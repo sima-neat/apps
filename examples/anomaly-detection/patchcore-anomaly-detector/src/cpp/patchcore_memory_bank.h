@@ -1,22 +1,11 @@
 #pragma once
 
 /// PatchCore memory-bank storage, coreset construction, and nearest-neighbor
-/// anomaly scoring -- the host-side half of the two-stage split described in
-/// examples/anomaly-detection/patchcore-anomaly-detector/README.md. The compiled MLA graph only
-/// extracts per-patch feature embeddings; the anomaly decision itself is a
-/// non-parametric lookup against a coreset of "normal" reference patches, so it
-/// has no place in a compiled graph and lives here instead, shared by every
-/// language variant of this example.
-///
-/// Two on-disk artifacts travel together as a versioned pair:
-///   - `memory_bank.npy`: the coreset, a float32 (N, embed_dim) array (the exact
-///     layout `numpy.save` writes for such an array; this reader/writer only
-///     supports that one shape).
-///   - `bank_meta.json`: the model package hash the bank was built against, the
-///     coreset ratio and nominal-image count used, and the decision threshold
-///     with the percentile and image count it was derived from. See
-///     `patchcore_scoring.py` for the byte-identical Python implementation this
-///     mirrors.
+/// anomaly scoring -- non-parametric, so it runs host-side rather than in
+/// the compiled graph. On-disk pair: `memory_bank.npy` (float32 (N,
+/// embed_dim) coreset, numpy.save layout) and `bank_meta.json` (model hash,
+/// calibration params, threshold). See patchcore_scoring.py for the
+/// byte-identical Python implementation this mirrors.
 
 #include <cstddef>
 #include <cstdint>
@@ -26,11 +15,9 @@
 
 namespace patchcore {
 
-/// Lowercase hex SHA-256 digest of a file's contents (via OpenSSL), read in
-/// chunks. Only used to pin a memory bank's bank_meta.json to the model
-/// package and bank file it was built against -- not for any
-/// security-sensitive purpose. Throws `std::runtime_error` if the file cannot
-/// be opened.
+/// Lowercase hex SHA-256 digest of a file's contents, used to pin a bank's
+/// bank_meta.json to the model/bank files it was built against (not for any
+/// security-sensitive purpose). Throws if the file cannot be opened.
 std::string sha256_file(const std::filesystem::path& path);
 
 /// A dense (H, W, C) tensor of patch-feature embeddings, row-major with C fastest.
@@ -45,10 +32,9 @@ struct PatchEmbeddings {
   }
 };
 
-/// Normalizes a raw model output buffer to (H, W, C). The MLA compiles tensors
-/// NHWC-native, but the channel axis is detected at runtime instead of assumed:
-/// `shape` is the tensor's shape (including any size-1 batch dim), and `flat` is
-/// its dense row-major payload, already converted to float32.
+/// Normalizes a raw model output buffer to (H, W, C); `shape` is the
+/// tensor's shape (channel axis detected at runtime, not assumed), `flat`
+/// its row-major float32 payload.
 PatchEmbeddings extract_hwc(const std::vector<int64_t>& shape, const std::vector<float>& flat,
                             int embed_dim);
 
@@ -58,16 +44,12 @@ struct AnomalyResult {
   float image_score = 0.0f;     // PatchCore-reweighted image-level anomaly score
 };
 
-/// Greedy k-center (farthest-point) coreset selection, matching the PatchCore
-/// paper's subsampling strategy: pick a random start, then repeatedly add
-/// whichever remaining point is farthest (by L2) from every point already
-/// selected. Runs directly in the full `embed_dim`-dimensional space rather than
-/// the paper's random low-dimensional (Johnson-Lindenstrauss) projection --
-/// simpler, at the cost of build-time speed on very large nominal sets.
-///
+/// Greedy k-center (farthest-point) coreset selection, matching the
+/// PatchCore paper's subsampling strategy, but in the full `embed_dim`-
+/// dimensional space rather than a random low-dimensional projection
+/// (simpler, at the cost of build time on very large nominal sets).
 /// `vectors` is a row-major (n, embed_dim) pool; returns the selected row
-/// indices, sized `max(1, round(n * ratio))` (or all of `vectors` if that would
-/// exceed `n`).
+/// indices, sized `max(1, round(n * ratio))`.
 std::vector<std::size_t> greedy_coreset_indices(const std::vector<float>& vectors,
                                                 std::size_t embed_dim, double ratio,
                                                 std::uint64_t seed);
@@ -85,12 +67,10 @@ public:
   static MemoryBank build(const std::vector<PatchEmbeddings>& per_image_embeddings,
                           double coreset_ratio, std::uint64_t seed);
 
-  /// Per-patch nearest-neighbor L2 distance to the bank (`score_map`), and the
-  /// image-level score with the PatchCore paper's neighborhood-reweighting term
-  /// (Eq. 7-8 of Roth et al., CVPR 2022; matches anomalib's reference
-  /// implementation). `num_neighbors` is the reweighting support-set size;
-  /// values <= 1 (or a bank too small to support it) fall back to the plain
-  /// max-of-score-map image score.
+  /// Per-patch nearest-neighbor L2 distance to the bank (`score_map`), and
+  /// the image-level score with the PatchCore paper's neighborhood-
+  /// reweighting term (Eq. 7-8, Roth et al., CVPR 2022). `num_neighbors` <=
+  /// 1 falls back to the plain max-of-score-map image score.
   [[nodiscard]] AnomalyResult score(const PatchEmbeddings& embeddings, int num_neighbors) const;
 
   [[nodiscard]] std::size_t size() const { return num_vectors_; }
@@ -98,17 +78,9 @@ public:
   [[nodiscard]] bool empty() const { return num_vectors_ == 0; }
 
 private:
-  void compute_squared_norms();
-
   std::vector<float> vectors_; // row-major (num_vectors_, embed_dim_)
   std::size_t num_vectors_ = 0;
   std::size_t embed_dim_ = 0;
-  // sum(vectors_[i] * vectors_[i]) per bank row, precomputed once (by load()/build(),
-  // via compute_squared_norms()) instead of every score() call -- the bank never
-  // changes mid-run, so recomputing this per video/RTSP frame was a wasted
-  // O(bank_size * embed_dim) cost on the hot path. double, not float: see the
-  // comment on dist_to_bank_row in the .cpp for why.
-  std::vector<double> vectors_sq_;
 };
 
 /// `p`-th percentile (linear interpolation, matching numpy.percentile's default)
@@ -139,14 +111,9 @@ struct BankMeta {
   double threshold_value = 0.0;
   double threshold_percentile = 0.0;
   int threshold_num_images = 0;
-  // Separate from threshold_value above: that one gates the per-image
-  // verdict; this one fixes the overlay's color scale to the nominal patch
-  // distribution (see draw_overlay in main.cpp). Deliberately not the same
-  // number -- see cmd_calibrate. patch_threshold_value is diagnostic only
-  // (unused by the overlay itself); scale_min/scale_max are what the overlay
-  // maps to the colormap's low/high ends. Absent (has_patch_threshold ==
-  // false) for bank_meta.json files written before this field existed;
-  // callers must recalibrate.
+  // Separate from threshold_value above: fixes the overlay's color scale
+  // (see draw_overlay). Absent for bank_meta.json files written before this
+  // field existed; callers must recalibrate.
   bool has_patch_threshold = false;
   double patch_threshold_value = 0.0;
   double patch_threshold_scale_min = 0.0;

@@ -1,14 +1,7 @@
-// Unit test for patchcore (C++): validates CLI arg handling.
-//
-// The scoring stage's math (nearest-neighbor distance, the PatchCore
-// neighborhood-reweighting term, greedy k-center coreset selection, threshold
-// derivation, and bank/model hash pinning) is covered against fixed embeddings
-// in tests/python/test_unit.py -- the C++ and Python implementations share the
-// same algorithm (see support/anomaly_detection/patchcore_memory_bank.h), and
-// this repo's C++ unit-test target only links against support_testing, not
-// support_runtime, so it cannot call into that library directly. This test is
-// scoped to what test_unit.cpp binaries in this repo test elsewhere: the CLI
-// surface.
+// Unit test for patchcore (C++): validates CLI arg handling. The scoring
+// math itself is covered against fixed embeddings in
+// tests/python/test_unit.py (same algorithm, see src/cpp/patchcore_memory_bank.h) --
+// this target only links support_testing, not support_runtime.
 #include "support/testing/test_config.h"
 #include "support/testing/test_process.h"
 

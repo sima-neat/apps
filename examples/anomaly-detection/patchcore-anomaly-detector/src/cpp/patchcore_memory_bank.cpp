@@ -168,18 +168,6 @@ NpyHeader parse_header_dict(const std::string& dict) {
 
 } // namespace
 
-void MemoryBank::compute_squared_norms() {
-  vectors_sq_.resize(num_vectors_);
-  for (std::size_t b = 0; b < num_vectors_; ++b) {
-    const float* row = vectors_.data() + b * embed_dim_;
-    double acc = 0.0;
-    for (std::size_t c = 0; c < embed_dim_; ++c) {
-      acc += static_cast<double>(row[c]) * static_cast<double>(row[c]);
-    }
-    vectors_sq_[b] = acc;
-  }
-}
-
 MemoryBank MemoryBank::load(const std::filesystem::path& path) {
   std::ifstream in(path, std::ios::binary);
   if (!in.good()) {
@@ -219,7 +207,6 @@ MemoryBank MemoryBank::load(const std::filesystem::path& path) {
       throw std::runtime_error("memory bank .npy payload is truncated: " + path.string());
     }
   }
-  bank.compute_squared_norms();
   return bank;
 }
 
@@ -345,7 +332,6 @@ MemoryBank MemoryBank::build(const std::vector<PatchEmbeddings>& per_image_embed
     std::copy_n(pooled.begin() + static_cast<std::ptrdiff_t>(selected[i] * embed_dim), embed_dim,
                bank.vectors_.begin() + static_cast<std::ptrdiff_t>(i * embed_dim));
   }
-  bank.compute_squared_norms();
   return bank;
 }
 
@@ -355,32 +341,17 @@ MemoryBank MemoryBank::build(const std::vector<PatchEmbeddings>& per_image_embed
 
 namespace {
 
-/// Dot product of two length-`n` float arrays. On aarch64 this runs as
-/// explicit NEON with two independent accumulators to hide FMA latency,
-/// instead of relying on the compiler to auto-vectorize the scalar reduction
-/// below. `n` is always embed_dim_ (1536, a multiple of 8); the tail loop
-/// covers any remainder for safety if that ever changes.
-inline float dot_product(const float* a, const float* b, std::size_t n) {
-#if defined(__aarch64__)
-  float32x4_t acc0 = vdupq_n_f32(0.0f);
-  float32x4_t acc1 = vdupq_n_f32(0.0f);
-  std::size_t c = 0;
-  for (; c + 8 <= n; c += 8) {
-    acc0 = vfmaq_f32(acc0, vld1q_f32(a + c), vld1q_f32(b + c));
-    acc1 = vfmaq_f32(acc1, vld1q_f32(a + c + 4), vld1q_f32(b + c + 4));
-  }
-  float total = vaddvq_f32(vaddq_f32(acc0, acc1));
-  for (; c < n; ++c) {
-    total += a[c] * b[c];
-  }
-  return total;
-#else
-  float acc = 0.0f;
+/// Sum of squared differences between two length-`n` float arrays,
+/// accumulated in double. Deliberately not the expand-and-dot identity
+/// (||q-b||^2 = ||q||^2 + ||b||^2 - 2*q.b) -- that cancels precision when q
+/// is close to a bank row; a direct per-element difference doesn't.
+inline double squared_diff_sum(const float* a, const float* b, std::size_t n) {
+  double acc = 0.0;
   for (std::size_t c = 0; c < n; ++c) {
-    acc += a[c] * b[c];
+    const double d = static_cast<double>(a[c]) - static_cast<double>(b[c]);
+    acc += d * d;
   }
   return acc;
-#endif
 }
 
 } // namespace
@@ -399,49 +370,23 @@ AnomalyResult MemoryBank::score(const PatchEmbeddings& embeddings, int num_neigh
   std::vector<std::size_t> locations(num_patches);
 
   auto bank_row = [&](std::size_t idx) { return vectors_.data() + idx * embed_dim_; };
-  // Expand-and-dot L2 identity (matches patchcore_scoring.py's _pairwise_l2):
-  // ||q-b||^2 = ||q||^2 + ||b||^2 - 2*q.b. `vectors_sq_` (||b||^2 per bank row) is
-  // precomputed once for the whole bank instead of recomputed on every call, and
-  // the per-pair cost drops from a fused subtract-square-sum to a plain dot
-  // product, which auto-vectorizes better -- both matter at video/RTSP frame rates.
-  //
-  // The combine-and-subtract step below is done in double, not float: when a
-  // query is very close to a bank vector, ||q||^2 + ||b||^2 and 2*q.b are
-  // nearly-equal large numbers, and subtracting them in float32 amplifies
-  // rounding error enough to flip which bank vector is nearest in near-tie
-  // cases. Because this NEON dot product and numpy's matmul accumulate in
-  // different orders, that amplified float32 error previously differed enough
-  // between the two languages to disagree on a score/verdict for the same
-  // bank and embedding (see _pairwise_l2's docstring for the Python side of
-  // this fix). The dot product itself stays float32/NEON -- only the
-  // subtraction that's actually prone to cancellation needs the extra
-  // precision, so this doesn't cost the hot loop's per-dimension work.
-  auto dist_to_bank_row = [&](const float* q, double q_sq, std::size_t b) {
-    const double dot = static_cast<double>(dot_product(q, bank_row(b), embed_dim_));
-    const double sq_dist = q_sq + vectors_sq_[b] - 2.0 * dot;
-    return static_cast<float>(std::sqrt(std::max(0.0, sq_dist)));
-  };
-  auto squared_norm = [&](const float* v) {
-    return static_cast<double>(dot_product(v, v, embed_dim_));
+  auto dist_to_bank_row = [&](const float* q, std::size_t b) {
+    return static_cast<float>(std::sqrt(squared_diff_sum(q, bank_row(b), embed_dim_)));
   };
 
-  // This loop (an O(num_patches * num_vectors_) brute-force nearest-neighbor
-  // search) dominates score()'s cost. Patches are independent -- each only
-  // reads embeddings/vectors_/vectors_sq_ and writes its own index of
-  // score_map/locations -- so it parallelizes safely with no locking. Thread
-  // count is capped below hardware_concurrency() to leave headroom for the
-  // rest of the pipeline (GStreamer decode/encode, MLA driver).
+  // Dominant cost of score(): brute-force nearest-neighbor search, patches
+  // independent so parallel with no locking, thread count capped below
+  // hardware_concurrency() to leave headroom for the rest of the pipeline.
   auto scan_patch_range = [&](std::size_t start, std::size_t stop, float& best_score,
                               std::size_t& best_patch) {
     best_score = -std::numeric_limits<float>::infinity();
     best_patch = start;
     for (std::size_t p = start; p < stop; ++p) {
       const float* q = embeddings.values.data() + p * embed_dim_;
-      const double q_sq = squared_norm(q);
       float best = std::numeric_limits<float>::infinity();
       std::size_t best_idx = 0;
       for (std::size_t b = 0; b < num_vectors_; ++b) {
-        const float d = dist_to_bank_row(q, q_sq, b);
+        const float d = dist_to_bank_row(q, b);
         if (d < best) {
           best = d;
           best_idx = b;
@@ -505,22 +450,20 @@ AnomalyResult MemoryBank::score(const PatchEmbeddings& embeddings, int num_neigh
   const float s_star = max_patch_score;
   const std::size_t nn_index = locations[max_patch];
   const float* m_star = bank_row(nn_index);
-  const double m_star_sq = vectors_sq_[nn_index];
 
   // N_b(m^*): the k nearest bank neighbors of m^* itself (ascending by distance
   // to m^*; index 0 is m^* itself, at distance 0).
   std::vector<std::pair<float, std::size_t>> dist_to_m_star(num_vectors_);
   for (std::size_t b = 0; b < num_vectors_; ++b) {
-    dist_to_m_star[b] = {dist_to_bank_row(m_star, m_star_sq, b), b};
+    dist_to_m_star[b] = {dist_to_bank_row(m_star, b), b};
   }
   std::partial_sort(dist_to_m_star.begin(), dist_to_m_star.begin() + k, dist_to_m_star.end());
 
   // Distance from the test patch (not m^*) to each support sample.
-  const double q_star_sq = squared_norm(q_star);
   std::vector<float> support_dists(static_cast<std::size_t>(k));
   for (int i = 0; i < k; ++i) {
     support_dists[static_cast<std::size_t>(i)] =
-        dist_to_bank_row(q_star, q_star_sq, dist_to_m_star[static_cast<std::size_t>(i)].second);
+        dist_to_bank_row(q_star, dist_to_m_star[static_cast<std::size_t>(i)].second);
   }
   const float max_dist = *std::max_element(support_dists.begin(), support_dists.end());
   float sum_exp = 0.0f;

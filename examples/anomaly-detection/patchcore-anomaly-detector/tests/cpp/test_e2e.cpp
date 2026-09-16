@@ -1,20 +1,19 @@
-// E2E test for patchcore (C++).
-//
-// Test 1 runs --calibrate against the bundled COCO test image set to produce a
-// fresh memory bank, then scores the same images and verifies annotated
-// overlay output -- this only proves the pipeline runs end to end on real
-// hardware, not that the resulting scores are meaningful (COCO has no
-// nominal/defect labels), which is what tests 2 and 3 cover.
+// E2E test for patchcore (C++). Test 1 runs --calibrate against the bundled
+// nominal set, then scores the bundled test images and verifies verdicts
+// and overlay output.
 #include "support/testing/test_config.h"
 #include "support/testing/test_process.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <regex>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -110,6 +109,100 @@ int run_calibrate_then_score(const std::string& binary, const std::string& model
   return rc;
 }
 
+// A run that writes some overlays and fails to write others must exit
+// nonzero -- succeeding as long as at least one write went through would
+// silently under-report incomplete output.
+int run_partial_write_failure_fails_the_run(const std::string& binary, const std::string& model_path) {
+  const char* images_raw = env_or_null("SIMANEAT_APPS_TEST_INPUT_DIR");
+  const std::string input_dir = images_raw ? images_raw : "assets/datasets-test/coco";
+  if (!fs::exists(input_dir) || fs::is_empty(input_dir)) {
+    env_or_skip("SIMANEAT_APPS_TEST_INPUT_DIR",
+                "directory with test images (assets/datasets-test/coco is empty or missing)");
+  }
+  std::vector<fs::path> images;
+  for (const auto& entry : fs::directory_iterator(input_dir)) {
+    if (entry.is_regular_file()) {
+      images.push_back(entry.path());
+    }
+  }
+  if (images.size() < 2) {
+    return skip_or_fail("test input directory needs at least 2 images");
+  }
+  std::sort(images.begin(), images.end());
+
+  auto out_dir =
+      create_test_output_dir("patchcore-anomaly-detector", "test_partial_write_failure_fails_the_run");
+  if (out_dir.empty())
+    return 1;
+
+  const fs::path run_dir = fs::path(out_dir).parent_path();
+  const fs::path config_path = run_dir / "config.yaml";
+  const fs::path bank_path = run_dir / "memory_bank.npy";
+  const fs::path meta_path = run_dir / "bank_meta.json";
+
+  write_e2e_config(
+      "patchcore-anomaly-detector", config_path,
+      {
+          {"model.path", model_path},
+          {"source.type", "image_dir"},
+          {"source.image_dir", input_dir},
+          {"calibration.nominal_images_dir", input_dir},
+          {"calibration.threshold_images_dir", input_dir},
+          {"memory_bank.path", bank_path.string()},
+          {"memory_bank.meta_path", meta_path.string()},
+          {"output.dir", out_dir},
+      });
+
+  const int timeout = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
+
+  auto calibrate = spawn_and_wait(binary, {"--calibrate", "--config", config_path.string()}, timeout);
+  if (calibrate.exit_code != 0) {
+    std::cerr << "[FAIL] --calibrate exited with code " << calibrate.exit_code << "\n";
+    remove_dir(out_dir);
+    return 1;
+  }
+
+  // Pre-create one output path as read-only so its overlay write fails while
+  // every other image's write should still succeed.
+  const std::string blocked_name = images.front().filename().string();
+  const fs::path blocked_path = fs::path(out_dir) / blocked_name;
+  {
+    std::ofstream placeholder(blocked_path, std::ios::binary | std::ios::trunc);
+  }
+  fs::permissions(blocked_path, fs::perms::owner_read | fs::perms::group_read |
+                                    fs::perms::others_read);
+
+  auto score = spawn_and_wait(binary, {"--config", config_path.string()}, timeout);
+  fs::permissions(blocked_path, fs::perms::owner_all);
+
+  int rc = 0;
+  if (score.exit_code == 0) {
+    std::cerr << "[FAIL] expected a nonzero exit code for a partial write failure, got 0\n";
+    rc = 1;
+  } else if (score.stderr_text.find(blocked_name) == std::string::npos) {
+    std::cerr << "[FAIL] expected the failed path (" << blocked_name << ") named in stderr\n"
+              << "stderr:\n" << score.stderr_text << "\n";
+    rc = 1;
+  } else {
+    int other_outputs = 0;
+    for (const auto& entry : fs::directory_iterator(out_dir)) {
+      if (entry.is_regular_file() && entry.path().filename() != "config.yaml" &&
+          entry.path().filename().string() != blocked_name) {
+        ++other_outputs;
+      }
+    }
+    if (other_outputs == 0) {
+      std::cerr << "[FAIL] the one blocked write should not have stopped the rest from running\n";
+      rc = 1;
+    } else {
+      std::cout << "[OK] partial write failure correctly fails the run\n";
+    }
+  }
+
+  remove_dir(out_dir);
+  return rc;
+}
+
 // A bank_meta.json pinned to a different model hash must fail at load, not
 // silently score against a mismatched bank.
 int run_bank_model_mismatch_fails_at_load(const std::string& binary) {
@@ -170,22 +263,39 @@ int run_bank_model_mismatch_fails_at_load(const std::string& binary) {
   return 0;
 }
 
-// Calibrates against the shipped real nominal set, then scores a held-out
-// normal image (NOT part of calibration) plus a real defect image -- and
-// asserts the actual pass/fail verdict on each, not just that the defect
-// scores higher than the image it was calibrated on (which proves nothing
-// about either verdict being correct).
+// Scores every held-out normal image and every defect image, and asserts
+// the actual pass/fail verdict on each -- not just relative ordering, and
+// not just one cherry-picked passing image.
 int run_held_out_normal_passes_and_defect_fails(const std::string& binary,
                                                 const std::string& model_path) {
   const fs::path nominal_dir = "assets/datasets/patchcore/nominal";
-  const fs::path held_out_src = "assets/datasets/patchcore/held_out_normal/normal_19.png";
-  const fs::path defect_src = "assets/datasets/patchcore/images/scratch_0.png";
+  const fs::path held_out_dir = "assets/datasets/patchcore/held_out_normal";
+  const fs::path images_dir = "assets/datasets/patchcore/images";
   if (!fs::exists(nominal_dir) || fs::is_empty(nominal_dir)) {
     return skip_or_fail("nominal calibration set missing under " + nominal_dir.string());
   }
-  if (!fs::exists(held_out_src) || !fs::exists(defect_src)) {
-    return skip_or_fail("held-out normal or defect image missing (" + held_out_src.string() + ", " +
-                        defect_src.string() + ")");
+
+  std::vector<std::string> held_out_names;
+  if (fs::exists(held_out_dir)) {
+    for (const auto& entry : fs::directory_iterator(held_out_dir)) {
+      if (entry.is_regular_file() && entry.path().extension() == ".png") {
+        held_out_names.push_back(entry.path().filename().string());
+      }
+    }
+  }
+  std::vector<std::string> defect_names;
+  if (fs::exists(images_dir)) {
+    for (const auto& entry : fs::directory_iterator(images_dir)) {
+      if (entry.is_regular_file() && entry.path().filename().string().rfind("scratch_", 0) == 0) {
+        defect_names.push_back(entry.path().filename().string());
+      }
+    }
+  }
+  std::sort(held_out_names.begin(), held_out_names.end());
+  std::sort(defect_names.begin(), defect_names.end());
+  if (held_out_names.empty() || defect_names.empty()) {
+    return skip_or_fail("held-out normal or defect images missing (" + held_out_dir.string() + ", " +
+                        images_dir.string() + ")");
   }
 
   auto out_dir = create_test_output_dir("patchcore-anomaly-detector", "test_held_out_normal_passes_and_defect_fails");
@@ -199,8 +309,12 @@ int run_held_out_normal_passes_and_defect_fails(const std::string& binary,
 
   const fs::path score_dir = run_dir / "score_inputs";
   fs::create_directories(score_dir);
-  fs::copy_file(held_out_src, score_dir / "normal_19.png", fs::copy_options::overwrite_existing);
-  fs::copy_file(defect_src, score_dir / "scratch_0.png", fs::copy_options::overwrite_existing);
+  for (const auto& name : held_out_names) {
+    fs::copy_file(held_out_dir / name, score_dir / name, fs::copy_options::overwrite_existing);
+  }
+  for (const auto& name : defect_names) {
+    fs::copy_file(images_dir / name, score_dir / name, fs::copy_options::overwrite_existing);
+  }
 
   write_e2e_config(
       "patchcore-anomaly-detector", config_path,
@@ -233,46 +347,65 @@ int run_held_out_normal_passes_and_defect_fails(const std::string& binary,
     return 1;
   }
 
-  static const std::regex kVerdictRe(R"(([^\s:]+):\s*score=[-\d.]+\s+threshold=[-\d.]+\s+verdict=(\w+))");
-  std::string normal_verdict;
-  std::string defect_verdict;
+  static const std::regex kVerdictRe(
+      R"(([^\s:]+):\s*score=([-\d.]+)\s+threshold=[-\d.]+\s+verdict=(\w+))");
+  std::map<std::string, std::pair<std::string, std::string>> verdicts; // name -> (verdict, score)
   for (std::sregex_iterator it(score.stdout_text.begin(), score.stdout_text.end(), kVerdictRe), end;
        it != end; ++it) {
-    const std::string path = (*it)[1].str();
-    const std::string verdict = (*it)[2].str();
-    if (path.find("normal_19.png") != std::string::npos) {
-      normal_verdict = verdict;
-    } else if (path.find("scratch_0.png") != std::string::npos) {
-      defect_verdict = verdict;
-    }
+    const fs::path path((*it)[1].str());
+    verdicts[path.filename().string()] = {(*it)[3].str(), (*it)[2].str()};
   }
 
   remove_dir(out_dir);
 
-  if (normal_verdict.empty() || defect_verdict.empty()) {
-    std::cerr << "[FAIL] could not find both images' verdicts in stdout:\n" << score.stdout_text << "\n";
-    return 1;
+  int rc = 0;
+  std::vector<std::string> held_out_failures;
+  for (const auto& name : held_out_names) {
+    auto it = verdicts.find(name);
+    if (it == verdicts.end()) {
+      std::cerr << "[FAIL] no verdict for " << name << " in stdout:\n" << score.stdout_text << "\n";
+      rc = 1;
+      continue;
+    }
+    if (it->second.first != "normal") {
+      held_out_failures.push_back(name + " scored " + it->second.second + " (ANOMALOUS)");
+    }
   }
-  if (normal_verdict != "normal") {
-    std::cerr << "[FAIL] held-out normal image was flagged " << normal_verdict << "\n";
-    return 1;
+  std::vector<std::string> defect_failures;
+  for (const auto& name : defect_names) {
+    auto it = verdicts.find(name);
+    if (it == verdicts.end()) {
+      std::cerr << "[FAIL] no verdict for " << name << " in stdout:\n" << score.stdout_text << "\n";
+      rc = 1;
+      continue;
+    }
+    if (it->second.first != "ANOMALOUS") {
+      defect_failures.push_back(name + " scored " + it->second.second + " (normal)");
+    }
   }
-  if (defect_verdict != "ANOMALOUS") {
-    std::cerr << "[FAIL] defect image was not flagged anomalous (verdict=" << defect_verdict << ")\n";
-    return 1;
+  if (!held_out_failures.empty()) {
+    std::cerr << "[FAIL] " << held_out_failures.size() << "/" << held_out_names.size()
+              << " held-out normal images were flagged anomalous:\n";
+    for (const auto& f : held_out_failures) std::cerr << "  " << f << "\n";
+    rc = 1;
   }
-  std::cout << "[OK] held-out normal passes, defect fails\n";
-  return 0;
+  if (!defect_failures.empty()) {
+    std::cerr << "[FAIL] " << defect_failures.size() << "/" << defect_names.size()
+              << " defect images were not flagged anomalous:\n";
+    for (const auto& f : defect_failures) std::cerr << "  " << f << "\n";
+    rc = 1;
+  }
+  if (rc == 0) {
+    std::cout << "[OK] all " << held_out_names.size() << " held-out normal images pass, all "
+              << defect_names.size() << " defect images fail\n";
+  }
+  return rc;
 }
 
-// Cross-language regression: a memory bank calibrated by the Python
-// implementation must load and separate defect from nominal correctly when
-// scored by C++. Both implementations share the same on-disk bank/meta format
-// and previously used a numerically unstable distance formula that could
-// disagree near ties between the two languages' own accumulation orders (see
-// patchcore_memory_bank.cpp's dist_to_bank_row comment) -- this proves the
-// fix holds across a bank the other language actually built, not just within
-// one language's own round trip.
+// Cross-language regression: a memory bank calibrated by Python must load
+// and separate defect from nominal correctly when scored by C++ (see
+// squared_diff_sum in patchcore_memory_bank.cpp for the distance formula
+// both languages share).
 int run_python_built_bank_scores_correctly_in_cpp(const std::string& binary,
                                                   const std::string& model_path) {
   const fs::path real_images_dir = "assets/datasets/patchcore/images";
@@ -390,6 +523,7 @@ int main(int argc, char** argv) {
 
   int failures = 0;
   failures += run_calibrate_then_score(binary, model_path) != 0;
+  failures += run_partial_write_failure_fails_the_run(binary, model_path) != 0;
   failures += run_bank_model_mismatch_fails_at_load(binary) != 0;
   failures += run_held_out_normal_passes_and_defect_fails(binary, model_path) != 0;
   failures += run_python_built_bank_scores_correctly_in_cpp(binary, model_path) != 0;

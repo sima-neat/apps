@@ -1,10 +1,5 @@
 """Unit tests for the PatchCore host-side scoring stage (patchcore_scoring.py).
-
-These exercise the memory-bank math directly against fixed, hand-constructed
-embeddings -- no model, no hardware, no Neat runtime -- per the example's
-acceptance criteria that the scoring stage has coverage independent of the
-hardware-gated end-to-end path in test_e2e.py.
-"""
+No model/hardware/Neat runtime -- fixed, hand-constructed embeddings only."""
 import subprocess
 import sys
 from pathlib import Path
@@ -140,6 +135,16 @@ class TestMemoryBankScore:
         bad_patches = np.zeros((1, 2, 3), dtype=np.float32)
         with pytest.raises(ValueError):
             bank.score(bad_patches, num_neighbors=1)
+
+    def test_identical_bank_and_query_score_near_zero(self):
+        """A patch identical to its one bank vector must score ~0, at the
+        real embedding dimension (1536) where cancellation error can hide."""
+        rng = np.random.default_rng(0)
+        vector = rng.standard_normal(1536).astype(np.float32)
+        bank = pcs.MemoryBank(vector[None, :])
+        patch = vector.reshape(1, 1, 1536)
+        scored = bank.score(patch, num_neighbors=1)
+        assert scored.score_map[0, 0] < 1e-3
 
 
 @pytest.mark.unit

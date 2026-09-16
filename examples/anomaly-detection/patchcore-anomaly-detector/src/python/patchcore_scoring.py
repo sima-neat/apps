@@ -1,22 +1,13 @@
-"""Host-side PatchCore memory bank: coreset build, calibration, and anomaly scoring.
-
-The compiled MLA graph only extracts per-patch feature embeddings (see the
-`wide_resnet50_2` layer2+layer3 tap in main.py's model options). The anomaly
-decision itself -- nearest-neighbor lookup against a coreset of "normal"
-reference patches, the image-level score, and the pass/fail threshold -- is
-non-parametric and has no place in a compiled graph, so it lives here as plain
-host-side numpy, following Roth et al., "Towards Total Recall in Industrial
+"""Host-side PatchCore memory bank: coreset build, calibration, and anomaly
+scoring -- non-parametric, so it runs as plain numpy rather than in the
+compiled graph, following Roth et al., "Towards Total Recall in Industrial
 Anomaly Detection" (CVPR 2022).
 
-Two on-disk artifacts travel together as a versioned pair:
-  - `memory_bank.npy`: the coreset, a float32 (N, embed_dim) array.
-  - `bank_meta.json`: the model package hash the bank was built against, the
-    coreset ratio and nominal-image count used, and the decision threshold
-    with the percentile and image count it was derived from.
-
-`bank_meta.json` pinning the model hash means a bank built for one compiled
-model package fails loudly at load time if pointed at a different package,
-instead of silently producing meaningless scores.
+Two on-disk artifacts travel together: `memory_bank.npy` (the coreset, a
+float32 (N, embed_dim) array) and `bank_meta.json` (model hash, calibration
+params, and decision threshold). The pinned model hash makes a bank pointed
+at the wrong compiled package fail loudly at load time instead of silently
+producing meaningless scores.
 """
 from __future__ import annotations
 
@@ -60,54 +51,25 @@ def extract_hwc(embedding: np.ndarray, embed_dim: int = EMBED_DIM) -> np.ndarray
     raise ValueError(f"could not find the {embed_dim}-channel axis in output shape {arr.shape}")
 
 
-def _pairwise_l2(query: np.ndarray, bank: np.ndarray, bank_sq: np.ndarray | None = None) -> np.ndarray:
+def _pairwise_l2(query: np.ndarray, bank64: np.ndarray, bank_sq: np.ndarray) -> np.ndarray:
     """query: (N, C), bank: (M, C) -> (N, M) L2 distances, via the expand-and-dot
-    identity (no scipy/faiss dependency): ||q-b||^2 = ||q||^2 + ||b||^2 - 2*q.b.
-
-    The combine-and-subtract step below is done in float64, not float32: when
-    a query is very close to a bank vector, ||q||^2 + ||b||^2 and 2*q.b are
-    nearly-equal large numbers, and subtracting them in float32 amplifies
-    rounding error enough to flip which bank vector is nearest in near-tie
-    cases. Because numpy's matmul and the C++ implementation's NEON dot
-    product accumulate in different orders, that amplified float32 error
-    previously differed enough between the two languages to disagree on a
-    score/verdict for the same bank and embedding (see
-    patchcore_memory_bank.cpp's dist_to_bank_row for the C++ side of this
-    fix). The matmul itself stays float32 -- only the subtraction that's
-    actually prone to cancellation needs the extra precision, and widening
-    the full (N, C) x (C, M) matmul to float64 instead (as an earlier version
-    of this fix did) roughly doubled per-frame scoring cost for no benefit,
-    since BLAS's float64 GEMM does the same O(N*C*M) work at twice the
-    per-element cost.
-
-    `bank_sq` is `sum(bank*bank, axis=1)` in float64; pass it precomputed when
-    scoring many queries against the same bank, since it never changes between
-    calls."""
-    q_sq = np.sum(query * query, axis=1, keepdims=True, dtype=np.float64)  # (N, 1)
-    if bank_sq is None:
-        bank_sq = np.sum(bank * bank, axis=1, dtype=np.float64)
-    cross = query @ bank.T  # (N, M), float32 -- BLAS-accelerated, stays fast
-    sq_dist = np.clip(
-        q_sq + bank_sq[None, :] - 2.0 * cross.astype(np.float64), a_min=0.0, a_max=None
-    )
+    identity: ||q-b||^2 = ||q||^2 + ||b||^2 - 2*q.b, computed entirely in
+    float64 (not just the final combine step -- widening only that step
+    can't recover precision a float32 matmul already lost). `bank64`/
+    `bank_sq` are `MemoryBank`'s precomputed float64 copies (see __init__)."""
+    query64 = query.astype(np.float64)
+    q_sq = np.einsum("ij,ij->i", query64, query64)[:, None]  # (N, 1)
+    cross = query64 @ bank64.T  # (N, M), float64 BLAS matmul
+    sq_dist = np.clip(q_sq + bank_sq[None, :] - 2.0 * cross, a_min=0.0, a_max=None)
     return np.sqrt(sq_dist)
 
 
 def greedy_coreset_indices(vectors: np.ndarray, ratio: float, seed: int) -> np.ndarray:
-    """Greedy k-center (farthest-point) coreset selection, matching the PatchCore
-    paper's subsampling strategy: pick a random start, then repeatedly add whichever
-    remaining point is farthest (by L2) from every point already selected.
-
-    This runs directly in the full `embed_dim`-dimensional space rather than the
-    paper's random low-dimensional (Johnson-Lindenstrauss) projection, trading
-    build-time speed for simplicity -- a deliberate simplification worth knowing
-    about if you port this toward the paper's reported build times on very large
-    nominal sets. It is O(k * n) distance computations, which is fine for the
-    nominal-set sizes a single inspection category calibration run collects, but
-    is the dominant cost of `--calibrate` for large sets.
-
-    Returns the selected row indices into `vectors`, not the vectors themselves.
-    """
+    """Greedy k-center (farthest-point) coreset selection, matching the
+    PatchCore paper's subsampling strategy, but in the full `embed_dim`-
+    dimensional space rather than a random low-dimensional projection
+    (simpler, at the cost of build time on very large nominal sets). Returns
+    row indices into `vectors`, not the vectors themselves."""
     n = vectors.shape[0]
     k = max(1, int(round(n * ratio)))
     if k >= n:
@@ -138,10 +100,10 @@ class MemoryBank:
         if vectors.ndim != 2:
             raise ValueError(f"memory bank must be a 2D (N, embed_dim) array, got shape {vectors.shape}")
         self.vectors = np.ascontiguousarray(vectors, dtype=np.float32)
-        # Precomputed once per bank rather than on every score() call. float64,
-        # matching _pairwise_l2's precision (see its docstring).
-        vectors64 = self.vectors.astype(np.float64)
-        self._vectors_sq = np.sum(vectors64 * vectors64, axis=1)
+        # Precomputed once per bank rather than on every score() call --
+        # _pairwise_l2 needs both, and the bank itself never changes.
+        self._bank64 = self.vectors.astype(np.float64)
+        self._bank_sq = np.einsum("ij,ij->i", self._bank64, self._bank64)
 
     @property
     def size(self) -> int:
@@ -184,7 +146,7 @@ class MemoryBank:
             raise ValueError(f"patch embedding dim {c} does not match memory bank dim {self.embed_dim}")
         flat = patch_embeddings.reshape(-1, c)
 
-        dists = _pairwise_l2(flat, self.vectors, self._vectors_sq)  # (num_patches, bank_size)
+        dists = _pairwise_l2(flat, self._bank64, self._bank_sq)  # (num_patches, bank_size)
         locations = np.argmin(dists, axis=1)  # nearest bank index per patch, m^* index
         patch_scores = dists[np.arange(dists.shape[0]), locations]  # s per patch
         score_map = patch_scores.reshape(h, w)
@@ -201,7 +163,7 @@ class MemoryBank:
 
         # N_b(m^*): the k nearest bank neighbors of m^* itself (support_idx[0] == nn_index,
         # since m^* is trivially its own closest neighbor at distance 0).
-        dist_to_m_star = _pairwise_l2(m_star[None, :], self.vectors, self._vectors_sq)[0]
+        dist_to_m_star = _pairwise_l2(m_star[None, :], self._bank64, self._bank_sq)[0]
         support_idx = np.argpartition(dist_to_m_star, k - 1)[:k]
         support_idx = support_idx[np.argsort(dist_to_m_star[support_idx])]
 
@@ -301,10 +263,8 @@ def save_bank_meta(path: str | Path, meta: dict) -> None:
 
 
 def verify_bank_matches_model(meta: dict, model_path: str | Path) -> None:
-    """Raises RuntimeError if `bank_meta.json`'s pinned model hash does not match
-    the model package this run is configured to use -- a mismatched bank silently
-    produces meaningless scores instead of failing, which this check turns into a
-    load-time error instead of a scoring-time surprise."""
+    """Raises RuntimeError if the bank's pinned model hash doesn't match the
+    configured model -- a mismatched bank otherwise silently scores wrong."""
     actual = sha256_file(model_path)
     expected = meta.get("model_sha256")
     if expected != actual:
@@ -316,15 +276,10 @@ def verify_bank_matches_model(meta: dict, model_path: str | Path) -> None:
 
 
 def verify_bank_hash(meta: dict, bank_path: str | Path) -> None:
-    """Raises RuntimeError if `memory_bank.npy`'s contents don't match the hash
-    `bank_meta.json` was saved with. The model-hash check above only proves the
-    *model* is consistent; this proves the *bank* and the threshold derived
-    from it are the ones actually paired -- an interrupted calibration or a
-    bank file swapped in from a different run would otherwise still pass
-    verify_bank_matches_model but score against the wrong threshold.
-
-    `bank_sha256` is absent from bank_meta.json files written before this
-    check existed; skip rather than fail so those banks keep working."""
+    """Raises RuntimeError if the bank file's contents don't match the hash
+    bank_meta.json was saved with (catches a swapped-in bank passing the
+    model-hash check but paired with the wrong threshold). Older meta files
+    without `bank_sha256` skip this rather than fail."""
     expected = meta.get("bank_sha256")
     if expected is None:
         return

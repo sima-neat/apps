@@ -1,13 +1,6 @@
-"""E2E test for the PatchCore example (Python), hardware-gated per Apps conventions.
-
-Runs `--calibrate` against the bundled test image set to produce a fresh
-memory bank and bank_meta.json, then runs the scoring pipeline against the
-same images and checks it produces annotated overlay output. The bundled
-COCO test images are not a real defect-free inspection set -- this only
-proves the pipeline runs end to end on real hardware, not that the resulting
-scores are meaningful; see the README for how to calibrate against a real
-nominal image set.
-"""
+"""E2E test for the PatchCore example (Python), hardware-gated per Apps
+conventions. Runs `--calibrate` against the bundled nominal set, then scores
+the bundled test images and checks verdicts/overlays."""
 import os
 import re
 import subprocess
@@ -24,28 +17,19 @@ NOMINAL_DIR = APPS_ROOT / "assets" / "datasets" / "patchcore" / "nominal"
 HELD_OUT_NORMAL_DIR = APPS_ROOT / "assets" / "datasets" / "patchcore" / "held_out_normal"
 NOMINAL_IMAGE = "plain_0.png"
 DEFECT_IMAGE = "scratch_0.png"
-# Confirmed (during development) to score clearly below threshold when
-# calibrated against the full 16-image nominal/ set -- not every held-out
-# image does, since a 99th-percentile threshold derived from a small
-# calibration set will naturally sit close to some genuinely normal images.
-HELD_OUT_NORMAL_IMAGE = "normal_19.png"
 
 SCORE_RE = re.compile(r"^(?P<path>.+): score=(?P<score>[-\d.]+) threshold=(?P<threshold>[-\d.]+) "
                       r"verdict=(?P<verdict>\w+)", re.MULTILINE)
 
 
 def _find_cpp_binary() -> Path | None:
-    """Resolve the patchcore C++ binary for the cross-language regression test
-    below. Not a general repo convention -- this test is the only thing in the
-    example that needs the sibling language's binary, so unlike e2e_model_path
-    et al. there's no shared fixture for it."""
+    """Resolve the patchcore C++ binary for the cross-language regression
+    test below (no shared fixture for this -- the only test here needing it)."""
     raw = os.environ.get("SIMANEAT_APPS_TEST_CPP_BINARY", "").strip()
     if raw:
         return Path(raw)
     candidates = (
-        # Installed/packaged layout (CI, and `sima-cli neat install`) -- see
-        # scripts/ci/validate_apps_runtime_archive.sh, which asserts every
-        # example's C++ executable lives here.
+        # Installed/packaged layout (CI, `sima-cli neat install`).
         EXAMPLE_DIR / "src" / "cpp" / "pre-built" / "patchcore-anomaly-detector",
         # Raw monorepo CMake build tree (local/DevKit development).
         APPS_ROOT / "build" / "examples" / "anomaly-detection" / "patchcore-anomaly-detector"
@@ -113,6 +97,73 @@ class TestE2E:
         for f in output_files:
             assert f.stat().st_size > 0, f"Output file is empty: {f.name}"
 
+    def test_partial_write_failure_fails_the_run(
+        self,
+        e2e_model_path,
+        tmp_output_dir,
+        test_images_dir,
+        test_timeout_ms,
+        skip_unless_e2e_ready,
+        e2e_config_writer,
+    ):
+        """A run that writes some overlays and fails to write others must
+        exit nonzero -- succeeding as long as at least one write went through
+        would silently under-report incomplete output."""
+        images = sorted(p for p in test_images_dir.iterdir() if p.is_file()) \
+            if test_images_dir.exists() else []
+        skip_unless_e2e_ready(len(images) >= 2, "test_images_dir needs at least 2 images")
+
+        bank_path = tmp_output_dir.parent / "memory_bank.npy"
+        meta_path = tmp_output_dir.parent / "bank_meta.json"
+        config_path = e2e_config_writer(
+            {
+                "source": {"type": "image_dir", "image_dir": str(test_images_dir)},
+                "calibration": {
+                    "nominal_images_dir": str(test_images_dir),
+                    "threshold_images_dir": str(test_images_dir),
+                },
+                "memory_bank": {"path": str(bank_path), "meta_path": str(meta_path)},
+                "output": {"dir": str(tmp_output_dir)},
+            }
+        )
+        timeout_s = test_timeout_ms / 1000
+
+        calibrate = subprocess.run(
+            [sys.executable, str(MAIN_PY), "--calibrate", "--config", str(config_path)],
+            capture_output=True, text=True, timeout=timeout_s, cwd=str(EXAMPLE_DIR),
+        )
+        assert calibrate.returncode == 0, (
+            f"--calibrate exited with code {calibrate.returncode}\n"
+            f"stdout:\n{calibrate.stdout}\nstderr:\n{calibrate.stderr}"
+        )
+
+        # Pre-create one output path as read-only so its overlay write fails
+        # while every other image's write should still succeed.
+        blocked_name = images[0].name
+        blocked_path = tmp_output_dir / blocked_name
+        blocked_path.write_bytes(b"")
+        blocked_path.chmod(0o444)
+        try:
+            score = subprocess.run(
+                [sys.executable, str(MAIN_PY), "--config", str(config_path)],
+                capture_output=True, text=True, timeout=timeout_s, cwd=str(EXAMPLE_DIR),
+            )
+        finally:
+            blocked_path.chmod(0o644)
+
+        assert score.returncode != 0, (
+            f"expected a nonzero exit code for a partial write failure, got 0\n"
+            f"stdout:\n{score.stdout}\nstderr:\n{score.stderr}"
+        )
+        assert blocked_name in score.stderr, (
+            f"expected the failed path ({blocked_name}) named in stderr:\n{score.stderr}"
+        )
+        other_outputs = [
+            path for path in tmp_output_dir.iterdir()
+            if path.is_file() and path.name not in ("config.yaml", blocked_name)
+        ]
+        assert other_outputs, "the one blocked write should not have stopped the rest from running"
+
     def test_bank_model_mismatch_fails_at_load(
         self,
         e2e_model_path,
@@ -161,26 +212,24 @@ class TestE2E:
         skip_unless_e2e_ready,
         e2e_config_writer,
     ):
-        """Calibrates against the shipped real nominal set, then scores a
-        held-out normal image (NOT part of calibration) plus a real defect
-        image -- and asserts the actual pass/fail verdict on each, not just
-        that the defect scores higher than the image it was calibrated on
-        (which proves nothing about either verdict being correct)."""
+        """Scores every held-out normal image and every defect image, and
+        asserts the actual pass/fail verdict on each -- not just relative
+        ordering, and not just one cherry-picked passing image."""
         skip_unless_e2e_ready(
             NOMINAL_DIR.is_dir() and any(NOMINAL_DIR.iterdir()),
             f"nominal calibration set missing under {NOMINAL_DIR}",
         )
-        held_out_path = HELD_OUT_NORMAL_DIR / HELD_OUT_NORMAL_IMAGE
-        defect_path = REAL_IMAGES_DIR / DEFECT_IMAGE
+        held_out_paths = sorted(HELD_OUT_NORMAL_DIR.glob("*.png")) if HELD_OUT_NORMAL_DIR.is_dir() else []
+        defect_paths = sorted(p for p in REAL_IMAGES_DIR.glob("scratch_*.png"))
         skip_unless_e2e_ready(
-            held_out_path.is_file() and defect_path.is_file(),
-            f"held-out normal or defect image missing ({held_out_path}, {defect_path})",
+            bool(held_out_paths) and bool(defect_paths),
+            f"held-out normal or defect images missing ({HELD_OUT_NORMAL_DIR}, {REAL_IMAGES_DIR})",
         )
 
         score_dir = tmp_output_dir.parent / "score_inputs"
         score_dir.mkdir(parents=True, exist_ok=True)
-        (score_dir / HELD_OUT_NORMAL_IMAGE).write_bytes(held_out_path.read_bytes())
-        (score_dir / DEFECT_IMAGE).write_bytes(defect_path.read_bytes())
+        for path in held_out_paths + defect_paths:
+            (score_dir / path.name).write_bytes(path.read_bytes())
 
         bank_path = tmp_output_dir.parent / "memory_bank.npy"
         meta_path = tmp_output_dir.parent / "bank_meta.json"
@@ -216,19 +265,34 @@ class TestE2E:
         )
 
         verdicts = {
-            Path(m.group("path")).name: m.group("verdict")
+            Path(m.group("path")).name: (m.group("verdict"), m.group("score"))
             for m in SCORE_RE.finditer(score.stdout)
         }
-        assert HELD_OUT_NORMAL_IMAGE in verdicts and DEFECT_IMAGE in verdicts, (
-            f"could not find both images' verdicts in stdout:\n{score.stdout}"
+
+        held_out_names = [p.name for p in held_out_paths]
+        defect_names = [p.name for p in defect_paths]
+        for name in held_out_names + defect_names:
+            assert name in verdicts, f"no verdict for {name} in stdout:\n{score.stdout}"
+
+        # Report every image's outcome (not just the first failure) so a
+        # regression here shows the full pass/fail picture in one run.
+        held_out_failures = [
+            f"{name} scored {verdicts[name][1]} (ANOMALOUS)"
+            for name in held_out_names
+            if verdicts[name][0] != "normal"
+        ]
+        defect_failures = [
+            f"{name} scored {verdicts[name][1]} (normal)"
+            for name in defect_names
+            if verdicts[name][0] != "ANOMALOUS"
+        ]
+        assert not held_out_failures, (
+            f"{len(held_out_failures)}/{len(held_out_names)} held-out normal images were "
+            f"flagged anomalous: {held_out_failures}"
         )
-        assert verdicts[HELD_OUT_NORMAL_IMAGE] == "normal", (
-            f"held-out normal image {HELD_OUT_NORMAL_IMAGE} was flagged "
-            f"{verdicts[HELD_OUT_NORMAL_IMAGE]}; stdout:\n{score.stdout}"
-        )
-        assert verdicts[DEFECT_IMAGE] == "ANOMALOUS", (
-            f"defect image {DEFECT_IMAGE} was not flagged anomalous "
-            f"(verdict={verdicts[DEFECT_IMAGE]}); stdout:\n{score.stdout}"
+        assert not defect_failures, (
+            f"{len(defect_failures)}/{len(defect_names)} defect images were not flagged "
+            f"anomalous: {defect_failures}"
         )
 
     def test_cpp_built_bank_scores_correctly_in_python(
@@ -293,23 +357,50 @@ class TestE2E:
             f"stdout:\n{calibrate.stdout}\nstderr:\n{calibrate.stderr}"
         )
 
-        score = subprocess.run(
+        py_score = subprocess.run(
             [sys.executable, str(MAIN_PY), "--config", str(config_path)],
             capture_output=True, text=True, timeout=timeout_s, cwd=str(EXAMPLE_DIR),
         )
-        assert score.returncode == 0, (
-            f"Python scoring against a C++-built bank exited with code {score.returncode}\n"
-            f"stdout:\n{score.stdout}\nstderr:\n{score.stderr}"
+        assert py_score.returncode == 0, (
+            f"Python scoring against a C++-built bank exited with code {py_score.returncode}\n"
+            f"stdout:\n{py_score.stdout}\nstderr:\n{py_score.stderr}"
         )
 
-        scores = {
-            Path(m.group("path")).name: float(m.group("score"))
-            for m in SCORE_RE.finditer(score.stdout)
-        }
-        assert NOMINAL_IMAGE in scores and DEFECT_IMAGE in scores, (
-            f"could not find both images' scores in stdout:\n{score.stdout}"
+        # Also score the same bank with the C++ binary that built it, so
+        # this compares actual scores/verdicts across languages -- not just
+        # that each language's own score ordering looks sensible.
+        cpp_score = subprocess.run(
+            [str(cpp_binary), "--config", str(config_path)],
+            capture_output=True, text=True, timeout=timeout_s, cwd=str(APPS_ROOT),
         )
-        assert scores[DEFECT_IMAGE] > scores[NOMINAL_IMAGE], (
+        assert cpp_score.returncode == 0, (
+            f"C++ scoring its own bank exited with code {cpp_score.returncode}\n"
+            f"stdout:\n{cpp_score.stdout}\nstderr:\n{cpp_score.stderr}"
+        )
+
+        py_scores = {
+            Path(m.group("path")).name: (m.group("score"), m.group("verdict"))
+            for m in SCORE_RE.finditer(py_score.stdout)
+        }
+        cpp_scores = {
+            Path(m.group("path")).name: (m.group("score"), m.group("verdict"))
+            for m in SCORE_RE.finditer(cpp_score.stdout)
+        }
+        for image in (NOMINAL_IMAGE, DEFECT_IMAGE):
+            assert image in py_scores, f"Python: no score for {image} in:\n{py_score.stdout}"
+            assert image in cpp_scores, f"C++: no score for {image} in:\n{cpp_score.stdout}"
+            py_value, py_verdict = float(py_scores[image][0]), py_scores[image][1]
+            cpp_value, cpp_verdict = float(cpp_scores[image][0]), cpp_scores[image][1]
+            assert py_verdict == cpp_verdict, (
+                f"{image}: Python verdict={py_verdict} but C++ verdict={cpp_verdict} "
+                f"(scores {py_value:.6f} vs {cpp_value:.6f})"
+            )
+            assert abs(py_value - cpp_value) < 0.01, (
+                f"{image}: Python and C++ scores disagree by more than expected floating-point "
+                f"noise: {py_value:.6f} vs {cpp_value:.6f}"
+            )
+
+        assert float(py_scores[DEFECT_IMAGE][0]) > float(py_scores[NOMINAL_IMAGE][0]), (
             "Python scoring a C++-built bank must still separate defect from nominal: "
-            f"nominal={scores[NOMINAL_IMAGE]:.4f} defect={scores[DEFECT_IMAGE]:.4f}"
+            f"nominal={py_scores[NOMINAL_IMAGE][0]} defect={py_scores[DEFECT_IMAGE][0]}"
         )

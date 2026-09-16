@@ -2,7 +2,7 @@ model:                                         # PatchCore feature-extractor mod
   path: models/patchcore_wide_resnet50_2_bf16_mla.tar.gz
 
 source:
-  type: image_dir                               # image_dir works out of the box with the shipped assets below.
+  type: video_file
   image_dir: assets/datasets/patchcore/images   # Used when type=image_dir.
   video_path: assets/datasets/patchcore/video/test.mp4
   rtsp:                                          # Used when type=rtsp.
@@ -30,6 +30,13 @@ calibration:                                    # Used only by --calibrate.
   seed: 0
   threshold_percentile: 99.0                    # Decision threshold = this percentile of nominal scores.
   threshold_images_dir: ""                      # Optional held-out nominal set; "" reuses nominal_images_dir.
+  threshold_margin: 1.2                         # Multiplier on top of the percentile threshold. The percentile
+                                                 # alone is capped by the highest score already present in the
+                                                 # nominal set, so it cannot absorb score inflation from sources
+                                                 # calibration never sees -- e.g. the unavoidable RGB<->YUV
+                                                 # rounding a video/RTSP source introduces even losslessly, which
+                                                 # this shipped nominal set's tight bank (coreset_ratio above)
+                                                 # has almost no headroom for. 1.0 = no margin.
 
 scoring:
   num_neighbors: 9                              # Neighborhood-reweighting support-set size (paper Eq. 7-8).
@@ -37,15 +44,16 @@ scoring:
 
 output:
   dir: sandbox/patchcore-anomaly-detector        # Folder for annotated overlay images.
-  save_every: 0                                 # image_dir: always saves. video_file/rtsp: 0 disables local saving.
+  save_every: 60
   overlay_alpha: 0.45                           # Heatmap blend weight in the output overlay image.
   insight:                                      # video_file/rtsp only: live view.
-    host: ""                                    # Required for type=video_file/rtsp, e.g. your Insight host IP.
+    host: "192.168.130.129"
     video_port: 9000
     channel: 0                                  # Insight channel index.
     bitrate_kbps: 4000                          # H.264 encoder bitrate for the pushed video stream.
 
 runtime:
-  timeout_ms: 15000                             # Per-frame model-inference timeout (rtsp's own frame wait is unbounded).
+  timeout_ms: 15000                             # Per-frame model-inference timeout (rtsp's own frame wait retries
+                                                 # indefinitely on a network stall or startup delay instead of giving up).
   frames: 0                                     # video_file/rtsp frame limit; 0 = run until the source ends.
   profile: false                                # Reserved for future per-stage profiling output.

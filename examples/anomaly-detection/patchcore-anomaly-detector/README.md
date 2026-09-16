@@ -23,6 +23,8 @@ Detects visual anomalies in industrial images or video using a compiled WideResN
 ## Prerequisites
 
 - `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
+- To run the Python variant: the Neat runtime's Python virtual environment at `~/pyneat`, created once when the Neat runtime is installed on the target (part of standard DevKit/SDK setup, not this app's install step) -- see the `sima-cli` documentation above.
+- For full `video_file`/`rtsp` frame rate in the Python variant: `~/pyneat`'s numpy needs a real BLAS backend. Some DevKit images ship an apt-installed numpy linked against plain reference BLAS (no threading, no vectorized matmul), not a PyPI wheel's bundled OpenBLAS -- check with `python3 -c "import numpy; numpy.show_config()"` (look for `openblas` under `found: true`; a build with only `blas`/`lapack` and no BLAS library listed is the reference build). If so, `source ~/pyneat/bin/activate && pip install numpy==1.26.4` (the newest version still within pyneat's own `numpy<2,>=1.24` pin) swaps in a real OpenBLAS build; this app's own single-threaded-BLAS default (see `main.py`'s top-of-file `OPENBLAS_NUM_THREADS`) is safe either way -- it's a no-op against reference BLAS and roughly doubles video/rtsp throughput against OpenBLAS on hardware this was measured on.
 - For `source.type: rtsp`, an RTSP H.264, H.265, or MJPEG source reachable from the target.
 - For `source.type: video_file` or `rtsp`, [Insight](https://developer.sima.ai/software/tools/insight/) (or another RTP receiver) to view the live annotated stream.
 
@@ -50,7 +52,13 @@ Set `model.path` in the example config to the downloaded package.
 
 ## Prepare the memory bank
 
-Before scoring anything, build a memory bank from a directory of known-good ("nominal") images of your own inspection target -- the bundled `assets/datasets/patchcore/nominal` set is a demo only, not a substitute for your own target's images:
+Before scoring anything, build a memory bank from a directory of known-good ("nominal") images of your own inspection target. The bundled `assets/datasets/patchcore/` set exists only to make this demo reproducible without your own images, and is not a substitute for your own target's data:
+
+- `nominal/` -- 16 real known-good reference images. `calibration.nominal_images_dir` points here by default; this is what `--calibrate` below builds the shipped memory bank from.
+- `held_out_normal/` -- 4 further real known-good images, deliberately excluded from calibration, used only by this example's own test suite to check that genuinely normal images the bank never saw still score below the threshold.
+- `images/` -- an image-directory scoring input: one normal-looking image (`plain_0.png`) and four images with synthetic scratch defects (`scratch_0.png`-`scratch_3.png`), for exercising `source.type: image_dir` end to end.
+
+To calibrate against your own inspection target instead, point `calibration.nominal_images_dir` at a directory of your own known-good images (a few dozen is a reasonable starting point) before running `--calibrate`.
 
 ```bash
 ./${APP_DIR}/src/cpp/pre-built/patchcore-anomaly-detector --calibrate --config ${APP_DIR}/src/common/config.yaml

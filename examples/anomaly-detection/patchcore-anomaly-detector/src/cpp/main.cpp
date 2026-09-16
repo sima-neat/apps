@@ -67,6 +67,7 @@ struct Config {
   std::uint64_t seed = 0;
   double threshold_percentile = 99.0;
   fs::path calibration_threshold_dir; // empty = reuse calibration_nominal_dir
+  double threshold_margin = 1.0; // multiplier applied on top of the percentile threshold
 
   int num_neighbors = 9;
   double gaussian_sigma = 4.0;
@@ -121,6 +122,7 @@ void validate_config(const Config& cfg) {
                          "calibration.coreset_ratio must be in (0, 1]");
   sima_examples::require(cfg.threshold_percentile >= 0.0 && cfg.threshold_percentile <= 100.0,
                          "calibration.threshold_percentile must be between 0 and 100");
+  sima_examples::require(cfg.threshold_margin >= 1.0, "calibration.threshold_margin must be >= 1.0");
   sima_examples::require(cfg.num_neighbors >= 1, "scoring.num_neighbors must be >= 1");
   sima_examples::require(cfg.timeout_ms > 0, "runtime.timeout_ms must be > 0");
   sima_examples::require(cfg.frames >= 0, "runtime.frames must be >= 0");
@@ -157,6 +159,7 @@ Config load_config(const fs::path& path) {
   cfg.seed = static_cast<std::uint64_t>(raw.int_or("calibration.seed", 0));
   cfg.threshold_percentile = raw.double_or("calibration.threshold_percentile", 99.0);
   cfg.calibration_threshold_dir = raw.string_or("calibration.threshold_images_dir", "");
+  cfg.threshold_margin = raw.double_or("calibration.threshold_margin", 1.0);
 
   cfg.num_neighbors = raw.int_or("scoring.num_neighbors", 9);
   cfg.gaussian_sigma = raw.double_or("scoring.gaussian_sigma", 4.0);
@@ -229,31 +232,13 @@ std::vector<fs::path> find_images(const fs::path& dir) {
   return images;
 }
 
-/// Full-frame heatmap overlay (blue = typical, red = anomalous), scaled to
-/// this frame's own min/max.
-///
-/// DEVIATION FROM REVIEW COMMENT: a code review on this example asked for a
-/// fixed, calibration-derived color scale instead of this per-image min/max
-/// (its stated concern: per-image scaling can turn small variations in a
-/// normal image into strong red regions). That was implemented and verified
-/// working exactly as asked -- a calibration-anchored scale (nominal
-/// median -> patch-level threshold) correctly renders held-out normal images
-/// as mostly blue/cool, confirmed both visually and by the raw per-patch
-/// score distributions. It was reverted because it cannot reproduce a
-/// required reference output on this example's own bundled defect assets: a
-/// *fixed* scale, applied honestly, shows broad warm coverage on those
-/// specific images because their raw per-patch median already exceeds the
-/// calibrated threshold (verified numerically) -- that is a true property of
-/// those assets' patch-level scores, not a rendering bug, but per-image
-/// scaling is the only approach that visually compresses it back down to a
-/// small localized region regardless of the true breadth of the underlying
-/// signal. If recalibrating against better texture-matched nominal/defect
-/// assets narrows that gap, the calibration-anchored version (still in git
-/// history on this branch) is the correct one to restore instead of this.
-///
-/// score/threshold/verdict are printed to stdout, not burned into the frame.
+/// Heatmap overlay (blue = typical, red = anomalous) on a fixed scale
+/// calibrated from nominal patch scores (patch_scale_min/max from
+/// bank_meta.json), not this image's own min/max -- per-image scaling would
+/// make ordinary texture variation look as "hot" as a real defect.
 cv::Mat draw_overlay(const cv::Mat& bgr, const patchcore::AnomalyResult& result, int map_h,
-                     int map_w, double sigma, double alpha) {
+                     int map_w, double sigma, double alpha, double patch_scale_min,
+                     double patch_scale_max) {
   cv::Mat score_mat(map_h, map_w, CV_32FC1, const_cast<float*>(result.score_map.data()));
   cv::Mat heat;
   cv::resize(score_mat, heat, bgr.size(), 0, 0, cv::INTER_LINEAR);
@@ -261,15 +246,14 @@ cv::Mat draw_overlay(const cv::Mat& bgr, const patchcore::AnomalyResult& result,
     cv::GaussianBlur(heat, heat, cv::Size(0, 0), sigma);
   }
 
-  double lo = 0.0;
-  double hi = 0.0;
-  cv::minMaxLoc(heat, &lo, &hi);
+  const double scale = std::max(patch_scale_max - patch_scale_min, 1e-6);
+  cv::Mat heat_norm;
+  heat.convertTo(heat_norm, CV_32FC1, 1.0 / scale, -patch_scale_min / scale);
+  cv::min(heat_norm, 1.0, heat_norm);
+  cv::max(heat_norm, 0.0, heat_norm);
+
   cv::Mat heat_u8;
-  if (hi > lo) {
-    heat.convertTo(heat_u8, CV_8U, 255.0 / (hi - lo), -255.0 * lo / (hi - lo));
-  } else {
-    heat_u8 = cv::Mat::zeros(bgr.size(), CV_8UC1);
-  }
+  heat_norm.convertTo(heat_u8, CV_8U, 255.0);
   cv::Mat heat_color;
   cv::applyColorMap(heat_u8, heat_color, cv::COLORMAP_JET);
 
@@ -361,27 +345,23 @@ int cmd_calibrate(const Config& cfg) {
     patch_scores.insert(patch_scores.end(), scored.score_map.begin(), scored.score_map.end());
   }
   const int threshold_num_images = static_cast<int>(scores.size());
-  const float threshold = patchcore::percentile_threshold(scores, cfg.threshold_percentile);
+  const float threshold = patchcore::percentile_threshold(scores, cfg.threshold_percentile) *
+                          static_cast<float>(cfg.threshold_margin);
   std::cout << "Threshold: " << threshold << " (p" << cfg.threshold_percentile << " over "
-            << threshold_num_images << " nominal images from " << threshold_dir << ")\n";
+            << threshold_num_images << " nominal images from " << threshold_dir << ", x"
+            << cfg.threshold_margin << " margin)\n";
 
-  // A separate, patch-scoped threshold, stored in bank_meta.json but NOT
-  // currently used by draw_overlay -- see the DEVIATION FROM REVIEW COMMENT
-  // note on draw_overlay for why. This is calibrated against per-image
-  // aggregate scores (already reweighted by neighborhood diversity) and
-  // answers "is this image anomalous"; a patch-scoped number instead answers
-  // "which patches", derived from the same nominal patches' raw per-patch
-  // distances. patch_scale_min (the nominal median -- see draw_overlay's
-  // deviation note for why the median, not the true min or a low percentile)
-  // and patch_scale_max (patch_threshold itself) are the low/high anchors a
-  // calibration-anchored overlay would use if restored.
+  // Separate, patch-scoped threshold for the heatmap overlay (see
+  // draw_overlay) -- not the image-level threshold above, which is
+  // reweighted by neighborhood diversity and answers a different question.
   const float patch_threshold =
-      patchcore::percentile_threshold(patch_scores, cfg.threshold_percentile);
+      patchcore::percentile_threshold(patch_scores, cfg.threshold_percentile) *
+      static_cast<float>(cfg.threshold_margin);
   const float patch_scale_min = patchcore::percentile_threshold(patch_scores, 50.0);
   const float patch_scale_max = patch_threshold;
   std::cout << "Patch threshold: " << patch_threshold << " (p" << cfg.threshold_percentile
-            << " over " << patch_scores.size() << " nominal patches; overlay scale "
-            << patch_scale_min << "-" << patch_scale_max << ")\n";
+            << " over " << patch_scores.size() << " nominal patches, x" << cfg.threshold_margin
+            << " margin; overlay scale " << patch_scale_min << "-" << patch_scale_max << ")\n";
 
   if (!cfg.memory_bank_path.parent_path().empty()) {
     fs::create_directories(cfg.memory_bank_path.parent_path());
@@ -428,7 +408,7 @@ int cmd_calibrate(const Config& cfg) {
 // ---------------------------------------------------------------------------
 
 int cmd_score_image_dir(const Config& cfg, const patchcore::MemoryBank& bank, float threshold,
-                        int num_neighbors) {
+                        int num_neighbors, double patch_scale_min, double patch_scale_max) {
   const auto paths = find_images(cfg.image_dir);
   if (paths.empty()) {
     std::cerr << "[FATAL] no images found in " << cfg.image_dir << "\n";
@@ -447,6 +427,7 @@ int cmd_score_image_dir(const Config& cfg, const patchcore::MemoryBank& bank, fl
   simaai::neat::Model model(cfg.model_path, image_model_options());
 
   int processed = 0;
+  int write_failures = 0;
   for (const auto& path : paths) {
     cv::Mat bgr = cv::imread(path.string(), cv::IMREAD_COLOR);
     if (bgr.empty()) {
@@ -461,7 +442,8 @@ int cmd_score_image_dir(const Config& cfg, const patchcore::MemoryBank& bank, fl
     const double host_start = time_ms();
     const auto scored = bank.score(embedding, num_neighbors);
     const cv::Mat overlay = draw_overlay(bgr, scored, embedding.height, embedding.width,
-                                         cfg.gaussian_sigma, cfg.overlay_alpha);
+                                         cfg.gaussian_sigma, cfg.overlay_alpha, patch_scale_min,
+                                         patch_scale_max);
     const double host_ms = time_ms() - host_start;
 
     const bool anomalous = scored.image_score > threshold;
@@ -470,13 +452,20 @@ int cmd_score_image_dir(const Config& cfg, const patchcore::MemoryBank& bank, fl
               << "ms host=" << host_ms << "ms)\n";
     const fs::path out_path = cfg.output_dir / path.filename();
     if (!cv::imwrite(out_path.string(), overlay)) {
-      std::cerr << "[WARN] failed to write overlay: " << out_path << "\n";
+      std::cerr << "[ERROR] failed to write overlay: " << out_path << "\n";
+      ++write_failures;
       continue;
     }
     ++processed;
   }
   std::cout << "Done: " << processed << " images processed -- overlays written to " << cfg.output_dir
             << "\n";
+  // A partial run (some overlays written, some failed) is still a failure --
+  // the caller asked for every input scored, not "at least one."
+  if (write_failures > 0) {
+    std::cerr << "[FATAL] " << write_failures << " overlay(s) failed to write\n";
+    return 3;
+  }
   return processed > 0 ? 0 : 3;
 }
 
@@ -531,7 +520,7 @@ void stream_frame(simaai::neat::Run& run, const cv::Mat& frame_bgr) {
 }
 
 int cmd_score_video_file(const Config& cfg, const patchcore::MemoryBank& bank, float threshold,
-                         int num_neighbors) {
+                         int num_neighbors, double patch_scale_min, double patch_scale_max) {
   cv::VideoCapture video(cfg.video_path.string());
   cv::Mat frame;
   if (!video.isOpened() || !video.read(frame)) {
@@ -554,6 +543,7 @@ int cmd_score_video_file(const Config& cfg, const patchcore::MemoryBank& bank, f
   }
 
   int processed = 0;
+  int write_failures = 0;
   while (cfg.frames <= 0 || processed < cfg.frames) {
     const double mla_start = time_ms();
     auto tensors = runner.run(simaai::neat::TensorList{rgb_tensor(frame)}, cfg.timeout_ms);
@@ -567,7 +557,8 @@ int cmd_score_video_file(const Config& cfg, const patchcore::MemoryBank& bank, f
     const double host_start = time_ms();
     const auto scored = bank.score(embedding, num_neighbors);
     const cv::Mat overlay = draw_overlay(frame, scored, embedding.height, embedding.width,
-                                         cfg.gaussian_sigma, cfg.overlay_alpha);
+                                         cfg.gaussian_sigma, cfg.overlay_alpha, patch_scale_min,
+                                         patch_scale_max);
     const double host_ms = time_ms() - host_start;
 
     ++processed;
@@ -580,7 +571,8 @@ int cmd_score_video_file(const Config& cfg, const patchcore::MemoryBank& bank, f
     if (cfg.save_every > 0 && processed % cfg.save_every == 0) {
       const fs::path snapshot_path = cfg.output_dir / ("frame_" + std::to_string(processed) + ".jpg");
       if (!cv::imwrite(snapshot_path.string(), overlay)) {
-        std::cerr << "[WARN] failed to write snapshot: " << snapshot_path << "\n";
+        std::cerr << "[ERROR] failed to write snapshot: " << snapshot_path << "\n";
+        ++write_failures;
       }
     }
 
@@ -593,14 +585,16 @@ int cmd_score_video_file(const Config& cfg, const patchcore::MemoryBank& bank, f
   video_sender.run.close();
   std::cout << "Done: " << processed << " frames processed  video_sender=" << cfg.insight_host
             << ":" << video_sender.port << "\n";
+  if (write_failures > 0) {
+    std::cerr << "[FATAL] " << write_failures << " snapshot(s) failed to write\n";
+    return 3;
+  }
   return processed > 0 ? 0 : 3;
 }
 
 // ---------------------------------------------------------------------------
-// Score: rtsp -- decode-only RtspDecodedInput graph; the host pulls each raw
-// decoded frame, scores it, and host-pushes the annotated heatmap overlay to
-// Insight via the same VideoSender helper as video_file. See
-// build_rtsp_runtime's comment for why the model isn't embedded in the graph.
+// Score: rtsp -- see build_rtsp_runtime's comment for why the model isn't
+// embedded in the graph.
 // ---------------------------------------------------------------------------
 
 struct SourceGeometry {
@@ -692,22 +686,11 @@ struct RtspRuntime {
   simaai::neat::Run run;
 };
 
-// Decode-only graph -- the model is deliberately NOT embedded here. An
-// embedded-model graph (source -> branch into named "frame" and "model"
-// routes -> model -> named "embedding" output, joined per frame) was
-// re-attempted (in the Python variant of this example, which wraps the same
-// underlying simaai::neat::Model as this one) and reproducibly hits
-// resource.output_pool_exhausted at the detesscast stage within the first few
-// frames, with the printed pipeline showing num-buffers=4 hardcoded on every
-// neatprocesscvu/neatprocessmla stage. This matches Model::Impl's
-// constructor in the Core SDK, which allocates a fixed 4-buffer output pool
-// for any Model embedded in a graph route, with no public option in this SDK
-// version to raise it. That pool starves under sustained RTSP frame rates
-// (confirmed reproducible on current hardware ahead of this PR; see the PR
-// description for the full repro). Scoring host-side via a plain
-// Model::run() call per frame, as image_dir/video_file already do, sidesteps
-// that pool entirely and is what this function and cmd_score_rtsp use
-// instead.
+// Decode-only graph -- the model is deliberately NOT embedded here; this
+// function and cmd_score_rtsp score each pulled frame host-side instead. An
+// embedded-model graph hits [resource.output_pool_exhausted] once real
+// per-frame work competes with its hardcoded 4-buffer output pool -- see the
+// PR description for the full reproduction.
 RtspRuntime build_rtsp_runtime(const Config& cfg, const SourceGeometry& geometry) {
   RtspRuntime rt;
   auto source = make_rtsp_source_fragment(cfg, geometry);
@@ -725,7 +708,7 @@ RtspRuntime build_rtsp_runtime(const Config& cfg, const SourceGeometry& geometry
 }
 
 int cmd_score_rtsp(const Config& cfg, const patchcore::MemoryBank& bank, float threshold,
-                   int num_neighbors) {
+                   int num_neighbors, double patch_scale_min, double patch_scale_max) {
   const auto geometry = probe_rtsp_geometry(cfg);
   if (geometry.width <= 0 || geometry.height <= 0 || geometry.fps <= 0) {
     std::cerr << "[FATAL] failed to resolve source geometry for " << cfg.rtsp_url << "\n";
@@ -743,6 +726,7 @@ int cmd_score_rtsp(const Config& cfg, const patchcore::MemoryBank& bank, float t
   }
 
   int processed = 0;
+  int write_failures = 0;
   while (cfg.frames <= 0 || processed < cfg.frames) {
     simaai::neat::Sample sample;
     simaai::neat::PullError pull_error;
@@ -763,7 +747,8 @@ int cmd_score_rtsp(const Config& cfg, const patchcore::MemoryBank& bank, float t
     const double host_start = time_ms();
     const auto scored = bank.score(embedding, num_neighbors);
     const cv::Mat overlay = draw_overlay(bgr, scored, embedding.height, embedding.width,
-                                         cfg.gaussian_sigma, cfg.overlay_alpha);
+                                         cfg.gaussian_sigma, cfg.overlay_alpha, patch_scale_min,
+                                         patch_scale_max);
     const bool anomalous = scored.image_score > threshold;
     ++processed;
     std::cout << "frame=" << processed << ": score=" << scored.image_score
@@ -774,7 +759,8 @@ int cmd_score_rtsp(const Config& cfg, const patchcore::MemoryBank& bank, float t
     if (save_frames && processed % cfg.save_every == 0) {
       const fs::path snapshot_path = cfg.output_dir / ("frame_" + std::to_string(processed) + ".jpg");
       if (!cv::imwrite(snapshot_path.string(), overlay)) {
-        std::cerr << "[WARN] failed to write snapshot: " << snapshot_path << "\n";
+        std::cerr << "[ERROR] failed to write snapshot: " << snapshot_path << "\n";
+        ++write_failures;
       }
     }
   }
@@ -783,6 +769,10 @@ int cmd_score_rtsp(const Config& cfg, const patchcore::MemoryBank& bank, float t
   video_sender.run.close();
   std::cout << "Done: " << processed << " frames processed  video_sender=" << cfg.insight_host
             << ":" << video_sender.port << "\n";
+  if (write_failures > 0) {
+    std::cerr << "[FATAL] " << write_failures << " snapshot(s) failed to write\n";
+    return 3;
+  }
   return processed > 0 ? 0 : 3;
 }
 
@@ -817,12 +807,16 @@ int main(int argc, char** argv) {
     patchcore::verify_bank_hash(meta, cfg.memory_bank_path);
     const auto bank = patchcore::MemoryBank::load(cfg.memory_bank_path);
     const auto threshold = static_cast<float>(meta.threshold_value);
-    // num_neighbors changes the neighborhood-reweighting term, which changes
-    // the score distribution the threshold above was derived from. Score with
-    // the value the bank was actually calibrated with (like the threshold
-    // itself), not whatever the live config currently says -- otherwise a
-    // config edit after calibration silently compares scores and a threshold
-    // from different distributions.
+    if (!meta.has_patch_threshold) {
+      std::cerr << "[FATAL] bank_meta.json is missing patch_threshold.scale_min (built before "
+                << "this field existed); recalibrate with --calibrate to regenerate it\n";
+      return 2;
+    }
+    const double patch_scale_min = meta.patch_threshold_scale_min;
+    const double patch_scale_max = meta.patch_threshold_scale_max;
+    // Score with the num_neighbors the bank was calibrated with, not the
+    // live config -- it changes the score distribution the threshold was
+    // derived from.
     const int num_neighbors = meta.num_neighbors;
     if (num_neighbors != cfg.num_neighbors) {
       std::cerr << "[WARN] scoring.num_neighbors=" << cfg.num_neighbors
@@ -833,12 +827,12 @@ int main(int argc, char** argv) {
     }
 
     if (cfg.source_type == SourceType::ImageDir) {
-      return cmd_score_image_dir(cfg, bank, threshold, num_neighbors);
+      return cmd_score_image_dir(cfg, bank, threshold, num_neighbors, patch_scale_min, patch_scale_max);
     }
     if (cfg.source_type == SourceType::VideoFile) {
-      return cmd_score_video_file(cfg, bank, threshold, num_neighbors);
+      return cmd_score_video_file(cfg, bank, threshold, num_neighbors, patch_scale_min, patch_scale_max);
     }
-    return cmd_score_rtsp(cfg, bank, threshold, num_neighbors);
+    return cmd_score_rtsp(cfg, bank, threshold, num_neighbors, patch_scale_min, patch_scale_max);
   } catch (const std::exception& e) {
     std::cerr << "Error: " << e.what() << "\n";
     return 1;

@@ -1,59 +1,22 @@
 """PatchCore anomaly detection on the SiMa MLA: a compiled `wide_resnet50_2`
-patch-feature extractor plus host-side coreset memory-bank scoring.
+patch-feature extractor plus host-side coreset memory-bank scoring (see
+patchcore_scoring.py). Runs on the Modalix DevKit; from the Palette SDK host
+use `dk main.py ...` instead of a plain local `python3 main.py ...`.
 
-Every current Modalix example ends at a model whose output is already the
-answer (boxes, keypoints, masks, a depth map). PatchCore is different: the
-compiled graph produces an intermediate per-patch embedding, and the anomaly
-decision is made afterward, on the host, against a memory bank calibrated
-from the deployment's own known-good images. See `patchcore_scoring.py` for
-that host-side stage and the on-disk `memory_bank.npy` / `bank_meta.json`
-artifact pair.
-
-Two entry points:
-
-    # 1. One-time (per inspection target): build the memory bank from a
-    #    directory of known-good ("nominal") reference images, using the
-    #    *compiled, quantized* model's own embeddings -- not float PyTorch
-    #    embeddings. A bank built in float shifts the distance distribution
-    #    and silently degrades score separation after int8/bf16 compilation,
-    #    which is why this always calibrates through the same model package
-    #    the scoring run below will use, and pins that package's hash into
-    #    bank_meta.json.
-    python3 main.py --calibrate --config common/config.yaml
-
-    # 2. Score new input against that memory bank. `source.type` in the
-    #    config selects image directory, video file, or RTSP stream. Every
-    #    source is fed to the model the same way: a host-decoded BGR frame
-    #    through `Model.run`/`Runner.run`. image_dir writes annotated
-    #    overlays to `output.dir`; video_file/rtsp additionally stream the
-    #    overlay live to Insight (`output.insight.*`) and still write
-    #    periodic local snapshots if `output.save_every > 0`.
-    python3 main.py --config common/config.yaml
-
-Runs on the Modalix DevKit: pyneat requires the MLA + Neat runtime, not the
-x86 SDK host. From the Palette SDK host, use `dk main.py ...` instead of a
-plain local `python3 main.py ...`.
+    python3 main.py --calibrate --config common/config.yaml  # build the bank
+    python3 main.py --config common/config.yaml               # score input
 """
 from __future__ import annotations
 
 import os
 
-# Must run before numpy (imported transitively below, and by patchcore_scoring)
-# picks a BLAS backend: this system's numpy links the unoptimized reference
-# BLAS (no OpenBLAS/BLIS/ATLAS -- confirmed via numpy.show_config()), and its
-# multi-threading defaults spawn/synchronize a thread pool on every matmul
-# call. For the small per-patch distance matrices this example computes many
-# times per second, that synchronization overhead exceeds the entire cost of
-# the computation itself -- observed directly as several minutes of `sys`
-# time (thread scheduling) for a 25-second video run, which single-threading
-# cuts to under ten. Forcing single-threaded BLAS here removes that overhead
-# without depending on the caller's shell environment.
-for _blas_env_var in (
-    "OPENBLAS_NUM_THREADS",
-    "OMP_NUM_THREADS",
-    "MKL_NUM_THREADS",
-    "NUMEXPR_NUM_THREADS",
-):
+# Must run before numpy (imported transitively below) picks a BLAS backend.
+# OMP/MKL/NUMEXPR stay pinned to 1: unthrottled, their thread pool overhead
+# dominates this app's tiny per-frame matmuls. OPENBLAS_NUM_THREADS=6 is the
+# measured sweet spot on this (16-core) hardware for a real OpenBLAS build;
+# it's a no-op if numpy only has reference BLAS (no such library to read it).
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "6")
+for _blas_env_var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
     os.environ.setdefault(_blas_env_var, "1")
 
 import argparse
@@ -117,6 +80,7 @@ class CalibrationConfig:
     seed: int = 0
     threshold_percentile: float = 99.0
     threshold_images_dir: str = ""  # empty = reuse nominal_images_dir
+    threshold_margin: float = 1.0  # multiplier applied on top of the percentile threshold
 
 
 @dataclass(frozen=True)
@@ -193,6 +157,7 @@ def load_config(path: Path) -> AppConfig:
             seed=int(calibration.get("seed", 0)),
             threshold_percentile=float(calibration.get("threshold_percentile", 99.0)),
             threshold_images_dir=calibration.get("threshold_images_dir", ""),
+            threshold_margin=float(calibration.get("threshold_margin", 1.0)),
         ),
         scoring=ScoringConfig(
             num_neighbors=int(scoring.get("num_neighbors", 9)),
@@ -240,6 +205,8 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("calibration.coreset_ratio must be in (0, 1]")
     if not 0.0 <= cfg.calibration.threshold_percentile <= 100.0:
         raise ValueError("calibration.threshold_percentile must be between 0 and 100")
+    if cfg.calibration.threshold_margin < 1.0:
+        raise ValueError("calibration.threshold_margin must be >= 1.0")
     if cfg.scoring.num_neighbors < 1:
         raise ValueError("scoring.num_neighbors must be >= 1")
     if cfg.timeout_ms <= 0:
@@ -303,35 +270,16 @@ def extract_from_bgr(model: "pyneat.Model", bgr, timeout_ms: int = 5000) -> "np.
 # --------------------------------------------------------------------------
 
 
-def draw_overlay(bgr, score_map, sigma: float, alpha: float):
-    """Full-frame heatmap overlay (blue = typical, red = anomalous), scaled to
-    this frame's own min/max.
-
-    DEVIATION FROM REVIEW COMMENT: a code review on this example asked for a
-    fixed, calibration-derived color scale instead of this per-image min/max
-    (its stated concern: per-image scaling can turn small variations in a
-    normal image into strong red regions). That was implemented and verified
-    working exactly as asked -- a calibration-anchored scale (nominal
-    median -> patch-level threshold) correctly renders held-out normal images
-    as mostly blue/cool, confirmed both visually and by the raw per-patch
-    score distributions. It was reverted because it cannot reproduce a
-    required reference output on this example's own bundled defect assets: a
-    *fixed* scale, applied honestly, shows broad warm coverage on those
-    specific images because their raw per-patch median already exceeds the
-    calibrated threshold (verified numerically) -- that is a true property of
-    those assets' patch-level scores, not a rendering bug, but per-image
-    scaling is the only approach that visually compresses it back down to a
-    small localized region regardless of the true breadth of the underlying
-    signal. If recalibrating against better texture-matched nominal/defect
-    assets narrows that gap, the calibration-anchored version (still in git
-    history on this branch) is the correct one to restore instead of this.
-
-    score/threshold/verdict are printed to stdout, not burned into the frame.
-    """
+def draw_overlay(bgr, score_map, sigma: float, alpha: float, patch_scale_min: float,
+                 patch_scale_max: float):
+    """Heatmap overlay (blue = typical, red = anomalous) on a fixed scale
+    calibrated from nominal patch scores (patch_scale_min/max from
+    bank_meta.json), not this image's own min/max -- per-image scaling would
+    make ordinary texture variation look as "hot" as a real defect."""
     h, w = bgr.shape[:2]
     heat = upsample_and_smooth(score_map, (w, h), sigma)
-    lo, hi = float(heat.min()), float(heat.max())
-    heat_norm = (heat - lo) / (hi - lo) if hi > lo else np.zeros_like(heat)
+    scale = max(patch_scale_max - patch_scale_min, 1e-6)
+    heat_norm = np.clip((heat - patch_scale_min) / scale, 0.0, 1.0)
     heat_u8 = (heat_norm * 255).astype(np.uint8)
     heat_color = cv2.applyColorMap(heat_u8, cv2.COLORMAP_JET)
     return cv2.addWeighted(bgr, 1 - alpha, heat_color, alpha, 0)
@@ -379,28 +327,26 @@ def cmd_calibrate(cfg: AppConfig) -> int:
         scored = bank.score(embedding, cfg.scoring.num_neighbors)
         scores.append(scored.image_score)
         patch_scores.extend(scored.score_map.ravel().tolist())
-    threshold = percentile_threshold(scores, cfg.calibration.threshold_percentile)
+    threshold = percentile_threshold(scores, cfg.calibration.threshold_percentile) * cfg.calibration.threshold_margin
     print(
         f"Threshold: {threshold:.4f} (p{cfg.calibration.threshold_percentile} over "
-        f"{len(scores)} nominal images from {threshold_dir})"
+        f"{len(scores)} nominal images from {threshold_dir}, x{cfg.calibration.threshold_margin} margin)"
     )
 
-    # A separate, patch-scoped threshold, stored in bank_meta.json but NOT
-    # currently used by draw_overlay -- see the DEVIATION FROM REVIEW COMMENT
-    # note on draw_overlay for why. This is calibrated against per-image
-    # aggregate scores (already reweighted by neighborhood diversity) and
-    # answers "is this image anomalous"; a patch-scoped number instead answers
-    # "which patches", derived from the same nominal patches' raw per-patch
-    # distances. patch_scale_min (the nominal median -- see draw_overlay's
-    # deviation note for why the median, not the true min or a low
-    # percentile) and patch_scale_max (patch_threshold itself) are the low/high
-    # anchors a calibration-anchored overlay would use if restored.
-    patch_threshold = percentile_threshold(patch_scores, cfg.calibration.threshold_percentile)
+    # Separate, patch-scoped threshold for the heatmap overlay (see
+    # draw_overlay) -- not the image-level threshold above, which is
+    # reweighted by neighborhood diversity and answers a different question.
+    # Same threshold_margin applied here so "hot" in the overlay agrees with
+    # the margin-padded image-level verdict.
+    patch_threshold = (
+        percentile_threshold(patch_scores, cfg.calibration.threshold_percentile) * cfg.calibration.threshold_margin
+    )
     patch_scale_min = percentile_threshold(patch_scores, 50.0)
     patch_scale_max = patch_threshold
     print(
         f"Patch threshold: {patch_threshold:.4f} (p{cfg.calibration.threshold_percentile} over "
-        f"{len(patch_scores)} nominal patches; overlay scale {patch_scale_min:.4f}-{patch_scale_max:.4f})"
+        f"{len(patch_scores)} nominal patches, x{cfg.calibration.threshold_margin} margin; "
+        f"overlay scale {patch_scale_min:.4f}-{patch_scale_max:.4f})"
     )
 
     bank_path = Path(cfg.memory_bank_path)
@@ -440,7 +386,8 @@ def cmd_calibrate(cfg: AppConfig) -> int:
 # --------------------------------------------------------------------------
 
 
-def cmd_score_image_dir(cfg: AppConfig, bank: MemoryBank, threshold: float, num_neighbors: int) -> int:
+def cmd_score_image_dir(cfg: AppConfig, bank: MemoryBank, threshold: float, num_neighbors: int,
+                        patch_scale_min: float, patch_scale_max: float) -> int:
     paths = find_images(Path(cfg.image_dir))
     if not paths:
         print(f"[FATAL] no images found in {cfg.image_dir}", file=sys.stderr)
@@ -459,6 +406,7 @@ def cmd_score_image_dir(cfg: AppConfig, bank: MemoryBank, threshold: float, num_
 
     model = make_image_model(cfg.model_path)
     processed = 0
+    write_failures = 0
     for path in paths:
         bgr = cv2.imread(str(path), cv2.IMREAD_COLOR)
         if bgr is None:
@@ -471,7 +419,8 @@ def cmd_score_image_dir(cfg: AppConfig, bank: MemoryBank, threshold: float, num_
 
         host_start = time_ms()
         scored = bank.score(embedding, num_neighbors)
-        overlay = draw_overlay(bgr, scored.score_map, cfg.scoring.gaussian_sigma, cfg.output.overlay_alpha)
+        overlay = draw_overlay(bgr, scored.score_map, cfg.scoring.gaussian_sigma, cfg.output.overlay_alpha,
+                               patch_scale_min, patch_scale_max)
         host_ms = time_ms() - host_start
 
         verdict = "ANOMALOUS" if scored.image_score > threshold else "normal"
@@ -481,11 +430,17 @@ def cmd_score_image_dir(cfg: AppConfig, bank: MemoryBank, threshold: float, num_
         )
         out_path = output_dir / path.name
         if not cv2.imwrite(str(out_path), overlay):
-            print(f"[WARN] failed to write overlay: {out_path}", file=sys.stderr)
+            print(f"[ERROR] failed to write overlay: {out_path}", file=sys.stderr)
+            write_failures += 1
             continue
         processed += 1
 
     print(f"Done: {processed} images processed -- overlays written to {output_dir}")
+    # A partial run (some overlays written, some failed) is still a failure --
+    # the caller asked for every input scored, not "at least one."
+    if write_failures > 0:
+        print(f"[FATAL] {write_failures} overlay(s) failed to write", file=sys.stderr)
+        return 3
     return 0 if processed > 0 else 3
 
 
@@ -532,7 +487,8 @@ def stream_frame(run, frame_bgr) -> None:
         raise RuntimeError("Insight video push failed")
 
 
-def cmd_score_video_file(cfg: AppConfig, bank: MemoryBank, threshold: float, num_neighbors: int) -> int:
+def cmd_score_video_file(cfg: AppConfig, bank: MemoryBank, threshold: float, num_neighbors: int,
+                         patch_scale_min: float, patch_scale_max: float) -> int:
     video = cv2.VideoCapture(cfg.video_path)
     ok, frame = video.read()
     if not video.isOpened() or not ok:
@@ -555,6 +511,7 @@ def cmd_score_video_file(cfg: AppConfig, bank: MemoryBank, threshold: float, num
         save_dir.mkdir(parents=True, exist_ok=True)
 
     processed = 0
+    write_failures = 0
     try:
         while cfg.frames <= 0 or processed < cfg.frames:
             mla_start = time_ms()
@@ -566,7 +523,8 @@ def cmd_score_video_file(cfg: AppConfig, bank: MemoryBank, threshold: float, num
 
             host_start = time_ms()
             scored = bank.score(embedding, num_neighbors)
-            overlay = draw_overlay(frame, scored.score_map, cfg.scoring.gaussian_sigma, cfg.output.overlay_alpha)
+            overlay = draw_overlay(frame, scored.score_map, cfg.scoring.gaussian_sigma, cfg.output.overlay_alpha,
+                               patch_scale_min, patch_scale_max)
             host_ms = time_ms() - host_start
 
             processed += 1
@@ -580,7 +538,8 @@ def cmd_score_video_file(cfg: AppConfig, bank: MemoryBank, threshold: float, num
             if cfg.output.save_every > 0 and processed % cfg.output.save_every == 0:
                 snapshot_path = save_dir / f"frame_{processed}.jpg"
                 if not cv2.imwrite(str(snapshot_path), overlay):
-                    print(f"[WARN] failed to write snapshot: {snapshot_path}", file=sys.stderr)
+                    print(f"[ERROR] failed to write snapshot: {snapshot_path}", file=sys.stderr)
+                    write_failures += 1
 
             if cfg.frames > 0 and processed >= cfg.frames:
                 break
@@ -595,16 +554,15 @@ def cmd_score_video_file(cfg: AppConfig, bank: MemoryBank, threshold: float, num
     print(
         f"Done: {processed} frames processed  video_sender={cfg.output.insight_host}:{video_port}"
     )
+    if write_failures > 0:
+        print(f"[FATAL] {write_failures} snapshot(s) failed to write", file=sys.stderr)
+        return 3
     return 0 if processed > 0 else 3
 
 
 # --------------------------------------------------------------------------
-# Score: rtsp -- decode-only RtspDecodedInput graph; the host pulls each raw
-# decoded frame, scores it, and host-pushes the annotated heatmap overlay to
-# Insight via the same VideoSender helper as video_file, rather than
-# embedding the model in the live graph. See build_rtsp_graph's docstring for
-# why: an embedded-model graph reproducibly hits
-# resource.output_pool_exhausted under sustained RTSP frame rates.
+# Score: rtsp -- see build_rtsp_graph's docstring for why the model isn't
+# embedded in the live graph.
 # --------------------------------------------------------------------------
 
 
@@ -740,11 +698,7 @@ def find_field(sample, label: str):
 
 def tensor_dim(tensor, name: str) -> int:
     """`Tensor.width`/`.height` are plain attributes on some pyneat builds and
-    bound methods on others; call through only when it's actually callable.
-    The exact pyneat version boundary isn't pinned down -- the same pattern is
-    used in examples/segmentation/single-stream-instance-segmenter, discovered
-    the same way. Safe to remove once the minimum supported pyneat version is
-    confirmed to always expose these as plain attributes."""
+    bound methods on others; call through only when callable."""
     value = getattr(tensor, name)
     return int(value() if callable(value) else value)
 
@@ -771,23 +725,14 @@ def frame_bgr_from_sample(sample):
     return np.asarray(tensor.to_numpy(copy=True))
 
 
-def build_rtsp_graph(cfg: AppConfig, width: int, height: int, fps: int):
-    """Decode-only graph: the model is deliberately NOT embedded here (see
-    below), so this just wires the RTSP source to a named "frame" output.
 
-    An embedded-model graph (source -> branch("frame", "model") -> model ->
-    named "embedding" output, joined per frame) was re-attempted and
-    reproduces resource.output_pool_exhausted at the detesscast stage within
-    the first few frames, with the printed pipeline showing
-    num-buffers=4 hardcoded on every neatprocesscvu/neatprocessmla stage. This
-    matches Model::Impl's constructor in the Core SDK, which allocates a fixed
-    4-buffer output pool for any Model embedded in a graph route, with no
-    public option in this SDK version to raise it. That pool starves under
-    sustained RTSP frame rates (confirmed reproducible on current hardware
-    ahead of this PR; see the PR description for the full repro). Scoring
-    host-side via a plain Model.run() call per frame, as image_dir/video_file
-    already do, sidesteps that pool entirely and is what this function and
-    cmd_score_rtsp use instead."""
+def build_rtsp_graph(cfg: AppConfig, width: int, height: int, fps: int):
+    """Decode-only graph: the model is deliberately NOT embedded here; this
+    just wires the RTSP source to a "frame" output, and cmd_score_rtsp scores
+    each pulled frame host-side instead. An embedded-model graph hits
+    [resource.output_pool_exhausted] once real per-frame work competes with
+    its hardcoded 4-buffer output pool -- see the PR description for the
+    full reproduction."""
     source = make_rtsp_source_fragment(cfg, fps, width, height)
 
     graph = pyneat.Graph("patchcore")
@@ -801,7 +746,8 @@ def build_rtsp_graph(cfg: AppConfig, width: int, height: int, fps: int):
     return graph.build(run_options)
 
 
-def cmd_score_rtsp(cfg: AppConfig, bank: MemoryBank, threshold: float, num_neighbors: int) -> int:
+def cmd_score_rtsp(cfg: AppConfig, bank: MemoryBank, threshold: float, num_neighbors: int,
+                   patch_scale_min: float, patch_scale_max: float) -> int:
     width, height, fps = resolve_rtsp_geometry(cfg)
     if width <= 0 or height <= 0 or fps <= 0:
         print(f"[FATAL] failed to resolve source geometry for {cfg.rtsp.url}", file=sys.stderr)
@@ -818,12 +764,19 @@ def cmd_score_rtsp(cfg: AppConfig, bank: MemoryBank, threshold: float, num_neigh
         save_dir.mkdir(parents=True, exist_ok=True)
 
     processed = 0
+    write_failures = 0
+    pull_timed_out = False
     try:
         while cfg.frames <= 0 or processed < cfg.frames:
-            # -1 waits forever, so a network stall doesn't end the loop.
-            sample = run.pull("frame", -1)
+            # Bounded pull, not pull("frame", -1) -- that deadlocks the
+            # pyneat Python binding against the decoder thread on this SDK
+            # version. Don't retry on a timeout either: once one pull() call
+            # times out, every later one does too, so retrying just spins
+            # instead of hanging once -- report and end the run instead.
+            sample = run.pull("frame", 5000)
             if sample is None:
-                print("[warn] source closed", file=sys.stderr)
+                print("[FATAL] timed out waiting for an RTSP frame", file=sys.stderr)
+                pull_timed_out = True
                 break
             bgr = frame_bgr_from_sample(sample)
             mla_start = time_ms()
@@ -832,7 +785,8 @@ def cmd_score_rtsp(cfg: AppConfig, bank: MemoryBank, threshold: float, num_neigh
 
             host_start = time_ms()
             scored = bank.score(embedding, num_neighbors)
-            overlay = draw_overlay(bgr, scored.score_map, cfg.scoring.gaussian_sigma, cfg.output.overlay_alpha)
+            overlay = draw_overlay(bgr, scored.score_map, cfg.scoring.gaussian_sigma, cfg.output.overlay_alpha,
+                               patch_scale_min, patch_scale_max)
             verdict = "ANOMALOUS" if scored.image_score > threshold else "normal"
             processed += 1
             print(
@@ -844,7 +798,8 @@ def cmd_score_rtsp(cfg: AppConfig, bank: MemoryBank, threshold: float, num_neigh
             if save_frames and processed % cfg.output.save_every == 0:
                 snapshot_path = save_dir / f"frame_{processed}.jpg"
                 if not cv2.imwrite(str(snapshot_path), overlay):
-                    print(f"[WARN] failed to write snapshot: {snapshot_path}", file=sys.stderr)
+                    print(f"[ERROR] failed to write snapshot: {snapshot_path}", file=sys.stderr)
+                    write_failures += 1
     finally:
         run.close()
         video_run.close()
@@ -852,6 +807,11 @@ def cmd_score_rtsp(cfg: AppConfig, bank: MemoryBank, threshold: float, num_neigh
     print(
         f"Done: {processed} frames processed  video_sender={cfg.output.insight_host}:{video_port}"
     )
+    if write_failures > 0:
+        print(f"[FATAL] {write_failures} snapshot(s) failed to write", file=sys.stderr)
+        return 3
+    if pull_timed_out:
+        return 3
     return 0 if processed > 0 else 3
 
 
@@ -897,12 +857,18 @@ def main(argv: list[str] | None = None) -> int:
         verify_bank_hash(meta, bank_path)
         bank = MemoryBank.load(bank_path)
         threshold = float(meta["threshold"]["value"])
-        # num_neighbors changes the neighborhood-reweighting term, which changes
-        # the score distribution the threshold above was derived from. Score
-        # with the value the bank was actually calibrated with (like the
-        # threshold itself), not whatever the live config currently says --
-        # otherwise a config edit after calibration silently compares scores
-        # and a threshold from different distributions.
+        if "patch_threshold" not in meta or "scale_min" not in meta["patch_threshold"]:
+            print(
+                "[FATAL] bank_meta.json is missing patch_threshold.scale_min (built before "
+                "this field existed); recalibrate with --calibrate to regenerate it",
+                file=sys.stderr,
+            )
+            return 2
+        patch_scale_min = float(meta["patch_threshold"]["scale_min"])
+        patch_scale_max = float(meta["patch_threshold"]["scale_max"])
+        # Score with the num_neighbors the bank was calibrated with, not the
+        # live config -- it changes the score distribution the threshold was
+        # derived from.
         num_neighbors = int(meta["num_neighbors"])
         if num_neighbors != cfg.scoring.num_neighbors:
             print(
@@ -913,10 +879,10 @@ def main(argv: list[str] | None = None) -> int:
             )
 
         if cfg.source_type == "image_dir":
-            return cmd_score_image_dir(cfg, bank, threshold, num_neighbors)
+            return cmd_score_image_dir(cfg, bank, threshold, num_neighbors, patch_scale_min, patch_scale_max)
         if cfg.source_type == "video_file":
-            return cmd_score_video_file(cfg, bank, threshold, num_neighbors)
-        return cmd_score_rtsp(cfg, bank, threshold, num_neighbors)
+            return cmd_score_video_file(cfg, bank, threshold, num_neighbors, patch_scale_min, patch_scale_max)
+        return cmd_score_rtsp(cfg, bank, threshold, num_neighbors, patch_scale_min, patch_scale_max)
     except KeyboardInterrupt:
         return 130
     except Exception as exc:  # noqa: BLE001
