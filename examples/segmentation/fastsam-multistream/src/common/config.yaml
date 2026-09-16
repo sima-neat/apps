@@ -1,0 +1,48 @@
+model:                       # FastSAM segmentation model selection.
+  path: models/fastsam-mobileclip/FastSAM-x_quant_mpk.tar.gz
+
+clip:                        # MobileCLIP2-S0 text-prompt matching.
+  image_encoder_path: models/fastsam-mobileclip/MobileCLIP2-S0_image_encoder_reparam_mpk.tar.gz
+  text_encoder_path:  models/fastsam-mobileclip/MobileCLIP2-S0_text_mpk.tar.gz
+  text_host_consts:   models/fastsam-mobileclip/MobileCLIP2-S0_text_host_consts.npz
+  # C++ app only: precomputed [M,512] text features (write with src/python/precompute_text_features.py).
+  # The Python app encodes the prompt itself and ignores this key.
+  text_features_path: examples/segmentation/fastsam-multistream/src/common/text_features.npy
+  min_score: 0.2             # Minimum absolute image/text cosine similarity (0 = keep any).
+  max_box_frac: 0.8          # Drop background-like masks spanning more of the frame w/h than this.
+  max_crops: 16              # Score only the K highest-objectness masks (0 = all). Bounds CLIP cost.
+  interval: 4                # C++ only: run CLIP every N frames; IoU-track between runs.
+  track_iou: 0.3             # C++ only: minimum IoU for tracking between CLIP runs.
+
+source:                      # RTSP inputs, one entry per camera.
+  rtsp_urls:                 # Up to 4 streams; each owns a decode graph, all share one detector.
+    - <rtsp-url-1>                 # Example: rtsp://<rtsp-source-ip>:<port>/<stream-name>
+    # - <rtsp-url-2>
+    # - <rtsp-url-3>
+    # - <rtsp-url-4>
+  tcp: true                  # Use TCP for RTSP transport.
+  latency_ms: 200            # RTSP receive latency in milliseconds.
+
+runtime:                     # Runtime and profiling settings.
+  infer_size: 640            # Square model input size (match the compiled package).
+  queue_depth: 8             # Host runner queue depth (per stream decode graph).
+  frames: 0                  # Per-stream frame limit. 0 = run until Ctrl+C.
+  max_fps: 30                # C++ only: cap each stream (0 = source rate); sizes profile window.
+  warmup_frames: 30          # C++ only: drain frames before metadata/profile output.
+  profile: true              # C++ only: print per-stream timing summaries.
+
+decode:                      # YOLO26-seg decode controls.
+  score_threshold: 0.01       # Min objectness to keep a mask.
+  nms_iou: 0.6               # Class-agnostic NMS IoU threshold.
+  max_detections: 300        # Max instances to keep per frame after NMS.
+
+prompt:                      # Natural-language query settings.
+  text: "the black labrador" # The query matched and tracked across every stream.
+
+output:                      # Insight video and metadata output.
+  video_enabled: true        # Disable to publish metadata only.
+  insight:                   # Live video and metadata destination.
+    host: <insight-host-ip>  # Host running the Insight receiver/viewer.
+    video_port_base: 9000    # Base UDP port for video channels (stream N = base + N).
+    metadata_port_base: 9100 # Base UDP port for metadata channels (stream N = base + N).
+    bitrate_kbps: 1000       # H.264 encoder bitrate (kbps).

@@ -1,0 +1,4 @@
+numpy
+opencv-python
+pyyaml
+regex          # vendored CLIP BPE tokenizer (text-prompt encode); no torch/open_clip needed
