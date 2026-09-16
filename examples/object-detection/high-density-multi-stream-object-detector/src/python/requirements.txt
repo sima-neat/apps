@@ -1,3 +1,2 @@
-numpy<2
 opencv-python<4.12
 PyYAML
