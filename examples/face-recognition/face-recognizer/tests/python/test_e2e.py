@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -120,9 +121,18 @@ class TestE2E:
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
 
-        # "processed=N fps=X.X" is always printed at shutdown
-        assert "processed=" in result.stdout, (
+        # "processed=N fps=X.X" is always printed at shutdown; require exactly
+        # the requested frame count so a pipeline that exits before producing
+        # any output (processed=0) does not pass.
+        _MAX_FRAMES = 60
+        _m = re.search(r"processed=(\d+)", result.stdout)
+        assert _m is not None, (
             "Pipeline summary not found — pipeline may not have started.\n"
+            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+        processed_frames = int(_m.group(1))
+        assert processed_frames == _MAX_FRAMES, (
+            f"Expected processed={_MAX_FRAMES} but got processed={processed_frames}.\n"
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
 
