@@ -29,7 +29,6 @@ class TestE2E:
         config_path = e2e_config_writer(
             {
                 "io": {"input_dir": str(test_images_dir), "output_dir": str(tmp_output_dir)},
-                "decode": {"score_threshold": 0.30},
             }
         )
 

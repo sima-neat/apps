@@ -42,8 +42,7 @@ int main(int argc, char** argv) {
   write_e2e_config("yolov8-instance-segmenter", config_path,
                    {{"model.path", model_path},
                     {"io.input_dir", input_dir},
-                    {"io.output_dir", out_dir},
-                    {"decode.score_threshold", "0.30"}});
+                    {"io.output_dir", out_dir}});
 
   int timeout = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
 
