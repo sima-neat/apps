@@ -66,12 +66,14 @@ e2e:
     notes:
       - >
         The Python pipeline requires a live H.264 RTSP source; file and webcam
-        inputs are not supported.  This test is always skipped in CI where no
-        RTSP stream is available — run manually on-device with both env vars set.
+        inputs are not supported.
       - >
-        When the RTSP stream contains the enrolled Paresh face, the recognition
-        assertion passes automatically using the bundled gallery.bin without any
-        extra env var setup.
+        The bundled gallery.bin is always loaded (so the gallery-loading path is
+        exercised) but the recognition assertion — at least one non-Unknown result
+        in 60 frames — is only enforced when SIMANEAT_APPS_TEST_GALLERY_BIN is
+        explicitly set by the caller, guaranteeing the RTSP stream contains enrolled
+        faces.  In CI the RTSP stream is a generic test stream with no enrolled
+        identities, so the recognition assertion is skipped automatically.
   cpp:
     enabled: true
     models:
