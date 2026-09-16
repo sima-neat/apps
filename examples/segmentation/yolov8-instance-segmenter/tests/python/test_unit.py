@@ -65,7 +65,7 @@ class TestMaskDecodeAndOverlay:
         assert main.class_color(1) == (151, 157, 255)
         assert main.class_color(2) == (31, 112, 255)
 
-    def test_decode_returns_mask_coefficients_and_proto(self):
+    def test_decode_preserves_probability_score_and_mask_outputs(self):
         def reg_cell():
             v = np.full((64,), -8.0, dtype=np.float32)
             for off in (0, 16, 32, 48):
@@ -75,16 +75,16 @@ class TestMaskDecodeAndOverlay:
         reg80 = np.zeros((1, 80, 80, 64), dtype=np.float32)
         reg40 = np.zeros((1, 40, 40, 64), dtype=np.float32)
         reg20 = np.zeros((1, 20, 20, 64), dtype=np.float32)
-        cls80 = np.full((1, 80, 80, 80), -10.0, dtype=np.float32)
-        cls40 = np.full((1, 40, 40, 80), -10.0, dtype=np.float32)
-        cls20 = np.full((1, 20, 20, 80), -10.0, dtype=np.float32)
+        cls80 = np.zeros((1, 80, 80, 80), dtype=np.float32)
+        cls40 = np.zeros((1, 40, 40, 80), dtype=np.float32)
+        cls20 = np.zeros((1, 20, 20, 80), dtype=np.float32)
         mk80 = np.zeros((1, 80, 80, 32), dtype=np.float32)
         mk40 = np.zeros((1, 40, 40, 32), dtype=np.float32)
         mk20 = np.zeros((1, 20, 20, 32), dtype=np.float32)
         proto = np.zeros((1, 160, 160, 32), dtype=np.float32)
 
         reg80[0, 10, 12, :] = reg_cell()
-        cls80[0, 10, 12, 3] = 10.0
+        cls80[0, 10, 12, 3] = 0.74
         mk80[0, 10, 12, 0] = 1.0
         proto[0, 20:60, 20:60, 0] = 10.0
 
@@ -104,6 +104,7 @@ class TestMaskDecodeAndOverlay:
         dets, proto_out = main.decode_yolov8_instances(tensors, 640, 0.6, 0.45, 10)
         assert len(dets) == 1
         assert dets[0]["class_id"] == 3
+        assert dets[0]["score"] == pytest.approx(0.74)
         assert dets[0]["coeff"].shape == (32,)
         assert proto_out.shape == (160, 160, 32)
 
