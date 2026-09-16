@@ -101,12 +101,15 @@ class TestMaskDecodeAndOverlay:
             FakeTensor(proto),
         ]
 
-        dets, proto_out = main.decode_yolov8_instances(tensors, 640, 0.6, 0.45, 10)
+        dets, proto_out = main.decode_yolov8_instances(tensors, 640, 0.70, 0.45, 10)
         assert len(dets) == 1
         assert dets[0]["class_id"] == 3
         assert dets[0]["score"] == pytest.approx(0.74)
         assert dets[0]["coeff"].shape == (32,)
         assert proto_out.shape == (160, 160, 32)
+
+        rejected, _ = main.decode_yolov8_instances(tensors, 640, 0.75, 0.45, 10)
+        assert rejected == []
 
     def test_apply_mask_overlay_changes_pixels(self):
         bgr = np.zeros((64, 64, 3), dtype=np.uint8)

@@ -5,6 +5,7 @@
 
 #include <filesystem>
 #include <iostream>
+#include <regex>
 #include <string>
 
 namespace fs = std::filesystem;
@@ -38,9 +39,11 @@ int main(int argc, char** argv) {
     return 1;
 
   const fs::path config_path = fs::path(out_dir).parent_path() / "config.yaml";
-  write_e2e_config(
-      "yolov8-instance-segmenter", config_path,
-      {{"model.path", model_path}, {"io.input_dir", input_dir}, {"io.output_dir", out_dir}});
+  write_e2e_config("yolov8-instance-segmenter", config_path,
+                   {{"model.path", model_path},
+                    {"io.input_dir", input_dir},
+                    {"io.output_dir", out_dir},
+                    {"decode.score_threshold", "0.30"}});
 
   int timeout = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
 
@@ -58,6 +61,9 @@ int main(int argc, char** argv) {
     rc = 1;
   } else if (!all_output_files_nonempty(out_dir)) {
     std::cerr << "[FAIL] some output files are empty\n";
+    rc = 1;
+  } else if (!std::regex_search(r.stdout_text, std::regex(R"(boxes=[1-9][0-9]*\b)"))) {
+    std::cerr << "[FAIL] expected detections on the test images\n" << r.stdout_text;
     rc = 1;
   } else {
     std::cout << "[OK] YOLOv8 instance segmentation overlay produced " << output_files

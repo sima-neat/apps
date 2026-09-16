@@ -1,5 +1,6 @@
 """E2E tests for yolov8-instance-segmenter (Python)."""
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -28,6 +29,7 @@ class TestE2E:
         config_path = e2e_config_writer(
             {
                 "io": {"input_dir": str(test_images_dir), "output_dir": str(tmp_output_dir)},
+                "decode": {"score_threshold": 0.30},
             }
         )
 
@@ -54,3 +56,6 @@ class TestE2E:
         ]
         assert output_files, "Expected output files but output directory is empty"
         assert all(path.stat().st_size > 0 for path in output_files)
+        assert re.search(r"boxes=[1-9][0-9]*\b", result.stdout), (
+            f"Expected detections on the test images\n{result.stdout}"
+        )
