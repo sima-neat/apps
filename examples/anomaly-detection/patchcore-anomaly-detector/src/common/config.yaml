@@ -47,7 +47,7 @@ output:
   save_every: 60
   overlay_alpha: 0.45                           # Heatmap blend weight in the output overlay image.
   insight:                                      # video_file/rtsp only: live view.
-    host: "192.168.130.129"
+    host: <insight-host-ip>              # Host running the Insight receiver/viewer.
     video_port: 9000
     channel: 0                                  # Insight channel index.
     bitrate_kbps: 4000                          # H.264 encoder bitrate for the pushed video stream.
