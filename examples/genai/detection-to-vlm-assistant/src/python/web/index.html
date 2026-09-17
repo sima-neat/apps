@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>Real-Time Semantic People Tracker</title>
+    <link rel="stylesheet" href="/assets/app.css">
+  </head>
+  <body>
+    <div class="ambient ambient-a"></div>
+    <div class="ambient ambient-b"></div>
+
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">
+            <span></span><span></span><span></span><span></span>
+          </div>
+          <div>
+            <p class="eyebrow">Modalix · On-device multimodal inference</p>
+            <h1 id="app-title">Real-Time Semantic People Tracker</h1>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <a class="button button-ghost" href="/modalix-webcam-ca.crt" download>Download local CA</a>
+          <div id="connection-pill" class="connection-pill connecting">
+            <span class="pulse-dot"></span>
+            <span id="connection-label">Connecting</span>
+          </div>
+          <button id="camera-button" class="button button-ghost" type="button">Start camera</button>
+        </div>
+      </header>
+
+      <section class="system-strip" aria-label="Pipeline status">
+        <div class="phase-copy">
+          <span id="phase-kicker">STARTING</span>
+          <strong id="phase-detail">Preparing the visual pipeline</strong>
+        </div>
+        <div id="component-status" class="component-status"></div>
+      </section>
+
+      <main class="content-grid">
+        <section id="video-panel" class="panel video-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="section-label">Live perception</p>
+              <h2>Semantic tracking stream</h2>
+            </div>
+            <div class="heading-actions">
+              <span id="model-name" class="model-chip" title="Vision-language model">Gemma-4-E2B-it</span>
+              <span class="live-badge"><span></span>LIVE</span>
+              <button id="reload-video" class="icon-button" type="button" title="Reload video">↻</button>
+              <button id="fullscreen-video" class="icon-button" type="button" title="Full screen">⛶</button>
+            </div>
+          </div>
+
+          <div id="viewer-frame" class="viewer-frame">
+            <video id="webcam-video" autoplay muted playsinline></video>
+            <canvas id="detection-overlay" aria-label="Live detection overlay"></canvas>
+            <div id="viewer-placeholder" class="viewer-placeholder">
+              <div class="scan-icon"></div>
+              <strong id="camera-message">Waiting for webcam permission</strong>
+              <span>Allow camera access to start the secure live stream.</span>
+            </div>
+          </div>
+
+          <div class="metrics-grid">
+            <article class="metric">
+              <span>Detection FPS</span>
+              <strong id="metric-fps">—</strong>
+              <small id="camera-rate">Camera: —</small>
+            </article>
+            <article class="metric">
+              <span>People tracked</span>
+              <strong id="metric-current">—</strong>
+              <small id="metric-total">0 tracks this session</small>
+            </article>
+            <article class="metric">
+              <span>Semantic descriptions</span>
+              <strong id="metric-described">—</strong>
+              <small id="metric-latency">VLM latency: —</small>
+            </article>
+            <article class="metric accent">
+              <span>Inference target</span>
+              <strong>MLA</strong>
+              <small>Modalix accelerator</small>
+            </article>
+          </div>
+        </section>
+
+      </main>
+    </div>
+
+    <script src="/assets/app.js" defer></script>
+  </body>
+</html>

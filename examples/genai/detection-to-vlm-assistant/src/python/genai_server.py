@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Start the Detection-to-VLM GenAI server."""
+"""Start the semantic people tracker's local GenAI server."""
 
 from __future__ import annotations
 

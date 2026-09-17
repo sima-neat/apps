@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the RTSP YOLO26 detector, Insight output, and optional GenAI captions."""
+"""Run browser-webcam YOLO26 detection with semantic people tracking."""
 
 from __future__ import annotations
 
@@ -8,10 +8,9 @@ import base64
 from dataclasses import dataclass
 import json
 from pathlib import Path
-from queue import Empty, Full, Queue
+import socket
 import struct
 import sys
-import threading
 import time
 from urllib import error, request
 
@@ -20,90 +19,145 @@ import numpy as np
 import pyneat
 import yaml
 
+from async_pipeline import AsyncModelPipeline
+from dashboard import DashboardServer, DashboardState
+from semantic_describer import AppearanceDescriber, SemanticState
+from tracker import ObjectTracker, TrackedDetection, TrackerConfig
+from visibility_gate import FullPersonVisibilityGate, overlapping_bboxes
+
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
 DEFAULT_SYSTEM_PROMPT = (
-    "Describe the visible action in the detected person crop. Be factual, "
-    "concise, and avoid guessing identity or protected attributes."
+    "Output one concise comma-separated line of visible attributes only. "
+    "Never explain, identify the person, describe actions, or repeat a field name."
 )
-DEFAULT_USER_PROMPT = "What is the person doing in this crop?"
+DEFAULT_USER_PROMPT = (
+    "Describe the visible person richly using 6 to 10 comma-separated attribute "
+    "phrases when observable. Include apparent age group and male or female "
+    "presentation when clear, hair color and style, upper clothing color, type "
+    "and pattern, lower clothing, footwear, carried items or accessories, and "
+    "one distinctive visible detail. Omit anything not visible. Never describe "
+    "identity, ethnicity, emotion, or action. Never output field names, no, or "
+    "none. Example: adult male, short dark hair, white striped polo, dark "
+    "trousers, black shoes, glasses, blue lanyard."
+)
 
 
 @dataclass(frozen=True)
 class Config:
-    rtsp_url: str
     model_path: str
     labels_path: str
     frames: int
     min_score: float
     nms_iou: float
     max_detections: int
-    classes: tuple[str, ...]
+    inference_queue_depth: int
+    inference_internal_queue_depth: int
     timeout_ms: int
     debug: bool
-    insight_host: str
-    video_port: int
-    metadata_port: int
-    channel: int
+    tracker_high_score: float
+    tracker_new_track_score: float
+    tracker_iou_threshold: float
+    tracker_max_center_distance: float
+    tracker_velocity_momentum: float
+    tracker_max_missing: int
+    tracker_min_confirmed_hits: int
+    tracker_max_active: int
+    tracker_center_distance_enabled: bool
+    description_edge_margin_ratio: float
+    description_min_clear_frames: int
+    webcam_target_fps: int
+    webcam_upload_max_width: int
+    webcam_max_frame_bytes: int
     genai_enabled: bool
     genai_host: str
     genai_port: int
     genai_model: str
     genai_max_tokens: int
-    genai_interval_seconds: float
     genai_timeout_seconds: float
     genai_max_pending_requests: int
-    genai_system_prompt: str
-    genai_user_prompt: str
+    web_enabled: bool
+    web_host: str
+    web_port: int
+    web_title: str
+    web_tls_enabled: bool
+    web_tls_cert: str
+    web_tls_key: str
+    web_tls_ca_cert: str
+
+@dataclass(frozen=True)
+class DetectionFrame:
+    frame_bgr: np.ndarray
+    width: int
+    height: int
 
 
 def load_config(path: Path) -> Config:
     raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    source = raw.get("source", {})
     model = raw.get("model", {})
-    insight = raw.get("insight", {})
+    webcam = raw.get("webcam", {})
     inference = raw.get("inference", {})
     runtime = raw.get("runtime", {})
+    tracking = raw.get("tracking", {})
     genai_server = raw.get("genai_server", {})
     server_model = genai_server.get("model", {})
     genai = raw.get("genai", {})
+    web = raw.get("web", {})
+    web_tls = web.get("tls", {})
     server_model_name = str(server_model.get("name", "") or "")
     genai_server_port = int(genai_server.get("port", 9998))
     return Config(
-        rtsp_url=source.get("rtsp_url", ""),
-        model_path=model.get("path", ""),
-        labels_path=model.get("labels", ""),
+        model_path=str(model.get("path", "")),
+        labels_path=str(model.get("labels", "")),
         frames=int(inference.get("frames", 0)),
         min_score=float(inference.get("min_score", 0.55)),
         nms_iou=float(inference.get("nms_iou", 0.50)),
         max_detections=int(inference.get("max_detections", 24)),
-        classes=class_filter(inference.get("classes")),
+        inference_queue_depth=max(2, int(inference.get("queue_depth", 4))),
+        inference_internal_queue_depth=max(
+            1, int(inference.get("internal_queue_depth", 2))
+        ),
         timeout_ms=int(runtime.get("timeout_ms", 20000)),
         debug=bool(runtime.get("debug", False)),
-        insight_host=insight.get("host", "127.0.0.1") or "127.0.0.1",
-        video_port=int(insight.get("video_port", 9000)),
-        metadata_port=int(insight.get("metadata_port", 9100)),
-        channel=int(insight.get("channel", 0)),
+        tracker_high_score=float(tracking.get("high_score_threshold", 0.55)),
+        tracker_new_track_score=float(tracking.get("new_track_threshold", 0.65)),
+        tracker_iou_threshold=float(tracking.get("match_iou_threshold", 0.20)),
+        tracker_max_center_distance=float(tracking.get("max_center_distance", 1.5)),
+        tracker_velocity_momentum=float(tracking.get("velocity_momentum", 0.80)),
+        tracker_max_missing=int(tracking.get("max_missing_frames", 30)),
+        tracker_min_confirmed_hits=int(tracking.get("min_confirmed_hits", 3)),
+        tracker_max_active=int(tracking.get("max_active_tracks", 32)),
+        tracker_center_distance_enabled=bool(
+            tracking.get("center_distance_enabled", True)
+        ),
+        description_edge_margin_ratio=float(
+            tracking.get("description_edge_margin_ratio", 0.03)
+        ),
+        description_min_clear_frames=int(
+            tracking.get("description_min_clear_frames", 5)
+        ),
+        webcam_target_fps=max(1, int(webcam.get("target_fps", 30))),
+        webcam_upload_max_width=max(
+            160, int(webcam.get("upload_max_width", 640))
+        ),
+        webcam_max_frame_bytes=max(
+            65536, int(webcam.get("max_frame_bytes", 4 * 1024 * 1024))
+        ),
         genai_enabled=bool(genai.get("enabled", False)),
-        genai_host=genai.get("host", "127.0.0.1") or "127.0.0.1",
+        genai_host=str(genai.get("host", "127.0.0.1") or "127.0.0.1"),
         genai_port=int(genai.get("port", genai_server_port)),
         genai_model=str(genai.get("model") or server_model_name),
-        genai_max_tokens=int(genai.get("max_tokens", 128)),
-        genai_interval_seconds=float(genai.get("interval_seconds", 5.0)),
+        genai_max_tokens=int(genai.get("max_tokens", 64)),
         genai_timeout_seconds=float(genai.get("timeout_seconds", 30.0)),
-        genai_max_pending_requests=max(1, int(genai.get("max_pending_requests", 1))),
-        genai_system_prompt=genai.get("system_prompt", DEFAULT_SYSTEM_PROMPT),
-        genai_user_prompt=genai.get("user_prompt", DEFAULT_USER_PROMPT),
+        genai_max_pending_requests=max(1, int(genai.get("max_pending_requests", 8))),
+        web_enabled=bool(web.get("enabled", True)),
+        web_host=str(web.get("host", "0.0.0.0") or "0.0.0.0"),
+        web_port=int(web.get("port", 5000)),
+        web_title=str(web.get("title", "Real-Time Semantic People Tracker")),
+        web_tls_enabled=bool(web_tls.get("enabled", False)),
+        web_tls_cert=str(web_tls.get("cert", "")),
+        web_tls_key=str(web_tls.get("key", "")),
+        web_tls_ca_cert=str(web_tls.get("ca_cert", "")),
     )
-
-
-def class_filter(value) -> tuple[str, ...]:
-    if value is None:
-        return ()
-    if isinstance(value, str):
-        values = value.split(",")
-    else:
-        values = value
-    return tuple(str(item).strip().lower() for item in values if str(item).strip())
 
 
 def load_labels(path: str) -> list[str]:
@@ -117,102 +171,12 @@ def load_labels(path: str) -> list[str]:
     ]
 
 
-def probe_rtsp(url: str) -> tuple[int, int, int]:
-    cap = cv2.VideoCapture(url)
-    try:
-        if not cap.isOpened():
-            raise RuntimeError(f"failed to open RTSP source: {url}")
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
-        fps = int(round(cap.get(cv2.CAP_PROP_FPS) or 0)) or 30
-    finally:
-        cap.release()
-
-    if width <= 0 or height <= 0:
-        raise RuntimeError("failed to probe RTSP dimensions")
-    return width, height, fps
-
-
-def tensor_dim(tensor, name: str) -> int:
-    value = getattr(tensor, name)
-    return int(value() if callable(value) else value)
-
-
-def decoded_tensor_to_rgb(tensor) -> np.ndarray:
-    if tensor.is_nv12():
-        width = tensor_dim(tensor, "width")
-        height = tensor_dim(tensor, "height")
-        payload = np.frombuffer(tensor.copy_payload_bytes(), dtype=np.uint8)
-        expected = width * height * 3 // 2
-        if payload.size < expected:
-            raise RuntimeError(f"NV12 payload too small: {payload.size} < {expected}")
-        nv12 = payload[:expected].reshape((height * 3 // 2, width))
-        bgr = cv2.cvtColor(nv12, cv2.COLOR_YUV2BGR_NV12)
-        return np.ascontiguousarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
-
-    if tensor.is_i420():
-        width = tensor_dim(tensor, "width")
-        height = tensor_dim(tensor, "height")
-        payload = np.frombuffer(tensor.copy_payload_bytes(), dtype=np.uint8)
-        expected = width * height * 3 // 2
-        if payload.size < expected:
-            raise RuntimeError(f"I420 payload too small: {payload.size} < {expected}")
-        i420 = payload[:expected].reshape((height * 3 // 2, width))
-        bgr = cv2.cvtColor(i420, cv2.COLOR_YUV2BGR_I420)
-        return np.ascontiguousarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
-
-    frame = np.asarray(tensor.to_numpy(copy=True))
-    if frame.ndim == 4 and frame.shape[0] == 1:
-        frame = frame[0]
-    if frame.ndim != 3:
-        raise RuntimeError(f"unexpected decoded tensor shape: {frame.shape}")
-    if frame.dtype != np.uint8:
-        frame = np.clip(frame, 0, 255).astype(np.uint8)
-    return np.ascontiguousarray(frame)
-
-
-def is_tensor_like(value) -> bool:
-    return hasattr(value, "copy_payload_bytes") and hasattr(value, "to_numpy")
-
-
-def is_sample_like(value) -> bool:
-    return hasattr(value, "kind") and hasattr(value, "fields")
-
-
-def bbox_payload_from_tensors(tensors) -> bytes:
-    for tensor in tensors:
+def bbox_payload(result) -> bytes:
+    if not isinstance(result, (list, tuple)):
+        return b""
+    for tensor in result:
         try:
             payload = tensor.copy_payload_bytes()
-        except Exception:
-            continue
-        if payload:
-            return payload
-    return b""
-
-
-def bbox_payload(result) -> bytes:
-    if isinstance(result, (list, tuple)) and all(is_tensor_like(item) for item in result):
-        return bbox_payload_from_tensors(result)
-
-    if not is_sample_like(result):
-        return b""
-
-    stack = [result]
-    while stack:
-        current = stack.pop()
-        stack.extend(reversed(list(current.fields)))
-        if current.kind == pyneat.SampleKind.TensorSet:
-            payload = bbox_payload_from_tensors(current.tensors)
-            if payload:
-                return payload
-            continue
-        if current.kind != pyneat.SampleKind.Tensor or current.tensor is None:
-            continue
-        fmt = (current.payload_tag or current.format or "").upper()
-        if fmt and fmt != "BBOX":
-            continue
-        try:
-            payload = current.tensor.copy_payload_bytes()
         except Exception:
             continue
         if payload:
@@ -226,96 +190,73 @@ def parse_boxes(result) -> list[dict]:
         return []
     count = min(struct.unpack_from("<I", payload, 0)[0], (len(payload) - 4) // 24)
     boxes = []
-    for idx in range(count):
-        x, y, w, h, score, class_id = struct.unpack_from("<iiiifi", payload, 4 + idx * 24)
-        if w > 0 and h > 0:
+    for index in range(count):
+        x, y, width, height, score, class_id = struct.unpack_from(
+            "<iiiifi", payload, 4 + index * 24
+        )
+        if width > 0 and height > 0:
             boxes.append(
                 {
-                    "bbox": [x, y, w, h],
-                    "score": score,
-                    "class_id": class_id,
+                    "bbox": [x, y, width, height],
+                    "score": float(score),
+                    "class_id": int(class_id),
                 }
             )
     return boxes
 
 
-def find_field(sample, label: str):
-    if getattr(sample, "stream_label", "") == label:
-        return sample
-    for field in getattr(sample, "fields", []):
-        found = find_field(field, label)
-        if found is not None:
-            return found
-    return None
+def label_for_box(box: dict, labels: list[str]) -> str:
+    class_id = int(box["class_id"])
+    if 0 <= class_id < len(labels):
+        return labels[class_id]
+    return f"class_{class_id}"
 
 
-def joined_field(sample, label: str, bundle_index: int):
-    """Return one branch of the combined output, by label or by combine order."""
-    field = find_field(sample, label)
-    if field is not None:
-        return field
-    fields = list(getattr(sample, "fields", []))
-    if sample.kind == pyneat.SampleKind.Bundle and len(fields) > bundle_index:
-        return fields[bundle_index]
-    raise RuntimeError(f"detector output missing {label} field")
-
-
-def decoded_frame_tensor(sample):
-    field = joined_field(sample, "frame", 0)
-    if field.kind == pyneat.SampleKind.Tensor and field.tensor is not None:
-        return field.tensor
-    if field.kind == pyneat.SampleKind.TensorSet and field.tensors:
-        return field.tensors[0]
-    raise RuntimeError("detector output did not contain a decoded frame tensor")
-
-
-def metadata_json(boxes: list[dict], labels: list[str], classes: tuple[str, ...] = ()) -> str:
-    objects = []
-    allowed = set(classes)
+def person_tracker_detections(boxes: list[dict], labels: list[str]) -> list[dict]:
+    result: list[dict] = []
     for box in boxes:
-        class_id = int(box["class_id"])
-        label = labels[class_id] if 0 <= class_id < len(labels) else f"class_{class_id}"
-        if allowed and label.lower() not in allowed:
+        label = label_for_box(box, labels)
+        if label.lower() != "person":
             continue
-        objects.append(
+        x, y, width, height = [float(value) for value in box["bbox"]]
+        result.append(
             {
-                "id": f"obj_{len(objects) + 1}",
-                "label": label,
-                "confidence": box["score"],
-                "bbox": box["bbox"],
+                "x1": x,
+                "y1": y,
+                "x2": x + width,
+                "y2": y + height,
+                "score": float(box["score"]),
+                "class_id": int(box["class_id"]),
             }
         )
-    return json.dumps({"objects": objects}, separators=(",", ":"))
+    return result
 
 
-def best_box_for_label(boxes: list[dict], labels: list[str], wanted: str):
-    wanted = wanted.lower()
-    matches = []
-    for box in boxes:
-        class_id = int(box["class_id"])
-        label = labels[class_id] if 0 <= class_id < len(labels) else f"class_{class_id}"
-        if label.lower() == wanted:
-            matches.append(box)
-    return max(matches, key=lambda box: box["score"], default=None)
-
-
-def crop_box(frame: np.ndarray, box: dict) -> np.ndarray:
-    x, y, w, h = [int(value) for value in box["bbox"]]
-    height, width = frame.shape[:2]
-    x0, y0 = max(0, x), max(0, y)
-    x1, y1 = min(width, x + w), min(height, y + h)
+def crop_track(
+    frame: np.ndarray, track: TrackedDetection, padding: float = 0.10
+) -> np.ndarray:
+    frame_height, frame_width = frame.shape[:2]
+    width = max(1.0, track.x2 - track.x1)
+    height = max(1.0, track.y2 - track.y1)
+    x0 = max(0, int(track.x1 - width * padding))
+    y0 = max(0, int(track.y1 - height * padding))
+    x1 = min(frame_width, int(track.x2 + width * padding + 0.5))
+    y1 = min(frame_height, int(track.y2 + height * padding + 0.5))
     if x1 <= x0 or y1 <= y0:
-        raise RuntimeError(f"invalid person crop: {box['bbox']}")
-    return np.ascontiguousarray(frame[y0:y1, x0:x1])
+        raise RuntimeError(f"invalid person crop for track {track.track_id}")
+    crop_bgr = np.ascontiguousarray(frame[y0:y1, x0:x1]).copy()
+    return np.ascontiguousarray(cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB))
 
 
 def rgb_to_bgr(frame: np.ndarray) -> np.ndarray:
     return np.ascontiguousarray(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
 
 
-def request_person_crop_response(crop_rgb: np.ndarray, cfg: Config) -> str:
-    crop = rgb_to_bgr(crop_rgb)
-    ok, encoded = cv2.imencode(".jpg", crop)
+def request_person_crop_response(
+    crop_rgb: np.ndarray,
+    cfg: Config,
+) -> str:
+    ok, encoded = cv2.imencode(".jpg", rgb_to_bgr(crop_rgb))
     if not ok:
         raise RuntimeError("failed to encode person crop")
 
@@ -325,7 +266,7 @@ def request_person_crop_response(crop_rgb: np.ndarray, cfg: Config) -> str:
         "stream": True,
         "max_tokens": cfg.genai_max_tokens,
         "messages": [
-            {"role": "system", "content": cfg.genai_system_prompt},
+            {"role": "system", "content": DEFAULT_SYSTEM_PROMPT},
             {
                 "role": "user",
                 "content": [
@@ -335,16 +276,14 @@ def request_person_crop_response(crop_rgb: np.ndarray, cfg: Config) -> str:
                     },
                     {
                         "type": "text",
-                        "text": cfg.genai_user_prompt,
+                        "text": DEFAULT_USER_PROMPT,
                     },
                 ],
             },
         ],
     }
-
-    url = f"http://{cfg.genai_host}:{cfg.genai_port}/v1/chat/completions"
     req = request.Request(
-        url,
+        f"http://{cfg.genai_host}:{cfg.genai_port}/v1/chat/completions",
         data=json.dumps(payload).encode("utf-8"),
         headers={"Content-Type": "application/json"},
         method="POST",
@@ -363,206 +302,218 @@ def request_person_crop_response(crop_rgb: np.ndarray, cfg: Config) -> str:
     return response_text.strip()
 
 
-class GenAICommenter:
-    def __init__(self, cfg: Config, labels: list[str]):
+class TrackAppearanceCommenter:
+    def __init__(self, cfg: Config, dashboard: DashboardState):
         self.cfg = cfg
-        self.labels = labels
-        self.queue: Queue[np.ndarray] = Queue(maxsize=cfg.genai_max_pending_requests)
-        self.stop_event = threading.Event()
-        self.worker = threading.Thread(target=self._run, daemon=True)
-        self.lock = threading.Lock()
-        self.last_enqueue_at = 0.0
-        self.in_flight = False
+        self.dashboard = dashboard
         self.server_available: bool | None = None
         self.response_count = 0
         self.started = False
+        self.describer = AppearanceDescriber(
+            self._request,
+            self._on_update,
+            queue_size=cfg.genai_max_pending_requests,
+            max_attempts=2,
+        )
 
     def start(self) -> None:
         if self.cfg.genai_enabled and not self.started:
-            self.worker.start()
+            self.describer.start()
             self.started = True
+            self.dashboard.set_component("vlm", "online", "Ready for a new track")
+        else:
+            self.dashboard.set_component("vlm", "stopped", "GenAI disabled")
 
-    def try_enqueue(self, sample, boxes: list[dict]) -> None:
-        if not self.cfg.genai_enabled:
-            return
-        now = time.monotonic()
-        if now - self.last_enqueue_at < self.cfg.genai_interval_seconds:
-            return
-        if self._pending_count() >= self.cfg.genai_max_pending_requests:
-            print("[genai-server] queue busy, dropping request", flush=True)
-            self.last_enqueue_at = now
-            return
+    def retain_tracks(self, active_track_ids: set[int]) -> None:
+        if self.started:
+            self.describer.retain_tracks(active_track_ids)
 
-        box = best_box_for_label(boxes, self.labels, "person")
-        if box is None:
-            return
+    def try_enqueue(self, track_id: int, crop_rgb: np.ndarray) -> bool:
+        scheduled = self.started and self.describer.schedule(track_id, crop_rgb)
+        if scheduled:
+            self.dashboard.set_component(
+                "vlm", "busy", f"Describing person #{track_id}"
+            )
+        return scheduled
 
-        frame = decoded_tensor_to_rgb(decoded_frame_tensor(sample))
-        try:
-            self.queue.put_nowait(crop_box(frame, box).copy())
-            self.last_enqueue_at = now
-        except Full:
-            print("[genai-server] queue full, dropping request", flush=True)
-            self.last_enqueue_at = now
+    def needs_description(self, track_id: int) -> bool:
+        return self.started and self.describer.needs_description(track_id)
+
+    def state_for(self, track_id: int) -> SemanticState:
+        if not self.started:
+            return SemanticState("unavailable", None, 0)
+        return self.describer.state_for(track_id) or SemanticState("waiting", None, 0)
 
     def close(self) -> None:
-        self.stop_event.set()
-        if self.started:
-            self.worker.join(timeout=1.0)
+        self.describer.close()
 
-    def _pending_count(self) -> int:
-        with self.lock:
-            return self.queue.qsize() + int(self.in_flight)
+    def _request(self, crop_rgb: np.ndarray) -> str:
+        try:
+            if not self._server_ready():
+                raise RuntimeError("vision-language server is unavailable")
+            return request_person_crop_response(crop_rgb, self.cfg)
+        except Exception as exc:
+            print(f"[genai-server] appearance request failed: {exc}", flush=True)
+            raise
 
-    def _set_in_flight(self, value: bool) -> None:
-        with self.lock:
-            self.in_flight = value
-
-    def _run(self) -> None:
-        while not self.stop_event.is_set():
-            try:
-                crop = self.queue.get(timeout=0.2)
-            except Empty:
-                continue
-
-            self._set_in_flight(True)
-            try:
-                if self._server_ready():
-                    response = request_person_crop_response(crop, self.cfg)
-                    if response:
-                        self.response_count += 1
-                        print(
-                            f"\n[response #{self.response_count:03d}] {response}",
-                            flush=True,
-                        )
-            except (TimeoutError, OSError, error.URLError) as exc:
-                print(f"[genai-server] request failed: {exc}", flush=True)
-            except Exception as exc:
-                print(f"[genai-server] request failed: {exc}", flush=True)
-            finally:
-                self._set_in_flight(False)
-                self.queue.task_done()
+    def _on_update(
+        self, track_id: int, state: SemanticState, latency_ms: float | None
+    ) -> None:
+        if state.status == "ready":
+            self.response_count += 1
+            print(
+                f"[appearance #{self.response_count:03d}] "
+                f"track={track_id} {state.description}",
+                flush=True,
+            )
+            self.dashboard.set_component("vlm", "online", "Track description ready")
+        else:
+            print(f"[appearance] track={track_id} unavailable", flush=True)
+            self.dashboard.set_component(
+                "vlm", "warning", "A track description was unavailable"
+            )
+        self.dashboard.update_track_semantic(
+            track_id,
+            status=state.status,
+            description=state.description,
+            latency_ms=latency_ms,
+        )
 
     def _server_ready(self) -> bool:
         url = f"http://{self.cfg.genai_host}:{self.cfg.genai_port}/v1/models"
         try:
             timeout = min(self.cfg.genai_timeout_seconds, 5.0)
-            with request.urlopen(url, timeout=timeout) as res:
-                ready = 200 <= res.status < 300
-                if ready and self.server_available is False:
-                    print(
-                        f"\n[genai-server] connected "
-                        f"http://{self.cfg.genai_host}:{self.cfg.genai_port}",
-                        flush=True,
-                    )
-                self.server_available = ready
-                return ready
+            with request.urlopen(url, timeout=timeout) as response:
+                ready = 200 <= response.status < 300
+            self.server_available = ready
+            self.dashboard.set_component(
+                "vlm",
+                "online" if ready else "warning",
+                "Ready" if ready else "Server returned an error",
+            )
+            return ready
         except (TimeoutError, OSError, error.URLError) as exc:
             if self.server_available is not False:
-                print(
-                    f"[genai-server] waiting for "
-                    f"http://{self.cfg.genai_host}:{self.cfg.genai_port}: {exc}",
-                    flush=True,
-                )
+                print(f"[genai-server] waiting for {url}: {exc}", flush=True)
             self.server_available = False
+            self.dashboard.set_component("vlm", "warning", "Server unavailable")
             return False
 
 
-def build_source_graph(cfg: Config, width: int, height: int, fps: int):
-    opt = pyneat.RtspDecodedInputOptions()
-    opt.url = cfg.rtsp_url
-    opt.payload_type = 96
-    opt.insert_queue = True
-    opt.auto_caps_from_stream = True
-    opt.fallback_h264_width = width
-    opt.fallback_h264_height = height
-    opt.fallback_h264_fps = fps
-    opt.sima_allocator_type = 2
-    opt.decoder_raw_output = True
-    opt.output_caps.enable = True
-    opt.output_caps.format = pyneat.Format.NV12
-    opt.output_caps.width = width
-    opt.output_caps.height = height
-    opt.output_caps.fps = fps
-    opt.output_caps.memory = pyneat.CapsMemory.Any
-    return pyneat.groups.rtsp_decoded_input(opt)
+def decode_uploaded_frame(payload: bytes) -> np.ndarray:
+    encoded = np.frombuffer(payload, dtype=np.uint8)
+    frame = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
+    if frame is None or frame.ndim != 3 or frame.shape[2] != 3:
+        raise ValueError("uploaded frame is not a decodable color image")
+    return np.ascontiguousarray(frame, dtype=np.uint8)
 
 
-def build_video_graph(cfg: Config, width: int, height: int, fps: int):
-    sender_opt = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(width, height, max(1, fps))
-    sender_opt.host = cfg.insight_host
-    sender_opt.channel = cfg.channel
-    sender_opt.video_port_base = cfg.video_port
+def image_tensor(frame_bgr: np.ndarray):
+    return pyneat.Tensor.from_numpy(
+        frame_bgr,
+        copy=True,
+        image_format=pyneat.PixelFormat.BGR,
+        memory=pyneat.TensorMemory.EV74,
+    )
 
-    graph = pyneat.Graph("video")
-    graph.connect(pyneat.nodes.input("video"), pyneat.groups.video_sender(sender_opt))
-    return graph
+
+def image_sample(frame_bgr: np.ndarray, frame_id: int):
+    sample = pyneat.Sample()
+    sample.kind = pyneat.SampleKind.Tensor
+    sample.tensor = image_tensor(frame_bgr)
+    sample.frame_id = int(frame_id)
+    sample.stream_id = "webcam"
+    return sample
 
 
 def build_model(cfg: Config, width: int, height: int):
-    opt = pyneat.ModelOptions()
-    opt.preprocess.kind = pyneat.InputKind.Image
-    opt.preprocess.enable = pyneat.AutoFlag.On
-    opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.NV12
-    opt.preprocess.input_max_width = width
-    opt.preprocess.input_max_height = height
-    opt.preprocess.preset = pyneat.NormalizePreset.COCO_YOLO
-    opt.decode_type = pyneat.BoxDecodeType.YoloV26
-    opt.score_threshold = cfg.min_score
-    opt.nms_iou_threshold = cfg.nms_iou
-    opt.top_k = cfg.max_detections
-    return pyneat.Model(cfg.model_path, opt)
+    options = pyneat.ModelOptions()
+    options.preprocess.kind = pyneat.InputKind.Image
+    options.preprocess.enable = pyneat.AutoFlag.On
+    options.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.BGR
+    options.preprocess.input_max_width = width
+    options.preprocess.input_max_height = height
+    options.preprocess.input_max_depth = 3
+    options.preprocess.preset = pyneat.NormalizePreset.COCO_YOLO
+    options.decode_type = pyneat.BoxDecodeType.YoloV26
+    options.score_threshold = cfg.min_score
+    options.nms_iou_threshold = cfg.nms_iou
+    options.top_k = cfg.max_detections
+    options.advanced_execution.preprocess_async = True
+    options.advanced_execution.inference_async = True
+    options.advanced_execution.internal_queue_depth = (
+        cfg.inference_internal_queue_depth
+    )
+    options.advanced_execution.inference_output_buffers = cfg.inference_queue_depth
+    return pyneat.Model(cfg.model_path, options)
 
 
-def build_pipeline(cfg: Config, width: int, height: int, fps: int):
+def build_runner(cfg: Config, width: int, height: int):
     model = build_model(cfg, width, height)
-    source = build_source_graph(cfg, width, height, fps)
-    video_graph = build_video_graph(cfg, width, height, fps)
+    seed = image_tensor(np.zeros((height, width, 3), dtype=np.uint8))
+    run_options = pyneat.RunOptions()
+    run_options.queue_depth = cfg.inference_queue_depth
+    run_options.overflow_policy = pyneat.OverflowPolicy.KeepLatest
+    run_options.preset = pyneat.RunPreset.Realtime
+    run_options.output_memory = pyneat.OutputMemory.ZeroCopy
+    runner = model.build(
+        [seed],
+        route_options=pyneat.ModelRouteOptions(),
+        run_options=run_options,
+    )
+    runner.run([seed], timeout_ms=cfg.timeout_ms)
+    return model, runner
 
-    # Insight correlates the RTP timestamp with the metadata timestamp, so the encoder and the
-    # detections must stay in one Run and therefore on one GStreamer timeline. The frame branch
-    # returns the decoded frame the GenAI commenter crops.
-    branch = pyneat.graphs.branch("source", ["video", "model", "frame"])
 
-    model_graph = pyneat.Graph("model")
-    model_graph.connect(pyneat.nodes.input("model"), model)
-
-    detections_graph = pyneat.Graph("detections")
-    detections_graph.add(pyneat.nodes.output("detections", pyneat.OutputOptions.every_frame(4)))
-
-    frame_graph = pyneat.Graph("frame")
-    frame_graph.add(pyneat.nodes.output("frame", pyneat.OutputOptions.every_frame(4)))
-
-    joined = pyneat.graphs.combine(
-        ["frame", "detections"], "detector_output", pyneat.CombinePolicy.ByFrame
+def build_tracker(cfg: Config) -> ObjectTracker:
+    return ObjectTracker(
+        TrackerConfig(
+            high_score_threshold=cfg.tracker_high_score,
+            new_track_threshold=cfg.tracker_new_track_score,
+            match_iou_threshold=cfg.tracker_iou_threshold,
+            max_center_distance=cfg.tracker_max_center_distance,
+            velocity_momentum=cfg.tracker_velocity_momentum,
+            max_missing_frames=cfg.tracker_max_missing,
+            min_confirmed_hits=cfg.tracker_min_confirmed_hits,
+            max_active_tracks=cfg.tracker_max_active,
+            center_distance_enabled=cfg.tracker_center_distance_enabled,
+        )
     )
 
-    graph = pyneat.Graph()
-    graph.connect(source, branch)
-    graph.connect(branch, video_graph)
-    graph.connect(branch, model_graph)
-    graph.connect(model_graph, detections_graph)
-    graph.connect(branch, frame_graph)
-    graph.connect(frame_graph, joined)
-    graph.connect(detections_graph, joined)
 
-    run_opt = pyneat.RunOptions()
-    run_opt.queue_depth = 4
-    run_opt.overflow_policy = pyneat.OverflowPolicy.KeepLatest
-    run_opt.output_memory = pyneat.OutputMemory.Owned
-    return model, graph, graph.build(run_opt)
+def browser_track(track: TrackedDetection, state: SemanticState) -> dict:
+    return {
+        "track_id": track.track_id,
+        "label": "person",
+        "score": float(track.score),
+        "bbox": [
+            int(track.x1),
+            int(track.y1),
+            max(0, int(track.x2 - track.x1)),
+            max(0, int(track.y2 - track.y1)),
+        ],
+        "semantic_status": state.status,
+        "semantic_description": state.description,
+    }
 
 
-def build_metadata_sender(cfg: Config):
-    opt = pyneat.MetadataSenderOptions()
-    opt.host = cfg.insight_host
-    opt.channel = cfg.channel
-    opt.metadata_port_base = cfg.metadata_port
-    return pyneat.MetadataSender(opt)
+def dashboard_url(cfg: Config, actual_port: int) -> str:
+    host = cfg.web_host
+    if host in ("0.0.0.0", "::"):
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            probe.connect(("192.0.2.1", 9))
+            host = probe.getsockname()[0]
+        except OSError:
+            host = socket.gethostname()
+        finally:
+            probe.close()
+    scheme = "https" if cfg.web_tls_enabled else "http"
+    return f"{scheme}://{host}:{actual_port}"
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Detection-to-VLM assistant")
+    parser = argparse.ArgumentParser(description="Webcam semantic people tracker")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     args = parser.parse_args()
     if not args.config.is_file():
@@ -570,55 +521,201 @@ def main() -> int:
         return 2
 
     cfg = load_config(args.config)
-    if not cfg.rtsp_url or not cfg.model_path:
-        print("config requires source.rtsp_url and model.path", file=sys.stderr)
+    if not cfg.model_path:
+        print("config requires model.path", file=sys.stderr)
         return 2
     if not Path(cfg.model_path).is_file():
         print(f"model package does not exist: {cfg.model_path}", file=sys.stderr)
         return 2
+    if not cfg.web_enabled:
+        print("web.enabled must be true for browser webcam input", file=sys.stderr)
+        return 2
+    if cfg.web_tls_enabled:
+        for label, value in (
+            ("web.tls.cert", cfg.web_tls_cert),
+            ("web.tls.key", cfg.web_tls_key),
+            ("web.tls.ca_cert", cfg.web_tls_ca_cert),
+        ):
+            if not value or not Path(value).is_file():
+                print(f"config requires an existing {label}: {value or '-'}", file=sys.stderr)
+                return 2
     if cfg.genai_enabled and not cfg.genai_model:
         print("config requires genai.model or genai_server.model.name", file=sys.stderr)
         return 2
 
-    detector_run = commenter = None
+    detector_model = detector_pipeline = commenter = dashboard = dashboard_server = None
+    processed = 0
+    tracker_profile_frames = 0
+    tracker_profile_ms = 0.0
     try:
         labels = load_labels(cfg.labels_path)
-        width, height, fps = probe_rtsp(cfg.rtsp_url)
-        _model, _detector_graph, detector_run = build_pipeline(cfg, width, height, fps)
-        metadata = build_metadata_sender(cfg)
-        commenter = GenAICommenter(cfg, labels)
-        commenter.start()
-        print(
-            f"[detector] stream {cfg.rtsp_url}\n"
-            f"[detector] input {width}x{height}@{fps}\n"
-            f"[insight] video={cfg.insight_host}:{cfg.video_port} "
-            f"metadata={cfg.insight_host}:{cfg.metadata_port} channel={cfg.channel}\n"
-            f"[genai-server] "
-            f"{'enabled' if cfg.genai_enabled else 'disabled'} "
-            f"model={cfg.genai_model or '-'} "
-            f"url=http://{cfg.genai_host}:{cfg.genai_port} "
-            f"interval={cfg.genai_interval_seconds:g}s\n"
+        if "person" not in {label.lower() for label in labels}:
+            raise RuntimeError("model labels must contain the person class")
+        tracker = build_tracker(cfg)
+        visibility_gate = FullPersonVisibilityGate(
+            edge_margin_ratio=cfg.description_edge_margin_ratio,
+            min_clear_frames=cfg.description_min_clear_frames,
         )
+        dashboard = DashboardState(
+            title=cfg.web_title,
+            model_name=cfg.genai_model,
+            target_fps=cfg.webcam_target_fps,
+            upload_max_width=cfg.webcam_upload_max_width,
+        )
+        dashboard_server = DashboardServer(
+            dashboard,
+            cfg.web_host,
+            cfg.web_port,
+            max_frame_bytes=cfg.webcam_max_frame_bytes,
+            tls_cert=Path(cfg.web_tls_cert) if cfg.web_tls_enabled else None,
+            tls_key=Path(cfg.web_tls_key) if cfg.web_tls_enabled else None,
+            ca_cert=Path(cfg.web_tls_ca_cert) if cfg.web_tls_enabled else None,
+        )
+        dashboard_server.start()
+        direct_url = dashboard_url(cfg, dashboard_server.port)
+        print(
+            f"[dashboard] {direct_url}\n"
+            "[webcam] accept the certificate warning once, then allow camera access",
+            flush=True,
+        )
+        dashboard.set_phase("waiting", "Allow webcam access in the browser")
+        dashboard.set_component("detector", "waiting", "Waiting for first webcam frame")
+        dashboard.set_component("mla", "waiting", "Waiting for first webcam frame")
 
-        processed = 0
-        while cfg.frames <= 0 or processed < cfg.frames:
-            sample = detector_run.pull("detector_output", cfg.timeout_ms)
-            if sample is None:
-                print("RTSP stream ended or pull timed out", file=sys.stderr)
-                break
-            boxes = parse_boxes(joined_field(sample, "detections", 1))
-            commenter.try_enqueue(sample, boxes)
-            ok = metadata.send_metadata(
-                "object-detection",
-                metadata_json(boxes, labels, cfg.classes),
-                int(sample.pts_ns // 1_000_000) if sample.pts_ns >= 0 else -1,
-                str(sample.frame_id) if sample.frame_id >= 0 else "",
+        commenter = TrackAppearanceCommenter(cfg, dashboard)
+        commenter.start()
+
+        def handle_detection(context: DetectionFrame, result) -> None:
+            nonlocal processed, tracker_profile_frames, tracker_profile_ms
+            outputs = list(getattr(result, "tensors", []))
+            tensor = getattr(result, "tensor", None)
+            if not outputs and tensor is not None:
+                outputs = [tensor]
+            boxes = parse_boxes(outputs)
+            person_boxes = person_tracker_detections(boxes, labels)
+            tracker_started = time.perf_counter()
+            tracks = tracker.update(person_boxes, processed)
+            overlapping_people = overlapping_bboxes(
+                [
+                    (
+                        detection["x1"],
+                        detection["y1"],
+                        detection["x2"],
+                        detection["y2"],
+                    )
+                    for detection in person_boxes
+                ]
             )
-            if not ok:
-                raise RuntimeError("failed to send metadata to Insight")
+            tracker_ms = (time.perf_counter() - tracker_started) * 1000.0
+            tracker_profile_frames += 1
+            tracker_profile_ms += tracker_ms
+
+            active_track_ids = tracker.active_track_ids()
+            commenter.retain_tracks(active_track_ids)
+            visibility_gate.retain_tracks(active_track_ids)
+            visible: list[dict] = []
+            for track in tracks:
+                track_bbox = (track.x1, track.y1, track.x2, track.y2)
+                if track_bbox in overlapping_people:
+                    visibility_gate.reset(track.track_id)
+                    eligible_for_description = False
+                else:
+                    eligible_for_description = visibility_gate.observe(
+                        track.track_id,
+                        track_bbox,
+                        context.width,
+                        context.height,
+                    )
+                if (
+                    eligible_for_description
+                    and commenter.needs_description(track.track_id)
+                ):
+                    try:
+                        commenter.try_enqueue(
+                            track.track_id, crop_track(context.frame_bgr, track)
+                        )
+                    except RuntimeError as exc:
+                        if cfg.debug:
+                            print(f"[tracker] crop skipped: {exc}", flush=True)
+                visible.append(browser_track(track, commenter.state_for(track.track_id)))
+
+            dashboard.record_frame(
+                visible,
+                width=context.width,
+                height=context.height,
+                tracker_latency_ms=tracker_ms,
+            )
             processed += 1
+            if tracker_profile_frames >= 300:
+                print(
+                    f"[tracker] avg_ms={tracker_profile_ms / tracker_profile_frames:.3f} "
+                    f"active={tracker.active_track_count()}",
+                    flush=True,
+                )
+                tracker_profile_frames = 0
+                tracker_profile_ms = 0.0
             if cfg.debug:
-                print(f"[detector] frame={processed} detections={len(boxes)}")
+                print(
+                    f"[detector] frame={processed} people={len(visible)} "
+                    f"tracker_ms={tracker_ms:.3f}"
+                )
+
+        frame_sequence = 0
+        runner_dimensions: tuple[int, int] | None = None
+        last_input_at = time.monotonic()
+
+        while cfg.frames <= 0 or processed < cfg.frames:
+            if detector_pipeline is not None:
+                detector_pipeline.raise_if_failed()
+            submitted = dashboard.wait_for_frame(frame_sequence, timeout=1.0)
+            if submitted is None:
+                if time.monotonic() - last_input_at >= 3.0:
+                    dashboard.set_component(
+                        "camera", "waiting", "Waiting for browser webcam frames"
+                    )
+                continue
+            frame_sequence, payload = submitted
+            last_input_at = time.monotonic()
+            frame_bgr = decode_uploaded_frame(payload)
+            height, width = frame_bgr.shape[:2]
+
+            if detector_pipeline is None or runner_dimensions != (width, height):
+                if detector_pipeline is not None:
+                    detector_pipeline.close()
+                dashboard.set_phase("initializing", "Building the Neat detection runner")
+                dashboard.set_component(
+                    "detector", "starting", f"Loading YOLO for {width}×{height}"
+                )
+                detector_model, detector_run = build_runner(cfg, width, height)
+                detector_pipeline = AsyncModelPipeline(
+                    detector_run,
+                    handle_detection,
+                    pull_timeout_ms=100,
+                    max_contexts=max(8, cfg.inference_queue_depth * 4),
+                )
+                detector_pipeline.start()
+                runner_dimensions = (width, height)
+                dashboard.set_component(
+                    "detector", "online", "YOLO26 async pipeline is processing"
+                )
+                dashboard.set_component("mla", "online", "Modalix MLA active")
+                dashboard.set_phase(
+                    "running", "Tracking people and describing new tracks"
+                )
+                print(
+                    f"[detector] async webcam input {width}x{height}"
+                    f"@{cfg.webcam_target_fps} queue={cfg.inference_queue_depth}",
+                    flush=True,
+                )
+
+            accepted = detector_pipeline.submit(
+                frame_sequence,
+                image_sample(frame_bgr, frame_sequence),
+                DetectionFrame(frame_bgr, width, height),
+            )
+            if not accepted and cfg.debug:
+                print(f"[detector] dropped frame={frame_sequence}")
+
         return 0 if processed > 0 else 3
     except KeyboardInterrupt:
         return 130
@@ -628,8 +725,15 @@ def main() -> int:
     finally:
         if commenter is not None:
             commenter.close()
-        if detector_run is not None:
-            detector_run.close()
+        if detector_pipeline is not None:
+            detector_pipeline.close()
+        detector_model = None
+        if dashboard is not None:
+            for component in ("camera", "detector", "mla", "vlm"):
+                dashboard.set_component(component, "stopped", "Application stopped")
+            dashboard.set_phase("stopped", "Application stopped")
+        if dashboard_server is not None:
+            dashboard_server.stop()
 
 
 if __name__ == "__main__":
