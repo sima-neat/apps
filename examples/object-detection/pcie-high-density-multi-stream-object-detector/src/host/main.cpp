@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "app_config.h"
+#include "stall_tracker.h"
 #include "support/object_detection/detection_egress.h"
 
 #include <gst/app/gstappsink.h>
@@ -55,6 +56,11 @@ namespace {
 volatile std::sig_atomic_t g_stop_requested = 0;
 
 void request_stop(int) {
+  if (g_stop_requested) {
+    // A second signal while the pipeline is tearing down: do not wait on a card that may never
+    // answer. _Exit is async-signal-safe; the card session is cleaned up by run.sh.
+    std::_Exit(130);
+  }
   g_stop_requested = 1;
 }
 
@@ -237,11 +243,18 @@ struct SharedState {
   std::string error;
 
   void fail(std::string message) {
-    bool expected = false;
-    if (failed.compare_exchange_strong(expected, true)) {
-      std::lock_guard lock(error_mutex);
-      error = std::move(message);
+    // Populate the protected error BEFORE publishing `failed`, and do both under
+    // the mutex. A reader observes the failure by testing `failed` and then
+    // taking error_mutex to read `error` (see the "[host] failed:" report); if
+    // the flag were flipped before `error` were assigned, such a reader could win
+    // the mutex first and print an empty reason. The mutex also serialises
+    // concurrent callers -- the first failure message wins.
+    std::lock_guard lock(error_mutex);
+    if (failed.load(std::memory_order_relaxed)) {
+      return;
     }
+    error = std::move(message);
+    failed.store(true, std::memory_order_release);
   }
 };
 
@@ -858,6 +871,7 @@ public:
       expire_results();
 
       const auto now = std::chrono::steady_clock::now();
+      check_for_stall(now);
       if (config_.profile && now - last_report >= std::chrono::seconds(5)) {
         print_stats(false);
         last_report = now;
@@ -865,16 +879,61 @@ public:
     }
     gst_object_unref(bus);
 
-    gst_element_send_event(pipeline_, gst_event_new_eos());
-    gst_element_set_state(pipeline_, GST_STATE_NULL);
-    result_dispatcher_.stop();
-    print_stats(true);
+    // Report the failure before tearing down: the teardown may be cut short by the watchdog.
     if (shared_.failed) {
       std::lock_guard lock(shared_.error_mutex);
       std::cerr << "[host] failed: " << shared_.error << "\n";
-      return 1;
     }
-    return 0;
+
+    // Tearing down rtspsrc and neatpciehost can block when the card no longer answers. Give
+    // the orderly path a bounded time, then exit without waiting for it.
+    std::atomic<bool> teardown_done{false};
+    std::thread teardown_watchdog([this, &teardown_done] {
+      const auto deadline =
+          std::chrono::steady_clock::now() + std::chrono::milliseconds(config_.teardown_timeout_ms);
+      while (!teardown_done && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      }
+      if (!teardown_done) {
+        print_stats(true);
+        std::cerr << "[host] teardown did not finish within " << config_.teardown_timeout_ms
+                  << " ms; exiting without waiting for the card. Reboot the card before "
+                     "starting a new session.\n";
+        std::_Exit(3);
+      }
+    });
+    gst_element_send_event(pipeline_, gst_event_new_eos());
+    gst_element_set_state(pipeline_, GST_STATE_NULL);
+    result_dispatcher_.stop();
+    teardown_done = true;
+    teardown_watchdog.join();
+    print_stats(true);
+    return shared_.failed ? 1 : 0;
+  }
+
+  // Fail fast when frames keep being admitted but the card has stopped returning results.
+  // Waiting forever hides a stalled PCIe endpoint and leaves the user with a process that has
+  // to be killed, which is exactly the sequence that precedes card-side driver faults.
+  void check_for_stall(std::chrono::steady_clock::time_point now) {
+    std::uint64_t returned = 0;
+    std::uint64_t admitted = 0;
+    std::uint64_t result_timeouts = 0;
+    for (const auto& stream : streams_) {
+      returned += stream->returned;
+      admitted += stream->admitted;
+      result_timeouts += stream->result_timeouts;
+    }
+    if (stall_tracker_.update(returned, admitted, now,
+                              std::chrono::milliseconds(config_.stall_timeout_ms))) {
+      const auto seconds =
+          std::chrono::duration_cast<std::chrono::seconds>(stall_tracker_.stalled_for(now)).count();
+      shared_.fail(
+          "card stopped returning results: no result for " + std::to_string(seconds) + " s while " +
+          std::to_string(admitted - returned) +
+          " frames were outstanding (result timeouts so far: " + std::to_string(result_timeouts) +
+          "). The card application or PCIe endpoint driver is stalled; stop this "
+          "session and reboot the card before starting another one.");
+    }
   }
 
   void print_stats(bool final) const {
@@ -943,6 +1002,7 @@ private:
   GstElement* pipeline_ = nullptr;
   std::vector<GstElement*> rtsp_sources_;
   std::vector<std::unique_ptr<StreamRuntime>> streams_;
+  pcie_high_density::StallTracker stall_tracker_;
 };
 
 } // namespace

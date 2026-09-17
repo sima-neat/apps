@@ -61,6 +61,8 @@ struct AppConfig {
 
   bool profile = false;
   int warmup_frames = 30;
+  int stall_timeout_ms = 0;
+  int teardown_timeout_ms = 10000;
 
   std::string insight_host;
   int video_port_base = 9000;
