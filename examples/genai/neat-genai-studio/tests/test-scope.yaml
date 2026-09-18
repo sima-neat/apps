@@ -13,7 +13,13 @@ unit:
 e2e:
   python:
     enabled: false
-    reason: GenAI model assets and runtime coverage are not enabled for GA yet.
+    # An end-to-end run needs a chat model, an ASR model and the Supertonic
+    # runtime (PyNeat + onnxruntime venv and the compiled TTS packages) present
+    # on the runner. None of these are published through the Model Registry
+    # the harness acquires test models from yet, so the lifecycle behaviour
+    # (spoken replies, ASR switching, reset) is verified on a DevKit by hand.
+    # Tracked as a follow-up in the repository issues.
+    reason: GenAI model assets (chat, ASR, Supertonic TTS) are not available to the test harness yet.
     models: []
   cpp:
     enabled: false

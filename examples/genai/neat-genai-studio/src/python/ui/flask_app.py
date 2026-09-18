@@ -284,7 +284,6 @@ class TalkController:
         self.utterance_speed = 1.0
         self.missing_voice_warnings = set()
         self._cpu_engine_lock = threading.Lock()   # serializes deferred CPU engine loads
-        self._pp_attempted = False                  # piper-plus load tried (success or not)
         langs = supported_langs or ['en']
         # Supertonic is the default engine. When it loads, the CPU engines stay
         # out of RAM until a user selects them; only languages Supertonic cannot
@@ -433,7 +432,6 @@ class TalkController:
 
         self.pp = None
         self.pp_current = None
-        self._pp_attempted = True
         if not self.pp_models:
             logging.info("No piper-plus voice found under assets/piper-plus/ — "
                          "multilingual alternative unavailable (run voice_install.sh).")
@@ -548,9 +546,12 @@ class TalkController:
             language=language)
 
     def _ensure_piper_plus_loaded(self):
-        """Load piper-plus on first selection. Returns True when an engine is up."""
+        """Load piper-plus on selection. A failed attempt (transient worker or
+        memory error) is retried on the next selection rather than remembered,
+        so the user can recover without restarting. Returns True when an
+        engine is up."""
         with self._cpu_engine_lock:
-            if self.pp is None and not self._pp_attempted:
+            if self.pp is None:
                 self._init_piper_plus()
             return self.pp is not None
 
@@ -620,8 +621,7 @@ class TalkController:
         pp_loaded = self.pp is not None and (language is None or self.pp.supports(language))
         # Deferred engines are offered when their models are installed; selecting
         # one loads it.
-        pp_ok = pp_loaded or (self.pp is None and not self._pp_attempted
-                              and bool(self._installed_piper_plus(language)))
+        pp_ok = pp_loaded or (self.pp is None and bool(self._installed_piper_plus(language)))
         tts_loaded = bool(self.pipers) and (language is None or language in self.pipers)
         tts_ok = tts_loaded or (
             (language is None or language not in self.pipers)
