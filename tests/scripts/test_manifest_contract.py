@@ -1018,18 +1018,24 @@ def test_vulcan_core_install_repairs_mixed_runtime_branch(tmp_path):
     )
 
 
-def test_vulcan_sysroot_sync_precedes_core_install(tmp_path):
+@pytest.mark.parametrize(
+    "receipt", ["2.0.0~pre9999", "3.0.0~git202609150138.174a5ae-1416"]
+)
+def test_vulcan_sysroot_sync_precedes_core_install(tmp_path, receipt):
     proc = _run_build(
         tmp_path,
+        platform_version=receipt.split("~", 1)[0],
         args=["--only-install-neat-core"],
-        env=_sysroot_sync_env(tmp_path),
+        env=_sysroot_sync_env(
+            tmp_path, manifest_text=json.dumps({"sysroot-version": receipt})
+        ),
     )
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
     assert (tmp_path / "events.log").read_text(encoding="utf-8").splitlines() == [
         "sima-cli:neat install --env production -t minimal --json "
         "core@scratch-core-for-test:scratchsha1",
-        "sysroot:update 2.0.0~pre9999",
+        f"sysroot:update {receipt}",
         "sysroot:status",
         "sima-cli:neat install --env production -d . -t minimal "
         "core@scratch-core-for-test:scratchsha1",
@@ -1102,8 +1108,13 @@ def test_vulcan_sysroot_sync_rejects_active_overlay_for_stable_receipt(tmp_path)
     ]
 
 
-def test_vulcan_sysroot_sync_runs_before_installed_core_shortcut(tmp_path):
-    env = _sysroot_sync_env(tmp_path)
+@pytest.mark.parametrize(
+    "receipt", ["2.0.0~pre9999", "3.0.0~git202609150138.174a5ae-1416"]
+)
+def test_vulcan_sysroot_sync_runs_before_installed_core_shortcut(tmp_path, receipt):
+    env = _sysroot_sync_env(
+        tmp_path, manifest_text=json.dumps({"sysroot-version": receipt})
+    )
     _write_fake_neat_json(
         tmp_path,
         channel="scratch-core-for-test",
@@ -1111,13 +1122,18 @@ def test_vulcan_sysroot_sync_runs_before_installed_core_shortcut(tmp_path):
         env="prod",
     )
 
-    proc = _run_build(tmp_path, args=["--only-install-neat-core"], env=env)
+    proc = _run_build(
+        tmp_path,
+        platform_version=receipt.split("~", 1)[0],
+        args=["--only-install-neat-core"],
+        env=env,
+    )
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
     assert (tmp_path / "events.log").read_text(encoding="utf-8").splitlines() == [
         "sima-cli:neat install --env production -t minimal --json "
         "core@scratch-core-for-test:scratchsha1",
-        "sysroot:update 2.0.0~pre9999",
+        f"sysroot:update {receipt}",
         "sysroot:status",
     ]
     assert "NEAT core already installed" in proc.stdout
@@ -1133,6 +1149,10 @@ def test_vulcan_sysroot_sync_runs_before_installed_core_shortcut(tmp_path):
         '{"sysroot-version":"2.0.0~pre9999\\nstatus"}',
         '{"sysroot-version":"2.0.1"}',
         '{"sysroot-version":"2.0.1~pre9999"}',
+        '{"sysroot-version":"2.0.1~git202609150138.174a5ae-1416"}',
+        '{"sysroot-version":"2.0.0~git20260915.174a5ae-1416"}',
+        '{"sysroot-version":"2.0.0~git202609150138.bad-1416"}',
+        '{"sysroot-version":"2.0.0~git202609150138.174a5ae-1416; touch /tmp/nope"}',
     ],
 )
 def test_vulcan_sysroot_sync_rejects_invalid_receipts(tmp_path, manifest_text):
@@ -1199,25 +1219,39 @@ def test_vulcan_sysroot_sync_rejects_wrong_core_identity(tmp_path):
 @pytest.mark.parametrize(
     ("status_env", "expected_calls"),
     [
-        ("NEAT_APPS_TEST_SYSROOT_UPDATE_STATUS", ["update 2.0.0~pre9999"]),
+        ("NEAT_APPS_TEST_SYSROOT_UPDATE_STATUS", ["update {receipt}"]),
         (
             "NEAT_APPS_TEST_SYSROOT_STATUS_STATUS",
-            ["update 2.0.0~pre9999", "status"],
+            ["update {receipt}", "status"],
         ),
     ],
 )
+@pytest.mark.parametrize(
+    "receipt", ["2.0.0~pre9999", "3.0.0~git202609150138.174a5ae-1416"]
+)
 def test_vulcan_sysroot_sync_propagates_command_failure(
-    tmp_path, status_env, expected_calls
+    tmp_path, status_env, expected_calls, receipt
 ):
-    env = _sysroot_sync_env(tmp_path)
+    env = _sysroot_sync_env(
+        tmp_path, manifest_text=json.dumps({"sysroot-version": receipt})
+    )
     env[status_env] = "23"
 
-    proc = _run_build(tmp_path, args=["--only-install-neat-core"], env=env)
+    proc = _run_build(
+        tmp_path,
+        platform_version=receipt.split("~", 1)[0],
+        args=["--only-install-neat-core"],
+        env=env,
+    )
 
     assert proc.returncode != 0
     assert (tmp_path / "sysroot.log").read_text(encoding="utf-8").splitlines() == (
-        expected_calls
+        [call.format(receipt=receipt) for call in expected_calls]
     )
+    assert (tmp_path / "sima-cli-args.txt").read_text().splitlines() == [
+        "neat install --env production -t minimal --json "
+        "core@scratch-core-for-test:scratchsha1"
+    ]
 
 
 def test_vulcan_sysroot_sync_requires_sysroot_tool(tmp_path):

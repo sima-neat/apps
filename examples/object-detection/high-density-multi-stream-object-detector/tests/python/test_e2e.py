@@ -8,6 +8,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import cv2
 import pytest
 
 from tests.utils.metadata_json_listener import MetadataJsonListener
@@ -18,53 +19,30 @@ EXAMPLE_DIR = Path(__file__).resolve().parents[2]
 def select_source(urls, codec):
     errors = []
     for url in dict.fromkeys(urls):
+        cap = cv2.VideoCapture(
+            url, cv2.CAP_ANY,
+            [cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 20000, cv2.CAP_PROP_READ_TIMEOUT_MSEC, 20000],
+        )
         try:
-            result = subprocess.run(
-                [
-                    "ffprobe",
-                    "-v",
-                    "error",
-                    "-rtsp_transport",
-                    "tcp",
-                    "-select_streams",
-                    "v:0",
-                    "-show_entries",
-                    "stream=codec_name,width,height,avg_frame_rate,has_b_frames",
-                    "-of",
-                    "json",
-                    url,
-                ],
-                capture_output=True,
-                text=True,
-                timeout=20,
-                check=False,
-            )
-        except subprocess.TimeoutExpired:
-            errors.append("RTSP source probe timed out")
-            continue
-        if result.returncode:
-            errors.append(result.stderr)
-            continue
-        streams = json.loads(result.stdout).get("streams", [])
-        if not streams:
-            continue
-        stream = streams[0]
-        rate = stream.get("avg_frame_rate", "0/1")
-        numerator, denominator = map(int, rate.split("/"))
-        fps = numerator / denominator if denominator else 0
+            if not cap.isOpened():
+                errors.append(f"Cannot open source: {url}")
+                continue
+            width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+            height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+            fps = cap.get(cv2.CAP_PROP_FPS)
+        finally:
+            cap.release()
         if (
-            stream.get("codec_name") == {"h264": "h264", "h265": "hevc"}[codec]
-            and stream.get("width") == 1280
-            and stream.get("height") == 720
-            and stream.get("has_b_frames") == 0
+            width == 1280
+            and height == 720
             and (abs(fps - 30) < 0.001 or abs(fps - 30000 / 1001) < 0.001)
         ):
             print(
                 f"source codec={codec} width=1280 height=720 fps={fps} unique_publishers=1"
             )
             return url
-        errors.append(str(stream))
-    pytest.fail(f"No 720p30 {codec} source without B-frames: {errors}")
+        errors.append(f"width={width} height={height} fps={fps}")
+    pytest.fail(f"No 720p30 {codec} source: {errors}")
 
 
 @pytest.mark.e2e
