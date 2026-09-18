@@ -2309,7 +2309,7 @@ class AppContext:
                     return jsonify({'error': 'TTS engine not initialized, start the app with --apionly disabled.'}), 500
 
                 text = data.get('input')
-                model = data.get('model', 'piper-tts')
+                model = str(data.get('model') or 'default')   # a named engine is dispatched; anything else routes
                 voice = data.get('voice', 'default')
                 language = data.get('language', 'en')
                 utterance_speed = data.get('utterance_speed', data.get('utteranceSpeed', 1.0))
