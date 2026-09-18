@@ -451,6 +451,10 @@ selector in Settings.
 | **piper-tts** | GPL-3.0 runtime; model-specific terms | onnxruntime (CPU) | English, Chinese, Spanish, French, Portuguese, German, Italian, Norwegian, Vietnamese |
 | **Browser** (Web Speech API) | None | client-side (your browser / OS) | any language your device has a voice for |
 
+- The speech API (`POST /v1/audio/speech`) honours an explicit `model`:
+  `supertonic`, `piper-plus` or `piper-tts` is dispatched to exactly that
+  engine and answers 503 when it cannot speak the requested `language`; any
+  other value (`default`, `tts-1`, …) goes through the router below.
 - **Supertonic 3** is the MLA-accelerated engine from
   [supertonic-sima](https://github.com/florianvoss-commit/supertonic-sima). It
   is preferred for every language it speaks whenever its runtime is installed

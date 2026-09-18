@@ -930,24 +930,52 @@ class TalkController:
         return sanitize_for_tts(text)
 
     
+    ENGINE_KEYS = {
+        'supertonic': 'supertonic', 'supertonic-tts': 'supertonic', 'mla': 'supertonic',
+        'piper-plus': 'piper-plus', 'piperplus': 'piper-plus',
+        'piper-tts': 'piper-tts', 'pipertts': 'piper-tts', 'piper': 'piper-tts', 'rhasspy': 'piper-tts',
+    }
+
+    def engine_for_request(self, engine, language):
+        """Resolve an explicit ``model`` from the speech API to one engine.
+
+        A recognized engine name is honored or refused: it never falls back to
+        the UI's preference. Anything else (``default``, ``tts-1``, empty)
+        goes through the router. Returns ``(effective_language, engine)``;
+        raises ``LookupError`` when the named engine cannot speak ``language``.
+        """
+        key = self.ENGINE_KEYS.get((engine or '').strip().lower())
+        if key is None:
+            return self._get_piper(language, load=True)
+        if key == 'supertonic':
+            if self.st is not None and self.st.supports(language):
+                return language, self.st
+            raise LookupError(
+                "Supertonic is not available for this language"
+                if self.st is not None else "Supertonic is not installed")
+        if key == 'piper-plus':
+            if self._ensure_piper_plus_loaded() and self.pp.supports(language):
+                return language, self.pp
+            raise LookupError(f"piper-plus has no voice for '{language}'")
+        # piper-tts: the dedicated voice for this language, loaded on demand.
+        if self._load_piper_language(language):
+            return language, self.pipers[language]
+        raise LookupError(f"piper-tts has no installed voice for '{language}'")
+
     def tts_on_demand(self, text, language='en', engine=None, voice=None):
         """
         Perform TTS synthesis on-demand for the given text and return audio bytes and timing info.
 
-        ``engine`` may name 'supertonic' to bypass the router when the MLA engine
-        speaks ``language``; ``voice`` then selects one of its speakers (F1-F5,
-        M1-M5) for this request only. Other engines ignore both.
+        ``engine`` is the request's ``model``: a recognized engine name is
+        dispatched to exactly that engine (``LookupError`` when it cannot serve
+        ``language``); other values use the router. ``voice`` selects a
+        Supertonic speaker (F1-F5, M1-M5) for this request only.
         """
         if not text:
             raise ValueError("No text provided for TTS synthesis.")
 
         start_time = time.time()
-        engine = (engine or '').strip().lower()
-        if (engine in ('supertonic', 'supertonic-tts') and self.st is not None
-                and self.st.supports(language)):
-            piper = self.st
-        else:
-            language, piper = self._get_piper(language, load=True)
+        language, piper = self.engine_for_request(engine, language)
         if piper is None:
             raise RuntimeError("No TTS voice model is loaded. Install Piper .onnx voice assets under assets/ or the Supertonic runtime.")
 
@@ -2273,14 +2301,19 @@ class AppContext:
                     return jsonify({'error': 'Missing "input" text field.'}), 400
                 if not self.talk_ctrl.has_voice(language):
                     return jsonify({
-                        'error': 'No Piper TTS voice model is loaded. Install Piper .onnx voice assets under assets/.'
+                        'error': 'No TTS voice model is loaded for this language. Install Piper voice assets under assets/ or the Supertonic runtime.'
                     }), 503
 
                 logging.info(f"Received TTS request: model={model}, voice={voice}, format={response_format}")
 
                 self.talk_ctrl.set_utterance_speed(utterance_speed)
-                result = self.talk_ctrl.tts_on_demand(
-                    text, language=language, engine=model, voice=voice)
+                try:
+                    result = self.talk_ctrl.tts_on_demand(
+                        text, language=language, engine=model, voice=voice)
+                except LookupError as exc:
+                    # An explicitly requested engine that cannot serve this
+                    # request is refused, never silently swapped.
+                    return jsonify({'error': f"model '{model}': {exc}"}), 503
 
                 # Default to WAV for Piper. If mp3 is requested, you need ffmpeg to convert.
                 audio_bytes = result['audio_bytes']
