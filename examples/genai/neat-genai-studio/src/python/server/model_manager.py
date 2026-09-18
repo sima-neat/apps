@@ -1036,25 +1036,34 @@ class ModelManager:
             # Unload first so the MLA/registry no longer references it. The /stop,
             # remove_model (MLA free) and rmtree can all block for seconds — keep
             # them out of _lock so status polls are not held up.
-            if name in self._server_model_names():
-                self._stop_model_streams(name)
-                # A residual registration (a failed warm-up whose rollback
-                # could not remove the model) must be cleared before the files
-                # go: deleting weights the runtime still references leaves an
-                # unusable entry until the server restarts.
+            # Every registered name that serves from this directory must be
+            # unloaded before the files go — the requested name itself, and any
+            # alias the runtime registered it under (a normalized served name,
+            # or the configured startup name next to the directory basename).
+            # A residual registration (a failed warm-up whose rollback could
+            # not remove the model) must be cleared too: deleting weights the
+            # runtime still references leaves an unusable entry until the
+            # server restarts.
+            registered = [
+                served for served in self._server_model_names()
+                if served == name or self._resolved_path(served) == path
+            ]
+            for served in registered:
+                self._stop_model_streams(served)
                 try:
-                    removed = bool(self._server.remove_model(name))
+                    removed = bool(self._server.remove_model(served))
                     detail = "" if removed else "the runtime reported it was not removed"
                 except Exception as exc:  # noqa: BLE001
                     removed, detail = False, str(exc)
                 if not removed:
                     raise ValueError(
-                        f"'{name}' is still registered with the runtime and could not be "
-                        f"unloaded ({detail}); restart the model server before deleting it."
+                        f"'{served}' (serving from the same files as '{name}') is still "
+                        f"registered with the runtime and could not be unloaded ({detail}); "
+                        f"restart the model server before deleting it."
                     )
                 with self._lock:
-                    if name in self._resident:
-                        self._resident.remove(name)
+                    if served in self._resident:
+                        self._resident.remove(served)
 
             shutil.rmtree(path, ignore_errors=True)
             with self._lock:
