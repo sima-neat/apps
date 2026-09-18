@@ -583,7 +583,7 @@ def stream_chat(oai, model, messages, max_tokens, render=False, think=True):
         data=json.dumps(payload).encode("utf-8"),
         headers={"Content-Type": "application/json"}, method="POST")
     parts, ttft, tps, tokens = [], None, None, 0
-    reasoning_tokens, think_open = 0, False
+    reasoning_tokens, think_open, held_deltas = 0, False, 0
     splitter = _ThinkSplitter()
     buf, md_state = "", [False, False]   # render: [in code fence, in $$ math block]
 
@@ -646,7 +646,24 @@ def stream_chat(oai, model, messages, max_tokens, render=False, think=True):
             clean = _CTRL_TOKENS.sub("", delta)
             if not clean:
                 continue
-            for kind, piece in splitter.feed(clean):
+            # Tokens are counted per incoming delta, not per emitted piece: the
+            # splitter buffers the undecided prefix and would otherwise report a
+            # whole held run as one token. A delta that arrives while the prefix
+            # is still held is counted once the hold resolves, on whichever side
+            # it lands.
+            was_in_think = splitter.in_think
+            pieces = splitter.feed(clean)
+            if (not pieces and not splitter.decided and not splitter.in_think
+                    and not splitter.saw_open):
+                held_deltas += 1                    # undecided prefix, counted later
+                continue
+            delta_side = "think" if (splitter.in_think or was_in_think
+                                     or (pieces and pieces[-1][0] == "think")) else "answer"
+            if delta_side == "think":
+                reasoning_tokens += 1
+            else:
+                tokens += 1
+            for kind, piece in pieces:
                 if kind == "reclassify":
                     # Everything streamed so far was template-injected reasoning:
                     # keep it out of the answer and count it as reasoning.
@@ -656,12 +673,14 @@ def stream_chat(oai, model, messages, max_tokens, render=False, think=True):
                     _end_think()
                     continue
                 if kind == "think":
-                    reasoning_tokens += 1
+                    reasoning_tokens += held_deltas   # a held prefix that turned out to be reasoning
+                    held_deltas = 0
                     _show_think(piece)
                     continue
                 _end_think()
                 parts.append(piece)
-                tokens += 1
+                tokens += held_deltas               # a held prefix released as answer
+                held_deltas = 0
                 if render:
                     buf += piece
                     while "\n" in buf:   # flush every completed line as rendered Markdown
@@ -674,11 +693,13 @@ def stream_chat(oai, model, messages, max_tokens, render=False, think=True):
                     sys.stdout.flush()
     for kind, piece in splitter.flush():
         if kind == "think":
-            reasoning_tokens += 1
+            reasoning_tokens += held_deltas
+            held_deltas = 0
             _show_think(piece)
         else:
             parts.append(piece)
-            tokens += 1
+            tokens += held_deltas
+            held_deltas = 0
             if render:
                 buf += piece
             else:
