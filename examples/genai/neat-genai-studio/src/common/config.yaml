@@ -10,7 +10,7 @@ server:                      # Local OpenAI-compatible model server.
   models:                    # Models served by the local server.
     catalog_dir: <path-to-models-catalog-dir> # Directory scanned for loadable models.
     # Only one chat/VLM model is resident at a time: loading a new one clears all
-    # other chat/VLM models (the ASR model is pinned and always kept).
+    # other chat/VLM models. Speech-to-text has its own slot and is unaffected.
     max_resident_chat_models: 1
     chat:                    # Chat/VLM models loaded at startup (OPTIONAL).
       # Optional: use an empty list (chat: []) to start with no model resident and
@@ -19,6 +19,9 @@ server:                      # Local OpenAI-compatible model server.
       - name: <primary-chat-model-name>
         path: <path-to-primary-chat-model-dir>
     asr:                     # Speech-to-text model (OPTIONAL; omit to start without ASR).
+      # Active at startup. Any other ASR model under catalog_dir can be made
+      # active at runtime from Settings -> Models; this is what a restart
+      # re-selects, so change it here to make a different choice permanent.
       name: <asr-model-name>        # Model name shown to the app.
       path: <path-to-asr-model-dir> # Local model directory.
 

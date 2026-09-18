@@ -2329,6 +2329,18 @@ function scrollChatToBottom() {
 }
 
 function updateAsrMetrics(metadata) {
+  // The server names the model that produced THIS transcript. That is the
+  // attribution for the "Heard you" numbers, not the server's current
+  // selection: a clip recorded under model A can finish after a switch to B.
+  // So show the producer in the caption, and when it differs from what we
+  // believe is active, ask the catalog rather than adopting the producer.
+  if (metadata && metadata.model) {
+    _asrLastProducer = metadata.model;
+    updateAsrModelIndicator();
+    if (metadata.model !== _asrActive && typeof refreshCatalog === 'function') {
+      refreshCatalog();   // sets _asrActive from the server's activeAsr flag
+    }
+  }
   if (!metadata || typeof metadata !== 'object') return;
   const language = metadata.language || '—';
   const noSpeech = metadata.no_speech_prob == null ? NaN : Number(metadata.no_speech_prob);
@@ -3926,8 +3938,17 @@ async function initStudioModelManager() {
 async function refreshCatalog() {
   try {
     const resp = await fetch('/models/catalog');
+    // The proxy answers a JSON error (502) while the control API is briefly
+    // unavailable, e.g. during a native model load. That is not an empty
+    // catalog: adopting it would clear the active ASR and disable recording
+    // while the model is still serving. Keep the last known state instead.
+    if (!resp.ok) {
+      const d = await resp.json().catch(() => ({}));
+      throw new Error((d && d.error) || `HTTP ${resp.status}`);
+    }
     const data = await resp.json();
-    const catalog = (data && data.catalog) || [];
+    if (!data || !Array.isArray(data.catalog)) throw new Error('malformed catalog');
+    const catalog = data.catalog;
     // Update capabilities so vision detection works for any catalog model.
     const caps = window.SIMA_CONFIG.chatModelCapabilities || {};
     catalog.forEach(m => {
@@ -3949,6 +3970,12 @@ function populateModelSelect(catalog) {
   const select = document.getElementById('chatModelSelect');
   if (!select) return;
   _catalog = catalog || [];
+  // Speech models are tracked separately: they never appear in the chat select,
+  // and exactly one of them is active at a time.
+  const asrModels = _catalog.filter(m => (m.type || 'chat') === 'asr');
+  _asrActive = (asrModels.find(m => m.activeAsr) || {}).name || '';
+  updateAsrModelIndicator();
+  updateComposerEnabled();     // the record button depends on an active ASR
   const chatModels = catalog.filter(m => (m.type || 'chat') !== 'asr');
   const previous = select.value;
   while (select.firstChild) select.removeChild(select.firstChild);
@@ -4016,6 +4043,12 @@ function populateModelSelect(catalog) {
 // <select id="chatModelSelect"> stays the source of truth for the rest of the app.
 let _catalog = [];
 let _pendingLoad = '';    // name of the model currently loading (for the row label)
+let _resetting = false;   // an accelerator reset + server relaunch is in flight
+let _loadTicker = null;   // client-side load countdown (see startLoadTicker)
+let _lastServerLoadUpdate = 0;   // when the server last reported real progress
+let _asrActive = '';     // ASR model serving transcriptions (from the catalog)
+let _asrLastProducer = '';   // ASR model that produced the latest transcript
+let _asrPending = '';    // ASR model mid-switch (for the row label)
 
 function escHtml(s) {
   return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -4089,7 +4122,7 @@ function renderInstalledList() {
   }
 
   const control = controlEnabled();
-  const busy = _modelBusy;
+  const busy = serverBusy();
   const activeName = control ? _activeChatModel : getSelectedChatModel();
   filtered.forEach(m => {
     const incomplete = m.complete === false;
@@ -4218,14 +4251,28 @@ function updateHomeModelIndicator() {
 // Refresh the per-row actions in the model list (Load / Unload / active state)
 // and composer whenever model state changes.
 function updateManageButtons() {
+  // Deliberately NOT disabled by _modelBusy: a wedged load holds that flag for
+  // the life of the request (up to 600s), which is exactly when this recovery
+  // action is needed. reset_mla() bypasses the server's op-lock for the same
+  // reason. Only a reset already in flight disables it.
+  const mlaReset = document.getElementById('mlaResetButton');
+  if (mlaReset) mlaReset.disabled = _resetting;
   renderInstalledList();
+  renderAsrList();
   updateComposerEnabled();
 }
 
 // A model is usable for chat only once it is FULLY resident (not mid-load and
 // not mid-reset). The composer is locked until then.
+function serverBusy() {
+  // Any state in which the model server cannot service a request: a model
+  // operation in flight, or a reset during which the old server is exiting and
+  // the replacement is not yet up.
+  return _modelBusy || _resetting;
+}
+
 function modelReady() {
-  return !!getSelectedChatModel() && !_modelBusy;
+  return !!getSelectedChatModel() && !serverBusy();
 }
 
 // Enable/disable the chat input interface based on model readiness.
@@ -4241,7 +4288,16 @@ function updateComposerEnabled() {
         : 'Load a model in Settings to start chatting…');
   }
   if (send) send.disabled = !ready;
-  if (typeof recordButton !== 'undefined' && recordButton) recordButton.disabled = !ready;
+  if (typeof recordButton !== 'undefined' && recordButton) {
+    // Recording also needs a speech-to-text model. In control mode the catalog
+    // is authoritative: with ASR_MODEL_REPO="" (or after a failed switch) none
+    // is active, and every upload would only come back "unavailable".
+    const asrMissing = controlEnabled() && !_asrActive;
+    recordButton.disabled = !ready || asrMissing;
+    recordButton.title = asrMissing
+      ? 'No speech-to-text model is active — pick one under Settings → Models'
+      : '';
+  }
   if (composer) composer.classList.toggle('composer-locked', !ready);
   // Snap/upload additionally require a vision model. When not ready, force them
   // off here (the load-start case); when ready, updateSelectedModelVisionState ->
@@ -4257,13 +4313,21 @@ function initModelManage() {
   const sel = document.getElementById('chatModelSelect');
   if (sel) sel.addEventListener('change', updateManageButtons);
 
+  const mlaReset = document.getElementById('mlaResetButton');
+  if (mlaReset) mlaReset.addEventListener('click', () => resetMla());
+
   const retry = document.getElementById('modelLoadRetry');
   const viewLogs = document.getElementById('modelLoadErrorLogs');
   if (retry) retry.addEventListener('click', () => {
     const box = document.getElementById('modelLoadError');
     const target = (box && box.dataset.model) || (sel && sel.value);
     clearModelError();
-    if (target) loadModelAndActivate(target);
+    if (!target) return;
+    // An ASR retry must go through the switch path so the UI process learns
+    // the new name; a plain load would leave transcription on the old model.
+    const entry = _catalog.find(m => m.name === target);
+    if (entry && (entry.type || 'chat') === 'asr') switchAsrModel(target);
+    else loadModelAndActivate(target);
   });
   if (viewLogs) viewLogs.addEventListener('click', () => {
     const det = document.getElementById('modelLogDetails');
@@ -4296,9 +4360,10 @@ async function unloadModel(name) {
   }
 }
 
-async function deleteModel(name) {
+async function deleteModel(name, extraWarning) {
   if (!name) return;
-  if (!window.confirm(`Delete "${name}" from disk? This removes the model weights and cannot be undone.`)) return;
+  if (!window.confirm(`Delete "${name}" from disk? This removes the model weights `
+    + `and cannot be undone.${extraWarning || ''}`)) return;
   setModelStatus(`Deleting ${name}…`, 'loading');
   try {
     const resp = await fetch('/models/delete', {
@@ -4314,6 +4379,328 @@ async function deleteModel(name) {
   } finally {
     await refreshCatalog();
     refreshDiskInfo();    // freeing weights returns space to the NVMe
+  }
+}
+
+// Name the model behind the "Heard you" metrics, so the numbers below it are
+// attributable — they change meaningfully when you switch speech models.
+function updateAsrModelIndicator() {
+  const el = document.getElementById('asrModelName');
+  if (!el) return;
+  // In control mode the catalog is authoritative — an empty _asrActive means the
+  // server reports none active, and naming the configured model anyway would
+  // credit transcripts to a model that is not running. The configured name is
+  // only a stand-in for static mode, which has no catalog to consult.
+  // Prefer the producer of the latest transcript (what the numbers describe);
+  // before any recording, name the active model.
+  const name = _asrLastProducer || _asrActive
+    || (controlEnabled() ? '' : (window.SIMA_CONFIG?.asrModelName || ''));
+  el.textContent = name;
+  el.title = name ? `Transcribed by ${name}` : '';
+}
+
+// Drive the load bar from the browser's own clock.
+//
+// The server cannot report progress while a load is in flight: add_model() does
+// the bulk MLA transfer in native code without releasing the GIL, so the whole
+// model-server process — control API included — stops answering for the entire
+// load (measured: 6s timeouts, zero bytes, for a 20s load). Polling therefore
+// yields nothing exactly when there is something to show. So take the estimate
+// from the catalog BEFORE starting, and count down locally.
+//
+// Server-side polling still runs and wins whenever it does answer (a short load,
+// or an ASR warm-up, where the process is responsive); this only fills the gap.
+function startLoadTicker(name, estimateS, stagesTotal) {
+  stopLoadTicker();
+  _lastServerLoadUpdate = 0;
+  const started = Date.now();
+  const est = (typeof estimateS === 'number' && estimateS > 0) ? estimateS : null;
+  const tick = () => {
+    // Server-reported progress is authoritative; only fill in while it is silent.
+    if (Date.now() - _lastServerLoadUpdate < 2000) return;
+    const elapsed = (Date.now() - started) / 1000;
+    // Hold at 99: the load is finished when the request returns, not when the
+    // estimate runs out, and a bar that sits at 100% while still working lies.
+    const pct = est ? Math.min(99, Math.floor(elapsed / est * 100)) : null;
+    const parts = [];
+    if (pct != null) parts.push(`${pct}%`);
+    if (stagesTotal) parts.push(`${stagesTotal} stages`);
+    parts.push(fmtDuration(Math.round(elapsed)));
+    if (est) {
+      const remain = Math.max(0, est - elapsed);
+      parts.push(remain > 0 ? `~${fmtDuration(Math.round(remain))} left` : 'finishing…');
+    }
+    setModelStatus(`Loading ${name} · ${parts.join(' · ')}`, 'loading');
+    setModelLoadBar(pct != null ? pct : 'active');
+  };
+  tick();
+  _loadTicker = setInterval(tick, 250);
+}
+
+function stopLoadTicker() {
+  if (_loadTicker) { clearInterval(_loadTicker); _loadTicker = null; }
+}
+
+// The catalog carries a per-model estimate and stage count; both may be absent
+// for a model the board has never sized.
+function modelLoadHints(name) {
+  const m = _catalog.find(x => x.name === name) || {};
+  return { est: m.estimatedLoadS, stages: m.stagesTotal };
+}
+
+// Reset the accelerator: asks the model server to exit with the sentinel code so
+// the supervisor (run.sh) restarts the MLA dispatcher — which owns models across
+// processes, so killing the server alone does not free them — and relaunches it.
+// Explicit only: nothing else in the studio triggers this.
+// The reset route is board-wide, so run.sh prints a token at startup that the
+// browser must send. Ask once and remember it; a 401 forgets it (see above).
+// Returns '' when none is stored and the user typed nothing (the server may
+// not require one), or null when the prompt was cancelled.
+const RESET_TOKEN_KEY = 'resetMlaToken';
+function getResetToken() {
+  let token = '';
+  try { token = localStorage.getItem(RESET_TOKEN_KEY) || ''; } catch (e) { /* ignore */ }
+  if (token) return token;
+  const typed = window.prompt(
+    'Reset MLA needs the token run.sh printed at startup '
+    + '(also in .neat-genai-reset.token on the board). Leave empty if the Studio '
+    + 'runs with STUDIO_RESET_AUTH=0.');
+  if (typed === null) return null;
+  token = typed.trim();
+  if (token) { try { localStorage.setItem(RESET_TOKEN_KEY, token); } catch (e) { /* ignore */ } }
+  return token;
+}
+
+async function resetMla() {
+  if (_resetting) return;
+  if (!window.confirm('Reset the accelerator (MLA)?\n\nThis unloads all models and briefly '
+      + 'restarts the model server — it will be unavailable for a few seconds. '
+      + 'In-progress generation will stop.')) return;
+  _resetting = true;
+  stopLoadPolling();          // the outgoing server's log feed is about to die
+  stopLoadTicker();
+  clearModelError();
+  updateManageButtons();
+  setModelStatus('Resetting the accelerator and restarting…', 'loading');
+  setModelLoadBar('active');
+  try {
+    // The server exits ~1.5s after replying, so this may never return — that is
+    // the success path, not a failure. A response that does arrive can still be
+    // a refusal (MLA_RESET=0 answers 400): surface it instead of waiting for a
+    // restart that will never happen and then reporting the old server as new.
+    let refused = '';
+    try {
+      const headers = {};
+      const token = getResetToken();
+      if (token === null) {                // the prompt was cancelled
+        _resetting = false;
+        setModelLoadBar(null);
+        updateManageButtons();
+        setModelStatus('Reset cancelled', '');
+        return;
+      }
+      if (token) headers['X-Reset-Token'] = token;
+      const r = await fetch('/models/reset-mla', { method: 'POST', headers });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        if (r.status === 401) {
+          try { localStorage.removeItem(RESET_TOKEN_KEY); } catch (e) { /* ignore */ }
+        }
+        refused = (d && (d.error || d.message)) || `reset refused (HTTP ${r.status})`;
+      }
+    } catch (e) { /* expected: the server went away */ }
+    if (refused) {
+      // Nothing was reset: release the lock but keep the refusal on screen
+      // (the restart cleanup below would replace it with the catalog status).
+      _resetting = false;
+      setModelLoadBar(null);
+      updateManageButtons();
+      setModelStatus(`Reset refused: ${refused}`, 'error');
+      return;
+    }
+    await waitForServerBack();
+  } finally {
+    if (_resetting) {
+      // Always release the lock, even if the wait threw, so the UI cannot get
+      // stuck with every action disabled.
+      _resetting = false;
+      _modelBusy = false;       // a wedged load is gone with the restart
+      setModelLoadBar(null);
+      clearModelError();        // drop a stale error a concurrent load's 502 raised
+      await refreshCatalog();
+      updateManageButtons();
+      if (typeof updateSelectedModelVisionState === 'function') updateSelectedModelVisionState();
+    }
+  }
+}
+
+// Poll /models/status until the relaunched model server answers.
+async function waitForServerBack() {
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  const start = Date.now();
+  const timeoutMs = 90000;
+  await sleep(2500);          // let the old process exit before polling
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const r = await fetch('/models/status', { cache: 'no-store' });
+      if (r.ok) {
+        const d = await r.json().catch(() => ({}));
+        // Back up. Whether the dispatcher itself was reset depends on run.sh
+        // having the privileges, so do not over-claim a full accelerator reset.
+        if (d && !d.error) { setModelStatus('Model server restarted — ready', 'ready'); return; }
+      }
+    } catch (e) { /* still down */ }
+    await sleep(1500);
+  }
+  setModelStatus('Reset requested, but the server is slow to return — check run.sh.', 'error');
+}
+
+// ---- Speech-to-text (ASR) models --------------------------------------------
+// Kept in their own list because they never compete with chat/VLM models for the
+// same slot: exactly one ASR model is resident, and picking another evicts it
+// without disturbing the loaded chat model. The chat filters (LLM/VLM, parameter
+// count, family) are meaningless here, so only the search box applies.
+function renderAsrList() {
+  const list = document.getElementById('asrModelList');
+  if (!list) return;
+  const text = (document.getElementById('modelSearchInput')?.value || '').trim().toLowerCase();
+  const models = _catalog.filter(m => (m.type || 'chat') === 'asr')
+                         .sort((a, b) => a.name.localeCompare(b.name));
+
+  const nameEl = document.getElementById('asrActiveName');
+  if (nameEl) nameEl.textContent = _asrActive || (models.length ? 'none active' : '');
+  const noteEl = document.getElementById('asrModelNote');
+  if (noteEl) noteEl.style.display = models.length > 1 ? '' : 'none';
+
+  list.innerHTML = '';
+  if (!models.length) {
+    list.innerHTML = `<div class="hub-note">No speech-to-text model${_hubEnabled
+      ? ' — download a Whisper model from the “Add Model” tab.' : '.'}</div>`;
+    return;
+  }
+  const filtered = models.filter(m => !text || m.name.toLowerCase().includes(text));
+  if (!filtered.length) {
+    list.innerHTML = '<div class="hub-note">No speech-to-text models match the search.</div>';
+    return;
+  }
+
+  const control = controlEnabled();
+  const busy = serverBusy();
+  filtered.forEach(m => {
+    const incomplete = m.complete === false;
+    const isActive = !!m.name && m.name === _asrActive;
+    const row = document.createElement('div');
+    row.className = 'hub-result model-row' + (isActive ? ' is-active' : '');
+
+    const meta = document.createElement('div');
+    meta.className = 'hub-result-meta';
+    const size = m.sizeBytes ? fmtBytes(m.sizeBytes) : '';
+    const stateCls = incomplete ? 'is-incomplete' : (isActive ? 'is-loaded' : '');
+    const stateTxt = incomplete ? '⚠ incomplete' : (isActive ? '🎙 active' : '○ downloaded');
+    const badges = `<span class="hub-badge hub-badge-asr">${typeBadge('asr')}</span>`
+      + (size ? `<span class="hub-badge">${size}</span>` : '')
+      + (m.pinned ? '<span class="hub-badge">startup default</span>' : '')
+      + `<span class="hub-badge model-state ${stateCls}">${stateTxt}</span>`;
+    meta.innerHTML = `<span class="hub-repo">${escHtml(m.name)}</span>`
+      + `<span class="hub-badges">${badges}</span>`;
+    row.appendChild(meta);
+
+    const info = document.createElement('button');
+    info.className = 'hub-info';
+    info.type = 'button';
+    info.textContent = 'ℹ';
+    info.title = `Model card & metadata for ${m.name}`;
+    info.addEventListener('click', (e) => { e.stopPropagation(); showModelCard(m.name); });
+    row.appendChild(info);
+
+    if (control) {
+      // The active model has no delete button — the server refuses it anyway.
+      if (!isActive) {
+        const del = document.createElement('button');
+        del.className = 'hub-info hub-danger';
+        del.type = 'button';
+        del.textContent = '🗑';
+        del.title = `Delete ${m.name} from disk`;
+        del.disabled = busy;
+        del.addEventListener('click', (e) => {
+          e.stopPropagation();
+          deleteModel(m.name, m.pinned
+            ? ' It is the startup default, so after a restart no speech-to-text '
+              + 'model will be active until you pick one.'
+            : '');
+        });
+        row.appendChild(del);
+      }
+
+      const btn = document.createElement('button');
+      btn.className = 'setting-button model-action';
+      btn.type = 'button';
+      if (isActive) {
+        btn.textContent = 'Active';
+        btn.disabled = true;
+      } else if (incomplete) {
+        btn.textContent = 'Incomplete';
+        btn.disabled = true;
+        btn.title = `${m.incompleteReason || 'Weights are incomplete'} — re-download from the Add Model tab.`;
+      } else if (busy && m.name === _asrPending) {
+        btn.textContent = 'Switching…';
+        btn.disabled = true;
+      } else {
+        btn.textContent = 'Use';
+        btn.classList.add('model-load');
+        btn.disabled = busy;
+        btn.addEventListener('click', (e) => { e.stopPropagation(); switchAsrModel(m.name); });
+      }
+      row.appendChild(btn);
+    }
+    list.appendChild(row);
+  });
+}
+
+// Make another ASR model active. Mirrors loadModelAndActivate, minus the chat
+// select and minus newChat() — switching how your voice is transcribed is no
+// reason to throw away the conversation.
+async function switchAsrModel(name) {
+  if (!name || _modelBusy || name === _asrActive) return;
+  _modelBusy = true;
+  _asrPending = name;
+  updateManageButtons();
+  clearModelError();
+  await resetLoadLog();
+
+  const note = _asrActive ? `Unloading ${_asrActive} — ` : '';
+  setModelStatus(`${note}Switching speech-to-text to ${name}…`, 'loading');
+  setModelLoadBar('active');
+  startLoadPolling(name);
+  const asrHints = modelLoadHints(name);
+  startLoadTicker(name, asrHints.est, asrHints.stages);
+  try {
+    const resp = await fetch('/models/asr', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name })
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.error || 'switch failed');
+    _asrActive = data.activeAsr || name;
+    updateComposerEnabled();
+    const evicted = Array.isArray(data.evicted) ? data.evicted : [];
+    const evictedNote = evicted.length ? ` · unloaded ${evicted.join(', ')}` : '';
+    const secs = (typeof data.load_seconds === 'number') ? data.load_seconds : null;
+    const timeNote = (secs != null && secs > 0) ? ` in ${secs.toFixed(1)}s` : '';
+    setModelStatus(`Speech-to-text ready: ${_asrActive}${timeNote}${evictedNote}`, 'ready');
+  } catch (err) {
+    setModelStatus('Speech-to-text switch failed — see details below', 'error');
+    showModelError(name, err.message);
+  } finally {
+    stopLoadPolling();
+    stopLoadTicker();
+    _modelBusy = false;
+    _asrPending = '';
+    await pollLoadLogsOnce(name);
+    setModelLoadBar(null);
+    await refreshCatalog();   // re-derives _asrActive from the catalog's activeAsr
+    updateManageButtons();
   }
 }
 
@@ -4412,6 +4799,8 @@ async function loadModelAndActivate(name) {
   setModelStatus(`${switchNote}Loading ${name}… preparing`, 'loading');
   setModelLoadBar('active');
   startLoadPolling(name);
+  const hints = modelLoadHints(name);
+  startLoadTicker(name, hints.est, hints.stages);
   try {
     const resp = await fetch('/models/load', {
       method: 'POST',
@@ -4432,6 +4821,7 @@ async function loadModelAndActivate(name) {
     showModelError(name, err.message);
   } finally {
     stopLoadPolling();
+    stopLoadTicker();
     if (select) select.disabled = false;
     _modelBusy = false;
     _pendingLoad = '';
@@ -4455,20 +4845,33 @@ let _logLineCount = 0;
 
 function applyLoadingStatus(ld, name) {
   if (!ld || ld.name !== name) return;
-  let txt;
-  // Only show the stage count when the server has a REAL completed count;
-  // filesDone == null means no per-stage signal, so use elapsed time instead.
+  _lastServerLoadUpdate = Date.now();
+  const parts = [];
+  // Percent first — it is what the eye goes to. `estimated` says whether it is
+  // derived from counted stages or from elapsed-vs-expected time.
+  if (ld.pct != null) parts.push(`${ld.pct}%`);
+
   if (ld.filesTotal && ld.filesDone != null) {
-    txt = `Loading ${name}… stage ${ld.filesDone} of ${ld.filesTotal}`;
-  } else {
-    txt = `Loading ${name}… ${fmtDuration(ld.elapsedS)}`;
+    // Real per-stage counter (older runtimes report one).
+    parts.push(`stage ${ld.filesDone} of ${ld.filesTotal}`);
+  } else if (ld.stagesTotal) {
+    // Current runtimes load every stage in one bulk call and count nothing, so
+    // show the scale of the work rather than a counter frozen at zero.
+    parts.push(`${ld.stagesTotal} stages`);
   }
-  if (ld.etaS != null) {
-    const remain = Math.max(0, ld.etaS - ld.elapsedS);
-    txt += ` · ~${fmtDuration(remain)} left`;
+  parts.push(fmtDuration(ld.elapsedS));
+
+  // The countdown. Say "~" while it is an estimate so the number is not read as
+  // a promise, and stop counting down past zero on a slower-than-expected load.
+  const remain = (ld.remainingS != null)
+    ? ld.remainingS
+    : (ld.etaS != null ? Math.max(0, ld.etaS - ld.elapsedS) : null);
+  if (remain != null) {
+    parts.push(remain > 0 ? `~${fmtDuration(remain)} left` : 'finishing…');
   }
-  setModelStatus(txt, 'loading');
-  setModelLoadBar('active');   // indeterminate — model load has no true percentage
+
+  setModelStatus(`Loading ${name} · ${parts.join(' · ')}`, 'loading');
+  setModelLoadBar(ld.pct != null ? ld.pct : 'active');
 }
 
 function processLoadUpdate(d, name) {
@@ -4623,7 +5026,17 @@ function setModelLoadBar(state) {
     return;
   }
   bar.style.display = 'block';
-  if (fill) { fill.style.width = '100%'; fill.classList.add('indeterminate'); }
+  if (fill) {
+    if (typeof state === 'number' && isFinite(state)) {
+      // A real percentage: fill to it and drop the barber-pole animation.
+      fill.classList.remove('indeterminate');
+      fill.style.width = `${Math.max(0, Math.min(100, state))}%`;
+    } else {
+      // No percentage available — keep the indeterminate sweep.
+      fill.style.width = '100%';
+      fill.classList.add('indeterminate');
+    }
+  }
   // Pin the status panel to the top and bring it into view — with per-row Load
   // buttons the click may happen far below it (especially on a small screen).
   if (panel) {
@@ -4642,10 +5055,11 @@ async function initHubControls() {
   // Models tab: search + type/size/family/sort filters + rescan act on the
   // DOWNLOADED list only.
   const modelSearch = document.getElementById('modelSearchInput');
-  if (modelSearch) modelSearch.addEventListener('input', renderInstalledList);
+  if (modelSearch) modelSearch.addEventListener('input', updateManageButtons);
   ['modelFilterType', 'modelFilterParams', 'modelFilterFamily', 'modelSortBy'].forEach(id => {
     const el = document.getElementById(id); if (el) el.addEventListener('change', renderInstalledList);
   });
+  updateAsrModelIndicator();
   const modelRefresh = document.getElementById('modelRefreshButton');
   if (modelRefresh) modelRefresh.addEventListener('click', () => refreshCatalog());
 
@@ -5459,6 +5873,10 @@ function askVision(query) {
 
 // ---- Continuous camera loop: repeatedly ask the VLM about the live camera ----
 let _visionLoop = { on: false, prompt: '', delayMs: 800 };
+// Bumped on every start and stop. A startup that is mid-await when the
+// loop is stopped (or restarted) sees a stale token and bows out, so it
+// cannot clear a fresh conversation or race a second runner.
+let _visionLoopToken = 0;
 
 function waitForGenerationEnd(timeoutMs) {
   timeoutMs = timeoutMs || 90000;
@@ -5474,6 +5892,21 @@ function waitForGenerationEnd(timeoutMs) {
   });
 }
 
+// Each loop pass is a fresh look at the world, so drop the conversation once its
+// answer lands. The server appends a user message per iteration — a base64 frame
+// included — plus the reply, and never trims, so without this a running loop
+// grows history without bound: memory climbs on the board, and with "Include
+// chat history" on the prompt walks into the context limit within a few frames.
+async function clearLoopContext() {
+  chatHistory = [];
+  try {
+    await fetch('/clear-history', { method: 'POST' });
+  } catch (err) {
+    // Non-fatal: the next iteration still asks, it just carries the old turns.
+    console.warn('Could not clear context between loop iterations:', err);
+  }
+}
+
 function setVisionLoopUI(on) {
   const btn = document.getElementById('visionLoopBtn');
   if (!btn) return;
@@ -5482,8 +5915,8 @@ function setVisionLoopUI(on) {
   btn.textContent = on ? '■ Stop' : '↻ Loop';
 }
 
-async function visionLoopRun() {
-  while (_visionLoop.on) {
+async function visionLoopRun(token) {
+  while (_visionLoop.on && token === _visionLoopToken) {
     // The loop only makes sense on the live camera with a vision model.
     if (!isVisionOpen() || _visionSource !== 'camera' || !selectedChatModelSupportsVision()) {
       stopVisionLoop();
@@ -5499,6 +5932,10 @@ async function visionLoopRun() {
     // Let the request register as active, then wait for it to complete.
     await new Promise((r) => setTimeout(r, 500));
     await waitForGenerationEnd();
+    // Only once the answer is really finished — waitForGenerationEnd also
+    // returns on its 90s timeout, and clearing mid-stream would drop the
+    // generation id out from under the streaming thread and cut the reply off.
+    if (!activeGeneration) await clearLoopContext();
     if (!_visionLoop.on) break;
     await new Promise((r) => setTimeout(r, _visionLoop.delayMs));
   }
@@ -5513,11 +5950,28 @@ function startVisionLoop() {
   _visionLoop.on = true;
   setVisionLoopUI(true);
   setVisionAskHint('Looping — asking about the live camera continuously. Tap Stop to end.');
-  visionLoopRun();
+  startVisionLoopRun(++_visionLoopToken);
+}
+
+// Start from a clean slate, so the first frame is not judged against whatever
+// was said before the loop began — but never clear while a reply is streaming:
+// that drops the server's generation id, so the stream ends without its `end`
+// event and the loop would then wait out waitForGenerationEnd's full timeout.
+async function startVisionLoopRun(token) {
+  if (activeGeneration) {
+    try { await stop(true); } catch (e) { /* best effort */ }
+    await waitForGenerationEnd(15000);
+    if (token !== _visionLoopToken) return;   // stopped or restarted meanwhile
+  }
+  await clearLoopContext();
+  if (token !== _visionLoopToken) return;
+  visionLoopRun(token);
 }
 
 function stopVisionLoop() {
   _visionLoop.on = false;
+  _visionLoopToken++;          // invalidate any startup still mid-await
+
   setVisionLoopUI(false);
   if (isVisionOpen()) setVisionAskHint('');
 }
@@ -6281,7 +6735,7 @@ function updateBenchModelState() {
   const run = document.getElementById('benchRunBtn');
   const hint = document.getElementById('benchHint');
   const n = benchSelectedModels().length;
-  const busy = _modelBusy;
+  const busy = serverBusy();
   if (run) {
     run.disabled = n === 0 || busy;
     run.textContent = n > 1 ? `Run benchmark · ${n} models` : 'Run benchmark';
