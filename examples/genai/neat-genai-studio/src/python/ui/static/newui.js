@@ -3996,8 +3996,17 @@ async function initStudioModelManager() {
 async function refreshCatalog() {
   try {
     const resp = await fetch('/models/catalog');
+    // The proxy answers a JSON error (502) while the control API is briefly
+    // unavailable, e.g. during a native model load. That is not an empty
+    // catalog: adopting it would clear the active ASR and disable recording
+    // while the model is still serving. Keep the last known state instead.
+    if (!resp.ok) {
+      const d = await resp.json().catch(() => ({}));
+      throw new Error((d && d.error) || `HTTP ${resp.status}`);
+    }
     const data = await resp.json();
-    const catalog = (data && data.catalog) || [];
+    if (!data || !Array.isArray(data.catalog)) throw new Error('malformed catalog');
+    const catalog = data.catalog;
     // Update capabilities so vision detection works for any catalog model.
     const caps = window.SIMA_CONFIG.chatModelCapabilities || {};
     catalog.forEach(m => {
