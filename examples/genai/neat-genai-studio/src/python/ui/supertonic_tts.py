@@ -165,6 +165,46 @@ def segment_text(text, language, max_model_chars=MAX_MODEL_CHARS):
 
 
 # --------------------------------------------------------------------------
+# Duration-contract fallback (used by the worker; pure Python so it is tested here)
+# --------------------------------------------------------------------------
+
+def _halves(text: str) -> tuple[str, str] | None:
+    """Split ``text`` near its middle at whitespace, else at a comma, else
+    hard; None when it cannot be made shorter."""
+    text = text.strip()
+    if len(text) < 2:
+        return None
+    mid = len(text) // 2
+    for sep in (" ", ",", "\u3001", "\uff0c"):
+        left = text.rfind(sep, 1, mid + 1)
+        right = text.find(sep, mid, len(text) - 1)
+        cut = left if left > 0 and (right < 0 or mid - left <= right - mid) else right
+        if cut > 0:
+            return text[:cut + (1 if sep != " " else 0)].strip(), text[cut + 1:].strip()
+    return text[:mid], text[mid:]
+
+
+def synthesize_fitting(engine, text, *, voice, language, speed, seed, depth=0):
+    """Synthesize ``text``, splitting it and retrying when the engine's
+    duration contract (192 latent frames, ~13 s) is exceeded even though the
+    text length fits. A long segment at a slow speed, or an unusual word the
+    duration predictor stretches, can do that. Yields SynthesisResult objects."""
+    try:
+        yield engine.synthesize(text, voice=voice, language=language, speed=speed, seed=seed)
+        return
+    except ValueError as exc:
+        if "latent length" not in str(exc) or depth >= 4:
+            raise
+        parts = _halves(text)
+        if parts is None or not all(parts):
+            raise
+    for part in parts:
+        yield from synthesize_fitting(
+            engine, part, voice=voice, language=language, speed=speed, seed=seed,
+            depth=depth + 1)
+
+
+# --------------------------------------------------------------------------
 # Worker process management (same framing as pipertts.py)
 # --------------------------------------------------------------------------
 

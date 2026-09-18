@@ -114,6 +114,52 @@ class SegmentTextTests(unittest.TestCase):
         self.assertEqual(len(segment_text(text, "pt-br"), ), 2)
 
 
+class DurationFallbackTests(unittest.TestCase):
+    class Engine:
+        """Rejects anything longer than `limit` the way the real engine does
+        when the predicted latent length exceeds 192 frames."""
+        def __init__(self, limit):
+            self.limit, self.calls = limit, []
+
+        def synthesize(self, text, **kwargs):
+            self.calls.append(text)
+            if len(text) > self.limit:
+                raise ValueError("predicted latent length 234 exceeds static limit 192")
+            return text
+
+    def _run(self, engine, text):
+        return list(supertonic_tts.synthesize_fitting(
+            engine, text, voice="M1", language="en", speed=1.0, seed=1))
+
+    def test_fitting_text_is_synthesized_once(self):
+        engine = self.Engine(100)
+        self.assertEqual(self._run(engine, "short enough"), ["short enough"])
+        self.assertEqual(engine.calls, ["short enough"])
+
+    def test_too_long_text_is_split_at_whitespace_until_it_fits(self):
+        engine = self.Engine(12)
+        pieces = self._run(engine, "one two three four five six seven")
+        self.assertEqual(" ".join(pieces), "one two three four five six seven")
+        self.assertTrue(all(len(p) <= 12 for p in pieces))
+
+    def test_comma_is_preferred_and_kept(self):
+        self.assertEqual(supertonic_tts._halves("first clause, second clause"),
+                         ("first clause,", "second clause"))
+
+    def test_unsplittable_word_is_hard_cut(self):
+        engine = self.Engine(8)
+        pieces = self._run(engine, "a" * 20)
+        self.assertEqual("".join(pieces), "a" * 20)
+        self.assertTrue(all(len(p) <= 8 for p in pieces))
+
+    def test_other_errors_propagate(self):
+        class Broken:
+            def synthesize(self, text, **kwargs):
+                raise ValueError("unsupported language 'xx'")
+        with self.assertRaisesRegex(ValueError, "unsupported language"):
+            self._run(Broken(), "hello there")
+
+
 class EnvironmentDiscoveryTests(unittest.TestCase):
     def test_not_available_when_paths_are_missing(self):
         with mock.patch.dict(os.environ, {

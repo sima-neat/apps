@@ -52,6 +52,11 @@ from pathlib import Path
 
 import numpy as np
 
+# Pure helpers shared with the client module (kept there so they stay
+# unit-testable without numpy or the runtime).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from supertonic_tts import synthesize_fitting  # noqa: E402
+
 
 DEFAULT_REPO_ROOT = "/media/nvme/repos/supertonic-sima"
 DEFAULT_APP_ROOT = "/media/nvme/supertonic-tts"
@@ -211,14 +216,19 @@ def main() -> None:
             speed = max(runtime.MIN_SPEED, min(runtime.MAX_SPEED, speed))
             seed = int(req.get("seed", DEFAULT_SEED))
             segments = [str(s) for s in req.get("segments", []) if str(s).strip()]
+            # One WAV per synthesized piece, trailing silence trimmed on every
+            # piece but the very last. A segment normally yields one piece and
+            # the generator finishes right after it, so listing a segment's
+            # pieces costs no extra latency before its first WAV goes out.
             for index, segment in enumerate(segments):
-                result = eng.synthesize(
-                    segment, voice=voice, language=language, speed=speed, seed=seed
-                )
-                waveform = result.waveform
-                if index < len(segments) - 1:
-                    waveform = trim_trailing_silence(waveform, result.sample_rate)
-                respond(2, wav_bytes(waveform, result.sample_rate))
+                pieces = list(synthesize_fitting(
+                    eng, segment, voice=voice, language=language, speed=speed, seed=seed))
+                for piece_index, result in enumerate(pieces):
+                    last = index == len(segments) - 1 and piece_index == len(pieces) - 1
+                    waveform = result.waveform
+                    if not last:
+                        waveform = trim_trailing_silence(waveform, result.sample_rate)
+                    respond(2, wav_bytes(waveform, result.sample_rate))
             respond(0, b"")
         except (ValueError, KeyError, TypeError) as exc:
             # Bad request (unknown voice, text too long, ...): report and keep serving.
