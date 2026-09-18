@@ -113,7 +113,10 @@ def _split_long(segment, max_chars):
     parts = []
     remaining = segment.strip()
     while remaining and not _fits(remaining, max_chars):
-        window = remaining[: max_chars + 1]
+        # A comma may sit at index max_chars-1 at most: the part then ends with
+        # it (no period is appended) and is exactly max_chars long. Searching
+        # one further would yield a part one character over the contract.
+        window = remaining[:max_chars]
         cut = max(window.rfind(","), window.rfind("，"))
         if cut < max_chars // 2:
             cut = remaining[:max_chars].rfind(" ")
@@ -121,7 +124,11 @@ def _split_long(segment, max_chars):
                 cut = max_chars - 1
         else:
             cut += 1
-        parts.append(remaining[:cut].strip())
+        part = remaining[:cut].strip()
+        while part and not _fits(part, max_chars):   # belt and braces: never exceed
+            part = part[: max_chars - 1].rstrip()
+            cut = len(part)
+        parts.append(part)
         remaining = remaining[cut:].strip()
     if remaining:
         parts.append(remaining)

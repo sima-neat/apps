@@ -73,6 +73,14 @@ class SegmentTextTests(unittest.TestCase):
         _assert_all_fit(self, segments, "en")
         self.assertEqual(" ".join(segments).split(), words.split())
 
+    def test_comma_at_the_budget_boundary_never_exceeds_the_contract(self):
+        limit = _limit("en")
+        for offset in (-2, -1, 0, 1, 2):
+            text = "a" * (limit + offset) + "," + " more words follow here."
+            segments = segment_text(text, "en")
+            _assert_all_fit(self, segments, "en")
+            self.assertEqual("".join(segments).replace(" ", ""), text.replace(" ", ""))
+
     def test_unbroken_run_is_hard_cut(self):
         text = "x" * 500
         segments = segment_text(text, "en")
