@@ -63,6 +63,26 @@ SERVER_STATUS_FILE="${SERVER_STATUS_FILE:-${EXAMPLE_DIR}/.neat-genai-server.stat
 # and relaunches. Exported so both front ends know where to write.
 RESET_REQUEST_FILE="${RESET_REQUEST_FILE:-${EXAMPLE_DIR}/.neat-genai-reset.request}"
 export NEAT_RESET_REQUEST_FILE="${RESET_REQUEST_FILE}"
+# The reset is board-wide (it restarts the MLA dispatcher), and the web UI is
+# reachable from the network without login, so the web route requires a
+# token from any client that is not on the board itself. run.sh generates it
+# once (kept in a 0600 file) and prints it at startup; the browser asks for it
+# the first time Reset MLA is pressed. STUDIO_RESET_AUTH=0 disables the check
+# for a trusted network; STUDIO_RESET_TOKEN sets a fixed value.
+STUDIO_RESET_AUTH="${STUDIO_RESET_AUTH:-1}"
+export STUDIO_RESET_AUTH
+RESET_TOKEN_FILE="${RESET_TOKEN_FILE:-${EXAMPLE_DIR}/.neat-genai-reset.token}"
+ensure_reset_token() {
+  [[ "${STUDIO_RESET_AUTH}" == "1" ]] || return 0
+  if [[ -z "${STUDIO_RESET_TOKEN:-}" && -s "${RESET_TOKEN_FILE}" ]]; then
+    STUDIO_RESET_TOKEN="$(head -n1 "${RESET_TOKEN_FILE}" | tr -d '[:space:]')"
+  fi
+  if [[ -z "${STUDIO_RESET_TOKEN:-}" ]]; then
+    STUDIO_RESET_TOKEN="$(head -c 24 /dev/urandom | base64 | tr -d '/+=\n' | head -c 24)"
+    ( umask 077; printf '%s\n' "${STUDIO_RESET_TOKEN}" > "${RESET_TOKEN_FILE}" )
+  fi
+  export STUDIO_RESET_TOKEN
+}
 RAG_WORKER_PATTERN="${PYTHON_DIR}/rag/vectordb_worker.py"
 SERVER_PATTERN="${PYTHON_DIR}/server/main.py"
 UI_PATTERN="${PYTHON_DIR}/ui/main.py"
@@ -315,6 +335,7 @@ do_clean() {
     "${DEFAULT_APP_VENV}" \
     "${EXAMPLE_DIR}/.venv-pipertts" \
     "${DEFAULT_LOCAL_CONFIG}" \
+    "${RESET_TOKEN_FILE}" \
     "${PID_FILE}" \
     "${PYTHON_DIR}/ui/milvus.db" \
     "${PYTHON_DIR}/ui/milvus.meta.json" \
@@ -882,6 +903,8 @@ cli_supervise() {
 
 prepare_clean_start
 
+ensure_reset_token
+
 section "Model Server"
 launch_server
 
@@ -929,6 +952,9 @@ remember_process_group "${ui_pid}"
 
 printf '\n'
 ok "Neat GenAI Studio is starting up."
+if [[ "${STUDIO_RESET_AUTH}" == "1" ]]; then
+  info "Reset MLA from a browser needs this token (also in ${C_DIM}${RESET_TOKEN_FILE}${C_RESET}): ${C_BOLD}${STUDIO_RESET_TOKEN}${C_RESET}"
+fi
 _url="$(web_url || true)"
 if [[ -n "${_url}" ]]; then
   info "Open ${C_ACCENT}${C_BOLD}${_url}${C_RESET} in your browser once it finishes loading."

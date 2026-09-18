@@ -4443,6 +4443,25 @@ function modelLoadHints(name) {
 // the supervisor (run.sh) restarts the MLA dispatcher — which owns models across
 // processes, so killing the server alone does not free them — and relaunches it.
 // Explicit only: nothing else in the studio triggers this.
+// The reset route is board-wide, so run.sh prints a token at startup that the
+// browser must send. Ask once and remember it; a 401 forgets it (see above).
+// Returns '' when none is stored and the user typed nothing (the server may
+// not require one), or null when the prompt was cancelled.
+const RESET_TOKEN_KEY = 'resetMlaToken';
+function getResetToken() {
+  let token = '';
+  try { token = localStorage.getItem(RESET_TOKEN_KEY) || ''; } catch (e) { /* ignore */ }
+  if (token) return token;
+  const typed = window.prompt(
+    'Reset MLA needs the token run.sh printed at startup '
+    + '(also in .neat-genai-reset.token on the board). Leave empty if the Studio '
+    + 'runs with STUDIO_RESET_AUTH=0.');
+  if (typed === null) return null;
+  token = typed.trim();
+  if (token) { try { localStorage.setItem(RESET_TOKEN_KEY, token); } catch (e) { /* ignore */ } }
+  return token;
+}
+
 async function resetMla() {
   if (_resetting) return;
   if (!window.confirm('Reset the accelerator (MLA)?\n\nThis unloads all models and briefly '
@@ -4462,9 +4481,22 @@ async function resetMla() {
     // restart that will never happen and then reporting the old server as new.
     let refused = '';
     try {
-      const r = await fetch('/models/reset-mla', { method: 'POST' });
+      const headers = {};
+      const token = getResetToken();
+      if (token === null) {                // the prompt was cancelled
+        _resetting = false;
+        setModelLoadBar(null);
+        updateManageButtons();
+        setModelStatus('Reset cancelled', '');
+        return;
+      }
+      if (token) headers['X-Reset-Token'] = token;
+      const r = await fetch('/models/reset-mla', { method: 'POST', headers });
       if (!r.ok) {
         const d = await r.json().catch(() => ({}));
+        if (r.status === 401) {
+          try { localStorage.removeItem(RESET_TOKEN_KEY); } catch (e) { /* ignore */ }
+        }
         refused = (d && (d.error || d.message)) || `reset refused (HTTP ${r.status})`;
       }
     } catch (e) { /* expected: the server went away */ }

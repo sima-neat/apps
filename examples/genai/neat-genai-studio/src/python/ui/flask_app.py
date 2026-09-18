@@ -9,6 +9,7 @@
 # All rights reserved.
 #########################################################
 import base64
+import hmac
 import ipaddress
 import json
 import logging
@@ -1526,6 +1527,20 @@ class AppContext:
 
         @self.app.route('/models/reset-mla', methods=['POST'])
         def models_reset_mla():
+            # Board-wide operation on a network-exposed, login-less UI: require
+            # the token run.sh printed from any client that is not on the board.
+            # The cross-origin guard above only covers browser-originated
+            # requests, so it is not an authorization boundary for this route.
+            if os.environ.get('STUDIO_RESET_AUTH', '1') == '1':
+                expected = os.environ.get('STUDIO_RESET_TOKEN', '')
+                provided = request.headers.get('X-Reset-Token', '')
+                on_board = request.remote_addr in ('127.0.0.1', '::1')
+                if not on_board and not (expected and hmac.compare_digest(provided, expected)):
+                    return jsonify({
+                        'error': 'Reset MLA needs the reset token that run.sh printed '
+                                 'at startup (X-Reset-Token header).',
+                        'auth': 'reset-token',
+                    }), 401
             # The server exits ~1.5s after replying, so the response may not
             # arrive at all — a dropped connection here is success, not failure.
             # A server wedged inside a native model load is different: it

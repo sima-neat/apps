@@ -357,6 +357,14 @@ and relaunches. Both paths share the relaunch budget (`MLA_MAX_RESTART_RETRIES`
 consecutive relaunches that fail within `RELAUNCH_STABLE_SECONDS`) and both are
 refused when `MLA_RESET=0`.
 
+Because the reset is board-wide and the web UI has no login, the web route
+requires a **reset token** from any client that is not on the board itself:
+`run.sh` generates one (kept in `.neat-genai-reset.token`, mode 0600) and
+prints it at startup; the browser asks for it the first time you press **Reset
+MLA** and remembers it. Set `STUDIO_RESET_TOKEN` to choose the value, or
+`STUDIO_RESET_AUTH=0` to drop the requirement on a trusted network. The CLI's
+`/reset` talks to the local control API and is unaffected.
+
 Restarting the dispatcher needs privileges. `run.sh` prefers the board's own
 `fix_devkit_runtime.sh` when present and otherwise restarts
 `simaai-appcomplex.service` via `sudo`, so run the studio as root, give the
