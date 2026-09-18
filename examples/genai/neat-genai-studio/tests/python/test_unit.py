@@ -49,6 +49,7 @@ from cli_think_suite import (  # noqa: E402,F401
 from asr_metadata_suite import AsrMetadataTests  # noqa: E402,F401
 from supertonic_tts_suite import (  # noqa: E402,F401
     ClientConfigurationTests as SupertonicClientConfigurationTests,
+    DurationFallbackTests as SupertonicDurationFallbackTests,
     EnvironmentDiscoveryTests as SupertonicEnvironmentDiscoveryTests,
     SegmentTextTests as SupertonicSegmentTextTests,
 )
@@ -110,6 +111,7 @@ __all__ = [
     "CliThinkSplitterTests",
     "AsrMetadataTests",
     "SupertonicClientConfigurationTests",
+    "SupertonicDurationFallbackTests",
     "SupertonicEnvironmentDiscoveryTests",
     "SupertonicSegmentTextTests",
 ]
