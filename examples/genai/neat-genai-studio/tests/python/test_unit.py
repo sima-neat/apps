@@ -44,6 +44,7 @@ from asr_switching_suite import (  # noqa: E402
 from hub_security_suite import HubPathSecurityTests  # noqa: E402,F401
 from cli_think_suite import (  # noqa: E402,F401
     NoThinkRewriteTests as CliNoThinkRewriteTests,
+    ResetDisconnectClassificationTests as CliResetDisconnectClassificationTests,
     StreamTokenCountTests as CliStreamTokenCountTests,
     ThinkSplitterTests as CliThinkSplitterTests,
 )
@@ -81,6 +82,7 @@ __all__ = [
     "MlaFailureClassificationTests",
     "HubPathSecurityTests",
     "CliNoThinkRewriteTests",
+    "CliResetDisconnectClassificationTests",
     "CliStreamTokenCountTests",
     "CliThinkSplitterTests",
     "AsrMetadataTests",

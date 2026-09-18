@@ -400,6 +400,12 @@ class ModelManager:
                     with self._lock:
                         self._active_asr = None
                     return self._handle_mla_failure(name, detail)
+                if not ok and not self._is_probe_client_error(detail):
+                    # Same rule as a fresh load: a server or transport failure
+                    # proved nothing, so do not adopt a model that never answered.
+                    with self._lock:
+                        self._active_asr = None
+                    return self._handle_warm_failure(name, detail)
                 with self._lock:
                     self._active_asr = name
                 result = {"name": name, "state": "ready", "evicted": [],

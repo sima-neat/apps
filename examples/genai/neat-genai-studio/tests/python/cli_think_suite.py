@@ -137,6 +137,15 @@ class StreamTokenCountTests(unittest.TestCase):
         self.assertEqual((tokens, reasoning), (1, 5))
 
 
+class ResetDisconnectClassificationTests(unittest.TestCase):
+    def test_only_a_mid_reply_disconnect_means_success(self):
+        import http.client
+        self.assertTrue(cli._is_reset_disconnect(http.client.RemoteDisconnected("gone")))
+        self.assertTrue(cli._is_reset_disconnect(ConnectionResetError()))
+        self.assertFalse(cli._is_reset_disconnect(ConnectionRefusedError()))
+        self.assertFalse(cli._is_reset_disconnect(OSError("network unreachable")))
+
+
 class NoThinkRewriteTests(unittest.TestCase):
     def test_last_user_text_turn_gets_the_switch_without_mutating_input(self):
         msgs = [{"role": "system", "content": "s"},
