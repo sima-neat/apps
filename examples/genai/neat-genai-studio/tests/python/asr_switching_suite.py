@@ -366,6 +366,26 @@ class AsrWarmupBehaviourTests(AsrSwitchingTests):
         warm.assert_called_once_with("whisper-medium-a16w8")
         self.assertEqual(manager.active_asr(), "whisper-medium-a16w8")
 
+    def test_a_residual_registration_recheck_rejects_server_failures(self):
+        # The model is still registered from an earlier failed warm-up. A
+        # re-check that fails with a server or transport error must not adopt
+        # it, exactly like a fresh load.
+        for detail in ("HTTP 500: internal error", "<urlopen error [Errno 111] Connection refused>"):
+            manager, server = self.manager()
+            server.names.append("whisper-medium-a16w8")   # registered, not active
+            with patch.object(ModelManager, "_warm_check_asr", return_value=(False, detail)):
+                with self.assertRaisesRegex(RuntimeError, "could not be warmed up"):
+                    manager.set_active_asr("whisper-medium-a16w8")
+            self.assertNotEqual(manager.active_asr(), "whisper-medium-a16w8")
+            self.assertNotIn("whisper-medium-a16w8", server.model_names())
+        # ... while a 4xx on the re-check stays soft, as before.
+        manager, server = self.manager()
+        server.names.append("whisper-medium-a16w8")
+        with patch.object(ModelManager, "_warm_check_asr", return_value=(False, "HTTP 400: bad audio")):
+            result = manager.set_active_asr("whisper-medium-a16w8")
+        self.assertEqual(result["state"], "ready")
+        self.assertEqual(manager.active_asr(), "whisper-medium-a16w8")
+
     def test_a_warm_up_timeout_fails_the_switch(self):
         # A probe that ran out of time proved nothing; reporting "ready" would
         # announce speech-to-text as working and hang the next recording.

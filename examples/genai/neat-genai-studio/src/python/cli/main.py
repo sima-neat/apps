@@ -10,6 +10,7 @@ library (+ PyYAML to read the config).
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import socket
 import os
@@ -406,6 +407,13 @@ def catalog(ctrl):
         return ctrl_get(ctrl, "/control/catalog").get("catalog", []) or []
     except Exception:
         return []
+
+
+def _is_reset_disconnect(reason):
+    """True for the transport errors a server that replies and then exits
+    produces: the only ones that mean the reset was accepted."""
+    return isinstance(reason, (http.client.RemoteDisconnected, ConnectionResetError,
+                               http.client.IncompleteRead, BrokenPipeError))
 
 
 def _request_supervisor_reset():
@@ -2167,13 +2175,22 @@ def main():
                     print(f"{ERR}  reset refused ({exc.code}): {detail or exc.reason}{RESET}")
                     continue
                 except urllib.error.URLError as exc:
-                    if isinstance(exc.reason, (socket.timeout, TimeoutError)):
+                    if isinstance(exc.reason, (socket.timeout, TimeoutError, ConnectionRefusedError)):
+                        # No server answered: wedged (timeout) or already down
+                        # (refused). Neither is a reset; hand it to run.sh,
+                        # whose watchdog performs the reset once a server is up.
                         if not _request_supervisor_reset():
                             continue
-                    # Otherwise a dropped connection: the success path (the
-                    # server exits mid-reply).
-                except Exception:  # noqa: BLE001
-                    pass
+                    elif not _is_reset_disconnect(exc.reason):
+                        print(f"{ERR}  reset request failed: {exc.reason}{RESET}")
+                        continue
+                    # A mid-reply disconnect is the success path: the server
+                    # replied and exited.
+                except (http.client.RemoteDisconnected, ConnectionResetError, http.client.IncompleteRead):
+                    pass   # the server exited mid-reply: success
+                except Exception as exc:  # noqa: BLE001
+                    print(f"{ERR}  reset request failed: {exc}{RESET}")
+                    continue
                 active = ""
                 camera_device = None      # no model resident → no live camera
                 # The endpoint replies BEFORE exiting (~1.5s later), so polling
