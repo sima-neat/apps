@@ -88,6 +88,55 @@ class ThinkSplitterTests(unittest.TestCase):
             [("answer", "a"), ("think", "b"), ("answer", "c"), ("think", "d"), ("answer", "e")])
 
 
+class _FakeResponse:
+    def __init__(self, deltas):
+        self._lines = [b'data: {"choices":[{"delta":{"content":' + __import__("json").dumps(d).encode() + b'}}]}\n'
+                       for d in deltas] + [b"data: [DONE]\n"]
+
+    def __iter__(self):
+        return iter(self._lines)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class StreamTokenCountTests(unittest.TestCase):
+    """stream_chat counts incoming deltas, whatever the splitter buffers."""
+
+    def _stream(self, deltas, think=True):
+        import io, contextlib
+        from unittest import mock
+        with mock.patch.object(cli.urllib.request, "urlopen", return_value=_FakeResponse(deltas)):
+            with contextlib.redirect_stdout(io.StringIO()):
+                return cli.stream_chat(("127.0.0.1", 1), "m", [{"role": "user", "content": "q"}],
+                                       64, render=False, think=think)
+
+    def test_short_plain_answer_counts_every_delta(self):
+        text, _, _, tokens, reasoning = self._stream(["ab", "cd", "ef", "gh", "ij"])
+        self.assertEqual((text, tokens, reasoning), ("abcdefghij", 5, 0))
+
+    def test_long_answer_counts_held_and_released_deltas(self):
+        deltas = ["word "] * 60                      # 300 chars, well past the hold
+        text, _, _, tokens, reasoning = self._stream(deltas)
+        self.assertEqual(text, "word " * 60)
+        self.assertEqual((tokens, reasoning), (60, 0))
+
+    def test_reasoning_block_is_counted_separately(self):
+        deltas = ["<think>", "let ", "me ", "think", "</think>", "The ", "answer."]
+        text, _, _, tokens, reasoning = self._stream(deltas)
+        self.assertEqual(text, "The answer.")
+        self.assertEqual((tokens, reasoning), (2, 5))
+
+    def test_close_only_reasoning_within_the_hold_is_counted_as_reasoning(self):
+        deltas = ["step ", "one ", "step ", "two", "</think>", " Final."]
+        text, _, _, tokens, reasoning = self._stream(deltas)
+        self.assertEqual(text.strip(), "Final.")
+        self.assertEqual((tokens, reasoning), (1, 5))
+
+
 class NoThinkRewriteTests(unittest.TestCase):
     def test_last_user_text_turn_gets_the_switch_without_mutating_input(self):
         msgs = [{"role": "system", "content": "s"},

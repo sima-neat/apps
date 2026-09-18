@@ -543,11 +543,20 @@ class ModelManager:
                         with self._lock:
                             self._active_asr = None
                         return self._handle_mla_failure(served, detail)
+                    if not self._is_probe_client_error(detail):
+                        # A server error or a transport failure (HTTP 5xx,
+                        # connection refused, ...) proved nothing about the
+                        # model either: no inference succeeded. Roll the switch
+                        # back rather than declare it ready.
+                        with self._lock:
+                            self._active_asr = None
+                        return self._handle_warm_failure(served, detail)
                     # Soft failure: unlike the chat probe, this one depends on the
                     # runtime's multipart handling and on how a given Whisper
-                    # artifact reacts to pure silence. A non-MLA error here most
-                    # likely means the model is fine, so keep it active — it will
-                    # load on first use, exactly as it did before warming existed.
+                    # artifact reacts to pure silence. A 4xx here most likely
+                    # means the probe's payload, not the model, was rejected, so
+                    # keep it active — it will load on first use, exactly as it
+                    # did before warming existed.
                     logging.warning("ASR warm-up for '%s' did not complete: %s",
                                     served, detail)
                     return {"name": served, "state": "ready", "evicted": evicted,
@@ -1281,6 +1290,31 @@ class ModelManager:
         """
         text = (detail or "").lower()
         return "timed out" in text or "timeout" in text
+
+    @staticmethod
+    def _is_probe_client_error(detail: str) -> bool:
+        """True for an HTTP 4xx from the warm-up probe (see _warm_check_asr's
+        "HTTP <code>: ..." detail): the one class of failure that is about the
+        probe's payload rather than the model or the runtime."""
+        m = re.match(r"HTTP (\d{3})\b", (detail or "").strip())
+        return bool(m) and 400 <= int(m.group(1)) < 500
+
+    def _handle_warm_failure(self, name: str, detail: str) -> dict:
+        """Roll back a switch whose warm-up failed for a non-accelerator
+        reason that still proved nothing (server error, transport failure)."""
+        logging.error("ASR warm-up failed for '%s': %s", name, detail)
+        self._record_error(name, detail, kind="load")
+        try:
+            self._server.remove_model(name)
+        except Exception:
+            pass
+        with self._lock:
+            if name == self._active_asr:
+                self._active_asr = None
+        raise RuntimeError(
+            f"Speech-to-text model '{name}' could not be warmed up: {detail[:300]}. "
+            "The previous model was unloaded; select a model again."
+        )
 
     def _handle_mla_failure(self, name: str, detail: str) -> dict:
         """Roll back a failed MLA load and report it without runtime recovery."""
