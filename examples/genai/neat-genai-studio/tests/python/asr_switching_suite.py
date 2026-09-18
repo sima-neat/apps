@@ -229,6 +229,26 @@ class AsrSwitchingTests(unittest.TestCase):
             manager.delete("whisper-medium-a16w8")
         self.assertTrue((self.tmp / "whisper-medium-a16w8").is_dir())
 
+    def test_deleting_an_alias_of_a_residual_registration_is_refused(self):
+        # The runtime served the model under a normalized name and a failed
+        # warm-up left that name registered with no active ASR. Deleting the
+        # requested alias must still find and clear (or refuse on) it.
+        manager, server = self.manager()
+        (self.tmp / "whisper-tiny-a16w8").mkdir()
+        manager.register_startup_model(
+            "whisper-tiny-a16w8", self.tmp / "whisper-tiny-a16w8", "asr", False, None)
+        # The state such a failure leaves: the served alias is a catalog entry
+        # for the same directory and is still registered, nothing is active.
+        with manager._lock:
+            manager._catalog["served-whisper-tiny-a16w8"] = dict(
+                manager._catalog["whisper-tiny-a16w8"], name="served-whisper-tiny-a16w8")
+            manager._active_asr = None
+        server.names.append("served-whisper-tiny-a16w8")
+        server.remove_model = lambda name: False
+        with self.assertRaisesRegex(ValueError, "served-whisper-tiny-a16w8.*still registered"):
+            manager.delete("whisper-tiny-a16w8")
+        self.assertTrue((self.tmp / "whisper-tiny-a16w8").is_dir())
+
     def test_an_eviction_reported_as_not_removed_aborts_the_switch(self):
         manager, server = self.manager()
         server.remove_model = lambda name: False
