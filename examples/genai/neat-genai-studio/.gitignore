@@ -4,4 +4,7 @@ config.local.yaml
 .venv-pipertts/
 .neat-genai-studio.pid
 .neat-genai-server.log
+.neat-genai-server.status
+.neat-genai-reset.token
+.neat-genai-reset.request
 .local-certs/
