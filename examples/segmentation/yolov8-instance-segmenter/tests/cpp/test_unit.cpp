@@ -1,4 +1,7 @@
-// Unit test for yolov8-instance-segmenter: validates CLI arg handling.
+#define main yolov8_segmenter_application_main
+#include "../../src/cpp/main.cpp"
+#undef main
+
 #include "support/testing/test_process.h"
 
 #include <iostream>
@@ -15,6 +18,29 @@ int main(int argc, char** argv) {
   const std::string binary = argv[1];
   int failures = 0;
 
+  // Exercise the production decoder with CPU tensors, without a model or device.
+  namespace neat = simaai::neat;
+  std::vector<neat::Tensor> tensors;
+  for (const int channels : {64, 64, 64, 80, 80, 80, 32, 32, 32}) {
+    tensors.push_back(neat::Tensor::from_vector(std::vector<float>(channels, 0.0f),
+                                                {1, 1, 1, channels}, neat::TensorMemory::CPU));
+  }
+  std::vector<float> probabilities(80, 0.0f);
+  probabilities[3] = 0.74f;
+  tensors[3] = neat::Tensor::from_vector(probabilities, {1, 1, 1, 80}, neat::TensorMemory::CPU);
+  tensors.push_back(neat::Tensor::from_vector(std::vector<float>(32, 0.0f), {1, 1, 1, 32},
+                                              neat::TensorMemory::CPU));
+  TensorHWC proto;
+  const auto boxes =
+      decode_yolov8_instances_from_detess(tensors, 640, 0.70f, 0.45f, 10, false, proto);
+  if (boxes.size() != 1 || boxes[0].class_id != 3 || std::abs(boxes[0].score - 0.74f) > 1e-6f) {
+    std::cerr << "[FAIL] decoder must preserve probability 0.74 above threshold 0.70\n";
+    ++failures;
+  }
+  if (!decode_yolov8_instances_from_detess(tensors, 640, 0.75f, 0.45f, 10, false, proto).empty()) {
+    std::cerr << "[FAIL] decoder must reject probability 0.74 below threshold 0.75\n";
+    ++failures;
+  }
   // Test 1: --help exits successfully and prints usage.
   {
     auto r = spawn_and_wait(binary, {"--help"}, 20000);

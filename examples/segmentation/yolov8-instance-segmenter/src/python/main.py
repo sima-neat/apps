@@ -190,9 +190,8 @@ def decode_yolov8_instances(tensors, infer_size, conf_thr, nms_iou, max_det, dq_
         for y in range(h):
             for x in range(w):
                 cls_vec = cls[y, x, :]
-                cls_sigmoid = 1.0 / (1.0 + np.exp(-cls_vec))
-                best_cls = int(np.argmax(cls_sigmoid))
-                best_score = float(cls_sigmoid[best_cls])
+                best_cls = int(np.argmax(cls_vec))
+                best_score = float(cls_vec[best_cls])
                 if best_score < conf_thr:
                     continue
 
