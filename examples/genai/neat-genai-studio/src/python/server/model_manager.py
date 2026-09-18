@@ -478,16 +478,15 @@ class ModelManager:
                             raise RuntimeError("the runtime reported it was not removed")
                         evicted.append(victim)
                     except Exception as exc:
-                        if not is_asr:
-                            self._log_note(f"Could not unload {victim}: {exc}")
-                            continue
-                        # There is only one ASR slot. If the outgoing model will
-                        # not free, adding the replacement leaves two resident —
-                        # which can fail the load outright on double residency —
-                        # and the state below would report no active ASR while
-                        # the old one is still serving. Abort with it untouched.
+                        # Whichever slot: if the outgoing model will not free,
+                        # adding the replacement leaves two resident (which can
+                        # fail the load outright on double residency) and the
+                        # state below would drop the old one from `_resident` /
+                        # `_active_asr`, making it invisible to every later
+                        # eviction. Abort with everything untouched.
+                        kind = "speech-to-text" if is_asr else "chat"
                         raise RuntimeError(
-                            f"Could not unload the current speech-to-text model "
+                            f"Could not unload the current {kind} model "
                             f"'{victim}': {exc}"
                         ) from exc
                 with self._lock:
