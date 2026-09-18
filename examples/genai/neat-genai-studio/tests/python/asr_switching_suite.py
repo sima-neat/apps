@@ -111,6 +111,20 @@ class AsrSwitchingTests(unittest.TestCase):
         self.assertIn("whisper-medium-a16w8", server.model_names())
         self.assertEqual(manager.active_asr(), "whisper-medium-a16w8")
 
+    def test_a_chat_victim_that_cannot_be_unloaded_aborts_the_load(self):
+        # Registering the replacement while the old model stays resident would
+        # overwrite _resident and hide the old model from every later eviction.
+        make_model_dir(self.tmp, "Qwen2.5-1.5B-Instruct", "chat")
+        manager, server = self.manager()
+        manager.scan_catalog()
+        manager.load("Llama-3.2-3B-Instruct")
+        server.remove_model = lambda name: False
+        with self.assertRaisesRegex(RuntimeError, "Could not unload the current chat model"):
+            manager.load("Qwen2.5-1.5B-Instruct")
+        self.assertIn("Llama-3.2-3B-Instruct", server.model_names())
+        self.assertNotIn("Qwen2.5-1.5B-Instruct", server.model_names())
+        self.assertEqual(manager._resident, ["Llama-3.2-3B-Instruct"])
+
     def test_set_active_asr_rejects_a_chat_model(self):
         manager, _ = self.manager()
         with self.assertRaisesRegex(ValueError, "not a speech-to-text"):

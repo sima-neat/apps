@@ -483,10 +483,17 @@ class _ThinkSplitter:
     across deltas is held back until it can be resolved."""
 
     OPEN, CLOSE = "<think>", "</think>"
+    # Text streamed before either tag is undecided: a template that injects
+    # <think> makes the model open with its reasoning and emit only </think>.
+    # Hold this many characters back before treating the prefix as an answer,
+    # so ordinary reasoning traces are shown as reasoning from the start; a
+    # trace longer than the hold is reclassified when its </think> arrives.
+    HOLD_CHARS = 160
 
     def __init__(self):
         self.in_think = False
         self.saw_open = False
+        self.decided = False      # the undecided prefix has been released as answer
         self.pending = ""
 
     def feed(self, delta):
@@ -498,15 +505,22 @@ class _ThinkSplitter:
             if not self.in_think and not self.saw_open:
                 # Template-injected reasoning: the runtime put <think> in the
                 # prompt, so the model emits only </think>. Everything before
-                # it was reasoning; tell the caller to reclassify what it saw.
+                # it was reasoning. While the prefix is still held nothing has
+                # been shown, so it is simply emitted as reasoning; once the
+                # hold was released, tell the caller to reclassify what it saw.
                 close = self.pending.find(self.CLOSE)
                 if close >= 0 and (idx < 0 or close < idx):
                     if close:
                         out.append(("think", self.pending[:close]))
-                    out.append(("reclassify", ""))
+                    if self.decided:
+                        out.append(("reclassify", ""))
                     self.pending = self.pending[close + len(self.CLOSE):]
                     self.saw_open = True
                     continue
+                if idx < 0 and not self.decided:
+                    if len(self.pending) < self.HOLD_CHARS:
+                        break                       # keep holding
+                    self.decided = True             # long enough: it is an answer
                 if idx < 0:
                     # Hold back a possible </think> prefix as well.
                     tag_alt = self.CLOSE
@@ -545,6 +559,7 @@ class _ThinkSplitter:
 
     def flush(self):
         rest, self.pending = self.pending, ""
+        self.decided = True
         return [("think" if self.in_think else "answer", rest)] if rest else []
 
 

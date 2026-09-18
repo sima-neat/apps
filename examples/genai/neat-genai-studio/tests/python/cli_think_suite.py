@@ -43,29 +43,44 @@ class ThinkSplitterTests(unittest.TestCase):
     def test_a_lone_angle_bracket_is_not_swallowed(self):
         self.assertEqual(_split(["plain ", "answer <", "3 done"]),
                          [("answer", "plain answer <3 done")])
+        # ... also once the hold has been released.
+        splitter = cli._ThinkSplitter()
+        splitter.feed("x" * cli._ThinkSplitter.HOLD_CHARS)
+        pieces = splitter.feed("a <") + splitter.feed("3 b") + splitter.flush()
+        self.assertEqual("".join(t for k, t in pieces if k == "answer"), "a <3 b")
 
     def test_unterminated_reasoning_is_flushed_as_reasoning(self):
         self.assertEqual(_split(["<think>unterminated"]), [("think", "unterminated")])
 
-    def test_template_injected_close_reclassifies_prior_text(self):
-        # No <think> was emitted (the runtime put it in the prompt), so the
-        # text before the bare </think> is reasoning and the caller is told.
-        pieces = []
+    def test_template_injected_close_within_the_hold_is_shown_as_reasoning(self):
+        # No <think> was emitted (the runtime put it in the prompt). While the
+        # undecided prefix is still held, nothing was shown as an answer, so
+        # the reasoning is emitted as reasoning and no reclassify is needed.
+        self.assertEqual(
+            _split(["step one ", "step two</think>", " Final answer."]),
+            [("think", "step one step two"), ("answer", " Final answer.")])
+
+    def test_prefix_is_held_until_the_hold_limit_then_released_as_answer(self):
         splitter = cli._ThinkSplitter()
-        for delta in ["step one ", "step two</think>", " Final answer."]:
-            pieces += splitter.feed(delta)
-        pieces += splitter.flush()
+        short = "x" * (cli._ThinkSplitter.HOLD_CHARS - 1)
+        self.assertEqual(splitter.feed(short), [])            # still undecided
+        released = splitter.feed("yy")                          # crosses the hold
+        self.assertEqual("".join(t for k, t in released if k == "answer"), short + "yy")
+        self.assertEqual(splitter.feed("more"), [("answer", "more")])
+
+    def test_template_injected_close_after_the_hold_reclassifies(self):
+        # A reasoning trace longer than the hold streamed as an answer; the
+        # bare </think> then tells the caller to reclassify what it showed.
+        long_reasoning = "reasoning " * 40
+        pieces = _split([long_reasoning, "</think>", " Final answer."])
         kinds = [k for k, _ in pieces]
         self.assertIn("reclassify", kinds)
-        # Model the caller: everything before the marker was reasoning (text
-        # that streamed before the tag arrived may have been labelled answer),
-        # everything after it is the answer.
         marker = kinds.index("reclassify")
-        before = "".join(t for _, t in pieces[:marker])
-        after = "".join(t for k, t in pieces[marker + 1:] if k == "answer")
-        self.assertEqual(before, "step one step two")
-        self.assertEqual(after, " Final answer.")
-        self.assertEqual([k for k, _ in pieces[marker + 1:]], ["answer"])
+        self.assertEqual("".join(t for _, t in pieces[:marker]), long_reasoning)
+        self.assertEqual(pieces[marker + 1:], [("answer", " Final answer.")])
+
+    def test_short_plain_answer_is_flushed_at_the_end(self):
+        self.assertEqual(_split(["Yes."]), [("answer", "Yes.")])
 
     def test_multiple_blocks(self):
         self.assertEqual(

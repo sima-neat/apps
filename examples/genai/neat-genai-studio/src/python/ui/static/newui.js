@@ -2329,13 +2329,17 @@ function scrollChatToBottom() {
 }
 
 function updateAsrMetrics(metadata) {
-  // The server names the model that produced this transcript. It is the only
-  // signal the browser gets when the active ASR was changed from outside the
-  // UI (an operator calling /control/asr), so trust it over the cached name.
-  if (metadata && metadata.model && metadata.model !== _asrActive) {
-    _asrActive = metadata.model;
+  // The server names the model that produced THIS transcript. That is the
+  // attribution for the "Heard you" numbers, not the server's current
+  // selection: a clip recorded under model A can finish after a switch to B.
+  // So show the producer in the caption, and when it differs from what we
+  // believe is active, ask the catalog rather than adopting the producer.
+  if (metadata && metadata.model) {
+    _asrLastProducer = metadata.model;
     updateAsrModelIndicator();
-    if (typeof updateManageButtons === 'function') updateManageButtons();
+    if (metadata.model !== _asrActive && typeof refreshCatalog === 'function') {
+      refreshCatalog();   // sets _asrActive from the server's activeAsr flag
+    }
   }
   if (!metadata || typeof metadata !== 'object') return;
   const language = metadata.language || '—';
@@ -4033,7 +4037,8 @@ let _pendingLoad = '';    // name of the model currently loading (for the row la
 let _resetting = false;   // an accelerator reset + server relaunch is in flight
 let _loadTicker = null;   // client-side load countdown (see startLoadTicker)
 let _lastServerLoadUpdate = 0;   // when the server last reported real progress
-let _asrActive = '';     // ASR model serving transcriptions
+let _asrActive = '';     // ASR model serving transcriptions (from the catalog)
+let _asrLastProducer = '';   // ASR model that produced the latest transcript
 let _asrPending = '';    // ASR model mid-switch (for the row label)
 
 function escHtml(s) {
@@ -4377,7 +4382,10 @@ function updateAsrModelIndicator() {
   // server reports none active, and naming the configured model anyway would
   // credit transcripts to a model that is not running. The configured name is
   // only a stand-in for static mode, which has no catalog to consult.
-  const name = _asrActive || (controlEnabled() ? '' : (window.SIMA_CONFIG?.asrModelName || ''));
+  // Prefer the producer of the latest transcript (what the numbers describe);
+  // before any recording, name the active model.
+  const name = _asrLastProducer || _asrActive
+    || (controlEnabled() ? '' : (window.SIMA_CONFIG?.asrModelName || ''));
   el.textContent = name;
   el.title = name ? `Transcribed by ${name}` : '';
 }
@@ -4461,21 +4469,27 @@ async function resetMla() {
       }
     } catch (e) { /* expected: the server went away */ }
     if (refused) {
+      // Nothing was reset: release the lock but keep the refusal on screen
+      // (the restart cleanup below would replace it with the catalog status).
+      _resetting = false;
+      setModelLoadBar(null);
+      updateManageButtons();
       setModelStatus(`Reset refused: ${refused}`, 'error');
-      setModelLoadBar(0);
       return;
     }
     await waitForServerBack();
   } finally {
-    // Always release the lock, even if the wait threw, so the UI cannot get
-    // stuck with every action disabled.
-    _resetting = false;
-    _modelBusy = false;       // a wedged load is gone with the restart
-    setModelLoadBar(null);
-    clearModelError();        // drop a stale error a concurrent load's 502 raised
-    await refreshCatalog();
-    updateManageButtons();
-    if (typeof updateSelectedModelVisionState === 'function') updateSelectedModelVisionState();
+    if (_resetting) {
+      // Always release the lock, even if the wait threw, so the UI cannot get
+      // stuck with every action disabled.
+      _resetting = false;
+      _modelBusy = false;       // a wedged load is gone with the restart
+      setModelLoadBar(null);
+      clearModelError();        // drop a stale error a concurrent load's 502 raised
+      await refreshCatalog();
+      updateManageButtons();
+      if (typeof updateSelectedModelVisionState === 'function') updateSelectedModelVisionState();
+    }
   }
 }
 
