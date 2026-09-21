@@ -151,6 +151,9 @@ def main() -> int:
             # configured one; the manager must track what is actually loaded, or
             # it reports no active ASR and a later switch fails to evict it.
             asr_name=served_asr_name or (cfg.asr_model.name if cfg.asr_model else None),
+            # ... while the configured alias stays what a restart re-selects,
+            # so status and the "startup default" marker keep naming it.
+            configured_asr_name=cfg.asr_model.name if cfg.asr_model else None,
             # Switching ASR models warms the new one (a short silent clip) so a
             # bad load surfaces during the switch, not on the next transcription.
             asr_warmup=os.environ.get("STUDIO_ASR_WARMUP", "1") != "0",
@@ -170,12 +173,16 @@ def main() -> int:
                 model.supports_vision, model.vision_image_size,
             )
         if cfg.asr_model:
-            # Register under the served name so the catalog entry, the type
-            # lookup and the active-ASR pointer all agree.
+            # Register the configured alias (what config re-selects) and, when
+            # the runtime normalized it, the served name too, so the catalog
+            # entry, the type lookup and the active-ASR pointer all agree.
             manager.register_startup_model(
-                served_asr_name or cfg.asr_model.name,
-                cfg.asr_model.path, "asr", False, None
+                cfg.asr_model.name, cfg.asr_model.path, "asr", False, None
             )
+            if served_asr_name and served_asr_name != cfg.asr_model.name:
+                manager.register_startup_model(
+                    served_asr_name, cfg.asr_model.path, "asr", False, None
+                )
         manager.scan_catalog()
 
         control_httpd = serve_control_api(manager, cfg.control.host, cfg.control.port)

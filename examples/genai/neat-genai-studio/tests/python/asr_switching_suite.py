@@ -295,6 +295,40 @@ class AsrSwitchingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "disabled"):
             manager.reset_mla()
 
+    def test_configured_alias_survives_a_normalized_served_name(self):
+        # The runtime serves the configured alias under another name. The
+        # configured alias must still be what a restart re-selects, and its
+        # row must carry the startup-default marker even after switching away.
+        server = FakeServer(["served-whisper-small"])
+        manager = ModelManager(
+            server, catalog_dir=self.tmp, max_resident_chat_models=1,
+            asr_name="served-whisper-small", configured_asr_name="whisper-small-a16w8",
+            hub=HubConfig(allow_download=False), openai_base_url="http://127.0.0.1:9998",
+            warmup=False, asr_warmup=False, switch_settle_s=0.0,
+        )
+        manager.register_startup_model(
+            "whisper-small-a16w8", self.tmp / "whisper-small-a16w8", "asr", False, None)
+        manager.register_startup_model(
+            "served-whisper-small", self.tmp / "whisper-small-a16w8", "asr", False, None)
+        manager.scan_catalog()
+        self.assertEqual(manager.status()["configuredAsrModel"], "whisper-small-a16w8")
+        pinned = {e["name"] for e in manager.catalog() if e["pinned"]}
+        self.assertIn("whisper-small-a16w8", pinned)
+        self.assertIn("served-whisper-small", pinned)   # same directory
+
+        manager.set_active_asr("whisper-medium-a16w8")
+        manager.scan_catalog()
+        self.assertEqual(manager.status()["configuredAsrModel"], "whisper-small-a16w8")
+        self.assertIn("whisper-small-a16w8", {e["name"] for e in manager.catalog() if e["pinned"]})
+
+    def test_only_payload_contract_4xx_are_soft_warm_failures(self):
+        soft = ModelManager._is_probe_client_error
+        for code in (400, 413, 415, 422):
+            self.assertTrue(soft(f"HTTP {code}: nope"), code)
+        for code in (401, 403, 404, 429, 500, 503):
+            self.assertFalse(soft(f"HTTP {code}: nope"), code)
+        self.assertFalse(soft("<urlopen error [Errno 111] Connection refused>"))
+
     def test_status_reports_active_and_configured_asr_separately(self):
         manager, _ = self.manager()
         manager.set_active_asr("whisper-medium-a16w8")
