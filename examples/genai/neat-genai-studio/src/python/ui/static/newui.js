@@ -4585,7 +4585,13 @@ async function resetMla() {
         }
         refused = (d && (d.error || d.message)) || `reset refused (HTTP ${r.status})`;
       }
-    } catch (e) { /* expected: the server went away */ }
+    } catch (e) {
+      // The UI process stays up while the model server restarts, and the route
+      // turns the model server's disconnect into a normal HTTP response, so a
+      // rejected fetch here is a browser<->Studio transport failure, not a
+      // reset that started. Do not wait for a restart and then report one.
+      refused = `could not reach the Studio (${e && e.message ? e.message : 'network error'})`;
+    }
     if (refused) {
       // Nothing was reset: release the lock but keep the refusal on screen
       // (the restart cleanup below would replace it with the catalog status).
