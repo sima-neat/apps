@@ -337,8 +337,16 @@ _supertonic_config_value() {
     tts && st && $1 == key":" {
       v = $0
       sub(/^[ \t]*[A-Za-z_]+:[ \t]*/, "", v)   # drop the key: keep the whole value
-      sub(/[ \t]+#.*$/, "", v)                 # trailing comment
-      gsub(/^["\x27]|["\x27]$/, "", v)        # surrounding quotes
+      if (v ~ /^"/) {                          # quoted: the value ends at the closing
+        v = substr(v, 2); i = index(v, "\"")    # quote; a "#" inside is part of it
+        if (i > 0) v = substr(v, 1, i - 1)
+      } else if (v ~ /^\x27/) {
+        v = substr(v, 2); i = index(v, "\x27")
+        if (i > 0) v = substr(v, 1, i - 1)
+      } else {
+        sub(/[ \t]+#.*$/, "", v)               # plain scalar: strip a trailing comment
+        sub(/[ \t]+$/, "", v)
+      }
       print v; exit
     }
   ' "${CONFIG_PATH}" 2>/dev/null || true
