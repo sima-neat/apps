@@ -45,6 +45,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import signal
 import struct
 import sys
 import wave
@@ -165,6 +166,17 @@ def _claim_protocol_channel():
 def main() -> None:
     out = _claim_protocol_channel()
 
+    # A SIGTERM (the Studio shutting down, or the UI process group being
+    # signalled) must release the two MLA runners instead of leaving the
+    # runtime to clean up after a dead process. The handler only raises; the
+    # engine is closed once, in the finally below, on every exit path (signal,
+    # stdin EOF, fatal error).
+    def _terminate(signum, _frame):
+        raise SystemExit(128 + signum)
+
+    signal.signal(signal.SIGTERM, _terminate)
+    signal.signal(signal.SIGINT, _terminate)
+
     def respond(status: int, payload: bytes) -> None:
         out.write(bytes([status]))
         out.write(struct.pack(">I", len(payload)))
@@ -193,7 +205,19 @@ def main() -> None:
             "max_speed": runtime.MAX_SPEED,
         }).encode("utf-8")
 
-    for line in sys.stdin:
+    try:
+        _serve(sys.stdin, respond, ensure_engine, describe, lambda: runtime)
+    finally:
+        if engine is not None:
+            try:
+                engine.close()
+            except Exception:  # noqa: BLE001 - best effort on the way out
+                pass
+
+
+def _serve(stdin, respond, ensure_engine, describe, current_runtime) -> None:
+    """The request loop, split out so ``main`` can close the engine on exit."""
+    for line in stdin:
         line = line.strip()
         if not line:
             continue
@@ -206,6 +230,7 @@ def main() -> None:
             if cmd != "synth_stream":
                 raise ValueError(f"unsupported command: {cmd}")
             eng = ensure_engine()
+            runtime = current_runtime()
             voice = str(req.get("voice") or "M1")
             language = str(req.get("language") or "en")
             if voice not in runtime.AVAILABLE_VOICES:

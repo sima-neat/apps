@@ -241,9 +241,13 @@ def stop_service():
 def handle_shutdown_signal(signum, _frame):
     logging.info("Received signal %s; stopping RAG database service", signum)
     stop_service()
+    # Let the Supertonic worker close its MLA runners instead of dying with
+    # the process group.
+    supertonic_tts.terminate_worker()
     raise KeyboardInterrupt
 
 atexit.register(stop_service)
+atexit.register(supertonic_tts.terminate_worker)
 signal.signal(signal.SIGTERM, handle_shutdown_signal)
 
 class AppConstants:

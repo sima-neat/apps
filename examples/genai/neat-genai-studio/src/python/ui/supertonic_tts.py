@@ -261,6 +261,27 @@ def shutdown_worker():
         _discard_worker()
 
 
+def terminate_worker(timeout=5.0):
+    """Ask the worker to exit gracefully (it closes its MLA runners on
+    SIGTERM), then kill it if it has not gone within ``timeout``. For the
+    Studio's own shutdown; nothing respawns it afterwards."""
+    global _worker
+    with _worker_lock:
+        proc = _worker
+        _worker = None
+        if proc is None or proc.poll() is not None:
+            return
+        try:
+            proc.terminate()
+            proc.wait(timeout=timeout)
+        except Exception:
+            try:
+                proc.kill()
+                proc.wait(timeout=5)
+            except Exception:
+                pass
+
+
 def _request(req):
     with _worker_lock:
         proc = _ensure_worker()
