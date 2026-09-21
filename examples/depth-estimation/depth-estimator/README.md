@@ -42,7 +42,7 @@ Run the remaining commands from `prebuilt-apps/`.
 | --- | --- | --- |
 | `depth_anything_v2_vits_mpk.tar.gz` | Default | Direct artifact |
 
-Model packages come from the Model Zoo release below, which can differ from the installed platform version.
+This model comes from the direct SDK artifact release below, which can differ from the installed platform version.
 
 ```bash
 export MODELZOO_VERSION="2.1.3"
