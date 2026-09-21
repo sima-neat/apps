@@ -125,6 +125,7 @@ class ModelManager:
         catalog_dir: Path | None,
         max_resident_chat_models: int,
         asr_name: str | None,
+        configured_asr_name: str | None = None,
         hub: HubConfig,
         openai_base_url: str,
         warmup: bool = True,
@@ -141,7 +142,10 @@ class ModelManager:
         # right now (mutable — the UI can switch it). The active name is only a
         # cache: eviction victims are DERIVED from the server's loaded set, so a
         # stale pointer can never strand a resident ASR model.
-        self._configured_asr = asr_name
+        # What config re-selects at startup (the alias the user wrote) versus
+        # what the runtime is serving now; the runtime may normalize the name,
+        # and a later switch changes the active one.
+        self._configured_asr = configured_asr_name or asr_name
         self._active_asr = asr_name
         self._hub = hub
         self._openai_base_url = openai_base_url.rstrip("/")
@@ -277,7 +281,7 @@ class ModelManager:
                 "loaded": info["name"] in loaded,
                 # "pinned" = the ASR model config re-selects on restart;
                 # "activeAsr" = the one serving transcriptions right now.
-                "pinned": info["name"] == self._configured_asr,
+                "pinned": self._is_configured_asr(info["name"]),
                 "activeAsr": (info.get("type") == "asr"
                               and info["name"] == active_asr),
                 "sizeBytes": self._size_of(path),
@@ -991,6 +995,16 @@ class ModelManager:
                 f"({self._active_asr}) — switch to another ASR model first."
             )
 
+    def _is_configured_asr(self, name: str) -> bool:
+        """The configured startup ASR, by alias or by the directory it points
+        at (the runtime may serve it under a normalized name)."""
+        if not self._configured_asr:
+            return False
+        if name == self._configured_asr:
+            return True
+        configured_path = self._resolved_path(self._configured_asr)
+        return bool(configured_path) and self._resolved_path(name) == configured_path
+
     def _resolved_path(self, name: str | None):
         """Resolved on-disk path for a catalog entry, or None."""
         if not name:
@@ -1303,7 +1317,10 @@ class ModelManager:
         "HTTP <code>: ..." detail): the one class of failure that is about the
         probe's payload rather than the model or the runtime."""
         m = re.match(r"HTTP (\d{3})\b", (detail or "").strip())
-        return bool(m) and 400 <= int(m.group(1)) < 500
+        # Only the statuses that describe the probe's payload. A missing
+        # endpoint (404), a refused authorization (401/403) or throttling
+        # (429) would fail every recording the same way.
+        return bool(m) and int(m.group(1)) in (400, 413, 415, 422)
 
     def _handle_warm_failure(self, name: str, detail: str) -> dict:
         """Roll back a switch whose warm-up failed for a non-accelerator
