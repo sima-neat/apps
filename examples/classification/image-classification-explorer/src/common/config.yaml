@@ -1,0 +1,61 @@
+# Image classification explorer configuration.
+#
+# `models` lists one or more model profiles. Every profile is self-contained:
+# artifact path, input size, preprocessing preset, output interpretation, label
+# mapping, and top-k. Nothing is inferred from the model file name. Add a
+# profile to compare an additional model against the ones already listed.
+
+io:                           # Input image settings.
+  input: null                 # Single image or a directory of images. null uses the fallback sample image.
+  fallback_image_url: https://raw.githubusercontent.com/EliSchwartz/imagenet-sample-images/master/n01443537_goldfish.JPEG
+  extensions: .jpg,.jpeg,.png,.bmp    # Recognized image extensions, comma separated.
+  output_dir: report          # Directory for report.html, report.json, and report.csv.
+
+runtime:                      # Runtime settings.
+  timeout_ms: 20000           # Per-image, per-model inference timeout.
+
+models:
+  resnet_50:
+    path: models/resnet_50_mpk.tar.gz
+    input_width: 224
+    input_height: 224
+    preprocess: imagenet      # Maps to pyneat/simaai NormalizePreset::ImageNet.
+    output: softmax           # Output interpretation: raw per-class scores; softmax is
+                               # applied and index i maps to label_map[i]. Only value implemented.
+    num_classes: 1000
+    label_map: src/common/imagenet_labels.txt   # One label per line; line index is the class id.
+    top_k: 5
+
+  resnet_18:
+    path: models/resnet_18_mpk.tar.gz
+    input_width: 224
+    input_height: 224
+    preprocess: imagenet
+    output: softmax
+    num_classes: 1000
+    label_map: src/common/imagenet_labels.txt
+    top_k: 5
+
+  efficientnet_b0:
+    path: models/efficientnet_b0_mpk.tar.gz
+    input_width: 224
+    input_height: 224
+    preprocess: imagenet
+    output: softmax
+    num_classes: 1000
+    label_map: src/common/imagenet_labels.txt
+    top_k: 5
+
+  densenet_121:
+    path: models/densenet_121_mpk.tar.gz
+    input_width: 224
+    input_height: 224
+    preprocess: imagenet
+    output: softmax
+    num_classes: 1000
+    label_map: src/common/imagenet_labels.txt
+    top_k: 5
+
+validation:                   # Used by the bundled sample-image regression test, not normal runs.
+  expected_class_id: 1        # ImageNet class id for goldfish.
+  min_probability: 0.20

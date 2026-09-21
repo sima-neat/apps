@@ -1,4 +1,4 @@
-// Unit test for image-classifier: validates CLI arg handling.
+// Unit test for image-classification-explorer: validates CLI arg handling.
 #include "support/testing/test_process.h"
 
 #include <iostream>
@@ -26,6 +26,28 @@ int main(int argc, char** argv) {
       ++failures;
     } else {
       std::cout << "[OK] --help printed usage\n";
+    }
+  }
+
+  // Test 2: a missing config file produces a nonzero exit.
+  {
+    auto r = spawn_and_wait(binary, {"--config", "/nonexistent/config.yaml"}, 20000);
+    if (r.exit_code == 0) {
+      std::cerr << "[FAIL] missing config: expected nonzero exit, got 0\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] missing config produced a nonzero exit\n";
+    }
+  }
+
+  // Test 3: an unrecognized flag produces a nonzero exit.
+  {
+    auto r = spawn_and_wait(binary, {"--bogus"}, 20000);
+    if (r.exit_code == 0) {
+      std::cerr << "[FAIL] unknown flag: expected nonzero exit, got 0\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] unknown flag produced a nonzero exit\n";
     }
   }
 
