@@ -76,7 +76,7 @@ Run the remaining commands from `prebuilt-apps/`.
 | --- | --- | --- |
 | `yolo26n-det-int8-b1.tar.gz` | Default | Direct artifact |
 
-Model packages come from the Model Zoo release below, which can differ from the installed platform version.
+This model comes from the direct SDK artifact release below, which can differ from the installed platform version.
 
 ```bash
 export MODELZOO_VERSION="2.1.3"

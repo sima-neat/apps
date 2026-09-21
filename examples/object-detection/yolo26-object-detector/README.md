@@ -87,7 +87,7 @@ python3 ${APP_DIR}/src/python/main.py \
 - Verify `model.path` and the labels file if detections are missing.
 - Confirm the input folder contains `.jpg`, `.jpeg`, `.png`, or `.bmp` files.
 - Adjust `decode.score_threshold` and `decode.nms_iou` when tuning detections.
-- Use `--profile` to inspect pipeline timing.
+- Set `runtime.profile: true` in the config to print pipeline timing summaries.
 
 ## Source Files
 
