@@ -50,7 +50,7 @@ n/a = the application does not ship that language.
 | `face-detection/single-stream-thermal-face-detector` | OK | OK | `processed=200`; streamed to Insight |
 | `feature-extraction/superpoint-feature-extractor` | OK | OK | `frames=200 average_points=331.6 descriptor_dim=256` |
 | `genai/detection-to-vlm-assistant` | n/a | OK | VLM served on `/v1/models`; caption returned |
-| `genai/neat-genai-studio` | n/a | BLOCKED (workaround OK) | `./run.sh` aborts on the ASR model; starts and serves chat once ASR is removed. See R2 |
+| `genai/neat-genai-studio` | n/a | BLOCKED (workaround OK) | `./run.sh` aborts on the ASR model ([#521](https://github.com/sima-neat/apps/issues/521)); starts and serves chat once ASR is removed |
 | `object-detection/detr-object-detector` | OK | OK | 21 annotated images |
 | `object-detection/high-density-multi-stream-object-detector` | BLOCKED | BLOCKED | 8 streams OK; 16 starved 12 of them. See finding D1 and B1 |
 | `object-detection/multi-stream-object-detector` | OK | OK | 4 streams, 36 saved frames |
@@ -118,6 +118,8 @@ maintainer decision rather than a blind change.
 Recorded separately from documentation defects, as #517 asks.
 
 **R1. `nanobind` reference-counting leak on the Python path.**
+Tracked as [#522](https://github.com/sima-neat/apps/issues/522).
+
 Five applications print the following on exit:
 
 ```
@@ -133,6 +135,8 @@ Affected: `multi-stream-object-detector`, `multi-stream-people-tracker`,
 `yolo26-tiny-drone-tracker`. Exit status is still 0 and results are correct.
 
 **R2. `setup.sh` installs an ASR model the runtime cannot load.**
+Tracked as [#521](https://github.com/sima-neat/apps/issues/521).
+
 Following `get-example.sh` -> `./setup.sh` -> `./run.sh` exactly, the model
 server aborts during warmup and takes the studio down with it:
 
