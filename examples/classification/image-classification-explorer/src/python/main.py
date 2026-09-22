@@ -47,12 +47,21 @@ class ImageResult:
 
 
 def download_image(url: str, dest: Path) -> Path:
-    """Download an image if it does not already exist."""
-    if not dest.exists():
+    """Download a fallback image, reusing a cache only for the same URL."""
+    source_path = dest.with_name(f"{dest.name}.source-url")
+    try:
+        cached_url = source_path.read_text(encoding="utf-8")
+    except OSError:
+        cached_url = None
+    if not dest.exists() or cached_url != url:
         print(f"Downloading {url} ...")
+        temporary = dest.with_name(f"{dest.name}.tmp")
         try:
-            urllib.request.urlretrieve(url, dest)
+            urllib.request.urlretrieve(url, temporary)
+            temporary.replace(dest)
+            source_path.write_text(url, encoding="utf-8")
         except (urllib.error.URLError, OSError) as exc:
+            temporary.unlink(missing_ok=True)
             raise FileNotFoundError(f"failed to download {url}: {exc}") from exc
     return dest
 

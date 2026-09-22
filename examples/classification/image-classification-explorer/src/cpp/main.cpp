@@ -24,6 +24,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -147,11 +148,14 @@ std::vector<ModelProfile> load_profiles(const sima_examples::ScalarConfig& raw,
                                         const fs::path& config_path) {
   const auto known_names = profile_names(raw);
   auto ordered = ordered_model_keys(config_path);
-  // Validate the file scan found exactly the same set of profiles ScalarConfig did;
-  // otherwise fall back to alphabetical rather than silently dropping/misordering.
+  // ScalarConfig has no scalar for an empty mapping, but the text scan does. Keep
+  // those extra declared profile names so the required-field validation below can
+  // reject them just as Python does. Fall back only when the scan misses a scalar
+  // profile or contains duplicates.
   std::set<std::string> ordered_set(ordered.begin(), ordered.end());
   std::set<std::string> known_set(known_names.begin(), known_names.end());
-  if (ordered.size() != ordered_set.size() || ordered_set != known_set) {
+  if (ordered.size() != ordered_set.size() ||
+      !std::includes(ordered_set.begin(), ordered_set.end(), known_set.begin(), known_set.end())) {
     ordered = known_names;
   }
 
@@ -235,14 +239,50 @@ std::vector<std::string> load_label_map(const std::string& path, int num_classes
   return labels;
 }
 
+fs::path fallback_source_path(const fs::path& fallback_dest) {
+  return fallback_dest.string() + ".source-url";
+}
+
+bool fallback_cache_matches(const fs::path& fallback_dest, const std::string& fallback_url) {
+  if (!fs::exists(fallback_dest))
+    return false;
+  std::ifstream in(fallback_source_path(fallback_dest));
+  std::string cached_url;
+  return static_cast<bool>(std::getline(in, cached_url)) && cached_url == fallback_url;
+}
+
+void record_fallback_source(const fs::path& fallback_dest, const std::string& fallback_url) {
+  std::ofstream out(fallback_source_path(fallback_dest));
+  if (!out.is_open()) {
+    throw std::runtime_error("failed to record fallback image source: " +
+                             fallback_source_path(fallback_dest).string());
+  }
+  out << fallback_url;
+  if (!out.good()) {
+    throw std::runtime_error("failed to record fallback image source: " +
+                             fallback_source_path(fallback_dest).string());
+  }
+}
+
 std::vector<fs::path> discover_images(const std::string& input_path,
                                       const std::vector<std::string>& extensions,
                                       const std::string& fallback_url,
                                       const fs::path& fallback_dest,
                                       std::vector<std::string>& skipped) {
   if (input_path.empty()) {
-    if (!sima_examples::download_file(fallback_url, fallback_dest)) {
-      throw std::runtime_error("failed to download fallback image: " + fallback_url);
+    if (!fallback_cache_matches(fallback_dest, fallback_url)) {
+      // download_file intentionally keeps a nonempty destination. Remove a stale
+      // fallback first so a changed URL cannot be recorded against old content.
+      std::error_code remove_error;
+      fs::remove(fallback_dest, remove_error);
+      if (remove_error) {
+        throw std::runtime_error("failed to refresh fallback image: " + fallback_dest.string() +
+                                 ": " + remove_error.message());
+      }
+      if (!sima_examples::download_file(fallback_url, fallback_dest)) {
+        throw std::runtime_error("failed to download fallback image: " + fallback_url);
+      }
+      record_fallback_source(fallback_dest, fallback_url);
     }
     return {fallback_dest};
   }
@@ -463,10 +503,10 @@ void write_csv_report(const fs::path& path, const std::vector<ImageResult>& resu
       if (it == result.predictions.end() || it->second.top_k.empty()) {
         const auto err_it = result.errors.find(profile.name);
         if (err_it != result.errors.end()) {
-          out << csv_escape(result.image_path.string()) << "," << profile.name << ",error,,,,,"
-              << csv_escape(err_it->second) << "\n";
+          out << csv_escape(result.image_path.string()) << "," << csv_escape(profile.name)
+              << ",error,,,,," << csv_escape(err_it->second) << "\n";
         } else {
-          out << csv_escape(result.image_path.string()) << "," << profile.name
+          out << csv_escape(result.image_path.string()) << "," << csv_escape(profile.name)
               << ",no_result,,,,,\n";
         }
         continue;
@@ -481,8 +521,8 @@ void write_csv_report(const fs::path& path, const std::vector<ImageResult>& resu
         top_k_str << label_for(profile, s.index) << ":" << std::fixed << std::setprecision(4)
                   << s.prob;
       }
-      out << csv_escape(result.image_path.string()) << "," << profile.name << ",ok," << top1.index
-          << "," << csv_escape(label_for(profile, top1.index)) << "," << std::fixed
+      out << csv_escape(result.image_path.string()) << "," << csv_escape(profile.name) << ",ok,"
+          << top1.index << "," << csv_escape(label_for(profile, top1.index)) << "," << std::fixed
           << std::setprecision(4) << top1.prob << "," << std::fixed << std::setprecision(2)
           << it->second.inference_ms << "," << csv_escape(top_k_str.str()) << "\n";
     }

@@ -141,8 +141,9 @@ stop the run.
 - Verify each `models.<name>.path` if a model fails to load.
 - Set `io.input` to a readable local image or directory if downloading or decoding the fallback
   image fails.
-- Check `report.json`'s `skipped` list and each image's `error` field for files that failed to
-  process.
+- Check `report.json`'s `skipped` list and each image's `errors` object for files that failed to
+  process. `errors` is keyed by model name, so one image can record a failure for one model while
+  retaining predictions from the others.
 
 ## Source Files
 

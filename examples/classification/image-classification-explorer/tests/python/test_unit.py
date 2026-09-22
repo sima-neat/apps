@@ -132,10 +132,32 @@ models:
 class TestDiscoverImages:
     def test_missing_input_uses_fallback(self, tmp_path):
         dest = tmp_path / "fallback.jpeg"
-        dest.write_bytes(b"fake")  # already present, so no network call
-        images, skipped = main.discover_images(None, (".jpg",), "http://example.invalid/x.jpg", dest)
+        url = "http://example.invalid/x.jpg"
+        dest.write_bytes(b"fake")
+        dest.with_name(f"{dest.name}.source-url").write_text(url)
+        images, skipped = main.discover_images(None, (".jpg",), url, dest)
         assert images == [dest]
         assert skipped == []
+
+    def test_fallback_refreshes_when_url_changes(self, tmp_path, monkeypatch):
+        dest = tmp_path / "fallback.jpeg"
+        old_url = "https://example.test/old.jpeg"
+        new_url = "https://example.test/new.jpeg"
+        dest.write_bytes(b"old image")
+        source_path = dest.with_name(f"{dest.name}.source-url")
+        source_path.write_text(old_url)
+        downloaded = []
+
+        def _download(url, target):
+            downloaded.append(url)
+            Path(target).write_bytes(b"new image")
+
+        monkeypatch.setattr(main.urllib.request, "urlretrieve", _download)
+
+        assert main.download_image(new_url, dest) == dest
+        assert downloaded == [new_url]
+        assert dest.read_bytes() == b"new image"
+        assert source_path.read_text() == new_url
 
     def test_single_file(self, tmp_path):
         img = tmp_path / "a.jpg"
