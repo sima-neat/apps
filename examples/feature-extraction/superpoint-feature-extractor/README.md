@@ -87,6 +87,21 @@ python3 ${APP_DIR}/src/python/main.py \
 Both implementations stream the overlay to Insight and print the number of processed frames,
 average feature count, descriptor dimension, and selected video endpoint.
 
+## Expected Result
+
+This application writes nothing to disk; its output is the Insight stream plus a
+single summary line printed when the frame limit is reached:
+
+```text
+frames=200 average_points=331.6 descriptor_dim=256 video_sender=<insight-host>:9000
+```
+
+`frames` should match `runtime.frames` (or the video length when it is `0`),
+`descriptor_dim` should be `256`, and `average_points` should be in the
+hundreds for the packaged TUM RGB-D sequence. An `average_points` near zero
+means the model loaded but found no features, which usually points at the input
+resolution rather than the model path.
+
 ## Troubleshooting
 
 - Confirm `model.path` points to the qualified SuperPoint package.

@@ -78,6 +78,22 @@ python3 ${APP_DIR}/src/python/main.py \
   --config ${APP_DIR}/src/common/config.yaml
 ```
 
+## Expected Result
+
+The application prints one line per image with its detection count and output
+file:
+
+```text
+[1/21] 000000081061.jpg: 3 detections -> 000000081061_detr.png
+[2/21] 000000116439.jpg: 9 detections -> 000000116439_detr.png
+```
+
+`io.output_dir` (default `sandbox/detr-object-detector`) then holds one
+annotated PNG per input image; with the packaged `assets/datasets/coco` folder
+that is 21 files. Detection counts vary by image. A run that writes every file
+with `0 detections` usually means `decode.confidence_threshold` is too high for
+the content.
+
 ## Troubleshooting
 
 - Verify `model.path` if model loading fails.

@@ -93,6 +93,20 @@ python3 ${APP_DIR}/src/python/main.py \
   --config ${APP_DIR}/src/common/config.yaml
 ```
 
+## Expected Result
+
+The application prints the resolved source on startup and a count when the frame
+limit is reached:
+
+```text
+processed=200 video_sender=<insight-host>:9000
+```
+
+`processed` should reach `inference.frames`, or keep climbing when `frames` is
+`0`. To confirm detections without watching Insight, set `output.save_dir` to a
+directory and `output.save_every` to a non-zero interval; the application then
+writes annotated frames there as well.
+
 ## Troubleshooting
 
 - Verify stream reachability if the first frame times out.

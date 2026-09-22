@@ -77,6 +77,20 @@ python3 ${APP_DIR}/src/python/main.py \
   --config ${APP_DIR}/src/common/config.yaml
 ```
 
+## Expected Result
+
+The application prints one line per image and a final count:
+
+```text
+[1/21] 000000081061.jpg -> 000000081061.png
+...
+Done: 21 images processed
+```
+
+`io.output_dir` (default `sandbox/depth-estimator`) then holds one PNG depth
+visualization per input image. With the packaged `assets/datasets/coco` folder
+that is 21 files. Nearer surfaces render brighter than distant ones.
+
 ## Troubleshooting
 
 - Verify `model.path` if startup fails.

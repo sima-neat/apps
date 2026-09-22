@@ -134,6 +134,22 @@ python3 ${APP_DIR}/src/python/main.py \
 Open the Insight video viewer for the channel (e.g. `/api/viewer-url?src=0`) to
 watch the annotated stream.
 
+## Expected Result
+
+This application writes nothing to disk; its output is the Insight video channel
+plus the landmark metadata channel. It prints the resolved source on startup and
+a count when the frame limit is reached:
+
+```text
+rtsp=rtsp://<host>:<port>/<stream> stream=1280x720@30 insight=<insight-host> video=9000 metadata=9100 channel=0
+processed=200 video_sender=<insight-host>:9000
+```
+
+`processed` should reach `inference.frames`. This count reports frames pushed
+through the pipeline, not faces found, so a healthy `processed` value does not
+by itself confirm detections. Confirm those in Insight, which draws the five
+landmarks as labeled dots on the stream.
+
 ## Debugging Notes
 - If the viewer shows video but no overlays, confirm `output.insight.host` and the
   metadata port are reachable and match the viewer's channel. Use Insight's

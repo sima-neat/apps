@@ -80,6 +80,21 @@ python3 ${APP_DIR}/src/python/main.py \
   --config ${APP_DIR}/src/common/config.yaml
 ```
 
+## Expected Result
+
+The application prints the top-1 index with its probability, the top-5 list, and
+a line confirming the top-1 class matches `validation.expected_class_id`:
+
+```text
+[model] top1 index=1 score=16.435 prob=0.946191
+[model] top5: 1:0.946191 0:0.0495301 392:0.00298376 389:0.000480504 29:0.000206855
+[model] top-1 matches expected class 1
+```
+
+With the packaged goldfish image, class `1` should win with a probability well
+above the `validation.min_probability` default of `0.20`. A missing match line
+means the run completed but failed the validation check.
+
 ## Troubleshooting
 
 - Verify `model.path` if model loading fails.
