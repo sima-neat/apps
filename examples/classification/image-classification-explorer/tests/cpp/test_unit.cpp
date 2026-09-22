@@ -444,5 +444,91 @@ int main(int argc, char** argv) {
     }
   }
 
+  // Test 14: unquoted YAML scalars that are not strings (bool, null, integers in
+  // any spelling) must be rejected, because PyYAML turns them into Python
+  // objects whose text differs from the raw spelling C++ reads.
+  {
+    namespace fs = std::filesystem;
+    const char* const kNonStringKeys[] = {"true", "null", "01", "1_0", "0x1"};
+    for (const auto* key : kNonStringKeys) {
+      const auto config_path =
+          fs::temp_directory_path() /
+          ("image-classification-explorer-nonstring-" + std::string(key) + "-" +
+           std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".yaml");
+      {
+        std::ofstream config(config_path);
+        config << "models:\n"
+               << "  " << key << ":\n"
+               << "    path: /nonexistent/m.tar.gz\n";
+      }
+      auto r = spawn_and_wait(binary, {"--config", config_path.string()}, 20000);
+      fs::remove(config_path);
+      if (r.exit_code == 0 ||
+          r.stderr_text.find("is not a string; quote it in config.yaml") == std::string::npos) {
+        std::cerr << "[FAIL] unquoted non-string key '" << key << "': expected rejection, got exit "
+                  << r.exit_code << "\nstderr:\n"
+                  << r.stderr_text << "\n";
+        ++failures;
+      }
+    }
+    if (failures == 0)
+      std::cout << "[OK] unquoted non-string profile names were rejected\n";
+  }
+
+  // Test 15: the same names are accepted when quoted, which makes them strings
+  // in both implementations. (Fails later on the missing model file, not on the
+  // name, so assert the name was accepted.)
+  {
+    namespace fs = std::filesystem;
+    const auto config_path =
+        fs::temp_directory_path() /
+        ("image-classification-explorer-quoted-numeric-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".yaml");
+    {
+      std::ofstream config(config_path);
+      config << "models:\n"
+             << "  \"1\":\n"
+             << "    path: /nonexistent/m.tar.gz\n";
+    }
+    auto r = spawn_and_wait(binary, {"--config", config_path.string()}, 20000);
+    fs::remove(config_path);
+    if (r.stderr_text.find("is not a string") != std::string::npos ||
+        r.stdout_text.find("Loading model '1'") == std::string::npos) {
+      std::cerr << "[FAIL] quoted numeric name: expected it to be accepted, exit " << r.exit_code
+                << "\nstdout:\n"
+                << r.stdout_text << "stderr:\n"
+                << r.stderr_text << "\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] quoted numeric profile name was accepted\n";
+    }
+  }
+
+  // Test 16: a non-integral scalar must be rejected rather than truncated, so
+  // both entrypoints run the same settings.
+  {
+    namespace fs = std::filesystem;
+    const auto config_path =
+        fs::temp_directory_path() /
+        ("image-classification-explorer-float-topk-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".yaml");
+    {
+      std::ofstream config(config_path);
+      config << "models:\n"
+             << "  m:\n"
+             << "    path: /nonexistent/m.tar.gz\n"
+             << "    top_k: 1.9\n";
+    }
+    auto r = spawn_and_wait(binary, {"--config", config_path.string()}, 20000);
+    fs::remove(config_path);
+    if (r.exit_code == 0) {
+      std::cerr << "[FAIL] non-integral top_k: expected nonzero exit\nstderr:\n"
+                << r.stderr_text << "\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] non-integral top_k was rejected\n";
+    }
+  }
+
   return failures > 0 ? 1 : 0;
 }

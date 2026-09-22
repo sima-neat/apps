@@ -42,6 +42,12 @@ const std::vector<std::string> kDefaultExtensions = {".jpg", ".jpeg", ".png", ".
 // label_map path is a configuration error.
 const char* const kBundledLabelMapRef = "src/common/imagenet_labels.txt";
 
+std::string lower_copy(std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  return value;
+}
+
 // ScalarConfig unquotes values but not mapping keys, so a profile declared as
 // `"resnet_50":` arrives with its quotes attached. Strip them for display and
 // metadata while the original spelling stays the lookup key.
@@ -73,6 +79,34 @@ std::size_t find_key_colon(const std::string& line) {
     }
   }
   return std::string::npos;
+}
+
+// True when an *unquoted* YAML scalar would be read as something other than a
+// string (bool, null, or an integer in any spelling). PyYAML turns those into
+// Python objects whose text differs from the raw spelling (`01` -> 1,
+// `true` -> True), so accepting them here would let C++ run a profile Python
+// rejects. Such names must be quoted, which makes them strings in both.
+bool looks_like_yaml_non_string(const std::string& key) {
+  if (key.empty() || key == "~")
+    return true;
+  const std::string lowered = lower_copy(key);
+  static const std::set<std::string> kWords = {"true", "false", "yes", "no", "on", "off", "null"};
+  if (kWords.count(lowered) != 0)
+    return true;
+  // Integer spellings: decimal (with YAML 1.1 underscores or leading zeros),
+  // and the 0x/0o/0b radix prefixes.
+  if (lowered.rfind("0x", 0) == 0 || lowered.rfind("0o", 0) == 0 || lowered.rfind("0b", 0) == 0)
+    return true;
+  const bool digits_only = std::all_of(
+      key.begin(), key.end(), [](unsigned char c) { return std::isdigit(c) != 0 || c == '_'; });
+  return digits_only &&
+         std::any_of(key.begin(), key.end(), [](unsigned char c) { return std::isdigit(c) != 0; });
+}
+
+// True when the key carries explicit YAML quotes, which make it a string.
+bool is_quoted_yaml_key(const std::string& key) {
+  return key.size() >= 2 &&
+         ((key.front() == '"' && key.back() == '"') || (key.front() == '\'' && key.back() == '\''));
 }
 
 std::string unquote_yaml_key(const std::string& key) {
@@ -107,12 +141,6 @@ struct ImageResult {
   std::map<std::string, Prediction> predictions;
   std::map<std::string, std::string> errors; // model name -> error message
 };
-
-std::string lower_copy(std::string value) {
-  std::transform(value.begin(), value.end(), value.begin(),
-                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-  return value;
-}
 
 std::vector<std::string> split_csv(const std::string& value) {
   std::vector<std::string> out;
@@ -213,6 +241,10 @@ std::vector<ModelProfile> load_profiles(const sima_examples::ScalarConfig& raw,
   // Validate the declared spelling before reconciliation, so a key ScalarConfig
   // cannot represent (a colon inside the name) is reported by its real name.
   for (const auto& key : ordered) {
+    if (!is_quoted_yaml_key(key) && looks_like_yaml_non_string(key)) {
+      throw std::runtime_error("models: profile name " + key +
+                               " is not a string; quote it in config.yaml");
+    }
     const std::string declared = unquote_yaml_key(key);
     if (!is_valid_profile_name(declared)) {
       throw std::runtime_error("models." + declared +

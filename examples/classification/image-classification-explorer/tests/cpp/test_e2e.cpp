@@ -144,6 +144,92 @@ int main(int argc, char** argv) {
     }
   }
 
+  // Scenario 2: directory input. The advertised directory workflow needs its own
+  // C++ coverage - a regression confined to C++ directory enumeration or to
+  // producing one report entry per file would otherwise pass every enabled C++
+  // e2e check, because the single-image case requires exactly one result.
+  if (failures == 0) {
+    std::string images_dir;
+    if (const char* dir_env = env_or_null("SIMANEAT_APPS_TEST_INPUT_DIR")) {
+      images_dir = dir_env;
+    } else {
+      images_dir = "assets/datasets-test/coco";
+    }
+
+    std::vector<fs::path> expected_images;
+    if (fs::is_directory(images_dir)) {
+      for (const auto& entry : fs::directory_iterator(images_dir)) {
+        if (entry.is_regular_file() && entry.path().extension() == ".jpg")
+          expected_images.push_back(entry.path());
+      }
+    }
+
+    if (expected_images.empty()) {
+      std::cerr << "[FAIL] no .jpg images found under " << images_dir
+                << "; set SIMANEAT_APPS_TEST_INPUT_DIR\n";
+      ++failures;
+    } else {
+      auto dir_out = create_test_output_dir("image-classification-explorer", "test_directory");
+      if (dir_out.empty())
+        return 1;
+      const fs::path dir_config = fs::path(dir_out).parent_path() / "config-directory.yaml";
+      const fs::path dir_report = fs::path(dir_out) / "report";
+      ConfigScalars dir_overrides = {{"io.input", images_dir},
+                                     {"io.fallback_image_url", "null"},
+                                     {"io.output_dir", dir_report.string()}};
+      for (size_t i = 0; i < kModelNames.size(); ++i) {
+        dir_overrides[std::string("models.") + kModelNames[i] + ".path"] = model_paths[i].string();
+      }
+      write_e2e_config("image-classification-explorer", dir_config, dir_overrides);
+
+      auto dr = spawn_and_wait(binary, {"--config", dir_config.string()}, timeout);
+      if (dr.exit_code != 0) {
+        std::cerr << "[FAIL] directory run exit code " << dr.exit_code << "\nstderr:\n"
+                  << dr.stderr_text << "\n";
+        ++failures;
+      } else if (!fs::exists(dir_report / "report.json")) {
+        std::cerr << "[FAIL] directory run produced no report.json\n";
+        ++failures;
+      } else {
+        std::ifstream in(dir_report / "report.json");
+        json report;
+        in >> report;
+        const auto& images = report.at("images");
+        if (images.size() != expected_images.size()) {
+          std::cerr << "[FAIL] expected " << expected_images.size() << " image entries, got "
+                    << images.size() << "\n";
+          ++failures;
+        } else {
+          for (const auto& image : images) {
+            const std::string path = image.value("path", "");
+            if (image.contains("errors")) {
+              std::cerr << "[FAIL] " << path << " has errors: " << image.at("errors") << "\n";
+              ++failures;
+              continue;
+            }
+            if (!image.contains("predictions")) {
+              std::cerr << "[FAIL] " << path << " is missing predictions\n";
+              ++failures;
+              continue;
+            }
+            for (const auto* name : kModelNames) {
+              const auto& predictions = image.at("predictions");
+              if (!predictions.contains(name) || predictions.at(name).at("top_k").empty()) {
+                std::cerr << "[FAIL] " << path << ": no top_k predictions for " << name << "\n";
+                ++failures;
+              }
+            }
+          }
+          if (failures == 0) {
+            std::cout << "[OK] directory input produced predictions for " << images.size()
+                      << " images x " << kModelNames.size() << " models\n";
+          }
+        }
+      }
+      remove_dir(dir_out);
+    }
+  }
+
   if (failures == 0) {
     std::cout << "[OK] classification explorer pipeline completed successfully\n";
   }

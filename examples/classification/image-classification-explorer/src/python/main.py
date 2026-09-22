@@ -110,6 +110,28 @@ def load_config(config_path: Path) -> dict[str, Any]:
         return yaml.safe_load(handle) or {}
 
 
+def config_int(value: Any, key: str, default: int) -> int:
+    """Read an integer config value the way the C++ ScalarConfig does.
+
+    PyYAML hands back real Python objects, so `top_k: 1.9` arrives as a float
+    that int() would silently truncate to 1 while C++ rejects the same file as
+    non-integral. Accept only genuine integers (or their exact text form) so
+    both entrypoints run the same settings."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        raise ValueError(f"{key} must be an integer, got {value!r}")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        try:
+            return int(text, 10)
+        except ValueError:
+            raise ValueError(f"{key} must be an integer, got {value!r}") from None
+    raise ValueError(f"{key} must be an integer, got {value!r}")
+
+
 def load_profiles(raw: dict[str, Any]) -> list[ModelProfile]:
     models_cfg = raw.get("models") or {}
     if not isinstance(models_cfg, dict) or not models_cfg:
@@ -119,14 +141,14 @@ def load_profiles(raw: dict[str, Any]) -> list[ModelProfile]:
     seen: set[str] = set()
     for raw_name, cfg in models_cfg.items():
         # PyYAML turns unquoted scalars into Python objects, so `1:` arrives as an
-        # int and `true:` as a bool. Normalize an int to its text (which is what
-        # C++ reads from the same file) and reject the types whose Python spelling
-        # would not match the YAML text, telling the customer to quote the name.
-        if raw_name is None or isinstance(raw_name, bool):
+        # int, `01:` as the int 1 and `true:` as a bool - none of which match the
+        # raw text C++ reads from the same file. Require a quoted (string) key so
+        # both entrypoints see exactly the same profile name.
+        if not isinstance(raw_name, str):
             raise ValueError(
                 f"models: profile name {raw_name!r} is not a string; quote it in config.yaml"
             )
-        name = str(raw_name)
+        name = raw_name
         if name in seen:
             raise ValueError(f"models.{name}: duplicate profile name")
         seen.add(name)
@@ -135,13 +157,13 @@ def load_profiles(raw: dict[str, Any]) -> list[ModelProfile]:
         profile = ModelProfile(
             name=name,
             path=str(cfg.get("path", "")),
-            input_width=int(cfg.get("input_width", 224)),
-            input_height=int(cfg.get("input_height", 224)),
+            input_width=config_int(cfg.get("input_width"), f"models.{name}.input_width", 224),
+            input_height=config_int(cfg.get("input_height"), f"models.{name}.input_height", 224),
             preprocess=str(cfg.get("preprocess", "imagenet")),
             output=str(cfg.get("output", "softmax")),
-            num_classes=int(cfg.get("num_classes", 1000)),
+            num_classes=config_int(cfg.get("num_classes"), f"models.{name}.num_classes", 1000),
             label_map=cfg.get("label_map"),
-            top_k=int(cfg.get("top_k", 5)),
+            top_k=config_int(cfg.get("top_k"), f"models.{name}.top_k", 5),
         )
         if not PROFILE_NAME_RE.fullmatch(name):
             raise ValueError(
@@ -858,7 +880,7 @@ def main() -> int:
             raise ValueError("`io` must be a mapping")
         if not isinstance(runtime, dict):
             raise ValueError("`runtime` must be a mapping")
-        timeout_ms = int(runtime.get("timeout_ms", 20000))
+        timeout_ms = config_int(runtime.get("timeout_ms"), "runtime.timeout_ms", 20000)
         extensions = tuple(
             e.strip().lower() for e in str(io_cfg.get("extensions", ",".join(DEFAULT_EXTENSIONS))).split(",")
             if e.strip()

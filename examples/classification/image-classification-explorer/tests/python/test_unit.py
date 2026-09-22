@@ -262,25 +262,39 @@ class TestLoadProfiles:
         with pytest.raises(ValueError, match="may only contain"):
             main.load_profiles(raw)
 
-    def test_normalizes_integer_yaml_keys_to_strings(self):
-        """Regression: an unquoted all-digit name arrives from PyYAML as an int
-        and used to be stored unconverted, crashing later with a TypeError while
-        joining profile names. C++ reads the same key as the text "1"."""
-        profiles = main.load_profiles({"models": {1: {"path": "m.tar.gz"}}})
-        assert [p.name for p in profiles] == ["1"]
-        assert all(isinstance(p.name, str) for p in profiles)
-        assert ", ".join(p.name for p in profiles) == "1"
-
-    @pytest.mark.parametrize("name", [True, None])
-    def test_rejects_yaml_keys_whose_python_spelling_differs(self, name):
-        """`true:`/`~:` become Python True/None, whose str() would not match the
-        YAML text C++ reads, so they are rejected rather than silently diverging."""
+    @pytest.mark.parametrize("name", [1, 0o1, True, None, 1.5])
+    def test_rejects_non_string_yaml_keys(self, name):
+        """Regression: unquoted scalars arrive from PyYAML as Python objects
+        whose text differs from the YAML spelling (`01` -> 1, `true` -> True),
+        so C++ reading the raw text would run a different profile. Both
+        implementations require such names to be quoted."""
         with pytest.raises(ValueError, match="quote it in config.yaml"):
             main.load_profiles({"models": {name: {"path": "m.tar.gz"}}})
 
-    def test_rejects_duplicate_names_after_normalization(self):
-        with pytest.raises(ValueError, match="duplicate profile name"):
-            main.load_profiles({"models": {1: {"path": "a.tar.gz"}, "1": {"path": "b.tar.gz"}}})
+    def test_accepts_quoted_numeric_name(self):
+        profiles = main.load_profiles({"models": {"1": {"path": "m.tar.gz"}}})
+        assert [p.name for p in profiles] == ["1"]
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [("top_k", 1.9), ("num_classes", 5.5), ("input_width", 224.5), ("input_height", 1e3),
+         ("top_k", True), ("top_k", "abc")],
+    )
+    def test_rejects_non_integral_values(self, field, value):
+        """Regression: int() silently truncated `top_k: 1.9` to 1 while the C++
+        ScalarConfig rejected the same file, so the two entrypoints ran
+        different settings."""
+        raw = {"models": {"a": {"path": "m.tar.gz", field: value}}}
+        with pytest.raises(ValueError, match="must be an integer"):
+            main.load_profiles(raw)
+
+    def test_accepts_integer_text_values(self):
+        """C++ ScalarConfig parses scalars from text, so a quoted integer is
+        still an integer in both implementations."""
+        raw = {"models": {"a": {"path": "m.tar.gz", "top_k": "3", "num_classes": "10"}}}
+        profile = main.load_profiles(raw)[0]
+        assert profile.top_k == 3
+        assert profile.num_classes == 10
 
     @pytest.mark.parametrize("name", ["resnet_50", "resnet-50", "ResNet50", "r50"])
     def test_accepts_portable_profile_names(self, name):
