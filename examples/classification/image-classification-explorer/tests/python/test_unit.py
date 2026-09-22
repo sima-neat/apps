@@ -140,39 +140,49 @@ models:
 
 class TestDiscoverImages:
     def test_missing_input_uses_fallback(self, tmp_path):
-        dest = tmp_path / "fallback.jpeg"
+        base = tmp_path / "fallback.jpeg"
         url = "http://example.invalid/x.jpg"
-        dest.write_bytes(b"fake")
-        dest.with_name(f"{dest.name}.source-url").write_text(url)
-        images, skipped = main.discover_images(None, (".jpg",), url, dest)
-        assert images == [dest]
+        cached = main.fallback_cache_path(url, base)
+        cached.write_bytes(b"fake")
+        images, skipped = main.discover_images(None, (".jpg",), url, base)
+        assert images == [cached]
         assert skipped == []
 
-    def test_fallback_refreshes_when_url_changes(self, tmp_path, monkeypatch):
-        dest = tmp_path / "fallback.jpeg"
+    def test_different_urls_use_separate_cache_entries(self, tmp_path, monkeypatch):
+        """Regression: the cache used one fixed path plus a URL marker, so two
+        runs with different URLs could pair one run's bytes with the other's
+        URL. Keying the path by URL removes the pair entirely."""
+        base = tmp_path / "fallback.jpeg"
         old_url = "https://example.test/old.jpeg"
         new_url = "https://example.test/new.jpeg"
-        _make_image(dest, color=(0, 0, 255))
-        old_bytes = dest.read_bytes()
-        source_path = dest.with_name(f"{dest.name}.source-url")
-        source_path.write_text(old_url)
+        colors = {old_url: (0, 0, 255), new_url: (0, 255, 0)}
         downloaded = []
 
         def _download(url, target):
             downloaded.append(url)
-            # urlretrieve writes to a ".tmp" path; render a real JPEG elsewhere
-            # and copy its bytes there since cv2.imwrite keys off the extension.
             rendered = tmp_path / "rendered.jpeg"
-            _make_image(rendered, color=(0, 255, 0))
+            _make_image(rendered, color=colors[url])
             Path(target).write_bytes(rendered.read_bytes())
 
         monkeypatch.setattr(main.urllib.request, "urlretrieve", _download)
 
-        assert main.download_image(new_url, dest) == dest
-        assert downloaded == [new_url]
-        assert dest.read_bytes() != old_bytes
-        assert main.is_decodable_image(dest)
-        assert source_path.read_text() == new_url
+        first = main.download_image(old_url, base)
+        second = main.download_image(new_url, base)
+        assert first != second
+        assert first.exists() and second.exists()
+        assert first.read_bytes() != second.read_bytes()
+        assert downloaded == [old_url, new_url]
+        # Each entry is reused without re-downloading, and never confused.
+        assert main.download_image(old_url, base) == first
+        assert main.download_image(new_url, base) == second
+        assert downloaded == [old_url, new_url]
+
+    def test_cache_path_is_stable_for_a_url(self, tmp_path):
+        base = tmp_path / "fallback.jpeg"
+        url = "https://example.test/x.jpeg"
+        assert main.fallback_cache_path(url, base) == main.fallback_cache_path(url, base)
+        assert main.fallback_cache_path(url, base).suffix == ".jpeg"
+        assert main.fallback_cache_path(url, base) != main.fallback_cache_path(url + "2", base)
 
     def test_single_file(self, tmp_path):
         img = tmp_path / "a.jpg"
@@ -251,6 +261,26 @@ class TestLoadProfiles:
         raw = {"models": {name: {"path": "m.tar.gz"}}}
         with pytest.raises(ValueError, match="may only contain"):
             main.load_profiles(raw)
+
+    def test_normalizes_integer_yaml_keys_to_strings(self):
+        """Regression: an unquoted all-digit name arrives from PyYAML as an int
+        and used to be stored unconverted, crashing later with a TypeError while
+        joining profile names. C++ reads the same key as the text "1"."""
+        profiles = main.load_profiles({"models": {1: {"path": "m.tar.gz"}}})
+        assert [p.name for p in profiles] == ["1"]
+        assert all(isinstance(p.name, str) for p in profiles)
+        assert ", ".join(p.name for p in profiles) == "1"
+
+    @pytest.mark.parametrize("name", [True, None])
+    def test_rejects_yaml_keys_whose_python_spelling_differs(self, name):
+        """`true:`/`~:` become Python True/None, whose str() would not match the
+        YAML text C++ reads, so they are rejected rather than silently diverging."""
+        with pytest.raises(ValueError, match="quote it in config.yaml"):
+            main.load_profiles({"models": {name: {"path": "m.tar.gz"}}})
+
+    def test_rejects_duplicate_names_after_normalization(self):
+        with pytest.raises(ValueError, match="duplicate profile name"):
+            main.load_profiles({"models": {1: {"path": "a.tar.gz"}, "1": {"path": "b.tar.gz"}}})
 
     @pytest.mark.parametrize("name", ["resnet_50", "resnet-50", "ResNet50", "r50"])
     def test_accepts_portable_profile_names(self, name):
@@ -346,9 +376,9 @@ class TestDownloadImage:
             raise urllib.error.URLError("simulated network failure")
 
         monkeypatch.setattr(main.urllib.request, "urlretrieve", _raise)
-        dest = tmp_path / "fallback.jpg"
+        base = tmp_path / "fallback.jpg"
         with pytest.raises(FileNotFoundError, match="failed to download"):
-            main.download_image("http://example.invalid/x.jpg", dest)
+            main.download_image("http://example.invalid/x.jpg", base)
 
     def test_undecodable_download_is_not_cached(self, tmp_path, monkeypatch):
         """Regression: an HTTP 200 response whose body is not an image (e.g. a
@@ -360,33 +390,30 @@ class TestDownloadImage:
             Path(target).write_bytes(b"<html>not an image</html>")
 
         monkeypatch.setattr(main.urllib.request, "urlretrieve", _download)
-        dest = tmp_path / "fallback.jpg"
-        source_path = dest.with_name(f"{dest.name}.source-url")
+        base = tmp_path / "fallback.jpg"
         with pytest.raises(FileNotFoundError, match="not a decodable image"):
-            main.download_image(url, dest)
-        assert not dest.exists()
-        assert not source_path.exists()
-        assert not dest.with_name(f"{dest.name}.tmp").exists()
+            main.download_image(url, base)
+        assert not main.fallback_cache_path(url, base).exists()
+        assert not list(tmp_path.glob("*.tmp-*"))
 
-    def test_undecodable_download_keeps_previous_cache(self, tmp_path, monkeypatch):
-        """A failed refresh must leave the previously cached image and its
-        recorded source URL untouched."""
-        old_url = "https://example.test/old.jpeg"
-        new_url = "https://example.test/new.jpeg"
-        dest = tmp_path / "fallback.jpg"
-        _make_image(dest)
-        old_bytes = dest.read_bytes()
-        source_path = dest.with_name(f"{dest.name}.source-url")
-        source_path.write_text(old_url)
+    def test_undecodable_download_keeps_other_cache_entries(self, tmp_path, monkeypatch):
+        """A failed download must leave every existing cache entry untouched."""
+        base = tmp_path / "fallback.jpg"
+        good_url = "https://example.test/good.jpeg"
+        bad_url = "https://example.test/bad.jpeg"
+        good_cache = main.fallback_cache_path(good_url, base)
+        _make_image(tmp_path / "rendered.jpg")
+        good_cache.write_bytes((tmp_path / "rendered.jpg").read_bytes())
+        good_bytes = good_cache.read_bytes()
 
         def _download(_url, target):
             Path(target).write_bytes(b"<html>not an image</html>")
 
         monkeypatch.setattr(main.urllib.request, "urlretrieve", _download)
         with pytest.raises(FileNotFoundError, match="not a decodable image"):
-            main.download_image(new_url, dest)
-        assert dest.read_bytes() == old_bytes
-        assert source_path.read_text() == old_url
+            main.download_image(bad_url, base)
+        assert good_cache.read_bytes() == good_bytes
+        assert not main.fallback_cache_path(bad_url, base).exists()
 
 
 class TestAgreement:

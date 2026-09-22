@@ -335,56 +335,51 @@ void close_or_throw(std::ofstream& out, const fs::path& path) {
   }
 }
 
-fs::path fallback_source_path(const fs::path& fallback_dest) {
-  return fallback_dest.string() + ".source-url";
+// Cache path for a fallback URL. The URL is part of the file name, so different
+// URLs never share a cache entry and there is no separate "which URL is this?"
+// marker that could be left paired with another run's bytes.
+fs::path fallback_cache_path(const std::string& url, const fs::path& base) {
+  std::ostringstream digest;
+  digest << std::hex << std::setw(16) << std::setfill('0') << std::hash<std::string>{}(url);
+  const std::string stem = base.stem().string();
+  const std::string extension = base.extension().string();
+  return base.parent_path() / (stem + "-" + digest.str() + extension);
 }
 
-bool fallback_cache_matches(const fs::path& fallback_dest, const std::string& fallback_url) {
-  if (!fs::exists(fallback_dest))
-    return false;
-  std::ifstream in(fallback_source_path(fallback_dest));
-  std::string cached_url;
-  return static_cast<bool>(std::getline(in, cached_url)) && cached_url == fallback_url;
-}
+// Download a fallback image into a URL-keyed cache entry. The download lands on
+// a process-private temporary file, is decoded before it is published, and is
+// then moved into place with a single rename, so concurrent runs cannot observe
+// or leave a half-updated cache entry and a non-image payload served with HTTP
+// 200 (e.g. a proxy error page) is never cached.
+fs::path download_fallback_image(const std::string& url, const fs::path& base) {
+  const fs::path dest = fallback_cache_path(url, base);
+  if (fs::exists(dest))
+    return dest;
 
-void record_fallback_source(const fs::path& fallback_dest, const std::string& fallback_url) {
-  const fs::path source_path = fallback_source_path(fallback_dest);
-  std::ofstream out(source_path);
-  if (!out.is_open()) {
-    throw std::runtime_error("failed to record fallback image source: " + source_path.string());
-  }
-  out << fallback_url;
-  close_or_throw(out, source_path);
-}
-
-// Download the fallback image to a temporary file and decode it before it
-// replaces the cached copy, so a non-image payload served with HTTP 200 (e.g. a
-// proxy error page) is never cached and silently reused by later runs.
-void refresh_fallback_image(const std::string& fallback_url, const fs::path& fallback_dest) {
-  const fs::path temporary = fallback_dest.string() + ".tmp";
+  const fs::path temporary = dest.string() + ".tmp-" + std::to_string(::getpid());
   std::error_code ec;
   // download_file intentionally keeps a nonempty destination, so clear any
-  // leftover partial download first.
+  // leftover partial download from a previous crash first.
   fs::remove(temporary, ec);
   if (ec) {
     throw std::runtime_error("failed to refresh fallback image: " + temporary.string() + ": " +
                              ec.message());
   }
-  if (!sima_examples::download_file(fallback_url, temporary)) {
-    throw std::runtime_error("failed to download fallback image: " + fallback_url);
+  if (!sima_examples::download_file(url, temporary)) {
+    throw std::runtime_error("failed to download fallback image: " + url);
   }
   if (cv::imread(temporary.string(), cv::IMREAD_COLOR).empty()) {
     fs::remove(temporary, ec);
-    throw std::runtime_error("failed to download fallback image: " + fallback_url +
+    throw std::runtime_error("failed to download fallback image: " + url +
                              ": downloaded file is not a decodable image");
   }
-  fs::rename(temporary, fallback_dest, ec);
+  fs::rename(temporary, dest, ec);
   if (ec) {
     fs::remove(temporary, ec);
-    throw std::runtime_error("failed to refresh fallback image: " + fallback_dest.string() + ": " +
+    throw std::runtime_error("failed to refresh fallback image: " + dest.string() + ": " +
                              ec.message());
   }
-  record_fallback_source(fallback_dest, fallback_url);
+  return dest;
 }
 
 std::vector<fs::path> discover_images(const std::string& input_path,
@@ -393,10 +388,7 @@ std::vector<fs::path> discover_images(const std::string& input_path,
                                       const fs::path& fallback_dest,
                                       std::vector<std::string>& skipped) {
   if (input_path.empty()) {
-    if (!fallback_cache_matches(fallback_dest, fallback_url)) {
-      refresh_fallback_image(fallback_url, fallback_dest);
-    }
-    return {fallback_dest};
+    return {download_fallback_image(fallback_url, fallback_dest)};
   }
 
   fs::path path = input_path;

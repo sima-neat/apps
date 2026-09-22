@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import os
 import re
@@ -69,28 +70,35 @@ def is_decodable_image(path: Path) -> bool:
     return cv2.imread(str(path), cv2.IMREAD_COLOR) is not None
 
 
-def download_image(url: str, dest: Path) -> Path:
-    """Download a fallback image, reusing a cache only for the same URL.
+def fallback_cache_path(url: str, base: Path) -> Path:
+    """Cache path for a fallback URL.
 
-    The download is decoded before it replaces the cache, so a non-image payload
-    served with HTTP 200 (e.g. a proxy error page) is never cached and silently
-    reused by later runs."""
-    source_path = dest.with_name(f"{dest.name}.source-url")
-    try:
-        cached_url = source_path.read_text(encoding="utf-8")
-    except OSError:
-        cached_url = None
-    if dest.exists() and cached_url == url:
+    The URL is part of the file name, so different URLs never share a cache
+    entry and there is no separate "which URL is this?" marker that could be
+    left paired with another run's bytes."""
+    digest = hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
+    return base.with_name(f"{base.stem}-{digest}{base.suffix}")
+
+
+def download_image(url: str, base: Path) -> Path:
+    """Download a fallback image into a URL-keyed cache entry.
+
+    The download lands on a process-private temporary file, is decoded before
+    it is published, and is then moved into place with a single atomic rename.
+    Concurrent runs (same URL or not) therefore cannot observe or leave a
+    half-updated cache entry, and a non-image payload served with HTTP 200
+    (e.g. a proxy error page) is never cached."""
+    dest = fallback_cache_path(url, base)
+    if dest.exists():
         return dest
 
     print(f"Downloading {url} ...")
-    temporary = dest.with_name(f"{dest.name}.tmp")
+    temporary = dest.with_name(f"{dest.name}.tmp-{os.getpid()}")
     try:
         urllib.request.urlretrieve(url, temporary)
         if not is_decodable_image(temporary):
             raise ValueError("downloaded file is not a decodable image")
         temporary.replace(dest)
-        source_path.write_text(url, encoding="utf-8")
     except (urllib.error.URLError, OSError, ValueError) as exc:
         temporary.unlink(missing_ok=True)
         raise FileNotFoundError(f"failed to download {url}: {exc}") from exc
@@ -108,7 +116,20 @@ def load_profiles(raw: dict[str, Any]) -> list[ModelProfile]:
         raise ValueError("config.yaml must define at least one entry under `models`")
 
     profiles = []
-    for name, cfg in models_cfg.items():
+    seen: set[str] = set()
+    for raw_name, cfg in models_cfg.items():
+        # PyYAML turns unquoted scalars into Python objects, so `1:` arrives as an
+        # int and `true:` as a bool. Normalize an int to its text (which is what
+        # C++ reads from the same file) and reject the types whose Python spelling
+        # would not match the YAML text, telling the customer to quote the name.
+        if raw_name is None or isinstance(raw_name, bool):
+            raise ValueError(
+                f"models: profile name {raw_name!r} is not a string; quote it in config.yaml"
+            )
+        name = str(raw_name)
+        if name in seen:
+            raise ValueError(f"models.{name}: duplicate profile name")
+        seen.add(name)
         if not isinstance(cfg, dict):
             raise ValueError(f"models.{name} must be a mapping")
         profile = ModelProfile(
@@ -122,7 +143,7 @@ def load_profiles(raw: dict[str, Any]) -> list[ModelProfile]:
             label_map=cfg.get("label_map"),
             top_k=int(cfg.get("top_k", 5)),
         )
-        if not PROFILE_NAME_RE.fullmatch(str(name)):
+        if not PROFILE_NAME_RE.fullmatch(name):
             raise ValueError(
                 f"models.{name}: profile names may only contain letters, digits, "
                 "'_' and '-'"
@@ -185,8 +206,7 @@ def discover_images(input_path: str | None, extensions: tuple[str, ...],
                      fallback_url: str, fallback_dest: Path) -> tuple[list[Path], list[str]]:
     """Return (images, skipped_descriptions) in deterministic order."""
     if not input_path:
-        download_image(fallback_url, fallback_dest)
-        return [fallback_dest], []
+        return [download_image(fallback_url, fallback_dest)], []
 
     path = Path(input_path)
     if path.is_file():
