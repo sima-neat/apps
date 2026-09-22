@@ -113,6 +113,40 @@ application installs from the selected Apps release. This may be deliberate, but
 it means a reader of a non-`main` README is directed at `main` content. Worth a
 maintainer decision rather than a blind change.
 
+**D7. The portal build has an undocumented Python requirement.**
+`portal/README.md` lists only Node.js and npm as prerequisites, but `npm run dev`
+and `npm run build` both invoke `scripts/generate_catalog.py`. That script and
+`scripts/validate_readmes.py` use `X | None` annotations, which Python 3.9
+rejects at import:
+
+```
+TypeError: unsupported operand type(s) for |: 'types.GenericAlias' and 'NoneType'
+```
+
+macOS ships 3.9 as the system `python3`, so the documented portal build fails
+out of the box there, and the error reads like a script bug rather than a
+version mismatch. `CONTRIBUTING.md` tells contributors to run both scripts
+without stating a version either. The portal prerequisites also gave only `apt`
+commands, which do not help on the platform where this actually bites.
+
+## Portal comparison
+
+The portal does not hold separately authored instructions. `generate_catalog.py`
+parses each example README into `catalog.json`, and the detail page renders every
+section except `Metadata` and `Concept`, which become the page header and card
+summary. Portal instructions therefore match the repository README by
+construction.
+
+This was verified rather than assumed: comparing every `##` heading in all 22
+READMEs against the generated catalog found no dropped or invented section, and
+the portal was built and browsed locally to confirm the rendered pages. The
+`Expected Result` sections added for #517 appear on the rendered pages and in the
+page navigation, and placeholders such as `<insight-host>` and `<model-file>`
+survive rendering instead of being consumed as HTML.
+
+The installed application matches as well: the READMEs shipped inside
+`prebuilt-apps/` are the same files as in the repository.
+
 ## Runtime defects
 
 Recorded separately from documentation defects, as #517 asks.
