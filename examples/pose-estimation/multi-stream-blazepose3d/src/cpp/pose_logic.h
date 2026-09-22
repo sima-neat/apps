@@ -31,6 +31,7 @@ namespace blazepose_app {
 constexpr std::size_t kBodyLandmarkCount = 33;
 constexpr std::size_t kRawLandmarkCount = 39;
 constexpr std::size_t kRawLandmarkWidth = 5;
+constexpr std::size_t kRawWorldLandmarkWidth = 3;
 
 constexpr std::array<const char*, kBodyLandmarkCount> kLandmarkNames = {
     "nose",        "left_eye_inner",  "left_eye",        "left_eye_outer", "right_eye_inner",
@@ -83,10 +84,18 @@ struct Keypoint {
   float confidence = 0.0F;
 };
 
+struct WorldKeypoint {
+  float x = 0.0F;
+  float y = 0.0F;
+  float z = 0.0F;
+  float confidence = 0.0F;
+};
+
 struct Pose {
   int roi_index = 0;
   Box box;
   std::array<Keypoint, kBodyLandmarkCount> keypoints{};
+  std::array<WorldKeypoint, kBodyLandmarkCount> world_keypoints{};
 };
 
 inline int64_t select_frame_id(int64_t frame_id, int64_t orig_input_seq, int64_t input_seq,
@@ -185,10 +194,14 @@ inline float sigmoid(float value) {
   return z / (1.0F + z);
 }
 
-inline Pose decode_pose(const std::vector<float>& raw_landmarks, const Affine& affine,
+inline Pose decode_pose(const std::vector<float>& raw_landmarks,
+                        const std::vector<float>& raw_world_landmarks, const Affine& affine,
                         const Box& box, int roi_index) {
   if (raw_landmarks.size() != kRawLandmarkCount * kRawLandmarkWidth) {
     throw std::runtime_error("BlazePose screen-landmark output must contain 195 floats");
+  }
+  if (raw_world_landmarks.size() != kRawLandmarkCount * kRawWorldLandmarkWidth) {
+    throw std::runtime_error("BlazePose world-landmark output must contain 117 floats");
   }
 
   Pose pose;
@@ -198,8 +211,11 @@ inline Pose decode_pose(const std::vector<float>& raw_landmarks, const Affine& a
     const float* raw = raw_landmarks.data() + index * kRawLandmarkWidth;
     const double source_x = affine.m00 * raw[0] + affine.m01 * raw[1] + affine.m02;
     const double source_y = affine.m10 * raw[0] + affine.m11 * raw[1] + affine.m12;
+    const float confidence = std::min(sigmoid(raw[3]), sigmoid(raw[4]));
     pose.keypoints[index] = {static_cast<float>(source_x), static_cast<float>(source_y),
-                             std::min(sigmoid(raw[3]), sigmoid(raw[4]))};
+                             confidence};
+    const float* world = raw_world_landmarks.data() + index * kRawWorldLandmarkWidth;
+    pose.world_keypoints[index] = {world[0], world[1], world[2], confidence};
   }
   return pose;
 }
@@ -229,6 +245,31 @@ inline nlohmann::json poses_data_json(std::vector<Pose> poses) {
          {"keypoints", std::move(keypoints)}});
   }
   return data;
+}
+
+inline nlohmann::json world_pose_auxiliary_data_json(std::vector<Pose> poses) {
+  std::sort(poses.begin(), poses.end(),
+            [](const Pose& left, const Pose& right) { return left.roi_index < right.roi_index; });
+  nlohmann::json world_poses = nlohmann::json::array();
+  for (const Pose& pose : poses) {
+    nlohmann::json keypoints = nlohmann::json::array();
+    for (std::size_t index = 0; index < pose.world_keypoints.size(); ++index) {
+      const WorldKeypoint& point = pose.world_keypoints[index];
+      keypoints.push_back({{"name", kLandmarkNames[index]},
+                           {"x", point.x},
+                           {"y", point.y},
+                           {"z", point.z},
+                           {"confidence", std::round(point.confidence * 1000.0F) / 1000.0F}});
+    }
+    world_poses.push_back({{"id", "pose_" + std::to_string(pose.roi_index + 1)},
+                           {"keypoints", std::move(keypoints)}});
+  }
+
+  return {{"schema_version", 1},
+          {"id", "world-pose"},
+          {"renderer", "blazepose-3d"},
+          {"title", "3D Pose"},
+          {"payload", {{"poses", std::move(world_poses)}}}};
 }
 
 } // namespace blazepose_app

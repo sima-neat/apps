@@ -14,7 +14,7 @@
 
 ## Concept
 
-This example detects people in any non-empty startup-configured set of RTSP streams, runs BlazePose on the selected person regions, and publishes 33 image-space keypoints per pose to Insight. C++ and Python use the same configuration, graph topology, scheduling policy, ROI transform, and metadata schema.
+This example detects people in any non-empty startup-configured set of RTSP streams, runs BlazePose on the selected person regions, and publishes both 33 image-space keypoints and 33 world-space keypoints per pose to Insight. C++ and Python use the same configuration, graph topology, scheduling policy, ROI transform, and metadata schemas.
 
 One source graph owns every RTSP input, encoded-video branch, decoder, admission edge, RGB conversion, and output. Frames stay NV12 through decode and freshness admission, then each admitted frame is converted once to packed RGB. Application-owned asynchronous queues feed one shared YOLO26 runner and one shared BlazePose runner through public push/pull APIs.
 
@@ -26,7 +26,7 @@ Application: latest RGB mailbox per stream ─> shared YOLO26 Model graph
              (Preproc ─> inference ─> BoxDecode) ─> person ROI mailbox per stream
              ─> BlazePose Preproc ROIs ─> owned EV74 ROI inputs
              ─> shared BlazePose runner
-             ─> 33 image keypoints ─> correlated Insight metadata
+             ─> 33 image + world keypoints ─> paired correlated Insight metadata
 ```
 
 The source graph and both model runners are fixed after startup. Add, remove, or edit cameras in the configuration and restart the application; there is no fixed camera-count limit in the application. Separate per-stream outputs let the source graph accept different resolutions without rebuilding a shared model graph.
@@ -82,13 +82,13 @@ Place the existing `blazepose_heavy_3d_bf16_nopad_neat_mpk.tar.gz` package in `m
 
 The public YOLO26 route accepts dynamic HWC RGB images. Model preprocessing resizes and normalizes them for the internal 640×640 tensor; its six raw detection heads are decoded by `YoloV26` BoxDecode into one BBOX output consumed by the application.
 
-The public BlazePose route also accepts dynamic HWC RGB images and preprocesses each selected ROI to 256×256. The existing artifact returns screen landmarks `[1,195]` (39 records of x, y, z, visibility logit, and presence logit), global pose presence `[1,1]`, and world landmarks `[1,117]`. This application uses the first 33 screen-landmark records and does not read or publish world landmarks.
+The public BlazePose route also accepts dynamic HWC RGB images and preprocesses each selected ROI to 256×256. The existing artifact returns screen landmarks `[1,195]` (39 records of x, y, z, visibility logit, and presence logit), global pose presence `[1,1]`, and world landmarks `[1,117]` (39 x/y/z records). This application publishes the first 33 screen records as the normal `pose-estimation` overlay and the first 33 world records as a generic `auxiliary-visualization` view.
 
 ## Prepare Insight
 
 Insight can host the input streams and render each output channel. Install videos from the Insight catalog or through Insight's YouTube support, start the streams in the Insight Web UI, and copy their RTSP URLs into `streams`.
 
-The application sends the original encoded stream and correlated `pose-estimation` metadata on the configured channel. Insight renders all 33 image-space points. Its current skeleton connections use the recognized COCO landmark-name subset; this example does not publish or visualize world-space landmarks.
+The application sends the original encoded stream plus two correlated metadata messages on the configured channel. Insight draws `pose-estimation` over the video and renders `auxiliary-visualization` world landmarks in the separate 3D Pose panel. Both messages carry the same source PTS timestamp and frame ID. This requires an Insight build with multi-type frame metadata and the `blazepose-3d` auxiliary renderer.
 
 ## Configure
 
@@ -144,7 +144,7 @@ python3 examples/pose-estimation/multi-stream-blazepose3d/src/python/main.py \
 
 ## Output Metadata
 
-Every accepted frame produces correlated `pose-estimation` metadata, including an empty `poses` array when no person is selected. Each pose carries its YOLO person box and 33 named image-space keypoints:
+Every accepted frame produces a correlated pair of messages, including empty pose arrays when no person is selected. The existing `pose-estimation` message remains the 2D overlay contract; each pose carries its YOLO person box and 33 named image-space keypoints:
 
 ```json
 {"poses":[{"id":"pose_1","label":"person","confidence":0.91,
@@ -152,9 +152,23 @@ Every accepted frame produces correlated `pose-estimation` metadata, including a
   "keypoints":[{"name":"nose","x":242,"y":135,"confidence":0.98}]}]}
 ```
 
+The separate `auxiliary-visualization` message uses the generic Insight schema
+and selects the built-in BlazePose renderer:
+
+```json
+{"schema_version":1,"id":"world-pose","renderer":"blazepose-3d","title":"3D Pose",
+  "payload":{"poses":[{"id":"pose_1","keypoints":[
+    {"name":"nose","x":0.01,"y":-0.42,"z":-0.08,"confidence":0.98}
+  ]}]}}
+```
+
+`MetadataSender` supplies the outer `type`, `timestamp`, and `frame_id` fields.
+The two message types are sent while holding the same per-stream metadata lock,
+so one channel cannot interleave identities from different frames.
+
 The keypoint confidence is the minimum of BlazePose landmark visibility and presence after sigmoid activation. The global pose-presence output gates each ROI.
 
-The application retains the source `stream_id`, frame ID, PTS, DTS, duration, and sequence numbers in its bounded FIFO context. Detached MLA/postprocess runners do not echo all of that identity, so output order is correlated against this retained context and the original PTS/frame ID is sent to Insight.
+The application retains the source `stream_id`, frame ID, PTS, DTS, duration, and sequence numbers in its bounded FIFO context. Detached MLA/postprocess runners do not echo all of that identity, so output order is correlated against this retained context and the original PTS/frame ID is sent to Insight. The hardware E2E tests listen on every configured metadata port and require a non-empty 2D/3D pair with an identical `(port, timestamp, frame_id)` identity.
 
 ## Performance and Scheduling
 

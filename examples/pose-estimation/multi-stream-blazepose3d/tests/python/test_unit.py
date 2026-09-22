@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -104,16 +106,32 @@ def test_roi_landmark_and_metadata_contract():
     ) == ((0, 10, 120, 110), [(0, (-10, 0, 60, 60)), (2, (100, 90, 20, 20))])
     raw = np.zeros((39, 5), dtype=np.float32)
     raw[0] = [4.0, 8.0, 0.0, 2.0, -2.0]
+    raw_world = np.zeros((39, 3), dtype=np.float32)
+    raw_world[0] = [0.1, -0.2, 0.3]
     affine = main.offset_affine((2.0, 0.0, 10.0, 0.0, 3.0, 10.0), 0, 10)
-    pose = main.decode_pose(raw, affine, box, 2)
+    pose = main.decode_pose(raw, raw_world, affine, box, 2)
     assert pose["keypoints"][0]["x"] == pytest.approx(18.0)
     assert pose["keypoints"][0]["y"] == pytest.approx(44.0)
     assert pose["keypoints"][0]["confidence"] == pytest.approx(main.sigmoid(-2.0))
+    world_point = pose["world_keypoints"][0]
+    assert world_point["name"] == "nose"
+    assert world_point["x"] == pytest.approx(0.1)
+    assert world_point["y"] == pytest.approx(-0.2)
+    assert world_point["z"] == pytest.approx(0.3)
+    assert world_point["confidence"] == pytest.approx(main.sigmoid(-2.0))
     data = main.poses_data([pose])
     assert data["poses"][0]["id"] == "pose_3"
     assert len(data["poses"][0]["keypoints"]) == 33
     assert data["poses"][0]["keypoints"][0]["name"] == "nose"
+    assert "world_keypoints" not in data["poses"][0]
+    auxiliary = main.world_pose_auxiliary_data([pose])
+    assert auxiliary["schema_version"] == 1
+    assert auxiliary["id"] == "world-pose"
+    assert auxiliary["renderer"] == "blazepose-3d"
+    assert len(auxiliary["payload"]["poses"][0]["keypoints"]) == 33
+    assert auxiliary["payload"]["poses"][0]["keypoints"][0]["name"] == "nose"
     json.dumps(data)
+    json.dumps(auxiliary)
 
 
 def test_frame_identity_falls_back_through_source_sequence_fields():
@@ -121,3 +139,29 @@ def test_frame_identity_falls_back_through_source_sequence_fields():
     assert main.select_frame_id(-1, 8, 7, 6) == 8
     assert main.select_frame_id(-1, -1, 7, 6) == 7
     assert main.select_frame_id(-1, -1, -1, 6) == 6
+
+
+def test_publish_metadata_sends_paired_overlay_and_auxiliary_messages():
+    calls = []
+
+    class Sender:
+        def send_metadata(self, *args):
+            calls.append(args)
+
+    stream_runtime = SimpleNamespace(
+        metadata_lock=threading.Lock(),
+        metadata_sender=Sender(),
+        metadata_frames=0,
+    )
+    identity = main.FrameIdentity("camera0", 7, 1_234_000_000, -1, -1, 7, 7)
+
+    main.publish_metadata(stream_runtime, identity, [])
+
+    assert [call[0] for call in calls] == [
+        "pose-estimation",
+        "auxiliary-visualization",
+    ]
+    assert all(call[2:] == (1234, "7") for call in calls)
+    assert json.loads(calls[0][1]) == {"poses": []}
+    assert json.loads(calls[1][1])["payload"] == {"poses": []}
+    assert stream_runtime.metadata_frames == 1

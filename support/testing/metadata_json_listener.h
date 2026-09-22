@@ -6,6 +6,13 @@
 
 namespace sima_examples::testing {
 
+struct MetadataJsonContract {
+  std::string metadata_type;
+  // Dot-separated path below `data` to the array being counted.
+  std::string data_array_key;
+  int min_object_count = 0;
+};
+
 // Test-only UDP listener for metadata JSON outputs.
 struct MetadataJsonListenerOptions {
   std::string host = "127.0.0.1";
@@ -19,10 +26,14 @@ struct MetadataJsonListenerOptions {
   bool require_all_ports = false;
   // Ignore otherwise valid messages until the data array contains at least this many objects.
   int min_object_count = 0;
+  // When non-empty, require every contract on each successful port. The
+  // single-type fields above remain the backward-compatible default.
+  std::vector<MetadataJsonContract> contracts;
 };
 
 struct MetadataJsonMessage {
   int port = -1;
+  std::string metadata_type;
   std::string payload;
   std::string frame_id;
   int64_t timestamp_ms = 0;

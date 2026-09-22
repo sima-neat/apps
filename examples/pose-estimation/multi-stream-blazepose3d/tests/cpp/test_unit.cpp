@@ -69,19 +69,36 @@ bool test_math_contract() {
   raw[1] = 8.0F;
   raw[3] = 2.0F;
   raw[4] = -2.0F;
+  std::vector<float> raw_world(39 * 3, 0.0F);
+  raw_world[0] = 0.1F;
+  raw_world[1] = -0.2F;
+  raw_world[2] = 0.3F;
   const blazepose_app::Affine affine =
       blazepose_app::offset_affine({2.0, 0.0, 10.0, 0.0, 3.0, 10.0}, 0, 10);
-  const auto pose = blazepose_app::decode_pose(raw, affine, box, 2);
+  const auto pose = blazepose_app::decode_pose(raw, raw_world, affine, box, 2);
   ok &= expect(std::abs(pose.keypoints[0].x - 18.0F) < 0.001F &&
                    std::abs(pose.keypoints[0].y - 44.0F) < 0.001F,
                "landmarks are mapped back through ROI affine metadata");
   ok &= expect(std::abs(pose.keypoints[0].confidence - blazepose_app::sigmoid(-2.0F)) < 0.001F,
                "confidence is min(sigmoid(visibility), sigmoid(presence))");
+  ok &= expect(std::abs(pose.world_keypoints[0].x - 0.1F) < 0.001F &&
+                   std::abs(pose.world_keypoints[0].y + 0.2F) < 0.001F &&
+                   std::abs(pose.world_keypoints[0].z - 0.3F) < 0.001F,
+               "world landmarks retain the model's 3D coordinates");
   const auto data = blazepose_app::poses_data_json({pose});
   ok &= expect(data["poses"][0]["keypoints"].size() == 33,
                "Insight metadata contains exactly 33 body keypoints");
   ok &= expect(data["poses"][0]["keypoints"][0]["name"] == "nose",
                "Insight metadata uses BlazePose landmark names");
+  ok &= expect(!data["poses"][0].contains("world_keypoints"),
+               "normal pose-estimation metadata remains a 2D overlay contract");
+  const auto auxiliary = blazepose_app::world_pose_auxiliary_data_json({pose});
+  ok &= expect(auxiliary["schema_version"] == 1 && auxiliary["id"] == "world-pose" &&
+                   auxiliary["renderer"] == "blazepose-3d",
+               "world landmarks use the generic auxiliary visualization envelope");
+  ok &= expect(auxiliary["payload"]["poses"][0]["keypoints"].size() == 33 &&
+                   auxiliary["payload"]["poses"][0]["keypoints"][0]["name"] == "nose",
+               "auxiliary payload contains 33 named world keypoints");
   ok &= expect(blazepose_app::select_frame_id(9, 8, 7, 6) == 9 &&
                    blazepose_app::select_frame_id(-1, 8, 7, 6) == 8 &&
                    blazepose_app::select_frame_id(-1, -1, 7, 6) == 7 &&

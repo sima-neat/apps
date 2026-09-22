@@ -27,6 +27,7 @@
 #include <opencv2/core/mat.hpp>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cctype>
 #include <chrono>
@@ -816,16 +817,21 @@ FrameIdentity identity_from_sample(const neat::Sample& sample) {
           sample.duration_ns, sample.input_seq, sample.orig_input_seq};
 }
 
-void publish_metadata(StreamRuntime& stream, const FrameIdentity& identity,
-                      std::vector<blazepose_app::Pose> poses) {
-  const std::string data = blazepose_app::poses_data_json(std::move(poses)).dump();
+void publish_frame_metadata(StreamRuntime& stream, const FrameIdentity& identity,
+                            std::vector<blazepose_app::Pose> poses) {
+  const std::string overlay_data = blazepose_app::poses_data_json(poses).dump();
+  const std::string auxiliary_data =
+      blazepose_app::world_pose_auxiliary_data_json(std::move(poses)).dump();
   const int64_t timestamp_ms = identity.pts_ns >= 0 ? identity.pts_ns / 1'000'000 : -1;
   const std::string frame_id = identity.frame_id >= 0 ? std::to_string(identity.frame_id) : "";
-  std::string error;
   std::lock_guard<std::mutex> lock(stream.metadata_mutex);
-  if (!stream.metadata_sender->send_metadata("pose-estimation", data, timestamp_ms, frame_id,
-                                             &error)) {
-    std::cerr << "[warn] stream " << stream.config.id << " metadata send failed: " << error << "\n";
+  for (const auto& [type, data] : std::array<std::pair<const char*, const std::string*>, 2>{
+           {{"pose-estimation", &overlay_data}, {"auxiliary-visualization", &auxiliary_data}}}) {
+    std::string error;
+    if (!stream.metadata_sender->send_metadata(type, *data, timestamp_ms, frame_id, &error)) {
+      std::cerr << "[warn] stream " << stream.config.id << " " << type
+                << " metadata send failed: " << error << "\n";
+    }
   }
   ++stream.metadata_frames;
 }
@@ -852,7 +858,9 @@ std::optional<blazepose_app::Pose> parse_pose_output(const neat::Sample& sample,
     return std::nullopt;
   }
   const std::vector<float> landmarks = tensor_floats(tensors[0], 195);
-  return blazepose_app::decode_pose(landmarks, context.affine, context.box, context.roi_index);
+  const std::vector<float> world_landmarks = tensor_floats(tensors[2], 117);
+  return blazepose_app::decode_pose(landmarks, world_landmarks, context.affine, context.box,
+                                    context.roi_index);
 }
 
 void record_error(AppRuntime& app) {
@@ -957,7 +965,7 @@ void dispatch_detector_jobs(AppRuntime& app, const AppConfig& cfg) {
       StreamRuntime& stream = *app.streams[static_cast<std::size_t>(job.stream_index)];
       if (Clock::now() >= job.deadline) {
         ++stream.timed_out_jobs;
-        publish_metadata(stream, job.identity, {});
+        publish_frame_metadata(stream, job.identity, {});
         continue;
       }
       const neat::Tensor detector_frame = job.rgb.cvu();
@@ -1024,13 +1032,13 @@ void pull_detector_outputs(AppRuntime& app, const AppConfig& cfg) {
       ++stream.detector_frames;
       if (Clock::now() >= job.deadline) {
         ++stream.timed_out_jobs;
-        publish_metadata(stream, job.identity, {});
+        publish_frame_metadata(stream, job.identity, {});
         continue;
       }
       job.people = select_people(sample, stream.width, stream.height, cfg);
       stream.selected_rois.fetch_add(job.people.size());
       if (job.people.empty()) {
-        publish_metadata(stream, job.identity, {});
+        publish_frame_metadata(stream, job.identity, {});
         continue;
       }
 
@@ -1062,11 +1070,11 @@ void dispatch_pose_jobs(AppRuntime& app, const AppConfig& cfg) {
       StreamRuntime& stream = *app.streams[static_cast<std::size_t>(job.stream_index)];
       if (Clock::now() >= job.deadline) {
         ++stream.timed_out_jobs;
-        publish_metadata(stream, job.identity, {});
+        publish_frame_metadata(stream, job.identity, {});
         continue;
       }
       if (job.people.empty()) {
-        publish_metadata(stream, job.identity, {});
+        publish_frame_metadata(stream, job.identity, {});
         continue;
       }
 
@@ -1084,7 +1092,7 @@ void dispatch_pose_jobs(AppRuntime& app, const AppConfig& cfg) {
       const auto plan =
           blazepose_app::batch_crop_plan(requested_rois, rgb_view->mat.cols, rgb_view->mat.rows);
       if (!plan.has_value()) {
-        publish_metadata(stream, job.identity, {});
+        publish_frame_metadata(stream, job.identity, {});
         continue;
       }
       const cv::Rect image_rect(plan->image.x, plan->image.y, plan->image.width,
@@ -1171,8 +1179,8 @@ void publish_completed_aggregate(AppRuntime& app, std::uint64_t job_id) {
     app.state.aggregates.erase(found);
     app.state.cv.notify_all();
   }
-  publish_metadata(*app.streams[static_cast<std::size_t>(aggregate.stream_index)],
-                   aggregate.identity, std::move(aggregate.poses));
+  publish_frame_metadata(*app.streams[static_cast<std::size_t>(aggregate.stream_index)],
+                         aggregate.identity, std::move(aggregate.poses));
 }
 
 void expire_pose_jobs(AppRuntime& app) {

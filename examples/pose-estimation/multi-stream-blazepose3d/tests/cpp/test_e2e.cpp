@@ -7,7 +7,9 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <set>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -42,20 +44,56 @@ void write_config(const fs::path& path, const fs::path& detector, const fs::path
 
 bool validate_metadata(const MetadataJsonListenerResult& result, std::string& error) {
   bool found_pose = false;
+  bool found_world_pose = false;
+  using FrameKey = std::tuple<int, int64_t, std::string>;
+  std::set<FrameKey> pose_frames;
+  std::set<FrameKey> world_pose_frames;
   try {
     for (const auto& message : result.messages) {
-      const auto poses = nlohmann::json::parse(message.payload).at("data").at("poses");
-      if (!poses.is_array()) {
-        error = "pose metadata data.poses is not an array";
+      const auto parsed = nlohmann::json::parse(message.payload);
+      const FrameKey frame{message.port, message.timestamp_ms, message.frame_id};
+      if (message.metadata_type == "pose-estimation") {
+        const auto& poses = parsed.at("data").at("poses");
+        for (const auto& pose : poses) {
+          found_pose = true;
+          if (!pose.contains("keypoints") || !pose["keypoints"].is_array() ||
+              pose["keypoints"].size() != 33) {
+            error = "a published 2D pose did not contain exactly 33 keypoints";
+            return false;
+          }
+        }
+        if (!poses.empty()) {
+          pose_frames.insert(frame);
+        }
+        continue;
+      }
+
+      const auto& data = parsed.at("data");
+      if (data.at("schema_version") != 1 || data.at("id") != "world-pose" ||
+          data.at("renderer") != "blazepose-3d") {
+        error = "auxiliary metadata did not use the world-pose BlazePose 3D contract";
         return false;
       }
+      const auto& poses = data.at("payload").at("poses");
       for (const auto& pose : poses) {
-        found_pose = true;
+        found_world_pose = true;
         if (!pose.contains("keypoints") || !pose["keypoints"].is_array() ||
             pose["keypoints"].size() != 33) {
-          error = "a published pose did not contain exactly 33 keypoints";
+          error = "a published 3D pose did not contain exactly 33 keypoints";
           return false;
         }
+        for (const auto& point : pose["keypoints"]) {
+          if (!point.contains("name") || !point["name"].is_string() || !point.contains("x") ||
+              !point["x"].is_number() || !point.contains("y") || !point["y"].is_number() ||
+              !point.contains("z") || !point["z"].is_number() || !point.contains("confidence") ||
+              !point["confidence"].is_number()) {
+            error = "a published 3D keypoint did not contain name/x/y/z/confidence";
+            return false;
+          }
+        }
+      }
+      if (!poses.empty()) {
+        world_pose_frames.insert(frame);
       }
     }
   } catch (const std::exception& exception) {
@@ -63,9 +101,24 @@ bool validate_metadata(const MetadataJsonListenerResult& result, std::string& er
     return false;
   }
   if (!found_pose) {
-    error = "no BlazePose result was published";
+    error = "no 2D BlazePose result was published";
+    return false;
   }
-  return found_pose;
+  if (!found_world_pose) {
+    error = "no 3D BlazePose result was published";
+    return false;
+  }
+  for (const int port : result.ports_with_valid_json) {
+    const bool matched =
+        std::any_of(pose_frames.begin(), pose_frames.end(), [&](const auto& frame) {
+          return std::get<0>(frame) == port && world_pose_frames.count(frame) != 0;
+        });
+    if (!matched) {
+      error = "2D and 3D metadata did not share a frame identity on port " + std::to_string(port);
+      return false;
+    }
+  }
+  return true;
 }
 
 int run_case(const std::string& binary, const fs::path& detector, const fs::path& pose,
@@ -84,8 +137,8 @@ int run_case(const std::string& binary, const fs::path& detector, const fs::path
   listener_options.num_ports = static_cast<int>(urls.size());
   listener_options.timeout_ms = 10000;
   listener_options.require_all_ports = true;
-  listener_options.metadata_type = "pose-estimation";
-  listener_options.data_array_key = "poses";
+  listener_options.contracts = {{"pose-estimation", "poses", 1},
+                                {"auxiliary-visualization", "payload.poses", 1}};
   MetadataJsonListener listener(listener_options);
   if (!listener.ok()) {
     std::cerr << "[FAIL] metadata listener: " << listener.error() << "\n";
@@ -110,7 +163,7 @@ int run_case(const std::string& binary, const fs::path& detector, const fs::path
       std::cerr << "[FAIL] " << codec << " metadata: " << error << "\n";
       result = 1;
     } else {
-      std::cout << "[OK] " << codec << " produced 33-keypoint metadata on " << urls.size()
+      std::cout << "[OK] " << codec << " produced paired 2D/3D metadata on " << urls.size()
                 << " streams\n";
     }
   }

@@ -104,9 +104,15 @@ class TestE2E:
             INSIGHT_HOST,
             metadata_port_base,
             num_ports=len(urls),
-            metadata_type="pose-estimation",
-            data_array_key="poses",
             require_all_ports=True,
+            metadata_contracts={
+                "pose-estimation": "poses",
+                "auxiliary-visualization": "payload.poses",
+            },
+            metadata_min_counts={
+                "pose-estimation": 1,
+                "auxiliary-visualization": 1,
+            },
         ) as listener:
             process = subprocess.run(
                 [sys.executable, str(MAIN_PY), "--config", str(config)],
@@ -119,13 +125,39 @@ class TestE2E:
             metadata = listener.wait_for_messages(10.0)
 
         assert process.returncode == 0, (
-            f"main.py exited with {process.returncode}\nstdout:\n{process.stdout}\nstderr:\n{process.stderr}"
+            f"main.py exited with {process.returncode}\n"
+            f"stdout:\n{process.stdout}\nstderr:\n{process.stderr}"
         )
         assert metadata.success, metadata.error
-        poses = [
-            pose
-            for message in metadata.messages
-            for pose in json.loads(message.payload)["data"]["poses"]
-        ]
-        assert poses, "no BlazePose result was published"
-        assert all(len(pose.get("keypoints", [])) == 33 for pose in poses)
+        pose_frames = set()
+        world_pose_frames = set()
+        for message in metadata.messages:
+            parsed = json.loads(message.payload)
+            frame = (message.port, message.timestamp_ms, message.frame_id)
+            if message.metadata_type == "pose-estimation":
+                poses = parsed["data"]["poses"]
+                assert all(len(pose.get("keypoints", [])) == 33 for pose in poses)
+                if poses:
+                    pose_frames.add(frame)
+                continue
+
+            data = parsed["data"]
+            assert data["schema_version"] == 1
+            assert data["id"] == "world-pose"
+            assert data["renderer"] == "blazepose-3d"
+            poses = data["payload"]["poses"]
+            for pose in poses:
+                assert len(pose.get("keypoints", [])) == 33
+                assert all(
+                    set(point) >= {"name", "x", "y", "z", "confidence"}
+                    for point in pose["keypoints"]
+                )
+            if poses:
+                world_pose_frames.add(frame)
+
+        assert pose_frames, "no 2D BlazePose result was published"
+        assert world_pose_frames, "no 3D BlazePose result was published"
+        assert all(
+            any(frame[0] == port and frame in world_pose_frames for frame in pose_frames)
+            for port in metadata.ports_with_valid_json
+        ), "2D and 3D metadata did not share a frame identity on every port"

@@ -441,11 +441,13 @@ def sigmoid(value: float) -> float:
 
 def decode_pose(
     raw_landmarks: Any,
+    raw_world_landmarks: Any,
     affine: tuple[float, float, float, float, float, float],
     box: dict[str, Any],
     roi_index: int,
 ) -> dict[str, Any]:
     values = np.asarray(raw_landmarks, dtype=np.float32).reshape(39, 5)
+    world_values = np.asarray(raw_world_landmarks, dtype=np.float32).reshape(39, 3)
     m00, m01, m02, m10, m11, m12 = affine
     keypoints = []
     for index, raw in enumerate(values[:33]):
@@ -457,7 +459,22 @@ def decode_pose(
                 "confidence": min(sigmoid(float(raw[3])), sigmoid(float(raw[4]))),
             }
         )
-    return {"roi_index": roi_index, "box": box, "keypoints": keypoints}
+    world_keypoints = [
+        {
+            "name": LANDMARK_NAMES[index],
+            "x": float(raw[0]),
+            "y": float(raw[1]),
+            "z": float(raw[2]),
+            "confidence": keypoints[index]["confidence"],
+        }
+        for index, raw in enumerate(world_values[:33])
+    ]
+    return {
+        "roi_index": roi_index,
+        "box": box,
+        "keypoints": keypoints,
+        "world_keypoints": world_keypoints,
+    }
 
 
 def poses_data(poses: list[dict[str, Any]]) -> dict[str, Any]:
@@ -491,6 +508,33 @@ def poses_data(poses: list[dict[str, Any]]) -> dict[str, Any]:
             }
         )
     return {"poses": published}
+
+
+def world_pose_auxiliary_data(poses: list[dict[str, Any]]) -> dict[str, Any]:
+    world_poses = []
+    for pose in sorted(poses, key=lambda item: int(item["roi_index"])):
+        world_poses.append(
+            {
+                "id": f"pose_{int(pose['roi_index']) + 1}",
+                "keypoints": [
+                    {
+                        "name": point["name"],
+                        "x": float(point["x"]),
+                        "y": float(point["y"]),
+                        "z": float(point["z"]),
+                        "confidence": round(float(point["confidence"]), 3),
+                    }
+                    for point in pose["world_keypoints"]
+                ],
+            }
+        )
+    return {
+        "schema_version": 1,
+        "id": "world-pose",
+        "renderer": "blazepose-3d",
+        "title": "3D Pose",
+        "payload": {"poses": world_poses},
+    }
 
 
 def rtsp_codec(codec: str):
@@ -970,10 +1014,16 @@ def publish_metadata(
 ) -> None:
     timestamp_ms = identity.pts_ns // 1_000_000 if identity.pts_ns >= 0 else -1
     frame_id = str(identity.frame_id) if identity.frame_id >= 0 else ""
-    data = json.dumps(poses_data(poses), separators=(",", ":"))
+    overlay_data = json.dumps(poses_data(poses), separators=(",", ":"))
+    auxiliary_data = json.dumps(
+        world_pose_auxiliary_data(poses), separators=(",", ":")
+    )
     with stream.metadata_lock:
         stream.metadata_sender.send_metadata(
-            "pose-estimation", data, timestamp_ms, frame_id
+            "pose-estimation", overlay_data, timestamp_ms, frame_id
+        )
+        stream.metadata_sender.send_metadata(
+            "auxiliary-visualization", auxiliary_data, timestamp_ms, frame_id
         )
         stream.metadata_frames += 1
 
@@ -1284,7 +1334,18 @@ def parse_pose_output(sample, context: PoseInputContext, cfg: AppConfig):
     landmarks = np.asarray(tensors[0].to_numpy(copy=True), dtype=np.float32).reshape(-1)
     if landmarks.size != 195:
         raise RuntimeError("BlazePose screen-landmark output must contain 195 floats")
-    return decode_pose(landmarks, context.affine, context.box, context.roi_index)
+    world_landmarks = np.asarray(
+        tensors[2].to_numpy(copy=True), dtype=np.float32
+    ).reshape(-1)
+    if world_landmarks.size != 117:
+        raise RuntimeError("BlazePose world-landmark output must contain 117 floats")
+    return decode_pose(
+        landmarks,
+        world_landmarks,
+        context.affine,
+        context.box,
+        context.roi_index,
+    )
 
 
 def pull_pose_outputs(runtime: AppRuntime, cfg: AppConfig) -> None:
