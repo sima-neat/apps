@@ -92,8 +92,14 @@ a line confirming the top-1 class matches `validation.expected_class_id`:
 ```
 
 With the packaged goldfish image, class `1` should win with a probability well
-above the `validation.min_probability` default of `0.20`. A missing match line
-means the run completed but failed the validation check.
+above the `validation.min_probability` default of `0.20`.
+
+A failed check reports the reason on stderr, so the run is never silently wrong:
+
+```text
+FAIL: expected top1=1 (goldfish), got 393
+FAIL: top1 prob 0.1832 < 0.2
+```
 
 ## Troubleshooting
 

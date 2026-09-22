@@ -111,10 +111,11 @@ processed counts:
 ```
 
 Every configured stream should appear with a non-zero `processed` count. A
-stream stuck at `processed=0` while others advance means that source is not
-delivering frames, not that the model is wrong. To inspect results without
-Insight, set `output.debug_dir` to a directory and leave `output.save_every`
-non-zero; the application then writes periodic annotated frames there.
+stream stuck at `processed=0` while others advance is worth investigating on its
+own: verify that source independently before assuming a model or config problem.
+To inspect results without Insight, set `output.debug_dir` to a directory and
+leave `output.save_every` non-zero; the application then writes periodic
+annotated frames there.
 
 ## Troubleshooting
 
