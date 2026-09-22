@@ -304,6 +304,22 @@ class TestLoadLabelMap:
         labels = main.load_label_map(str(label_file), 3)
         assert labels[:3] == ["cat", "dog", "bird"]
 
+    def test_missing_custom_map_named_like_the_bundled_one_is_rejected(self, tmp_path):
+        """Regression: the bundled-map fallback matched on basename, so a typo in
+        a custom path like /custom/imagenet_labels.txt silently loaded the shipped
+        ImageNet map and produced confident labels from the wrong mapping."""
+        missing = tmp_path / "custom" / "imagenet_labels.txt"
+        with pytest.raises(ValueError, match="failed to open label map"):
+            main.load_label_map(str(missing), 3)
+
+    def test_shipped_reference_resolves_to_the_bundled_map(self, tmp_path, monkeypatch):
+        """The documented `src/common/imagenet_labels.txt` reference must still
+        resolve regardless of the caller's cwd."""
+        monkeypatch.chdir(tmp_path)
+        labels = main.load_label_map(main.BUNDLED_LABEL_MAP_REF, 1000)
+        assert len(labels) >= 1000
+        assert labels[1] == "goldfish"
+
     def test_missing_file_raises_value_error_not_os_error(self, tmp_path):
         """Regression: a missing label_map path must surface as ValueError (the
         type main() catches for config problems), not an uncaught OSError."""

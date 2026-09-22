@@ -36,8 +36,26 @@ namespace {
 
 const std::vector<std::string> kDefaultExtensions = {".jpg", ".jpeg", ".png", ".bmp"};
 
+// The shipped config references the bundled label map by its in-package path,
+// which is relative to the example directory rather than the caller's cwd. Only
+// this exact reference falls back to the bundled copy; any other missing
+// label_map path is a configuration error.
+const char* const kBundledLabelMapRef = "src/common/imagenet_labels.txt";
+
+// ScalarConfig unquotes values but not mapping keys, so a profile declared as
+// `"resnet_50":` arrives with its quotes attached. Strip them for display and
+// metadata while the original spelling stays the lookup key.
+std::string unquote_yaml_key(const std::string& key) {
+  if (key.size() >= 2 &&
+      ((key.front() == '"' && key.back() == '"') || (key.front() == '\'' && key.back() == '\''))) {
+    return key.substr(1, key.size() - 2);
+  }
+  return key;
+}
+
 struct ModelProfile {
-  std::string name;
+  std::string name;       // display name (YAML quotes removed)
+  std::string config_key; // key exactly as spelled in the config, for lookups
   std::string path;
   int input_width = 224;
   int input_height = 224;
@@ -174,17 +192,19 @@ std::vector<ModelProfile> load_profiles(const sima_examples::ScalarConfig& raw,
   }
 
   std::vector<ModelProfile> profiles;
-  for (const auto& name : ordered) {
+  for (const auto& key : ordered) {
     ModelProfile profile;
-    profile.name = name;
-    profile.path = raw.string_or("models." + name + ".path", "");
-    profile.input_width = raw.int_or("models." + name + ".input_width", 224);
-    profile.input_height = raw.int_or("models." + name + ".input_height", 224);
-    profile.preprocess = raw.string_or("models." + name + ".preprocess", "imagenet");
-    profile.output = raw.string_or("models." + name + ".output", "softmax");
-    profile.num_classes = raw.int_or("models." + name + ".num_classes", 1000);
-    profile.label_map = raw.string_or("models." + name + ".label_map", "");
-    profile.top_k = raw.int_or("models." + name + ".top_k", 5);
+    profile.config_key = key;
+    profile.name = unquote_yaml_key(key);
+    const std::string& name = profile.name;
+    profile.path = raw.string_or("models." + key + ".path", "");
+    profile.input_width = raw.int_or("models." + key + ".input_width", 224);
+    profile.input_height = raw.int_or("models." + key + ".input_height", 224);
+    profile.preprocess = raw.string_or("models." + key + ".preprocess", "imagenet");
+    profile.output = raw.string_or("models." + key + ".output", "softmax");
+    profile.num_classes = raw.int_or("models." + key + ".num_classes", 1000);
+    profile.label_map = raw.string_or("models." + key + ".label_map", "");
+    profile.top_k = raw.int_or("models." + key + ".top_k", 5);
     if (name.find('.') != std::string::npos) {
       throw std::runtime_error("models." + name + ": profile names must not contain '.'");
     }
@@ -229,11 +249,12 @@ std::vector<std::string> load_label_map(const std::string& path, int num_classes
   }
 
   fs::path label_path = path;
-  if (!fs::exists(label_path)) {
-    // Bundled label maps live next to this example's source tree regardless of the
-    // caller's cwd (model.path stays cwd-relative since it points at a downloaded file).
-    fs::path bundled =
-        fs::path(SIMANEAT_APPS_EXAMPLE_SOURCE_DIR) / ".." / "common" / label_path.filename();
+  if (!fs::exists(label_path) && fs::path(path).generic_string() == kBundledLabelMapRef) {
+    // Resolve the shipped reference next to this example's source tree, regardless
+    // of the caller's cwd (model.path stays cwd-relative: it points at a file the
+    // customer downloaded). A missing custom path is NOT redirected here.
+    fs::path bundled = fs::path(SIMANEAT_APPS_EXAMPLE_SOURCE_DIR) / ".." / "common" /
+                       fs::path(kBundledLabelMapRef).filename();
     if (fs::exists(bundled))
       label_path = bundled;
   }

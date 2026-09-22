@@ -317,5 +317,60 @@ int main(int argc, char** argv) {
     }
   }
 
+  // Test 10: a quoted YAML profile key must be reported without its quotes, so
+  // C++ metadata matches what Python's YAML loader produces.
+  {
+    namespace fs = std::filesystem;
+    const auto config_path =
+        fs::temp_directory_path() /
+        ("image-classification-explorer-quoted-key-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".yaml");
+    {
+      std::ofstream config(config_path);
+      config << "models:\n"
+             << "  \"resnet_50\":\n"
+             << "    path: /nonexistent/resnet_50.tar.gz\n";
+    }
+    auto r = spawn_and_wait(binary, {"--config", config_path.string()}, 20000);
+    fs::remove(config_path);
+    const bool unquoted = r.stdout_text.find("Loading model 'resnet_50'") != std::string::npos;
+    const bool quoted = r.stdout_text.find("\"resnet_50\"") != std::string::npos;
+    if (!unquoted || quoted) {
+      std::cerr << "[FAIL] quoted profile key: expected unquoted model name, stdout:\n"
+                << r.stdout_text << "\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] quoted YAML profile key was unquoted\n";
+    }
+  }
+
+  // Test 11: a missing custom label map whose basename matches the bundled one
+  // must be rejected rather than silently loading the shipped ImageNet map.
+  {
+    namespace fs = std::filesystem;
+    const auto stamp = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    const auto config_path =
+        fs::temp_directory_path() / ("image-classification-explorer-labelmap-" + stamp + ".yaml");
+    const auto missing =
+        fs::temp_directory_path() / ("no-such-dir-" + stamp) / "imagenet_labels.txt";
+    {
+      std::ofstream config(config_path);
+      config << "models:\n"
+             << "  m:\n"
+             << "    path: /nonexistent/m.tar.gz\n"
+             << "    label_map: " << missing.string() << "\n";
+    }
+    auto r = spawn_and_wait(binary, {"--config", config_path.string()}, 20000);
+    fs::remove(config_path);
+    if (r.exit_code == 0 || r.stderr_text.find("failed to open label map") == std::string::npos) {
+      std::cerr << "[FAIL] missing custom label map: expected rejection, got exit " << r.exit_code
+                << "\nstderr:\n"
+                << r.stderr_text << "\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] missing custom label map was rejected\n";
+    }
+  }
+
   return failures > 0 ? 1 : 0;
 }

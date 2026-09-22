@@ -22,6 +22,11 @@ DEFAULT_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp")
 # Marker proving a directory was produced by this application; publish_report
 # only ever replaces a directory that carries it (or an empty one).
 REPORT_MARKER = ".image-classification-explorer-report"
+# The shipped config references the bundled label map by its in-package path,
+# which is relative to the example directory rather than the caller's cwd. Only
+# this exact reference falls back to the bundled copy; any other missing
+# label_map path is a configuration error.
+BUNDLED_LABEL_MAP_REF = "src/common/imagenet_labels.txt"
 REPORT_ENTRIES = ("report.json", "report.csv", "report.html", "thumbnails", REPORT_MARKER)
 
 
@@ -140,10 +145,11 @@ def load_label_map(path: str | None, num_classes: int) -> list[str]:
     if not path:
         return [str(i) for i in range(num_classes)]
     label_path = Path(path)
-    if not label_path.exists():
-        # Bundled label maps live next to this script regardless of the caller's cwd
-        # (model.path stays cwd-relative since it points at a user-downloaded file).
-        bundled = Path(__file__).resolve().parents[1] / "common" / label_path.name
+    if not label_path.exists() and Path(path).as_posix() == BUNDLED_LABEL_MAP_REF:
+        # Resolve the shipped reference next to this script, regardless of the
+        # caller's cwd (model.path stays cwd-relative: it points at a file the
+        # customer downloaded). A missing custom path is NOT redirected here.
+        bundled = Path(__file__).resolve().parents[1] / "common" / Path(BUNDLED_LABEL_MAP_REF).name
         if bundled.exists():
             label_path = bundled
     try:
