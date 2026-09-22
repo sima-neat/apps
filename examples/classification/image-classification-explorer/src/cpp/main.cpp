@@ -1073,22 +1073,33 @@ void recover_interrupted_publish(const fs::path& output_dir) {
     return;
 
   const std::string prefix = "." + output_dir.filename().string() + ".previous-";
-  std::vector<fs::path> backups;
+  // A backup whose process is still alive belongs to a publish that is mid-swap:
+  // it still needs that directory to roll back, and its own rename will fill
+  // output_dir shortly. Never restore or delete those.
+  std::vector<fs::path> abandoned;
   for (const auto& entry : fs::directory_iterator(parent)) {
     if (!entry.is_directory())
       continue;
-    if (entry.path().filename().string().rfind(prefix, 0) != 0)
+    const std::string name = entry.path().filename().string();
+    if (name.rfind(prefix, 0) != 0)
       continue;
     if (!fs::exists(entry.path() / kReportMarker))
       continue;
-    backups.push_back(entry.path());
+    const std::string suffix = name.substr(prefix.size());
+    if (!suffix.empty() &&
+        std::all_of(suffix.begin(), suffix.end(),
+                    [](unsigned char c) { return std::isdigit(c) != 0; }) &&
+        process_is_running(static_cast<pid_t>(std::stol(suffix)))) {
+      continue;
+    }
+    abandoned.push_back(entry.path());
   }
-  if (backups.empty())
+  if (abandoned.empty())
     return;
 
   if (!fs::exists(output_dir)) {
-    auto newest = backups.begin();
-    for (auto it = backups.begin(); it != backups.end(); ++it) {
+    auto newest = abandoned.begin();
+    for (auto it = abandoned.begin(); it != abandoned.end(); ++it) {
       std::error_code ec;
       const auto written = fs::last_write_time(*it, ec);
       if (ec)
@@ -1098,23 +1109,15 @@ void recover_interrupted_publish(const fs::path& output_dir) {
         newest = it;
     }
     const fs::path restored = *newest;
-    backups.erase(newest);
+    abandoned.erase(newest);
     fs::rename(restored, output_dir);
     std::cerr << "Recovered an interrupted report publication: restored "
               << restored.filename().string() << " to " << output_dir << "\n";
   }
 
   // Anything left belongs to a finished publish that never got to delete its
-  // backup. Keep backups whose process is still alive: it may be mid-swap and
-  // still need them to roll back.
-  for (const auto& leftover : backups) {
-    const std::string suffix = leftover.filename().string().substr(prefix.size());
-    if (!suffix.empty() &&
-        std::all_of(suffix.begin(), suffix.end(),
-                    [](unsigned char c) { return std::isdigit(c) != 0; }) &&
-        process_is_running(static_cast<pid_t>(std::stol(suffix)))) {
-      continue;
-    }
+  // backup.
+  for (const auto& leftover : abandoned) {
     std::error_code ec;
     fs::remove_all(leftover, ec);
     if (!ec)

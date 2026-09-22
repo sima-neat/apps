@@ -582,5 +582,44 @@ int main(int argc, char** argv) {
     fs::remove_all(work);
   }
 
+  // Test 18: with output_dir absent, a backup owned by a live process must not
+  // be restored - it belongs to a concurrent publisher that is mid-swap.
+  {
+    namespace fs = std::filesystem;
+    const auto stamp = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    const auto work = fs::temp_directory_path() / ("image-classification-explorer-live-" + stamp);
+    fs::create_directories(work);
+    {
+      std::ofstream(work / "input.txt") << "not an image\n";
+    }
+    {
+      std::ofstream config(work / "config.yaml");
+      config << "io:\n"
+             << "  input: " << (work / "input.txt").string() << "\n"
+             << "  output_dir: " << (work / "report").string() << "\n"
+             << "models:\n"
+             << "  m:\n"
+             << "    path: /nonexistent/m.tar.gz\n";
+    }
+    auto first = spawn_and_wait(binary, {"--config", (work / "config.yaml").string()}, 20000);
+
+    // Exactly the state a concurrent publisher is in mid-swap: the old report
+    // renamed aside under a live pid, output_dir not yet reinstalled.
+    const fs::path live = work / (".report.previous-" + std::to_string(::getpid()));
+    fs::rename(work / "report", live);
+
+    auto second = spawn_and_wait(binary, {"--config", (work / "config.yaml").string()}, 20000);
+    const bool live_kept = fs::exists(live / ".image-classification-explorer-report");
+    if (first.exit_code != 0 || second.exit_code != 0 || !live_kept) {
+      std::cerr << "[FAIL] live publisher backup: exits " << first.exit_code << "/"
+                << second.exit_code << " live_kept=" << live_kept << "\nstderr:\n"
+                << second.stderr_text << "\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] a live publisher's backup was neither restored nor removed\n";
+    }
+    fs::remove_all(work);
+  }
+
   return failures > 0 ? 1 : 0;
 }

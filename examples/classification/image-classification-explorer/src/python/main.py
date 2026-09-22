@@ -788,23 +788,24 @@ def recover_interrupted_publish(output_dir: Path) -> None:
         return
     backups = [p for p in parent.glob(f".{output_dir.name}.previous-*")
                if p.is_dir() and (p / REPORT_MARKER).is_file()]
-    if not backups:
+    # A backup whose process is still alive belongs to a publish that is mid-swap:
+    # it still needs that directory to roll back, and its own rename will fill
+    # output_dir shortly. Never restore or delete those.
+    abandoned = [p for p in backups
+                 if not ((pid := _backup_pid(p)) is not None and process_is_running(pid))]
+    if not abandoned:
         return
 
     if not output_dir.exists():
-        newest = max(backups, key=lambda p: p.stat().st_mtime)
+        newest = max(abandoned, key=lambda p: p.stat().st_mtime)
         newest.rename(output_dir)
         print(f"Recovered an interrupted report publication: restored {newest.name} to "
               f"{output_dir}", file=sys.stderr)
-        backups.remove(newest)
+        abandoned.remove(newest)
 
     # Anything left belongs to a finished publish that never got to delete its
-    # backup. Keep backups whose process is still alive: it may be mid-swap and
-    # still need them to roll back.
-    for leftover in backups:
-        pid = _backup_pid(leftover)
-        if pid is not None and process_is_running(pid):
-            continue
+    # backup.
+    for leftover in abandoned:
         shutil.rmtree(leftover, ignore_errors=True)
         print(f"Removed a leftover report backup: {leftover.name}", file=sys.stderr)
 

@@ -857,6 +857,34 @@ models:
             helper.kill()
             helper.wait()
 
+    def test_does_not_restore_a_live_publishers_backup(self, tmp_path, monkeypatch):
+        """Regression: with output_dir absent, recovery restored the newest
+        backup without checking whether its owner was still running, stealing a
+        concurrent publisher's rollback source and breaking its own swap."""
+        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
+        img = tmp_path / "a.jpg"
+        _make_image(img)
+        out_dir = tmp_path / "out"
+        config_path = tmp_path / "config.yaml"
+        _write_config(config_path, img, out_dir)
+        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
+        assert main.main() == 0
+
+        helper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        try:
+            # Exactly the state a concurrent publisher is in mid-swap: it has
+            # renamed the old report aside and has not yet installed its own.
+            live = tmp_path / f".out.previous-{helper.pid}"
+            out_dir.rename(live)
+
+            main.recover_interrupted_publish(out_dir)
+
+            assert live.is_dir(), "a live publisher's backup must not be taken"
+            assert not out_dir.exists(), "output_dir must be left for the live publisher"
+        finally:
+            helper.kill()
+            helper.wait()
+
     def test_leaves_unmarked_directories_alone(self, tmp_path, monkeypatch):
         """Only directories carrying the report marker are ever deleted."""
         monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
