@@ -983,6 +983,45 @@ void write_html_report(const fs::path& path, const std::vector<ImageResult>& res
 // a `report.html`) can never be swapped away.
 const char* const kReportMarker = ".image-classification-explorer-report";
 
+// Restore a report stranded by a publish that was killed mid-swap.
+//
+// publish_report renames the old report aside before moving the new one into
+// place. If the process dies between those two renames, `output_dir` is absent
+// and the complete previous report sits under `.<name>.previous-<pid>`. Move the
+// newest such directory back so nothing is stranded and the ownership check sees
+// a normal previous report.
+void recover_interrupted_publish(const fs::path& output_dir) {
+  if (fs::exists(output_dir))
+    return;
+  const fs::path parent = output_dir.parent_path();
+  if (!fs::is_directory(parent))
+    return;
+
+  const std::string prefix = "." + output_dir.filename().string() + ".previous-";
+  fs::path newest;
+  fs::file_time_type newest_time;
+  for (const auto& entry : fs::directory_iterator(parent)) {
+    if (!entry.is_directory())
+      continue;
+    if (entry.path().filename().string().rfind(prefix, 0) != 0)
+      continue;
+    std::error_code ec;
+    const auto written = fs::last_write_time(entry.path(), ec);
+    if (ec)
+      continue;
+    if (newest.empty() || written > newest_time) {
+      newest = entry.path();
+      newest_time = written;
+    }
+  }
+  if (newest.empty())
+    return;
+
+  fs::rename(newest, output_dir);
+  std::cerr << "Recovered an interrupted report publication: restored "
+            << newest.filename().string() << " to " << output_dir << "\n";
+}
+
 void publish_report(const fs::path& output_dir_arg, const std::vector<ImageResult>& results,
                     const std::vector<ModelProfile>& profiles,
                     const std::vector<std::string>& skipped, double total_ms) {
@@ -995,6 +1034,7 @@ void publish_report(const fs::path& output_dir_arg, const std::vector<ImageResul
   if (output_dir.filename().empty()) // trailing slash
     output_dir = output_dir.parent_path();
   const fs::path parent = output_dir.parent_path();
+  recover_interrupted_publish(output_dir);
 
   if (fs::exists(output_dir)) {
     if (!fs::is_directory(output_dir)) {
@@ -1051,7 +1091,9 @@ void publish_report(const fs::path& output_dir_arg, const std::vector<ImageResul
     try {
       fs::rename(staging, output_dir);
     } catch (...) {
-      if (had_previous)
+      // A hard kill between the two renames is recovered on the next run by
+      // recover_interrupted_publish().
+      if (had_previous && !fs::exists(output_dir))
         fs::rename(previous, output_dir); // roll back to the previous report
       throw;
     }

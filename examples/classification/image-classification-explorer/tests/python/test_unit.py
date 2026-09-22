@@ -734,6 +734,48 @@ models:
         assert sorted(p.name for p in (out_dir / "thumbnails").iterdir()) == thumbs_before
         assert not list(tmp_path.glob(".out.*")), "staging/previous directories left behind"
 
+    def test_recovers_report_stranded_by_an_interrupted_publish(self, tmp_path, monkeypatch):
+        """Regression: a publish killed between the two renames left output_dir
+        absent and the complete previous report under .<name>.previous-<pid>.
+        The next run must restore it rather than stranding it."""
+        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
+        img = tmp_path / "a.jpg"
+        _make_image(img)
+        out_dir = tmp_path / "out"
+        config_path = tmp_path / "config.yaml"
+        _write_config(config_path, img, out_dir)
+        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
+        assert main.main() == 0
+
+        # Simulate a process killed after the first rename of the swap.
+        stranded = tmp_path / ".out.previous-4242"
+        out_dir.rename(stranded)
+        assert not out_dir.exists()
+
+        main.recover_interrupted_publish(out_dir)
+
+        assert out_dir.is_dir()
+        assert (out_dir / "report.json").is_file()
+        assert (out_dir / main.REPORT_MARKER).is_file()
+        assert not stranded.exists()
+
+    def test_run_after_interrupted_publish_succeeds(self, tmp_path, monkeypatch):
+        """The recovered report is a normal previous report, so the next full
+        run replaces it without tripping the ownership check."""
+        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
+        img = tmp_path / "a.jpg"
+        _make_image(img)
+        out_dir = tmp_path / "out"
+        config_path = tmp_path / "config.yaml"
+        _write_config(config_path, img, out_dir)
+        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
+        assert main.main() == 0
+        out_dir.rename(tmp_path / ".out.previous-4242")
+
+        assert main.main() == 0
+        assert (out_dir / "report.json").is_file()
+        assert not list(tmp_path.glob(".out.previous-*"))
+
     def test_failed_swap_rolls_back_previous_report(self, tmp_path, monkeypatch):
         """If the final rename of the staged report fails, the previous report
         must be restored at output_dir and nothing left behind."""
@@ -905,11 +947,38 @@ class TestArgParsing:
         assert "usage" in r.stdout.lower()
 
     def test_bad_config_path(self):
+        """Regression: a missing config must report a concise configuration
+        error and exit 2, as the C++ entrypoint does, not raise a traceback."""
         r = subprocess.run(
             [sys.executable, str(MAIN_PY), "--config", "/nonexistent/config.yaml"],
             capture_output=True, text=True, timeout=20,
         )
-        assert r.returncode != 0
+        assert r.returncode == 2
+        assert "Invalid configuration" in r.stderr
+        assert "Traceback" not in r.stderr
+
+    def test_invalid_yaml_config(self, tmp_path):
+        """Regression: malformed YAML must report a configuration error, not a
+        yaml.YAMLError traceback."""
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text("models:\n  m:\n   - broken: [unclosed\n")
+        r = subprocess.run(
+            [sys.executable, str(MAIN_PY), "--config", str(config_path)],
+            capture_output=True, text=True, timeout=20,
+        )
+        assert r.returncode == 2
+        assert "Invalid configuration" in r.stderr
+        assert "Traceback" not in r.stderr
+
+    def test_non_mapping_config(self, tmp_path):
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text("- just\n- a\n- list\n")
+        r = subprocess.run(
+            [sys.executable, str(MAIN_PY), "--config", str(config_path)],
+            capture_output=True, text=True, timeout=20,
+        )
+        assert r.returncode == 2
+        assert "mapping at the top level" in r.stderr
 
     def test_unknown_flag(self):
         r = subprocess.run(

@@ -372,5 +372,48 @@ int main(int argc, char** argv) {
     }
   }
 
+  // Test 12: a report stranded by a publish that was killed mid-swap is restored
+  // on the next run instead of being left under .<name>.previous-<pid>.
+  {
+    namespace fs = std::filesystem;
+    const auto stamp = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    const auto work =
+        fs::temp_directory_path() / ("image-classification-explorer-recover-" + stamp);
+    fs::create_directories(work);
+    {
+      std::ofstream(work / "input.txt") << "not an image\n";
+    }
+    {
+      std::ofstream config(work / "config.yaml");
+      config << "io:\n"
+             << "  input: " << (work / "input.txt").string() << "\n"
+             << "  output_dir: " << (work / "report").string() << "\n"
+             << "models:\n"
+             << "  m:\n"
+             << "    path: /nonexistent/m.tar.gz\n";
+    }
+    auto first = spawn_and_wait(binary, {"--config", (work / "config.yaml").string()}, 20000);
+    // Simulate a process killed after the first rename of the swap.
+    fs::rename(work / "report", work / ".report.previous-4242");
+    auto second = spawn_and_wait(binary, {"--config", (work / "config.yaml").string()}, 20000);
+    bool stranded = false;
+    for (const auto& entry : fs::directory_iterator(work)) {
+      if (entry.path().filename().string().rfind(".report.previous-", 0) == 0)
+        stranded = true;
+    }
+    if (first.exit_code != 0 || second.exit_code != 0 ||
+        !fs::exists(work / "report" / "report.json") || stranded ||
+        second.stderr_text.find("Recovered an interrupted report publication") ==
+            std::string::npos) {
+      std::cerr << "[FAIL] interrupted publish: expected recovery, exits " << first.exit_code << "/"
+                << second.exit_code << " stranded=" << stranded << "\nstderr:\n"
+                << second.stderr_text << "\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] report stranded by an interrupted publish was recovered\n";
+    }
+    fs::remove_all(work);
+  }
+
   return failures > 0 ? 1 : 0;
 }

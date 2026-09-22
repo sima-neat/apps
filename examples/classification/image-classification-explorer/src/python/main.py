@@ -706,6 +706,28 @@ def write_html_report(path: Path, results: list[ImageResult], profiles: list[Mod
     path.write_text(html, encoding="utf-8")
 
 
+def recover_interrupted_publish(output_dir: Path) -> None:
+    """Restore a report stranded by a publish that was killed mid-swap.
+
+    publish_report renames the old report aside before moving the new one into
+    place. If the process dies between those two renames, `output_dir` is absent
+    and the complete previous report sits under `.<name>.previous-<pid>`. Move
+    the newest such directory back so nothing is stranded and the ownership
+    check below sees a normal previous report."""
+    if output_dir.exists():
+        return
+    parent = output_dir.parent
+    if not parent.is_dir():
+        return
+    stranded = [p for p in parent.glob(f".{output_dir.name}.previous-*") if p.is_dir()]
+    if not stranded:
+        return
+    newest = max(stranded, key=lambda p: p.stat().st_mtime)
+    newest.rename(output_dir)
+    print(f"Recovered an interrupted report publication: restored {newest.name} to "
+          f"{output_dir}", file=sys.stderr)
+
+
 def publish_report(output_dir: Path, results: list[ImageResult], profiles: list[ModelProfile],
                    skipped: list[str], class_summary: ClassSummary,
                    timing: dict[str, Any]) -> None:
@@ -719,6 +741,7 @@ def publish_report(output_dir: Path, results: list[ImageResult], profiles: list[
     to contain a `report.html`) can never be swapped away."""
     output_dir = output_dir.resolve()
     parent = output_dir.parent
+    recover_interrupted_publish(output_dir)
     if output_dir.exists():
         if not output_dir.is_dir():
             raise OSError(f"output_dir {output_dir} exists and is not a directory")
@@ -753,9 +776,12 @@ def publish_report(output_dir: Path, results: list[ImageResult], profiles: list[
             output_dir.rename(previous)
         try:
             staging.rename(output_dir)
-        except OSError:
-            if had_previous:
-                previous.rename(output_dir)  # roll back to the previous report
+        except BaseException:
+            # Includes KeyboardInterrupt: roll back to the previous report. A
+            # hard kill between the two renames is recovered on the next run by
+            # recover_interrupted_publish().
+            if had_previous and not output_dir.exists():
+                previous.rename(output_dir)
             raise
         if had_previous:
             shutil.rmtree(previous, ignore_errors=True)
@@ -786,30 +812,38 @@ def main() -> int:
     parser.add_argument("--config", type=Path, default=default_config, help="Path to YAML configuration")
     args = parser.parse_args()
 
-    raw = load_config(args.config)
-
+    # Reading and interpreting the config all happens in one controlled error path,
+    # so an unreadable file, invalid YAML, or a bad value reports `Invalid
+    # configuration: ...` and exit 2 rather than a traceback (matching C++).
+    #
     # Relative paths in config.yaml (model artifacts, label maps, output dir) resolve
     # against the current working directory, matching every other example in this repo:
     # customers run commands from the installed `prebuilt-apps/` root, not from here.
-    io_cfg = raw.get("io", {})
-    runtime = raw.get("runtime", {})
-    timeout_ms = int(runtime.get("timeout_ms", 20000))
-    extensions = tuple(
-        e.strip().lower() for e in str(io_cfg.get("extensions", ",".join(DEFAULT_EXTENSIONS))).split(",")
-        if e.strip()
-    ) or DEFAULT_EXTENSIONS
-    fallback_url = io_cfg.get(
-        "fallback_image_url",
-        "https://raw.githubusercontent.com/EliSchwartz/imagenet-sample-images/master/"
-        "n01443537_goldfish.JPEG",
-    )
-    output_dir = Path(io_cfg.get("output_dir", "report"))
-
     try:
+        raw = load_config(args.config)
+        if not isinstance(raw, dict):
+            raise ValueError(f"{args.config} must contain a YAML mapping at the top level")
+        io_cfg = raw.get("io") or {}
+        runtime = raw.get("runtime") or {}
+        if not isinstance(io_cfg, dict):
+            raise ValueError("`io` must be a mapping")
+        if not isinstance(runtime, dict):
+            raise ValueError("`runtime` must be a mapping")
+        timeout_ms = int(runtime.get("timeout_ms", 20000))
+        extensions = tuple(
+            e.strip().lower() for e in str(io_cfg.get("extensions", ",".join(DEFAULT_EXTENSIONS))).split(",")
+            if e.strip()
+        ) or DEFAULT_EXTENSIONS
+        fallback_url = io_cfg.get(
+            "fallback_image_url",
+            "https://raw.githubusercontent.com/EliSchwartz/imagenet-sample-images/master/"
+            "n01443537_goldfish.JPEG",
+        )
+        output_dir = Path(io_cfg.get("output_dir", "report"))
         profiles = load_profiles(raw)
         for profile in profiles:
             profile.labels = load_label_map(profile.label_map, profile.num_classes)
-    except ValueError as exc:
+    except (OSError, yaml.YAMLError, TypeError, ValueError) as exc:
         print(f"Invalid configuration: {exc}", file=sys.stderr)
         return 2
 
