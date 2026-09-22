@@ -566,19 +566,22 @@ int main(int argc, char** argv) {
       std::ofstream(unmarked / "customer.txt") << "keep me\n";
     }
 
+    // The second run still cleans the orphan, then defers because a live process
+    // owns a backup.
     auto second = spawn_and_wait(binary, {"--config", (work / "config.yaml").string()}, 20000);
     const bool orphan_removed = !fs::exists(orphan);
     const bool live_kept = fs::exists(live);
     const bool unmarked_kept = fs::exists(unmarked / "customer.txt");
-    if (first.exit_code != 0 || second.exit_code != 0 || !orphan_removed || !live_kept ||
-        !unmarked_kept) {
+    const bool deferred = second.exit_code != 0 &&
+                          second.stderr_text.find("another run is publishing") != std::string::npos;
+    if (first.exit_code != 0 || !deferred || !orphan_removed || !live_kept || !unmarked_kept) {
       std::cerr << "[FAIL] backup cleanup: exits " << first.exit_code << "/" << second.exit_code
                 << " orphan_removed=" << orphan_removed << " live_kept=" << live_kept
-                << " unmarked_kept=" << unmarked_kept << "\nstderr:\n"
+                << " unmarked_kept=" << unmarked_kept << " deferred=" << deferred << "\nstderr:\n"
                 << second.stderr_text << "\n";
       ++failures;
     } else {
-      std::cout << "[OK] orphaned report backup removed; live and unmarked ones preserved\n";
+      std::cout << "[OK] orphaned backup removed; live one preserved and publication deferred\n";
     }
     fs::remove_all(work);
   }
@@ -615,13 +618,18 @@ int main(int argc, char** argv) {
 
     auto second = spawn_and_wait(binary, {"--config", (work / "config.yaml").string()}, 20000);
     const bool live_kept = fs::exists(live / ".image-classification-explorer-report");
-    if (first.exit_code != 0 || second.exit_code != 0 || !live_kept) {
+    // It must also decline to publish, rather than occupying the path the live
+    // run is about to rename its staging directory into.
+    const bool deferred = second.exit_code != 0 &&
+                          second.stderr_text.find("another run is publishing") != std::string::npos;
+    if (first.exit_code != 0 || !deferred || !live_kept || fs::exists(work / "report")) {
       std::cerr << "[FAIL] live publisher backup: exits " << first.exit_code << "/"
-                << second.exit_code << " live_kept=" << live_kept << "\nstderr:\n"
+                << second.exit_code << " live_kept=" << live_kept << " deferred=" << deferred
+                << "\nstderr:\n"
                 << second.stderr_text << "\n";
       ++failures;
     } else {
-      std::cout << "[OK] a live publisher's backup was neither restored nor removed\n";
+      std::cout << "[OK] a live publisher's backup was preserved and publication deferred\n";
     }
     fs::remove_all(work);
   }
@@ -655,6 +663,43 @@ int main(int argc, char** argv) {
     }
     if (failures == 0)
       std::cout << "[OK] non-positive runtime.timeout_ms was rejected\n";
+  }
+
+  // Test 21: a staging directory abandoned by a terminated run is removed.
+  {
+    namespace fs = std::filesystem;
+    const auto stamp = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    const auto work =
+        fs::temp_directory_path() / ("image-classification-explorer-staging-" + stamp);
+    fs::create_directories(work);
+    {
+      std::ofstream(work / "input.txt") << "not an image\n";
+    }
+    {
+      std::ofstream config(work / "config.yaml");
+      config << "io:\n"
+             << "  input: " << (work / "input.txt").string() << "\n"
+             << "  output_dir: " << (work / "report").string() << "\n"
+             << "models:\n"
+             << "  m:\n"
+             << "    path: /nonexistent/m.tar.gz\n";
+    }
+    auto first = spawn_and_wait(binary, {"--config", (work / "config.yaml").string()}, 20000);
+    const fs::path abandoned = work / ".report.staging-2147483646";
+    fs::create_directories(abandoned);
+    {
+      std::ofstream(abandoned / "report.json") << "{}\n";
+    }
+    auto second = spawn_and_wait(binary, {"--config", (work / "config.yaml").string()}, 20000);
+    if (first.exit_code != 0 || second.exit_code != 0 || fs::exists(abandoned)) {
+      std::cerr << "[FAIL] abandoned staging: exits " << first.exit_code << "/" << second.exit_code
+                << " still_present=" << fs::exists(abandoned) << "\nstderr:\n"
+                << second.stderr_text << "\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] staging directory abandoned by a dead run was removed\n";
+    }
+    fs::remove_all(work);
   }
 
   return failures > 0 ? 1 : 0;

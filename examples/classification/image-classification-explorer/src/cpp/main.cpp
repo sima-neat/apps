@@ -44,6 +44,29 @@ const std::vector<std::string> kDefaultExtensions = {".jpg", ".jpeg", ".png", ".
 // label_map path is a configuration error.
 const char* const kBundledLabelMapRef = "src/common/imagenet_labels.txt";
 
+using FileFingerprint = std::pair<std::uintmax_t, fs::file_time_type>;
+
+std::optional<FileFingerprint> file_fingerprint(const fs::path& path) {
+  std::error_code ec;
+  const auto size = fs::file_size(path, ec);
+  if (ec)
+    return std::nullopt;
+  const auto written = fs::last_write_time(path, ec);
+  if (ec)
+    return std::nullopt;
+  return FileFingerprint{size, written};
+}
+
+// Refuse to mix results from different versions of the same input file.
+void check_unchanged(const fs::path& path, const std::optional<FileFingerprint>& expected) {
+  if (!expected.has_value())
+    return;
+  const auto current = file_fingerprint(path);
+  if (!current.has_value() || *current != *expected) {
+    throw std::runtime_error("input changed while the run was in progress: " + path.string());
+  }
+}
+
 std::string lower_copy(std::string value) {
   std::transform(value.begin(), value.end(), value.begin(),
                  [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
@@ -173,6 +196,9 @@ struct Prediction {
 
 struct ImageResult {
   fs::path image_path;
+  // (size, mtime) captured once, so every model and the thumbnail are known to
+  // describe the same bytes even if the file is replaced mid-run.
+  std::optional<std::pair<std::uintmax_t, fs::file_time_type>> fingerprint;
   std::map<std::string, Prediction> predictions;
   std::map<std::string, std::string> errors; // model name -> error message
 };
@@ -545,8 +571,14 @@ std::vector<ImageResult> run_all(std::vector<ModelProfile>& profiles,
                                  const std::vector<fs::path>& images, int timeout_ms) {
   std::vector<ImageResult> results;
   results.reserve(images.size());
+  // Fingerprint every input up front: models are loaded one at a time, so each
+  // image is re-read per model, and agreement is only meaningful if those reads
+  // saw the same bytes.
   for (const auto& image : images) {
-    results.push_back(ImageResult{image, {}, {}});
+    ImageResult result;
+    result.image_path = image;
+    result.fingerprint = file_fingerprint(image);
+    results.push_back(std::move(result));
   }
 
   for (auto& profile : profiles) {
@@ -554,7 +586,9 @@ std::vector<ImageResult> run_all(std::vector<ModelProfile>& profiles,
     simaai::neat::Model model = build_model(profile);
     for (auto& result : results) {
       try {
+        check_unchanged(result.image_path, result.fingerprint);
         result.predictions[profile.name] = classify(model, profile, result.image_path, timeout_ms);
+        check_unchanged(result.image_path, result.fingerprint);
       } catch (const std::exception& e) {
         std::cerr << "  " << result.image_path << ": " << profile.name << " failed: " << e.what()
                   << "\n";
@@ -729,7 +763,14 @@ std::string html_escape(const std::string& value) {
 }
 
 std::optional<std::string> make_thumbnail(const fs::path& image_path, const fs::path& thumb_dir,
+                                          const std::optional<FileFingerprint>& fingerprint,
                                           int max_side = 160) {
+  // The thumbnail must show the bytes the predictions were made from.
+  try {
+    check_unchanged(image_path, fingerprint);
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
   cv::Mat img = cv::imread(image_path.string(), cv::IMREAD_COLOR);
   if (img.empty())
     return std::nullopt;
@@ -753,7 +794,8 @@ void write_html_report(const fs::path& path, const std::vector<ImageResult>& res
   std::ostringstream rows;
   size_t row_idx = 0;
   for (const auto& result : results) {
-    const auto thumb = make_thumbnail(result.image_path, output_dir / "thumbnails");
+    const auto thumb =
+        make_thumbnail(result.image_path, output_dir / "thumbnails", result.fingerprint);
     const std::string img_cell = thumb.has_value() ? "<img src=\"" + *thumb + "\">" : "";
 
     json top1_obj = json::object();
@@ -1097,16 +1139,48 @@ bool process_is_running(pid_t pid) {
 // between those steps leaves either `output_dir` absent (restore the backup) or
 // the backup orphaned (delete it). Backups belonging to a process that is still
 // running are left alone, as is anything that does not carry the report marker.
-void recover_interrupted_publish(const fs::path& output_dir) {
+// Returns true when a live process owns a backup, meaning a publish is in flight
+// and this run must not touch output_dir.
+bool recover_interrupted_publish(const fs::path& output_dir) {
   const fs::path parent = output_dir.parent_path();
   if (!fs::is_directory(parent))
-    return;
+    return false;
+
+  // A directory bearing our own pid cannot belong to a concurrent invocation: it
+  // is a stale one from a killed run whose pid the OS has since recycled onto us.
+  const auto owned_by_live_process = [](const std::string& name, const std::string& pfx) {
+    const std::string suffix = name.substr(pfx.size());
+    if (suffix.empty() || !std::all_of(suffix.begin(), suffix.end(),
+                                       [](unsigned char c) { return std::isdigit(c) != 0; })) {
+      return false;
+    }
+    const auto owner = static_cast<pid_t>(std::stol(suffix));
+    return owner != ::getpid() && process_is_running(owner);
+  };
+
+  // Staging directories of dead owners leak disk space: their cleanup never ran.
+  // Ours is removed by publish_report itself.
+  const std::string staging_prefix = "." + output_dir.filename().string() + ".staging-";
+  std::vector<fs::path> stale_staging;
+  for (const auto& entry : fs::directory_iterator(parent)) {
+    if (!entry.is_directory())
+      continue;
+    const std::string name = entry.path().filename().string();
+    if (name.rfind(staging_prefix, 0) == 0 && !owned_by_live_process(name, staging_prefix))
+      stale_staging.push_back(entry.path());
+  }
+  for (const auto& staging : stale_staging) {
+    std::error_code ec;
+    fs::remove_all(staging, ec);
+    if (!ec) {
+      std::cerr << "Removed an abandoned report staging directory: " << staging.filename().string()
+                << "\n";
+    }
+  }
 
   const std::string prefix = "." + output_dir.filename().string() + ".previous-";
-  // A backup whose process is still alive belongs to a publish that is mid-swap:
-  // it still needs that directory to roll back, and its own rename will fill
-  // output_dir shortly. Never restore or delete those.
   std::vector<fs::path> abandoned;
+  bool live_owner = false;
   for (const auto& entry : fs::directory_iterator(parent)) {
     if (!entry.is_directory())
       continue;
@@ -1115,21 +1189,16 @@ void recover_interrupted_publish(const fs::path& output_dir) {
       continue;
     if (!fs::exists(entry.path() / kReportMarker))
       continue;
-    // A backup bearing our own pid cannot belong to a concurrent invocation: it
-    // is a stale one from a killed run whose pid the OS has since recycled onto
-    // us. Treating it as live would leave it in place and then fail our own
-    // rename onto that path, blocking every later run.
-    const std::string suffix = name.substr(prefix.size());
-    if (!suffix.empty() && std::all_of(suffix.begin(), suffix.end(),
-                                       [](unsigned char c) { return std::isdigit(c) != 0; })) {
-      const auto owner = static_cast<pid_t>(std::stol(suffix));
-      if (owner != ::getpid() && process_is_running(owner))
-        continue;
+    // A backup whose process is still alive belongs to a publish that is mid-swap:
+    // it still needs that directory to roll back. Never restore or delete those.
+    if (owned_by_live_process(name, prefix)) {
+      live_owner = true;
+      continue;
     }
     abandoned.push_back(entry.path());
   }
   if (abandoned.empty())
-    return;
+    return live_owner;
 
   if (!fs::exists(output_dir)) {
     auto newest = abandoned.begin();
@@ -1157,6 +1226,7 @@ void recover_interrupted_publish(const fs::path& output_dir) {
     if (!ec)
       std::cerr << "Removed a leftover report backup: " << leftover.filename().string() << "\n";
   }
+  return live_owner;
 }
 
 void publish_report(const fs::path& output_dir_arg, const std::vector<ImageResult>& results,
@@ -1171,7 +1241,12 @@ void publish_report(const fs::path& output_dir_arg, const std::vector<ImageResul
   if (output_dir.filename().empty()) // trailing slash
     output_dir = output_dir.parent_path();
   const fs::path parent = output_dir.parent_path();
-  recover_interrupted_publish(output_dir);
+  if (recover_interrupted_publish(output_dir)) {
+    // Another run has output_dir renamed aside and will rename its own staging
+    // into that path. Publishing now would take the path out from under it.
+    throw std::runtime_error("another run is publishing to " + output_dir.string() +
+                             "; retry once it has finished");
+  }
 
   if (fs::exists(output_dir)) {
     if (!fs::is_directory(output_dir)) {

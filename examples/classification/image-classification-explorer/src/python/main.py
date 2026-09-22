@@ -60,8 +60,22 @@ class Prediction:
 @dataclass
 class ImageResult:
     image_path: Path
+    # (size, mtime_ns) captured once, so every model and the thumbnail are known
+    # to describe the same bytes even if the file is replaced mid-run.
+    fingerprint: tuple[int, int] | None = None
     predictions: dict[str, Prediction] = field(default_factory=dict)  # model name -> Prediction
     errors: dict[str, str] = field(default_factory=dict)  # model name -> error message
+
+
+def file_fingerprint(path: Path) -> tuple[int, int]:
+    info = path.stat()
+    return (info.st_size, info.st_mtime_ns)
+
+
+def check_unchanged(path: Path, expected: tuple[int, int] | None) -> None:
+    """Refuse to mix results from different versions of the same input file."""
+    if expected is not None and file_fingerprint(path) != expected:
+        raise ValueError(f"input changed while the run was in progress: {path}")
 
 
 def is_decodable_image(path: Path) -> bool:
@@ -348,7 +362,15 @@ def classify(model, profile: ModelProfile, image_path: Path, timeout_ms: int) ->
 
 
 def run_all(profiles: list[ModelProfile], images: list[Path], timeout_ms: int) -> list[ImageResult]:
-    results = [ImageResult(image_path=p) for p in images]
+    # Fingerprint every input up front: models are loaded one at a time, so each
+    # image is re-read per model, and agreement is only meaningful if those reads
+    # saw the same bytes.
+    results = []
+    for image in images:
+        try:
+            results.append(ImageResult(image_path=image, fingerprint=file_fingerprint(image)))
+        except OSError:
+            results.append(ImageResult(image_path=image))
 
     for profile in profiles:
         print(f"Loading model '{profile.name}': {profile.path}")
@@ -356,7 +378,9 @@ def run_all(profiles: list[ModelProfile], images: list[Path], timeout_ms: int) -
         try:
             for result in results:
                 try:
+                    check_unchanged(result.image_path, result.fingerprint)
                     result.predictions[profile.name] = classify(model, profile, result.image_path, timeout_ms)
+                    check_unchanged(result.image_path, result.fingerprint)
                 except Exception as exc:  # noqa: BLE001 - per-image, per-model failures must not abort the run
                     print(f"  {result.image_path}: {profile.name} failed: {exc}", file=sys.stderr)
                     result.errors[profile.name] = str(exc)
@@ -437,9 +461,15 @@ def write_csv_report(path: Path, results: list[ImageResult], profiles: list[Mode
                     writer.writerow([result.image_path, profile.name, "no_result", "", "", "", "", ""])
 
 
-def make_thumbnail(image_path: Path, thumb_dir: Path, max_side: int = 160) -> str | None:
+def make_thumbnail(image_path: Path, thumb_dir: Path, max_side: int = 160,
+                   fingerprint: tuple[int, int] | None = None) -> str | None:
     import cv2
 
+    # The thumbnail must show the bytes the predictions were made from.
+    try:
+        check_unchanged(image_path, fingerprint)
+    except (OSError, ValueError):
+        return None
     img = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
     if img is None:
         return None
@@ -470,7 +500,8 @@ def write_html_report(path: Path, results: list[ImageResult], profiles: list[Mod
     profile_names = [p.name for p in profiles]
     rows = []
     for idx, result in enumerate(results):
-        thumb = make_thumbnail(result.image_path, output_dir / "thumbnails")
+        thumb = make_thumbnail(result.image_path, output_dir / "thumbnails",
+                               fingerprint=result.fingerprint)
 
         top1_by_model = {
             name: {"class_id": pred.top_k[0][0], "label": pred.top_k[0][1], "prob": pred.top_k[0][2]}
@@ -774,7 +805,7 @@ def _backup_pid(backup: Path) -> int | None:
     return int(suffix) if suffix.isdigit() else None
 
 
-def recover_interrupted_publish(output_dir: Path) -> None:
+def recover_interrupted_publish(output_dir: Path) -> bool:
     """Clean up after a publish that was killed part-way through its swap.
 
     publish_report renames the old report aside to `.<name>.previous-<pid>`,
@@ -782,10 +813,25 @@ def recover_interrupted_publish(output_dir: Path) -> None:
     between those steps leaves either `output_dir` absent (restore the backup)
     or the backup orphaned (delete it). Backups belonging to a process that is
     still running are left alone, as is anything that does not carry the
-    report marker."""
+    report marker.
+
+    Returns True when a live process owns a backup, meaning a publish is in
+    flight and this run must not touch output_dir."""
     parent = output_dir.parent
     if not parent.is_dir():
-        return
+        return False
+
+    # Staging directories of dead owners leak disk space: their `finally` cleanup
+    # never ran. Ours is removed by publish_report itself.
+    for staging in parent.glob(f".{output_dir.name}.staging-*"):
+        if not staging.is_dir():
+            continue
+        pid = _backup_pid(staging)
+        if pid is not None and pid != os.getpid() and process_is_running(pid):
+            continue
+        shutil.rmtree(staging, ignore_errors=True)
+        print(f"Removed an abandoned report staging directory: {staging.name}", file=sys.stderr)
+
     backups = [p for p in parent.glob(f".{output_dir.name}.previous-*")
                if p.is_dir() and (p / REPORT_MARKER).is_file()]
     # A backup whose process is still alive belongs to a publish that is mid-swap:
@@ -795,12 +841,14 @@ def recover_interrupted_publish(output_dir: Path) -> None:
     # a stale one from a killed run whose pid the OS has since recycled onto us.
     # Treating it as live would leave it in place and then fail our own rename
     # onto that path, blocking every later run.
-    abandoned = [p for p in backups
-                 if not ((pid := _backup_pid(p)) is not None
-                         and pid != os.getpid()
-                         and process_is_running(pid))]
+    def owned_by_live_process(backup: Path) -> bool:
+        pid = _backup_pid(backup)
+        return pid is not None and pid != os.getpid() and process_is_running(pid)
+
+    live_owner = any(owned_by_live_process(p) for p in backups)
+    abandoned = [p for p in backups if not owned_by_live_process(p)]
     if not abandoned:
-        return
+        return live_owner
 
     if not output_dir.exists():
         newest = max(abandoned, key=lambda p: p.stat().st_mtime)
@@ -814,6 +862,7 @@ def recover_interrupted_publish(output_dir: Path) -> None:
     for leftover in abandoned:
         shutil.rmtree(leftover, ignore_errors=True)
         print(f"Removed a leftover report backup: {leftover.name}", file=sys.stderr)
+    return live_owner
 
 
 def publish_report(output_dir: Path, results: list[ImageResult], profiles: list[ModelProfile],
@@ -829,7 +878,12 @@ def publish_report(output_dir: Path, results: list[ImageResult], profiles: list[
     to contain a `report.html`) can never be swapped away."""
     output_dir = output_dir.resolve()
     parent = output_dir.parent
-    recover_interrupted_publish(output_dir)
+    if recover_interrupted_publish(output_dir):
+        # Another run has output_dir renamed aside and will rename its own staging
+        # into that path. Publishing now would take the path out from under it.
+        raise OSError(
+            f"another run is publishing to {output_dir}; retry once it has finished"
+        )
     if output_dir.exists():
         if not output_dir.is_dir():
             raise OSError(f"output_dir {output_dir} exists and is not a directory")
