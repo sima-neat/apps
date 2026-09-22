@@ -922,6 +922,36 @@ void write_html_report(const fs::path& path, const std::vector<ImageResult>& res
   close_or_throw(out, path);
 }
 
+// Write the complete report into a staging directory, then swap it into
+// `output_dir` as one unit. A failure part-way leaves any previous report intact
+// instead of a mixture of old and new files.
+void publish_report(const fs::path& output_dir, const std::vector<ImageResult>& results,
+                    const std::vector<ModelProfile>& profiles,
+                    const std::vector<std::string>& skipped, double total_ms) {
+  static const char* const kReportEntries[] = {"report.json", "report.csv", "report.html",
+                                               "thumbnails"};
+  fs::create_directories(output_dir);
+  const fs::path staging = output_dir / ".staging";
+  fs::remove_all(staging);
+  fs::create_directories(staging);
+  try {
+    write_json_report(staging / "report.json", results, profiles, skipped, total_ms);
+    write_csv_report(staging / "report.csv", results, profiles);
+    write_html_report(staging / "report.html", results, profiles, skipped, staging);
+    for (const auto* name : kReportEntries) {
+      fs::remove_all(output_dir / name);
+      if (fs::exists(staging / name))
+        fs::rename(staging / name, output_dir / name);
+    }
+  } catch (...) {
+    std::error_code ec;
+    fs::remove_all(staging, ec);
+    throw;
+  }
+  std::error_code ec;
+  fs::remove_all(staging, ec);
+}
+
 struct Args {
   fs::path config_path;
 };
@@ -991,10 +1021,7 @@ int main(int argc, char** argv) {
                      .count();
     }
 
-    fs::create_directories(output_dir);
-    write_json_report(output_dir / "report.json", results, profiles, skipped, total_ms);
-    write_csv_report(output_dir / "report.csv", results, profiles);
-    write_html_report(output_dir / "report.html", results, profiles, skipped, output_dir);
+    publish_report(output_dir, results, profiles, skipped, total_ms);
 
     const auto images_with_errors = std::count_if(
         results.begin(), results.end(), [](const ImageResult& r) { return !r.errors.empty(); });

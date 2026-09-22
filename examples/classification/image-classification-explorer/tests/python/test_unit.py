@@ -201,6 +201,26 @@ class TestDiscoverImages:
         with pytest.raises(FileNotFoundError):
             main.discover_images(str(tmp_path / "nope"), (".jpg",), "", tmp_path / "fb.jpg")
 
+    def test_unreadable_directory_fails_cleanly(self, tmp_path, monkeypatch, capsys):
+        """Regression: a directory that exists but cannot be enumerated must
+        surface as the concise input error (exit 3), not a traceback."""
+        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
+        input_dir = tmp_path / "locked"
+        input_dir.mkdir()
+
+        def _denied(self):
+            raise PermissionError(13, "Permission denied", str(self))
+
+        monkeypatch.setattr(Path, "iterdir", _denied)
+        config_path = tmp_path / "config.yaml"
+        _write_config(config_path, input_dir, tmp_path / "out")
+        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
+
+        rc = main.main()
+
+        assert rc == 3
+        assert "Permission denied" in capsys.readouterr().err
+
 
 class TestLoadProfiles:
     def test_requires_models_section(self):
@@ -623,6 +643,61 @@ models:
         assert rc == 6
         assert "failed to write thumbnail" in capsys.readouterr().err
         assert not (out_dir / "report.html").exists()
+        assert not (out_dir / ".staging").exists()
+
+    def test_failed_rerun_leaves_previous_report_intact(self, tmp_path, monkeypatch):
+        """Regression: when a rerun into the same output_dir fails part-way, the
+        directory must still hold the complete previous report rather than a
+        mixture of new report.json/report.csv and old report.html/thumbnails."""
+        import cv2
+
+        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
+        img = tmp_path / "a.jpg"
+        _make_image(img)
+        out_dir = tmp_path / "out"
+        config_path = tmp_path / "config.yaml"
+        _write_config(config_path, img, out_dir)
+        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
+
+        assert main.main() == 0
+        before = {name: (out_dir / name).read_bytes()
+                  for name in ("report.json", "report.csv", "report.html")}
+        thumbs_before = sorted(p.name for p in (out_dir / "thumbnails").iterdir())
+        assert thumbs_before
+
+        # Second run: JSON/CSV would succeed, thumbnail encoding fails.
+        _make_image(tmp_path / "b.jpg")
+        _write_config(config_path, tmp_path, out_dir)
+        monkeypatch.setattr(cv2, "imwrite", lambda *args, **kwargs: False)
+
+        assert main.main() == 6
+        for name, content in before.items():
+            assert (out_dir / name).read_bytes() == content, f"{name} was clobbered"
+        assert sorted(p.name for p in (out_dir / "thumbnails").iterdir()) == thumbs_before
+        assert not (out_dir / ".staging").exists()
+
+    def test_successful_rerun_replaces_stale_outputs(self, tmp_path, monkeypatch):
+        """A successful rerun must not leave thumbnails from a previous run behind."""
+        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
+        out_dir = tmp_path / "out"
+        config_path = tmp_path / "config.yaml"
+        first = tmp_path / "first"
+        first.mkdir()
+        _make_image(first / "a.jpg")
+        _make_image(first / "b.jpg")
+        _write_config(config_path, first, out_dir)
+        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
+        assert main.main() == 0
+        assert len(list((out_dir / "thumbnails").iterdir())) == 2
+
+        second = tmp_path / "second"
+        second.mkdir()
+        _make_image(second / "c.jpg")
+        _write_config(config_path, second, out_dir)
+        assert main.main() == 0
+        assert len(list((out_dir / "thumbnails").iterdir())) == 1
+        payload = json.loads((out_dir / "report.json").read_text())
+        assert [Path(i["path"]).name for i in payload["images"]] == ["c.jpg"]
 
 
 class TestHtmlReportContent:

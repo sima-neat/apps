@@ -114,5 +114,46 @@ int main(int argc, char** argv) {
     }
   }
 
+  // Test 6: an input directory that exists but cannot be enumerated must fail
+  // with a concise error, not an uncaught exception. (Skipped when running as
+  // root, where permission bits do not apply.)
+  {
+    namespace fs = std::filesystem;
+    const auto stamp = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    const auto locked_dir =
+        fs::temp_directory_path() / ("image-classification-explorer-locked-" + stamp);
+    const auto config_path =
+        fs::temp_directory_path() / ("image-classification-explorer-locked-" + stamp + ".yaml");
+    fs::create_directories(locked_dir);
+    fs::permissions(locked_dir, fs::perms::none);
+    std::error_code probe;
+    fs::directory_iterator probe_it(locked_dir, probe);
+    if (!probe) {
+      std::cout << "[SKIP] unreadable input directory: permissions not enforced (root?)\n";
+    } else {
+      {
+        std::ofstream config(config_path);
+        config << "io:\n"
+               << "  input: " << locked_dir.string() << "\n"
+               << "models:\n"
+               << "  m:\n"
+               << "    path: /nonexistent/m.tar.gz\n";
+      }
+      auto r = spawn_and_wait(binary, {"--config", config_path.string()}, 20000);
+      fs::remove(config_path);
+      if (r.exit_code == 0 || r.stderr_text.find("Error:") == std::string::npos ||
+          r.stderr_text.find("terminate") != std::string::npos) {
+        std::cerr << "[FAIL] unreadable input directory: expected concise error, got exit "
+                  << r.exit_code << "\nstderr:\n"
+                  << r.stderr_text << "\n";
+        ++failures;
+      } else {
+        std::cout << "[OK] unreadable input directory produced a concise error\n";
+      }
+    }
+    fs::permissions(locked_dir, fs::perms::owner_all);
+    fs::remove_all(locked_dir);
+  }
+
   return failures > 0 ? 1 : 0;
 }

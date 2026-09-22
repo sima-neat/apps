@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import shutil
 import sys
 import time
 import urllib.error
@@ -17,6 +18,7 @@ from typing import Any
 import yaml
 
 DEFAULT_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp")
+REPORT_ENTRIES = ("report.json", "report.csv", "report.html", "thumbnails")
 
 
 @dataclass
@@ -681,6 +683,33 @@ def write_html_report(path: Path, results: list[ImageResult], profiles: list[Mod
     path.write_text(html, encoding="utf-8")
 
 
+def publish_report(output_dir: Path, results: list[ImageResult], profiles: list[ModelProfile],
+                   skipped: list[str], class_summary: dict[str, dict[str, int]],
+                   timing: dict[str, Any]) -> None:
+    """Write the complete report into a staging directory, then swap it into
+    `output_dir` as one unit. A failure part-way leaves any previous report
+    intact instead of a mixture of old and new files."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    staging = output_dir / ".staging"
+    shutil.rmtree(staging, ignore_errors=True)
+    staging.mkdir()
+    try:
+        write_json_report(staging / "report.json", results, profiles, skipped, class_summary, timing)
+        write_csv_report(staging / "report.csv", results, profiles)
+        write_html_report(staging / "report.html", results, profiles, skipped, class_summary, staging)
+        for name in REPORT_ENTRIES:
+            previous = output_dir / name
+            if previous.is_dir():
+                shutil.rmtree(previous)
+            else:
+                previous.unlink(missing_ok=True)
+            fresh = staging / name
+            if fresh.exists():
+                fresh.replace(previous)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+
 def build_class_summary(results: list[ImageResult], profiles: list[ModelProfile]) -> dict[str, dict[str, int]]:
     summary: dict[str, dict[str, int]] = {p.name: {} for p in profiles}
     for result in results:
@@ -730,7 +759,7 @@ def main() -> int:
         images, skipped = discover_images(
             io_cfg.get("input"), extensions, fallback_url, Path("/tmp/goldfish.jpeg")
         )
-    except FileNotFoundError as exc:
+    except OSError as exc:  # missing path, unreadable directory, failed download
         print(str(exc), file=sys.stderr)
         return 3
 
@@ -761,10 +790,7 @@ def main() -> int:
     }
 
     try:
-        output_dir.mkdir(parents=True, exist_ok=True)
-        write_json_report(output_dir / "report.json", results, profiles, skipped, class_summary, timing)
-        write_csv_report(output_dir / "report.csv", results, profiles)
-        write_html_report(output_dir / "report.html", results, profiles, skipped, class_summary, output_dir)
+        publish_report(output_dir, results, profiles, skipped, class_summary, timing)
     except OSError as exc:
         print(f"Error: failed to write report to {output_dir}: {exc}", file=sys.stderr)
         return 6
