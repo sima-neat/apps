@@ -450,7 +450,8 @@ int main(int argc, char** argv) {
   // objects whose text differs from the raw spelling C++ reads.
   {
     namespace fs = std::filesystem;
-    const char* const kNonStringKeys[] = {"true", "null", "01", "1_0", "0x1", "-1", "+2"};
+    const char* const kNonStringKeys[] = {"true", "null", "01", "1_0",
+                                          "0x1",  "-1",   "+2", "2026-09-22"};
     for (const auto* key : kNonStringKeys) {
       const auto config_path =
           fs::temp_directory_path() /
@@ -584,6 +585,10 @@ int main(int argc, char** argv) {
 
   // Test 18: with output_dir absent, a backup owned by a live process must not
   // be restored - it belongs to a concurrent publisher that is mid-swap.
+  //
+  // (The "backup bearing our own recycled pid" case cannot be set up here: the
+  // child binary's pid is not known before it runs. Python covers it directly,
+  // since main() runs in-process there, and the C++ predicate is the same.)
   {
     namespace fs = std::filesystem;
     const auto stamp = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());

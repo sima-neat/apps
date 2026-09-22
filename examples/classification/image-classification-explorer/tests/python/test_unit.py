@@ -1,5 +1,6 @@
 """Focused unit tests for image-classification-explorer (Python)."""
 
+import datetime
 import importlib.util
 import json
 import os
@@ -264,7 +265,9 @@ class TestLoadProfiles:
         with pytest.raises(ValueError, match="may only contain"):
             main.load_profiles(raw)
 
-    @pytest.mark.parametrize("name", [1, 0o1, True, None, 1.5, -1, +2])
+    @pytest.mark.parametrize(
+        "name", [1, 0o1, True, None, 1.5, -1, +2, datetime.date(2026, 9, 22)]
+    )
     def test_rejects_non_string_yaml_keys(self, name):
         """Regression: unquoted scalars arrive from PyYAML as Python objects
         whose text differs from the YAML spelling (`01` -> 1, `true` -> True),
@@ -884,6 +887,26 @@ models:
         finally:
             helper.kill()
             helper.wait()
+
+    def test_removes_backup_bearing_our_own_recycled_pid(self, tmp_path, monkeypatch):
+        """Regression: a stale backup whose pid the OS later recycled onto this
+        process was mistaken for a live publisher's, so it was never cleaned and
+        the next publish failed renaming output_dir onto that existing path."""
+        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
+        img = tmp_path / "a.jpg"
+        _make_image(img)
+        out_dir = tmp_path / "out"
+        config_path = tmp_path / "config.yaml"
+        _write_config(config_path, img, out_dir)
+        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
+        assert main.main() == 0
+
+        recycled = tmp_path / f".out.previous-{os.getpid()}"
+        shutil.copytree(out_dir, recycled)
+
+        assert main.main() == 0, "a rerun must not be blocked by a recycled-pid backup"
+        assert not recycled.exists()
+        assert (out_dir / "report.json").is_file()
 
     def test_leaves_unmarked_directories_alone(self, tmp_path, monkeypatch):
         """Only directories carrying the report marker are ever deleted."""

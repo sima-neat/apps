@@ -83,6 +83,34 @@ std::size_t find_key_colon(const std::string& line) {
   return std::string::npos;
 }
 
+// True when a key is an unquoted YAML date (YYYY-MM-DD), which PyYAML resolves
+// to a datetime.date and Python therefore rejects as a non-string key. Full
+// timestamps carry ':' or spaces and are already refused elsewhere.
+bool looks_like_yaml_date(const std::string& key) {
+  size_t i = 0;
+  const auto take_digits = [&](size_t min_n, size_t max_n) {
+    size_t n = 0;
+    while (i < key.size() && std::isdigit(static_cast<unsigned char>(key[i])) && n < max_n) {
+      ++i;
+      ++n;
+    }
+    return n >= min_n;
+  };
+  if (!take_digits(4, 4))
+    return false;
+  if (i >= key.size() || key[i] != '-')
+    return false;
+  ++i;
+  if (!take_digits(1, 2))
+    return false;
+  if (i >= key.size() || key[i] != '-')
+    return false;
+  ++i;
+  if (!take_digits(1, 2))
+    return false;
+  return i == key.size();
+}
+
 // True when an *unquoted* YAML scalar would be read as something other than a
 // string (bool, null, or an integer in any spelling). PyYAML turns those into
 // Python objects whose text differs from the raw spelling (`01` -> 1,
@@ -94,6 +122,8 @@ bool looks_like_yaml_non_string(const std::string& key) {
   const std::string lowered = lower_copy(key);
   static const std::set<std::string> kWords = {"true", "false", "yes", "no", "on", "off", "null"};
   if (kWords.count(lowered) != 0)
+    return true;
+  if (looks_like_yaml_date(key))
     return true;
   // Integer spellings: an optional sign, then decimal digits (with YAML 1.1
   // underscores or leading zeros) or a 0x/0o/0b radix prefix.
@@ -1085,12 +1115,16 @@ void recover_interrupted_publish(const fs::path& output_dir) {
       continue;
     if (!fs::exists(entry.path() / kReportMarker))
       continue;
+    // A backup bearing our own pid cannot belong to a concurrent invocation: it
+    // is a stale one from a killed run whose pid the OS has since recycled onto
+    // us. Treating it as live would leave it in place and then fail our own
+    // rename onto that path, blocking every later run.
     const std::string suffix = name.substr(prefix.size());
-    if (!suffix.empty() &&
-        std::all_of(suffix.begin(), suffix.end(),
-                    [](unsigned char c) { return std::isdigit(c) != 0; }) &&
-        process_is_running(static_cast<pid_t>(std::stol(suffix)))) {
-      continue;
+    if (!suffix.empty() && std::all_of(suffix.begin(), suffix.end(),
+                                       [](unsigned char c) { return std::isdigit(c) != 0; })) {
+      const auto owner = static_cast<pid_t>(std::stol(suffix));
+      if (owner != ::getpid() && process_is_running(owner))
+        continue;
     }
     abandoned.push_back(entry.path());
   }

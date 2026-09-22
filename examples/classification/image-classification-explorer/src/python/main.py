@@ -791,8 +791,14 @@ def recover_interrupted_publish(output_dir: Path) -> None:
     # A backup whose process is still alive belongs to a publish that is mid-swap:
     # it still needs that directory to roll back, and its own rename will fill
     # output_dir shortly. Never restore or delete those.
+    # A backup bearing our own pid cannot belong to a concurrent invocation: it is
+    # a stale one from a killed run whose pid the OS has since recycled onto us.
+    # Treating it as live would leave it in place and then fail our own rename
+    # onto that path, blocking every later run.
     abandoned = [p for p in backups
-                 if not ((pid := _backup_pid(p)) is not None and process_is_running(pid))]
+                 if not ((pid := _backup_pid(p)) is not None
+                         and pid != os.getpid()
+                         and process_is_running(pid))]
     if not abandoned:
         return
 
