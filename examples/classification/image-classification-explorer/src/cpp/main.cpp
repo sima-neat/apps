@@ -75,8 +75,9 @@ std::vector<std::string> split_csv(const std::string& value) {
   return out;
 }
 
-// ScalarConfig flattens nested maps into dotted keys (e.g. "models.resnet_50.path").
-// Recover the set of profile names declared under `models.` in sorted order by
+// ScalarConfig flattens nested maps into dotted keys (e.g. "models.resnet_50.path") and
+// stores them in an unordered/sorted map, so it cannot tell us the order profiles were
+// declared in. Recover the *set* of profile names (order not meaningful here) by
 // scanning the raw scalar map.
 std::vector<std::string> profile_names(const sima_examples::ScalarConfig& raw) {
   std::vector<std::string> names;
@@ -96,9 +97,66 @@ std::vector<std::string> profile_names(const sima_examples::ScalarConfig& raw) {
   return names;
 }
 
-std::vector<ModelProfile> load_profiles(const sima_examples::ScalarConfig& raw) {
+// Recover the declaration order of top-level keys under `models:` by scanning the
+// config file's own text, so C++ iterates profiles in the same order Python does
+// (Python's dict/YAML loader preserves declaration order; ScalarConfig does not).
+// Falls back to an empty vector (caller falls back to alphabetical) if the file
+// can't be read or doesn't look like the expected shape.
+std::vector<std::string> ordered_model_keys(const fs::path& config_path) {
+  std::ifstream in(config_path);
+  if (!in.is_open())
+    return {};
+
+  std::vector<std::string> keys;
+  std::string raw_line;
+  int models_indent = -1;
+  int child_indent = -1;
+  bool in_models = false;
+  while (std::getline(in, raw_line)) {
+    const std::string trimmed = sima_examples::trim_copy(raw_line);
+    if (trimmed.empty() || trimmed[0] == '#')
+      continue;
+    int indent = 0;
+    while (indent < static_cast<int>(raw_line.size()) &&
+           (raw_line[static_cast<size_t>(indent)] == ' ' ||
+            raw_line[static_cast<size_t>(indent)] == '\t'))
+      ++indent;
+
+    if (!in_models) {
+      if (trimmed == "models:") {
+        models_indent = indent;
+        in_models = true;
+      }
+      continue;
+    }
+
+    if (indent <= models_indent)
+      break; // left the `models:` block
+    if (child_indent == -1)
+      child_indent = indent;
+    if (indent == child_indent) {
+      const auto colon = trimmed.find(':');
+      if (colon != std::string::npos)
+        keys.push_back(sima_examples::trim_copy(trimmed.substr(0, colon)));
+    }
+  }
+  return keys;
+}
+
+std::vector<ModelProfile> load_profiles(const sima_examples::ScalarConfig& raw,
+                                        const fs::path& config_path) {
+  const auto known_names = profile_names(raw);
+  auto ordered = ordered_model_keys(config_path);
+  // Validate the file scan found exactly the same set of profiles ScalarConfig did;
+  // otherwise fall back to alphabetical rather than silently dropping/misordering.
+  std::set<std::string> ordered_set(ordered.begin(), ordered.end());
+  std::set<std::string> known_set(known_names.begin(), known_names.end());
+  if (ordered.size() != ordered_set.size() || ordered_set != known_set) {
+    ordered = known_names;
+  }
+
   std::vector<ModelProfile> profiles;
-  for (const auto& name : profile_names(raw)) {
+  for (const auto& name : ordered) {
     ModelProfile profile;
     profile.name = name;
     profile.path = raw.string_or("models." + name + ".path", "");
@@ -817,7 +875,7 @@ int main(int argc, char** argv) {
     const fs::path output_dir = raw.string_or("io.output_dir", "report");
     const int timeout_ms = raw.int_or("runtime.timeout_ms", 20000);
 
-    auto profiles = load_profiles(raw);
+    auto profiles = load_profiles(raw, args.config_path);
     for (auto& profile : profiles) {
       profile.labels = load_label_map(profile.label_map, profile.num_classes);
     }

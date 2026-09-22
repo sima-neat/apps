@@ -223,7 +223,9 @@ def classify(model, profile: ModelProfile, image_path: Path, timeout_ms: int) ->
     scores = scores[: profile.num_classes]
 
     probs = softmax(scores)
-    top_indices = np.argsort(scores)[::-1][: profile.top_k]
+    # Tie-break by ascending class id so equal scores resolve deterministically
+    # and identically to the C++ implementation's topk_with_softmax.
+    top_indices = np.lexsort((np.arange(scores.size), -scores))[: profile.top_k]
     top_k = [
         (int(i), profile.labels[int(i)], float(probs[int(i)]))
         for i in top_indices
