@@ -1114,6 +1114,20 @@ class TestArgParsing:
         assert "Invalid configuration" in r.stderr
         assert "Traceback" not in r.stderr
 
+    @pytest.mark.parametrize("timeout", [0, -1])
+    def test_rejects_nonpositive_timeout(self, tmp_path, timeout):
+        """A zero or negative per-image timeout is not a usable bound."""
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            f"runtime:\n  timeout_ms: {timeout}\nmodels:\n  m:\n    path: m.tar.gz\n"
+        )
+        r = subprocess.run(
+            [sys.executable, str(MAIN_PY), "--config", str(config_path)],
+            capture_output=True, text=True, timeout=20,
+        )
+        assert r.returncode == 2
+        assert "runtime.timeout_ms must be positive" in r.stderr
+
     def test_non_mapping_config(self, tmp_path):
         config_path = tmp_path / "config.yaml"
         config_path.write_text("- just\n- a\n- list\n")

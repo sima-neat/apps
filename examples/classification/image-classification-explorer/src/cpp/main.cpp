@@ -1252,6 +1252,10 @@ int main(int argc, char** argv) {
       extensions.assign(kDefaultExtensions.begin(), kDefaultExtensions.end());
     const fs::path output_dir = raw.string_or("io.output_dir", "report");
     const int timeout_ms = raw.int_or("runtime.timeout_ms", 20000);
+    if (timeout_ms <= 0) {
+      throw std::runtime_error("runtime.timeout_ms must be positive, got " +
+                               std::to_string(timeout_ms));
+    }
 
     auto profiles = load_profiles(raw, args.config_path);
     for (auto& profile : profiles) {

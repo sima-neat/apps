@@ -621,5 +621,36 @@ int main(int argc, char** argv) {
     fs::remove_all(work);
   }
 
+  // Test 19: a zero or negative per-image timeout is not a usable bound.
+  {
+    namespace fs = std::filesystem;
+    for (const char* timeout : {"0", "-1"}) {
+      const auto config_path =
+          fs::temp_directory_path() /
+          ("image-classification-explorer-timeout-" +
+           std::string(timeout == std::string("0") ? "zero" : "negative") + "-" +
+           std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".yaml");
+      {
+        std::ofstream config(config_path);
+        config << "runtime:\n"
+               << "  timeout_ms: " << timeout << "\n"
+               << "models:\n"
+               << "  m:\n"
+               << "    path: /nonexistent/m.tar.gz\n";
+      }
+      auto r = spawn_and_wait(binary, {"--config", config_path.string()}, 20000);
+      fs::remove(config_path);
+      if (r.exit_code == 0 ||
+          r.stderr_text.find("runtime.timeout_ms must be positive") == std::string::npos) {
+        std::cerr << "[FAIL] timeout_ms " << timeout << ": expected rejection, got exit "
+                  << r.exit_code << "\nstderr:\n"
+                  << r.stderr_text << "\n";
+        ++failures;
+      }
+    }
+    if (failures == 0)
+      std::cout << "[OK] non-positive runtime.timeout_ms was rejected\n";
+  }
+
   return failures > 0 ? 1 : 0;
 }

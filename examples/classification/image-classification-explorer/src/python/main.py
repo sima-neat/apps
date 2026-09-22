@@ -912,6 +912,8 @@ def main() -> int:
         if not isinstance(runtime, dict):
             raise ValueError("`runtime` must be a mapping")
         timeout_ms = config_int(runtime.get("timeout_ms"), "runtime.timeout_ms", 20000)
+        if timeout_ms <= 0:
+            raise ValueError(f"runtime.timeout_ms must be positive, got {timeout_ms}")
         extensions = tuple(
             e.strip().lower() for e in str(io_cfg.get("extensions", ",".join(DEFAULT_EXTENSIONS))).split(",")
             if e.strip()
