@@ -9,6 +9,8 @@ import sys
 
 import pytest
 
+from tests.utils.output_assertions import assert_saved_frames_are_usable
+
 from tests.utils.metadata_json_listener import MetadataJsonListener
 
 
@@ -108,12 +110,4 @@ class TestE2E:
             f"tracking metadata was not received on all streams: {metadata.error}"
         )
 
-        files = [
-            path
-            for path in tmp_output_dir.rglob("*")
-            if path.is_file() and path.name != "config.yaml"
-        ]
-        assert len(files) >= total_saved_frames, (
-            f"Expected at least {total_saved_frames} sampled output files, got {len(files)}"
-        )
-        assert all(path.stat().st_size > 0 for path in files)
+        assert_saved_frames_are_usable(tmp_output_dir, total_saved_frames)

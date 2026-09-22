@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.utils.output_assertions import assert_saved_frames_are_usable
+
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
 
@@ -48,10 +50,4 @@ class TestE2E:
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
 
-        output_files = [
-            path
-            for path in tmp_output_dir.iterdir()
-            if path.is_file() and path.name != "config.yaml"
-        ]
-        assert output_files, "Expected output files but output directory is empty"
-        assert all(path.stat().st_size > 0 for path in output_files)
+        assert_saved_frames_are_usable(tmp_output_dir, 1)
