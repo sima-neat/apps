@@ -155,5 +155,93 @@ int main(int argc, char** argv) {
     fs::remove_all(locked_dir);
   }
 
+  // Test 7: a profile name containing '.' is rejected with a clear message instead
+  // of being truncated to a nonexistent profile.
+  {
+    namespace fs = std::filesystem;
+    const auto config_path =
+        fs::temp_directory_path() /
+        ("image-classification-explorer-dotted-name-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".yaml");
+    {
+      std::ofstream config(config_path);
+      config << "models:\n"
+             << "  resnet.v2:\n"
+             << "    path: /nonexistent/resnet_v2.tar.gz\n";
+    }
+    auto r = spawn_and_wait(binary, {"--config", config_path.string()}, 20000);
+    fs::remove(config_path);
+    if (r.exit_code == 0 ||
+        r.stderr_text.find("models.resnet.v2: profile names must not contain '.'") ==
+            std::string::npos) {
+      std::cerr << "[FAIL] dotted profile name: expected rejection, got exit " << r.exit_code
+                << "\nstderr:\n"
+                << r.stderr_text << "\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] dotted model profile name was rejected\n";
+    }
+  }
+
+  // Test 8: output_dir is replaced as a whole, so a directory holding anything
+  // other than a previous report is refused; a clean one receives the report.
+  // Uses an unsupported-extension input so no model is loaded.
+  {
+    namespace fs = std::filesystem;
+    const auto stamp = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    const auto work = fs::temp_directory_path() / ("image-classification-explorer-out-" + stamp);
+    fs::create_directories(work / "shared");
+    {
+      std::ofstream(work / "shared" / "notes.txt") << "customer data\n";
+    }
+    {
+      std::ofstream(work / "input.txt") << "not an image\n";
+    }
+    auto write_config = [&](const fs::path& output_dir) {
+      std::ofstream config(work / "config.yaml");
+      config << "io:\n"
+             << "  input: " << (work / "input.txt").string() << "\n"
+             << "  output_dir: " << output_dir.string() << "\n"
+             << "models:\n"
+             << "  m:\n"
+             << "    path: /nonexistent/m.tar.gz\n";
+    };
+
+    write_config(work / "shared");
+    auto refused = spawn_and_wait(binary, {"--config", (work / "config.yaml").string()}, 20000);
+    if (refused.exit_code == 0 ||
+        refused.stderr_text.find("not part of a previous report") == std::string::npos ||
+        !fs::exists(work / "shared" / "notes.txt")) {
+      std::cerr << "[FAIL] shared output_dir: expected refusal, got exit " << refused.exit_code
+                << "\nstderr:\n"
+                << refused.stderr_text << "\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] output_dir with foreign entries was refused\n";
+    }
+
+    write_config(work / "report");
+    auto ok = spawn_and_wait(binary, {"--config", (work / "config.yaml").string()}, 20000);
+    auto second = spawn_and_wait(binary, {"--config", (work / "config.yaml").string()}, 20000);
+    bool leftovers = false;
+    for (const auto& entry : fs::directory_iterator(work)) {
+      if (entry.path().filename().string().rfind(".report.", 0) == 0)
+        leftovers = true;
+    }
+    if (ok.exit_code != 0 || second.exit_code != 0 ||
+        !fs::exists(work / "report" / "report.json") ||
+        !fs::exists(work / "report" / "report.csv") ||
+        !fs::exists(work / "report" / "report.html") || leftovers) {
+      std::cerr << "[FAIL] dedicated output_dir: expected report files after two runs, exits "
+                << ok.exit_code << "/" << second.exit_code << ", leftovers=" << leftovers
+                << "\nstderr:\n"
+                << ok.stderr_text << second.stderr_text << "\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] dedicated output_dir was written and replaced without leftovers\n";
+    }
+    fs::remove_all(work);
+  }
+
   return failures > 0 ? 1 : 0;
 }

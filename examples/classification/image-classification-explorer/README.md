@@ -72,7 +72,8 @@ Open `${APP_DIR}/src/common/config.yaml`:
 - `models.<name>.path` — path to each downloaded model package.
 - `io.input` — a single image path or a directory of images. Leave empty to classify the bundled
   sample goldfish image (downloads it on first run; needs network access).
-- `io.output_dir` — where `report.html`, `report.json`, and `report.csv` are written.
+- `io.output_dir` — dedicated directory where `report.html`, `report.json`, `report.csv`, and
+  `thumbnails/` are written; each run replaces its previous contents.
 
 Remove a `models` entry to run with fewer models, or add one to compare an additional model. Each
 profile is fully self-contained:
@@ -133,8 +134,13 @@ Example report (4 models against a directory of images):
 
 ![Example image classification explorer report](../../../portal/assets/examples/classification/image-classification-explorer/report-example.png)
 
-Files that could not be read or have an unsupported extension are listed separately and do not
-stop the run.
+Files with an unsupported extension are listed under **Skipped files** and are not classified.
+Files with a supported extension that cannot be decoded stay in the main table with a per-model
+`error` cell (and an `errors` entry in `report.json`); neither case stops the run.
+
+Each run replaces the previous contents of `io.output_dir` as a unit, so the directory is either
+the complete previous report or the complete new one. Use a dedicated directory: a run refuses
+to write into a directory that contains anything other than a previous report.
 
 ## Troubleshooting
 

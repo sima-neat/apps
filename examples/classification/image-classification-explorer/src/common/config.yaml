@@ -9,7 +9,7 @@ io:                           # Input image settings.
   input: null                 # Single image or a directory of images. null uses the fallback sample image.
   fallback_image_url: https://raw.githubusercontent.com/EliSchwartz/imagenet-sample-images/master/n01443537_goldfish.JPEG
   extensions: .jpg,.jpeg,.png,.bmp    # Recognized image extensions, comma separated.
-  output_dir: report          # Directory for report.html, report.json, and report.csv.
+  output_dir: report          # Dedicated directory for report.html/json/csv and thumbnails; replaced on each run.
 
 runtime:                      # Runtime settings.
   timeout_ms: 20000           # Per-image, per-model inference timeout.

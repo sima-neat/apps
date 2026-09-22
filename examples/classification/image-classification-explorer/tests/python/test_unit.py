@@ -244,6 +244,11 @@ class TestLoadProfiles:
         assert profiles[1].top_k == 5  # default
         assert profiles[0].output == "softmax"  # default
 
+    def test_rejects_dotted_profile_name(self):
+        raw = {"models": {"resnet.v2": {"path": "m.tar.gz"}}}
+        with pytest.raises(ValueError, match="must not contain '.'"):
+            main.load_profiles(raw)
+
     def test_rejects_unsupported_output_interpretation(self):
         raw = {"models": {"a": {"path": "m.tar.gz", "output": "raw_logits"}}}
         with pytest.raises(ValueError, match="output"):
@@ -643,7 +648,7 @@ models:
         assert rc == 6
         assert "failed to write thumbnail" in capsys.readouterr().err
         assert not (out_dir / "report.html").exists()
-        assert not (out_dir / ".staging").exists()
+        assert not list(tmp_path.glob(".out.*")), "staging/previous directories left behind"
 
     def test_failed_rerun_leaves_previous_report_intact(self, tmp_path, monkeypatch):
         """Regression: when a rerun into the same output_dir fails part-way, the
@@ -674,7 +679,53 @@ models:
         for name, content in before.items():
             assert (out_dir / name).read_bytes() == content, f"{name} was clobbered"
         assert sorted(p.name for p in (out_dir / "thumbnails").iterdir()) == thumbs_before
-        assert not (out_dir / ".staging").exists()
+        assert not list(tmp_path.glob(".out.*")), "staging/previous directories left behind"
+
+    def test_failed_swap_rolls_back_previous_report(self, tmp_path, monkeypatch):
+        """If the final rename of the staged report fails, the previous report
+        must be restored at output_dir and nothing left behind."""
+        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
+        img = tmp_path / "a.jpg"
+        _make_image(img)
+        out_dir = tmp_path / "out"
+        config_path = tmp_path / "config.yaml"
+        _write_config(config_path, img, out_dir)
+        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
+        assert main.main() == 0
+        before = (out_dir / "report.json").read_bytes()
+
+        real_rename = Path.rename
+
+        def flaky_rename(self, target):
+            if ".staging-" in self.name:
+                raise OSError(5, "simulated rename failure")
+            return real_rename(self, target)
+
+        monkeypatch.setattr(Path, "rename", flaky_rename)
+        assert main.main() == 6
+        assert (out_dir / "report.json").read_bytes() == before
+        assert (out_dir / "report.html").is_file()
+        assert not list(tmp_path.glob(".out.*")), "staging/previous directories left behind"
+
+    def test_output_dir_with_foreign_entries_is_refused(self, tmp_path, monkeypatch, capsys):
+        """output_dir is replaced as a whole, so a directory holding anything
+        other than a previous report must be refused rather than swapped away."""
+        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
+        img = tmp_path / "a.jpg"
+        _make_image(img)
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        (out_dir / "notes.txt").write_text("customer data")
+        config_path = tmp_path / "config.yaml"
+        _write_config(config_path, img, out_dir)
+        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
+
+        rc = main.main()
+
+        assert rc == 6
+        assert "not part of a previous report" in capsys.readouterr().err
+        assert (out_dir / "notes.txt").read_text() == "customer data"
+        assert not (out_dir / "report.json").exists()
 
     def test_successful_rerun_replaces_stale_outputs(self, tmp_path, monkeypatch):
         """A successful rerun must not leave thumbnails from a previous run behind."""

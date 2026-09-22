@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import shutil
 import sys
 import time
@@ -107,6 +108,8 @@ def load_profiles(raw: dict[str, Any]) -> list[ModelProfile]:
             label_map=cfg.get("label_map"),
             top_k=int(cfg.get("top_k", 5)),
         )
+        if "." in name:
+            raise ValueError(f"models.{name}: profile names must not contain '.'")
         if not profile.path:
             raise ValueError(f"models.{name}.path is required")
         if profile.output != "softmax":
@@ -686,26 +689,47 @@ def write_html_report(path: Path, results: list[ImageResult], profiles: list[Mod
 def publish_report(output_dir: Path, results: list[ImageResult], profiles: list[ModelProfile],
                    skipped: list[str], class_summary: dict[str, dict[str, int]],
                    timing: dict[str, Any]) -> None:
-    """Write the complete report into a staging directory, then swap it into
-    `output_dir` as one unit. A failure part-way leaves any previous report
-    intact instead of a mixture of old and new files."""
-    output_dir.mkdir(parents=True, exist_ok=True)
-    staging = output_dir / ".staging"
+    """Write the complete report into a sibling staging directory, then swap the
+    whole `output_dir` for it. Readers never see a mixture of old and new files,
+    and a failure at any point leaves the previous report in place.
+
+    `output_dir` is owned by this application: it is refused if it holds
+    anything other than a previous report, so a shared directory (e.g. `.`)
+    can never be swapped away."""
+    output_dir = output_dir.resolve()
+    parent = output_dir.parent
+    if output_dir.exists():
+        if not output_dir.is_dir():
+            raise OSError(f"output_dir {output_dir} exists and is not a directory")
+        foreign = sorted(p.name for p in output_dir.iterdir() if p.name not in REPORT_ENTRIES)
+        if foreign:
+            raise OSError(
+                f"output_dir {output_dir} contains entries that are not part of a previous "
+                f"report ({', '.join(foreign[:3])}); use a dedicated directory"
+            )
+    parent.mkdir(parents=True, exist_ok=True)
+
+    tag = str(os.getpid())
+    staging = parent / f".{output_dir.name}.staging-{tag}"
+    previous = parent / f".{output_dir.name}.previous-{tag}"
     shutil.rmtree(staging, ignore_errors=True)
     staging.mkdir()
     try:
         write_json_report(staging / "report.json", results, profiles, skipped, class_summary, timing)
         write_csv_report(staging / "report.csv", results, profiles)
         write_html_report(staging / "report.html", results, profiles, skipped, class_summary, staging)
-        for name in REPORT_ENTRIES:
-            previous = output_dir / name
-            if previous.is_dir():
-                shutil.rmtree(previous)
-            else:
-                previous.unlink(missing_ok=True)
-            fresh = staging / name
-            if fresh.exists():
-                fresh.replace(previous)
+
+        had_previous = output_dir.exists()
+        if had_previous:
+            output_dir.rename(previous)
+        try:
+            staging.rename(output_dir)
+        except OSError:
+            if had_previous:
+                previous.rename(output_dir)  # roll back to the previous report
+            raise
+        if had_previous:
+            shutil.rmtree(previous, ignore_errors=True)
     finally:
         shutil.rmtree(staging, ignore_errors=True)
 

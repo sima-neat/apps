@@ -27,6 +27,8 @@
 #include <system_error>
 #include <vector>
 
+#include <unistd.h>
+
 namespace fs = std::filesystem;
 using json = nlohmann::json;
 
@@ -79,7 +81,9 @@ std::vector<std::string> split_csv(const std::string& value) {
 // ScalarConfig flattens nested maps into dotted keys (e.g. "models.resnet_50.path") and
 // stores them in an unordered/sorted map, so it cannot tell us the order profiles were
 // declared in. Recover the *set* of profile names (order not meaningful here) by
-// scanning the raw scalar map.
+// scanning the raw scalar map. The profile name is everything before the final
+// ".<field>", so a declared name containing '.' surfaces intact and can be rejected
+// with a clear message instead of being silently truncated.
 std::vector<std::string> profile_names(const sima_examples::ScalarConfig& raw) {
   std::vector<std::string> names;
   std::set<std::string> seen;
@@ -89,7 +93,7 @@ std::vector<std::string> profile_names(const sima_examples::ScalarConfig& raw) {
     if (key.rfind(prefix, 0) != 0)
       continue;
     const std::string rest = key.substr(prefix.size());
-    const auto dot = rest.find('.');
+    const auto dot = rest.rfind('.');
     const std::string name = dot == std::string::npos ? rest : rest.substr(0, dot);
     if (seen.insert(name).second)
       names.push_back(name);
@@ -181,6 +185,9 @@ std::vector<ModelProfile> load_profiles(const sima_examples::ScalarConfig& raw,
     profile.num_classes = raw.int_or("models." + name + ".num_classes", 1000);
     profile.label_map = raw.string_or("models." + name + ".label_map", "");
     profile.top_k = raw.int_or("models." + name + ".top_k", 5);
+    if (name.find('.') != std::string::npos) {
+      throw std::runtime_error("models." + name + ": profile names must not contain '.'");
+    }
     if (profile.path.empty()) {
       throw std::runtime_error("models." + name + ".path is required");
     }
@@ -922,34 +929,74 @@ void write_html_report(const fs::path& path, const std::vector<ImageResult>& res
   close_or_throw(out, path);
 }
 
-// Write the complete report into a staging directory, then swap it into
-// `output_dir` as one unit. A failure part-way leaves any previous report intact
-// instead of a mixture of old and new files.
-void publish_report(const fs::path& output_dir, const std::vector<ImageResult>& results,
+// Write the complete report into a sibling staging directory, then swap the whole
+// `output_dir` for it. Readers never see a mixture of old and new files, and a
+// failure at any point leaves the previous report in place.
+//
+// `output_dir` is owned by this application: it is refused if it holds anything
+// other than a previous report, so a shared directory (e.g. `.`) can never be
+// swapped away.
+void publish_report(const fs::path& output_dir_arg, const std::vector<ImageResult>& results,
                     const std::vector<ModelProfile>& profiles,
                     const std::vector<std::string>& skipped, double total_ms) {
-  static const char* const kReportEntries[] = {"report.json", "report.csv", "report.html",
-                                               "thumbnails"};
-  fs::create_directories(output_dir);
-  const fs::path staging = output_dir / ".staging";
-  fs::remove_all(staging);
+  static const std::set<std::string> kReportEntries = {"report.json", "report.csv", "report.html",
+                                                       "thumbnails"};
+  fs::path output_dir = fs::absolute(output_dir_arg).lexically_normal();
+  if (output_dir.filename().empty()) // trailing slash
+    output_dir = output_dir.parent_path();
+  const fs::path parent = output_dir.parent_path();
+
+  if (fs::exists(output_dir)) {
+    if (!fs::is_directory(output_dir)) {
+      throw std::runtime_error("output_dir " + output_dir.string() +
+                               " exists and is not a directory");
+    }
+    std::vector<std::string> foreign;
+    for (const auto& entry : fs::directory_iterator(output_dir)) {
+      const std::string name = entry.path().filename().string();
+      if (kReportEntries.count(name) == 0)
+        foreign.push_back(name);
+    }
+    if (!foreign.empty()) {
+      std::sort(foreign.begin(), foreign.end());
+      std::string listed;
+      for (size_t i = 0; i < foreign.size() && i < 3; ++i)
+        listed += (i ? ", " : "") + foreign[i];
+      throw std::runtime_error("output_dir " + output_dir.string() +
+                               " contains entries that are not part of a previous report (" +
+                               listed + "); use a dedicated directory");
+    }
+  }
+  fs::create_directories(parent);
+
+  const std::string tag = std::to_string(::getpid());
+  const fs::path staging = parent / ("." + output_dir.filename().string() + ".staging-" + tag);
+  const fs::path previous = parent / ("." + output_dir.filename().string() + ".previous-" + tag);
+  std::error_code ignored;
+  fs::remove_all(staging, ignored);
   fs::create_directories(staging);
   try {
     write_json_report(staging / "report.json", results, profiles, skipped, total_ms);
     write_csv_report(staging / "report.csv", results, profiles);
     write_html_report(staging / "report.html", results, profiles, skipped, staging);
-    for (const auto* name : kReportEntries) {
-      fs::remove_all(output_dir / name);
-      if (fs::exists(staging / name))
-        fs::rename(staging / name, output_dir / name);
+
+    const bool had_previous = fs::exists(output_dir);
+    if (had_previous)
+      fs::rename(output_dir, previous);
+    try {
+      fs::rename(staging, output_dir);
+    } catch (...) {
+      if (had_previous)
+        fs::rename(previous, output_dir); // roll back to the previous report
+      throw;
     }
+    if (had_previous)
+      fs::remove_all(previous, ignored);
   } catch (...) {
-    std::error_code ec;
-    fs::remove_all(staging, ec);
+    fs::remove_all(staging, ignored);
     throw;
   }
-  std::error_code ec;
-  fs::remove_all(staging, ec);
+  fs::remove_all(staging, ignored);
 }
 
 struct Args {
