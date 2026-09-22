@@ -65,7 +65,9 @@ python3 ${APP_DIR}/src/python/main.py \
   --config ${APP_DIR}/src/common/config.yaml
 ```
 
-The output directory contains sampled NV12 frames and `summary.json`. Convert a frame for visual inspection with:
+The output directory contains sampled NV12 frames and `summary.json`. A Modalix
+DevKit does not ship `ffmpeg`, so copy a frame to a workstation with FFmpeg
+installed and convert it there for visual inspection:
 
 ```bash
 FRAME="$(find sandbox/mipi-camera-capture -name 'frame_00_*.nv12' -print -quit)"

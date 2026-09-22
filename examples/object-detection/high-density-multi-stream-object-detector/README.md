@@ -86,13 +86,29 @@ sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/mod
 cd ..
 ```
 
-Set `model.path` in the selected config to the downloaded package. Relative paths resolve from the config file; absolute paths are also supported.
+Set `model.path` in the selected config to the downloaded package.
+
+Relative paths in this config resolve from the config file, not from
+`prebuilt-apps/`. A bare `models/yolo26n-det-int8-b1.tar.gz` therefore points at
+`${APP_DIR}/src/common/models/` and fails with
+`ModelPack: invalid_archive: archive path does not exist`. Use an absolute path
+to the file downloaded above:
+
+```yaml
+model:
+  path: /home/sima/prebuilt-apps/models/yolo26n-det-int8-b1.tar.gz
+```
+
+Print the value to paste with `echo "$(pwd)/models/yolo26n-det-int8-b1.tar.gz"`
+from `prebuilt-apps/`.
 
 ## Prepare Insight
 
 [Insight](https://developer.sima.ai/software/tools/insight/) can host the input streams and render each output channel. Install videos directly from the Insight catalog or through YouTube support. In the Insight Web UI, start the required streams and copy their RTSP URLs into `streams`. Use the host and UDP port ranges reported by `neat` for the output settings.
 
-Verify each source before starting the application:
+Verify each source before starting the application. A Modalix DevKit does not
+ship `ffprobe`, so run this from the machine hosting the sources or from any
+workstation with FFmpeg installed:
 
 ```bash
 ffprobe -v error \
