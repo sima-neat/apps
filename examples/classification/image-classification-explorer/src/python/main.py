@@ -7,6 +7,7 @@ import argparse
 import csv
 import json
 import os
+import re
 import shutil
 import sys
 import time
@@ -27,6 +28,11 @@ REPORT_MARKER = ".image-classification-explorer-report"
 # this exact reference falls back to the bundled copy; any other missing
 # label_map path is a configuration error.
 BUNDLED_LABEL_MAP_REF = "src/common/imagenet_labels.txt"
+# Profile names travel through config keys, report columns, CSV/JSON fields and
+# the HTML controls, and the C++ side addresses them through dotted, colon-
+# separated config keys. Restrict them to a portable set so both languages
+# accept exactly the same names instead of diverging on exotic YAML keys.
+PROFILE_NAME_RE = re.compile(r"[A-Za-z0-9_-]+")
 REPORT_ENTRIES = ("report.json", "report.csv", "report.html", "thumbnails", REPORT_MARKER)
 
 
@@ -116,8 +122,11 @@ def load_profiles(raw: dict[str, Any]) -> list[ModelProfile]:
             label_map=cfg.get("label_map"),
             top_k=int(cfg.get("top_k", 5)),
         )
-        if "." in name:
-            raise ValueError(f"models.{name}: profile names must not contain '.'")
+        if not PROFILE_NAME_RE.fullmatch(str(name)):
+            raise ValueError(
+                f"models.{name}: profile names may only contain letters, digits, "
+                "'_' and '-'"
+            )
         if not profile.path:
             raise ValueError(f"models.{name}.path is required")
         if profile.output != "softmax":

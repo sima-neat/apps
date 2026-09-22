@@ -109,10 +109,34 @@ int main(int argc, char** argv) {
         std::cerr << "[FAIL] report.json image entry is missing predictions\n";
         ++failures;
       } else {
+        // A nonempty top-k is not enough: a regression in normalization, output
+        // interpretation or label mapping would still produce one. Pin the known
+        // class for the known image, using the shipped config's validation block.
+        const bool default_image =
+            env_or_null("SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE") == nullptr;
+        const int expected_id =
+            e2e_int("image-classification-explorer", "validation", "expected_class_id");
+        const double min_probability = example_common_config("image-classification-explorer")
+                                           .double_or("validation.min_probability", 0.0);
         for (const auto* name : kModelNames) {
           const auto& predictions = image.at("predictions");
           if (!predictions.contains(name) || predictions.at(name).at("top_k").empty()) {
             std::cerr << "[FAIL] report.json has no top_k predictions for " << name << "\n";
+            ++failures;
+            continue;
+          }
+          if (!default_image)
+            continue;
+          const auto& top1 = predictions.at(name).at("top_k").front();
+          const int class_id = top1.at("class_id").get<int>();
+          const double probability = top1.at("probability").get<double>();
+          if (class_id != expected_id) {
+            std::cerr << "[FAIL] " << name << ": expected class " << expected_id << ", got "
+                      << class_id << " (" << top1.at("label").get<std::string>() << ")\n";
+            ++failures;
+          } else if (probability < min_probability) {
+            std::cerr << "[FAIL] " << name << ": goldfish probability " << probability << " below "
+                      << min_probability << "\n";
             ++failures;
           }
         }

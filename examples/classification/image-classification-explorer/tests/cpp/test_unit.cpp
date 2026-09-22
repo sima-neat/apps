@@ -172,7 +172,7 @@ int main(int argc, char** argv) {
     auto r = spawn_and_wait(binary, {"--config", config_path.string()}, 20000);
     fs::remove(config_path);
     if (r.exit_code == 0 ||
-        r.stderr_text.find("models.resnet.v2: profile names must not contain '.'") ==
+        r.stderr_text.find("models.resnet.v2: profile names may only contain") ==
             std::string::npos) {
       std::cerr << "[FAIL] dotted profile name: expected rejection, got exit " << r.exit_code
                 << "\nstderr:\n"
@@ -413,6 +413,35 @@ int main(int argc, char** argv) {
       std::cout << "[OK] report stranded by an interrupted publish was recovered\n";
     }
     fs::remove_all(work);
+  }
+
+  // Test 13: a profile name containing a colon cannot be addressed through the
+  // config keys, so it must be rejected by its real name rather than silently
+  // truncated at the first colon.
+  {
+    namespace fs = std::filesystem;
+    const auto config_path =
+        fs::temp_directory_path() /
+        ("image-classification-explorer-colon-name-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".yaml");
+    {
+      std::ofstream config(config_path);
+      config << "models:\n"
+             << "  \"resnet:50\":\n"
+             << "    path: /nonexistent/resnet_50.tar.gz\n";
+    }
+    auto r = spawn_and_wait(binary, {"--config", config_path.string()}, 20000);
+    fs::remove(config_path);
+    if (r.exit_code == 0 ||
+        r.stderr_text.find("models.resnet:50: profile names may only contain") ==
+            std::string::npos) {
+      std::cerr << "[FAIL] colon profile name: expected rejection naming resnet:50, got exit "
+                << r.exit_code << "\nstderr:\n"
+                << r.stderr_text << "\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] colon in a model profile name was rejected by its real name\n";
+    }
   }
 
   return failures > 0 ? 1 : 0;

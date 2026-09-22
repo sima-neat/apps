@@ -45,6 +45,36 @@ const char* const kBundledLabelMapRef = "src/common/imagenet_labels.txt";
 // ScalarConfig unquotes values but not mapping keys, so a profile declared as
 // `"resnet_50":` arrives with its quotes attached. Strip them for display and
 // metadata while the original spelling stays the lookup key.
+// Profile names travel through config keys, report columns, CSV/JSON fields and
+// the HTML controls, and ScalarConfig addresses them through dotted, colon-
+// separated keys. Restrict them to a portable set so both languages accept
+// exactly the same names instead of diverging on exotic YAML keys.
+bool is_valid_profile_name(const std::string& name) {
+  if (name.empty())
+    return false;
+  return std::all_of(name.begin(), name.end(),
+                     [](unsigned char c) { return std::isalnum(c) != 0 || c == '_' || c == '-'; });
+}
+
+// Locate the ':' that separates a mapping key from its value, skipping colons
+// inside a quoted key (e.g. `"resnet:50":`) so the whole key is recovered and
+// can be reported accurately rather than silently truncated.
+std::size_t find_key_colon(const std::string& line) {
+  char quote = '\0';
+  for (std::size_t i = 0; i < line.size(); ++i) {
+    const char c = line[i];
+    if (quote != '\0') {
+      if (c == quote)
+        quote = '\0';
+    } else if (c == '"' || c == '\'') {
+      quote = c;
+    } else if (c == ':') {
+      return i;
+    }
+  }
+  return std::string::npos;
+}
+
 std::string unquote_yaml_key(const std::string& key) {
   if (key.size() >= 2 &&
       ((key.front() == '"' && key.back() == '"') || (key.front() == '\'' && key.back() == '\''))) {
@@ -168,7 +198,7 @@ std::vector<std::string> ordered_model_keys(const fs::path& config_path) {
     if (child_indent == -1)
       child_indent = indent;
     if (indent == child_indent) {
-      const auto colon = trimmed.find(':');
+      const auto colon = find_key_colon(trimmed);
       if (colon != std::string::npos)
         keys.push_back(sima_examples::trim_copy(trimmed.substr(0, colon)));
     }
@@ -180,6 +210,15 @@ std::vector<ModelProfile> load_profiles(const sima_examples::ScalarConfig& raw,
                                         const fs::path& config_path) {
   const auto known_names = profile_names(raw);
   auto ordered = ordered_model_keys(config_path);
+  // Validate the declared spelling before reconciliation, so a key ScalarConfig
+  // cannot represent (a colon inside the name) is reported by its real name.
+  for (const auto& key : ordered) {
+    const std::string declared = unquote_yaml_key(key);
+    if (!is_valid_profile_name(declared)) {
+      throw std::runtime_error("models." + declared +
+                               ": profile names may only contain letters, digits, '_' and '-'");
+    }
+  }
   // ScalarConfig has no scalar for an empty mapping, but the text scan does. Keep
   // those extra declared profile names so the required-field validation below can
   // reject them just as Python does. Fall back only when the scan misses a scalar
@@ -205,8 +244,9 @@ std::vector<ModelProfile> load_profiles(const sima_examples::ScalarConfig& raw,
     profile.num_classes = raw.int_or("models." + key + ".num_classes", 1000);
     profile.label_map = raw.string_or("models." + key + ".label_map", "");
     profile.top_k = raw.int_or("models." + key + ".top_k", 5);
-    if (name.find('.') != std::string::npos) {
-      throw std::runtime_error("models." + name + ": profile names must not contain '.'");
+    if (!is_valid_profile_name(name)) {
+      throw std::runtime_error("models." + name +
+                               ": profile names may only contain letters, digits, '_' and '-'");
     }
     if (profile.path.empty()) {
       throw std::runtime_error("models." + name + ".path is required");

@@ -75,8 +75,9 @@ Open `${APP_DIR}/src/common/config.yaml`:
 - `io.output_dir` — dedicated directory where `report.html`, `report.json`, `report.csv`, and
   `thumbnails/` are written; each run replaces its previous contents.
 
-Remove a `models` entry to run with fewer models, or add one to compare an additional model. Each
-profile is fully self-contained:
+Remove a `models` entry to run with fewer models, or add one to compare an additional model.
+Profile names may contain letters, digits, `_` and `-` (they become config keys, report columns
+and CSV/JSON fields). Each profile is fully self-contained:
 
 | Field | Meaning |
 | --- | --- |

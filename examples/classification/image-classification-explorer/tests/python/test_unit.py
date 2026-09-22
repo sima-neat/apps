@@ -244,10 +244,18 @@ class TestLoadProfiles:
         assert profiles[1].top_k == 5  # default
         assert profiles[0].output == "softmax"  # default
 
-    def test_rejects_dotted_profile_name(self):
-        raw = {"models": {"resnet.v2": {"path": "m.tar.gz"}}}
-        with pytest.raises(ValueError, match="must not contain '.'"):
+    @pytest.mark.parametrize("name", ["resnet.v2", "resnet:50", "res net", "res/net", ""])
+    def test_rejects_unsupported_profile_names(self, name):
+        """Regression: names with dots or colons cannot be addressed through the
+        C++ config keys, so both languages must reject the same set."""
+        raw = {"models": {name: {"path": "m.tar.gz"}}}
+        with pytest.raises(ValueError, match="may only contain"):
             main.load_profiles(raw)
+
+    @pytest.mark.parametrize("name", ["resnet_50", "resnet-50", "ResNet50", "r50"])
+    def test_accepts_portable_profile_names(self, name):
+        raw = {"models": {name: {"path": "m.tar.gz"}}}
+        assert [p.name for p in main.load_profiles(raw)] == [name]
 
     def test_rejects_unsupported_output_interpretation(self):
         raw = {"models": {"a": {"path": "m.tar.gz", "output": "raw_logits"}}}

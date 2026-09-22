@@ -11,6 +11,31 @@ import yaml
 
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
+COMMON_CONFIG = EXAMPLE_DIR / "src" / "common" / "config.yaml"
+
+
+def _validation_expectations() -> tuple[int, float]:
+    """Expected top-1 class id and minimum probability for the bundled goldfish
+    fixture, read from the shipped config's `validation` block."""
+    validation = yaml.safe_load(COMMON_CONFIG.read_text())["validation"]
+    return int(validation["expected_class_id"]), float(validation["min_probability"])
+
+
+def _assert_goldfish(image_entry: dict, model_names) -> None:
+    """A nonempty top-k is not enough: a regression in normalization, output
+    interpretation or label mapping would still produce one. Pin the known
+    class for the known image."""
+    expected_id, min_probability = _validation_expectations()
+    for model_name in model_names:
+        top1 = image_entry["predictions"][model_name]["top_k"][0]
+        assert top1["class_id"] == expected_id, (
+            f"{model_name}: expected class {expected_id}, got {top1['class_id']} "
+            f"({top1['label']})"
+        )
+        assert top1["probability"] >= min_probability, (
+            f"{model_name}: goldfish probability {top1['probability']:.4f} below "
+            f"{min_probability}"
+        )
 
 
 MODEL_NAMES = ("resnet_50", "resnet_18", "efficientnet_b0", "densenet_121")
@@ -31,11 +56,9 @@ class TestE2E:
         e2e_config_writer,
         tmp_output_dir,
     ):
+        default_image = apps_root / "assets" / "datasets-test" / "imagenet" / "goldfish.jpeg"
         image_env = Path(
-            os.environ.get(
-                "SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE",
-                str(apps_root / "assets" / "datasets-test" / "imagenet" / "goldfish.jpeg"),
-            )
+            os.environ.get("SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE", str(default_image))
         )
         skip_unless_e2e_ready(
             image_env.exists(),
@@ -82,6 +105,8 @@ class TestE2E:
             assert image_entry["predictions"][model_name]["top_k"], (
                 f"{model_name} produced no predictions"
             )
+        if image_env == default_image:
+            _assert_goldfish(image_entry, MODEL_NAMES)
 
     def test_directory_input(
         self,
@@ -148,11 +173,9 @@ class TestE2E:
         tmp_output_dir,
     ):
         """Each supported model must work on its own, not just alongside the others."""
+        default_image = apps_root / "assets" / "datasets-test" / "imagenet" / "goldfish.jpeg"
         image_env = Path(
-            os.environ.get(
-                "SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE",
-                str(apps_root / "assets" / "datasets-test" / "imagenet" / "goldfish.jpeg"),
-            )
+            os.environ.get("SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE", str(default_image))
         )
         skip_unless_e2e_ready(
             image_env.exists(),
@@ -185,3 +208,5 @@ class TestE2E:
         payload = json.loads((output_dir / "report.json").read_text())
         assert payload["models"] == [model_name]
         assert payload["images"][0]["predictions"][model_name]["top_k"]
+        if image_env == default_image:
+            _assert_goldfish(payload["images"][0], [model_name])
