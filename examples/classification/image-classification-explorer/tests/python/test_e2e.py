@@ -77,7 +77,7 @@ class TestE2E:
         assert set(payload["models"]) == set(MODEL_NAMES)
         assert len(payload["images"]) == 1
         image_entry = payload["images"][0]
-        assert "error" not in image_entry
+        assert "errors" not in image_entry, f"image had errors: {image_entry.get('errors')}"
         for model_name in MODEL_NAMES:
             assert image_entry["predictions"][model_name]["top_k"], (
                 f"{model_name} produced no predictions"

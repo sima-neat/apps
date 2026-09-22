@@ -46,23 +46,37 @@ class ImageResult:
     errors: dict[str, str] = field(default_factory=dict)  # model name -> error message
 
 
+def is_decodable_image(path: Path) -> bool:
+    import cv2
+
+    return cv2.imread(str(path), cv2.IMREAD_COLOR) is not None
+
+
 def download_image(url: str, dest: Path) -> Path:
-    """Download a fallback image, reusing a cache only for the same URL."""
+    """Download a fallback image, reusing a cache only for the same URL.
+
+    The download is decoded before it replaces the cache, so a non-image payload
+    served with HTTP 200 (e.g. a proxy error page) is never cached and silently
+    reused by later runs."""
     source_path = dest.with_name(f"{dest.name}.source-url")
     try:
         cached_url = source_path.read_text(encoding="utf-8")
     except OSError:
         cached_url = None
-    if not dest.exists() or cached_url != url:
-        print(f"Downloading {url} ...")
-        temporary = dest.with_name(f"{dest.name}.tmp")
-        try:
-            urllib.request.urlretrieve(url, temporary)
-            temporary.replace(dest)
-            source_path.write_text(url, encoding="utf-8")
-        except (urllib.error.URLError, OSError) as exc:
-            temporary.unlink(missing_ok=True)
-            raise FileNotFoundError(f"failed to download {url}: {exc}") from exc
+    if dest.exists() and cached_url == url:
+        return dest
+
+    print(f"Downloading {url} ...")
+    temporary = dest.with_name(f"{dest.name}.tmp")
+    try:
+        urllib.request.urlretrieve(url, temporary)
+        if not is_decodable_image(temporary):
+            raise ValueError("downloaded file is not a decodable image")
+        temporary.replace(dest)
+        source_path.write_text(url, encoding="utf-8")
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        temporary.unlink(missing_ok=True)
+        raise FileNotFoundError(f"failed to download {url}: {exc}") from exc
     return dest
 
 
@@ -727,7 +741,6 @@ def main() -> int:
             return 6
         total_ms = (time.monotonic() - start) * 1000.0
 
-    output_dir.mkdir(parents=True, exist_ok=True)
     class_summary = build_class_summary(results, profiles)
     timing = {
         "total_ms": total_ms,
@@ -735,9 +748,14 @@ def main() -> int:
         "model_count": len(profiles),
     }
 
-    write_json_report(output_dir / "report.json", results, profiles, skipped, class_summary, timing)
-    write_csv_report(output_dir / "report.csv", results, profiles)
-    write_html_report(output_dir / "report.html", results, profiles, skipped, class_summary, output_dir)
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        write_json_report(output_dir / "report.json", results, profiles, skipped, class_summary, timing)
+        write_csv_report(output_dir / "report.csv", results, profiles)
+        write_html_report(output_dir / "report.html", results, profiles, skipped, class_summary, output_dir)
+    except OSError as exc:
+        print(f"Error: failed to write report to {output_dir}: {exc}", file=sys.stderr)
+        return 6
 
     images_with_errors = sum(1 for r in results if r.errors)
     print(f"Done in {total_ms:.1f} ms. Report written to {output_dir}")

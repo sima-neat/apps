@@ -239,6 +239,17 @@ std::vector<std::string> load_label_map(const std::string& path, int num_classes
   return labels;
 }
 
+// Flush and close an output stream, then report any failure (including one
+// surfaced only at close, e.g. a full filesystem) so the caller never claims a
+// file was written when it is absent or truncated.
+void close_or_throw(std::ofstream& out, const fs::path& path) {
+  out.flush();
+  out.close();
+  if (out.fail()) {
+    throw std::runtime_error("failed to write: " + path.string());
+  }
+}
+
 fs::path fallback_source_path(const fs::path& fallback_dest) {
   return fallback_dest.string() + ".source-url";
 }
@@ -252,16 +263,43 @@ bool fallback_cache_matches(const fs::path& fallback_dest, const std::string& fa
 }
 
 void record_fallback_source(const fs::path& fallback_dest, const std::string& fallback_url) {
-  std::ofstream out(fallback_source_path(fallback_dest));
+  const fs::path source_path = fallback_source_path(fallback_dest);
+  std::ofstream out(source_path);
   if (!out.is_open()) {
-    throw std::runtime_error("failed to record fallback image source: " +
-                             fallback_source_path(fallback_dest).string());
+    throw std::runtime_error("failed to record fallback image source: " + source_path.string());
   }
   out << fallback_url;
-  if (!out.good()) {
-    throw std::runtime_error("failed to record fallback image source: " +
-                             fallback_source_path(fallback_dest).string());
+  close_or_throw(out, source_path);
+}
+
+// Download the fallback image to a temporary file and decode it before it
+// replaces the cached copy, so a non-image payload served with HTTP 200 (e.g. a
+// proxy error page) is never cached and silently reused by later runs.
+void refresh_fallback_image(const std::string& fallback_url, const fs::path& fallback_dest) {
+  const fs::path temporary = fallback_dest.string() + ".tmp";
+  std::error_code ec;
+  // download_file intentionally keeps a nonempty destination, so clear any
+  // leftover partial download first.
+  fs::remove(temporary, ec);
+  if (ec) {
+    throw std::runtime_error("failed to refresh fallback image: " + temporary.string() + ": " +
+                             ec.message());
   }
+  if (!sima_examples::download_file(fallback_url, temporary)) {
+    throw std::runtime_error("failed to download fallback image: " + fallback_url);
+  }
+  if (cv::imread(temporary.string(), cv::IMREAD_COLOR).empty()) {
+    fs::remove(temporary, ec);
+    throw std::runtime_error("failed to download fallback image: " + fallback_url +
+                             ": downloaded file is not a decodable image");
+  }
+  fs::rename(temporary, fallback_dest, ec);
+  if (ec) {
+    fs::remove(temporary, ec);
+    throw std::runtime_error("failed to refresh fallback image: " + fallback_dest.string() + ": " +
+                             ec.message());
+  }
+  record_fallback_source(fallback_dest, fallback_url);
 }
 
 std::vector<fs::path> discover_images(const std::string& input_path,
@@ -271,18 +309,7 @@ std::vector<fs::path> discover_images(const std::string& input_path,
                                       std::vector<std::string>& skipped) {
   if (input_path.empty()) {
     if (!fallback_cache_matches(fallback_dest, fallback_url)) {
-      // download_file intentionally keeps a nonempty destination. Remove a stale
-      // fallback first so a changed URL cannot be recorded against old content.
-      std::error_code remove_error;
-      fs::remove(fallback_dest, remove_error);
-      if (remove_error) {
-        throw std::runtime_error("failed to refresh fallback image: " + fallback_dest.string() +
-                                 ": " + remove_error.message());
-      }
-      if (!sima_examples::download_file(fallback_url, fallback_dest)) {
-        throw std::runtime_error("failed to download fallback image: " + fallback_url);
-      }
-      record_fallback_source(fallback_dest, fallback_url);
+      refresh_fallback_image(fallback_url, fallback_dest);
     }
     return {fallback_dest};
   }
@@ -471,9 +498,7 @@ void write_json_report(const fs::path& path, const std::vector<ImageResult>& res
     throw std::runtime_error("failed to open for writing: " + path.string());
   }
   out << payload.dump(2);
-  if (!out.good()) {
-    throw std::runtime_error("failed to write: " + path.string());
-  }
+  close_or_throw(out, path);
 }
 
 std::string csv_escape(const std::string& value) {
@@ -527,9 +552,7 @@ void write_csv_report(const fs::path& path, const std::vector<ImageResult>& resu
           << it->second.inference_ms << "," << csv_escape(top_k_str.str()) << "\n";
     }
   }
-  if (!out.good()) {
-    throw std::runtime_error("failed to write: " + path.string());
-  }
+  close_or_throw(out, path);
 }
 
 std::string html_escape(const std::string& value) {
@@ -883,9 +906,7 @@ void write_html_report(const fs::path& path, const std::vector<ImageResult>& res
       << "  sortSelect.addEventListener('change', applyFilters);\n"
       << "  applyFilters();\n"
       << "</script>\n</body>\n</html>\n";
-  if (!out.good()) {
-    throw std::runtime_error("failed to write: " + path.string());
-  }
+  close_or_throw(out, path);
 }
 
 struct Args {

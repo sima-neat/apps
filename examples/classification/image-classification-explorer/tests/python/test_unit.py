@@ -143,20 +143,26 @@ class TestDiscoverImages:
         dest = tmp_path / "fallback.jpeg"
         old_url = "https://example.test/old.jpeg"
         new_url = "https://example.test/new.jpeg"
-        dest.write_bytes(b"old image")
+        _make_image(dest, color=(0, 0, 255))
+        old_bytes = dest.read_bytes()
         source_path = dest.with_name(f"{dest.name}.source-url")
         source_path.write_text(old_url)
         downloaded = []
 
         def _download(url, target):
             downloaded.append(url)
-            Path(target).write_bytes(b"new image")
+            # urlretrieve writes to a ".tmp" path; render a real JPEG elsewhere
+            # and copy its bytes there since cv2.imwrite keys off the extension.
+            rendered = tmp_path / "rendered.jpeg"
+            _make_image(rendered, color=(0, 255, 0))
+            Path(target).write_bytes(rendered.read_bytes())
 
         monkeypatch.setattr(main.urllib.request, "urlretrieve", _download)
 
         assert main.download_image(new_url, dest) == dest
         assert downloaded == [new_url]
-        assert dest.read_bytes() == b"new image"
+        assert dest.read_bytes() != old_bytes
+        assert main.is_decodable_image(dest)
         assert source_path.read_text() == new_url
 
     def test_single_file(self, tmp_path):
@@ -272,6 +278,44 @@ class TestDownloadImage:
         with pytest.raises(FileNotFoundError, match="failed to download"):
             main.download_image("http://example.invalid/x.jpg", dest)
 
+    def test_undecodable_download_is_not_cached(self, tmp_path, monkeypatch):
+        """Regression: an HTTP 200 response whose body is not an image (e.g. a
+        proxy error page) must fail the run instead of being cached and reused
+        by every later fallback run."""
+        url = "http://example.invalid/x.jpg"
+
+        def _download(_url, target):
+            Path(target).write_bytes(b"<html>not an image</html>")
+
+        monkeypatch.setattr(main.urllib.request, "urlretrieve", _download)
+        dest = tmp_path / "fallback.jpg"
+        source_path = dest.with_name(f"{dest.name}.source-url")
+        with pytest.raises(FileNotFoundError, match="not a decodable image"):
+            main.download_image(url, dest)
+        assert not dest.exists()
+        assert not source_path.exists()
+        assert not dest.with_name(f"{dest.name}.tmp").exists()
+
+    def test_undecodable_download_keeps_previous_cache(self, tmp_path, monkeypatch):
+        """A failed refresh must leave the previously cached image and its
+        recorded source URL untouched."""
+        old_url = "https://example.test/old.jpeg"
+        new_url = "https://example.test/new.jpeg"
+        dest = tmp_path / "fallback.jpg"
+        _make_image(dest)
+        old_bytes = dest.read_bytes()
+        source_path = dest.with_name(f"{dest.name}.source-url")
+        source_path.write_text(old_url)
+
+        def _download(_url, target):
+            Path(target).write_bytes(b"<html>not an image</html>")
+
+        monkeypatch.setattr(main.urllib.request, "urlretrieve", _download)
+        with pytest.raises(FileNotFoundError, match="not a decodable image"):
+            main.download_image(new_url, dest)
+        assert dest.read_bytes() == old_bytes
+        assert source_path.read_text() == old_url
+
 
 class TestAgreement:
     def test_none_with_single_model(self):
@@ -367,6 +411,23 @@ class TestFakeHardwarePipeline:
         assert rc == 6
         assert "archive not found" in capsys.readouterr().err
 
+    def test_unwritable_output_dir_fails_cleanly(self, tmp_path, monkeypatch, capsys):
+        """Regression: a report directory that cannot be created must surface as
+        a concise nonzero failure (as the C++ implementation does), not a traceback."""
+        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
+        img = tmp_path / "a.jpg"
+        _make_image(img)
+        blocker = tmp_path / "not_a_dir"
+        blocker.write_text("file in the way")
+        config_path = tmp_path / "config.yaml"
+        _write_config(config_path, img, blocker / "report")
+        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
+
+        rc = main.main()
+
+        assert rc == 6
+        assert "failed to write report" in capsys.readouterr().err
+
     def test_corrupted_image_reported_not_fatal(self, tmp_path, monkeypatch):
         monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
         _make_image(tmp_path / "good.jpg")
@@ -384,8 +445,8 @@ class TestFakeHardwarePipeline:
         assert "m" in by_name["broken.jpg"]["errors"]
         assert "failed to read image" in by_name["broken.jpg"]["errors"]["m"]
         assert "predictions" not in by_name["broken.jpg"]
-        assert "predictions" in by_name["good.jpg"]
-        assert "error" not in by_name["good.jpg"]
+        assert "errors" not in by_name["good.jpg"]
+        assert by_name["good.jpg"]["predictions"]["m"]["top_k"]
 
     def test_all_documented_formats_load(self, tmp_path, monkeypatch):
         monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
@@ -402,7 +463,9 @@ class TestFakeHardwarePipeline:
         assert rc == 0
         payload = json.loads((out_dir / "report.json").read_text())
         assert len(payload["images"]) == 4
-        assert all("error" not in img for img in payload["images"])
+        for img in payload["images"]:
+            assert "errors" not in img, f"{img['path']} had errors: {img.get('errors')}"
+            assert img["predictions"]["m"]["top_k"], f"{img['path']} produced no predictions"
 
     def test_original_files_left_unchanged(self, tmp_path, monkeypatch):
         monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
