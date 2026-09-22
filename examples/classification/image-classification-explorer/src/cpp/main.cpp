@@ -447,19 +447,21 @@ std::vector<ImageResult> run_all(std::vector<ModelProfile>& profiles,
 
 // True/False only when every named profile has a top-1 result; otherwise
 // indeterminate rather than silently agreeing/disagreeing over a partial subset.
+// Identity is the class id, not the label: ImageNet has distinct classes that
+// share a display label (e.g. 134/517 "crane").
 std::optional<bool> agreement(const ImageResult& result,
                               const std::vector<ModelProfile>& profiles) {
   if (profiles.size() < 2)
     return std::nullopt;
-  std::vector<std::string> labels;
+  std::vector<int> class_ids;
   for (const auto& profile : profiles) {
     const auto it = result.predictions.find(profile.name);
     if (it == result.predictions.end() || it->second.top_k.empty())
       return std::nullopt;
-    labels.push_back(profile.labels.at(static_cast<size_t>(it->second.top_k.front().index)));
+    class_ids.push_back(it->second.top_k.front().index);
   }
-  return std::all_of(labels.begin(), labels.end(),
-                     [&](const std::string& l) { return l == labels.front(); });
+  return std::all_of(class_ids.begin(), class_ids.end(),
+                     [&](int id) { return id == class_ids.front(); });
 }
 
 std::string label_for(const ModelProfile& profile, int class_id) {
@@ -500,9 +502,12 @@ void write_json_report(const fs::path& path, const std::vector<ImageResult>& res
         }
         predictions[profile.name] = {{"top_k", top_k}, {"inference_ms", it->second.inference_ms}};
         if (!it->second.top_k.empty()) {
-          const std::string label = label_for(profile, it->second.top_k.front().index);
-          auto& count = class_summary[profile.name][label];
-          count = count.is_number_integer() ? count.get<int>() + 1 : 1;
+          // Keyed by class id so distinct classes sharing a label are never merged.
+          const int class_id = it->second.top_k.front().index;
+          auto& entry = class_summary[profile.name][std::to_string(class_id)];
+          if (!entry.is_object())
+            entry = {{"label", label_for(profile, class_id)}, {"count", 0}};
+          entry["count"] = entry["count"].get<int>() + 1;
         }
       }
       entry["predictions"] = predictions;
@@ -637,7 +642,8 @@ void write_html_report(const fs::path& path, const std::vector<ImageResult>& res
       const auto it = result.predictions.find(profile.name);
       const auto err_it = result.errors.find(profile.name);
       if (it != result.predictions.end() && !it->second.top_k.empty()) {
-        top1_obj[profile.name] = {{"label", label_for(profile, it->second.top_k.front().index)},
+        top1_obj[profile.name] = {{"class_id", it->second.top_k.front().index},
+                                  {"label", label_for(profile, it->second.top_k.front().index)},
                                   {"prob", it->second.top_k.front().prob}};
         std::ostringstream top_str;
         bool first = true;
@@ -678,20 +684,29 @@ void write_html_report(const fs::path& path, const std::vector<ImageResult>& res
                      << html_escape(profile.name) << "\" checked> " << html_escape(profile.name)
                      << "</label>";
 
-  std::map<std::string, std::map<std::string, int>> class_summary;
+  // model -> class id -> count (keyed by id so distinct classes sharing a label
+  // are never merged).
+  std::map<std::string, std::map<int, int>> class_summary;
   for (const auto& result : results) {
     for (const auto& profile : profiles) {
       const auto it = result.predictions.find(profile.name);
       if (it == result.predictions.end() || it->second.top_k.empty())
         continue;
-      class_summary[profile.name][label_for(profile, it->second.top_k.front().index)]++;
+      class_summary[profile.name][it->second.top_k.front().index]++;
     }
   }
   std::ostringstream summary_rows;
-  for (const auto& [model, per_class] : class_summary) {
-    for (const auto& [cls, count] : per_class) {
-      summary_rows << "<tr><td>" << html_escape(model) << "</td><td>" << html_escape(cls)
-                   << "</td><td>" << count << "</td></tr>";
+  for (const auto& profile : profiles) {
+    const auto model_it = class_summary.find(profile.name);
+    if (model_it == class_summary.end())
+      continue;
+    std::vector<std::pair<int, int>> ordered(model_it->second.begin(), model_it->second.end());
+    std::stable_sort(ordered.begin(), ordered.end(),
+                     [](const auto& a, const auto& b) { return a.second > b.second; });
+    for (const auto& [class_id, count] : ordered) {
+      summary_rows << "<tr><td>" << html_escape(profile.name) << "</td><td>" << class_id
+                   << "</td><td>" << html_escape(label_for(profile, class_id)) << "</td><td>"
+                   << count << "</td></tr>";
     }
   }
 
@@ -776,8 +791,8 @@ void write_html_report(const fs::path& path, const std::vector<ImageResult>& res
       << "<table id=\"reportTable\">\n<thead><tr><th>Image</th><th>Path</th>" << header_cols.str()
       << "<th>Models Agree?</th></tr></thead>\n<tbody>\n"
       << rows.str() << "</tbody>\n</table>\n"
-      << "<h2>Per-class summary</h2>\n<table><thead><tr><th>Model</th><th>Predicted class</th>"
-         "<th>Count</th></tr></thead><tbody>"
+      << "<h2>Per-class summary</h2>\n<table><thead><tr><th>Model</th><th>Class id</th>"
+         "<th>Predicted class</th><th>Count</th></tr></thead><tbody>"
       << summary_rows.str() << "</tbody></table>\n"
       << "<h2>Skipped files</h2>\n<ul>" << (skipped.empty() ? "<li>None</li>" : skipped_rows.str())
       << "</ul>\n"
@@ -835,11 +850,12 @@ void write_html_report(const fs::path& path, const std::vector<ImageResult>& res
       << "  }\n"
       << "\n"
       << "  function rowAgreement(row, models) {\n"
+      << "    // Identity is the class id: distinct classes can share a display label.\n"
       << "    if (models.length < 2) return null;\n"
       << "    const top1 = rowTop1(row);\n"
-      << "    const labels = models.map((m) => top1[m] && top1[m].label);\n"
-      << "    if (labels.some((l) => l === undefined)) return null;\n"
-      << "    return labels.every((l) => l === labels[0]);\n"
+      << "    const ids = models.map((m) => top1[m] && top1[m].class_id);\n"
+      << "    if (ids.some((id) => id === undefined)) return null;\n"
+      << "    return ids.every((id) => id === ids[0]);\n"
       << "  }\n"
       << "\n"
       << "  function rowMaxConfidence(row, models) {\n"

@@ -315,20 +315,21 @@ def run_all(profiles: list[ModelProfile], images: list[Path], timeout_ms: int) -
 def agreement(result: ImageResult, profile_names: list[str]) -> bool | None:
     """True/False only when every named model has a top-1 result; otherwise
     indeterminate (None) rather than silently agreeing/disagreeing over a
-    partial subset."""
+    partial subset. Identity is the class id, not the label: ImageNet has
+    distinct classes that share a display label (e.g. 134/517 "crane")."""
     if len(profile_names) < 2:
         return None
-    labels = []
+    class_ids = []
     for name in profile_names:
         pred = result.predictions.get(name)
         if pred is None or not pred.top_k:
             return None
-        labels.append(pred.top_k[0][1])
-    return len(set(labels)) == 1
+        class_ids.append(pred.top_k[0][0])
+    return len(set(class_ids)) == 1
 
 
 def write_json_report(path: Path, results: list[ImageResult], profiles: list[ModelProfile],
-                       skipped: list[str], class_summary: dict[str, dict[str, int]],
+                       skipped: list[str], class_summary: ClassSummary,
                        timing: dict[str, Any]) -> None:
     payload = {
         "models": [p.name for p in profiles],
@@ -407,7 +408,7 @@ def html_escape(value: str) -> str:
 
 
 def write_html_report(path: Path, results: list[ImageResult], profiles: list[ModelProfile],
-                       skipped: list[str], class_summary: dict[str, dict[str, int]],
+                       skipped: list[str], class_summary: ClassSummary,
                        output_dir: Path) -> None:
     profile_names = [p.name for p in profiles]
     rows = []
@@ -415,7 +416,7 @@ def write_html_report(path: Path, results: list[ImageResult], profiles: list[Mod
         thumb = make_thumbnail(result.image_path, output_dir / "thumbnails")
 
         top1_by_model = {
-            name: {"label": pred.top_k[0][1], "prob": pred.top_k[0][2]}
+            name: {"class_id": pred.top_k[0][0], "label": pred.top_k[0][1], "prob": pred.top_k[0][2]}
             for name, pred in result.predictions.items() if pred.top_k
         }
         top1_json = html_escape(json.dumps(top1_by_model))
@@ -454,9 +455,10 @@ def write_html_report(path: Path, results: list[ImageResult], profiles: list[Mod
         for name in profile_names
     )
     summary_rows = "".join(
-        f"<tr><td>{html_escape(name)}</td><td>{html_escape(cls)}</td><td>{count}</td></tr>"
+        f"<tr><td>{html_escape(name)}</td><td>{html_escape(class_id)}</td>"
+        f"<td>{html_escape(entry['label'])}</td><td>{entry['count']}</td></tr>"
         for name, per_class in class_summary.items()
-        for cls, count in sorted(per_class.items(), key=lambda kv: -kv[1])
+        for class_id, entry in sorted(per_class.items(), key=lambda kv: -kv[1]["count"])
     )
     skipped_rows = "".join(f"<li>{html_escape(s)}</li>" for s in skipped)
 
@@ -536,7 +538,7 @@ def write_html_report(path: Path, results: list[ImageResult], profiles: list[Mod
 
 <h2>Per-class summary</h2>
 <table>
-  <thead><tr><th>Model</th><th>Predicted class</th><th>Count</th></tr></thead>
+  <thead><tr><th>Model</th><th>Class id</th><th>Predicted class</th><th>Count</th></tr></thead>
   <tbody>{summary_rows}</tbody>
 </table>
 
@@ -599,11 +601,12 @@ def write_html_report(path: Path, results: list[ImageResult], profiles: list[Mod
   function rowAgreement(row, models) {{
     // True/False only when every selected model has a top-1 result; otherwise
     // indeterminate, rather than silently agreeing/disagreeing over a subset.
+    // Identity is the class id: distinct classes can share a display label.
     if (models.length < 2) return null;
     const top1 = rowTop1(row);
-    const labels = models.map((m) => top1[m] && top1[m].label);
-    if (labels.some((l) => l === undefined)) return null;
-    return labels.every((l) => l === labels[0]);
+    const ids = models.map((m) => top1[m] && top1[m].class_id);
+    if (ids.some((id) => id === undefined)) return null;
+    return ids.every((id) => id === ids[0]);
   }}
 
   function rowMaxConfidence(row, models) {{
@@ -698,7 +701,7 @@ def write_html_report(path: Path, results: list[ImageResult], profiles: list[Mod
 
 
 def publish_report(output_dir: Path, results: list[ImageResult], profiles: list[ModelProfile],
-                   skipped: list[str], class_summary: dict[str, dict[str, int]],
+                   skipped: list[str], class_summary: ClassSummary,
                    timing: dict[str, Any]) -> None:
     """Write the complete report into a sibling staging directory, then swap the
     whole `output_dir` for it. Readers never see a mixture of old and new files,
@@ -754,15 +757,20 @@ def publish_report(output_dir: Path, results: list[ImageResult], profiles: list[
         shutil.rmtree(staging, ignore_errors=True)
 
 
-def build_class_summary(results: list[ImageResult], profiles: list[ModelProfile]) -> dict[str, dict[str, int]]:
-    summary: dict[str, dict[str, int]] = {p.name: {} for p in profiles}
+ClassSummary = dict[str, dict[str, dict[str, Any]]]  # model -> class id (str) -> {label, count}
+
+
+def build_class_summary(results: list[ImageResult], profiles: list[ModelProfile]) -> ClassSummary:
+    """Count top-1 predictions per model, keyed by class id so distinct classes
+    that share a label are never merged."""
+    summary: ClassSummary = {p.name: {} for p in profiles}
     for result in results:
         for name, pred in result.predictions.items():
             if not pred.top_k:
                 continue
-            label = pred.top_k[0][1]
-            summary.setdefault(name, {})
-            summary[name][label] = summary[name].get(label, 0) + 1
+            class_id, label, _ = pred.top_k[0]
+            entry = summary.setdefault(name, {}).setdefault(str(class_id), {"label": label, "count": 0})
+            entry["count"] += 1
     return summary
 
 

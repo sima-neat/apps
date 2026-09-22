@@ -383,6 +383,14 @@ class TestAgreement:
         result.predictions["b"] = main.Prediction(top_k=[(2, "dog", 0.7)], inference_ms=1.0)
         assert main.agreement(result, ["a", "b"]) is False
 
+    def test_false_when_same_label_maps_to_different_class_ids(self):
+        """Regression: ImageNet has distinct classes sharing a display label
+        (134/517 "crane", 638/639 "maillot"); those are a disagreement."""
+        result = main.ImageResult(image_path=Path("x.jpg"))
+        result.predictions["a"] = main.Prediction(top_k=[(134, "crane", 0.9)], inference_ms=1.0)
+        result.predictions["b"] = main.Prediction(top_k=[(517, "crane", 0.7)], inference_ms=1.0)
+        assert main.agreement(result, ["a", "b"]) is False
+
     def test_none_when_one_of_three_selected_models_has_no_result(self):
         """Regression: two of three selected models agreeing must not be reported
         as agreement while the third selected model has no result at all."""
@@ -435,7 +443,20 @@ class TestReports:
         results = self._sample_results()
         profiles = [self._sample_profile()]
         summary = main.build_class_summary(results, profiles)
-        assert summary["a"]["cat"] == 1
+        assert summary["a"]["1"] == {"label": "cat", "count": 1}
+
+    def test_class_summary_keeps_same_label_classes_separate(self):
+        """Regression: 134 and 517 both display as "crane" but are distinct
+        classes and must be counted separately."""
+        r1 = main.ImageResult(image_path=Path("img1.jpg"))
+        r1.predictions["a"] = main.Prediction(top_k=[(134, "crane", 0.9)], inference_ms=1.0)
+        r2 = main.ImageResult(image_path=Path("img2.jpg"))
+        r2.predictions["a"] = main.Prediction(top_k=[(517, "crane", 0.8)], inference_ms=1.0)
+        summary = main.build_class_summary([r1, r2], [self._sample_profile()])
+        assert summary["a"] == {
+            "134": {"label": "crane", "count": 1},
+            "517": {"label": "crane", "count": 1},
+        }
 
 
 class TestFakeHardwarePipeline:
@@ -605,8 +626,10 @@ models:
         assert "simulated inference failure" in image_entry["errors"]["b"]
         assert "b" not in image_entry["predictions"]
         # class_summary must only count what the report actually shows.
-        top1_label = image_entry["predictions"]["a"]["top_k"][0]["label"]
-        assert payload["class_summary"]["a"].get(top1_label) == 1
+        top1 = image_entry["predictions"]["a"]["top_k"][0]
+        assert payload["class_summary"]["a"] == {
+            str(top1["class_id"]): {"label": top1["label"], "count": 1}
+        }
         assert payload["class_summary"].get("b", {}) == {}
 
 
@@ -846,6 +869,9 @@ class TestHtmlReportContent:
         assert 'id="filterResult"' in html
         assert 'id="minConfidence"' in html
         assert 'id="sortBy"' in html
+        # Agreement is recomputed in the browser from class ids, not labels.
+        assert "class_id" in html
+        assert "top1[m].class_id" in html
         assert '"label": "cat"' in html or '"label":"cat"' in html or '&quot;label&quot;: &quot;cat&quot;' in html
         assert "error: failed to read image" in html
 
