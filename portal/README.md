@@ -45,9 +45,13 @@ required.
 
 To run the steps manually instead, reproduce both of them. Skipping
 `sync_portal_assets.py` leaves catalog entries pointing at previews and README
-images that were never copied into `public/`, so the pages render without them:
+images that were never copied into `public/`, so the pages render without them.
+These commands run from the `portal` directory, like the ones in Run and Build
+below:
 
 ```bash
+cd <apps-repo-root>/portal
+npm install
 python3.11 ../scripts/generate_catalog.py > public/catalog.json
 python3.11 ../scripts/sync_portal_assets.py
 ```

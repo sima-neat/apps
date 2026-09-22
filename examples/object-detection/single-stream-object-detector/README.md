@@ -102,10 +102,20 @@ limit is reached:
 processed=200 video_sender=<insight-host>:9000
 ```
 
-`processed` should reach `inference.frames`, or keep climbing when `frames` is
-`0`. To confirm detections without watching Insight, set `output.save_dir` to a
+The packaged config ships `inference.frames: 0`, which runs continuously. The
+closing `processed=` line prints only when a finite limit is reached, and
+interrupting the run with Ctrl-C skips it. For a bounded check that ends by
+itself, set a positive limit first:
+
+```yaml
+inference:
+  frames: 200
+```
+
+Left at `0`, the live Insight stream is the success signal instead. Either way,
+to confirm detections without watching Insight, set `output.save_dir` to a
 directory and `output.save_every` to a non-zero interval; the application then
-writes annotated frames there as well.
+writes annotated frames there as it runs.
 
 ## Troubleshooting
 
