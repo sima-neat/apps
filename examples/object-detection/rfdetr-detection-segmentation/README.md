@@ -124,9 +124,10 @@ RF-DETR detection: completed=200 output_fps=30.8
 ```
 
 The startup line should echo the selected task and variant, the codec, and the
-resolution probed from your source. `completed` should reach `inference.frames`,
-and `output_fps` should track the source frame rate. An `output_fps` well below
-the source rate means frames are being dropped upstream of the detector.
+resolution probed from your source. Check that probed resolution matches the
+source you intended. `completed` should reach `inference.frames`, and
+`output_fps` should track the source frame rate; a much lower `output_fps` means
+the pipeline is not keeping up with the source.
 
 ## Performance
 

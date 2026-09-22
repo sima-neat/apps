@@ -96,11 +96,11 @@ single summary line printed when the frame limit is reached:
 frames=200 average_points=331.6 descriptor_dim=256 video_sender=<insight-host>:9000
 ```
 
-`frames` should match `runtime.frames` (or the video length when it is `0`),
-`descriptor_dim` should be `256`, and `average_points` should be in the
-hundreds for the packaged TUM RGB-D sequence. An `average_points` near zero
-means the model loaded but found no features, which usually points at the input
-resolution rather than the model path.
+`frames` should match `runtime.frames`, or the video length when it is `0`.
+`descriptor_dim` should be `256`. For the packaged TUM RGB-D sequence
+`average_points` runs in the low hundreds. An `average_points` near zero means
+the pipeline ran but the model returned almost no features, which is worth
+investigating even though the run exits successfully.
 
 ## Troubleshooting
 
