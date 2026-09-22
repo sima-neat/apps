@@ -9,10 +9,15 @@ be reusable so each application's suite stays about that application.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Iterable, Sequence
 
 import cv2
+
+# The multi-stream applications name every frame after the stream that produced
+# it, e.g. stream_1_frame_40.jpg, and write them all into one directory.
+_STREAM_IN_NAME = re.compile(r"^stream[_-]?(\d+)[_-]")
 
 
 def saved_image_files(output_dir: Path, *, exclude: Iterable[str] = ("config.yaml",)) -> list[Path]:
@@ -48,32 +53,56 @@ def assert_frames_decode(paths: Sequence[Path], *, min_side: int = 16) -> list["
     return frames
 
 
-def assert_frames_are_not_all_identical(
+def group_frames_by_stream(
+    paths: Sequence[Path], frames: Sequence["cv2.typing.MatLike"]
+) -> dict[str, list[tuple[Path, "cv2.typing.MatLike"]]]:
+    """Split saved frames into one group per stream, keeping filename order.
+
+    Frames that carry no stream in their name — the single-stream and
+    still-image suites — stay together as one group, which is the whole run.
+    """
+    groups: dict[str, list[tuple[Path, "cv2.typing.MatLike"]]] = {}
+    for path, frame in zip(paths, frames):
+        match = _STREAM_IN_NAME.match(path.name)
+        label = f"stream {match.group(1)}" if match else "the run"
+        groups.setdefault(label, []).append((path, frame))
+    return groups
+
+
+def assert_every_stream_advances(
     frames: Sequence["cv2.typing.MatLike"], paths: Sequence[Path]
 ) -> None:
-    """The run produced moving video, not one frame written repeatedly.
+    """Every stream produced moving video, not one frame written repeatedly.
 
     A pipeline that stalls on its first frame, or a decoder handing back the
     same buffer every pull, still writes the expected number of files. This is
     the cheapest assertion that separates that from a working stream.
 
+    Each stream is compared only against itself. A multi-stream run writes all
+    of its streams into one directory, so comparing the directory as a whole
+    would be satisfied the moment any one stream moved, and a stream frozen
+    beside a working one — the failure this is here to catch — would pass.
+
     Assumes the source has motion, which is true of the looping test streams
     the e2e configuration points at. A deliberately static source would need
     this check skipped rather than loosened.
     """
-    if len(frames) < 2:
-        return
+    for label, group in group_frames_by_stream(paths, frames).items():
+        if len(group) < 2:
+            continue
 
-    first = frames[0]
-    for index, frame in enumerate(frames[1:], start=1):
-        if frame.shape != first.shape or cv2.norm(frame, first, cv2.NORM_L1) > 0:
-            return
+        first = group[0][1]
+        if any(
+            frame.shape != first.shape or cv2.norm(frame, first, cv2.NORM_L1) > 0
+            for _, frame in group[1:]
+        ):
+            continue
 
-    names = ", ".join(path.name for path in paths[:4])
-    raise AssertionError(
-        f"all {len(frames)} saved frames are pixel-identical ({names}...); "
-        "the pipeline is not advancing through the stream"
-    )
+        names = ", ".join(path.name for path, _ in group[:4])
+        raise AssertionError(
+            f"all {len(group)} frames saved for {label} are pixel-identical "
+            f"({names}...); the pipeline is not advancing through the stream"
+        )
 
 
 def assert_saved_frames_are_usable(
@@ -89,5 +118,5 @@ def assert_saved_frames_are_usable(
         f"expected at least {minimum} saved frames, got {len(paths)}"
     )
     frames = assert_frames_decode(paths, min_side=min_side)
-    assert_frames_are_not_all_identical(frames, paths)
+    assert_every_stream_advances(frames, paths)
     return paths
