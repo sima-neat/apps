@@ -98,6 +98,16 @@ std::vector<std::string> profile_names(const sima_examples::ScalarConfig& raw) {
   return names;
 }
 
+// Drop a YAML inline comment (`#` at the start of the line or preceded by
+// whitespace) and trailing whitespace, so `models:   # profiles` matches `models:`.
+std::string strip_yaml_comment(const std::string& line) {
+  for (size_t i = 0; i < line.size(); ++i) {
+    if (line[i] == '#' && (i == 0 || line[i - 1] == ' ' || line[i - 1] == '\t'))
+      return sima_examples::trim_copy(line.substr(0, i));
+  }
+  return sima_examples::trim_copy(line);
+}
+
 // Recover the declaration order of top-level keys under `models:` by scanning the
 // config file's own text, so C++ iterates profiles in the same order Python does
 // (Python's dict/YAML loader preserves declaration order; ScalarConfig does not).
@@ -114,8 +124,8 @@ std::vector<std::string> ordered_model_keys(const fs::path& config_path) {
   int child_indent = -1;
   bool in_models = false;
   while (std::getline(in, raw_line)) {
-    const std::string trimmed = sima_examples::trim_copy(raw_line);
-    if (trimmed.empty() || trimmed[0] == '#')
+    const std::string trimmed = strip_yaml_comment(raw_line);
+    if (trimmed.empty())
       continue;
     int indent = 0;
     while (indent < static_cast<int>(raw_line.size()) &&
@@ -591,7 +601,10 @@ std::optional<std::string> make_thumbnail(const fs::path& image_path, const fs::
                       std::max(1, static_cast<int>(img.rows * scale))));
   fs::create_directories(thumb_dir);
   const std::string name = std::to_string(std::hash<std::string>{}(image_path.string())) + ".jpg";
-  cv::imwrite((thumb_dir / name).string(), resized);
+  const fs::path thumb_path = thumb_dir / name;
+  if (!cv::imwrite(thumb_path.string(), resized)) {
+    throw std::runtime_error("failed to write thumbnail: " + thumb_path.string());
+  }
   return "thumbnails/" + name;
 }
 

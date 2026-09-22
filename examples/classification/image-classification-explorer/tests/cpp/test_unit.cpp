@@ -80,5 +80,39 @@ int main(int argc, char** argv) {
     }
   }
 
+  // Test 5: profiles run in declaration order even when `models:` carries an
+  // inline YAML comment (the order scanner must strip comments, not fall back
+  // to alphabetical order).
+  {
+    namespace fs = std::filesystem;
+    const auto config_path =
+        fs::temp_directory_path() /
+        ("image-classification-explorer-model-order-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".yaml");
+    {
+      std::ofstream config(config_path);
+      config << "models:   # profiles, non-alphabetical on purpose\n"
+             << "  zeta:  # loaded first\n"
+             << "    path: /nonexistent/zeta.tar.gz\n"
+             << "  alpha:\n"
+             << "    path: /nonexistent/alpha.tar.gz\n";
+    }
+    auto r = spawn_and_wait(binary, {"--config", config_path.string()}, 20000);
+    fs::remove(config_path);
+    const auto zeta = r.stdout_text.find("Loading model 'zeta'");
+    const auto alpha = r.stdout_text.find("Loading model 'alpha'");
+    if (r.exit_code == 0) {
+      std::cerr << "[FAIL] model order: expected nonzero exit for missing model files\n";
+      ++failures;
+    } else if (zeta == std::string::npos || alpha != std::string::npos) {
+      std::cerr << "[FAIL] model order: expected 'zeta' to load first (declaration order), "
+                << "stdout:\n"
+                << r.stdout_text << "\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] declared model order preserved with inline YAML comment\n";
+    }
+  }
+
   return failures > 0 ? 1 : 0;
 }

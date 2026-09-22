@@ -47,6 +47,10 @@ def _make_fake_pyneat(num_classes=5, fail_message=None, fail_run_for_paths=None)
     import numpy as np
 
     mod = types.ModuleType("pyneat")
+    # Live-instance accounting so tests can prove models are released one at a
+    # time (CPython refcounting makes __del__ run as soon as the last ref drops).
+    mod.live_models = 0
+    mod.max_live_models = 0
 
     class InputKind:
         Image = "image"
@@ -92,6 +96,11 @@ def _make_fake_pyneat(num_classes=5, fail_message=None, fail_run_for_paths=None)
             if fail_message is not None:
                 raise RuntimeError(fail_message)
             self.path = path
+            mod.live_models += 1
+            mod.max_live_models = max(mod.max_live_models, mod.live_models)
+
+        def __del__(self):
+            mod.live_models -= 1
 
         def run(self, tensors, timeout_ms=0):
             if self.path in fail_run_for_paths:
@@ -560,6 +569,60 @@ models:
         top1_label = image_entry["predictions"]["a"]["top_k"][0]["label"]
         assert payload["class_summary"]["a"].get(top1_label) == 1
         assert payload["class_summary"].get("b", {}) == {}
+
+
+    def test_models_are_loaded_one_at_a_time(self, tmp_path, monkeypatch):
+        """Regression: the previous profile's model must be released before the
+        next one is constructed, so two models never coexist on the accelerator."""
+        fake = _make_fake_pyneat()
+        monkeypatch.setitem(sys.modules, "pyneat", fake)
+        _make_image(tmp_path / "img.jpg")
+        out_dir = tmp_path / "out"
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(f"""
+io:
+  input: {tmp_path}
+  output_dir: {out_dir}
+models:
+  a:
+    path: fake_model_a.tar.gz
+    num_classes: 5
+  b:
+    path: fake_model_b.tar.gz
+    num_classes: 5
+  c:
+    path: fake_model_c.tar.gz
+    num_classes: 5
+""")
+        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
+
+        rc = main.main()
+
+        assert rc == 0
+        assert fake.max_live_models == 1
+        assert fake.live_models == 0
+        payload = json.loads((out_dir / "report.json").read_text())
+        assert set(payload["images"][0]["predictions"]) == {"a", "b", "c"}
+
+    def test_thumbnail_write_failure_fails_run(self, tmp_path, monkeypatch, capsys):
+        """Regression: an ignored cv2.imwrite failure let the report reference a
+        thumbnail that was never written while still reporting success."""
+        import cv2
+
+        img = tmp_path / "a.jpg"
+        _make_image(img)  # before imwrite is stubbed out
+        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
+        monkeypatch.setattr(cv2, "imwrite", lambda *args, **kwargs: False)
+        out_dir = tmp_path / "out"
+        config_path = tmp_path / "config.yaml"
+        _write_config(config_path, img, out_dir)
+        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
+
+        rc = main.main()
+
+        assert rc == 6
+        assert "failed to write thumbnail" in capsys.readouterr().err
+        assert not (out_dir / "report.html").exists()
 
 
 class TestHtmlReportContent:

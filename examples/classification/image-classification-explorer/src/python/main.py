@@ -280,12 +280,18 @@ def run_all(profiles: list[ModelProfile], images: list[Path], timeout_ms: int) -
     for profile in profiles:
         print(f"Loading model '{profile.name}': {profile.path}")
         model = build_model(profile)
-        for result in results:
-            try:
-                result.predictions[profile.name] = classify(model, profile, result.image_path, timeout_ms)
-            except Exception as exc:  # noqa: BLE001 - per-image, per-model failures must not abort the run
-                print(f"  {result.image_path}: {profile.name} failed: {exc}", file=sys.stderr)
-                result.errors[profile.name] = str(exc)
+        try:
+            for result in results:
+                try:
+                    result.predictions[profile.name] = classify(model, profile, result.image_path, timeout_ms)
+                except Exception as exc:  # noqa: BLE001 - per-image, per-model failures must not abort the run
+                    print(f"  {result.image_path}: {profile.name} failed: {exc}", file=sys.stderr)
+                    result.errors[profile.name] = str(exc)
+        finally:
+            # Release this model's accelerator resources before the next profile is
+            # loaded, so only one model is ever resident at a time (as in C++, where
+            # `model` is scoped to the loop body).
+            del model
 
     return results
 
@@ -368,7 +374,13 @@ def make_thumbnail(image_path: Path, thumb_dir: Path, max_side: int = 160) -> st
     resized = cv2.resize(img, (max(1, int(w * scale)), max(1, int(h * scale))))
     thumb_dir.mkdir(parents=True, exist_ok=True)
     thumb_name = f"{abs(hash(str(image_path)))}.jpg"
-    cv2.imwrite(str(thumb_dir / thumb_name), resized)
+    thumb_path = thumb_dir / thumb_name
+    try:
+        written = cv2.imwrite(str(thumb_path), resized)
+    except cv2.error as exc:
+        raise OSError(f"failed to write thumbnail {thumb_path}: {exc}") from exc
+    if not written:
+        raise OSError(f"failed to write thumbnail {thumb_path}")
     return f"thumbnails/{thumb_name}"
 
 
