@@ -8,6 +8,7 @@ import csv
 import json
 import sys
 import time
+import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -49,7 +50,10 @@ def download_image(url: str, dest: Path) -> Path:
     """Download an image if it does not already exist."""
     if not dest.exists():
         print(f"Downloading {url} ...")
-        urllib.request.urlretrieve(url, dest)
+        try:
+            urllib.request.urlretrieve(url, dest)
+        except (urllib.error.URLError, OSError) as exc:
+            raise FileNotFoundError(f"failed to download {url}: {exc}") from exc
     return dest
 
 
@@ -86,6 +90,17 @@ def load_profiles(raw: dict[str, Any]) -> list[ModelProfile]:
                 "only 'softmax' is implemented (raw per-class scores, softmax applied, "
                 "index i maps to label_map[i])"
             )
+        if profile.top_k <= 0:
+            raise ValueError(f"models.{name}.top_k must be positive, got {profile.top_k}")
+        if profile.num_classes <= 0:
+            raise ValueError(
+                f"models.{name}.num_classes must be positive, got {profile.num_classes}"
+            )
+        if profile.input_width <= 0 or profile.input_height <= 0:
+            raise ValueError(
+                f"models.{name}.input_width/input_height must be positive, got "
+                f"{profile.input_width}x{profile.input_height}"
+            )
         profiles.append(profile)
     return profiles
 
@@ -100,8 +115,11 @@ def load_label_map(path: str | None, num_classes: int) -> list[str]:
         bundled = Path(__file__).resolve().parents[1] / "common" / label_path.name
         if bundled.exists():
             label_path = bundled
-    with label_path.open("r", encoding="utf-8") as handle:
-        labels = [line.strip() for line in handle if line.strip()]
+    try:
+        with label_path.open("r", encoding="utf-8") as handle:
+            labels = [line.strip() for line in handle if line.strip()]
+    except OSError as exc:
+        raise ValueError(f"failed to open label map {label_path}: {exc}") from exc
     if len(labels) < num_classes:
         raise ValueError(
             f"label map {label_path} has {len(labels)} entries, expected at least {num_classes}"
@@ -250,13 +268,17 @@ def run_all(profiles: list[ModelProfile], images: list[Path], timeout_ms: int) -
 
 
 def agreement(result: ImageResult, profile_names: list[str]) -> bool | None:
-    labels = [
-        result.predictions[name].top_k[0][1]
-        for name in profile_names
-        if name in result.predictions and result.predictions[name].top_k
-    ]
-    if len(labels) < 2:
+    """True/False only when every named model has a top-1 result; otherwise
+    indeterminate (None) rather than silently agreeing/disagreeing over a
+    partial subset."""
+    if len(profile_names) < 2:
         return None
+    labels = []
+    for name in profile_names:
+        pred = result.predictions.get(name)
+        if pred is None or not pred.top_k:
+            return None
+        labels.append(pred.top_k[0][1])
     return len(set(labels)) == 1
 
 
@@ -524,9 +546,12 @@ def write_html_report(path: Path, results: list[ImageResult], profiles: list[Mod
   }}
 
   function rowAgreement(row, models) {{
+    // True/False only when every selected model has a top-1 result; otherwise
+    // indeterminate, rather than silently agreeing/disagreeing over a subset.
+    if (models.length < 2) return null;
     const top1 = rowTop1(row);
-    const labels = models.map((m) => top1[m] && top1[m].label).filter((v) => v !== undefined);
-    if (labels.length < 2) return null;
+    const labels = models.map((m) => top1[m] && top1[m].label);
+    if (labels.some((l) => l === undefined)) return null;
     return labels.every((l) => l === labels[0]);
   }}
 

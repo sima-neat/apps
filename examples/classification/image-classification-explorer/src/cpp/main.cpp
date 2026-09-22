@@ -176,6 +176,21 @@ std::vector<ModelProfile> load_profiles(const sima_examples::ScalarConfig& raw,
                                "per-class scores, softmax applied, index i maps to "
                                "label_map[i])");
     }
+    if (profile.top_k <= 0) {
+      throw std::runtime_error("models." + name + ".top_k must be positive, got " +
+                               std::to_string(profile.top_k));
+    }
+    if (profile.num_classes <= 0) {
+      throw std::runtime_error("models." + name + ".num_classes must be positive, got " +
+                               std::to_string(profile.num_classes));
+    }
+    if (profile.input_width <= 0 || profile.input_height <= 0) {
+      throw std::runtime_error("models." + name +
+                               ".input_width/input_height must be positive, "
+                               "got " +
+                               std::to_string(profile.input_width) + "x" +
+                               std::to_string(profile.input_height));
+    }
     profiles.push_back(std::move(profile));
   }
   if (profiles.empty()) {
@@ -339,17 +354,19 @@ std::vector<ImageResult> run_all(std::vector<ModelProfile>& profiles,
   return results;
 }
 
+// True/False only when every named profile has a top-1 result; otherwise
+// indeterminate rather than silently agreeing/disagreeing over a partial subset.
 std::optional<bool> agreement(const ImageResult& result,
                               const std::vector<ModelProfile>& profiles) {
+  if (profiles.size() < 2)
+    return std::nullopt;
   std::vector<std::string> labels;
   for (const auto& profile : profiles) {
     const auto it = result.predictions.find(profile.name);
-    if (it != result.predictions.end() && !it->second.top_k.empty()) {
-      labels.push_back(profile.labels.at(static_cast<size_t>(it->second.top_k.front().index)));
-    }
+    if (it == result.predictions.end() || it->second.top_k.empty())
+      return std::nullopt;
+    labels.push_back(profile.labels.at(static_cast<size_t>(it->second.top_k.front().index)));
   }
-  if (labels.size() < 2)
-    return std::nullopt;
   return std::all_of(labels.begin(), labels.end(),
                      [&](const std::string& l) { return l == labels.front(); });
 }
@@ -728,10 +745,10 @@ void write_html_report(const fs::path& path, const std::vector<ImageResult>& res
       << "  }\n"
       << "\n"
       << "  function rowAgreement(row, models) {\n"
+      << "    if (models.length < 2) return null;\n"
       << "    const top1 = rowTop1(row);\n"
-      << "    const labels = models.map((m) => top1[m] && top1[m].label).filter((v) => v !== "
-         "undefined);\n"
-      << "    if (labels.length < 2) return null;\n"
+      << "    const labels = models.map((m) => top1[m] && top1[m].label);\n"
+      << "    if (labels.some((l) => l === undefined)) return null;\n"
       << "    return labels.every((l) => l === labels[0]);\n"
       << "  }\n"
       << "\n"

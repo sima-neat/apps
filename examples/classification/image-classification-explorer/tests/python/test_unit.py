@@ -192,6 +192,26 @@ class TestLoadProfiles:
         with pytest.raises(ValueError, match="output"):
             main.load_profiles(raw)
 
+    @pytest.mark.parametrize("top_k", [0, -1, -5])
+    def test_rejects_nonpositive_top_k(self, top_k):
+        raw = {"models": {"a": {"path": "m.tar.gz", "top_k": top_k}}}
+        with pytest.raises(ValueError, match="top_k"):
+            main.load_profiles(raw)
+
+    @pytest.mark.parametrize("num_classes", [0, -1])
+    def test_rejects_nonpositive_num_classes(self, num_classes):
+        raw = {"models": {"a": {"path": "m.tar.gz", "num_classes": num_classes}}}
+        with pytest.raises(ValueError, match="num_classes"):
+            main.load_profiles(raw)
+
+    @pytest.mark.parametrize(("width", "height"), [(0, 224), (224, 0), (-1, 224)])
+    def test_rejects_nonpositive_dimensions(self, width, height):
+        raw = {
+            "models": {"a": {"path": "m.tar.gz", "input_width": width, "input_height": height}}
+        }
+        with pytest.raises(ValueError, match="input_width/input_height"):
+            main.load_profiles(raw)
+
 
 class TestLoadLabelMap:
     def test_default_numeric_labels(self):
@@ -207,6 +227,28 @@ class TestLoadLabelMap:
         label_file.write_text("cat\n")
         with pytest.raises(ValueError):
             main.load_label_map(str(label_file), 3)
+
+    def test_missing_file_raises_value_error_not_os_error(self, tmp_path):
+        """Regression: a missing label_map path must surface as ValueError (the
+        type main() catches for config problems), not an uncaught OSError."""
+        missing = tmp_path / "does_not_exist" / "labels.txt"
+        with pytest.raises(ValueError, match="failed to open label map"):
+            main.load_label_map(str(missing), 3)
+
+
+class TestDownloadImage:
+    def test_network_failure_raises_file_not_found_error(self, tmp_path, monkeypatch):
+        """Regression: a download failure must surface as FileNotFoundError (the
+        type main() catches for input problems), not an uncaught URLError."""
+        import urllib.error
+
+        def _raise(*args, **kwargs):
+            raise urllib.error.URLError("simulated network failure")
+
+        monkeypatch.setattr(main.urllib.request, "urlretrieve", _raise)
+        dest = tmp_path / "fallback.jpg"
+        with pytest.raises(FileNotFoundError, match="failed to download"):
+            main.download_image("http://example.invalid/x.jpg", dest)
 
 
 class TestAgreement:
@@ -226,6 +268,15 @@ class TestAgreement:
         result.predictions["a"] = main.Prediction(top_k=[(1, "cat", 0.9)], inference_ms=1.0)
         result.predictions["b"] = main.Prediction(top_k=[(2, "dog", 0.7)], inference_ms=1.0)
         assert main.agreement(result, ["a", "b"]) is False
+
+    def test_none_when_one_of_three_selected_models_has_no_result(self):
+        """Regression: two of three selected models agreeing must not be reported
+        as agreement while the third selected model has no result at all."""
+        result = main.ImageResult(image_path=Path("x.jpg"))
+        result.predictions["a"] = main.Prediction(top_k=[(1, "cat", 0.9)], inference_ms=1.0)
+        result.predictions["b"] = main.Prediction(top_k=[(1, "cat", 0.8)], inference_ms=1.0)
+        result.errors["c"] = "simulated failure"
+        assert main.agreement(result, ["a", "b", "c"]) is None
 
 
 class TestReports:
