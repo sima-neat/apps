@@ -207,17 +207,23 @@ int main(int argc, char** argv) {
              << "    path: /nonexistent/m.tar.gz\n";
     };
 
+    // A customer directory without the ownership marker - even one that holds
+    // a report.html - must never be swapped away.
+    {
+      std::ofstream(work / "shared" / "report.html") << "customer page\n";
+    }
     write_config(work / "shared");
     auto refused = spawn_and_wait(binary, {"--config", (work / "config.yaml").string()}, 20000);
     if (refused.exit_code == 0 ||
-        refused.stderr_text.find("not part of a previous report") == std::string::npos ||
-        !fs::exists(work / "shared" / "notes.txt")) {
-      std::cerr << "[FAIL] shared output_dir: expected refusal, got exit " << refused.exit_code
+        refused.stderr_text.find("not created by this application") == std::string::npos ||
+        !fs::exists(work / "shared" / "notes.txt") ||
+        !fs::exists(work / "shared" / "report.html")) {
+      std::cerr << "[FAIL] unowned output_dir: expected refusal, got exit " << refused.exit_code
                 << "\nstderr:\n"
                 << refused.stderr_text << "\n";
       ++failures;
     } else {
-      std::cout << "[OK] output_dir with foreign entries was refused\n";
+      std::cout << "[OK] output_dir without the ownership marker was refused\n";
     }
 
     write_config(work / "report");
@@ -231,7 +237,8 @@ int main(int argc, char** argv) {
     if (ok.exit_code != 0 || second.exit_code != 0 ||
         !fs::exists(work / "report" / "report.json") ||
         !fs::exists(work / "report" / "report.csv") ||
-        !fs::exists(work / "report" / "report.html") || leftovers) {
+        !fs::exists(work / "report" / "report.html") ||
+        !fs::exists(work / "report" / ".image-classification-explorer-report") || leftovers) {
       std::cerr << "[FAIL] dedicated output_dir: expected report files after two runs, exits "
                 << ok.exit_code << "/" << second.exit_code << ", leftovers=" << leftovers
                 << "\nstderr:\n"
@@ -240,7 +247,74 @@ int main(int argc, char** argv) {
     } else {
       std::cout << "[OK] dedicated output_dir was written and replaced without leftovers\n";
     }
+
+    // A previous report that has since gained unrelated files is refused too.
+    {
+      std::ofstream(work / "report" / "notes.txt") << "customer data\n";
+    }
+    auto foreign = spawn_and_wait(binary, {"--config", (work / "config.yaml").string()}, 20000);
+    if (foreign.exit_code == 0 ||
+        foreign.stderr_text.find("not part of a previous report") == std::string::npos ||
+        !fs::exists(work / "report" / "notes.txt")) {
+      std::cerr << "[FAIL] foreign entries: expected refusal, got exit " << foreign.exit_code
+                << "\nstderr:\n"
+                << foreign.stderr_text << "\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] previous report with foreign entries was refused\n";
+    }
+
+    // A symlinked output_dir keeps the link and replaces its target.
+    fs::create_directories(work / "real_report");
+    fs::create_directory_symlink(work / "real_report", work / "linked");
+    write_config(work / "linked");
+    auto via_link = spawn_and_wait(binary, {"--config", (work / "config.yaml").string()}, 20000);
+    auto via_link2 = spawn_and_wait(binary, {"--config", (work / "config.yaml").string()}, 20000);
+    if (via_link.exit_code != 0 || via_link2.exit_code != 0 || !fs::is_symlink(work / "linked") ||
+        fs::read_symlink(work / "linked") != work / "real_report" ||
+        !fs::exists(work / "real_report" / "report.json")) {
+      std::cerr << "[FAIL] symlinked output_dir: expected link preserved and target replaced, "
+                   "exits "
+                << via_link.exit_code << "/" << via_link2.exit_code << "\nstderr:\n"
+                << via_link.stderr_text << via_link2.stderr_text << "\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] symlinked output_dir kept the link and replaced its target\n";
+    }
     fs::remove_all(work);
+  }
+
+  // Test 9: a blank line inside the first num_classes label-map lines is rejected
+  // instead of silently shifting every later class id.
+  {
+    namespace fs = std::filesystem;
+    const auto stamp = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    const auto labels_path =
+        fs::temp_directory_path() / ("image-classification-explorer-labels-" + stamp + ".txt");
+    const auto config_path =
+        fs::temp_directory_path() / ("image-classification-explorer-labels-" + stamp + ".yaml");
+    {
+      std::ofstream(labels_path) << "cat\n\nbird\ndog\n";
+    }
+    {
+      std::ofstream config(config_path);
+      config << "models:\n"
+             << "  m:\n"
+             << "    path: /nonexistent/m.tar.gz\n"
+             << "    num_classes: 3\n"
+             << "    label_map: " << labels_path.string() << "\n";
+    }
+    auto r = spawn_and_wait(binary, {"--config", config_path.string()}, 20000);
+    fs::remove(config_path);
+    fs::remove(labels_path);
+    if (r.exit_code == 0 || r.stderr_text.find("line 2 is blank") == std::string::npos) {
+      std::cerr << "[FAIL] blank label line: expected rejection, got exit " << r.exit_code
+                << "\nstderr:\n"
+                << r.stderr_text << "\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] blank label-map line was rejected\n";
+    }
   }
 
   return failures > 0 ? 1 : 0;

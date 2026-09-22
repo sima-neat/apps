@@ -290,6 +290,20 @@ class TestLoadLabelMap:
         with pytest.raises(ValueError):
             main.load_label_map(str(label_file), 3)
 
+    def test_blank_line_within_range_is_rejected(self, tmp_path):
+        """Regression: a blank line used to be dropped, silently shifting every
+        later class id onto the wrong label."""
+        label_file = tmp_path / "labels.txt"
+        label_file.write_text("cat\n\nbird\ndog\n")
+        with pytest.raises(ValueError, match="line 2 is blank"):
+            main.load_label_map(str(label_file), 3)
+
+    def test_labels_are_positional_and_trailing_blanks_are_tolerated(self, tmp_path):
+        label_file = tmp_path / "labels.txt"
+        label_file.write_text("cat\ndog\nbird\n\n\n")
+        labels = main.load_label_map(str(label_file), 3)
+        assert labels[:3] == ["cat", "dog", "bird"]
+
     def test_missing_file_raises_value_error_not_os_error(self, tmp_path):
         """Regression: a missing label_map path must surface as ValueError (the
         type main() catches for config problems), not an uncaught OSError."""
@@ -707,15 +721,16 @@ models:
         assert (out_dir / "report.html").is_file()
         assert not list(tmp_path.glob(".out.*")), "staging/previous directories left behind"
 
-    def test_output_dir_with_foreign_entries_is_refused(self, tmp_path, monkeypatch, capsys):
-        """output_dir is replaced as a whole, so a directory holding anything
-        other than a previous report must be refused rather than swapped away."""
+    def test_output_dir_without_marker_is_refused(self, tmp_path, monkeypatch, capsys):
+        """output_dir is replaced as a whole, so a customer directory - even one
+        that happens to hold a report.html and thumbnails/ - must be refused
+        rather than swapped away."""
         monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
         img = tmp_path / "a.jpg"
         _make_image(img)
         out_dir = tmp_path / "out"
-        out_dir.mkdir()
-        (out_dir / "notes.txt").write_text("customer data")
+        (out_dir / "thumbnails").mkdir(parents=True)
+        (out_dir / "report.html").write_text("customer data")
         config_path = tmp_path / "config.yaml"
         _write_config(config_path, img, out_dir)
         monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
@@ -723,9 +738,61 @@ models:
         rc = main.main()
 
         assert rc == 6
+        assert "not created by this application" in capsys.readouterr().err
+        assert (out_dir / "report.html").read_text() == "customer data"
+        assert not (out_dir / "report.json").exists()
+
+    def test_output_dir_with_foreign_entries_is_refused(self, tmp_path, monkeypatch, capsys):
+        """A previous report directory that has since gained unrelated files is
+        refused too."""
+        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
+        img = tmp_path / "a.jpg"
+        _make_image(img)
+        out_dir = tmp_path / "out"
+        config_path = tmp_path / "config.yaml"
+        _write_config(config_path, img, out_dir)
+        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
+        assert main.main() == 0
+        assert (out_dir / main.REPORT_MARKER).is_file()
+        (out_dir / "notes.txt").write_text("customer data")
+
+        rc = main.main()
+
+        assert rc == 6
         assert "not part of a previous report" in capsys.readouterr().err
         assert (out_dir / "notes.txt").read_text() == "customer data"
-        assert not (out_dir / "report.json").exists()
+
+    def test_empty_existing_output_dir_is_accepted(self, tmp_path, monkeypatch):
+        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
+        img = tmp_path / "a.jpg"
+        _make_image(img)
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        config_path = tmp_path / "config.yaml"
+        _write_config(config_path, img, out_dir)
+        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
+        assert main.main() == 0
+        assert (out_dir / "report.json").is_file()
+
+    def test_symlinked_output_dir_keeps_link_and_replaces_target(self, tmp_path, monkeypatch):
+        """A symlinked output_dir must have its target replaced, leaving the
+        link itself in place and pointing at the fresh report."""
+        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
+        img = tmp_path / "a.jpg"
+        _make_image(img)
+        target = tmp_path / "real_report"
+        target.mkdir()
+        link = tmp_path / "out"
+        link.symlink_to(target, target_is_directory=True)
+        config_path = tmp_path / "config.yaml"
+        _write_config(config_path, img, link)
+        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
+
+        assert main.main() == 0
+        assert main.main() == 0
+        assert link.is_symlink() and link.resolve() == target.resolve()
+        assert (target / "report.json").is_file()
+        assert not list(tmp_path.glob(".real_report.*")) and not list(tmp_path.glob(".out.*"))
 
     def test_successful_rerun_replaces_stale_outputs(self, tmp_path, monkeypatch):
         """A successful rerun must not leave thumbnails from a previous run behind."""

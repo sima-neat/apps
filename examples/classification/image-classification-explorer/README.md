@@ -85,7 +85,7 @@ profile is fully self-contained:
 | `preprocess` | Preprocessing preset. Only `imagenet` (standard ImageNet normalization) is implemented. |
 | `output` | Output interpretation. Only `softmax` is implemented: the model produces raw per-class scores, softmax is applied, and index `i` maps to `label_map[i]`. |
 | `num_classes` | Number of classes the model outputs. |
-| `label_map` | Path to a text file with one label per line (line index = class id). Omit for numeric labels. |
+| `label_map` | Path to a text file with one label per line (line index = class id; blank lines within the first `num_classes` lines are rejected). Omit for numeric labels. |
 | `top_k` | How many predictions to keep per image. |
 
 `preprocess` and `output` exist so a future model that needs different normalization or output
@@ -139,8 +139,9 @@ Files with a supported extension that cannot be decoded stay in the main table w
 `error` cell (and an `errors` entry in `report.json`); neither case stops the run.
 
 Each run replaces the previous contents of `io.output_dir` as a unit, so the directory is either
-the complete previous report or the complete new one. Use a dedicated directory: a run refuses
-to write into a directory that contains anything other than a previous report.
+the complete previous report or the complete new one. Use an empty or dedicated directory: a run
+only replaces a directory that carries the hidden `.image-classification-explorer-report` marker
+from a previous run and holds nothing else; any other non-empty directory is refused.
 
 ## Troubleshooting
 
