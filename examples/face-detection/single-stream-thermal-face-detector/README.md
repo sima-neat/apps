@@ -145,10 +145,21 @@ rtsp=rtsp://<host>:<port>/<stream> stream=1280x720@30 insight=<insight-host> vid
 processed=200 video_sender=<insight-host>:9000
 ```
 
-`processed` should reach `inference.frames`. This count reports frames pushed
-through the pipeline, not faces found, so a healthy `processed` value does not
-by itself confirm detections. Confirm those in Insight, which draws the five
-landmarks as labeled dots on the stream.
+The packaged config ships `inference.frames: 0`, which runs continuously. The
+closing `processed=` line prints only when a finite limit is reached, and
+interrupting the run with Ctrl-C skips it in both implementations. For a bounded
+check that ends by itself and prints the count, set a positive limit first:
+
+```yaml
+inference:
+  frames: 200
+```
+
+Left at `0`, the live Insight stream is the success signal instead.
+
+Either way, `processed` reports frames pushed through the pipeline, not faces
+found, so a healthy count does not by itself confirm detections. Confirm those
+in Insight, which draws the five landmarks as labeled dots on the stream.
 
 ## Debugging Notes
 - If the viewer shows video but no overlays, confirm `output.insight.host` and the

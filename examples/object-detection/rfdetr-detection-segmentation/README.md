@@ -123,11 +123,22 @@ RF-DETR detection small h264: rtsp://<host>:<port>/<stream> (1280x720@30) -> Ins
 RF-DETR detection: completed=200 output_fps=30.8
 ```
 
-The startup line should echo the selected task and variant, the codec, and the
-resolution probed from your source. Check that probed resolution matches the
-source you intended. `completed` should reach `inference.frames`, and
-`output_fps` should track the source frame rate; a much lower `output_fps` means
-the pipeline is not keeping up with the source.
+The startup line prints as soon as the source is probed, so it confirms the
+task, variant, codec and resolution straight away. Check that probed resolution
+matches the source you intended.
+
+The packaged config ships `inference.frames: 0`, which runs continuously, so the
+closing `completed=` line prints only when a finite limit is reached. For a
+bounded check that ends by itself, set a positive limit first:
+
+```yaml
+inference:
+  frames: 200
+```
+
+`completed` should then reach that limit, and `output_fps` should track the
+source frame rate; a much lower `output_fps` means the pipeline is not keeping
+up with the source. Left at `0`, the live Insight stream is the success signal.
 
 ## Performance
 

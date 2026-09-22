@@ -110,12 +110,24 @@ processed counts:
 [stream 2] processed=200
 ```
 
-Every configured stream should appear with a non-zero `processed` count. A
-stream stuck at `processed=0` while others advance is worth investigating on its
-own: verify that source independently before assuming a model or config problem.
-To inspect results without Insight, set `output.debug_dir` to a directory and
-leave `output.save_every` non-zero; the application then writes periodic
-annotated frames there.
+The `[profile stream=N]` lines appear while the run is in progress, once
+`runtime.warmup_frames` has passed, so they are visible without stopping the
+application. Every configured stream should appear.
+
+The `[stream N] processed=` summaries are printed at the end, and the packaged
+config ships `inference.frames: 0`, which runs continuously. Set a positive
+limit for a bounded check that ends by itself and prints them:
+
+```yaml
+inference:
+  frames: 200
+```
+
+A stream stuck with no progress while others advance is worth investigating on
+its own: verify that source independently before assuming a model or config
+problem. To inspect results without Insight, set `output.debug_dir` to a
+directory and leave `output.save_every` non-zero; the application then writes
+periodic annotated frames there.
 
 ## Troubleshooting
 
