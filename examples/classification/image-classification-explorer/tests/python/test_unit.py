@@ -26,14 +26,21 @@ def _make_image(path, color=(0, 0, 255), size=32):
     cv2.imwrite(str(path), img)
 
 
-def _make_fake_pyneat(num_classes=5, fail_message=None):
+def _make_fake_pyneat(num_classes=5, fail_message=None, fail_run_for_paths=None):
     """A minimal in-process stand-in for the real pyneat SDK.
 
     This lets error paths that otherwise only run on real hardware (missing
     model archives, corrupted images, unsupported formats) be exercised
     automatically in CI without a devkit. Model.run() returns deterministic,
     seeded-random scores so results are reproducible across test runs.
+
+    fail_message: every Model(path, opt) construction raises (simulates a bad
+    model archive, e.g. a missing file).
+    fail_run_for_paths: Model.run() raises only when the model was built from
+    one of these paths, so other models on the same image still succeed
+    (simulates one model failing inference while others are fine).
     """
+    fail_run_for_paths = fail_run_for_paths or ()
     import hashlib
     import types
 
@@ -87,6 +94,8 @@ def _make_fake_pyneat(num_classes=5, fail_message=None):
             self.path = path
 
         def run(self, tensors, timeout_ms=0):
+            if self.path in fail_run_for_paths:
+                raise RuntimeError(f"simulated inference failure for {self.path}")
             # hashlib (not the builtin hash()) so results are reproducible across
             # processes: hash() is salted per-process by PYTHONHASHSEED.
             material = self.path.encode() + tensors[0]._arr.tobytes()[:16]
@@ -223,7 +232,7 @@ class TestReports:
     def _sample_results(self):
         r1 = main.ImageResult(image_path=Path("img1.jpg"))
         r1.predictions["a"] = main.Prediction(top_k=[(1, "cat", 0.9), (2, "dog", 0.05)], inference_ms=2.0)
-        r2 = main.ImageResult(image_path=Path("img2.jpg"), error="failed to read image")
+        r2 = main.ImageResult(image_path=Path("img2.jpg"), errors={"a": "failed to read image"})
         return [r1, r2]
 
     def _sample_profile(self):
@@ -244,7 +253,8 @@ class TestReports:
         assert payload["skipped"] == ["skipped.txt: bad ext"]
         assert len(payload["images"]) == 2
         assert payload["images"][0]["predictions"]["a"]["top_k"][0]["label"] == "cat"
-        assert "error" in payload["images"][1]
+        assert payload["images"][1]["errors"] == {"a": "failed to read image"}
+        assert "predictions" not in payload["images"][1]
 
     def test_csv_report_shape(self, tmp_path):
         results = self._sample_results()
@@ -298,7 +308,10 @@ class TestFakeHardwarePipeline:
         assert rc == 0
         payload = json.loads((out_dir / "report.json").read_text())
         by_name = {Path(img["path"]).name: img for img in payload["images"]}
-        assert "error" in by_name["broken.jpg"]
+        assert "m" in by_name["broken.jpg"]["errors"]
+        assert "failed to read image" in by_name["broken.jpg"]["errors"]["m"]
+        assert "predictions" not in by_name["broken.jpg"]
+        assert "predictions" in by_name["good.jpg"]
         assert "error" not in by_name["good.jpg"]
 
     def test_all_documented_formats_load(self, tmp_path, monkeypatch):
@@ -364,13 +377,62 @@ models:
         # agreement and disagreement represented, exercising both code paths.
         assert agreements == {True, False}
 
+    def test_one_model_failing_does_not_discard_another_models_prediction(
+        self, tmp_path, monkeypatch
+    ):
+        """Regression: model B failing on an image must not hide model A's
+        already-computed prediction for that same image from the report, and
+        class_summary must stay consistent with what the report actually shows."""
+        good_model_path = "fake_model_a.tar.gz"
+        bad_model_path = "fake_model_b.tar.gz"
+        monkeypatch.setitem(
+            sys.modules,
+            "pyneat",
+            _make_fake_pyneat(fail_run_for_paths={bad_model_path}),
+        )
+        _make_image(tmp_path / "img.jpg")
+        out_dir = tmp_path / "out"
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(f"""
+io:
+  input: {tmp_path}
+  output_dir: {out_dir}
+models:
+  a:
+    path: {good_model_path}
+    num_classes: 5
+    top_k: 3
+  b:
+    path: {bad_model_path}
+    num_classes: 5
+    top_k: 3
+""")
+        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
+
+        rc = main.main()
+
+        assert rc == 0
+        payload = json.loads((out_dir / "report.json").read_text())
+        image_entry = payload["images"][0]
+        # Model a's prediction must survive despite model b's failure on the same image.
+        assert "a" in image_entry["predictions"]
+        assert image_entry["predictions"]["a"]["top_k"]
+        assert "b" in image_entry["errors"]
+        assert "simulated inference failure" in image_entry["errors"]["b"]
+        assert "b" not in image_entry["predictions"]
+        # class_summary must only count what the report actually shows.
+        top1_label = image_entry["predictions"]["a"]["top_k"][0]["label"]
+        assert payload["class_summary"]["a"].get(top1_label) == 1
+        assert payload["class_summary"].get("b", {}) == {}
+
 
 class TestHtmlReportContent:
     def _write(self, tmp_path, profiles):
         r1 = main.ImageResult(image_path=Path("img1.jpg"))
         for p in profiles:
             r1.predictions[p.name] = main.Prediction(top_k=[(1, "cat", 0.9)], inference_ms=1.0)
-        r2 = main.ImageResult(image_path=Path("img2.jpg"), error="failed to read image")
+        r2 = main.ImageResult(image_path=Path("img2.jpg"),
+                             errors={p.name: "failed to read image" for p in profiles})
         out = tmp_path / "report.html"
         main.write_html_report(out, [r1, r2], profiles, ["skipped.txt: bad ext"], {}, tmp_path)
         return out.read_text()

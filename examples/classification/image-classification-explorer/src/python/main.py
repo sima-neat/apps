@@ -42,7 +42,7 @@ class Prediction:
 class ImageResult:
     image_path: Path
     predictions: dict[str, Prediction] = field(default_factory=dict)  # model name -> Prediction
-    error: str | None = None
+    errors: dict[str, str] = field(default_factory=dict)  # model name -> error message
 
 
 def download_image(url: str, dest: Path) -> Path:
@@ -238,13 +238,11 @@ def run_all(profiles: list[ModelProfile], images: list[Path], timeout_ms: int) -
         print(f"Loading model '{profile.name}': {profile.path}")
         model = build_model(profile)
         for result in results:
-            if result.error is not None:
-                continue
             try:
                 result.predictions[profile.name] = classify(model, profile, result.image_path, timeout_ms)
-            except Exception as exc:  # noqa: BLE001 - per-image failures must not abort the run
+            except Exception as exc:  # noqa: BLE001 - per-image, per-model failures must not abort the run
                 print(f"  {result.image_path}: {profile.name} failed: {exc}", file=sys.stderr)
-                result.error = str(exc)
+                result.errors[profile.name] = str(exc)
 
     return results
 
@@ -272,9 +270,7 @@ def write_json_report(path: Path, results: list[ImageResult], profiles: list[Mod
     }
     for result in results:
         entry: dict[str, Any] = {"path": str(result.image_path)}
-        if result.error:
-            entry["error"] = result.error
-        else:
+        if result.predictions:
             entry["predictions"] = {
                 name: {
                     "top_k": [{"class_id": c, "label": lbl, "probability": p} for c, lbl, p in pred.top_k],
@@ -283,6 +279,8 @@ def write_json_report(path: Path, results: list[ImageResult], profiles: list[Mod
                 for name, pred in result.predictions.items()
             }
             entry["agreement"] = agreement(result, [p.name for p in profiles])
+        if result.errors:
+            entry["errors"] = result.errors
         payload["images"].append(entry)
 
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -294,20 +292,22 @@ def write_csv_report(path: Path, results: list[ImageResult], profiles: list[Mode
         writer.writerow(["image", "model", "status", "top1_class_id", "top1_label",
                           "top1_probability", "inference_ms", "top_k"])
         for result in results:
-            if result.error:
-                writer.writerow([result.image_path, "", "error", "", "", "", "", result.error])
-                continue
             for profile in profiles:
                 pred = result.predictions.get(profile.name)
-                if pred is None or not pred.top_k:
+                if pred is not None and pred.top_k:
+                    top1 = pred.top_k[0]
+                    top_k_str = ";".join(f"{lbl}:{p:.4f}" for _, lbl, p in pred.top_k)
+                    writer.writerow([
+                        result.image_path, profile.name, "ok", top1[0], top1[1],
+                        f"{top1[2]:.4f}", f"{pred.inference_ms:.2f}", top_k_str,
+                    ])
+                elif profile.name in result.errors:
+                    writer.writerow([
+                        result.image_path, profile.name, "error", "", "", "", "",
+                        result.errors[profile.name],
+                    ])
+                else:
                     writer.writerow([result.image_path, profile.name, "no_result", "", "", "", "", ""])
-                    continue
-                top1 = pred.top_k[0]
-                top_k_str = ";".join(f"{lbl}:{p:.4f}" for _, lbl, p in pred.top_k)
-                writer.writerow([
-                    result.image_path, profile.name, "ok", top1[0], top1[1],
-                    f"{top1[2]:.4f}", f"{pred.inference_ms:.2f}", top_k_str,
-                ])
 
 
 def make_thumbnail(image_path: Path, thumb_dir: Path, max_side: int = 160) -> str | None:
@@ -338,14 +338,6 @@ def write_html_report(path: Path, results: list[ImageResult], profiles: list[Mod
     rows = []
     for idx, result in enumerate(results):
         thumb = make_thumbnail(result.image_path, output_dir / "thumbnails")
-        if result.error:
-            rows.append(f"""
-            <tr class="row" data-result="error" data-idx="{idx}" data-top1="{{}}">
-              <td>{f'<img src="{thumb}">' if thumb else ''}</td>
-              <td>{html_escape(str(result.image_path))}</td>
-              <td colspan="{len(profile_names) + 1}" class="error">error: {html_escape(result.error)}</td>
-            </tr>""")
-            continue
 
         top1_by_model = {
             name: {"label": pred.top_k[0][1], "prob": pred.top_k[0][2]}
@@ -355,17 +347,23 @@ def write_html_report(path: Path, results: list[ImageResult], profiles: list[Mod
         cells = []
         for name in profile_names:
             pred = result.predictions.get(name)
-            if pred is None or not pred.top_k:
+            if pred is not None and pred.top_k:
+                top_str = "<br>".join(f"{html_escape(lbl)} ({p:.2%})" for _, lbl, p in pred.top_k)
+                cells.append(
+                    f'<td data-model-col="{html_escape(name)}">{top_str}<br>'
+                    f'<span class="timing">{pred.inference_ms:.1f} ms</span></td>'
+                )
+            elif name in result.errors:
+                cells.append(
+                    f'<td data-model-col="{html_escape(name)}" class="error">'
+                    f'error: {html_escape(result.errors[name])}</td>'
+                )
+            else:
                 cells.append(f'<td data-model-col="{html_escape(name)}">no result</td>')
-                continue
-            top_str = "<br>".join(f"{html_escape(lbl)} ({p:.2%})" for _, lbl, p in pred.top_k)
-            cells.append(
-                f'<td data-model-col="{html_escape(name)}">{top_str}<br>'
-                f'<span class="timing">{pred.inference_ms:.1f} ms</span></td>'
-            )
 
+        has_error = "1" if result.errors else "0"
         rows.append(f"""
-        <tr class="row" data-result="" data-idx="{idx}" data-top1="{top1_json}">
+        <tr class="row" data-has-error="{has_error}" data-idx="{idx}" data-top1="{top1_json}">
           <td>{f'<img src="{thumb}">' if thumb else ''}</td>
           <td>{html_escape(str(result.image_path))}</td>
           {''.join(cells)}
@@ -400,7 +398,7 @@ def write_html_report(path: Path, results: list[ImageResult], profiles: list[Mod
   img {{ max-width: 100px; max-height: 100px; }}
   .timing {{ color: #888; font-size: 11px; }}
   .error {{ color: #b00020; }}
-  tr[data-result="disagree"] {{ background: #fff6e5; }}
+  tr[data-has-error="1"] {{ background: #fff6e5; }}
   #controls {{ margin: 12px 0; display: flex; gap: 12px; align-items: flex-start; flex-wrap: wrap; }}
   #controls input, #controls select {{ padding: 4px; }}
   .dropdown {{ position: relative; display: inline-block; }}
@@ -526,7 +524,7 @@ def write_html_report(path: Path, results: list[ImageResult], profiles: list[Mod
   function rowAgreement(row, models) {{
     const top1 = rowTop1(row);
     const labels = models.map((m) => top1[m] && top1[m].label).filter((v) => v !== undefined);
-    if (labels.length === 0) return null;
+    if (labels.length < 2) return null;
     return labels.every((l) => l === labels[0]);
   }}
 
@@ -552,13 +550,11 @@ def write_html_report(path: Path, results: list[ImageResult], profiles: list[Mod
     }});
 
     for (const row of rows) {{
-      const isError = row.dataset.result === 'error';
+      const hasError = row.dataset.hasError === '1';
       let visible;
 
       if (resultQuery === 'error') {{
-        visible = isError;
-      }} else if (isError) {{
-        visible = resultQuery === '';
+        visible = hasError;
       }} else {{
         const agree = rowAgreement(row, models);
         if (resultQuery === 'agree') visible = agree === true;
@@ -566,17 +562,17 @@ def write_html_report(path: Path, results: list[ImageResult], profiles: list[Mod
         else visible = true;
       }}
 
-      if (visible && classQuery && !isError) {{
+      if (visible && classQuery) {{
         visible = rowClassText(row, models).toLowerCase().includes(classQuery);
       }}
 
-      if (visible && minConfidence !== null && !isError) {{
+      if (visible && minConfidence !== null) {{
         const maxConf = rowMaxConfidence(row, models);
         visible = maxConf !== null && maxConf >= minConfidence;
       }}
 
       const agreeCell = row.querySelector('.agree-cell');
-      if (agreeCell && !isError) {{
+      if (agreeCell) {{
         const agree = rowAgreement(row, models);
         agreeCell.textContent = agree === null ? '—' : (agree ? 'agree' : 'disagree');
       }}
@@ -600,8 +596,8 @@ def write_html_report(path: Path, results: list[ImageResult], profiles: list[Mod
       sorted.sort((a, b) => rowClassText(a, models).localeCompare(rowClassText(b, models)));
     }} else if (sortKey === 'result') {{
       sorted.sort((a, b) => {{
-        const ra = a.dataset.result === 'error' ? 2 : (rowAgreement(a, models) === false ? 1 : 0);
-        const rb = b.dataset.result === 'error' ? 2 : (rowAgreement(b, models) === false ? 1 : 0);
+        const ra = a.dataset.hasError === '1' ? 2 : (rowAgreement(a, models) === false ? 1 : 0);
+        const rb = b.dataset.hasError === '1' ? 2 : (rowAgreement(b, models) === false ? 1 : 0);
         return ra - rb;
       }});
     }} else {{
@@ -679,20 +675,21 @@ def main() -> int:
     for entry in skipped:
         print(f"Skipping {entry}")
 
+    results: list[ImageResult] = []
+    total_ms = 0.0
     if not images:
         print("No images to classify.", file=sys.stderr)
-        return 0
+    else:
+        print(f"Classifying {len(images)} image(s) with {len(profiles)} model(s): "
+              f"{', '.join(p.name for p in profiles)}")
 
-    print(f"Classifying {len(images)} image(s) with {len(profiles)} model(s): "
-          f"{', '.join(p.name for p in profiles)}")
-
-    start = time.monotonic()
-    try:
-        results = run_all(profiles, images, timeout_ms)
-    except Exception as exc:  # noqa: BLE001 - a whole-model failure (e.g. bad path) is fatal
-        print(f"Error: {exc}", file=sys.stderr)
-        return 6
-    total_ms = (time.monotonic() - start) * 1000.0
+        start = time.monotonic()
+        try:
+            results = run_all(profiles, images, timeout_ms)
+        except Exception as exc:  # noqa: BLE001 - a whole-model failure (e.g. bad path) is fatal
+            print(f"Error: {exc}", file=sys.stderr)
+            return 6
+        total_ms = (time.monotonic() - start) * 1000.0
 
     output_dir.mkdir(parents=True, exist_ok=True)
     class_summary = build_class_summary(results, profiles)
@@ -706,15 +703,16 @@ def main() -> int:
     write_csv_report(output_dir / "report.csv", results, profiles)
     write_html_report(output_dir / "report.html", results, profiles, skipped, class_summary, output_dir)
 
-    errors = sum(1 for r in results if r.error)
+    images_with_errors = sum(1 for r in results if r.errors)
     print(f"Done in {total_ms:.1f} ms. Report written to {output_dir}")
     print(f"  report.html, report.json, report.csv")
-    if errors:
-        print(f"  {errors} image(s) failed classification (see report.json)")
+    if images_with_errors:
+        print(f"  {images_with_errors} image(s) had at least one model failure (see report.json)")
 
     validation = raw.get("validation") or {}
     expected_class_id = validation.get("expected_class_id")
-    if expected_class_id is not None and len(images) == 1 and profiles:
+    used_fallback_sample = not io_cfg.get("input")
+    if expected_class_id is not None and used_fallback_sample and len(images) == 1 and profiles:
         first = results[0]
         pred = first.predictions.get(profiles[0].name)
         if pred and pred.top_k:

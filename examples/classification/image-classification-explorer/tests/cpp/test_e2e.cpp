@@ -4,6 +4,8 @@
 #include "support/testing/test_process.h"
 #include "support/testing/test_config.h"
 
+#include <nlohmann/json.hpp>
+
 #include <array>
 #include <filesystem>
 #include <fstream>
@@ -14,18 +16,12 @@
 
 namespace fs = std::filesystem;
 using namespace sima_examples::testing;
+using json = nlohmann::json;
 
 namespace {
 
 constexpr std::array<const char*, 4> kModelNames = {"resnet_50", "resnet_18", "efficientnet_b0",
                                                     "densenet_121"};
-
-bool file_contains(const fs::path& path, const std::string& needle) {
-  std::ifstream in(path);
-  std::ostringstream buf;
-  buf << in.rdbuf();
-  return buf.str().find(needle) != std::string::npos;
-}
 
 } // namespace
 
@@ -95,11 +91,32 @@ int main(int argc, char** argv) {
       ++failures;
     }
   }
-  for (const auto* name : kModelNames) {
-    if (failures == 0 &&
-        !file_contains(report_dir / "report.json", std::string("\"") + name + "\"")) {
-      std::cerr << "[FAIL] report.json missing " << name << " predictions\n";
+
+  if (failures == 0) {
+    std::ifstream in(report_dir / "report.json");
+    json report;
+    in >> report;
+    const auto& images = report.at("images");
+    if (images.size() != 1) {
+      std::cerr << "[FAIL] expected exactly 1 image in report.json, got " << images.size() << "\n";
       ++failures;
+    } else {
+      const auto& image = images.front();
+      if (image.contains("errors")) {
+        std::cerr << "[FAIL] report.json image entry has errors: " << image.at("errors") << "\n";
+        ++failures;
+      } else if (!image.contains("predictions")) {
+        std::cerr << "[FAIL] report.json image entry is missing predictions\n";
+        ++failures;
+      } else {
+        for (const auto* name : kModelNames) {
+          const auto& predictions = image.at("predictions");
+          if (!predictions.contains(name) || predictions.at(name).at("top_k").empty()) {
+            std::cerr << "[FAIL] report.json has no top_k predictions for " << name << "\n";
+            ++failures;
+          }
+        }
+      }
     }
   }
 

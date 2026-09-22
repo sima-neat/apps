@@ -14,9 +14,9 @@
 
 ## Concept
 
-Classifies a single image or a whole directory of images with one or more models and generates a
-browsable HTML report (plus JSON and CSV results) showing predictions, confidence, per-class
-counts, and where multiple models agree or disagree.
+Classifies a single image or a folder of images with one or more models and shows predictions,
+confidence, and where models agree or disagree in a browsable HTML report with JSON and CSV
+results.
 
 ## Preview
 
@@ -40,7 +40,7 @@ APP_DIR=examples/classification/image-classification-explorer
 
 Run the remaining commands from `prebuilt-apps/`.
 
-## Prepare the Models
+## Prepare the Model
 
 | Model package | Model Zoo name |
 | --- | --- |

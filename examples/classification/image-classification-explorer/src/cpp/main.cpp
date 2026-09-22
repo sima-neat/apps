@@ -54,7 +54,7 @@ struct Prediction {
 struct ImageResult {
   fs::path image_path;
   std::map<std::string, Prediction> predictions;
-  std::optional<std::string> error;
+  std::map<std::string, std::string> errors; // model name -> error message
 };
 
 std::string lower_copy(std::string value) {
@@ -262,21 +262,19 @@ std::vector<ImageResult> run_all(std::vector<ModelProfile>& profiles,
   std::vector<ImageResult> results;
   results.reserve(images.size());
   for (const auto& image : images) {
-    results.push_back(ImageResult{image, {}, std::nullopt});
+    results.push_back(ImageResult{image, {}, {}});
   }
 
   for (auto& profile : profiles) {
     std::cout << "Loading model '" << profile.name << "': " << profile.path << "\n";
     simaai::neat::Model model = build_model(profile);
     for (auto& result : results) {
-      if (result.error.has_value())
-        continue;
       try {
         result.predictions[profile.name] = classify(model, profile, result.image_path, timeout_ms);
       } catch (const std::exception& e) {
         std::cerr << "  " << result.image_path << ": " << profile.name << " failed: " << e.what()
                   << "\n";
-        result.error = e.what();
+        result.errors[profile.name] = e.what();
       }
     }
   }
@@ -322,9 +320,7 @@ void write_json_report(const fs::path& path, const std::vector<ImageResult>& res
   for (const auto& result : results) {
     json entry;
     entry["path"] = result.image_path.string();
-    if (result.error.has_value()) {
-      entry["error"] = *result.error;
-    } else {
+    if (!result.predictions.empty()) {
       json predictions = json::object();
       for (const auto& profile : profiles) {
         const auto it = result.predictions.find(profile.name);
@@ -346,6 +342,9 @@ void write_json_report(const fs::path& path, const std::vector<ImageResult>& res
       entry["predictions"] = predictions;
       const auto agree = agreement(result, profiles);
       entry["agreement"] = agree.has_value() ? json(*agree) : json(nullptr);
+    }
+    if (!result.errors.empty()) {
+      entry["errors"] = result.errors;
     }
     images.push_back(entry);
   }
@@ -375,15 +374,17 @@ void write_csv_report(const fs::path& path, const std::vector<ImageResult>& resu
   std::ofstream out(path);
   out << "image,model,status,top1_class_id,top1_label,top1_probability,inference_ms,top_k\n";
   for (const auto& result : results) {
-    if (result.error.has_value()) {
-      out << csv_escape(result.image_path.string()) << ",,error,,,,," << csv_escape(*result.error)
-          << "\n";
-      continue;
-    }
     for (const auto& profile : profiles) {
       const auto it = result.predictions.find(profile.name);
       if (it == result.predictions.end() || it->second.top_k.empty()) {
-        out << csv_escape(result.image_path.string()) << "," << profile.name << ",no_result,,,,,\n";
+        const auto err_it = result.errors.find(profile.name);
+        if (err_it != result.errors.end()) {
+          out << csv_escape(result.image_path.string()) << "," << profile.name << ",error,,,,,"
+              << csv_escape(err_it->second) << "\n";
+        } else {
+          out << csv_escape(result.image_path.string()) << "," << profile.name
+              << ",no_result,,,,,\n";
+        }
         continue;
       }
       const auto& top1 = it->second.top_k.front();
@@ -453,43 +454,38 @@ void write_html_report(const fs::path& path, const std::vector<ImageResult>& res
     const auto thumb = make_thumbnail(result.image_path, output_dir / "thumbnails");
     const std::string img_cell = thumb.has_value() ? "<img src=\"" + *thumb + "\">" : "";
 
-    if (result.error.has_value()) {
-      rows << "<tr class=\"row\" data-result=\"error\" data-idx=\"" << row_idx
-           << "\" data-top1=\"{}\"><td>" << img_cell << "</td><td>"
-           << html_escape(result.image_path.string()) << "</td><td colspan=\""
-           << (profiles.size() + 1) << "\" class=\"error\">error: " << html_escape(*result.error)
-           << "</td></tr>\n";
-      ++row_idx;
-      continue;
-    }
-
     json top1_obj = json::object();
     std::ostringstream cells;
     for (const auto& profile : profiles) {
       const auto it = result.predictions.find(profile.name);
-      if (it == result.predictions.end() || it->second.top_k.empty()) {
+      const auto err_it = result.errors.find(profile.name);
+      if (it != result.predictions.end() && !it->second.top_k.empty()) {
+        top1_obj[profile.name] = {{"label", label_for(profile, it->second.top_k.front().index)},
+                                  {"prob", it->second.top_k.front().prob}};
+        std::ostringstream top_str;
+        bool first = true;
+        for (const auto& s : it->second.top_k) {
+          if (!first)
+            top_str << "<br>";
+          first = false;
+          top_str << html_escape(label_for(profile, s.index)) << " (" << std::fixed
+                  << std::setprecision(1) << (s.prob * 100.0) << "%)";
+        }
+        cells << "<td data-model-col=\"" << html_escape(profile.name) << "\">" << top_str.str()
+              << "<br><span class=\"timing\">" << std::fixed << std::setprecision(1)
+              << it->second.inference_ms << " ms</span></td>";
+      } else if (err_it != result.errors.end()) {
+        cells << "<td data-model-col=\"" << html_escape(profile.name) << "\" class=\"error\">"
+              << "error: " << html_escape(err_it->second) << "</td>";
+      } else {
         cells << "<td data-model-col=\"" << html_escape(profile.name) << "\">no result</td>";
-        continue;
       }
-      top1_obj[profile.name] = {{"label", label_for(profile, it->second.top_k.front().index)},
-                                {"prob", it->second.top_k.front().prob}};
-      std::ostringstream top_str;
-      bool first = true;
-      for (const auto& s : it->second.top_k) {
-        if (!first)
-          top_str << "<br>";
-        first = false;
-        top_str << html_escape(label_for(profile, s.index)) << " (" << std::fixed
-                << std::setprecision(1) << (s.prob * 100.0) << "%)";
-      }
-      cells << "<td data-model-col=\"" << html_escape(profile.name) << "\">" << top_str.str()
-            << "<br><span class=\"timing\">" << std::fixed << std::setprecision(1)
-            << it->second.inference_ms << " ms</span></td>";
     }
 
-    rows << "<tr class=\"row\" data-result=\"\" data-idx=\"" << row_idx << "\" data-top1=\""
-         << html_escape(top1_obj.dump()) << "\"><td>" << img_cell << "</td><td>"
-         << html_escape(result.image_path.string()) << "</td>" << cells.str()
+    const std::string has_error = result.errors.empty() ? "0" : "1";
+    rows << "<tr class=\"row\" data-has-error=\"" << has_error << "\" data-idx=\"" << row_idx
+         << "\" data-top1=\"" << html_escape(top1_obj.dump()) << "\"><td>" << img_cell
+         << "</td><td>" << html_escape(result.image_path.string()) << "</td>" << cells.str()
          << "<td class=\"agree-cell\">&mdash;</td></tr>\n";
     ++row_idx;
   }
@@ -547,7 +543,7 @@ void write_html_report(const fs::path& path, const std::vector<ImageResult>& res
       << "  img { max-width: 100px; max-height: 100px; }\n"
       << "  .timing { color: #888; font-size: 11px; }\n"
       << "  .error { color: #b00020; }\n"
-      << "  tr[data-result=\"disagree\"] { background: #fff6e5; }\n"
+      << "  tr[data-has-error=\"1\"] { background: #fff6e5; }\n"
       << "  #controls { margin: 12px 0; display: flex; gap: 12px; align-items: flex-start; "
          "flex-wrap: wrap; }\n"
       << "  #controls input, #controls select { padding: 4px; }\n"
@@ -662,7 +658,7 @@ void write_html_report(const fs::path& path, const std::vector<ImageResult>& res
       << "    const top1 = rowTop1(row);\n"
       << "    const labels = models.map((m) => top1[m] && top1[m].label).filter((v) => v !== "
          "undefined);\n"
-      << "    if (labels.length === 0) return null;\n"
+      << "    if (labels.length < 2) return null;\n"
       << "    return labels.every((l) => l === labels[0]);\n"
       << "  }\n"
       << "\n"
@@ -690,13 +686,11 @@ void write_html_report(const fs::path& path, const std::vector<ImageResult>& res
       << "    });\n"
       << "\n"
       << "    for (const row of rows) {\n"
-      << "      const isError = row.dataset.result === 'error';\n"
+      << "      const hasError = row.dataset.hasError === '1';\n"
       << "      let visible;\n"
       << "\n"
       << "      if (resultQuery === 'error') {\n"
-      << "        visible = isError;\n"
-      << "      } else if (isError) {\n"
-      << "        visible = resultQuery === '';\n"
+      << "        visible = hasError;\n"
       << "      } else {\n"
       << "        const agree = rowAgreement(row, models);\n"
       << "        if (resultQuery === 'agree') visible = agree === true;\n"
@@ -704,17 +698,17 @@ void write_html_report(const fs::path& path, const std::vector<ImageResult>& res
       << "        else visible = true;\n"
       << "      }\n"
       << "\n"
-      << "      if (visible && classQuery && !isError) {\n"
+      << "      if (visible && classQuery) {\n"
       << "        visible = rowClassText(row, models).toLowerCase().includes(classQuery);\n"
       << "      }\n"
       << "\n"
-      << "      if (visible && minConfidence !== null && !isError) {\n"
+      << "      if (visible && minConfidence !== null) {\n"
       << "        const maxConf = rowMaxConfidence(row, models);\n"
       << "        visible = maxConf !== null && maxConf >= minConfidence;\n"
       << "      }\n"
       << "\n"
       << "      const agreeCell = row.querySelector('.agree-cell');\n"
-      << "      if (agreeCell && !isError) {\n"
+      << "      if (agreeCell) {\n"
       << "        const agree = rowAgreement(row, models);\n"
       << "        agreeCell.textContent = agree === null ? '\\u2014' : (agree ? 'agree' : "
          "'disagree');\n"
@@ -740,9 +734,9 @@ void write_html_report(const fs::path& path, const std::vector<ImageResult>& res
          "models)));\n"
       << "    } else if (sortKey === 'result') {\n"
       << "      sorted.sort((a, b) => {\n"
-      << "        const ra = a.dataset.result === 'error' ? 2 : (rowAgreement(a, models) === "
+      << "        const ra = a.dataset.hasError === '1' ? 2 : (rowAgreement(a, models) === "
          "false ? 1 : 0);\n"
-      << "        const rb = b.dataset.result === 'error' ? 2 : (rowAgreement(b, models) === "
+      << "        const rb = b.dataset.hasError === '1' ? 2 : (rowAgreement(b, models) === "
          "false ? 1 : 0);\n"
       << "        return ra - rb;\n"
       << "      });\n"
@@ -816,31 +810,52 @@ int main(int argc, char** argv) {
     for (const auto& s : skipped)
       std::cout << "Skipping " << s << "\n";
 
+    std::vector<ImageResult> results;
+    double total_ms = 0.0;
     if (images.empty()) {
       std::cerr << "No images to classify.\n";
-      return 0;
+    } else {
+      std::cout << "Classifying " << images.size() << " image(s) with " << profiles.size()
+                << " model(s)\n";
+
+      const auto start = std::chrono::steady_clock::now();
+      results = run_all(profiles, images, timeout_ms);
+      total_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
+                     .count();
     }
-
-    std::cout << "Classifying " << images.size() << " image(s) with " << profiles.size()
-              << " model(s)\n";
-
-    const auto start = std::chrono::steady_clock::now();
-    auto results = run_all(profiles, images, timeout_ms);
-    const double total_ms =
-        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 
     fs::create_directories(output_dir);
     write_json_report(output_dir / "report.json", results, profiles, skipped, total_ms);
     write_csv_report(output_dir / "report.csv", results, profiles);
     write_html_report(output_dir / "report.html", results, profiles, skipped, output_dir);
 
-    const auto errors = std::count_if(results.begin(), results.end(),
-                                      [](const ImageResult& r) { return r.error.has_value(); });
+    const auto images_with_errors = std::count_if(
+        results.begin(), results.end(), [](const ImageResult& r) { return !r.errors.empty(); });
     std::cout << "Done in " << total_ms << " ms. Report written to " << output_dir << "\n";
     std::cout << "  report.html, report.json, report.csv\n";
-    if (errors > 0) {
-      std::cout << "  " << errors << " image(s) failed classification (see report.json)\n";
+    if (images_with_errors > 0) {
+      std::cout << "  " << images_with_errors
+                << " image(s) had at least one model failure (see report.json)\n";
     }
+
+    const auto expected_class_id_str = raw.string_value("validation.expected_class_id");
+    const bool used_fallback_sample = input_path.empty();
+    if (expected_class_id_str.has_value() && used_fallback_sample && images.size() == 1 &&
+        !profiles.empty()) {
+      const int expected_class_id = std::stoi(*expected_class_id_str);
+      const auto& first = results.front();
+      const auto it = first.predictions.find(profiles.front().name);
+      if (it != first.predictions.end() && !it->second.top_k.empty()) {
+        const auto& top1 = it->second.top_k.front();
+        const double min_probability = raw.double_or("validation.min_probability", 0.0);
+        if (top1.index != expected_class_id || top1.prob < min_probability) {
+          std::cerr << "Note: " << profiles.front().name << " top1=" << top1.index << " ("
+                    << top1.prob << ") did not match expected_class_id=" << expected_class_id
+                    << " (min_probability=" << min_probability << "); see report for details.\n";
+        }
+      }
+    }
+
     return 0;
   } catch (const std::exception& e) {
     std::cerr << "Error: " << e.what() << "\n";
