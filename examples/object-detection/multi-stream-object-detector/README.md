@@ -100,6 +100,22 @@ python3 ${APP_DIR}/src/python/main.py \
   --config ${APP_DIR}/src/common/config.yaml
 ```
 
+## Expected Result
+
+The application prints one startup line per stream, then per-stream profile and
+processed counts:
+
+```text
+[profile stream=2] frames=70 output_fps=20.4 avg_detection_pull_ms=0.43 avg_metadata_send_ms=0.57 avg_boxes=2.0
+[stream 2] processed=200
+```
+
+Every configured stream should appear with a non-zero `processed` count. A
+stream stuck at `processed=0` while others advance means that source is not
+delivering frames, not that the model is wrong. To inspect results without
+Insight, set `output.debug_dir` to a directory and leave `output.save_every`
+non-zero; the application then writes periodic annotated frames there.
+
 ## Troubleshooting
 
 - Replace all placeholder stream URLs and the Insight host before running.

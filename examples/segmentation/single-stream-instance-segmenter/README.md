@@ -96,6 +96,19 @@ python3 ${APP_DIR}/src/python/main.py \
   --config ${APP_DIR}/src/common/config.yaml
 ```
 
+## Expected Result
+
+The application prints a count when the frame limit is reached:
+
+```text
+processed=200 dropped_segments=0 video_sender=<insight-host>:9000
+```
+
+`processed` should reach `inference.frames`, and `dropped_segments` should stay
+at or near `0`; a climbing value means mask decoding cannot keep up with the
+source. To confirm masks without watching Insight, set `output.save_dir` and a
+non-zero `output.save_every` to write annotated frames to disk as well.
+
 ## Troubleshooting
 
 - Verify `model.path` and the source URL if startup fails.

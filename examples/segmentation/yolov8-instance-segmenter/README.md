@@ -79,6 +79,22 @@ python3 ${APP_DIR}/src/python/main.py \
   --config ${APP_DIR}/src/common/config.yaml
 ```
 
+## Expected Result
+
+The application prints the image count, then one line per output file with the
+number of instances drawn:
+
+```text
+Found 21 images
+Wrote: "sandbox/yolov8-instance-segmenter/000000116439_overlay.jpg" boxes=1
+Wrote: "sandbox/yolov8-instance-segmenter/000000129492_overlay.jpg" boxes=4
+```
+
+`io.output_dir` then holds one `_overlay.jpg` per input image. Some COCO images
+legitimately produce `boxes=0` at the default `decode.score_threshold` of
+`0.60`; every image producing `boxes=0` points at a threshold or model-path
+problem instead.
+
 ## Troubleshooting
 
 - Verify `model.path` if startup fails.
