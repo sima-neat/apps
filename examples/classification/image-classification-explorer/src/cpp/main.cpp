@@ -27,6 +27,8 @@
 #include <system_error>
 #include <vector>
 
+#include <cerrno>
+#include <csignal>
 #include <unistd.h>
 
 namespace fs = std::filesystem;
@@ -93,14 +95,17 @@ bool looks_like_yaml_non_string(const std::string& key) {
   static const std::set<std::string> kWords = {"true", "false", "yes", "no", "on", "off", "null"};
   if (kWords.count(lowered) != 0)
     return true;
-  // Integer spellings: decimal (with YAML 1.1 underscores or leading zeros),
-  // and the 0x/0o/0b radix prefixes.
-  if (lowered.rfind("0x", 0) == 0 || lowered.rfind("0o", 0) == 0 || lowered.rfind("0b", 0) == 0)
+  // Integer spellings: an optional sign, then decimal digits (with YAML 1.1
+  // underscores or leading zeros) or a 0x/0o/0b radix prefix.
+  std::string body = lowered;
+  if (!body.empty() && (body.front() == '-' || body.front() == '+'))
+    body.erase(0, 1);
+  if (body.rfind("0x", 0) == 0 || body.rfind("0o", 0) == 0 || body.rfind("0b", 0) == 0)
     return true;
   const bool digits_only = std::all_of(
-      key.begin(), key.end(), [](unsigned char c) { return std::isdigit(c) != 0 || c == '_'; });
-  return digits_only &&
-         std::any_of(key.begin(), key.end(), [](unsigned char c) { return std::isdigit(c) != 0; });
+      body.begin(), body.end(), [](unsigned char c) { return std::isdigit(c) != 0 || c == '_'; });
+  return digits_only && std::any_of(body.begin(), body.end(),
+                                    [](unsigned char c) { return std::isdigit(c) != 0; });
 }
 
 // True when the key carries explicit YAML quotes, which make it a string.
@@ -1047,43 +1052,74 @@ void write_html_report(const fs::path& path, const std::vector<ImageResult>& res
 // a `report.html`) can never be swapped away.
 const char* const kReportMarker = ".image-classification-explorer-report";
 
-// Restore a report stranded by a publish that was killed mid-swap.
+// True when a process with this id still exists (it may be another run of this
+// application mid-swap, whose backup must not be touched).
+bool process_is_running(pid_t pid) {
+  if (::kill(pid, 0) == 0)
+    return true;
+  return errno != ESRCH;
+}
+
+// Clean up after a publish that was killed part-way through its swap.
 //
-// publish_report renames the old report aside before moving the new one into
-// place. If the process dies between those two renames, `output_dir` is absent
-// and the complete previous report sits under `.<name>.previous-<pid>`. Move the
-// newest such directory back so nothing is stranded and the ownership check sees
-// a normal previous report.
+// publish_report renames the old report aside to `.<name>.previous-<pid>`,
+// moves the new one into place, then deletes the backup. A process killed
+// between those steps leaves either `output_dir` absent (restore the backup) or
+// the backup orphaned (delete it). Backups belonging to a process that is still
+// running are left alone, as is anything that does not carry the report marker.
 void recover_interrupted_publish(const fs::path& output_dir) {
-  if (fs::exists(output_dir))
-    return;
   const fs::path parent = output_dir.parent_path();
   if (!fs::is_directory(parent))
     return;
 
   const std::string prefix = "." + output_dir.filename().string() + ".previous-";
-  fs::path newest;
-  fs::file_time_type newest_time;
+  std::vector<fs::path> backups;
   for (const auto& entry : fs::directory_iterator(parent)) {
     if (!entry.is_directory())
       continue;
     if (entry.path().filename().string().rfind(prefix, 0) != 0)
       continue;
-    std::error_code ec;
-    const auto written = fs::last_write_time(entry.path(), ec);
-    if (ec)
+    if (!fs::exists(entry.path() / kReportMarker))
       continue;
-    if (newest.empty() || written > newest_time) {
-      newest = entry.path();
-      newest_time = written;
-    }
+    backups.push_back(entry.path());
   }
-  if (newest.empty())
+  if (backups.empty())
     return;
 
-  fs::rename(newest, output_dir);
-  std::cerr << "Recovered an interrupted report publication: restored "
-            << newest.filename().string() << " to " << output_dir << "\n";
+  if (!fs::exists(output_dir)) {
+    auto newest = backups.begin();
+    for (auto it = backups.begin(); it != backups.end(); ++it) {
+      std::error_code ec;
+      const auto written = fs::last_write_time(*it, ec);
+      if (ec)
+        continue;
+      std::error_code best_ec;
+      if (written > fs::last_write_time(*newest, best_ec))
+        newest = it;
+    }
+    const fs::path restored = *newest;
+    backups.erase(newest);
+    fs::rename(restored, output_dir);
+    std::cerr << "Recovered an interrupted report publication: restored "
+              << restored.filename().string() << " to " << output_dir << "\n";
+  }
+
+  // Anything left belongs to a finished publish that never got to delete its
+  // backup. Keep backups whose process is still alive: it may be mid-swap and
+  // still need them to roll back.
+  for (const auto& leftover : backups) {
+    const std::string suffix = leftover.filename().string().substr(prefix.size());
+    if (!suffix.empty() &&
+        std::all_of(suffix.begin(), suffix.end(),
+                    [](unsigned char c) { return std::isdigit(c) != 0; }) &&
+        process_is_running(static_cast<pid_t>(std::stol(suffix)))) {
+      continue;
+    }
+    std::error_code ec;
+    fs::remove_all(leftover, ec);
+    if (!ec)
+      std::cerr << "Removed a leftover report backup: " << leftover.filename().string() << "\n";
+  }
 }
 
 void publish_report(const fs::path& output_dir_arg, const std::vector<ImageResult>& results,

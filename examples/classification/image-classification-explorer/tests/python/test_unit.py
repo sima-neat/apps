@@ -2,6 +2,8 @@
 
 import importlib.util
 import json
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -262,7 +264,7 @@ class TestLoadProfiles:
         with pytest.raises(ValueError, match="may only contain"):
             main.load_profiles(raw)
 
-    @pytest.mark.parametrize("name", [1, 0o1, True, None, 1.5])
+    @pytest.mark.parametrize("name", [1, 0o1, True, None, 1.5, -1, +2])
     def test_rejects_non_string_yaml_keys(self, name):
         """Regression: unquoted scalars arrive from PyYAML as Python objects
         whose text differs from the YAML spelling (`01` -> 1, `true` -> True),
@@ -807,6 +809,71 @@ models:
         assert (out_dir / "report.json").is_file()
         assert (out_dir / main.REPORT_MARKER).is_file()
         assert not stranded.exists()
+
+    def test_removes_orphaned_backup_from_a_completed_swap(self, tmp_path, monkeypatch):
+        """Regression: a process killed after the new report was installed but
+        before its backup was deleted left .<name>.previous-<pid> behind
+        forever, since recovery returned early whenever output_dir existed."""
+        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
+        img = tmp_path / "a.jpg"
+        _make_image(img)
+        out_dir = tmp_path / "out"
+        config_path = tmp_path / "config.yaml"
+        _write_config(config_path, img, out_dir)
+        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
+        assert main.main() == 0
+
+        # A complete backup left by a process that no longer exists.
+        orphan = tmp_path / ".out.previous-2147483646"
+        shutil.copytree(out_dir, orphan)
+        assert (orphan / main.REPORT_MARKER).is_file()
+
+        assert main.main() == 0
+        assert not orphan.exists()
+        assert (out_dir / "report.json").is_file()
+
+    def test_keeps_backup_of_a_running_process(self, tmp_path, monkeypatch):
+        """A backup belonging to a live process may still be needed for its
+        rollback, so it must not be deleted."""
+        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
+        img = tmp_path / "a.jpg"
+        _make_image(img)
+        out_dir = tmp_path / "out"
+        config_path = tmp_path / "config.yaml"
+        _write_config(config_path, img, out_dir)
+        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
+        assert main.main() == 0
+
+        # A separate, genuinely running process (this process's own pid is the one
+        # publish_report uses for its backup, so it cannot stand in here).
+        helper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        try:
+            live = tmp_path / f".out.previous-{helper.pid}"
+            shutil.copytree(out_dir, live)
+
+            assert main.main() == 0
+            assert live.is_dir(), "backup of a running process must be preserved"
+        finally:
+            helper.kill()
+            helper.wait()
+
+    def test_leaves_unmarked_directories_alone(self, tmp_path, monkeypatch):
+        """Only directories carrying the report marker are ever deleted."""
+        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
+        img = tmp_path / "a.jpg"
+        _make_image(img)
+        out_dir = tmp_path / "out"
+        config_path = tmp_path / "config.yaml"
+        _write_config(config_path, img, out_dir)
+        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
+        assert main.main() == 0
+
+        unmarked = tmp_path / ".out.previous-2147483646"
+        unmarked.mkdir()
+        (unmarked / "customer.txt").write_text("keep me")
+
+        assert main.main() == 0
+        assert (unmarked / "customer.txt").read_text() == "keep me"
 
     def test_run_after_interrupted_publish_succeeds(self, tmp_path, monkeypatch):
         """The recovered report is a normal previous report, so the next full

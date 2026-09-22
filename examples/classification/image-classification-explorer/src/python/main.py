@@ -757,26 +757,56 @@ def write_html_report(path: Path, results: list[ImageResult], profiles: list[Mod
     path.write_text(html, encoding="utf-8")
 
 
-def recover_interrupted_publish(output_dir: Path) -> None:
-    """Restore a report stranded by a publish that was killed mid-swap.
+def process_is_running(pid: int) -> bool:
+    """True when a process with this id still exists (it may be another run of
+    this application mid-swap, whose backup must not be touched)."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True  # exists but is not ours to signal
+    return True
 
-    publish_report renames the old report aside before moving the new one into
-    place. If the process dies between those two renames, `output_dir` is absent
-    and the complete previous report sits under `.<name>.previous-<pid>`. Move
-    the newest such directory back so nothing is stranded and the ownership
-    check below sees a normal previous report."""
-    if output_dir.exists():
-        return
+
+def _backup_pid(backup: Path) -> int | None:
+    suffix = backup.name.rsplit("-", 1)[-1]
+    return int(suffix) if suffix.isdigit() else None
+
+
+def recover_interrupted_publish(output_dir: Path) -> None:
+    """Clean up after a publish that was killed part-way through its swap.
+
+    publish_report renames the old report aside to `.<name>.previous-<pid>`,
+    moves the new one into place, then deletes the backup. A process killed
+    between those steps leaves either `output_dir` absent (restore the backup)
+    or the backup orphaned (delete it). Backups belonging to a process that is
+    still running are left alone, as is anything that does not carry the
+    report marker."""
     parent = output_dir.parent
     if not parent.is_dir():
         return
-    stranded = [p for p in parent.glob(f".{output_dir.name}.previous-*") if p.is_dir()]
-    if not stranded:
+    backups = [p for p in parent.glob(f".{output_dir.name}.previous-*")
+               if p.is_dir() and (p / REPORT_MARKER).is_file()]
+    if not backups:
         return
-    newest = max(stranded, key=lambda p: p.stat().st_mtime)
-    newest.rename(output_dir)
-    print(f"Recovered an interrupted report publication: restored {newest.name} to "
-          f"{output_dir}", file=sys.stderr)
+
+    if not output_dir.exists():
+        newest = max(backups, key=lambda p: p.stat().st_mtime)
+        newest.rename(output_dir)
+        print(f"Recovered an interrupted report publication: restored {newest.name} to "
+              f"{output_dir}", file=sys.stderr)
+        backups.remove(newest)
+
+    # Anything left belongs to a finished publish that never got to delete its
+    # backup. Keep backups whose process is still alive: it may be mid-swap and
+    # still need them to roll back.
+    for leftover in backups:
+        pid = _backup_pid(leftover)
+        if pid is not None and process_is_running(pid):
+            continue
+        shutil.rmtree(leftover, ignore_errors=True)
+        print(f"Removed a leftover report backup: {leftover.name}", file=sys.stderr)
 
 
 def publish_report(output_dir: Path, results: list[ImageResult], profiles: list[ModelProfile],

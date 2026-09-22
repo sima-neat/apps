@@ -3,6 +3,7 @@
 
 #include <chrono>
 #include <filesystem>
+#include <unistd.h>
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -449,7 +450,7 @@ int main(int argc, char** argv) {
   // objects whose text differs from the raw spelling C++ reads.
   {
     namespace fs = std::filesystem;
-    const char* const kNonStringKeys[] = {"true", "null", "01", "1_0", "0x1"};
+    const char* const kNonStringKeys[] = {"true", "null", "01", "1_0", "0x1", "-1", "+2"};
     for (const auto* key : kNonStringKeys) {
       const auto config_path =
           fs::temp_directory_path() /
@@ -528,6 +529,57 @@ int main(int argc, char** argv) {
     } else {
       std::cout << "[OK] non-integral top_k was rejected\n";
     }
+  }
+
+  // Test 17: a backup orphaned by a publish that was killed after installing the
+  // new report is removed on the next run, while a backup belonging to a live
+  // process, and any directory without the report marker, are left alone.
+  {
+    namespace fs = std::filesystem;
+    const auto stamp = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    const auto work = fs::temp_directory_path() / ("image-classification-explorer-backup-" + stamp);
+    fs::create_directories(work);
+    {
+      std::ofstream(work / "input.txt") << "not an image\n";
+    }
+    {
+      std::ofstream config(work / "config.yaml");
+      config << "io:\n"
+             << "  input: " << (work / "input.txt").string() << "\n"
+             << "  output_dir: " << (work / "report").string() << "\n"
+             << "models:\n"
+             << "  m:\n"
+             << "    path: /nonexistent/m.tar.gz\n";
+    }
+    auto first = spawn_and_wait(binary, {"--config", (work / "config.yaml").string()}, 20000);
+
+    // Orphan from a process that no longer exists, a backup owned by this live
+    // test process, and an unmarked directory that must never be touched.
+    const fs::path orphan = work / ".report.previous-2147483646";
+    const fs::path live = work / (".report.previous-" + std::to_string(::getpid()));
+    const fs::path unmarked = work / ".report.previous-2147483645";
+    fs::copy(work / "report", orphan, fs::copy_options::recursive);
+    fs::copy(work / "report", live, fs::copy_options::recursive);
+    fs::create_directories(unmarked);
+    {
+      std::ofstream(unmarked / "customer.txt") << "keep me\n";
+    }
+
+    auto second = spawn_and_wait(binary, {"--config", (work / "config.yaml").string()}, 20000);
+    const bool orphan_removed = !fs::exists(orphan);
+    const bool live_kept = fs::exists(live);
+    const bool unmarked_kept = fs::exists(unmarked / "customer.txt");
+    if (first.exit_code != 0 || second.exit_code != 0 || !orphan_removed || !live_kept ||
+        !unmarked_kept) {
+      std::cerr << "[FAIL] backup cleanup: exits " << first.exit_code << "/" << second.exit_code
+                << " orphan_removed=" << orphan_removed << " live_kept=" << live_kept
+                << " unmarked_kept=" << unmarked_kept << "\nstderr:\n"
+                << second.stderr_text << "\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] orphaned report backup removed; live and unmarked ones preserved\n";
+    }
+    fs::remove_all(work);
   }
 
   return failures > 0 ? 1 : 0;
