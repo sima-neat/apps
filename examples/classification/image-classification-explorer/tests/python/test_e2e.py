@@ -128,6 +128,14 @@ class TestE2E:
         expected_count = len(list(test_images_dir.glob("*.jpg")))
         assert len(payload["images"]) == expected_count
         assert payload["timing"]["image_count"] == expected_count
+        for image_entry in payload["images"]:
+            assert "errors" not in image_entry, (
+                f"{image_entry['path']} had errors: {image_entry.get('errors')}"
+            )
+            for model_name in MODEL_NAMES:
+                assert image_entry["predictions"][model_name]["top_k"], (
+                    f"{image_entry['path']}: {model_name} produced no predictions"
+                )
 
     @pytest.mark.parametrize("model_name", MODEL_NAMES)
     def test_each_model_individually(

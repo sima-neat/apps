@@ -352,7 +352,13 @@ void write_json_report(const fs::path& path, const std::vector<ImageResult>& res
   payload["class_summary"] = class_summary;
 
   std::ofstream out(path);
+  if (!out.is_open()) {
+    throw std::runtime_error("failed to open for writing: " + path.string());
+  }
   out << payload.dump(2);
+  if (!out.good()) {
+    throw std::runtime_error("failed to write: " + path.string());
+  }
 }
 
 std::string csv_escape(const std::string& value) {
@@ -372,6 +378,9 @@ std::string csv_escape(const std::string& value) {
 void write_csv_report(const fs::path& path, const std::vector<ImageResult>& results,
                       const std::vector<ModelProfile>& profiles) {
   std::ofstream out(path);
+  if (!out.is_open()) {
+    throw std::runtime_error("failed to open for writing: " + path.string());
+  }
   out << "image,model,status,top1_class_id,top1_label,top1_probability,inference_ms,top_k\n";
   for (const auto& result : results) {
     for (const auto& profile : profiles) {
@@ -402,6 +411,9 @@ void write_csv_report(const fs::path& path, const std::vector<ImageResult>& resu
           << std::setprecision(4) << top1.prob << "," << std::fixed << std::setprecision(2)
           << it->second.inference_ms << "," << csv_escape(top_k_str.str()) << "\n";
     }
+  }
+  if (!out.good()) {
+    throw std::runtime_error("failed to write: " + path.string());
   }
 }
 
@@ -533,6 +545,9 @@ void write_html_report(const fs::path& path, const std::vector<ImageResult>& res
   }
 
   std::ofstream out(path);
+  if (!out.is_open()) {
+    throw std::runtime_error("failed to open for writing: " + path.string());
+  }
   out << "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n"
       << "<title>Image Classification Explorer Report</title>\n<style>\n"
       << "  body { font-family: -apple-system, Arial, sans-serif; margin: 24px; color: #1a1a1a; }\n"
@@ -753,6 +768,9 @@ void write_html_report(const fs::path& path, const std::vector<ImageResult>& res
       << "  sortSelect.addEventListener('change', applyFilters);\n"
       << "  applyFilters();\n"
       << "</script>\n</body>\n</html>\n";
+  if (!out.good()) {
+    throw std::runtime_error("failed to write: " + path.string());
+  }
 }
 
 struct Args {
