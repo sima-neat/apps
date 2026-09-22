@@ -82,13 +82,24 @@ python3 ${APP_DIR}/src/python/main.py \
 
 ## Expected Result
 
-The application prints the top-1 index with its probability, the top-5 list, and
-a line confirming the top-1 class matches `validation.expected_class_id`:
+Both implementations print the top-1 index with its probability and the top-5
+list, then confirm the top-1 class matches `validation.expected_class_id`. The
+two use different wording, so check against the one you ran.
+
+C++:
 
 ```text
 [model] top1 index=1 score=16.435 prob=0.946191
 [model] top5: 1:0.946191 0:0.0495301 392:0.00298376 389:0.000480504 29:0.000206855
 [model] top-1 matches expected class 1
+```
+
+Python:
+
+```text
+top1 index=1 score=16.4350 prob=0.9586
+top5: 1:0.9586 0:0.0379 392:0.0023 389:0.0005 29:0.0002
+PASS
 ```
 
 With the packaged goldfish image, class `1` should win with a probability well

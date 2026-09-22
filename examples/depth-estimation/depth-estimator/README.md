@@ -79,7 +79,9 @@ python3 ${APP_DIR}/src/python/main.py \
 
 ## Expected Result
 
-The application prints one line per image and a final count:
+The application prints one line per image and a final count. The C++ binary also
+prints `[INFER]` and `[DEPTH]` diagnostic lines between them and quotes the
+filenames; both are normal.
 
 ```text
 [1/21] 000000081061.jpg -> 000000081061.png

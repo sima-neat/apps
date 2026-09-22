@@ -38,12 +38,30 @@ On macOS, with [Homebrew](https://brew.sh):
 brew install node python@3.11
 ```
 
-If your default `python3` is older than 3.10, run the npm scripts with a newer
-interpreter on `PATH` ahead of it, or regenerate the catalog manually:
+If your default `python3` is older than 3.10, put a newer interpreter on `PATH`
+ahead of it so `npm run dev` and `npm run build` work unchanged. That is the
+preferred fix, because the `sync-catalog` script does two things and both are
+required.
+
+To run the steps manually instead, reproduce both of them. Skipping
+`sync_portal_assets.py` leaves catalog entries pointing at previews and README
+images that were never copied into `public/`, so the pages render without them:
 
 ```bash
 python3.11 ../scripts/generate_catalog.py > public/catalog.json
+python3.11 ../scripts/sync_portal_assets.py
+```
+
+Then start the development server:
+
+```bash
 npx vite
+```
+
+or produce the static build in `dist/`:
+
+```bash
+npx vite build
 ```
 
 ## Run
