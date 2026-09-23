@@ -73,7 +73,7 @@ On the target, pick a frame and copy it out. The exact filename includes the
 observed capture time, so take the one the application printed:
 
 ```bash
-FRAME="$(find sandbox/mipi-camera-capture -name 'frame_00_*.nv12' -print -quit)"
+FRAME="$(realpath "$(find sandbox/mipi-camera-capture -name 'frame_00_*.nv12' -print -quit)")"
 echo "${FRAME}"
 ```
 

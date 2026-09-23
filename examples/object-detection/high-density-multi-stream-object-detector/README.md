@@ -92,15 +92,20 @@ Relative paths in this config resolve from the config file, not from
 `prebuilt-apps/`. A bare `models/yolo26n-det-int8-b1.tar.gz` therefore points at
 `${APP_DIR}/src/common/models/` and fails with
 `ModelPack: invalid_archive: archive path does not exist`. Use an absolute path
-to the file downloaded above:
+to the file downloaded above.
+
+Print it from `prebuilt-apps/`:
+
+```bash
+echo "$(pwd)/models/yolo26n-det-int8-b1.tar.gz"
+```
+
+Then paste that value into the selected config:
 
 ```yaml
 model:
-  path: /home/sima/prebuilt-apps/models/yolo26n-det-int8-b1.tar.gz
+  path: <paste-the-printed-path>
 ```
-
-Print the value to paste with `echo "$(pwd)/models/yolo26n-det-int8-b1.tar.gz"`
-from `prebuilt-apps/`.
 
 ## Prepare Insight
 
