@@ -123,6 +123,10 @@ RF-DETR detection small h264: rtsp://<host>:<port>/<stream> (1280x720@30) -> Ins
 RF-DETR detection: completed=200 output_fps=30.8
 ```
 
+The `output_fps` value above is Python's, which prints one decimal place. The
+C++ binary prints the same line at the default stream precision, for example
+`output_fps=30.7692`.
+
 The startup line prints as soon as the source is probed, so it confirms the
 task, variant, codec and resolution straight away. Check that probed resolution
 matches the source you intended.

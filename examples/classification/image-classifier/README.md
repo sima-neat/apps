@@ -107,11 +107,14 @@ By default `io.image` is `null`, so the application downloads the goldfish image
 from `io.fallback_image_url` and needs network access. Class `1` should win with
 a probability well above the `validation.min_probability` default of `0.20`.
 
-A failed check reports the reason rather than failing silently. Python prints to
-stderr:
+A failed check reports the reason rather than failing silently. Python prints
+one of these to stderr and stops, so you see the first that applies, never both:
 
 ```text
 FAIL: expected top1=1 (goldfish), got 393
+```
+
+```text
 FAIL: top1 prob 0.1832 < 0.2
 ```
 

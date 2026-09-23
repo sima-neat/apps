@@ -88,8 +88,8 @@ cd ..
 
 Set `model.path` in the selected config to the downloaded package.
 
-Relative paths in this config resolve from the config file, not from
-`prebuilt-apps/`. A bare `models/yolo26n-det-int8-b1.tar.gz` therefore points at
+A relative `model.path` resolves from the config file, not from `prebuilt-apps/`.
+A bare `models/yolo26n-det-int8-b1.tar.gz` therefore points at
 `${APP_DIR}/src/common/models/` and fails with
 `ModelPack: invalid_archive: archive path does not exist`. Use an absolute path
 to the file downloaded above.
@@ -106,6 +106,9 @@ Then paste that value into the selected config:
 model:
   path: <paste-the-printed-path>
 ```
+
+`model.labels` is the exception: it resolves from the Apps root, so the packaged
+value needs no change. The config header states the same split.
 
 ## Prepare Insight
 
