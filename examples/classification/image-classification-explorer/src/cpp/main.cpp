@@ -1388,7 +1388,14 @@ int main(int argc, char** argv) {
         throw ConfigError("validation.expected_class_id must be an integer, got " + *text);
       }
     }
-    const double min_probability = raw.double_or("validation.min_probability", 0.0);
+    const double min_probability = [&] {
+      try {
+        return raw.double_or("validation.min_probability", 0.0);
+      } catch (const std::exception&) {
+        throw ConfigError("validation.min_probability must be a number, got " +
+                          raw.string_or("validation.min_probability", "0.0"));
+      }
+    }();
 
     const int timeout_ms = config_int(raw, "runtime.timeout_ms", 20000);
     if (timeout_ms <= 0) {

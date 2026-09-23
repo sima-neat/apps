@@ -1402,7 +1402,8 @@ class TestArgParsing:
         ("block", "expected"),
         [("validation: 5\n", "must be a mapping"),
          ("validation:\n  expected_class_id: abc\n", "must be an integer"),
-         ("validation:\n  min_probability: high\n", "must be a number")],
+         ("validation:\n  min_probability: high\n", "must be a number"),
+         ("validation:\n  min_probability: [1]\n", "must be a number")],
     )
     def test_rejects_malformed_validation_block(self, tmp_path, block, expected):
         """Regression: the validation block was read only after the report was
@@ -1416,6 +1417,32 @@ class TestArgParsing:
         assert r.returncode == 2
         assert expected in r.stderr
         assert "Traceback" not in r.stderr
+
+    def test_quoted_numbers_are_accepted_like_cpp(self, tmp_path, monkeypatch):
+        """ScalarConfig parses every scalar from text, so a quoted number is a
+        number there; Python must accept it rather than reject what C++ runs."""
+        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
+        img = tmp_path / "a.jpg"
+        _make_image(img)
+        out_dir = tmp_path / "out"
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(f"""
+io:
+  input: {img}
+  output_dir: {out_dir}
+validation:
+  expected_class_id: "1"
+  min_probability: "0.2"
+models:
+  m:
+    path: fake.tar.gz
+    num_classes: "5"
+    top_k: "3"
+""")
+        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
+        assert main.main() == 0
+        payload = json.loads((out_dir / "report.json").read_text())
+        assert len(payload["images"][0]["predictions"]["m"]["top_k"]) == 3
 
     def test_non_scalar_io_setting_is_rejected(self, tmp_path):
         """A list or mapping has no text form C++ could read, so it is an error

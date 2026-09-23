@@ -174,6 +174,26 @@ def config_int(value: Any, key: str, default: int) -> int:
     raise ValueError(f"{key} must be an integer, got {value!r}")
 
 
+def config_float(value: Any, key: str, default: float) -> float:
+    """Read a floating-point config value the way the C++ ScalarConfig does.
+
+    ScalarConfig parses every scalar from text, so a quoted `"0.2"` is a number
+    there; rejecting it here would make the two entrypoints accept different
+    configurations."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        raise ValueError(f"{key} must be a number, got {value!r}")
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            raise ValueError(f"{key} must be a number, got {value!r}") from None
+    raise ValueError(f"{key} must be a number, got {value!r}")
+
+
 def _check_int32(value: int, key: str) -> int:
     if not INT32_MIN <= value <= INT32_MAX:
         raise ValueError(f"{key} is out of range for a 32-bit integer: {value}")
@@ -956,12 +976,9 @@ def main() -> int:
         expected_class_id = validation.get("expected_class_id")
         if expected_class_id is not None:
             expected_class_id = config_int(expected_class_id, "validation.expected_class_id", 0)
-        min_probability = validation.get("min_probability", 0.0)
-        if isinstance(min_probability, bool) or not isinstance(min_probability, (int, float)):
-            raise ValueError(
-                f"validation.min_probability must be a number, got {min_probability!r}"
-            )
-        min_probability = float(min_probability)
+        min_probability = config_float(
+            validation.get("min_probability"), "validation.min_probability", 0.0
+        )
         profiles = load_profiles(raw)
         for profile in profiles:
             profile.labels = load_label_map(profile.label_map, profile.num_classes)
