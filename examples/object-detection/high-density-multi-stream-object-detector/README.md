@@ -108,7 +108,7 @@ model:
 ```
 
 `model.labels` is the exception: it resolves from the Apps root, so the packaged
-value needs no change. The config header states the same split.
+value needs no change.
 
 ## Prepare Insight
 
