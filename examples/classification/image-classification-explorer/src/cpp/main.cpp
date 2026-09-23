@@ -1481,25 +1481,19 @@ int main(int argc, char** argv) {
       }
     }
 
-    // ScalarConfig keeps a flow value such as `output_dir: [a, b]` verbatim, so
-    // without this C++ would create a directory literally named "[a, b]" while
-    // Python rejects the same file as not a scalar. Every scalar is checked
-    // rather than a hand-listed set, which would miss the models.* keys.
+    // Not guarded: a collection written where a scalar belongs, such as
+    // `output_dir: [a, b]`. Python rejects it; ScalarConfig keeps the text
+    // verbatim, so C++ would create a directory literally named "[a, b]".
     //
-    // Two known limits, both from ScalarConfig rather than from here: a block
-    // sequence leaves no scalar at all, so it is invisible and C++ falls back to
-    // the default where Python rejects the file; and a quoted "[a, b]" is
-    // unquoted before we see it, so a directory whose name really is bracketed
-    // is rejected. Telling the three apart needs a YAML parser in the shared
-    // reader, which is a change for its owners.
-    for (const auto& [key, value] : raw.scalars()) {
-      if (value.size() >= 2 &&
-          ((value.front() == '[' && value.back() == ']') ||
-           (value.front() == '{' && value.back() == '}'))) {
-        throw ConfigError(key + " must be a scalar, got " +
-                          std::string(value.front() == '[' ? "a list" : "a mapping"));
-      }
-    }
+    // Guarding it here was tried twice and withdrawn both times. ScalarConfig
+    // flattens the file to scalars, which loses what is needed to do this
+    // correctly: a block sequence leaves no entry at all, a quoted "[a, b]" is
+    // indistinguishable from an unquoted one, and a check over every scalar
+    // also rejects keys neither entrypoint reads - `notes: [see docs]` became
+    // a hard error in C++ while Python ignored it. Each attempt broke a
+    // configuration that works today in order to reject one nobody writes.
+    // Doing it properly means a real YAML parser in the shared reader, which
+    // is its owners' call, not this example's.
 
     const std::string input_path = raw.string_or("io.input", "");
     const std::string fallback_url =
