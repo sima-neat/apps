@@ -41,6 +41,33 @@ namespace {
 
 const std::vector<std::string> kDefaultExtensions = {".jpg", ".jpeg", ".png", ".bmp"};
 
+// The two entrypoints report the same failures with the same exit codes:
+// 2 for anything wrong with the configuration or the command line, 3 for input
+// that cannot be read, and 6 for a runtime or reporting failure.
+class ConfigError : public std::runtime_error {
+public:
+  explicit ConfigError(const std::string& what) : std::runtime_error(what) {}
+};
+
+class InputError : public std::runtime_error {
+public:
+  explicit InputError(const std::string& what) : std::runtime_error(what) {}
+};
+
+// std::stoi reports an out-of-range value as an exception with no context; give
+// the customer the key and the value instead, as Python does.
+int config_int(const sima_examples::ScalarConfig& raw, const std::string& key, int fallback) {
+  try {
+    return raw.int_or(key, fallback);
+  } catch (const std::out_of_range&) {
+    throw ConfigError(key + " is out of range for a 32-bit integer: " +
+                      raw.string_or(key, std::to_string(fallback)));
+  } catch (const std::exception&) {
+    throw ConfigError(key + " must be an integer, got " +
+                      raw.string_or(key, std::to_string(fallback)));
+  }
+}
+
 // The shipped config references the bundled label map by its in-package path,
 // which is relative to the example directory rather than the caller's cwd. Only
 // this exact reference falls back to the bundled copy; any other missing
@@ -225,9 +252,14 @@ std::vector<std::string> split_csv(const std::string& value) {
   std::stringstream ss(value);
   std::string item;
   while (std::getline(ss, item, ',')) {
-    item = sima_examples::trim_copy(item);
-    if (!item.empty())
-      out.push_back(lower_copy(item));
+    item = lower_copy(sima_examples::trim_copy(item));
+    if (item.empty())
+      continue;
+    // Accept `jpg` as well as `.jpg`: the extension compared against always
+    // carries the dot, so an entry without one would silently match nothing.
+    if (item.front() != '.')
+      item.insert(item.begin(), '.');
+    out.push_back(item);
   }
   return out;
 }
@@ -320,13 +352,13 @@ std::vector<ModelProfile> load_profiles(const sima_examples::ScalarConfig& raw,
   // cannot represent (a colon inside the name) is reported by its real name.
   for (const auto& key : ordered) {
     if (!is_quoted_yaml_key(key) && looks_like_yaml_non_string(key)) {
-      throw std::runtime_error("models: profile name " + key +
-                               " is not a string; quote it in config.yaml");
+      throw ConfigError("models: profile name " + key +
+                        " is not a string; quote it in config.yaml");
     }
     const std::string declared = unquote_yaml_key(key);
     if (!is_valid_profile_name(declared)) {
-      throw std::runtime_error("models." + declared +
-                               ": profile names may only contain letters, digits, '_' and '-'");
+      throw ConfigError("models." + declared +
+                        ": profile names may only contain letters, digits, '_' and '-'");
     }
   }
   // ScalarConfig has no scalar for an empty mapping, but the text scan does. Keep
@@ -347,45 +379,45 @@ std::vector<ModelProfile> load_profiles(const sima_examples::ScalarConfig& raw,
     profile.name = unquote_yaml_key(key);
     const std::string& name = profile.name;
     profile.path = raw.string_or("models." + key + ".path", "");
-    profile.input_width = raw.int_or("models." + key + ".input_width", 224);
-    profile.input_height = raw.int_or("models." + key + ".input_height", 224);
+    profile.input_width = config_int(raw, "models." + key + ".input_width", 224);
+    profile.input_height = config_int(raw, "models." + key + ".input_height", 224);
     profile.preprocess = raw.string_or("models." + key + ".preprocess", "imagenet");
     profile.output = raw.string_or("models." + key + ".output", "softmax");
-    profile.num_classes = raw.int_or("models." + key + ".num_classes", 1000);
+    profile.num_classes = config_int(raw, "models." + key + ".num_classes", 1000);
     profile.label_map = raw.string_or("models." + key + ".label_map", "");
-    profile.top_k = raw.int_or("models." + key + ".top_k", 5);
+    profile.top_k = config_int(raw, "models." + key + ".top_k", 5);
     if (!is_valid_profile_name(name)) {
-      throw std::runtime_error("models." + name +
-                               ": profile names may only contain letters, digits, '_' and '-'");
+      throw ConfigError("models." + name +
+                        ": profile names may only contain letters, digits, '_' and '-'");
     }
     if (profile.path.empty()) {
-      throw std::runtime_error("models." + name + ".path is required");
+      throw ConfigError("models." + name + ".path is required");
     }
     if (profile.output != "softmax") {
-      throw std::runtime_error("models." + name + ".output=" + profile.output +
-                               " is not supported; only 'softmax' is implemented (raw "
-                               "per-class scores, softmax applied, index i maps to "
-                               "label_map[i])");
+      throw ConfigError("models." + name + ".output=" + profile.output +
+                        " is not supported; only 'softmax' is implemented (raw "
+                        "per-class scores, softmax applied, index i maps to "
+                        "label_map[i])");
     }
     if (profile.top_k <= 0) {
-      throw std::runtime_error("models." + name + ".top_k must be positive, got " +
-                               std::to_string(profile.top_k));
+      throw ConfigError("models." + name + ".top_k must be positive, got " +
+                        std::to_string(profile.top_k));
     }
     if (profile.num_classes <= 0) {
-      throw std::runtime_error("models." + name + ".num_classes must be positive, got " +
-                               std::to_string(profile.num_classes));
+      throw ConfigError("models." + name + ".num_classes must be positive, got " +
+                        std::to_string(profile.num_classes));
     }
     if (profile.input_width <= 0 || profile.input_height <= 0) {
-      throw std::runtime_error("models." + name +
-                               ".input_width/input_height must be positive, "
-                               "got " +
-                               std::to_string(profile.input_width) + "x" +
-                               std::to_string(profile.input_height));
+      throw ConfigError("models." + name +
+                        ".input_width/input_height must be positive, "
+                        "got " +
+                        std::to_string(profile.input_width) + "x" +
+                        std::to_string(profile.input_height));
     }
     profiles.push_back(std::move(profile));
   }
   if (profiles.empty()) {
-    throw std::runtime_error("config.yaml must define at least one entry under `models`");
+    throw ConfigError("config.yaml must define at least one entry under `models`");
   }
   return profiles;
 }
@@ -411,7 +443,7 @@ std::vector<std::string> load_label_map(const std::string& path, int num_classes
 
   std::ifstream in(label_path);
   if (!in.is_open()) {
-    throw std::runtime_error("failed to open label map: " + label_path.string());
+    throw ConfigError("failed to open label map: " + label_path.string());
   }
   // Positional: physical line index == class id, so blank lines are never dropped
   // (that would silently shift every later label).
@@ -420,15 +452,14 @@ std::vector<std::string> load_label_map(const std::string& path, int num_classes
     labels.push_back(sima_examples::trim_copy(line));
   }
   if (static_cast<int>(labels.size()) < num_classes) {
-    throw std::runtime_error("label map " + label_path.string() + " has " +
-                             std::to_string(labels.size()) + " entries, expected at least " +
-                             std::to_string(num_classes));
+    throw ConfigError("label map " + label_path.string() + " has " + std::to_string(labels.size()) +
+                      " entries, expected at least " + std::to_string(num_classes));
   }
   for (int class_id = 0; class_id < num_classes; ++class_id) {
     if (labels[static_cast<size_t>(class_id)].empty()) {
-      throw std::runtime_error("label map " + label_path.string() + " line " +
-                               std::to_string(class_id + 1) + " is blank; every class id 0.." +
-                               std::to_string(num_classes - 1) + " needs a label");
+      throw ConfigError("label map " + label_path.string() + " line " +
+                        std::to_string(class_id + 1) + " is blank; every class id 0.." +
+                        std::to_string(num_classes - 1) + " needs a label");
     }
   }
   return labels;
@@ -472,22 +503,21 @@ fs::path download_fallback_image(const std::string& url, const fs::path& base) {
   // leftover partial download from a previous crash first.
   fs::remove(temporary, ec);
   if (ec) {
-    throw std::runtime_error("failed to refresh fallback image: " + temporary.string() + ": " +
-                             ec.message());
+    throw InputError("failed to refresh fallback image: " + temporary.string() + ": " +
+                     ec.message());
   }
   if (!sima_examples::download_file(url, temporary)) {
-    throw std::runtime_error("failed to download fallback image: " + url);
+    throw InputError("failed to download fallback image: " + url);
   }
   if (cv::imread(temporary.string(), cv::IMREAD_COLOR).empty()) {
     fs::remove(temporary, ec);
-    throw std::runtime_error("failed to download fallback image: " + url +
-                             ": downloaded file is not a decodable image");
+    throw InputError("failed to download fallback image: " + url +
+                     ": downloaded file is not a decodable image");
   }
   fs::rename(temporary, dest, ec);
   if (ec) {
     fs::remove(temporary, ec);
-    throw std::runtime_error("failed to refresh fallback image: " + dest.string() + ": " +
-                             ec.message());
+    throw InputError("failed to refresh fallback image: " + dest.string() + ": " + ec.message());
   }
   return dest;
 }
@@ -513,7 +543,7 @@ std::vector<fs::path> discover_images(const std::string& input_path,
   }
 
   if (!fs::is_directory(path)) {
-    throw std::runtime_error("input path does not exist: " + path.string());
+    throw InputError("input path does not exist: " + path.string());
   }
 
   std::vector<fs::path> entries;
@@ -536,15 +566,15 @@ std::vector<fs::path> discover_images(const std::string& input_path,
   }
 
   if (images.empty() && skipped.empty()) {
-    throw std::runtime_error("no image files found under " + path.string());
+    throw InputError("no image files found under " + path.string());
   }
   return images;
 }
 
 simaai::neat::Model build_model(const ModelProfile& profile) {
   if (profile.preprocess != "imagenet") {
-    throw std::runtime_error("models." + profile.name + ".preprocess=" + profile.preprocess +
-                             " is not supported; only 'imagenet' is implemented");
+    throw ConfigError("models." + profile.name + ".preprocess=" + profile.preprocess +
+                      " is not supported; only 'imagenet' is implemented");
   }
   simaai::neat::Model::Options opt;
   opt.preprocess.kind = simaai::neat::InputKind::Image;
@@ -1416,13 +1446,13 @@ Args parse_args(int argc, char** argv) {
     const std::string arg = argv[i];
     if (arg == "--config") {
       if (i + 1 >= argc)
-        throw std::runtime_error("--config requires a path");
+        throw ConfigError("--config requires a path");
       args.config_path = argv[++i];
     } else if (arg == "--help" || arg == "-h") {
       std::cout << "Usage: " << argv[0] << " [--config <path>]\n";
       std::exit(0);
     } else {
-      throw std::runtime_error("unknown argument: " + arg);
+      throw ConfigError("unknown argument: " + arg);
     }
   }
   return args;
@@ -1436,7 +1466,14 @@ int main(int argc, char** argv) {
 
   try {
     const Args args = parse_args(argc, argv);
-    const auto raw = sima_examples::ScalarConfig::load(args.config_path);
+    // An unreadable or malformed config file is a configuration failure.
+    const sima_examples::ScalarConfig raw = [&] {
+      try {
+        return sima_examples::ScalarConfig::load(args.config_path);
+      } catch (const std::exception& e) {
+        throw ConfigError(e.what());
+      }
+    }();
 
     const std::string input_path = raw.string_or("io.input", "");
     const std::string fallback_url =
@@ -1458,15 +1495,14 @@ int main(int argc, char** argv) {
           throw std::invalid_argument("trailing characters");
         expected_class_id = parsed;
       } catch (const std::exception&) {
-        throw std::runtime_error("validation.expected_class_id must be an integer, got " + *text);
+        throw ConfigError("validation.expected_class_id must be an integer, got " + *text);
       }
     }
     const double min_probability = raw.double_or("validation.min_probability", 0.0);
 
-    const int timeout_ms = raw.int_or("runtime.timeout_ms", 20000);
+    const int timeout_ms = config_int(raw, "runtime.timeout_ms", 20000);
     if (timeout_ms <= 0) {
-      throw std::runtime_error("runtime.timeout_ms must be positive, got " +
-                               std::to_string(timeout_ms));
+      throw ConfigError("runtime.timeout_ms must be positive, got " + std::to_string(timeout_ms));
     }
 
     auto profiles = load_profiles(raw, args.config_path);
@@ -1523,6 +1559,12 @@ int main(int argc, char** argv) {
     }
 
     return 0;
+  } catch (const ConfigError& e) {
+    std::cerr << "Invalid configuration: " << e.what() << "\n";
+    return 2;
+  } catch (const InputError& e) {
+    std::cerr << e.what() << "\n";
+    return 3;
   } catch (const std::exception& e) {
     std::cerr << "Error: " << e.what() << "\n";
     return 6;

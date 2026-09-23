@@ -39,22 +39,28 @@ int main(int argc, char** argv) {
   // Test 2: a missing config file produces a nonzero exit.
   {
     auto r = spawn_and_wait(binary, {"--config", "/nonexistent/config.yaml"}, 20000);
-    if (r.exit_code == 0) {
-      std::cerr << "[FAIL] missing config: expected nonzero exit, got 0\n";
+    // 2 is the configuration-error code the Python entrypoint uses.
+    if (r.exit_code != 2 || r.stderr_text.find("Invalid configuration") == std::string::npos) {
+      std::cerr << "[FAIL] missing config: expected exit 2 and an \"Invalid configuration\" "
+                   "message, got "
+                << r.exit_code << "\nstderr:\n"
+                << r.stderr_text << "\n";
       ++failures;
     } else {
-      std::cout << "[OK] missing config produced a nonzero exit\n";
+      std::cout << "[OK] missing config produced a configuration error (exit 2)\n";
     }
   }
 
   // Test 3: an unrecognized flag produces a nonzero exit.
   {
     auto r = spawn_and_wait(binary, {"--bogus"}, 20000);
-    if (r.exit_code == 0) {
-      std::cerr << "[FAIL] unknown flag: expected nonzero exit, got 0\n";
+    // argparse exits 2 for a usage error; the C++ entrypoint matches it.
+    if (r.exit_code != 2) {
+      std::cerr << "[FAIL] unknown flag: expected exit 2, got " << r.exit_code << "\nstderr:\n"
+                << r.stderr_text << "\n";
       ++failures;
     } else {
-      std::cout << "[OK] unknown flag produced a nonzero exit\n";
+      std::cout << "[OK] unknown flag produced a usage error (exit 2)\n";
     }
   }
 
@@ -802,6 +808,72 @@ int main(int argc, char** argv) {
     } else {
       std::cout << "[OK] malformed validation.expected_class_id was rejected up front\n";
     }
+  }
+
+  // Test 25: an unreadable input path is an input error (exit 3), the code the
+  // Python entrypoint uses, not a generic runtime failure.
+  {
+    namespace fs = std::filesystem;
+    const auto config_path =
+        fs::temp_directory_path() /
+        ("image-classification-explorer-missing-input-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".yaml");
+    {
+      std::ofstream config(config_path);
+      config << "io:\n"
+             << "  input: /nonexistent/directory/of/images\n"
+             << "models:\n"
+             << "  m:\n"
+             << "    path: /nonexistent/m.tar.gz\n";
+    }
+    auto r = spawn_and_wait(binary, {"--config", config_path.string()}, 20000);
+    fs::remove(config_path);
+    if (r.exit_code != 3 || r.stderr_text.find("input path does not exist") == std::string::npos) {
+      std::cerr << "[FAIL] missing input: expected exit 3, got " << r.exit_code << "\nstderr:\n"
+                << r.stderr_text << "\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] missing input path produced an input error (exit 3)\n";
+    }
+  }
+
+  // Test 26: `extensions: jpg` (no leading dot) must still match .jpg files.
+  {
+    namespace fs = std::filesystem;
+    const auto stamp = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    const auto work = fs::temp_directory_path() / ("image-classification-explorer-ext-" + stamp);
+    const auto images = work / "images";
+    fs::create_directories(images);
+    {
+      std::ofstream(images / "a.jpg") << "not really an image\n";
+    }
+    // The config lives outside the scanned directory: a .yaml inside it would
+    // itself be reported as an unsupported extension.
+    {
+      std::ofstream config(work / "config.yaml");
+      config << "io:\n"
+             << "  input: " << images.string() << "\n"
+             << "  output_dir: " << (work / "report").string() << "\n"
+             << "  extensions: jpg\n"
+             << "models:\n"
+             << "  m:\n"
+             << "    path: /nonexistent/m.tar.gz\n";
+    }
+    auto r = spawn_and_wait(binary, {"--config", (work / "config.yaml").string()}, 20000);
+    // The model cannot load, so the run fails - but the file must have been
+    // accepted as an input rather than reported as an unsupported extension.
+    const bool skipped_it =
+        (r.stdout_text + r.stderr_text).find("unsupported extension") != std::string::npos;
+    const bool classified = r.stdout_text.find("Classifying 1 image(s)") != std::string::npos;
+    if (skipped_it || !classified) {
+      std::cerr << "[FAIL] extensions without a dot: skipped=" << skipped_it
+                << " classified=" << classified << "\nstdout:\n"
+                << r.stdout_text << "\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] an extension without a leading dot still matched\n";
+    }
+    fs::remove_all(work);
   }
 
   return failures > 0 ? 1 : 0;

@@ -327,14 +327,13 @@ class TestLoadProfiles:
         raw = {"models": {name: {"path": "m.tar.gz"}}}
         assert [p.name for p in main.load_profiles(raw)] == [name]
 
-    @pytest.mark.parametrize("field", ["path", "preprocess", "output", "label_map"])
-    def test_rejects_non_string_settings(self, field):
-        """A non-string scalar must be a configuration error, not silently
-        stringified: `path: 5` used to become the literal "5" and `path: null`
-        the literal "None", which passed the required-field check."""
-        raw = {"models": {"a": {"path": "m.tar.gz", field: 5}}}
-        with pytest.raises(ValueError, match="must be a string"):
-            main.load_profiles(raw)
+    @pytest.mark.parametrize(("value", "expected"), [(5, "5"), (True, "true"), (False, "false")])
+    def test_scalar_settings_render_as_cpp_reads_them(self, value, expected):
+        """ScalarConfig sees every value as text and cannot tell `path: 5` from
+        `path: "5"`, so Python must render the same text rather than reject one
+        of them - and booleans must be YAML-style, not Python-style."""
+        profile = main.load_profiles({"models": {"a": {"path": value}}})[0]
+        assert profile.path == expected
 
     def test_null_path_is_reported_as_missing(self):
         """Regression: `path: null` became the string "None" and passed the
@@ -1416,19 +1415,44 @@ class TestArgParsing:
         assert expected in r.stderr
         assert "Traceback" not in r.stderr
 
-    @pytest.mark.parametrize("setting", ["input", "output_dir", "fallback_image_url"])
-    def test_rejects_non_string_io_settings(self, tmp_path, setting):
+    def test_non_scalar_io_setting_is_rejected(self, tmp_path):
+        """A list or mapping has no text form C++ could read, so it is an error
+        in both - unlike a plain scalar, which is rendered as text."""
         config_path = tmp_path / "config.yaml"
         config_path.write_text(
-            f"io:\n  {setting}: 5\nmodels:\n  m:\n    path: m.tar.gz\n"
+            "io:\n  output_dir: [a, b]\nmodels:\n  m:\n    path: m.tar.gz\n"
         )
         r = subprocess.run(
             [sys.executable, str(MAIN_PY), "--config", str(config_path)],
             capture_output=True, text=True, timeout=20,
         )
         assert r.returncode == 2
-        assert f"io.{setting} must be a string" in r.stderr
+        assert "must be a scalar" in r.stderr
         assert "Traceback" not in r.stderr
+
+    def test_extensions_without_a_leading_dot_are_accepted(self, tmp_path, monkeypatch):
+        """Regression: Path.suffix always carries the dot, so `extensions: jpg`
+        silently matched nothing and reported every image as unsupported."""
+        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
+        img = tmp_path / "a.jpg"
+        _make_image(img)
+        out_dir = tmp_path / "out"
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(f"""
+io:
+  input: {img}
+  output_dir: {out_dir}
+  extensions: jpg, .png
+models:
+  m:
+    path: fake.tar.gz
+    num_classes: 5
+""")
+        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
+        assert main.main() == 0
+        payload = json.loads((out_dir / "report.json").read_text())
+        assert payload["skipped"] == []
+        assert payload["images"][0]["predictions"]["m"]["top_k"]
 
     def test_non_mapping_config(self, tmp_path):
         config_path = tmp_path / "config.yaml"

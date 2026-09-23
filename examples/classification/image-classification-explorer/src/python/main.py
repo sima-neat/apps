@@ -176,15 +176,31 @@ def _check_int32(value: int, key: str) -> int:
     return value
 
 
+def normalize_extension(value: str) -> str:
+    """Accept `jpg` as well as `.jpg`. Path.suffix always carries the dot, so an
+    entry without one would silently match nothing."""
+    text = value.strip().lower()
+    return text if text.startswith(".") else f".{text}"
+
+
 def config_str(value: Any, key: str, default: str | None) -> str | None:
-    """Read a string config value. `key: null` means "not set", so it falls back
-    to the default instead of becoming the text "None"; a non-string scalar is a
-    configuration error rather than something silently stringified."""
+    """Read a string config value the way the C++ ScalarConfig does.
+
+    `key: null` means "not set" and falls back to the default rather than
+    becoming the text "None". Other scalars are rendered as the text C++ reads
+    from the same file: it sees every value as text and cannot tell `path: 5`
+    from `path: "5"`, so rejecting one here would make the two entrypoints
+    accept different configurations. Booleans are rendered YAML-style
+    (`true`/`false`) rather than Python-style for the same reason."""
     if value is None:
         return default
     if isinstance(value, str):
         return value
-    raise ValueError(f"{key} must be a string, got {value!r}")
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    raise ValueError(f"{key} must be a scalar, got {value!r}")
 
 
 def load_profiles(raw: dict[str, Any]) -> list[ModelProfile]:
@@ -1074,7 +1090,7 @@ def main() -> int:
         raw_extensions = config_str(io_cfg.get("extensions"), "io.extensions",
                                     ",".join(DEFAULT_EXTENSIONS))
         extensions = tuple(
-            e.strip().lower() for e in raw_extensions.split(",") if e.strip()
+            normalize_extension(e) for e in raw_extensions.split(",") if e.strip()
         ) or DEFAULT_EXTENSIONS
         fallback_url = config_str(
             io_cfg.get("fallback_image_url"), "io.fallback_image_url",
