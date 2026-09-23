@@ -221,6 +221,7 @@ class TestDiscoverImages:
         images, skipped = main.discover_images(str(f), (".jpg",), "", tmp_path / "fb.jpg")
         assert images == []
         assert len(skipped) == 1
+        assert "a.txt" in skipped[0] and "unsupported extension .txt" in skipped[0]
 
     def test_directory_deterministic_order_and_skips(self, tmp_path):
         _make_image(tmp_path / "b.jpg")

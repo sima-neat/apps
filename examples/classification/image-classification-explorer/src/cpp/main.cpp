@@ -12,10 +12,13 @@
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
+#include <cmath>
+#include <csignal>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
-#include <functional>
 #include <iomanip>
 #include <iostream>
 #include <map>
@@ -27,10 +30,7 @@
 #include <system_error>
 #include <vector>
 
-#include <cerrno>
-#include <cmath>
-#include <cstdint>
-#include <csignal>
+// POSIX: the publication lock and the process-liveness check.
 #include <fcntl.h>
 #include <unistd.h>
 
@@ -911,7 +911,9 @@ void write_html_report(const fs::path& path, const std::vector<ImageResult>& res
   for (const auto& result : results) {
     const auto thumb =
         make_thumbnail(result.image_path, output_dir / "thumbnails", result.fingerprint);
-    const std::string img_cell = thumb.has_value() ? "<img src=\"" + *thumb + "\">" : "";
+    // alt="" marks the thumbnail decorative: the path is in the next cell, so a
+    // screen reader should not announce it twice.
+    const std::string img_cell = thumb.has_value() ? "<img src=\"" + *thumb + "\" alt=\"\">" : "";
 
     json top1_obj = json::object();
     std::ostringstream cells;

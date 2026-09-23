@@ -151,6 +151,19 @@ from a previous run and holds nothing else; any other non-empty directory is ref
 - Verify each `models.<name>.path` if a model fails to load.
 - Set `io.input` to a readable local image or directory if downloading or decoding the fallback
   image fails.
+Both entrypoints report failures the same way, so a script can branch on the
+exit code regardless of the language it ran:
+
+| Exit code | Meaning |
+| ---: | --- |
+| `0` | The run completed and the report was written. |
+| `2` | The command line or `config.yaml` is wrong (`Invalid configuration: ...`). |
+| `3` | The input could not be read: a missing path, an empty directory, or a failed fallback download. |
+| `6` | A model or the report itself failed at runtime. |
+
+A per-image, per-model inference failure does not fail the run: it is recorded
+in the report and the exit code stays `0`.
+
 - Check `report.json`'s `skipped` list and each image's `errors` object for files that failed to
   process. `errors` is keyed by model name, so one image can record a failure for one model while
   retaining predictions from the others.

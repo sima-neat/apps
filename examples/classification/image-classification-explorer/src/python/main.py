@@ -638,7 +638,9 @@ def write_html_report(path: Path, results: list[ImageResult], profiles: list[Mod
                 cells.append(f'<td data-model-col="{html_escape(name)}">no result</td>')
 
         has_error = "1" if result.errors else "0"
-        img_cell = f'<img src="{thumb}">' if thumb else ""
+        # alt="" marks the thumbnail decorative: the path is in the next cell,
+        # so a screen reader should not announce it twice.
+        img_cell = f'<img src="{thumb}" alt="">' if thumb else ""
         rows.append(
             f'<tr class="row" data-has-error="{has_error}" data-idx="{idx}" '
             f'data-top1="{top1_json}"><td>{img_cell}</td>'
