@@ -216,8 +216,12 @@ std::optional<FileFingerprint> file_fingerprint(const fs::path& path) {
 
 // Refuse to mix results from different versions of the same input file.
 void check_unchanged(const fs::path& path, const std::optional<FileFingerprint>& expected) {
-  if (!expected.has_value())
-    return;
+  if (!expected.has_value()) {
+    // Fail closed. Returning here made every later check a no-op for this file,
+    // so separate models and the thumbnail could each read a different
+    // replacement under one report entry.
+    throw std::runtime_error("input could not be fingerprinted: " + path.string());
+  }
   const auto current = file_fingerprint(path);
   if (!current.has_value() || *current != *expected) {
     throw std::runtime_error("input changed while the run was in progress: " + path.string());
@@ -305,17 +309,11 @@ bool looks_like_yaml_non_string(const std::string& key) {
     return true;
   if (looks_like_yaml_date(key))
     return true;
-  // Integer spellings: an optional sign, then decimal digits (with YAML 1.1
-  // underscores or leading zeros) or a 0x/0o/0b radix prefix.
-  std::string body = lowered;
-  if (!body.empty() && (body.front() == '-' || body.front() == '+'))
-    body.erase(0, 1);
-  if (body.rfind("0x", 0) == 0 || body.rfind("0o", 0) == 0 || body.rfind("0b", 0) == 0)
-    return true;
-  const bool digits_only = std::all_of(
-      body.begin(), body.end(), [](unsigned char c) { return std::isdigit(c) != 0 || c == '_'; });
-  return digits_only && std::any_of(body.begin(), body.end(),
-                                    [](unsigned char c) { return std::isdigit(c) != 0; });
+  // Integer spellings, decided by the same parser the settings use. A radix
+  // prefix only makes a key an integer when valid digits follow it: PyYAML
+  // leaves `0xmodel` a string, so treating every `0x` as a number would reject
+  // a profile name Python accepts.
+  return parse_yaml_int(key).has_value();
 }
 
 // True when the key carries explicit YAML quotes, which make it a string.

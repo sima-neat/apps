@@ -100,7 +100,12 @@ def file_fingerprint(path: Path) -> tuple[int, int]:
 
 def check_unchanged(path: Path, expected: tuple[int, int] | None) -> None:
     """Refuse to mix results from different versions of the same input file."""
-    if expected is not None and file_fingerprint(path) != expected:
+    if expected is None:
+        # Fail closed. Passing here made every later check a no-op for this
+        # file, so separate models and the thumbnail could each read a
+        # different replacement under one report entry.
+        raise ValueError(f"input could not be fingerprinted: {path}")
+    if file_fingerprint(path) != expected:
         raise ValueError(f"input changed while the run was in progress: {path}")
 
 

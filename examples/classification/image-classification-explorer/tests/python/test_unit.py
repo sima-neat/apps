@@ -530,7 +530,10 @@ class TestThumbnails:
 
         src = tmp_path / "tiny.jpg"
         _make_image(src, size=32)
-        name = main.make_thumbnail(src, tmp_path / "thumbs")
+        # A fingerprint is required now: without one make_thumbnail fails closed,
+        # because it cannot prove the bytes it draws are the ones predicted from.
+        name = main.make_thumbnail(src, tmp_path / "thumbs",
+                                   fingerprint=main.file_fingerprint(src))
         assert name is not None
         written = cv2.imread(str(tmp_path / "thumbs" / Path(name).name))
         assert written.shape[0] == 32 and written.shape[1] == 32
