@@ -17,11 +17,14 @@
 #include <cmath>
 #include <csignal>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <optional>
 #include <set>
@@ -57,16 +60,113 @@ public:
 
 // std::stoi reports an out-of-range value as an exception with no context; give
 // the customer the key and the value instead, as Python does.
-int config_int(const sima_examples::ScalarConfig& raw, const std::string& key, int fallback) {
-  try {
-    return raw.int_or(key, fallback);
-  } catch (const std::out_of_range&) {
-    throw ConfigError(key + " is out of range for a 32-bit integer: " +
-                      raw.string_or(key, std::to_string(fallback)));
-  } catch (const std::exception&) {
-    throw ConfigError(key + " must be an integer, got " +
-                      raw.string_or(key, std::to_string(fallback)));
+std::string lower_copy(std::string value); // defined below, used by parse_yaml_int
+
+// PyYAML resolves `~` to null, so `input: ~` means "not set". ScalarConfig only
+// recognises the spelling `null`, so without this C++ would look for a file
+// literally named "~" while Python downloaded the fallback sample.
+std::optional<std::string> config_scalar(const sima_examples::ScalarConfig& raw,
+                                         const std::string& key) {
+  auto value = raw.string_value(key);
+  if (value.has_value() && sima_examples::trim_copy(*value) == "~")
+    return std::nullopt;
+  return value;
+}
+
+std::string config_scalar_or(const sima_examples::ScalarConfig& raw, const std::string& key,
+                             const std::string& fallback) {
+  if (!config_scalar(raw, key).has_value())
+    return fallback;
+  return raw.string_or(key, fallback);
+}
+
+// PyYAML reads integers with the YAML 1.1 rules: a leading zero is octal, `0x`
+// and `0b` are radix prefixes and underscores are separators. ScalarConfig uses
+// std::stoi in base 10, so `num_classes: 010` is 8 to Python and 10 to C++ -
+// no error on either side, just two different runs. Parse it the way PyYAML
+// does so both read the same number out of the same file.
+std::optional<long long> parse_yaml_int(const std::string& text) {
+  std::string body = sima_examples::trim_copy(text);
+  if (body.empty())
+    return std::nullopt;
+  bool negative = false;
+  if (body.front() == '-' || body.front() == '+') {
+    negative = body.front() == '-';
+    body.erase(0, 1);
   }
+  body.erase(std::remove(body.begin(), body.end(), '_'), body.end());
+  if (body.empty())
+    return std::nullopt;
+
+  int base = 10;
+  const std::string lowered = lower_copy(body);
+  if (lowered.rfind("0x", 0) == 0) {
+    base = 16;
+    body = body.substr(2);
+  } else if (lowered.rfind("0b", 0) == 0) {
+    base = 2;
+    body = body.substr(2);
+  } else if (lowered.rfind("0o", 0) == 0) {
+    base = 8;
+    body = body.substr(2);
+  } else if (body.size() > 1 && body.front() == '0') {
+    base = 8; // YAML 1.1 bare octal
+  }
+  if (body.empty())
+    return std::nullopt;
+
+  try {
+    std::size_t consumed = 0;
+    const long long parsed = std::stoll(body, &consumed, base);
+    if (consumed != body.size())
+      return std::nullopt;
+    return negative ? -parsed : parsed;
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+}
+
+// Python prints a float with str(): the shortest text that reads back as the
+// same value, and never bare digits - 0.0 prints as "0.0", not "0".
+std::string python_float_text(double value) {
+  char buffer[64];
+  for (int precision = 1; precision <= 17; ++precision) {
+    std::snprintf(buffer, sizeof(buffer), "%.*g", precision, value);
+    if (std::strtod(buffer, nullptr) == value)
+      break;
+  }
+  std::string text(buffer);
+  if (text.find_first_of(".einf") == std::string::npos)
+    text += ".0";
+  return text;
+}
+
+int config_int(const sima_examples::ScalarConfig& raw, const std::string& key, int fallback) {
+  const auto text = config_scalar(raw, key);
+  if (!text.has_value())
+    return fallback;
+  const auto parsed = parse_yaml_int(*text);
+  if (!parsed.has_value())
+    throw ConfigError(key + " must be an integer, got " + *text);
+  if (*parsed < std::numeric_limits<int>::min() || *parsed > std::numeric_limits<int>::max())
+    throw ConfigError(key + " is out of range for a 32-bit integer: " + *text);
+  return static_cast<int>(*parsed);
+}
+
+// pathlib drops "." components and redundant separators when it builds a Path,
+// but never resolves "..". std::filesystem keeps the text as written, so
+// `io.input: ./images` would put "./images/x.jpg" in the C++ report and
+// "images/x.jpg" in the Python one - a difference in every path field, and in
+// the thumbnail names, which are digests of those paths. Mirror pathlib exactly;
+// lexically_normal() is not the same function, because it also collapses "..".
+fs::path normalize_like_pathlib(const fs::path& path) {
+  fs::path result;
+  for (const auto& part : path) {
+    if (part.empty() || part == ".")
+      continue;
+    result /= part;
+  }
+  return result.empty() ? fs::path(".") : result;
 }
 
 // The shipped config references the bundled label map by its in-package path,
@@ -541,7 +641,7 @@ std::vector<std::string> load_label_map(const std::string& path, int num_classes
     return labels;
   }
 
-  fs::path label_path = path;
+  fs::path label_path = normalize_like_pathlib(path);
   if (!fs::exists(label_path) && fs::path(path).generic_string() == kBundledLabelMapRef) {
     // Resolve the shipped reference through the same lookup the report assets
     // use, so it is found wherever the binary is run from (model.path stays
@@ -554,9 +654,15 @@ std::vector<std::string> load_label_map(const std::string& path, int num_classes
 
   errno = 0;
   std::ifstream in(label_path);
-  if (!in.is_open()) {
-    throw ConfigError("failed to open label map " + label_path.string() + ": " +
-                      std::strerror(errno));
+  const int open_errno = errno;
+  // A directory opens successfully on glibc, so is_open() alone would let it
+  // through and report "0 entries" instead of naming the real problem.
+  if (!in.is_open() || !fs::is_regular_file(label_path)) {
+    const bool is_directory = fs::is_directory(label_path);
+    const std::string reason = is_directory ? "Is a directory"
+                               : open_errno ? std::strerror(open_errno)
+                                            : "No such file or directory";
+    throw ConfigError("failed to open label map " + label_path.string() + ": " + reason);
   }
   // Positional: physical line index == class id, so blank lines are never dropped
   // (that would silently shift every later label).
@@ -640,22 +746,6 @@ fs::path download_fallback_image(const std::string& url, const fs::path& base) {
   return dest;
 }
 
-// pathlib drops "." components and redundant separators when it builds a Path,
-// but never resolves "..". std::filesystem keeps the text as written, so
-// `io.input: ./images` would put "./images/x.jpg" in the C++ report and
-// "images/x.jpg" in the Python one - a difference in every path field, and in
-// the thumbnail names, which are digests of those paths. Mirror pathlib exactly;
-// lexically_normal() is not the same function, because it also collapses "..".
-fs::path normalize_like_pathlib(const fs::path& path) {
-  fs::path result;
-  for (const auto& part : path) {
-    if (part.empty() || part == ".")
-      continue;
-    result /= part;
-  }
-  return result.empty() ? fs::path(".") : result;
-}
-
 std::vector<fs::path> discover_images(const std::string& input_path,
                                       const std::vector<std::string>& extensions,
                                       const std::string& fallback_url,
@@ -692,7 +782,7 @@ std::vector<fs::path> discover_images(const std::string& input_path,
     }
     for (const auto& entry : it) {
       if (entry.is_regular_file())
-        entries.push_back(entry.path());
+        entries.push_back(normalize_like_pathlib(entry.path()));
     }
   }
   std::sort(entries.begin(), entries.end(),
@@ -1264,7 +1354,7 @@ bool recover_interrupted_publish(const fs::path& output_dir) {
     try {
       owner = static_cast<pid_t>(std::stol(suffix));
     } catch (const std::exception&) {
-      return false;  // too large to be a live pid, which is Python's conclusion too
+      return false; // too large to be a live pid, which is Python's conclusion too
     }
     return owner != ::getpid() && process_is_running(owner);
   };
@@ -1442,7 +1532,7 @@ Args parse_args(int argc, char** argv) {
     if (arg == "--config") {
       if (i + 1 >= argc)
         throw ConfigError("--config requires a path");
-      args.config_path = argv[++i];
+      args.config_path = normalize_like_pathlib(argv[++i]);
     } else if (arg == "--help" || arg == "-h") {
       std::cout << "Usage: " << argv[0] << " [--config <path>]\n";
       std::exit(0);
@@ -1495,23 +1585,26 @@ int main(int argc, char** argv) {
     // Doing it properly means a real YAML parser in the shared reader, which
     // is its owners' call, not this example's.
 
-    const std::string input_path = raw.string_or("io.input", "");
-    const std::string fallback_url =
-        raw.string_or("io.fallback_image_url",
-                      "https://raw.githubusercontent.com/EliSchwartz/imagenet-sample-images/master/"
-                      "n01443537_goldfish.JPEG");
-    auto extensions = split_csv(raw.string_or("io.extensions", ".jpg,.jpeg,.png,.bmp"));
+    const std::string input_path = config_scalar_or(raw, "io.input", "");
+    const std::string fallback_url = config_scalar_or(
+        raw, "io.fallback_image_url",
+        "https://raw.githubusercontent.com/EliSchwartz/imagenet-sample-images/master/"
+        "n01443537_goldfish.JPEG");
+    auto extensions = split_csv(config_scalar_or(raw, "io.extensions", ".jpg,.jpeg,.png,.bmp"));
     if (extensions.empty())
       extensions.assign(kDefaultExtensions.begin(), kDefaultExtensions.end());
-    const fs::path output_dir = raw.string_or("io.output_dir", "report");
+    const fs::path output_dir =
+        normalize_like_pathlib(config_scalar_or(raw, "io.output_dir", "report"));
     // Parse the validation block up front: std::stoi on a malformed value would
     // otherwise throw after the report had already been written.
     std::optional<int> expected_class_id;
-    if (raw.string_value("validation.expected_class_id").has_value()) {
+    if (config_scalar(raw, "validation.expected_class_id").has_value()) {
       expected_class_id = config_int(raw, "validation.expected_class_id", 0);
     }
 
     const double min_probability = [&] {
+      if (!config_scalar(raw, "validation.min_probability").has_value())
+        return 0.0;
       try {
         return raw.double_or("validation.min_probability", 0.0);
       } catch (const std::exception&) {
@@ -1588,8 +1681,9 @@ int main(int argc, char** argv) {
           std::ostringstream probability;
           probability << std::fixed << std::setprecision(4) << top1.prob;
           std::cerr << "Note: " << profiles.front().name << " top1=" << top1.index << " ("
-                    << probability.str() << ") did not match expected_class_id="
-                    << *expected_class_id << " (min_probability=" << min_probability
+                    << probability.str()
+                    << ") did not match expected_class_id=" << *expected_class_id
+                    << " (min_probability=" << python_float_text(min_probability)
                     << "); see report for details.\n";
         }
       }

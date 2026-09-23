@@ -80,10 +80,12 @@ def _normalised_report(output_dir: Path) -> dict:
     payload = json.loads((output_dir / "report.json").read_text())
     payload["timing"]["total_ms"] = "<ms>"
     for image in payload["images"]:
-        image["path"] = Path(image["path"]).name
         for prediction in image.get("predictions", {}).values():
             prediction["inference_ms"] = "<ms>"
-    payload["skipped"] = [Path(entry.split(":")[0]).name for entry in payload["skipped"]]
+    # Paths and skip reasons are compared exactly as written. Reducing them to
+    # basenames, as this used to, made the comparison blind to a path-spelling
+    # divergence between the two entrypoints - the very thing it exists to
+    # catch - and to the reason a file was skipped.
     return payload
 
 

@@ -166,6 +166,38 @@ def load_config(config_path: Path) -> dict[str, Any]:
     return loaded
 
 
+def parse_yaml_int(text: str) -> int | None:
+    """Parse an integer with the YAML 1.1 rules PyYAML applies to a bare scalar.
+
+    A quoted `"010"` reaches this function as text, and ScalarConfig cannot see
+    the quotes, so C++ reads every value as YAML and gets 8. Reading it as base
+    10 here would make the same file mean 10 to one entrypoint and 8 to the
+    other."""
+    body = text.strip()
+    if not body:
+        return None
+    negative = body[0] == "-"
+    if body[0] in "+-":
+        body = body[1:]
+    body = body.replace("_", "")
+    if not body:
+        return None
+    base = 10
+    lowered = body.lower()
+    if lowered.startswith(("0x", "0b", "0o")):
+        base = {"x": 16, "b": 2, "o": 8}[lowered[1]]
+        body = body[2:]
+    elif len(body) > 1 and body[0] == "0":
+        base = 8  # YAML 1.1 bare octal
+    if not body:
+        return None
+    try:
+        parsed = int(body, base)
+    except ValueError:
+        return None
+    return -parsed if negative else parsed
+
+
 def yaml_text(value: Any) -> str:
     """Render a parsed YAML value as the text C++ reads from the same file.
 
@@ -200,13 +232,10 @@ def config_int(value: Any, key: str, default: int) -> int:
     if isinstance(value, int):
         return _check_int32(value, key)
     if isinstance(value, str):
-        text = value.strip()
-        try:
-            return _check_int32(int(text, 10), key)
-        except ValueError as exc:
-            if "out of range" in str(exc):
-                raise
-            raise ValueError(f"{key} must be an integer, got {yaml_text(value)}") from None
+        parsed = parse_yaml_int(value)
+        if parsed is None:
+            raise ValueError(f"{key} must be an integer, got {yaml_text(value)}")
+        return _check_int32(parsed, key)
     raise ValueError(f"{key} must be an integer, got {yaml_text(value)}")
 
 

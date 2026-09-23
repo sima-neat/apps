@@ -949,7 +949,11 @@ models:
             live = tmp_path / f".out.previous-{helper.pid}"
             out_dir.rename(live)
 
-            main.recover_interrupted_publish(out_dir)
+            # The return value is what defers publication; discarding it made
+            # both assertions below hold even when the function did nothing.
+            assert main.recover_interrupted_publish(out_dir) is True, (
+                "a live publisher's backup must report a publish in flight"
+            )
 
             assert live.is_dir(), "a live publisher's backup must not be taken"
             assert not out_dir.exists(), "output_dir must be left for the live publisher"
@@ -1502,4 +1506,4 @@ models:
             capture_output=True, text=True, timeout=20,
         )
         assert r.returncode == 2
-        assert "unrecognized" in r.stderr.lower() or "error" in r.stderr.lower()
+        assert "unrecognized arguments: --bogus" in r.stderr
