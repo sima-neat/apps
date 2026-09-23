@@ -325,6 +325,43 @@ class TestE2E:
         # so both must fail the same way once the configuration is accepted.
         ("model archive missing",
          "models:\n  m:\n    path: /nonexistent/model.tar.gz\n", 6),
+
+        # Falsy scalars. `x or {}` reads these as "absent" and quietly applies
+        # defaults, so testing only a truthy scalar missed them entirely.
+        ("io section is false", "io: false\nmodels:\n  m:\n    path: m.tar.gz\n", 2),
+        ("io section is zero", "io: 0\nmodels:\n  m:\n    path: m.tar.gz\n", 2),
+        ("runtime section is false",
+         "runtime: false\nmodels:\n  m:\n    path: m.tar.gz\n", 2),
+        ("validation section is false",
+         "validation: false\nmodels:\n  m:\n    path: m.tar.gz\n", 2),
+        ("models section is false", "models: false\n", 2),
+        ("models section is empty", "models: {}\n", 2),
+        ("top-level is false", "false\n", 2),
+
+        # Combinations: a configuration error must win over an input error
+        # regardless of which is discovered first, or the two entrypoints
+        # disagree on which code to report.
+        ("bad preprocess and missing input",
+         "io:\n  input: /nonexistent/directory\n"
+         "models:\n  m:\n    path: m.tar.gz\n    preprocess: bespoke\n", 2),
+        ("bad top_k and missing input",
+         "io:\n  input: /nonexistent/directory\n"
+         "models:\n  m:\n    path: m.tar.gz\n    top_k: 0\n", 2),
+        ("bad label map and missing input",
+         "io:\n  input: /nonexistent/directory\n"
+         "models:\n  m:\n    path: m.tar.gz\n    label_map: /nonexistent/labels.txt\n", 2),
+
+        # `foo:` and `"foo":` are one YAML key and the later definition wins.
+        # The invalid top_k is in the FIRST definition, so a run that honours
+        # "last wins" never sees it and fails later at the missing archive (6),
+        # while one that keeps both entries rejects the configuration (2). The
+        # bad value has to be in the discarded definition for this to detect
+        # anything - with it in the second, both behaviours exit 2 and the case
+        # proves nothing.
+        ("quoted and unquoted duplicate key",
+         'models:\n  foo:\n    path: /nonexistent/m.tar.gz\n    top_k: 0\n'
+         '  "foo":\n    path: /nonexistent/m.tar.gz\n',
+         6),
     ]
 
     def test_cpp_and_python_fail_identically(

@@ -385,6 +385,23 @@ std::vector<ModelProfile> load_profiles(const sima_examples::ScalarConfig& raw,
     ordered = known_names;
   }
 
+  // `foo:` and `"foo":` are the same YAML key. PyYAML keeps the position of the
+  // first and the value of the last; mirror that, or C++ would build two
+  // profiles that then collide in the prediction and error maps.
+  std::vector<std::string> deduped;
+  for (const auto& key : ordered) {
+    const std::string name = unquote_yaml_key(key);
+    auto existing = std::find_if(deduped.begin(), deduped.end(), [&](const std::string& other) {
+      return unquote_yaml_key(other) == name;
+    });
+    if (existing == deduped.end()) {
+      deduped.push_back(key);
+    } else {
+      *existing = key; // later definition wins, position of the first is kept
+    }
+  }
+  ordered = deduped;
+
   std::vector<ModelProfile> profiles;
   for (const auto& key : ordered) {
     ModelProfile profile;
@@ -405,6 +422,10 @@ std::vector<ModelProfile> load_profiles(const sima_examples::ScalarConfig& raw,
     }
     if (profile.path.empty()) {
       throw ConfigError("models." + name + ".path is required");
+    }
+    if (profile.preprocess != "imagenet") {
+      throw ConfigError("models." + name + ".preprocess=" + profile.preprocess +
+                        " is not supported; only 'imagenet' is implemented");
     }
     if (profile.output != "softmax") {
       throw ConfigError("models." + name + ".output=" + profile.output +
@@ -906,6 +927,14 @@ std::optional<std::string> make_thumbnail(const fs::path& image_path, const fs::
   cv::Mat img = cv::imread(image_path.string(), cv::IMREAD_COLOR);
   if (img.empty())
     return std::nullopt;
+  try {
+    // Re-check after the read, as inference does: a file replaced between the
+    // check above and this read would otherwise put a thumbnail of the new
+    // bytes next to predictions made from the old ones.
+    check_unchanged(image_path, fingerprint);
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
   // Shrink only; never upscale a small image.
   const double scale = std::min(1.0, static_cast<double>(max_side) / std::max(img.cols, img.rows));
   cv::Mat resized;

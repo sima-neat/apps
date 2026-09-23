@@ -153,7 +153,14 @@ def download_image(url: str, base: Path) -> Path:
 
 def load_config(config_path: Path) -> dict[str, Any]:
     with config_path.open("r", encoding="utf-8") as handle:
-        return yaml.safe_load(handle) or {}
+        loaded = yaml.safe_load(handle)
+    # An empty file is an empty configuration; a file holding a bare scalar is
+    # not a configuration at all, and `or {}` would hide that.
+    if loaded is None:
+        return {}
+    if not isinstance(loaded, dict):
+        raise ValueError(f"{config_path} must contain a YAML mapping at the top level")
+    return loaded
 
 
 def config_int(value: Any, key: str, default: int) -> int:
@@ -213,6 +220,21 @@ def normalize_extension(value: str) -> str:
     return text if text.startswith(".") else f".{text}"
 
 
+def config_section(raw: dict[str, Any], name: str) -> dict[str, Any]:
+    """Read a top-level section.
+
+    Absent or null means "use the defaults"; anything else must be a mapping.
+    `raw.get(name) or {}` cannot make that distinction, because a falsy scalar
+    such as `io: false` or `runtime: 0` collapses to an empty mapping and the
+    defaults are applied to a configuration the customer got wrong."""
+    value = raw.get(name)
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"`{name}` must be a mapping, got {value!r}")
+    return value
+
+
 def config_str(value: Any, key: str, default: str | None) -> str | None:
     """Read a string config value the way the C++ ScalarConfig does.
 
@@ -234,8 +256,8 @@ def config_str(value: Any, key: str, default: str | None) -> str | None:
 
 
 def load_profiles(raw: dict[str, Any]) -> list[ModelProfile]:
-    models_cfg = raw.get("models") or {}
-    if not isinstance(models_cfg, dict) or not models_cfg:
+    models_cfg = config_section(raw, "models")
+    if not models_cfg:
         raise ValueError("config.yaml must define at least one entry under `models`")
 
     profiles = []
@@ -596,6 +618,13 @@ def make_thumbnail(image_path: Path, thumb_dir: Path, max_side: int = 160,
         return None
     img = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
     if img is None:
+        return None
+    try:
+        # Re-check after the read, as inference does: a file replaced between
+        # the check above and this read would otherwise put a thumbnail of the
+        # new bytes next to predictions made from the old ones.
+        check_unchanged(image_path, fingerprint)
+    except (OSError, ValueError):
         return None
     h, w = img.shape[:2]
     scale = min(1.0, max_side / max(h, w))  # shrink only; never upscale a small image
@@ -977,12 +1006,8 @@ def main() -> int:
         raw = load_config(args.config)
         if not isinstance(raw, dict):
             raise ValueError(f"{args.config} must contain a YAML mapping at the top level")
-        io_cfg = raw.get("io") or {}
-        runtime = raw.get("runtime") or {}
-        if not isinstance(io_cfg, dict):
-            raise ValueError("`io` must be a mapping")
-        if not isinstance(runtime, dict):
-            raise ValueError("`runtime` must be a mapping")
+        io_cfg = config_section(raw, "io")
+        runtime = config_section(raw, "runtime")
         timeout_ms = config_int(runtime.get("timeout_ms"), "runtime.timeout_ms", 20000)
         if timeout_ms <= 0:
             raise ValueError(f"runtime.timeout_ms must be positive, got {timeout_ms}")
@@ -1001,9 +1026,7 @@ def main() -> int:
         input_path = config_str(io_cfg.get("input"), "io.input", None)
         output_dir = Path(config_str(io_cfg.get("output_dir"), "io.output_dir", "report"))
         # P8: fail on a malformed validation block now, not after a successful run.
-        validation = raw.get("validation") or {}
-        if not isinstance(validation, dict):
-            raise ValueError("`validation` must be a mapping")
+        validation = config_section(raw, "validation")
         expected_class_id = validation.get("expected_class_id")
         if expected_class_id is not None:
             expected_class_id = config_int(expected_class_id, "validation.expected_class_id", 0)
