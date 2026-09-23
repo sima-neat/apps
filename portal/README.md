@@ -52,8 +52,10 @@ below:
 ```bash
 cd <apps-repo-root>/portal
 npm install
-python3.11 ../scripts/generate_catalog.py > public/catalog.json
-python3.11 ../scripts/sync_portal_assets.py
+PY=python3           # or python3.11, or whichever 3.10+ interpreter you have
+"$PY" --version
+"$PY" ../scripts/generate_catalog.py > public/catalog.json
+"$PY" ../scripts/sync_portal_assets.py
 ```
 
 Then start the development server:

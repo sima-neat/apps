@@ -126,8 +126,9 @@ inference:
 A stream stuck with no progress while others advance is worth investigating on
 its own: verify that source independently before assuming a model or config
 problem. To inspect results without Insight, set `output.debug_dir` to a
-directory and leave `output.save_every` non-zero; the application then writes
-periodic annotated frames there.
+directory **and** `output.save_every` to a positive interval. Both are required:
+the packaged config ships `save_every: 0`, which disables saving even when
+`debug_dir` is set.
 
 ## Troubleshooting
 
