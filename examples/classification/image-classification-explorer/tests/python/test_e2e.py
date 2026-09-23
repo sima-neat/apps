@@ -263,9 +263,13 @@ class TestE2E:
                 f"{argv[0]} exited {result.returncode}\n{result.stdout}\n{result.stderr}"
             )
 
-        # report.csv must match byte for byte, including line endings.
-        py_csv = (py_out / "report.csv").read_text()
-        cpp_csv = (cpp_out / "report.csv").read_text()
+        # Compare the raw text, so a line-ending difference fails here: reading
+        # through csv.reader would strip the terminators and hide it.
+        py_csv = (py_out / "report.csv").read_bytes().decode()
+        cpp_csv = (cpp_out / "report.csv").read_bytes().decode()
+        assert py_csv.count("\r\n") == cpp_csv.count("\r\n"), (
+            "report.csv line endings differ between the implementations"
+        )
         assert _drop_timing_column(py_csv) == _drop_timing_column(cpp_csv), (
             "report.csv differs between the implementations"
         )

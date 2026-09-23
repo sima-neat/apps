@@ -40,6 +40,9 @@ REPORT_ENTRIES = ("report.json", "report.csv", "report.html", "thumbnails", REPO
 # agree only to about seven digits - well beyond the precision a float32 model
 # output carries. Report a rounded value so both emit identical numbers.
 PROBABILITY_DECIMALS = 6
+# Directory of the configuration in use, set once in main(); see
+# bundled_candidates().
+CONFIG_DIRECTORY: Path | None = None
 # The C++ ScalarConfig parses scalars with std::stoi, which is limited to int32.
 # Reject anything outside that range so both entrypoints accept the same values.
 INT32_MIN, INT32_MAX = -2**31, 2**31 - 1
@@ -328,9 +331,10 @@ def load_label_map(path: str | None, num_classes: int) -> list[str]:
         # Resolve the shipped reference next to this script, regardless of the
         # caller's cwd (model.path stays cwd-relative: it points at a file the
         # customer downloaded). A missing custom path is NOT redirected here.
-        bundled = Path(__file__).resolve().parents[1] / "common" / Path(BUNDLED_LABEL_MAP_REF).name
-        if bundled.exists():
-            label_path = bundled
+        for bundled in bundled_candidates(Path(BUNDLED_LABEL_MAP_REF).name):
+            if bundled.exists():
+                label_path = bundled
+                break
     try:
         with label_path.open("r", encoding="utf-8") as handle:
             # Positional: physical line index == class id, so blank lines are never
@@ -390,18 +394,32 @@ def load_rgb_resized(path: str, width: int, height: int):
 
     bgr = cv2.imread(path, cv2.IMREAD_COLOR)
     if bgr is None:
-        raise ValueError(f"failed to read image: {path}")
+        # Capitalised to match sima_examples::load_rgb_resized, whose message
+        # the C++ entrypoint records in the same report field.
+        raise ValueError(f"Failed to read image: {path}")
     # INTER_AREA matches sima_examples::load_rgb_resized (support/runtime/example_utils.cpp)
     # used by the C++ implementation, so both languages preprocess images identically.
     bgr = cv2.resize(bgr, (width, height), interpolation=cv2.INTER_AREA)
     return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
 
 
-def softmax(x):
+def softmax(scores):
+    """Softmax computed exactly as sima_examples::topk_with_softmax does.
+
+    The C++ helper subtracts the float32 maximum, evaluates exp in double and
+    accumulates the denominator sequentially. NumPy would use pairwise
+    summation and, with float32 exps, drift from C++ by around 1e-7 - small,
+    but enough to change a reported value at the sixth decimal for some inputs.
+    Mirroring the arithmetic makes the two reports agree because they computed
+    the same thing, not because a rounding step happened to hide the gap."""
     import numpy as np
 
-    e = np.exp(x - np.max(x))
-    return e / e.sum()
+    shifted = (scores - np.max(scores)).astype(np.float64)
+    exponentials = np.exp(shifted)
+    total = 0.0
+    for value in exponentials:  # sequential, matching the C++ accumulation order
+        total += float(value)
+    return exponentials / total
 
 
 def tensor_to_numpy_dense(tensor) -> Any:
@@ -432,12 +450,7 @@ def tensor_to_numpy_dense(tensor) -> Any:
 def build_model(profile: ModelProfile):
     import pyneat
 
-    if profile.preprocess != "imagenet":
-        raise ValueError(
-            f"models.{profile.name}.preprocess={profile.preprocess!r} is not supported; "
-            "only 'imagenet' is implemented"
-        )
-
+    # preprocess is validated in load_profiles, before any input is read.
     opt = pyneat.ModelOptions()
     opt.preprocess.kind = pyneat.InputKind.Image
     opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.RGB
@@ -641,16 +654,30 @@ def make_thumbnail(image_path: Path, thumb_dir: Path, max_side: int = 160,
     return f"thumbnails/{thumb_name}"
 
 
-def bundled_asset(name: str) -> str:
-    """Read a file shipped next to this script under src/common.
+def bundled_candidates(name: str) -> list[Path]:
+    """Where a file shipped under src/common may be found.
 
-    The report's CSS and JavaScript live there rather than inside either
-    entrypoint, so both emit exactly the same markup and cannot drift apart."""
-    path = Path(__file__).resolve().parents[1] / "common" / name
-    try:
-        return path.read_text(encoding="utf-8")
-    except OSError as exc:
-        raise OSError(f"failed to read bundled report asset {path}: {exc}") from exc
+    Beside this script covers every layout Python runs in. The directory of the
+    configuration in use is listed too, because config.yaml ships in src/common
+    beside these files: it is what lets the C++ binary find them from any
+    working directory, and both implementations searching the same places keeps
+    them aligned."""
+    candidates = []
+    if CONFIG_DIRECTORY is not None:
+        candidates.append(CONFIG_DIRECTORY / name)
+    candidates.append(Path(__file__).resolve().parents[1] / "common" / name)
+    return candidates
+
+
+def bundled_asset(name: str) -> str:
+    """Read a file shipped under src/common, wherever it is found."""
+    for path in bundled_candidates(name):
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+    tried = "\n  ".join(str(p) for p in bundled_candidates(name))
+    raise OSError(f"failed to read bundled report asset {name!r}; looked in:\n  {tried}")
 
 
 def html_escape(value: str) -> str:
@@ -793,6 +820,8 @@ def process_is_running(pid: int) -> bool:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
+    except OverflowError:
+        return False  # too large to be a live pid on this platform
     except OSError:
         return True  # exists but is not ours to signal
     return True
@@ -994,6 +1023,9 @@ def main() -> int:
     default_config = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
     parser.add_argument("--config", type=Path, default=default_config, help="Path to YAML configuration")
     args = parser.parse_args()
+
+    global CONFIG_DIRECTORY
+    CONFIG_DIRECTORY = args.config.expanduser().resolve().parent
 
     # Reading and interpreting the config all happens in one controlled error path,
     # so an unreadable file, invalid YAML, or a bad value reports `Invalid

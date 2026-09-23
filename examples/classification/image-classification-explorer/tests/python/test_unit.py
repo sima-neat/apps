@@ -647,7 +647,9 @@ class TestFakeHardwarePipeline:
         payload = json.loads((out_dir / "report.json").read_text())
         by_name = {Path(img["path"]).name: img for img in payload["images"]}
         assert "m" in by_name["broken.jpg"]["errors"]
-        assert "failed to read image" in by_name["broken.jpg"]["errors"]["m"]
+        # Capitalised to match sima_examples::load_rgb_resized, so the same
+        # undecodable input produces the same text in both reports.
+        assert "Failed to read image" in by_name["broken.jpg"]["errors"]["m"]
         assert "predictions" not in by_name["broken.jpg"]
         assert "errors" not in by_name["good.jpg"]
         assert by_name["good.jpg"]["predictions"]["m"]["top_k"]
@@ -1340,9 +1342,9 @@ class TestHtmlReportContent:
         assert 'id="filterResult"' in html
         assert 'id="minConfidence"' in html
         assert 'id="sortBy"' in html
-        # Agreement is recomputed in the browser from class ids, not labels.
-        assert "class_id" in html
-        assert "top1[m].class_id" in html
+        # The data attribute must carry the class id for the row, not merely
+        # mention class_id somewhere in the embedded script.
+        assert "&quot;class_id&quot;:1" in html
         # The attribute holds compact, sorted, HTML-escaped JSON, matching the
         # C++ writer byte for byte.
         assert "&quot;label&quot;:&quot;cat&quot;" in html

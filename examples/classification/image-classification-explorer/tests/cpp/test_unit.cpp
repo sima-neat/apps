@@ -50,6 +50,21 @@ sima_examples::testing::ProcessResult spawn_and_wait_in(const std::string& binar
 
 } // namespace
 
+// Several checks below need a completed first run to manipulate. Report that
+// clearly instead of letting a filesystem call throw out of main(): these tests
+// write their configuration into a temporary directory, so they expect to run
+// from the repository root, which is what ctest's WORKING_DIRECTORY provides.
+bool require_report(const sima_examples::testing::ProcessResult& run,
+                    const std::filesystem::path& report_dir, const char* label, int& failures) {
+  if (run.exit_code == 0 && std::filesystem::exists(report_dir))
+    return true;
+  std::cerr << "[FAIL] " << label << ": the first run did not produce " << report_dir << " (exit "
+            << run.exit_code << ")\nstderr:\n"
+            << run.stderr_text << "\n";
+  ++failures;
+  return false;
+}
+
 int main(int argc, char** argv) {
   if (argc < 2) {
     std::cerr << "[ERR] usage: " << argv[0] << " <example-binary>\n";
@@ -57,6 +72,16 @@ int main(int argc, char** argv) {
   }
   const std::string binary = argv[1];
   int failures = 0;
+
+  // These checks write throwaway configurations into temporary directories, so
+  // the application under test can only find src/common through the repository
+  // layout. ctest supplies that working directory; say so plainly rather than
+  // letting a later filesystem call abort with an unhandled exception.
+  if (find_bundled_source("report.css").empty()) {
+    std::cerr << "[ERR] run this from the repository root: src/common was not found from "
+              << std::filesystem::current_path() << "\n";
+    return 2;
+  }
 
   // Test 1: --help prints usage.
   {
@@ -442,25 +467,29 @@ int main(int argc, char** argv) {
     }
     auto first = spawn_and_wait(binary, {"--config", (work / "config.yaml").string()}, 20000);
     // Simulate a process killed after the first rename of the swap.
-    fs::rename(work / "report", work / ".report.previous-4242");
-    auto second = spawn_and_wait(binary, {"--config", (work / "config.yaml").string()}, 20000);
-    bool stranded = false;
-    for (const auto& entry : fs::directory_iterator(work)) {
-      if (entry.path().filename().string().rfind(".report.previous-", 0) == 0)
-        stranded = true;
-    }
-    if (first.exit_code != 0 || second.exit_code != 0 ||
-        !fs::exists(work / "report" / "report.json") || stranded ||
-        second.stderr_text.find("Recovered an interrupted report publication") ==
-            std::string::npos) {
-      std::cerr << "[FAIL] interrupted publish: expected recovery, exits " << first.exit_code << "/"
-                << second.exit_code << " stranded=" << stranded << "\nstderr:\n"
-                << second.stderr_text << "\n";
-      ++failures;
+    if (!require_report(first, work / "report", "interrupted publish", failures)) {
+      fs::remove_all(work);
     } else {
-      std::cout << "[OK] report stranded by an interrupted publish was recovered\n";
+      fs::rename(work / "report", work / ".report.previous-4242");
+      auto second = spawn_and_wait(binary, {"--config", (work / "config.yaml").string()}, 20000);
+      bool stranded = false;
+      for (const auto& entry : fs::directory_iterator(work)) {
+        if (entry.path().filename().string().rfind(".report.previous-", 0) == 0)
+          stranded = true;
+      }
+      if (first.exit_code != 0 || second.exit_code != 0 ||
+          !fs::exists(work / "report" / "report.json") || stranded ||
+          second.stderr_text.find("Recovered an interrupted report publication") ==
+              std::string::npos) {
+        std::cerr << "[FAIL] interrupted publish: expected recovery, exits " << first.exit_code
+                  << "/" << second.exit_code << " stranded=" << stranded << "\nstderr:\n"
+                  << second.stderr_text << "\n";
+        ++failures;
+      } else {
+        std::cout << "[OK] report stranded by an interrupted publish was recovered\n";
+      }
+      fs::remove_all(work);
     }
-    fs::remove_all(work);
   }
 
   // Test 13: a profile name containing a colon cannot be addressed through the
@@ -570,8 +599,12 @@ int main(int argc, char** argv) {
     }
     auto r = spawn_and_wait(binary, {"--config", config_path.string()}, 20000);
     fs::remove(config_path);
-    if (r.exit_code == 0) {
-      std::cerr << "[FAIL] non-integral top_k: expected nonzero exit\nstderr:\n"
+    // "nonzero" would also be satisfied by the missing model archive, so check
+    // that the configuration itself was rejected, with the code Python uses.
+    if (r.exit_code != 2 ||
+        r.stderr_text.find("models.m.top_k must be an integer") == std::string::npos) {
+      std::cerr << "[FAIL] non-integral top_k: expected exit 2 naming top_k, got " << r.exit_code
+                << "\nstderr:\n"
                 << r.stderr_text << "\n";
       ++failures;
     } else {
@@ -606,6 +639,10 @@ int main(int argc, char** argv) {
     const fs::path orphan = work / ".report.previous-2147483646";
     const fs::path live = work / (".report.previous-" + std::to_string(::getpid()));
     const fs::path unmarked = work / ".report.previous-2147483645";
+    if (!require_report(first, work / "report", "backup cleanup", failures)) {
+      fs::remove_all(work);
+      return failures > 0 ? 1 : 0;
+    }
     fs::copy(work / "report", orphan, fs::copy_options::recursive);
     fs::copy(work / "report", live, fs::copy_options::recursive);
     fs::create_directories(unmarked);
@@ -661,6 +698,10 @@ int main(int argc, char** argv) {
     // Exactly the state a concurrent publisher is in mid-swap: the old report
     // renamed aside under a live pid, output_dir not yet reinstalled.
     const fs::path live = work / (".report.previous-" + std::to_string(::getpid()));
+    if (!require_report(first, work / "report", "live publisher backup", failures)) {
+      fs::remove_all(work);
+      return failures > 0 ? 1 : 0;
+    }
     fs::rename(work / "report", live);
 
     auto second = spawn_and_wait(binary, {"--config", (work / "config.yaml").string()}, 20000);
@@ -970,9 +1011,13 @@ int main(int argc, char** argv) {
       const bool found_labels = r.stderr_text.find("failed to open label map") == std::string::npos;
       const bool found_assets =
           r.stderr_text.find("failed to read bundled report asset") == std::string::npos;
-      if (!found_labels || !found_assets) {
+      // The absence of two strings is also true of a binary that never ran, so
+      // require the run to have succeeded and written its report.
+      const bool published = r.exit_code == 0 && fs::exists(pkg / "report" / "report.html");
+      if (!found_labels || !found_assets || !published) {
         std::cerr << "[FAIL] packaged layout: labels_found=" << found_labels
-                  << " assets_found=" << found_assets << "\nstderr:\n"
+                  << " assets_found=" << found_assets << " published=" << published << " exit "
+                  << r.exit_code << "\nstderr:\n"
                   << r.stderr_text << "\n";
         ++failures;
       } else {

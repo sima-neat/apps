@@ -17,6 +17,7 @@
 #include <cmath>
 #include <csignal>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -366,6 +367,15 @@ fs::path executable_directory() {
   return exe.parent_path();
 }
 
+// The directory holding the configuration file in use. config.yaml ships in
+// src/common beside the label map and the report assets, so wherever the
+// customer points --config, the rest of src/common is next to it. Set once in
+// main() before anything reads a bundled file.
+fs::path& config_directory() {
+  static fs::path directory;
+  return directory;
+}
+
 // Every file shipped under src/common is found the same way, by one function.
 // The label map and the report assets each used to do their own lookup, and the
 // two drifted: a packaged binary run from outside prebuilt-apps found its CSS
@@ -379,6 +389,12 @@ fs::path executable_directory() {
 // build/. The last candidate covers running from the example directory itself.
 std::vector<fs::path> bundled_candidates(const std::string& name) {
   std::vector<fs::path> candidates;
+  // The configuration the customer actually named is the most reliable anchor:
+  // config.yaml lives in src/common, so the assets are its neighbours. This is
+  // what makes a build-tree binary work from any directory, where nothing else
+  // below resolves.
+  if (!config_directory().empty())
+    candidates.push_back(config_directory() / name);
   const fs::path exe_dir = executable_directory();
   if (!exe_dir.empty()) {
     candidates.push_back(exe_dir / ".." / ".." / "common" / name);
@@ -633,10 +649,11 @@ std::vector<fs::path> discover_images(const std::string& input_path,
 
   fs::path path = input_path;
   if (fs::is_regular_file(path)) {
-    const std::string ext = lower_copy(path.extension().string());
+    const std::string raw_ext = path.extension().string();
+    const std::string ext = lower_copy(raw_ext);
     if (std::find(extensions.begin(), extensions.end(), ext) == extensions.end()) {
       skipped.push_back(path.string() + ": unsupported extension " +
-                        (ext.empty() ? "(none)" : ext));
+                        (raw_ext.empty() ? "(none)" : raw_ext));
       return {};
     }
     return {path};
@@ -665,10 +682,11 @@ std::vector<fs::path> discover_images(const std::string& input_path,
 
   std::vector<fs::path> images;
   for (const auto& entry : entries) {
-    const std::string ext = lower_copy(entry.extension().string());
+    const std::string raw_ext = entry.extension().string();
+    const std::string ext = lower_copy(raw_ext);
     if (std::find(extensions.begin(), extensions.end(), ext) == extensions.end()) {
       skipped.push_back(entry.string() + ": unsupported extension " +
-                        (ext.empty() ? "(none)" : ext));
+                        (raw_ext.empty() ? "(none)" : raw_ext));
       continue;
     }
     images.push_back(entry);
@@ -682,10 +700,7 @@ std::vector<fs::path> discover_images(const std::string& input_path,
 
 // --- Neat inference: preprocessing, model construction and execution -----------
 simaai::neat::Model build_model(const ModelProfile& profile) {
-  if (profile.preprocess != "imagenet") {
-    throw ConfigError("models." + profile.name + ".preprocess=" + profile.preprocess +
-                      " is not supported; only 'imagenet' is implemented");
-  }
+  // preprocess is validated in load_profiles, before any input is read.
   simaai::neat::Model::Options opt;
   opt.preprocess.kind = simaai::neat::InputKind::Image;
   opt.preprocess.color_convert.input_format = simaai::neat::PreprocessColorFormat::RGB;
@@ -754,8 +769,8 @@ std::vector<ImageResult> run_all(std::vector<ModelProfile>& profiles,
         check_unchanged(result.image_path, result.fingerprint);
         result.predictions[profile.name] = std::move(prediction);
       } catch (const std::exception& e) {
-        std::cerr << "  " << result.image_path << ": " << profile.name << " failed: " << e.what()
-                  << "\n";
+        std::cerr << "  " << result.image_path.string() << ": " << profile.name
+                  << " failed: " << e.what() << "\n";
         result.errors[profile.name] = e.what();
       }
     }
@@ -1155,7 +1170,8 @@ bool process_is_running(pid_t pid) {
 class PublicationLock {
 public:
   explicit PublicationLock(const fs::path& output_dir)
-      : path_(output_dir.parent_path() / ("." + output_dir.filename().string() + ".lock")) {
+      : output_dir_(output_dir),
+        path_(output_dir.parent_path() / ("." + output_dir.filename().string() + ".lock")) {
     for (int attempt = 0; attempt < 2; ++attempt) {
       const int fd = ::open(path_.c_str(), O_CREAT | O_EXCL | O_WRONLY, 0644);
       if (fd >= 0) {
@@ -1166,8 +1182,11 @@ public:
         held_ = true;
         return;
       }
-      if (errno != EEXIST)
-        break;
+      if (errno != EEXIST) {
+        // Not a collision: report what actually failed, as Python does.
+        throw std::runtime_error("failed to create the publication lock " + path_.string() + ": " +
+                                 std::strerror(errno));
+      }
 
       std::optional<pid_t> holder;
       std::ifstream in(path_);
@@ -1188,7 +1207,7 @@ public:
       }
       break;
     }
-    throw std::runtime_error("another run is publishing to " + path_.parent_path().string() +
+    throw std::runtime_error("another run is publishing to " + output_dir_.string() +
                              "; retry once it has finished");
   }
 
@@ -1203,6 +1222,7 @@ public:
   PublicationLock& operator=(const PublicationLock&) = delete;
 
 private:
+  fs::path output_dir_;
   fs::path path_;
   bool held_ = false;
 };
@@ -1418,6 +1438,8 @@ int main(int argc, char** argv) {
 
   try {
     const Args args = parse_args(argc, argv);
+    config_directory() = fs::absolute(args.config_path).parent_path();
+
     // An unreadable or malformed config file is a configuration failure.
     const sima_examples::ScalarConfig raw = [&] {
       try {
@@ -1436,6 +1458,19 @@ int main(int argc, char** argv) {
       }
     }
 
+    // ScalarConfig keeps a flow value such as `output_dir: [a, b]` verbatim, so
+    // without this C++ would create a directory literally named "[a, b]" while
+    // Python rejects the same file as not a scalar.
+    for (const char* key :
+         {"io.input", "io.output_dir", "io.extensions", "io.fallback_image_url",
+          "runtime.timeout_ms", "validation.expected_class_id", "validation.min_probability"}) {
+      const auto value = raw.string_value(key);
+      if (value.has_value() && !value->empty() &&
+          (value->front() == '[' || value->front() == '{')) {
+        throw ConfigError(std::string(key) + " must be a scalar, got " + *value);
+      }
+    }
+
     const std::string input_path = raw.string_or("io.input", "");
     const std::string fallback_url =
         raw.string_or("io.fallback_image_url",
@@ -1448,17 +1483,10 @@ int main(int argc, char** argv) {
     // Parse the validation block up front: std::stoi on a malformed value would
     // otherwise throw after the report had already been written.
     std::optional<int> expected_class_id;
-    if (const auto text = raw.string_value("validation.expected_class_id")) {
-      try {
-        std::size_t consumed = 0;
-        const int parsed = std::stoi(*text, &consumed);
-        if (consumed != text->size())
-          throw std::invalid_argument("trailing characters");
-        expected_class_id = parsed;
-      } catch (const std::exception&) {
-        throw ConfigError("validation.expected_class_id must be an integer, got " + *text);
-      }
+    if (raw.string_value("validation.expected_class_id").has_value()) {
+      expected_class_id = config_int(raw, "validation.expected_class_id", 0);
     }
+
     const double min_probability = [&] {
       try {
         return raw.double_or("validation.min_probability", 0.0);
@@ -1504,11 +1532,17 @@ int main(int argc, char** argv) {
                      .count();
     }
 
-    publish_report(output_dir, results, profiles, skipped, total_ms);
+    try {
+      publish_report(output_dir, results, profiles, skipped, total_ms);
+    } catch (const std::exception& e) {
+      throw std::runtime_error("failed to write report to " + output_dir.string() + ": " +
+                               e.what());
+    }
 
     const auto images_with_errors = std::count_if(
         results.begin(), results.end(), [](const ImageResult& r) { return !r.errors.empty(); });
-    std::cout << "Done in " << total_ms << " ms. Report written to " << output_dir << "\n";
+    std::cout << "Done in " << std::fixed << std::setprecision(1) << total_ms
+              << " ms. Report written to " << output_dir.string() << "\n";
     std::cout << "  report.html, report.json, report.csv\n";
     if (images_with_errors > 0) {
       std::cout << "  " << images_with_errors
@@ -1526,7 +1560,8 @@ int main(int argc, char** argv) {
         const auto& top1 = it->second.top_k.front();
         if (top1.index != *expected_class_id || top1.prob < min_probability) {
           std::cerr << "Note: " << profiles.front().name << " top1=" << top1.index << " ("
-                    << top1.prob << ") did not match expected_class_id=" << *expected_class_id
+                    << std::fixed << std::setprecision(4) << top1.prob
+                    << ") did not match expected_class_id=" << *expected_class_id
                     << " (min_probability=" << min_probability << "); see report for details.\n";
         }
       }
