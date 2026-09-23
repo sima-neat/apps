@@ -59,13 +59,9 @@ int main(int argc, char** argv) {
   }
 
   const int output_files = count_output_files(out_dir);
-  if (output_files == 0) {
-    std::cerr << "[FAIL] expected annotated output images but output directory is empty\n";
-    remove_dir(out_dir);
-    return 1;
-  }
-  if (!all_output_files_nonempty(out_dir)) {
-    std::cerr << "[FAIL] some annotated output images are empty\n";
+  const std::string output_problem = saved_frames_problem(out_dir, supported_image_count(input_dir));
+  if (!output_problem.empty()) {
+    std::cerr << "[FAIL] " << output_problem << "\n";
     remove_dir(out_dir);
     return 1;
   }

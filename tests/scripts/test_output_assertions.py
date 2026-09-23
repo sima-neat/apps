@@ -20,8 +20,10 @@ from tests.utils.output_assertions import (
     assert_every_stream_advances,
     assert_frames_decode,
     assert_saved_frames_are_usable,
+    assert_streamed_frames_are_usable,
     group_frames_by_stream,
     saved_image_files,
+    supported_image_files,
 )
 from tests.utils.pytest_fixtures import (
     _confirm_finished_outputs,
@@ -160,18 +162,18 @@ class TestAssertEveryStreamAdvances:
         self._write_streams(tmp_path, [[100, 100, 100], [0, 60, 120]])
 
         with pytest.raises(AssertionError, match=r"stream 0 .*not advancing"):
-            assert_saved_frames_are_usable(tmp_path, 6)
+            assert_streamed_frames_are_usable(tmp_path, 6)
 
     def test_a_stream_showing_its_own_static_image_is_rejected(self, tmp_path):
         self._write_streams(tmp_path, [[0, 60, 120], [200, 200, 200]])
 
         with pytest.raises(AssertionError, match=r"stream 1 .*not advancing"):
-            assert_saved_frames_are_usable(tmp_path, 6)
+            assert_streamed_frames_are_usable(tmp_path, 6)
 
     def test_every_stream_advancing_is_accepted(self, tmp_path):
         self._write_streams(tmp_path, [[0, 60, 120], [10, 70, 130]])
 
-        assert len(assert_saved_frames_are_usable(tmp_path, 6)) == 6
+        assert len(assert_streamed_frames_are_usable(tmp_path, 6)) == 6
 
     def test_frames_are_grouped_by_the_stream_named_in_their_filename(self, tmp_path):
         self._write_streams(tmp_path, [[0, 60], [10, 70, 130]])
@@ -192,6 +194,75 @@ class TestAssertEveryStreamAdvances:
         groups = group_frames_by_stream(paths, assert_frames_decode(paths))
 
         assert [len(group) for group in groups.values()] == [3]
+
+
+class TestBatchOutputIsNotHeldToMotion:
+    """A batch run owes one output per input, not motion.
+
+    A directory of images is whatever the caller pointed the application at.
+    Two identical inputs correctly produce two identical outputs, so the
+    advancement check that a looping stream earns would report a working
+    offline application as a stalled pipeline.
+    """
+
+    def test_identical_outputs_from_identical_inputs_are_accepted(self, tmp_path):
+        for index in range(3):
+            _write_frame(tmp_path / f"image_{index}_depth.png", shade=90)
+
+        assert len(assert_saved_frames_are_usable(tmp_path, 3)) == 3
+
+    def test_a_truncated_batch_output_is_still_rejected(self, tmp_path):
+        _write_frame(tmp_path / "image_0_depth.png", shade=90)
+        path = tmp_path / "image_1_depth.png"
+        _write_frame(path, shade=90)
+        data = path.read_bytes()
+        path.write_bytes(data[: len(data) // 3])
+
+        with pytest.raises(AssertionError, match="does not decode"):
+            assert_saved_frames_are_usable(tmp_path, 2)
+
+    def test_a_degenerate_batch_output_is_still_rejected(self, tmp_path):
+        _write_frame(tmp_path / "image_0_depth.png", size=(8, 8))
+
+        with pytest.raises(AssertionError, match="implausible"):
+            assert_saved_frames_are_usable(tmp_path, 1)
+
+
+class TestSupportedImageFiles:
+    """Batch suites size their expectation from the directory they hand over.
+
+    A minimum of one lets an application that annotates the first image and
+    exits cleanly pass: the single output decodes, and advancement is not
+    asked of a batch at all.
+    """
+
+    def test_only_the_suffixes_the_applications_accept_are_counted(self, tmp_path):
+        for name in ("a.jpg", "b.JPEG", "c.png", "d.bmp"):
+            _write_frame(tmp_path / name)
+        (tmp_path / "notes.txt").write_text("not an image")
+        (tmp_path / "labels.json").write_text("{}")
+        (tmp_path / "nested").mkdir()
+
+        assert [path.name for path in supported_image_files(tmp_path)] == [
+            "a.jpg",
+            "b.JPEG",
+            "c.png",
+            "d.bmp",
+        ]
+
+    def test_an_application_that_stops_after_the_first_image_is_rejected(self, tmp_path):
+        input_dir = tmp_path / "in"
+        input_dir.mkdir()
+        for index in range(4):
+            _write_frame(input_dir / f"image_{index}.jpg", shade=index * 50)
+        output_dir = tmp_path / "out"
+        output_dir.mkdir()
+        _write_frame(output_dir / "image_0_depth.png", shade=0)
+
+        with pytest.raises(AssertionError, match="expected at least 4 saved frames, got 1"):
+            assert_saved_frames_are_usable(
+                output_dir, len(supported_image_files(input_dir))
+            )
 
 
 class TestOutputCompletion:

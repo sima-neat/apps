@@ -66,12 +66,9 @@ int main(int argc, char** argv) {
     rc = 1;
   } else {
     const int files = count_output_files(output_dir);
-    if (files < total_saved_frames) {
-      std::cerr << "[FAIL] expected at least " << total_saved_frames
-                << " sampled output files, got " << files << "\n";
-      rc = 1;
-    } else if (!all_output_files_nonempty(output_dir)) {
-      std::cerr << "[FAIL] some sampled output files are empty\n";
+    const std::string problem = streamed_frames_problem(output_dir, total_saved_frames);
+    if (!problem.empty()) {
+      std::cerr << "[FAIL] " << problem << "\n";
       rc = 1;
     } else {
       std::cout << "[OK] single-stream instance segmenter produced " << files

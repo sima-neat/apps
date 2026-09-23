@@ -6,7 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from tests.utils.output_assertions import assert_saved_frames_are_usable
+from tests.utils.output_assertions import (
+    assert_saved_frames_are_usable,
+    supported_image_files,
+)
 
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
@@ -24,8 +27,8 @@ class TestE2E:
         e2e_config_writer,
     ):
         skip_unless_e2e_ready(
-            test_images_dir.exists() and any(test_images_dir.iterdir()),
-            f"test_images_dir is missing or empty: {test_images_dir}",
+            test_images_dir.exists() and bool(supported_image_files(test_images_dir)),
+            f"test_images_dir has no images to process: {test_images_dir}",
         )
 
         config_path = e2e_config_writer(
@@ -53,4 +56,6 @@ class TestE2E:
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
 
-        assert_saved_frames_are_usable(tmp_output_dir, 1)
+        assert_saved_frames_are_usable(
+            tmp_output_dir, len(supported_image_files(test_images_dir))
+        )

@@ -7,7 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from tests.utils.output_assertions import assert_saved_frames_are_usable
+from tests.utils.output_assertions import (
+    assert_saved_frames_are_usable,
+    supported_image_files,
+)
 
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
@@ -43,8 +46,8 @@ class TestE2E:
         e2e_config_writer,
     ):
         skip_unless_e2e_ready(
-            test_images_dir.exists() and any(test_images_dir.iterdir()),
-            f"test_images_dir is missing or empty: {test_images_dir}",
+            test_images_dir.exists() and bool(supported_image_files(test_images_dir)),
+            f"test_images_dir has no images to process: {test_images_dir}",
         )
 
         detections_path = tmp_output_dir.parent / "detections.json"
@@ -75,16 +78,13 @@ class TestE2E:
             f"main.py exited with code {result.returncode}\n"
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
-        assert_saved_frames_are_usable(tmp_output_dir, 1)
+        assert_saved_frames_are_usable(
+            tmp_output_dir, len(supported_image_files(test_images_dir))
+        )
 
         assert detections_path.is_file(), (
             f"Expected a detections report at {detections_path}"
         )
         reported = json.loads(detections_path.read_text(encoding="utf-8"))
-        expected_images = {
-            path.name
-            for path in test_images_dir.iterdir()
-            if path.is_file()
-            and path.suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp"}
-        }
+        expected_images = {path.name for path in supported_image_files(test_images_dir)}
         _assert_valid_detections(reported, expected_images)

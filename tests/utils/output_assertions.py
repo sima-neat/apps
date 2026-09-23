@@ -19,6 +19,23 @@ import cv2
 # it, e.g. stream_1_frame_40.jpg, and write them all into one directory.
 _STREAM_IN_NAME = re.compile(r"^stream[_-]?(\d+)[_-]")
 
+# What the directory-based applications accept, from their shared is_image().
+_IMAGE_SUFFIXES = frozenset({".jpg", ".jpeg", ".png", ".bmp"})
+
+
+def supported_image_files(input_dir: Path) -> list[Path]:
+    """The images a directory-based application will process, in its own order.
+
+    Suites size their output expectation with this rather than with a constant,
+    so that an application which annotates the first image and exits cleanly is
+    not mistaken for one that processed the directory.
+    """
+    return sorted(
+        path
+        for path in input_dir.iterdir()
+        if path.is_file() and path.suffix.lower() in _IMAGE_SUFFIXES
+    )
+
 
 def saved_image_files(output_dir: Path, *, exclude: Iterable[str] = ("config.yaml",)) -> list[Path]:
     """Every file an e2e run saved, newest-last, excluding config artifacts."""
@@ -108,15 +125,39 @@ def assert_every_stream_advances(
 def assert_saved_frames_are_usable(
     output_dir: Path, minimum: int, *, min_side: int = 16
 ) -> list[Path]:
-    """The whole output check for an application that saves annotated frames.
+    """The output check for an application that annotates a directory of images.
 
     Replaces the common `len(files) >= n` plus `st_size > 0` pair with the same
-    count check followed by assertions that the frames decode and advance.
+    count check followed by assertions that the frames decode. Nothing here
+    asks the frames to differ: a batch of images is whatever the caller pointed
+    the application at, and two identical inputs correctly produce two identical
+    outputs. What a batch run does owe is one output per input, which is why
+    `minimum` should come from `supported_image_files(input_dir)`.
     """
+    paths, _ = _counted_and_decoded(output_dir, minimum, min_side)
+    return paths
+
+
+def assert_streamed_frames_are_usable(
+    output_dir: Path, minimum: int, *, min_side: int = 16
+) -> list[Path]:
+    """The same check for an application that samples frames out of a stream.
+
+    Adds the assertion a stream can be held to and a batch cannot: the frames
+    have to move. The e2e configuration points these suites at looping test
+    streams, so every stream is expected to advance; a deliberately static
+    source would need this call replaced rather than loosened.
+    """
+    paths, frames = _counted_and_decoded(output_dir, minimum, min_side)
+    assert_every_stream_advances(frames, paths)
+    return paths
+
+
+def _counted_and_decoded(
+    output_dir: Path, minimum: int, min_side: int
+) -> tuple[list[Path], list["cv2.typing.MatLike"]]:
     paths = saved_image_files(output_dir)
     assert len(paths) >= minimum, (
         f"expected at least {minimum} saved frames, got {len(paths)}"
     )
-    frames = assert_frames_decode(paths, min_side=min_side)
-    assert_every_stream_advances(frames, paths)
-    return paths
+    return paths, assert_frames_decode(paths, min_side=min_side)

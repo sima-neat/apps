@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.utils.output_assertions import assert_saved_frames_are_usable
+from tests.utils.output_assertions import assert_streamed_frames_are_usable
 
 from tests.utils.metadata_json_listener import MetadataJsonListener
 
@@ -129,4 +129,4 @@ class TestE2E:
             f"tracking metadata was not received on all streams: {metadata.error}"
         )
 
-        assert_saved_frames_are_usable(tmp_output_dir, total_saved_frames)
+        assert_streamed_frames_are_usable(tmp_output_dir, total_saved_frames)
