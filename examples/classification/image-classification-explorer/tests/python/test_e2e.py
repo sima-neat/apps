@@ -1,7 +1,10 @@
 """E2E tests for image-classification-explorer (Python)."""
 
+import csv
+import io
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -39,6 +42,28 @@ def _assert_goldfish(image_entry: dict, model_names) -> None:
 
 
 MODEL_NAMES = ("resnet_50", "resnet_18", "efficientnet_b0", "densenet_121")
+
+
+def _drop_timing_column(csv_text: str) -> list[list[str]]:
+    """CSV rows without the measured inference_ms column."""
+    rows = list(csv.reader(io.StringIO(csv_text)))
+    return [row[:6] + row[7:] for row in rows]
+
+
+def _strip_timings(html: str) -> str:
+    return re.sub(r"[0-9]+\.[0-9]+ ms", "<ms>", html)
+
+
+def _normalised_report(output_dir: Path) -> dict:
+    payload = json.loads((output_dir / "report.json").read_text())
+    payload["timing"]["total_ms"] = "<ms>"
+    for image in payload["images"]:
+        image["path"] = Path(image["path"]).name
+        for prediction in image.get("predictions", {}).values():
+            prediction["inference_ms"] = "<ms>"
+    payload["skipped"] = [Path(entry.split(":")[0]).name for entry in payload["skipped"]]
+    return payload
+
 
 
 def _model_paths(models_dir: Path) -> dict[str, Path]:
@@ -161,6 +186,85 @@ class TestE2E:
                 assert image_entry["predictions"][model_name]["top_k"], (
                     f"{image_entry['path']}: {model_name} produced no predictions"
                 )
+
+    def test_cpp_and_python_reports_are_identical(
+        self,
+        apps_root,
+        models_dir,
+        test_timeout_ms,
+        skip_unless_e2e_ready,
+        e2e_config_writer,
+        tmp_output_dir,
+        test_images_dir,
+    ):
+        """The two entrypoints must produce the same report for the same input.
+
+        Nearly every review finding on this application was a divergence
+        between them - operator handling, exit codes, CSV line endings, drifted
+        copies of the report JavaScript. Comparing the artifacts directly is
+        what makes that class visible instead of being found one case at a
+        time."""
+        binary = os.environ.get("SIMANEAT_APPS_TEST_CPP_BINARY", "")
+        if not binary:
+            candidate = (
+                apps_root
+                / "build/examples/classification/image-classification-explorer"
+                / "image-classification-explorer"
+            )
+            binary = str(candidate) if candidate.is_file() else ""
+        skip_unless_e2e_ready(
+            bool(binary) and Path(binary).is_file(),
+            "C++ binary not built; set SIMANEAT_APPS_TEST_CPP_BINARY",
+        )
+        skip_unless_e2e_ready(
+            test_images_dir.is_dir() and any(test_images_dir.glob("*.jpg")),
+            f"no test images found under {test_images_dir}",
+        )
+        paths = _model_paths(models_dir)
+        skip_unless_e2e_ready(
+            all(p.is_file() for p in paths.values()),
+            f"{', '.join(MODEL_NAMES)} model packages not found under {models_dir}",
+        )
+
+        models = {name: {"path": str(paths[name])} for name in MODEL_NAMES}
+        py_out = tmp_output_dir.parent / "report-python"
+        cpp_out = tmp_output_dir.parent / "report-cpp"
+
+        # e2e_config_writer always writes the same path, so write and run each
+        # configuration in turn rather than holding two at once.
+        for output_dir, command in (
+            (py_out, lambda cfg: [sys.executable, str(MAIN_PY), "--config", str(cfg)]),
+            (cpp_out, lambda cfg: [binary, "--config", str(cfg)]),
+        ):
+            config = e2e_config_writer(
+                {"io": {"input": str(test_images_dir), "output_dir": str(output_dir)},
+                 "models": models}
+            )
+            argv = command(config)
+            result = subprocess.run(
+                argv, capture_output=True, text=True,
+                timeout=test_timeout_ms / 1000, cwd=str(EXAMPLE_DIR),
+            )
+            assert result.returncode == 0, (
+                f"{argv[0]} exited {result.returncode}\n{result.stdout}\n{result.stderr}"
+            )
+
+        # report.csv must match byte for byte, including line endings.
+        py_csv = (py_out / "report.csv").read_text()
+        cpp_csv = (cpp_out / "report.csv").read_text()
+        assert _drop_timing_column(py_csv) == _drop_timing_column(cpp_csv), (
+            "report.csv differs between the implementations"
+        )
+
+        # report.html differs only in the per-image timings it displays.
+        py_html = _strip_timings((py_out / "report.html").read_text())
+        cpp_html = _strip_timings((cpp_out / "report.html").read_text())
+        assert py_html == cpp_html, "report.html differs between the implementations"
+
+        # report.json must match once measured times are removed.
+        assert _normalised_report(py_out) == _normalised_report(cpp_out), (
+            "report.json differs between the implementations"
+        )
 
     @pytest.mark.parametrize("model_name", MODEL_NAMES)
     def test_each_model_individually(

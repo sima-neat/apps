@@ -74,6 +74,17 @@ int config_int(const sima_examples::ScalarConfig& raw, const std::string& key, i
 // label_map path is a configuration error.
 const char* const kBundledLabelMapRef = "src/common/imagenet_labels.txt";
 
+// Python computes softmax in float32 and C++ accumulates in double, so the two
+// agree only to about seven digits - well beyond the precision a float32 model
+// output carries. Report a rounded value so both emit identical numbers.
+constexpr int kProbabilityDecimals = 6;
+
+double round_probability(double value) {
+  const double factor = 1e6; // 10^kProbabilityDecimals
+  static_assert(kProbabilityDecimals == 6, "factor must match kProbabilityDecimals");
+  return std::round(value * factor) / factor;
+}
+
 // FNV-1a (64-bit). std::hash is not specified to be stable across builds, and
 // Python's hash() is salted per process; this keeps thumbnail names identical
 // across runs, machines and both implementations.
@@ -706,7 +717,7 @@ void write_json_report(const fs::path& path, const std::vector<ImageResult>& res
         for (const auto& scored : it->second.top_k) {
           top_k.push_back({{"class_id", scored.index},
                            {"label", label_for(profile, scored.index)},
-                           {"probability", scored.prob}});
+                           {"probability", round_probability(scored.prob)}});
         }
         predictions[profile.name] = {{"top_k", top_k}, {"inference_ms", it->second.inference_ms}};
         if (!it->second.top_k.empty()) {
@@ -792,6 +803,55 @@ void write_csv_report(const fs::path& path, const std::vector<ImageResult>& resu
   close_or_throw(out, path);
 }
 
+// Directory holding this executable, used to find files shipped beside it
+// regardless of the working directory.
+fs::path executable_directory() {
+  std::error_code ec;
+  const fs::path exe = fs::read_symlink("/proc/self/exe", ec);
+  if (ec)
+    return {};
+  return exe.parent_path();
+}
+
+// Read a file shipped next to this example under src/common. The report's CSS
+// and JavaScript live there rather than inside either entrypoint, so both emit
+// exactly the same markup and cannot drift apart.
+//
+// The file is looked up relative to the executable first, which works for the
+// packaged layout (src/cpp/pre-built/<binary>) no matter where the customer
+// runs it from. SIMANEAT_APPS_EXAMPLE_SOURCE_DIR is a repository-relative path,
+// so it only resolves when the working directory is the repository or the
+// installed `prebuilt-apps` root; it covers the development build tree, where
+// the executable sits under build/.
+std::string bundled_asset(const std::string& name) {
+  std::vector<fs::path> candidates;
+  const fs::path exe_dir = executable_directory();
+  if (!exe_dir.empty()) {
+    candidates.push_back(exe_dir / ".." / ".." / "common" / name); // packaged pre-built/
+    candidates.push_back(exe_dir / "common" / name);
+  }
+  candidates.push_back(fs::path(SIMANEAT_APPS_EXAMPLE_SOURCE_DIR) / ".." / "common" / name);
+  candidates.push_back(fs::path("src") / "common" / name); // run from the example directory
+
+  for (const auto& candidate : candidates) {
+    std::ifstream in(candidate);
+    if (!in.is_open())
+      continue;
+    std::ostringstream contents;
+    contents << in.rdbuf();
+    if (in.bad())
+      continue;
+    return contents.str();
+  }
+
+  std::string tried;
+  for (const auto& candidate : candidates) {
+    tried += "\n  " + candidate.lexically_normal().string();
+  }
+  throw std::runtime_error("failed to read bundled report asset '" + name +
+                           "'; looked in:" + tried);
+}
+
 std::string html_escape(const std::string& value) {
   std::string out;
   out.reserve(value.size());
@@ -861,7 +921,7 @@ void write_html_report(const fs::path& path, const std::vector<ImageResult>& res
       if (it != result.predictions.end() && !it->second.top_k.empty()) {
         top1_obj[profile.name] = {{"class_id", it->second.top_k.front().index},
                                   {"label", label_for(profile, it->second.top_k.front().index)},
-                                  {"prob", it->second.top_k.front().prob}};
+                                  {"prob", round_probability(it->second.top_k.front().prob)}};
         std::ostringstream top_str;
         bool first = true;
         for (const auto& s : it->second.top_k) {
@@ -869,7 +929,7 @@ void write_html_report(const fs::path& path, const std::vector<ImageResult>& res
             top_str << "<br>";
           first = false;
           top_str << html_escape(label_for(profile, s.index)) << " (" << std::fixed
-                  << std::setprecision(1) << (s.prob * 100.0) << "%)";
+                  << std::setprecision(2) << (s.prob * 100.0) << "%)";
         }
         cells << "<td data-model-col=\"" << html_escape(profile.name) << "\">" << top_str.str()
               << "<br><span class=\"timing\">" << std::fixed << std::setprecision(1)
@@ -918,8 +978,12 @@ void write_html_report(const fs::path& path, const std::vector<ImageResult>& res
     if (model_it == class_summary.end())
       continue;
     std::vector<std::pair<int, int>> ordered(model_it->second.begin(), model_it->second.end());
-    std::stable_sort(ordered.begin(), ordered.end(),
-                     [](const auto& a, const auto& b) { return a.second > b.second; });
+    // Most frequent first, then by class id, matching the Python writer.
+    std::stable_sort(ordered.begin(), ordered.end(), [](const auto& a, const auto& b) {
+      if (a.second != b.second)
+        return a.second > b.second;
+      return a.first < b.first;
+    });
     for (const auto& [class_id, count] : ordered) {
       summary_rows << "<tr><td>" << html_escape(profile.name) << "</td><td>" << class_id
                    << "</td><td>" << html_escape(label_for(profile, class_id)) << "</td><td>"
@@ -941,39 +1005,16 @@ void write_html_report(const fs::path& path, const std::vector<ImageResult>& res
     joined_names += names[i];
   }
 
+  const std::string report_css = bundled_asset("report.css");
+  const std::string report_js = bundled_asset("report.js");
+
   std::ofstream out(path);
   if (!out.is_open()) {
     throw std::runtime_error("failed to open for writing: " + path.string());
   }
   out << "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n"
       << "<title>Image Classification Explorer Report</title>\n<style>\n"
-      << "  body { font-family: -apple-system, Arial, sans-serif; margin: 24px; color: #1a1a1a; }\n"
-      << "  table { border-collapse: collapse; width: 100%; margin-top: 12px; }\n"
-      << "  th, td { border: 1px solid #ddd; padding: 8px; text-align: left; vertical-align: top; "
-         "font-size: 13px; }\n"
-      << "  th { background: #f4f4f4; position: sticky; top: 0; }\n"
-      << "  img { max-width: 100px; max-height: 100px; }\n"
-      << "  .timing { color: #888; font-size: 11px; }\n"
-      << "  .error { color: #b00020; }\n"
-      << "  tr[data-has-error=\"1\"] { background: #fff6e5; }\n"
-      << "  #controls { margin: 12px 0; display: flex; gap: 12px; align-items: flex-start; "
-         "flex-wrap: wrap; }\n"
-      << "  #controls input, #controls select { padding: 4px; }\n"
-      << "  .dropdown { position: relative; display: inline-block; }\n"
-      << "  .dropdown-btn { padding: 5px 10px; border: 1px solid #ccc; border-radius: 4px; "
-         "background: #fff; cursor: pointer; font-size: 13px; }\n"
-      << "  .dropdown-panel { display: none; position: absolute; top: 100%; left: 0; margin-top: "
-         "4px; padding: 8px; background: #fff; border: 1px solid #ccc; border-radius: 4px; "
-         "box-shadow: 0 2px 8px rgba(0,0,0,0.15); z-index: 10; min-width: 160px; max-height: "
-         "240px; overflow-y: auto; }\n"
-      << "  .dropdown-panel.open { display: block; }\n"
-      << "  .dropdown-panel label { display: block; font-size: 13px; padding: 2px 0; "
-         "white-space: nowrap; }\n"
-      << "  .dropdown-panel .dropdown-actions { margin-top: 6px; padding-top: 6px; border-top: "
-         "1px solid #eee; }\n"
-      << "  .dropdown-panel .dropdown-actions button { font-size: 12px; padding: 2px 6px; "
-         "margin-right: 6px; cursor: pointer; }\n"
-      << "</style>\n</head>\n<body>\n"
+      << report_css << "</style>\n</head>\n<body>\n"
       << "<h1>Image Classification Explorer Report</h1>\n"
       << "<p>Models: " << html_escape(joined_names) << " &middot; Images: " << results.size()
       << " &middot; Skipped: " << skipped.size() << "</p>\n"
@@ -1014,158 +1055,7 @@ void write_html_report(const fs::path& path, const std::vector<ImageResult>& res
       << "<h2>Skipped files</h2>\n<ul>" << (skipped.empty() ? "<li>None</li>" : skipped_rows.str())
       << "</ul>\n"
       << "<script>\n"
-      << "  const classInput = document.getElementById('filterClass');\n"
-      << "  const resultSelect = document.getElementById('filterResult');\n"
-      << "  const confidenceInput = document.getElementById('minConfidence');\n"
-      << "  const sortSelect = document.getElementById('sortBy');\n"
-      << "  const tbody = document.querySelector('#reportTable tbody');\n"
-      << "  const rows = Array.from(document.querySelectorAll('#reportTable tbody tr'));\n"
-      << "  const modelBtn = document.getElementById('modelDropdownBtn');\n"
-      << "  const modelPanel = document.getElementById('modelDropdownPanel');\n"
-      << "  const modelChecks = Array.from(document.querySelectorAll('.model-checkbox'));\n"
-      << "\n"
-      << "  function selectedModels() {\n"
-      << "    return modelChecks.filter((c) => c.checked).map((c) => c.value);\n"
-      << "  }\n"
-      << "\n"
-      << "  function updateModelBtnLabel() {\n"
-      << "    const selected = modelChecks.filter((c) => c.checked);\n"
-      << "    let label;\n"
-      << "    if (selected.length === 0) {\n"
-      << "      label = 'No models';\n"
-      << "    } else if (selected.length === modelChecks.length) {\n"
-      << "      label = 'All models';\n"
-      << "    } else {\n"
-      << "      label = selected.length + ' model' + (selected.length > 1 ? 's' : '');\n"
-      << "    }\n"
-      << "    modelBtn.textContent = label + ' \\u25BE';\n"
-      << "  }\n"
-      << "\n"
-      << "  modelBtn.addEventListener('click', (e) => {\n"
-      << "    e.stopPropagation();\n"
-      << "    modelPanel.classList.toggle('open');\n"
-      << "  });\n"
-      << "  document.addEventListener('click', () => modelPanel.classList.remove('open'));\n"
-      << "  modelPanel.addEventListener('click', (e) => e.stopPropagation());\n"
-      << "  document.getElementById('modelSelectAll').addEventListener('click', () => {\n"
-      << "    modelChecks.forEach((c) => { c.checked = true; });\n"
-      << "    updateModelBtnLabel();\n"
-      << "    applyFilters();\n"
-      << "  });\n"
-      << "  document.getElementById('modelSelectNone').addEventListener('click', () => {\n"
-      << "    modelChecks.forEach((c) => { c.checked = false; });\n"
-      << "    updateModelBtnLabel();\n"
-      << "    applyFilters();\n"
-      << "  });\n"
-      << "  modelChecks.forEach((c) => c.addEventListener('change', () => {\n"
-      << "    updateModelBtnLabel();\n"
-      << "    applyFilters();\n"
-      << "  }));\n"
-      << "\n"
-      << "  function rowTop1(row) {\n"
-      << "    try { return JSON.parse(row.dataset.top1 || '{}'); } catch (e) { return {}; }\n"
-      << "  }\n"
-      << "\n"
-      << "  function rowAgreement(row, models) {\n"
-      << "    // Identity is the class id: distinct classes can share a display label.\n"
-      << "    if (models.length < 2) return null;\n"
-      << "    const top1 = rowTop1(row);\n"
-      << "    const ids = models.map((m) => top1[m] && top1[m].class_id);\n"
-      << "    if (ids.some((id) => id === undefined)) return null;\n"
-      << "    return ids.every((id) => id === ids[0]);\n"
-      << "  }\n"
-      << "\n"
-      << "  function rowMaxConfidence(row, models) {\n"
-      << "    const top1 = rowTop1(row);\n"
-      << "    const probs = models.map((m) => top1[m] && top1[m].prob).filter((v) => v !== "
-         "undefined);\n"
-      << "    return probs.length ? Math.max(...probs) : null;\n"
-      << "  }\n"
-      << "\n"
-      << "  function rowClassText(row, models) {\n"
-      << "    const top1 = rowTop1(row);\n"
-      << "    return models.map((m) => (top1[m] && top1[m].label) || '').join(' ');\n"
-      << "  }\n"
-      << "\n"
-      << "  function applyFilters() {\n"
-      << "    const models = selectedModels();\n"
-      << "    const classQuery = classInput.value.trim().toLowerCase();\n"
-      << "    const resultQuery = resultSelect.value;\n"
-      << "    const minConfidence = confidenceInput.value === '' ? null : "
-         "parseFloat(confidenceInput.value) / 100;\n"
-      << "\n"
-      << "    document.querySelectorAll('[data-model-col]').forEach((cell) => {\n"
-      << "      cell.style.display = models.includes(cell.dataset.modelCol) ? '' : 'none';\n"
-      << "    });\n"
-      << "\n"
-      << "    for (const row of rows) {\n"
-      << "      const hasError = row.dataset.hasError === '1';\n"
-      << "      let visible;\n"
-      << "\n"
-      << "      if (resultQuery === 'error') {\n"
-      << "        visible = hasError;\n"
-      << "      } else {\n"
-      << "        const agree = rowAgreement(row, models);\n"
-      << "        if (resultQuery === 'agree') visible = agree === true;\n"
-      << "        else if (resultQuery === 'disagree') visible = agree === false;\n"
-      << "        else visible = true;\n"
-      << "      }\n"
-      << "\n"
-      << "      if (visible && classQuery) {\n"
-      << "        visible = rowClassText(row, models).toLowerCase().includes(classQuery);\n"
-      << "      }\n"
-      << "\n"
-      << "      if (visible && minConfidence !== null) {\n"
-      << "        const maxConf = rowMaxConfidence(row, models);\n"
-      << "        visible = maxConf !== null && maxConf >= minConfidence;\n"
-      << "      }\n"
-      << "\n"
-      << "      const agreeCell = row.querySelector('.agree-cell');\n"
-      << "      if (agreeCell) {\n"
-      << "        const agree = rowAgreement(row, models);\n"
-      << "        agreeCell.textContent = agree === null ? '\\u2014' : (agree ? 'agree' : "
-         "'disagree');\n"
-      << "      }\n"
-      << "\n"
-      << "      row.style.display = visible ? '' : 'none';\n"
-      << "    }\n"
-      << "\n"
-      << "    applySort(models);\n"
-      << "  }\n"
-      << "\n"
-      << "  function applySort(models) {\n"
-      << "    const sortKey = sortSelect.value;\n"
-      << "    const sorted = rows.slice();\n"
-      << "    if (sortKey === 'confidence') {\n"
-      << "      sorted.sort((a, b) => {\n"
-      << "        const av = rowMaxConfidence(a, models);\n"
-      << "        const bv = rowMaxConfidence(b, models);\n"
-      << "        return (bv === null ? -1 : bv) - (av === null ? -1 : av);\n"
-      << "      });\n"
-      << "    } else if (sortKey === 'class') {\n"
-      << "      sorted.sort((a, b) => rowClassText(a, models).localeCompare(rowClassText(b, "
-         "models)));\n"
-      << "    } else if (sortKey === 'result') {\n"
-      << "      sorted.sort((a, b) => {\n"
-      << "        const ra = a.dataset.hasError === '1' ? 2 : (rowAgreement(a, models) === "
-         "false ? 1 : 0);\n"
-      << "        const rb = b.dataset.hasError === '1' ? 2 : (rowAgreement(b, models) === "
-         "false ? 1 : 0);\n"
-      << "        return ra - rb;\n"
-      << "      });\n"
-      << "    } else {\n"
-      << "      sorted.sort((a, b) => Number(a.dataset.idx) - Number(b.dataset.idx));\n"
-      << "    }\n"
-      << "    for (const row of sorted) tbody.appendChild(row);\n"
-      << "  }\n"
-      << "\n"
-      << "  updateModelBtnLabel();\n"
-      << "  classInput.addEventListener('input', applyFilters);\n"
-      << "  resultSelect.addEventListener('change', applyFilters);\n"
-      << "  confidenceInput.addEventListener('input', applyFilters);\n"
-      << "  sortSelect.addEventListener('change', applyFilters);\n"
-      << "  applyFilters();\n"
-      << "</script>\n</body>\n</html>\n";
+      << report_js << "</script>\n</body>\n</html>\n";
   close_or_throw(out, path);
 }
 
@@ -1521,8 +1411,14 @@ int main(int argc, char** argv) {
     if (images.empty()) {
       std::cerr << "No images to classify.\n";
     } else {
+      std::string joined;
+      for (const auto& profile : profiles) {
+        if (!joined.empty())
+          joined += ", ";
+        joined += profile.name;
+      }
       std::cout << "Classifying " << images.size() << " image(s) with " << profiles.size()
-                << " model(s)\n";
+                << " model(s): " << joined << "\n";
 
       const auto start = std::chrono::steady_clock::now();
       results = run_all(profiles, images, timeout_ms);

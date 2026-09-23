@@ -36,6 +36,10 @@ BUNDLED_LABEL_MAP_REF = "src/common/imagenet_labels.txt"
 # accept exactly the same names instead of diverging on exotic YAML keys.
 PROFILE_NAME_RE = re.compile(r"[A-Za-z0-9_-]+")
 REPORT_ENTRIES = ("report.json", "report.csv", "report.html", "thumbnails", REPORT_MARKER)
+# Python computes softmax in float32 and C++ accumulates in double, so the two
+# agree only to about seven digits - well beyond the precision a float32 model
+# output carries. Report a rounded value so both emit identical numbers.
+PROBABILITY_DECIMALS = 6
 # The C++ ScalarConfig parses scalars with std::stoi, which is limited to int32.
 # Reject anything outside that range so both entrypoints accept the same values.
 INT32_MIN, INT32_MAX = -2**31, 2**31 - 1
@@ -488,7 +492,11 @@ def write_json_report(path: Path, results: list[ImageResult], profiles: list[Mod
         if result.predictions:
             entry["predictions"] = {
                 name: {
-                    "top_k": [{"class_id": c, "label": lbl, "probability": p} for c, lbl, p in pred.top_k],
+                    "top_k": [
+                        {"class_id": c, "label": lbl,
+                         "probability": round(p, PROBABILITY_DECIMALS)}
+                        for c, lbl, p in pred.top_k
+                    ],
                     "inference_ms": pred.inference_ms,
                 }
                 for name, pred in result.predictions.items()
@@ -503,7 +511,9 @@ def write_json_report(path: Path, results: list[ImageResult], profiles: list[Mod
 
 def write_csv_report(path: Path, results: list[ImageResult], profiles: list[ModelProfile]) -> None:
     with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.writer(handle)
+        # csv.writer defaults to CRLF; the C++ writer emits LF, and the two
+        # reports must be byte-identical for the same run.
+        writer = csv.writer(handle, lineterminator="\n")
         writer.writerow(["image", "model", "status", "top1_class_id", "top1_label",
                           "top1_probability", "inference_ms", "top_k"])
         for result in results:
@@ -552,6 +562,18 @@ def make_thumbnail(image_path: Path, thumb_dir: Path, max_side: int = 160,
     return f"thumbnails/{thumb_name}"
 
 
+def bundled_asset(name: str) -> str:
+    """Read a file shipped next to this script under src/common.
+
+    The report's CSS and JavaScript live there rather than inside either
+    entrypoint, so both emit exactly the same markup and cannot drift apart."""
+    path = Path(__file__).resolve().parents[1] / "common" / name
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise OSError(f"failed to read bundled report asset {path}: {exc}") from exc
+
+
 def html_escape(value: str) -> str:
     return (
         value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
@@ -568,10 +590,16 @@ def write_html_report(path: Path, results: list[ImageResult], profiles: list[Mod
                                fingerprint=result.fingerprint)
 
         top1_by_model = {
-            name: {"class_id": pred.top_k[0][0], "label": pred.top_k[0][1], "prob": pred.top_k[0][2]}
+            name: {"class_id": pred.top_k[0][0], "label": pred.top_k[0][1],
+                   "prob": round(pred.top_k[0][2], PROBABILITY_DECIMALS)}
             for name, pred in result.predictions.items() if pred.top_k
         }
-        top1_json = html_escape(json.dumps(top1_by_model))
+        # Compact separators and sorted keys match nlohmann::json::dump(), which
+        # stores objects sorted, so both implementations emit the same attribute
+        # text. The browser looks these up by name, so order is presentational.
+        top1_json = html_escape(
+            json.dumps(top1_by_model, separators=(",", ":"), sort_keys=True)
+        )
         cells = []
         for name in profile_names:
             pred = result.predictions.get(name)
@@ -590,13 +618,13 @@ def write_html_report(path: Path, results: list[ImageResult], profiles: list[Mod
                 cells.append(f'<td data-model-col="{html_escape(name)}">no result</td>')
 
         has_error = "1" if result.errors else "0"
-        rows.append(f"""
-        <tr class="row" data-has-error="{has_error}" data-idx="{idx}" data-top1="{top1_json}">
-          <td>{f'<img src="{thumb}">' if thumb else ''}</td>
-          <td>{html_escape(str(result.image_path))}</td>
-          {''.join(cells)}
-          <td class="agree-cell">&mdash;</td>
-        </tr>""")
+        img_cell = f'<img src="{thumb}">' if thumb else ""
+        rows.append(
+            f'<tr class="row" data-has-error="{has_error}" data-idx="{idx}" '
+            f'data-top1="{top1_json}"><td>{img_cell}</td>'
+            f'<td>{html_escape(str(result.image_path))}</td>{"".join(cells)}'
+            f'<td class="agree-cell">&mdash;</td></tr>\n'
+        )
 
     header_cols = "".join(
         f'<th data-model-col="{html_escape(name)}">{html_escape(name)}</th>' for name in profile_names
@@ -606,52 +634,31 @@ def write_html_report(path: Path, results: list[ImageResult], profiles: list[Mod
         f'{html_escape(name)}</label>'
         for name in profile_names
     )
+    # Most frequent first, then by class id: counts tie often, and ordering by
+    # insertion would differ from the C++ map, which is ordered by class id.
     summary_rows = "".join(
         f"<tr><td>{html_escape(name)}</td><td>{html_escape(class_id)}</td>"
         f"<td>{html_escape(entry['label'])}</td><td>{entry['count']}</td></tr>"
         for name, per_class in class_summary.items()
-        for class_id, entry in sorted(per_class.items(), key=lambda kv: -kv[1]["count"])
+        for class_id, entry in sorted(
+            per_class.items(), key=lambda kv: (-kv[1]["count"], int(kv[0]))
+        )
     )
     skipped_rows = "".join(f"<li>{html_escape(s)}</li>" for s in skipped)
 
+    report_css = bundled_asset("report.css")
+    report_js = bundled_asset("report.js")
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <title>Image Classification Explorer Report</title>
 <style>
-  body {{ font-family: -apple-system, Arial, sans-serif; margin: 24px; color: #1a1a1a; }}
-  table {{ border-collapse: collapse; width: 100%; margin-top: 12px; }}
-  th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; vertical-align: top; font-size: 13px; }}
-  th {{ background: #f4f4f4; position: sticky; top: 0; }}
-  img {{ max-width: 100px; max-height: 100px; }}
-  .timing {{ color: #888; font-size: 11px; }}
-  .error {{ color: #b00020; }}
-  tr[data-has-error="1"] {{ background: #fff6e5; }}
-  #controls {{ margin: 12px 0; display: flex; gap: 12px; align-items: flex-start; flex-wrap: wrap; }}
-  #controls input, #controls select {{ padding: 4px; }}
-  .dropdown {{ position: relative; display: inline-block; }}
-  .dropdown-btn {{
-    padding: 5px 10px; border: 1px solid #ccc; border-radius: 4px; background: #fff; cursor: pointer;
-    font-size: 13px;
-  }}
-  .dropdown-panel {{
-    display: none; position: absolute; top: 100%; left: 0; margin-top: 4px; padding: 8px;
-    background: #fff; border: 1px solid #ccc; border-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.15);
-    z-index: 10; min-width: 160px; max-height: 240px; overflow-y: auto;
-  }}
-  .dropdown-panel.open {{ display: block; }}
-  .dropdown-panel label {{ display: block; font-size: 13px; padding: 2px 0; white-space: nowrap; }}
-  .dropdown-panel .dropdown-actions {{ margin-top: 6px; padding-top: 6px; border-top: 1px solid #eee; }}
-  .dropdown-panel .dropdown-actions button {{
-    font-size: 12px; padding: 2px 6px; margin-right: 6px; cursor: pointer;
-  }}
-</style>
+{report_css}</style>
 </head>
 <body>
 <h1>Image Classification Explorer Report</h1>
 <p>Models: {html_escape(', '.join(profile_names))} &middot; Images: {len(results)} &middot; Skipped: {len(skipped)}</p>
-
 <div id="controls">
   <div class="dropdown" id="modelDropdown">
     <button type="button" class="dropdown-btn" id="modelDropdownBtn">All models &#9662;</button>
@@ -678,174 +685,17 @@ def write_html_report(path: Path, results: list[ImageResult], profiles: list[Mod
     <option value="result">Sort: result</option>
   </select>
 </div>
-
 <table id="reportTable">
-  <thead>
-    <tr><th>Image</th><th>Path</th>{header_cols}<th>Models Agree?</th></tr>
-  </thead>
-  <tbody>
-    {''.join(rows)}
-  </tbody>
+<thead><tr><th>Image</th><th>Path</th>{header_cols}<th>Models Agree?</th></tr></thead>
+<tbody>
+{''.join(rows)}</tbody>
 </table>
-
 <h2>Per-class summary</h2>
-<table>
-  <thead><tr><th>Model</th><th>Class id</th><th>Predicted class</th><th>Count</th></tr></thead>
-  <tbody>{summary_rows}</tbody>
-</table>
-
+<table><thead><tr><th>Model</th><th>Class id</th><th>Predicted class</th><th>Count</th></tr></thead><tbody>{summary_rows}</tbody></table>
 <h2>Skipped files</h2>
 <ul>{skipped_rows if skipped_rows else '<li>None</li>'}</ul>
-
 <script>
-  const classInput = document.getElementById('filterClass');
-  const resultSelect = document.getElementById('filterResult');
-  const confidenceInput = document.getElementById('minConfidence');
-  const sortSelect = document.getElementById('sortBy');
-  const tbody = document.querySelector('#reportTable tbody');
-  const rows = Array.from(document.querySelectorAll('#reportTable tbody tr'));
-  const modelBtn = document.getElementById('modelDropdownBtn');
-  const modelPanel = document.getElementById('modelDropdownPanel');
-  const modelChecks = Array.from(document.querySelectorAll('.model-checkbox'));
-
-  function selectedModels() {{
-    return modelChecks.filter((c) => c.checked).map((c) => c.value);
-  }}
-
-  function updateModelBtnLabel() {{
-    const selected = modelChecks.filter((c) => c.checked);
-    let label;
-    if (selected.length === 0) {{
-      label = 'No models';
-    }} else if (selected.length === modelChecks.length) {{
-      label = 'All models';
-    }} else {{
-      label = selected.length + ' model' + (selected.length > 1 ? 's' : '');
-    }}
-    modelBtn.textContent = label + ' ▾';
-  }}
-
-  modelBtn.addEventListener('click', (e) => {{
-    e.stopPropagation();
-    modelPanel.classList.toggle('open');
-  }});
-  document.addEventListener('click', () => modelPanel.classList.remove('open'));
-  modelPanel.addEventListener('click', (e) => e.stopPropagation());
-  document.getElementById('modelSelectAll').addEventListener('click', () => {{
-    modelChecks.forEach((c) => {{ c.checked = true; }});
-    updateModelBtnLabel();
-    applyFilters();
-  }});
-  document.getElementById('modelSelectNone').addEventListener('click', () => {{
-    modelChecks.forEach((c) => {{ c.checked = false; }});
-    updateModelBtnLabel();
-    applyFilters();
-  }});
-  modelChecks.forEach((c) => c.addEventListener('change', () => {{
-    updateModelBtnLabel();
-    applyFilters();
-  }}));
-
-  function rowTop1(row) {{
-    try {{ return JSON.parse(row.dataset.top1 || '{{}}'); }} catch (e) {{ return {{}}; }}
-  }}
-
-  function rowAgreement(row, models) {{
-    // True/False only when every selected model has a top-1 result; otherwise
-    // indeterminate, rather than silently agreeing/disagreeing over a subset.
-    // Identity is the class id: distinct classes can share a display label.
-    if (models.length < 2) return null;
-    const top1 = rowTop1(row);
-    const ids = models.map((m) => top1[m] && top1[m].class_id);
-    if (ids.some((id) => id === undefined)) return null;
-    return ids.every((id) => id === ids[0]);
-  }}
-
-  function rowMaxConfidence(row, models) {{
-    const top1 = rowTop1(row);
-    const probs = models.map((m) => top1[m] && top1[m].prob).filter((v) => v !== undefined);
-    return probs.length ? Math.max(...probs) : null;
-  }}
-
-  function rowClassText(row, models) {{
-    const top1 = rowTop1(row);
-    return models.map((m) => (top1[m] && top1[m].label) || '').join(' ');
-  }}
-
-  function applyFilters() {{
-    const models = selectedModels();
-    const classQuery = classInput.value.trim().toLowerCase();
-    const resultQuery = resultSelect.value;
-    const minConfidence = confidenceInput.value === '' ? null : parseFloat(confidenceInput.value) / 100;
-
-    document.querySelectorAll('[data-model-col]').forEach((cell) => {{
-      cell.style.display = models.includes(cell.dataset.modelCol) ? '' : 'none';
-    }});
-
-    for (const row of rows) {{
-      const hasError = row.dataset.hasError === '1';
-      let visible;
-
-      if (resultQuery === 'error') {{
-        visible = hasError;
-      }} else {{
-        const agree = rowAgreement(row, models);
-        if (resultQuery === 'agree') visible = agree === true;
-        else if (resultQuery === 'disagree') visible = agree === false;
-        else visible = true;
-      }}
-
-      if (visible && classQuery) {{
-        visible = rowClassText(row, models).toLowerCase().includes(classQuery);
-      }}
-
-      if (visible && minConfidence !== null) {{
-        const maxConf = rowMaxConfidence(row, models);
-        visible = maxConf !== null && maxConf >= minConfidence;
-      }}
-
-      const agreeCell = row.querySelector('.agree-cell');
-      if (agreeCell) {{
-        const agree = rowAgreement(row, models);
-        agreeCell.textContent = agree === null ? '—' : (agree ? 'agree' : 'disagree');
-      }}
-
-      row.style.display = visible ? '' : 'none';
-    }}
-
-    applySort(models);
-  }}
-
-  function applySort(models) {{
-    const sortKey = sortSelect.value;
-    const sorted = rows.slice();
-    if (sortKey === 'confidence') {{
-      sorted.sort((a, b) => {{
-        const av = rowMaxConfidence(a, models);
-        const bv = rowMaxConfidence(b, models);
-        return (bv === null ? -1 : bv) - (av === null ? -1 : av);
-      }});
-    }} else if (sortKey === 'class') {{
-      sorted.sort((a, b) => rowClassText(a, models).localeCompare(rowClassText(b, models)));
-    }} else if (sortKey === 'result') {{
-      sorted.sort((a, b) => {{
-        const ra = a.dataset.hasError === '1' ? 2 : (rowAgreement(a, models) === false ? 1 : 0);
-        const rb = b.dataset.hasError === '1' ? 2 : (rowAgreement(b, models) === false ? 1 : 0);
-        return ra - rb;
-      }});
-    }} else {{
-      sorted.sort((a, b) => Number(a.dataset.idx) - Number(b.dataset.idx));
-    }}
-    for (const row of sorted) tbody.appendChild(row);
-  }}
-
-  updateModelBtnLabel();
-  classInput.addEventListener('input', applyFilters);
-  resultSelect.addEventListener('change', applyFilters);
-  confidenceInput.addEventListener('input', applyFilters);
-  sortSelect.addEventListener('change', applyFilters);
-  applyFilters();
-</script>
+{report_js}</script>
 </body>
 </html>
 """

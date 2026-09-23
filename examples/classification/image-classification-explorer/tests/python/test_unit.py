@@ -1342,7 +1342,9 @@ class TestHtmlReportContent:
         # Agreement is recomputed in the browser from class ids, not labels.
         assert "class_id" in html
         assert "top1[m].class_id" in html
-        assert '"label": "cat"' in html or '"label":"cat"' in html or '&quot;label&quot;: &quot;cat&quot;' in html
+        # The attribute holds compact, sorted, HTML-escaped JSON, matching the
+        # C++ writer byte for byte.
+        assert "&quot;label&quot;:&quot;cat&quot;" in html
         assert "error: failed to read image" in html
 
 

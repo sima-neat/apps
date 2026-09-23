@@ -161,6 +161,7 @@ from a previous run and holds nothing else; any other non-empty directory is ref
 - Python source: `src/python/main.py`
 - Shared config: `src/common/config.yaml`
 - Bundled ImageNet label map: `src/common/imagenet_labels.txt`
+- Shared report assets used by both implementations: `src/common/report.css`, `src/common/report.js`
 
 The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
 
