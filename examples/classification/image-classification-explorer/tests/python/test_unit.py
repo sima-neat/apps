@@ -1000,6 +1000,95 @@ models:
             helper.kill()
             helper.wait()
 
+    def test_swapped_input_leaves_no_prediction(self, tmp_path, monkeypatch):
+        """Regression: the prediction was stored before the post-inference
+        fingerprint check raised, so the report kept a result from bytes that
+        had already been replaced alongside the error."""
+        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
+        img = tmp_path / "a.jpg"
+        _make_image(img, color=(0, 0, 255))
+        out_dir = tmp_path / "out"
+        config_path = tmp_path / "config.yaml"
+        _write_config(config_path, img, out_dir)
+        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
+
+        real_classify = main.classify
+
+        def classify_then_swap(model, profile, image_path, timeout_ms):
+            result = real_classify(model, profile, image_path, timeout_ms)
+            _make_image(image_path, color=(0, 255, 0), size=64)
+            return result
+
+        monkeypatch.setattr(main, "classify", classify_then_swap)
+
+        assert main.main() == 0
+        entry = json.loads((out_dir / "report.json").read_text())["images"][0]
+        assert "errors" in entry
+        assert "predictions" not in entry, "a superseded prediction must not be kept"
+
+    def test_null_extensions_falls_back_to_defaults(self, tmp_path, monkeypatch):
+        """Regression: `extensions:` left null became the literal ("none",), so
+        every ordinary image was reported as an unsupported extension."""
+        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
+        img = tmp_path / "a.jpg"
+        _make_image(img)
+        out_dir = tmp_path / "out"
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(f"""
+io:
+  input: {img}
+  output_dir: {out_dir}
+  extensions: null
+models:
+  m:
+    path: fake.tar.gz
+    num_classes: 5
+""")
+        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
+
+        assert main.main() == 0
+        payload = json.loads((out_dir / "report.json").read_text())
+        assert payload["skipped"] == []
+        assert payload["images"][0]["predictions"]["m"]["top_k"]
+
+    def test_publication_lock_excludes_a_second_run(self, tmp_path, monkeypatch):
+        """The lock must serialize publication, not merely detect a race after
+        the fact: a run holding it makes a second run defer."""
+        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
+        img = tmp_path / "a.jpg"
+        _make_image(img)
+        out_dir = tmp_path / "out"
+        config_path = tmp_path / "config.yaml"
+        _write_config(config_path, img, out_dir)
+        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
+        assert main.main() == 0
+
+        helper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        try:
+            lock = tmp_path / ".out.lock"
+            lock.write_text(f"{helper.pid}\n")
+            assert main.main() == 6
+            assert lock.exists(), "a live holder's lock must not be stolen"
+        finally:
+            helper.kill()
+            helper.wait()
+            lock.unlink(missing_ok=True)
+
+    def test_stale_lock_is_reclaimed(self, tmp_path, monkeypatch):
+        """A lock left by a process that no longer exists must not block runs."""
+        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
+        img = tmp_path / "a.jpg"
+        _make_image(img)
+        out_dir = tmp_path / "out"
+        config_path = tmp_path / "config.yaml"
+        _write_config(config_path, img, out_dir)
+        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
+
+        (tmp_path / ".out.lock").write_text("2147483646\n")
+        assert main.main() == 0
+        assert (out_dir / "report.json").is_file()
+        assert not (tmp_path / ".out.lock").exists()
+
     def test_leaves_unmarked_directories_alone(self, tmp_path, monkeypatch):
         """Only directories carrying the report marker are ever deleted."""
         monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())

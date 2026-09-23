@@ -14,6 +14,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -379,8 +380,11 @@ def run_all(profiles: list[ModelProfile], images: list[Path], timeout_ms: int) -
             for result in results:
                 try:
                     check_unchanged(result.image_path, result.fingerprint)
-                    result.predictions[profile.name] = classify(model, profile, result.image_path, timeout_ms)
+                    prediction = classify(model, profile, result.image_path, timeout_ms)
+                    # Only keep the prediction once the bytes behind it are proven
+                    # unchanged, so a swapped input leaves an error and no result.
                     check_unchanged(result.image_path, result.fingerprint)
+                    result.predictions[profile.name] = prediction
                 except Exception as exc:  # noqa: BLE001 - per-image, per-model failures must not abort the run
                     print(f"  {result.image_path}: {profile.name} failed: {exc}", file=sys.stderr)
                     result.errors[profile.name] = str(exc)
@@ -805,6 +809,46 @@ def _backup_pid(backup: Path) -> int | None:
     return int(suffix) if suffix.isdigit() else None
 
 
+@contextmanager
+def publication_lock(output_dir: Path):
+    """Serialize publication to one output directory.
+
+    Recovery and the swap must happen under one lock: without it two runs can
+    both observe "no other publisher", and the second then sees the momentary
+    gap while the first has its output renamed aside. A lock left by a process
+    that no longer exists is reclaimed."""
+    lock_path = output_dir.parent / f".{output_dir.name}.lock"
+    fd = None
+    for attempt in (0, 1):
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            break
+        except FileExistsError:
+            holder = None
+            try:
+                holder = int(lock_path.read_text(encoding="utf-8").strip())
+            except (OSError, ValueError):
+                pass
+            if attempt == 0 and (holder is None or holder == os.getpid()
+                                 or not process_is_running(holder)):
+                lock_path.unlink(missing_ok=True)  # stale: its owner is gone
+                continue
+            raise OSError(
+                f"another run is publishing to {output_dir}; retry once it has finished"
+            ) from None
+    if fd is None:
+        raise OSError(f"could not acquire the publication lock for {output_dir}")
+    try:
+        os.write(fd, f"{os.getpid()}\n".encode())
+        os.close(fd)
+        fd = None
+        yield
+    finally:
+        if fd is not None:
+            os.close(fd)
+        lock_path.unlink(missing_ok=True)
+
+
 def recover_interrupted_publish(output_dir: Path) -> bool:
     """Clean up after a publish that was killed part-way through its swap.
 
@@ -877,6 +921,16 @@ def publish_report(output_dir: Path, results: list[ImageResult], profiles: list[
     run and holds nothing else, so a customer directory (even one that happens
     to contain a `report.html`) can never be swapped away."""
     output_dir = output_dir.resolve()
+    parent = output_dir.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    with publication_lock(output_dir):
+        _publish_locked(output_dir, results, profiles, skipped, class_summary, timing)
+
+
+def _publish_locked(output_dir: Path, results: list[ImageResult], profiles: list[ModelProfile],
+                    skipped: list[str], class_summary: ClassSummary,
+                    timing: dict[str, Any]) -> None:
+    """The body of publish_report, run while holding the publication lock."""
     parent = output_dir.parent
     if recover_interrupted_publish(output_dir):
         # Another run has output_dir renamed aside and will rename its own staging
@@ -974,9 +1028,13 @@ def main() -> int:
         timeout_ms = config_int(runtime.get("timeout_ms"), "runtime.timeout_ms", 20000)
         if timeout_ms <= 0:
             raise ValueError(f"runtime.timeout_ms must be positive, got {timeout_ms}")
+        # `extensions:` left null in YAML arrives as None; str(None) would turn the
+        # accepted list into ("none",) and reject every real image.
+        raw_extensions = io_cfg.get("extensions")
+        if raw_extensions is None:
+            raw_extensions = ",".join(DEFAULT_EXTENSIONS)
         extensions = tuple(
-            e.strip().lower() for e in str(io_cfg.get("extensions", ",".join(DEFAULT_EXTENSIONS))).split(",")
-            if e.strip()
+            e.strip().lower() for e in str(raw_extensions).split(",") if e.strip()
         ) or DEFAULT_EXTENSIONS
         fallback_url = io_cfg.get(
             "fallback_image_url",

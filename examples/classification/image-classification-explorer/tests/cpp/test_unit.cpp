@@ -702,5 +702,55 @@ int main(int argc, char** argv) {
     fs::remove_all(work);
   }
 
+  // Test 22: publication is serialized by a lock. A lock held by a live process
+  // makes a run defer; one left by a dead process is reclaimed.
+  {
+    namespace fs = std::filesystem;
+    const auto stamp = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    const auto work = fs::temp_directory_path() / ("image-classification-explorer-lock-" + stamp);
+    fs::create_directories(work);
+    {
+      std::ofstream(work / "input.txt") << "not an image\n";
+    }
+    {
+      std::ofstream config(work / "config.yaml");
+      config << "io:\n"
+             << "  input: " << (work / "input.txt").string() << "\n"
+             << "  output_dir: " << (work / "report").string() << "\n"
+             << "models:\n"
+             << "  m:\n"
+             << "    path: /nonexistent/m.tar.gz\n";
+    }
+    const fs::path lock = work / ".report.lock";
+
+    // Held by this live test process: the run must defer and leave it alone.
+    {
+      std::ofstream(lock) << ::getpid() << "\n";
+    }
+    auto blocked = spawn_and_wait(binary, {"--config", (work / "config.yaml").string()}, 20000);
+    const bool deferred =
+        blocked.exit_code != 0 &&
+        blocked.stderr_text.find("another run is publishing") != std::string::npos;
+    const bool lock_kept = fs::exists(lock);
+
+    // Held by a pid that cannot exist: the lock is reclaimed and the run proceeds.
+    {
+      std::ofstream(lock) << "2147483646\n";
+    }
+    auto reclaimed = spawn_and_wait(binary, {"--config", (work / "config.yaml").string()}, 20000);
+    const bool published = reclaimed.exit_code == 0 && fs::exists(work / "report" / "report.json");
+    const bool lock_released = !fs::exists(lock);
+
+    if (!deferred || !lock_kept || !published || !lock_released) {
+      std::cerr << "[FAIL] publication lock: deferred=" << deferred << " lock_kept=" << lock_kept
+                << " published=" << published << " lock_released=" << lock_released << "\nstderr:\n"
+                << blocked.stderr_text << reclaimed.stderr_text << "\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] publication lock defers a second run and reclaims a stale lock\n";
+    }
+    fs::remove_all(work);
+  }
+
   return failures > 0 ? 1 : 0;
 }

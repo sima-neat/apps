@@ -29,6 +29,7 @@
 
 #include <cerrno>
 #include <csignal>
+#include <fcntl.h>
 #include <unistd.h>
 
 namespace fs = std::filesystem;
@@ -587,8 +588,11 @@ std::vector<ImageResult> run_all(std::vector<ModelProfile>& profiles,
     for (auto& result : results) {
       try {
         check_unchanged(result.image_path, result.fingerprint);
-        result.predictions[profile.name] = classify(model, profile, result.image_path, timeout_ms);
+        Prediction prediction = classify(model, profile, result.image_path, timeout_ms);
+        // Only keep the prediction once the bytes behind it are proven unchanged,
+        // so a swapped input leaves an error and no result.
         check_unchanged(result.image_path, result.fingerprint);
+        result.predictions[profile.name] = std::move(prediction);
       } catch (const std::exception& e) {
         std::cerr << "  " << result.image_path << ": " << profile.name << " failed: " << e.what()
                   << "\n";
@@ -1139,6 +1143,67 @@ bool process_is_running(pid_t pid) {
 // between those steps leaves either `output_dir` absent (restore the backup) or
 // the backup orphaned (delete it). Backups belonging to a process that is still
 // running are left alone, as is anything that does not carry the report marker.
+// Serialize publication to one output directory.
+//
+// Recovery and the swap must happen under one lock: without it two runs can both
+// observe "no other publisher", and the second then sees the momentary gap while
+// the first has its output renamed aside. A lock left by a process that no longer
+// exists is reclaimed.
+class PublicationLock {
+public:
+  explicit PublicationLock(const fs::path& output_dir)
+      : path_(output_dir.parent_path() / ("." + output_dir.filename().string() + ".lock")) {
+    for (int attempt = 0; attempt < 2; ++attempt) {
+      const int fd = ::open(path_.c_str(), O_CREAT | O_EXCL | O_WRONLY, 0644);
+      if (fd >= 0) {
+        const std::string owner = std::to_string(::getpid()) + "\n";
+        const ssize_t written = ::write(fd, owner.data(), owner.size());
+        static_cast<void>(written);
+        ::close(fd);
+        held_ = true;
+        return;
+      }
+      if (errno != EEXIST)
+        break;
+
+      std::optional<pid_t> holder;
+      std::ifstream in(path_);
+      std::string text;
+      if (std::getline(in, text)) {
+        try {
+          holder = static_cast<pid_t>(std::stol(text));
+        } catch (const std::exception&) {
+          holder.reset();
+        }
+      }
+      const bool stale =
+          !holder.has_value() || *holder == ::getpid() || !process_is_running(*holder);
+      if (attempt == 0 && stale) {
+        std::error_code ec;
+        fs::remove(path_, ec); // its owner is gone
+        continue;
+      }
+      break;
+    }
+    throw std::runtime_error("another run is publishing to " + path_.parent_path().string() +
+                             "; retry once it has finished");
+  }
+
+  ~PublicationLock() {
+    if (held_) {
+      std::error_code ec;
+      fs::remove(path_, ec);
+    }
+  }
+
+  PublicationLock(const PublicationLock&) = delete;
+  PublicationLock& operator=(const PublicationLock&) = delete;
+
+private:
+  fs::path path_;
+  bool held_ = false;
+};
+
 // Returns true when a live process owns a backup, meaning a publish is in flight
 // and this run must not touch output_dir.
 bool recover_interrupted_publish(const fs::path& output_dir) {
@@ -1241,6 +1306,9 @@ void publish_report(const fs::path& output_dir_arg, const std::vector<ImageResul
   if (output_dir.filename().empty()) // trailing slash
     output_dir = output_dir.parent_path();
   const fs::path parent = output_dir.parent_path();
+  fs::create_directories(parent);
+  const PublicationLock lock(output_dir);
+
   if (recover_interrupted_publish(output_dir)) {
     // Another run has output_dir renamed aside and will rename its own staging
     // into that path. Publishing now would take the path out from under it.
@@ -1279,8 +1347,6 @@ void publish_report(const fs::path& output_dir_arg, const std::vector<ImageResul
                                listed + "); use a dedicated directory");
     }
   }
-  fs::create_directories(parent);
-
   const std::string tag = std::to_string(::getpid());
   const fs::path staging = parent / ("." + output_dir.filename().string() + ".staging-" + tag);
   const fs::path previous = parent / ("." + output_dir.filename().string() + ".previous-" + tag);
