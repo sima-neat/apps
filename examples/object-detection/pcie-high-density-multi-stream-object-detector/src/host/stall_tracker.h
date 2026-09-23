@@ -25,7 +25,7 @@ namespace pcie_high_density {
 // `returned` and `admitted` are cumulative, monotonically non-decreasing
 // counters. Call update() once per poll with the current time.
 class StallTracker {
- public:
+public:
   using clock = std::chrono::steady_clock;
 
   // Returns true once the card has returned no result for `timeout` while work
@@ -62,14 +62,16 @@ class StallTracker {
   }
 
   // How long the currently-outstanding work has gone without a result.
-  clock::duration stalled_for(clock::time_point now) const { return now - last_progress_; }
+  clock::duration stalled_for(clock::time_point now) const {
+    return now - last_progress_;
+  }
 
- private:
+private:
   bool initialized_ = false;
   clock::time_point last_progress_{};
   std::uint64_t last_returned_ = 0;
 };
 
-}  // namespace pcie_high_density
+} // namespace pcie_high_density
 
-#endif  // PCIE_HIGH_DENSITY_STALL_TRACKER_H
+#endif // PCIE_HIGH_DENSITY_STALL_TRACKER_H

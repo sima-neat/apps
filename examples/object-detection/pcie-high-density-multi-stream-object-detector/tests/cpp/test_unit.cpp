@@ -32,19 +32,21 @@ bool expect_true(bool condition, const std::string& message) {
 }
 
 const Clock::time_point kBase{};
-Clock::time_point at(int seconds) { return kBase + std::chrono::seconds(seconds); }
-const std::chrono::milliseconds kTimeout{60000};  // 60 s, the documented default
+Clock::time_point at(int seconds) {
+  return kBase + std::chrono::seconds(seconds);
+}
+const std::chrono::milliseconds kTimeout{60000}; // 60 s, the documented default
 
 // Healthy steady state: the card keeps returning results with a small, constant
 // backlog in flight. Progress each tick must keep the detector quiet.
 void test_steady_progress_never_trips() {
   StallTracker tracker;
   std::uint64_t returned = 0;
-  std::uint64_t admitted = 5;  // 5 frames permanently in flight
+  std::uint64_t admitted = 5; // 5 frames permanently in flight
   bool tripped = false;
   for (int s = 0; s <= 300; ++s) {
     admitted += 30;
-    returned += 30;  // results keep flowing -> made_progress every tick
+    returned += 30; // results keep flowing -> made_progress every tick
     tripped |= tracker.update(returned, admitted, at(s), kTimeout);
   }
   expect_true(!tripped, "steady progress with a constant backlog never trips");
@@ -55,7 +57,7 @@ void test_steady_progress_never_trips() {
 void test_idle_then_admit_does_not_instantly_trip() {
   StallTracker tracker;
   std::uint64_t returned = 100;
-  std::uint64_t admitted = 100;  // fully caught up
+  std::uint64_t admitted = 100; // fully caught up
 
   bool tripped_idle = false;
   for (int s = 0; s <= 70; ++s) {
@@ -63,12 +65,12 @@ void test_idle_then_admit_does_not_instantly_trip() {
   }
   expect_true(!tripped_idle, "no trip during a 70 s idle gap (nothing outstanding)");
 
-  admitted = 101;  // one frame admitted after the idle gap
+  admitted = 101; // one frame admitted after the idle gap
   const bool tripped_now = tracker.update(returned, admitted, at(71), kTimeout);
   expect_true(!tripped_now, "a frame admitted after 70 s idle does not instantly trip");
 
   bool tripped_before_deadline = false;
-  for (int s = 72; s <= 129; ++s) {  // < 60 s since the admission's reference tick
+  for (int s = 72; s <= 129; ++s) { // < 60 s since the admission's reference tick
     tripped_before_deadline |= tracker.update(returned, admitted, at(s), kTimeout);
   }
   expect_true(!tripped_before_deadline, "does not trip before the timeout elapses");
@@ -83,23 +85,22 @@ void test_freeze_with_outstanding_work_trips() {
   StallTracker tracker;
   std::uint64_t returned = 0;
   std::uint64_t admitted = 0;
-  for (int s = 0; s < 10; ++s) {  // healthy ramp
+  for (int s = 0; s < 10; ++s) { // healthy ramp
     admitted += 30;
     returned += 30;
     tracker.update(returned, admitted, at(s), kTimeout);
   }
 
-  admitted += 20;  // 20 frames outstanding, then everything freezes (no new admits, no returns)
+  admitted += 20; // 20 frames outstanding, then everything freezes (no new admits, no returns)
 
   bool tripped_before_deadline = false;
-  for (int s = 10; s <= 68; ++s) {  // < 60 s since the last result (at t=9)
+  for (int s = 10; s <= 68; ++s) { // < 60 s since the last result (at t=9)
     tripped_before_deadline |= tracker.update(returned, admitted, at(s), kTimeout);
   }
   expect_true(!tripped_before_deadline, "freeze does not trip before the timeout");
 
   const bool tripped_after = tracker.update(returned, admitted, at(72), kTimeout);
-  expect_true(tripped_after,
-              "freeze with outstanding work trips without any new admissions");
+  expect_true(tripped_after, "freeze with outstanding work trips without any new admissions");
 }
 
 // A non-positive timeout disables detection entirely.
@@ -112,7 +113,7 @@ void test_zero_timeout_disables_detection() {
   expect_true(!tripped, "a non-positive timeout disables stall detection");
 }
 
-}  // namespace
+} // namespace
 
 int main(int /*argc*/, char** /*argv*/) {
   test_steady_progress_never_trips();
