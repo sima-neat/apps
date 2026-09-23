@@ -10,9 +10,45 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <vector>
 
 using sima_examples::testing::ProcessResult;
 using sima_examples::testing::spawn_and_wait;
+
+namespace {
+
+// The repository copy of a file shipped under src/common, for building a fake
+// packaged layout in the test.
+std::filesystem::path find_bundled_source(const std::string& name) {
+  namespace fs = std::filesystem;
+  const std::vector<fs::path> candidates = {
+      fs::path("examples/classification/image-classification-explorer/src/common") / name,
+      fs::path("src") / "common" / name,
+      fs::path("../src/common") / name,
+  };
+  for (const auto& candidate : candidates) {
+    std::error_code ec;
+    if (fs::is_regular_file(candidate, ec) && !ec)
+      return candidate;
+  }
+  return {};
+}
+
+// spawn_and_wait always inherits the caller's directory; this runs the binary
+// somewhere else, which is the whole point of the packaged-layout check.
+sima_examples::testing::ProcessResult spawn_and_wait_in(const std::string& binary,
+                                                        const std::vector<std::string>& args,
+                                                        int timeout_ms,
+                                                        const std::string& working_directory) {
+  namespace fs = std::filesystem;
+  const fs::path previous = fs::current_path();
+  fs::current_path(working_directory);
+  auto result = sima_examples::testing::spawn_and_wait(binary, args, timeout_ms);
+  fs::current_path(previous);
+  return result;
+}
+
+} // namespace
 
 int main(int argc, char** argv) {
   if (argc < 2) {
@@ -876,6 +912,74 @@ int main(int argc, char** argv) {
       std::cout << "[OK] an extension without a leading dot still matched\n";
     }
     fs::remove_all(work);
+  }
+
+  // Test 27: the packaged layout works from an unrelated working directory.
+  //
+  // SIMANEAT_APPS_EXAMPLE_SOURCE_DIR is repository-relative, so a customer who
+  // runs the shipped binary from their own directory with an explicit --config
+  // can only find src/common through the executable. Recreate that layout - a
+  // copy of the binary under src/cpp/pre-built/ beside a src/common/ - and run
+  // it from somewhere else entirely.
+  {
+    namespace fs = std::filesystem;
+    const auto stamp = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    const auto pkg = fs::temp_directory_path() / ("image-classification-explorer-pkg-" + stamp);
+    const auto bin_dir = pkg / "src" / "cpp" / "pre-built";
+    const auto common = pkg / "src" / "common";
+    fs::create_directories(bin_dir);
+    fs::create_directories(common);
+
+    std::error_code ec;
+    fs::copy_file(binary, bin_dir / "image-classification-explorer",
+                  fs::copy_options::overwrite_existing, ec);
+    if (ec) {
+      std::cerr << "[SKIP] packaged layout: could not copy the binary: " << ec.message() << "\n";
+    } else {
+      fs::permissions(bin_dir / "image-classification-explorer",
+                      fs::perms::owner_all | fs::perms::group_exec | fs::perms::others_exec,
+                      fs::perm_options::add, ec);
+
+      // The label map and the report assets both have to be found.
+      for (const char* name : {"imagenet_labels.txt", "report.css", "report.js"}) {
+        const fs::path source = find_bundled_source(name);
+        if (!source.empty())
+          fs::copy_file(source, common / name, fs::copy_options::overwrite_existing, ec);
+      }
+
+      {
+        std::ofstream(pkg / "input.txt") << "not an image\n";
+      }
+      const auto config_path = pkg / "config.yaml";
+      {
+        std::ofstream config(config_path);
+        config << "io:\n"
+               << "  input: " << (pkg / "input.txt").string() << "\n"
+               << "  output_dir: " << (pkg / "report").string() << "\n"
+               << "models:\n"
+               << "  m:\n"
+               << "    path: /nonexistent/m.tar.gz\n"
+               << "    num_classes: 1000\n"
+               << "    label_map: src/common/imagenet_labels.txt\n";
+      }
+
+      // Run from a directory unrelated to the package.
+      const auto elsewhere = fs::temp_directory_path();
+      auto r = spawn_and_wait_in((bin_dir / "image-classification-explorer").string(),
+                                 {"--config", config_path.string()}, 20000, elsewhere.string());
+      const bool found_labels = r.stderr_text.find("failed to open label map") == std::string::npos;
+      const bool found_assets =
+          r.stderr_text.find("failed to read bundled report asset") == std::string::npos;
+      if (!found_labels || !found_assets) {
+        std::cerr << "[FAIL] packaged layout: labels_found=" << found_labels
+                  << " assets_found=" << found_assets << "\nstderr:\n"
+                  << r.stderr_text << "\n";
+        ++failures;
+      } else {
+        std::cout << "[OK] packaged layout resolved src/common from another directory\n";
+      }
+    }
+    fs::remove_all(pkg, ec);
   }
 
   return failures > 0 ? 1 : 0;

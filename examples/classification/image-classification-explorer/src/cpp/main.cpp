@@ -356,6 +356,67 @@ std::vector<std::string> ordered_model_keys(const fs::path& config_path) {
   return keys;
 }
 
+// Directory holding this executable, used to find files shipped beside it
+// regardless of the working directory.
+fs::path executable_directory() {
+  std::error_code ec;
+  const fs::path exe = fs::read_symlink("/proc/self/exe", ec);
+  if (ec)
+    return {};
+  return exe.parent_path();
+}
+
+// Every file shipped under src/common is found the same way, by one function.
+// The label map and the report assets each used to do their own lookup, and the
+// two drifted: a packaged binary run from outside prebuilt-apps found its CSS
+// but not its labels.
+//
+// The executable comes first, which covers the packaged layout
+// (src/cpp/pre-built/<binary>) from any working directory.
+// SIMANEAT_APPS_EXAMPLE_SOURCE_DIR is repository-relative, so it only resolves
+// when the working directory is the repository or the installed prebuilt-apps
+// root; it covers the development build tree, where the executable sits under
+// build/. The last candidate covers running from the example directory itself.
+std::vector<fs::path> bundled_candidates(const std::string& name) {
+  std::vector<fs::path> candidates;
+  const fs::path exe_dir = executable_directory();
+  if (!exe_dir.empty()) {
+    candidates.push_back(exe_dir / ".." / ".." / "common" / name);
+    candidates.push_back(exe_dir / "common" / name);
+  }
+  candidates.push_back(fs::path(SIMANEAT_APPS_EXAMPLE_SOURCE_DIR) / ".." / "common" / name);
+  candidates.push_back(fs::path("src") / "common" / name);
+  return candidates;
+}
+
+// The first candidate that exists, or an empty path.
+fs::path find_bundled_file(const std::string& name) {
+  for (const auto& candidate : bundled_candidates(name)) {
+    std::error_code ec;
+    if (fs::is_regular_file(candidate, ec) && !ec)
+      return candidate;
+  }
+  return {};
+}
+
+std::string bundled_asset(const std::string& name) {
+  const fs::path path = find_bundled_file(name);
+  if (!path.empty()) {
+    std::ifstream in(path);
+    std::ostringstream contents;
+    contents << in.rdbuf();
+    if (in.good() || in.eof())
+      return contents.str();
+  }
+
+  std::string tried;
+  for (const auto& candidate : bundled_candidates(name)) {
+    tried += "\n  " + candidate.lexically_normal().string();
+  }
+  throw std::runtime_error("failed to read bundled report asset '" + name +
+                           "'; looked in:" + tried);
+}
+
 // --- Configuration: reading config.yaml and validating every setting -----------
 std::vector<ModelProfile> load_profiles(const sima_examples::ScalarConfig& raw,
                                         const fs::path& config_path) {
@@ -466,12 +527,12 @@ std::vector<std::string> load_label_map(const std::string& path, int num_classes
 
   fs::path label_path = path;
   if (!fs::exists(label_path) && fs::path(path).generic_string() == kBundledLabelMapRef) {
-    // Resolve the shipped reference next to this example's source tree, regardless
-    // of the caller's cwd (model.path stays cwd-relative: it points at a file the
-    // customer downloaded). A missing custom path is NOT redirected here.
-    fs::path bundled = fs::path(SIMANEAT_APPS_EXAMPLE_SOURCE_DIR) / ".." / "common" /
-                       fs::path(kBundledLabelMapRef).filename();
-    if (fs::exists(bundled))
+    // Resolve the shipped reference through the same lookup the report assets
+    // use, so it is found wherever the binary is run from (model.path stays
+    // cwd-relative: it points at a file the customer downloaded). A missing
+    // custom path is NOT redirected here.
+    const fs::path bundled = find_bundled_file(fs::path(kBundledLabelMapRef).filename().string());
+    if (!bundled.empty())
       label_path = bundled;
   }
 
@@ -840,55 +901,6 @@ void write_csv_report(const fs::path& path, const std::vector<ImageResult>& resu
     }
   }
   close_or_throw(out, path);
-}
-
-// Directory holding this executable, used to find files shipped beside it
-// regardless of the working directory.
-fs::path executable_directory() {
-  std::error_code ec;
-  const fs::path exe = fs::read_symlink("/proc/self/exe", ec);
-  if (ec)
-    return {};
-  return exe.parent_path();
-}
-
-// Read a file shipped next to this example under src/common. The report's CSS
-// and JavaScript live there rather than inside either entrypoint, so both emit
-// exactly the same markup and cannot drift apart.
-//
-// The file is looked up relative to the executable first, which works for the
-// packaged layout (src/cpp/pre-built/<binary>) no matter where the customer
-// runs it from. SIMANEAT_APPS_EXAMPLE_SOURCE_DIR is a repository-relative path,
-// so it only resolves when the working directory is the repository or the
-// installed `prebuilt-apps` root; it covers the development build tree, where
-// the executable sits under build/.
-std::string bundled_asset(const std::string& name) {
-  std::vector<fs::path> candidates;
-  const fs::path exe_dir = executable_directory();
-  if (!exe_dir.empty()) {
-    candidates.push_back(exe_dir / ".." / ".." / "common" / name); // packaged pre-built/
-    candidates.push_back(exe_dir / "common" / name);
-  }
-  candidates.push_back(fs::path(SIMANEAT_APPS_EXAMPLE_SOURCE_DIR) / ".." / "common" / name);
-  candidates.push_back(fs::path("src") / "common" / name); // run from the example directory
-
-  for (const auto& candidate : candidates) {
-    std::ifstream in(candidate);
-    if (!in.is_open())
-      continue;
-    std::ostringstream contents;
-    contents << in.rdbuf();
-    if (in.bad())
-      continue;
-    return contents.str();
-  }
-
-  std::string tried;
-  for (const auto& candidate : candidates) {
-    tried += "\n  " + candidate.lexically_normal().string();
-  }
-  throw std::runtime_error("failed to read bundled report asset '" + name +
-                           "'; looked in:" + tried);
 }
 
 std::string html_escape(const std::string& value) {

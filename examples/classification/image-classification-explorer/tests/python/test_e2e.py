@@ -45,16 +45,25 @@ MODEL_NAMES = ("resnet_50", "resnet_18", "efficientnet_b0", "densenet_121")
 
 
 def _cpp_binary(apps_root: Path) -> str:
-    """The built C++ entrypoint, or "" when it is not available."""
+    """The C++ entrypoint, or "" when it is not available.
+
+    The runtime suite executes against the installed `prebuilt-apps` tree, where
+    the binary ships under `src/cpp/pre-built/` and there is no build directory,
+    so that location is checked first. The build tree covers a developer running
+    these tests from a source checkout."""
     configured = os.environ.get("SIMANEAT_APPS_TEST_CPP_BINARY", "")
     if configured:
         return configured if Path(configured).is_file() else ""
-    candidate = (
+    candidates = [
+        EXAMPLE_DIR / "src" / "cpp" / "pre-built" / "image-classification-explorer",
         apps_root
         / "build/examples/classification/image-classification-explorer"
-        / "image-classification-explorer"
-    )
-    return str(candidate) if candidate.is_file() else ""
+        / "image-classification-explorer",
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return str(candidate)
+    return ""
 
 
 def _drop_timing_column(csv_text: str) -> list[list[str]]:
