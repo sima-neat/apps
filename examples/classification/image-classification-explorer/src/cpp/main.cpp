@@ -28,6 +28,8 @@
 #include <vector>
 
 #include <cerrno>
+#include <cmath>
+#include <cstdint>
 #include <csignal>
 #include <fcntl.h>
 #include <unistd.h>
@@ -44,6 +46,20 @@ const std::vector<std::string> kDefaultExtensions = {".jpg", ".jpeg", ".png", ".
 // this exact reference falls back to the bundled copy; any other missing
 // label_map path is a configuration error.
 const char* const kBundledLabelMapRef = "src/common/imagenet_labels.txt";
+
+// FNV-1a (64-bit). std::hash is not specified to be stable across builds, and
+// Python's hash() is salted per process; this keeps thumbnail names identical
+// across runs, machines and both implementations.
+std::string stable_digest(const std::string& value) {
+  std::uint64_t digest = 0xCBF29CE484222325ULL;
+  for (unsigned char byte : value) {
+    digest ^= static_cast<std::uint64_t>(byte);
+    digest *= 0x100000001B3ULL;
+  }
+  std::ostringstream out;
+  out << std::hex << std::setw(16) << std::setfill('0') << digest;
+  return out.str();
+}
 
 using FileFingerprint = std::pair<std::uintmax_t, fs::file_time_type>;
 
@@ -433,11 +449,11 @@ void close_or_throw(std::ofstream& out, const fs::path& path) {
 // URLs never share a cache entry and there is no separate "which URL is this?"
 // marker that could be left paired with another run's bytes.
 fs::path fallback_cache_path(const std::string& url, const fs::path& base) {
-  std::ostringstream digest;
-  digest << std::hex << std::setw(16) << std::setfill('0') << std::hash<std::string>{}(url);
+  // Same FNV-1a digest the Python implementation uses, so both share one cache
+  // entry rather than downloading the same image twice.
   const std::string stem = base.stem().string();
   const std::string extension = base.extension().string();
-  return base.parent_path() / (stem + "-" + digest.str() + extension);
+  return base.parent_path() / (stem + "-" + stable_digest(url) + extension);
 }
 
 // Download a fallback image into a URL-keyed cache entry. The download lands on
@@ -561,6 +577,10 @@ Prediction classify(simaai::neat::Model& model, const ModelProfile& profile,
                              " scores, got " + std::to_string(scores.size()));
   }
   scores.resize(profile.num_classes);
+  if (!std::all_of(scores.begin(), scores.end(), [](float v) { return std::isfinite(v); })) {
+    // NaN/inf would propagate through softmax into the report.
+    throw std::runtime_error("model produced non-finite scores");
+  }
 
   Prediction pred;
   pred.top_k = sima_examples::topk_with_softmax(scores, profile.top_k);
@@ -778,13 +798,14 @@ std::optional<std::string> make_thumbnail(const fs::path& image_path, const fs::
   cv::Mat img = cv::imread(image_path.string(), cv::IMREAD_COLOR);
   if (img.empty())
     return std::nullopt;
-  const double scale = static_cast<double>(max_side) / std::max(img.cols, img.rows);
+  // Shrink only; never upscale a small image.
+  const double scale = std::min(1.0, static_cast<double>(max_side) / std::max(img.cols, img.rows));
   cv::Mat resized;
   cv::resize(img, resized,
              cv::Size(std::max(1, static_cast<int>(img.cols * scale)),
                       std::max(1, static_cast<int>(img.rows * scale))));
   fs::create_directories(thumb_dir);
-  const std::string name = std::to_string(std::hash<std::string>{}(image_path.string())) + ".jpg";
+  const std::string name = stable_digest(image_path.string()) + ".jpg";
   const fs::path thumb_path = thumb_dir / name;
   if (!cv::imwrite(thumb_path.string(), resized)) {
     throw std::runtime_error("failed to write thumbnail: " + thumb_path.string());
@@ -1426,6 +1447,22 @@ int main(int argc, char** argv) {
     if (extensions.empty())
       extensions.assign(kDefaultExtensions.begin(), kDefaultExtensions.end());
     const fs::path output_dir = raw.string_or("io.output_dir", "report");
+    // Parse the validation block up front: std::stoi on a malformed value would
+    // otherwise throw after the report had already been written.
+    std::optional<int> expected_class_id;
+    if (const auto text = raw.string_value("validation.expected_class_id")) {
+      try {
+        std::size_t consumed = 0;
+        const int parsed = std::stoi(*text, &consumed);
+        if (consumed != text->size())
+          throw std::invalid_argument("trailing characters");
+        expected_class_id = parsed;
+      } catch (const std::exception&) {
+        throw std::runtime_error("validation.expected_class_id must be an integer, got " + *text);
+      }
+    }
+    const double min_probability = raw.double_or("validation.min_probability", 0.0);
+
     const int timeout_ms = raw.int_or("runtime.timeout_ms", 20000);
     if (timeout_ms <= 0) {
       throw std::runtime_error("runtime.timeout_ms must be positive, got " +
@@ -1468,19 +1505,18 @@ int main(int argc, char** argv) {
                 << " image(s) had at least one model failure (see report.json)\n";
     }
 
-    const auto expected_class_id_str = raw.string_value("validation.expected_class_id");
+    // Parsed with the rest of the configuration further up, so a malformed value
+    // cannot turn a completed run into a failure after the report is written.
     const bool used_fallback_sample = input_path.empty();
-    if (expected_class_id_str.has_value() && used_fallback_sample && images.size() == 1 &&
+    if (expected_class_id.has_value() && used_fallback_sample && images.size() == 1 &&
         !profiles.empty()) {
-      const int expected_class_id = std::stoi(*expected_class_id_str);
       const auto& first = results.front();
       const auto it = first.predictions.find(profiles.front().name);
       if (it != first.predictions.end() && !it->second.top_k.empty()) {
         const auto& top1 = it->second.top_k.front();
-        const double min_probability = raw.double_or("validation.min_probability", 0.0);
-        if (top1.index != expected_class_id || top1.prob < min_probability) {
+        if (top1.index != *expected_class_id || top1.prob < min_probability) {
           std::cerr << "Note: " << profiles.front().name << " top1=" << top1.index << " ("
-                    << top1.prob << ") did not match expected_class_id=" << expected_class_id
+                    << top1.prob << ") did not match expected_class_id=" << *expected_class_id
                     << " (min_probability=" << min_probability << "); see report for details.\n";
         }
       }

@@ -146,10 +146,31 @@ class TestDiscoverImages:
         base = tmp_path / "fallback.jpeg"
         url = "http://example.invalid/x.jpg"
         cached = main.fallback_cache_path(url, base)
-        cached.write_bytes(b"fake")
+        _make_image(tmp_path / "rendered.jpeg")
+        cached.write_bytes((tmp_path / "rendered.jpeg").read_bytes())
         images, skipped = main.discover_images(None, (".jpg",), url, base)
         assert images == [cached]
         assert skipped == []
+
+    def test_corrupt_cache_entry_is_refetched(self, tmp_path, monkeypatch):
+        """Regression: a cached fallback was reused on its path alone, so a
+        truncated or corrupted entry was classified on every later run."""
+        base = tmp_path / "fallback.jpeg"
+        url = "http://example.invalid/x.jpg"
+        cached = main.fallback_cache_path(url, base)
+        cached.write_bytes(b"not an image")
+        downloaded = []
+
+        def _download(_url, target):
+            downloaded.append(_url)
+            rendered = tmp_path / "rendered.jpeg"
+            _make_image(rendered, color=(0, 255, 0))
+            Path(target).write_bytes(rendered.read_bytes())
+
+        monkeypatch.setattr(main.urllib.request, "urlretrieve", _download)
+        assert main.download_image(url, base) == cached
+        assert downloaded == [url]
+        assert main.is_decodable_image(cached)
 
     def test_different_urls_use_separate_cache_entries(self, tmp_path, monkeypatch):
         """Regression: the cache used one fixed path plus a URL marker, so two
@@ -305,6 +326,29 @@ class TestLoadProfiles:
     def test_accepts_portable_profile_names(self, name):
         raw = {"models": {name: {"path": "m.tar.gz"}}}
         assert [p.name for p in main.load_profiles(raw)] == [name]
+
+    @pytest.mark.parametrize("field", ["path", "preprocess", "output", "label_map"])
+    def test_rejects_non_string_settings(self, field):
+        """A non-string scalar must be a configuration error, not silently
+        stringified: `path: 5` used to become the literal "5" and `path: null`
+        the literal "None", which passed the required-field check."""
+        raw = {"models": {"a": {"path": "m.tar.gz", field: 5}}}
+        with pytest.raises(ValueError, match="must be a string"):
+            main.load_profiles(raw)
+
+    def test_null_path_is_reported_as_missing(self):
+        """Regression: `path: null` became the string "None" and passed the
+        required check, failing much later with a confusing model-load error."""
+        with pytest.raises(ValueError, match="path is required"):
+            main.load_profiles({"models": {"a": {"path": None}}})
+
+    @pytest.mark.parametrize("value", [2**31, -2**31 - 1])
+    def test_rejects_values_outside_int32(self, value):
+        """The C++ ScalarConfig parses with std::stoi, so a value Python would
+        accept and C++ would reject must fail in both."""
+        raw = {"models": {"a": {"path": "m.tar.gz", "top_k": value}}}
+        with pytest.raises(ValueError, match="out of range"):
+            main.load_profiles(raw)
 
     def test_rejects_unsupported_output_interpretation(self):
         raw = {"models": {"a": {"path": "m.tar.gz", "output": "raw_logits"}}}
@@ -469,6 +513,27 @@ class TestAgreement:
         result.predictions["b"] = main.Prediction(top_k=[(1, "cat", 0.8)], inference_ms=1.0)
         result.errors["c"] = "simulated failure"
         assert main.agreement(result, ["a", "b", "c"]) is None
+
+
+class TestThumbnails:
+    def test_name_is_stable_across_runs(self, tmp_path):
+        """Regression: names came from Python's per-process-salted hash(), so
+        every run renamed every thumbnail."""
+        assert main.stable_digest("/a/b.jpg") == main.stable_digest("/a/b.jpg")
+        assert main.stable_digest("/a/b.jpg") != main.stable_digest("/a/c.jpg")
+        # Pinned FNV-1a value, so a change to the algorithm is a deliberate and
+        # visible decision - and so C++ can be checked against the same constant.
+        assert main.stable_digest("/a/b.jpg") == "771220d11190d381"
+
+    def test_small_image_is_not_upscaled(self, tmp_path):
+        import cv2
+
+        src = tmp_path / "tiny.jpg"
+        _make_image(src, size=32)
+        name = main.make_thumbnail(src, tmp_path / "thumbs")
+        assert name is not None
+        written = cv2.imread(str(tmp_path / "thumbs" / Path(name).name))
+        assert written.shape[0] == 32 and written.shape[1] == 32
 
 
 class TestReports:
@@ -1331,6 +1396,39 @@ class TestArgParsing:
         )
         assert r.returncode == 2
         assert "runtime.timeout_ms must be positive" in r.stderr
+
+    @pytest.mark.parametrize(
+        ("block", "expected"),
+        [("validation: 5\n", "must be a mapping"),
+         ("validation:\n  expected_class_id: abc\n", "must be an integer"),
+         ("validation:\n  min_probability: high\n", "must be a number")],
+    )
+    def test_rejects_malformed_validation_block(self, tmp_path, block, expected):
+        """Regression: the validation block was read only after the report was
+        written, so a malformed value turned a successful run into a traceback."""
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(f"models:\n  m:\n    path: m.tar.gz\n{block}")
+        r = subprocess.run(
+            [sys.executable, str(MAIN_PY), "--config", str(config_path)],
+            capture_output=True, text=True, timeout=20,
+        )
+        assert r.returncode == 2
+        assert expected in r.stderr
+        assert "Traceback" not in r.stderr
+
+    @pytest.mark.parametrize("setting", ["input", "output_dir", "fallback_image_url"])
+    def test_rejects_non_string_io_settings(self, tmp_path, setting):
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            f"io:\n  {setting}: 5\nmodels:\n  m:\n    path: m.tar.gz\n"
+        )
+        r = subprocess.run(
+            [sys.executable, str(MAIN_PY), "--config", str(config_path)],
+            capture_output=True, text=True, timeout=20,
+        )
+        assert r.returncode == 2
+        assert f"io.{setting} must be a string" in r.stderr
+        assert "Traceback" not in r.stderr
 
     def test_non_mapping_config(self, tmp_path):
         config_path = tmp_path / "config.yaml"

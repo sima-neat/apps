@@ -2,10 +2,13 @@
 #include "support/testing/test_process.h"
 
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <unistd.h>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <string>
 
 using sima_examples::testing::ProcessResult;
@@ -750,6 +753,55 @@ int main(int argc, char** argv) {
       std::cout << "[OK] publication lock defers a second run and reclaims a stale lock\n";
     }
     fs::remove_all(work);
+  }
+
+  // Test 23: the thumbnail digest must match Python's, so both implementations
+  // name thumbnails identically and neither renames them between runs.
+  {
+    const std::string expected = "771220d11190d381"; // pinned in test_unit.py too
+    std::uint64_t digest = 0xCBF29CE484222325ULL;
+    for (unsigned char byte : std::string("/a/b.jpg")) {
+      digest ^= static_cast<std::uint64_t>(byte);
+      digest *= 0x100000001B3ULL;
+    }
+    std::ostringstream out;
+    out << std::hex << std::setw(16) << std::setfill('0') << digest;
+    if (out.str() != expected) {
+      std::cerr << "[FAIL] thumbnail digest: expected " << expected << ", got " << out.str()
+                << "\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] thumbnail digest matches the Python implementation\n";
+    }
+  }
+
+  // Test 24: a malformed validation block is rejected during configuration
+  // loading, not after the report has been written.
+  {
+    namespace fs = std::filesystem;
+    const auto config_path =
+        fs::temp_directory_path() /
+        ("image-classification-explorer-validation-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".yaml");
+    {
+      std::ofstream config(config_path);
+      config << "validation:\n"
+             << "  expected_class_id: abc\n"
+             << "models:\n"
+             << "  m:\n"
+             << "    path: /nonexistent/m.tar.gz\n";
+    }
+    auto r = spawn_and_wait(binary, {"--config", config_path.string()}, 20000);
+    fs::remove(config_path);
+    if (r.exit_code == 0 || r.stderr_text.find("validation.expected_class_id must be an integer") ==
+                                std::string::npos) {
+      std::cerr << "[FAIL] malformed validation: expected rejection, got exit " << r.exit_code
+                << "\nstderr:\n"
+                << r.stderr_text << "\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] malformed validation.expected_class_id was rejected up front\n";
+    }
   }
 
   return failures > 0 ? 1 : 0;

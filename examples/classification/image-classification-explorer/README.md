@@ -70,8 +70,9 @@ way by adding another entry under `models`.
 Open `${APP_DIR}/src/common/config.yaml`:
 
 - `models.<name>.path` — path to each downloaded model package.
-- `io.input` — a single image path or a directory of images. Leave empty to classify the bundled
-  sample goldfish image (downloads it on first run; needs network access).
+- `io.input` — a single image path or a directory of images. The directory is read one level
+  deep: files directly inside it are classified and subdirectories are ignored. Leave empty to
+  classify the bundled sample goldfish image (downloads it on first run; needs network access).
 - `io.output_dir` — dedicated directory where `report.html`, `report.json`, `report.csv`, and
   `thumbnails/` are written; each run replaces its previous contents.
 
@@ -135,7 +136,8 @@ Example report (4 models against a directory of images):
 
 ![Example image classification explorer report](../../../portal/assets/examples/classification/image-classification-explorer/report-example.png)
 
-Files with an unsupported extension are listed under **Skipped files** and are not classified.
+Files with an unsupported extension are listed under **Skipped files** and are not classified;
+subdirectories of the input directory are not listed, since the scan is one level deep.
 Files with a supported extension that cannot be decoded stay in the main table with a per-model
 `error` cell (and an `errors` entry in `report.json`); neither case stops the run.
 

@@ -5,13 +5,13 @@ from __future__ import annotations
 
 import argparse
 import csv
-import hashlib
 import json
 import os
 import re
 import shutil
 import sys
 import time
+import tempfile
 import urllib.error
 import urllib.request
 from contextlib import contextmanager
@@ -36,6 +36,11 @@ BUNDLED_LABEL_MAP_REF = "src/common/imagenet_labels.txt"
 # accept exactly the same names instead of diverging on exotic YAML keys.
 PROFILE_NAME_RE = re.compile(r"[A-Za-z0-9_-]+")
 REPORT_ENTRIES = ("report.json", "report.csv", "report.html", "thumbnails", REPORT_MARKER)
+# The C++ ScalarConfig parses scalars with std::stoi, which is limited to int32.
+# Reject anything outside that range so both entrypoints accept the same values.
+INT32_MIN, INT32_MAX = -2**31, 2**31 - 1
+
+ClassSummary = dict[str, dict[str, dict[str, Any]]]  # model -> class id (str) -> {label, count}
 
 
 @dataclass
@@ -68,6 +73,16 @@ class ImageResult:
     errors: dict[str, str] = field(default_factory=dict)  # model name -> error message
 
 
+def stable_digest(value: str) -> str:
+    """FNV-1a (64-bit), so thumbnail names are identical across runs, machines
+    and both implementations. Python's built-in hash() is salted per process and
+    would rename every thumbnail on each run."""
+    digest = 0xCBF29CE484222325
+    for byte in value.encode("utf-8"):
+        digest = ((digest ^ byte) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+    return f"{digest:016x}"
+
+
 def file_fingerprint(path: Path) -> tuple[int, int]:
     info = path.stat()
     return (info.st_size, info.st_mtime_ns)
@@ -82,7 +97,10 @@ def check_unchanged(path: Path, expected: tuple[int, int] | None) -> None:
 def is_decodable_image(path: Path) -> bool:
     import cv2
 
-    return cv2.imread(str(path), cv2.IMREAD_COLOR) is not None
+    try:
+        return cv2.imread(str(path), cv2.IMREAD_COLOR) is not None
+    except cv2.error:
+        return False  # some builds raise instead of returning None on bad data
 
 
 def fallback_cache_path(url: str, base: Path) -> Path:
@@ -90,9 +108,10 @@ def fallback_cache_path(url: str, base: Path) -> Path:
 
     The URL is part of the file name, so different URLs never share a cache
     entry and there is no separate "which URL is this?" marker that could be
-    left paired with another run's bytes."""
-    digest = hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
-    return base.with_name(f"{base.stem}-{digest}{base.suffix}")
+    left paired with another run's bytes. The digest is the same FNV-1a the C++
+    implementation uses, so both share one cache entry rather than downloading
+    the same image twice."""
+    return base.with_name(f"{base.stem}-{stable_digest(url)}{base.suffix}")
 
 
 def download_image(url: str, base: Path) -> Path:
@@ -105,7 +124,9 @@ def download_image(url: str, base: Path) -> Path:
     (e.g. a proxy error page) is never cached."""
     dest = fallback_cache_path(url, base)
     if dest.exists():
-        return dest
+        if is_decodable_image(dest):
+            return dest
+        dest.unlink(missing_ok=True)  # truncated or corrupted since it was cached
 
     print(f"Downloading {url} ...")
     temporary = dest.with_name(f"{dest.name}.tmp-{os.getpid()}")
@@ -137,14 +158,33 @@ def config_int(value: Any, key: str, default: int) -> int:
     if isinstance(value, bool):
         raise ValueError(f"{key} must be an integer, got {value!r}")
     if isinstance(value, int):
-        return value
+        return _check_int32(value, key)
     if isinstance(value, str):
         text = value.strip()
         try:
-            return int(text, 10)
-        except ValueError:
+            return _check_int32(int(text, 10), key)
+        except ValueError as exc:
+            if "out of range" in str(exc):
+                raise
             raise ValueError(f"{key} must be an integer, got {value!r}") from None
     raise ValueError(f"{key} must be an integer, got {value!r}")
+
+
+def _check_int32(value: int, key: str) -> int:
+    if not INT32_MIN <= value <= INT32_MAX:
+        raise ValueError(f"{key} is out of range for a 32-bit integer: {value}")
+    return value
+
+
+def config_str(value: Any, key: str, default: str | None) -> str | None:
+    """Read a string config value. `key: null` means "not set", so it falls back
+    to the default instead of becoming the text "None"; a non-string scalar is a
+    configuration error rather than something silently stringified."""
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return value
+    raise ValueError(f"{key} must be a string, got {value!r}")
 
 
 def load_profiles(raw: dict[str, Any]) -> list[ModelProfile]:
@@ -171,13 +211,13 @@ def load_profiles(raw: dict[str, Any]) -> list[ModelProfile]:
             raise ValueError(f"models.{name} must be a mapping")
         profile = ModelProfile(
             name=name,
-            path=str(cfg.get("path", "")),
+            path=config_str(cfg.get("path"), f"models.{name}.path", "") or "",
             input_width=config_int(cfg.get("input_width"), f"models.{name}.input_width", 224),
             input_height=config_int(cfg.get("input_height"), f"models.{name}.input_height", 224),
-            preprocess=str(cfg.get("preprocess", "imagenet")),
-            output=str(cfg.get("output", "softmax")),
+            preprocess=config_str(cfg.get("preprocess"), f"models.{name}.preprocess", "imagenet"),
+            output=config_str(cfg.get("output"), f"models.{name}.output", "softmax"),
             num_classes=config_int(cfg.get("num_classes"), f"models.{name}.num_classes", 1000),
-            label_map=cfg.get("label_map"),
+            label_map=config_str(cfg.get("label_map"), f"models.{name}.label_map", None),
             top_k=config_int(cfg.get("top_k"), f"models.{name}.top_k", 5),
         )
         if not PROFILE_NAME_RE.fullmatch(name):
@@ -350,6 +390,10 @@ def classify(model, profile: ModelProfile, image_path: Path, timeout_ms: int) ->
     if scores.size < profile.num_classes:
         raise RuntimeError(f"expected at least {profile.num_classes} scores, got {scores.size}")
     scores = scores[: profile.num_classes]
+    if not np.isfinite(scores).all():
+        # NaN/inf would propagate into softmax and then into report.json, where
+        # json.dumps emits a bare NaN that is not valid JSON.
+        raise RuntimeError("model produced non-finite scores")
 
     probs = softmax(scores)
     # Tie-break by ascending class id so equal scores resolve deterministically
@@ -478,10 +522,10 @@ def make_thumbnail(image_path: Path, thumb_dir: Path, max_side: int = 160,
     if img is None:
         return None
     h, w = img.shape[:2]
-    scale = max_side / max(h, w)
+    scale = min(1.0, max_side / max(h, w))  # shrink only; never upscale a small image
     resized = cv2.resize(img, (max(1, int(w * scale)), max(1, int(h * scale))))
     thumb_dir.mkdir(parents=True, exist_ok=True)
-    thumb_name = f"{abs(hash(str(image_path)))}.jpg"
+    thumb_name = f"{stable_digest(str(image_path))}.jpg"
     thumb_path = thumb_dir / thumb_name
     try:
         written = cv2.imwrite(str(thumb_path), resized)
@@ -985,9 +1029,6 @@ def _publish_locked(output_dir: Path, results: list[ImageResult], profiles: list
         shutil.rmtree(staging, ignore_errors=True)
 
 
-ClassSummary = dict[str, dict[str, dict[str, Any]]]  # model -> class id (str) -> {label, count}
-
-
 def build_class_summary(results: list[ImageResult], profiles: list[ModelProfile]) -> ClassSummary:
     """Count top-1 predictions per model, keyed by class id so distinct classes
     that share a label are never merged."""
@@ -1030,18 +1071,31 @@ def main() -> int:
             raise ValueError(f"runtime.timeout_ms must be positive, got {timeout_ms}")
         # `extensions:` left null in YAML arrives as None; str(None) would turn the
         # accepted list into ("none",) and reject every real image.
-        raw_extensions = io_cfg.get("extensions")
-        if raw_extensions is None:
-            raw_extensions = ",".join(DEFAULT_EXTENSIONS)
+        raw_extensions = config_str(io_cfg.get("extensions"), "io.extensions",
+                                    ",".join(DEFAULT_EXTENSIONS))
         extensions = tuple(
-            e.strip().lower() for e in str(raw_extensions).split(",") if e.strip()
+            e.strip().lower() for e in raw_extensions.split(",") if e.strip()
         ) or DEFAULT_EXTENSIONS
-        fallback_url = io_cfg.get(
-            "fallback_image_url",
+        fallback_url = config_str(
+            io_cfg.get("fallback_image_url"), "io.fallback_image_url",
             "https://raw.githubusercontent.com/EliSchwartz/imagenet-sample-images/master/"
             "n01443537_goldfish.JPEG",
         )
-        output_dir = Path(io_cfg.get("output_dir", "report"))
+        input_path = config_str(io_cfg.get("input"), "io.input", None)
+        output_dir = Path(config_str(io_cfg.get("output_dir"), "io.output_dir", "report"))
+        # P8: fail on a malformed validation block now, not after a successful run.
+        validation = raw.get("validation") or {}
+        if not isinstance(validation, dict):
+            raise ValueError("`validation` must be a mapping")
+        expected_class_id = validation.get("expected_class_id")
+        if expected_class_id is not None:
+            expected_class_id = config_int(expected_class_id, "validation.expected_class_id", 0)
+        min_probability = validation.get("min_probability", 0.0)
+        if isinstance(min_probability, bool) or not isinstance(min_probability, (int, float)):
+            raise ValueError(
+                f"validation.min_probability must be a number, got {min_probability!r}"
+            )
+        min_probability = float(min_probability)
         profiles = load_profiles(raw)
         for profile in profiles:
             profile.labels = load_label_map(profile.label_map, profile.num_classes)
@@ -1051,7 +1105,11 @@ def main() -> int:
 
     try:
         images, skipped = discover_images(
-            io_cfg.get("input"), extensions, fallback_url, Path("/tmp/goldfish.jpeg")
+            input_path, extensions, fallback_url,
+            # Honour TMPDIR, as the C++ side does via fs::temp_directory_path().
+            # Same name the C++ side derives from sima_examples::default_goldfish_path(),
+            # so one download serves both implementations.
+            Path(tempfile.gettempdir()) / "sima_imagenet_goldfish.jpg",
         )
     except OSError as exc:  # missing path, unreadable directory, failed download
         print(str(exc), file=sys.stderr)
@@ -1091,21 +1149,18 @@ def main() -> int:
 
     images_with_errors = sum(1 for r in results if r.errors)
     print(f"Done in {total_ms:.1f} ms. Report written to {output_dir}")
-    print(f"  report.html, report.json, report.csv")
+    print("  report.html, report.json, report.csv")
     if images_with_errors:
         print(f"  {images_with_errors} image(s) had at least one model failure (see report.json)")
 
-    validation = raw.get("validation") or {}
-    expected_class_id = validation.get("expected_class_id")
-    used_fallback_sample = not io_cfg.get("input")
+    used_fallback_sample = not input_path
     if expected_class_id is not None and used_fallback_sample and len(images) == 1 and profiles:
         first = results[0]
         pred = first.predictions.get(profiles[0].name)
         if pred and pred.top_k:
             top1_id = pred.top_k[0][0]
-            min_probability = float(validation.get("min_probability", 0.0))
             top1_prob = pred.top_k[0][2]
-            if top1_id != int(expected_class_id) or top1_prob < min_probability:
+            if top1_id != expected_class_id or top1_prob < min_probability:
                 print(
                     f"Note: {profiles[0].name} top1={top1_id} ({top1_prob:.4f}) did not match "
                     f"expected_class_id={expected_class_id} (min_probability={min_probability}); "
