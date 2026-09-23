@@ -44,6 +44,19 @@ def _assert_goldfish(image_entry: dict, model_names) -> None:
 MODEL_NAMES = ("resnet_50", "resnet_18", "efficientnet_b0", "densenet_121")
 
 
+def _cpp_binary(apps_root: Path) -> str:
+    """The built C++ entrypoint, or "" when it is not available."""
+    configured = os.environ.get("SIMANEAT_APPS_TEST_CPP_BINARY", "")
+    if configured:
+        return configured if Path(configured).is_file() else ""
+    candidate = (
+        apps_root
+        / "build/examples/classification/image-classification-explorer"
+        / "image-classification-explorer"
+    )
+    return str(candidate) if candidate.is_file() else ""
+
+
 def _drop_timing_column(csv_text: str) -> list[list[str]]:
     """CSV rows without the measured inference_ms column."""
     rows = list(csv.reader(io.StringIO(csv_text)))
@@ -204,17 +217,9 @@ class TestE2E:
         copies of the report JavaScript. Comparing the artifacts directly is
         what makes that class visible instead of being found one case at a
         time."""
-        binary = os.environ.get("SIMANEAT_APPS_TEST_CPP_BINARY", "")
-        if not binary:
-            candidate = (
-                apps_root
-                / "build/examples/classification/image-classification-explorer"
-                / "image-classification-explorer"
-            )
-            binary = str(candidate) if candidate.is_file() else ""
+        binary = _cpp_binary(apps_root)
         skip_unless_e2e_ready(
-            bool(binary) and Path(binary).is_file(),
-            "C++ binary not built; set SIMANEAT_APPS_TEST_CPP_BINARY",
+            bool(binary), "C++ binary not built; set SIMANEAT_APPS_TEST_CPP_BINARY"
         )
         skip_unless_e2e_ready(
             test_images_dir.is_dir() and any(test_images_dir.glob("*.jpg")),
@@ -264,6 +269,83 @@ class TestE2E:
         # report.json must match once measured times are removed.
         assert _normalised_report(py_out) == _normalised_report(cpp_out), (
             "report.json differs between the implementations"
+        )
+
+    # Every configuration below is rejected by both entrypoints. The successful
+    # run is compared by test_cpp_and_python_reports_are_identical; this covers
+    # the other half, where the two used to drift unnoticed: several findings on
+    # this PR were error paths where one language exited 2 and the other 6.
+    FAILURE_CASES = [
+        ("missing config file", None, 2),
+        ("top-level scalar", "just-a-string\n", 2),
+        ("io section is a scalar", "io: /images\nmodels:\n  m:\n    path: m.tar.gz\n", 2),
+        ("runtime section is a scalar",
+         "runtime: 5000\nmodels:\n  m:\n    path: m.tar.gz\n", 2),
+        ("no models", "io:\n  input: null\n", 2),
+        ("model without a path", "models:\n  m: {}\n", 2),
+        ("unsupported preprocess",
+         "models:\n  m:\n    path: m.tar.gz\n    preprocess: bespoke\n", 2),
+        ("unsupported output",
+         "models:\n  m:\n    path: m.tar.gz\n    output: raw_logits\n", 2),
+        ("non-integral top_k",
+         "models:\n  m:\n    path: m.tar.gz\n    top_k: 1.9\n", 2),
+        ("non-positive top_k",
+         "models:\n  m:\n    path: m.tar.gz\n    top_k: 0\n", 2),
+        ("non-positive timeout",
+         "runtime:\n  timeout_ms: 0\nmodels:\n  m:\n    path: m.tar.gz\n", 2),
+        ("unquoted non-string profile name",
+         "models:\n  true:\n    path: m.tar.gz\n", 2),
+        ("profile name with a dot",
+         "models:\n  resnet.v2:\n    path: m.tar.gz\n", 2),
+        ("malformed validation block",
+         "validation:\n  expected_class_id: abc\nmodels:\n  m:\n    path: m.tar.gz\n", 2),
+        ("missing label map",
+         "models:\n  m:\n    path: m.tar.gz\n    label_map: /nonexistent/labels.txt\n", 2),
+        ("input path does not exist",
+         "io:\n  input: /nonexistent/directory\nmodels:\n  m:\n    path: m.tar.gz\n", 3),
+    ]
+
+    def test_cpp_and_python_fail_identically(
+        self, apps_root, tmp_output_dir, skip_unless_e2e_ready, test_timeout_ms
+    ):
+        """Both entrypoints must reject the same configurations the same way."""
+        binary = _cpp_binary(apps_root)
+        skip_unless_e2e_ready(
+            bool(binary), "C++ binary not built; set SIMANEAT_APPS_TEST_CPP_BINARY"
+        )
+
+        config_path = tmp_output_dir.parent / "failure-config.yaml"
+        mismatches = []
+        for label, body, expected in self.FAILURE_CASES:
+            if body is None:
+                argument = str(tmp_output_dir.parent / "does-not-exist.yaml")
+            else:
+                config_path.write_text(body)
+                argument = str(config_path)
+
+            outcomes = {}
+            for language, command in (
+                ("python", [sys.executable, str(MAIN_PY), "--config", argument]),
+                ("cpp", [binary, "--config", argument]),
+            ):
+                result = subprocess.run(
+                    command, capture_output=True, text=True,
+                    timeout=test_timeout_ms / 1000, cwd=str(EXAMPLE_DIR),
+                )
+                outcomes[language] = (result.returncode, result.stderr.strip())
+
+            py_code, py_err = outcomes["python"]
+            cpp_code, cpp_err = outcomes["cpp"]
+            if py_code != cpp_code or py_code != expected:
+                mismatches.append(
+                    f"{label}: expected {expected}, python={py_code}, cpp={cpp_code}"
+                )
+            for language, (_, err) in outcomes.items():
+                if "Traceback" in err or "terminate called" in err:
+                    mismatches.append(f"{label}: {language} crashed instead of reporting: {err[:200]}")
+
+        assert not mismatches, "exit codes differ between the entrypoints:\n  " + "\n  ".join(
+            mismatches
         )
 
     @pytest.mark.parametrize("model_name", MODEL_NAMES)

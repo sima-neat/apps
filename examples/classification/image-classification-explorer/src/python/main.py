@@ -273,6 +273,11 @@ def load_profiles(raw: dict[str, Any]) -> list[ModelProfile]:
             )
         if not profile.path:
             raise ValueError(f"models.{name}.path is required")
+        if profile.preprocess != "imagenet":
+            raise ValueError(
+                f"models.{name}.preprocess={profile.preprocess!r} is not supported; "
+                "only 'imagenet' is implemented"
+            )
         if profile.output != "softmax":
             raise ValueError(
                 f"models.{name}.output={profile.output!r} is not supported; "
@@ -778,6 +783,13 @@ def publication_lock(output_dir: Path):
     both observe "no other publisher", and the second then sees the momentary
     gap while the first has its output renamed aside. A lock left by a process
     that no longer exists is reclaimed."""
+    # Scope: this guards the common case of a second run started by hand while
+    # one is publishing. It is not a general mutual-exclusion primitive - two
+    # processes can still both enter if they collide inside the microseconds
+    # between creating this file and writing the pid into it. Closing that
+    # window properly means an advisory flock(), which is only worth adding if
+    # concurrent publication to one output_dir becomes a supported workflow; it
+    # is not one today, and the README says so.
     lock_path = output_dir.parent / f".{output_dir.name}.lock"
     fd = None
     for attempt in (0, 1):

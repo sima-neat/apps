@@ -151,14 +151,16 @@ int main(int argc, char** argv) {
       }
       auto r = spawn_and_wait(binary, {"--config", config_path.string()}, 20000);
       fs::remove(config_path);
-      if (r.exit_code == 0 || r.stderr_text.find("Error:") == std::string::npos ||
+      // Exit 3 is the input-error code the Python entrypoint uses for this.
+      if (r.exit_code != 3 ||
+          r.stderr_text.find("failed to read input directory") == std::string::npos ||
           r.stderr_text.find("terminate") != std::string::npos) {
-        std::cerr << "[FAIL] unreadable input directory: expected concise error, got exit "
+        std::cerr << "[FAIL] unreadable input directory: expected exit 3 and a read failure, got "
                   << r.exit_code << "\nstderr:\n"
                   << r.stderr_text << "\n";
         ++failures;
       } else {
-        std::cout << "[OK] unreadable input directory produced a concise error\n";
+        std::cout << "[OK] unreadable input directory produced an input error (exit 3)\n";
       }
     }
     fs::permissions(locked_dir, fs::perms::owner_all);

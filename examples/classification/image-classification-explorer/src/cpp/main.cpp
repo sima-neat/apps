@@ -507,8 +507,13 @@ fs::path fallback_cache_path(const std::string& url, const fs::path& base) {
 // 200 (e.g. a proxy error page) is never cached.
 fs::path download_fallback_image(const std::string& url, const fs::path& base) {
   const fs::path dest = fallback_cache_path(url, base);
-  if (fs::exists(dest))
-    return dest;
+  if (fs::exists(dest)) {
+    if (!cv::imread(dest.string(), cv::IMREAD_COLOR).empty())
+      return dest;
+    // Truncated or corrupted since it was cached: refetch rather than classify it.
+    std::error_code stale;
+    fs::remove(dest, stale);
+  }
 
   const fs::path temporary = dest.string() + ".tmp-" + std::to_string(::getpid());
   std::error_code ec;
@@ -560,9 +565,18 @@ std::vector<fs::path> discover_images(const std::string& input_path,
   }
 
   std::vector<fs::path> entries;
-  for (const auto& entry : fs::directory_iterator(path)) {
-    if (entry.is_regular_file())
-      entries.push_back(entry.path());
+  {
+    // Constructing the iterator throws when the directory cannot be read; that
+    // is an input failure, and Python reports it as one.
+    std::error_code ec;
+    fs::directory_iterator it(path, ec);
+    if (ec) {
+      throw InputError("failed to read input directory " + path.string() + ": " + ec.message());
+    }
+    for (const auto& entry : it) {
+      if (entry.is_regular_file())
+        entries.push_back(entry.path());
+    }
   }
   std::sort(entries.begin(), entries.end(),
             [](const fs::path& a, const fs::path& b) { return a.filename() < b.filename(); });
@@ -1371,6 +1385,15 @@ int main(int argc, char** argv) {
         throw ConfigError(e.what());
       }
     }();
+
+    // `io: /images` or `runtime: 5000` leaves ScalarConfig holding a scalar at
+    // the section name, and every nested lookup below would quietly fall back to
+    // its default. Python rejects these, so reject them here too.
+    for (const char* section : {"io", "runtime", "validation", "models"}) {
+      if (raw.string_value(section).has_value()) {
+        throw ConfigError(std::string("`") + section + "` must be a mapping");
+      }
+    }
 
     const std::string input_path = raw.string_or("io.input", "");
     const std::string fallback_url =

@@ -141,6 +141,11 @@ subdirectories of the input directory are not listed, since the scan is one leve
 Files with a supported extension that cannot be decoded stay in the main table with a per-model
 `error` cell (and an `errors` entry in `report.json`); neither case stops the run.
 
+One run writes one report. Two runs publishing into the same `io.output_dir` at
+the same time is not supported: give each concurrent run its own output
+directory. A run started while another is publishing normally declines with a
+clear message, but that check is a convenience rather than a guarantee.
+
 Each run replaces the previous contents of `io.output_dir` as a unit, so the directory is either
 the complete previous report or the complete new one. Use an empty or dedicated directory: a run
 only replaces a directory that carries the hidden `.image-classification-explorer-report` marker
