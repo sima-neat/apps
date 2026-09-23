@@ -303,6 +303,28 @@ class TestE2E:
          "models:\n  m:\n    path: m.tar.gz\n    label_map: /nonexistent/labels.txt\n", 2),
         ("input path does not exist",
          "io:\n  input: /nonexistent/directory\nmodels:\n  m:\n    path: m.tar.gz\n", 3),
+        ("non-positive num_classes",
+         "models:\n  m:\n    path: m.tar.gz\n    num_classes: 0\n", 2),
+        ("non-positive input_width",
+         "models:\n  m:\n    path: m.tar.gz\n    input_width: 0\n", 2),
+        ("integer beyond int32",
+         "models:\n  m:\n    path: m.tar.gz\n    top_k: 2147483648\n", 2),
+        ("profile name with a colon",
+         'models:\n  "resnet:50":\n    path: m.tar.gz\n', 2),
+        ("profile name with a space",
+         'models:\n  "res net":\n    path: m.tar.gz\n', 2),
+        ("non-numeric min_probability",
+         "validation:\n  min_probability: high\nmodels:\n  m:\n    path: m.tar.gz\n", 2),
+        ("label map that is too short",
+         "models:\n  m:\n    path: m.tar.gz\n    num_classes: 5\n"
+         "    label_map: TOO_SHORT_LABELS\n", 2),
+        ("label map with a blank line",
+         "models:\n  m:\n    path: m.tar.gz\n    num_classes: 3\n"
+         "    label_map: BLANK_LINE_LABELS\n", 2),
+        # Runtime rather than configuration: the model archive does not exist,
+        # so both must fail the same way once the configuration is accepted.
+        ("model archive missing",
+         "models:\n  m:\n    path: /nonexistent/model.tar.gz\n", 6),
     ]
 
     def test_cpp_and_python_fail_identically(
@@ -315,11 +337,18 @@ class TestE2E:
         )
 
         config_path = tmp_output_dir.parent / "failure-config.yaml"
+        too_short = tmp_output_dir.parent / "too-short-labels.txt"
+        too_short.write_text("only\none\n")
+        blank_line = tmp_output_dir.parent / "blank-line-labels.txt"
+        blank_line.write_text("cat\n\nbird\n")
+
         mismatches = []
         for label, body, expected in self.FAILURE_CASES:
             if body is None:
                 argument = str(tmp_output_dir.parent / "does-not-exist.yaml")
             else:
+                body = (body.replace("TOO_SHORT_LABELS", str(too_short))
+                            .replace("BLANK_LINE_LABELS", str(blank_line)))
                 config_path.write_text(body)
                 argument = str(config_path)
 

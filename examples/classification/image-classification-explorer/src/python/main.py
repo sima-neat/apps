@@ -239,7 +239,6 @@ def load_profiles(raw: dict[str, Any]) -> list[ModelProfile]:
         raise ValueError("config.yaml must define at least one entry under `models`")
 
     profiles = []
-    seen: set[str] = set()
     for raw_name, cfg in models_cfg.items():
         # PyYAML turns unquoted scalars into Python objects, so `1:` arrives as an
         # int, `01:` as the int 1 and `true:` as a bool - none of which match the
@@ -249,10 +248,10 @@ def load_profiles(raw: dict[str, Any]) -> list[ModelProfile]:
             raise ValueError(
                 f"models: profile name {raw_name!r} is not a string; quote it in config.yaml"
             )
+        # A duplicate key cannot reach here: PyYAML keeps the last of two
+        # identical keys, and only string keys are accepted, so no two distinct
+        # keys can render as the same name.
         name = raw_name
-        if name in seen:
-            raise ValueError(f"models.{name}: duplicate profile name")
-        seen.add(name)
         if not isinstance(cfg, dict):
             raise ValueError(f"models.{name} must be a mapping")
         profile = ModelProfile(
