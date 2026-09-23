@@ -101,6 +101,7 @@ std::string stable_digest(const std::string& value) {
 
 using FileFingerprint = std::pair<std::uintmax_t, fs::file_time_type>;
 
+// --- Inputs: fingerprinting, decoding and the fallback image cache -------------
 std::optional<FileFingerprint> file_fingerprint(const fs::path& path) {
   std::error_code ec;
   const auto size = fs::file_size(path, ec);
@@ -355,6 +356,7 @@ std::vector<std::string> ordered_model_keys(const fs::path& config_path) {
   return keys;
 }
 
+// --- Configuration: reading config.yaml and validating every setting -----------
 std::vector<ModelProfile> load_profiles(const sima_examples::ScalarConfig& raw,
                                         const fs::path& config_path) {
   const auto known_names = profile_names(raw);
@@ -582,6 +584,7 @@ std::vector<fs::path> discover_images(const std::string& input_path,
   return images;
 }
 
+// --- Neat inference: preprocessing, model construction and execution -----------
 simaai::neat::Model build_model(const ModelProfile& profile) {
   if (profile.preprocess != "imagenet") {
     throw ConfigError("models." + profile.name + ".preprocess=" + profile.preprocess +
@@ -664,6 +667,7 @@ std::vector<ImageResult> run_all(std::vector<ModelProfile>& profiles,
   return results;
 }
 
+// --- Reporting: agreement, per-class counts and the JSON/CSV/HTML writers ------
 // True/False only when every named profile has a top-1 result; otherwise
 // indeterminate rather than silently agreeing/disagreeing over a partial subset.
 // Identity is the class id, not the label: ImageNet has distinct classes that
@@ -1071,6 +1075,7 @@ void write_html_report(const fs::path& path, const std::vector<ImageResult>& res
 // a `report.html`) can never be swapped away.
 const char* const kReportMarker = ".image-classification-explorer-report";
 
+// --- Publication: swapping the report directory into place safely --------------
 // True when a process with this id still exists (it may be another run of this
 // application mid-swap, whose backup must not be touched).
 bool process_is_running(pid_t pid) {

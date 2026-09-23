@@ -87,6 +87,9 @@ def stable_digest(value: str) -> str:
     return f"{digest:016x}"
 
 
+# --- Inputs: fingerprinting, decoding and the fallback image cache ---------------
+
+
 def file_fingerprint(path: Path) -> tuple[int, int]:
     info = path.stat()
     return (info.st_size, info.st_mtime_ns)
@@ -143,6 +146,9 @@ def download_image(url: str, base: Path) -> Path:
         temporary.unlink(missing_ok=True)
         raise FileNotFoundError(f"failed to download {url}: {exc}") from exc
     return dest
+
+
+# --- Configuration: reading config.yaml and validating every setting -------------
 
 
 def load_config(config_path: Path) -> dict[str, Any]:
@@ -349,6 +355,9 @@ def discover_images(input_path: str | None, extensions: tuple[str, ...],
     return images, skipped
 
 
+# --- Neat inference: preprocessing, model construction and execution -------------
+
+
 def load_rgb_resized(path: str, width: int, height: int):
     """Load an image with OpenCV and return an RGB uint8 HWC array."""
     import cv2
@@ -481,6 +490,9 @@ def run_all(profiles: list[ModelProfile], images: list[Path], timeout_ms: int) -
     return results
 
 
+# --- Reporting: agreement, per-class counts and the JSON/CSV/HTML writers --------
+
+
 def agreement(result: ImageResult, profile_names: list[str]) -> bool | None:
     """True/False only when every named model has a top-1 result; otherwise
     indeterminate (None) rather than silently agreeing/disagreeing over a
@@ -495,6 +507,20 @@ def agreement(result: ImageResult, profile_names: list[str]) -> bool | None:
             return None
         class_ids.append(pred.top_k[0][0])
     return len(set(class_ids)) == 1
+
+
+def build_class_summary(results: list[ImageResult], profiles: list[ModelProfile]) -> ClassSummary:
+    """Count top-1 predictions per model, keyed by class id so distinct classes
+    that share a label are never merged."""
+    summary: ClassSummary = {p.name: {} for p in profiles}
+    for result in results:
+        for name, pred in result.predictions.items():
+            if not pred.top_k:
+                continue
+            class_id, label, _ = pred.top_k[0]
+            entry = summary.setdefault(name, {}).setdefault(str(class_id), {"label": label, "count": 0})
+            entry["count"] += 1
+    return summary
 
 
 def write_json_report(path: Path, results: list[ImageResult], profiles: list[ModelProfile],
@@ -724,6 +750,9 @@ def write_html_report(path: Path, results: list[ImageResult], profiles: list[Mod
     path.write_text(html, encoding="utf-8")
 
 
+# --- Publication: swapping the report directory into place safely ----------------
+
+
 def process_is_running(pid: int) -> bool:
     """True when a process with this id still exists (it may be another run of
     this application mid-swap, whose backup must not be touched)."""
@@ -917,18 +946,7 @@ def _publish_locked(output_dir: Path, results: list[ImageResult], profiles: list
         shutil.rmtree(staging, ignore_errors=True)
 
 
-def build_class_summary(results: list[ImageResult], profiles: list[ModelProfile]) -> ClassSummary:
-    """Count top-1 predictions per model, keyed by class id so distinct classes
-    that share a label are never merged."""
-    summary: ClassSummary = {p.name: {} for p in profiles}
-    for result in results:
-        for name, pred in result.predictions.items():
-            if not pred.top_k:
-                continue
-            class_id, label, _ = pred.top_k[0]
-            entry = summary.setdefault(name, {}).setdefault(str(class_id), {"label": label, "count": 0})
-            entry["count"] += 1
-    return summary
+# --- Entrypoint ------------------------------------------------------------------
 
 
 def main() -> int:
