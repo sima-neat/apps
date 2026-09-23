@@ -36,9 +36,9 @@ BUNDLED_LABEL_MAP_REF = "src/common/imagenet_labels.txt"
 # accept exactly the same names instead of diverging on exotic YAML keys.
 PROFILE_NAME_RE = re.compile(r"[A-Za-z0-9_-]+")
 REPORT_ENTRIES = ("report.json", "report.csv", "report.html", "thumbnails", REPORT_MARKER)
-# Python computes softmax in float32 and C++ accumulates in double, so the two
-# agree only to about seven digits - well beyond the precision a float32 model
-# output carries. Report a rounded value so both emit identical numbers.
+# Both entrypoints compute softmax the same way and narrow the result to
+# float32, so the values agree. Rounding keeps the reports free of digits a
+# float32 probability does not actually carry.
 PROBABILITY_DECIMALS = 6
 # Directory of the configuration in use, set once in main(); see
 # bundled_candidates().
@@ -147,7 +147,7 @@ def download_image(url: str, base: Path) -> Path:
         temporary.replace(dest)
     except (urllib.error.URLError, OSError, ValueError) as exc:
         temporary.unlink(missing_ok=True)
-        raise FileNotFoundError(f"failed to download {url}: {exc}") from exc
+        raise FileNotFoundError(f"failed to download fallback image: {url}: {exc}") from exc
     return dest
 
 
@@ -166,6 +166,26 @@ def load_config(config_path: Path) -> dict[str, Any]:
     return loaded
 
 
+def yaml_text(value: Any) -> str:
+    """Render a parsed YAML value as the text C++ reads from the same file.
+
+    Error messages name the offending value, and repr() is the wrong renderer
+    for that: it writes a string in quotes and a bool as `True`, neither of
+    which is what the customer wrote or what the C++ entrypoint prints for the
+    same file. A collection is named by its shape, because ScalarConfig keeps
+    `[a,b]` verbatim while PyYAML hands back a parsed list - the two can agree
+    on the shape but never on the spelling."""
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (list, tuple)):
+        return "a list"
+    if isinstance(value, dict):
+        return "a mapping"
+    return str(value)
+
+
 def config_int(value: Any, key: str, default: int) -> int:
     """Read an integer config value the way the C++ ScalarConfig does.
 
@@ -176,7 +196,7 @@ def config_int(value: Any, key: str, default: int) -> int:
     if value is None:
         return default
     if isinstance(value, bool):
-        raise ValueError(f"{key} must be an integer, got {value!r}")
+        raise ValueError(f"{key} must be an integer, got {yaml_text(value)}")
     if isinstance(value, int):
         return _check_int32(value, key)
     if isinstance(value, str):
@@ -186,8 +206,8 @@ def config_int(value: Any, key: str, default: int) -> int:
         except ValueError as exc:
             if "out of range" in str(exc):
                 raise
-            raise ValueError(f"{key} must be an integer, got {value!r}") from None
-    raise ValueError(f"{key} must be an integer, got {value!r}")
+            raise ValueError(f"{key} must be an integer, got {yaml_text(value)}") from None
+    raise ValueError(f"{key} must be an integer, got {yaml_text(value)}")
 
 
 def config_float(value: Any, key: str, default: float) -> float:
@@ -199,15 +219,15 @@ def config_float(value: Any, key: str, default: float) -> float:
     if value is None:
         return default
     if isinstance(value, bool):
-        raise ValueError(f"{key} must be a number, got {value!r}")
+        raise ValueError(f"{key} must be a number, got {yaml_text(value)}")
     if isinstance(value, (int, float)):
         return float(value)
     if isinstance(value, str):
         try:
             return float(value.strip())
         except ValueError:
-            raise ValueError(f"{key} must be a number, got {value!r}") from None
-    raise ValueError(f"{key} must be a number, got {value!r}")
+            raise ValueError(f"{key} must be a number, got {yaml_text(value)}") from None
+    raise ValueError(f"{key} must be a number, got {yaml_text(value)}")
 
 
 def _check_int32(value: int, key: str) -> int:
@@ -234,7 +254,7 @@ def config_section(raw: dict[str, Any], name: str) -> dict[str, Any]:
     if value is None:
         return {}
     if not isinstance(value, dict):
-        raise ValueError(f"`{name}` must be a mapping, got {value!r}")
+        raise ValueError(f"`{name}` must be a mapping, got {yaml_text(value)}")
     return value
 
 
@@ -255,7 +275,7 @@ def config_str(value: Any, key: str, default: str | None) -> str | None:
         return "true" if value else "false"
     if isinstance(value, (int, float)):
         return str(value)
-    raise ValueError(f"{key} must be a scalar, got {value!r}")
+    raise ValueError(f"{key} must be a scalar, got {yaml_text(value)}")
 
 
 def load_profiles(raw: dict[str, Any]) -> list[ModelProfile]:
@@ -271,7 +291,7 @@ def load_profiles(raw: dict[str, Any]) -> list[ModelProfile]:
         # both entrypoints see exactly the same profile name.
         if not isinstance(raw_name, str):
             raise ValueError(
-                f"models: profile name {raw_name!r} is not a string; quote it in config.yaml"
+                f"models: profile name {yaml_text(raw_name)} is not a string; quote it in config.yaml"
             )
         # A duplicate key cannot reach here: PyYAML keeps the last of two
         # identical keys, and only string keys are accepted, so no two distinct
@@ -299,12 +319,12 @@ def load_profiles(raw: dict[str, Any]) -> list[ModelProfile]:
             raise ValueError(f"models.{name}.path is required")
         if profile.preprocess != "imagenet":
             raise ValueError(
-                f"models.{name}.preprocess={profile.preprocess!r} is not supported; "
+                f"models.{name}.preprocess={yaml_text(profile.preprocess)} is not supported; "
                 "only 'imagenet' is implemented"
             )
         if profile.output != "softmax":
             raise ValueError(
-                f"models.{name}.output={profile.output!r} is not supported; "
+                f"models.{name}.output={yaml_text(profile.output)} is not supported; "
                 "only 'softmax' is implemented (raw per-class scores, softmax applied, "
                 "index i maps to label_map[i])"
             )
@@ -341,7 +361,11 @@ def load_label_map(path: str | None, num_classes: int) -> list[str]:
             # dropped (that would silently shift every later label).
             labels = [line.strip() for line in handle.read().splitlines()]
     except OSError as exc:
-        raise ValueError(f"failed to open label map {label_path}: {exc}") from exc
+        # Worded and detailed as the C++ entrypoint words it: strerror alone,
+        # because str(exc) would repeat the path that already precedes it.
+        raise ValueError(
+            f"failed to open label map {label_path}: {exc.strerror or exc}"
+        ) from exc
     if len(labels) < num_classes:
         raise ValueError(
             f"label map {label_path} has {len(labels)} entries, expected at least {num_classes}"
@@ -419,7 +443,10 @@ def softmax(scores):
     total = 0.0
     for value in exponentials:  # sequential, matching the C++ accumulation order
         total += float(value)
-    return exponentials / total
+    # ScoredIndex::prob is a float, so C++ narrows each probability to float32
+    # before reporting it. Narrowing here too is what makes the sixth decimal
+    # agree; without it the two differ for roughly one value in 130.
+    return (exponentials / total).astype(np.float32)
 
 
 def tensor_to_numpy_dense(tensor) -> Any:
@@ -591,7 +618,10 @@ def write_json_report(path: Path, results: list[ImageResult], profiles: list[Mod
             entry["errors"] = result.errors
         payload["images"].append(entry)
 
-    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    # sort_keys and ensure_ascii=False match nlohmann::json::dump(), which
+    # stores keys ordered and writes UTF-8 unescaped.
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False),
+                    encoding="utf-8")
 
 
 def write_csv_report(path: Path, results: list[ImageResult], profiles: list[ModelProfile]) -> None:
@@ -704,7 +734,8 @@ def write_html_report(path: Path, results: list[ImageResult], profiles: list[Mod
         # stores objects sorted, so both implementations emit the same attribute
         # text. The browser looks these up by name, so order is presentational.
         top1_json = html_escape(
-            json.dumps(top1_by_model, separators=(",", ":"), sort_keys=True)
+            json.dumps(top1_by_model, separators=(",", ":"), sort_keys=True,
+                       ensure_ascii=False)
         )
         cells = []
         for name in profile_names:
@@ -866,8 +897,6 @@ def publication_lock(output_dir: Path):
             raise OSError(
                 f"another run is publishing to {output_dir}; retry once it has finished"
             ) from None
-    if fd is None:
-        raise OSError(f"could not acquire the publication lock for {output_dir}")
     try:
         os.write(fd, f"{os.getpid()}\n".encode())
         os.close(fd)
@@ -1035,7 +1064,12 @@ def main() -> int:
     # against the current working directory, matching every other example in this repo:
     # customers run commands from the installed `prebuilt-apps/` root, not from here.
     try:
-        raw = load_config(args.config)
+        try:
+            raw = load_config(args.config)
+        except OSError as exc:
+            # Worded as the C++ entrypoint words it; the bare OSError would add
+            # an errno prefix and re-quote the path.
+            raise ValueError(f"failed to open config file: {args.config}") from exc
         if not isinstance(raw, dict):
             raise ValueError(f"{args.config} must contain a YAML mapping at the top level")
         io_cfg = config_section(raw, "io")

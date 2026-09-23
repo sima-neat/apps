@@ -552,9 +552,11 @@ std::vector<std::string> load_label_map(const std::string& path, int num_classes
       label_path = bundled;
   }
 
+  errno = 0;
   std::ifstream in(label_path);
   if (!in.is_open()) {
-    throw ConfigError("failed to open label map: " + label_path.string());
+    throw ConfigError("failed to open label map " + label_path.string() + ": " +
+                      std::strerror(errno));
   }
   // Positional: physical line index == class id, so blank lines are never dropped
   // (that would silently shift every later label).
@@ -638,6 +640,22 @@ fs::path download_fallback_image(const std::string& url, const fs::path& base) {
   return dest;
 }
 
+// pathlib drops "." components and redundant separators when it builds a Path,
+// but never resolves "..". std::filesystem keeps the text as written, so
+// `io.input: ./images` would put "./images/x.jpg" in the C++ report and
+// "images/x.jpg" in the Python one - a difference in every path field, and in
+// the thumbnail names, which are digests of those paths. Mirror pathlib exactly;
+// lexically_normal() is not the same function, because it also collapses "..".
+fs::path normalize_like_pathlib(const fs::path& path) {
+  fs::path result;
+  for (const auto& part : path) {
+    if (part.empty() || part == ".")
+      continue;
+    result /= part;
+  }
+  return result.empty() ? fs::path(".") : result;
+}
+
 std::vector<fs::path> discover_images(const std::string& input_path,
                                       const std::vector<std::string>& extensions,
                                       const std::string& fallback_url,
@@ -647,7 +665,7 @@ std::vector<fs::path> discover_images(const std::string& input_path,
     return {download_fallback_image(fallback_url, fallback_dest)};
   }
 
-  fs::path path = input_path;
+  const fs::path path = normalize_like_pathlib(input_path);
   if (fs::is_regular_file(path)) {
     const std::string raw_ext = path.extension().string();
     const std::string ext = lower_copy(raw_ext);
@@ -1242,7 +1260,12 @@ bool recover_interrupted_publish(const fs::path& output_dir) {
                                        [](unsigned char c) { return std::isdigit(c) != 0; })) {
       return false;
     }
-    const auto owner = static_cast<pid_t>(std::stol(suffix));
+    pid_t owner = 0;
+    try {
+      owner = static_cast<pid_t>(std::stol(suffix));
+    } catch (const std::exception&) {
+      return false;  // too large to be a live pid, which is Python's conclusion too
+    }
     return owner != ::getpid() && process_is_running(owner);
   };
 
@@ -1303,7 +1326,7 @@ bool recover_interrupted_publish(const fs::path& output_dir) {
     abandoned.erase(newest);
     fs::rename(restored, output_dir);
     std::cerr << "Recovered an interrupted report publication: restored "
-              << restored.filename().string() << " to " << output_dir << "\n";
+              << restored.filename().string() << " to " << output_dir.string() << "\n";
   }
 
   // Anything left belongs to a finished publish that never got to delete its
@@ -1453,21 +1476,28 @@ int main(int argc, char** argv) {
     // the section name, and every nested lookup below would quietly fall back to
     // its default. Python rejects these, so reject them here too.
     for (const char* section : {"io", "runtime", "validation", "models"}) {
-      if (raw.string_value(section).has_value()) {
-        throw ConfigError(std::string("`") + section + "` must be a mapping");
+      if (const auto value = raw.string_value(section)) {
+        throw ConfigError(std::string("`") + section + "` must be a mapping, got " + *value);
       }
     }
 
     // ScalarConfig keeps a flow value such as `output_dir: [a, b]` verbatim, so
     // without this C++ would create a directory literally named "[a, b]" while
-    // Python rejects the same file as not a scalar.
-    for (const char* key :
-         {"io.input", "io.output_dir", "io.extensions", "io.fallback_image_url",
-          "runtime.timeout_ms", "validation.expected_class_id", "validation.min_probability"}) {
-      const auto value = raw.string_value(key);
-      if (value.has_value() && !value->empty() &&
-          (value->front() == '[' || value->front() == '{')) {
-        throw ConfigError(std::string(key) + " must be a scalar, got " + *value);
+    // Python rejects the same file as not a scalar. Every scalar is checked
+    // rather than a hand-listed set, which would miss the models.* keys.
+    //
+    // Two known limits, both from ScalarConfig rather than from here: a block
+    // sequence leaves no scalar at all, so it is invisible and C++ falls back to
+    // the default where Python rejects the file; and a quoted "[a, b]" is
+    // unquoted before we see it, so a directory whose name really is bracketed
+    // is rejected. Telling the three apart needs a YAML parser in the shared
+    // reader, which is a change for its owners.
+    for (const auto& [key, value] : raw.scalars()) {
+      if (value.size() >= 2 &&
+          ((value.front() == '[' && value.back() == ']') ||
+           (value.front() == '{' && value.back() == '}'))) {
+        throw ConfigError(key + " must be a scalar, got " +
+                          std::string(value.front() == '[' ? "a list" : "a mapping"));
       }
     }
 
@@ -1559,10 +1589,14 @@ int main(int argc, char** argv) {
       if (it != first.predictions.end() && !it->second.top_k.empty()) {
         const auto& top1 = it->second.top_k.front();
         if (top1.index != *expected_class_id || top1.prob < min_probability) {
+          // Formatted separately: std::fixed and setprecision are sticky, and
+          // applied inline they would also reformat min_probability below.
+          std::ostringstream probability;
+          probability << std::fixed << std::setprecision(4) << top1.prob;
           std::cerr << "Note: " << profiles.front().name << " top1=" << top1.index << " ("
-                    << std::fixed << std::setprecision(4) << top1.prob
-                    << ") did not match expected_class_id=" << *expected_class_id
-                    << " (min_probability=" << min_probability << "); see report for details.\n";
+                    << probability.str() << ") did not match expected_class_id="
+                    << *expected_class_id << " (min_probability=" << min_probability
+                    << "); see report for details.\n";
         }
       }
     }

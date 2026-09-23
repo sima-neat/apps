@@ -244,6 +244,13 @@ class TestE2E:
         py_out = tmp_output_dir.parent / "report-python"
         cpp_out = tmp_output_dir.parent / "report-cpp"
 
+        # Deliberately relative and "./"-prefixed: pathlib drops the "." when it
+        # builds a Path while std::filesystem keeps the text as written, so this
+        # spelling is what makes the two write different paths into every report
+        # field - and different thumbnail names, which are digests of those
+        # paths. An absolute input would not exercise it.
+        relative_input = "./" + os.path.relpath(test_images_dir, EXAMPLE_DIR)
+
         # e2e_config_writer always writes the same path, so write and run each
         # configuration in turn rather than holding two at once.
         for output_dir, command in (
@@ -251,7 +258,7 @@ class TestE2E:
             (cpp_out, lambda cfg: [binary, "--config", str(cfg)]),
         ):
             config = e2e_config_writer(
-                {"io": {"input": str(test_images_dir), "output_dir": str(output_dir)},
+                {"io": {"input": relative_input, "output_dir": str(output_dir)},
                  "models": models}
             )
             argv = command(config)
@@ -288,6 +295,22 @@ class TestE2E:
     # run is compared by test_cpp_and_python_reports_are_identical; this covers
     # the other half, where the two used to drift unnoticed: several findings on
     # this PR were error paths where one language exited 2 and the other 6.
+    # Two failures are reported by code neither entrypoint owns, so their text
+    # cannot be aligned from here:
+    #   * a top-level scalar is rejected by ScalarConfig, which sees a file of
+    #     `key: value` lines and reports the offending line; PyYAML parses the
+    #     whole document first and reports the shape. Matching them means
+    #     teaching the shared reader to parse YAML, which is its owners' call.
+    #   * a broken model archive is described by the inference library, and
+    #     pyneat and simaai::neat word their own errors differently.
+    # Both still have to agree on the exit code, which is what a script checks.
+    MESSAGE_DIFFERS_BY_DESIGN = frozenset({
+        "top-level scalar",
+        "top-level is false",
+        "model archive missing",
+        "quoted and unquoted duplicate key",
+    })
+
     FAILURE_CASES = [
         ("missing config file", None, 2),
         ("top-level scalar", "just-a-string\n", 2),
@@ -419,11 +442,19 @@ class TestE2E:
                 mismatches.append(
                     f"{label}: expected {expected}, python={py_code}, cpp={cpp_code}"
                 )
+            # The text matters as much as the code: a customer reads the message,
+            # not the exit status. Comparing only the codes is what let a dozen
+            # differently-worded messages for the same failure survive review.
+            elif py_err != cpp_err and label not in self.MESSAGE_DIFFERS_BY_DESIGN:
+                mismatches.append(
+                    f"{label}: same exit {py_code} but different message\n"
+                    f"      python: {py_err}\n         cpp: {cpp_err}"
+                )
             for language, (_, err) in outcomes.items():
                 if "Traceback" in err or "terminate called" in err:
                     mismatches.append(f"{label}: {language} crashed instead of reporting: {err[:200]}")
 
-        assert not mismatches, "exit codes differ between the entrypoints:\n  " + "\n  ".join(
+        assert not mismatches, "the entrypoints do not fail identically:\n  " + "\n  ".join(
             mismatches
         )
 
