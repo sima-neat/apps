@@ -86,9 +86,11 @@ number of instances drawn:
 
 ```text
 Found 21 images
-Wrote: "sandbox/yolov8-instance-segmenter/000000116439_overlay.jpg" boxes=1
-Wrote: "sandbox/yolov8-instance-segmenter/000000129492_overlay.jpg" boxes=4
+Wrote: sandbox/yolov8-instance-segmenter/000000116439_overlay.jpg boxes=1
+Wrote: sandbox/yolov8-instance-segmenter/000000129492_overlay.jpg boxes=4
 ```
+
+The C++ binary prints the same lines with the path in quotes.
 
 `io.output_dir` then holds one `_overlay.jpg` per input image. Some COCO images
 legitimately produce `boxes=0` at the default `decode.score_threshold` of

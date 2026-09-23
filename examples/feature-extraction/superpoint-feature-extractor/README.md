@@ -10,7 +10,7 @@
 | Languages | C++, Python |
 | Status | stable |
 | Binary Name | superpoint-feature-extractor |
-| Model | superpoint_modalix_int8_tessellation_mla |
+| Model | superpoint |
 
 ## Concept
 
