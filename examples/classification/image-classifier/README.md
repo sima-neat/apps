@@ -83,33 +83,43 @@ python3 ${APP_DIR}/src/python/main.py \
 ## Expected Result
 
 Both implementations print the top-1 index with its probability and the top-5
-list, then confirm the top-1 class matches `validation.expected_class_id`. The
-two use different wording, so check against the one you ran.
+list, then confirm the top-1 class. They word it differently, so check against
+the one you ran. Exact probabilities vary between runs and between the two
+implementations; what matters is that class `1` wins by a wide margin.
 
 C++:
 
 ```text
-[model] top1 index=1 score=16.435 prob=0.946191
-[model] top5: 1:0.946191 0:0.0495301 392:0.00298376 389:0.000480504 29:0.000206855
+[model] top1 index=1 score=16.43 prob=0.94
+[model] top5: 1:0.94 0:0.04 392:0.002 389:0.0004 29:0.0002
 [model] top-1 matches expected class 1
 ```
 
 Python:
 
 ```text
-top1 index=1 score=16.4350 prob=0.9586
-top5: 1:0.9586 0:0.0379 392:0.0023 389:0.0005 29:0.0002
+top1 index=1 score=16.43 prob=0.95
+top5: 1:0.95 0:0.04 392:0.002 389:0.0005 29:0.0002
 PASS
 ```
 
-With the packaged goldfish image, class `1` should win with a probability well
-above the `validation.min_probability` default of `0.20`.
+By default `io.image` is `null`, so the application downloads the goldfish image
+from `io.fallback_image_url` and needs network access. Class `1` should win with
+a probability well above the `validation.min_probability` default of `0.20`.
 
-A failed check reports the reason on stderr, so the run is never silently wrong:
+A failed check reports the reason rather than failing silently. Python prints to
+stderr:
 
 ```text
 FAIL: expected top1=1 (goldfish), got 393
 FAIL: top1 prob 0.1832 < 0.2
+```
+
+C++ raises instead, and the message reaches stderr through the top-level
+handler:
+
+```text
+Error: model: top-1 mismatch: expected 1 got 393
 ```
 
 ## Troubleshooting

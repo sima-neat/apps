@@ -127,18 +127,14 @@ The startup line prints as soon as the source is probed, so it confirms the
 task, variant, codec and resolution straight away. Check that probed resolution
 matches the source you intended.
 
-The packaged config ships `inference.frames: 0`, which runs continuously, so the
-closing `completed=` line prints only when a finite limit is reached. For a
-bounded check that ends by itself, set a positive limit first:
+The packaged config ships `inference.frames: 0`, which runs continuously. Both
+implementations handle `SIGINT`, so stopping with Ctrl-C still prints the closing
+`completed=` line. Set a positive `inference.frames` if you want the run to end
+on its own instead.
 
-```yaml
-inference:
-  frames: 200
-```
-
-`completed` should then reach that limit, and `output_fps` should track the
+`completed` reports the frames processed, and `output_fps` should track the
 source frame rate; a much lower `output_fps` means the pipeline is not keeping
-up with the source. Left at `0`, the live Insight stream is the success signal.
+up with the source.
 
 ## Performance
 

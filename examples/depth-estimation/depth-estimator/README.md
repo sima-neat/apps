@@ -91,9 +91,9 @@ Done: 21 images processed
 
 `io.output_dir` (default `sandbox/depth-estimator`) then holds one PNG depth
 visualization per input image. With the packaged `assets/datasets/coco` folder
-that is 21 files. Each is an INFERNO colormap of the depth map, normalized per
-image, so brightness is relative within one image and not comparable between
-images.
+that is 21 files. Each is a side-by-side image: the resized input on the left,
+its depth colormap on the right. The colormap is normalized per image, so
+brightness is relative within one image and not comparable between images.
 
 ## Troubleshooting
 

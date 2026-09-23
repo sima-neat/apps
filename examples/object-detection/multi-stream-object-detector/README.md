@@ -106,9 +106,12 @@ The application prints one startup line per stream, then per-stream profile and
 processed counts:
 
 ```text
-[profile stream=2] frames=70 output_fps=20.4 avg_detection_pull_ms=0.43 avg_metadata_send_ms=0.57 avg_boxes=2.0
+[profile stream=2] frames=70 output_fps=20.364721259721044 avg_detection_pull_ms=0.43236884301794426 avg_metadata_send_ms=0.5690935856795737 avg_boxes=2.0
 [stream 2] processed=200
 ```
+
+The numbers are printed unrounded, and the two implementations format them
+differently, so compare the magnitudes rather than the digits.
 
 The `[profile stream=N]` lines appear while the run is in progress, once
 `runtime.warmup_frames` has passed, so they are visible without stopping the
