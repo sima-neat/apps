@@ -181,14 +181,6 @@ python3 -m pip install -r "$APP_DIR/src/python/requirements.txt"
 python3 "$APP_DIR/src/python/main.py" --config "$CONFIG"
 ```
 
-The named profiles are validated with the C++ binary. Treat the Python
-implementation as a readable reference rather than an equivalent way to run them:
-on a Modalix DevKit it did not sustain the 16-stream default profile against a
-30 fps source, reporting roughly 1-2 published frames per second per stream and
-eventually failing with `timed out waiting for detector progress`. The same
-happened with eight streams. Use the C++ binary for the density profiles and the
-Python source to understand what the application does.
-
 Stop the application with `Ctrl-C`.
 
 Use one active Insight viewer while validating metadata. Insight currently has a single-viewer metadata rendering limitation; multiple simultaneous viewers can make box delivery appear intermittent even when the application is advancing normally.
