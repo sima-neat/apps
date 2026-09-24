@@ -231,3 +231,19 @@ def test_pose_smoother_state_is_independent_per_stream():
     right_result = right.filter([pose_sample(88.0, 1.0, 0.98)], 1_040_000_000)[0]
     assert left_result["keypoints"][0]["x"] < 12.0
     assert right_result["keypoints"][0]["x"] > 88.0
+
+
+def test_pose_smoother_bridges_two_missing_results_without_buffering():
+    smoother = main.PoseSmoother()
+    original = pose_sample(50.0, 0.9, 0.0)
+    smoother.filter([copy.deepcopy(original)], 1_000_000_000)
+
+    first_gap = smoother.filter([], 1_040_000_000)
+    second_gap = smoother.filter([], 1_080_000_000)
+    expired = smoother.filter([], 1_120_000_000)
+
+    assert first_gap[0]["keypoints"][0]["x"] == 50.0
+    assert second_gap[0]["keypoints"][0]["x"] == 50.0
+    assert first_gap[0]["keypoints"][0]["confidence"] < 0.9
+    assert second_gap[0]["keypoints"][0]["confidence"] < first_gap[0]["keypoints"][0]["confidence"]
+    assert expired == []

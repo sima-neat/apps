@@ -106,6 +106,8 @@ struct PoseSmoothingOptions {
   float fast_motion_threshold = 0.08F;
   float minimum_match_iou = 0.15F;
   int reset_after_ms = 250;
+  int max_coast_frames = 2;
+  float coast_confidence_decay = 0.85F;
 };
 
 inline float box_iou(const Box& left, const Box& right) {
@@ -133,12 +135,26 @@ public:
     if (poses.empty()) {
       if (is_reset_gap(pts_ns)) {
         reset();
+        return poses;
+      }
+      if (!previous_.empty() && ++missing_frames_ <= options_.max_coast_frames) {
+        auto coasted = previous_;
+        const float decay = std::pow(options_.coast_confidence_decay, missing_frames_);
+        for (Pose& pose : coasted) {
+          pose.box.score *= decay;
+          for (std::size_t index = 0; index < pose.keypoints.size(); ++index) {
+            pose.keypoints[index].confidence *= decay;
+            pose.world_keypoints[index].confidence = pose.keypoints[index].confidence;
+          }
+        }
+        return coasted;
       }
       return poses;
     }
     if (is_reset_gap(pts_ns) || (pts_ns >= 0 && last_pts_ns_ >= 0 && pts_ns <= last_pts_ns_)) {
       reset();
     }
+    missing_frames_ = 0;
 
     std::vector<int> matches(poses.size(), -1);
     std::vector<bool> used(previous_.size(), false);
@@ -212,6 +228,7 @@ public:
   void reset() {
     previous_.clear();
     last_pts_ns_ = -1;
+    missing_frames_ = 0;
   }
 
 private:
@@ -241,6 +258,7 @@ private:
   PoseSmoothingOptions options_;
   std::vector<Pose> previous_;
   int64_t last_pts_ns_ = -1;
+  int missing_frames_ = 0;
 };
 
 inline int64_t select_frame_id(int64_t frame_id, int64_t orig_input_seq, int64_t input_seq,

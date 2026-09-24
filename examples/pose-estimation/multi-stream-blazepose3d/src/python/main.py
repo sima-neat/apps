@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import gc
 import glob
 import json
@@ -162,10 +163,13 @@ class PoseSmoother:
     MINIMUM_MATCH_IOU = 0.15
     RESET_AFTER_NS = 250_000_000
     NOMINAL_FRAME_NS = 40_000_000
+    MAX_COAST_FRAMES = 2
+    COAST_CONFIDENCE_DECAY = 0.85
 
     def __init__(self) -> None:
         self.previous: list[dict[str, Any]] = []
         self.last_pts_ns = -1
+        self.missing_frames = 0
 
     @staticmethod
     def _blend(previous: float, current: float, alpha: float) -> float:
@@ -190,16 +194,31 @@ class PoseSmoother:
     def reset(self) -> None:
         self.previous = []
         self.last_pts_ns = -1
+        self.missing_frames = 0
 
     def filter(self, poses: list[dict[str, Any]], pts_ns: int) -> list[dict[str, Any]]:
         if not poses:
             if self._reset_gap(pts_ns):
                 self.reset()
+                return poses
+            if self.previous and self.missing_frames < self.MAX_COAST_FRAMES:
+                self.missing_frames += 1
+                coasted = copy.deepcopy(self.previous)
+                decay = self.COAST_CONFIDENCE_DECAY**self.missing_frames
+                for pose in coasted:
+                    pose["box"]["score"] *= decay
+                    for point, world in zip(
+                        pose["keypoints"], pose["world_keypoints"], strict=True
+                    ):
+                        point["confidence"] *= decay
+                        world["confidence"] = point["confidence"]
+                return coasted
             return poses
         if self._reset_gap(pts_ns) or (
             pts_ns >= 0 and self.last_pts_ns >= 0 and pts_ns <= self.last_pts_ns
         ):
             self.reset()
+        self.missing_frames = 0
 
         matches = [-1] * len(poses)
         used: set[int] = set()

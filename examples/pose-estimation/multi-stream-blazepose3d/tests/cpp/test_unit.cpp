@@ -151,6 +151,20 @@ bool test_math_contract() {
   const auto reset = smoother.filter({reset_pose}, 1'400'000'000).front();
   ok &= expect(std::abs(reset.keypoints[0].x - 30.0F) < 0.001F,
                "temporal filter resets after a discontinuity instead of dragging stale state");
+
+  blazepose_app::PoseSmoother continuity;
+  continuity.filter({first_pose}, 2'000'000'000);
+  const auto first_gap = continuity.filter({}, 2'040'000'000);
+  const auto second_gap = continuity.filter({}, 2'080'000'000);
+  const auto expired = continuity.filter({}, 2'120'000'000);
+  const bool continuity_sizes = first_gap.size() == 1 && second_gap.size() == 1 && expired.empty();
+  ok &= expect(continuity_sizes,
+               "temporal filter bridges two missing results without buffering later frames");
+  if (continuity_sizes) {
+    ok &= expect(first_gap[0].keypoints[0].confidence < first_pose.keypoints[0].confidence &&
+                     second_gap[0].keypoints[0].confidence < first_gap[0].keypoints[0].confidence,
+                 "coasted pose confidence decays while the estimate is unavailable");
+  }
   return ok;
 }
 

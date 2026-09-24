@@ -119,7 +119,7 @@ output:
 
 Configure one to four streams. Each stream needs a unique stable `id` and `insight_channel`. Sources may have different resolutions. `pose.max_people_per_frame` bounds how many highest-confidence person boxes are sent to BlazePose per admitted frame.
 
-`pose.temporal_filter_enabled` defaults to `true`. The per-stream filter matches poses by person-box overlap, damps small coordinate and confidence fluctuations, and adapts toward the current frame during deliberate fast motion. It filters image and world landmarks together before either metadata message is built, so the 2D overlay and 3D view remain frame-correlated and cannot drift apart. Disable it only when raw model output is required for measurement.
+`pose.temporal_filter_enabled` defaults to `true`. The per-stream filter matches poses by person-box overlap, damps small coordinate and confidence fluctuations, and adapts toward the current frame during deliberate fast motion. It also bridges at most two missing detector or pose results with a confidence-decayed copy of the latest estimate. This removes one-frame visualization flashes without buffering future frames or adding inference latency. The filter processes image and world landmarks together before either metadata message is built, so the 2D overlay and 3D view remain frame-correlated and cannot drift apart. Disable it only when raw model output is required for measurement.
 
 ## Run
 
@@ -184,7 +184,7 @@ The application retains the source `stream_id`, frame ID, PTS, DTS, duration, an
 
 - `RealtimeLatestByStream` bounds admitted decoder-backed frames before the packed-RGB conversion.
 - Latest-only detector and pose mailboxes plus round-robin dispatch prevent stale work from accumulating and preserve fairness across streams.
-- Each stream owns independent temporal-filter state. Small landmark and confidence fluctuations are damped without buffering frames, while large motion receives a higher current-frame weight to limit visual lag.
+- Each stream owns independent temporal-filter state. Small landmark and confidence fluctuations are damped without buffering frames, large motion receives a higher current-frame weight to limit visual lag, and a two-frame confidence-decayed coast hides isolated inference misses.
 - YOLO26 and BlazePose each use one shared model route. Increasing stream count does not create additional model routes.
 - Video uses H.264 or H.265 encoded passthrough. The application does not draw on frames or re-encode them.
 - The current public `VideoConvert` node performs the one NV12-to-RGB conversion on A65 after admission. The RGB frame remains holder-backed in application code; Python passes the `Tensor` directly and C++ maps a non-owning `cv::Mat` view.
