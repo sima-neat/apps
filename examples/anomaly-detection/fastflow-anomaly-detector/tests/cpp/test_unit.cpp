@@ -8,7 +8,6 @@
 
 namespace fs = std::filesystem;
 using sima_examples::testing::create_test_scratch_dir;
-using sima_examples::testing::example_common_config_path;
 using sima_examples::testing::ProcessResult;
 using sima_examples::testing::remove_dir;
 using sima_examples::testing::spawn_and_wait;
@@ -84,12 +83,11 @@ int main(int argc, char** argv) {
     }
   }
 
-  // Test 5: --validate-config-only accepts the packaged config. Its <rtsp-url> and
-  // <insight-host-ip> placeholders are non-empty strings, which is all validation asks of them.
+  // Test 5: --validate-config-only accepts the packaged config, the binary's default. Its
+  // <rtsp-url> and <insight-host-ip> placeholders are non-empty strings, which is all
+  // validation asks of them. No --config, so no process logs land next to the packaged config.
   {
-    const fs::path packaged = example_common_config_path(kExampleName);
-    const ProcessResult r =
-        spawn_and_wait(binary, {"--config", packaged.string(), "--validate-config-only"}, 20000);
+    const ProcessResult r = spawn_and_wait(binary, {"--validate-config-only"}, 20000);
     if (r.exit_code != 0) {
       std::cerr << "[FAIL] validate-config-only: expected exit 0, got " << r.exit_code << "\n"
                 << r.stderr_text;

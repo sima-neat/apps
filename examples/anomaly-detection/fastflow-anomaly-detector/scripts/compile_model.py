@@ -4,24 +4,12 @@
     activate-model-compiler
     python3 scripts/compile_model.py --model model.onnx --calib-images /data/my_product/train/good
 
-Takes the ONNX that ``anomalib export`` writes (anomalib 2.x, which puts the input
-normalisation and the 0..1 probability map inside the graph), converts it to bfloat16
-and writes ``build/<name>/<name>_mpk.tar.gz`` for Modalix. Point ``model.path`` in
-config.yaml at the package and set ``model.normalize`` to mean 0 and stddev 1.
+Converts an anomalib 2.x export to bfloat16 and writes ``build/<name>/<name>_mpk.tar.gz``.
+Set ``model.path`` to it and ``model.normalize`` to mean 0 and stddev 1.
 
-Two constructs of the export are patched first, because the Model Compiler (SDK 2.1.3)
-mishandles them: the per-image LayerNorm over (C, H, W), which it would lower to a
-per-channel normalisation and turn the map into noise, and the 5-D stack that averages
-the per-scale maps, which would split the package into stages the application cannot
-load. Up to 50 good images serve as the sample inputs of the conversion pass.
-
-The images are required even though bfloat16 fits no quantisation scales. Measured on the
-board 2026-09-09: the same 4-step export compiled from one synthetic 0..1 sample instead
-of MVTec bottle photographs scores image AUROC 0.50 and pixel AUROC 0.43 with the map
-saturated on every image, against 0.99 and 0.97 from the same script with the photographs.
-The two packages differ only in the recorded input range and about 6.5 KB of the MLA ELF,
-so the conversion takes more from these images than the manifest shows. Feed real good
-parts.
+The export's per-image LayerNorm and 5-D map average are patched first, because the Model
+Compiler mishandles both. Use photos of real good parts for ``--calib-images``, even though
+bfloat16 needs no quantisation scales: a synthetic sample saturates the map.
 """
 import argparse
 import logging
