@@ -58,7 +58,7 @@ def int_or(raw: dict, key: str, default: int) -> int:
     value = raw.get(key, default)
     if value is None:
         return default
-    if not isinstance(value, int):
+    if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError(f"{key} must be an integer")
     return value
 
