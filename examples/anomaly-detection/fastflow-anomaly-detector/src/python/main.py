@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 from collections import deque
@@ -102,9 +103,18 @@ def load_config(path: Path) -> Config:
     return cfg
 
 
-def probe_stream(url: str) -> tuple[int, int, int]:
+def probe_stream(url: str, tcp: bool) -> tuple[int, int, int]:
     """Frame size and rate, which the graph needs before it starts."""
-    capture = cv2.VideoCapture(url)
+    capture_options_key = "OPENCV_FFMPEG_CAPTURE_OPTIONS"
+    previous_capture_options = os.environ.get(capture_options_key)
+    os.environ[capture_options_key] = f"rtsp_transport;{'tcp' if tcp else 'udp'}"
+    try:
+        capture = cv2.VideoCapture(url)
+    finally:
+        if previous_capture_options is None:
+            os.environ.pop(capture_options_key, None)
+        else:
+            os.environ[capture_options_key] = previous_capture_options
     width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fps = int(round(capture.get(cv2.CAP_PROP_FPS)))
@@ -264,7 +274,7 @@ def frame_tensor(sample):
 
 
 def run(cfg: Config) -> None:
-    width, height, fps = probe_stream(cfg.rtsp_url)
+    width, height, fps = probe_stream(cfg.rtsp_url, cfg.tcp)
     if width != height:
         print(f"[warn] stream is {width}x{height}; the model letterboxes non-square frames, "
               "which flattens the map", file=sys.stderr)
