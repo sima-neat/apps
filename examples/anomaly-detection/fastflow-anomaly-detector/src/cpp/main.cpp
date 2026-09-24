@@ -431,9 +431,11 @@ void run(const Config& cfg) {
       flagged += regions.empty() ? 0 : 1;
       window_regions += static_cast<int>(regions.size());
       if (!cfg.save_dir.empty() && cfg.save_every != 0 && processed % cfg.save_every == 0) {
-        cv::imwrite(
-            (fs::path(cfg.save_dir) / ("frame_" + std::to_string(processed) + ".jpg")).string(),
-            frame);
+        const auto out_path =
+            fs::path(cfg.save_dir) / ("frame_" + std::to_string(processed) + ".jpg");
+        if (!cv::imwrite(out_path.string(), frame)) {
+          std::cerr << "[warn] failed to write output frame: " << out_path.string() << "\n";
+        }
       }
       if (cfg.profile && processed % cfg.profile_interval == 0) {
         const double elapsed_s = (sima_examples::time_ms() - window_start_ms) / 1000.0;

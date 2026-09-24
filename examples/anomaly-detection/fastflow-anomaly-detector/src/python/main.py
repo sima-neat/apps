@@ -320,7 +320,9 @@ def run(cfg: Config) -> None:
             flagged += bool(regions)
             window_regions += len(regions)
             if cfg.save_dir and cfg.save_every and processed % cfg.save_every == 0:
-                cv2.imwrite(str(Path(cfg.save_dir) / f"frame_{processed}.jpg"), frame)
+                out_path = Path(cfg.save_dir) / f"frame_{processed}.jpg"
+                if not cv2.imwrite(str(out_path), frame):
+                    print(f"[warn] failed to write output frame: {out_path}", file=sys.stderr)
             if cfg.profile and processed % cfg.profile_interval == 0:
                 elapsed = time.perf_counter() - window_start
                 print(f"[profile] frames={cfg.profile_interval} "
