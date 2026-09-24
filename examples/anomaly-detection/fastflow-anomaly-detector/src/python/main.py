@@ -110,6 +110,8 @@ def load_config(path: Path) -> Config:
             raise ValueError(f"{key} must be set")
     if not all(s > 0 for s in cfg.stddev):
         raise ValueError("model.normalize.stddev must be > 0")
+    if cfg.latency_ms < 0:
+        raise ValueError("source.latency_ms must be >= 0")
     if cfg.frames < 0:
         raise ValueError("inference.frames must be >= 0")
     if not 0.0 <= cfg.threshold <= 1.0:
