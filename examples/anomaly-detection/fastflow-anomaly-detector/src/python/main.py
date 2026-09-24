@@ -46,11 +46,10 @@ class Config:
 
 def rgb_stats(value, key: str) -> list[float]:
     """One normalisation value per channel, in R, G, B order."""
-    if isinstance(value, (list, tuple)) and len(value) == 3:
-        try:
-            return [float(v) for v in value]
-        except (TypeError, ValueError):
-            pass
+    if isinstance(value, (list, tuple)) and len(value) == 3 and not any(
+        isinstance(v, bool) or not isinstance(v, (int, float)) for v in value
+    ):
+        return [float(v) for v in value]
     raise ValueError(f"{key} must be three numbers, one per RGB channel")
 
 
@@ -61,6 +60,15 @@ def int_or(raw: dict, key: str, default: int) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError(f"{key} must be an integer")
     return value
+
+
+def float_or(raw: dict, key: str, default: float) -> float:
+    value = raw.get(key, default)
+    if value is None:
+        return default
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"{key} must be numeric")
+    return float(value)
 
 
 def bool_or(raw: dict, key: str, default: bool) -> bool:
@@ -89,14 +97,14 @@ def load_config(path: Path) -> Config:
         tcp=bool_or(source, "tcp", True),
         latency_ms=int_or(source, "latency_ms", 100),
         frames=int_or(inference, "frames", 0),
-        threshold=float(inference.get("threshold", 0.5)),
+        threshold=float_or(inference, "threshold", 0.5),
         min_region_px=int_or(inference, "min_region_px", 300),
         profile=bool_or(runtime, "profile", False),
         profile_interval=int_or(runtime, "profile_interval", 100),
         insight_host=str(insight.get("host") or ""),
         video_port=int_or(insight, "video_port", 9000),
-        heat_max=float(output.get("heat_max", 0.7)),
-        alpha=float(output.get("alpha", 0.55)),
+        heat_max=float_or(output, "heat_max", 0.7),
+        alpha=float_or(output, "alpha", 0.55),
         save_dir=str(output.get("save_dir") or ""),
         save_every=int_or(output, "save_every", 0),
     )
