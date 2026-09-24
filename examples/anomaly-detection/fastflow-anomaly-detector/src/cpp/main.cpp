@@ -132,6 +132,7 @@ Config load_config(const fs::path& path) {
   sima_examples::require(!cfg.insight_host.empty(), "output.insight.host must be set");
   sima_examples::require(std::find(cfg.stddev.begin(), cfg.stddev.end(), 0.0F) == cfg.stddev.end(),
                          "model.normalize.stddev must not contain zero");
+  sima_examples::require(cfg.frames >= 0, "inference.frames must be >= 0");
   sima_examples::require(cfg.threshold >= 0.0 && cfg.threshold <= 1.0,
                          "inference.threshold must be between 0 and 1");
   sima_examples::require(cfg.min_region_px > 0, "inference.min_region_px must be > 0");

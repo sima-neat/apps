@@ -95,6 +95,7 @@ class TestConfig:
             ({"model": {"normalize": {"mean": [0.5, 0.5]}}}, "three numbers"),
             ({"model": {"normalize": {"mean": "a, b, c"}}}, "three numbers"),
             ({"model": {"normalize": {"stddev": [1.0, 0.0, 1.0]}}}, "model.normalize.stddev"),
+            ({"inference": {"frames": -1}}, "inference.frames"),
             ({"inference": {"threshold": 1.5}}, "inference.threshold"),
             ({"inference": {"min_region_px": 0}}, "inference.min_region_px"),
             ({"runtime": {"profile_interval": 0}}, "runtime.profile_interval"),

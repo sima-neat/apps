@@ -92,6 +92,8 @@ def load_config(path: Path) -> Config:
             raise ValueError(f"{key} must be set")
     if 0.0 in cfg.stddev:
         raise ValueError("model.normalize.stddev must not contain zero")
+    if cfg.frames < 0:
+        raise ValueError("inference.frames must be >= 0")
     if not 0.0 <= cfg.threshold <= 1.0:
         raise ValueError("inference.threshold must be between 0 and 1")
     if cfg.min_region_px <= 0:
