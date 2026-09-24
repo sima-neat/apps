@@ -393,8 +393,8 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("models.detector_path must be set")
     if not cfg.pose_model_path:
         raise ValueError("models.pose_path must be set")
-    if not cfg.streams:
-        raise ValueError("streams must be a non-empty list")
+    if not 1 <= len(cfg.streams) <= 4:
+        raise ValueError("streams must contain between 1 and 4 entries")
     if not cfg.insight_host:
         raise ValueError("output.insight.host must be set")
     if cfg.latency_ms < 0:
@@ -603,7 +603,7 @@ def decode_pose(
     }
 
 
-def poses_data(poses: list[dict[str, Any]]) -> dict[str, Any]:
+def poses_data(poses: list[dict[str, Any]], stream_id: str) -> dict[str, Any]:
     published = []
     for pose in sorted(poses, key=lambda item: int(item["roi_index"])):
         box = pose["box"]
@@ -633,7 +633,7 @@ def poses_data(poses: list[dict[str, Any]]) -> dict[str, Any]:
                 ],
             }
         )
-    return {"poses": published}
+    return {"stream_id": stream_id, "poses": published}
 
 
 def auxiliary_visualization_data(
@@ -653,7 +653,9 @@ def auxiliary_visualization_data(
     return data
 
 
-def world_pose_auxiliary_data(poses: list[dict[str, Any]]) -> dict[str, Any]:
+def world_pose_auxiliary_data(
+    poses: list[dict[str, Any]], stream_id: str
+) -> dict[str, Any]:
     world_poses = []
     for pose in sorted(poses, key=lambda item: int(item["roi_index"])):
         world_poses.append(
@@ -671,9 +673,11 @@ def world_pose_auxiliary_data(poses: list[dict[str, Any]]) -> dict[str, Any]:
                 ],
             }
         )
-    return auxiliary_visualization_data(
+    data = auxiliary_visualization_data(
         "world-pose", "blazepose-3d", {"poses": world_poses}, "3D Pose"
     )
+    data["stream_id"] = stream_id
+    return data
 
 
 def rtsp_codec(codec: str):
@@ -1163,9 +1167,12 @@ def publish_metadata(
     with stream.metadata_lock:
         if stream.pose_temporal_filter_enabled:
             poses = stream.pose_smoother.filter(poses, identity.pts_ns)
-        overlay_data = json.dumps(poses_data(poses), separators=(",", ":"))
+        overlay_data = json.dumps(
+            poses_data(poses, identity.stream_id), separators=(",", ":")
+        )
         auxiliary_data = json.dumps(
-            world_pose_auxiliary_data(poses), separators=(",", ":")
+            world_pose_auxiliary_data(poses, identity.stream_id),
+            separators=(",", ":"),
         )
         stream.metadata_sender.send_metadata(
             "pose-estimation", overlay_data, timestamp_ms, frame_id

@@ -85,14 +85,19 @@ bool test_math_contract() {
                    std::abs(pose.world_keypoints[0].y + 0.2F) < 0.001F &&
                    std::abs(pose.world_keypoints[0].z - 0.3F) < 0.001F,
                "world landmarks retain the model's 3D coordinates");
-  const auto data = blazepose_app::poses_data_json({pose});
+  const auto data = blazepose_app::poses_data_json({pose}, "camera0");
+  ok &= expect(data.at("stream_id") == "camera0",
+               "2D metadata preserves the source stream identity");
   ok &= expect(data["poses"][0]["keypoints"].size() == 33,
                "Insight metadata contains exactly 33 body keypoints");
   ok &= expect(data["poses"][0]["keypoints"][0]["name"] == "nose",
                "Insight metadata uses BlazePose landmark names");
   ok &= expect(!data["poses"][0].contains("world_keypoints"),
                "normal pose-estimation metadata remains a 2D overlay contract");
-  const auto auxiliary = blazepose_app::world_pose_auxiliary_data_json({pose});
+  const auto auxiliary =
+      blazepose_app::world_pose_auxiliary_data_json({pose}, "camera0");
+  ok &= expect(auxiliary.at("stream_id") == "camera0",
+               "auxiliary metadata preserves the source stream identity");
   ok &= expect(auxiliary["schema_version"] == 1 && auxiliary["id"] == "world-pose" &&
                    auxiliary["renderer"] == "blazepose-3d",
                "world landmarks use the generic auxiliary visualization envelope");
@@ -161,7 +166,7 @@ bool test_cli(const std::string& binary) {
   return ok;
 }
 
-bool test_dynamic_stream_config(const std::string& binary) {
+bool test_stream_limit(const std::string& binary) {
   const fs::path config = write_config(
       "dynamic_stream_config",
       "  - id: camera0\n    url: rtsp://127.0.0.1/src0\n    codec: h264\n    insight_channel: 0\n"
@@ -171,9 +176,11 @@ bool test_dynamic_stream_config(const std::string& binary) {
       "  - id: camera4\n    url: rtsp://127.0.0.1/src4\n    codec: h264\n    insight_channel: 4\n");
   const auto result =
       spawn_and_wait(binary, {"--config", config.string(), "--validate-config-only"}, 20000);
-  const bool ok =
-      expect(result.exit_code == 0 && result.stdout_text.find("streams=5") != std::string::npos,
-             "configuration accepts more than four heterogeneous streams");
+  const bool ok = expect(
+      result.exit_code == 1 &&
+          result.stderr_text.find("streams must contain between 1 and 4 entries") !=
+              std::string::npos,
+      "configuration rejects more than four streams");
   remove_dir(config.parent_path().string());
   return ok;
 }
@@ -203,7 +210,7 @@ int main(int argc, char** argv) {
   }
   bool ok = test_math_contract();
   ok &= test_cli(argv[1]);
-  ok &= test_dynamic_stream_config(argv[1]);
+  ok &= test_stream_limit(argv[1]);
   ok &= test_duplicate_stream_identity(argv[1]);
   return ok ? 0 : 1;
 }

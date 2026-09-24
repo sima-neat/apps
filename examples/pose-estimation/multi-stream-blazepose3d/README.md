@@ -31,7 +31,7 @@ Application: latest RGB mailbox per stream ─> shared YOLO26 Model graph
              ─> 33 image + world keypoints ─> paired correlated Insight metadata
 ```
 
-The source graph and both model runners are fixed after startup. Add, remove, or edit cameras in the configuration and restart the application; there is no fixed camera-count limit in the application. Separate per-stream outputs let the source graph accept different resolutions without rebuilding a shared model graph.
+The source graph and both model runners are fixed after startup. Configure one to four cameras, then restart the application after adding, removing, or editing a stream. Separate per-stream outputs let the source graph accept different resolutions without rebuilding a shared model graph.
 
 ## Preview
 
@@ -117,7 +117,7 @@ output:
     host: <insight-host-ip>
 ```
 
-Each stream needs a unique stable `id` and `insight_channel`. Sources may have different resolutions. `pose.max_people_per_frame` bounds how many highest-confidence person boxes are sent to BlazePose per admitted frame.
+Configure one to four streams. Each stream needs a unique stable `id` and `insight_channel`. Sources may have different resolutions. `pose.max_people_per_frame` bounds how many highest-confidence person boxes are sent to BlazePose per admitted frame.
 
 `pose.temporal_filter_enabled` defaults to `true`. The per-stream filter matches poses by person-box overlap, damps small coordinate and confidence fluctuations, and adapts toward the current frame during deliberate fast motion. It filters image and world landmarks together before either metadata message is built, so the 2D overlay and 3D view remain frame-correlated and cannot drift apart. Disable it only when raw model output is required for measurement.
 
@@ -152,7 +152,7 @@ python3 "${APP_DIR}/src/python/main.py" \
 Every accepted frame produces a correlated pair of messages, including empty pose arrays when no person is selected. The existing `pose-estimation` message remains the 2D overlay contract; each pose carries its YOLO person box and 33 named image-space keypoints:
 
 ```json
-{"poses":[{"id":"pose_1","label":"person","confidence":0.91,
+{"stream_id":"entrance","poses":[{"id":"pose_1","label":"person","confidence":0.91,
   "bbox":[120,80,240,520],
   "keypoints":[{"name":"nose","x":242,"y":135,"confidence":0.98}]}]}
 ```
@@ -161,7 +161,7 @@ The separate `auxiliary-visualization` message uses the generic Insight schema
 and selects the built-in BlazePose renderer:
 
 ```json
-{"schema_version":1,"id":"world-pose","renderer":"blazepose-3d","title":"3D Pose",
+{"schema_version":1,"id":"world-pose","renderer":"blazepose-3d","title":"3D Pose","stream_id":"entrance",
   "payload":{"poses":[{"id":"pose_1","keypoints":[
     {"name":"nose","x":0.01,"y":-0.42,"z":-0.08,"confidence":0.98}
   ]}]}}
@@ -178,7 +178,7 @@ data can reuse the same envelope with a separately registered Insight renderer.
 
 The keypoint confidence is the minimum of BlazePose landmark visibility and presence after sigmoid activation. The global pose-presence output gates each ROI.
 
-The application retains the source `stream_id`, frame ID, PTS, DTS, duration, and sequence numbers in its bounded FIFO context. Detached MLA/postprocess runners do not echo all of that identity, so output order is correlated against this retained context and the original PTS/frame ID is sent to Insight. The hardware E2E tests listen on every configured metadata port and require a non-empty 2D/3D pair with an identical `(port, timestamp, frame_id)` identity.
+The application retains the source `stream_id`, frame ID, PTS, DTS, duration, and sequence numbers in its bounded FIFO context. Detached MLA/postprocess runners do not echo all of that identity, so output order is correlated against this retained context. Both metadata payloads include the original `stream_id`, and `MetadataSender` supplies the original PTS and frame ID. The hardware E2E tests listen on every configured metadata port and require the configured stream identity plus a non-empty 2D/3D pair with an identical `(port, timestamp, frame_id)` identity.
 
 ## Performance and Scheduling
 

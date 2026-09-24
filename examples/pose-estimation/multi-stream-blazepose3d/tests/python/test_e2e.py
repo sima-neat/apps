@@ -134,6 +134,9 @@ class TestE2E:
         for message in metadata.messages:
             parsed = json.loads(message.payload)
             frame = (message.port, message.timestamp_ms, message.frame_id)
+            assert parsed["data"]["stream_id"] == (
+                f"camera{message.port - metadata_port_base}"
+            )
             if message.metadata_type == "pose-estimation":
                 poses = parsed["data"]["poses"]
                 assert all(len(pose.get("keypoints", [])) == 33 for pose in poses)

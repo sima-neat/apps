@@ -2,7 +2,7 @@ models:                              # Model packages are supplied at runtime.
   detector_path: <detector-model-path> # Default: yolo26m-det-int8-b1.tar.gz.
   pose_path: <blazepose-model-path>  # Existing BlazePose 3D BF16 package.
 
-streams:                             # Any non-empty startup camera list; restart after edits.
+streams:                             # Configure one to four cameras; restart after edits.
   - id: camera0                     # Unique stable stream identity.
     url: <rtsp-url>                 # RTSP source URL.
     codec: h264                     # h264/avc or h265/hevc.

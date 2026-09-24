@@ -42,7 +42,8 @@ void write_config(const fs::path& path, const fs::path& detector, const fs::path
          << "\n    metadata_port_base: " << metadata_port_base << "\n  video_enabled: true\n";
 }
 
-bool validate_metadata(const MetadataJsonListenerResult& result, std::string& error) {
+bool validate_metadata(const MetadataJsonListenerResult& result, int metadata_port_base,
+                       std::string& error) {
   bool found_pose = false;
   bool found_world_pose = false;
   using FrameKey = std::tuple<int, int64_t, std::string>;
@@ -52,6 +53,12 @@ bool validate_metadata(const MetadataJsonListenerResult& result, std::string& er
     for (const auto& message : result.messages) {
       const auto parsed = nlohmann::json::parse(message.payload);
       const FrameKey frame{message.port, message.timestamp_ms, message.frame_id};
+      const std::string expected_stream_id =
+          "camera" + std::to_string(message.port - metadata_port_base);
+      if (parsed.at("data").at("stream_id") != expected_stream_id) {
+        error = "metadata did not preserve the configured stream identity";
+        return false;
+      }
       if (message.metadata_type == "pose-estimation") {
         const auto& poses = parsed.at("data").at("poses");
         for (const auto& pose : poses) {
@@ -159,7 +166,7 @@ int run_case(const std::string& binary, const fs::path& detector, const fs::path
     result = 1;
   } else {
     std::string error;
-    if (!validate_metadata(metadata, error)) {
+    if (!validate_metadata(metadata, metadata_port_base, error)) {
       std::cerr << "[FAIL] " << codec << " metadata: " << error << "\n";
       result = 1;
     } else {

@@ -365,10 +365,11 @@ inline Pose decode_pose(const std::vector<float>& raw_landmarks,
   return pose;
 }
 
-inline nlohmann::json poses_data_json(std::vector<Pose> poses) {
+inline nlohmann::json poses_data_json(std::vector<Pose> poses, const std::string& stream_id) {
   std::sort(poses.begin(), poses.end(),
             [](const Pose& left, const Pose& right) { return left.roi_index < right.roi_index; });
   nlohmann::json data;
+  data["stream_id"] = stream_id;
   data["poses"] = nlohmann::json::array();
   for (const Pose& pose : poses) {
     nlohmann::json keypoints = nlohmann::json::array();
@@ -405,7 +406,8 @@ auxiliary_visualization_data_json(std::string id, std::string renderer, nlohmann
   return data;
 }
 
-inline nlohmann::json world_pose_auxiliary_data_json(std::vector<Pose> poses) {
+inline nlohmann::json world_pose_auxiliary_data_json(std::vector<Pose> poses,
+                                                     const std::string& stream_id) {
   std::sort(poses.begin(), poses.end(),
             [](const Pose& left, const Pose& right) { return left.roi_index < right.roi_index; });
   nlohmann::json world_poses = nlohmann::json::array();
@@ -423,8 +425,10 @@ inline nlohmann::json world_pose_auxiliary_data_json(std::vector<Pose> poses) {
                            {"keypoints", std::move(keypoints)}});
   }
 
-  return auxiliary_visualization_data_json("world-pose", "blazepose-3d",
-                                           {{"poses", std::move(world_poses)}}, "3D Pose");
+  nlohmann::json data = auxiliary_visualization_data_json(
+      "world-pose", "blazepose-3d", {{"poses", std::move(world_poses)}}, "3D Pose");
+  data["stream_id"] = stream_id;
+  return data;
 }
 
 } // namespace blazepose_app

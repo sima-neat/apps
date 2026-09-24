@@ -67,13 +67,9 @@ def test_cli_help_and_missing_config():
     assert "config file not found" in missing.stderr
 
 
-def test_dynamic_stream_configuration_accepts_more_than_four(tmp_path: Path):
-    cfg = main.load_app_config(
-        write_config(tmp_path, [stream(index) for index in range(5)])
-    )
-    assert len(cfg.streams) == 5
-    assert cfg.streams[1].codec == "h265"
-    assert cfg.streams[4].insight_channel == 4
+def test_stream_configuration_rejects_more_than_four(tmp_path: Path):
+    with pytest.raises(ValueError, match="streams must contain between 1 and 4 entries"):
+        main.load_app_config(write_config(tmp_path, [stream(index) for index in range(5)]))
 
 
 @pytest.mark.parametrize(
@@ -120,12 +116,14 @@ def test_roi_landmark_and_metadata_contract():
     assert world_point["y"] == pytest.approx(-0.2)
     assert world_point["z"] == pytest.approx(0.3)
     assert world_point["confidence"] == pytest.approx(main.sigmoid(-2.0))
-    data = main.poses_data([pose])
+    data = main.poses_data([pose], "camera0")
+    assert data["stream_id"] == "camera0"
     assert data["poses"][0]["id"] == "pose_3"
     assert len(data["poses"][0]["keypoints"]) == 33
     assert data["poses"][0]["keypoints"][0]["name"] == "nose"
     assert "world_keypoints" not in data["poses"][0]
-    auxiliary = main.world_pose_auxiliary_data([pose])
+    auxiliary = main.world_pose_auxiliary_data([pose], "camera0")
+    assert auxiliary["stream_id"] == "camera0"
     assert auxiliary["schema_version"] == 1
     assert auxiliary["id"] == "world-pose"
     assert auxiliary["renderer"] == "blazepose-3d"
@@ -179,7 +177,8 @@ def test_publish_metadata_sends_paired_overlay_and_auxiliary_messages():
         "auxiliary-visualization",
     ]
     assert all(call[2:] == (1234, "7") for call in calls)
-    assert json.loads(calls[0][1]) == {"poses": []}
+    assert json.loads(calls[0][1]) == {"stream_id": "camera0", "poses": []}
+    assert json.loads(calls[1][1])["stream_id"] == "camera0"
     assert json.loads(calls[1][1])["payload"] == {"poses": []}
     assert stream_runtime.metadata_frames == 1
 

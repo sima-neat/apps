@@ -336,7 +336,8 @@ std::vector<StreamConfig> parse_streams(const fs::path& config_path) {
 void validate_config(const AppConfig& cfg) {
   sima_examples::require(!cfg.detector_model_path.empty(), "models.detector_path must be set");
   sima_examples::require(!cfg.pose_model_path.empty(), "models.pose_path must be set");
-  sima_examples::require(!cfg.streams.empty(), "streams must be a non-empty list");
+  sima_examples::require(!cfg.streams.empty() && cfg.streams.size() <= 4,
+                         "streams must contain between 1 and 4 entries");
   sima_examples::require(!cfg.insight_host.empty(), "output.insight.host must be set");
   sima_examples::require(cfg.latency_ms >= 0, "input.latency_ms must be >= 0");
   sima_examples::require(cfg.detector_min_score >= 0.0 && cfg.detector_min_score <= 1.0,
@@ -828,9 +829,10 @@ void publish_frame_metadata(StreamRuntime& stream, const FrameIdentity& identity
   if (stream.pose_temporal_filter_enabled) {
     poses = stream.pose_smoother.filter(std::move(poses), identity.pts_ns);
   }
-  const std::string overlay_data = blazepose_app::poses_data_json(poses).dump();
+  const std::string overlay_data =
+      blazepose_app::poses_data_json(poses, identity.stream_id).dump();
   const std::string auxiliary_data =
-      blazepose_app::world_pose_auxiliary_data_json(std::move(poses)).dump();
+      blazepose_app::world_pose_auxiliary_data_json(std::move(poses), identity.stream_id).dump();
   const int64_t timestamp_ms = identity.pts_ns >= 0 ? identity.pts_ns / 1'000'000 : -1;
   const std::string frame_id = identity.frame_id >= 0 ? std::to_string(identity.frame_id) : "";
   for (const auto& [type, data] : std::array<std::pair<const char*, const std::string*>, 2>{
