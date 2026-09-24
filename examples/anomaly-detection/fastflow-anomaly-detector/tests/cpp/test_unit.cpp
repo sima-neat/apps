@@ -104,13 +104,13 @@ int main(int argc, char** argv) {
   {
     const fs::path scratch = create_test_scratch_dir(kExampleName, "config");
     const fs::path invalid = scratch / "invalid.yaml";
-    write_e2e_config(kExampleName, invalid, {{"model.normalize.stddev", "[1, 0, 1]"}});
+    write_e2e_config(kExampleName, invalid, {{"model.normalize.stddev", "[-1, 1, 1]"}});
     const ProcessResult r =
         spawn_and_wait(binary, {"--config", invalid.string(), "--validate-config-only"}, 20000);
     if (r.exit_code == 0) {
       std::cerr << "[FAIL] invalid config: expected nonzero exit\n";
       ++failures;
-    } else if (r.stderr_text.find("[ERR] model.normalize.stddev must not contain zero") ==
+    } else if (r.stderr_text.find("[ERR] model.normalize.stddev must be > 0") ==
                std::string::npos) {
       std::cerr << "[FAIL] invalid config: stderr does not explain failure\n" << r.stderr_text;
       ++failures;

@@ -130,8 +130,9 @@ Config load_config(const fs::path& path) {
   sima_examples::require(!cfg.model_path.empty(), "model.path must be set");
   sima_examples::require(!cfg.rtsp_url.empty(), "source.rtsp_url must be set");
   sima_examples::require(!cfg.insight_host.empty(), "output.insight.host must be set");
-  sima_examples::require(std::find(cfg.stddev.begin(), cfg.stddev.end(), 0.0F) == cfg.stddev.end(),
-                         "model.normalize.stddev must not contain zero");
+  sima_examples::require(
+      std::all_of(cfg.stddev.begin(), cfg.stddev.end(), [](float s) { return s > 0.0F; }),
+      "model.normalize.stddev must be > 0");
   sima_examples::require(cfg.frames >= 0, "inference.frames must be >= 0");
   sima_examples::require(cfg.threshold >= 0.0 && cfg.threshold <= 1.0,
                          "inference.threshold must be between 0 and 1");

@@ -99,8 +99,8 @@ def load_config(path: Path) -> Config:
     for key, value in required:
         if not value:
             raise ValueError(f"{key} must be set")
-    if 0.0 in cfg.stddev:
-        raise ValueError("model.normalize.stddev must not contain zero")
+    if not all(s > 0 for s in cfg.stddev):
+        raise ValueError("model.normalize.stddev must be > 0")
     if cfg.frames < 0:
         raise ValueError("inference.frames must be >= 0")
     if not 0.0 <= cfg.threshold <= 1.0:
