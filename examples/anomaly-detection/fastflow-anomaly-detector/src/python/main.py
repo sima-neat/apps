@@ -54,6 +54,15 @@ def rgb_stats(value, key: str) -> list[float]:
     raise ValueError(f"{key} must be three numbers, one per RGB channel")
 
 
+def bool_or(raw: dict, key: str, default: bool) -> bool:
+    value = raw.get(key, default)
+    if value is None:
+        return default
+    if not isinstance(value, bool):
+        raise TypeError(f"{key} must be true or false")
+    return value
+
+
 def load_config(path: Path) -> Config:
     raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     model = raw.get("model") or {}
@@ -68,12 +77,12 @@ def load_config(path: Path) -> Config:
         mean=rgb_stats(normalize.get("mean", DEFAULT_MEAN), "model.normalize.mean"),
         stddev=rgb_stats(normalize.get("stddev", DEFAULT_STDDEV), "model.normalize.stddev"),
         rtsp_url=str(source.get("rtsp_url") or ""),
-        tcp=bool(source.get("tcp", True)),
+        tcp=bool_or(source, "tcp", True),
         latency_ms=int(source.get("latency_ms", 100)),
         frames=int(inference.get("frames", 0)),
         threshold=float(inference.get("threshold", 0.5)),
         min_region_px=int(inference.get("min_region_px", 300)),
-        profile=bool(runtime.get("profile", False)),
+        profile=bool_or(runtime, "profile", False),
         profile_interval=int(runtime.get("profile_interval", 100)),
         insight_host=str(insight.get("host") or ""),
         video_port=int(insight.get("video_port", 9000)),
