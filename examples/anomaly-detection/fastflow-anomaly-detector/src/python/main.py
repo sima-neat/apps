@@ -54,6 +54,15 @@ def rgb_stats(value, key: str) -> list[float]:
     raise ValueError(f"{key} must be three numbers, one per RGB channel")
 
 
+def int_or(raw: dict, key: str, default: int) -> int:
+    value = raw.get(key, default)
+    if value is None:
+        return default
+    if not isinstance(value, int):
+        raise TypeError(f"{key} must be an integer")
+    return value
+
+
 def bool_or(raw: dict, key: str, default: bool) -> bool:
     value = raw.get(key, default)
     if value is None:
@@ -78,18 +87,18 @@ def load_config(path: Path) -> Config:
         stddev=rgb_stats(normalize.get("stddev", DEFAULT_STDDEV), "model.normalize.stddev"),
         rtsp_url=str(source.get("rtsp_url") or ""),
         tcp=bool_or(source, "tcp", True),
-        latency_ms=int(source.get("latency_ms", 100)),
-        frames=int(inference.get("frames", 0)),
+        latency_ms=int_or(source, "latency_ms", 100),
+        frames=int_or(inference, "frames", 0),
         threshold=float(inference.get("threshold", 0.5)),
-        min_region_px=int(inference.get("min_region_px", 300)),
+        min_region_px=int_or(inference, "min_region_px", 300),
         profile=bool_or(runtime, "profile", False),
-        profile_interval=int(runtime.get("profile_interval", 100)),
+        profile_interval=int_or(runtime, "profile_interval", 100),
         insight_host=str(insight.get("host") or ""),
-        video_port=int(insight.get("video_port", 9000)),
+        video_port=int_or(insight, "video_port", 9000),
         heat_max=float(output.get("heat_max", 0.7)),
         alpha=float(output.get("alpha", 0.55)),
         save_dir=str(output.get("save_dir") or ""),
-        save_every=int(output.get("save_every", 0)),
+        save_every=int_or(output, "save_every", 0),
     )
     required = (
         ("model.path", cfg.model_path),
