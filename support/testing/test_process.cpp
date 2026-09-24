@@ -5,6 +5,8 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <chrono>
+#include <poll.h>
 #include <iostream>
 #include <signal.h>
 #include <sstream>
@@ -126,11 +128,45 @@ std::string read_fd(int fd) {
   std::array<char, 4096> buf;
   while (true) {
     const ssize_t n = ::read(fd, buf.data(), buf.size());
+    if (n < 0 && errno == EINTR)
+      continue;
     if (n <= 0)
       break;
     result.append(buf.data(), static_cast<size_t>(n));
   }
   return result;
+}
+
+
+// A single reader owns each descriptor. Read one bounded chunk after poll says
+// it is ready, then return to the child-exit/timeout checks. Re-polling drains
+// queued data without waiting on either empty pipe.
+void drain_ready_pipes(std::array<pollfd, 2>& pipes, std::string& out, std::string& err,
+                       std::string& capture_error, int wait_ms) {
+  const int ready = ::poll(pipes.data(), pipes.size(), wait_ms);
+  if (ready < 0) {
+    if (errno != EINTR && capture_error.empty())
+      capture_error = std::string("poll failed: ") + std::strerror(errno);
+    return;
+  }
+  if (ready == 0)
+    return;
+  std::array<char, 4096> buffer;
+  std::string* destinations[] = {&out, &err};
+  for (std::size_t i = 0; i < pipes.size(); ++i) {
+    auto& pipe = pipes[i];
+    if (pipe.fd < 0 || pipe.revents == 0)
+      continue;
+    const ssize_t count = ::read(pipe.fd, buffer.data(), buffer.size());
+    if (count > 0) {
+      destinations[i]->append(buffer.data(), static_cast<std::size_t>(count));
+    } else if (count == 0 || (errno != EINTR && errno != EAGAIN)) {
+      if (count < 0 && capture_error.empty())
+        capture_error = std::string("pipe read failed: ") + std::strerror(errno);
+      ::close(pipe.fd);
+      pipe.fd = -1;
+    }
+  }
 }
 
 std::string shell_quote(const std::string& value) {
@@ -229,31 +265,33 @@ ProcessResult spawn_and_wait(const std::string& binary, const std::vector<std::s
   ::close(stdout_pipe[1]);
   ::close(stderr_pipe[1]);
 
-  // Wait with timeout
-  int elapsed_ms = 0;
+  // Drain while waiting so a full stdout or stderr pipe cannot block startup.
+  std::array<pollfd, 2> pipes{{{stdout_pipe[0], POLLIN, 0}, {stderr_pipe[0], POLLIN, 0}}};
+  std::string out, err, capture_error;
+  const auto started = std::chrono::steady_clock::now();
+  bool timed_out = false;
   int status = 0;
   while (!child_exited(pid, status)) {
+    const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - started).count();
     if (timeout_ms > 0 && elapsed_ms >= timeout_ms) {
       terminate_child(pid);
-      auto out = read_fd(stdout_pipe[0]);
-      auto err = read_fd(stderr_pipe[0]);
-      ::close(stdout_pipe[0]);
-      ::close(stderr_pipe[0]);
-      err += "\n[test_process] killed after timeout (" + std::to_string(timeout_ms) + "ms)";
-      ProcessResult result{-1, std::move(out), std::move(err)};
-      write_process_artifacts(artifact_dir, command, result);
-      return result;
+      timed_out = true;
+      break;
     }
-    ::usleep(50000); // 50ms
-    elapsed_ms += 50;
+    drain_ready_pipes(pipes, out, err, capture_error, 50);
   }
+  // Exit can precede our final reads. Keep both pipes active until EOF so no
+  // trailing data is lost, including buffered output from a timed-out child.
+  while (pipes[0].fd >= 0 || pipes[1].fd >= 0)
+    drain_ready_pipes(pipes, out, err, capture_error, 50);
 
-  auto out = read_fd(stdout_pipe[0]);
-  auto err = read_fd(stderr_pipe[0]);
-  ::close(stdout_pipe[0]);
-  ::close(stderr_pipe[0]);
-
-  int exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+  if (timed_out)
+    err += "\n[test_process] killed after timeout (" + std::to_string(timeout_ms) + "ms)";
+  if (!capture_error.empty())
+    err += "\n[test_process] " + capture_error;
+  const int exit_code = !timed_out && capture_error.empty() && WIFEXITED(status)
+                            ? WEXITSTATUS(status) : -1;
   ProcessResult result{exit_code, std::move(out), std::move(err)};
   write_process_artifacts(artifact_dir, command, result);
   return result;
