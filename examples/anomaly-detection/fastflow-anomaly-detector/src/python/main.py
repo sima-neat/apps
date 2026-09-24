@@ -109,6 +109,8 @@ def load_config(path: Path) -> Config:
         raise ValueError("inference.min_region_px must be > 0")
     if cfg.profile_interval <= 0:
         raise ValueError("runtime.profile_interval must be > 0")
+    if not 0 < cfg.video_port <= 65535:
+        raise ValueError("output.insight.video_port must be in [1, 65535]")
     if cfg.save_every < 0:
         raise ValueError("output.save_every must be >= 0")
     if not 0.0 <= cfg.alpha <= 1.0:
