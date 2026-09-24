@@ -96,6 +96,8 @@ def load_config(path: Path) -> Config:
         raise ValueError("inference.threshold must be between 0 and 1")
     if cfg.min_region_px <= 0:
         raise ValueError("inference.min_region_px must be > 0")
+    if cfg.profile_interval <= 0:
+        raise ValueError("runtime.profile_interval must be > 0")
     if not 0.0 <= cfg.alpha <= 1.0:
         raise ValueError("output.alpha must be between 0 and 1")
     if cfg.heat_max <= cfg.threshold:

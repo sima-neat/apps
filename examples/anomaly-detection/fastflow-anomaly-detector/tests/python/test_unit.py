@@ -97,6 +97,7 @@ class TestConfig:
             ({"model": {"normalize": {"stddev": [1.0, 0.0, 1.0]}}}, "model.normalize.stddev"),
             ({"inference": {"threshold": 1.5}}, "inference.threshold"),
             ({"inference": {"min_region_px": 0}}, "inference.min_region_px"),
+            ({"runtime": {"profile_interval": 0}}, "runtime.profile_interval"),
         ],
     )
     def test_invalid_values_are_rejected(self, tmp_path, overrides, message):

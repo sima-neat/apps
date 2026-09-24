@@ -135,6 +135,7 @@ Config load_config(const fs::path& path) {
   sima_examples::require(cfg.threshold >= 0.0 && cfg.threshold <= 1.0,
                          "inference.threshold must be between 0 and 1");
   sima_examples::require(cfg.min_region_px > 0, "inference.min_region_px must be > 0");
+  sima_examples::require(cfg.profile_interval > 0, "runtime.profile_interval must be > 0");
   sima_examples::require(cfg.alpha >= 0.0 && cfg.alpha <= 1.0,
                          "output.alpha must be between 0 and 1");
   sima_examples::require(cfg.heat_max > cfg.threshold,
@@ -432,7 +433,7 @@ void run(const Config& cfg) {
             (fs::path(cfg.save_dir) / ("frame_" + std::to_string(processed) + ".jpg")).string(),
             frame);
       }
-      if (cfg.profile && cfg.profile_interval > 0 && processed % cfg.profile_interval == 0) {
+      if (cfg.profile && processed % cfg.profile_interval == 0) {
         const double elapsed_s = (sima_examples::time_ms() - window_start_ms) / 1000.0;
         std::cout << cv::format("[profile] frames=%d output_fps=%.1f avg_regions=%.2f",
                                 cfg.profile_interval, cfg.profile_interval / elapsed_s,
