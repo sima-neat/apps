@@ -510,6 +510,23 @@ def poses_data(poses: list[dict[str, Any]]) -> dict[str, Any]:
     return {"poses": published}
 
 
+def auxiliary_visualization_data(
+    view_id: str,
+    renderer: str,
+    payload: dict[str, Any],
+    title: str | None = None,
+) -> dict[str, Any]:
+    data = {
+        "schema_version": 1,
+        "id": view_id,
+        "renderer": renderer,
+        "payload": payload,
+    }
+    if title is not None:
+        data["title"] = title
+    return data
+
+
 def world_pose_auxiliary_data(poses: list[dict[str, Any]]) -> dict[str, Any]:
     world_poses = []
     for pose in sorted(poses, key=lambda item: int(item["roi_index"])):
@@ -528,13 +545,9 @@ def world_pose_auxiliary_data(poses: list[dict[str, Any]]) -> dict[str, Any]:
                 ],
             }
         )
-    return {
-        "schema_version": 1,
-        "id": "world-pose",
-        "renderer": "blazepose-3d",
-        "title": "3D Pose",
-        "payload": {"poses": world_poses},
-    }
+    return auxiliary_visualization_data(
+        "world-pose", "blazepose-3d", {"poses": world_poses}, "3D Pose"
+    )
 
 
 def rtsp_codec(codec: str):
@@ -1219,39 +1232,22 @@ def dispatch_pose_jobs(runtime: AppRuntime, cfg: AppConfig) -> None:
             requested_rois = [
                 square_roi(box, cfg.roi_scale) for box in job.people
             ]
-            plan = batch_crop_plan(
-                requested_rois,
-                int(rgb_view.shape[1]),
-                int(rgb_view.shape[0]),
-            )
-            if plan is None:
-                publish_metadata(stream, job.identity, [])
-                continue
-            image, planned_rois = plan
-            x, y, width, height = image
-            crop = np.array(
-                rgb_view[y : y + height, x : x + width],
-                dtype=np.uint8,
-                copy=True,
-                order="C",
-            )
             output = pyneat.stages.preproc(
-                [crop],
+                [rgb_view],
                 runtime.pose_model,
                 rois=[
-                    pyneat.PreprocessRoi(0, *relative_roi)
-                    for _, relative_roi in planned_rois
+                    pyneat.PreprocessRoi(0, *roi) for roi in requested_rois
                 ],
                 image_format=pyneat.PixelFormat.RGB,
                 copy=False,
             )
-            if len(output) != len(planned_rois):
+            if len(output) != len(requested_rois):
                 raise RuntimeError(
                     "BlazePose Preproc output count does not match ROI count"
                 )
             prepared_inputs = []
-            for tensor, (person_index, _) in zip(output, planned_rois, strict=True):
-                affine = offset_affine(affine_from_tensor(tensor), x, y)
+            for person_index, tensor in enumerate(output):
+                affine = affine_from_tensor(tensor)
                 # Detached asynchronous Runs may retain their input after push().
                 # Give each ROI independent EV74 storage before enqueueing.
                 prepared_inputs.append(

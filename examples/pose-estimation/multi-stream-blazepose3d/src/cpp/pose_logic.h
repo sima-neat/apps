@@ -24,6 +24,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace blazepose_app {
@@ -247,6 +248,19 @@ inline nlohmann::json poses_data_json(std::vector<Pose> poses) {
   return data;
 }
 
+inline nlohmann::json auxiliary_visualization_data_json(
+    std::string id, std::string renderer, nlohmann::json payload,
+    std::optional<std::string> title = std::nullopt) {
+  nlohmann::json data = {{"schema_version", 1},
+                         {"id", std::move(id)},
+                         {"renderer", std::move(renderer)},
+                         {"payload", std::move(payload)}};
+  if (title.has_value()) {
+    data["title"] = std::move(*title);
+  }
+  return data;
+}
+
 inline nlohmann::json world_pose_auxiliary_data_json(std::vector<Pose> poses) {
   std::sort(poses.begin(), poses.end(),
             [](const Pose& left, const Pose& right) { return left.roi_index < right.roi_index; });
@@ -265,11 +279,8 @@ inline nlohmann::json world_pose_auxiliary_data_json(std::vector<Pose> poses) {
                            {"keypoints", std::move(keypoints)}});
   }
 
-  return {{"schema_version", 1},
-          {"id", "world-pose"},
-          {"renderer", "blazepose-3d"},
-          {"title", "3D Pose"},
-          {"payload", {{"poses", std::move(world_poses)}}}};
+  return auxiliary_visualization_data_json(
+      "world-pose", "blazepose-3d", {{"poses", std::move(world_poses)}}, "3D Pose");
 }
 
 } // namespace blazepose_app

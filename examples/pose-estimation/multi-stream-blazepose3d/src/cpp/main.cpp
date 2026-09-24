@@ -1089,29 +1089,19 @@ void dispatch_pose_jobs(AppRuntime& app, const AppConfig& cfg) {
       for (const blazepose_app::Box& person : job.people) {
         requested_rois.push_back(blazepose_app::square_roi(person, cfg.roi_scale));
       }
-      const auto plan =
-          blazepose_app::batch_crop_plan(requested_rois, rgb_view->mat.cols, rgb_view->mat.rows);
-      if (!plan.has_value()) {
-        publish_frame_metadata(stream, job.identity, {});
-        continue;
-      }
-      const cv::Rect image_rect(plan->image.x, plan->image.y, plan->image.width,
-                                plan->image.height);
-      const cv::Mat crop_view = rgb_view->mat(image_rect);
-      std::vector<neat::PreprocessRoi> crop_rois;
-      crop_rois.reserve(plan->rois.size());
-      for (const blazepose_app::Roi& roi : plan->rois) {
-        crop_rois.push_back({0, roi.x, roi.y, roi.width, roi.height});
+      std::vector<neat::PreprocessRoi> pose_rois;
+      pose_rois.reserve(requested_rois.size());
+      for (const blazepose_app::Roi& roi : requested_rois) {
+        pose_rois.push_back({0, roi.x, roi.y, roi.width, roi.height});
       }
       const neat::TensorList output =
-          neat::stages::Preproc(std::vector<cv::Mat>{crop_view}, *app.pose_model, crop_rois);
-      if (output.size() != plan->indices.size()) {
+          neat::stages::Preproc(std::vector<cv::Mat>{rgb_view->mat}, *app.pose_model, pose_rois);
+      if (output.size() != requested_rois.size()) {
         throw std::runtime_error("BlazePose Preproc output count does not match ROI count");
       }
       for (std::size_t index = 0; index < output.size(); ++index) {
-        const std::size_t person_index = plan->indices[index];
-        const blazepose_app::Affine affine = blazepose_app::offset_affine(
-            affine_from_tensor(output[index]), plan->image.x, plan->image.y);
+        const std::size_t person_index = index;
+        const blazepose_app::Affine affine = affine_from_tensor(output[index]);
         // Detached asynchronous Runs may retain their input after push(). Give
         // each ROI independent EV74 storage so Preproc can recycle its pool.
         prepared_inputs.push_back({static_cast<int>(person_index), job.people[person_index], affine,

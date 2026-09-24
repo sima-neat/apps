@@ -166,6 +166,11 @@ and selects the built-in BlazePose renderer:
 The two message types are sent while holding the same per-stream metadata lock,
 so one channel cannot interleave identities from different frames.
 
+The envelope builder accepts any renderer name and JSON object; it does not know
+about BlazePose fields. This example's world-pose helper supplies the
+`blazepose-3d` payload, while point clouds, meshes, trajectories, or other 3D
+data can reuse the same envelope with a separately registered Insight renderer.
+
 The keypoint confidence is the minimum of BlazePose landmark visibility and presence after sigmoid activation. The global pose-presence output gates each ROI.
 
 The application retains the source `stream_id`, frame ID, PTS, DTS, duration, and sequence numbers in its bounded FIFO context. Detached MLA/postprocess runners do not echo all of that identity, so output order is correlated against this retained context and the original PTS/frame ID is sent to Insight. The hardware E2E tests listen on every configured metadata port and require a non-empty 2D/3D pair with an identical `(port, timestamp, frame_id)` identity.
@@ -178,7 +183,7 @@ The application retains the source `stream_id`, frame ID, PTS, DTS, duration, an
 - Video uses H.264 or H.265 encoded passthrough. The application does not draw on frames or re-encode them.
 - The current public `VideoConvert` node performs the one NV12-to-RGB conversion on A65 after admission. The RGB frame remains holder-backed in application code; Python passes the `Tensor` directly and C++ maps a non-owning `cv::Mat` view.
 - YOLO26 preprocessing stays inside the shared `Model::graph()` route; the application pushes each correlated RGB frame directly into that runner.
-- The public `stages::Preproc(..., rois)` API preprocesses the smallest crop containing the selected BlazePose ROIs in one batched call. C++ passes a non-owning RGB crop view; Python materializes a packed crop because its binding requires contiguous HWC input. The crop origin is composed into each returned affine before publishing frame-relative keypoints. Full RGB frames are not cloned.
+- The public `stages::Preproc(..., rois)` API receives the fixed-size source RGB frame and all selected BlazePose ROIs in one batched call. Keeping the input dimensions stable lets Neat reuse one preprocessing runner instead of caching a new graph for every changing person-box crop; returned affine metadata still maps landmarks directly into source-frame coordinates. Full RGB frames are not cloned.
 
 The shutdown summary reports source and detector frames, selected and completed ROIs, both mailbox drop counts, timed-out jobs, metadata FPS, and pose FPS. These are application counters, not node profiling or graph visualization.
 

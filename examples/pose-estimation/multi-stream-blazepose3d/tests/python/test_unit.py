@@ -130,8 +130,22 @@ def test_roi_landmark_and_metadata_contract():
     assert auxiliary["renderer"] == "blazepose-3d"
     assert len(auxiliary["payload"]["poses"][0]["keypoints"]) == 33
     assert auxiliary["payload"]["poses"][0]["keypoints"][0]["name"] == "nose"
+    point_cloud = {
+        "points": [{"x": 0.1, "y": 0.2, "z": 0.3, "value": 7}],
+        "axes": ["east", "north", "up"],
+    }
+    generic = main.auxiliary_visualization_data(
+        "depth-cloud", "point-cloud-3d", point_cloud
+    )
+    assert generic == {
+        "schema_version": 1,
+        "id": "depth-cloud",
+        "renderer": "point-cloud-3d",
+        "payload": point_cloud,
+    }
     json.dumps(data)
     json.dumps(auxiliary)
+    json.dumps(generic)
 
 
 def test_frame_identity_falls_back_through_source_sequence_fields():

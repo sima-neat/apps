@@ -99,6 +99,16 @@ bool test_math_contract() {
   ok &= expect(auxiliary["payload"]["poses"][0]["keypoints"].size() == 33 &&
                    auxiliary["payload"]["poses"][0]["keypoints"][0]["name"] == "nose",
                "auxiliary payload contains 33 named world keypoints");
+  const nlohmann::json point_cloud = {
+      {"points", {{{"x", 0.1}, {"y", 0.2}, {"z", 0.3}, {"value", 7}}}},
+      {"axes", {"east", "north", "up"}},
+  };
+  const auto generic = blazepose_app::auxiliary_visualization_data_json(
+      "depth-cloud", "point-cloud-3d", point_cloud);
+  ok &= expect(generic["schema_version"] == 1 && generic["id"] == "depth-cloud" &&
+                   generic["renderer"] == "point-cloud-3d" && generic["payload"] == point_cloud &&
+                   !generic.contains("title"),
+               "generic auxiliary envelope preserves an arbitrary renderer payload");
   ok &= expect(blazepose_app::select_frame_id(9, 8, 7, 6) == 9 &&
                    blazepose_app::select_frame_id(-1, 8, 7, 6) == 8 &&
                    blazepose_app::select_frame_id(-1, -1, 7, 6) == 7 &&
