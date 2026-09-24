@@ -8,13 +8,15 @@
 | Difficulty | Advanced |
 | Tags | blazepose, yolo26, keypoints, rtsp, multistream, insight |
 | Languages | C++, Python |
-| Status | experimental |
+| Status | stable |
 | Binary Name | multi-stream-blazepose3d |
 | Model | YOLO26 detection and BlazePose Heavy 3D |
 
 ## Concept
 
-This example detects people in any non-empty startup-configured set of RTSP streams, runs BlazePose on the selected person regions, and publishes both 33 image-space keypoints and 33 world-space keypoints per pose to Insight. C++ and Python use the same configuration, graph topology, scheduling policy, ROI transform, and metadata schemas.
+Detects people across RTSP streams with shared YOLO26 and BlazePose models, then publishes frame-correlated 2D landmarks and 3D world landmarks to separate Insight channels.
+
+C++ and Python use the same configuration, graph topology, scheduling policy, ROI transform, and metadata schemas.
 
 One source graph owns every RTSP input, encoded-video branch, decoder, admission edge, RGB conversion, and output. Frames stay NV12 through decode and freshness admission, then each admitted frame is converted once to packed RGB. Application-owned asynchronous queues feed one shared YOLO26 runner and one shared BlazePose runner through public push/pull APIs.
 
@@ -33,7 +35,7 @@ The source graph and both model runners are fixed after startup. Add, remove, or
 
 ## Preview
 
-![Multi-stream pose preview](../../../portal/assets/examples/pose-estimation/multi-stream-pose-estimator/image.png)
+![Multi-stream BlazePose 3D preview](../../../portal/assets/examples/pose-estimation/multi-stream-blazepose3d/image.png)
 
 ## Prerequisites
 
@@ -48,6 +50,7 @@ Install the latest Neat Apps runtime and enter the installed bundle:
 ```bash
 sima-cli neat install apps
 cd prebuilt-apps
+export APP_DIR=examples/pose-estimation/multi-stream-blazepose3d
 ```
 
 Run the remaining commands from `prebuilt-apps/`.
@@ -76,7 +79,7 @@ sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/mod
 cd ..
 ```
 
-Place the existing `blazepose_heavy_3d_bf16_nopad_neat_mpk.tar.gz` package in `models/`. This experimental example intentionally does not publish or download that package; its versioned custom Model Zoo publication remains a release prerequisite.
+Place the existing `blazepose_heavy_3d_bf16_nopad_neat_mpk.tar.gz` package in `models/`. Its versioned custom Model Zoo publication remains a release prerequisite.
 
 ## Model Contracts
 
@@ -92,7 +95,7 @@ The application sends the original encoded stream plus two correlated metadata m
 
 ## Configure
 
-Edit `examples/pose-estimation/multi-stream-blazepose3d/src/common/config.yaml`:
+Edit `${APP_DIR}/src/common/config.yaml`:
 
 ```yaml
 models:
@@ -123,25 +126,25 @@ Each stream needs a unique stable `id` and `insight_channel`. Sources may have d
 Validate the configuration without opening streams:
 
 ```bash
-./examples/pose-estimation/multi-stream-blazepose3d/src/cpp/pre-built/multi-stream-blazepose3d \
-  --config examples/pose-estimation/multi-stream-blazepose3d/src/common/config.yaml \
+"${APP_DIR}/src/cpp/pre-built/multi-stream-blazepose3d" \
+  --config "${APP_DIR}/src/common/config.yaml" \
   --validate-config-only
 ```
 
 ### C++
 
 ```bash
-./examples/pose-estimation/multi-stream-blazepose3d/src/cpp/pre-built/multi-stream-blazepose3d \
-  --config examples/pose-estimation/multi-stream-blazepose3d/src/common/config.yaml
+"${APP_DIR}/src/cpp/pre-built/multi-stream-blazepose3d" \
+  --config "${APP_DIR}/src/common/config.yaml"
 ```
 
 ### Python
 
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/pose-estimation/multi-stream-blazepose3d/src/python/requirements.txt
-python3 examples/pose-estimation/multi-stream-blazepose3d/src/python/main.py \
-  --config examples/pose-estimation/multi-stream-blazepose3d/src/common/config.yaml
+pip install -r "${APP_DIR}/src/python/requirements.txt"
+python3 "${APP_DIR}/src/python/main.py" \
+  --config "${APP_DIR}/src/common/config.yaml"
 ```
 
 ## Output Metadata
