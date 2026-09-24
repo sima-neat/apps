@@ -39,6 +39,12 @@ CONFIG_ENV_VARS=(
   SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT
   SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT
   NEAT_APPS_SKIP_MODEL_DOWNLOAD
+  SIMANEAT_APPS_TEST_HD_STREAMS
+  SIMANEAT_APPS_TEST_HD_SOURCE_FPS
+  SIMANEAT_APPS_TEST_HD_MEASURE_FRAMES
+  SIMANEAT_APPS_TEST_HD_PROFILE
+  SIMANEAT_APPS_TEST_HD_DECODER_BUFFERS
+  SIMANEAT_APPS_TEST_HD_INPUT_BUFFERS
 )
 
 PROCESS_ENV_WAS_SET=()
@@ -791,7 +797,7 @@ run_ctest() {
     OVERALL_RC=1
   fi
   if [[ "${STRICT_MODE}" == "1" && "${label}" == "e2e" ]]; then
-    if rg -q '\*\*\*Skipped|Not Run' "${log_file}"; then
+    if grep -Eq '\*\*\*Skipped|Not Run' "${log_file}"; then
       echo "  [FAIL] Strict mode is enabled but C++ e2e tests were skipped."
       OVERALL_RC=1
     fi

@@ -727,3 +727,49 @@ def test_download_models_resolves_modelzoo_version_from_manifest(
     assert sima_cli_args.read_text(encoding="utf-8").strip() == (
         f"modelzoo -v {expected_version} get resnet_50"
     )
+
+
+@pytest.mark.parametrize("log,strict,expected", [
+    ("1/1 Test #1: detector.e2e ... Passed", "1", 0),
+    ("1/1 Test #1: detector.e2e ... ***Skipped", "1", 1),
+    ("1/1 Test #1: detector.e2e ... Not Run", "1", 1),
+    ("1/1 Test #1: detector.e2e ... ***Skipped", "0", 0),
+])
+def test_cpp_strict_skip_detection_without_ripgrep(tmp_path, log, strict, expected):
+    """Execute the production CTest wrapper with only standard board tools."""
+    import shutil
+
+    script = (APPS_ROOT / "tests/test.sh").read_text()
+    start = script.index("run_ctest() {\n")
+    end = script.index('\nif [[ "${RUN_CPP}"', start)
+    function = script[start:end]
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    for tool in ("grep", "tee", "tr"):
+        resolved = shutil.which(tool)
+        assert resolved, f"required test tool unavailable: {tool}"
+        (tools / tool).symlink_to(resolved)
+    build = tmp_path / "build"
+    build.mkdir()
+    harness = r'''
+set -euo pipefail
+export_cpp_model_files() { return 0; }
+scope_tool() { printf '%s\n' 'detector\.e2e'; }
+start_summary_log() { printf '%s\n' "$LOG_FILE"; }
+ctest() { printf '%s\n' "$CASE_LOG"; }
+OVERALL_RC=0
+@FUNCTION@
+run_ctest e2e
+exit "$OVERALL_RC"
+'''.replace("@FUNCTION@", function)
+    result = subprocess.run(
+        [shutil.which("bash"), "-c", harness],
+        env={**os.environ, "PATH": str(tools), "ROOT_DIR": str(tmp_path),
+             "BUILD_DIR": str(build), "LOG_FILE": str(tmp_path / "ctest.log"),
+             "CASE_LOG": log, "STRICT_MODE": strict},
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == expected, result.stdout + result.stderr
+    assert "command not found" not in result.stderr
+    if expected:
+        assert "C++ e2e tests were skipped" in result.stdout
