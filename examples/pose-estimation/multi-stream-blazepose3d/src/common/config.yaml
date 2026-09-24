@@ -23,6 +23,7 @@ pose:
   max_people_per_frame: 4           # Highest-confidence people sent to BlazePose.
   roi_scale: 1.65                   # Square ROI expansion around each person box.
   presence_threshold: 0.50          # Global BlazePose presence threshold.
+  temporal_filter_enabled: true     # Smooth confidence and coordinates once for matched 2D/3D poses.
   job_timeout_ms: 1000              # Publish completed poses when this deadline expires.
   max_pending_jobs: 64              # Aggregate bound across all streams.
 

@@ -85,6 +85,7 @@ struct AppConfig {
   int max_people_per_frame = 4;
   double roi_scale = 1.65;
   double pose_presence_threshold = 0.50;
+  bool pose_temporal_filter_enabled = true;
   int pose_job_timeout_ms = 1000;
   int max_pending_jobs = 64;
   int frame_limit = 0;
@@ -153,6 +154,8 @@ struct StreamRuntime {
   int fps = 0;
   std::unique_ptr<neat::MetadataSender> metadata_sender;
   std::mutex metadata_mutex;
+  blazepose_app::PoseSmoother pose_smoother;
+  bool pose_temporal_filter_enabled = true;
   std::atomic<int> metadata_frames{0};
   std::atomic<std::uint64_t> source_frames{0};
   std::atomic<std::uint64_t> detector_frames{0};
@@ -384,6 +387,7 @@ AppConfig load_app_config(const fs::path& config_path) {
   cfg.max_people_per_frame = raw.int_or("pose.max_people_per_frame", 4);
   cfg.roi_scale = raw.double_or("pose.roi_scale", 1.65);
   cfg.pose_presence_threshold = raw.double_or("pose.presence_threshold", 0.50);
+  cfg.pose_temporal_filter_enabled = raw.bool_or("pose.temporal_filter_enabled", true);
   cfg.pose_job_timeout_ms = raw.int_or("pose.job_timeout_ms", 1000);
   cfg.max_pending_jobs = raw.int_or("pose.max_pending_jobs", 64);
   cfg.frame_limit = raw.int_or("runtime.frames", 0);
@@ -657,6 +661,7 @@ void initialize_streams(AppRuntime& app, const AppConfig& cfg) {
     stream->index = static_cast<int>(index);
     stream->config = cfg.streams[index];
     stream->source_options = probe_source(cfg, *stream);
+    stream->pose_temporal_filter_enabled = cfg.pose_temporal_filter_enabled;
     max_width = std::max(max_width, stream->width);
     max_height = std::max(max_height, stream->height);
 
@@ -819,12 +824,15 @@ FrameIdentity identity_from_sample(const neat::Sample& sample) {
 
 void publish_frame_metadata(StreamRuntime& stream, const FrameIdentity& identity,
                             std::vector<blazepose_app::Pose> poses) {
+  std::lock_guard<std::mutex> lock(stream.metadata_mutex);
+  if (stream.pose_temporal_filter_enabled) {
+    poses = stream.pose_smoother.filter(std::move(poses), identity.pts_ns);
+  }
   const std::string overlay_data = blazepose_app::poses_data_json(poses).dump();
   const std::string auxiliary_data =
       blazepose_app::world_pose_auxiliary_data_json(std::move(poses)).dump();
   const int64_t timestamp_ms = identity.pts_ns >= 0 ? identity.pts_ns / 1'000'000 : -1;
   const std::string frame_id = identity.frame_id >= 0 ? std::to_string(identity.frame_id) : "";
-  std::lock_guard<std::mutex> lock(stream.metadata_mutex);
   for (const auto& [type, data] : std::array<std::pair<const char*, const std::string*>, 2>{
            {{"pose-estimation", &overlay_data}, {"auxiliary-visualization", &auxiliary_data}}}) {
     std::string error;

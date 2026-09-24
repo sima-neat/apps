@@ -99,6 +99,150 @@ struct Pose {
   std::array<WorldKeypoint, kBodyLandmarkCount> world_keypoints{};
 };
 
+struct PoseSmoothingOptions {
+  float position_alpha = 0.45F;
+  float confidence_alpha = 0.20F;
+  float fast_motion_alpha = 0.90F;
+  float fast_motion_threshold = 0.08F;
+  float minimum_match_iou = 0.15F;
+  int reset_after_ms = 250;
+};
+
+inline float box_iou(const Box& left, const Box& right) {
+  const float intersection_width =
+      std::max(0.0F, std::min(left.x2, right.x2) - std::max(left.x1, right.x1));
+  const float intersection_height =
+      std::max(0.0F, std::min(left.y2, right.y2) - std::max(left.y1, right.y1));
+  const float intersection = intersection_width * intersection_height;
+  const float left_area = std::max(0.0F, left.x2 - left.x1) * std::max(0.0F, left.y2 - left.y1);
+  const float right_area =
+      std::max(0.0F, right.x2 - right.x1) * std::max(0.0F, right.y2 - right.y1);
+  const float union_area = left_area + right_area - intersection;
+  return union_area > 0.0F ? intersection / union_area : 0.0F;
+}
+
+inline float blend(float previous, float current, float alpha) {
+  return previous + alpha * (current - previous);
+}
+
+class PoseSmoother {
+public:
+  explicit PoseSmoother(PoseSmoothingOptions options = {}) : options_(options) {}
+
+  std::vector<Pose> filter(std::vector<Pose> poses, int64_t pts_ns) {
+    if (poses.empty()) {
+      if (is_reset_gap(pts_ns)) {
+        reset();
+      }
+      return poses;
+    }
+    if (is_reset_gap(pts_ns) || (pts_ns >= 0 && last_pts_ns_ >= 0 && pts_ns <= last_pts_ns_)) {
+      reset();
+    }
+
+    std::vector<int> matches(poses.size(), -1);
+    std::vector<bool> used(previous_.size(), false);
+    for (std::size_t current_index = 0; current_index < poses.size(); ++current_index) {
+      float best_iou = options_.minimum_match_iou;
+      for (std::size_t previous_index = 0; previous_index < previous_.size(); ++previous_index) {
+        if (used[previous_index]) {
+          continue;
+        }
+        const float overlap = box_iou(poses[current_index].box, previous_[previous_index].box);
+        if (overlap >= best_iou) {
+          best_iou = overlap;
+          matches[current_index] = static_cast<int>(previous_index);
+        }
+      }
+      if (matches[current_index] >= 0) {
+        used[static_cast<std::size_t>(matches[current_index])] = true;
+      }
+    }
+
+    const float elapsed_frames = elapsed_frame_count(pts_ns);
+    for (std::size_t current_index = 0; current_index < poses.size(); ++current_index) {
+      const int previous_index = matches[current_index];
+      if (previous_index < 0) {
+        continue;
+      }
+      Pose& current = poses[current_index];
+      const Pose& previous = previous_[static_cast<std::size_t>(previous_index)];
+      const float width = std::max(0.0F, current.box.x2 - current.box.x1);
+      const float height = std::max(0.0F, current.box.y2 - current.box.y1);
+      const float scale = std::max(1.0F, std::hypot(width, height));
+      const float center_motion =
+          std::hypot((current.box.x1 + current.box.x2 - previous.box.x1 - previous.box.x2) * 0.5F,
+                     (current.box.y1 + current.box.y2 - previous.box.y1 - previous.box.y2) * 0.5F) /
+          scale;
+      const float box_alpha = motion_alpha(center_motion, elapsed_frames);
+      current.box.x1 = blend(previous.box.x1, current.box.x1, box_alpha);
+      current.box.y1 = blend(previous.box.y1, current.box.y1, box_alpha);
+      current.box.x2 = blend(previous.box.x2, current.box.x2, box_alpha);
+      current.box.y2 = blend(previous.box.y2, current.box.y2, box_alpha);
+      current.box.score = blend(previous.box.score, current.box.score,
+                                adjusted_alpha(options_.confidence_alpha, elapsed_frames));
+
+      for (std::size_t landmark = 0; landmark < current.keypoints.size(); ++landmark) {
+        Keypoint& point = current.keypoints[landmark];
+        const Keypoint& previous_point = previous.keypoints[landmark];
+        const float motion =
+            std::hypot(point.x - previous_point.x, point.y - previous_point.y) / scale;
+        const float alpha = motion_alpha(motion, elapsed_frames);
+        point.x = blend(previous_point.x, point.x, alpha);
+        point.y = blend(previous_point.y, point.y, alpha);
+        point.confidence = blend(previous_point.confidence, point.confidence,
+                                 adjusted_alpha(options_.confidence_alpha, elapsed_frames));
+
+        WorldKeypoint& world = current.world_keypoints[landmark];
+        const WorldKeypoint& previous_world = previous.world_keypoints[landmark];
+        world.x = blend(previous_world.x, world.x, alpha);
+        world.y = blend(previous_world.y, world.y, alpha);
+        world.z = blend(previous_world.z, world.z, alpha);
+        world.confidence = point.confidence;
+      }
+    }
+
+    previous_ = poses;
+    if (pts_ns >= 0) {
+      last_pts_ns_ = pts_ns;
+    }
+    return poses;
+  }
+
+  void reset() {
+    previous_.clear();
+    last_pts_ns_ = -1;
+  }
+
+private:
+  bool is_reset_gap(int64_t pts_ns) const {
+    return pts_ns >= 0 && last_pts_ns_ >= 0 &&
+           pts_ns - last_pts_ns_ > static_cast<int64_t>(options_.reset_after_ms) * 1'000'000;
+  }
+
+  float elapsed_frame_count(int64_t pts_ns) const {
+    if (pts_ns < 0 || last_pts_ns_ < 0 || pts_ns <= last_pts_ns_) {
+      return 1.0F;
+    }
+    constexpr double kNominalFrameNs = 40'000'000.0;
+    return static_cast<float>(std::clamp((pts_ns - last_pts_ns_) / kNominalFrameNs, 1.0, 6.0));
+  }
+
+  static float adjusted_alpha(float alpha, float elapsed_frames) {
+    return 1.0F - std::pow(1.0F - alpha, elapsed_frames);
+  }
+
+  float motion_alpha(float normalized_motion, float elapsed_frames) const {
+    const float amount = std::clamp(normalized_motion / options_.fast_motion_threshold, 0.0F, 1.0F);
+    const float alpha = blend(options_.position_alpha, options_.fast_motion_alpha, amount);
+    return adjusted_alpha(alpha, elapsed_frames);
+  }
+
+  PoseSmoothingOptions options_;
+  std::vector<Pose> previous_;
+  int64_t last_pts_ns_ = -1;
+};
+
 inline int64_t select_frame_id(int64_t frame_id, int64_t orig_input_seq, int64_t input_seq,
                                std::uint64_t pull_sequence) {
   if (frame_id >= 0) {
@@ -248,9 +392,9 @@ inline nlohmann::json poses_data_json(std::vector<Pose> poses) {
   return data;
 }
 
-inline nlohmann::json auxiliary_visualization_data_json(
-    std::string id, std::string renderer, nlohmann::json payload,
-    std::optional<std::string> title = std::nullopt) {
+inline nlohmann::json
+auxiliary_visualization_data_json(std::string id, std::string renderer, nlohmann::json payload,
+                                  std::optional<std::string> title = std::nullopt) {
   nlohmann::json data = {{"schema_version", 1},
                          {"id", std::move(id)},
                          {"renderer", std::move(renderer)},
@@ -279,8 +423,8 @@ inline nlohmann::json world_pose_auxiliary_data_json(std::vector<Pose> poses) {
                            {"keypoints", std::move(keypoints)}});
   }
 
-  return auxiliary_visualization_data_json(
-      "world-pose", "blazepose-3d", {{"poses", std::move(world_poses)}}, "3D Pose");
+  return auxiliary_visualization_data_json("world-pose", "blazepose-3d",
+                                           {{"poses", std::move(world_poses)}}, "3D Pose");
 }
 
 } // namespace blazepose_app

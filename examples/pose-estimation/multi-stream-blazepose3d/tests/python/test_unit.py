@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import subprocess
 import sys
@@ -165,6 +166,8 @@ def test_publish_metadata_sends_paired_overlay_and_auxiliary_messages():
     stream_runtime = SimpleNamespace(
         metadata_lock=threading.Lock(),
         metadata_sender=Sender(),
+        pose_smoother=main.PoseSmoother(),
+        pose_temporal_filter_enabled=True,
         metadata_frames=0,
     )
     identity = main.FrameIdentity("camera0", 7, 1_234_000_000, -1, -1, 7, 7)
@@ -179,3 +182,53 @@ def test_publish_metadata_sends_paired_overlay_and_auxiliary_messages():
     assert json.loads(calls[0][1]) == {"poses": []}
     assert json.loads(calls[1][1])["payload"] == {"poses": []}
     assert stream_runtime.metadata_frames == 1
+
+
+def pose_sample(x: float, confidence: float, world_x: float, box_x: float = 0.0) -> dict:
+    return {
+        "roi_index": 0,
+        "box": {
+            "x1": box_x,
+            "y1": 0.0,
+            "x2": box_x + 100.0,
+            "y2": 100.0,
+            "score": 0.9,
+            "class_id": 0,
+        },
+        "keypoints": [{"name": "nose", "x": x, "y": 50.0, "confidence": confidence}],
+        "world_keypoints": [
+            {"name": "nose", "x": world_x, "y": 0.0, "z": 0.0, "confidence": confidence}
+        ],
+    }
+
+
+def test_pose_smoother_filters_2d_world_and_confidence_together_without_buffering():
+    smoother = main.PoseSmoother()
+    first = smoother.filter([pose_sample(50.0, 0.2, 0.0)], 1_000_000_000)[0]
+    assert first["keypoints"][0]["x"] == 50.0
+
+    second = smoother.filter([pose_sample(54.0, 0.4, 0.04)], 1_040_000_000)[0]
+    image_fraction = (second["keypoints"][0]["x"] - 50.0) / 4.0
+    world_fraction = second["world_keypoints"][0]["x"] / 0.04
+    assert 0.45 < image_fraction < 0.90
+    assert world_fraction == pytest.approx(image_fraction)
+    assert second["keypoints"][0]["confidence"] == pytest.approx(0.24)
+    assert second["world_keypoints"][0]["confidence"] == pytest.approx(0.24)
+
+    fast = smoother.filter([pose_sample(154.0, 0.4, 1.04)], 1_080_000_000)[0]
+    assert fast["keypoints"][0]["x"] > 140.0
+
+    raw_after_gap = pose_sample(30.0, 0.9, -0.2)
+    reset = smoother.filter([copy.deepcopy(raw_after_gap)], 1_400_000_000)[0]
+    assert reset == raw_after_gap
+
+
+def test_pose_smoother_state_is_independent_per_stream():
+    left = main.PoseSmoother()
+    right = main.PoseSmoother()
+    left.filter([pose_sample(10.0, 1.0, 0.0)], 1_000_000_000)
+    right.filter([pose_sample(90.0, 1.0, 1.0)], 1_000_000_000)
+    left_result = left.filter([pose_sample(12.0, 1.0, 0.02)], 1_040_000_000)[0]
+    right_result = right.filter([pose_sample(88.0, 1.0, 0.98)], 1_040_000_000)[0]
+    assert left_result["keypoints"][0]["x"] < 12.0
+    assert right_result["keypoints"][0]["x"] > 88.0

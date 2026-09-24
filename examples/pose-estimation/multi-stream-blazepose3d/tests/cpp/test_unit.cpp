@@ -114,6 +114,38 @@ bool test_math_contract() {
                    blazepose_app::select_frame_id(-1, -1, 7, 6) == 7 &&
                    blazepose_app::select_frame_id(-1, -1, -1, 6) == 6,
                "frame identity falls back through source sequence fields");
+
+  blazepose_app::Pose first_pose;
+  first_pose.box = {0.0F, 0.0F, 100.0F, 100.0F, 0.9F, 0};
+  first_pose.keypoints[0] = {50.0F, 50.0F, 0.2F};
+  first_pose.world_keypoints[0] = {0.0F, 0.0F, 0.0F, 0.2F};
+  blazepose_app::PoseSmoother smoother;
+  smoother.filter({first_pose}, 1'000'000'000);
+  blazepose_app::Pose second_pose = first_pose;
+  second_pose.keypoints[0].x = 54.0F;
+  second_pose.keypoints[0].confidence = 0.4F;
+  second_pose.world_keypoints[0].x = 0.04F;
+  second_pose.world_keypoints[0].confidence = 0.4F;
+  const auto smoothed = smoother.filter({second_pose}, 1'040'000'000).front();
+  const float image_fraction = (smoothed.keypoints[0].x - 50.0F) / 4.0F;
+  const float world_fraction = smoothed.world_keypoints[0].x / 0.04F;
+  ok &= expect(image_fraction > 0.45F && image_fraction < 0.90F &&
+                   std::abs(image_fraction - world_fraction) < 0.001F,
+               "temporal filter applies one adaptive weight to 2D and world landmarks");
+  ok &= expect(std::abs(smoothed.keypoints[0].confidence - 0.24F) < 0.001F &&
+                   std::abs(smoothed.world_keypoints[0].confidence - 0.24F) < 0.001F,
+               "temporal filter damps confidence crossings consistently");
+
+  blazepose_app::Pose fast_pose = second_pose;
+  fast_pose.keypoints[0].x = 154.0F;
+  const auto fast = smoother.filter({fast_pose}, 1'080'000'000).front();
+  ok &= expect(fast.keypoints[0].x > 140.0F,
+               "temporal filter follows deliberate fast motion without buffering frames");
+  blazepose_app::Pose reset_pose = first_pose;
+  reset_pose.keypoints[0].x = 30.0F;
+  const auto reset = smoother.filter({reset_pose}, 1'400'000'000).front();
+  ok &= expect(std::abs(reset.keypoints[0].x - 30.0F) < 0.001F,
+               "temporal filter resets after a discontinuity instead of dragging stale state");
   return ok;
 }
 

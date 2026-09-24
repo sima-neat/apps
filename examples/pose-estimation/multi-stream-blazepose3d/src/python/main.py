@@ -84,6 +84,7 @@ class AppConfig:
     max_people_per_frame: int = 4
     roi_scale: float = 1.65
     pose_presence_threshold: float = 0.50
+    pose_temporal_filter_enabled: bool = True
     pose_job_timeout_ms: int = 1000
     max_pending_jobs: int = 64
     frame_limit: int = 0
@@ -143,6 +144,128 @@ class PoseAggregate:
     poses: list[dict[str, Any]] = field(default_factory=list)
 
 
+def box_iou(left: dict[str, Any], right: dict[str, Any]) -> float:
+    intersection_width = max(0.0, min(left["x2"], right["x2"]) - max(left["x1"], right["x1"]))
+    intersection_height = max(0.0, min(left["y2"], right["y2"]) - max(left["y1"], right["y1"]))
+    intersection = intersection_width * intersection_height
+    left_area = max(0.0, left["x2"] - left["x1"]) * max(0.0, left["y2"] - left["y1"])
+    right_area = max(0.0, right["x2"] - right["x1"]) * max(0.0, right["y2"] - right["y1"])
+    union_area = left_area + right_area - intersection
+    return intersection / union_area if union_area > 0.0 else 0.0
+
+
+class PoseSmoother:
+    POSITION_ALPHA = 0.45
+    CONFIDENCE_ALPHA = 0.20
+    FAST_MOTION_ALPHA = 0.90
+    FAST_MOTION_THRESHOLD = 0.08
+    MINIMUM_MATCH_IOU = 0.15
+    RESET_AFTER_NS = 250_000_000
+    NOMINAL_FRAME_NS = 40_000_000
+
+    def __init__(self) -> None:
+        self.previous: list[dict[str, Any]] = []
+        self.last_pts_ns = -1
+
+    @staticmethod
+    def _blend(previous: float, current: float, alpha: float) -> float:
+        return previous + alpha * (current - previous)
+
+    @staticmethod
+    def _adjusted_alpha(alpha: float, elapsed_frames: float) -> float:
+        return 1.0 - (1.0 - alpha) ** elapsed_frames
+
+    def _motion_alpha(self, normalized_motion: float, elapsed_frames: float) -> float:
+        amount = min(1.0, max(0.0, normalized_motion / self.FAST_MOTION_THRESHOLD))
+        alpha = self._blend(self.POSITION_ALPHA, self.FAST_MOTION_ALPHA, amount)
+        return self._adjusted_alpha(alpha, elapsed_frames)
+
+    def _reset_gap(self, pts_ns: int) -> bool:
+        return (
+            pts_ns >= 0
+            and self.last_pts_ns >= 0
+            and pts_ns - self.last_pts_ns > self.RESET_AFTER_NS
+        )
+
+    def reset(self) -> None:
+        self.previous = []
+        self.last_pts_ns = -1
+
+    def filter(self, poses: list[dict[str, Any]], pts_ns: int) -> list[dict[str, Any]]:
+        if not poses:
+            if self._reset_gap(pts_ns):
+                self.reset()
+            return poses
+        if self._reset_gap(pts_ns) or (
+            pts_ns >= 0 and self.last_pts_ns >= 0 and pts_ns <= self.last_pts_ns
+        ):
+            self.reset()
+
+        matches = [-1] * len(poses)
+        used: set[int] = set()
+        for current_index, pose in enumerate(poses):
+            best_iou = self.MINIMUM_MATCH_IOU
+            for previous_index, previous in enumerate(self.previous):
+                if previous_index in used:
+                    continue
+                overlap = box_iou(pose["box"], previous["box"])
+                if overlap >= best_iou:
+                    best_iou = overlap
+                    matches[current_index] = previous_index
+            if matches[current_index] >= 0:
+                used.add(matches[current_index])
+
+        elapsed_frames = 1.0
+        if pts_ns >= 0 and self.last_pts_ns >= 0 and pts_ns > self.last_pts_ns:
+            elapsed_frames = min(6.0, max(1.0, (pts_ns - self.last_pts_ns) / self.NOMINAL_FRAME_NS))
+
+        for current_index, previous_index in enumerate(matches):
+            if previous_index < 0:
+                continue
+            current = poses[current_index]
+            previous = self.previous[previous_index]
+            box = current["box"]
+            previous_box = previous["box"]
+            width = max(0.0, box["x2"] - box["x1"])
+            height = max(0.0, box["y2"] - box["y1"])
+            scale = max(1.0, math.hypot(width, height))
+            center_motion = math.hypot(
+                (box["x1"] + box["x2"] - previous_box["x1"] - previous_box["x2"]) * 0.5,
+                (box["y1"] + box["y2"] - previous_box["y1"] - previous_box["y2"]) * 0.5,
+            ) / scale
+            box_alpha = self._motion_alpha(center_motion, elapsed_frames)
+            for coordinate in ("x1", "y1", "x2", "y2"):
+                box[coordinate] = self._blend(previous_box[coordinate], box[coordinate], box_alpha)
+            confidence_alpha = self._adjusted_alpha(self.CONFIDENCE_ALPHA, elapsed_frames)
+            box["score"] = self._blend(previous_box["score"], box["score"], confidence_alpha)
+
+            for point, old_point, world, old_world in zip(
+                current["keypoints"],
+                previous["keypoints"],
+                current["world_keypoints"],
+                previous["world_keypoints"],
+                strict=True,
+            ):
+                motion = (
+                    math.hypot(point["x"] - old_point["x"], point["y"] - old_point["y"])
+                    / scale
+                )
+                alpha = self._motion_alpha(motion, elapsed_frames)
+                point["x"] = self._blend(old_point["x"], point["x"], alpha)
+                point["y"] = self._blend(old_point["y"], point["y"], alpha)
+                point["confidence"] = self._blend(
+                    old_point["confidence"], point["confidence"], confidence_alpha
+                )
+                for coordinate in ("x", "y", "z"):
+                    world[coordinate] = self._blend(old_world[coordinate], world[coordinate], alpha)
+                world["confidence"] = point["confidence"]
+
+        self.previous = poses
+        if pts_ns >= 0:
+            self.last_pts_ns = pts_ns
+        return poses
+
+
 @dataclass
 class StreamRuntime:
     index: int
@@ -153,6 +276,8 @@ class StreamRuntime:
     height: int
     fps: int
     metadata_lock: threading.Lock = field(default_factory=threading.Lock)
+    pose_smoother: PoseSmoother = field(default_factory=PoseSmoother)
+    pose_temporal_filter_enabled: bool = True
     metadata_frames: int = 0
     source_frames: int = 0
     detector_frames: int = 0
@@ -354,6 +479,7 @@ def load_app_config(config_path: Path) -> AppConfig:
         max_people_per_frame=int_or(pose, "max_people_per_frame", 4),
         roi_scale=float_or(pose, "roi_scale", 1.65),
         pose_presence_threshold=float_or(pose, "presence_threshold", 0.50),
+        pose_temporal_filter_enabled=bool_or(pose, "temporal_filter_enabled", True),
         pose_job_timeout_ms=int_or(pose, "job_timeout_ms", 1000),
         max_pending_jobs=int_or(pose, "max_pending_jobs", 64),
         frame_limit=int_or(runtime, "frames", 0),
@@ -859,7 +985,14 @@ def build_runtime(cfg: AppConfig) -> AppRuntime:
         metadata_sender = pyneat.MetadataSender(metadata_options, send_options)
         streams.append(
             StreamRuntime(
-                index, stream_cfg, source_options, metadata_sender, width, height, fps
+                index,
+                stream_cfg,
+                source_options,
+                metadata_sender,
+                width,
+                height,
+                fps,
+                pose_temporal_filter_enabled=cfg.pose_temporal_filter_enabled,
             )
         )
 
@@ -1027,11 +1160,13 @@ def publish_metadata(
 ) -> None:
     timestamp_ms = identity.pts_ns // 1_000_000 if identity.pts_ns >= 0 else -1
     frame_id = str(identity.frame_id) if identity.frame_id >= 0 else ""
-    overlay_data = json.dumps(poses_data(poses), separators=(",", ":"))
-    auxiliary_data = json.dumps(
-        world_pose_auxiliary_data(poses), separators=(",", ":")
-    )
     with stream.metadata_lock:
+        if stream.pose_temporal_filter_enabled:
+            poses = stream.pose_smoother.filter(poses, identity.pts_ns)
+        overlay_data = json.dumps(poses_data(poses), separators=(",", ":"))
+        auxiliary_data = json.dumps(
+            world_pose_auxiliary_data(poses), separators=(",", ":")
+        )
         stream.metadata_sender.send_metadata(
             "pose-estimation", overlay_data, timestamp_ms, frame_id
         )
