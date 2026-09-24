@@ -372,9 +372,10 @@ void run(const Config& cfg) {
     std::cerr << "[warn] stream is " << stream.width << "x" << stream.height
               << "; the model letterboxes non-square frames, which flattens the map\n";
   }
-  Source source = build_source(cfg, stream.width, stream.height, stream.fps);
   Detector detector = build_model(cfg, stream.width, stream.height);
   InsightVideo video(cfg, stream.width, stream.height, stream.fps);
+  // Last: the source starts reading at once, and an RTSP server drops a reader that stalls.
+  Source source = build_source(cfg, stream.width, stream.height, stream.fps);
   std::cout << "rtsp=" << cfg.rtsp_url << " stream=" << stream.width << "x" << stream.height << "@"
             << stream.fps << " map=" << detector.map_side << "x" << detector.map_side
             << " threshold=" << cfg.threshold << " min_region_px=" << cfg.min_region_px

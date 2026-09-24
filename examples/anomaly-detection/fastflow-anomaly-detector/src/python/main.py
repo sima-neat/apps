@@ -268,9 +268,9 @@ def run(cfg: Config) -> None:
     if width != height:
         print(f"[warn] stream is {width}x{height}; the model letterboxes non-square frames, "
               "which flattens the map", file=sys.stderr)
-    graph_run = build_source(cfg, width, height, fps)
     model, map_side = build_model(cfg, width, height)
     video = InsightVideo(cfg, width, height, fps)
+    graph_run = build_source(cfg, width, height, fps)
     print(f"rtsp={cfg.rtsp_url} stream={width}x{height}@{fps} map={map_side}x{map_side} "
           f"threshold={cfg.threshold} min_region_px={cfg.min_region_px} "
           f"insight={cfg.insight_host} video={video.port} channel=0", flush=True)
