@@ -374,7 +374,6 @@ void run(const Config& cfg) {
   }
   Detector detector = build_model(cfg, stream.width, stream.height);
   InsightVideo video(cfg, stream.width, stream.height, stream.fps);
-  // Last: the source starts reading at once, and an RTSP server drops a reader that stalls.
   Source source = build_source(cfg, stream.width, stream.height, stream.fps);
   std::cout << "rtsp=" << cfg.rtsp_url << " stream=" << stream.width << "x" << stream.height << "@"
             << stream.fps << " map=" << detector.map_side << "x" << detector.map_side

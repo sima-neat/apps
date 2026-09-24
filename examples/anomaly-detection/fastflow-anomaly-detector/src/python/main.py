@@ -147,7 +147,7 @@ def build_source(cfg: Config, width: int, height: int, fps: int):
     run_options.queue_depth = 3
     run_options.overflow_policy = pyneat.OverflowPolicy.KeepLatest
     run_options.output_memory = pyneat.OutputMemory.ZeroCopy
-    return graph.build(run_options)
+    return graph, graph.build(run_options)
 
 
 def build_model(cfg: Config, width: int, height: int):
@@ -184,11 +184,11 @@ class InsightVideo:
         options.video_port_base = cfg.video_port
         options.encoder.bitrate_kbps = 4000
         self.port = options.video_port
-        graph = pyneat.Graph("insight")
-        graph.add(pyneat.nodes.input(source))
-        graph.add(pyneat.groups.video_sender(options))
+        self._graph = pyneat.Graph("insight")
+        self._graph.add(pyneat.nodes.input(source))
+        self._graph.add(pyneat.groups.video_sender(options))
         # The graph negotiates its caps from a first sample.
-        self._run = graph.build([self._tensor(np.zeros((height, width, 3), np.uint8))])
+        self._run = self._graph.build([self._tensor(np.zeros((height, width, 3), np.uint8))])
 
     @staticmethod
     def _tensor(rgb):
@@ -270,7 +270,7 @@ def run(cfg: Config) -> None:
               "which flattens the map", file=sys.stderr)
     model, map_side = build_model(cfg, width, height)
     video = InsightVideo(cfg, width, height, fps)
-    graph_run = build_source(cfg, width, height, fps)
+    source_graph, graph_run = build_source(cfg, width, height, fps)
     print(f"rtsp={cfg.rtsp_url} stream={width}x{height}@{fps} map={map_side}x{map_side} "
           f"threshold={cfg.threshold} min_region_px={cfg.min_region_px} "
           f"insight={cfg.insight_host} video={video.port} channel=0", flush=True)
