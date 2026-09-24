@@ -310,6 +310,8 @@ class TestE2E:
         "top-level scalar",
         "top-level is false",
         "model archive missing",
+        "tilde input is null",
+        "radix-prefixed profile name",
         "quoted and unquoted duplicate key",
     })
 
@@ -396,6 +398,23 @@ class TestE2E:
         # bad value has to be in the discarded definition for this to detect
         # anything - with it in the second, both behaviours exit 2 and the case
         # proves nothing.
+        # `012` is octal 10 to PyYAML. If C++ went back to base-10 stoi it would
+        # ask for 12 entries and the message would stop matching, so this pins
+        # the YAML integer grammar in both.
+        ("octal num_classes", "models:\n  m:\n    path: m.tar.gz\n"
+         "    label_map: TOO_SHORT_LABELS\n    num_classes: 012\n", 2),
+        # `~` is YAML null: unset, not a file named "~". C++ used to exit 3 here
+        # while Python downloaded the fallback and reached the model (exit 6).
+        ("tilde input is null",
+         "io:\n  input: ~\nmodels:\n  m:\n    path: /nonexistent/m.tar.gz\n", 6),
+        # A radix prefix with no valid digits after it is a string, so this is a
+        # legal profile name; C++ used to reject it as a non-string key (exit 2).
+        ("radix-prefixed profile name",
+         "models:\n  0xmodel:\n    path: /nonexistent/m.tar.gz\n", 6),
+        # A directory opens successfully on glibc, so without the is_regular_file
+        # check C++ reported "0 entries" instead of naming the real problem.
+        ("label map is a directory",
+         "models:\n  m:\n    path: m.tar.gz\n    label_map: A_DIRECTORY\n", 2),
         ("quoted and unquoted duplicate key",
          'models:\n  foo:\n    path: /nonexistent/m.tar.gz\n    top_k: 0\n'
          '  "foo":\n    path: /nonexistent/m.tar.gz\n',
@@ -414,6 +433,8 @@ class TestE2E:
         config_path = tmp_output_dir.parent / "failure-config.yaml"
         too_short = tmp_output_dir.parent / "too-short-labels.txt"
         too_short.write_text("only\none\n")
+        a_directory = tmp_output_dir.parent / "a-directory"
+        a_directory.mkdir(exist_ok=True)
         blank_line = tmp_output_dir.parent / "blank-line-labels.txt"
         blank_line.write_text("cat\n\nbird\n")
 
@@ -423,6 +444,7 @@ class TestE2E:
                 argument = str(tmp_output_dir.parent / "does-not-exist.yaml")
             else:
                 body = (body.replace("TOO_SHORT_LABELS", str(too_short))
+                            .replace("A_DIRECTORY", str(a_directory))
                             .replace("BLANK_LINE_LABELS", str(blank_line)))
                 config_path.write_text(body)
                 argument = str(config_path)

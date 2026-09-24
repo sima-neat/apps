@@ -539,6 +539,57 @@ class TestThumbnails:
         assert written.shape[0] == 32 and written.shape[1] == 32
 
 
+class TestYamlIntegers:
+    """parse_yaml_int decides both what a setting means and whether a profile
+    name is a string, so a change here moves two behaviours at once."""
+
+    @pytest.mark.parametrize("text,expected", [
+        ("10", 10),          # plain decimal
+        ("010", 8),          # YAML 1.1 bare octal, not decimal 10
+        ("0o17", 15),
+        ("0x1F", 31),
+        ("0b101", 5),
+        ("1_0", 10),         # underscore separator
+        ("-010", -8),
+        (" 5 ", 5),          # ScalarConfig trims; PyYAML would too
+    ])
+    def test_yaml_spellings(self, text, expected):
+        assert main.parse_yaml_int(text) == expected
+
+    @pytest.mark.parametrize("text", [
+        "0xmodel",  # radix prefix with no valid digits: a string, not a number
+        "0binary",
+        "0o9",      # 9 is not an octal digit
+        "12abc",
+        "",
+        "abc",
+        "1.5",      # a float is not an integer
+    ])
+    def test_non_integers(self, text):
+        assert main.parse_yaml_int(text) is None
+
+    def test_radix_prefix_alone_is_not_a_non_string_key(self):
+        """`0xmodel` is an advertised-valid profile name. Treating every `0x`
+        as an integer made C++ reject a profile Python accepts."""
+        assert main.parse_yaml_int("0xmodel") is None
+
+
+class TestFingerprintFailsClosed:
+    def test_missing_fingerprint_raises(self, tmp_path):
+        """Without a fingerprint check_unchanged can prove nothing. It used to
+        return quietly, which silently disabled every later check for that file
+        and let separate models read different replacements under one entry."""
+        img = tmp_path / "a.jpg"
+        _make_image(img)
+        with pytest.raises(ValueError, match="could not be fingerprinted"):
+            main.check_unchanged(img, None)
+
+    def test_present_fingerprint_still_passes(self, tmp_path):
+        img = tmp_path / "a.jpg"
+        _make_image(img)
+        main.check_unchanged(img, main.file_fingerprint(img))  # must not raise
+
+
 class TestReports:
     def _sample_results(self):
         r1 = main.ImageResult(image_path=Path("img1.jpg"))
