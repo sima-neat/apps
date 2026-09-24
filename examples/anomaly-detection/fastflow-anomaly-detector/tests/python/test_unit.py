@@ -98,6 +98,7 @@ class TestConfig:
             ({"inference": {"threshold": 1.5}}, "inference.threshold"),
             ({"inference": {"min_region_px": 0}}, "inference.min_region_px"),
             ({"runtime": {"profile_interval": 0}}, "runtime.profile_interval"),
+            ({"output": {"save_every": -1}}, "output.save_every"),
         ],
     )
     def test_invalid_values_are_rejected(self, tmp_path, overrides, message):

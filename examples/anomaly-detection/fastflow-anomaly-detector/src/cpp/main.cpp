@@ -136,6 +136,7 @@ Config load_config(const fs::path& path) {
                          "inference.threshold must be between 0 and 1");
   sima_examples::require(cfg.min_region_px > 0, "inference.min_region_px must be > 0");
   sima_examples::require(cfg.profile_interval > 0, "runtime.profile_interval must be > 0");
+  sima_examples::require(cfg.save_every >= 0, "output.save_every must be >= 0");
   sima_examples::require(cfg.alpha >= 0.0 && cfg.alpha <= 1.0,
                          "output.alpha must be between 0 and 1");
   sima_examples::require(cfg.heat_max > cfg.threshold,
