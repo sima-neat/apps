@@ -25,12 +25,15 @@ import json
 import logging
 import os
 import re
-import struct
 import subprocess
 import threading
 import unicodedata
 import wave
 from pathlib import Path
+
+from worker_ipc import read_frame, send_request
+
+_WORKER_LABEL = "Supertonic worker"
 
 DEFAULT_REPO_ROOT = "/media/nvme/repos/supertonic-sima"
 DEFAULT_APP_ROOT = "/media/nvme/supertonic-tts"
@@ -227,23 +230,6 @@ def _ensure_worker():
     return _worker
 
 
-def _read_exact(stream, n):
-    chunks = []
-    while n > 0:
-        b = stream.read(n)
-        if not b:
-            raise RuntimeError("Supertonic worker closed the pipe")
-        chunks.append(b)
-        n -= len(b)
-    return b"".join(chunks)
-
-
-def _read_frame(proc):
-    status = _read_exact(proc.stdout, 1)[0]
-    length = struct.unpack(">I", _read_exact(proc.stdout, 4))[0]
-    return status, _read_exact(proc.stdout, length)
-
-
 def _discard_worker():
     global _worker
     try:
@@ -286,9 +272,8 @@ def _request(req):
     with _worker_lock:
         proc = _ensure_worker()
         try:
-            proc.stdin.write((json.dumps(req) + "\n").encode("utf-8"))
-            proc.stdin.flush()
-            status, payload = _read_frame(proc)
+            send_request(proc, req)
+            status, payload = read_frame(proc, _WORKER_LABEL)
         except Exception:
             _discard_worker()
             raise
@@ -303,10 +288,9 @@ def _request_stream(req):
     with _worker_lock:
         proc = _ensure_worker()
         try:
-            proc.stdin.write((json.dumps(req) + "\n").encode("utf-8"))
-            proc.stdin.flush()
+            send_request(proc, req)
             while True:
-                status, payload = _read_frame(proc)
+                status, payload = read_frame(proc, _WORKER_LABEL)
                 if status == 2:
                     yield payload
                 elif status == 0:
@@ -328,7 +312,7 @@ def _request_stream(req):
             if not complete:
                 try:
                     while True:
-                        status, _ = _read_frame(proc)
+                        status, _ = read_frame(proc, _WORKER_LABEL)
                         if status in (0, 1, 3):
                             complete = True
                             if status == 3:

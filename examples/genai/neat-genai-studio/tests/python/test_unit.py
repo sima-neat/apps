@@ -49,6 +49,16 @@ from cli_think_suite import (  # noqa: E402,F401
     ThinkSplitterTests as CliThinkSplitterTests,
 )
 from asr_metadata_suite import AsrMetadataTests  # noqa: E402,F401
+from readme_package_suite import ReadmePackagePathsTests  # noqa: E402,F401
+from studio_client_suite import (  # noqa: E402,F401
+    MlaResetPolicyTests,
+    NoThinkTransformTests,
+)
+from worker_ipc_suite import (  # noqa: E402,F401
+    ReadExactTests,
+    ReadFrameTests,
+    SendRequestTests,
+)
 from supertonic_tts_suite import (  # noqa: E402,F401
     ClientConfigurationTests as SupertonicClientConfigurationTests,
     DurationFallbackTests as SupertonicDurationFallbackTests,
@@ -114,6 +124,12 @@ __all__ = [
     "CliStreamTokenCountTests",
     "CliThinkSplitterTests",
     "AsrMetadataTests",
+    "ReadmePackagePathsTests",
+    "MlaResetPolicyTests",
+    "NoThinkTransformTests",
+    "ReadExactTests",
+    "ReadFrameTests",
+    "SendRequestTests",
     "SupertonicClientConfigurationTests",
     "SupertonicDurationFallbackTests",
     "SupertonicEnvironmentDiscoveryTests",
