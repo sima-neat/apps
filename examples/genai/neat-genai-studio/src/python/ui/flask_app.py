@@ -39,6 +39,11 @@ import socket
 import subprocess
 
 from shared.config import HubConfig
+from shared.studio_client import (
+    apply_no_think,
+    hand_reset_to_supervisor,
+    mla_reset_disabled,
+)
 from shared.board_camera import (
     capture_camera_frame,
     default_camera_device,
@@ -1811,20 +1816,18 @@ class AppContext:
             # request times out. That is exactly the case the button exists for,
             # and only the supervisor (run.sh) can recover it: ask it through the
             # request file it polls.
-            if os.environ.get('MLA_RESET', '1') != '1':
+            if mla_reset_disabled():
                 return jsonify({'error': 'Accelerator reset is disabled (MLA_RESET=0).'}), 400
             try:
                 resp = requests.post(_control_url('/control/reset_mla'), timeout=10)
             except requests.Timeout:
-                request_file = os.environ.get('NEAT_RESET_REQUEST_FILE', '')
-                if not request_file:
+                handoff = hand_reset_to_supervisor()
+                if handoff == 'no_supervisor':
                     return jsonify({'error': 'The model server is not responding and no '
                                              'supervisor is available to reset it '
                                              '(start the Studio with run.sh).'}), 503
-                try:
-                    Path(request_file).write_text('reset\n', encoding='utf-8')
-                except OSError as exc:
-                    logging.error("Could not write the reset request file %s: %s", request_file, exc)
+                if handoff == 'error':
+                    logging.error("Could not write the reset request file for the supervisor")
                     return jsonify({'error': 'Could not hand the reset to the supervisor.'}), 500
                 logging.warning("Model server unresponsive; reset handed to the supervisor")
                 return jsonify({'state': 'resetting', 'reset': True, 'via': 'supervisor'}), 202
@@ -2769,38 +2772,6 @@ def _read_gen_params(form):
     return params
 
 
-def _apply_no_think(messages):
-    """Return a copy of ``messages`` with ``/no_think`` appended to the last user
-    turn (Qwen3's soft switch to disable reasoning). The shared history is not
-    mutated, so it only affects this request."""
-    if not messages:
-        return messages
-    out = list(messages)
-    for i in range(len(out) - 1, -1, -1):
-        m = out[i]
-        if not (isinstance(m, dict) and m.get('role') == 'user'):
-            continue
-        m = dict(m)
-        content = m.get('content')
-        if isinstance(content, str):
-            m['content'] = (content + ' /no_think').strip()
-        elif isinstance(content, list):
-            new = list(content)
-            for j in range(len(new) - 1, -1, -1):
-                part = new[j]
-                if isinstance(part, dict) and part.get('type') == 'text':
-                    part = dict(part)
-                    part['text'] = (part.get('text', '') + ' /no_think').strip()
-                    new[j] = part
-                    break
-            else:
-                new.append({'type': 'text', 'text': '/no_think'})
-            m['content'] = new
-        out[i] = m
-        break
-    return out
-
-
 def _answer_part(raw):
     """The portion of a streamed reply outside <think>…</think> — i.e. what should
     be spoken (reasoning is never sent to TTS)."""
@@ -2841,7 +2812,7 @@ def stream_chat_request(messages, model, config, generation_id, socketio_event='
     no_think = bool(gen_params.get('no_think'))
     payload = {
         "model": model,
-        "messages": _apply_no_think(messages) if no_think else messages,
+        "messages": apply_no_think(messages) if no_think else messages,
         "stream": True
     }
     if no_think:
