@@ -1297,12 +1297,11 @@ class AppContext:
             return self.conversation_history.copy()
 
 
-    def update_settings(self, camidx, model_server_ip, ragserver, httponly, apionly, llm_only, model_name=None, vision_image_size=None):
+    def update_settings(self, camidx, model_server_ip, ragserver, httponly, llm_only, model_name=None, vision_image_size=None):
         self.camidx = AppConstants.DEFAULT_CAMERA_IDX if camidx is None else camidx
         self.model_server_ip = AppConstants.DEFAULT_SIMA_SERVER_IP if model_server_ip is None else model_server_ip
         self.ragserver = ragserver
         self.httponly = httponly
-        self.apionly = apionly
         self.llm_only = llm_only
         self.model_display_name = model_name or ""
         self.vision_image_size = vision_image_size
@@ -1311,10 +1310,9 @@ class AppContext:
         if self.system_prompt:
             self.set_system_prompt(self.system_prompt)
 
-        if not self.apionly:
-            self.talk_ctrl = TalkController([
-                'en', 'fr', 'es', 'de', 'it', 'zh', 'vi', 'ja', 'pt', 'ko', 'no'
-            ])
+        self.talk_ctrl = TalkController([
+            'en', 'fr', 'es', 'de', 'it', 'zh', 'vi', 'ja', 'pt', 'ko', 'no'
+        ])
 
     def update_from_config(self, app_cfg):
         model_server = f"{app_cfg.openai.client_host}:{app_cfg.openai.port}"
@@ -1347,7 +1345,6 @@ class AppContext:
             model_server_ip=model_server,
             ragserver=None,
             httponly=not app_cfg.web.https,
-            apionly=False,
             llm_only=False,
             model_name=app_cfg.chat_model.name if app_cfg.chat_model else "",
             vision_image_size=None
@@ -1490,12 +1487,9 @@ class AppContext:
         @self.app.route('/')
         def newui():
             self.socketio.emit('update', {"hello" : "world"})
-            if not self.apionly:
-                return render_template('newui.html',
-                                     llm_only=self.llm_only,
-                                     model_name=self.model_display_name)
-
-            return render_template('apionly.html')
+            return render_template('newui.html',
+                                   llm_only=self.llm_only,
+                                   model_name=self.model_display_name)
 
         @self.app.route('/showcase')
         def showcase():
@@ -1599,7 +1593,7 @@ class AppContext:
         def select_voice():
             try:
                 if self.talk_ctrl is None:
-                    return jsonify({'error': 'TTS engine not initialized, start the app with --apionly disabled.'}), 503
+                    return jsonify({'error': 'TTS engine not initialized.'}), 503
 
                 data = request.get_json() or {}
                 lang = data.get('lang', 'en')
@@ -2310,7 +2304,7 @@ class AppContext:
                     return jsonify({'error': 'Missing JSON payload.'}), 400
 
                 if self.talk_ctrl == None:
-                    return jsonify({'error': 'TTS engine not initialized, start the app with --apionly disabled.'}), 500
+                    return jsonify({'error': 'TTS engine not initialized.'}), 500
 
                 text = data.get('input')
                 model = str(data.get('model') or 'default')   # a named engine is dispatched; anything else routes
@@ -3016,11 +3010,11 @@ def run_ui(app_cfg):
     genai_app.setup_router()
     cleanup()
 
-    if not genai_app.apionly and genai_app.rag_enabled:
+    if genai_app.rag_enabled:
         logging.info("Starting RAG database service")
         ensure_rag_modules_loaded()
         vectodb_proc = start_service()
-    elif not genai_app.apionly:
+    else:
         logging.info("RAG database service disabled")
 
     try:

@@ -907,6 +907,15 @@ consume_reset_request() {
 # reset the dispatcher and relaunch so the CLI can reconnect. Poll-based, since a
 # backgrounded subshell cannot `wait` a sibling PID; bounded so a broken server
 # cannot respawn forever. Strays are swept by cleanup().
+#
+# This is the CLI-mode twin of the web-mode supervisor loop below (search
+# "Supervisor: keep both processes alive"). They deliberately are NOT merged:
+# the CLI watchdog runs in a backgrounded subshell and must poll
+# SERVER_STATUS_FILE, watches only the server, and relaunches on an ordinary
+# crash; the web loop runs in the launcher shell, `wait`s the server, also
+# watches the UI, and shuts the Studio down on an ordinary crash. Both reuse the
+# shared helpers (consume_reset_request, force_stop_server, reset_mla_dispatcher,
+# launch_server) and the same bounded RELAUNCH_STABLE_SECONDS retry budget.
 cli_supervise() {
   # `tries` counts consecutive relaunches that did not survive: a relaunched
   # server that stays up for RELAUNCH_STABLE_SECONDS clears it, so explicit
@@ -1029,6 +1038,8 @@ printf '\n'
 # Supervisor: keep both processes alive. A child failure stops the Studio, except
 # for the sentinel exit code, which is the model server asking for the explicit
 # accelerator reset the user requested. Nothing else touches the board runtime.
+# This is the web-mode twin of cli_supervise() above; see that function's header
+# for why the two loops are kept separate rather than merged.
 status=0
 # Consecutive relaunches that did not survive RELAUNCH_STABLE_SECONDS. A
 # relaunch that stays up clears it, so a user can reset the accelerator as often
