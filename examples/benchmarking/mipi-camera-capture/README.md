@@ -65,16 +65,26 @@ python3 ${APP_DIR}/src/python/main.py \
   --config ${APP_DIR}/src/common/config.yaml
 ```
 
-The output directory contains sampled NV12 frames and `summary.json`. Convert a frame for visual inspection with:
+The output directory contains sampled NV12 frames and `summary.json`. A Modalix
+DevKit does not ship `ffmpeg`, so copy a frame to a workstation with FFmpeg
+installed and convert it there for visual inspection:
+
+On the target, pick a frame and copy it out. The exact filename includes the
+observed capture time, so take the one the application printed:
 
 ```bash
-FRAME="$(find sandbox/mipi-camera-capture -name 'frame_00_*.nv12' -print -quit)"
-ffmpeg -f rawvideo -pixel_format nv12 -video_size 1920x1080 \
-  -i "${FRAME}" \
-  -frames:v 1 sandbox/mipi-camera-capture/frame.png
+FRAME="$(realpath "$(find sandbox/mipi-camera-capture -name 'frame_00_*.nv12' -print -quit)")"
+echo "${FRAME}"
 ```
 
-The exact frame filename includes its observed capture time; use the filename printed by the application.
+From the workstation, copy that file over and convert it there:
+
+```bash
+scp <user>@<target>:<path-printed-above> ./frame.nv12
+ffmpeg -f rawvideo -pixel_format nv12 -video_size 1920x1080 \
+  -i frame.nv12 \
+  -frames:v 1 frame.png
+```
 
 ## Expected Result
 

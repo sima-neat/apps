@@ -44,7 +44,7 @@ Run the remaining commands from `prebuilt-apps/`.
 | --- | --- | --- |
 | `detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz` | Default | Direct artifact |
 
-Model packages come from the Model Zoo release below, which can differ from the installed platform version.
+This model comes from the direct SDK artifact release below, which can differ from the installed platform version.
 
 ```bash
 export MODELZOO_VERSION="2.1.3"
@@ -77,6 +77,22 @@ pip install -r ${APP_DIR}/src/python/requirements.txt
 python3 ${APP_DIR}/src/python/main.py \
   --config ${APP_DIR}/src/common/config.yaml
 ```
+
+## Expected Result
+
+The application prints one line per image with its detection count and output
+file:
+
+```text
+[1/21] 000000081061.jpg: 3 detections -> 000000081061_detr.png
+[2/21] 000000116439.jpg: 9 detections -> 000000116439_detr.png
+```
+
+`io.output_dir` (default `sandbox/detr-object-detector`) then holds one
+annotated PNG per input image; with the packaged `assets/datasets/coco` folder
+that is 21 files. Detection counts vary by image. A run that writes every file
+with `0 detections` usually means `decode.confidence_threshold` is too high for
+the content.
 
 ## Troubleshooting
 

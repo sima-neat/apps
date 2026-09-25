@@ -100,6 +100,39 @@ python3 ${APP_DIR}/src/python/main.py \
   --config ${APP_DIR}/src/common/config.yaml
 ```
 
+## Expected Result
+
+The application prints one startup line per stream, then per-stream profile and
+processed counts:
+
+```text
+[profile stream=2] frames=70 output_fps=20.364721259721044 avg_detection_pull_ms=0.43236884301794426 avg_metadata_send_ms=0.5690935856795737 avg_boxes=2.0
+[stream 2] processed=200
+```
+
+The numbers are printed unrounded, and the two implementations format them
+differently, so compare the magnitudes rather than the digits.
+
+The `[profile stream=N]` lines appear while the run is in progress, once
+`runtime.warmup_frames` has passed, so they are visible without stopping the
+application. Every configured stream should appear.
+
+The `[stream N] processed=` summaries are printed at the end, and the packaged
+config ships `inference.frames: 0`, which runs continuously. Set a positive
+limit for a bounded check that ends by itself and prints them:
+
+```yaml
+inference:
+  frames: 200
+```
+
+A stream stuck with no progress while others advance is worth investigating on
+its own: verify that source independently before assuming a model or config
+problem. To inspect results without Insight, set `output.debug_dir` to a
+directory **and** `output.save_every` to a positive interval. Both are required:
+the packaged config ships `save_every: 0`, which disables saving even when
+`debug_dir` is set.
+
 ## Troubleshooting
 
 - Replace all placeholder stream URLs and the Insight host before running.

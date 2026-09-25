@@ -13,11 +13,61 @@ The portal reads `catalog.json`, which is generated from the per-example `README
 
 ## Prerequisites
 
-Install Node.js and npm if not already available:
+Node.js and npm, and Python 3.10 or newer.
+
+Python is required because `npm run dev` and `npm run build` both shell out to
+`scripts/generate_catalog.py` to rebuild `catalog.json`. Those scripts use
+`X | None` type annotations, which Python 3.9 evaluates at runtime and rejects
+with `TypeError: unsupported operand type(s) for |`. macOS ships Python 3.9 as
+the system `python3`, so check your version before the first build:
+
+```bash
+python3 --version
+```
+
+On Debian and Ubuntu:
 
 ```bash
 sudo apt update
-sudo apt install -y nodejs npm
+sudo apt install -y nodejs npm python3
+```
+
+On macOS, with [Homebrew](https://brew.sh):
+
+```bash
+brew install node python@3.11
+```
+
+If your default `python3` is older than 3.10, put a newer interpreter on `PATH`
+ahead of it so `npm run dev` and `npm run build` work unchanged. That is the
+preferred fix, because the `sync-catalog` script does two things and both are
+required.
+
+To run the steps manually instead, reproduce both of them. Skipping
+`sync_portal_assets.py` leaves catalog entries pointing at previews and README
+images that were never copied into `public/`, so the pages render without them.
+These commands run from the `portal` directory, like the ones in Run and Build
+below:
+
+```bash
+cd <apps-repo-root>/portal
+npm install
+PY=python3           # or python3.11, or whichever 3.10+ interpreter you have
+"$PY" --version
+"$PY" ../scripts/generate_catalog.py > public/catalog.json
+"$PY" ../scripts/sync_portal_assets.py
+```
+
+Then start the development server:
+
+```bash
+npx vite
+```
+
+or produce the static build in `dist/`:
+
+```bash
+npx vite build
 ```
 
 ## Run

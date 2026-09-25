@@ -96,6 +96,30 @@ python3 ${APP_DIR}/src/python/main.py \
   --config ${APP_DIR}/src/common/config.yaml
 ```
 
+## Expected Result
+
+The application prints a count when the frame limit is reached:
+
+```text
+processed=200 dropped_segments=0 video_sender=<insight-host>:9000
+```
+
+The packaged config ships `inference.frames: 0`, which runs continuously. The
+closing line prints only when a finite limit is reached, and interrupting the
+run with Ctrl-C skips it. For a bounded check that ends by itself, set a
+positive limit first:
+
+```yaml
+inference:
+  frames: 200
+```
+
+Left at `0`, the live Insight stream is the success signal instead.
+`dropped_segments` counts segments the pipeline discarded and should stay at or
+near `0`. To confirm masks without watching Insight, set `output.save_dir` to a
+directory and `output.save_every` to a non-zero interval; the application then
+writes annotated frames there as it runs.
+
 ## Troubleshooting
 
 - Verify `model.path` and the source URL if startup fails.

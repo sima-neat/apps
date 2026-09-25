@@ -80,6 +80,51 @@ python3 ${APP_DIR}/src/python/main.py \
   --config ${APP_DIR}/src/common/config.yaml
 ```
 
+## Expected Result
+
+Both implementations print the top-1 index with its probability and the top-5
+list, then confirm the top-1 class. They word it differently, so check against
+the one you ran. Exact probabilities vary between runs and between the two
+implementations; what matters is that class `1` wins by a wide margin.
+
+C++, which prints at the default stream precision:
+
+```text
+[model] top1 index=1 score=16.435 prob=0.946191
+[model] top5: 1:0.946191 0:0.0495301 392:0.00298376 389:0.000480504 29:0.000206855
+[model] top-1 matches expected class 1
+```
+
+Python, which prints four decimal places:
+
+```text
+top1 index=1 score=16.4350 prob=0.9532
+top5: 1:0.9532 0:0.0434 392:0.0023 389:0.0004 29:0.0002
+PASS
+```
+
+By default `io.image` is `null`, so the application downloads the goldfish image
+from `io.fallback_image_url` and needs network access. Class `1` should win with
+a probability well above the `validation.min_probability` default of `0.20`.
+
+A failed check reports the reason rather than failing silently. Python prints
+one of these to stderr and stops, so you see the first that applies, never both:
+
+```text
+FAIL: expected top1=1 (goldfish), got 393
+```
+
+```text
+FAIL: top1 prob 0.1832 < 0.2
+```
+
+C++ raises instead, and the message reaches stderr through the top-level
+handler:
+
+```text
+Error: model: top-1 mismatch: expected 1 got 393
+```
+
 ## Troubleshooting
 
 - Verify `model.path` if model loading fails.

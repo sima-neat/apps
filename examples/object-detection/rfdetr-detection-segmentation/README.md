@@ -113,6 +113,33 @@ python3 "$APP_DIR/src/python/main.py" --config "$APP_DIR/src/common/config.yaml"
 
 Insight receives `object-detection` metadata for detection or `segmentation` polygon metadata for segmentation. Stop a continuous run with Ctrl-C.
 
+## Expected Result
+
+This application writes nothing to disk; its output is the Insight stream plus a
+startup line and a closing summary:
+
+```text
+RF-DETR detection small h264: rtsp://<host>:<port>/<stream> (1280x720@30) -> Insight video=9000 metadata=9100
+RF-DETR detection: completed=200 output_fps=30.8
+```
+
+The `output_fps` value above is Python's, which prints one decimal place. The
+C++ binary prints the same line at the default stream precision, for example
+`output_fps=30.7692`.
+
+The startup line prints as soon as the source is probed, so it confirms the
+task, variant, codec and resolution straight away. Check that probed resolution
+matches the source you intended.
+
+The packaged config ships `inference.frames: 0`, which runs continuously. Both
+implementations handle `SIGINT`, so stopping with Ctrl-C still prints the closing
+`completed=` line. Set a positive `inference.frames` if you want the run to end
+on its own instead.
+
+`completed` reports the frames processed, and `output_fps` should track the
+source frame rate; a much lower `output_fps` means the pipeline is not keeping
+up with the source.
+
 ## Performance
 
 End-to-end throughput measured on Modalix under sustained load, using input streams with frame rates exceeding the application's processing capacity. Figures represent the maximum observed inference output rate at each resolution. Segmentation figures use `mask_grid_size: 108`.

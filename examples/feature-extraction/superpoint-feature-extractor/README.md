@@ -10,7 +10,7 @@
 | Languages | C++, Python |
 | Status | stable |
 | Binary Name | superpoint-feature-extractor |
-| Model | superpoint / modalix_int8_tessellation_mla |
+| Model | superpoint |
 
 ## Concept
 
@@ -86,6 +86,21 @@ python3 ${APP_DIR}/src/python/main.py \
 
 Both implementations stream the overlay to Insight and print the number of processed frames,
 average feature count, descriptor dimension, and selected video endpoint.
+
+## Expected Result
+
+This application writes nothing to disk; its output is the Insight stream plus a
+single summary line printed when the frame limit is reached:
+
+```text
+frames=200 average_points=331.6 descriptor_dim=256 video_sender=<insight-host>:9000
+```
+
+`frames` should match `runtime.frames`, or the video length when it is `0`.
+`descriptor_dim` should be `256`. For the packaged TUM RGB-D sequence
+`average_points` runs in the low hundreds. An `average_points` near zero means
+the pipeline ran but the model returned almost no features, which is worth
+investigating even though the run exits successfully.
 
 ## Troubleshooting
 
