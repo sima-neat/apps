@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.utils.output_assertions import assert_streamed_frames_are_usable
+
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
 SOURCE_CASES = [
@@ -120,6 +122,6 @@ class TestE2E:
             f"{source['name']} main.py exited with code {result.returncode}\n"
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
-        output_files = [path for path in tmp_output_dir.iterdir() if path.is_file()]
-        assert len(output_files) >= int(output_cfg["total_saved_frames"])
-        assert all(path.stat().st_size > 0 for path in output_files)
+        assert_streamed_frames_are_usable(
+            tmp_output_dir, int(output_cfg["total_saved_frames"])
+        )

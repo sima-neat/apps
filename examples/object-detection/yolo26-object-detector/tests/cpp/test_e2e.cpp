@@ -73,18 +73,17 @@ int main(int argc, char** argv) {
 
   auto r = spawn_and_wait(binary, {"--config", config_path.string()}, timeout);
 
+  const int expected_images = supported_image_count(input_dir);
   const int output_files = count_output_files(out_dir);
+  const std::string output_problem = saved_frames_problem(out_dir, expected_images);
 
   int rc = 0;
   if (r.exit_code != 0) {
     std::cerr << "[FAIL] exit code " << r.exit_code << "\n";
     std::cerr << "stderr:\n" << r.stderr_text << "\n";
     rc = 1;
-  } else if (output_files == 0) {
-    std::cerr << "[FAIL] expected output files but output directory is empty\n";
-    rc = 1;
-  } else if (!all_output_files_nonempty(out_dir)) {
-    std::cerr << "[FAIL] some output files are empty\n";
+  } else if (!output_problem.empty()) {
+    std::cerr << "[FAIL] " << output_problem << "\n";
     rc = 1;
   } else {
     std::cout << "[OK] yolo26m object detection overlay produced " << output_files

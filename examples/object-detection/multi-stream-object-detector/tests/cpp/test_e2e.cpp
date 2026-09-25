@@ -83,12 +83,9 @@ int run_source_case(const std::string& binary, const std::string& model_path,
     rc = 1;
   } else {
     const int files = count_output_files(output_dir);
-    if (files < total_saved_frames) {
-      std::cerr << "[FAIL] " << source_case.codec << " expected at least " << total_saved_frames
-                << " sampled output files, got " << files << "\n";
-      rc = 1;
-    } else if (!all_output_files_nonempty(output_dir)) {
-      std::cerr << "[FAIL] " << source_case.codec << " some sampled output files are empty\n";
+    const std::string problem = streamed_frames_problem(output_dir, total_saved_frames);
+    if (!problem.empty()) {
+      std::cerr << "[FAIL] " << source_case.codec << " " << problem << "\n";
       rc = 1;
     } else {
       std::cout << "[OK] " << source_case.codec << " multi-camera object detector produced "

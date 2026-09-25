@@ -1,16 +1,23 @@
 #include "support/testing/test_process.h"
 
+#include <algorithm>
 #include <array>
+#include <cctype>
 #include <cerrno>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
+#include <regex>
 #include <signal.h>
 #include <sstream>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+#include <opencv2/core.hpp>
+#include <opencv2/imgcodecs.hpp>
 
 namespace fs = std::filesystem;
 
@@ -179,6 +186,110 @@ void write_process_artifacts(const fs::path& dir, const std::string& command,
   std::ofstream(dir / "stderr.log") << result.stderr_text;
 }
 
+bool is_output_file(const fs::directory_entry& entry) {
+  return entry.is_regular_file() && entry.path().filename() != "config.yaml";
+}
+
+// What the directory-based applications accept, from their shared is_image().
+bool is_image_suffix(const fs::path& path) {
+  std::string suffix = path.extension().string();
+  for (char& c : suffix) {
+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  }
+  return suffix == ".jpg" || suffix == ".jpeg" || suffix == ".png" || suffix == ".bmp";
+}
+
+std::vector<fs::path> saved_image_files(const std::string& dir) {
+  std::vector<fs::path> paths;
+  std::error_code ec;
+  for (fs::recursive_directory_iterator entry(dir, ec), end; entry != end && !ec;
+       entry.increment(ec)) {
+    if (is_output_file(*entry))
+      paths.push_back(entry->path());
+  }
+  std::sort(paths.begin(), paths.end());
+  return paths;
+}
+
+// The multi-stream applications name every frame after the stream that produced
+// it, e.g. stream_1_frame_40.jpg, and write them all into one directory. Names
+// without a stream stay together as one group, which is the whole run.
+std::map<std::string, std::vector<fs::path>> group_by_stream(const std::vector<fs::path>& paths) {
+  static const std::regex stream_in_name(R"(^stream[_-]?([0-9]+)[_-])");
+  std::map<std::string, std::vector<fs::path>> groups;
+  for (const fs::path& path : paths) {
+    const std::string name = path.filename().string();
+    std::smatch match;
+    const std::string label =
+        std::regex_search(name, match, stream_in_name) ? "stream " + match[1].str() : "the run";
+    groups[label].push_back(path);
+  }
+  return groups;
+}
+
+using OutputSizes = std::map<fs::path, std::uintmax_t>;
+
+OutputSizes output_sizes(const std::string& dir) {
+  OutputSizes sizes;
+  std::error_code ec;
+  for (fs::recursive_directory_iterator entry(dir, ec), end; entry != end && !ec;
+       entry.increment(ec)) {
+    if (!is_output_file(*entry))
+      continue;
+    std::error_code size_ec;
+    const std::uintmax_t size = entry->file_size(size_ec);
+    // The producer may be replacing the file right now; treat it as in flight.
+    sizes[entry->path()] = size_ec ? 0 : size;
+  }
+  return sizes;
+}
+
+// Which output files the producer has demonstrably finished writing. The
+// applications write each frame straight to its final path, so a file is
+// visible, and already non-empty, before its last byte lands. Counting a file
+// on sight lets the poll stop the producer mid-write, and the truncated frame
+// then reads as an application failure the harness caused. A file counts only
+// once its size has stopped changing and it decodes as an image, which costs
+// one decode per file because the answer is remembered per size.
+OutputSizes confirm_finished_outputs(const OutputSizes& sizes, const OutputSizes& previous,
+                                     bool have_previous, const OutputSizes& finished) {
+  OutputSizes confirmed;
+  for (const auto& [path, size] : finished) {
+    const auto current = sizes.find(path);
+    if (current != sizes.end() && current->second == size)
+      confirmed[path] = size;
+  }
+  if (!have_previous)
+    return confirmed;
+
+  for (const auto& [path, size] : sizes) {
+    if (size == 0 || confirmed.count(path))
+      continue;
+    const auto before = previous.find(path);
+    if (before == previous.end() || before->second != size)
+      continue;
+    if (!cv::imread(path.string(), cv::IMREAD_COLOR).empty())
+      confirmed[path] = size;
+  }
+  return confirmed;
+}
+
+// Drop whatever the producer had not finished when the signal reached it.
+// Termination is requested as soon as enough frames are confirmed, so a later
+// frame can still be mid-write when SIGTERM arrives and lose its tail. That
+// truncation belongs to the harness, not to the application, and the confirmed
+// frames already satisfy the count the suite asked for. Nothing is discarded
+// when the producer exits on its own, so a crash mid-write is still visible.
+void discard_unfinished_writes(const std::string& dir, const OutputSizes& finished) {
+  for (const auto& [path, size] : output_sizes(dir)) {
+    const auto confirmed = finished.find(path);
+    if (confirmed == finished.end() || confirmed->second != size) {
+      std::error_code ec;
+      fs::remove(path, ec);
+    }
+  }
+}
+
 } // namespace
 
 ProcessResult spawn_and_wait(const std::string& binary, const std::vector<std::string>& args,
@@ -309,17 +420,26 @@ ProcessResult spawn_until_output_files(const std::string& binary,
 
   int elapsed_ms = 0;
   int status = 0;
+  OutputSizes previous_sizes;
+  bool have_previous = false;
+  OutputSizes finished;
   while (!child_exited(pid, status)) {
-    if (expected_files > 0 && count_output_files(output_dir) >= expected_files &&
-        all_output_files_nonempty(output_dir)) {
-      terminate_child(pid);
-      auto out = read_fd(stdout_pipe[0]);
-      auto err = read_fd(stderr_pipe[0]);
-      ::close(stdout_pipe[0]);
-      ::close(stderr_pipe[0]);
-      ProcessResult result{0, std::move(out), std::move(err)};
-      write_process_artifacts(artifact_dir, command, result);
-      return result;
+    if (expected_files > 0) {
+      const OutputSizes sizes = output_sizes(output_dir);
+      finished = confirm_finished_outputs(sizes, previous_sizes, have_previous, finished);
+      previous_sizes = sizes;
+      have_previous = true;
+      if (static_cast<int>(finished.size()) >= expected_files) {
+        terminate_child(pid);
+        discard_unfinished_writes(output_dir, finished);
+        auto out = read_fd(stdout_pipe[0]);
+        auto err = read_fd(stderr_pipe[0]);
+        ::close(stdout_pipe[0]);
+        ::close(stderr_pipe[0]);
+        ProcessResult result{0, std::move(out), std::move(err)};
+        write_process_artifacts(artifact_dir, command, result);
+        return result;
+      }
     }
     if (timeout_ms > 0 && elapsed_ms >= timeout_ms) {
       terminate_child(pid);
@@ -405,14 +525,6 @@ void remove_dir(const std::string& path) {
   fs::remove_all(target.filename() == "out" ? target.parent_path() : target, ec);
 }
 
-namespace {
-
-bool is_output_file(const fs::directory_entry& entry) {
-  return entry.is_regular_file() && entry.path().filename() != "config.yaml";
-}
-
-} // namespace
-
 int count_output_files(const std::string& dir) {
   int count = 0;
   std::error_code ec;
@@ -432,6 +544,68 @@ bool all_output_files_nonempty(const std::string& dir) {
       return false;
   }
   return true;
+}
+
+int supported_image_count(const std::string& dir) {
+  int count = 0;
+  std::error_code ec;
+  for (fs::directory_iterator entry(dir, ec), end; entry != end && !ec; entry.increment(ec)) {
+    if (entry->is_regular_file() && is_image_suffix(entry->path()))
+      ++count;
+  }
+  return count;
+}
+
+std::string saved_frames_problem(const std::string& dir, int minimum, int min_side) {
+  const std::vector<fs::path> paths = saved_image_files(dir);
+  if (static_cast<int>(paths.size()) < minimum) {
+    return "expected at least " + std::to_string(minimum) + " saved frames, got " +
+           std::to_string(paths.size());
+  }
+
+  for (const fs::path& path : paths) {
+    const cv::Mat frame = cv::imread(path.string(), cv::IMREAD_COLOR);
+    if (frame.empty()) {
+      std::error_code ec;
+      return path.filename().string() + " is " + std::to_string(fs::file_size(path, ec)) +
+             " bytes but does not decode as an image";
+    }
+    if (frame.cols < min_side || frame.rows < min_side) {
+      return path.filename().string() + " decoded to an implausible " +
+             std::to_string(frame.cols) + "x" + std::to_string(frame.rows);
+    }
+  }
+  return "";
+}
+
+std::string streamed_frames_problem(const std::string& dir, int minimum, int min_side) {
+  const std::string problem = saved_frames_problem(dir, minimum, min_side);
+  if (!problem.empty())
+    return problem;
+
+  for (const auto& [label, group] : group_by_stream(saved_image_files(dir))) {
+    if (group.size() < 2)
+      continue;
+
+    // Held one at a time against the first: a run can save many large frames.
+    const cv::Mat first = cv::imread(group.front().string(), cv::IMREAD_COLOR);
+    bool advanced = false;
+    for (std::size_t index = 1; index < group.size() && !advanced; ++index) {
+      const cv::Mat frame = cv::imread(group[index].string(), cv::IMREAD_COLOR);
+      advanced = frame.size() != first.size() || frame.type() != first.type() ||
+                 cv::norm(frame, first, cv::NORM_L1) > 0;
+    }
+    if (!advanced) {
+      std::string names;
+      for (std::size_t index = 0; index < group.size() && index < 4; ++index) {
+        names += (index ? ", " : "") + group[index].filename().string();
+      }
+      return "all " + std::to_string(group.size()) + " frames saved for " + label +
+             " are pixel-identical (" + names +
+             "...); the pipeline is not advancing through the stream";
+    }
+  }
+  return "";
 }
 
 } // namespace sima_examples::testing

@@ -234,17 +234,58 @@ def e2e_subprocess_artifacts(request, monkeypatch):
     yield
 
 
-def _output_files(output_dir: Path) -> list[Path]:
-    return [
-        path
-        for path in output_dir.rglob("*")
-        if path.is_file() and path.name != "config.yaml"
-    ]
+def _output_sizes(output_dir: Path) -> dict[Path, int]:
+    sizes: dict[Path, int] = {}
+    for path in output_dir.rglob("*"):
+        if not path.is_file() or path.name == "config.yaml":
+            continue
+        try:
+            sizes[path] = path.stat().st_size
+        except OSError:
+            # The producer is replacing the file right now; treat it as in flight.
+            sizes[path] = -1
+    return sizes
 
 
-def _has_output_files(output_dir: Path, expected_files: int) -> bool:
-    files = _output_files(output_dir)
-    return len(files) >= expected_files and all(path.stat().st_size > 0 for path in files)
+def _confirm_finished_outputs(
+    sizes: dict[Path, int], previous: dict[Path, int] | None, finished: dict[Path, int]
+) -> dict[Path, int]:
+    """Which output files the producer has demonstrably finished writing.
+
+    The applications write each frame straight to its final path, so a file is
+    visible, and already non-empty, before its last byte lands. Counting a file
+    on sight lets the poll stop the producer mid-write, and the truncated frame
+    then reads as an application failure that the harness caused. A file counts
+    only once its size has stopped changing and it decodes as an image, which
+    costs one decode per file because the answer is remembered per size.
+    """
+    # Imported here so the shared fixtures stay importable without OpenCV.
+    import cv2
+
+    confirmed = {path: size for path, size in finished.items() if sizes.get(path) == size}
+    if previous is None:
+        return confirmed
+
+    for path, size in sizes.items():
+        if path in confirmed or size <= 0 or previous.get(path) != size:
+            continue
+        if cv2.imread(str(path)) is not None:
+            confirmed[path] = size
+    return confirmed
+
+
+def _discard_unfinished_writes(output_dir: Path, finished: dict[Path, int]) -> None:
+    """Drop whatever the producer had not finished when the signal reached it.
+
+    Termination is requested as soon as enough frames are confirmed, so a later
+    frame can still be mid-write when SIGTERM arrives and lose its tail. That
+    truncation belongs to the harness, not to the application, and the confirmed
+    frames already satisfy the count the suite asked for. Nothing is discarded
+    when the producer exits on its own, so a crash mid-write is still visible.
+    """
+    for path, size in _output_sizes(output_dir).items():
+        if finished.get(path) != size:
+            path.unlink(missing_ok=True)
 
 
 @pytest.fixture
@@ -305,11 +346,18 @@ def run_until_output_files(request):
             text=True,
         )
         deadline = time.monotonic() + timeout_s
+        previous_sizes: dict[Path, int] | None = None
+        finished: dict[Path, int] = {}
         while True:
-            if expected_files > 0 and _has_output_files(output_dir, expected_files):
-                stdout, stderr = _terminate(process)
-                _write_artifacts(command, stdout, stderr)
-                return subprocess.CompletedProcess(command, 0, stdout, stderr)
+            if expected_files > 0:
+                sizes = _output_sizes(output_dir)
+                finished = _confirm_finished_outputs(sizes, previous_sizes, finished)
+                previous_sizes = sizes
+                if len(finished) >= expected_files:
+                    stdout, stderr = _terminate(process)
+                    _discard_unfinished_writes(output_dir, finished)
+                    _write_artifacts(command, stdout, stderr)
+                    return subprocess.CompletedProcess(command, 0, stdout, stderr)
 
             returncode = process.poll()
             if returncode is not None:
