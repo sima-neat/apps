@@ -14,778 +14,119 @@
 ## Concept
 Runs supported language and vision-language models on a Modalix device through a web interface for chat, image analysis, model setup, and diagnostics.
 
-The Studio starts without a chat model loaded. From the web interface you can:
+The Studio starts with no chat model loaded. From the web interface you can:
 
-- find compatible models already on the device
+- find compatible models already on the device and load one language or vision-language model at a time without a restart
 - download models from the supported Hugging Face accounts when the device is online
-- load one language or vision-language model at a time without restarting the Studio
 - chat with text, uploaded images, a browser camera, or a camera attached to the board
 - transcribe speech with Whisper, speak replies with the installed voices, and search local documents with RAG
 
 The interface and its fonts and JavaScript libraries run locally. Internet access is needed only when you search for or download a model from Hugging Face.
 
 ## Preview
-Neat GenAI Studio UI:
-
 ![Neat GenAI Studio preview](../../../portal/assets/examples/genai/neat-genai-studio/image.png)
 
 ## Prerequisites
-- Installed Neat Development Environment + Neat Library.
-- The model server uses the Python environment where `pyneat` is available. The default scripts assume:
-
-```text
-~/pyneat/bin/python
-```
-
-Set `PYNEAT_PYTHON=/path/to/python-with-pyneat` if your Neat Library environment is
-somewhere else.
+- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
+- Installed Neat Development Environment and Neat Library. The model server runs in the Python environment where `pyneat` is available; the scripts default to `~/pyneat/bin/python`. Set `PYNEAT_PYTHON=/path/to/python-with-pyneat` if it lives elsewhere.
+- Internet access on the target only when you search for or download a model from Hugging Face.
 
 ## Install Apps
-Fetch only Neat GenAI Studio and enter its directory. This avoids downloading
-the complete Apps bundle:
+Install the latest Neat Apps runtime and enter the installed bundle:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sima-neat/apps/main/scripts/get-example.sh | bash -s -- neat-genai-studio
-cd neat-genai-studio
+sima-cli neat install apps
+cd prebuilt-apps
+APP_DIR=examples/genai/neat-genai-studio
 ```
+
+Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
-Install the UI virtual environment, Whisper ASR model, GTE-small embedding
-model, TTS voices (piper-tts + the piper-plus model), default RAG database, and
-generated local config:
+Neat GenAI Studio installs its models and dependencies with its own setup script, which downloads from Hugging Face. There is no `sima-cli` model-download step for this application.
 
 ```bash
-./setup.sh
+${APP_DIR}/setup.sh
 ```
 
-At the end, `setup.sh` offers to create a **`neat-ai`** shell alias for `./run.sh`
-so you can start the studio from any directory. On the eLxr board (interactive
-SSH sessions are login shells) it is written to `~/.bash_profile`; for zsh it goes
-to `~/.zshrc`. Answer the prompt, or set `CREATE_ALIAS=1`/`0` to skip it
-non-interactively; after it's added, `source ~/.bash_profile` (or open a new
-shell), then run `neat-ai`, `neat-ai --cli`, `neat-ai stop`, etc.
+`setup.sh` creates the UI virtual environments, downloads the default speech and embedding models, installs the text-to-speech voices and the Supertonic engine, builds the default RAG database, and writes a generated `config.local.yaml`.
 
-> You can skip running `setup.sh` yourself: **`./run.sh` runs it automatically on
-> the first launch** if it hasn't completed. Opt out with `AUTO_SETUP=0` (it then
-> errors with a hint instead of installing).
+| Model | Role | Source |
+| --- | --- | --- |
+| `whisper-small-a16w8` | Default speech-to-text, installed by `setup.sh` | Hugging Face `simaai/whisper-small-a16w8` |
+| `gte-small` | RAG embedding model, installed by `setup.sh` | Hugging Face `thenlper/gte-small` |
+| `Qwen3-VL-4B-Instruct-GPTQ-a16w4` | Example chat / vision-language model, loaded on demand | Hugging Face (`simaai`, `TDoSiMa`) |
 
-**No chat/VLM model is downloaded by default.** The UI starts with no
-chat model loaded. Download one from the Hugging Face panel or seed the
-catalog during installation, as shown below. By default, `setup.sh` downloads only:
-
-- `simaai/whisper-small-a16w8` (ASR)
-- `thenlper/gte-small` (RAG embedding)
-
-Downloaded models are stored under `/media/nvme/llima/models` by default. That
-directory is the **model catalog**: any compatible model directory under it can
-be loaded on the fly from the UI. On a system without NVMe, set
-`LLIMA_MODELS_PATH` to another writable location:
+No chat or vision-language model is installed by default; load one from the web interface after startup, or fetch and preload one during setup:
 
 ```bash
-LLIMA_MODELS_PATH=/workspace/neat/models_genai ./setup.sh
+CHAT_MODEL_REPO=simaai/Qwen3-VL-4B-Instruct-GPTQ-a16w4 ${APP_DIR}/setup.sh
 ```
 
-Seed the catalog with one or more chat/VLM models at install time instead of
-downloading them from the UI (space-separated Hugging Face repos):
-
-```bash
-CATALOG_MODEL_REPOS="simaai/<a-chat-or-vlm-repo> simaai/<another-repo>" ./setup.sh
-```
-
-Other useful environment variables:
-
-- `CHAT_MODEL_REPO`: optionally download **and preload** one chat/VLM model at
-  startup (empty by default, i.e. none).
-- `ASR_MODEL_REPO`: the speech-to-text model installed and made active at
-  startup (default `simaai/whisper-small-a16w8`; set to `""` to install none).
-- `ASR_CATALOG_MODEL_REPOS`: space-separated extra ASR repos to seed the
-  catalog, e.g. `simaai/whisper-medium-a16w8`, so you can switch between them
-  at runtime from **Settings → Models**.
-- `MAX_RESIDENT_CHAT_MODELS`: kept for advanced use; by default only one
-  chat/VLM model is resident and loading a new one clears the others.
-- `ALLOW_HUB_DOWNLOAD`: `true`/`false` to enable/disable in-UI Hugging Face
-  downloads (default `true`).
-- `TTS_LANGUAGES`: comma- or space-separated catalogued server-TTS languages to
-  install. Interactive setup prompts when this is unset; non-interactive setup
-  defaults to `en,de,es,fr,it,ja,pt,vi,zh`.
-- `INSTALL_SUPERTONIC`, `SUPERTONIC_REPO_ROOT`, `SUPERTONIC_APP_ROOT`,
-  `SUPERTONIC_REPO_REVISION`: install the MLA-accelerated Supertonic 3 engine
-  (default on), where its checkout and runtime live, and the reviewed upstream
-  commit a fresh clone is pinned to; see
-  [Text-to-speech](#text-to-speech-voices--languages). The paths are written to
-  `config.local.yaml` under `app.tts.supertonic`, so `run.sh` finds a
-  non-default install without re-exporting them.
-- `TTS_OPTIONAL_VOICES`: optional voice ids to install, for example
-  `mera,en_US-ljspeech-medium,zh_CN-chaowen-medium`.
-
-The UI virtual environment is stored under `./.venv` unless `APP_VENV` is set.
-The generated config is stored at `./config.local.yaml` unless `CONFIG_PATH` is
-set. RAG is enabled by default and uses `src/python/ui/milvus.db`.
+Models are stored under `/media/nvme/llima/models` by default. Set `LLIMA_MODELS_PATH=/path/to/models` before `setup.sh` to use another directory.
 
 ## Configure
+`setup.sh` writes `config.local.yaml`; the packaged defaults are in `${APP_DIR}/src/common/config.yaml`. Any compatible model directory under the catalog is discovered and loadable from the web interface without a restart, so most users change nothing. Edit `config.local.yaml` only to change:
 
-### Model catalog
-
-After install, edit `config.local.yaml` to change the catalog, memory budget, or
-the models loaded at startup:
-
-```yaml
-server:
-  models:
-    catalog_dir: /media/nvme/llima/models   # scanned for loadable models
-    max_resident_chat_models: 1             # chat/VLM models resident at once
-    chat: []                                # optional: none preloaded by default.
-      # To preload a model at startup instead, list it here, e.g.:
-      # - name: Qwen3-VL-4B-Instruct-GPTQ-a16w4
-      #   path: /media/nvme/llima/models/Qwen3-VL-4B-Instruct-GPTQ-a16w4
-    asr:                                    # active at startup; switchable at runtime
-      name: whisper-small-a16w8
-      path: /media/nvme/llima/models/whisper-small-a16w8
-  hub:
-    allow_download: true
-    org: simaai
-```
-
-Any compatible model directory (one containing `devkit/` with `vlm_config.json`
-or `whisper_config.json`) placed under `catalog_dir` is discovered automatically
-and can be loaded from the UI. You do not need to list it under `chat:` or restart.
-
-Both `chat:` and `asr:` are **optional**. Use `chat: []` (and omit `asr:`) to
-start the server and UI with no model resident; the UI comes up and prompts you
-to load or download a model. This is the fully decoupled mode.
+- `server.models.catalog_dir` — the directory scanned for loadable models (default `/media/nvme/llima/models`).
+- `server.models.chat` — chat or vision-language models to preload at startup (empty by default; models still load on demand).
+- `server.models.asr` — the speech-to-text model active at startup (`whisper-small-a16w8` by default; switchable at runtime).
+- `server.hub.allow_download` — whether the interface may download models from Hugging Face.
+- `app.rag.enabled` and `app.rag.embedding_model_dir` — retrieval-augmented search and its embedding model.
 
 ## Run
-Start both the Neat OpenAI-compatible server (with the control API) and the Flask UI:
+Start the Studio. The launcher runs `setup.sh` automatically on first launch if it has not been run yet.
 
 ```bash
-./run.sh          # or `neat-ai` if you created the alias
+APP_DIR=examples/genai/neat-genai-studio
+${APP_DIR}/run.sh
 ```
 
-`run.sh` prints the web UI URL to open in a browser. Settings live behind the ⚙
-icon; the **Models** tab lists your downloaded models (search, load/unload,
-delete) and the **Add Model** tab lists models available to download from Hugging
-Face with their download size and the NVMe free space remaining. When you're done,
-either press `Ctrl+C` in the terminal or use the **⏻ Shutdown** button in the
-sidebar. Both methods stop the UI and model server cleanly, just like
-`./run.sh stop`).
+When it finishes starting, open the printed URL — `https://<target-ip>:5000` — in a browser. Load a model from **Settings → Models**, then chat.
 
-### Terminal chat (CLI)
-Prefer the terminal? `--cli` starts the model server (clearing stale processes
-first, as usual) and drops you into an interactive chat instead of the web UI.
-`/reset` performs the same explicit accelerator reset as the web UI's button:
+Use the terminal chat instead of the web interface:
 
 ```bash
-./run.sh --cli    # or `neat-ai --cli`
+${APP_DIR}/run.sh --cli
 ```
 
-On an interactive start it first asks what you want to do: **Chat with a model**,
-**Benchmark model(s)**, **Download a model** (when online), or **go straight to the
-prompt**. Skip the menu by jumping straight to a mode:
+Stop the Studio with `Ctrl+C`, or from another shell:
 
 ```bash
-./run.sh --chat [MODEL]        # chat now (load MODEL first if given)
-./run.sh --download [REPO]      # download REPO (or prompt), then chat
-./run.sh --benchmark [MODEL]    # benchmark MODEL (or prompt), then chat (alias --bench)
+${APP_DIR}/run.sh stop
+${APP_DIR}/run.sh status
 ```
 
-It then talks straight to the model server (the control API to list/load models
-and the OpenAI endpoint to stream replies). Type a message to chat; commands:
-
-```text
-/models          list catalog models (● loaded, ○ not)
-/load [name]     load a model: no name pops an arrow-key picker (↑/↓, Enter)
-/download        browse Hugging Face: pick one, several, or all models to
-                 download (Space to multi-select, 'a' for all), then load one
-/unload [name]   unload a model: no name unloads the loaded LLM/VLM
-/delete [name]   delete a model's weights from disk: no name pops a picker;
-                 asks to confirm (irreversible; /rm, /remove)
-/image [path]    attach an image to the next message (VLM only; no path prompts)
-/camera [device] arm the board camera: every message then auto-sends a fresh
-                 frame to the VLM (/camera off to stop; /dev/video16: /cam, /webcam)
-/benchmark …     TTFT/TPS benchmark: see the Benchmark section below
-/system <text>   set a system prompt (empty clears it)
-/new             clear the conversation
-/export [file]   save this chat to a .log file (default neat-chat-<time>.log)
-/reset           reset the accelerator (MLA) and restart the model server
-/tokens <n>      set max response tokens
-/think [on|off]  let reasoning models think before answering (default on):
-                 the reasoning streams dimmed, is counted separately, and stays
-                 out of the history and /export; off sends /no_think like the
-                 web UI's Thinking toggle (start with --no-think for the same)
-/rag [filter]    inspect the RAG database: list chunks (/docs; filter narrows)
-/rag on|off      toggle RAG-augmented chat (top passages prepended to prompts)
-/rag search <q>  semantic search: show top matches without asking the model
-/rag db [path]   show, or switch to, which milvus.db is served ('default' reverts)
-/rag status      show the RAG toggle, active database and service state
-/rag reset|clear rebuild from the default document, or clear all RAG documents
-/help  /quit     help / exit (aliases: /exit, /bye, /q, Ctrl+D)
-```
-
-Replies render live as Markdown, and LaTeX math is converted to Unicode for the
-terminal (`$E = mc^2$` → `E = mc²`, `\frac`, `\sqrt`, Greek letters, `\sum`, …).
-
-Ctrl+C stops the current reply; it prints per-response timing (tokens, TTFT,
-tok/s). Exiting shuts the model server down. Use **↑/↓** at the prompt to recall
-previous prompts (history persists across sessions in `~/.neat_ai_history`).
-
-`/camera <index>` **arms** a camera attached **to the board** (the CLI runs on
-the board, unlike the web UI, which uses the browser's camera). Once armed, every
-message auto-grabs a fresh frame and sends it to the VLM: `/camera off` disarms,
-and a `📷` in the prompt shows it's live. It uses any available capture tool,
-including `ffmpeg`, `fswebcam`, or `libcamera`/`rpicam`. Install one if
-the board has none, or set `NEAT_CAMERA_DEVICE` to the right `/dev/video*` node.
-An explicit `/image` still takes precedence for that one message.
-
-### Stopping
-Press `Ctrl+C` in the terminal running `run.sh`, or from another shell:
+To start the processes manually, run the packaged entrypoints under `${APP_DIR}/src/python/` in separate terminals — the OpenAI-compatible model server and the web interface:
 
 ```bash
-./run.sh stop      # cleanly stop a running instance
-./run.sh status    # report whether it is running
+${PYNEAT_PYTHON:-~/pyneat/bin/python} ${APP_DIR}/src/python/server/main.py --config ${APP_DIR}/config.local.yaml
+${APP_DIR}/.venv/bin/python ${APP_DIR}/src/python/ui/main.py --config ${APP_DIR}/config.local.yaml
 ```
 
-### Update
-Pull the latest Studio source. Dependency refresh is opt-in; it updates only the
-two Python environments and does not rewrite models, voices, configuration, or
-the RAG database:
-
-```bash
-./run.sh update              # git pull in a checkout, else re-fetch the example
-NEAT_APPS_BRANCH=develop ./run.sh update   # update from a specific branch
-UPDATE_DEPS=1 ./run.sh update              # also refresh Python dependencies
-```
-
-In a full `apps` git checkout this runs `git pull`; if you fetched just this
-example with `get-example.sh`, it re-downloads the release archive and mirrors
-tracked source, removing files deleted by later releases while preserving the
-venvs, local config/certificates, RAG database, logs, and downloaded voices.
-
-### Clean up
-Remove everything the app generated (both venvs, `config.local.yaml`, the RAG
-database, downloaded TTS voices, `__pycache__`, the pid file, and any `*.log`)
-to reclaim space or start fresh:
-
-```bash
-./run.sh --clean        # lists what will be removed, then asks to confirm
-./run.sh --clean -y     # skip the prompt (or CLEAN_YES=1)
-CLEAN_SUPERTONIC=1 ./run.sh --clean   # also remove the Supertonic runtime + checkout
-```
-
-It stops a running instance first and lists each target with the total size
-before deleting. Downloaded chat/VLM/ASR models under `catalog_dir` are **kept**
-(they're large and shared); re-run `./setup.sh` afterwards to reinstall the venvs.
-
-Shutdown is graceful: both processes handle `SIGTERM`, so the model server
-releases its models from the MLA and the UI stops the RAG worker before exiting
-(a force-kill only happens if they don't stop within `SHUTDOWN_GRACE_SECONDS`,
-default 10). `run.sh` records its PID in `.neat-genai-studio.pid` (used by
-`stop`/`status`) and refuses to start a second instance while one is running.
-
-On launch, `run.sh` stops stale model-server/UI processes from an interrupted
-Studio run and waits for the model-server port to become available. It does not
-restart the MLA dispatcher, initialize the MLA, or run a board-runtime recovery
-script on startup, and model/runtime failures are reported rather than silently
-recovered from. The accelerator is only ever reset when you explicitly ask for
-it — see [Reset the accelerator](#reset-the-accelerator).
-
-Open the Flask UI:
-
-```text
-https://<target-ip>:5000
-```
-
-The Neat OpenAI-compatible server listens on `http://127.0.0.1:9998`, and the
-model-management control API on `http://127.0.0.1:9997`.
-
-Check that the startup models are hosted:
+## Expected Result
+The web interface loads at `https://<target-ip>:5000`. After loading a model from **Settings → Models**, a chat prompt returns a streamed reply. From a shell on the target you can confirm the model server and its loaded models:
 
 ```bash
 curl -s http://127.0.0.1:9998/v1/models | python3 -m json.tool
 ```
 
-### Switch models on the fly
-The **Settings → Models** tab shows models downloaded to the board in a searchable list. Loaded models are marked
-`● loaded`, on-disk ones `○ downloaded`; press **Load** on a not-yet-loaded model
-to load it at runtime and unload all other chat/VLM models (speech-to-text has
-its own slot and is untouched), so the MLA holds just the active model. A **Load status** panel pins to the
-top of the tab and shows the live progress bar while it loads. The studio cancels
-the outgoing model's in-flight generation and waits for its memory to be released
-before loading the new one, then warms it so your first message is instant.
-
-If a switch hits an accelerator error, the Studio rolls back the failed model
-registration and reports the error. It does not restart or reset board services
-on its own — use **Reset MLA** below if the accelerator is genuinely wedged.
-
-### Switch the speech-to-text model
-The same tab lists your speech-to-text (ASR) models in their own
-**Speech-to-text** group, because they never compete with chat models for the
-same slot. Exactly one is active — marked `● active` — and pressing **Use** on
-another evicts it and makes the new one active, without restarting and without
-clearing the conversation. The chat model stays loaded throughout.
-
-`setup.sh` installs `simaai/whisper-small-a16w8` by default. To install a
-different or additional model:
-
-```bash
-# Replace the default:
-ASR_MODEL_REPO="simaai/whisper-medium-a16w8" ./setup.sh
-
-# Or keep whisper-small and seed extra models to switch between at runtime:
-ASR_CATALOG_MODEL_REPOS="simaai/whisper-medium-a16w8" ./setup.sh
-```
-
-You can also download any Whisper build from **Settings → Add Model** while the
-studio is running; it appears in the Speech-to-text group ready to use. Larger
-models transcribe more accurately at the cost of load time and memory.
-
-Switching is **not persistent**: `server.models.asr` in `config.local.yaml` is
-what a restart re-selects, and the model it names carries a `startup default`
-badge. Edit it to make a different choice permanent. Set `STUDIO_ASR_WARMUP=0`
-to skip the warm-up a switch performs (the first transcription then pays the
-load cost instead).
-
-### Reset the accelerator
-Models are held by the MLA shared-memory dispatcher, which outlives the studio's
-own processes — so if a load wedges it, restarting the studio does not clear it.
-**Settings → Models → Reset MLA** (or `/reset` in the CLI) unloads everything and
-asks `run.sh` to restart the dispatcher and relaunch the model server. The web UI
-stays up and reconnects on its own; expect a few seconds of unavailability, and
-any in-progress generation stops.
-
-This is the **only** thing in the studio that touches the board runtime, and it
-never happens on its own — not at startup, and not when a model fails to load.
-
-The request normally goes through the model server's control API, which exits
-with a sentinel status that `run.sh` acts on. A server wedged inside a native
-model load cannot answer that API at all, so when the request times out the web
-UI and the CLI instead write a request file (`.neat-genai-reset.request`, see
-`NEAT_RESET_REQUEST_FILE`) that `run.sh` polls every second: it stops the server
-itself (TERM, then KILL after `SHUTDOWN_GRACE_SECONDS`), resets the dispatcher
-and relaunches. Both paths share the relaunch budget (`MLA_MAX_RESTART_RETRIES`
-consecutive relaunches that fail within `RELAUNCH_STABLE_SECONDS`) and both are
-refused when `MLA_RESET=0`.
-
-Because the reset is board-wide and the web UI has no login, the web route
-requires a **reset token** from any client that is not on the board itself:
-`run.sh` generates one (kept in `.neat-genai-reset.token`, mode 0600) and
-prints it at startup; the browser asks for it the first time you press **Reset
-MLA** and remembers it. Set `STUDIO_RESET_TOKEN` to choose the value, or
-`STUDIO_RESET_AUTH=0` to drop the requirement on a trusted network. The CLI's
-`/reset` talks to the local control API and is unaffected.
-
-Restarting the dispatcher needs privileges. `run.sh` prefers the board's own
-`fix_devkit_runtime.sh` when present and otherwise restarts
-`simaai-appcomplex.service` via `sudo`, so run the studio as root, give the
-account passwordless sudo for those commands, or point `MLA_RESET_CMD` at your
-own reset command. Without privileges the model server still relaunches, the
-dispatcher is left alone, and a warning says so. `MLA_RESET=0` refuses the
-request outright.
-
-### Download models from Hugging Face
-When the board is online, the **Settings → Add Model** tab appears (it's hidden
-offline). It lists compatible `simaai` models *available to download*, each with a
-**download size** badge (⬇ so you know how much space it needs) and a **`💾 NVMe
-storage: … free`** readout so you can tell whether it will fit. Filter/search,
-click **Download**, watch the progress bar, and the model moves to the **Models**
-tab ready to load. Downloads land under `catalog_dir`. Set `HF_TOKEN` for gated
-repos.
-
-### Benchmark (TTFT / TPS)
-The performance half of SiMa's **MoLE** (Modalix Language-model Evaluator) measures
-**Time-To-First-Token (TTFT)** and **Tokens-Per-Second (TPS)** by streaming from
-the on-device model. Open it with the speedometer icon in the header.
-
-- **Pick one, several, or all models.** The *Models to benchmark* control is a
-  multi-select (with **Select all downloaded**). Each selected model is loaded and
-  benchmarked in turn.
-- **Comparison + export.** With 2+ models you get a side-by-side bar chart and
-  table (TPS mean/p90, TTFT, tokens, σ) with the best TPS/TTFT highlighted, plus
-  **⤓ CSV / ⤓ JSON** export of the results.
-- Configure **Runs** and **Output tokens**; each run streams live and the summary
-  reports min/max/avg/median/σ/p90.
-
-In the CLI, use `/benchmark`:
-
-```text
-/benchmark                 benchmark the active model (5 runs · 128 tokens)
-/benchmark all             benchmark every downloaded LLM/VLM, then a comparison table
-/benchmark m1,m2 5 128     specific models · 5 runs · 128 tokens each
-```
-
-After a CLI run it offers to export the results to a `.csv` or `.json` path.
-Ctrl+C stops the current run. (Accuracy tasks like hellaswag/piqa still need the
-host `llima-benchmark` CLI.)
-
-### SiMaSentry Solutions (Med / Safe / Sec demo harnesses)
-The Studio includes three AI harnesses. **SiMaSentry-Med** provides clinical VLM chat and diagnostic imaging tools. **SiMaSentry-Safe** handles PPE and hazard inspection with live camera zones. **SiMaSentry-Sec** supports SOC threat analysis and change detection. Open them from the shield icon in the header.
-
-- Picking a card launches the harness full-screen, **auto-wired to the currently
-  loaded model** through a same-origin `/v1/chat/completions` proxy (the Studio
-  page is HTTPS while the model server is HTTP, so the proxy avoids
-  mixed-content/CORS blocks).
-- Load a VLM to use the image features. A
-  badge and confirmation warn when the loaded model has no vision support.
-- The harness's ⌂ Home action returns to the launcher grid; ✕ (or Esc) closes it.
-- The suite also works standalone at `https://<board>:5000/solutions/` (the
-  SiMaSentry Mission Control portal), handy for kiosk setups.
-- Safe's PPE Inspector uses the browser camera and all three support voice
-  in/out: grant camera/microphone permission when prompted (HTTPS required,
-  which the Studio already serves).
-
-### Markdown & fonts
-Assistant replies render Markdown live. Hover a reply to **copy the whole
-response** (top-right button), and hover any code block to **copy the code**.
-Under **Appearance**, pick a font family and size or type any locally installed
-family; the choice is saved in the browser. The dark/light theme toggle is in the
-Settings header.
-
-### Text-to-speech (voices & languages)
-Spoken replies use a **multi-engine router** that picks the best offline TTS
-engine per language. The spoken language follows the **Transcription language**
-selector in Settings.
-
-| Engine | Licence | Runtime | Languages |
-| --- | --- | --- | --- |
-| **Supertonic 3** | OpenRAIL model terms (see notices) | PyNeat on the **MLA** (vector field + vocoder), onnxruntime (CPU text front end) | 30+ incl. English, German, Spanish, French, Italian, Portuguese, Japanese, **Korean**, Vietnamese (not Chinese) |
-| **piper-plus** | MIT runtime; model-specific terms | onnxruntime (CPU) | Japanese, English, Chinese, Spanish, French, Portuguese |
-| **piper-tts** | GPL-3.0 runtime; model-specific terms | onnxruntime (CPU) | English, Chinese, Spanish, French, Portuguese, German, Italian, Norwegian, Vietnamese |
-| **Browser** (Web Speech API) | None | client-side (your browser / OS) | any language your device has a voice for |
-
-- The speech API (`POST /v1/audio/speech`) honours an explicit `model`:
-  `supertonic`, `piper-plus` or `piper-tts` is dispatched to exactly that
-  engine and answers 503 when it cannot speak the requested `language`; any
-  other value (`default`, `tts-1`, …) goes through the router below.
-- **Supertonic 3** is the MLA-accelerated engine from
-  [supertonic-sima](https://github.com/florianvoss-commit/supertonic-sima). It
-  is preferred for every language it speaks whenever its runtime is installed
-  (see below), synthesizes at a real-time factor of about 0.07 on a Modalix
-  DevKit, and offers ten speakers (F1-F5, M1-M5) under **Settings → Supertonic
-  voice**. `SUPERTONIC_VOICE` picks the startup speaker; `SUPERTONIC_STEPS`
-  (5-12, default 8) trades quality for latency. Replies are split into segments
-  that fit the compiled 192-character contract and streamed one WAV per segment.
-- **Japanese** defaults to Piper Plus CSS10. CSS10 is declared public domain;
-  the multilingual base model is CC BY 4.0 and its attribution is preserved in
-  [the TTS notices](THIRD_PARTY_TTS_MODELS.md).
-- **MERA** is an optional Piper Plus model published under Apache 2.0, with the
-  CC BY 4.0 base-model attribution preserved. Selecting it downloads and
-  verifies it automatically.
-- **Chinese** defaults to the dedicated Huayan Piper voice. Chaowen is an
-  optional second Chinese voice; Piper Plus CSS10 remains available as the
-  multilingual alternative.
-- **Korean** is spoken by Supertonic 3 when it is installed. Without it there is
-  no server-side Korean model: use Browser TTS when the client has a Korean
-  voice; otherwise replies remain text-only.
-- **Voice engine**: a **Settings → Voice engine** dropdown chooses which engine
-  is preferred for languages more than one can speak (supertonic, piper-plus or
-  piper-tts). Languages only one engine supports are unaffected.
-- **Browser**: selecting the **Browser** engine speaks replies on the client with
-  the Web Speech API instead of synthesizing on the board (no server compute). The
-  server still cleans each sentence (Markdown/LaTeX stripped), so the browser
-  utters clean text; pick a device voice under **Settings → Browser voice**. It
-  works for any language your browser has a voice for.
-- `setup.sh` asks which catalogued languages to install. In non-interactive use,
-  set `TTS_LANGUAGES`, and use `TTS_OPTIONAL_VOICES=mera` to add MERA. The UI
-  lists catalogued voices per language and downloads a missing voice when it is
-  activated.
-- CSS10 is the default Piper Plus model. It applies across all six Piper Plus
-  languages; MERA is the only optional multilingual model.
-- **piper-tts runs in its own venv** (`.venv-pipertts`). piper-tts and piper-plus
-  both ship a top-level `piper` package and can't share one environment, so
-  `setup.sh` installs piper-tts separately and the UI reaches it through a
-  subprocess worker (`pipertts_worker.py`); `run.sh` exports `PIPERTTS_PYTHON`
-  for this. If the venv is missing, dedicated voices are skipped and Piper Plus
-  keeps working.
-- Every dedicated piper-tts voice is split into encoder and decoder ONNX files
-  during setup. The decoder emits roughly half-second audio slices, so the
-  browser starts playback while the remainder of the sentence is synthesized.
-  Split inference is required: setup fails if an installed dedicated voice cannot
-  be split, and the UI keeps the current voice if a newly selected voice cannot
-  be prepared. The original model remains on disk only to rebuild the split
-  files; the worker loads only the encoder and decoder sessions into memory.
-  Piper Plus is a separate multilingual engine and does not use this split path.
-- The default router preference is `supertonic` when its runtime loaded and
-  `piper-tts` otherwise. Selecting `piper-plus` under **Settings → Voice engine**
-  switches supported languages to the active multilingual voice.
-- **CPU engines load on demand.** When Supertonic is available, piper-plus and
-  the dedicated piper-tts voices stay out of RAM at startup; only languages
-  Supertonic cannot speak (Chinese, Norwegian) get their Piper voice loaded.
-  The **Voice engine** picker still lists installed CPU engines, marked
-  "loads on select"; choosing piper-tts loads the voice for the current
-  language (a few seconds) and other languages load on their first spoken
-  reply. Without Supertonic every installed engine loads at startup as before.
-- **Supertonic runs in its own venv and worker too.** Its runtime needs `pyneat`,
-  `onnxruntime` and `numpy 1.26`, which the UI venv does not carry, so `setup.sh`
-  clones [supertonic-sima](https://github.com/florianvoss-commit/supertonic-sima)
-  to `SUPERTONIC_REPO_ROOT` (default `/media/nvme/repos/supertonic-sima`) and runs
-  its `scripts/setup_devkit.sh`, which builds the venv under
-  `SUPERTONIC_APP_ROOT` (default `/media/nvme/supertonic-tts`) and downloads the
-  pinned upstream CPU models plus the precompiled MLA packages from
-  [florianvoss/supertonic-3-sima](https://huggingface.co/florianvoss/supertonic-3-sima).
-  No on-device compilation is needed. A fresh clone is checked out at the
-  reviewed commit in `SUPERTONIC_REPO_REVISION` before its installer runs, and
-  an install is only treated as complete when every file the worker needs is
-  present, so an interrupted download is repaired on the next `setup.sh`. Both
-  paths are persisted under `app.tts.supertonic` in `config.local.yaml`;
-  `run.sh` and the UI read them from there, with the environment variables as
-  overrides, and `run.sh` exports `SUPERTONIC_PYTHON` for the worker. Set
-  `INSTALL_SUPERTONIC=0` to skip it; when the runtime is missing the engine is
-  simply not offered and the CPU engines behave as before. An existing checkout
-  is only used when it is clean and at the reviewed revision (a clean one at
-  another revision is moved there; `SUPERTONIC_ALLOW_UNPINNED=1` runs it as
-  is). `./run.sh --clean` keeps the runtime and checkout, since they live
-  outside the example directory and are shared with the standalone
-  supertonic-sima app; `CLEAN_SUPERTONIC=1` removes them too. The worker holds the
-  two Supertonic models on the MLA next to the chat and speech-to-text models.
-  An accelerator reset (**Reset MLA**) tears the worker down; the next spoken
-  reply respawns it.
-
-The authoritative reviewed catalog is `src/python/ui/voice_catalog.json`. Each
-entry has a compact licence label, pinned upstream repository revision, and
-SHA-256 checksums. Models under `CC-BY-NC-SA-4.0` are excluded. Runtime
-discovery ignores models outside the catalog. See
-[Third-party TTS models](THIRD_PARTY_TTS_MODELS.md) for attribution notices.
-
-### Manual Process Start
-Use this only when you want two explicit terminals.
-
-```bash
-export EXAMPLE_DIR="${PWD}"
-```
-
-Terminal 1, model server + control API:
-
-```bash
-source ~/pyneat/bin/activate
-
-python "${EXAMPLE_DIR}/src/python/server/main.py" \
-  --config "${EXAMPLE_DIR}/config.local.yaml"
-```
-
-Terminal 2, Flask UI:
-
-```bash
-source .venv/bin/activate
-
-python "${EXAMPLE_DIR}/src/python/ui/main.py" \
-  --config "${EXAMPLE_DIR}/config.local.yaml"
-```
-
-The supported entrypoints are `src/python/server/main.py` for model hosting and
-`src/python/ui/main.py` for the UI.
-
-## RAG
-RAG is enabled by default after `./setup.sh`.
-
-The installer downloads `thenlper/gte-small`, stores it under the configured
-models directory, and creates:
-
-```text
-src/python/ui/milvus.db
-src/python/ui/milvus.meta.json
-```
-
-### Inspect the RAG database
-See exactly what has been ingested: the source, chunk count, embedding model,
-and every chunk (header breadcrumb + text):
-
-- **Web UI**: **Settings → Knowledge (RAG) → Inspect RAG DB** opens a browser with
-  a filter box.
-- **CLI**: `/rag` lists the chunks, `/rag <filter>` narrows by a substring
-  (alias `/docs`).
-
-The UI reads through the running VectorDB service, which owns the DB file. The
-CLI uses that service when it is available. Otherwise, it reads `milvus.db`
-directly. This prevents the database from being opened twice for writing.
-
-### RAG-augmented chat (CLI)
-The web UI has a **Search RAG Database** toggle; the CLI has the same, plus a way
-to switch which database it searches:
-
-- `/rag on` / `/rag off`: when on, each prompt is first used to retrieve the top
-  passages from the database, which are prepended to that turn as context (your
-  chat history keeps the clean prompt, so context isn't re-fed every turn).
-- `/rag search <query>`: a one-off semantic search that prints the top matches
-  without asking the model.
-- `/rag db <path>`: point the CLI at a different `milvus.db` (`/rag db default`
-  reverts). Inspection, search and augmentation then all use that file.
-- `/rag status`: show the toggle, the active database and the service state.
-
-RAG needs the VectorDB service (semantic search). In CLI mode the studio's web
-service usually isn't running, so the CLI **starts its own** worker on first use
-(loading the embedding model takes a moment) and stops it on exit. If the Studio
-is running, the CLI shares its service instead of starting a second one, and
-`/rag status` shows which database that shared service actually serves (a pending
-`/rag db` override only takes effect once the running service stops).
-
-Retrieved context is size-capped before it's added to a prompt so it can't
-overflow the on-board model's small context window. Because the single-writer
-`milvus.db` is guarded by port reachability, avoid **cold-starting the CLI's RAG
-and the web UI at the same instant** against the same database.
-
-### Reset or clear the RAG database
-- **Reset to Default** rebuilds RAG from the bundled `src/common/rag/neat.md`.
-- **Clear** removes all ingested documents.
-
-In the **Web UI**: **Settings → Knowledge (RAG)** → *Reset to Default* / *Clear RAG
-DB* (both confirm first). In the **CLI**: `/rag reset` and `/rag clear`. The CLI
-operations run only when the RAG service isn't holding the database file open
-(otherwise it points you to the UI buttons).
-
-To point RAG at a different local embedding model or disable it, edit
-`config.local.yaml`:
-
-```yaml
-app:
-  rag:
-    enabled: true
-    embedding_model_dir: /path/to/llima/models/gte-small
-```
-
-To rebuild the RAG database from another Markdown file:
-
-```bash
-export EXAMPLE_DIR="${PWD}"
-source .venv/bin/activate
-
-python src/python/rag/create_db.py \
-  --input /path/to/document.md \
-  --output src/python/ui/milvus.db \
-  --embedding-model "${LLIMA_MODELS_PATH:-/media/nvme/llima/models}/gte-small"
-```
-
-Do not commit generated files:
-
-```text
-${EXAMPLE_DIR}/src/python/ui/milvus.db
-${EXAMPLE_DIR}/src/python/ui/milvus.meta.json
-${EXAMPLE_DIR}/config.local.yaml
-```
-
-## Verify
-Use these checks after the model server and Flask UI are running.
-
-Check hosted model names:
-
-```bash
-curl -s http://127.0.0.1:9998/v1/models | python3 -m json.tool
-```
-
-Check the model-management control API:
-
-```bash
-# Catalog + loaded state + memory budget + Hugging Face availability
-curl -s http://127.0.0.1:9997/control/status | python3 -m json.tool
-
-# Load a catalog model at runtime (no restart), then confirm it via /v1/models
-curl -s http://127.0.0.1:9997/control/load \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"<catalog-model-name>"}' | python3 -m json.tool
-
-# Unload it again
-curl -s http://127.0.0.1:9997/control/unload \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"<catalog-model-name>"}' | python3 -m json.tool
-
-# Make another speech-to-text model active (evicts the previous one). The
-# status above reports the active one as "asrModel" and the one a restart
-# re-selects as "configuredAsrModel".
-curl -s http://127.0.0.1:9997/control/asr \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"whisper-medium-a16w8"}' | python3 -m json.tool
-```
-
-Check text chat:
-
-```bash
-CHAT_MODEL="<chat-model-name>"
-
-curl -s http://127.0.0.1:9998/v1/chat/completions \
-  -H 'Content-Type: application/json' \
-  -d "{\"model\":\"${CHAT_MODEL}\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Say hello in Markdown.\"}]}],\"max_tokens\":32}"
-```
-
-Check ASR with any short WAV file:
-
-```bash
-ASR_MODEL="<asr-model-name>"
-AUDIO_FILE="/path/to/audio.wav"
-
-curl -s http://127.0.0.1:9998/v1/audio/transcriptions \
-  -F "model=${ASR_MODEL}" \
-  -F "language=auto" \
-  -F "file=@${AUDIO_FILE}"
-```
-
-The Studio uses a strict silence/noise filter: a recording is ignored when
-either `no_speech_prob > 0.6` or `avg_logprob <= -1.0`. The latter catches
-Gaussian/background noise that Whisper may assign a low no-speech probability
-but very low-confidence tokens. Automatic language detection also routes the
-answer to the matching installed TTS voice. Override either threshold when
-tuning for a microphone or environment:
-
-```bash
-ASR_NO_SPEECH_THRESHOLD=0.6 ASR_LOGPROB_THRESHOLD=-1.0 ./run.sh
-```
-
-If the deployed Whisper artifact does not provide `avg_logprob`, the Studio
-uses `no_speech_prob` alone.
-
-Check TTS through the Flask app. `language` selects the engine via the router
-(English and Japanese below → piper-plus/piper-tts according to the selected
-engine; dedicated piper-tts voices are the default):
-
-```bash
-# English
-curl -k -s https://127.0.0.1:5000/v1/audio/speech \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"piper-tts","input":"Hello from Neat GenAI Studio.","language":"en"}' \
-  --output /tmp/neat-genai-studio-tts-en.wav
-
-# Japanese (dedicated piper-tts by default)
-curl -k -s https://127.0.0.1:5000/v1/audio/speech \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"piper-tts","input":"こんにちは。Neat GenAI Studio です。","language":"ja"}' \
-  --output /tmp/neat-genai-studio-tts-ja.wav
-```
-
-Then test the browser UI:
-
-- send a text prompt and confirm the reply renders Markdown (try asking for a
-  table or a code block, then use the code copy button)
-- in **Settings → Models**, press **Load** on a different downloaded model and
-  confirm it loads (watch the pinned Load-status bar) and answers without restarting
-- if online, open **Settings → Add Model**, download a compatible model, and load it
-- open the **Benchmark** (header speedometer), select two or more models, run it,
-  and export the comparison as CSV/JSON
-- under Appearance, change the font family/size and reload to confirm it persists
-- enable `Include image in the prompt` and send an image prompt
-- record audio and confirm transcription appears
-- pick a **Transcription language** (e.g. Japanese) and confirm spoken replies
-  play in that language; select a piper-tts voice and confirm playback
-- change the system prompt, press abort during generation
-- enable `Search RAG Database` and ask a question from `src/common/rag/neat.md`
+Speech transcription (Whisper), spoken replies (text-to-speech), image prompts, the board or browser camera, and RAG document search are available from the interface when their models and voices are installed.
+
+## Troubleshooting
+- If the model server does not start, confirm `pyneat` is importable in the environment at `PYNEAT_PYTHON` (default `~/pyneat/bin/python`).
+- To download models from a gated Hugging Face repository, set `HF_TOKEN` before running `setup.sh` or the interface.
+- The web interface uses HTTPS on port `5000`; the model server uses `127.0.0.1:9998` and its control API uses `127.0.0.1:9997`.
+- Reinstall the environment and regenerated config with `${APP_DIR}/run.sh --clean` followed by `${APP_DIR}/setup.sh`.
 
 ## Source Files
-- Run wrapper: `run.sh`
-- Model hosting + control API: `src/python/server/main.py`, `src/python/server/model_manager.py`, `src/python/server/control_api.py`, `src/python/server/hub.py`
-- UI: `src/python/ui/main.py`, `src/python/ui/flask_app.py`
-- Terminal chat (CLI): `src/python/cli/main.py`
-- TTS engines: `src/python/ui/piperplus_tts.py` (Piper Plus, main venv), `src/python/ui/pipertts.py` + `src/python/ui/pipertts_worker.py` (piper-tts, isolated venv)
-- Voice/model install and policy: `src/python/voice_install.sh`, `src/python/ui/voice_catalog.py`, `src/python/ui/voice_catalog.json`, `THIRD_PARTY_TTS_MODELS.md`
-- Shared config: `src/python/shared/config.py`, `src/common/config.yaml`
-- Python dependencies: `src/python/requirements.txt` (main venv, Piper Plus), `src/python/requirements-pipertts.txt` (isolated piper-tts venv), `src/python/requirements-rag.txt`
-- RAG helper: `src/python/rag/create_db.py`, `src/python/rag/vectordb.py`, `src/python/rag/vectordb_worker.py`
-- RAG sample document: `src/common/rag/neat.md`
-- UI assets: `src/python/ui/templates/`, `src/python/ui/static/` (including `static/vendor/` and `static/fonts/`), `src/python/ui/assets/`, `src/python/ui/certs/`
-- SiMaSentry Solutions harnesses (vendored from `apps-llima-harnesses`): `src/python/ui/harnesses/`
-- Manual API scripts: `src/python/ui/apitest/`
-- Test scope: `tests/test-scope.yaml`
+- Launcher and setup: `run.sh`, `setup.sh`
+- Model server: `src/python/server/`
+- Web interface: `src/python/ui/`
+- Terminal chat: `src/python/cli/`
+- Shared configuration and runtime helpers: `src/common/`, `src/python/shared/`
+- RAG database tools and default corpus: `src/python/rag/`, `src/common/rag/`
+- Text-to-speech model attribution: `THIRD_PARTY_TTS_MODELS.md`
 
 ## Development From Source
-See the Apps repository [contributor guide](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md)
-for contribution requirements. The repository (not the installed bundle) also
-carries the host-runnable unit suites under `tests/python/` (`*_suite.py` plus
-the `tts_text_check.py` script), collected by `tests/python/test_unit.py`;
-`./tests/test.sh --unit` runs them and they need only pytest and PyYAML. The single-example download contains the Studio
-source and can be edited directly; cloning the complete Apps repository is not
-required to run or customize it.
+To modify or test this example, use the [Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).
