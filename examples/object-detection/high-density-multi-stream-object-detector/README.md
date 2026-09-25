@@ -100,11 +100,14 @@ Print it from `prebuilt-apps/`:
 echo "$(pwd)/models/yolo26n-det-int8-b1.tar.gz"
 ```
 
-Then paste that value into the selected config:
+Then set that value as `model.path` in the selected config. Change only that
+line; `labels` and `decode_type` must keep their packaged values:
 
 ```yaml
 model:
   path: <paste-the-printed-path>
+  labels: examples/object-detection/high-density-multi-stream-object-detector/src/common/coco_label.txt
+  decode_type: yolo26
 ```
 
 `model.labels` is the exception: it resolves from the Apps root, so the packaged
