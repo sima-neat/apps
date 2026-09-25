@@ -277,17 +277,9 @@ jobs:
 
       - name: Install test dependencies
         run: |
-          if ! command -v ffprobe >/dev/null 2>&1; then
-            elevate=()
-            if [[ "$(id -u)" -ne 0 ]]; then
-              elevate=(sudo -n)
-            fi
-            "${elevate[@]}" apt-get update
-            "${elevate[@]}" env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ffmpeg
-          fi
           source "${PYNEAT_ACTIVATE}"
           echo "Using Python test interpreter: ${PYTHON_TEST_BIN}"
-          "${PYTHON_TEST_BIN}" -m pip install pytest "numpy<2" "opencv-python-headless<4.12" PyYAML
+          "${PYTHON_TEST_BIN}" -m pip install pytest "opencv-python-headless<4.12" PyYAML
           "${PYTHON_TEST_BIN}" -c "import pyneat; print('Using pyneat:', pyneat.__file__)"
 
       - name: Run all activated Apps tests
