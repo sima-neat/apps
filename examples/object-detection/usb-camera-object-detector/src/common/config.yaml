@@ -1,0 +1,39 @@
+model:                       # Detection model selection.
+  path: <model-path>         # Example: models/<model-pack>.tar.gz
+  labels: examples/object-detection/usb-camera-object-detector/src/common/coco_label.txt
+
+source:                      # USB (UVC) camera capture.
+  device: <video-capture-node>   # e.g. /dev/video96. Find it: see Prepare the Camera.
+  width: 1920                # Capture width.
+  height: 1080               # Capture height.
+  fps: 30                    # Capture rate. MJPEG sustains 30 fps at 1080p; raw YUYV cannot.
+  flip: none                 # none, rotate-180, horizontal-flip, or vertical-flip.
+  override_fragment: ""      # Diagnostic: replace the camera with any NV12 GStreamer fragment.
+
+inference:                   # Detection settings.
+  frames: 0                  # Frame limit. 0 means run until interrupted.
+  min_score: 0.30            # Detection score threshold.
+  nms_iou: 0.50              # NMS IoU threshold.
+  max_detections: 100        # Max detections to keep per frame.
+
+runtime:                     # Runtime settings.
+  profile: false             # Print windowed profiling lines and the generated backend.
+  profile_interval: 100      # Rolling profile window in published frames.
+  queue_depth: 3             # Pipeline queue depth. 3 keeps latency low.
+
+output:                      # Insight receiver.
+  insight:
+    host: <insight-host-ip>  # Host running the Insight receiver/viewer.
+    video_port: 9000         # UDP video port.
+    metadata_port: 9100      # UDP metadata port.
+    bitrate_kbps: 4000       # H.264 encoder bitrate.
+
+# Test harness settings only. Normal example runs ignore this section.
+# The e2e tests have no camera, so they drive the same graph from a synthetic
+# NV12 source through source.override_fragment.
+testing:
+  e2e:
+    source:
+      override_fragment: "videotestsrc pattern=smpte is-live=true ! video/x-raw,format=NV12,width=1920,height=1080,framerate=30/1 ! queue leaky=downstream max-size-buffers=2"
+    inference:
+      frames: 30
