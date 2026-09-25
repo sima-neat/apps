@@ -54,6 +54,11 @@ from studio_client_suite import (  # noqa: E402,F401
     MlaResetPolicyTests,
     NoThinkTransformTests,
 )
+from worker_ipc_suite import (  # noqa: E402,F401
+    ReadExactTests,
+    ReadFrameTests,
+    SendRequestTests,
+)
 from supertonic_tts_suite import (  # noqa: E402,F401
     ClientConfigurationTests as SupertonicClientConfigurationTests,
     DurationFallbackTests as SupertonicDurationFallbackTests,
@@ -122,6 +127,9 @@ __all__ = [
     "ReadmePackagePathsTests",
     "MlaResetPolicyTests",
     "NoThinkTransformTests",
+    "ReadExactTests",
+    "ReadFrameTests",
+    "SendRequestTests",
     "SupertonicClientConfigurationTests",
     "SupertonicDurationFallbackTests",
     "SupertonicEnvironmentDiscoveryTests",

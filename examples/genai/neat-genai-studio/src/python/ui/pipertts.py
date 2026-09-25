@@ -15,13 +15,15 @@ the piper-plus (main) venv.
 
 import base64
 import io
-import json
 import os
-import struct
 import subprocess
 import threading
 import wave
 from pathlib import Path
+
+from worker_ipc import read_frame, send_request
+
+_WORKER_LABEL = "piper-tts worker"
 
 _worker = None
 _worker_lock = threading.Lock()
@@ -64,17 +66,6 @@ def _ensure_worker():
     return _worker
 
 
-def _read_exact(stream, n):
-    chunks = []
-    while n > 0:
-        b = stream.read(n)
-        if not b:
-            raise RuntimeError("piper-tts worker closed the pipe")
-        chunks.append(b)
-        n -= len(b)
-    return b"".join(chunks)
-
-
 def _discard_worker():
     global _worker
     try:
@@ -91,11 +82,8 @@ def _request(req):
     with _worker_lock:
         proc = _ensure_worker()
         try:
-            proc.stdin.write((json.dumps(req) + "\n").encode("utf-8"))
-            proc.stdin.flush()
-            status = _read_exact(proc.stdout, 1)[0]
-            length = struct.unpack(">I", _read_exact(proc.stdout, 4))[0]
-            payload = _read_exact(proc.stdout, length)
+            send_request(proc, req)
+            status, payload = read_frame(proc, _WORKER_LABEL)
         except Exception:
             # A broken worker is unusable — kill it so the next call respawns.
             _discard_worker()
@@ -112,12 +100,9 @@ def _request_stream(req):
     with _worker_lock:
         proc = _ensure_worker()
         try:
-            proc.stdin.write((json.dumps(req) + "\n").encode("utf-8"))
-            proc.stdin.flush()
+            send_request(proc, req)
             while True:
-                status = _read_exact(proc.stdout, 1)[0]
-                length = struct.unpack(">I", _read_exact(proc.stdout, 4))[0]
-                payload = _read_exact(proc.stdout, length)
+                status, payload = read_frame(proc, _WORKER_LABEL)
                 if status == 2:
                     yield payload
                 elif status == 0:
@@ -136,9 +121,7 @@ def _request_stream(req):
             if not complete:
                 try:
                     while True:
-                        status = _read_exact(proc.stdout, 1)[0]
-                        length = struct.unpack(">I", _read_exact(proc.stdout, 4))[0]
-                        _read_exact(proc.stdout, length)
+                        status, _ = read_frame(proc, _WORKER_LABEL)
                         if status in (0, 1):
                             complete = True
                             break
