@@ -39,7 +39,7 @@ GROUPS: tuple[tuple[str, tuple[ModelRow, ...]], ...] = (
     (
         "General Models",
         (
-            ModelRow("resnet_50", "resnet_50_mpk.tar.gz", "image-classifier",
+            ModelRow("resnet_50", "resnet_50_mpk.tar.gz", "image-classification-explorer",
                      "models/resnet_50_mpk.tar.gz"),
             ModelRow("depth_anything_v2_vits", "depth_anything_v2_vits_mpk.tar.gz",
                      "depth-estimator", "models/depth_anything_v2_vits_mpk.tar.gz"),
