@@ -175,9 +175,27 @@ bool resolve_bind_addr(const std::string& host, int port, sockaddr_storage& out,
   return ok;
 }
 
-bool is_valid_metadata_json(const std::string& payload, const std::string& metadata_type,
-                            const std::string& data_array_key, MetadataJsonMessage& out,
-                            std::string& err) {
+const json* json_at_path(const json& root, const std::string& path) {
+  const json* current = &root;
+  size_t start = 0;
+  while (start <= path.size()) {
+    const size_t separator = path.find('.', start);
+    const std::string key = path.substr(start, separator - start);
+    if (key.empty() || !current->is_object() || !current->contains(key)) {
+      return nullptr;
+    }
+    current = &current->at(key);
+    if (separator == std::string::npos) {
+      return current;
+    }
+    start = separator + 1;
+  }
+  return nullptr;
+}
+
+bool is_valid_metadata_json(const std::string& payload,
+                            const std::vector<MetadataJsonContract>& contracts,
+                            MetadataJsonMessage& out, std::string& err) {
   json parsed;
   try {
     parsed = json::parse(payload);
@@ -190,8 +208,16 @@ bool is_valid_metadata_json(const std::string& payload, const std::string& metad
     err = "json root is not an object";
     return false;
   }
-  if (!parsed.contains("type") || parsed["type"] != metadata_type) {
+  if (!parsed.contains("type") || !parsed["type"].is_string()) {
     err = "missing or invalid type";
+    return false;
+  }
+  const std::string metadata_type = parsed["type"].get<std::string>();
+  const auto contract = std::find_if(contracts.begin(), contracts.end(), [&](const auto& item) {
+    return item.metadata_type == metadata_type;
+  });
+  if (contract == contracts.end()) {
+    err = "unexpected metadata type " + metadata_type;
     return false;
   }
   if (!parsed.contains("timestamp") || !parsed["timestamp"].is_number_integer()) {
@@ -206,15 +232,17 @@ bool is_valid_metadata_json(const std::string& payload, const std::string& metad
     err = "missing or invalid data";
     return false;
   }
-  if (!parsed["data"].contains(data_array_key) || !parsed["data"][data_array_key].is_array()) {
-    err = "missing or invalid data." + data_array_key;
+  const json* objects = json_at_path(parsed["data"], contract->data_array_key);
+  if (!objects || !objects->is_array()) {
+    err = "missing or invalid data." + contract->data_array_key;
     return false;
   }
 
+  out.metadata_type = metadata_type;
   out.payload = payload;
   out.frame_id = parsed["frame_id"].get<std::string>();
   out.timestamp_ms = parsed["timestamp"].get<int64_t>();
-  out.object_count = static_cast<int>(parsed["data"][data_array_key].size());
+  out.object_count = static_cast<int>(objects->size());
   return true;
 }
 
@@ -233,6 +261,16 @@ MetadataJsonListener::MetadataJsonListener(const MetadataJsonListenerOptions& op
   }
   if (opt_.base_port <= 0) {
     err_ = "base_port must be > 0";
+    return;
+  }
+  if (opt_.contracts.empty()) {
+    opt_.contracts.push_back({opt_.metadata_type, opt_.data_array_key, opt_.min_object_count});
+  }
+  if (std::any_of(opt_.contracts.begin(), opt_.contracts.end(), [](const auto& contract) {
+        return contract.metadata_type.empty() || contract.data_array_key.empty() ||
+               contract.min_object_count < 0;
+      })) {
+    err_ = "metadata contracts require a type, data array path, and non-negative count";
     return;
   }
   if (opt_.min_object_count < 0) {
@@ -324,8 +362,7 @@ bool MetadataJsonListener::handle_datagram(SocketState& sock, MetadataJsonListen
   MetadataJsonMessage msg;
   msg.port = sock.port;
   std::string parse_err;
-  if (!is_valid_metadata_json(reassembled.payload, opt_.metadata_type, opt_.data_array_key, msg,
-                              parse_err)) {
+  if (!is_valid_metadata_json(reassembled.payload, opt_.contracts, msg, parse_err)) {
     if (result.error.empty()) {
       result.error = "invalid json on port " + std::to_string(sock.port) + ": " + parse_err;
     }
@@ -333,14 +370,28 @@ bool MetadataJsonListener::handle_datagram(SocketState& sock, MetadataJsonListen
   }
 
   result.messages.push_back(std::move(msg));
-  if (result.messages.back().object_count < opt_.min_object_count) {
-    result.error =
-        "data." + opt_.data_array_key + " contains " +
-        std::to_string(result.messages.back().object_count) + " objects; expected at least " +
-        std::to_string(opt_.min_object_count);
+  const auto contract =
+      std::find_if(opt_.contracts.begin(), opt_.contracts.end(), [&](const auto& item) {
+        return item.metadata_type == result.messages.back().metadata_type;
+      });
+  if (contract != opt_.contracts.end() &&
+      result.messages.back().object_count < contract->min_object_count) {
+    result.error = "data." + contract->data_array_key + " contains " +
+                   std::to_string(result.messages.back().object_count) +
+                   " objects; expected at least " + std::to_string(contract->min_object_count);
     return true;
   }
-  if (std::find(result.ports_with_valid_json.begin(), result.ports_with_valid_json.end(),
+  const bool port_complete =
+      std::all_of(opt_.contracts.begin(), opt_.contracts.end(), [&](const auto& required) {
+        return std::any_of(result.messages.begin(), result.messages.end(),
+                           [&](const auto& received) {
+                             return received.port == sock.port &&
+                                    received.metadata_type == required.metadata_type &&
+                                    received.object_count >= required.min_object_count;
+                           });
+      });
+  if (port_complete &&
+      std::find(result.ports_with_valid_json.begin(), result.ports_with_valid_json.end(),
                 sock.port) == result.ports_with_valid_json.end()) {
     result.ports_with_valid_json.push_back(sock.port);
   }
