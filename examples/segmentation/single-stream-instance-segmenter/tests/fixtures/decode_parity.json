@@ -1,0 +1,137 @@
+{
+  "comment": "Shared C++/Python decode-parity fixture for single-stream-instance-segmenter. The Python and C++ unit tests build the same synthetic YOLOv8 heads from 'input' and must decode them into 'expected', which is how the two implementations are held to one decode contract. The frame size is deliberately not a neat multiple of the model input, so every decoded coordinate lands well inside a pixel and neither implementation can round to a different integer box.",
+  "input": {
+    "input_size": 640,
+    "class_count": 80,
+    "frame": {
+      "width": 1234,
+      "height": 694
+    },
+    "min_score": 0.7,
+    "nms_iou": 0.45,
+    "max_detections": 10,
+    "mask_threshold": 0.5,
+    "prototype": [
+      {
+        "channel": 0,
+        "background": -4.0,
+        "foreground": 8.0,
+        "rect": [
+          20,
+          20,
+          140,
+          140
+        ]
+      },
+      {
+        "channel": 1,
+        "background": -4.0,
+        "foreground": 8.0,
+        "rect": [
+          60,
+          60,
+          110,
+          110
+        ]
+      }
+    ],
+    "cells": [
+      {
+        "level": 0,
+        "row": 40,
+        "column": 40,
+        "class_id": 3,
+        "score": 0.74,
+        "dfl_bin": 6,
+        "coefficient": 0,
+        "comment": "kept: highest-scoring instance of class 3"
+      },
+      {
+        "level": 0,
+        "row": 41,
+        "column": 41,
+        "class_id": 3,
+        "score": 0.72,
+        "dfl_bin": 6,
+        "coefficient": 0,
+        "comment": "dropped: overlaps the cell above at the same class"
+      },
+      {
+        "level": 1,
+        "row": 25,
+        "column": 30,
+        "class_id": 12,
+        "score": 0.9,
+        "dfl_bin": 4,
+        "coefficient": 1,
+        "comment": "kept: separate class and location"
+      },
+      {
+        "level": 2,
+        "row": 8,
+        "column": 8,
+        "class_id": 7,
+        "score": 0.6,
+        "dfl_bin": 5,
+        "coefficient": 0,
+        "comment": "dropped: below min_score"
+      }
+    ]
+  },
+  "expected": {
+    "detections": [
+      {
+        "class_id": 12,
+        "score": 0.9,
+        "box": [
+          817.5248,
+          393.2748,
+          1064.3252,
+          640.0752
+        ],
+        "mask_grid": 160,
+        "mask_above_threshold": 125
+      },
+      {
+        "class_id": 3,
+        "score": 0.74,
+        "box": [
+          532.1625,
+          262.1625,
+          717.2625,
+          447.2625
+        ],
+        "mask_grid": 160,
+        "mask_above_threshold": 676
+      }
+    ],
+    "segments": [
+      {
+        "id": "seg_1",
+        "label": "class_12",
+        "confidence": 0.9,
+        "bbox": [
+          817,
+          393,
+          248,
+          248
+        ],
+        "mask_format": "polygon",
+        "min_polygon_points": 3
+      },
+      {
+        "id": "seg_2",
+        "label": "class_3",
+        "confidence": 0.74,
+        "bbox": [
+          532,
+          262,
+          186,
+          186
+        ],
+        "mask_format": "polygon",
+        "min_polygon_points": 3
+      }
+    ]
+  }
+}

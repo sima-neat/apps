@@ -1,6 +1,8 @@
 model:
+  family: yolo26             # yolo26 or yolov8. Selects the decode path; never inferred from the file name.
   path: <model-path>         # Example: models/YOLO26-SEGMENTATION/yolo26m-seg-bf16-b1.tar.gz
   labels: examples/segmentation/single-stream-instance-segmenter/src/common/coco_label.txt
+  input_size: 640            # Square model input the package was compiled for.
 
 source:
   type: rtsp                 # rtsp or http.
@@ -36,6 +38,8 @@ output:
 # Test harness settings only. Normal example runs ignore this section.
 testing:
   e2e:
+    inference:
+      frames: 40               # Bounded run, so e2e tests exit on their own.
+      min_score: 0.25          # Keeps the smaller packages productive on sparse test footage.
     output:
-      save_every: 10
-      total_saved_frames: 20
+      save_every: 1

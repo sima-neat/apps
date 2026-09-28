@@ -12,6 +12,7 @@ import pytest
 
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
+PARITY_FIXTURE = EXAMPLE_DIR / "tests" / "fixtures" / "decode_parity.json"
 
 _SPEC = importlib.util.spec_from_file_location("instance_seg_main", MAIN_PY)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -37,8 +38,14 @@ def test_ffprobe_transport_matches_source(monkeypatch, source_type, url, tcp, ex
         return SimpleNamespace(returncode=0, stdout="width=1920\nheight=1080\navg_frame_rate=30/1\n")
 
     monkeypatch.setattr(main.subprocess, "run", fake_run)
-    cfg = main.AppConfig("model", Path("labels"), url, source_type, tcp=tcp,
-                         ssl_strict=False)
+    cfg = main.AppConfig(
+        model_path="model",
+        labels_path=Path("labels"),
+        source_url=url,
+        source_type=source_type,
+        tcp=tcp,
+        ssl_strict=False,
+    )
 
     assert main.probe_ffprobe(cfg) == (1920, 1080, 30)
     assert captured[0].count("-rtsp_transport") == int(expected_tcp)
@@ -93,6 +100,66 @@ class TestConfig:
             cwd=str(EXAMPLE_DIR),
         )
         assert r.returncode == 0, r.stderr
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            ("yolo26", "yolo26"),
+            ("YOLO26", "yolo26"),
+            ("yolov8", "yolov8"),
+            ("yolo_v8", "yolov8"),
+        ],
+    )
+    def test_model_family_is_selected_explicitly(self, value, expected):
+        assert main.parse_model_family(value) == expected
+
+    def test_unknown_model_family_is_rejected(self):
+        # The family is configuration, never inferred from the package file name.
+        with pytest.raises(ValueError, match="model.family"):
+            main.parse_model_family("yolo_v8n_seg_mpk.tar.gz")
+
+    def test_config_carries_family_and_input_size(self, tmp_path):
+        config = tmp_path / "config.yaml"
+        config.write_text(
+            """
+model:
+  family: yolov8
+  path: model.tar.gz
+  input_size: 640
+source:
+  url: rtsp://127.0.0.1:8554/src1
+output:
+  insight:
+    host: 127.0.0.1
+""",
+            encoding="utf-8",
+        )
+
+        cfg = main.load_app_config(config)
+
+        assert cfg.model_family == main.YOLOV8
+        assert cfg.input_size == 640
+        # Source and output settings stay independent of the selected family.
+        assert cfg.source_url == "rtsp://127.0.0.1:8554/src1"
+        assert cfg.insight_host == "127.0.0.1"
+
+    def test_invalid_input_size_is_rejected(self, tmp_path):
+        config = tmp_path / "config.yaml"
+        config.write_text(
+            """
+model:
+  path: model.tar.gz
+  input_size: 600
+source:
+  url: rtsp://127.0.0.1:8554/src1
+output:
+  insight:
+    host: 127.0.0.1
+""",
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="input_size"):
+            main.load_app_config(config)
 
     def test_invalid_mask_alpha_is_rejected(self, tmp_path):
         config = tmp_path / "config.yaml"
@@ -262,3 +329,299 @@ class TestSampleAccess:
         bundle = self._Sample(self._Kind.Bundle, fields=[frame, segments])
 
         assert main.segment_tensors_from_sample(bundle) == ["boxes"]
+
+
+def load_parity_fixture() -> dict:
+    """The decode contract both implementations are held to."""
+    with PARITY_FIXTURE.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def build_yolov8_heads(spec: dict) -> list:
+    """Synthetic YOLOv8 head tensors described by the shared fixture."""
+    input_size = int(spec["input_size"])
+    grids = [input_size // stride for stride in main.YOLOV8_STRIDES]
+    boxes = [np.zeros((grid, grid, 4 * main.DFL_BINS), np.float32) for grid in grids]
+    scores = [
+        np.zeros((grid, grid, int(spec["class_count"])), np.float32) for grid in grids
+    ]
+    coefficients = [
+        np.zeros((grid, grid, main.MASK_COEFFICIENTS), np.float32) for grid in grids
+    ]
+    proto_grid = input_size // main.MASK_STRIDE
+    proto = np.zeros((proto_grid, proto_grid, main.MASK_COEFFICIENTS), np.float32)
+
+    for channel in spec["prototype"]:
+        index = int(channel["channel"])
+        proto[:, :, index] = channel["background"]
+        x0, y0, x1, y1 = channel["rect"]
+        proto[y0:y1, x0:x1, index] = channel["foreground"]
+
+    for cell in spec["cells"]:
+        level, row, column = int(cell["level"]), int(cell["row"]), int(cell["column"])
+        sides = np.full((4 * main.DFL_BINS,), -8.0, np.float32)
+        for side in range(4):
+            sides[side * main.DFL_BINS + int(cell["dfl_bin"])] = 8.0
+        boxes[level][row, column, :] = sides
+        scores[level][row, column, int(cell["class_id"])] = cell["score"]
+        coefficients[level][row, column, int(cell["coefficient"])] = 1.0
+
+    return boxes + scores + coefficients + [proto]
+
+
+def decode_fixture(spec: dict) -> list:
+    return main.decode_yolov8_segments(
+        build_yolov8_heads(spec),
+        int(spec["frame"]["width"]),
+        int(spec["frame"]["height"]),
+        int(spec["input_size"]),
+        float(spec["min_score"]),
+        float(spec["nms_iou"]),
+        int(spec["max_detections"]),
+    )
+
+
+@pytest.mark.unit
+class TestYolov8Decode:
+    """The YOLOv8 side of the model-specific decoding boundary."""
+
+    def setup_method(self):
+        main.load_runtime_dependencies()
+
+    def test_decode_matches_shared_parity_fixture(self):
+        fixture = load_parity_fixture()
+        spec = fixture["input"]
+
+        detections = decode_fixture(spec)
+
+        expected = fixture["expected"]["detections"]
+        assert len(detections) == len(expected)
+        for det, want in zip(detections, expected):
+            assert det["class_id"] == want["class_id"]
+            assert det["score"] == pytest.approx(want["score"], abs=1e-6)
+            box = [det["x1"], det["y1"], det["x2"], det["y2"]]
+            assert box == pytest.approx(want["box"], abs=1e-3)
+            assert det["mask"].shape == (want["mask_grid"], want["mask_grid"])
+            assert det["mask"].dtype == np.uint8
+            assert int((det["mask"] > 127).sum()) == want["mask_above_threshold"]
+
+    def test_metadata_matches_shared_parity_fixture(self):
+        fixture = load_parity_fixture()
+        spec = fixture["input"]
+        frame_shape = (int(spec["frame"]["height"]), int(spec["frame"]["width"]), 3)
+        labels = [f"class_{index}" for index in range(int(spec["class_count"]))]
+
+        segments = main.metadata_segments(
+            decode_fixture(spec), labels, frame_shape, float(spec["mask_threshold"])
+        )
+
+        expected = fixture["expected"]["segments"]
+        assert len(segments) == len(expected)
+        for segment, want in zip(segments, expected):
+            assert segment["id"] == want["id"]
+            assert segment["label"] == want["label"]
+            assert segment["confidence"] == pytest.approx(want["confidence"], abs=1e-6)
+            assert segment["bbox"] == want["bbox"]
+            assert segment["mask_format"] == want["mask_format"]
+            assert len(segment["mask"]) >= want["min_polygon_points"]
+
+    def test_confidence_is_the_packaged_class_probability(self):
+        spec = load_parity_fixture()["input"]
+
+        detections = decode_fixture(spec)
+
+        # The packaged class head emits probabilities, so no activation is applied here.
+        assert [round(det["score"], 6) for det in detections] == [0.9, 0.74]
+
+    def test_scores_below_the_threshold_are_dropped(self):
+        spec = dict(load_parity_fixture()["input"], min_score=0.95)
+
+        assert decode_fixture(spec) == []
+
+    def test_letterboxed_boxes_land_in_frame_pixels(self):
+        spec = load_parity_fixture()["input"]
+        frame_w, frame_h = int(spec["frame"]["width"]), int(spec["frame"]["height"])
+
+        detections = decode_fixture(spec)
+
+        assert detections
+        for det in detections:
+            assert 0.0 <= det["x1"] < det["x2"] <= frame_w
+            assert 0.0 <= det["y1"] < det["y2"] <= frame_h
+
+    def test_head_shapes_are_checked_against_input_size(self):
+        spec = load_parity_fixture()["input"]
+        heads = build_yolov8_heads(spec)
+
+        with pytest.raises(RuntimeError, match="model.input_size"):
+            main.split_yolov8_heads(heads, 320)
+
+    def test_missing_head_tensors_fail_clearly(self):
+        spec = load_parity_fixture()["input"]
+
+        with pytest.raises(RuntimeError, match="head tensors"):
+            main.split_yolov8_heads(build_yolov8_heads(spec)[:-1], int(spec["input_size"]))
+
+
+@pytest.mark.unit
+class TestDecodeBoundary:
+    """Family selection is the only thing that changes between the two decode paths."""
+
+    def setup_method(self):
+        main.load_runtime_dependencies()
+
+    def _config(self, family: str) -> object:
+        return main.AppConfig(
+            model_path="model.tar.gz",
+            labels_path=Path("labels.txt"),
+            source_url="rtsp://127.0.0.1:8554/src1",
+            model_family=family,
+            insight_host="127.0.0.1",
+        )
+
+    def test_family_selects_the_decoder(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(
+            main, "decode_yolo26_segments", lambda *args: calls.append("yolo26") or []
+        )
+        monkeypatch.setattr(
+            main, "decode_yolov8_segments", lambda *args: calls.append("yolov8") or []
+        )
+        monkeypatch.setattr(main, "tensor_to_hwc_f32", lambda tensor: tensor)
+
+        main.decode_segments(self._config(main.YOLO26), ["payload"], 1920, 1080)
+        main.decode_segments(self._config(main.YOLOV8), ["payload"] * 10, 1920, 1080)
+
+        assert calls == ["yolo26", "yolov8"]
+
+    def test_both_families_produce_the_same_record(self):
+        spec = load_parity_fixture()["input"]
+        mask = np.full((160, 160), 255, dtype=np.uint8)
+        # decode_yolo26_segments() builds its records through detection() as well, so one
+        # record from each path is compared field by field.
+        yolo26_record = main.detection(8.0, 8.0, 56.0, 56.0, 0.9, 0, mask)
+        yolov8_record = decode_fixture(spec)[0]
+
+        assert sorted(yolov8_record) == sorted(yolo26_record)
+        for key, value in yolo26_record.items():
+            assert type(yolov8_record[key]) is type(value)
+
+
+@pytest.mark.unit
+class TestFramePairing:
+    """YOLOv8 pairs frames with segments here, so a saved frame is the one it was decoded from."""
+
+    def _runtime(self, frame_ids):
+        return SimpleNamespace(
+            frames=[(frame_id, f"frame_{frame_id}") for frame_id in frame_ids],
+            frame_output_name="frame",
+        )
+
+    def test_returns_the_frame_the_segments_came_from(self):
+        runtime = self._runtime([7, 8, 9])
+
+        assert main.frame_for(runtime, 8) == "frame_8"
+
+    def test_returns_none_once_the_frame_has_aged_out(self):
+        runtime = self._runtime([7, 8, 9])
+
+        assert main.frame_for(runtime, 3) is None
+
+    def test_unidentified_samples_are_never_paired(self):
+        # A sample without a frame identity cannot be matched to a frame; saving is skipped
+        # rather than pairing an overlay onto the wrong picture.
+        runtime = self._runtime([7, 8, 9])
+
+        assert main.frame_for(runtime, -1) is None
+
+    def test_ring_keeps_the_newest_frames(self):
+        pulled = [SimpleNamespace(frame_id=index) for index in range(main.FRAME_RING_CAPACITY + 4)]
+        runtime = SimpleNamespace(frames=[], frame_output_name="frame",
+                                  run=SimpleNamespace(pull=lambda name, timeout: (
+                                      pulled.pop(0) if pulled else None)))
+
+        main.drain_frames(runtime)
+
+        assert len(runtime.frames) == main.FRAME_RING_CAPACITY
+        assert runtime.frames[-1][0] == main.FRAME_RING_CAPACITY + 3
+
+
+@pytest.mark.unit
+class TestModelPreprocess:
+    """Both families must request the same input preparation.
+
+    A YOLOv8 package whose normalization is left to chance sees unnormalized pixels and its
+    class scores collapse to a fraction of their range, which looks like a decode bug but is
+    not one. This pins the request for both families.
+    """
+
+    class _Preprocess:
+        def __init__(self):
+            self.kind = None
+            self.enable = None
+            self.preset = None
+            self.input_max_width = 0
+            self.input_max_height = 0
+            self.color_convert = SimpleNamespace(input_format=None)
+            self.resize = SimpleNamespace(enable=None, mode=None)
+
+    class _Options:
+        def __init__(self):
+            self.preprocess = TestModelPreprocess._Preprocess()
+            self.decode_type = None
+            self.score_threshold = 0.0
+            self.nms_iou_threshold = 0.0
+            self.top_k = 0
+
+    @pytest.fixture
+    def stub(self, monkeypatch):
+        captured = {}
+
+        def model(path, opt):
+            captured["path"] = path
+            captured["opt"] = opt
+            return object()
+
+        monkeypatch.setattr(
+            main,
+            "pyneat",
+            SimpleNamespace(
+                ModelOptions=TestModelPreprocess._Options,
+                Model=model,
+                InputKind=SimpleNamespace(Image="image"),
+                AutoFlag=SimpleNamespace(On="on", Auto="auto"),
+                NormalizePreset=SimpleNamespace(COCO_YOLO="coco_yolo"),
+                PreprocessColorFormat=SimpleNamespace(NV12="nv12"),
+                ResizeMode=SimpleNamespace(Letterbox="letterbox"),
+                BoxDecodeType=SimpleNamespace(YoloV26Seg="yolo26seg"),
+            ),
+        )
+        return captured
+
+    def _config(self, family):
+        return main.AppConfig(
+            model_path="model.tar.gz",
+            labels_path=Path("labels.txt"),
+            source_url="rtsp://127.0.0.1:8554/src1",
+            model_family=family,
+            insight_host="127.0.0.1",
+        )
+
+    @pytest.mark.parametrize("family", [main.YOLO26, main.YOLOV8])
+    def test_normalization_is_requested_for_both_families(self, stub, family):
+        main.make_model(self._config(family), 1920, 1080)
+
+        preprocess = stub["opt"].preprocess
+        assert preprocess.enable == "on"
+        assert preprocess.preset == "coco_yolo"
+        assert preprocess.color_convert.input_format == "nv12"
+        assert (preprocess.input_max_width, preprocess.input_max_height) == (1920, 1080)
+
+    def test_only_yolo26_decodes_on_device(self, stub):
+        main.make_model(self._config(main.YOLO26), 1920, 1080)
+        assert stub["opt"].decode_type == "yolo26seg"
+
+        main.make_model(self._config(main.YOLOV8), 1920, 1080)
+        # YOLOv8 heads are decoded on the host, and that decode inverts a letterbox.
+        assert stub["opt"].decode_type is None
+        assert stub["opt"].preprocess.resize.mode == "letterbox"

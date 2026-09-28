@@ -36,9 +36,11 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -68,9 +70,26 @@ struct EncodedSegments {
   int dropped = 0;
 };
 
-/// YOLO26 emits masks at one quarter of the model input per dimension, so a 160x160 head
-/// corresponds to a 640x640 input.
+/// Both families emit masks at one quarter of the model input per dimension, so a 160x160
+/// mask grid corresponds to a 640x640 input.
 constexpr int kMaskStride = 4;
+
+/// BoxDecode returns YOLO26 masks on a fixed grid, independent of the model input size.
+constexpr int kYolo26MaskGrid = 160;
+
+/// YOLOv8 head contract: three feature levels of box, class, and mask-coefficient tensors,
+/// followed by the mask prototypes.
+constexpr std::size_t kYolov8HeadTensors = 10;
+constexpr std::array<int, 3> kYolov8Strides = {8, 16, 32};
+
+/// Distribution-focal-loss bins per box side, and prototype/coefficient depth.
+constexpr int kDflBins = 16;
+constexpr int kMaskCoefficients = 32;
+
+/// Model families this application decodes. YOLO26 decodes on the MLA through the packaged
+/// BoxDecode route; YOLOv8 surfaces raw heads that are decoded here. Both produce the same
+/// `SegmentationDetection` records, so everything downstream is family independent.
+enum class ModelFamily { Yolo26, YoloV8 };
 
 /// Mask-head region covering `frame_rect`. The head is a fixed grid over the letterboxed model
 /// input, so a frame rectangle reaches it through the same scale and padding the preprocessor used.
@@ -190,8 +209,10 @@ enum class SourceType { Rtsp, Http };
 enum class SourceCodec { H264, H265, Mjpeg };
 
 struct AppConfig {
+  ModelFamily model_family = ModelFamily::Yolo26;
   std::string model_path;
   fs::path labels_path;
+  int input_size = 640;
   std::string source_url;
   SourceType source_type = SourceType::Rtsp;
   SourceCodec source_codec = SourceCodec::H264;
@@ -293,6 +314,11 @@ struct PipelineRuntime {
   std::vector<std::string> labels;
   /// Run output the loop pulls: the segments alone, or the frame-joined bundle when saving.
   std::string output_name;
+  /// Separate decoded-frame output, used when frames are paired by this application instead
+  /// of by a graph-side join. Empty when the graph joins them.
+  std::string frame_output_name;
+  /// Recent decoded frames, oldest first, waiting to be paired with their segments.
+  std::deque<std::pair<std::int64_t, simaai::neat::Sample>> frames;
   int frame_w = 0;
   int frame_h = 0;
   int output_fps = 30;
@@ -303,6 +329,21 @@ std::string lower_copy(std::string value) {
   std::transform(value.begin(), value.end(), value.begin(),
                  [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
   return value;
+}
+
+ModelFamily parse_model_family(const std::string& value) {
+  const std::string lowered = lower_copy(value);
+  if (lowered == "yolo26" || lowered == "yolo-26" || lowered == "yolov26") {
+    return ModelFamily::Yolo26;
+  }
+  if (lowered == "yolov8" || lowered == "yolo-v8" || lowered == "yolo_v8") {
+    return ModelFamily::YoloV8;
+  }
+  throw std::runtime_error("model.family must be yolo26 or yolov8");
+}
+
+const char* model_family_name(ModelFamily value) {
+  return value == ModelFamily::Yolo26 ? "yolo26" : "yolov8";
 }
 
 SourceType parse_source_type(const std::string& value) {
@@ -365,6 +406,10 @@ CliOptions parse_args(int argc, char** argv) {
 void validate_config(const AppConfig& cfg) {
   sima_examples::require(!cfg.source_url.empty(), "source.url or source.rtsp_url must be set");
   sima_examples::require(!cfg.model_path.empty(), "model.path must be set");
+  sima_examples::require(cfg.input_size > 0 &&
+                             cfg.input_size % (kMaskStride * kYolov8Strides.back()) == 0,
+                         "model.input_size must be a positive multiple of " +
+                             std::to_string(kMaskStride * kYolov8Strides.back()));
   sima_examples::require(!cfg.labels_path.empty(), "model.labels must be set");
   sima_examples::require(!cfg.insight_host.empty(), "output.insight.host must be set");
   sima_examples::require(cfg.latency_ms >= 0, "source.latency_ms must be >= 0");
@@ -396,7 +441,9 @@ AppConfig load_app_config(const fs::path& config_path) {
       "coco_label.txt";
 
   AppConfig cfg;
+  cfg.model_family = parse_model_family(raw.string_or("model.family", "yolo26"));
   cfg.model_path = raw.string_or("model.path", "");
+  cfg.input_size = raw.int_or("model.input_size", 640);
   cfg.labels_path = raw.string_or("model.labels", default_labels.string());
   const std::string legacy_rtsp_url = raw.string_or("source.rtsp_url", "");
   cfg.source_url = raw.string_or("source.url", legacy_rtsp_url);
@@ -465,9 +512,19 @@ std::vector<std::uint8_t> tensor_to_u8(const simaai::neat::Tensor& tensor) {
   return tensor.copy_dense_bytes_tight();
 }
 
+/// Detection rectangle in frame pixels, clamped to the frame and never empty.
+cv::Rect frame_rect_for_detection(const SegmentationDetection& det, const cv::Size& frame_size) {
+  const int x0 = std::clamp(static_cast<int>(std::floor(det.x1)), 0, frame_size.width - 1);
+  const int y0 = std::clamp(static_cast<int>(std::floor(det.y1)), 0, frame_size.height - 1);
+  const int x1 = std::clamp(static_cast<int>(std::ceil(det.x2)), x0 + 1, frame_size.width);
+  const int y1 = std::clamp(static_cast<int>(std::ceil(det.y2)), y0 + 1, frame_size.height);
+  return cv::Rect(x0, y0, x1 - x0, y1 - y0);
+}
+
+/// YOLO26 boundary: the MLA already ran BoxDecode, so this only unpacks its payload.
 std::vector<SegmentationDetection>
-decode_segmentation_output(const simaai::neat::TensorList& tensors, int frame_w, int frame_h,
-                           int max_detections) {
+decode_yolo26_segments(const simaai::neat::TensorList& tensors, int frame_w, int frame_h,
+                       int max_detections) {
   if (tensors.empty()) {
     throw std::runtime_error("model returned no segmentation tensors");
   }
@@ -475,7 +532,7 @@ decode_segmentation_output(const simaai::neat::TensorList& tensors, int frame_w,
   const auto decoded =
       simaai::neat::decode_segmentation(tensors, frame_w, frame_h, max_detections, false);
   std::vector<SegmentationDetection> detections;
-  const size_t mask_bytes = 160U * 160U;
+  const size_t mask_bytes = static_cast<size_t>(kYolo26MaskGrid) * kYolo26MaskGrid;
   for (const auto& item : decoded) {
     if (!item.boxes.shape.empty() && item.boxes.shape.front() == 0) {
       continue;
@@ -496,7 +553,7 @@ decode_segmentation_output(const simaai::neat::TensorList& tensors, int frame_w,
       det.score = row[4];
       det.class_id = static_cast<int>(row[5]);
       if (masks.size() >= (static_cast<size_t>(i) + 1U) * mask_bytes) {
-        cv::Mat mask(160, 160, CV_8UC1,
+        cv::Mat mask(kYolo26MaskGrid, kYolo26MaskGrid, CV_8UC1,
                      const_cast<std::uint8_t*>(masks.data() + static_cast<size_t>(i) * mask_bytes));
         det.mask = mask.clone();
       }
@@ -507,6 +564,283 @@ decode_segmentation_output(const simaai::neat::TensorList& tensors, int frame_w,
     }
   }
   return detections;
+}
+
+/// One head tensor as a dense HWC float32 buffer, dropping a leading batch axis of 1.
+struct TensorHWC {
+  int h = 0;
+  int w = 0;
+  int c = 0;
+  std::vector<float> data;
+
+  /// The `c` values stored for one cell.
+  const float* row(int y, int x) const {
+    const size_t index =
+        (static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x)) *
+        static_cast<size_t>(c);
+    return data.data() + index;
+  }
+};
+
+TensorHWC tensor_to_hwc_f32(const simaai::neat::Tensor& tensor) {
+  TensorHWC out;
+  if (tensor.shape.size() == 4) {
+    if (tensor.shape[0] != 1) {
+      throw std::runtime_error("only batch size 1 is supported");
+    }
+    out.h = static_cast<int>(tensor.shape[1]);
+    out.w = static_cast<int>(tensor.shape[2]);
+    out.c = static_cast<int>(tensor.shape[3]);
+  } else if (tensor.shape.size() == 3) {
+    out.h = static_cast<int>(tensor.shape[0]);
+    out.w = static_cast<int>(tensor.shape[1]);
+    out.c = static_cast<int>(tensor.shape[2]);
+  } else {
+    throw std::runtime_error("unexpected head tensor rank " +
+                             std::to_string(tensor.shape.size()));
+  }
+
+  const auto floats = tensor_to_floats(tensor);
+  const size_t elements =
+      static_cast<size_t>(out.h) * static_cast<size_t>(out.w) * static_cast<size_t>(out.c);
+  if (floats.size() < elements) {
+    throw std::runtime_error("head tensor holds fewer elements than its shape declares");
+  }
+  out.data.assign(floats.begin(), floats.begin() + static_cast<std::ptrdiff_t>(elements));
+  return out;
+}
+
+/// The packaged YOLOv8 heads, grouped by role.
+struct Yolov8Heads {
+  std::vector<TensorHWC> boxes;
+  std::vector<TensorHWC> scores;
+  std::vector<TensorHWC> coefficients;
+  TensorHWC proto;
+};
+
+/// Groups the head tensors and checks them against `model.input_size`.
+Yolov8Heads split_yolov8_heads(const simaai::neat::TensorList& tensors, int input_size) {
+  if (tensors.size() < kYolov8HeadTensors) {
+    throw std::runtime_error("YOLOv8 decode expects " + std::to_string(kYolov8HeadTensors) +
+                             " head tensors, got " + std::to_string(tensors.size()));
+  }
+
+  Yolov8Heads heads;
+  for (size_t level = 0; level < kYolov8Strides.size(); ++level) {
+    heads.boxes.push_back(tensor_to_hwc_f32(tensors[level]));
+    heads.scores.push_back(tensor_to_hwc_f32(tensors[level + 3U]));
+    heads.coefficients.push_back(tensor_to_hwc_f32(tensors[level + 6U]));
+  }
+  heads.proto = tensor_to_hwc_f32(tensors[9]);
+
+  if (heads.proto.c != kMaskCoefficients) {
+    throw std::runtime_error("unexpected prototype channels " + std::to_string(heads.proto.c));
+  }
+  if (heads.proto.h != heads.proto.w || heads.proto.h * kMaskStride != input_size) {
+    throw std::runtime_error("prototype grid " + std::to_string(heads.proto.h) + "x" +
+                             std::to_string(heads.proto.w) +
+                             " does not match model.input_size " + std::to_string(input_size));
+  }
+  for (size_t level = 0; level < kYolov8Strides.size(); ++level) {
+    const int grid = input_size / kYolov8Strides[level];
+    const TensorHWC& box = heads.boxes[level];
+    const TensorHWC& score = heads.scores[level];
+    const TensorHWC& coefficient = heads.coefficients[level];
+    if (box.h != grid || box.w != grid || box.c != 4 * kDflBins) {
+      throw std::runtime_error("unexpected box head shape for stride " +
+                               std::to_string(kYolov8Strides[level]) + " at model.input_size " +
+                               std::to_string(input_size));
+    }
+    if (score.h != grid || score.w != grid || score.c <= 0) {
+      throw std::runtime_error("unexpected class head shape for stride " +
+                               std::to_string(kYolov8Strides[level]));
+    }
+    if (coefficient.h != grid || coefficient.w != grid ||
+        coefficient.c != kMaskCoefficients) {
+      throw std::runtime_error("unexpected mask-coefficient head shape for stride " +
+                               std::to_string(kYolov8Strides[level]));
+    }
+  }
+  return heads;
+}
+
+/// Expected distance, in cells, of one distribution-focal-loss box side.
+float dfl_distance(const float* logits) {
+  float max_logit = -std::numeric_limits<float>::infinity();
+  for (int bin = 0; bin < kDflBins; ++bin) {
+    max_logit = std::max(max_logit, logits[bin]);
+  }
+  float numerator = 0.0f;
+  float denominator = 0.0f;
+  for (int bin = 0; bin < kDflBins; ++bin) {
+    const float weight = std::exp(logits[bin] - max_logit);
+    numerator += static_cast<float>(bin) * weight;
+    denominator += weight;
+  }
+  return denominator > 0.0f ? numerator / denominator : 0.0f;
+}
+
+/// One YOLOv8 instance before NMS, in letterboxed model pixels.
+struct Yolov8Candidate {
+  float x1 = 0.0f;
+  float y1 = 0.0f;
+  float x2 = 0.0f;
+  float y2 = 0.0f;
+  float score = 0.0f;
+  int class_id = -1;
+  std::array<float, kMaskCoefficients> coefficients{};
+};
+
+std::vector<Yolov8Candidate> yolov8_candidates(const Yolov8Heads& heads, int input_size,
+                                               double min_score) {
+  std::vector<Yolov8Candidate> candidates;
+  for (size_t level = 0; level < kYolov8Strides.size(); ++level) {
+    const TensorHWC& box = heads.boxes[level];
+    const TensorHWC& score = heads.scores[level];
+    const TensorHWC& coefficient = heads.coefficients[level];
+    const float stride = static_cast<float>(input_size) / static_cast<float>(box.h);
+
+    for (int y = 0; y < box.h; ++y) {
+      for (int x = 0; x < box.w; ++x) {
+        // The packaged class head already carries probabilities, so it is thresholded as is.
+        const float* class_scores = score.row(y, x);
+        int best_class = 0;
+        float best_score = class_scores[0];
+        for (int c = 1; c < score.c; ++c) {
+          if (class_scores[c] > best_score) {
+            best_score = class_scores[c];
+            best_class = c;
+          }
+        }
+        if (best_score < static_cast<float>(min_score)) {
+          continue;
+        }
+
+        const float* sides = box.row(y, x);
+        const float left = dfl_distance(sides) * stride;
+        const float top = dfl_distance(sides + kDflBins) * stride;
+        const float right = dfl_distance(sides + 2 * kDflBins) * stride;
+        const float bottom = dfl_distance(sides + 3 * kDflBins) * stride;
+        const float center_x = (static_cast<float>(x) + 0.5f) * stride;
+        const float center_y = (static_cast<float>(y) + 0.5f) * stride;
+
+        Yolov8Candidate candidate;
+        candidate.x1 = std::clamp(center_x - left, 0.0f, static_cast<float>(input_size));
+        candidate.y1 = std::clamp(center_y - top, 0.0f, static_cast<float>(input_size));
+        candidate.x2 = std::clamp(center_x + right, 0.0f, static_cast<float>(input_size));
+        candidate.y2 = std::clamp(center_y + bottom, 0.0f, static_cast<float>(input_size));
+        candidate.score = best_score;
+        candidate.class_id = best_class;
+        const float* coefficient_row = coefficient.row(y, x);
+        std::copy(coefficient_row, coefficient_row + kMaskCoefficients,
+                  candidate.coefficients.begin());
+        if (candidate.x2 > candidate.x1 && candidate.y2 > candidate.y1) {
+          candidates.push_back(candidate);
+        }
+      }
+    }
+  }
+  return candidates;
+}
+
+float iou_xyxy(const Yolov8Candidate& a, const Yolov8Candidate& b) {
+  const float width = std::max(0.0f, std::min(a.x2, b.x2) - std::max(a.x1, b.x1));
+  const float height = std::max(0.0f, std::min(a.y2, b.y2) - std::max(a.y1, b.y1));
+  const float intersection = width * height;
+  const float union_area =
+      (a.x2 - a.x1) * (a.y2 - a.y1) + (b.x2 - b.x1) * (b.y2 - b.y1) - intersection;
+  return union_area > 0.0f ? intersection / union_area : 0.0f;
+}
+
+/// Greedy per-class NMS, highest score first, capped at `max_detections`.
+std::vector<Yolov8Candidate> nms_per_class(std::vector<Yolov8Candidate> candidates, double nms_iou,
+                                           int max_detections) {
+  std::stable_sort(candidates.begin(), candidates.end(),
+                   [](const Yolov8Candidate& a, const Yolov8Candidate& b) {
+                     return a.score > b.score;
+                   });
+  std::vector<Yolov8Candidate> kept;
+  kept.reserve(static_cast<size_t>(max_detections));
+  for (const auto& candidate : candidates) {
+    if (static_cast<int>(kept.size()) >= max_detections) {
+      break;
+    }
+    const bool suppressed =
+        std::any_of(kept.begin(), kept.end(), [&](const Yolov8Candidate& keeper) {
+          return keeper.class_id == candidate.class_id &&
+                 iou_xyxy(keeper, candidate) > static_cast<float>(nms_iou);
+        });
+    if (!suppressed) {
+      kept.push_back(candidate);
+    }
+  }
+  return kept;
+}
+
+/// Prototype mask for one instance, on the same grid BoxDecode returns for YOLO26.
+cv::Mat yolov8_instance_mask(const TensorHWC& proto,
+                             const std::array<float, kMaskCoefficients>& coefficients,
+                             const cv::Rect& frame_rect, const cv::Size& frame_size) {
+  cv::Mat mask = cv::Mat::zeros(proto.h, proto.w, CV_8UC1);
+  const cv::Rect mask_rect =
+      mask_rect_for_frame_rect(frame_rect, frame_size, cv::Size(proto.w, proto.h));
+  for (int y = mask_rect.y; y < mask_rect.y + mask_rect.height; ++y) {
+    std::uint8_t* row = mask.ptr<std::uint8_t>(y);
+    for (int x = mask_rect.x; x < mask_rect.x + mask_rect.width; ++x) {
+      const float* prototypes = proto.row(y, x);
+      float logit = 0.0f;
+      for (int k = 0; k < kMaskCoefficients; ++k) {
+        logit += prototypes[k] * coefficients[static_cast<size_t>(k)];
+      }
+      row[x] = cv::saturate_cast<std::uint8_t>(255.0f / (1.0f + std::exp(-logit)));
+    }
+  }
+  return mask;
+}
+
+/// YOLOv8 boundary: decode raw heads here into the shared detection representation.
+std::vector<SegmentationDetection>
+decode_yolov8_segments(const simaai::neat::TensorList& tensors, int frame_w, int frame_h,
+                       const AppConfig& cfg) {
+  const Yolov8Heads heads = split_yolov8_heads(tensors, cfg.input_size);
+  const auto kept = nms_per_class(yolov8_candidates(heads, cfg.input_size, cfg.min_score),
+                                  cfg.nms_iou, cfg.max_detections);
+
+  // Undo the letterbox the model preprocess applied, so boxes land in frame pixels.
+  const double scale = std::min(static_cast<double>(cfg.input_size) / frame_w,
+                                static_cast<double>(cfg.input_size) / frame_h);
+  const double pad_x = (static_cast<double>(cfg.input_size) - frame_w * scale) * 0.5;
+  const double pad_y = (static_cast<double>(cfg.input_size) - frame_h * scale) * 0.5;
+  const cv::Size frame_size(frame_w, frame_h);
+
+  std::vector<SegmentationDetection> detections;
+  detections.reserve(kept.size());
+  for (const auto& candidate : kept) {
+    SegmentationDetection det;
+    det.x1 = static_cast<float>(std::clamp((candidate.x1 - pad_x) / scale, 0.0, 1.0 * frame_w));
+    det.y1 = static_cast<float>(std::clamp((candidate.y1 - pad_y) / scale, 0.0, 1.0 * frame_h));
+    det.x2 = static_cast<float>(std::clamp((candidate.x2 - pad_x) / scale, 0.0, 1.0 * frame_w));
+    det.y2 = static_cast<float>(std::clamp((candidate.y2 - pad_y) / scale, 0.0, 1.0 * frame_h));
+    if (det.x2 <= det.x1 || det.y2 <= det.y1) {
+      continue;
+    }
+    det.score = candidate.score;
+    det.class_id = candidate.class_id;
+    det.mask = yolov8_instance_mask(heads.proto, candidate.coefficients,
+                                    frame_rect_for_detection(det, frame_size), frame_size);
+    detections.push_back(std::move(det));
+  }
+  return detections;
+}
+
+/// The one place model family changes behavior.
+std::vector<SegmentationDetection> decode_segments(const AppConfig& cfg,
+                                                   const simaai::neat::TensorList& tensors,
+                                                   int frame_w, int frame_h) {
+  if (cfg.model_family == ModelFamily::Yolo26) {
+    return decode_yolo26_segments(tensors, frame_w, frame_h, cfg.max_detections);
+  }
+  return decode_yolov8_segments(tensors, frame_w, frame_h, cfg);
 }
 
 struct SourceGeometry {
@@ -739,21 +1073,34 @@ SourceGeometry resolve_source_geometry(const AppConfig& cfg) {
   return geometry;
 }
 
+/// Loads the segmentation package. Only the postprocess contract differs per family.
 std::unique_ptr<simaai::neat::Model> make_model(const AppConfig& cfg,
                                                 const SourceGeometry& geometry) {
   simaai::neat::Model::Options opt;
   opt.preprocess.kind = simaai::neat::InputKind::Image;
-  opt.preprocess.enable = simaai::neat::AutoFlag::On;
+  // The decoder emits NV12; the model preprocess letterboxes it onto the model input.
   opt.preprocess.color_convert.input_format = simaai::neat::PreprocessColorFormat::NV12;
   if (geometry.width > 0 && geometry.height > 0) {
     opt.preprocess.input_max_width = geometry.width;
     opt.preprocess.input_max_height = geometry.height;
   }
-  opt.preprocess.preset = simaai::neat::NormalizePreset::COCO_YOLO;
-  opt.decode_type = simaai::neat::BoxDecodeType::YoloV26Seg;
-  opt.score_threshold = cfg.min_score;
-  opt.nms_iou_threshold = cfg.nms_iou;
-  opt.top_k = cfg.max_detections;
+  if (cfg.model_family == ModelFamily::Yolo26) {
+    opt.preprocess.enable = simaai::neat::AutoFlag::On;
+    opt.preprocess.preset = simaai::neat::NormalizePreset::COCO_YOLO;
+    // BoxDecode runs on device and emits the segmentation payload this app unpacks.
+    opt.decode_type = simaai::neat::BoxDecodeType::YoloV26Seg;
+    opt.score_threshold = cfg.min_score;
+    opt.nms_iou_threshold = cfg.nms_iou;
+    opt.top_k = cfg.max_detections;
+  } else {
+    // YOLOv8 leaves decode_type unset so the route surfaces the raw float heads that
+    // decode_yolov8_segments() consumes. The decode inverts a letterbox, so the resize policy
+    // is requested rather than assumed, and the YOLO normalization is requested explicitly.
+    opt.preprocess.enable = simaai::neat::AutoFlag::On;
+    opt.preprocess.preset = simaai::neat::NormalizePreset::COCO_YOLO;
+    opt.preprocess.resize.enable = simaai::neat::AutoFlag::On;
+    opt.preprocess.resize.mode = simaai::neat::ResizeMode::Letterbox;
+  }
   return std::make_unique<simaai::neat::Model>(cfg.model_path, opt);
 }
 
@@ -791,8 +1138,70 @@ const simaai::neat::Sample& joined_field(const simaai::neat::Sample& sample,
 }
 
 simaai::neat::Tensor frame_tensor_from_sample(const simaai::neat::Sample& sample) {
-  const auto tensors = simaai::neat::tensors_from_sample(joined_field(sample, "frame", 0U), true);
+  // A graph-joined bundle carries the frame in a field; a separate frame output is the sample.
+  const simaai::neat::Sample& field = sample.kind == simaai::neat::SampleKind::Bundle
+                                          ? joined_field(sample, "frame", 0U)
+                                          : sample;
+  const auto tensors = simaai::neat::tensors_from_sample(field, true);
   return tensors.front();
+}
+
+/// How many decoded frames may wait for their segments. The segments branch trails the frame
+/// branch by the model and host-decode latency, so this only has to cover that lag. Output
+/// memory is owned on this route, so a retained frame costs memory, not a pipeline buffer.
+constexpr std::size_t kFrameRingCapacity = 16;
+
+/// Moves every frame the run has ready into the ring, dropping the oldest past capacity.
+/// Draining every iteration is what keeps the frame output queue from backing up.
+void drain_frames(PipelineRuntime& runtime) {
+  while (true) {
+    simaai::neat::Sample frame;
+    simaai::neat::PullError pull_error;
+    if (runtime.run.pull(runtime.frame_output_name, 0, frame, &pull_error) !=
+        simaai::neat::PullStatus::Ok) {
+      return;
+    }
+    const std::int64_t frame_id = frame.frame_id;
+    runtime.frames.emplace_back(frame_id, std::move(frame));
+    if (runtime.frames.size() > kFrameRingCapacity) {
+      runtime.frames.pop_front();
+    }
+  }
+}
+
+/// Waits for the next segments sample while keeping the frame branch drained.
+///
+/// A single long blocking pull would leave the frame output queue unattended, and the frames
+/// discarded there under the keep-latest policy are exactly the partners a saved frame needs,
+/// so the wait is split into short slices with a drain between them.
+simaai::neat::PullStatus pull_segments(PipelineRuntime& runtime, int timeout_ms,
+                                       simaai::neat::Sample& sample,
+                                       simaai::neat::PullError& pull_error) {
+  if (runtime.frame_output_name.empty()) {
+    return runtime.run.pull(runtime.output_name, timeout_ms, sample, &pull_error);
+  }
+  constexpr int kSliceMs = 20;
+  const double deadline = time_ms() + timeout_ms;
+  while (true) {
+    drain_frames(runtime);
+    const auto status = runtime.run.pull(runtime.output_name, kSliceMs, sample, &pull_error);
+    if (status != simaai::neat::PullStatus::Timeout || time_ms() >= deadline) {
+      return status;
+    }
+  }
+}
+
+/// The retained frame a segments sample was computed from, or null when it has aged out.
+const simaai::neat::Sample* frame_for(const PipelineRuntime& runtime, std::int64_t frame_id) {
+  if (frame_id < 0) {
+    return nullptr;
+  }
+  for (auto it = runtime.frames.rbegin(); it != runtime.frames.rend(); ++it) {
+    if (it->first == frame_id) {
+      return &it->second;
+    }
+  }
+  return nullptr;
 }
 
 simaai::neat::TensorList segment_tensors_from_sample(const simaai::neat::Sample& sample) {
@@ -815,14 +1224,6 @@ cv::Scalar class_color(int class_id) {
       cv::Scalar(187, 212, 0),  cv::Scalar(255, 194, 0),   cv::Scalar(168, 153, 44),
   };
   return palette[static_cast<size_t>(std::max(class_id, 0)) % palette.size()];
-}
-
-cv::Rect frame_rect_for_detection(const SegmentationDetection& det, const cv::Size& frame_size) {
-  const int x0 = std::clamp(static_cast<int>(std::floor(det.x1)), 0, frame_size.width - 1);
-  const int y0 = std::clamp(static_cast<int>(std::floor(det.y1)), 0, frame_size.height - 1);
-  const int x1 = std::clamp(static_cast<int>(std::ceil(det.x2)), x0 + 1, frame_size.width);
-  const int y1 = std::clamp(static_cast<int>(std::ceil(det.y2)), y0 + 1, frame_size.height);
-  return cv::Rect(x0, y0, x1 - x0, y1 - y0);
 }
 
 void draw_box(cv::Mat& frame, const SegmentationDetection& det,
@@ -923,9 +1324,14 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
   simaai::neat::Graph model_graph("model");
   model_graph.connect(simaai::neat::nodes::Input("model"), *runtime.model);
 
+  // The YOLO26 decode is a cheap payload unpack, so its output can queue frames. The YOLOv8
+  // decode runs on the host and cannot match the source rate; queueing there pins the whole
+  // detess stage output pool and starves it, so that output keeps only the newest sample.
   simaai::neat::Graph segments_graph("segments");
-  segments_graph.add(
-      simaai::neat::nodes::Output("segments", simaai::neat::OutputOptions::EveryFrame(4)));
+  segments_graph.add(simaai::neat::nodes::Output(
+      "segments", cfg.model_family == ModelFamily::Yolo26
+                      ? simaai::neat::OutputOptions::EveryFrame(4)
+                      : simaai::neat::OutputOptions::EveryFrame(1)));
 
   runtime.graph.connect(source, branch);
   runtime.graph.connect(branch, video_graph);
@@ -935,13 +1341,22 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
     simaai::neat::Graph frame_graph("frame");
     frame_graph.add(
         simaai::neat::nodes::Output("frame", simaai::neat::OutputOptions::EveryFrame(4)));
-    auto joined = simaai::neat::graphs::Combine({"frame", "segments"}, "segmentation_output",
-                                                simaai::neat::CombinePolicy::ByFrame);
     runtime.graph.connect(branch, frame_graph);
-    runtime.graph.connect(frame_graph, joined);
-    runtime.graph.connect(segments_graph, joined);
+    if (cfg.model_family == ModelFamily::Yolo26) {
+      auto joined = simaai::neat::graphs::Combine({"frame", "segments"}, "segmentation_output",
+                                                  simaai::neat::CombinePolicy::ByFrame);
+      runtime.graph.connect(frame_graph, joined);
+      runtime.graph.connect(segments_graph, joined);
+      runtime.output_name = "segmentation_output";
+    } else {
+      // The graph-side join retains more model-output buffers than a YOLOv8 package's fixed
+      // pool can serve, so this route publishes both streams and pairs them on frame_id below.
+      runtime.frame_output_name = "frame";
+      runtime.output_name = "segments";
+    }
+  } else {
+    runtime.output_name = "segments";
   }
-  runtime.output_name = save_frames ? "segmentation_output" : "segments";
   if (cfg.profile) {
     std::cout << "Backend:\n" << runtime.graph.describe_backend() << "\n";
   }
@@ -950,7 +1365,12 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
   run_options.preset = simaai::neat::RunPreset::Realtime;
   run_options.queue_depth = 3;
   run_options.overflow_policy = simaai::neat::OverflowPolicy::KeepLatest;
-  run_options.output_memory = simaai::neat::OutputMemory::ZeroCopy;
+  // Measured on Modalix: the YOLOv8 head tensors must be copied out of the detess stage pool
+  // at pull time, or the stage starves while the host decode runs. YOLO26 pulls one small
+  // BoxDecode payload and keeps the cheaper zero-copy path.
+  run_options.output_memory = cfg.model_family == ModelFamily::Yolo26
+                                  ? simaai::neat::OutputMemory::ZeroCopy
+                                  : simaai::neat::OutputMemory::Owned;
   runtime.run = runtime.graph.build(run_options);
 
   simaai::neat::MetadataSenderOptions metadata_options;
@@ -963,7 +1383,8 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
   sima_examples::require(runtime.metadata_sender->ok(), metadata_err);
 
   std::cout << "source=" << cfg.source_url << " type=" << source_type_name(cfg.source_type)
-            << " codec=" << source_codec_name(cfg.source_codec) << " stream=" << runtime.frame_w
+            << " codec=" << source_codec_name(cfg.source_codec)
+            << " model=" << model_family_name(cfg.model_family) << " stream=" << runtime.frame_w
             << "x" << runtime.frame_h << "@" << runtime.output_fps
             << " insight=" << cfg.insight_host << " video=" << runtime.video_port
             << " metadata=" << runtime.metadata_sender->metadata_port() << " channel=0\n";
@@ -986,18 +1407,31 @@ int send_metadata(PipelineRuntime& runtime, const AppConfig& cfg,
   return encoded.dropped;
 }
 
-void maybe_save_frame(const AppConfig& cfg, int processed, const simaai::neat::Sample& sample,
-                      const std::vector<SegmentationDetection>& detections,
-                      const std::vector<std::string>& labels) {
-  if (cfg.save_dir.empty() || cfg.save_every <= 0 || processed % cfg.save_every != 0) {
-    return;
+/// Whether this result is due an annotated frame.
+bool save_due(const AppConfig& cfg, int processed) {
+  return !cfg.save_dir.empty() && cfg.save_every > 0 && processed % cfg.save_every == 0;
+}
+
+/// Writes one annotated frame. Returns false when the decoded frame it needs is gone.
+///
+/// The YOLO26 route joins frames to results inside the graph and always has its partner. The
+/// YOLOv8 route pairs them here, and a source faster than the model makes the two branches
+/// retain different frames, so some results have no picture to annotate. Those are counted and
+/// reported rather than silently skipped.
+bool save_frame(const AppConfig& cfg, int processed, const simaai::neat::Sample* sample,
+                const std::vector<SegmentationDetection>& detections,
+                const std::vector<std::string>& labels) {
+  if (sample == nullptr) {
+    return false;
   }
-  const cv::Mat frame = tensor_bgr_from_decoded(frame_tensor_from_sample(sample));
+  const cv::Mat frame = tensor_bgr_from_decoded(frame_tensor_from_sample(*sample));
   const cv::Mat annotated = overlay_segmentation(frame, detections, labels, cfg);
   const auto out_path = cfg.save_dir / ("frame_" + std::to_string(processed) + ".jpg");
   if (!cv::imwrite(out_path.string(), annotated)) {
     std::cerr << "[warn] failed to write output frame: " << out_path.string() << "\n";
+    return false;
   }
+  return true;
 }
 
 void run_pipeline(PipelineRuntime& runtime, const AppConfig& cfg) {
@@ -1007,11 +1441,13 @@ void run_pipeline(PipelineRuntime& runtime, const AppConfig& cfg) {
 
   int processed = 0;
   int dropped_total = 0;
+  int saved = 0;
+  int unpaired = 0;
   while (cfg.frames <= 0 || processed < cfg.frames) {
     simaai::neat::Sample sample;
     simaai::neat::PullError pull_error;
     const double pull_start = time_ms();
-    const auto status = runtime.run.pull(runtime.output_name, 20000, sample, &pull_error);
+    const auto status = pull_segments(runtime, 20000, sample, pull_error);
     const double pull_end = time_ms();
     if (status == simaai::neat::PullStatus::Timeout) {
       std::cerr << "[warn] timed out waiting for segmentation output\n";
@@ -1025,8 +1461,8 @@ void run_pipeline(PipelineRuntime& runtime, const AppConfig& cfg) {
     }
 
     const double decode_start = time_ms();
-    const auto detections = decode_segmentation_output(
-        segment_tensors_from_sample(sample), runtime.frame_w, runtime.frame_h, cfg.max_detections);
+    const auto detections =
+        decode_segments(cfg, segment_tensors_from_sample(sample), runtime.frame_w, runtime.frame_h);
     const double decode_end = time_ms();
 
     const double metadata_start = time_ms();
@@ -1038,13 +1474,25 @@ void run_pipeline(PipelineRuntime& runtime, const AppConfig& cfg) {
     dropped_total += dropped;
 
     ++processed;
-    maybe_save_frame(cfg, processed, sample, detections, runtime.labels);
+    if (save_due(cfg, processed)) {
+      const simaai::neat::Sample* frame_sample = &sample;
+      if (!runtime.frame_output_name.empty()) {
+        drain_frames(runtime);
+        frame_sample = frame_for(runtime, sample.frame_id);
+      }
+      if (save_frame(cfg, processed, frame_sample, detections, runtime.labels)) {
+        ++saved;
+      } else {
+        ++unpaired;
+      }
+    }
     profile.add(pull_end - pull_start, decode_end - decode_start, metadata_end - metadata_start,
                 static_cast<int>(detections.size()), dropped);
   }
 
   profile.flush();
   std::cout << "processed=" << processed << " dropped_segments=" << dropped_total
+            << " saved=" << saved << " unpaired=" << unpaired
             << " video_sender=" << cfg.insight_host << ":" << runtime.video_port << "\n";
 }
 
