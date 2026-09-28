@@ -18,6 +18,7 @@ VALID_CATEGORIES = {
     "object-detection",
     "tracking",
     "segmentation",
+    "anomaly-detection",
     "pose-estimation",
     "depth-estimation",
     "face-detection",
