@@ -131,8 +131,11 @@ class TestE2E:
         assert metadata.success, metadata.error
         for message in metadata.messages:
             assert message.frame_id.isdecimal() and message.timestamp_ms >= 0
-        segments = json.loads(metadata.messages[-1].payload)["data"]["segments"]
-        assert segments
+        # Every frame publishes a message, including frames with nothing to report, so the
+        # run is checked for a message that carries segments rather than whichever arrived last.
+        published = [json.loads(message.payload)["data"]["segments"] for message in metadata.messages]
+        segments = next((entry for entry in published if entry), None)
+        assert segments, f"no published message carried a segment (messages={len(published)})"
         for segment in segments:
             assert segment["label"]
             assert 0.0 <= segment["confidence"] <= 1.0

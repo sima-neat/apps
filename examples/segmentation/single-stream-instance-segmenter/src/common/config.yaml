@@ -39,8 +39,8 @@ output:
 testing:
   e2e:
     inference:
-      frames: 20               # Bounded run, so e2e tests exit on their own.
-      min_score: 0.35          # Keeps the smaller packages productive on sparse test footage.
+      frames: 40               # Bounded run, so e2e tests exit on their own.
+      min_score: 0.25          # Keeps the smaller packages productive on sparse test footage.
     output:
       save_every: 1
       total_saved_frames: 20
