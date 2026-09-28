@@ -9,7 +9,11 @@ The harness side of the same contract is here too, because the assertions are
 only about the application if the harness stopped it between writes.
 """
 
+import builtins
+import importlib
 import sys
+import tempfile
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -376,3 +380,71 @@ class TestAssertSavedFramesAreUsable:
         paths = assert_saved_frames_are_usable(tmp_path, 3)
 
         assert len(paths) == 3
+
+
+class TestStalledStreamWithOneFrame:
+    """A stream that saves one frame and stops is a stall, not a short run.
+
+    Without a configured stream count the helper cannot tell "this stream wrote
+    one frame" from "this run only ever writes one frame", so a one-frame group
+    is skipped. The multi-stream suites know how many streams they configured,
+    and passing that turns the ambiguity into a failure.
+    """
+
+    def _mixed_streams(self, tmp_path):
+        # stream 0 stalls after one frame; stream 1 runs normally.
+        _write_frame(tmp_path / "stream_0_frame_1.jpg", shade=10)
+        for index, shade in enumerate((20, 60, 100), start=1):
+            _write_frame(tmp_path / f"stream_1_frame_{index}.jpg", shade=shade)
+
+    def test_a_one_frame_stream_passes_when_no_count_is_given(self, tmp_path):
+        """The pre-existing behaviour, kept for the single-stream suites."""
+        self._mixed_streams(tmp_path)
+
+        assert_streamed_frames_are_usable(tmp_path, 4)
+
+    def test_a_one_frame_stream_fails_when_the_count_is_given(self, tmp_path):
+        self._mixed_streams(tmp_path)
+
+        with pytest.raises(AssertionError, match="one frame cannot show the stream advancing"):
+            assert_streamed_frames_are_usable(tmp_path, 4, streams=2)
+
+    def test_a_stream_that_saved_nothing_is_reported(self, tmp_path):
+        for index, shade in enumerate((20, 60, 100), start=1):
+            _write_frame(tmp_path / f"stream_1_frame_{index}.jpg", shade=shade)
+
+        with pytest.raises(AssertionError, match="expected frames from 2 streams, got 1"):
+            assert_streamed_frames_are_usable(tmp_path, 3, streams=2)
+
+    def test_two_healthy_streams_pass_with_the_count(self, tmp_path):
+        for stream in (0, 1):
+            for index, shade in enumerate((20, 60, 100), start=1):
+                _write_frame(tmp_path / f"stream_{stream}_frame_{index}.jpg", shade=shade)
+
+        assert_streamed_frames_are_usable(tmp_path, 6, streams=2)
+
+
+class TestHelperImportsWithoutOpenCV:
+    def test_the_module_imports_when_opencv_is_missing(self, monkeypatch):
+        """A suite that cannot run e2e still imports this during collection.
+
+        On an interpreter with pytest and PyYAML but no OpenCV, the suite's own
+        `_runtime_deps_ready()` guard is what should skip the test. If this
+        module needed cv2 to import, that supported skip would instead be a
+        collection error naming the wrong cause.
+        """
+        real_import = builtins.__import__
+
+        def without_cv2(name, *args, **kwargs):
+            if name == "cv2" or name.startswith("cv2."):
+                raise ModuleNotFoundError("No module named 'cv2'")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.delitem(sys.modules, "tests.utils.output_assertions", raising=False)
+        monkeypatch.delitem(sys.modules, "cv2", raising=False)
+        monkeypatch.setattr(builtins, "__import__", without_cv2)
+
+        module = importlib.import_module("tests.utils.output_assertions")
+
+        # The functions that do not decode stay usable without OpenCV.
+        assert module.supported_image_files(Path(tempfile.gettempdir())) is not None

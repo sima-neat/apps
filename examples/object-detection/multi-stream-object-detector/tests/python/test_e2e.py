@@ -109,4 +109,6 @@ class TestE2E:
             f"{metadata.error}"
         )
 
-        assert_streamed_frames_are_usable(tmp_output_dir, total_saved_frames)
+        assert_streamed_frames_are_usable(
+            tmp_output_dir, total_saved_frames, streams=len(rtsp_urls[:2])
+        )

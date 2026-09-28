@@ -122,4 +122,6 @@ class TestE2E:
             poses = json.loads(message.payload)["data"]["poses"]
             assert all(len(pose.get("keypoints", [])) == 17 for pose in poses)
 
-        assert_streamed_frames_are_usable(tmp_output_dir, total_saved_frames)
+        assert_streamed_frames_are_usable(
+            tmp_output_dir, total_saved_frames, streams=len(rtsp_urls[:2])
+        )

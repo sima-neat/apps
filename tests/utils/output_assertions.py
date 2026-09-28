@@ -13,7 +13,11 @@ import re
 from pathlib import Path
 from typing import Iterable, Sequence
 
-import cv2
+# OpenCV is imported inside the functions that decode, not here. A suite that
+# cannot run e2e locally still imports this module during collection, and its
+# own `_runtime_deps_ready()` / `skip_unless_e2e_ready` guards are what should
+# report a missing cv2 — a module-level import turns that supported skip into a
+# collection error before any guard runs.
 
 # The multi-stream applications name every frame after the stream that produced
 # it, e.g. stream_1_frame_40.jpg, and write them all into one directory.
@@ -54,6 +58,8 @@ def assert_frames_decode(paths: Sequence[Path], *, min_side: int = 16) -> list["
     `st_size > 0` passes on a truncated JPEG; this does not. Returns the decoded
     frames so a caller can assert further without re-reading them.
     """
+    import cv2
+
     assert paths, "no output frames were saved"
 
     frames = []
@@ -87,7 +93,10 @@ def group_frames_by_stream(
 
 
 def assert_every_stream_advances(
-    frames: Sequence["cv2.typing.MatLike"], paths: Sequence[Path]
+    frames: Sequence["cv2.typing.MatLike"],
+    paths: Sequence[Path],
+    *,
+    expected_streams: int | None = None,
 ) -> None:
     """Every stream produced moving video, not one frame written repeatedly.
 
@@ -104,9 +113,27 @@ def assert_every_stream_advances(
     the e2e configuration points at. A deliberately static source would need
     this check skipped rather than loosened.
     """
-    for label, group in group_frames_by_stream(paths, frames).items():
+    import cv2
+
+    groups = group_frames_by_stream(paths, frames)
+
+    if expected_streams is not None:
+        missing = expected_streams - len(groups)
+        assert missing <= 0, (
+            f"expected frames from {expected_streams} streams, got {len(groups)} "
+            f"({', '.join(sorted(groups)) or 'none'}); "
+            "a stream that saved nothing cannot be shown to advance"
+        )
+
+    for label, group in groups.items():
         if len(group) < 2:
-            continue
+            if expected_streams is None:
+                continue
+            raise AssertionError(
+                f"{label} saved only {len(group)} frame "
+                f"({group[0][0].name}); one frame cannot show the stream advancing, "
+                "so a stream that stalled immediately would pass unnoticed"
+            )
 
         first = group[0][1]
         if any(
@@ -139,7 +166,7 @@ def assert_saved_frames_are_usable(
 
 
 def assert_streamed_frames_are_usable(
-    output_dir: Path, minimum: int, *, min_side: int = 16
+    output_dir: Path, minimum: int, *, min_side: int = 16, streams: int | None = None
 ) -> list[Path]:
     """The same check for an application that samples frames out of a stream.
 
@@ -149,7 +176,7 @@ def assert_streamed_frames_are_usable(
     source would need this call replaced rather than loosened.
     """
     paths, frames = _counted_and_decoded(output_dir, minimum, min_side)
-    assert_every_stream_advances(frames, paths)
+    assert_every_stream_advances(frames, paths, expected_streams=streams)
     return paths
 
 
