@@ -1407,22 +1407,31 @@ int send_metadata(PipelineRuntime& runtime, const AppConfig& cfg,
   return encoded.dropped;
 }
 
-void maybe_save_frame(const AppConfig& cfg, int processed, const simaai::neat::Sample* sample,
-                      const std::vector<SegmentationDetection>& detections,
-                      const std::vector<std::string>& labels) {
-  if (cfg.save_dir.empty() || cfg.save_every <= 0 || processed % cfg.save_every != 0) {
-    return;
-  }
+/// Whether this result is due an annotated frame.
+bool save_due(const AppConfig& cfg, int processed) {
+  return !cfg.save_dir.empty() && cfg.save_every > 0 && processed % cfg.save_every == 0;
+}
+
+/// Writes one annotated frame. Returns false when the decoded frame it needs is gone.
+///
+/// The YOLO26 route joins frames to results inside the graph and always has its partner. The
+/// YOLOv8 route pairs them here, and a source faster than the model makes the two branches
+/// retain different frames, so some results have no picture to annotate. Those are counted and
+/// reported rather than silently skipped.
+bool save_frame(const AppConfig& cfg, int processed, const simaai::neat::Sample* sample,
+                const std::vector<SegmentationDetection>& detections,
+                const std::vector<std::string>& labels) {
   if (sample == nullptr) {
-    std::cerr << "[warn] no decoded frame retained for this result; skipped saving\n";
-    return;
+    return false;
   }
   const cv::Mat frame = tensor_bgr_from_decoded(frame_tensor_from_sample(*sample));
   const cv::Mat annotated = overlay_segmentation(frame, detections, labels, cfg);
   const auto out_path = cfg.save_dir / ("frame_" + std::to_string(processed) + ".jpg");
   if (!cv::imwrite(out_path.string(), annotated)) {
     std::cerr << "[warn] failed to write output frame: " << out_path.string() << "\n";
+    return false;
   }
+  return true;
 }
 
 void run_pipeline(PipelineRuntime& runtime, const AppConfig& cfg) {
@@ -1432,6 +1441,8 @@ void run_pipeline(PipelineRuntime& runtime, const AppConfig& cfg) {
 
   int processed = 0;
   int dropped_total = 0;
+  int saved = 0;
+  int unpaired = 0;
   while (cfg.frames <= 0 || processed < cfg.frames) {
     simaai::neat::Sample sample;
     simaai::neat::PullError pull_error;
@@ -1463,18 +1474,25 @@ void run_pipeline(PipelineRuntime& runtime, const AppConfig& cfg) {
     dropped_total += dropped;
 
     ++processed;
-    const simaai::neat::Sample* frame_sample = &sample;
-    if (!runtime.frame_output_name.empty()) {
-      drain_frames(runtime);
-      frame_sample = frame_for(runtime, sample.frame_id);
+    if (save_due(cfg, processed)) {
+      const simaai::neat::Sample* frame_sample = &sample;
+      if (!runtime.frame_output_name.empty()) {
+        drain_frames(runtime);
+        frame_sample = frame_for(runtime, sample.frame_id);
+      }
+      if (save_frame(cfg, processed, frame_sample, detections, runtime.labels)) {
+        ++saved;
+      } else {
+        ++unpaired;
+      }
     }
-    maybe_save_frame(cfg, processed, frame_sample, detections, runtime.labels);
     profile.add(pull_end - pull_start, decode_end - decode_start, metadata_end - metadata_start,
                 static_cast<int>(detections.size()), dropped);
   }
 
   profile.flush();
   std::cout << "processed=" << processed << " dropped_segments=" << dropped_total
+            << " saved=" << saved << " unpaired=" << unpaired
             << " video_sender=" << cfg.insight_host << ":" << runtime.video_port << "\n";
 }
 

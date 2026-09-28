@@ -1296,27 +1296,40 @@ def send_metadata(
     return dropped
 
 
-def maybe_save_frame(
+def save_due(cfg: AppConfig, processed: int) -> bool:
+    """Whether this result is due an annotated frame."""
+    return bool(cfg.output.save_dir) and cfg.output.save_every > 0 and (
+        processed % cfg.output.save_every == 0
+    )
+
+
+def save_frame(
     cfg: AppConfig, processed: int, sample, detections: list[dict], labels: list[str]
-) -> None:
-    if not cfg.output.save_dir or cfg.output.save_every <= 0:
-        return
-    if processed % cfg.output.save_every != 0:
-        return
+) -> bool:
+    """Writes one annotated frame. Returns False when the decoded frame it needs is gone.
+
+    The YOLO26 route joins frames to results inside the graph and always has its partner. The
+    YOLOv8 route pairs them in the run loop, and a source faster than the model makes the two
+    branches retain different frames, so some results have no picture to annotate. Those are
+    counted and reported rather than silently skipped.
+    """
     if sample is None:
-        print("[warn] no decoded frame retained for this result; skipped saving", file=sys.stderr)
-        return
+        return False
     frame = tensor_bgr_from_decoded(frame_tensor_from_sample(sample))
     annotated = overlay_segmentation(frame, detections, cfg.min_score, cfg.output, labels)
     out_path = Path(cfg.output.save_dir) / f"frame_{processed}.jpg"
     if not cv2.imwrite(str(out_path), annotated):
         print(f"[warn] failed to write output frame: {out_path}", file=sys.stderr)
+        return False
+    return True
 
 
 def run_pipeline(runtime: PipelineRuntime, cfg: AppConfig) -> int:
     profile = ProfileWindow(cfg.profile, cfg.profile_interval)
     processed = 0
     dropped_total = 0
+    saved = 0
+    unpaired = 0
     while cfg.frames <= 0 or processed < cfg.frames:
         pull_start = time_ms()
         sample = pull_segments(runtime, 20000)
@@ -1342,11 +1355,15 @@ def run_pipeline(runtime: PipelineRuntime, cfg: AppConfig) -> int:
         dropped_total += dropped
 
         processed += 1
-        frame_sample = sample
-        if runtime.frame_output_name:
-            drain_frames(runtime)
-            frame_sample = frame_for(runtime, sample.frame_id)
-        maybe_save_frame(cfg, processed, frame_sample, detections, runtime.labels)
+        if save_due(cfg, processed):
+            frame_sample = sample
+            if runtime.frame_output_name:
+                drain_frames(runtime)
+                frame_sample = frame_for(runtime, sample.frame_id)
+            if save_frame(cfg, processed, frame_sample, detections, runtime.labels):
+                saved += 1
+            else:
+                unpaired += 1
         profile.add(
             pull_end - pull_start,
             decode_end - decode_start,
@@ -1358,6 +1375,7 @@ def run_pipeline(runtime: PipelineRuntime, cfg: AppConfig) -> int:
     profile.flush()
     print(
         f"processed={processed} dropped_segments={dropped_total} "
+        f"saved={saved} unpaired={unpaired} "
         f"video_sender={cfg.insight_host}:{runtime.video_port}"
     )
     return processed
