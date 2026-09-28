@@ -1254,180 +1254,10 @@ const char* const kReportMarker = ".image-classification-explorer-report";
 // --- Publication: swapping the report directory into place safely --------------
 // True when a process with this id still exists (it may be another run of this
 // application mid-swap, whose backup must not be touched).
-bool process_is_running(pid_t pid) {
-  if (::kill(pid, 0) == 0)
-    return true;
-  return errno != ESRCH;
-}
-
-// Clean up after a publish that was killed part-way through its swap.
-//
-// publish_report renames the old report aside to `.<name>.previous-<pid>`,
-// moves the new one into place, then deletes the backup. A process killed
-// between those steps leaves either `output_dir` absent (restore the backup) or
-// the backup orphaned (delete it). Backups belonging to a process that is still
-// running are left alone, as is anything that does not carry the report marker.
-// Serialize publication to one output directory.
-//
-// Recovery and the swap must happen under one lock: without it two runs can both
-// observe "no other publisher", and the second then sees the momentary gap while
-// the first has its output renamed aside. A lock left by a process that no longer
-// exists is reclaimed.
-class PublicationLock {
-public:
-  explicit PublicationLock(const fs::path& output_dir)
-      : output_dir_(output_dir),
-        path_(output_dir.parent_path() / ("." + output_dir.filename().string() + ".lock")) {
-    for (int attempt = 0; attempt < 2; ++attempt) {
-      const int fd = ::open(path_.c_str(), O_CREAT | O_EXCL | O_WRONLY, 0644);
-      if (fd >= 0) {
-        const std::string owner = std::to_string(::getpid()) + "\n";
-        const ssize_t written = ::write(fd, owner.data(), owner.size());
-        static_cast<void>(written);
-        ::close(fd);
-        held_ = true;
-        return;
-      }
-      if (errno != EEXIST) {
-        // Not a collision: report what actually failed, as Python does.
-        throw std::runtime_error("failed to create the publication lock " + path_.string() + ": " +
-                                 std::strerror(errno));
-      }
-
-      std::optional<pid_t> holder;
-      std::ifstream in(path_);
-      std::string text;
-      if (std::getline(in, text)) {
-        try {
-          holder = static_cast<pid_t>(std::stol(text));
-        } catch (const std::exception&) {
-          holder.reset();
-        }
-      }
-      const bool stale =
-          !holder.has_value() || *holder == ::getpid() || !process_is_running(*holder);
-      if (attempt == 0 && stale) {
-        std::error_code ec;
-        fs::remove(path_, ec); // its owner is gone
-        continue;
-      }
-      break;
-    }
-    throw std::runtime_error("another run is publishing to " + output_dir_.string() +
-                             "; retry once it has finished");
-  }
-
-  ~PublicationLock() {
-    if (held_) {
-      std::error_code ec;
-      fs::remove(path_, ec);
-    }
-  }
-
-  PublicationLock(const PublicationLock&) = delete;
-  PublicationLock& operator=(const PublicationLock&) = delete;
-
-private:
-  fs::path output_dir_;
-  fs::path path_;
-  bool held_ = false;
-};
-
-// Returns true when a live process owns a backup, meaning a publish is in flight
-// and this run must not touch output_dir.
-bool recover_interrupted_publish(const fs::path& output_dir) {
-  const fs::path parent = output_dir.parent_path();
-  if (!fs::is_directory(parent))
-    return false;
-
-  // A directory bearing our own pid cannot belong to a concurrent invocation: it
-  // is a stale one from a killed run whose pid the OS has since recycled onto us.
-  const auto owned_by_live_process = [](const std::string& name, const std::string& pfx) {
-    const std::string suffix = name.substr(pfx.size());
-    if (suffix.empty() || !std::all_of(suffix.begin(), suffix.end(),
-                                       [](unsigned char c) { return std::isdigit(c) != 0; })) {
-      return false;
-    }
-    pid_t owner = 0;
-    try {
-      owner = static_cast<pid_t>(std::stol(suffix));
-    } catch (const std::exception&) {
-      return false; // too large to be a live pid, which is Python's conclusion too
-    }
-    return owner != ::getpid() && process_is_running(owner);
-  };
-
-  // Staging directories of dead owners leak disk space: their cleanup never ran.
-  // Ours is removed by publish_report itself.
-  const std::string staging_prefix = "." + output_dir.filename().string() + ".staging-";
-  std::vector<fs::path> stale_staging;
-  for (const auto& entry : fs::directory_iterator(parent)) {
-    if (!entry.is_directory())
-      continue;
-    const std::string name = entry.path().filename().string();
-    if (name.rfind(staging_prefix, 0) == 0 && !owned_by_live_process(name, staging_prefix))
-      stale_staging.push_back(entry.path());
-  }
-  for (const auto& staging : stale_staging) {
-    std::error_code ec;
-    fs::remove_all(staging, ec);
-    if (!ec) {
-      std::cerr << "Removed an abandoned report staging directory: " << staging.filename().string()
-                << "\n";
-    }
-  }
-
-  const std::string prefix = "." + output_dir.filename().string() + ".previous-";
-  std::vector<fs::path> abandoned;
-  bool live_owner = false;
-  for (const auto& entry : fs::directory_iterator(parent)) {
-    if (!entry.is_directory())
-      continue;
-    const std::string name = entry.path().filename().string();
-    if (name.rfind(prefix, 0) != 0)
-      continue;
-    if (!fs::exists(entry.path() / kReportMarker))
-      continue;
-    // A backup whose process is still alive belongs to a publish that is mid-swap:
-    // it still needs that directory to roll back. Never restore or delete those.
-    if (owned_by_live_process(name, prefix)) {
-      live_owner = true;
-      continue;
-    }
-    abandoned.push_back(entry.path());
-  }
-  if (abandoned.empty())
-    return live_owner;
-
-  if (!fs::exists(output_dir)) {
-    auto newest = abandoned.begin();
-    for (auto it = abandoned.begin(); it != abandoned.end(); ++it) {
-      std::error_code ec;
-      const auto written = fs::last_write_time(*it, ec);
-      if (ec)
-        continue;
-      std::error_code best_ec;
-      if (written > fs::last_write_time(*newest, best_ec))
-        newest = it;
-    }
-    const fs::path restored = *newest;
-    abandoned.erase(newest);
-    fs::rename(restored, output_dir);
-    std::cerr << "Recovered an interrupted report publication: restored "
-              << restored.filename().string() << " to " << output_dir.string() << "\n";
-  }
-
-  // Anything left belongs to a finished publish that never got to delete its
-  // backup.
-  for (const auto& leftover : abandoned) {
-    std::error_code ec;
-    fs::remove_all(leftover, ec);
-    if (!ec)
-      std::cerr << "Removed a leftover report backup: " << leftover.filename().string() << "\n";
-  }
-  return live_owner;
-}
-
+// One run at a time per output directory, which the README states. There is no
+// cross-process locking or recovery protocol: the two scratch names are fixed,
+// are the only paths outside output_dir this touches, and are cleared on entry,
+// so a run interrupted mid-swap costs the previous report and nothing else.
 void publish_report(const fs::path& output_dir_arg, const std::vector<ImageResult>& results,
                     const std::vector<ModelProfile>& profiles,
                     const std::vector<std::string>& skipped, double total_ms) {
@@ -1441,14 +1271,6 @@ void publish_report(const fs::path& output_dir_arg, const std::vector<ImageResul
     output_dir = output_dir.parent_path();
   const fs::path parent = output_dir.parent_path();
   fs::create_directories(parent);
-  const PublicationLock lock(output_dir);
-
-  if (recover_interrupted_publish(output_dir)) {
-    // Another run has output_dir renamed aside and will rename its own staging
-    // into that path. Publishing now would take the path out from under it.
-    throw std::runtime_error("another run is publishing to " + output_dir.string() +
-                             "; retry once it has finished");
-  }
 
   if (fs::exists(output_dir)) {
     if (!fs::is_directory(output_dir)) {
@@ -1481,11 +1303,14 @@ void publish_report(const fs::path& output_dir_arg, const std::vector<ImageResul
                                listed + "); use a dedicated directory");
     }
   }
-  const std::string tag = std::to_string(::getpid());
-  const fs::path staging = parent / ("." + output_dir.filename().string() + ".staging-" + tag);
-  const fs::path previous = parent / ("." + output_dir.filename().string() + ".previous-" + tag);
+  // Named exactly, never matched by prefix: a directory that merely starts with
+  // one of these names belongs to someone else and is left alone. Leftovers here
+  // are from a run of ours that was interrupted mid-swap.
+  const fs::path staging = parent / ("." + output_dir.filename().string() + ".staging");
+  const fs::path previous = parent / ("." + output_dir.filename().string() + ".previous");
   std::error_code ignored;
   fs::remove_all(staging, ignored);
+  fs::remove_all(previous, ignored);
   fs::create_directories(staging);
   try {
     write_json_report(staging / "report.json", results, profiles, skipped, total_ms);
@@ -1503,8 +1328,6 @@ void publish_report(const fs::path& output_dir_arg, const std::vector<ImageResul
     try {
       fs::rename(staging, output_dir);
     } catch (...) {
-      // A hard kill between the two renames is recovered on the next run by
-      // recover_interrupted_publish().
       if (had_previous && !fs::exists(output_dir))
         fs::rename(previous, output_dir); // roll back to the previous report
       throw;

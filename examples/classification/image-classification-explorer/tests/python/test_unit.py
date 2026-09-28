@@ -909,132 +909,6 @@ models:
         assert sorted(p.name for p in (out_dir / "thumbnails").iterdir()) == thumbs_before
         assert not list(tmp_path.glob(".out.*")), "staging/previous directories left behind"
 
-    def test_recovers_report_stranded_by_an_interrupted_publish(self, tmp_path, monkeypatch):
-        """Regression: a publish killed between the two renames left output_dir
-        absent and the complete previous report under .<name>.previous-<pid>.
-        The next run must restore it rather than stranding it."""
-        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
-        img = tmp_path / "a.jpg"
-        _make_image(img)
-        out_dir = tmp_path / "out"
-        config_path = tmp_path / "config.yaml"
-        _write_config(config_path, img, out_dir)
-        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
-        assert main.main() == 0
-
-        # Simulate a process killed after the first rename of the swap.
-        stranded = tmp_path / ".out.previous-4242"
-        out_dir.rename(stranded)
-        assert not out_dir.exists()
-
-        main.recover_interrupted_publish(out_dir)
-
-        assert out_dir.is_dir()
-        assert (out_dir / "report.json").is_file()
-        assert (out_dir / main.REPORT_MARKER).is_file()
-        assert not stranded.exists()
-
-    def test_removes_orphaned_backup_from_a_completed_swap(self, tmp_path, monkeypatch):
-        """Regression: a process killed after the new report was installed but
-        before its backup was deleted left .<name>.previous-<pid> behind
-        forever, since recovery returned early whenever output_dir existed."""
-        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
-        img = tmp_path / "a.jpg"
-        _make_image(img)
-        out_dir = tmp_path / "out"
-        config_path = tmp_path / "config.yaml"
-        _write_config(config_path, img, out_dir)
-        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
-        assert main.main() == 0
-
-        # A complete backup left by a process that no longer exists.
-        orphan = tmp_path / ".out.previous-2147483646"
-        shutil.copytree(out_dir, orphan)
-        assert (orphan / main.REPORT_MARKER).is_file()
-
-        assert main.main() == 0
-        assert not orphan.exists()
-        assert (out_dir / "report.json").is_file()
-
-    def test_keeps_backup_of_a_running_process(self, tmp_path, monkeypatch, capsys):
-        """A backup belonging to a live process may still be needed for its
-        rollback, so it must not be deleted - and this run defers rather than
-        publishing alongside it."""
-        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
-        img = tmp_path / "a.jpg"
-        _make_image(img)
-        out_dir = tmp_path / "out"
-        config_path = tmp_path / "config.yaml"
-        _write_config(config_path, img, out_dir)
-        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
-        assert main.main() == 0
-
-        # A separate, genuinely running process (this process's own pid is the one
-        # publish_report uses for its backup, so it cannot stand in here).
-        helper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
-        try:
-            live = tmp_path / f".out.previous-{helper.pid}"
-            shutil.copytree(out_dir, live)
-
-            assert main.main() == 6
-            assert "another run is publishing" in capsys.readouterr().err
-            assert live.is_dir(), "backup of a running process must be preserved"
-        finally:
-            helper.kill()
-            helper.wait()
-
-    def test_does_not_restore_a_live_publishers_backup(self, tmp_path, monkeypatch):
-        """Regression: with output_dir absent, recovery restored the newest
-        backup without checking whether its owner was still running, stealing a
-        concurrent publisher's rollback source and breaking its own swap."""
-        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
-        img = tmp_path / "a.jpg"
-        _make_image(img)
-        out_dir = tmp_path / "out"
-        config_path = tmp_path / "config.yaml"
-        _write_config(config_path, img, out_dir)
-        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
-        assert main.main() == 0
-
-        helper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
-        try:
-            # Exactly the state a concurrent publisher is in mid-swap: it has
-            # renamed the old report aside and has not yet installed its own.
-            live = tmp_path / f".out.previous-{helper.pid}"
-            out_dir.rename(live)
-
-            # The return value is what defers publication; discarding it made
-            # both assertions below hold even when the function did nothing.
-            assert main.recover_interrupted_publish(out_dir) is True, (
-                "a live publisher's backup must report a publish in flight"
-            )
-
-            assert live.is_dir(), "a live publisher's backup must not be taken"
-            assert not out_dir.exists(), "output_dir must be left for the live publisher"
-        finally:
-            helper.kill()
-            helper.wait()
-
-    def test_removes_backup_bearing_our_own_recycled_pid(self, tmp_path, monkeypatch):
-        """Regression: a stale backup whose pid the OS later recycled onto this
-        process was mistaken for a live publisher's, so it was never cleaned and
-        the next publish failed renaming output_dir onto that existing path."""
-        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
-        img = tmp_path / "a.jpg"
-        _make_image(img)
-        out_dir = tmp_path / "out"
-        config_path = tmp_path / "config.yaml"
-        _write_config(config_path, img, out_dir)
-        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
-        assert main.main() == 0
-
-        recycled = tmp_path / f".out.previous-{os.getpid()}"
-        shutil.copytree(out_dir, recycled)
-
-        assert main.main() == 0, "a rerun must not be blocked by a recycled-pid backup"
-        assert not recycled.exists()
-        assert (out_dir / "report.json").is_file()
-
     def test_input_replaced_mid_run_is_reported_not_mixed(self, tmp_path, monkeypatch):
         """Regression: each model re-reads the file, so a file replaced mid-run
         could have its models' predictions compared against different bytes."""
@@ -1077,53 +951,6 @@ models:
         assert "errors" in entry
         assert "changed while the run was in progress" in "".join(entry["errors"].values())
         assert entry.get("agreement") is None
-
-    def test_removes_staging_abandoned_by_a_dead_run(self, tmp_path, monkeypatch):
-        """Regression: a run killed mid-generation left .<name>.staging-<pid>
-        behind forever, since recovery only ever scanned .previous-*."""
-        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
-        img = tmp_path / "a.jpg"
-        _make_image(img)
-        out_dir = tmp_path / "out"
-        config_path = tmp_path / "config.yaml"
-        _write_config(config_path, img, out_dir)
-        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
-        assert main.main() == 0
-
-        abandoned = tmp_path / ".out.staging-2147483646"
-        abandoned.mkdir()
-        (abandoned / "report.json").write_text("{}")
-
-        assert main.main() == 0
-        assert not abandoned.exists()
-
-    def test_defers_while_another_run_owns_the_swap(self, tmp_path, monkeypatch, capsys):
-        """Regression: recovery left a live publisher's backup alone but said
-        nothing, so this run carried on and could occupy the path the other run
-        was about to rename its staging into."""
-        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
-        img = tmp_path / "a.jpg"
-        _make_image(img)
-        out_dir = tmp_path / "out"
-        config_path = tmp_path / "config.yaml"
-        _write_config(config_path, img, out_dir)
-        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
-        assert main.main() == 0
-
-        helper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
-        try:
-            # The state a concurrent publisher is in mid-swap.
-            out_dir.rename(tmp_path / f".out.previous-{helper.pid}")
-
-            rc = main.main()
-
-            assert rc == 6
-            assert "another run is publishing" in capsys.readouterr().err
-            assert (tmp_path / f".out.previous-{helper.pid}").is_dir()
-            assert not out_dir.exists()
-        finally:
-            helper.kill()
-            helper.wait()
 
     def test_swapped_input_leaves_no_prediction(self, tmp_path, monkeypatch):
         """Regression: the prediction was stored before the post-inference
@@ -1176,44 +1003,6 @@ models:
         assert payload["skipped"] == []
         assert payload["images"][0]["predictions"]["m"]["top_k"]
 
-    def test_publication_lock_excludes_a_second_run(self, tmp_path, monkeypatch):
-        """The lock must serialize publication, not merely detect a race after
-        the fact: a run holding it makes a second run defer."""
-        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
-        img = tmp_path / "a.jpg"
-        _make_image(img)
-        out_dir = tmp_path / "out"
-        config_path = tmp_path / "config.yaml"
-        _write_config(config_path, img, out_dir)
-        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
-        assert main.main() == 0
-
-        helper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
-        try:
-            lock = tmp_path / ".out.lock"
-            lock.write_text(f"{helper.pid}\n")
-            assert main.main() == 6
-            assert lock.exists(), "a live holder's lock must not be stolen"
-        finally:
-            helper.kill()
-            helper.wait()
-            lock.unlink(missing_ok=True)
-
-    def test_stale_lock_is_reclaimed(self, tmp_path, monkeypatch):
-        """A lock left by a process that no longer exists must not block runs."""
-        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
-        img = tmp_path / "a.jpg"
-        _make_image(img)
-        out_dir = tmp_path / "out"
-        config_path = tmp_path / "config.yaml"
-        _write_config(config_path, img, out_dir)
-        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
-
-        (tmp_path / ".out.lock").write_text("2147483646\n")
-        assert main.main() == 0
-        assert (out_dir / "report.json").is_file()
-        assert not (tmp_path / ".out.lock").exists()
-
     def test_leaves_unmarked_directories_alone(self, tmp_path, monkeypatch):
         """Only directories carrying the report marker are ever deleted."""
         monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
@@ -1243,11 +1032,11 @@ models:
         _write_config(config_path, img, out_dir)
         monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
         assert main.main() == 0
-        out_dir.rename(tmp_path / ".out.previous-4242")
+        out_dir.rename(tmp_path / ".out.previous")
 
         assert main.main() == 0
         assert (out_dir / "report.json").is_file()
-        assert not list(tmp_path.glob(".out.previous-*"))
+        assert not (tmp_path / ".out.previous").exists()
 
     def test_failed_swap_rolls_back_previous_report(self, tmp_path, monkeypatch):
         """If the final rename of the staged report fails, the previous report
@@ -1265,7 +1054,7 @@ models:
         real_rename = Path.rename
 
         def flaky_rename(self, target):
-            if ".staging-" in self.name:
+            if self.name.endswith(".staging"):
                 raise OSError(5, "simulated rename failure")
             return real_rename(self, target)
 
@@ -1274,6 +1063,30 @@ models:
         assert (out_dir / "report.json").read_bytes() == before
         assert (out_dir / "report.html").is_file()
         assert not list(tmp_path.glob(".out.*")), "staging/previous directories left behind"
+
+    def test_cleanup_touches_only_its_own_two_scratch_names(self, tmp_path, monkeypatch):
+        """Publication clears `.<name>.staging` and `.<name>.previous` and nothing
+        else. The earlier version globbed `.<name>.staging-*`, so a directory it
+        did not own - with no pid in its name and no ownership check - was
+        recursively deleted by an ordinary report run."""
+        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
+        img = tmp_path / "a.jpg"
+        _make_image(img)
+        out_dir = tmp_path / "out"
+        config_path = tmp_path / "config.yaml"
+        _write_config(config_path, img, out_dir)
+
+        bystanders = [tmp_path / ".out.staging-notes", tmp_path / ".out.staging-2147483646",
+                      tmp_path / ".out.previous-notes", tmp_path / ".out.stagingextra"]
+        for d in bystanders:
+            d.mkdir()
+            (d / "keep.txt").write_text("not ours", encoding="utf-8")
+
+        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
+        assert main.main() == 0
+        assert (out_dir / "report.json").is_file()
+        for d in bystanders:
+            assert (d / "keep.txt").is_file(), f"{d.name} was deleted by a report run"
 
     def test_output_dir_without_marker_is_refused(self, tmp_path, monkeypatch, capsys):
         """output_dir is replaced as a whole, so a customer directory - even one

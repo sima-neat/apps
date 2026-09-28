@@ -142,9 +142,9 @@ Files with a supported extension that cannot be decoded stay in the main table w
 `error` cell (and an `errors` entry in `report.json`); neither case stops the run.
 
 One run writes one report. Two runs publishing into the same `io.output_dir` at
-the same time is not supported: give each concurrent run its own output
-directory. A run started while another is publishing normally declines with a
-clear message, but that check is a convenience rather than a guarantee.
+the same time is not supported and is not detected: give each concurrent run its
+own output directory. A run interrupted part-way through replacing the directory
+costs the previous report; the next run writes a fresh one.
 
 Each run replaces the previous contents of `io.output_dir` as a unit, so the directory is either
 the complete previous report or the complete new one. Use an empty or dedicated directory: a run

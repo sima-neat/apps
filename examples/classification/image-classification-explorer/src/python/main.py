@@ -878,130 +878,6 @@ def write_html_report(path: Path, results: list[ImageResult], profiles: list[Mod
 # --- Publication: swapping the report directory into place safely ----------------
 
 
-def process_is_running(pid: int) -> bool:
-    """True when a process with this id still exists (it may be another run of
-    this application mid-swap, whose backup must not be touched)."""
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except OverflowError:
-        return False  # too large to be a live pid on this platform
-    except OSError:
-        return True  # exists but is not ours to signal
-    return True
-
-
-def _backup_pid(backup: Path) -> int | None:
-    suffix = backup.name.rsplit("-", 1)[-1]
-    return int(suffix) if suffix.isdigit() else None
-
-
-@contextmanager
-def publication_lock(output_dir: Path):
-    """Serialize publication to one output directory.
-
-    Recovery and the swap must happen under one lock: without it two runs can
-    both observe "no other publisher", and the second then sees the momentary
-    gap while the first has its output renamed aside. A lock left by a process
-    that no longer exists is reclaimed."""
-    # Scope: this guards the common case of a second run started by hand while
-    # one is publishing. It is not a general mutual-exclusion primitive - two
-    # processes can still both enter if they collide inside the microseconds
-    # between creating this file and writing the pid into it. Closing that
-    # window properly means an advisory flock(), which is only worth adding if
-    # concurrent publication to one output_dir becomes a supported workflow; it
-    # is not one today, and the README says so.
-    lock_path = output_dir.parent / f".{output_dir.name}.lock"
-    fd = None
-    for attempt in (0, 1):
-        try:
-            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-            break
-        except FileExistsError:
-            holder = None
-            try:
-                holder = int(lock_path.read_text(encoding="utf-8").strip())
-            except (OSError, ValueError):
-                pass
-            if attempt == 0 and (holder is None or holder == os.getpid()
-                                 or not process_is_running(holder)):
-                lock_path.unlink(missing_ok=True)  # stale: its owner is gone
-                continue
-            raise OSError(
-                f"another run is publishing to {output_dir}; retry once it has finished"
-            ) from None
-    try:
-        os.write(fd, f"{os.getpid()}\n".encode())
-        os.close(fd)
-        fd = None
-        yield
-    finally:
-        if fd is not None:
-            os.close(fd)
-        lock_path.unlink(missing_ok=True)
-
-
-def recover_interrupted_publish(output_dir: Path) -> bool:
-    """Clean up after a publish that was killed part-way through its swap.
-
-    publish_report renames the old report aside to `.<name>.previous-<pid>`,
-    moves the new one into place, then deletes the backup. A process killed
-    between those steps leaves either `output_dir` absent (restore the backup)
-    or the backup orphaned (delete it). Backups belonging to a process that is
-    still running are left alone, as is anything that does not carry the
-    report marker.
-
-    Returns True when a live process owns a backup, meaning a publish is in
-    flight and this run must not touch output_dir."""
-    parent = output_dir.parent
-    if not parent.is_dir():
-        return False
-
-    # Staging directories of dead owners leak disk space: their `finally` cleanup
-    # never ran. Ours is removed by publish_report itself.
-    for staging in parent.glob(f".{output_dir.name}.staging-*"):
-        if not staging.is_dir():
-            continue
-        pid = _backup_pid(staging)
-        if pid is not None and pid != os.getpid() and process_is_running(pid):
-            continue
-        shutil.rmtree(staging, ignore_errors=True)
-        print(f"Removed an abandoned report staging directory: {staging.name}", file=sys.stderr)
-
-    backups = [p for p in parent.glob(f".{output_dir.name}.previous-*")
-               if p.is_dir() and (p / REPORT_MARKER).is_file()]
-    # A backup whose process is still alive belongs to a publish that is mid-swap:
-    # it still needs that directory to roll back, and its own rename will fill
-    # output_dir shortly. Never restore or delete those.
-    # A backup bearing our own pid cannot belong to a concurrent invocation: it is
-    # a stale one from a killed run whose pid the OS has since recycled onto us.
-    # Treating it as live would leave it in place and then fail our own rename
-    # onto that path, blocking every later run.
-    def owned_by_live_process(backup: Path) -> bool:
-        pid = _backup_pid(backup)
-        return pid is not None and pid != os.getpid() and process_is_running(pid)
-
-    live_owner = any(owned_by_live_process(p) for p in backups)
-    abandoned = [p for p in backups if not owned_by_live_process(p)]
-    if not abandoned:
-        return live_owner
-
-    if not output_dir.exists():
-        newest = max(abandoned, key=lambda p: p.stat().st_mtime)
-        newest.rename(output_dir)
-        print(f"Recovered an interrupted report publication: restored {newest.name} to "
-              f"{output_dir}", file=sys.stderr)
-        abandoned.remove(newest)
-
-    # Anything left belongs to a finished publish that never got to delete its
-    # backup.
-    for leftover in abandoned:
-        shutil.rmtree(leftover, ignore_errors=True)
-        print(f"Removed a leftover report backup: {leftover.name}", file=sys.stderr)
-    return live_owner
-
-
 def publish_report(output_dir: Path, results: list[ImageResult], profiles: list[ModelProfile],
                    skipped: list[str], class_summary: ClassSummary,
                    timing: dict[str, Any]) -> None:
@@ -1012,25 +888,16 @@ def publish_report(output_dir: Path, results: list[ImageResult], profiles: list[
     `output_dir` is owned by this application: an existing directory is only
     replaced if it is empty or carries the REPORT_MARKER written by a previous
     run and holds nothing else, so a customer directory (even one that happens
-    to contain a `report.html`) can never be swapped away."""
+    to contain a `report.html`) can never be swapped away.
+
+    One run at a time per output directory, which the README states. There is no
+    cross-process locking or recovery protocol: the two scratch names below are
+    fixed, are the only paths outside `output_dir` this function touches, and are
+    cleared on entry, so a run interrupted mid-swap costs the previous report and
+    nothing else."""
     output_dir = output_dir.resolve()
     parent = output_dir.parent
     parent.mkdir(parents=True, exist_ok=True)
-    with publication_lock(output_dir):
-        _publish_locked(output_dir, results, profiles, skipped, class_summary, timing)
-
-
-def _publish_locked(output_dir: Path, results: list[ImageResult], profiles: list[ModelProfile],
-                    skipped: list[str], class_summary: ClassSummary,
-                    timing: dict[str, Any]) -> None:
-    """The body of publish_report, run while holding the publication lock."""
-    parent = output_dir.parent
-    if recover_interrupted_publish(output_dir):
-        # Another run has output_dir renamed aside and will rename its own staging
-        # into that path. Publishing now would take the path out from under it.
-        raise OSError(
-            f"another run is publishing to {output_dir}; retry once it has finished"
-        )
     if output_dir.exists():
         if not output_dir.is_dir():
             raise OSError(f"output_dir {output_dir} exists and is not a directory")
@@ -1046,12 +913,14 @@ def _publish_locked(output_dir: Path, results: list[ImageResult], profiles: list
                 f"output_dir {output_dir} contains entries that are not part of a previous "
                 f"report ({', '.join(foreign[:3])}); use a dedicated directory"
             )
-    parent.mkdir(parents=True, exist_ok=True)
 
-    tag = str(os.getpid())
-    staging = parent / f".{output_dir.name}.staging-{tag}"
-    previous = parent / f".{output_dir.name}.previous-{tag}"
+    staging = parent / f".{output_dir.name}.staging"
+    previous = parent / f".{output_dir.name}.previous"
+    # Named exactly, never matched by prefix: a directory that merely starts with
+    # one of these names belongs to someone else and is left alone. Leftovers
+    # here are from a run of ours that was interrupted mid-swap.
     shutil.rmtree(staging, ignore_errors=True)
+    shutil.rmtree(previous, ignore_errors=True)
     staging.mkdir()
     try:
         write_json_report(staging / "report.json", results, profiles, skipped, class_summary, timing)
@@ -1066,9 +935,7 @@ def _publish_locked(output_dir: Path, results: list[ImageResult], profiles: list
         try:
             staging.rename(output_dir)
         except BaseException:
-            # Includes KeyboardInterrupt: roll back to the previous report. A
-            # hard kill between the two renames is recovered on the next run by
-            # recover_interrupted_publish().
+            # Includes KeyboardInterrupt: roll back to the previous report.
             if had_previous and not output_dir.exists():
                 previous.rename(output_dir)
             raise
