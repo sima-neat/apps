@@ -403,6 +403,11 @@ class TestE2E:
         # the YAML integer grammar in both.
         ("octal num_classes", "models:\n  m:\n    path: m.tar.gz\n"
          "    label_map: TOO_SHORT_LABELS\n    num_classes: 012\n", 2),
+        # `~` is null in a profile field too, not the literal string "~". The
+        # io.* settings were routed through config_scalar and these were not, so
+        # a required path spelled `~` was absent to Python and present to C++.
+        ("tilde profile path is null",
+         "models:\n  m:\n    path: ~\n", 2),
         # `~` is YAML null: unset, not a file named "~". C++ used to exit 3 here
         # while Python downloaded the fallback and reached the model (exit 6).
         ("tilde input is null",

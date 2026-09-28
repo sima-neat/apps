@@ -583,13 +583,13 @@ std::vector<ModelProfile> load_profiles(const sima_examples::ScalarConfig& raw,
     profile.config_key = key;
     profile.name = unquote_yaml_key(key);
     const std::string& name = profile.name;
-    profile.path = raw.string_or("models." + key + ".path", "");
+    profile.path = config_scalar_or(raw, "models." + key + ".path", "");
     profile.input_width = config_int(raw, "models." + key + ".input_width", 224);
     profile.input_height = config_int(raw, "models." + key + ".input_height", 224);
-    profile.preprocess = raw.string_or("models." + key + ".preprocess", "imagenet");
-    profile.output = raw.string_or("models." + key + ".output", "softmax");
+    profile.preprocess = config_scalar_or(raw, "models." + key + ".preprocess", "imagenet");
+    profile.output = config_scalar_or(raw, "models." + key + ".output", "softmax");
     profile.num_classes = config_int(raw, "models." + key + ".num_classes", 1000);
-    profile.label_map = raw.string_or("models." + key + ".label_map", "");
+    profile.label_map = config_scalar_or(raw, "models." + key + ".label_map", "");
     profile.top_k = config_int(raw, "models." + key + ".top_k", 5);
     if (!is_valid_profile_name(name)) {
       throw ConfigError("models." + name +
