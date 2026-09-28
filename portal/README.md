@@ -30,7 +30,13 @@ On Debian and Ubuntu:
 ```bash
 sudo apt update
 sudo apt install -y nodejs npm python3
+python3 --version
 ```
+
+Check that version. Releases before Debian 12 and Ubuntu 22.04 ship a `python3`
+older than 3.10, so `apt install python3` there leaves you below the minimum. On
+those, install a 3.10 or newer interpreter as well, which may need a backports or
+PPA source, and use it as described at the end of this section.
 
 On macOS, with [Homebrew](https://brew.sh):
 
