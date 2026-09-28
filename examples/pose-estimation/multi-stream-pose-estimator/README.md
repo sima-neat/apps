@@ -133,6 +133,23 @@ Each stream publishes `pose-estimation` metadata. Every pose carries the person 
 
 Keypoint coordinates are in source-frame pixels, matching the box.
 
+## Expected Result
+
+Each stream reports its own progress while the run is in flight, once
+`runtime.warmup_frames` has passed:
+
+```text
+[profile stream=0] frames=100 output_fps=27.2924 avg_detection_pull_ms=1.94374 avg_metadata_send_ms=0.197574 avg_poses=0.01
+```
+
+Every configured stream should appear. The two implementations format these numbers differently: Python prints the full
+float, the C++ binary prints at the default stream precision of six significant
+digits. Compare the magnitudes rather than the digits.
+
+`avg_poses` is the mean number of poses per processed frame. It is low on footage
+where people are distant or sparse, so a small value is not itself a problem. A
+stream that never reports frames at all is the signal worth investigating.
+
 ## Troubleshooting
 
 - Replace all placeholder stream URLs and the Insight host before running.

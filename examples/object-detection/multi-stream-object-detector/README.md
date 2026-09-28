@@ -110,8 +110,9 @@ processed counts:
 [stream 2] processed=200
 ```
 
-The numbers are printed unrounded, and the two implementations format them
-differently, so compare the magnitudes rather than the digits.
+The two implementations format these numbers differently: Python prints the full
+float, the C++ binary prints at the default stream precision of six significant
+digits. Compare the magnitudes rather than the digits.
 
 The `[profile stream=N]` lines appear while the run is in progress, once
 `runtime.warmup_frames` has passed, so they are visible without stopping the

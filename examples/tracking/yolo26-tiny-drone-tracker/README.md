@@ -122,9 +122,22 @@ python3 "$APP_DIR/src/python/main.py" \
   --config "$APP_DIR/src/common/config.yaml"
 ```
 
-## Troubleshooting
+## Expected Result
 
-- Start with one stream before adding more inputs.
+Each stream reports its own progress while the run is in flight:
+
+```text
+[profile stream=0] frames=100 output_fps=27.0271 avg_detection_pull_ms=27.4154 avg_tracker_ms=0.50715 avg_metadata_send_ms=1.45828 avg_tracks=46.76
+```
+
+`avg_tracks` is the mean number of active tracks per processed frame. On the
+packaged anti-UAV source it runs to several dozen, because the model is tuned for
+small objects and that footage is dense with them; values between roughly 35 and
+50 are ordinary there. Expect a much lower figure on other material.
+
+The two implementations format these numbers differently: Python prints the full
+float, the C++ binary prints at the default stream precision of six significant
+digits. Compare the magnitudes rather than the digits.
 - Verify the model path, RTSP URL, codec, Insight host, and UDP port ranges.
 - Keep `inference.num_classes: 1`; it must match the model's class-head depth.
 - Set either inflight limit to `-1` to use the Core default.

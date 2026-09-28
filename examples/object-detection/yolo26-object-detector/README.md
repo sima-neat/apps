@@ -82,6 +82,20 @@ python3 ${APP_DIR}/src/python/main.py \
   --config ${APP_DIR}/src/common/config.yaml
 ```
 
+## Expected Result
+
+The application prints the image count, one line per image, and a final total:
+
+```text
+Found 21 images
+[1/21] 000000081061.jpg -> 000000081061.png (3 detections)
+Done: 21 images processed
+```
+
+`io.output_dir` then holds one annotated PNG per input image; with the packaged
+`assets/datasets/coco` folder that is 21 files. The C++ binary prints the same
+lines with the input filename in quotes.
+
 ## Troubleshooting
 
 - Verify `model.path` and the labels file if detections are missing.
