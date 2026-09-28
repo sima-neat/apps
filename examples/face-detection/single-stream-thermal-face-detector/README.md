@@ -162,6 +162,28 @@ found, so a healthy count does not by itself confirm detections. Confirm those
 in Insight, which draws the five landmarks as labeled dots on the stream.
 
 ## Debugging Notes
+
+Check the configuration before involving hardware. This validates and exits
+without opening a stream:
+
+```bash
+python3 ${APP_DIR}/src/python/main.py \
+  --config ${APP_DIR}/src/common/config.yaml --validate-config-only
+```
+
+- `source.rtsp_url must be set`, `model.path must be set` and
+  `output.insight.host must be set` mean the value is empty or missing. Note that
+  validation does not detect an unedited placeholder: the packaged
+  `<rtsp-url>` and `<insight-host-ip>` are non-empty strings and pass, so a config
+  you have not filled in still validates cleanly.
+- `method SETUP failed: 461 Unsupported Transport` was observed once at startup
+  against an Insight-hosted source, after which the pipeline built and the run
+  completed normally. Treat a single occurrence as noise unless the pipeline also
+  fails to start.
+- If the run reports no frames at all, verify the RTSP URL from the board itself
+  rather than from the machine running Insight. The URL Insight displays is not
+  always reachable from the target, and the ports table above explains why.
+
 - If the viewer shows video but no overlays, confirm `output.insight.host` and the
   metadata port are reachable and match the viewer's channel. Use Insight's
   `/api/ingest/stats` to check `metadata.messages_received`.

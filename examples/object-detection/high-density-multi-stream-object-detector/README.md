@@ -206,6 +206,41 @@ Use one active Insight viewer while validating metadata. Insight currently has a
 
 If channels do not start, confirm that every publisher was already reachable and that the configured source caps match the selected profile. Restart the application after restarting the publishers.
 
+## Troubleshooting
+
+Check the configuration before involving hardware. This validates and exits
+without opening a stream or touching Insight:
+
+```bash
+"$APP" --config "$CONFIG" --validate-config-only
+```
+
+- `ModelPack: invalid_archive: archive path does not exist` at run time means
+  `model.path` resolved from the config file rather than from `prebuilt-apps/`.
+  Use the absolute path printed in Prepare the Model. Validation does not open
+  the archive, so this appears only once the run starts.
+- `output.insight.max_visible_streams cannot exceed stream count` means the
+  profile's visible-stream count is higher than the number of entries under
+  `streams`. Reduce it, or add the missing stream URLs.
+- `failed to probe RTSP frame rate` means the source was reached but reported no
+  frame rate. Set `input.fps` to the source's rate to carry on.
+- A source that cannot be reached at all reports something different: the Python
+  entrypoint prints `failed to open RTSP source for probing: <url>`, and the C++
+  binary fails the dimensions check first with `failed to probe RTSP frame
+  dimensions`. Verify the URL from the board itself rather than from the machine
+  running Insight; the URL Insight displays is not always reachable from the
+  target.
+- `timed out waiting for two initial detections from streams: …` names the
+  streams that produced fewer than two detection results before the timeout. That
+  is not the same as delivering no frames: a stream that is decoding normally but
+  detecting nothing is named too, so check whether the content actually contains
+  objects the model reports before suspecting the source.
+- Where the named streams genuinely are not delivering, the sources are the
+  place to look rather than the model or the board. In reproducing this example,
+  publishing all sixteen streams from the same board that consumed them starved
+  most of them; publishing from a separate machine on the network ran the
+  documented profile cleanly.
+
 ## Source Files
 
 - C++ reference source: `src/cpp/main.cpp`
