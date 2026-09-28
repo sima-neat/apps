@@ -248,8 +248,19 @@ class TestSourceCombinations:
         with pytest.raises(ValueError):
             main.load_app_config(write_config(tmp_path, [(("source", "type"), "webrtc")]))
 
-    def test_rtsp_url_is_read_from_the_legacy_key(self, tmp_path):
-        """`source.rtsp_url` predates `source.url` and configs still in the field use it."""
+    def test_an_empty_url_falls_back_to_the_legacy_key(self, tmp_path):
+        """config.yaml keeps source.url present and documents rtsp_url as
+        "used when source.url is empty", so an empty value must fall through."""
+        cfg = main.load_app_config(
+            write_config(
+                tmp_path,
+                [(("source", "url"), ""), (("source", "rtsp_url"), "rtsp://127.0.0.1:8554/legacy")],
+            )
+        )
+
+        assert cfg.source_url == "rtsp://127.0.0.1:8554/legacy"
+
+    def test_an_absent_url_falls_back_to_the_legacy_key(self, tmp_path):
         raw = copy.deepcopy(VALID_CONFIG)
         del raw["source"]["url"]
         raw["source"]["rtsp_url"] = "rtsp://127.0.0.1:8554/legacy"
@@ -257,6 +268,19 @@ class TestSourceCombinations:
         cfg = main.load_app_config(write_config(tmp_path, root=raw))
 
         assert cfg.source_url == "rtsp://127.0.0.1:8554/legacy"
+
+    def test_a_present_url_wins_over_the_legacy_key(self, tmp_path):
+        cfg = main.load_app_config(
+            write_config(tmp_path, [(("source", "rtsp_url"), "rtsp://127.0.0.1:8554/legacy")])
+        )
+
+        assert cfg.source_url == "rtsp://127.0.0.1:8554/src1"
+
+    def test_both_empty_is_still_rejected(self, tmp_path):
+        with pytest.raises(ValueError, match="source.url or source.rtsp_url must be set"):
+            main.load_app_config(
+                write_config(tmp_path, [(("source", "url"), ""), (("source", "rtsp_url"), "")])
+            )
 
 
 @pytest.mark.unit
