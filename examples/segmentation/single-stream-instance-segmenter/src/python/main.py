@@ -497,6 +497,24 @@ def drain_frames(runtime) -> None:
             runtime.frames.pop(0)
 
 
+def pull_segments(runtime, timeout_ms: int):
+    """Waits for the next segments sample while keeping the frame branch drained.
+
+    A single long blocking pull would leave the frame output queue unattended, and the frames
+    discarded there under the keep-latest policy are exactly the partners a saved frame needs,
+    so the wait is split into short slices with a drain between them.
+    """
+    if not runtime.frame_output_name:
+        return runtime.run.pull(runtime.output_name, timeout_ms)
+    slice_ms = 20
+    deadline = time_ms() + timeout_ms
+    while True:
+        drain_frames(runtime)
+        sample = runtime.run.pull(runtime.output_name, slice_ms)
+        if sample is not None or time_ms() >= deadline:
+            return sample
+
+
 def frame_for(runtime, frame_id: int):
     """The retained frame a segments sample was computed from, or None when it has aged out."""
     if frame_id < 0:
@@ -1301,7 +1319,7 @@ def run_pipeline(runtime: PipelineRuntime, cfg: AppConfig) -> int:
     dropped_total = 0
     while cfg.frames <= 0 or processed < cfg.frames:
         pull_start = time_ms()
-        sample = runtime.run.pull(runtime.output_name, 20000)
+        sample = pull_segments(runtime, 20000)
         pull_end = time_ms()
         if sample is None:
             print("[warn] timed out waiting for segmentation output", file=sys.stderr)
@@ -1326,7 +1344,6 @@ def run_pipeline(runtime: PipelineRuntime, cfg: AppConfig) -> int:
         processed += 1
         frame_sample = sample
         if runtime.frame_output_name:
-            # The frame branch runs ahead of the segments branch, so its partner is waiting.
             drain_frames(runtime)
             frame_sample = frame_for(runtime, sample.frame_id)
         maybe_save_frame(cfg, processed, frame_sample, detections, runtime.labels)

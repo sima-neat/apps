@@ -1169,6 +1169,28 @@ void drain_frames(PipelineRuntime& runtime) {
   }
 }
 
+/// Waits for the next segments sample while keeping the frame branch drained.
+///
+/// A single long blocking pull would leave the frame output queue unattended, and the frames
+/// discarded there under the keep-latest policy are exactly the partners a saved frame needs,
+/// so the wait is split into short slices with a drain between them.
+simaai::neat::PullStatus pull_segments(PipelineRuntime& runtime, int timeout_ms,
+                                       simaai::neat::Sample& sample,
+                                       simaai::neat::PullError& pull_error) {
+  if (runtime.frame_output_name.empty()) {
+    return runtime.run.pull(runtime.output_name, timeout_ms, sample, &pull_error);
+  }
+  constexpr int kSliceMs = 20;
+  const double deadline = time_ms() + timeout_ms;
+  while (true) {
+    drain_frames(runtime);
+    const auto status = runtime.run.pull(runtime.output_name, kSliceMs, sample, &pull_error);
+    if (status != simaai::neat::PullStatus::Timeout || time_ms() >= deadline) {
+      return status;
+    }
+  }
+}
+
 /// The retained frame a segments sample was computed from, or null when it has aged out.
 const simaai::neat::Sample* frame_for(const PipelineRuntime& runtime, std::int64_t frame_id) {
   if (frame_id < 0) {
@@ -1414,7 +1436,7 @@ void run_pipeline(PipelineRuntime& runtime, const AppConfig& cfg) {
     simaai::neat::Sample sample;
     simaai::neat::PullError pull_error;
     const double pull_start = time_ms();
-    const auto status = runtime.run.pull(runtime.output_name, 20000, sample, &pull_error);
+    const auto status = pull_segments(runtime, 20000, sample, pull_error);
     const double pull_end = time_ms();
     if (status == simaai::neat::PullStatus::Timeout) {
       std::cerr << "[warn] timed out waiting for segmentation output\n";
@@ -1443,7 +1465,6 @@ void run_pipeline(PipelineRuntime& runtime, const AppConfig& cfg) {
     ++processed;
     const simaai::neat::Sample* frame_sample = &sample;
     if (!runtime.frame_output_name.empty()) {
-      // The frame branch runs ahead of the segments branch, so its partner is already waiting.
       drain_frames(runtime);
       frame_sample = frame_for(runtime, sample.frame_id);
     }
