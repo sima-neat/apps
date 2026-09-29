@@ -1,6 +1,7 @@
 """E2E test for the PatchCore example (Python), hardware-gated per Apps
-conventions. Runs `--calibrate` against the bundled nominal set, then scores
-the bundled test images and checks verdicts/overlays."""
+conventions. Calibrates on the bundled nominal set, scores the images in
+SIMANEAT_APPS_TEST_INPUT_DIR, and checks verdicts and overlays on the bundled
+held-out normal and defect images."""
 import os
 import re
 import subprocess
@@ -340,14 +341,8 @@ class TestE2E:
         e2e_config_writer,
     ):
         """Cross-language regression: a memory bank calibrated by the C++
-        implementation must load and separate defect from nominal correctly
-        when scored by Python. Both implementations share the same on-disk
-        bank/meta format and previously used a numerically unstable distance
-        formula that could disagree near ties between the two languages' own
-        accumulation orders (see patchcore_scoring.py's _pairwise_l2
-        docstring) -- this proves the fix holds across a bank the other
-        language actually built, not just within one language's own round
-        trip."""
+        implementation must load in Python, separate defect from nominal, and
+        give the same verdicts (scores within 0.01) as C++ scoring that bank."""
         cpp_binary = _find_cpp_binary()
         skip_unless_e2e_ready(
             cpp_binary is not None,

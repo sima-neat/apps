@@ -62,7 +62,7 @@ struct Config {
   std::uint64_t seed = 0;
   double threshold_percentile = 99.0;
   fs::path calibration_threshold_dir; // empty = reuse calibration_nominal_dir
-  double threshold_margin = 1.0; // multiplier applied on top of the percentile threshold
+  double threshold_margin = 1.0; // multiplier on both percentile thresholds (image and patch)
 
   int num_neighbors = 9;
   double gaussian_sigma = 4.0;
@@ -642,7 +642,7 @@ const simaai::neat::Sample* find_field(const simaai::neat::Sample& sample,
 }
 
 cv::Mat frame_bgr_from_sample(const simaai::neat::Sample& sample) {
-  // Falls back to the sample itself for a plain (non-joined) single-output pull.
+  // Uses the joined sample's "frame" field; falls back to the sample itself if it has none.
   const auto* field = find_field(sample, "frame");
   if (field == nullptr) {
     field = &sample;
@@ -751,6 +751,7 @@ int cmd_score_rtsp(const Config& cfg, const patchcore::MemoryBank& bank, float t
     {
       simaai::neat::Sample sample;
       simaai::neat::PullError pull_error;
+      // The model runs inside the graph, so "mla" here is the wait for the joined output.
       const double mla_start = time_ms();
       // -1 waits forever, so a network stall doesn't end the loop.
       const auto status = rt.run.pull("patchcore_output", -1, sample, &pull_error);

@@ -22,9 +22,11 @@ calibration:                                    # Used only by --calibrate.
   coreset_ratio: 0.0004                         # Fraction of nominal patches kept in the bank. Smaller is
                                                  # faster but coarser; bank size grows with the nominal set.
   seed: 0
-  threshold_percentile: 99.0                    # Decision threshold = this percentile of nominal scores.
+  threshold_percentile: 99.0                    # Image verdict threshold = this percentile of nominal image
+                                                 # scores; the same percentile of nominal patch scores sets
+                                                 # the overlay highlight threshold.
   threshold_images_dir: ""                      # Optional held-out nominal set; "" reuses nominal_images_dir.
-  threshold_margin: 1.2                         # Multiplier on the percentile threshold, for headroom on
+  threshold_margin: 1.2                         # Multiplier on both percentile thresholds, for headroom on
                                                  # video/rtsp input. 1.0 = no margin.
 
 scoring:
@@ -42,6 +44,7 @@ output:
     bitrate_kbps: 4000                          # H.264 encoder bitrate for the pushed video stream.
 
 runtime:
-  timeout_ms: 15000                             # Per-frame model-inference timeout.
+  timeout_ms: 15000                             # Per-image/frame model timeout for --calibrate, image_dir,
+                                                 # and video_file (rtsp runs the model inside its graph).
   frames: 0                                     # video_file/rtsp frame limit; 0 = run until the source ends.
   profile: false                                # Reserved; currently unused.

@@ -1,6 +1,7 @@
 // E2E test for patchcore (C++). Test 1 runs --calibrate against the bundled
-// nominal set, then scores the bundled test images and verifies verdicts
-// and overlay output.
+// nominal set, then scores the images in SIMANEAT_APPS_TEST_INPUT_DIR and
+// verifies the overlay output; the held-out test checks verdicts and overlays
+// on the bundled held-out normal and defect images.
 #include "support/testing/test_config.h"
 #include "support/testing/test_process.h"
 
@@ -450,9 +451,9 @@ int run_held_out_normal_passes_and_defect_fails(const std::string& binary,
 }
 
 // Cross-language regression: a memory bank calibrated by Python must load
-// and separate defect from nominal correctly when scored by C++ (see
-// squared_diff_sum in patchcore_memory_bank.cpp for the distance formula
-// both languages share).
+// and separate defect from nominal correctly when scored by C++ (C++ sums
+// per-element squared differences in double; Python uses a float64 expansion
+// in _pairwise_l2 -- both must agree on the same bank).
 int run_python_built_bank_scores_correctly_in_cpp(const std::string& binary,
                                                   const std::string& model_path) {
   const fs::path real_images_dir = "assets/datasets/patchcore/images";

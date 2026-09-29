@@ -105,9 +105,10 @@ python3 ${APP_DIR}/src/python/main.py \
 Every processed image/frame prints its score, the configured threshold, and the pass/fail verdict. `image_dir` writes overlays to `output.dir` in which only regions scoring above the calibrated patch threshold are highlighted (yellow to red); normal regions are left unchanged; `video_file`/`rtsp` additionally stream the live overlay to Insight (`output.insight.host`/`video_port`) and, if `output.save_every > 0`, also save periodic snapshots to `output.dir`.
 
 ```
-assets/datasets/patchcore/images/scratch_0.png: score=30.8839 threshold=19.4000 verdict=ANOMALOUS (mla=42.1ms host=6.7ms)
+assets/datasets/patchcore/images/plain_0.png: score=16.4049 threshold=18.7885 verdict=normal (mla=324.3ms host=20.0ms)
+assets/datasets/patchcore/images/scratch_0.png: score=31.1989 threshold=18.7885 verdict=ANOMALOUS (mla=13.9ms host=9.7ms)
 ...
-Done: 10 images processed -- overlays written to sandbox/patchcore-anomaly-detector
+Done: 5 images processed -- overlays written to sandbox/patchcore-anomaly-detector
 ```
 
 ## Troubleshooting

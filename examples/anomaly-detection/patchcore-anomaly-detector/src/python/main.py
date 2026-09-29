@@ -3,8 +3,11 @@ patch-feature extractor plus host-side coreset memory-bank scoring (see
 patchcore_scoring.py). Runs on the Modalix DevKit; from the Palette SDK host
 use `dk main.py ...` instead of a plain local `python3 main.py ...`.
 
-    python3 main.py --calibrate --config common/config.yaml  # build the bank
-    python3 main.py --config common/config.yaml               # score input
+    python3 main.py --calibrate [--config <path>]  # build the bank
+    python3 main.py [--config <path>]              # score input
+
+--config defaults to ../common/config.yaml next to this file. Paths inside the
+config are relative to the working directory (run from the Apps root; see README).
 """
 from __future__ import annotations
 import os
@@ -66,7 +69,7 @@ class CalibrationConfig:
     seed: int = 0
     threshold_percentile: float = 99.0
     threshold_images_dir: str = ""  # empty = reuse nominal_images_dir
-    threshold_margin: float = 1.0  # multiplier applied on top of the percentile threshold
+    threshold_margin: float = 1.0  # multiplier on both percentile thresholds (image and patch)
 
 
 @dataclass(frozen=True)
@@ -221,9 +224,10 @@ def find_images(directory: Path) -> list[Path]:
 
 
 def make_image_model(model_path: str) -> "pyneat.Model":
-    """One shared Options for image_dir/video_file. Each source decodes to a
-    host-side BGR frame before calling the model, so no Graph-embedded decode
-    source or hand-specified resize geometry is needed here."""
+    """Model for calibration, image_dir, and video_file: each input is decoded
+    to a host-side BGR frame before calling the model, so no graph-embedded
+    decode source or hand-specified resize geometry is needed here. rtsp uses
+    make_rtsp_graph_model instead."""
     opt = pyneat.ModelOptions()
     opt.preprocess.kind = pyneat.InputKind.Image
     opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.RGB
@@ -653,7 +657,7 @@ def tensor_dim(tensor, name: str) -> int:
 
 
 def frame_bgr_from_sample(sample):
-    # Falls back to the sample itself for a plain (non-joined) single-output pull.
+    # Uses the joined sample's "frame" field; falls back to the sample itself if it has none.
     field = find_field(sample, "frame") or sample
     tensors = extract_tensors(field)
     if not tensors:
@@ -742,8 +746,9 @@ def cmd_score_rtsp(cfg: AppConfig, bank: MemoryBank, threshold: float, num_neigh
     pull_timed_out = False
     try:
         while cfg.frames <= 0 or processed < cfg.frames:
-            # Bounded pull: pull("frame", -1) can deadlock the Python binding.
+            # Bounded pull: an unbounded pull(..., -1) can deadlock the Python binding.
             # A timeout ends the run, since later pulls also time out.
+            # The model runs inside the graph, so "mla" here is the wait for the joined output.
             mla_start = time_ms()
             sample = run.pull("patchcore_output", 5000)
             if sample is None:

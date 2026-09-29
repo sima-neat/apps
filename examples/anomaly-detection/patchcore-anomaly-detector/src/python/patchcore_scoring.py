@@ -87,7 +87,7 @@ def greedy_coreset_indices(vectors: np.ndarray, ratio: float, seed: int) -> np.n
 
 @dataclass
 class ScoredImage:
-    score_map: np.ndarray  # (H, W) float32, patch-grid resolution nearest-neighbor distances
+    score_map: np.ndarray  # (H, W) float64, patch-grid resolution nearest-neighbor distances
     image_score: float  # PatchCore-reweighted image-level anomaly score
 
 
