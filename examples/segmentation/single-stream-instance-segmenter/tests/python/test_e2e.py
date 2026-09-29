@@ -11,6 +11,49 @@ from tests.utils.output_assertions import assert_streamed_frames_are_usable
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
 
+# One case per source/codec combination the application accepts. The
+# validator only allows http with mjpeg, so that is the single http case.
+SOURCE_CASES = [
+    pytest.param(
+        {
+            "name": "rtsp_h264",
+            "type": "rtsp",
+            "codec": "h264",
+            "url_fixture": "rtsp_h264_url",
+        },
+        id="rtsp-h264",
+    ),
+    pytest.param(
+        {
+            "name": "rtsp_h265",
+            "type": "rtsp",
+            "codec": "h265",
+            "url_fixture": "rtsp_h265_url",
+        },
+        id="rtsp-h265",
+    ),
+    pytest.param(
+        {
+            "name": "rtsp_mjpeg",
+            "type": "rtsp",
+            "codec": "mjpeg",
+            "url_fixture": "rtsp_mjpeg_url",
+        },
+        id="rtsp-mjpeg",
+    ),
+    pytest.param(
+        {
+            "name": "http_mjpeg",
+            "type": "http",
+            "codec": "mjpeg",
+            "url_fixture": "http_mjpeg_url",
+            "fps": 30,
+            "ssl_strict": False,
+        },
+        id="http-mjpeg",
+    ),
+]
+
 
 def _env_int_or_default(name: str, default: int) -> int:
     raw = os.environ.get(name, "").strip()
@@ -23,20 +66,32 @@ def _env_str_or_default(name: str, default: str) -> str:
 
 @pytest.mark.e2e
 class TestE2E:
-    def test_full_pipeline_rtsp_h264(
+    @pytest.mark.parametrize("source", SOURCE_CASES)
+    def test_full_pipeline(
         self,
+        request,
+        source,
         e2e_model_path,
-        rtsp_h264_url,
         tmp_output_dir,
         test_timeout_ms,
         e2e_config_section,
         e2e_config_writer,
         run_until_output_files,
     ):
+        source_url = request.getfixturevalue(source["url_fixture"])
         output_cfg = e2e_config_section("single-stream-instance-segmenter", "testing.e2e.output")
+        source_config = {
+            "type": source["type"],
+            "codec": source["codec"],
+            "url": source_url,
+            "ssl_strict": source.get("ssl_strict", True),
+        }
+        if source.get("fps", 0) > 0:
+            source_config["fps"] = source["fps"]
+
         config_path = e2e_config_writer(
             {
-                "source": {"type": "rtsp", "codec": "h264", "url": rtsp_h264_url},
+                "source": source_config,
                 "output": {
                     "save_dir": str(tmp_output_dir),
                     "insight": {
@@ -67,7 +122,9 @@ class TestE2E:
         )
 
         assert result.returncode == 0, (
-            f"main.py exited with code {result.returncode}\n"
+            f"{source['name']} main.py exited with code {result.returncode}\n"
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
-        assert_streamed_frames_are_usable(tmp_output_dir, int(output_cfg["total_saved_frames"]))
+        assert_streamed_frames_are_usable(
+            tmp_output_dir, int(output_cfg["total_saved_frames"])
+        )
