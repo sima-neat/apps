@@ -138,6 +138,10 @@ small objects and that footage is dense with them; values between roughly 35 and
 The two implementations format these numbers differently: Python prints the full
 float, the C++ binary prints at the default stream precision of six significant
 digits. Compare the magnitudes rather than the digits.
+
+## Troubleshooting
+
+- Start with one stream before adding more inputs.
 - Verify the model path, RTSP URL, codec, Insight host, and UDP port ranges.
 - Keep `inference.num_classes: 1`; it must match the model's class-head depth.
 - Set either inflight limit to `-1` to use the Core default.
