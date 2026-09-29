@@ -1,0 +1,35 @@
+models:
+  yolo_11s:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/model_zoo/gen2/object_detection/yolo_11s/yolo_11s_mpk.tar.gz
+    file: yolo_11s_mpk.tar.gz
+  yolo_11s_seg:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/model_zoo/gen2/instance_segmentation/yolo_11s_seg/yolo_11s_seg_mpk.tar.gz
+    file: yolo_11s_seg_mpk.tar.gz
+  yolo26m-pose-int8-b1:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26-pose/yolo26m-pose-int8-b1.tar.gz
+    file: yolo26m-pose-int8-b1.tar.gz
+  yolo26m-det-int8-b1:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26-detection/yolo26m-det-int8-b1.tar.gz
+    file: yolo26m-det-int8-b1.tar.gz
+unit:
+  python: true
+  cpp: true
+e2e:
+  python:
+    enabled: true
+    models:
+    - yolo_11s
+    - yolo_11s_seg
+    - yolo26m-pose-int8-b1
+    - yolo26m-det-int8-b1
+  cpp:
+    enabled: true
+    models:
+    - yolo_11s
+    - yolo_11s_seg
+    - yolo26m-pose-int8-b1
+    - yolo26m-det-int8-b1
