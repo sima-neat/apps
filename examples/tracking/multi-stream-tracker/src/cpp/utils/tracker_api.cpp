@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <memory>
@@ -30,6 +31,29 @@ struct TrackedDetection {
   int class_id = -1;
   std::string label;
 };
+
+/// Integer box clipped to the frame, as published in tracking metadata.
+struct ClippedBox {
+  int x = 0;
+  int y = 0;
+  int w = 0;
+  int h = 0;
+};
+
+/// Clips both endpoints before measuring, so a predicted box that crosses an
+/// edge reports only its visible extent. Clamping just the origin would keep
+/// the full span and publish a box wider than the frame shows.
+inline ClippedBox clip_box_to_frame(const TrackedDetection& track, int frame_w, int frame_h) {
+  const auto clip = [](double value, int limit) {
+    return std::min(std::max(value, 0.0), static_cast<double>(limit));
+  };
+  ClippedBox box;
+  box.x = static_cast<int>(clip(track.x1, frame_w));
+  box.y = static_cast<int>(clip(track.y1, frame_h));
+  box.w = std::max(0, static_cast<int>(clip(track.x2, frame_w)) - box.x);
+  box.h = std::max(0, static_cast<int>(clip(track.y2, frame_h)) - box.y);
+  return box;
+}
 
 /// Tracker settings for one detection class. Defaults follow ByteTrack.
 struct ClassTrackerConfig {

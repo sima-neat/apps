@@ -55,3 +55,12 @@ if (TARGET multi-stream-tracker_unit_test)
       multi_stream_tracker_lib
   )
 endif()
+
+# The e2e test resolves the configured class labels through the tracker API, so
+# it needs the same library as the unit test.
+if (TARGET multi-stream-tracker_e2e_test)
+  target_link_libraries(multi-stream-tracker_e2e_test
+    PRIVATE
+      multi_stream_tracker_lib
+  )
+endif()

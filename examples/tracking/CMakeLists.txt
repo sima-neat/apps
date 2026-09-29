@@ -1,5 +1,4 @@
 foreach(example IN ITEMS
-    multi-stream-people-tracker
     multi-stream-tracker
     yolo26-tiny-drone-tracker
 )

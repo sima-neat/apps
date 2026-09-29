@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 from pathlib import Path
 import sys
@@ -13,8 +14,12 @@ from tests.utils.metadata_json_listener import MetadataJsonListener
 
 
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
-MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
+PYTHON_DIR = EXAMPLE_DIR / "src" / "python"
+MAIN_PY = PYTHON_DIR / "main.py"
 E2E_INSIGHT_HOST = "127.0.0.1"
+
+if str(PYTHON_DIR) not in sys.path:
+    sys.path.insert(0, str(PYTHON_DIR))
 
 
 def _runtime_deps_ready() -> bool:
@@ -24,6 +29,62 @@ def _runtime_deps_ready() -> bool:
 def _env_int_or_default(name: str, default: int) -> int:
     raw = os.environ.get(name, "").strip()
     return int(raw) if raw else default
+
+
+def assert_tracking_metadata(metadata, expected_labels: set[str], stream_count: int) -> None:
+    """Fail unless every stream published real tracks with valid labels and stable IDs.
+
+    Without this the suite passes on `{"tracks": []}`: the listener only checks
+    that some valid JSON arrived on each port.
+    """
+    per_port: dict[int, list[tuple[str, list[dict]]]] = {}
+    for message in metadata.messages:
+        payload = json.loads(message.payload)
+        tracks = payload.get("tracks")
+        assert isinstance(tracks, list), f"port {message.port}: 'tracks' must be a list"
+        per_port.setdefault(message.port, []).append((message.frame_id, tracks))
+
+    assert len(per_port) == stream_count, (
+        f"expected tracking metadata from {stream_count} streams, got {sorted(per_port)}"
+    )
+
+    for port, frames in sorted(per_port.items()):
+        ids_per_frame = []
+        for frame_id, tracks in frames:
+            for track in tracks:
+                assert set(track) == {"id", "label", "confidence", "bbox"}, (
+                    f"port {port} frame {frame_id}: unexpected metadata keys {sorted(track)}"
+                )
+                assert track["label"] in expected_labels, (
+                    f"port {port} frame {frame_id}: label {track['label']!r} "
+                    f"is not a configured class {sorted(expected_labels)}"
+                )
+                assert str(track["id"]).isdigit() and int(track["id"]) > 0, (
+                    f"port {port} frame {frame_id}: invalid track id {track['id']!r}"
+                )
+                assert 0.0 <= float(track["confidence"]) <= 1.0
+                x, y, w, h = (float(value) for value in track["bbox"])
+                assert x >= 0 and y >= 0 and w > 0 and h > 0, (
+                    f"port {port} frame {frame_id}: degenerate bbox {track['bbox']}"
+                )
+            if tracks:
+                ids_per_frame.append({str(track["id"]) for track in tracks})
+
+        assert ids_per_frame, f"port {port}: every frame published an empty track list"
+
+        all_ids = set().union(*ids_per_frame)
+        assert len(all_ids) >= 2, (
+            f"port {port}: expected multiple tracks over the run, saw ids {sorted(all_ids)}"
+        )
+
+        # A tracker that re-numbers every frame would never repeat an id.
+        carried = any(
+            previous & current for previous, current in zip(ids_per_frame, ids_per_frame[1:])
+        )
+        assert carried, (
+            f"port {port}: no track id persisted between consecutive published frames; "
+            "ids are not stable"
+        )
 
 
 @pytest.mark.e2e
@@ -106,6 +167,13 @@ class TestE2E:
         )
         assert metadata.success, (
             f"tracking metadata was not received on all streams: {metadata.error}"
+        )
+        from main import load_app_config
+
+        assert_tracking_metadata(
+            metadata,
+            expected_labels={entry.label for entry in load_app_config(config_path).tracker_classes},
+            stream_count=2,
         )
 
         files = [

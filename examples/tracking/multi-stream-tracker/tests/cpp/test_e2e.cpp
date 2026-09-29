@@ -4,9 +4,15 @@
 #include "support/testing/test_config.h"
 #include "support/testing/test_process.h"
 
+#include "examples/tracking/multi-stream-tracker/src/cpp/utils/tracker_api.cpp"
+
+#include <nlohmann/json.hpp>
+
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -39,6 +45,129 @@ void append_tracking_block(const fs::path& config_path) {
       out << line << "\n";
     }
   }
+}
+
+/// Collects the `class:` values from the example's common config, so the e2e
+/// expectation follows the shipped configuration instead of a hardcoded list.
+std::vector<multi_stream_tracker::ClassEntry> configured_class_entries() {
+  std::ifstream common(example_common_config_path(kExampleName));
+  std::vector<multi_stream_tracker::ClassEntry> entries;
+  std::string line;
+  bool in_block = false;
+  while (std::getline(common, line)) {
+    const bool top_level = !line.empty() && line[0] != ' ' && line[0] != '#';
+    if (top_level) {
+      in_block = line.rfind("tracking:", 0) == 0;
+    }
+    if (!in_block) {
+      continue;
+    }
+    const auto dash = line.find("- class:");
+    if (dash == std::string::npos) {
+      continue;
+    }
+    std::string value = line.substr(dash + 8);
+    const auto hash = value.find('#');
+    if (hash != std::string::npos) {
+      value = value.substr(0, hash);
+    }
+    const auto first = value.find_first_not_of(" \t\"'");
+    const auto last = value.find_last_not_of(" \t\r\n\"'");
+    if (first == std::string::npos) {
+      continue;
+    }
+    entries.push_back({{"class", value.substr(first, last - first + 1)}});
+  }
+  return entries;
+}
+
+/// Fails unless every stream published real tracks with valid labels and stable
+/// IDs. Without this the suite passes on `{"tracks": []}`: the listener only
+/// checks that some valid JSON arrived on each port.
+bool tracking_metadata_is_valid(const MetadataJsonListenerResult& metadata,
+                                const std::set<std::string>& expected_labels, std::size_t streams) {
+  std::map<int, std::vector<std::set<std::string>>> ids_per_port;
+  std::set<int> ports_seen;
+
+  for (const auto& message : metadata.messages) {
+    const auto payload = nlohmann::json::parse(message.payload, nullptr, false);
+    if (payload.is_discarded() || !payload.contains("tracks") || !payload["tracks"].is_array()) {
+      std::cerr << "[FAIL] port " << message.port << ": 'tracks' must be an array\n";
+      return false;
+    }
+    ports_seen.insert(message.port);
+    std::set<std::string> frame_ids;
+    for (const auto& track : payload["tracks"]) {
+      if (!track.contains("id") || !track.contains("label") || !track.contains("confidence") ||
+          !track.contains("bbox") || track.size() != 4) {
+        std::cerr << "[FAIL] port " << message.port << " frame " << message.frame_id
+                  << ": unexpected tracking metadata keys\n";
+        return false;
+      }
+      const auto label = track["label"].get<std::string>();
+      if (expected_labels.count(label) == 0) {
+        std::cerr << "[FAIL] port " << message.port << " frame " << message.frame_id << ": label '"
+                  << label << "' is not a configured class\n";
+        return false;
+      }
+      const auto id = track["id"].get<std::string>();
+      if (id.empty() || id.find_first_not_of("0123456789") != std::string::npos || id == "0") {
+        std::cerr << "[FAIL] port " << message.port << " frame " << message.frame_id
+                  << ": invalid track id '" << id << "'\n";
+        return false;
+      }
+      const auto& bbox = track["bbox"];
+      if (!bbox.is_array() || bbox.size() != 4 || bbox[0].get<double>() < 0.0 ||
+          bbox[1].get<double>() < 0.0 || bbox[2].get<double>() <= 0.0 ||
+          bbox[3].get<double>() <= 0.0) {
+        std::cerr << "[FAIL] port " << message.port << " frame " << message.frame_id
+                  << ": degenerate bbox\n";
+        return false;
+      }
+      frame_ids.insert(id);
+    }
+    if (!frame_ids.empty()) {
+      ids_per_port[message.port].push_back(frame_ids);
+    }
+  }
+
+  if (ports_seen.size() != streams) {
+    std::cerr << "[FAIL] expected tracking metadata from " << streams << " streams, got "
+              << ports_seen.size() << "\n";
+    return false;
+  }
+
+  for (const int port : ports_seen) {
+    const auto& frames = ids_per_port[port];
+    if (frames.empty()) {
+      std::cerr << "[FAIL] port " << port << ": every frame published an empty track list\n";
+      return false;
+    }
+    std::set<std::string> all_ids;
+    for (const auto& frame : frames) {
+      all_ids.insert(frame.begin(), frame.end());
+    }
+    if (all_ids.size() < 2) {
+      std::cerr << "[FAIL] port " << port << ": expected multiple tracks over the run\n";
+      return false;
+    }
+    // A tracker that re-numbers every frame would never repeat an id.
+    bool carried = false;
+    for (std::size_t i = 1; i < frames.size() && !carried; ++i) {
+      for (const auto& id : frames[i]) {
+        if (frames[i - 1].count(id) != 0) {
+          carried = true;
+          break;
+        }
+      }
+    }
+    if (!carried) {
+      std::cerr << "[FAIL] port " << port
+                << ": no track id persisted between consecutive published frames\n";
+      return false;
+    }
+  }
+  return true;
 }
 
 void record_unavailable_source(const std::string& fail_reason, const std::string& skip_reason,
@@ -123,8 +252,18 @@ int run_source_case(const std::string& binary, const std::string& model_path,
                 << " tracking metadata was not received on all streams: " << metadata.error << "\n";
       rc = 1;
     } else {
-      std::cout << "[OK] " << source_case.codec << " tracking metadata received on "
-                << metadata.ports_with_valid_json.size() << " streams\n";
+      std::set<std::string> expected_labels;
+      for (const auto& config : multi_stream_tracker::parse_class_configs(
+               configured_class_entries())) {
+        expected_labels.insert(config.label);
+      }
+      if (!tracking_metadata_is_valid(metadata, expected_labels, 2)) {
+        rc = 1;
+      } else {
+        std::cout << "[OK] " << source_case.codec << " tracking metadata received on "
+                  << metadata.ports_with_valid_json.size()
+                  << " streams with valid labels and stable ids\n";
+      }
     }
   }
 

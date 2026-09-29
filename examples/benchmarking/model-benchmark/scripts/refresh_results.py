@@ -59,43 +59,43 @@ GROUPS: tuple[tuple[str, tuple[ModelRow, ...]], ...] = (
             ModelRow("yolo26n-det-bf16-mla_tess-b1",
                      "yolo26n-det-bf16-mla_tess-b1.tar.gz",
                      "single-stream-object-detector, multi-stream-object-detector, "
-                     "multi-stream-people-tracker",
+                     "multi-stream-tracker",
                      "models/YOLO26-DETECTION/yolo26n-det-bf16-mla_tess-b1.tar.gz"),
             ModelRow("yolo26s-det-bf16-mla_tess-b1",
                      "yolo26s-det-bf16-mla_tess-b1.tar.gz",
                      "single-stream-object-detector, multi-stream-object-detector, "
-                     "multi-stream-people-tracker",
+                     "multi-stream-tracker",
                      "models/YOLO26-DETECTION/yolo26s-det-bf16-mla_tess-b1.tar.gz"),
             ModelRow("yolo26m-det-bf16-mla_tess-b1",
                      "yolo26m-det-bf16-mla_tess-b1.tar.gz",
                      "single-stream-object-detector, multi-stream-object-detector, "
                      "yolo26-object-detector, detection-to-vlm-assistant, "
-                     "multi-stream-people-tracker",
+                     "multi-stream-tracker",
                      "models/yolo26m-det-bf16-mla_tess-b1.tar.gz"),
             ModelRow("yolo26l-det-bf16-mla_tess-b1",
                      "yolo26l-det-bf16-mla_tess-b1.tar.gz",
                      "single-stream-object-detector, multi-stream-object-detector, "
-                     "multi-stream-people-tracker",
+                     "multi-stream-tracker",
                      "models/YOLO26-DETECTION/yolo26l-det-bf16-mla_tess-b1.tar.gz"),
             ModelRow("yolo26x-det-bf16-mla_tess-b1",
                      "yolo26x-det-bf16-mla_tess-b1.tar.gz",
                      "single-stream-object-detector, multi-stream-object-detector, "
-                     "multi-stream-people-tracker",
+                     "multi-stream-tracker",
                      "models/YOLO26-DETECTION/yolo26x-det-bf16-mla_tess-b1.tar.gz"),
             ModelRow("yolo26m-det-bf16-b1", "yolo26m-det-bf16-b1.tar.gz",
                      "single-stream-object-detector, multi-stream-object-detector, "
-                     "detection-to-vlm-assistant, multi-stream-people-tracker",
+                     "detection-to-vlm-assistant, multi-stream-tracker",
                      "models/YOLO26-DETECTION/yolo26m-det-bf16-b1.tar.gz"),
             ModelRow("yolo26n-det-int8-b1", "yolo26n-det-int8-b1.tar.gz",
                      "high-density-multi-stream-object-detector",
                      "models/YOLO26-DETECTION/yolo26n-det-int8-b1.tar.gz"),
             ModelRow("yolo26m-det-int8-b1", "yolo26m-det-int8-b1.tar.gz",
                      "single-stream-object-detector, multi-stream-object-detector, "
-                     "detection-to-vlm-assistant, multi-stream-people-tracker",
+                     "detection-to-vlm-assistant, multi-stream-tracker",
                      "models/YOLO26-DETECTION/yolo26m-det-int8-b1.tar.gz"),
             ModelRow("yolo26m-det-int8-b1-boxdecode", "yolo26m-det-int8-b1.tar.gz",
                      "single-stream-object-detector, multi-stream-object-detector, "
-                     "detection-to-vlm-assistant, multi-stream-people-tracker",
+                     "detection-to-vlm-assistant, multi-stream-tracker",
                      "models/YOLO26-DETECTION/yolo26m-det-int8-b1.tar.gz",
                      decode_type="yolo26-det"),
         ),

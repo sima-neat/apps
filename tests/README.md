@@ -267,7 +267,7 @@ Streaming e2e tests require live reachable sources at test time:
 - `single-stream-object-detector` (C++/Python)
 - `single-stream-instance-segmenter` (C++/Python)
 - `multi-stream-object-detector` (C++/Python)
-- `multi-stream-people-tracker` (C++/Python)
+- `multi-stream-tracker` (C++/Python)
 
 Use [Insight](https://developer.sima.ai/software/tools/insight/) to install
 videos directly from its catalog or through YouTube support. Start the required
