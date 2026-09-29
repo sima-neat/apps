@@ -371,14 +371,16 @@ def build_metadata_tracks(
 ) -> list[dict]:
     metadata_tracks = []
     for track in tracks:
-        x = max(0, int(track.x1))
-        y = max(0, int(track.y1))
-        w = max(0, int(track.x2 - track.x1))
-        h = max(0, int(track.y2 - track.y1))
-        if x + w > frame_w:
-            w = frame_w - x
-        if y + h > frame_h:
-            h = frame_h - y
+        # Clip both endpoints before measuring: a predicted box can extend past
+        # either edge, and clamping only the origin leaves the width too large.
+        x1 = min(max(track.x1, 0.0), float(frame_w))
+        y1 = min(max(track.y1, 0.0), float(frame_h))
+        x2 = min(max(track.x2, 0.0), float(frame_w))
+        y2 = min(max(track.y2, 0.0), float(frame_h))
+        x = int(x1)
+        y = int(y1)
+        w = max(0, int(x2) - x)
+        h = max(0, int(y2) - y)
         metadata_tracks.append(
             {
                 "id": str(track.track_id),
@@ -811,6 +813,10 @@ def maybe_save_debug_frame(
         print(f"[warn] failed to write output frame: {out_path}", file=sys.stderr)
 
 
+# Consecutive empty 50 ms pulls tolerated before a finite run gives up on a source.
+IDLE_PULLS_BEFORE_CLOSE = 100
+
+
 def all_streams_done(streams: list[StreamRuntime], frame_limit: int) -> bool:
     if frame_limit <= 0:
         return False
@@ -904,8 +910,23 @@ def run_app(cfg: AppConfig) -> None:
         if cfg.profile:
             print(f"Backend:\n{app.graph.describe_backend()}")
         app.run = app.graph.build(build_run_options())
+        idle_pulls = 0
         while not all_streams_done(app.streams, cfg.frames):
-            process_run_once(app, cfg, "detections")
+            if process_run_once(app, cfg, "detections"):
+                idle_pulls = 0
+                continue
+            # A finite run must not hang when a source ends or drops before
+            # reaching the frame limit: nothing else marks a stream closed.
+            idle_pulls += 1
+            if cfg.frames > 0 and idle_pulls >= IDLE_PULLS_BEFORE_CLOSE:
+                for stream in app.streams:
+                    if stream.processed < cfg.frames and not stream.closed:
+                        stream.closed = True
+                        print(
+                            f"[warn] stream {stream.index} source ended after "
+                            f"{stream.processed} frames (requested {cfg.frames})",
+                            file=sys.stderr,
+                        )
     except KeyboardInterrupt:
         raise
     finally:

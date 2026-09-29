@@ -300,11 +300,16 @@ std::vector<multi_stream_tracker::ClassEntry> parse_tracking_classes(const fs::p
     }
     const int indent = leading_spaces(without_comment);
 
+    // A block list may indent its entries at or beyond the owning key, so a
+    // `- ` line level with `classes:` still belongs to the list.
+    const bool list_item = line == "-" || line.rfind("- ", 0) == 0;
+
     if (tracking_indent >= 0 && indent <= tracking_indent) {
       tracking_indent = -1;
       classes_indent = -1;
     }
-    if (classes_indent >= 0 && indent <= classes_indent) {
+    if (classes_indent >= 0 && indent <= classes_indent &&
+        !(list_item && indent == classes_indent)) {
       classes_indent = -1;
     }
     if (tracking_indent < 0 && indent == 0 && line == "tracking:") {
@@ -326,7 +331,7 @@ std::vector<multi_stream_tracker::ClassEntry> parse_tracking_classes(const fs::p
     }
 
     std::string item = line;
-    if (item == "-" || item.rfind("- ", 0) == 0) {
+    if (list_item) {
       if (item_indent >= 0 && indent != item_indent) {
         throw std::runtime_error("tracking.classes entries must use the same indentation");
       }
@@ -456,23 +461,16 @@ build_metadata_tracks(const std::vector<TrackedDetection>& tracks, int frame_w, 
   std::vector<sima_examples::MetadataBox> metadata_boxes;
   metadata_boxes.reserve(tracks.size());
   for (const auto& track : tracks) {
-    int x1 = std::max(0, static_cast<int>(track.x1));
-    int y1 = std::max(0, static_cast<int>(track.y1));
-    int w = std::max(0, static_cast<int>(track.x2 - track.x1));
-    int h = std::max(0, static_cast<int>(track.y2 - track.y1));
-    if (x1 + w > frame_w)
-      w = frame_w - x1;
-    if (y1 + h > frame_h)
-      h = frame_h - y1;
+    const auto box = multi_stream_tracker::clip_box_to_frame(track, frame_w, frame_h);
 
     sima_examples::MetadataBox obj;
     obj.id = std::to_string(track.track_id);
     obj.label = track.label;
     obj.confidence = track.score;
-    obj.x = static_cast<float>(x1);
-    obj.y = static_cast<float>(y1);
-    obj.w = static_cast<float>(std::max(0, w));
-    obj.h = static_cast<float>(std::max(0, h));
+    obj.x = static_cast<float>(box.x);
+    obj.y = static_cast<float>(box.y);
+    obj.w = static_cast<float>(box.w);
+    obj.h = static_cast<float>(box.h);
     metadata_boxes.push_back(obj);
   }
   return metadata_boxes;

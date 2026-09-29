@@ -322,6 +322,38 @@ class TestMetadata:
             ]
         }
 
+    def test_metadata_box_clipped_at_both_edges(self):
+        """A predicted box crossing an edge must publish the clipped extent, not the raw span."""
+        from main import build_metadata_tracks
+        from utils.tracker import TrackedDetection
+
+        # Crosses the left edge: raw span is 181 px but only 136 px are visible.
+        left = TrackedDetection(1, -44.59, 10.0, 136.98, 90.0, 0.8, 2, "car")
+        # Crosses the right and bottom edges.
+        right = TrackedDetection(2, 600.0, 400.0, 700.0, 500.0, 0.8, 0, "person")
+
+        out = build_metadata_tracks([left, right], frame_w=640, frame_h=480)
+
+        x, y, w, h = out[0]["bbox"]
+        assert (x, w) == (0.0, 136.0)
+        assert x + w <= 640 and y + h <= 480
+
+        x, y, w, h = out[1]["bbox"]
+        assert (x, y) == (600.0, 400.0)
+        assert x + w == 640.0 and y + h == 480.0
+
+    def test_metadata_box_fully_outside_frame_is_empty(self):
+        from main import build_metadata_tracks
+        from utils.tracker import TrackedDetection
+
+        out = build_metadata_tracks(
+            [TrackedDetection(3, -200.0, -200.0, -10.0, -10.0, 0.8, 0, "person")],
+            frame_w=640,
+            frame_h=480,
+        )
+
+        assert out[0]["bbox"][2:] == [0.0, 0.0]
+
 
 def det(x1, y1, x2, y2, score=0.9, class_id=0):
     return {"x1": x1, "y1": y1, "x2": x2, "y2": y2, "score": score, "class_id": class_id}
@@ -392,6 +424,17 @@ class TestClassConfig:
         path = write_config(tmp_path, ["rtsp://127.0.0.1:8554/src1"], tracking=tracking)
         with pytest.raises(ValueError, match="min_score must be <= low_score_threshold of class 'person'"):
             load_app_config(path)
+
+    def test_config_file_accepts_list_at_key_indent(self, tmp_path: Path):
+        """YAML allows list entries level with their key; both apps must accept it."""
+        from main import load_app_config
+
+        tracking = "tracking:\n  classes:\n  - class: person\n    high_score_threshold: 0.50\n  - class: car\n    match_iou_threshold: 0.15"
+        config_path = write_config(tmp_path, ["rtsp://127.0.0.1:8554/src1"], tracking=tracking)
+
+        cfg = load_app_config(config_path)
+
+        assert [entry.label for entry in cfg.tracker_classes] == ["person", "car"]
 
     def test_validate_config_only_rejects_duplicate_class(self, tmp_path: Path):
         tracking = "tracking:\n  classes:\n    - class: car\n    - class: 2\n"

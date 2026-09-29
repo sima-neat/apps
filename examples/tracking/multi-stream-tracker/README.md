@@ -137,7 +137,7 @@ Three trackers were compared on the same recorded detections using `tools/compar
 - `greedy_cv`: greedy IoU with constant-velocity prediction, from `yolo26-tiny-drone-tracker`.
 - `bytetrack`: this example.
 
-The real videos have no ground-truth labels, so the report uses proxies. Fewer unique IDs and longer tracks for the same objects mean fewer broken tracks. Detections came from `yolo26m-det-bf16-mla_tess-b1` on a Modalix DevKit.
+The real videos have no ground-truth labels, so the report uses proxies: unique ID count, mean track length, short-lived tracks and re-births. Read these as fragmentation measures, not identity accuracy. They cannot separate a genuinely continuous track from an object the tracker never admitted: ByteTrack holds new tracks for `min_confirmed_hits` and requires `new_track_threshold`, so two stationary objects scoring 0.90 and 0.55 yield two baseline IDs but one ByteTrack ID. Identity claims below rest on the synthetic scenarios, where ground truth exists. Detections came from `yolo26m-det-bf16-mla_tess-b1` on a Modalix DevKit.
 
 | Video (classes) | Tracker | Unique IDs | Mean track length | Tracks < 5 frames | Re-births |
 | --- | --- | --- | --- | --- | --- |
@@ -169,7 +169,7 @@ Synthetic scenarios with ground truth (mean of 10 seeds; IDF1 and ID switches, h
 | Low-confidence frames | 0.893 / 0.0 | 0.992 / 0.0 | **0.992 / 0.0** |
 | Different speeds (up to 70 px/frame) | 0.733 / 16.9 | 0.899 / 1.6 | **0.905 / 0.5** |
 
-ByteTrack gives the most stable IDs on every real video. It also removes the synthetic false positives, because unconfirmed and low-score detections never start a track. It stays small, at about 300 lines per language with no dependencies.
+ByteTrack produces the least fragmented output on every real video, and the synthetic scenarios — the only ones with ground truth — show that this comes with equal or better identity accuracy (IDF1) and fewer ID switches, not at its expense. It also removes the synthetic false positives, because unconfirmed and low-score detections never start a track. It stays small, at about 300 lines per language with no dependencies.
 
 Known limits:
 

@@ -269,6 +269,50 @@ bool test_config_file_classes(const std::string& binary) {
                      0, "classes=bicycle,dog");
   ok &= run_validate(binary, "config_flow_list", "tracking:\n  classes: [person]\n", 1,
                      "block list");
+  // YAML allows list entries level with their key; Python accepts this, so C++ must too.
+  ok &= run_validate(binary, "config_list_at_key_indent",
+                     "tracking:\n  classes:\n  - class: person\n"
+                     "    high_score_threshold: 0.50\n  - class: car\n"
+                     "    match_iou_threshold: 0.15\n",
+                     0, "classes=person,car");
+  return ok;
+}
+
+bool test_metadata_box_clipping() {
+  bool ok = true;
+  // Crosses the left edge: raw span is 181 px but only 136 px are visible.
+  TrackedDetection left;
+  left.track_id = 1;
+  left.x1 = -44.59f;
+  left.y1 = 10.0f;
+  left.x2 = 136.98f;
+  left.y2 = 90.0f;
+  const auto left_box = multi_stream_tracker::clip_box_to_frame(left, 640, 480);
+  ok &= expect_true(left_box.x == 0 && left_box.w == 136, "left-edge box uses clipped extent");
+  ok &= expect_true(left_box.x + left_box.w <= 640 && left_box.y + left_box.h <= 480,
+                    "left-edge box stays inside the frame");
+
+  // Crosses the right and bottom edges.
+  TrackedDetection right;
+  right.track_id = 2;
+  right.x1 = 600.0f;
+  right.y1 = 400.0f;
+  right.x2 = 700.0f;
+  right.y2 = 500.0f;
+  const auto right_box = multi_stream_tracker::clip_box_to_frame(right, 640, 480);
+  ok &= expect_true(right_box.x == 600 && right_box.x + right_box.w == 640 &&
+                        right_box.y + right_box.h == 480,
+                    "right/bottom box is clipped to the frame");
+
+  // Entirely outside the frame.
+  TrackedDetection gone;
+  gone.track_id = 3;
+  gone.x1 = -200.0f;
+  gone.y1 = -200.0f;
+  gone.x2 = -10.0f;
+  gone.y2 = -10.0f;
+  const auto gone_box = multi_stream_tracker::clip_box_to_frame(gone, 640, 480);
+  ok &= expect_true(gone_box.w == 0 && gone_box.h == 0, "box outside the frame is empty");
   return ok;
 }
 
@@ -559,6 +603,7 @@ int main(int argc, char** argv) {
   ok &= test_config_accepts_one_to_five_classes();
   ok &= test_config_rejects_invalid_classes();
   ok &= test_config_file_classes(binary);
+  ok &= test_metadata_box_clipping();
   ok &= test_tracker_reuses_track_id_for_moving_object();
   ok &= test_tracker_publishes_label_and_id();
   ok &= test_tracker_multiple_tracks_multiple_classes();
