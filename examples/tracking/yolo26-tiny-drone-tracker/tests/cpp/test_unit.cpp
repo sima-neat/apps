@@ -6,6 +6,7 @@
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -379,6 +380,116 @@ bool test_tracker_expires_stale_state_before_creating_replacement() {
                      "replacement preserves the active-track bound");
 }
 
+// ---------------------------------------------------------------------------
+// Configuration rules --validate-config-only can reach without a model or a
+// stream (Refs #526). Each case is the minimal valid config with exactly one
+// value broken, and asserts the message that names the rule, so a failure
+// says which rule stopped firing.
+// ---------------------------------------------------------------------------
+struct ConfigParts {
+  std::string sections;      // extra top-level sections, e.g. "input:\n  latency_ms: -1\n"
+  std::string output_extra;  // extra keys under output:, e.g. "  save_every: -1\n"
+  std::string insight_extra; // extra keys under output.insight:, e.g. "    video_port_base: 0\n"
+  std::string model_path = "models/model.tar.gz";
+  std::string host = "127.0.0.1";
+};
+
+struct RejectedConfig {
+  const char* name;
+  ConfigParts parts;
+  const char* message;
+};
+
+std::string config_body(const ConfigParts& parts) {
+  return "model:\n  path: '" + parts.model_path + "'\n" +
+         std::string("streams:\n  - rtsp://127.0.0.1:8554/src1\n") + parts.sections + "output:\n" +
+         parts.output_extra + "  insight:\n    host: '" + parts.host + "'\n" + parts.insight_extra;
+}
+
+bool test_configuration_rules_are_enforced(const std::string& binary) {
+  const std::vector<RejectedConfig> cases = {
+      {"model-path-empty", {"", "", "", ""}, "model.path must be set"},
+      {"insight-host-empty",
+       {"", "", "", "models/model.tar.gz", ""},
+       "output.insight.host must be set"},
+      {"codec-unsupported",
+       {"input:\n  codec: vp9\n", "", ""},
+       "input.codec must be h264/avc or h265/hevc"},
+      {"latency-negative", {"input:\n  latency_ms: -1\n", "", ""}, "input.latency_ms must be >= 0"},
+      {"frames-negative", {"inference:\n  frames: -1\n", "", ""}, "inference.frames must be >= 0"},
+      {"fps-negative", {"inference:\n  fps: -1\n", "", ""}, "inference.fps must be >= 0"},
+      {"num-classes-zero",
+       {"inference:\n  num_classes: 0\n", "", ""},
+       "inference.num_classes must be > 0"},
+      {"target-class-negative",
+       {"inference:\n  target_class_id: -1\n", "", ""},
+       "inference.target_class_id must be >= 0"},
+      {"target-class-outside-num-classes",
+       {"inference:\n  num_classes: 2\n  target_class_id: 2\n", "", ""},
+       "must be less than inference.num_classes"},
+      {"target-label-empty",
+       {"inference:\n  target_label: ''\n", "", ""},
+       "inference.target_label must be set"},
+      {"min-score-above",
+       {"inference:\n  min_score: 1.5\n", "", ""},
+       "inference.min_score must be between 0 and 1"},
+      {"nms-below",
+       {"inference:\n  nms_iou: -0.5\n", "", ""},
+       "inference.nms_iou must be between 0 and 1"},
+      {"max-detections-zero",
+       {"inference:\n  max_detections: 0\n", "", ""},
+       "inference.max_detections must be > 0"},
+      {"warmup-negative",
+       {"runtime:\n  warmup_frames: -1\n", "", ""},
+       "runtime.warmup_frames must be >= 0"},
+      {"match-iou-above",
+       {"tracking:\n  match_iou_threshold: 2\n", "", ""},
+       "tracking.match_iou_threshold must be between 0 and 1"},
+      {"high-score-below-min-score",
+       {"inference:\n  min_score: 0.5\ntracking:\n  high_score_threshold: 0.4\n", "", ""},
+       "tracking.high_score_threshold must be in [inference.min_score, 1]"},
+      {"new-track-below-high-score",
+       {"tracking:\n  high_score_threshold: 0.6\n  new_track_threshold: 0.5\n", "", ""},
+       "tracking.new_track_threshold must be in [high_score_threshold, 1]"},
+      {"center-distance-negative",
+       {"tracking:\n  max_center_distance: -1\n", "", ""},
+       "tracking.max_center_distance must be >= 0"},
+      {"momentum-at-one",
+       {"tracking:\n  velocity_momentum: 1\n", "", ""},
+       "tracking.velocity_momentum must be in [0, 1)"},
+      {"max-missing-negative",
+       {"tracking:\n  max_missing_frames: -1\n", "", ""},
+       "tracking.max_missing_frames must be >= 0"},
+      {"min-hits-zero",
+       {"tracking:\n  min_confirmed_hits: 0\n", "", ""},
+       "tracking.min_confirmed_hits must be >= 1"},
+      {"max-active-zero",
+       {"tracking:\n  max_active_tracks: 0\n", "", ""},
+       "tracking.max_active_tracks must be >= 1"},
+      {"save-every-negative", {"", "  save_every: -1\n", ""}, "output.save_every must be >= 0"},
+  };
+
+  bool ok = true;
+  for (const RejectedConfig& c : cases) {
+    const fs::path config_path = write_config(std::string("rule_") + c.name, config_body(c.parts));
+    const auto result =
+        spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
+    ok &= expect_true(result.exit_code != 0, std::string(c.name) + " is rejected") &&
+          expect_contains(result.stderr_text, c.message, std::string(c.name) + " names its rule");
+    remove_dir(config_path.parent_path().string());
+  }
+
+  // The control: the same minimal config with nothing broken validates, so the
+  // rejections above are about the broken value and not about the baseline.
+  const fs::path config_path = write_config("rule_baseline", config_body(ConfigParts{}));
+  const auto result =
+      spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
+  ok &= expect_true(result.exit_code == 0, "minimal config validates") &&
+        expect_contains(result.stdout_text, "Config validated", "validated line is printed");
+  remove_dir(config_path.parent_path().string());
+  return ok;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -395,6 +506,7 @@ int main(int argc, char** argv) {
   ok &= test_validate_config_only_rejects_too_many_streams(binary);
   ok &= test_validate_config_only_rejects_invalid_inflight_limit(binary);
   ok &= test_validate_config_only_checks_full_port_ranges(binary);
+  ok &= test_configuration_rules_are_enforced(binary);
   ok &= test_requested_fps_configures_videorate();
   ok &= test_closed_detection_output_is_terminal();
   ok &= test_debug_frames_require_matching_identity();
