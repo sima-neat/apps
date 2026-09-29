@@ -288,7 +288,9 @@ def load_app_config(config_path: Path) -> AppConfig:
     cfg = AppConfig(
         model_path=string_or(model, "path"),
         labels_path=Path(string_or(model, "labels", str(DEFAULT_LABELS))),
-        source_url=string_or(source, "url", string_or(source, "rtsp_url")),
+        # config.yaml documents source.rtsp_url as the fallback "when source.url
+        # is empty", so an empty value must fall through, not just an absent key.
+        source_url=string_or(source, "url") or string_or(source, "rtsp_url"),
         source_type=parse_source_type(string_or(source, "type", "rtsp")),
         source_codec=parse_source_codec(string_or(source, "codec", "h264")),
         latency_ms=int_or(source, "latency_ms", 200),

@@ -112,6 +112,53 @@ output:
         with pytest.raises(ValueError, match="mask_alpha"):
             main.load_app_config(config)
 
+    @staticmethod
+    def _source_config(tmp_path, url_line, legacy_line):
+        config = tmp_path / "config.yaml"
+        config.write_text(
+            f"""
+model:
+  path: model.tar.gz
+source:
+{url_line}
+{legacy_line}
+output:
+  insight:
+    host: 127.0.0.1
+""",
+            encoding="utf-8",
+        )
+        return config
+
+    def test_an_empty_url_falls_back_to_the_legacy_key(self, tmp_path):
+        """config.yaml ships source.url present and says rtsp_url is "used when
+        source.url is empty", so the empty value must fall through."""
+        config = self._source_config(
+            tmp_path, '  url: ""', "  rtsp_url: rtsp://127.0.0.1:8554/legacy"
+        )
+
+        assert main.load_app_config(config).source_url == "rtsp://127.0.0.1:8554/legacy"
+
+    def test_an_absent_url_falls_back_to_the_legacy_key(self, tmp_path):
+        config = self._source_config(tmp_path, "", "  rtsp_url: rtsp://127.0.0.1:8554/legacy")
+
+        assert main.load_app_config(config).source_url == "rtsp://127.0.0.1:8554/legacy"
+
+    def test_a_present_url_wins_over_the_legacy_key(self, tmp_path):
+        config = self._source_config(
+            tmp_path,
+            "  url: rtsp://127.0.0.1:8554/src1",
+            "  rtsp_url: rtsp://127.0.0.1:8554/legacy",
+        )
+
+        assert main.load_app_config(config).source_url == "rtsp://127.0.0.1:8554/src1"
+
+    def test_both_empty_is_still_rejected(self, tmp_path):
+        config = self._source_config(tmp_path, '  url: ""', '  rtsp_url: ""')
+
+        with pytest.raises(ValueError, match="source.url or source.rtsp_url must be set"):
+            main.load_app_config(config)
+
 
 @pytest.mark.unit
 class TestMaskOverlay:
