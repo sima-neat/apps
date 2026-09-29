@@ -142,6 +142,7 @@ class TestValidBaseline:
 
 REJECTED = [
     pytest.param(("model", "path"), "", "model.path must be set", id="model-path-empty"),
+    pytest.param(("model", "labels"), "", "model.labels must be set", id="model-labels-empty"),
     pytest.param(
         ("output", "insight", "host"), "", "output.insight.host must be set", id="insight-host-empty"
     ),
@@ -313,17 +314,27 @@ class TestMalformedConfigFiles:
 
 
 @pytest.mark.unit
-class TestLabelsPathHandling:
-    """`model.labels` has a rule that the config file cannot actually trigger."""
+class TestLabelsRule:
+    """`model.labels` is checked on the raw string, before it becomes a Path.
 
-    def test_an_empty_labels_value_resolves_to_the_current_directory(self, tmp_path):
-        # string_or only falls back when the key is absent, so "" survives and
-        # Path("") becomes ".", which is truthy. The "model.labels must be set"
-        # rule is therefore unreachable from a config file. Recorded here so the
-        # behaviour is deliberate rather than assumed; a fix would make this fail.
-        cfg = main.load_app_config(write_config(tmp_path, [(("model", "labels"), "")]))
+    Path("") is ".", which is truthy, so a rule that only saw the converted
+    path accepted an empty value and the run failed later with "labels file
+    does not exist: .". The loader now rejects the empty value (the case is in
+    REJECTED above); validate_config keeps the rule for an AppConfig built in
+    code, which is what the second test exercises.
+    """
 
-        assert str(cfg.labels_path) == "."
+    def test_an_omitted_labels_key_uses_the_shipped_coco_list(self, tmp_path):
+        raw = {
+            "model": {"path": "model.tar.gz"},
+            "source": {"url": "rtsp://127.0.0.1:8554/src1"},
+            "output": {"insight": {"host": "127.0.0.1"}},
+        }
+
+        cfg = main.load_app_config(write_config(tmp_path, root=raw))
+
+        assert cfg.labels_path.name == "coco_label.txt"
+        assert cfg.labels_path.is_file()
 
     def test_the_rule_still_fires_when_the_path_really_is_empty(self):
         cfg = main.AppConfig(

@@ -385,6 +385,7 @@ class TestValidBaseline:
 
 REJECTED = [
     pytest.param(("model", "path"), "", "model.path must be set", id="model-path-empty"),
+    pytest.param(("model", "labels"), "", "model.labels must be set", id="model-labels-empty"),
     pytest.param(
         ("output", "insight", "host"), "", "output.insight.host must be set", id="insight-host-empty"
     ),

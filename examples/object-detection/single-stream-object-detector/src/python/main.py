@@ -239,9 +239,16 @@ def load_app_config(config_path: Path) -> AppConfig:
     insight = section(output, "insight")
     default_labels = Path(__file__).resolve().parents[1] / "common" / "coco_label.txt"
 
+    labels_path = string_or(model, "labels", str(default_labels))
+    # Checked on the raw value: Path("") is ".", so the same rule in
+    # validate_config would accept an empty value and the run would fail
+    # later with "labels file does not exist: .".
+    if not labels_path:
+        raise ValueError("model.labels must be set")
+
     cfg = AppConfig(
         model_path=string_or(model, "path"),
-        labels_path=Path(string_or(model, "labels", str(default_labels))),
+        labels_path=Path(labels_path),
         # config.yaml documents source.rtsp_url as the fallback "when source.url
         # is empty", so an empty value must fall through, not just an absent key.
         source_url=string_or(source, "url") or string_or(source, "rtsp_url"),

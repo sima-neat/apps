@@ -112,6 +112,25 @@ output:
         with pytest.raises(ValueError, match="mask_alpha"):
             main.load_app_config(config)
 
+    def test_an_empty_labels_value_is_rejected(self, tmp_path):
+        """Path("") is ".", so the rule has to look at the raw value, not the Path."""
+        config = tmp_path / "config.yaml"
+        config.write_text(
+            """
+model:
+  path: model.tar.gz
+  labels: ""
+source:
+  url: rtsp://127.0.0.1:8554/src1
+output:
+  insight:
+    host: 127.0.0.1
+""",
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="model.labels must be set"):
+            main.load_app_config(config)
+
     @staticmethod
     def _source_config(tmp_path, url_line, legacy_line):
         config = tmp_path / "config.yaml"
