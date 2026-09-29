@@ -15,10 +15,13 @@ import sys
 import tempfile
 from pathlib import Path
 
-import numpy as np
 import pytest
 
-import cv2
+# The frames these tests write and decode need NumPy and OpenCV. Missing either
+# is a prerequisite problem, not a traceback at collection: skip with the
+# package named, and let tests/test.sh --strict turn that skip into a failure.
+np = pytest.importorskip("numpy", reason="the harness self-tests build frames with NumPy")
+cv2 = pytest.importorskip("cv2", reason="the harness self-tests decode frames with OpenCV")
 
 from tests.utils.output_assertions import (
     assert_every_stream_advances,

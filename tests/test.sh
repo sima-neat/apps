@@ -880,6 +880,10 @@ run_pytest() {
 # The other files under tests/scripts are repository contract tests: they read
 # build.sh, the workflows and the portal sources, so they need a source
 # checkout, carry no marker, and are not part of this run.
+#
+# The self-tests need NumPy and OpenCV (see tests/README.md). Without them
+# they skip with the package named; under --strict that skip is a failure,
+# the same rule the e2e suites apply to a missing prerequisite.
 # ---------------------------------------------------------------------------
 run_harness_pytest() {
   local harness_dir="${ROOT_DIR}/tests/scripts"
@@ -906,6 +910,10 @@ run_harness_pytest() {
   # pytest exits 5 when it collected nothing: the self-tests vanishing is a
   # failure of exactly the kind this step exists to catch, so it is not a skip.
   if [[ "${rc}" -ne 0 ]]; then
+    OVERALL_RC=1
+  fi
+  if [[ "${STRICT_MODE}" == "1" ]] && grep -Eq '[0-9]+ skipped' "${log_file}"; then
+    echo "  [FAIL] Strict mode is enabled but harness self-tests were skipped."
     OVERALL_RC=1
   fi
   rm -f "${log_file}"

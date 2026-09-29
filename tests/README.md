@@ -165,11 +165,16 @@ Python tests run through `PYTHON_TEST_BIN`. If it is unset, `tests/test.sh`
 uses common pyneat locations first, then the active virtual environment, then
 system `python3`.
 
-The selected interpreter must have `pytest` and `PyYAML` installed:
+The selected interpreter must have `pytest`, `PyYAML`, NumPy and OpenCV
+installed. NumPy and OpenCV are what the e2e output assertions and the harness
+self-tests decode saved frames with; this is the same set CI installs:
 
 ```bash
-${PYTHON_TEST_BIN:-python3} -m pip install pytest PyYAML
+${PYTHON_TEST_BIN:-python3} -m pip install pytest PyYAML "numpy<2" "opencv-python-headless<4.12"
 ```
+
+Without NumPy or OpenCV the harness self-tests skip with a message naming the
+missing package, and `--strict` turns that skip into a failure.
 
 For a persistent local override, set `PYTHON_TEST_BIN` in `tests/configs/.env.local`.
 
