@@ -96,6 +96,9 @@ tests/
     pytest_fixtures.py # shared pytest fixture implementations
     test_scope.py      # test-scope validation and query helper
   scripts/
+    test_output_assertions.py  # harness self-tests (marked unit; run by test.sh --unit)
+    test_*_contract.py         # repository contract tests; need a source checkout,
+                               # run with: pytest -c tests/pytest.ini tests/scripts
     testing/           # VS Code / DevKit task helpers
 
 examples/<category>/<example>/
@@ -110,6 +113,7 @@ sandbox-test/
     cpp-e2e.log
     cpp-unit.log
     python-e2e.log
+    python-harness.log
     python-unit.log
   python/<example>/<test>/
     command.txt

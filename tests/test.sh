@@ -871,6 +871,46 @@ run_pytest() {
   done
 }
 
+# ---------------------------------------------------------------------------
+# Harness self-tests. The shared fixtures and output assertions under
+# tests/utils are what every example test relies on, so they have tests of
+# their own under tests/scripts, marked `unit` because they need no hardware
+# and no model. They run once, before the per-example suites, so a helper that
+# can no longer fail is caught here rather than passing silently everywhere.
+# The other files under tests/scripts are repository contract tests: they read
+# build.sh, the workflows and the portal sources, so they need a source
+# checkout, carry no marker, and are not part of this run.
+# ---------------------------------------------------------------------------
+run_harness_pytest() {
+  local harness_dir="${ROOT_DIR}/tests/scripts"
+  echo ""
+  echo "  Python harness self-tests (tests/scripts, unit marker)"
+  echo "  $(printf '%.0s-' {1..50})"
+  if [[ ! -d "${harness_dir}" ]]; then
+    echo "  [FAIL] Harness self-tests are missing: ${harness_dir#${ROOT_DIR}/}"
+    OVERALL_RC=1
+    return
+  fi
+  local summary_file log_file rc
+  summary_file="$(start_summary_log "python" "harness")"
+  log_file="$(mktemp)"
+
+  echo "  [RUN] ${harness_dir#${ROOT_DIR}/} (-m unit)"
+  echo "[RUN] ${harness_dir#${ROOT_DIR}/} (-m unit)" >>"${summary_file}"
+  set +e
+  "${PYTHON_TEST_BIN}" -m pytest -c "${ROOT_DIR}/tests/pytest.ini" -m unit \
+    --rootdir="${ROOT_DIR}" -v "${harness_dir}" | tee "${log_file}" | tee -a "${summary_file}"
+  rc=${PIPESTATUS[0]}
+  set -e
+
+  # pytest exits 5 when it collected nothing: the self-tests vanishing is a
+  # failure of exactly the kind this step exists to catch, so it is not a skip.
+  if [[ "${rc}" -ne 0 ]]; then
+    OVERALL_RC=1
+  fi
+  rm -f "${log_file}"
+}
+
 if [[ "${RUN_PYTHON}" -eq 1 ]]; then
   if ! resolve_pytest_python; then
     echo ""
@@ -895,6 +935,7 @@ if [[ "${RUN_PYTHON}" -eq 1 && "${PYTHON_READY}" -eq 1 ]]; then
   echo ""
   echo "  Python test interpreter: ${PYTHON_TEST_BIN}"
   if [[ "${RUN_UNIT}" -eq 1 ]]; then
+    run_harness_pytest
     run_pytest "unit"
   fi
   if [[ "${RUN_E2E}" -eq 1 ]]; then

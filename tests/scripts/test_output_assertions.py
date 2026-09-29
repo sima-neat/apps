@@ -35,6 +35,11 @@ from tests.utils.pytest_fixtures import (
     _output_sizes,
 )
 
+# Marked `unit` so tests/test.sh --unit runs this file: it needs no hardware and
+# no model, only the helper it tests. The repository contract tests beside it
+# need a source checkout and are deliberately unmarked.
+pytestmark = pytest.mark.unit
+
 
 # A producer that takes a visible amount of time over each frame, the way a
 # large JPEG does on a loaded device, and keeps running afterwards like the
