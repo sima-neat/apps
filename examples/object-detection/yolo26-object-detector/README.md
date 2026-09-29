@@ -96,6 +96,13 @@ Done: 21 images processed
 `assets/datasets/coco` folder that is 21 files. The C++ binary prints the same
 lines with the input filename in quotes.
 
+Running a second time adds a `Cleared N stale output images` line before the
+rest, in both implementations, where `N` is however many image files the previous
+run left in `io.output_dir`. Setting `io.output_dir` to the same folder as
+`io.input_dir` skips that cleanup and reports
+`Skipping output cleanup because output_dir matches input_dir` on stderr; keep
+them separate.
+
 ## Troubleshooting
 
 - Verify `model.path` and the labels file if detections are missing.
