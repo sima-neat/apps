@@ -14,7 +14,7 @@
 
 ## Concept
 
-Tracks up to five object classes, such as people and cars, across multiple RTSP streams with YOLO26. Each class has its own ByteTrack-style tracker settings. Every track gets a stable ID, and the app sends live video plus tracking metadata (class label and track ID) to Insight.
+Tracks up to five object classes across multiple RTSP streams with YOLO26, each class with its own ByteTrack tracker settings. Every track gets a stable ID, sent to Insight with its class label.
 
 ## Preview
 
