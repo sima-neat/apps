@@ -97,10 +97,13 @@ energy_joules=46.6746557159697
 report_json=sandbox/model-benchmark/report.json
 ```
 
-The complete report lands at `output.report_json`. These numbers depend on the
-model package and the board, so treat them as an example of the shape rather
-than a target; compare your own against the maintained benchmark results linked
-in the `Benchmark Results` section above.
+The `report_json=` line names where the full report was written; trust it rather
+than either setting, because `--output-json` takes precedence over
+`output.report_json` and the documented run above passes that flag.
+
+These numbers depend on the model package and the board, so treat them as an
+example of the shape rather than a target; compare your own against the
+maintained benchmark results linked in the `Benchmark Results` section above.
 
 ## Troubleshooting
 
