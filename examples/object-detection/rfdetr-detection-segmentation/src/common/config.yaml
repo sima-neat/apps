@@ -38,3 +38,4 @@ output:
     host: <insight-host-ip>     # Insight host reachable from the target.
     video_port: 9000            # Video ingest port.
     metadata_port: 9100         # Metadata ingest port.
+    raw_video_max_fps: 60       # MJPEG preview encoding cap; 0 keeps source FPS.

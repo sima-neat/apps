@@ -16,7 +16,13 @@
 
 Run RF-DETR detection or instance segmentation on one H.264, H.265, or MJPEG RTSP stream and view the result in Insight.
 
-The application decodes to NV12 once. EV74 converts, resizes, and normalizes each frame for the selected backbone. A one-frame queue drops stale decoded frames if inference falls behind. Host code then selects the strongest proposals and passes the matching boxes and feature tensor to the transformer. Insight receives the source video and matching detection boxes or segmentation polygons.
+The application decodes to NV12 once. EV74 converts, resizes, and normalizes each frame for the selected backbone. An explicit realtime graph link admits decoded frames to inference and replaces stale pending frames when inference falls behind. Core can fuse compatible H.264 and H.265 source, decoder, and video-relay branches to avoid intermediate application handoffs. Host code then selects the strongest proposals and passes the matching boxes and feature tensor to the transformer. Insight receives the source video and matching detection boxes or segmentation polygons.
+
+Decoded-frame admission allows up to 16 in-flight frames and replaces pending frames when inference is full. Backbone outputs and transformer inputs use bounded, blocking handoffs so admitted inference work is not discarded between the two models.
+
+MJPEG reserves 32 decoded buffers so decoding can continue while inference and preview retain frames. This is tested headroom for the application, not an exact count of graph-held buffers. The raw NV12 storage is about 44 MB at 720p, 100 MB at 1080p, or 398 MB at 4K, before alignment.
+
+TCP sources use RTP timestamps directly to avoid arrival-time corrections during high-rate replay. MJPEG preview encoding defaults to 60 FPS with bounded raw-frame admission; inference keeps the full input rate. H.264 and H.265 video remain encoded passthrough.
 
 ## Preview
 
@@ -88,6 +94,7 @@ Edit `$APP_DIR/src/common/config.yaml`:
 - For detection, set `model.detection.variant` to `small` or `medium`.
 - Set `source.rtsp_url` and select `source.codec` as `h264`, `h265`, or `mjpeg`.
 - Leave `source.width`, `height`, and `fps` at `0` to probe the stream. Width and height are fallbacks; a positive FPS overrides the detected value.
+- `output.insight.raw_video_max_fps` limits MJPEG preview encoding, independently of inference. The default is 60; use 0 to retain the source rate. It does not affect H.264/H.265 passthrough.
 - Set `output.insight.host`, `video_port`, and `metadata_port` to the values reported by Insight.
 - Keep `inference.frames: 0` to run continuously, or set a finite result count.
 
