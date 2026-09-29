@@ -4,6 +4,7 @@
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -149,6 +150,90 @@ bool test_validate_config_only_rejects_invalid_inflight_limit(const std::string&
   return ok;
 }
 
+// ---------------------------------------------------------------------------
+// Configuration rules --validate-config-only can reach without a model or a
+// stream (Refs #526). Each case is the minimal valid config with exactly one
+// value broken, and asserts the message that names the rule, so a failure
+// says which rule stopped firing.
+// ---------------------------------------------------------------------------
+struct ConfigParts {
+  std::string sections;      // extra top-level sections, e.g. "input:\n  latency_ms: -1\n"
+  std::string output_extra;  // extra keys under output:, e.g. "  save_every: -1\n"
+  std::string insight_extra; // extra keys under output.insight:, e.g. "    video_port_base: 0\n"
+  std::string model_path = "models/model.tar.gz";
+  std::string host = "127.0.0.1";
+};
+
+struct RejectedConfig {
+  const char* name;
+  ConfigParts parts;
+  const char* message;
+};
+
+std::string config_body(const ConfigParts& parts) {
+  return "model:\n  path: '" + parts.model_path + "'\n" +
+         std::string("streams:\n  - rtsp://127.0.0.1:8554/src1\n") + parts.sections + "output:\n" +
+         parts.output_extra + "  insight:\n    host: '" + parts.host + "'\n" + parts.insight_extra;
+}
+
+bool test_configuration_rules_are_enforced(const std::string& binary) {
+  const std::vector<RejectedConfig> cases = {
+      {"model-path-empty", {"", "", "", ""}, "model.path must be set"},
+      {"insight-host-empty",
+       {"", "", "", "models/model.tar.gz", ""},
+       "output.insight.host must be set"},
+      {"codec-unsupported",
+       {"input:\n  codec: vp9\n", "", ""},
+       "input.codec must be h264/avc or h265/hevc"},
+      {"latency-negative", {"input:\n  latency_ms: -1\n", "", ""}, "input.latency_ms must be >= 0"},
+      {"max-width-zero", {"input:\n  max_width: 0\n", "", ""}, "input.max_width must be > 0"},
+      {"max-height-zero", {"input:\n  max_height: 0\n", "", ""}, "input.max_height must be > 0"},
+      {"frames-negative", {"inference:\n  frames: -1\n", "", ""}, "inference.frames must be >= 0"},
+      {"min-score-above",
+       {"inference:\n  min_score: 1.5\n", "", ""},
+       "inference.min_score must be between 0 and 1"},
+      {"nms-below",
+       {"inference:\n  nms_iou: -0.5\n", "", ""},
+       "inference.nms_iou must be between 0 and 1"},
+      {"max-poses-zero",
+       {"inference:\n  max_poses: 0\n", "", ""},
+       "inference.max_poses must be > 0"},
+      {"keypoint-visibility-above",
+       {"", "  min_keypoint_visibility: 2\n", ""},
+       "output.min_keypoint_visibility must be between 0 and 1"},
+      {"warmup-negative",
+       {"runtime:\n  warmup_frames: -1\n", "", ""},
+       "runtime.warmup_frames must be >= 0"},
+      {"video-port-base-zero",
+       {"", "", "    video_port_base: 0\n"},
+       "output.insight.video_port_base must be > 0"},
+      {"metadata-port-base-zero",
+       {"", "", "    metadata_port_base: 0\n"},
+       "output.insight.metadata_port_base must be > 0"},
+      {"save-every-negative", {"", "  save_every: -1\n", ""}, "output.save_every must be >= 0"},
+  };
+
+  bool ok = true;
+  for (const RejectedConfig& c : cases) {
+    const fs::path config_path = write_config(std::string("rule_") + c.name, config_body(c.parts));
+    const auto result =
+        spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
+    ok &= expect_true(result.exit_code != 0, std::string(c.name) + " is rejected") &&
+          expect_contains(result.stderr_text, c.message, std::string(c.name) + " names its rule");
+    remove_dir(config_path.parent_path().string());
+  }
+
+  // The control: the same minimal config with nothing broken validates, so the
+  // rejections above are about the broken value and not about the baseline.
+  const fs::path config_path = write_config("rule_baseline", config_body(ConfigParts{}));
+  const auto result =
+      spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
+  ok &= expect_true(result.exit_code == 0, "minimal config validates") &&
+        expect_contains(result.stdout_text, "Config validated", "validated line is printed");
+  remove_dir(config_path.parent_path().string());
+  return ok;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -165,5 +250,6 @@ int main(int argc, char** argv) {
   ok &= test_validate_config_only_rejects_too_many_streams(binary);
   ok &= test_validate_config_only_rejects_empty_streams(binary);
   ok &= test_validate_config_only_rejects_invalid_inflight_limit(binary);
+  ok &= test_configuration_rules_are_enforced(binary);
   return ok ? 0 : 1;
 }

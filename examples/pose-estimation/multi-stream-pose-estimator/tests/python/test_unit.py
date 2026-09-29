@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+import importlib.util
 import json
 import struct
 import subprocess
@@ -11,6 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from tests.utils.metadata_json_listener import _MetadataReassembler
 
@@ -20,6 +23,15 @@ MAIN_PY = PYTHON_DIR / "main.py"
 
 if str(PYTHON_DIR) not in sys.path:
     sys.path.insert(0, str(PYTHON_DIR))
+
+# The configuration tests bind `main` under an example-specific module name:
+# every application has a module called `main`, and a plain `import main`
+# binds whichever was imported first when pytest runs across examples.
+_CONFIG_SPEC = importlib.util.spec_from_file_location("multi_stream_pose_estimator_main", MAIN_PY)
+assert _CONFIG_SPEC is not None and _CONFIG_SPEC.loader is not None
+main_module = importlib.util.module_from_spec(_CONFIG_SPEC)
+sys.modules[_CONFIG_SPEC.name] = main_module
+_CONFIG_SPEC.loader.exec_module(main_module)
 
 pytestmark = pytest.mark.unit
 
@@ -483,3 +495,210 @@ class TestMetadata:
 
         assert len(payload.encode("utf-8")) <= 65507
         assert all(len(pose["keypoints"]) == 17 for pose in json.loads(payload)["poses"])
+
+
+
+# ---------------------------------------------------------------------------
+# Configuration handling and option validation (Refs #526).
+# Each test starts from VALID_CONFIG and breaks exactly one thing, so a failure
+# names the rule that fired rather than "config rejected". The stream cap, the
+# empty stream list and the invalid inflight limit are owned by
+# TestConfigLoading above and are not repeated here.
+# ---------------------------------------------------------------------------
+
+VALID_CONFIG = {
+    "model": {"path": "model.tar.gz"},
+    "streams": ["rtsp://127.0.0.1:8554/src1", "rtsp://127.0.0.1:8554/src2"],
+    "input": {"codec": "h264", "latency_ms": 100, "tcp": True, "max_width": 1920, "max_height": 1080},
+    "inference": {
+        "frames": 0,
+        "max_inflight_per_stream": 4,
+        "max_inflight_total": 16,
+        "min_score": 0.55,
+        "nms_iou": 0.6,
+        "max_poses": 50,
+    },
+    "runtime": {"profile": False, "warmup_frames": 30},
+    "output": {
+        "video_enabled": True,
+        "save_every": 0,
+        "min_keypoint_visibility": 0.3,
+        "insight": {"host": "127.0.0.1", "video_port_base": 9000, "metadata_port_base": 9100},
+    },
+}
+
+
+def write_full_config(tmp_path: Path, overrides=None, *, root=None) -> Path:
+    """Write VALID_CONFIG with `overrides` applied as ((section, ..., key), value)."""
+    raw = copy.deepcopy(VALID_CONFIG) if root is None else root
+    for path, value in (overrides or []):
+        target = raw
+        for key in path[:-1]:
+            target = target[key]
+        target[path[-1]] = value
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+    return config_path
+
+
+class TestValidBaseline:
+    def test_the_baseline_config_loads(self, tmp_path):
+        """If this breaks, every rejection test below is testing the wrong thing."""
+        cfg = main_module.load_app_config(write_full_config(tmp_path))
+
+        assert cfg.model_path == "model.tar.gz"
+        assert len(cfg.rtsp_urls) == 2
+        assert cfg.codec == "h264"
+        assert cfg.insight_host == "127.0.0.1"
+
+    def test_omitted_optional_values_fall_back_to_documented_defaults(self, tmp_path):
+        raw = {
+            "model": {"path": "model.tar.gz"},
+            "streams": ["rtsp://127.0.0.1:8554/src1"],
+            "output": {"insight": {"host": "127.0.0.1"}},
+        }
+
+        cfg = main_module.load_app_config(write_full_config(tmp_path, root=raw))
+
+        assert cfg.codec == "h264"
+        assert cfg.latency_ms == 100
+        assert cfg.input_max_width == 1920
+        assert cfg.input_max_height == 1080
+        assert cfg.max_inflight_per_stream == 4
+        assert cfg.max_inflight_total == 16
+        assert cfg.min_score == pytest.approx(0.55)
+        assert cfg.nms_iou == pytest.approx(0.60)
+        assert cfg.max_poses == 50
+        assert cfg.min_keypoint_visibility == pytest.approx(0.30)
+        assert cfg.warmup_frames == 30
+        assert cfg.video_port_base == 9000
+        assert cfg.metadata_port_base == 9100
+        assert cfg.video_enabled == True
+        assert cfg.save_every == 0
+
+
+REJECTED = [
+    pytest.param(('model', 'path'), '', 'model.path must be set', id='model-path-empty'),
+    pytest.param(('output', 'insight', 'host'), '', 'output.insight.host must be set', id='insight-host-empty'),
+    pytest.param(('input', 'codec'), 'vp9', 'input.codec must be h264/avc or h265/hevc', id='codec-unsupported'),
+    pytest.param(('input', 'latency_ms'), -1, 'input.latency_ms must be >= 0', id='latency-negative'),
+    pytest.param(('input', 'max_width'), 0, 'input.max_width must be > 0', id='max-width-zero'),
+    pytest.param(('input', 'max_height'), 0, 'input.max_height must be > 0', id='max-height-zero'),
+    pytest.param(('inference', 'frames'), -1, 'inference.frames must be >= 0', id='frames-negative'),
+    pytest.param(('inference', 'min_score'), -0.01, 'inference.min_score must be between 0 and 1', id='min-score-below'),
+    pytest.param(('inference', 'min_score'), 1.01, 'inference.min_score must be between 0 and 1', id='min-score-above'),
+    pytest.param(('inference', 'nms_iou'), -0.01, 'inference.nms_iou must be between 0 and 1', id='nms-below'),
+    pytest.param(('inference', 'nms_iou'), 1.01, 'inference.nms_iou must be between 0 and 1', id='nms-above'),
+    pytest.param(('inference', 'max_poses'), 0, 'inference.max_poses must be > 0', id='max-poses-zero'),
+    pytest.param(('output', 'min_keypoint_visibility'), 1.01, 'output.min_keypoint_visibility must be between 0 and 1', id='keypoint-visibility-above'),
+    pytest.param(('runtime', 'warmup_frames'), -1, 'runtime.warmup_frames must be >= 0', id='warmup-negative'),
+    pytest.param(('output', 'insight', 'video_port_base'), 0, 'output.insight.video_port_base must be > 0', id='video-port-base-zero'),
+    pytest.param(('output', 'insight', 'metadata_port_base'), 0, 'output.insight.metadata_port_base must be > 0', id='metadata-port-base-zero'),
+    pytest.param(('output', 'save_every'), -1, 'output.save_every must be >= 0', id='save-every-negative'),
+]
+
+
+class TestRejectedValues:
+    @pytest.mark.parametrize(("path", "value", "message"), REJECTED)
+    def test_invalid_value_is_rejected_with_an_actionable_message(
+        self, tmp_path, path, value, message
+    ):
+        with pytest.raises(ValueError) as excinfo:
+            main_module.load_app_config(write_full_config(tmp_path, [(path, value)]))
+
+        assert message in str(excinfo.value)
+
+
+class TestBoundariesAreAccepted:
+    """An off-by-one that rejects a legal value is the failure nobody writes a test for."""
+
+    @pytest.mark.parametrize(
+        ("path", "value"),
+        [
+            (('inference', 'min_score'), 0.0),
+            (('inference', 'min_score'), 1.0),
+            (('inference', 'nms_iou'), 0.0),
+            (('inference', 'nms_iou'), 1.0),
+            (('output', 'min_keypoint_visibility'), 0.0),
+            (('output', 'min_keypoint_visibility'), 1.0),
+            (('input', 'latency_ms'), 0),
+            (('input', 'max_width'), 1),
+            (('input', 'max_height'), 1),
+            (('inference', 'frames'), 0),
+            (('runtime', 'warmup_frames'), 0),
+            (('output', 'save_every'), 0),
+            (('inference', 'max_poses'), 1),
+        ],
+    )
+    def test_boundary_value_is_accepted(self, tmp_path, path, value):
+        main_module.load_app_config(write_full_config(tmp_path, [(path, value)]))
+
+
+class TestStreamList:
+    def test_a_missing_stream_list_is_rejected(self, tmp_path):
+        raw = copy.deepcopy(VALID_CONFIG)
+        del raw["streams"]
+
+        with pytest.raises(ValueError, match="streams must be a non-empty list"):
+            main_module.load_app_config(write_full_config(tmp_path, root=raw))
+
+    def test_a_scalar_instead_of_a_list_is_rejected(self, tmp_path):
+        with pytest.raises(ValueError, match="streams must be a non-empty list"):
+            main_module.load_app_config(
+                write_full_config(tmp_path, [(("streams",), "rtsp://127.0.0.1:8554/src1")])
+            )
+
+    @pytest.mark.parametrize(
+        ("streams", "bad_index"),
+        [
+            ([""], 0),
+            (["   "], 0),
+            (["rtsp://127.0.0.1:8554/src1", ""], 1),
+            (["rtsp://127.0.0.1:8554/src1", 42], 1),
+        ],
+    )
+    def test_a_blank_or_non_string_entry_names_its_index(self, tmp_path, streams, bad_index):
+        """The index matters: with four streams, "one of them is wrong" is not actionable."""
+        with pytest.raises(ValueError, match=rf"streams\[{bad_index}\] must be a non-empty string"):
+            main_module.load_app_config(write_full_config(tmp_path, [(("streams",), streams)]))
+
+    def test_stream_order_is_preserved(self, tmp_path):
+        """Stream order decides which Insight port each stream publishes on."""
+        streams = ["rtsp://host/c", "rtsp://host/a", "rtsp://host/b"]
+
+        cfg = main_module.load_app_config(write_full_config(tmp_path, [(("streams",), streams)]))
+
+        assert cfg.rtsp_urls == streams
+
+
+class TestInflightSentinels:
+    """-1 means unbounded; 0 and negatives other than -1 are mistakes."""
+
+    @pytest.mark.parametrize("key", ["max_inflight_per_stream", "max_inflight_total"])
+    @pytest.mark.parametrize("value", [-1, 1, 64])
+    def test_unbounded_and_positive_values_are_accepted(self, tmp_path, key, value):
+        cfg = main_module.load_app_config(write_full_config(tmp_path, [(("inference", key), value)]))
+
+        assert getattr(cfg, key) == value
+
+    @pytest.mark.parametrize("key", ["max_inflight_per_stream", "max_inflight_total"])
+    @pytest.mark.parametrize("value", [0, -2])
+    def test_zero_and_other_negatives_are_rejected(self, tmp_path, key, value):
+        with pytest.raises(ValueError, match=f"inference.{key} must be -1 or > 0"):
+            main_module.load_app_config(write_full_config(tmp_path, [(("inference", key), value)]))
+
+
+class TestMalformedConfigFiles:
+    def test_a_non_mapping_root_is_rejected(self, tmp_path):
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text("- not\n- a mapping\n", encoding="utf-8")
+
+        with pytest.raises(ValueError, match="config root must be a mapping"):
+            main_module.load_app_config(config_path)
+
+    def test_an_empty_file_is_reported_as_missing_settings_not_a_crash(self, tmp_path):
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text("", encoding="utf-8")
+
+        with pytest.raises(ValueError, match="streams must be a non-empty list"):
+            main_module.load_app_config(config_path)
