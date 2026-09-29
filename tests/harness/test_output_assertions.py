@@ -39,8 +39,8 @@ from tests.utils.pytest_fixtures import (
 )
 
 # Marked `unit` so tests/test.sh --unit runs this file: it needs no hardware and
-# no model, only the helper it tests. The repository contract tests beside it
-# need a source checkout and are deliberately unmarked.
+# no model, only the helper it tests. It lives apart from the repository
+# contract tests under tests/scripts, which need a source checkout.
 pytestmark = pytest.mark.unit
 
 

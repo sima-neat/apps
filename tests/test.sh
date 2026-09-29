@@ -874,21 +874,22 @@ run_pytest() {
 # ---------------------------------------------------------------------------
 # Harness self-tests. The shared fixtures and output assertions under
 # tests/utils are what every example test relies on, so they have tests of
-# their own under tests/scripts, marked `unit` because they need no hardware
+# their own under tests/harness, marked `unit` because they need no hardware
 # and no model. They run once, before the per-example suites, so a helper that
 # can no longer fail is caught here rather than passing silently everywhere.
-# The other files under tests/scripts are repository contract tests: they read
-# build.sh, the workflows and the portal sources, so they need a source
-# checkout, carry no marker, and are not part of this run.
+# They live apart from tests/scripts on purpose: the repository contract tests
+# there read build.sh, the workflows and the portal sources, and one of them
+# loads a script at import time, so collecting that directory needs a source
+# checkout, which the runtime CI overlays the tests onto does not have.
 #
 # The self-tests need NumPy and OpenCV (see tests/README.md). Without them
 # they skip with the package named; under --strict that skip is a failure,
 # the same rule the e2e suites apply to a missing prerequisite.
 # ---------------------------------------------------------------------------
 run_harness_pytest() {
-  local harness_dir="${ROOT_DIR}/tests/scripts"
+  local harness_dir="${ROOT_DIR}/tests/harness"
   echo ""
-  echo "  Python harness self-tests (tests/scripts, unit marker)"
+  echo "  Python harness self-tests (tests/harness)"
   echo "  $(printf '%.0s-' {1..50})"
   if [[ ! -d "${harness_dir}" ]]; then
     echo "  [FAIL] Harness self-tests are missing: ${harness_dir#${ROOT_DIR}/}"

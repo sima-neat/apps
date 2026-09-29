@@ -95,8 +95,9 @@ tests/
     e2e_config.py      # shared example-config and output helpers
     pytest_fixtures.py # shared pytest fixture implementations
     test_scope.py      # test-scope validation and query helper
+  harness/
+    test_output_assertions.py  # harness self-tests; run by test.sh --unit
   scripts/
-    test_output_assertions.py  # harness self-tests (marked unit; run by test.sh --unit)
     test_*_contract.py         # repository contract tests; need a source checkout,
                                # run with: pytest -c tests/pytest.ini tests/scripts
     testing/           # VS Code / DevKit task helpers
@@ -173,8 +174,9 @@ self-tests decode saved frames with; this is the same set CI installs:
 ${PYTHON_TEST_BIN:-python3} -m pip install pytest PyYAML "numpy<2" "opencv-python-headless<4.12"
 ```
 
-Without NumPy or OpenCV the harness self-tests skip with a message naming the
-missing package, and `--strict` turns that skip into a failure.
+Without NumPy or OpenCV the harness self-tests under `tests/harness` skip with
+a message naming the missing package, and `--strict` turns that skip into a
+failure.
 
 For a persistent local override, set `PYTHON_TEST_BIN` in `tests/configs/.env.local`.
 
