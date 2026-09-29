@@ -193,6 +193,8 @@ struct AppConfig {
   std::string model_path;
   fs::path labels_path;
   std::string source_url;
+  // Which key supplied source_url: "source.url" or the legacy "source.rtsp_url".
+  std::string source_key = "source.url";
   SourceType source_type = SourceType::Rtsp;
   SourceCodec source_codec = SourceCodec::H264;
   int latency_ms = 200;
@@ -404,6 +406,7 @@ AppConfig load_app_config(const fs::path& config_path) {
   cfg.source_url = raw.string_or("source.url", "");
   if (cfg.source_url.empty()) {
     cfg.source_url = legacy_rtsp_url;
+    cfg.source_key = "source.rtsp_url";
   }
   cfg.source_type = parse_source_type(raw.string_or("source.type", "rtsp"));
   cfg.source_codec = parse_source_codec(raw.string_or("source.codec", "h264"));
@@ -1063,9 +1066,9 @@ int main(int argc, char** argv) {
     const CliOptions cli = parse_args(argc, argv);
     const AppConfig cfg = load_app_config(cli.config_path);
     if (cli.validate_config_only) {
-      // The resolved source is reported so a test can see which of source.url
-      // and the legacy source.rtsp_url was selected, not only that one was.
-      std::cout << "Config validated: " << cli.config_path << " (source=" << cfg.source_url
+      // Reports which key supplied the source, not its value: a URL can carry
+      // credentials and this line ends up in terminal and CI logs.
+      std::cout << "Config validated: " << cli.config_path << " (source=" << cfg.source_key
                 << ")\n";
       return 0;
     }

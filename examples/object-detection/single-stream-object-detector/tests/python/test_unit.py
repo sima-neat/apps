@@ -260,6 +260,7 @@ class TestSourceCombinations:
         )
 
         assert cfg.source_url == "rtsp://127.0.0.1:8554/legacy"
+        assert cfg.source_key == "source.rtsp_url"
 
     def test_an_absent_url_falls_back_to_the_legacy_key(self, tmp_path):
         raw = copy.deepcopy(VALID_CONFIG)
@@ -269,6 +270,7 @@ class TestSourceCombinations:
         cfg = main.load_app_config(write_config(tmp_path, root=raw))
 
         assert cfg.source_url == "rtsp://127.0.0.1:8554/legacy"
+        assert cfg.source_key == "source.rtsp_url"
 
     def test_a_present_url_wins_over_the_legacy_key(self, tmp_path):
         cfg = main.load_app_config(
@@ -276,12 +278,57 @@ class TestSourceCombinations:
         )
 
         assert cfg.source_url == "rtsp://127.0.0.1:8554/src1"
+        assert cfg.source_key == "source.url"
 
     def test_both_empty_is_still_rejected(self, tmp_path):
         with pytest.raises(ValueError, match="source.url or source.rtsp_url must be set"):
             main.load_app_config(
                 write_config(tmp_path, [(("source", "url"), ""), (("source", "rtsp_url"), "")])
             )
+
+
+@pytest.mark.unit
+class TestValidateConfigOnlyOutput:
+    """`--validate-config-only` names the key that supplied the source, never the URL.
+
+    The URL can carry credentials and this line ends up in terminal and CI logs,
+    so the C++ binary prints the same line and its unit suite asserts the same.
+    """
+
+    @staticmethod
+    def _validate(config_path):
+        return subprocess.run(
+            [sys.executable, str(MAIN_PY), "--config", str(config_path), "--validate-config-only"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=str(EXAMPLE_DIR),
+        )
+
+    def test_the_legacy_key_is_reported_without_the_url(self, tmp_path):
+        result = self._validate(
+            write_config(
+                tmp_path,
+                [
+                    (("source", "url"), ""),
+                    (("source", "rtsp_url"), "rtsp://user:secret@127.0.0.1:8554/legacy"),
+                ],
+            )
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert "(source=source.rtsp_url)" in result.stdout
+        assert "secret" not in result.stdout
+        assert "rtsp://" not in result.stdout
+
+    def test_a_present_url_is_reported_as_source_url(self, tmp_path):
+        result = self._validate(
+            write_config(tmp_path, [(("source", "rtsp_url"), "rtsp://127.0.0.1:8554/legacy")])
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert "(source=source.url)" in result.stdout
+        assert "rtsp://" not in result.stdout
 
 
 @pytest.mark.unit

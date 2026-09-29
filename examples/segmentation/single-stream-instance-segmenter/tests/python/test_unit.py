@@ -156,7 +156,9 @@ output:
             tmp_path, '  url: ""', "  rtsp_url: rtsp://127.0.0.1:8554/legacy"
         )
 
-        assert main.load_app_config(config).source_url == "rtsp://127.0.0.1:8554/legacy"
+        cfg = main.load_app_config(config)
+        assert cfg.source_url == "rtsp://127.0.0.1:8554/legacy"
+        assert cfg.source_key == "source.rtsp_url"
 
     def test_an_absent_url_falls_back_to_the_legacy_key(self, tmp_path):
         config = self._source_config(tmp_path, "", "  rtsp_url: rtsp://127.0.0.1:8554/legacy")
@@ -170,13 +172,35 @@ output:
             "  rtsp_url: rtsp://127.0.0.1:8554/legacy",
         )
 
-        assert main.load_app_config(config).source_url == "rtsp://127.0.0.1:8554/src1"
+        cfg = main.load_app_config(config)
+        assert cfg.source_url == "rtsp://127.0.0.1:8554/src1"
+        assert cfg.source_key == "source.url"
 
     def test_both_empty_is_still_rejected(self, tmp_path):
         config = self._source_config(tmp_path, '  url: ""', '  rtsp_url: ""')
 
         with pytest.raises(ValueError, match="source.url or source.rtsp_url must be set"):
             main.load_app_config(config)
+
+    def test_validate_config_only_names_the_key_and_not_the_url(self, tmp_path):
+        """The URL can carry credentials and this line ends up in logs, so the
+        validated line reports the key that supplied the source. The C++ binary
+        prints the same line and its unit suite asserts the same."""
+        config = self._source_config(
+            tmp_path, '  url: ""', "  rtsp_url: rtsp://user:secret@127.0.0.1:8554/legacy"
+        )
+        r = subprocess.run(
+            [sys.executable, str(MAIN_PY), "--config", str(config), "--validate-config-only"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=str(EXAMPLE_DIR),
+        )
+
+        assert r.returncode == 0, r.stderr
+        assert "(source=source.rtsp_url)" in r.stdout
+        assert "secret" not in r.stdout
+        assert "rtsp://" not in r.stdout
 
 
 @pytest.mark.unit

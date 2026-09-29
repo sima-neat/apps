@@ -116,7 +116,7 @@ bool test_empty_url_falls_back_to_the_legacy_key(const std::string& binary) {
                           minimal_config("  url: \"\"\n"
                                          "  rtsp_url: rtsp://127.0.0.1:8554/legacy\n"));
   return expect_true(r.exit_code == 0, "empty url with a legacy rtsp_url validates") &&
-         expect_contains(r.stdout_text, "source=rtsp://127.0.0.1:8554/legacy",
+         expect_contains(r.stdout_text, "source=source.rtsp_url",
                          "empty url selects the legacy rtsp_url");
 }
 
@@ -124,7 +124,7 @@ bool test_absent_url_falls_back_to_the_legacy_key(const std::string& binary) {
   const auto r = validate(binary, "absent_url_falls_back",
                           minimal_config("  rtsp_url: rtsp://127.0.0.1:8554/legacy\n"));
   return expect_true(r.exit_code == 0, "absent url with a legacy rtsp_url validates") &&
-         expect_contains(r.stdout_text, "source=rtsp://127.0.0.1:8554/legacy",
+         expect_contains(r.stdout_text, "source=source.rtsp_url",
                          "absent url selects the legacy rtsp_url");
 }
 
@@ -133,9 +133,9 @@ bool test_present_url_wins_over_the_legacy_key(const std::string& binary) {
                           minimal_config("  url: rtsp://127.0.0.1:8554/src1\n"
                                          "  rtsp_url: rtsp://127.0.0.1:8554/legacy\n"));
   return expect_true(r.exit_code == 0, "url beside a legacy rtsp_url validates") &&
-         expect_contains(r.stdout_text, "source=rtsp://127.0.0.1:8554/src1",
-                         "present url is selected") &&
-         expect_not_contains(r.stdout_text, "legacy", "legacy rtsp_url is not selected");
+         expect_contains(r.stdout_text, "source=source.url", "present url is selected") &&
+         expect_not_contains(r.stdout_text, "source.rtsp_url", "legacy rtsp_url is not selected") &&
+         expect_not_contains(r.stdout_text, "rtsp://", "validated line does not echo the URL");
 }
 
 bool test_both_urls_empty_is_rejected(const std::string& binary) {
