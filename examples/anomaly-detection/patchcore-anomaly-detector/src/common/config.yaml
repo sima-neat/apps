@@ -34,7 +34,7 @@ scoring:
 output:
   dir: sandbox/patchcore-anomaly-detector        # Folder for annotated overlay images.
   save_every: 60
-  overlay_alpha: 0.45                           # Heatmap blend weight in the output overlay image.
+  overlay_alpha: 0.45                           # Blend weight of highlighted (above patch threshold) regions.
   insight:                                      # video_file/rtsp only: live view.
     host: <insight-host-ip>              # Host running the Insight receiver/viewer.
     video_port: 9000

@@ -41,6 +41,7 @@ IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".bmp")
 
 BACKBONE = "wide_resnet50_2"
 TORCHVISION_WEIGHTS = "IMAGENET1K_V1"
+OVERLAY_LUT_LOW = 191  # COLORMAP_JET index where highlights start (yellow); 255 is red.
 PATCH_GRID = (28, 28)  # 224x224 input -> 28x28 patch grid, see the model's compile config
 
 
@@ -247,15 +248,24 @@ def extract_from_bgr(model: "pyneat.Model", bgr, timeout_ms: int = 5000) -> "np.
 
 def draw_overlay(bgr, score_map, sigma: float, alpha: float, patch_scale_min: float,
                  patch_scale_max: float):
-    """Heatmap overlay (blue = typical, red = anomalous) on the fixed patch-score
-    scale saved in bank_meta.json, so every image is colored consistently."""
+    """Highlights only pixels whose smoothed patch score exceeds the calibrated
+    patch threshold (patch_scale_max in bank_meta.json); all other pixels are
+    left unchanged. Highlight color runs yellow -> red over a fixed calibrated
+    span: threshold .. threshold + (threshold - nominal median)."""
     h, w = bgr.shape[:2]
     heat = upsample_and_smooth(score_map, (w, h), sigma)
-    scale = max(patch_scale_max - patch_scale_min, 1e-6)
-    heat_norm = np.clip((heat - patch_scale_min) / scale, 0.0, 1.0)
-    heat_u8 = (heat_norm * 255).astype(np.uint8)
+    _, mask = cv2.threshold(heat, patch_scale_max, 255, cv2.THRESH_BINARY)
+    mask = mask.astype(np.uint8)
+    out = bgr.copy()
+    if not cv2.countNonZero(mask):
+        return out
+    span = max(patch_scale_max - patch_scale_min, 1e-6)
+    heat_u8 = cv2.convertScaleAbs(heat - patch_scale_max, alpha=(255 - OVERLAY_LUT_LOW) / span)
+    heat_u8 = cv2.add(heat_u8, OVERLAY_LUT_LOW)  # saturates at 255 (red)
     heat_color = cv2.applyColorMap(heat_u8, cv2.COLORMAP_JET)
-    return cv2.addWeighted(bgr, 1 - alpha, heat_color, alpha, 0)
+    blended = cv2.addWeighted(bgr, 1 - alpha, heat_color, alpha, 0)
+    cv2.copyTo(blended, mask, out)
+    return out
 
 
 def cmd_calibrate(cfg: AppConfig) -> int:
@@ -301,7 +311,7 @@ def cmd_calibrate(cfg: AppConfig) -> int:
         f"{len(scores)} nominal images from {threshold_dir}, x{cfg.calibration.threshold_margin} margin)"
     )
 
-    # Patch-level threshold for the overlay scale, separate from the image-level threshold.
+    # Patch-level threshold for the overlay highlight, separate from the image-level threshold.
     patch_threshold = (
         percentile_threshold(patch_scores, cfg.calibration.threshold_percentile) * cfg.calibration.threshold_margin
     )
@@ -661,20 +671,53 @@ def frame_bgr_from_sample(sample):
     return np.asarray(tensor.to_numpy(copy=True))
 
 
-def build_rtsp_graph(cfg: AppConfig, width: int, height: int, fps: int):
-    """Decodes the RTSP stream to a "frame" output; cmd_score_rtsp runs the
-    model on each pulled frame."""
+def make_rtsp_graph_model(cfg: AppConfig, width: int, height: int) -> "pyneat.Model":
+    """Model embedded in the RTSP graph: consumes the decoder's NV12 frames directly."""
+    opt = pyneat.ModelOptions()
+    opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.NV12
+    opt.preprocess.input_max_width = width
+    opt.preprocess.input_max_height = height
+    opt.preprocess.preset = pyneat.NormalizePreset.ImageNet
+    return pyneat.Model(cfg.model_path, opt)
+
+
+def build_rtsp_graph(cfg: AppConfig, model: "pyneat.Model", width: int, height: int, fps: int):
+    """RTSP source -> branch -> {model route -> "embedding", "frame"}, joined per
+    frame into "patchcore_output"."""
     source = make_rtsp_source_fragment(cfg, fps, width, height)
+    branch = pyneat.graphs.branch("source", ["model", "frame"])
+
+    model_graph = pyneat.Graph("model")
+    model_graph.connect(pyneat.nodes.input("model"), model.graph(pyneat.ModelRouteOptions()))
+    embedding_graph = pyneat.Graph("embedding")
+    embedding_graph.add(pyneat.nodes.output("embedding", pyneat.OutputOptions.every_frame(4)))
+    frame_graph = pyneat.Graph("frame")
+    frame_graph.add(pyneat.nodes.output("frame", pyneat.OutputOptions.every_frame(4)))
+    joined = pyneat.graphs.combine(["frame", "embedding"], "patchcore_output", pyneat.CombinePolicy.ByFrame)
 
     graph = pyneat.Graph("patchcore")
-    graph.connect(source, pyneat.nodes.output("frame"))
+    graph.connect(source, branch)
+    graph.connect(branch, model_graph)
+    graph.connect(model_graph, embedding_graph)
+    graph.connect(branch, frame_graph)
+    graph.connect(frame_graph, joined)
+    graph.connect(embedding_graph, joined)
 
     run_options = pyneat.RunOptions()
     run_options.preset = pyneat.RunPreset.Realtime
-    run_options.queue_depth = 3
+    # Depth 3 drops the joined output to ~26 fps on a 30 fps source; 16 keeps up.
+    run_options.queue_depth = 16
     run_options.overflow_policy = pyneat.OverflowPolicy.KeepLatest
     run_options.output_memory = pyneat.OutputMemory.ZeroCopy
-    return graph.build(run_options)
+    return graph, graph.build(run_options)
+
+
+def embedding_from_sample(sample) -> "np.ndarray":
+    field = find_field(sample, "embedding")
+    tensors = extract_tensors(field) if field is not None else []
+    if not tensors:
+        raise RuntimeError("joined output missing an embedding field")
+    return extract_hwc(np.asarray(tensors[0].to_numpy(copy=True)))
 
 
 def cmd_score_rtsp(cfg: AppConfig, bank: MemoryBank, threshold: float, num_neighbors: int,
@@ -684,8 +727,8 @@ def cmd_score_rtsp(cfg: AppConfig, bank: MemoryBank, threshold: float, num_neigh
         print(f"[FATAL] failed to resolve source geometry for {cfg.rtsp.url}", file=sys.stderr)
         return 2
 
-    model = make_image_model(cfg.model_path)
-    run = build_rtsp_graph(cfg, width, height, fps)
+    model = make_rtsp_graph_model(cfg, width, height)
+    _graph, run = build_rtsp_graph(cfg, model, width, height, fps)
     _video_graph, video_run, video_port = build_video_sender(cfg, fps, width, height)
     print(f"streaming to Insight: {cfg.output.insight_host}:{video_port}")
 
@@ -701,15 +744,17 @@ def cmd_score_rtsp(cfg: AppConfig, bank: MemoryBank, threshold: float, num_neigh
         while cfg.frames <= 0 or processed < cfg.frames:
             # Bounded pull: pull("frame", -1) can deadlock the Python binding.
             # A timeout ends the run, since later pulls also time out.
-            sample = run.pull("frame", 5000)
+            mla_start = time_ms()
+            sample = run.pull("patchcore_output", 5000)
             if sample is None:
                 print("[FATAL] timed out waiting for an RTSP frame", file=sys.stderr)
                 pull_timed_out = True
                 break
-            bgr = frame_bgr_from_sample(sample)
-            mla_start = time_ms()
-            embedding = extract_from_bgr(model, bgr, cfg.timeout_ms)
             mla_ms = time_ms() - mla_start
+            # Copy both fields out, then drop the sample so its buffers return to the pools.
+            embedding = embedding_from_sample(sample)
+            bgr = frame_bgr_from_sample(sample)
+            del sample
 
             host_start = time_ms()
             scored = bank.score(embedding, num_neighbors)

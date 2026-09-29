@@ -7,6 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -20,6 +21,23 @@ DEFECT_IMAGE = "scratch_0.png"
 
 SCORE_RE = re.compile(r"^(?P<path>.+): score=(?P<score>[-\d.]+) threshold=(?P<threshold>[-\d.]+) "
                       r"verdict=(?P<verdict>\w+)", re.MULTILINE)
+
+
+# Share of pixels a defect overlay may highlight: above zero (the defect is
+# shown) and well below the whole image (it is localized).
+MIN_DEFECT_HIGHLIGHT = 0.005
+MAX_DEFECT_HIGHLIGHT = 0.60
+
+
+def _highlighted_fraction(input_path: Path, overlay_path: Path) -> float:
+    """Fraction of pixels the overlay changed relative to the input image."""
+    import cv2
+
+    src = cv2.imread(str(input_path), cv2.IMREAD_COLOR)
+    out = cv2.imread(str(overlay_path), cv2.IMREAD_COLOR)
+    assert src is not None and out is not None, f"could not read {input_path} / {overlay_path}"
+    assert src.shape == out.shape, f"overlay shape {out.shape} != input shape {src.shape}"
+    return float(np.any(src != out, axis=2).mean())
 
 
 def _find_cpp_binary() -> Path | None:
@@ -293,6 +311,24 @@ class TestE2E:
         assert not defect_failures, (
             f"{len(defect_failures)}/{len(defect_names)} defect images were not flagged "
             f"anomalous: {defect_failures}"
+        )
+
+        # Overlays highlight only patches above the calibrated patch threshold:
+        # held-out normal overlays must be pixel-identical to their inputs, and
+        # defect overlays must highlight a localized region, not the whole image.
+        highlighted = {
+            name: _highlighted_fraction(score_dir / name, tmp_output_dir / name)
+            for name in held_out_names + defect_names
+        }
+        normal_highlighted = {n: f for n, f in highlighted.items() if n in held_out_names and f > 0}
+        assert not normal_highlighted, f"held-out normal overlays have highlighted pixels: {normal_highlighted}"
+        defect_bad = {
+            n: f for n, f in highlighted.items()
+            if n in defect_names and not MIN_DEFECT_HIGHLIGHT < f < MAX_DEFECT_HIGHLIGHT
+        }
+        assert not defect_bad, (
+            f"defect overlays not localized (expected {MIN_DEFECT_HIGHLIGHT:.0%}-"
+            f"{MAX_DEFECT_HIGHLIGHT:.0%} of pixels highlighted): {defect_bad}"
         )
 
     def test_cpp_built_bank_scores_correctly_in_python(

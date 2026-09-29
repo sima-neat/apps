@@ -4,6 +4,8 @@
 #include "support/testing/test_config.h"
 #include "support/testing/test_process.h"
 
+#include <opencv2/core.hpp>
+#include <opencv2/imgcodecs.hpp>
 #include <algorithm>
 #include <cstdlib>
 #include <filesystem>
@@ -263,9 +265,31 @@ int run_bank_model_mismatch_fails_at_load(const std::string& binary) {
   return 0;
 }
 
+// Share of pixels a defect overlay may highlight: above zero (the defect is
+// shown) and well below the whole image (it is localized).
+constexpr double kMinDefectHighlight = 0.005;
+constexpr double kMaxDefectHighlight = 0.60;
+
+// Fraction of pixels the overlay changed relative to the input image; -1 if
+// either image can't be read or their sizes differ.
+double highlighted_fraction(const fs::path& input_path, const fs::path& overlay_path) {
+  const cv::Mat src = cv::imread(input_path.string(), cv::IMREAD_COLOR);
+  const cv::Mat out = cv::imread(overlay_path.string(), cv::IMREAD_COLOR);
+  if (src.empty() || out.empty() || src.size() != out.size()) {
+    return -1.0;
+  }
+  cv::Mat diff;
+  cv::absdiff(src, out, diff);
+  cv::Mat gray;
+  cv::transform(diff, gray, cv::Matx13f(1.f, 1.f, 1.f));
+  return static_cast<double>(cv::countNonZero(gray)) / static_cast<double>(gray.total());
+}
+
 // Scores every held-out normal image and every defect image, and asserts
 // the actual pass/fail verdict on each -- not just relative ordering, and
-// not just one cherry-picked passing image.
+// not just one cherry-picked passing image. Also checks the overlays:
+// held-out normal overlays must be pixel-identical to their inputs, and
+// defect overlays must highlight a localized region.
 int run_held_out_normal_passes_and_defect_fails(const std::string& binary,
                                                 const std::string& model_path) {
   const fs::path nominal_dir = "assets/datasets/patchcore/nominal";
@@ -356,9 +380,31 @@ int run_held_out_normal_passes_and_defect_fails(const std::string& binary,
     verdicts[path.filename().string()] = {(*it)[3].str(), (*it)[2].str()};
   }
 
+  std::map<std::string, double> highlighted;
+  for (const auto& name : held_out_names) {
+    highlighted[name] = highlighted_fraction(score_dir / name, fs::path(out_dir) / name);
+  }
+  for (const auto& name : defect_names) {
+    highlighted[name] = highlighted_fraction(score_dir / name, fs::path(out_dir) / name);
+  }
   remove_dir(out_dir);
 
   int rc = 0;
+  for (const auto& name : held_out_names) {
+    if (highlighted[name] != 0.0) {
+      std::cerr << "[FAIL] held-out normal overlay " << name << " highlighted fraction "
+                << highlighted[name] << " (expected 0)\n";
+      rc = 1;
+    }
+  }
+  for (const auto& name : defect_names) {
+    const double f = highlighted[name];
+    if (!(f > kMinDefectHighlight && f < kMaxDefectHighlight)) {
+      std::cerr << "[FAIL] defect overlay " << name << " highlighted fraction " << f
+                << " (expected " << kMinDefectHighlight << "-" << kMaxDefectHighlight << ")\n";
+      rc = 1;
+    }
+  }
   std::vector<std::string> held_out_failures;
   for (const auto& name : held_out_names) {
     auto it = verdicts.find(name);
@@ -396,8 +442,9 @@ int run_held_out_normal_passes_and_defect_fails(const std::string& binary,
     rc = 1;
   }
   if (rc == 0) {
-    std::cout << "[OK] all " << held_out_names.size() << " held-out normal images pass, all "
-              << defect_names.size() << " defect images fail\n";
+    std::cout << "[OK] all " << held_out_names.size() << " held-out normal images pass with "
+              << "unhighlighted overlays, all " << defect_names.size()
+              << " defect images fail with localized highlights\n";
   }
   return rc;
 }

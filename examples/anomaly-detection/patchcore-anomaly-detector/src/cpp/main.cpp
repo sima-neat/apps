@@ -32,6 +32,7 @@ using sima_examples::time_ms;
 namespace {
 
 constexpr int kEmbedDim = 1536;
+constexpr double kOverlayLutLow = 191.0; // COLORMAP_JET index where highlights start (yellow); 255 is red.
 constexpr int kPatchGridH = 28;
 constexpr int kPatchGridW = 28;
 constexpr const char* kBackbone = "wide_resnet50_2";
@@ -226,8 +227,10 @@ std::vector<fs::path> find_images(const fs::path& dir) {
   return images;
 }
 
-/// Heatmap overlay (blue = typical, red = anomalous) on the fixed patch-score
-/// scale saved in bank_meta.json, so every image is colored consistently.
+/// Highlights only pixels whose smoothed patch score exceeds the calibrated
+/// patch threshold (patch_scale_max in bank_meta.json); all other pixels are
+/// left unchanged. Highlight color runs yellow -> red over a fixed calibrated
+/// span: threshold .. threshold + (threshold - nominal median).
 cv::Mat draw_overlay(const cv::Mat& bgr, const patchcore::AnomalyResult& result, int map_h,
                      int map_w, double sigma, double alpha, double patch_scale_min,
                      double patch_scale_max) {
@@ -238,19 +241,25 @@ cv::Mat draw_overlay(const cv::Mat& bgr, const patchcore::AnomalyResult& result,
     cv::GaussianBlur(heat, heat, cv::Size(0, 0), sigma);
   }
 
-  const double scale = std::max(patch_scale_max - patch_scale_min, 1e-6);
-  cv::Mat heat_norm;
-  heat.convertTo(heat_norm, CV_32FC1, 1.0 / scale, -patch_scale_min / scale);
-  cv::min(heat_norm, 1.0, heat_norm);
-  cv::max(heat_norm, 0.0, heat_norm);
+  const cv::Mat mask = heat > patch_scale_max;
+  cv::Mat out = bgr.clone();
+  if (cv::countNonZero(mask) == 0) {
+    return out;
+  }
+  const double span = std::max(patch_scale_max - patch_scale_min, 1e-6);
+  cv::Mat level;
+  heat.convertTo(level, CV_32FC1, 1.0 / span, -patch_scale_max / span);
+  cv::min(level, 1.0, level);
+  cv::max(level, 0.0, level);
 
   cv::Mat heat_u8;
-  heat_norm.convertTo(heat_u8, CV_8U, 255.0);
+  level.convertTo(heat_u8, CV_8U, 255.0 - kOverlayLutLow, kOverlayLutLow);
   cv::Mat heat_color;
   cv::applyColorMap(heat_u8, heat_color, cv::COLORMAP_JET);
 
-  cv::Mat out;
-  cv::addWeighted(bgr, 1.0 - alpha, heat_color, alpha, 0.0, out);
+  cv::Mat blended;
+  cv::addWeighted(bgr, 1.0 - alpha, heat_color, alpha, 0.0, blended);
+  blended.copyTo(out, mask);
   return out;
 }
 
@@ -338,7 +347,7 @@ int cmd_calibrate(const Config& cfg) {
             << threshold_num_images << " nominal images from " << threshold_dir << ", x"
             << cfg.threshold_margin << " margin)\n";
 
-  // Patch-level threshold for the overlay scale, separate from the image-level threshold.
+  // Patch-level threshold for the overlay highlight, separate from the image-level threshold.
   const float patch_threshold =
       patchcore::percentile_threshold(patch_scores, cfg.threshold_percentile) *
       static_cast<float>(cfg.threshold_margin);
@@ -654,21 +663,64 @@ struct RtspRuntime {
   simaai::neat::Run run;
 };
 
-// Decodes the RTSP stream to a "frame" output; cmd_score_rtsp runs the model on each pulled frame.
-RtspRuntime build_rtsp_runtime(const Config& cfg, const SourceGeometry& geometry) {
+// Model embedded in the RTSP graph: consumes the decoder's NV12 frames directly.
+simaai::neat::Model::Options rtsp_graph_model_options(const SourceGeometry& geometry) {
+  simaai::neat::Model::Options opt;
+  opt.preprocess.color_convert.input_format = simaai::neat::PreprocessColorFormat::NV12;
+  opt.preprocess.input_max_width = geometry.width;
+  opt.preprocess.input_max_height = geometry.height;
+  opt.preprocess.preset = simaai::neat::NormalizePreset::ImageNet;
+  return opt;
+}
+
+// RTSP source -> branch -> {model route -> "embedding", "frame"}, joined per frame into
+// "patchcore_output".
+RtspRuntime build_rtsp_runtime(const Config& cfg, const SourceGeometry& geometry,
+                               simaai::neat::Model& model) {
   RtspRuntime rt;
   auto source = make_rtsp_source_fragment(cfg, geometry);
+  auto branch = simaai::neat::graphs::Branch("source", {"model", "frame"});
+
+  simaai::neat::Graph model_graph("model");
+  model_graph.connect(simaai::neat::nodes::Input("model"),
+                      model.graph(simaai::neat::Model::RouteOptions{}));
+  simaai::neat::Graph embedding_graph("embedding");
+  embedding_graph.add(
+      simaai::neat::nodes::Output("embedding", simaai::neat::OutputOptions::EveryFrame(4)));
+  simaai::neat::Graph frame_graph("frame");
+  frame_graph.add(simaai::neat::nodes::Output("frame", simaai::neat::OutputOptions::EveryFrame(4)));
+  auto joined = simaai::neat::graphs::Combine({"frame", "embedding"}, "patchcore_output",
+                                              simaai::neat::CombinePolicy::ByFrame);
 
   rt.graph = simaai::neat::Graph("patchcore");
-  rt.graph.connect(source, simaai::neat::nodes::Output("frame"));
+  rt.graph.connect(source, branch);
+  rt.graph.connect(branch, model_graph);
+  rt.graph.connect(model_graph, embedding_graph);
+  rt.graph.connect(branch, frame_graph);
+  rt.graph.connect(frame_graph, joined);
+  rt.graph.connect(embedding_graph, joined);
 
   simaai::neat::RunOptions run_options;
   run_options.preset = simaai::neat::RunPreset::Realtime;
-  run_options.queue_depth = 3;
+  // Depth 3 drops the joined output to ~26 fps on a 30 fps source; 16 keeps up.
+  run_options.queue_depth = 16;
   run_options.overflow_policy = simaai::neat::OverflowPolicy::KeepLatest;
   run_options.output_memory = simaai::neat::OutputMemory::ZeroCopy;
   rt.run = rt.graph.build(run_options);
   return rt;
+}
+
+patchcore::PatchEmbeddings embedding_from_sample(const simaai::neat::Sample& sample) {
+  const auto* field = find_field(sample, "embedding");
+  if (field == nullptr) {
+    throw std::runtime_error("joined output missing an embedding field");
+  }
+  const auto tensors = simaai::neat::tensors_from_sample(*field, true);
+  if (tensors.empty()) {
+    throw std::runtime_error("embedding field has no tensor");
+  }
+  const auto& t = tensors.front();
+  return patchcore::extract_hwc(t.shape, sima_examples::tensor_to_floats(t), kEmbedDim);
 }
 
 int cmd_score_rtsp(const Config& cfg, const patchcore::MemoryBank& bank, float threshold,
@@ -679,8 +731,8 @@ int cmd_score_rtsp(const Config& cfg, const patchcore::MemoryBank& bank, float t
     return 2;
   }
 
-  simaai::neat::Model model(cfg.model_path, image_model_options());
-  auto rt = build_rtsp_runtime(cfg, geometry);
+  simaai::neat::Model model(cfg.model_path, rtsp_graph_model_options(geometry));
+  auto rt = build_rtsp_runtime(cfg, geometry, model);
   auto video_sender = build_video_sender(cfg, geometry.fps, geometry.width, geometry.height);
   std::cout << "streaming to Insight: " << cfg.insight_host << ":" << video_sender.port << "\n";
 
@@ -692,21 +744,26 @@ int cmd_score_rtsp(const Config& cfg, const patchcore::MemoryBank& bank, float t
   int processed = 0;
   int write_failures = 0;
   while (cfg.frames <= 0 || processed < cfg.frames) {
-    simaai::neat::Sample sample;
-    simaai::neat::PullError pull_error;
-    // -1 waits forever, so a network stall doesn't end the loop.
-    const auto status = rt.run.pull("frame", -1, sample, &pull_error);
-    if (status == simaai::neat::PullStatus::Closed) {
-      break;
+    cv::Mat bgr;
+    patchcore::PatchEmbeddings embedding;
+    double mla_ms = 0.0;
+    {
+      simaai::neat::Sample sample;
+      simaai::neat::PullError pull_error;
+      const double mla_start = time_ms();
+      // -1 waits forever, so a network stall doesn't end the loop.
+      const auto status = rt.run.pull("patchcore_output", -1, sample, &pull_error);
+      if (status == simaai::neat::PullStatus::Closed) {
+        break;
+      }
+      if (status != simaai::neat::PullStatus::Ok) {
+        throw std::runtime_error("failed to pull output: " + pull_error.message);
+      }
+      mla_ms = time_ms() - mla_start;
+      // Copy both fields out; the sample (and its pooled buffers) is released at scope end.
+      embedding = embedding_from_sample(sample);
+      bgr = frame_bgr_from_sample(sample);
     }
-    if (status != simaai::neat::PullStatus::Ok) {
-      throw std::runtime_error("failed to pull output: " + pull_error.message);
-    }
-
-    const cv::Mat bgr = frame_bgr_from_sample(sample);
-    const double mla_start = time_ms();
-    const auto embedding = extract_from_bgr(model, bgr, cfg.timeout_ms);
-    const double mla_ms = time_ms() - mla_start;
 
     const double host_start = time_ms();
     const auto scored = bank.score(embedding, num_neighbors);

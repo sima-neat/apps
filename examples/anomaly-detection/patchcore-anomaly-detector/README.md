@@ -102,7 +102,7 @@ python3 ${APP_DIR}/src/python/main.py \
   --config ${APP_DIR}/src/common/config.yaml
 ```
 
-Every processed image/frame prints its score, the configured threshold, and the pass/fail verdict. `image_dir` writes annotated heatmap overlays to `output.dir`; `video_file`/`rtsp` additionally stream the live overlay to Insight (`output.insight.host`/`video_port`) and, if `output.save_every > 0`, also save periodic snapshots to `output.dir`.
+Every processed image/frame prints its score, the configured threshold, and the pass/fail verdict. `image_dir` writes overlays to `output.dir` in which only regions scoring above the calibrated patch threshold are highlighted (yellow to red); normal regions are left unchanged; `video_file`/`rtsp` additionally stream the live overlay to Insight (`output.insight.host`/`video_port`) and, if `output.save_every > 0`, also save periodic snapshots to `output.dir`.
 
 ```
 assets/datasets/patchcore/images/scratch_0.png: score=30.8839 threshold=19.4000 verdict=ANOMALOUS (mla=42.1ms host=6.7ms)
