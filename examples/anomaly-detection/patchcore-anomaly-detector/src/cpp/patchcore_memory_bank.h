@@ -4,8 +4,8 @@
 /// anomaly scoring -- non-parametric, so it runs host-side rather than in
 /// the compiled graph. On-disk pair: `memory_bank.npy` (float32 (N,
 /// embed_dim) coreset, numpy.save layout) and `bank_meta.json` (model hash,
-/// calibration params, threshold). See patchcore_scoring.py for the
-/// byte-identical Python implementation this mirrors.
+/// calibration params, threshold). patchcore_scoring.py is the Python
+/// implementation of the same format.
 
 #include <cstddef>
 #include <cstdint>
@@ -44,11 +44,8 @@ struct AnomalyResult {
   float image_score = 0.0f;     // PatchCore-reweighted image-level anomaly score
 };
 
-/// Greedy k-center (farthest-point) coreset selection, matching the
-/// PatchCore paper's subsampling strategy, but in the full `embed_dim`-
-/// dimensional space rather than a random low-dimensional projection
-/// (simpler, at the cost of build time on very large nominal sets).
-/// `vectors` is a row-major (n, embed_dim) pool; returns the selected row
+/// Greedy k-center (farthest-point) coreset selection in the full
+/// `embed_dim` space. `vectors` is a row-major (n, embed_dim) pool; returns the selected row
 /// indices, sized `max(1, round(n * ratio))`.
 std::vector<std::size_t> greedy_coreset_indices(const std::vector<float>& vectors,
                                                 std::size_t embed_dim, double ratio,
@@ -91,10 +88,8 @@ float percentile_threshold(std::vector<float> scores, double percentile);
 /// interpret `memory_bank.npy` without hard-coding it in application source.
 struct BankMeta {
   std::string model_sha256;
-  // Pins this metadata to the exact memory_bank.npy it was derived from -- the
-  // threshold below is only valid for that bank's score distribution. Empty
-  // for bank_meta.json files written before this field existed; verify_bank_hash
-  // skips the check in that case rather than failing.
+  // Pins this metadata to the memory_bank.npy its threshold was derived from.
+  // Empty when absent from bank_meta.json; verify_bank_hash then skips the check.
   std::string bank_sha256;
   std::string model_filename;
   std::string backbone;
@@ -111,9 +106,7 @@ struct BankMeta {
   double threshold_value = 0.0;
   double threshold_percentile = 0.0;
   int threshold_num_images = 0;
-  // Separate from threshold_value above: fixes the overlay's color scale
-  // (see draw_overlay). Absent for bank_meta.json files written before this
-  // field existed; callers must recalibrate.
+  // Overlay color scale, separate from threshold_value. If absent, recalibrate.
   bool has_patch_threshold = false;
   double patch_threshold_value = 0.0;
   double patch_threshold_scale_min = 0.0;
@@ -128,15 +121,11 @@ void save_bank_meta(const std::filesystem::path& path, const BankMeta& meta);
 std::string current_utc_timestamp();
 
 /// Throws `std::runtime_error` if `meta.model_sha256` does not match the sha256
-/// of `model_path` -- a mismatched bank silently produces meaningless scores
-/// instead of failing, which this check turns into a load-time error.
+/// of `model_path`.
 void verify_bank_matches_model(const BankMeta& meta, const std::filesystem::path& model_path);
 
 /// Throws `std::runtime_error` if `meta.bank_sha256` is set and does not match
-/// the sha256 of `bank_path` -- proves the bank and the threshold derived from
-/// it are the ones actually paired, which verify_bank_matches_model alone
-/// cannot: an interrupted calibration or a bank swapped in from a different
-/// run still has the right model hash but the wrong score distribution.
+/// the sha256 of `bank_path`, i.e. the bank is not the one the threshold came from.
 void verify_bank_hash(const BankMeta& meta, const std::filesystem::path& bank_path);
 
 } // namespace patchcore

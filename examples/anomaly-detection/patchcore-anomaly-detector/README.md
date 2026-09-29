@@ -23,8 +23,6 @@ Detects visual anomalies in industrial images or video using a compiled WideResN
 ## Prerequisites
 
 - `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
-- To run the Python variant: the Neat runtime's Python virtual environment at `~/pyneat`, created once when the Neat runtime is installed on the target (part of standard DevKit/SDK setup, not this app's install step) -- see the `sima-cli` documentation above.
-- For full `video_file`/`rtsp` frame rate in the Python variant: `~/pyneat`'s numpy needs a real BLAS backend. Some DevKit images ship an apt-installed numpy linked against plain reference BLAS (no threading, no vectorized matmul), not a PyPI wheel's bundled OpenBLAS -- check with `python3 -c "import numpy; numpy.show_config()"` (look for `openblas` under `found: true`; a build with only `blas`/`lapack` and no BLAS library listed is the reference build). If so, `source ~/pyneat/bin/activate && pip install numpy==1.26.4` (the newest version still within pyneat's own `numpy<2,>=1.24` pin) swaps in a real OpenBLAS build; this app's own single-threaded-BLAS default (see `main.py`'s top-of-file `OPENBLAS_NUM_THREADS`) is safe either way -- it's a no-op against reference BLAS and roughly doubles video/rtsp throughput against OpenBLAS on hardware this was measured on.
 - For `source.type: rtsp`, an RTSP H.264, H.265, or MJPEG source reachable from the target.
 - For `source.type: video_file` or `rtsp`, [Insight](https://developer.sima.ai/software/tools/insight/) (or another RTP receiver) to view the live annotated stream.
 
@@ -37,6 +35,16 @@ APP_DIR=examples/anomaly-detection/patchcore-anomaly-detector
 ```
 
 Run the remaining commands from `prebuilt-apps/`.
+
+## Set Up Python
+
+Skip this section if you only run the C++ variant. The Python variant runs in the `pyneat` Python environment that the Apps installer sets up with Neat Core (`~/pyneat` by default). Activate it (in every new shell), confirm `pyneat` imports, and install this app's requirements:
+
+```bash
+source ~/pyneat/bin/activate
+python3 -c "import pyneat"
+pip install -r ${APP_DIR}/src/python/requirements.txt
+```
 
 ## Prepare the Model
 
@@ -64,11 +72,9 @@ To calibrate against your own inspection target instead, point `calibration.nomi
 ./${APP_DIR}/src/cpp/pre-built/patchcore-anomaly-detector --calibrate --config ${APP_DIR}/src/common/config.yaml
 ```
 
-or, with the Python variant:
+or, with the Python variant (after [Set Up Python](#set-up-python)):
 
 ```bash
-source ~/pyneat/bin/activate
-pip install -r ${APP_DIR}/src/python/requirements.txt
 python3 ${APP_DIR}/src/python/main.py --calibrate --config ${APP_DIR}/src/common/config.yaml
 ```
 
@@ -89,9 +95,9 @@ Open `${APP_DIR}/src/common/config.yaml`. Set `model.path`, `source.type` and it
 
 ### Python
 
+After [Set Up Python](#set-up-python):
+
 ```bash
-source ~/pyneat/bin/activate
-pip install -r ${APP_DIR}/src/python/requirements.txt
 python3 ${APP_DIR}/src/python/main.py \
   --config ${APP_DIR}/src/common/config.yaml
 ```
@@ -106,9 +112,10 @@ Done: 10 images processed -- overlays written to sandbox/patchcore-anomaly-detec
 
 ## Troubleshooting
 
+- `ModuleNotFoundError: No module named 'pyneat'`: activate the `pyneat` environment (see [Set Up Python](#set-up-python)).
 - `memory bank not found`: run `--calibrate` first.
 - `memory bank was built against a different model package`: `model.path` changed since the last `--calibrate`; rebuild the bank.
-- `bank_meta.json is missing patch_threshold`: bank was built before this field existed; recalibrate.
+- `bank_meta.json is missing patch_threshold`: rerun `--calibrate` to regenerate the bank.
 - Confirm `source.image_dir` / `source.video_path` / `source.rtsp.url` matches the configured `source.type`.
 - `rtsp`: `failed to resolve source geometry` -- the stream wasn't reachable, or (for `codec: h265`/`mjpeg`) didn't expose probeable width/height; set `source.rtsp.width`/`height` explicitly.
 - Nothing appears in Insight: confirm `output.insight.host` is reachable and Insight is listening on the configured `video_port`/`channel`.

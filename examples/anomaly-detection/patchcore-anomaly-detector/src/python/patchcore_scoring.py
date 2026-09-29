@@ -52,11 +52,9 @@ def extract_hwc(embedding: np.ndarray, embed_dim: int = EMBED_DIM) -> np.ndarray
 
 
 def _pairwise_l2(query: np.ndarray, bank64: np.ndarray, bank_sq: np.ndarray) -> np.ndarray:
-    """query: (N, C), bank: (M, C) -> (N, M) L2 distances, via the expand-and-dot
-    identity: ||q-b||^2 = ||q||^2 + ||b||^2 - 2*q.b, computed entirely in
-    float64 (not just the final combine step -- widening only that step
-    can't recover precision a float32 matmul already lost). `bank64`/
-    `bank_sq` are `MemoryBank`'s precomputed float64 copies (see __init__)."""
+    """query: (N, C), bank: (M, C) -> (N, M) L2 distances, computed in float64
+    so scores match the C++ implementation. `bank64`/`bank_sq` are
+    `MemoryBank`'s precomputed float64 bank and squared norms."""
     query64 = query.astype(np.float64)
     q_sq = np.einsum("ij,ij->i", query64, query64)[:, None]  # (N, 1)
     cross = query64 @ bank64.T  # (N, M), float64 BLAS matmul
@@ -100,8 +98,7 @@ class MemoryBank:
         if vectors.ndim != 2:
             raise ValueError(f"memory bank must be a 2D (N, embed_dim) array, got shape {vectors.shape}")
         self.vectors = np.ascontiguousarray(vectors, dtype=np.float32)
-        # Precomputed once per bank rather than on every score() call --
-        # _pairwise_l2 needs both, and the bank itself never changes.
+        # Precomputed once for _pairwise_l2.
         self._bank64 = self.vectors.astype(np.float64)
         self._bank_sq = np.einsum("ij,ij->i", self._bank64, self._bank64)
 
@@ -215,11 +212,7 @@ def build_bank_meta(
     return {
         "model_sha256": sha256_file(model_path),
         "model_filename": Path(model_path).name,
-        # Pins bank_meta.json to the exact memory_bank.npy it was derived from --
-        # the threshold above is only valid for the score distribution that
-        # specific bank produces, so a bank swapped in from a different
-        # calibration run (same model, different coreset) must not be scored
-        # against this threshold silently.
+        # Pins this metadata to the memory_bank.npy its threshold was derived from.
         "bank_sha256": sha256_file(bank_path),
         "backbone": backbone,
         "torchvision_weights": torchvision_weights,
@@ -236,12 +229,7 @@ def build_bank_meta(
             "percentile": threshold_percentile,
             "num_images": threshold_num_images,
         },
-        # Separate from "threshold" above: that one gates the per-image
-        # verdict; this one fixes the overlay's color scale to the nominal
-        # patch distribution (see draw_overlay). Deliberately not the same
-        # number -- see cmd_calibrate. "value" is unused by the overlay itself
-        # (kept for tooling/inspection); scale_min/scale_max are what
-        # draw_overlay actually maps to the colormap's low/high ends.
+        # Overlay color scale (scale_min/scale_max); separate from the image-level threshold.
         "patch_threshold": {
             "value": patch_threshold,
             "scale_min": patch_scale_min,
@@ -277,9 +265,7 @@ def verify_bank_matches_model(meta: dict, model_path: str | Path) -> None:
 
 def verify_bank_hash(meta: dict, bank_path: str | Path) -> None:
     """Raises RuntimeError if the bank file's contents don't match the hash
-    bank_meta.json was saved with (catches a swapped-in bank passing the
-    model-hash check but paired with the wrong threshold). Older meta files
-    without `bank_sha256` skip this rather than fail."""
+    bank_meta.json was saved with. Skipped when `bank_sha256` is absent."""
     expected = meta.get("bank_sha256")
     if expected is None:
         return

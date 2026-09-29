@@ -226,10 +226,8 @@ std::vector<fs::path> find_images(const fs::path& dir) {
   return images;
 }
 
-/// Heatmap overlay (blue = typical, red = anomalous) on a fixed scale
-/// calibrated from nominal patch scores (patch_scale_min/max from
-/// bank_meta.json), not this image's own min/max -- per-image scaling would
-/// make ordinary texture variation look as "hot" as a real defect.
+/// Heatmap overlay (blue = typical, red = anomalous) on the fixed patch-score
+/// scale saved in bank_meta.json, so every image is colored consistently.
 cv::Mat draw_overlay(const cv::Mat& bgr, const patchcore::AnomalyResult& result, int map_h,
                      int map_w, double sigma, double alpha, double patch_scale_min,
                      double patch_scale_max) {
@@ -340,9 +338,7 @@ int cmd_calibrate(const Config& cfg) {
             << threshold_num_images << " nominal images from " << threshold_dir << ", x"
             << cfg.threshold_margin << " margin)\n";
 
-  // Separate, patch-scoped threshold for the heatmap overlay (see
-  // draw_overlay) -- not the image-level threshold above, which is
-  // reweighted by neighborhood diversity and answers a different question.
+  // Patch-level threshold for the overlay scale, separate from the image-level threshold.
   const float patch_threshold =
       patchcore::percentile_threshold(patch_scores, cfg.threshold_percentile) *
       static_cast<float>(cfg.threshold_margin);
@@ -399,9 +395,7 @@ int cmd_score_image_dir(const Config& cfg, const patchcore::MemoryBank& bank, fl
     return 3;
   }
   fs::create_directories(cfg.output_dir);
-  // fs::equivalent follows symlinks: writing overlays into the input directory
-  // (directly or via a symlink alias) would silently replace the original
-  // images with their overlays.
+  // fs::equivalent follows symlinks, so a symlinked alias of the input directory is rejected too.
   if (fs::equivalent(cfg.output_dir, cfg.image_dir)) {
     std::cerr << "[FATAL] output.dir (" << cfg.output_dir << ") must not be the same as "
               << "source.image_dir (" << cfg.image_dir << ") -- this would overwrite the input images\n";
@@ -444,8 +438,7 @@ int cmd_score_image_dir(const Config& cfg, const patchcore::MemoryBank& bank, fl
   }
   std::cout << "Done: " << processed << " images processed -- overlays written to " << cfg.output_dir
             << "\n";
-  // A partial run (some overlays written, some failed) is still a failure --
-  // the caller asked for every input scored, not "at least one."
+  // Any failed write fails the run.
   if (write_failures > 0) {
     std::cerr << "[FATAL] " << write_failures << " overlay(s) failed to write\n";
     return 3;
@@ -661,11 +654,7 @@ struct RtspRuntime {
   simaai::neat::Run run;
 };
 
-// Decode-only graph -- the model is deliberately NOT embedded here; this
-// function and cmd_score_rtsp score each pulled frame host-side instead. An
-// embedded-model graph hits [resource.output_pool_exhausted] once real
-// per-frame work competes with its hardcoded 4-buffer output pool -- see the
-// PR description for the full reproduction.
+// Decodes the RTSP stream to a "frame" output; cmd_score_rtsp runs the model on each pulled frame.
 RtspRuntime build_rtsp_runtime(const Config& cfg, const SourceGeometry& geometry) {
   RtspRuntime rt;
   auto source = make_rtsp_source_fragment(cfg, geometry);
@@ -783,15 +772,13 @@ int main(int argc, char** argv) {
     const auto bank = patchcore::MemoryBank::load(cfg.memory_bank_path);
     const auto threshold = static_cast<float>(meta.threshold_value);
     if (!meta.has_patch_threshold) {
-      std::cerr << "[FATAL] bank_meta.json is missing patch_threshold.scale_min (built before "
-                << "this field existed); recalibrate with --calibrate to regenerate it\n";
+      std::cerr << "[FATAL] bank_meta.json is missing patch_threshold.scale_min; "
+                << "recalibrate with --calibrate to regenerate it\n";
       return 2;
     }
     const double patch_scale_min = meta.patch_threshold_scale_min;
     const double patch_scale_max = meta.patch_threshold_scale_max;
-    // Score with the num_neighbors the bank was calibrated with, not the
-    // live config -- it changes the score distribution the threshold was
-    // derived from.
+    // Use the calibrated num_neighbors; the saved threshold depends on it.
     const int num_neighbors = meta.num_neighbors;
     if (num_neighbors != cfg.num_neighbors) {
       std::cerr << "[WARN] scoring.num_neighbors=" << cfg.num_neighbors

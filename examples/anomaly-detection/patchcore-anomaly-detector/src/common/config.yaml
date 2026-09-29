@@ -18,25 +18,14 @@ memory_bank:                                    # Host-side kNN reference set (n
   meta_path: sandbox/patchcore-anomaly-detector/bank_meta.json   # Model hash, coreset stats, and threshold.
 
 calibration:                                    # Used only by --calibrate.
-  nominal_images_dir: assets/datasets/patchcore/nominal   # Shipped demo set (16 real known-good images);
-                                                 # point this at your own inspection target's known-good images.
-  coreset_ratio: 0.0004                         # Fraction of nominal patches kept via greedy k-center.
-                                                 # Smaller = faster score() but a coarser bank; recalibrate
-                                                 # (--calibrate) after changing this. Tuned for the shipped
-                                                 # 16-image nominal set (12544 total patches) to keep the
-                                                 # bank near the same size (~5 vectors) validated for
-                                                 # >25fps on video/rtsp; a larger nominal set at this same
-                                                 # ratio scales the bank size (and per-frame cost) with it.
+  nominal_images_dir: assets/datasets/patchcore/nominal   # Demo set (16 known-good images); use your own.
+  coreset_ratio: 0.0004                         # Fraction of nominal patches kept in the bank. Smaller is
+                                                 # faster but coarser; bank size grows with the nominal set.
   seed: 0
   threshold_percentile: 99.0                    # Decision threshold = this percentile of nominal scores.
   threshold_images_dir: ""                      # Optional held-out nominal set; "" reuses nominal_images_dir.
-  threshold_margin: 1.2                         # Multiplier on top of the percentile threshold. The percentile
-                                                 # alone is capped by the highest score already present in the
-                                                 # nominal set, so it cannot absorb score inflation from sources
-                                                 # calibration never sees -- e.g. the unavoidable RGB<->YUV
-                                                 # rounding a video/RTSP source introduces even losslessly, which
-                                                 # this shipped nominal set's tight bank (coreset_ratio above)
-                                                 # has almost no headroom for. 1.0 = no margin.
+  threshold_margin: 1.2                         # Multiplier on the percentile threshold, for headroom on
+                                                 # video/rtsp input. 1.0 = no margin.
 
 scoring:
   num_neighbors: 9                              # Neighborhood-reweighting support-set size (paper Eq. 7-8).
@@ -53,7 +42,6 @@ output:
     bitrate_kbps: 4000                          # H.264 encoder bitrate for the pushed video stream.
 
 runtime:
-  timeout_ms: 15000                             # Per-frame model-inference timeout (rtsp's own frame wait retries
-                                                 # indefinitely on a network stall or startup delay instead of giving up).
+  timeout_ms: 15000                             # Per-frame model-inference timeout.
   frames: 0                                     # video_file/rtsp frame limit; 0 = run until the source ends.
-  profile: false                                # Reserved for future per-stage profiling output.
+  profile: false                                # Reserved; currently unused.

@@ -323,9 +323,7 @@ MemoryBank MemoryBank::build(const std::vector<PatchEmbeddings>& per_image_embed
 namespace {
 
 /// Sum of squared differences between two length-`n` float arrays,
-/// accumulated in double. Deliberately not the expand-and-dot identity
-/// (||q-b||^2 = ||q||^2 + ||b||^2 - 2*q.b) -- that cancels precision when q
-/// is close to a bank row; a direct per-element difference doesn't.
+/// accumulated in double for precision when `a` is close to `b`.
 inline double squared_diff_sum(const float* a, const float* b, std::size_t n) {
   double acc = 0.0;
   for (std::size_t c = 0; c < n; ++c) {
@@ -355,9 +353,8 @@ AnomalyResult MemoryBank::score(const PatchEmbeddings& embeddings, int num_neigh
     return static_cast<float>(std::sqrt(squared_diff_sum(q, bank_row(b), embed_dim_)));
   };
 
-  // Dominant cost of score(): brute-force nearest-neighbor search, patches
-  // independent so parallel with no locking, thread count capped below
-  // hardware_concurrency() to leave headroom for the rest of the pipeline.
+  // Brute-force nearest-neighbor search, parallel over patches; the thread count
+  // stays below hardware_concurrency() to leave headroom for the pipeline.
   auto scan_patch_range = [&](std::size_t start, std::size_t stop, float& best_score,
                               std::size_t& best_patch) {
     best_score = -std::numeric_limits<float>::infinity();

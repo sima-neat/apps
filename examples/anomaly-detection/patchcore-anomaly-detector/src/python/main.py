@@ -247,10 +247,8 @@ def extract_from_bgr(model: "pyneat.Model", bgr, timeout_ms: int = 5000) -> "np.
 
 def draw_overlay(bgr, score_map, sigma: float, alpha: float, patch_scale_min: float,
                  patch_scale_max: float):
-    """Heatmap overlay (blue = typical, red = anomalous) on a fixed scale
-    calibrated from nominal patch scores (patch_scale_min/max from
-    bank_meta.json), not this image's own min/max -- per-image scaling would
-    make ordinary texture variation look as "hot" as a real defect."""
+    """Heatmap overlay (blue = typical, red = anomalous) on the fixed patch-score
+    scale saved in bank_meta.json, so every image is colored consistently."""
     h, w = bgr.shape[:2]
     heat = upsample_and_smooth(score_map, (w, h), sigma)
     scale = max(patch_scale_max - patch_scale_min, 1e-6)
@@ -303,11 +301,7 @@ def cmd_calibrate(cfg: AppConfig) -> int:
         f"{len(scores)} nominal images from {threshold_dir}, x{cfg.calibration.threshold_margin} margin)"
     )
 
-    # Separate, patch-scoped threshold for the heatmap overlay (see
-    # draw_overlay) -- not the image-level threshold above, which is
-    # reweighted by neighborhood diversity and answers a different question.
-    # Same threshold_margin applied here so "hot" in the overlay agrees with
-    # the margin-padded image-level verdict.
+    # Patch-level threshold for the overlay scale, separate from the image-level threshold.
     patch_threshold = (
         percentile_threshold(patch_scores, cfg.calibration.threshold_percentile) * cfg.calibration.threshold_margin
     )
@@ -357,8 +351,7 @@ def cmd_score_image_dir(cfg: AppConfig, bank: MemoryBank, threshold: float, num_
         return 3
     output_dir = Path(cfg.output.dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    # Resolved (symlink-following) comparison: writing overlays into the input
-    # directory would silently replace the original images with their overlays.
+    # resolve() follows symlinks, so a symlinked alias of the input directory is rejected too.
     if output_dir.resolve() == Path(cfg.image_dir).resolve():
         print(
             f"[FATAL] output.dir ({cfg.output.dir}) must not be the same as "
@@ -399,8 +392,7 @@ def cmd_score_image_dir(cfg: AppConfig, bank: MemoryBank, threshold: float, num_
         processed += 1
 
     print(f"Done: {processed} images processed -- overlays written to {output_dir}")
-    # A partial run (some overlays written, some failed) is still a failure --
-    # the caller asked for every input scored, not "at least one."
+    # Any failed write fails the run.
     if write_failures > 0:
         print(f"[FATAL] {write_failures} overlay(s) failed to write", file=sys.stderr)
         return 3
@@ -576,10 +568,7 @@ def probe_rtsp_capture(url: str) -> tuple[int, int, int]:
 
 def resolve_rtsp_geometry(cfg: AppConfig) -> tuple[int, int, int]:
     width, height, fps = probe_ffprobe(cfg)
-    # Configured hints take priority over probed values -- required for
-    # h265/mjpeg, whose caps aren't self-describing the way H.264 SPS is, so
-    # probing frequently can't discover dimensions at all (matches main.cpp's
-    # probe_rtsp_geometry).
+    # Configured width/height override probed values; h265/mjpeg often can't be probed.
     width = cfg.rtsp.width if cfg.rtsp.width > 0 else width
     height = cfg.rtsp.height if cfg.rtsp.height > 0 else height
     if width <= 0 or height <= 0 or fps <= 0:
@@ -662,10 +651,7 @@ def frame_bgr_from_sample(sample):
     tensor = tensors[0]
     if tensor.is_nv12():
         width, height = tensor_dim(tensor, "width"), tensor_dim(tensor, "height")
-        # .contiguous() repacks a row-padded plane before the raw byte copy --
-        # without it, a stride wider than width (common for hardware-aligned
-        # buffers) reads padding as pixel data and shifts every row after the
-        # first. Matches C++'s nv12_to_bgr and every multi-stream Python example.
+        # .contiguous() drops row padding so the byte copy matches width * height.
         payload = np.frombuffer(tensor.contiguous().copy_payload_bytes(), dtype=np.uint8)
         expected = width * height * 3 // 2
         if payload.size < expected:
@@ -676,12 +662,8 @@ def frame_bgr_from_sample(sample):
 
 
 def build_rtsp_graph(cfg: AppConfig, width: int, height: int, fps: int):
-    """Decode-only graph: the model is deliberately NOT embedded here; this
-    just wires the RTSP source to a "frame" output, and cmd_score_rtsp scores
-    each pulled frame host-side instead. An embedded-model graph hits
-    [resource.output_pool_exhausted] once real per-frame work competes with
-    its hardcoded 4-buffer output pool -- see the PR description for the
-    full reproduction."""
+    """Decodes the RTSP stream to a "frame" output; cmd_score_rtsp runs the
+    model on each pulled frame."""
     source = make_rtsp_source_fragment(cfg, fps, width, height)
 
     graph = pyneat.Graph("patchcore")
@@ -717,11 +699,8 @@ def cmd_score_rtsp(cfg: AppConfig, bank: MemoryBank, threshold: float, num_neigh
     pull_timed_out = False
     try:
         while cfg.frames <= 0 or processed < cfg.frames:
-            # Bounded pull, not pull("frame", -1) -- that deadlocks the
-            # pyneat Python binding against the decoder thread on this SDK
-            # version. Don't retry on a timeout either: once one pull() call
-            # times out, every later one does too, so retrying just spins
-            # instead of hanging once -- report and end the run instead.
+            # Bounded pull: pull("frame", -1) can deadlock the Python binding.
+            # A timeout ends the run, since later pulls also time out.
             sample = run.pull("frame", 5000)
             if sample is None:
                 print("[FATAL] timed out waiting for an RTSP frame", file=sys.stderr)
@@ -803,16 +782,14 @@ def main(argv: list[str] | None = None) -> int:
         threshold = float(meta["threshold"]["value"])
         if "patch_threshold" not in meta or "scale_min" not in meta["patch_threshold"]:
             print(
-                "[FATAL] bank_meta.json is missing patch_threshold.scale_min (built before "
-                "this field existed); recalibrate with --calibrate to regenerate it",
+                "[FATAL] bank_meta.json is missing patch_threshold.scale_min; "
+                "recalibrate with --calibrate to regenerate it",
                 file=sys.stderr,
             )
             return 2
         patch_scale_min = float(meta["patch_threshold"]["scale_min"])
         patch_scale_max = float(meta["patch_threshold"]["scale_max"])
-        # Score with the num_neighbors the bank was calibrated with, not the
-        # live config -- it changes the score distribution the threshold was
-        # derived from.
+        # Use the calibrated num_neighbors; the saved threshold depends on it.
         num_neighbors = int(meta["num_neighbors"])
         if num_neighbors != cfg.scoring.num_neighbors:
             print(
