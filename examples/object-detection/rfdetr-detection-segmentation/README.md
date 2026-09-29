@@ -164,8 +164,9 @@ as `RF-DETR detection configuration is valid`.
   downloaded archive for the selected task and variant. This is specific to the
   Python entrypoint, where a blank value becomes the literal string `None` and
   slips past validation, so the failure appears only once the run starts. The
-  C++ binary rejects the same config during validation with
-  `model.<task> backbone and transformer must be set`.
+  C++ binary rejects the same config during validation, naming the selected
+  variant, for example
+  `model.detection.small.backbone and transformer must be set`.
 - `failed to resolve RTSP width, height, and FPS` means the source could not be
   probed, usually because the URL is not reachable from the board. Verify it from
   the board itself; the URL Insight displays is not always reachable from the

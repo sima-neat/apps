@@ -231,15 +231,13 @@ without opening a stream or touching Insight:
   running Insight; the URL Insight displays is not always reachable from the
   target.
 - `timed out waiting for two initial detections from streams: …` names the
-  streams that produced fewer than two detection results before the timeout. That
-  is not the same as delivering no frames: a stream that is decoding normally but
-  detecting nothing is named too, so check whether the content actually contains
-  objects the model reports before suspecting the source.
-- Where the named streams genuinely are not delivering, the sources are the
-  place to look rather than the model or the board. In reproducing this example,
-  publishing all sixteen streams from the same board that consumed them starved
-  most of them; publishing from a separate machine on the network ran the
-  documented profile cleanly.
+  streams that produced fewer than two inference results before the timeout. The
+  count is per result pulled from the pipeline, not per object found, so footage
+  containing nothing the model reports still primes normally. A named stream is
+  one that is not delivering frames, and the sources are the place to look rather
+  than the model or the board. In reproducing this example, publishing all sixteen
+  streams from the same board that consumed them starved most of them; publishing
+  from a separate machine on the network ran the documented profile cleanly.
 
 ## Source Files
 

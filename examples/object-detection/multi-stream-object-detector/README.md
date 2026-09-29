@@ -119,8 +119,9 @@ The `[profile stream=N]` lines appear while the run is in progress, once
 application. Every configured stream should appear.
 
 The `[stream N] processed=` summaries are printed at the end, and the packaged
-config ships `inference.frames: 0`, which runs continuously. Set a positive
-limit for a bounded check that ends by itself and prints them:
+config ships `inference.frames: 0`, which runs continuously. Unlike the
+single-stream examples, both implementations here still print them on Ctrl-C. Set
+a positive limit for a bounded check that ends by itself instead:
 
 ```yaml
 inference:

@@ -103,7 +103,10 @@ the run ends:
 [stream 0] processed=150
 ```
 
-Every configured stream should appear in both. The two implementations format these numbers differently: Python prints the full
+Every configured stream should appear in both. Unlike the single-stream examples,
+both implementations here still print the closing counts on Ctrl-C.
+
+The two implementations format these numbers differently: Python prints the full
 float, the C++ binary prints at the default stream precision of six significant
 digits. Compare the magnitudes rather than the digits.
 
