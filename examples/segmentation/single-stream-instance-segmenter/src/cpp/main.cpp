@@ -1063,7 +1063,10 @@ int main(int argc, char** argv) {
     const CliOptions cli = parse_args(argc, argv);
     const AppConfig cfg = load_app_config(cli.config_path);
     if (cli.validate_config_only) {
-      std::cout << "Config validated: " << cli.config_path << "\n";
+      // The resolved source is reported so a test can see which of source.url
+      // and the legacy source.rtsp_url was selected, not only that one was.
+      std::cout << "Config validated: " << cli.config_path << " (source=" << cfg.source_url
+                << ")\n";
       return 0;
     }
     if (!cfg.save_dir.empty()) {
