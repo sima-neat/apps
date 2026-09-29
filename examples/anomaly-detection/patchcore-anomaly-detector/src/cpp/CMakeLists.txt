@@ -17,3 +17,8 @@ sima_neat_apps_module("patchcore-anomaly-detector" UNIT_TEST E2E_TEST OUTPUT_TAR
 find_package(OpenSSL REQUIRED)
 target_sources(${patchcore_target} PRIVATE patchcore_memory_bank.cpp)
 target_link_libraries(${patchcore_target} PRIVATE OpenSSL::Crypto)
+
+# The e2e test decodes overlay PNGs with OpenCV to check which pixels were highlighted.
+if (TARGET patchcore-anomaly-detector_e2e_test)
+  target_link_libraries(patchcore-anomaly-detector_e2e_test PRIVATE SimaNeatApps::sima_neat)
+endif()
