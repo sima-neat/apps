@@ -50,7 +50,7 @@ Run the remaining commands from `prebuilt-apps/`.
 | `yolo26x-det-bf16-mla_tess-b1.tar.gz` | Supported |
 | `yolo26m-det-bf16-b1.tar.gz` | Supported |
 
-Model packages come from the Model Zoo release below, which can differ from the installed platform version. Replace `<model-file>` with a file from the table.
+This model comes from the direct SDK artifact release below, which can differ from the installed platform version. Replace `<model-file>` with a file from the table.
 
 ```bash
 export MODELZOO_VERSION="2.1.3"

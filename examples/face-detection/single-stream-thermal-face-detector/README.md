@@ -58,8 +58,8 @@ Run the remaining commands from `prebuilt-apps/`.
 
 Primary model: `yolov5s_face_raw_split`
 
-Model packages come from the Model Zoo release below, which can differ from the
-installed platform version.
+This model comes from the direct SDK artifact release below, which can differ
+from the installed platform version.
 
 ```bash
 export MODELZOO_VERSION="2.1.3"
