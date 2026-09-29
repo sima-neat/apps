@@ -904,16 +904,25 @@ run_harness_pytest() {
   echo "[RUN] ${harness_dir#${ROOT_DIR}/} (-m unit)" >>"${summary_file}"
   set +e
   "${PYTHON_TEST_BIN}" -m pytest -c "${ROOT_DIR}/tests/pytest.ini" -m unit \
-    --rootdir="${ROOT_DIR}" -v "${harness_dir}" | tee "${log_file}" | tee -a "${summary_file}"
+    --rootdir="${ROOT_DIR}" -v -rs "${harness_dir}" | tee "${log_file}" | tee -a "${summary_file}"
   rc=${PIPESTATUS[0]}
   set -e
 
-  # pytest exits 5 when it collected nothing: the self-tests vanishing is a
-  # failure of exactly the kind this step exists to catch, so it is not a skip.
-  if [[ "${rc}" -ne 0 ]]; then
+  # pytest exits 5 when it collected nothing. With a skip reported that is the
+  # suite declining to run because a prerequisite is missing (its importorskip
+  # for NumPy or OpenCV), which non-strict runs tolerate. Without a skip it
+  # means the self-tests are gone, which is exactly what this step exists to
+  # catch, so that stays a failure. Any other non-zero code is a real failure.
+  local skipped=0
+  if grep -Eq '[0-9]+ skipped' "${log_file}"; then
+    skipped=1
+  fi
+  if [[ "${rc}" -eq 5 && "${skipped}" -eq 1 ]]; then
+    echo "  [SKIP] Harness self-tests were skipped: a prerequisite is missing (see tests/README.md)."
+  elif [[ "${rc}" -ne 0 ]]; then
     OVERALL_RC=1
   fi
-  if [[ "${STRICT_MODE}" == "1" ]] && grep -Eq '[0-9]+ skipped' "${log_file}"; then
+  if [[ "${STRICT_MODE}" == "1" && "${skipped}" -eq 1 ]]; then
     echo "  [FAIL] Strict mode is enabled but harness self-tests were skipped."
     OVERALL_RC=1
   fi
