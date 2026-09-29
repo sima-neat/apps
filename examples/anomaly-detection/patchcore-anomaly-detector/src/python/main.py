@@ -320,7 +320,7 @@ def cmd_calibrate(cfg: AppConfig) -> int:
     print(
         f"Patch threshold: {patch_threshold:.4f} (p{cfg.calibration.threshold_percentile} over "
         f"{len(patch_scores)} nominal patches, x{cfg.calibration.threshold_margin} margin; "
-        f"overlay scale {patch_scale_min:.4f}-{patch_scale_max:.4f})"
+        f"overlay highlights above {patch_scale_max:.4f}, color span from {patch_scale_min:.4f})"
     )
 
     bank_path = Path(cfg.memory_bank_path)

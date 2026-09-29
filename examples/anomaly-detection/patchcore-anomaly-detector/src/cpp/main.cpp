@@ -355,7 +355,8 @@ int cmd_calibrate(const Config& cfg) {
   const float patch_scale_max = patch_threshold;
   std::cout << "Patch threshold: " << patch_threshold << " (p" << cfg.threshold_percentile
             << " over " << patch_scores.size() << " nominal patches, x" << cfg.threshold_margin
-            << " margin; overlay scale " << patch_scale_min << "-" << patch_scale_max << ")\n";
+            << " margin; overlay highlights above " << patch_scale_max << ", color span from "
+            << patch_scale_min << ")\n";
 
   if (!cfg.memory_bank_path.parent_path().empty()) {
     fs::create_directories(cfg.memory_bank_path.parent_path());

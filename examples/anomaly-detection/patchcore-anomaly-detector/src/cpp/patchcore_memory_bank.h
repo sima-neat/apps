@@ -106,7 +106,8 @@ struct BankMeta {
   double threshold_value = 0.0;
   double threshold_percentile = 0.0;
   int threshold_num_images = 0;
-  // Overlay color scale, separate from threshold_value. If absent, recalibrate.
+  // Overlay highlight: pixels above scale_max are highlighted, colored over the span
+  // scale_max - scale_min. Separate from threshold_value. If absent, recalibrate.
   bool has_patch_threshold = false;
   double patch_threshold_value = 0.0;
   double patch_threshold_scale_min = 0.0;

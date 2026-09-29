@@ -229,7 +229,8 @@ def build_bank_meta(
             "percentile": threshold_percentile,
             "num_images": threshold_num_images,
         },
-        # Overlay color scale (scale_min/scale_max); separate from the image-level threshold.
+        # Overlay highlight: pixels above scale_max are highlighted, colored over the span
+        # scale_max - scale_min. Separate from the image-level threshold.
         "patch_threshold": {
             "value": patch_threshold,
             "scale_min": patch_scale_min,
