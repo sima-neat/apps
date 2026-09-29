@@ -578,14 +578,33 @@ std::string saved_frames_problem(const std::string& dir, int minimum, int min_si
   return "";
 }
 
-std::string streamed_frames_problem(const std::string& dir, int minimum, int min_side) {
+std::string streamed_frames_problem(const std::string& dir, int minimum, int expected_streams,
+                                    int min_side) {
   const std::string problem = saved_frames_problem(dir, minimum, min_side);
   if (!problem.empty())
     return problem;
 
-  for (const auto& [label, group] : group_by_stream(saved_image_files(dir))) {
-    if (group.size() < 2)
-      continue;
+  const auto groups = group_by_stream(saved_image_files(dir));
+
+  if (expected_streams > 0 && static_cast<int>(groups.size()) < expected_streams) {
+    std::string labels;
+    for (const auto& [label, group] : groups) {
+      labels += (labels.empty() ? "" : ", ") + label;
+    }
+    return "expected frames from " + std::to_string(expected_streams) + " streams, got " +
+           std::to_string(groups.size()) + " (" + (labels.empty() ? "none" : labels) +
+           "); a stream that saved nothing cannot be shown to advance";
+  }
+
+  for (const auto& [label, group] : groups) {
+    if (group.size() < 2) {
+      if (expected_streams <= 0)
+        continue;
+      return label + " saved only " + std::to_string(group.size()) + " frame (" +
+             group.front().filename().string() +
+             "); one frame cannot show the stream advancing, so a stream that stalled "
+             "immediately would pass unnoticed";
+    }
 
     // Held one at a time against the first: a run can save many large frames.
     const cv::Mat first = cv::imread(group.front().string(), cv::IMREAD_COLOR);

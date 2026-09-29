@@ -94,7 +94,8 @@ int run_source_case(const std::string& binary, const std::string& model_path,
     rc = 1;
   } else {
     const int files = count_output_files(output_dir);
-    const std::string problem = streamed_frames_problem(output_dir, total_saved_frames);
+    // Two streams are configured above, so both must advance on their own.
+    const std::string problem = streamed_frames_problem(output_dir, total_saved_frames, 2);
     if (!problem.empty()) {
       std::cerr << "[FAIL] " << source_case.codec << " " << problem << "\n";
       rc = 1;

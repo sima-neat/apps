@@ -85,6 +85,14 @@ std::string saved_frames_problem(const std::string& dir, int minimum, int min_si
 // frames have to move. Frames are grouped by the stream named in their filename
 // (stream_<n>_frame_<m>.jpg) and each stream is required to advance against
 // itself, so a stream frozen beside a working one is still caught.
-std::string streamed_frames_problem(const std::string& dir, int minimum, int min_side = 16);
+//
+// Without a stream count a one-frame group is skipped, because the helper
+// cannot tell "this stream wrote one frame and stalled" from "this run only
+// writes one frame". A suite that knows how many streams it configured passes
+// that as expected_streams, and then every stream must be present with at
+// least two frames — a stream that stalled after its first frame, or saved
+// nothing at all, is a failure rather than a pass carried by its neighbour.
+std::string streamed_frames_problem(const std::string& dir, int minimum, int expected_streams = 0,
+                                    int min_side = 16);
 
 } // namespace sima_examples::testing
