@@ -1,0 +1,17 @@
+models:
+  fastflow_demo:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/model_zoo/gen2/anomaly_detection/fastflow_demo/fastflow_demo_mpk.tar.gz
+    file: fastflow_demo_mpk.tar.gz
+unit:
+  python: true
+  cpp: true
+e2e:
+  python:
+    enabled: true
+    models:
+    - fastflow_demo
+  cpp:
+    enabled: true
+    models:
+    - fastflow_demo

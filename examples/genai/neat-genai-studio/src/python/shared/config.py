@@ -67,6 +67,15 @@ class RagConfig:
 
 
 @dataclass(frozen=True)
+class SupertonicConfig:
+    """Where the optional Supertonic 3 (MLA TTS) runtime lives. Both paths are
+    machine-specific, so setup.sh persists them here and run.sh and the UI
+    read the same values; environment variables still override."""
+    repo_root: str = "/media/nvme/repos/supertonic-sima"
+    app_root: str = "/media/nvme/supertonic-tts"
+
+
+@dataclass(frozen=True)
 class ControlConfig:
     host: str
     client_host: str
@@ -109,6 +118,7 @@ class AppConfig:
     max_resident_chat_models: int = 1
     hub: HubConfig = HubConfig(allow_download=True, orgs=("simaai", "TDoSiMa"))
     ui: UIConfig = UIConfig(font_family="Inter", font_size=15)
+    supertonic: SupertonicConfig = SupertonicConfig()
 
 
 def load_config(path: Path = DEFAULT_CONFIG, apps_root: Path = PATH_ROOT) -> AppConfig:
@@ -156,6 +166,14 @@ def load_server_config(path: Path = DEFAULT_SERVER_CONFIG, apps_root: Path = PAT
     )
 
 
+def _load_supertonic_config(raw: dict) -> SupertonicConfig:
+    defaults = SupertonicConfig()
+    return SupertonicConfig(
+        repo_root=str(raw.get("repo_root") or defaults.repo_root),
+        app_root=str(raw.get("app_root") or defaults.app_root),
+    )
+
+
 def load_ui_config(path: Path = DEFAULT_UI_CONFIG, apps_root: Path = PATH_ROOT) -> AppConfig:
     config = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     raw = config.get("app", config)
@@ -169,6 +187,7 @@ def load_ui_config(path: Path = DEFAULT_UI_CONFIG, apps_root: Path = PATH_ROOT) 
     control = raw.get("control", {})
     hub = server.get("hub", {})
     ui = raw.get("ui", {})
+    supertonic = (raw.get("tts", {}) or {}).get("supertonic", {}) or {}
     chat_models = _load_chat_model_names(server_models, apps_root)
 
     return AppConfig(
@@ -195,6 +214,7 @@ def load_ui_config(path: Path = DEFAULT_UI_CONFIG, apps_root: Path = PATH_ROOT) 
         max_resident_chat_models=max(1, int(server_models.get("max_resident_chat_models", 1) or 1)),
         hub=_load_hub_config(hub),
         ui=_load_ui_section(ui),
+        supertonic=_load_supertonic_config(supertonic),
     )
 
 
