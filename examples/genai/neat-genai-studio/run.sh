@@ -184,13 +184,16 @@ section() {
 }
 
 # Best-effort browser URL from the app.web block of the config (scheme/host/port).
+web_config_value() { web_config_scalar "${CONFIG_PATH}" "$1"; }
+
 web_url() {
   local host port https scheme ip
-  host="$(awk '/^  web:/{f=1;next} f&&/^  [a-z]/{f=0} f&&/host:/{print $2;exit}' "${CONFIG_PATH}" 2>/dev/null || true)"
-  port="$(awk '/^  web:/{f=1;next} f&&/^  [a-z]/{f=0} f&&/port:/{print $2;exit}' "${CONFIG_PATH}" 2>/dev/null || true)"
-  https="$(awk '/^  web:/{f=1;next} f&&/^  [a-z]/{f=0} f&&/https:/{print $2;exit}' "${CONFIG_PATH}" 2>/dev/null || true)"
+  host="$(web_config_value host)"
+  port="$(web_config_value port)"
+  https="$(web_config_value https)"
   [[ -n "${port}" ]] || return 1
-  scheme="http"; [[ "${https}" == "true" ]] && scheme="https"
+  # https defaults to true in shared.config when the key is absent.
+  scheme="https"; [[ -n "${https}" ]] && ! config_true "${https}" && scheme="http"
   if [[ -z "${host}" || "${host}" == "0.0.0.0" || "${host}" == "::" ]]; then
     ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
     host="${ip:-localhost}"
@@ -202,7 +205,7 @@ web_url() {
 # when the UI listens on every interface (it keeps working if the IP changes).
 local_web_url() {
   local url; url="$(web_url)" || return 1
-  local host; host="$(awk '/^  web:/{f=1;next} f&&/^  [a-z]/{f=0} f&&/host:/{print $2;exit}' "${CONFIG_PATH}" 2>/dev/null || true)"
+  local host; host="$(web_config_value host)"
   if [[ -z "${host}" || "${host}" == "0.0.0.0" || "${host}" == "::" ]]; then
     url="$(printf '%s' "${url}" | sed -E 's#^(https?)://[^:/]+#\1://localhost#')"
   fi
@@ -353,6 +356,8 @@ do_status() {
       if [[ "${mode}" == "backend-only" ]]; then
         ok "Neat GenAI Studio is running (pid ${pid}, backend-only: API endpoints, no web UI)."
         [[ -n "${url}" ]] && info "API: ${C_ACCENT}${url}${C_RESET}  health: ${C_ACCENT}${url}/health${C_RESET}"
+      elif [[ "${mode}" == "cli" ]]; then
+        ok "Neat GenAI Studio is running (pid ${pid}, cli: terminal chat, no web UI)."
       else
         ok "Neat GenAI Studio is running (pid ${pid}${mode:+, ${mode}})."
         [[ -n "${url}" ]] && info "Web UI: ${C_ACCENT}${url}${C_RESET}"
@@ -954,8 +959,7 @@ trap 'exit 129' HUP
 # app.web.headless: true in the config is the same as --backend-only (the UI
 # process reads it too); resolve it before the mode is recorded and branched on.
 if [[ "${BACKEND_ONLY}" != "1" && "${CLI_MODE}" != "1" ]]; then
-  _headless="$(awk '/^  web:/{f=1;next} f&&/^  [a-z]/{f=0} f&&$1=="headless:"{print $2;exit}' "${CONFIG_PATH}" 2>/dev/null || true)"
-  case "${_headless,,}" in true|yes|on|1) BACKEND_ONLY=1 ;; esac
+  config_true "$(web_config_value headless)" && BACKEND_ONLY=1
 fi
 
 # Record this instance so `./run.sh stop` can find it (removed by cleanup).
@@ -1150,7 +1154,7 @@ fi
 _url="$(web_url || true)"
 if [[ -n "${_url}" && "${BACKEND_ONLY}" == "1" ]]; then
   info "Backend-only: API on ${C_ACCENT}${C_BOLD}${_url}${C_RESET} (no web UI); readiness at ${C_ACCENT}${_url}/health${C_RESET}."
-  _cors="${BACKEND_CORS_ORIGINS:-$(awk '/^  web:/{f=1;next} f&&/^  [a-z]/{f=0} f&&$1=="cors_origins:"{sub(/^[^:]*:[ \t]*/,""); gsub(/^["\x27]|["\x27][ \t]*(#.*)?$/,""); print; exit}' "${CONFIG_PATH}" 2>/dev/null || true)}"
+  _cors="${BACKEND_CORS_ORIGINS:-$(web_config_value cors_origins)}"
   info "CORS for browser front ends: ${_cors:-off (app.web.cors_origins or BACKEND_CORS_ORIGINS allows origins)}."
 elif [[ -n "${_url}" ]]; then
   info "Open ${C_ACCENT}${C_BOLD}${_url}${C_RESET} in your browser once it finishes loading."

@@ -422,7 +422,7 @@ GET  /v1/audio/voices              engines, voices and languages
 POST /v1/audio/transcriptions      speech to text in the spoken language
 POST /v1/audio/translations        speech to English text
 GET  /models/status, /models/catalog; POST /models/load, /models/unload, /models/asr, ...
-POST /tts/engine, /supertonic/voice, /piperplus/voice, /voices/select   voice settings
+GET/POST /tts/engine; GET /supertonic/voices, /piperplus/voices, /voices; POST /supertonic/select, /piperplus/select, /voices/select   voice settings
 POST /shutdown                     stop everything (not reachable cross-origin)
 ```
 
@@ -454,7 +454,12 @@ curl -sk -X OPTIONS $B/v1/audio/speech -H 'Origin: http://10.0.0.5:3000' \
 ```
 
 `src/python/ui/apitest/backend_runtime_test.sh` exercises the model server and
-the speech routes against a backend started this way.
+the speech routes against a backend started this way, and
+`src/python/ui/apitest/audio_e2e.sh [host:port | base URL]` checks the audio
+workflow end to end against any running instance: synthesized speech is
+transcribed back to its words, German speech translates to English, and the
+chat model answers; it exits non-zero on any failure. The `apitest` scripts
+take a full base URL (`http://…` when `app.web.https` is false) or `STUDIO_URL`.
 
 ### Switch models on the fly
 The **Settings → Models** tab shows models downloaded to the board in a searchable list. Loaded models are marked

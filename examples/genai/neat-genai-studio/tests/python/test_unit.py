@@ -55,7 +55,7 @@ from audio_api_suite import (  # noqa: E402,F401
     TranscriptionFormTests as AudioApiTranscriptionFormTests,
     VoicesListingTests as AudioApiVoicesListingTests,
 )
-from shell_config_suite import ShellConfigValueTests  # noqa: E402,F401
+from shell_config_suite import ShellConfigValueTests, ShellWebConfigTests  # noqa: E402,F401
 from backend_mode_suite import (  # noqa: E402,F401
     BackendPathTests,
     CorsPolicyTests as BackendCorsPolicyTests,

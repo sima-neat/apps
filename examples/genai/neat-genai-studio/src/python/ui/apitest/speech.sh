@@ -3,7 +3,7 @@
 # (POST /v1/audio/speech on the web UI port) and save the WAV.
 #
 # Usage:
-#   ./speech.sh [host:port] "text to synthesize" [output_file] [model] [voice] [language] [speed]
+#   ./speech.sh [host:port | base URL] "text to synthesize" [output_file] [model] [voice] [language] [speed]
 # Examples:
 #   ./speech.sh "Hello from Neat GenAI Studio."
 #   ./speech.sh 10.0.0.5:5000 "Guten Morgen." morgen.wav supertonic F2 de 1.2
@@ -11,11 +11,18 @@
 # model: default | supertonic | piper-plus | piper-tts   voice: F1..F5 / M1..M5 (Supertonic)
 # speed: 0.25-4.0 (clamped to the engine's range; the effective value is in X-Speed)
 
-if [ "$1" ] && [[ "$1" == *:* && "$1" != *" "* ]]; then
-  HOST="$1"
+# Where the Studio listens: a full base URL (http://… or https://…) as the first
+# argument, or host:port (scheme from STUDIO_SCHEME, default https), or
+# STUDIO_URL / MODALIX_HOST. Use http:// when app.web.https is false.
+if [ -n "$1" ] && [[ "$1" == http://* || "$1" == https://* ]]; then
+  BASE="${1%/}"
+  shift
+elif [ -n "$1" ] && [[ "$1" == *:* && "$1" != *" "* ]]; then
+  BASE="${STUDIO_SCHEME:-https}://$1"
   shift
 else
-  HOST=${MODALIX_HOST:-127.0.0.1:5000}
+  BASE="${STUDIO_URL:-${STUDIO_SCHEME:-https}://${MODALIX_HOST:-127.0.0.1:5000}}"
+  BASE="${BASE%/}"
 fi
 
 TEXT="$1"
@@ -26,7 +33,7 @@ LANGUAGE="${5:-en}"
 SPEED="${6:-1.0}"
 
 if [ -z "$TEXT" ]; then
-  echo "Usage: $0 [host:port] \"text to synthesize\" [output_file] [model] [voice] [language] [speed]"
+  echo "Usage: $0 [host:port | base URL] \"text to synthesize\" [output_file] [model] [voice] [language] [speed]"
   exit 1
 fi
 
@@ -34,7 +41,7 @@ BODY=$(python3 -c 'import json,sys; print(json.dumps({"input": sys.argv[1], "mod
   "$TEXT" "$MODEL" "$VOICE" "$LANGUAGE" "$SPEED")
 
 # -D - prints the response headers (X-Engine, X-Voice, X-Speed, X-RTF, ...).
-curl -k -sS -D - -X POST "https://${HOST}/v1/audio/speech" \
+curl -k -sS -D - -X POST "${BASE}/v1/audio/speech" \
   -H "Content-Type: application/json" \
   -o "${OUTPUT_FILE}" \
   -d "${BODY}"

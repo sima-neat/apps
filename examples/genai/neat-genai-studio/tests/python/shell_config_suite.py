@@ -35,6 +35,47 @@ CONFIG = """app:
 """
 
 
+def _run(script: str, *args: str) -> str:
+    out = subprocess.run(["bash", "-c", f'source "$1"; shift; {script}', "_", str(HELPER), *args],
+                         check=True, capture_output=True, text=True)
+    return out.stdout.strip()
+
+
+WEB = """app:
+  web:
+    host: "0.0.0.0"
+    port: 5000   # the UI
+    https: 'false'
+    headless: "True"
+    cors_origins: "http://a:3000, https://b"   # allowlist
+  tts:
+    supertonic:
+      models_root: /m
+"""
+
+
+class ShellWebConfigTests(unittest.TestCase):
+    def _web(self, key):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / "c.yaml"
+            config.write_text(WEB, encoding="utf-8")
+            return _run('web_config_scalar "$1" "$2"', str(config), key)
+
+    def test_quoted_and_commented_scalars(self):
+        self.assertEqual(self._web("host"), "0.0.0.0")
+        self.assertEqual(self._web("port"), "5000")
+        self.assertEqual(self._web("https"), "false")
+        self.assertEqual(self._web("headless"), "True")
+        self.assertEqual(self._web("cors_origins"), "http://a:3000, https://b")
+        self.assertEqual(self._web("models_root"), "")      # other section
+
+    def test_truthiness_matches_the_python_loader(self):
+        for value in ("1", "true", "True", "YES", "on"):
+            self.assertEqual(_run('config_true "$1" && echo y || echo n', value), "y", value)
+        for value in ("0", "false", "", "no", "off", "'true'"):
+            self.assertEqual(_run('config_true "$1" && echo y || echo n', value), "n", value)
+
+
 class ShellConfigValueTests(unittest.TestCase):
     def test_quoted_and_plain_values(self):
         self.assertEqual(_read(CONFIG, "models_root"), "/data/st # models")
