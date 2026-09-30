@@ -331,13 +331,18 @@ POST /v1/audio/transcriptions    multipart/form-data
                    tts_language, no_speech_prob, avg_logprob, ignored, reason, model | text -> text/plain
   -> headers X-ASR-Model, X-Elapsed-Time; 400 missing file | 413 too large | 503 no ASR active / server unreachable
 
+POST /v1/audio/translations      multipart/form-data, same fields and limits as transcriptions
+  -> the speech translated into English (Whisper's translate task); verbose_json adds
+     task: "translate", language = the detected source language, tts_language: "en";
+     headers X-ASR-Model, X-Task, X-Elapsed-Time
+
 GET  /v1/audio/voices            extension: discovery
   -> {default_engine, languages, engines: [{key, label, loaded, languages, voices: [{id, label, ...}]}]}
 ```
 
 `utterance_speed` / `utteranceSpeed` are still accepted on the speech route as
 deprecated aliases of `speed`. The scripts under `src/python/ui/apitest/`
-(`speech.sh`, `transcriptions.sh`, `chat.sh`) wrap these calls.
+(`speech.sh`, `transcriptions.sh`, `translations.sh`, `chat.sh`) wrap these calls.
 
 #### Audio API playground
 The waveform button in the header opens the **Audio API playground**

@@ -2550,6 +2550,18 @@ class AppContext:
             /v1/audio/transcriptions so an HTTPS page and plain clients reach it
             on this origin. `response_format`: json (default) | verbose_json |
             text. `model` defaults to the active ASR model."""
+            return _audio_to_text('transcribe')
+
+        @self.app.route('/v1/audio/translations', methods=['POST'])
+        @self.app.route('/audio/translations', methods=['POST'])
+        def openai_translations():
+            """OpenAI-compatible speech-to-English (Whisper's translate task),
+            proxied to the model server's /v1/audio/translations. Same form and
+            formats as transcriptions; the text is always English, and
+            verbose_json reports the detected source `language`."""
+            return _audio_to_text('translate')
+
+        def _audio_to_text(task):
             started = time.time()
             # Refuse oversized bodies before Werkzeug parses (and spools) the
             # multipart data: the file limit plus headroom for the envelope and
@@ -2589,7 +2601,7 @@ class AppContext:
             try:
                 result, model = transcribe_audio(
                     audio_bytes, language=req.language, model=req.model,
-                    filename=filename, content_type=content_type)
+                    filename=filename, content_type=content_type, task=task)
             except TranscriptionError as exc:
                 return jsonify({'error': exc.message}), exc.status
             asr = None
@@ -2602,9 +2614,9 @@ class AppContext:
                     no_speech_threshold=_env_float('ASR_NO_SPEECH_THRESHOLD', DEFAULT_NO_SPEECH_THRESHOLD),
                     logprob_threshold=_env_float('ASR_LOGPROB_THRESHOLD', DEFAULT_LOGPROB_THRESHOLD),
                 )
-            body, mimetype = format_transcription(result, asr, req.response_format, model=model)
+            body, mimetype = format_transcription(result, asr, req.response_format, model=model, task=task)
             elapsed = time.time() - started
-            headers = {'X-ASR-Model': model or '', 'X-Elapsed-Time': f"{elapsed:.3f}"}
+            headers = {'X-ASR-Model': model or '', 'X-Task': task, 'X-Elapsed-Time': f"{elapsed:.3f}"}
             if isinstance(body, str):
                 return Response(body, mimetype=mimetype, headers=headers)
             resp = jsonify(body)
@@ -3237,13 +3249,16 @@ def _upload_size(upload):
 
 
 def transcribe_audio(audio_bytes, *, language='auto', model=None, filename='audio.wav',
-                     content_type='audio/wav', timeout=60):
-    """Send audio to the model server's /v1/audio/transcriptions and return
-    ``(result_dict, model_name)``. ``model`` defaults to the active ASR model.
-    The model server decodes the upload with libavformat, so the browser's
-    WebM/Opus and other container formats work; pass the real name and type."""
+                     content_type='audio/wav', timeout=60, task='transcribe'):
+    """Send audio to the model server's /v1/audio/transcriptions (``task``
+    "transcribe") or /v1/audio/translations ("translate": Whisper's
+    speech-to-English) and return ``(result_dict, model_name)``. ``model``
+    defaults to the active ASR model. The model server decodes the upload with
+    libavformat, so the browser's WebM/Opus and other container formats work;
+    pass the real name and type."""
     cfg = genai_app.get_config()
-    url = f"http://{str(cfg['SIMAAI_IP_ADDR']).strip()}/v1/audio/transcriptions"
+    route = 'translations' if task == 'translate' else 'transcriptions'
+    url = f"http://{str(cfg['SIMAAI_IP_ADDR']).strip()}/v1/audio/{route}"
     model = (model or '').strip() or genai_app.resolve_asr_model()
     if not model:
         logging.error("No speech-to-text model is active; cannot transcribe.")

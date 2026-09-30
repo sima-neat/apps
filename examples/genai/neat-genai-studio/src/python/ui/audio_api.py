@@ -139,13 +139,19 @@ def parse_transcription_form(form: Mapping, *, has_file: bool, size: int | None)
     return TranscriptionRequest(model=model, language=language, response_format=response_format)
 
 
+TRANSCRIPTION_TASKS = ("transcribe", "translate")
+
+
 def format_transcription(result: Mapping, asr: Mapping | None, response_format: str,
-                         model: str | None = None) -> tuple[Any, str]:
-    """Shape the model server's transcription result for the requested format.
+                         model: str | None = None, *, task: str = "transcribe") -> tuple[Any, str]:
+    """Shape the model server's transcription/translation result for the
+    requested format.
 
     Returns ``(body, mimetype)``; ``body`` is a dict for the JSON formats and a
     string for ``text``. ``asr`` is the Studio's ``analyze_transcription``
-    output and is only consulted for ``verbose_json``.
+    output and is only consulted for ``verbose_json``. For ``task="translate"``
+    (Whisper's speech-to-English) ``language`` stays the detected *source*
+    language and ``tts_language`` is English, the language of the text.
     """
     text = str((result or {}).get("text") or "").strip()
     if response_format == "text":
@@ -162,7 +168,10 @@ def format_transcription(result: Mapping, asr: Mapping | None, response_format: 
             "ignored": bool(asr.get("ignored", False)),
             "reason": asr.get("reason"),
             "model": model,
+            "task": task,
         }
+        if task == "translate":
+            body["tts_language"] = "en"
         return body, "application/json"
     return {"text": text}, "application/json"
 

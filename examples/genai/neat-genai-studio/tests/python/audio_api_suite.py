@@ -126,6 +126,23 @@ class FormatTranscriptionTests(unittest.TestCase):
         self.assertIsNone(body["reason"])
         self.assertEqual(body["model"], "whisper")
 
+    def test_default_task_is_transcribe(self):
+        body, _ = format_transcription(self.RESULT, None, "verbose_json")
+        self.assertEqual(body["task"], "transcribe")
+
+    def test_translate_keeps_source_language_and_speaks_english(self):
+        result = {"text": " Good morning! ", "language": "de", "no_speech_prob": 0.02, "avg_logprob": -0.27}
+        asr = analyze_transcription(result, requested_language="auto",
+                                    supported_tts_languages=("en", "de"))
+        body, _ = format_transcription(result, asr, "verbose_json", model="whisper", task="translate")
+        self.assertEqual((body["text"], body["task"], body["language"], body["tts_language"]),
+                         ("Good morning!", "translate", "de", "en"))
+
+    def test_json_and_text_ignore_the_task(self):
+        self.assertEqual(format_transcription(self.RESULT, None, "json", task="translate"),
+                         ({"text": "hello world"}, "application/json"))
+        self.assertEqual(format_transcription(self.RESULT, None, "text", task="translate")[0], "hello world\n")
+
     def test_verbose_json_without_analysis_falls_back_to_the_raw_fields(self):
         body, _ = format_transcription(self.RESULT, None, "verbose_json")
         self.assertEqual(body["language"], "en")
