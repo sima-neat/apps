@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+import importlib.util
 import json
 from pathlib import Path
 import subprocess
@@ -21,6 +23,15 @@ COMMON_DIR = EXAMPLE_DIR / "src" / "common"
 
 if str(PYTHON_DIR) not in sys.path:
     sys.path.insert(0, str(PYTHON_DIR))
+
+# The configuration tests bind `main` under an example-specific module name:
+# every application has a module called `main`, and a plain `import main`
+# binds whichever was imported first when pytest runs across examples.
+_CONFIG_SPEC = importlib.util.spec_from_file_location("high_density_multi_stream_object_detector_main", MAIN_PY)
+assert _CONFIG_SPEC is not None and _CONFIG_SPEC.loader is not None
+main_module = importlib.util.module_from_spec(_CONFIG_SPEC)
+sys.modules[_CONFIG_SPEC.name] = main_module
+_CONFIG_SPEC.loader.exec_module(main_module)
 
 pytestmark = pytest.mark.unit
 
@@ -1318,3 +1329,256 @@ def test_measurement_excludes_warmup_and_failed_sends():
     assert measurement.observe(0, 103, True, False, 7.0)
     assert measurement.summary() == dict(frames=3, elapsed_s=4.0, aggregate_fps=0.75,
                                         per_stream_frames=[2, 1], per_stream_send_failures=[0, 1])
+
+
+
+# ---------------------------------------------------------------------------
+# Configuration handling and option validation (Refs #526).
+# Each test starts from VALID_CONFIG and breaks exactly one thing, so a failure
+# names the rule that fired rather than "config rejected". The rules already
+# owned by TestConfigLoading above (the 80-stream cap, the empty stream list,
+# the worker count, the inflight and internal-queue limits, the liveness
+# timeouts, the removed keys, the probe-skip requirements, the port overlap and
+# the visible-stream cap) are not repeated here.
+# ---------------------------------------------------------------------------
+
+VALID_CONFIG = {
+    "model": {"path": MODEL_PATH, "labels": "coco_label.txt", "decode_type": "yolo26"},
+    "streams": ["rtsp://127.0.0.1:8554/src1", "rtsp://127.0.0.1:8554/src2"],
+    "input": {
+        "codec": "h264",
+        "tcp": True,
+        "latency_ms": 100,
+        "drop_on_latency": False,
+        "skip_rtsp_probe": False,
+        "width": 0,
+        "height": 0,
+        "fps": 0,
+        "decoder_buffers": 16,
+        "decoder_input_buffers": 2,
+        "decoder_tuning": "auto",
+    },
+    "runtime": {
+        "profile": False,
+        "warmup_frames": 30,
+        "initial_detection_timeout_ms": 30000,
+        "stream_detection_timeout_ms": 30000,
+        "no_detection_timeout_ms": 30000,
+    },
+    "inference": {
+        "workers": 1,
+        "queue_depth": 4,
+        "internal_queue_depth": 1,
+        "max_inflight_per_stream": 4,
+        "max_inflight_total": 8,
+        "min_score": 0.55,
+        "nms_iou": 0.6,
+        "max_detections": 50,
+    },
+    "output": {
+        "video_enabled": True,
+        "insight": {
+            "host": "127.0.0.1",
+            "video_port_base": 9000,
+            "metadata_port_base": 9100,
+            "max_visible_streams": -1,
+        },
+    },
+}
+
+
+def write_full_config(tmp_path: Path, overrides=None, *, root=None) -> Path:
+    """Write VALID_CONFIG with `overrides` applied as ((section, ..., key), value)."""
+    raw = copy.deepcopy(VALID_CONFIG) if root is None else root
+    for path, value in (overrides or []):
+        target = raw
+        for key in path[:-1]:
+            target = target[key]
+        target[path[-1]] = value
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+    return config_path
+
+
+class TestValidBaseline:
+    def test_the_baseline_config_loads(self, tmp_path):
+        """If this breaks, every rejection test below is testing the wrong thing."""
+        cfg = main_module.load_app_config(write_full_config(tmp_path))
+
+        assert cfg.model_path.endswith(MODEL_PATH)
+        assert len(cfg.rtsp_urls) == 2
+        assert cfg.codec == "h264"
+        assert cfg.insight_host == "127.0.0.1"
+
+    def test_omitted_optional_values_fall_back_to_documented_defaults(self, tmp_path):
+        raw = {
+            "model": {"path": MODEL_PATH},
+            "streams": ["rtsp://127.0.0.1:8554/src1"],
+            "output": {"insight": {"host": "127.0.0.1"}},
+        }
+
+        cfg = main_module.load_app_config(write_full_config(tmp_path, root=raw))
+
+        assert cfg.codec == "h264"
+        assert cfg.workers == 1
+        assert cfg.queue_depth == main_module.DEFAULT_QUEUE_DEPTH
+        assert cfg.internal_queue_depth == main_module.DEFAULT_INTERNAL_QUEUE_DEPTH
+        assert cfg.max_inflight_per_stream == main_module.DEFAULT_MAX_INFLIGHT_PER_STREAM
+        assert cfg.max_inflight_total == main_module.DEFAULT_MAX_INFLIGHT_TOTAL
+        assert cfg.decoder_buffers == main_module.DEFAULT_DECODER_BUFFERS
+        assert cfg.decoder_input_buffers == main_module.DEFAULT_DECODER_INPUT_BUFFERS
+        assert cfg.decoder_tuning == main_module.normalize_decoder_tuning("auto")
+        assert cfg.input_width == 0
+        assert cfg.input_height == 0
+        assert cfg.input_fps == 0
+        assert cfg.latency_ms == 100
+        assert cfg.tcp == True
+        assert cfg.skip_rtsp_probe == False
+        assert cfg.min_score == pytest.approx(0.55)
+        assert cfg.nms_iou == pytest.approx(0.60)
+        assert cfg.max_detections == 50
+        assert cfg.warmup_frames == 30
+        assert cfg.initial_detection_timeout_ms == main_module.DEFAULT_INITIAL_DETECTION_TIMEOUT_MS
+        assert cfg.stream_detection_timeout_ms == main_module.DEFAULT_STREAM_DETECTION_TIMEOUT_MS
+        assert cfg.no_detection_timeout_ms == main_module.DEFAULT_NO_DETECTION_TIMEOUT_MS
+        assert cfg.video_port_base == 9000
+        assert cfg.metadata_port_base == 9100
+        assert cfg.insight_visible_streams == main_module.ALL_INSIGHT_STREAMS
+        assert cfg.video_enabled == True
+        assert cfg.decode_type == main_module.normalize_box_decode_type("yolo26")
+        assert cfg.labels_path == Path("coco_label.txt")
+
+
+REJECTED = [
+    pytest.param(('model', 'path'), '', 'model.path must be set', id='model-path-empty'),
+    pytest.param(('model', 'labels'), '', 'model.labels must be set', id='model-labels-empty'),
+    pytest.param(('model', 'decode_type'), 'ssd', 'model.decode_type must be one of', id='decode-type-unsupported'),
+    pytest.param(('output', 'insight', 'host'), '', 'output.insight.host must be set', id='insight-host-empty'),
+    pytest.param(('input', 'codec'), 'vp9', 'input.codec must be h264/avc or h265/hevc', id='codec-unsupported'),
+    pytest.param(('input', 'decoder_tuning'), 'fast', 'input.decoder_tuning must be one of', id='decoder-tuning-unsupported'),
+    pytest.param(('input', 'latency_ms'), -1, 'input.latency_ms must be >= 0', id='latency-negative'),
+    pytest.param(('input', 'width'), -1, 'input.width must be >= 0', id='width-negative'),
+    pytest.param(('input', 'height'), -1, 'input.height must be >= 0', id='height-negative'),
+    pytest.param(('input', 'fps'), -1, 'input.fps must be >= 0', id='fps-negative'),
+    pytest.param(('input', 'width'), 640, 'input.width and input.height must be set together', id='width-without-height'),
+    pytest.param(('input', 'decoder_buffers'), 0, 'input.decoder_buffers must be > 0', id='decoder-buffers-zero'),
+    pytest.param(('input', 'decoder_buffers'), 65, 'input.decoder_buffers must be <= 64', id='decoder-buffers-above'),
+    pytest.param(('input', 'decoder_input_buffers'), 0, 'input.decoder_input_buffers must be > 0', id='decoder-input-buffers-zero'),
+    pytest.param(('inference', 'queue_depth'), 0, 'inference.queue_depth must be > 0', id='queue-depth-zero'),
+    pytest.param(('inference', 'queue_depth'), 33, 'inference.queue_depth must be <= 32', id='queue-depth-above'),
+    pytest.param(('inference', 'max_inflight_per_stream'), 33, 'inference.max_inflight_per_stream must be <= 32', id='inflight-per-stream-above'),
+    pytest.param(('inference', 'min_score'), -0.01, 'inference.min_score must be between 0 and 1', id='min-score-below'),
+    pytest.param(('inference', 'min_score'), 1.01, 'inference.min_score must be between 0 and 1', id='min-score-above'),
+    pytest.param(('inference', 'nms_iou'), -0.01, 'inference.nms_iou must be between 0 and 1', id='nms-below'),
+    pytest.param(('inference', 'nms_iou'), 1.01, 'inference.nms_iou must be between 0 and 1', id='nms-above'),
+    pytest.param(('inference', 'max_detections'), 0, 'inference.max_detections must be > 0', id='max-detections-zero'),
+    pytest.param(('runtime', 'warmup_frames'), -1, 'runtime.warmup_frames must be >= 0', id='warmup-negative'),
+    pytest.param(('runtime', 'initial_detection_timeout_ms'), 0, 'runtime.initial_detection_timeout_ms must be > 0', id='initial-timeout-zero'),
+    pytest.param(('output', 'insight', 'video_port_base'), 0, 'output.insight.video_port_base must be > 0', id='video-port-base-zero'),
+    pytest.param(('output', 'insight', 'video_port_base'), 65536, 'output.insight.video_port_base must be <= 65535', id='video-port-base-above'),
+    pytest.param(('output', 'insight', 'video_port_base'), 65535, 'output.insight video port range exceeds 65535', id='video-port-range-exceeds'),
+    pytest.param(('output', 'insight', 'metadata_port_base'), 0, 'output.insight.metadata_port_base must be > 0', id='metadata-port-base-zero'),
+    pytest.param(('output', 'insight', 'metadata_port_base'), 65536, 'output.insight.metadata_port_base must be <= 65535', id='metadata-port-base-above'),
+    pytest.param(('output', 'insight', 'metadata_port_base'), 65535, 'output.insight metadata port range exceeds 65535', id='metadata-port-range-exceeds'),
+    pytest.param(('output', 'insight', 'max_visible_streams'), -2, 'output.insight.max_visible_streams must be >= -1', id='visible-streams-below-minus-one'),
+]
+
+
+class TestRejectedValues:
+    @pytest.mark.parametrize(("path", "value", "message"), REJECTED)
+    def test_invalid_value_is_rejected_with_an_actionable_message(
+        self, tmp_path, path, value, message
+    ):
+        with pytest.raises(ValueError) as excinfo:
+            main_module.load_app_config(write_full_config(tmp_path, [(path, value)]))
+
+        assert message in str(excinfo.value)
+
+
+class TestBoundariesAreAccepted:
+    """An off-by-one that rejects a legal value is the failure nobody writes a test for."""
+
+    @pytest.mark.parametrize(
+        ("path", "value"),
+        [
+            (('inference', 'min_score'), 0.0),
+            (('inference', 'min_score'), 1.0),
+            (('inference', 'nms_iou'), 0.0),
+            (('inference', 'nms_iou'), 1.0),
+            (('input', 'latency_ms'), 0),
+            (('input', 'fps'), 0),
+            (('input', 'decoder_buffers'), 1),
+            (('input', 'decoder_buffers'), 64),
+            (('input', 'decoder_input_buffers'), 1),
+            (('inference', 'queue_depth'), 1),
+            (('inference', 'queue_depth'), 32),
+            (('inference', 'internal_queue_depth'), 0),
+            (('inference', 'internal_queue_depth'), 32),
+            (('inference', 'max_inflight_per_stream'), 1),
+            (('inference', 'max_inflight_per_stream'), 32),
+            (('inference', 'max_inflight_total'), 1),
+            (('inference', 'max_detections'), 1),
+            (('runtime', 'warmup_frames'), 0),
+            (('runtime', 'initial_detection_timeout_ms'), 1),
+            (('runtime', 'stream_detection_timeout_ms'), 1),
+            (('runtime', 'no_detection_timeout_ms'), 1),
+            (('output', 'insight', 'video_port_base'), 1),
+            (('output', 'insight', 'video_port_base'), 65534),
+            (('output', 'insight', 'metadata_port_base'), 1),
+            (('output', 'insight', 'max_visible_streams'), -1),
+            (('output', 'insight', 'max_visible_streams'), 2),
+        ],
+    )
+    def test_boundary_value_is_accepted(self, tmp_path, path, value):
+        main_module.load_app_config(write_full_config(tmp_path, [(path, value)]))
+
+
+class TestStreamList:
+    def test_a_scalar_instead_of_a_list_is_rejected(self, tmp_path):
+        with pytest.raises(ValueError, match="streams must be a non-empty list"):
+            main_module.load_app_config(
+                write_full_config(tmp_path, [(("streams",), "rtsp://127.0.0.1:8554/src1")])
+            )
+
+    @pytest.mark.parametrize(
+        ("streams", "bad_index"),
+        [([""], 0), (["   "], 0), (["rtsp://127.0.0.1:8554/src1", ""], 1), (["rtsp://127.0.0.1:8554/src1", 42], 1)],
+    )
+    def test_a_blank_or_non_string_entry_names_its_index(self, tmp_path, streams, bad_index):
+        """The index matters: with eighty streams, "one of them is wrong" is not actionable."""
+        with pytest.raises(ValueError, match=rf"streams\[{bad_index}\] must be a non-empty string"):
+            main_module.load_app_config(write_full_config(tmp_path, [(("streams",), streams)]))
+
+    def test_stream_order_is_preserved(self, tmp_path):
+        """Stream order decides which Insight port each stream publishes on."""
+        streams = ["rtsp://host/c", "rtsp://host/a", "rtsp://host/b"]
+
+        cfg = main_module.load_app_config(write_full_config(tmp_path, [(("streams",), streams)]))
+
+        assert cfg.rtsp_urls == streams
+
+
+class TestCodecAliases:
+    @pytest.mark.parametrize(
+        ("alias", "codec"), [("h264", "h264"), ("avc", "h264"), ("h265", "h265"), ("hevc", "h265")]
+    )
+    def test_every_documented_alias_is_accepted(self, tmp_path, alias, codec):
+        cfg = main_module.load_app_config(write_full_config(tmp_path, [(("input", "codec"), alias)]))
+
+        assert cfg.codec == codec
+
+
+class TestMalformedConfigFiles:
+    def test_a_non_mapping_root_is_rejected(self, tmp_path):
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text("- not\n- a mapping\n", encoding="utf-8")
+
+        with pytest.raises(ValueError, match="config root must be a mapping"):
+            main_module.load_app_config(config_path)
+
+    def test_an_empty_file_is_reported_as_missing_settings_not_a_crash(self, tmp_path):
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text("", encoding="utf-8")
+
+        with pytest.raises(ValueError, match="streams must be a non-empty list"):
+            main_module.load_app_config(config_path)
