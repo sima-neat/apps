@@ -56,6 +56,11 @@ from audio_api_suite import (  # noqa: E402,F401
     VoicesListingTests as AudioApiVoicesListingTests,
 )
 from shell_config_suite import ShellConfigValueTests  # noqa: E402,F401
+from backend_mode_suite import (  # noqa: E402,F401
+    BackendPathTests,
+    CorsPolicyTests as BackendCorsPolicyTests,
+    HealthPayloadTests as BackendHealthPayloadTests,
+)
 from supertonic_tts_suite import (  # noqa: E402,F401
     ClientConfigurationTests as SupertonicClientConfigurationTests,
     DurationFallbackTests as SupertonicDurationFallbackTests,

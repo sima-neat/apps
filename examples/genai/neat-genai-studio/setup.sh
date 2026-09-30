@@ -593,6 +593,7 @@ app:
     host: 0.0.0.0
     port: 5000
     https: true
+    headless: false   # true: API endpoints only, no web UI (same as ./run.sh --backend-only)
 
   ui:
     font_family: Inter

@@ -55,6 +55,7 @@ from asr_metadata import (
     normalize_language_code,
 )
 import supertonic_tts
+import backend_mode
 from audio_api import (
     MAX_TRANSCRIPTION_BYTES,
     AudioApiError,
@@ -1125,6 +1126,8 @@ class AppContext:
         self.current_voice_by_lang = {}
         self.talk_ctrl = None
         self.llm_only = False
+        self.backend_only = False   # --backend-only: API endpoints, no web UI (backend_mode.py)
+        self.cors_origins = ()      # BACKEND_CORS_ORIGINS, honoured in backend-only mode only
         self.system_prompt = None
         self.model_display_name = ""
         self.chat_model_name = "model"
@@ -1477,14 +1480,56 @@ class AppContext:
         self.app = Flask(__name__)
         self.socketio = SocketIO(self.app)
 
+        def _cors_allowed_origin():
+            """The request's Origin when backend-only CORS allows it for this path."""
+            if not (self.backend_only and self.cors_origins):
+                return None
+            origin = request.headers.get("Origin") or ""
+            if origin and backend_mode.cors_path(request.path) \
+                    and backend_mode.origin_allowed(origin, self.cors_origins):
+                return origin
+            return None
+
+        @self.app.before_request
+        def _backend_only_gate():
+            """Backend-only mode serves the API surface only (backend_mode.py):
+            the UI pages, static files and the Studio's own chat/RAG/camera
+            routes answer 404, and an allowed CORS preflight is answered here."""
+            if not self.backend_only:
+                return None
+            if not backend_mode.path_allowed(request.path):
+                return jsonify({"error": "Not available in backend-only mode.",
+                                "health": "/health"}), 404
+            if request.path == "/" and request.method in ("GET", "HEAD"):
+                return jsonify({"studio": "backend-only", "version": _studio_version(),
+                                "health": "/health"})
+            origin = _cors_allowed_origin()
+            if request.method == "OPTIONS" and origin:
+                return ("", 204, backend_mode.cors_headers(
+                    origin, request.headers.get("Access-Control-Request-Headers")))
+            return None
+
+        @self.app.after_request
+        def _backend_cors_headers(response):
+            origin = _cors_allowed_origin()
+            if origin:
+                for key, value in backend_mode.cors_headers(
+                        origin, request.headers.get("Access-Control-Request-Headers")).items():
+                    response.headers[key] = value
+            return response
+
         @self.app.before_request
         def _reject_cross_origin_mutation():
             """Keep browser mutations on the Studio's own origin.
 
             Headerless local API/CLI clients remain supported. Browsers provide
-            Origin, Referer, or Sec-Fetch-Site for cross-origin requests.
+            Origin, Referer, or Sec-Fetch-Site for cross-origin requests. In
+            backend-only mode, origins on the BACKEND_CORS_ORIGINS allowlist may
+            call the API paths.
             """
             if request.method not in {"POST", "PUT", "PATCH", "DELETE"}:
+                return None
+            if _cors_allowed_origin():
                 return None
 
             expected_origin = request.host_url.rstrip("/")
@@ -2461,6 +2506,29 @@ class AppContext:
                 logging.exception("TTS endpoint error")
                 return jsonify({'error': 'TTS request failed'}), 500
 
+        @self.app.route('/health', methods=['GET'])
+        def health():
+            """Readiness for integrating front ends: model server reachability,
+            active ASR model, loaded chat models and TTS engines. Always 200;
+            `ok` is false while the model server is unreachable."""
+            status, error = None, None
+            try:
+                resp = requests.get(
+                    f"{self.control_base_url.rstrip('/')}/control/status", timeout=3)
+                resp.raise_for_status()
+                status = resp.json()
+            except Exception as exc:  # noqa: BLE001
+                error = type(exc).__name__
+            engines = []
+            if self.talk_ctrl is not None:
+                try:
+                    engines = self.talk_ctrl.voice_engine()['engines']
+                except Exception:  # noqa: BLE001
+                    engines = []
+            return jsonify(backend_mode.health_payload(
+                mode='backend-only' if self.backend_only else 'studio',
+                version=_studio_version(), status=status, engines=engines, error=error))
+
         @self.app.route('/v1/audio/voices', methods=['GET'])
         @self.app.route('/audio/voices', methods=['GET'])
         def openai_voices():
@@ -3237,12 +3305,15 @@ def configure_logging(log_filename='server.log'):
         ]
     )
 
-def run_ui(app_cfg):
+def run_ui(app_cfg, backend_only=False):
     global genai_app
     global vectodb_proc
 
     configure_logging()
-    logging.info('Initializing Neat GenAI Studio app (frontend and TTS) please wait....')
+    if backend_only:
+        logging.info('Initializing Neat GenAI Studio in backend-only mode (API endpoints and TTS, no web UI)....')
+    else:
+        logging.info('Initializing Neat GenAI Studio app (frontend and TTS) please wait....')
     # Supertonic paths, before the TTS engines initialize: an explicit
     # environment override (run.sh exports one only when set) wins, then the
     # persisted config, then the module defaults.
@@ -3251,12 +3322,21 @@ def run_ui(app_cfg):
     if app_cfg.supertonic.venv and not os.environ.get("SUPERTONIC_PYTHON"):
         os.environ.setdefault("SUPERTONIC_VENV", app_cfg.supertonic.venv)
     genai_app = AppContext()
+    genai_app.backend_only = bool(backend_only)
+    cors_raw = os.environ.get("BACKEND_CORS_ORIGINS", "")
+    if backend_only:
+        genai_app.cors_origins = backend_mode.parse_cors_origins(cors_raw)
+        logging.info("Backend-only CORS: %s", genai_app.cors_origins or "off")
+    elif cors_raw.strip():
+        logging.warning("BACKEND_CORS_ORIGINS is only honoured in backend-only mode; ignored.")
     genai_app.initialize()
     genai_app.update_from_config(app_cfg)
     genai_app.setup_router()
     cleanup()
 
-    if not genai_app.apionly and genai_app.rag_enabled:
+    if genai_app.backend_only:
+        logging.info("RAG database service not started (backend-only mode)")
+    elif not genai_app.apionly and genai_app.rag_enabled:
         logging.info("Starting RAG database service")
         ensure_rag_modules_loaded()
         vectodb_proc = start_service()

@@ -99,6 +99,11 @@ SERVER_PATTERN="${PYTHON_DIR}/server/main.py"
 UI_PATTERN="${PYTHON_DIR}/ui/main.py"
 # PID file for the running instance (enables `./run.sh stop`).
 PID_FILE="${RUN_PID_FILE:-${EXAMPLE_DIR}/.neat-genai-studio.pid}"
+# Which mode the running instance was started in (web / backend-only / cli),
+# written beside the pid file so `status` can say so.
+MODE_FILE="${PID_FILE%.pid}.mode"
+# --backend-only: model server + the Studio's API endpoints, no web UI.
+BACKEND_ONLY="${BACKEND_ONLY:-0}"
 STOP_TIMEOUT="${STOP_TIMEOUT:-20}"
 # Terminal chat instead of the web UI (set by `./run.sh --cli`).
 CLI_MODE="${CLI_MODE:-0}"
@@ -264,6 +269,11 @@ Usage:
   ./run.sh            Start the model server and web UI (Ctrl+C to stop).
                       Runs ./setup.sh automatically on the first launch.
   ./run.sh --cli      Start the model server and a terminal chat (no web UI).
+  ./run.sh --backend-only
+                      Start the model server and the Studio's API endpoints
+                      (chat, speech, transcription, translation, voices, models,
+                      /health) without the web UI, for other front ends such as
+                      Insight. BACKEND_CORS_ORIGINS enables browser CORS.
   ./run.sh --chat [MODEL]      Terminal chat; load MODEL and chat (skips the menu).
   ./run.sh --download [REPO]   Terminal chat; download REPO (or prompt) first.
   ./run.sh --benchmark [MODEL] Terminal chat; benchmark MODEL (or prompt). --bench.
@@ -278,6 +288,9 @@ Environment:
   AUTO_SETUP=0        Do not auto-run ./setup.sh on first launch (error instead).
   NEAT_APPS_BRANCH    Branch to pull for `update` (default: main).
   UPDATE_DEPS=1       Run full setup.sh dependency refresh during `update`.
+  BACKEND_CORS_ORIGINS
+                      With --backend-only: origins (comma-separated, or *) whose
+                      browser pages may call the API (CORS). Default: none.
 USAGE
 }
 
@@ -285,9 +298,15 @@ do_status() {
   if [[ -f "${PID_FILE}" ]]; then
     local pid; pid="$(cat "${PID_FILE}" 2>/dev/null || true)"
     if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
-      ok "Neat GenAI Studio is running (pid ${pid})."
+      local mode; mode="$(cat "${MODE_FILE}" 2>/dev/null || echo web)"
       local url; url="$(web_url || true)"
-      [[ -n "${url}" ]] && info "Web UI: ${C_ACCENT}${url}${C_RESET}"
+      if [[ "${mode}" == "backend-only" ]]; then
+        ok "Neat GenAI Studio is running (pid ${pid}, backend-only: API endpoints, no web UI)."
+        [[ -n "${url}" ]] && info "API: ${C_ACCENT}${url}${C_RESET}  health: ${C_ACCENT}${url}/health${C_RESET}"
+      else
+        ok "Neat GenAI Studio is running (pid ${pid}${mode:+, ${mode}})."
+        [[ -n "${url}" ]] && info "Web UI: ${C_ACCENT}${url}${C_RESET}"
+      fi
       return 0
     fi
   fi
@@ -311,11 +330,11 @@ do_stop() {
         warn "Not responding after ${STOP_TIMEOUT}s; sending KILL…"
         kill -KILL "${pid}" 2>/dev/null || true
       fi
-      rm -f "${PID_FILE}" "${SERVER_STATUS_FILE}"
+      rm -f "${PID_FILE}" "${MODE_FILE}" "${SERVER_STATUS_FILE}"
       ok "Stopped."
       return 0
     fi
-    rm -f "${PID_FILE}" "${SERVER_STATUS_FILE}"
+    rm -f "${PID_FILE}" "${MODE_FILE}" "${SERVER_STATUS_FILE}"
   fi
   # No recorded instance — best-effort cleanup of any stray studio processes.
   info "No running instance recorded; cleaning up any stray processes…"
@@ -406,6 +425,7 @@ do_clean() {
     "${DEFAULT_LOCAL_CONFIG}" \
     "${RESET_TOKEN_FILE}" \
     "${PID_FILE}" \
+    "${MODE_FILE}" \
     "${PYTHON_DIR}/ui/milvus.db" \
     "${PYTHON_DIR}/ui/milvus.meta.json" \
     "${PYTHON_DIR}/ui/assets/piper-plus" \
@@ -545,6 +565,7 @@ do_update() {
       --exclude='/config.local.yaml' \
       --exclude='/.local-certs/' \
       --exclude='/.neat-genai-studio.pid' \
+      --exclude='/.neat-genai-studio.mode' \
       --exclude='*.log' \
       --exclude='/src/python/ui/uploads/' \
       --exclude='/src/python/ui/.milvus.db.lock' \
@@ -592,6 +613,7 @@ case "${1:-run}" in
   update|--update|upgrade) do_update; exit 0 ;;
   -h|--help|help) usage; exit 0 ;;
   --cli|cli) CLI_MODE=1 ;;   # fall through to launch, then run the terminal chat
+  --backend-only|backend-only|backend) BACKEND_ONLY=1 ;;   # fall through to launch, headless
   # CLI shortcuts: launch the terminal chat straight into a mode. An optional
   # second argument (a model name, or HF repo for download) is forwarded too.
   --chat|chat)
@@ -838,7 +860,7 @@ cleanup() {
     pkill -KILL -f "${SERVER_PATTERN}" 2>/dev/null || true
   fi
   stop_stale_rag_worker
-  rm -f "${PID_FILE}" "${SERVER_STATUS_FILE}" "${RESET_REQUEST_FILE}"
+  rm -f "${PID_FILE}" "${MODE_FILE}" "${SERVER_STATUS_FILE}" "${RESET_REQUEST_FILE}"
   ok "Neat GenAI Studio stopped."
 }
 
@@ -851,7 +873,7 @@ if [[ -f "${PID_FILE}" ]]; then
     info "Run './run.sh stop' first, or './run.sh status' to check."
     exit 1
   fi
-  rm -f "${PID_FILE}" "${SERVER_STATUS_FILE}"
+  rm -f "${PID_FILE}" "${MODE_FILE}" "${SERVER_STATUS_FILE}"
 fi
 
 trap cleanup EXIT
@@ -860,6 +882,7 @@ trap 'exit 143' TERM
 
 # Record this instance so `./run.sh stop` can find it (removed by cleanup).
 echo "$$" > "${PID_FILE}"
+if [[ "${CLI_MODE}" == "1" ]]; then echo cli; elif [[ "${BACKEND_ONLY}" == "1" ]]; then echo backend-only; else echo web; fi > "${MODE_FILE}"
 # Expose the supervisor PID + PID file to the UI so it can offer a GUI "Shut down"
 # button (it SIGTERMs this process, which runs cleanup — same as `./run.sh stop`).
 export NEAT_RUN_PID="$$"
@@ -1027,9 +1050,16 @@ if [[ "${CLI_MODE}" == "1" ]]; then
   exit 0                # -> EXIT trap stops the model server
 fi
 
-section "Web UI"
-step "Starting the Neat GenAI Studio web UI…"
-setsid "${APP_PYTHON}" "${PYTHON_DIR}/ui/main.py" --config "${CONFIG_PATH}" &
+ui_args=(--config "${CONFIG_PATH}")
+if [[ "${BACKEND_ONLY}" == "1" ]]; then
+  section "Backend (headless)"
+  step "Starting the Neat GenAI Studio API endpoints (no web UI)…"
+  ui_args+=(--backend-only)
+else
+  section "Web UI"
+  step "Starting the Neat GenAI Studio web UI…"
+fi
+setsid "${APP_PYTHON}" "${PYTHON_DIR}/ui/main.py" "${ui_args[@]}" &
 pids[1]="$!"
 ui_pid="${pids[1]}"
 remember_process_group "${ui_pid}"
@@ -1040,7 +1070,10 @@ if [[ "${STUDIO_RESET_AUTH}" == "1" ]]; then
   info "Reset MLA from a browser needs this token (also in ${C_DIM}${RESET_TOKEN_FILE}${C_RESET}): ${C_BOLD}${STUDIO_RESET_TOKEN}${C_RESET}"
 fi
 _url="$(web_url || true)"
-if [[ -n "${_url}" ]]; then
+if [[ -n "${_url}" && "${BACKEND_ONLY}" == "1" ]]; then
+  info "Backend-only: API on ${C_ACCENT}${C_BOLD}${_url}${C_RESET} (no web UI); readiness at ${C_ACCENT}${_url}/health${C_RESET}."
+  info "CORS for browser front ends: ${BACKEND_CORS_ORIGINS:-off (set BACKEND_CORS_ORIGINS to allow origins)}."
+elif [[ -n "${_url}" ]]; then
   info "Open ${C_ACCENT}${C_BOLD}${_url}${C_RESET} in your browser once it finishes loading."
 fi
 info "Press ${C_BOLD}Ctrl+C${C_RESET} to stop, or run ${C_BOLD}./run.sh stop${C_RESET} from another shell."

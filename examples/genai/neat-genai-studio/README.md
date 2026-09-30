@@ -367,6 +367,55 @@ requests; the microphone needs the HTTPS page the Studio serves by default.
 **Back to Studio** (top left, or Esc) returns to the chat; standalone it links
 to the Studio root. Source: `src/python/ui/playground/`.
 
+### Backend-only mode (for Insight and other front ends)
+`./run.sh --backend-only` starts the model server and the Studio's API
+endpoints without the web UI, so another front end (for example Insight) can
+use the chat, speech, transcription and translation services directly. The
+text-to-speech engines still run in the Studio's web process, so the speech
+routes work exactly as in the full Studio. `app.web.headless: true` in
+`config.local.yaml` makes it the default; `./run.sh status` reports the mode.
+
+Served on the Studio port (HTTPS by default; set `app.web.https: false` for
+plain HTTP behind another service):
+
+```text
+GET  /health                       readiness: model server, active ASR model, loaded chat models, TTS engines
+POST /v1/chat/completions          OpenAI chat (streaming), proxied to the loaded chat/VLM model
+POST /v1/audio/speech              text to speech (see the audio API above)
+GET  /v1/audio/voices              engines, voices and languages
+POST /v1/audio/transcriptions      speech to text in the spoken language
+POST /v1/audio/translations        speech to English text
+GET  /models/status, /models/catalog; POST /models/load, /models/unload, /models/asr, ...
+POST /tts/engine, /supertonic/voice, /piperplus/voice, /voices/select   voice settings
+POST /shutdown                     stop everything (not reachable cross-origin)
+```
+
+Everything else (the UI pages, `/playground/`, static files, the Studio's own
+chat, RAG and camera routes) answers 404 in this mode. Browser pages on other
+origins are refused by default; list the origins that may call the API, or `*`:
+
+```bash
+BACKEND_CORS_ORIGINS="https://insight.local:8443,http://10.0.0.5:3000" ./run.sh --backend-only
+```
+
+Allowed origins get CORS headers (the `X-*` timing and engine headers are
+exposed) and preflight answers on the API paths; `/shutdown` never is. Quick
+checks from the board:
+
+```bash
+B=https://127.0.0.1:5000
+curl -sk $B/health
+curl -sk $B/v1/audio/voices | head -c 300
+curl -sk -X POST $B/v1/audio/speech -H 'Content-Type: application/json' \
+  -d '{"input":"Hello from the backend","model":"supertonic"}' -o hello.wav -D -
+curl -sk -X POST $B/v1/audio/translations -F file=@hello.wav -F response_format=verbose_json
+curl -sk -X OPTIONS $B/v1/audio/speech -H 'Origin: http://10.0.0.5:3000' \
+  -H 'Access-Control-Request-Method: POST' -D - -o /dev/null
+```
+
+`src/python/ui/apitest/backend_runtime_test.sh` exercises the model server and
+the speech routes against a backend started this way.
+
 ### Switch models on the fly
 The **Settings → Models** tab shows models downloaded to the board in a searchable list. Loaded models are marked
 `● loaded`, on-disk ones `○ downloaded`; press **Load** on a not-yet-loaded model

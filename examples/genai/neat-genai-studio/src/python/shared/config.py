@@ -58,6 +58,7 @@ class WebConfig:
     host: str
     port: int
     https: bool
+    headless: bool = False   # backend-only: serve the API endpoints, not the web UI
 
 
 @dataclass(frozen=True)
@@ -158,6 +159,7 @@ def load_server_config(path: Path = DEFAULT_SERVER_CONFIG, apps_root: Path = PAT
             host=str(web.get("host", "0.0.0.0") or "0.0.0.0"),
             port=int(web.get("port", 5000)),
             https=_load_bool(web.get("https", True)),
+            headless=_load_bool(web.get("headless", False)),
         ),
         rag=_load_rag_config(rag, apps_root),
         control=_load_control_config(control),
@@ -211,6 +213,7 @@ def load_ui_config(path: Path = DEFAULT_UI_CONFIG, apps_root: Path = PATH_ROOT) 
             host=str(web.get("host", "0.0.0.0") or "0.0.0.0"),
             port=int(web.get("port", 5000)),
             https=_load_bool(web.get("https", True)),
+            headless=_load_bool(web.get("headless", False)),
         ),
         rag=_load_rag_config(rag, apps_root),
         control=_load_control_config(control),

@@ -49,6 +49,7 @@ app:                         # Assistant web app settings.
     host: 0.0.0.0            # Host interface to bind.
     port: 5000               # Web UI port.
     https: true              # Serve the UI over HTTPS.
+    headless: false          # true: API endpoints only, no web UI (./run.sh --backend-only).
 
   ui:                        # Appearance defaults (users can override in the browser).
     font_family: Inter       # Default UI font family.
