@@ -114,18 +114,34 @@ bool child_exited(pid_t pid, int& status_out) {
   return rc == pid;
 }
 
-void terminate_child(pid_t pid) {
+// Stop the child the way an operator would: SIGINT, which every application
+// here handles, then SIGTERM and SIGKILL only if it ignores that. Reports the
+// wait status and the signal that finally ended it.
+void stop_child(pid_t pid, int& status_out, int& signal_out) {
+  status_out = 0;
+  signal_out = 0;
   if (pid <= 0)
     return;
-  (void)::kill(pid, SIGTERM);
-  int status = 0;
-  for (int i = 0; i < 20; ++i) {
-    if (child_exited(pid, status))
-      return;
-    ::usleep(100000);
+  const struct {
+    int signal;
+    int grace_ticks; // 100 ms each
+  } steps[] = {{SIGINT, 100}, {SIGTERM, 50}};
+  for (const auto& step : steps) {
+    (void)::kill(pid, step.signal);
+    signal_out = step.signal;
+    for (int i = 0; i < step.grace_ticks; ++i) {
+      if (child_exited(pid, status_out))
+        return;
+      ::usleep(100000);
+    }
   }
   (void)::kill(pid, SIGKILL);
-  (void)::waitpid(pid, &status, 0);
+  signal_out = SIGKILL;
+  (void)::waitpid(pid, &status_out, 0);
+}
+
+int exit_code_from_status(int status) {
+  return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 }
 
 std::string read_fd(int fd) {
@@ -345,7 +361,9 @@ ProcessResult spawn_and_wait(const std::string& binary, const std::vector<std::s
   int status = 0;
   while (!child_exited(pid, status)) {
     if (timeout_ms > 0 && elapsed_ms >= timeout_ms) {
-      terminate_child(pid);
+      int stop_status = 0;
+      int stop_signal = 0;
+      stop_child(pid, stop_status, stop_signal);
       auto out = read_fd(stdout_pipe[0]);
       auto err = read_fd(stderr_pipe[0]);
       ::close(stdout_pipe[0]);
@@ -430,19 +448,27 @@ ProcessResult spawn_until_output_files(const std::string& binary,
       previous_sizes = sizes;
       have_previous = true;
       if (static_cast<int>(finished.size()) >= expected_files) {
-        terminate_child(pid);
+        int stop_status = 0;
+        int stop_signal = 0;
+        stop_child(pid, stop_status, stop_signal);
         discard_unfinished_writes(output_dir, finished);
         auto out = read_fd(stdout_pipe[0]);
         auto err = read_fd(stderr_pipe[0]);
         ::close(stdout_pipe[0]);
         ::close(stderr_pipe[0]);
-        ProcessResult result{0, std::move(out), std::move(err)};
+        // The real exit status, not a stand-in 0: whether the application shut
+        // down cleanly is part of what the suite proves. See exit_problem().
+        ProcessResult result{exit_code_from_status(stop_status), std::move(out), std::move(err)};
+        result.stopped_by_harness = true;
+        result.stop_signal = stop_signal;
         write_process_artifacts(artifact_dir, command, result);
         return result;
       }
     }
     if (timeout_ms > 0 && elapsed_ms >= timeout_ms) {
-      terminate_child(pid);
+      int stop_status = 0;
+      int stop_signal = 0;
+      stop_child(pid, stop_status, stop_signal);
       auto out = read_fd(stdout_pipe[0]);
       auto err = read_fd(stderr_pipe[0]);
       ::close(stdout_pipe[0]);
@@ -571,8 +597,8 @@ std::string saved_frames_problem(const std::string& dir, int minimum, int min_si
              " bytes but does not decode as an image";
     }
     if (frame.cols < min_side || frame.rows < min_side) {
-      return path.filename().string() + " decoded to an implausible " +
-             std::to_string(frame.cols) + "x" + std::to_string(frame.rows);
+      return path.filename().string() + " decoded to an implausible " + std::to_string(frame.cols) +
+             "x" + std::to_string(frame.rows);
     }
   }
   return "";
@@ -625,6 +651,25 @@ std::string streamed_frames_problem(const std::string& dir, int minimum, int exp
     }
   }
   return "";
+}
+
+std::string exit_problem(const ProcessResult& result) {
+  if (!result.stopped_by_harness) {
+    return result.exit_code == 0 ? "" : "exit code " + std::to_string(result.exit_code);
+  }
+  if (result.stop_signal != SIGINT) {
+    return "ignored SIGINT and had to be stopped with " +
+           std::string(result.stop_signal == SIGKILL ? "SIGKILL" : "SIGTERM") + " (exit " +
+           std::to_string(result.exit_code) + "); its shutdown path never ran";
+  }
+  if (result.exit_code == 0 || result.exit_code == 130) {
+    return "";
+  }
+  if (result.exit_code < 0) {
+    return "died from SIGINT instead of shutting down cleanly";
+  }
+  return "exited " + std::to_string(result.exit_code) +
+         " after SIGINT instead of shutting down cleanly (expected 0 or 130)";
 }
 
 } // namespace sima_examples::testing

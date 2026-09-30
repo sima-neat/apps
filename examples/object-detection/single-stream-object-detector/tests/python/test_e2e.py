@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.utils.process_assertions import assert_exited_cleanly
 from tests.utils.output_assertions import assert_streamed_frames_are_usable
 
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -118,10 +119,7 @@ class TestE2E:
             cwd=str(EXAMPLE_DIR),
         )
 
-        assert result.returncode == 0, (
-            f"{source['name']} main.py exited with code {result.returncode}\n"
-            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-        )
+        assert_exited_cleanly(result)
         assert_streamed_frames_are_usable(
             tmp_output_dir, int(output_cfg["total_saved_frames"])
         )

@@ -10,10 +10,20 @@ constexpr int kSkipCode = 77;
 
 // Result of spawning a child process.
 struct ProcessResult {
-  int exit_code = -1;
+  int exit_code = -1; // WEXITSTATUS, or -1 when the process died from a signal
   std::string stdout_text;
   std::string stderr_text;
+  // Set by spawn_until_output_files when the harness stopped the process itself,
+  // with the signal that finally ended it: SIGINT when it shut down on request,
+  // SIGTERM or SIGKILL when it had to be escalated.
+  bool stopped_by_harness = false;
+  int stop_signal = 0;
 };
+
+// Empty when the process exited cleanly: 0 on its own, or, when the harness
+// stopped it, 0 or 130 after SIGINT without escalation. Otherwise the reason,
+// naming the exit code or the signal, so a suite can print it after "[FAIL]".
+std::string exit_problem(const ProcessResult& result);
 
 // Read an environment variable; return nullptr if unset or empty.
 const char* env_or_null(const char* key);
@@ -44,7 +54,10 @@ int skip_or_fail(const std::string& reason);
 ProcessResult spawn_and_wait(const std::string& binary, const std::vector<std::string>& args,
                              int timeout_ms = 30000);
 
-// Spawn a process, wait until output_dir contains expected_files, then terminate it.
+// Spawn a process, wait until output_dir contains expected_files, then stop it:
+// SIGINT first, which the applications handle, escalating to SIGTERM and SIGKILL
+// only if it ignores that. The result carries the real exit status and how the
+// process was stopped; use exit_problem() to judge it.
 // Returns exit_code 0 when the output condition is reached before timeout.
 ProcessResult spawn_until_output_files(const std::string& binary,
                                        const std::vector<std::string>& args,
