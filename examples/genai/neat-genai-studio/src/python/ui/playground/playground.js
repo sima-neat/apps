@@ -148,12 +148,16 @@
     const placeholder = waveEl.querySelector('.placeholder');
     const label = button.querySelector('span');
 
-    function stop() {
+    function stopSource() {          // Web Audio playback only
       if (source) { const s = source; source = null; try { s.stop(); } catch (e) { /* already stopped */ } }
       cancelAnimationFrame(raf);
       waveEl.classList.remove('playing');
       label.textContent = 'Play';
       if (resolveEnd) { const r = resolveEnd; resolveEnd = null; r(); }
+    }
+    function stop() {                // everything, including the native controls
+      stopSource();
+      if (!audioEl.paused) { try { audioEl.pause(); } catch (e) { /* not playable */ } }
     }
     function tick() {
       if (!source || !buffer) return;
@@ -168,7 +172,7 @@
       source = ctx.createBufferSource();
       source.buffer = buffer;
       source.connect(ctx.destination);
-      source.onended = stop;
+      source.onended = stopSource;
       startedAt = ctx.currentTime;
       source.start();
       waveEl.classList.add('playing');
@@ -204,7 +208,7 @@
       return Promise.resolve();
     }
     button.addEventListener('click', () => { play(); });
-    audioEl.addEventListener('play', () => { if (source) stop(); });   // don't double-play
+    audioEl.addEventListener('play', () => { if (source) stopSource(); });   // don't double-play
     window.addEventListener('resize', () => { if (buffer) drawWave(canvas, buffer); });
     return { load, stop, play, get buffer() { return buffer; }, get playing() { return !!source; } };
   }
@@ -802,23 +806,35 @@
     });
   });
   async function startLive() {
+    if (liveController) return;              // already listening or waiting on the prompt
     ensureAudioContext();
     liveMic.set({ sensitivity: Number(tl.sens.value), silenceMs: Number(tl.silence.value) });
     setStatus(tl.status, '');
-    liveController = new AbortController();  // before the mic runs: segments bind to it
+    const session = new AbortController();   // before the mic runs: segments bind to it
+    liveController = session;
+    tl.start.disabled = true; tl.start.querySelector('span').textContent = 'Starting…';   // no second click meanwhile
+    tl.stop.disabled = false;
     let started = false;
     try { started = await liveMic.start(); }
-    catch (err) { liveController = null; setStatus(tl.status, `Microphone unavailable: ${err.message}`, 'err'); setChip(tl.state, 'err', 'no microphone'); return; }
-    if (!started) { liveController = null; return; }   // stopped while the permission prompt was open
-    tl.start.disabled = true; tl.start.classList.add('recording'); tl.start.querySelector('span').textContent = 'Listening';
-    tl.stop.disabled = false;
+    catch (err) {
+      if (liveController === session) { liveController = null; resetLiveControls(); }
+      setStatus(tl.status, `Microphone unavailable: ${err.message}`, 'err'); setChip(tl.state, 'err', 'no microphone');
+      return;
+    }
+    if (!started || liveController !== session) {   // stopped while the permission prompt was open
+      if (liveController === session) { liveController = null; resetLiveControls(); }
+      return;
+    }
+    tl.start.classList.add('recording'); tl.start.querySelector('span').textContent = 'Listening';
   }
-  function stopLive() {
-    if (liveMic.state === 'idle' && tl.start.disabled === false) return;
-    liveMic.stop();
-    if (liveController) { liveController.abort(); liveController = null; }
+  function resetLiveControls() {
     tl.start.disabled = false; tl.start.classList.remove('recording'); tl.start.querySelector('span').textContent = 'Start listening';
     tl.stop.disabled = true;
+  }
+  function stopLive() {
+    liveMic.stop();
+    if (liveController) { liveController.abort(); liveController = null; }
+    resetLiveControls();
   }
   tl.start.addEventListener('click', startLive);
   tl.stop.addEventListener('click', stopLive);
@@ -984,7 +1000,7 @@
 
   // Leaving a tab stops whatever it was doing (playback, recording, listening).
   leaveTab = (name) => {
-    if (name === 'speech') spPlayer.stop();
+    if (name === 'speech') { if (spController) spController.abort(); spPlayer.stop(); }
     else if (name === 'transcription') { stopLive(); stopRecording(); trPlayer.stop(); }
     else if (name === 'echo') stopEcho();
   };
