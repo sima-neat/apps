@@ -3106,7 +3106,9 @@ def transcribe_audio(audio_bytes, *, language='auto', model=None, filename='audi
     if response.status_code >= 400:
         detail = ''
         try:
-            detail = str((response.json() or {}).get('error') or '')
+            error = (response.json() or {}).get('error')
+            # The model server answers OpenAI-style: {"error": {"message", "type"}}.
+            detail = str(error.get('message') or error.get('type') or '') if isinstance(error, dict) else str(error or '')
         except ValueError:
             pass
         logging.error("Model server rejected the transcription (%s): %s", response.status_code, detail[:200])
