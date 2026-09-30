@@ -95,7 +95,12 @@ tests/
     e2e_config.py      # shared example-config and output helpers
     pytest_fixtures.py # shared pytest fixture implementations
     test_scope.py      # test-scope validation and query helper
+  harness/
+    test_output_assertions.py  # harness self-tests; run by test.sh --unit
   scripts/
+    test_*_contract.py         # repository contract tests; need a source checkout,
+                               # run with: pytest -c tests/pytest.ini tests/scripts
+                               # (CI: the Repository Contract Tests job)
     testing/           # VS Code / DevKit task helpers
 
 examples/<category>/<example>/
@@ -110,6 +115,7 @@ sandbox-test/
     cpp-e2e.log
     cpp-unit.log
     python-e2e.log
+    python-harness.log
     python-unit.log
   python/<example>/<test>/
     command.txt
@@ -161,11 +167,17 @@ Python tests run through `PYTHON_TEST_BIN`. If it is unset, `tests/test.sh`
 uses common pyneat locations first, then the active virtual environment, then
 system `python3`.
 
-The selected interpreter must have `pytest` and `PyYAML` installed:
+The selected interpreter must have `pytest`, `PyYAML`, NumPy and OpenCV
+installed. NumPy and OpenCV are what the e2e output assertions and the harness
+self-tests decode saved frames with; this is the same set CI installs:
 
 ```bash
-${PYTHON_TEST_BIN:-python3} -m pip install pytest PyYAML
+${PYTHON_TEST_BIN:-python3} -m pip install pytest PyYAML "numpy<2" "opencv-python-headless<4.12"
 ```
+
+Without NumPy or OpenCV the harness self-tests under `tests/harness` skip with
+a message naming the missing package, and `--strict` turns that skip into a
+failure.
 
 For a persistent local override, set `PYTHON_TEST_BIN` in `tests/configs/.env.local`.
 
@@ -260,3 +272,7 @@ MJPEG URLs.
 - Stage 2 (Modalix runner): overlays the test bundle, runs
   `./tests/test.sh --all --strict`, and publishes only the runtime candidate after
   every activated test passes.
+- Alongside both, an Ubuntu job runs the repository contract tests under
+  `tests/scripts` against the source checkout, because they read `build.sh`, the
+  workflows and the portal sources, which the test bundle does not carry.
+  Publishing waits for it too.

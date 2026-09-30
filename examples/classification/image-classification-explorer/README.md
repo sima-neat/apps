@@ -151,6 +151,52 @@ the complete previous report or the complete new one. Use an empty or dedicated 
 only replaces a directory that carries the hidden `.image-classification-explorer-report` marker
 from a previous run and holds nothing else; any other non-empty directory is refused.
 
+## Expected Result
+
+Both implementations write the same report, so the check is the same whichever
+you ran: the run ends with a summary naming the report directory, and every
+model agrees on the sample image.
+
+```text
+Done in 3292.5 ms. Report written to report
+  report.html, report.json, report.csv
+```
+
+With `io.input` left `null`, the bundled goldfish sample is classified by every
+profile in `config.yaml`. Opening `report.html`, or reading `report.csv`, should
+show class `1` winning for each model:
+
+```text
+image                     model            status  top1_class_id  top1_label  top1_probability
+/tmp/sima_imagenet_...    resnet_50        ok      1              goldfish    0.9462
+/tmp/sima_imagenet_...    resnet_18        ok      1              goldfish    0.9995
+/tmp/sima_imagenet_...    efficientnet_b0  ok      1              goldfish    0.7786
+/tmp/sima_imagenet_...    densenet_121     ok      1              goldfish    0.9586
+```
+
+Exact probabilities vary with the model package; what matters is that class `1`
+wins for every profile and that `status` is `ok` rather than `error`. The two
+implementations produce byte-identical `report.csv`, `report.html` and thumbnail
+names for the same input, so a difference between them is a defect, not run
+variance.
+
+A per-image failure does not stop the run: the image keeps its row and the
+failing model gets an `error` cell in the report and a line on stderr, so a
+partial result is always visible rather than silently missing.
+
+```text
+  images/broken.jpg: resnet_50 failed: Failed to read image: images/broken.jpg
+```
+
+If `validation.expected_class_id` is set and the sample does not match it, the
+run still writes its report and notes the mismatch on stderr rather than
+failing:
+
+```text
+Note: resnet_50 top1=393 (0.4871) did not match expected_class_id=1
+  (min_probability=0.2); see report for details.
+```
+
 ## Troubleshooting
 
 - Verify each `models.<name>.path` if a model fails to load.

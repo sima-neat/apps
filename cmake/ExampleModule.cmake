@@ -96,6 +96,14 @@ function(_sima_neat_apps_ensure_support_testing apps_root)
 
   find_package(nlohmann_json REQUIRED)
 
+  # The e2e assertions decode saved frames, so the test support library needs
+  # OpenCV in its own right. The example binaries already require it, through
+  # the Neat core target, and the top-level build resolves it the same way.
+  if (NOT TARGET PkgConfig::OPENCV)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(OPENCV REQUIRED IMPORTED_TARGET opencv4)
+  endif()
+
   add_library(sima_neat_apps_support_testing STATIC
     "${apps_root}/support/runtime/config_utils.cpp"
     "${apps_root}/support/testing/metadata_json_listener.cpp"
@@ -107,6 +115,7 @@ function(_sima_neat_apps_ensure_support_testing apps_root)
   target_link_libraries(sima_neat_apps_support_testing
     PUBLIC
       nlohmann_json::nlohmann_json
+      PkgConfig::OPENCV
   )
 
   target_include_directories(sima_neat_apps_support_testing

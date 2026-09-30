@@ -1,0 +1,39 @@
+model:
+  path: models/fastflow_demo_mpk.tar.gz   # Compiled model archive. See Prepare the Model.
+  # Input normalisation the package expects, RGB order on 0..1 pixels. fastflow_demo takes
+  # its blue-disc mean; a package compiled from an anomalib export normalises inside the
+  # graph and takes mean [0, 0, 0] and stddev [1, 1, 1].
+  normalize:
+    mean: [0.3893437, 0.35421189, 0.36142577]
+    stddev: [1.0, 1.0, 1.0]
+
+source:
+  rtsp_url: <rtsp-url>       # e.g. rtsp://<insight-host-ip>:8554/src1. Frames must be square.
+  tcp: true                  # Use TCP for RTSP transport.
+  latency_ms: 100            # RTSP receive latency in milliseconds.
+
+inference:
+  frames: 0                  # Frame limit. 0 means run continuously.
+  threshold: 0.5             # Map probability that counts as anomalous. Fixed by training.
+  min_region_px: 300         # Smallest connected region, in 256x256 map pixels, that marks a
+                             # frame ANOMALY. Measured on the blue discs; re-measure per product.
+
+runtime:
+  profile: false             # Print aggregate profiling summaries.
+  profile_interval: 100      # Rolling profile window in published frames.
+
+output:
+  heat_max: 0.7              # Map probability drawn at full heatmap intensity.
+  alpha: 0.55                # Heatmap opacity over the frame.
+  save_dir: ""               # Optional directory for annotated frames.
+  save_every: 0              # Save every Nth output frame. 0 disables saving.
+  insight:
+    host: <insight-host-ip>  # Host running the Insight receiver/viewer.
+    video_port: 9000         # UDP video port.
+
+# Test harness settings only. Normal example runs ignore this section.
+testing:
+  e2e:
+    output:
+      save_every: 10
+      total_saved_frames: 20
