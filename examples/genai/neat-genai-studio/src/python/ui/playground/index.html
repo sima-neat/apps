@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Audio API · Neat GenAI Studio</title>
+  <link rel="icon" href="/static/icons/logo.png">
+  <link rel="stylesheet" href="playground.css">
+</head>
+<body>
+  <header class="pg-header">
+    <div class="pg-brand">
+      <img id="logo" src="/static/icons/logo_bright.png" alt="SiMa.ai">
+      <h1>Audio API <span>playground</span></h1>
+    </div>
+    <nav class="pg-tabs" role="tablist" aria-label="Endpoints">
+      <button class="pg-tab" role="tab" data-tab="speech" aria-selected="true" type="button">Speech</button>
+      <button class="pg-tab" role="tab" data-tab="transcription" aria-selected="false" type="button">Transcription</button>
+    </nav>
+    <span class="pg-spacer"></span>
+    <span id="conn" class="pg-pill"><i class="dot"></i><span>connecting…</span></span>
+    <button id="themeButton" class="icon-btn" type="button" title="Toggle theme" aria-label="Toggle theme">
+      <svg id="themeSun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+      <svg id="themeMoon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" hidden><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+    </button>
+    <a id="newTab" class="icon-btn" href="/playground/" target="_blank" rel="noopener" title="Open in a new tab" aria-label="Open in a new tab">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-9 9M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/></svg>
+    </a>
+    <button id="closeButton" class="icon-btn" type="button" title="Back to the Studio (Esc)" aria-label="Close" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </header>
+
+  <main>
+    <!-- ================= Speech ================= -->
+    <section id="panel-speech" class="pg-panel" role="tabpanel">
+      <div class="pg-grid">
+        <div class="card">
+          <div class="card-head"><h2>Compose</h2><span class="route">POST /v1/audio/speech</span></div>
+          <label class="field">
+            <span>Text <code>input</code></span>
+            <textarea id="sp-input" class="textarea" spellcheck="true">Hello from Neat GenAI Studio. This sentence was synthesized on the Modalix accelerator.</textarea>
+          </label>
+          <div class="row">
+            <label class="field"><span>Engine <code>model</code></span><select id="sp-engine" class="select"></select></label>
+            <label class="field"><span>Voice <code>voice</code></span><select id="sp-voice" class="select"></select></label>
+            <label class="field"><span>Language <code>language</code></span><select id="sp-language" class="select"></select></label>
+          </div>
+          <div class="field">
+            <span>Speed <code>speed</code></span>
+            <div class="slider"><input id="sp-speed" type="range" min="0.25" max="4" step="0.05" value="1"><output id="sp-speedOut">1.00×</output></div>
+            <div class="hint">Engines clamp to their own range (Supertonic 0.7–2.0, Piper 0.5–2.0); the effective value returns in <code>X-Speed</code>. Only <code>wav</code> is produced.</div>
+          </div>
+          <div class="actions">
+            <button id="sp-run" class="btn primary" type="button">
+              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span>Synthesize</span>
+            </button>
+            <button id="sp-stop" class="btn" type="button" disabled>Cancel</button>
+            <span class="hint">⌘/Ctrl + Enter</span>
+          </div>
+          <div id="sp-status" class="status"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>Output</h2><span id="sp-size" class="route">–</span></div>
+          <div id="sp-wave" class="wave"><canvas id="sp-canvas"></canvas><div class="cursor"></div><div id="sp-placeholder" class="placeholder">Synthesize to hear the result</div></div>
+          <div class="player-row">
+            <button id="sp-play" class="btn" type="button" disabled>
+              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span>Play</span>
+            </button>
+            <audio id="sp-audio" controls preload="auto" hidden></audio>
+            <a id="sp-download" class="btn" download="speech.wav" hidden>Download WAV</a>
+          </div>
+          <div class="stats">
+            <div class="stat"><b id="st-engine">–</b><span>engine</span></div>
+            <div class="stat"><b id="st-voice">–</b><span>voice</span></div>
+            <div class="stat"><b id="st-speed">–</b><span>speed</span></div>
+            <div class="stat"><b id="st-dur">–</b><span>audio s</span></div>
+            <div class="stat"><b id="st-gen">–</b><span>gen s</span></div>
+            <div class="stat"><b id="st-rtf">–</b><span>RTF</span></div>
+          </div>
+          <details open>
+            <summary>Request &amp; curl</summary>
+            <div class="body">
+              <pre id="sp-req">{}</pre>
+              <div class="copy-row"><span>Same call from a shell</span><button class="copy-btn" data-copy="sp-curl" type="button">Copy</button></div>
+              <pre id="sp-curl"></pre>
+            </div>
+          </details>
+          <details>
+            <summary>Response headers</summary>
+            <div class="body"><pre id="sp-headers"></pre></div>
+          </details>
+          <details>
+            <summary>Engines, voices &amp; languages <code>GET /v1/audio/voices</code></summary>
+            <div class="body"><pre id="sp-voicesJson"></pre></div>
+          </details>
+        </div>
+      </div>
+      <div class="ref">
+        <span><code>input</code> ≤ 4096 chars</span><span><code>model</code> default | supertonic | piper-plus | piper-tts</span>
+        <span><code>speed</code> 0.25–4.0</span><span><code>response_format</code> wav</span><span><code>language</code> ISO code (extension)</span>
+      </div>
+    </section>
+
+    <!-- ================= Transcription ================= -->
+    <section id="panel-transcription" class="pg-panel" role="tabpanel" hidden>
+      <div class="pg-grid">
+        <div class="card">
+          <div class="card-head"><h2>Audio in</h2><span class="route">POST /v1/audio/transcriptions</span></div>
+          <div class="actions">
+            <button id="tr-rec" class="btn primary rec-btn" type="button"><i class="rec-dot"></i><span>Record</span></button>
+            <button id="tr-recStop" class="btn" type="button" disabled>Stop</button>
+            <span id="tr-recTime" class="hint"></span>
+          </div>
+          <div class="meter"><i id="tr-level"></i></div>
+          <label id="tr-drop" class="drop">
+            <input id="tr-file" type="file" accept="audio/*,video/webm,.wav,.webm,.ogg,.mp3,.m4a,.flac">
+            <span id="tr-dropText">… or drop an audio file here / click to choose</span>
+          </label>
+          <div id="tr-wave" class="wave"><canvas id="tr-canvas"></canvas><div class="cursor"></div><div id="tr-placeholder" class="placeholder">No clip yet</div></div>
+          <div class="player-row">
+            <button id="tr-play" class="btn" type="button" disabled>
+              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span>Play clip</span>
+            </button>
+            <audio id="tr-audio" controls preload="auto" hidden></audio>
+            <span id="tr-clipInfo" class="hint"></span>
+          </div>
+          <div class="row">
+            <label class="field"><span>Language <code>language</code></span><select id="tr-language" class="select"></select></label>
+            <label class="field"><span>Format <code>response_format</code></span>
+              <select id="tr-format" class="select"><option value="verbose_json" selected>verbose_json</option><option value="json">json</option><option value="text">text</option></select>
+            </label>
+            <label class="field"><span>Model <code>model</code></span><input id="tr-model" class="input" type="text" placeholder="active speech-to-text model"></label>
+          </div>
+          <div class="actions">
+            <button id="tr-run" class="btn primary" type="button" disabled>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 12h3l3-7 4 14 3-7h3"/></svg><span>Transcribe</span>
+            </button>
+            <button id="tr-cancel" class="btn" type="button" disabled>Cancel</button>
+          </div>
+          <div id="tr-status" class="status"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>Transcript</h2><span id="tr-elapsed" class="route">–</span></div>
+          <div id="tr-result" class="transcript empty">The transcript appears here.</div>
+          <table id="tr-meta" class="meta" hidden>
+            <tbody>
+              <tr><td>model <code>X-ASR-Model</code></td><td id="m-model">–</td></tr>
+              <tr><td>language</td><td id="m-lang">–</td></tr>
+              <tr><td>no_speech_prob</td><td id="m-nospeech">–</td></tr>
+              <tr><td>avg_logprob</td><td id="m-logprob">–</td></tr>
+              <tr><td>Studio filter</td><td id="m-ignored">–</td></tr>
+            </tbody>
+          </table>
+          <details open>
+            <summary>curl</summary>
+            <div class="body">
+              <div class="copy-row"><span>Same call from a shell</span><button class="copy-btn" data-copy="tr-curl" type="button">Copy</button></div>
+              <pre id="tr-curl"></pre>
+            </div>
+          </details>
+          <details>
+            <summary>Raw response</summary>
+            <div class="body"><pre id="tr-raw"></pre></div>
+          </details>
+        </div>
+      </div>
+      <div class="ref">
+        <span><code>file</code> WAV, WebM/Opus, MP4, MP3, FLAC… ≤ 25 MiB</span><span><code>language</code> auto or ISO code</span>
+        <span><code>response_format</code> json | verbose_json | text</span><span><code>model</code> optional</span>
+      </div>
+    </section>
+  </main>
+
+  <script src="playground.js"></script>
+</body>
+</html>

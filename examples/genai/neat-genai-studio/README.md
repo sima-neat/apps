@@ -335,9 +335,21 @@ GET  /v1/audio/voices            extension: discovery
 
 `utterance_speed` / `utteranceSpeed` are still accepted on the speech route as
 deprecated aliases of `speed`. The scripts under `src/python/ui/apitest/`
-(`speech.sh`, `transcriptions.sh`, `chat.sh`) wrap these calls, and the
-**Speech API** and **Transcription API** harnesses under **Solutions** let you
-try them from a browser.
+(`speech.sh`, `transcriptions.sh`, `chat.sh`) wrap these calls.
+
+#### Audio API playground
+The waveform button in the header opens the **Audio API playground**
+(`https://<board>:5000/playground/`, also usable standalone), a page themed like
+the Studio with two tabs. **Speech** fills its engine, voice and language
+pickers from `GET /v1/audio/voices`, calls `POST /v1/audio/speech`, draws and
+plays the result (Web Audio, with a scrubbable player and a download link) and
+shows the `X-*` headers, the request body and a copyable `curl` equivalent.
+**Transcription** records from the microphone with a live level meter or takes
+a dropped file, previews the clip, calls `POST /v1/audio/transcriptions` in any
+of the three formats and shows the transcript, its metadata and a `curl`
+equivalent. It needs no chat model, keeps everything on this origin and makes
+no external requests; the microphone needs the HTTPS page the Studio serves by
+default. Source: `src/python/ui/playground/`.
 
 ### Switch models on the fly
 The **Settings → Models** tab shows models downloaded to the board in a searchable list. Loaded models are marked
@@ -452,19 +464,8 @@ After a CLI run it offers to export the results to a `.csv` or `.json` path.
 Ctrl+C stops the current run. (Accuracy tasks like hellaswag/piqa still need the
 host `llima-benchmark` CLI.)
 
-### SiMaSentry Solutions (Med / Safe / Sec demo harnesses) and API playgrounds
+### SiMaSentry Solutions (Med / Safe / Sec demo harnesses)
 The Studio includes three AI harnesses. **SiMaSentry-Med** provides clinical VLM chat and diagnostic imaging tools. **SiMaSentry-Safe** handles PPE and hazard inspection with live camera zones. **SiMaSentry-Sec** supports SOC threat analysis and change detection. Open them from the shield icon in the header.
-
-The same grid offers two **audio API playgrounds** for trying the endpoints
-independently of the chat: **Speech API** (`/solutions/speech/`) calls
-`GET /v1/audio/voices` to offer every engine, voice and language, then
-`POST /v1/audio/speech`, plays and downloads the WAV, and shows the `X-*`
-headers plus a `curl` equivalent; **Transcription API**
-(`/solutions/transcription/`) records from the microphone or takes a file and
-calls `POST /v1/audio/transcriptions` in any of the three response formats,
-showing the transcript, its metadata and a `curl` equivalent. They need no chat
-model, keep everything on this origin, and make no external requests (the
-microphone needs the HTTPS page the Studio serves by default).
 
 - Picking a card launches the harness full-screen, **auto-wired to the currently
   loaded model** through a same-origin `/v1/chat/completions` proxy (the Studio

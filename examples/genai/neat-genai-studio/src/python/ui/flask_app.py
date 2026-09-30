@@ -1589,6 +1589,19 @@ class AppContext:
                 filename += 'index.html'
             return send_from_directory(harness_dir, filename)
 
+        # Audio API playground: a single same-origin page (Speech / Transcription
+        # tabs) that exercises /v1/audio/* directly. Themed like the Studio and
+        # embedded from the header's Audio API button.
+        playground_dir = str(APP_DIR / 'playground')
+
+        @self.app.route('/playground/')
+        def playground_index():
+            return send_from_directory(playground_dir, 'index.html')
+
+        @self.app.route('/playground/<path:filename>')
+        def playground_asset(filename):
+            return send_from_directory(playground_dir, filename)
+
         @self.app.route('/tts/engine', methods=['GET'])
         def tts_engine_get():
             if self.talk_ctrl is None:

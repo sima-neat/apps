@@ -13,9 +13,6 @@
     medical:  { folder: 'health',   label: 'SiMaSentry-Med',  accent: 'medical' },
     safety:   { folder: 'safety',   label: 'SiMaSentry-Safe', accent: 'safety' },
     security: { folder: 'security', label: 'SiMaSentry-Sec',  accent: 'security' },
-    // Audio API playgrounds (same-origin /v1/audio/*); they ignore the chat settings.
-    speech:        { folder: 'speech',        label: 'Speech API',        accent: 'speech' },
-    transcription: { folder: 'transcription', label: 'Transcription API', accent: 'transcription' },
   };
 
   // Legacy hash routes from the previous launcher version.

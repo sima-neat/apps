@@ -835,6 +835,7 @@ window.onload = function () {
   initBenchmark();
   initShowcase();
   initSolutions();
+  initPlayground();
   initShutdownButton();
   initRagInspect();
   initVersionModal();
@@ -6308,6 +6309,67 @@ function closeShowcase() {
   _showcaseEntered = false;
 }
 
+// ---- Audio API playground (/playground/), embedded in-app ----------------
+// The header's waveform button opens the playground full-screen in an iframe
+// (same origin; it calls /v1/audio/* directly and follows the Studio theme).
+// The page's ✕ / Esc posts {type:'sima-studio:close-playground'} to close.
+let _playgroundEntered = false;
+
+function openPlayground() {
+  const modal = document.getElementById('playgroundModal');
+  const frame = document.getElementById('playgroundFrame');
+  if (!modal || !frame) return;
+  if (!frame.src) frame.src = '/playground/';
+  frame.style.display = 'block';
+  modal.style.display = 'flex';
+  document.body.classList.add('playground-open');
+  _playgroundEntered = false;
+  try {
+    const rf = modal.requestFullscreen || modal.webkitRequestFullscreen;
+    if (rf) { const p = rf.call(modal); if (p && p.then) { _playgroundEntered = true; p.catch(() => { _playgroundEntered = false; }); } }
+  } catch (e) { /* ignore */ }
+  setTimeout(() => { try { frame.contentWindow && frame.contentWindow.focus(); } catch (e) { /* ignore */ } }, 80);
+}
+
+function closePlayground() {
+  const modal = document.getElementById('playgroundModal');
+  const frame = document.getElementById('playgroundFrame');
+  if (!modal) return;
+  modal.style.display = 'none';
+  if (frame) { frame.style.display = 'none'; frame.src = ''; }   // stops audio and releases the mic
+  document.body.classList.remove('playground-open');
+  if (_playgroundEntered) {
+    try {
+      if (document.fullscreenElement || document.webkitFullscreenElement) {
+        const p = (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+        if (p && p.catch) p.catch(() => {});
+      }
+    } catch (e) { /* ignore */ }
+  }
+  _playgroundEntered = false;
+}
+
+function initPlayground() {
+  const btn = document.getElementById('playgroundButton');
+  const modal = document.getElementById('playgroundModal');
+  if (!btn || !modal) return;
+  btn.addEventListener('click', (e) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || (e.button && e.button !== 0)) return;
+    e.preventDefault();
+    openPlayground();
+  });
+  window.addEventListener('message', (e) => {
+    const frame = document.getElementById('playgroundFrame');
+    if (!frame || e.source !== frame.contentWindow) return;
+    if (e.origin !== window.location.origin) return;
+    if (e.data && typeof e.data === 'object' && e.data.type === 'sima-studio:close-playground') closePlayground();
+  });
+  document.addEventListener('fullscreenchange', () => {
+    // Leaving browser fullscreen (Esc handled by the browser) closes the playground too.
+    if (_playgroundEntered && !document.fullscreenElement && modal.style.display !== 'none') closePlayground();
+  });
+}
+
 // ---- Solutions: SiMaSentry harness suites (Med/Safe/Sec), embedded in-app ----
 // The header shield button opens a Studio-styled launcher grid; picking a card
 // loads the vendored harness (/solutions/<mode>/) in a fullscreen iframe,
@@ -6318,17 +6380,10 @@ const SOLUTIONS_MODES = {
   health:   { label: 'SiMaSentry-Med' },
   safety:   { label: 'SiMaSentry-Safe' },
   security: { label: 'SiMaSentry-Sec' },
-  // Audio API playgrounds: same-origin pages that call /v1/audio/* directly.
-  // They need no chat model and take no provider/model parameters.
-  speech:        { label: 'Speech API', kind: 'audio' },
-  transcription: { label: 'Transcription API', kind: 'audio' },
 };
 let _solutionsEntered = false;   // did we request browser fullscreen on open?
 
 function buildSolutionsHarnessUrl(mode) {
-  if (SOLUTIONS_MODES[mode] && SOLUTIONS_MODES[mode].kind === 'audio') {
-    return `/solutions/${mode}/index.html`;
-  }
   // provider=ollama keeps the harness from requiring an API key; URL params
   // override its localStorage so every open reflects the current model.
   const params = new URLSearchParams({ provider: 'ollama', base_url: '/v1/chat/completions' });
@@ -6408,8 +6463,7 @@ function openSolutionsHarness(mode) {
   if (!SOLUTIONS_MODES[mode]) return;
   const model = getSelectedChatModel();
   const vision = model && selectedChatModelSupportsVision();
-  // The audio playgrounds talk to the TTS/ASR engines, not the chat model.
-  if (!vision && SOLUTIONS_MODES[mode].kind !== 'audio') {
+  if (!vision) {
     const msg = model
       ? `${model} has no vision support — the ${SOLUTIONS_MODES[mode].label} image features won't work. Open anyway?`
       : `No model is loaded — ${SOLUTIONS_MODES[mode].label} cannot chat until one is loaded in Settings. Open anyway?`;

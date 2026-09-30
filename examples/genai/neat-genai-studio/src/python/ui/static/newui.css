@@ -654,13 +654,6 @@ body.rag-inspect-open { overflow: hidden; }
 .solutions-card[data-accent="med"]  { --sl-accent: #16c8a6; }
 .solutions-card[data-accent="safe"] { --sl-accent: #f2801d; }
 .solutions-card[data-accent="sec"]  { --sl-accent: #3a86ec; }
-.solutions-card[data-accent="speech"] { --sl-accent: #b4d33d; }
-.solutions-card[data-accent="asr"]    { --sl-accent: #a6a8d6; }
-.solutions-card-icon {
-  width: min(110px, 30vw); height: auto; color: var(--sl-accent);
-  filter: drop-shadow(0 10px 24px rgba(0, 0, 0, .45)); margin: 12px 0 8px;
-}
-.solutions-card-api code { font-size: .78rem; color: #b8c4d6; }
 .solutions-card:hover, .solutions-card:focus-visible {
   transform: translateY(-3px);
   border-color: color-mix(in srgb, var(--sl-accent) 55%, transparent);
@@ -682,6 +675,8 @@ body.rag-inspect-open { overflow: hidden; }
   border-radius: 999px; padding: 3px 9px;
 }
 .solutions-frame { flex: 1 1 auto; width: 100%; height: 100%; border: 0; display: block; }
+.playground-modal { background: var(--bg); color: var(--text); }
+body.playground-open { overflow: hidden; }
 body.solutions-open { overflow: hidden; }
 
 .bench-modal {
