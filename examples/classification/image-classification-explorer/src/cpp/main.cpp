@@ -62,24 +62,6 @@ public:
 // the customer the key and the value instead, as Python does.
 std::string lower_copy(std::string value); // defined below, used by parse_yaml_int
 
-// PyYAML resolves `~` to null, so `input: ~` means "not set". ScalarConfig only
-// recognises the spelling `null`, so without this C++ would look for a file
-// literally named "~" while Python downloaded the fallback sample.
-std::optional<std::string> config_scalar(const sima_examples::ScalarConfig& raw,
-                                         const std::string& key) {
-  auto value = raw.string_value(key);
-  if (value.has_value() && sima_examples::trim_copy(*value) == "~")
-    return std::nullopt;
-  return value;
-}
-
-std::string config_scalar_or(const sima_examples::ScalarConfig& raw, const std::string& key,
-                             const std::string& fallback) {
-  if (!config_scalar(raw, key).has_value())
-    return fallback;
-  return raw.string_or(key, fallback);
-}
-
 // PyYAML reads integers with the YAML 1.1 rules: a leading zero is octal, `0x`
 // and `0b` are radix prefixes and underscores are separators. ScalarConfig uses
 // std::stoi in base 10, so `num_classes: 010` is 8 to Python and 10 to C++ -
@@ -124,6 +106,32 @@ std::optional<long long> parse_yaml_int(const std::string& text) {
   } catch (const std::exception&) {
     return std::nullopt;
   }
+}
+
+// PyYAML resolves `~` to null, so `input: ~` means "not set". ScalarConfig only
+// recognises the spelling `null`, so without this C++ would look for a file
+// literally named "~" while Python downloaded the fallback sample.
+std::optional<std::string> config_scalar(const sima_examples::ScalarConfig& raw,
+                                         const std::string& key) {
+  auto value = raw.string_value(key);
+  if (value.has_value() && sima_examples::trim_copy(*value) == "~")
+    return std::nullopt;
+  return value;
+}
+
+std::string config_scalar_or(const sima_examples::ScalarConfig& raw, const std::string& key,
+                             const std::string& fallback) {
+  const auto value = config_scalar(raw, key);
+  if (!value.has_value())
+    return fallback;
+  // PyYAML resolves an unquoted numeric scalar to a number, and Python renders
+  // that number as text, so `output_dir: 010` names the directory "8" there.
+  // ScalarConfig keeps the text "010" and cannot see whether it was quoted, so
+  // canonicalise the same way here: both entrypoints then agree for either
+  // spelling. A value that is not a YAML integer is untouched.
+  if (const auto number = parse_yaml_int(*value))
+    return std::to_string(*number);
+  return *value;
 }
 
 // Python prints a float with str(): the shortest text that reads back as the
@@ -779,7 +787,13 @@ std::vector<fs::path> discover_images(const std::string& input_path,
       throw InputError("failed to read input directory " + path.string() + ": " + ec.message());
     }
     for (const auto& entry : it) {
-      if (entry.is_regular_file())
+      // The throwing overload aborts the entire scan when one entry cannot be
+      // stat'ed - a dangling or self-referential symlink - and the run exits
+      // with no report at all. Python's Path.is_file() reports false for the
+      // same entry and carries on, so skip it here too. (find_bundled_file
+      // already uses this overload; this was the one place that did not.)
+      std::error_code entry_ec;
+      if (entry.is_regular_file(entry_ec) && !entry_ec)
         entries.push_back(normalize_like_pathlib(entry.path()));
     }
   }

@@ -304,6 +304,18 @@ def config_str(value: Any, key: str, default: str | None) -> str | None:
     if value is None:
         return default
     if isinstance(value, str):
+        text = value.strip()
+        # ScalarConfig unquotes a value before testing it for null, so `"null"`
+        # and `"~"` reach C++ indistinguishable from a bare null and fall back
+        # to the default. Without this the same file would write to a directory
+        # actually named "null" in Python and to the default in C++.
+        if text.lower() == "null" or text == "~":
+            return default
+        # Likewise C++ cannot tell `010` from `"010"`; both canonicalise, so
+        # both name the same directory either way.
+        number = parse_yaml_int(text)
+        if number is not None:
+            return str(number)
         return value
     if isinstance(value, bool):
         return "true" if value else "false"

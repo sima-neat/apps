@@ -539,6 +539,55 @@ class TestThumbnails:
         assert written.shape[0] == 32 and written.shape[1] == 32
 
 
+class TestScalarConfigSemantics:
+    """`ScalarConfig` unquotes a value and then tests it for null, and it never
+    sees a YAML type. Python has the typed value but not the raw spelling, so
+    neither side can recover what the other lost - the only way they agree is
+    for Python to adopt the same lossy rules."""
+
+    @pytest.mark.parametrize("value,expected", [
+        ("null", "fallback"),    # unquoted by ScalarConfig, then read as null
+        ("NULL", "fallback"),
+        ("~", "fallback"),
+        ("010", "8"),            # C++ cannot tell this from the bare 010
+        ("0x10", "16"),
+        ("2024", "2024"),        # canonical already: unchanged
+        ("report", "report"),    # ordinary name: untouched
+        ("null-reports", "null-reports"),
+    ])
+    def test_string_values_follow_cpp_rules(self, value, expected):
+        assert main.config_str(value, "io.output_dir", "fallback") == expected
+
+    def test_parsed_numbers_render_canonically(self):
+        """PyYAML hands `010` over as int 8; C++ canonicalises the text to the
+        same thing."""
+        assert main.config_str(8, "io.output_dir", "fallback") == "8"
+
+
+class TestDirectoryScan:
+    def test_unstatable_entry_is_skipped_not_fatal(self, tmp_path):
+        """A self-referential symlink cannot be stat'ed. Python's Path.is_file()
+        reports False and the scan continues; C++ used the throwing
+        is_regular_file() overload here and ended the run with no report at all.
+        Pinned on both sides so neither drifts onto the other's behaviour."""
+        images = tmp_path / "images"
+        images.mkdir()
+        good = images / "a.jpg"
+        _make_image(good)
+        try:
+            (images / "loop").symlink_to("loop")
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks unavailable on this filesystem")
+
+        found, skipped = main.discover_images(
+            str(images), (".jpg",), "http://unused.invalid/x.jpg", tmp_path / "fallback.jpg"
+        )
+        assert [p.name for p in found] == ["a.jpg"]
+        assert not any("loop" in entry for entry in skipped), (
+            "an unstatable entry should be ignored, not reported as a skipped image"
+        )
+
+
 class TestYamlIntegers:
     """parse_yaml_int decides both what a setting means and whether a profile
     name is a string, so a change here moves two behaviours at once."""

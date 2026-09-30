@@ -696,6 +696,108 @@ int main(int argc, char** argv) {
     fs::remove_all(work);
   }
 
+  // Test 28: an entry that cannot be stat'ed must not abort the scan. The
+  // throwing is_regular_file() overload raised filesystem_error on a
+  // self-referential symlink, so the run ended at exit 6 with no report while
+  // Python skipped the entry and continued.
+  {
+    namespace fs = std::filesystem;
+    const auto stamp = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    const auto work = fs::temp_directory_path() / ("image-classification-explorer-loop-" + stamp);
+    const auto images = work / "images";
+    fs::create_directories(images);
+    {
+      std::ofstream(images / "a.jpg") << "not really an image\n";
+    }
+    std::error_code link_ec;
+    fs::create_symlink("loop", images / "loop", link_ec); // points at itself
+    {
+      std::ofstream config(work / "config.yaml");
+      config << "io:\n"
+             << "  input: " << images.string() << "\n"
+             << "  output_dir: " << (work / "report").string() << "\n"
+             << "models:\n"
+             << "  m:\n"
+             << "    path: /nonexistent/m.tar.gz\n";
+    }
+    auto r = spawn_and_wait(binary, {"--config", (work / "config.yaml").string()}, 20000);
+    // The model cannot load, so the run still fails - but the scan must have
+    // completed and found the one real image.
+    const bool classified = r.stdout_text.find("Classifying 1 image(s)") != std::string::npos;
+    const bool filesystem_error =
+        (r.stdout_text + r.stderr_text).find("filesystem error") != std::string::npos;
+    if (link_ec) {
+      std::cout << "[OK] unstatable directory entry (skipped: symlinks unavailable here)\n";
+    } else if (!classified || filesystem_error) {
+      std::cerr << "[FAIL] unstatable directory entry: classified=" << classified
+                << " filesystem_error=" << filesystem_error << " exit " << r.exit_code
+                << "\nstdout:\n"
+                << r.stdout_text << "\nstderr:\n"
+                << r.stderr_text << "\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] an unstatable directory entry was skipped, not fatal\n";
+    }
+    fs::remove_all(work);
+  }
+
+  // Test 29: a numeric or null-like output_dir must name the same directory
+  // here as in Python. PyYAML resolves `010` to 8 and unquotes `"null"` to a
+  // plain string, while ScalarConfig sees only text and cannot tell either
+  // spelling apart, so both sides canonicalise. Uses an unsupported-extension
+  // input so no model is loaded.
+  {
+    namespace fs = std::filesystem;
+    const auto stamp = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    const auto work =
+        fs::temp_directory_path() / ("image-classification-explorer-dirname-" + stamp);
+    fs::create_directories(work);
+    {
+      std::ofstream(work / "input.txt") << "not an image\n";
+    }
+    // The run happens with `work` as the working directory, so the report
+    // assets are resolved through the config-file anchor rather than a
+    // repo-relative path. Put them beside config.yaml, as a package does.
+    for (const char* asset : {"report.css", "report.js"}) {
+      const fs::path source = find_bundled_source(asset);
+      if (!source.empty())
+        fs::copy_file(source, work / asset, fs::copy_options::overwrite_existing);
+    }
+    auto run_with = [&](const std::string& output_dir_value) {
+      std::ofstream config(work / "config.yaml");
+      config << "io:\n"
+             << "  input: " << (work / "input.txt").string() << "\n"
+             << "  output_dir: " << output_dir_value << "\n"
+             << "models:\n"
+             << "  m:\n"
+             << "    path: /nonexistent/m.tar.gz\n";
+      config.close();
+      // Absolute: spawn_and_wait_in changes the working directory, which is
+      // what makes the relative output_dir below resolve inside `work`.
+      return spawn_and_wait_in(fs::absolute(binary).string(),
+                               {"--config", (work / "config.yaml").string()}, 20000, work.string());
+    };
+
+    // `010` is octal 8 to PyYAML, so the directory is "8" in Python.
+    auto numeric = run_with("010");
+    const bool canonical = fs::exists(work / "8") && !fs::exists(work / "010");
+    // `"null"` is unquoted before the null test, so C++ falls back to "report";
+    // Python now does the same rather than creating a directory named "null".
+    auto nulled = run_with("\"null\"");
+    const bool defaulted = fs::exists(work / "report") && !fs::exists(work / "null");
+
+    if (numeric.exit_code != 0 || nulled.exit_code != 0 || !canonical || !defaulted) {
+      std::cerr << "[FAIL] output_dir canonicalisation: numeric_exit=" << numeric.exit_code
+                << " canonical=" << canonical << " nulled_exit=" << nulled.exit_code
+                << " defaulted=" << defaulted << "\nstderr:\n"
+                << numeric.stderr_text << nulled.stderr_text << "\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] numeric and null-like output_dir names match Python\n";
+    }
+    fs::remove_all(work);
+  }
+
   // Test 27: the packaged layout works from an unrelated working directory.
   //
   // SIMANEAT_APPS_EXAMPLE_SOURCE_DIR is repository-relative, so a customer who
