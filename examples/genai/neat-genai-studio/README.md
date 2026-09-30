@@ -383,7 +383,8 @@ the Studio's own design tokens, fonts, controls and spacing, with four modes:
 - **Translate** turns speech or typed text in one language into another. Pick
   the source (or let Whisper detect it) and any target; the target list marks
   languages the chosen voice engine cannot speak. Into English, speech goes
-  straight through Whisper's translate task (`POST /v1/audio/translations`);
+  through Whisper's translate task (`POST /v1/audio/translations`, with the
+  original transcribed alongside so each turn shows both);
   into any other language, Whisper transcribes what was said and the loaded
   chat model translates it through `POST /v1/chat/completions`, streaming the
   result into the turn. The translation can be spoken back with the chosen

@@ -950,6 +950,13 @@ trap 'exit 143' TERM
 # cleanly instead of leaving the setsid'd processes behind.
 trap 'exit 129' HUP
 
+# app.web.headless: true in the config is the same as --backend-only (the UI
+# process reads it too); resolve it before the mode is recorded and branched on.
+if [[ "${BACKEND_ONLY}" != "1" && "${CLI_MODE}" != "1" ]]; then
+  _headless="$(awk '/^  web:/{f=1;next} f&&/^  [a-z]/{f=0} f&&$1=="headless:"{print $2;exit}' "${CONFIG_PATH}" 2>/dev/null || true)"
+  case "${_headless,,}" in true|yes|on|1) BACKEND_ONLY=1 ;; esac
+fi
+
 # Record this instance so `./run.sh stop` can find it (removed by cleanup).
 echo "$$" > "${PID_FILE}"
 if [[ "${CLI_MODE}" == "1" ]]; then echo cli; elif [[ "${BACKEND_ONLY}" == "1" ]]; then echo backend-only; else echo web; fi > "${MODE_FILE}"

@@ -669,7 +669,7 @@
   async function setClip(blob, name, type) {
     clip = { blob, name, type: type || blob.type || 'application/octet-stream' };
     tr.clipInfo.textContent = `${name} · ${clip.type} · ${(blob.size / 1024).toFixed(0)} KiB`;
-    tr.run.disabled = false;
+    tr.run.disabled = !!trController;          // one request at a time: Run returns when it ends
     updateTrPreview();
     await trPlayer.load(blob, { autoplay: false });
   }
@@ -767,13 +767,15 @@
 
   async function transcribe() {
     if (!clip) { setStatus(tr.status, 'Record or choose a clip first.', 'err'); return; }
-    trController = new AbortController();
+    if (trController) return;                    // single-flight: Cancel first
+    const controller = new AbortController();
+    trController = controller;
     tr.run.disabled = true; tr.cancel.disabled = false; tr.meta.hidden = true;
     tr.result.classList.add('empty'); tr.result.textContent = 'Transcribing…';
     setStatus(tr.status, 'Transcribing…', '', true);
     const t0 = performance.now();
     try {
-      const res = await fetch(`${API}/v1/audio/transcriptions`, { method: 'POST', body: trFormData(), signal: trController.signal });
+      const res = await fetch(`${API}/v1/audio/transcriptions`, { method: 'POST', body: trFormData(), signal: controller.signal });
       const type = res.headers.get('Content-Type') || '';
       const rawText = await res.text();
       tr.raw.textContent = rawText;
@@ -807,8 +809,8 @@
       if (err.name === 'AbortError') setStatus(tr.status, 'Cancelled.');
       else setStatus(tr.status, err.message, 'err');
     } finally {
-      trController = null;
-      tr.run.disabled = !clip; tr.cancel.disabled = true;
+      if (trController === controller) trController = null;
+      tr.run.disabled = !clip || !!trController; tr.cancel.disabled = !trController;
     }
   }
 
@@ -1287,17 +1289,25 @@
       if (blob) {
         const toEnglish = target === 'en';
         setXlState('busy', toEnglish ? 'Translating to English…' : 'Transcribing…');
-        const r = await transcribeBlob(blob, 'utterance.wav', { language: source, signal, endpoint: toEnglish ? 'translations' : 'transcriptions' });
-        timing.asr = r.secs;
-        detected = r.data.language || detected;
+        // Into English: Whisper's translate task gives the translation, and a
+        // transcription of the same clip (requested alongside) gives the original.
+        const [r, src] = await Promise.all([
+          transcribeBlob(blob, 'utterance.wav', { language: source, signal, endpoint: toEnglish ? 'translations' : 'transcriptions' }),
+          toEnglish ? transcribeBlob(blob, 'utterance.wav', { language: source, signal }).catch((e) => { if (e.name === 'AbortError') throw e; return null; })
+                    : Promise.resolve(null),
+        ]);
+        timing.asr = Math.max(r.secs, src ? src.secs : 0);
+        detected = r.data.language || (src && src.data.language) || detected;
         if (r.data.ignored || !r.text) {
           setBubble(you, r.text || '(nothing recognisable)', `${dur.toFixed(1)} s · ${r.data.ignored ? `ignored: ${r.data.reason || 'filtered'}` : 'no words'}`, 'ignored');
           you.style.opacity = '.6';
           return;
         }
         if (toEnglish) {
-          setBubble(you, `(${dur.toFixed(1)} s of ${detected ? langName(detected) : 'speech'})`, `${langTag(detected)} · Whisper translate ${r.secs.toFixed(2)} s`);
-          translation = r.text; how = `Whisper translate`;
+          original = (src && src.text) || '';
+          setBubble(you, original || `(${dur.toFixed(1)} s of ${detected ? langName(detected) : 'speech'}; source transcript unavailable)`,
+                    `${langTag(detected)} · ASR ${timing.asr.toFixed(2)} s`);
+          translation = r.text; how = `Whisper translate ${r.secs.toFixed(2)} s`;
         } else {
           original = r.text;
           setBubble(you, original, `${langTag(detected)} · ASR ${r.secs.toFixed(2)} s`);
