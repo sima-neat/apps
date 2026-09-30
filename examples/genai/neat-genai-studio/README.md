@@ -319,7 +319,7 @@ POST /v1/audio/speech            JSON
                    that one; any other Piper voice answers 400 rather than a different voice
   speed            0.25-4.0 (default 1.0); clamped to the engine's range, effective value in X-Speed
   response_format  wav (the only format produced; anything else answers 400)
-  language         extension: ISO code the text is in (default en)
+  language         extension: ISO code the text is in (default en; auto means en)
   -> 200 audio/wav with X-Engine, X-Voice, X-Language, X-Speed, X-RTF, X-Audio-Duration, X-Elapsed-Time
      400 {error, param} | 503 {error, reason, engine} when the engine cannot serve the language
 
@@ -590,18 +590,22 @@ selector in Settings.
   on-device compilation is needed, and nothing is cloned from an external
   repository: the runtime package itself is vendored in
   `src/python/ui/supertonic_sima/` (see its README for provenance and how to
-  refresh it). An install is only treated as complete when every file the
-  worker needs is present, so an interrupted download is repaired on the next
-  `setup.sh`. The models root and the venv path are persisted under
-  `app.tts.supertonic.models_root` / `.venv` in `config.local.yaml`; `run.sh`
-  and the UI read them from there (so a custom `SUPERTONIC_VENV` given to
-  `setup.sh` keeps working on every later launch), with `SUPERTONIC_MODELS_ROOT`
+  refresh it). Every `setup.sh` run (including `--dependencies-only`) checks all
+  19 model files against the SHA-256 of the pinned revisions and re-fetches any
+  that are missing or different, so an interrupted, corrupted or outdated
+  download is repaired; a venv whose build fails part-way is removed rather than
+  left half-installed. The models root and the venv path are persisted under
+  `app.tts.supertonic.models_root` / `.venv` in `config.local.yaml`; `setup.sh`,
+  `run.sh` and the UI read them from there (so a custom `SUPERTONIC_VENV` or
+  `SUPERTONIC_MODELS_ROOT` keeps working on every later launch and re-run), with `SUPERTONIC_MODELS_ROOT`
   / `SUPERTONIC_VENV` / `SUPERTONIC_PYTHON` in the environment as overrides, and
   `run.sh` exports `SUPERTONIC_PYTHON` for the worker. Set `INSTALL_SUPERTONIC=0` to skip
   it; when the runtime is missing the engine is simply not offered and the CPU
-  engines behave as before. `./run.sh --clean` removes the venv and keeps the
-  model files (they live outside the example directory); `CLEAN_SUPERTONIC=1`
-  removes them too. Installs made before the runtime was vendored keep working:
+  engines behave as before. `./run.sh --clean` removes the venv under the
+  example directory and keeps the model files; a venv configured elsewhere and
+  the model files are removed only with `CLEAN_SUPERTONIC=1`. `./run.sh update`
+  warns when a release changes the Supertonic requirements or model revisions
+  without `UPDATE_DEPS=1`. Installs made before the runtime was vendored keep working:
   their `app_root` config key maps to `<app_root>/models`, and the old venv and
   checkout can simply be deleted. The worker holds the two Supertonic models on
   the MLA next to the chat and speech-to-text models. An accelerator reset

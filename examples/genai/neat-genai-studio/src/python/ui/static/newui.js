@@ -6315,6 +6315,16 @@ function closeShowcase() {
 // The page's "Back to Studio" link / Esc posts {type:'sima-studio:close-playground'}
 // to close; standalone, that link simply navigates to /.
 let _playgroundEntered = false;
+let _playgroundGen = 0;              // bumps on every open/close: stale fullscreen promises no-op
+
+function _exitFullscreenQuietly() {
+  try {
+    if (document.fullscreenElement || document.webkitFullscreenElement) {
+      const p = (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+      if (p && p.catch) p.catch(() => {});
+    }
+  } catch (e) { /* ignore */ }
+}
 
 function openPlayground() {
   const modal = document.getElementById('playgroundModal');
@@ -6325,9 +6335,20 @@ function openPlayground() {
   modal.style.display = 'flex';
   document.body.classList.add('playground-open');
   _playgroundEntered = false;
+  const gen = ++_playgroundGen;
   try {
     const rf = modal.requestFullscreen || modal.webkitRequestFullscreen;
-    if (rf) { const p = rf.call(modal); if (p && p.then) { _playgroundEntered = true; p.catch(() => { _playgroundEntered = false; }); } }
+    if (rf) {
+      const p = rf.call(modal);
+      if (p && p.then) {
+        _playgroundEntered = true;
+        p.then(() => {
+          // Closed before fullscreen was granted: leave it again. (A reopen in
+          // the meantime wants fullscreen, so only a hidden modal exits.)
+          if (modal.style.display === 'none') _exitFullscreenQuietly();
+        }, () => { if (gen === _playgroundGen) _playgroundEntered = false; });
+      }
+    }
   } catch (e) { /* ignore */ }
   setTimeout(() => { try { frame.contentWindow && frame.contentWindow.focus(); } catch (e) { /* ignore */ } }, 80);
 }
@@ -6341,14 +6362,8 @@ function closePlayground() {
   // rather than '' (an empty src reflects as the document URL and stays truthy).
   if (frame) { frame.style.display = 'none'; frame.src = 'about:blank'; }
   document.body.classList.remove('playground-open');
-  if (_playgroundEntered) {
-    try {
-      if (document.fullscreenElement || document.webkitFullscreenElement) {
-        const p = (document.exitFullscreen || document.webkitExitFullscreen).call(document);
-        if (p && p.catch) p.catch(() => {});
-      }
-    } catch (e) { /* ignore */ }
-  }
+  _playgroundGen += 1;
+  if (_playgroundEntered) _exitFullscreenQuietly();
   _playgroundEntered = false;
 }
 

@@ -91,9 +91,11 @@
   }
   function option(value, label) { const o = document.createElement('option'); o.value = value; o.textContent = label; return o; }
   function fmt(v, d) { return (typeof v === 'number' && Number.isFinite(v)) ? v.toFixed(d) : (v == null || v === '' ? '–' : String(v)); }
+  const sliderShows = [];            // refresh every slider's readout (boot, after restoring prefs)
   function bindSlider(input, output, format) {
     const show = () => { output.value = format(Number(input.value)); };
     input.addEventListener('input', show); show();
+    sliderShows.push(show);
     return show;
   }
   function el(tag, cls, text) { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; }
@@ -170,6 +172,7 @@
     function play() {
       if (!buffer) return Promise.resolve();
       if (source) { stop(); return Promise.resolve(); }
+      if (!audioEl.paused) { try { audioEl.pause(); } catch (e) { /* ignore */ } }   // one player at a time
       const ctx = ensureAudioContext();
       source = ctx.createBufferSource();
       source.buffer = buffer;
@@ -184,10 +187,21 @@
     }
     /** Decode and show a clip; resolves when autoplay finishes. A stop() while
      *  decoding (tab left, Cancel) discards the result: nothing is shown or played. */
+    function clear() {               // show nothing until the new clip is decoded
+      buffer = null;
+      drawWave(canvas, null);
+      placeholder.hidden = false;
+      placeholder.textContent = 'Decoding…';
+      if (objectUrl) { URL.revokeObjectURL(objectUrl); objectUrl = null; }
+      audioEl.removeAttribute('src');
+      try { audioEl.load(); } catch (e) { /* ignore */ }
+      audioEl.hidden = true;
+      button.disabled = true;
+    }
     async function load(blob, { autoplay } = {}) {
       stop();
       const gen = loadGen;
-      buffer = null;
+      clear();
       const ctx = ensureAudioContext();
       const bytes = await blob.arrayBuffer();
       if (gen !== loadGen) return Promise.resolve();
@@ -270,6 +284,17 @@
     }
     registerProcessor('pg-capture', PgCapture);`;
   let workletReady = null;
+  // The capture processor is registered once per AudioContext; only a failed
+  // addModule is retried (registering the same name twice would throw).
+  function loadWorklet(ctx) {
+    if (!workletReady) {
+      const url = URL.createObjectURL(new Blob([WORKLET_SRC], { type: 'text/javascript' }));
+      const ready = ctx.audioWorklet.addModule(url);
+      ready.then(() => URL.revokeObjectURL(url), () => { URL.revokeObjectURL(url); if (workletReady === ready) workletReady = null; });
+      workletReady = ready;
+    }
+    return workletReady;
+  }
 
   function createLiveMic(opts) {
     const o = Object.assign({ silenceMs: 700, minSpeechMs: 250, maxSpeechMs: 20000, prerollMs: 320, sensitivity: 0.5 }, opts);
@@ -333,45 +358,68 @@
       }
     }
 
-    let startToken = 0;               // invalidated by stop(): a permission prompt may outlive it
-    /** Resolves true when listening, false when cancelled by stop() meanwhile
-     *  (or already running / starting); rejects when the microphone is denied. */
-    mic.start = async function start() {
-      if (stream) return true;
-      if (mic.starting) return false;
+    let startToken = 0;               // stop() bumps it: every await in a start re-checks it
+    let pending = null;               // the start in flight, if any
+    const cancelled = (token) => token !== startToken;
+
+    // Build the capture graph from a granted stream. Everything is held in locals
+    // and only published (stream/srcNode/node) once no stop() happened during any
+    // await; otherwise it is torn down here and the start reports false.
+    async function startOnce(token) {
       const ctx = ensureAudioContext();
-      rate = ctx.sampleRate;
-      const token = ++startToken;
-      mic.starting = true;
-      let granted;
-      try {
-        granted = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
-      } finally { mic.starting = false; }
-      if (token !== startToken) {     // stopped (tab left, Stop pressed) while the prompt was open
+      const granted = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+      let src = null, n = null;
+      const teardown = () => {
+        try { if (src) src.disconnect(); } catch (e) { /* ignore */ }
+        try { if (n) n.disconnect(); } catch (e) { /* ignore */ }
+        if (n && n.port) n.port.onmessage = null;
+        if (n && 'onaudioprocess' in n) n.onaudioprocess = null;
         granted.getTracks().forEach((t) => t.stop());
-        return false;
-      }
-      stream = granted;
-      srcNode = ctx.createMediaStreamSource(stream);
-      let usedWorklet = false;
-      if (ctx.audioWorklet) {
-        try {
-          if (!workletReady) workletReady = ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLET_SRC], { type: 'text/javascript' })));
-          await workletReady;
-          node = new AudioWorkletNode(ctx, 'pg-capture', { numberOfInputs: 1, numberOfOutputs: 0 });
-          node.port.onmessage = (e) => frame(e.data);
-          srcNode.connect(node);
-          usedWorklet = true;
-        } catch (e) { workletReady = null; node = null; }
-      }
-      if (!usedWorklet) {
-        node = ctx.createScriptProcessor(1024, 1, 1);
-        node.onaudioprocess = (e) => frame(new Float32Array(e.inputBuffer.getChannelData(0)));
-        srcNode.connect(node); node.connect(ctx.destination);   // Chrome needs the sink for the callback to run
-      }
+      };
+      if (cancelled(token)) { teardown(); return false; }        // stopped during the permission prompt
+      try {
+        rate = ctx.sampleRate;
+        src = ctx.createMediaStreamSource(granted);
+        let workletOk = false;
+        if (ctx.audioWorklet) {
+          try { await loadWorklet(ctx); workletOk = true; } catch (e) { workletOk = false; }
+          if (cancelled(token)) { teardown(); return false; }    // stopped while the worklet loaded
+        }
+        if (workletOk) {
+          try {
+            n = new AudioWorkletNode(ctx, 'pg-capture', { numberOfInputs: 1, numberOfOutputs: 0 });
+            n.port.onmessage = (e) => frame(e.data);
+            src.connect(n);
+          } catch (e) { n = null; }
+        }
+        if (!n) {
+          n = ctx.createScriptProcessor(1024, 1, 1);
+          n.onaudioprocess = (e) => frame(new Float32Array(e.inputBuffer.getChannelData(0)));
+          src.connect(n); n.connect(ctx.destination);   // Chrome needs the sink for the callback to run
+        }
+      } catch (err) { teardown(); throw err; }
+      stream = granted; srcNode = src; node = n;
       reset(); floor = -60; mic.paused = false;
       setState('listening');
       return true;
+    }
+
+    /** Resolves true once listening, false when stop() cancelled this start;
+     *  rejects when the microphone is denied or capture cannot be set up. A
+     *  start issued while a cancelled one is still settling waits for it and
+     *  then proceeds, so a quick stop/start is never silently dropped. */
+    mic.start = async function start() {
+      if (stream) return true;
+      if (pending) {
+        await pending.catch(() => false);
+        if (stream) return true;
+      }
+      const token = ++startToken;
+      const p = startOnce(token);
+      pending = p; mic.starting = true;
+      try { return await p; } finally {
+        if (pending === p) { pending = null; mic.starting = false; }
+      }
     };
     mic.stop = function stop() {
       startToken += 1;                // cancels a start() still waiting on the prompt
@@ -518,6 +566,7 @@
     sp.req.textContent = JSON.stringify(body, null, 2);
     const json = JSON.stringify(body).replace(/'/g, "'\\''");
     sp.curl.textContent = `curl -k -X POST ${API}/v1/audio/speech \\\n  -H 'Content-Type: application/json' \\\n  -d '${json}' -o speech.wav -D -`;
+    if (!listing) return;          // pickers not filled yet: saving now would erase the stored choices
     savePrefs({ engine: sp.engine.value, voice: sp.voice.value, language: sp.language.value, speed: sp.speed.value, input: sp.input.value });
   }
   function initSpeechPickers() {
@@ -533,6 +582,13 @@
     updateSpeechPreview();
   }
 
+  let downloadUrl = null;
+  function setDownload(blob) {
+    if (downloadUrl) URL.revokeObjectURL(downloadUrl);
+    downloadUrl = blob ? URL.createObjectURL(blob) : null;
+    if (downloadUrl) sp.download.href = downloadUrl; else sp.download.removeAttribute('href');
+    sp.download.hidden = !downloadUrl;
+  }
   async function synthesize() {
     if (spController) return;                 // one request at a time (Run is disabled; shortcut checks too)
     const body = speechBody();
@@ -564,11 +620,11 @@
       }
       const blob = await res.blob();
       sp.size.textContent = `${(blob.size / 1024).toFixed(0)} KiB · ${((performance.now() - t0) / 1000).toFixed(2)} s round trip`;
-      sp.download.href = URL.createObjectURL(blob);
-      sp.download.hidden = false;
+      setDownload(blob);
       setStatus(sp.status, 'Playing', 'ok');
       await spPlayer.load(blob, { autoplay: true });
-      setStatus(sp.status, 'Done', 'ok');
+      if (spPlayer.buffer) setStatus(sp.status, 'Done', 'ok');
+      else setStatus(sp.status, 'The browser could not decode the returned audio (the download link still has it).', 'err');
     } catch (err) {
       if (err.name === 'AbortError') setStatus(sp.status, 'Cancelled.');
       else setStatus(sp.status, err.message, 'err');
@@ -596,7 +652,7 @@
     result: $('tr-result'), meta: $('tr-meta'), elapsed: $('tr-elapsed'), curl: $('tr-curl'), raw: $('tr-raw'),
   };
   const trPlayer = makePlayer({ waveEl: $('tr-wave'), canvas: $('tr-canvas'), button: $('tr-play'), audioEl: $('tr-audio') });
-  let clip = null, recorder = null, stream = null, chunks = [], timer = 0, meterRaf = 0, trController = null;
+  let clip = null, trController = null;
 
   ASR_LANGUAGES.forEach((c) => { tr.language.appendChild(option(c, langLabel(c))); $('tl-language').appendChild(option(c, langLabel(c))); $('ec-asrLanguage').appendChild(option(c, langLabel(c))); });
 
@@ -613,18 +669,15 @@
     await trPlayer.load(blob, { autoplay: false });
   }
 
-  function meterLoop(analyser, data) {
-    analyser.getByteTimeDomainData(data);
-    let sum = 0;
-    for (let i = 0; i < data.length; i++) { const v = (data[i] - 128) / 128; sum += v * v; }
-    const rms = Math.sqrt(sum / data.length);
-    tr.level.style.width = `${Math.min(100, rms * 260)}%`;
-    meterRaf = requestAnimationFrame(() => meterLoop(analyser, data));
-  }
+
 
   let recToken = 0, recStarting = false;   // a pending permission prompt is cancelled by stopRecording()
+  // Each recording owns its stream, recorder, meter and timer (captured in the
+  // closure), so a late onstop from a previous recording can never tear down a
+  // newer one.
+  let active = null;                 // { rec, cleanup } of the recording in progress
   async function startRecording() {
-    if (recStarting || (recorder && recorder.state !== 'inactive')) return;
+    if (recStarting || active) return;
     const token = ++recToken;
     recStarting = true;
     let granted;
@@ -632,36 +685,63 @@
     catch (err) { setStatus(tr.status, `Microphone unavailable: ${err.message}`, 'err'); return; }
     finally { recStarting = false; }
     if (token !== recToken) { granted.getTracks().forEach((t) => t.stop()); return; }   // mode/tab left meanwhile
-    stream = granted;
     const mime = (window.MediaRecorder && MediaRecorder.isTypeSupported) ? MIME_PREFERENCE.find((m) => MediaRecorder.isTypeSupported(m)) : '';
-    try { recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream); }
-    catch (err) { setStatus(tr.status, `Recording not supported here: ${err.message}`, 'err'); stream.getTracks().forEach((t) => t.stop()); return; }
+    let rec;
+    try { rec = mime ? new MediaRecorder(granted, { mimeType: mime }) : new MediaRecorder(granted); }
+    catch (err) { setStatus(tr.status, `Recording not supported here: ${err.message}`, 'err'); granted.getTracks().forEach((t) => t.stop()); return; }
     const ctx = ensureAudioContext();
     const analyser = ctx.createAnalyser(); analyser.fftSize = 1024;
-    ctx.createMediaStreamSource(stream).connect(analyser);
-    meterLoop(analyser, new Uint8Array(analyser.fftSize));
-    chunks = [];
-    recorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
-    recorder.onstop = async () => {
-      const type = recorder.mimeType || mime || 'audio/webm';
-      const blob = new Blob(chunks, { type });
-      stream.getTracks().forEach((t) => t.stop()); stream = null;
-      clearInterval(timer); cancelAnimationFrame(meterRaf); tr.level.style.width = '0';
+    const src = ctx.createMediaStreamSource(granted);
+    src.connect(analyser);
+    const data = new Uint8Array(analyser.fftSize);
+    let raf = 0;
+    const meter = () => {
+      analyser.getByteTimeDomainData(data);
+      let sum = 0;
+      for (let i = 0; i < data.length; i++) { const v = (data[i] - 128) / 128; sum += v * v; }
+      tr.level.style.width = `${Math.min(100, Math.sqrt(sum / data.length) * 260)}%`;
+      raf = requestAnimationFrame(meter);
+    };
+    meter();
+    const started = Date.now();
+    const tm = setInterval(() => { tr.recTime.textContent = `${((Date.now() - started) / 1000).toFixed(1)} s`; }, 200);
+    const parts = [];
+    let cleaned = false;
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      clearInterval(tm); cancelAnimationFrame(raf);
+      try { src.disconnect(); } catch (e) { /* ignore */ }
+      granted.getTracks().forEach((t) => t.stop());
+      if (active && active.rec === rec) active = null;
+      tr.level.style.width = '0';
       tr.rec.classList.remove('recording'); tr.rec.querySelector('span').textContent = 'Record';
       tr.rec.disabled = false; tr.recStop.disabled = true;
+    };
+    rec.ondataavailable = (e) => { if (e.data && e.data.size) parts.push(e.data); };
+    rec.onerror = (e) => { cleanup(); setStatus(tr.status, `Recording failed: ${(e.error && e.error.message) || 'unknown error'}`, 'err'); };
+    rec.onstop = async () => {
+      cleanup();
+      const type = rec.mimeType || mime || 'audio/webm';
+      const blob = new Blob(parts, { type });
       if (!blob.size) { setStatus(tr.status, 'Nothing was recorded.', 'err'); return; }
       await setClip(blob, `recording.${extensionFor(type)}`, type);
       setStatus(tr.status, 'Clip ready. Press Transcribe.', 'ok');
     };
-    recorder.start();
-    const started = Date.now();
+    active = { rec, cleanup };
+    rec.start();
     tr.recTime.textContent = '0.0 s';
-    timer = setInterval(() => { tr.recTime.textContent = `${((Date.now() - started) / 1000).toFixed(1)} s`; }, 200);
     tr.rec.classList.add('recording'); tr.rec.querySelector('span').textContent = 'Recording';
     tr.rec.disabled = true; tr.recStop.disabled = false;
     setStatus(tr.status, 'Recording… press Stop when done.');
   }
-  function stopRecording() { recToken += 1; if (recorder && recorder.state !== 'inactive') recorder.stop(); }
+  function stopRecording() {
+    recToken += 1;                   // cancels a start still waiting on the permission prompt
+    const cur = active;
+    if (!cur) return;
+    if (cur.rec.state !== 'inactive') cur.rec.stop();   // onstop finishes the clip and cleans up
+    else cur.cleanup();
+  }
 
   function trFormData() {
     const fd = new FormData();
@@ -763,7 +843,7 @@
     $('tr-clipMode').hidden = mode !== 'clip'; $('tr-clipOut').hidden = mode !== 'clip';
     $('tr-liveMode').hidden = mode !== 'live'; $('tr-liveOut').hidden = mode !== 'live';
     if (mode !== 'live') stopLive();
-    if (mode !== 'clip') { stopRecording(); trPlayer.stop(); }
+    if (mode !== 'clip') { stopRecording(); trPlayer.stop(); if (trController) trController.abort(); }
     savePrefs({ trMode: mode });
   }
   document.querySelectorAll('.seg-btn[data-trmode]').forEach((b) => b.addEventListener('click', () => trMode(b.dataset.trmode)));
@@ -789,10 +869,13 @@
     const session = liveController;          // the capture session this segment belongs to
     if (!session) return;                    // stopped between cut and delivery
     const row = addSegmentRow(dur);
+    // Settings as they were when this utterance was spoken, not when its turn
+    // in the queue comes.
+    const language = tl.language.value, model = tl.model.value.trim();
     liveQueue = liveQueue.then(async () => {
       if (session.signal.aborted) { row.remove(); return; }   // stopped while queued
       try {
-        const r = await transcribeBlob(blob, 'utterance.wav', { language: tl.language.value, model: tl.model.value.trim(), signal: session.signal });
+        const r = await transcribeBlob(blob, 'utterance.wav', { language, model, signal: session.signal });
         const d = r.data;
         row.classList.remove('pending');
         row.querySelector('.x').textContent = r.text || '(no words)';
@@ -904,6 +987,7 @@
     if (prefs.ecTtsLanguage && [...ec.ttsLanguage.options].some((o) => o.value === prefs.ecTtsLanguage)) ec.ttsLanguage.value = prefs.ecTtsLanguage;
   }
   function saveEchoPrefs() {
+    if (!listing) return;          // pickers not filled yet: keep the stored choices
     savePrefs({ ecEngine: ec.engine.value, ecVoice: ec.voice.value, ecTtsLanguage: ec.ttsLanguage.value, ecAsrLanguage: ec.asrLanguage.value,
                 ecSpeed: ec.speed.value, ecSilence: ec.silence.value, ecSens: ec.sens.value });
   }
@@ -976,25 +1060,31 @@
       if (echoOn) { echoMic.resume(); setEchoState('listening', 'Listening… say something.'); }
     }
   });
+  let echoStarting = false;
   async function startEcho() {
+    if (echoOn || echoStarting) return;
     ensureAudioContext();
     echoMic.set({ sensitivity: Number(ec.sens.value), silenceMs: Number(ec.silence.value) });
     setStatus(ec.status, '');
+    echoStarting = true;
+    setEchoState('busy', 'Starting the microphone… press again to cancel.');
     let started = false;
     try { started = await echoMic.start(); }
-    catch (err) { setEchoState('err', `Microphone unavailable: ${err.message}`); return; }
-    if (!started) return;                     // stopped while the permission prompt was open
+    catch (err) { echoStarting = false; setEchoState('err', `Microphone unavailable: ${err.message}`); return; }
+    if (!echoStarting || !started) return;    // cancelled while the prompt / setup was pending
+    echoStarting = false;
     echoOn = true;
     setEchoState('listening', 'Listening… say something.');
   }
   function stopEcho() {
+    echoStarting = false;
     echoOn = false;
     echoMic.stop();
     if (echoController) echoController.abort();
     ecPlayer.stop();
     setEchoState('idle', 'Press to start, then just talk. What you say is transcribed and spoken straight back.');
   }
-  ec.start.addEventListener('click', () => { if (echoOn) stopEcho(); else startEcho(); });
+  ec.start.addEventListener('click', () => { if (echoOn || echoStarting) stopEcho(); else startEcho(); });
   ec.engine.addEventListener('change', () => { fillVoiceSelect(ec.voice, ec.engine.value); fillEchoTtsLanguages(); saveEchoPrefs(); });
   [ec.voice, ec.ttsLanguage, ec.asrLanguage].forEach((e) => e.addEventListener('change', saveEchoPrefs));
   bindSlider(ec.speed, $('ec-speedOut'), (v) => `${v.toFixed(2)}×`);
@@ -1011,13 +1101,13 @@
   // Leaving a tab stops whatever it was doing (playback, recording, listening).
   leaveTab = (name) => {
     if (name === 'speech') { if (spController) spController.abort(); spPlayer.stop(); }
-    else if (name === 'transcription') { stopLive(); stopRecording(); trPlayer.stop(); }
+    else if (name === 'transcription') { stopLive(); stopRecording(); trPlayer.stop(); if (trController) trController.abort(); }
     else if (name === 'echo') stopEcho();
   };
 
   // ---- boot --------------------------------------------------------------
   window.addEventListener('pagehide', () => {
-    stopRecording(); if (stream) stream.getTracks().forEach((t) => t.stop());
+    stopRecording();
     stopLive(); stopEcho(); spPlayer.stop(); trPlayer.stop();
   });
   const prefs = loadPrefs();
@@ -1031,7 +1121,9 @@
   if (prefs.ecSpeed) ec.speed.value = prefs.ecSpeed;
   if (prefs.ecSilence) ec.silence.value = prefs.ecSilence;
   if (prefs.ecSens) ec.sens.value = prefs.ecSens;
-  [tl.sens, tl.silence, ec.speed, ec.silence, ec.sens].forEach((i) => i.dispatchEvent(new Event('input')));
+  // Readouts only: firing 'input' here would run the save handlers while the
+  // voice pickers are still empty and overwrite the stored choices.
+  sliderShows.forEach((show) => show());
   updateTrPreview();
   trMode(prefs.trMode === 'live' ? 'live' : 'clip');
   const initial = (location.hash || '').replace('#', '') || prefs.tab || 'speech';

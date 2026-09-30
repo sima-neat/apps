@@ -62,6 +62,11 @@ def _float_param(value: Any, name: str) -> float:
     return number
 
 
+def _speech_language(value: Any) -> str:
+    language = str(value or "").strip().lower()
+    return "en" if language in ("", "auto") else language
+
+
 def parse_speech_request(data: Any) -> SpeechRequest:
     """Validate a ``POST /v1/audio/speech`` JSON body."""
     if not isinstance(data, Mapping):
@@ -99,7 +104,9 @@ def parse_speech_request(data: Any) -> SpeechRequest:
         text=text,
         model=str(data.get("model") or "default").strip() or "default",
         voice=str(data.get("voice") or "default").strip() or "default",
-        language=str(data.get("language") or "en").strip().lower() or "en",
+        # "auto" means "not stated": speech needs one language, so it is English
+        # (the Studio's default) rather than a refusal for an unknown code.
+        language=_speech_language(data.get("language")),
         speed=speed,
         response_format=response_format,
         used_speed_alias=used_alias,

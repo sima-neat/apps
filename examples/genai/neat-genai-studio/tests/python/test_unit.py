@@ -55,6 +55,7 @@ from audio_api_suite import (  # noqa: E402,F401
     TranscriptionFormTests as AudioApiTranscriptionFormTests,
     VoicesListingTests as AudioApiVoicesListingTests,
 )
+from shell_config_suite import ShellConfigValueTests  # noqa: E402,F401
 from supertonic_tts_suite import (  # noqa: E402,F401
     ClientConfigurationTests as SupertonicClientConfigurationTests,
     DurationFallbackTests as SupertonicDurationFallbackTests,
@@ -107,7 +108,7 @@ def test_ui_config_reads_supertonic_paths(tmp_path) -> None:
     without = tmp_path / "without.yaml"
     without.write_text(base, encoding="utf-8")
     cfg = load_ui_config(without, tmp_path)
-    assert cfg.supertonic.models_root == "/media/nvme/supertonic-tts/models"
+    assert cfg.supertonic.models_root == ""   # unset: the runtime default decides
 
 
 @pytest.mark.unit

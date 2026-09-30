@@ -73,7 +73,7 @@ class SupertonicConfig:
     the same values; SUPERTONIC_MODELS_ROOT / SUPERTONIC_VENV (or
     SUPERTONIC_PYTHON) in the environment still override. ``venv`` empty means
     the default ``<example>/.venv-supertonic``."""
-    models_root: str = "/media/nvme/supertonic-tts/models"
+    models_root: str = ""   # empty: supertonic_tts.models_root() decides (env, legacy env, default)
     venv: str = ""
 
 
@@ -174,7 +174,7 @@ def _load_supertonic_config(raw: dict) -> SupertonicConfig:
     if not models_root and raw.get("app_root"):
         # Pre-vendoring config: the models lived under <app_root>/models.
         models_root = str(Path(str(raw["app_root"])) / "models")
-    return SupertonicConfig(models_root=str(models_root or defaults.models_root),
+    return SupertonicConfig(models_root=str(models_root or defaults.models_root or ""),
                             venv=str(raw.get("venv") or ""))
 
 

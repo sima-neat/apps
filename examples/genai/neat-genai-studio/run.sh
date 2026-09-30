@@ -5,6 +5,8 @@ EXAMPLE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON_DIR="${EXAMPLE_DIR}/src/python"
 DEFAULT_APP_VENV="${EXAMPLE_DIR}/.venv"
 DEFAULT_LOCAL_CONFIG="${EXAMPLE_DIR}/config.local.yaml"
+# shellcheck source=src/common/config_value.sh
+source "${EXAMPLE_DIR}/src/common/config_value.sh"
 
 if [[ -z "${CONFIG_PATH:-}" ]]; then
   if [[ -f "${DEFAULT_LOCAL_CONFIG}" ]]; then
@@ -251,7 +253,7 @@ system_info() {
   _kv "neat-llima" "${llima_ver:-unknown}"
   [[ -n "${runtime_ver}" ]] && _kv "neat-runtime" "${runtime_ver}"
   _kv "python" "${py_ver:-unknown}"
-  _kv "supertonic" "$([[ -n "${SUPERTONIC_PYTHON}" ]] && echo "models ${SUPERTONIC_MODELS_ROOT_RESOLVED:-}" || echo "not installed")"
+  _kv "supertonic" "$(supertonic_installed && echo "models ${SUPERTONIC_MODELS_ROOT_RESOLVED:-}" || echo "not installed (./setup.sh installs it)")"
   _kv "host" "$(uname -sm 2>/dev/null || echo unknown)"
 }
 
@@ -331,29 +333,7 @@ do_stop() {
 
 # Supertonic paths: environment > app.tts.supertonic in the config > defaults.
 # Only values that are set are exported, so the UI applies the same precedence.
-_supertonic_config_value() {
-  awk -v key="$1" '
-    /^  tts:/ {tts=1; next}
-    tts && /^  [a-z]/ {tts=0}
-    tts && /^    supertonic:/ {st=1; next}
-    tts && st && /^    [a-z]/ {st=0}
-    tts && st && $1 == key":" {
-      v = $0
-      sub(/^[ \t]*[A-Za-z_]+:[ \t]*/, "", v)   # drop the key: keep the whole value
-      if (v ~ /^"/) {                          # quoted: the value ends at the closing
-        v = substr(v, 2); i = index(v, "\"")    # quote; a "#" inside is part of it
-        if (i > 0) v = substr(v, 1, i - 1)
-      } else if (v ~ /^\x27/) {
-        v = substr(v, 2); i = index(v, "\x27")
-        if (i > 0) v = substr(v, 1, i - 1)
-      } else {
-        sub(/[ \t]+#.*$/, "", v)               # plain scalar: strip a trailing comment
-        sub(/[ \t]+$/, "", v)
-      }
-      print v; exit
-    }
-  ' "${CONFIG_PATH}" 2>/dev/null || true
-}
+_supertonic_config_value() { supertonic_config_value "${CONFIG_PATH}" "$1"; }
 resolve_supertonic_env() {
   local models legacy
   models="${SUPERTONIC_MODELS_ROOT:-$(_supertonic_config_value models_root)}"
@@ -377,6 +357,21 @@ resolve_supertonic_env() {
   # Effective path (default applied) for run.sh's own use: the banner and --clean.
   SUPERTONIC_MODELS_ROOT_RESOLVED="${models:-/media/nvme/supertonic-tts/models}"
 }
+# Same test as supertonic_tts.available(): runtime interpreter plus the two
+# marker model files (setup.sh verifies every file's checksum).
+supertonic_installed() {
+  [[ -n "${SUPERTONIC_PYTHON}" \
+     && -f "${SUPERTONIC_MODELS_ROOT_RESOLVED}/supertonic-3/onnx/tts.json" \
+     && -f "${SUPERTONIC_MODELS_ROOT_RESOLVED}/supertonic-3-sima/supertonic_vector_field_sima_mpk.tar.gz" ]]
+}
+# What a dependency refresh would change for Supertonic: its pinned requirements
+# and the reviewed model revisions/checksums in setup.sh.
+supertonic_fingerprint() {
+  {
+    cat "${PYTHON_DIR}/requirements-supertonic.txt" 2>/dev/null
+    grep -E '^SUPERTONIC_(UPSTREAM|SIMA)_HF_REVISION=|^[0-9a-f]{64}  supertonic-3' "${EXAMPLE_DIR}/setup.sh" 2>/dev/null
+  } | sha256sum | cut -d' ' -f1
+}
 # Remove app-generated data (venvs, generated config, RAG db, downloaded TTS
 # voices, pid, caches, logs). Confirms first unless -y/--yes or CLEAN_YES=1.
 # Downloaded chat/VLM/ASR models under catalog_dir are left intact.
@@ -388,19 +383,26 @@ do_clean() {
     do_stop >/dev/null 2>&1 || true
   fi
 
-  # Supertonic lives outside the example dir (its venv and models are shared
-  # with the standalone supertonic-sima app), so it is kept unless asked for.
   resolve_supertonic_env
   local -a targets=() t
-  # The Supertonic venv is app-generated and always removed; the downloaded
-  # model files live outside the example directory and are kept unless asked.
+  # The Supertonic venv under the example directory is app-generated and always
+  # removed. One configured elsewhere (SUPERTONIC_VENV / app.tts.supertonic.venv)
+  # and the downloaded model files are kept unless CLEAN_SUPERTONIC=1.
+  case "${SUPERTONIC_VENV}/" in
+    "${EXAMPLE_DIR}"/*) [[ -e "${SUPERTONIC_VENV}" ]] && targets+=("${SUPERTONIC_VENV}") ;;
+    *)
+      if [[ "${CLEAN_SUPERTONIC:-0}" == "1" ]]; then
+        [[ -e "${SUPERTONIC_VENV}" ]] && targets+=("${SUPERTONIC_VENV}")
+      elif [[ -e "${SUPERTONIC_VENV}" ]]; then
+        info "Keeping the Supertonic venv outside this directory: ${SUPERTONIC_VENV} (CLEAN_SUPERTONIC=1 removes it)."
+      fi ;;
+  esac
   if [[ "${CLEAN_SUPERTONIC:-0}" == "1" && -e "${SUPERTONIC_MODELS_ROOT_RESOLVED}" ]]; then
     targets+=("${SUPERTONIC_MODELS_ROOT_RESOLVED}")
   fi
   for t in \
     "${DEFAULT_APP_VENV}" \
     "${EXAMPLE_DIR}/.venv-pipertts" \
-    "${SUPERTONIC_VENV}" \
     "${DEFAULT_LOCAL_CONFIG}" \
     "${RESET_TOKEN_FILE}" \
     "${PID_FILE}" \
@@ -486,6 +488,8 @@ migrate_piper_voices() {
 
 do_update() {
   local branch="${NEAT_APPS_BRANCH:-main}"
+  local supertonic_before
+  supertonic_before="$(supertonic_fingerprint)"
   if do_status >/dev/null 2>&1; then
     warn "The studio is running — restart it (./run.sh stop, then start) after updating."
   fi
@@ -561,6 +565,9 @@ do_update() {
   # model, voice, config and RAG stages.
   if [[ "${UPDATE_DEPS:-0}" == "0" ]]; then
     info "Python dependency refresh skipped (set UPDATE_DEPS=1 to enable it)."
+    if [[ "$(supertonic_fingerprint)" != "${supertonic_before}" ]]; then
+      warn "This update changes the Supertonic requirements or model revisions; run UPDATE_DEPS=1 ./run.sh update (or ./setup.sh) to apply them."
+    fi
   else
     step "Refreshing Python dependencies…"
     # setup.sh must refresh the Supertonic runtime this installation actually

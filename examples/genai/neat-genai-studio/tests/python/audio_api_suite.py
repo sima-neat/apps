@@ -27,6 +27,11 @@ class SpeechRequestTests(unittest.TestCase):
                           req.response_format, req.used_speed_alias),
                          ("Hello", "default", "default", "en", 1.0, "wav", False))
 
+    def test_auto_or_blank_language_means_english(self):
+        for value in ("auto", "AUTO", "", None, "  "):
+            self.assertEqual(parse_speech_request({"input": "a", "language": value}).language, "en")
+        self.assertEqual(parse_speech_request({"input": "a", "language": "DE"}).language, "de")
+
     def test_missing_or_blank_input_is_400_on_input(self):
         for body in ({}, {"input": ""}, {"input": "   "}, {"input": 5}, None, "text"):
             with self.assertRaises(AudioApiError) as ctx:

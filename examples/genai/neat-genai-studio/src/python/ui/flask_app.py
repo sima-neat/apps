@@ -288,6 +288,7 @@ class TalkController:
         self.pp_models = []         # installed piper-plus voices (selectable)
         self.pp_current = None      # key of the active piper-plus voice
         self.pp_lock = threading.Lock()   # guards runtime piper-plus voice switches
+        self._pp_swap_lock = threading.Lock()   # swaps (pp, pp_current) as one unit
         self.prefer_piper_plus = False  # prefer piper-plus over dedicated piper-tts voices
         self.st = None              # Supertonic 3 MLA engine (all voices/languages)
         self.st_lock = threading.Lock()   # guards Supertonic voice switches
@@ -340,7 +341,7 @@ class TalkController:
             return None
         if eng is self.st:
             return 'supertonic'
-        if eng is self.pp:
+        if eng is self.pp or getattr(eng, 'studio_voice_key', None):
             return 'piper-plus'
         return 'piper-tts'
 
@@ -348,8 +349,8 @@ class TalkController:
         """Speaker label for the metrics strip, where an engine has one."""
         if eng is not None and eng is self.st:
             return self.st.voice
-        if eng is not None and eng is self.pp:
-            return self.pp_current
+        if eng is not None and getattr(eng, 'studio_voice_key', None):
+            return eng.studio_voice_key      # the voice this instance was built for
         return None
 
     def _log_tts_coverage(self):
@@ -424,28 +425,32 @@ class TalkController:
         for t in threads:
             t.join()
 
-    def _init_piper_plus(self):
-        """Load only installed Piper Plus models from the reviewed catalog."""
+    def _scan_piper_plus(self):
+        """Installed Piper Plus models from the reviewed catalog, default first."""
         assets = Path("assets")
         voices = installed_voices(
             VOICE_CATALOG, assets_path=assets, engine="piper-plus"
         )
         voices.sort(key=lambda voice: not voice.get("default", False))
-        self.pp_models = []
+        models = []
         for voice in voices:
             paths = catalog_asset_paths(voice, assets)
             onnx = next(path for path in paths if path.suffix == ".onnx")
             cfg = next((path for path in paths if path.name == "config.json"), None)
-            self.pp_models.append({
+            models.append({
                 "key": voice["id"],
                 "label": voice["label"],
                 "onnx": onnx,
                 "config": cfg,
                 "license": voice["license"],
             })
+        return models
 
-        self.pp = None
-        self.pp_current = None
+    def _init_piper_plus(self):
+        """Load the default installed Piper Plus voice. The engine in use is
+        only ever replaced by a fully built one (never set to None meanwhile),
+        so concurrent requests see either the old or the new voice."""
+        self.pp_models = self._scan_piper_plus()
         if not self.pp_models:
             logging.info("No piper-plus voice found under assets/piper-plus/ — "
                          "multilingual alternative unavailable (run voice_install.sh).")
@@ -453,7 +458,9 @@ class TalkController:
         self._load_piper_plus(self.pp_models[0]["key"])
 
     def _load_piper_plus(self, key):
-        """Load the piper-plus voice `key` into self.pp. Returns True on success."""
+        """Build the piper-plus voice `key` and swap it in atomically (engine and
+        its key together). Returns True on success; on failure the previous
+        voice, if any, stays active."""
         entry = next((m for m in getattr(self, "pp_models", []) if m["key"] == key), None)
         if entry is None:
             return False
@@ -461,14 +468,15 @@ class TalkController:
             from piperplus_tts import PiperPlusTTS
             pp = PiperPlusTTS(entry["onnx"], config_path=entry["config"])
             pp.set_utterance_speed(self.utterance_speed)
-            self.pp = pp
-            self.pp_current = key
-            logging.info("piper-plus voice '%s' ready (languages: %s)",
-                         key, sorted(pp.languages))
-            return True
+            pp.studio_voice_key = key
         except Exception as e:  # noqa: BLE001
             logging.warning("Failed to load piper-plus voice '%s': %s", key, e)
             return False
+        with self._pp_swap_lock:
+            self.pp, self.pp_current = pp, key
+        logging.info("piper-plus voice '%s' ready (languages: %s)",
+                     key, sorted(pp.languages))
+        return True
 
     def set_piper_plus_voice(self, key):
         """Install a catalogued model when needed and switch to it."""
@@ -480,7 +488,7 @@ class TalkController:
                 # The installer also verifies existing files against the pinned
                 # checksums, so a corrupt or manually replaced model is repaired.
                 install_catalog_voice(catalog_voice, assets_path=Path("assets"))
-                self._init_piper_plus()
+                self.pp_models = self._scan_piper_plus()
                 return self._load_piper_plus(key)
             except Exception:  # noqa: BLE001
                 logging.exception("Could not install/load Piper Plus voice '%s'", key)
@@ -509,7 +517,8 @@ class TalkController:
         if not supertonic_tts.available():
             logging.info("Supertonic runtime not installed (venv %s, models %s) — MLA TTS "
                          "unavailable; run setup.sh with INSTALL_SUPERTONIC=1.",
-                         supertonic_tts.DEFAULT_VENV, supertonic_tts.models_root())
+                         supertonic_tts._supertonic_python() or supertonic_tts.DEFAULT_VENV,
+                         supertonic_tts.models_root())
             return
         try:
             st = supertonic_tts.SupertonicTTS(voice=self.st_voice_default())
@@ -986,8 +995,10 @@ class TalkController:
         if key == 'piper-plus':
             if not self._installed_piper_plus():
                 raise self.EngineUnavailable('not-installed', key)
-            if self._ensure_piper_plus_loaded() and self.pp.supports(language):
-                return language, self.pp
+            self._ensure_piper_plus_loaded()
+            pp = self.pp                  # one read: a voice switch may swap it
+            if pp is not None and pp.supports(language):
+                return language, pp
             raise self.EngineUnavailable('no-voice', key)
         # piper-tts: the dedicated voice for this language, loaded on demand.
         if self._load_piper_language(language):
@@ -2481,8 +2492,12 @@ class AppContext:
                                 'param': 'file'}), 413
             try:
                 request.max_content_length = TRANSCRIPTION_REQUEST_LIMIT   # bounds a chunked body too
-            except AttributeError:                                          # older Werkzeug: read-only
-                pass
+            except AttributeError:
+                # Flask < 3.1 (read-only there): a body without a length cannot
+                # be bounded before parsing, so it is refused outright.
+                if declared is None:
+                    return jsonify({'error': 'Content-Length is required for audio uploads.',
+                                    'param': 'file'}), 411
             try:
                 upload = request.files.get('file')
             except RequestEntityTooLarge:
@@ -3231,7 +3246,8 @@ def run_ui(app_cfg):
     # Supertonic paths, before the TTS engines initialize: an explicit
     # environment override (run.sh exports one only when set) wins, then the
     # persisted config, then the module defaults.
-    os.environ.setdefault("SUPERTONIC_MODELS_ROOT", app_cfg.supertonic.models_root)
+    if app_cfg.supertonic.models_root:
+        os.environ.setdefault("SUPERTONIC_MODELS_ROOT", app_cfg.supertonic.models_root)
     if app_cfg.supertonic.venv and not os.environ.get("SUPERTONIC_PYTHON"):
         os.environ.setdefault("SUPERTONIC_VENV", app_cfg.supertonic.venv)
     genai_app = AppContext()
