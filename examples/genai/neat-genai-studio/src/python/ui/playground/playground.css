@@ -66,6 +66,14 @@ a { color: var(--accent); }
   content: ''; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px;
   background: var(--spectrum); opacity: .9;
 }
+.back-btn {
+  display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 12px 0 8px; border-radius: 10px;
+  color: var(--text-2); background: var(--surface-2); border: 1px solid var(--border); text-decoration: none;
+  font-size: 13px; font-weight: 600; white-space: nowrap; transition: .18s ease;
+}
+.back-btn:hover { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); transform: translateY(-1px); }
+.back-btn svg { width: 16px; height: 16px; }
+@media (max-width: 640px) { .back-btn span { display: none; } .back-btn { padding: 0 8px; } }
 .pg-brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .pg-brand img { height: 26px; width: auto; }
 .pg-brand h1 { margin: 0; font-size: 15px; font-weight: 600; white-space: nowrap; }

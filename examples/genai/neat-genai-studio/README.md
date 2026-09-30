@@ -349,7 +349,8 @@ a dropped file, previews the clip, calls `POST /v1/audio/transcriptions` in any
 of the three formats and shows the transcript, its metadata and a `curl`
 equivalent. It needs no chat model, keeps everything on this origin and makes
 no external requests; the microphone needs the HTTPS page the Studio serves by
-default. Source: `src/python/ui/playground/`.
+default. **Back to Studio** (top left, or Esc) returns to the chat; standalone it
+links to the Studio root. Source: `src/python/ui/playground/`.
 
 ### Switch models on the fly
 The **Settings → Models** tab shows models downloaded to the board in a searchable list. Loaded models are marked

@@ -59,12 +59,15 @@
     if (history.replaceState) history.replaceState(null, '', `#${name}`);
   }
   document.querySelectorAll('.pg-tab').forEach((t) => t.addEventListener('click', () => showTab(t.dataset.tab)));
+  // "Back to Studio" is a plain link to / (target=_top) so it works even if this
+  // script never runs. When embedded in the Studio it closes the modal in place
+  // instead of reloading; standalone it simply navigates to the Studio.
+  const closePlayground = () => window.parent.postMessage({ type: 'sima-studio:close-playground' }, window.location.origin);
   if (embedded) {
-    $('closeButton').hidden = false;
-    $('closeButton').addEventListener('click', () => window.parent.postMessage({ type: 'sima-studio:close-playground' }, window.location.origin));
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') window.parent.postMessage({ type: 'sima-studio:close-playground' }, window.location.origin);
-    });
+    $('backButton').addEventListener('click', (e) => { e.preventDefault(); closePlayground(); });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePlayground(); });
+  } else {
+    $('newTab').hidden = true;   // already a tab of its own
   }
   document.querySelectorAll('.copy-btn').forEach((b) => b.addEventListener('click', async () => {
     const text = $(b.dataset.copy).textContent;

@@ -6312,7 +6312,8 @@ function closeShowcase() {
 // ---- Audio API playground (/playground/), embedded in-app ----------------
 // The header's waveform button opens the playground full-screen in an iframe
 // (same origin; it calls /v1/audio/* directly and follows the Studio theme).
-// The page's ✕ / Esc posts {type:'sima-studio:close-playground'} to close.
+// The page's "Back to Studio" link / Esc posts {type:'sima-studio:close-playground'}
+// to close; standalone, that link simply navigates to /.
 let _playgroundEntered = false;
 
 function openPlayground() {
@@ -6367,6 +6368,10 @@ function initPlayground() {
   document.addEventListener('fullscreenchange', () => {
     // Leaving browser fullscreen (Esc handled by the browser) closes the playground too.
     if (_playgroundEntered && !document.fullscreenElement && modal.style.display !== 'none') closePlayground();
+  });
+  // Esc while focus is on the Studio itself (the frame handles its own keys).
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && modal.style.display !== 'none') closePlayground();
   });
 }
 
