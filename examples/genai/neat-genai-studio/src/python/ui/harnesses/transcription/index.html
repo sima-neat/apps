@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Transcription API · Neat GenAI Studio</title>
+  <link rel="icon" href="../SiMaSentry.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <button id="home-button" type="button" title="Back to Solutions">⌂ Home</button>
+    <div>
+      <h1>Transcription API</h1>
+      <div class="sub">Try <code>POST /v1/audio/transcriptions</code> against this Studio: record a clip or upload a file.</div>
+    </div>
+    <span class="spacer"></span>
+    <span id="conn" class="status"></span>
+  </header>
+
+  <main>
+    <section class="card">
+      <h2>Audio</h2>
+      <div class="actions">
+        <button id="record" class="primary" type="button"><span id="recDot" class="rec"></span>Record</button>
+        <button id="stopRec" type="button" disabled>Stop</button>
+        <span id="recTime" class="hint"></span>
+      </div>
+      <label>… or choose a file (<code>file</code>)
+        <input id="file" type="file" accept="audio/*,video/webm,.wav,.webm,.ogg,.mp3,.m4a,.flac">
+      </label>
+      <div id="clipInfo" class="hint">No clip yet. Recording needs microphone permission and an HTTPS or localhost page.</div>
+      <audio id="preview" controls hidden></audio>
+
+      <h2>Request</h2>
+      <div class="row">
+        <label>Language (<code>language</code>)
+          <select id="language"></select>
+        </label>
+        <label>Format (<code>response_format</code>)
+          <select id="format">
+            <option value="json">json</option>
+            <option value="verbose_json" selected>verbose_json</option>
+            <option value="text">text</option>
+          </select>
+        </label>
+        <label>Model (<code>model</code>, optional)
+          <input id="model" type="text" placeholder="active speech-to-text model">
+        </label>
+      </div>
+      <div class="actions">
+        <button id="transcribe" class="primary" type="button" disabled>Transcribe</button>
+        <button id="cancel" type="button" disabled>Cancel</button>
+      </div>
+      <div id="status" class="status"></div>
+    </section>
+
+    <section class="card">
+      <h2>Result</h2>
+      <div id="result" class="result"></div>
+      <table id="meta" hidden>
+        <tbody>
+          <tr><td>model (X-ASR-Model)</td><td id="mModel">–</td></tr>
+          <tr><td>language</td><td id="mLanguage">–</td></tr>
+          <tr><td>no_speech_prob</td><td id="mNoSpeech">–</td></tr>
+          <tr><td>avg_logprob</td><td id="mLogprob">–</td></tr>
+          <tr><td>ignored / reason</td><td id="mIgnored">–</td></tr>
+          <tr><td>server time (X-Elapsed-Time)</td><td id="mElapsed">–</td></tr>
+        </tbody>
+      </table>
+      <details open>
+        <summary>curl equivalent</summary>
+        <pre id="curl"></pre>
+      </details>
+      <details>
+        <summary>Raw response</summary>
+        <pre id="raw"></pre>
+      </details>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
