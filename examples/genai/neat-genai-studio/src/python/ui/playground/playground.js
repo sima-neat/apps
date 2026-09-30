@@ -321,8 +321,11 @@
     }
 
     let startToken = 0;               // invalidated by stop(): a permission prompt may outlive it
+    /** Resolves true when listening, false when cancelled by stop() meanwhile
+     *  (or already running / starting); rejects when the microphone is denied. */
     mic.start = async function start() {
-      if (stream || mic.starting) return;
+      if (stream) return true;
+      if (mic.starting) return false;
       const ctx = ensureAudioContext();
       rate = ctx.sampleRate;
       const token = ++startToken;
@@ -333,7 +336,7 @@
       } finally { mic.starting = false; }
       if (token !== startToken) {     // stopped (tab left, Stop pressed) while the prompt was open
         granted.getTracks().forEach((t) => t.stop());
-        return;
+        return false;
       }
       stream = granted;
       srcNode = ctx.createMediaStreamSource(stream);
@@ -355,6 +358,7 @@
       }
       reset(); floor = -60; mic.paused = false;
       setState('listening');
+      return true;
     };
     mic.stop = function stop() {
       startToken += 1;                // cancels a start() still waiting on the prompt
@@ -604,9 +608,17 @@
     meterRaf = requestAnimationFrame(() => meterLoop(analyser, data));
   }
 
+  let recToken = 0, recStarting = false;   // a pending permission prompt is cancelled by stopRecording()
   async function startRecording() {
-    try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+    if (recStarting || (recorder && recorder.state !== 'inactive')) return;
+    const token = ++recToken;
+    recStarting = true;
+    let granted;
+    try { granted = await navigator.mediaDevices.getUserMedia({ audio: true }); }
     catch (err) { setStatus(tr.status, `Microphone unavailable: ${err.message}`, 'err'); return; }
+    finally { recStarting = false; }
+    if (token !== recToken) { granted.getTracks().forEach((t) => t.stop()); return; }   // mode/tab left meanwhile
+    stream = granted;
     const mime = (window.MediaRecorder && MediaRecorder.isTypeSupported) ? MIME_PREFERENCE.find((m) => MediaRecorder.isTypeSupported(m)) : '';
     try { recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream); }
     catch (err) { setStatus(tr.status, `Recording not supported here: ${err.message}`, 'err'); stream.getTracks().forEach((t) => t.stop()); return; }
@@ -635,7 +647,7 @@
     tr.rec.disabled = true; tr.recStop.disabled = false;
     setStatus(tr.status, 'Recording… press Stop when done.');
   }
-  function stopRecording() { if (recorder && recorder.state !== 'inactive') recorder.stop(); }
+  function stopRecording() { recToken += 1; if (recorder && recorder.state !== 'inactive') recorder.stop(); }
 
   function trFormData() {
     const fd = new FormData();
@@ -794,8 +806,10 @@
     liveMic.set({ sensitivity: Number(tl.sens.value), silenceMs: Number(tl.silence.value) });
     setStatus(tl.status, '');
     liveController = new AbortController();  // before the mic runs: segments bind to it
-    try { await liveMic.start(); }
+    let started = false;
+    try { started = await liveMic.start(); }
     catch (err) { liveController = null; setStatus(tl.status, `Microphone unavailable: ${err.message}`, 'err'); setChip(tl.state, 'err', 'no microphone'); return; }
+    if (!started) { liveController = null; return; }   // stopped while the permission prompt was open
     tl.start.disabled = true; tl.start.classList.add('recording'); tl.start.querySelector('span').textContent = 'Listening';
     tl.stop.disabled = false;
   }
@@ -940,8 +954,10 @@
     ensureAudioContext();
     echoMic.set({ sensitivity: Number(ec.sens.value), silenceMs: Number(ec.silence.value) });
     setStatus(ec.status, '');
-    try { await echoMic.start(); }
+    let started = false;
+    try { started = await echoMic.start(); }
     catch (err) { setEchoState('err', `Microphone unavailable: ${err.message}`); return; }
+    if (!started) return;                     // stopped while the permission prompt was open
     echoOn = true;
     setEchoState('listening', 'Listening… say something.');
   }

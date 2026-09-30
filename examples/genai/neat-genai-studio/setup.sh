@@ -359,12 +359,32 @@ _supertonic_models() {
   )
 }
 
+# Re-apply the pinned requirements to an existing, importable venv (a
+# dependency refresh must pick up changed pins; the PyNeat wheel is left alone
+# unless the runtime stops importing, in which case the venv is rebuilt).
+_supertonic_refresh_requirements() {
+  info "Refreshing the Supertonic runtime requirements in ${C_DIM}${SUPERTONIC_VENV}${C_RESET}…"
+  if ! "${SUPERTONIC_VENV}/bin/python" -m pip install -r "${EXAMPLE_DIR}/src/python/requirements-supertonic.txt"; then
+    warn "Supertonic requirements refresh failed; rebuilding the venv."
+    return 1
+  fi
+  _supertonic_runtime_ok && return 0
+  warn "Supertonic runtime no longer imports after the refresh; rebuilding the venv."
+  return 1
+}
+
+# install_supertonic [refresh]: `refresh` (dependency-only mode) re-applies the
+# pins even when the venv is currently usable.
 install_supertonic() {
+  local refresh="${1:-}"
   section "Supertonic 3 (MLA text-to-speech)"
   local -a missing=()
   mapfile -t missing < <(_supertonic_missing_files)
+  if _supertonic_runtime_ok && [[ "${refresh}" == "refresh" ]]; then
+    _supertonic_refresh_requirements || _supertonic_venv || return 0
+  fi
   if _supertonic_runtime_ok && [[ "${#missing[@]}" -eq 0 ]]; then
-    ok "Supertonic runtime already installed (venv ${C_DIM}${SUPERTONIC_VENV}${C_RESET}, models ${C_DIM}${SUPERTONIC_MODELS_ROOT}${C_RESET})."
+    ok "Supertonic runtime ${refresh:+refreshed and }ready (venv ${C_DIM}${SUPERTONIC_VENV}${C_RESET}, models ${C_DIM}${SUPERTONIC_MODELS_ROOT}${C_RESET})."
     return 0
   fi
   if ! _supertonic_runtime_ok; then
@@ -408,7 +428,7 @@ if [[ "${DEPENDENCIES_ONLY}" == "1" ]]; then
   # checkout loses the default TTS engine. Its model files are only fetched when
   # missing, which a dependency refresh should not normally trigger.
   if [[ "${INSTALL_SUPERTONIC}" == "1" ]]; then
-    install_supertonic
+    install_supertonic refresh
   else
     info "Supertonic 3 install skipped (INSTALL_SUPERTONIC=0)."
   fi
