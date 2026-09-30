@@ -1,4 +1,4 @@
-"""Lightweight per-stream people tracker for the Python multi-camera example."""
+"""Frozen copy of the previous multi-stream-people-tracker matcher, kept as the comparison baseline."""
 
 from __future__ import annotations
 

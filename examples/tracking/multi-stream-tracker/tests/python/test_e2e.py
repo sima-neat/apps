@@ -1,8 +1,9 @@
-"""E2E tests for multi-stream-people-tracker (Python)."""
+"""E2E tests for multi-stream-tracker (Python)."""
 
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 from pathlib import Path
 import sys
@@ -13,8 +14,12 @@ from tests.utils.metadata_json_listener import MetadataJsonListener
 
 
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
-MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
+PYTHON_DIR = EXAMPLE_DIR / "src" / "python"
+MAIN_PY = PYTHON_DIR / "main.py"
 E2E_INSIGHT_HOST = "127.0.0.1"
+
+if str(PYTHON_DIR) not in sys.path:
+    sys.path.insert(0, str(PYTHON_DIR))
 
 
 def _runtime_deps_ready() -> bool:
@@ -24,6 +29,46 @@ def _runtime_deps_ready() -> bool:
 def _env_int_or_default(name: str, default: int) -> int:
     raw = os.environ.get(name, "").strip()
     return int(raw) if raw else default
+
+
+def assert_tracking_metadata(metadata, expected_labels: set[str]) -> None:
+    """Fail unless the published tracks carry valid classes, ids and boxes.
+
+    The listener is configured with min_object_count=1, so reaching here already
+    proves both streams published a non-empty track list. This checks that what
+    they published is usable: the metadata contract, a configured class label, a
+    positive integer id, and a box inside the frame.
+    """
+    checked = 0
+    for message in metadata.messages:
+        payload = json.loads(message.payload)
+        # Insight wraps the array: {"data": {"tracks": [...]}, "frame_id": ..., "type": ...}
+        tracks = (payload.get("data") or {}).get("tracks")
+        assert isinstance(tracks, list), (
+            f"port {message.port}: 'data.tracks' must be a list, got {type(tracks).__name__}"
+        )
+        for track in tracks:
+            assert set(track) == {"id", "label", "confidence", "bbox"}, (
+                f"port {message.port} frame {message.frame_id}: "
+                f"unexpected metadata keys {sorted(track)}"
+            )
+            assert track["label"] in expected_labels, (
+                f"port {message.port} frame {message.frame_id}: label {track['label']!r} "
+                f"is not a configured class {sorted(expected_labels)}"
+            )
+            assert str(track["id"]).isdigit() and int(track["id"]) > 0, (
+                f"port {message.port} frame {message.frame_id}: invalid id {track['id']!r}"
+            )
+            assert 0.0 <= float(track["confidence"]) <= 1.0, (
+                f"port {message.port} frame {message.frame_id}: confidence out of range"
+            )
+            x, y, w, h = (float(value) for value in track["bbox"])
+            assert x >= 0 and y >= 0 and w > 0 and h > 0, (
+                f"port {message.port} frame {message.frame_id}: degenerate bbox {track['bbox']}"
+            )
+            checked += 1
+
+    assert checked > 0, "no published track was inspected"
 
 
 @pytest.mark.e2e
@@ -53,7 +98,7 @@ class TestE2E:
         skip_unless_e2e_ready(
             len(rtsp_urls) >= 2, f"need at least two RTSP {codec.upper()} URLs for multistream e2e"
         )
-        output_cfg = e2e_config_section("multi-stream-people-tracker", "testing.e2e.output")
+        output_cfg = e2e_config_section("multi-stream-tracker", "testing.e2e.output")
         total_saved_frames = int(output_cfg["total_saved_frames"])
         metadata_port_base = _env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100)
 
@@ -90,6 +135,9 @@ class TestE2E:
             metadata_type="tracking",
             data_array_key="tracks",
             require_all_ports=True,
+            # Every stream must publish at least one real track, so the suite
+            # fails if tracking is removed or never produces output.
+            min_object_count=1,
         ) as metadata_listener:
             result = run_until_output_files(
                 cmd,
@@ -105,7 +153,13 @@ class TestE2E:
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
         assert metadata.success, (
-            f"tracking metadata was not received on all streams: {metadata.error}"
+            f"every stream must publish at least one track: {metadata.error}"
+        )
+        from main import load_app_config
+
+        assert_tracking_metadata(
+            metadata,
+            expected_labels={entry.label for entry in load_app_config(config_path).tracker_classes},
         )
 
         files = [

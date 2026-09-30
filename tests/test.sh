@@ -506,7 +506,7 @@ preflight_e2e_env() {
         -z "${rtsp_mjpeg_urls}" && -z "${http_mjpeg_url}" && -z "${http_mjpeg_urls}" ]]; then
     echo "  [WARN] no codec stream env configured; stream e2e tests will skip."
     echo "  [WARN] stream e2e tests: single-stream-object-detector, single-stream-instance-segmenter,"
-    echo "         multi-stream-object-detector, multi-stream-people-tracker."
+    echo "         multi-stream-object-detector, multi-stream-tracker."
     echo "  [WARN] start the required streams in Insight before e2e:"
     echo "         https://developer.sima.ai/software/tools/insight/"
     echo "         export SIMANEAT_TEST_RTSP_H264_URL=<rtsp-h264-url>"
