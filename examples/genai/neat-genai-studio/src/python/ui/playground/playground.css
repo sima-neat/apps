@@ -85,7 +85,9 @@ a { color: var(--accent); }
 .back-btn:hover { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); transform: translateY(-1px); }
 .back-btn svg { width: 16px; height: 16px; }
 .pg-brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.pg-brand img { height: 26px; width: auto; }
+/* Neat product mark (colorful sparkle, transparent bg — works on both themes), as in the Studio header. */
+.pg-brand-mark { height: 34px; width: auto; flex: none; object-fit: contain; filter: drop-shadow(0 2px 7px color-mix(in srgb, var(--accent) 32%, transparent)); }
+@media (max-width: 480px) { .pg-brand-mark { height: 26px; } }
 .pg-brand-text { display: flex; flex-direction: column; line-height: 1.1; min-width: 0; }
 .pg-title { font-size: 16px; font-weight: 600; letter-spacing: -.01em; white-space: nowrap; }
 .pg-sub { font-size: 11px; color: var(--text-3); letter-spacing: .02em; white-space: nowrap; }

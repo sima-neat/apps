@@ -36,7 +36,6 @@
     document.documentElement.setAttribute('data-theme', theme);
     $('themeSun').hidden = theme === 'dark';
     $('themeMoon').hidden = theme !== 'dark';
-    $('logo').src = theme === 'dark' ? '/static/icons/logo_dark.png' : '/static/icons/logo_bright.png';
   }
   function storedTheme() {
     try { return localStorage.getItem('theme') || 'dark'; } catch (e) { return 'dark'; }
