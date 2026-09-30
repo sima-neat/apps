@@ -260,3 +260,7 @@ MJPEG URLs.
 - Stage 2 (Modalix runner): overlays the test bundle, runs
   `./tests/test.sh --all --strict`, and publishes only the runtime candidate after
   every activated test passes.
+- Alongside both, an Ubuntu job runs the repository contract tests under
+  `tests/scripts` against the source checkout, because they read `build.sh`, the
+  workflows and the portal sources, which the test bundle does not carry.
+  Publishing waits for it too.
