@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdlib>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -54,11 +55,16 @@ int skip_or_fail(const std::string& reason);
 ProcessResult spawn_and_wait(const std::string& binary, const std::vector<std::string>& args,
                              int timeout_ms = 30000);
 
-// Spawn a process, wait until output_dir contains expected_files, then stop it:
-// SIGINT first, which the applications handle, escalating to SIGTERM and SIGKILL
-// only if it ignores that. The result carries the real exit status and how the
-// process was stopped; use exit_problem() to judge it.
-// Returns exit_code 0 when the output condition is reached before timeout.
+// Spawn a process, poll `ready` every 100 ms until it returns true, then stop the
+// process: SIGINT first, which the applications handle, escalating to SIGTERM and
+// SIGKILL only if it ignores that. The result carries the real exit status and how
+// the process was stopped; use exit_problem() to judge it. `ready` is also where a
+// caller does its own polling, such as reading metadata off a listener.
+ProcessResult spawn_until(const std::string& binary, const std::vector<std::string>& args,
+                          const std::function<bool()>& ready, int timeout_ms = 30000);
+
+// spawn_until() with "output_dir holds expected_files finished files" as the condition.
+// A file that was still being written when the stop landed is discarded.
 ProcessResult spawn_until_output_files(const std::string& binary,
                                        const std::vector<std::string>& args,
                                        const std::string& output_dir, int expected_files,

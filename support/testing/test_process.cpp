@@ -388,10 +388,13 @@ ProcessResult spawn_and_wait(const std::string& binary, const std::vector<std::s
   return result;
 }
 
-ProcessResult spawn_until_output_files(const std::string& binary,
-                                       const std::vector<std::string>& args,
-                                       const std::string& output_dir, int expected_files,
-                                       int timeout_ms) {
+namespace {
+
+// The one loop behind spawn_until() and spawn_until_output_files(): fork, poll
+// `ready` while the child runs, stop it once ready, or report a timeout.
+ProcessResult spawn_until_ready(const std::string& binary, const std::vector<std::string>& args,
+                                const std::function<bool()>& ready,
+                                const std::function<void()>& on_stopped, int timeout_ms) {
   const fs::path artifact_dir = artifact_dir_from_config_arg(args);
   const std::string command = command_line(binary, args);
   int stdout_pipe[2];
@@ -438,32 +441,25 @@ ProcessResult spawn_until_output_files(const std::string& binary,
 
   int elapsed_ms = 0;
   int status = 0;
-  OutputSizes previous_sizes;
-  bool have_previous = false;
-  OutputSizes finished;
   while (!child_exited(pid, status)) {
-    if (expected_files > 0) {
-      const OutputSizes sizes = output_sizes(output_dir);
-      finished = confirm_finished_outputs(sizes, previous_sizes, have_previous, finished);
-      previous_sizes = sizes;
-      have_previous = true;
-      if (static_cast<int>(finished.size()) >= expected_files) {
-        int stop_status = 0;
-        int stop_signal = 0;
-        stop_child(pid, stop_status, stop_signal);
-        discard_unfinished_writes(output_dir, finished);
-        auto out = read_fd(stdout_pipe[0]);
-        auto err = read_fd(stderr_pipe[0]);
-        ::close(stdout_pipe[0]);
-        ::close(stderr_pipe[0]);
-        // The real exit status, not a stand-in 0: whether the application shut
-        // down cleanly is part of what the suite proves. See exit_problem().
-        ProcessResult result{exit_code_from_status(stop_status), std::move(out), std::move(err)};
-        result.stopped_by_harness = true;
-        result.stop_signal = stop_signal;
-        write_process_artifacts(artifact_dir, command, result);
-        return result;
+    if (ready()) {
+      int stop_status = 0;
+      int stop_signal = 0;
+      stop_child(pid, stop_status, stop_signal);
+      if (on_stopped) {
+        on_stopped();
       }
+      auto out = read_fd(stdout_pipe[0]);
+      auto err = read_fd(stderr_pipe[0]);
+      ::close(stdout_pipe[0]);
+      ::close(stderr_pipe[0]);
+      // The real exit status, not a stand-in 0: whether the application shut
+      // down cleanly is part of what the suite proves. See exit_problem().
+      ProcessResult result{exit_code_from_status(stop_status), std::move(out), std::move(err)};
+      result.stopped_by_harness = true;
+      result.stop_signal = stop_signal;
+      write_process_artifacts(artifact_dir, command, result);
+      return result;
     }
     if (timeout_ms > 0 && elapsed_ms >= timeout_ms) {
       int stop_status = 0;
@@ -491,6 +487,35 @@ ProcessResult spawn_until_output_files(const std::string& binary,
   ProcessResult result{exit_code, std::move(out), std::move(err)};
   write_process_artifacts(artifact_dir, command, result);
   return result;
+}
+
+} // namespace
+
+ProcessResult spawn_until(const std::string& binary, const std::vector<std::string>& args,
+                          const std::function<bool()>& ready, int timeout_ms) {
+  return spawn_until_ready(binary, args, ready, nullptr, timeout_ms);
+}
+
+ProcessResult spawn_until_output_files(const std::string& binary,
+                                       const std::vector<std::string>& args,
+                                       const std::string& output_dir, int expected_files,
+                                       int timeout_ms) {
+  OutputSizes previous_sizes;
+  bool have_previous = false;
+  OutputSizes finished;
+  const auto enough_finished_files = [&] {
+    if (expected_files <= 0) {
+      return false;
+    }
+    const OutputSizes sizes = output_sizes(output_dir);
+    finished = confirm_finished_outputs(sizes, previous_sizes, have_previous, finished);
+    previous_sizes = sizes;
+    have_previous = true;
+    return static_cast<int>(finished.size()) >= expected_files;
+  };
+  return spawn_until_ready(
+      binary, args, enough_finished_files, [&] { discard_unfinished_writes(output_dir, finished); },
+      timeout_ms);
 }
 
 // ---------------------------------------------------------------------------

@@ -50,6 +50,12 @@ public:
   // Wait until timeout for valid metadata matching MetadataJsonListenerOptions.
   MetadataJsonListenerResult wait_for_messages();
 
+  // One poll round of at most poll_ms: reads the datagrams that arrived into `result`
+  // and returns true once the options' success condition is met. wait_for_messages()
+  // is this in a loop; a test that runs the application itself calls it from the
+  // readiness callback of spawn_until() instead.
+  bool poll_messages(MetadataJsonListenerResult& result, int poll_ms);
+
 private:
   struct SocketState;
 

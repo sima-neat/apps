@@ -354,17 +354,41 @@ bool MetadataJsonListener::success_reached(const MetadataJsonListenerResult& res
   return !result.ports_with_valid_json.empty();
 }
 
+bool MetadataJsonListener::poll_messages(MetadataJsonListenerResult& result, int poll_ms) {
+  if (!ok()) {
+    result.error = err_;
+    return false;
+  }
+  std::vector<pollfd> pfds;
+  pfds.reserve(sockets_.size());
+  for (const auto& sock : sockets_) {
+    pfds.push_back(pollfd{sock.fd, POLLIN, 0});
+  }
+  const int rc = ::poll(pfds.data(), pfds.size(), poll_ms);
+  if (rc < 0) {
+    result.error = std::string("poll failed: ") + std::strerror(errno);
+    return false;
+  }
+  if (rc == 0) {
+    return false;
+  }
+  for (size_t i = 0; i < pfds.size(); ++i) {
+    if ((pfds[i].revents & POLLIN) == 0)
+      continue;
+    (void)handle_datagram(sockets_[i], result);
+    if (success_reached(result)) {
+      result.success = true;
+      return true;
+    }
+  }
+  return false;
+}
+
 MetadataJsonListenerResult MetadataJsonListener::wait_for_messages() {
   MetadataJsonListenerResult result;
   if (!ok()) {
     result.error = err_;
     return result;
-  }
-
-  std::vector<pollfd> pfds;
-  pfds.reserve(sockets_.size());
-  for (const auto& sock : sockets_) {
-    pfds.push_back(pollfd{sock.fd, POLLIN, 0});
   }
 
   const auto deadline =
@@ -378,23 +402,11 @@ MetadataJsonListenerResult MetadataJsonListener::wait_for_messages() {
       break;
     }
     const int poll_ms = static_cast<int>(std::min<int64_t>(250, remaining.count()));
-    const int rc = ::poll(pfds.data(), pfds.size(), poll_ms);
-    if (rc < 0) {
-      result.error = std::string("poll failed: ") + std::strerror(errno);
+    if (poll_messages(result, poll_ms)) {
       return result;
     }
-    if (rc == 0) {
-      continue;
-    }
-
-    for (size_t i = 0; i < pfds.size(); ++i) {
-      if ((pfds[i].revents & POLLIN) == 0)
-        continue;
-      (void)handle_datagram(sockets_[i], result);
-      if (success_reached(result)) {
-        result.success = true;
-        return result;
-      }
+    if (!result.error.empty()) {
+      return result;
     }
   }
 
