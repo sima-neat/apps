@@ -151,6 +151,7 @@
     let loadGen = 0;                 // stop() bumps it: a load still decoding then goes nowhere
     const cursor = waveEl.querySelector('.cursor');
     const placeholder = waveEl.querySelector('.placeholder');
+    const emptyText = placeholder.textContent;   // shown again after reset()
     const label = button.querySelector('span');
 
     function stopSource() {          // Web Audio playback only
@@ -232,10 +233,17 @@
       if (autoplay && buffer) return play();
       return Promise.resolve();
     }
+    /** Back to empty: stop, drop the clip and its object URL, restore the placeholder. */
+    function reset() {
+      stop();
+      clear();
+      placeholder.textContent = emptyText;
+      waveEl.classList.remove('playing');
+    }
     button.addEventListener('click', () => { play(); });
     audioEl.addEventListener('play', () => { if (source) stopSource(); });   // don't double-play
     window.addEventListener('resize', () => { if (buffer) drawWave(canvas, buffer); });
-    return { load, stop, play, get buffer() { return buffer; }, get playing() { return !!source; } };
+    return { load, stop, play, reset, get buffer() { return buffer; }, get playing() { return !!source; } };
   }
 
   // ---- WAV encoding (16 kHz mono PCM16) for the live modes --------------
@@ -1111,7 +1119,7 @@
   ec.sens.addEventListener('input', () => { echoMic.set({ sensitivity: Number(ec.sens.value) }); saveEchoPrefs(); });
   ec.clear.addEventListener('click', () => {
     if (echoController) echoController.abort();   // the turn in progress belongs to the cleared history
-    ecPlayer.stop();
+    ecPlayer.reset();                              // and the last reply's audio with it
     ec.turns.innerHTML = '<div class="placeholder">Each turn shows what was heard and the reply that was spoken back, with timings.</div>';
     Object.assign(echoStats, { count: 0, asr: [], tts: [], turn: [] }); updateEchoStats();
   });
@@ -1463,7 +1471,7 @@
   xl.sens.addEventListener('input', () => { xlMic.set({ sensitivity: Number(xl.sens.value) }); saveTranslatePrefs(); });
   xl.clear.addEventListener('click', () => {
     if (xlController) xlController.abort();       // the turn in progress belongs to the cleared history
-    xlPlayer.stop();
+    xlPlayer.reset();                              // and the last translation's audio with it
     xl.turns.innerHTML = XL_PLACEHOLDER;
     xlPairs.length = 0;
     Object.assign(xlStats, { count: 0, asr: [], llm: [], tts: [] }); updateXlStats();
