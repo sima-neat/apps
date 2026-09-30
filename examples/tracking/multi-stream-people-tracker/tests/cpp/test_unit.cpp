@@ -1,8 +1,8 @@
 #include "examples/tracking/multi-stream-people-tracker/src/cpp/utils/tracker_api.cpp"
+#include "support/testing/test_checks.h"
 #include "support/testing/test_process.h"
 
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -11,36 +11,13 @@ namespace fs = std::filesystem;
 
 using multi_stream_people_tracker::Detection;
 using multi_stream_people_tracker::PeopleTracker;
-using sima_examples::testing::create_test_scratch_dir;
+using sima_examples::testing::expect_contains;
+using sima_examples::testing::expect_true;
 using sima_examples::testing::remove_dir;
 using sima_examples::testing::spawn_and_wait;
+using sima_examples::testing::write_scratch_config;
 
 namespace {
-
-bool expect_true(bool condition, const std::string& message) {
-  if (!condition) {
-    std::cerr << "[FAIL] " << message << "\n";
-    return false;
-  }
-  std::cout << "[OK] " << message << "\n";
-  return true;
-}
-
-bool expect_contains(const std::string& haystack, const std::string& needle,
-                     const std::string& message) {
-  return expect_true(haystack.find(needle) != std::string::npos, message);
-}
-
-fs::path write_config(const std::string& test_name, const std::string& body) {
-  const std::string temp_dir = create_test_scratch_dir("multi-stream-people-tracker", test_name);
-  if (temp_dir.empty()) {
-    throw std::runtime_error("failed to create temp directory");
-  }
-  const fs::path config_path = fs::path(temp_dir) / "config.yaml";
-  std::ofstream out(config_path);
-  out << body;
-  return config_path;
-}
 
 bool test_help_runs(const std::string& binary) {
   const auto result = spawn_and_wait(binary, {"--help"}, 20000);
@@ -58,7 +35,7 @@ bool test_missing_config_file_fails_cleanly(const std::string& binary) {
 }
 
 bool test_validate_config_only_accepts_four_streams(const std::string& binary) {
-  const fs::path config_path = write_config("test_validate_config_only_accepts_four_streams",
+  const fs::path config_path = write_scratch_config("multi-stream-people-tracker", "test_validate_config_only_accepts_four_streams",
                                             "model:\n"
                                             "  path: models/yolo26m-det-int8-b1.tar.gz\n"
                                             "streams:\n"
@@ -89,7 +66,7 @@ bool test_validate_config_only_accepts_four_streams(const std::string& binary) {
 }
 
 bool test_validate_config_only_rejects_too_many_streams(const std::string& binary) {
-  const fs::path config_path = write_config("test_validate_config_only_rejects_too_many_streams",
+  const fs::path config_path = write_scratch_config("multi-stream-people-tracker", "test_validate_config_only_rejects_too_many_streams",
                                             "model:\n"
                                             "  path: models/yolo26m-det-int8-b1.tar.gz\n"
                                             "streams:\n"
@@ -113,7 +90,7 @@ bool test_validate_config_only_rejects_too_many_streams(const std::string& binar
 
 bool test_validate_config_only_rejects_invalid_inflight_limit(const std::string& binary) {
   const fs::path config_path =
-      write_config("test_validate_config_only_rejects_invalid_inflight_limit",
+      write_scratch_config("multi-stream-people-tracker", "test_validate_config_only_rejects_invalid_inflight_limit",
                    "model:\n"
                    "  path: models/yolo26m-det-int8-b1.tar.gz\n"
                    "streams:\n"
@@ -222,7 +199,7 @@ bool test_configuration_rules_are_enforced(const std::string& binary) {
 
   bool ok = true;
   for (const RejectedConfig& c : cases) {
-    const fs::path config_path = write_config(std::string("rule_") + c.name, config_body(c.parts));
+    const fs::path config_path = write_scratch_config("multi-stream-people-tracker", std::string("rule_") + c.name, config_body(c.parts));
     const auto result =
         spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
     ok &= expect_true(result.exit_code != 0, std::string(c.name) + " is rejected") &&
@@ -232,7 +209,7 @@ bool test_configuration_rules_are_enforced(const std::string& binary) {
 
   // The control: the same minimal config with nothing broken validates, so the
   // rejections above are about the broken value and not about the baseline.
-  const fs::path config_path = write_config("rule_baseline", config_body(ConfigParts{}));
+  const fs::path config_path = write_scratch_config("multi-stream-people-tracker", "rule_baseline", config_body(ConfigParts{}));
   const auto result =
       spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
   ok &= expect_true(result.exit_code == 0, "minimal config validates") &&

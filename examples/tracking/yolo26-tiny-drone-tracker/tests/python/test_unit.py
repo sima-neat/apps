@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import copy
-import importlib.util
 import json
 import subprocess
 import sys
@@ -13,23 +12,14 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-import yaml
+
+from tests.utils.config_cases import config_writer, load_example_main
 
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 PYTHON_DIR = EXAMPLE_DIR / "src" / "python"
 MAIN_PY = PYTHON_DIR / "main.py"
 
-if str(PYTHON_DIR) not in sys.path:
-    sys.path.insert(0, str(PYTHON_DIR))
-
-# The configuration tests bind `main` under an example-specific module name:
-# every application has a module called `main`, and a plain `import main`
-# binds whichever was imported first when pytest runs across examples.
-_CONFIG_SPEC = importlib.util.spec_from_file_location("yolo26_tiny_drone_tracker_main", MAIN_PY)
-assert _CONFIG_SPEC is not None and _CONFIG_SPEC.loader is not None
-main_module = importlib.util.module_from_spec(_CONFIG_SPEC)
-sys.modules[_CONFIG_SPEC.name] = main_module
-_CONFIG_SPEC.loader.exec_module(main_module)
+main_module = load_example_main(EXAMPLE_DIR, "yolo26_tiny_drone_tracker_main")
 
 pytestmark = pytest.mark.unit
 
@@ -117,8 +107,6 @@ class TestMainEntrypoint:
 
 class TestConfigLoading:
     def test_load_app_config_accepts_four_streams(self, tmp_path: Path):
-        from main import load_app_config
-
         config_path = write_config(
             tmp_path,
             [
@@ -129,7 +117,7 @@ class TestConfigLoading:
             ],
         )
 
-        cfg = load_app_config(config_path)
+        cfg = main_module.load_app_config(config_path)
 
         assert cfg.model_path == "models/yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz"
         assert len(cfg.rtsp_urls) == 4
@@ -142,16 +130,12 @@ class TestConfigLoading:
         assert cfg.max_inflight_total == 4
 
     def test_load_app_config_accepts_hevc(self, tmp_path: Path):
-        from main import load_app_config
-
-        cfg = load_app_config(
+        cfg = main_module.load_app_config(
             write_config(tmp_path, ["rtsp://127.0.0.1:8554/src1"], codec="hevc")
         )
         assert cfg.codec == "h265"
 
     def test_load_app_config_accepts_custom_inflight_limits(self, tmp_path: Path):
-        from main import load_app_config
-
         config_path = write_config(
             tmp_path,
             ["rtsp://127.0.0.1:8554/src1"],
@@ -159,14 +143,12 @@ class TestConfigLoading:
             max_inflight_total=12,
         )
 
-        cfg = load_app_config(config_path)
+        cfg = main_module.load_app_config(config_path)
 
         assert cfg.max_inflight_per_stream == 3
         assert cfg.max_inflight_total == 12
 
     def test_load_app_config_rejects_invalid_inflight_limit(self, tmp_path: Path):
-        from main import load_app_config
-
         config_path = write_config(
             tmp_path,
             ["rtsp://127.0.0.1:8554/src1"],
@@ -176,7 +158,7 @@ class TestConfigLoading:
         with pytest.raises(
             ValueError, match="max_inflight_per_stream must be -1 or > 0"
         ):
-            load_app_config(config_path)
+            main_module.load_app_config(config_path)
 
     @pytest.mark.parametrize(
         ("port_name", "other_port_name"),
@@ -188,8 +170,6 @@ class TestConfigLoading:
     def test_load_app_config_accepts_last_port_at_udp_limit(
         self, tmp_path: Path, port_name: str, other_port_name: str
     ):
-        from main import load_app_config
-
         port_values = {port_name: 65532, other_port_name: 9000}
         config_path = write_config(
             tmp_path,
@@ -197,7 +177,7 @@ class TestConfigLoading:
             **port_values,
         )
 
-        cfg = load_app_config(config_path)
+        cfg = main_module.load_app_config(config_path)
 
         assert getattr(cfg, port_name) + len(cfg.rtsp_urls) - 1 == 65535
 
@@ -205,8 +185,6 @@ class TestConfigLoading:
     def test_load_app_config_rejects_port_range_overflow(
         self, tmp_path: Path, port_name: str
     ):
-        from main import load_app_config
-
         port_values = {port_name: 65533}
         config_path = write_config(
             tmp_path,
@@ -218,7 +196,7 @@ class TestConfigLoading:
             ValueError,
             match=rf"output\.insight\.{port_name} must be between 1 and 65532",
         ):
-            load_app_config(config_path)
+            main_module.load_app_config(config_path)
 
     @pytest.mark.parametrize(
         ("video_port_base", "metadata_port_base"),
@@ -227,8 +205,6 @@ class TestConfigLoading:
     def test_load_app_config_rejects_overlapping_insight_port_ranges(
         self, tmp_path: Path, video_port_base: int, metadata_port_base: int
     ):
-        from main import load_app_config
-
         config_path = write_config(
             tmp_path,
             [
@@ -240,13 +216,11 @@ class TestConfigLoading:
         )
 
         with pytest.raises(ValueError, match="port ranges must not overlap"):
-            load_app_config(config_path)
+            main_module.load_app_config(config_path)
 
     def test_load_app_config_allows_overlap_when_video_is_disabled(
         self, tmp_path: Path
     ):
-        from main import load_app_config
-
         config_path = write_config(
             tmp_path,
             [
@@ -258,14 +232,12 @@ class TestConfigLoading:
             video_enabled=False,
         )
 
-        cfg = load_app_config(config_path)
+        cfg = main_module.load_app_config(config_path)
 
         assert cfg.video_enabled is False
 
     def test_default_config_uses_one_class_motion_tracking(self):
-        from main import load_app_config
-
-        cfg = load_app_config(EXAMPLE_DIR / "src" / "common" / "config.yaml")
+        cfg = main_module.load_app_config(EXAMPLE_DIR / "src" / "common" / "config.yaml")
 
         assert cfg.model_path.endswith("yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz")
         assert cfg.num_classes == 1
@@ -276,8 +248,6 @@ class TestConfigLoading:
         assert cfg.tracker_min_confirmed_hits == 2
 
     def test_load_app_config_rejects_too_many_streams(self, tmp_path: Path):
-        from main import load_app_config
-
         config_path = write_config(
             tmp_path,
             [
@@ -290,11 +260,9 @@ class TestConfigLoading:
         )
 
         with pytest.raises(ValueError, match="up to four streams"):
-            load_app_config(config_path)
+            main_module.load_app_config(config_path)
 
     def test_load_app_config_rejects_empty_streams(self, tmp_path: Path):
-        from main import load_app_config
-
         config_path = tmp_path / "config.yaml"
         config_path.write_text(
             textwrap.dedent(
@@ -311,7 +279,7 @@ class TestConfigLoading:
         )
 
         with pytest.raises(ValueError, match="streams"):
-            load_app_config(config_path)
+            main_module.load_app_config(config_path)
 
     def test_validate_config_only_reports_stream_count(self, tmp_path: Path):
         config_path = write_config(
@@ -353,8 +321,6 @@ class TestRuntimeOptions:
     def test_probe_rtsp_uses_configured_transport_without_leaking_environment(
         self, monkeypatch, tcp, inherited_options, expected_transport
     ):
-        import main
-
         observed_options = []
 
         class FakeCapture:
@@ -374,12 +340,12 @@ class TestRuntimeOptions:
 
         def open_capture(_url):
             observed_options.append(
-                main.os.environ.get("OPENCV_FFMPEG_CAPTURE_OPTIONS")
+                main_module.os.environ.get("OPENCV_FFMPEG_CAPTURE_OPTIONS")
             )
             return FakeCapture()
 
         monkeypatch.setattr(
-            main,
+            main_module,
             "cv2",
             SimpleNamespace(
                 VideoCapture=open_capture,
@@ -389,13 +355,11 @@ class TestRuntimeOptions:
             ),
         )
 
-        assert main.probe_rtsp("rtsp://camera/stream", tcp) == (640, 512, 30)
+        assert main_module.probe_rtsp("rtsp://camera/stream", tcp) == (640, 512, 30)
         assert observed_options == [expected_transport]
-        assert main.os.environ.get("OPENCV_FFMPEG_CAPTURE_OPTIONS") == inherited_options
+        assert main_module.os.environ.get("OPENCV_FFMPEG_CAPTURE_OPTIONS") == inherited_options
 
     def test_encoded_input_options_carry_codec_format(self, monkeypatch):
-        import main
-
         class FakeInputOptions:
             format = ""
 
@@ -406,12 +370,12 @@ class TestRuntimeOptions:
             RtspCodec=SimpleNamespace(H264="codec-h264", H265="codec-h265"),
             InputMemoryPolicy=SimpleNamespace(Ev74="ev74", SystemMemory="system"),
         )
-        monkeypatch.setattr(main, "pyneat", fake_pyneat)
+        monkeypatch.setattr(main_module, "pyneat", fake_pyneat)
 
-        decode = main.encoded_decode_input_options(fake_pyneat.RtspCodec.H265)
-        video = main.encoded_video_input_options(fake_pyneat.RtspCodec.H265)
-        h264_decode = main.encoded_decode_input_options(fake_pyneat.RtspCodec.H264)
-        h264_video = main.encoded_video_input_options(fake_pyneat.RtspCodec.H264)
+        decode = main_module.encoded_decode_input_options(fake_pyneat.RtspCodec.H265)
+        video = main_module.encoded_video_input_options(fake_pyneat.RtspCodec.H265)
+        h264_decode = main_module.encoded_decode_input_options(fake_pyneat.RtspCodec.H264)
+        h264_video = main_module.encoded_video_input_options(fake_pyneat.RtspCodec.H264)
 
         assert decode.format == "h265"
         assert video.format == "h265"
@@ -419,15 +383,13 @@ class TestRuntimeOptions:
         assert h264_video.format == "h264"
 
     def test_realtime_link_sets_inflight_limits(self, monkeypatch):
-        import main
-
         fake_pyneat = SimpleNamespace(
             GraphLinkOptions=type("GraphLinkOptions", (), {}),
             GraphLinkPolicy=SimpleNamespace(RealtimeLatestByStream="latest-by-stream"),
         )
-        monkeypatch.setattr(main, "pyneat", fake_pyneat)
+        monkeypatch.setattr(main_module, "pyneat", fake_pyneat)
 
-        link = main.realtime_link(2, 4, 3, 12)
+        link = main_module.realtime_link(2, 4, 3, 12)
 
         assert link.policy == "latest-by-stream"
         assert link.queue_depth == 4
@@ -436,8 +398,6 @@ class TestRuntimeOptions:
         assert link.max_inflight_total == 12
 
     def test_configured_fps_enables_videorate_without_changing_source(self):
-        from main import configure_output_fps
-
         options = SimpleNamespace(
             source_fps=30,
             use_videorate=False,
@@ -445,7 +405,7 @@ class TestRuntimeOptions:
             output_caps=SimpleNamespace(fps=30),
         )
 
-        output_fps = configure_output_fps(options, options.source_fps, 10)
+        output_fps = main_module.configure_output_fps(options, options.source_fps, 10)
 
         assert output_fps == 10
         assert options.source_fps == 30
@@ -454,8 +414,6 @@ class TestRuntimeOptions:
         assert options.output_caps.fps == 10
 
     def test_source_fps_default_does_not_insert_videorate(self):
-        from main import configure_output_fps
-
         options = SimpleNamespace(
             source_fps=30,
             use_videorate=True,
@@ -463,7 +421,7 @@ class TestRuntimeOptions:
             output_caps=SimpleNamespace(fps=10),
         )
 
-        output_fps = configure_output_fps(options, options.source_fps, 0)
+        output_fps = main_module.configure_output_fps(options, options.source_fps, 0)
 
         assert output_fps == 30
         assert options.source_fps == 30
@@ -472,8 +430,6 @@ class TestRuntimeOptions:
         assert options.output_caps.fps == 30
 
     def test_none_pull_distinguishes_timeout_from_closed_output(self):
-        from main import pull_result_has_sample
-
         timeout_run = SimpleNamespace(
             last_error=lambda: "", running=lambda: True, can_pull=lambda: False
         )
@@ -481,43 +437,39 @@ class TestRuntimeOptions:
             last_error=lambda: "source reached EOS", running=lambda: False
         )
 
-        assert pull_result_has_sample(timeout_run, None, "detections") is False
+        assert main_module.pull_result_has_sample(timeout_run, None, "detections") is False
         with pytest.raises(
             RuntimeError,
             match="detections output closed unexpectedly: source reached EOS",
         ):
-            pull_result_has_sample(closed_run, None, "detections")
+            main_module.pull_result_has_sample(closed_run, None, "detections")
 
     def test_debug_frame_matching_rejects_newer_unrelated_frame(self):
-        from main import DebugFrame, samples_correlate, take_debug_frame
-
         matching_image = object()
         newer_image = object()
         stream = SimpleNamespace(
             debug_frames=deque(
                 [
-                    DebugFrame(frame_id=43, pts_ns=2_000_000, frame=newer_image),
-                    DebugFrame(frame_id=42, pts_ns=1_000_000, frame=matching_image),
+                    main_module.DebugFrame(frame_id=43, pts_ns=2_000_000, frame=newer_image),
+                    main_module.DebugFrame(frame_id=42, pts_ns=1_000_000, frame=matching_image),
                 ],
                 maxlen=32,
             )
         )
         detection = SimpleNamespace(frame_id=42, pts_ns=1_000_000)
 
-        assert take_debug_frame(stream, detection) is matching_image
+        assert main_module.take_debug_frame(stream, detection) is matching_image
         assert len(stream.debug_frames) == 1
         assert stream.debug_frames[0].frame is newer_image
-        assert not samples_correlate(stream.debug_frames[0], detection)
+        assert not main_module.samples_correlate(stream.debug_frames[0], detection)
 
     def test_debug_frame_matching_falls_back_to_pts(self):
-        from main import samples_correlate
-
         detection = SimpleNamespace(frame_id=-1, pts_ns=3_000_000)
         frame = SimpleNamespace(frame_id=-1, pts_ns=3_000_000)
         partially_identified_frame = SimpleNamespace(frame_id=42, pts_ns=3_000_000)
 
-        assert samples_correlate(frame, detection)
-        assert not samples_correlate(partially_identified_frame, detection)
+        assert main_module.samples_correlate(frame, detection)
+        assert not main_module.samples_correlate(partially_identified_frame, detection)
 
 
 class FakeMetadataSender:
@@ -536,17 +488,16 @@ class FakeSample:
 
 class TestMetadata:
     def test_send_metadata_uses_tracking_contract(self):
-        from main import AppConfig, ProfileWindow, StreamRuntime, send_metadata
         from utils.tracker import ObjectTracker, TrackedDetection
 
         sender = FakeMetadataSender()
-        runtime = StreamRuntime(
+        runtime = main_module.StreamRuntime(
             index=0,
             url="rtsp://127.0.0.1:8554/src1",
             source_options=None,
             metadata_sender=sender,
             tracker=ObjectTracker(),
-            profile=ProfileWindow(False, 0),
+            profile=main_module.ProfileWindow(False, 0),
             debug_frames=deque(maxlen=32),
             frame_w=100,
             frame_h=100,
@@ -555,8 +506,8 @@ class TestMetadata:
         )
         tracks = [TrackedDetection(7, 10.0, 20.0, 40.0, 60.0, 0.75, 0)]
 
-        cfg = AppConfig(model_path="model.tar.gz", rtsp_urls=[runtime.url])
-        send_metadata(runtime, cfg, FakeSample(), tracks)
+        cfg = main_module.AppConfig(model_path="model.tar.gz", rtsp_urls=[runtime.url])
+        main_module.send_metadata(runtime, cfg, FakeSample(), tracks)
 
         assert len(sender.calls) == 1
         metadata_type, data_json, timestamp_ms, frame_id = sender.calls[0]
@@ -728,7 +679,6 @@ class TestTracker:
         assert tracker.active_track_count() == 1
 
 
-
 # ---------------------------------------------------------------------------
 # Configuration handling and option validation (Refs #526).
 # Each test starts from VALID_CONFIG and breaks exactly one thing, so a failure
@@ -772,17 +722,8 @@ VALID_CONFIG = {
 }
 
 
-def write_full_config(tmp_path: Path, overrides=None, *, root=None) -> Path:
-    """Write VALID_CONFIG with `overrides` applied as ((section, ..., key), value)."""
-    raw = copy.deepcopy(VALID_CONFIG) if root is None else root
-    for path, value in (overrides or []):
-        target = raw
-        for key in path[:-1]:
-            target = target[key]
-        target[path[-1]] = value
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text(yaml.safe_dump(raw), encoding="utf-8")
-    return config_path
+# Writes VALID_CONFIG with overrides applied as ((section, ..., key), value).
+write_full_config = config_writer(VALID_CONFIG)
 
 
 class TestValidBaseline:
