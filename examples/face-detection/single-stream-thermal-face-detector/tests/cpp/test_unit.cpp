@@ -1,4 +1,5 @@
 // Unit test for single-stream-thermal-face-detector: validates CLI arg handling.
+#include "support/runtime/pull_status.h"
 #include "support/testing/test_process.h"
 
 #include <filesystem>
@@ -184,6 +185,40 @@ int main(int argc, char** argv) {
 
   // Test 6: every configuration rule --validate-config-only can reach fires with its message.
   failures += configuration_rule_failures(binary);
+
+  // The pull loop treats a timeout as "try again" and a closed output or pull error as the
+  // end of the run, carrying the runtime's own reason.
+  {
+    using sima_examples::pull_status_has_sample;
+    using simaai::neat::PullStatus;
+    simaai::neat::PullError pull_error;
+    pull_error.message = "queue torn down";
+    const auto thrown_message = [&](PullStatus status) -> std::string {
+      try {
+        (void)pull_status_has_sample(status, "detections", pull_error, "source reached EOS");
+      } catch (const std::runtime_error& error) {
+        return error.what();
+      }
+      return "";
+    };
+    const std::string closed = thrown_message(PullStatus::Closed);
+    const std::string errored = thrown_message(PullStatus::Error);
+    if (closed != "detections output closed unexpectedly: source reached EOS") {
+      std::cerr << "[FAIL] closed output should end the run with the reason, got: " << closed
+                << "\n";
+      ++failures;
+    } else if (errored != "failed to pull detections: queue torn down") {
+      std::cerr << "[FAIL] pull error should end the run with its message, got: " << errored
+                << "\n";
+      ++failures;
+    } else if (pull_status_has_sample(PullStatus::Timeout, "detections", pull_error, "") ||
+               !pull_status_has_sample(PullStatus::Ok, "detections", pull_error, "")) {
+      std::cerr << "[FAIL] a timeout is not a sample and a successful pull is\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] closed output and pull error are terminal, timeout is not\n";
+    }
+  }
 
   return failures > 0 ? 1 : 0;
 }

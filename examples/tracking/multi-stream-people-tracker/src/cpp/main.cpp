@@ -20,6 +20,7 @@
 #include "support/object_detection/obj_detection_utils.h"
 #include "support/runtime/config_utils.h"
 #include "support/runtime/example_utils.h"
+#include "support/runtime/pull_status.h"
 
 #include <nodes/groups/VideoSender.h>
 #include <nodes/io/MetadataSender.h>
@@ -160,7 +161,6 @@ struct StreamRuntime {
   int output_fps = 0;
   int video_port = 0;
   int processed = 0;
-  bool closed = false;
 };
 
 struct AppRuntime {
@@ -740,7 +740,7 @@ bool all_streams_done(const std::vector<StreamRuntime>& streams, int frame_limit
     return false;
   }
   return std::all_of(streams.begin(), streams.end(), [frame_limit](const StreamRuntime& stream) {
-    return stream.processed >= frame_limit || stream.closed;
+    return stream.processed >= frame_limit;
   });
 }
 
@@ -823,11 +823,9 @@ bool process_run_once(AppRuntime& app, const AppConfig& cfg, const std::string& 
   simaai::neat::PullError pull_error;
   const auto status = app.run.pull(output_name, kPullTimeoutMs, sample, &pull_error);
   const double pull_end = sima_examples::time_ms();
-  if (status == simaai::neat::PullStatus::Timeout || status == simaai::neat::PullStatus::Closed) {
+  if (!sima_examples::pull_status_has_sample(status, output_name, pull_error,
+                                             app.run.last_error())) {
     return false;
-  }
-  if (status != simaai::neat::PullStatus::Ok) {
-    throw std::runtime_error("failed to pull " + output_name + ": " + pull_error.message);
   }
   const int stream_index = stream_index_from_sample(sample, static_cast<int>(app.streams.size()));
   process_output_sample(app.streams[static_cast<std::size_t>(stream_index)], cfg, sample,

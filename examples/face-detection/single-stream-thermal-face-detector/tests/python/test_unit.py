@@ -2,11 +2,13 @@
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
 from tests.utils.config_cases import config_writer, load_example_main
+from tests.utils.fake_run import FakeRun
 
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
@@ -272,3 +274,52 @@ class TestMalformedConfigFiles:
 
         with pytest.raises(ValueError, match="source.rtsp_url must be set"):
             main_module.load_app_config(config_path)
+
+
+@pytest.mark.unit
+class TestPullOutcomes:
+    """The pull loop, driven by a run that yields no sample.
+
+    A timeout is a warning and another pull; a closed output and a runtime error end the
+    run with a message. A closed output used to end the loop quietly, which reported a
+    source that died after zero frames as a completed run.
+    """
+
+    def test_timeout_is_not_a_sample(self):
+        example = load_example()
+        run = FakeRun("timeout")
+        run.pull("detections", 20000)
+
+        assert example.pull_result_has_sample(run, None, "detections") is False
+
+    def test_closed_output_ends_the_run_with_the_reason(self):
+        example = load_example()
+        run = FakeRun(("closed", "source reached EOS"))
+        run.pull("detections", 20000)
+
+        with pytest.raises(
+            RuntimeError, match="detections output closed unexpectedly: source reached EOS"
+        ):
+            example.pull_result_has_sample(run, None, "detections")
+
+    def test_runtime_error_ends_the_run(self):
+        example = load_example()
+        run = FakeRun(("error", "queue torn down"))
+        run.pull("detections", 20000)
+
+        with pytest.raises(RuntimeError, match="runtime error: queue torn down"):
+            example.pull_result_has_sample(run, None, "detections")
+
+    def test_run_pipeline_does_not_report_a_closed_output_as_success(self, capsys):
+        example = load_example()
+        run = FakeRun("timeout", ("closed", "source reached EOS"))
+        runtime = SimpleNamespace(run=run)
+        cfg = SimpleNamespace(frames=0, profile=False, profile_interval=1)
+
+        with pytest.raises(RuntimeError, match="detections output closed unexpectedly"):
+            example.run_pipeline(runtime, cfg)
+
+        captured = capsys.readouterr()
+        assert captured.err.count("[warn] timed out waiting for detections") == 1
+        assert "processed=" not in captured.out
+        assert run.pulls == [("detections", 20000)] * 2

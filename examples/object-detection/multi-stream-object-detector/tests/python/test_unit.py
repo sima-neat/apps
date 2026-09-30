@@ -13,6 +13,7 @@ from types import SimpleNamespace
 import pytest
 
 from tests.utils.config_cases import config_writer, load_example_main
+from tests.utils.fake_run import FakeRun
 
 
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -234,6 +235,47 @@ class TestRuntimeOptions:
         assert link.stream_id == "stream2"
         assert link.max_inflight_per_stream == 3
         assert link.max_inflight_total == 12
+
+class TestPullOutcomes:
+    """The pull loop, driven by a run that yields no sample.
+
+    A timeout keeps the loop going; a closed output and a runtime error end it with a
+    message, so a dead stream cannot pass for a healthy wait.
+    """
+
+    @staticmethod
+    def _app(run):
+        return main_module.AppRuntime(graph=None, run=run, model=None, streams=[])
+
+    def test_timeout_is_not_a_sample(self):
+        run = FakeRun("timeout")
+        cfg = SimpleNamespace(save_dir="", save_every=0)
+
+        assert main_module.process_run_once(self._app(run), cfg, "detections") is False
+        assert run.pulls == [("detections", 50)]
+
+    def test_closed_output_ends_the_run_with_the_reason(self):
+        run = FakeRun(("closed", "source reached EOS"))
+        cfg = SimpleNamespace(save_dir="", save_every=0)
+
+        with pytest.raises(
+            RuntimeError, match="detections output closed unexpectedly: source reached EOS"
+        ):
+            main_module.process_run_once(self._app(run), cfg, "detections")
+
+    def test_closed_output_without_a_reason_still_ends_the_run(self):
+        run = FakeRun(("closed", ""))
+        cfg = SimpleNamespace(save_dir="", save_every=0)
+
+        with pytest.raises(RuntimeError, match="^detections output closed unexpectedly$"):
+            main_module.process_run_once(self._app(run), cfg, "detections")
+
+    def test_runtime_error_ends_the_run(self):
+        run = FakeRun(("error", "queue torn down"))
+        cfg = SimpleNamespace(save_dir="", save_every=0)
+
+        with pytest.raises(RuntimeError, match="runtime error: queue torn down"):
+            main_module.process_run_once(self._app(run), cfg, "detections")
 
 
 class FakeMetadataSender:
