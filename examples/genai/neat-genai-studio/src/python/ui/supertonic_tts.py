@@ -367,21 +367,27 @@ class SupertonicTTS:
         self.voice = voice
         return True
 
-    def set_utterance_speed(self, speed):
+    def clamp_speed(self, speed):
+        """The engine's effective speed for a requested multiplier: the Studio
+        slider allows 0.5x and the API 0.25x-4x, but the model contract is
+        ``min_speed``..``max_speed`` (0.7-2.0)."""
         try:
             speed = float(speed)
         except (TypeError, ValueError):
             speed = 1.0
-        # The Studio slider allows 0.5x; the model contract starts at 0.7x.
-        self.speed = max(self.min_speed, min(self.max_speed, speed))
+        return max(self.min_speed, min(self.max_speed, speed))
+
+    def set_utterance_speed(self, speed):
+        self.speed = self.clamp_speed(speed)
 
     def supports(self, language):
         return bool(language) and language in self.languages
 
     # -- synthesis -----------------------------------------------------------
-    def synthesize_stream(self, text, language=None, voice=None):
-        """Yield one WAV ``BytesIO`` per text segment. ``voice`` overrides the
-        configured speaker for this call only (ignored when unknown)."""
+    def synthesize_stream(self, text, language=None, voice=None, speed=None):
+        """Yield one WAV ``BytesIO`` per text segment. ``voice`` and ``speed``
+        override the configured speaker/speed for this call only (an unknown
+        voice is ignored; ``None`` speed uses the configured one)."""
         language = language if self.supports(language) else "en"
         voice = voice if voice in self.voices else self.voice
         segments = segment_text(text, language)
@@ -389,7 +395,8 @@ class SupertonicTTS:
             return
         req = {
             "cmd": "synth_stream", "segments": segments, "voice": voice,
-            "language": language, "speed": self.speed,
+            "language": language,
+            "speed": self.speed if speed is None else self.clamp_speed(speed),
         }
         # The worker exits on a runtime failure (e.g. its MLA runners died under
         # an accelerator reset). If that happened before any audio was produced,
@@ -409,8 +416,8 @@ class SupertonicTTS:
             finally:
                 stream.close()
 
-    def synthesize(self, text, language=None, voice=None):
-        chunks = list(self.synthesize_stream(text, language=language, voice=voice))
+    def synthesize(self, text, language=None, voice=None, speed=None):
+        chunks = list(self.synthesize_stream(text, language=language, voice=voice, speed=speed))
         if not chunks:
             return io.BytesIO()
         if len(chunks) == 1:

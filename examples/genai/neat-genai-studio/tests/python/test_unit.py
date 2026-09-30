@@ -49,6 +49,12 @@ from cli_think_suite import (  # noqa: E402,F401
     ThinkSplitterTests as CliThinkSplitterTests,
 )
 from asr_metadata_suite import AsrMetadataTests  # noqa: E402,F401
+from audio_api_suite import (  # noqa: E402,F401
+    FormatTranscriptionTests as AudioApiFormatTranscriptionTests,
+    SpeechRequestTests as AudioApiSpeechRequestTests,
+    TranscriptionFormTests as AudioApiTranscriptionFormTests,
+    VoicesListingTests as AudioApiVoicesListingTests,
+)
 from supertonic_tts_suite import (  # noqa: E402,F401
     ClientConfigurationTests as SupertonicClientConfigurationTests,
     DurationFallbackTests as SupertonicDurationFallbackTests,
@@ -114,6 +120,10 @@ __all__ = [
     "CliStreamTokenCountTests",
     "CliThinkSplitterTests",
     "AsrMetadataTests",
+    "AudioApiFormatTranscriptionTests",
+    "AudioApiSpeechRequestTests",
+    "AudioApiTranscriptionFormTests",
+    "AudioApiVoicesListingTests",
     "SupertonicClientConfigurationTests",
     "SupertonicDurationFallbackTests",
     "SupertonicEnvironmentDiscoveryTests",

@@ -303,6 +303,42 @@ Check that the startup models are hosted:
 curl -s http://127.0.0.1:9998/v1/models | python3 -m json.tool
 ```
 
+### Audio API (OpenAI-compatible)
+The web UI port (`https://<board>:5000`, self-signed certificate) serves the
+OpenAI audio API shape, so any OpenAI-style client can speak and transcribe
+without the chat UI. Both routes are same-origin proxies/engines inside the
+Studio, so browser pages can call them too (the model server on `:9998` is plain
+HTTP and cannot be reached from an HTTPS page).
+
+```text
+POST /v1/audio/speech            JSON
+  input            required, up to 4096 characters
+  model            default | supertonic | piper-plus | piper-tts   (a named engine is used or refused, never swapped)
+  voice            Supertonic speaker F1-F5 / M1-M5; other engines report the loaded voice
+  speed            0.25-4.0 (default 1.0); clamped to the engine's range, effective value in X-Speed
+  response_format  wav (the only format produced; anything else answers 400)
+  language         extension: ISO code the text is in (default en)
+  -> 200 audio/wav with X-Engine, X-Voice, X-Language, X-Speed, X-RTF, X-Audio-Duration, X-Elapsed-Time
+     400 {error, param} | 503 {error, reason, engine} when the engine cannot serve the language
+
+POST /v1/audio/transcriptions    multipart/form-data
+  file             required (WAV, WebM/Opus, MP4/AAC, ... the server decodes with libavformat; up to 25 MiB)
+  model            optional speech-to-text model; default: the active one
+  language         optional ISO code or auto (default)
+  response_format  json (default) -> {"text"} | verbose_json -> text plus language, language_detected,
+                   tts_language, no_speech_prob, avg_logprob, ignored, reason, model | text -> text/plain
+  -> headers X-ASR-Model, X-Elapsed-Time; 400 missing file | 413 too large | 503 no ASR active / server unreachable
+
+GET  /v1/audio/voices            extension: discovery
+  -> {default_engine, languages, engines: [{key, label, loaded, languages, voices: [{id, label, ...}]}]}
+```
+
+`utterance_speed` / `utteranceSpeed` are still accepted on the speech route as
+deprecated aliases of `speed`. The scripts under `src/python/ui/apitest/`
+(`speech.sh`, `transcriptions.sh`, `chat.sh`) wrap these calls, and the
+**Speech API** and **Transcription API** harnesses under **Solutions** let you
+try them from a browser.
+
 ### Switch models on the fly
 The **Settings → Models** tab shows models downloaded to the board in a searchable list. Loaded models are marked
 `● loaded`, on-disk ones `○ downloaded`; press **Load** on a not-yet-loaded model
@@ -704,11 +740,20 @@ curl -s http://127.0.0.1:9998/v1/chat/completions \
   -d "{\"model\":\"${CHAT_MODEL}\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Say hello in Markdown.\"}]}],\"max_tokens\":32}"
 ```
 
-Check ASR with any short WAV file:
+Check ASR with any short audio file, through the Studio (the active model is
+used when `model` is omitted):
+
+```bash
+AUDIO_FILE="/path/to/audio.wav"
+
+curl -k -s https://127.0.0.1:5000/v1/audio/transcriptions \
+  -F "file=@${AUDIO_FILE}" -F "response_format=verbose_json" | python3 -m json.tool
+```
+
+or directly against the model server:
 
 ```bash
 ASR_MODEL="<asr-model-name>"
-AUDIO_FILE="/path/to/audio.wav"
 
 curl -s http://127.0.0.1:9998/v1/audio/transcriptions \
   -F "model=${ASR_MODEL}" \
@@ -730,22 +775,24 @@ ASR_NO_SPEECH_THRESHOLD=0.6 ASR_LOGPROB_THRESHOLD=-1.0 ./run.sh
 If the deployed Whisper artifact does not provide `avg_logprob`, the Studio
 uses `no_speech_prob` alone.
 
-Check TTS through the Flask app. `language` selects the engine via the router
-(English and Japanese below → piper-plus/piper-tts according to the selected
-engine; dedicated piper-tts voices are the default):
+Check TTS through the Flask app. `model` names an engine (used or refused,
+never swapped); `default` lets the router pick (Supertonic when installed):
 
 ```bash
-# English
+# what is available
+curl -k -s https://127.0.0.1:5000/v1/audio/voices | python3 -m json.tool
+
+# Supertonic, German, speaker F2, a little faster; -D - shows the X-* headers
+curl -k -s -D - https://127.0.0.1:5000/v1/audio/speech \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"supertonic","voice":"F2","input":"Guten Morgen aus dem Studio.","language":"de","speed":1.2}' \
+  --output /tmp/neat-genai-studio-tts-de.wav
+
+# dedicated Piper voice, English
 curl -k -s https://127.0.0.1:5000/v1/audio/speech \
   -H 'Content-Type: application/json' \
   -d '{"model":"piper-tts","input":"Hello from Neat GenAI Studio.","language":"en"}' \
   --output /tmp/neat-genai-studio-tts-en.wav
-
-# Japanese (dedicated piper-tts by default)
-curl -k -s https://127.0.0.1:5000/v1/audio/speech \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"piper-tts","input":"こんにちは。Neat GenAI Studio です。","language":"ja"}' \
-  --output /tmp/neat-genai-studio-tts-ja.wav
 ```
 
 Then test the browser UI:

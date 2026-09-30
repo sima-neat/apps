@@ -54,6 +54,14 @@ from asr_metadata import (
     normalize_language_code,
 )
 import supertonic_tts
+from audio_api import (
+    MAX_TRANSCRIPTION_BYTES,
+    AudioApiError,
+    build_voices_listing,
+    format_transcription,
+    parse_speech_request,
+    parse_transcription_form,
+)
 from voice_catalog import (
     asset_paths as catalog_asset_paths,
     catalog_voices,
@@ -985,7 +993,7 @@ class TalkController:
             return language, self.pipers[language]
         raise self.EngineUnavailable('no-voice', key)
 
-    def tts_on_demand(self, text, language='en', engine=None, voice=None):
+    def tts_on_demand(self, text, language='en', engine=None, voice=None, speed=None):
         """
         Perform TTS synthesis on-demand for the given text and return audio bytes and timing info.
 
@@ -1002,13 +1010,21 @@ class TalkController:
         language, piper = self.engine_for_request(engine, language)
 
         sanitized_text = self._sanitize_for_tts(text)
+        # ``speed`` is per request: it never touches the utterance speed the UI
+        # slider set (that used to be a side effect of the API).
         if piper is self.st:
-            buffer = piper.synthesize(sanitized_text, language=language, voice=voice)
+            used_voice = voice if voice in self.st.voices else self.st.voice
+            buffer = piper.synthesize(sanitized_text, language=language, voice=voice, speed=speed)
         else:
-            buffer = piper.synthesize(sanitized_text, language=language)
+            used_voice = self._engine_voice(piper) or self._piper_voice_id(language)
+            buffer = piper.synthesize(sanitized_text, language=language, speed=speed)
         elapsed_time = time.time() - start_time
         audio_duration = self._get_wav_duration(buffer)
         rtf = elapsed_time / audio_duration if audio_duration > 0 else 0
+        effective_speed = (piper.clamp_speed(speed) if speed is not None
+                           else getattr(piper, 'speed', None))
+        if effective_speed is None and hasattr(piper, 'length_scale'):   # piper-plus state
+            effective_speed = 1.0 / piper.length_scale if piper.length_scale else 1.0
 
         logging.info(f"[On-Demand TTS] Synthesized audio in {elapsed_time:.3f} sec (RTF: {rtf:.2f})")
 
@@ -1016,8 +1032,62 @@ class TalkController:
             'audio_bytes': buffer.getvalue(),
             'elapsed_time': elapsed_time,
             'audio_duration': audio_duration,
-            'rtf': rtf
+            'rtf': rtf,
+            'engine': self._engine_name(piper),
+            'voice': used_voice,
+            'language': language,
+            'speed': effective_speed,
         }
+
+    def _piper_voice_id(self, language):
+        """Catalog id of the dedicated Piper voice loaded for ``language``."""
+        piper = self.pipers.get(language)
+        if piper is None:
+            return None
+        return Path(getattr(piper, 'model_path', '')).stem or None
+
+    def voices_listing(self):
+        """``GET /v1/audio/voices``: every server-side engine with the languages
+        and voices it offers, whether or not it is loaded yet."""
+        supertonic = None
+        if self.st is not None:
+            supertonic = {
+                'languages': sorted(self.st.languages),
+                'voices': [
+                    {'id': v, 'label': supertonic_tts.VOICE_LABELS.get(v, v),
+                     'default': v == self.st.voice}
+                    for v in self.st.voices
+                ],
+            }
+        pp_voices = catalog_voices(VOICE_CATALOG, engine="piper-plus")
+        pp_installed = {v['id'] for v in self._installed_piper_plus()}
+        piper_plus = None
+        if pp_voices:
+            piper_plus = {
+                'languages': sorted({lang for v in pp_voices for lang in v['languages']}),
+                'voices': [
+                    {'id': v['id'], 'label': v['label'], 'languages': v['languages'],
+                     'installed': v['id'] in pp_installed,
+                     'default': v['id'] == self.pp_current}
+                    for v in pp_voices
+                ],
+            }
+        tts_installed = self._installed_pipers()
+        piper_tts = None
+        if tts_installed:
+            piper_tts = {
+                'languages': sorted({lang for v in tts_installed for lang in v['languages']}),
+                'voices': [
+                    {'id': v['id'], 'label': v['label'], 'language': v['languages'][0],
+                     'installed': True, 'loaded': v['languages'][0] in self.pipers}
+                    for v in tts_installed
+                ],
+            }
+        return build_voices_listing(
+            self.voice_engine()['engines'],
+            supertonic=supertonic, piper_plus=piper_plus, piper_tts=piper_tts,
+            default_engine=None if self.browser_tts else self._preferred_engine_key(),
+        )
 
 class AppContext:
     def __init__(self):
@@ -2304,29 +2374,23 @@ class AppContext:
         @self.app.route('/v1/audio/speech', methods=['POST'])
         @self.app.route('/audio/speech', methods=['POST'])
         def openai_tts():
+            """OpenAI-compatible text-to-speech. See audio_api.parse_speech_request
+            for the contract; WAV only, `language` is the Studio's extension."""
             try:
-                data = request.get_json()
-                if not data:
-                    return jsonify({'error': 'Missing JSON payload.'}), 400
-
-                if self.talk_ctrl == None:
-                    return jsonify({'error': 'TTS engine not initialized, start the app with --apionly disabled.'}), 500
-
-                text = data.get('input')
-                model = str(data.get('model') or 'default')   # a named engine is dispatched; anything else routes
-                voice = data.get('voice', 'default')
-                language = data.get('language', 'en')
-                utterance_speed = data.get('utterance_speed', data.get('utteranceSpeed', 1.0))
-                response_format = data.get('response_format', 'wav')
-
-                if not text:
-                    return jsonify({'error': 'Missing "input" text field.'}), 400
-                logging.info(f"Received TTS request: model={model}, voice={voice}, format={response_format}")
-
-                self.talk_ctrl.set_utterance_speed(utterance_speed)
+                try:
+                    req = parse_speech_request(request.get_json(silent=True))
+                except AudioApiError as exc:
+                    return jsonify(exc.payload()), exc.status
+                if self.talk_ctrl is None:
+                    return jsonify({'error': 'TTS engine not initialized, start the app with --apionly disabled.'}), 503
+                if req.used_speed_alias:
+                    logging.info("speech request used a deprecated speed field; use 'speed'")
+                logging.info("Received TTS request: model=%s, voice=%s, language=%s, speed=%s",
+                             req.model, req.voice, req.language, req.speed)
                 try:
                     result = self.talk_ctrl.tts_on_demand(
-                        text, language=language, engine=model, voice=voice)
+                        req.text, language=req.language, engine=req.model,
+                        voice=req.voice, speed=req.speed)
                 except TalkController.EngineUnavailable as exc:
                     # An explicitly requested engine that cannot serve this
                     # request is refused, never silently swapped. The message is
@@ -2336,27 +2400,83 @@ class AppContext:
                     return jsonify({'error': message, 'reason': exc.reason,
                                     'engine': exc.engine or None}), 503
 
-                # Default to WAV for Piper. If mp3 is requested, you need ffmpeg to convert.
-                audio_bytes = result['audio_bytes']
-                content_type = 'audio/wav'
-                filename = 'output.wav'
-
-                # Optional: Add MP3 conversion logic if needed here
-
-                return Response(
-                    audio_bytes,
-                    mimetype=content_type,
-                    headers={
-                        'Content-Disposition': f'attachment; filename="{filename}"',
-                        'X-RTF': str(result['rtf']),
-                        'X-Audio-Duration': str(result['audio_duration']),
-                        'X-Elapsed-Time': str(result['elapsed_time'])
-                    }
-                )
-
+                headers = {
+                    'Content-Disposition': 'attachment; filename="speech.wav"',
+                    'X-RTF': str(result['rtf']),
+                    'X-Audio-Duration': str(result['audio_duration']),
+                    'X-Elapsed-Time': str(result['elapsed_time']),
+                    'X-Engine': str(result.get('engine') or ''),
+                    'X-Voice': str(result.get('voice') or ''),
+                    'X-Language': str(result.get('language') or ''),
+                }
+                if result.get('speed') is not None:
+                    headers['X-Speed'] = f"{float(result['speed']):.2f}"
+                return Response(result['audio_bytes'], mimetype='audio/wav', headers=headers)
             except Exception:
                 logging.exception("TTS endpoint error")
                 return jsonify({'error': 'TTS request failed'}), 500
+
+        @self.app.route('/v1/audio/voices', methods=['GET'])
+        @self.app.route('/audio/voices', methods=['GET'])
+        def openai_voices():
+            """Extension: which engines, voices and languages the speech API
+            offers (OpenAI has no discovery call). Engines are listed whether or
+            not they are loaded; selecting one loads it."""
+            if self.talk_ctrl is None:
+                return jsonify({'error': 'TTS engine not initialized, start the app with --apionly disabled.'}), 503
+            try:
+                return jsonify(self.talk_ctrl.voices_listing())
+            except Exception:
+                logging.exception("voices listing error")
+                return jsonify({'error': 'could not list voices'}), 500
+
+        @self.app.route('/v1/audio/transcriptions', methods=['POST'])
+        @self.app.route('/audio/transcriptions', methods=['POST'])
+        def openai_transcriptions():
+            """OpenAI-compatible speech-to-text, proxied to the model server's
+            /v1/audio/transcriptions so an HTTPS page and plain clients reach it
+            on this origin. `response_format`: json (default) | verbose_json |
+            text. `model` defaults to the active ASR model."""
+            started = time.time()
+            upload = request.files.get('file')
+            try:
+                req = parse_transcription_form(
+                    request.form, has_file=upload is not None,
+                    size=request.content_length)
+            except AudioApiError as exc:
+                return jsonify(exc.payload()), exc.status
+            audio_bytes = upload.read()
+            if not audio_bytes:
+                return jsonify({'error': 'Uploaded file is empty.', 'param': 'file'}), 400
+            if len(audio_bytes) > MAX_TRANSCRIPTION_BYTES:
+                return jsonify({'error': 'audio upload exceeds the size limit', 'param': 'file'}), 413
+            filename = secure_filename(upload.filename or '') or 'audio.wav'
+            content_type = upload.mimetype or 'application/octet-stream'
+            try:
+                result, model = transcribe_audio(
+                    audio_bytes, language=req.language, model=req.model,
+                    filename=filename, content_type=content_type)
+            except TranscriptionError as exc:
+                return jsonify({'error': exc.message}), exc.status
+            asr = None
+            if req.response_format == 'verbose_json':
+                asr = analyze_transcription(
+                    result,
+                    requested_language=req.language,
+                    supported_tts_languages=(self.talk_ctrl.supported_langs
+                                             if self.talk_ctrl is not None else ()),
+                    no_speech_threshold=_env_float('ASR_NO_SPEECH_THRESHOLD', DEFAULT_NO_SPEECH_THRESHOLD),
+                    logprob_threshold=_env_float('ASR_LOGPROB_THRESHOLD', DEFAULT_LOGPROB_THRESHOLD),
+                )
+            body, mimetype = format_transcription(result, asr, req.response_format, model=model)
+            elapsed = time.time() - started
+            headers = {'X-ASR-Model': model or '', 'X-Elapsed-Time': f"{elapsed:.3f}"}
+            if isinstance(body, str):
+                return Response(body, mimetype=mimetype, headers=headers)
+            resp = jsonify(body)
+            for key, value in headers.items():
+                resp.headers[key] = value
+            return resp
 
         # Board camera: a /dev/video* device plugged into the devkit board
         # itself, as opposed to the in-browser camera (the *client's* webcam).
@@ -2951,41 +3071,70 @@ def post_stop_to_sima(model_name=None):
         logging.error(f"Failed to send stop signal: {e}")
         return False
 
-def post_audio_to_mla(audio_bytes, language="auto", used_model=None):
-    """
-    Sends an audio file (as bytes) to the SIMA model server for transcription.
-    """
+class TranscriptionError(Exception):
+    """The model server could not transcribe: ``status`` is the HTTP status the
+    API should answer with, ``message`` a client-safe explanation."""
+
+    def __init__(self, status, message):
+        super().__init__(message)
+        self.status = status
+        self.message = message
+
+
+def transcribe_audio(audio_bytes, *, language='auto', model=None, filename='audio.wav',
+                     content_type='audio/wav', timeout=60):
+    """Send audio to the model server's /v1/audio/transcriptions and return
+    ``(result_dict, model_name)``. ``model`` defaults to the active ASR model.
+    The model server decodes the upload with libavformat, so the browser's
+    WebM/Opus and other container formats work; pass the real name and type."""
     cfg = genai_app.get_config()
     url = f"http://{str(cfg['SIMAAI_IP_ADDR']).strip()}/v1/audio/transcriptions"
-
-    files = {
-        'file': ('audio.wav', audio_bytes, 'audio/wav')
-    }
-    model = genai_app.resolve_asr_model()
+    model = (model or '').strip() or genai_app.resolve_asr_model()
     if not model:
         logging.error("No speech-to-text model is active; cannot transcribe.")
+        raise TranscriptionError(503, 'No speech-to-text model is active on the server.')
+    files = {'file': (filename, audio_bytes, content_type)}
+    # The server treats 'auto' as detection; it is sent as-is, exactly as the
+    # chat upload path always has.
+    data = {'model': model, 'language': language or 'auto'}
+    logging.debug('Posting AUDIO to SIMA model server at %s (model=%s, %s)', url, model, filename)
+    try:
+        response = requests.post(url, files=files, data=data, timeout=timeout)
+    except requests.RequestException as exc:
+        logging.error("Failed to send audio for transcription: %s", exc)
+        raise TranscriptionError(503, 'Speech transcription is unavailable. Please try again.')
+    if response.status_code >= 400:
+        detail = ''
+        try:
+            detail = str((response.json() or {}).get('error') or '')
+        except ValueError:
+            pass
+        logging.error("Model server rejected the transcription (%s): %s", response.status_code, detail[:200])
+        status = response.status_code if 400 <= response.status_code < 600 else 502
+        raise TranscriptionError(status, detail[:300] or f'transcription failed (HTTP {response.status_code})')
+    try:
+        result = response.json()
+    except ValueError:
+        raise TranscriptionError(502, 'The model server returned a malformed transcription.')
+    logging.info("Successfully sent audio for transcription to SiMa.ai server.")
+    return result, model
+
+
+def post_audio_to_mla(audio_bytes, language='auto', used_model=None):
+    """
+    Sends an audio file (as bytes) to the SIMA model server for transcription.
+    Returns the result dict, or None on any failure (the /upload path's contract).
+    """
+    try:
+        result, model = transcribe_audio(audio_bytes, language=language)
+    except TranscriptionError:
         return None
     # Report back which model served this request. Resolving again after the
     # call would race a concurrent switch and mislabel the transcript.
     if isinstance(used_model, list):
         used_model.append(model)
-    data = {
-        'model': model,
-        'language': language
-    }
+    return result
 
-    logging.debug(f'Posting AUDIO to SIMA model server at {url}')
-    try:
-        response = requests.post(url, files=files, data=data, timeout=60)
-        response.raise_for_status()
-        logging.info("Successfully sent audio for transcription to SiMa.ai server.")
-
-        result = response.json()
-        return result  # Should include 'text' field with transcription text
-
-    except requests.RequestException as e:
-        logging.error(f"Failed to send audio for transcription: {e}")
-        return None
 
 def configure_logging(log_filename='server.log'):
     if logging.getLogger().handlers:

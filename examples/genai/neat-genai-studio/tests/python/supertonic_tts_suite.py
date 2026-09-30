@@ -347,6 +347,25 @@ class ClientConfigurationTests(unittest.TestCase):
         self.assertTrue(proc.killed)
         self.assertIsNone(supertonic_tts._worker)
 
+    def test_per_call_speed_is_clamped_and_does_not_stick(self):
+        tts = self._client()
+        tts.set_utterance_speed(1.0)
+        captured = {}
+
+        def fake_stream(req):
+            captured.update(req)
+            yield b"RIFF"
+
+        with mock.patch.object(supertonic_tts, "_request_stream", side_effect=fake_stream):
+            list(tts.synthesize_stream("Hello.", language="en", speed=3.5))
+            self.assertAlmostEqual(captured["speed"], 2.0)     # clamped to the contract
+            list(tts.synthesize_stream("Hello.", language="en", speed=0.25))
+            self.assertAlmostEqual(captured["speed"], 0.7)
+            list(tts.synthesize_stream("Hello.", language="en"))
+            self.assertAlmostEqual(captured["speed"], 1.0)     # configured speed unchanged
+        self.assertAlmostEqual(tts.speed, 1.0)
+        self.assertAlmostEqual(tts.clamp_speed("garbage"), 1.0)
+
     def test_blank_text_makes_no_request(self):
         tts = self._client()
         with mock.patch.object(supertonic_tts, "_request_stream") as stream:
