@@ -1,6 +1,7 @@
 // E2E test for multi-stream-pose-estimator.
 // Runs the RTSP pipeline and verifies sampled debug frames plus pose metadata.
 #include "support/testing/metadata_json_listener.h"
+#include "support/testing/source_cases.h"
 #include "support/testing/test_config.h"
 #include "support/testing/test_process.h"
 
@@ -18,11 +19,6 @@ namespace {
 
 constexpr const char* kExampleName = "multi-stream-pose-estimator";
 constexpr const char* kE2eInsightHost = "127.0.0.1";
-
-struct SourceCase {
-  std::string codec;
-  std::vector<std::string> urls;
-};
 
 bool has_complete_poses(const MetadataJsonListenerResult& metadata, std::string& error) {
   try {
@@ -44,18 +40,8 @@ bool has_complete_poses(const MetadataJsonListenerResult& metadata, std::string&
   return true;
 }
 
-void record_unavailable_source(const std::string& fail_reason, const std::string& skip_reason,
-                               int& rc) {
-  if (require_e2e_mode()) {
-    std::cerr << "[FAIL] " << fail_reason << "\n";
-    rc = 1;
-  } else {
-    std::cerr << "[SKIP] " << skip_reason << "\n";
-  }
-}
-
 int run_source_case(const std::string& binary, const std::string& model_path,
-                    const SourceCase& source_case) {
+                    const MultiStreamSourceCase& source_case) {
   const std::string output_dir = create_test_output_dir(
       kExampleName, "test_multi_stream_" + source_case.codec + "_insight_and_save_pipeline");
   if (output_dir.empty()) {
@@ -155,36 +141,13 @@ int main(int argc, char** argv) {
     return skip_or_fail("configured pose model not found under SIMANEAT_APPS_TEST_MODELS_DIR");
   }
 
-  const std::vector<SourceCase> source_cases = {
+  const std::vector<MultiStreamSourceCase> source_cases = {
       {"h264", rtsp_h264_urls_from_env()},
       {"h265", rtsp_h265_urls_from_env()},
   };
 
-  int cases_run = 0;
-  int rc = 0;
-  for (const SourceCase& source_case : source_cases) {
-    if (source_case.urls.size() < 2) {
-      record_unavailable_source("need at least two RTSP " + source_case.codec +
-                                    " URLs for multistream e2e",
-                                "set at least two RTSP " + source_case.codec + " URLs to run " +
-                                    source_case.codec + " multistream e2e",
-                                rc);
-      continue;
-    }
-    ++cases_run;
-    if (run_source_case(binary, model_path, source_case) != 0) {
-      rc = 1;
-    }
-  }
-
-  if (cases_run == 0) {
-    if (require_e2e_mode()) {
-      std::cerr << "[FAIL] no multi-stream pose estimator RTSP e2e URLs configured\n";
-      return 1;
-    }
-    std::cerr << "[SKIP] no multi-stream pose estimator RTSP e2e URLs configured\n";
-    return kSkipCode;
-  }
-
-  return rc;
+  return run_multistream_source_cases("multi-stream pose estimator", source_cases, 2,
+                                      [&](const MultiStreamSourceCase& source_case) {
+                                        return run_source_case(binary, model_path, source_case);
+                                      });
 }

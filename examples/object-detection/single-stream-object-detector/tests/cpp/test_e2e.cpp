@@ -1,3 +1,4 @@
+#include "support/testing/source_cases.h"
 #include "support/testing/test_config.h"
 #include "support/testing/test_process.h"
 
@@ -13,27 +14,8 @@ namespace {
 
 constexpr const char* kExampleName = "single-stream-object-detector";
 
-struct SourceCase {
-  const char* name;
-  const char* env_key;
-  const char* type;
-  const char* codec;
-  int fps;
-  bool ssl_strict;
-};
-
-void record_unavailable_source(const std::string& fail_reason, const std::string& skip_reason,
-                               int& rc) {
-  if (require_e2e_mode()) {
-    std::cerr << "[FAIL] " << fail_reason << "\n";
-    rc = 1;
-  } else {
-    std::cerr << "[SKIP] " << skip_reason << "\n";
-  }
-}
-
 int run_source_case(const std::string& binary, const std::string& model_path,
-                    const SourceCase& source_case, const char* source_url) {
+                    const StreamSourceCase& source_case, const std::string& source_url) {
   const std::string output_dir =
       create_test_output_dir(kExampleName, std::string("test_full_pipeline_") + source_case.name);
   if (output_dir.empty()) {
@@ -105,38 +87,16 @@ int main(int argc, char** argv) {
                         "SIMANEAT_APPS_TEST_MODELS_DIR");
   }
 
-  const std::vector<SourceCase> source_cases = {
+  const std::vector<StreamSourceCase> source_cases = {
       {"rtsp_h264", "SIMANEAT_TEST_RTSP_H264_URL", "rtsp", "h264", 0, true},
       {"rtsp_h265", "SIMANEAT_TEST_RTSP_H265_URL", "rtsp", "h265", 0, true},
       {"rtsp_mjpeg", "SIMANEAT_TEST_RTSP_MJPEG_URL", "rtsp", "mjpeg", 0, true},
       {"http_mjpeg", "SIMANEAT_TEST_HTTP_MJPEG_URL", "http", "mjpeg", 30, false},
   };
 
-  int cases_run = 0;
-  int rc = 0;
-  for (const SourceCase& source_case : source_cases) {
-    const char* source_url = env_or_null(source_case.env_key);
-    if (!source_url) {
-      record_unavailable_source(
-          std::string(source_case.env_key) + " is required for " + source_case.name + " e2e",
-          std::string("set ") + source_case.env_key + " to run " + source_case.name + " e2e", rc);
-      continue;
-    }
-    ++cases_run;
-    if (run_source_case(binary, model_path, source_case, source_url) != 0) {
-      rc = 1;
-    }
-  }
-
-  if (cases_run == 0) {
-    if (require_e2e_mode()) {
-      std::cerr << "[FAIL] no single-stream object detector source e2e URLs configured\n";
-      return 1;
-    } else {
-      std::cerr << "[SKIP] no single-stream object detector source e2e URLs configured\n";
-      return kSkipCode;
-    }
-  }
-
-  return rc;
+  return run_single_stream_source_cases(
+      "single-stream object detector", source_cases,
+      [&](const StreamSourceCase& source_case, const std::string& source_url) {
+        return run_source_case(binary, model_path, source_case, source_url);
+      });
 }
