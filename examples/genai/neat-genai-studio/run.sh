@@ -410,11 +410,12 @@ do_stop() {
 _supertonic_config_value() { supertonic_config_value "${CONFIG_PATH}" "$1"; }
 resolve_supertonic_env() {
   local models legacy
+  # Pre-vendoring config/env: everything lived under app_root (<app_root>/models
+  # and the runtime venv <app_root>/.venv), until setup.sh migrates the install.
+  legacy="${SUPERTONIC_APP_ROOT:-$(_supertonic_config_value app_root)}"
   models="${SUPERTONIC_MODELS_ROOT:-$(_supertonic_config_value models_root)}"
-  if [[ -z "${models}" ]]; then
-    # Pre-vendoring config/env: the models lived under <app_root>/models.
-    legacy="${SUPERTONIC_APP_ROOT:-$(_supertonic_config_value app_root)}"
-    [[ -n "${legacy}" ]] && models="${legacy}/models"
+  if [[ -z "${models}" && -n "${legacy}" ]]; then
+    models="${legacy}/models"
   fi
   [[ -n "${models}" ]] && export SUPERTONIC_MODELS_ROOT="${models}"
   # The venv setup.sh built (persisted as app.tts.supertonic.venv when it was
@@ -426,6 +427,12 @@ resolve_supertonic_env() {
   fi
   if [[ -z "${SUPERTONIC_PYTHON}" && -x "${SUPERTONIC_VENV}/bin/python" ]]; then
     SUPERTONIC_PYTHON="${SUPERTONIC_VENV}/bin/python"
+  fi
+  # An install from before the runtime was vendored has no new venv yet: keep
+  # using its <app_root>/.venv (it has numpy/onnxruntime/pyneat; the worker
+  # imports the vendored package) so updating never drops the default engine.
+  if [[ -z "${SUPERTONIC_PYTHON}" && -n "${legacy}" && -x "${legacy}/.venv/bin/python" ]]; then
+    SUPERTONIC_PYTHON="${legacy}/.venv/bin/python"
   fi
   export SUPERTONIC_PYTHON SUPERTONIC_VENV
   # Effective path (default applied) for run.sh's own use: the banner and --clean.

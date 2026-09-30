@@ -204,6 +204,17 @@ class EnvironmentDiscoveryTests(unittest.TestCase):
                 os.environ.pop("SUPERTONIC_PYTHON", None)
                 self.assertIsNone(supertonic_tts._supertonic_python())
 
+    def test_legacy_app_root_venv_is_used_until_migrated(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            legacy = Path(tmp) / "supertonic-tts"
+            (legacy / ".venv" / "bin").mkdir(parents=True)
+            (legacy / ".venv" / "bin" / "python").write_text("")
+            with mock.patch.object(supertonic_tts, "DEFAULT_VENV", Path(tmp) / "missing"), \
+                 mock.patch.dict(os.environ, {"SUPERTONIC_APP_ROOT": str(legacy)}, clear=False):
+                os.environ.pop("SUPERTONIC_PYTHON", None); os.environ.pop("SUPERTONIC_VENV", None)
+                self.assertEqual(supertonic_tts._supertonic_python(), str(legacy / ".venv" / "bin" / "python"))
+
     def test_default_venv_is_beside_the_example(self):
         # src/python/ui/supertonic_tts.py -> <example>/.venv-supertonic
         self.assertEqual(supertonic_tts.DEFAULT_VENV.name, ".venv-supertonic")

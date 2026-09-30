@@ -757,15 +757,17 @@
     };
     rec.ondataavailable = (e) => { if (e.data && e.data.size) parts.push(e.data); };
     rec.onerror = (e) => { cleanup(); setStatus(tr.status, `Recording failed: ${(e.error && e.error.message) || 'unknown error'}`, 'err'); };
+    const recording = { rec, cleanup, discard: false };
     rec.onstop = async () => {
       cleanup();
+      if (recording.discard) return;               // Clear: throw the captured audio away
       const type = rec.mimeType || mime || 'audio/webm';
       const blob = new Blob(parts, { type });
       if (!blob.size) { setStatus(tr.status, 'Nothing was recorded.', 'err'); return; }
       await setClip(blob, `recording.${extensionFor(type)}`, type);
       setStatus(tr.status, 'Clip ready. Press Transcribe.', 'ok');
     };
-    active = { rec, cleanup };
+    active = recording;
     try { rec.start(); }
     catch (err) { cleanup(); setStatus(tr.status, `Recording could not start: ${err.message}`, 'err'); return; }
     tr.recTime.textContent = '0.0 s';
@@ -773,10 +775,11 @@
     tr.rec.disabled = true; tr.recStop.disabled = false;
     setStatus(tr.status, 'Recording… press Stop when done.');
   }
-  function stopRecording() {
+  function stopRecording({ discard = false } = {}) {
     recToken += 1;                   // cancels a start still waiting on the permission prompt
     const cur = active;
     if (!cur) return;
+    if (discard) cur.discard = true;
     if (cur.rec.state !== 'inactive') cur.rec.stop();   // onstop finishes the clip and cleans up
     else cur.cleanup();
   }
@@ -850,7 +853,7 @@
   tr.rec.addEventListener('click', startRecording);
   tr.recStop.addEventListener('click', stopRecording);
   $('tr-clear').addEventListener('click', () => {
-    stopRecording();
+    stopRecording({ discard: true });
     if (trController) trController.abort();        // its finally re-enables the controls
     trPlayer.reset();
     clip = null;
@@ -1132,7 +1135,10 @@
     if (!echoStarting || !started) return;    // cancelled while the prompt / setup was pending
     echoStarting = false;
     echoOn = true;
-    setEchoState('listening', 'Listening… say something.');
+    // A cancelled turn may still be unwinding: stay paused until its finally
+    // resumes the microphone, so no utterance is dropped by the busy guard.
+    if (echoBusy) { echoMic.pause(); setEchoState('busy', 'Finishing the previous turn…'); }
+    else setEchoState('listening', 'Listening… say something.');
   }
   function stopEcho() {
     echoStarting = false;
@@ -1295,9 +1301,9 @@
     const from = source && source !== 'auto' ? ` from ${langName(source)}` : '';
     return `You are a translator. Translate the user's text${from} into ${langName(target)}. ${rule} ${only}`.replace(/\s+/g, ' ').trim();
   }
-  async function translateWithLlm(text, { source, target, tone = 'neutral', signal, onText }) {
+  async function translateWithLlm(text, { model, source, target, tone = 'neutral', signal, onText }) {
     const body = {
-      model: xlChatModel, stream: true, temperature: 0, max_tokens: 512,
+      model, stream: true, temperature: 0, max_tokens: 512,
       messages: [
         { role: 'system', content: translationPrompt({ source, target, tone }) },
         { role: 'user', content: text },
@@ -1398,13 +1404,14 @@
         } else {
           if (!xlChatModel) await refreshChatModel();
           if (signal.aborted) return;
-          if (!xlChatModel) throw new Error(`Load a chat model in the Studio (Settings → Models) to translate into ${targetName}${toneLabel ? ` with a ${toneLabel} tone` : ''}.`);
+          const model = xlChatModel;               // this turn's model: request and label agree
+          if (!model) throw new Error(`Load a chat model in the Studio (Settings → Models) to translate into ${targetName}${toneLabel ? ` with a ${toneLabel} tone` : ''}.`);
           setXlState('busy', detected === target ? `Rewriting in a ${toneLabel} tone…` : `Translating into ${targetName}${toneLabel ? ` (${toneLabel})` : ''}…`);
           out = add('assistant pending', who, 'translating…');
-          const llm = await translateWithLlm(original, { source: detected || source, target, tone, signal,
+          const llm = await translateWithLlm(original, { model, source: detected || source, target, tone, signal,
             onText: (t) => { if (!signal.aborted && t) out.querySelector('.txt').textContent = t; } });
           timing.llm = llm.secs;
-          translation = llm.text; how = `${xlChatModel} · LLM ${llm.secs.toFixed(2)} s`;
+          translation = llm.text; how = `${model} · LLM ${llm.secs.toFixed(2)} s`;
           if (!translation) throw new Error('The chat model returned no translation.');
         }
       }

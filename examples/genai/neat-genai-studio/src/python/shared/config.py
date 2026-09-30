@@ -187,8 +187,14 @@ def _load_supertonic_config(raw: dict) -> SupertonicConfig:
     if not models_root and raw.get("app_root"):
         # Pre-vendoring config: the models lived under <app_root>/models.
         models_root = str(Path(str(raw["app_root"])) / "models")
+    venv = raw.get("venv")
+    if not venv and raw.get("app_root"):
+        # Pre-vendoring config: the runtime venv lived at <app_root>/.venv. Used
+        # only when it exists (supertonic_tts checks), until setup.sh migrates.
+        legacy_venv = Path(str(raw["app_root"])) / ".venv"
+        venv = str(legacy_venv) if (legacy_venv / "bin" / "python").exists() else ""
     return SupertonicConfig(models_root=str(models_root or defaults.models_root or ""),
-                            venv=str(raw.get("venv") or ""))
+                            venv=str(venv or ""))
 
 
 def load_ui_config(path: Path = DEFAULT_UI_CONFIG, apps_root: Path = PATH_ROOT) -> AppConfig:

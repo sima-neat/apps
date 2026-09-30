@@ -88,7 +88,15 @@ def _supertonic_python():
         return p if Path(p).exists() else None
     venv = os.environ.get("SUPERTONIC_VENV")
     cand = (Path(venv) if venv else DEFAULT_VENV) / "bin" / "python"
-    return str(cand) if cand.exists() else None
+    if cand.exists():
+        return str(cand)
+    # Pre-vendoring install not migrated yet: its venv beside the models.
+    legacy = os.environ.get("SUPERTONIC_APP_ROOT")
+    if not venv and legacy:
+        old = Path(legacy) / ".venv" / "bin" / "python"
+        if old.exists():
+            return str(old)
+    return None
 
 
 def available():

@@ -130,6 +130,15 @@ def test_ui_config_reads_supertonic_paths(tmp_path) -> None:
         "      app_root: /data/st-app\n", encoding="utf-8")
     cfg = load_ui_config(legacy, tmp_path)
     assert cfg.supertonic.models_root == "/data/st-app/models"
+    assert cfg.supertonic.venv == ""          # no <app_root>/.venv on this host
+
+    # ...and its runtime venv is carried over while it still exists.
+    app_root = tmp_path / "st-app"
+    (app_root / ".venv" / "bin").mkdir(parents=True)
+    (app_root / ".venv" / "bin" / "python").write_text("")
+    legacy_venv = tmp_path / "legacy-venv.yaml"
+    legacy_venv.write_text(base + f"  tts:\n    supertonic:\n      app_root: {app_root}\n", encoding="utf-8")
+    assert load_ui_config(legacy_venv, tmp_path).supertonic.venv == str(app_root / ".venv")
 
     without = tmp_path / "without.yaml"
     without.write_text(base, encoding="utf-8")
