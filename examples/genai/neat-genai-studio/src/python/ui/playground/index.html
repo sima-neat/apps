@@ -317,6 +317,16 @@
             </button></div>
             <label class="field"><span>To</span><select id="xl-target" class="select"></select></label>
           </div>
+          <label class="field"><span>Tone <code>register</code></span>
+            <select id="xl-tone" class="select">
+              <option value="neutral" selected>Neutral · as spoken</option>
+              <option value="formal">Formal · polite, formal address</option>
+              <option value="casual">Casual · everyday, informal address</option>
+              <option value="friendly">Friendly · warm and upbeat</option>
+              <option value="business">Business · professional and concise</option>
+              <option value="simple">Simple · plain words for learners</option>
+            </select>
+          </label>
           <div id="xl-model" class="model-note"><i class="dot"></i><span>checking the chat model…</span></div>
           <div class="echo-stage">
             <button id="xl-start" class="echo-btn" type="button" aria-label="Start listening">
@@ -352,7 +362,7 @@
             <span>Sensitivity <code>VAD</code></span>
             <div class="slider"><input id="xl-sens" type="range" min="0" max="1" step="0.05" value="0.5"><output id="xl-sensOut">0.50</output></div>
           </div>
-          <div class="hint">Into English, speech goes through Whisper's translate task, with the original transcribed alongside. Into any other language, Whisper transcribes what you said and the loaded chat model translates it. The microphone is muted while a translation plays.</div>
+          <div class="hint">Into English with a neutral tone, speech goes through Whisper's translate task, with the original transcribed alongside. With another tone, or into any other language, Whisper transcribes what you said and the loaded chat model translates it. The microphone is muted while a translation plays.</div>
           <div id="xl-status" class="status"></div>
         </div>
 

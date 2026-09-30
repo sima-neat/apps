@@ -387,7 +387,11 @@ the Studio's own design tokens, fonts, controls and spacing, with four modes:
   original transcribed alongside so each turn shows both);
   into any other language, Whisper transcribes what was said and the loaded
   chat model translates it through `POST /v1/chat/completions`, streaming the
-  result into the turn. The translation can be spoken back with the chosen
+  result into the turn. A **Tone** setting (neutral, formal, casual, friendly,
+  business, simple) sets the register: formal and casual pick the language's
+  formal or informal address (vous/tu, Sie/du, usted/tú); any tone other than
+  neutral uses the chat model, into English too, and with the source and target
+  the same it rewrites the text in that tone. The translation can be spoken back with the chosen
   engine, voice and speed. Hands-free like Echo (the microphone is muted while
   a translation plays), with a text box for typed input, a swap button, and
   ASR, LLM and TTS timings per turn.

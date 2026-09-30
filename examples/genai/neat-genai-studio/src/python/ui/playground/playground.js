@@ -1124,7 +1124,7 @@
   // the spoken language and the loaded chat model translates the text through
   // the Studio's /v1/chat/completions. Typed text always goes to the chat model.
   const xl = {
-    source: $('xl-source'), target: $('xl-target'), swap: $('xl-swap'), route: $('xl-route'), model: $('xl-model'),
+    source: $('xl-source'), target: $('xl-target'), tone: $('xl-tone'), swap: $('xl-swap'), route: $('xl-route'), model: $('xl-model'),
     start: $('xl-start'), state: $('xl-state'), level: $('xl-level'), threshold: $('xl-threshold'),
     text: $('xl-text'), send: $('xl-send'), speak: $('xl-speak'), engine: $('xl-engine'), voice: $('xl-voice'),
     speed: $('xl-speed'), silence: $('xl-silence'), sens: $('xl-sens'), status: $('xl-status'),
@@ -1167,20 +1167,33 @@
     codes.forEach((c) => xl.target.appendChild(option(c, `${langTag(c)}${speakable(c, xl.engine.value) ? '' : ` · not speakable by ${engineLabel}`}`)));
     xl.target.value = codes.includes(w) ? w : 'en';
   }
+  // Tone (register) of the translation. Whisper's translate task has none, so
+  // any tone but neutral goes through the chat model, into English too.
+  const TONES = {
+    neutral: { label: 'neutral', rule: '' },
+    formal: { label: 'formal', rule: 'Use a formal, polite register: formal forms of address (for example vous, Sie, usted, Lei), honorifics where the language has them, no slang or contractions.' },
+    casual: { label: 'casual', rule: 'Use a casual, everyday register as between friends: informal forms of address (for example tu, du, tú), contractions and natural colloquial phrasing are fine.' },
+    friendly: { label: 'friendly', rule: 'Use a warm, friendly and upbeat register, informal but polite.' },
+    business: { label: 'business', rule: 'Use a professional business register: clear, courteous and concise, as in a work email.' },
+    simple: { label: 'simple', rule: 'Use plain, simple words and short sentences that a language learner can understand.' },
+  };
+  const toneOf = () => (TONES[xl.tone.value] ? xl.tone.value : 'neutral');
+  // Whisper's translate task only when nothing but a literal English rendering is wanted.
+  const whisperOnly = (target, tone) => target === 'en' && tone === 'neutral';
   function refreshRoute() {
-    const target = xl.target.value;
-    xl.route.textContent = target === 'en' ? 'translations → speech' : 'transcriptions → chat → speech';
+    const target = xl.target.value, tone = toneOf();
+    xl.route.textContent = whisperOnly(target, tone) ? 'translations → speech' : 'transcriptions → chat → speech';
     const note = xl.model.querySelector('span');
     if (xlChatModel) {
       xl.model.className = 'model-note ok';
-      note.textContent = `Chat model: ${xlChatModel}${target === 'en' ? ' (used for typed text)' : ''}`;
+      note.textContent = `Chat model: ${xlChatModel}${whisperOnly(target, tone) ? ' (used for typed text)' : ''}`;
     } else if (xlModelGen === 0) {
       xl.model.className = 'model-note idle'; note.textContent = 'Checking the chat model…';
     } else {
       xl.model.className = 'model-note warn';
-      note.textContent = target === 'en'
-        ? 'No chat model loaded: spoken English translation works; typed text needs a chat model (Studio → Settings → Models).'
-        : `No chat model loaded: load one in the Studio (Settings → Models) to translate into ${langName(target)}. Spoken → English works without one.`;
+      note.textContent = whisperOnly(target, tone)
+        ? 'No chat model loaded: spoken English translation works; typed text and tones need a chat model (Studio → Settings → Models).'
+        : `No chat model loaded: load one in the Studio (Settings → Models) to translate into ${langName(target)}${tone === 'neutral' ? '' : ` with a ${TONES[tone].label} tone`}. Spoken → English (neutral) works without one.`;
     }
   }
   /** The loaded chat/VLM model from /models/status (first loaded non-ASR entry). */
@@ -1207,7 +1220,7 @@
   }
   function saveTranslatePrefs() {
     if (!listing) return;          // pickers not filled yet: keep the stored choices
-    savePrefs({ xlSource: xl.source.value, xlTarget: xl.target.value, xlEngine: xl.engine.value, xlVoice: xl.voice.value,
+    savePrefs({ xlSource: xl.source.value, xlTarget: xl.target.value, xlTone: toneOf(), xlEngine: xl.engine.value, xlVoice: xl.voice.value,
                 xlSpeak: xl.speak.checked, xlSpeed: xl.speed.value, xlSilence: xl.silence.value, xlSens: xl.sens.value });
   }
   function updateXlStats() {
@@ -1231,12 +1244,20 @@
     return t;
   }
   /** Translate `text` with the loaded chat model, streaming partial text to onText. */
-  async function translateWithLlm(text, { source, target, signal, onText }) {
+  function translationPrompt({ source, target, tone }) {
+    const rule = (TONES[tone] || TONES.neutral).rule;
+    const only = 'Reply with the result only: no explanations, notes, transliteration or quotes.';
+    if (source && source !== 'auto' && source === target) {   // same language: restyle only
+      return `You are an editor. Rewrite the user's text in ${langName(target)}, keeping its meaning. ${rule} ${only}`.replace(/\s+/g, ' ').trim();
+    }
     const from = source && source !== 'auto' ? ` from ${langName(source)}` : '';
+    return `You are a translator. Translate the user's text${from} into ${langName(target)}. ${rule} ${only}`.replace(/\s+/g, ' ').trim();
+  }
+  async function translateWithLlm(text, { source, target, tone = 'neutral', signal, onText }) {
     const body = {
       model: xlChatModel, stream: true, temperature: 0, max_tokens: 512,
       messages: [
-        { role: 'system', content: `You are a translator. Translate the user's text${from} into ${langName(target)}. Reply with the translation only: no explanations, notes, transliteration or quotes.` },
+        { role: 'system', content: translationPrompt({ source, target, tone }) },
         { role: 'user', content: text },
       ],
     };
@@ -1286,7 +1307,7 @@
     const session = new AbortController();
     xlController = session;
     // Settings as they are now, not when a later await resumes.
-    const source = xl.source.value, target = xl.target.value, engine = xl.engine.value;
+    const source = xl.source.value, target = xl.target.value, engine = xl.engine.value, tone = toneOf();
     const voice = xl.voice.value, speed = Number(xl.speed.value), speak = xl.speak.checked;
     if (xlOn) xlMic.pause();                     // no listening while we translate and speak
     const signal = session.signal;
@@ -1298,7 +1319,7 @@
     try {
       let original = typed || '', detected = source !== 'auto' ? source : null, translation = '', how = '';
       if (blob) {
-        const toEnglish = target === 'en';
+        const toEnglish = whisperOnly(target, tone);
         setXlState('busy', toEnglish ? 'Translating to English…' : 'Transcribing…');
         // Into English: Whisper's translate task gives the translation, and a
         // transcription of the same clip (requested alongside) gives the original.
@@ -1327,16 +1348,18 @@
         setBubble(you, typed, detected ? langTag(detected) : 'typed');
       }
       const targetName = langName(target);
+      const toneLabel = tone === 'neutral' ? '' : TONES[tone].label;
+      const who = toneLabel ? `${targetName} · ${toneLabel}` : targetName;
       if (!translation) {
-        if (detected && detected === target) {
+        if (detected && detected === target && tone === 'neutral') {
           translation = original; how = `already in ${targetName}`;
         } else {
           if (!xlChatModel) await refreshChatModel();
           if (signal.aborted) return;
-          if (!xlChatModel) throw new Error(`Load a chat model in the Studio (Settings → Models) to translate into ${targetName}.`);
-          setXlState('busy', `Translating into ${targetName}…`);
-          out = add('assistant pending', targetName, 'translating…');
-          const llm = await translateWithLlm(original, { source: detected || source, target, signal,
+          if (!xlChatModel) throw new Error(`Load a chat model in the Studio (Settings → Models) to translate into ${targetName}${toneLabel ? ` with a ${toneLabel} tone` : ''}.`);
+          setXlState('busy', detected === target ? `Rewriting in a ${toneLabel} tone…` : `Translating into ${targetName}${toneLabel ? ` (${toneLabel})` : ''}…`);
+          out = add('assistant pending', who, 'translating…');
+          const llm = await translateWithLlm(original, { source: detected || source, target, tone, signal,
             onText: (t) => { if (!signal.aborted && t) out.querySelector('.txt').textContent = t; } });
           timing.llm = llm.secs;
           translation = llm.text; how = `${xlChatModel} · LLM ${llm.secs.toFixed(2)} s`;
@@ -1344,7 +1367,7 @@
         }
       }
       if (signal.aborted) return;
-      if (!out) out = add('assistant', targetName, translation);
+      if (!out) out = add('assistant', who, translation);
       setBubble(out, translation, how);
       xlPairs.push([original || `(${langTag(detected)} speech)`, translation]);
       xlStats.count += 1;
@@ -1424,6 +1447,7 @@
   xl.text.addEventListener('keydown', (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') sendTyped(); });
   xl.engine.addEventListener('change', () => { fillVoiceSelect(xl.voice, xl.engine.value); fillTranslateTargets(); saveTranslatePrefs(); });
   xl.target.addEventListener('change', () => { refreshRoute(); saveTranslatePrefs(); });
+  xl.tone.addEventListener('change', () => { refreshRoute(); saveTranslatePrefs(); });
   [xl.source, xl.voice, xl.speak].forEach((e) => e.addEventListener('change', saveTranslatePrefs));
   xl.swap.addEventListener('click', () => {
     const s = xl.source.value, t = xl.target.value;
@@ -1479,6 +1503,7 @@
   if (prefs.ecSilence) ec.silence.value = prefs.ecSilence;
   if (prefs.ecSens) ec.sens.value = prefs.ecSens;
   if (prefs.xlSource) fillTranslateSources(prefs.xlSource);
+  if (prefs.xlTone && [...xl.tone.options].some((o) => o.value === prefs.xlTone)) xl.tone.value = prefs.xlTone;
   if (prefs.xlSpeak === false) xl.speak.checked = false;
   if (prefs.xlSpeed) xl.speed.value = prefs.xlSpeed;
   if (prefs.xlSilence) xl.silence.value = prefs.xlSilence;
