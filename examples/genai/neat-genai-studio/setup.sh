@@ -732,13 +732,13 @@ desktop_entry() {
     printf '%s\n' "[Desktop Entry]" "Version=1.0" "Type=Application" "Name=Neat GenAI Studio" \
       "Comment=Run LLMs, VLMs, speech-to-text and text-to-speech on the Modalix MLA" \
       "${exec_line}" "Path=${EXAMPLE_DIR}" "Icon=${EXAMPLE_DIR}/src/python/ui/static/icons/neat-logo.png" \
-      "Terminal=false" "Categories=Development;Science;AudioVideo;" "Keywords=LLM;GenAI;SiMa;Modalix;Neat;" \
+      "Terminal=false" "Categories=Development;" "Keywords=LLM;GenAI;SiMa;Modalix;Neat;" \
       "StartupNotify=false"
   else
     printf '%s\n' "[Desktop Entry]" "Version=1.0" "Type=Application" "Name=Neat GenAI Studio" \
       "Comment=Run LLMs, VLMs, speech-to-text and text-to-speech on the Modalix MLA" \
       "Exec=\"${launch}\"" "Path=${EXAMPLE_DIR}" "Icon=${EXAMPLE_DIR}/src/python/ui/static/icons/neat-logo.png" \
-      "Terminal=true" "Categories=Development;Science;AudioVideo;" "Keywords=LLM;GenAI;SiMa;Modalix;Neat;" \
+      "Terminal=true" "Categories=Development;" "Keywords=LLM;GenAI;SiMa;Modalix;Neat;" \
       "StartupNotify=false"
   fi
 }
