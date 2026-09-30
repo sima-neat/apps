@@ -347,7 +347,7 @@ deprecated aliases of `speed`. The scripts under `src/python/ui/apitest/`
 #### Audio API playground
 The waveform button in the header opens the **Audio API playground**
 (`https://<board>:5000/playground/`, also usable standalone), a page built from
-the Studio's own design tokens, fonts, controls and spacing, with three modes:
+the Studio's own design tokens, fonts, controls and spacing, with four modes:
 
 - **Speech** fills its engine, voice and language pickers from
   `GET /v1/audio/voices`, calls `POST /v1/audio/speech`, draws and plays the
@@ -366,9 +366,21 @@ the Studio's own design tokens, fonts, controls and spacing, with three modes:
   was heard) and speed you pick. The microphone is muted while the reply plays
   and listening resumes afterwards; each turn shows the words heard, the reply
   spoken and the ASR, TTS and total timings.
+- **Translate** turns speech or typed text in one language into another. Pick
+  the source (or let Whisper detect it) and any target; the target list marks
+  languages the chosen voice engine cannot speak. Into English, speech goes
+  straight through Whisper's translate task (`POST /v1/audio/translations`);
+  into any other language, Whisper transcribes what was said and the loaded
+  chat model translates it through `POST /v1/chat/completions`, streaming the
+  result into the turn. The translation can be spoken back with the chosen
+  engine, voice and speed. Hands-free like Echo (the microphone is muted while
+  a translation plays), with a text box for typed input, a swap button, and
+  ASR, LLM and TTS timings per turn.
 
-It needs no chat model, keeps everything on this origin and makes no external
-requests; the microphone needs the HTTPS page the Studio serves by default.
+Speech, Transcription and Echo need no chat model; Translate needs one only for
+targets other than English (or for typed text), and says so when none is
+loaded. Everything stays on this origin with no external requests; the
+microphone needs the HTTPS page the Studio serves by default.
 **Back to Studio** (top left, or Esc) returns to the chat; standalone it links
 to the Studio root. Source: `src/python/ui/playground/`.
 

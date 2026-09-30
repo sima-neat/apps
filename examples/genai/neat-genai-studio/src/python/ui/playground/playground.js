@@ -25,7 +25,7 @@
   };
   const ASR_LANGUAGES = ['auto', 'en', 'fr', 'es', 'de', 'it', 'pt', 'ja', 'ko', 'zh', 'vi', 'no'];
   const MIME_PREFERENCE = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4', 'audio/wav'];
-  const TABS = ['speech', 'transcription', 'echo'];
+  const TABS = ['speech', 'transcription', 'echo', 'translate'];
 
   const $ = (id) => document.getElementById(id);
   const embedded = window.parent && window.parent !== window;
@@ -55,6 +55,7 @@
   }
   let currentTab = null;
   let leaveTab = () => {};        // set once the mode objects exist (below)
+  let enterTab = () => {};
   function showTab(name) {
     if (!TABS.includes(name)) name = 'speech';
     if (currentTab && currentTab !== name) leaveTab(currentTab);
@@ -63,6 +64,7 @@
     document.querySelectorAll('.pg-panel').forEach((p) => { p.hidden = p.id !== `panel-${name}`; });
     savePrefs({ tab: name });
     if (history.replaceState) history.replaceState(null, '', `#${name}`);
+    enterTab(name);
   }
   document.querySelectorAll('.pg-tab').forEach((t) => t.addEventListener('click', () => showTab(t.dataset.tab)));
 
@@ -450,14 +452,17 @@
   }
 
   /** POST one clip to /v1/audio/transcriptions (verbose_json) → {text, data, headers, secs}. */
-  async function transcribeBlob(blob, name, { language, model, signal } = {}) {
+  /** POST one clip to /v1/audio/transcriptions (or `endpoint: 'translations'`,
+   *  Whisper's speech-to-English) as verbose_json → {text, data, headers, secs}. */
+  async function transcribeBlob(blob, name, { language, model, signal, endpoint = 'transcriptions' } = {}) {
     const fd = new FormData();
     fd.append('file', blob, name);
     if (language && language !== 'auto') fd.append('language', language);
     if (model) fd.append('model', model);
     fd.append('response_format', 'verbose_json');
     const t0 = performance.now();
-    const res = await fetch(`${API}/v1/audio/transcriptions`, { method: 'POST', body: fd, signal });
+    const route = endpoint === 'translations' ? 'translations' : 'transcriptions';
+    const res = await fetch(`${API}/v1/audio/${route}`, { method: 'POST', body: fd, signal });
     const raw = await res.text();
     let data = {};
     try { data = JSON.parse(raw); } catch (e) { /* not JSON */ }
@@ -997,21 +1002,21 @@
     $('ec-tts').textContent = fmt(avg(echoStats.tts), 2);
     $('ec-turn').textContent = fmt(avg(echoStats.turn), 2);
   }
-  function bubble(kind, who, text) {
-    const ph = ec.turns.querySelector('.placeholder'); if (ph) ph.remove();
+  function bubble(kind, who, text, container = ec.turns) {
+    const ph = container.querySelector('.placeholder'); if (ph) ph.remove();
     const m = el('div', `message ${kind}`);
     m.appendChild(el('span', 'who', who));
     m.appendChild(el('span', 'txt', text));
     m.appendChild(el('span', 'meta'));
-    ec.turns.appendChild(m);
-    ec.turns.scrollTop = ec.turns.scrollHeight;
+    container.appendChild(m);
+    container.scrollTop = container.scrollHeight;
     return m;
   }
   const setBubble = (m, text, meta, cls) => {
     m.querySelector('.txt').textContent = text;
     m.querySelector('.meta').textContent = meta || '';
     m.classList.remove('pending'); if (cls) m.classList.add(cls);
-    ec.turns.scrollTop = ec.turns.scrollHeight;
+    if (m.parentElement) m.parentElement.scrollTop = m.parentElement.scrollHeight;
   };
 
   echoMic.on('segment', async (blob, dur) => {
@@ -1098,17 +1103,346 @@
     Object.assign(echoStats, { count: 0, asr: [], tts: [], turn: [] }); updateEchoStats();
   });
 
+  // =====================================================================
+  // Translate: speak or type in one language, get it in another
+  // =====================================================================
+  // Into English, speech goes through Whisper's translate task
+  // (/v1/audio/translations). Into any other language, Whisper transcribes in
+  // the spoken language and the loaded chat model translates the text through
+  // the Studio's /v1/chat/completions. Typed text always goes to the chat model.
+  const xl = {
+    source: $('xl-source'), target: $('xl-target'), swap: $('xl-swap'), route: $('xl-route'), model: $('xl-model'),
+    start: $('xl-start'), state: $('xl-state'), level: $('xl-level'), threshold: $('xl-threshold'),
+    text: $('xl-text'), send: $('xl-send'), speak: $('xl-speak'), engine: $('xl-engine'), voice: $('xl-voice'),
+    speed: $('xl-speed'), silence: $('xl-silence'), sens: $('xl-sens'), status: $('xl-status'),
+    turns: $('xl-turns'), copy: $('xl-copy'), clear: $('xl-clear'),
+  };
+  const XL_PLACEHOLDER = '<div class="placeholder">Each turn shows the original with its detected language and the translation, with ASR, LLM and TTS timings.</div>';
+  const xlPlayer = makePlayer({ waveEl: $('xl-wave'), canvas: $('xl-canvas'), button: $('xl-play'), audioEl: $('xl-audio') });
+  const xlMic = createLiveMic({ silenceMs: 700, sensitivity: 0.5, maxSpeechMs: 15000 });
+  bindMeter(xlMic, xl.level, xl.threshold);
+  const xlStats = { count: 0, asr: [], llm: [], tts: [] };
+  const xlPairs = [];                // [original, translation] for Copy all
+  let xlOn = false, xlStarting = false, xlBusy = false, xlController = null;
+  let xlChatModel = null, xlModelGen = 0;
+  const XL_IDLE = 'Press to listen and speak, or type below. Each utterance is translated as soon as you pause.';
+  const langName = (code) => LANGUAGE_NAMES[code] || code;
+  const langTag = (code) => (code ? `${code} · ${langName(code)}` : 'language not detected');
+
+  function setXlState(cls, text) {
+    xl.state.className = `echo-state ${cls}`; xl.state.textContent = text;
+    xl.start.className = `echo-btn ${(xlOn || xlStarting) ? 'on ' : ''}${cls}`;
+  }
+  xlMic.on('state', (st) => {
+    if (!xlOn || xlBusy) return;
+    if (st === 'listening') setXlState('listening', 'Listening… speak, then pause.');
+    else if (st === 'speech') setXlState('voice', 'Hearing you…');
+  });
+
+  function speakable(code, engine) { return engineLanguages(engine).includes(code); }
+  function fillTranslateSources(wanted) {
+    const w = wanted || xl.source.value || 'auto';
+    xl.source.innerHTML = '';
+    ASR_LANGUAGES.forEach((c) => xl.source.appendChild(option(c, c === 'auto' ? 'auto · detect' : langTag(c))));
+    xl.source.value = ASR_LANGUAGES.includes(w) ? w : 'auto';
+  }
+  function fillTranslateTargets(wanted) {
+    const w = wanted || xl.target.value || 'en';
+    const engineLabel = (engineEntry(xl.engine.value) || {}).label || 'the router';
+    const codes = Object.keys(LANGUAGE_NAMES).sort((a, b) => (a === 'en' ? -1 : b === 'en' ? 1 : langName(a).localeCompare(langName(b))));
+    xl.target.innerHTML = '';
+    codes.forEach((c) => xl.target.appendChild(option(c, `${langTag(c)}${speakable(c, xl.engine.value) ? '' : ` · not speakable by ${engineLabel}`}`)));
+    xl.target.value = codes.includes(w) ? w : 'en';
+  }
+  function refreshRoute() {
+    const target = xl.target.value;
+    xl.route.textContent = target === 'en' ? 'translations → speech' : 'transcriptions → chat → speech';
+    const note = xl.model.querySelector('span');
+    if (xlChatModel) {
+      xl.model.className = 'model-note ok';
+      note.textContent = `Chat model: ${xlChatModel}${target === 'en' ? ' (used for typed text)' : ''}`;
+    } else if (xlModelGen === 0) {
+      xl.model.className = 'model-note idle'; note.textContent = 'Checking the chat model…';
+    } else {
+      xl.model.className = 'model-note warn';
+      note.textContent = target === 'en'
+        ? 'No chat model loaded: spoken English translation works; typed text needs a chat model (Studio → Settings → Models).'
+        : `No chat model loaded: load one in the Studio (Settings → Models) to translate into ${langName(target)}. Spoken → English works without one.`;
+    }
+  }
+  /** The loaded chat/VLM model from /models/status (first loaded non-ASR entry). */
+  async function refreshChatModel() {
+    const gen = ++xlModelGen;
+    let name = null;
+    try {
+      const res = await fetch(`${API}/models/status`, { headers: { Accept: 'application/json' } });
+      const data = await res.json().catch(() => ({}));
+      const loaded = (data.catalog || []).find((m) => m.loaded && (m.type || 'chat') !== 'asr');
+      name = loaded ? loaded.name : null;
+    } catch (e) { name = null; }
+    if (gen !== xlModelGen) return xlChatModel;   // a newer check superseded this one
+    xlChatModel = name;
+    refreshRoute();
+    return xlChatModel;
+  }
+  function initTranslatePickers() {
+    const prefs = loadPrefs();
+    fillEngineSelect(xl.engine, prefs.xlEngine);
+    fillVoiceSelect(xl.voice, xl.engine.value, prefs.xlVoice);
+    fillTranslateTargets(prefs.xlTarget || 'en');
+    refreshRoute();
+  }
+  function saveTranslatePrefs() {
+    if (!listing) return;          // pickers not filled yet: keep the stored choices
+    savePrefs({ xlSource: xl.source.value, xlTarget: xl.target.value, xlEngine: xl.engine.value, xlVoice: xl.voice.value,
+                xlSpeak: xl.speak.checked, xlSpeed: xl.speed.value, xlSilence: xl.silence.value, xlSens: xl.sens.value });
+  }
+  function updateXlStats() {
+    $('xl-count').textContent = String(xlStats.count);
+    $('xl-asr').textContent = fmt(avg(xlStats.asr), 2);
+    $('xl-llm').textContent = fmt(avg(xlStats.llm), 2);
+    $('xl-tts').textContent = fmt(avg(xlStats.tts), 2);
+  }
+
+  // Small models sometimes wrap the answer: drop reasoning blocks, leaked stop
+  // tokens, a "Translation:" label and surrounding quotes.
+  function cleanTranslation(text) {
+    let t = String(text || '');
+    t = t.replace(/<think>[\s\S]*?<\/think>/gi, '');
+    const open = t.search(/<think>/i);
+    if (open >= 0) t = t.slice(0, open);          // still thinking: show nothing of it
+    t = t.replace(/<\|?(end_of_turn|eot_id|im_end|endoftext|end)\|?>/gi, '');
+    t = t.trim().replace(/^(translation|translated text)\s*:\s*/i, '');
+    const m = t.match(/^(["“«„'])([\s\S]*)(["”»“'])$/);
+    if (m) t = m[2].trim();
+    return t;
+  }
+  /** Translate `text` with the loaded chat model, streaming partial text to onText. */
+  async function translateWithLlm(text, { source, target, signal, onText }) {
+    const from = source && source !== 'auto' ? ` from ${langName(source)}` : '';
+    const body = {
+      model: xlChatModel, stream: true, temperature: 0, max_tokens: 512,
+      messages: [
+        { role: 'system', content: `You are a translator. Translate the user's text${from} into ${langName(target)}. Reply with the translation only: no explanations, notes, transliteration or quotes.` },
+        { role: 'user', content: text },
+      ],
+    };
+    const t0 = performance.now();
+    const res = await fetch(`${API}/v1/chat/completions`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' }, body: JSON.stringify(body), signal,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      const e = err.error;
+      throw new Error((e && (e.message || (typeof e === 'string' ? e : ''))) || `Chat model error (HTTP ${res.status})`);
+    }
+    let acc = '';
+    if (!(res.headers.get('Content-Type') || '').includes('text/event-stream') || !res.body) {
+      const data = await res.json().catch(() => ({}));
+      acc = ((((data.choices || [])[0] || {}).message || {}).content) || '';
+    } else {
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '', done = false;
+      while (!done) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        buf += decoder.decode(chunk.value, { stream: true });
+        let nl;
+        while ((nl = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1);
+          if (!line.startsWith('data:')) continue;
+          const payload = line.slice(5).trim();
+          if (payload === '[DONE]') { done = true; break; }
+          try {
+            const delta = ((((JSON.parse(payload).choices || [])[0] || {}).delta || {}).content) || '';
+            if (delta) { acc += delta; if (onText) onText(cleanTranslation(acc)); }
+          } catch (e) { /* keep-alive or partial line */ }
+        }
+      }
+      if (done) { try { await reader.cancel(); } catch (e) { /* ignore */ } }
+    }
+    return { text: cleanTranslation(acc), secs: (performance.now() - t0) / 1000 };
+  }
+
+  /** One translation turn from a spoken utterance ({blob, dur}) or typed text. */
+  async function runTranslation({ blob, dur, typed }) {
+    if (xlBusy) return;
+    xlBusy = true;
+    xl.send.disabled = true;
+    const session = new AbortController();
+    xlController = session;
+    // Settings as they are now, not when a later await resumes.
+    const source = xl.source.value, target = xl.target.value, engine = xl.engine.value;
+    const voice = xl.voice.value, speed = Number(xl.speed.value), speak = xl.speak.checked;
+    if (xlOn) xlMic.pause();                     // no listening while we translate and speak
+    const signal = session.signal;
+    const turn = [];                              // bubbles of this turn, for cancellation
+    const add = (kind, who, text) => { const b = bubble(kind, who, text, xl.turns); turn.push(b); return b; };
+    const you = add('user pending', blob ? 'You said' : 'You typed', blob ? `listening to ${dur.toFixed(1)} s of speech…` : typed);
+    const timing = {};
+    let out = null;
+    try {
+      let original = typed || '', detected = source !== 'auto' ? source : null, translation = '', how = '';
+      if (blob) {
+        const toEnglish = target === 'en';
+        setXlState('busy', toEnglish ? 'Translating to English…' : 'Transcribing…');
+        const r = await transcribeBlob(blob, 'utterance.wav', { language: source, signal, endpoint: toEnglish ? 'translations' : 'transcriptions' });
+        timing.asr = r.secs;
+        detected = r.data.language || detected;
+        if (r.data.ignored || !r.text) {
+          setBubble(you, r.text || '(nothing recognisable)', `${dur.toFixed(1)} s · ${r.data.ignored ? `ignored: ${r.data.reason || 'filtered'}` : 'no words'}`, 'ignored');
+          you.style.opacity = '.6';
+          return;
+        }
+        if (toEnglish) {
+          setBubble(you, `(${dur.toFixed(1)} s of ${detected ? langName(detected) : 'speech'})`, `${langTag(detected)} · Whisper translate ${r.secs.toFixed(2)} s`);
+          translation = r.text; how = `Whisper translate`;
+        } else {
+          original = r.text;
+          setBubble(you, original, `${langTag(detected)} · ASR ${r.secs.toFixed(2)} s`);
+        }
+      } else {
+        setBubble(you, typed, detected ? langTag(detected) : 'typed');
+      }
+      const targetName = langName(target);
+      if (!translation) {
+        if (detected && detected === target) {
+          translation = original; how = `already in ${targetName}`;
+        } else {
+          if (!xlChatModel) await refreshChatModel();
+          if (signal.aborted) return;
+          if (!xlChatModel) throw new Error(`Load a chat model in the Studio (Settings → Models) to translate into ${targetName}.`);
+          setXlState('busy', `Translating into ${targetName}…`);
+          out = add('assistant pending', targetName, 'translating…');
+          const llm = await translateWithLlm(original, { source: detected || source, target, signal,
+            onText: (t) => { if (!signal.aborted && t) out.querySelector('.txt').textContent = t; } });
+          timing.llm = llm.secs;
+          translation = llm.text; how = `${xlChatModel} · LLM ${llm.secs.toFixed(2)} s`;
+          if (!translation) throw new Error('The chat model returned no translation.');
+        }
+      }
+      if (signal.aborted) return;
+      if (!out) out = add('assistant', targetName, translation);
+      setBubble(out, translation, how);
+      xlPairs.push([original || `(${langTag(detected)} speech)`, translation]);
+      xlStats.count += 1;
+      if (timing.asr != null) xlStats.asr.push(timing.asr);
+      if (timing.llm != null) xlStats.llm.push(timing.llm);
+      if (speak && speakable(target, engine)) {
+        setXlState('busy', 'Synthesizing…');
+        const body = { input: translation, model: engine, language: target, speed, response_format: 'wav' };
+        if (voice && voice !== 'default') body.voice = voice;
+        const tts = await speakText(body, signal);
+        timing.tts = tts.secs; xlStats.tts.push(tts.secs);
+        const h = (n) => tts.headers.get(n) || '–';
+        setBubble(out, translation, `${how} · ${h('X-Engine')} ${h('X-Voice')} TTS ${tts.secs.toFixed(2)} s`);
+        updateXlStats();
+        if (signal.aborted) return;
+        setXlState('speaking', 'Speaking the translation…');
+        out.classList.add('speaking');
+        await xlPlayer.load(tts.blob, { autoplay: true });
+        out.classList.remove('speaking');
+      } else {
+        if (speak) setBubble(out, translation, `${how} · not spoken: ${(engineEntry(engine) || {}).label || 'no engine'} has no ${targetName} voice`);
+        updateXlStats();
+      }
+    } catch (err) {
+      if (err.name !== 'AbortError') {
+        const pendingBubble = turn.find((b) => b.classList.contains('pending'));
+        if (pendingBubble) setBubble(pendingBubble, err.message, '', 'err');
+        else add('assistant err', 'Error', err.message);
+        setStatus(xl.status, err.message, 'err');
+      }
+    } finally {
+      turn.forEach((b) => { if (b.classList.contains('pending')) { setBubble(b, '(cancelled)', '', 'ignored'); b.style.opacity = '.6'; } });
+      if (out) out.classList.remove('speaking');
+      if (xlController === session) xlController = null;
+      xlBusy = false;
+      xl.send.disabled = false;
+      if (xlOn) { xlMic.resume(); setXlState('listening', 'Listening… speak, then pause.'); }
+      else if (!xlStarting) setXlState('idle', XL_IDLE);
+    }
+  }
+
+  xlMic.on('segment', (blob, dur) => { if (xlOn && !xlBusy) runTranslation({ blob, dur }); });
+  async function startTranslate() {
+    if (xlOn || xlStarting) return;
+    ensureAudioContext();
+    xlMic.set({ sensitivity: Number(xl.sens.value), silenceMs: Number(xl.silence.value) });
+    setStatus(xl.status, '');
+    xlStarting = true;
+    setXlState('busy', 'Starting the microphone… press again to cancel.');
+    let started = false;
+    try { started = await xlMic.start(); }
+    catch (err) { xlStarting = false; setXlState('err', `Microphone unavailable: ${err.message}`); return; }
+    if (!xlStarting || !started) return;          // cancelled while the prompt / setup was pending
+    xlStarting = false;
+    xlOn = true;
+    if (xlBusy) xlMic.pause();                     // a typed translation is still running
+    else setXlState('listening', 'Listening… speak, then pause.');
+  }
+  function stopTranslate() {
+    xlStarting = false;
+    xlOn = false;
+    xlMic.stop();
+    if (xlController) xlController.abort();
+    xlPlayer.stop();
+    setXlState('idle', XL_IDLE);
+  }
+  function sendTyped() {
+    const text = xl.text.value.trim();
+    if (!text) { setStatus(xl.status, 'Type something to translate.', 'err'); return; }
+    if (xlBusy) return;
+    ensureAudioContext();                          // created on the click: playback is allowed
+    setStatus(xl.status, '');
+    runTranslation({ typed: text });
+  }
+  xl.start.addEventListener('click', () => { if (xlOn || xlStarting) stopTranslate(); else startTranslate(); });
+  xl.send.addEventListener('click', sendTyped);
+  xl.text.addEventListener('keydown', (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') sendTyped(); });
+  xl.engine.addEventListener('change', () => { fillVoiceSelect(xl.voice, xl.engine.value); fillTranslateTargets(); saveTranslatePrefs(); });
+  xl.target.addEventListener('change', () => { refreshRoute(); saveTranslatePrefs(); });
+  [xl.source, xl.voice, xl.speak].forEach((e) => e.addEventListener('change', saveTranslatePrefs));
+  xl.swap.addEventListener('click', () => {
+    const s = xl.source.value, t = xl.target.value;
+    if (s !== 'auto' && [...xl.target.options].some((o) => o.value === s)) xl.target.value = s;
+    xl.source.value = ASR_LANGUAGES.includes(t) ? t : 'auto';
+    refreshRoute(); saveTranslatePrefs();
+  });
+  bindSlider(xl.speed, $('xl-speedOut'), (v) => `${v.toFixed(2)}×`);
+  bindSlider(xl.silence, $('xl-silenceOut'), (v) => `${v} ms`);
+  bindSlider(xl.sens, $('xl-sensOut'), (v) => v.toFixed(2));
+  xl.speed.addEventListener('input', saveTranslatePrefs);
+  xl.silence.addEventListener('input', () => { xlMic.set({ silenceMs: Number(xl.silence.value) }); saveTranslatePrefs(); });
+  xl.sens.addEventListener('input', () => { xlMic.set({ sensitivity: Number(xl.sens.value) }); saveTranslatePrefs(); });
+  xl.clear.addEventListener('click', () => {
+    xl.turns.innerHTML = XL_PLACEHOLDER;
+    xlPairs.length = 0;
+    Object.assign(xlStats, { count: 0, asr: [], llm: [], tts: [] }); updateXlStats();
+  });
+  xl.copy.addEventListener('click', async () => {
+    const text = xlPairs.map(([a, b]) => `${a}\n→ ${b}`).join('\n\n');
+    try { await navigator.clipboard.writeText(text); xl.copy.textContent = 'Copied'; } catch (e) { xl.copy.textContent = 'Select & copy'; }
+    setTimeout(() => { xl.copy.textContent = 'Copy all'; }, 1500);
+  });
+  window.addEventListener('focus', () => { if (currentTab === 'translate') refreshChatModel(); });
+  fillTranslateSources();
+
+  enterTab = (name) => { if (name === 'translate') refreshChatModel(); };
   // Leaving a tab stops whatever it was doing (playback, recording, listening).
   leaveTab = (name) => {
     if (name === 'speech') { if (spController) spController.abort(); spPlayer.stop(); }
     else if (name === 'transcription') { stopLive(); stopRecording(); trPlayer.stop(); if (trController) trController.abort(); }
     else if (name === 'echo') stopEcho();
+    else if (name === 'translate') stopTranslate();
   };
 
   // ---- boot --------------------------------------------------------------
   window.addEventListener('pagehide', () => {
     stopRecording();
-    stopLive(); stopEcho(); spPlayer.stop(); trPlayer.stop();
+    stopLive(); stopEcho(); stopTranslate(); spPlayer.stop(); trPlayer.stop();
+    if (downloadUrl) URL.revokeObjectURL(downloadUrl);
   });
   const prefs = loadPrefs();
   if (prefs.trLanguage) tr.language.value = prefs.trLanguage;
@@ -1121,6 +1455,11 @@
   if (prefs.ecSpeed) ec.speed.value = prefs.ecSpeed;
   if (prefs.ecSilence) ec.silence.value = prefs.ecSilence;
   if (prefs.ecSens) ec.sens.value = prefs.ecSens;
+  if (prefs.xlSource) fillTranslateSources(prefs.xlSource);
+  if (prefs.xlSpeak === false) xl.speak.checked = false;
+  if (prefs.xlSpeed) xl.speed.value = prefs.xlSpeed;
+  if (prefs.xlSilence) xl.silence.value = prefs.xlSilence;
+  if (prefs.xlSens) xl.sens.value = prefs.xlSens;
   // Readouts only: firing 'input' here would run the save handlers while the
   // voice pickers are still empty and overwrite the stored choices.
   sliderShows.forEach((show) => show());
@@ -1128,6 +1467,6 @@
   trMode(prefs.trMode === 'live' ? 'live' : 'clip');
   const initial = (location.hash || '').replace('#', '') || prefs.tab || 'speech';
   showTab(initial);
-  listingWaiters.push(initSpeechPickers, initEchoPickers);
+  listingWaiters.push(initSpeechPickers, initEchoPickers, initTranslatePickers);
   loadVoices();
 })();

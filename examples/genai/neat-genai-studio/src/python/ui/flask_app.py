@@ -2618,7 +2618,9 @@ class AppContext:
             elapsed = time.time() - started
             headers = {'X-ASR-Model': model or '', 'X-Task': task, 'X-Elapsed-Time': f"{elapsed:.3f}"}
             if isinstance(body, str):
-                return Response(body, mimetype=mimetype, headers=headers)
+                # content_type, not mimetype: the value already carries its
+                # charset and Flask would append a second one.
+                return Response(body, content_type=mimetype, headers=headers)
             resp = jsonify(body)
             for key, value in headers.items():
                 resp.headers[key] = value

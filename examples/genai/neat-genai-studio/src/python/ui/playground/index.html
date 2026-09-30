@@ -20,6 +20,7 @@
       <button class="pg-tab" role="tab" data-tab="speech" aria-selected="true" type="button">Speech</button>
       <button class="pg-tab" role="tab" data-tab="transcription" aria-selected="false" type="button">Transcription</button>
       <button class="pg-tab" role="tab" data-tab="echo" aria-selected="false" type="button">Echo</button>
+      <button class="pg-tab" role="tab" data-tab="translate" aria-selected="false" type="button">Translate</button>
     </nav>
     <span class="pg-spacer"></span>
     <span id="conn" class="pg-pill"><i class="dot"></i><span>connecting…</span></span>
@@ -301,6 +302,88 @@
       <div class="ref">
         <span>1 · utterance cut by voice activity</span><span>2 · <code>POST /v1/audio/transcriptions</code> (verbose_json)</span>
         <span>3 · <code>POST /v1/audio/speech</code> with the transcript</span><span>4 · played back, mic resumes</span>
+      </div>
+    </section>
+
+    <!-- ================= Translate: speak or type in one language, get another ================= -->
+    <section id="panel-translate" class="pg-panel" role="tabpanel" hidden>
+      <div class="pg-grid">
+        <div class="card">
+          <div class="card-head"><h2>Translate</h2><span id="xl-route" class="route">transcriptions → chat → speech</span></div>
+          <div class="row">
+            <label class="field"><span>From <code>language</code></span><select id="xl-source" class="select"></select></label>
+            <div class="swap-wrap"><button id="xl-swap" class="icon-btn" type="button" title="Swap languages" aria-label="Swap languages">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h13M16 3l4 4-4 4M17 17H4M8 21l-4-4 4-4"/></svg>
+            </button></div>
+            <label class="field"><span>To</span><select id="xl-target" class="select"></select></label>
+          </div>
+          <div id="xl-model" class="model-note"><i class="dot"></i><span>checking the chat model…</span></div>
+          <div class="echo-stage">
+            <button id="xl-start" class="echo-btn" type="button" aria-label="Start listening">
+              <span class="ring"></span>
+              <svg class="mic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+              <svg class="stopi" viewBox="0 0 24 24" fill="currentColor" hidden><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+            </button>
+            <div id="xl-state" class="echo-state idle">Press to listen and speak, or type below. Each utterance is translated as soon as you pause.</div>
+            <div class="meter vad"><i id="xl-level"></i><b id="xl-threshold"></b></div>
+          </div>
+          <div class="compose">
+            <textarea id="xl-text" class="textarea short" placeholder="…or type text to translate (Ctrl/⌘ + Enter)"></textarea>
+            <button id="xl-send" class="btn primary" type="button">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h14M13 6l6 6-6 6"/></svg><span>Translate</span>
+            </button>
+          </div>
+          <label class="check"><input id="xl-speak" type="checkbox" checked> Speak the translation</label>
+          <div class="row">
+            <label class="field"><span>Voice engine <code>model</code></span><select id="xl-engine" class="select"></select></label>
+            <label class="field"><span>Voice <code>voice</code></span><select id="xl-voice" class="select"></select></label>
+          </div>
+          <div class="row">
+            <div class="field">
+              <span>Speed <code>speed</code></span>
+              <div class="slider"><input id="xl-speed" type="range" min="0.25" max="4" step="0.05" value="1"><output id="xl-speedOut">1.00×</output></div>
+            </div>
+            <div class="field">
+              <span>End of utterance <code>silence</code></span>
+              <div class="slider"><input id="xl-silence" type="range" min="300" max="2000" step="50" value="700"><output id="xl-silenceOut">700 ms</output></div>
+            </div>
+          </div>
+          <div class="field">
+            <span>Sensitivity <code>VAD</code></span>
+            <div class="slider"><input id="xl-sens" type="range" min="0" max="1" step="0.05" value="0.5"><output id="xl-sensOut">0.50</output></div>
+          </div>
+          <div class="hint">Into English, speech goes straight through Whisper's translate task. Into any other language, Whisper transcribes what you said and the loaded chat model translates it. The microphone is muted while a translation plays.</div>
+          <div id="xl-status" class="status"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>Translations</h2>
+            <div class="actions tight">
+              <button id="xl-copy" class="copy-btn" type="button">Copy all</button>
+              <button id="xl-clear" class="copy-btn" type="button">Clear</button>
+            </div>
+          </div>
+          <div id="xl-turns" class="turns"><div class="placeholder">Each turn shows the original with its detected language and the translation, with ASR, LLM and TTS timings.</div></div>
+          <div id="xl-wave" class="wave short"><canvas id="xl-canvas"></canvas><div class="cursor"></div><div id="xl-placeholder" class="placeholder">Last spoken translation</div></div>
+          <div class="player-row">
+            <button id="xl-play" class="btn" type="button" disabled>
+              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span>Play</span>
+            </button>
+            <audio id="xl-audio" controls preload="auto" hidden></audio>
+          </div>
+          <div class="stats">
+            <div class="stat"><b id="xl-count">0</b><span>translations</span></div>
+            <div class="stat"><b id="xl-asr">–</b><span>avg ASR s</span></div>
+            <div class="stat"><b id="xl-llm">–</b><span>avg LLM s</span></div>
+            <div class="stat"><b id="xl-tts">–</b><span>avg TTS s</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="ref">
+        <span>→ English: <code>POST /v1/audio/translations</code></span>
+        <span>other targets: <code>POST /v1/audio/transcriptions</code> then <code>POST /v1/chat/completions</code></span>
+        <span>spoken with <code>POST /v1/audio/speech</code></span>
       </div>
     </section>
   </main>

@@ -320,3 +320,21 @@ table.meta td:last-child { font-family: var(--code-font); font-size: 12.5px; }
 /* reference footer */
 .ref { font-size: 12.5px; color: var(--text-3); display: flex; gap: 14px; flex-wrap: wrap; align-items: center; padding: 0 2px; }
 .ref code { color: var(--text-2); }
+
+/* ---- translate ------------------------------------------------------- */
+.swap-wrap { display: flex; align-items: flex-end; justify-content: center; padding-bottom: 1px; }
+#panel-translate .row:first-of-type { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); }
+.model-note { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-2); }
+.model-note .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-3); flex: none; }
+.model-note.ok .dot { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 22%, transparent); }
+.model-note.warn { color: var(--warn); } .model-note.warn .dot { background: var(--warn); }
+.model-note.idle .dot { background: var(--text-3); }
+.compose { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: end; }
+.textarea.short { min-height: 64px; }
+.message .lang { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 999px; font-size: 10.5px;
+  letter-spacing: .04em; background: color-mix(in srgb, currentColor 14%, transparent); text-transform: none; }
+@media (max-width: 640px) {
+  .pg-tab { padding: 6px 10px; }
+  .pg-tabs { margin-left: 0; }
+}
+@media (max-width: 480px) { .compose { grid-template-columns: 1fr; } }
