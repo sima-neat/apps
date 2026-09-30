@@ -716,10 +716,20 @@
     let rec;
     try { rec = mime ? new MediaRecorder(granted, { mimeType: mime }) : new MediaRecorder(granted); }
     catch (err) { setStatus(tr.status, `Recording not supported here: ${err.message}`, 'err'); granted.getTracks().forEach((t) => t.stop()); return; }
-    const ctx = ensureAudioContext();
-    const analyser = ctx.createAnalyser(); analyser.fftSize = 1024;
-    const src = ctx.createMediaStreamSource(granted);
-    src.connect(analyser);
+    // Level meter. Everything after the permission grant is undone if it fails,
+    // so the microphone never stays on without a recording that can stop it.
+    let analyser, src;
+    try {
+      const ctx = ensureAudioContext();
+      analyser = ctx.createAnalyser(); analyser.fftSize = 1024;
+      src = ctx.createMediaStreamSource(granted);
+      src.connect(analyser);
+    } catch (err) {
+      try { if (src) src.disconnect(); } catch (e) { /* ignore */ }
+      granted.getTracks().forEach((t) => t.stop());
+      setStatus(tr.status, `Recording could not start: ${err.message}`, 'err');
+      return;
+    }
     const data = new Uint8Array(analyser.fftSize);
     let raf = 0;
     const meter = () => {
@@ -756,7 +766,8 @@
       setStatus(tr.status, 'Clip ready. Press Transcribe.', 'ok');
     };
     active = { rec, cleanup };
-    rec.start();
+    try { rec.start(); }
+    catch (err) { cleanup(); setStatus(tr.status, `Recording could not start: ${err.message}`, 'err'); return; }
     tr.recTime.textContent = '0.0 s';
     tr.rec.classList.add('recording'); tr.rec.querySelector('span').textContent = 'Recording';
     tr.rec.disabled = true; tr.recStop.disabled = false;
