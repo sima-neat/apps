@@ -59,6 +59,7 @@ class WebConfig:
     port: int
     https: bool
     headless: bool = False   # backend-only: serve the API endpoints, not the web UI
+    cors_origins: str = ""   # backend-only CORS allowlist (comma list or *); env BACKEND_CORS_ORIGINS overrides
 
 
 @dataclass(frozen=True)
@@ -160,6 +161,7 @@ def load_server_config(path: Path = DEFAULT_SERVER_CONFIG, apps_root: Path = PAT
             port=int(web.get("port", 5000)),
             https=_load_bool(web.get("https", True)),
             headless=_load_bool(web.get("headless", False)),
+            cors_origins=_load_cors_origins(web.get("cors_origins")),
         ),
         rag=_load_rag_config(rag, apps_root),
         control=_load_control_config(control),
@@ -168,6 +170,15 @@ def load_server_config(path: Path = DEFAULT_SERVER_CONFIG, apps_root: Path = PAT
         hub=_load_hub_config(hub),
         ui=_load_ui_section(ui),
     )
+
+
+def _load_cors_origins(value) -> str:
+    """app.web.cors_origins as one comma-separated string (a YAML list works too)."""
+    if not value:
+        return ""
+    if isinstance(value, (list, tuple)):
+        return ",".join(str(v).strip() for v in value if str(v).strip())
+    return str(value).strip()
 
 
 def _load_supertonic_config(raw: dict) -> SupertonicConfig:
@@ -214,6 +225,7 @@ def load_ui_config(path: Path = DEFAULT_UI_CONFIG, apps_root: Path = PATH_ROOT) 
             port=int(web.get("port", 5000)),
             https=_load_bool(web.get("https", True)),
             headless=_load_bool(web.get("headless", False)),
+            cors_origins=_load_cors_origins(web.get("cors_origins")),
         ),
         rag=_load_rag_config(rag, apps_root),
         control=_load_control_config(control),

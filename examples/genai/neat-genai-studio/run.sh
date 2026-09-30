@@ -928,8 +928,9 @@ if [[ -f "${PID_FILE}" ]]; then
   if [[ -n "${existing}" ]] && kill -0 "${existing}" 2>/dev/null; then
     if [[ "${OPEN_BROWSER}" == "1" ]]; then
       ok "Neat GenAI Studio is already running (pid ${existing})."
-      if [[ "$(cat "${MODE_FILE}" 2>/dev/null || echo web)" == "backend-only" ]]; then
-        warn "It runs in backend-only mode (no web UI); stop it and start ./run.sh to use the UI."
+      _mode="$(cat "${MODE_FILE}" 2>/dev/null || echo web)"
+      if [[ "${_mode}" != "web" ]]; then
+        warn "It runs in ${_mode} mode (no web UI); stop it (./run.sh stop) and start ./run.sh to use the UI."
         exit 1
       fi
       _url="$(local_web_url || true)"
@@ -1149,7 +1150,8 @@ fi
 _url="$(web_url || true)"
 if [[ -n "${_url}" && "${BACKEND_ONLY}" == "1" ]]; then
   info "Backend-only: API on ${C_ACCENT}${C_BOLD}${_url}${C_RESET} (no web UI); readiness at ${C_ACCENT}${_url}/health${C_RESET}."
-  info "CORS for browser front ends: ${BACKEND_CORS_ORIGINS:-off (set BACKEND_CORS_ORIGINS to allow origins)}."
+  _cors="${BACKEND_CORS_ORIGINS:-$(awk '/^  web:/{f=1;next} f&&/^  [a-z]/{f=0} f&&$1=="cors_origins:"{sub(/^[^:]*:[ \t]*/,""); gsub(/^["\x27]|["\x27][ \t]*(#.*)?$/,""); print; exit}' "${CONFIG_PATH}" 2>/dev/null || true)}"
+  info "CORS for browser front ends: ${_cors:-off (app.web.cors_origins or BACKEND_CORS_ORIGINS allows origins)}."
 elif [[ -n "${_url}" ]]; then
   info "Open ${C_ACCENT}${C_BOLD}${_url}${C_RESET} in your browser once it finishes loading."
 fi

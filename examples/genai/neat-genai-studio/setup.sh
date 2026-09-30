@@ -599,6 +599,7 @@ app:
     port: 5000
     https: true
     headless: false   # true: API endpoints only, no web UI (same as ./run.sh --backend-only)
+    cors_origins: ""  # backend-only: origins (comma list or *) whose browser pages may call the API
 
   ui:
     font_family: Inter

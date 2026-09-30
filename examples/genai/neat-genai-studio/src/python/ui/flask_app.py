@@ -3340,12 +3340,13 @@ def run_ui(app_cfg, backend_only=False):
         os.environ.setdefault("SUPERTONIC_VENV", app_cfg.supertonic.venv)
     genai_app = AppContext()
     genai_app.backend_only = bool(backend_only)
-    cors_raw = os.environ.get("BACKEND_CORS_ORIGINS", "")
+    # The environment overrides the persisted allowlist (app.web.cors_origins).
+    cors_raw = os.environ.get("BACKEND_CORS_ORIGINS") or app_cfg.web.cors_origins or ""
     if backend_only:
         genai_app.cors_origins = backend_mode.parse_cors_origins(cors_raw)
         logging.info("Backend-only CORS: %s", genai_app.cors_origins or "off")
     elif cors_raw.strip():
-        logging.warning("BACKEND_CORS_ORIGINS is only honoured in backend-only mode; ignored.")
+        logging.warning("The CORS allowlist (app.web.cors_origins / BACKEND_CORS_ORIGINS) is only honoured in backend-only mode; ignored.")
     genai_app.initialize()
     genai_app.update_from_config(app_cfg)
     genai_app.setup_router()

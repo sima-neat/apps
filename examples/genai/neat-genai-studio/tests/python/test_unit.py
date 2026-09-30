@@ -82,6 +82,27 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.mark.unit
+def test_ui_config_reads_backend_settings(tmp_path) -> None:
+    """app.web.headless and the persisted backend CORS allowlist (string or list)."""
+    from shared.config import load_ui_config
+
+    plain = tmp_path / "plain.yaml"
+    plain.write_text("app:\n  web:\n    port: 5000\n", encoding="utf-8")
+    cfg = load_ui_config(plain, tmp_path)
+    assert (cfg.web.headless, cfg.web.cors_origins) == (False, "")
+
+    text = tmp_path / "text.yaml"
+    text.write_text('app:\n  web:\n    port: 5000\n    headless: true\n'
+                    '    cors_origins: "http://a:3000, https://b"\n', encoding="utf-8")
+    cfg = load_ui_config(text, tmp_path)
+    assert (cfg.web.headless, cfg.web.cors_origins) == (True, "http://a:3000, https://b")
+
+    listed = tmp_path / "list.yaml"
+    listed.write_text("app:\n  web:\n    port: 5000\n    cors_origins:\n      - http://a:3000\n      - '*'\n",
+                      encoding="utf-8")
+    assert load_ui_config(listed, tmp_path).web.cors_origins == "http://a:3000,*"
+
+
 def test_ui_config_reads_supertonic_paths(tmp_path) -> None:
     """app.tts.supertonic persists the machine-specific Supertonic models root
     that setup.sh wrote; a pre-vendoring app_root maps to its models/ subdir and

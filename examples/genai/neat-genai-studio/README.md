@@ -430,6 +430,10 @@ origins are refused by default; list the origins that may call the API, or `*`:
 BACKEND_CORS_ORIGINS="https://insight.local:8443,http://10.0.0.5:3000" ./run.sh --backend-only
 ```
 
+To keep the allowlist across launches, set `app.web.cors_origins` in
+`config.local.yaml` (a comma-separated string or a YAML list); the environment
+variable overrides it for one run.
+
 Allowed origins get CORS headers (the `X-*` timing and engine headers are
 exposed) and preflight answers on the API paths; `/shutdown` never is. Quick
 checks from the board:

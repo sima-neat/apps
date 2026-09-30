@@ -50,6 +50,7 @@ app:                         # Assistant web app settings.
     port: 5000               # Web UI port.
     https: true              # Serve the UI over HTTPS.
     headless: false          # true: API endpoints only, no web UI (./run.sh --backend-only).
+    cors_origins: ""         # Backend-only CORS allowlist: "https://a:8443,http://b:3000" or "*"; env BACKEND_CORS_ORIGINS overrides.
 
   ui:                        # Appearance defaults (users can override in the browser).
     font_family: Inter       # Default UI font family.

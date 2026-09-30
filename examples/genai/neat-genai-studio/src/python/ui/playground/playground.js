@@ -836,6 +836,7 @@
   const liveMic = createLiveMic({ silenceMs: 700, sensitivity: 0.5 });
   bindMeter(liveMic, tl.level, tl.threshold);
   const liveStats = { count: 0, words: 0, speech: 0, latencies: [], rtfs: [] };
+  let liveClearGen = 0;
   let liveQueue = Promise.resolve();
   let liveController = null;
 
@@ -879,10 +880,12 @@
     // Settings as they were when this utterance was spoken, not when its turn
     // in the queue comes.
     const language = tl.language.value, model = tl.model.value.trim();
+    const clearGen = liveClearGen;
     liveQueue = liveQueue.then(async () => {
       if (session.signal.aborted) { row.remove(); return; }   // stopped while queued
       try {
         const r = await transcribeBlob(blob, 'utterance.wav', { language, model, signal: session.signal });
+        if (clearGen !== liveClearGen) return;   // the log was cleared meanwhile
         const d = r.data;
         row.classList.remove('pending');
         row.querySelector('.x').textContent = r.text || '(no words)';
@@ -945,6 +948,7 @@
   tl.language.addEventListener('change', () => savePrefs({ tlLanguage: tl.language.value }));
   tl.hideIgnored.addEventListener('change', () => { tl.log.querySelectorAll('.seg-item.ignored').forEach((r) => { r.hidden = tl.hideIgnored.checked; }); savePrefs({ tlHide: tl.hideIgnored.checked }); });
   tl.clear.addEventListener('click', () => {
+    liveClearGen += 1;                         // results still in flight belong to the cleared log
     tl.log.innerHTML = '<div class="placeholder">Start listening and speak. Each utterance appears here as soon as it is transcribed.</div>';
     Object.assign(liveStats, { count: 0, words: 0, speech: 0, latencies: [], rtfs: [] }); updateLiveStats();
   });
@@ -1101,6 +1105,8 @@
   ec.silence.addEventListener('input', () => { echoMic.set({ silenceMs: Number(ec.silence.value) }); saveEchoPrefs(); });
   ec.sens.addEventListener('input', () => { echoMic.set({ sensitivity: Number(ec.sens.value) }); saveEchoPrefs(); });
   ec.clear.addEventListener('click', () => {
+    if (echoController) echoController.abort();   // the turn in progress belongs to the cleared history
+    ecPlayer.stop();
     ec.turns.innerHTML = '<div class="placeholder">Each turn shows what was heard and the reply that was spoken back, with timings.</div>';
     Object.assign(echoStats, { count: 0, asr: [], tts: [], turn: [] }); updateEchoStats();
   });
@@ -1427,6 +1433,8 @@
   xl.silence.addEventListener('input', () => { xlMic.set({ silenceMs: Number(xl.silence.value) }); saveTranslatePrefs(); });
   xl.sens.addEventListener('input', () => { xlMic.set({ sensitivity: Number(xl.sens.value) }); saveTranslatePrefs(); });
   xl.clear.addEventListener('click', () => {
+    if (xlController) xlController.abort();       // the turn in progress belongs to the cleared history
+    xlPlayer.stop();
     xl.turns.innerHTML = XL_PLACEHOLDER;
     xlPairs.length = 0;
     Object.assign(xlStats, { count: 0, asr: [], llm: [], tts: [] }); updateXlStats();
