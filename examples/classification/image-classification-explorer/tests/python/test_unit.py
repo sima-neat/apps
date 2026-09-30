@@ -554,6 +554,11 @@ class TestScalarConfigSemantics:
         ("2024", "2024"),        # canonical already: unchanged
         ("report", "report"),    # ordinary name: untouched
         ("null-reports", "null-reports"),
+        ("yes", "true"),         # YAML 1.1 Boolean aliases, as PyYAML resolves them
+        ("No", "false"),
+        ("on", "true"),
+        ("OFF", "false"),
+        ("yesterday", "yesterday"),   # not a Boolean: left alone
     ])
     def test_string_values_follow_cpp_rules(self, value, expected):
         assert main.config_str(value, "io.output_dir", "fallback") == expected
@@ -1112,6 +1117,27 @@ models:
         assert (out_dir / "report.json").read_bytes() == before
         assert (out_dir / "report.html").is_file()
         assert not list(tmp_path.glob(".out.*")), "staging/previous directories left behind"
+
+    def test_unowned_scratch_directory_is_refused_not_deleted(self, tmp_path, monkeypatch):
+        """An exact name is not proof of ownership. If something else already
+        owns `.<name>.staging` or `.<name>.previous`, the run must stop rather
+        than recursively delete a directory it did not create."""
+        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
+        img = tmp_path / "a.jpg"
+        _make_image(img)
+        out_dir = tmp_path / "out"
+        config_path = tmp_path / "config.yaml"
+        _write_config(config_path, img, out_dir)
+
+        squatter = tmp_path / ".out.staging"
+        squatter.mkdir()
+        (squatter / "someone-elses-work.txt").write_text("keep me", encoding="utf-8")
+
+        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
+        assert main.main() == 6
+        assert (squatter / "someone-elses-work.txt").is_file(), (
+            "a scratch directory without the marker must never be deleted"
+        )
 
     def test_cleanup_touches_only_its_own_two_scratch_names(self, tmp_path, monkeypatch):
         """Publication clears `.<name>.staging` and `.<name>.previous` and nothing
