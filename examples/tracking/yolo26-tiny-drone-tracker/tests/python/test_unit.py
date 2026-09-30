@@ -488,15 +488,13 @@ class FakeSample:
 
 class TestMetadata:
     def test_send_metadata_uses_tracking_contract(self):
-        from utils.tracker import ObjectTracker, TrackedDetection
-
         sender = FakeMetadataSender()
         runtime = main_module.StreamRuntime(
             index=0,
             url="rtsp://127.0.0.1:8554/src1",
             source_options=None,
             metadata_sender=sender,
-            tracker=ObjectTracker(),
+            tracker=main_module.ObjectTracker(),
             profile=main_module.ProfileWindow(False, 0),
             debug_frames=deque(maxlen=32),
             frame_w=100,
@@ -504,7 +502,7 @@ class TestMetadata:
             output_fps=30,
             video_port=9000,
         )
-        tracks = [TrackedDetection(7, 10.0, 20.0, 40.0, 60.0, 0.75, 0)]
+        tracks = [main_module.TrackedDetection(7, 10.0, 20.0, 40.0, 60.0, 0.75, 0)]
 
         cfg = main_module.AppConfig(model_path="model.tar.gz", rtsp_urls=[runtime.url])
         main_module.send_metadata(runtime, cfg, FakeSample(), tracks)
@@ -528,10 +526,8 @@ class TestMetadata:
 
 class TestTracker:
     def test_tracker_reuses_track_id_for_nearby_detection(self):
-        from utils.tracker import ObjectTracker, TrackerConfig
-
-        tracker = ObjectTracker(
-            TrackerConfig(match_iou_threshold=0.3, max_missing_frames=2)
+        tracker = main_module.ObjectTracker(
+            main_module.TrackerConfig(match_iou_threshold=0.3, max_missing_frames=2)
         )
         first = tracker.update(
             [
@@ -565,10 +561,8 @@ class TestTracker:
         assert first[0].track_id == second[0].track_id
 
     def test_tracker_drops_track_after_missing_budget(self):
-        from utils.tracker import ObjectTracker, TrackerConfig
-
-        tracker = ObjectTracker(
-            TrackerConfig(match_iou_threshold=0.3, max_missing_frames=1)
+        tracker = main_module.ObjectTracker(
+            main_module.TrackerConfig(match_iou_threshold=0.3, max_missing_frames=1)
         )
         tracker.update(
             [
@@ -589,10 +583,8 @@ class TestTracker:
         assert tracker.active_track_count() == 0
 
     def test_motion_matching_reuses_id_when_boxes_have_zero_iou(self):
-        from utils.tracker import ObjectTracker, TrackerConfig
-
-        tracker = ObjectTracker(
-            TrackerConfig(
+        tracker = main_module.ObjectTracker(
+            main_module.TrackerConfig(
                 match_iou_threshold=0.3,
                 max_center_distance=3.0,
                 velocity_momentum=0.0,
@@ -615,10 +607,8 @@ class TestTracker:
         assert [item.track_id for item in (first[0], second[0], third[0])] == [1, 1, 1]
 
     def test_low_score_detection_only_recovers_confirmed_track(self):
-        from utils.tracker import ObjectTracker, TrackerConfig
-
-        tracker = ObjectTracker(
-            TrackerConfig(
+        tracker = main_module.ObjectTracker(
+            main_module.TrackerConfig(
                 high_score_threshold=0.5,
                 new_track_threshold=0.5,
                 match_iou_threshold=0.1,
@@ -637,9 +627,7 @@ class TestTracker:
         assert recovered[0].track_id == 1
 
     def test_tracker_bounds_active_state(self):
-        from utils.tracker import ObjectTracker, TrackerConfig
-
-        tracker = ObjectTracker(TrackerConfig(max_active_tracks=2))
+        tracker = main_module.ObjectTracker(main_module.TrackerConfig(max_active_tracks=2))
         detections = [
             {
                 "x1": index * 20,
@@ -656,10 +644,8 @@ class TestTracker:
         assert tracker.active_track_count() == 2
 
     def test_tracker_expires_stale_state_before_creating_replacement(self):
-        from utils.tracker import ObjectTracker, TrackerConfig
-
-        tracker = ObjectTracker(
-            TrackerConfig(
+        tracker = main_module.ObjectTracker(
+            main_module.TrackerConfig(
                 max_active_tracks=1,
                 max_missing_frames=0,
                 center_distance_enabled=False,
