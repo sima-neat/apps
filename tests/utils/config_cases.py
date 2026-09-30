@@ -35,9 +35,12 @@ def load_example_main(example_dir: Path, module_name: str) -> types.ModuleType:
         return loaded
     python_dir = example_dir / "src" / "python"
     # main.py imports its own packages (utils.tracker, ...) the way a script run from its
-    # directory does, so that directory has to be importable before it executes.
-    if str(python_dir) not in sys.path:
-        sys.path.insert(0, str(python_dir))
+    # directory does, so that directory has to be importable first, and a package of the
+    # same name that another example already put in sys.modules must not shadow this one.
+    if str(python_dir) in sys.path:
+        sys.path.remove(str(python_dir))
+    sys.path.insert(0, str(python_dir))
+    _evict_shadowing_packages(python_dir)
     main_py = python_dir / "main.py"
     spec = importlib.util.spec_from_file_location(module_name, main_py)
     if spec is None or spec.loader is None:
@@ -46,6 +49,24 @@ def load_example_main(example_dir: Path, module_name: str) -> types.ModuleType:
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _evict_shadowing_packages(python_dir: Path) -> None:
+    """Drop cached modules that another example's ``src/python`` provided under a name
+    this example also ships, so this example's ``main.py`` imports its own copies."""
+    local_names = {
+        entry.stem if entry.suffix == ".py" else entry.name
+        for entry in python_dir.iterdir()
+        if entry.name != "main.py" and not entry.name.startswith(("_", "."))
+    }
+    root = python_dir.resolve()
+    for name, module in list(sys.modules.items()):
+        if name.split(".", 1)[0] not in local_names:
+            continue
+        origins = [getattr(module, "__file__", None)] + list(getattr(module, "__path__", []) or [])
+        origins = [Path(origin).resolve() for origin in origins if origin]
+        if origins and not any(origin.is_relative_to(root) for origin in origins):
+            del sys.modules[name]
 
 
 def write_config(

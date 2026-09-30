@@ -97,6 +97,7 @@ tests/
     test_scope.py      # test-scope validation and query helper
   harness/
     test_output_assertions.py  # harness self-tests; run by test.sh --unit
+    test_config_cases.py       # self-tests for the shared config-test helpers
   scripts/
     test_*_contract.py         # repository contract tests; need a source checkout,
                                # run with: pytest -c tests/pytest.ini tests/scripts
