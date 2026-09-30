@@ -82,6 +82,8 @@ def bool_or(raw: dict, key: str, default: bool) -> bool:
 
 def load_config(path: Path) -> Config:
     raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if not isinstance(raw, dict):
+        raise ValueError("config root must be a mapping")
     model = raw.get("model") or {}
     source = raw.get("source") or {}
     inference = raw.get("inference") or {}
