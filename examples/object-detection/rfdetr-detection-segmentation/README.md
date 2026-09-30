@@ -113,6 +113,66 @@ python3 "$APP_DIR/src/python/main.py" --config "$APP_DIR/src/common/config.yaml"
 
 Insight receives `object-detection` metadata for detection or `segmentation` polygon metadata for segmentation. Stop a continuous run with Ctrl-C.
 
+## Expected Result
+
+This application writes nothing to disk; its output is the Insight stream plus a
+startup line and a closing summary:
+
+```text
+RF-DETR detection small h264: rtsp://<host>:<port>/<stream> (1280x720@30) -> Insight video=9000 metadata=9100
+RF-DETR detection: completed=200 output_fps=30.8
+```
+
+The `output_fps` value above is Python's, which prints one decimal place. The
+C++ binary prints the same line at the default stream precision, for example
+`output_fps=30.7692`.
+
+The startup line prints as soon as the source is probed, so it confirms the
+task, variant, codec and resolution straight away. Check that probed resolution
+matches the source you intended.
+
+The packaged config ships `inference.frames: 0`, which runs continuously. Both
+implementations handle `SIGINT`, so stopping with Ctrl-C still prints the closing
+`completed=` line. Set a positive `inference.frames` if you want the run to end
+on its own instead.
+
+`completed` reports the frames processed, and `output_fps` should track the
+source frame rate; a much lower `output_fps` means the pipeline is not keeping
+up with the source.
+
+## Troubleshooting
+
+Check the configuration before involving hardware. This validates and exits
+without opening a stream:
+
+```bash
+python3 ${APP_DIR}/src/python/main.py \
+  --config ${APP_DIR}/src/common/config.yaml --validate-config-only
+```
+
+A valid configuration prints, for example, `RF-DETR detection small
+configuration is valid`. The C++ binary prints the same line without the variant,
+as `RF-DETR detection configuration is valid`.
+
+- `source.codec must be h264/avc, h265/hevc, or mjpeg` means `source.codec` names
+  a codec this example does not decode. Set it to match the source.
+- `model.task must be detection or segmentation`, and
+  `model.detection.variant must be small or medium`, mean the selected task or
+  variant is not one of the supported values.
+- `model archive must use .tar.gz: None` means one half of the model pair was
+  left blank in the config. Both `backbone` and `transformer` must name a
+  downloaded archive for the selected task and variant. This is specific to the
+  Python entrypoint, where a blank value becomes the literal string `None` and
+  slips past validation, so the failure appears only once the run starts. The
+  C++ binary rejects the same config during validation, naming the selected
+  variant, for example
+  `model.detection.small.backbone and transformer must be set`.
+- `failed to resolve RTSP width, height, and FPS` means the source could not be
+  probed, usually because the URL is not reachable from the board. Verify it from
+  the board itself; the URL Insight displays is not always reachable from the
+  target. Where the source is reachable but does not report its properties, set
+  `source.width`, `source.height` and `source.fps` as fallbacks.
+
 ## Performance
 
 End-to-end throughput measured on Modalix under sustained load, using input streams with frame rates exceeding the application's processing capacity. Figures represent the maximum observed inference output rate at each resolution. Segmentation figures use `mask_grid_size: 108`.
