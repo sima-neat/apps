@@ -144,6 +144,7 @@
    *  resolves when playback ends (or is stopped). */
   function makePlayer({ waveEl, canvas, button, audioEl }) {
     let buffer = null, source = null, startedAt = 0, raf = 0, resolveEnd = null, objectUrl = null;
+    let loadGen = 0;                 // stop() bumps it: a load still decoding then goes nowhere
     const cursor = waveEl.querySelector('.cursor');
     const placeholder = waveEl.querySelector('.placeholder');
     const label = button.querySelector('span');
@@ -155,7 +156,8 @@
       label.textContent = 'Play';
       if (resolveEnd) { const r = resolveEnd; resolveEnd = null; r(); }
     }
-    function stop() {                // everything, including the native controls
+    function stop() {                // everything, including a load still in progress
+      loadGen += 1;
       stopSource();
       if (!audioEl.paused) { try { audioEl.pause(); } catch (e) { /* not playable */ } }
     }
@@ -180,16 +182,23 @@
       raf = requestAnimationFrame(tick);
       return new Promise((resolve) => { resolveEnd = resolve; });
     }
+    /** Decode and show a clip; resolves when autoplay finishes. A stop() while
+     *  decoding (tab left, Cancel) discards the result: nothing is shown or played. */
     async function load(blob, { autoplay } = {}) {
       stop();
+      const gen = loadGen;
       buffer = null;
       const ctx = ensureAudioContext();
       const bytes = await blob.arrayBuffer();
-      try {
-        buffer = await ctx.decodeAudioData(bytes.slice(0));
+      if (gen !== loadGen) return Promise.resolve();
+      let decoded = null;
+      try { decoded = await ctx.decodeAudioData(bytes.slice(0)); } catch (e) { decoded = null; }
+      if (gen !== loadGen) return Promise.resolve();
+      buffer = decoded;
+      if (buffer) {
         drawWave(canvas, buffer);
         placeholder.hidden = true;
-      } catch (e) {
+      } else {
         drawWave(canvas, null);
         placeholder.hidden = false;
         placeholder.textContent = 'This clip cannot be decoded by the browser';
@@ -525,6 +534,7 @@
   }
 
   async function synthesize() {
+    if (spController) return;                 // one request at a time (Run is disabled; shortcut checks too)
     const body = speechBody();
     if (!body.input.trim()) { setStatus(sp.status, 'Enter some text first.', 'err'); return; }
     ensureAudioContext();                     // created on the click: playback is allowed from here on
@@ -574,7 +584,7 @@
   sp.speed.addEventListener('input', () => { sp.speedOut.value = `${Number(sp.speed.value).toFixed(2)}×`; updateSpeechPreview(); });
   sp.run.addEventListener('click', synthesize);
   sp.stop.addEventListener('click', () => { if (spController) spController.abort(); spPlayer.stop(); });
-  sp.input.addEventListener('keydown', (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') synthesize(); });
+  sp.input.addEventListener('keydown', (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && !spController) synthesize(); });
 
   // =====================================================================
   // Transcription: clip mode
