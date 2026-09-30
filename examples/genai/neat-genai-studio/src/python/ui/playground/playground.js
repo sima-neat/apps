@@ -667,9 +667,14 @@
              'audio/wav': 'wav', 'audio/x-wav': 'wav', 'audio/wave': 'wav', 'audio/mpeg': 'mp3', 'audio/flac': 'flac' }[base] || 'bin';
   }
   async function setClip(blob, name, type) {
+    // A result for the previous clip must never appear under the new one:
+    // abort its request (its finally re-enables Transcribe).
+    if (trController) trController.abort();
     clip = { blob, name, type: type || blob.type || 'application/octet-stream' };
     tr.clipInfo.textContent = `${name} · ${clip.type} · ${(blob.size / 1024).toFixed(0)} KiB`;
     tr.run.disabled = !!trController;          // one request at a time: Run returns when it ends
+    tr.meta.hidden = true;
+    tr.result.classList.add('empty'); tr.result.textContent = 'The transcript appears here.';
     updateTrPreview();
     await trPlayer.load(blob, { autoplay: false });
   }
