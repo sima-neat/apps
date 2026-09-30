@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import copy
-import importlib.util
 import json
 from pathlib import Path
 import subprocess
@@ -12,6 +10,8 @@ import textwrap
 from types import SimpleNamespace
 
 import pytest
+
+from tests.utils.config_cases import config_writer, load_example_main
 import yaml
 
 
@@ -21,17 +21,7 @@ MAIN_PY = PYTHON_DIR / "main.py"
 MODEL_PATH = "models/yolo26n-det-int8-b1.tar.gz"
 COMMON_DIR = EXAMPLE_DIR / "src" / "common"
 
-if str(PYTHON_DIR) not in sys.path:
-    sys.path.insert(0, str(PYTHON_DIR))
-
-# The configuration tests bind `main` under an example-specific module name:
-# every application has a module called `main`, and a plain `import main`
-# binds whichever was imported first when pytest runs across examples.
-_CONFIG_SPEC = importlib.util.spec_from_file_location("high_density_multi_stream_object_detector_main", MAIN_PY)
-assert _CONFIG_SPEC is not None and _CONFIG_SPEC.loader is not None
-main_module = importlib.util.module_from_spec(_CONFIG_SPEC)
-sys.modules[_CONFIG_SPEC.name] = main_module
-_CONFIG_SPEC.loader.exec_module(main_module)
+main_module = load_example_main(EXAMPLE_DIR, "high_density_multi_stream_object_detector_main")
 
 pytestmark = pytest.mark.unit
 
@@ -169,11 +159,9 @@ class TestConfigLoading:
         max_inflight_per_stream: int,
         max_inflight_total: int,
     ):
-        from main import effective_insight_visible_streams, load_app_config
-
         path = COMMON_DIR / filename
         raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-        cfg = load_app_config(path)
+        cfg = main_module.load_app_config(path)
 
         assert len(cfg.rtsp_urls) == streams
         assert (cfg.input_width, cfg.input_height, cfg.input_fps) == (1280, 720, fps)
@@ -186,7 +174,7 @@ class TestConfigLoading:
         assert cfg.max_inflight_total == max_inflight_total
         assert cfg.stream_detection_timeout_ms == 30_000
         assert cfg.no_detection_timeout_ms == 30_000
-        assert effective_insight_visible_streams(cfg) == streams
+        assert main_module.effective_insight_visible_streams(cfg) == streams
         assert (cfg.video_port_base, cfg.video_port_base + streams - 1) == (
             9000,
             9000 + streams - 1,
@@ -206,8 +194,6 @@ class TestConfigLoading:
         assert default["input"]["skip_rtsp_probe"] is False
 
     def test_config_rejects_overlapping_insight_port_ranges(self, tmp_path: Path):
-        from main import load_app_config
-
         config_path = write_config(
             tmp_path,
             [f"rtsp://127.0.0.1:8554/src{i}" for i in range(4)],
@@ -223,11 +209,9 @@ class TestConfigLoading:
             encoding="utf-8",
         )
         with pytest.raises(ValueError, match="port ranges overlap"):
-            load_app_config(config_path)
+            main_module.load_app_config(config_path)
 
     def test_load_app_config_accepts_twenty_four_streams(self, tmp_path: Path):
-        from main import load_app_config
-
         config_path = write_config(
             tmp_path,
             [f"rtsp://127.0.0.1:8554/src{index}" for index in range(1, 25)],
@@ -242,7 +226,7 @@ class TestConfigLoading:
             ).strip(),
         )
 
-        cfg = load_app_config(config_path)
+        cfg = main_module.load_app_config(config_path)
 
         assert cfg.model_path == str(tmp_path / MODEL_PATH)
         assert cfg.decode_type == "yolo26"
@@ -273,8 +257,6 @@ class TestConfigLoading:
     def test_config_rejects_invalid_liveness_settings(
         self, tmp_path: Path, setting: str, message: str
     ):
-        from main import load_app_config
-
         config_path = write_config(
             tmp_path,
             ["rtsp://127.0.0.1:8554/src1"],
@@ -282,11 +264,9 @@ class TestConfigLoading:
         )
 
         with pytest.raises(ValueError, match=message):
-            load_app_config(config_path)
+            main_module.load_app_config(config_path)
 
     def test_config_rejects_legacy_fan_in_policy(self, tmp_path: Path):
-        from main import load_app_config
-
         config_path = write_config(
             tmp_path,
             ["rtsp://127.0.0.1:8554/src1"],
@@ -294,16 +274,9 @@ class TestConfigLoading:
         )
 
         with pytest.raises(ValueError, match=r"fan_in_policy was removed.*connect\(\)/build\(\)"):
-            load_app_config(config_path)
+            main_module.load_app_config(config_path)
 
     def test_load_app_config_accepts_insight_visible_limit(self, tmp_path: Path):
-        from main import (
-            effective_insight_visible_streams,
-            is_insight_visible_stream,
-            load_app_config,
-            should_send_metadata,
-        )
-
         stream_lines = "\n".join(
             f"  - rtsp://127.0.0.1:8554/src{index}" for index in range(1, 25)
         )
@@ -330,20 +303,18 @@ output:
             encoding="utf-8",
         )
 
-        cfg = load_app_config(config_path)
+        cfg = main_module.load_app_config(config_path)
 
         assert cfg.insight_visible_streams == 16
-        assert effective_insight_visible_streams(cfg) == 16
-        assert is_insight_visible_stream(cfg, 15) is True
-        assert is_insight_visible_stream(cfg, 16) is False
-        assert should_send_metadata(cfg, 15) is True
-        assert should_send_metadata(cfg, 16) is False
+        assert main_module.effective_insight_visible_streams(cfg) == 16
+        assert main_module.is_insight_visible_stream(cfg, 15) is True
+        assert main_module.is_insight_visible_stream(cfg, 16) is False
+        assert main_module.should_send_metadata(cfg, 15) is True
+        assert main_module.should_send_metadata(cfg, 16) is False
 
     def test_load_app_config_resolves_model_and_labels_by_their_owners(
         self, tmp_path: Path
     ):
-        from main import load_app_config
-
         config_dir = tmp_path / "portable-bundle"
         config_dir.mkdir()
         config_path = config_dir / "app.yaml"
@@ -360,27 +331,23 @@ output:
             encoding="utf-8",
         )
 
-        cfg = load_app_config(config_path)
+        cfg = main_module.load_app_config(config_path)
 
         assert cfg.model_path == str(config_dir / "models" / "detector.mpk")
         assert cfg.labels_path == Path("labels/coco.txt")
 
     def test_load_app_config_accepts_forty_streams(self, tmp_path: Path):
-        from main import load_app_config
-
         config_path = write_config(
             tmp_path,
             [f"rtsp://127.0.0.1:8554/src{index}" for index in range(1, 41)],
             workers=1,
         )
 
-        cfg = load_app_config(config_path)
+        cfg = main_module.load_app_config(config_path)
 
         assert len(cfg.rtsp_urls) == 40
 
     def test_load_app_config_rejects_removed_output_paths(self, tmp_path: Path):
-        from main import load_app_config
-
         config_path = write_config(
             tmp_path,
             ["rtsp://127.0.0.1:8554/src1"],
@@ -393,11 +360,9 @@ output:
         )
 
         with pytest.raises(ValueError, match="output.hidden_streams was removed"):
-            load_app_config(config_path)
+            main_module.load_app_config(config_path)
 
     def test_load_app_config_accepts_yolov8_decode_type(self, tmp_path: Path):
-        from main import load_app_config
-
         config_path = write_config(
             tmp_path,
             ["rtsp://127.0.0.1:8554/src1"],
@@ -405,13 +370,11 @@ output:
             decode_type="yolov8",
         )
 
-        cfg = load_app_config(config_path)
+        cfg = main_module.load_app_config(config_path)
 
         assert cfg.decode_type == "yolov8"
 
     def test_load_app_config_accepts_decoder_tuning_and_aliases(self, tmp_path: Path):
-        from main import load_app_config
-
         config_path = write_config(
             tmp_path,
             ["rtsp://127.0.0.1:8554/src1"],
@@ -430,7 +393,7 @@ output:
             ).strip(),
         )
 
-        cfg = load_app_config(config_path)
+        cfg = main_module.load_app_config(config_path)
 
         assert cfg.decoder_buffers == 7
         assert cfg.decoder_input_buffers == 2
@@ -441,8 +404,6 @@ output:
     def test_load_app_config_rejects_invalid_internal_queue_depth(
         self, tmp_path: Path, depth: int
     ):
-        from main import load_app_config
-
         config_path = write_config(
             tmp_path,
             ["rtsp://127.0.0.1:8554/src1"],
@@ -450,11 +411,9 @@ output:
         )
 
         with pytest.raises(ValueError, match="inference.internal_queue_depth"):
-            load_app_config(config_path)
+            main_module.load_app_config(config_path)
 
     def test_load_app_config_rejects_too_many_streams(self, tmp_path: Path):
-        from main import load_app_config
-
         config_path = write_config(
             tmp_path,
             [f"rtsp://127.0.0.1:8554/src{index}" for index in range(1, 82)],
@@ -462,13 +421,11 @@ output:
         )
 
         with pytest.raises(ValueError, match="up to 80 streams"):
-            load_app_config(config_path)
+            main_module.load_app_config(config_path)
 
     def test_load_app_config_rejects_insight_visible_limit_above_stream_count(
         self, tmp_path: Path
     ):
-        from main import load_app_config
-
         stream_lines = "\n".join(
             f"  - rtsp://127.0.0.1:8554/src{index}" for index in range(1, 5)
         )
@@ -492,11 +449,9 @@ output:
         )
 
         with pytest.raises(ValueError, match="cannot exceed stream count"):
-            load_app_config(config_path)
+            main_module.load_app_config(config_path)
 
     def test_load_app_config_rejects_empty_streams(self, tmp_path: Path):
-        from main import load_app_config
-
         config_path = tmp_path / "config.yaml"
         config_path.write_text(
             textwrap.dedent(
@@ -513,11 +468,9 @@ output:
         )
 
         with pytest.raises(ValueError, match="streams must be a non-empty list"):
-            load_app_config(config_path)
+            main_module.load_app_config(config_path)
 
     def test_load_app_config_rejects_non_shared_worker_count(self, tmp_path: Path):
-        from main import load_app_config
-
         config_path = write_config(
             tmp_path,
             ["rtsp://127.0.0.1:8554/src1", "rtsp://127.0.0.1:8554/src2"],
@@ -525,17 +478,15 @@ output:
         )
 
         with pytest.raises(ValueError, match="set inference.workers to 1"):
-            load_app_config(config_path)
+            main_module.load_app_config(config_path)
 
     def test_load_app_config_validates_max_inflight_limits(self, tmp_path: Path):
-        from main import load_app_config
-
         tuned_path = write_config(
             tmp_path,
             ["rtsp://127.0.0.1:8554/src1"],
             inference_extra="  max_inflight_per_stream: 4\n  max_inflight_total: 12",
         )
-        tuned = load_app_config(tuned_path)
+        tuned = main_module.load_app_config(tuned_path)
         assert tuned.max_inflight_per_stream == 4
         assert tuned.max_inflight_total == 12
 
@@ -547,7 +498,7 @@ output:
             inference_extra="  max_inflight_per_stream: 0",
         )
         with pytest.raises(ValueError, match="max_inflight_per_stream must be > 0"):
-            load_app_config(invalid_per_stream_path)
+            main_module.load_app_config(invalid_per_stream_path)
 
         invalid_total_dir = tmp_path / "invalid_total"
         invalid_total_dir.mkdir()
@@ -557,11 +508,9 @@ output:
             inference_extra="  max_inflight_total: 0",
         )
         with pytest.raises(ValueError, match="max_inflight_total must be > 0"):
-            load_app_config(invalid_total_path)
+            main_module.load_app_config(invalid_total_path)
 
     def test_load_app_config_rejects_skip_probe_without_caps(self, tmp_path: Path):
-        from main import load_app_config
-
         config_path = write_config(
             tmp_path,
             ["rtsp://127.0.0.1:8554/src1"],
@@ -570,11 +519,9 @@ output:
         )
 
         with pytest.raises(ValueError, match="skip_rtsp_probe requires"):
-            load_app_config(config_path)
+            main_module.load_app_config(config_path)
 
     def test_load_app_config_rejects_fps_scheduler_knobs(self, tmp_path: Path):
-        from main import load_app_config
-
         config_path = write_config(
             tmp_path,
             ["rtsp://127.0.0.1:8554/src1"],
@@ -583,7 +530,7 @@ output:
         )
 
         with pytest.raises(ValueError, match="target_fps is not supported"):
-            load_app_config(config_path)
+            main_module.load_app_config(config_path)
 
     def test_validate_config_only_reports_graph_native_settings(self, tmp_path: Path):
         config_path = write_config(
@@ -618,8 +565,6 @@ output:
 
 class TestRuntimeOptions:
     def test_source_options_keep_decoded_handoff_device_visible(self, monkeypatch):
-        import main
-
         class FakeRtspDecodedInputOptions:
             def __init__(self):
                 self.output_caps = SimpleNamespace()
@@ -637,16 +582,16 @@ class TestRuntimeOptions:
             Format=SimpleNamespace(NV12="NV12"),
             CapsMemory=SimpleNamespace(Any="Any"),
         )
-        monkeypatch.setattr(main, "pyneat", fake_pyneat)
+        monkeypatch.setattr(main_module, "pyneat", fake_pyneat)
 
-        cfg = main.AppConfig(
+        cfg = main_module.AppConfig(
             model_path=MODEL_PATH,
             labels_path=Path("labels.txt"),
             rtsp_urls=["rtsp://127.0.0.1:8554/src1"],
             codec="h265",
         )
 
-        opt, fps, width, height = main.make_source_options(
+        opt, fps, width, height = main_module.make_source_options(
             cfg, cfg.rtsp_urls[0], fps=30, width=640, height=480
         )
 
@@ -659,7 +604,7 @@ class TestRuntimeOptions:
         assert opt.source_fps == 0
         assert opt.dec_fps == 30
         assert opt.auto_caps_from_stream is True
-        assert opt.num_buffers == main.DEFAULT_DECODER_BUFFERS
+        assert opt.num_buffers == main_module.DEFAULT_DECODER_BUFFERS
         assert opt.output_caps.enable is True
         assert opt.output_caps.format == "NV12"
         assert opt.output_caps.width == 640
@@ -669,8 +614,6 @@ class TestRuntimeOptions:
         assert (fps, width, height) == (30, 640, 480)
 
     def test_source_options_explicit_caps_override_probe_caps(self, monkeypatch):
-        import main
-
         class FakeRtspDecodedInputOptions:
             def __init__(self):
                 self.output_caps = SimpleNamespace()
@@ -688,9 +631,9 @@ class TestRuntimeOptions:
             Format=SimpleNamespace(NV12="NV12"),
             CapsMemory=SimpleNamespace(Any="Any"),
         )
-        monkeypatch.setattr(main, "pyneat", fake_pyneat)
+        monkeypatch.setattr(main_module, "pyneat", fake_pyneat)
 
-        cfg = main.AppConfig(
+        cfg = main_module.AppConfig(
             model_path=MODEL_PATH,
             labels_path=Path("labels.txt"),
             rtsp_urls=["rtsp://127.0.0.1:8554/src1"],
@@ -700,12 +643,12 @@ class TestRuntimeOptions:
             decoder_tuning="throughput-low-latency",
         )
         monkeypatch.setattr(
-            main,
+            main_module,
             "probe_rtsp",
             lambda _url: pytest.fail("fully configured source must not be probed"),
         )
 
-        opt, fps, width, height = main.make_source_options(cfg, cfg.rtsp_urls[0])
+        opt, fps, width, height = main_module.make_source_options(cfg, cfg.rtsp_urls[0])
 
         assert opt.codec == "H264"
         assert opt.dec_width == 1280
@@ -721,8 +664,6 @@ class TestRuntimeOptions:
         assert (fps, width, height) == (20, 1280, 720)
 
     def test_realtime_options_matches_cpp_runtime_defaults(self, monkeypatch):
-        import main
-
         class FakeRunOptions:
             pass
 
@@ -732,9 +673,9 @@ class TestRuntimeOptions:
             OverflowPolicy=SimpleNamespace(KeepLatest="KeepLatest"),
             OutputMemory=SimpleNamespace(ZeroCopy="ZeroCopy"),
         )
-        monkeypatch.setattr(main, "pyneat", fake_pyneat)
+        monkeypatch.setattr(main_module, "pyneat", fake_pyneat)
 
-        options = main.realtime_options(7)
+        options = main_module.realtime_options(7)
 
         assert options.preset == "Realtime"
         assert options.queue_depth == 7
@@ -742,22 +683,20 @@ class TestRuntimeOptions:
         assert options.output_memory == "ZeroCopy"
 
     def test_video_sender_does_not_participate_in_shared_preroll(self, monkeypatch):
-        import main
-
         class FakeVideoSenderOptions:
             @staticmethod
             def passthrough(codec):
                 return SimpleNamespace(codec=codec, async_=True)
 
         monkeypatch.setattr(
-            main,
+            main_module,
             "pyneat",
             SimpleNamespace(
                 VideoSenderOptions=FakeVideoSenderOptions,
                 RtspCodec=SimpleNamespace(H264="h264", H265="h265"),
             ),
         )
-        cfg = main.AppConfig(
+        cfg = main_module.AppConfig(
             model_path=MODEL_PATH,
             labels_path=Path("labels.txt"),
             rtsp_urls=["rtsp://127.0.0.1:8554/src1"],
@@ -766,7 +705,7 @@ class TestRuntimeOptions:
             video_port_base=9200,
         )
 
-        options = main.make_video_options(cfg, SimpleNamespace(index=3))
+        options = main_module.make_video_options(cfg, SimpleNamespace(index=3))
 
         assert options.async_ is False
         assert options.codec == "h265"
@@ -775,36 +714,30 @@ class TestRuntimeOptions:
         assert options.video_port_base == 9200
 
     def test_graph_options_apply_internal_queue_depth_and_async_mla(self, monkeypatch):
-        import main
-
         class FakeGraphOptions:
             def __init__(self):
                 self.advanced_execution = SimpleNamespace(
                     internal_queue_depth=None, inference_async=None
                 )
 
-        monkeypatch.setattr(main, "pyneat", SimpleNamespace(GraphOptions=FakeGraphOptions))
+        monkeypatch.setattr(main_module, "pyneat", SimpleNamespace(GraphOptions=FakeGraphOptions))
 
-        options = main.graph_options(2)
+        options = main_module.graph_options(2)
 
         assert options.advanced_execution.internal_queue_depth == 2
         assert options.advanced_execution.inference_async is True
 
     def test_graph_options_require_async_mla_public_surface(self, monkeypatch):
-        import main
-
         class FakeGraphOptions:
             def __init__(self):
                 self.advanced_execution = SimpleNamespace(internal_queue_depth=None)
 
-        monkeypatch.setattr(main, "pyneat", SimpleNamespace(GraphOptions=FakeGraphOptions))
+        monkeypatch.setattr(main_module, "pyneat", SimpleNamespace(GraphOptions=FakeGraphOptions))
 
         with pytest.raises(RuntimeError, match="inference_async"):
-            main.graph_options(2)
+            main_module.graph_options(2)
 
     def test_decode_options_apply_input_pool_and_tuning(self, monkeypatch):
-        import main
-
         class FakeGraph:
             def __init__(self, _name=""):
                 self.nodes = []
@@ -826,7 +759,7 @@ class TestRuntimeOptions:
                 output=lambda name: ("output", name),
             ),
         )
-        monkeypatch.setattr(main, "pyneat", fake_pyneat)
+        monkeypatch.setattr(main_module, "pyneat", fake_pyneat)
 
         source_options = SimpleNamespace(
             codec="H264",
@@ -841,7 +774,7 @@ class TestRuntimeOptions:
             output_caps=SimpleNamespace(enable=False),
         )
 
-        graph = main.make_decoder(
+        graph = main_module.make_decoder(
             source_options,
             decoder_buffers=16,
             decoder_input_buffers=2,
@@ -858,7 +791,7 @@ class TestRuntimeOptions:
         assert decode.memory_opt is True
         assert graph.nodes[1] == ("output", "detector_frame")
 
-        default_graph = main.make_decoder(
+        default_graph = main_module.make_decoder(
             source_options,
             decoder_buffers=8,
             decoder_input_buffers=2,
@@ -867,8 +800,6 @@ class TestRuntimeOptions:
         assert default_graph.nodes[0].memory_opt is False
 
     def test_graph_realtime_link_stamps_stream_id(self, monkeypatch):
-        import main
-
         class FakeGraphLinkOptions:
             pass
 
@@ -878,9 +809,9 @@ class TestRuntimeOptions:
                 RealtimeLatestByStream="latest-by-stream",
             ),
         )
-        monkeypatch.setattr(main, "pyneat", fake_pyneat)
+        monkeypatch.setattr(main_module, "pyneat", fake_pyneat)
 
-        link = main.graph_realtime_link(3, "stream7")
+        link = main_module.graph_realtime_link(3, "stream7")
 
         assert link.policy == "latest-by-stream"
         assert link.queue_depth == 3
@@ -888,28 +819,23 @@ class TestRuntimeOptions:
         assert link.max_inflight_per_stream == 4
         assert link.max_inflight_total == 8
 
-        tuned = main.graph_realtime_link(3, "stream7", 4, 12)
+        tuned = main_module.graph_realtime_link(3, "stream7", 4, 12)
         assert tuned.max_inflight_per_stream == 4
         assert tuned.max_inflight_total == 12
 
     def test_stream_index_from_detection_validates_route_metadata(self):
-        import main
-
-        assert main.stream_index_from_detection(SimpleNamespace(stream_id="stream2"), 4) == 2
-        assert main.stream_index_from_detection(SimpleNamespace(stream_id=""), 1) == 0
+        assert main_module.stream_index_from_detection(SimpleNamespace(stream_id="stream2"), 4) == 2
+        assert main_module.stream_index_from_detection(SimpleNamespace(stream_id=""), 1) == 0
         with pytest.raises(RuntimeError, match="missing stream id"):
-            main.stream_index_from_detection(SimpleNamespace(stream_id=""), 2)
+            main_module.stream_index_from_detection(SimpleNamespace(stream_id=""), 2)
         with pytest.raises(RuntimeError, match="invalid detection stream id"):
-            main.stream_index_from_detection(SimpleNamespace(stream_id="streamx"), 4)
+            main_module.stream_index_from_detection(SimpleNamespace(stream_id="streamx"), 4)
         with pytest.raises(RuntimeError, match="out of range"):
-            main.stream_index_from_detection(SimpleNamespace(stream_id="stream4"), 4)
+            main_module.stream_index_from_detection(SimpleNamespace(stream_id="stream4"), 4)
 
 
 class TestRuntimeDelivery:
     def test_unexpected_clean_detector_close_is_not_reported_as_success(self):
-        import main
-        from main import AggregateProfile, AppRuntime, pull_detections
-
         class ClosedRun:
             def pull(self, _name, _timeout_ms):
                 return None
@@ -920,31 +846,28 @@ class TestRuntimeDelivery:
             def last_error(self):
                 return ""
 
-        main._STOP_REQUESTED = False
-        source = main.SourceRuntime(
+        main_module._STOP_REQUESTED = False
+        source = main_module.SourceRuntime(
             0,
             "rtsp://src0",
             None,
             [],
             None,
-            main.StreamProfile(False, 0),
+            main_module.StreamProfile(False, 0),
             1280,
             720,
             20,
         )
-        app = AppRuntime(model=None, graph=None, run=ClosedRun(), sources=[source])
+        app = main_module.AppRuntime(model=None, graph=None, run=ClosedRun(), sources=[source])
         cfg = SimpleNamespace(
             initial_detection_timeout_ms=1000,
             stream_detection_timeout_ms=1000,
             no_detection_timeout_ms=1000,
         )
         with pytest.raises(RuntimeError, match="detections output closed unexpectedly"):
-            pull_detections(app, cfg, AggregateProfile(False, 0))
+            main_module.pull_detections(app, cfg, main_module.AggregateProfile(False, 0))
 
     def test_target_completion_cannot_hide_latched_starvation(self, monkeypatch):
-        import main
-        from main import AppRuntime, pull_detections
-
         detections = [0, 0, 1, 1, 0, 1]
 
         class FakeRun:
@@ -959,14 +882,14 @@ class TestRuntimeDelivery:
             return not detections
 
         monkeypatch.setattr(
-            main, "stream_index_from_detection", lambda sample, _count: sample
+            main_module, "stream_index_from_detection", lambda sample, _count: sample
         )
-        monkeypatch.setattr(main, "complete_detection", lambda *_args: None)
-        monkeypatch.setattr(main, "target_reached", reached_target)
+        monkeypatch.setattr(main_module, "complete_detection", lambda *_args: None)
+        monkeypatch.setattr(main_module, "target_reached", reached_target)
         monotonic_values = iter((0.0, 0.0, 0.1, 0.2, 0.3, 0.4, 0.9, 1.4, 1.4))
-        monkeypatch.setattr(main.time, "monotonic", lambda: next(monotonic_values))
-        main._STOP_REQUESTED = False
-        app = AppRuntime(
+        monkeypatch.setattr(main_module.time, "monotonic", lambda: next(monotonic_values))
+        main_module._STOP_REQUESTED = False
+        app = main_module.AppRuntime(
             model=None, graph=None, run=FakeRun(), sources=[object(), object()]
         )
         cfg = SimpleNamespace(
@@ -978,13 +901,11 @@ class TestRuntimeDelivery:
         with pytest.raises(
             RuntimeError, match="timed out waiting for detector progress from streams: 1"
         ):
-            pull_detections(app, cfg, object())
+            main_module.pull_detections(app, cfg, object())
         assert target_checks == 6
 
     def test_detection_watchdog_tracks_deadlines(self):
-        from main import DetectionFailureKind, DetectionWatchdog
-
-        watchdog = DetectionWatchdog(
+        watchdog = main_module.DetectionWatchdog(
             3,
             priming_observations=2,
             startup_timeout_s=10.0,
@@ -999,16 +920,16 @@ class TestRuntimeDelivery:
         watchdog.observe(1, 3.1)
         assert not watchdog.check(9.99)
         startup_failure = watchdog.check(10.0)
-        assert startup_failure.kind is DetectionFailureKind.STARTUP
+        assert startup_failure.kind is main_module.DetectionFailureKind.STARTUP
         assert startup_failure.streams == (2,)
 
         watchdog.observe(2, 10.0)
         assert not watchdog.startup_complete()
         late_startup_failure = watchdog.check(10.0)
-        assert late_startup_failure.kind is DetectionFailureKind.STARTUP
+        assert late_startup_failure.kind is main_module.DetectionFailureKind.STARTUP
         assert late_startup_failure.streams == (2,)
 
-        watchdog = DetectionWatchdog(
+        watchdog = main_module.DetectionWatchdog(
             3,
             priming_observations=2,
             startup_timeout_s=100.0,
@@ -1030,14 +951,14 @@ class TestRuntimeDelivery:
         watchdog.observe(0, 15.5)
         watchdog.observe(1, 15.5)
         starvation = watchdog.check(15.5)
-        assert starvation.kind is DetectionFailureKind.STREAM_STARVATION
+        assert starvation.kind is main_module.DetectionFailureKind.STREAM_STARVATION
         assert starvation.streams == (1,)
 
         global_stall = watchdog.check(65.5)
-        assert global_stall.kind is DetectionFailureKind.GLOBAL_STALL
+        assert global_stall.kind is main_module.DetectionFailureKind.GLOBAL_STALL
         assert global_stall.streams == ()
 
-        startup_stall_watchdog = DetectionWatchdog(
+        startup_stall_watchdog = main_module.DetectionWatchdog(
             3,
             priming_observations=2,
             startup_timeout_s=100.0,
@@ -1048,10 +969,10 @@ class TestRuntimeDelivery:
         startup_stall_watchdog.observe(0, 1.0)
         assert not startup_stall_watchdog.check(5.999)
         startup_stall = startup_stall_watchdog.check(6.0)
-        assert startup_stall.kind is DetectionFailureKind.GLOBAL_STALL
+        assert startup_stall.kind is main_module.DetectionFailureKind.GLOBAL_STALL
         assert startup_stall.streams == ()
 
-        recovered_stall_watchdog = DetectionWatchdog(
+        recovered_stall_watchdog = main_module.DetectionWatchdog(
             1,
             priming_observations=1,
             startup_timeout_s=100.0,
@@ -1061,14 +982,12 @@ class TestRuntimeDelivery:
         )
         recovered_stall_watchdog.observe(0, 5.0)
         recovered_stall = recovered_stall_watchdog.check(5.0)
-        assert recovered_stall.kind is DetectionFailureKind.GLOBAL_STALL
+        assert recovered_stall.kind is main_module.DetectionFailureKind.GLOBAL_STALL
         assert recovered_stall.streams == ()
 
     def test_detection_watchdog_allows_sustained_48_stream_scheduler_skew(self):
-        from main import DetectionWatchdog
-
         stream_count = 48
-        watchdog = DetectionWatchdog(
+        watchdog = main_module.DetectionWatchdog(
             stream_count,
             priming_observations=2,
             startup_timeout_s=60.0,
@@ -1095,8 +1014,6 @@ class TestRuntimeDelivery:
     def test_source_topology_connects_encoded_video_with_a_distinct_latest_link(
         self, monkeypatch
     ):
-        import main
-
         class FakeGraph:
             def __init__(self, name=""):
                 self.name = name
@@ -1131,31 +1048,31 @@ class TestRuntimeDelivery:
             rtsp_calls.append(options)
             return rtsp_graph
 
-        monkeypatch.setattr(main, "pyneat", fake_pyneat)
-        monkeypatch.setattr(main, "make_rtsp_encoded_input", make_rtsp_encoded_input)
-        monkeypatch.setattr(main, "make_decoder", lambda *_args: "decoder")
-        monkeypatch.setattr(main, "graph_realtime_link", lambda *_args: "latest")
+        monkeypatch.setattr(main_module, "pyneat", fake_pyneat)
+        monkeypatch.setattr(main_module, "make_rtsp_encoded_input", make_rtsp_encoded_input)
+        monkeypatch.setattr(main_module, "make_decoder", lambda *_args: "decoder")
+        monkeypatch.setattr(main_module, "graph_realtime_link", lambda *_args: "latest")
         monkeypatch.setattr(
-            main, "make_video_options", lambda *_args: SimpleNamespace(video_port=9000)
+            main_module, "make_video_options", lambda *_args: SimpleNamespace(video_port=9000)
         )
 
-        cfg = main.AppConfig("model", Path("labels"), ["rtsp://src0"])
+        cfg = main_module.AppConfig("model", Path("labels"), ["rtsp://src0"])
         source_options = object()
-        source = main.SourceRuntime(
+        source = main_module.SourceRuntime(
             0,
             "rtsp://src0",
             None,
             [],
             source_options,
-            main.StreamProfile(False, 0),
+            main_module.StreamProfile(False, 0),
             1280,
             720,
             20,
         )
         graph = RecordingGraph()
-        app = main.AppRuntime(None, graph, None, [source])
+        app = main_module.AppRuntime(None, graph, None, [source])
 
-        main.connect_source_graph(app, cfg, source, "detector")
+        main_module.connect_source_graph(app, cfg, source, "detector")
 
         assert rtsp_calls == [source_options]
         assert len(graph.connections) == 3
@@ -1196,57 +1113,51 @@ class FakeSample:
 
 class TestMetadata:
     def test_send_metadata_noops_when_stream_metadata_disabled(self):
-        from main import SourceRuntime, StreamProfile, send_metadata
-
-        runtime = SourceRuntime(
+        runtime = main_module.SourceRuntime(
             index=16,
             url="rtsp://127.0.0.1:8554/src17",
             metadata_sender=None,
             labels=["person"],
             source_options=None,
-            profile=StreamProfile(False, 16),
+            profile=main_module.StreamProfile(False, 16),
             frame_w=100,
             frame_h=100,
             source_fps=30,
         )
 
-        send_metadata(runtime, FakeSample(), [])
+        main_module.send_metadata(runtime, FakeSample(), [])
 
     def test_nonblocking_metadata_exception_is_counted_without_stopping_pipeline(self):
-        from main import SourceRuntime, StreamProfile, send_metadata_nonblocking
-
         class FailingSender:
             def send_raw_json(self, _payload):
                 raise RuntimeError("udp send failed")
 
-        runtime = SourceRuntime(
+        runtime = main_module.SourceRuntime(
             index=3,
             url="rtsp://127.0.0.1:8554/src4",
             metadata_sender=FailingSender(),
             labels=[],
             source_options=None,
-            profile=StreamProfile(False, 3),
+            profile=main_module.StreamProfile(False, 3),
             frame_w=1280,
             frame_h=720,
             source_fps=20,
         )
 
-        send_metadata_nonblocking(runtime, "{}")
+        main_module.send_metadata_nonblocking(runtime, "{}")
 
         assert runtime.metadata_send_ok == 0
         assert runtime.metadata_send_fail == 1
 
     def test_send_metadata_uses_object_detection_contract(self):
-        from main import SourceRuntime, StreamProfile, send_metadata
-
         sender = FakeMetadataSender()
-        runtime = SourceRuntime(
+        runtime = main_module.SourceRuntime(
             index=0,
             url="rtsp://127.0.0.1:8554/src1",
             metadata_sender=sender,
             labels=["person"],
             source_options=None,
-            profile=StreamProfile(False, 0),
+            profile=main_module.StreamProfile(False, 0),
             frame_w=100,
             frame_h=100,
             source_fps=30,
@@ -1263,7 +1174,7 @@ class TestMetadata:
             }
         ]
 
-        send_metadata(runtime, FakeSample(), boxes)
+        main_module.send_metadata(runtime, FakeSample(), boxes)
 
         assert len(sender.calls) == 1
         payload = json.loads(sender.calls[0])
@@ -1292,22 +1203,20 @@ class TestMetadata:
         }
 
     def test_send_metadata_preserves_missing_sample_identity(self):
-        from main import SourceRuntime, StreamProfile, send_metadata
-
         sender = FakeMetadataSender()
-        runtime = SourceRuntime(
+        runtime = main_module.SourceRuntime(
             index=0,
             url="rtsp://127.0.0.1:8554/src1",
             metadata_sender=sender,
             labels=["person"],
             source_options=None,
-            profile=StreamProfile(False, 0),
+            profile=main_module.StreamProfile(False, 0),
             frame_w=100,
             frame_h=100,
             source_fps=30,
         )
 
-        send_metadata(runtime, SimpleNamespace(pts_ns=-1, frame_id=-1), [])
+        main_module.send_metadata(runtime, SimpleNamespace(pts_ns=-1, frame_id=-1), [])
 
         payload = json.loads(sender.calls[0])
         assert payload["timestamp"] == -1
@@ -1329,7 +1238,6 @@ def test_measurement_excludes_warmup_and_failed_sends():
     assert measurement.observe(0, 103, True, False, 7.0)
     assert measurement.summary() == dict(frames=3, elapsed_s=4.0, aggregate_fps=0.75,
                                         per_stream_frames=[2, 1], per_stream_send_failures=[0, 1])
-
 
 
 # ---------------------------------------------------------------------------
@@ -1387,17 +1295,8 @@ VALID_CONFIG = {
 }
 
 
-def write_full_config(tmp_path: Path, overrides=None, *, root=None) -> Path:
-    """Write VALID_CONFIG with `overrides` applied as ((section, ..., key), value)."""
-    raw = copy.deepcopy(VALID_CONFIG) if root is None else root
-    for path, value in (overrides or []):
-        target = raw
-        for key in path[:-1]:
-            target = target[key]
-        target[path[-1]] = value
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text(yaml.safe_dump(raw), encoding="utf-8")
-    return config_path
+# Writes VALID_CONFIG with overrides applied as ((section, ..., key), value).
+write_full_config = config_writer(VALID_CONFIG)
 
 
 class TestValidBaseline:

@@ -460,7 +460,8 @@ def validate_config(cfg: AppConfig) -> None:
     if not cfg.model_path:
         raise ValueError("model.path must be set")
     normalize_box_decode_type(cfg.decode_type)
-    if not str(cfg.labels_path):
+    # Path("") is ".", so an empty value in the file arrives here as ".".
+    if str(cfg.labels_path) in ("", "."):
         raise ValueError("model.labels must be set")
     if not cfg.rtsp_urls:
         raise ValueError("streams must be set")
@@ -602,11 +603,6 @@ def load_app_config(config_path: Path) -> AppConfig:
 
     model_path_value = string_or(model, "path")
     labels_path_value = string_or(model, "labels", "coco_label.txt")
-    # Checked on the raw value: Path("") is ".", so the same rule in
-    # validate_config would accept an empty value and the run would fail
-    # later with "labels file does not exist: .".
-    if not labels_path_value:
-        raise ValueError("model.labels must be set")
 
     cfg = AppConfig(
         model_path=(

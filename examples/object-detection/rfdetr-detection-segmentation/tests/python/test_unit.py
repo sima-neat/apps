@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import copy
-import importlib.util
 import json
 import sys
 from pathlib import Path
@@ -12,15 +10,13 @@ from unittest.mock import Mock
 
 import numpy as np
 import pytest
+
+from tests.utils.config_cases import config_writer, load_example_main
 import yaml
 
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
-_SPEC = importlib.util.spec_from_file_location("rfdetr_main", MAIN_PY)
-assert _SPEC is not None and _SPEC.loader is not None
-main = importlib.util.module_from_spec(_SPEC)
-sys.modules[_SPEC.name] = main
-_SPEC.loader.exec_module(main)
+main = load_example_main(EXAMPLE_DIR, "rfdetr_main")
 
 
 @pytest.mark.unit
@@ -221,7 +217,6 @@ def test_segmentation_metadata_contains_polygons(mask_grid_size):
     assert all(0 <= x < 1280 and 0 <= y < 720 for x, y in segment["mask"])
 
 
-
 # ---------------------------------------------------------------------------
 # Configuration handling and option validation (Refs #526).
 # Each test starts from VALID_CONFIG and breaks exactly one thing, so a failure
@@ -258,17 +253,8 @@ VALID_CONFIG = {
 }
 
 
-def write_full_config(tmp_path: Path, overrides=None, *, root=None) -> Path:
-    """Write VALID_CONFIG with `overrides` applied as ((section, ..., key), value)."""
-    raw = copy.deepcopy(VALID_CONFIG) if root is None else root
-    for path, value in (overrides or []):
-        target = raw
-        for key in path[:-1]:
-            target = target[key]
-        target[path[-1]] = value
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text(yaml.safe_dump(raw), encoding="utf-8")
-    return config_path
+# Writes VALID_CONFIG with overrides applied as ((section, ..., key), value).
+write_full_config = config_writer(VALID_CONFIG)
 
 
 @pytest.mark.unit

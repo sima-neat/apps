@@ -1,13 +1,12 @@
 """Unit tests for single-stream-thermal-face-detector (Python)."""
-import copy
-import importlib.util
 import subprocess
 import sys
 from pathlib import Path
 
 import numpy as np
 import pytest
-import yaml
+
+from tests.utils.config_cases import config_writer, load_example_main
 
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
@@ -18,13 +17,7 @@ LEVEL_SIZES = (100, 50, 25)
 
 
 def load_example():
-    spec = importlib.util.spec_from_file_location("thermal_face_example", MAIN_PY)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    # main.py declares module-level dataclasses, which resolve annotations
-    # through sys.modules, so register before executing.
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    module = load_example_main(EXAMPLE_DIR, "thermal_face_example")
     module.np = np  # main.py binds numpy lazily at runtime
     return module
 
@@ -158,7 +151,6 @@ def test_single_frame_profile_includes_frame_elapsed_time(monkeypatch, capsys):
     assert "output_fps=100.0" in capsys.readouterr().out
 
 
-
 # ---------------------------------------------------------------------------
 # Configuration handling and option validation (Refs #526).
 # Each test starts from VALID_CONFIG and breaks exactly one thing, so a failure
@@ -177,17 +169,8 @@ VALID_CONFIG = {
 }
 
 
-def write_full_config(tmp_path: Path, overrides=None, *, root=None) -> Path:
-    """Write VALID_CONFIG with `overrides` applied as ((section, ..., key), value)."""
-    raw = copy.deepcopy(VALID_CONFIG) if root is None else root
-    for path, value in (overrides or []):
-        target = raw
-        for key in path[:-1]:
-            target = target[key]
-        target[path[-1]] = value
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text(yaml.safe_dump(raw), encoding="utf-8")
-    return config_path
+# Writes VALID_CONFIG with overrides applied as ((section, ..., key), value).
+write_full_config = config_writer(VALID_CONFIG)
 
 
 @pytest.mark.unit
