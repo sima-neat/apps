@@ -222,12 +222,17 @@ without opening a stream or touching Insight:
 - `output.insight.max_visible_streams cannot exceed stream count` means the
   profile's visible-stream count is higher than the number of entries under
   `streams`. Reduce it, or add the missing stream URLs.
-- `failed to probe RTSP frame rate` means the source was reached but reported no
-  frame rate. Set `input.fps` to the source's rate to carry on.
-- A source that cannot be reached at all reports something different: the Python
-  entrypoint prints `failed to open RTSP source for probing: <url>`, and the C++
-  binary fails the dimensions check first with `failed to probe RTSP frame
-  dimensions`. Verify the URL from the board itself rather than from the machine
+- `failed to probe RTSP frame rate` from the C++ binary does not tell you which
+  problem you have. The shipped profiles set `input.width` and `input.height` but
+  leave `input.fps` at `0`, so the configured dimensions are used as-is and only
+  the frame rate is probed. An unreachable source and a reachable source that
+  advertises no frame rate both end at this same message. Confirm the URL is
+  reachable from the board before assuming the latter, and set `input.fps` only
+  once you have.
+- The Python entrypoint does distinguish the two: an unreachable source raises
+  `failed to open RTSP source for probing: <url>` before any dimension or rate
+  check.
+- Either way, verify the URL from the board itself rather than from the machine
   running Insight; the URL Insight displays is not always reachable from the
   target.
 - `timed out waiting for two initial detections from streams: …` names the
