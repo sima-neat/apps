@@ -339,18 +339,31 @@ deprecated aliases of `speed`. The scripts under `src/python/ui/apitest/`
 
 #### Audio API playground
 The waveform button in the header opens the **Audio API playground**
-(`https://<board>:5000/playground/`, also usable standalone), a page themed like
-the Studio with two tabs. **Speech** fills its engine, voice and language
-pickers from `GET /v1/audio/voices`, calls `POST /v1/audio/speech`, draws and
-plays the result (Web Audio, with a scrubbable player and a download link) and
-shows the `X-*` headers, the request body and a copyable `curl` equivalent.
-**Transcription** records from the microphone with a live level meter or takes
-a dropped file, previews the clip, calls `POST /v1/audio/transcriptions` in any
-of the three formats and shows the transcript, its metadata and a `curl`
-equivalent. It needs no chat model, keeps everything on this origin and makes
-no external requests; the microphone needs the HTTPS page the Studio serves by
-default. **Back to Studio** (top left, or Esc) returns to the chat; standalone it
-links to the Studio root. Source: `src/python/ui/playground/`.
+(`https://<board>:5000/playground/`, also usable standalone), a page built from
+the Studio's own design tokens, fonts, controls and spacing, with three modes:
+
+- **Speech** fills its engine, voice and language pickers from
+  `GET /v1/audio/voices`, calls `POST /v1/audio/speech`, draws and plays the
+  result (Web Audio, with a scrubbable player and a download link) and shows the
+  `X-*` headers, the request body and a copyable `curl` equivalent.
+- **Transcription** has a *Clip* mode (record from the microphone with a level
+  meter or drop a file, preview it, call `POST /v1/audio/transcriptions` in any
+  of the three formats, see the transcript, its metadata and a `curl` line) and
+  a *Live* mode: hands-free listening where an energy-based voice-activity
+  detector in the browser cuts each utterance at a pause you set (sensitivity
+  and end-of-utterance sliders), uploads it as 16 kHz WAV and appends the
+  transcript to a running log with per-utterance latency, real-time factor and
+  the Studio's accepted/ignored verdict.
+- **Echo** is a voice loop: speak, and what you said is transcribed and spoken
+  straight back with the engine, voice, language (by default the language that
+  was heard) and speed you pick. The microphone is muted while the reply plays
+  and listening resumes afterwards; each turn shows the words heard, the reply
+  spoken and the ASR, TTS and total timings.
+
+It needs no chat model, keeps everything on this origin and makes no external
+requests; the microphone needs the HTTPS page the Studio serves by default.
+**Back to Studio** (top left, or Esc) returns to the chat; standalone it links
+to the Studio root. Source: `src/python/ui/playground/`.
 
 ### Switch models on the fly
 The **Settings → Models** tab shows models downloaded to the board in a searchable list. Loaded models are marked

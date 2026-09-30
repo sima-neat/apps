@@ -1589,9 +1589,10 @@ class AppContext:
                 filename += 'index.html'
             return send_from_directory(harness_dir, filename)
 
-        # Audio API playground: a single same-origin page (Speech / Transcription
-        # tabs) that exercises /v1/audio/* directly. Themed like the Studio and
-        # embedded from the header's Audio API button.
+        # Audio API playground: a single same-origin page (Speech, Transcription
+        # with a clip and a hands-free live mode, and Echo: speak, get transcribed,
+        # hear it spoken back) that exercises /v1/audio/* directly. Themed like the
+        # Studio and embedded from the header's Audio API button.
         playground_dir = str(APP_DIR / 'playground')
 
         @self.app.route('/playground/')

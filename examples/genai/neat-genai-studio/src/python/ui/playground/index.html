@@ -14,11 +14,12 @@
     </a>
     <div class="pg-brand">
       <img id="logo" src="/static/icons/logo_bright.png" alt="SiMa.ai">
-      <h1>Audio API <span>playground</span></h1>
+      <div class="pg-brand-text"><span class="pg-title">Audio API</span><span class="pg-sub">playground · /v1/audio</span></div>
     </div>
-    <nav class="pg-tabs" role="tablist" aria-label="Endpoints">
+    <nav class="pg-tabs" role="tablist" aria-label="Modes">
       <button class="pg-tab" role="tab" data-tab="speech" aria-selected="true" type="button">Speech</button>
       <button class="pg-tab" role="tab" data-tab="transcription" aria-selected="false" type="button">Transcription</button>
+      <button class="pg-tab" role="tab" data-tab="echo" aria-selected="false" type="button">Echo</button>
     </nav>
     <span class="pg-spacer"></span>
     <span id="conn" class="pg-pill"><i class="dot"></i><span>connecting…</span></span>
@@ -79,21 +80,21 @@
             <div class="stat"><b id="st-gen">–</b><span>gen s</span></div>
             <div class="stat"><b id="st-rtf">–</b><span>RTF</span></div>
           </div>
-          <details open>
+          <details class="panel" open>
             <summary>Request &amp; curl</summary>
-            <div class="body">
+            <div class="panel-body">
               <pre id="sp-req">{}</pre>
               <div class="copy-row"><span>Same call from a shell</span><button class="copy-btn" data-copy="sp-curl" type="button">Copy</button></div>
               <pre id="sp-curl"></pre>
             </div>
           </details>
-          <details>
+          <details class="panel">
             <summary>Response headers</summary>
-            <div class="body"><pre id="sp-headers"></pre></div>
+            <div class="panel-body"><pre id="sp-headers"></pre></div>
           </details>
-          <details>
+          <details class="panel">
             <summary>Engines, voices &amp; languages <code>GET /v1/audio/voices</code></summary>
-            <div class="body"><pre id="sp-voicesJson"></pre></div>
+            <div class="panel-body"><pre id="sp-voicesJson"></pre></div>
           </details>
         </div>
       </div>
@@ -107,69 +108,199 @@
     <section id="panel-transcription" class="pg-panel" role="tabpanel" hidden>
       <div class="pg-grid">
         <div class="card">
-          <div class="card-head"><h2>Audio in</h2><span class="route">POST /v1/audio/transcriptions</span></div>
-          <div class="actions">
-            <button id="tr-rec" class="btn primary rec-btn" type="button"><i class="rec-dot"></i><span>Record</span></button>
-            <button id="tr-recStop" class="btn" type="button" disabled>Stop</button>
-            <span id="tr-recTime" class="hint"></span>
+          <div class="card-head">
+            <h2>Audio in</h2>
+            <div class="seg" role="tablist" aria-label="Transcription mode">
+              <button class="seg-btn" data-trmode="clip" aria-selected="true" type="button">Clip</button>
+              <button class="seg-btn" data-trmode="live" aria-selected="false" type="button">Live</button>
+            </div>
+            <span class="route">POST /v1/audio/transcriptions</span>
           </div>
-          <div class="meter"><i id="tr-level"></i></div>
-          <label id="tr-drop" class="drop">
-            <input id="tr-file" type="file" accept="audio/*,video/webm,.wav,.webm,.ogg,.mp3,.m4a,.flac">
-            <span id="tr-dropText">… or drop an audio file here / click to choose</span>
-          </label>
-          <div id="tr-wave" class="wave"><canvas id="tr-canvas"></canvas><div class="cursor"></div><div id="tr-placeholder" class="placeholder">No clip yet</div></div>
-          <div class="player-row">
-            <button id="tr-play" class="btn" type="button" disabled>
-              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span>Play clip</span>
-            </button>
-            <audio id="tr-audio" controls preload="auto" hidden></audio>
-            <span id="tr-clipInfo" class="hint"></span>
-          </div>
-          <div class="row">
-            <label class="field"><span>Language <code>language</code></span><select id="tr-language" class="select"></select></label>
-            <label class="field"><span>Format <code>response_format</code></span>
-              <select id="tr-format" class="select"><option value="verbose_json" selected>verbose_json</option><option value="json">json</option><option value="text">text</option></select>
+
+          <!-- Clip mode: record or drop a file, transcribe once -->
+          <div id="tr-clipMode" class="stack">
+            <div class="actions">
+              <button id="tr-rec" class="btn primary rec-btn" type="button"><i class="rec-dot"></i><span>Record</span></button>
+              <button id="tr-recStop" class="btn" type="button" disabled>Stop</button>
+              <span id="tr-recTime" class="hint"></span>
+            </div>
+            <div class="meter"><i id="tr-level"></i></div>
+            <label id="tr-drop" class="drop">
+              <input id="tr-file" type="file" accept="audio/*,video/webm,.wav,.webm,.ogg,.mp3,.m4a,.flac">
+              <span id="tr-dropText">… or drop an audio file here / click to choose</span>
             </label>
-            <label class="field"><span>Model <code>model</code></span><input id="tr-model" class="input" type="text" placeholder="active speech-to-text model"></label>
+            <div id="tr-wave" class="wave"><canvas id="tr-canvas"></canvas><div class="cursor"></div><div id="tr-placeholder" class="placeholder">No clip yet</div></div>
+            <div class="player-row">
+              <button id="tr-play" class="btn" type="button" disabled>
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span>Play clip</span>
+              </button>
+              <audio id="tr-audio" controls preload="auto" hidden></audio>
+              <span id="tr-clipInfo" class="hint"></span>
+            </div>
+            <div class="row">
+              <label class="field"><span>Language <code>language</code></span><select id="tr-language" class="select"></select></label>
+              <label class="field"><span>Format <code>response_format</code></span>
+                <select id="tr-format" class="select"><option value="verbose_json" selected>verbose_json</option><option value="json">json</option><option value="text">text</option></select>
+              </label>
+              <label class="field"><span>Model <code>model</code></span><input id="tr-model" class="input" type="text" placeholder="active speech-to-text model"></label>
+            </div>
+            <div class="actions">
+              <button id="tr-run" class="btn primary" type="button" disabled>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 12h3l3-7 4 14 3-7h3"/></svg><span>Transcribe</span>
+              </button>
+              <button id="tr-cancel" class="btn" type="button" disabled>Cancel</button>
+            </div>
+            <div id="tr-status" class="status"></div>
           </div>
-          <div class="actions">
-            <button id="tr-run" class="btn primary" type="button" disabled>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 12h3l3-7 4 14 3-7h3"/></svg><span>Transcribe</span>
-            </button>
-            <button id="tr-cancel" class="btn" type="button" disabled>Cancel</button>
+
+          <!-- Live mode: hands-free, utterances are cut by voice activity and
+               transcribed one after another -->
+          <div id="tr-liveMode" class="stack" hidden>
+            <div class="live-head">
+              <button id="tl-start" class="btn primary rec-btn" type="button"><i class="rec-dot"></i><span>Start listening</span></button>
+              <button id="tl-stop" class="btn" type="button" disabled>Stop</button>
+              <span id="tl-state" class="state-chip idle"><i></i><span>idle</span></span>
+            </div>
+            <div class="meter vad"><i id="tl-level"></i><b id="tl-threshold"></b></div>
+            <div class="row">
+              <label class="field"><span>Language <code>language</code></span><select id="tl-language" class="select"></select></label>
+              <label class="field"><span>Model <code>model</code></span><input id="tl-model" class="input" type="text" placeholder="active speech-to-text model"></label>
+            </div>
+            <div class="row">
+              <div class="field">
+                <span>Sensitivity <code>VAD</code></span>
+                <div class="slider"><input id="tl-sens" type="range" min="0" max="1" step="0.05" value="0.5"><output id="tl-sensOut">0.50</output></div>
+              </div>
+              <div class="field">
+                <span>End of utterance <code>silence</code></span>
+                <div class="slider"><input id="tl-silence" type="range" min="300" max="2000" step="50" value="700"><output id="tl-silenceOut">700 ms</output></div>
+              </div>
+            </div>
+            <label class="check"><input id="tl-hideIgnored" type="checkbox"> Hide segments the Studio would ignore (noise, low confidence)</label>
+            <div class="hint">Speech is detected in the browser, cut at the pause you set and posted as 16 kHz WAV, one utterance at a time, with <code>response_format=verbose_json</code>. Nothing leaves this origin.</div>
+            <div id="tl-status" class="status"></div>
           </div>
-          <div id="tr-status" class="status"></div>
         </div>
 
         <div class="card">
-          <div class="card-head"><h2>Transcript</h2><span id="tr-elapsed" class="route">–</span></div>
-          <div id="tr-result" class="transcript empty">The transcript appears here.</div>
-          <table id="tr-meta" class="meta" hidden>
-            <tbody>
-              <tr><td>model <code>X-ASR-Model</code></td><td id="m-model">–</td></tr>
-              <tr><td>language</td><td id="m-lang">–</td></tr>
-              <tr><td>no_speech_prob</td><td id="m-nospeech">–</td></tr>
-              <tr><td>avg_logprob</td><td id="m-logprob">–</td></tr>
-              <tr><td>Studio filter</td><td id="m-ignored">–</td></tr>
-            </tbody>
-          </table>
-          <details open>
-            <summary>curl</summary>
-            <div class="body">
-              <div class="copy-row"><span>Same call from a shell</span><button class="copy-btn" data-copy="tr-curl" type="button">Copy</button></div>
-              <pre id="tr-curl"></pre>
+          <!-- Clip result -->
+          <div id="tr-clipOut" class="stack">
+            <div class="card-head"><h2>Transcript</h2><span id="tr-elapsed" class="route">–</span></div>
+            <div id="tr-result" class="transcript empty">The transcript appears here.</div>
+            <table id="tr-meta" class="meta" hidden>
+              <tbody>
+                <tr><td>model <code>X-ASR-Model</code></td><td id="m-model">–</td></tr>
+                <tr><td>language</td><td id="m-lang">–</td></tr>
+                <tr><td>no_speech_prob</td><td id="m-nospeech">–</td></tr>
+                <tr><td>avg_logprob</td><td id="m-logprob">–</td></tr>
+                <tr><td>Studio filter</td><td id="m-ignored">–</td></tr>
+              </tbody>
+            </table>
+            <details class="panel" open>
+              <summary>curl</summary>
+              <div class="panel-body">
+                <div class="copy-row"><span>Same call from a shell</span><button class="copy-btn" data-copy="tr-curl" type="button">Copy</button></div>
+                <pre id="tr-curl"></pre>
+              </div>
+            </details>
+            <details class="panel">
+              <summary>Raw response</summary>
+              <div class="panel-body"><pre id="tr-raw"></pre></div>
+            </details>
+          </div>
+
+          <!-- Live result -->
+          <div id="tr-liveOut" class="stack" hidden>
+            <div class="card-head">
+              <h2>Live transcript</h2>
+              <div class="actions tight">
+                <button id="tl-copy" class="copy-btn" type="button">Copy all</button>
+                <button id="tl-clear" class="copy-btn" type="button">Clear</button>
+              </div>
             </div>
-          </details>
-          <details>
-            <summary>Raw response</summary>
-            <div class="body"><pre id="tr-raw"></pre></div>
-          </details>
+            <div id="tl-log" class="live-log"><div class="placeholder">Start listening and speak. Each utterance appears here as soon as it is transcribed.</div></div>
+            <div class="stats">
+              <div class="stat"><b id="tl-count">0</b><span>utterances</span></div>
+              <div class="stat"><b id="tl-words">0</b><span>words</span></div>
+              <div class="stat"><b id="tl-speech">0.0</b><span>speech s</span></div>
+              <div class="stat"><b id="tl-latency">–</b><span>avg latency s</span></div>
+              <div class="stat"><b id="tl-rtf">–</b><span>avg RTF</span></div>
+            </div>
+          </div>
         </div>
       </div>
       <div class="ref">
         <span><code>file</code> WAV, WebM/Opus, MP4, MP3, FLAC… ≤ 25 MiB</span><span><code>language</code> auto or ISO code</span>
         <span><code>response_format</code> json | verbose_json | text</span><span><code>model</code> optional</span>
+      </div>
+    </section>
+
+    <!-- ================= Echo: speak, get transcribed, hear it spoken back ================= -->
+    <section id="panel-echo" class="pg-panel" role="tabpanel" hidden>
+      <div class="pg-grid">
+        <div class="card">
+          <div class="card-head"><h2>Voice loop</h2><span class="route">transcriptions → speech</span></div>
+          <div class="echo-stage">
+            <button id="ec-start" class="echo-btn" type="button" aria-label="Start">
+              <span class="ring"></span>
+              <svg class="mic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+              <svg class="stopi" viewBox="0 0 24 24" fill="currentColor" hidden><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+            </button>
+            <div id="ec-state" class="echo-state idle">Press to start, then just talk. What you say is transcribed and spoken straight back.</div>
+            <div class="meter vad"><i id="ec-level"></i><b id="ec-threshold"></b></div>
+          </div>
+          <div class="row">
+            <label class="field"><span>Voice engine <code>model</code></span><select id="ec-engine" class="select"></select></label>
+            <label class="field"><span>Voice <code>voice</code></span><select id="ec-voice" class="select"></select></label>
+          </div>
+          <div class="row">
+            <label class="field"><span>Listen in <code>language</code></span><select id="ec-asrLanguage" class="select"></select></label>
+            <label class="field"><span>Speak back in</span>
+              <select id="ec-ttsLanguage" class="select"><option value="auto" selected>match what was heard</option></select>
+            </label>
+          </div>
+          <div class="row">
+            <div class="field">
+              <span>Speed <code>speed</code></span>
+              <div class="slider"><input id="ec-speed" type="range" min="0.25" max="4" step="0.05" value="1"><output id="ec-speedOut">1.00×</output></div>
+            </div>
+            <div class="field">
+              <span>End of utterance <code>silence</code></span>
+              <div class="slider"><input id="ec-silence" type="range" min="300" max="2000" step="50" value="600"><output id="ec-silenceOut">600 ms</output></div>
+            </div>
+          </div>
+          <div class="field">
+            <span>Sensitivity <code>VAD</code></span>
+            <div class="slider"><input id="ec-sens" type="range" min="0" max="1" step="0.05" value="0.5"><output id="ec-sensOut">0.50</output></div>
+          </div>
+          <div class="hint">The microphone is muted while the reply plays, then listening resumes. Use headphones or keep the volume moderate so the reply is not picked up again.</div>
+          <div id="ec-status" class="status"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>Conversation</h2>
+            <div class="actions tight"><button id="ec-clear" class="copy-btn" type="button">Clear</button></div>
+          </div>
+          <div id="ec-turns" class="turns"><div class="placeholder">Each turn shows what was heard and the reply that was spoken back, with timings.</div></div>
+          <div id="ec-wave" class="wave short"><canvas id="ec-canvas"></canvas><div class="cursor"></div><div id="ec-placeholder" class="placeholder">Last reply</div></div>
+          <div class="player-row">
+            <button id="ec-play" class="btn" type="button" disabled>
+              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span>Play</span>
+            </button>
+            <audio id="ec-audio" controls preload="auto" hidden></audio>
+          </div>
+          <div class="stats">
+            <div class="stat"><b id="ec-count">0</b><span>turns</span></div>
+            <div class="stat"><b id="ec-asr">–</b><span>avg ASR s</span></div>
+            <div class="stat"><b id="ec-tts">–</b><span>avg TTS s</span></div>
+            <div class="stat"><b id="ec-turn">–</b><span>avg to reply s</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="ref">
+        <span>1 · utterance cut by voice activity</span><span>2 · <code>POST /v1/audio/transcriptions</code> (verbose_json)</span>
+        <span>3 · <code>POST /v1/audio/speech</code> with the transcript</span><span>4 · played back, mic resumes</span>
       </div>
     </section>
   </main>
