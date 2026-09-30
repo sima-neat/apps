@@ -652,6 +652,15 @@
   sp.input.addEventListener('input', updateSpeechPreview);
   sp.speed.addEventListener('input', () => { sp.speedOut.value = `${Number(sp.speed.value).toFixed(2)}×`; updateSpeechPreview(); });
   sp.run.addEventListener('click', synthesize);
+  $('sp-clear').addEventListener('click', () => {
+    if (spController) spController.abort();        // a synthesis still running is dropped too
+    spPlayer.reset();
+    setDownload(null);
+    ['st-engine', 'st-voice', 'st-speed', 'st-dur', 'st-gen', 'st-rtf'].forEach((id) => { $(id).textContent = '–'; });
+    sp.size.textContent = '–';
+    sp.headers.textContent = '';
+    setStatus(sp.status, '');
+  });
   sp.stop.addEventListener('click', () => { if (spController) spController.abort(); spPlayer.stop(); });
   sp.input.addEventListener('keydown', (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && !spController) synthesize(); });
 
@@ -829,6 +838,20 @@
 
   tr.rec.addEventListener('click', startRecording);
   tr.recStop.addEventListener('click', stopRecording);
+  $('tr-clear').addEventListener('click', () => {
+    stopRecording();
+    if (trController) trController.abort();        // its finally re-enables the controls
+    trPlayer.reset();
+    clip = null;
+    tr.file.value = '';
+    tr.clipInfo.textContent = ''; tr.recTime.textContent = '';
+    tr.run.disabled = true;
+    tr.meta.hidden = true;
+    tr.result.classList.add('empty'); tr.result.textContent = 'The transcript appears here.';
+    tr.elapsed.textContent = '–'; tr.raw.textContent = '';
+    updateTrPreview();
+    setStatus(tr.status, '');
+  });
   tr.file.addEventListener('change', () => { const f = tr.file.files && tr.file.files[0]; if (f) { setClip(f, f.name, f.type); setStatus(tr.status, 'File selected.'); } });
   ['dragenter', 'dragover'].forEach((ev) => tr.drop.addEventListener(ev, (e) => { e.preventDefault(); tr.drop.classList.add('over'); }));
   ['dragleave', 'drop'].forEach((ev) => tr.drop.addEventListener(ev, (e) => { e.preventDefault(); tr.drop.classList.remove('over'); }));

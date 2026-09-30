@@ -338,3 +338,7 @@ table.meta td:last-child { font-family: var(--code-font); font-size: 12.5px; }
   .pg-tabs { margin-left: 0; }
 }
 @media (max-width: 480px) { .compose { grid-template-columns: 1fr; } }
+
+/* Clear sits at the end of a card head, after the route pill */
+.card-head > .copy-btn:last-child { flex: none; }
+.card-head .route + .copy-btn { margin-left: 0; }
