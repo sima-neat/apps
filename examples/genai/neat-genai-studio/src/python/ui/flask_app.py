@@ -32,6 +32,7 @@ import wave
 import traceback
 from pathlib import Path
 from werkzeug.utils import secure_filename
+from werkzeug.exceptions import RequestEntityTooLarge
 import tempfile
 import atexit
 import signal
@@ -2471,7 +2472,22 @@ class AppContext:
             on this origin. `response_format`: json (default) | verbose_json |
             text. `model` defaults to the active ASR model."""
             started = time.time()
-            upload = request.files.get('file')
+            # Refuse oversized bodies before Werkzeug parses (and spools) the
+            # multipart data: the file limit plus headroom for the envelope and
+            # the other fields. The exact per-file check follows after parsing.
+            declared = request.content_length
+            if declared is not None and declared > TRANSCRIPTION_REQUEST_LIMIT:
+                return jsonify({'error': f'audio upload exceeds {MAX_TRANSCRIPTION_BYTES // (1024 * 1024)} MiB',
+                                'param': 'file'}), 413
+            try:
+                request.max_content_length = TRANSCRIPTION_REQUEST_LIMIT   # bounds a chunked body too
+            except AttributeError:                                          # older Werkzeug: read-only
+                pass
+            try:
+                upload = request.files.get('file')
+            except RequestEntityTooLarge:
+                return jsonify({'error': f'audio upload exceeds {MAX_TRANSCRIPTION_BYTES // (1024 * 1024)} MiB',
+                                'param': 'file'}), 413
             try:
                 req = parse_transcription_form(
                     request.form, has_file=upload is not None,
@@ -3114,6 +3130,11 @@ class TranscriptionError(Exception):
         super().__init__(message)
         self.status = status
         self.message = message
+
+
+# Hard limit on a transcription request body: the file cap plus headroom for
+# the multipart envelope and the form fields (model, language, response_format).
+TRANSCRIPTION_REQUEST_LIMIT = MAX_TRANSCRIPTION_BYTES + 1024 * 1024
 
 
 def _upload_size(upload):

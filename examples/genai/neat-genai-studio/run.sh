@@ -373,7 +373,7 @@ resolve_supertonic_env() {
   if [[ -z "${SUPERTONIC_PYTHON}" && -x "${SUPERTONIC_VENV}/bin/python" ]]; then
     SUPERTONIC_PYTHON="${SUPERTONIC_VENV}/bin/python"
   fi
-  export SUPERTONIC_PYTHON
+  export SUPERTONIC_PYTHON SUPERTONIC_VENV
   # Effective path (default applied) for run.sh's own use: the banner and --clean.
   SUPERTONIC_MODELS_ROOT_RESOLVED="${models:-/media/nvme/supertonic-tts/models}"
 }
@@ -563,6 +563,10 @@ do_update() {
     info "Python dependency refresh skipped (set UPDATE_DEPS=1 to enable it)."
   else
     step "Refreshing Python dependencies…"
+    # setup.sh must refresh the Supertonic runtime this installation actually
+    # uses: hand it the persisted venv and models root (config.local.yaml),
+    # not its defaults, unless the environment already names them.
+    resolve_supertonic_env
     if "${EXAMPLE_DIR}/setup.sh" --dependencies-only; then
       ok "Python dependencies refreshed."
     else

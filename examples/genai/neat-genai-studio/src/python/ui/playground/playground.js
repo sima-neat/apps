@@ -320,11 +320,22 @@
       }
     }
 
+    let startToken = 0;               // invalidated by stop(): a permission prompt may outlive it
     mic.start = async function start() {
-      if (stream) return;
+      if (stream || mic.starting) return;
       const ctx = ensureAudioContext();
       rate = ctx.sampleRate;
-      stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+      const token = ++startToken;
+      mic.starting = true;
+      let granted;
+      try {
+        granted = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+      } finally { mic.starting = false; }
+      if (token !== startToken) {     // stopped (tab left, Stop pressed) while the prompt was open
+        granted.getTracks().forEach((t) => t.stop());
+        return;
+      }
+      stream = granted;
       srcNode = ctx.createMediaStreamSource(stream);
       let usedWorklet = false;
       if (ctx.audioWorklet) {
@@ -346,6 +357,7 @@
       setState('listening');
     };
     mic.stop = function stop() {
+      startToken += 1;                // cancels a start() still waiting on the prompt
       if (!stream) return;
       try { srcNode.disconnect(); } catch (e) { /* ignore */ }
       try { node.disconnect(); } catch (e) { /* ignore */ }
