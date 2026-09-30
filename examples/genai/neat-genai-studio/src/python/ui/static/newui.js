@@ -53,9 +53,11 @@ let ragServerStatusText = "";
 let currentSystemPrompt = '';
 let systemPromptRequestInFlight = false;
 // Preferred TTS engine (defaults to piper-tts, matching the backend). Drives
-// which voice-selection setting is shown (rhasspy voice vs piper-plus voice).
+// which voice-selection setting is shown (rhasspy voice vs piper-plus voice vs
+// Supertonic speaker). The server reports the real current engine on load.
 let _currentTtsEngine = 'piper-tts';
 let _ppVoicesAvailable = false;
+let _stVoicesAvailable = false;
 // Used for TTS routing while the transcription selector remains on Auto-detect.
 // English is the safe default for typed prompts before the first recording.
 let _detectedSpeechLanguage = 'en';
@@ -2204,6 +2206,7 @@ socket.on('audio_chunk', (data) => {
 
   if (data.tps != null) { const t = document.getElementById('tpsValue'); if (t) t.textContent = data.tps; }
   if (data.rtf != null) { const r = document.getElementById('rtfValue'); if (r) r.textContent = data.rtf; }
+  if (data.engine) updateTtsEngineIndicator(data.engine, data.voice);
 
   // Browser TTS: the server sent only the (already sanitized) sentence text —
   // speak it locally with the Web Speech API instead of playing server audio.
@@ -2355,7 +2358,11 @@ function updateAsrMetrics(metadata) {
   if (logprobEl) {
     logprobEl.textContent = Number.isFinite(avgLogprob) ? avgLogprob.toFixed(2) : '—';
   }
-  if (metadata.language_detected && metadata.language) {
+  // Adopt the detected language only from a clip that actually held speech.
+  // Whisper still guesses a language for silence or noise (an ignored result),
+  // and that guess is arbitrary — adopting it (e.g. 'nn') would make every
+  // following typed prompt ask for a voice no engine has, silencing replies.
+  if (metadata.language_detected && metadata.language && !metadata.ignored) {
     _detectedSpeechLanguage = metadata.tts_language || metadata.language;
     updateVoiceEngineForLanguage();
   }
@@ -2644,18 +2651,22 @@ function setVoiceRowVisible(visible) {
   if (voiceRow) {
     // Keep the allowlisted server voice catalog reachable while Browser is
     // active so a language omitted during setup can be installed from the UI.
-    const show = visible && _currentTtsEngine !== 'piper-plus';
+    const show = visible && _currentTtsEngine !== 'piper-plus' && _currentTtsEngine !== 'supertonic';
     voiceRow.style.display = show ? 'block' : 'none';
   }
 }
 
 // Show only the voice-selection setting relevant to the active engine:
-// piper-plus -> its voice picker; piper-tts -> the rhasspy voice picker;
-// browser -> the device-voice picker.
+// supertonic -> its speaker picker; piper-plus -> its voice picker;
+// piper-tts -> the rhasspy voice picker; browser -> the device-voice picker.
 function applyEngineVoiceVisibility() {
   const ppRow = document.getElementById('piperPlusVoiceRow');
   if (ppRow) {
     ppRow.style.display = (_currentTtsEngine === 'piper-plus' && _ppVoicesAvailable) ? '' : 'none';
+  }
+  const stRow = document.getElementById('supertonicVoiceRow');
+  if (stRow) {
+    stRow.style.display = (_currentTtsEngine === 'supertonic' && _stVoicesAvailable) ? '' : 'none';
   }
   const brRow = document.getElementById('browserVoiceRow');
   if (brRow) {
@@ -3036,7 +3047,48 @@ async function initPiperPlusVoices() {
   };
 }
 
-// ---- Voice engine picker (piper-plus vs rhasspy piper-tts) ----------------
+// ---- Supertonic speaker picker (F1-F5 / M1-M5 on the MLA engine) -----------
+async function initSupertonicVoices() {
+  const sel = document.getElementById('supertonicVoiceSelect');
+  const row = document.getElementById('supertonicVoiceRow');
+  if (!sel || !row) return;
+  let data;
+  try {
+    data = await (await fetch('/supertonic/voices')).json();
+  } catch (e) { _stVoicesAvailable = false; row.style.display = 'none'; return; }
+  const voices = (data && data.voices) || [];
+  _stVoicesAvailable = voices.length > 0;
+  if (!voices.length) { row.style.display = 'none'; return; }
+  sel.innerHTML = '';
+  voices.forEach(v => {
+    const o = document.createElement('option');
+    o.value = v.key;
+    o.textContent = v.label || v.key;
+    sel.appendChild(o);
+  });
+  if (data.current) sel.value = data.current;
+  applyEngineVoiceVisibility();   // show only if Supertonic is the active engine
+  sel.onchange = async () => {
+    const status = document.getElementById('supertonicVoiceStatus');
+    if (status) status.textContent = 'Switching…';
+    sel.disabled = true;
+    try {
+      const r = await fetch('/supertonic/select', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: sel.value })
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || d.status !== 'ok') throw new Error((d && d.error) || 'failed to switch');
+      if (status) status.textContent = 'Active';
+    } catch (err) {
+      if (status) status.textContent = 'Failed: ' + err.message;
+    } finally {
+      sel.disabled = false;
+    }
+  };
+}
+
+// ---- Voice engine picker (supertonic / piper-plus / rhasspy piper-tts) -----
 // Shows ONLY the engine(s) that can speak the currently selected language, so a
 // language is never offered an incompatible engine. When both engines support
 // it, the user can choose which is preferred; when only one does, it's shown
@@ -3052,12 +3104,14 @@ async function updateVoiceEngineForLanguage() {
   } catch (e) { row.style.display = 'none'; return; }
   const engines = (data && data.engines) || [];
   if (data.current) _currentTtsEngine = data.current;
+  updateTtsEngineIndicator();
   if (!engines.length) { row.style.display = 'none'; applyEngineVoiceVisibility(); return; }
   sel.innerHTML = '';
   engines.forEach(e => {
     const o = document.createElement('option');
     o.value = e.key;
-    o.textContent = e.label || e.key;
+    // CPU engines stay out of RAM until selected; say so in the picker.
+    o.textContent = (e.label || e.key) + (e.loaded === false ? ' · loads on select' : '');
     sel.appendChild(o);
   });
   sel.value = engines.some(e => e.key === _currentTtsEngine) ? _currentTtsEngine : engines[0].value;
@@ -3066,17 +3120,20 @@ async function updateVoiceEngineForLanguage() {
   row.style.display = '';              // always show the supported engine(s)
   sel.onchange = async () => {
     const status = document.getElementById('voiceEngineStatus');
-    if (status) status.textContent = 'Saving…';
+    const chosen = engines.find(e => e.key === sel.value);
+    if (status) status.textContent = (chosen && chosen.loaded === false) ? 'Loading engine…' : 'Saving…';
     sel.disabled = true;
     try {
       const r = await fetch('/tts/engine', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ engine: sel.value })
+        body: JSON.stringify({ engine: sel.value, lang: getSelectedVoiceLanguage() })
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok || d.status !== 'ok') throw new Error((d && d.error) || 'failed');
       _currentTtsEngine = sel.value;
       applyEngineVoiceVisibility();     // swap which voice picker is shown
+      updateTtsEngineIndicator();
+      if (chosen && chosen.loaded === false) { updateVoiceEngineForLanguage(); initPiperPlusVoices(); return; }
       if (status) status.textContent = 'Active';
     } catch (err) {
       if (status) status.textContent = 'Failed: ' + err.message;
@@ -3091,6 +3148,7 @@ window.addEventListener('DOMContentLoaded', () => {
   const langRow = document.getElementById('languageRow');
   if (langRow) langRow.style.display = 'block';
   initPiperPlusVoices();
+  initSupertonicVoices();
   updateVoiceEngineForLanguage();   // also drives refreshVoiceOptions via applyEngineVoiceVisibility
   // Device speech voices often load asynchronously — repopulate the Browser
   // voice picker when they arrive (only relevant while that engine is active).
@@ -4397,6 +4455,25 @@ function updateAsrModelIndicator() {
     || (controlEnabled() ? '' : (window.SIMA_CONFIG?.asrModelName || ''));
   el.textContent = name;
   el.title = name ? `Transcribed by ${name}` : '';
+}
+
+// Name the engine behind the "Spoke back" metrics, mirroring the ASR indicator.
+// Before anything has been spoken it shows the engine the router will use for
+// the selected language; each audio chunk then names the engine (and speaker)
+// that actually produced it, so RTF reads against the right engine.
+const TTS_ENGINE_LABELS = {
+  'supertonic': 'Supertonic 3',
+  'piper-plus': 'piper-plus',
+  'piper-tts': 'piper-tts',
+  'browser': 'Browser',
+};
+function updateTtsEngineIndicator(engine, voice) {
+  const el = document.getElementById('ttsEngineName');
+  if (!el) return;
+  const key = engine || _currentTtsEngine;
+  const label = TTS_ENGINE_LABELS[key] || key || '';
+  el.textContent = label && voice ? `${label} · ${voice}` : label;
+  el.title = label ? `Spoken by ${el.textContent}` : '';
 }
 
 // Drive the load bar from the browser's own clock.

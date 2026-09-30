@@ -108,6 +108,13 @@ Other useful environment variables:
 - `TTS_LANGUAGES`: comma- or space-separated catalogued server-TTS languages to
   install. Interactive setup prompts when this is unset; non-interactive setup
   defaults to `en,de,es,fr,it,ja,pt,vi,zh`.
+- `INSTALL_SUPERTONIC`, `SUPERTONIC_REPO_ROOT`, `SUPERTONIC_APP_ROOT`,
+  `SUPERTONIC_REPO_REVISION`: install the MLA-accelerated Supertonic 3 engine
+  (default on), where its checkout and runtime live, and the reviewed upstream
+  commit a fresh clone is pinned to; see
+  [Text-to-speech](#text-to-speech-voices--languages). The paths are written to
+  `config.local.yaml` under `app.tts.supertonic`, so `run.sh` finds a
+  non-default install without re-exporting them.
 - `TTS_OPTIONAL_VOICES`: optional voice ids to install, for example
   `mera,en_US-ljspeech-medium,zh_CN-chaowen-medium`.
 
@@ -261,6 +268,7 @@ to reclaim space or start fresh:
 ```bash
 ./run.sh --clean        # lists what will be removed, then asks to confirm
 ./run.sh --clean -y     # skip the prompt (or CLEAN_YES=1)
+CLEAN_SUPERTONIC=1 ./run.sh --clean   # also remove the Supertonic runtime + checkout
 ```
 
 It stops a running instance first and lists each target with the total size
@@ -438,10 +446,23 @@ selector in Settings.
 
 | Engine | Licence | Runtime | Languages |
 | --- | --- | --- | --- |
+| **Supertonic 3** | OpenRAIL model terms (see notices) | PyNeat on the **MLA** (vector field + vocoder), onnxruntime (CPU text front end) | 30+ incl. English, German, Spanish, French, Italian, Portuguese, Japanese, **Korean**, Vietnamese (not Chinese) |
 | **piper-plus** | MIT runtime; model-specific terms | onnxruntime (CPU) | Japanese, English, Chinese, Spanish, French, Portuguese |
 | **piper-tts** | GPL-3.0 runtime; model-specific terms | onnxruntime (CPU) | English, Chinese, Spanish, French, Portuguese, German, Italian, Norwegian, Vietnamese |
 | **Browser** (Web Speech API) | None | client-side (your browser / OS) | any language your device has a voice for |
 
+- The speech API (`POST /v1/audio/speech`) honours an explicit `model`:
+  `supertonic`, `piper-plus` or `piper-tts` is dispatched to exactly that
+  engine and answers 503 when it cannot speak the requested `language`; any
+  other value (`default`, `tts-1`, …) goes through the router below.
+- **Supertonic 3** is the MLA-accelerated engine from
+  [supertonic-sima](https://github.com/florianvoss-commit/supertonic-sima). It
+  is preferred for every language it speaks whenever its runtime is installed
+  (see below), synthesizes at a real-time factor of about 0.07 on a Modalix
+  DevKit, and offers ten speakers (F1-F5, M1-M5) under **Settings → Supertonic
+  voice**. `SUPERTONIC_VOICE` picks the startup speaker; `SUPERTONIC_STEPS`
+  (5-12, default 8) trades quality for latency. Replies are split into segments
+  that fit the compiled 192-character contract and streamed one WAV per segment.
 - **Japanese** defaults to Piper Plus CSS10. CSS10 is declared public domain;
   the multilingual base model is CC BY 4.0 and its attribution is preserved in
   [the TTS notices](THIRD_PARTY_TTS_MODELS.md).
@@ -451,11 +472,12 @@ selector in Settings.
 - **Chinese** defaults to the dedicated Huayan Piper voice. Chaowen is an
   optional second Chinese voice; Piper Plus CSS10 remains available as the
   multilingual alternative.
-- **Korean has no server-side TTS model.** Use Browser TTS when the client has a
-  Korean voice; otherwise replies remain text-only.
+- **Korean** is spoken by Supertonic 3 when it is installed. Without it there is
+  no server-side Korean model: use Browser TTS when the client has a Korean
+  voice; otherwise replies remain text-only.
 - **Voice engine**: a **Settings → Voice engine** dropdown chooses which engine
-  is preferred for languages more than one can speak (piper-plus or piper-tts).
-  Languages only one engine supports are unaffected.
+  is preferred for languages more than one can speak (supertonic, piper-plus or
+  piper-tts). Languages only one engine supports are unaffected.
 - **Browser**: selecting the **Browser** engine speaks replies on the client with
   the Web Speech API instead of synthesizing on the board (no server compute). The
   server still cleans each sentence (Markdown/LaTeX stripped), so the browser
@@ -481,9 +503,41 @@ selector in Settings.
   be prepared. The original model remains on disk only to rebuild the split
   files; the worker loads only the encoder and decoder sessions into memory.
   Piper Plus is a separate multilingual engine and does not use this split path.
-- The default router preference is `piper-tts`. Selecting `piper-plus` under
-  **Settings → Voice engine** switches supported languages to the active
-  multilingual voice.
+- The default router preference is `supertonic` when its runtime loaded and
+  `piper-tts` otherwise. Selecting `piper-plus` under **Settings → Voice engine**
+  switches supported languages to the active multilingual voice.
+- **CPU engines load on demand.** When Supertonic is available, piper-plus and
+  the dedicated piper-tts voices stay out of RAM at startup; only languages
+  Supertonic cannot speak (Chinese, Norwegian) get their Piper voice loaded.
+  The **Voice engine** picker still lists installed CPU engines, marked
+  "loads on select"; choosing piper-tts loads the voice for the current
+  language (a few seconds) and other languages load on their first spoken
+  reply. Without Supertonic every installed engine loads at startup as before.
+- **Supertonic runs in its own venv and worker too.** Its runtime needs `pyneat`,
+  `onnxruntime` and `numpy 1.26`, which the UI venv does not carry, so `setup.sh`
+  clones [supertonic-sima](https://github.com/florianvoss-commit/supertonic-sima)
+  to `SUPERTONIC_REPO_ROOT` (default `/media/nvme/repos/supertonic-sima`) and runs
+  its `scripts/setup_devkit.sh`, which builds the venv under
+  `SUPERTONIC_APP_ROOT` (default `/media/nvme/supertonic-tts`) and downloads the
+  pinned upstream CPU models plus the precompiled MLA packages from
+  [florianvoss/supertonic-3-sima](https://huggingface.co/florianvoss/supertonic-3-sima).
+  No on-device compilation is needed. A fresh clone is checked out at the
+  reviewed commit in `SUPERTONIC_REPO_REVISION` before its installer runs, and
+  an install is only treated as complete when every file the worker needs is
+  present, so an interrupted download is repaired on the next `setup.sh`. Both
+  paths are persisted under `app.tts.supertonic` in `config.local.yaml`;
+  `run.sh` and the UI read them from there, with the environment variables as
+  overrides, and `run.sh` exports `SUPERTONIC_PYTHON` for the worker. Set
+  `INSTALL_SUPERTONIC=0` to skip it; when the runtime is missing the engine is
+  simply not offered and the CPU engines behave as before. An existing checkout
+  is only used when it is clean and at the reviewed revision (a clean one at
+  another revision is moved there; `SUPERTONIC_ALLOW_UNPINNED=1` runs it as
+  is). `./run.sh --clean` keeps the runtime and checkout, since they live
+  outside the example directory and are shared with the standalone
+  supertonic-sima app; `CLEAN_SUPERTONIC=1` removes them too. The worker holds the
+  two Supertonic models on the MLA next to the chat and speech-to-text models.
+  An accelerator reset (**Reset MLA**) tears the worker down; the next spoken
+  reply respawns it.
 
 The authoritative reviewed catalog is `src/python/ui/voice_catalog.json`. Each
 entry has a compact licence label, pinned upstream repository revision, and

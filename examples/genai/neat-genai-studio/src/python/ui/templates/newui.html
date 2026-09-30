@@ -121,6 +121,7 @@
             <div class="metric-group-head">
               <span class="metric-group-icon" aria-hidden="true">🔊</span>
               <span>Spoke back</span>
+              <span class="metric-group-model" id="ttsEngineName" title=""></span>
             </div>
             <div class="metric-group-items">
               <div class="metric-item"><span class="metric-value" id="firstAudioTime">0s</span><span class="metric-label">First Audio</span></div>
@@ -461,6 +462,11 @@
                 <label for="piperPlusVoiceSelect" class="setting-label">Piper Plus multilingual voice</label>
                 <select id="piperPlusVoiceSelect" class="setting-select"></select>
                 <div id="piperPlusVoiceStatus" class="voice-status"></div>
+              </div>
+              <div class="setting-row voice-language-group" id="supertonicVoiceRow" style="display: none;">
+                <label for="supertonicVoiceSelect" class="setting-label">Supertonic voice</label>
+                <select id="supertonicVoiceSelect" class="setting-select"></select>
+                <div id="supertonicVoiceStatus" class="voice-status"></div>
               </div>
               <div class="setting-row voice-language-group" id="browserVoiceRow" style="display: none;">
                 <label for="browserVoiceSelect" class="setting-label">Browser voice</label>
