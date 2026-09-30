@@ -1,22 +1,18 @@
 """Unit tests for single-stream-object-detector (Python)."""
 import copy
-import importlib.util
 import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-import yaml
+
+from tests.utils.config_cases import config_writer, load_example_main
 
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
 
-_SPEC = importlib.util.spec_from_file_location("object_detector_main", MAIN_PY)
-assert _SPEC is not None and _SPEC.loader is not None
-main = importlib.util.module_from_spec(_SPEC)
-sys.modules[_SPEC.name] = main
-_SPEC.loader.exec_module(main)
+main = load_example_main(EXAMPLE_DIR, "object_detector_main")
 
 
 @pytest.mark.unit
@@ -96,17 +92,8 @@ VALID_CONFIG = {
 }
 
 
-def write_config(tmp_path: Path, overrides=None, *, root=None) -> Path:
-    """Write the baseline config with `overrides` applied as (section, key, value)."""
-    raw = copy.deepcopy(VALID_CONFIG) if root is None else root
-    for path, value in (overrides or []):
-        target = raw
-        for key in path[:-1]:
-            target = target[key]
-        target[path[-1]] = value
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text(yaml.safe_dump(raw), encoding="utf-8")
-    return config_path
+# Writes VALID_CONFIG with overrides applied as ((section, ..., key), value).
+write_config = config_writer(VALID_CONFIG)
 
 
 @pytest.mark.unit
@@ -386,7 +373,7 @@ class TestLabelsRule:
     def test_the_rule_still_fires_when_the_path_really_is_empty(self):
         cfg = main.AppConfig(
             model_path="model.tar.gz",
-            labels_path="",
+            labels_path=Path(""),
             source_url="rtsp://127.0.0.1:8554/src1",
             insight_host="127.0.0.1",
         )

@@ -200,7 +200,8 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("source.url or source.rtsp_url must be set")
     if not cfg.model_path:
         raise ValueError("model.path must be set")
-    if not str(cfg.labels_path):
+    # Path("") is ".", so an empty value in the file arrives here as ".".
+    if str(cfg.labels_path) in ("", "."):
         raise ValueError("model.labels must be set")
     if not cfg.insight_host:
         raise ValueError("output.insight.host must be set")
@@ -242,12 +243,6 @@ def load_app_config(config_path: Path) -> AppConfig:
     default_labels = Path(__file__).resolve().parents[1] / "common" / "coco_label.txt"
 
     labels_path = string_or(model, "labels", str(default_labels))
-    # Checked on the raw value: Path("") is ".", so the same rule in
-    # validate_config would accept an empty value and the run would fail
-    # later with "labels file does not exist: .".
-    if not labels_path:
-        raise ValueError("model.labels must be set")
-
     # config.yaml documents source.rtsp_url as the fallback "when source.url
     # is empty", so an empty value must fall through, not just an absent key.
     # The key that supplied the URL is kept so --validate-config-only can report

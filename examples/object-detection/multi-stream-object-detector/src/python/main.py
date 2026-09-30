@@ -200,7 +200,8 @@ def parse_input_codec(value: str) -> str:
 def validate_config(cfg: AppConfig) -> None:
     if not cfg.model_path:
         raise ValueError("model.path must be set")
-    if not str(cfg.labels_path):
+    # Path("") is ".", so an empty value in the file arrives here as ".".
+    if str(cfg.labels_path) in ("", "."):
         raise ValueError("model.labels must be set")
     if not cfg.rtsp_urls:
         raise ValueError("streams must be set")
@@ -257,12 +258,6 @@ def load_app_config(config_path: Path) -> AppConfig:
         rtsp_urls.append(value)
 
     labels_path = string_or(model, "labels", str(default_labels))
-    # Checked on the raw value: Path("") is ".", so the same rule in
-    # validate_config would accept an empty value and the run would fail
-    # later with "labels file does not exist: .".
-    if not labels_path:
-        raise ValueError("model.labels must be set")
-
     cfg = AppConfig(
         model_path=string_or(model, "path"),
         labels_path=Path(labels_path),

@@ -1,6 +1,5 @@
 """Unit tests for single-stream-instance-segmenter (Python)."""
 
-import importlib.util
 import json
 import subprocess
 import sys
@@ -10,14 +9,12 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from tests.utils.config_cases import load_example_main
+
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
 
-_SPEC = importlib.util.spec_from_file_location("instance_seg_main", MAIN_PY)
-assert _SPEC is not None and _SPEC.loader is not None
-main = importlib.util.module_from_spec(_SPEC)
-sys.modules[_SPEC.name] = main
-_SPEC.loader.exec_module(main)
+main = load_example_main(EXAMPLE_DIR, "instance_seg_main")
 
 
 @pytest.mark.unit
