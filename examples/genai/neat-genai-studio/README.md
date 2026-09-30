@@ -592,10 +592,12 @@ selector in Settings.
   `src/python/ui/supertonic_sima/` (see its README for provenance and how to
   refresh it). An install is only treated as complete when every file the
   worker needs is present, so an interrupted download is repaired on the next
-  `setup.sh`. The models root is persisted under `app.tts.supertonic.models_root`
-  in `config.local.yaml`; `run.sh` and the UI read it from there, with
-  `SUPERTONIC_MODELS_ROOT` in the environment as the override, and `run.sh`
-  exports `SUPERTONIC_PYTHON` for the worker. Set `INSTALL_SUPERTONIC=0` to skip
+  `setup.sh`. The models root and the venv path are persisted under
+  `app.tts.supertonic.models_root` / `.venv` in `config.local.yaml`; `run.sh`
+  and the UI read them from there (so a custom `SUPERTONIC_VENV` given to
+  `setup.sh` keeps working on every later launch), with `SUPERTONIC_MODELS_ROOT`
+  / `SUPERTONIC_VENV` / `SUPERTONIC_PYTHON` in the environment as overrides, and
+  `run.sh` exports `SUPERTONIC_PYTHON` for the worker. Set `INSTALL_SUPERTONIC=0` to skip
   it; when the runtime is missing the engine is simply not offered and the CPU
   engines behave as before. `./run.sh --clean` removes the venv and keeps the
   model files (they live outside the example directory); `CLEAN_SUPERTONIC=1`

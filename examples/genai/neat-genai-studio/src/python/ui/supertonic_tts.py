@@ -80,11 +80,14 @@ def models_root():
 
 
 def _supertonic_python():
-    """Interpreter of the Supertonic runtime venv, or None when not installed."""
+    """Interpreter of the Supertonic runtime venv, or None when not installed:
+    ``SUPERTONIC_PYTHON``, else ``SUPERTONIC_VENV`` (the path setup.sh persisted
+    in the config, exported by run.sh / run_ui), else the default venv."""
     p = os.environ.get("SUPERTONIC_PYTHON")
     if p:
         return p if Path(p).exists() else None
-    cand = DEFAULT_VENV / "bin" / "python"
+    venv = os.environ.get("SUPERTONIC_VENV")
+    cand = (Path(venv) if venv else DEFAULT_VENV) / "bin" / "python"
     return str(cand) if cand.exists() else None
 
 

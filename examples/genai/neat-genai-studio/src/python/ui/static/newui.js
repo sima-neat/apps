@@ -6320,7 +6320,7 @@ function openPlayground() {
   const modal = document.getElementById('playgroundModal');
   const frame = document.getElementById('playgroundFrame');
   if (!modal || !frame) return;
-  if (!frame.src) frame.src = '/playground/';
+  frame.src = '/playground/';        // always a fresh load (close unloads it)
   frame.style.display = 'block';
   modal.style.display = 'flex';
   document.body.classList.add('playground-open');
@@ -6337,7 +6337,9 @@ function closePlayground() {
   const frame = document.getElementById('playgroundFrame');
   if (!modal) return;
   modal.style.display = 'none';
-  if (frame) { frame.style.display = 'none'; frame.src = ''; }   // stops audio and releases the mic
+  // Unload the page: stops audio and releases the microphone. about:blank
+  // rather than '' (an empty src reflects as the document URL and stays truthy).
+  if (frame) { frame.style.display = 'none'; frame.src = 'about:blank'; }
   document.body.classList.remove('playground-open');
   if (_playgroundEntered) {
     try {

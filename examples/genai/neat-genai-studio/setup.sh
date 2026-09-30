@@ -544,8 +544,11 @@ app:
 
   tts:
     supertonic:
-      # Supertonic 3 (MLA TTS) model files; the runtime venv is ./.venv-supertonic.
+      # Supertonic 3 (MLA TTS) model files and the runtime venv setup.sh built
+      # (run.sh and the UI read both; SUPERTONIC_MODELS_ROOT / SUPERTONIC_VENV
+      # in the environment override).
       models_root: "${SUPERTONIC_MODELS_ROOT}"
+      venv: "${SUPERTONIC_VENV}"
 
   rag:
     enabled: true

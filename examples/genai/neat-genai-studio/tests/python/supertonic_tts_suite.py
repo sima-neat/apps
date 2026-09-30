@@ -191,6 +191,19 @@ class EnvironmentDiscoveryTests(unittest.TestCase):
                  / "supertonic_vector_field_sima_mpk.tar.gz").write_bytes(b"")
                 self.assertTrue(supertonic_tts.available())
 
+    def test_supertonic_venv_env_names_the_interpreter(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            venv = Path(tmp) / "custom-venv"
+            (venv / "bin").mkdir(parents=True)
+            (venv / "bin" / "python").write_text("")
+            with mock.patch.dict(os.environ, {"SUPERTONIC_VENV": str(venv)}, clear=False):
+                os.environ.pop("SUPERTONIC_PYTHON", None)
+                self.assertEqual(supertonic_tts._supertonic_python(), str(venv / "bin" / "python"))
+            with mock.patch.dict(os.environ, {"SUPERTONIC_VENV": str(Path(tmp) / "missing")}, clear=False):
+                os.environ.pop("SUPERTONIC_PYTHON", None)
+                self.assertIsNone(supertonic_tts._supertonic_python())
+
     def test_default_venv_is_beside_the_example(self):
         # src/python/ui/supertonic_tts.py -> <example>/.venv-supertonic
         self.assertEqual(supertonic_tts.DEFAULT_VENV.name, ".venv-supertonic")

@@ -3211,6 +3211,8 @@ def run_ui(app_cfg):
     # environment override (run.sh exports one only when set) wins, then the
     # persisted config, then the module defaults.
     os.environ.setdefault("SUPERTONIC_MODELS_ROOT", app_cfg.supertonic.models_root)
+    if app_cfg.supertonic.venv and not os.environ.get("SUPERTONIC_PYTHON"):
+        os.environ.setdefault("SUPERTONIC_VENV", app_cfg.supertonic.venv)
     genai_app = AppContext()
     genai_app.initialize()
     genai_app.update_from_config(app_cfg)

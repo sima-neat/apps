@@ -53,11 +53,11 @@
   function savePrefs(patch) {
     try { localStorage.setItem(PREFS_KEY, JSON.stringify(Object.assign(loadPrefs(), patch))); } catch (e) { /* ignore */ }
   }
-  const tabHooks = { leave: {} };
   let currentTab = null;
+  let leaveTab = () => {};        // set once the mode objects exist (below)
   function showTab(name) {
     if (!TABS.includes(name)) name = 'speech';
-    if (currentTab && currentTab !== name && tabHooks.leave[currentTab]) tabHooks.leave[currentTab]();
+    if (currentTab && currentTab !== name) leaveTab(currentTab);
     currentTab = name;
     document.querySelectorAll('.pg-tab').forEach((t) => t.setAttribute('aria-selected', String(t.dataset.tab === name)));
     document.querySelectorAll('.pg-panel').forEach((p) => { p.hidden = p.id !== `panel-${name}`; });
@@ -143,7 +143,7 @@
   /** One decoded clip with Web Audio playback and a scrolling cursor. play()
    *  resolves when playback ends (or is stopped). */
   function makePlayer({ waveEl, canvas, button, audioEl }) {
-    let buffer = null, source = null, startedAt = 0, raf = 0, resolveEnd = null;
+    let buffer = null, source = null, startedAt = 0, raf = 0, resolveEnd = null, objectUrl = null;
     const cursor = waveEl.querySelector('.cursor');
     const placeholder = waveEl.querySelector('.placeholder');
     const label = button.querySelector('span');
@@ -190,8 +190,9 @@
         placeholder.hidden = false;
         placeholder.textContent = 'Cannot decode this clip for the waveform (the player below may still play it)';
       }
-      if (audioEl.src) URL.revokeObjectURL(audioEl.src);
-      audioEl.src = URL.createObjectURL(blob);
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      objectUrl = URL.createObjectURL(blob);
+      audioEl.src = objectUrl;
       audioEl.hidden = false;
       button.disabled = !buffer;
       if (autoplay && buffer) return play();
@@ -549,7 +550,6 @@
   sp.run.addEventListener('click', synthesize);
   sp.stop.addEventListener('click', () => { if (spController) spController.abort(); spPlayer.stop(); });
   sp.input.addEventListener('keydown', (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') synthesize(); });
-  tabHooks.leave.speech = () => spPlayer.stop();
 
   // =====================================================================
   // Transcription: clip mode
@@ -743,11 +743,13 @@
     return row;
   }
   liveMic.on('segment', (blob, dur, forced) => {
+    const session = liveController;          // the capture session this segment belongs to
+    if (!session) return;                    // stopped between cut and delivery
     const row = addSegmentRow(dur);
-    liveController = liveController || new AbortController();
     liveQueue = liveQueue.then(async () => {
+      if (session.signal.aborted) { row.remove(); return; }   // stopped while queued
       try {
-        const r = await transcribeBlob(blob, 'utterance.wav', { language: tl.language.value, model: tl.model.value.trim(), signal: liveController.signal });
+        const r = await transcribeBlob(blob, 'utterance.wav', { language: tl.language.value, model: tl.model.value.trim(), signal: session.signal });
         const d = r.data;
         row.classList.remove('pending');
         row.querySelector('.x').textContent = r.text || '(no words)';
@@ -774,9 +776,9 @@
     ensureAudioContext();
     liveMic.set({ sensitivity: Number(tl.sens.value), silenceMs: Number(tl.silence.value) });
     setStatus(tl.status, '');
+    liveController = new AbortController();  // before the mic runs: segments bind to it
     try { await liveMic.start(); }
-    catch (err) { setStatus(tl.status, `Microphone unavailable: ${err.message}`, 'err'); setChip(tl.state, 'err', 'no microphone'); return; }
-    liveController = new AbortController();
+    catch (err) { liveController = null; setStatus(tl.status, `Microphone unavailable: ${err.message}`, 'err'); setChip(tl.state, 'err', 'no microphone'); return; }
     tl.start.disabled = true; tl.start.classList.add('recording'); tl.start.querySelector('span').textContent = 'Listening';
     tl.stop.disabled = false;
   }
@@ -804,7 +806,6 @@
     try { await navigator.clipboard.writeText(text); tl.copy.textContent = 'Copied'; } catch (e) { tl.copy.textContent = 'Select & copy'; }
     setTimeout(() => { tl.copy.textContent = 'Copy all'; }, 1500);
   });
-  tabHooks.leave.transcription = () => { stopLive(); stopRecording(); trPlayer.stop(); };
 
   // =====================================================================
   // Echo: speak → transcribe → speak back
@@ -947,7 +948,13 @@
     ec.turns.innerHTML = '<div class="placeholder">Each turn shows what was heard and the reply that was spoken back, with timings.</div>';
     Object.assign(echoStats, { count: 0, asr: [], tts: [], turn: [] }); updateEchoStats();
   });
-  tabHooks.leave.echo = stopEcho;
+
+  // Leaving a tab stops whatever it was doing (playback, recording, listening).
+  leaveTab = (name) => {
+    if (name === 'speech') spPlayer.stop();
+    else if (name === 'transcription') { stopLive(); stopRecording(); trPlayer.stop(); }
+    else if (name === 'echo') stopEcho();
+  };
 
   // ---- boot --------------------------------------------------------------
   window.addEventListener('pagehide', () => {

@@ -44,6 +44,7 @@ export PIPERTTS_PYTHON="${PIPERTTS_PYTHON:-}"
 # spawns supertonic_worker.py with the resolved interpreter; when it is absent
 # the engine is simply not offered.
 SUPERTONIC_PYTHON="${SUPERTONIC_PYTHON:-}"
+SUPERTONIC_VENV_EXPLICIT="${SUPERTONIC_VENV:-}"
 SUPERTONIC_VENV="${SUPERTONIC_VENV:-${EXAMPLE_DIR}/.venv-supertonic}"
 SHUTDOWN_GRACE_SECONDS="${SHUTDOWN_GRACE_SECONDS:-10}"
 # Explicit accelerator reset (the UI's "Reset MLA" button and the CLI's /reset).
@@ -362,6 +363,13 @@ resolve_supertonic_env() {
     [[ -n "${legacy}" ]] && models="${legacy}/models"
   fi
   [[ -n "${models}" ]] && export SUPERTONIC_MODELS_ROOT="${models}"
+  # The venv setup.sh built (persisted as app.tts.supertonic.venv when it was
+  # not the default); SUPERTONIC_VENV / SUPERTONIC_PYTHON in the environment win.
+  if [[ -z "${SUPERTONIC_VENV_EXPLICIT}" ]]; then
+    local venv
+    venv="$(_supertonic_config_value venv)"
+    [[ -n "${venv}" ]] && SUPERTONIC_VENV="${venv}"
+  fi
   if [[ -z "${SUPERTONIC_PYTHON}" && -x "${SUPERTONIC_VENV}/bin/python" ]]; then
     SUPERTONIC_PYTHON="${SUPERTONIC_VENV}/bin/python"
   fi

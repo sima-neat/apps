@@ -56,7 +56,8 @@ app:                         # Assistant web app settings.
 
   tts:                       # Server-side text-to-speech settings.
     supertonic:              # Supertonic 3, the MLA engine installed by setup.sh (optional).
-      models_root: /media/nvme/supertonic-tts/models   # Downloaded model files (the runtime venv is ./.venv-supertonic).
+      models_root: /media/nvme/supertonic-tts/models   # Downloaded model files.
+      venv: ""                                          # Runtime venv setup.sh built; empty = ./.venv-supertonic.
 
   rag:                       # Retrieval-augmented generation settings.
     enabled: false                             # Enable document retrieval.

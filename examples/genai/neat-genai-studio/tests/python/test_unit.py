@@ -88,6 +88,13 @@ def test_ui_config_reads_supertonic_paths(tmp_path) -> None:
         base + "  tts:\n    supertonic:\n      models_root: /data/st-models\n", encoding="utf-8")
     cfg = load_ui_config(with_paths, tmp_path)
     assert cfg.supertonic.models_root == "/data/st-models"
+    assert cfg.supertonic.venv == ""
+
+    custom_venv = tmp_path / "venv.yaml"
+    custom_venv.write_text(
+        base + "  tts:\n    supertonic:\n      models_root: /data/st-models\n"
+        "      venv: /data/st-venv\n", encoding="utf-8")
+    assert load_ui_config(custom_venv, tmp_path).supertonic.venv == "/data/st-venv"
 
     # A config written before the runtime was vendored named the parent dir.
     legacy = tmp_path / "legacy.yaml"
