@@ -65,6 +65,18 @@ to `~/.zshrc`. Answer the prompt, or set `CREATE_ALIAS=1`/`0` to skip it
 non-interactively; after it's added, `source ~/.bash_profile` (or open a new
 shell), then run `neat-ai`, `neat-ai --cli`, `neat-ai stop`, etc.
 
+On a board with a desktop (display, keyboard and mouse attached), `setup.sh`
+also offers a **desktop icon** (`CREATE_DESKTOP_ICON=1`/`0` non-interactively);
+it goes on the desktop and in the applications menu. Double-clicking it opens a
+terminal that runs `./run.sh --open-browser`: the Studio starts, or is found
+already running, and the default browser opens on it as soon as the UI
+answers. The first visit shows the browser's warning for the Studio's
+self-signed certificate; choose Advanced → proceed. Closing the terminal window
+(or Ctrl+C in it) stops the Studio; if startup fails, the window stays open with
+the error. The first double-click may ask to trust the launcher (XFCE:
+**Mark Executable**) unless `setup.sh` ran inside the logged-in desktop session.
+`./run.sh --clean` removes the icon along with the other generated files.
+
 > You can skip running `setup.sh` yourself: **`./run.sh` runs it automatically on
 > the first launch** if it hasn't completed. Opt out with `AUTO_SETUP=0` (it then
 > errors with a hint instead of installing).
@@ -158,7 +170,9 @@ to load or download a model. This is the fully decoupled mode.
 Start both the Neat OpenAI-compatible server (with the control API) and the Flask UI:
 
 ```bash
-./run.sh          # or `neat-ai` if you created the alias
+./run.sh                  # or `neat-ai` if you created the alias
+./run.sh --open-browser   # on the board's desktop: also open the UI in the browser
+./run.sh --backend-only   # API endpoints only, no web UI (see Backend-only mode)
 ```
 
 `run.sh` prints the web UI URL to open in a browser. Settings live behind the ⚙

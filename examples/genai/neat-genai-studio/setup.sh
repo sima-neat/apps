@@ -172,6 +172,11 @@ Environment:
                                 default: 1
   CREATE_ALIAS                  Create the neat-ai shell alias, 1 or 0.
                                 If unset, interactive setup prompts; otherwise 0.
+  CREATE_DESKTOP_ICON           Create the desktop icon / menu entry that starts
+                                the Studio and opens it in the browser, 1 or 0.
+                                If unset, interactive setup prompts (only where a
+                                desktop exists); otherwise 0. An installed icon
+                                is kept up to date on later runs.
   ALLOW_HUB_DOWNLOAD            Allow in-UI Hugging Face downloads, true or false
                                 default: true
   INSTALL_TTS_VOICES            Download Piper TTS voices, 1 or 0
@@ -714,9 +719,104 @@ maybe_create_alias() {
   info "Alias: ${C_DIM}neat-ai='${run_path}'${C_RESET}"
 }
 
+# Offer a desktop launcher (double-click icon + application menu entry) for a
+# user at the board with a display, keyboard and mouse. It runs
+# src/common/desktop-launch.sh in a terminal: the Studio starts (or is found
+# running) and the browser opens on the UI. Noninteractive setup only creates
+# it with CREATE_DESKTOP_ICON=1.
+desktop_entry() {
+  local launch="${EXAMPLE_DIR}/src/common/desktop-launch.sh"
+  local exec_line
+  if command -v x-terminal-emulator >/dev/null 2>&1; then
+    exec_line="Exec=x-terminal-emulator -T \"Neat GenAI Studio\" -e \"${launch}\""
+    printf '%s\n' "[Desktop Entry]" "Version=1.0" "Type=Application" "Name=Neat GenAI Studio" \
+      "Comment=Run LLMs, VLMs, speech-to-text and text-to-speech on the Modalix MLA" \
+      "${exec_line}" "Path=${EXAMPLE_DIR}" "Icon=${EXAMPLE_DIR}/src/python/ui/static/icons/neat-logo.png" \
+      "Terminal=false" "Categories=Development;Science;AudioVideo;" "Keywords=LLM;GenAI;SiMa;Modalix;Neat;" \
+      "StartupNotify=false"
+  else
+    printf '%s\n' "[Desktop Entry]" "Version=1.0" "Type=Application" "Name=Neat GenAI Studio" \
+      "Comment=Run LLMs, VLMs, speech-to-text and text-to-speech on the Modalix MLA" \
+      "Exec=\"${launch}\"" "Path=${EXAMPLE_DIR}" "Icon=${EXAMPLE_DIR}/src/python/ui/static/icons/neat-logo.png" \
+      "Terminal=true" "Categories=Development;Science;AudioVideo;" "Keywords=LLM;GenAI;SiMa;Modalix;Neat;" \
+      "StartupNotify=false"
+  fi
+}
+
+# XFCE (and other file managers) ask before running a launcher that is not
+# marked trusted; mark it through the desktop session's bus when one exists
+# (a user logged in at the board). Without a session the first double-click
+# asks once ("Mark Executable").
+_trust_launcher() {
+  local file="$1" bus="${DBUS_SESSION_BUS_ADDRESS:-}"
+  command -v gio >/dev/null 2>&1 || return 1
+  if [[ -z "${bus}" && -S "/run/user/$(id -u)/bus" ]]; then
+    bus="unix:path=/run/user/$(id -u)/bus"
+  fi
+  [[ -n "${bus}" ]] || return 1
+  DBUS_SESSION_BUS_ADDRESS="${bus}" gio set -t string "${file}" \
+    metadata::xfce-exe-checksum "$(sha256sum "${file}" | cut -d' ' -f1)" >/dev/null 2>&1 || return 1
+  DBUS_SESSION_BUS_ADDRESS="${bus}" gio set -t string "${file}" metadata::trusted true >/dev/null 2>&1 || true
+  return 0
+}
+
+maybe_create_desktop_icon() {
+  local apps_dir="${XDG_DATA_HOME:-${HOME}/.local/share}/applications"
+  local desktop_dir="${XDG_DESKTOP_DIR:-${HOME}/Desktop}"
+  if [[ ! -d "${desktop_dir}" && ! -d /usr/share/xsessions ]]; then
+    return 0                        # headless board: nothing to offer
+  fi
+  local want="${CREATE_DESKTOP_ICON:-}"
+  local installed="${apps_dir}/neat-genai-studio.desktop"
+  if [[ -z "${want}" && -f "${installed}" ]]; then
+    want=1                          # keep an existing launcher up to date
+  fi
+  if [[ -z "${want}" ]]; then
+    if [[ -t 0 ]]; then
+      read -r -p "Create a desktop icon that starts the Studio and opens it in the browser? [y/N] " want
+      case "${want}" in
+        y|Y|yes|YES) want=1 ;;
+        *) want=0 ;;
+      esac
+    else
+      want=0
+    fi
+  fi
+  if [[ "${want}" != "1" ]]; then
+    info "Desktop icon not created (set CREATE_DESKTOP_ICON=1 to enable it)."
+    return 0
+  fi
+
+  chmod +x "${EXAMPLE_DIR}/src/common/desktop-launch.sh" "${EXAMPLE_DIR}/run.sh" 2>/dev/null || true
+  local entry target changed=0 trusted=1
+  entry="$(desktop_entry)"
+  mkdir -p "${apps_dir}"
+  local -a targets=("${installed}")
+  [[ -d "${desktop_dir}" ]] && targets+=("${desktop_dir}/neat-genai-studio.desktop")
+  for target in "${targets[@]}"; do
+    if [[ ! -f "${target}" ]] || [[ "$(cat "${target}")" != "${entry}" ]]; then
+      printf '%s\n' "${entry}" > "${target}"
+      changed=1
+    fi
+    chmod 755 "${target}"
+    _trust_launcher "${target}" || trusted=0
+  done
+  command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "${apps_dir}" >/dev/null 2>&1 || true
+  if [[ "${changed}" == "1" ]]; then
+    ok "Desktop icon installed: ${C_DIM}${targets[*]}${C_RESET}"
+  else
+    ok "Desktop icon already installed."
+  fi
+  info "Double-click ${C_BOLD}Neat GenAI Studio${C_RESET} on the desktop (or in the applications menu): a terminal starts the Studio and the browser opens on it. Closing that terminal stops the Studio."
+  if [[ "${trusted}" != "1" ]]; then
+    info "On the first double-click the desktop may ask to trust the launcher; choose ${C_BOLD}Mark Executable${C_RESET} (or Launch Anyway)."
+  fi
+}
+
 section "Done"
 ok "Install complete."
 maybe_create_alias
+maybe_create_desktop_icon
 info "Config: ${C_DIM}${CONFIG_PATH}${C_RESET}"
 info "Start the studio with ${C_BOLD}./run.sh${C_RESET}"
 printf '\n'

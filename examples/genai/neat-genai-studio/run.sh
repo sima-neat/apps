@@ -104,6 +104,10 @@ PID_FILE="${RUN_PID_FILE:-${EXAMPLE_DIR}/.neat-genai-studio.pid}"
 MODE_FILE="${PID_FILE%.pid}.mode"
 # --backend-only: model server + the Studio's API endpoints, no web UI.
 BACKEND_ONLY="${BACKEND_ONLY:-0}"
+# --open-browser: open the web UI in the desktop browser once it answers (the
+# desktop icon uses this). With a running instance it just opens the browser.
+OPEN_BROWSER="${OPEN_BROWSER:-0}"
+BROWSER_WAITER_PID=""
 STOP_TIMEOUT="${STOP_TIMEOUT:-20}"
 # Terminal chat instead of the web UI (set by `./run.sh --cli`).
 CLI_MODE="${CLI_MODE:-0}"
@@ -194,6 +198,49 @@ web_url() {
   printf '%s://%s:%s' "${scheme}" "${host}" "${port}"
 }
 
+# The UI URL for a browser on this board: localhost instead of the LAN address
+# when the UI listens on every interface (it keeps working if the IP changes).
+local_web_url() {
+  local url; url="$(web_url)" || return 1
+  local host; host="$(awk '/^  web:/{f=1;next} f&&/^  [a-z]/{f=0} f&&/host:/{print $2;exit}' "${CONFIG_PATH}" 2>/dev/null || true)"
+  if [[ -z "${host}" || "${host}" == "0.0.0.0" || "${host}" == "::" ]]; then
+    url="$(printf '%s' "${url}" | sed -E 's#^(https?)://[^:/]+#\1://localhost#')"
+  fi
+  printf '%s' "${url}"
+}
+
+# Wait until the web UI answers (its /health route), up to UI_READY_TIMEOUT s.
+wait_for_ui() {
+  local url="$1" deadline=$((SECONDS + ${UI_READY_TIMEOUT:-300}))
+  command -v curl >/dev/null 2>&1 || { sleep 20; return 0; }
+  while [[ "${SECONDS}" -lt "${deadline}" ]]; do
+    curl -k -s -o /dev/null --max-time 2 "${url}/health" && return 0
+    sleep 1
+  done
+  return 1
+}
+
+# Open `url` in the desktop's default browser, detached from this terminal so
+# closing it does not take the browser along.
+open_url() {
+  local url="$1"
+  if [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
+    warn "No graphical display in this session; open ${url} in a browser yourself."
+    return 1
+  fi
+  local opener
+  for opener in xdg-open x-www-browser sensible-browser; do
+    if command -v "${opener}" >/dev/null 2>&1; then
+      setsid "${opener}" "${url}" >/dev/null 2>&1 < /dev/null &
+      ok "Opened ${C_ACCENT}${url}${C_RESET} in the browser."
+      info "First visit: the browser warns about the Studio's self-signed certificate; choose Advanced → proceed (it is this board)."
+      return 0
+    fi
+  done
+  warn "No browser opener (xdg-open) found; open ${url} yourself."
+  return 1
+}
+
 # Aligned "label   value" line for the System section.
 _kv() { printf '   %s%-12s%s %s\n' "${C_MUTED}" "$1" "${C_RESET}" "$2"; }
 
@@ -277,6 +324,9 @@ Usage:
   ./run.sh --chat [MODEL]      Terminal chat; load MODEL and chat (skips the menu).
   ./run.sh --download [REPO]   Terminal chat; download REPO (or prompt) first.
   ./run.sh --benchmark [MODEL] Terminal chat; benchmark MODEL (or prompt). --bench.
+  ./run.sh --open-browser
+                      Start (if not running) and open the web UI in the
+                      desktop browser once it answers; used by the desktop icon.
   ./run.sh stop       Cleanly stop a running instance.
   ./run.sh status     Report whether the studio is running.
   ./run.sh update     Update to the latest version (preserves models, config,
@@ -431,6 +481,11 @@ do_clean() {
     "${PYTHON_DIR}/ui/assets/piper-plus" \
     "${PYTHON_DIR}/ui/assets/mms-tts-kor"; do
     [[ -e "$t" ]] && targets+=("$t")
+  done
+  # The desktop icon / menu entry setup.sh installed for this checkout.
+  for t in "${XDG_DATA_HOME:-${HOME}/.local/share}/applications/neat-genai-studio.desktop" \
+           "${XDG_DESKTOP_DIR:-${HOME}/Desktop}/neat-genai-studio.desktop"; do
+    [[ -f "$t" ]] && grep -qF "${EXAMPLE_DIR}/" "$t" && targets+=("$t")
   done
   # Downloaded rhasspy .onnx voices (committed .onnx.json configs are kept),
   # __pycache__ dirs, and any *.log files the app produced.
@@ -614,6 +669,7 @@ case "${1:-run}" in
   -h|--help|help) usage; exit 0 ;;
   --cli|cli) CLI_MODE=1 ;;   # fall through to launch, then run the terminal chat
   --backend-only|backend-only|backend) BACKEND_ONLY=1 ;;   # fall through to launch, headless
+  --open-browser|open) OPEN_BROWSER=1 ;;   # fall through to launch, then open the UI
   # CLI shortcuts: launch the terminal chat straight into a mode. An optional
   # second argument (a model name, or HF repo for download) is forwarded too.
   --chat|chat)
@@ -828,6 +884,7 @@ cleanup() {
   trap '' INT TERM
 
   step "Shutting down Neat GenAI Studio…"
+  if [[ -n "${BROWSER_WAITER_PID}" ]]; then kill "${BROWSER_WAITER_PID}" 2>/dev/null || true; fi
 
   # Graceful: both Python entrypoints handle SIGTERM — the model server releases
   # its models on the MLA and the UI stops the RAG worker before exiting.
@@ -869,6 +926,16 @@ cleanup() {
 if [[ -f "${PID_FILE}" ]]; then
   existing="$(cat "${PID_FILE}" 2>/dev/null || true)"
   if [[ -n "${existing}" ]] && kill -0 "${existing}" 2>/dev/null; then
+    if [[ "${OPEN_BROWSER}" == "1" ]]; then
+      ok "Neat GenAI Studio is already running (pid ${existing})."
+      if [[ "$(cat "${MODE_FILE}" 2>/dev/null || echo web)" == "backend-only" ]]; then
+        warn "It runs in backend-only mode (no web UI); stop it and start ./run.sh to use the UI."
+        exit 1
+      fi
+      _url="$(local_web_url || true)"
+      [[ -n "${_url}" ]] && open_url "${_url}"
+      exit 0
+    fi
     errln "Neat GenAI Studio is already running (pid ${existing})."
     info "Run './run.sh stop' first, or './run.sh status' to check."
     exit 1
@@ -879,6 +946,9 @@ fi
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+# Closing the terminal window (the desktop icon runs us in one) stops the Studio
+# cleanly instead of leaving the setsid'd processes behind.
+trap 'exit 129' HUP
 
 # Record this instance so `./run.sh stop` can find it (removed by cleanup).
 echo "$$" > "${PID_FILE}"
@@ -1075,6 +1145,18 @@ if [[ -n "${_url}" && "${BACKEND_ONLY}" == "1" ]]; then
   info "CORS for browser front ends: ${BACKEND_CORS_ORIGINS:-off (set BACKEND_CORS_ORIGINS to allow origins)}."
 elif [[ -n "${_url}" ]]; then
   info "Open ${C_ACCENT}${C_BOLD}${_url}${C_RESET} in your browser once it finishes loading."
+fi
+if [[ "${OPEN_BROWSER}" == "1" ]]; then
+  if [[ "${BACKEND_ONLY}" == "1" ]]; then
+    warn "--open-browser is ignored in backend-only mode (there is no web UI)."
+  else
+    _local_url="$(local_web_url || true)"
+    if [[ -n "${_local_url}" ]]; then
+      info "The browser opens on ${C_ACCENT}${_local_url}${C_RESET} as soon as the UI answers."
+      ( if wait_for_ui "${_local_url}"; then open_url "${_local_url}"; else warn "The web UI did not answer in time; open ${_local_url} yourself."; fi ) &
+      BROWSER_WAITER_PID="$!"
+    fi
+  fi
 fi
 info "Press ${C_BOLD}Ctrl+C${C_RESET} to stop, or run ${C_BOLD}./run.sh stop${C_RESET} from another shell."
 printf '\n'
