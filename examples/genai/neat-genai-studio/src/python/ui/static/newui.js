@@ -6318,10 +6318,17 @@ const SOLUTIONS_MODES = {
   health:   { label: 'SiMaSentry-Med' },
   safety:   { label: 'SiMaSentry-Safe' },
   security: { label: 'SiMaSentry-Sec' },
+  // Audio API playgrounds: same-origin pages that call /v1/audio/* directly.
+  // They need no chat model and take no provider/model parameters.
+  speech:        { label: 'Speech API', kind: 'audio' },
+  transcription: { label: 'Transcription API', kind: 'audio' },
 };
 let _solutionsEntered = false;   // did we request browser fullscreen on open?
 
 function buildSolutionsHarnessUrl(mode) {
+  if (SOLUTIONS_MODES[mode] && SOLUTIONS_MODES[mode].kind === 'audio') {
+    return `/solutions/${mode}/index.html`;
+  }
   // provider=ollama keeps the harness from requiring an API key; URL params
   // override its localStorage so every open reflects the current model.
   const params = new URLSearchParams({ provider: 'ollama', base_url: '/v1/chat/completions' });
@@ -6401,7 +6408,8 @@ function openSolutionsHarness(mode) {
   if (!SOLUTIONS_MODES[mode]) return;
   const model = getSelectedChatModel();
   const vision = model && selectedChatModelSupportsVision();
-  if (!vision) {
+  // The audio playgrounds talk to the TTS/ASR engines, not the chat model.
+  if (!vision && SOLUTIONS_MODES[mode].kind !== 'audio') {
     const msg = model
       ? `${model} has no vision support — the ${SOLUTIONS_MODES[mode].label} image features won't work. Open anyway?`
       : `No model is loaded — ${SOLUTIONS_MODES[mode].label} cannot chat until one is loaded in Settings. Open anyway?`;

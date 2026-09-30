@@ -452,8 +452,19 @@ After a CLI run it offers to export the results to a `.csv` or `.json` path.
 Ctrl+C stops the current run. (Accuracy tasks like hellaswag/piqa still need the
 host `llima-benchmark` CLI.)
 
-### SiMaSentry Solutions (Med / Safe / Sec demo harnesses)
+### SiMaSentry Solutions (Med / Safe / Sec demo harnesses) and API playgrounds
 The Studio includes three AI harnesses. **SiMaSentry-Med** provides clinical VLM chat and diagnostic imaging tools. **SiMaSentry-Safe** handles PPE and hazard inspection with live camera zones. **SiMaSentry-Sec** supports SOC threat analysis and change detection. Open them from the shield icon in the header.
+
+The same grid offers two **audio API playgrounds** for trying the endpoints
+independently of the chat: **Speech API** (`/solutions/speech/`) calls
+`GET /v1/audio/voices` to offer every engine, voice and language, then
+`POST /v1/audio/speech`, plays and downloads the WAV, and shows the `X-*`
+headers plus a `curl` equivalent; **Transcription API**
+(`/solutions/transcription/`) records from the microphone or takes a file and
+calls `POST /v1/audio/transcriptions` in any of the three response formats,
+showing the transcript, its metadata and a `curl` equivalent. They need no chat
+model, keep everything on this origin, and make no external requests (the
+microphone needs the HTTPS page the Studio serves by default).
 
 - Picking a card launches the harness full-screen, **auto-wired to the currently
   loaded model** through a same-origin `/v1/chat/completions` proxy (the Studio

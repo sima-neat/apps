@@ -1096,3 +1096,8 @@ body.is-returning .mc-main {
 @media (orientation: portrait) and (max-width: 560px) {
   .mc-status-list { grid-template-columns: 1fr; }
 }
+
+/* Audio API playground cards (inline SVG icons instead of product PNGs). */
+.mc-card[data-accent="speech"] { --card-accent: var(--sec-accent); --card-soft: var(--sec-soft); }
+.mc-card[data-accent="transcription"] { --card-accent: var(--med-accent); --card-soft: var(--med-soft); }
+.mc-card-icon-svg { color: var(--card-accent, var(--mc-accent)); display: inline-flex; }

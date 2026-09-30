@@ -7,6 +7,8 @@
 | `?mode=medical`  | **SiMaSentry-Med**  ([`health/`](health/README.md))   | *Clinical-Grade Edge Radiology* — symptom triage, radiology / medical-image review, vision + voice. | `gemma3` |
 | `?mode=safety`   | **SiMaSentry-Safe** ([`safety/`](safety/README.md))   | *Industrial PPE & Hazard Compliance* — factory-floor hazard detection from camera, image, or video. | `gemma3` |
 | `?mode=security` | **SiMaSentry-Sec**  ([`security/`](security/README.md)) | *High-Security SOC & Change Detection* — threat assessment from CCTV stills and video frames. | `gemma3` |
+| `?mode=speech` | **Speech API** ([`speech/`](speech/README.md)) | Text-to-speech playground for the Studio's `POST /v1/audio/speech` (engines, voices, speed, headers, curl). Ignores the chat settings. | n/a |
+| `?mode=transcription` | **Transcription API** ([`transcription/`](transcription/README.md)) | Speech-to-text playground for `POST /v1/audio/transcriptions` (microphone or file, all response formats, curl). Ignores the chat settings. | n/a |
 
 Open `index.html` and pick a card. The harness loads embedded inside Mission Control via an iframe; click **Home** in the harness header to return.
 
