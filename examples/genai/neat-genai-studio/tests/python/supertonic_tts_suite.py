@@ -246,6 +246,19 @@ class VendoredRuntimeTests(unittest.TestCase):
         self.assertIn("ko", text.AVAILABLE_LANGUAGES)
         self.assertNotIn("zh", text.AVAILABLE_LANGUAGES)
 
+    def test_emoji_pattern_strips_emoji_and_keeps_text(self):
+        # The class was rewritten as ordered ranges (CodeQL); same code points.
+        text = self._load("text")
+        strip = text._EMOJI_PATTERN.sub
+        self.assertEqual(strip("", "hi \U0001f600\U0001f1fa\U0001f1f8 there \u2600"), "hi  there ")
+        self.assertEqual(strip("", "caf\u00e9 \u2013 na\u00efve 100%"), "caf\u00e9 \u2013 na\u00efve 100%")
+        for cp in (0x2600, 0x26ff, 0x2700, 0x27bf, 0x1f1e6, 0x1f1ff, 0x1f300, 0x1f5ff, 0x1f600, 0x1f64f,
+                   0x1f680, 0x1f6ff, 0x1f700, 0x1f77f, 0x1f780, 0x1f7ff, 0x1f800, 0x1f8ff, 0x1f900, 0x1f9ff,
+                   0x1fa00, 0x1fa6f, 0x1fa70, 0x1faff):
+            self.assertTrue(text._EMOJI_PATTERN.fullmatch(chr(cp)), hex(cp))
+        for cp in (0x25ff, 0x27c0, 0x1f1e5, 0x1f200, 0x1fb00):
+            self.assertIsNone(text._EMOJI_PATTERN.fullmatch(chr(cp)), hex(cp))
+
     def test_no_absolute_paths_in_the_vendored_code(self):
         for path in self.PACKAGE.glob("*.py"):
             self.assertNotIn("/media/nvme", path.read_text(encoding="utf-8"), path)

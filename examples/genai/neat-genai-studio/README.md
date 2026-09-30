@@ -314,7 +314,9 @@ HTTP and cannot be reached from an HTTPS page).
 POST /v1/audio/speech            JSON
   input            required, up to 4096 characters
   model            default | supertonic | piper-plus | piper-tts   (a named engine is used or refused, never swapped)
-  voice            Supertonic speaker F1-F5 / M1-M5; other engines report the loaded voice
+  voice            Supertonic speaker F1-F5 / M1-M5, per request. The Piper engines speak with the voice
+                   loaded for the language (chosen in the Studio's voice settings): omit voice or name
+                   that one; any other Piper voice answers 400 rather than a different voice
   speed            0.25-4.0 (default 1.0); clamped to the engine's range, effective value in X-Speed
   response_format  wav (the only format produced; anything else answers 400)
   language         extension: ISO code the text is in (default en)

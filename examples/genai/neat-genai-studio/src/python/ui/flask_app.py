@@ -1001,22 +1001,38 @@ class TalkController:
         dispatched to exactly that engine (``EngineUnavailable`` when it cannot
         serve ``language``); other values use the router, which raises the same
         when no engine can speak the language. ``voice`` selects a Supertonic
-        speaker (F1-F5, M1-M5) for this request only.
+        speaker (F1-F5, M1-M5) for this request only. The Piper engines have one
+        loaded voice per language (chosen in the Studio's voice settings), so a
+        ``voice`` naming anything else is refused with ``AudioApiError`` (400)
+        rather than answered with a different voice than was asked for.
         """
         if not text:
             raise ValueError("No text provided for TTS synthesis.")
 
         start_time = time.time()
         language, piper = self.engine_for_request(engine, language)
+        requested_voice = (voice or '').strip()
+        if requested_voice.lower() == 'default':
+            requested_voice = ''
 
         sanitized_text = self._sanitize_for_tts(text)
         # ``speed`` is per request: it never touches the utterance speed the UI
         # slider set (that used to be a side effect of the API).
         if piper is self.st:
-            used_voice = voice if voice in self.st.voices else self.st.voice
-            buffer = piper.synthesize(sanitized_text, language=language, voice=voice, speed=speed)
+            if requested_voice and requested_voice not in self.st.voices:
+                raise AudioApiError(
+                    400, f"voice '{requested_voice}' is not a Supertonic voice "
+                    f"(one of {', '.join(self.st.voices)})", 'voice')
+            used_voice = requested_voice or self.st.voice
+            buffer = piper.synthesize(sanitized_text, language=language, voice=used_voice, speed=speed)
         else:
             used_voice = self._engine_voice(piper) or self._piper_voice_id(language)
+            if requested_voice and requested_voice != used_voice:
+                raise AudioApiError(
+                    400, f"voice '{requested_voice}' is not the voice loaded for "
+                    f"{self._engine_name(piper)} in '{language}' ('{used_voice}'); "
+                    f"Piper voices are selected in the Studio's voice settings, "
+                    f"omit 'voice' to use the loaded one", 'voice')
             buffer = piper.synthesize(sanitized_text, language=language, speed=speed)
         elapsed_time = time.time() - start_time
         audio_duration = self._get_wav_duration(buffer)
@@ -1079,7 +1095,8 @@ class TalkController:
                 'languages': sorted({lang for v in tts_installed for lang in v['languages']}),
                 'voices': [
                     {'id': v['id'], 'label': v['label'], 'language': v['languages'][0],
-                     'installed': True, 'loaded': v['languages'][0] in self.pipers}
+                     'installed': True, 'loaded': v['languages'][0] in self.pipers,
+                     'default': v['id'] == self._piper_voice_id(v['languages'][0])}
                     for v in tts_installed
                 ],
             }
@@ -2405,6 +2422,8 @@ class AppContext:
                     result = self.talk_ctrl.tts_on_demand(
                         req.text, language=req.language, engine=req.model,
                         voice=req.voice, speed=req.speed)
+                except AudioApiError as exc:          # a voice the engine cannot honour
+                    return jsonify(exc.payload()), exc.status
                 except TalkController.EngineUnavailable as exc:
                     # An explicitly requested engine that cannot serve this
                     # request is refused, never silently swapped. The message is
@@ -2456,10 +2475,12 @@ class AppContext:
             try:
                 req = parse_transcription_form(
                     request.form, has_file=upload is not None,
-                    size=request.content_length)
+                    size=_upload_size(upload))
             except AudioApiError as exc:
                 return jsonify(exc.payload()), exc.status
-            audio_bytes = upload.read()
+            # Bounded read: the file's own bytes are what the 25 MiB limit is
+            # about (the multipart envelope around them does not count).
+            audio_bytes = upload.stream.read(MAX_TRANSCRIPTION_BYTES + 1)
             if not audio_bytes:
                 return jsonify({'error': 'Uploaded file is empty.', 'param': 'file'}), 400
             if len(audio_bytes) > MAX_TRANSCRIPTION_BYTES:
@@ -3093,6 +3114,22 @@ class TranscriptionError(Exception):
         super().__init__(message)
         self.status = status
         self.message = message
+
+
+def _upload_size(upload):
+    """Byte length of a werkzeug ``FileStorage`` without consuming it (``None``
+    when the stream cannot be measured); used for the 25 MiB upload limit."""
+    if upload is None:
+        return None
+    try:
+        stream = upload.stream
+        position = stream.tell()
+        stream.seek(0, os.SEEK_END)
+        size = stream.tell() - position
+        stream.seek(position)
+        return size
+    except (AttributeError, OSError, ValueError):
+        return None
 
 
 def transcribe_audio(audio_bytes, *, language='auto', model=None, filename='audio.wav',

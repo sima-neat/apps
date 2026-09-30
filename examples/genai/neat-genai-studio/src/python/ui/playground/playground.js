@@ -410,18 +410,25 @@
     const w = wanted || listing.default_engine || 'default';
     select.value = [...select.options].some((o) => o.value === w) ? w : 'default';
   }
+  // Supertonic voices are per request. The Piper engines speak with the voice
+  // loaded for the language (chosen in the Studio's voice settings) and the
+  // speech route refuses any other, so those are listed but not selectable.
   function fillVoiceSelect(select, engineKey, wanted) {
     const entry = engineEntry(engineKey);
+    const perRequest = engineKey === 'supertonic';
     select.innerHTML = '';
-    select.appendChild(option('default', entry ? 'engine default' : 'router choice'));
+    select.appendChild(option('default', entry ? (perRequest ? 'engine default' : 'voice loaded for the language') : 'router choice'));
     (entry && entry.voices || []).forEach((v) => {
       const bits = [v.label || v.id];
       if (v.language) bits.push(v.language);
-      if (v.installed === false) bits.push('downloads on select');
       if (v.default) bits.push('current');
-      select.appendChild(option(v.id, bits.join(' · ')));
+      else if (!perRequest) bits.push('select in Studio settings');
+      else if (v.installed === false) bits.push('downloads on select');
+      const o = option(v.id, bits.join(' · '));
+      if (!perRequest && !v.default) o.disabled = true;
+      select.appendChild(o);
     });
-    if (wanted && [...select.options].some((o) => o.value === wanted)) select.value = wanted;
+    if (wanted && [...select.options].some((o) => o.value === wanted && !o.disabled)) select.value = wanted;
   }
   function engineLanguages(engineKey) {
     const entry = engineEntry(engineKey);
@@ -659,8 +666,9 @@
         $('m-lang').textContent = data.language ? `${data.language}${data.language_detected ? ' (detected)' : ''}` : '–';
         $('m-nospeech').textContent = fmt(data.no_speech_prob, 3);
         $('m-logprob').textContent = fmt(data.avg_logprob, 3);
-        $('m-ignored').innerHTML = data.ignored == null ? '–'
-          : (data.ignored ? `<span class="badge warn">would be ignored · ${data.reason || ''}</span>` : '<span class="badge ok">accepted</span>');
+        const verdict = $('m-ignored'); verdict.textContent = '';
+        if (data.ignored == null) verdict.textContent = '–';
+        else verdict.appendChild(el('span', data.ignored ? 'badge warn' : 'badge ok', data.ignored ? `would be ignored · ${data.reason || ''}` : 'accepted'));
       }
       tr.result.classList.toggle('empty', !text);
       tr.result.textContent = text || '(empty transcript)';
