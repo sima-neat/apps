@@ -188,6 +188,7 @@ static AppConfig parse_args(int argc, char** argv) {
     cfg.match         = yaml_cfg.match;
     cfg.overlay       = yaml_cfg.overlay;
     cfg.is_live       = looks_live(cfg.input_uri);
+    if (cfg.test_mode) cfg.insight_host.clear();
     return cfg;
 }
 

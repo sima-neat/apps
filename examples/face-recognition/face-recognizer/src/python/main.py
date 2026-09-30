@@ -974,6 +974,7 @@ def main(argv=None) -> int:
     if args.scrfd_model:  cfg.scrfd_model   = args.scrfd_model
     if args.arcface_model:cfg.arcface_model = args.arcface_model
     if args.max_frames:   cfg.max_frames    = args.max_frames
+    if args.test:         cfg.insight_host  = ""
 
     try:
         _load_runtime_deps()
