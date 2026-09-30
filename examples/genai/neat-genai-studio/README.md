@@ -108,13 +108,13 @@ Other useful environment variables:
 - `TTS_LANGUAGES`: comma- or space-separated catalogued server-TTS languages to
   install. Interactive setup prompts when this is unset; non-interactive setup
   defaults to `en,de,es,fr,it,ja,pt,vi,zh`.
-- `INSTALL_SUPERTONIC`, `SUPERTONIC_REPO_ROOT`, `SUPERTONIC_APP_ROOT`,
-  `SUPERTONIC_REPO_REVISION`: install the MLA-accelerated Supertonic 3 engine
-  (default on), where its checkout and runtime live, and the reviewed upstream
-  commit a fresh clone is pinned to; see
-  [Text-to-speech](#text-to-speech-voices--languages). The paths are written to
-  `config.local.yaml` under `app.tts.supertonic`, so `run.sh` finds a
-  non-default install without re-exporting them.
+- `INSTALL_SUPERTONIC`, `SUPERTONIC_MODELS_ROOT`, `SUPERTONIC_VENV`: install the
+  MLA-accelerated Supertonic 3 engine (default on), where its model files are
+  stored (default `/media/nvme/supertonic-tts/models`) and where its runtime venv
+  is built (default `./.venv-supertonic`); see
+  [Text-to-speech](#text-to-speech-voices--languages). The models root is
+  written to `config.local.yaml` under `app.tts.supertonic`, so `run.sh` finds a
+  non-default location without re-exporting it.
 - `TTS_OPTIONAL_VOICES`: optional voice ids to install, for example
   `mera,en_US-ljspeech-medium,zh_CN-chaowen-medium`.
 
@@ -268,7 +268,7 @@ to reclaim space or start fresh:
 ```bash
 ./run.sh --clean        # lists what will be removed, then asks to confirm
 ./run.sh --clean -y     # skip the prompt (or CLEAN_YES=1)
-CLEAN_SUPERTONIC=1 ./run.sh --clean   # also remove the Supertonic runtime + checkout
+CLEAN_SUPERTONIC=1 ./run.sh --clean   # also remove the downloaded Supertonic model files
 ```
 
 It stops a running instance first and lists each target with the total size
@@ -491,8 +491,8 @@ selector in Settings.
   `supertonic`, `piper-plus` or `piper-tts` is dispatched to exactly that
   engine and answers 503 when it cannot speak the requested `language`; any
   other value (`default`, `tts-1`, …) goes through the router below.
-- **Supertonic 3** is the MLA-accelerated engine from
-  [supertonic-sima](https://github.com/florianvoss-commit/supertonic-sima). It
+- **Supertonic 3** is the MLA-accelerated engine (runtime vendored under
+  `src/python/ui/supertonic_sima/`, models from Hugging Face). It
   is preferred for every language it speaks whenever its runtime is installed
   (see below), synthesizes at a real-time factor of about 0.07 on a Modalix
   DevKit, and offers ten speakers (F1-F5, M1-M5) under **Settings → Supertonic
@@ -551,29 +551,31 @@ selector in Settings.
   reply. Without Supertonic every installed engine loads at startup as before.
 - **Supertonic runs in its own venv and worker too.** Its runtime needs `pyneat`,
   `onnxruntime` and `numpy 1.26`, which the UI venv does not carry, so `setup.sh`
-  clones [supertonic-sima](https://github.com/florianvoss-commit/supertonic-sima)
-  to `SUPERTONIC_REPO_ROOT` (default `/media/nvme/repos/supertonic-sima`) and runs
-  its `scripts/setup_devkit.sh`, which builds the venv under
-  `SUPERTONIC_APP_ROOT` (default `/media/nvme/supertonic-tts`) and downloads the
-  pinned upstream CPU models plus the precompiled MLA packages from
-  [florianvoss/supertonic-3-sima](https://huggingface.co/florianvoss/supertonic-3-sima).
-  No on-device compilation is needed. A fresh clone is checked out at the
-  reviewed commit in `SUPERTONIC_REPO_REVISION` before its installer runs, and
-  an install is only treated as complete when every file the worker needs is
-  present, so an interrupted download is repaired on the next `setup.sh`. Both
-  paths are persisted under `app.tts.supertonic` in `config.local.yaml`;
-  `run.sh` and the UI read them from there, with the environment variables as
-  overrides, and `run.sh` exports `SUPERTONIC_PYTHON` for the worker. Set
-  `INSTALL_SUPERTONIC=0` to skip it; when the runtime is missing the engine is
-  simply not offered and the CPU engines behave as before. An existing checkout
-  is only used when it is clean and at the reviewed revision (a clean one at
-  another revision is moved there; `SUPERTONIC_ALLOW_UNPINNED=1` runs it as
-  is). `./run.sh --clean` keeps the runtime and checkout, since they live
-  outside the example directory and are shared with the standalone
-  supertonic-sima app; `CLEAN_SUPERTONIC=1` removes them too. The worker holds the
-  two Supertonic models on the MLA next to the chat and speech-to-text models.
-  An accelerator reset (**Reset MLA**) tears the worker down; the next spoken
-  reply respawns it.
+  builds `./.venv-supertonic` (requirements in
+  `src/python/requirements-supertonic.txt`, plus the PyNeat wheel fetched with
+  `sima-cli neat install core -t pyneat`) and downloads the model files with
+  the venv's `hf`: the upstream CPU models and voice styles from
+  [Supertone/supertonic-3](https://huggingface.co/Supertone/supertonic-3) and
+  the precompiled MLA packages from
+  [florianvoss/supertonic-3-sima](https://huggingface.co/florianvoss/supertonic-3-sima),
+  both at commit revisions pinned in `setup.sh` and verified by SHA-256. No
+  on-device compilation is needed, and nothing is cloned from an external
+  repository: the runtime package itself is vendored in
+  `src/python/ui/supertonic_sima/` (see its README for provenance and how to
+  refresh it). An install is only treated as complete when every file the
+  worker needs is present, so an interrupted download is repaired on the next
+  `setup.sh`. The models root is persisted under `app.tts.supertonic.models_root`
+  in `config.local.yaml`; `run.sh` and the UI read it from there, with
+  `SUPERTONIC_MODELS_ROOT` in the environment as the override, and `run.sh`
+  exports `SUPERTONIC_PYTHON` for the worker. Set `INSTALL_SUPERTONIC=0` to skip
+  it; when the runtime is missing the engine is simply not offered and the CPU
+  engines behave as before. `./run.sh --clean` removes the venv and keeps the
+  model files (they live outside the example directory); `CLEAN_SUPERTONIC=1`
+  removes them too. Installs made before the runtime was vendored keep working:
+  their `app_root` config key maps to `<app_root>/models`, and the old venv and
+  checkout can simply be deleted. The worker holds the two Supertonic models on
+  the MLA next to the chat and speech-to-text models. An accelerator reset
+  (**Reset MLA**) tears the worker down; the next spoken reply respawns it.
 
 The authoritative reviewed catalog is `src/python/ui/voice_catalog.json`. Each
 entry has a compact licence label, pinned upstream repository revision, and

@@ -37,12 +37,14 @@ if [[ -z "${PIPERTTS_PYTHON:-}" && -x "${EXAMPLE_DIR}/.venv-pipertts/bin/python"
   PIPERTTS_PYTHON="${EXAMPLE_DIR}/.venv-pipertts/bin/python"
 fi
 export PIPERTTS_PYTHON="${PIPERTTS_PYTHON:-}"
-# Supertonic 3 (MLA TTS) lives in its own checkout + venv (see setup.sh). Its
-# paths are persisted under app.tts.supertonic in the local config; explicit
-# environment values override them. Resolved by resolve_supertonic_env once the
-# config path is final. The UI spawns supertonic_worker.py with the resolved
-# interpreter; when it is absent the engine is simply not offered.
+# Supertonic 3 (MLA TTS): the vendored runtime runs from ./.venv-supertonic (see
+# setup.sh); its model files' location is persisted under app.tts.supertonic in
+# the local config, with SUPERTONIC_MODELS_ROOT in the environment overriding.
+# Resolved by resolve_supertonic_env once the config path is final. The UI
+# spawns supertonic_worker.py with the resolved interpreter; when it is absent
+# the engine is simply not offered.
 SUPERTONIC_PYTHON="${SUPERTONIC_PYTHON:-}"
+SUPERTONIC_VENV="${SUPERTONIC_VENV:-${EXAMPLE_DIR}/.venv-supertonic}"
 SHUTDOWN_GRACE_SECONDS="${SHUTDOWN_GRACE_SECONDS:-10}"
 # Explicit accelerator reset (the UI's "Reset MLA" button and the CLI's /reset).
 # Never runs on its own: normal startup and load failures leave the board runtime
@@ -248,7 +250,7 @@ system_info() {
   _kv "neat-llima" "${llima_ver:-unknown}"
   [[ -n "${runtime_ver}" ]] && _kv "neat-runtime" "${runtime_ver}"
   _kv "python" "${py_ver:-unknown}"
-  _kv "supertonic" "$([[ -n "${SUPERTONIC_PYTHON}" ]] && echo "${SUPERTONIC_APP_ROOT_RESOLVED:-}" || echo "not installed")"
+  _kv "supertonic" "$([[ -n "${SUPERTONIC_PYTHON}" ]] && echo "models ${SUPERTONIC_MODELS_ROOT_RESOLVED:-}" || echo "not installed")"
   _kv "host" "$(uname -sm 2>/dev/null || echo unknown)"
 }
 
@@ -352,20 +354,20 @@ _supertonic_config_value() {
   ' "${CONFIG_PATH}" 2>/dev/null || true
 }
 resolve_supertonic_env() {
-  local repo app
-  repo="${SUPERTONIC_REPO_ROOT:-$(_supertonic_config_value repo_root)}"
-  app="${SUPERTONIC_APP_ROOT:-$(_supertonic_config_value app_root)}"
-  [[ -n "${repo}" ]] && export SUPERTONIC_REPO_ROOT="${repo}"
-  [[ -n "${app}" ]] && export SUPERTONIC_APP_ROOT="${app}"
-  app="${app:-/media/nvme/supertonic-tts}"
-  repo="${repo:-/media/nvme/repos/supertonic-sima}"
-  if [[ -z "${SUPERTONIC_PYTHON}" && -x "${app}/.venv/bin/python" ]]; then
-    SUPERTONIC_PYTHON="${app}/.venv/bin/python"
+  local models legacy
+  models="${SUPERTONIC_MODELS_ROOT:-$(_supertonic_config_value models_root)}"
+  if [[ -z "${models}" ]]; then
+    # Pre-vendoring config/env: the models lived under <app_root>/models.
+    legacy="${SUPERTONIC_APP_ROOT:-$(_supertonic_config_value app_root)}"
+    [[ -n "${legacy}" ]] && models="${legacy}/models"
+  fi
+  [[ -n "${models}" ]] && export SUPERTONIC_MODELS_ROOT="${models}"
+  if [[ -z "${SUPERTONIC_PYTHON}" && -x "${SUPERTONIC_VENV}/bin/python" ]]; then
+    SUPERTONIC_PYTHON="${SUPERTONIC_VENV}/bin/python"
   fi
   export SUPERTONIC_PYTHON
-  # Effective paths (defaults applied) for run.sh's own use: the banner and --clean.
-  SUPERTONIC_APP_ROOT_RESOLVED="${app}"
-  SUPERTONIC_REPO_ROOT_RESOLVED="${repo}"
+  # Effective path (default applied) for run.sh's own use: the banner and --clean.
+  SUPERTONIC_MODELS_ROOT_RESOLVED="${models:-/media/nvme/supertonic-tts/models}"
 }
 # Remove app-generated data (venvs, generated config, RAG db, downloaded TTS
 # voices, pid, caches, logs). Confirms first unless -y/--yes or CLEAN_YES=1.
@@ -382,14 +384,15 @@ do_clean() {
   # with the standalone supertonic-sima app), so it is kept unless asked for.
   resolve_supertonic_env
   local -a targets=() t
-  if [[ "${CLEAN_SUPERTONIC:-0}" == "1" ]]; then
-    for t in "${SUPERTONIC_APP_ROOT_RESOLVED}" "${SUPERTONIC_REPO_ROOT_RESOLVED}"; do
-      [[ -n "$t" && -e "$t" ]] && targets+=("$t")
-    done
+  # The Supertonic venv is app-generated and always removed; the downloaded
+  # model files live outside the example directory and are kept unless asked.
+  if [[ "${CLEAN_SUPERTONIC:-0}" == "1" && -e "${SUPERTONIC_MODELS_ROOT_RESOLVED}" ]]; then
+    targets+=("${SUPERTONIC_MODELS_ROOT_RESOLVED}")
   fi
   for t in \
     "${DEFAULT_APP_VENV}" \
     "${EXAMPLE_DIR}/.venv-pipertts" \
+    "${SUPERTONIC_VENV}" \
     "${DEFAULT_LOCAL_CONFIG}" \
     "${RESET_TOKEN_FILE}" \
     "${PID_FILE}" \
@@ -423,11 +426,8 @@ do_clean() {
   local catalog; catalog="$(sed -n 's/^[[:space:]]*catalog_dir:[[:space:]]*\(.*\)/\1/p' \
     "${CONFIG_PATH}" 2>/dev/null | head -n1)"
   [[ -n "${catalog}" ]] && info "Downloaded models under ${C_DIM}${catalog}${C_RESET} are kept."
-  if [[ "${CLEAN_SUPERTONIC:-0}" != "1" ]]; then
-    local st_kept=()
-    [[ -e "${SUPERTONIC_APP_ROOT_RESOLVED}" ]] && st_kept+=("${SUPERTONIC_APP_ROOT_RESOLVED}")
-    [[ -e "${SUPERTONIC_REPO_ROOT_RESOLVED}" ]] && st_kept+=("${SUPERTONIC_REPO_ROOT_RESOLVED}")
-    [[ ${#st_kept[@]} -gt 0 ]] && info "Supertonic runtime under ${C_DIM}${st_kept[*]}${C_RESET} is kept (CLEAN_SUPERTONIC=1 removes it)."
+  if [[ "${CLEAN_SUPERTONIC:-0}" != "1" && -e "${SUPERTONIC_MODELS_ROOT_RESOLVED}" ]]; then
+    info "Supertonic models under ${C_DIM}${SUPERTONIC_MODELS_ROOT_RESOLVED}${C_RESET} are kept (CLEAN_SUPERTONIC=1 removes them)."
   fi
 
   if [[ "${yes}" != "-y" && "${yes}" != "--yes" && "${CLEAN_YES:-0}" != "1" ]]; then
@@ -529,6 +529,7 @@ do_update() {
     rsync -a --delete-delay --delay-updates \
       --exclude='/.venv/' \
       --exclude='/.venv-pipertts/' \
+      --exclude='/.venv-supertonic/' \
       --exclude='/config.local.yaml' \
       --exclude='/.local-certs/' \
       --exclude='/.neat-genai-studio.pid' \

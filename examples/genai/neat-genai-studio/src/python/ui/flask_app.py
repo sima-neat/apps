@@ -506,9 +506,9 @@ class TalkController:
     def _init_supertonic(self):
         """Load the Supertonic 3 MLA engine when its runtime is installed."""
         if not supertonic_tts.available():
-            logging.info("Supertonic runtime not installed under %s — MLA TTS unavailable "
-                         "(clone supertonic-sima and re-run setup.sh).",
-                         supertonic_tts.app_root())
+            logging.info("Supertonic runtime not installed (venv %s, models %s) — MLA TTS "
+                         "unavailable; run setup.sh with INSTALL_SUPERTONIC=1.",
+                         supertonic_tts.DEFAULT_VENV, supertonic_tts.models_root())
             return
         try:
             st = supertonic_tts.SupertonicTTS(voice=self.st_voice_default())
@@ -3157,8 +3157,7 @@ def run_ui(app_cfg):
     # Supertonic paths, before the TTS engines initialize: an explicit
     # environment override (run.sh exports one only when set) wins, then the
     # persisted config, then the module defaults.
-    os.environ.setdefault("SUPERTONIC_REPO_ROOT", app_cfg.supertonic.repo_root)
-    os.environ.setdefault("SUPERTONIC_APP_ROOT", app_cfg.supertonic.app_root)
+    os.environ.setdefault("SUPERTONIC_MODELS_ROOT", app_cfg.supertonic.models_root)
     genai_app = AppContext()
     genai_app.initialize()
     genai_app.update_from_config(app_cfg)

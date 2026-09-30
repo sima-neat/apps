@@ -164,41 +164,47 @@ class EnvironmentDiscoveryTests(unittest.TestCase):
     def test_not_available_when_paths_are_missing(self):
         with mock.patch.dict(os.environ, {
             "SUPERTONIC_PYTHON": "/nonexistent/python",
-            "SUPERTONIC_REPO_ROOT": "/nonexistent/repo",
-            "SUPERTONIC_APP_ROOT": "/nonexistent/app",
+            "SUPERTONIC_MODELS_ROOT": "/nonexistent/models",
         }):
             self.assertIsNone(supertonic_tts._supertonic_python())
             self.assertFalse(supertonic_tts.available())
 
-    def test_available_requires_venv_checkout_and_models(self):
+    def test_available_requires_venv_and_models(self):
         import tempfile
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            app = root / "app"
-            repo = root / "repo"
-            (app / ".venv" / "bin").mkdir(parents=True)
-            (app / ".venv" / "bin" / "python").write_text("")
-            env = {
-                "SUPERTONIC_REPO_ROOT": str(repo),
-                "SUPERTONIC_APP_ROOT": str(app),
-            }
-            env.pop("SUPERTONIC_PYTHON", None)
-            with mock.patch.dict(os.environ, env, clear=False):
-                os.environ.pop("SUPERTONIC_PYTHON", None)
-                self.assertEqual(
-                    supertonic_tts._supertonic_python(),
-                    str(app / ".venv" / "bin" / "python"),
-                )
-                self.assertFalse(supertonic_tts.available())   # no checkout yet
-                (repo / "app" / "supertonic_sima").mkdir(parents=True)
-                (repo / "app" / "supertonic_sima" / "__init__.py").write_text("")
+            venv_py = root / ".venv-supertonic" / "bin" / "python"
+            venv_py.parent.mkdir(parents=True)
+            venv_py.write_text("")
+            models = root / "models"
+            with mock.patch.dict(os.environ, {
+                "SUPERTONIC_PYTHON": str(venv_py),
+                "SUPERTONIC_MODELS_ROOT": str(models),
+            }):
+                self.assertEqual(supertonic_tts._supertonic_python(), str(venv_py))
+                self.assertEqual(supertonic_tts.models_root(), models)
                 self.assertFalse(supertonic_tts.available())   # no models yet
-                (app / "models" / "supertonic-3" / "onnx").mkdir(parents=True)
-                (app / "models" / "supertonic-3" / "onnx" / "tts.json").write_text("{}")
-                (app / "models" / "supertonic-3-sima").mkdir(parents=True)
-                (app / "models" / "supertonic-3-sima"
+                (models / "supertonic-3" / "onnx").mkdir(parents=True)
+                (models / "supertonic-3" / "onnx" / "tts.json").write_text("{}")
+                (models / "supertonic-3-sima").mkdir(parents=True)
+                (models / "supertonic-3-sima"
                  / "supertonic_vector_field_sima_mpk.tar.gz").write_bytes(b"")
                 self.assertTrue(supertonic_tts.available())
+
+    def test_default_venv_is_beside_the_example(self):
+        # src/python/ui/supertonic_tts.py -> <example>/.venv-supertonic
+        self.assertEqual(supertonic_tts.DEFAULT_VENV.name, ".venv-supertonic")
+        self.assertTrue((supertonic_tts.DEFAULT_VENV.parent / "setup.sh").is_file())
+
+    def test_legacy_app_root_maps_to_its_models_subdir(self):
+        env = {"SUPERTONIC_APP_ROOT": "/data/old-supertonic"}
+        with mock.patch.dict(os.environ, env, clear=False):
+            os.environ.pop("SUPERTONIC_MODELS_ROOT", None)
+            self.assertEqual(supertonic_tts.models_root(), Path("/data/old-supertonic/models"))
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("SUPERTONIC_MODELS_ROOT", None)
+            os.environ.pop("SUPERTONIC_APP_ROOT", None)
+            self.assertEqual(supertonic_tts.models_root(), Path(supertonic_tts.DEFAULT_MODELS_ROOT))
 
     def test_worker_spawn_fails_clearly_without_runtime(self):
         with mock.patch.dict(os.environ, {"SUPERTONIC_PYTHON": "/nonexistent/python"}):
@@ -206,6 +212,43 @@ class EnvironmentDiscoveryTests(unittest.TestCase):
             with self.assertRaises(RuntimeError) as ctx:
                 supertonic_tts.SupertonicTTS()
             self.assertIn("Supertonic runtime venv not found", str(ctx.exception))
+
+
+class VendoredRuntimeTests(unittest.TestCase):
+    """The vendored supertonic_sima package: importable pieces without the
+    runtime, and no absolute paths left behind."""
+
+    PACKAGE = Path(supertonic_tts.__file__).resolve().parent / "supertonic_sima"
+
+    def _load(self, name):
+        # Load a single module by file so the package __init__ (which pulls in
+        # the engine and therefore pyneat) is not executed on a host.
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            f"vendored_{name}", self.PACKAGE / f"{name}.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_runtime_closure_is_present_with_provenance_headers(self):
+        for name in ("__init__", "audio", "engine", "inputs", "text"):
+            path = self.PACKAGE / f"{name}.py"
+            self.assertTrue(path.is_file(), path)
+            head = path.read_text(encoding="utf-8")[:400]
+            self.assertIn("Vendored from", head)
+            self.assertIn("3b837b3e1b6a378ab8c24c3c04b079429b67e237", head)
+
+    def test_text_contract_matches_the_client(self):
+        text = self._load("text")
+        self.assertEqual(tuple(text.AVAILABLE_VOICES), supertonic_tts.VOICES)
+        self.assertAlmostEqual(text.MIN_SPEED, 0.7)
+        self.assertAlmostEqual(text.MAX_SPEED, 2.0)
+        self.assertIn("ko", text.AVAILABLE_LANGUAGES)
+        self.assertNotIn("zh", text.AVAILABLE_LANGUAGES)
+
+    def test_no_absolute_paths_in_the_vendored_code(self):
+        for path in self.PACKAGE.glob("*.py"):
+            self.assertNotIn("/media/nvme", path.read_text(encoding="utf-8"), path)
 
 
 class ClientConfigurationTests(unittest.TestCase):

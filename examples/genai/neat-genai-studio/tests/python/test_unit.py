@@ -60,6 +60,7 @@ from supertonic_tts_suite import (  # noqa: E402,F401
     DurationFallbackTests as SupertonicDurationFallbackTests,
     EnvironmentDiscoveryTests as SupertonicEnvironmentDiscoveryTests,
     SegmentTextTests as SupertonicSegmentTextTests,
+    VendoredRuntimeTests as SupertonicVendoredRuntimeTests,
 )
 from voice_catalog_suite import (  # noqa: E402,F401
     test_catalog_has_simple_licenses_and_pinned_sources,
@@ -76,24 +77,30 @@ pytestmark = pytest.mark.unit
 
 @pytest.mark.unit
 def test_ui_config_reads_supertonic_paths(tmp_path) -> None:
-    """app.tts.supertonic persists the machine-specific Supertonic paths that
-    setup.sh wrote, and defaults apply when the section is absent."""
+    """app.tts.supertonic persists the machine-specific Supertonic models root
+    that setup.sh wrote; a pre-vendoring app_root maps to its models/ subdir and
+    defaults apply when the section is absent."""
     from shared.config import load_ui_config
 
     base = "app:\n  web:\n    port: 5000\n"
     with_paths = tmp_path / "with.yaml"
     with_paths.write_text(
+        base + "  tts:\n    supertonic:\n      models_root: /data/st-models\n", encoding="utf-8")
+    cfg = load_ui_config(with_paths, tmp_path)
+    assert cfg.supertonic.models_root == "/data/st-models"
+
+    # A config written before the runtime was vendored named the parent dir.
+    legacy = tmp_path / "legacy.yaml"
+    legacy.write_text(
         base + "  tts:\n    supertonic:\n      repo_root: /data/st-repo\n"
         "      app_root: /data/st-app\n", encoding="utf-8")
-    cfg = load_ui_config(with_paths, tmp_path)
-    assert cfg.supertonic.repo_root == "/data/st-repo"
-    assert cfg.supertonic.app_root == "/data/st-app"
+    cfg = load_ui_config(legacy, tmp_path)
+    assert cfg.supertonic.models_root == "/data/st-app/models"
 
     without = tmp_path / "without.yaml"
     without.write_text(base, encoding="utf-8")
     cfg = load_ui_config(without, tmp_path)
-    assert cfg.supertonic.repo_root == "/media/nvme/repos/supertonic-sima"
-    assert cfg.supertonic.app_root == "/media/nvme/supertonic-tts"
+    assert cfg.supertonic.models_root == "/media/nvme/supertonic-tts/models"
 
 
 @pytest.mark.unit
@@ -128,4 +135,5 @@ __all__ = [
     "SupertonicDurationFallbackTests",
     "SupertonicEnvironmentDiscoveryTests",
     "SupertonicSegmentTextTests",
+    "SupertonicVendoredRuntimeTests",
 ]

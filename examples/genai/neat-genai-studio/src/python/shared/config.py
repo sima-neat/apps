@@ -68,11 +68,10 @@ class RagConfig:
 
 @dataclass(frozen=True)
 class SupertonicConfig:
-    """Where the optional Supertonic 3 (MLA TTS) runtime lives. Both paths are
-    machine-specific, so setup.sh persists them here and run.sh and the UI
-    read the same values; environment variables still override."""
-    repo_root: str = "/media/nvme/repos/supertonic-sima"
-    app_root: str = "/media/nvme/supertonic-tts"
+    """Where the Supertonic 3 (MLA TTS) model files live. Machine-specific, so
+    setup.sh persists it here and run.sh and the UI read the same value;
+    SUPERTONIC_MODELS_ROOT in the environment still overrides."""
+    models_root: str = "/media/nvme/supertonic-tts/models"
 
 
 @dataclass(frozen=True)
@@ -168,10 +167,11 @@ def load_server_config(path: Path = DEFAULT_SERVER_CONFIG, apps_root: Path = PAT
 
 def _load_supertonic_config(raw: dict) -> SupertonicConfig:
     defaults = SupertonicConfig()
-    return SupertonicConfig(
-        repo_root=str(raw.get("repo_root") or defaults.repo_root),
-        app_root=str(raw.get("app_root") or defaults.app_root),
-    )
+    models_root = raw.get("models_root")
+    if not models_root and raw.get("app_root"):
+        # Pre-vendoring config: the models lived under <app_root>/models.
+        models_root = str(Path(str(raw["app_root"])) / "models")
+    return SupertonicConfig(models_root=str(models_root or defaults.models_root))
 
 
 def load_ui_config(path: Path = DEFAULT_UI_CONFIG, apps_root: Path = PATH_ROOT) -> AppConfig:

@@ -1,0 +1,10 @@
+# Isolated venv for the Supertonic 3 (MLA) text-to-speech runtime
+# (.venv-supertonic, built by setup.sh). The vendored runtime under
+# src/python/ui/supertonic_sima/ pins numpy 1.x and this onnxruntime; the UI venv
+# carries numpy 2.x, so the engine runs in supertonic_worker.py from this venv.
+# PyNeat is installed separately by setup.sh from the wheel that
+# `sima-cli neat install core -t pyneat` provides (with --no-deps, so it cannot
+# move these pins). huggingface_hub supplies the `hf` downloader for the models.
+numpy==1.26.4
+onnxruntime==1.22.1
+huggingface_hub==0.34.4

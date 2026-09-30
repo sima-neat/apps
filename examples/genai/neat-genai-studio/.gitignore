@@ -2,6 +2,7 @@
 config.local.yaml
 .venv/
 .venv-pipertts/
+.venv-supertonic/
 .neat-genai-studio.pid
 .neat-genai-server.log
 .neat-genai-server.status
