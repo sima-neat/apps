@@ -866,10 +866,19 @@
     updateTrPreview();
     setStatus(tr.status, '');
   });
-  tr.file.addEventListener('change', () => { const f = tr.file.files && tr.file.files[0]; if (f) { setClip(f, f.name, f.type); setStatus(tr.status, 'File selected.'); } });
+  // A chosen or dropped file replaces the clip: discard any recording in
+  // progress (or still waiting on the permission prompt) so its onstop cannot
+  // overwrite the file afterwards.
+  function useFile(f, message) {
+    if (!f) return;
+    stopRecording({ discard: true });
+    setClip(f, f.name, f.type);
+    setStatus(tr.status, message);
+  }
+  tr.file.addEventListener('change', () => useFile(tr.file.files && tr.file.files[0], 'File selected.'));
   ['dragenter', 'dragover'].forEach((ev) => tr.drop.addEventListener(ev, (e) => { e.preventDefault(); tr.drop.classList.add('over'); }));
   ['dragleave', 'drop'].forEach((ev) => tr.drop.addEventListener(ev, (e) => { e.preventDefault(); tr.drop.classList.remove('over'); }));
-  tr.drop.addEventListener('drop', (e) => { const f = e.dataTransfer.files && e.dataTransfer.files[0]; if (f) { setClip(f, f.name, f.type); setStatus(tr.status, 'File dropped.'); } });
+  tr.drop.addEventListener('drop', (e) => useFile(e.dataTransfer.files && e.dataTransfer.files[0], 'File dropped.'));
   [tr.language, tr.format].forEach((e) => e.addEventListener('change', updateTrPreview));
   tr.model.addEventListener('input', updateTrPreview);
   tr.run.addEventListener('click', transcribe);
