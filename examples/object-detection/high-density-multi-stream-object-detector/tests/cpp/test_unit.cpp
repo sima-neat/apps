@@ -811,6 +811,94 @@ bool test_detection_watchdog_tracks_deadlines() {
   return ok;
 }
 
+// ---------------------------------------------------------------------------
+// Configuration rules --validate-config-only can reach without a model or a
+// stream (Refs #526). Each case is the minimal valid config with exactly one
+// value broken, and asserts the message that names the rule. The rules the
+// cases above already own (stream cap, worker count, inflight and queue
+// limits, liveness timeouts, removed keys, probe skip, port overlap, visible
+// stream cap) are not repeated.
+// ---------------------------------------------------------------------------
+struct RuleCase {
+  const char* name;
+  const char* model_extra;     // extra lines under model:, e.g. "  labels: ''\n"
+  const char* input_extra;     // extra lines under input:
+  const char* inference_extra; // extra lines under inference:
+  const char* extra_sections;  // extra top-level sections, e.g. "runtime:\n  warmup_frames: -1\n"
+  const char* insight_extra;   // extra lines under output.insight:
+  const char* model_path;
+  const char* host;
+  const char* message;
+};
+
+std::string rule_config(const RuleCase& c) {
+  return std::string("model:\n  path: '") + c.model_path + "'\n" + c.model_extra + "streams:\n" +
+         stream_entries(1) + "input:\n  tcp: true\n  latency_ms: 100\n" + c.input_extra +
+         "inference:\n  workers: 1\n" + c.inference_extra + c.extra_sections +
+         "output:\n  insight:\n    host: '" + c.host + "'\n" + c.insight_extra;
+}
+
+bool test_configuration_rules_are_enforced(const std::string& binary) {
+  const std::vector<RuleCase> cases = {
+      {"model-path-empty", "", "", "", "", "", "", "127.0.0.1", "model.path must be set"},
+      {"model-labels-empty", "  labels: ''\n", "", "", "", "", kModelPath, "127.0.0.1",
+       "model.labels must be set"},
+      {"latency-negative", "", "  latency_ms: -1\n", "", "", "", kModelPath, "127.0.0.1",
+       "input.latency_ms must be >= 0"},
+      {"width-negative", "", "  width: -1\n", "", "", "", kModelPath, "127.0.0.1",
+       "input.width must be >= 0"},
+      {"height-negative", "", "  height: -1\n", "", "", "", kModelPath, "127.0.0.1",
+       "input.height must be >= 0"},
+      {"fps-negative", "", "  fps: -1\n", "", "", "", kModelPath, "127.0.0.1",
+       "input.fps must be >= 0"},
+      {"width-without-height", "", "  width: 640\n", "", "", "", kModelPath, "127.0.0.1",
+       "input.width and input.height must be set together"},
+      {"decoder-buffers-zero", "", "  decoder_buffers: 0\n", "", "", "", kModelPath, "127.0.0.1",
+       "input.decoder_buffers must be > 0"},
+      {"decoder-buffers-above", "", "  decoder_buffers: 65\n", "", "", "", kModelPath, "127.0.0.1",
+       "input.decoder_buffers must be <= 64"},
+      {"decoder-input-buffers-zero", "", "  decoder_input_buffers: 0\n", "", "", "", kModelPath,
+       "127.0.0.1", "input.decoder_input_buffers must be > 0"},
+      {"queue-depth-zero", "", "", "  queue_depth: 0\n", "", "", kModelPath, "127.0.0.1",
+       "inference.queue_depth must be > 0"},
+      {"queue-depth-above", "", "", "  queue_depth: 33\n", "", "", kModelPath, "127.0.0.1",
+       "inference.queue_depth must be <= 32"},
+      {"inflight-per-stream-above", "", "", "  max_inflight_per_stream: 33\n", "", "", kModelPath,
+       "127.0.0.1", "inference.max_inflight_per_stream must be <= 32"},
+      {"min-score-above", "", "", "  min_score: 1.5\n", "", "", kModelPath, "127.0.0.1",
+       "inference.min_score must be between 0 and 1"},
+      {"nms-below", "", "", "  nms_iou: -0.5\n", "", "", kModelPath, "127.0.0.1",
+       "inference.nms_iou must be between 0 and 1"},
+      {"max-detections-zero", "", "", "  max_detections: 0\n", "", "", kModelPath, "127.0.0.1",
+       "inference.max_detections must be > 0"},
+      {"warmup-negative", "", "", "", "runtime:\n  warmup_frames: -1\n", "", kModelPath,
+       "127.0.0.1", "runtime.warmup_frames must be >= 0"},
+      {"initial-timeout-zero", "", "", "", "runtime:\n  initial_detection_timeout_ms: 0\n", "",
+       kModelPath, "127.0.0.1", "runtime.initial_detection_timeout_ms must be > 0"},
+      {"insight-host-empty", "", "", "", "", "", kModelPath, "", "output.insight.host must be set"},
+      {"video-port-base-zero", "", "", "", "", "    video_port_base: 0\n", kModelPath, "127.0.0.1",
+       "output.insight.video_port_base must be > 0"},
+      {"video-port-base-above", "", "", "", "", "    video_port_base: 65536\n", kModelPath,
+       "127.0.0.1", "output.insight.video_port_base must be <= 65535"},
+      {"metadata-port-base-zero", "", "", "", "", "    metadata_port_base: 0\n", kModelPath,
+       "127.0.0.1", "output.insight.metadata_port_base must be > 0"},
+      {"metadata-port-base-above", "", "", "", "", "    metadata_port_base: 65536\n", kModelPath,
+       "127.0.0.1", "output.insight.metadata_port_base must be <= 65535"},
+      {"visible-streams-below-minus-one", "", "", "", "", "    max_visible_streams: -2\n",
+       kModelPath, "127.0.0.1", "output.insight.max_visible_streams must be >= -1"},
+  };
+  bool ok = true;
+  for (const RuleCase& c : cases) {
+    const fs::path config_path = write_config(std::string("rule_") + c.name, rule_config(c));
+    const auto result =
+        spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
+    ok &= expect_true(result.exit_code != 0, std::string(c.name) + " is rejected") &&
+          expect_contains(result.stderr_text, c.message, std::string(c.name) + " names its rule");
+    remove_dir(config_path.parent_path().string());
+  }
+  return ok;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -864,6 +952,7 @@ int main(int argc, char** argv) {
   ok &= test_validate_config_only_rejects_fps_scheduler_knob(binary);
   ok &= test_validate_config_only_rejects_legacy_fan_in_policy(binary);
   ok &= test_validate_config_only_rejects_invalid_decoder_tuning(binary);
+  ok &= test_configuration_rules_are_enforced(binary);
   ok &= test_detection_watchdog_tracks_deadlines();
   return ok ? 0 : 1;
 }

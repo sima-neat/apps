@@ -602,6 +602,11 @@ def load_app_config(config_path: Path) -> AppConfig:
 
     model_path_value = string_or(model, "path")
     labels_path_value = string_or(model, "labels", "coco_label.txt")
+    # Checked on the raw value: Path("") is ".", so the same rule in
+    # validate_config would accept an empty value and the run would fail
+    # later with "labels file does not exist: .".
+    if not labels_path_value:
+        raise ValueError("model.labels must be set")
 
     cfg = AppConfig(
         model_path=(

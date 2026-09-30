@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import importlib.util
 import json
 import sys
@@ -218,3 +219,232 @@ def test_segmentation_metadata_contains_polygons(mask_grid_size):
     assert segment["mask_format"] == "polygon"
     assert len(segment["mask"]) >= 3
     assert all(0 <= x < 1280 and 0 <= y < 720 for x, y in segment["mask"])
+
+
+
+# ---------------------------------------------------------------------------
+# Configuration handling and option validation (Refs #526).
+# Each test starts from VALID_CONFIG and breaks exactly one thing, so a failure
+# names the rule that fired rather than "config rejected". The model-variant
+# choice and the segmentation mask grid are owned by the tests above.
+# ---------------------------------------------------------------------------
+
+VALID_CONFIG = {
+    "model": {
+        "task": "detection",
+        "labels": "labels.txt",
+        "detection": {
+            "variant": "small",
+            "small": {"backbone": "small-b.tar.gz", "transformer": "small-t.tar.gz"},
+            "medium": {"backbone": "medium-b.tar.gz", "transformer": "medium-t.tar.gz"},
+        },
+        "segmentation": {"backbone": "seg-b.tar.gz", "transformer": "seg-t.tar.gz"},
+    },
+    "source": {
+        "rtsp_url": "rtsp://127.0.0.1:8554/src1",
+        "codec": "h264",
+        "tcp": True,
+        "latency_ms": 100,
+        "width": 0,
+        "height": 0,
+        "fps": 0,
+    },
+    "inference": {
+        "frames": 0,
+        "detection": {"min_score": 0.5, "max_detections": 100},
+        "segmentation": {"min_score": 0.3, "max_segments": 24, "mask_threshold": 0.08, "mask_grid_size": 640},
+    },
+    "output": {"insight": {"host": "127.0.0.1", "video_port": 9000, "metadata_port": 9100}},
+}
+
+
+def write_full_config(tmp_path: Path, overrides=None, *, root=None) -> Path:
+    """Write VALID_CONFIG with `overrides` applied as ((section, ..., key), value)."""
+    raw = copy.deepcopy(VALID_CONFIG) if root is None else root
+    for path, value in (overrides or []):
+        target = raw
+        for key in path[:-1]:
+            target = target[key]
+        target[path[-1]] = value
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+    return config_path
+
+
+@pytest.mark.unit
+class TestValidBaseline:
+    def test_the_baseline_config_loads(self, tmp_path):
+        """If this breaks, every rejection test below is testing the wrong thing."""
+        cfg = main.load_config(write_full_config(tmp_path))
+
+        assert cfg.task == "detection"
+        assert cfg.backbone == "small-b.tar.gz"
+        assert cfg.rtsp_url == "rtsp://127.0.0.1:8554/src1"
+        assert cfg.insight_host == "127.0.0.1"
+
+    def test_omitted_optional_values_fall_back_to_documented_defaults(self, tmp_path):
+        raw = {
+            "model": {
+                "labels": "labels.txt",
+                "detection": {"small": {"backbone": "small-b.tar.gz", "transformer": "small-t.tar.gz"}},
+            },
+            "source": {"rtsp_url": "rtsp://127.0.0.1:8554/src1"},
+            # inference.<task> must exist as a mapping; every value inside it may be omitted.
+            "inference": {"detection": {}},
+            "output": {"insight": {"host": "127.0.0.1"}},
+        }
+
+        cfg = main.load_config(write_full_config(tmp_path, root=raw))
+
+        assert cfg.task == "detection"
+        assert cfg.variant == "small"
+        assert cfg.input_size == 512
+        assert cfg.feature_size == 32
+        assert cfg.top_k == 300
+        assert cfg.codec == "h264"
+        assert cfg.tcp == True
+        assert cfg.latency_ms == 100
+        assert cfg.width == 0
+        assert cfg.height == 0
+        assert cfg.fps == 0
+        assert cfg.frames == 0
+        assert cfg.min_score == pytest.approx(0.5)
+        assert cfg.max_results == 100
+        # Mask settings are read for the segmentation task; see TestSegmentationTask.
+        assert cfg.video_port == 9000
+        assert cfg.metadata_port == 9100
+
+
+REJECTED = [
+    pytest.param(('model', 'task'), 'tracking', 'model.task must be detection or segmentation', id='task-unsupported'),
+    pytest.param(('model', 'detection', 'small', 'backbone'), '', 'model.detection backbone and transformer must be set', id='backbone-empty'),
+    pytest.param(('model', 'labels'), '', 'model.labels must be set', id='labels-empty'),
+    pytest.param(('source', 'rtsp_url'), 'http://127.0.0.1:8080/stream', 'source.rtsp_url must be an RTSP URL', id='rtsp-url-not-rtsp'),
+    pytest.param(('source', 'codec'), 'vp9', 'source.codec must be h264/avc, h265/hevc, or mjpeg', id='codec-unsupported'),
+    pytest.param(('source', 'latency_ms'), -1, 'source.latency_ms and inference.frames must be >= 0', id='latency-negative'),
+    pytest.param(('inference', 'frames'), -1, 'source.latency_ms and inference.frames must be >= 0', id='frames-negative'),
+    pytest.param(('source', 'width'), -1, 'source.width, source.height, and source.fps must be >= 0', id='width-negative'),
+    pytest.param(('source', 'height'), -1, 'source.width, source.height, and source.fps must be >= 0', id='height-negative'),
+    pytest.param(('source', 'fps'), -1, 'source.width, source.height, and source.fps must be >= 0', id='fps-negative'),
+    pytest.param(('inference', 'detection', 'min_score'), 1.01, 'inference.detection.min_score must be in [0, 1]', id='min-score-above'),
+    pytest.param(('inference', 'detection', 'min_score'), -0.01, 'inference.detection.min_score must be in [0, 1]', id='min-score-below'),
+    pytest.param(('inference', 'detection', 'max_detections'), 0, 'inference.detection.max_detections must be > 0', id='max-detections-zero'),
+    pytest.param(('output', 'insight', 'host'), '', 'output.insight.host must be set', id='insight-host-empty'),
+    pytest.param(('output', 'insight', 'video_port'), 0, 'Insight ports must be in [1, 65535]', id='video-port-zero'),
+    pytest.param(('output', 'insight', 'video_port'), 65536, 'Insight ports must be in [1, 65535]', id='video-port-above'),
+    pytest.param(('output', 'insight', 'metadata_port'), 0, 'Insight ports must be in [1, 65535]', id='metadata-port-zero'),
+]
+
+
+@pytest.mark.unit
+class TestRejectedValues:
+    @pytest.mark.parametrize(("path", "value", "message"), REJECTED)
+    def test_invalid_value_is_rejected_with_an_actionable_message(
+        self, tmp_path, path, value, message
+    ):
+        with pytest.raises(ValueError) as excinfo:
+            main.load_config(write_full_config(tmp_path, [(path, value)]))
+
+        assert message in str(excinfo.value)
+
+
+@pytest.mark.unit
+class TestBoundariesAreAccepted:
+    """An off-by-one that rejects a legal value is the failure nobody writes a test for."""
+
+    @pytest.mark.parametrize(
+        ("path", "value"),
+        [
+            (('inference', 'detection', 'min_score'), 0.0),
+            (('inference', 'detection', 'min_score'), 1.0),
+            (('source', 'latency_ms'), 0),
+            (('inference', 'frames'), 0),
+            (('source', 'width'), 0),
+            (('source', 'height'), 0),
+            (('source', 'fps'), 0),
+            (('inference', 'detection', 'max_detections'), 1),
+            (('output', 'insight', 'video_port'), 1),
+            (('output', 'insight', 'video_port'), 65535),
+            (('output', 'insight', 'metadata_port'), 1),
+        ],
+    )
+    def test_boundary_value_is_accepted(self, tmp_path, path, value):
+        main.load_config(write_full_config(tmp_path, [(path, value)]))
+
+
+@pytest.mark.unit
+class TestSegmentationTask:
+    """The segmentation task reads its own model pair and inference section."""
+
+    def test_the_segmentation_pair_and_limits_are_selected(self, tmp_path):
+        cfg = main.load_config(write_full_config(tmp_path, [(("model", "task"), "segmentation")]))
+
+        assert cfg.task == "segmentation"
+        assert cfg.backbone == "seg-b.tar.gz"
+        assert cfg.input_size == 432
+        assert cfg.top_k == 200
+        assert cfg.max_results == 24
+        assert cfg.min_score == pytest.approx(0.3)
+
+    def test_a_missing_segmentation_pair_is_rejected(self, tmp_path):
+        overrides = [(("model", "task"), "segmentation"), (("model", "segmentation", "transformer"), "")]
+
+        with pytest.raises(ValueError, match="model.segmentation backbone and transformer must be set"):
+            main.load_config(write_full_config(tmp_path, overrides))
+
+    def test_mask_defaults_apply_to_the_segmentation_task(self, tmp_path):
+        raw = {
+            "model": {
+                "labels": "labels.txt",
+                "task": "segmentation",
+                "segmentation": {"backbone": "seg-b.tar.gz", "transformer": "seg-t.tar.gz"},
+            },
+            "source": {"rtsp_url": "rtsp://127.0.0.1:8554/src1"},
+            "inference": {"segmentation": {}},
+            "output": {"insight": {"host": "127.0.0.1"}},
+        }
+
+        cfg = main.load_config(write_full_config(tmp_path, root=raw))
+
+        assert cfg.mask_threshold == pytest.approx(0.08)
+        assert cfg.mask_grid_size == 640
+
+    @pytest.mark.parametrize(("value",), [(0.0,), (1.0,)])
+    def test_mask_threshold_boundaries_are_accepted(self, tmp_path, value):
+        overrides = [(("model", "task"), "segmentation"), (("inference", "segmentation", "mask_threshold"), value)]
+
+        main.load_config(write_full_config(tmp_path, overrides))
+
+    @pytest.mark.parametrize(
+        ("key", "value", "message"),
+        [
+            ("min_score", 1.01, "inference.segmentation.min_score must be in [0, 1]"),
+            ("max_segments", 0, "inference.segmentation.max_segments must be > 0"),
+            ("mask_threshold", 1.01, "inference.segmentation.mask_threshold must be in [0, 1]"),
+        ],
+    )
+    def test_segmentation_limits_are_enforced(self, tmp_path, key, value, message):
+        overrides = [(("model", "task"), "segmentation"), (("inference", "segmentation", key), value)]
+
+        with pytest.raises(ValueError) as excinfo:
+            main.load_config(write_full_config(tmp_path, overrides))
+
+        assert message in str(excinfo.value)
+
+
+@pytest.mark.unit
+class TestMalformedConfigFiles:
+    def test_a_non_mapping_root_is_rejected(self, tmp_path):
+        """A list at the root used to escape as an AttributeError from `raw.get`."""
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text("- not\n- a mapping\n", encoding="utf-8")
+
+        with pytest.raises(ValueError, match="config root must be a mapping"):
+            main.load_config(config_path)
+
+    def test_an_empty_file_is_reported_as_missing_settings_not_a_crash(self, tmp_path):
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text("", encoding="utf-8")
+
+        with pytest.raises(ValueError, match="model must be a mapping"):
+            main.load_config(config_path)

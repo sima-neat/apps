@@ -1,4 +1,5 @@
 """Unit tests for single-stream-thermal-face-detector (Python)."""
+import copy
 import importlib.util
 import subprocess
 import sys
@@ -6,6 +7,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import yaml
 
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
@@ -154,3 +156,136 @@ def test_single_frame_profile_includes_frame_elapsed_time(monkeypatch, capsys):
     profile.add(pull_ms=6.0, decode_ms=3.0, metadata_ms=1.0, face_count=1)
 
     assert "output_fps=100.0" in capsys.readouterr().out
+
+
+
+# ---------------------------------------------------------------------------
+# Configuration handling and option validation (Refs #526).
+# Each test starts from VALID_CONFIG and breaks exactly one thing, so a failure
+# names the rule that fired rather than "config rejected". The empty labels
+# value is owned by TestArgParsing above through --validate-config-only.
+# ---------------------------------------------------------------------------
+
+main_module = load_example()
+
+VALID_CONFIG = {
+    "model": {"path": "model.tar.gz", "labels": "face_label.txt"},
+    "source": {"rtsp_url": "rtsp://127.0.0.1:8554/src1", "tcp": True, "latency_ms": 100},
+    "inference": {"frames": 0, "min_score": 0.25, "nms_iou": 0.45, "max_detections": 50},
+    "runtime": {"profile": False, "profile_interval": 100},
+    "output": {"insight": {"host": "127.0.0.1", "video_port": 9000, "metadata_port": 9100}},
+}
+
+
+def write_full_config(tmp_path: Path, overrides=None, *, root=None) -> Path:
+    """Write VALID_CONFIG with `overrides` applied as ((section, ..., key), value)."""
+    raw = copy.deepcopy(VALID_CONFIG) if root is None else root
+    for path, value in (overrides or []):
+        target = raw
+        for key in path[:-1]:
+            target = target[key]
+        target[path[-1]] = value
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+    return config_path
+
+
+@pytest.mark.unit
+class TestValidBaseline:
+    def test_the_baseline_config_loads(self, tmp_path):
+        """If this breaks, every rejection test below is testing the wrong thing."""
+        cfg = main_module.load_app_config(write_full_config(tmp_path))
+
+        assert cfg.model_path == "model.tar.gz"
+        assert cfg.rtsp_url == "rtsp://127.0.0.1:8554/src1"
+        assert cfg.insight_host == "127.0.0.1"
+
+    def test_omitted_optional_values_fall_back_to_documented_defaults(self, tmp_path):
+        raw = {
+            "model": {"path": "model.tar.gz"},
+            "source": {"rtsp_url": "rtsp://127.0.0.1:8554/src1"},
+            "output": {"insight": {"host": "127.0.0.1"}},
+        }
+
+        cfg = main_module.load_app_config(write_full_config(tmp_path, root=raw))
+
+        assert cfg.latency_ms == 200
+        assert cfg.tcp == True
+        assert cfg.frames == 0
+        assert cfg.min_score == pytest.approx(0.25)
+        assert cfg.nms_iou == pytest.approx(0.45)
+        assert cfg.max_detections == 50
+        assert cfg.profile == False
+        assert cfg.profile_interval == 100
+        assert cfg.video_port == 9000
+        assert cfg.metadata_port == 9100
+        assert cfg.labels_path.name == "face_label.txt"
+
+
+REJECTED = [
+    pytest.param(('source', 'rtsp_url'), '', 'source.rtsp_url must be set', id='rtsp-url-empty'),
+    pytest.param(('model', 'path'), '', 'model.path must be set', id='model-path-empty'),
+    pytest.param(('output', 'insight', 'host'), '', 'output.insight.host must be set', id='insight-host-empty'),
+    pytest.param(('source', 'latency_ms'), -1, 'source.latency_ms must be >= 0', id='latency-negative'),
+    pytest.param(('inference', 'frames'), -1, 'inference.frames must be >= 0', id='frames-negative'),
+    pytest.param(('inference', 'min_score'), -0.01, 'inference.min_score must be between 0 and 1', id='min-score-below'),
+    pytest.param(('inference', 'min_score'), 1.01, 'inference.min_score must be between 0 and 1', id='min-score-above'),
+    pytest.param(('inference', 'nms_iou'), -0.01, 'inference.nms_iou must be between 0 and 1', id='nms-below'),
+    pytest.param(('inference', 'nms_iou'), 1.01, 'inference.nms_iou must be between 0 and 1', id='nms-above'),
+    pytest.param(('inference', 'max_detections'), 0, 'inference.max_detections must be > 0', id='max-detections-zero'),
+    pytest.param(('runtime', 'profile_interval'), 0, 'runtime.profile_interval must be > 0', id='profile-interval-zero'),
+    pytest.param(('output', 'insight', 'video_port'), 0, 'output.insight.video_port must be > 0', id='video-port-zero'),
+    pytest.param(('output', 'insight', 'metadata_port'), 0, 'output.insight.metadata_port must be > 0', id='metadata-port-zero'),
+]
+
+
+@pytest.mark.unit
+class TestRejectedValues:
+    @pytest.mark.parametrize(("path", "value", "message"), REJECTED)
+    def test_invalid_value_is_rejected_with_an_actionable_message(
+        self, tmp_path, path, value, message
+    ):
+        with pytest.raises(ValueError) as excinfo:
+            main_module.load_app_config(write_full_config(tmp_path, [(path, value)]))
+
+        assert message in str(excinfo.value)
+
+
+@pytest.mark.unit
+class TestBoundariesAreAccepted:
+    """An off-by-one that rejects a legal value is the failure nobody writes a test for."""
+
+    @pytest.mark.parametrize(
+        ("path", "value"),
+        [
+            (('inference', 'min_score'), 0.0),
+            (('inference', 'min_score'), 1.0),
+            (('inference', 'nms_iou'), 0.0),
+            (('inference', 'nms_iou'), 1.0),
+            (('source', 'latency_ms'), 0),
+            (('inference', 'frames'), 0),
+            (('inference', 'max_detections'), 1),
+            (('runtime', 'profile_interval'), 1),
+        ],
+    )
+    def test_boundary_value_is_accepted(self, tmp_path, path, value):
+        main_module.load_app_config(write_full_config(tmp_path, [(path, value)]))
+
+
+@pytest.mark.unit
+class TestMalformedConfigFiles:
+    def test_a_non_mapping_root_is_rejected(self, tmp_path):
+        """Raised as TypeError here, unlike the other applications; main() reports
+        both the same way, so the message is what matters."""
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text("- not\n- a mapping\n", encoding="utf-8")
+
+        with pytest.raises((TypeError, ValueError), match="config root must be a mapping"):
+            main_module.load_app_config(config_path)
+
+    def test_an_empty_file_is_reported_as_missing_settings_not_a_crash(self, tmp_path):
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text("", encoding="utf-8")
+
+        with pytest.raises(ValueError, match="source.rtsp_url must be set"):
+            main_module.load_app_config(config_path)
