@@ -69,15 +69,21 @@ The output directory contains sampled NV12 frames and `summary.json`. A Modalix
 DevKit does not ship `ffmpeg`, so copy a frame to a workstation with FFmpeg
 installed and convert it there for visual inspection:
 
-On the target, pick a frame and copy it out. The exact filename includes the
-observed capture time, so take the one the application printed:
+On the target, pick a frame and copy it out. Set `OUT_DIR` to the
+`output.directory` from your config; the command below uses the shipped default.
+The exact filename includes the observed capture time, so take the one the
+application printed:
 
 ```bash
-FRAME="$(realpath "$(find sandbox/mipi-camera-capture -name 'frame_00_*.nv12' -print -quit)")"
+OUT_DIR="sandbox/mipi-camera-capture"
+FRAME="$(realpath "$(find "${OUT_DIR}" -name 'frame_00_*.nv12' -print -quit)")"
 echo "${FRAME}"
 ```
 
-From the workstation, copy that file over and convert it there:
+From the workstation, copy that file over and convert it there. A raw NV12 file
+carries no dimensions, so `-video_size` must match the `camera.width` and
+`camera.height` you configured. At any other size the conversion produces a
+skewed or garbled image instead of failing:
 
 ```bash
 scp <user>@<target>:<path-printed-above> ./frame.nv12
