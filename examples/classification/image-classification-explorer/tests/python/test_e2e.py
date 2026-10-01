@@ -403,6 +403,11 @@ class TestE2E:
         # the YAML integer grammar in both.
         ("octal num_classes", "models:\n  m:\n    path: m.tar.gz\n"
          "    label_map: TOO_SHORT_LABELS\n    num_classes: 012\n", 2),
+        # A direct io.input that cannot be stat'ed is an input error (3), not a
+        # generic runtime failure (6). The entry-scan fix covered the directory
+        # loop; this covers the direct-path predicates above it.
+        ("input path is an unstatable symlink",
+         "io:\n  input: SELF_SYMLINK\nmodels:\n  m:\n    path: m.tar.gz\n", 3),
         # `~` is null in a profile field too, not the literal string "~". The
         # io.* settings were routed through config_scalar and these were not, so
         # a required path spelled `~` was absent to Python and present to C++.
@@ -440,6 +445,9 @@ class TestE2E:
         too_short.write_text("only\none\n")
         a_directory = tmp_output_dir.parent / "a-directory"
         a_directory.mkdir(exist_ok=True)
+        self_symlink = tmp_output_dir.parent / "self-symlink"
+        if not self_symlink.is_symlink():
+            self_symlink.symlink_to(self_symlink)
         blank_line = tmp_output_dir.parent / "blank-line-labels.txt"
         blank_line.write_text("cat\n\nbird\n")
 
@@ -450,6 +458,7 @@ class TestE2E:
             else:
                 body = (body.replace("TOO_SHORT_LABELS", str(too_short))
                             .replace("A_DIRECTORY", str(a_directory))
+                            .replace("SELF_SYMLINK", str(self_symlink))
                             .replace("BLANK_LINE_LABELS", str(blank_line)))
                 config_path.write_text(body)
                 argument = str(config_path)

@@ -778,7 +778,18 @@ std::vector<fs::path> discover_images(const std::string& input_path,
   }
 
   const fs::path path = normalize_like_pathlib(input_path);
-  if (fs::is_regular_file(path)) {
+  // error_code overloads throughout: a status lookup that fails (a
+  // self-referential symlink, a permission error) must become an InputError
+  // (exit 3) like Python's is_file()/is_dir(), not escape as a generic
+  // runtime failure (exit 6).
+  std::error_code path_ec;
+  const bool is_file = fs::is_regular_file(path, path_ec);
+  if (path_ec) {
+    // Same wording as Python, which reaches this through is_file() returning
+    // false for a path it cannot stat rather than through a distinct branch.
+    throw InputError("input path does not exist: " + path.string());
+  }
+  if (is_file) {
     const std::string raw_ext = path.extension().string();
     const std::string ext = lower_copy(raw_ext);
     if (std::find(extensions.begin(), extensions.end(), ext) == extensions.end()) {
@@ -789,7 +800,7 @@ std::vector<fs::path> discover_images(const std::string& input_path,
     return {path};
   }
 
-  if (!fs::is_directory(path)) {
+  if (!fs::is_directory(path, path_ec) || path_ec) {
     throw InputError("input path does not exist: " + path.string());
   }
 

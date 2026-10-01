@@ -176,9 +176,10 @@ image                     model            status  top1_class_id  top1_label  to
 
 Exact probabilities vary with the model package; what matters is that class `1`
 wins for every profile and that `status` is `ok` rather than `error`. The two
-implementations produce byte-identical `report.csv`, `report.html` and thumbnail
-names for the same input, so a difference between them is a defect, not run
-variance.
+implementations produce identical `report.csv`, `report.html` and thumbnail
+names for the same input, once the separately measured per-image `inference_ms`
+and total time are excluded. Those timings differ between any two runs by
+design; anything else differing between the two implementations is a defect.
 
 A per-image failure does not stop the run: the image keeps its row and the
 failing model gets an `error` cell in the report and a line on stderr, so a
