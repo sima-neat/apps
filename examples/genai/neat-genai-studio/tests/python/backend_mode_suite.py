@@ -8,6 +8,7 @@ import unittest
 from backend_mode import (
     cors_headers,
     cors_path,
+    effective_cors_setting,
     health_payload,
     normalize_origin,
     origin_allowed,
@@ -59,6 +60,13 @@ class CorsPolicyTests(unittest.TestCase):
         self.assertFalse(origin_allowed("null", "*"))
         self.assertTrue(origin_allowed("https://anything", "*"))
         self.assertFalse(origin_allowed("https://anything", ()))
+
+    def test_environment_overrides_the_config_even_when_empty(self):
+        self.assertEqual(effective_cors_setting({}, "http://a:3000"), "http://a:3000")
+        self.assertEqual(effective_cors_setting({"BACKEND_CORS_ORIGINS": "*"}, "http://a:3000"), "*")
+        self.assertEqual(effective_cors_setting({"BACKEND_CORS_ORIGINS": ""}, "http://a:3000"), "")
+        self.assertEqual(parse_cors_origins(effective_cors_setting({"BACKEND_CORS_ORIGINS": ""}, "http://a:3000")), ())
+        self.assertEqual(effective_cors_setting({}, None), "")
 
     def test_headers_echo_origin(self):
         h = cors_headers("http://a:3000/", "content-type, x-custom")

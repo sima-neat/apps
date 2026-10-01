@@ -436,7 +436,8 @@ BACKEND_CORS_ORIGINS="https://insight.local:8443,http://10.0.0.5:3000" ./run.sh 
 
 To keep the allowlist across launches, set `app.web.cors_origins` in
 `config.local.yaml` (a comma-separated string or a YAML list); the environment
-variable overrides it for one run.
+variable overrides it for one run, and setting it empty
+(`BACKEND_CORS_ORIGINS= ./run.sh --backend-only`) turns CORS off for that run.
 
 Allowed origins get CORS headers (the `X-*` timing and engine headers are
 exposed) and preflight answers on the API paths; `/shutdown` never is. Quick

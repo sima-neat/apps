@@ -1161,8 +1161,8 @@ fi
 _url="$(web_url || true)"
 if [[ -n "${_url}" && "${BACKEND_ONLY}" == "1" ]]; then
   info "Backend-only: API on ${C_ACCENT}${C_BOLD}${_url}${C_RESET} (no web UI); readiness at ${C_ACCENT}${_url}/health${C_RESET}."
-  _cors="${BACKEND_CORS_ORIGINS:-$(web_config_value cors_origins)}"
-  [[ -n "${_cors}" ]] || _cors="$(web_config_list "${CONFIG_PATH}" cors_origins)"   # YAML list form
+  # Set at all (even empty) wins over the config, as in the UI process.
+  if [[ -n "${BACKEND_CORS_ORIGINS+set}" ]]; then _cors="${BACKEND_CORS_ORIGINS}"; else _cors="$(web_config_value cors_origins)"; fi
   info "CORS for browser front ends: ${_cors:-off (app.web.cors_origins or BACKEND_CORS_ORIGINS allows origins)}."
 elif [[ -n "${_url}" ]]; then
   info "Open ${C_ACCENT}${C_BOLD}${_url}${C_RESET} in your browser once it finishes loading."

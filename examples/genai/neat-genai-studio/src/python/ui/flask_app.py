@@ -3341,7 +3341,7 @@ def run_ui(app_cfg, backend_only=False):
     genai_app = AppContext()
     genai_app.backend_only = bool(backend_only)
     # The environment overrides the persisted allowlist (app.web.cors_origins).
-    cors_raw = os.environ.get("BACKEND_CORS_ORIGINS") or app_cfg.web.cors_origins or ""
+    cors_raw = backend_mode.effective_cors_setting(os.environ, app_cfg.web.cors_origins)
     if backend_only:
         genai_app.cors_origins = backend_mode.parse_cors_origins(cors_raw)
         logging.info("Backend-only CORS: %s", genai_app.cors_origins or "off")

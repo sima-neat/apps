@@ -81,6 +81,15 @@ def parse_cors_origins(raw: str | None):
     return tuple(seen)
 
 
+def effective_cors_setting(environ: Mapping, configured: str | None) -> str:
+    """The allowlist text in force: BACKEND_CORS_ORIGINS when it is set at all
+    (an empty value turns CORS off for that run, even with a persisted
+    allowlist), otherwise app.web.cors_origins."""
+    if "BACKEND_CORS_ORIGINS" in environ:
+        return str(environ.get("BACKEND_CORS_ORIGINS") or "")
+    return str(configured or "")
+
+
 def origin_allowed(origin: str, allowed) -> bool:
     """True when the browser ``Origin`` is on the allowlist."""
     normalized = normalize_origin(origin)
