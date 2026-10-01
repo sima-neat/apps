@@ -17,12 +17,20 @@ CHAT_MODEL_REPO="${CHAT_MODEL_REPO:-}"
 # Example: CATALOG_MODEL_REPOS="simaai/Llama-3.2-3B-Instruct-... simaai/..."
 CATALOG_MODEL_REPOS="${CATALOG_MODEL_REPOS:-}"
 # Speech-to-text model downloaded and made active at startup.
+#
+# A LAYERED-encoder build: current LLiMa splits the Whisper encoder into one ELF
+# per layer and rejects the older monolithic builds as "Unsupported legacy
+# Whisper model". Move this to the simaai layered build once published; on an
+# older runtime that needs a monolithic encoder, pass
+# ASR_MODEL_REPO=simaai/whisper-small-a16w8 instead. Setup checks the model
+# actually loads and will not configure it at startup if the runtime refuses it.
+#
 # Set ASR_MODEL_REPO="" to install none (note the `-`, not `:-`, so an
 # explicitly empty value is honoured rather than falling back to the default).
-ASR_MODEL_REPO="${ASR_MODEL_REPO-simaai/whisper-small-a16w8}"
+ASR_MODEL_REPO="${ASR_MODEL_REPO-florianvoss/whisper-small-a16w8-layered-encoder}"
 # Extra ASR models to seed the catalog (space-separated HF repos); switch
 # between them at runtime in Settings -> Models. Example:
-#   ASR_CATALOG_MODEL_REPOS="simaai/whisper-medium-a16w8"
+#   ASR_CATALOG_MODEL_REPOS="florianvoss/whisper-medium-a16w8-layered-encoder"
 ASR_CATALOG_MODEL_REPOS="${ASR_CATALOG_MODEL_REPOS:-}"
 RAG_EMBEDDING_REPO="thenlper/gte-small"
 CHAT_MODEL_NAME="${CHAT_MODEL_NAME:-${CHAT_MODEL_REPO##*/}}"
@@ -608,13 +616,49 @@ else
   CHAT_YAML="    chat: []            # No model preloaded; load on demand from the UI."
 fi
 
-if [[ -n "${ASR_MODEL_REPO}" ]]; then
+# Ask the runtime whether it can actually load the model, before naming it as the
+# startup ASR. Encoder layout requirements have changed between runtime builds in
+# both directions, so this asks rather than infers: an explicit refusal means the
+# config should not point here, while an inconclusive result (busy accelerator,
+# no runtime) leaves the configuration alone.
+asr_model_loads() {
+  local dir="$1" out rc
+  [[ -d "${dir}" ]] || return 2
+  [[ -x "${PYNEAT_PYTHON}" ]] || return 2
+  out="$("${PYNEAT_PYTHON}" "${EXAMPLE_DIR}/scripts/probe_asr.py" "${dir}" 2>&1)"
+  rc=$?
+  case "${rc}" in
+    0) return 0 ;;
+    3) printf '%s\n' "${out}" ; return 1 ;;   # the runtime refused it
+    *) printf '%s\n' "${out}" ; return 2 ;;   # could not tell
+  esac
+}
+
+ASR_STARTUP_OK=1
+if [[ -n "${ASR_MODEL_REPO}" && "${SKIP_MODEL_DOWNLOAD}" != "1" ]]; then
+  step "Checking that ${ASR_MODEL_NAME} loads on this runtime…"
+  probe_out="$(asr_model_loads "${ASR_MODEL_DIR}")" ; probe_rc=$?
+  case "${probe_rc}" in
+    0) ok "Speech-to-text model loads." ;;
+    1) ASR_STARTUP_OK=0
+       warn "This runtime refuses ${ASR_MODEL_NAME}:"
+       printf '%s\n' "${probe_out}" | sed 's/^/    /' >&2
+       warn "Leaving it in the catalog but NOT configuring it at startup."
+       warn "Install one this runtime accepts, e.g. ASR_MODEL_REPO=simaai/whisper-small-a16w8 ./setup.sh,"
+       warn "or pick a model in Settings -> Models once the Studio is running." ;;
+    *) warn "Could not verify ${ASR_MODEL_NAME} (accelerator busy or no runtime); configuring it anyway." ;;
+  esac
+fi
+
+if [[ -n "${ASR_MODEL_REPO}" && "${ASR_STARTUP_OK}" == "1" ]]; then
   ASR_YAML=$(cat <<ASR
     asr:                # Active at startup; switch at runtime in Settings -> Models.
       name: ${ASR_MODEL_NAME}
       path: ${ASR_MODEL_DIR}
 ASR
 )
+elif [[ -n "${ASR_MODEL_REPO}" ]]; then
+  ASR_YAML="    # asr: omitted — ${ASR_MODEL_NAME} is in the catalog but this runtime refuses it."
 else
   ASR_YAML="    # asr: omitted — no speech-to-text model is preloaded."
 fi

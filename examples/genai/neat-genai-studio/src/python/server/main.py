@@ -26,6 +26,9 @@ from server.control_api import serve_control_api
 from server.load_log import LoadLogTap
 from server.model_manager import ModelManager
 
+# How many catalogued speech models to try when the configured one fails.
+_ASR_FALLBACK_LIMIT = 3
+
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -100,8 +103,8 @@ def start_openai_server(cfg: AppConfig):
                 raise
             print(f"startup ASR model '{served_asr_name}' cannot be used: {exc}",
                   file=sys.stderr, flush=True)
-            print("starting without speech-to-text — pick a working ASR model in "
-                  "Settings -> Models", file=sys.stderr, flush=True)
+            print("dropped it; looking for another speech model in the catalog",
+                  file=sys.stderr, flush=True)
             try:
                 server.remove_model(served_asr_name)
             except Exception:
@@ -205,6 +208,41 @@ def main() -> int:
                     served_asr_name, cfg.asr_model.path, "asr", False, None
                 )
         manager.scan_catalog()
+
+        # No speech model active — either none was configured, or the runtime
+        # refused the configured one above. Try the other speech models already
+        # in the catalog and keep the first that loads. Encoder layout
+        # requirements have changed between runtime builds in both directions, so
+        # trying is the only reliable test; a user whose runtime moved under them
+        # gets working transcription instead of silence. Bounded, and
+        # STUDIO_ASR_FALLBACK=0 turns it off.
+        if manager.active_asr() is None and os.environ.get("STUDIO_ASR_FALLBACK", "1") != "0":
+            tried = 0
+            for entry in manager.catalog():
+                if tried >= _ASR_FALLBACK_LIMIT:
+                    break
+                if entry.get("type") != "asr" or entry.get("complete") is False:
+                    continue
+                if entry["name"] == (cfg.asr_model.name if cfg.asr_model else None):
+                    continue          # just failed; do not retry it
+                tried += 1
+                try:
+                    manager.set_active_asr(entry["name"])
+                except Exception as exc:  # noqa: BLE001 - try the next candidate
+                    print(f"speech model '{entry['name']}' did not load: "
+                          f"{str(exc).splitlines()[0][:200]}", file=sys.stderr, flush=True)
+                    continue
+                print(f"using '{entry['name']}' for speech-to-text "
+                      f"(the configured model is unavailable)", flush=True)
+                break
+            else:
+                print(
+                    "no speech model in the catalog loads on this runtime"
+                    if tried else
+                    "no other speech model in the catalog to fall back to",
+                    file=sys.stderr, flush=True)
+                print("starting without speech-to-text — download one from "
+                      "Settings -> Add Model", file=sys.stderr, flush=True)
 
         control_httpd = serve_control_api(manager, cfg.control.host, cfg.control.port)
         print(

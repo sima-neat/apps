@@ -114,7 +114,12 @@ Other useful environment variables:
 - `CHAT_MODEL_REPO`: optionally download **and preload** one chat/VLM model at
   startup (empty by default, i.e. none).
 - `ASR_MODEL_REPO`: the speech-to-text model installed and made active at
-  startup (default `simaai/whisper-small-a16w8`; set to `""` to install none).
+  startup (default `florianvoss/whisper-small-a16w8-layered-encoder`; set to
+  `""` to install none). Current LLiMa splits the Whisper encoder into one ELF
+  per layer and refuses the older monolithic builds; on a runtime that needs a
+  monolithic encoder pass `ASR_MODEL_REPO=simaai/whisper-small-a16w8`. Setup
+  checks the model loads and leaves it out of the startup configuration if the
+  runtime refuses it, rather than configuring a model that cannot be used.
 - `ASR_CATALOG_MODEL_REPOS`: space-separated extra ASR repos to seed the
   catalog, e.g. `simaai/whisper-medium-a16w8`, so you can switch between them
   at runtime from **Settings → Models**.
