@@ -32,6 +32,7 @@ import wave
 import traceback
 from pathlib import Path
 from werkzeug.utils import secure_filename
+from werkzeug.exceptions import RequestEntityTooLarge
 import tempfile
 import atexit
 import signal
@@ -54,6 +55,16 @@ from asr_metadata import (
     normalize_language_code,
 )
 import supertonic_tts
+import backend_mode
+from audio_api import (
+    SPEECH_ENGINE_ALIASES,
+    MAX_TRANSCRIPTION_BYTES,
+    AudioApiError,
+    build_voices_listing,
+    format_transcription,
+    parse_speech_request,
+    parse_transcription_form,
+)
 from voice_catalog import (
     asset_paths as catalog_asset_paths,
     catalog_voices,
@@ -279,6 +290,7 @@ class TalkController:
         self.pp_models = []         # installed piper-plus voices (selectable)
         self.pp_current = None      # key of the active piper-plus voice
         self.pp_lock = threading.Lock()   # guards runtime piper-plus voice switches
+        self._pp_swap_lock = threading.Lock()   # swaps (pp, pp_current) as one unit
         self.prefer_piper_plus = False  # prefer piper-plus over dedicated piper-tts voices
         self.st = None              # Supertonic 3 MLA engine (all voices/languages)
         self.st_lock = threading.Lock()   # guards Supertonic voice switches
@@ -331,7 +343,7 @@ class TalkController:
             return None
         if eng is self.st:
             return 'supertonic'
-        if eng is self.pp:
+        if eng is self.pp or getattr(eng, 'studio_voice_key', None):
             return 'piper-plus'
         return 'piper-tts'
 
@@ -339,8 +351,8 @@ class TalkController:
         """Speaker label for the metrics strip, where an engine has one."""
         if eng is not None and eng is self.st:
             return self.st.voice
-        if eng is not None and eng is self.pp:
-            return self.pp_current
+        if eng is not None and getattr(eng, 'studio_voice_key', None):
+            return eng.studio_voice_key      # the voice this instance was built for
         return None
 
     def _log_tts_coverage(self):
@@ -415,28 +427,32 @@ class TalkController:
         for t in threads:
             t.join()
 
-    def _init_piper_plus(self):
-        """Load only installed Piper Plus models from the reviewed catalog."""
+    def _scan_piper_plus(self):
+        """Installed Piper Plus models from the reviewed catalog, default first."""
         assets = Path("assets")
         voices = installed_voices(
             VOICE_CATALOG, assets_path=assets, engine="piper-plus"
         )
         voices.sort(key=lambda voice: not voice.get("default", False))
-        self.pp_models = []
+        models = []
         for voice in voices:
             paths = catalog_asset_paths(voice, assets)
             onnx = next(path for path in paths if path.suffix == ".onnx")
             cfg = next((path for path in paths if path.name == "config.json"), None)
-            self.pp_models.append({
+            models.append({
                 "key": voice["id"],
                 "label": voice["label"],
                 "onnx": onnx,
                 "config": cfg,
                 "license": voice["license"],
             })
+        return models
 
-        self.pp = None
-        self.pp_current = None
+    def _init_piper_plus(self):
+        """Load the default installed Piper Plus voice. The engine in use is
+        only ever replaced by a fully built one (never set to None meanwhile),
+        so concurrent requests see either the old or the new voice."""
+        self.pp_models = self._scan_piper_plus()
         if not self.pp_models:
             logging.info("No piper-plus voice found under assets/piper-plus/ — "
                          "multilingual alternative unavailable (run voice_install.sh).")
@@ -444,7 +460,9 @@ class TalkController:
         self._load_piper_plus(self.pp_models[0]["key"])
 
     def _load_piper_plus(self, key):
-        """Load the piper-plus voice `key` into self.pp. Returns True on success."""
+        """Build the piper-plus voice `key` and swap it in atomically (engine and
+        its key together). Returns True on success; on failure the previous
+        voice, if any, stays active."""
         entry = next((m for m in getattr(self, "pp_models", []) if m["key"] == key), None)
         if entry is None:
             return False
@@ -452,14 +470,15 @@ class TalkController:
             from piperplus_tts import PiperPlusTTS
             pp = PiperPlusTTS(entry["onnx"], config_path=entry["config"])
             pp.set_utterance_speed(self.utterance_speed)
-            self.pp = pp
-            self.pp_current = key
-            logging.info("piper-plus voice '%s' ready (languages: %s)",
-                         key, sorted(pp.languages))
-            return True
+            pp.studio_voice_key = key
         except Exception as e:  # noqa: BLE001
             logging.warning("Failed to load piper-plus voice '%s': %s", key, e)
             return False
+        with self._pp_swap_lock:
+            self.pp, self.pp_current = pp, key
+        logging.info("piper-plus voice '%s' ready (languages: %s)",
+                     key, sorted(pp.languages))
+        return True
 
     def set_piper_plus_voice(self, key):
         """Install a catalogued model when needed and switch to it."""
@@ -471,7 +490,7 @@ class TalkController:
                 # The installer also verifies existing files against the pinned
                 # checksums, so a corrupt or manually replaced model is repaired.
                 install_catalog_voice(catalog_voice, assets_path=Path("assets"))
-                self._init_piper_plus()
+                self.pp_models = self._scan_piper_plus()
                 return self._load_piper_plus(key)
             except Exception:  # noqa: BLE001
                 logging.exception("Could not install/load Piper Plus voice '%s'", key)
@@ -498,9 +517,10 @@ class TalkController:
     def _init_supertonic(self):
         """Load the Supertonic 3 MLA engine when its runtime is installed."""
         if not supertonic_tts.available():
-            logging.info("Supertonic runtime not installed under %s — MLA TTS unavailable "
-                         "(clone supertonic-sima and re-run setup.sh).",
-                         supertonic_tts.app_root())
+            logging.info("Supertonic runtime not installed (venv %s, models %s) — MLA TTS "
+                         "unavailable; run setup.sh with INSTALL_SUPERTONIC=1.",
+                         supertonic_tts._supertonic_python() or supertonic_tts.DEFAULT_VENV,
+                         supertonic_tts.models_root())
             return
         try:
             st = supertonic_tts.SupertonicTTS(voice=self.st_voice_default())
@@ -948,11 +968,7 @@ class TalkController:
         'none': 'no TTS engine can speak the requested language',
     }
 
-    ENGINE_KEYS = {
-        'supertonic': 'supertonic', 'supertonic-tts': 'supertonic', 'mla': 'supertonic',
-        'piper-plus': 'piper-plus', 'piperplus': 'piper-plus',
-        'piper-tts': 'piper-tts', 'pipertts': 'piper-tts', 'piper': 'piper-tts', 'rhasspy': 'piper-tts',
-    }
+    ENGINE_KEYS = SPEECH_ENGINE_ALIASES      # one map with the request parser (audio_api)
 
     def engine_for_request(self, engine, language):
         """Resolve an explicit ``model`` from the speech API to one engine.
@@ -977,15 +993,17 @@ class TalkController:
         if key == 'piper-plus':
             if not self._installed_piper_plus():
                 raise self.EngineUnavailable('not-installed', key)
-            if self._ensure_piper_plus_loaded() and self.pp.supports(language):
-                return language, self.pp
+            self._ensure_piper_plus_loaded()
+            pp = self.pp                  # one read: a voice switch may swap it
+            if pp is not None and pp.supports(language):
+                return language, pp
             raise self.EngineUnavailable('no-voice', key)
         # piper-tts: the dedicated voice for this language, loaded on demand.
         if self._load_piper_language(language):
             return language, self.pipers[language]
         raise self.EngineUnavailable('no-voice', key)
 
-    def tts_on_demand(self, text, language='en', engine=None, voice=None):
+    def tts_on_demand(self, text, language='en', engine=None, voice=None, speed=None):
         """
         Perform TTS synthesis on-demand for the given text and return audio bytes and timing info.
 
@@ -993,22 +1011,46 @@ class TalkController:
         dispatched to exactly that engine (``EngineUnavailable`` when it cannot
         serve ``language``); other values use the router, which raises the same
         when no engine can speak the language. ``voice`` selects a Supertonic
-        speaker (F1-F5, M1-M5) for this request only.
+        speaker (F1-F5, M1-M5) for this request only. The Piper engines have one
+        loaded voice per language (chosen in the Studio's voice settings), so a
+        ``voice`` naming anything else is refused with ``AudioApiError`` (400)
+        rather than answered with a different voice than was asked for.
         """
         if not text:
             raise ValueError("No text provided for TTS synthesis.")
 
         start_time = time.time()
         language, piper = self.engine_for_request(engine, language)
+        requested_voice = (voice or '').strip()
+        if requested_voice.lower() == 'default':
+            requested_voice = ''
 
         sanitized_text = self._sanitize_for_tts(text)
+        # ``speed`` is per request: it never touches the utterance speed the UI
+        # slider set (that used to be a side effect of the API).
         if piper is self.st:
-            buffer = piper.synthesize(sanitized_text, language=language, voice=voice)
+            if requested_voice and requested_voice not in self.st.voices:
+                raise AudioApiError(
+                    400, f"voice '{requested_voice}' is not a Supertonic voice "
+                    f"(one of {', '.join(self.st.voices)})", 'voice')
+            used_voice = requested_voice or self.st.voice
+            buffer = piper.synthesize(sanitized_text, language=language, voice=used_voice, speed=speed)
         else:
-            buffer = piper.synthesize(sanitized_text, language=language)
+            used_voice = self._engine_voice(piper) or self._piper_voice_id(language)
+            if requested_voice and requested_voice != used_voice:
+                raise AudioApiError(
+                    400, f"voice '{requested_voice}' is not the voice loaded for "
+                    f"{self._engine_name(piper)} in '{language}' ('{used_voice}'); "
+                    f"Piper voices are selected in the Studio's voice settings, "
+                    f"omit 'voice' to use the loaded one", 'voice')
+            buffer = piper.synthesize(sanitized_text, language=language, speed=speed)
         elapsed_time = time.time() - start_time
         audio_duration = self._get_wav_duration(buffer)
         rtf = elapsed_time / audio_duration if audio_duration > 0 else 0
+        effective_speed = (piper.clamp_speed(speed) if speed is not None
+                           else getattr(piper, 'speed', None))
+        if effective_speed is None and hasattr(piper, 'length_scale'):   # piper-plus state
+            effective_speed = 1.0 / piper.length_scale if piper.length_scale else 1.0
 
         logging.info(f"[On-Demand TTS] Synthesized audio in {elapsed_time:.3f} sec (RTF: {rtf:.2f})")
 
@@ -1016,8 +1058,63 @@ class TalkController:
             'audio_bytes': buffer.getvalue(),
             'elapsed_time': elapsed_time,
             'audio_duration': audio_duration,
-            'rtf': rtf
+            'rtf': rtf,
+            'engine': self._engine_name(piper),
+            'voice': used_voice,
+            'language': language,
+            'speed': effective_speed,
         }
+
+    def _piper_voice_id(self, language):
+        """Catalog id of the dedicated Piper voice loaded for ``language``."""
+        piper = self.pipers.get(language)
+        if piper is None:
+            return None
+        return Path(getattr(piper, 'model_path', '')).stem or None
+
+    def voices_listing(self):
+        """``GET /v1/audio/voices``: every server-side engine with the languages
+        and voices it offers, whether or not it is loaded yet."""
+        supertonic = None
+        if self.st is not None:
+            supertonic = {
+                'languages': sorted(self.st.languages),
+                'voices': [
+                    {'id': v, 'label': supertonic_tts.VOICE_LABELS.get(v, v),
+                     'default': v == self.st.voice}
+                    for v in self.st.voices
+                ],
+            }
+        pp_voices = catalog_voices(VOICE_CATALOG, engine="piper-plus")
+        pp_installed = {v['id'] for v in self._installed_piper_plus()}
+        piper_plus = None
+        if pp_voices:
+            piper_plus = {
+                'languages': sorted({lang for v in pp_voices for lang in v['languages']}),
+                'voices': [
+                    {'id': v['id'], 'label': v['label'], 'languages': v['languages'],
+                     'installed': v['id'] in pp_installed,
+                     'default': v['id'] == self.pp_current}
+                    for v in pp_voices
+                ],
+            }
+        tts_installed = self._installed_pipers()
+        piper_tts = None
+        if tts_installed:
+            piper_tts = {
+                'languages': sorted({lang for v in tts_installed for lang in v['languages']}),
+                'voices': [
+                    {'id': v['id'], 'label': v['label'], 'language': v['languages'][0],
+                     'installed': True, 'loaded': v['languages'][0] in self.pipers,
+                     'default': v['id'] == self._piper_voice_id(v['languages'][0])}
+                    for v in tts_installed
+                ],
+            }
+        return build_voices_listing(
+            self.voice_engine()['engines'],
+            supertonic=supertonic, piper_plus=piper_plus, piper_tts=piper_tts,
+            default_engine=None if self.browser_tts else self._preferred_engine_key(),
+        )
 
 class AppContext:
     def __init__(self):
@@ -1026,6 +1123,8 @@ class AppContext:
         self.current_voice_by_lang = {}
         self.talk_ctrl = None
         self.llm_only = False
+        self.backend_only = False   # --backend-only: API endpoints, no web UI (backend_mode.py)
+        self.cors_origins = ()      # BACKEND_CORS_ORIGINS, honoured in backend-only mode only
         self.system_prompt = None
         self.model_display_name = ""
         self.chat_model_name = "model"
@@ -1043,7 +1142,8 @@ class AppContext:
         # Runtime model management + appearance
         self.control_base_url = "http://127.0.0.1:9997"
         self.catalog_dir = None
-        self.hub_config = HubConfig(allow_download=True, orgs=("simaai", "TDoSiMa"))
+        self.hub_config = HubConfig(allow_download=True,
+                                    orgs=("simaai", "TDoSiMa", "florianvoss"))
         self.ui_font_family = "Inter"
         self.ui_font_size = 15
         self._catalog_names_cache = (0.0, frozenset())
@@ -1378,14 +1478,56 @@ class AppContext:
         self.app = Flask(__name__)
         self.socketio = SocketIO(self.app)
 
+        def _cors_allowed_origin():
+            """The request's Origin when backend-only CORS allows it for this path."""
+            if not (self.backend_only and self.cors_origins):
+                return None
+            origin = request.headers.get("Origin") or ""
+            if origin and backend_mode.cors_path(request.path) \
+                    and backend_mode.origin_allowed(origin, self.cors_origins):
+                return origin
+            return None
+
+        @self.app.before_request
+        def _backend_only_gate():
+            """Backend-only mode serves the API surface only (backend_mode.py):
+            the UI pages, static files and the Studio's own chat/RAG/camera
+            routes answer 404, and an allowed CORS preflight is answered here."""
+            if not self.backend_only:
+                return None
+            if not backend_mode.path_allowed(request.path):
+                return jsonify({"error": "Not available in backend-only mode.",
+                                "health": "/health"}), 404
+            if request.path == "/" and request.method in ("GET", "HEAD"):
+                return jsonify({"studio": "backend-only", "version": _studio_version(),
+                                "health": "/health"})
+            origin = _cors_allowed_origin()
+            if request.method == "OPTIONS" and origin:
+                return ("", 204, backend_mode.cors_headers(
+                    origin, request.headers.get("Access-Control-Request-Headers")))
+            return None
+
+        @self.app.after_request
+        def _backend_cors_headers(response):
+            origin = _cors_allowed_origin()
+            if origin:
+                for key, value in backend_mode.cors_headers(
+                        origin, request.headers.get("Access-Control-Request-Headers")).items():
+                    response.headers[key] = value
+            return response
+
         @self.app.before_request
         def _reject_cross_origin_mutation():
             """Keep browser mutations on the Studio's own origin.
 
             Headerless local API/CLI clients remain supported. Browsers provide
-            Origin, Referer, or Sec-Fetch-Site for cross-origin requests.
+            Origin, Referer, or Sec-Fetch-Site for cross-origin requests. In
+            backend-only mode, origins on the BACKEND_CORS_ORIGINS allowlist may
+            call the API paths.
             """
             if request.method not in {"POST", "PUT", "PATCH", "DELETE"}:
+                return None
+            if _cors_allowed_origin():
                 return None
 
             expected_origin = request.host_url.rstrip("/")
@@ -1518,6 +1660,20 @@ class AppContext:
             if filename.endswith('/'):
                 filename += 'index.html'
             return send_from_directory(harness_dir, filename)
+
+        # Audio API playground: a single same-origin page (Speech, Transcription
+        # with a clip and a hands-free live mode, and Echo: speak, get transcribed,
+        # hear it spoken back) that exercises /v1/audio/* directly. Themed like the
+        # Studio and embedded from the header's Audio API button.
+        playground_dir = str(APP_DIR / 'playground')
+
+        @self.app.route('/playground/')
+        def playground_index():
+            return send_from_directory(playground_dir, 'index.html')
+
+        @self.app.route('/playground/<path:filename>')
+        def playground_asset(filename):
+            return send_from_directory(playground_dir, filename)
 
         @self.app.route('/tts/engine', methods=['GET'])
         def tts_engine_get():
@@ -2304,29 +2460,25 @@ class AppContext:
         @self.app.route('/v1/audio/speech', methods=['POST'])
         @self.app.route('/audio/speech', methods=['POST'])
         def openai_tts():
+            """OpenAI-compatible text-to-speech. See audio_api.parse_speech_request
+            for the contract; WAV only, `language` is the Studio's extension."""
             try:
-                data = request.get_json()
-                if not data:
-                    return jsonify({'error': 'Missing JSON payload.'}), 400
-
-                if self.talk_ctrl == None:
-                    return jsonify({'error': 'TTS engine not initialized, start the app with --apionly disabled.'}), 500
-
-                text = data.get('input')
-                model = str(data.get('model') or 'default')   # a named engine is dispatched; anything else routes
-                voice = data.get('voice', 'default')
-                language = data.get('language', 'en')
-                utterance_speed = data.get('utterance_speed', data.get('utteranceSpeed', 1.0))
-                response_format = data.get('response_format', 'wav')
-
-                if not text:
-                    return jsonify({'error': 'Missing "input" text field.'}), 400
-                logging.info(f"Received TTS request: model={model}, voice={voice}, format={response_format}")
-
-                self.talk_ctrl.set_utterance_speed(utterance_speed)
+                try:
+                    req = parse_speech_request(request.get_json(silent=True))
+                except AudioApiError as exc:
+                    return jsonify(exc.payload()), exc.status
+                if self.talk_ctrl is None:
+                    return jsonify({'error': 'TTS engine not initialized, start the app with --apionly disabled.'}), 503
+                if req.used_speed_alias:
+                    logging.info("speech request used a deprecated speed field; use 'speed'")
+                logging.info("Received TTS request: model=%s, voice=%s, language=%s, speed=%s",
+                             req.model, req.voice, req.language, req.speed)
                 try:
                     result = self.talk_ctrl.tts_on_demand(
-                        text, language=language, engine=model, voice=voice)
+                        req.text, language=req.language, engine=req.model,
+                        voice=req.voice, speed=req.speed)
+                except AudioApiError as exc:          # a voice the engine cannot honour
+                    return jsonify(exc.payload()), exc.status
                 except TalkController.EngineUnavailable as exc:
                     # An explicitly requested engine that cannot serve this
                     # request is refused, never silently swapped. The message is
@@ -2336,27 +2488,141 @@ class AppContext:
                     return jsonify({'error': message, 'reason': exc.reason,
                                     'engine': exc.engine or None}), 503
 
-                # Default to WAV for Piper. If mp3 is requested, you need ffmpeg to convert.
-                audio_bytes = result['audio_bytes']
-                content_type = 'audio/wav'
-                filename = 'output.wav'
-
-                # Optional: Add MP3 conversion logic if needed here
-
-                return Response(
-                    audio_bytes,
-                    mimetype=content_type,
-                    headers={
-                        'Content-Disposition': f'attachment; filename="{filename}"',
-                        'X-RTF': str(result['rtf']),
-                        'X-Audio-Duration': str(result['audio_duration']),
-                        'X-Elapsed-Time': str(result['elapsed_time'])
-                    }
-                )
-
+                headers = {
+                    'Content-Disposition': 'attachment; filename="speech.wav"',
+                    'X-RTF': str(result['rtf']),
+                    'X-Audio-Duration': str(result['audio_duration']),
+                    'X-Elapsed-Time': str(result['elapsed_time']),
+                    'X-Engine': str(result.get('engine') or ''),
+                    'X-Voice': str(result.get('voice') or ''),
+                    'X-Language': str(result.get('language') or ''),
+                }
+                if result.get('speed') is not None:
+                    headers['X-Speed'] = f"{float(result['speed']):.2f}"
+                return Response(result['audio_bytes'], mimetype='audio/wav', headers=headers)
             except Exception:
                 logging.exception("TTS endpoint error")
                 return jsonify({'error': 'TTS request failed'}), 500
+
+        @self.app.route('/health', methods=['GET'])
+        def health():
+            """Readiness for integrating front ends: model server reachability,
+            active ASR model, loaded chat models and TTS engines. Always 200;
+            `ok` is false while the model server is unreachable."""
+            status, error = None, None
+            try:
+                resp = requests.get(
+                    f"{self.control_base_url.rstrip('/')}/control/status", timeout=3)
+                resp.raise_for_status()
+                status = resp.json()
+            except Exception as exc:  # noqa: BLE001
+                error = type(exc).__name__
+            engines = []
+            if self.talk_ctrl is not None:
+                try:
+                    engines = self.talk_ctrl.voice_engine()['engines']
+                except Exception:  # noqa: BLE001
+                    engines = []
+            return jsonify(backend_mode.health_payload(
+                mode='backend-only' if self.backend_only else 'studio',
+                version=_studio_version(), status=status, engines=engines, error=error))
+
+        @self.app.route('/v1/audio/voices', methods=['GET'])
+        @self.app.route('/audio/voices', methods=['GET'])
+        def openai_voices():
+            """Extension: which engines, voices and languages the speech API
+            offers (OpenAI has no discovery call). Engines are listed whether or
+            not they are loaded; selecting one loads it."""
+            if self.talk_ctrl is None:
+                return jsonify({'error': 'TTS engine not initialized, start the app with --apionly disabled.'}), 503
+            try:
+                return jsonify(self.talk_ctrl.voices_listing())
+            except Exception:
+                logging.exception("voices listing error")
+                return jsonify({'error': 'could not list voices'}), 500
+
+        @self.app.route('/v1/audio/transcriptions', methods=['POST'])
+        @self.app.route('/audio/transcriptions', methods=['POST'])
+        def openai_transcriptions():
+            """OpenAI-compatible speech-to-text, proxied to the model server's
+            /v1/audio/transcriptions so an HTTPS page and plain clients reach it
+            on this origin. `response_format`: json (default) | verbose_json |
+            text. `model` defaults to the active ASR model."""
+            return _audio_to_text('transcribe')
+
+        @self.app.route('/v1/audio/translations', methods=['POST'])
+        @self.app.route('/audio/translations', methods=['POST'])
+        def openai_translations():
+            """OpenAI-compatible speech-to-English (Whisper's translate task),
+            proxied to the model server's /v1/audio/translations. Same form and
+            formats as transcriptions; the text is always English, and
+            verbose_json reports the detected source `language`."""
+            return _audio_to_text('translate')
+
+        def _audio_to_text(task):
+            started = time.time()
+            # Refuse oversized bodies before Werkzeug parses (and spools) the
+            # multipart data: the file limit plus headroom for the envelope and
+            # the other fields. The exact per-file check follows after parsing.
+            declared = request.content_length
+            if declared is not None and declared > TRANSCRIPTION_REQUEST_LIMIT:
+                return jsonify({'error': f'audio upload exceeds {MAX_TRANSCRIPTION_BYTES // (1024 * 1024)} MiB',
+                                'param': 'file'}), 413
+            try:
+                request.max_content_length = TRANSCRIPTION_REQUEST_LIMIT   # bounds a chunked body too
+            except AttributeError:
+                # Flask < 3.1 (read-only there): a body without a length cannot
+                # be bounded before parsing, so it is refused outright.
+                if declared is None:
+                    return jsonify({'error': 'Content-Length is required for audio uploads.',
+                                    'param': 'file'}), 411
+            try:
+                upload = request.files.get('file')
+            except RequestEntityTooLarge:
+                return jsonify({'error': f'audio upload exceeds {MAX_TRANSCRIPTION_BYTES // (1024 * 1024)} MiB',
+                                'param': 'file'}), 413
+            try:
+                req = parse_transcription_form(
+                    request.form, has_file=upload is not None,
+                    size=_upload_size(upload))
+            except AudioApiError as exc:
+                return jsonify(exc.payload()), exc.status
+            # Bounded read: the file's own bytes are what the 25 MiB limit is
+            # about (the multipart envelope around them does not count).
+            audio_bytes = upload.stream.read(MAX_TRANSCRIPTION_BYTES + 1)
+            if not audio_bytes:
+                return jsonify({'error': 'Uploaded file is empty.', 'param': 'file'}), 400
+            if len(audio_bytes) > MAX_TRANSCRIPTION_BYTES:
+                return jsonify({'error': 'audio upload exceeds the size limit', 'param': 'file'}), 413
+            filename = secure_filename(upload.filename or '') or 'audio.wav'
+            content_type = upload.mimetype or 'application/octet-stream'
+            try:
+                result, model = transcribe_audio(
+                    audio_bytes, language=req.language, model=req.model,
+                    filename=filename, content_type=content_type, task=task)
+            except TranscriptionError as exc:
+                return jsonify({'error': exc.message}), exc.status
+            asr = None
+            if req.response_format == 'verbose_json':
+                asr = analyze_transcription(
+                    result,
+                    requested_language=req.language,
+                    supported_tts_languages=(self.talk_ctrl.supported_langs
+                                             if self.talk_ctrl is not None else ()),
+                    no_speech_threshold=_env_float('ASR_NO_SPEECH_THRESHOLD', DEFAULT_NO_SPEECH_THRESHOLD),
+                    logprob_threshold=_env_float('ASR_LOGPROB_THRESHOLD', DEFAULT_LOGPROB_THRESHOLD),
+                )
+            body, mimetype = format_transcription(result, asr, req.response_format, model=model, task=task)
+            elapsed = time.time() - started
+            headers = {'X-ASR-Model': model or '', 'X-Task': task, 'X-Elapsed-Time': f"{elapsed:.3f}"}
+            if isinstance(body, str):
+                # content_type, not mimetype: the value already carries its
+                # charset and Flask would append a second one.
+                return Response(body, content_type=mimetype, headers=headers)
+            resp = jsonify(body)
+            for key, value in headers.items():
+                resp.headers[key] = value
+            return resp
 
         # Board camera: a /dev/video* device plugged into the devkit board
         # itself, as opposed to the in-browser camera (the *client's* webcam).
@@ -2951,41 +3217,96 @@ def post_stop_to_sima(model_name=None):
         logging.error(f"Failed to send stop signal: {e}")
         return False
 
-def post_audio_to_mla(audio_bytes, language="auto", used_model=None):
-    """
-    Sends an audio file (as bytes) to the SIMA model server for transcription.
-    """
-    cfg = genai_app.get_config()
-    url = f"http://{str(cfg['SIMAAI_IP_ADDR']).strip()}/v1/audio/transcriptions"
+class TranscriptionError(Exception):
+    """The model server could not transcribe: ``status`` is the HTTP status the
+    API should answer with, ``message`` a client-safe explanation."""
 
-    files = {
-        'file': ('audio.wav', audio_bytes, 'audio/wav')
-    }
-    model = genai_app.resolve_asr_model()
+    def __init__(self, status, message):
+        super().__init__(message)
+        self.status = status
+        self.message = message
+
+
+# Hard limit on a transcription request body: the file cap plus headroom for
+# the multipart envelope and the form fields (model, language, response_format).
+TRANSCRIPTION_REQUEST_LIMIT = MAX_TRANSCRIPTION_BYTES + 1024 * 1024
+
+
+def _upload_size(upload):
+    """Byte length of a werkzeug ``FileStorage`` without consuming it (``None``
+    when the stream cannot be measured); used for the 25 MiB upload limit."""
+    if upload is None:
+        return None
+    try:
+        stream = upload.stream
+        position = stream.tell()
+        stream.seek(0, os.SEEK_END)
+        size = stream.tell() - position
+        stream.seek(position)
+        return size
+    except (AttributeError, OSError, ValueError):
+        return None
+
+
+def transcribe_audio(audio_bytes, *, language='auto', model=None, filename='audio.wav',
+                     content_type='audio/wav', timeout=60, task='transcribe'):
+    """Send audio to the model server's /v1/audio/transcriptions (``task``
+    "transcribe") or /v1/audio/translations ("translate": Whisper's
+    speech-to-English) and return ``(result_dict, model_name)``. ``model``
+    defaults to the active ASR model. The model server decodes the upload with
+    libavformat, so the browser's WebM/Opus and other container formats work;
+    pass the real name and type."""
+    cfg = genai_app.get_config()
+    route = 'translations' if task == 'translate' else 'transcriptions'
+    url = f"http://{str(cfg['SIMAAI_IP_ADDR']).strip()}/v1/audio/{route}"
+    model = (model or '').strip() or genai_app.resolve_asr_model()
     if not model:
         logging.error("No speech-to-text model is active; cannot transcribe.")
+        raise TranscriptionError(503, 'No speech-to-text model is active on the server.')
+    files = {'file': (filename, audio_bytes, content_type)}
+    # The server treats 'auto' as detection; it is sent as-is, exactly as the
+    # chat upload path always has.
+    data = {'model': model, 'language': language or 'auto'}
+    logging.debug('Posting AUDIO to SIMA model server at %s (model=%s, %s)', url, model, filename)
+    try:
+        response = requests.post(url, files=files, data=data, timeout=timeout)
+    except requests.RequestException as exc:
+        logging.error("Failed to send audio for transcription: %s", exc)
+        raise TranscriptionError(503, 'Speech transcription is unavailable. Please try again.')
+    if response.status_code >= 400:
+        detail = ''
+        try:
+            error = (response.json() or {}).get('error')
+            # The model server answers OpenAI-style: {"error": {"message", "type"}}.
+            detail = str(error.get('message') or error.get('type') or '') if isinstance(error, dict) else str(error or '')
+        except ValueError:
+            pass
+        logging.error("Model server rejected the transcription (%s): %s", response.status_code, detail[:200])
+        status = response.status_code if 400 <= response.status_code < 600 else 502
+        raise TranscriptionError(status, detail[:300] or f'transcription failed (HTTP {response.status_code})')
+    try:
+        result = response.json()
+    except ValueError:
+        raise TranscriptionError(502, 'The model server returned a malformed transcription.')
+    logging.info("Successfully sent audio for transcription to SiMa.ai server.")
+    return result, model
+
+
+def post_audio_to_mla(audio_bytes, language='auto', used_model=None):
+    """
+    Sends an audio file (as bytes) to the SIMA model server for transcription.
+    Returns the result dict, or None on any failure (the /upload path's contract).
+    """
+    try:
+        result, model = transcribe_audio(audio_bytes, language=language)
+    except TranscriptionError:
         return None
     # Report back which model served this request. Resolving again after the
     # call would race a concurrent switch and mislabel the transcript.
     if isinstance(used_model, list):
         used_model.append(model)
-    data = {
-        'model': model,
-        'language': language
-    }
+    return result
 
-    logging.debug(f'Posting AUDIO to SIMA model server at {url}')
-    try:
-        response = requests.post(url, files=files, data=data, timeout=60)
-        response.raise_for_status()
-        logging.info("Successfully sent audio for transcription to SiMa.ai server.")
-
-        result = response.json()
-        return result  # Should include 'text' field with transcription text
-
-    except requests.RequestException as e:
-        logging.error(f"Failed to send audio for transcription: {e}")
-        return None
 
 def configure_logging(log_filename='server.log'):
     if logging.getLogger().handlers:
@@ -2999,24 +3320,39 @@ def configure_logging(log_filename='server.log'):
         ]
     )
 
-def run_ui(app_cfg):
+def run_ui(app_cfg, backend_only=False):
     global genai_app
     global vectodb_proc
 
     configure_logging()
-    logging.info('Initializing Neat GenAI Studio app (frontend and TTS) please wait....')
+    if backend_only:
+        logging.info('Initializing Neat GenAI Studio in backend-only mode (API endpoints and TTS, no web UI)....')
+    else:
+        logging.info('Initializing Neat GenAI Studio app (frontend and TTS) please wait....')
     # Supertonic paths, before the TTS engines initialize: an explicit
     # environment override (run.sh exports one only when set) wins, then the
     # persisted config, then the module defaults.
-    os.environ.setdefault("SUPERTONIC_REPO_ROOT", app_cfg.supertonic.repo_root)
-    os.environ.setdefault("SUPERTONIC_APP_ROOT", app_cfg.supertonic.app_root)
+    if app_cfg.supertonic.models_root:
+        os.environ.setdefault("SUPERTONIC_MODELS_ROOT", app_cfg.supertonic.models_root)
+    if app_cfg.supertonic.venv and not os.environ.get("SUPERTONIC_PYTHON"):
+        os.environ.setdefault("SUPERTONIC_VENV", app_cfg.supertonic.venv)
     genai_app = AppContext()
+    genai_app.backend_only = bool(backend_only)
+    # The environment overrides the persisted allowlist (app.web.cors_origins).
+    cors_raw = backend_mode.effective_cors_setting(os.environ, app_cfg.web.cors_origins)
+    if backend_only:
+        genai_app.cors_origins = backend_mode.parse_cors_origins(cors_raw)
+        logging.info("Backend-only CORS: %s", genai_app.cors_origins or "off")
+    elif cors_raw.strip():
+        logging.warning("The CORS allowlist (app.web.cors_origins / BACKEND_CORS_ORIGINS) is only honoured in backend-only mode; ignored.")
     genai_app.initialize()
     genai_app.update_from_config(app_cfg)
     genai_app.setup_router()
     cleanup()
 
-    if not genai_app.apionly and genai_app.rag_enabled:
+    if genai_app.backend_only:
+        logging.info("RAG database service not started (backend-only mode)")
+    elif not genai_app.apionly and genai_app.rag_enabled:
         logging.info("Starting RAG database service")
         ensure_rag_modules_loaded()
         vectodb_proc = start_service()

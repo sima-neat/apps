@@ -27,8 +27,10 @@ server:                      # Local OpenAI-compatible model server.
 
   hub:                       # Hugging Face on-demand model download.
     allow_download: true     # Allow downloading compatible models when online.
-    orgs: [simaai, TDoSiMa]  # Hub accounts searched for precompiled models
-                             # (simaai official + TDoSiMa community).
+    orgs: [simaai, TDoSiMa, florianvoss]
+                             # Hub accounts searched for precompiled models
+                             # (simaai official; TDoSiMa and florianvoss community).
+                             # Non-simaai repos land on disk as "<org>@<name>".
 
 app:                         # Assistant web app settings.
   openai:                    # OpenAI-compatible client endpoint.
@@ -49,6 +51,8 @@ app:                         # Assistant web app settings.
     host: 0.0.0.0            # Host interface to bind.
     port: 5000               # Web UI port.
     https: true              # Serve the UI over HTTPS.
+    headless: false          # true: API endpoints only, no web UI (./run.sh --backend-only).
+    cors_origins: ""         # Backend-only CORS allowlist: "https://a:8443,http://b:3000" or "*"; env BACKEND_CORS_ORIGINS overrides.
 
   ui:                        # Appearance defaults (users can override in the browser).
     font_family: Inter       # Default UI font family.
@@ -56,8 +60,8 @@ app:                         # Assistant web app settings.
 
   tts:                       # Server-side text-to-speech settings.
     supertonic:              # Supertonic 3, the MLA engine installed by setup.sh (optional).
-      repo_root: /media/nvme/repos/supertonic-sima   # supertonic-sima checkout.
-      app_root: /media/nvme/supertonic-tts           # Its runtime venv and models.
+      models_root: /media/nvme/supertonic-tts/models   # Downloaded model files.
+      venv: ""                                          # Runtime venv setup.sh built; empty = ./.venv-supertonic.
 
   rag:                       # Retrieval-augmented generation settings.
     enabled: false                             # Enable document retrieval.

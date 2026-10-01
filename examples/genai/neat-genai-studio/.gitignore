@@ -2,9 +2,13 @@
 config.local.yaml
 .venv/
 .venv-pipertts/
+.venv-supertonic/
 .neat-genai-studio.pid
+.neat-genai-studio.mode
+.neat-genai-studio.url
 .neat-genai-server.log
 .neat-genai-server.status
 .neat-genai-reset.token
 .neat-genai-reset.request
 .local-certs/
+config.local.yaml.bak
