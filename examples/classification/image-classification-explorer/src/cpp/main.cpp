@@ -346,9 +346,93 @@ bool is_quoted_yaml_key(const std::string& key) {
          ((key.front() == '"' && key.back() == '"') || (key.front() == '\'' && key.back() == '\''));
 }
 
+// A double-quoted YAML scalar carries escapes, and PyYAML decodes them before
+// the key ever reaches Python: `"resnet\\u005f50"` is the profile `resnet_50`
+// there. Stripping only the quotes left the backslash sequence intact here, so
+// C++ rejected a profile name Python loads. Single quotes have no escapes in
+// YAML except '' for a literal quote.
+std::string decode_double_quoted_yaml(const std::string& body) {
+  std::string out;
+  out.reserve(body.size());
+  for (std::size_t i = 0; i < body.size(); ++i) {
+    if (body[i] != '\\' || i + 1 >= body.size()) {
+      out += body[i];
+      continue;
+    }
+    const char esc = body[++i];
+    switch (esc) {
+    case '0':
+      out += '\0';
+      break;
+    case 'a':
+      out += '\a';
+      break;
+    case 'b':
+      out += '\b';
+      break;
+    case 't':
+    case '\t':
+      out += '\t';
+      break;
+    case 'n':
+      out += '\n';
+      break;
+    case 'v':
+      out += '\v';
+      break;
+    case 'f':
+      out += '\f';
+      break;
+    case 'r':
+      out += '\r';
+      break;
+    case 'e':
+      out += '\x1b';
+      break;
+    case ' ':
+    case '"':
+    case '/':
+    case '\\':
+      out += esc;
+      break;
+    case 'x':
+    case 'u':
+    case 'U': {
+      const std::size_t width = esc == 'x' ? 2 : (esc == 'u' ? 4 : 8);
+      if (i + width >= body.size()) {
+        out += '\\';
+        out += esc;
+        break;
+      }
+      const std::string digits = body.substr(i + 1, width);
+      if (!std::all_of(digits.begin(), digits.end(),
+                       [](unsigned char ch) { return std::isxdigit(ch) != 0; })) {
+        out += '\\';
+        out += esc;
+        break;
+      }
+      const unsigned long code = std::stoul(digits, nullptr, 16);
+      i += width;
+      // Only the ASCII range can appear in a valid profile name; anything wider
+      // is emitted as a byte the name validator will reject, exactly as an
+      // undecodable name is rejected today.
+      out += static_cast<char>(code <= 0x7f ? code : '?');
+      break;
+    }
+    default:
+      out += '\\';
+      out += esc;
+      break;
+    }
+  }
+  return out;
+}
+
 std::string unquote_yaml_key(const std::string& key) {
-  if (key.size() >= 2 &&
-      ((key.front() == '"' && key.back() == '"') || (key.front() == '\'' && key.back() == '\''))) {
+  if (key.size() >= 2 && key.front() == '"' && key.back() == '"') {
+    return decode_double_quoted_yaml(key.substr(1, key.size() - 2));
+  }
+  if (key.size() >= 2 && key.front() == '\'' && key.back() == '\'') {
     return key.substr(1, key.size() - 2);
   }
   return key;

@@ -312,6 +312,7 @@ class TestE2E:
         "model archive missing",
         "tilde input is null",
         "radix-prefixed profile name",
+        "escaped profile key",
         "quoted and unquoted duplicate key",
     })
 
@@ -417,6 +418,10 @@ class TestE2E:
         # while Python downloaded the fallback and reached the model (exit 6).
         ("tilde input is null",
          "io:\n  input: ~\nmodels:\n  m:\n    path: /nonexistent/m.tar.gz\n", 6),
+        # PyYAML decodes escapes in a double-quoted key, so this names the
+        # profile `resnet_50`; C++ used to keep the backslash and reject it.
+        ("escaped profile key",
+         "models:\n  \"resnet\\u005f50\":\n    path: /nonexistent/m.tar.gz\n", 6),
         # A radix prefix with no valid digits after it is a string, so this is a
         # legal profile name; C++ used to reject it as a non-string key (exit 2).
         ("radix-prefixed profile name",
