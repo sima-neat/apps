@@ -18,7 +18,7 @@ Run RF-DETR detection or instance segmentation on one H.264, H.265, or MJPEG RTS
 
 The application decodes to NV12 once. EV74 converts, resizes, and normalizes each frame for the selected backbone. An explicit realtime graph link admits decoded frames to inference and replaces stale pending frames when inference falls behind. Core can fuse compatible H.264 and H.265 source, decoder, and video-relay branches to avoid intermediate application handoffs. Host code then selects the strongest proposals and passes the matching boxes and feature tensor to the transformer. Insight receives the source video and matching detection boxes or segmentation polygons.
 
-Decoded-frame admission allows up to 16 in-flight frames and replaces pending frames when inference is full. Backbone outputs and transformer inputs use bounded, blocking handoffs so admitted inference work is not discarded between the two models.
+Decoded-frame admission allows up to 16 in-flight frames and replaces pending frames when inference is full. The backbone output retains the latest completed result. The transformer input uses a four-entry queue with `KeepLatest`, replacing older pending results when full. These bounded handoffs favor recent frames when downstream processing falls behind.
 
 MJPEG reserves 32 decoded buffers so decoding can continue while inference and preview retain frames. This is tested headroom for the application, not an exact count of graph-held buffers. The raw NV12 storage is about 44 MB at 720p, 100 MB at 1080p, or 398 MB at 4K, before alignment.
 
