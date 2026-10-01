@@ -7,6 +7,11 @@ from pathlib import Path
 
 import pytest
 
+from tests.utils.output_assertions import (
+    assert_saved_frames_are_usable,
+    supported_image_files,
+)
+
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
 
@@ -23,8 +28,8 @@ class TestE2E:
         e2e_config_writer,
     ):
         skip_unless_e2e_ready(
-            test_images_dir.exists() and any(test_images_dir.iterdir()),
-            "test_images_dir is missing or empty",
+            test_images_dir.exists() and bool(supported_image_files(test_images_dir)),
+            "test_images_dir has no images to process",
         )
         config_path = e2e_config_writer(
             {
@@ -48,13 +53,9 @@ class TestE2E:
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
 
-        output_files = [
-            path
-            for path in tmp_output_dir.iterdir()
-            if path.is_file() and path.name != "config.yaml"
-        ]
-        assert output_files, "Expected output files but output directory is empty"
-        assert all(path.stat().st_size > 0 for path in output_files)
+        assert_saved_frames_are_usable(
+            tmp_output_dir, len(supported_image_files(test_images_dir))
+        )
         assert re.search(r"boxes=[1-9][0-9]*\b", result.stdout), (
             f"Expected detections on the test images\n{result.stdout}"
         )
