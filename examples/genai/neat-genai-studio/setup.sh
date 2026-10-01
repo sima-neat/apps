@@ -180,6 +180,10 @@ Environment:
                                 default: 1
   CREATE_ALIAS                  Create the neat-ai shell alias, 1 or 0.
                                 If unset, interactive setup prompts; otherwise 0.
+  WEB_HOST, WEB_PORT, WEB_HTTPS, WEB_HEADLESS, WEB_CORS_ORIGINS
+                                app.web settings written to the config. Default:
+                                the values in an existing config (kept on re-run),
+                                else 0.0.0.0, 5000, true, false and none.
   CREATE_DESKTOP_ICON           Create the desktop icon / menu entry that starts
                                 the Studio and opens it in the browser, 1 or 0.
                                 If unset, interactive setup prompts (only where a
@@ -567,6 +571,26 @@ HUB_ORGS_YAML="$(echo "${HUB_ORGS}" | tr -s ' ' | sed 's/^ //; s/ $//; s/ /, /g'
 section "Configuration"
 step "Writing local config: ${C_DIM}${CONFIG_PATH}${C_RESET}"
 mkdir -p "$(dirname "${CONFIG_PATH}")"
+# Web settings a customer may have changed (including backend-only mode and its
+# CORS allowlist) survive a re-run: environment > the existing config (read by
+# the app's own loader) > defaults. The previous file is kept as .bak so any
+# other hand edits can be carried over.
+_web_setting() {   # _web_setting <key> <default>
+  local v=""
+  [[ -f "${CONFIG_PATH}" ]] && v="$(web_config_scalar "${CONFIG_PATH}" "$1")"
+  printf '%s' "${v:-$2}"
+}
+WEB_HOST="${WEB_HOST:-$(_web_setting host 0.0.0.0)}"
+WEB_PORT="${WEB_PORT:-$(_web_setting port 5000)}"
+WEB_HTTPS="${WEB_HTTPS:-$(_web_setting https true)}"
+WEB_HEADLESS="${WEB_HEADLESS:-$(_web_setting headless false)}"
+WEB_CORS_ORIGINS="${WEB_CORS_ORIGINS-$(_web_setting cors_origins '')}"
+config_true "${WEB_HTTPS}" && WEB_HTTPS=true || WEB_HTTPS=false
+config_true "${WEB_HEADLESS}" && WEB_HEADLESS=true || WEB_HEADLESS=false
+if [[ -f "${CONFIG_PATH}" ]]; then
+  cp -p "${CONFIG_PATH}" "${CONFIG_PATH}.bak"
+  info "Previous config kept as ${C_DIM}${CONFIG_PATH}.bak${C_RESET} (web settings carried over: host ${WEB_HOST}, port ${WEB_PORT}, https ${WEB_HTTPS}, headless ${WEB_HEADLESS}${WEB_CORS_ORIGINS:+, cors_origins ${WEB_CORS_ORIGINS}})."
+fi
 cat > "${CONFIG_PATH}" <<YAML
 server:
   openai:
@@ -604,11 +628,11 @@ app:
       Answer the question in the language it was asked in.
 
   web:
-    host: 0.0.0.0
-    port: 5000
-    https: true
-    headless: false   # true: API endpoints only, no web UI (same as ./run.sh --backend-only)
-    cors_origins: ""  # backend-only: origins (comma list or *) whose browser pages may call the API
+    host: "${WEB_HOST}"
+    port: ${WEB_PORT}
+    https: ${WEB_HTTPS}
+    headless: ${WEB_HEADLESS}   # true: API endpoints only, no web UI (same as ./run.sh --backend-only)
+    cors_origins: "${WEB_CORS_ORIGINS}"  # backend-only: origins (comma list or *) whose browser pages may call the API
 
   ui:
     font_family: Inter

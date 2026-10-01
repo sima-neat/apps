@@ -77,6 +77,11 @@ the error. The first double-click may ask to trust the launcher (XFCE:
 **Mark Executable**) unless `setup.sh` ran inside the logged-in desktop session.
 `./run.sh --clean` removes the icon along with the other generated files.
 
+Re-running `setup.sh` (for example to add a model or voice) regenerates
+`config.local.yaml` but keeps your `app.web` settings (host, port, https,
+`headless`, `cors_origins`) and the Supertonic paths; the previous file is saved
+as `config.local.yaml.bak` so any other hand edits can be copied back.
+
 > You can skip running `setup.sh` yourself: **`./run.sh` runs it automatically on
 > the first launch** if it hasn't completed. Opt out with `AUTO_SETUP=0` (it then
 > errors with a hint instead of installing).

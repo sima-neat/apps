@@ -10,3 +10,4 @@ config.local.yaml
 .neat-genai-reset.token
 .neat-genai-reset.request
 .local-certs/
+config.local.yaml.bak

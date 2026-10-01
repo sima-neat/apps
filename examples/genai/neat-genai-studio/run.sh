@@ -501,6 +501,7 @@ do_clean() {
     "${DEFAULT_APP_VENV}" \
     "${EXAMPLE_DIR}/.venv-pipertts" \
     "${DEFAULT_LOCAL_CONFIG}" \
+    "${DEFAULT_LOCAL_CONFIG}.bak" \
     "${RESET_TOKEN_FILE}" \
     "${PID_FILE}" \
     "${MODE_FILE}" \
@@ -646,6 +647,7 @@ do_update() {
       --exclude='/.venv-pipertts/' \
       --exclude='/.venv-supertonic/' \
       --exclude='/config.local.yaml' \
+      --exclude='/config.local.yaml.bak' \
       --exclude='/.local-certs/' \
       --exclude='/.neat-genai-studio.pid' \
       --exclude='/.neat-genai-studio.mode' \
