@@ -1012,7 +1012,11 @@ void write_json_report(const fs::path& path, const std::vector<ImageResult>& res
 }
 
 std::string csv_escape(const std::string& value) {
-  if (value.find_first_of(",\"\n") == std::string::npos)
+  // \r is in the set because a bare carriage return is a legal character in a
+  // Unix filename, and a CSV reader treats an unquoted one as a record
+  // boundary - the row would split and every later column shift. Python's
+  // csv.writer quotes it, so leaving it out here also broke report parity.
+  if (value.find_first_of(",\"\n\r") == std::string::npos)
     return value;
   std::string out = "\"";
   for (char c : value) {

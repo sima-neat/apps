@@ -539,6 +539,26 @@ class TestThumbnails:
         assert written.shape[0] == 32 and written.shape[1] == 32
 
 
+class TestCsvQuoting:
+    def test_carriage_return_in_a_path_is_quoted(self, tmp_path):
+        """A bare \\r is legal in a Unix filename and is a record boundary to a
+        CSV reader, so it has to be quoted or the row splits and every later
+        column shifts. Python's csv.writer does this; the C++ writer had to be
+        told, and the two must agree."""
+        import csv as _csv
+        import io as _io
+
+        rows = [["a\rb", "m", "ok"]]
+        buf = _io.StringIO()
+        _csv.writer(buf, lineterminator="\r\n").writerows(rows)
+        written = buf.getvalue()
+        assert written.startswith('"a\rb"'), (
+            "csv.writer must quote a field containing a carriage return"
+        )
+        # Round-trips as one row, which is the property the C++ side must match.
+        assert list(_csv.reader(_io.StringIO(written))) == rows
+
+
 class TestScalarConfigSemantics:
     """`ScalarConfig` unquotes a value and then tests it for null, and it never
     sees a YAML type. Python has the typed value but not the raw spelling, so
