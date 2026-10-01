@@ -5152,7 +5152,7 @@ async function initHubControls() {
   if (hubSearch) hubSearch.addEventListener('input', applyHubFilters);
   const hubRefresh = document.getElementById('hubRefreshButton');
   if (hubRefresh) hubRefresh.addEventListener('click', () => { _hubLoaded = true; loadHubModels(); });
-  ['hubFilterType', 'hubFilterParams', 'hubFilterFamily', 'hubSortBy'].forEach(id => {
+  ['hubFilterOrg', 'hubFilterType', 'hubFilterParams', 'hubFilterFamily', 'hubSortBy'].forEach(id => {
     const el = document.getElementById(id); if (el) el.addEventListener('change', applyHubFilters);
   });
 
@@ -5196,8 +5196,11 @@ async function loadHubModels() {
       // The server classifies from Hub metadata (pipeline_tag/tags), which is
       // reliable; the repo-name guess is only for older servers.
       const t = m.type ? m.type.toUpperCase() : hubModelType(m.repoId);
-      return { ...m, _type: t, _params: b, _bucket: hubParamsBucket(b), _family: hubModelFamily(m.repoId) };
+      const org = m.org || (m.repoId.includes('/') ? m.repoId.split('/')[0] : '');
+      return { ...m, _type: t, _org: org, _params: b, _bucket: hubParamsBucket(b),
+               _family: hubModelFamily(m.repoId) };
     });
+    populateHubOrgFilter();
     populateHubFamilyFilter();
     applyHubFilters();
   } catch (err) {
@@ -5237,6 +5240,22 @@ function hubModelFamily(repoId) {
   return m ? (m[0][0].toUpperCase() + m[0].slice(1)) : 'Other';
 }
 
+// Which Hugging Face accounts the current results came from. Built from the
+// results rather than the configured org list, so it only ever offers accounts
+// that actually returned something.
+function populateHubOrgFilter() {
+  const sel = document.getElementById('hubFilterOrg');
+  if (!sel) return;
+  const cur = sel.value;
+  const orgs = Array.from(new Set(_hubAllModels.map(m => m._org).filter(Boolean)))
+    .sort((a, b) => a.localeCompare(b));
+  sel.innerHTML = '<option value="">All accounts</option>'
+    + orgs.map(o => `<option value="${escHtml(o)}">${escHtml(o)}</option>`).join('');
+  if (orgs.includes(cur)) sel.value = cur;
+  // One account configured: the filter would be a no-op, so keep it out of the way.
+  sel.style.display = orgs.length > 1 ? '' : 'none';
+}
+
 function populateHubFamilyFilter() {
   const sel = document.getElementById('hubFilterFamily');
   if (!sel) return;
@@ -5251,6 +5270,7 @@ function applyHubFilters() {
   const ft = document.getElementById('hubFilterType')?.value || '';
   const fp = document.getElementById('hubFilterParams')?.value || '';
   const ff = document.getElementById('hubFilterFamily')?.value || '';
+  const fo = document.getElementById('hubFilterOrg')?.value || '';
   const filtered = _hubAllModels.filter(m => {
     // Fully-installed models live in the Installed section above; only offer the
     // Hugging Face row for new models and incomplete ones (which need re-download).
@@ -5259,6 +5279,7 @@ function applyHubFilters() {
     if (ft && m._type !== ft) return false;
     if (fp && m._bucket !== fp) return false;
     if (ff && m._family !== ff) return false;
+    if (fo && m._org !== fo) return false;
     return true;
   });
   const sort = document.getElementById('hubSortBy')?.value || 'downloads';

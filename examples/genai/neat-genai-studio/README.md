@@ -555,9 +555,11 @@ offline). It lists compatible models *available to download* from the Hugging Fa
 accounts in `server.hub.orgs` — `simaai` (official precompiled) plus the
 `TDoSiMa` and `florianvoss` community accounts — each with a **download size**
 badge (⬇ so you know how much space it needs) and a **`💾 NVMe storage: … free`**
-readout so you can tell whether it will fit. Filter by type (LLM / VLM / ASR),
-search, click **Download**, watch the progress bar, and the model moves to the
-**Models** tab ready to load — a speech model into the **Speech-to-text** group.
+readout so you can tell whether it will fit. Filter by account, type
+(LLM / VLM / ASR), parameter count or family, search, click **Download**, watch
+the progress bar, and the model moves to the **Models** tab ready to load — a
+speech model into the **Speech-to-text** group. The account filter lists only
+accounts that returned results, and hides itself when just one is configured.
 
 Downloads land under `catalog_dir`. A repo from an account other than `simaai` is
 stored as `<org>@<name>`, so two accounts publishing the same model name cannot
