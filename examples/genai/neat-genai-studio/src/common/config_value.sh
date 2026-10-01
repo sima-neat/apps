@@ -62,3 +62,22 @@ config_true() {
     *) return 1 ;;
   esac
 }
+
+# A YAML block list under app.web.<key>, joined with commas:
+#   web_config_list <config.yaml> <key>     ("- a" / "- 'b'" items; quotes dropped)
+web_config_list() {
+  local config="$1" key="$2"
+  [[ -f "${config}" ]] || return 0
+  awk -v key="${key}" '
+    /^  web:/ {f=1; next}
+    f && /^  [a-z]/ {f=0}
+    f && $1 == key":" {l=1; next}
+    l && /^[ \t]*- / {
+      v = $0; sub(/^[ \t]*- [ \t]*/, "", v); sub(/[ \t]+#.*$/, "", v); sub(/[ \t]+$/, "", v)
+      gsub(/^["\x27]|["\x27]$/, "", v)
+      out = out (out == "" ? "" : ",") v; next
+    }
+    l {l=0}
+    END {print out}
+  ' "${config}" 2>/dev/null || true
+}

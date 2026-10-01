@@ -69,6 +69,16 @@ class ShellWebConfigTests(unittest.TestCase):
         self.assertEqual(self._web("cors_origins"), "http://a:3000, https://b")
         self.assertEqual(self._web("models_root"), "")      # other section
 
+    def test_list_valued_setting_is_joined(self):
+        text = ("app:\n  web:\n    port: 5000\n    cors_origins:\n      - http://a:3000\n"
+                "      - 'https://b'   # second\n      - \"*\"\n    https: true\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / "c.yaml"
+            config.write_text(text, encoding="utf-8")
+            self.assertEqual(_run('web_config_list "$1" cors_origins', str(config)), "http://a:3000,https://b,*")
+            self.assertEqual(_run('web_config_scalar "$1" cors_origins', str(config)), "")
+            self.assertEqual(_run('web_config_list "$1" https', str(config)), "")
+
     def test_truthiness_matches_the_python_loader(self):
         for value in ("1", "true", "True", "YES", "on"):
             self.assertEqual(_run('config_true "$1" && echo y || echo n', value), "y", value)

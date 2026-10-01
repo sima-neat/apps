@@ -148,6 +148,7 @@
    *  resolves when playback ends (or is stopped). */
   function makePlayer({ waveEl, canvas, button, audioEl }) {
     let buffer = null, source = null, startedAt = 0, raf = 0, resolveEnd = null, objectUrl = null;
+    let nativeWaiters = [];          // play() promises handed over to the <audio> controls
     let loadGen = 0;                 // stop() bumps it: a load still decoding then goes nowhere
     const cursor = waveEl.querySelector('.cursor');
     const placeholder = waveEl.querySelector('.placeholder');
@@ -161,10 +162,15 @@
       label.textContent = 'Play';
       if (resolveEnd) { const r = resolveEnd; resolveEnd = null; r(); }
     }
+    function settleNative() {        // the native playback a turn was waiting on ended
+      const waiters = nativeWaiters; nativeWaiters = [];
+      waiters.forEach((r) => r());
+    }
     function stop() {                // everything, including a load still in progress
       loadGen += 1;
       stopSource();
       if (!audioEl.paused) { try { audioEl.pause(); } catch (e) { /* not playable */ } }
+      settleNative();
     }
     function tick() {
       if (!source || !buffer) return;
@@ -241,7 +247,15 @@
       waveEl.classList.remove('playing');
     }
     button.addEventListener('click', () => { play(); });
-    audioEl.addEventListener('play', () => { if (source) stopSource(); });   // don't double-play
+    // Switching to the native controls mid-playback: stop the Web Audio copy, but
+    // a turn awaiting play() (Echo, Translate keep the microphone paused until
+    // then) keeps waiting until the native playback pauses or ends.
+    audioEl.addEventListener('play', () => {
+      if (!source) return;
+      if (resolveEnd) { nativeWaiters.push(resolveEnd); resolveEnd = null; }
+      stopSource();
+    });
+    ['pause', 'ended', 'emptied'].forEach((ev) => audioEl.addEventListener(ev, settleNative));
     window.addEventListener('resize', () => { if (buffer) drawWave(canvas, buffer); });
     return { load, stop, play, reset, get buffer() { return buffer; }, get playing() { return !!source; } };
   }
@@ -756,7 +770,7 @@
       tr.rec.disabled = false; tr.recStop.disabled = true;
     };
     rec.ondataavailable = (e) => { if (e.data && e.data.size) parts.push(e.data); };
-    rec.onerror = (e) => { cleanup(); setStatus(tr.status, `Recording failed: ${(e.error && e.error.message) || 'unknown error'}`, 'err'); };
+    rec.onerror = (e) => { recording.discard = true; cleanup(); setStatus(tr.status, `Recording failed: ${(e.error && e.error.message) || 'unknown error'}`, 'err'); };
     const recording = { rec, cleanup, discard: false };
     rec.onstop = async () => {
       cleanup();
