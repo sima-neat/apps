@@ -109,13 +109,21 @@ def _write_registry_cli(path: Path, installed_files: list[str]) -> tuple[Path, P
     calls = path / "sima-cli-calls.txt"
     cli = path / "sima-cli"
     touch_commands = "".join(
-        f'touch "$install_dir/{file_name}"\n' for file_name in installed_files
+        f'touch "$output/$model_id/$variant/{file_name}"\n'
+        for file_name in installed_files
     )
     cli.write_text(
         "#!/usr/bin/env bash\n"
         'printf \'%s\\n\' "$*" >> "$NEAT_APPS_TEST_SIMA_CLI_CALLS"\n'
-        'install_dir="${!#:?missing install directory}"\n'
-        'mkdir -p "$install_dir"\n'
+        "while [[ $# -gt 0 ]]; do\n"
+        '  case "$1" in\n'
+        '    --id) model_id="$2"; shift 2 ;;\n'
+        '    --variant) variant="$2"; shift 2 ;;\n'
+        '    --output) output="$2"; shift 2 ;;\n'
+        '    *) shift ;;\n'
+        "  esac\n"
+        "done\n"
+        'mkdir -p "$output/$model_id/$variant"\n'
         f"{touch_commands}",
         encoding="utf-8",
     )
@@ -517,29 +525,33 @@ def test_download_models_rejects_unknown_url_placeholder(tmp_path):
     assert "unsupported URL placeholder" in result.stderr
 
 
-def test_download_models_installs_registry_resource_once_for_multiple_files(tmp_path):
+def test_download_models_fetches_compiled_model_from_registry(tmp_path):
     _require_modern_bash()
     query = _write_registry_scope_query(
         tmp_path,
-        [("first", "first.tar.gz"), ("second", "second.tar.gz")],
+        [("demo", "demo.tar.gz")],
     )
-    cli, calls = _write_registry_cli(tmp_path, ["first.tar.gz", "second.tar.gz"])
+    cli, calls = _write_registry_cli(tmp_path, ["demo.tar.gz"])
     models_dir = tmp_path / "models"
 
     result = _run_registry_download(models_dir, query, cli, calls)
 
     assert result.returncode == 0, result.stderr
-    call_lines = calls.read_text(encoding="utf-8").splitlines()
-    assert len(call_lines) == 1
-    assert call_lines[0].split()[:4] == [
-        "neat",
-        "install",
-        "models/demo-models@main:latest",
-        "--install-dir",
+    command = calls.read_text(encoding="utf-8").split()
+    assert command[:9] == [
+        "models",
+        "download",
+        "--id",
+        "demo-models",
+        "--variant",
+        "latest",
+        "--branch",
+        "main",
+        "--output",
     ]
-    assert len(call_lines[0].split()) == 5
-    assert (models_dir / "first.tar.gz").is_file()
-    assert (models_dir / "second.tar.gz").is_file()
+    assert Path(command[9]).name.startswith("tmp.")
+    assert command[10:] == ["--json"]
+    assert (models_dir / "demo.tar.gz").is_file()
 
 
 def test_download_models_uses_staging_registry_for_non_main_ref(tmp_path):
@@ -554,12 +566,16 @@ def test_download_models_uses_staging_registry_for_non_main_ref(tmp_path):
     result = _run_registry_download(tmp_path / "models", query, cli, calls)
 
     assert result.returncode == 0, result.stderr
-    assert calls.read_text(encoding="utf-8").split()[:5] == [
-        "neat",
-        "install",
+    assert calls.read_text(encoding="utf-8").split()[:9] == [
+        "models",
+        "download",
         "--stg",
-        "models/demo-models@codex/model-branch:latest",
-        "--install-dir",
+        "--id",
+        "demo-models",
+        "--variant",
+        "latest",
+        "--branch",
+        "codex/model-branch",
     ]
 
 
@@ -594,10 +610,7 @@ def test_download_models_reports_missing_registry_file(tmp_path):
     result = _run_registry_download(tmp_path / "models", query, cli, calls)
 
     assert result.returncode != 0
-    assert (
-        "second: requested file second.tar.gz was not installed by "
-        "models/demo-models@main:latest"
-    ) in result.stderr
+    assert "second: requested file second.tar.gz was not downloaded" in result.stderr
 
 
 def test_download_models_rejects_unsafe_registry_file(tmp_path):

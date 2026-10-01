@@ -284,114 +284,56 @@ download_huggingface_model() {
     return 1
 }
 
-download_model_registry_group() {
-    local registry_name="$1"
-    local registry_ref="$2"
-    local registry_spec="$3"
-    shift 3
-    local resource="models/${registry_name}@${registry_ref}:${registry_spec}"
-    local all_present=1
-    local row model_id name expected_file ref spec fields
-
-    for row in "$@"; do
-        fields=()
-        split_tsv_row "$row" fields
-        name="${fields[2]:-}"
-        expected_file="${fields[4]:-}"
-        ref="${fields[7]:-}"
-        spec="${fields[8]:-}"
-        if [[ "$name" == "$registry_name" && "$ref" == "$registry_ref" && \
-              "$spec" == "$registry_spec" && \
-              ! -f "${MODELS_DIR}/${expected_file}" ]]; then
-            all_present=0
-        fi
-    done
-
-    if [[ "$all_present" -eq 1 ]]; then
-        for row in "$@"; do
-            fields=()
-            split_tsv_row "$row" fields
-            model_id="${fields[0]:-}"
-            name="${fields[2]:-}"
-            ref="${fields[7]:-}"
-            spec="${fields[8]:-}"
-            if [[ "$name" == "$registry_name" && "$ref" == "$registry_ref" && \
-                  "$spec" == "$registry_spec" ]]; then
-                echo "[skip] $model_id already exists"
-            fi
-        done
+download_model_registry_model() {
+    local model_id="$1"
+    local registry_id="$2"
+    local expected_file="$3"
+    local registry_branch="$4"
+    local variant="$5"
+    if [[ -f "${MODELS_DIR}/${expected_file}" ]]; then
+        echo "[skip] $model_id already exists"
         return 0
     fi
-
     ensure_sima_cli_bin || return 1
+
     local tmpdir
     if ! tmpdir="$(mktemp -d)"; then
-        echo "[error] failed to create temporary directory for $resource" >&2
+        echo "[error] failed to create temporary directory for $registry_id/$variant" >&2
         return 1
     fi
-    echo "[download] $resource (model-registry)"
     local environment_args=()
-    if [[ "$registry_ref" != "main" ]]; then
+    if [[ "$registry_branch" != "main" ]]; then
         environment_args+=(--stg)
     fi
-    if ! "$SIMA_CLI_BIN" neat install "${environment_args[@]}" "$resource" --install-dir "$tmpdir"; then
+    echo "[download] $model_id (model-registry: $registry_id/$variant@$registry_branch)"
+    if ! "$SIMA_CLI_BIN" models download "${environment_args[@]}" \
+            --id "$registry_id" --variant "$variant" --branch "$registry_branch" \
+            --output "$tmpdir" --json; then
         rm -rf "$tmpdir"
-        echo "[error] failed to install model-registry resource $resource" >&2
+        echo "[error] failed to download model $registry_id/$variant@$registry_branch" >&2
         return 1
     fi
 
-    local failed=0
-    local installed_file destination destination_dir staged_file
-    for row in "$@"; do
-        fields=()
-        split_tsv_row "$row" fields
-        model_id="${fields[0]:-}"
-        name="${fields[2]:-}"
-        expected_file="${fields[4]:-}"
-        ref="${fields[7]:-}"
-        spec="${fields[8]:-}"
-        if [[ "$name" != "$registry_name" || "$ref" != "$registry_ref" || \
-              "$spec" != "$registry_spec" ]]; then
-            continue
-        fi
-        destination="${MODELS_DIR}/${expected_file}"
-        if [[ -f "$destination" ]]; then
-            echo "[skip] $model_id already exists"
-            continue
-        fi
-        installed_file="${tmpdir}/${expected_file}"
-        if [[ ! -f "$installed_file" ]]; then
-            echo "[error] $model_id: requested file $expected_file was not installed by $resource" >&2
-            failed=1
-            continue
-        fi
-        destination_dir="$(dirname "$destination")"
-        if ! mkdir -p "$destination_dir"; then
-            echo "[error] $model_id: failed to create model directory $destination_dir" >&2
-            failed=1
-            continue
-        fi
-        if ! staged_file="$(mktemp "${destination}.tmp.XXXXXX")"; then
-            echo "[error] $model_id: failed to stage $expected_file in $destination_dir" >&2
-            failed=1
-            continue
-        fi
-        if ! cp "$installed_file" "$staged_file"; then
-            rm -f "$staged_file"
-            echo "[error] $model_id: failed to copy $expected_file into $MODELS_DIR" >&2
-            failed=1
-            continue
-        fi
-        if ! mv -f "$staged_file" "$destination"; then
-            rm -f "$staged_file"
-            echo "[error] $model_id: failed to publish $expected_file into $MODELS_DIR" >&2
-            failed=1
-            continue
-        fi
-        echo "[ok] $model_id"
-    done
+    local installed_file="${tmpdir}/${registry_id}/${variant}/${expected_file}"
+    if [[ ! -f "$installed_file" ]]; then
+        rm -rf "$tmpdir"
+        echo "[error] $model_id: requested file $expected_file was not downloaded" >&2
+        return 1
+    fi
+    local staged_file
+    if ! staged_file="$(mktemp "${MODELS_DIR}/${expected_file}.tmp.XXXXXX")"; then
+        rm -rf "$tmpdir"
+        echo "[error] $model_id: failed to stage $expected_file in $MODELS_DIR" >&2
+        return 1
+    fi
+    if ! cp "$installed_file" "$staged_file" || ! mv -f "$staged_file" "${MODELS_DIR}/${expected_file}"; then
+        rm -f "$staged_file"
+        rm -rf "$tmpdir"
+        echo "[error] $model_id: failed to publish $expected_file into $MODELS_DIR" >&2
+        return 1
+    fi
     rm -rf "$tmpdir"
-    return "$failed"
+    echo "[ok] $model_id"
 }
 
 split_tsv_row() {
@@ -441,7 +383,6 @@ download_scoped_models() {
     acquire_lock
 
     local failed=0
-    local registry_rows=()
     local row model_id source name url expected_file repo path fields
     for row in "${rows[@]}"; do
         fields=()
@@ -468,7 +409,8 @@ download_scoped_models() {
                     echo "[error] $model_id has unsafe model-registry file: $expected_file" >&2
                     failed=1
                 else
-                    registry_rows+=("$row")
+                    download_model_registry_model "$model_id" "$name" "$expected_file" \
+                        "${fields[7]:-}" "${fields[8]:-}" || failed=1
                 fi
                 ;;
             *)
@@ -478,33 +420,6 @@ download_scoped_models() {
         esac
     done
 
-    local registry_names=()
-    local registry_refs=()
-    local registry_specs=()
-    local ref spec seen index
-    for row in "${registry_rows[@]}"; do
-        fields=()
-        split_tsv_row "$row" fields
-        name="${fields[2]:-}"
-        ref="${fields[7]:-}"
-        spec="${fields[8]:-}"
-        seen=0
-        for index in "${!registry_names[@]}"; do
-            if [[ "${registry_names[$index]}" == "$name" && \
-                  "${registry_refs[$index]}" == "$ref" && \
-                  "${registry_specs[$index]}" == "$spec" ]]; then
-                seen=1
-                break
-            fi
-        done
-        if [[ "$seen" -eq 1 ]]; then
-            continue
-        fi
-        registry_names+=("$name")
-        registry_refs+=("$ref")
-        registry_specs+=("$spec")
-        download_model_registry_group "$name" "$ref" "$spec" "${registry_rows[@]}" || failed=1
-    done
     return "$failed"
 }
 
