@@ -35,9 +35,14 @@ CONFIG = """app:
 """
 
 
-def _run(script: str, *args: str) -> str:
+import os
+import sys
+
+
+def _run(script: str, *args: str, python: str | None = None) -> str:
+    env = dict(os.environ, STUDIO_CONFIG_PYTHON=python or sys.executable)
     out = subprocess.run(["bash", "-c", f'source "$1"; shift; {script}', "_", str(HELPER), *args],
-                         check=True, capture_output=True, text=True)
+                         check=True, capture_output=True, text=True, env=env)
     return out.stdout.strip()
 
 
@@ -65,7 +70,7 @@ class ShellWebConfigTests(unittest.TestCase):
         self.assertEqual(self._web("host"), "0.0.0.0")
         self.assertEqual(self._web("port"), "5000")
         self.assertEqual(self._web("https"), "false")
-        self.assertEqual(self._web("headless"), "True")
+        self.assertEqual(self._web("headless"), "true")       # normalized by the loader
         self.assertEqual(self._web("cors_origins"), "http://a:3000, https://b")
         self.assertEqual(self._web("models_root"), "")      # other section
 
@@ -76,8 +81,8 @@ class ShellWebConfigTests(unittest.TestCase):
             config = Path(tmp) / "c.yaml"
             config.write_text(text, encoding="utf-8")
             self.assertEqual(_run('web_config_list "$1" cors_origins', str(config)), "http://a:3000,https://b,*")
-            self.assertEqual(_run('web_config_scalar "$1" cors_origins', str(config)), "")
-            self.assertEqual(_run('web_config_list "$1" https', str(config)), "")
+            self.assertEqual(_run('web_config_scalar "$1" cors_origins', str(config)), "http://a:3000,https://b,*")
+            self.assertEqual(_run('web_config_list "$1" https', str(config)), "true")   # loader value
 
     def test_any_indentation_and_no_app_root_like_the_loader(self):
         four = ("app:\n    web:\n        headless: true\n        https: false\n"
@@ -89,7 +94,7 @@ class ShellWebConfigTests(unittest.TestCase):
             self.assertEqual(_run('web_config_scalar "$1" headless', str(a)), "true")
             self.assertEqual(_run('web_config_scalar "$1" https', str(a)), "false")
             self.assertEqual(_run('supertonic_config_value "$1" models_root', str(a)), "/m4")
-            self.assertEqual(_run('web_config_scalar "$1" headless', str(b)), "yes")
+            self.assertEqual(_run('web_config_scalar "$1" headless', str(b)), "true")
             self.assertEqual(_run('supertonic_config_value "$1" venv', str(b)), "/v")
         # the Python loader agrees on the same files
         import sys
@@ -99,6 +104,29 @@ class ShellWebConfigTests(unittest.TestCase):
             a = Path(tmp) / "four.yaml"; a.write_text(four, encoding="utf-8")
             cfg = load_ui_config(a, Path(tmp))
             self.assertEqual((cfg.web.headless, cfg.web.https, cfg.supertonic.models_root), (True, False, "/m4"))
+
+    def test_flow_style_mapping_reads_like_the_loader(self):
+        text = ('app:\n  web: {host: 0.0.0.0, port: 5000, headless: true, https: "false",'
+                ' cors_origins: [http://a:3000, "https://b"]}\n'
+                '  tts: {supertonic: {models_root: /flow, venv: /fv}}\n')
+        with tempfile.TemporaryDirectory() as tmp:
+            c = Path(tmp) / "flow.yaml"; c.write_text(text, encoding="utf-8")
+            self.assertEqual(_run('web_config_scalar "$1" headless', str(c)), "true")
+            self.assertEqual(_run('web_config_scalar "$1" https', str(c)), "false")
+            self.assertEqual(_run('web_config_scalar "$1" port', str(c)), "5000")
+            self.assertEqual(_run('web_config_list "$1" cors_origins', str(c)), "http://a:3000,https://b")
+            self.assertEqual(_run('supertonic_config_value "$1" models_root', str(c)), "/flow")
+            self.assertEqual(_run('supertonic_config_value "$1" venv', str(c)), "/fv")
+
+    def test_fallback_reader_without_a_yaml_python(self):
+        # No usable Python: the block-style awk reader still answers.
+        with tempfile.TemporaryDirectory() as tmp:
+            c = Path(tmp) / "c.yaml"; c.write_text(WEB, encoding="utf-8")
+            env = dict(os.environ, STUDIO_CONFIG_PYTHON="/nonexistent/python", PATH="/usr/bin:/bin")
+            script = 'source "$1"; _studio_config_python() { return 1; }; web_config_scalar "$2" headless'
+            out = subprocess.run(["bash", "-c", script, "_", str(HELPER), str(c)],
+                                 check=True, capture_output=True, text=True, env=env)
+            self.assertEqual(out.stdout.strip(), "True")
 
     def test_truthiness_matches_the_python_loader(self):
         for value in ("1", "true", "True", "YES", "on"):
