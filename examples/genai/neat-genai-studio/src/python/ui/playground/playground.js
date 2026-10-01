@@ -930,7 +930,17 @@
   const liveStats = { count: 0, words: 0, speech: 0, latencies: [], rtfs: [] };
   let liveClearGen = 0;
   let liveQueue = Promise.resolve();
-  let liveController = null;
+  let liveController = null;           // the capture session (Start → Stop)
+  // The batch of transcription requests the log shows. Clear aborts it and
+  // starts a new batch with an empty queue while listening carries on; Stop
+  // aborts it with the session.
+  let liveBatch = null;
+  function newLiveBatch() {
+    if (liveBatch) liveBatch.abort();
+    liveBatch = new AbortController();
+    liveQueue = Promise.resolve();
+    return liveBatch;
+  }
 
   function setChip(chipEl, cls, text) { chipEl.className = `state-chip ${cls}`; chipEl.lastElementChild.textContent = text; }
   liveMic.on('state', (s) => {
@@ -973,11 +983,13 @@
     // in the queue comes.
     const language = tl.language.value, model = tl.model.value.trim();
     const clearGen = liveClearGen;
+    const batch = liveBatch || newLiveBatch();
+    const dropped = () => session.signal.aborted || batch.signal.aborted || clearGen !== liveClearGen;
     liveQueue = liveQueue.then(async () => {
-      if (session.signal.aborted) { row.remove(); return; }   // stopped while queued
+      if (dropped()) { row.remove(); return; }   // stopped or cleared while queued
       try {
-        const r = await transcribeBlob(blob, 'utterance.wav', { language, model, signal: session.signal });
-        if (clearGen !== liveClearGen) return;   // the log was cleared meanwhile
+        const r = await transcribeBlob(blob, 'utterance.wav', { language, model, signal: batch.signal });
+        if (dropped()) return;                   // the log was cleared meanwhile
         const d = r.data;
         row.classList.remove('pending');
         row.querySelector('.x').textContent = r.text || '(no words)';
@@ -993,7 +1005,7 @@
         }
       } catch (err) {
         row.classList.remove('pending');
-        if (err.name === 'AbortError') { row.remove(); return; }
+        if (err.name === 'AbortError' || dropped()) { row.remove(); return; }   // not this log's business any more
         row.classList.add('err'); row.querySelector('.x').textContent = err.message;
         setStatus(tl.status, err.message, 'err');
       }
@@ -1007,6 +1019,7 @@
     setStatus(tl.status, '');
     const session = new AbortController();   // before the mic runs: segments bind to it
     liveController = session;
+    newLiveBatch();
     tl.start.disabled = true; tl.start.querySelector('span').textContent = 'Starting…';   // no second click meanwhile
     tl.stop.disabled = false;
     let started = false;
@@ -1029,6 +1042,8 @@
   function stopLive() {
     liveMic.stop();
     if (liveController) { liveController.abort(); liveController = null; }
+    if (liveBatch) { liveBatch.abort(); liveBatch = null; }
+    liveQueue = Promise.resolve();
     resetLiveControls();
   }
   tl.start.addEventListener('click', startLive);
@@ -1041,6 +1056,8 @@
   tl.hideIgnored.addEventListener('change', () => { tl.log.querySelectorAll('.seg-item.ignored').forEach((r) => { r.hidden = tl.hideIgnored.checked; }); savePrefs({ tlHide: tl.hideIgnored.checked }); });
   tl.clear.addEventListener('click', () => {
     liveClearGen += 1;                         // results still in flight belong to the cleared log
+    if (liveBatch) newLiveBatch();             // cancel in-flight and queued requests; keep listening
+    setStatus(tl.status, '');
     tl.log.innerHTML = '<div class="placeholder">Start listening and speak. Each utterance appears here as soon as it is transcribed.</div>';
     Object.assign(liveStats, { count: 0, words: 0, speech: 0, latencies: [], rtfs: [] }); updateLiveStats();
   });
