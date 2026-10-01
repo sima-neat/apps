@@ -742,8 +742,12 @@
     recStarting = true;
     let granted;
     try { granted = await navigator.mediaDevices.getUserMedia({ audio: true }); }
-    catch (err) { setStatus(tr.status, `Microphone unavailable: ${err.message}`, 'err'); return; }
-    finally { recStarting = false; }
+    catch (err) {
+      if (token !== recToken) return;        // superseded: leave the UI to the current attempt
+      setStatus(tr.status, `Microphone unavailable: ${err.message}`, 'err');
+      return;
+    }
+    finally { if (token === recToken) recStarting = false; }
     if (token !== recToken) { granted.getTracks().forEach((t) => t.stop()); return; }   // mode/tab left meanwhile
     const mime = (window.MediaRecorder && MediaRecorder.isTypeSupported) ? MIME_PREFERENCE.find((m) => MediaRecorder.isTypeSupported(m)) : '';
     let rec;
@@ -1025,7 +1029,10 @@
     let started = false;
     try { started = await liveMic.start(); }
     catch (err) {
-      if (liveController === session) { liveController = null; resetLiveControls(); }
+      // A superseded attempt must not report anything: the replacement may have
+      // already succeeded, and this error would sit over a working microphone.
+      if (liveController !== session) return;
+      liveController = null; resetLiveControls();
       setStatus(tl.status, `Microphone unavailable: ${err.message}`, 'err'); setChip(tl.state, 'err', 'no microphone');
       return;
     }

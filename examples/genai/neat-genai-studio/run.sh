@@ -372,7 +372,12 @@ do_status() {
     local pid; pid="$(cat "${PID_FILE}" 2>/dev/null || true)"
     if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
       local mode; mode="$(cat "${MODE_FILE}" 2>/dev/null || echo web)"
-      local url; url="$(web_url || true)"
+      # Report the URL the RUNNING instance recorded: recomputing it here would
+      # describe this invocation's config, which a CONFIG_PATH override makes a
+      # different (possibly unreachable) endpoint. Fall back for an instance
+      # started before the url file existed.
+      local url; url="$(cat "${URL_FILE}" 2>/dev/null || true)"
+      [[ -n "${url}" ]] || url="$(web_url || true)"
       if [[ "${mode}" == "backend-only" ]]; then
         ok "Neat GenAI Studio is running (pid ${pid}, backend-only: API endpoints, no web UI)."
         [[ -n "${url}" ]] && info "API: ${C_ACCENT}${url}${C_RESET}  health: ${C_ACCENT}${url}/health${C_RESET}"
