@@ -374,54 +374,26 @@ def classify_model_dir(model_dir: Path) -> dict | None:
 
 
 def layered_encoder_reason(elf_names) -> str:
-    """Why this runtime cannot load a speech build, or "" if it can.
+    """Deprecated: always "". Kept so older callers keep working.
 
-    The runtime derives ELF paths from the model name and loads the encoder as
-    one stage, ``<model>_encoder_stage1_mla.elf``. Some community builds ship a
-    *layered* encoder instead — one ELF per encoder layer, no combined stage —
-    and whisper_config.json names no files, so nothing in the model declares
-    which layout it uses. Shared by the on-disk check and the Hub listing so a
-    build is described the same way before and after downloading it.
+    This used to refuse Whisper builds whose encoder is split into per-layer ELF
+    files, because the runtime loaded the encoder as one combined stage. That
+    requirement then INVERTED inside a single version: 0.4.0 needs a combined
+    stage, 0.4.0+develop.7d003ef needs 12 layered files and calls the combined
+    one "Unsupported legacy Whisper model". Neither layout is right in general,
+    the model directory does not say which runtime compiled it, and guessing
+    wrong blocks the only models that work. The runtime now reports the mismatch
+    precisely — naming the layout it found, the one it needs and the remedy — so
+    let it decide and surface its message.
     """
-    names = [n for n in elf_names if n.endswith("_mla.elf")]
-    if not names or any("_encoder_stage" in n for n in names):
-        return ""
-    layered = [n for n in names if "_encoder_layer" in n]
-    if not layered:
-        return ""
-    return (f"this build splits the encoder into {len(layered)} per-layer weight "
-            "files, and the installed Neat runtime loads the encoder as a single "
-            "stage — use a build with a combined encoder, or set "
-            "STUDIO_ALLOW_LAYERED_ASR=1 if your runtime supports layers")
+    return ""
 
 
 def model_dir_supported(path) -> tuple[bool, str]:
-    """Can this runtime address the model's weights? (supported, reason).
-
-    Separate from ``model_dir_complete``: an unsupported build is not a broken
-    download, and telling the user to re-download it wastes gigabytes and never
-    helps. Only speech models are examined; chat/VLM builds legitimately ship
-    per-layer weights and no encoder.
-    """
-    if os.environ.get("STUDIO_ALLOW_LAYERED_ASR") == "1":
-        return True, ""
-    try:
-        p = path if isinstance(path, Path) else Path(path)
-    except Exception:
-        return True, ""
-    try:
-        if not p or not p.is_dir():
-            return True, ""
-        if not (p / "devkit" / "whisper_config.json").is_file() \
-                and not (p / "whisper_config.json").is_file():
-            return True, ""
-        elf_dir = p / "elf_files"
-        if not elf_dir.is_dir():
-            return True, ""
-        why = layered_encoder_reason(f.name for f in elf_dir.glob("*_mla.elf"))
-    except OSError:
-        return True, ""
-    return (not why), why
+    """Always (True, ""). See layered_encoder_reason for why nothing is refused
+    here: encoder layout is a runtime-version question the files cannot answer.
+    Kept so the catalog's `supported` field stays populated for clients."""
+    return True, ""
 
 
 def model_dir_complete(path) -> tuple[bool, str]:

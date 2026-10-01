@@ -86,7 +86,28 @@ def start_openai_server(cfg: AppConfig):
             flush=True,
         )
 
-        server.start()
+        try:
+            server.start()
+        except Exception as exc:
+            # start() warms every registered model, so ONE unusable startup
+            # model takes the whole studio down with it — and the ASR model is
+            # the likely culprit, because a runtime update can change which
+            # Whisper build layout it accepts. Drop it and start without
+            # speech-to-text rather than leaving the user with nothing: every
+            # other model is still loadable, and a working one can be selected
+            # from the UI.
+            if served_asr_name is None:
+                raise
+            print(f"startup ASR model '{served_asr_name}' cannot be used: {exc}",
+                  file=sys.stderr, flush=True)
+            print("starting without speech-to-text — pick a working ASR model in "
+                  "Settings -> Models", file=sys.stderr, flush=True)
+            try:
+                server.remove_model(served_asr_name)
+            except Exception:
+                pass
+            served_asr_name = None
+            server.start()
         return server, served_asr_name
     except BaseException:
         if server is not None:
