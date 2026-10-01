@@ -428,6 +428,28 @@ std::string decode_double_quoted_yaml(const std::string& body) {
   return out;
 }
 
+// Every filesystem predicate below goes through these. The throwing overloads
+// abort the whole run when a path cannot be stat'ed - a self-referential
+// symlink, a permission error - and the failure escapes as a generic runtime
+// error (exit 6), where Python's Path.exists()/is_file()/is_dir() report false
+// and the caller turns that into the documented ConfigError or InputError.
+// Three separate review findings were this same mistake at three call sites, so
+// the predicates are centralised rather than fixed one at a time.
+bool path_exists(const fs::path& p) {
+  std::error_code ec;
+  return fs::exists(p, ec) && !ec;
+}
+
+bool path_is_directory(const fs::path& p) {
+  std::error_code ec;
+  return fs::is_directory(p, ec) && !ec;
+}
+
+bool path_is_regular_file(const fs::path& p) {
+  std::error_code ec;
+  return fs::is_regular_file(p, ec) && !ec;
+}
+
 std::string unquote_yaml_key(const std::string& key) {
   if (key.size() >= 2 && key.front() == '"' && key.back() == '"') {
     return decode_double_quoted_yaml(key.substr(1, key.size() - 2));
@@ -614,8 +636,7 @@ std::vector<fs::path> bundled_candidates(const std::string& name) {
 // The first candidate that exists, or an empty path.
 fs::path find_bundled_file(const std::string& name) {
   for (const auto& candidate : bundled_candidates(name)) {
-    std::error_code ec;
-    if (fs::is_regular_file(candidate, ec) && !ec)
+    if (path_is_regular_file(candidate))
       return candidate;
   }
   return {};
@@ -748,7 +769,7 @@ std::vector<std::string> load_label_map(const std::string& path, int num_classes
   }
 
   fs::path label_path = normalize_like_pathlib(path);
-  if (!fs::exists(label_path) && fs::path(path).generic_string() == kBundledLabelMapRef) {
+  if (!path_exists(label_path) && fs::path(path).generic_string() == kBundledLabelMapRef) {
     // Resolve the shipped reference through the same lookup the report assets
     // use, so it is found wherever the binary is run from (model.path stays
     // cwd-relative: it points at a file the customer downloaded). A missing
@@ -763,8 +784,8 @@ std::vector<std::string> load_label_map(const std::string& path, int num_classes
   const int open_errno = errno;
   // A directory opens successfully on glibc, so is_open() alone would let it
   // through and report "0 entries" instead of naming the real problem.
-  if (!in.is_open() || !fs::is_regular_file(label_path)) {
-    const bool is_directory = fs::is_directory(label_path);
+  if (!in.is_open() || !path_is_regular_file(label_path)) {
+    const bool is_directory = path_is_directory(label_path);
     const std::string reason = is_directory ? "Is a directory"
                                : open_errno ? std::strerror(open_errno)
                                             : "No such file or directory";
@@ -819,7 +840,7 @@ fs::path fallback_cache_path(const std::string& url, const fs::path& base) {
 // 200 (e.g. a proxy error page) is never cached.
 fs::path download_fallback_image(const std::string& url, const fs::path& base) {
   const fs::path dest = fallback_cache_path(url, base);
-  if (fs::exists(dest)) {
+  if (path_exists(dest)) {
     if (!cv::imread(dest.string(), cv::IMREAD_COLOR).empty())
       return dest;
     // Truncated or corrupted since it was cached: refetch rather than classify it.
@@ -1401,8 +1422,8 @@ void publish_report(const fs::path& output_dir_arg, const std::vector<ImageResul
   const fs::path parent = output_dir.parent_path();
   fs::create_directories(parent);
 
-  if (fs::exists(output_dir)) {
-    if (!fs::is_directory(output_dir)) {
+  if (path_exists(output_dir)) {
+    if (!path_is_directory(output_dir)) {
       throw std::runtime_error("output_dir " + output_dir.string() +
                                " exists and is not a directory");
     }
@@ -1440,9 +1461,9 @@ void publish_report(const fs::path& output_dir_arg, const std::vector<ImageResul
   const fs::path previous = parent / ("." + output_dir.filename().string() + ".previous");
   std::error_code ignored;
   for (const fs::path& scratch : {staging, previous}) {
-    if (!fs::exists(scratch))
+    if (!path_exists(scratch))
       continue;
-    if (!fs::is_directory(scratch) || !fs::is_regular_file(scratch / kReportMarker)) {
+    if (!path_is_directory(scratch) || !path_is_regular_file(scratch / kReportMarker)) {
       throw std::runtime_error(scratch.string() +
                                " exists and was not created by this application; move or remove "
                                "it, or choose a different io.output_dir");
@@ -1467,13 +1488,13 @@ void publish_report(const fs::path& output_dir_arg, const std::vector<ImageResul
       close_or_throw(marker, staging / kReportMarker);
     }
 
-    const bool had_previous = fs::exists(output_dir);
+    const bool had_previous = path_exists(output_dir);
     if (had_previous)
       fs::rename(output_dir, previous);
     try {
       fs::rename(staging, output_dir);
     } catch (...) {
-      if (had_previous && !fs::exists(output_dir))
+      if (had_previous && !path_exists(output_dir))
         fs::rename(previous, output_dir); // roll back to the previous report
       throw;
     }

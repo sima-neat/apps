@@ -404,6 +404,10 @@ class TestE2E:
         # the YAML integer grammar in both.
         ("octal num_classes", "models:\n  m:\n    path: m.tar.gz\n"
          "    label_map: TOO_SHORT_LABELS\n    num_classes: 012\n", 2),
+        # A label_map that cannot be stat'ed is a configuration error (2), not a
+        # generic runtime failure (6).
+        ("label map is an unstatable symlink",
+         "models:\n  m:\n    path: m.tar.gz\n    label_map: SELF_SYMLINK\n", 2),
         # A direct io.input that cannot be stat'ed is an input error (3), not a
         # generic runtime failure (6). The entry-scan fix covered the directory
         # loop; this covers the direct-path predicates above it.
