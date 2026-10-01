@@ -585,6 +585,7 @@
   };
   const spPlayer = makePlayer({ waveEl: $('sp-wave'), canvas: $('sp-canvas'), button: $('sp-play'), audioEl: $('sp-audio') });
   let spController = null;
+  let spClearGen = 0;                // Clear bumps it: a synthesis it interrupted reports nothing
 
   function fillSpeechLanguages(wanted) {
     const languages = engineLanguages(sp.engine.value);
@@ -633,13 +634,16 @@
     if (!body.input.trim()) { setStatus(sp.status, 'Enter some text first.', 'err'); return; }
     ensureAudioContext();                     // created on the click: playback is allowed from here on
     updateSpeechPreview();
-    spController = new AbortController();
+    const controller = new AbortController();
+    spController = controller;
+    const clearGen = spClearGen;
+    const cleared = () => clearGen !== spClearGen;
     sp.run.disabled = true; sp.stop.disabled = false; sp.download.hidden = true;
     setStatus(sp.status, 'Synthesizing…', '', true);
     const t0 = performance.now();
     try {
       const res = await fetch(`${API}/v1/audio/speech`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: spController.signal,
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: controller.signal,
       });
       const lines = [];
       res.headers.forEach((v, k) => { if (/^x-|^content-/i.test(k)) lines.push(`${k}: ${v}`); });
@@ -661,14 +665,17 @@
       setDownload(blob);
       setStatus(sp.status, 'Playing', 'ok');
       await spPlayer.load(blob, { autoplay: true });
+      if (cleared()) return;                   // Clear emptied the output on purpose
+      if (controller.signal.aborted) { setStatus(sp.status, 'Cancelled.'); return; }   // Cancel during playback
       if (spPlayer.buffer) setStatus(sp.status, 'Done', 'ok');
       else setStatus(sp.status, 'The browser could not decode the returned audio (the download link still has it).', 'err');
     } catch (err) {
+      if (cleared()) return;                   // Clear's own abort: keep the cleared output empty
       if (err.name === 'AbortError') setStatus(sp.status, 'Cancelled.');
       else setStatus(sp.status, err.message, 'err');
     } finally {
-      spController = null;
-      sp.run.disabled = false; sp.stop.disabled = true;
+      if (spController === controller) spController = null;
+      sp.run.disabled = !!spController; sp.stop.disabled = !spController;
     }
   }
 
@@ -678,6 +685,7 @@
   sp.speed.addEventListener('input', () => { sp.speedOut.value = `${Number(sp.speed.value).toFixed(2)}×`; updateSpeechPreview(); });
   sp.run.addEventListener('click', synthesize);
   $('sp-clear').addEventListener('click', () => {
+    spClearGen += 1;                               // the interrupted synthesis reports nothing
     if (spController) spController.abort();        // a synthesis still running is dropped too
     spPlayer.reset();
     setDownload(null);
