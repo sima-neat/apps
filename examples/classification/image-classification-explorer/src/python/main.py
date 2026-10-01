@@ -289,7 +289,10 @@ def config_int(value: Any, key: str, default: int) -> int:
     if isinstance(value, int):
         return _check_int32(value, key)
     if isinstance(value, str):
-        parsed = parse_yaml_int(value)
+        decoded = scalar_text(value)
+        if decoded is None:
+            return default
+        parsed = parse_yaml_int(decoded)
         if parsed is None:
             raise ValueError(f"{key} must be an integer, got {yaml_text(value)}")
         return _check_int32(parsed, key)
@@ -329,6 +332,18 @@ def normalize_extension(value: str) -> str:
     return text if text.startswith(".") else f".{text}"
 
 
+def scalar_text(value: str) -> str | None:
+    """Apply ScalarConfig's scalar rules to a string, or None when it reads as null.
+
+    One place, because every reader needs it: C++ takes its text from
+    config_scalar, so decoding or null-handling in only the string path left the
+    integer and float settings disagreeing."""
+    decoded = decode_yaml_escapes(value).strip()
+    if decoded == "~" or decoded.lower() == "null":
+        return None
+    return decoded
+
+
 def config_section(raw: dict[str, Any], name: str) -> dict[str, Any]:
     """Read a top-level section.
 
@@ -338,6 +353,10 @@ def config_section(raw: dict[str, Any], name: str) -> dict[str, Any]:
     defaults are applied to a configuration the customer got wrong."""
     value = raw.get(name)
     if value is None:
+        return {}
+    # ScalarConfig unquotes before testing for null, so `io: "null"` is absent to
+    # C++ and the defaults apply. Python saw a string and rejected the file.
+    if isinstance(value, str) and scalar_text(value) is None:
         return {}
     if not isinstance(value, dict):
         raise ValueError(f"`{name}` must be a mapping, got {yaml_text(value)}")
@@ -356,15 +375,8 @@ def config_str(value: Any, key: str, default: str | None) -> str | None:
     if value is None:
         return default
     if isinstance(value, str):
-        # Stripped first, then decoded: ScalarConfig trims the raw line before
-        # the C++ side decodes, so an escape that produces whitespace survives
-        # in both rather than in neither.
-        text = decode_yaml_escapes(value.strip())
-        # ScalarConfig unquotes a value before testing it for null, so `"null"`
-        # and `"~"` reach C++ indistinguishable from a bare null and fall back
-        # to the default. Without this the same file would write to a directory
-        # actually named "null" in Python and to the default in C++.
-        if text.lower() == "null" or text == "~":
+        text = scalar_text(value)
+        if text is None:
             return default
         # Likewise C++ cannot tell `010` from `"010"`; both canonicalise, so
         # both name the same directory either way.

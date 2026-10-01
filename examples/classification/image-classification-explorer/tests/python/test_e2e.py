@@ -313,6 +313,8 @@ class TestE2E:
         "tilde input is null",
         "radix-prefixed profile name",
         "escaped profile key",
+        "quoted null section",
+        "escaped integer setting",
         "quoted and unquoted duplicate key",
     })
 
@@ -402,6 +404,15 @@ class TestE2E:
         # `012` is octal 10 to PyYAML. If C++ went back to base-10 stoi it would
         # ask for 12 entries and the message would stop matching, so this pins
         # the YAML integer grammar in both.
+        # ScalarConfig unquotes before the null test, so `io: "null"` is absent
+        # to C++ and the defaults apply; Python saw a string and rejected it.
+        ("quoted null section",
+         "io: \"null\"\nmodels:\n  m:\n    path: /nonexistent/m.tar.gz\n", 6),
+        # PyYAML decodes the escapes to 224; the integer reader must see the
+        # decoded text, not the raw backslashes.
+        ("escaped integer setting",
+         "models:\n  m:\n    path: /nonexistent/m.tar.gz\n"
+         "    input_width: \"\\x32\\x32\\x34\"\n", 6),
         ("octal num_classes", "models:\n  m:\n    path: m.tar.gz\n"
          "    label_map: TOO_SHORT_LABELS\n    num_classes: 012\n", 2),
         # A label_map that cannot be stat'ed is a configuration error (2), not a

@@ -232,9 +232,17 @@ std::optional<bool> parse_yaml_bool(const std::string& text) {
 std::optional<std::string> config_scalar(const sima_examples::ScalarConfig& raw,
                                          const std::string& key) {
   auto value = raw.string_value(key);
-  if (value.has_value() && sima_examples::trim_copy(*value) == "~")
+  if (!value.has_value())
     return std::nullopt;
-  return value;
+  // Decoded here rather than in each caller: config_int and the float reader
+  // take their text from this function, and decoding only in the string path
+  // meant `input_width: "\\x32\\x32\\x34"` was 224 to PyYAML and unparseable here.
+  const std::string decoded = sima_examples::trim_copy(decode_double_quoted_yaml(*value));
+  // ScalarConfig already treats a bare `null` as absent, but an escape can also
+  // decode *to* null, and `~` is null to PyYAML and not to ScalarConfig.
+  if (decoded == "~" || lower_copy(decoded) == "null")
+    return std::nullopt;
+  return decoded;
 }
 
 std::string config_scalar_or(const sima_examples::ScalarConfig& raw, const std::string& key,
@@ -249,7 +257,7 @@ std::string config_scalar_or(const sima_examples::ScalarConfig& raw, const std::
   // unquoted is decoded on both sides instead of neither. The cost is that a
   // literal backslash in a path is read as an escape - identically in both, so
   // the same configuration still fails the same way.
-  const std::optional<std::string> value = decode_double_quoted_yaml(*raw_value);
+  const std::optional<std::string> value = raw_value; // config_scalar decoded it
   // PyYAML resolves an unquoted numeric scalar to a number, and Python renders
   // that number as text, so `output_dir: 010` names the directory "8" there.
   // ScalarConfig keeps the text "010" and cannot see whether it was quoted, so
