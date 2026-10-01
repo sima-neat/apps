@@ -23,6 +23,28 @@ MAX_TRANSCRIPTION_BYTES = 25 * 1024 * 1024   # OpenAI's upload limit
 SPEECH_FORMATS = ("wav",)         # this server produces WAV only
 TRANSCRIPTION_FORMATS = ("json", "verbose_json", "text")
 SPEED_ALIASES = ("utterance_speed", "utteranceSpeed")   # pre-standard field names
+# `model` on the speech route: an engine name (aliases accepted) is used or
+# refused; the router names (OpenAI's own model ids included, so OpenAI
+# clients work unchanged) let the Studio pick the engine. Anything else is a
+# client error rather than a silent swap to another engine.
+SPEECH_ENGINE_ALIASES = {
+    "supertonic": "supertonic", "supertonic-tts": "supertonic", "mla": "supertonic",
+    "piper-plus": "piper-plus", "piperplus": "piper-plus",
+    "piper-tts": "piper-tts", "pipertts": "piper-tts", "piper": "piper-tts", "rhasspy": "piper-tts",
+}
+SPEECH_ROUTER_MODELS = ("default", "tts-1", "tts-1-hd", "gpt-4o-mini-tts")
+
+
+def speech_model(value: Any) -> str:
+    """Canonical `model` for the speech route: an engine key or "default".
+    Raises AudioApiError(400, param=model) for an unknown name."""
+    name = str(value or "").strip().lower()
+    if not name or name in SPEECH_ROUTER_MODELS:
+        return "default"
+    if name in SPEECH_ENGINE_ALIASES:
+        return SPEECH_ENGINE_ALIASES[name]
+    accepted = ", ".join(("default", "supertonic", "piper-plus", "piper-tts"))
+    raise AudioApiError(400, f"model '{value}' is not a speech engine; use one of {accepted}", "model")
 
 
 class AudioApiError(ValueError):
@@ -102,7 +124,7 @@ def parse_speech_request(data: Any) -> SpeechRequest:
 
     return SpeechRequest(
         text=text,
-        model=str(data.get("model") or "default").strip() or "default",
+        model=speech_model(data.get("model")),
         voice=str(data.get("voice") or "default").strip() or "default",
         # "auto" means "not stated": speech needs one language, so it is English
         # (the Studio's default) rather than a refusal for an unknown code.

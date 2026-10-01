@@ -332,7 +332,8 @@ HTTP and cannot be reached from an HTTPS page).
 ```text
 POST /v1/audio/speech            JSON
   input            required, up to 4096 characters
-  model            default | supertonic | piper-plus | piper-tts   (a named engine is used or refused, never swapped)
+  model            default | supertonic | piper-plus | piper-tts   (a named engine is used or refused, never swapped;
+                   OpenAI's tts-1 / tts-1-hd / gpt-4o-mini-tts mean default; any other name answers 400)
   voice            Supertonic speaker F1-F5 / M1-M5, per request. The Piper engines speak with the voice
                    loaded for the language (chosen in the Studio's voice settings): omit voice or name
                    that one; any other Piper voice answers 400 rather than a different voice

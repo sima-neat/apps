@@ -32,6 +32,18 @@ class SpeechRequestTests(unittest.TestCase):
             self.assertEqual(parse_speech_request({"input": "a", "language": value}).language, "en")
         self.assertEqual(parse_speech_request({"input": "a", "language": "DE"}).language, "de")
 
+    def test_model_is_an_engine_or_the_router(self):
+        for value, expect in (("supertonic", "supertonic"), ("MLA", "supertonic"), ("piper", "piper-tts"),
+                              ("piperplus", "piper-plus"), ("tts-1", "default"), ("gpt-4o-mini-tts", "default"),
+                              ("", "default"), (None, "default"), ("Default", "default")):
+            self.assertEqual(parse_speech_request({"input": "a", "model": value}).model, expect, value)
+
+    def test_unknown_model_is_400_on_model(self):
+        for value in ("supertonik", "whisper-small", "piper_tts"):
+            with self.assertRaises(AudioApiError) as ctx:
+                parse_speech_request({"input": "a", "model": value})
+            self.assertEqual((ctx.exception.status, ctx.exception.param), (400, "model"), value)
+
     def test_missing_or_blank_input_is_400_on_input(self):
         for body in ({}, {"input": ""}, {"input": "   "}, {"input": 5}, None, "text"):
             with self.assertRaises(AudioApiError) as ctx:

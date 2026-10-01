@@ -57,6 +57,7 @@ from asr_metadata import (
 import supertonic_tts
 import backend_mode
 from audio_api import (
+    SPEECH_ENGINE_ALIASES,
     MAX_TRANSCRIPTION_BYTES,
     AudioApiError,
     build_voices_listing,
@@ -967,11 +968,7 @@ class TalkController:
         'none': 'no TTS engine can speak the requested language',
     }
 
-    ENGINE_KEYS = {
-        'supertonic': 'supertonic', 'supertonic-tts': 'supertonic', 'mla': 'supertonic',
-        'piper-plus': 'piper-plus', 'piperplus': 'piper-plus',
-        'piper-tts': 'piper-tts', 'pipertts': 'piper-tts', 'piper': 'piper-tts', 'rhasspy': 'piper-tts',
-    }
+    ENGINE_KEYS = SPEECH_ENGINE_ALIASES      # one map with the request parser (audio_api)
 
     def engine_for_request(self, engine, language):
         """Resolve an explicit ``model`` from the speech API to one engine.
