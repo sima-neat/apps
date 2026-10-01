@@ -146,7 +146,9 @@
 
   /** One decoded clip with Web Audio playback and a scrolling cursor. play()
    *  resolves when playback ends (or is stopped). */
-  function makePlayer({ waveEl, canvas, button, audioEl }) {
+  /** onPlayback(true|false) is called whenever audible playback (Web Audio or
+   *  the native controls) starts or stops, so listening modes can pause. */
+  function makePlayer({ waveEl, canvas, button, audioEl, onPlayback }) {
     let buffer = null, source = null, startedAt = 0, raf = 0, resolveEnd = null, objectUrl = null;
     let nativeWaiters = [];          // play() promises handed over to the <audio> controls
     let loadGen = 0;                 // stop() bumps it: a load still decoding then goes nowhere
@@ -155,12 +157,19 @@
     const emptyText = placeholder.textContent;   // shown again after reset()
     const label = button.querySelector('span');
 
+    let audible = false;
+    const isAudible = () => !!source || (!audioEl.paused && !audioEl.ended);
+    function notify() {              // report playback start/stop transitions once
+      const now = isAudible();
+      if (now !== audible) { audible = now; if (onPlayback) onPlayback(now); }
+    }
     function stopSource() {          // Web Audio playback only
       if (source) { const s = source; source = null; try { s.stop(); } catch (e) { /* already stopped */ } }
       cancelAnimationFrame(raf);
       waveEl.classList.remove('playing');
       label.textContent = 'Play';
       if (resolveEnd) { const r = resolveEnd; resolveEnd = null; r(); }
+      notify();
     }
     function settleNative() {        // the native playback a turn was waiting on ended
       const waiters = nativeWaiters; nativeWaiters = [];
@@ -189,6 +198,7 @@
       source.onended = stopSource;
       startedAt = ctx.currentTime;
       source.start();
+      notify();
       waveEl.classList.add('playing');
       label.textContent = 'Stop';
       raf = requestAnimationFrame(tick);
@@ -255,9 +265,10 @@
       if (resolveEnd) { nativeWaiters.push(resolveEnd); resolveEnd = null; }
       stopSource();
     });
-    ['pause', 'ended', 'emptied'].forEach((ev) => audioEl.addEventListener(ev, settleNative));
+    ['pause', 'ended', 'emptied'].forEach((ev) => audioEl.addEventListener(ev, () => { settleNative(); notify(); }));
+    audioEl.addEventListener('playing', notify);
     window.addEventListener('resize', () => { if (buffer) drawWave(canvas, buffer); });
-    return { load, stop, play, reset, get buffer() { return buffer; }, get playing() { return !!source; } };
+    return { load, stop, play, reset, get buffer() { return buffer; }, get playing() { return isAudible(); } };
   }
 
   // ---- WAV encoding (16 kHz mono PCM16) for the live modes --------------
@@ -1040,7 +1051,14 @@
     speed: $('ec-speed'), silence: $('ec-silence'), sens: $('ec-sens'), status: $('ec-status'),
     turns: $('ec-turns'), clear: $('ec-clear'),
   };
-  const ecPlayer = makePlayer({ waveEl: $('ec-wave'), canvas: $('ec-canvas'), button: $('ec-play'), audioEl: $('ec-audio') });
+  // A manual replay while listening pauses the microphone until it ends (turns
+  // manage the microphone themselves while echoBusy).
+  const ecPlayer = makePlayer({ waveEl: $('ec-wave'), canvas: $('ec-canvas'), button: $('ec-play'), audioEl: $('ec-audio'),
+    onPlayback: (playing) => {
+      if (!echoOn || echoBusy) return;
+      if (playing) { echoMic.pause(); setEchoState('speaking', 'Replaying… listening resumes when it ends.'); }
+      else { echoMic.resume(); setEchoState('listening', 'Listening… say something.'); }
+    } });
   const echoMic = createLiveMic({ silenceMs: 600, sensitivity: 0.5, maxSpeechMs: 15000 });
   bindMeter(echoMic, ec.level, ec.threshold);
   const echoStats = { count: 0, asr: [], tts: [], turn: [] };
@@ -1141,7 +1159,8 @@
       }
     } finally {
       echoBusy = false; echoController = null;
-      if (echoOn) { echoMic.resume(); setEchoState('listening', 'Listening… say something.'); }
+      if (echoOn && ecPlayer.playing) { setEchoState('speaking', 'Replaying… listening resumes when it ends.'); }
+      else if (echoOn) { echoMic.resume(); setEchoState('listening', 'Listening… say something.'); }
     }
   });
   let echoStarting = false;
@@ -1161,6 +1180,7 @@
     // A cancelled turn may still be unwinding: stay paused until its finally
     // resumes the microphone, so no utterance is dropped by the busy guard.
     if (echoBusy) { echoMic.pause(); setEchoState('busy', 'Finishing the previous turn…'); }
+    else if (ecPlayer.playing) { echoMic.pause(); setEchoState('speaking', 'Replaying… listening resumes when it ends.'); }
     else setEchoState('listening', 'Listening… say something.');
   }
   function stopEcho() {
@@ -1202,7 +1222,12 @@
     turns: $('xl-turns'), copy: $('xl-copy'), clear: $('xl-clear'),
   };
   const XL_PLACEHOLDER = '<div class="placeholder">Each turn shows the original with its detected language and the translation, with ASR, LLM and TTS timings.</div>';
-  const xlPlayer = makePlayer({ waveEl: $('xl-wave'), canvas: $('xl-canvas'), button: $('xl-play'), audioEl: $('xl-audio') });
+  const xlPlayer = makePlayer({ waveEl: $('xl-wave'), canvas: $('xl-canvas'), button: $('xl-play'), audioEl: $('xl-audio'),
+    onPlayback: (playing) => {
+      if (!xlOn || xlBusy) return;               // a turn manages the microphone itself
+      if (playing) { xlMic.pause(); setXlState('speaking', 'Replaying… listening resumes when it ends.'); }
+      else { xlMic.resume(); setXlState('listening', 'Listening… speak, then pause.'); }
+    } });
   const xlMic = createLiveMic({ silenceMs: 700, sensitivity: 0.5, maxSpeechMs: 15000 });
   bindMeter(xlMic, xl.level, xl.threshold);
   const xlStats = { count: 0, asr: [], llm: [], tts: [] };
@@ -1476,7 +1501,8 @@
       if (xlController === session) xlController = null;
       xlBusy = false;
       xl.send.disabled = false;
-      if (xlOn) { xlMic.resume(); setXlState('listening', 'Listening… speak, then pause.'); }
+      if (xlOn && xlPlayer.playing) { setXlState('speaking', 'Replaying… listening resumes when it ends.'); }
+      else if (xlOn) { xlMic.resume(); setXlState('listening', 'Listening… speak, then pause.'); }
       else if (!xlStarting) setXlState('idle', XL_IDLE);
     }
   }
@@ -1496,6 +1522,7 @@
     xlStarting = false;
     xlOn = true;
     if (xlBusy) xlMic.pause();                     // a typed translation is still running
+    else if (xlPlayer.playing) { xlMic.pause(); setXlState('speaking', 'Replaying… listening resumes when it ends.'); }
     else setXlState('listening', 'Listening… speak, then pause.');
   }
   function stopTranslate() {
