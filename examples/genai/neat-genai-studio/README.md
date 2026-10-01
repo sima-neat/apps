@@ -90,7 +90,8 @@ as `config.local.yaml.bak` so any other hand edits can be copied back.
 chat model loaded. Download one from the Hugging Face panel or seed the
 catalog during installation, as shown below. By default, `setup.sh` downloads only:
 
-- `simaai/whisper-small-a16w8` (ASR)
+- `florianvoss/whisper-small-a16w8-layered-encoder` (ASR; stored as
+  `florianvoss@whisper-small-a16w8-layered-encoder`)
 - `thenlper/gte-small` (RAG embedding)
 
 Downloaded models are stored under `/media/nvme/llima/models` by default. That
@@ -121,7 +122,8 @@ Other useful environment variables:
   checks the model loads and leaves it out of the startup configuration if the
   runtime refuses it, rather than configuring a model that cannot be used.
 - `ASR_CATALOG_MODEL_REPOS`: space-separated extra ASR repos to seed the
-  catalog, e.g. `simaai/whisper-medium-a16w8`, so you can switch between them
+  catalog, e.g. `florianvoss/whisper-medium-a16w8-layered-encoder`, so you can
+  switch between them
   at runtime from **Settings → Models**.
 - `MAX_RESIDENT_CHAT_MODELS`: kept for advanced use; by default only one
   chat/VLM model is resident and loading a new one clears the others.
@@ -502,15 +504,16 @@ same slot. Exactly one is active — marked `● active` — and pressing **Use*
 another evicts it and makes the new one active, without restarting and without
 clearing the conversation. The chat model stays loaded throughout.
 
-`setup.sh` installs `simaai/whisper-small-a16w8` by default. To install a
-different or additional model:
+`setup.sh` installs `florianvoss/whisper-small-a16w8-layered-encoder` by
+default — a layered-encoder build, which is what current LLiMa requires. To
+install a different or additional model:
 
 ```bash
 # Replace the default:
-ASR_MODEL_REPO="simaai/whisper-medium-a16w8" ./setup.sh
+ASR_MODEL_REPO="florianvoss/whisper-medium-a16w8-layered-encoder" ./setup.sh
 
 # Or keep whisper-small and seed extra models to switch between at runtime:
-ASR_CATALOG_MODEL_REPOS="simaai/whisper-medium-a16w8" ./setup.sh
+ASR_CATALOG_MODEL_REPOS="florianvoss/whisper-medium-a16w8-layered-encoder" ./setup.sh
 ```
 
 You can also download any Whisper build from **Settings → Add Model** while the
@@ -887,7 +890,7 @@ curl -s http://127.0.0.1:9997/control/unload \
 # re-selects as "configuredAsrModel".
 curl -s http://127.0.0.1:9997/control/asr \
   -H 'Content-Type: application/json' \
-  -d '{"name":"whisper-medium-a16w8"}' | python3 -m json.tool
+  -d '{"name":"florianvoss@whisper-medium-a16w8-layered-encoder"}' | python3 -m json.tool
 ```
 
 Check text chat:

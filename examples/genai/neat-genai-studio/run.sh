@@ -649,12 +649,26 @@ do_update() {
     # erase them — a custom runtime and potentially gigabytes of models — while
     # this step claims to keep them. Resolve the configured paths and exclude any
     # that fall under EXAMPLE_DIR, on top of the default locations below.
+    # Resolve the persisted paths FIRST: they are only populated by
+    # resolve_supertonic_env, and reading them unset aborts under `set -u` —
+    # which would break the documented update rather than protect anything. It
+    # also picks up a custom venv recorded only in config.local.yaml.
+    resolve_supertonic_env
     local -a keep=()
-    local cfg_path
-    for cfg_path in "${SUPERTONIC_VENV}" "${SUPERTONIC_MODELS_ROOT}"; do
+    local cfg_path abs rel
+    for cfg_path in "${SUPERTONIC_VENV:-}" "${SUPERTONIC_MODELS_ROOT:-}"; do
       [[ -n "${cfg_path}" ]] || continue
-      local abs rel
-      abs="$(cd "$(dirname "${cfg_path}")" 2>/dev/null && printf '%s/%s' "$(pwd -P)" "$(basename "${cfg_path}")")" || continue
+      # Resolve without requiring the directory to exist yet; `local x=$(...)`
+      # always returns 0, so the status is checked separately.
+      abs=""
+      if [[ -d "${cfg_path}" ]]; then
+        abs="$(cd "${cfg_path}" 2>/dev/null && pwd -P)" || abs=""
+      elif [[ -d "$(dirname "${cfg_path}")" ]]; then
+        abs="$(cd "$(dirname "${cfg_path}")" 2>/dev/null && pwd -P)" || abs=""
+        [[ -n "${abs}" ]] && abs="${abs}/$(basename "${cfg_path}")"
+      else
+        abs="${cfg_path}"
+      fi
       [[ -n "${abs}" ]] || continue
       case "${abs}" in
         "${EXAMPLE_DIR}"/*)

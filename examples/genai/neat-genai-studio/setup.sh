@@ -637,7 +637,14 @@ asr_model_loads() {
 ASR_STARTUP_OK=1
 if [[ -n "${ASR_MODEL_REPO}" && "${SKIP_MODEL_DOWNLOAD}" != "1" ]]; then
   step "Checking that ${ASR_MODEL_NAME} loads on this runtime…"
-  probe_out="$(asr_model_loads "${ASR_MODEL_DIR}")" ; probe_rc=$?
+  # `out=$(f)` under `set -e` aborts the script when f returns nonzero — which
+  # is precisely the refused/inconclusive outcomes this case exists to handle.
+  # An if/else keeps errexit from firing and still captures the status.
+  if probe_out="$(asr_model_loads "${ASR_MODEL_DIR}")"; then
+    probe_rc=0
+  else
+    probe_rc=$?
+  fi
   case "${probe_rc}" in
     0) ok "Speech-to-text model loads." ;;
     1) ASR_STARTUP_OK=0
