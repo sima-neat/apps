@@ -93,7 +93,7 @@ class ControlConfig:
 @dataclass(frozen=True)
 class HubConfig:
     allow_download: bool
-    orgs: tuple[str, ...] = ("simaai", "TDoSiMa")
+    orgs: tuple[str, ...] = ("simaai", "TDoSiMa", "florianvoss")
 
     @property
     def org(self) -> str:
@@ -120,7 +120,8 @@ class AppConfig:
     control: ControlConfig = ControlConfig(host="127.0.0.1", client_host="127.0.0.1", port=9997)
     catalog_dir: Path | None = None
     max_resident_chat_models: int = 1
-    hub: HubConfig = HubConfig(allow_download=True, orgs=("simaai", "TDoSiMa"))
+    hub: HubConfig = HubConfig(allow_download=True,
+                              orgs=("simaai", "TDoSiMa", "florianvoss"))
     ui: UIConfig = UIConfig(font_family="Inter", font_size=15)
     supertonic: SupertonicConfig = SupertonicConfig()
 
@@ -520,7 +521,7 @@ def _load_control_config(raw: object) -> ControlConfig:
 
 def _load_hub_config(raw: object) -> HubConfig:
     hub = raw if isinstance(raw, dict) else {}
-    raw_orgs = hub.get("orgs", hub.get("org", ["simaai", "TDoSiMa"]))
+    raw_orgs = hub.get("orgs", hub.get("org", ["simaai", "TDoSiMa", "florianvoss"]))
     if isinstance(raw_orgs, str):
         orgs = tuple(o.strip() for o in raw_orgs.replace(",", " ").split() if o.strip())
     elif isinstance(raw_orgs, (list, tuple)):
@@ -528,7 +529,7 @@ def _load_hub_config(raw: object) -> HubConfig:
     else:
         orgs = ()
     if not orgs:
-        orgs = ("simaai", "TDoSiMa")
+        orgs = ("simaai", "TDoSiMa", "florianvoss")
     return HubConfig(
         allow_download=_load_bool(hub.get("allow_download", True)),
         orgs=orgs,

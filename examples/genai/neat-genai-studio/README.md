@@ -122,6 +122,9 @@ Other useful environment variables:
   chat/VLM model is resident and loading a new one clears the others.
 - `ALLOW_HUB_DOWNLOAD`: `true`/`false` to enable/disable in-UI Hugging Face
   downloads (default `true`).
+- `HUB_ORGS`: space-separated Hugging Face accounts the in-UI browser searches
+  (default `simaai TDoSiMa florianvoss`). Only listed accounts can be downloaded
+  from.
 - `TTS_LANGUAGES`: comma- or space-separated catalogued server-TTS languages to
   install. Interactive setup prompts when this is unset; non-interactive setup
   defaults to `en,de,es,fr,it,ja,pt,vi,zh`.
@@ -548,12 +551,19 @@ request outright.
 
 ### Download models from Hugging Face
 When the board is online, the **Settings → Add Model** tab appears (it's hidden
-offline). It lists compatible `simaai` models *available to download*, each with a
-**download size** badge (⬇ so you know how much space it needs) and a **`💾 NVMe
-storage: … free`** readout so you can tell whether it will fit. Filter/search,
-click **Download**, watch the progress bar, and the model moves to the **Models**
-tab ready to load. Downloads land under `catalog_dir`. Set `HF_TOKEN` for gated
-repos.
+offline). It lists compatible models *available to download* from the Hugging Face
+accounts in `server.hub.orgs` — `simaai` (official precompiled) plus the
+`TDoSiMa` and `florianvoss` community accounts — each with a **download size**
+badge (⬇ so you know how much space it needs) and a **`💾 NVMe storage: … free`**
+readout so you can tell whether it will fit. Filter by type (LLM / VLM / ASR),
+search, click **Download**, watch the progress bar, and the model moves to the
+**Models** tab ready to load — a speech model into the **Speech-to-text** group.
+
+Downloads land under `catalog_dir`. A repo from an account other than `simaai` is
+stored as `<org>@<name>`, so two accounts publishing the same model name cannot
+collide. Set `HF_TOKEN` for gated repos, and `HUB_ORGS` at install time (or
+`server.hub.orgs` afterwards) to change which accounts are searched; a repo from
+an account that is not listed is refused.
 
 ### Benchmark (TTFT / TPS)
 The performance half of SiMa's **MoLE** (Modalix Language-model Evaluator) measures

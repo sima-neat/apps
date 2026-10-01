@@ -1142,7 +1142,8 @@ class AppContext:
         # Runtime model management + appearance
         self.control_base_url = "http://127.0.0.1:9997"
         self.catalog_dir = None
-        self.hub_config = HubConfig(allow_download=True, orgs=("simaai", "TDoSiMa"))
+        self.hub_config = HubConfig(allow_download=True,
+                                    orgs=("simaai", "TDoSiMa", "florianvoss"))
         self.ui_font_family = "Inter"
         self.ui_font_size = 15
         self._catalog_names_cache = (0.0, frozenset())

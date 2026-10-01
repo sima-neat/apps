@@ -31,8 +31,8 @@ CHAT_MODEL_NAME="${CHAT_MODEL_NAME:-${CHAT_MODEL_REPO##*/}}"
 MAX_RESIDENT_CHAT_MODELS="${MAX_RESIDENT_CHAT_MODELS:-1}"
 ALLOW_HUB_DOWNLOAD="${ALLOW_HUB_DOWNLOAD:-true}"
 # Hugging Face accounts searched for compatible models (space-separated):
-# simaai (official precompiled) + TDoSiMa (community).
-HUB_ORGS="${HUB_ORGS:-simaai TDoSiMa}"
+# simaai (official precompiled) + TDoSiMa and florianvoss (community).
+HUB_ORGS="${HUB_ORGS:-simaai TDoSiMa florianvoss}"
 INSTALL_TTS_VOICES="${INSTALL_TTS_VOICES:-1}"
 DEFAULT_TTS_LANGUAGES="en,de,es,fr,it,ja,pt,vi,zh"
 TTS_LANGUAGES="${TTS_LANGUAGES:-}"

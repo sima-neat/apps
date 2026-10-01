@@ -1070,7 +1070,7 @@ def load_model(ctrl, name, oai=None, auto_retry=True):
 def _hub_config(config_path):
     """Read catalog_dir + Hugging Face settings from the config."""
     from pathlib import Path
-    catalog_dir, allow, orgs = None, True, ("simaai", "TDoSiMa")
+    catalog_dir, allow, orgs = None, True, ("simaai", "TDoSiMa", "florianvoss")
     try:
         import yaml
         with open(config_path, "r", encoding="utf-8") as fh:

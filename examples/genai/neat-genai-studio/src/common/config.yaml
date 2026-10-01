@@ -27,8 +27,10 @@ server:                      # Local OpenAI-compatible model server.
 
   hub:                       # Hugging Face on-demand model download.
     allow_download: true     # Allow downloading compatible models when online.
-    orgs: [simaai, TDoSiMa]  # Hub accounts searched for precompiled models
-                             # (simaai official + TDoSiMa community).
+    orgs: [simaai, TDoSiMa, florianvoss]
+                             # Hub accounts searched for precompiled models
+                             # (simaai official; TDoSiMa and florianvoss community).
+                             # Non-simaai repos land on disk as "<org>@<name>".
 
 app:                         # Assistant web app settings.
   openai:                    # OpenAI-compatible client endpoint.
