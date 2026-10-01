@@ -227,7 +227,12 @@ def main() -> int:
         # trying is the only reliable test; a user whose runtime moved under them
         # gets working transcription instead of silence. Bounded, and
         # STUDIO_ASR_FALLBACK=0 turns it off.
-        if manager.active_asr() is None and os.environ.get("STUDIO_ASR_FALLBACK", "1") != "0":
+        # Only when a CONFIGURED model failed. An omitted `asr:` is a documented
+        # choice — the fully decoupled mode starts with nothing resident — so
+        # inventing a model there would override the user and take accelerator
+        # memory they did not ask to spend.
+        if (cfg.asr_model is not None and manager.active_asr() is None
+                and os.environ.get("STUDIO_ASR_FALLBACK", "1") != "0"):
             # Exclude the model that just failed BY PATH, not only by name: a
             # configured alias and the directory basename are two catalog entries
             # for one directory, so a name-only check retries the failure and

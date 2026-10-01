@@ -1038,7 +1038,9 @@ fi
 # Record this instance so `./run.sh stop` can find it (removed by cleanup).
 echo "$$" > "${PID_FILE}"
 if [[ "${CLI_MODE}" == "1" ]]; then echo cli; elif [[ "${BACKEND_ONLY}" == "1" ]]; then echo backend-only; else echo web; fi > "${MODE_FILE}"
-if [[ "${CLI_MODE}" != "1" && "${BACKEND_ONLY}" != "1" ]]; then
+# Backend-only serves its API on the same host/port, and `status` reports that
+# URL too, so record it in both modes. Only --cli has no HTTP surface.
+if [[ "${CLI_MODE}" != "1" ]]; then
   _self_url="$(local_web_url || true)"
   [[ -n "${_self_url}" ]] && printf '%s\n' "${_self_url}" > "${URL_FILE}"
 fi
