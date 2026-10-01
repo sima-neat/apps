@@ -593,7 +593,7 @@ def run(cfg: Config) -> int:
     inference_graph = pyneat.Graph("inference")
     inference_graph.add(backbone.graph())
     backbone_output = pyneat.Graph("backbone_output")
-    backbone_output.add(pyneat.nodes.output("backbone", pyneat.OutputOptions.every_frame(2)))
+    backbone_output.add(pyneat.nodes.output("backbone", pyneat.OutputOptions.latest()))
     inference_graph.add(backbone_output)
 
     source_graph = pyneat.Graph("rfdetr_source")
@@ -614,8 +614,8 @@ def run(cfg: Config) -> int:
 
     transformer_run_options = pyneat.RunOptions()
     transformer_run_options.preset = pyneat.RunPreset.Balanced
-    transformer_run_options.queue_depth = 1
-    transformer_run_options.overflow_policy = pyneat.OverflowPolicy.Block
+    transformer_run_options.queue_depth = 4
+    transformer_run_options.overflow_policy = pyneat.OverflowPolicy.KeepLatest
     transformer_run_options.output_memory = pyneat.OutputMemory.Owned
     dummy_inputs = [
         pyneat.Tensor.from_numpy(

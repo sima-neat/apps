@@ -747,13 +747,12 @@ int run(const Config& cfg) {
   neat::Graph decode("decoder");
   decode.add(neat::nodes::SimaDecode(decode_options));
 
-  const int preview_fps = cfg.raw_video_max_fps > 0
-                              ? std::min(geometry.fps, cfg.raw_video_max_fps)
-                              : geometry.fps;
+  const int preview_fps =
+      cfg.raw_video_max_fps > 0 ? std::min(geometry.fps, cfg.raw_video_max_fps) : geometry.fps;
   auto video_options =
       cfg.codec == SourceCodec::Mjpeg
-          ? neat::nodes::groups::VideoSenderOptions::H264RtpUdpFromRaw(
-                geometry.width, geometry.height, preview_fps)
+          ? neat::nodes::groups::VideoSenderOptions::H264RtpUdpFromRaw(geometry.width,
+                                                                       geometry.height, preview_fps)
           : neat::nodes::groups::VideoSenderOptions::Passthrough(rtsp_codec(cfg.codec));
   video_options.host = cfg.insight_host;
   video_options.video_port_base = cfg.video_port;
@@ -769,7 +768,7 @@ int run(const Config& cfg) {
   neat::Graph inference("inference");
   inference.add(backbone.graph());
   neat::Graph backbone_output("backbone_output");
-  backbone_output.add(neat::nodes::Output("backbone", neat::OutputOptions::EveryFrame(2)));
+  backbone_output.add(neat::nodes::Output("backbone", neat::OutputOptions::Latest()));
   inference.add(backbone_output);
 
   neat::Graph source_graph("rfdetr_source");
@@ -791,8 +790,8 @@ int run(const Config& cfg) {
 
   neat::RunOptions transformer_run_options;
   transformer_run_options.preset = neat::RunPreset::Balanced;
-  transformer_run_options.queue_depth = 1;
-  transformer_run_options.overflow_policy = neat::OverflowPolicy::Block;
+  transformer_run_options.queue_depth = 4;
+  transformer_run_options.overflow_policy = neat::OverflowPolicy::KeepLatest;
   transformer_run_options.output_memory = neat::OutputMemory::Owned;
   neat::TensorList transformer_seed;
   for (const auto& spec : transformer.input_specs()) {
