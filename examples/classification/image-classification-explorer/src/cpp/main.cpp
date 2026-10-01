@@ -934,7 +934,15 @@ std::vector<fs::path> discover_images(const std::string& input_path,
     if (ec) {
       throw InputError("failed to read input directory " + path.string() + ": " + ec.message());
     }
-    for (const auto& entry : it) {
+    // Advanced explicitly: the range-for uses the throwing operator++, so a
+    // directory that becomes unreadable part-way through aborted the run with
+    // exit 6 instead of the documented input error. Python's iterdir() failure
+    // is caught and reported the same way.
+    for (; it != fs::directory_iterator(); it.increment(ec)) {
+      if (ec) {
+        throw InputError("failed to read input directory " + path.string() + ": " + ec.message());
+      }
+      const auto& entry = *it;
       // The throwing overload aborts the entire scan when one entry cannot be
       // stat'ed - a dangling or self-referential symlink - and the run exits
       // with no report at all. Python's Path.is_file() reports false for the
@@ -1606,13 +1614,20 @@ int main(int argc, char** argv) {
     }
 
     const double min_probability = [&] {
-      if (!config_scalar(raw, "validation.min_probability").has_value())
+      // The decoded text, not ScalarConfig's original: double_or re-reads the
+      // raw value, so `"\\x30\\x2e\\x32"` - 0.2 to PyYAML - was literal backslash
+      // text here and rejected.
+      const auto text = config_scalar(raw, "validation.min_probability");
+      if (!text.has_value())
         return 0.0;
       try {
-        return raw.double_or("validation.min_probability", 0.0);
+        std::size_t consumed = 0;
+        const double parsed = std::stod(*text, &consumed);
+        if (consumed != text->size())
+          throw std::invalid_argument("trailing characters");
+        return parsed;
       } catch (const std::exception&) {
-        throw ConfigError("validation.min_probability must be a number, got " +
-                          raw.string_or("validation.min_probability", "0.0"));
+        throw ConfigError("validation.min_probability must be a number, got " + *text);
       }
     }();
 

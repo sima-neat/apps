@@ -315,6 +315,7 @@ class TestE2E:
         "escaped profile key",
         "quoted null section",
         "escaped integer setting",
+        "escaped min_probability",
         "quoted and unquoted duplicate key",
     })
 
@@ -410,6 +411,10 @@ class TestE2E:
          "io: \"null\"\nmodels:\n  m:\n    path: /nonexistent/m.tar.gz\n", 6),
         # PyYAML decodes the escapes to 224; the integer reader must see the
         # decoded text, not the raw backslashes.
+        # PyYAML decodes this to 0.2; the float reader must see decoded text.
+        ("escaped min_probability",
+         "validation:\n  min_probability: \"\\x30\\x2e\\x39\\x39\"\n"
+         "models:\n  m:\n    path: /nonexistent/m.tar.gz\n", 6),
         ("escaped integer setting",
          "models:\n  m:\n    path: /nonexistent/m.tar.gz\n"
          "    input_width: \"\\x32\\x32\\x34\"\n", 6),
