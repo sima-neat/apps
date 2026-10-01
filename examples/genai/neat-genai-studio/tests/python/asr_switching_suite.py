@@ -1,4 +1,5 @@
 import io
+import os
 import shutil
 import sys
 import tempfile
@@ -20,7 +21,7 @@ except ModuleNotFoundError as exc:  # pragma: no cover - environment check
     ) from exc
 
 from server.model_manager import ModelManager, _is_mla_failure
-from shared.config import HubConfig
+from shared.config import HubConfig, model_dir_complete
 
 
 class FakeServer:
@@ -460,6 +461,56 @@ class AsrWarmupBehaviourTests(AsrSwitchingTests):
 
         self.assertIsNone(manager.active_asr())
         self.assertNotIn("whisper-medium-a16w8", server.model_names())
+
+
+class LayeredEncoderDetectionTests(unittest.TestCase):
+    """A speech build whose encoder weights this runtime cannot address.
+
+    The runtime derives ELF names by convention and loads the encoder as one
+    stage; some community builds ship one ELF per encoder layer instead, and
+    whisper_config.json names no files. Caught before loading, the Load button
+    explains why; missed, the accelerator fails with "Model file does not
+    exist" after the working model has already been unloaded.
+    """
+
+    def _build(self, root, name, encoder_elfs, config="whisper_config.json"):
+        d = Path(root) / name
+        (d / "devkit").mkdir(parents=True)
+        (d / "elf_files").mkdir()
+        (d / "devkit" / config).write_text("{}")
+        (d / ".neat-complete").write_text("ok\n")      # a complete download
+        for e in encoder_elfs:
+            (d / "elf_files" / e).write_bytes(b"x")
+        (d / "elf_files" / "m_decoder_init_layer0_stage1_mla.elf").write_bytes(b"x")
+        return d
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def test_a_combined_encoder_stage_is_loadable(self):
+        d = self._build(self.tmp, "combined", ["m_encoder_stage1_mla.elf"])
+        self.assertEqual(model_dir_complete(d), (True, ""))
+
+    def test_a_layered_encoder_is_refused_with_the_reason(self):
+        d = self._build(self.tmp, "layered",
+                        [f"m_encoder_layer{i}_stage1_mla.elf" for i in range(12)])
+        ok, why = model_dir_complete(d)
+        self.assertFalse(ok)
+        self.assertIn("12 per-layer", why)
+        self.assertIn("single stage", why)
+
+    def test_the_override_allows_a_layered_build(self):
+        d = self._build(self.tmp, "layered-ok",
+                        [f"m_encoder_layer{i}_stage1_mla.elf" for i in range(2)])
+        with patch.dict(os.environ, {"STUDIO_ALLOW_LAYERED_ASR": "1"}):
+            self.assertEqual(model_dir_complete(d), (True, ""))
+
+    def test_chat_models_are_unaffected(self):
+        # Chat/VLM builds legitimately ship per-layer weights and no encoder.
+        d = self._build(self.tmp, "chat", ["x_language_layer0_stage1_mla.elf"],
+                        config="vlm_config.json")
+        self.assertEqual(model_dir_complete(d), (True, ""))
 
 
 class MlaFailureClassificationTests(unittest.TestCase):

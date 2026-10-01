@@ -39,6 +39,7 @@ from asr_switching_suite import (  # noqa: E402
     AsrSwitchingTests,
     AsrWarmupBehaviourTests,
     AsrWarmupPayloadTests,
+    LayeredEncoderDetectionTests,
     MlaFailureClassificationTests,
 )
 from hub_security_suite import HubPathSecurityTests  # noqa: E402,F401
@@ -163,6 +164,7 @@ __all__ = [
     "AsrSwitchingTests",
     "AsrWarmupBehaviourTests",
     "AsrWarmupPayloadTests",
+    "LayeredEncoderDetectionTests",
     "MlaFailureClassificationTests",
     "HubPathSecurityTests",
     "CliNoThinkRewriteTests",
