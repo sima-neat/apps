@@ -186,30 +186,46 @@ section() {
 # Best-effort browser URL from the app.web block of the config (scheme/host/port).
 web_config_value() { web_config_scalar "${CONFIG_PATH}" "$1"; }
 
-web_url() {
-  local host port https scheme ip
-  host="$(web_config_value host)"
+# A host as it must appear in a URL: IPv6 literals in brackets.
+url_host() {
+  local h="$1"
+  if [[ "${h}" == *:* && "${h}" != \[*\] ]]; then printf '[%s]' "${h}"; else printf '%s' "${h}"; fi
+}
+# True for the "listen on every interface" hosts (or none configured).
+wildcard_host() { [[ -z "$1" || "$1" == "0.0.0.0" || "$1" == "::" || "$1" == "[::]" ]]; }
+
+# _web_url_for <host-or-empty>: the UI URL with that host (scheme and port from
+# the config). Returns 1 when the config has no port.
+_web_url_for() {
+  local port https scheme
   port="$(web_config_value port)"
   https="$(web_config_value https)"
   [[ -n "${port}" ]] || return 1
   # https defaults to true in shared.config when the key is absent.
   scheme="https"; [[ -n "${https}" ]] && ! config_true "${https}" && scheme="http"
-  if [[ -z "${host}" || "${host}" == "0.0.0.0" || "${host}" == "::" ]]; then
-    ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
-    host="${ip:-localhost}"
-  fi
-  printf '%s://%s:%s' "${scheme}" "${host}" "${port}"
+  printf '%s://%s:%s' "${scheme}" "$(url_host "$1")" "${port}"
 }
 
-# The UI URL for a browser on this board: localhost instead of the LAN address
-# when the UI listens on every interface (it keeps working if the IP changes).
-local_web_url() {
-  local url; url="$(web_url)" || return 1
-  local host; host="$(web_config_value host)"
-  if [[ -z "${host}" || "${host}" == "0.0.0.0" || "${host}" == "::" ]]; then
-    url="$(printf '%s' "${url}" | sed -E 's#^(https?)://[^:/]+#\1://localhost#')"
+# The UI URL to give other machines: the configured host, or this board's first
+# LAN address (IPv4 preferred) when the UI listens on every interface.
+web_url() {
+  local host ip
+  host="$(web_config_value host)"
+  if wildcard_host "${host}"; then
+    ip="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -v ':' | grep -m1 . || true)"
+    [[ -n "${ip}" ]] || ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    host="${ip:-localhost}"
   fi
-  printf '%s' "${url}"
+  _web_url_for "${host}"
+}
+
+# The UI URL for a browser on this board: localhost when the UI listens on every
+# interface (it keeps working if the IP changes), else the configured host.
+local_web_url() {
+  local host
+  host="$(web_config_value host)"
+  wildcard_host "${host}" && host="localhost"
+  _web_url_for "${host}"
 }
 
 # Wait until the web UI answers (its /health route), up to UI_READY_TIMEOUT s.
