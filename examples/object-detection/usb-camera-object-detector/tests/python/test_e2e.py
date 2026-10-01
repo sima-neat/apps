@@ -2,8 +2,9 @@
 
 There is no USB camera on the test target, so these drive the same graph from
 the synthetic NV12 source declared under `testing.e2e` in config.yaml. That
-covers everything except the v4l2src element itself: the custom source node, the
-branch, the video sender, the model, the box decode, and the metadata send.
+covers the NV12 branch, video sender, model, box decode, and metadata send.
+USB capture and the encoded Input/JpegParse/SimaDecode route require camera
+validation separately.
 """
 
 import re

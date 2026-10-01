@@ -1,8 +1,8 @@
 // E2E test for usb-camera-object-detector.
 // There is no USB camera on the test target, so this drives the same graph from
 // the synthetic NV12 source declared under `testing.e2e` in config.yaml. That
-// exercises the custom source node, the branch, the video sender, the model,
-// the box decode, and the metadata send -- everything but v4l2src itself.
+// exercises the NV12 branch, video sender, model, box decode, and metadata send.
+// USB capture and Input/JpegParse/SimaDecode require camera validation separately.
 #include "support/testing/test_config.h"
 #include "support/testing/test_process.h"
 

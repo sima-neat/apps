@@ -1,7 +1,7 @@
 """Unit tests for usb-camera-object-detector (Python).
 
 These run with no camera, no model, and no board: everything covered here is
-either pure configuration handling or the GStreamer fragment builder.
+configuration handling, metadata, or mocked compressed-camera capture.
 """
 
 import copy
@@ -10,6 +10,7 @@ import re
 import struct
 import subprocess
 import sys
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -150,6 +151,8 @@ class TestConfigLoading:
         [
             ("source", "width", 0, "source.width"),
             ("source", "width", -1, "source.width"),
+            ("source", "width", 1279, "source.width"),
+            ("source", "height", 719, "source.height"),
             ("source", "height", 0, "source.height"),
             ("source", "fps", 0, "source.fps"),
             ("source", "device", "", "source.device"),
@@ -183,6 +186,21 @@ class TestConfigLoading:
         raw = config_with(model={"path": ""})
         with pytest.raises(ValueError, match="model.path"):
             main.validate_config(main.build_app_config(raw))
+
+    @pytest.mark.parametrize("key", ["video_port", "metadata_port"])
+    @pytest.mark.parametrize("port", [-1, 0, 65536, 70000])
+    def test_invalid_udp_ports_are_rejected(self, key, port):
+        raw = valid_config()
+        raw["output"]["insight"][key] = port
+        with pytest.raises(ValueError, match=key):
+            main.validate_config(main.build_app_config(raw))
+
+    @pytest.mark.parametrize("key", ["video_port", "metadata_port"])
+    @pytest.mark.parametrize("port", [1, 65535])
+    def test_udp_port_boundaries_are_valid(self, key, port):
+        raw = valid_config()
+        raw["output"]["insight"][key] = port
+        main.validate_config(main.build_app_config(raw))
 
     def test_device_may_be_empty_when_overridden(self):
         """An override fragment replaces the camera, so the device is not needed."""
@@ -234,87 +252,155 @@ class TestFlip:
         assert main.FLIP_METHODS["none"] == ""
 
 
+class FakeCapture:
+    def __init__(self, frames=(), *, opened=True, mismatches=None, reject_raw=False):
+        self.frames = iter(frames)
+        self.opened = opened
+        self.properties = {}
+        self.mismatches = mismatches or {}
+        self.reject_raw = reject_raw
+        self.released = False
+
+    def isOpened(self):
+        return self.opened
+
+    def set(self, key, value):
+        self.properties[key] = value
+        return not (self.reject_raw and key == "CONVERT_RGB")
+
+    def get(self, key):
+        return self.mismatches.get(key, self.properties.get(key, 0))
+
+    def read(self):
+        data = next(self.frames, None)
+        return (False, None) if data is None else (True, SimpleNamespace(tobytes=lambda: data))
+
+    def release(self):
+        self.released = True
+
+
+def fake_cv2(capture):
+    module = SimpleNamespace(CAP_V4L2=200, VideoCapture=lambda *args: capture,
+                             VideoWriter_fourcc=lambda *args: 1196444237)
+    for key in ("FOURCC", "FRAME_WIDTH", "FRAME_HEIGHT", "FPS", "BUFFERSIZE", "CONVERT_RGB"):
+        setattr(module, "CAP_PROP_" + key, key)
+    return module
+
+
 @pytest.mark.unit
-class TestCameraFragment:
-    """Validate the GStreamer fragment. This is the part with no Neat node behind
-    it, so it is the part most worth pinning down."""
+class TestUsbCapture:
+    def test_preserves_encoded_jpeg_and_disables_cpu_decode(self):
+        jpeg = b"\xff\xd8compressed-camera-frame\xff\xd9"
+        capture = FakeCapture([jpeg])
+        camera = main.UsbCamera(main.build_app_config(valid_config()), fake_cv2(capture))
+        assert capture.properties["CONVERT_RGB"] == 0
+        assert capture.properties["FOURCC"] == 1196444237
+        assert capture.properties["BUFFERSIZE"] == 2
+        assert camera.caps == "image/jpeg,width=1920,height=1080,framerate=30/1"
+        assert camera.read() == jpeg
+        camera.close()
+        assert capture.released
 
-    @staticmethod
-    def fragment(**source) -> str:
-        return main.camera_fragment(main.build_app_config(config_with(source=source)))
+    def test_discards_truncated_jpeg_before_decode(self):
+        jpeg = b"\xff\xd8complete\xff\xd9"
+        capture = FakeCapture([b"\xff\xd8truncated", jpeg])
+        camera = main.UsbCamera(main.build_app_config(valid_config()), fake_cv2(capture))
+        assert camera.read() == jpeg
+        assert camera.dropped_frames == 1
 
-    def test_pins_mjpeg_not_raw_yuyv(self):
-        """Without image/jpeg caps v4l2src negotiates YUYV, capped at ~5 fps at 1080p."""
-        assert "image/jpeg" in self.fragment()
+    @pytest.mark.parametrize("frames,message", [
+        ([], "stopped delivering"),
+        ([b"not a JPEG"], "invalid MJPEG"),
+        ([b"\xff\xd8truncated"] * 8, "8 consecutive incomplete"),
+    ])
+    def test_capture_errors_fail_clearly(self, frames, message):
+        camera = main.UsbCamera(main.build_app_config(valid_config()), fake_cv2(FakeCapture(frames)))
+        with pytest.raises(RuntimeError, match=message):
+            camera.read()
 
-    def test_carries_device_resolution_and_rate(self):
-        frag = self.fragment(device="/dev/video9", width=1280, height=720, fps=25)
+    @pytest.mark.parametrize("kwargs,message", [
+        ({"opened": False}, "Cannot open"),
+        ({"reject_raw": True}, "without CPU decode"),
+        ({"mismatches": {"FOURCC": 0}}, "compressed MJPEG"),
+        ({"mismatches": {"FRAME_WIDTH": 640}}, "requested resolution/frame rate"),
+        ({"mismatches": {"FRAME_HEIGHT": 480}}, "requested resolution/frame rate"),
+        ({"mismatches": {"FPS": 15}}, "requested resolution/frame rate"),
+        ({"mismatches": {"FPS": float("nan")}}, "requested resolution/frame rate"),
+    ])
+    def test_failed_negotiation_releases_camera(self, kwargs, message):
+        capture = FakeCapture(**kwargs)
+        with pytest.raises(RuntimeError, match=message):
+            main.UsbCamera(main.build_app_config(valid_config()), fake_cv2(capture))
+        assert capture.released
 
-        assert "v4l2src device=/dev/video9" in frag
-        assert "width=1280,height=720,framerate=25/1" in frag
-        assert "image/jpeg,width=1280,height=720,framerate=25/1" in frag
-
-    def test_uses_mmap_io(self):
-        """io-mode=rw memcpys every frame; mmap is zero-copy from the UVC driver."""
-        assert "io-mode=mmap" in self.fragment()
-
-    def test_decodes_on_cpu_and_converts_to_nv12(self):
-        frag = self.fragment()
-
-        assert "neatdecoder" in frag and "dec-type=mjpeg" in frag
-        # jpegparse breaks UVC MJPEG on GStreamer 1.22 (see camera_fragment).
-        assert "jpegparse" not in frag
-        # The hardware decoder emits NV12 natively; no CPU conversion stage.
-        assert "videoconvert" not in frag
-        assert "jpegdec" not in frag
-        assert "dec-fmt=NV12" in frag
-
-    def test_queues_are_leaky(self):
-        """A stalled MLA must drop frames, never back-pressure the camera."""
-        assert frag_count(self.fragment(), "leaky=downstream") >= 2
-
-    def test_does_not_end_on_bare_caps(self):
-        """gst_parse_launch reads a trailing caps string as an element name and
-        fails with `no element "video"`."""
-        frag = self.fragment()
-
-        assert not frag.strip().split("!")[-1].strip().startswith("video/")
-        assert frag.strip().split("!")[-1].strip().startswith("queue")
-
-    def test_flip_is_absent_by_default(self):
-        assert "videoflip" not in self.fragment()
-
-    @pytest.mark.parametrize(
-        "flip", ["rotate-180", "horizontal-flip", "vertical-flip"]
-    )
-    def test_flip_is_inserted_before_conversion(self, flip):
-        frag = self.fragment(flip=flip)
-
-        assert f"videoflip method={flip}" in frag
-        assert frag.index("neatdecoder") < frag.index("videoflip")
-        assert frag.index("videoflip") < frag.rindex("queue")
-
-    def test_override_replaces_the_whole_fragment(self):
+    def test_override_description_is_preserved(self):
         override = "videotestsrc ! video/x-raw,format=NV12 ! queue"
-        frag = self.fragment(override_fragment=override)
-
-        assert frag == override
-        assert "v4l2src" not in frag
-
-    def test_shipped_test_override_is_a_valid_nv12_source(self):
-        """The e2e harness drives this fragment instead of a camera."""
-        raw = yaml.safe_load(CONFIG_YAML.read_text(encoding="utf-8"))
-        override = raw["testing"]["e2e"]["source"]["override_fragment"]
-
-        assert "videotestsrc" in override
-        assert "format=NV12" in override
-        assert f"width={raw['source']['width']}" in override
-        assert f"height={raw['source']['height']}" in override
-        assert not override.strip().split("!")[-1].strip().startswith("video/")
+        cfg = main.build_app_config(config_with(source={"override_fragment": override}))
+        assert main.source_description(cfg) == override
 
 
-def frag_count(fragment: str, needle: str) -> int:
-    return fragment.count(needle)
+@pytest.mark.unit
+class TestCaptureLifecycle:
+    @pytest.mark.parametrize("fail_metadata", [False, True])
+    def test_success_and_send_failure_stop_and_join_capture(self, monkeypatch, fail_metadata):
+        import threading
+
+        pushed, closed = threading.Event(), threading.Event()
+        push_calls = []
+
+        def push(samples):
+            push_calls.append(samples)
+            pushed.set()
+            return True
+
+        def read():
+            assert closed.wait(2), "capture was not stopped"
+            return b"\xff\xd8\xff\xd9"
+
+        def pull(*args):
+            assert pushed.wait(2), "capture did not submit the seed"
+            return SimpleNamespace()
+
+        def send(*args):
+            if fail_metadata:
+                raise RuntimeError("metadata send failed")
+
+        monkeypatch.setattr(main, "pyneat", SimpleNamespace(
+            make_encoded_sample=lambda *args, **kwargs: SimpleNamespace()))
+        monkeypatch.setattr(main, "extract_bbox_payload", lambda sample: b"")
+        monkeypatch.setattr(main, "send_metadata", send)
+        runtime = SimpleNamespace(seed=SimpleNamespace(), video_port=9000,
+                                  run=SimpleNamespace(push=push, pull=pull, close=closed.set))
+        cfg = main.build_app_config(config_with(inference={"frames": 1}))
+        camera = SimpleNamespace(read=read, caps="image/jpeg")
+        if fail_metadata:
+            with pytest.raises(RuntimeError, match="metadata send failed"):
+                main.run_pipeline(runtime, cfg, camera)
+        else:
+            assert main.run_pipeline(runtime, cfg, camera) == 1
+        assert closed.is_set()
+        assert len(push_calls) == 1
+        assert not any(t.name == "usb-capture" for t in threading.enumerate())
+
+    def test_camera_failure_reaches_main_loop(self):
+        import threading
+
+        failed, closed = threading.Event(), threading.Event()
+
+        def read():
+            failed.set()
+            raise RuntimeError("USB camera stopped delivering frames")
+
+        def pull(*args):
+            assert failed.wait(2)
+            return None
+
+        runtime = SimpleNamespace(seed=None, run=SimpleNamespace(pull=pull, close=closed.set))
+        with pytest.raises(RuntimeError, match="stopped delivering frames"):
+            main.run_pipeline(runtime, main.build_app_config(valid_config()),
+                              SimpleNamespace(read=read, caps="image/jpeg"))
+        assert closed.is_set()
+        assert not any(t.name == "usb-capture" for t in threading.enumerate())
 
 
 @pytest.mark.unit
@@ -389,6 +475,29 @@ class TestBboxPayload:
 @pytest.mark.unit
 class TestMetadata:
     """Validate the Insight object-detection contract."""
+
+    @pytest.mark.parametrize("result", [True, False])
+    def test_metadata_send_result(self, result):
+        runtime = SimpleNamespace(
+            labels=["person"],
+            metadata_sender=SimpleNamespace(send_metadata=lambda *args: result),
+        )
+        cfg = main.build_app_config(valid_config())
+        sample = SimpleNamespace(pts_ns=1000000, frame_id=1)
+        if result:
+            main.send_metadata(runtime, cfg, sample, [])
+        else:
+            with pytest.raises(RuntimeError, match="metadata send failed"):
+                main.send_metadata(runtime, cfg, sample, [])
+
+    def test_metadata_transport_exception_is_propagated(self):
+        def fail(*args):
+            raise RuntimeError("sendto failed: Network is unreachable")
+
+        runtime = SimpleNamespace(labels=[], metadata_sender=SimpleNamespace(send_metadata=fail))
+        with pytest.raises(RuntimeError, match="Network is unreachable"):
+            main.send_metadata(runtime, main.build_app_config(valid_config()),
+                               SimpleNamespace(pts_ns=-1, frame_id=-1), [])
 
     def test_boxes_become_xywh_objects(self):
         boxes = [{"x1": 10.0, "y1": 20.0, "x2": 40.0, "y2": 60.0, "score": 0.8, "class_id": 0}]
@@ -494,14 +603,6 @@ class TestTwinParity:
     )
     def test_cpp_reads_every_config_key(self, key):
         assert f'"{key}"' in self.cpp_source(), f"C++ twin does not read {key}"
-
-    @pytest.mark.parametrize(
-        "element",
-        ["v4l2src", "io-mode=mmap", "image/jpeg", "neatdecoder", "dec-type=mjpeg",
-         "videoflip", "dec-fmt=NV12", "leaky=downstream"],
-    )
-    def test_cpp_fragment_uses_the_same_elements(self, element):
-        assert element in self.cpp_source(), f"C++ fragment is missing {element}"
 
     def test_both_twins_use_the_same_bbox_record_size(self):
         assert "kBboxRecordSize = 24" in self.cpp_source()

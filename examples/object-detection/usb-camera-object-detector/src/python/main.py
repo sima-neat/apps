@@ -1,9 +1,9 @@
 """USB (UVC) camera YOLO26 object detection with Insight output, using pyneat.
 
-The camera is a plain GStreamer fragment behind Neat's `custom()` escape hatch,
-because Neat has no V4L2 source node. From there the graph is ordinary Neat:
+OpenCV captures compressed MJPEG through V4L2. Public Neat input and decoder
+nodes turn each encoded sample into NV12 before branching:
 
-    v4l2src (MJPEG) -> jpegdec -> NV12 -> branch -+-> video_sender -> Insight
+    Input -> JpegParse -> SimaDecode(MJPEG) -> NV12 -> branch -+-> video_sender -> Insight
                                                   `-> model -> detections
 
 Both branches stay inside one Run so the encoder and the detections share a
@@ -23,6 +23,8 @@ from pathlib import Path
 import struct
 import sys
 import time
+import threading
+import signal
 
 import yaml
 
@@ -79,6 +81,7 @@ class PipelineRuntime:
     metadata_sender: object
     labels: list[str]
     video_port: int
+    seed: object = None
 
 
 class ProfileWindow:
@@ -156,7 +159,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--validate-config-only",
         action="store_true",
-        help="Validate the configuration, print the resolved source fragment, and exit",
+        help="Validate the configuration, print the capture/decode route, and exit",
     )
     return parser.parse_args(argv)
 
@@ -223,6 +226,8 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError(f"source.width must be > 0, got {cfg.width}")
     if cfg.height <= 0:
         raise ValueError(f"source.height must be > 0, got {cfg.height}")
+    if cfg.width % 2 or cfg.height % 2:
+        raise ValueError("source.width and source.height must be even for NV12")
     if cfg.fps <= 0:
         raise ValueError(f"source.fps must be > 0, got {cfg.fps}")
     if cfg.frames < 0:
@@ -239,10 +244,10 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError(f"runtime.queue_depth must be > 0, got {cfg.queue_depth}")
     if not cfg.insight_host:
         raise ValueError("output.insight.host must be set")
-    if cfg.video_port <= 0:
-        raise ValueError(f"output.insight.video_port must be > 0, got {cfg.video_port}")
-    if cfg.metadata_port <= 0:
-        raise ValueError(f"output.insight.metadata_port must be > 0, got {cfg.metadata_port}")
+    if not 1 <= cfg.video_port <= 65535:
+        raise ValueError(f"output.insight.video_port must be in [1, 65535], got {cfg.video_port}")
+    if not 1 <= cfg.metadata_port <= 65535:
+        raise ValueError(f"output.insight.metadata_port must be in [1, 65535], got {cfg.metadata_port}")
     if cfg.bitrate_kbps <= 0:
         raise ValueError(f"output.insight.bitrate_kbps must be > 0, got {cfg.bitrate_kbps}")
 
@@ -301,51 +306,61 @@ def load_labels(labels_path: Path) -> list[str]:
     return labels
 
 
-def camera_fragment(cfg: AppConfig) -> str:
-    """GStreamer fragment for the USB camera. Neat has no V4L2 source node, so
-    this goes through the `custom()` escape hatch.
+def camera_caps(cfg: AppConfig) -> str:
+    return f"image/jpeg,width={cfg.width},height={cfg.height},framerate={cfg.fps}/1"
 
-    io-mode=mmap    zero-copy DMA from the UVC driver; io-mode=rw memcpys every frame.
-    image/jpeg      pins MJPEG. Without it v4l2src negotiates raw YUYV, which USB 2.0
-                    bandwidth limits to ~5 fps at 1080p.
-    queue leaky     drop stale frames rather than stall the camera when the MLA is busy.
-    neatdecoder     SiMa hardware MJPEG decode, emitting NV12 straight into SiMaAI memory
-                    for the CVU and the encoder. This is what `nodes::SimaDecode` with
-                    `SimaDecodeType::MJPEG` generates; it is spelled inline because the
-                    whole camera path is already one `custom()` fragment.
-                    It needs no videoconvert (NV12 is native) and no jpegparse ahead of
-                    it: v4l2src delivers one whole JPEG per buffer, and GStreamer 1.22's
-                    jpegparse cannot read the APP0 segment UVC cameras emit -- it warned
-                    once per frame ("Failed to parse app0 segment") then killed the run
-                    with a media-format error. Measured on a Logitech BRIO at 1080p:
 
-                        decoder        1080p30 CPU     1080p60 CPU / fps
-                        jpegdec        141% of a core  204% / 43.4
-                        neatdecoder     35% of a core   60% / 46.6
-
-                    Three runs per arm, spread under 1.5 points; every hardware sample
-                    beat every CPU sample. Neither decoder reaches 60 fps -- that ceiling
-                    is downstream, not here. Do not reintroduce jpegdec or jpegparse.
-
-    The fragment must not end on a bare caps string: gst_parse_launch reads a trailing
-    `video/x-raw,...` as an element name and fails with `no element "video"`. Ending on
-    a real element keeps the caps a capsfilter.
-    """
+def source_description(cfg: AppConfig) -> str:
     if cfg.override_fragment:
         return cfg.override_fragment
+    return (f"V4L2 device={cfg.device} caps={camera_caps(cfg)} "
+            f"-> Input -> JpegParse -> SimaDecode(MJPEG,NV12) flip={cfg.flip}")
 
-    fragment = (
-        f"v4l2src device={cfg.device} io-mode=mmap"
-        f" ! image/jpeg,width={cfg.width},height={cfg.height},framerate={cfg.fps}/1"
-        f" ! queue leaky=downstream max-size-buffers=2"
-        f" ! neatdecoder sima-allocator-type=2 dec-type=mjpeg dec-fmt=NV12"
-    )
-    # COCO models lose confidence on inverted scenes; correct the mount before inference.
-    # videoflip works downstream of the hardware decoder and measured free (34.4% vs
-    # 34.5% of a core without it).
-    if cfg.flip != "none":
-        fragment += f" ! videoflip method={FLIP_METHODS[cfg.flip]}"
-    return fragment + " ! queue leaky=downstream max-size-buffers=2"
+
+class UsbCamera:
+    """Capture compressed JPEG bytes; the Neat graph owns hardware decoding."""
+
+    def __init__(self, cfg: AppConfig, cv2):
+        self.capture = cv2.VideoCapture(cfg.device, cv2.CAP_V4L2)
+        self.caps = camera_caps(cfg)
+        self.dropped_frames = 0
+        try:
+            if not self.capture.isOpened():
+                raise RuntimeError(f"Cannot open USB camera {cfg.device}")
+            mjpg = cv2.VideoWriter_fourcc(*"MJPG")
+            self.capture.set(cv2.CAP_PROP_FOURCC, mjpg)
+            self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, cfg.width)
+            self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, cfg.height)
+            self.capture.set(cv2.CAP_PROP_FPS, cfg.fps)
+            self.capture.set(cv2.CAP_PROP_BUFFERSIZE, 2)
+            if (int(self.capture.get(cv2.CAP_PROP_FOURCC)) != mjpg
+                    or not self.capture.set(cv2.CAP_PROP_CONVERT_RGB, 0)):
+                raise RuntimeError("USB camera must provide compressed MJPEG without CPU decode")
+            if (self.capture.get(cv2.CAP_PROP_FRAME_WIDTH) != cfg.width
+                    or self.capture.get(cv2.CAP_PROP_FRAME_HEIGHT) != cfg.height
+                    or not abs(self.capture.get(cv2.CAP_PROP_FPS) - cfg.fps) <= 0.1):
+                raise RuntimeError("USB camera did not negotiate the requested resolution/frame rate")
+        except BaseException:
+            self.close()
+            raise
+
+    def read(self) -> bytes:
+        for _ in range(8):
+            ok, frame = self.capture.read()
+            if not ok or frame is None:
+                raise RuntimeError("USB camera stopped delivering frames")
+            data = frame.tobytes()
+            if not data.startswith(b"\xff\xd8"):
+                raise RuntimeError("USB camera returned invalid MJPEG data")
+            if data.endswith(b"\xff\xd9"):
+                return data
+            self.dropped_frames += 1
+            print(f"[warn] discarded incomplete MJPEG frame; total={self.dropped_frames}",
+                  file=sys.stderr, flush=True)
+        raise RuntimeError("USB camera returned 8 consecutive incomplete MJPEG frames")
+
+    def close(self) -> None:
+        self.capture.release()
 
 
 def parse_bbox_payload(payload: bytes, img_w: int, img_h: int, max_detections: int) -> list[dict]:
@@ -463,7 +478,7 @@ def build_video_graph(cfg: AppConfig):
     return graph, sender_options.video_port
 
 
-def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
+def build_pipeline(cfg: AppConfig, camera=None) -> PipelineRuntime:
     labels = load_labels(cfg.labels_path)
     model = make_model(cfg)
     video_graph, video_port = build_video_graph(cfg)
@@ -479,13 +494,33 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
     live = pyneat.GraphLinkOptions()
     live.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
 
-    # connect() registers the source; add()ing it as well emits the fragment twice and
-    # starts two v4l2src elements on the same device.
-    source = pyneat.nodes.custom(camera_fragment(cfg), pyneat.InputRole.Source)
-    branch = pyneat.graphs.branch("camera", ["video", "model"])
+    source_graph = pyneat.Graph("capture_decode")
+    seed = None
+    if camera is None:
+        source_graph.add(pyneat.nodes.custom(cfg.override_fragment, pyneat.InputRole.Source))
+    else:
+        ingress = pyneat.InputOptions()
+        ingress.payload_type = pyneat.PayloadType.Encoded
+        ingress.caps_override = camera.caps
+        ingress.memory_policy = pyneat.InputMemoryPolicy.SystemMemory
+        ingress.do_timestamp = False
+        decode = pyneat.SimaDecodeOptions()
+        decode.type = pyneat.SimaDecodeType.MJPEG
+        decode.raw_output = True
+        decode.out_format = pyneat.Format.NV12
+        decode.dec_width, decode.dec_height = cfg.width, cfg.height
+        decode.dec_fps = cfg.fps
+        source_graph.add(pyneat.nodes.input("jpeg", ingress))
+        source_graph.add(pyneat.nodes.jpeg_parse())
+        source_graph.add(pyneat.nodes.sima_decode(decode))
+        if cfg.flip != "none":
+            source_graph.add(pyneat.nodes.custom(f"videoflip method={FLIP_METHODS[cfg.flip]}"))
+        seed = pyneat.make_encoded_sample(camera.read(), camera.caps, pts_ns=0,
+                                          duration_ns=1_000_000_000 // cfg.fps)
 
+    branch = pyneat.graphs.branch("camera", ["video", "model"])
     graph = pyneat.Graph("usb_camera_object_detector")
-    graph.connect(source, branch)
+    graph.connect(source_graph, branch)
     graph.connect(branch, video_graph, live)
     graph.connect(branch, model_graph, live)
     graph.connect(model_graph, detections_graph)
@@ -493,18 +528,19 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
     if cfg.profile:
         print(f"Backend:\n{graph.describe_backend()}", flush=True)
 
-    run_options = pyneat.RunOptions()
-    run_options.preset = pyneat.RunPreset.Realtime
-    run_options.queue_depth = cfg.queue_depth
-    run_options.overflow_policy = pyneat.OverflowPolicy.KeepLatest
-    run_options.output_memory = pyneat.OutputMemory.ZeroCopy
-    run = graph.build(run_options)
-
     metadata_options = pyneat.MetadataSenderOptions()
     metadata_options.host = cfg.insight_host
     metadata_options.channel = 0
     metadata_options.metadata_port_base = cfg.metadata_port
     metadata_sender = pyneat.MetadataSender(metadata_options)
+
+    run_options = pyneat.RunOptions()
+    run_options.preset = pyneat.RunPreset.Realtime
+    run_options.queue_depth = cfg.queue_depth
+    run_options.overflow_policy = pyneat.OverflowPolicy.KeepLatest
+    run_options.output_memory = pyneat.OutputMemory.ZeroCopy
+    run_options.input_timeout_ms = 20000
+    run = graph.build([seed], run_options) if seed is not None else graph.build(run_options)
 
     source_label = "override" if cfg.override_fragment else cfg.device
     print(
@@ -520,6 +556,7 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
         metadata_sender=metadata_sender,
         labels=labels,
         video_port=video_port,
+        seed=seed,
     )
 
 
@@ -527,37 +564,84 @@ def send_metadata(runtime: PipelineRuntime, cfg: AppConfig, sample, boxes: list[
     metadata_boxes = build_metadata_boxes(boxes, runtime.labels, cfg.width, cfg.height)
     timestamp_ms = int(sample.pts_ns // 1_000_000) if sample.pts_ns >= 0 else -1
     frame_id = str(sample.frame_id) if sample.frame_id >= 0 else ""
-    runtime.metadata_sender.send_metadata(
+    if not runtime.metadata_sender.send_metadata(
         "object-detection",
         json.dumps({"objects": metadata_boxes}, separators=(",", ":")),
         timestamp_ms,
         frame_id,
-    )
+    ):
+        raise RuntimeError("metadata send failed")
 
 
-def run_pipeline(runtime: PipelineRuntime, cfg: AppConfig) -> int:
+def run_pipeline(runtime: PipelineRuntime, cfg: AppConfig, camera=None) -> int:
     profile = ProfileWindow(cfg.profile, cfg.profile_interval)
     processed = 0
     detections = 0
-    while cfg.frames <= 0 or processed < cfg.frames:
-        pull_start = time_ms()
-        sample = runtime.run.pull("detections", 20000)
-        pull_end = time_ms()
-        if sample is None:
-            print("[warn] timed out waiting for detections", file=sys.stderr, flush=True)
-            continue
+    stop = threading.Event()
+    capture_errors = []
 
-        boxes = parse_bbox_payload(
-            extract_bbox_payload(sample), cfg.width, cfg.height, cfg.max_detections
-        )
+    def feed_camera():
+        capture_start = time.monotonic_ns()
+        frame_id = 0
+        try:
+            while not stop.is_set():
+                if runtime.seed is not None:
+                    encoded = runtime.seed
+                    runtime.seed = None
+                else:
+                    data = camera.read()
+                    encoded = pyneat.make_encoded_sample(
+                        data, camera.caps, pts_ns=time.monotonic_ns() - capture_start,
+                        duration_ns=1_000_000_000 // cfg.fps)
+                encoded.frame_id = frame_id
+                encoded.stream_id = "camera"
+                if stop.is_set():
+                    break
+                if not runtime.run.push([encoded]):
+                    raise RuntimeError("USB decoder rejected JPEG input")
+                frame_id += 1
+        except Exception as error:
+            if not stop.is_set():
+                capture_errors.append(error)
 
-        metadata_start = time_ms()
-        send_metadata(runtime, cfg, sample, boxes)
-        metadata_end = time_ms()
+    producer = threading.Thread(target=feed_camera, name="usb-capture") if camera is not None else None
+    if producer is not None:
+        producer.start()
+    last_output = time.monotonic()
+    try:
+        while cfg.frames <= 0 or processed < cfg.frames:
+            if capture_errors:
+                raise capture_errors[0]
+            pull_start = time_ms()
+            sample = runtime.run.pull("detections", 200 if producer is not None else 20000)
+            pull_end = time_ms()
+            if sample is None:
+                if time.monotonic() - last_output >= 20:
+                    raise RuntimeError("timed out waiting for detections")
+                continue
+            last_output = time.monotonic()
 
-        processed += 1
-        detections += len(boxes)
-        profile.add(pull_end - pull_start, metadata_end - metadata_start, len(boxes))
+            boxes = parse_bbox_payload(
+                extract_bbox_payload(sample), cfg.width, cfg.height, cfg.max_detections
+            )
+
+            metadata_start = time_ms()
+            send_metadata(runtime, cfg, sample, boxes)
+            metadata_end = time_ms()
+
+            processed += 1
+            detections += len(boxes)
+            profile.add(pull_end - pull_start, metadata_end - metadata_start, len(boxes))
+
+    finally:
+        stop.set()
+        try:
+            runtime.run.close()
+        finally:
+            if producer is not None:
+                producer.join()
+    if capture_errors:
+        raise capture_errors[0]
 
     profile.flush()
     print(
@@ -591,17 +675,27 @@ def main(argv: list[str] | None = None) -> int:
             f"max_detections={cfg.max_detections} queue_depth={cfg.queue_depth} "
             f"insight={cfg.insight_host}:{cfg.video_port}/{cfg.metadata_port}"
         )
-        print(f"[validate] fragment={camera_fragment(cfg)}")
+        print(f"[validate] source_pipeline={source_description(cfg)}")
         print("[validate] configuration OK")
         return 0
 
+    def request_stop(signum, frame):
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, request_stop)
+    signal.signal(signal.SIGHUP, request_stop)
     try:
         load_runtime_dependencies()
-        runtime = build_pipeline(cfg)
+        camera = None
         try:
-            run_pipeline(runtime, cfg)
+            if not cfg.override_fragment:
+                import cv2
+                camera = UsbCamera(cfg, cv2)
+            runtime = build_pipeline(cfg, camera)
+            run_pipeline(runtime, cfg, camera)
         finally:
-            runtime.run.close()
+            if camera is not None:
+                camera.close()
         return 0
     except KeyboardInterrupt:
         return 130

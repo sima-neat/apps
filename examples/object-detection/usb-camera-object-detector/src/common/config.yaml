@@ -24,8 +24,8 @@ runtime:                     # Runtime settings.
 output:                      # Insight receiver.
   insight:
     host: <insight-host-ip>  # Host running the Insight receiver/viewer.
-    video_port: 9000         # UDP video port.
-    metadata_port: 9100      # UDP metadata port.
+    video_port: 9000         # Destination UDP video port for channel 0 (1..65535).
+    metadata_port: 9100      # Destination UDP metadata port for channel 0 (1..65535).
     bitrate_kbps: 4000       # H.264 encoder bitrate.
 
 # Test harness settings only. Normal example runs ignore this section.

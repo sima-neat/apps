@@ -1,5 +1,5 @@
 // Unit test for usb-camera-object-detector: CLI handling, configuration validation,
-// and the resolved camera fragment. Runs without a camera, a model, or a board.
+// and the resolved capture/decode route. Runs without a camera, a model, or a board.
 #include "support/testing/test_process.h"
 
 #include <filesystem>
@@ -99,8 +99,8 @@ bool validate_rejects(const std::string& binary, const std::string& test_name,
   return ok;
 }
 
-// Returns the `[validate] fragment=` line for a config body.
-std::string fragment_for(const std::string& binary, const std::string& test_name,
+// Returns the `[validate] source_pipeline=` line for a config body.
+std::string source_description_for(const std::string& binary, const std::string& test_name,
                          const std::string& body, bool* ok) {
   const fs::path config_path = write_config(test_name, body);
   const auto result =
@@ -111,10 +111,10 @@ std::string fragment_for(const std::string& binary, const std::string& test_name
     *ok = false;
     return {};
   }
-  const std::string marker = "[validate] fragment=";
+  const std::string marker = "[validate] source_pipeline=";
   const auto start = result.stdout_text.find(marker);
   if (start == std::string::npos) {
-    std::cerr << "[FAIL] " << test_name << ": no fragment line\n";
+    std::cerr << "[FAIL] " << test_name << ": no source_pipeline line\n";
     *ok = false;
     return {};
   }
@@ -185,72 +185,38 @@ bool test_shipped_config_validates(const std::string& binary) {
   return ok;
 }
 
-bool test_fragment_pins_mjpeg_capture(const std::string& binary) {
+bool test_source_reports_mjpeg_capture(const std::string& binary) {
   bool ok = true;
-  const std::string frag =
-      fragment_for(binary, "test_fragment_pins_mjpeg_capture", config_body(), &ok);
-  if (!ok) {
-    return false;
-  }
-  return expect_contains(frag, "v4l2src device=/dev/video16",
-                         "fragment opens the configured node") &&
-         expect_contains(frag, "io-mode=mmap", "fragment uses zero-copy mmap io") &&
-         expect_contains(frag, "image/jpeg", "fragment pins MJPEG rather than raw YUYV") &&
-         expect_contains(frag, "width=1920,height=1080,framerate=30/1",
-                         "fragment carries the capture mode") &&
-         // jpegparse breaks UVC MJPEG on GStreamer 1.22 (see camera_fragment).
-         expect_absent(frag, "jpegparse", "fragment omits jpegparse") &&
-         expect_contains(frag, "neatdecoder", "fragment uses the SiMa hardware decoder") &&
-         expect_contains(frag, "dec-type=mjpeg", "hardware decoder is in MJPEG mode") &&
-         expect_contains(frag, "dec-fmt=NV12", "hardware decoder publishes NV12") &&
-         expect_absent(frag, "jpegdec", "fragment does not decode JPEG on the CPU") &&
-         expect_absent(frag, "videoconvert", "hardware decoder needs no CPU conversion") &&
-         expect_contains(frag, "leaky=downstream", "fragment queues drop rather than stall");
+  const auto description = source_description_for(binary, "test_source_reports_mjpeg_capture", config_body(), &ok);
+  return ok && expect_contains(description, "V4L2 device=/dev/video16", "configured camera") &&
+         expect_contains(description, "image/jpeg,width=1920,height=1080,framerate=30/1", "encoded caps") &&
+         expect_contains(description, "Input -> JpegParse -> SimaDecode(MJPEG,NV12)", "public decoder route");
 }
 
-// gst_parse_launch reads a trailing caps string as an element name and fails
-// with `no element "video"`, so the fragment must end on a real element.
-bool test_fragment_does_not_end_on_caps(const std::string& binary) {
+bool test_source_omits_flip_by_default(const std::string& binary) {
   bool ok = true;
   const std::string frag =
-      fragment_for(binary, "test_fragment_does_not_end_on_caps", config_body(), &ok);
-  if (!ok) {
-    return false;
-  }
-  const auto last = frag.find_last_of('!');
-  const std::string tail = last == std::string::npos ? frag : frag.substr(last + 1);
-  const auto first_char = tail.find_first_not_of(' ');
-  const std::string trimmed = first_char == std::string::npos ? tail : tail.substr(first_char);
-  return expect_true(trimmed.rfind("queue", 0) == 0, "fragment ends on a real element");
-}
-
-bool test_fragment_omits_flip_by_default(const std::string& binary) {
-  bool ok = true;
-  const std::string frag =
-      fragment_for(binary, "test_fragment_omits_flip_by_default", config_body(), &ok);
+      source_description_for(binary, "test_source_omits_flip_by_default", config_body(), &ok);
   if (!ok) {
     return false;
   }
   return expect_absent(frag, "videoflip", "no videoflip when source.flip is none");
 }
 
-bool test_fragment_inserts_flip(const std::string& binary) {
+bool test_source_inserts_flip(const std::string& binary) {
   bool ok = true;
   const std::string frag =
-      fragment_for(binary, "test_fragment_inserts_flip", config_body("  flip: rotate-180\n"), &ok);
+      source_description_for(binary, "test_source_inserts_flip", config_body("  flip: rotate-180\n"), &ok);
   if (!ok) {
     return false;
   }
-  const auto flip_pos = frag.find("videoflip method=rotate-180");
-  const auto decode_pos = frag.find("neatdecoder");
-  return expect_true(flip_pos != std::string::npos, "videoflip is inserted for rotate-180") &&
-         expect_true(decode_pos < flip_pos, "videoflip runs after the hardware decode");
+  return expect_contains(frag, "flip=rotate-180", "configured flip is reported");
 }
 
-bool test_fragment_honours_capture_mode(const std::string& binary) {
+bool test_source_honours_capture_mode(const std::string& binary) {
   bool ok = true;
   const std::string frag =
-      fragment_for(binary, "test_fragment_honours_capture_mode",
+      source_description_for(binary, "test_source_honours_capture_mode",
                    config_body("  width: 1280\n  height: 720\n  fps: 25\n"), &ok);
   if (!ok) {
     return false;
@@ -264,7 +230,7 @@ bool test_fragment_honours_capture_mode(const std::string& binary) {
 bool test_override_replaces_the_camera(const std::string& binary) {
   bool ok = true;
   const std::string frag =
-      fragment_for(binary, "test_override_replaces_the_camera",
+      source_description_for(binary, "test_override_replaces_the_camera",
                    config_body("  override_fragment: \"videotestsrc ! queue\"\n"), &ok);
   if (!ok) {
     return false;
@@ -278,7 +244,7 @@ bool test_override_replaces_the_camera(const std::string& binary) {
 // same way; before it did, such a config failed with "invalid config line".
 bool test_wrapped_override_fragment_is_folded(const std::string& binary) {
   bool ok = true;
-  const std::string frag = fragment_for(
+  const std::string frag = source_description_for(
       binary, "test_wrapped_override_fragment_is_folded",
       config_body("  override_fragment: videotestsrc pattern=smpte is-live=true\n"
                   "    ! video/x-raw,format=NV12,width=1920,height=1080\n"
@@ -395,11 +361,10 @@ int main(int argc, char** argv) {
   ok &= test_missing_config_value_is_rejected(binary);
   ok &= test_missing_config_file_fails_cleanly(binary);
   ok &= test_shipped_config_validates(binary);
-  ok &= test_fragment_pins_mjpeg_capture(binary);
-  ok &= test_fragment_does_not_end_on_caps(binary);
-  ok &= test_fragment_omits_flip_by_default(binary);
-  ok &= test_fragment_inserts_flip(binary);
-  ok &= test_fragment_honours_capture_mode(binary);
+  ok &= test_source_reports_mjpeg_capture(binary);
+  ok &= test_source_omits_flip_by_default(binary);
+  ok &= test_source_inserts_flip(binary);
+  ok &= test_source_honours_capture_mode(binary);
   ok &= test_override_replaces_the_camera(binary);
   ok &= test_wrapped_override_fragment_is_folded(binary);
   ok &= test_override_reported_as_source(binary);
@@ -433,6 +398,26 @@ int main(int argc, char** argv) {
   ok &= validate_rejects(binary, "test_rejects_zero_queue_depth",
                          config_body("", "", "  queue_depth: 0\n"), "runtime.queue_depth",
                          "zero runtime.queue_depth");
+
+  ok &= validate_rejects(binary, "test_odd_width", config_body("  width: 1279\n"),
+                         "source.width", "odd NV12 width");
+  ok &= validate_rejects(binary, "test_odd_height", config_body("  height: 719\n"),
+                         "source.height", "odd NV12 height");
+
+  for (const std::string key : {"video_port", "metadata_port"}) {
+    const std::string original = key + (key == "video_port" ? ": 9000" : ": 9100");
+    for (const int port : {-1, 0, 65536, 70000}) {
+      std::string body = config_body();
+      body.replace(body.find(original), original.size(), key + ": " + std::to_string(port));
+      ok &= validate_rejects(binary, "test_" + key + "_" + std::to_string(port), body,
+                             "output.insight." + key, "invalid " + key);
+    }
+    for (const int port : {1, 65535}) {
+      std::string body = config_body();
+      body.replace(body.find(original), original.size(), key + ": " + std::to_string(port));
+      source_description_for(binary, "test_" + key + "_" + std::to_string(port), body, &ok);
+    }
+  }
 
   return ok ? 0 : 1;
 }

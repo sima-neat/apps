@@ -16,19 +16,30 @@
 
 Captures from a USB (UVC) webcam, runs YOLO26 detection on the MLA, and streams H.264 video plus detection metadata to Insight.
 
-Neat has no V4L2 source node, so the camera is a GStreamer fragment behind the
-`custom()` escape hatch. Everything after it is an ordinary Neat graph:
+OpenCV captures compressed MJPEG bytes through V4L2 with RGB conversion
+disabled. Each complete JPEG becomes a timestamped Neat encoded sample. Public
+`Input`, `JpegParse`, and `SimaDecode` nodes decode it to NV12 on the hardware:
 
 ```text
-v4l2src (MJPEG) -> neatdecoder (NV12) -> branch -+-> video_sender -> Insight
-                                              `-> model -> detections -> Insight metadata
+USB camera -> compressed JPEG -> Input -> JpegParse -> SimaDecode(MJPEG)
+                                                       |
+                                                    NV12 branch
+                                                    /         \
+                                             video_sender     model
+                                                  |             |
+                                              Insight      detection metadata
 ```
 
-Both branches stay inside one Run so the encoder and the detections share a
-GStreamer timeline. Insight correlates the RTP timestamp with the metadata
-timestamp, and cannot render overlays if the two drift apart. The branch link
-uses `RealtimeLatestByStream`, so a slow branch drops its own stale frames
-instead of back-pressuring the camera.
+Capture and input submission run on a worker while the main loop receives
+detections and sends metadata. Both branches stay inside one Neat Run and share
+the capture timestamps, allowing Insight to align overlays with video. The
+`RealtimeLatestByStream` links drop stale frames independently when a branch
+falls behind. Neat's configured input queue bounds pending work.
+
+The capture helper verifies the negotiated resolution and frame rate and rejects
+non-MJPEG output. It discards truncated JPEGs before they reach `JpegParse`, and
+reports an error after eight consecutive incomplete frames. Shutdown closes the
+Neat Run, joins the capture worker, and releases the camera.
 
 The C++ and Python implementations read the same `src/common/config.yaml` and
 build the same graph.
@@ -67,8 +78,23 @@ The default model is `yolo26m-det-bf16-mla_tess-b1`.
 | `yolo26x-det-bf16-mla_tess-b1.tar.gz` | Supported | Direct artifact |
 | `yolo26m-det-bf16-b1.tar.gz` | Supported | Direct artifact |
 | `yolo26m-det-int8-b1.tar.gz` | Supported | Direct artifact |
+| `yolo_26n_mpk.tar.gz` | Supported YOLO26n | Model Zoo (`yolo_26n`) |
 
-Model packages come from the Model Zoo release below, which can differ from the installed platform version. Replace `<model-file>` with a file from the table.
+To download YOLO26n through Model Zoo, run these commands from `prebuilt-apps/`:
+
+```bash
+mkdir -p models
+cd models
+sima-cli modelzoo --version 2.1.3 --boardtype modalix get yolo_26n
+cd ..
+```
+
+Set `model.path` to `models/yolo_26n_mpk.tar.gz`. The lookup name is
+`yolo_26n`, including the underscore; `yolo_26n_cls` and `yolo_26n_seg`
+are different tasks and are not supported by this detector.
+
+For the default medium model or the alternate int8 package, use the direct
+artifacts below. The Model Zoo version can differ from the installed platform version.
 
 ```bash
 export MODELZOO_VERSION="2.1.3"
@@ -81,11 +107,18 @@ cd ..
 
 Set `model.path` in the config to the downloaded package.
 
+For any other **Direct artifact** row in the table, replace `<model-file>` with
+that row's exact filename and run from `prebuilt-apps/models/`:
+
+```bash
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26-detection/<model-file>"
+```
+
 All listed models share one code path: NV12 preprocessing, MLA inference, and
 on-device YOLO26 box decode over the 80 COCO classes in
 `src/common/coco_label.txt`.
 
-**On the int8 package.** Its detections, classes, and box geometry match bf16,
+**On `yolo26m-det-int8-b1.tar.gz`.** Its detections, classes, and box geometry match bf16,
 but every confidence score is capped at 0.50, because its class-score heads
 carry a zero-point at the top of the int8 range. If you select it, roughly halve
 `inference.min_score` (0.30 becomes about 0.15); the default threshold would
@@ -164,8 +197,8 @@ source:
   device: /dev/video96
 ```
 
-`--validate-config-only` prints the resolved GStreamer fragment, so you can
-confirm the right node reached the pipeline before opening the camera.
+`--validate-config-only` prints the device, encoded caps, and Neat decoder route
+without opening the camera. Actual camera-mode negotiation is checked at startup.
 
 ## Configure
 
@@ -199,9 +232,18 @@ output:
 actually offers; they are pinned into the capture caps rather than negotiated.
 
 Set `source.flip` to `rotate-180` for an inverted camera mount. COCO models lose
-confidence on upside-down scenes, and the flip is applied before inference.
+confidence on upside-down scenes, and the flip is applied to decoded NV12 before both video output and inference.
+The optional flip uses a small `videoflip` custom node; capture and MJPEG decode
+use OpenCV and public Neat APIs respectively.
 
-`source.override_fragment` replaces the camera with any GStreamer fragment that
+`output.insight.video_port` and `output.insight.metadata_port` are the actual
+destination UDP ports for channel 0. Match them to the Insight receiver's video
+and metadata ports respectively; each must be between 1 and 65535. Both language
+implementations exit with an error if metadata sending fails locally. A successful
+UDP send does not acknowledge receipt by Insight.
+
+`source.override_fragment` is the diagnostic escape hatch: it bypasses USB
+capture and MJPEG decoding with a GStreamer fragment that
 ends producing NV12 at `source.width` x `source.height`. It is a diagnostic
 hook: it lets you exercise the whole graph with no camera attached, or validate
 the model against an image with a known answer.
@@ -230,7 +272,7 @@ python3 ${APP_DIR}/src/python/main.py \
 ```
 
 Both accept `--validate-config-only`, which checks the configuration, prints the
-resolved camera fragment, and exits without opening the camera or loading the
+resolved capture/decode route, and exits without opening the camera or loading the
 model:
 
 ```bash
@@ -258,10 +300,12 @@ it completes.
 
 ## Troubleshooting
 
-- Run either implementation with `--validate-config-only` to check the configuration and inspect the resolved camera fragment without opening the camera.
+- On `USB camera did not negotiate` errors, select a resolution/frame-rate combination listed by the camera.
+- On repeated incomplete JPEG errors, check the USB connection and select a lower-bandwidth capture mode.
+- Run either implementation with `--validate-config-only` to check the configuration and inspect the resolved capture/decode route without opening the camera.
 - If the camera fails to open, confirm `source.device` is the *Video Capture* node from `v4l2-ctl --list-devices`, not the Metadata Capture node.
 - If capture negotiation fails, confirm the camera offers MJPEG at the configured resolution and rate with `v4l2-ctl --device <node> --list-formats-ext`.
-- If the frame rate is far below `source.fps`, confirm the pipeline negotiated MJPEG rather than raw YUYV, which USB 2.0 cannot sustain at 1080p.
+- If the frame rate is below `source.fps`, inspect the camera exposure settings and runtime profiling. Negotiating a mode does not guarantee the camera or complete pipeline sustains that rate.
 - If detections are weak on an inverted mount, set `source.flip: rotate-180`.
 - If video and detections are absent, verify the Insight host and UDP ports.
 - To separate a camera problem from a model problem, set `source.override_fragment` to a still image or `videotestsrc` and rerun.

@@ -2,10 +2,10 @@
  * @example usb-camera-object-detector.cpp
  * USB (UVC) camera YOLO26 object detection with Insight output.
  *
- * The camera is a plain GStreamer fragment behind Neat's Custom() escape hatch,
- * because Neat has no V4L2 source node. From there the graph is ordinary Neat:
+ * OpenCV captures compressed MJPEG through V4L2. Neat input and decoder nodes
+ * turn each encoded sample into NV12 before branching:
  *
- *     v4l2src (MJPEG) -> neatdecoder (NV12) -> branch -+-> video_sender -> Insight
+ *     Input -> JpegParse -> SimaDecode(MJPEG) -> branch -+-> video_sender -> Insight
  *                                                   `-> model -> detections
  *
  * Both branches stay inside one Run so the encoder and the detections share a
@@ -22,6 +22,11 @@
 #include <atomic>
 #include <chrono>
 #include <csignal>
+#include <cmath>
+#include <thread>
+#include <mutex>
+#include <exception>
+#include <opencv2/videoio.hpp>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -153,6 +158,9 @@ Config load_config(const fs::path& config_path) {
   if (cfg.height <= 0) {
     throw std::runtime_error("source.height must be > 0");
   }
+  if (cfg.width % 2 || cfg.height % 2) {
+    throw std::runtime_error("source.width and source.height must be even for NV12");
+  }
   if (cfg.fps <= 0) {
     throw std::runtime_error("source.fps must be > 0");
   }
@@ -177,11 +185,11 @@ Config load_config(const fs::path& config_path) {
   if (cfg.insight_host.empty()) {
     throw std::runtime_error("output.insight.host must be set");
   }
-  if (cfg.video_port <= 0) {
-    throw std::runtime_error("output.insight.video_port must be > 0");
+  if (cfg.video_port <= 0 || cfg.video_port > 65535) {
+    throw std::runtime_error("output.insight.video_port must be in [1, 65535]");
   }
-  if (cfg.metadata_port <= 0) {
-    throw std::runtime_error("output.insight.metadata_port must be > 0");
+  if (cfg.metadata_port <= 0 || cfg.metadata_port > 65535) {
+    throw std::runtime_error("output.insight.metadata_port must be in [1, 65535]");
   }
   if (cfg.bitrate_kbps <= 0) {
     throw std::runtime_error("output.insight.bitrate_kbps must be > 0");
@@ -209,56 +217,71 @@ std::vector<std::string> load_labels(const fs::path& labels_path) {
   return labels;
 }
 
-/**
- * GStreamer fragment for the USB camera. Neat has no V4L2 source node, so this
- * goes through the Custom() escape hatch.
- *
- * io-mode=mmap   zero-copy DMA from the UVC driver; io-mode=rw memcpys every frame.
- * image/jpeg     pins MJPEG. Without it v4l2src negotiates raw YUYV, which USB 2.0
- *                bandwidth limits to ~5 fps at 1080p.
- * queue leaky    drop stale frames rather than stall the camera when the MLA is busy.
- * neatdecoder    SiMa hardware MJPEG decode, emitting NV12 straight into SiMaAI memory
- *                for the CVU and the encoder. This is what `nodes::SimaDecode` with
- *                `SimaDecodeType::MJPEG` generates; it is spelled inline because the
- *                whole camera path is already one `custom()` fragment.
- *                It needs no videoconvert (NV12 is native) and no jpegparse ahead of
- *                it: v4l2src delivers one whole JPEG per buffer, and GStreamer 1.22's
- *                jpegparse cannot read the APP0 segment UVC cameras emit -- it warned
- *                once per frame ("Failed to parse app0 segment") then killed the run
- *                with a media-format error. Measured on a Logitech BRIO at 1080p:
- *
- *                    decoder        1080p30 CPU     1080p60 CPU / fps
- *                    jpegdec        141% of a core  204% / 43.4
- *                    neatdecoder     35% of a core   60% / 46.6
- *
- *                Three runs per arm, spread under 1.5 points; every hardware sample
- *                beat every CPU sample. Neither decoder reaches 60 fps -- that ceiling
- *                is downstream, not here. Do not reintroduce jpegdec or jpegparse.
- *
- * The fragment must not end on a bare caps string: gst_parse_launch reads a trailing
- * `video/x-raw,...` as an element name and fails with `no element "video"`. Ending on
- * a real element keeps the caps a capsfilter.
- */
-std::string camera_fragment(const Config& cfg) {
-  if (!cfg.override_fragment.empty()) {
-    return cfg.override_fragment;
+std::string camera_caps(const Config& cfg) {
+  return "image/jpeg,width=" + std::to_string(cfg.width) + ",height=" +
+         std::to_string(cfg.height) + ",framerate=" + std::to_string(cfg.fps) + "/1";
+}
+
+std::string source_description(const Config& cfg) {
+  if (!cfg.override_fragment.empty()) return cfg.override_fragment;
+  return "V4L2 device=" + cfg.device + " caps=" + camera_caps(cfg) +
+         " -> Input -> JpegParse -> SimaDecode(MJPEG,NV12) flip=" + cfg.flip;
+}
+
+// Owns capture only. Neat graph construction remains in the application entrypoint.
+class UsbCamera {
+public:
+  explicit UsbCamera(const Config& opt) : capture_(opt.device, cv::CAP_V4L2) {
+    if (!capture_.isOpened()) {
+      throw std::runtime_error("Cannot open USB camera " + opt.device);
+    }
+    const auto mjpg = cv::VideoWriter::fourcc('M', 'J', 'P', 'G');
+    capture_.set(cv::CAP_PROP_FOURCC, mjpg);
+    capture_.set(cv::CAP_PROP_FRAME_WIDTH, opt.width);
+    capture_.set(cv::CAP_PROP_FRAME_HEIGHT, opt.height);
+    capture_.set(cv::CAP_PROP_FPS, opt.fps);
+    capture_.set(cv::CAP_PROP_BUFFERSIZE, 2);
+    if (static_cast<int>(capture_.get(cv::CAP_PROP_FOURCC)) != mjpg ||
+        !capture_.set(cv::CAP_PROP_CONVERT_RGB, 0)) {
+      throw std::runtime_error("USB camera must provide compressed MJPEG without CPU decode");
+    }
+    const double fps = capture_.get(cv::CAP_PROP_FPS);
+    if (static_cast<int>(capture_.get(cv::CAP_PROP_FRAME_WIDTH)) != opt.width ||
+        static_cast<int>(capture_.get(cv::CAP_PROP_FRAME_HEIGHT)) != opt.height ||
+        !std::isfinite(fps) || std::abs(fps - opt.fps) > 0.1) {
+      throw std::runtime_error("USB camera did not negotiate the requested resolution/frame rate");
+    }
+    caps = "image/jpeg,width=" + std::to_string(opt.width) +
+           ",height=" + std::to_string(opt.height) + ",framerate=" + std::to_string(opt.fps) + "/1";
   }
 
-  std::ostringstream fragment;
-  fragment << "v4l2src device=" << cfg.device << " io-mode=mmap"
-           << " ! image/jpeg,width=" << cfg.width << ",height=" << cfg.height
-           << ",framerate=" << cfg.fps << "/1"
-           << " ! queue leaky=downstream max-size-buffers=2"
-           << " ! neatdecoder sima-allocator-type=2 dec-type=mjpeg dec-fmt=NV12";
-  // COCO models lose confidence on inverted scenes; correct the mount before inference.
-  // videoflip works downstream of the hardware decoder and measured free (34.4% vs
-  // 34.5% of a core without it).
-  if (cfg.flip != "none") {
-    fragment << " ! videoflip method=" << flip_methods().at(cfg.flip);
+  std::vector<std::uint8_t> read() {
+    // Do not feed a truncated JPEG to the request/response decoder: jpegparse
+    // can wait for another buffer while the application waits for its output.
+    for (int attempt = 0; attempt < 8; ++attempt) {
+      cv::Mat frame;
+      if (!capture_.read(frame) || frame.empty()) {
+        throw std::runtime_error("USB camera stopped delivering frames");
+      }
+      const auto size = frame.total() * frame.elemSize();
+      if (!frame.isContinuous() || size < 2 || frame.data[0] != 0xff || frame.data[1] != 0xd8) {
+        throw std::runtime_error("USB camera returned invalid MJPEG data");
+      }
+      if (frame.data[size - 2] == 0xff && frame.data[size - 1] == 0xd9) {
+        return {frame.data, frame.data + size};
+      }
+      std::cerr << "USB: discarded incomplete MJPEG frame (" << size
+                << " bytes; dropped_total=" << ++dropped_frames_ << ")\n";
+    }
+    throw std::runtime_error("USB camera returned 8 consecutive incomplete MJPEG frames");
   }
-  fragment << " ! queue leaky=downstream max-size-buffers=2";
-  return fragment.str();
-}
+
+  std::string caps;
+
+private:
+  std::uint64_t dropped_frames_ = 0;
+  cv::VideoCapture capture_;
+};
 
 std::vector<Box> parse_bbox_payload(const std::vector<uint8_t>& payload, int img_w, int img_h,
                                     int max_detections) {
@@ -455,13 +478,14 @@ int main(int argc, char** argv) {
               << " nms_iou=" << cfg.nms_iou << " max_detections=" << cfg.max_detections
               << " queue_depth=" << cfg.queue_depth << " insight=" << cfg.insight_host << ":"
               << cfg.video_port << "/" << cfg.metadata_port << "\n";
-    std::cout << "[validate] fragment=" << camera_fragment(cfg) << "\n";
+    std::cout << "[validate] source_pipeline=" << source_description(cfg) << "\n";
     std::cout << "[validate] configuration OK\n";
     return 0;
   }
 
   std::signal(SIGINT, handle_signal);
   std::signal(SIGTERM, handle_signal);
+  std::signal(SIGHUP, handle_signal);
 
   try {
     auto model = make_model(cfg);
@@ -480,13 +504,36 @@ int main(int argc, char** argv) {
     neat::GraphLinkOptions live;
     live.policy = neat::GraphLinkPolicy::RealtimeLatestByStream;
 
-    // connect() registers the source; add()ing it as well emits the fragment twice and
-    // starts two v4l2src elements on the same device.
-    auto source = neat::nodes::Custom(camera_fragment(cfg), neat::InputRole::Source);
+    std::unique_ptr<UsbCamera> camera;
+    neat::Sample seed;
+    neat::Graph source_graph("capture_decode");
+    if (!cfg.override_fragment.empty()) {
+      source_graph.add(neat::nodes::Custom(cfg.override_fragment, neat::InputRole::Source));
+    } else {
+      camera = std::make_unique<UsbCamera>(cfg);
+      neat::InputOptions ingress;
+      ingress.payload_type = neat::PayloadType::Encoded;
+      ingress.caps_override = camera->caps;
+      ingress.memory_policy = neat::InputMemoryPolicy::SystemMemory;
+      ingress.do_timestamp = false;
+      neat::SimaDecodeOptions decode;
+      decode.type = neat::SimaDecodeType::MJPEG;
+      decode.raw_output = true;
+      decode.out_format = "NV12";
+      decode.dec_width = cfg.width;
+      decode.dec_height = cfg.height;
+      decode.dec_fps = cfg.fps;
+      source_graph.add(neat::nodes::Input("jpeg", ingress));
+      source_graph.add(neat::nodes::JpegParse());
+      source_graph.add(neat::nodes::SimaDecode(decode));
+      if (cfg.flip != "none") {
+        source_graph.add(neat::nodes::Custom("videoflip method=" + flip_methods().at(cfg.flip)));
+      }
+      seed = neat::make_encoded_sample(camera->read(), camera->caps, 0, -1, 1000000000LL / cfg.fps);
+    }
     auto branch = neat::graphs::Branch("camera", {"video", "model"});
-
     neat::Graph graph("usb_camera_object_detector");
-    graph.connect(source, branch);
+    graph.connect(source_graph, branch);
     graph.connect(branch, video_graph, live);
     graph.connect(branch, model_graph, live);
     graph.connect(model_graph, detections_graph);
@@ -500,13 +547,18 @@ int main(int argc, char** argv) {
     run_options.queue_depth = cfg.queue_depth;
     run_options.overflow_policy = neat::OverflowPolicy::KeepLatest;
     run_options.output_memory = neat::OutputMemory::ZeroCopy;
-    neat::Run run = graph.build(run_options);
+    run_options.input_timeout_ms = kPullTimeoutMs;
+    neat::Run run = camera ? graph.build(seed, run_options) : graph.build(run_options);
 
     neat::MetadataSenderOptions metadata_options;
     metadata_options.host = cfg.insight_host;
     metadata_options.channel = 0;
     metadata_options.metadata_port_base = cfg.metadata_port;
-    neat::MetadataSender metadata_sender(metadata_options);
+    std::string metadata_error;
+    neat::MetadataSender metadata_sender(metadata_options, &metadata_error);
+    if (!metadata_sender.ok()) {
+      throw std::runtime_error("metadata sender initialization failed: " + metadata_error);
+    }
 
     const std::string source_label = cfg.override_fragment.empty() ? cfg.device : "override";
     std::cout << "source=" << source_label << " stream=" << cfg.width << "x" << cfg.height << "@"
@@ -521,55 +573,109 @@ int main(int argc, char** argv) {
     double window_pull_ms = 0.0;
     auto window_start = std::chrono::steady_clock::now();
 
-    while (!g_stop.load() && (cfg.frames <= 0 || processed < cfg.frames)) {
-      neat::Sample sample;
-      neat::PullError err;
-      const auto pull_start = std::chrono::steady_clock::now();
-      const auto status = run.pull("detections", kPullTimeoutMs, sample, &err);
-      const auto pull_end = std::chrono::steady_clock::now();
+    std::mutex capture_error_mutex;
+    std::exception_ptr capture_error;
+    std::jthread producer;
+    if (camera) {
+      producer = std::jthread([&](std::stop_token stop) {
+        const auto capture_start = std::chrono::steady_clock::now();
+        int64_t frame_id = 0;
+        try {
+          while (!stop.stop_requested() && !g_stop.load()) {
+            neat::Sample encoded;
+            if (frame_id == 0) {
+              encoded = seed;
+            } else {
+              auto bytes = camera->read();
+              const auto pts = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                  std::chrono::steady_clock::now() - capture_start).count();
+              encoded = neat::make_encoded_sample(std::move(bytes), camera->caps, pts, -1,
+                                                  1000000000LL / cfg.fps);
+            }
+            encoded.frame_id = frame_id++;
+            encoded.stream_id = "camera";
+            if (stop.stop_requested()) break;
+            if (!run.push(encoded)) throw std::runtime_error("USB decoder rejected JPEG input");
+          }
+        } catch (...) {
+          if (!stop.stop_requested()) {
+            std::lock_guard lock(capture_error_mutex);
+            capture_error = std::current_exception();
+          }
+        }
+      });
+    }
+    auto check_capture_error = [&] {
+      std::lock_guard lock(capture_error_mutex);
+      if (capture_error) std::rethrow_exception(capture_error);
+    };
+    auto stop_capture = [&] {
+      producer.request_stop();
+      run.close();
+      if (producer.joinable()) producer.join();
+    };
+    auto last_output = std::chrono::steady_clock::now();
+    try {
+      while (!g_stop.load() && (cfg.frames <= 0 || processed < cfg.frames)) {
+        check_capture_error();
+        neat::Sample sample;
+        neat::PullError err;
+        const auto pull_start = std::chrono::steady_clock::now();
+        const auto status = run.pull("detections", camera ? 200 : kPullTimeoutMs, sample, &err);
+        const auto pull_end = std::chrono::steady_clock::now();
 
-      if (status == neat::PullStatus::Timeout) {
-        std::cerr << "[warn] timed out waiting for detections\n";
-        continue;
-      }
-      if (status == neat::PullStatus::Closed) {
-        std::cout << "pipeline closed\n";
-        break;
-      }
-      if (status != neat::PullStatus::Ok) {
-        throw std::runtime_error("pull failed: " + err.message);
-      }
+        if (status == neat::PullStatus::Timeout) {
+          if (pull_end - last_output >= std::chrono::milliseconds(kPullTimeoutMs))
+            throw std::runtime_error("timed out waiting for detections");
+          continue;
+        }
+        last_output = pull_end;
+        if (status == neat::PullStatus::Closed) {
+          std::cout << "pipeline closed\n";
+          break;
+        }
+        if (status != neat::PullStatus::Ok) {
+          throw std::runtime_error("pull failed: " + err.message);
+        }
 
-      const auto boxes = parse_bbox_payload(bbox_payload_from_sample(sample), cfg.width, cfg.height,
-                                            cfg.max_detections);
-      metadata_sender.send_metadata(
-          "object-detection", build_metadata_json(boxes, labels, cfg.width, cfg.height),
-          sample.pts_ns >= 0 ? static_cast<int64_t>(sample.pts_ns / 1000000) : -1,
-          sample.frame_id >= 0 ? std::to_string(sample.frame_id) : std::string());
+        const auto boxes = parse_bbox_payload(bbox_payload_from_sample(sample), cfg.width, cfg.height,
+                                              cfg.max_detections);
+        if (!metadata_sender.send_metadata(
+            "object-detection", build_metadata_json(boxes, labels, cfg.width, cfg.height),
+            sample.pts_ns >= 0 ? static_cast<int64_t>(sample.pts_ns / 1000000) : -1,
+            sample.frame_id >= 0 ? std::to_string(sample.frame_id) : std::string(),
+            &metadata_error)) {
+          throw std::runtime_error("metadata send failed: " + metadata_error);
+        }
 
-      ++processed;
-      detections += static_cast<int>(boxes.size());
+        ++processed;
+        detections += static_cast<int>(boxes.size());
 
-      if (cfg.profile) {
-        using ms = std::chrono::duration<double, std::milli>;
-        ++window_frames;
-        window_boxes += static_cast<int>(boxes.size());
-        window_pull_ms += ms(pull_end - pull_start).count();
-        if (window_frames >= cfg.profile_interval) {
-          const double elapsed = std::chrono::duration<double>(pull_end - window_start).count();
-          std::cout << "[profile] frames=" << window_frames
-                    << " output_fps=" << (elapsed > 0.0 ? window_frames / elapsed : 0.0)
-                    << " avg_detection_pull_ms=" << window_pull_ms / window_frames
-                    << " avg_boxes=" << static_cast<double>(window_boxes) / window_frames << "\n";
-          window_frames = 0;
-          window_boxes = 0;
-          window_pull_ms = 0.0;
-          window_start = pull_end;
+        if (cfg.profile) {
+          using ms = std::chrono::duration<double, std::milli>;
+          ++window_frames;
+          window_boxes += static_cast<int>(boxes.size());
+          window_pull_ms += ms(pull_end - pull_start).count();
+          if (window_frames >= cfg.profile_interval) {
+            const double elapsed = std::chrono::duration<double>(pull_end - window_start).count();
+            std::cout << "[profile] frames=" << window_frames
+                      << " output_fps=" << (elapsed > 0.0 ? window_frames / elapsed : 0.0)
+                      << " avg_detection_pull_ms=" << window_pull_ms / window_frames
+                      << " avg_boxes=" << static_cast<double>(window_boxes) / window_frames << "\n";
+            window_frames = 0;
+            window_boxes = 0;
+            window_pull_ms = 0.0;
+            window_start = pull_end;
+          }
         }
       }
-    }
 
-    run.close();
+    } catch (...) {
+      stop_capture();
+      throw;
+    }
+    stop_capture();
+    check_capture_error();
     std::cout << "processed=" << processed << " detections=" << detections
               << " video_sender=" << cfg.insight_host << ":" << cfg.video_port << "\n";
     return g_stop.load() ? 130 : 0;
