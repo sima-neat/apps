@@ -171,6 +171,44 @@ def load_config(config_path: Path) -> dict[str, Any]:
     return loaded
 
 
+def decode_yaml_escapes(text: str) -> str:
+    """Decode the escapes a double-quoted YAML scalar carries.
+
+    PyYAML decodes them for a quoted value and leaves them literal for an
+    unquoted one; ScalarConfig unquotes without decoding, so C++ never sees the
+    difference. Decoding unconditionally on both sides is what makes the same
+    file mean the same thing - the alternative leaves one spelling agreeing and
+    the other not. The cost is that a literal backslash in a value is read as an
+    escape, identically in both entrypoints."""
+    out: list[str] = []
+    i = 0
+    simple = {"0": "\0", "a": "\a", "b": "\b", "t": "\t", "\t": "\t", "n": "\n",
+              "v": "\v", "f": "\f", "r": "\r", "e": "\x1b", " ": " ",
+              '"': '"', "/": "/", "\\": "\\"}
+    while i < len(text):
+        if text[i] != "\\" or i + 1 >= len(text):
+            out.append(text[i])
+            i += 1
+            continue
+        esc = text[i + 1]
+        if esc in simple:
+            out.append(simple[esc])
+            i += 2
+            continue
+        width = {"x": 2, "u": 4, "U": 8}.get(esc)
+        digits = text[i + 2:i + 2 + width] if width else ""
+        if width and len(digits) == width and all(ch in "0123456789abcdefABCDEF" for ch in digits):
+            code = int(digits, 16)
+            # Mirrors the C++ side, which cannot emit a wider code point as one
+            # byte and substitutes a character the validators reject.
+            out.append(chr(code) if code <= 0x7F else "?")
+            i += 2 + width
+            continue
+        out.append(text[i])
+        i += 1
+    return "".join(out)
+
+
 def parse_yaml_bool(text: str) -> bool | None:
     """Recognise the YAML 1.1 Boolean spellings PyYAML resolves.
 
@@ -318,7 +356,10 @@ def config_str(value: Any, key: str, default: str | None) -> str | None:
     if value is None:
         return default
     if isinstance(value, str):
-        text = value.strip()
+        # Stripped first, then decoded: ScalarConfig trims the raw line before
+        # the C++ side decodes, so an escape that produces whitespace survives
+        # in both rather than in neither.
+        text = decode_yaml_escapes(value.strip())
         # ScalarConfig unquotes a value before testing it for null, so `"null"`
         # and `"~"` reach C++ indistinguishable from a bare null and fall back
         # to the default. Without this the same file would write to a directory
@@ -333,7 +374,7 @@ def config_str(value: Any, key: str, default: str | None) -> str | None:
         flag = parse_yaml_bool(text)
         if flag is not None:
             return "true" if flag else "false"
-        return value
+        return text
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, (int, float)):

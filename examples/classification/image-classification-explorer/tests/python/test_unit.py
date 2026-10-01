@@ -579,6 +579,9 @@ class TestScalarConfigSemantics:
         ("on", "true"),
         ("OFF", "false"),
         ("yesterday", "yesterday"),   # not a Boolean: left alone
+        ("report\\u002d2026", "report-2026"),   # escapes decoded as PyYAML decodes them
+        ("models/resnet\\u005f50.tar.gz", "models/resnet_50.tar.gz"),
+        ("report\\q2026", "report\\q2026"),      # not an escape: left alone
     ])
     def test_string_values_follow_cpp_rules(self, value, expected):
         assert main.config_str(value, "io.output_dir", "fallback") == expected

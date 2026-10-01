@@ -108,6 +108,110 @@ std::optional<long long> parse_yaml_int(const std::string& text) {
   }
 }
 
+// A double-quoted YAML scalar carries escapes, and PyYAML decodes them before
+// the key ever reaches Python: `"resnet\\u005f50"` is the profile `resnet_50`
+// there. Stripping only the quotes left the backslash sequence intact here, so
+// C++ rejected a profile name Python loads. Single quotes have no escapes in
+// YAML except '' for a literal quote.
+std::string decode_double_quoted_yaml(const std::string& body) {
+  std::string out;
+  out.reserve(body.size());
+  for (std::size_t i = 0; i < body.size(); ++i) {
+    if (body[i] != '\\' || i + 1 >= body.size()) {
+      out += body[i];
+      continue;
+    }
+    const char esc = body[++i];
+    switch (esc) {
+    case '0':
+      out += '\0';
+      break;
+    case 'a':
+      out += '\a';
+      break;
+    case 'b':
+      out += '\b';
+      break;
+    case 't':
+    case '\t':
+      out += '\t';
+      break;
+    case 'n':
+      out += '\n';
+      break;
+    case 'v':
+      out += '\v';
+      break;
+    case 'f':
+      out += '\f';
+      break;
+    case 'r':
+      out += '\r';
+      break;
+    case 'e':
+      out += '\x1b';
+      break;
+    case ' ':
+    case '"':
+    case '/':
+    case '\\':
+      out += esc;
+      break;
+    case 'x':
+    case 'u':
+    case 'U': {
+      const std::size_t width = esc == 'x' ? 2 : (esc == 'u' ? 4 : 8);
+      if (i + width >= body.size()) {
+        out += '\\';
+        out += esc;
+        break;
+      }
+      const std::string digits = body.substr(i + 1, width);
+      if (!std::all_of(digits.begin(), digits.end(),
+                       [](unsigned char ch) { return std::isxdigit(ch) != 0; })) {
+        out += '\\';
+        out += esc;
+        break;
+      }
+      const unsigned long code = std::stoul(digits, nullptr, 16);
+      i += width;
+      // Only the ASCII range can appear in a valid profile name; anything wider
+      // is emitted as a byte the name validator will reject, exactly as an
+      // undecodable name is rejected today.
+      out += static_cast<char>(code <= 0x7f ? code : '?');
+      break;
+    }
+    default:
+      out += '\\';
+      out += esc;
+      break;
+    }
+  }
+  return out;
+}
+
+// Every filesystem predicate below goes through these. The throwing overloads
+// abort the whole run when a path cannot be stat'ed - a self-referential
+// symlink, a permission error - and the failure escapes as a generic runtime
+// error (exit 6), where Python's Path.exists()/is_file()/is_dir() report false
+// and the caller turns that into the documented ConfigError or InputError.
+// Three separate review findings were this same mistake at three call sites, so
+// the predicates are centralised rather than fixed one at a time.
+bool path_exists(const fs::path& p) {
+  std::error_code ec;
+  return fs::exists(p, ec) && !ec;
+}
+
+bool path_is_directory(const fs::path& p) {
+  std::error_code ec;
+  return fs::is_directory(p, ec) && !ec;
+}
+
+bool path_is_regular_file(const fs::path& p) {
+  std::error_code ec;
+  return fs::is_regular_file(p, ec) && !ec;
+}
+
 // PyYAML resolves `~` to null, so `input: ~` means "not set". ScalarConfig only
 // recognises the spelling `null`, so without this C++ would look for a file
 // literally named "~" while Python downloaded the fallback sample.
@@ -135,9 +239,17 @@ std::optional<std::string> config_scalar(const sima_examples::ScalarConfig& raw,
 
 std::string config_scalar_or(const sima_examples::ScalarConfig& raw, const std::string& key,
                              const std::string& fallback) {
-  const auto value = config_scalar(raw, key);
-  if (!value.has_value())
+  const auto raw_value = config_scalar(raw, key);
+  if (!raw_value.has_value())
     return fallback;
+  // ScalarConfig unquotes but does not decode, so a double-quoted escape such
+  // as `"report\\u002d2026"` arrives here as literal backslash text while
+  // PyYAML already gave Python `report-2026`. Decoding unconditionally is what
+  // makes the two agree: an escape that PyYAML left alone because the value was
+  // unquoted is decoded on both sides instead of neither. The cost is that a
+  // literal backslash in a path is read as an escape - identically in both, so
+  // the same configuration still fails the same way.
+  const std::optional<std::string> value = decode_double_quoted_yaml(*raw_value);
   // PyYAML resolves an unquoted numeric scalar to a number, and Python renders
   // that number as text, so `output_dir: 010` names the directory "8" there.
   // ScalarConfig keeps the text "010" and cannot see whether it was quoted, so
@@ -344,110 +456,6 @@ bool looks_like_yaml_non_string(const std::string& key) {
 bool is_quoted_yaml_key(const std::string& key) {
   return key.size() >= 2 &&
          ((key.front() == '"' && key.back() == '"') || (key.front() == '\'' && key.back() == '\''));
-}
-
-// A double-quoted YAML scalar carries escapes, and PyYAML decodes them before
-// the key ever reaches Python: `"resnet\\u005f50"` is the profile `resnet_50`
-// there. Stripping only the quotes left the backslash sequence intact here, so
-// C++ rejected a profile name Python loads. Single quotes have no escapes in
-// YAML except '' for a literal quote.
-std::string decode_double_quoted_yaml(const std::string& body) {
-  std::string out;
-  out.reserve(body.size());
-  for (std::size_t i = 0; i < body.size(); ++i) {
-    if (body[i] != '\\' || i + 1 >= body.size()) {
-      out += body[i];
-      continue;
-    }
-    const char esc = body[++i];
-    switch (esc) {
-    case '0':
-      out += '\0';
-      break;
-    case 'a':
-      out += '\a';
-      break;
-    case 'b':
-      out += '\b';
-      break;
-    case 't':
-    case '\t':
-      out += '\t';
-      break;
-    case 'n':
-      out += '\n';
-      break;
-    case 'v':
-      out += '\v';
-      break;
-    case 'f':
-      out += '\f';
-      break;
-    case 'r':
-      out += '\r';
-      break;
-    case 'e':
-      out += '\x1b';
-      break;
-    case ' ':
-    case '"':
-    case '/':
-    case '\\':
-      out += esc;
-      break;
-    case 'x':
-    case 'u':
-    case 'U': {
-      const std::size_t width = esc == 'x' ? 2 : (esc == 'u' ? 4 : 8);
-      if (i + width >= body.size()) {
-        out += '\\';
-        out += esc;
-        break;
-      }
-      const std::string digits = body.substr(i + 1, width);
-      if (!std::all_of(digits.begin(), digits.end(),
-                       [](unsigned char ch) { return std::isxdigit(ch) != 0; })) {
-        out += '\\';
-        out += esc;
-        break;
-      }
-      const unsigned long code = std::stoul(digits, nullptr, 16);
-      i += width;
-      // Only the ASCII range can appear in a valid profile name; anything wider
-      // is emitted as a byte the name validator will reject, exactly as an
-      // undecodable name is rejected today.
-      out += static_cast<char>(code <= 0x7f ? code : '?');
-      break;
-    }
-    default:
-      out += '\\';
-      out += esc;
-      break;
-    }
-  }
-  return out;
-}
-
-// Every filesystem predicate below goes through these. The throwing overloads
-// abort the whole run when a path cannot be stat'ed - a self-referential
-// symlink, a permission error - and the failure escapes as a generic runtime
-// error (exit 6), where Python's Path.exists()/is_file()/is_dir() report false
-// and the caller turns that into the documented ConfigError or InputError.
-// Three separate review findings were this same mistake at three call sites, so
-// the predicates are centralised rather than fixed one at a time.
-bool path_exists(const fs::path& p) {
-  std::error_code ec;
-  return fs::exists(p, ec) && !ec;
-}
-
-bool path_is_directory(const fs::path& p) {
-  std::error_code ec;
-  return fs::is_directory(p, ec) && !ec;
-}
-
-bool path_is_regular_file(const fs::path& p) {
-  std::error_code ec;
-  return fs::is_regular_file(p, ec) && !ec;
 }
 
 std::string unquote_yaml_key(const std::string& key) {
