@@ -79,6 +79,27 @@ class ShellWebConfigTests(unittest.TestCase):
             self.assertEqual(_run('web_config_scalar "$1" cors_origins', str(config)), "")
             self.assertEqual(_run('web_config_list "$1" https', str(config)), "")
 
+    def test_any_indentation_and_no_app_root_like_the_loader(self):
+        four = ("app:\n    web:\n        headless: true\n        https: false\n"
+                "    tts:\n        supertonic:\n            models_root: /m4\n")
+        top = "web:\n  headless: yes\ntts:\n  supertonic:\n    venv: /v\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            a = Path(tmp) / "four.yaml"; a.write_text(four, encoding="utf-8")
+            b = Path(tmp) / "top.yaml"; b.write_text(top, encoding="utf-8")
+            self.assertEqual(_run('web_config_scalar "$1" headless', str(a)), "true")
+            self.assertEqual(_run('web_config_scalar "$1" https', str(a)), "false")
+            self.assertEqual(_run('supertonic_config_value "$1" models_root', str(a)), "/m4")
+            self.assertEqual(_run('web_config_scalar "$1" headless', str(b)), "yes")
+            self.assertEqual(_run('supertonic_config_value "$1" venv', str(b)), "/v")
+        # the Python loader agrees on the same files
+        import sys
+        sys.path.insert(0, str(HELPER.parents[2] / "src" / "python"))
+        from shared.config import load_ui_config
+        with tempfile.TemporaryDirectory() as tmp:
+            a = Path(tmp) / "four.yaml"; a.write_text(four, encoding="utf-8")
+            cfg = load_ui_config(a, Path(tmp))
+            self.assertEqual((cfg.web.headless, cfg.web.https, cfg.supertonic.models_root), (True, False, "/m4"))
+
     def test_truthiness_matches_the_python_loader(self):
         for value in ("1", "true", "True", "YES", "on"):
             self.assertEqual(_run('config_true "$1" && echo y || echo n', value), "y", value)

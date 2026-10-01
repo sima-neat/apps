@@ -1,59 +1,58 @@
-# Shared by setup.sh and run.sh (sourced, not executed): read scalars from a
-# Studio config written by setup.sh the way shared.config reads them.
-#   supertonic_config_value <config.yaml> <key>   -> value, or nothing
-# Handles double/single-quoted values (a "#" inside quotes is kept) and plain
-# scalars with a trailing comment. Missing file or key prints nothing.
-supertonic_config_value() {
-  local config="$1" key="$2"
+# Shared by setup.sh and run.sh (sourced, not executed): read values from a
+# Studio config the way shared.config.load_ui_config does. Nesting follows the
+# YAML indentation (any width), and like the loader the settings live under
+# `app:` or, when there is no `app:` key, at the top level.
+
+# yaml_lookup <config.yaml> <dotted.path> <scalar|list>
+#   scalar: the value with surrounding quotes or a trailing comment removed.
+#   list:   a block list ("- a" items) under the key, joined with commas.
+yaml_lookup() {
+  local config="$1" path="$2" mode="$3"
   [[ -f "${config}" ]] || return 0
-  awk -v key="${key}" '
-    /^  tts:/ {tts=1; next}
-    tts && /^  [a-z]/ {tts=0}
-    tts && /^    supertonic:/ {st=1; next}
-    tts && st && /^    [a-z]/ {st=0}
-    tts && st && $1 == key":" {
-      v = $0
-      sub(/^[ \t]*[A-Za-z_]+:[ \t]*/, "", v)
-      if (v ~ /^"/) {
-        v = substr(v, 2); i = index(v, "\"")
-        if (i > 0) v = substr(v, 1, i - 1)
-      } else if (v ~ /^\x27/) {
-        v = substr(v, 2); i = index(v, "\x27")
-        if (i > 0) v = substr(v, 1, i - 1)
-      } else {
-        sub(/[ \t]+#.*$/, "", v)
-        sub(/[ \t]+$/, "", v)
-      }
-      print v; exit
+  awk -v want="${path}" -v mode="${mode}" '
+    function strip(v,   i) {
+      sub(/^[ \t]+/, "", v)
+      if (v ~ /^"/)            { v = substr(v, 2); i = index(v, "\""); if (i > 0) v = substr(v, 1, i - 1) }
+      else if (v ~ /^\x27/)    { v = substr(v, 2); i = index(v, "\x27"); if (i > 0) v = substr(v, 1, i - 1) }
+      else                     { sub(/[ \t]+#.*$/, "", v); sub(/[ \t]+$/, "", v) }
+      return v
     }
+    /^[ \t]*(#.*)?$/ { next }                       # blank lines and comments
+    {
+      match($0, /^ */); ind = RLENGTH; line = substr($0, ind + 1)
+      if (collecting) {
+        if (ind > list_ind && line ~ /^- /) {
+          item = line; sub(/^- [ \t]*/, "", item); item = strip(item)
+          out = out (out == "" ? "" : ",") item; next
+        }
+        print out; found = 1; exit
+      }
+      while (depth > 0 && ind <= at[depth]) depth--
+      if (line ~ /^[A-Za-z_][A-Za-z0-9_-]*:([ \t]|$)/) {
+        key = line; sub(/:.*/, "", key)
+        val = line; sub(/^[^:]*:/, "", val)
+        depth++; keys[depth] = key; at[depth] = ind
+        p = keys[1]; for (i = 2; i <= depth; i++) p = p "." keys[i]
+        if (p == want) {
+          if (mode == "list") { collecting = 1; list_ind = ind; out = ""; next }
+          print strip(val); found = 1; exit
+        }
+      }
+    }
+    END { if (collecting && !found) print out }
   ' "${config}" 2>/dev/null || true
 }
 
-# One scalar from the app.web section:  web_config_scalar <config.yaml> <key>
-# Quoted values lose their quotes, plain ones their trailing comment.
-web_config_scalar() {
-  local config="$1" key="$2"
-  [[ -f "${config}" ]] || return 0
-  awk -v key="${key}" '
-    /^  web:/ {f=1; next}
-    f && /^  [a-z]/ {f=0}
-    f && $1 == key":" {
-      v = $0
-      sub(/^[ \t]*[A-Za-z_]+:[ \t]*/, "", v)
-      if (v ~ /^"/) {
-        v = substr(v, 2); i = index(v, "\"")
-        if (i > 0) v = substr(v, 1, i - 1)
-      } else if (v ~ /^\x27/) {
-        v = substr(v, 2); i = index(v, "\x27")
-        if (i > 0) v = substr(v, 1, i - 1)
-      } else {
-        sub(/[ \t]+#.*$/, "", v)
-        sub(/[ \t]+$/, "", v)
-      }
-      print v; exit
-    }
-  ' "${config}" 2>/dev/null || true
-}
+# The loader reads `app:` when present, else the top level.
+_studio_has_app_root() { grep -qE '^app:([[:space:]]|$)' "$1" 2>/dev/null; }
+_studio_path() { if _studio_has_app_root "$1"; then printf 'app.%s' "$2"; else printf '%s' "$2"; fi; }
+
+# supertonic_config_value <config.yaml> <key>   -> app.tts.supertonic.<key>
+supertonic_config_value() { yaml_lookup "$1" "$(_studio_path "$1" "tts.supertonic.$2")" scalar; }
+# web_config_scalar <config.yaml> <key>         -> app.web.<key>
+web_config_scalar() { yaml_lookup "$1" "$(_studio_path "$1" "web.$2")" scalar; }
+# web_config_list <config.yaml> <key>           -> app.web.<key> as a block list, comma-joined
+web_config_list() { yaml_lookup "$1" "$(_studio_path "$1" "web.$2")" list; }
 
 # Truthiness as shared.config._load_bool: 1/true/yes/on in any case.
 config_true() {
@@ -61,23 +60,4 @@ config_true() {
     1|true|yes|on) return 0 ;;
     *) return 1 ;;
   esac
-}
-
-# A YAML block list under app.web.<key>, joined with commas:
-#   web_config_list <config.yaml> <key>     ("- a" / "- 'b'" items; quotes dropped)
-web_config_list() {
-  local config="$1" key="$2"
-  [[ -f "${config}" ]] || return 0
-  awk -v key="${key}" '
-    /^  web:/ {f=1; next}
-    f && /^  [a-z]/ {f=0}
-    f && $1 == key":" {l=1; next}
-    l && /^[ \t]*- / {
-      v = $0; sub(/^[ \t]*- [ \t]*/, "", v); sub(/[ \t]+#.*$/, "", v); sub(/[ \t]+$/, "", v)
-      gsub(/^["\x27]|["\x27]$/, "", v)
-      out = out (out == "" ? "" : ",") v; next
-    }
-    l {l=0}
-    END {print out}
-  ' "${config}" 2>/dev/null || true
 }
