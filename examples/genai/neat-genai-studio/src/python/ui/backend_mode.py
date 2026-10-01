@@ -54,13 +54,28 @@ def cors_path(path: str) -> bool:
     return _matches(path, CORS_PREFIXES, CORS_EXACT)
 
 
+# Ports a browser omits when it serializes an Origin header.
+_DEFAULT_PORTS = {"http": "80", "https": "443"}
+
+
 def normalize_origin(origin: str) -> str:
     """``scheme://host[:port]`` lower-cased, without a trailing slash or path;
-    empty for anything that is not an http(s) origin."""
+    empty for anything that is not an http(s) origin.
+
+    The scheme's default port is dropped, because a browser never sends it: an
+    allowlist entry written as ``https://host:443`` must still match the
+    ``https://host`` the browser actually presents, or the request is refused
+    despite being configured.
+    """
     parts = urlsplit((origin or "").strip())
-    if parts.scheme.lower() not in ("http", "https") or not parts.netloc:
+    scheme = parts.scheme.lower()
+    if scheme not in ("http", "https") or not parts.netloc:
         return ""
-    return f"{parts.scheme.lower()}://{parts.netloc.lower()}"
+    netloc = parts.netloc.lower()
+    default = _DEFAULT_PORTS[scheme]
+    if netloc.endswith(f":{default}"):
+        netloc = netloc[: -(len(default) + 1)]
+    return f"{scheme}://{netloc}"
 
 
 def parse_cors_origins(raw: str | None):

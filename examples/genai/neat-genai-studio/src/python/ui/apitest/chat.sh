@@ -40,7 +40,7 @@ fi
 
 BODY=$(python3 -c 'import json,sys; print(json.dumps({"model": sys.argv[1], "messages": [{"role": "user", "content": sys.argv[2]}], "stream": True}))' "$MODEL" "$PROMPT")
 
-curl -N -k -sS -X POST "${BASE}/v1/chat/completions" \
+curl --fail-with-body -N -k -sS -X POST "${BASE}/v1/chat/completions" \
   -H "Content-Type: application/json" \
   -d "${BODY}"
 echo

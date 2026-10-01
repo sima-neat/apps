@@ -164,11 +164,17 @@ server:
       # - name: Qwen3-VL-4B-Instruct-GPTQ-a16w4
       #   path: /media/nvme/llima/models/Qwen3-VL-4B-Instruct-GPTQ-a16w4
     asr:                                    # active at startup; switchable at runtime
-      name: whisper-small-a16w8
-      path: /media/nvme/llima/models/whisper-small-a16w8
+      # What a default ./setup.sh installs. A repo from an account other than
+      # simaai is stored as "<org>@<name>", which is the name to use here.
+      name: florianvoss@whisper-small-a16w8-layered-encoder
+      path: /media/nvme/llima/models/florianvoss@whisper-small-a16w8-layered-encoder
+      # On a runtime that needs a monolithic encoder instead, install with
+      # ASR_MODEL_REPO=simaai/whisper-small-a16w8 and use:
+      #   name: whisper-small-a16w8
+      #   path: /media/nvme/llima/models/whisper-small-a16w8
   hub:
     allow_download: true
-    org: simaai
+    orgs: [simaai, TDoSiMa, florianvoss]
 ```
 
 Any compatible model directory (one containing `devkit/` with `vlm_config.json`

@@ -1189,8 +1189,14 @@
     }
   });
   let echoStarting = false;
+  // Bumped by every start and stop. getUserMedia can still be pending when the
+  // user cancels and presses again: without a token the OLD attempt's rejection
+  // clears the shared flag under the new one, and an old SUCCESS leaves the
+  // microphone live while the UI reports it unavailable.
+  let echoAttempt = 0;
   async function startEcho() {
     if (echoOn || echoStarting) return;
+    const attempt = ++echoAttempt;
     ensureAudioContext();
     echoMic.set({ sensitivity: Number(ec.sens.value), silenceMs: Number(ec.silence.value) });
     setStatus(ec.status, '');
@@ -1198,7 +1204,18 @@
     setEchoState('busy', 'Starting the microphone… press again to cancel.');
     let started = false;
     try { started = await echoMic.start(); }
-    catch (err) { echoStarting = false; setEchoState('err', `Microphone unavailable: ${err.message}`); return; }
+    catch (err) {
+      if (attempt !== echoAttempt) return;     // superseded; leave state alone
+      echoStarting = false;
+      setEchoState('err', `Microphone unavailable: ${err.message}`);
+      return;
+    }
+    if (attempt !== echoAttempt) {
+      // A newer attempt (or a stop) owns the UI now. Release this stream rather
+      // than leaving the microphone open with nothing reading it.
+      if (started) echoMic.stop();
+      return;
+    }
     if (!echoStarting || !started) return;    // cancelled while the prompt / setup was pending
     echoStarting = false;
     echoOn = true;
@@ -1209,6 +1226,7 @@
     else setEchoState('listening', 'Listening… say something.');
   }
   function stopEcho() {
+    echoAttempt++;                 // invalidate any startup still in flight
     echoStarting = false;
     echoOn = false;
     echoMic.stop();
@@ -1533,8 +1551,10 @@
   }
 
   xlMic.on('segment', (blob, dur) => { if (xlOn && !xlBusy) runTranslation({ blob, dur }); });
+  let xlAttempt = 0;                 // see echoAttempt: per-attempt ownership
   async function startTranslate() {
     if (xlOn || xlStarting) return;
+    const attempt = ++xlAttempt;
     ensureAudioContext();
     xlMic.set({ sensitivity: Number(xl.sens.value), silenceMs: Number(xl.silence.value) });
     setStatus(xl.status, '');
@@ -1542,7 +1562,16 @@
     setXlState('busy', 'Starting the microphone… press again to cancel.');
     let started = false;
     try { started = await xlMic.start(); }
-    catch (err) { xlStarting = false; setXlState('err', `Microphone unavailable: ${err.message}`); return; }
+    catch (err) {
+      if (attempt !== xlAttempt) return;
+      xlStarting = false;
+      setXlState('err', `Microphone unavailable: ${err.message}`);
+      return;
+    }
+    if (attempt !== xlAttempt) {
+      if (started) xlMic.stop();
+      return;
+    }
     if (!xlStarting || !started) return;          // cancelled while the prompt / setup was pending
     xlStarting = false;
     xlOn = true;
@@ -1551,6 +1580,7 @@
     else setXlState('listening', 'Listening… speak, then pause.');
   }
   function stopTranslate() {
+    xlAttempt++;
     xlStarting = false;
     xlOn = false;
     xlMic.stop();

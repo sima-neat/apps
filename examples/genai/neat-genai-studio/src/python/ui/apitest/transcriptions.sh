@@ -37,5 +37,5 @@ fi
 args=(-F "file=@${FILE_PATH}" -F "language=${LANGUAGE}" -F "response_format=${FORMAT}")
 [ -n "$MODEL" ] && args+=(-F "model=${MODEL}")
 
-curl -k -sS -D - -X POST "${BASE}/v1/audio/transcriptions" "${args[@]}"
+curl --fail-with-body -k -sS -D - -X POST "${BASE}/v1/audio/transcriptions" "${args[@]}"
 echo

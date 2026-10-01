@@ -102,6 +102,10 @@ PID_FILE="${RUN_PID_FILE:-${EXAMPLE_DIR}/.neat-genai-studio.pid}"
 # Which mode the running instance was started in (web / backend-only / cli),
 # written beside the pid file so `status` can say so.
 MODE_FILE="${PID_FILE%.pid}.mode"
+# The running instance records the URL it is actually serving: a later
+# --open-browser must open that, not a URL recomputed from the launcher's own
+# (possibly different) CONFIG_PATH.
+URL_FILE="${PID_FILE%.pid}.url"
 # --backend-only: model server + the Studio's API endpoints, no web UI.
 BACKEND_ONLY="${BACKEND_ONLY:-0}"
 # --open-browser: open the web UI in the desktop browser once it answers (the
@@ -401,11 +405,11 @@ do_stop() {
         warn "Not responding after ${STOP_TIMEOUT}s; sending KILL…"
         kill -KILL "${pid}" 2>/dev/null || true
       fi
-      rm -f "${PID_FILE}" "${MODE_FILE}" "${SERVER_STATUS_FILE}"
+      rm -f "${PID_FILE}" "${MODE_FILE}" "${URL_FILE}" "${SERVER_STATUS_FILE}"
       ok "Stopped."
       return 0
     fi
-    rm -f "${PID_FILE}" "${MODE_FILE}" "${SERVER_STATUS_FILE}"
+    rm -f "${PID_FILE}" "${MODE_FILE}" "${URL_FILE}" "${SERVER_STATUS_FILE}"
   fi
   # No recorded instance — best-effort cleanup of any stray studio processes.
   info "No running instance recorded; cleaning up any stray processes…"
@@ -640,9 +644,30 @@ do_update() {
     tar -xzf "${tmp}/src.tar.gz" -C "${tmp}" "${ex_path}" \
       || { errln "Extract failed."; rm -rf "${tmp}"; return 1; }
     step "Applying update (keeping your models, venvs, config and RAG db)…"
+    # The Supertonic venv and models root are configurable and may be pointed at
+    # a non-default directory INSIDE the example, where --delete-delay would
+    # erase them — a custom runtime and potentially gigabytes of models — while
+    # this step claims to keep them. Resolve the configured paths and exclude any
+    # that fall under EXAMPLE_DIR, on top of the default locations below.
+    local -a keep=()
+    local cfg_path
+    for cfg_path in "${SUPERTONIC_VENV}" "${SUPERTONIC_MODELS_ROOT}"; do
+      [[ -n "${cfg_path}" ]] || continue
+      local abs rel
+      abs="$(cd "$(dirname "${cfg_path}")" 2>/dev/null && printf '%s/%s' "$(pwd -P)" "$(basename "${cfg_path}")")" || continue
+      [[ -n "${abs}" ]] || continue
+      case "${abs}" in
+        "${EXAMPLE_DIR}"/*)
+          rel="${abs#"${EXAMPLE_DIR}"/}"
+          keep+=( "--exclude=/${rel}/" )
+          info "Keeping configured path: ${C_DIM}${rel}${C_RESET}"
+          ;;
+      esac
+    done
     # Mirror tracked source so files deleted by a release disappear locally.
     # Explicitly exclude every install-owned path from transfer and deletion.
     rsync -a --delete-delay --delay-updates \
+      ${keep[@]+"${keep[@]}"} \
       --exclude='/.venv/' \
       --exclude='/.venv-pipertts/' \
       --exclude='/.venv-supertonic/' \
@@ -651,6 +676,7 @@ do_update() {
       --exclude='/.local-certs/' \
       --exclude='/.neat-genai-studio.pid' \
       --exclude='/.neat-genai-studio.mode' \
+      --exclude='/.neat-genai-studio.url' \
       --exclude='*.log' \
       --exclude='/src/python/ui/uploads/' \
       --exclude='/src/python/ui/.milvus.db.lock' \
@@ -947,7 +973,7 @@ cleanup() {
     pkill -KILL -f "${SERVER_PATTERN}" 2>/dev/null || true
   fi
   stop_stale_rag_worker
-  rm -f "${PID_FILE}" "${MODE_FILE}" "${SERVER_STATUS_FILE}" "${RESET_REQUEST_FILE}"
+  rm -f "${PID_FILE}" "${MODE_FILE}" "${URL_FILE}" "${SERVER_STATUS_FILE}" "${RESET_REQUEST_FILE}"
   ok "Neat GenAI Studio stopped."
 }
 
@@ -963,7 +989,10 @@ if [[ -f "${PID_FILE}" ]]; then
         warn "It runs in ${_mode} mode (no web UI); stop it (./run.sh stop) and start ./run.sh to use the UI."
         exit 1
       fi
-      _url="$(local_web_url || true)"
+      # Prefer the URL the running instance recorded; fall back to resolving it
+      # locally for an instance started before this was written.
+      _url="$(cat "${URL_FILE}" 2>/dev/null || true)"
+      [[ -n "${_url}" ]] || _url="$(local_web_url || true)"
       [[ -n "${_url}" ]] && open_url "${_url}"
       exit 0
     fi
@@ -971,7 +1000,7 @@ if [[ -f "${PID_FILE}" ]]; then
     info "Run './run.sh stop' first, or './run.sh status' to check."
     exit 1
   fi
-  rm -f "${PID_FILE}" "${MODE_FILE}" "${SERVER_STATUS_FILE}"
+  rm -f "${PID_FILE}" "${MODE_FILE}" "${URL_FILE}" "${SERVER_STATUS_FILE}"
 fi
 
 trap cleanup EXIT
@@ -990,6 +1019,10 @@ fi
 # Record this instance so `./run.sh stop` can find it (removed by cleanup).
 echo "$$" > "${PID_FILE}"
 if [[ "${CLI_MODE}" == "1" ]]; then echo cli; elif [[ "${BACKEND_ONLY}" == "1" ]]; then echo backend-only; else echo web; fi > "${MODE_FILE}"
+if [[ "${CLI_MODE}" != "1" && "${BACKEND_ONLY}" != "1" ]]; then
+  _self_url="$(local_web_url || true)"
+  [[ -n "${_self_url}" ]] && printf '%s\n' "${_self_url}" > "${URL_FILE}"
+fi
 # Expose the supervisor PID + PID file to the UI so it can offer a GUI "Shut down"
 # button (it SIGTERMs this process, which runs cleanup — same as `./run.sh stop`).
 export NEAT_RUN_PID="$$"

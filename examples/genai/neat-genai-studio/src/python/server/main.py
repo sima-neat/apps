@@ -105,10 +105,21 @@ def start_openai_server(cfg: AppConfig):
                   file=sys.stderr, flush=True)
             print("dropped it; looking for another speech model in the catalog",
                   file=sys.stderr, flush=True)
+            # remove_model's return value is authoritative: retrying start()
+            # with the model still registered just warms it again and fails
+            # identically, so the recovery would not actually recover.
+            removed = False
             try:
-                server.remove_model(served_asr_name)
-            except Exception:
-                pass
+                removed = bool(server.remove_model(served_asr_name))
+            except Exception as rm_exc:  # noqa: BLE001 - reported below
+                print(f"could not unregister it: {rm_exc}", file=sys.stderr, flush=True)
+            if not removed:
+                raise RuntimeError(
+                    f"the startup speech model '{served_asr_name}' could not be "
+                    "unregistered, so the server cannot start without it. Remove "
+                    "server.models.asr from the config, or point it at a model "
+                    "this runtime accepts."
+                ) from exc
             served_asr_name = None
             server.start()
         return server, served_asr_name

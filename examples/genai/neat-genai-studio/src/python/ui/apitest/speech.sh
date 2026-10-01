@@ -1,4 +1,5 @@
 #!/bin/bash
+set -u
 # Synthesize text through the Studio's OpenAI-compatible endpoint
 # (POST /v1/audio/speech on the web UI port) and save the WAV.
 #
@@ -41,9 +42,20 @@ BODY=$(python3 -c 'import json,sys; print(json.dumps({"input": sys.argv[1], "mod
   "$TEXT" "$MODEL" "$VOICE" "$LANGUAGE" "$SPEED")
 
 # -D - prints the response headers (X-Engine, X-Voice, X-Speed, X-RTF, ...).
-curl -k -sS -D - -X POST "${BASE}/v1/audio/speech" \
+# --fail-with-body: a 4xx/5xx sets a non-zero status while still printing the
+# body, so a failed check cannot report success or leave an error page saved as
+# though it were audio.
+# Capture curl's own status: inside `if ! curl ...` the `!` has already
+# inverted it, so $? there is 0 and the failure would be reported as success.
+curl -k -sS --fail-with-body -D - -X POST "${BASE}/v1/audio/speech" \
   -H "Content-Type: application/json" \
   -o "${OUTPUT_FILE}" \
   -d "${BODY}"
+status=$?
+if [ "${status}" -ne 0 ]; then
+  echo "❌ Speech synthesis failed (curl exit ${status}); see the response above." >&2
+  rm -f "${OUTPUT_FILE}"
+  exit "${status}"
+fi
 
 echo "✅ Saved synthesized speech to ${OUTPUT_FILE}"

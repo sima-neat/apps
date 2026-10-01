@@ -5,6 +5,7 @@ config.local.yaml
 .venv-supertonic/
 .neat-genai-studio.pid
 .neat-genai-studio.mode
+.neat-genai-studio.url
 .neat-genai-server.log
 .neat-genai-server.status
 .neat-genai-reset.token
