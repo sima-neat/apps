@@ -290,6 +290,25 @@ class AsrSwitchingTests(unittest.TestCase):
             manager.delete("whisper-small-a16w8")
         self.assertTrue((self.tmp / "whisper-small-a16w8").is_dir())
 
+    def test_an_alias_and_its_basename_resolve_to_one_path(self):
+        """Two catalog names for one directory must compare equal by path.
+
+        The configured `asr.name` and the directory basename are separate
+        entries; startup's fallback and delete both rely on a path comparison to
+        avoid treating them as different models.
+        """
+        manager, _ = self.manager()
+        manager.register_startup_model(
+            "configured-alias", self.tmp / "whisper-small-a16w8", "asr", False, None)
+
+        alias = manager.resolved_model_path("configured-alias")
+        basename = manager.resolved_model_path("whisper-small-a16w8")
+        self.assertIsNotNone(alias)
+        self.assertEqual(alias, basename)
+        # A genuinely different model must not collide with it.
+        self.assertNotEqual(alias, manager.resolved_model_path("whisper-medium-a16w8"))
+        self.assertIsNone(manager.resolved_model_path("not-in-catalog"))
+
     def test_reset_is_refused_when_disabled(self):
         manager, _ = self.manager()
         manager._mla_reset_enabled = False

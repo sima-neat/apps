@@ -998,8 +998,8 @@ class ModelManager:
         # adds the configured `asr.name` while the catalog scan adds the
         # directory's basename. Deleting the "other" name would rmtree the weights
         # the active model is serving from, so compare resolved paths too.
-        active_path = self._resolved_path(self._active_asr)
-        if active_path and self._resolved_path(name) == active_path:
+        active_path = self.resolved_model_path(self._active_asr)
+        if active_path and self.resolved_model_path(name) == active_path:
             raise ValueError(
                 f"'{name}' is the active speech-to-text model under another name "
                 f"({self._active_asr}) — switch to another ASR model first."
@@ -1012,10 +1012,10 @@ class ModelManager:
             return False
         if name == self._configured_asr:
             return True
-        configured_path = self._resolved_path(self._configured_asr)
-        return bool(configured_path) and self._resolved_path(name) == configured_path
+        configured_path = self.resolved_model_path(self._configured_asr)
+        return bool(configured_path) and self.resolved_model_path(name) == configured_path
 
-    def _resolved_path(self, name: str | None):
+    def resolved_model_path(self, name: str | None):
         """Resolved on-disk path for a catalog entry, or None."""
         if not name:
             return None
@@ -1085,7 +1085,7 @@ class ModelManager:
             # server restarts.
             registered = [
                 served for served in self._server_model_names()
-                if served == name or self._resolved_path(served) == path
+                if served == name or self.resolved_model_path(served) == path
             ]
             for served in registered:
                 self._stop_model_streams(served)

@@ -228,14 +228,28 @@ def main() -> int:
         # gets working transcription instead of silence. Bounded, and
         # STUDIO_ASR_FALLBACK=0 turns it off.
         if manager.active_asr() is None and os.environ.get("STUDIO_ASR_FALLBACK", "1") != "0":
+            # Exclude the model that just failed BY PATH, not only by name: a
+            # configured alias and the directory basename are two catalog entries
+            # for one directory, so a name-only check retries the failure and
+            # burns one of the few attempts a third candidate needs.
+            failed_name = cfg.asr_model.name if cfg.asr_model else None
+            failed_path = None
+            if cfg.asr_model and cfg.asr_model.path:
+                try:
+                    failed_path = Path(cfg.asr_model.path).resolve()
+                except Exception:  # noqa: BLE001 - name check still applies
+                    failed_path = None
             tried = 0
             for entry in manager.catalog():
                 if tried >= _ASR_FALLBACK_LIMIT:
                     break
                 if entry.get("type") != "asr" or entry.get("complete") is False:
                     continue
-                if entry["name"] == (cfg.asr_model.name if cfg.asr_model else None):
+                if entry["name"] == failed_name:
                     continue          # just failed; do not retry it
+                if failed_path is not None and \
+                        manager.resolved_model_path(entry["name"]) == failed_path:
+                    continue          # same directory under its other name
                 tried += 1
                 try:
                     manager.set_active_asr(entry["name"])
