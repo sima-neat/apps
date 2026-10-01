@@ -45,20 +45,28 @@ INSTALL_SUPERTONIC="${INSTALL_SUPERTONIC:-1}"
 # Paths: environment > what an earlier setup persisted in CONFIG_PATH
 # (app.tts.supertonic.{venv,models_root}, or the pre-vendoring app_root) > defaults,
 # so re-running setup without the variables keeps a custom install where it is.
+# The persisted values are read by resolve_supertonic_paths once the UI venv
+# exists, through the application's own config loader (any YAML form).
 # shellcheck source=src/common/config_value.sh
 source "${EXAMPLE_DIR}/src/common/config_value.sh"
 SUPERTONIC_DEFAULT_VENV="${EXAMPLE_DIR}/.venv-supertonic"
 SUPERTONIC_DEFAULT_MODELS_ROOT="/media/nvme/supertonic-tts/models"
-SUPERTONIC_VENV="${SUPERTONIC_VENV:-$(supertonic_config_value "${CONFIG_PATH}" venv)}"
-SUPERTONIC_VENV="${SUPERTONIC_VENV:-${SUPERTONIC_DEFAULT_VENV}}"
+SUPERTONIC_VENV="${SUPERTONIC_VENV:-}"
 # Model files (SUPERTONIC_APP_ROOT is the pre-vendoring name: its models/ subdir).
 SUPERTONIC_MODELS_ROOT="${SUPERTONIC_MODELS_ROOT:-${SUPERTONIC_APP_ROOT:+${SUPERTONIC_APP_ROOT}/models}}"
-SUPERTONIC_MODELS_ROOT="${SUPERTONIC_MODELS_ROOT:-$(supertonic_config_value "${CONFIG_PATH}" models_root)}"
-if [[ -z "${SUPERTONIC_MODELS_ROOT}" ]]; then
-  _st_legacy_root="$(supertonic_config_value "${CONFIG_PATH}" app_root)"
-  SUPERTONIC_MODELS_ROOT="${_st_legacy_root:+${_st_legacy_root}/models}"
-fi
-SUPERTONIC_MODELS_ROOT="${SUPERTONIC_MODELS_ROOT:-${SUPERTONIC_DEFAULT_MODELS_ROOT}}"
+resolve_supertonic_paths() {
+  # The UI venv (built just before) has PyYAML and runs config_query.py.
+  [[ -x "${APP_VENV}/bin/python" ]] && export STUDIO_CONFIG_PYTHON="${APP_VENV}/bin/python"
+  SUPERTONIC_VENV="${SUPERTONIC_VENV:-$(supertonic_config_value "${CONFIG_PATH}" venv)}"
+  SUPERTONIC_VENV="${SUPERTONIC_VENV:-${SUPERTONIC_DEFAULT_VENV}}"
+  SUPERTONIC_MODELS_ROOT="${SUPERTONIC_MODELS_ROOT:-$(supertonic_config_value "${CONFIG_PATH}" models_root)}"
+  if [[ -z "${SUPERTONIC_MODELS_ROOT}" ]]; then
+    local legacy_root
+    legacy_root="$(supertonic_config_value "${CONFIG_PATH}" app_root)"
+    SUPERTONIC_MODELS_ROOT="${legacy_root:+${legacy_root}/models}"
+  fi
+  SUPERTONIC_MODELS_ROOT="${SUPERTONIC_MODELS_ROOT:-${SUPERTONIC_DEFAULT_MODELS_ROOT}}"
+}
 # Reviewed Hugging Face revisions: the upstream CPU models and voice styles, and
 # the compiled MLA packages. Bump deliberately, with review, together with the
 # checksums in _supertonic_checksums (a bump without them fails verification).
@@ -257,6 +265,7 @@ info "Installing UI + RAG requirements (incl. piper-plus)…"
   -r "${EXAMPLE_DIR}/src/python/requirements.txt" \
   -r "${EXAMPLE_DIR}/src/python/requirements-rag.txt"
 ok "UI virtual environment ready."
+resolve_supertonic_paths
 
 # Supertonic 3: hybrid TTS whose vector field and vocoder run on the MLA through
 # PyNeat. The runtime package is vendored in src/python/ui/supertonic_sima/; its
