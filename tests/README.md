@@ -68,6 +68,11 @@ available by calling `scripts/download_models.sh`, which skips models already
 present under `SIMANEAT_APPS_TEST_MODELS_DIR`. Set
 `NEAT_APPS_SKIP_MODEL_DOWNLOAD=1` to disable this step.
 
+For `source: model-registry`, `name`, `ref`, and `spec` select the model ID,
+Models repository branch, and build profile passed to `sima-cli models
+download`. The verified artifact is copied to the scope's flat `file` name so
+existing E2E fixtures can consume it consistently with Model Zoo downloads.
+
 The README `Model` row remains customer-facing metadata. Test selection and
 test model downloads are controlled by `examples/*/*/tests/test-scope.yaml`, so large
 or blocked examples can stay documented without blocking CI. If a test is
