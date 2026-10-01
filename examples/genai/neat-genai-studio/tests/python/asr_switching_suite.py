@@ -21,7 +21,7 @@ except ModuleNotFoundError as exc:  # pragma: no cover - environment check
     ) from exc
 
 from server.model_manager import ModelManager, _is_mla_failure
-from shared.config import HubConfig, model_dir_complete
+from shared.config import HubConfig, model_dir_complete, model_dir_supported
 
 
 class FakeServer:
@@ -490,27 +490,31 @@ class LayeredEncoderDetectionTests(unittest.TestCase):
 
     def test_a_combined_encoder_stage_is_loadable(self):
         d = self._build(self.tmp, "combined", ["m_encoder_stage1_mla.elf"])
+        self.assertEqual(model_dir_supported(d), (True, ""))
         self.assertEqual(model_dir_complete(d), (True, ""))
 
     def test_a_layered_encoder_is_refused_with_the_reason(self):
         d = self._build(self.tmp, "layered",
                         [f"m_encoder_layer{i}_stage1_mla.elf" for i in range(12)])
-        ok, why = model_dir_complete(d)
+        ok, why = model_dir_supported(d)
         self.assertFalse(ok)
         self.assertIn("12 per-layer", why)
         self.assertIn("single stage", why)
+        # An unsupported build is NOT an incomplete download: reporting it as
+        # one sends the user to re-fetch gigabytes that fail the same way.
+        self.assertEqual(model_dir_complete(d), (True, ""))
 
     def test_the_override_allows_a_layered_build(self):
         d = self._build(self.tmp, "layered-ok",
                         [f"m_encoder_layer{i}_stage1_mla.elf" for i in range(2)])
         with patch.dict(os.environ, {"STUDIO_ALLOW_LAYERED_ASR": "1"}):
-            self.assertEqual(model_dir_complete(d), (True, ""))
+            self.assertEqual(model_dir_supported(d), (True, ""))
 
     def test_chat_models_are_unaffected(self):
         # Chat/VLM builds legitimately ship per-layer weights and no encoder.
         d = self._build(self.tmp, "chat", ["x_language_layer0_stage1_mla.elf"],
                         config="vlm_config.json")
-        self.assertEqual(model_dir_complete(d), (True, ""))
+        self.assertEqual(model_dir_supported(d), (True, ""))
 
 
 class MlaFailureClassificationTests(unittest.TestCase):

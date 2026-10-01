@@ -373,46 +373,55 @@ def classify_model_dir(model_dir: Path) -> dict | None:
     return None
 
 
-def _asr_elf_layout_usable(p: Path) -> tuple[bool, str]:
-    """Can this runtime address a speech model's encoder weights?
+def layered_encoder_reason(elf_names) -> str:
+    """Why this runtime cannot load a speech build, or "" if it can.
 
-    The runtime derives ELF paths from the model name by convention and loads
-    the encoder as one stage, ``<model>_encoder_stage1_mla.elf``. Some community
-    builds ship a *layered* encoder instead — one ELF per encoder layer, with no
-    combined stage — and whisper_config.json names no files, so nothing in the
-    model declares which layout it uses. Without this check such a build passes
-    every completeness test and then fails inside the accelerator with
-    "Model file does not exist", naming a file the user never chose, after the
-    working model has already been unloaded.
+    The runtime derives ELF paths from the model name and loads the encoder as
+    one stage, ``<model>_encoder_stage1_mla.elf``. Some community builds ship a
+    *layered* encoder instead — one ELF per encoder layer, no combined stage —
+    and whisper_config.json names no files, so nothing in the model declares
+    which layout it uses. Shared by the on-disk check and the Hub listing so a
+    build is described the same way before and after downloading it.
+    """
+    names = [n for n in elf_names if n.endswith("_mla.elf")]
+    if not names or any("_encoder_stage" in n for n in names):
+        return ""
+    layered = [n for n in names if "_encoder_layer" in n]
+    if not layered:
+        return ""
+    return (f"this build splits the encoder into {len(layered)} per-layer weight "
+            "files, and the installed Neat runtime loads the encoder as a single "
+            "stage — use a build with a combined encoder, or set "
+            "STUDIO_ALLOW_LAYERED_ASR=1 if your runtime supports layers")
 
-    Set STUDIO_ALLOW_LAYERED_ASR=1 to skip this check on a runtime that has
-    gained layered-encoder support.
+
+def model_dir_supported(path) -> tuple[bool, str]:
+    """Can this runtime address the model's weights? (supported, reason).
+
+    Separate from ``model_dir_complete``: an unsupported build is not a broken
+    download, and telling the user to re-download it wastes gigabytes and never
+    helps. Only speech models are examined; chat/VLM builds legitimately ship
+    per-layer weights and no encoder.
     """
     if os.environ.get("STUDIO_ALLOW_LAYERED_ASR") == "1":
         return True, ""
     try:
+        p = path if isinstance(path, Path) else Path(path)
+    except Exception:
+        return True, ""
+    try:
+        if not p or not p.is_dir():
+            return True, ""
         if not (p / "devkit" / "whisper_config.json").is_file() \
                 and not (p / "whisper_config.json").is_file():
-            return True, ""          # not a speech model; nothing to say
+            return True, ""
         elf_dir = p / "elf_files"
         if not elf_dir.is_dir():
-            return True, ""          # the weight check below owns this case
-        names = [f.name for f in elf_dir.glob("*_mla.elf")]
-        if not names:
             return True, ""
-        if any("_encoder_stage" in n for n in names):
-            return True, ""          # has a combined encoder stage: loadable
-        layered = [n for n in names if "_encoder_layer" in n]
-        if layered:
-            return False, (
-                f"this build splits the encoder into {len(layered)} per-layer "
-                "weight files, and the installed Neat runtime loads the encoder "
-                "as a single stage — use a build with a combined encoder, or set "
-                "STUDIO_ALLOW_LAYERED_ASR=1 if your runtime supports layers"
-            )
+        why = layered_encoder_reason(f.name for f in elf_dir.glob("*_mla.elf"))
     except OSError:
-        pass
-    return True, ""
+        return True, ""
+    return (not why), why
 
 
 def model_dir_complete(path) -> tuple[bool, str]:
@@ -431,12 +440,6 @@ def model_dir_complete(path) -> tuple[bool, str]:
         return True, ""
     if not p or not p.is_dir():
         return False, "model directory is missing"
-    # Checked BEFORE the completeness marker: a fully-downloaded model whose
-    # weights this runtime cannot address is still unloadable, and failing here
-    # beats failing deep in the accelerator after the previous model was evicted.
-    usable, why = _asr_elf_layout_usable(p)
-    if not usable:
-        return False, why
     # Definitive: marker written only after a fully successful download.
     if (p / ".neat-complete").exists():
         return True, ""

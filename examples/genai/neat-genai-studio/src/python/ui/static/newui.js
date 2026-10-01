@@ -4057,6 +4057,7 @@ function populateModelSelect(catalog) {
     option.value = m.name;
     const size = m.sizeBytes ? `  ·  ${fmtBytes(m.sizeBytes)}` : '';
     const incomplete = m.complete === false;
+    const unsupported = m.supported === false;
     const dot = incomplete ? '⚠ ' : (m.loaded ? '● ' : '○ ');
     option.textContent = `${dot}${m.name}  ·  ${typeBadge(m.type)}${size}${incomplete ? '  ·  incomplete' : ''}`;
     option.dataset.loaded = m.loaded ? 'true' : 'false';
@@ -4185,6 +4186,7 @@ function renderInstalledList() {
   const activeName = control ? _activeChatModel : getSelectedChatModel();
   filtered.forEach(m => {
     const incomplete = m.complete === false;
+    const unsupported = m.supported === false;
     const isActive = !!m.name && m.name === activeName;
     const row = document.createElement('div');
     row.className = 'hub-result model-row' + (isActive ? ' is-active' : '');
@@ -4223,9 +4225,14 @@ function renderInstalledList() {
       if (m.loaded) {
         btn.textContent = 'Unload'; btn.classList.add('model-unload'); btn.disabled = busy;
         btn.addEventListener('click', (e) => { e.stopPropagation(); unloadModel(m.name); });
-      } else if (incomplete) {
-        btn.textContent = 'Incomplete'; btn.disabled = true;
-        btn.title = `${m.incompleteReason || 'Weights are incomplete'} — re-download from Hugging Face below.`;
+      } else if (incomplete || unsupported) {
+        // Unsupported is NOT a broken download: re-fetching gigabytes would
+        // fail identically, so do not offer that as the remedy.
+        btn.textContent = unsupported ? 'Unsupported' : 'Incomplete';
+        btn.disabled = true;
+        btn.title = unsupported
+          ? (m.unsupportedReason || 'This build cannot run on the installed runtime.')
+          : `${m.incompleteReason || 'Weights are incomplete'} — re-download from Hugging Face below.`;
       } else if (_modelBusy && m.name === _pendingLoad) {
         btn.textContent = 'Loading…'; btn.disabled = true;
       } else {
@@ -4672,6 +4679,7 @@ function renderAsrList() {
   const busy = serverBusy();
   filtered.forEach(m => {
     const incomplete = m.complete === false;
+    const unsupported = m.supported === false;
     const isActive = !!m.name && m.name === _asrActive;
     const row = document.createElement('div');
     row.className = 'hub-result model-row' + (isActive ? ' is-active' : '');
@@ -4722,10 +4730,12 @@ function renderAsrList() {
       if (isActive) {
         btn.textContent = 'Active';
         btn.disabled = true;
-      } else if (incomplete) {
-        btn.textContent = 'Incomplete';
+      } else if (incomplete || unsupported) {
+        btn.textContent = unsupported ? 'Unsupported' : 'Incomplete';
         btn.disabled = true;
-        btn.title = `${m.incompleteReason || 'Weights are incomplete'} — re-download from the Add Model tab.`;
+        btn.title = unsupported
+          ? (m.unsupportedReason || 'This build cannot run on the installed runtime.')
+          : `${m.incompleteReason || 'Weights are incomplete'} — re-download from the Add Model tab.`;
       } else if (busy && m.name === _asrPending) {
         btn.textContent = 'Switching…';
         btn.disabled = true;
@@ -5334,7 +5344,9 @@ function renderHubResults(data) {
       (p != null ? `<span class="hub-badge">${p}B</span>` : '') +
       sizeBadge +
       `<span class="hub-badge hub-badge-fam">${fam}</span>` +
-      (incomplete ? `<span class="hub-badge hub-badge-warn" title="Local copy is missing files — re-download to fix">⚠ incomplete</span>` : '');
+      (item.unsupportedReason
+        ? `<span class="hub-badge hub-badge-warn" title="${escHtml(item.unsupportedReason)}">⚠ unsupported</span>`
+        : incomplete ? `<span class="hub-badge hub-badge-warn" title="Local copy is missing files — re-download to fix">⚠ incomplete</span>` : '');
     meta.innerHTML = `<span class="hub-repo">${item.repoId}</span><span class="hub-badges">${badges}</span><span class="hub-sub">${sub}</span>`;
     const info = document.createElement('button');
     info.className = 'hub-info';
@@ -5343,11 +5355,17 @@ function renderHubResults(data) {
     info.textContent = 'ℹ';
     info.addEventListener('click', () => showHubCard(item.repoId));
     const btn = document.createElement('button');
-    btn.className = 'setting-button hub-download-btn' + (incomplete ? ' hub-redownload' : '');
-    btn.textContent = incomplete ? 'Re-download' : (item.alreadyInCatalog ? 'In catalog' : 'Download');
-    btn.disabled = !!(item.alreadyInCatalog && !incomplete);
-    if (incomplete) btn.title = 'The on-disk copy is incomplete — download again to repair it';
-    btn.addEventListener('click', () => hubDownload(item.repoId, row, btn));
+    // The server judges the encoder layout from the repo's own file list, so a
+    // build this runtime cannot load is refused here rather than after the
+    // download has already cost gigabytes.
+    const unsupported = !!item.unsupportedReason;
+    btn.className = 'setting-button hub-download-btn' + (incomplete && !unsupported ? ' hub-redownload' : '');
+    btn.textContent = unsupported ? 'Unsupported'
+      : (incomplete ? 'Re-download' : (item.alreadyInCatalog ? 'In catalog' : 'Download'));
+    btn.disabled = unsupported || !!(item.alreadyInCatalog && !incomplete);
+    if (unsupported) btn.title = item.unsupportedReason;
+    else if (incomplete) btn.title = 'The on-disk copy is incomplete — download again to repair it';
+    if (!unsupported) btn.addEventListener('click', () => hubDownload(item.repoId, row, btn));
     row.appendChild(meta);
     row.appendChild(info);
     row.appendChild(btn);

@@ -30,7 +30,8 @@ import wave
 from pathlib import Path
 
 from shared.chat_template import repair_chat_template_files
-from shared.config import HubConfig, classify_model_dir, model_dir_complete
+from shared.config import (HubConfig, classify_model_dir, model_dir_complete,
+                           model_dir_supported)
 
 
 def parse_param_count(name: str) -> str | None:
@@ -272,6 +273,7 @@ class ModelManager:
         entries = []                                # outside the lock (walks are slow)
         for info in infos:
             complete, reason = self._is_model_complete(info.get("path"))
+            supported, unsupported_reason = model_dir_supported(info.get("path"))
             path = info.get("path")
             entries.append({
                 "name": info["name"],
@@ -295,6 +297,11 @@ class ModelManager:
                 "stagesTotal": self._count_elf_stages(path),
                 "complete": complete,
                 "incompleteReason": reason or None,
+                # Distinct from "complete": an unsupported build downloaded
+                # perfectly. Conflating them tells the user to re-download
+                # gigabytes that will fail the same way.
+                "supported": supported,
+                "unsupportedReason": unsupported_reason or None,
             })
         entries.sort(key=lambda e: (e["type"] == "asr", e["name"].lower()))
         return entries
@@ -427,6 +434,9 @@ class ModelManager:
             # Refuse to load a model whose weights are missing/partial — otherwise
             # it fails deep in the MLA with a confusing error.
             complete, reason = self._is_model_complete(path)
+            ok_supported, why_unsupported = model_dir_supported(path)
+            if not ok_supported:
+                raise ValueError(f"'{name}' cannot be loaded — {why_unsupported}")
             if not complete:
                 raise ValueError(
                     f"'{name}' cannot be loaded — {reason}. Re-download it from Add Model."
