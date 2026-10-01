@@ -15,9 +15,10 @@ namespace {
 constexpr const char* kExampleName = "single-stream-object-detector";
 
 int run_source_case(const std::string& binary, const std::string& model_path,
-                    const StreamSourceCase& source_case, const std::string& source_url) {
+                    const StreamSourceCase& source_case, const std::string& source_url,
+                    const std::string& label) {
   const std::string output_dir =
-      create_test_output_dir(kExampleName, std::string("test_full_pipeline_") + source_case.name);
+      create_test_output_dir(kExampleName, "test_full_pipeline_" + label);
   if (output_dir.empty()) {
     return 1;
   }
@@ -50,7 +51,7 @@ int run_source_case(const std::string& binary, const std::string& model_path,
   int rc = 0;
   const std::string exit_problem_text = exit_problem(result);
   if (!exit_problem_text.empty()) {
-    std::cerr << "[FAIL] " << source_case.name << " " << exit_problem_text << "\n";
+    std::cerr << "[FAIL] " << label << " " << exit_problem_text << "\n";
     std::cerr << "stdout:\n" << result.stdout_text << "\n";
     std::cerr << "stderr:\n" << result.stderr_text << "\n";
     rc = 1;
@@ -58,11 +59,10 @@ int run_source_case(const std::string& binary, const std::string& model_path,
     const int files = count_output_files(output_dir);
     const std::string problem = streamed_frames_problem(output_dir, total_saved_frames);
     if (!problem.empty()) {
-      std::cerr << "[FAIL] " << source_case.name << " " << problem << "\n";
+      std::cerr << "[FAIL] " << label << " " << problem << "\n";
       rc = 1;
     } else {
-      std::cout << "[OK] " << source_case.name << " produced " << files
-                << " sampled output files\n";
+      std::cout << "[OK] " << label << " produced " << files << " sampled output files\n";
     }
   }
 
@@ -82,8 +82,10 @@ int main(int argc, char** argv) {
 
   const char* models_dir_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
   const std::string models_dir = models_dir_raw ? models_dir_raw : "models";
-  const std::string model_path = configured_model_path(kExampleName, models_dir);
-  if (model_path.empty() || !fs::exists(model_path)) {
+  int rc = 0;
+  const std::vector<std::string> model_paths =
+      available_model_paths(configured_model_paths(kExampleName, models_dir), rc);
+  if (model_paths.empty()) {
     return skip_or_fail("configured single-stream detector model not found under "
                         "SIMANEAT_APPS_TEST_MODELS_DIR");
   }
@@ -95,9 +97,18 @@ int main(int argc, char** argv) {
       {"http_mjpeg", "SIMANEAT_TEST_HTTP_MJPEG_URL", "http", "mjpeg", 30, false},
   };
 
-  return run_single_stream_source_cases(
+  const int cases_rc = run_single_stream_source_cases(
       "single-stream object detector", source_cases,
       [&](const StreamSourceCase& source_case, const std::string& source_url) {
-        return run_source_case(binary, model_path, source_case, source_url);
+        int case_rc = 0;
+        for (const std::string& model_path : model_paths) {
+          const std::string label =
+              model_case_label(source_case.name, model_path, model_paths.size());
+          if (run_source_case(binary, model_path, source_case, source_url, label) != 0) {
+            case_rc = 1;
+          }
+        }
+        return case_rc;
       });
+  return rc != 0 ? rc : cases_rc;
 }
