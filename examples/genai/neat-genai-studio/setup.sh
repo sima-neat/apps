@@ -52,6 +52,10 @@ source "${EXAMPLE_DIR}/src/common/config_value.sh"
 SUPERTONIC_DEFAULT_VENV="${EXAMPLE_DIR}/.venv-supertonic"
 SUPERTONIC_DEFAULT_MODELS_ROOT="/media/nvme/supertonic-tts/models"
 SUPERTONIC_VENV="${SUPERTONIC_VENV:-}"
+# An explicit PyNeat wheel for the Supertonic venv, and where to look for one
+# matching the installed runtime when it is not given.
+PYNEAT_WHEEL="${PYNEAT_WHEEL:-}"
+PYNEAT_WHEEL_DIRS="${PYNEAT_WHEEL_DIRS:-/media/nvme/neat /data/neat ${HOME}/neat ${HOME}/Downloads}"
 # Model files (SUPERTONIC_APP_ROOT is the pre-vendoring name: its models/ subdir).
 SUPERTONIC_MODELS_ROOT="${SUPERTONIC_MODELS_ROOT:-${SUPERTONIC_APP_ROOT:+${SUPERTONIC_APP_ROOT}/models}}"
 resolve_supertonic_paths() {
@@ -336,13 +340,46 @@ _supertonic_venv_failed() {
   return 1
 }
 
+# The Supertonic venv needs the SAME PyNeat as the system runtime: its extension
+# links a versioned libsima_neat.so, so a wheel from a different build fails to
+# import and the engine silently disappears. sima-cli serves one channel, which
+# is not necessarily the runtime that is installed, so prefer a local wheel
+# matching the installed PyNeat and fall back to sima-cli.
+_installed_pyneat_version() {
+  "${PYNEAT_PYTHON}" - <<'PYV' 2>/dev/null
+try:
+    from importlib.metadata import version
+    print(version("pyneat"))
+except Exception:
+    pass
+PYV
+}
+
+_local_pyneat_wheel() {
+  local want="$1" d
+  [[ -n "${want}" ]] || return 1
+  for d in ${PYNEAT_WHEEL_DIRS}; do
+    [[ -d "${d}" ]] || continue
+    local hit
+    hit="$(find "${d}" -maxdepth 2 -type f -name "pyneat-${want}-*.whl" -print -quit 2>/dev/null)"
+    [[ -n "${hit}" ]] && { printf '%s\n' "${hit}"; return 0; }
+  done
+  return 1
+}
+
 _supertonic_venv() {
   # The PyNeat wheel comes from sima-cli, which the DevKit exposes on PATH only
   # for login shells.
   if ! command -v sima-cli >/dev/null 2>&1 && [[ -x /data/sima-cli/.venv/bin/sima-cli ]]; then
     export PATH="${PATH}:/data/sima-cli/.venv/bin"
   fi
-  if ! command -v sima-cli >/dev/null 2>&1; then
+  local want_version wheel_override="${PYNEAT_WHEEL}"
+  want_version="$(_installed_pyneat_version)"
+  if [[ -z "${wheel_override}" && -n "${want_version}" ]]; then
+    wheel_override="$(_local_pyneat_wheel "${want_version}" || true)"
+    [[ -n "${wheel_override}" ]] && info "Using the PyNeat wheel matching the installed runtime (${want_version})."
+  fi
+  if [[ -z "${wheel_override}" ]] && ! command -v sima-cli >/dev/null 2>&1; then
     warn "sima-cli is required to fetch the PyNeat wheel for Supertonic; Supertonic TTS skipped."
     return 1
   fi
@@ -355,6 +392,17 @@ _supertonic_venv() {
   "${SUPERTONIC_VENV}/bin/python" -m pip install -r "${EXAMPLE_DIR}/src/python/requirements-supertonic.txt" \
     || _supertonic_venv_failed "Supertonic requirements failed to install; Supertonic TTS skipped." || return 1
   local wheel_dir status=0
+  if [[ -n "${wheel_override}" ]]; then
+    # --no-deps: the wheel must not move the pinned numpy/onnxruntime.
+    "${SUPERTONIC_VENV}/bin/python" -m pip install --no-deps "${wheel_override}" \
+      || _supertonic_venv_failed "The PyNeat wheel ${wheel_override} did not install; Supertonic TTS skipped." \
+      || return 1
+    _supertonic_runtime_ok \
+      || _supertonic_venv_failed "The Supertonic runtime does not import with ${wheel_override##*/}; Supertonic TTS skipped." \
+      || return 1
+    ok "Supertonic venv ready."
+    return 0
+  fi
   wheel_dir="$(mktemp -d)"
   info "Fetching the PyNeat wheel with sima-cli…"
   local -a wheels=()
@@ -371,8 +419,13 @@ _supertonic_venv() {
   fi
   rm -rf "${wheel_dir}"
   [[ "${status}" -eq 0 ]] || _supertonic_venv_failed "Supertonic TTS skipped." || return 1
-  _supertonic_runtime_ok \
-    || _supertonic_venv_failed "The Supertonic runtime does not import in the new venv; Supertonic TTS skipped." || return 1
+  if ! _supertonic_runtime_ok; then
+    local got
+    got="$("${SUPERTONIC_VENV}/bin/python" -c 'from importlib.metadata import version; print(version("pyneat"))' 2>/dev/null || true)"
+    warn "sima-cli's PyNeat (${got:-unknown}) does not match the installed runtime (${want_version:-unknown})."
+    warn "Point PYNEAT_WHEEL at the wheel for the installed runtime, or search PYNEAT_WHEEL_DIRS (${PYNEAT_WHEEL_DIRS})."
+    _supertonic_venv_failed "The Supertonic runtime does not import in the new venv; Supertonic TTS skipped." || return 1
+  fi
   ok "Supertonic venv ready."
 }
 
