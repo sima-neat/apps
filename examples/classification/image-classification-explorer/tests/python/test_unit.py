@@ -611,6 +611,14 @@ class TestScalarConfigSemantics:
         assert main.config_str(8, "io.output_dir", "fallback") == "8"
 
 
+class TestDateScalars:
+    def test_unquoted_date_is_its_iso_text(self):
+        """PyYAML resolves `2026-10-02` to a date while ScalarConfig hands C++
+        the text, so Python rejected a dated output directory that C++ ran."""
+        import datetime as _dt
+        assert main.config_str(_dt.date(2026, 10, 2), "io.output_dir", "report") == "2026-10-02"
+
+
 class TestFloatScalarSemantics:
     """config_float was the one reader not going through scalar_text, so a
     quoted threshold meant something different in each entrypoint."""

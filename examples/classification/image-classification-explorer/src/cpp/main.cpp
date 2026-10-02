@@ -941,9 +941,19 @@ std::vector<ModelProfile> load_profiles(const sima_examples::ScalarConfig& raw,
   return profiles;
 }
 
+// Numeric labels are materialised eagerly, so num_classes bounds an allocation.
+// INT32_MAX alone let a typo exhaust memory before the model was even loaded.
+constexpr int kMaxNumericLabels = 100000;
+
 std::vector<std::string> load_label_map(const std::string& path, int num_classes) {
   std::vector<std::string> labels;
   if (path.empty()) {
+    if (num_classes > kMaxNumericLabels) {
+      throw ConfigError("num_classes=" + std::to_string(num_classes) +
+                        " exceeds the supported maximum of " + std::to_string(kMaxNumericLabels) +
+                        " for generated numeric labels; supply a label_map, or check the value");
+    }
+    labels.reserve(static_cast<std::size_t>(num_classes));
     for (int i = 0; i < num_classes; ++i)
       labels.push_back(std::to_string(i));
     return labels;

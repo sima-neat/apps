@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import datetime
 import json
 import os
 import re
@@ -314,6 +315,11 @@ def yaml_text(value: Any) -> str:
         return "null"
     if isinstance(value, bool):
         return "true" if value else "false"
+    if isinstance(value, (datetime.date, datetime.datetime)):
+        # PyYAML resolves an unquoted `2026-10-02` to a date; ScalarConfig hands
+        # C++ the text. isoformat() is that text, so a dated output directory
+        # names the same thing in both instead of being rejected here.
+        return value.isoformat()
     if isinstance(value, (list, tuple)):
         return "a list"
     if isinstance(value, dict):
@@ -429,6 +435,8 @@ def config_str(value: Any, key: str, default: str | None) -> str | None:
     (`true`/`false`) rather than Python-style for the same reason."""
     if value is None:
         return default
+    if isinstance(value, (datetime.date, datetime.datetime)):
+        return value.isoformat()
     if isinstance(value, str):
         text = scalar_text(value)
         if text is None:
@@ -524,8 +532,20 @@ def load_profiles(raw: dict[str, Any]) -> list[ModelProfile]:
     return profiles
 
 
+# Numeric labels are materialised eagerly, so num_classes bounds an allocation.
+# INT32_MAX alone let a typo exhaust memory before the model was even loaded.
+# No classification model has more classes than this by orders of magnitude.
+MAX_NUMERIC_LABELS = 100_000
+
+
 def load_label_map(path: str | None, num_classes: int) -> list[str]:
     if not path:
+        if num_classes > MAX_NUMERIC_LABELS:
+            raise ValueError(
+                f"num_classes={num_classes} exceeds the supported maximum of "
+                f"{MAX_NUMERIC_LABELS} for generated numeric labels; supply a "
+                f"label_map, or check the value"
+            )
         return [str(i) for i in range(num_classes)]
     label_path = Path(path)
     if not label_path.exists() and Path(path).as_posix() == BUNDLED_LABEL_MAP_REF:

@@ -423,6 +423,10 @@ class TestE2E:
         ("underscored min_probability",
          "validation:\n  min_probability: 1_000.0\n"
          "models:\n  m:\n    path: /nonexistent/m.tar.gz\n", 6),
+        # num_classes bounds an eager allocation of numeric labels; INT32_MAX
+        # alone let a typo exhaust memory before the model was loaded.
+        ("num_classes beyond the numeric-label limit",
+         "models:\n  m:\n    path: /nonexistent/m.tar.gz\n    num_classes: 100000000\n", 2),
         ("quoted models section",
          "\"models\":\n  m:\n    path: /nonexistent/m.tar.gz\n", 6),
         ("flow sequence output_dir",
