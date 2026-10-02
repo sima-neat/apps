@@ -360,9 +360,47 @@ std::optional<bool> parse_yaml_bool(const std::string& text) {
   return std::nullopt;
 }
 
+std::string unquote_yaml_key(const std::string& key); // defined below
+
+// ScalarConfig unquotes values but not keys, so a quoted section or profile
+// name is stored with its quotes and `models.m.path` misses entirely. PyYAML
+// normalises the key, so build the same view once: every dotted segment
+// unquoted, which is also how profile names are compared elsewhere.
+const std::map<std::string, std::string>&
+normalized_scalars(const sima_examples::ScalarConfig& raw) {
+  static std::map<std::string, std::string> cache;
+  static bool built = false;
+  if (!built) {
+    for (const auto& [key, value] : raw.scalars()) {
+      std::string normalized;
+      std::size_t start = 0;
+      while (true) {
+        const std::size_t dot = key.find('.', start);
+        const std::string segment =
+            key.substr(start, dot == std::string::npos ? std::string::npos : dot - start);
+        if (!normalized.empty())
+          normalized += '.';
+        normalized += unquote_yaml_key(segment);
+        if (dot == std::string::npos)
+          break;
+        start = dot + 1;
+      }
+      cache.emplace(normalized, value);
+    }
+    built = true;
+  }
+  return cache;
+}
+
 std::optional<std::string> config_scalar(const sima_examples::ScalarConfig& raw,
                                          const std::string& key) {
-  auto value = raw.string_value(key);
+  std::optional<std::string> value = raw.string_value(key);
+  if (!value.has_value()) {
+    const auto& normalized = normalized_scalars(raw);
+    const auto it = normalized.find(key);
+    if (it != normalized.end() && !it->second.empty())
+      value = it->second;
+  }
   if (!value.has_value())
     return std::nullopt;
   // Decoded here rather than in each caller: config_int and the float reader
@@ -708,7 +746,7 @@ std::vector<std::string> ordered_model_keys(const fs::path& config_path) {
       ++indent;
 
     if (!in_models) {
-      if (trimmed == "models:") {
+      if (trimmed == "models:" || trimmed == "\"models\":" || trimmed == "'models':") {
         models_indent = indent;
         in_models = true;
       }

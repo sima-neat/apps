@@ -313,6 +313,7 @@ class TestE2E:
         "tilde input is null",
         "radix-prefixed profile name",
         "escaped profile key",
+        "quoted models section",
         "quoted null section",
         "escaped integer setting",
         "escaped min_probability",
@@ -414,6 +415,10 @@ class TestE2E:
         # PyYAML decodes this to 0.2; the float reader must see decoded text.
         # A collection where a scalar belongs: both reject it rather than one
         # creating a directory literally named "[a, b]".
+        # PyYAML normalises a quoted mapping key; ScalarConfig keeps the quotes,
+        # so `models.` lookups missed and every profile was discarded.
+        ("quoted models section",
+         "\"models\":\n  m:\n    path: /nonexistent/m.tar.gz\n", 6),
         ("flow sequence output_dir",
          "io:\n  output_dir: [a, b]\nmodels:\n  m:\n    path: /nonexistent/m.tar.gz\n", 2),
         ("escaped min_probability",
