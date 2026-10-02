@@ -4,6 +4,7 @@
 #include <array>
 #include <cctype>
 #include <cerrno>
+#include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -439,9 +440,14 @@ ProcessResult spawn_until_ready(const std::string& binary, const std::vector<std
   ::close(stdout_pipe[1]);
   ::close(stderr_pipe[1]);
 
-  int elapsed_ms = 0;
+  // Wall-clock time, not a count of iterations: `ready` may block (a listener poll, for
+  // instance), and the timeout must still mean what the caller said.
+  const auto started = std::chrono::steady_clock::now();
   int status = 0;
   while (!child_exited(pid, status)) {
+    const int elapsed_ms = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                std::chrono::steady_clock::now() - started)
+                                                .count());
     if (ready()) {
       int stop_status = 0;
       int stop_signal = 0;
@@ -475,7 +481,6 @@ ProcessResult spawn_until_ready(const std::string& binary, const std::vector<std
       return result;
     }
     ::usleep(100000);
-    elapsed_ms += 100;
   }
 
   auto out = read_fd(stdout_pipe[0]);
