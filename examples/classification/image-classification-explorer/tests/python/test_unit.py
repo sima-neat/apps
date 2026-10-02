@@ -596,6 +596,11 @@ class TestScalarConfigSemantics:
         ("1:05", "65"),
         ("1:2:3", "3723"),
         ("a:b", "a:b"),              # not a number: left alone
+        (".nan", "nan"),             # YAML special floats, dotted spelling only
+        (".inf", "inf"),
+        ("-.inf", "-inf"),
+        ("nan", "nan"),              # bare: a string in PyYAML, left alone
+        ("inf", "inf"),
     ])
     def test_string_values_follow_cpp_rules(self, value, expected):
         assert main.config_str(value, "io.output_dir", "fallback") == expected

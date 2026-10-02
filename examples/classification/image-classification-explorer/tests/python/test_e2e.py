@@ -412,6 +412,10 @@ class TestE2E:
         # PyYAML decodes the escapes to 224; the integer reader must see the
         # decoded text, not the raw backslashes.
         # PyYAML decodes this to 0.2; the float reader must see decoded text.
+        # A collection where a scalar belongs: both reject it rather than one
+        # creating a directory literally named "[a, b]".
+        ("flow sequence output_dir",
+         "io:\n  output_dir: [a, b]\nmodels:\n  m:\n    path: /nonexistent/m.tar.gz\n", 2),
         ("escaped min_probability",
          "validation:\n  min_probability: \"\\x30\\x2e\\x39\\x39\"\n"
          "models:\n  m:\n    path: /nonexistent/m.tar.gz\n", 6),

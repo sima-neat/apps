@@ -317,6 +317,17 @@ std::optional<double> parse_yaml_float(const std::string& text) {
   std::string body = sima_examples::trim_copy(text);
   if (body.empty())
     return std::nullopt;
+  // YAML spells these with a leading dot, and only with it: `.nan` is a float
+  // while a bare `nan` stays a string, in PyYAML and so here.
+  {
+    const std::string lowered_all = lower_copy(body);
+    if (lowered_all == ".nan")
+      return std::numeric_limits<double>::quiet_NaN();
+    if (lowered_all == ".inf" || lowered_all == "+.inf")
+      return std::numeric_limits<double>::infinity();
+    if (lowered_all == "-.inf")
+      return -std::numeric_limits<double>::infinity();
+  }
   if (body.front() == '-' || body.front() == '+')
     body.erase(0, 1);
   body.erase(std::remove(body.begin(), body.end(), '_'), body.end());
@@ -385,6 +396,15 @@ std::string config_scalar_or(const sima_examples::ScalarConfig& raw, const std::
   // spelling. A value that is not a YAML integer is untouched.
   if (const auto number = parse_yaml_int(*value))
     return std::to_string(*number);
+  // A collection written where a scalar belongs. ScalarConfig keeps the text,
+  // so C++ would create a directory literally named "[a, b]" while Python
+  // rejects the list. Both reject it now - including the quoted spelling, which
+  // neither side can distinguish, so both treat it the same way.
+  if (value->size() >= 2 && ((value->front() == '[' && value->back() == ']') ||
+                             (value->front() == '{' && value->back() == '}'))) {
+    throw ConfigError(std::string(key) + " must be a scalar, got " +
+                      std::string(value->front() == '[' ? "a list" : "a mapping"));
+  }
   if (const auto number = parse_yaml_float(*value))
     return python_float_text(*number);
   if (const auto flag = parse_yaml_bool(*value))

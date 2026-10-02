@@ -223,6 +223,12 @@ def parse_yaml_float(text: str) -> float | None:
     body = text.strip()
     if not body:
         return None
+    # YAML spells these with a leading dot, and only with it: `.nan` is a float
+    # while a bare `nan` stays a string.
+    special = {".nan": float("nan"), ".inf": float("inf"), "+.inf": float("inf"),
+               "-.inf": float("-inf")}
+    if body.lower() in special:
+        return special[body.lower()]
     if body[0] in "+-":
         body = body[1:]
     body = body.replace("_", "")
@@ -418,6 +424,13 @@ def config_str(value: Any, key: str, default: str | None) -> str | None:
         text = scalar_text(value)
         if text is None:
             return default
+        if len(text) >= 2 and ((text[0] == "[" and text[-1] == "]")
+                               or (text[0] == "{" and text[-1] == "}")):
+            # C++ cannot tell this from an unquoted flow collection, which both
+            # reject, so a quoted one is rejected here too rather than accepted
+            # by one entrypoint only.
+            shape = "a list" if text[0] == "[" else "a mapping"
+            raise ValueError(f"{key} must be a scalar, got {shape}")
         # Likewise C++ cannot tell `010` from `"010"`; both canonicalise, so
         # both name the same directory either way.
         number = parse_yaml_int(text)
