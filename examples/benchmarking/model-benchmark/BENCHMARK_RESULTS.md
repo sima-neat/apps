@@ -23,7 +23,7 @@ These results measure the compiled model package only. They do not include camer
 
 | Model ID | Package | Used By | Postprocess | Outputs | Latency / FPS |
 | --- | --- | --- | --- | ---: | ---: |
-| `resnet_50` | `resnet_50_mpk.tar.gz` | image-classifier | `detessdequant` | 1 | 2.360 / 1102.25 |
+| `resnet_50` | `resnet_50_mpk.tar.gz` | image-classification-explorer | `detessdequant` | 1 | 2.360 / 1102.25 |
 | `depth_anything_v2_vits` | `depth_anything_v2_vits_mpk.tar.gz` | depth-estimator | `detessdequant` | 1 | 20.841 / 55.01 |
 | `retinaface_mobilenet25` | `retinaface_mobilenet25_mod_0_mpk.tar.gz` | face-detector | `detessdequant` | 9 | 4.540 / 637.29 |
 | `detr_resnet50_modified_class_embed_bbox_embed` | `detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz` | detr-object-detector | `detessdequant` | 2 | 23.426 / 68.86 |
