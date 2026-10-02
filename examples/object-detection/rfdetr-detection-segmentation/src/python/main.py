@@ -78,6 +78,8 @@ def parse_source_codec(value: str) -> str:
 def load_config(path: Path) -> Config:
     with path.open(encoding="utf-8") as handle:
         raw = yaml.safe_load(handle) or {}
+    if not isinstance(raw, dict):
+        raise ValueError("config root must be a mapping")
     model = _mapping(raw, "model")
     source = _mapping(raw, "source")
     inference = _mapping(raw, "inference")

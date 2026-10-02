@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <iostream>
 #include <string>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -98,6 +99,93 @@ bool test_empty_labels_is_rejected(const std::string& binary) {
                          "empty labels error names the key");
 }
 
+// ---------------------------------------------------------------------------
+// Configuration rules --validate-config-only can reach without a model or a
+// stream (Refs #526). Each case is the minimal valid config with exactly one
+// value broken, and asserts the message that names the rule, so a failure
+// says which rule stopped firing.
+// ---------------------------------------------------------------------------
+struct ConfigParts {
+  std::string sections;      // extra top-level sections, e.g. "input:\n  latency_ms: -1\n"
+  std::string output_extra;  // extra keys under output:, e.g. "  save_every: -1\n"
+  std::string insight_extra; // extra keys under output.insight:, e.g. "    video_port_base: 0\n"
+  std::string model_path = "models/model.tar.gz";
+  std::string host = "127.0.0.1";
+};
+
+struct RejectedConfig {
+  const char* name;
+  ConfigParts parts;
+  const char* message;
+};
+
+std::string config_body(const ConfigParts& parts) {
+  return "model:\n  path: '" + parts.model_path + "'\n" +
+         (parts.sections.rfind("source:", 0) == 0
+              ? std::string()
+              : std::string("source:\n  url: rtsp://127.0.0.1:8554/src1\n")) +
+         parts.sections + "output:\n" + parts.output_extra + "  insight:\n    host: '" +
+         parts.host + "'\n" + parts.insight_extra;
+}
+
+bool test_configuration_rules_are_enforced(const std::string& binary) {
+  const std::vector<RejectedConfig> cases = {
+      {"model-path-empty", {"", "", "", ""}, "model.path must be set"},
+      {"insight-host-empty",
+       {"", "", "", "models/model.tar.gz", ""},
+       "output.insight.host must be set"},
+      {"latency-negative",
+       {"source:\n  url: rtsp://127.0.0.1:8554/src1\n  latency_ms: -1\n", "", ""},
+       "source.latency_ms must be >= 0"},
+      {"fps-negative",
+       {"source:\n  url: rtsp://127.0.0.1:8554/src1\n  fps: -1\n", "", ""},
+       "source.fps must be >= 0"},
+      {"http-needs-mjpeg",
+       {"source:\n  url: http://127.0.0.1:8080/stream\n  type: http\n  codec: h264\n", "", ""},
+       "source.codec must be mjpeg for source.type=http"},
+      {"frames-negative", {"inference:\n  frames: -1\n", "", ""}, "inference.frames must be >= 0"},
+      {"min-score-above",
+       {"inference:\n  min_score: 1.5\n", "", ""},
+       "inference.min_score must be between 0 and 1"},
+      {"nms-below",
+       {"inference:\n  nms_iou: -0.5\n", "", ""},
+       "inference.nms_iou must be between 0 and 1"},
+      {"max-detections-zero",
+       {"inference:\n  max_detections: 0\n", "", ""},
+       "inference.max_detections must be > 0"},
+      {"profile-interval-zero",
+       {"runtime:\n  profile_interval: 0\n", "", ""},
+       "runtime.profile_interval must be > 0"},
+      {"video-port-zero", {"", "", "    video_port: 0\n"}, "output.insight.video_port must be > 0"},
+      {"metadata-port-zero",
+       {"", "", "    metadata_port: 0\n"},
+       "output.insight.metadata_port must be > 0"},
+      {"save-every-negative", {"", "  save_every: -1\n", ""}, "output.save_every must be >= 0"},
+      {"mask-alpha-above",
+       {"", "  mask_alpha: 2\n", ""},
+       "output.mask_alpha must be between 0 and 1"},
+      {"mask-threshold-above",
+       {"", "  mask_threshold: 2\n", ""},
+       "output.mask_threshold must be between 0 and 1"},
+  };
+
+  bool ok = true;
+  for (const RejectedConfig& c : cases) {
+    const auto result = validate_config_body(kExampleName, binary, std::string("rule_") + c.name,
+                                             config_body(c.parts));
+    ok &= expect_true(result.exit_code != 0, std::string(c.name) + " is rejected") &&
+          expect_contains(result.stderr_text, c.message, std::string(c.name) + " names its rule");
+  }
+
+  // The control: the same minimal config with nothing broken validates, so the
+  // rejections above are about the broken value and not about the baseline.
+  const auto result =
+      validate_config_body(kExampleName, binary, "rule_baseline", config_body(ConfigParts{}));
+  ok &= expect_true(result.exit_code == 0, "minimal config validates") &&
+        expect_contains(result.stdout_text, "Config validated", "validated line is printed");
+  return ok;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -116,5 +204,6 @@ int main(int argc, char** argv) {
   ok &= test_present_url_wins_over_the_legacy_key(binary);
   ok &= test_both_urls_empty_is_rejected(binary);
   ok &= test_empty_labels_is_rejected(binary);
+  ok &= test_configuration_rules_are_enforced(binary);
   return ok ? 0 : 1;
 }

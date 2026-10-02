@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <iostream>
 #include <string>
+#include <vector>
 
 namespace fs = std::filesystem;
 using sima_examples::testing::create_test_scratch_dir;
@@ -16,6 +17,100 @@ using sima_examples::testing::write_e2e_config;
 namespace {
 
 constexpr const char* kExampleName = "fastflow-anomaly-detector";
+
+// ---------------------------------------------------------------------------
+// Configuration rules --validate-config-only can reach without a model or a
+// stream (Refs #526). Each case is the packaged config with exactly one value
+// broken, and asserts the message that names the rule; the accepted cases pin
+// both ends of each range so an off-by-one cannot creep in. Tests 6 and 7
+// above own the stddev and alpha rules.
+// ---------------------------------------------------------------------------
+struct RuleCase {
+  const char* name;
+  sima_examples::testing::ConfigScalars overrides;
+  const char* message; // empty: the config must validate
+};
+
+int configuration_rule_failures(const std::string& binary) {
+  const std::vector<RuleCase> cases = {
+      {"model-path-empty", {{"model.path", ""}}, "model.path must be set"},
+      {"rtsp-url-empty", {{"source.rtsp_url", ""}}, "source.rtsp_url must be set"},
+      {"insight-host-empty", {{"output.insight.host", ""}}, "output.insight.host must be set"},
+      {"latency-negative", {{"source.latency_ms", "-1"}}, "source.latency_ms must be >= 0"},
+      {"frames-negative", {{"inference.frames", "-1"}}, "inference.frames must be >= 0"},
+      {"threshold-above",
+       {{"inference.threshold", "1.5"}},
+       "inference.threshold must be between 0 and 1"},
+      {"threshold-below",
+       {{"inference.threshold", "-0.5"}},
+       "inference.threshold must be between 0 and 1"},
+      {"min-region-zero",
+       {{"inference.min_region_px", "0"}},
+       "inference.min_region_px must be > 0"},
+      {"profile-interval-zero",
+       {{"runtime.profile_interval", "0"}},
+       "runtime.profile_interval must be > 0"},
+      {"video-port-zero",
+       {{"output.insight.video_port", "0"}},
+       "output.insight.video_port must be in [1, 65535]"},
+      {"video-port-above",
+       {{"output.insight.video_port", "65536"}},
+       "output.insight.video_port must be in [1, 65535]"},
+      {"save-every-negative", {{"output.save_every", "-1"}}, "output.save_every must be >= 0"},
+      {"heat-max-equals-threshold",
+       {{"output.heat_max", "0.5"}},
+       "output.heat_max must be greater than inference.threshold"},
+      {"heat-max-below-threshold",
+       {{"inference.threshold", "0.8"}, {"output.heat_max", "0.7"}},
+       "output.heat_max must be greater than inference.threshold"},
+      // accepted boundaries
+      {"threshold-zero-accepted", {{"inference.threshold", "0"}}, ""},
+      {"threshold-one-accepted", {{"inference.threshold", "1"}, {"output.heat_max", "1.5"}}, ""},
+      {"alpha-zero-accepted", {{"output.alpha", "0"}}, ""},
+      {"alpha-one-accepted", {{"output.alpha", "1"}}, ""},
+      {"latency-zero-accepted", {{"source.latency_ms", "0"}}, ""},
+      {"min-region-one-accepted", {{"inference.min_region_px", "1"}}, ""},
+      {"profile-interval-one-accepted", {{"runtime.profile_interval", "1"}}, ""},
+      {"video-port-one-accepted", {{"output.insight.video_port", "1"}}, ""},
+      {"video-port-max-accepted", {{"output.insight.video_port", "65535"}}, ""},
+      {"save-every-zero-accepted", {{"output.save_every", "0"}}, ""},
+  };
+  int failures = 0;
+  const fs::path scratch = create_test_scratch_dir(kExampleName, "configuration-rules");
+  if (scratch.empty()) {
+    std::cerr << "[FAIL] could not create config test directory\n";
+    return 1;
+  }
+  for (const RuleCase& c : cases) {
+    const fs::path config_path = scratch / (std::string(c.name) + ".yaml");
+    write_e2e_config(kExampleName, config_path, c.overrides);
+    const ProcessResult r =
+        spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
+    const bool expect_reject = std::string(c.message).empty() == false;
+    if (expect_reject) {
+      if (r.exit_code == 0) {
+        std::cerr << "[FAIL] " << c.name << ": expected rejection, got exit 0\n";
+        ++failures;
+      } else if (r.stderr_text.find(std::string("[ERR] ") + c.message) == std::string::npos) {
+        std::cerr << "[FAIL] " << c.name << ": stderr does not name the rule (" << c.message
+                  << ")\n"
+                  << r.stderr_text;
+        ++failures;
+      } else {
+        std::cout << "[OK] " << c.name << " is rejected by its rule\n";
+      }
+    } else if (r.exit_code != 0 || r.stdout_text.find("Config validated") == std::string::npos) {
+      std::cerr << "[FAIL] " << c.name << ": expected the config to validate, got exit "
+                << r.exit_code << "\n"
+                << r.stderr_text;
+      ++failures;
+    } else {
+      std::cout << "[OK] " << c.name << "\n";
+    }
+  }
+  remove_dir(scratch.string());
+  return failures;
+}
 
 } // namespace
 
@@ -139,6 +234,9 @@ int main(int argc, char** argv) {
     }
     remove_dir(scratch.string());
   }
+
+  // Test 8: every configuration rule --validate-config-only can reach, both ends of each range.
+  failures += configuration_rule_failures(binary);
 
   return failures > 0 ? 1 : 0;
 }
