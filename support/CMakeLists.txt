@@ -31,6 +31,7 @@ if (BUILD_TESTING)
   add_library(sima_neat_apps_support_testing STATIC
     runtime/config_utils.cpp
     testing/metadata_json_listener.cpp
+    testing/test_checks.cpp
     testing/test_config.cpp
     testing/test_process.cpp
   )

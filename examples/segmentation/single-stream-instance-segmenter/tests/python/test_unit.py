@@ -1,6 +1,5 @@
 """Unit tests for single-stream-instance-segmenter (Python)."""
 
-import importlib.util
 import json
 import subprocess
 import sys
@@ -10,14 +9,12 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from tests.utils.config_cases import load_example_main
+
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
 
-_SPEC = importlib.util.spec_from_file_location("instance_seg_main", MAIN_PY)
-assert _SPEC is not None and _SPEC.loader is not None
-main = importlib.util.module_from_spec(_SPEC)
-sys.modules[_SPEC.name] = main
-_SPEC.loader.exec_module(main)
+main = load_example_main(EXAMPLE_DIR, "instance_seg_main")
 
 
 @pytest.mark.unit
@@ -111,6 +108,96 @@ output:
         )
         with pytest.raises(ValueError, match="mask_alpha"):
             main.load_app_config(config)
+
+    def test_an_empty_labels_value_is_rejected(self, tmp_path):
+        """Path("") is ".", so the rule has to look at the raw value, not the Path."""
+        config = tmp_path / "config.yaml"
+        config.write_text(
+            """
+model:
+  path: model.tar.gz
+  labels: ""
+source:
+  url: rtsp://127.0.0.1:8554/src1
+output:
+  insight:
+    host: 127.0.0.1
+""",
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="model.labels must be set"):
+            main.load_app_config(config)
+
+    @staticmethod
+    def _source_config(tmp_path, url_line, legacy_line):
+        config = tmp_path / "config.yaml"
+        config.write_text(
+            f"""
+model:
+  path: model.tar.gz
+source:
+{url_line}
+{legacy_line}
+output:
+  insight:
+    host: 127.0.0.1
+""",
+            encoding="utf-8",
+        )
+        return config
+
+    def test_an_empty_url_falls_back_to_the_legacy_key(self, tmp_path):
+        """config.yaml ships source.url present and says rtsp_url is "used when
+        source.url is empty", so the empty value must fall through."""
+        config = self._source_config(
+            tmp_path, '  url: ""', "  rtsp_url: rtsp://127.0.0.1:8554/legacy"
+        )
+
+        cfg = main.load_app_config(config)
+        assert cfg.source_url == "rtsp://127.0.0.1:8554/legacy"
+        assert cfg.source_key == "source.rtsp_url"
+
+    def test_an_absent_url_falls_back_to_the_legacy_key(self, tmp_path):
+        config = self._source_config(tmp_path, "", "  rtsp_url: rtsp://127.0.0.1:8554/legacy")
+
+        assert main.load_app_config(config).source_url == "rtsp://127.0.0.1:8554/legacy"
+
+    def test_a_present_url_wins_over_the_legacy_key(self, tmp_path):
+        config = self._source_config(
+            tmp_path,
+            "  url: rtsp://127.0.0.1:8554/src1",
+            "  rtsp_url: rtsp://127.0.0.1:8554/legacy",
+        )
+
+        cfg = main.load_app_config(config)
+        assert cfg.source_url == "rtsp://127.0.0.1:8554/src1"
+        assert cfg.source_key == "source.url"
+
+    def test_both_empty_is_still_rejected(self, tmp_path):
+        config = self._source_config(tmp_path, '  url: ""', '  rtsp_url: ""')
+
+        with pytest.raises(ValueError, match="source.url or source.rtsp_url must be set"):
+            main.load_app_config(config)
+
+    def test_validate_config_only_names_the_key_and_not_the_url(self, tmp_path):
+        """The URL can carry credentials and this line ends up in logs, so the
+        validated line reports the key that supplied the source. The C++ binary
+        prints the same line and its unit suite asserts the same."""
+        config = self._source_config(
+            tmp_path, '  url: ""', "  rtsp_url: rtsp://user:secret@127.0.0.1:8554/legacy"
+        )
+        r = subprocess.run(
+            [sys.executable, str(MAIN_PY), "--config", str(config), "--validate-config-only"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=str(EXAMPLE_DIR),
+        )
+
+        assert r.returncode == 0, r.stderr
+        assert "(source=source.rtsp_url)" in r.stdout
+        assert "secret" not in r.stdout
+        assert "rtsp://" not in r.stdout
 
 
 @pytest.mark.unit

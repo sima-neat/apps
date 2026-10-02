@@ -45,6 +45,8 @@ class AppConfig:
     metadata_port: int = 9100
     save_dir: str = ""
     save_every: int = 0
+    # Which key supplied source_url: "source.url" or the legacy "source.rtsp_url".
+    source_key: str = "source.url"
 
 
 @dataclass
@@ -198,7 +200,8 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("source.url or source.rtsp_url must be set")
     if not cfg.model_path:
         raise ValueError("model.path must be set")
-    if not str(cfg.labels_path):
+    # Path("") is ".", so an empty value in the file arrives here as ".".
+    if str(cfg.labels_path) in ("", "."):
         raise ValueError("model.labels must be set")
     if not cfg.insight_host:
         raise ValueError("output.insight.host must be set")
@@ -239,10 +242,20 @@ def load_app_config(config_path: Path) -> AppConfig:
     insight = section(output, "insight")
     default_labels = Path(__file__).resolve().parents[1] / "common" / "coco_label.txt"
 
+    labels_path = string_or(model, "labels", str(default_labels))
+    # config.yaml documents source.rtsp_url as the fallback "when source.url
+    # is empty", so an empty value must fall through, not just an absent key.
+    # The key that supplied the URL is kept so --validate-config-only can report
+    # the choice without echoing the URL, which can carry credentials.
+    source_url = string_or(source, "url")
+    source_key = "source.url" if source_url else "source.rtsp_url"
+    source_url = source_url or string_or(source, "rtsp_url")
+
     cfg = AppConfig(
         model_path=string_or(model, "path"),
-        labels_path=Path(string_or(model, "labels", str(default_labels))),
-        source_url=string_or(source, "url", string_or(source, "rtsp_url")),
+        labels_path=Path(labels_path),
+        source_url=source_url,
+        source_key=source_key,
         source_type=parse_source_type(string_or(source, "type", "rtsp")),
         source_codec=parse_source_codec(string_or(source, "codec", "h264")),
         latency_ms=int_or(source, "latency_ms", 200),
@@ -806,7 +819,9 @@ def main(argv: list[str] | None = None) -> int:
         args = parse_args(argv)
         cfg = load_app_config(args.config)
         if args.validate_config_only:
-            print(f"Config validated: {args.config}")
+            # Reports which key supplied the source, not its value: a URL can
+            # carry credentials and this line ends up in terminal and CI logs.
+            print(f"Config validated: {args.config} (source={cfg.source_key})")
             return 0
 
         load_runtime_dependencies()
