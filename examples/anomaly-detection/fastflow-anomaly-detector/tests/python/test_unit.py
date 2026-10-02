@@ -110,6 +110,116 @@ class TestConfig:
             main.load_config(write_config(tmp_path, overrides))
 
 
+# ---------------------------------------------------------------------------
+# Configuration handling and option validation (Refs #526).
+# TestConfig above owns the required keys, the normalisation triplet and one
+# rejection per rule. These add the rules it does not reach, both ends of each
+# range, the documented defaults, and malformed files.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestRejectedValues:
+    @pytest.mark.parametrize(
+        ("overrides", "message"),
+        [
+            pytest.param({"output": {"alpha": 1.01}}, "output.alpha must be between 0 and 1", id="alpha-above"),
+            pytest.param({"output": {"alpha": -0.01}}, "output.alpha must be between 0 and 1", id="alpha-below"),
+            pytest.param(
+                {"output": {"heat_max": 0.5}},
+                "output.heat_max must be greater than inference.threshold",
+                id="heat-max-equals-threshold",
+            ),
+            pytest.param(
+                {"inference": {"threshold": 0.8}, "output": {"heat_max": 0.7}},
+                "output.heat_max must be greater than inference.threshold",
+                id="heat-max-below-threshold",
+            ),
+            pytest.param({"inference": {"threshold": -0.01}}, "inference.threshold must be between 0 and 1", id="threshold-below"),
+            pytest.param({"output": {"insight": {"video_port": 65536}}}, "output.insight.video_port must be in [1, 65535]", id="video-port-above"),
+            pytest.param({"inference": {"min_region_px": -5}}, "inference.min_region_px must be > 0", id="min-region-negative"),
+        ],
+    )
+    def test_invalid_value_is_rejected_with_an_actionable_message(self, tmp_path, overrides, message):
+        with pytest.raises(ValueError) as excinfo:
+            main.load_config(write_config(tmp_path, overrides))
+
+        assert message in str(excinfo.value)
+
+
+@pytest.mark.unit
+class TestBoundariesAreAccepted:
+    """An off-by-one that rejects a legal value is the failure nobody writes a test for."""
+
+    @pytest.mark.parametrize(
+        "overrides",
+        [
+            pytest.param({"inference": {"threshold": 0.0}}, id="threshold-zero"),
+            pytest.param({"inference": {"threshold": 1.0}, "output": {"heat_max": 1.5}}, id="threshold-one"),
+            pytest.param({"output": {"heat_max": 0.5001}}, id="heat-max-just-above-threshold"),
+            pytest.param({"output": {"alpha": 0.0}}, id="alpha-zero"),
+            pytest.param({"output": {"alpha": 1.0}}, id="alpha-one"),
+            pytest.param({"source": {"latency_ms": 0}}, id="latency-zero"),
+            pytest.param({"inference": {"frames": 0}}, id="frames-zero"),
+            pytest.param({"inference": {"min_region_px": 1}}, id="min-region-one"),
+            pytest.param({"runtime": {"profile_interval": 1}}, id="profile-interval-one"),
+            pytest.param({"output": {"insight": {"video_port": 1}}}, id="video-port-one"),
+            pytest.param({"output": {"insight": {"video_port": 65535}}}, id="video-port-max"),
+            pytest.param({"output": {"save_every": 0}}, id="save-every-zero"),
+        ],
+    )
+    def test_boundary_value_is_accepted(self, tmp_path, overrides):
+        main.load_config(write_config(tmp_path, overrides))
+
+
+@pytest.mark.unit
+class TestDocumentedDefaults:
+    def test_omitted_sections_fall_back_to_the_loader_defaults(self, tmp_path):
+        raw = {
+            "model": {"path": "models/fastflow_demo_mpk.tar.gz"},
+            "source": {"rtsp_url": "rtsp://camera/live"},
+            "output": {"insight": {"host": "127.0.0.1"}},
+        }
+        path = tmp_path / "config.yaml"
+        path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+
+        cfg = main.load_config(path)
+
+        assert cfg.mean == pytest.approx(main.DEFAULT_MEAN)
+        assert cfg.stddev == pytest.approx(main.DEFAULT_STDDEV)
+        assert (cfg.tcp, cfg.latency_ms, cfg.frames) == (True, 100, 0)
+        assert (cfg.threshold, cfg.min_region_px) == (0.5, 300)
+        assert (cfg.profile, cfg.profile_interval) == (False, 100)
+        assert cfg.video_port == 9000
+        assert (cfg.heat_max, cfg.alpha) == (0.7, 0.55)
+        assert (cfg.save_dir, cfg.save_every) == ("", 0)
+
+
+@pytest.mark.unit
+class TestMalformedConfigFiles:
+    def test_a_non_mapping_root_is_rejected(self, tmp_path):
+        """A list at the root used to escape as an AttributeError from `raw.get`."""
+        path = tmp_path / "config.yaml"
+        path.write_text("- not\n- a mapping\n", encoding="utf-8")
+
+        with pytest.raises(ValueError, match="config root must be a mapping"):
+            main.load_config(path)
+
+    def test_an_empty_file_is_reported_as_missing_settings_not_a_crash(self, tmp_path):
+        path = tmp_path / "config.yaml"
+        path.write_text("", encoding="utf-8")
+
+        with pytest.raises(ValueError, match="model.path must be set"):
+            main.load_config(path)
+
+    def test_a_non_integer_value_is_rejected(self, tmp_path):
+        """Raised as TypeError here, unlike the other applications' ValueError, and
+        without the section prefix; main() reports both the same way, so the
+        message is what matters."""
+        with pytest.raises((TypeError, ValueError), match="latency_ms must be an integer"):
+            main.load_config(write_config(tmp_path, {"source": {"latency_ms": "fast"}}))
+
+
 @pytest.mark.unit
 def test_regions_from_map_keeps_large_regions_only():
     np = pytest.importorskip("numpy")
