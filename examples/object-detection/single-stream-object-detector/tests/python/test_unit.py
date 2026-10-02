@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from tests.utils.config_cases import config_writer, load_example_main
+from tests.utils.fake_run import FakeRun
 
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
@@ -380,3 +381,47 @@ class TestLabelsRule:
 
         with pytest.raises(ValueError, match="model.labels must be set"):
             main.validate_config(cfg)
+
+
+@pytest.mark.unit
+class TestPullOutcomes:
+    """The pull loop, driven by a run that yields no sample.
+
+    A timeout is a warning and another pull; a closed output and a runtime error end the
+    run with a message, so a dead source is neither a healthy wait nor a completed run.
+    """
+
+    def test_timeout_is_not_a_sample(self):
+        run = FakeRun("timeout")
+        run.pull("detections", 20000)
+
+        assert main.pull_result_has_sample(run, None, "detections") is False
+
+    def test_closed_output_ends_the_run_with_the_reason(self):
+        run = FakeRun(("closed", "source reached EOS"))
+        run.pull("detections", 20000)
+
+        with pytest.raises(
+            RuntimeError, match="detections output closed unexpectedly: source reached EOS"
+        ):
+            main.pull_result_has_sample(run, None, "detections")
+
+    def test_runtime_error_ends_the_run(self):
+        run = FakeRun(("error", "queue torn down"))
+        run.pull("detections", 20000)
+
+        with pytest.raises(RuntimeError, match="runtime error: queue torn down"):
+            main.pull_result_has_sample(run, None, "detections")
+
+    def test_run_pipeline_warns_on_timeout_and_stops_on_closed_output(self, capsys):
+        run = FakeRun("timeout", ("closed", "source reached EOS"))
+        runtime = SimpleNamespace(run=run, output_name="detections")
+        cfg = SimpleNamespace(frames=0, profile=False, profile_interval=1)
+
+        with pytest.raises(RuntimeError, match="detections output closed unexpectedly"):
+            main.run_pipeline(runtime, cfg)
+
+        captured = capsys.readouterr()
+        assert captured.err.count("[warn] timed out waiting for detections") == 1
+        assert "processed=" not in captured.out
+        assert run.pulls == [("detections", 20000)] * 2

@@ -787,6 +787,23 @@ def maybe_save_debug_frame(cfg: AppConfig, processed: int, sample, boxes: list[d
         print(f"[warn] failed to write output frame: {out_path}", file=sys.stderr)
 
 
+def pull_result_has_sample(run, sample, output_name: str) -> bool:
+    if sample is not None:
+        return True
+    last_error_fn = getattr(run, "last_error", None)
+    last_error = last_error_fn() if callable(last_error_fn) else ""
+    running_fn = getattr(run, "running", None)
+    running = running_fn() if callable(running_fn) else True
+    if not running:
+        message = f"{output_name} output closed unexpectedly"
+        if last_error:
+            message += f": {last_error}"
+        raise RuntimeError(message)
+    if last_error:
+        raise RuntimeError(f"runtime error: {last_error}")
+    return False
+
+
 def run_pipeline(runtime: PipelineRuntime, cfg: AppConfig) -> int:
     profile = ProfileWindow(cfg.profile, cfg.profile_interval)
     processed = 0
@@ -794,7 +811,7 @@ def run_pipeline(runtime: PipelineRuntime, cfg: AppConfig) -> int:
         pull_start = time_ms()
         detection_sample = runtime.run.pull(runtime.output_name, 20000)
         pull_end = time_ms()
-        if detection_sample is None:
+        if not pull_result_has_sample(runtime.run, detection_sample, runtime.output_name):
             print("[warn] timed out waiting for detections", file=sys.stderr)
             continue
 

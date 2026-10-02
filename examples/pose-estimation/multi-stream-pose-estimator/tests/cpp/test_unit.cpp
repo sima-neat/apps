@@ -1,3 +1,4 @@
+#include "support/runtime/pull_status.h"
 #include "support/testing/test_checks.h"
 #include "support/testing/test_process.h"
 
@@ -8,6 +9,7 @@
 
 namespace fs = std::filesystem;
 
+using sima_examples::pull_status_has_sample;
 using sima_examples::testing::expect_contains;
 using sima_examples::testing::expect_true;
 using sima_examples::testing::remove_dir;
@@ -32,24 +34,25 @@ bool test_missing_config_file_fails_cleanly(const std::string& binary) {
 }
 
 bool test_validate_config_only_accepts_four_streams(const std::string& binary) {
-  const fs::path config_path = write_scratch_config("multi-stream-pose-estimator", "test_validate_config_only_accepts_four_streams",
-                                            "model:\n"
-                                            "  path: models/yolo26m-pose-int8-b1.tar.gz\n"
-                                            "streams:\n"
-                                            "  - rtsp://127.0.0.1:8554/src1\n"
-                                            "  - rtsp://127.0.0.1:8554/src2\n"
-                                            "  - rtsp://127.0.0.1:8554/src3\n"
-                                            "  - rtsp://127.0.0.1:8554/src4\n"
-                                            "input:\n"
-                                            "  codec: avc\n"
-                                            "  max_width: 2560\n"
-                                            "  max_height: 1440\n"
-                                            "inference:\n"
-                                            "  max_inflight_per_stream: 3\n"
-                                            "  max_inflight_total: 12\n"
-                                            "output:\n"
-                                            "  insight:\n"
-                                            "    host: 127.0.0.1\n");
+  const fs::path config_path = write_scratch_config(
+      "multi-stream-pose-estimator", "test_validate_config_only_accepts_four_streams",
+      "model:\n"
+      "  path: models/yolo26m-pose-int8-b1.tar.gz\n"
+      "streams:\n"
+      "  - rtsp://127.0.0.1:8554/src1\n"
+      "  - rtsp://127.0.0.1:8554/src2\n"
+      "  - rtsp://127.0.0.1:8554/src3\n"
+      "  - rtsp://127.0.0.1:8554/src4\n"
+      "input:\n"
+      "  codec: avc\n"
+      "  max_width: 2560\n"
+      "  max_height: 1440\n"
+      "inference:\n"
+      "  max_inflight_per_stream: 3\n"
+      "  max_inflight_total: 12\n"
+      "output:\n"
+      "  insight:\n"
+      "    host: 127.0.0.1\n");
 
   const auto result =
       spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
@@ -65,18 +68,19 @@ bool test_validate_config_only_accepts_four_streams(const std::string& binary) {
 }
 
 bool test_validate_config_only_rejects_too_many_streams(const std::string& binary) {
-  const fs::path config_path = write_scratch_config("multi-stream-pose-estimator", "test_validate_config_only_rejects_too_many_streams",
-                                            "model:\n"
-                                            "  path: models/yolo26m-pose-int8-b1.tar.gz\n"
-                                            "streams:\n"
-                                            "  - rtsp://127.0.0.1:8554/src1\n"
-                                            "  - rtsp://127.0.0.1:8554/src2\n"
-                                            "  - rtsp://127.0.0.1:8554/src3\n"
-                                            "  - rtsp://127.0.0.1:8554/src4\n"
-                                            "  - rtsp://127.0.0.1:8554/src5\n"
-                                            "output:\n"
-                                            "  insight:\n"
-                                            "    host: 127.0.0.1\n");
+  const fs::path config_path = write_scratch_config(
+      "multi-stream-pose-estimator", "test_validate_config_only_rejects_too_many_streams",
+      "model:\n"
+      "  path: models/yolo26m-pose-int8-b1.tar.gz\n"
+      "streams:\n"
+      "  - rtsp://127.0.0.1:8554/src1\n"
+      "  - rtsp://127.0.0.1:8554/src2\n"
+      "  - rtsp://127.0.0.1:8554/src3\n"
+      "  - rtsp://127.0.0.1:8554/src4\n"
+      "  - rtsp://127.0.0.1:8554/src5\n"
+      "output:\n"
+      "  insight:\n"
+      "    host: 127.0.0.1\n");
 
   const auto result =
       spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
@@ -88,13 +92,14 @@ bool test_validate_config_only_rejects_too_many_streams(const std::string& binar
 }
 
 bool test_validate_config_only_rejects_empty_streams(const std::string& binary) {
-  const fs::path config_path = write_scratch_config("multi-stream-pose-estimator", "test_validate_config_only_rejects_empty_streams",
-                                            "model:\n"
-                                            "  path: models/yolo26m-pose-int8-b1.tar.gz\n"
-                                            "streams: []\n"
-                                            "output:\n"
-                                            "  insight:\n"
-                                            "    host: 127.0.0.1\n");
+  const fs::path config_path = write_scratch_config(
+      "multi-stream-pose-estimator", "test_validate_config_only_rejects_empty_streams",
+      "model:\n"
+      "  path: models/yolo26m-pose-int8-b1.tar.gz\n"
+      "streams: []\n"
+      "output:\n"
+      "  insight:\n"
+      "    host: 127.0.0.1\n");
 
   const auto result =
       spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
@@ -106,17 +111,17 @@ bool test_validate_config_only_rejects_empty_streams(const std::string& binary) 
 }
 
 bool test_validate_config_only_rejects_invalid_inflight_limit(const std::string& binary) {
-  const fs::path config_path =
-      write_scratch_config("multi-stream-pose-estimator", "test_validate_config_only_rejects_invalid_inflight_limit",
-                   "model:\n"
-                   "  path: models/yolo26m-pose-int8-b1.tar.gz\n"
-                   "streams:\n"
-                   "  - rtsp://127.0.0.1:8554/src1\n"
-                   "inference:\n"
-                   "  max_inflight_per_stream: 0\n"
-                   "output:\n"
-                   "  insight:\n"
-                   "    host: 127.0.0.1\n");
+  const fs::path config_path = write_scratch_config(
+      "multi-stream-pose-estimator", "test_validate_config_only_rejects_invalid_inflight_limit",
+      "model:\n"
+      "  path: models/yolo26m-pose-int8-b1.tar.gz\n"
+      "streams:\n"
+      "  - rtsp://127.0.0.1:8554/src1\n"
+      "inference:\n"
+      "  max_inflight_per_stream: 0\n"
+      "output:\n"
+      "  insight:\n"
+      "    host: 127.0.0.1\n");
 
   const auto result =
       spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
@@ -192,7 +197,8 @@ bool test_configuration_rules_are_enforced(const std::string& binary) {
 
   bool ok = true;
   for (const RejectedConfig& c : cases) {
-    const fs::path config_path = write_scratch_config("multi-stream-pose-estimator", std::string("rule_") + c.name, config_body(c.parts));
+    const fs::path config_path = write_scratch_config(
+        "multi-stream-pose-estimator", std::string("rule_") + c.name, config_body(c.parts));
     const auto result =
         spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
     ok &= expect_true(result.exit_code != 0, std::string(c.name) + " is rejected") &&
@@ -202,13 +208,37 @@ bool test_configuration_rules_are_enforced(const std::string& binary) {
 
   // The control: the same minimal config with nothing broken validates, so the
   // rejections above are about the broken value and not about the baseline.
-  const fs::path config_path = write_scratch_config("multi-stream-pose-estimator", "rule_baseline", config_body(ConfigParts{}));
+  const fs::path config_path = write_scratch_config("multi-stream-pose-estimator", "rule_baseline",
+                                                    config_body(ConfigParts{}));
   const auto result =
       spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
   ok &= expect_true(result.exit_code == 0, "minimal config validates") &&
         expect_contains(result.stdout_text, "Config validated", "validated line is printed");
   remove_dir(config_path.parent_path().string());
   return ok;
+}
+
+bool test_closed_output_is_terminal() {
+  using simaai::neat::PullStatus;
+  simaai::neat::PullError pull_error;
+  pull_error.message = "queue torn down";
+  const auto thrown_message = [&](PullStatus status) -> std::string {
+    try {
+      (void)pull_status_has_sample(status, "poses", pull_error, "source reached EOS");
+    } catch (const std::runtime_error& error) {
+      return error.what();
+    }
+    return "";
+  };
+  return expect_true(thrown_message(PullStatus::Closed) ==
+                         "poses output closed unexpectedly: source reached EOS",
+                     "closed output ends the run with the runtime's reason") &&
+         expect_true(thrown_message(PullStatus::Error) == "failed to pull poses: queue torn down",
+                     "pull error ends the run with its message") &&
+         expect_true(!pull_status_has_sample(PullStatus::Timeout, "poses", pull_error, ""),
+                     "timeout is not a sample") &&
+         expect_true(pull_status_has_sample(PullStatus::Ok, "poses", pull_error, ""),
+                     "successful pull is a sample");
 }
 
 } // namespace
@@ -228,5 +258,6 @@ int main(int argc, char** argv) {
   ok &= test_validate_config_only_rejects_empty_streams(binary);
   ok &= test_validate_config_only_rejects_invalid_inflight_limit(binary);
   ok &= test_configuration_rules_are_enforced(binary);
+  ok &= test_closed_output_is_terminal();
   return ok ? 0 : 1;
 }
