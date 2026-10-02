@@ -16,6 +16,7 @@ from tests.utils.e2e_config import (
     common_config_path_for_test,
     prepare_output_dir,
     resolve_configured_model_path,
+    resolve_configured_model_paths,
     section_from_common_config,
     write_merged_config,
 )
@@ -36,6 +37,7 @@ __all__ = [
     "e2e_config_writer",
     "e2e_subprocess_artifacts",
     "e2e_model_path",
+    "pytest_generate_tests",
     "run_until_output_files",
     "test_images_dir",
     "test_timeout_ms",
@@ -79,13 +81,23 @@ def e2e_config_section():
     return _get
 
 
+def _models_dir_from_env() -> Path:
+    raw = os.environ.get("SIMANEAT_APPS_TEST_MODELS_DIR", "").strip()
+    return Path(raw) if raw else APPS_ROOT / "models"
+
+
 @pytest.fixture
 def models_dir() -> Path:
     """Resolve SIMANEAT_APPS_TEST_MODELS_DIR (default: models)."""
-    raw = os.environ.get("SIMANEAT_APPS_TEST_MODELS_DIR", "").strip()
-    if raw:
-        return Path(raw)
-    return APPS_ROOT / "models"
+    return _models_dir_from_env()
+
+
+def _parametrized_model_path(request) -> Path | None:
+    """The model this test instance was generated for, when pytest_generate_tests made one."""
+    callspec = getattr(request.node, "callspec", None)
+    if callspec is None:
+        return None
+    return callspec.params.get("e2e_model_path")
 
 
 def _csv_env(key: str, description: str) -> list[str]:
@@ -178,7 +190,13 @@ def e2e_config_writer(request, tmp_output_dir, models_dir):
         test_file = Path(str(request.node.fspath))
         common_config = common_config_path_for_test(test_file)
         config_path = tmp_output_dir.parent / "config.yaml"
-        return write_merged_config(common_config, config_path, overrides, models_dir)
+        return write_merged_config(
+            common_config,
+            config_path,
+            overrides,
+            models_dir,
+            model_path=_parametrized_model_path(request),
+        )
 
     return _write
 
@@ -292,13 +310,47 @@ def _discard_unfinished_writes(output_dir: Path, finished: dict[Path, int]) -> N
 @pytest.fixture
 def e2e_model_path(request, models_dir, skip_unless_e2e_ready) -> Path:
     """Resolve the model path named by src/common/config.yaml under the active models dir."""
-    test_file = Path(str(request.node.fspath))
-    model_path = resolve_configured_model_path(common_config_path_for_test(test_file), models_dir)
+    model_path = _parametrized_model_path(request)
+    if model_path is None:
+        test_file = Path(str(request.node.fspath))
+        model_path = resolve_configured_model_path(
+            common_config_path_for_test(test_file), models_dir
+        )
     skip_unless_e2e_ready(
         model_path is not None and model_path.is_file(),
         f"configured model not found under {models_dir}: {model_path}",
     )
     return model_path
+
+
+def _model_id(model_path: Path) -> str:
+    name = model_path.name
+    return name[: -len(".tar.gz")] if name.endswith(".tar.gz") else model_path.stem
+
+
+def pytest_generate_tests(metafunc) -> None:
+    """Run an e2e test once per model its suite is scoped to.
+
+    The scope's first selected model is the suite's model. When
+    SIMANEAT_APPS_TEST_MODEL_VARIANTS=1 adds the scope's ``variants``, a test that takes
+    ``e2e_model_path`` is generated once per model and named after it, and the config
+    writer uses that model. With a single model in play nothing about the test changes.
+    """
+    if "e2e_model_path" not in metafunc.fixturenames:
+        return
+    test_file = Path(str(getattr(metafunc.definition, "path", metafunc.definition.fspath)))
+    common_config = common_config_path_for_test(test_file)
+    if not common_config.is_file():
+        return
+    model_paths = resolve_configured_model_paths(common_config, _models_dir_from_env())
+    if len(model_paths) < 2:
+        return
+    metafunc.parametrize(
+        "e2e_model_path",
+        model_paths,
+        indirect=True,
+        ids=[_model_id(path) for path in model_paths],
+    )
 
 
 class StoppedProcess(subprocess.CompletedProcess):

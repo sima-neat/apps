@@ -1,6 +1,7 @@
 #include "support/testing/source_cases.h"
 #include "support/testing/test_process.h"
 
+#include <filesystem>
 #include <iostream>
 
 namespace sima_examples::testing {
@@ -13,6 +14,22 @@ void record_unavailable_case(const std::string& fail_reason, const std::string& 
   } else {
     std::cerr << "[SKIP] " << skip_reason << "\n";
   }
+}
+
+std::vector<std::string> available_model_paths(const std::vector<std::string>& model_paths,
+                                               int& rc) {
+  std::vector<std::string> available;
+  for (const std::string& model_path : model_paths) {
+    if (std::filesystem::exists(model_path)) {
+      available.push_back(model_path);
+      continue;
+    }
+    const std::string model_name = std::filesystem::path(model_path).filename().string();
+    record_unavailable_case(model_name + " is scoped for e2e but missing under " +
+                                std::filesystem::path(model_path).parent_path().string(),
+                            "download " + model_name + " to run its e2e cases", rc);
+  }
+  return available;
 }
 
 namespace {
