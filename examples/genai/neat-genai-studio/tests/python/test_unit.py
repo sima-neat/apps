@@ -50,6 +50,19 @@ from cli_think_suite import (  # noqa: E402,F401
     ThinkSplitterTests as CliThinkSplitterTests,
 )
 from asr_metadata_suite import AsrMetadataTests  # noqa: E402,F401
+from readme_package_suite import (  # noqa: E402,F401
+    LauncherPackagePathsTests,
+    ReadmePackagePathsTests,
+)
+from studio_client_suite import (  # noqa: E402,F401
+    MlaResetPolicyTests,
+    NoThinkTransformTests,
+)
+from worker_ipc_suite import (  # noqa: E402,F401
+    ReadExactTests,
+    ReadFrameTests,
+    SendRequestTests,
+)
 from audio_api_suite import (  # noqa: E402,F401
     FormatTranscriptionTests as AudioApiFormatTranscriptionTests,
     SpeechRequestTests as AudioApiSpeechRequestTests,
@@ -172,6 +185,13 @@ __all__ = [
     "CliStreamTokenCountTests",
     "CliThinkSplitterTests",
     "AsrMetadataTests",
+    "LauncherPackagePathsTests",
+    "ReadmePackagePathsTests",
+    "MlaResetPolicyTests",
+    "NoThinkTransformTests",
+    "ReadExactTests",
+    "ReadFrameTests",
+    "SendRequestTests",
     "AudioApiFormatTranscriptionTests",
     "AudioApiSpeechRequestTests",
     "AudioApiTranscriptionFormTests",

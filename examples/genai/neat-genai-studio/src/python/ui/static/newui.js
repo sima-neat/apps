@@ -1222,7 +1222,7 @@ function sendTextMessage() {
     // Text-only mode: clear if single-shot, then add message and process
     clearIfSingleShotMode();
     addChatMessage(message, true, false); // No image preview for text-only
-    startProcessing('', message);
+    startProcessing(message);
   }
 }
 
@@ -1489,7 +1489,7 @@ function captureAndAnimateSnap(textchat = null) {
     if (textchat) {
       addChatMessage(textchat, true, false);
     }
-    startProcessing('', textchat, !textchat);
+    startProcessing(textchat, !textchat);
     return;
   }
 
@@ -1608,20 +1608,20 @@ function captureAndAnimateSnap(textchat = null) {
   }
 
   // Send the final request to the backend immediately after capture.
-  startProcessing('', isAudioQuery ? null : queryText, isAudioQuery);
+  startProcessing(isAudioQuery ? null : queryText, isAudioQuery);
 }
 
 
-function startProcessing(resultMessage, textchat = null, waitForTranscription = false) {
+function startProcessing(textchat = null, waitForTranscription = false) {
   return enqueueRequest(async () => {
     if (activeGeneration) {
       await stop(true);
     }
-    await startProcessingInternal(resultMessage, textchat, waitForTranscription);
+    await startProcessingInternal(textchat, waitForTranscription);
   });
 }
 
-async function startProcessingInternal(resultMessage, textchat = null, waitForTranscription = false) {
+async function startProcessingInternal(textchat = null, waitForTranscription = false) {
   stopAudio();
 
   // Reset metrics
@@ -1683,7 +1683,7 @@ async function startProcessingInternal(resultMessage, textchat = null, waitForTr
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
       updateAsrMetrics(data.asr);
-      displayResult(data.question || resultMessage, 'static/sample_audio.wav', data.ttt);
+      showTranscribeTime(data.ttt);
       if (data.ignored) {
         activeGeneration = false;
         receivedEndSignal = true;
@@ -1704,7 +1704,7 @@ async function startProcessingInternal(resultMessage, textchat = null, waitForTr
     } catch (error) {
       activeGeneration = false;
       console.error('Error uploading files:', error);
-      displayResult('Error processing request', 'static/sample_audio.wav');
+      showTranscribeTime();
     }
   };
 
@@ -1724,7 +1724,7 @@ async function startProcessingInternal(resultMessage, textchat = null, waitForTr
     } catch (error) {
       activeGeneration = false;
       console.error('Error preparing image blob:', error);
-      displayResult('Error preparing image', 'static/sample_audio.wav');
+      showTranscribeTime();
     }
   } else {
     await sendRequest();
@@ -1961,13 +1961,10 @@ function _findTextRange(container, needle, fromNorm) {
   return range;
 }
 
-function displayResult(text, audioSrc, ttt = 0) {
-  // Only update metrics - text display is now handled by WebSocket events
-  // The assistant message should already exist from startProcessing()
+// The reply text arrives over the WebSocket (handleTextUpdate); the upload
+// response only carries the transcription time.
+function showTranscribeTime(ttt = 0) {
   document.getElementById('transcribeTime').textContent = ttt + 's';
-
-  // Note: text parameter (data.question) is ignored since it's just echoing user input
-  // Actual LLM response comes through handleTextUpdate() via WebSocket
 }
 
 
@@ -5990,7 +5987,7 @@ function askVision(query) {
   setVisionQuestion(query);
   if (typeof clearIfSingleShotMode === 'function') clearIfSingleShotMode();
   addChatMessage(query, true, true);
-  startProcessing('', query, false);
+  startProcessing(query, false);
   if (input) input.value = '';
 }
 
@@ -6235,7 +6232,7 @@ function submitVisionVoiceQuery() {
   if (typeof clearIfSingleShotMode === 'function') clearIfSingleShotMode();
   // Audio + image path: waitForTranscription=true so the transcript comes back
   // via the 'transcription' socket event (displayTranscribedQuery).
-  startProcessing('', null, true);
+  startProcessing(null, true);
 }
 
 // Mirror the newest assistant answer from the chat into the vision overlay so
