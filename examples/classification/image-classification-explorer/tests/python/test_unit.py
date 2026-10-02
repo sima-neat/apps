@@ -587,6 +587,15 @@ class TestScalarConfigSemantics:
         ("1e3", "1000.0"),
         ("models/v1.0", "models/v1.0"),   # not a float: a path, left alone
         (".jpg", ".jpg"),
+        ("report''s", "report's"),   # single-quoted YAML escapes an apostrophe
+        ("1:20", "80"),              # YAML 1.1 sexagesimal
+        ("10:30", "630"),
+        ("1:60", "1:60"),            # 60 is not a valid sexagesimal digit pair
+        ("1:99", "1:99"),
+        ("0:30", "0:30"),            # a leading zero disqualifies it
+        ("1:05", "65"),
+        ("1:2:3", "3723"),
+        ("a:b", "a:b"),              # not a number: left alone
     ])
     def test_string_values_follow_cpp_rules(self, value, expected):
         assert main.config_str(value, "io.output_dir", "fallback") == expected

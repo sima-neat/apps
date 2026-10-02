@@ -80,6 +80,34 @@ std::optional<long long> parse_yaml_int(const std::string& text) {
   if (body.empty())
     return std::nullopt;
 
+  // PyYAML's grammar exactly: [1-9][0-9]* then one or more :[0-5]?[0-9]. So
+  // `1:20` is 80 while `1:60`, `1:99` and `0:30` stay strings.
+  if (body.find(':') != std::string::npos) {
+    std::vector<std::string> parts;
+    std::size_t start_at = 0;
+    while (true) {
+      const std::size_t colon = body.find(':', start_at);
+      parts.push_back(
+          body.substr(start_at, colon == std::string::npos ? std::string::npos : colon - start_at));
+      if (colon == std::string::npos)
+        break;
+      start_at = colon + 1;
+    }
+    const auto all_digits = [](const std::string& p) {
+      return !p.empty() && std::all_of(p.begin(), p.end(),
+                                       [](unsigned char ch) { return std::isdigit(ch) != 0; });
+    };
+    if (!all_digits(parts[0]) || parts[0].front() == '0')
+      return std::nullopt;
+    long long total = std::stoll(parts[0]);
+    for (std::size_t i = 1; i < parts.size(); ++i) {
+      if (!all_digits(parts[i]) || parts[i].size() > 2 || std::stoll(parts[i]) > 59)
+        return std::nullopt;
+      total = total * 60 + std::stoll(parts[i]);
+    }
+    return negative ? -total : total;
+  }
+
   int base = 10;
   const std::string lowered = lower_copy(body);
   if (lowered.rfind("0x", 0) == 0) {
@@ -113,7 +141,30 @@ std::optional<long long> parse_yaml_int(const std::string& text) {
 // there. Stripping only the quotes left the backslash sequence intact here, so
 // C++ rejected a profile name Python loads. Single quotes have no escapes in
 // YAML except '' for a literal quote.
+std::string decode_escapes_only(const std::string& body);
+
 std::string decode_double_quoted_yaml(const std::string& body) {
+  std::string out;
+  out.reserve(body.size());
+  // A single-quoted YAML scalar escapes an apostrophe by doubling it, so
+  // `'report''s'` is `report's` to PyYAML. ScalarConfig strips the outer quotes
+  // and leaves the pair, and the quote style is gone by the time we see it - so
+  // collapse unconditionally, which both sides do, rather than leave one
+  // spelling agreeing and the other not.
+  std::string collapsed;
+  collapsed.reserve(body.size());
+  for (std::size_t i = 0; i < body.size(); ++i) {
+    if (body[i] == '\'' && i + 1 < body.size() && body[i + 1] == '\'') {
+      collapsed += '\'';
+      ++i;
+    } else {
+      collapsed += body[i];
+    }
+  }
+  return decode_escapes_only(collapsed);
+}
+
+std::string decode_escapes_only(const std::string& body) {
   std::string out;
   out.reserve(body.size());
   for (std::size_t i = 0; i < body.size(); ++i) {

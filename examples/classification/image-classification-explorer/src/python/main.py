@@ -180,6 +180,11 @@ def decode_yaml_escapes(text: str) -> str:
     file mean the same thing - the alternative leaves one spelling agreeing and
     the other not. The cost is that a literal backslash in a value is read as an
     escape, identically in both entrypoints."""
+    # A single-quoted YAML scalar escapes an apostrophe by doubling it, so
+    # `'report''s'` is `report's`. ScalarConfig strips the outer quotes and
+    # leaves the pair, and the quote style is gone before either side sees it,
+    # so both collapse unconditionally.
+    text = text.replace("''", "'")
     out: list[str] = []
     i = 0
     simple = {"0": "\0", "a": "\a", "b": "\b", "t": "\t", "\t": "\t", "n": "\n",
@@ -260,6 +265,20 @@ def parse_yaml_int(text: str) -> int | None:
     body = body.replace("_", "")
     if not body:
         return None
+    # YAML 1.1 sexagesimal: `1:20` is 80, which PyYAML resolves, so a quoted
+    # spelling of the same value must mean the same thing here.
+    if ":" in body:
+        # PyYAML's grammar exactly: [1-9][0-9]* then one or more :[0-5]?[0-9].
+        # So `1:20` is 80 while `1:60`, `1:99` and `0:30` stay strings.
+        parts = body.split(":")
+        if not parts[0] or not parts[0].isdigit() or parts[0][0] == "0":
+            return None
+        total = int(parts[0])
+        for part in parts[1:]:
+            if not part.isdigit() or len(part) > 2 or int(part) > 59:
+                return None
+            total = total * 60 + int(part)
+        return -total if negative else total
     base = 10
     lowered = body.lower()
     if lowered.startswith(("0x", "0b", "0o")):
