@@ -152,7 +152,7 @@ class NoThinkRewriteTests(unittest.TestCase):
                 {"role": "user", "content": "hi"},
                 {"role": "assistant", "content": "yo"},
                 {"role": "user", "content": "again"}]
-        out = cli._without_thinking(msgs)
+        out = cli.apply_no_think(msgs)
         self.assertEqual(out[-1]["content"], "again /no_think")
         self.assertEqual(out[1]["content"], "hi")           # earlier turns untouched
         self.assertEqual(msgs[-1]["content"], "again")      # input not mutated
@@ -160,13 +160,13 @@ class NoThinkRewriteTests(unittest.TestCase):
     def test_multimodal_turn_appends_to_its_text_part(self):
         msgs = [{"role": "user", "content": [{"type": "text", "text": "see"},
                                              {"type": "image", "image": "x"}]}]
-        out = cli._without_thinking(msgs)
+        out = cli.apply_no_think(msgs)
         self.assertEqual(out[0]["content"][0]["text"], "see /no_think")
         self.assertEqual(msgs[0]["content"][0]["text"], "see")
 
     def test_image_only_turn_gains_a_text_part(self):
         msgs = [{"role": "user", "content": [{"type": "image", "image": "x"}]}]
-        out = cli._without_thinking(msgs)
+        out = cli.apply_no_think(msgs)
         self.assertEqual(out[0]["content"][-1], {"type": "text", "text": "/no_think"})
 
 
