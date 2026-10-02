@@ -1,37 +1,23 @@
-// E2E test for single-stream-instance-segmenter.
+#include "support/testing/source_cases.h"
 #include "support/testing/test_config.h"
 #include "support/testing/test_process.h"
 
 #include <filesystem>
 #include <iostream>
 #include <string>
+#include <vector>
 
 namespace fs = std::filesystem;
 using namespace sima_examples::testing;
 
-int main(int argc, char** argv) {
-  if (argc < 2) {
-    std::cerr << "[ERR] usage: " << argv[0] << " <example-binary>\n";
-    return 2;
-  }
+namespace {
 
-  const char* rtsp_url = env_or_null("SIMANEAT_TEST_RTSP_H264_URL");
-  if (!rtsp_url) {
-    return skip_or_fail(
-        "SIMANEAT_TEST_RTSP_H264_URL is required for single-stream-instance-segmenter e2e");
-  }
+constexpr const char* kExampleName = "single-stream-instance-segmenter";
 
-  const char* models_dir_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
-  const std::string models_dir = models_dir_raw ? models_dir_raw : "models";
-  const std::string model_path =
-      configured_model_path("single-stream-instance-segmenter", models_dir);
-  if (model_path.empty() || !fs::exists(model_path)) {
-    return skip_or_fail(
-        "configured instance segmentation model not found under SIMANEAT_APPS_TEST_MODELS_DIR");
-  }
-
+int run_source_case(const std::string& binary, const std::string& model_path,
+                    const StreamSourceCase& source_case, const std::string& source_url) {
   const std::string output_dir =
-      create_test_output_dir("single-stream-instance-segmenter", "test_full_pipeline_rtsp_h264");
+      create_test_output_dir(kExampleName, std::string("test_full_pipeline_") + source_case.name);
   if (output_dir.empty()) {
     return 1;
   }
@@ -42,25 +28,28 @@ int main(int argc, char** argv) {
                                        : "127.0.0.1";
   const int video_port = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000);
   const int metadata_port = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100);
-  const int total_saved_frames =
-      e2e_int("single-stream-instance-segmenter", "testing.e2e.output", "total_saved_frames");
-  write_e2e_config("single-stream-instance-segmenter", config_path,
-                   {{"source.type", "rtsp"},
-                    {"source.codec", "h264"},
-                    {"source.url", rtsp_url},
-                    {"model.path", model_path},
-                    {"output.save_dir", output_dir},
-                    {"output.insight.host", insight_host},
-                    {"output.insight.video_port", std::to_string(video_port)},
-                    {"output.insight.metadata_port", std::to_string(metadata_port)}});
+  const int total_saved_frames = e2e_int(kExampleName, "testing.e2e.output", "total_saved_frames");
+  ConfigScalars overrides{{"source.type", source_case.type},
+                          {"source.codec", source_case.codec},
+                          {"source.url", source_url},
+                          {"source.ssl_strict", source_case.ssl_strict ? "true" : "false"},
+                          {"model.path", model_path},
+                          {"output.save_dir", output_dir},
+                          {"output.insight.host", insight_host},
+                          {"output.insight.video_port", std::to_string(video_port)},
+                          {"output.insight.metadata_port", std::to_string(metadata_port)}};
+  if (source_case.fps > 0) {
+    overrides["source.fps"] = std::to_string(source_case.fps);
+  }
+  write_e2e_config(kExampleName, config_path, overrides);
 
   const int timeout_ms = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
-  const ProcessResult result = spawn_until_output_files(argv[1], {"--config", config_path.string()},
+  const ProcessResult result = spawn_until_output_files(binary, {"--config", config_path.string()},
                                                         output_dir, total_saved_frames, timeout_ms);
 
   int rc = 0;
   if (result.exit_code != 0) {
-    std::cerr << "[FAIL] exit code " << result.exit_code << "\n";
+    std::cerr << "[FAIL] " << source_case.name << " exit code " << result.exit_code << "\n";
     std::cerr << "stdout:\n" << result.stdout_text << "\n";
     std::cerr << "stderr:\n" << result.stderr_text << "\n";
     rc = 1;
@@ -68,14 +57,48 @@ int main(int argc, char** argv) {
     const int files = count_output_files(output_dir);
     const std::string problem = streamed_frames_problem(output_dir, total_saved_frames);
     if (!problem.empty()) {
-      std::cerr << "[FAIL] " << problem << "\n";
+      std::cerr << "[FAIL] " << source_case.name << " " << problem << "\n";
       rc = 1;
     } else {
-      std::cout << "[OK] single-stream instance segmenter produced " << files
+      std::cout << "[OK] " << source_case.name << " produced " << files
                 << " sampled output files\n";
     }
   }
 
   remove_dir(output_dir);
   return rc;
+}
+
+} // namespace
+
+int main(int argc, char** argv) {
+  if (argc < 2) {
+    std::cerr << "[ERR] usage: " << argv[0] << " <example-binary>\n";
+    return 2;
+  }
+
+  const std::string binary = argv[1];
+
+  const char* models_dir_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
+  const std::string models_dir = models_dir_raw ? models_dir_raw : "models";
+  const std::string model_path = configured_model_path(kExampleName, models_dir);
+  if (model_path.empty() || !fs::exists(model_path)) {
+    return skip_or_fail("configured instance segmentation model not found under "
+                        "SIMANEAT_APPS_TEST_MODELS_DIR");
+  }
+
+  // One case per source/codec combination the application accepts. The
+  // validator only allows http with mjpeg, so that is the single http case.
+  const std::vector<StreamSourceCase> source_cases = {
+      {"rtsp_h264", "SIMANEAT_TEST_RTSP_H264_URL", "rtsp", "h264", 0, true},
+      {"rtsp_h265", "SIMANEAT_TEST_RTSP_H265_URL", "rtsp", "h265", 0, true},
+      {"rtsp_mjpeg", "SIMANEAT_TEST_RTSP_MJPEG_URL", "rtsp", "mjpeg", 0, true},
+      {"http_mjpeg", "SIMANEAT_TEST_HTTP_MJPEG_URL", "http", "mjpeg", 30, false},
+  };
+
+  return run_single_stream_source_cases(
+      "single-stream instance segmenter", source_cases,
+      [&](const StreamSourceCase& source_case, const std::string& source_url) {
+        return run_source_case(binary, model_path, source_case, source_url);
+      });
 }
