@@ -1788,15 +1788,14 @@ int main(int argc, char** argv) {
       const auto text = config_scalar(raw, "validation.min_probability");
       if (!text.has_value())
         return 0.0;
-      try {
-        std::size_t consumed = 0;
-        const double parsed = std::stod(*text, &consumed);
-        if (consumed != text->size())
-          throw std::invalid_argument("trailing characters");
-        return parsed;
-      } catch (const std::exception&) {
-        throw ConfigError("validation.min_probability must be a number, got " + *text);
-      }
+      // The same YAML number handling as every other scalar reader: std::stod
+      // alone stops at the underscore in `1_000.0` and at the dot in `.inf`,
+      // both of which PyYAML resolves and Python accepts.
+      if (const auto whole = parse_yaml_int(*text))
+        return static_cast<double>(*whole);
+      if (const auto number = parse_yaml_float(*text))
+        return *number;
+      throw ConfigError("validation.min_probability must be a number, got " + *text);
     }();
 
     const int timeout_ms = config_int(raw, "runtime.timeout_ms", 20000);

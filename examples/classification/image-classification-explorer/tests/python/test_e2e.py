@@ -314,6 +314,7 @@ class TestE2E:
         "radix-prefixed profile name",
         "escaped profile key",
         "quoted models section",
+        "underscored min_probability",
         "quoted null section",
         "escaped integer setting",
         "escaped min_probability",
@@ -417,6 +418,11 @@ class TestE2E:
         # creating a directory literally named "[a, b]".
         # PyYAML normalises a quoted mapping key; ScalarConfig keeps the quotes,
         # so `models.` lookups missed and every profile was discarded.
+        # `1_000.0` is a YAML float PyYAML accepts; std::stod stopped at the
+        # underscore, so C++ rejected a threshold Python took.
+        ("underscored min_probability",
+         "validation:\n  min_probability: 1_000.0\n"
+         "models:\n  m:\n    path: /nonexistent/m.tar.gz\n", 6),
         ("quoted models section",
          "\"models\":\n  m:\n    path: /nonexistent/m.tar.gz\n", 6),
         ("flow sequence output_dir",
