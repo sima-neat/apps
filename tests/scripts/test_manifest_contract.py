@@ -1069,46 +1069,16 @@ def test_vulcan_core_install_does_not_check_production_metadata_for_other_envs(
     )
 
 
-def test_vulcan_core_install_repairs_mixed_runtime_branch(tmp_path):
-    sima_cli_cwd = tmp_path / "sima-cli-cwd.txt"
-    sima_cli_args = tmp_path / "sima-cli-args.txt"
-    _write_fake_sima_cli(tmp_path)
-    _write_fake_neat_json(
-        tmp_path,
-        channel="scratch-core-for-test",
-        tag="scratchsha1",
-        env="prod",
-        runtime_channel="different-runtime-branch",
-    )
-
-    proc = _run_build(
-        tmp_path,
-        args=["--only-install-neat-core"],
-        env={
-            **_core_metadata_env(),
-            "NEAT_APPS_DEPENDENCY_BRANCH": "scratch-core-for-test",
-            "NEAT_CORE_INSTALL_MODE": "vulcan",
-            "NEAT_VULCAN_ENV": "production",
-            "NEAT_APPS_TEST_SIMA_CLI_CWD": str(sima_cli_cwd),
-            "NEAT_APPS_TEST_SIMA_CLI_ARGS": str(sima_cli_args),
-        },
-    )
-
-    assert proc.returncode == 0, proc.stderr + proc.stdout
-    assert "NEAT core already installed" not in proc.stdout
-    assert (
-        sima_cli_args.read_text(encoding="utf-8")
-        .strip()
-        .endswith("core@scratch-core-for-test:scratchsha1")
-    )
-
-
 @pytest.mark.parametrize(
-    ("runtime_revision", "gst_revision"),
-    [("old", "new"), ("new", "old"), ("old", "old")],
+    ("runtime_version", "gst_version"),
+    [
+        ("0.5.0+different-runtime-branch.new", "0.5.0+scratch-core-for-test.new"),
+        ("0.5.0+scratch-core-for-test.old", "0.5.0+scratch-core-for-test.new"),
+        ("0.5.0+scratch-core-for-test.new", "0.5.0+scratch-core-for-test.old"),
+    ],
 )
 def test_vulcan_core_install_refreshes_republished_dependencies(
-    tmp_path, runtime_revision, gst_revision
+    tmp_path, runtime_version, gst_version
 ):
     _write_fake_sima_cli(tmp_path)
     _write_fake_neat_json(
@@ -1116,8 +1086,8 @@ def test_vulcan_core_install_refreshes_republished_dependencies(
         channel="scratch-core-for-test",
         tag="scratchsha1",
         env="prod",
-        runtime_version=f"0.5.0+scratch-core-for-test.{runtime_revision}",
-        gst_plugins_version=f"0.5.0+scratch-core-for-test.{gst_revision}",
+        runtime_version=runtime_version,
+        gst_plugins_version=gst_version,
     )
     proc = _run_build(
         tmp_path,
@@ -1186,6 +1156,7 @@ def test_vulcan_core_install_refreshes_when_metadata_is_unverifiable(
         channel="scratch-core-for-test",
         tag="scratchsha1",
         env="prod",
+        runtime_version="0.5.0",
     )
     bodies = {}
     if metadata is not None:

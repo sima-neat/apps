@@ -560,7 +560,6 @@ def run(cfg: Config) -> int:
         encoded_options.fallback_h264_height = height
     source = pyneat.groups.rtsp_encoded_input(encoded_options)
 
-    inference_inflight = 16
     decode_options = pyneat.SimaDecodeOptions()
     decode_options.type = decoder_type
     decode_options.out_format = pyneat.Format.NV12
@@ -570,7 +569,7 @@ def run(cfg: Config) -> int:
     decode_options.dec_fps = fps
     if cfg.codec == "mjpeg":
         # Keep free decode surfaces while inference and preview retain frames.
-        decode_options.num_buffers = 2 * inference_inflight
+        decode_options.num_buffers = 32
     decoder = pyneat.Graph("decoder")
     decoder.add(pyneat.nodes.sima_decode(decode_options))
 
@@ -590,10 +589,14 @@ def run(cfg: Config) -> int:
         video.add(pyneat.nodes.caps_raw("NV12", width, height, preview_fps))
     video.add(pyneat.groups.video_sender(video_options))
 
+    queue_options = pyneat.QueueOptions()
+    queue_options.max_buffers = 16
+    queue_options.overflow_policy = pyneat.OverflowPolicy.KeepLatest
     inference_graph = pyneat.Graph("inference")
+    inference_graph.add(pyneat.nodes.queue(queue_options))
     inference_graph.add(backbone.graph())
     backbone_output = pyneat.Graph("backbone_output")
-    backbone_output.add(pyneat.nodes.output("backbone", pyneat.OutputOptions.latest()))
+    backbone_output.add(pyneat.nodes.output("backbone", pyneat.OutputOptions.every_frame(4)))
     inference_graph.add(backbone_output)
 
     source_graph = pyneat.Graph("rfdetr_source")
@@ -606,16 +609,12 @@ def run(cfg: Config) -> int:
         source_graph.connect(decoder, video, video_link)
     else:
         source_graph.connect(source, video)
-    inference_link = pyneat.GraphLinkOptions()
-    inference_link.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
-    inference_link.max_inflight_per_stream = inference_inflight
-    inference_link.max_inflight_total = inference_inflight
-    source_graph.connect(decoder, inference_graph, inference_link)
+    source_graph.connect(decoder, inference_graph)
 
     transformer_run_options = pyneat.RunOptions()
     transformer_run_options.preset = pyneat.RunPreset.Balanced
     transformer_run_options.queue_depth = 4
-    transformer_run_options.overflow_policy = pyneat.OverflowPolicy.KeepLatest
+    transformer_run_options.overflow_policy = pyneat.OverflowPolicy.Block
     transformer_run_options.output_memory = pyneat.OutputMemory.Owned
     dummy_inputs = [
         pyneat.Tensor.from_numpy(

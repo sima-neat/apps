@@ -732,7 +732,6 @@ int run(const Config& cfg) {
   }
   auto source = neat::nodes::groups::RtspEncodedInput(encoded_options);
 
-  constexpr int inference_inflight = 16;
   neat::SimaDecodeOptions decode_options;
   decode_options.type = decode_type(cfg.codec);
   decode_options.out_format = neat::FormatTag::NV12;
@@ -742,7 +741,7 @@ int run(const Config& cfg) {
   decode_options.dec_fps = geometry.fps;
   if (cfg.codec == SourceCodec::Mjpeg) {
     // Keep free decode surfaces while inference and preview retain frames.
-    decode_options.num_buffers = 2 * inference_inflight;
+    decode_options.num_buffers = 32;
   }
   neat::Graph decode("decoder");
   decode.add(neat::nodes::SimaDecode(decode_options));
@@ -765,10 +764,14 @@ int run(const Config& cfg) {
   }
   video.add(neat::nodes::groups::VideoSender(video_options));
 
+  neat::QueueOptions queue_options;
+  queue_options.max_buffers = 16;
+  queue_options.overflow_policy = neat::OverflowPolicy::KeepLatest;
   neat::Graph inference("inference");
+  inference.add(neat::nodes::Queue(queue_options));
   inference.add(backbone.graph());
   neat::Graph backbone_output("backbone_output");
-  backbone_output.add(neat::nodes::Output("backbone", neat::OutputOptions::Latest()));
+  backbone_output.add(neat::nodes::Output("backbone", neat::OutputOptions::EveryFrame(4)));
   inference.add(backbone_output);
 
   neat::Graph source_graph("rfdetr_source");
@@ -782,16 +785,12 @@ int run(const Config& cfg) {
   } else {
     source_graph.connect(source, video);
   }
-  neat::GraphLinkOptions inference_link;
-  inference_link.policy = neat::GraphLinkPolicy::RealtimeLatestByStream;
-  inference_link.max_inflight_per_stream = inference_inflight;
-  inference_link.max_inflight_total = inference_inflight;
-  source_graph.connect(decode, inference, inference_link);
+  source_graph.connect(decode, inference);
 
   neat::RunOptions transformer_run_options;
   transformer_run_options.preset = neat::RunPreset::Balanced;
   transformer_run_options.queue_depth = 4;
-  transformer_run_options.overflow_policy = neat::OverflowPolicy::KeepLatest;
+  transformer_run_options.overflow_policy = neat::OverflowPolicy::Block;
   transformer_run_options.output_memory = neat::OutputMemory::Owned;
   neat::TensorList transformer_seed;
   for (const auto& spec : transformer.input_specs()) {
