@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Persistent Supertonic 3 synthesis worker (runs in the Supertonic runtime venv).
+"""Persistent Supertonic 3 synthesis worker (runs in ``.venv-supertonic``).
 
 Supertonic runs its vector field and vocoder on the MLA through PyNeat and its
 duration predictor / text encoder on the CPU through ONNX Runtime. Those
 packages (``pyneat``, ``onnxruntime``, ``numpy==1.26.4``) are not part of the
-Studio UI environment, so the engine lives in the venv created by the
-`supertonic-sima <https://github.com/florianvoss-commit/supertonic-sima>`_
-repository (``scripts/setup_devkit.sh``) and the UI talks to it through this
-subprocess. A crashed or reset worker is simply respawned by the client, which
-also covers the Studio's supervised accelerator reset: restarting the MLA
-dispatcher tears down every runner in every process, including this one.
+Studio UI environment, so the engine (the vendored ``supertonic_sima`` package
+next to this file) lives in the venv that ``setup.sh`` builds and the UI talks
+to it through this subprocess. A crashed or reset worker is simply respawned by
+the client, which also covers the Studio's supervised accelerator reset:
+restarting the MLA dispatcher tears down every runner in every process,
+including this one.
 
 Protocol over stdin/stdout (identical to ``pipertts_worker.py``; the worker
 duplicates its stdout before the Neat runtime initializes because the runtime
@@ -33,11 +33,11 @@ silence generated at the end of every segment but the last is trimmed with a
 short retained tail and fade, so consecutive segments join without a gap.
 
 Environment:
-    SUPERTONIC_REPO_ROOT   supertonic-sima checkout (its ``app/`` is imported)
-    SUPERTONIC_APP_ROOT    models root; ``models/supertonic-3`` and
-                           ``models/supertonic-3-sima`` live below it
-    SUPERTONIC_STEPS       Euler denoising steps, 5-12 (default 8)
-    SUPERTONIC_THREADS     ONNX Runtime intra-op threads (default min(8, cpus))
+    SUPERTONIC_MODELS_ROOT  models root; ``supertonic-3`` (upstream CPU models and
+                            voice styles) and ``supertonic-3-sima`` (compiled MLA
+                            packages) live below it
+    SUPERTONIC_STEPS        Euler denoising steps, 5-12 (default 8)
+    SUPERTONIC_THREADS      ONNX Runtime intra-op threads (default min(8, cpus))
 """
 
 from __future__ import annotations
@@ -59,8 +59,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from supertonic_tts import synthesize_fitting  # noqa: E402
 
 
-DEFAULT_REPO_ROOT = "/media/nvme/repos/supertonic-sima"
-DEFAULT_APP_ROOT = "/media/nvme/supertonic-tts"
 DEFAULT_SEED = 1101
 # Tail trimming between segments (mirrors the upstream browser playground).
 FRAME_SECONDS = 0.01
@@ -70,23 +68,22 @@ FADE_SECONDS = 0.02
 
 
 def _import_runtime():
-    repo_root = Path(os.environ.get("SUPERTONIC_REPO_ROOT") or DEFAULT_REPO_ROOT)
-    app_dir = repo_root / "app"
-    if not (app_dir / "supertonic_sima" / "__init__.py").is_file():
+    """Import the vendored runtime package (this directory is first on sys.path).
+    A missing dependency names what to install instead of a bare ImportError."""
+    try:
+        import supertonic_sima  # noqa: WPS433 - venv-specific import
+    except ImportError as exc:
+        missing = getattr(exc, "name", None) or str(exc)
         raise RuntimeError(
-            f"supertonic_sima package not found under {app_dir}; set "
-            "SUPERTONIC_REPO_ROOT to a supertonic-sima checkout"
-        )
-    if str(app_dir) not in sys.path:
-        sys.path.insert(0, str(app_dir))
-    import supertonic_sima  # noqa: WPS433 - deferred, venv-specific import
-
+            f"the Supertonic runtime cannot be imported ({missing}); run setup.sh "
+            "with INSTALL_SUPERTONIC=1 to build .venv-supertonic (pyneat, "
+            "onnxruntime, numpy)"
+        ) from exc
     return supertonic_sima
 
 
 def _build_engine(runtime):
-    app_root = Path(os.environ.get("SUPERTONIC_APP_ROOT") or DEFAULT_APP_ROOT)
-    model_root = app_root / "models"
+    model_root = Path(os.environ["SUPERTONIC_MODELS_ROOT"])
     compiled = model_root / "supertonic-3-sima"
     steps = int(os.environ.get("SUPERTONIC_STEPS") or 8)
     if not 5 <= steps <= 12:

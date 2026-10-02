@@ -1,4 +1,5 @@
 import io
+import os
 import shutil
 import sys
 import tempfile
@@ -20,7 +21,7 @@ except ModuleNotFoundError as exc:  # pragma: no cover - environment check
     ) from exc
 
 from server.model_manager import ModelManager, _is_mla_failure
-from shared.config import HubConfig
+from shared.config import HubConfig, model_dir_complete, model_dir_supported
 
 
 class FakeServer:
@@ -289,6 +290,25 @@ class AsrSwitchingTests(unittest.TestCase):
             manager.delete("whisper-small-a16w8")
         self.assertTrue((self.tmp / "whisper-small-a16w8").is_dir())
 
+    def test_an_alias_and_its_basename_resolve_to_one_path(self):
+        """Two catalog names for one directory must compare equal by path.
+
+        The configured `asr.name` and the directory basename are separate
+        entries; startup's fallback and delete both rely on a path comparison to
+        avoid treating them as different models.
+        """
+        manager, _ = self.manager()
+        manager.register_startup_model(
+            "configured-alias", self.tmp / "whisper-small-a16w8", "asr", False, None)
+
+        alias = manager.resolved_model_path("configured-alias")
+        basename = manager.resolved_model_path("whisper-small-a16w8")
+        self.assertIsNotNone(alias)
+        self.assertEqual(alias, basename)
+        # A genuinely different model must not collide with it.
+        self.assertNotEqual(alias, manager.resolved_model_path("whisper-medium-a16w8"))
+        self.assertIsNone(manager.resolved_model_path("not-in-catalog"))
+
     def test_reset_is_refused_when_disabled(self):
         manager, _ = self.manager()
         manager._mla_reset_enabled = False
@@ -460,6 +480,52 @@ class AsrWarmupBehaviourTests(AsrSwitchingTests):
 
         self.assertIsNone(manager.active_asr())
         self.assertNotIn("whisper-medium-a16w8", server.model_names())
+
+
+class EncoderLayoutIsNotJudgedLocallyTests(unittest.TestCase):
+    """Neither encoder layout may be refused from the files alone.
+
+    Which layout the runtime accepts inverted inside one version: 0.4.0 needs a
+    combined encoder stage, 0.4.0+develop.7d003ef needs per-layer ELFs and calls
+    the combined one "Unsupported legacy Whisper model". A model directory does
+    not record which runtime compiled it, so a local guess blocks whichever
+    builds happen to be the working ones. These pin that the studio offers both
+    and lets the runtime report any mismatch itself.
+    """
+
+    def _build(self, root, name, encoder_elfs, config="whisper_config.json"):
+        d = Path(root) / name
+        (d / "devkit").mkdir(parents=True)
+        (d / "elf_files").mkdir()
+        (d / "devkit" / config).write_text("{}")
+        (d / ".neat-complete").write_text("ok\n")
+        for e in encoder_elfs:
+            (d / "elf_files" / e).write_bytes(b"x")
+        (d / "elf_files" / "m_decoder_init_layer0_stage1_mla.elf").write_bytes(b"x")
+        return d
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def test_a_combined_encoder_build_is_offered(self):
+        d = self._build(self.tmp, "combined", ["m_encoder_stage1_mla.elf"])
+        self.assertEqual(model_dir_supported(d), (True, ""))
+        self.assertEqual(model_dir_complete(d), (True, ""))
+
+    def test_a_layered_encoder_build_is_offered(self):
+        d = self._build(self.tmp, "layered",
+                        [f"m_encoder_layer{i}_stage1_mla.elf" for i in range(12)])
+        self.assertEqual(model_dir_supported(d), (True, ""))
+        self.assertEqual(model_dir_complete(d), (True, ""))
+
+    def test_a_genuinely_broken_download_is_still_caught(self):
+        d = self._build(self.tmp, "broken", ["m_encoder_stage1_mla.elf"])
+        (d / ".neat-complete").unlink()
+        (d / "elf_files" / "m_encoder_stage1_mla.elf").write_bytes(b"")
+        ok, why = model_dir_complete(d)
+        self.assertFalse(ok)
+        self.assertIn("incomplete weight file", why)
 
 
 class MlaFailureClassificationTests(unittest.TestCase):
