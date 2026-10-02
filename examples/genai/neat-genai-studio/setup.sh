@@ -625,7 +625,7 @@ asr_model_loads() {
   local dir="$1" out rc
   [[ -d "${dir}" ]] || return 2
   [[ -x "${PYNEAT_PYTHON}" ]] || return 2
-  out="$("${PYNEAT_PYTHON}" "${EXAMPLE_DIR}/scripts/probe_asr.py" "${dir}" 2>&1)"
+  out="$("${PYNEAT_PYTHON}" "${EXAMPLE_DIR}/src/python/server/probe_asr.py" "${dir}" 2>&1)"
   rc=$?
   case "${rc}" in
     0) return 0 ;;
