@@ -209,6 +209,27 @@ def decode_yaml_escapes(text: str) -> str:
     return "".join(out)
 
 
+def parse_yaml_float(text: str) -> float | None:
+    """The fourth YAML scalar type, matched the way PyYAML matches it.
+
+    A '.' or an exponent is required so this never claims a value the integer
+    reader owns, and the whole string must match so a path like `models/v1.0` or
+    an extension `.jpg` is left alone."""
+    body = text.strip()
+    if not body:
+        return None
+    if body[0] in "+-":
+        body = body[1:]
+    body = body.replace("_", "")
+    if not body or ("." not in body and "e" not in body.lower()):
+        return None
+    try:
+        value = float(body)
+    except ValueError:
+        return None
+    return -value if text.strip()[0] == "-" else value
+
+
 def parse_yaml_bool(text: str) -> bool | None:
     """Recognise the YAML 1.1 Boolean spellings PyYAML resolves.
 
@@ -381,6 +402,9 @@ def config_str(value: Any, key: str, default: str | None) -> str | None:
         # Likewise C++ cannot tell `010` from `"010"`; both canonicalise, so
         # both name the same directory either way.
         number = parse_yaml_int(text)
+        if number is not None:
+            return str(number)
+        number = parse_yaml_float(text)
         if number is not None:
             return str(number)
         flag = parse_yaml_bool(text)

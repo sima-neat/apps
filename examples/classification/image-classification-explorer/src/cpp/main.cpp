@@ -218,6 +218,75 @@ bool path_is_regular_file(const fs::path& p) {
 // PyYAML 1.1 resolves these spellings to a Boolean, and Python renders the
 // Boolean as "true"/"false". ScalarConfig passes the original word through, so
 // `output_dir: yes` was the directory "yes" here and "true" there.
+// Python prints a float with str(): the shortest text that reads back as the
+// same value, and never bare digits - 0.0 prints as "0.0", not "0".
+std::string python_float_text(double value) {
+  if (std::isnan(value))
+    return "nan";
+  if (std::isinf(value))
+    return value > 0 ? "inf" : "-inf";
+  char buffer[64];
+  int digits = 17;
+  for (int precision = 1; precision <= 17; ++precision) {
+    std::snprintf(buffer, sizeof(buffer), "%.*g", precision, value);
+    if (std::strtod(buffer, nullptr) == value) {
+      digits = precision;
+      break;
+    }
+  }
+  std::string text(buffer);
+  // %g switches to scientific as soon as the exponent reaches the precision,
+  // so the shortest round-trip of 1000.0 is "1e+03". Python's repr stays
+  // positional while the exponent is in [-4, 16), so re-render those.
+  const auto exponent_at = text.find('e');
+  if (exponent_at != std::string::npos) {
+    const int exponent = std::atoi(text.c_str() + exponent_at + 1);
+    if (exponent >= -4 && exponent < 16) {
+      std::snprintf(buffer, sizeof(buffer), "%.*f", std::max(0, digits - 1 - exponent), value);
+      text = buffer;
+      if (text.find('.') != std::string::npos) {
+        text.erase(text.find_last_not_of('0') + 1);
+        if (!text.empty() && text.back() == '.')
+          text.pop_back();
+      }
+    }
+  }
+  // Never bare digits: Python prints 0.0, not 0.
+  if (text.find_first_of(".einf") == std::string::npos)
+    text += ".0";
+  return text;
+}
+
+// The fourth YAML scalar type. PyYAML resolves `1_000.0` to 1000.0 and Python
+// renders it "1000.0"; ScalarConfig keeps the text. A '.' or an exponent is
+// required so this never claims a value the integer reader should have, and the
+// whole string must match so a path like "models/v1.0" or an extension ".jpg"
+// is left alone.
+std::optional<double> parse_yaml_float(const std::string& text) {
+  std::string body = sima_examples::trim_copy(text);
+  if (body.empty())
+    return std::nullopt;
+  if (body.front() == '-' || body.front() == '+')
+    body.erase(0, 1);
+  body.erase(std::remove(body.begin(), body.end(), '_'), body.end());
+  if (body.empty())
+    return std::nullopt;
+  const bool has_point = body.find('.') != std::string::npos;
+  const bool has_exponent =
+      body.find('e') != std::string::npos || body.find('E') != std::string::npos;
+  if (!has_point && !has_exponent)
+    return std::nullopt; // an integer: the integer reader owns it
+  try {
+    std::size_t consumed = 0;
+    const double parsed = std::stod(body, &consumed);
+    if (consumed != body.size())
+      return std::nullopt; // trailing characters: not a number
+    return text.front() == '-' ? -parsed : parsed;
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+}
+
 std::optional<bool> parse_yaml_bool(const std::string& text) {
   static const std::set<std::string> kTrue = {"true", "yes", "on"};
   static const std::set<std::string> kFalse = {"false", "no", "off"};
@@ -265,24 +334,11 @@ std::string config_scalar_or(const sima_examples::ScalarConfig& raw, const std::
   // spelling. A value that is not a YAML integer is untouched.
   if (const auto number = parse_yaml_int(*value))
     return std::to_string(*number);
+  if (const auto number = parse_yaml_float(*value))
+    return python_float_text(*number);
   if (const auto flag = parse_yaml_bool(*value))
     return *flag ? "true" : "false";
   return *value;
-}
-
-// Python prints a float with str(): the shortest text that reads back as the
-// same value, and never bare digits - 0.0 prints as "0.0", not "0".
-std::string python_float_text(double value) {
-  char buffer[64];
-  for (int precision = 1; precision <= 17; ++precision) {
-    std::snprintf(buffer, sizeof(buffer), "%.*g", precision, value);
-    if (std::strtod(buffer, nullptr) == value)
-      break;
-  }
-  std::string text(buffer);
-  if (text.find_first_of(".einf") == std::string::npos)
-    text += ".0";
-  return text;
 }
 
 int config_int(const sima_examples::ScalarConfig& raw, const std::string& key, int fallback) {
@@ -1576,8 +1632,11 @@ int main(int argc, char** argv) {
     // `io: /images` or `runtime: 5000` leaves ScalarConfig holding a scalar at
     // the section name, and every nested lookup below would quietly fall back to
     // its default. Python rejects these, so reject them here too.
+    // Through config_scalar, not string_value: a section whose value decodes to
+    // null - `io: "\\x6eull"` - is absent to Python and must be absent here too,
+    // and the message quotes the decoded text the customer effectively wrote.
     for (const char* section : {"io", "runtime", "validation", "models"}) {
-      if (const auto value = raw.string_value(section)) {
+      if (const auto value = config_scalar(raw, section)) {
         throw ConfigError(std::string("`") + section + "` must be a mapping, got " + *value);
       }
     }

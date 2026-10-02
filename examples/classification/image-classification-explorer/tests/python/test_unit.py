@@ -582,6 +582,11 @@ class TestScalarConfigSemantics:
         ("report\\u002d2026", "report-2026"),   # escapes decoded as PyYAML decodes them
         ("models/resnet\\u005f50.tar.gz", "models/resnet_50.tar.gz"),
         ("report\\q2026", "report\\q2026"),      # not an escape: left alone
+        ("1_000.0", "1000.0"),       # YAML float: canonical as Python renders it
+        ("1.50", "1.5"),
+        ("1e3", "1000.0"),
+        ("models/v1.0", "models/v1.0"),   # not a float: a path, left alone
+        (".jpg", ".jpg"),
     ])
     def test_string_values_follow_cpp_rules(self, value, expected):
         assert main.config_str(value, "io.output_dir", "fallback") == expected
