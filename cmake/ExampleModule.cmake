@@ -80,6 +80,7 @@ function(_sima_neat_apps_ensure_support_runtime apps_root)
   target_link_libraries(sima_neat_apps_support_runtime
     PUBLIC
       SimaNeatApps::sima_neat
+      opencv_videoio
       nlohmann_json::nlohmann_json
   )
 

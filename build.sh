@@ -985,10 +985,10 @@ receipt = artifact["sysroot-version"]
 consumer_base = consumer["platform-version"]
 if not isinstance(receipt, str) or (
     receipt
-    and not re.fullmatch(r"[0-9]+(?:[.][0-9]+){2}(?:~pre[0-9]+)?", receipt)
+    and not re.fullmatch(r"[0-9]+(?:[.][0-9]+){2}(?:~(?:pre[0-9]+|git[0-9]{12}[.][0-9a-f]{7,40}-[0-9]+))?", receipt)
 ):
     raise SystemExit("invalid sysroot-version")
-if receipt and consumer_base != receipt.split("~pre", 1)[0]:
+if receipt and consumer_base != receipt.split("~", 1)[0]:
     raise SystemExit("platform-version does not match the Internals receipt")
 print(receipt)
 PY
@@ -1001,7 +1001,7 @@ PY
     return 0
   fi
 
-  if [[ "${receipt}" == *"~pre"* ]]; then
+  if [[ "${receipt}" == *"~"* ]]; then
     echo "Updating SDK sysroot to Core's Internals receipt ${receipt}"
     if ! run_privileged sysroot update "${receipt}"; then
       echo "ERROR: Failed to update SDK sysroot to ${receipt}." >&2
