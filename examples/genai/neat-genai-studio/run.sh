@@ -244,9 +244,12 @@ wait_for_ui() {
 }
 
 # Open `url` in the desktop's default browser, detached from this terminal so
-# closing it does not take the browser along.
+# closing it does not take the browser along. With "wait" as the second
+# argument, also wait (up to 10 s) for the opener to hand the URL over before
+# returning: a caller that exits right away would otherwise close the desktop
+# icon's terminal and kill the opener before the browser receives the URL.
 open_url() {
-  local url="$1"
+  local url="$1" wait_for_handoff="${2:-}"
   if [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
     warn "No graphical display in this session; open ${url} in a browser yourself."
     return 1
@@ -255,6 +258,12 @@ open_url() {
   for opener in xdg-open x-www-browser sensible-browser; do
     if command -v "${opener}" >/dev/null 2>&1; then
       setsid "${opener}" "${url}" >/dev/null 2>&1 < /dev/null &
+      if [[ "${wait_for_handoff}" == "wait" ]]; then
+        local opener_pid=$! waited=0
+        while kill -0 "${opener_pid}" 2>/dev/null && (( waited < 20 )); do
+          sleep 0.5; waited=$(( waited + 1 ))
+        done
+      fi
       ok "Opened ${C_ACCENT}${url}${C_RESET} in the browser."
       info "First visit: the browser warns about the Studio's self-signed certificate; choose Advanced → proceed (it is this board)."
       return 0
@@ -640,9 +649,11 @@ do_update() {
     else
       errln "curl or wget is required to update."; rm -rf "${tmp}"; return 1
     fi
-    root="$(tar -tzf "${tmp}/src.tar.gz" 2>/dev/null | head -1 | cut -d/ -f1)"
+    # Read the whole listing (awk, not head/grep -q): under pipefail, a reader
+    # that exits early kills tar with SIGPIPE and the update aborts with 141.
+    root="$(tar -tzf "${tmp}/src.tar.gz" 2>/dev/null | awk -F/ 'NR == 1 { print $1 }')"
     ex_path="${root}/examples/genai/neat-genai-studio"
-    if ! tar -tzf "${tmp}/src.tar.gz" 2>/dev/null | grep -qxF "${ex_path}/"; then
+    if ! tar -tzf "${tmp}/src.tar.gz" 2>/dev/null | grep -xF "${ex_path}/" >/dev/null; then
       errln "neat-genai-studio not found in the archive (branch ${branch})."
       rm -rf "${tmp}"; return 1
     fi
@@ -1012,7 +1023,7 @@ if [[ -f "${PID_FILE}" ]]; then
       # locally for an instance started before this was written.
       _url="$(cat "${URL_FILE}" 2>/dev/null || true)"
       [[ -n "${_url}" ]] || _url="$(local_web_url || true)"
-      [[ -n "${_url}" ]] && open_url "${_url}"
+      [[ -n "${_url}" ]] && open_url "${_url}" wait
       exit 0
     fi
     errln "Neat GenAI Studio is already running (pid ${existing})."
@@ -1111,6 +1122,15 @@ consume_reset_request() {
 # reset the dispatcher and relaunch so the CLI can reconnect. Poll-based, since a
 # backgrounded subshell cannot `wait` a sibling PID; bounded so a broken server
 # cannot respawn forever. Strays are swept by cleanup().
+#
+# This is the CLI-mode twin of the web-mode supervisor loop below (search
+# "Supervisor: keep both processes alive"). They deliberately are NOT merged:
+# the CLI watchdog runs in a backgrounded subshell and must poll
+# SERVER_STATUS_FILE, watches only the server, and relaunches on an ordinary
+# crash; the web loop runs in the launcher shell, `wait`s the server, also
+# watches the UI, and shuts the Studio down on an ordinary crash. Both reuse the
+# shared helpers (consume_reset_request, force_stop_server, reset_mla_dispatcher,
+# launch_server) and the same bounded RELAUNCH_STABLE_SECONDS retry budget.
 cli_supervise() {
   # `tries` counts consecutive relaunches that did not survive: a relaunched
   # server that stays up for RELAUNCH_STABLE_SECONDS clears it, so explicit
@@ -1257,6 +1277,8 @@ printf '\n'
 # Supervisor: keep both processes alive. A child failure stops the Studio, except
 # for the sentinel exit code, which is the model server asking for the explicit
 # accelerator reset the user requested. Nothing else touches the board runtime.
+# This is the web-mode twin of cli_supervise() above; see that function's header
+# for why the two loops are kept separate rather than merged.
 status=0
 # Consecutive relaunches that did not survive RELAUNCH_STABLE_SECONDS. A
 # relaunch that stays up clears it, so a user can reset the accelerator as often
