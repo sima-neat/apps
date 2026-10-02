@@ -358,10 +358,19 @@ def config_float(value: Any, key: str, default: float) -> float:
     if isinstance(value, (int, float)):
         return float(value)
     if isinstance(value, str):
-        try:
-            return float(value.strip())
-        except ValueError:
-            raise ValueError(f"{key} must be a number, got {yaml_text(value)}") from None
+        # Through the same readers as config_str and config_int: C++ takes this
+        # setting from config_scalar, so float() here made `"010"` 10.0 against
+        # its YAML-octal 8, and `"null"` an error against its default.
+        text = scalar_text(value)
+        if text is None:
+            return default
+        whole = parse_yaml_int(text)
+        if whole is not None:
+            return float(whole)
+        number = parse_yaml_float(text)
+        if number is not None:
+            return number
+        raise ValueError(f"{key} must be a number, got {yaml_text(value)}")
     raise ValueError(f"{key} must be a number, got {yaml_text(value)}")
 
 

@@ -611,6 +611,30 @@ class TestScalarConfigSemantics:
         assert main.config_str(8, "io.output_dir", "fallback") == "8"
 
 
+class TestFloatScalarSemantics:
+    """config_float was the one reader not going through scalar_text, so a
+    quoted threshold meant something different in each entrypoint."""
+
+    @pytest.mark.parametrize("value,expected", [
+        ("010", 8.0),        # C++ reads this as YAML octal, not decimal 10
+        ("0.2", 0.2),
+        ("1_000.0", 1000.0),
+        (".inf", float("inf")),
+    ])
+    def test_quoted_numbers_follow_cpp_rules(self, value, expected):
+        assert main.config_float(value, "validation.min_probability", 0.5) == expected
+
+    @pytest.mark.parametrize("value", ["null", "NULL", "~"])
+    def test_quoted_nulls_fall_back_to_the_default(self, value):
+        """C++ sees these as absent once ScalarConfig unquotes them, so Python
+        must default rather than reject the file."""
+        assert main.config_float(value, "validation.min_probability", 0.5) == 0.5
+
+    def test_non_numbers_are_still_rejected(self):
+        with pytest.raises(ValueError, match="must be a number"):
+            main.config_float("abc", "validation.min_probability", 0.5)
+
+
 class TestDirectoryScan:
     def test_unstatable_entry_is_skipped_not_fatal(self, tmp_path):
         """A self-referential symlink cannot be stat'ed. Python's Path.is_file()
