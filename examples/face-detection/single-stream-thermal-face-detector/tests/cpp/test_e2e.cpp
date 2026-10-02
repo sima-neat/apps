@@ -1,7 +1,8 @@
 // E2E test for single-stream-thermal-face-detector.
 // Runs the single-stream RTSP pipeline and verifies the app publishes valid
 // pose-estimation metadata JSON (the 5 facial landmarks) to the Insight metadata
-// UDP port. A local UDP listener stands in for Insight, so no running viewer is
+// UDP port, then stops it the way an operator would and checks it shut down
+// cleanly. A local UDP listener stands in for Insight, so no running viewer is
 // required -- only an RTSP H.264 source (SIMANEAT_TEST_RTSP_H264_URL) and the model.
 #include "support/testing/metadata_json_listener.h"
 #include "support/testing/test_config.h"
@@ -58,7 +59,7 @@ int main(int argc, char** argv) {
                     {"output.insight.host", kE2eInsightHost},
                     {"output.insight.video_port", std::to_string(video_port)},
                     {"output.insight.metadata_port", std::to_string(metadata_port)},
-                    {"inference.frames", "140"}});
+                    {"inference.frames", "0"}});
 
   MetadataJsonListenerOptions metadata_options;
   metadata_options.host = kE2eInsightHost;
@@ -75,18 +76,24 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+  // The application runs until stopped (frames = 0). Once the listener has a verdict,
+  // the metadata it asked for or a datagram that was not valid metadata, the harness
+  // interrupts the application and the result carries how it shut down; the shipped
+  // config's finite run is the Python suite's.
   const int timeout_ms = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
-  const ProcessResult result =
-      spawn_and_wait(binary, {"--config", config_path.string()}, timeout_ms);
+  MetadataJsonListenerResult metadata;
+  const ProcessResult result = spawn_until(
+      binary, {"--config", config_path.string()},
+      [&] { return metadata_listener.poll_messages(metadata, 250); }, timeout_ms);
 
   int rc = 0;
-  if (result.exit_code != 0) {
-    std::cerr << "[FAIL] exit code " << result.exit_code << "\n";
+  const std::string exit_problem_text = exit_problem(result);
+  if (!exit_problem_text.empty()) {
+    std::cerr << "[FAIL] " << exit_problem_text << "\n";
     std::cerr << "stdout:\n" << result.stdout_text << "\n";
     std::cerr << "stderr:\n" << result.stderr_text << "\n";
     rc = 1;
   } else {
-    const MetadataJsonListenerResult metadata = metadata_listener.wait_for_messages();
     if (!metadata.success) {
       std::cerr << "[FAIL] pose-estimation metadata was not received: " << metadata.error << "\n";
       rc = 1;
@@ -105,7 +112,7 @@ int main(int argc, char** argv) {
         rc = 1;
       } else {
         std::cout << "[OK] yolov5s-face published valid pose-estimation metadata on "
-                  << metadata.ports_with_valid_json.size() << " port(s)\n";
+                  << metadata.ports_with_valid_json.size() << " port(s) and stopped cleanly\n";
       }
     }
   }

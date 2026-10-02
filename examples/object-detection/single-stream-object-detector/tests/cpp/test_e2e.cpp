@@ -48,8 +48,9 @@ int run_source_case(const std::string& binary, const std::string& model_path,
                                                         output_dir, total_saved_frames, timeout_ms);
 
   int rc = 0;
-  if (result.exit_code != 0) {
-    std::cerr << "[FAIL] " << source_case.name << " exit code " << result.exit_code << "\n";
+  const std::string exit_problem_text = exit_problem(result);
+  if (!exit_problem_text.empty()) {
+    std::cerr << "[FAIL] " << source_case.name << " " << exit_problem_text << "\n";
     std::cerr << "stdout:\n" << result.stdout_text << "\n";
     std::cerr << "stderr:\n" << result.stderr_text << "\n";
     rc = 1;

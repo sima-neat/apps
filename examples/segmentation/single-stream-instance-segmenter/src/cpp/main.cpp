@@ -18,6 +18,7 @@
 #include "neat/nodes.h"
 #include "support/runtime/config_utils.h"
 #include "support/runtime/example_utils.h"
+#include <csignal>
 #include <nodes/groups/VideoSender.h>
 #include <nodes/io/MetadataSender.h>
 
@@ -48,6 +49,15 @@ namespace fs = std::filesystem;
 using sima_examples::time_ms;
 
 namespace {
+
+// SIGINT ends the pull loop so the run is closed and the counters printed, the
+// way the multistream applications already stop. The e2e harness stops the
+// application this way and checks that it exits cleanly.
+volatile std::sig_atomic_t g_stop_requested = 0;
+
+void request_stop(int) {
+  g_stop_requested = 1;
+}
 
 /// MetadataSender rejects a payload above 65507 bytes, and the rejection surfaces as an error the
 /// application has to handle mid-stream. Half of that leaves room for the envelope and keeps the
@@ -1015,7 +1025,9 @@ void run_pipeline(PipelineRuntime& runtime, const AppConfig& cfg) {
 
   int processed = 0;
   int dropped_total = 0;
-  while (cfg.frames <= 0 || processed < cfg.frames) {
+  g_stop_requested = 0;
+  std::signal(SIGINT, request_stop);
+  while (g_stop_requested == 0 && (cfg.frames <= 0 || processed < cfg.frames)) {
     simaai::neat::Sample sample;
     simaai::neat::PullError pull_error;
     const double pull_start = time_ms();

@@ -32,6 +32,7 @@ from tests.utils.output_assertions import (
     saved_image_files,
     supported_image_files,
 )
+from tests.utils.process_assertions import assert_exited_cleanly
 from tests.utils.pytest_fixtures import (
     _confirm_finished_outputs,
     _discard_unfinished_writes,
@@ -57,16 +58,21 @@ import cv2
 import numpy as np
 
 out = Path(sys.argv[1])
-for index in range(40):
-    image = np.full((48, 64, 3), (index * 11) % 255, dtype=np.uint8)
-    data = cv2.imencode(".jpg", image)[1].tobytes()
-    with open(out / f"stream_{index % 2}_frame_{index}.jpg", "wb") as handle:
-        handle.write(data[: len(data) // 2])
-        handle.flush()
-        time.sleep(0.3)
-        handle.write(data[len(data) // 2 :])
-    time.sleep(0.2)
-time.sleep(60)
+try:
+    for index in range(40):
+        image = np.full((48, 64, 3), (index * 11) % 255, dtype=np.uint8)
+        data = cv2.imencode(".jpg", image)[1].tobytes()
+        with open(out / f"stream_{index % 2}_frame_{index}.jpg", "wb") as handle:
+            handle.write(data[: len(data) // 2])
+            handle.flush()
+            time.sleep(0.3)
+            handle.write(data[len(data) // 2 :])
+        time.sleep(0.2)
+    time.sleep(60)
+except KeyboardInterrupt:
+    # Like the applications: the harness stops with SIGINT, and a clean stop
+    # exits 130 after the shutdown path has run.
+    sys.exit(130)
 """
 
 
@@ -370,7 +376,7 @@ class TestOutputCompletion:
             cwd=str(tmp_path),
         )
 
-        assert result.returncode == 0
+        assert_exited_cleanly(result)
         assert_saved_frames_are_usable(output_dir, 4)
 
 

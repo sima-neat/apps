@@ -20,6 +20,7 @@
 #include "support/runtime/config_utils.h"
 #include "support/runtime/example_utils.h"
 
+#include <csignal>
 #include <nodes/groups/VideoSender.h>
 #include <nodes/io/MetadataSender.h>
 
@@ -44,6 +45,15 @@
 namespace fs = std::filesystem;
 
 namespace {
+
+// SIGINT ends the pull loop so the run is closed and the counters printed, the
+// way the multistream applications already stop. The e2e harness stops the
+// application this way and checks that it exits cleanly.
+volatile std::sig_atomic_t g_stop_requested = 0;
+
+void request_stop(int) {
+  g_stop_requested = 1;
+}
 
 enum class SourceType { Rtsp, Http };
 enum class SourceCodec { H264, H265, Mjpeg };
@@ -730,7 +740,9 @@ void run_pipeline(PipelineRuntime& runtime, const AppConfig& cfg) {
   profile.interval = cfg.profile_interval;
 
   int processed = 0;
-  while (cfg.frames <= 0 || processed < cfg.frames) {
+  g_stop_requested = 0;
+  std::signal(SIGINT, request_stop);
+  while (g_stop_requested == 0 && (cfg.frames <= 0 || processed < cfg.frames)) {
     simaai::neat::Sample detection_sample;
     simaai::neat::PullError pull_error;
     const double pull_start = sima_examples::time_ms();

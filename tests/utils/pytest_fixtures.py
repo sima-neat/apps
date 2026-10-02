@@ -2,6 +2,7 @@
 
 import os
 import shutil
+import signal
 import shlex
 import subprocess
 import time
@@ -300,6 +301,17 @@ def e2e_model_path(request, models_dir, skip_unless_e2e_ready) -> Path:
     return model_path
 
 
+class StoppedProcess(subprocess.CompletedProcess):
+    """A CompletedProcess that also records whether the harness stopped the
+    application, and with which signal, so a test can tell "exited 130 because it
+    handled our SIGINT" from "exited 130 for its own reasons"."""
+
+    def __init__(self, args, returncode, stdout, stderr, *, stopped_by_harness: bool, stop_signal: int | None):
+        super().__init__(args, returncode, stdout, stderr)
+        self.stopped_by_harness = stopped_by_harness
+        self.stop_signal = stop_signal
+
+
 @pytest.fixture
 def run_until_output_files(request):
     """Run a process until the requested number of output files exists."""
@@ -323,13 +335,25 @@ def run_until_output_files(request):
         (run_dir / "stdout.log").write_text(stdout, encoding="utf-8")
         (run_dir / "stderr.log").write_text(stderr, encoding="utf-8")
 
-    def _terminate(process: subprocess.Popen[str]) -> tuple[str, str]:
-        process.terminate()
-        try:
-            return process.communicate(timeout=5)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            return process.communicate()
+    def _stop(process: subprocess.Popen[str]) -> tuple[str, str, int]:
+        """Stop the application the way an operator would, then escalate.
+
+        SIGINT is what every application here handles: the Python ones through
+        KeyboardInterrupt, closing their run in a finally and exiting 130, the
+        C++ ones through a handler that ends their loop and exits 0. SIGTERM and
+        SIGKILL are only for an application that ignores it, and the signal that
+        finally ended it is reported so a test can tell the two apart.
+        """
+        for sig, grace_s in ((signal.SIGINT, 10.0), (signal.SIGTERM, 5.0)):
+            process.send_signal(sig)
+            try:
+                stdout, stderr = process.communicate(timeout=grace_s)
+                return stdout, stderr, sig
+            except subprocess.TimeoutExpired:
+                continue
+        process.kill()
+        stdout, stderr = process.communicate()
+        return stdout, stderr, signal.SIGKILL
 
     def _run(
         command: list[str],
@@ -354,22 +378,36 @@ def run_until_output_files(request):
                 finished = _confirm_finished_outputs(sizes, previous_sizes, finished)
                 previous_sizes = sizes
                 if len(finished) >= expected_files:
-                    stdout, stderr = _terminate(process)
+                    stdout, stderr, stop_signal = _stop(process)
                     _discard_unfinished_writes(output_dir, finished)
                     _write_artifacts(command, stdout, stderr)
-                    return subprocess.CompletedProcess(command, 0, stdout, stderr)
+                    # The real exit status, not a stand-in 0: whether the
+                    # application shut down cleanly is part of what the test
+                    # proves. assert_exited_cleanly knows what "clean" means here.
+                    return StoppedProcess(
+                        command,
+                        process.returncode,
+                        stdout,
+                        stderr,
+                        stopped_by_harness=True,
+                        stop_signal=stop_signal,
+                    )
 
             returncode = process.poll()
             if returncode is not None:
                 stdout, stderr = process.communicate()
                 _write_artifacts(command, stdout, stderr)
-                return subprocess.CompletedProcess(command, returncode, stdout, stderr)
+                return StoppedProcess(
+                    command, returncode, stdout, stderr, stopped_by_harness=False, stop_signal=None
+                )
 
             if time.monotonic() >= deadline:
-                stdout, stderr = _terminate(process)
+                stdout, stderr, stop_signal = _stop(process)
                 stderr += f"\n[test_process] killed after timeout ({int(timeout_s * 1000)}ms)"
                 _write_artifacts(command, stdout, stderr)
-                return subprocess.CompletedProcess(command, -1, stdout, stderr)
+                return StoppedProcess(
+                    command, -1, stdout, stderr, stopped_by_harness=False, stop_signal=stop_signal
+                )
 
             time.sleep(0.1)
 
