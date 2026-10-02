@@ -51,9 +51,11 @@ public:
   MetadataJsonListenerResult wait_for_messages();
 
   // One poll round of at most poll_ms: reads the datagrams that arrived into `result`
-  // and returns true once the options' success condition is met. wait_for_messages()
-  // is this in a loop; a test that runs the application itself calls it from the
-  // readiness callback of spawn_until() instead.
+  // and returns true once there is a verdict, either the options' success condition is
+  // met or an error was recorded (a datagram that could not be read, or that was not
+  // valid metadata). wait_for_messages() is this in a loop; a test that runs the
+  // application itself calls it from the readiness callback of spawn_until() instead,
+  // and reads `result.success` and `result.error` afterwards.
   bool poll_messages(MetadataJsonListenerResult& result, int poll_ms);
 
 private:

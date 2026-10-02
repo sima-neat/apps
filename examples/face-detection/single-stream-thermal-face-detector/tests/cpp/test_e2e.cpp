@@ -76,9 +76,10 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  // The application runs until stopped (frames = 0). Once the listener has the
-  // metadata it asked for, the harness interrupts the application and the result
-  // carries how it shut down; the shipped config's finite run is the Python suite's.
+  // The application runs until stopped (frames = 0). Once the listener has a verdict,
+  // the metadata it asked for or a datagram that was not valid metadata, the harness
+  // interrupts the application and the result carries how it shut down; the shipped
+  // config's finite run is the Python suite's.
   const int timeout_ms = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
   MetadataJsonListenerResult metadata;
   const ProcessResult result = spawn_until(

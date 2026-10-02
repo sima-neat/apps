@@ -334,10 +334,9 @@ bool MetadataJsonListener::handle_datagram(SocketState& sock, MetadataJsonListen
 
   result.messages.push_back(std::move(msg));
   if (result.messages.back().object_count < opt_.min_object_count) {
-    result.error =
-        "data." + opt_.data_array_key + " contains " +
-        std::to_string(result.messages.back().object_count) + " objects; expected at least " +
-        std::to_string(opt_.min_object_count);
+    result.error = "data." + opt_.data_array_key + " contains " +
+                   std::to_string(result.messages.back().object_count) +
+                   " objects; expected at least " + std::to_string(opt_.min_object_count);
     return true;
   }
   if (std::find(result.ports_with_valid_json.begin(), result.ports_with_valid_json.end(),
@@ -380,6 +379,9 @@ bool MetadataJsonListener::poll_messages(MetadataJsonListenerResult& result, int
       result.success = true;
       return true;
     }
+    if (!result.error.empty()) {
+      return true;
+    }
   }
   return false;
 }
@@ -403,9 +405,6 @@ MetadataJsonListenerResult MetadataJsonListener::wait_for_messages() {
     }
     const int poll_ms = static_cast<int>(std::min<int64_t>(250, remaining.count()));
     if (poll_messages(result, poll_ms)) {
-      return result;
-    }
-    if (!result.error.empty()) {
       return result;
     }
   }

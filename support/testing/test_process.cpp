@@ -443,12 +443,31 @@ ProcessResult spawn_until_ready(const std::string& binary, const std::vector<std
   // Wall-clock time, not a count of iterations: `ready` may block (a listener poll, for
   // instance), and the timeout must still mean what the caller said.
   const auto started = std::chrono::steady_clock::now();
+  const auto timed_out = [&] {
+    if (timeout_ms <= 0) {
+      return false;
+    }
+    const auto elapsed = std::chrono::steady_clock::now() - started;
+    return std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count() >= timeout_ms;
+  };
   int status = 0;
   while (!child_exited(pid, status)) {
-    const int elapsed_ms = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
-                                                std::chrono::steady_clock::now() - started)
-                                                .count());
-    if (ready()) {
+    if (timed_out()) {
+      int stop_status = 0;
+      int stop_signal = 0;
+      stop_child(pid, stop_status, stop_signal);
+      auto out = read_fd(stdout_pipe[0]);
+      auto err = read_fd(stderr_pipe[0]);
+      ::close(stdout_pipe[0]);
+      ::close(stderr_pipe[0]);
+      err += "\n[test_process] killed after timeout (" + std::to_string(timeout_ms) + "ms)";
+      ProcessResult result{-1, std::move(out), std::move(err)};
+      write_process_artifacts(artifact_dir, command, result);
+      return result;
+    }
+    // Readiness reached after the deadline passed is not readiness: `ready` may block,
+    // and the next iteration reports the timeout instead.
+    if (ready() && !timed_out()) {
       int stop_status = 0;
       int stop_signal = 0;
       stop_child(pid, stop_status, stop_signal);
@@ -464,19 +483,6 @@ ProcessResult spawn_until_ready(const std::string& binary, const std::vector<std
       ProcessResult result{exit_code_from_status(stop_status), std::move(out), std::move(err)};
       result.stopped_by_harness = true;
       result.stop_signal = stop_signal;
-      write_process_artifacts(artifact_dir, command, result);
-      return result;
-    }
-    if (timeout_ms > 0 && elapsed_ms >= timeout_ms) {
-      int stop_status = 0;
-      int stop_signal = 0;
-      stop_child(pid, stop_status, stop_signal);
-      auto out = read_fd(stdout_pipe[0]);
-      auto err = read_fd(stderr_pipe[0]);
-      ::close(stdout_pipe[0]);
-      ::close(stderr_pipe[0]);
-      err += "\n[test_process] killed after timeout (" + std::to_string(timeout_ms) + "ms)";
-      ProcessResult result{-1, std::move(out), std::move(err)};
       write_process_artifacts(artifact_dir, command, result);
       return result;
     }
