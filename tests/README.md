@@ -243,6 +243,8 @@ python3 -m pytest \
 - `SIMANEAT_TEST_HTTP_MJPEG_URL` (single HTTP MJPEG stream URL)
 - `SIMANEAT_TEST_HTTP_MJPEG_URLS` (comma-separated HTTP MJPEG URLs)
 - `SIMANEAT_APPS_TEST_TIMEOUT_MS` (default: `180000`)
+- `SIMANEAT_APPS_HIGH_DENSITY_INITIAL_PROGRESS_TIMEOUT_MS` (high-density receiver warmup progress timeout, default: `90000`)
+- `SIMANEAT_APPS_HIGH_DENSITY_STREAM_PROGRESS_TIMEOUT_MS` (high-density receiver measurement progress timeout, default: `30000`)
 - `SIMANEAT_APPS_TEST_REQUIRE_E2E` (backward-compatible strict e2e env flag; prefer `--strict`)
 - `SIMANEAT_APPS_TEST_LABELS_FILE` (optional labels file override)
 - `SIMANEAT_APPS_TEST_INSIGHT_HOST` (default: `127.0.0.1`)

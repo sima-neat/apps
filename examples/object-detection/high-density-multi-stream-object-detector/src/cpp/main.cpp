@@ -16,14 +16,11 @@
 #include "neat/models.h"
 #include "neat/node_groups.h"
 #include "neat/nodes.h"
-#include "detection_watchdog.h"
-#include "metadata_measurement.h"
 #include "support/object_detection/detection_egress.h"
 #include "support/object_detection/obj_detection_utils.h"
 #include "support/runtime/config_utils.h"
 #include "support/runtime/example_utils.h"
 
-#include <nlohmann/json.hpp>
 #include <nodes/groups/VideoSender.h>
 #include <nodes/io/MetadataSender.h>
 
@@ -39,7 +36,6 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
-#include <mutex>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -53,11 +49,6 @@ namespace fs = std::filesystem;
 namespace {
 
 constexpr int kStreamLimit = 80;
-constexpr int kDefaultInitialDetectionTimeoutMs = 30000;
-constexpr int kDefaultStreamDetectionTimeoutMs = 30000;
-constexpr int kDefaultNoDetectionTimeoutMs = 30000;
-constexpr std::size_t kDetectionPrimingObservations = 2;
-constexpr int kWatchdogCheckIntervalMs = 100;
 constexpr int kDefaultQueueDepth = 4;
 constexpr int kDefaultInternalQueueDepth = 1;
 constexpr int kDefaultMaxInflightPerStream = 4;
@@ -100,11 +91,6 @@ struct AppConfig {
   double min_score = 0.55;
   double nms_iou = 0.60;
   int max_detections = 50;
-  bool profile = false;
-  int warmup_frames = 30;
-  int initial_detection_timeout_ms = kDefaultInitialDetectionTimeoutMs;
-  int stream_detection_timeout_ms = kDefaultStreamDetectionTimeoutMs;
-  int no_detection_timeout_ms = kDefaultNoDetectionTimeoutMs;
   std::string insight_host = "127.0.0.1";
   int video_port_base = 9000;
   int metadata_port_base = 9100;
@@ -159,102 +145,16 @@ struct CliOptions {
   bool validate_config_only = false;
 };
 
-struct StreamProfile {
-  bool enabled = false;
-  int stream_index = 0;
-  int interval = 100;
-  int frames = 0;
-  int boxes = 0;
-  double start_ms = 0.0;
-  double parse_ms = 0.0;
-  double metadata_send_ms = 0.0;
-
-  void add(double parse, double metadata_send, int box_count) {
-    if (!enabled)
-      return;
-    if (frames == 0)
-      start_ms = sima_examples::time_ms();
-    ++frames;
-    boxes += box_count;
-    parse_ms += parse;
-    metadata_send_ms += metadata_send;
-    if (frames >= interval)
-      flush();
-  }
-
-  void flush() {
-    if (!enabled || frames == 0)
-      return;
-    const double elapsed = sima_examples::time_ms() - start_ms;
-    const double metadata_fps =
-        elapsed > 0.0 ? static_cast<double>(frames) * 1000.0 / elapsed : 0.0;
-    const auto avg = [this](double value) { return value / static_cast<double>(frames); };
-    std::cout << "[profile stream=" << stream_index << "] frames=" << frames
-              << " metadata_fps=" << metadata_fps << " avg_parse_ms=" << avg(parse_ms)
-              << " avg_metadata_send_ms=" << avg(metadata_send_ms)
-              << " avg_boxes=" << static_cast<double>(boxes) / static_cast<double>(frames) << "\n";
-    frames = 0;
-    boxes = 0;
-    start_ms = 0.0;
-    parse_ms = 0.0;
-    metadata_send_ms = 0.0;
-  }
-};
-struct AggregateProfile {
-  bool enabled = false;
-  int stream_count = 0;
-  std::uint64_t interval_frames = 400;
-  std::uint64_t frames = 0;
-  double start_ms = 0.0;
-  std::mutex mu;
-
-  void add() {
-    if (!enabled)
-      return;
-    std::lock_guard<std::mutex> lock(mu);
-    if (frames == 0)
-      start_ms = sima_examples::time_ms();
-    ++frames;
-    if (frames >= interval_frames)
-      flush_locked();
-  }
-
-  void flush() {
-    if (!enabled)
-      return;
-    std::lock_guard<std::mutex> lock(mu);
-    flush_locked();
-  }
-
-private:
-  void flush_locked() {
-    if (frames == 0)
-      return;
-    const double elapsed_s = std::max(0.001, (sima_examples::time_ms() - start_ms) / 1000.0);
-    const double aggregate_fps = static_cast<double>(frames) / elapsed_s;
-    std::cout << "[profile aggregate] frames=" << frames << " elapsed_s=" << elapsed_s
-              << " aggregate_fps=" << aggregate_fps << " avg_per_stream_fps="
-              << (stream_count > 0 ? aggregate_fps / static_cast<double>(stream_count) : 0.0)
-              << "\n";
-    frames = 0;
-    start_ms = 0.0;
-  }
-};
-
 struct SourceRuntime {
   int index = 0;
   std::string url;
   std::unique_ptr<simaai::neat::MetadataSender> metadata_sender;
   std::vector<std::string> labels;
-  simaai::neat::nodes::groups::RtspDecodedInputOptions source_options;
-  StreamProfile profile;
   std::vector<objdet::Box> parsed_boxes;
   int frame_w = 0;
   int frame_h = 0;
   int source_fps = 0;
   int video_port = 0;
-  int processed = 0;
-  std::uint64_t metadata_send_ok = 0;
   std::uint64_t metadata_send_fail = 0;
 };
 struct AppRuntime {
@@ -428,13 +328,6 @@ void validate_config(const AppConfig& cfg) {
   sima_examples::require(cfg.nms_iou >= 0.0 && cfg.nms_iou <= 1.0,
                          "inference.nms_iou must be between 0 and 1");
   sima_examples::require(cfg.max_detections > 0, "inference.max_detections must be > 0");
-  sima_examples::require(cfg.warmup_frames >= 0, "runtime.warmup_frames must be >= 0");
-  sima_examples::require(cfg.initial_detection_timeout_ms > 0,
-                         "runtime.initial_detection_timeout_ms must be > 0");
-  sima_examples::require(cfg.stream_detection_timeout_ms > 0,
-                         "runtime.stream_detection_timeout_ms must be > 0");
-  sima_examples::require(cfg.no_detection_timeout_ms > 0,
-                         "runtime.no_detection_timeout_ms must be > 0");
   sima_examples::require(cfg.video_port_base > 0, "output.insight.video_port_base must be > 0");
   sima_examples::require(cfg.video_port_base <= 65535,
                          "output.insight.video_port_base must be <= 65535");
@@ -467,6 +360,14 @@ void validate_config(const AppConfig& cfg) {
 
 AppConfig load_app_config(const fs::path& config_path) {
   const auto raw = sima_examples::ScalarConfig::load(config_path);
+  for (const std::string key : {"runtime.profile", "runtime.warmup_frames",
+                                "runtime.initial_detection_timeout_ms",
+                                "runtime.stream_detection_timeout_ms",
+                                "runtime.no_detection_timeout_ms"}) {
+    sima_examples::require(!raw.string_value(key).has_value(),
+                           key + " was removed; warmup, measurement, and progress deadlines "
+                                 "belong to the end-to-end test receiver");
+  }
   sima_examples::require(
       !raw.string_value("inference.fan_in_policy").has_value(),
       "inference.fan_in_policy was removed; remove it because ordinary connect()/build() now "
@@ -516,14 +417,6 @@ AppConfig load_app_config(const fs::path& config_path) {
   cfg.min_score = raw.double_or("inference.min_score", 0.55);
   cfg.nms_iou = raw.double_or("inference.nms_iou", 0.60);
   cfg.max_detections = raw.int_or("inference.max_detections", 50);
-  cfg.profile = raw.bool_or("runtime.profile", false);
-  cfg.warmup_frames = raw.int_or("runtime.warmup_frames", 30);
-  cfg.initial_detection_timeout_ms =
-      raw.int_or("runtime.initial_detection_timeout_ms", kDefaultInitialDetectionTimeoutMs);
-  cfg.stream_detection_timeout_ms =
-      raw.int_or("runtime.stream_detection_timeout_ms", kDefaultStreamDetectionTimeoutMs);
-  cfg.no_detection_timeout_ms =
-      raw.int_or("runtime.no_detection_timeout_ms", kDefaultNoDetectionTimeoutMs);
   cfg.insight_host = raw.string_or("output.insight.host", "");
   cfg.video_port_base = raw.int_or("output.insight.video_port_base", 9000);
   cfg.metadata_port_base = raw.int_or("output.insight.metadata_port_base", 9100);
@@ -641,84 +534,8 @@ bool env_bool(const char* key, bool fallback = false) {
   return v == "1" || v == "true" || v == "yes" || v == "on";
 }
 
-int env_int(const char* key, int fallback) {
-  const char* value = std::getenv(key);
-  if (!value || !*value)
-    return fallback;
-  char* end = nullptr;
-  const long parsed = std::strtol(value, &end, 10);
-  if (!end || *end != '\0')
-    return fallback;
-  return static_cast<int>(parsed);
-}
-
 bool app_verbose() {
   return env_bool("HIGH_DENSITY_DETECTOR_VERBOSE", false);
-}
-
-bool app_print_backend() {
-  return app_verbose() || env_bool("HIGH_DENSITY_DETECTOR_PRINT_BACKEND", false);
-}
-
-int app_liveness_ms() {
-  return std::max(0, env_int("HIGH_DENSITY_DETECTOR_LIVENESS_MS", 0));
-}
-
-void print_pull_liveness(const std::vector<SourceRuntime>& sources, const char* reason,
-                         std::uint64_t total_pulls) {
-  if (sources.empty()) {
-    std::cerr << "[detector][liveness] reason=" << (reason ? reason : "snapshot")
-              << " streams=0 total_pulls=" << total_pulls << "\n";
-    return;
-  }
-
-  int min_processed = sources.front().processed;
-  int max_processed = sources.front().processed;
-  int zero_streams = 0;
-  std::uint64_t metadata_send_ok = 0;
-  std::uint64_t metadata_send_fail = 0;
-  for (const auto& source : sources) {
-    min_processed = std::min(min_processed, source.processed);
-    max_processed = std::max(max_processed, source.processed);
-    if (source.processed == 0) {
-      ++zero_streams;
-    }
-    metadata_send_ok += source.metadata_send_ok;
-    metadata_send_fail += source.metadata_send_fail;
-  }
-
-  std::vector<const SourceRuntime*> low;
-  low.reserve(sources.size());
-  const int low_cutoff = std::max(min_processed + 2, max_processed / 4);
-  for (const auto& source : sources) {
-    if (source.processed <= low_cutoff) {
-      low.push_back(&source);
-    }
-  }
-  std::sort(low.begin(), low.end(), [](const SourceRuntime* a, const SourceRuntime* b) {
-    if (a->processed != b->processed) {
-      return a->processed < b->processed;
-    }
-    return a->index < b->index;
-  });
-
-  std::cerr << "[detector][liveness] reason=" << (reason ? reason : "snapshot")
-            << " streams=" << sources.size() << " total_pulls=" << total_pulls
-            << " min_processed=" << min_processed << " max_processed=" << max_processed
-            << " zero_streams=" << zero_streams << " metadata_send_ok=" << metadata_send_ok
-            << " metadata_send_fail=" << metadata_send_fail << " low_cutoff=" << low_cutoff
-            << " low=";
-  const std::size_t show = std::min<std::size_t>(low.size(), 12);
-  for (std::size_t i = 0; i < show; ++i) {
-    if (i != 0U) {
-      std::cerr << ",";
-    }
-    std::cerr << "stream" << low[i]->index << ":" << low[i]->processed;
-  }
-  if (low.size() > show) {
-    std::cerr << ",...";
-  }
-  std::cerr << "\n";
 }
 
 std::string stream_id_for(int stream_index) {
@@ -759,19 +576,6 @@ int stream_index_from_detection(const simaai::neat::Sample& sample, int stream_c
   return index;
 }
 
-int target_frames_per_stream() {
-  return std::max(0, env_int("HIGH_DENSITY_DETECTOR_FRAMES_PER_STREAM", 0));
-}
-
-bool target_reached(const std::vector<SourceRuntime>& sources) {
-  const int target = target_frames_per_stream();
-  if (target <= 0 || sources.empty()) {
-    return false;
-  }
-  return std::all_of(sources.begin(), sources.end(),
-                     [target](const SourceRuntime& source) { return source.processed >= target; });
-}
-
 simaai::neat::RunOptions realtime_options(
     int queue_depth = 3,
     simaai::neat::OverflowPolicy overflow_policy = simaai::neat::OverflowPolicy::KeepLatest) {
@@ -783,9 +587,8 @@ simaai::neat::RunOptions realtime_options(
   return run_options;
 }
 
-simaai::neat::nodes::groups::RtspDecodedInputOptions
-make_source_options(const AppConfig& cfg, const std::string& url, int& fps_out, int& width_out,
-                    int& height_out) {
+void resolve_source_geometry(const AppConfig& cfg, const std::string& url, int& fps_out,
+                             int& width_out, int& height_out) {
   sima_examples::RtspStreamInfo probe;
   const bool needs_probe =
       !cfg.skip_rtsp_probe && (cfg.input_width <= 0 || cfg.input_height <= 0 || cfg.input_fps <= 0);
@@ -794,102 +597,13 @@ make_source_options(const AppConfig& cfg, const std::string& url, int& fps_out, 
     probe_options.payload_type = 96;
     probe_options.latency_ms = cfg.latency_ms;
     probe_options.rtsp_tcp = cfg.tcp;
-    probe_options.debug = cfg.profile;
+    probe_options.debug = app_verbose();
     (void)sima_examples::probe_rtsp_stream_info(url, probe_options, probe);
   }
 
   width_out = cfg.input_width > 0 ? cfg.input_width : probe.width;
   height_out = cfg.input_height > 0 ? cfg.input_height : probe.height;
   fps_out = cfg.input_fps > 0 ? cfg.input_fps : probe.fps;
-
-  simaai::neat::nodes::groups::RtspDecodedInputOptions opt;
-  opt.url = url;
-  opt.latency_ms = cfg.latency_ms;
-  opt.tcp = cfg.tcp;
-  opt.drop_on_latency = cfg.rtsp_drop_on_latency;
-  opt.payload_type = 96;
-  opt.insert_queue = true;
-  opt.out_format = "NV12";
-  opt.decoder_name = "decoder";
-  opt.decoder_raw_output = true;
-  opt.decoder_next_element = "CVU";
-  opt.decoder_input_buffers = cfg.decoder_input_buffers;
-  opt.decoder_tuning = cfg.decoder_tuning;
-  opt.decoder_memory_opt =
-      cfg.decoder_tuning == "low-memory" || cfg.decoder_tuning == "throughput-low-latency";
-  opt.auto_caps_from_stream = !cfg.skip_rtsp_probe;
-  opt.num_buffers = cfg.decoder_buffers;
-  opt.codec = cfg.codec;
-  if (width_out > 0 && height_out > 0) {
-    opt.dec_width = width_out;
-    opt.dec_height = height_out;
-    if (cfg.codec == simaai::neat::nodes::groups::RtspCodec::H264) {
-      opt.fallback_h264_width = width_out;
-      opt.fallback_h264_height = height_out;
-    }
-    opt.output_caps.width = width_out;
-    opt.output_caps.height = height_out;
-  }
-  if (fps_out > 0) {
-    opt.source_fps = cfg.input_fps;
-    opt.dec_fps = fps_out;
-    opt.output_caps.fps = cfg.input_fps;
-  }
-  opt.output_caps.enable = true;
-  opt.output_caps.format = simaai::neat::FormatTag::NV12;
-  opt.output_caps.memory = simaai::neat::CapsMemory::Any;
-  return opt;
-}
-
-simaai::neat::Graph
-make_rtsp_encoded_input(const simaai::neat::nodes::groups::RtspDecodedInputOptions& opt) {
-  simaai::neat::nodes::groups::RtspEncodedInputOptions encoded;
-  encoded.url = opt.url;
-  encoded.codec = opt.codec;
-  encoded.latency_ms = opt.latency_ms;
-  encoded.tcp = opt.tcp;
-  encoded.drop_on_latency = opt.drop_on_latency;
-  encoded.buffer_mode = opt.buffer_mode;
-  encoded.insert_queue = opt.insert_queue;
-  encoded.sync_mode = opt.sync_mode;
-  encoded.auto_caps_from_stream = opt.auto_caps_from_stream;
-  encoded.source_fps = opt.source_fps;
-  encoded.payload_type = opt.payload_type;
-  if (opt.codec != simaai::neat::nodes::groups::RtspCodec::H265) {
-    encoded.h264_parse_config_interval = opt.h264_parse_config_interval;
-    encoded.fallback_h264_fps = opt.dec_fps;
-    encoded.fallback_h264_width = opt.fallback_h264_width;
-    encoded.fallback_h264_height = opt.fallback_h264_height;
-  }
-  return simaai::neat::nodes::groups::RtspEncodedInput(encoded);
-}
-
-simaai::neat::Graph make_decoder(const simaai::neat::nodes::groups::RtspDecodedInputOptions& opt,
-                                 int decoder_buffers) {
-  const bool use_h265 = opt.codec == simaai::neat::nodes::groups::RtspCodec::H265;
-
-  simaai::neat::Graph graph("decoder");
-  simaai::neat::SimaDecodeOptions decode;
-  decode.type = use_h265 ? simaai::neat::SimaDecodeType::H265 : simaai::neat::SimaDecodeType::H264;
-  decode.sima_allocator_type = opt.sima_allocator_type;
-  decode.out_format = simaai::neat::FormatTag::NV12;
-  decode.decoder_name = opt.decoder_name;
-  decode.raw_output = opt.decoder_raw_output;
-  decode.next_element = opt.decoder_next_element;
-  decode.dec_width = opt.dec_width;
-  decode.dec_height = opt.dec_height;
-  decode.dec_fps = opt.dec_fps;
-  decode.num_buffers = decoder_buffers;
-  decode.input_buffers = opt.decoder_input_buffers;
-  decode.decoder_tuning = opt.decoder_tuning;
-  decode.memory_opt = opt.decoder_memory_opt;
-  graph.add(simaai::neat::nodes::SimaDecode(std::move(decode)));
-  if (opt.output_caps.enable) {
-    graph.add(simaai::neat::nodes::CapsRaw("NV12", opt.output_caps.width, opt.output_caps.height,
-                                           opt.output_caps.fps, opt.output_caps.memory));
-  }
-  graph.add(simaai::neat::nodes::Output("detector_frame"));
-  return graph;
 }
 
 std::unique_ptr<simaai::neat::Model> make_model(const AppConfig& cfg) {
@@ -926,14 +640,11 @@ SourceRuntime make_source_runtime(const AppConfig& cfg, int stream_index,
   SourceRuntime source;
   source.index = stream_index;
   source.url = cfg.rtsp_urls[static_cast<std::size_t>(stream_index)];
-  source.source_options =
-      make_source_options(cfg, source.url, source.source_fps, source.frame_w, source.frame_h);
+  resolve_source_geometry(cfg, source.url, source.source_fps, source.frame_w, source.frame_h);
   sima_examples::require(source.frame_w > 0 && source.frame_h > 0,
                          "failed to probe RTSP frame dimensions");
   sima_examples::require(source.source_fps > 0, "failed to probe RTSP frame rate");
   source.labels = labels;
-  source.profile.enabled = cfg.profile;
-  source.profile.stream_index = stream_index;
   source.parsed_boxes.reserve(static_cast<std::size_t>(cfg.max_detections));
 
   if (should_send_metadata(cfg, stream_index)) {
@@ -984,7 +695,6 @@ void connect_source_graph(AppRuntime& app, const AppConfig& cfg, SourceRuntime& 
                           const simaai::neat::Graph& detector_graph) {
   simaai::neat::GraphLinkOptions detector_link;
   detector_link.policy = simaai::neat::GraphLinkPolicy::RealtimeLatestByStream;
-  detector_link.queue_depth = cfg.queue_depth;
   detector_link.stream_id = stream_id_for(source.index);
   detector_link.max_inflight_per_stream = cfg.max_inflight_per_stream;
   detector_link.max_inflight_total = cfg.max_inflight_total;
@@ -994,8 +704,44 @@ void connect_source_graph(AppRuntime& app, const AppConfig& cfg, SourceRuntime& 
   // shared detector, while VideoSender consumes the same read-only encoded AU
   // before the decoder. This keeps video delivery off the application pull
   // path and avoids retaining decoded EV buffers.
-  auto rtsp = make_rtsp_encoded_input(source.source_options);
-  auto decoder = make_decoder(source.source_options, cfg.decoder_buffers);
+  simaai::neat::nodes::groups::RtspEncodedInputOptions rtsp_options;
+  rtsp_options.url = source.url;
+  rtsp_options.codec = cfg.codec;
+  rtsp_options.latency_ms = cfg.latency_ms;
+  rtsp_options.tcp = cfg.tcp;
+  rtsp_options.drop_on_latency = cfg.rtsp_drop_on_latency;
+  rtsp_options.insert_queue = true;
+  rtsp_options.auto_caps_from_stream = !cfg.skip_rtsp_probe;
+  rtsp_options.source_fps = cfg.input_fps;
+  rtsp_options.payload_type = 96;
+  if (cfg.codec == simaai::neat::nodes::groups::RtspCodec::H264) {
+    rtsp_options.fallback_h264_fps = source.source_fps;
+    rtsp_options.fallback_h264_width = source.frame_w;
+    rtsp_options.fallback_h264_height = source.frame_h;
+  }
+  auto rtsp = simaai::neat::nodes::groups::RtspEncodedInput(rtsp_options);
+
+  simaai::neat::SimaDecodeOptions decode_options;
+  decode_options.type = cfg.codec == simaai::neat::nodes::groups::RtspCodec::H265
+                            ? simaai::neat::SimaDecodeType::H265
+                            : simaai::neat::SimaDecodeType::H264;
+  decode_options.out_format = simaai::neat::FormatTag::NV12;
+  decode_options.decoder_name = "decoder";
+  decode_options.raw_output = true;
+  decode_options.next_element = "CVU";
+  decode_options.dec_width = source.frame_w;
+  decode_options.dec_height = source.frame_h;
+  decode_options.dec_fps = source.source_fps;
+  decode_options.num_buffers = cfg.decoder_buffers;
+  decode_options.input_buffers = cfg.decoder_input_buffers;
+  decode_options.decoder_tuning = cfg.decoder_tuning;
+  decode_options.memory_opt =
+      cfg.decoder_tuning == "low-memory" || cfg.decoder_tuning == "throughput-low-latency";
+  simaai::neat::Graph decoder("decoder");
+  decoder.add(simaai::neat::nodes::SimaDecode(std::move(decode_options)));
+  decoder.add(simaai::neat::nodes::CapsRaw("NV12", source.frame_w, source.frame_h, cfg.input_fps,
+                                           simaai::neat::CapsMemory::Any));
+  decoder.add(simaai::neat::nodes::Output("detector_frame"));
   app.graph.connect(rtsp, decoder);
   app.graph.connect(decoder, detector_graph, detector_link);
 
@@ -1063,7 +809,6 @@ void send_metadata_nonblocking(SourceRuntime& source, const std::string& payload
   std::string err;
   const bool sent = source.metadata_sender->send_raw_json(payload, &err);
   if (sent) {
-    ++source.metadata_send_ok;
     return;
   }
   const std::uint64_t failures = ++source.metadata_send_fail;
@@ -1107,9 +852,7 @@ void send_metadata(SourceRuntime& source, const simaai::neat::Sample& frame,
 }
 
 void complete_detection(SourceRuntime& source, const AppConfig& cfg,
-                        AggregateProfile& aggregate_profile,
                         const simaai::neat::Sample& detections) {
-  const double parse_start = sima_examples::time_ms();
   {
     BboxPayloadView payload;
     std::string err;
@@ -1120,39 +863,12 @@ void complete_detection(SourceRuntime& source, const AppConfig& cfg,
     objdet::parse_boxes_strict_into(payload.bytes(), source.frame_w, source.frame_h,
                                     cfg.max_detections, false, source.parsed_boxes);
   }
-  const double parse_end = sima_examples::time_ms();
-
-  ++source.processed;
-  const bool warming_up = source.processed <= cfg.warmup_frames;
-
-  if (!warming_up) {
-    const double metadata_start = sima_examples::time_ms();
-    send_metadata(source, detections, source.parsed_boxes);
-    const double metadata_end = sima_examples::time_ms();
-    source.profile.add(parse_end - parse_start, metadata_end - metadata_start,
-                       static_cast<int>(source.parsed_boxes.size()));
-    aggregate_profile.add();
-  }
+  send_metadata(source, detections, source.parsed_boxes);
 }
 
-void pull_detections(AppRuntime& app, const AppConfig& cfg, AggregateProfile& aggregate_profile) {
-  const int measured_frames = env_int("HIGH_DENSITY_DETECTOR_MEASURE_FRAMES", 0);
-  sima_examples::require(measured_frames >= 0, "measurement frame target must be nonnegative");
-  high_density::MetadataMeasurement measurement(app.sources.size(), cfg.warmup_frames,
-                                                measured_frames);
-  std::uint64_t total_pulls = 0;
-  const int liveness_ms = app_liveness_ms();
-  auto now = std::chrono::steady_clock::now();
-  high_density::DetectionWatchdog watchdog(
-      app.sources.size(), kDetectionPrimingObservations,
-      std::chrono::milliseconds(cfg.initial_detection_timeout_ms),
-      std::chrono::milliseconds(cfg.stream_detection_timeout_ms),
-      std::chrono::milliseconds(cfg.no_detection_timeout_ms), now);
-  auto next_liveness = now + std::chrono::milliseconds(liveness_ms);
-  auto next_watchdog_check = now;
+void pull_detections(AppRuntime& app, const AppConfig& cfg) {
   while (g_stop_requested == 0) {
     bool did_work = false;
-    bool reached_target = false;
     constexpr int kMaxDetectionsPerRound = 64;
     for (int drained = 0; drained < kMaxDetectionsPerRound; ++drained) {
       simaai::neat::Sample detections;
@@ -1174,98 +890,14 @@ void pull_detections(AppRuntime& app, const AppConfig& cfg, AggregateProfile& ag
       }
 
       did_work = true;
-      ++total_pulls;
       const int stream_index =
           stream_index_from_detection(detections, static_cast<int>(app.sources.size()));
-      watchdog.observe(static_cast<std::size_t>(stream_index));
       auto& source = app.sources[static_cast<std::size_t>(stream_index)];
-      const auto sent_before = source.metadata_send_ok;
-      const auto failed_before = source.metadata_send_fail;
-      complete_detection(source, cfg, aggregate_profile, detections);
-      if (measured_frames > 0 &&
-          measurement.observe(
-              stream_index, source.processed, source.metadata_send_ok > sent_before,
-              source.metadata_send_fail > failed_before,
-              std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch())
-                  .count())) {
-        std::vector<std::uint64_t> total_sent;
-        for (const auto& stream : app.sources)
-          total_sent.push_back(stream.metadata_send_ok);
-        const nlohmann::json summary = {{"frames", measurement.total},
-                                        {"elapsed_s", measurement.elapsed},
-                                        {"aggregate_fps", measurement.total / measurement.elapsed},
-                                        {"per_stream_frames", measurement.frames},
-                                        {"per_stream_total_sent", total_sent},
-                                        {"per_stream_send_failures", measurement.failures}};
-        std::cout << "[measurement] " << summary.dump() << std::endl;
-        reached_target = true;
-        break;
-      }
-      if (target_reached(app.sources)) {
-        reached_target = true;
-        break;
-      }
-    }
-
-    now = std::chrono::steady_clock::now();
-    const bool check_watchdog = did_work || now >= next_watchdog_check;
-    const auto failure = check_watchdog ? watchdog.check(now) : high_density::DetectionFailure{};
-    if (check_watchdog) {
-      next_watchdog_check = now + std::chrono::milliseconds(kWatchdogCheckIntervalMs);
-    }
-    if (failure) {
-      using high_density::DetectionFailureKind;
-      if (failure.kind == DetectionFailureKind::GlobalStall) {
-        print_pull_liveness(app.sources, "detector_global_stall", total_pulls);
-        throw std::runtime_error("timed out waiting for any detector progress");
-      }
-
-      const bool startup = failure.kind == DetectionFailureKind::Startup;
-      print_pull_liveness(app.sources,
-                          startup ? "initial_stream_detection_timeout" : "stream_detection_timeout",
-                          total_pulls);
-      std::string stream_list;
-      for (const auto index : failure.streams) {
-        if (!stream_list.empty()) {
-          stream_list += ",";
-        }
-        stream_list += std::to_string(index);
-      }
-      if (startup) {
-        throw std::runtime_error("timed out waiting for two initial detections from streams: " +
-                                 stream_list);
-      }
-      throw std::runtime_error("timed out waiting for detector progress from streams: " +
-                               stream_list);
-    }
-    if (reached_target) {
-      return;
-    }
-    if (liveness_ms > 0) {
-      if (now >= next_liveness) {
-        print_pull_liveness(app.sources, "heartbeat", total_pulls);
-        next_liveness = now + std::chrono::milliseconds(liveness_ms);
-      }
+      complete_detection(source, cfg, detections);
     }
     if (!did_work) {
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-  }
-}
-
-void flush_and_print_runtime_stats(AggregateProfile& aggregate_profile,
-                                   std::vector<SourceRuntime>& sources) {
-  aggregate_profile.flush();
-  for (auto& source : sources) {
-    source.profile.flush();
-    const auto metadata_stats = source.metadata_sender ? source.metadata_sender->stats()
-                                                       : simaai::neat::MetadataSenderStats{};
-    std::cout << "[stream " << source.index << "] processed=" << source.processed
-              << " metadata_send_ok=" << source.metadata_send_ok
-              << " metadata_send_fail=" << source.metadata_send_fail
-              << " metadata_would_block=" << metadata_stats.would_block
-              << " metadata_no_buffer_space=" << metadata_stats.no_buffer_space
-              << " metadata_send_max_ns=" << metadata_stats.max_send_duration_ns << "\n";
   }
 }
 
@@ -1274,9 +906,6 @@ void run_app(const AppConfig& cfg) {
   auto previous_sigint = std::signal(SIGINT, request_stop);
 
   const auto labels = load_labels(cfg.labels_path);
-  AggregateProfile aggregate_profile;
-  aggregate_profile.enabled = cfg.profile;
-  aggregate_profile.stream_count = static_cast<int>(cfg.rtsp_urls.size());
 
   // The realtime fan-in retains the latest pending frame per stream. This small
   // global depth only decouples shared model stages and does not create another
@@ -1294,25 +923,19 @@ void run_app(const AppConfig& cfg) {
     }
     validate_worker_pool_geometry(app.sources);
 
-    if (cfg.profile && app_print_backend()) {
-      std::cout << "Application backend:\n" << app.graph.describe_backend() << "\n";
-    }
-
     // Ordinary build() lowers the explicit encoded VideoSender and decoder
     // fan-out into the fused realtime source pipeline.
     app.run = app.graph.build(
         realtime_options(cfg.queue_depth, simaai::neat::OverflowPolicy::KeepLatest));
 
-    pull_detections(app, cfg, aggregate_profile);
+    pull_detections(app, cfg);
   } catch (...) {
     app.run.close();
-    flush_and_print_runtime_stats(aggregate_profile, app.sources);
     std::signal(SIGINT, previous_sigint);
     throw;
   }
 
   app.run.close();
-  flush_and_print_runtime_stats(aggregate_profile, app.sources);
   std::signal(SIGINT, previous_sigint);
 }
 
@@ -1338,8 +961,6 @@ int main(int argc, char** argv) {
                 << ", inference_async=" << (kInferenceAsync ? "true" : "false")
                 << ", max_inflight_per_stream=" << cfg.max_inflight_per_stream
                 << ", max_inflight_total=" << cfg.max_inflight_total
-                << ", stream_detection_timeout_ms=" << cfg.stream_detection_timeout_ms
-                << ", no_detection_timeout_ms=" << cfg.no_detection_timeout_ms
                 << ", input=" << cfg.input_width << "x" << cfg.input_height << "@" << cfg.input_fps
                 << ", insight_visible_streams=" << visible_streams
                 << ", video_ports=" << cfg.video_port_base << "-" << video_port_last
