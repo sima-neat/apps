@@ -392,7 +392,8 @@ class TestMetadata:
         sender = FakeMetadataSender()
         runtime = StreamRuntime(
             index=0,
-            source_options=None,
+            url="rtsp://example.test/stream",
+            source_fps=30,
             metadata_sender=sender,
             profile=ProfileWindow(False, 0),
             latest_debug_frame=None,

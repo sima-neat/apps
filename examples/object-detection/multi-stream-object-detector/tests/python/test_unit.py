@@ -247,7 +247,7 @@ class TestMetadata:
         runtime = StreamRuntime(
             index=0,
             url="rtsp://127.0.0.1:8554/src1",
-            source_options=None,
+            source_fps=30,
             metadata_sender=sender,
             labels=["person"],
             profile=ProfileWindow(False, 0),
