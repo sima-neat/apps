@@ -122,8 +122,7 @@ void run_case(const std::string& binary, const std::string& model, const std::st
                   start);
   const int timeout_ms = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
 
-  // One receiver round per call. spawn_until() stops the application with SIGINT
-  // once this returns true: the frame target was reached or the receiver failed.
+  // One receiver round: true once the frame target was reached or the receiver failed.
   std::string receiver_failure;
   const auto receiver_done = [&]() -> bool {
     try {
@@ -173,11 +172,20 @@ void run_case(const std::string& binary, const std::string& model, const std::st
     return tracker.complete();
   };
 
-  // spawn_until() sends SIGINT as soon as the receiver is done; remember when, so the
+  // spawn_until() sleeps 100 ms between calls, and each round reads one datagram, so
+  // a single round per call would starve all but the first of the 16 metadata
+  // sockets. Keep receiving for a slice instead; returning between slices still lets
+  // spawn_until() notice an early exit or the overall timeout.
+  // spawn_until() sends SIGINT as soon as this returns true; remember when, so the
   // shutdown can be held to this example's limit rather than the harness's longer grace.
+  constexpr auto kReceiveSlice = std::chrono::seconds(1);
   std::optional<std::chrono::steady_clock::time_point> stop_requested_at;
   const auto ready = [&] {
-    const bool done = receiver_done();
+    const auto slice_end = std::chrono::steady_clock::now() + kReceiveSlice;
+    bool done = false;
+    while (!done && std::chrono::steady_clock::now() < slice_end) {
+      done = receiver_done();
+    }
     if (done) {
       stop_requested_at = std::chrono::steady_clock::now();
     }
