@@ -24,6 +24,11 @@ DEFAULT_MAX_INFLIGHT_TOTAL = 8
 INFERENCE_ASYNC = True
 DEFAULT_DECODER_BUFFERS = 16
 DEFAULT_DECODER_INPUT_BUFFERS = 2
+# runtime.* defaults. The settings are validated so existing configs keep loading,
+# but the application no longer acts on them.
+DEFAULT_INITIAL_DETECTION_TIMEOUT_MS = 30_000
+DEFAULT_STREAM_DETECTION_TIMEOUT_MS = 30_000
+DEFAULT_NO_DETECTION_TIMEOUT_MS = 30_000
 ALL_INSIGHT_STREAMS = -1
 MAX_DETECTION_PULLS_PER_ROUND = 64
 
@@ -64,6 +69,11 @@ class AppConfig:
     metadata_port_base: int = 9100
     insight_visible_streams: int = ALL_INSIGHT_STREAMS
     video_enabled: bool = True
+    profile: bool = False
+    warmup_frames: int = 30
+    initial_detection_timeout_ms: int = DEFAULT_INITIAL_DETECTION_TIMEOUT_MS
+    stream_detection_timeout_ms: int = DEFAULT_STREAM_DETECTION_TIMEOUT_MS
+    no_detection_timeout_ms: int = DEFAULT_NO_DETECTION_TIMEOUT_MS
 
 
 BOX_DECODE_TYPE_NAMES = {
@@ -281,6 +291,14 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("inference.nms_iou must be between 0 and 1")
     if cfg.max_detections <= 0:
         raise ValueError("inference.max_detections must be > 0")
+    if cfg.warmup_frames < 0:
+        raise ValueError("runtime.warmup_frames must be >= 0")
+    if cfg.initial_detection_timeout_ms <= 0:
+        raise ValueError("runtime.initial_detection_timeout_ms must be > 0")
+    if cfg.stream_detection_timeout_ms <= 0:
+        raise ValueError("runtime.stream_detection_timeout_ms must be > 0")
+    if cfg.no_detection_timeout_ms <= 0:
+        raise ValueError("runtime.no_detection_timeout_ms must be > 0")
     if cfg.video_port_base <= 0:
         raise ValueError("output.insight.video_port_base must be > 0")
     if cfg.video_port_base > 65535:
@@ -340,17 +358,11 @@ def load_app_config(config_path: Path) -> AppConfig:
     model = section(raw, "model")
     input_cfg = section(raw, "input")
     runtime = section(raw, "runtime")
-    removed_runtime_keys = {
-        "profile",
-        "warmup_frames",
-        "initial_detection_timeout_ms",
-        "stream_detection_timeout_ms",
-        "no_detection_timeout_ms",
-    }
-    if removed := sorted(removed_runtime_keys.intersection(runtime)):
-        raise ValueError(
-            f"runtime.{removed[0]} was removed; warmup, measurement, and progress "
-            "deadlines belong to the end-to-end test receiver"
+    if runtime:
+        print(
+            "[warn] runtime.* settings are validated for compatibility but have no effect; "
+            "warmup, measurement, and progress deadlines belong to the end-to-end test receiver",
+            file=sys.stderr,
         )
     output = section(raw, "output")
     if "hidden_streams" in output:
@@ -414,6 +426,17 @@ def load_app_config(config_path: Path) -> AppConfig:
         metadata_port_base=int_or(insight, "metadata_port_base", 9100),
         insight_visible_streams=int_or(insight, "max_visible_streams", ALL_INSIGHT_STREAMS),
         video_enabled=bool_or(output, "video_enabled", True),
+        profile=bool_or(runtime, "profile", False),
+        warmup_frames=int_or(runtime, "warmup_frames", 30),
+        initial_detection_timeout_ms=int_or(
+            runtime, "initial_detection_timeout_ms", DEFAULT_INITIAL_DETECTION_TIMEOUT_MS
+        ),
+        stream_detection_timeout_ms=int_or(
+            runtime, "stream_detection_timeout_ms", DEFAULT_STREAM_DETECTION_TIMEOUT_MS
+        ),
+        no_detection_timeout_ms=int_or(
+            runtime, "no_detection_timeout_ms", DEFAULT_NO_DETECTION_TIMEOUT_MS
+        ),
     )
     validate_config(cfg)
     return cfg
