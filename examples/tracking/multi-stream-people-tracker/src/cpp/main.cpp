@@ -436,29 +436,6 @@ bool output_caps_enabled(
   return caps.enable || caps.width > 0 || caps.height > 0 || caps.fps > 0;
 }
 
-simaai::neat::FormatTag encoded_format_tag(simaai::neat::nodes::groups::RtspCodec codec) {
-  return codec == simaai::neat::nodes::groups::RtspCodec::H265 ? simaai::neat::FormatTag::H265
-                                                               : simaai::neat::FormatTag::H264;
-}
-
-simaai::neat::InputOptions
-encoded_decode_input_options(simaai::neat::nodes::groups::RtspCodec codec) {
-  simaai::neat::InputOptions opt;
-  opt.payload_type = simaai::neat::PayloadType::Encoded;
-  opt.format = encoded_format_tag(codec);
-  opt.memory_policy = simaai::neat::InputMemoryPolicy::Ev74;
-  return opt;
-}
-
-simaai::neat::InputOptions
-encoded_video_input_options(simaai::neat::nodes::groups::RtspCodec codec) {
-  simaai::neat::InputOptions opt;
-  opt.payload_type = simaai::neat::PayloadType::Encoded;
-  opt.format = encoded_format_tag(codec);
-  opt.memory_policy = simaai::neat::InputMemoryPolicy::SystemMemory;
-  return opt;
-}
-
 simaai::neat::Graph
 build_encoded_source_graph(const simaai::neat::nodes::groups::RtspDecodedInputOptions& opt) {
   simaai::neat::Graph source("rtsp_encoded_source");
@@ -478,8 +455,7 @@ build_encoded_source_graph(const simaai::neat::nodes::groups::RtspDecodedInputOp
 }
 
 simaai::neat::Graph
-build_decode_graph(const std::string& input_name,
-                   const simaai::neat::nodes::groups::RtspDecodedInputOptions& opt) {
+build_decode_graph(const simaai::neat::nodes::groups::RtspDecodedInputOptions& opt) {
   simaai::neat::Graph decode("decode");
   const bool use_h265 = opt.codec == simaai::neat::nodes::groups::RtspCodec::H265;
 
@@ -498,8 +474,7 @@ build_decode_graph(const std::string& input_name,
   dec.decoder_tuning = opt.decoder_tuning;
   dec.memory_opt = opt.decoder_memory_opt;
 
-  decode.connect(simaai::neat::nodes::Input(input_name, encoded_decode_input_options(opt.codec)),
-                 simaai::neat::nodes::SimaDecode(dec));
+  decode.add(simaai::neat::nodes::SimaDecode(dec));
   if (opt.use_videoconvert) {
     decode.add(simaai::neat::nodes::VideoConvert());
   }
@@ -518,12 +493,9 @@ build_decode_graph(const std::string& input_name,
 }
 
 simaai::neat::Graph
-build_video_sender_graph(const std::string& input_name,
-                         simaai::neat::nodes::groups::RtspCodec codec,
-                         const simaai::neat::nodes::groups::VideoSenderOptions& video_options) {
+build_video_sender_graph(const simaai::neat::nodes::groups::VideoSenderOptions& video_options) {
   simaai::neat::Graph video("video_sender");
-  video.connect(simaai::neat::nodes::Input(input_name, encoded_video_input_options(codec)),
-                simaai::neat::nodes::groups::VideoSender(video_options));
+  video.add(simaai::neat::nodes::groups::VideoSender(video_options));
   return video;
 }
 
@@ -621,7 +593,7 @@ simaai::neat::nodes::groups::VideoSenderOptions make_video_options(const AppConf
   video_options.host = cfg.insight_host;
   video_options.channel = stream_index;
   video_options.video_port_base = cfg.video_port_base;
-  video_options.async = true;
+  video_options.async = false;
   return video_options;
 }
 
@@ -670,19 +642,14 @@ StreamRuntime build_stream_runtime(const AppConfig& cfg, int stream_index, const
 void connect_stream_graph(AppRuntime& app, const AppConfig& cfg, const StreamRuntime& stream,
                           const simaai::neat::Graph& detector_graph) {
   auto source = build_encoded_source_graph(stream.source_options);
-  auto decoder = build_decode_graph("decode_h264", stream.source_options);
-
+  auto decoder = build_decode_graph(stream.source_options);
+  // Direct links let Core render the source, decoder and sender as one pipeline with a tee.
+  app.graph.connect(source, decoder);
   if (cfg.video_enabled) {
-    auto encoded_branch = simaai::neat::graphs::Branch("encoded", {"decode_h264", "video_h264"});
-    app.graph.connect(source, encoded_branch);
-    app.graph.connect(encoded_branch, decoder, realtime_link(stream.index, 3));
-
-    const auto video_options = make_video_options(cfg, stream.index);
-    app.graph.connect(encoded_branch,
-                      build_video_sender_graph("video_h264", cfg.codec, video_options),
-                      realtime_link(stream.index, 3));
-  } else {
-    app.graph.connect(source, decoder, realtime_link(stream.index, 3));
+    simaai::neat::GraphLinkOptions video_link;
+    video_link.policy = simaai::neat::GraphLinkPolicy::RealtimeLatestByStream;
+    app.graph.connect(source, build_video_sender_graph(make_video_options(cfg, stream.index)),
+                      video_link);
   }
 
   const bool save_debug_frames = save_frames_enabled(cfg);

@@ -455,31 +455,7 @@ def build_encoded_source_graph(opt) -> pyneat.Graph:
     return source
 
 
-def encoded_format_tag(codec):
-    return pyneat.Format.H265 if codec == pyneat.RtspCodec.H265 else pyneat.Format.H264
-
-
-def encoded_decode_input_options(codec):
-    opt = pyneat.InputOptions()
-    opt.payload_type = pyneat.PayloadType.Encoded
-    opt.format = encoded_format_tag(codec)
-    if hasattr(pyneat, "InputMemoryPolicy") and hasattr(opt, "memory_policy"):
-        opt.memory_policy = pyneat.InputMemoryPolicy.Ev74
-    return opt
-
-
-def encoded_video_input_options(codec):
-    opt = pyneat.InputOptions()
-    opt.payload_type = pyneat.PayloadType.Encoded
-    opt.format = encoded_format_tag(codec)
-    if hasattr(pyneat, "InputMemoryPolicy") and hasattr(opt, "memory_policy"):
-        opt.memory_policy = pyneat.InputMemoryPolicy.SystemMemory
-    elif hasattr(opt, "use_simaai_pool"):
-        opt.use_simaai_pool = False
-    return opt
-
-
-def build_decode_graph(input_name: str, opt) -> pyneat.Graph:
+def build_decode_graph(opt) -> pyneat.Graph:
     decode = pyneat.Graph("decode")
     use_h265 = opt.codec == pyneat.RtspCodec.H265
 
@@ -494,10 +470,7 @@ def build_decode_graph(input_name: str, opt) -> pyneat.Graph:
     dec.dec_height = opt.dec_height
     dec.dec_fps = opt.source_fps
     dec.num_buffers = opt.num_buffers
-    decode.connect(
-        pyneat.nodes.input(input_name, encoded_decode_input_options(opt.codec)),
-        pyneat.nodes.sima_decode(dec),
-    )
+    decode.add(pyneat.nodes.sima_decode(dec))
     if opt.use_videoconvert:
         decode.add(pyneat.nodes.video_convert())
     if opt.use_videoscale:
@@ -517,12 +490,9 @@ def build_decode_graph(input_name: str, opt) -> pyneat.Graph:
     return decode
 
 
-def build_video_sender_graph(input_name: str, codec, video_options) -> pyneat.Graph:
+def build_video_sender_graph(video_options) -> pyneat.Graph:
     video = pyneat.Graph("video_sender")
-    video.connect(
-        pyneat.nodes.input(input_name, encoded_video_input_options(codec)),
-        pyneat.groups.video_sender(video_options),
-    )
+    video.add(pyneat.groups.video_sender(video_options))
     return video
 
 
@@ -617,7 +587,7 @@ def make_video_options(cfg: AppConfig, stream_index: int):
     video_options.host = cfg.insight_host
     video_options.channel = stream_index
     video_options.video_port_base = cfg.video_port_base
-    video_options.async_ = True
+    video_options.async_ = False
     return video_options
 
 
@@ -661,21 +631,15 @@ def connect_stream_graph(
     app: AppRuntime, cfg: AppConfig, stream: StreamRuntime, detector_graph
 ) -> None:
     source = build_encoded_source_graph(stream.source_options)
-    decoder = build_decode_graph("decode_h264", stream.source_options)
-
+    decoder = build_decode_graph(stream.source_options)
+    # Direct links let Core render the source, decoder and sender as one pipeline with a tee.
+    app.graph.connect(source, decoder)
     if cfg.video_enabled:
-        encoded_branch = pyneat.graphs.branch("encoded", ["decode_h264", "video_h264"])
-        app.graph.connect(source, encoded_branch)
-        app.graph.connect(encoded_branch, decoder, realtime_link(stream.index, 3))
-
-        video_options = make_video_options(cfg, stream.index)
+        video_link = pyneat.GraphLinkOptions()
+        video_link.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
         app.graph.connect(
-            encoded_branch,
-            build_video_sender_graph("video_h264", rtsp_codec(cfg.codec), video_options),
-            realtime_link(stream.index, 3),
+            source, build_video_sender_graph(make_video_options(cfg, stream.index)), video_link
         )
-    else:
-        app.graph.connect(source, decoder, realtime_link(stream.index, 3))
 
     save_debug_frames = save_frames_enabled(cfg)
     decoded_outputs = ["detector_frame", "debug_frame"] if save_debug_frames else ["detector_frame"]

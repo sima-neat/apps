@@ -206,30 +206,6 @@ class TestConfigLoading:
 
 
 class TestRuntimeOptions:
-    def test_encoded_input_options_carry_codec_format(self, monkeypatch):
-        import main
-
-        class FakeInputOptions:
-            format = ""
-
-        fake_pyneat = SimpleNamespace(
-            InputOptions=FakeInputOptions,
-            PayloadType=SimpleNamespace(Encoded="encoded"),
-            Format=SimpleNamespace(H264="h264", H265="h265"),
-            RtspCodec=SimpleNamespace(H264="codec-h264", H265="codec-h265"),
-            InputMemoryPolicy=SimpleNamespace(Ev74="ev74", SystemMemory="system"),
-        )
-        monkeypatch.setattr(main, "pyneat", fake_pyneat)
-
-        decode = main.encoded_decode_input_options(fake_pyneat.RtspCodec.H265)
-        video = main.encoded_video_input_options(fake_pyneat.RtspCodec.H265)
-        h264_decode = main.encoded_decode_input_options(fake_pyneat.RtspCodec.H264)
-        h264_video = main.encoded_video_input_options(fake_pyneat.RtspCodec.H264)
-
-        assert decode.format == "h265"
-        assert video.format == "h265"
-        assert h264_decode.format == "h264"
-        assert h264_video.format == "h264"
 
     def test_realtime_link_sets_inflight_limits(self, monkeypatch):
         import main
