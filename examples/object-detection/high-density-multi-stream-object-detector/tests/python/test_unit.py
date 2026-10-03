@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import socket
 import subprocess
 import sys
 import textwrap
@@ -17,11 +18,14 @@ import yaml
 
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 PYTHON_DIR = EXAMPLE_DIR / "src" / "python"
+TEST_DIR = Path(__file__).resolve().parent
 MAIN_PY = PYTHON_DIR / "main.py"
 MODEL_PATH = "models/yolo26n-det-int8-b1.tar.gz"
 COMMON_DIR = EXAMPLE_DIR / "src" / "common"
 
 main_module = load_example_main(EXAMPLE_DIR, "high_density_multi_stream_object_detector_main")
+if str(TEST_DIR) not in sys.path:
+    sys.path.insert(0, str(TEST_DIR))
 
 pytestmark = pytest.mark.unit
 
@@ -172,8 +176,6 @@ class TestConfigLoading:
         assert cfg.internal_queue_depth == internal_queue_depth
         assert cfg.max_inflight_per_stream == max_inflight_per_stream
         assert cfg.max_inflight_total == max_inflight_total
-        assert cfg.stream_detection_timeout_ms == 30_000
-        assert cfg.no_detection_timeout_ms == 30_000
         assert main_module.effective_insight_visible_streams(cfg) == streams
         assert (cfg.video_port_base, cfg.video_port_base + streams - 1) == (
             9000,
@@ -240,32 +242,6 @@ class TestConfigLoading:
         assert cfg.input_height == 720
         assert cfg.input_fps == 20
         assert cfg.insight_host == "127.0.0.1"
-        assert cfg.warmup_frames == 30
-        assert cfg.stream_detection_timeout_ms == 30_000
-        assert cfg.no_detection_timeout_ms == 30_000
-
-    @pytest.mark.parametrize(
-        ("setting", "message"),
-        [
-            ("no_detection_timeout_ms", "no_detection_timeout_ms must be > 0"),
-            (
-                "stream_detection_timeout_ms",
-                "stream_detection_timeout_ms must be > 0",
-            ),
-        ],
-    )
-    def test_config_rejects_invalid_liveness_settings(
-        self, tmp_path: Path, setting: str, message: str
-    ):
-        config_path = write_config(
-            tmp_path,
-            ["rtsp://127.0.0.1:8554/src1"],
-            runtime_extra=f"{setting}: 0",
-        )
-
-        with pytest.raises(ValueError, match=message):
-            main_module.load_app_config(config_path)
-
     def test_config_rejects_legacy_fan_in_policy(self, tmp_path: Path):
         config_path = write_config(
             tmp_path,
@@ -557,83 +533,23 @@ output:
         assert "queue_depth=4" in result.stdout
         assert "max_inflight_per_stream=4" in result.stdout
         assert "max_inflight_total=8" in result.stdout
-        assert "stream_detection_timeout_ms=30000" in result.stdout
-        assert "no_detection_timeout_ms=30000" in result.stdout
         assert "insight_visible_streams=2" in result.stdout
         assert "decoder_admission=core" in result.stdout
 
 
 class TestRuntimeOptions:
-    def test_source_options_keep_decoded_handoff_device_visible(self, monkeypatch):
-        class FakeRtspDecodedInputOptions:
-            def __init__(self):
-                self.output_caps = SimpleNamespace()
-                self.h264_parse_config_interval = -1
-                self.h264_fps = -1
-                self.h264_width = -1
-                self.h264_height = -1
-                self.buffer_mode = ""
-                self.sync_mode = False
-                self.sima_allocator_type = 2
-
-        fake_pyneat = SimpleNamespace(
-            RtspDecodedInputOptions=FakeRtspDecodedInputOptions,
-            RtspCodec=SimpleNamespace(H264="H264", H265="H265"),
-            Format=SimpleNamespace(NV12="NV12"),
-            CapsMemory=SimpleNamespace(Any="Any"),
-        )
-        monkeypatch.setattr(main_module, "pyneat", fake_pyneat)
-
+    def test_source_geometry_uses_probe_and_explicit_overrides(self, monkeypatch):
         cfg = main_module.AppConfig(
             model_path=MODEL_PATH,
             labels_path=Path("labels.txt"),
             rtsp_urls=["rtsp://127.0.0.1:8554/src1"],
             codec="h265",
         )
-
-        opt, fps, width, height = main_module.make_source_options(
+        assert main_module.resolve_source_geometry(
             cfg, cfg.rtsp_urls[0], fps=30, width=640, height=480
-        )
+        ) == (30, 640, 480)
 
-        assert opt.out_format == "NV12"
-        assert opt.decoder_raw_output is True
-        assert opt.decoder_next_element == "CVU"
-        assert opt.codec == "H265"
-        assert opt.dec_width == 640
-        assert opt.dec_height == 480
-        assert opt.source_fps == 0
-        assert opt.dec_fps == 30
-        assert opt.auto_caps_from_stream is True
-        assert opt.num_buffers == main_module.DEFAULT_DECODER_BUFFERS
-        assert opt.output_caps.enable is True
-        assert opt.output_caps.format == "NV12"
-        assert opt.output_caps.width == 640
-        assert opt.output_caps.height == 480
-        assert opt.output_caps.fps == 0
-        assert opt.output_caps.memory == "Any"
-        assert (fps, width, height) == (30, 640, 480)
-
-    def test_source_options_explicit_caps_override_probe_caps(self, monkeypatch):
-        class FakeRtspDecodedInputOptions:
-            def __init__(self):
-                self.output_caps = SimpleNamespace()
-                self.h264_parse_config_interval = -1
-                self.h264_fps = -1
-                self.h264_width = -1
-                self.h264_height = -1
-                self.buffer_mode = ""
-                self.sync_mode = False
-                self.sima_allocator_type = 2
-
-        fake_pyneat = SimpleNamespace(
-            RtspDecodedInputOptions=FakeRtspDecodedInputOptions,
-            RtspCodec=SimpleNamespace(H264="H264", H265="H265"),
-            Format=SimpleNamespace(NV12="NV12"),
-            CapsMemory=SimpleNamespace(Any="Any"),
-        )
-        monkeypatch.setattr(main_module, "pyneat", fake_pyneat)
-
-        cfg = main_module.AppConfig(
+        configured = main_module.AppConfig(
             model_path=MODEL_PATH,
             labels_path=Path("labels.txt"),
             rtsp_urls=["rtsp://127.0.0.1:8554/src1"],
@@ -647,21 +563,11 @@ class TestRuntimeOptions:
             "probe_rtsp",
             lambda _url: pytest.fail("fully configured source must not be probed"),
         )
-
-        opt, fps, width, height = main_module.make_source_options(cfg, cfg.rtsp_urls[0])
-
-        assert opt.codec == "H264"
-        assert opt.dec_width == 1280
-        assert opt.dec_height == 720
-        assert opt.source_fps == 20
-        assert opt.dec_fps == 20
-        assert opt.fallback_h264_width == 1280
-        assert opt.fallback_h264_height == 720
-        assert getattr(opt, "fallback_h264_fps", -1) == -1
-        assert opt.output_caps.width == 1280
-        assert opt.output_caps.height == 720
-        assert opt.output_caps.fps == 20
-        assert (fps, width, height) == (20, 1280, 720)
+        assert main_module.resolve_source_geometry(configured, configured.rtsp_urls[0]) == (
+            20,
+            1280,
+            720,
+        )
 
     def test_realtime_options_matches_cpp_runtime_defaults(self, monkeypatch):
         class FakeRunOptions:
@@ -737,68 +643,6 @@ class TestRuntimeOptions:
         with pytest.raises(RuntimeError, match="inference_async"):
             main_module.graph_options(2)
 
-    def test_decode_options_apply_input_pool_and_tuning(self, monkeypatch):
-        class FakeGraph:
-            def __init__(self, _name=""):
-                self.nodes = []
-
-            def add(self, node):
-                self.nodes.append(node)
-
-        class FakeDecodeOptions:
-            pass
-
-        fake_pyneat = SimpleNamespace(
-            Graph=FakeGraph,
-            Format=SimpleNamespace(NV12="NV12"),
-            SimaDecodeOptions=FakeDecodeOptions,
-            SimaDecodeType=SimpleNamespace(H264="H264", H265="H265"),
-            RtspCodec=SimpleNamespace(H264="H264", H265="H265"),
-            nodes=SimpleNamespace(
-                sima_decode=lambda options: options,
-                output=lambda name: ("output", name),
-            ),
-        )
-        monkeypatch.setattr(main_module, "pyneat", fake_pyneat)
-
-        source_options = SimpleNamespace(
-            codec="H264",
-            dec_width=1280,
-            dec_height=720,
-            source_fps=0,
-            dec_fps=20,
-            sima_allocator_type=2,
-            decoder_name="decoder",
-            decoder_raw_output=True,
-            decoder_next_element="CVU",
-            output_caps=SimpleNamespace(enable=False),
-        )
-
-        graph = main_module.make_decoder(
-            source_options,
-            decoder_buffers=16,
-            decoder_input_buffers=2,
-            decoder_tuning="throughput-low-latency",
-        )
-
-        decode = graph.nodes[0]
-        assert decode.dec_width == 1280
-        assert decode.dec_height == 720
-        assert decode.dec_fps == 20
-        assert decode.num_buffers == 16
-        assert decode.input_buffers == 2
-        assert decode.decoder_tuning == "throughput-low-latency"
-        assert decode.memory_opt is True
-        assert graph.nodes[1] == ("output", "detector_frame")
-
-        default_graph = main_module.make_decoder(
-            source_options,
-            decoder_buffers=8,
-            decoder_input_buffers=2,
-            decoder_tuning="auto",
-        )
-        assert default_graph.nodes[0].memory_opt is False
-
     def test_graph_realtime_link_stamps_stream_id(self, monkeypatch):
         class FakeGraphLinkOptions:
             pass
@@ -811,15 +655,15 @@ class TestRuntimeOptions:
         )
         monkeypatch.setattr(main_module, "pyneat", fake_pyneat)
 
-        link = main_module.graph_realtime_link(3, "stream7")
+        link = main_module.graph_realtime_link("stream7")
 
         assert link.policy == "latest-by-stream"
-        assert link.queue_depth == 3
+        assert not hasattr(link, "queue_depth")
         assert link.stream_id == "stream7"
         assert link.max_inflight_per_stream == 4
         assert link.max_inflight_total == 8
 
-        tuned = main_module.graph_realtime_link(3, "stream7", 4, 12)
+        tuned = main_module.graph_realtime_link("stream7", 4, 12)
         assert tuned.max_inflight_per_stream == 4
         assert tuned.max_inflight_total == 12
 
@@ -852,164 +696,13 @@ class TestRuntimeDelivery:
             "rtsp://src0",
             None,
             [],
-            None,
-            main_module.StreamProfile(False, 0),
             1280,
             720,
             20,
         )
         app = main_module.AppRuntime(model=None, graph=None, run=ClosedRun(), sources=[source])
-        cfg = SimpleNamespace(
-            initial_detection_timeout_ms=1000,
-            stream_detection_timeout_ms=1000,
-            no_detection_timeout_ms=1000,
-        )
         with pytest.raises(RuntimeError, match="detections output closed unexpectedly"):
-            main_module.pull_detections(app, cfg, main_module.AggregateProfile(False, 0))
-
-    def test_target_completion_cannot_hide_latched_starvation(self, monkeypatch):
-        detections = [0, 0, 1, 1, 0, 1]
-
-        class FakeRun:
-            def pull(self, _name, _timeout_ms):
-                return detections.pop(0)
-
-        target_checks = 0
-
-        def reached_target(_sources):
-            nonlocal target_checks
-            target_checks += 1
-            return not detections
-
-        monkeypatch.setattr(
-            main_module, "stream_index_from_detection", lambda sample, _count: sample
-        )
-        monkeypatch.setattr(main_module, "complete_detection", lambda *_args: None)
-        monkeypatch.setattr(main_module, "target_reached", reached_target)
-        monotonic_values = iter((0.0, 0.0, 0.1, 0.2, 0.3, 0.4, 0.9, 1.4, 1.4))
-        monkeypatch.setattr(main_module.time, "monotonic", lambda: next(monotonic_values))
-        main_module._STOP_REQUESTED = False
-        app = main_module.AppRuntime(
-            model=None, graph=None, run=FakeRun(), sources=[object(), object()]
-        )
-        cfg = SimpleNamespace(
-            initial_detection_timeout_ms=10_000,
-            stream_detection_timeout_ms=1000,
-            no_detection_timeout_ms=10_000,
-        )
-
-        with pytest.raises(
-            RuntimeError, match="timed out waiting for detector progress from streams: 1"
-        ):
-            main_module.pull_detections(app, cfg, object())
-        assert target_checks == 6
-
-    def test_detection_watchdog_tracks_deadlines(self):
-        watchdog = main_module.DetectionWatchdog(
-            3,
-            priming_observations=2,
-            startup_timeout_s=10.0,
-            stream_timeout_s=20.0,
-            no_progress_timeout_s=50.0,
-            start=0.0,
-        )
-        watchdog.observe(0, 1.0)
-        watchdog.observe(0, 1.1)
-        watchdog.observe(2, 2.0)
-        watchdog.observe(1, 3.0)
-        watchdog.observe(1, 3.1)
-        assert not watchdog.check(9.99)
-        startup_failure = watchdog.check(10.0)
-        assert startup_failure.kind is main_module.DetectionFailureKind.STARTUP
-        assert startup_failure.streams == (2,)
-
-        watchdog.observe(2, 10.0)
-        assert not watchdog.startup_complete()
-        late_startup_failure = watchdog.check(10.0)
-        assert late_startup_failure.kind is main_module.DetectionFailureKind.STARTUP
-        assert late_startup_failure.streams == (2,)
-
-        watchdog = main_module.DetectionWatchdog(
-            3,
-            priming_observations=2,
-            startup_timeout_s=100.0,
-            stream_timeout_s=5.0,
-            no_progress_timeout_s=50.0,
-            start=0.0,
-        )
-        watchdog.observe(0, 1.0)
-        watchdog.observe(0, 1.1)
-        watchdog.observe(2, 2.0)
-        watchdog.observe(1, 10.1)
-        watchdog.observe(1, 10.2)
-        watchdog.observe(0, 10.5)
-        watchdog.observe(2, 10.5)
-        assert watchdog.startup_complete()
-        watchdog.observe(0, 14.0)
-        watchdog.observe(2, 14.1)
-        assert not watchdog.check(15.49)
-        watchdog.observe(0, 15.5)
-        watchdog.observe(1, 15.5)
-        starvation = watchdog.check(15.5)
-        assert starvation.kind is main_module.DetectionFailureKind.STREAM_STARVATION
-        assert starvation.streams == (1,)
-
-        global_stall = watchdog.check(65.5)
-        assert global_stall.kind is main_module.DetectionFailureKind.GLOBAL_STALL
-        assert global_stall.streams == ()
-
-        startup_stall_watchdog = main_module.DetectionWatchdog(
-            3,
-            priming_observations=2,
-            startup_timeout_s=100.0,
-            stream_timeout_s=20.0,
-            no_progress_timeout_s=5.0,
-            start=0.0,
-        )
-        startup_stall_watchdog.observe(0, 1.0)
-        assert not startup_stall_watchdog.check(5.999)
-        startup_stall = startup_stall_watchdog.check(6.0)
-        assert startup_stall.kind is main_module.DetectionFailureKind.GLOBAL_STALL
-        assert startup_stall.streams == ()
-
-        recovered_stall_watchdog = main_module.DetectionWatchdog(
-            1,
-            priming_observations=1,
-            startup_timeout_s=100.0,
-            stream_timeout_s=20.0,
-            no_progress_timeout_s=5.0,
-            start=0.0,
-        )
-        recovered_stall_watchdog.observe(0, 5.0)
-        recovered_stall = recovered_stall_watchdog.check(5.0)
-        assert recovered_stall.kind is main_module.DetectionFailureKind.GLOBAL_STALL
-        assert recovered_stall.streams == ()
-
-    def test_detection_watchdog_allows_sustained_48_stream_scheduler_skew(self):
-        stream_count = 48
-        watchdog = main_module.DetectionWatchdog(
-            stream_count,
-            priming_observations=2,
-            startup_timeout_s=60.0,
-            stream_timeout_s=5.0,
-            no_progress_timeout_s=30.0,
-            start=0.0,
-        )
-        for stream_index in range(stream_count):
-            watchdog.observe(stream_index, stream_index * 0.01)
-            watchdog.observe(stream_index, stream_index * 0.01 + 0.001)
-        assert watchdog.startup_complete()
-
-        now = 1.0
-        for _ in range(10):
-            watchdog.observe(0, now)
-            now += 0.01
-            for _ in range(5):
-                for stream_index in range(1, stream_count):
-                    watchdog.observe(stream_index, now)
-                    now += 0.01
-
-        assert not watchdog.check(now)
+            main_module.pull_detections(app, SimpleNamespace())
 
     def test_source_topology_connects_encoded_video_with_a_distinct_latest_link(
         self, monkeypatch
@@ -1017,9 +710,16 @@ class TestRuntimeDelivery:
         class FakeGraph:
             def __init__(self, name=""):
                 self.name = name
+                self.nodes = []
 
             def set_name(self, name):
                 self.name = name
+
+            def add(self, node):
+                self.nodes.append(node)
+
+        class FakeOptions:
+            pass
 
         class FakeGraphLinkOptions:
             def __init__(self):
@@ -1039,32 +739,44 @@ class TestRuntimeDelivery:
         fake_pyneat = SimpleNamespace(
             GraphLinkOptions=FakeGraphLinkOptions,
             GraphLinkPolicy=SimpleNamespace(RealtimeLatestByStream="latest-by-stream"),
-            groups=SimpleNamespace(video_sender=lambda _options: FakeGraph("video_sender")),
+            RtspEncodedInputOptions=FakeOptions,
+            RtspCodec=SimpleNamespace(H264="H264", H265="H265"),
+            SimaDecodeOptions=FakeOptions,
+            SimaDecodeType=SimpleNamespace(H264="H264", H265="H265"),
+            Format=SimpleNamespace(NV12="NV12"),
+            CapsMemory=SimpleNamespace(Any="Any"),
+            Graph=FakeGraph,
+            nodes=SimpleNamespace(
+                sima_decode=lambda options: ("decode", options),
+                caps_raw=lambda *args: ("caps", args),
+                output=lambda name: ("output", name),
+            ),
+            groups=SimpleNamespace(
+                rtsp_encoded_input=lambda options: rtsp_calls.append(options) or rtsp_graph,
+                video_sender=lambda _options: FakeGraph("video_sender"),
+            ),
         )
         rtsp_graph = object()
         rtsp_calls = []
 
-        def make_rtsp_encoded_input(options):
-            rtsp_calls.append(options)
-            return rtsp_graph
-
         monkeypatch.setattr(main_module, "pyneat", fake_pyneat)
-        monkeypatch.setattr(main_module, "make_rtsp_encoded_input", make_rtsp_encoded_input)
-        monkeypatch.setattr(main_module, "make_decoder", lambda *_args: "decoder")
-        monkeypatch.setattr(main_module, "graph_realtime_link", lambda *_args: "latest")
         monkeypatch.setattr(
             main_module, "make_video_options", lambda *_args: SimpleNamespace(video_port=9000)
         )
 
-        cfg = main_module.AppConfig("model", Path("labels"), ["rtsp://src0"])
-        source_options = object()
+        cfg = main_module.AppConfig(
+            "model",
+            Path("labels"),
+            ["rtsp://src0"],
+            decoder_buffers=16,
+            decoder_input_buffers=2,
+            decoder_tuning="throughput-low-latency",
+        )
         source = main_module.SourceRuntime(
             0,
             "rtsp://src0",
             None,
             [],
-            source_options,
-            main_module.StreamProfile(False, 0),
             1280,
             720,
             20,
@@ -1074,11 +786,37 @@ class TestRuntimeDelivery:
 
         main_module.connect_source_graph(app, cfg, source, "detector")
 
-        assert rtsp_calls == [source_options]
+        assert len(rtsp_calls) == 1
+        encoded = rtsp_calls[0]
+        assert encoded.url == source.url
+        assert encoded.codec == "H264"
+        assert encoded.payload_type == 96
+        assert encoded.source_fps == 0
+        assert encoded.fallback_h264_fps == 20
+        assert encoded.fallback_h264_width == 1280
+        assert encoded.fallback_h264_height == 720
         assert len(graph.connections) == 3
         assert graph.connections[0][0] is rtsp_graph
-        assert graph.connections[0][1:] == ("decoder", None)
-        assert graph.connections[1] == ("decoder", "detector", "latest")
+        decoder = graph.connections[0][1]
+        assert isinstance(decoder, FakeGraph)
+        decode = decoder.nodes[0][1]
+        assert decode.type == "H264"
+        assert decode.dec_width == 1280
+        assert decode.dec_height == 720
+        assert decode.dec_fps == 20
+        assert decode.num_buffers == 16
+        assert decode.input_buffers == 2
+        assert decode.decoder_tuning == "throughput-low-latency"
+        assert decode.memory_opt is True
+        assert decoder.nodes[1] == ("caps", ("NV12", 1280, 720, 0, "Any"))
+        detector_link = graph.connections[1][2]
+        assert graph.connections[1][0] is decoder
+        assert graph.connections[1][1] == "detector"
+        assert detector_link.policy == "latest-by-stream"
+        assert detector_link.queue_depth == 16
+        assert detector_link.stream_id == "stream0"
+        assert detector_link.max_inflight_per_stream == 4
+        assert detector_link.max_inflight_total == 8
         encoded_sender = graph.connections[2][1]
         video_link = graph.connections[2][2]
         assert graph.connections[2][0] is rtsp_graph
@@ -1118,8 +856,6 @@ class TestMetadata:
             url="rtsp://127.0.0.1:8554/src17",
             metadata_sender=None,
             labels=["person"],
-            source_options=None,
-            profile=main_module.StreamProfile(False, 16),
             frame_w=100,
             frame_h=100,
             source_fps=30,
@@ -1137,8 +873,6 @@ class TestMetadata:
             url="rtsp://127.0.0.1:8554/src4",
             metadata_sender=FailingSender(),
             labels=[],
-            source_options=None,
-            profile=main_module.StreamProfile(False, 3),
             frame_w=1280,
             frame_h=720,
             source_fps=20,
@@ -1146,7 +880,6 @@ class TestMetadata:
 
         main_module.send_metadata_nonblocking(runtime, "{}")
 
-        assert runtime.metadata_send_ok == 0
         assert runtime.metadata_send_fail == 1
 
     def test_send_metadata_uses_object_detection_contract(self):
@@ -1156,8 +889,6 @@ class TestMetadata:
             url="rtsp://127.0.0.1:8554/src1",
             metadata_sender=sender,
             labels=["person"],
-            source_options=None,
-            profile=main_module.StreamProfile(False, 0),
             frame_w=100,
             frame_h=100,
             source_fps=30,
@@ -1209,8 +940,6 @@ class TestMetadata:
             url="rtsp://127.0.0.1:8554/src1",
             metadata_sender=sender,
             labels=["person"],
-            source_options=None,
-            profile=main_module.StreamProfile(False, 0),
             frame_w=100,
             frame_h=100,
             source_fps=30,
@@ -1224,20 +953,107 @@ class TestMetadata:
         assert "rtp_timestamp" not in payload
 
 
-def test_measurement_excludes_warmup_and_failed_sends():
-    from metadata_measurement import MetadataMeasurement
+def test_received_metadata_tracker_owns_warmup_measurement_and_deadlines():
+    from received_metadata_tracker import ReceivedMetadataTracker
 
-    measurement = MetadataMeasurement(2, 100, 3)
-    assert not measurement.observe(0, 100, False, False, 1.0)
-    assert not measurement.observe(0, 101, True, False, 2.0)
-    assert not measurement.observe(1, 100, False, False, 3.0)
-    assert measurement.total == 0
-    assert not measurement.observe(1, 101, False, True, 4.0)
-    assert not measurement.observe(0, 102, True, False, 5.0)
-    assert not measurement.observe(1, 102, True, False, 6.0)
-    assert measurement.observe(0, 103, True, False, 7.0)
-    assert measurement.summary() == dict(frames=3, elapsed_s=4.0, aggregate_fps=0.75,
-                                        per_stream_frames=[2, 1], per_stream_send_failures=[0, 1])
+    tracker = ReceivedMetadataTracker(2, 2, 3, 100.0, 50.0, 0.0)
+    assert not tracker.observe(0, "0", True, 5.0)
+    assert not tracker.observe(0, "0", True, 6.0)
+    assert not tracker.observe(0, "1", False, 10.0)
+    assert not tracker.observe(1, "0", True, 15.0)
+    assert not tracker.observe(1, "1", False, 20.0)
+    assert tracker.warmup_complete
+    assert not tracker.measurement_started
+    assert tracker.total_measured == 0
+    tracker.start_measurement(20.0)
+    assert not tracker.observe(0, "2", False, 30.0)
+    assert not tracker.observe(1, "2", False, 40.0)
+    assert tracker.observe(0, "3", False, 50.0)
+    assert tracker.measured_frames == [2, 1]
+    assert tracker.elapsed_s == 30.0
+    assert tracker.useful_detection == [True, True]
+
+    deadlines = ReceivedMetadataTracker(2, 1, 10, 100.0, 50.0, 0.0)
+    deadlines.observe(0, "0", False, 25.0)
+    assert deadlines.stalled_streams(100.0) == [1]
+    deadlines.observe(1, "0", False, 100.0)
+    deadlines.start_measurement(100.0)
+    deadlines.observe(0, "1", False, 125.0)
+    assert deadlines.stalled_streams(150.0) == [1]
+
+
+def test_metadata_listener_reports_invalid_message_before_valid_message():
+    from tests.utils.metadata_json_listener import MetadataJsonListener
+
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+
+    with MetadataJsonListener("127.0.0.1", port, 1) as listener:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender:
+            sender.sendto(b"{not json", ("127.0.0.1", port))
+            sender.sendto(
+                json.dumps(
+                    {
+                        "type": "object-detection",
+                        "timestamp": 1,
+                        "frame_id": "frame-1",
+                        "data": {"objects": []},
+                    }
+                ).encode(),
+                ("127.0.0.1", port),
+            )
+        result = listener.wait_for_messages(1.0)
+
+    assert result.success
+    assert not result.timed_out
+    assert "json parse failed" in result.error
+
+
+def test_metadata_listener_marks_empty_poll_as_timeout():
+    from tests.utils.metadata_json_listener import MetadataJsonListener
+
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+
+    with MetadataJsonListener("127.0.0.1", port, 1) as listener:
+        result = listener.wait_for_messages(0.01)
+
+    assert not result.success
+    assert result.timed_out
+
+
+def test_metadata_listener_validates_queued_messages():
+    from tests.utils.metadata_json_listener import MetadataJsonListener
+
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+
+    def payload(frame_id: str) -> bytes:
+        return json.dumps(
+            {
+                "type": "object-detection",
+                "timestamp": 1,
+                "frame_id": frame_id,
+                "data": {"objects": []},
+            }
+        ).encode()
+
+    with MetadataJsonListener("127.0.0.1", port, 1) as listener:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender:
+            sender.sendto(payload("warmup-1"), ("127.0.0.1", port))
+            sender.sendto(payload("warmup-2"), ("127.0.0.1", port))
+            sender.sendto(b"{not json", ("127.0.0.1", port))
+        assert listener.wait_for_messages(1.0).success
+        drained = listener.drain_pending()
+        result = listener.wait_for_messages(0.01)
+
+    assert len(drained.messages) == 1
+    assert "json parse failed" in drained.error
+    assert not result.success
+    assert result.timed_out
 
 
 # ---------------------------------------------------------------------------
