@@ -50,6 +50,7 @@ from cli_think_suite import (  # noqa: E402,F401
     ThinkSplitterTests as CliThinkSplitterTests,
 )
 from asr_metadata_suite import AsrMetadataTests  # noqa: E402,F401
+from talk_controller_suite import SupertonicRetryTests  # noqa: E402,F401
 from readme_package_suite import (  # noqa: E402,F401
     LauncherPackagePathsTests,
     ReadmePackagePathsTests,
@@ -187,6 +188,7 @@ __all__ = [
     "AsrMetadataTests",
     "LauncherPackagePathsTests",
     "ReadmePackagePathsTests",
+    "SupertonicRetryTests",
     "MlaResetPolicyTests",
     "NoThinkTransformTests",
     "ReadExactTests",

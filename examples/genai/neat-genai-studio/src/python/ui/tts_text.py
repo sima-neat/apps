@@ -376,6 +376,21 @@ def _normalize_spaces(text: str) -> str:
     return "".join(out)
 
 
+# Emoji and their companions (variation selectors, zero-width joiner, keycap,
+# skin tones, flags, tag sequences). Speech engines reject them: Supertonic fails
+# the whole request on U+FE0F ("unsupported characters after preprocessing").
+_EMOJI = re.compile(
+    "["
+    "\U0001F000-\U0001FAFF"   # pictographs, emoticons, transport, flags, skin tones
+    "\U000E0020-\U000E007F"   # tag sequences (subdivision flags)
+    "\u2300-\u23FF"           # technical symbols used as emoji (watch, hourglass)
+    "\u2600-\u27BF"           # miscellaneous symbols and dingbats
+    "\u2B00-\u2BFF"           # arrows and stars used as emoji
+    "\uFE0E\uFE0F\u200D\u20E3"
+    "]+"
+)
+
+
 def sanitize_for_tts(text: str) -> str:
     """Strip Markdown and LaTeX from ``text`` and return clean, speakable prose."""
     if not text:
@@ -444,8 +459,10 @@ def sanitize_for_tts(text: str) -> str:
     # 9. Emphasis markers and identifier underscores.
     text = text.replace("_", " ")            # snake_case → "snake case"
 
-    # 10. Final safety sweep: no formatting artifact character may survive.
+    # 10. Final safety sweep: no formatting artifact character may survive, and
+    #     no emoji (speech engines reject them).
     text = _ARTIFACTS.sub(" ", text)
+    text = _EMOJI.sub(" ", text)
 
     # 11. Whitespace and legibility cleanup. (No hyphen-joining: a spaced hyphen is
     #     usually an em-dash / clause break, so fusing "home - it" into "home-it"
