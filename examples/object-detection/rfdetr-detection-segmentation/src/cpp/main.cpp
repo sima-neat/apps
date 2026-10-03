@@ -27,8 +27,6 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <map>
-#include <mutex>
 #include <numeric>
 #include <optional>
 #include <stdexcept>
@@ -135,6 +133,7 @@ struct Config {
   std::string insight_host;
   int video_port = 9000;
   int metadata_port = 9100;
+  int raw_video_max_fps = 60;
 };
 
 struct CliOptions {
@@ -214,6 +213,7 @@ Config load_config(const fs::path& path) {
   cfg.insight_host = raw.string_or("output.insight.host", "");
   cfg.video_port = raw.int_or("output.insight.video_port", 9000);
   cfg.metadata_port = raw.int_or("output.insight.metadata_port", 9100);
+  cfg.raw_video_max_fps = raw.int_or("output.insight.raw_video_max_fps", 60);
 
   sima_examples::require(!cfg.backbone.empty() && !cfg.transformer.empty(),
                          model_prefix + "backbone and transformer must be set");
@@ -234,6 +234,8 @@ Config load_config(const fs::path& path) {
     sima_examples::require(cfg.mask_grid_size >= kMaskSize,
                            "inference.segmentation.mask_grid_size must be >= 108");
   }
+  sima_examples::require(cfg.raw_video_max_fps >= 0,
+                         "output.insight.raw_video_max_fps must be >= 0");
   sima_examples::require(!cfg.insight_host.empty(), "output.insight.host must be set");
   sima_examples::require(cfg.video_port > 0 && cfg.video_port <= 65535 && cfg.metadata_port > 0 &&
                              cfg.metadata_port <= 65535,
@@ -286,12 +288,11 @@ std::vector<float> read_floats(const neat::Tensor& tensor) {
   if (tensor.dtype != neat::TensorDType::Float32 || !tensor.is_dense()) {
     throw std::runtime_error("RF-DETR output must be a dense float32 tensor");
   }
-  auto mapping = tensor.map(neat::MapMode::Read);
-  if (mapping.data == nullptr || mapping.size_bytes % sizeof(float) != 0) {
+  const auto bytes = tensor.dense_bytes_tight();
+  std::vector<float> values(bytes / sizeof(float));
+  if (!tensor.copy_dense_bytes_tight_to(reinterpret_cast<uint8_t*>(values.data()), bytes)) {
     throw std::runtime_error("RF-DETR tensor is not CPU-readable");
   }
-  std::vector<float> values(mapping.size_bytes / sizeof(float));
-  std::memcpy(values.data(), mapping.data, mapping.size_bytes);
   return values;
 }
 
@@ -402,10 +403,6 @@ void copy_identity(const neat::Sample& source, neat::Sample& target) {
   target.dts_ns = source.dts_ns;
   target.duration_ns = source.duration_ns;
   target.attributes = source.attributes;
-}
-
-int64_t identity_key(const neat::Sample& sample) {
-  return sample.frame_id >= 0 ? sample.frame_id : sample.input_seq;
 }
 
 neat::TensorList transformer_inputs(const neat::Model& model, neat::Tensor feature,
@@ -707,7 +704,7 @@ int run(const Config& cfg) {
   std::vector<std::vector<int64_t>> transformer_outputs = {{1, cfg.top_k, 4},
                                                            {1, cfg.top_k, kNumClasses}};
   if (cfg.task == Task::Segmentation) {
-    transformer_outputs.push_back({kMaskSize, kMaskSize, cfg.top_k});
+    transformer_outputs.push_back({1, kMaskSize, kMaskSize, cfg.top_k});
   }
   const auto backbone_inputs = backbone.input_specs();
   const bool valid_contract =
@@ -726,6 +723,8 @@ int run(const Config& cfg) {
   encoded_options.codec = rtsp_codec(cfg.codec);
   encoded_options.latency_ms = cfg.latency_ms;
   encoded_options.tcp = cfg.tcp;
+  if (cfg.tcp)
+    encoded_options.buffer_mode = "none";
   encoded_options.source_fps = geometry.fps;
   if (cfg.codec == SourceCodec::H264) {
     encoded_options.fallback_h264_width = geometry.width;
@@ -740,43 +739,58 @@ int run(const Config& cfg) {
   decode_options.dec_width = geometry.width;
   decode_options.dec_height = geometry.height;
   decode_options.dec_fps = geometry.fps;
+  if (cfg.codec == SourceCodec::Mjpeg) {
+    // Keep free decode surfaces while inference and preview retain frames.
+    decode_options.num_buffers = 32;
+  }
   neat::Graph decode("decoder");
   decode.add(neat::nodes::SimaDecode(decode_options));
 
+  const int preview_fps =
+      cfg.raw_video_max_fps > 0 ? std::min(geometry.fps, cfg.raw_video_max_fps) : geometry.fps;
   auto video_options =
       cfg.codec == SourceCodec::Mjpeg
-          ? neat::nodes::groups::VideoSenderOptions::H264RtpUdpFromRaw(
-                geometry.width, geometry.height, geometry.fps)
+          ? neat::nodes::groups::VideoSenderOptions::H264RtpUdpFromRaw(geometry.width,
+                                                                       geometry.height, preview_fps)
           : neat::nodes::groups::VideoSenderOptions::Passthrough(rtsp_codec(cfg.codec));
   video_options.host = cfg.insight_host;
   video_options.video_port_base = cfg.video_port;
   video_options.channel = 0;
-  video_options.async = true;
-  auto video = neat::nodes::groups::VideoSender(video_options);
+  video_options.async = false;
+  neat::Graph video("video");
+  if (cfg.codec == SourceCodec::Mjpeg) {
+    video.add(neat::nodes::VideoRate());
+    video.add(neat::nodes::CapsRaw("NV12", geometry.width, geometry.height, preview_fps));
+  }
+  video.add(neat::nodes::groups::VideoSender(video_options));
 
   neat::QueueOptions queue_options;
-  queue_options.max_buffers = 1;
+  queue_options.max_buffers = 4;
   queue_options.overflow_policy = neat::OverflowPolicy::KeepLatest;
   neat::Graph inference("inference");
   inference.add(neat::nodes::Queue(queue_options));
   inference.add(backbone.graph());
   neat::Graph backbone_output("backbone_output");
-  backbone_output.add(neat::nodes::Output("backbone", neat::OutputOptions::Latest()));
+  backbone_output.add(neat::nodes::Output("backbone", neat::OutputOptions::EveryFrame(4)));
   inference.add(backbone_output);
 
   neat::Graph source_graph("rfdetr_source");
   source_graph.connect(source, decode);
   if (cfg.codec == SourceCodec::Mjpeg) {
-    source_graph.connect(decode, video);
+    neat::GraphLinkOptions video_link;
+    video_link.policy = neat::GraphLinkPolicy::RealtimeLatestByStream;
+    video_link.max_inflight_per_stream = 2;
+    video_link.max_inflight_total = 2;
+    source_graph.connect(decode, video, video_link);
   } else {
     source_graph.connect(source, video);
   }
   source_graph.connect(decode, inference);
 
   neat::RunOptions transformer_run_options;
-  transformer_run_options.preset = neat::RunPreset::Realtime;
-  transformer_run_options.queue_depth = 1;
-  transformer_run_options.overflow_policy = neat::OverflowPolicy::KeepLatest;
+  transformer_run_options.preset = neat::RunPreset::Balanced;
+  transformer_run_options.queue_depth = 4;
+  transformer_run_options.overflow_policy = neat::OverflowPolicy::Block;
   transformer_run_options.output_memory = neat::OutputMemory::Owned;
   neat::TensorList transformer_seed;
   for (const auto& spec : transformer.input_specs()) {
@@ -807,8 +821,6 @@ int run(const Config& cfg) {
 
   const int proposal_count = cfg.feature_size * cfg.feature_size;
   std::string transformer_bridge_error;
-  std::mutex identity_mutex;
-  std::map<int64_t, int64_t> source_pts;
   std::thread transformer_bridge([&] {
     try {
       while (!g_stop.load()) {
@@ -826,14 +838,7 @@ int run(const Config& cfg) {
         transformer_sample.tensors =
             transformer_inputs(transformer, outputs.feature, gathered_tensor, cfg.top_k);
         copy_identity(*sample, transformer_sample);
-        {
-          std::lock_guard lock(identity_mutex);
-          source_pts[identity_key(*sample)] = sample->pts_ns;
-          if (source_pts.size() > 8U) {
-            source_pts.erase(source_pts.begin());
-          }
-        }
-        if (!transformer_runner.try_push(transformer_sample)) {
+        if (!transformer_runner.push(transformer_sample)) {
           if (!g_stop.load()) {
             throw std::runtime_error("Transformer rejected input");
           }
@@ -866,16 +871,7 @@ int run(const Config& cfg) {
                                            cfg.max_results, cfg.top_k))
               : segmentation_metadata(output, geometry.width, geometry.height, labels, cfg);
       const int64_t source_frame_id = sample.frame_id;
-      int64_t source_pts_ns = sample.pts_ns;
-      {
-        std::lock_guard lock(identity_mutex);
-        const auto found = source_pts.find(identity_key(sample));
-        if (found != source_pts.end()) {
-          source_pts_ns = found->second;
-          source_pts.erase(found);
-        }
-      }
-      const int64_t timestamp_ms = source_pts_ns >= 0 ? source_pts_ns / 1'000'000 : -1;
+      const int64_t timestamp_ms = sample.pts_ns >= 0 ? sample.pts_ns / 1'000'000 : -1;
       const std::string frame_id = source_frame_id >= 0 ? std::to_string(source_frame_id) : "";
       std::string error;
       const char* metadata_type = cfg.task == Task::Detection ? "object-detection" : "segmentation";
@@ -890,16 +886,18 @@ int run(const Config& cfg) {
     }
   } catch (...) {
     g_stop.store(true);
-    source_run.stop();
+    transformer_runner.close_input();
     transformer_bridge.join();
     transformer_runner.close();
+    source_run.stop();
     throw;
   }
 
   g_stop.store(true);
-  source_run.stop();
+  transformer_runner.close_input();
   transformer_bridge.join();
   transformer_runner.close();
+  source_run.stop();
   if (!transformer_bridge_error.empty()) {
     throw std::runtime_error(transformer_bridge_error);
   }

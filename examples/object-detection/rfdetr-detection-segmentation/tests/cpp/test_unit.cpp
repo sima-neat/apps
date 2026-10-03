@@ -42,6 +42,30 @@ int main(int argc, char** argv) {
     ++failures;
   }
 
+  auto shared_output = neat::Tensor::from_vector(
+      std::vector<float>{99.0F, 1.0F, 2.0F, 3.0F, 4.0F, 88.0F}, {6}, neat::TensorMemory::CPU);
+  shared_output.shape = {2};
+  shared_output.byte_offset = sizeof(float);
+  if (read_floats(shared_output) != std::vector<float>{1.0F, 2.0F}) {
+    std::cerr << "[FAIL] tensor reads must exclude adjacent output storage\n";
+    ++failures;
+  }
+  auto padded_output = neat::Tensor::from_vector(
+      std::vector<float>{1.0F, 2.0F, 99.0F, 3.0F, 4.0F, 88.0F}, {6}, neat::TensorMemory::CPU);
+  padded_output.shape = {2, 2};
+  padded_output.strides_bytes = {3 * sizeof(float), sizeof(float)};
+  if (read_floats(padded_output) != std::vector<float>{1.0F, 2.0F, 3.0F, 4.0F}) {
+    std::cerr << "[FAIL] tensor reads must respect padded row strides\n";
+    ++failures;
+  }
+  shared_output.shape = {8};
+  try {
+    (void)read_floats(shared_output);
+    std::cerr << "[FAIL] tensor reads must reject insufficient storage\n";
+    ++failures;
+  } catch (const std::exception&) {
+  }
+
   std::vector<float> scores(305, 0.0F);
   scores[3] = 2.0F;
   scores[4] = 2.0F;
@@ -98,7 +122,7 @@ int main(int argc, char** argv) {
   TransformerOutputs segmentation_output{
       neat::Tensor::from_vector(segmentation_boxes, {1, 200, 4}, neat::TensorMemory::CPU),
       neat::Tensor::from_vector(segmentation_logits, {1, 200, 91}, neat::TensorMemory::CPU),
-      neat::Tensor::from_vector(masks, {108, 108, 200}, neat::TensorMemory::CPU),
+      neat::Tensor::from_vector(masks, {1, 108, 108, 200}, neat::TensorMemory::CPU),
   };
   for (const int grid_size : {108, 432, 640}) {
     segmentation_config.mask_grid_size = grid_size;

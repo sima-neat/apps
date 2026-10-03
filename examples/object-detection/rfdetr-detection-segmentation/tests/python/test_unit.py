@@ -40,9 +40,9 @@ def test_transformer_inputs_copy_only_cpu_features(monkeypatch, storage_kind):
         cvu=Mock(return_value=device_feature),
     )
     gathered = SimpleNamespace(shape=[1, 2, 4])
-    model = SimpleNamespace(input_specs=lambda: [gathered, device_feature])
+    input_shapes = (tuple(gathered.shape), tuple(device_feature.shape))
 
-    inputs = main.transformer_inputs(model, feature, gathered, 2)
+    inputs = main.transformer_inputs(input_shapes, feature, gathered, 2)
 
     assert inputs[0] is gathered
     if storage_kind == "GstSample":
@@ -110,6 +110,7 @@ def test_config_selects_one_model_pair(tmp_path, variant, size):
 
     selected = main.load_config(path)
 
+    assert selected.raw_video_max_fps == 60
     assert selected.variant == variant
     assert selected.input_size == size
     assert selected.backbone.startswith(variant)
@@ -203,8 +204,8 @@ def test_segmentation_metadata_contains_polygons(mask_grid_size):
     logits[0, 0, 0] = 12.0
     logits[0, 0, 1] = 11.0
     logits[0, 1, 1] = 10.0
-    masks = np.full((108, 108, 200), -20.0, dtype=np.float32)
-    masks[40:68, 40:68, 0] = 10.0
+    masks = np.full((1, 108, 108, 200), -20.0, dtype=np.float32)
+    masks[0, 40:68, 40:68, 0] = 10.0
 
     payload = main.segmentation_metadata(
         boxes, logits, masks, 1280, 720, labels, 0.3, 1, 0.08, mask_grid_size
@@ -218,3 +219,17 @@ def test_segmentation_metadata_contains_polygons(mask_grid_size):
     assert segment["mask_format"] == "polygon"
     assert len(segment["mask"]) >= 3
     assert all(0 <= x < 1280 and 0 <= y < 720 for x, y in segment["mask"])
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("limit", [0, 30, -1])
+def test_raw_preview_rate_configuration(tmp_path, limit):
+    raw = yaml.safe_load((EXAMPLE_DIR / "src/common/config.yaml").read_text())
+    raw["output"]["insight"]["raw_video_max_fps"] = limit
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(raw))
+    if limit < 0:
+        with pytest.raises(ValueError, match="raw_video_max_fps"):
+            main.load_config(path)
+    else:
+        assert main.load_config(path).raw_video_max_fps == limit

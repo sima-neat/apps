@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import signal
 import subprocess
 import sys
@@ -48,6 +49,7 @@ class Config:
     insight_host: str
     video_port: int
     metadata_port: int
+    raw_video_max_fps: int
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -132,6 +134,7 @@ def load_config(path: Path) -> Config:
         insight_host=str(insight.get("host", "")),
         video_port=int(insight.get("video_port", 9000)),
         metadata_port=int(insight.get("metadata_port", 9100)),
+        raw_video_max_fps=int(insight.get("raw_video_max_fps", 60)),
     )
     if not cfg.backbone or not cfg.transformer:
         raise ValueError(f"model.{task} backbone and transformer must be set")
@@ -141,6 +144,8 @@ def load_config(path: Path) -> Config:
         raise ValueError("source.rtsp_url must be an RTSP URL")
     if cfg.latency_ms < 0 or cfg.frames < 0:
         raise ValueError("source.latency_ms and inference.frames must be >= 0")
+    if cfg.raw_video_max_fps < 0:
+        raise ValueError("output.insight.raw_video_max_fps must be >= 0")
     if cfg.width < 0 or cfg.height < 0 or cfg.fps < 0:
         raise ValueError("source.width, source.height, and source.fps must be >= 0")
     if not 0.0 <= cfg.min_score <= 1.0:
@@ -408,7 +413,7 @@ def split_backbone(sample, proposal_count: int):
     feature = scores = proposals = None
     for tensor in collect_tensors(sample):
         shape = _shape(tensor)
-        elements = int(np.prod(shape))
+        elements = math.prod(shape)
         if len(shape) >= 3 and shape[-1] == 256:
             feature = tensor
         elif shape[-1:] == (4,) and elements == proposal_count * 4:
@@ -424,7 +429,7 @@ def split_transformer(sample, cfg: Config):
     boxes = logits = masks = None
     for tensor in collect_tensors(sample):
         shape = _shape(tensor)
-        elements = int(np.prod(shape))
+        elements = math.prod(shape)
         if elements == cfg.top_k * 4:
             boxes = tensor
         elif elements == cfg.top_k * NUM_CLASSES:
@@ -445,18 +450,13 @@ def copy_identity(source, target) -> None:
     target.attributes = source.attributes
 
 
-def identity_key(sample) -> int:
-    return sample.frame_id if sample.frame_id >= 0 else sample.input_seq
-
-
-def transformer_inputs(model, feature, gathered, top_k: int) -> list:
+def transformer_inputs(input_shapes, feature, gathered, top_k: int) -> list:
     # Keep SiMa-backed features zero-copy; Core may return a CPU-owned output.
     if feature.storage.kind in (pyneat.StorageKind.CpuOwned, pyneat.StorageKind.CpuExternal):
         feature = feature.cvu()
     ordered = []
-    for spec in model.input_specs():
-        expected = tuple(int(value) for value in spec.shape)
-        elements = int(np.prod(expected))
+    for expected in input_shapes:
+        elements = math.prod(expected)
         tensor = gathered if elements == top_k * 4 else feature
         current = _shape(tensor)
         if current == (1, *expected):
@@ -522,7 +522,7 @@ def run(cfg: Config) -> int:
     side = cfg.feature_size
     transformer_outputs = [[1, cfg.top_k, 4], [1, cfg.top_k, NUM_CLASSES]]
     if cfg.task == "segmentation":
-        transformer_outputs.append([MASK_SIZE, MASK_SIZE, cfg.top_k])
+        transformer_outputs.append([1, MASK_SIZE, MASK_SIZE, cfg.top_k])
     expected_shapes = (
         [[1, side, side, 256], [1, side * side], [1, side * side, 4]],
         [[side, side, 256], [1, cfg.top_k, 4]],
@@ -552,6 +552,8 @@ def run(cfg: Config) -> int:
     encoded_options.codec = source_codec
     encoded_options.latency_ms = cfg.latency_ms
     encoded_options.tcp = cfg.tcp
+    if cfg.tcp:
+        encoded_options.buffer_mode = "none"
     encoded_options.source_fps = fps
     if cfg.codec == "h264":
         encoded_options.fallback_h264_width = width
@@ -565,42 +567,54 @@ def run(cfg: Config) -> int:
     decode_options.dec_width = width
     decode_options.dec_height = height
     decode_options.dec_fps = fps
+    if cfg.codec == "mjpeg":
+        # Keep free decode surfaces while inference and preview retain frames.
+        decode_options.num_buffers = 32
     decoder = pyneat.Graph("decoder")
     decoder.add(pyneat.nodes.sima_decode(decode_options))
 
+    preview_fps = min(fps, cfg.raw_video_max_fps) if cfg.raw_video_max_fps else fps
     video_options = (
-        pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(width, height, fps)
+        pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(width, height, preview_fps)
         if cfg.codec == "mjpeg"
         else pyneat.VideoSenderOptions.passthrough(source_codec)
     )
     video_options.host = cfg.insight_host
     video_options.video_port_base = cfg.video_port
     video_options.channel = 0
-    video_options.async_ = True
-    video = pyneat.groups.video_sender(video_options)
+    video_options.async_ = False
+    video = pyneat.Graph("video")
+    if cfg.codec == "mjpeg":
+        video.add(pyneat.nodes.video_rate())
+        video.add(pyneat.nodes.caps_raw("NV12", width, height, preview_fps))
+    video.add(pyneat.groups.video_sender(video_options))
 
     queue_options = pyneat.QueueOptions()
-    queue_options.max_buffers = 1
+    queue_options.max_buffers = 4
     queue_options.overflow_policy = pyneat.OverflowPolicy.KeepLatest
     inference_graph = pyneat.Graph("inference")
     inference_graph.add(pyneat.nodes.queue(queue_options))
     inference_graph.add(backbone.graph())
     backbone_output = pyneat.Graph("backbone_output")
-    backbone_output.add(pyneat.nodes.output("backbone", pyneat.OutputOptions.latest()))
+    backbone_output.add(pyneat.nodes.output("backbone", pyneat.OutputOptions.every_frame(4)))
     inference_graph.add(backbone_output)
 
     source_graph = pyneat.Graph("rfdetr_source")
     source_graph.connect(source, decoder)
     if cfg.codec == "mjpeg":
-        source_graph.connect(decoder, video)
+        video_link = pyneat.GraphLinkOptions()
+        video_link.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
+        video_link.max_inflight_per_stream = 2
+        video_link.max_inflight_total = 2
+        source_graph.connect(decoder, video, video_link)
     else:
         source_graph.connect(source, video)
     source_graph.connect(decoder, inference_graph)
 
     transformer_run_options = pyneat.RunOptions()
-    transformer_run_options.preset = pyneat.RunPreset.Realtime
-    transformer_run_options.queue_depth = 1
-    transformer_run_options.overflow_policy = pyneat.OverflowPolicy.KeepLatest
+    transformer_run_options.preset = pyneat.RunPreset.Balanced
+    transformer_run_options.queue_depth = 4
+    transformer_run_options.overflow_policy = pyneat.OverflowPolicy.Block
     transformer_run_options.output_memory = pyneat.OutputMemory.Owned
     dummy_inputs = [
         pyneat.Tensor.from_numpy(
@@ -636,9 +650,8 @@ def run(cfg: Config) -> int:
 
     stop = threading.Event()
     bridge_error: list[BaseException] = []
-    identity_lock = threading.Lock()
-    source_pts: dict[int, int] = {}
     proposal_count = cfg.feature_size**2
+    transformer_input_shapes = tuple(tuple(spec.shape) for spec in transformer.input_specs())
 
     def transformer_bridge() -> None:
         try:
@@ -656,15 +669,10 @@ def run(cfg: Config) -> int:
                 transformer_sample = pyneat.Sample()
                 transformer_sample.kind = pyneat.SampleKind.TensorSet
                 transformer_sample.tensors = transformer_inputs(
-                    transformer, feature, gathered_tensor, cfg.top_k
+                    transformer_input_shapes, feature, gathered_tensor, cfg.top_k
                 )
                 copy_identity(sample, transformer_sample)
-                key = identity_key(sample)
-                with identity_lock:
-                    source_pts[key] = sample.pts_ns
-                    if len(source_pts) > 8:
-                        source_pts.pop(next(iter(source_pts)))
-                if not transformer_runner.try_push_samples(transformer_sample):
+                if not transformer_runner.push_samples(transformer_sample):
                     if not stop.is_set():
                         raise RuntimeError("Transformer rejected input")
                     break
@@ -723,9 +731,7 @@ def run(cfg: Config) -> int:
                 )
                 metadata_type = "segmentation"
             source_frame_id = sample.frame_id
-            with identity_lock:
-                source_pts_ns = source_pts.pop(identity_key(sample), sample.pts_ns)
-            timestamp_ms = source_pts_ns // 1_000_000 if source_pts_ns >= 0 else -1
+            timestamp_ms = sample.pts_ns // 1_000_000 if sample.pts_ns >= 0 else -1
             frame_id = str(source_frame_id) if source_frame_id >= 0 else ""
             if not metadata_sender.send_metadata(
                 metadata_type,
@@ -742,9 +748,10 @@ def run(cfg: Config) -> int:
             raise bridge_error[0]
     finally:
         stop.set()
-        source_run.stop()
+        transformer_runner.close_input()
+        transformer_worker.join()
         transformer_runner.close()
-        transformer_worker.join(timeout=5)
+        source_run.stop()
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
         _ = (backbone, source_graph)
