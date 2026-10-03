@@ -11,6 +11,7 @@
 #include <cmath>
 #include <filesystem>
 #include <iostream>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -22,6 +23,8 @@ namespace fs = std::filesystem;
 
 namespace {
 constexpr const char* kExample = "high-density-multi-stream-object-detector";
+// Clean exit after SIGINT must take no longer than this, as in the Python E2E.
+constexpr long long kSigintExitLimitMs = 5000;
 
 void require(bool condition, const std::string& message) {
   if (!condition)
@@ -161,12 +164,31 @@ void run_case(const std::string& binary, const std::string& model, const std::st
     return tracker.complete();
   };
 
-  const auto result =
-      spawn_until(binary, {"--config", config.string()}, receiver_done, timeout_ms);
+  // spawn_until() sends SIGINT as soon as the receiver is done; remember when, so the
+  // shutdown can be held to this example's limit rather than the harness's longer grace.
+  std::optional<std::chrono::steady_clock::time_point> stop_requested_at;
+  const auto ready = [&] {
+    const bool done = receiver_done();
+    if (done) {
+      stop_requested_at = std::chrono::steady_clock::now();
+    }
+    return done;
+  };
+
+  const auto result = spawn_until(binary, {"--config", config.string()}, ready, timeout_ms);
   const std::string shutdown_problem = exit_problem(result);
   require(shutdown_problem.empty(), "application did not shut down cleanly: " +
                                         shutdown_problem + "\n" + result.stdout_text +
                                         result.stderr_text);
+  if (result.stopped_by_harness && stop_requested_at) {
+    const auto shutdown_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                 std::chrono::steady_clock::now() - *stop_requested_at)
+                                 .count();
+    require(shutdown_ms <= kSigintExitLimitMs,
+            "application took " + std::to_string(shutdown_ms) + " ms to exit after SIGINT; " +
+                "the limit is " + std::to_string(kSigintExitLimitMs) + " ms\n" +
+                result.stdout_text + result.stderr_text);
+  }
   if (receiver_failure.empty() && !result.stopped_by_harness) {
     receiver_failure = "application exited before the receiver reached its frame target";
   }
