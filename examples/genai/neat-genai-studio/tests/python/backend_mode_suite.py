@@ -93,6 +93,23 @@ class HealthPayloadTests(unittest.TestCase):
         self.assertEqual(body["chat_models_loaded"], ["Gemma"])
         self.assertEqual([e["key"] for e in body["tts"]["engines"]], ["supertonic", "piper-tts"])
 
+    def test_reports_the_api_version(self):
+        body = health_payload(mode="backend-only", version="1.2", status=self.STATUS, engines=self.ENGINES)
+        self.assertEqual(body["api_version"], 1)
+
+    def test_lists_an_engine_that_failed_to_load_with_its_error(self):
+        engines = [{"key": "piper-tts", "loaded": True}, {"key": "browser", "loaded": True}]
+        body = health_payload(mode="backend-only", version="1.2", status=self.STATUS, engines=engines,
+                              engine_failures={"supertonic": "accelerator runtime is not available"})
+        self.assertIn({"key": "supertonic", "loaded": False, "error": "accelerator runtime is not available"},
+                      body["tts"]["engines"])
+        self.assertTrue(body["ok"])  # the model server is fine; one voice engine is not
+
+    def test_an_engine_that_loaded_is_not_also_listed_as_failed(self):
+        body = health_payload(mode="studio", version="1.2", status=self.STATUS, engines=self.ENGINES,
+                              engine_failures={"supertonic": "stale"})
+        self.assertEqual([e["key"] for e in body["tts"]["engines"]], ["supertonic", "piper-tts"])
+
     def test_unreachable(self):
         body = health_payload(mode="studio", version="1.2", status=None, engines=[], error="refused")
         self.assertFalse(body["ok"])
