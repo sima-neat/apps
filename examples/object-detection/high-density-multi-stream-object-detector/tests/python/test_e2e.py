@@ -2,15 +2,18 @@
 
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 
 from tests.utils.metadata_json_listener import MetadataJsonListener
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from received_metadata_tracker import ReceivedMetadataTracker
 
 EXAMPLE_DIR = Path(__file__).resolve().parents[2]
 
@@ -67,6 +70,19 @@ def select_source(urls, codec):
     pytest.fail(f"No 720p30 {codec} source without B-frames: {errors}")
 
 
+def validate_metadata_message(message, base_port):
+    payload = json.loads(message.payload)
+    index = message.port - base_port
+    assert 0 <= index < 16, "metadata arrived on an unexpected port"
+    assert payload["type"] == "object-detection"
+    assert isinstance(payload["data"]["objects"], list)
+    assert payload["stream_index"] == index
+    assert payload["stream_id"] == f"stream{index}"
+    assert payload["frame_id"] and payload["pts_ns"] >= 0
+    assert "rtp_timestamp" in payload
+    return index, payload
+
+
 @pytest.mark.e2e
 @pytest.mark.parametrize("codec", ["h264", "h265"])
 def test_metadata_throughput(
@@ -78,7 +94,6 @@ def test_metadata_throughput(
         {
             "streams": [url] * 16,
             "input": {"codec": codec, "width": 1280, "height": 720, "fps": 0},
-            "runtime": {"warmup_frames": 100, "profile": False},
             "output": {
                 "video_enabled": True,
                 "insight": {
@@ -92,67 +107,110 @@ def test_metadata_throughput(
             },
         }
     )
-    env = dict(
-        os.environ,
-        HIGH_DENSITY_DETECTOR_MEASURE_FRAMES="5000",
-        HIGH_DENSITY_DETECTOR_FRAMES_PER_STREAM="0",
+    start = time.monotonic()
+    tracker = ReceivedMetadataTracker(
+        16,
+        100,
+        5000,
+        int(
+            os.environ.get(
+                "SIMANEAT_APPS_HIGH_DENSITY_INITIAL_PROGRESS_TIMEOUT_MS", "90000"
+            )
+        )
+        / 1000,
+        int(
+            os.environ.get(
+                "SIMANEAT_APPS_HIGH_DENSITY_STREAM_PROGRESS_TIMEOUT_MS", "30000"
+            )
+        )
+        / 1000,
+        start,
     )
-    messages = []
-    with (
-        MetadataJsonListener("127.0.0.1", port, num_ports=16) as listener,
-        ThreadPoolExecutor(max_workers=1) as executor,
-    ):
-        process = executor.submit(
-            subprocess.run,
+    receiver_failure = ""
+    forced_kill = False
+    with MetadataJsonListener("127.0.0.1", port, num_ports=16) as listener:
+        process = subprocess.Popen(
             [
                 sys.executable,
                 str(EXAMPLE_DIR / "src/python/main.py"),
                 "--config",
                 str(config),
             ],
-            env=env,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=test_timeout_ms / 1000,
-            check=False,
         )
-        drain_until = float("inf")
-        while True:
-            metadata = listener.wait_for_messages(0.2)
-            messages.extend(metadata.messages)
-            if process.done():
-                now = time.monotonic()
-                if not metadata.messages or now >= drain_until:
+        deadline = start + test_timeout_ms / 1000
+        try:
+            while not tracker.complete:
+                metadata = listener.wait_for_messages(0.2)
+                if metadata.error and not metadata.timed_out:
+                    receiver_failure = f"metadata listener failed: {metadata.error}"
                     break
-                drain_until = min(drain_until, now + 1)
-        result = process.result()
-    assert result.returncode == 0, result.stdout + result.stderr
-    received = [set() for _ in range(16)]
-    detected_streams = set()
-    for message in messages:
-        payload = json.loads(message.payload)
-        index = message.port - port
-        assert payload["stream_index"] == index
-        assert payload["stream_id"] == f"stream{index}"
-        assert payload["frame_id"] and payload["pts_ns"] >= 0
-        assert "rtp_timestamp" in payload
-        received[index].add(payload["frame_id"])
-        if message.object_count > 0:
-            detected_streams.add(index)
-    assert detected_streams == set(range(16)), "missing detections on one or more streams"
-    summaries = [
-        json.loads(line.removeprefix("[measurement] "))
-        for line in result.stdout.splitlines()
-        if line.startswith("[measurement] ")
-    ]
-    assert len(summaries) == 1, result.stdout
-    summary = summaries[0]
+                for message in metadata.messages:
+                    index, payload = validate_metadata_message(message, port)
+                    tracker.observe(
+                        index,
+                        payload["frame_id"],
+                        message.object_count > 0,
+                        time.monotonic(),
+                    )
+                    if tracker.warmup_complete and not tracker.measurement_started:
+                        # Timing includes the flush, so concurrent arrivals can only lower FPS.
+                        tracker.start_measurement(time.monotonic())
+                        drained = listener.drain_pending()
+                        assert not drained.error, drained.error
+                        for queued_message in drained.messages:
+                            validate_metadata_message(queued_message, port)
+                        break
+                    if tracker.complete:
+                        break
+
+                now = time.monotonic()
+                stalled = tracker.stalled_streams(now)
+                if stalled:
+                    phase = "ongoing" if tracker.measurement_started else "initial"
+                    receiver_failure = (
+                        f"{phase} metadata progress timeout; missing streams={stalled}; "
+                        f"warmup={tracker.warmup_frames}; "
+                        f"measured={tracker.measured_frames}"
+                    )
+                    break
+                if process.poll() is not None:
+                    receiver_failure = (
+                        "application exited before the receiver reached its frame target"
+                    )
+                    break
+                if now >= deadline:
+                    receiver_failure = (
+                        f"total test timeout; warmup={tracker.warmup_frames}; "
+                        f"measured={tracker.measured_frames}"
+                    )
+                    break
+        finally:
+            if process.poll() is None:
+                process.send_signal(signal.SIGINT)
+            try:
+                stdout, stderr = process.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                forced_kill = True
+                process.kill()
+                stdout, stderr = process.communicate()
+
+    assert not forced_kill, f"application required forced kill after SIGINT\n{stdout}{stderr}"
+    assert process.returncode == 0, stdout + stderr
+    assert not receiver_failure, f"{receiver_failure}\n{stdout}{stderr}"
+    assert tracker.complete
+    assert all(tracker.useful_detection), "missing useful detections on one or more streams"
+    assert tracker.total_measured == 5000
+    assert tracker.elapsed_s > 0
+    aggregate_fps = tracker.total_measured / tracker.elapsed_s
+    summary = {
+        "frames": tracker.total_measured,
+        "elapsed_s": tracker.elapsed_s,
+        "aggregate_fps": aggregate_fps,
+        "per_stream_frames": tracker.measured_frames,
+    }
     print(f"{codec}: {json.dumps(summary)}")
-    assert summary["frames"] == 5000
-    assert len(summary["per_stream_frames"]) == 16
-    assert sum(summary["per_stream_frames"]) == 5000
-    assert summary["elapsed_s"] > 0
-    assert summary["aggregate_fps"] == pytest.approx(5000 / summary["elapsed_s"])
-    assert summary["aggregate_fps"] > 450
-    assert min(summary["per_stream_frames"]) / summary["elapsed_s"] > 450 / 16
-    assert [len(frames) for frames in received] == summary["per_stream_total_sent"]
+    assert aggregate_fps > 450
+    assert min(tracker.measured_frames) / tracker.elapsed_s > 28.125

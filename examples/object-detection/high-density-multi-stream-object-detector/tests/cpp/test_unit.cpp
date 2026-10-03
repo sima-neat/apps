@@ -1,8 +1,8 @@
 #include "support/object_detection/detection_egress.h"
-#include "../../src/cpp/detection_watchdog.h"
-#include "../../src/cpp/metadata_measurement.h"
+#include "support/testing/metadata_json_listener.h"
 #include "support/testing/test_checks.h"
 #include "support/testing/test_process.h"
+#include "received_metadata_tracker.h"
 
 #include <nlohmann/json.hpp>
 
@@ -14,6 +14,10 @@
 #include <iostream>
 #include <string>
 #include <vector>
+
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 namespace fs = std::filesystem;
 
@@ -196,10 +200,6 @@ bool test_validate_config_only_accepts_twenty_four_streams(const std::string& bi
                       "validate output reports the proven public per-stream credit default") &&
       expect_contains(result.stdout_text, "max_inflight_total=8",
                       "validate output reports the proven total credit default") &&
-      expect_contains(result.stdout_text, "stream_detection_timeout_ms=30000",
-                      "validate output reports the per-stream progress timeout") &&
-      expect_contains(result.stdout_text, "no_detection_timeout_ms=30000",
-                      "validate output reports the global no-progress timeout") &&
       expect_contains(result.stdout_text,
                       (config_path.parent_path() / kModelPath).lexically_normal().string(),
                       "relative model path resolves from the config directory");
@@ -249,8 +249,6 @@ bool test_validate_config_only_accepts_named_profiles(const std::string& binary)
     ok &= expect_contains(result.stdout_text,
                           "max_inflight_total=" + std::to_string(profile.max_inflight_total),
                           label + " reports its total credit");
-    ok &= expect_contains(result.stdout_text, "stream_detection_timeout_ms=30000",
-                          label + " reports its per-stream progress timeout");
     ok &= expect_contains(result.stdout_text,
                           "insight_visible_streams=" + std::to_string(profile.streams),
                           label + " publishes every configured stream");
@@ -548,58 +546,6 @@ bool test_validate_config_only_checks_max_inflight_limits(const std::string& bin
   return ok;
 }
 
-bool test_validate_config_only_checks_liveness_limits(const std::string& binary) {
-  const std::string base = model_header() + "streams:\n" + stream_entries(4) +
-                           "inference:\n"
-                           "  workers: 1\n"
-                           "  max_inflight_total: 12\n";
-  const fs::path tuned_path = write_scratch_config("high-density-multi-stream-object-detector", "test_validate_config_only_accepts_tuned_liveness",
-                                           base + "runtime:\n"
-                                                  "  stream_detection_timeout_ms: 45000\n"
-                                                  "  no_detection_timeout_ms: 60000\n"
-                                                  "output:\n"
-                                                  "  insight:\n"
-                                                  "    host: 127.0.0.1\n");
-  const auto tuned =
-      spawn_and_wait(binary, {"--config", tuned_path.string(), "--validate-config-only"}, 20000);
-  bool ok = expect_true(tuned.exit_code == 0, "detector liveness limits can be tuned") &&
-            expect_contains(tuned.stdout_text, "stream_detection_timeout_ms=45000",
-                            "validate output reports the tuned per-stream timeout") &&
-            expect_contains(tuned.stdout_text, "no_detection_timeout_ms=60000",
-                            "validate output reports the tuned global timeout");
-  remove_dir(tuned_path.parent_path().string());
-
-  const fs::path invalid_timeout_path =
-      write_scratch_config("high-density-multi-stream-object-detector", "test_validate_config_only_rejects_invalid_no_detection_timeout",
-                   base + "runtime:\n"
-                          "  no_detection_timeout_ms: 0\n"
-                          "output:\n"
-                          "  insight:\n"
-                          "    host: 127.0.0.1\n");
-  const auto invalid_timeout = spawn_and_wait(
-      binary, {"--config", invalid_timeout_path.string(), "--validate-config-only"}, 20000);
-  ok &= expect_true(invalid_timeout.exit_code == 1, "zero global timeout is rejected") &&
-        expect_contains(invalid_timeout.stderr_text, "no_detection_timeout_ms must be > 0",
-                        "global timeout validation identifies the bad setting");
-  remove_dir(invalid_timeout_path.parent_path().string());
-
-  const fs::path invalid_stream_timeout_path =
-      write_scratch_config("high-density-multi-stream-object-detector", "test_validate_config_only_rejects_invalid_stream_detection_timeout",
-                   base + "runtime:\n"
-                          "  stream_detection_timeout_ms: 0\n"
-                          "output:\n"
-                          "  insight:\n"
-                          "    host: 127.0.0.1\n");
-  const auto invalid_stream_timeout = spawn_and_wait(
-      binary, {"--config", invalid_stream_timeout_path.string(), "--validate-config-only"}, 20000);
-  ok &=
-      expect_true(invalid_stream_timeout.exit_code == 1, "zero per-stream timeout is rejected") &&
-      expect_contains(invalid_stream_timeout.stderr_text, "stream_detection_timeout_ms must be > 0",
-                      "per-stream timeout validation identifies the bad setting");
-  remove_dir(invalid_stream_timeout_path.parent_path().string());
-  return ok;
-}
-
 bool test_validate_config_only_rejects_empty_streams(const std::string& binary) {
   const fs::path config_path = write_scratch_config("high-density-multi-stream-object-detector", "test_validate_config_only_rejects_empty_streams",
                                             model_header() + "streams: []\n"
@@ -681,109 +627,100 @@ bool test_validate_config_only_rejects_invalid_decoder_tuning(const std::string&
   return ok;
 }
 
-bool test_detection_watchdog_tracks_deadlines() {
-  using Watchdog = high_density::DetectionWatchdog;
-  using FailureKind = high_density::DetectionFailureKind;
-  const auto start = Watchdog::TimePoint{};
-  Watchdog watchdog(/*stream_count=*/3, /*priming_observations=*/2,
-                    /*startup_timeout=*/std::chrono::milliseconds(100),
-                    /*stream_timeout=*/std::chrono::milliseconds(200),
-                    /*no_progress_timeout=*/std::chrono::milliseconds(500), start);
-
+bool test_received_metadata_tracker() {
+  using Tracker = high_density::testing::ReceivedMetadataTracker;
+  const auto start = Tracker::TimePoint{};
+  Tracker tracker(2, 2, 3, std::chrono::milliseconds(100), std::chrono::milliseconds(50), start);
   bool ok = true;
-  watchdog.observe(0, start + std::chrono::milliseconds(5));
-  watchdog.observe(0, start + std::chrono::milliseconds(6));
-  watchdog.observe(2, start + std::chrono::milliseconds(10));
-  watchdog.observe(1, start + std::chrono::milliseconds(20));
-  watchdog.observe(1, start + std::chrono::milliseconds(21));
-  ok &= expect_true(!watchdog.check(start + std::chrono::milliseconds(99)),
-                    "startup watchdog waits for the configured all-stream deadline");
-  const auto startup_failure = watchdog.check(start + std::chrono::milliseconds(100));
-  ok &= expect_true(startup_failure.kind == FailureKind::Startup &&
-                        startup_failure.streams == std::vector<std::size_t>({2}),
-                    "startup watchdog reports streams that have not completed priming twice");
+  ok &= expect_true(!tracker.observe(0, "0", true, start + std::chrono::milliseconds(5)) &&
+                        !tracker.observe(0, "0", true, start + std::chrono::milliseconds(6)),
+                    "receiver tracker ignores duplicate frame identities");
+  tracker.observe(0, "1", false, start + std::chrono::milliseconds(10));
+  tracker.observe(1, "0", true, start + std::chrono::milliseconds(15));
+  tracker.observe(1, "1", false, start + std::chrono::milliseconds(20));
+  ok &= expect_true(tracker.warmup_complete() && !tracker.measurement_started() &&
+                        tracker.total_measured() == 0,
+                    "measurement waits for an explicit post-warmup boundary");
+  tracker.start_measurement(start + std::chrono::milliseconds(20));
+  tracker.observe(0, "2", false, start + std::chrono::milliseconds(30));
+  tracker.observe(1, "2", false, start + std::chrono::milliseconds(40));
+  ok &= expect_true(tracker.observe(0, "3", false, start + std::chrono::milliseconds(50)) &&
+                        tracker.total_measured() == 3 &&
+                        tracker.measured_frames() == std::vector<std::uint64_t>({2, 1}) &&
+                        std::abs(tracker.elapsed_seconds() - 0.03) < 1e-9,
+                    "receiver tracker measures exactly the common post-warmup interval");
+  ok &= expect_true(std::all_of(tracker.useful_detection().begin(),
+                                tracker.useful_detection().end(), [](bool value) { return value; }),
+                    "receiver tracker records useful detections for every stream");
 
-  watchdog.observe(2, start + std::chrono::milliseconds(100));
-  const auto late_startup_failure = watchdog.check(start + std::chrono::milliseconds(100));
-  ok &= expect_true(!watchdog.startup_complete() &&
-                        late_startup_failure.kind == FailureKind::Startup &&
-                        late_startup_failure.streams == std::vector<std::size_t>({2}),
-                    "late priming cannot clear an already-expired startup deadline");
+  Tracker deadlines(2, 1, 10, std::chrono::milliseconds(100),
+                    std::chrono::milliseconds(50), start);
+  deadlines.observe(0, "0", false, start + std::chrono::milliseconds(25));
+  ok &= expect_true(deadlines.stalled_streams(start + std::chrono::milliseconds(100)) ==
+                        std::vector<std::size_t>{1},
+                    "initial deadline identifies the stream with no receiver progress");
+  deadlines.observe(1, "0", false, start + std::chrono::milliseconds(100));
+  deadlines.start_measurement(start + std::chrono::milliseconds(100));
+  deadlines.observe(0, "1", false, start + std::chrono::milliseconds(125));
+  ok &= expect_true(deadlines.stalled_streams(start + std::chrono::milliseconds(150)) ==
+                        std::vector<std::size_t>{1},
+                    "ongoing deadline identifies a stalled measured stream");
+  return ok;
+}
 
-  Watchdog running_watchdog(/*stream_count=*/3, /*priming_observations=*/2,
-                            /*startup_timeout=*/std::chrono::milliseconds(1000),
-                            /*stream_timeout=*/std::chrono::milliseconds(50),
-                            /*no_progress_timeout=*/std::chrono::milliseconds(500), start);
-  running_watchdog.observe(0, start + std::chrono::milliseconds(5));
-  running_watchdog.observe(0, start + std::chrono::milliseconds(6));
-  running_watchdog.observe(2, start + std::chrono::milliseconds(10));
-  running_watchdog.observe(1, start + std::chrono::milliseconds(101));
-  running_watchdog.observe(1, start + std::chrono::milliseconds(102));
-  running_watchdog.observe(0, start + std::chrono::milliseconds(105));
-  running_watchdog.observe(2, start + std::chrono::milliseconds(105));
-  ok &= expect_true(running_watchdog.startup_complete(),
-                    "watchdog enters running mode when every stream primes before the deadline");
-  running_watchdog.observe(0, start + std::chrono::milliseconds(140));
-  running_watchdog.observe(2, start + std::chrono::milliseconds(141));
-  ok &= expect_true(!running_watchdog.check(start + std::chrono::milliseconds(154)),
-                    "each stream may be silent until its configured deadline");
-  running_watchdog.observe(0, start + std::chrono::milliseconds(155));
-  running_watchdog.observe(1, start + std::chrono::milliseconds(155));
-  const auto starvation = running_watchdog.check(start + std::chrono::milliseconds(155));
-  ok &= expect_true(starvation.kind == FailureKind::StreamStarvation &&
-                        starvation.streams == std::vector<std::size_t>{1},
-                    "a later completion cannot clear an already-crossed stream deadline");
-
-  const auto global_stall = running_watchdog.check(start + std::chrono::milliseconds(655));
-  ok &= expect_true(global_stall.kind == FailureKind::GlobalStall && global_stall.streams.empty(),
-                    "a separate wall-clock guard detects total detector stagnation");
-
-  Watchdog startup_stall_watchdog(
-      /*stream_count=*/3, /*priming_observations=*/2, std::chrono::milliseconds(1000),
-      /*stream_timeout=*/std::chrono::milliseconds(500),
-      /*no_progress_timeout=*/std::chrono::milliseconds(50), start);
-  startup_stall_watchdog.observe(0, start + std::chrono::milliseconds(5));
-  ok &= expect_true(!startup_stall_watchdog.check(start + std::chrono::milliseconds(54)),
-                    "startup allows less than the global no-progress timeout");
-  const auto startup_stall = startup_stall_watchdog.check(start + std::chrono::milliseconds(55));
-  ok &= expect_true(startup_stall.kind == FailureKind::GlobalStall && startup_stall.streams.empty(),
-                    "global detector stagnation is enforced while streams are still priming");
-
-  Watchdog recovered_stall_watchdog(
-      /*stream_count=*/1, /*priming_observations=*/1, std::chrono::milliseconds(1000),
-      /*stream_timeout=*/std::chrono::milliseconds(500),
-      /*no_progress_timeout=*/std::chrono::milliseconds(50), start);
-  recovered_stall_watchdog.observe(0, start + std::chrono::milliseconds(50));
-  const auto recovered_stall =
-      recovered_stall_watchdog.check(start + std::chrono::milliseconds(50));
-  ok &= expect_true(recovered_stall.kind == FailureKind::GlobalStall &&
-                        recovered_stall.streams.empty(),
-                    "late detector progress cannot clear an already-expired global stall");
-
-  constexpr std::size_t stream_count = 48;
-  Watchdog dense_watchdog(stream_count, /*priming_observations=*/2, std::chrono::seconds(60),
-                          /*stream_timeout=*/std::chrono::seconds(5),
-                          /*no_progress_timeout=*/std::chrono::seconds(30), start);
-  for (std::size_t index = 0; index < stream_count; ++index) {
-    const auto offset = std::chrono::milliseconds(static_cast<int>(index * 10));
-    dense_watchdog.observe(index, start + offset);
-    dense_watchdog.observe(index, start + offset + std::chrono::milliseconds(1));
+bool test_metadata_listener_validates_queued_messages() {
+  const int probe = ::socket(AF_INET, SOCK_DGRAM, 0);
+  if (probe < 0)
+    return expect_true(false, "metadata listener test creates a port probe");
+  sockaddr_in address{};
+  address.sin_family = AF_INET;
+  address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  address.sin_port = 0;
+  if (::bind(probe, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) < 0) {
+    ::close(probe);
+    return expect_true(false, "metadata listener test binds a port probe");
   }
-  ok &= expect_true(dense_watchdog.startup_complete(),
-                    "staggered 48-stream startup reaches a common progress baseline");
-  auto now = start + std::chrono::seconds(1);
-  for (int cycle = 0; cycle < 10; ++cycle) {
-    dense_watchdog.observe(0, now);
-    now += std::chrono::milliseconds(10);
-    for (int repeat = 0; repeat < 5; ++repeat) {
-      for (std::size_t stream_index = 1; stream_index < stream_count; ++stream_index) {
-        dense_watchdog.observe(stream_index, now);
-        now += std::chrono::milliseconds(10);
-      }
-    }
+  socklen_t address_size = sizeof(address);
+  if (::getsockname(probe, reinterpret_cast<sockaddr*>(&address), &address_size) < 0) {
+    ::close(probe);
+    return expect_true(false, "metadata listener test reads the selected port");
   }
-  ok &= expect_true(!dense_watchdog.check(now),
-                    "sustained scheduler skew does not false-timeout healthy streams");
+  const int port = ntohs(address.sin_port);
+  ::close(probe);
+
+  sima_examples::testing::MetadataJsonListenerOptions options;
+  options.base_port = port;
+  options.timeout_ms = 20;
+  sima_examples::testing::MetadataJsonListener listener(options);
+  if (!listener.ok())
+    return expect_true(false, listener.error());
+
+  const int sender = ::socket(AF_INET, SOCK_DGRAM, 0);
+  if (sender < 0)
+    return expect_true(false, "metadata listener test creates a sender");
+  const std::string first =
+      R"({"type":"object-detection","timestamp":1,"frame_id":"warmup-1","data":{"objects":[]}})";
+  const std::string second =
+      R"({"type":"object-detection","timestamp":2,"frame_id":"warmup-2","data":{"objects":[]}})";
+  const std::string malformed = "{not json";
+  const auto send = [&](const std::string& payload) {
+    return ::sendto(sender, payload.data(), payload.size(), 0,
+                    reinterpret_cast<const sockaddr*>(&address), sizeof(address));
+  };
+  bool ok = expect_true(send(first) == static_cast<ssize_t>(first.size()) &&
+                            send(second) == static_cast<ssize_t>(second.size()) &&
+                            send(malformed) == static_cast<ssize_t>(malformed.size()),
+                        "metadata listener test queues warmup messages");
+  ::close(sender);
+  ok &= expect_true(listener.wait_for_messages().success,
+                    "metadata listener consumes the first warmup message");
+  const auto drained = listener.drain_pending();
+  ok &= expect_true(drained.messages.size() == 1 &&
+                        drained.error.find("json parse failed") != std::string::npos,
+                    "metadata listener validates queued warmup messages");
+  const auto after_discard = listener.wait_for_messages();
+  ok &= expect_true(!after_discard.success && after_discard.timed_out,
+                    "drained warmup metadata is not observed later");
   return ok;
 }
 
@@ -878,26 +815,13 @@ bool test_configuration_rules_are_enforced(const std::string& binary) {
 } // namespace
 
 int main(int argc, char** argv) {
-  high_density::MetadataMeasurement measurement(2, 100, 3);
-  bool measurement_ok = !measurement.observe(0, 100, false, false, 1.0);
-  measurement_ok &= !measurement.observe(0, 101, true, false, 2.0);
-  measurement_ok &= !measurement.observe(1, 100, false, false, 3.0);
-  measurement_ok &= measurement.total == 0;
-  measurement_ok &= !measurement.observe(1, 101, false, true, 4.0);
-  measurement_ok &= !measurement.observe(0, 102, true, false, 5.0);
-  measurement_ok &= !measurement.observe(1, 102, true, false, 6.0);
-  measurement_ok &= measurement.observe(0, 103, true, false, 7.0);
-  measurement_ok &= measurement.total == 3 && measurement.elapsed == 4.0 &&
-                    measurement.frames == std::vector<std::uint64_t>{2, 1} &&
-                    measurement.failures == std::vector<std::uint64_t>{0, 1};
-  if (!expect_true(measurement_ok, "metadata measurement excludes warm-up and failed sends"))
+  if (!test_received_metadata_tracker())
+    return 1;
+  if (!test_metadata_listener_validates_queued_messages())
     return 1;
 
   if (argc == 2 && std::string(argv[1]) == "--detection-egress-only") {
     return test_metadata_fast_path_preserves_insight_payload() ? 0 : 1;
-  }
-  if (argc == 2 && std::string(argv[1]) == "--detection-watchdog-only") {
-    return test_detection_watchdog_tracks_deadlines() ? 0 : 1;
   }
   if (argc < 2) {
     std::cerr << "[ERR] usage: " << argv[0] << " <example-binary>\n";
@@ -923,12 +847,10 @@ int main(int argc, char** argv) {
   ok &= test_validate_config_only_rejects_invalid_worker_count(binary);
   ok &= test_validate_config_only_checks_internal_queue_depth(binary);
   ok &= test_validate_config_only_checks_max_inflight_limits(binary);
-  ok &= test_validate_config_only_checks_liveness_limits(binary);
   ok &= test_validate_config_only_rejects_empty_streams(binary);
   ok &= test_validate_config_only_rejects_fps_scheduler_knob(binary);
   ok &= test_validate_config_only_rejects_legacy_fan_in_policy(binary);
   ok &= test_validate_config_only_rejects_invalid_decoder_tuning(binary);
   ok &= test_configuration_rules_are_enforced(binary);
-  ok &= test_detection_watchdog_tracks_deadlines();
   return ok ? 0 : 1;
 }
