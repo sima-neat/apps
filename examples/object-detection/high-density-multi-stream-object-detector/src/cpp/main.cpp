@@ -58,6 +58,10 @@ constexpr int kDefaultMaxInflightTotal = 8;
 constexpr bool kInferenceAsync = true;
 constexpr int kDefaultDecoderBuffers = 16;
 constexpr int kDefaultDecoderInputBuffers = 2;
+// runtime.* defaults. The settings are validated so existing configs keep loading,
+// but the application no longer acts on them.
+constexpr int kDefaultWarmupFrames = 30;
+constexpr int kDefaultDetectionTimeoutMs = 30000;
 constexpr int kAllInsightStreams = -1;
 
 volatile std::sig_atomic_t g_stop_requested = 0;
@@ -96,6 +100,11 @@ struct AppConfig {
   int metadata_port_base = 9100;
   int insight_visible_streams = kAllInsightStreams;
   bool video_enabled = true;
+  bool profile = false;
+  int warmup_frames = kDefaultWarmupFrames;
+  int initial_detection_timeout_ms = kDefaultDetectionTimeoutMs;
+  int stream_detection_timeout_ms = kDefaultDetectionTimeoutMs;
+  int no_detection_timeout_ms = kDefaultDetectionTimeoutMs;
 };
 
 std::string lower_copy(std::string value) {
@@ -328,6 +337,13 @@ void validate_config(const AppConfig& cfg) {
   sima_examples::require(cfg.nms_iou >= 0.0 && cfg.nms_iou <= 1.0,
                          "inference.nms_iou must be between 0 and 1");
   sima_examples::require(cfg.max_detections > 0, "inference.max_detections must be > 0");
+  sima_examples::require(cfg.warmup_frames >= 0, "runtime.warmup_frames must be >= 0");
+  sima_examples::require(cfg.initial_detection_timeout_ms > 0,
+                         "runtime.initial_detection_timeout_ms must be > 0");
+  sima_examples::require(cfg.stream_detection_timeout_ms > 0,
+                         "runtime.stream_detection_timeout_ms must be > 0");
+  sima_examples::require(cfg.no_detection_timeout_ms > 0,
+                         "runtime.no_detection_timeout_ms must be > 0");
   sima_examples::require(cfg.video_port_base > 0, "output.insight.video_port_base must be > 0");
   sima_examples::require(cfg.video_port_base <= 65535,
                          "output.insight.video_port_base must be <= 65535");
@@ -360,14 +376,6 @@ void validate_config(const AppConfig& cfg) {
 
 AppConfig load_app_config(const fs::path& config_path) {
   const auto raw = sima_examples::ScalarConfig::load(config_path);
-  for (const std::string key : {"runtime.profile", "runtime.warmup_frames",
-                                "runtime.initial_detection_timeout_ms",
-                                "runtime.stream_detection_timeout_ms",
-                                "runtime.no_detection_timeout_ms"}) {
-    sima_examples::require(!raw.string_value(key).has_value(),
-                           key + " was removed; warmup, measurement, and progress deadlines "
-                                 "belong to the end-to-end test receiver");
-  }
   sima_examples::require(
       !raw.string_value("inference.fan_in_policy").has_value(),
       "inference.fan_in_policy was removed; remove it because ordinary connect()/build() now "
@@ -423,6 +431,25 @@ AppConfig load_app_config(const fs::path& config_path) {
   cfg.insight_visible_streams =
       raw.int_or("output.insight.max_visible_streams", kAllInsightStreams);
   cfg.video_enabled = raw.bool_or("output.video_enabled", true);
+  cfg.profile = raw.bool_or("runtime.profile", false);
+  cfg.warmup_frames = raw.int_or("runtime.warmup_frames", kDefaultWarmupFrames);
+  cfg.initial_detection_timeout_ms =
+      raw.int_or("runtime.initial_detection_timeout_ms", kDefaultDetectionTimeoutMs);
+  cfg.stream_detection_timeout_ms =
+      raw.int_or("runtime.stream_detection_timeout_ms", kDefaultDetectionTimeoutMs);
+  cfg.no_detection_timeout_ms =
+      raw.int_or("runtime.no_detection_timeout_ms", kDefaultDetectionTimeoutMs);
+  for (const char* key : {"runtime.profile", "runtime.warmup_frames",
+                          "runtime.initial_detection_timeout_ms",
+                          "runtime.stream_detection_timeout_ms",
+                          "runtime.no_detection_timeout_ms"}) {
+    if (raw.string_value(key).has_value()) {
+      std::cerr << "[warn] runtime.* settings are validated for compatibility but have no "
+                   "effect; warmup, measurement, and progress deadlines belong to the "
+                   "end-to-end test receiver\n";
+      break;
+    }
+  }
   validate_config(cfg);
   return cfg;
 }
