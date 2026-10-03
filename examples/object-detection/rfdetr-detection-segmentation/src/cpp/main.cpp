@@ -765,7 +765,7 @@ int run(const Config& cfg) {
   video.add(neat::nodes::groups::VideoSender(video_options));
 
   neat::QueueOptions queue_options;
-  queue_options.max_buffers = 16;
+  queue_options.max_buffers = 4;
   queue_options.overflow_policy = neat::OverflowPolicy::KeepLatest;
   neat::Graph inference("inference");
   inference.add(neat::nodes::Queue(queue_options));

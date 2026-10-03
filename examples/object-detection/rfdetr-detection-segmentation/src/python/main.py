@@ -590,7 +590,7 @@ def run(cfg: Config) -> int:
     video.add(pyneat.groups.video_sender(video_options))
 
     queue_options = pyneat.QueueOptions()
-    queue_options.max_buffers = 16
+    queue_options.max_buffers = 4
     queue_options.overflow_policy = pyneat.OverflowPolicy.KeepLatest
     inference_graph = pyneat.Graph("inference")
     inference_graph.add(pyneat.nodes.queue(queue_options))
