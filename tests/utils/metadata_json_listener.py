@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import json
 import select
 import socket
 import struct
 import time
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
@@ -114,16 +114,6 @@ class _MetadataReassembler:
             del self._assemblies[message_id]
 
 
-def _record_valid_metadata_type(
-    valid_types_by_frame: dict[tuple[int, int, str], set[str]],
-    message: MetadataJsonMessage,
-    required_type_count: int,
-) -> bool:
-    frame_key = (message.port, message.timestamp_ms, message.frame_id)
-    valid_types_by_frame.setdefault(frame_key, set()).add(message.metadata_type)
-    return len(valid_types_by_frame[frame_key]) == required_type_count
-
-
 class MetadataJsonListener:
     """Receive metadata JSON emitted by e2e examples."""
 
@@ -137,7 +127,6 @@ class MetadataJsonListener:
         require_all_ports: bool = False,
         min_object_count: int = 0,
         metadata_contracts: dict[str, str] | None = None,
-        metadata_min_counts: dict[str, int] | None = None,
     ) -> None:
         if num_ports <= 0:
             raise ValueError("num_ports must be > 0")
@@ -146,22 +135,13 @@ class MetadataJsonListener:
         if min_object_count < 0:
             raise ValueError("min_object_count must be >= 0")
 
-        self._metadata_contracts = metadata_contracts or {
-            metadata_type: data_array_key
-        }
-        self._metadata_min_counts = {
-            contract_type: (metadata_min_counts or {}).get(
-                contract_type, min_object_count
-            )
-            for contract_type in self._metadata_contracts
-        }
+        self._metadata_contracts = metadata_contracts or {metadata_type: data_array_key}
+        self._min_object_count = min_object_count
         if not self._metadata_contracts or any(
             not contract_type or not array_path
             for contract_type, array_path in self._metadata_contracts.items()
         ):
             raise ValueError("metadata contracts require a type and data array path")
-        if any(count < 0 for count in self._metadata_min_counts.values()):
-            raise ValueError("metadata minimum counts must be >= 0")
         self._require_all_ports = require_all_ports
         self._sockets: dict[socket.socket, int] = {}
         self._reassemblers: dict[socket.socket, _MetadataReassembler] = {}
@@ -184,7 +164,7 @@ class MetadataJsonListener:
         self._sockets.clear()
         self._reassemblers.clear()
 
-    def __enter__(self) -> "MetadataJsonListener":
+    def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -199,7 +179,9 @@ class MetadataJsonListener:
 
         while time.monotonic() < deadline:
             remaining = max(0.0, deadline - time.monotonic())
-            readable, _, _ = select.select(list(self._sockets.keys()), [], [], min(0.2, remaining))
+            readable, _, _ = select.select(
+                list(self._sockets.keys()), [], [], min(0.2, remaining)
+            )
             for sock in readable:
                 datagram, _ = sock.recvfrom(65536)
                 port = self._sockets[sock]
@@ -213,16 +195,15 @@ class MetadataJsonListener:
                     last_error = error
                     continue
                 messages.append(message)
-                minimum = self._metadata_min_counts[message.metadata_type]
-                if message.object_count < minimum:
+                if message.object_count < self._min_object_count:
                     last_error = (
                         f"data.{self._metadata_contracts[message.metadata_type]} contains "
-                        f"{message.object_count} objects; expected at least {minimum}"
+                        f"{message.object_count} objects; expected at least {self._min_object_count}"
                     )
                     continue
-                if _record_valid_metadata_type(
-                    valid_types_by_frame, message, len(self._metadata_contracts)
-                ):
+                frame = (message.port, message.timestamp_ms, message.frame_id)
+                valid_types_by_frame.setdefault(frame, set()).add(message.metadata_type)
+                if len(valid_types_by_frame[frame]) == len(self._metadata_contracts):
                     ports_with_valid_json.add(port)
                 if self._success_reached(ports_with_valid_json):
                     return MetadataJsonResult(True, ports_with_valid_json, messages)
@@ -242,7 +223,7 @@ class MetadataJsonListener:
     ) -> tuple[MetadataJsonMessage | None, str]:
         try:
             parsed = json.loads(payload.decode("utf-8"))
-        except Exception as exc:
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             return None, f"json parse failed: {exc}"
 
         if not isinstance(parsed, dict):
