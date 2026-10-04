@@ -428,7 +428,7 @@ inline YamlScalar parse_yaml_scalar(const std::string& value) {
   }
   if (scalar.front() == '[' || scalar.front() == '{' || scalar.front() == '&' ||
       scalar.front() == '*' || scalar.front() == '!' || scalar.front() == '\'' ||
-      scalar.front() == '"' || scalar.back() == '\'' || scalar.back() == '"') {
+      scalar.front() == '"') {
     return {scalar, YamlScalarType::Other};
   }
 

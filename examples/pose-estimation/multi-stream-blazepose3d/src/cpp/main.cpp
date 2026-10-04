@@ -273,7 +273,10 @@ void apply_stream_field(StreamConfig& stream, const ParsedKeyValue& field) {
   } else if (field.key == "url") {
     stream.url = require_stream_string(field);
   } else if (field.key == "codec") {
-    stream.codec = parse_codec(require_stream_string(field));
+    // An explicit null keeps the H.264 default, as Python's string_or does.
+    if (field.scalar.type != blazepose_config::YamlScalarType::Null) {
+      stream.codec = parse_codec(require_stream_string(field));
+    }
   } else if (field.key == "insight_channel") {
     stream.insight_channel = require_stream_integer(field);
   } else if (field.key == "width") {
