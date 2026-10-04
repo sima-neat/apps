@@ -394,6 +394,55 @@ download_model_registry_group() {
     return "$failed"
 }
 
+download_model_registry_variant() {
+    local model_id="$1"
+    local registry_name="$2"
+    local registry_ref="$3"
+    local variant="$4"
+    local expected_file="$5"
+    local destination="${MODELS_DIR}/${expected_file}"
+    if [[ -f "$destination" ]]; then
+        echo "[skip] $model_id already exists"
+        return 0
+    fi
+    ensure_sima_cli_bin || return 1
+
+    local tmpdir
+    if ! tmpdir="$(mktemp -d)"; then
+        echo "[error] failed to create temporary directory for $registry_name/$variant" >&2
+        return 1
+    fi
+    local environment_args=()
+    if [[ "$registry_ref" != "main" ]]; then
+        environment_args+=(--stg)
+    fi
+    echo "[download] $model_id (model-registry: $registry_name/$variant@$registry_ref)"
+    if ! "$SIMA_CLI_BIN" models download "${environment_args[@]}" \
+            --id "$registry_name" --variant "$variant" --branch "$registry_ref" \
+            --output "$tmpdir" --json; then
+        rm -rf "$tmpdir"
+        echo "[error] failed to download model $registry_name/$variant@$registry_ref" >&2
+        return 1
+    fi
+
+    local downloaded_file="${tmpdir}/${registry_name}/${variant}/${expected_file}"
+    local staged_file
+    if [[ ! -f "$downloaded_file" ]]; then
+        echo "[error] $model_id: requested file $expected_file was not downloaded" >&2
+    elif ! staged_file="$(mktemp "${destination}.tmp.XXXXXX")"; then
+        echo "[error] $model_id: failed to stage $expected_file in $MODELS_DIR" >&2
+    elif ! cp "$downloaded_file" "$staged_file" || ! mv -f "$staged_file" "$destination"; then
+        rm -f "$staged_file"
+        echo "[error] $model_id: failed to publish $expected_file into $MODELS_DIR" >&2
+    else
+        rm -rf "$tmpdir"
+        echo "[ok] $model_id"
+        return 0
+    fi
+    rm -rf "$tmpdir"
+    return 1
+}
+
 split_tsv_row() {
     local row="$1"
     local -n out="$2"
@@ -467,6 +516,9 @@ download_scoped_models() {
                 if ! model_registry_file_is_safe "$expected_file"; then
                     echo "[error] $model_id has unsafe model-registry file: $expected_file" >&2
                     failed=1
+                elif [[ -n "${fields[9]:-}" ]]; then
+                    download_model_registry_variant "$model_id" "$name" "${fields[7]:-}" \
+                        "${fields[9]}" "$expected_file" || failed=1
                 else
                     registry_rows+=("$row")
                 fi

@@ -1,0 +1,50 @@
+models:
+  yolo26m-det-bf16-mla_tess-b1:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26-detection/yolo26m-det-bf16-mla_tess-b1.tar.gz
+    file: yolo26m-det-bf16-mla_tess-b1.tar.gz
+  yolo26n-det-bf16-mla_tess-b1:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26-detection/yolo26n-det-bf16-mla_tess-b1.tar.gz
+    file: yolo26n-det-bf16-mla_tess-b1.tar.gz
+  yolo26s-det-bf16-mla_tess-b1:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26-detection/yolo26s-det-bf16-mla_tess-b1.tar.gz
+    file: yolo26s-det-bf16-mla_tess-b1.tar.gz
+  yolo26l-det-bf16-mla_tess-b1:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26-detection/yolo26l-det-bf16-mla_tess-b1.tar.gz
+    file: yolo26l-det-bf16-mla_tess-b1.tar.gz
+  yolo26x-det-bf16-mla_tess-b1:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26-detection/yolo26x-det-bf16-mla_tess-b1.tar.gz
+    file: yolo26x-det-bf16-mla_tess-b1.tar.gz
+  yolo26m-det-bf16-b1:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26-detection/yolo26m-det-bf16-b1.tar.gz
+    file: yolo26m-det-bf16-b1.tar.gz
+  yolo26m-det-int8-b1:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26-detection/yolo26m-det-int8-b1.tar.gz
+    file: yolo26m-det-int8-b1.tar.gz
+  blazepose-ghum-heavy:
+    source: model-registry
+    name: blazepose_ghum_heavy
+    ref: feat/blazepose-ghum-heavy
+    spec: latest
+    variant: modalix_bf16
+    file: blazepose_ghum_heavy_modalix_bf16_mpk.tar.gz
+unit:
+  python: true
+  cpp: true
+e2e:
+  python:
+    enabled: true
+    models:
+    - yolo26m-det-int8-b1
+    - blazepose-ghum-heavy
+  cpp:
+    enabled: true
+    models:
+    - yolo26m-det-int8-b1
+    - blazepose-ghum-heavy

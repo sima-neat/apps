@@ -68,6 +68,14 @@ available by calling `scripts/download_models.sh`, which skips models already
 present under `SIMANEAT_APPS_TEST_MODELS_DIR`. Set
 `NEAT_APPS_SKIP_MODEL_DOWNLOAD=1` to disable this step.
 
+A `source: model-registry` model names the registry model (`name`), the Models
+repository branch (`ref`) and the catalog spec (`spec`), and is installed with
+`sima-cli neat install models/<name>@<ref>:<spec>`. Adding `variant` instead
+downloads only that build variant's latest artifact with `sima-cli models download
+--id <name> --variant <variant> --branch <ref>`; such a model must use
+`spec: latest`. Either way, `file` is the flat filename the E2E tests read from
+the models directory.
+
 The README `Model` row remains customer-facing metadata. Test selection and
 test model downloads are controlled by `examples/*/*/tests/test-scope.yaml`, so large
 or blocked examples can stay documented without blocking CI. If a test is
