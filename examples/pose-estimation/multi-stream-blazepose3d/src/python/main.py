@@ -226,6 +226,10 @@ class PoseSmoother:
                         point["confidence"] *= decay
                         world["confidence"] = point["confidence"]
                 return coasted
+            if self.previous:
+                # The coast window is exhausted; without a usable PTS no reset gap
+                # can fire, so drop the stale subject before a new one appears.
+                self.reset()
             return poses
         if self._reset_gap(pts_ns) or (
             pts_ns >= 0 and self.last_pts_ns >= 0 and pts_ns <= self.last_pts_ns

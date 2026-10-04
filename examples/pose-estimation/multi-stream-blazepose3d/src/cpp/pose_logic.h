@@ -269,6 +269,11 @@ public:
         }
         return coasted;
       }
+      if (!previous_.empty()) {
+        // The coast window is exhausted; without a usable PTS no reset gap can
+        // fire, so drop the stale subject before a new one appears.
+        reset();
+      }
       return poses;
     }
     if (is_reset_gap(pts_ns) || (pts_ns >= 0 && last_pts_ns_ >= 0 && pts_ns <= last_pts_ns_)) {

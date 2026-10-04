@@ -204,6 +204,17 @@ bool test_math_contract() {
                      second_gap[0].keypoints[0].confidence < first_gap[0].keypoints[0].confidence,
                  "coasted pose confidence decays while the estimate is unavailable");
   }
+
+  blazepose_app::PoseSmoother no_pts;
+  no_pts.filter({first_pose}, -1);
+  no_pts.filter({}, -1);
+  no_pts.filter({}, -1);
+  const bool no_pts_expired = no_pts.filter({}, -1).empty();
+  blazepose_app::Pose later_pose = first_pose;
+  later_pose.keypoints[0].x = 54.0F;
+  const auto later = no_pts.filter({later_pose}, -1).front();
+  ok &= expect(no_pts_expired && std::abs(later.keypoints[0].x - 54.0F) < 0.001F,
+               "temporal filter drops a stale subject once coasting ends without PTS");
   return ok;
 }
 
