@@ -1766,6 +1766,10 @@ def parse_pose_output(sample, context: PoseInputContext, cfg: AppConfig):
     ).reshape(-1)
     if world_landmarks.size != 117:
         raise RuntimeError("BlazePose world-landmark output must contain 117 floats")
+    # A non-finite landmark would fail integer rounding when the frame is
+    # published, so discard only this ROI's pose; the frame still publishes.
+    if not (np.isfinite(landmarks).all() and np.isfinite(world_landmarks).all()):
+        return None
     return decode_pose(
         landmarks,
         world_landmarks,

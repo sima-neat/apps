@@ -379,6 +379,38 @@ def test_pose_presence_logit_is_activated_before_thresholding(monkeypatch):
     assert main.parse_pose_output(object(), context, cfg) is None
 
 
+@pytest.mark.parametrize(
+    ("tensor_index", "position", "value"),
+    [(0, 0, np.nan), (0, 194, np.inf), (2, 0, np.nan), (2, 116, -np.inf)],
+    ids=["screen-nan", "screen-inf", "world-nan", "world-negative-inf"],
+)
+def test_non_finite_landmarks_discard_only_that_pose(
+    monkeypatch, tensor_index: int, position: int, value: float
+):
+    class Tensor:
+        def __init__(self, values):
+            self.values = np.asarray(values, dtype=np.float32)
+
+        def to_numpy(self, *, copy):
+            return self.values.copy() if copy else self.values
+
+    screen = np.zeros(195, dtype=np.float32)
+    world = np.zeros(117, dtype=np.float32)
+    tensors = [Tensor(screen), Tensor([4.0]), Tensor(world)]
+    monkeypatch.setattr(main, "tensors_from_sample", lambda *_args: tensors)
+    identity = main.FrameIdentity("camera0", 1, 0, -1, -1, 1, 1)
+    box = {"x1": 0.0, "y1": 0.0, "x2": 100.0, "y2": 100.0, "score": 0.9, "class_id": 0}
+    context = main.PoseInputContext(
+        1, 0, 0, 1, box, (1.0, 0.0, 0.0, 0.0, 1.0, 0.0), identity
+    )
+    cfg = SimpleNamespace(pose_presence_threshold=0.5)
+    assert main.parse_pose_output(object(), context, cfg) is not None
+
+    tensors[tensor_index].values[position] = value
+
+    assert main.parse_pose_output(object(), context, cfg) is None
+
+
 def test_pose_preprocess_copies_readonly_tensor_exports():
     image = np.zeros((4, 4, 3), dtype=np.uint8)
     image.flags.writeable = False

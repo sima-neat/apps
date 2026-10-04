@@ -469,6 +469,22 @@ inline Pose decode_pose(const std::vector<float>& raw_landmarks,
   return pose;
 }
 
+// Decodes a pose only from finite model outputs. A NaN or infinite landmark would
+// reach integer rounding and JSON serialization, so that ROI's pose is discarded
+// and the frame publishes without it. One pass over the floats, no allocation.
+inline std::optional<Pose> decode_finite_pose(const std::vector<float>& raw_landmarks,
+                                              const std::vector<float>& raw_world_landmarks,
+                                              const Affine& affine, const Box& box, float presence,
+                                              int roi_index) {
+  const auto finite = [](float value) { return std::isfinite(value); };
+  if (!std::isfinite(presence) ||
+      !std::all_of(raw_landmarks.begin(), raw_landmarks.end(), finite) ||
+      !std::all_of(raw_world_landmarks.begin(), raw_world_landmarks.end(), finite)) {
+    return std::nullopt;
+  }
+  return decode_pose(raw_landmarks, raw_world_landmarks, affine, box, presence, roi_index);
+}
+
 inline nlohmann::json poses_data_json(std::vector<Pose> poses, const std::string& stream_id) {
   std::sort(poses.begin(), poses.end(),
             [](const Pose& left, const Pose& right) { return left.roi_index < right.roi_index; });

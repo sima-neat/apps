@@ -948,8 +948,8 @@ std::optional<blazepose_app::Pose> parse_pose_output(const neat::Sample& sample,
   }
   const std::vector<float> landmarks = tensor_floats(tensors[0], 195);
   const std::vector<float> world_landmarks = tensor_floats(tensors[2], 117);
-  return blazepose_app::decode_pose(landmarks, world_landmarks, context.affine, context.box,
-                                    presence_probability, context.roi_index);
+  return blazepose_app::decode_finite_pose(landmarks, world_landmarks, context.affine, context.box,
+                                           presence_probability, context.roi_index);
 }
 
 void record_error(AppRuntime& app) {
