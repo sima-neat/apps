@@ -181,7 +181,8 @@ and selects the built-in BlazePose renderer:
 
 `MetadataSender` supplies the outer `type`, `timestamp`, and `frame_id` fields.
 The two message types are sent while holding the same per-stream metadata lock,
-so one channel cannot interleave identities from different frames.
+so one channel cannot interleave identities from different frames. A frame
+without people publishes an empty pair, which clears the stream's poses in Insight.
 
 The envelope builder accepts any renderer name and JSON object; it does not know
 about BlazePose fields. This example's world-pose helper supplies the

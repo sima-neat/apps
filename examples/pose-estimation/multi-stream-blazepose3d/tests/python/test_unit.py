@@ -412,7 +412,8 @@ def test_model_push_retries_without_using_the_blocking_python_binding():
 
 
 def test_detector_outputs_keep_only_the_latest_frame_with_people(monkeypatch):
-    stream_runtime = runtime_stream(outstanding=3)
+    sender = RecordingSender()
+    stream_runtime = runtime_stream(sender, outstanding=3)
     state = main.SharedState(1)
     jobs = [main.FrameJob(job_id, 0, object(), IDENTITY) for job_id in (1, 2, 3)]
     state.pending_detector_outputs.extend(jobs)
@@ -427,6 +428,11 @@ def test_detector_outputs_keep_only_the_latest_frame_with_people(monkeypatch):
     assert state.error is None
     # Job 1 had nobody and job 2 was replaced by job 3; both are finished.
     assert state.pose_mailboxes == [jobs[2]]
+    # Job 1 still publishes an empty pair so Insight clears stale poses.
+    assert [(call[0], json.loads(call[1])["stream_id"]) for call in sender.calls] == [
+        ("pose-estimation", "camera0"),
+        ("auxiliary-visualization", "camera0"),
+    ]
     assert stream_runtime.outstanding_frames == 1
 
 

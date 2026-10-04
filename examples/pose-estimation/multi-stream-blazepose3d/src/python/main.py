@@ -960,8 +960,7 @@ def require_rgb_tensor(sample):
 
 
 def finish_frame(runtime: AppRuntime, stream: StreamRuntime) -> None:
-    """Mark one admitted frame finished: published, replaced by newer work, or
-    without people."""
+    """Mark one admitted frame finished: published or replaced by newer work."""
     with runtime.state.condition:
         stream.outstanding_frames -= 1
         runtime.state.condition.notify_all()
@@ -1187,6 +1186,8 @@ def pull_detector_outputs(runtime: AppRuntime, cfg: AppConfig) -> None:
             stream = runtime.streams[job.stream_index]
             job.people = select_people(sample, stream, cfg)
             if not job.people:
+                # An empty pair clears the stream's previous poses in Insight.
+                publish_frame(stream, job.identity, [])
                 finish_frame(runtime, stream)
                 continue
             with state.condition:

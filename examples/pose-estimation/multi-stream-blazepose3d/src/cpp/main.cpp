@@ -729,8 +729,7 @@ std::vector<blazepose_app::Box> select_people(const neat::Sample& detections, in
   return people;
 }
 
-// Marks one admitted frame as finished: published, dropped for newer work, or
-// without people.
+// Marks one admitted frame as finished: published or dropped for newer work.
 void finish_frame(AppRuntime& app, StreamRuntime& stream) {
   std::lock_guard<std::mutex> lock(app.state.mutex);
   --stream.outstanding_frames;
@@ -1036,6 +1035,8 @@ void pull_detector_outputs(AppRuntime& app, const AppConfig& cfg) {
       StreamRuntime& stream = *app.streams[static_cast<std::size_t>(job.stream_index)];
       job.people = select_people(sample, stream.width, stream.height, cfg);
       if (job.people.empty()) {
+        // An empty pair clears the stream's previous poses in Insight.
+        publish_frame(stream, job.identity, {});
         finish_frame(app, stream);
         continue;
       }
