@@ -477,48 +477,120 @@ def transformer_inputs(input_shapes, feature, gathered, top_k: int) -> list:
     return ordered
 
 
-def run(cfg: Config) -> int:
-    global pyneat
-    import pyneat
-
-    labels = load_labels(cfg.labels)
-    width, height, fps = probe_source_geometry(cfg)
+def rtsp_codec(cfg: Config):
     if cfg.codec == "h264":
-        source_codec = pyneat.RtspCodec.H264
-        decoder_type = pyneat.SimaDecodeType.H264
-    elif cfg.codec == "h265":
-        source_codec = pyneat.RtspCodec.H265
-        decoder_type = pyneat.SimaDecodeType.H265
-    else:
-        source_codec = pyneat.RtspCodec.MJPEG
-        decoder_type = pyneat.SimaDecodeType.MJPEG
+        return pyneat.RtspCodec.H264
+    return pyneat.RtspCodec.H265 if cfg.codec == "h265" else pyneat.RtspCodec.MJPEG
 
-    backbone_options = pyneat.ModelOptions()
-    backbone_options.preprocess.kind = pyneat.InputKind.Image
-    backbone_options.preprocess.enable = pyneat.AutoFlag.On
-    backbone_options.preprocess.input_max_width = width
-    backbone_options.preprocess.input_max_height = height
-    backbone_options.preprocess.input_max_depth = 3
-    backbone_options.preprocess.resize.enable = pyneat.AutoFlag.On
-    backbone_options.preprocess.resize.mode = pyneat.ResizeMode.Stretch
-    backbone_options.preprocess.color_convert.enable = pyneat.AutoFlag.On
-    backbone_options.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.NV12
-    backbone_options.preprocess.color_convert.output_format = pyneat.PreprocessColorFormat.RGB
-    backbone_options.preprocess.preset = pyneat.NormalizePreset.ImageNet
+
+def decode_type(cfg: Config):
+    if cfg.codec == "h264":
+        return pyneat.SimaDecodeType.H264
+    return pyneat.SimaDecodeType.H265 if cfg.codec == "h265" else pyneat.SimaDecodeType.MJPEG
+
+
+def preview_fps(cfg: Config, fps: int) -> int:
+    return min(fps, cfg.raw_video_max_fps) if cfg.raw_video_max_fps else fps
+
+
+def source_options(cfg: Config, width: int, height: int, fps: int):
+    opt = pyneat.RtspEncodedInputOptions()
+    opt.url = cfg.rtsp_url
+    opt.codec = rtsp_codec(cfg)
+    opt.latency_ms = cfg.latency_ms
+    opt.tcp = cfg.tcp
+    if cfg.tcp:
+        opt.buffer_mode = "none"
+    opt.source_fps = fps
+    if cfg.codec == "h264":
+        opt.fallback_h264_width = width
+        opt.fallback_h264_height = height
+    return opt
+
+
+def decoder_options(cfg: Config, width: int, height: int, fps: int):
+    opt = pyneat.SimaDecodeOptions()
+    opt.type = decode_type(cfg)
+    opt.out_format = pyneat.Format.NV12
+    opt.raw_output = True
+    opt.dec_width = width
+    opt.dec_height = height
+    opt.dec_fps = fps
+    if cfg.codec == "mjpeg":
+        # Keep free decode surfaces while inference and preview retain frames.
+        opt.num_buffers = 32
+    return opt
+
+
+def video_options(cfg: Config, width: int, height: int, fps: int):
+    opt = (
+        pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(width, height, preview_fps(cfg, fps))
+        if cfg.codec == "mjpeg"
+        else pyneat.VideoSenderOptions.passthrough(rtsp_codec(cfg))
+    )
+    opt.host = cfg.insight_host
+    opt.video_port_base = cfg.video_port
+    opt.channel = 0
+    opt.async_ = False
+    return opt
+
+
+def metadata_options(cfg: Config):
+    opt = pyneat.MetadataSenderOptions()
+    opt.host = cfg.insight_host
+    opt.metadata_port_base = cfg.metadata_port
+    opt.channel = 0
+    return opt
+
+
+def latest_queue(depth: int):
+    """Replaces the oldest decoded frame instead of slowing the decoder when inference lags."""
+    opt = pyneat.QueueOptions()
+    opt.max_buffers = depth
+    opt.overflow_policy = pyneat.OverflowPolicy.KeepLatest
+    return opt
+
+
+def preview_link():
+    """Bounds raw MJPEG preview frames so encoding cannot hold decoder buffers."""
+    link = pyneat.GraphLinkOptions()
+    link.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
+    link.max_inflight_per_stream = 2
+    link.max_inflight_total = 2
+    return link
+
+
+def build_backbone(cfg: Config, width: int, height: int):
+    opt = pyneat.ModelOptions()
+    opt.preprocess.kind = pyneat.InputKind.Image
+    opt.preprocess.enable = pyneat.AutoFlag.On
+    opt.preprocess.input_max_width = width
+    opt.preprocess.input_max_height = height
+    opt.preprocess.input_max_depth = 3
+    opt.preprocess.resize.enable = pyneat.AutoFlag.On
+    opt.preprocess.resize.mode = pyneat.ResizeMode.Stretch
+    opt.preprocess.color_convert.enable = pyneat.AutoFlag.On
+    opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.NV12
+    opt.preprocess.color_convert.output_format = pyneat.PreprocessColorFormat.RGB
+    opt.preprocess.preset = pyneat.NormalizePreset.ImageNet
     if cfg.task == "segmentation":
-        backbone_options.preprocess.resize.width = cfg.input_size
-        backbone_options.preprocess.resize.height = cfg.input_size
-    backbone_options.processcvu.pre_run_target = "EV74"
-    backbone_options.processcvu.post_run_target = "A65"
-    backbone = pyneat.Model(cfg.backbone, backbone_options)
+        opt.preprocess.resize.width = cfg.input_size
+        opt.preprocess.resize.height = cfg.input_size
+    opt.processcvu.pre_run_target = "EV74"
+    opt.processcvu.post_run_target = "A65"
+    return pyneat.Model(cfg.backbone, opt)
 
-    transformer_options = pyneat.ModelOptions()
-    transformer_options.preprocess.kind = pyneat.InputKind.Tensor
-    transformer_options.preprocess.enable = pyneat.AutoFlag.Off
-    transformer_options.processcvu.pre_run_target = "A65"
-    transformer_options.processcvu.post_run_target = "A65"
-    transformer = pyneat.Model(cfg.transformer, transformer_options)
 
+def build_transformer(cfg: Config):
+    opt = pyneat.ModelOptions()
+    opt.preprocess.kind = pyneat.InputKind.Tensor
+    opt.preprocess.enable = pyneat.AutoFlag.Off
+    opt.processcvu.pre_run_target = "A65"
+    opt.processcvu.post_run_target = "A65"
+    return pyneat.Model(cfg.transformer, opt)
+
+
+def require_model_contract(cfg: Config, backbone, transformer) -> None:
     side = cfg.feature_size
     transformer_outputs = [[1, cfg.top_k, 4], [1, cfg.top_k, NUM_CLASSES]]
     if cfg.task == "segmentation":
@@ -547,76 +619,9 @@ def run(cfg: Config) -> int:
     if not valid_contract:
         raise RuntimeError("selected RF-DETR model pair has an unexpected I/O contract")
 
-    encoded_options = pyneat.RtspEncodedInputOptions()
-    encoded_options.url = cfg.rtsp_url
-    encoded_options.codec = source_codec
-    encoded_options.latency_ms = cfg.latency_ms
-    encoded_options.tcp = cfg.tcp
-    if cfg.tcp:
-        encoded_options.buffer_mode = "none"
-    encoded_options.source_fps = fps
-    if cfg.codec == "h264":
-        encoded_options.fallback_h264_width = width
-        encoded_options.fallback_h264_height = height
-    source = pyneat.groups.rtsp_encoded_input(encoded_options)
 
-    decode_options = pyneat.SimaDecodeOptions()
-    decode_options.type = decoder_type
-    decode_options.out_format = pyneat.Format.NV12
-    decode_options.raw_output = True
-    decode_options.dec_width = width
-    decode_options.dec_height = height
-    decode_options.dec_fps = fps
-    if cfg.codec == "mjpeg":
-        # Keep free decode surfaces while inference and preview retain frames.
-        decode_options.num_buffers = 32
-    decoder = pyneat.Graph("decoder")
-    decoder.add(pyneat.nodes.sima_decode(decode_options))
-
-    preview_fps = min(fps, cfg.raw_video_max_fps) if cfg.raw_video_max_fps else fps
-    video_options = (
-        pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(width, height, preview_fps)
-        if cfg.codec == "mjpeg"
-        else pyneat.VideoSenderOptions.passthrough(source_codec)
-    )
-    video_options.host = cfg.insight_host
-    video_options.video_port_base = cfg.video_port
-    video_options.channel = 0
-    video_options.async_ = False
-    video = pyneat.Graph("video")
-    if cfg.codec == "mjpeg":
-        video.add(pyneat.nodes.video_rate())
-        video.add(pyneat.nodes.caps_raw("NV12", width, height, preview_fps))
-    video.add(pyneat.groups.video_sender(video_options))
-
-    queue_options = pyneat.QueueOptions()
-    queue_options.max_buffers = 4
-    queue_options.overflow_policy = pyneat.OverflowPolicy.KeepLatest
-    inference_graph = pyneat.Graph("inference")
-    inference_graph.add(pyneat.nodes.queue(queue_options))
-    inference_graph.add(backbone.graph())
-    backbone_output = pyneat.Graph("backbone_output")
-    backbone_output.add(pyneat.nodes.output("backbone", pyneat.OutputOptions.every_frame(4)))
-    inference_graph.add(backbone_output)
-
-    source_graph = pyneat.Graph("rfdetr_source")
-    source_graph.connect(source, decoder)
-    if cfg.codec == "mjpeg":
-        video_link = pyneat.GraphLinkOptions()
-        video_link.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
-        video_link.max_inflight_per_stream = 2
-        video_link.max_inflight_total = 2
-        source_graph.connect(decoder, video, video_link)
-    else:
-        source_graph.connect(source, video)
-    source_graph.connect(decoder, inference_graph)
-
-    transformer_run_options = pyneat.RunOptions()
-    transformer_run_options.preset = pyneat.RunPreset.Balanced
-    transformer_run_options.queue_depth = 4
-    transformer_run_options.overflow_policy = pyneat.OverflowPolicy.Block
-    transformer_run_options.output_memory = pyneat.OutputMemory.Owned
-    dummy_inputs = [
+def transformer_seed(transformer) -> list:
+    return [
         pyneat.Tensor.from_numpy(
             np.zeros(tuple(int(value) for value in spec.shape), dtype=np.float32),
             copy=True,
@@ -624,27 +629,109 @@ def run(cfg: Config) -> int:
         )
         for spec in transformer.input_specs()
     ]
-    transformer_runner = transformer.build(
-        dummy_inputs,
-        route_options=pyneat.ModelRouteOptions(),
-        run_options=transformer_run_options,
+
+
+def source_run_options():
+    run_options = pyneat.RunOptions()
+    run_options.preset = pyneat.RunPreset.Realtime
+    run_options.output_memory = pyneat.OutputMemory.ZeroCopy
+    run_options.advanced.prepare_output_cpu_visible = True
+    return run_options
+
+
+def transformer_run_options():
+    """Every completed backbone result reaches the transformer; the bridge blocks when full."""
+    run_options = pyneat.RunOptions()
+    run_options.preset = pyneat.RunPreset.Balanced
+    run_options.queue_depth = 4
+    run_options.overflow_policy = pyneat.OverflowPolicy.Block
+    run_options.output_memory = pyneat.OutputMemory.Owned
+    return run_options
+
+
+def result_metadata(cfg: Config, sample, width: int, height: int, labels: list[str]):
+    box_tensor, logit_tensor, mask_tensor = split_transformer(sample, cfg)
+    if cfg.task == "detection":
+        objects = postprocess(
+            box_tensor.to_numpy(copy=False),
+            logit_tensor.to_numpy(copy=False),
+            width,
+            height,
+            labels,
+            cfg.min_score,
+            cfg.max_results,
+            cfg.top_k,
+        )
+        return "object-detection", json.dumps({"objects": objects}, separators=(",", ":"))
+    return "segmentation", segmentation_metadata(
+        box_tensor.to_numpy(copy=False),
+        logit_tensor.to_numpy(copy=False),
+        mask_tensor.to_numpy(copy=False),
+        width,
+        height,
+        labels,
+        cfg.min_score,
+        cfg.max_results,
+        cfg.mask_threshold,
+        cfg.mask_grid_size,
     )
 
-    source_run_options = pyneat.RunOptions()
-    source_run_options.preset = pyneat.RunPreset.Realtime
-    source_run_options.output_memory = pyneat.OutputMemory.ZeroCopy
-    source_run_options.advanced.prepare_output_cpu_visible = True
-    source_run = source_graph.build(source_run_options)
-    video_port = video_options.video_port
-    metadata_options = pyneat.MetadataSenderOptions()
-    metadata_options.host = cfg.insight_host
-    metadata_options.metadata_port_base = cfg.metadata_port
-    metadata_options.channel = 0
-    metadata_sender = pyneat.MetadataSender(metadata_options)
+
+def build_graph(cfg: Config, backbone, width: int, height: int, fps: int):
+    """Decode once; send the preview to Insight and the newest frames to the backbone."""
+    source = pyneat.Graph("rtsp_encoded_source")
+    source.add(pyneat.groups.rtsp_encoded_input(source_options(cfg, width, height, fps)))
+
+    decoder = pyneat.Graph("decoder")
+    decoder.add(pyneat.nodes.sima_decode(decoder_options(cfg, width, height, fps)))
+
+    video = pyneat.Graph("video")
+    if cfg.codec == "mjpeg":
+        video.add(pyneat.nodes.video_rate())
+        video.add(pyneat.nodes.caps_raw("NV12", width, height, preview_fps(cfg, fps)))
+    video.add(pyneat.groups.video_sender(video_options(cfg, width, height, fps)))
+
+    inference = pyneat.Graph("inference")
+    inference.add(pyneat.nodes.queue(latest_queue(4)))
+    inference.add(backbone.graph())
+    backbone_output = pyneat.Graph("backbone_output")
+    backbone_output.add(pyneat.nodes.output("backbone", pyneat.OutputOptions.every_frame(4)))
+    inference.add(backbone_output)
+
+    graph = pyneat.Graph("rfdetr_source")
+    graph.connect(source, decoder)
+    if cfg.codec == "mjpeg":
+        # MJPEG has no encoded passthrough: the preview re-encodes decoded frames.
+        graph.connect(decoder, video, preview_link())
+    else:
+        # A plain source link lets Core tee the encoded stream to the decoder and the sender.
+        graph.connect(source, video)
+    graph.connect(decoder, inference)
+    return graph
+
+
+def run(cfg: Config) -> int:
+    global pyneat
+    import pyneat
+
+    labels = load_labels(cfg.labels)
+    width, height, fps = probe_source_geometry(cfg)
+    backbone = build_backbone(cfg, width, height)
+    transformer = build_transformer(cfg)
+    require_model_contract(cfg, backbone, transformer)
+
+    graph = build_graph(cfg, backbone, width, height, fps)
+    transformer_runner = transformer.build(
+        transformer_seed(transformer),
+        route_options=pyneat.ModelRouteOptions(),
+        run_options=transformer_run_options(),
+    )
+    source_run = graph.build(source_run_options())
+    metadata_sender = pyneat.MetadataSender(metadata_options(cfg))
     print(
         f"RF-DETR {cfg.task} {cfg.variant} {cfg.codec}: {cfg.rtsp_url} "
         f"({width}x{height}@{fps}) -> "
-        f"Insight video={video_port} metadata={metadata_sender.metadata_port()}",
+        f"Insight video={cfg.video_port} metadata={metadata_sender.metadata_port()}",
         flush=True,
     )
 
@@ -654,6 +741,7 @@ def run(cfg: Config) -> int:
     transformer_input_shapes = tuple(tuple(spec.shape) for spec in transformer.input_specs())
 
     def transformer_bridge() -> None:
+        """Select the top proposals on the host and hand them to the transformer."""
         try:
             while not stop.is_set():
                 sample = source_run.pull("backbone", 500)
@@ -695,50 +783,12 @@ def run(cfg: Config) -> int:
     try:
         while not stop.is_set() and (cfg.frames == 0 or processed < cfg.frames):
             sample = transformer_runner.pull(timeout_ms=500)
-            tensors = collect_tensors(sample)
-            if not tensors:
+            if not collect_tensors(sample):
                 continue
-            box_tensor, logit_tensor, mask_tensor = split_transformer(sample, cfg)
-            if cfg.task == "detection":
-                data = json.dumps(
-                    {
-                        "objects": postprocess(
-                            box_tensor.to_numpy(copy=False),
-                            logit_tensor.to_numpy(copy=False),
-                            width,
-                            height,
-                            labels,
-                            cfg.min_score,
-                            cfg.max_results,
-                            cfg.top_k,
-                        )
-                    },
-                    separators=(",", ":"),
-                )
-                metadata_type = "object-detection"
-            else:
-                data = segmentation_metadata(
-                    box_tensor.to_numpy(copy=False),
-                    logit_tensor.to_numpy(copy=False),
-                    mask_tensor.to_numpy(copy=False),
-                    width,
-                    height,
-                    labels,
-                    cfg.min_score,
-                    cfg.max_results,
-                    cfg.mask_threshold,
-                    cfg.mask_grid_size,
-                )
-                metadata_type = "segmentation"
-            source_frame_id = sample.frame_id
+            metadata_type, data = result_metadata(cfg, sample, width, height, labels)
             timestamp_ms = sample.pts_ns // 1_000_000 if sample.pts_ns >= 0 else -1
-            frame_id = str(source_frame_id) if source_frame_id >= 0 else ""
-            if not metadata_sender.send_metadata(
-                metadata_type,
-                data,
-                timestamp_ms,
-                frame_id,
-            ):
+            frame_id = str(sample.frame_id) if sample.frame_id >= 0 else ""
+            if not metadata_sender.send_metadata(metadata_type, data, timestamp_ms, frame_id):
                 print("[warn] Insight metadata send failed", file=sys.stderr)
             processed += 1
             last_completed_at = time.monotonic()
@@ -754,7 +804,7 @@ def run(cfg: Config) -> int:
         source_run.stop()
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
-        _ = (backbone, source_graph)
+        _ = (backbone, graph)
     elapsed = (last_completed_at - first_completed_at) if processed > 1 else 0.0
     output_fps = (processed - 1) / elapsed if elapsed > 0.0 else 0.0
     print(
