@@ -19,8 +19,11 @@ inline bool pull_status_has_sample(simaai::neat::PullStatus status, const std::s
     return false;
   }
   if (status == simaai::neat::PullStatus::Closed) {
+    // A source that reached end of stream leaves the run's error empty; the reason is
+    // only in the pull's own detail.
+    const std::string& reason = run_error.empty() ? pull_error.message : run_error;
     throw std::runtime_error(output_name + " output closed unexpectedly" +
-                             (run_error.empty() ? std::string{} : ": " + run_error));
+                             (reason.empty() ? std::string{} : ": " + reason));
   }
   if (status != simaai::neat::PullStatus::Ok) {
     throw std::runtime_error("failed to pull " + output_name + ": " + pull_error.message);

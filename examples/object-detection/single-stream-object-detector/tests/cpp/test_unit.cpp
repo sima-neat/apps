@@ -125,18 +125,25 @@ bool test_closed_output_is_terminal() {
   using simaai::neat::PullStatus;
   simaai::neat::PullError pull_error;
   pull_error.message = "queue torn down";
-  const auto thrown_message = [&](PullStatus status) -> std::string {
+  simaai::neat::PullError end_of_stream;
+  end_of_stream.message = "input source reached end of stream";
+  const auto thrown_message = [](PullStatus status, const simaai::neat::PullError& detail,
+                                 const std::string& run_error) -> std::string {
     try {
-      (void)pull_status_has_sample(status, "detections", pull_error, "source reached EOS");
+      (void)pull_status_has_sample(status, "detections", detail, run_error);
     } catch (const std::runtime_error& error) {
       return error.what();
     }
     return "";
   };
-  return expect_true(thrown_message(PullStatus::Closed) ==
+  return expect_true(thrown_message(PullStatus::Closed, pull_error, "source reached EOS") ==
                          "detections output closed unexpectedly: source reached EOS",
                      "closed output ends the run with the runtime's reason") &&
-         expect_true(thrown_message(PullStatus::Error) ==
+         expect_true(thrown_message(PullStatus::Closed, end_of_stream, "") ==
+                         "detections output closed unexpectedly: input source reached end of "
+                         "stream",
+                     "closed output without a run error keeps the pull's reason") &&
+         expect_true(thrown_message(PullStatus::Error, pull_error, "source reached EOS") ==
                          "failed to pull detections: queue torn down",
                      "pull error ends the run with its message") &&
          expect_true(!pull_status_has_sample(PullStatus::Timeout, "detections", pull_error, ""),
