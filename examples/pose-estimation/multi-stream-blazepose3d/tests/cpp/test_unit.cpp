@@ -268,6 +268,8 @@ bool test_config_validation(const std::string& binary) {
       {"duplicate_id",
        config(stream_entry(0) + replaced(stream_entry(1), "id: camera1", "id: camera0")),
        "stream ids must be unique"},
+      {"quoted_stream_key", config(replaced(stream_entry(0), "- id: camera0", "- \"id\": camera0")),
+       "quoted YAML mapping keys are not supported"},
       {"numeric_id", config(replaced(stream_entry(0), "id: camera0", "id: 123")),
        "stream id must be a string"},
       {"timestamp_id", config(replaced(stream_entry(0), "id: camera0", "id: 2026-10-04")),

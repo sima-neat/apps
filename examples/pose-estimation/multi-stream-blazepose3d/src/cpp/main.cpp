@@ -543,6 +543,10 @@ std::unordered_map<std::string, std::string> load_raw_scalars(const fs::path& co
     if (content == "-" || content.rfind("- ", 0) == 0) {
       content = sima_examples::trim_copy(content.substr(1));
     }
+    if (!content.empty() && (content.front() == '\'' || content.front() == '"')) {
+      throw std::runtime_error("quoted YAML mapping keys are not supported; use plain keys: " +
+                               line);
+    }
     const std::size_t flow_colon = content.find(':');
     const std::string flow_value = flow_colon == std::string::npos
                                        ? content
