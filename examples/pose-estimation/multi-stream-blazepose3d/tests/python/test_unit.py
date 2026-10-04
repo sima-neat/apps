@@ -152,6 +152,74 @@ def test_pose_count_is_bounded_by_metadata_transport(tmp_path: Path):
         main.load_app_config(path)
 
 
+class _Options:
+    """Records attribute writes; unset attributes read as the -1 Core default."""
+
+    def __init__(self):
+        self.output_caps = SimpleNamespace(fps=-1)
+
+    def __getattr__(self, name):
+        return -1
+
+
+class _Graph:
+    def __init__(self, name=""):
+        self.nodes = []
+
+    def add(self, node):
+        self.nodes.append(node)
+
+    def connect(self, *nodes):
+        self.nodes.extend(nodes)
+
+
+def _recording_pyneat():
+    return SimpleNamespace(
+        RtspDecodedInputOptions=_Options,
+        RtspEncodedInputOptions=_Options,
+        SimaDecodeOptions=_Options,
+        InputOptions=_Options,
+        Graph=_Graph,
+        RtspCodec=SimpleNamespace(H264="h264", H265="h265"),
+        SimaDecodeType=SimpleNamespace(H264="h264", H265="h265"),
+        Format=SimpleNamespace(NV12="NV12", H264="H264", H265="H265"),
+        CapsMemory=SimpleNamespace(Any="any"),
+        PayloadType=SimpleNamespace(Encoded="encoded"),
+        InputMemoryPolicy=SimpleNamespace(Ev74="ev74"),
+        groups=SimpleNamespace(rtsp_encoded_input=lambda options: ("rtsp", options)),
+        nodes=SimpleNamespace(
+            input=lambda *args: ("input", args),
+            sima_decode=lambda options: ("decode", options),
+            caps_raw=lambda *args: ("caps", args),
+            output=lambda *args: ("output", args),
+        ),
+    )
+
+
+@pytest.mark.parametrize("codec", ["h264", "h265"])
+def test_source_frame_rate_is_a_decoder_hint_not_a_caps_pin(monkeypatch, codec: str):
+    # A 29.97 fps camera probes as 30 but negotiates 30000/1001; pinning 30/1 into
+    # the encoded or raw caps stops that stream with an incompatible-caps error.
+    monkeypatch.setattr(main, "pyneat", _recording_pyneat())
+    stream_cfg = main.StreamConfig("camera0", "rtsp://127.0.0.1/src0", codec, 0)
+    cfg = main.AppConfig("detector.tar.gz", "pose.tar.gz", [stream_cfg])
+    options = main.build_source_options(cfg, stream_cfg, 1280, 720, 30)
+    assert options.dec_fps == 30
+    assert options.source_fps == -1
+    assert options.output_caps.fps == -1
+    assert options.fallback_h264_fps == (30 if codec == "h264" else -1)
+
+    _, encoded = main.make_encoded_source(options).nodes[0]
+    assert encoded.source_fps == -1
+    assert encoded.fallback_h264_fps == options.fallback_h264_fps
+
+    decoder = main.make_decoder(options).nodes
+    _, decode = decoder[1]
+    assert decode.dec_fps == 30
+    caps = [args for kind, args in decoder if kind == "caps"]
+    assert caps == [("NV12", 1280, 720, -1, "any")]
+
+
 @pytest.mark.parametrize("roi_scale", [".nan", ".inf", "-.inf", "0", "-1.5"])
 def test_roi_scale_must_be_finite_and_positive(tmp_path: Path, roi_scale: str):
     path = write_config(tmp_path, [stream(0)])

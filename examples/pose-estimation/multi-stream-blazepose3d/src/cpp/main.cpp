@@ -501,7 +501,10 @@ neat::nodes::groups::RtspDecodedInputOptions probe_source(const AppConfig& cfg,
   options.latency_ms = cfg.latency_ms;
   options.tcp = cfg.tcp;
   options.payload_type = 96;
-  options.source_fps = runtime.fps;
+  // The integer FPS (probed and rounded, or configured) is only the decoder's
+  // rate hint. Pinning it into caps would reject NTSC-rate cameras: a 29.97 fps
+  // stream negotiates 30000/1001, which a 30/1 caps filter cannot accept.
+  options.dec_fps = runtime.fps;
   options.insert_queue = true;
   options.out_format = "NV12";
   options.decoder_name = "decoder_" + runtime.config.id;
@@ -512,12 +515,12 @@ neat::nodes::groups::RtspDecodedInputOptions probe_source(const AppConfig& cfg,
   if (runtime.config.codec == neat::nodes::groups::RtspCodec::H264) {
     options.fallback_h264_width = runtime.width;
     options.fallback_h264_height = runtime.height;
+    options.fallback_h264_fps = runtime.fps;
   }
   options.output_caps.enable = true;
   options.output_caps.format = "NV12";
   options.output_caps.width = runtime.width;
   options.output_caps.height = runtime.height;
-  options.output_caps.fps = runtime.fps;
   options.output_caps.memory = neat::CapsMemory::Any;
   return options;
 }
@@ -534,6 +537,7 @@ neat::Graph make_encoded_source(const neat::nodes::groups::RtspDecodedInputOptio
   encoded.auto_caps_from_stream = options.auto_caps_from_stream;
   encoded.fallback_h264_width = options.fallback_h264_width;
   encoded.fallback_h264_height = options.fallback_h264_height;
+  encoded.fallback_h264_fps = options.fallback_h264_fps;
   return neat::nodes::groups::RtspEncodedInput(encoded);
 }
 
@@ -548,7 +552,7 @@ neat::Graph make_decoder(const neat::nodes::groups::RtspDecodedInputOptions& opt
   decode.next_element = options.decoder_next_element;
   decode.dec_width = options.dec_width;
   decode.dec_height = options.dec_height;
-  decode.dec_fps = options.source_fps;
+  decode.dec_fps = options.dec_fps;
   decode.num_buffers = options.num_buffers;
   decode.input_buffers = options.decoder_input_buffers;
   decode.decoder_tuning = options.decoder_tuning;
@@ -558,8 +562,8 @@ neat::Graph make_decoder(const neat::nodes::groups::RtspDecodedInputOptions& opt
   graph.connect(neat::nodes::Input(
                     "encoded", encoded_input_options(options.codec, neat::InputMemoryPolicy::Ev74)),
                 neat::nodes::SimaDecode(decode));
-  graph.add(neat::nodes::CapsRaw("NV12", options.dec_width, options.dec_height, options.source_fps,
-                                 neat::CapsMemory::Any));
+  graph.add(neat::nodes::CapsRaw("NV12", options.dec_width, options.dec_height,
+                                 options.output_caps.fps, neat::CapsMemory::Any));
   graph.add(neat::nodes::Output("analytics_frame"));
   return graph;
 }
@@ -692,7 +696,7 @@ neat::Graph make_rgb_output(const StreamRuntime& stream) {
   neat::Graph graph("rgb_" + std::to_string(stream.index));
   graph.add(neat::nodes::Input("analytics_frame"));
   graph.add(neat::nodes::VideoConvert());
-  graph.add(neat::nodes::CapsRaw("RGB", stream.width, stream.height, stream.fps));
+  graph.add(neat::nodes::CapsRaw("RGB", stream.width, stream.height));
   graph.add(neat::nodes::Output(frame_output_name(stream.index), neat::OutputOptions::Latest()));
   return graph;
 }

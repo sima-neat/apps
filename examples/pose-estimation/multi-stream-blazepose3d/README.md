@@ -136,7 +136,7 @@ Configure one to four streams. Each stream needs a unique stable `id` and `insig
 
 The active video and metadata UDP ports must be disjoint. If you use sparse or non-zero channel numbers, choose `video_port_base` and `metadata_port_base` so no `base + insight_channel` value overlaps.
 
-The optional `width`, `height`, and `fps` fields must be supplied together. When present, they avoid a startup probe so an offline channel cannot prevent healthy channels from starting; make them match the RTSP source's actual caps. Once running, a channel that closes or errors is isolated while the other channels continue.
+The optional `width`, `height`, and `fps` fields must be supplied together. When present, they avoid a startup probe so an offline channel cannot prevent healthy channels from starting; make them match the RTSP source's actual caps. The FPS is a decoder hint and is not pinned into caps, so a 29.97 fps (30000/1001) camera works with `fps: 30`, as it does when probed. Once running, a channel that closes or errors is isolated while the other channels continue.
 
 `pose.temporal_filter_enabled` defaults to `true`. The per-stream filter matches poses by person-box overlap, damps small coordinate and confidence fluctuations, and adapts toward the current frame during deliberate fast motion. It also bridges at most two missing detector or pose results with a confidence-decayed copy of the latest estimate. This removes one-frame visualization flashes without buffering future frames or adding inference latency. The filter processes image and world landmarks together before either metadata message is built, so the 2D overlay and 3D view remain frame-correlated and cannot drift apart. Disable it only when raw model output is required for measurement.
 
