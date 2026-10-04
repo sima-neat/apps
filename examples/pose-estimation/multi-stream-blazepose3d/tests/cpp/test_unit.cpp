@@ -452,6 +452,32 @@ bool test_pose_count_limit(const std::string& binary) {
   return ok;
 }
 
+bool test_standalone_sequence_dash_starts_a_stream(const std::string& binary) {
+  const std::string streams = "  -\n"
+                              "    id: camera0\n"
+                              "    url: rtsp://127.0.0.1/src0\n"
+                              "    codec: h264\n"
+                              "    insight_channel: 0\n"
+                              "  - # second stream\n"
+                              "    id: camera1\n"
+                              "    url: rtsp://127.0.0.1/src1\n"
+                              "    insight_channel: 1\n";
+  const fs::path config = write_config("standalone_sequence_dash", streams);
+  const auto typed = blazepose_config::TypedConfig::load(config);
+  bool ok = expect(typed.string_or("output.insight.host", "") == "127.0.0.1" &&
+                       typed.string_or("models.pose_path", "") == "pose#v2.tar.gz",
+                   "the typed scanner skips standalone sequence dashes like PyYAML");
+  const auto result =
+      spawn_and_wait(binary, {"--config", config.string(), "--validate-config-only"}, 20000);
+  ok &= expect(result.exit_code == 0 && result.stdout_text.find("streams=2") != std::string::npos,
+               "a standalone sequence dash starts a stream mapping like PyYAML");
+  if (result.exit_code != 0) {
+    std::cerr << result.stderr_text;
+  }
+  remove_dir(config.parent_path().string());
+  return ok;
+}
+
 bool test_roi_scale_must_be_finite_and_positive(const std::string& binary) {
   bool ok = true;
   for (const std::string value : {".nan", ".inf", "-.inf", "0", "-1.5"}) {
@@ -489,5 +515,6 @@ int main(int argc, char** argv) {
   ok &= test_metadata_contract_correlation();
   ok &= test_pose_count_limit(argv[1]);
   ok &= test_roi_scale_must_be_finite_and_positive(argv[1]);
+  ok &= test_standalone_sequence_dash_starts_a_stream(argv[1]);
   return ok ? 0 : 1;
 }

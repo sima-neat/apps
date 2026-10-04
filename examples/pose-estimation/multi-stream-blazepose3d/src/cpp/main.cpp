@@ -327,11 +327,16 @@ std::vector<StreamConfig> parse_streams(const fs::path& config_path) {
     if (!in_streams) {
       continue;
     }
-    if (indent <= streams_indent && line.rfind("- ", 0) != 0) {
+    if (indent <= streams_indent && !blazepose_config::is_sequence_entry(line)) {
       commit();
       break;
     }
-    if (line.rfind("- ", 0) == 0) {
+    if (line == "-") {
+      commit();
+      current.emplace();
+      continue;
+    }
+    if (blazepose_config::is_sequence_entry(line)) {
       commit();
       current.emplace();
       apply_stream_field(

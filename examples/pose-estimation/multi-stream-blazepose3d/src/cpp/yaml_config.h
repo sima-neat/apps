@@ -339,6 +339,12 @@ inline std::string strip_yaml_inline_comment(const std::string& line) {
   return line;
 }
 
+// A trimmed line that opens a block-sequence entry: "- key: value", or a
+// standalone "-" whose mapping continues on the following, deeper lines.
+inline bool is_sequence_entry(const std::string& line) {
+  return line == "-" || line.rfind("- ", 0) == 0;
+}
+
 inline int parse_yaml_integer(const std::string& value, const std::string& key) {
   std::string scalar = value;
   scalar.erase(std::remove(scalar.begin(), scalar.end(), '_'), scalar.end());
@@ -468,7 +474,7 @@ public:
         }
         list_block_indent = -1;
       }
-      if (line.rfind("- ", 0) == 0) {
+      if (is_sequence_entry(line)) {
         list_block_indent = indent;
         continue;
       }

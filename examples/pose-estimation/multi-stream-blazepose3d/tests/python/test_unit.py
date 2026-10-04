@@ -220,6 +220,23 @@ def test_source_frame_rate_is_a_decoder_hint_not_a_caps_pin(monkeypatch, codec: 
     assert caps == [("NV12", 1280, 720, -1, "any")]
 
 
+def test_standalone_sequence_dash_starts_a_stream_like_cpp(tmp_path: Path):
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        "models:\n  detector_path: detector.tar.gz\n  pose_path: pose.tar.gz\n"
+        "streams:\n"
+        "  -\n    id: camera0\n    url: rtsp://127.0.0.1/src0\n"
+        "    codec: h264\n    insight_channel: 0\n"
+        "  - # second stream\n    id: camera1\n    url: rtsp://127.0.0.1/src1\n"
+        "    insight_channel: 1\n"
+        "output:\n  insight:\n    host: 127.0.0.1\n",
+        encoding="utf-8",
+    )
+    cfg = main.load_app_config(path)
+    assert [stream.id for stream in cfg.streams] == ["camera0", "camera1"]
+    assert [stream.insight_channel for stream in cfg.streams] == [0, 1]
+
+
 @pytest.mark.parametrize("roi_scale", [".nan", ".inf", "-.inf", "0", "-1.5"])
 def test_roi_scale_must_be_finite_and_positive(tmp_path: Path, roi_scale: str):
     path = write_config(tmp_path, [stream(0)])
