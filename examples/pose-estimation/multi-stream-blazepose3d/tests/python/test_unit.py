@@ -198,6 +198,14 @@ def test_config_reads_streams_and_settings(tmp_path: Path):
     assert main.load_app_config(main.DEFAULT_CONFIG).pose_temporal_filter_enabled
 
 
+def test_config_defaults_null_codec_and_decodes_quoted_strings(tmp_path: Path):
+    text = config_text([stream(0, codec=None)])
+    text = text.replace("host: 127.0.0.1", 'host: "127.0.0.\\x31"')
+    cfg = load_config(tmp_path, text)
+    assert cfg.streams[0].codec == "h264"
+    assert cfg.insight_host == "127.0.0.1"
+
+
 class _Options:
     """Records attribute writes; unset attributes read as the -1 Core default."""
 
