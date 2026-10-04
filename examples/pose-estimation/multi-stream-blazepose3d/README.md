@@ -107,7 +107,7 @@ The application sends the original encoded stream plus two correlated metadata m
 
 ## Configure
 
-Edit `${APP_DIR}/src/common/config.yaml`. Both the C++ and Python apps read block-style YAML only, as shown below; one-line flow collections such as `streams: [{...}]` are rejected.
+Edit `${APP_DIR}/src/common/config.yaml`:
 
 ```yaml
 models:
@@ -138,17 +138,9 @@ The active video and metadata UDP ports must be disjoint. If you use sparse or n
 
 The optional `width`, `height`, and `fps` fields must be supplied together. When present, they avoid a startup probe so an offline channel cannot prevent healthy channels from starting; make them match the RTSP source's actual caps. The FPS is a decoder hint and is not pinned into caps, so a 29.97 fps (30000/1001) camera works with `fps: 30`, as it does when probed.
 
-`pose.temporal_filter_enabled` defaults to `true`. The per-stream filter matches poses by person-box overlap, damps small coordinate and confidence fluctuations, and adapts toward the current frame during deliberate fast motion. It also bridges at most two missing detector or pose results with a confidence-decayed copy of the latest estimate. This removes one-frame visualization flashes without buffering future frames or adding inference latency. The filter processes image and world landmarks together before either metadata message is built, so the 2D overlay and 3D view remain frame-correlated and cannot drift apart. Disable it only when raw model output is required for measurement.
+`pose.temporal_filter_enabled` defaults to `true`. Each stream matches its poses to the previous frame's by person-box overlap and moves the matched image and world landmarks halfway toward the new estimate, so the 2D overlay and 3D view are smoothed together. Disable it when raw model output is required.
 
 ## Run
-
-Validate the configuration without opening streams:
-
-```bash
-"${APP_DIR}/src/cpp/pre-built/multi-stream-blazepose3d" \
-  --config "${APP_DIR}/src/common/config.yaml" \
-  --validate-config-only
-```
 
 ### C++
 
@@ -168,7 +160,7 @@ python3 "${APP_DIR}/src/python/main.py" \
 
 ## Output Metadata
 
-Every accepted frame produces a correlated pair of messages, including empty pose arrays when no person is selected. Each `pose-estimation` pose carries its YOLO person box, global presence, 33 named image-space keypoints, and 33 named world keypoints. Insight uses the image-space fields for the 2D overlay:
+Each frame in which YOLO26 selects people produces a correlated pair of messages. Each `pose-estimation` pose carries its YOLO person box, global presence, 33 named image-space keypoints, and 33 named world keypoints. Insight uses the image-space fields for the 2D overlay:
 
 ```json
 {"stream_id":"entrance","poses":[{"id":"pose_1","label":"person","presence":0.99,"confidence":0.91,
@@ -198,26 +190,23 @@ data can reuse the same envelope with a separately registered Insight renderer.
 
 The keypoint confidence is the minimum of BlazePose landmark visibility and presence after sigmoid activation. The global pose-presence logit is also sigmoid-activated before it gates each ROI and is published as a probability.
 
-The application retains the source `stream_id`, frame ID, PTS, DTS, duration, and sequence numbers in its bounded FIFO context. Detached MLA/postprocess runners do not echo all of that identity, so output order is correlated against this retained context. Both metadata payloads include the original `stream_id`. The C++ and Python hardware E2E tests each run up to four H.264 and four H.265 streams, and listen on every configured metadata port. They require the configured stream identity and, on every port, a 2D/3D pair with an identical `(port, timestamp, frame_id)` identity and pose count; empty pairs count, because a source may show nobody. At least one port must publish a non-empty pair with 33 image and world keypoints per pose. They also require codec-valid RTP on every configured video port.
+Each frame's stream ID, frame ID and PTS stay with its queued work, so a result is always published on its own stream's channel with its source timestamp. The C++ and Python hardware E2E tests each run up to four H.264 and four H.265 streams. They require video on every configured video port, the configured stream identity in every metadata message, and at least one non-empty 2D/3D pair with 33 world keypoints per pose and one `(port, timestamp, frame_id)` identity.
 
 ## Performance and Scheduling
 
 - Each source run starts and pulls on its own thread, so an offline source's startup timeout cannot delay healthy streams. `RealtimeLatestByStream` bounds admitted decoder-backed frames before the packed-RGB conversion.
-- Latest-only detector and pose mailboxes plus round-robin dispatch prevent stale work from accumulating and preserve fairness across streams.
-- A per-stream completion queue publishes results in source-frame order; work evicted from a latest-only mailbox advances the sequence without emitting stale metadata.
+- Latest-only detector and pose mailboxes plus round-robin dispatch keep a slow or disconnected stream from blocking the others; newer work replaces queued work instead of accumulating.
 - YOLO26 and BlazePose each use one shared model route. Increasing stream count does not create additional model routes.
 - Video uses H.264 or H.265 encoded passthrough with latest-only egress, so a slow receiver cannot backpressure analytics. The application does not draw on frames or re-encode them.
 - The current public `VideoConvert` node performs the one NV12-to-RGB conversion on A65 after admission. The RGB frame remains holder-backed in application code; Python passes the `Tensor` directly and C++ maps a non-owning `cv::Mat` view.
 - YOLO26 preprocessing stays inside the shared `Model::graph()` route; the application pushes each correlated RGB frame directly into that runner.
 - The public `stages::Preproc(..., rois)` API receives the fixed-size source RGB frame and all selected BlazePose ROIs in one batched call. Keeping the input dimensions stable lets Neat reuse one preprocessing runner instead of caching a new graph for every changing person-box crop; returned affine metadata still maps landmarks directly into source-frame coordinates. Full RGB frames are not cloned.
 
-The shutdown summary reports source and detector frames, metadata frames, metadata send failures, selected and completed ROIs, both mailbox drop counts, timed-out jobs, metadata FPS, and pose FPS. A metadata frame is a correlated 2D/3D pair whose two messages were both queued for Insight; only these count toward `runtime.frames`. A pair with a failed send is logged, counted as a send failure, and still completes its frame. These are application counters, not node profiling or graph visualization.
+At shutdown each stream prints `frames_in` (source frames admitted, which `runtime.frames` limits) and `frames_out` (metadata pairs whose two messages were both queued for Insight). A failed send is logged and does not count.
 
 ## Troubleshooting
 
 - Replace all placeholders before running and verify both model paths.
-- Set `detector.max_inflight_per_stream` to `-1` to use the Core default.
-- Increase `pose.job_timeout_ms` only if valid jobs expire under sustained load.
 - Reduce `pose.max_people_per_frame` when pose throughput, rather than detection, is the bottleneck.
 - H.265 input and video passthrough require an Insight/browser environment that can decode HEVC.
 
