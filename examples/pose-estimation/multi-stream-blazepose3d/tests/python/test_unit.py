@@ -152,6 +152,8 @@ REJECTED_CONFIGS = [
     ),
     ("unknown-codec", config_text([stream(0, codec="hevc")]), "codec must be h264 or h265"),
     ("eleven-people", config_text(pose={"max_people_per_frame": 11}), "between 1 and 10"),
+    ("null-frames", config_text(runtime={"frames": None}), "frames must be an integer"),
+    ("null-tcp", config_text(input={"tcp": None}), "tcp must be true or false"),
 ] + [
     (f"roi-scale-{value}", config_text() + f"pose:\n  roi_scale: {value}\n", "finite and > 0")
     for value in (".nan", ".inf", "0")
@@ -164,7 +166,7 @@ REJECTED_CONFIGS = [
     ids=[case[0] for case in REJECTED_CONFIGS],
 )
 def test_config_validation(tmp_path: Path, text: str, message: str):
-    with pytest.raises(ValueError, match=message):
+    with pytest.raises((TypeError, ValueError), match=message):
         load_config(tmp_path, text)
 
 
