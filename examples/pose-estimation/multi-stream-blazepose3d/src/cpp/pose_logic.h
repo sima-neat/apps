@@ -131,6 +131,22 @@ claim_expired_aggregates(Aggregates& aggregates, ShouldExpire&& should_expire) {
   return expired;
 }
 
+// Sends one frame's 2D/3D metadata pair through `send(type)`. runtime.frames
+// counts correlated pairs queued for Insight, so the frame counts only when both
+// sends succeed; otherwise it is counted as a send failure. Either way the
+// caller completes the frame, so admission and draining are unaffected.
+template <typename Send, typename FrameCount, typename FailureCount>
+bool send_metadata_pair(Send&& send, FrameCount& metadata_frames, FailureCount& send_failures) {
+  const bool overlay_sent = send("pose-estimation");
+  const bool world_sent = send("auxiliary-visualization");
+  if (overlay_sent && world_sent) {
+    ++metadata_frames;
+    return true;
+  }
+  ++send_failures;
+  return false;
+}
+
 template <typename T> class OrderedCompletionQueue {
 public:
   std::vector<T> complete(std::uint64_t sequence, T value) {

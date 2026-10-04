@@ -28,7 +28,6 @@
 #include <opencv2/core/mat.hpp>
 
 #include <algorithm>
-#include <array>
 #include <atomic>
 #include <cctype>
 #include <chrono>
@@ -175,6 +174,7 @@ struct StreamRuntime {
   blazepose_app::PoseSmoother pose_smoother;
   bool pose_temporal_filter_enabled = true;
   std::atomic<int> metadata_frames{0};
+  std::atomic<std::uint64_t> metadata_send_failures{0};
   std::atomic<std::uint64_t> source_frames{0};
   std::atomic<std::uint64_t> detector_frames{0};
   std::atomic<std::uint64_t> selected_rois{0};
@@ -884,15 +884,18 @@ void publish_frame_metadata_locked(StreamRuntime& stream, const FrameIdentity& i
       blazepose_app::world_pose_auxiliary_data_json(std::move(poses), identity.stream_id).dump();
   const int64_t timestamp_ms = identity.pts_ns >= 0 ? identity.pts_ns / 1'000'000 : -1;
   const std::string frame_id = identity.frame_id >= 0 ? std::to_string(identity.frame_id) : "";
-  for (const auto& [type, data] : std::array<std::pair<const char*, const std::string*>, 2>{
-           {{"pose-estimation", &overlay_data}, {"auxiliary-visualization", &auxiliary_data}}}) {
+  const auto send = [&](const char* type) {
+    const std::string& data =
+        std::string_view(type) == "pose-estimation" ? overlay_data : auxiliary_data;
     std::string error;
-    if (!stream.metadata_sender->send_metadata(type, *data, timestamp_ms, frame_id, &error)) {
-      std::cerr << "[warn] stream " << stream.config.id << " " << type
-                << " metadata send failed: " << error << "\n";
+    if (stream.metadata_sender->send_metadata(type, data, timestamp_ms, frame_id, &error)) {
+      return true;
     }
-  }
-  ++stream.metadata_frames;
+    std::cerr << "[warn] stream " << stream.config.id << " " << type
+              << " metadata send failed: " << error << "\n";
+    return false;
+  };
+  blazepose_app::send_metadata_pair(send, stream.metadata_frames, stream.metadata_send_failures);
 }
 
 void complete_frame(StreamRuntime& stream, std::uint64_t sequence, const FrameIdentity& identity,
@@ -1599,6 +1602,7 @@ void print_summary(const AppRuntime& app, double elapsed_seconds) {
               << "] source_frames=" << stream->source_frames.load()
               << " detector_frames=" << stream->detector_frames.load()
               << " metadata_frames=" << stream->metadata_frames.load()
+              << " metadata_send_failures=" << stream->metadata_send_failures.load()
               << " selected_rois=" << stream->selected_rois.load()
               << " completed_rois=" << stream->completed_rois.load()
               << " detector_mailbox_drops=" << stream->detector_mailbox_drops.load()

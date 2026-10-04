@@ -212,7 +212,7 @@ The application retains the source `stream_id`, frame ID, PTS, DTS, duration, an
 - YOLO26 preprocessing stays inside the shared `Model::graph()` route; the application pushes each correlated RGB frame directly into that runner.
 - The public `stages::Preproc(..., rois)` API receives the fixed-size source RGB frame and all selected BlazePose ROIs in one batched call. Keeping the input dimensions stable lets Neat reuse one preprocessing runner instead of caching a new graph for every changing person-box crop; returned affine metadata still maps landmarks directly into source-frame coordinates. Full RGB frames are not cloned.
 
-The shutdown summary reports source and detector frames, selected and completed ROIs, both mailbox drop counts, timed-out jobs, metadata FPS, and pose FPS. These are application counters, not node profiling or graph visualization.
+The shutdown summary reports source and detector frames, metadata frames, metadata send failures, selected and completed ROIs, both mailbox drop counts, timed-out jobs, metadata FPS, and pose FPS. A metadata frame is a correlated 2D/3D pair whose two messages were both queued for Insight; only these count toward `runtime.frames`. A pair with a failed send is logged, counted as a send failure, and still completes its frame. These are application counters, not node profiling or graph visualization.
 
 ## Troubleshooting
 

@@ -320,6 +320,7 @@ class StreamRuntime:
     pose_smoother: PoseSmoother = field(default_factory=PoseSmoother)
     pose_temporal_filter_enabled: bool = True
     metadata_frames: int = 0
+    metadata_send_failures: int = 0
     source_frames: int = 0
     detector_frames: int = 0
     selected_rois: int = 0
@@ -1217,13 +1218,30 @@ def publish_metadata_locked(
         world_pose_auxiliary_data(poses, identity.stream_id),
         separators=(",", ":"),
     )
-    stream.metadata_sender.send_metadata(
-        "pose-estimation", overlay_data, timestamp_ms, frame_id
-    )
-    stream.metadata_sender.send_metadata(
-        "auxiliary-visualization", auxiliary_data, timestamp_ms, frame_id
-    )
-    stream.metadata_frames += 1
+    # runtime.frames counts correlated pairs queued for Insight, so a frame counts
+    # only when both messages were queued. A failed pair still completes its frame.
+    pair_sent = True
+    for metadata_type, data in (
+        ("pose-estimation", overlay_data),
+        ("auxiliary-visualization", auxiliary_data),
+    ):
+        try:
+            sent = bool(
+                stream.metadata_sender.send_metadata(metadata_type, data, timestamp_ms, frame_id)
+            )
+            error = ""
+        except RuntimeError as exc:  # pyneat raises when the sender reports an error.
+            sent, error = False, str(exc)
+        if not sent:
+            pair_sent = False
+            print(
+                f"[warn] stream {stream.config.id} {metadata_type} metadata send failed: {error}",
+                file=sys.stderr,
+            )
+    if pair_sent:
+        stream.metadata_frames += 1
+    else:
+        stream.metadata_send_failures += 1
 
 
 def complete_frame(
@@ -1863,7 +1881,9 @@ def print_summary(runtime: AppRuntime, elapsed: float) -> None:
         print(
             f"[summary stream={stream.config.id}] source_frames={stream.source_frames} "
             f"detector_frames={stream.detector_frames} "
-            f"metadata_frames={stream.metadata_frames} selected_rois={stream.selected_rois} "
+            f"metadata_frames={stream.metadata_frames} "
+            f"metadata_send_failures={stream.metadata_send_failures} "
+            f"selected_rois={stream.selected_rois} "
             f"completed_rois={stream.completed_rois} "
             f"detector_mailbox_drops={stream.detector_mailbox_drops} "
             f"pose_mailbox_drops={stream.pose_mailbox_drops} "
