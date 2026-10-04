@@ -431,16 +431,24 @@ download_model_registry_variant() {
         # sima-cli 2.1.18+ downloads a model-package zip that wraps the model pack.
         for package in "${tmpdir}/${registry_name}/${variant}"/*.zip; do
             [[ -f "$package" ]] || continue
-            "$VERSION_PYTHON" - "$package" "$expected_file" "$downloaded_file" <<'PY' || true
+            local extracted_file
+            extracted_file="$(mktemp "${downloaded_file}.tmp.XXXXXX")" || continue
+            if "$VERSION_PYTHON" - "$package" "$expected_file" "$extracted_file" <<'PY'
 import shutil, sys, zipfile
 package, expected, target = sys.argv[1:4]
 with zipfile.ZipFile(package) as archive:
     members = [m for m in archive.infolist() if m.filename.rsplit("/", 1)[-1] == expected]
-    if len(members) == 1:
-        with archive.open(members[0]) as src, open(target, "wb") as dst:
-            shutil.copyfileobj(src, dst)
+    if len(members) != 1:
+        raise SystemExit(f"expected one {expected} in {package}, found {len(members)}")
+    with archive.open(members[0]) as src, open(target, "wb") as dst:
+        shutil.copyfileobj(src, dst)
 PY
-            [[ -f "$downloaded_file" ]] && break
+            then
+                if mv -f "$extracted_file" "$downloaded_file"; then
+                    break
+                fi
+            fi
+            rm -f "$extracted_file"
         done
     fi
     local staged_file

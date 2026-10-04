@@ -7,7 +7,7 @@ streams:                             # Configure one to four cameras; restart af
     url: <rtsp-url>                 # RTSP source URL.
     codec: h264                     # h264 or h265.
     insight_channel: 0              # Unique Insight video/metadata channel.
-    width: 1920                     # Optional with height/fps; avoids probing an offline source.
+    width: 1920                     # Required source dimensions and decoder FPS hint.
     height: 1080
     fps: 30
 

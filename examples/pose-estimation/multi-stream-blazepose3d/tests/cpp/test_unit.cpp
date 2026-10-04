@@ -32,10 +32,11 @@ bool near(float actual, float expected) {
 }
 
 std::string stream_entry(int index, const std::string& codec = "h264",
-                         const std::string& extra = "") {
+                         const std::string& extra = "", bool with_caps = true) {
   const std::string number = std::to_string(index);
   return "  - id: camera" + number + "\n    url: rtsp://127.0.0.1/src" + number +
-         "\n    codec: " + codec + "\n    insight_channel: " + number + "\n" + extra;
+         "\n    codec: " + codec + "\n    insight_channel: " + number + "\n" +
+         (with_caps ? "    width: 1920\n    height: 1080\n    fps: 30\n" : "") + extra;
 }
 
 // `insight` continues the output.insight mapping; `sections` adds top-level sections.
@@ -158,6 +159,12 @@ bool test_latest_work_and_metadata_pairs() {
   bool ok = expect(!blazepose_app::keep_latest(mailbox, 1) &&
                        blazepose_app::keep_latest(mailbox, 2) && mailbox == 2,
                    "a stream mailbox keeps only the latest work");
+  std::uint64_t last_published_frame_id = 0;
+  ok &= expect(blazepose_app::claim_newer_frame(2, last_published_frame_id) &&
+                   !blazepose_app::claim_newer_frame(1, last_published_frame_id) &&
+                   blazepose_app::claim_newer_frame(3, last_published_frame_id) &&
+                   last_published_frame_id == 3,
+               "a stream never publishes a completed frame behind a newer frame");
   std::vector<std::string> sent;
   const auto send_failing_world = [&](const char* type) {
     sent.emplace_back(type);
@@ -246,8 +253,8 @@ bool test_config_validation(const std::string& binary) {
        "stream video port must be <= 65535"},
       {"metadata_port_range", config(stream_entry(60000), "    video_port_base: 1\n"),
        "stream metadata port must be <= 65535"},
-      {"partial_caps", config(stream_entry(0, "h264", "    width: 1920\n")),
-       "must either all be omitted or all be > 0"},
+      {"missing_caps", config(stream_entry(0, "h264", "", false)),
+       "width, height, and fps must all be > 0"},
       {"unknown_codec", config(stream_entry(0, "hevc")), "stream codec must be h264 or h265"},
       {"eleven_people", config(stream_entry(0), "", "pose:\n  max_people_per_frame: 11\n"),
        "pose.max_people_per_frame must be between 1 and 10"},

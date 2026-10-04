@@ -7,7 +7,6 @@ import gc
 import glob
 import json
 import math
-import os
 import struct
 import sys
 import threading
@@ -35,7 +34,6 @@ MAX_INFLIGHT_PER_STREAM = 4
 # Accepted model input with no output for this long means the shared Run is stuck.
 INFERENCE_STALL_TIMEOUT_S = 5.0
 
-cv2 = None
 np = None
 pyneat = None
 
@@ -175,6 +173,7 @@ class StreamRuntime:
     source_run: Any = None
     metadata_lock: threading.Lock = field(default_factory=threading.Lock)
     pose_smoother: PoseSmoother = field(default_factory=PoseSmoother)
+    last_published_frame_id: int = 0
     frames_in: int = 0
     frames_out: int = 0
     # Admitted frames that are still queued or inside a model.
@@ -212,17 +211,15 @@ class AppRuntime:
 
 
 def load_runtime_dependencies() -> None:
-    global cv2, np, pyneat
+    global np, pyneat
     if pyneat is not None:
         return
     for path in glob.glob("/usr/lib/python3*/dist-packages"):
         if path not in sys.path:
             sys.path.insert(0, path)
-    import cv2 as cv2_module
     import numpy as np_module
     import pyneat as pyneat_module
 
-    cv2 = cv2_module
     np = np_module
     pyneat = pyneat_module
 
@@ -310,12 +307,8 @@ def validate_config(cfg: AppConfig) -> None:
             raise ValueError("stream url must be set")
         if stream.insight_channel < 0:
             raise ValueError("stream insight_channel must be >= 0")
-        no_caps = stream.width == stream.height == stream.fps == 0
-        all_caps = stream.width > 0 and stream.height > 0 and stream.fps > 0
-        if not (no_caps or all_caps):
-            raise ValueError(
-                "stream width, height, and fps must either all be omitted or all be > 0"
-            )
+        if not (stream.width > 0 and stream.height > 0 and stream.fps > 0):
+            raise ValueError("stream width, height, and fps must all be > 0")
         if cfg.video_port_base + stream.insight_channel > 65535:
             raise ValueError("stream video port must be <= 65535")
         if cfg.metadata_port_base + stream.insight_channel > 65535:
@@ -522,21 +515,6 @@ def rtsp_codec(codec: str):
     return pyneat.RtspCodec.H265 if codec == "h265" else pyneat.RtspCodec.H264
 
 
-def probe_rtsp(url: str, tcp: bool) -> tuple[int, int, int]:
-    if tcp:
-        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
-    capture = cv2.VideoCapture(url)
-    if not capture.isOpened():
-        raise RuntimeError(f"failed to open RTSP source for probing: {url}")
-    width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
-    height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
-    fps = round(capture.get(cv2.CAP_PROP_FPS) or 0)
-    capture.release()
-    if width <= 0 or height <= 0 or fps <= 0:
-        raise RuntimeError(f"RTSP probe must resolve width, height, and FPS for {url}")
-    return width, height, fps
-
-
 def build_source_options(
     cfg: AppConfig, stream: StreamConfig, width: int, height: int, fps: int
 ):
@@ -546,8 +524,8 @@ def build_source_options(
     options.latency_ms = cfg.latency_ms
     options.tcp = cfg.tcp
     options.payload_type = 96
-    # The integer FPS (probed and rounded, or configured) is only the decoder's
-    # rate hint. Pinning it into caps would reject NTSC-rate cameras: a 29.97 fps
+    # The configured integer FPS is only the decoder's rate hint. Pinning it
+    # into caps would reject NTSC-rate cameras: a 29.97 fps
     # stream negotiates 30000/1001, which a 30/1 caps filter cannot accept.
     options.dec_fps = fps
     options.insert_queue = True
@@ -804,15 +782,7 @@ def realtime_link(stream: StreamRuntime):
 def build_runtime(cfg: AppConfig) -> AppRuntime:
     streams: list[StreamRuntime] = []
     for index, stream_cfg in enumerate(cfg.streams):
-        if stream_cfg.width > 0:
-            width, height, fps = stream_cfg.width, stream_cfg.height, stream_cfg.fps
-        else:
-            try:
-                width, height, fps = probe_rtsp(stream_cfg.url, cfg.tcp)
-            except RuntimeError as error:
-                raise RuntimeError(
-                    f"{error}; configure width, height, and fps to start while it is offline"
-                ) from error
+        width, height, fps = stream_cfg.width, stream_cfg.height, stream_cfg.fps
         source_options = build_source_options(cfg, stream_cfg, width, height, fps)
         metadata_options = pyneat.MetadataSenderOptions()
         metadata_options.host = cfg.insight_host
@@ -974,6 +944,9 @@ def publish_frame(
     """Send one frame's 2D and 3D metadata. The per-stream lock keeps the two
     messages of one frame from interleaving with another frame's."""
     with stream.metadata_lock:
+        if identity.frame_id <= stream.last_published_frame_id:
+            return
+        stream.last_published_frame_id = identity.frame_id
         if stream.pose_temporal_filter_enabled:
             poses = stream.pose_smoother.filter(poses)
         overlay = poses_data(poses, identity.stream_id)

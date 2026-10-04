@@ -12,12 +12,14 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <map>
 #include <mutex>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <tuple>
@@ -33,6 +35,42 @@ constexpr const char* kInsightHost = "127.0.0.1";
 constexpr const char* kPoseModel = "blazepose_ghum_heavy_modalix_bf16_mpk.tar.gz";
 constexpr const char* kDetectorModel = "yolo26m-det-int8-b1.tar.gz";
 constexpr std::size_t kMaxStreams = 4;
+
+struct SourceCaps {
+  int width = 0;
+  int height = 0;
+  int fps = 0;
+};
+
+SourceCaps probe_source_caps(const std::string& url) {
+  const auto probe =
+      spawn_and_wait("/usr/bin/env",
+                     {"ffprobe", "-v", "error", "-rtsp_transport", "tcp", "-select_streams", "v:0",
+                      "-show_entries", "stream=width,height,avg_frame_rate", "-of", "json", url},
+                     20000);
+  if (probe.exit_code != 0) {
+    throw std::runtime_error("failed to probe E2E source " + url + ": " + probe.stderr_text);
+  }
+  const auto streams =
+      nlohmann::json::parse(probe.stdout_text).value("streams", nlohmann::json::array());
+  if (streams.size() != 1) {
+    throw std::runtime_error("E2E source must expose one video stream: " + url);
+  }
+  const auto& stream = streams.front();
+  const std::string rate = stream.value("avg_frame_rate", "0/1");
+  std::istringstream input(rate);
+  double numerator = 0.0;
+  double denominator = 0.0;
+  char separator = 0;
+  input >> numerator >> separator >> denominator;
+  const SourceCaps caps{stream.value("width", 0), stream.value("height", 0),
+                        denominator > 0.0 ? static_cast<int>(std::round(numerator / denominator))
+                                          : 0};
+  if (caps.width <= 0 || caps.height <= 0 || caps.fps <= 0) {
+    throw std::runtime_error("failed to resolve E2E source caps: " + url);
+  }
+  return caps;
+}
 
 // Counts the UDP datagrams that arrive on each Insight video port.
 class VideoListener {
@@ -110,8 +148,10 @@ void write_config(const fs::path& path, const fs::path& detector, const fs::path
   output << "models:\n  detector_path: " << detector.string() << "\n  pose_path: " << pose.string()
          << "\nstreams:\n";
   for (std::size_t index = 0; index < urls.size(); ++index) {
+    const SourceCaps caps = probe_source_caps(urls[index]);
     output << "  - id: camera" << index << "\n    url: " << urls[index] << "\n    codec: " << codec
-           << "\n    insight_channel: " << index << "\n";
+           << "\n    insight_channel: " << index << "\n    width: " << caps.width
+           << "\n    height: " << caps.height << "\n    fps: " << caps.fps << "\n";
   }
   output << "input:\n  tcp: true\n  latency_ms: 100\n"
             "detector:\n  min_score: 0.30\n  nms_iou: 0.60\n"
