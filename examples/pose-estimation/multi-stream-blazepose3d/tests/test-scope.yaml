@@ -31,7 +31,8 @@ models:
     source: model-registry
     name: blazepose_ghum_heavy
     ref: feat/blazepose-ghum-heavy
-    spec: modalix_bf16
+    spec: latest
+    variant: modalix_bf16
     file: blazepose_ghum_heavy_modalix_bf16_mpk.tar.gz
 unit:
   python: true

@@ -17,7 +17,7 @@ APPS_ROOT = Path(__file__).resolve().parents[2]
 VALID_SOURCES = {"modelzoo", "url", "huggingface", "model-registry"}
 VALID_LANGUAGES = {"python", "cpp"}
 VALID_KINDS = {"unit", "e2e"}
-MODEL_FIELDS = ("source", "name", "url", "file", "repo", "path", "ref", "spec")
+MODEL_FIELDS = ("source", "name", "url", "file", "repo", "path", "ref", "spec", "variant")
 SCOPE_FILE_NAME = "test-scope.yaml"
 SCOPE_FILE_SUBPATH = Path("tests") / SCOPE_FILE_NAME
 
@@ -209,6 +209,12 @@ def validate_scope(scope: dict[str, Any], apps_root: Path) -> list[str]:
                         errors.append(
                             f"{example_key}: model-registry model {model_id} needs {field}"
                         )
+                variant = str(model.get("variant", "") or "").strip()
+                if variant and str(model.get("spec", "") or "").strip() != "latest":
+                    errors.append(
+                        f"{example_key}: model-registry model {model_id} with a variant "
+                        "downloads the latest artifact; set spec: latest"
+                    )
                 file_name = str(model.get("file", "") or "")
                 if file_name and (
                     file_name in {".", ".."}
@@ -263,7 +269,8 @@ def validate_scope(scope: dict[str, Any], apps_root: Path) -> list[str]:
             if not file_name:
                 continue
             identity = tuple(
-                str(model.get(field, "") or "") for field in ("name", "ref", "spec")
+                str(model.get(field, "") or "")
+                for field in ("name", "ref", "spec", "variant")
             )
             owner = f"{example_key}: model {model_id}"
             previous = registry_destinations.setdefault(file_name, (identity, owner))
