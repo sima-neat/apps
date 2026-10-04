@@ -252,6 +252,15 @@ bool test_config_validation(const std::string& binary) {
   };
   std::vector<Case> cases = {
       {"no_host", replaced(config(), "host: 127.0.0.1", "host: ''"), "host must be set"},
+      {"numeric_detector_path",
+       replaced(config(), "detector_path: detector.tar.gz", "detector_path: 123"),
+       "models.detector_path must be a string"},
+      {"boolean_pose_path", replaced(config(), "pose_path: pose.tar.gz", "pose_path: true"),
+       "models.pose_path must be a string"},
+      {"timestamp_host", replaced(config(), "host: 127.0.0.1", "host: 2026-10-04"),
+       "output.insight.host must be a string"},
+      {"collection_host", replaced(config(), "host: 127.0.0.1", "host: []"),
+       "output.insight.host must be a string"},
       {"five_streams",
        config(stream_entry(0) + stream_entry(1, "h265") + stream_entry(2) + stream_entry(3) +
               stream_entry(4)),

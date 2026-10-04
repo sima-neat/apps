@@ -127,6 +127,26 @@ def test_cli_help_and_missing_config():
 # test_config_validation() in test_unit.cpp runs the same cases against the C++ app.
 REJECTED_CONFIGS = [
     ("no-host", config_text().replace("host: 127.0.0.1", "host: ''"), "host must be set"),
+    (
+        "numeric-detector-path",
+        config_text().replace("detector_path: detector.tar.gz", "detector_path: 123"),
+        "detector_path must be a string",
+    ),
+    (
+        "boolean-pose-path",
+        config_text().replace("pose_path: pose.tar.gz", "pose_path: true"),
+        "pose_path must be a string",
+    ),
+    (
+        "timestamp-host",
+        config_text().replace("host: 127.0.0.1", "host: 2026-10-04"),
+        "host must be a string",
+    ),
+    (
+        "collection-host",
+        config_text().replace("host: 127.0.0.1", "host: []"),
+        "host must be a string",
+    ),
     ("five-streams", config_text([stream(i) for i in range(5)]), "between 1 and 4 entries"),
     ("duplicate-id", config_text([stream(0), stream(1, id="camera0")]), "ids must be unique"),
     ("numeric-id", config_text([stream(0, id=123)]), "id must be a string"),
