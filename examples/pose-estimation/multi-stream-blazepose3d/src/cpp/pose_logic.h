@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <optional>
@@ -39,6 +40,22 @@ template <typename T> bool keep_latest(std::optional<T>& slot, T value) {
   const bool replaced = slot.has_value();
   slot = std::move(value);
   return replaced;
+}
+
+// Accepted model input with no output for this long means the shared Run is stuck.
+constexpr std::chrono::seconds kInferenceStallTimeout{5};
+
+// Times how long a model has had accepted input but no output; true past the timeout.
+inline bool inference_stalled(std::optional<std::chrono::steady_clock::time_point>& waiting_since,
+                              bool input_pending, std::chrono::steady_clock::time_point now) {
+  if (!input_pending) {
+    waiting_since.reset();
+    return false;
+  }
+  if (!waiting_since) {
+    waiting_since = now;
+  }
+  return now - *waiting_since > kInferenceStallTimeout;
 }
 
 constexpr std::array<const char*, kBodyLandmarkCount> kLandmarkNames = {

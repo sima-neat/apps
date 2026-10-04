@@ -989,20 +989,24 @@ void dispatch_detector_jobs(AppRuntime& app, const AppConfig& /*cfg*/) {
 }
 
 // Pulls one output of a shared model. Returns false when the application is
-// stopping, and throws when the Run closed or failed on its own.
+// stopping, and throws when the Run closed or failed on its own, or stalled.
+template <typename Pending>
 bool pull_model_output(AppRuntime& app, neat::Run& run, const char* output, const char* model,
-                       neat::Sample& sample) {
+                       const Pending& pending, neat::Sample& sample) {
+  std::optional<Clock::time_point> waiting_since;
   while (true) {
     neat::PullError error;
     const auto status = run.pull(output, 20, sample, &error);
     if (status == neat::PullStatus::Ok) {
       return true;
     }
+    bool input_pending = false;
     {
       std::lock_guard<std::mutex> lock(app.state.mutex);
       if (app.state.stopping) {
         return false;
       }
+      input_pending = !pending.empty();
     }
     if (status == neat::PullStatus::Closed) {
       const std::string detail = run.last_error();
@@ -1013,13 +1017,19 @@ bool pull_model_output(AppRuntime& app, neat::Run& run, const char* output, cons
       throw std::runtime_error(std::string("failed to pull ") + model +
                                " output: " + error.message);
     }
+    if (blazepose_app::inference_stalled(waiting_since, input_pending, Clock::now())) {
+      throw std::runtime_error(std::string(model) + " inference stalled: no output for " +
+                               std::to_string(blazepose_app::kInferenceStallTimeout.count()) +
+                               " s");
+    }
   }
 }
 
 void pull_detector_outputs(AppRuntime& app, const AppConfig& cfg) {
   try {
     neat::Sample sample;
-    while (pull_model_output(app, app.detector_run, "detector_output", "YOLO26", sample)) {
+    while (pull_model_output(app, app.detector_run, "detector_output", "YOLO26",
+                             app.state.pending_detector_outputs, sample)) {
       FrameJob job;
       {
         std::lock_guard<std::mutex> lock(app.state.mutex);
@@ -1116,7 +1126,8 @@ void dispatch_pose_jobs(AppRuntime& app, const AppConfig& cfg) {
 void pull_pose_outputs(AppRuntime& app, const AppConfig& cfg) {
   try {
     neat::Sample sample;
-    while (pull_model_output(app, app.pose_run, "pose_output", "BlazePose", sample)) {
+    while (pull_model_output(app, app.pose_run, "pose_output", "BlazePose",
+                             app.state.pending_pose_outputs, sample)) {
       PoseInputContext context;
       {
         std::lock_guard<std::mutex> lock(app.state.mutex);

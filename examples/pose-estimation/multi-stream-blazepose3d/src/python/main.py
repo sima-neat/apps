@@ -32,6 +32,8 @@ LANDMARK_NAMES = (
 
 MAX_DETECTIONS = 100
 MAX_INFLIGHT_PER_STREAM = 4
+# Accepted model input with no output for this long means the shared Run is stuck.
+INFERENCE_STALL_TIMEOUT_S = 5.0
 
 cv2 = None
 np = None
@@ -1135,20 +1137,30 @@ def run_source_stream(runtime: AppRuntime, cfg: AppConfig, stream: StreamRuntime
         close_source_stream(runtime, stream, str(error))
 
 
-def pull_model_output(runtime: AppRuntime, run, output: str, model: str):
+def pull_model_output(runtime: AppRuntime, run, output: str, model: str, pending: deque):
     """Pull one output of a shared model; None when the application is stopping.
-    Raises when the Run closed on its own."""
+    Raises when the Run closed on its own, or stalled."""
+    waiting_since = None
     while True:
         sample = run.pull(output, 20)
         if sample is not None:
             return sample
+        now = time.monotonic()
         with runtime.state.condition:
             if runtime.state.stopping:
                 return None
+            if not pending:
+                waiting_since = None
+            elif waiting_since is None:
+                waiting_since = now
         if not run.can_pull():
             detail = run.last_error()
             raise RuntimeError(
                 f"{model} output closed unexpectedly" + (f": {detail}" if detail else "")
+            )
+        if waiting_since is not None and now - waiting_since > INFERENCE_STALL_TIMEOUT_S:
+            raise RuntimeError(
+                f"{model} inference stalled: no output for {INFERENCE_STALL_TIMEOUT_S:g} s"
             )
 
 
@@ -1175,7 +1187,13 @@ def pull_detector_outputs(runtime: AppRuntime, cfg: AppConfig) -> None:
     try:
         state = runtime.state
         while (
-            sample := pull_model_output(runtime, runtime.detector_run, "detector_output", "YOLO26")
+            sample := pull_model_output(
+                runtime,
+                runtime.detector_run,
+                "detector_output",
+                "YOLO26",
+                state.pending_detector_outputs,
+            )
         ) is not None:
             with state.condition:
                 if not state.pending_detector_outputs:
@@ -1289,7 +1307,9 @@ def pull_pose_outputs(runtime: AppRuntime, cfg: AppConfig) -> None:
     try:
         state = runtime.state
         while (
-            sample := pull_model_output(runtime, runtime.pose_run, "pose_output", "BlazePose")
+            sample := pull_model_output(
+                runtime, runtime.pose_run, "pose_output", "BlazePose", state.pending_pose_outputs
+            )
         ) is not None:
             with state.condition:
                 if not state.pending_pose_outputs:
