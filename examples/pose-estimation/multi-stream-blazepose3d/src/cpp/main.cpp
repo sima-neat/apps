@@ -640,6 +640,12 @@ std::string decoded_string_or(const std::unordered_map<std::string, std::string>
   if (value == raw_scalars.end() || is_plain_yaml_null(value->second)) {
     return default_value;
   }
+  const bool quoted = value->second.size() >= 2 &&
+                      (value->second.front() == '"' || value->second.front() == '\'') &&
+                      value->second.back() == value->second.front();
+  if (!quoted && !is_plain_yaml_string(value->second)) {
+    throw std::runtime_error(key + " must be a string");
+  }
   return decode_yaml_scalar(value->second);
 }
 
