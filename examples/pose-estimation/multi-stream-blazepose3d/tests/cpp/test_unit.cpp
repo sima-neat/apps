@@ -140,6 +140,23 @@ bool test_non_finite_landmarks_discard_only_that_pose() {
   return ok;
 }
 
+bool test_non_finite_detector_scores_are_discarded() {
+  const blazepose_app::Box person{0.0F, 0.0F, 100.0F, 100.0F, 0.9F, 0};
+  blazepose_app::Box invalid = person;
+  invalid.score = std::nanf("");
+  bool ok = expect(blazepose_app::is_finite_person_box(person) &&
+                       !blazepose_app::is_finite_person_box(invalid),
+                   "a non-finite detector score discards that person box");
+  invalid.score = INFINITY;
+  ok &= expect(!blazepose_app::is_finite_person_box(invalid),
+               "an infinite detector score discards that person box");
+  invalid = person;
+  invalid.class_id = 1;
+  ok &= expect(!blazepose_app::is_finite_person_box(invalid),
+               "a finite non-person detector box remains excluded");
+  return ok;
+}
+
 bool test_pose_smoother() {
   blazepose_app::PoseSmoother smoother;
   blazepose_app::PoseSmoother other_stream;
@@ -362,6 +379,7 @@ int main(int argc, char** argv) {
   }
   bool ok = test_math_and_metadata_contract();
   ok &= test_non_finite_landmarks_discard_only_that_pose();
+  ok &= test_non_finite_detector_scores_are_discarded();
   ok &= test_pose_smoother();
   ok &= test_latest_work_and_metadata_pairs();
   ok &= test_inference_stall_timeout();

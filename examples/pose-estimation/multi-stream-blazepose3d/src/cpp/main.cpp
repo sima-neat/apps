@@ -1089,8 +1089,9 @@ std::vector<blazepose_app::Box> select_people(const neat::Sample& detections, in
       objdet::parse_boxes_strict(payload, width, height, kMaxDetections, false);
   std::vector<blazepose_app::Box> people;
   for (const objdet::Box& box : boxes) {
-    if (box.class_id == 0) {
-      people.push_back({box.x1, box.y1, box.x2, box.y2, box.score, box.class_id});
+    const blazepose_app::Box person{box.x1, box.y1, box.x2, box.y2, box.score, box.class_id};
+    if (blazepose_app::is_finite_person_box(person)) {
+      people.push_back(person);
     }
   }
   std::sort(people.begin(), people.end(),
