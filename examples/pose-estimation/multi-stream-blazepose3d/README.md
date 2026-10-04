@@ -107,7 +107,7 @@ The application sends the original encoded stream plus two correlated metadata m
 
 ## Configure
 
-Edit `${APP_DIR}/src/common/config.yaml`:
+Edit `${APP_DIR}/src/common/config.yaml`. Both the C++ and Python apps read block-style YAML only, as shown below; one-line flow collections such as `streams: [{...}]` are rejected.
 
 ```yaml
 models:

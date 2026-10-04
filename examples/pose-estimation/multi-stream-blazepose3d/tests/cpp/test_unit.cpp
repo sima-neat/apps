@@ -486,6 +486,35 @@ bool test_null_codec_and_trailing_quotes_match_python(const std::string& binary)
   return ok;
 }
 
+bool test_flow_style_collections_are_rejected(const std::string& binary) {
+  bool ok = true;
+  struct Case {
+    std::string name;
+    std::string body;
+  };
+  for (const Case& test :
+       {Case{"flow_streams",
+             "streams: [{id: camera0, url: rtsp://127.0.0.1/src0, insight_channel: 0}]\n"},
+        Case{"flow_stream_entry",
+             "streams:\n  - {id: camera0, url: rtsp://127.0.0.1/src0, insight_channel: 0}\n"},
+        Case{"flow_section", "streams:\n  - id: camera0\n    url: rtsp://127.0.0.1/src0\n"
+                             "    insight_channel: 0\noutput: {insight: {host: 127.0.0.1}}\n"}}) {
+    const fs::path directory = create_test_scratch_dir("multi-stream-blazepose3d", test.name);
+    const fs::path config = directory / "config.yaml";
+    std::ofstream(config) << "models:\n  detector_path: detector.tar.gz\n"
+                             "  pose_path: pose.tar.gz\n"
+                          << test.body;
+    const auto result =
+        spawn_and_wait(binary, {"--config", config.string(), "--validate-config-only"}, 20000);
+    ok &= expect(result.exit_code == 1 &&
+                     result.stderr_text.find("flow-style YAML collections are not supported") !=
+                         std::string::npos,
+                 test.name + " is rejected consistently with Python");
+    remove_dir(directory.string());
+  }
+  return ok;
+}
+
 bool test_stream_mapping_order_and_explicit_caps(const std::string& binary) {
   const fs::path config = write_config(
       "stream_mapping_order",
@@ -712,6 +741,7 @@ int main(int argc, char** argv) {
   ok &= test_scalar_config_preserves_yaml_types(argv[1]);
   ok &= test_typed_settings_reject_explicit_null(argv[1]);
   ok &= test_null_codec_and_trailing_quotes_match_python(argv[1]);
+  ok &= test_flow_style_collections_are_rejected(argv[1]);
   ok &= test_stream_mapping_order_and_explicit_caps(argv[1]);
   ok &= test_yaml_scalar_parity(argv[1]);
   ok &= test_metadata_contract_correlation();

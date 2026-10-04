@@ -444,6 +444,25 @@ inline YamlScalar parse_yaml_scalar(const std::string& value) {
 
 class TypedConfig {
 public:
+  // Only block-style YAML is supported, matching the Python entry point. Empty
+  // `{}` and `[]` stay allowed because PyYAML writes empty sections that way.
+  static void reject_flow_collection(const std::string& line) {
+    std::string content = line;
+    if (is_sequence_entry(content)) {
+      content = sima_examples::trim_copy(content.substr(1));
+    }
+    const std::size_t colon = content.find(':');
+    const std::string value =
+        colon == std::string::npos ? content : sima_examples::trim_copy(content.substr(colon + 1));
+    for (const std::string& part : {content, value}) {
+      if (!part.empty() && (part.front() == '[' || part.front() == '{') && part != "{}" &&
+          part != "[]") {
+        throw std::runtime_error(
+            "flow-style YAML collections are not supported; use block style: " + line);
+      }
+    }
+  }
+
   static TypedConfig load(const std::filesystem::path& path) {
     std::ifstream input(path);
     if (!input.is_open()) {
@@ -468,6 +487,7 @@ public:
       }
 
       const std::string line = sima_examples::trim_copy(without_comment);
+      reject_flow_collection(line);
       if (list_block_indent >= 0) {
         if (indent > list_block_indent) {
           continue;
