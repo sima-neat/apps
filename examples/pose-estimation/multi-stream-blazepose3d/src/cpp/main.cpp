@@ -463,6 +463,11 @@ bool is_plain_yaml_string(const std::string& value) {
   return !std::regex_match(value, number_pattern) && !std::regex_match(value, timestamp_pattern);
 }
 
+bool is_yaml_block_scalar_header(const std::string& value) {
+  static const std::regex pattern(R"(^[|>](?:[1-9][+-]?|[+-][1-9]?)?$)");
+  return std::regex_match(value, pattern);
+}
+
 // ScalarConfig skips YAML lists, so the stream entries are read here: a
 // "- key: value" line starts an entry and deeper "key: value" lines continue it.
 std::vector<StreamConfig> parse_streams(const fs::path& config_path) {
@@ -542,6 +547,10 @@ std::unordered_map<std::string, std::string> load_raw_scalars(const fs::path& co
     const std::string flow_value = flow_colon == std::string::npos
                                        ? content
                                        : sima_examples::trim_copy(content.substr(flow_colon + 1));
+    if (is_yaml_block_scalar_header(flow_value)) {
+      throw std::runtime_error("YAML block scalar values are not supported; use a quoted string: " +
+                               line);
+    }
     for (const std::string& part : {content, flow_value}) {
       if (!part.empty() && (part.front() == '[' || part.front() == '{') && part != "{}" &&
           part != "[]") {

@@ -324,10 +324,11 @@ def validate_config(cfg: AppConfig) -> None:
 
 
 FLOW_STYLE_ERROR = "flow-style YAML collections are not supported; use block style"
+BLOCK_SCALAR_ERROR = "YAML block scalar values are not supported; use a quoted string"
 
 
 def reject_flow_collections(text: str) -> None:
-    """Accept only block-style YAML, the subset the C++ entry point reads."""
+    """Accept only the YAML styles supported by the C++ entry point."""
     pending = [yaml.compose(text)]
     while pending:
         node = pending.pop()
@@ -339,6 +340,8 @@ def reject_flow_collections(text: str) -> None:
             if node.flow_style and node.value:
                 raise ValueError(f"{FLOW_STYLE_ERROR} (line {node.start_mark.line + 1})")
             pending.extend(node.value)
+        elif isinstance(node, yaml.ScalarNode) and node.style in ("|", ">"):
+            raise ValueError(f"{BLOCK_SCALAR_ERROR} (line {node.start_mark.line + 1})")
 
 
 def load_app_config(config_path: Path) -> AppConfig:
