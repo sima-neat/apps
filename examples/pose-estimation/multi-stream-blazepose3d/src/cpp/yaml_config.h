@@ -15,6 +15,7 @@
 #include "support/runtime/config_utils.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <climits>
 #include <cstdint>
@@ -27,6 +28,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -40,13 +42,13 @@ struct YamlScalar {
   YamlScalarType type = YamlScalarType::Other;
 };
 
-namespace detail {
-
 inline std::string lower_copy(std::string value) {
   std::transform(value.begin(), value.end(), value.begin(),
                  [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
   return value;
 }
+
+namespace detail {
 
 inline void append_utf8(std::string& out, uint32_t codepoint) {
   if (codepoint >= 0xd800U && codepoint <= 0xdfffU) {
@@ -119,68 +121,22 @@ inline std::string unquote(std::string value) {
     if (++index >= body.size()) {
       throw std::runtime_error("incomplete escape in YAML string");
     }
+    // Escapes with a fixed single-byte result, then those with a Unicode result.
+    static constexpr std::string_view kByteEscapes = "0abtnvfre \"/\\";
+    static constexpr std::string_view kBytes{"\0\a\b\t\n\v\f\r\x1b \"/\\", kByteEscapes.size()};
+    static constexpr std::string_view kUnicodeEscapes = "N_LP";
+    static constexpr std::array<uint32_t, 4> kCodepoints = {0x85U, 0xa0U, 0x2028U, 0x2029U};
     const char escaped = body[index];
-    switch (escaped) {
-    case '0':
-      decoded.push_back('\0');
-      break;
-    case 'a':
-      decoded.push_back('\a');
-      break;
-    case 'b':
-      decoded.push_back('\b');
-      break;
-    case 't':
-      decoded.push_back('\t');
-      break;
-    case 'n':
-      decoded.push_back('\n');
-      break;
-    case 'v':
-      decoded.push_back('\v');
-      break;
-    case 'f':
-      decoded.push_back('\f');
-      break;
-    case 'r':
-      decoded.push_back('\r');
-      break;
-    case 'e':
-      decoded.push_back('\x1b');
-      break;
-    case ' ':
-      decoded.push_back(' ');
-      break;
-    case '"':
-      decoded.push_back('"');
-      break;
-    case '/':
-      decoded.push_back('/');
-      break;
-    case '\\':
-      decoded.push_back('\\');
-      break;
-    case 'N':
-      append_utf8(decoded, 0x85U);
-      break;
-    case '_':
-      append_utf8(decoded, 0xa0U);
-      break;
-    case 'L':
-      append_utf8(decoded, 0x2028U);
-      break;
-    case 'P':
-      append_utf8(decoded, 0x2029U);
-      break;
-    case 'x':
-    case 'u':
-    case 'U': {
+    if (const std::size_t byte = kByteEscapes.find(escaped); byte != std::string_view::npos) {
+      decoded.push_back(kBytes[byte]);
+    } else if (const std::size_t unicode = kUnicodeEscapes.find(escaped);
+               unicode != std::string_view::npos) {
+      append_utf8(decoded, kCodepoints[unicode]);
+    } else if (escaped == 'x' || escaped == 'u' || escaped == 'U') {
       const std::size_t digits = escaped == 'x' ? 2U : escaped == 'u' ? 4U : 8U;
       append_utf8(decoded, decode_hex_escape(body, index + 1, digits));
       index += digits;
-      break;
-    }
-    default:
+    } else {
       throw std::runtime_error("unsupported escape in YAML string");
     }
   }
@@ -345,6 +301,15 @@ inline bool is_sequence_entry(const std::string& line) {
   return line == "-" || line.rfind("- ", 0) == 0;
 }
 
+// Strips a config line's comment. Returns false for a blank line; otherwise sets
+// the line's indentation and its trimmed content.
+inline bool scan_yaml_line(const std::string& raw_line, int& indent, std::string& line) {
+  const std::string without_comment = strip_yaml_inline_comment(raw_line);
+  line = sima_examples::trim_copy(without_comment);
+  indent = static_cast<int>(without_comment.find_first_not_of(" \t"));
+  return !line.empty();
+}
+
 inline int parse_yaml_integer(const std::string& value, const std::string& key) {
   std::string scalar = value;
   scalar.erase(std::remove(scalar.begin(), scalar.end(), '_'), scalar.end());
@@ -410,6 +375,21 @@ inline int parse_yaml_integer(const std::string& value, const std::string& key) 
   return negative ? -parsed : parsed;
 }
 
+inline std::string require_string(const YamlScalar& scalar, const std::string& key) {
+  if (scalar.type != YamlScalarType::String) {
+    throw std::runtime_error(key + " must be a string");
+  }
+  return scalar.value;
+}
+
+// An explicit null is a present value of the wrong type, as in Python.
+inline int require_integer(const YamlScalar& scalar, const std::string& key) {
+  if (scalar.type != YamlScalarType::Integer) {
+    throw std::runtime_error(key + " must be an integer");
+  }
+  return parse_yaml_integer(scalar.value, key);
+}
+
 inline YamlScalar parse_yaml_scalar(const std::string& value) {
   const std::string scalar = sima_examples::trim_copy(value);
   const bool quoted = scalar.size() >= 2 && ((scalar.front() == '\'' && scalar.back() == '\'') ||
@@ -418,7 +398,7 @@ inline YamlScalar parse_yaml_scalar(const std::string& value) {
     return {detail::unquote(scalar), YamlScalarType::String};
   }
 
-  const std::string lowered = detail::lower_copy(scalar);
+  const std::string lowered = lower_copy(scalar);
   if (lowered.empty() || lowered == "~" || lowered == "null") {
     return {scalar, YamlScalarType::Null};
   }
@@ -473,20 +453,12 @@ public:
     std::vector<std::pair<int, std::string>> stack;
     int list_block_indent = -1;
     std::string raw_line;
+    int indent = 0;
+    std::string line;
     while (std::getline(input, raw_line)) {
-      const std::string without_comment = strip_yaml_inline_comment(raw_line);
-      if (sima_examples::trim_copy(without_comment).empty()) {
+      if (!scan_yaml_line(raw_line, indent, line)) {
         continue;
       }
-
-      int indent = 0;
-      while (indent < static_cast<int>(without_comment.size()) &&
-             (without_comment[static_cast<std::size_t>(indent)] == ' ' ||
-              without_comment[static_cast<std::size_t>(indent)] == '\t')) {
-        ++indent;
-      }
-
-      const std::string line = sima_examples::trim_copy(without_comment);
       reject_flow_collection(line);
       if (list_block_indent >= 0) {
         if (indent > list_block_indent) {
@@ -531,10 +503,7 @@ public:
     if (it == scalars_.end() || it->second.type == YamlScalarType::Null) {
       return std::nullopt;
     }
-    if (it->second.type != YamlScalarType::String) {
-      throw std::runtime_error(key + " must be a string");
-    }
-    return it->second.value;
+    return require_string(it->second, key);
   }
 
   [[nodiscard]] std::string string_or(const std::string& key,
@@ -548,11 +517,7 @@ public:
     if (it == scalars_.end()) {
       return default_value;
     }
-    // An explicit null is a present value of the wrong type, as in Python.
-    if (it->second.type != YamlScalarType::Integer) {
-      throw std::runtime_error(key + " must be an integer");
-    }
-    return parse_yaml_integer(it->second.value, key);
+    return require_integer(it->second, key);
   }
 
   [[nodiscard]] double double_or(const std::string& key, double default_value) const {
@@ -578,7 +543,7 @@ public:
     if (it->second.type != YamlScalarType::Boolean) {
       throw std::runtime_error(key + " must be true or false");
     }
-    const std::string lowered = detail::lower_copy(it->second.value);
+    const std::string lowered = lower_copy(it->second.value);
     return lowered == "true" || lowered == "yes" || lowered == "on";
   }
 
