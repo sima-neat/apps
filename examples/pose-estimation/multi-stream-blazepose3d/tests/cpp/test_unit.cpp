@@ -558,6 +558,28 @@ bool test_standalone_sequence_dash_starts_a_stream(const std::string& binary) {
   return ok;
 }
 
+bool test_video_port_range_applies_only_when_video_is_enabled(const std::string& binary) {
+  bool ok = true;
+  for (const bool video_enabled : {false, true}) {
+    const fs::path config =
+        write_config("video_port_range", "  - id: camera0\n    url: rtsp://127.0.0.1/src0\n"
+                                         "    codec: h264\n    insight_channel: 60000\n");
+    std::ofstream(config, std::ios::app)
+        << "    video_port_base: 9000\n    metadata_port_base: 1\n  video_enabled: "
+        << (video_enabled ? "true" : "false") << "\n";
+    const auto result =
+        spawn_and_wait(binary, {"--config", config.string(), "--validate-config-only"}, 20000);
+    const bool rejected =
+        result.exit_code == 1 &&
+        result.stderr_text.find("stream video port must be <= 65535") != std::string::npos;
+    ok &= expect(video_enabled ? rejected : result.exit_code == 0,
+                 video_enabled ? "an out-of-range video port is rejected while video is enabled"
+                               : "a metadata-only config ignores the unused video port range");
+    remove_dir(config.parent_path().string());
+  }
+  return ok;
+}
+
 bool test_roi_scale_must_be_finite_and_positive(const std::string& binary) {
   bool ok = true;
   for (const std::string value : {".nan", ".inf", "-.inf", "0", "-1.5"}) {
@@ -598,5 +620,6 @@ int main(int argc, char** argv) {
   ok &= test_pose_count_limit(argv[1]);
   ok &= test_roi_scale_must_be_finite_and_positive(argv[1]);
   ok &= test_standalone_sequence_dash_starts_a_stream(argv[1]);
+  ok &= test_video_port_range_applies_only_when_video_is_enabled(argv[1]);
   return ok ? 0 : 1;
 }

@@ -395,7 +395,8 @@ void validate_config(const AppConfig& cfg) {
         stream.width > 0 && stream.height > 0 && stream.fps > 0;
     sima_examples::require(has_no_explicit_caps || has_complete_explicit_caps,
                            "stream width, height, and fps must either all be omitted or all be > 0");
-    sima_examples::require(stream.insight_channel <= 65535 - cfg.video_port_base,
+    sima_examples::require(!cfg.video_enabled ||
+                               stream.insight_channel <= 65535 - cfg.video_port_base,
                            "stream video port must be <= 65535");
     sima_examples::require(stream.insight_channel <= 65535 - cfg.metadata_port_base,
                            "stream metadata port must be <= 65535");

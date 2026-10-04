@@ -120,6 +120,31 @@ def test_insight_video_and_metadata_ports_must_not_overlap(tmp_path: Path):
         main.load_app_config(path)
 
 
+@pytest.mark.parametrize("video_enabled", [False, True])
+def test_video_port_range_applies_only_when_video_is_enabled(tmp_path: Path, video_enabled):
+    path = write_config(tmp_path, [stream(0, channel=60000)])
+    config = yaml.safe_load(path.read_text(encoding="utf-8"))
+    config["output"]["insight"].update({"video_port_base": 9000, "metadata_port_base": 1})
+    config["output"]["video_enabled"] = video_enabled
+    path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+    if video_enabled:
+        with pytest.raises(ValueError, match="stream video port must be <= 65535"):
+            main.load_app_config(path)
+    else:
+        cfg = main.load_app_config(path)
+        assert cfg.metadata_port_base + cfg.streams[0].insight_channel == 60001
+
+
+def test_metadata_port_range_applies_without_video(tmp_path: Path):
+    path = write_config(tmp_path, [stream(0, channel=60000)])
+    config = yaml.safe_load(path.read_text(encoding="utf-8"))
+    config["output"]["insight"].update({"video_port_base": 1, "metadata_port_base": 9100})
+    config["output"]["video_enabled"] = False
+    path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+    with pytest.raises(ValueError, match="stream metadata port must be <= 65535"):
+        main.load_app_config(path)
+
+
 def test_stream_mapping_order_and_explicit_caps_match_cpp(tmp_path: Path):
     ordered_stream = {
         "url": "rtsp://127.0.0.1/ordered",

@@ -477,7 +477,7 @@ def validate_config(cfg: AppConfig) -> None:
             raise ValueError(
                 "stream width, height, and fps must either all be omitted or all be > 0"
             )
-        if cfg.video_port_base + stream.insight_channel > 65535:
+        if cfg.video_enabled and cfg.video_port_base + stream.insight_channel > 65535:
             raise ValueError("stream video port must be <= 65535")
         if cfg.metadata_port_base + stream.insight_channel > 65535:
             raise ValueError("stream metadata port must be <= 65535")
