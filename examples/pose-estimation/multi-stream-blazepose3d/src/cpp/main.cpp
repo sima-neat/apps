@@ -566,6 +566,25 @@ std::string decoded_string_or(const std::unordered_map<std::string, std::string>
   return decode_yaml_scalar(value->second);
 }
 
+bool app_bool_or(const sima_examples::ScalarConfig& config,
+                 const std::unordered_map<std::string, std::string>& raw_scalars,
+                 const std::string& key, bool default_value) {
+  const auto raw = raw_scalars.find(key);
+  if (raw == raw_scalars.end()) {
+    return default_value;
+  }
+  std::string value = sima_examples::trim_copy(raw->second);
+  std::transform(value.begin(), value.end(), value.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  if (value == "yes" || value == "on") {
+    return true;
+  }
+  if (value == "no" || value == "off") {
+    return false;
+  }
+  return config.bool_or(key, default_value);
+}
+
 void validate_config(const AppConfig& cfg) {
   sima_examples::require(!cfg.detector_model_path.empty(), "models.detector_path must be set");
   sima_examples::require(!cfg.pose_model_path.empty(), "models.pose_path must be set");
@@ -621,14 +640,15 @@ AppConfig load_app_config(const fs::path& config_path) {
   cfg.detector_model_path = decoded_string_or(raw_scalars, "models.detector_path", "");
   cfg.pose_model_path = decoded_string_or(raw_scalars, "models.pose_path", "");
   cfg.streams = parse_streams(config_path);
-  cfg.tcp = raw.bool_or("input.tcp", true);
+  cfg.tcp = app_bool_or(raw, raw_scalars, "input.tcp", true);
   cfg.latency_ms = raw.int_or("input.latency_ms", 100);
   cfg.detector_min_score = raw.double_or("detector.min_score", 0.30);
   cfg.detector_nms_iou = raw.double_or("detector.nms_iou", 0.60);
   cfg.max_people_per_frame = raw.int_or("pose.max_people_per_frame", 4);
   cfg.roi_scale = raw.double_or("pose.roi_scale", 1.65);
   cfg.pose_presence_threshold = raw.double_or("pose.presence_threshold", 0.50);
-  cfg.pose_temporal_filter_enabled = raw.bool_or("pose.temporal_filter_enabled", true);
+  cfg.pose_temporal_filter_enabled =
+      app_bool_or(raw, raw_scalars, "pose.temporal_filter_enabled", true);
   cfg.frame_limit = raw.int_or("runtime.frames", 0);
   cfg.insight_host = decoded_string_or(raw_scalars, "output.insight.host", "");
   cfg.video_port_base = raw.int_or("output.insight.video_port_base", 9000);

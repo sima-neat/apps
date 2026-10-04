@@ -24,6 +24,14 @@ DETECTOR_MODEL = "yolo26m-det-int8-b1.tar.gz"
 POSE_MODEL = "blazepose_ghum_heavy_modalix_bf16_mpk.tar.gz"
 INSIGHT_HOST = "127.0.0.1"
 MAX_STREAMS = 4
+LANDMARK_NAMES = (
+    "nose", "left_eye_inner", "left_eye", "left_eye_outer", "right_eye_inner",
+    "right_eye", "right_eye_outer", "left_ear", "right_ear", "mouth_left", "mouth_right",
+    "left_shoulder", "right_shoulder", "left_elbow", "right_elbow", "left_wrist",
+    "right_wrist", "left_pinky", "right_pinky", "left_index", "right_index", "left_thumb",
+    "right_thumb", "left_hip", "right_hip", "left_knee", "right_knee", "left_ankle",
+    "right_ankle", "left_heel", "right_heel", "left_foot_index", "right_foot_index",
+)
 
 
 class RtpVideoListener:
@@ -246,13 +254,48 @@ def source_caps(url: str) -> tuple[int, int, int]:
     return caps
 
 
+def is_probability(value) -> bool:
+    return type(value) in (int, float) and math.isfinite(value) and 0 <= value <= 1
+
+
 def has_body_points(pose, name: str, axes: str) -> bool:
-    """pose[name] holds 33 points with finite coordinates on every required axis."""
+    """pose[name] holds all named body points with finite coordinates and confidence."""
     points = pose.get(name, [])
-    return len(points) == 33 and all(
-        type(point.get(axis)) in (int, float) and math.isfinite(point[axis])
-        for point in points
-        for axis in axes
+    return len(points) == len(LANDMARK_NAMES) and all(
+        point.get("name") == LANDMARK_NAMES[index]
+        and is_probability(point.get("confidence"))
+        and all(
+            type(point.get(axis)) in (int, float) and math.isfinite(point[axis])
+            for axis in axes
+        )
+        for index, point in enumerate(points)
+    )
+
+
+def valid_overlay_pose(pose) -> bool:
+    bbox = pose.get("bbox")
+    return (
+        isinstance(pose.get("id"), str)
+        and bool(pose["id"])
+        and pose.get("label") == "person"
+        and is_probability(pose.get("presence"))
+        and is_probability(pose.get("confidence"))
+        and isinstance(bbox, list)
+        and len(bbox) == 4
+        and all(type(value) in (int, float) and math.isfinite(value) for value in bbox)
+        and bbox[2] >= 0
+        and bbox[3] >= 0
+        and has_body_points(pose, "keypoints", "xy")
+        and has_body_points(pose, "world_keypoints", "xyz")
+    )
+
+
+def valid_auxiliary_pose(pose) -> bool:
+    return (
+        isinstance(pose.get("id"), str)
+        and bool(pose["id"])
+        and is_probability(pose.get("presence"))
+        and has_body_points(pose, "keypoints", "xyz")
     )
 
 
@@ -270,18 +313,14 @@ def metadata_problem(messages, metadata_port_base: int, num_ports: int) -> str |
             return f"metadata on port {message.port} did not carry its stream id"
         if message.metadata_type == "pose-estimation":
             poses = data["poses"]
-            point_contracts = (("keypoints", "xy"), ("world_keypoints", "xyz"))
+            valid_pose = valid_overlay_pose
         elif (data.get("id"), data.get("renderer")) == ("world-pose", "blazepose-3d"):
             poses = data["payload"]["poses"]
-            point_contracts = (("keypoints", "xyz"),)
+            valid_pose = valid_auxiliary_pose
         else:
             return "auxiliary metadata did not use the world-pose BlazePose 3D envelope"
-        if not all(
-            has_body_points(pose, name, axes)
-            for pose in poses
-            for name, axes in point_contracts
-        ):
-            return f"a {message.metadata_type} pose did not carry 33 valid keypoints"
+        if not all(valid_pose(pose) for pose in poses):
+            return f"a {message.metadata_type} pose did not satisfy the advertised schema"
         frame = (message.port, message.timestamp_ms, message.frame_id)
         pose_counts[message.metadata_type][frame] = len(poses)
     world = pose_counts["auxiliary-visualization"]
@@ -308,19 +347,35 @@ def test_metadata_problem_requires_pairs_on_every_port_and_stream_ids():
         world_z=3.0,
     ):
         data = {"stream_id": stream_id or f"camera{port - 9100}"}
-        image_point = {"x": 1.0, "y": 2}
-        world_point = {"x": 1.0, "y": 2}
-        if world_z is not None:
-            world_point["z"] = world_z
+        image_points_data = [
+            {"name": name, "x": 1.0, "y": 2, "confidence": 0.9}
+            for name in LANDMARK_NAMES[:image_points]
+        ]
+        world_points_data = []
+        for name in LANDMARK_NAMES:
+            point = {"name": name, "x": 1.0, "y": 2, "confidence": 0.9}
+            if world_z is not None:
+                point["z"] = world_z
+            world_points_data.append(point)
         if metadata_type == "pose-estimation":
             pose = {
-                "keypoints": [image_point] * image_points,
-                "world_keypoints": [world_point] * 33,
+                "id": "pose_1",
+                "label": "person",
+                "presence": 0.9,
+                "confidence": 0.8,
+                "bbox": [1, 2, 3, 4],
+                "keypoints": image_points_data,
+                "world_keypoints": world_points_data,
             }
             data["poses"] = [pose] * poses
         else:
             data.update(id="world-pose", renderer="blazepose-3d")
-            data["payload"] = {"poses": [{"keypoints": [world_point] * 33}] * poses}
+            data["payload"] = {
+                "poses": [
+                    {"id": "pose_1", "presence": 0.9, "keypoints": world_points_data}
+                ]
+                * poses
+            }
         return SimpleNamespace(
             port=port,
             metadata_type=metadata_type,
@@ -344,15 +399,50 @@ def test_metadata_problem_requires_pairs_on_every_port_and_stream_ids():
     assert "non-empty" in metadata_problem(split, 9100, 2)
     assert "stream id" in metadata_problem([message(9100, "pose-estimation", "1", 1, "x")], 9100, 1)
     short_2d = message(9100, "pose-estimation", "1", 1, image_points=32)
-    assert "33 valid keypoints" in metadata_problem([short_2d], 9100, 1)
+    assert "advertised schema" in metadata_problem([short_2d], 9100, 1)
     missing_overlay_z = message(9100, "pose-estimation", "1", 1, world_z=None)
-    assert "33 valid keypoints" in metadata_problem([missing_overlay_z], 9100, 1)
+    assert "advertised schema" in metadata_problem([missing_overlay_z], 9100, 1)
     missing_auxiliary_z = message(9100, "auxiliary-visualization", "1", 1, world_z=None)
-    assert "33 valid keypoints" in metadata_problem([missing_auxiliary_z], 9100, 1)
+    assert "advertised schema" in metadata_problem([missing_auxiliary_z], 9100, 1)
     non_finite_z = message(9100, "auxiliary-visualization", "1", 1, world_z=float("nan"))
-    assert "33 valid keypoints" in metadata_problem([non_finite_z], 9100, 1)
+    assert "advertised schema" in metadata_problem([non_finite_z], 9100, 1)
     boolean_z = message(9100, "auxiliary-visualization", "1", 1, world_z=True)
-    assert "33 valid keypoints" in metadata_problem([boolean_z], 9100, 1)
+    assert "advertised schema" in metadata_problem([boolean_z], 9100, 1)
+
+    def malformed(metadata_type, edit):
+        item = message(9100, metadata_type, "1", 1)
+        payload = json.loads(item.payload)
+        poses = (
+            payload["data"]["poses"]
+            if metadata_type == "pose-estimation"
+            else payload["data"]["payload"]["poses"]
+        )
+        edit(poses[0])
+        item.payload = json.dumps(payload)
+        return item
+
+    assert "advertised schema" in metadata_problem(
+        [malformed("pose-estimation", lambda pose: pose.pop("bbox"))], 9100, 1
+    )
+    assert "advertised schema" in metadata_problem(
+        [malformed("pose-estimation", lambda pose: pose.update(confidence=True))], 9100, 1
+    )
+    assert "advertised schema" in metadata_problem(
+        [malformed("auxiliary-visualization", lambda pose: pose.update(presence=2.0))], 9100, 1
+    )
+    assert "advertised schema" in metadata_problem(
+        [malformed("pose-estimation", lambda pose: pose["keypoints"][0].pop("name"))], 9100, 1
+    )
+    assert "advertised schema" in metadata_problem(
+        [
+            malformed(
+                "auxiliary-visualization",
+                lambda pose: pose["keypoints"][0].update(confidence=float("nan")),
+            )
+        ],
+        9100,
+        1,
+    )
 
 
 @pytest.mark.e2e

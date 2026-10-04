@@ -226,6 +226,15 @@ def test_empty_flow_collections_stay_allowed(tmp_path: Path):
     assert len(cfg.streams) == 1
 
 
+def test_legacy_yaml_booleans_match_cpp(tmp_path: Path):
+    cfg = load_config(
+        tmp_path,
+        config_text() + "input:\n  tcp: yes\npose:\n  temporal_filter_enabled: OFF\n",
+    )
+    assert cfg.tcp is True
+    assert cfg.pose_temporal_filter_enabled is False
+
+
 class _Options:
     """Records attribute writes; unset attributes read as the -1 Core default."""
 
