@@ -32,6 +32,7 @@ constexpr const char* kExampleName = "multi-stream-blazepose3d";
 constexpr const char* kInsightHost = "127.0.0.1";
 constexpr const char* kPoseModel = "blazepose_ghum_heavy_modalix_bf16_mpk.tar.gz";
 constexpr const char* kDetectorModel = "yolo26m-det-int8-b1.tar.gz";
+constexpr std::size_t kMaxStreams = 4;
 
 class RtpVideoListener {
 public:
@@ -345,8 +346,14 @@ int main(int argc, char** argv) {
     return skip_or_fail("YOLO26 and BlazePose model packages are required");
   }
 
-  const std::vector<std::pair<std::string, std::vector<std::string>>> cases = {
+  std::vector<std::pair<std::string, std::vector<std::string>>> cases = {
       {"h264", rtsp_h264_urls_from_env()}, {"h265", rtsp_h265_urls_from_env()}};
+  for (auto& [codec, urls] : cases) {
+    // The application accepts at most four streams; CI provides five per codec.
+    if (urls.size() > kMaxStreams) {
+      urls.resize(kMaxStreams);
+    }
+  }
   int result = 0;
   int cases_run = 0;
   for (const auto& [codec, urls] : cases) {
