@@ -466,6 +466,21 @@ std::unordered_map<std::string, std::string> load_raw_scalars(const fs::path& co
     if (line.empty() || line.front() == '#') {
       continue;
     }
+    std::string content = line;
+    if (content == "-" || content.rfind("- ", 0) == 0) {
+      content = sima_examples::trim_copy(content.substr(1));
+    }
+    const std::size_t flow_colon = content.find(':');
+    const std::string flow_value = flow_colon == std::string::npos
+                                       ? content
+                                       : sima_examples::trim_copy(content.substr(flow_colon + 1));
+    for (const std::string& part : {content, flow_value}) {
+      if (!part.empty() && (part.front() == '[' || part.front() == '{') && part != "{}" &&
+          part != "[]") {
+        throw std::runtime_error(
+            "flow-style YAML collections are not supported; use block style: " + line);
+      }
+    }
     const int indent = static_cast<int>(text.find_first_not_of(" \t"));
     if (list_block_indent >= 0) {
       if (indent > list_block_indent) {
