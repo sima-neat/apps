@@ -334,30 +334,27 @@ int main(int argc, char** argv) {
     std::cerr << "[ERR] usage: " << argv[0] << " <example-binary>\n";
     return 2;
   }
-  const fs::path models_dir = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR") != nullptr
-                                  ? fs::path(env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR"))
-                                  : fs::path("models");
-  const fs::path detector = env_or_null("SIMANEAT_APPS_TEST_DETECTOR_MODEL") != nullptr
-                                ? fs::path(env_or_null("SIMANEAT_APPS_TEST_DETECTOR_MODEL"))
-                                : models_dir / kDetectorModel;
-  const fs::path pose = env_or_null("SIMANEAT_APPS_TEST_BLAZEPOSE_MODEL") != nullptr
-                            ? fs::path(env_or_null("SIMANEAT_APPS_TEST_BLAZEPOSE_MODEL"))
-                            : models_dir / kPoseModel;
+  const auto env_path = [](const char* name, const fs::path& fallback) {
+    const char* value = env_or_null(name);
+    return value != nullptr ? fs::path(value) : fallback;
+  };
+  const fs::path models_dir = env_path("SIMANEAT_APPS_TEST_MODELS_DIR", "models");
+  const fs::path detector =
+      env_path("SIMANEAT_APPS_TEST_DETECTOR_MODEL", models_dir / kDetectorModel);
+  const fs::path pose = env_path("SIMANEAT_APPS_TEST_BLAZEPOSE_MODEL", models_dir / kPoseModel);
   if (!fs::exists(detector) || !fs::exists(pose)) {
     return skip_or_fail("YOLO26 and BlazePose model packages are required");
   }
 
   std::vector<std::pair<std::string, std::vector<std::string>>> cases = {
       {"h264", rtsp_h264_urls_from_env()}, {"h265", rtsp_h265_urls_from_env()}};
+  int result = 0;
+  int cases_run = 0;
   for (auto& [codec, urls] : cases) {
     // The application accepts at most four streams; CI provides five per codec.
     if (urls.size() > kMaxStreams) {
       urls.resize(kMaxStreams);
     }
-  }
-  int result = 0;
-  int cases_run = 0;
-  for (const auto& [codec, urls] : cases) {
     if (urls.empty()) {
       continue;
     }

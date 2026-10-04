@@ -119,6 +119,17 @@ def env_int(name: str, default: int) -> int:
     return int(value) if value else default
 
 
+def valid_poses(poses, points_key: str) -> bool:
+    """Each pose has a presence in [0, 1] and 33 named x/y/z/confidence points."""
+    return all(
+        len(pose.get(points_key, [])) == 33
+        and isinstance(pose.get("presence"), (int, float))
+        and 0.0 <= pose["presence"] <= 1.0
+        and all(set(point) >= {"name", "x", "y", "z", "confidence"} for point in pose[points_key])
+        for pose in poses
+    )
+
+
 def pose_counts(messages, metadata_port_base: int) -> dict[str, dict[tuple, int]]:
     """Validate every message and return its pose count keyed by frame identity.
 
@@ -138,31 +149,14 @@ def pose_counts(messages, metadata_port_base: int) -> dict[str, dict[tuple, int]
         if message.metadata_type == "pose-estimation":
             poses = parsed["data"]["poses"]
             assert all(len(pose.get("keypoints", [])) == 33 for pose in poses)
-            assert all(len(pose.get("world_keypoints", [])) == 33 for pose in poses)
-            assert all(
-                isinstance(pose.get("presence"), (int, float))
-                and 0.0 <= pose["presence"] <= 1.0
-                for pose in poses
-            )
-            assert all(
-                set(point) >= {"name", "x", "y", "z", "confidence"}
-                for pose in poses
-                for point in pose["world_keypoints"]
-            )
+            assert valid_poses(poses, "world_keypoints")
         else:
             data = parsed["data"]
             assert data["schema_version"] == 1
             assert data["id"] == "world-pose"
             assert data["renderer"] == "blazepose-3d"
             poses = data["payload"]["poses"]
-            for pose in poses:
-                assert len(pose.get("keypoints", [])) == 33
-                assert isinstance(pose.get("presence"), (int, float))
-                assert 0.0 <= pose["presence"] <= 1.0
-                assert all(
-                    set(point) >= {"name", "x", "y", "z", "confidence"}
-                    for point in pose["keypoints"]
-                )
+            assert valid_poses(poses, "keypoints")
         counts[message.metadata_type][frame] = len(poses)
     return counts
 
