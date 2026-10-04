@@ -609,6 +609,26 @@ void validate_pose_contract(const neat::Model& model) {
                          "BlazePose output 2 must be [1,117]");
 }
 
+void copy_identity(const FrameIdentity& identity, neat::Sample& sample) {
+  sample.stream_id = identity.stream_id;
+  sample.frame_id = identity.frame_id;
+  sample.pts_ns = identity.pts_ns;
+  sample.dts_ns = identity.dts_ns;
+  sample.duration_ns = identity.duration_ns;
+  sample.input_seq = identity.input_seq;
+  sample.orig_input_seq = identity.orig_input_seq;
+}
+
+neat::RunOptions reliable_model_run_options() {
+  neat::RunOptions options;
+  options.preset = neat::RunPreset::Reliable;
+  options.overflow_policy = neat::OverflowPolicy::Block;
+  options.output_memory = neat::OutputMemory::ZeroCopy;
+  options.input_timeout_ms = 30000;
+  options.startup_preflight = false;
+  return options;
+}
+
 neat::Sample pose_input_sample(const neat::Tensor& tensor, const PoseInputContext* context) {
   neat::Sample sample = neat::make_tensor_sample("pose_input", tensor);
   sample.payload_type = neat::PayloadType::Tensor;
@@ -618,13 +638,7 @@ neat::Sample pose_input_sample(const neat::Tensor& tensor, const PoseInputContex
     sample.payload_tag = sample.format;
   }
   if (context != nullptr) {
-    sample.stream_id = context->identity.stream_id;
-    sample.frame_id = context->identity.frame_id;
-    sample.pts_ns = context->identity.pts_ns;
-    sample.dts_ns = context->identity.dts_ns;
-    sample.duration_ns = context->identity.duration_ns;
-    sample.input_seq = context->identity.input_seq;
-    sample.orig_input_seq = context->identity.orig_input_seq;
+    copy_identity(context->identity, sample);
   }
   return sample;
 }
@@ -643,14 +657,7 @@ void build_pose_run(AppRuntime& app) {
   app.pose_graph.add(app.pose_model->inference());
   app.pose_graph.add(app.pose_model->postprocess());
   app.pose_graph.add(neat::nodes::Output("pose_output", neat::OutputOptions::EveryFrame(4)));
-
-  neat::RunOptions options;
-  options.preset = neat::RunPreset::Reliable;
-  options.overflow_policy = neat::OverflowPolicy::Block;
-  options.output_memory = neat::OutputMemory::ZeroCopy;
-  options.input_timeout_ms = 30000;
-  options.startup_preflight = false;
-  app.pose_run = app.pose_graph.build(seed, options);
+  app.pose_run = app.pose_graph.build(seed, reliable_model_run_options());
 }
 
 neat::GraphLinkOptions realtime_link(const AppConfig& cfg, const StreamRuntime& stream) {
@@ -736,13 +743,7 @@ neat::Sample image_input_sample(const std::string& name, const neat::Tensor& ten
   sample.format = "RGB";
   sample.payload_tag = sample.format;
   if (identity != nullptr) {
-    sample.stream_id = identity->stream_id;
-    sample.frame_id = identity->frame_id;
-    sample.pts_ns = identity->pts_ns;
-    sample.dts_ns = identity->dts_ns;
-    sample.duration_ns = identity->duration_ns;
-    sample.input_seq = identity->input_seq;
-    sample.orig_input_seq = identity->orig_input_seq;
+    copy_identity(*identity, sample);
   }
   return sample;
 }
@@ -770,14 +771,7 @@ void build_detector_run(AppRuntime& app) {
   output_graph.add(neat::nodes::Output("detector_output", neat::OutputOptions::EveryFrame(4)));
   app.detector_graph.connect(input_graph, model_graph);
   app.detector_graph.connect(model_graph, output_graph);
-
-  neat::RunOptions options;
-  options.preset = neat::RunPreset::Reliable;
-  options.overflow_policy = neat::OverflowPolicy::Block;
-  options.output_memory = neat::OutputMemory::ZeroCopy;
-  options.input_timeout_ms = 30000;
-  options.startup_preflight = false;
-  app.detector_run = app.detector_graph.build(seed, options);
+  app.detector_run = app.detector_graph.build(seed, reliable_model_run_options());
 }
 
 bool extract_bbox_payload(const neat::Sample& sample, std::vector<std::uint8_t>& payload,
