@@ -73,6 +73,7 @@ class FrameIdentity:
     stream_id: str
     frame_id: int
     pts_ns: int
+    sequence: int
 
 
 @dataclass
@@ -173,7 +174,7 @@ class StreamRuntime:
     source_run: Any = None
     metadata_lock: threading.Lock = field(default_factory=threading.Lock)
     pose_smoother: PoseSmoother = field(default_factory=PoseSmoother)
-    last_published_frame_id: int = 0
+    last_published_sequence: int = 0
     frames_in: int = 0
     frames_out: int = 0
     # Admitted frames that are still queued or inside a model.
@@ -982,9 +983,9 @@ def publish_frame(
     """Send one frame's 2D and 3D metadata. The per-stream lock keeps the two
     messages of one frame from interleaving with another frame's."""
     with stream.metadata_lock:
-        if identity.frame_id <= stream.last_published_frame_id:
+        if identity.sequence <= stream.last_published_sequence:
             return
-        stream.last_published_frame_id = identity.frame_id
+        stream.last_published_sequence = identity.sequence
         if stream.pose_temporal_filter_enabled:
             poses = stream.pose_smoother.filter(poses)
         overlay = poses_data(poses, identity.stream_id)
@@ -1117,7 +1118,12 @@ def pull_source_frames(runtime: AppRuntime, cfg: AppConfig, stream: StreamRuntim
                 if state.stopping:
                     return
                 stream.frames_in += 1
-                identity = FrameIdentity(stream.config.id, stream.frames_in, int(sample.pts_ns))
+                identity = FrameIdentity(
+                    stream.config.id,
+                    int(sample.frame_id),
+                    int(sample.pts_ns),
+                    stream.frames_in,
+                )
                 job = FrameJob(runtime.next_job_id, stream.index, rgb, identity)
                 runtime.next_job_id += 1
                 if not keep_latest(state.detector_mailboxes, stream.index, job):

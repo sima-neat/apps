@@ -43,14 +43,14 @@ template <typename T> bool keep_latest(std::optional<T>& slot, T value) {
   return replaced;
 }
 
-// Claims `frame_id` for publication when it is newer than every frame already
-// claimed on the stream. Completed older inference must not be sent after a
-// newer empty frame has cleared the viewer and its temporal-filter state.
-inline bool claim_newer_frame(std::uint64_t frame_id, std::uint64_t& last_claimed_frame_id) {
-  if (frame_id <= last_claimed_frame_id) {
+// Claims a local sequence when it is newer than every frame already published.
+// Completed older inference must not be sent after a newer empty frame has
+// cleared the viewer and its temporal-filter state.
+inline bool claim_newer_frame(std::uint64_t sequence, std::uint64_t& last_claimed_sequence) {
+  if (sequence <= last_claimed_sequence) {
     return false;
   }
-  last_claimed_frame_id = frame_id;
+  last_claimed_sequence = sequence;
   return true;
 }
 

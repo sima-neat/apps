@@ -176,11 +176,11 @@ bool test_latest_work_and_metadata_pairs() {
   bool ok = expect(!blazepose_app::keep_latest(mailbox, 1) &&
                        blazepose_app::keep_latest(mailbox, 2) && mailbox == 2,
                    "a stream mailbox keeps only the latest work");
-  std::uint64_t last_published_frame_id = 0;
-  ok &= expect(blazepose_app::claim_newer_frame(2, last_published_frame_id) &&
-                   !blazepose_app::claim_newer_frame(1, last_published_frame_id) &&
-                   blazepose_app::claim_newer_frame(3, last_published_frame_id) &&
-                   last_published_frame_id == 3,
+  std::uint64_t last_published_sequence = 0;
+  ok &= expect(blazepose_app::claim_newer_frame(2, last_published_sequence) &&
+                   !blazepose_app::claim_newer_frame(1, last_published_sequence) &&
+                   blazepose_app::claim_newer_frame(3, last_published_sequence) &&
+                   last_published_sequence == 3,
                "a stream never publishes a completed frame behind a newer frame");
   std::vector<std::string> sent;
   const auto send_failing_world = [&](const char* type) {
@@ -301,6 +301,15 @@ bool test_config_validation(const std::string& binary) {
       {"duplicate_channel",
        config(stream_entry(0) + replaced(stream_entry(1), "channel: 1", "channel: 0")),
        "stream insight channels must be unique"},
+      {"octal_channel",
+       config(stream_entry(9) + replaced(stream_entry(1), "channel: 1", "channel: 011")),
+       "stream insight channels must be unique"},
+      {"hex_channel",
+       config(stream_entry(9) + replaced(stream_entry(1), "channel: 1", "channel: 0x9")),
+       "stream insight channels must be unique"},
+      {"octal_port_overlap",
+       config(stream_entry(0), "    video_port_base: 0110\n    metadata_port_base: 72\n"),
+       "video and metadata ports must not overlap"},
       {"port_overlap",
        config(stream_entry(0) + replaced(stream_entry(1), "channel: 1", "channel: 100"),
               "    video_port_base: 9000\n"),

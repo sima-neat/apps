@@ -30,6 +30,7 @@
 #include <atomic>
 #include <cctype>
 #include <chrono>
+#include <climits>
 #include <cmath>
 #include <condition_variable>
 #include <csignal>
@@ -104,6 +105,7 @@ struct FrameIdentity {
   std::string stream_id;
   int64_t frame_id = -1;
   int64_t pts_ns = -1;
+  std::uint64_t sequence = 0;
 };
 
 struct FrameJob {
@@ -142,7 +144,7 @@ struct StreamRuntime {
   std::mutex metadata_mutex;
   bool pose_temporal_filter_enabled = true;
   blazepose_app::PoseSmoother pose_smoother;
-  std::uint64_t last_published_frame_id = 0;
+  std::uint64_t last_published_sequence = 0;
   std::atomic<int> frames_in{0};
   std::atomic<int> frames_out{0};
   // Admitted frames that are still queued or inside a model.
@@ -193,20 +195,10 @@ std::string codec_name(neat::nodes::groups::RtspCodec codec) {
   return codec == neat::nodes::groups::RtspCodec::H265 ? "h265" : "h264";
 }
 
+int parse_yaml_integer(const std::string& value, const std::string& key);
+
 void apply_stream_field(StreamConfig& stream, const std::string& key, const std::string& value) {
-  const auto integer = [&]() {
-    std::size_t used = 0;
-    int parsed = 0;
-    try {
-      parsed = std::stoi(value, &used);
-    } catch (const std::exception&) {
-      used = 0;
-    }
-    if (used == 0 || used != value.size()) {
-      throw std::runtime_error("stream " + key + " must be an integer");
-    }
-    return parsed;
-  };
+  const auto integer = [&]() { return parse_yaml_integer(value, "stream " + key); };
   if (key == "id") {
     stream.id = value;
   } else if (key == "url") {
@@ -446,6 +438,65 @@ bool is_yaml_integer(std::string value) {
   return all_digits(value, 10);
 }
 
+int parse_yaml_integer(const std::string& value, const std::string& key) {
+  if (!is_yaml_integer(value)) {
+    throw std::runtime_error(key + " must be an integer");
+  }
+  std::string scalar = value;
+  scalar.erase(std::remove(scalar.begin(), scalar.end(), '_'), scalar.end());
+  const bool negative = scalar.front() == '-';
+  if (scalar.front() == '+' || scalar.front() == '-') {
+    scalar.erase(0, 1);
+  }
+  const std::uint64_t limit =
+      negative ? static_cast<std::uint64_t>(INT_MAX) + 1U : static_cast<std::uint64_t>(INT_MAX);
+  std::uint64_t magnitude = 0;
+  const auto append = [&](std::uint64_t part, std::uint64_t base) {
+    if (magnitude > (limit - part) / base) {
+      throw std::runtime_error(key + " is outside the supported integer range");
+    }
+    magnitude = magnitude * base + part;
+  };
+  if (scalar.find(':') != std::string::npos) {
+    std::istringstream segments(scalar);
+    std::string segment;
+    while (std::getline(segments, segment, ':')) {
+      std::uint64_t part = 0;
+      for (const char digit : segment) {
+        if (part > (limit - static_cast<std::uint64_t>(digit - '0')) / 10U) {
+          throw std::runtime_error(key + " is outside the supported integer range");
+        }
+        part = part * 10U + static_cast<std::uint64_t>(digit - '0');
+      }
+      append(part, 60U);
+    }
+  } else {
+    int base = 10;
+    std::size_t start = 0;
+    if (scalar.size() > 2 && scalar.rfind("0b", 0) == 0) {
+      base = 2;
+      start = 2;
+    } else if (scalar.size() > 2 && scalar.rfind("0x", 0) == 0) {
+      base = 16;
+      start = 2;
+    } else if (scalar.size() > 1 && scalar.front() == '0') {
+      base = 8;
+      start = 1;
+    }
+    for (std::size_t index = start; index < scalar.size(); ++index) {
+      const unsigned char character = static_cast<unsigned char>(scalar[index]);
+      const int digit =
+          std::isdigit(character) != 0 ? character - '0' : std::tolower(character) - 'a' + 10;
+      append(static_cast<std::uint64_t>(digit), static_cast<std::uint64_t>(base));
+    }
+  }
+  if (negative && magnitude == static_cast<std::uint64_t>(INT_MAX) + 1U) {
+    return INT_MIN;
+  }
+  const int parsed = static_cast<int>(magnitude);
+  return negative ? -parsed : parsed;
+}
+
 bool is_plain_yaml_string(const std::string& value) {
   std::string lowered = value;
   std::transform(lowered.begin(), lowered.end(), lowered.begin(),
@@ -653,6 +704,12 @@ std::string decoded_string_or(const std::unordered_map<std::string, std::string>
   return decode_yaml_scalar(value->second);
 }
 
+int yaml_int_or(const std::unordered_map<std::string, std::string>& raw_scalars,
+                const std::string& key, int default_value) {
+  const auto value = raw_scalars.find(key);
+  return value == raw_scalars.end() ? default_value : parse_yaml_integer(value->second, key);
+}
+
 bool app_bool_or(const sima_examples::ScalarConfig& config,
                  const std::unordered_map<std::string, std::string>& raw_scalars,
                  const std::string& key, bool default_value) {
@@ -728,18 +785,18 @@ AppConfig load_app_config(const fs::path& config_path) {
   cfg.pose_model_path = decoded_string_or(raw_scalars, "models.pose_path", "");
   cfg.streams = parse_streams(config_path);
   cfg.tcp = app_bool_or(raw, raw_scalars, "input.tcp", true);
-  cfg.latency_ms = raw.int_or("input.latency_ms", 100);
+  cfg.latency_ms = yaml_int_or(raw_scalars, "input.latency_ms", 100);
   cfg.detector_min_score = raw.double_or("detector.min_score", 0.30);
   cfg.detector_nms_iou = raw.double_or("detector.nms_iou", 0.60);
-  cfg.max_people_per_frame = raw.int_or("pose.max_people_per_frame", 4);
+  cfg.max_people_per_frame = yaml_int_or(raw_scalars, "pose.max_people_per_frame", 4);
   cfg.roi_scale = raw.double_or("pose.roi_scale", 1.65);
   cfg.pose_presence_threshold = raw.double_or("pose.presence_threshold", 0.50);
   cfg.pose_temporal_filter_enabled =
       app_bool_or(raw, raw_scalars, "pose.temporal_filter_enabled", true);
-  cfg.frame_limit = raw.int_or("runtime.frames", 0);
+  cfg.frame_limit = yaml_int_or(raw_scalars, "runtime.frames", 0);
   cfg.insight_host = decoded_string_or(raw_scalars, "output.insight.host", "");
-  cfg.video_port_base = raw.int_or("output.insight.video_port_base", 9000);
-  cfg.metadata_port_base = raw.int_or("output.insight.metadata_port_base", 9100);
+  cfg.video_port_base = yaml_int_or(raw_scalars, "output.insight.video_port_base", 9000);
+  cfg.metadata_port_base = yaml_int_or(raw_scalars, "output.insight.metadata_port_base", 9100);
   validate_config(cfg);
   return cfg;
 }
@@ -1133,7 +1190,7 @@ void finish_frame(AppRuntime& app, StreamRuntime& stream) {
 void publish_frame(StreamRuntime& stream, const FrameIdentity& identity,
                    std::vector<blazepose_app::Pose> poses) {
   std::lock_guard<std::mutex> lock(stream.metadata_mutex);
-  if (!blazepose_app::claim_newer_frame(identity.frame_id, stream.last_published_frame_id)) {
+  if (!blazepose_app::claim_newer_frame(identity.sequence, stream.last_published_sequence)) {
     return;
   }
   if (stream.pose_temporal_filter_enabled) {
@@ -1274,7 +1331,8 @@ void pull_source_frames(AppRuntime& app, const AppConfig& cfg, StreamRuntime& st
       job.job_id = app.next_job_id.fetch_add(1);
       job.stream_index = stream.index;
       job.rgb = require_rgb_tensor(sample);
-      job.identity = {stream.config.id, stream.frames_in.load() + 1, sample.pts_ns};
+      job.identity = {stream.config.id, sample.frame_id, sample.pts_ns,
+                      static_cast<std::uint64_t>(stream.frames_in.load() + 1)};
       bool dropped = false;
       {
         std::lock_guard<std::mutex> lock(app.state.mutex);

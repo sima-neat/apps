@@ -443,6 +443,7 @@ public:
   RtpVideoListener(int base_port, int num_ports, std::string codec)
       : codec_(std::move(codec)), config_packets_(static_cast<std::size_t>(num_ports), 0),
         vcl_access_units_(static_cast<std::size_t>(num_ports), 0),
+        vcl_timestamps_(static_cast<std::size_t>(num_ports)),
         fu_progress_(static_cast<std::size_t>(num_ports)) {
     for (int offset = 0; offset < num_ports; ++offset) {
       const int fd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -495,6 +496,23 @@ public:
     return true;
   }
 
+  bool has_correlated_timestamp(int port_offset, int64_t timestamp_ms) const {
+    if (port_offset < 0 || static_cast<std::size_t>(port_offset) >= vcl_timestamps_.size() ||
+        timestamp_ms < 0) {
+      return false;
+    }
+    const std::uint32_t expected = static_cast<std::uint32_t>(timestamp_ms * 90);
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (const std::uint32_t actual : vcl_timestamps_[static_cast<std::size_t>(port_offset)]) {
+      const std::uint32_t forward = actual - expected;
+      const std::uint32_t backward = expected - actual;
+      if (std::min(forward, backward) <= 89U) {
+        return true;
+      }
+    }
+    return false;
+  }
+
 private:
   void receive(std::size_t index) {
     std::array<std::uint8_t, 65536> packet{};
@@ -512,6 +530,7 @@ private:
       }
       if (vcl.has_value() && completes_vcl_access_unit(*vcl, fu_progress_[index])) {
         ++vcl_access_units_[index];
+        vcl_timestamps_[index].insert(vcl->timestamp);
       }
     }
   }
@@ -522,6 +541,7 @@ private:
   mutable std::mutex mutex_;
   std::vector<int> config_packets_;
   std::vector<int> vcl_access_units_;
+  std::vector<std::set<std::uint32_t>> vcl_timestamps_;
   std::vector<std::optional<FuProgress>> fu_progress_;
   std::atomic<bool> stopping_{false};
   std::string error_;
@@ -673,7 +693,7 @@ bool test_paired_pose_content_validation() {
 // and world for 2D poses), and at least one port publishes a non-empty 2D/3D pair
 // for one frame.
 bool validate_metadata(const MetadataJsonListenerResult& result, int metadata_port_base,
-                       std::string& error) {
+                       const RtpVideoListener& video, std::string& error) {
   using FrameKey = std::tuple<int, int64_t, std::string>;
   std::map<FrameKey, nlohmann::json> pose_frames;
   std::map<FrameKey, nlohmann::json> world_pose_frames;
@@ -711,12 +731,16 @@ bool validate_metadata(const MetadataJsonListenerResult& result, int metadata_po
     const auto world = world_pose_frames.find(entry.first);
     if (world != world_pose_frames.end() &&
         paired_pose_content_matches(entry.second, world->second)) {
-      paired_ports.insert(std::get<0>(entry.first));
+      const int port = std::get<0>(entry.first);
+      if (!video.has_correlated_timestamp(port - metadata_port_base, std::get<1>(entry.first))) {
+        continue;
+      }
+      paired_ports.insert(port);
       nonempty_pair = nonempty_pair || !entry.second.empty();
     }
   }
   if (paired_ports.empty()) {
-    error = "no stream published a non-empty content-matched 2D/3D pair for one frame";
+    error = "no stream published a content-matched pair correlated to video PTS";
     return false;
   }
   if (paired_ports.size() < result.ports_with_valid_json.size()) {
@@ -772,7 +796,8 @@ int run_case(const std::string& binary, const fs::path& detector, const fs::path
   while (std::chrono::steady_clock::now() < metadata_deadline && metadata.error.empty()) {
     listener.poll_messages(metadata, 250);
     std::string error;
-    if (validate_metadata(metadata, metadata_port_base, error) && metadata.success) {
+    if (validate_metadata(metadata, metadata_port_base, video_listener, error) &&
+        metadata.success) {
       metadata_error.clear();
       break;
     }
