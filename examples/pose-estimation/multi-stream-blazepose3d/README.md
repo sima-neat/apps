@@ -57,25 +57,13 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-The detector supports the same Model Zoo packages as the multi-stream detector and tracker:
-
-| Model file | Role |
-| --- | --- |
-| `yolo26m-det-int8-b1.tar.gz` | Default |
-| `yolo26n-det-bf16-mla_tess-b1.tar.gz` | Supported |
-| `yolo26s-det-bf16-mla_tess-b1.tar.gz` | Supported |
-| `yolo26m-det-bf16-mla_tess-b1.tar.gz` | Supported |
-| `yolo26l-det-bf16-mla_tess-b1.tar.gz` | Supported |
-| `yolo26x-det-bf16-mla_tess-b1.tar.gz` | Supported |
-| `yolo26m-det-bf16-b1.tar.gz` | Supported |
-
-Replace `<model-file>` with one file from the table:
+The detector uses the `yolo26m-det-int8-b1.tar.gz` Model Zoo package, which the E2E tests run:
 
 ```bash
 export MODELZOO_VERSION="2.1.3"
 mkdir -p models
 cd models
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26-detection/<model-file>"
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26-detection/yolo26m-det-int8-b1.tar.gz"
 cd ..
 ```
 
