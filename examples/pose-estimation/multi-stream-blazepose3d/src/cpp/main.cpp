@@ -880,6 +880,15 @@ void skip_frame(StreamRuntime& stream, const FrameJob& job) {
   complete_frame(stream, job.stream_sequence, job.identity, std::nullopt);
 }
 
+void publish_empty_frame(StreamRuntime& stream, const FrameJob& job) {
+  complete_frame(stream, job.stream_sequence, job.identity, std::vector<blazepose_app::Pose>{});
+}
+
+void time_out_frame(StreamRuntime& stream, const FrameJob& job) {
+  ++stream.timed_out_jobs;
+  publish_empty_frame(stream, job);
+}
+
 std::vector<float> tensor_floats(const neat::Tensor& tensor, std::size_t expected) {
   const std::vector<std::uint8_t> bytes = tensor.copy_payload_bytes();
   if (bytes.size() != expected * sizeof(float)) {
@@ -1123,9 +1132,7 @@ void dispatch_detector_jobs(AppRuntime& app, const AppConfig& cfg) {
       FrameJob job = std::move(*maybe_job);
       StreamRuntime& stream = *app.streams[static_cast<std::size_t>(job.stream_index)];
       if (Clock::now() >= job.deadline) {
-        ++stream.timed_out_jobs;
-        complete_frame(stream, job.stream_sequence, job.identity,
-                       std::vector<blazepose_app::Pose>{});
+        time_out_frame(stream, job);
         continue;
       }
       const neat::Tensor detector_frame = job.rgb.cvu();
@@ -1144,18 +1151,14 @@ void dispatch_detector_jobs(AppRuntime& app, const AppConfig& cfg) {
         expired_while_waiting = Clock::now() >= job.deadline;
       }
       if (expired_while_waiting) {
-        ++stream.timed_out_jobs;
-        complete_frame(stream, job.stream_sequence, job.identity,
-                       std::vector<blazepose_app::Pose>{});
+        time_out_frame(stream, job);
         continue;
       }
       const auto push_result = try_push_with_context_until(
           app, app.detector_run, "detector_input", input, app.state.pending_detector_outputs, job,
           job.deadline, "YOLO26 Run rejected a frame input");
       if (push_result == blazepose_app::NonblockingPushResult::Aborted) {
-        ++stream.timed_out_jobs;
-        complete_frame(stream, job.stream_sequence, job.identity,
-                       std::vector<blazepose_app::Pose>{});
+        time_out_frame(stream, job);
       } else if (push_result == blazepose_app::NonblockingPushResult::Cancelled) {
         std::lock_guard<std::mutex> lock(app.state.mutex);
         if (app.state.stopping) {
@@ -1178,9 +1181,7 @@ void expire_detector_jobs(AppRuntime& app) {
         [now](const FrameJob& job) { return now >= job.deadline; });
   }
   for (const FrameJob& job : expired) {
-    StreamRuntime& stream = *app.streams[static_cast<std::size_t>(job.stream_index)];
-    ++stream.timed_out_jobs;
-    complete_frame(stream, job.stream_sequence, job.identity, std::vector<blazepose_app::Pose>{});
+    time_out_frame(*app.streams[static_cast<std::size_t>(job.stream_index)], job);
   }
 }
 
@@ -1231,16 +1232,13 @@ void pull_detector_outputs(AppRuntime& app, const AppConfig& cfg) {
       StreamRuntime& stream = *app.streams[static_cast<std::size_t>(job.stream_index)];
       ++stream.detector_frames;
       if (Clock::now() >= job.deadline) {
-        ++stream.timed_out_jobs;
-        complete_frame(stream, job.stream_sequence, job.identity,
-                       std::vector<blazepose_app::Pose>{});
+        time_out_frame(stream, job);
         continue;
       }
       job.people = select_people(sample, stream.width, stream.height, cfg);
       stream.selected_rois.fetch_add(job.people.size());
       if (job.people.empty()) {
-        complete_frame(stream, job.stream_sequence, job.identity,
-                       std::vector<blazepose_app::Pose>{});
+        publish_empty_frame(stream, job);
         continue;
       }
 
@@ -1280,14 +1278,11 @@ void dispatch_pose_jobs(AppRuntime& app, const AppConfig& cfg) {
       FrameJob job = std::move(*maybe_job);
       StreamRuntime& stream = *app.streams[static_cast<std::size_t>(job.stream_index)];
       if (Clock::now() >= job.deadline) {
-        ++stream.timed_out_jobs;
-        complete_frame(stream, job.stream_sequence, job.identity,
-                       std::vector<blazepose_app::Pose>{});
+        time_out_frame(stream, job);
         continue;
       }
       if (job.people.empty()) {
-        complete_frame(stream, job.stream_sequence, job.identity,
-                       std::vector<blazepose_app::Pose>{});
+        publish_empty_frame(stream, job);
         continue;
       }
 
@@ -1295,30 +1290,24 @@ void dispatch_pose_jobs(AppRuntime& app, const AppConfig& cfg) {
       if (!rgb_view.has_value()) {
         throw std::runtime_error("failed to map packed RGB frame without copying");
       }
-      std::vector<PreparedPoseInput> prepared_inputs;
-      prepared_inputs.reserve(job.people.size());
-      std::vector<blazepose_app::Roi> requested_rois;
-      requested_rois.reserve(job.people.size());
-      for (const blazepose_app::Box& person : job.people) {
-        requested_rois.push_back(blazepose_app::square_roi(person, cfg.roi_scale));
-      }
       std::vector<neat::PreprocessRoi> pose_rois;
-      pose_rois.reserve(requested_rois.size());
-      for (const blazepose_app::Roi& roi : requested_rois) {
+      pose_rois.reserve(job.people.size());
+      for (const blazepose_app::Box& person : job.people) {
+        const blazepose_app::Roi roi = blazepose_app::square_roi(person, cfg.roi_scale);
         pose_rois.push_back({0, roi.x, roi.y, roi.width, roi.height});
       }
       const neat::TensorList output =
           neat::stages::Preproc(std::vector<cv::Mat>{rgb_view->mat}, *app.pose_model, pose_rois);
-      if (output.size() != requested_rois.size()) {
+      if (output.size() != pose_rois.size()) {
         throw std::runtime_error("BlazePose Preproc output count does not match ROI count");
       }
+      std::vector<PreparedPoseInput> prepared_inputs;
+      prepared_inputs.reserve(output.size());
       for (std::size_t index = 0; index < output.size(); ++index) {
-        const std::size_t person_index = index;
-        const blazepose_app::Affine affine = affine_from_tensor(output[index]);
         // Detached asynchronous Runs may retain their input after push(). Give
         // each ROI independent EV74 storage so Preproc can recycle its pool.
-        prepared_inputs.push_back({static_cast<int>(person_index), job.people[person_index], affine,
-                                   output[index].clone().cvu()});
+        prepared_inputs.push_back({static_cast<int>(index), job.people[index],
+                                   affine_from_tensor(output[index]), output[index].clone().cvu()});
       }
 
       bool expired_while_waiting = false;
@@ -1343,9 +1332,7 @@ void dispatch_pose_jobs(AppRuntime& app, const AppConfig& cfg) {
         }
       }
       if (expired_while_waiting) {
-        ++stream.timed_out_jobs;
-        complete_frame(stream, job.stream_sequence, job.identity,
-                       std::vector<blazepose_app::Pose>{});
+        time_out_frame(stream, job);
         continue;
       }
 

@@ -1294,6 +1294,11 @@ def skip_frame(stream: StreamRuntime, job: FrameJob) -> None:
     complete_frame(stream, job.stream_sequence, job.identity, None)
 
 
+def time_out_frame(stream: StreamRuntime, job: FrameJob) -> None:
+    stream.timed_out_jobs += 1
+    complete_frame(stream, job.stream_sequence, job.identity, [])
+
+
 def affine_from_tensor(tensor) -> tuple[float, float, float, float, float, float]:
     meta = tensor.semantic.preprocess
     if meta is None:
@@ -1498,8 +1503,7 @@ def dispatch_detector_jobs(runtime: AppRuntime, cfg: AppConfig) -> None:
                 return
             stream = runtime.streams[job.stream_index]
             if time.monotonic() >= job.deadline:
-                stream.timed_out_jobs += 1
-                complete_frame(stream, job.stream_sequence, job.identity, [])
+                time_out_frame(stream, job)
                 continue
             detector_frame = job.rgb.cvu()
             sample = image_input_sample("detector_input", detector_frame, job.identity)
@@ -1515,8 +1519,7 @@ def dispatch_detector_jobs(runtime: AppRuntime, cfg: AppConfig) -> None:
                 if state.stopping:
                     return
             if expired_while_waiting:
-                stream.timed_out_jobs += 1
-                complete_frame(stream, job.stream_sequence, job.identity, [])
+                time_out_frame(stream, job)
                 continue
             push_result = try_push_with_context(
                 runtime,
@@ -1533,8 +1536,7 @@ def dispatch_detector_jobs(runtime: AppRuntime, cfg: AppConfig) -> None:
                     if state.stopping:
                         return
                 if push_result is NonblockingPushResult.ABORTED:
-                    stream.timed_out_jobs += 1
-                    complete_frame(stream, job.stream_sequence, job.identity, [])
+                    time_out_frame(stream, job)
                 continue
     except Exception as error:  # noqa: BLE001 - propagate worker failures to the owner thread.
         set_error(runtime, error)
@@ -1549,9 +1551,7 @@ def expire_detector_jobs(runtime: AppRuntime) -> None:
                 expired.append(job)
                 runtime.state.pending_detector_outputs[index] = None
     for job in expired:
-        stream = runtime.streams[job.stream_index]
-        stream.timed_out_jobs += 1
-        complete_frame(stream, job.stream_sequence, job.identity, [])
+        time_out_frame(runtime.streams[job.stream_index], job)
 
 
 def writable_rgb_view(tensor):
@@ -1598,8 +1598,7 @@ def pull_detector_outputs(runtime: AppRuntime, cfg: AppConfig) -> None:
             stream = runtime.streams[job.stream_index]
             stream.detector_frames += 1
             if time.monotonic() >= job.deadline:
-                stream.timed_out_jobs += 1
-                complete_frame(stream, job.stream_sequence, job.identity, [])
+                time_out_frame(stream, job)
                 continue
             job.people = select_people(sample, stream, cfg)
             stream.selected_rois += len(job.people)
@@ -1632,8 +1631,7 @@ def dispatch_pose_jobs(runtime: AppRuntime, cfg: AppConfig) -> None:
                 return
             stream = runtime.streams[job.stream_index]
             if time.monotonic() >= job.deadline:
-                stream.timed_out_jobs += 1
-                complete_frame(stream, job.stream_sequence, job.identity, [])
+                time_out_frame(stream, job)
                 continue
             if not job.people:
                 complete_frame(stream, job.stream_sequence, job.identity, [])
@@ -1690,8 +1688,7 @@ def dispatch_pose_jobs(runtime: AppRuntime, cfg: AppConfig) -> None:
                         job.deadline,
                     )
             if expired_while_waiting:
-                stream.timed_out_jobs += 1
-                complete_frame(stream, job.stream_sequence, job.identity, [])
+                time_out_frame(stream, job)
                 continue
 
             accepted_rois = 0
