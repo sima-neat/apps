@@ -249,6 +249,148 @@ std::string strip_yaml_comment(const std::string& text) {
   return text;
 }
 
+void append_utf8(std::string& output, std::uint32_t code_point) {
+  if (code_point > 0x10FFFF || (code_point >= 0xD800 && code_point <= 0xDFFF)) {
+    throw std::runtime_error("invalid Unicode escape in stream value");
+  }
+  if (code_point <= 0x7F) {
+    output.push_back(static_cast<char>(code_point));
+  } else if (code_point <= 0x7FF) {
+    output.push_back(static_cast<char>(0xC0 | (code_point >> 6)));
+    output.push_back(static_cast<char>(0x80 | (code_point & 0x3F)));
+  } else if (code_point <= 0xFFFF) {
+    output.push_back(static_cast<char>(0xE0 | (code_point >> 12)));
+    output.push_back(static_cast<char>(0x80 | ((code_point >> 6) & 0x3F)));
+    output.push_back(static_cast<char>(0x80 | (code_point & 0x3F)));
+  } else {
+    output.push_back(static_cast<char>(0xF0 | (code_point >> 18)));
+    output.push_back(static_cast<char>(0x80 | ((code_point >> 12) & 0x3F)));
+    output.push_back(static_cast<char>(0x80 | ((code_point >> 6) & 0x3F)));
+    output.push_back(static_cast<char>(0x80 | (code_point & 0x3F)));
+  }
+}
+
+std::uint32_t parse_hex_escape(const std::string& value, std::size_t& index, std::size_t digits) {
+  if (index + digits >= value.size()) {
+    throw std::runtime_error("incomplete YAML escape in stream value");
+  }
+  std::uint32_t code_point = 0;
+  for (std::size_t offset = 1; offset <= digits; ++offset) {
+    const char digit = value[index + offset];
+    code_point <<= 4;
+    if (digit >= '0' && digit <= '9') {
+      code_point |= static_cast<std::uint32_t>(digit - '0');
+    } else if (digit >= 'a' && digit <= 'f') {
+      code_point |= static_cast<std::uint32_t>(digit - 'a' + 10);
+    } else if (digit >= 'A' && digit <= 'F') {
+      code_point |= static_cast<std::uint32_t>(digit - 'A' + 10);
+    } else {
+      throw std::runtime_error("invalid hexadecimal YAML escape in stream value");
+    }
+  }
+  index += digits;
+  return code_point;
+}
+
+std::string decode_yaml_scalar(const std::string& value) {
+  if (value.size() < 2 || (value.front() != '\'' && value.front() != '"')) {
+    return value;
+  }
+  if (value.back() != value.front()) {
+    throw std::runtime_error("unterminated quoted stream value");
+  }
+  std::string decoded;
+  decoded.reserve(value.size() - 2);
+  if (value.front() == '\'') {
+    for (std::size_t index = 1; index + 1 < value.size(); ++index) {
+      if (value[index] == '\'') {
+        if (index + 2 >= value.size() || value[index + 1] != '\'') {
+          throw std::runtime_error("invalid single-quoted stream value");
+        }
+        ++index;
+      }
+      decoded.push_back(value[index]);
+    }
+    return decoded;
+  }
+
+  for (std::size_t index = 1; index + 1 < value.size(); ++index) {
+    if (value[index] != '\\') {
+      decoded.push_back(value[index]);
+      continue;
+    }
+    if (++index + 1 >= value.size()) {
+      throw std::runtime_error("incomplete YAML escape in stream value");
+    }
+    const char escaped = value[index];
+    switch (escaped) {
+    case '0':
+      decoded.push_back('\0');
+      break;
+    case 'a':
+      decoded.push_back('\a');
+      break;
+    case 'b':
+      decoded.push_back('\b');
+      break;
+    case 't':
+      decoded.push_back('\t');
+      break;
+    case 'n':
+      decoded.push_back('\n');
+      break;
+    case 'v':
+      decoded.push_back('\v');
+      break;
+    case 'f':
+      decoded.push_back('\f');
+      break;
+    case 'r':
+      decoded.push_back('\r');
+      break;
+    case 'e':
+      decoded.push_back('\x1B');
+      break;
+    case ' ':
+      decoded.push_back(' ');
+      break;
+    case '"':
+      decoded.push_back('"');
+      break;
+    case '/':
+      decoded.push_back('/');
+      break;
+    case '\\':
+      decoded.push_back('\\');
+      break;
+    case 'N':
+      append_utf8(decoded, 0x85);
+      break;
+    case '_':
+      append_utf8(decoded, 0xA0);
+      break;
+    case 'L':
+      append_utf8(decoded, 0x2028);
+      break;
+    case 'P':
+      append_utf8(decoded, 0x2029);
+      break;
+    case 'x':
+      append_utf8(decoded, parse_hex_escape(value, index, 2));
+      break;
+    case 'u':
+      append_utf8(decoded, parse_hex_escape(value, index, 4));
+      break;
+    case 'U':
+      append_utf8(decoded, parse_hex_escape(value, index, 8));
+      break;
+    default:
+      throw std::runtime_error("unsupported YAML escape in stream value");
+    }
+  }
+  return decoded;
+}
+
 // ScalarConfig skips YAML lists, so the stream entries are read here: a
 // "- key: value" line starts an entry and deeper "key: value" lines continue it.
 std::vector<StreamConfig> parse_streams(const fs::path& config_path) {
@@ -281,11 +423,7 @@ std::vector<StreamConfig> parse_streams(const fs::path& config_path) {
     if (streams.empty() || colon == std::string::npos) {
       throw std::runtime_error("streams must be a list of 'key: value' mappings");
     }
-    std::string value = sima_examples::trim_copy(line.substr(colon + 1));
-    if (value.size() >= 2 && (value.front() == '"' || value.front() == '\'') &&
-        value.back() == value.front()) {
-      value = value.substr(1, value.size() - 2);
-    }
+    const std::string value = decode_yaml_scalar(sima_examples::trim_copy(line.substr(colon + 1)));
     apply_stream_field(streams.back(), sima_examples::trim_copy(line.substr(0, colon)), value);
   }
   return streams;

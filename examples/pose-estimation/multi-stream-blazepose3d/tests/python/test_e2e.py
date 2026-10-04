@@ -26,11 +26,12 @@ INSIGHT_HOST = "127.0.0.1"
 MAX_STREAMS = 4
 
 
-class VideoListener:
-    """Counts the UDP datagrams that arrive on each Insight video port."""
+class RtpVideoListener:
+    """Counts codec-valid RTP packets on each Insight video port."""
 
-    def __init__(self, host: str, base_port: int, num_ports: int):
+    def __init__(self, host: str, base_port: int, num_ports: int, codec: str):
         self._stop = threading.Event()
+        self._codec = codec
         self._counts = [0] * num_ports
         self._sockets = []
         self._threads = []
@@ -57,14 +58,135 @@ class VideoListener:
     def _receive(self, index: int, sock: socket.socket) -> None:
         while not self._stop.is_set():
             try:
-                sock.recv(65536)
+                packet = sock.recv(65536)
             except TimeoutError:
                 continue
-            self._counts[index] += 1
+            if self._is_codec_config_rtp(packet):
+                self._counts[index] += 1
+
+    @staticmethod
+    def _rtp_payload(packet: bytes) -> bytes | None:
+        if len(packet) < 13 or packet[0] >> 6 != 2 or packet[1] & 0x7F != 96:
+            return None
+        header_size = 12 + 4 * (packet[0] & 0x0F)
+        if header_size >= len(packet):
+            return None
+        if packet[0] & 0x10:
+            if header_size + 4 > len(packet):
+                return None
+            extension_words = int.from_bytes(packet[header_size + 2 : header_size + 4])
+            header_size += 4 + 4 * extension_words
+            if header_size >= len(packet):
+                return None
+        payload_end = len(packet)
+        if packet[0] & 0x20:
+            padding = packet[-1]
+            if padding == 0 or padding > payload_end - header_size:
+                return None
+            payload_end -= padding
+        return packet[header_size:payload_end] or None
+
+    def _is_codec_config_rtp(self, packet: bytes) -> bool:
+        payload = self._rtp_payload(packet)
+        if payload is None:
+            return False
+        if self._codec == "h264":
+            nal_type = payload[0] & 0x1F
+            if payload[0] & 0x80:
+                return False
+            if nal_type == 7:
+                return len(payload) >= 2
+            if nal_type == 28:
+                return (
+                    len(payload) >= 3
+                    and payload[1] & 0xC0 == 0x80
+                    and payload[1] & 0x20 == 0
+                    and payload[1] & 0x1F == 7
+                )
+            if nal_type != 24:
+                return False
+            position = 1
+            found_sps = False
+            max_nri = 0
+            while position < len(payload):
+                if position + 2 > len(payload):
+                    return False
+                nal_size = int.from_bytes(payload[position : position + 2])
+                position += 2
+                if nal_size == 0 or position + nal_size > len(payload):
+                    return False
+                if payload[position] & 0x80:
+                    return False
+                max_nri = max(max_nri, payload[position] & 0x60)
+                found_sps |= nal_size >= 2 and payload[position] & 0x9F == 7
+                position += nal_size
+            return found_sps and payload[0] & 0x60 == max_nri
+
+        if len(payload) < 2 or payload[0] & 0x80 or payload[1] & 0x07 == 0:
+            return False
+        nal_type = payload[0] >> 1 & 0x3F
+        if nal_type == 32:
+            return len(payload) >= 3
+        if nal_type == 49:
+            return len(payload) >= 4 and payload[2] & 0xC0 == 0x80 and payload[2] & 0x3F == 32
+        if nal_type != 48:
+            return False
+        position = 2
+        found_vps = False
+        while position < len(payload):
+            if position + 2 > len(payload):
+                return False
+            nal_size = int.from_bytes(payload[position : position + 2])
+            position += 2
+            if nal_size < 2 or position + nal_size > len(payload):
+                return False
+            nal = payload[position : position + nal_size]
+            found_vps |= (
+                nal_size >= 3
+                and not nal[0] & 0x80
+                and nal[0] >> 1 & 0x3F == 32
+                and nal[1] & 0x07 != 0
+            )
+            position += nal_size
+        return found_vps
 
     @property
     def received_all_ports(self) -> bool:
         return all(count > 0 for count in self._counts)
+
+
+def test_rtp_video_packet_validation():
+    h264 = RtpVideoListener(INSIGHT_HOST, 0, 0, "h264")
+    h265 = RtpVideoListener(INSIGHT_HOST, 0, 0, "h265")
+    header = bytes([0x80, 96, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1])
+    h264_sps = header + bytes([0x67, 0x01])
+    h265_vps = header + bytes([0x40, 0x01, 0x01])
+    assert h264._is_codec_config_rtp(h264_sps)
+    assert not h265._is_codec_config_rtp(h264_sps)
+    assert h265._is_codec_config_rtp(h265_vps)
+    assert not h264._is_codec_config_rtp(h265_vps)
+    # Ordinary slice headers overlap and therefore cannot prove the codec.
+    assert not h264._is_codec_config_rtp(header + bytes([0x61, 0x01]))
+    assert not h265._is_codec_config_rtp(header + bytes([0x61, 0x01]))
+    assert not h264._is_codec_config_rtp(header + bytes([0x02, 0x01]))
+    assert not h265._is_codec_config_rtp(header + bytes([0x02, 0x01]))
+    assert h264._is_codec_config_rtp(header + bytes([0x78, 0, 2, 0x67, 1]))
+    assert h264._is_codec_config_rtp(header + bytes([28, 0x87, 1]))
+    assert h265._is_codec_config_rtp(header + bytes([0x60, 1, 0, 3, 0x40, 1, 1]))
+    assert h265._is_codec_config_rtp(header + bytes([0x62, 1, 0xA0, 1]))
+    assert not h264._is_codec_config_rtp(bytes([0x80, 97]) + h264_sps[2:])
+    assert not h264._is_codec_config_rtp(header + bytes([24]))
+    assert not h264._is_codec_config_rtp(header + bytes([28]))
+    assert not h265._is_codec_config_rtp(header + bytes([0x60, 1]))
+    assert not h265._is_codec_config_rtp(header + bytes([0x62, 1]))
+    assert not h264._is_codec_config_rtp(header + bytes([0x67]))
+    assert not h265._is_codec_config_rtp(header + bytes([0x40, 1]))
+    assert not h264._is_codec_config_rtp(header + bytes([24, 0, 1, 0x67]))
+    assert not h264._is_codec_config_rtp(header + bytes([24, 0, 2, 0x67, 1]))
+    assert not h265._is_codec_config_rtp(header + bytes([0x60, 1, 0, 2, 0x40, 1]))
+    assert not h264._is_codec_config_rtp(header + bytes([28, 0xC7, 1]))
+    assert not h265._is_codec_config_rtp(header + bytes([0x62, 1, 0xE0, 1]))
+    assert not h264._is_codec_config_rtp(b"not-rtp")
 
 
 def runtime_dependencies_ready() -> bool:
@@ -304,7 +426,9 @@ class TestE2E:
                     "auxiliary-visualization": "payload.poses",
                 },
             ) as listener,
-            VideoListener(INSIGHT_HOST, video_port_base, len(urls)) as video,
+            RtpVideoListener(
+                INSIGHT_HOST, video_port_base, len(urls), codec
+            ) as video,
         ):
             process = subprocess.run(
                 [sys.executable, str(MAIN_PY), "--config", str(config)],
