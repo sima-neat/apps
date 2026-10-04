@@ -218,17 +218,6 @@ struct Pose {
   std::array<WorldKeypoint, kBodyLandmarkCount> world_keypoints{};
 };
 
-struct PoseSmoothingOptions {
-  float position_alpha = 0.45F;
-  float confidence_alpha = 0.20F;
-  float fast_motion_alpha = 0.90F;
-  float fast_motion_threshold = 0.08F;
-  float minimum_match_iou = 0.15F;
-  int reset_after_ms = 250;
-  int max_coast_frames = 2;
-  float coast_confidence_decay = 0.85F;
-};
-
 inline float box_iou(const Box& left, const Box& right) {
   const float intersection_width =
       std::max(0.0F, std::min(left.x2, right.x2) - std::max(left.x1, right.x1));
@@ -248,7 +237,15 @@ inline float blend(float previous, float current, float alpha) {
 
 class PoseSmoother {
 public:
-  explicit PoseSmoother(PoseSmoothingOptions options = {}) : options_(options) {}
+  static constexpr float kPositionAlpha = 0.45F;
+  static constexpr float kConfidenceAlpha = 0.20F;
+  static constexpr float kFastMotionAlpha = 0.90F;
+  static constexpr float kFastMotionThreshold = 0.08F;
+  static constexpr float kMinimumMatchIou = 0.15F;
+  static constexpr int64_t kResetAfterNs = 250'000'000;
+  static constexpr double kNominalFrameNs = 40'000'000.0;
+  static constexpr int kMaxCoastFrames = 2;
+  static constexpr float kCoastConfidenceDecay = 0.85F;
 
   std::vector<Pose> filter(std::vector<Pose> poses, int64_t pts_ns) {
     if (poses.empty()) {
@@ -256,9 +253,9 @@ public:
         reset();
         return poses;
       }
-      if (!previous_.empty() && ++missing_frames_ <= options_.max_coast_frames) {
+      if (!previous_.empty() && ++missing_frames_ <= kMaxCoastFrames) {
         auto coasted = previous_;
-        const float decay = std::pow(options_.coast_confidence_decay, missing_frames_);
+        const float decay = std::pow(kCoastConfidenceDecay, missing_frames_);
         for (Pose& pose : coasted) {
           pose.presence *= decay;
           pose.box.score *= decay;
@@ -284,7 +281,7 @@ public:
     std::vector<int> matches(poses.size(), -1);
     std::vector<bool> used(previous_.size(), false);
     for (std::size_t current_index = 0; current_index < poses.size(); ++current_index) {
-      float best_iou = options_.minimum_match_iou;
+      float best_iou = kMinimumMatchIou;
       for (std::size_t previous_index = 0; previous_index < previous_.size(); ++previous_index) {
         if (used[previous_index]) {
           continue;
@@ -320,8 +317,7 @@ public:
       current.box.y1 = blend(previous.box.y1, current.box.y1, box_alpha);
       current.box.x2 = blend(previous.box.x2, current.box.x2, box_alpha);
       current.box.y2 = blend(previous.box.y2, current.box.y2, box_alpha);
-      const float confidence_alpha =
-          adjusted_alpha(options_.confidence_alpha, elapsed_frames);
+      const float confidence_alpha = adjusted_alpha(kConfidenceAlpha, elapsed_frames);
       current.presence = blend(previous.presence, current.presence, confidence_alpha);
       current.box.score = blend(previous.box.score, current.box.score, confidence_alpha);
 
@@ -359,15 +355,13 @@ public:
 
 private:
   bool is_reset_gap(int64_t pts_ns) const {
-    return pts_ns >= 0 && last_pts_ns_ >= 0 &&
-           pts_ns - last_pts_ns_ > static_cast<int64_t>(options_.reset_after_ms) * 1'000'000;
+    return pts_ns >= 0 && last_pts_ns_ >= 0 && pts_ns - last_pts_ns_ > kResetAfterNs;
   }
 
   float elapsed_frame_count(int64_t pts_ns) const {
     if (pts_ns < 0 || last_pts_ns_ < 0 || pts_ns <= last_pts_ns_) {
       return 1.0F;
     }
-    constexpr double kNominalFrameNs = 40'000'000.0;
     return static_cast<float>(std::clamp((pts_ns - last_pts_ns_) / kNominalFrameNs, 1.0, 6.0));
   }
 
@@ -376,12 +370,11 @@ private:
   }
 
   float motion_alpha(float normalized_motion, float elapsed_frames) const {
-    const float amount = std::clamp(normalized_motion / options_.fast_motion_threshold, 0.0F, 1.0F);
-    const float alpha = blend(options_.position_alpha, options_.fast_motion_alpha, amount);
+    const float amount = std::clamp(normalized_motion / kFastMotionThreshold, 0.0F, 1.0F);
+    const float alpha = blend(kPositionAlpha, kFastMotionAlpha, amount);
     return adjusted_alpha(alpha, elapsed_frames);
   }
 
-  PoseSmoothingOptions options_;
   std::vector<Pose> previous_;
   int64_t last_pts_ns_ = -1;
   int missing_frames_ = 0;
