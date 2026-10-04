@@ -22,6 +22,7 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -78,6 +79,9 @@ SourceCaps probe_source_caps(const std::string& url) {
 struct RtpPayload {
   const std::uint8_t* data;
   std::size_t size;
+  std::uint16_t sequence;
+  std::uint32_t timestamp;
+  bool marker;
 };
 
 std::optional<RtpPayload> rtp_payload(const std::uint8_t* packet, std::size_t size) {
@@ -113,7 +117,13 @@ std::optional<RtpPayload> rtp_payload(const std::uint8_t* packet, std::size_t si
   if (header_size >= payload_end) {
     return std::nullopt;
   }
-  return RtpPayload{packet + header_size, payload_end - header_size};
+  const std::uint16_t sequence =
+      (static_cast<std::uint16_t>(packet[2]) << 8) | static_cast<std::uint16_t>(packet[3]);
+  const std::uint32_t timestamp = (static_cast<std::uint32_t>(packet[4]) << 24) |
+                                  (static_cast<std::uint32_t>(packet[5]) << 16) |
+                                  (static_cast<std::uint32_t>(packet[6]) << 8) | packet[7];
+  return RtpPayload{packet + header_size, payload_end - header_size, sequence, timestamp,
+                    (packet[1] & 0x80) != 0};
 }
 
 bool is_codec_config_rtp(const std::uint8_t* packet, std::size_t size, const std::string& codec) {
@@ -194,9 +204,184 @@ bool is_codec_config_rtp(const std::uint8_t* packet, std::size_t size, const std
   return found_vps;
 }
 
+struct VclEvidence {
+  bool complete = false;
+  bool fragment = false;
+  bool start = false;
+  bool end = false;
+  bool marker = false;
+  std::uint16_t sequence = 0;
+  std::uint32_t timestamp = 0;
+  std::uint16_t fragment_signature = 0;
+};
+
+std::optional<VclEvidence> vcl_evidence_rtp(const std::uint8_t* packet, std::size_t size,
+                                            const std::string& codec) {
+  const auto parsed = rtp_payload(packet, size);
+  if (!parsed.has_value()) {
+    return std::nullopt;
+  }
+  const std::uint8_t* payload = parsed->data;
+  const std::size_t payload_size = parsed->size;
+  const auto evidence = [&](bool complete, bool fragment = false, bool start = false,
+                            bool end = false, std::uint16_t fragment_signature = 0) {
+    return VclEvidence{
+        complete,          fragment,          start, end, parsed->marker, parsed->sequence,
+        parsed->timestamp, fragment_signature};
+  };
+  if (codec == "h264") {
+    if ((payload[0] & 0x80) != 0) {
+      return std::nullopt;
+    }
+    const std::uint8_t nal_type = payload[0] & 0x1F;
+    if (nal_type >= 1 && nal_type <= 5) {
+      return payload_size >= 2 ? std::optional<VclEvidence>(evidence(parsed->marker))
+                               : std::nullopt;
+    }
+    if (nal_type == 28) {
+      if (payload_size < 3 || (payload[1] & 0x20) != 0) {
+        return std::nullopt;
+      }
+      const bool start = (payload[1] & 0x80) != 0;
+      const bool end = (payload[1] & 0x40) != 0;
+      const std::uint8_t fragmented_type = payload[1] & 0x1F;
+      return !start || !end ? (fragmented_type >= 1 && fragmented_type <= 5
+                                   ? std::optional<VclEvidence>(evidence(
+                                         false, true, start, end,
+                                         static_cast<std::uint16_t>(((payload[0] & 0x60) << 8) |
+                                                                    fragmented_type)))
+                                   : std::nullopt)
+                            : std::nullopt;
+    }
+    if (nal_type != 24) {
+      return std::nullopt;
+    }
+    std::size_t position = 1;
+    bool found_vcl = false;
+    std::uint8_t max_nri = 0;
+    while (position < payload_size) {
+      if (position + 2 > payload_size) {
+        return std::nullopt;
+      }
+      const std::size_t nal_size =
+          (static_cast<std::size_t>(payload[position]) << 8) | payload[position + 1];
+      position += 2;
+      if (nal_size == 0 || nal_size > payload_size - position || (payload[position] & 0x80) != 0) {
+        return std::nullopt;
+      }
+      max_nri = std::max(max_nri, static_cast<std::uint8_t>(payload[position] & 0x60));
+      const std::uint8_t member_type = payload[position] & 0x1F;
+      found_vcl = found_vcl || (nal_size >= 2 && member_type >= 1 && member_type <= 5);
+      position += nal_size;
+    }
+    return (payload[0] & 0x60) == max_nri && found_vcl
+               ? std::optional<VclEvidence>(evidence(parsed->marker))
+               : std::nullopt;
+  }
+
+  if (payload_size < 2 || (payload[0] & 0x81) != 0 || (payload[1] & 0xF8) != 0 ||
+      (payload[1] & 0x07) == 0) {
+    return std::nullopt;
+  }
+  const std::uint8_t nal_type = (payload[0] >> 1) & 0x3F;
+  if (nal_type <= 31) {
+    return payload_size >= 3 ? std::optional<VclEvidence>(evidence(parsed->marker)) : std::nullopt;
+  }
+  if (nal_type == 49) {
+    if (payload_size < 4 || (payload[2] & 0x20) != 0) {
+      return std::nullopt;
+    }
+    const bool start = (payload[2] & 0x80) != 0;
+    const bool end = (payload[2] & 0x40) != 0;
+    const std::uint8_t fragmented_type = payload[2] & 0x3F;
+    return (!start || !end) && fragmented_type <= 31
+               ? std::optional<VclEvidence>(evidence(
+                     false, true, start, end,
+                     static_cast<std::uint16_t>(((payload[1] & 0x07) << 8) | fragmented_type)))
+               : std::nullopt;
+  }
+  if (nal_type != 48) {
+    return std::nullopt;
+  }
+  std::size_t position = 2;
+  bool found_vcl = false;
+  while (position < payload_size) {
+    if (position + 2 > payload_size) {
+      return std::nullopt;
+    }
+    const std::size_t nal_size =
+        (static_cast<std::size_t>(payload[position]) << 8) | payload[position + 1];
+    position += 2;
+    if (nal_size < 2 || nal_size > payload_size - position) {
+      return std::nullopt;
+    }
+    const std::uint8_t* nal = payload + position;
+    if ((nal[0] & 0x81) != 0 || (nal[1] & 0xF8) != 0 || (nal[1] & 0x07) == 0) {
+      return std::nullopt;
+    }
+    found_vcl = found_vcl || (nal_size >= 3 && ((nal[0] >> 1) & 0x3F) <= 31);
+    position += nal_size;
+  }
+  return found_vcl ? std::optional<VclEvidence>(evidence(parsed->marker)) : std::nullopt;
+}
+
+struct FuProgress {
+  std::uint32_t timestamp;
+  std::uint16_t next_sequence;
+  std::uint16_t fragment_signature;
+};
+
+bool completes_vcl_access_unit(const VclEvidence& evidence, std::optional<FuProgress>& progress) {
+  if (evidence.complete) {
+    progress.reset();
+    return true;
+  }
+  if (!evidence.fragment) {
+    return false;
+  }
+  if (evidence.start) {
+    if (evidence.marker) {
+      progress.reset();
+      return false;
+    }
+    progress = FuProgress{evidence.timestamp, static_cast<std::uint16_t>(evidence.sequence + 1),
+                          evidence.fragment_signature};
+    return false;
+  }
+  if (!progress.has_value() || progress->timestamp != evidence.timestamp ||
+      progress->next_sequence != evidence.sequence ||
+      progress->fragment_signature != evidence.fragment_signature) {
+    progress.reset();
+    return false;
+  }
+  progress->next_sequence = static_cast<std::uint16_t>(evidence.sequence + 1);
+  if (evidence.end) {
+    const bool complete = evidence.marker;
+    progress.reset();
+    return complete;
+  }
+  if (evidence.marker) {
+    progress.reset();
+    return false;
+  }
+  return false;
+}
+
 bool test_rtp_packet_validation() {
-  const auto packet = [](std::initializer_list<std::uint8_t> payload) {
-    std::vector<std::uint8_t> bytes{0x80, 96, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1};
+  const auto packet = [](std::initializer_list<std::uint8_t> payload, bool marker = false,
+                         std::uint16_t sequence = 1, std::uint32_t timestamp = 1) {
+    std::vector<std::uint8_t> bytes{0x80,
+                                    static_cast<std::uint8_t>((marker ? 0x80 : 0) | 96),
+                                    static_cast<std::uint8_t>(sequence >> 8),
+                                    static_cast<std::uint8_t>(sequence),
+                                    static_cast<std::uint8_t>(timestamp >> 24),
+                                    static_cast<std::uint8_t>(timestamp >> 16),
+                                    static_cast<std::uint8_t>(timestamp >> 8),
+                                    static_cast<std::uint8_t>(timestamp),
+                                    0,
+                                    0,
+                                    0,
+                                    1};
     bytes.reserve(bytes.size() + payload.size());
     for (const std::uint8_t value : payload) {
       bytes.push_back(value);
@@ -217,6 +402,23 @@ bool test_rtp_packet_validation() {
   const auto h265_fu = packet({0x62, 1, 0xA0, 1});
   auto wrong_payload = h264;
   wrong_payload[1] = 97;
+  const auto h264_vcl = packet({0x65, 1}, true);
+  const auto h265_vcl = packet({0x26, 1, 1}, true);
+  const auto h264_start = packet({28, 0x85, 1}, false, 10, 99);
+  const auto h264_middle = packet({28, 0x05, 1}, false, 11, 99);
+  const auto h264_end = packet({28, 0x45, 1}, true, 12, 99);
+  std::optional<FuProgress> fu_progress;
+  const auto h264_start_evidence = vcl_evidence_rtp(h264_start.data(), h264_start.size(), "h264");
+  const auto h264_middle_evidence =
+      vcl_evidence_rtp(h264_middle.data(), h264_middle.size(), "h264");
+  const auto h264_end_evidence = vcl_evidence_rtp(h264_end.data(), h264_end.size(), "h264");
+  const bool fragmented_vcl = h264_start_evidence.has_value() && h264_middle_evidence.has_value() &&
+                              h264_end_evidence.has_value() &&
+                              !completes_vcl_access_unit(*h264_start_evidence, fu_progress) &&
+                              !completes_vcl_access_unit(*h264_middle_evidence, fu_progress) &&
+                              completes_vcl_access_unit(*h264_end_evidence, fu_progress);
+  const auto h264_vcl_evidence = vcl_evidence_rtp(h264_vcl.data(), h264_vcl.size(), "h264");
+  const auto h265_vcl_evidence = vcl_evidence_rtp(h265_vcl.data(), h265_vcl.size(), "h265");
   return accepted(h264, "h264") && !accepted(h264, "h265") && accepted(h265, "h265") &&
          !accepted(h265, "h264") && !accepted(overlapping_h264, "h264") &&
          !accepted(overlapping_h264, "h265") && !accepted(overlapping_h265, "h264") &&
@@ -230,13 +432,18 @@ bool test_rtp_packet_validation() {
          !accepted(packet({0x63, 1, 0xA0, 1}), "h265") &&
          !accepted(packet({0x60, 1, 0, 2, 0x40, 1}), "h265") && !accepted(packet({28}), "h264") &&
          !accepted(packet({0x62, 1}), "h265") && !accepted(packet({28, 0xC7, 1}), "h264") &&
-         !accepted(packet({0x62, 1, 0xE0, 1}), "h265") && !accepted(wrong_payload, "h264");
+         !accepted(packet({0x62, 1, 0xE0, 1}), "h265") && !accepted(wrong_payload, "h264") &&
+         h264_vcl_evidence.has_value() && h264_vcl_evidence->complete &&
+         h265_vcl_evidence.has_value() && h265_vcl_evidence->complete && fragmented_vcl &&
+         !vcl_evidence_rtp(h264.data(), h264.size(), "h264").has_value();
 }
 
 class RtpVideoListener {
 public:
   RtpVideoListener(int base_port, int num_ports, std::string codec)
-      : codec_(std::move(codec)), packets_(static_cast<std::size_t>(num_ports), 0) {
+      : codec_(std::move(codec)), config_packets_(static_cast<std::size_t>(num_ports), 0),
+        vcl_access_units_(static_cast<std::size_t>(num_ports), 0),
+        fu_progress_(static_cast<std::size_t>(num_ports)) {
     for (int offset = 0; offset < num_ports; ++offset) {
       const int fd = socket(AF_INET, SOCK_DGRAM, 0);
       if (fd < 0) {
@@ -272,7 +479,7 @@ public:
   }
 
   bool ok() const {
-    return error_.empty() && sockets_.size() == packets_.size();
+    return error_.empty() && sockets_.size() == config_packets_.size();
   }
   const std::string& error() const {
     return error_;
@@ -280,7 +487,12 @@ public:
 
   bool received_all_ports() const {
     std::lock_guard<std::mutex> lock(mutex_);
-    return std::all_of(packets_.begin(), packets_.end(), [](int packets) { return packets > 0; });
+    for (std::size_t index = 0; index < config_packets_.size(); ++index) {
+      if (config_packets_[index] == 0 || vcl_access_units_[index] == 0) {
+        return false;
+      }
+    }
+    return true;
   }
 
 private:
@@ -288,9 +500,18 @@ private:
     std::array<std::uint8_t, 65536> packet{};
     while (!stopping_) {
       const ssize_t size = recv(sockets_[index], packet.data(), packet.size(), 0);
-      if (size > 0 && is_codec_config_rtp(packet.data(), static_cast<std::size_t>(size), codec_)) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        ++packets_[index];
+      if (size <= 0) {
+        continue;
+      }
+      const std::size_t packet_size = static_cast<std::size_t>(size);
+      const bool config = is_codec_config_rtp(packet.data(), packet_size, codec_);
+      const auto vcl = vcl_evidence_rtp(packet.data(), packet_size, codec_);
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (config) {
+        ++config_packets_[index];
+      }
+      if (vcl.has_value() && completes_vcl_access_unit(*vcl, fu_progress_[index])) {
+        ++vcl_access_units_[index];
       }
     }
   }
@@ -299,7 +520,9 @@ private:
   std::vector<std::thread> workers_;
   std::string codec_;
   mutable std::mutex mutex_;
-  std::vector<int> packets_;
+  std::vector<int> config_packets_;
+  std::vector<int> vcl_access_units_;
+  std::vector<std::optional<FuProgress>> fu_progress_;
   std::atomic<bool> stopping_{false};
   std::string error_;
 };
@@ -410,14 +633,50 @@ bool test_pose_schema_validation() {
   return !valid_overlay_pose(overlay);
 }
 
+bool paired_pose_content_matches(const nlohmann::json& overlay, const nlohmann::json& auxiliary) {
+  if (!overlay.is_array() || !auxiliary.is_array() || overlay.size() != auxiliary.size()) {
+    return false;
+  }
+  for (std::size_t index = 0; index < overlay.size(); ++index) {
+    if (overlay.at(index).at("id") != auxiliary.at(index).at("id") ||
+        overlay.at(index).at("presence") != auxiliary.at(index).at("presence") ||
+        overlay.at(index).at("world_keypoints") != auxiliary.at(index).at("keypoints")) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool test_paired_pose_content_validation() {
+  nlohmann::json overlay = nlohmann::json::array(
+      {{{"id", "pose_1"}, {"presence", 0.9}, {"world_keypoints", body_points(true)}}});
+  nlohmann::json auxiliary = nlohmann::json::array(
+      {{{"id", "pose_1"}, {"presence", 0.9}, {"keypoints", body_points(true)}}});
+  if (!paired_pose_content_matches(overlay, auxiliary)) {
+    return false;
+  }
+  auxiliary[0]["id"] = "pose_2";
+  if (paired_pose_content_matches(overlay, auxiliary)) {
+    return false;
+  }
+  auxiliary[0]["id"] = "pose_1";
+  auxiliary[0]["presence"] = 0.8;
+  if (paired_pose_content_matches(overlay, auxiliary)) {
+    return false;
+  }
+  auxiliary[0]["presence"] = 0.9;
+  auxiliary[0]["keypoints"][0]["x"] = 2.0;
+  return !paired_pose_content_matches(overlay, auxiliary);
+}
+
 // Every message carries its port's stream id and 33 valid keypoints per pose (image
 // and world for 2D poses), and at least one port publishes a non-empty 2D/3D pair
 // for one frame.
 bool validate_metadata(const MetadataJsonListenerResult& result, int metadata_port_base,
                        std::string& error) {
   using FrameKey = std::tuple<int, int64_t, std::string>;
-  std::map<FrameKey, std::size_t> pose_frames;
-  std::map<FrameKey, std::size_t> world_pose_frames;
+  std::map<FrameKey, nlohmann::json> pose_frames;
+  std::map<FrameKey, nlohmann::json> world_pose_frames;
   try {
     for (const auto& message : result.messages) {
       const auto data = nlohmann::json::parse(message.payload).at("data");
@@ -440,21 +699,34 @@ bool validate_metadata(const MetadataJsonListenerResult& result, int metadata_po
         }
       }
       (overlay ? pose_frames
-               : world_pose_frames)[{message.port, message.timestamp_ms, message.frame_id}] =
-          poses.size();
+               : world_pose_frames)[{message.port, message.timestamp_ms, message.frame_id}] = poses;
     }
   } catch (const std::exception& exception) {
     error = std::string("failed to validate pose metadata: ") + exception.what();
     return false;
   }
-  const bool paired = std::any_of(pose_frames.begin(), pose_frames.end(), [&](const auto& entry) {
+  std::set<int> paired_ports;
+  bool nonempty_pair = false;
+  for (const auto& entry : pose_frames) {
     const auto world = world_pose_frames.find(entry.first);
-    return entry.second > 0 && world != world_pose_frames.end() && world->second == entry.second;
-  });
-  if (!paired) {
-    error = "no stream published a non-empty 2D/3D BlazePose pair for one frame";
+    if (world != world_pose_frames.end() &&
+        paired_pose_content_matches(entry.second, world->second)) {
+      paired_ports.insert(std::get<0>(entry.first));
+      nonempty_pair = nonempty_pair || !entry.second.empty();
+    }
   }
-  return paired;
+  if (paired_ports.empty()) {
+    error = "no stream published a non-empty content-matched 2D/3D pair for one frame";
+    return false;
+  }
+  if (paired_ports.size() < result.ports_with_valid_json.size()) {
+    error = "not every metadata port published a content-matched 2D/3D pair for one frame";
+    return false;
+  }
+  if (!nonempty_pair) {
+    error = "no stream published a non-empty content-matched 2D/3D pair for one frame";
+  }
+  return nonempty_pair;
 }
 
 int run_case(const std::string& binary, const fs::path& detector, const fs::path& pose,
@@ -517,7 +789,8 @@ int run_case(const std::string& binary, const fs::path& detector, const fs::path
               << process.stderr_text << "\n";
     result = 1;
   } else if (!video_listener.received_all_ports()) {
-    std::cerr << "[FAIL] " << codec << " did not emit video on every video port\n";
+    std::cerr << "[FAIL] " << codec
+              << " did not emit codec configuration and a VCL access unit on every video port\n";
     result = 1;
   } else if (!metadata_error.empty()) {
     std::cerr << "[FAIL] " << codec << " metadata: " << metadata_error << "\n";
@@ -543,6 +816,10 @@ int main(int argc, char** argv) {
   }
   if (!test_pose_schema_validation()) {
     std::cerr << "[FAIL] advertised pose metadata schema validation\n";
+    return 1;
+  }
+  if (!test_paired_pose_content_validation()) {
+    std::cerr << "[FAIL] paired pose metadata content validation\n";
     return 1;
   }
   const auto env_path = [](const char* name, const fs::path& fallback) {

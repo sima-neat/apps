@@ -35,12 +35,14 @@ LANDMARK_NAMES = (
 
 
 class RtpVideoListener:
-    """Counts codec-valid RTP packets on each Insight video port."""
+    """Requires codec configuration and a complete VCL access unit on each video port."""
 
     def __init__(self, host: str, base_port: int, num_ports: int, codec: str):
         self._stop = threading.Event()
         self._codec = codec
-        self._counts = [0] * num_ports
+        self._config_counts = [0] * num_ports
+        self._vcl_counts = [0] * num_ports
+        self._fu_progress = [None] * num_ports
         self._sockets = []
         self._threads = []
         for offset in range(num_ports):
@@ -70,10 +72,13 @@ class RtpVideoListener:
             except TimeoutError:
                 continue
             if self._is_codec_config_rtp(packet):
-                self._counts[index] += 1
+                self._config_counts[index] += 1
+            evidence = self._vcl_evidence_rtp(packet)
+            if evidence is not None and self._completes_vcl_access_unit(index, evidence):
+                self._vcl_counts[index] += 1
 
     @staticmethod
-    def _rtp_payload(packet: bytes) -> bytes | None:
+    def _rtp_payload(packet: bytes):
         if len(packet) < 13 or packet[0] >> 6 != 2 or packet[1] & 0x7F != 96:
             return None
         header_size = 12 + 4 * (packet[0] & 0x0F)
@@ -92,12 +97,21 @@ class RtpVideoListener:
             if padding == 0 or padding > payload_end - header_size:
                 return None
             payload_end -= padding
-        return packet[header_size:payload_end] or None
+        payload = packet[header_size:payload_end]
+        if not payload:
+            return None
+        return (
+            payload,
+            int.from_bytes(packet[2:4], "big"),
+            int.from_bytes(packet[4:8], "big"),
+            bool(packet[1] & 0x80),
+        )
 
     def _is_codec_config_rtp(self, packet: bytes) -> bool:
-        payload = self._rtp_payload(packet)
-        if payload is None:
+        parsed = self._rtp_payload(packet)
+        if parsed is None:
             return False
+        payload, _sequence, _timestamp, _marker = parsed
         if self._codec == "h264":
             nal_type = payload[0] & 0x1F
             if payload[0] & 0x80:
@@ -164,9 +178,123 @@ class RtpVideoListener:
             position += nal_size
         return found_vps
 
+    def _vcl_evidence_rtp(self, packet: bytes):
+        parsed = self._rtp_payload(packet)
+        if parsed is None:
+            return None
+        payload, sequence, timestamp, marker = parsed
+
+        def evidence(*, complete=False, fragment=False, start=False, end=False, signature=0):
+            return complete, fragment, start, end, marker, sequence, timestamp, signature
+
+        if self._codec == "h264":
+            if payload[0] & 0x80:
+                return None
+            nal_type = payload[0] & 0x1F
+            if 1 <= nal_type <= 5:
+                return evidence(complete=marker) if len(payload) >= 2 else None
+            if nal_type == 28:
+                if len(payload) < 3 or payload[1] & 0x20:
+                    return None
+                start, end = bool(payload[1] & 0x80), bool(payload[1] & 0x40)
+                fragmented_type = payload[1] & 0x1F
+                if start and end or not 1 <= fragmented_type <= 5:
+                    return None
+                return evidence(
+                    fragment=True,
+                    start=start,
+                    end=end,
+                    signature=(payload[0] & 0x60) << 8 | fragmented_type,
+                )
+            if nal_type != 24:
+                return None
+            position = 1
+            found_vcl = False
+            max_nri = 0
+            while position < len(payload):
+                if position + 2 > len(payload):
+                    return None
+                nal_size = int.from_bytes(payload[position : position + 2], "big")
+                position += 2
+                if nal_size == 0 or position + nal_size > len(payload) or payload[position] & 0x80:
+                    return None
+                max_nri = max(max_nri, payload[position] & 0x60)
+                member_type = payload[position] & 0x1F
+                found_vcl |= nal_size >= 2 and 1 <= member_type <= 5
+                position += nal_size
+            return evidence(complete=marker) if found_vcl and payload[0] & 0x60 == max_nri else None
+
+        if (
+            len(payload) < 2
+            or payload[0] & 0x81
+            or payload[1] & 0xF8
+            or payload[1] & 0x07 == 0
+        ):
+            return None
+        nal_type = payload[0] >> 1 & 0x3F
+        if nal_type <= 31:
+            return evidence(complete=marker) if len(payload) >= 3 else None
+        if nal_type == 49:
+            if len(payload) < 4 or payload[2] & 0x20:
+                return None
+            start, end = bool(payload[2] & 0x80), bool(payload[2] & 0x40)
+            if start and end or payload[2] & 0x3F > 31:
+                return None
+            return evidence(
+                fragment=True,
+                start=start,
+                end=end,
+                signature=(payload[1] & 0x07) << 8 | (payload[2] & 0x3F),
+            )
+        if nal_type != 48:
+            return None
+        position = 2
+        found_vcl = False
+        while position < len(payload):
+            if position + 2 > len(payload):
+                return None
+            nal_size = int.from_bytes(payload[position : position + 2], "big")
+            position += 2
+            if nal_size < 2 or position + nal_size > len(payload):
+                return None
+            nal = payload[position : position + nal_size]
+            if nal[0] & 0x81 or nal[1] & 0xF8 or nal[1] & 0x07 == 0:
+                return None
+            found_vcl |= nal_size >= 3 and nal[0] >> 1 & 0x3F <= 31
+            position += nal_size
+        return evidence(complete=marker) if found_vcl else None
+
+    def _completes_vcl_access_unit(self, index: int, evidence) -> bool:
+        complete, fragment, start, end, marker, sequence, timestamp, signature = evidence
+        if complete:
+            self._fu_progress[index] = None
+            return True
+        if not fragment:
+            return False
+        if start:
+            if marker:
+                self._fu_progress[index] = None
+                return False
+            self._fu_progress[index] = (timestamp, (sequence + 1) & 0xFFFF, signature)
+            return False
+        if self._fu_progress[index] != (timestamp, sequence, signature):
+            self._fu_progress[index] = None
+            return False
+        self._fu_progress[index] = (timestamp, (sequence + 1) & 0xFFFF, signature)
+        if end:
+            self._fu_progress[index] = None
+            return marker
+        if marker:
+            self._fu_progress[index] = None
+            return False
+        return False
+
     @property
     def received_all_ports(self) -> bool:
-        return all(count > 0 for count in self._counts)
+        return all(
+            config > 0 and vcl > 0
+            for config, vcl in zip(self._config_counts, self._vcl_counts, strict=True)
+        )
 
 
 def test_rtp_video_packet_validation():
@@ -205,6 +333,47 @@ def test_rtp_video_packet_validation():
     assert not h264._is_codec_config_rtp(header + bytes([28, 0xC7, 1]))
     assert not h265._is_codec_config_rtp(header + bytes([0x62, 1, 0xE0, 1]))
     assert not h264._is_codec_config_rtp(b"not-rtp")
+
+    def packet(payload, *, marker=False, sequence=1, timestamp=1):
+        return bytes(
+            [
+                0x80,
+                (0x80 if marker else 0) | 96,
+                sequence >> 8,
+                sequence & 0xFF,
+                timestamp >> 24,
+                timestamp >> 16 & 0xFF,
+                timestamp >> 8 & 0xFF,
+                timestamp & 0xFF,
+                0,
+                0,
+                0,
+                1,
+            ]
+        ) + bytes(payload)
+
+    assert h264._vcl_evidence_rtp(h264_sps) is None
+    assert h264._vcl_evidence_rtp(packet([0x65, 1], marker=True))[0]
+    assert h265._vcl_evidence_rtp(packet([0x26, 1, 1], marker=True))[0]
+    h264._fu_progress = [None]
+    h264_fragments = [
+        packet([28, 0x85, 1], sequence=10, timestamp=99),
+        packet([28, 0x05, 1], sequence=11, timestamp=99),
+        packet([28, 0x45, 1], marker=True, sequence=12, timestamp=99),
+    ]
+    assert not h264._completes_vcl_access_unit(0, h264._vcl_evidence_rtp(h264_fragments[0]))
+    assert not h264._completes_vcl_access_unit(0, h264._vcl_evidence_rtp(h264_fragments[1]))
+    assert h264._completes_vcl_access_unit(0, h264._vcl_evidence_rtp(h264_fragments[2]))
+    h265._fu_progress = [None]
+    h265_start = packet([0x62, 1, 0x93, 1], sequence=20, timestamp=100)
+    h265_end = packet([0x62, 1, 0x53, 1], marker=True, sequence=21, timestamp=100)
+    assert not h265._completes_vcl_access_unit(0, h265._vcl_evidence_rtp(h265_start))
+    assert h265._completes_vcl_access_unit(0, h265._vcl_evidence_rtp(h265_end))
+    h264._config_counts = [1]
+    h264._vcl_counts = [0]
+    assert not h264.received_all_ports
+    h264._vcl_counts[0] = 1
+    assert h264.received_all_ports
 
 
 def runtime_dependencies_ready() -> bool:
@@ -299,11 +468,20 @@ def valid_auxiliary_pose(pose) -> bool:
     )
 
 
+def paired_pose_content_matches(overlay, auxiliary) -> bool:
+    return len(overlay) == len(auxiliary) and all(
+        overlay_pose["id"] == auxiliary_pose["id"]
+        and overlay_pose["presence"] == auxiliary_pose["presence"]
+        and overlay_pose["world_keypoints"] == auxiliary_pose["keypoints"]
+        for overlay_pose, auxiliary_pose in zip(overlay, auxiliary, strict=True)
+    )
+
+
 def metadata_problem(messages, metadata_port_base: int, num_ports: int) -> str | None:
     """Every message carries its port's stream id and 33 valid keypoints per pose
     (image and world for 2D poses), every port publishes a 2D/3D pair for one
     frame, and one such pair is non-empty."""
-    pose_counts: dict[str, dict[tuple, int]] = {
+    pose_frames: dict[str, dict[tuple, list]] = {
         "pose-estimation": {},
         "auxiliary-visualization": {},
     }
@@ -322,17 +500,19 @@ def metadata_problem(messages, metadata_port_base: int, num_ports: int) -> str |
         if not all(valid_pose(pose) for pose in poses):
             return f"a {message.metadata_type} pose did not satisfy the advertised schema"
         frame = (message.port, message.timestamp_ms, message.frame_id)
-        pose_counts[message.metadata_type][frame] = len(poses)
-    world = pose_counts["auxiliary-visualization"]
+        pose_frames[message.metadata_type][frame] = poses
+    world = pose_frames["auxiliary-visualization"]
     paired = {
-        frame: count
-        for frame, count in pose_counts["pose-estimation"].items()
-        if world.get(frame) == count
+        frame: poses
+        for frame, poses in pose_frames["pose-estimation"].items()
+        if frame in world and paired_pose_content_matches(poses, world[frame])
     }
-    if not any(paired.values()):
-        return "no stream published a non-empty 2D/3D BlazePose pair for one frame"
+    if not paired:
+        return "no stream published a non-empty content-matched 2D/3D pair for one frame"
     if len({port for port, _, _ in paired}) < num_ports:
-        return "not every metadata port published a 2D/3D BlazePose pair for one frame"
+        return "not every metadata port published a content-matched 2D/3D pair for one frame"
+    if not any(paired.values()):
+        return "no stream published a non-empty content-matched 2D/3D pair for one frame"
     return None
 
 
@@ -394,7 +574,7 @@ def test_metadata_problem_requires_pairs_on_every_port_and_stream_ids():
     ]
     assert metadata_problem(empty + pair, 9100, 2) is None
     assert "every metadata port" in metadata_problem(pair, 9100, 2)
-    assert "non-empty" in metadata_problem(empty + pair[:1], 9100, 2)
+    assert "every metadata port" in metadata_problem(empty + pair[:1], 9100, 2)
     split = [pair[0], message(9101, "auxiliary-visualization", "2", 2)]
     assert "non-empty" in metadata_problem(split, 9100, 2)
     assert "stream id" in metadata_problem([message(9100, "pose-estimation", "1", 1, "x")], 9100, 1)
@@ -443,6 +623,21 @@ def test_metadata_problem_requires_pairs_on_every_port_and_stream_ids():
         9100,
         1,
     )
+    overlay = message(9100, "pose-estimation", "matched", 1)
+    for field, value in (
+        ("id", "pose_2"),
+        ("presence", 0.8),
+        ("keypoints", None),
+    ):
+        auxiliary = message(9100, "auxiliary-visualization", "matched", 1)
+        payload = json.loads(auxiliary.payload)
+        pose = payload["data"]["payload"]["poses"][0]
+        if field == "keypoints":
+            pose["keypoints"][0]["x"] += 1
+        else:
+            pose[field] = value
+        auxiliary.payload = json.dumps(payload)
+        assert "content-matched" in metadata_problem([overlay, auxiliary], 9100, 1)
 
 
 @pytest.mark.e2e
