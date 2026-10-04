@@ -270,6 +270,33 @@ def test_standalone_sequence_dash_starts_a_stream_like_cpp(tmp_path: Path):
     assert [stream.insight_channel for stream in cfg.streams] == [0, 1]
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        "streams: [{id: camera0, url: rtsp://127.0.0.1/src0, insight_channel: 0}]\n"
+        "output:\n  insight:\n    host: 127.0.0.1\n",
+        "streams:\n  - {id: camera0, url: rtsp://127.0.0.1/src0, insight_channel: 0}\n"
+        "output:\n  insight:\n    host: 127.0.0.1\n",
+        "streams:\n  - id: camera0\n    url: rtsp://127.0.0.1/src0\n    insight_channel: 0\n"
+        "output: {insight: {host: 127.0.0.1}}\n",
+    ],
+)
+def test_flow_style_collections_are_rejected_like_cpp(tmp_path: Path, body: str):
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        "models:\n  detector_path: detector.tar.gz\n  pose_path: pose.tar.gz\n" + body,
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="flow-style YAML collections are not supported"):
+        main.load_app_config(path)
+
+
+def test_empty_flow_collections_stay_allowed(tmp_path: Path):
+    path = write_config(tmp_path, [stream(0)])
+    path.write_text(path.read_text(encoding="utf-8") + "pose: {}\n", encoding="utf-8")
+    assert len(main.load_app_config(path).streams) == 1
+
+
 def test_null_codec_and_trailing_quotes_match_cpp(tmp_path: Path):
     path = tmp_path / "config.yaml"
     path.write_text(

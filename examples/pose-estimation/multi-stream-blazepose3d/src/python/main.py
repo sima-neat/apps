@@ -499,8 +499,28 @@ def validate_config(cfg: AppConfig) -> None:
 STREAM_SETTINGS = frozenset({"id", "url", "codec", "insight_channel", "width", "height", "fps"})
 
 
+FLOW_STYLE_ERROR = "flow-style YAML collections are not supported; use block style"
+
+
+def reject_flow_collections(text: str) -> None:
+    """Accept only block-style YAML, the subset the C++ entry point also reads."""
+    pending = [yaml.compose(text)]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, yaml.MappingNode):
+            if node.flow_style and node.value:
+                raise ValueError(f"{FLOW_STYLE_ERROR} (line {node.start_mark.line + 1})")
+            pending.extend(child for pair in node.value for child in pair)
+        elif isinstance(node, yaml.SequenceNode):
+            if node.flow_style and node.value:
+                raise ValueError(f"{FLOW_STYLE_ERROR} (line {node.start_mark.line + 1})")
+            pending.extend(node.value)
+
+
 def load_app_config(config_path: Path) -> AppConfig:
-    raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    text = config_path.read_text(encoding="utf-8")
+    reject_flow_collections(text)
+    raw = yaml.safe_load(text) or {}
     if not isinstance(raw, dict):
         raise TypeError("config root must be a mapping")
     models = section(raw, "models")
