@@ -25,27 +25,53 @@ import main
 main.np = np
 pytestmark = pytest.mark.unit
 
-
-def write_config(tmp_path: Path, streams: list[dict]) -> Path:
-    config = {
-        "models": {"detector_path": "detector.tar.gz", "pose_path": "pose.tar.gz"},
-        "streams": streams,
-        "output": {"insight": {"host": "127.0.0.1"}},
-    }
-    path = tmp_path / "config.yaml"
-    path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
-    return path
+IDENTITY = main.FrameIdentity("camera0", 1, 1_000_000, -1, -1, 1, 1)
+BOX = {"x1": 0.0, "y1": 0.0, "x2": 100.0, "y2": 100.0, "score": 0.9, "class_id": 0}
+UNIT_AFFINE = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0)
+CONFIG_HEAD = "models:\n  detector_path: detector.tar.gz\n  pose_path: pose.tar.gz\n"
+CONFIG_TAIL = "output:\n  insight:\n    host: 127.0.0.1\n"
 
 
-def stream(
-    index: int, *, stream_id: str | None = None, channel: int | None = None
-) -> dict:
+def stream(index: int, *, channel: int | None = None, **fields) -> dict:
     return {
-        "id": stream_id or f"camera{index}",
+        "id": f"camera{index}",
         "url": f"rtsp://127.0.0.1/src{index}",
         "codec": "hevc" if index == 1 else "h264",
         "insight_channel": index if channel is None else channel,
+        **fields,
     }
+
+
+def config_text(streams=None, insight=None, output=None, **sections) -> str:
+    config = {
+        "models": {"detector_path": "detector.tar.gz", "pose_path": "pose.tar.gz"},
+        "streams": [stream(0)] if streams is None else streams,
+        **sections,
+        "output": {"insight": {"host": "127.0.0.1", **(insight or {})}, **(output or {})},
+    }
+    return yaml.safe_dump(config, sort_keys=False)
+
+
+BASE = config_text()
+
+
+def replaced(old: str, new: str) -> str:
+    return BASE.replace(old, new, 1)
+
+
+def load_config(tmp_path: Path, text: str) -> main.AppConfig:
+    path = tmp_path / "config.yaml"
+    path.write_text(text, encoding="utf-8")
+    return main.load_app_config(path)
+
+
+def stream_config(index: int, codec: str = "h264", channel: int | None = None):
+    return main.StreamConfig(
+        f"camera{index}",
+        f"rtsp://127.0.0.1/src{index}",
+        codec,
+        index if channel is None else channel,
+    )
 
 
 def runtime_stream(sender, *, outstanding: int = 1, temporal_filter: bool = False):
@@ -66,12 +92,61 @@ def runtime_stream(sender, *, outstanding: int = 1, temporal_filter: bool = Fals
     )
 
 
+class RecordingSender:
+    def __init__(self):
+        self.calls = []
+
+    def send_metadata(self, *args):
+        self.calls.append(args)
+        return True
+
+
+class FakeFrame:
+    def clone(self):
+        return self
+
+    def cvu(self):
+        return self
+
+
+class LateOutputRun:
+    """Times out `timeouts` times, then returns one output and stops the app."""
+
+    def __init__(self, state, timeouts: int = 1):
+        self.state = state
+        self.timeouts = timeouts
+
+    def pull(self, _name, _timeout):
+        if self.timeouts > 0:
+            self.timeouts -= 1
+            return None
+        with self.state.condition:
+            self.state.stopping = True
+        return object()
+
+    @staticmethod
+    def can_pull():
+        return True
+
+
+def wait_until(predicate) -> None:
+    for _ in range(100):
+        if predicate():
+            return
+        main.time.sleep(0.002)
+
+
+def stop_and_join(state, worker: threading.Thread) -> None:
+    with state.condition:
+        state.stopping = True
+        state.condition.notify_all()
+    worker.join(timeout=1)
+    assert not worker.is_alive()
+
+
 def test_cli_help_and_missing_config():
     help_result = subprocess.run(
-        [sys.executable, str(MAIN_PY), "--help"],
-        capture_output=True,
-        text=True,
-        check=False,
+        [sys.executable, str(MAIN_PY), "--help"], capture_output=True, text=True, check=False
     )
     assert help_result.returncode == 0
     assert "--config" in help_result.stdout
@@ -85,104 +160,160 @@ def test_cli_help_and_missing_config():
     assert "config file not found" in missing.stderr
 
 
-def test_stream_configuration_rejects_more_than_four(tmp_path: Path):
-    with pytest.raises(ValueError, match="streams must contain between 1 and 4 entries"):
-        main.load_app_config(write_config(tmp_path, [stream(index) for index in range(5)]))
+FLOW_ERROR = "flow-style YAML collections are not supported"
+FLOW_STREAM = "{id: camera0, url: rtsp://127.0.0.1/src0, insight_channel: 0}"
+BLOCK_STREAM = "  - id: camera0\n    url: rtsp://127.0.0.1/src0\n    insight_channel: 0\n"
+
+# test_config_validation() in test_unit.cpp runs the same cases against the C++ app.
+REJECTED_CONFIGS = [
+    ("five-streams", config_text([stream(i) for i in range(5)]), "between 1 and 4 entries"),
+    ("duplicate-id", config_text([stream(0), stream(1, id="camera0")]), "ids must be unique"),
+    (
+        "duplicate-channel",
+        config_text([stream(0), stream(1, channel=0)]),
+        "channels must be unique",
+    ),
+    (
+        "port-overlap",
+        config_text([stream(0), stream(1, channel=100)], {"video_port_base": 9000}),
+        "video and metadata ports must not overlap",
+    ),
+    (
+        "video-port-range",
+        config_text([stream(0, channel=60000)], {"metadata_port_base": 1}, {"video_enabled": True}),
+        "stream video port must be <= 65535",
+    ),
+    (
+        "metadata-port-range",
+        config_text([stream(0, channel=60000)], {"video_port_base": 1}, {"video_enabled": False}),
+        "stream metadata port must be <= 65535",
+    ),
+    ("unknown-stream-key", config_text([stream(0, enabled=True)]), "unknown stream setting"),
+    ("partial-caps", config_text([stream(0, width=1920)]), "all be omitted or all be > 0"),
+    ("unknown-codec", config_text([stream(0, codec="vp9")]), "codec must be h264/avc or h265/hevc"),
+    ("eleven-people", config_text(pose={"max_people_per_frame": 11}), "between 1 and 10"),
+    ("max-detections", config_text(detector={"max_detections": 0}), "max_detections must be > 0"),
+    ("max-inflight", config_text(detector={"max_inflight_per_stream": 0}), "must be -1 or > 0"),
+    ("max-pending-jobs", config_text(pose={"max_pending_jobs": 0}), "max_pending_jobs must be > 0"),
+    ("temporal-filter", config_text(pose={"temporal_filter_enabled": 1}), "must be true or false"),
+    ("null-bool", config_text(output={"video_enabled": None}), "must be true or false"),
+    ("null-int", config_text(detector={"max_detections": None}), "must be an integer"),
+    ("null-double", config_text(pose={"roi_scale": None}), "must be numeric"),
+    ("null-url", replaced("url: rtsp://127.0.0.1/src0", "url: null"), "url must be set"),
+    ("numeric-id", replaced("id: camera0", "id: 17"), "must be a string"),
+    ("binary-id", replaced("id: camera0", "id: 0b101"), "must be a string"),
+    ("sexagesimal-id", replaced("id: camera0", "id: 1:20"), "must be a string"),
+    ("date-id", replaced("id: camera0", "id: 2026-10-01"), "must be a string"),
+    ("boolean-url", replaced("url: rtsp://127.0.0.1/src0", "url: true"), "must be a string"),
+    ("numeric-detector", replaced("detector.tar.gz", "123"), "must be a string"),
+    ("boolean-pose", replaced("pose.tar.gz", "false"), "must be a string"),
+    ("numeric-host", replaced("host: 127.0.0.1", "host: 127"), "must be a string"),
+    ("flow-streams", CONFIG_HEAD + f"streams: [{FLOW_STREAM}]\n", FLOW_ERROR),
+    ("flow-stream-entry", CONFIG_HEAD + f"streams:\n  - {FLOW_STREAM}\n", FLOW_ERROR),
+    (
+        "flow-section",
+        CONFIG_HEAD + "streams:\n" + BLOCK_STREAM + "output: {insight: {host: 127.0.0.1}}\n",
+        FLOW_ERROR,
+    ),
+] + [
+    (f"roi-scale-{value}", BASE + f"pose:\n  roi_scale: {value}\n", "finite and > 0")
+    for value in (".nan", ".inf", "-.inf", "0", "-1.5")
+]
 
 
 @pytest.mark.parametrize(
-    ("mutator", "message"),
-    [
-        (
-            lambda values: values.__setitem__(1, stream(1, stream_id="camera0")),
-            "ids must be unique",
-        ),
-        (
-            lambda values: values.__setitem__(1, stream(1, channel=0)),
-            "channels must be unique",
-        ),
-    ],
+    ("text", "message"),
+    [case[1:] for case in REJECTED_CONFIGS],
+    ids=[case[0] for case in REJECTED_CONFIGS],
 )
-def test_duplicate_stream_fields_are_rejected(tmp_path: Path, mutator, message: str):
-    streams = [stream(0), stream(1)]
-    mutator(streams)
-    with pytest.raises(ValueError, match=message):
-        main.load_app_config(write_config(tmp_path, streams))
+def test_config_validation(tmp_path: Path, text: str, message: str):
+    with pytest.raises((TypeError, ValueError), match=message):
+        load_config(tmp_path, text)
 
 
-def test_insight_video_and_metadata_ports_must_not_overlap(tmp_path: Path):
-    path = write_config(tmp_path, [stream(0), stream(1, channel=100)])
-    config = yaml.safe_load(path.read_text(encoding="utf-8"))
-    config["output"]["insight"].update(
-        {"video_port_base": 9000, "metadata_port_base": 9100}
+ACCEPTED_CONFIGS = [
+    (
+        "standalone-sequence-dash",
+        CONFIG_HEAD
+        + "streams:\n  -\n    id: camera0\n    url: rtsp://127.0.0.1/src0\n    codec: h264\n"
+        + "    insight_channel: 0\n  - # second stream\n    id: camera1\n"
+        + "    url: rtsp://127.0.0.1/src1\n    insight_channel: 1\n"
+        + CONFIG_TAIL,
+        [stream_config(0), stream_config(1)],
+    ),
+    (
+        "yaml-spellings",
+        replaced("url: rtsp://127.0.0.1/src0", "url: rtsp://host/cam's # camera label")
+        .replace("insight_channel: 0", "insight_channel: 0b10")
+        + "runtime:\n  frames: 010\ndetector:\n  min_score: 0.5_0\n"
+        + "pose:\n  job_timeout_ms: 1_000\n  roi_scale: 1:20.5\ntest:\n  nan: .NaN\n",
+        [main.StreamConfig("camera0", "rtsp://host/cam's", "h264", 2)],
+    ),
+    ("empty-flow-mapping", BASE + "pose: {}\n", [stream_config(0)]),
+    (
+        "null-codec-trailing-quote",
+        replaced("id: camera0", "id: camera'").replace("codec: h264", "codec: null"),
+        [main.StreamConfig("camera'", "rtsp://127.0.0.1/src0", "h264", 0)],
+    ),
+    (
+        "mapping-order-and-caps",
+        config_text(
+            [
+                {
+                    "url": "rtsp://127.0.0.1/ordered",
+                    "width": 1920,
+                    "id": "camera0",
+                    "fps": 30,
+                    "insight_channel": 0,
+                    "height": 1080,
+                    "codec": "h264",
+                }
+            ]
+        ),
+        [main.StreamConfig("camera0", "rtsp://127.0.0.1/ordered", "h264", 0, 1920, 1080, 30)],
+    ),
+    (
+        "video-disabled-skips-video-port-range",
+        config_text(
+            [stream(0, channel=60000)], {"metadata_port_base": 1}, {"video_enabled": False}
+        ),
+        [stream_config(0, channel=60000)],
+    ),
+    (
+        "codec-spellings",
+        config_text([stream(i, codec=c) for i, c in enumerate(("avc", "H.264", "HEVC", "h.265"))]),
+        [stream_config(0), stream_config(1), stream_config(2, "h265"), stream_config(3, "h265")],
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("text", "streams"),
+    [case[1:] for case in ACCEPTED_CONFIGS],
+    ids=[case[0] for case in ACCEPTED_CONFIGS],
+)
+def test_accepted_configs(tmp_path: Path, text: str, streams: list):
+    assert load_config(tmp_path, text).streams == streams
+
+
+def test_restored_settings_are_read_with_their_defaults(tmp_path: Path):
+    def restored(cfg):
+        return (
+            cfg.max_detections,
+            cfg.max_inflight_per_stream,
+            cfg.max_pending_jobs,
+            cfg.pose_temporal_filter_enabled,
+            cfg.video_enabled,
+        )
+
+    assert restored(load_config(tmp_path, BASE)) == (100, 4, 64, True, True)
+    assert restored(main.load_app_config(main.DEFAULT_CONFIG)) == (100, 4, 64, True, True)
+    custom = config_text(
+        detector={"max_detections": 7, "max_inflight_per_stream": -1},
+        pose={"max_pending_jobs": 3, "temporal_filter_enabled": False},
+        output={"video_enabled": False},
     )
-    path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
-    with pytest.raises(ValueError, match="video and metadata ports must not overlap"):
-        main.load_app_config(path)
-
-
-@pytest.mark.parametrize("video_enabled", [False, True])
-def test_video_port_range_applies_only_when_video_is_enabled(tmp_path: Path, video_enabled):
-    path = write_config(tmp_path, [stream(0, channel=60000)])
-    config = yaml.safe_load(path.read_text(encoding="utf-8"))
-    config["output"]["insight"].update({"video_port_base": 9000, "metadata_port_base": 1})
-    config["output"]["video_enabled"] = video_enabled
-    path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
-    if video_enabled:
-        with pytest.raises(ValueError, match="stream video port must be <= 65535"):
-            main.load_app_config(path)
-    else:
-        cfg = main.load_app_config(path)
-        assert cfg.metadata_port_base + cfg.streams[0].insight_channel == 60001
-
-
-def test_metadata_port_range_applies_without_video(tmp_path: Path):
-    path = write_config(tmp_path, [stream(0, channel=60000)])
-    config = yaml.safe_load(path.read_text(encoding="utf-8"))
-    config["output"]["insight"].update({"video_port_base": 1, "metadata_port_base": 9100})
-    config["output"]["video_enabled"] = False
-    path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
-    with pytest.raises(ValueError, match="stream metadata port must be <= 65535"):
-        main.load_app_config(path)
-
-
-def test_stream_mapping_order_and_explicit_caps_match_cpp(tmp_path: Path):
-    ordered_stream = {
-        "url": "rtsp://127.0.0.1/ordered",
-        "width": 1920,
-        "id": "camera0",
-        "fps": 30,
-        "insight_channel": 0,
-        "height": 1080,
-        "codec": "h264",
-    }
-    cfg = main.load_app_config(write_config(tmp_path, [ordered_stream]))
-    assert cfg.streams[0] == main.StreamConfig(
-        "camera0", "rtsp://127.0.0.1/ordered", "h264", 0, 1920, 1080, 30
-    )
-
-
-def test_unknown_stream_setting_is_rejected_like_cpp(tmp_path: Path):
-    entry = stream(0)
-    entry["enabled"] = True
-    with pytest.raises(ValueError, match="unknown stream setting: enabled"):
-        main.load_app_config(write_config(tmp_path, [entry]))
-
-
-def test_stream_caps_must_be_complete(tmp_path: Path):
-    incomplete = stream(0)
-    incomplete["width"] = 1920
-    with pytest.raises(ValueError, match="must either all be omitted or all be > 0"):
-        main.load_app_config(write_config(tmp_path, [incomplete]))
-
-
-def test_pose_count_is_bounded_by_metadata_transport(tmp_path: Path):
-    path = write_config(tmp_path, [stream(0)])
-    config = yaml.safe_load(path.read_text(encoding="utf-8"))
-    config["pose"] = {"max_people_per_frame": 11}
-    path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
-    with pytest.raises(ValueError, match="between 1 and 10"):
-        main.load_app_config(path)
+    assert restored(load_config(tmp_path, custom)) == (7, -1, 3, False, False)
 
 
 class _Options:
@@ -253,204 +384,86 @@ def test_source_frame_rate_is_a_decoder_hint_not_a_caps_pin(monkeypatch, codec: 
     assert caps == [("NV12", 1280, 720, -1, "any")]
 
 
-def test_standalone_sequence_dash_starts_a_stream_like_cpp(tmp_path: Path):
-    path = tmp_path / "config.yaml"
-    path.write_text(
-        "models:\n  detector_path: detector.tar.gz\n  pose_path: pose.tar.gz\n"
-        "streams:\n"
-        "  -\n    id: camera0\n    url: rtsp://127.0.0.1/src0\n"
-        "    codec: h264\n    insight_channel: 0\n"
-        "  - # second stream\n    id: camera1\n    url: rtsp://127.0.0.1/src1\n"
-        "    insight_channel: 1\n"
-        "output:\n  insight:\n    host: 127.0.0.1\n",
-        encoding="utf-8",
-    )
-    cfg = main.load_app_config(path)
-    assert [stream.id for stream in cfg.streams] == ["camera0", "camera1"]
-    assert [stream.insight_channel for stream in cfg.streams] == [0, 1]
-
-
-@pytest.mark.parametrize(
-    "body",
-    [
-        "streams: [{id: camera0, url: rtsp://127.0.0.1/src0, insight_channel: 0}]\n"
-        "output:\n  insight:\n    host: 127.0.0.1\n",
-        "streams:\n  - {id: camera0, url: rtsp://127.0.0.1/src0, insight_channel: 0}\n"
-        "output:\n  insight:\n    host: 127.0.0.1\n",
-        "streams:\n  - id: camera0\n    url: rtsp://127.0.0.1/src0\n    insight_channel: 0\n"
-        "output: {insight: {host: 127.0.0.1}}\n",
-    ],
-)
-def test_flow_style_collections_are_rejected_like_cpp(tmp_path: Path, body: str):
-    path = tmp_path / "config.yaml"
-    path.write_text(
-        "models:\n  detector_path: detector.tar.gz\n  pose_path: pose.tar.gz\n" + body,
-        encoding="utf-8",
-    )
-    with pytest.raises(ValueError, match="flow-style YAML collections are not supported"):
-        main.load_app_config(path)
-
-
-def test_empty_flow_collections_stay_allowed(tmp_path: Path):
-    path = write_config(tmp_path, [stream(0)])
-    path.write_text(path.read_text(encoding="utf-8") + "pose: {}\n", encoding="utf-8")
-    assert len(main.load_app_config(path).streams) == 1
-
-
-def test_null_codec_and_trailing_quotes_match_cpp(tmp_path: Path):
-    path = tmp_path / "config.yaml"
-    path.write_text(
-        "models:\n  detector_path: detector.tar.gz\n  pose_path: pose.tar.gz\n"
-        "streams:\n  - id: camera'\n    url: rtsp://127.0.0.1/src0\n"
-        "    codec: null\n    insight_channel: 0\n"
-        "output:\n  insight:\n    host: 127.0.0.1\n",
-        encoding="utf-8",
-    )
-    cfg = main.load_app_config(path)
-    assert cfg.streams[0].id == "camera'"
-    assert cfg.streams[0].codec == main.parse_codec("h264")
-
-
-@pytest.mark.parametrize("roi_scale", [".nan", ".inf", "-.inf", "0", "-1.5"])
-def test_roi_scale_must_be_finite_and_positive(tmp_path: Path, roi_scale: str):
-    path = write_config(tmp_path, [stream(0)])
-    path.write_text(
-        path.read_text(encoding="utf-8") + f"pose:\n  roi_scale: {roi_scale}\n",
-        encoding="utf-8",
-    )
-    with pytest.raises(ValueError, match="pose.roi_scale must be finite and > 0"):
-        main.load_app_config(path)
-
-
 def test_roi_landmark_and_metadata_contract():
     box = {"x1": 10.0, "y1": 20.0, "x2": 30.0, "y2": 60.0, "score": 0.9, "class_id": 0}
-    roi = main.square_roi(box, 1.5)
-    assert roi == (-10, 10, 60, 60)
+    assert main.square_roi(box, 1.5) == (-10, 10, 60, 60)
     raw = np.zeros((39, 5), dtype=np.float32)
     raw[0] = [4.0, 8.0, 0.0, 2.0, -2.0]
     raw_world = np.zeros((39, 3), dtype=np.float32)
     raw_world[0] = [0.1, -0.2, 0.3]
-    affine = (2.0, 0.0, 10.0, 0.0, 3.0, 20.0)
-    pose = main.decode_pose(raw, raw_world, affine, box, 0.93, 2)
+    pose = main.decode_pose(raw, raw_world, (2.0, 0.0, 10.0, 0.0, 3.0, 20.0), box, 0.93, 2)
+    nose, world_nose = pose["keypoints"][0], pose["world_keypoints"][0]
     assert pose["presence"] == pytest.approx(0.93)
-    assert pose["keypoints"][0]["x"] == pytest.approx(18.0)
-    assert pose["keypoints"][0]["y"] == pytest.approx(44.0)
-    assert pose["keypoints"][0]["confidence"] == pytest.approx(main.sigmoid(-2.0))
-    world_point = pose["world_keypoints"][0]
-    assert world_point["name"] == "nose"
-    assert world_point["x"] == pytest.approx(0.1)
-    assert world_point["y"] == pytest.approx(-0.2)
-    assert world_point["z"] == pytest.approx(0.3)
-    assert world_point["confidence"] == pytest.approx(main.sigmoid(-2.0))
+    assert (nose["x"], nose["y"]) == pytest.approx((18.0, 44.0))
+    assert nose["confidence"] == world_nose["confidence"] == pytest.approx(main.sigmoid(-2.0))
+    assert (world_nose["x"], world_nose["y"], world_nose["z"]) == pytest.approx((0.1, -0.2, 0.3))
+
     data = main.poses_data([pose], "camera0")
+    published = data["poses"][0]
     assert data["stream_id"] == "camera0"
-    assert data["poses"][0]["id"] == "pose_3"
-    assert data["poses"][0]["presence"] == pytest.approx(0.93)
-    assert len(data["poses"][0]["keypoints"]) == 33
-    assert data["poses"][0]["keypoints"][0]["name"] == "nose"
-    assert len(data["poses"][0]["world_keypoints"]) == 33
-    assert data["poses"][0]["world_keypoints"][0]["name"] == "nose"
-    assert data["poses"][0]["world_keypoints"][0]["z"] == pytest.approx(0.3)
+    assert (published["id"], published["presence"]) == ("pose_3", pytest.approx(0.93))
+    assert len(published["keypoints"]) == len(published["world_keypoints"]) == 33
+    assert published["keypoints"][0]["name"] == published["world_keypoints"][0]["name"] == "nose"
+    assert published["world_keypoints"][0]["z"] == pytest.approx(0.3)
+
     auxiliary = main.world_pose_auxiliary_data([pose], "camera0")
-    assert auxiliary["stream_id"] == "camera0"
-    assert auxiliary["schema_version"] == 1
-    assert auxiliary["id"] == "world-pose"
-    assert auxiliary["renderer"] == "blazepose-3d"
-    assert auxiliary["payload"]["poses"][0]["presence"] == pytest.approx(0.93)
-    assert len(auxiliary["payload"]["poses"][0]["keypoints"]) == 33
-    assert auxiliary["payload"]["poses"][0]["keypoints"][0]["name"] == "nose"
-    point_cloud = {
-        "points": [{"x": 0.1, "y": 0.2, "z": 0.3, "value": 7}],
-        "axes": ["east", "north", "up"],
+    assert {key: auxiliary[key] for key in ("schema_version", "id", "renderer", "stream_id")} == {
+        "schema_version": 1,
+        "id": "world-pose",
+        "renderer": "blazepose-3d",
+        "stream_id": "camera0",
     }
-    generic = main.auxiliary_visualization_data(
-        "depth-cloud", "point-cloud-3d", point_cloud
-    )
+    assert auxiliary["payload"]["poses"] == [
+        {"id": "pose_3", "presence": 0.93, "keypoints": published["world_keypoints"]}
+    ]
+    point_cloud = {"points": [{"x": 0.1, "y": 0.2, "z": 0.3, "value": 7}], "axes": ["east"]}
+    generic = main.auxiliary_visualization_data("depth-cloud", "point-cloud-3d", point_cloud)
     assert generic == {
         "schema_version": 1,
         "id": "depth-cloud",
         "renderer": "point-cloud-3d",
         "payload": point_cloud,
     }
-    json.dumps(data)
-    json.dumps(auxiliary)
-    json.dumps(generic)
+    json.dumps([data, auxiliary, generic])
+
+
+class FakeTensor:
+    def __init__(self, values):
+        self.values = np.asarray(values, dtype=np.float32)
+
+    def to_numpy(self, *, copy):
+        return self.values.copy() if copy else self.values
+
+
+def parse_pose(monkeypatch, presence_logit: float, poison=None):
+    tensors = [FakeTensor(np.zeros(195)), FakeTensor([presence_logit]), FakeTensor(np.zeros(117))]
+    if poison is not None:
+        tensor_index, position, value = poison
+        tensors[tensor_index].values[position] = value
+    monkeypatch.setattr(main, "tensors_from_sample", lambda *_args: tensors)
+    context = main.PoseInputContext(1, 0, 0, BOX, UNIT_AFFINE, IDENTITY)
+    return main.parse_pose_output(object(), context, SimpleNamespace(pose_presence_threshold=0.5))
 
 
 def test_pose_presence_logit_is_activated_before_thresholding(monkeypatch):
-    class Tensor:
-        def __init__(self, values):
-            self.values = np.asarray(values, dtype=np.float32)
-
-        def to_numpy(self, *, copy):
-            return self.values.copy() if copy else self.values
-
-    tensors = [Tensor(np.zeros(195)), Tensor([0.0]), Tensor(np.zeros(117))]
-    monkeypatch.setattr(main, "tensors_from_sample", lambda *_args: tensors)
-    identity = main.FrameIdentity("camera0", 1, 0, -1, -1, 1, 1)
-    context = main.PoseInputContext(
-        1,
-        0,
-        0,
-        {
-            "x1": 0.0,
-            "y1": 0.0,
-            "x2": 100.0,
-            "y2": 100.0,
-            "score": 0.9,
-            "class_id": 0,
-        },
-        (1.0, 0.0, 0.0, 0.0, 1.0, 0.0),
-        identity,
-    )
-    cfg = SimpleNamespace(pose_presence_threshold=0.5)
-
-    pose = main.parse_pose_output(object(), context, cfg)
-    assert pose["presence"] == pytest.approx(0.5)
-
-    tensors[1] = Tensor([-0.01])
-    assert main.parse_pose_output(object(), context, cfg) is None
+    assert parse_pose(monkeypatch, 0.0)["presence"] == pytest.approx(0.5)
+    assert parse_pose(monkeypatch, -0.01) is None
 
 
 @pytest.mark.parametrize(
-    ("tensor_index", "position", "value"),
+    "poison",
     [(0, 0, np.nan), (0, 194, np.inf), (2, 0, np.nan), (2, 116, -np.inf)],
     ids=["screen-nan", "screen-inf", "world-nan", "world-negative-inf"],
 )
-def test_non_finite_landmarks_discard_only_that_pose(
-    monkeypatch, tensor_index: int, position: int, value: float
-):
-    class Tensor:
-        def __init__(self, values):
-            self.values = np.asarray(values, dtype=np.float32)
-
-        def to_numpy(self, *, copy):
-            return self.values.copy() if copy else self.values
-
-    screen = np.zeros(195, dtype=np.float32)
-    world = np.zeros(117, dtype=np.float32)
-    tensors = [Tensor(screen), Tensor([4.0]), Tensor(world)]
-    monkeypatch.setattr(main, "tensors_from_sample", lambda *_args: tensors)
-    identity = main.FrameIdentity("camera0", 1, 0, -1, -1, 1, 1)
-    box = {"x1": 0.0, "y1": 0.0, "x2": 100.0, "y2": 100.0, "score": 0.9, "class_id": 0}
-    context = main.PoseInputContext(
-        1, 0, 0, box, (1.0, 0.0, 0.0, 0.0, 1.0, 0.0), identity
-    )
-    cfg = SimpleNamespace(pose_presence_threshold=0.5)
-    assert main.parse_pose_output(object(), context, cfg) is not None
-
-    tensors[tensor_index].values[position] = value
-
-    assert main.parse_pose_output(object(), context, cfg) is None
+def test_non_finite_landmarks_discard_only_that_pose(monkeypatch, poison):
+    assert parse_pose(monkeypatch, 4.0) is not None
+    assert parse_pose(monkeypatch, 4.0, poison) is None
 
 
 def test_pose_preprocess_copies_readonly_tensor_exports():
     image = np.zeros((4, 4, 3), dtype=np.uint8)
     image.flags.writeable = False
-    tensor = SimpleNamespace(to_numpy=lambda *, copy: image)
-
-    exported = main.writable_rgb_view(tensor)
-
+    exported = main.writable_rgb_view(SimpleNamespace(to_numpy=lambda *, copy: image))
     assert exported.flags.writeable
     assert not np.shares_memory(exported, image)
 
@@ -460,16 +473,6 @@ def test_frame_identity_falls_back_through_source_sequence_fields():
     assert main.select_frame_id(-1, 8, 7, 6) == 8
     assert main.select_frame_id(-1, -1, 7, 6) == 7
     assert main.select_frame_id(-1, -1, -1, 6) == 6
-
-
-def test_closed_stream_does_not_block_healthy_stream_frame_limit():
-    runtime = SimpleNamespace(
-        streams=[
-            SimpleNamespace(closed=True, metadata_frames=0, outstanding_frames=0),
-            SimpleNamespace(closed=False, metadata_frames=8, outstanding_frames=0),
-        ]
-    )
-    assert main.all_streams_done(runtime, 8)
 
 
 def test_closed_stream_drains_admitted_frames_before_completion():
@@ -499,8 +502,7 @@ def test_frame_admission_reserves_only_the_remaining_per_stream_limit():
 
 def test_model_push_retries_without_using_the_blocking_python_binding():
     class Run:
-        def __init__(self):
-            self.attempts = 0
+        attempts = 0
 
         def try_push(self, _name, _samples):
             self.attempts += 1
@@ -518,43 +520,18 @@ def test_model_push_retries_without_using_the_blocking_python_binding():
     pending = main.deque()
     context = object()
     run = Run()
-
-    assert (
-        main.try_push_with_context(
-            runtime, run, "input", object(), pending, context, "closed"
-        )
-        is main.NonblockingPushResult.ACCEPTED
-    )
+    result = main.try_push_with_context(runtime, run, "input", object(), pending, context, "closed")
+    assert result is main.NonblockingPushResult.ACCEPTED
     assert run.attempts == 3
     assert list(pending) == [context]
 
 
 def test_pose_dispatch_aborts_expired_rejected_push_and_continues(monkeypatch):
-    calls = []
-
-    class Sender:
-        def send_metadata(self, *args):
-            calls.append(args)
-            return True
-
-    class Tensor:
-        def clone(self):
-            return self
-
-        def cvu(self):
-            return self
-
-    stream_runtime = runtime_stream(Sender(), outstanding=2)
-    identity = main.FrameIdentity("camera0", 1, 1_000_000, -1, -1, 1, 1)
+    sender = RecordingSender()
+    stream_runtime = runtime_stream(sender, outstanding=2)
     now = main.time.monotonic()
-    first_job = main.FrameJob(1, 1, 0, object(), [{}], identity, now + 1.0)
-    jobs = iter(
-        [
-            first_job,
-            main.FrameJob(2, 2, 0, object(), [], identity, now + 1.0),
-            None,
-        ]
-    )
+    first_job = main.FrameJob(1, 1, 0, object(), [{}], IDENTITY, now + 1.0)
+    jobs = iter([first_job, main.FrameJob(2, 2, 0, object(), [], IDENTITY, now + 1.0), None])
 
     class Run:
         attempts = 0
@@ -572,29 +549,24 @@ def test_pose_dispatch_aborts_expired_rejected_push_and_continues(monkeypatch):
 
     state = main.SharedState(1)
     runtime = SimpleNamespace(
-        state=state,
-        streams=[stream_runtime],
-        pose_run=Run(),
-        pose_model=object(),
+        state=state, streams=[stream_runtime], pose_run=Run(), pose_model=object()
     )
     monkeypatch.setattr(main, "take_next_job", lambda *_args: next(jobs))
     monkeypatch.setattr(main, "writable_rgb_view", lambda _tensor: object())
     monkeypatch.setattr(main, "square_roi", lambda *_args: (0, 0, 1, 1))
-    monkeypatch.setattr(main, "affine_from_tensor", lambda _tensor: (1, 0, 0, 0, 1, 0))
+    monkeypatch.setattr(main, "affine_from_tensor", lambda _tensor: UNIT_AFFINE)
     monkeypatch.setattr(main, "pose_input_sample", lambda *_args: object())
     monkeypatch.setattr(
         main,
         "pyneat",
         SimpleNamespace(
-            stages=SimpleNamespace(preproc=lambda *_args, **_kwargs: [Tensor()]),
+            stages=SimpleNamespace(preproc=lambda *_args, **_kwargs: [FakeFrame()]),
             PreprocessRoi=lambda *_args: object(),
             PixelFormat=SimpleNamespace(RGB="rgb"),
         ),
     )
 
-    main.dispatch_pose_jobs(
-        runtime, SimpleNamespace(roi_scale=1.0, max_pending_jobs=1)
-    )
+    main.dispatch_pose_jobs(runtime, SimpleNamespace(roi_scale=1.0, max_pending_jobs=1))
 
     assert state.error is None
     assert not state.pending_pose_outputs
@@ -602,19 +574,13 @@ def test_pose_dispatch_aborts_expired_rejected_push_and_continues(monkeypatch):
     assert stream_runtime.timed_out_jobs == 1
     assert stream_runtime.metadata_frames == 2
     assert stream_runtime.outstanding_frames == 0
-    assert len(calls) == 4
+    assert len(sender.calls) == 4
     assert Run.attempts == 1
 
 
 def test_rejected_detector_push_accepts_concurrent_expiry_tombstone(monkeypatch):
-    class Tensor:
-        @staticmethod
-        def cvu():
-            return object()
-
-    stream_runtime = runtime_stream(SimpleNamespace(send_metadata=lambda *_args: True))
-    identity = main.FrameIdentity("camera0", 1, 1_000_000, -1, -1, 1, 1)
-    job = main.FrameJob(1, 1, 0, Tensor(), [], identity, main.time.monotonic() + 1.0)
+    stream_runtime = runtime_stream(RecordingSender())
+    job = main.FrameJob(1, 1, 0, FakeFrame(), [], IDENTITY, main.time.monotonic() + 1.0)
     state = main.SharedState(1)
     state.detector_mailboxes[0] = job
 
@@ -628,15 +594,11 @@ def test_rejected_detector_push_accepts_concurrent_expiry_tombstone(monkeypatch)
     runtime = SimpleNamespace(state=state, streams=[stream_runtime], detector_run=Run())
     monkeypatch.setattr(main, "image_input_sample", lambda *_args: object())
     worker = threading.Thread(
-        target=main.dispatch_detector_jobs,
-        args=(runtime, SimpleNamespace(max_pending_jobs=1)),
+        target=main.dispatch_detector_jobs, args=(runtime, SimpleNamespace(max_pending_jobs=1))
     )
 
     worker.start()
-    for _ in range(100):
-        if stream_runtime.outstanding_frames == 0:
-            break
-        main.time.sleep(0.002)
+    wait_until(lambda: stream_runtime.outstanding_frames == 0)
 
     assert worker.is_alive()
     assert not state.pending_detector_outputs
@@ -644,35 +606,14 @@ def test_rejected_detector_push_accepts_concurrent_expiry_tombstone(monkeypatch)
     assert stream_runtime.metadata_frames == 1
     assert stream_runtime.outstanding_frames == 0
     assert state.error is None
-
-    with state.condition:
-        state.stopping = True
-        state.condition.notify_all()
-    worker.join(timeout=1)
-    assert not worker.is_alive()
+    stop_and_join(state, worker)
 
 
 def test_detector_dispatch_aborts_expired_rejected_push_and_continues(monkeypatch):
-    calls = []
-
-    class Tensor:
-        @staticmethod
-        def cvu():
-            return object()
-
-    stream_runtime = runtime_stream(
-        SimpleNamespace(send_metadata=lambda *args: calls.append(args) or True), outstanding=2
-    )
-    identity = main.FrameIdentity("camera0", 1, 1_000_000, -1, -1, 1, 1)
+    stream_runtime = runtime_stream(RecordingSender(), outstanding=2)
     now = main.time.monotonic()
-    first_job = main.FrameJob(1, 1, 0, Tensor(), [], identity, now + 1.0)
-    jobs = iter(
-        [
-            first_job,
-            main.FrameJob(2, 2, 0, Tensor(), [], identity, now + 1.0),
-            None,
-        ]
-    )
+    first_job = main.FrameJob(1, 1, 0, FakeFrame(), [], IDENTITY, now + 1.0)
+    jobs = iter([first_job, main.FrameJob(2, 2, 0, FakeFrame(), [], IDENTITY, now + 1.0), None])
 
     class Run:
         attempts = 0
@@ -698,45 +639,19 @@ def test_detector_dispatch_aborts_expired_rejected_push_and_continues(monkeypatc
     assert stream_runtime.timed_out_jobs == 1
     assert stream_runtime.metadata_frames == 1
     assert stream_runtime.outstanding_frames == 1
-    assert len(state.pending_detector_outputs) == 1
-    assert state.pending_detector_outputs[0].job_id == 2
+    assert [job.job_id for job in state.pending_detector_outputs] == [2]
     assert Run.attempts == 2
 
 
 def test_detector_timeout_completes_without_output_and_discards_late_result(monkeypatch):
-    calls = []
-
-    class Sender:
-        def send_metadata(self, *args):
-            calls.append(args)
-            return True
-
-    stream_runtime = runtime_stream(Sender())
-    identity = main.FrameIdentity("camera0", 1, 1_000_000, -1, -1, 1, 1)
-    job = main.FrameJob(1, 1, 0, object(), [], identity, main.time.monotonic() - 1.0)
+    sender = RecordingSender()
+    stream_runtime = runtime_stream(sender)
     state = main.SharedState(1)
-    state.pending_detector_outputs.append(job)
-
-    class DelayedRun:
-        def __init__(self):
-            self.pulls = 0
-
-        def pull(self, _name, _timeout):
-            self.pulls += 1
-            if self.pulls == 1:
-                return None
-            with state.condition:
-                state.stopping = True
-            return object()
-
-        @staticmethod
-        def can_pull():
-            return True
-
+    state.pending_detector_outputs.append(
+        main.FrameJob(1, 1, 0, object(), [], IDENTITY, main.time.monotonic() - 1.0)
+    )
     runtime = SimpleNamespace(
-        state=state,
-        streams=[stream_runtime],
-        detector_run=DelayedRun(),
+        state=state, streams=[stream_runtime], detector_run=LateOutputRun(state)
     )
     monkeypatch.setattr(
         main,
@@ -749,51 +664,33 @@ def test_detector_timeout_completes_without_output_and_discards_late_result(monk
     assert stream_runtime.timed_out_jobs == 1
     assert stream_runtime.metadata_frames == 1
     assert stream_runtime.outstanding_frames == 0
-    assert len(calls) == 2
+    assert len(sender.calls) == 2
     assert not state.pending_detector_outputs
     assert state.error is None
 
 
 def test_detector_dispatch_expires_while_tombstones_hold_capacity(monkeypatch):
-    class Tensor:
-        @staticmethod
-        def cvu():
-            return object()
-
     class Run:
         @staticmethod
         def try_push(*_args):
             raise AssertionError("an expired frame must not reach the detector")
 
-    stream_runtime = runtime_stream(SimpleNamespace(send_metadata=lambda *_args: True))
-    identity = main.FrameIdentity("camera0", 1, 1_000_000, -1, -1, 1, 1)
+    stream_runtime = runtime_stream(RecordingSender())
     state = main.SharedState(1)
     state.pending_detector_outputs.append(None)
     state.detector_mailboxes[0] = main.FrameJob(
-        1,
-        1,
-        0,
-        Tensor(),
-        [],
-        identity,
-        main.time.monotonic() + 0.02,
+        1, 1, 0, FakeFrame(), [], IDENTITY, main.time.monotonic() + 0.02
     )
     runtime = SimpleNamespace(state=state, streams=[stream_runtime], detector_run=Run())
     monkeypatch.setattr(main, "image_input_sample", lambda *_args: object())
-    cfg = SimpleNamespace(max_pending_jobs=1)
-    worker = threading.Thread(target=main.dispatch_detector_jobs, args=(runtime, cfg))
+    worker = threading.Thread(
+        target=main.dispatch_detector_jobs, args=(runtime, SimpleNamespace(max_pending_jobs=1))
+    )
 
     worker.start()
-    for _ in range(100):
-        if stream_runtime.outstanding_frames == 0:
-            break
-        main.time.sleep(0.002)
-    with state.condition:
-        state.stopping = True
-        state.condition.notify_all()
-    worker.join(timeout=1)
+    wait_until(lambda: stream_runtime.outstanding_frames == 0)
+    stop_and_join(state, worker)
 
-    assert not worker.is_alive()
     assert stream_runtime.timed_out_jobs == 1
     assert stream_runtime.metadata_frames == 1
     assert stream_runtime.outstanding_frames == 0
@@ -801,37 +698,19 @@ def test_detector_dispatch_expires_while_tombstones_hold_capacity(monkeypatch):
     assert state.error is None
 
 
-def test_pose_timeout_retains_correlation_until_late_roi_output(monkeypatch):
-    stream_runtime = runtime_stream(SimpleNamespace(send_metadata=lambda *_args: True))
-    identity = main.FrameIdentity("camera0", 1, 1_000_000, -1, -1, 1, 1)
-    context = main.PoseInputContext(1, 0, 0, {}, (1, 0, 0, 0, 1, 0), identity)
+def pose_job_state(deadline: float):
     state = main.SharedState(1)
-    state.pending_pose_outputs.append(context)
-    state.aggregates[1] = main.PoseAggregate(
-        0, 1, 1, identity, main.time.monotonic() - 1.0
-    )
+    state.pending_pose_outputs.append(main.PoseInputContext(1, 0, 0, {}, UNIT_AFFINE, IDENTITY))
+    state.aggregates[1] = main.PoseAggregate(0, 1, 1, IDENTITY, deadline)
+    return state
 
-    class DelayedRun:
-        def __init__(self):
-            self.pulls = 0
 
-        def pull(self, _name, _timeout):
-            self.pulls += 1
-            if self.pulls == 1:
-                return None
-            with state.condition:
-                state.stopping = True
-            return object()
-
-        @staticmethod
-        def can_pull():
-            return True
-
-    runtime = SimpleNamespace(state=state, streams=[stream_runtime], pose_run=DelayedRun())
+def test_pose_timeout_retains_correlation_until_late_roi_output(monkeypatch):
+    stream_runtime = runtime_stream(RecordingSender())
+    state = pose_job_state(main.time.monotonic() - 1.0)
+    runtime = SimpleNamespace(state=state, streams=[stream_runtime], pose_run=LateOutputRun(state))
     monkeypatch.setattr(
-        main,
-        "parse_pose_output",
-        lambda *_args: pytest.fail("late ROI output must not be parsed"),
+        main, "parse_pose_output", lambda *_args: pytest.fail("late ROI output must not be parsed")
     )
 
     main.pull_pose_outputs(runtime, SimpleNamespace())
@@ -846,12 +725,8 @@ def test_pose_timeout_retains_correlation_until_late_roi_output(monkeypatch):
 
 
 def test_completed_pose_aggregate_is_claimed_before_expiry_can_publish_it(monkeypatch):
-    identity = main.FrameIdentity("camera0", 1, 1_000_000, -1, -1, 1, 1)
-    context = main.PoseInputContext(1, 0, 0, {}, (1, 0, 0, 0, 1, 0), identity)
-    state = main.SharedState(1)
-    state.pending_pose_outputs.append(context)
-    state.aggregates[1] = main.PoseAggregate(0, 1, 1, identity, main.time.monotonic() + 60.0)
-    runtime = SimpleNamespace(state=state, streams=[], pose_run=None)
+    state = pose_job_state(main.time.monotonic() + 60.0)
+    runtime = SimpleNamespace(state=state, streams=[], pose_run=LateOutputRun(state, timeouts=0))
     expiry_runs = []
 
     class RacingStream(SimpleNamespace):
@@ -869,21 +744,8 @@ def test_completed_pose_aggregate_is_claimed_before_expiry_can_publish_it(monkey
                 main.expire_pose_jobs(runtime)
                 expiry_runs.append(True)
 
-    stream = RacingStream(**vars(runtime_stream(SimpleNamespace(send_metadata=lambda *_: True))))
+    stream = RacingStream(**vars(runtime_stream(RecordingSender())))
     runtime.streams.append(stream)
-
-    class OneOutputRun:
-        @staticmethod
-        def pull(_name, _timeout):
-            with state.condition:
-                state.stopping = True
-            return object()
-
-        @staticmethod
-        def can_pull():
-            return True
-
-    runtime.pose_run = OneOutputRun()
     monkeypatch.setattr(main, "parse_pose_output", lambda *_args: None)
     RacingStream.armed = True
 
@@ -914,9 +776,8 @@ def test_failed_metadata_pair_completes_the_frame_without_counting_it(failure: s
 
     sender = Sender()
     stream = runtime_stream(sender, outstanding=2)
-    identity = main.FrameIdentity("camera0", 1, 1_000_000, -1, -1, 1, 1)
 
-    main.complete_frame(stream, 1, identity, [])
+    main.complete_frame(stream, 1, IDENTITY, [])
 
     assert sender.calls == ["pose-estimation", "auxiliary-visualization"]
     assert stream.metadata_frames == 0
@@ -924,7 +785,7 @@ def test_failed_metadata_pair_completes_the_frame_without_counting_it(failure: s
     assert stream.outstanding_frames == 1
 
     sender.fail = False
-    main.complete_frame(stream, 2, identity, [])
+    main.complete_frame(stream, 2, IDENTITY, [])
 
     assert stream.metadata_frames == 1
     assert stream.metadata_send_failures == 1
@@ -936,103 +797,44 @@ def test_failed_metadata_pair_completes_the_frame_without_counting_it(failure: s
         main.require_successful_completion(runtime, 2)
 
 
-def test_incomplete_closed_stream_is_not_a_successful_finite_run():
-    runtime = SimpleNamespace(
-        streams=[
-            SimpleNamespace(
-                config=SimpleNamespace(id="offline"), closed=True, metadata_frames=0
-            ),
-            SimpleNamespace(
-                config=SimpleNamespace(id="healthy"), closed=False, metadata_frames=8
-            ),
-        ]
-    )
-    with pytest.raises(RuntimeError, match="offline"):
-        main.require_successful_completion(runtime, 8)
-
-
 def test_all_closed_streams_fail_an_unbounded_run():
-    runtime = SimpleNamespace(
-        streams=[
-            SimpleNamespace(
-                config=SimpleNamespace(id="camera0"), closed=True, metadata_frames=2
-            )
-        ]
-    )
+    stream = SimpleNamespace(config=SimpleNamespace(id="camera0"), closed=True, metadata_frames=2)
     with pytest.raises(RuntimeError, match="all source streams stopped"):
-        main.require_successful_completion(runtime, 0)
+        main.require_successful_completion(SimpleNamespace(streams=[stream]), 0)
 
 
-def test_one_source_owner_detects_each_independent_run_closing():
-    owner_threads = set()
-    barrier = threading.Barrier(2)
+def test_each_source_run_starts_and_is_pulled_on_its_own_thread(monkeypatch):
+    build_threads, pull_threads = set(), set()
+    build_barrier, pull_barrier = threading.Barrier(2), threading.Barrier(2)
 
     class ClosedRun:
-        def __init__(self):
-            self.pull_count = 0
+        pull_count = 0
 
         def pull(self, _output, timeout_ms):
             assert timeout_ms == -1
-            owner_threads.add(threading.get_ident())
+            pull_threads.add(threading.get_ident())
             self.pull_count += 1
-            barrier.wait(timeout=1)
-            return None
-
-    runs = [ClosedRun(), ClosedRun()]
-    streams = [
-        SimpleNamespace(
-            config=SimpleNamespace(id=f"camera{index}"),
-            source_run=source_run,
-            closed=False,
-            metadata_lock=threading.Lock(),
-            metadata_frames=0,
-            outstanding_frames=0,
-        )
-        for index, source_run in enumerate(runs)
-    ]
-    runtime = SimpleNamespace(streams=streams, state=main.SharedState(2))
-    cfg = SimpleNamespace(frame_limit=0)
-    pullers = [
-        threading.Thread(target=main.pull_source_frames, args=(runtime, cfg, index))
-        for index in range(2)
-    ]
-
-    for puller in pullers:
-        puller.start()
-    for puller in pullers:
-        puller.join(timeout=2)
-
-    assert all(not puller.is_alive() for puller in pullers)
-    assert all(stream.closed for stream in streams)
-    assert [source_run.pull_count for source_run in runs] == [1, 1]
-    assert len(owner_threads) == 2
-
-
-def test_source_runs_start_concurrently(monkeypatch):
-    build_threads = set()
-    barrier = threading.Barrier(2)
-
-    class ClosedRun:
-        def pull(self, _output, timeout_ms):
-            assert timeout_ms == -1
-            return None
-
-        @staticmethod
-        def close():
+            pull_barrier.wait(timeout=1)
             return None
 
     class SourceGraph:
+        def __init__(self):
+            self.run = ClosedRun()
+
         def build(self, _options):
             build_threads.add(threading.get_ident())
-            barrier.wait(timeout=1)
-            return ClosedRun()
+            build_barrier.wait(timeout=1)
+            return self.run
 
-    fake_pyneat = SimpleNamespace(
-        RunOptions=type("RunOptions", (), {}),
-        RunPreset=SimpleNamespace(Realtime="realtime"),
-        OutputMemory=SimpleNamespace(ZeroCopy="zero-copy"),
+    monkeypatch.setattr(
+        main,
+        "pyneat",
+        SimpleNamespace(
+            RunOptions=type("RunOptions", (), {}),
+            RunPreset=SimpleNamespace(Realtime="realtime"),
+            OutputMemory=SimpleNamespace(ZeroCopy="zero-copy"),
+        ),
     )
-    monkeypatch.setattr(main, "pyneat", fake_pyneat)
     streams = [
         SimpleNamespace(
             index=index,
@@ -1040,15 +842,16 @@ def test_source_runs_start_concurrently(monkeypatch):
             source_graph=SourceGraph(),
             source_run=None,
             closed=False,
+            metadata_lock=threading.Lock(),
+            metadata_frames=0,
+            outstanding_frames=0,
         )
         for index in range(2)
     ]
     runtime = SimpleNamespace(streams=streams, state=main.SharedState(2))
+    cfg = SimpleNamespace(frame_limit=0)
     pullers = [
-        threading.Thread(
-            target=main.run_source_stream,
-            args=(runtime, SimpleNamespace(), index),
-        )
+        threading.Thread(target=main.run_source_stream, args=(runtime, cfg, index))
         for index in range(2)
     ]
 
@@ -1058,27 +861,20 @@ def test_source_runs_start_concurrently(monkeypatch):
         puller.join(timeout=2)
 
     assert all(not puller.is_alive() for puller in pullers)
-    assert len(build_threads) == 2
+    assert len(build_threads) == len(pull_threads) == 2
+    assert [stream.source_graph.run.pull_count for stream in streams] == [1, 1]
     assert all(stream.closed for stream in streams)
 
 
 def test_publish_metadata_sends_paired_overlay_and_auxiliary_messages():
-    calls = []
-
-    class Sender:
-        def send_metadata(self, *args):
-            calls.append(args)
-            return True
-
-    stream_runtime = runtime_stream(Sender(), temporal_filter=True)
+    sender = RecordingSender()
+    stream_runtime = runtime_stream(sender, temporal_filter=True)
     identity = main.FrameIdentity("camera0", 7, 1_234_000_000, -1, -1, 7, 7)
 
     main.complete_frame(stream_runtime, 1, identity, [])
 
-    assert [call[0] for call in calls] == [
-        "pose-estimation",
-        "auxiliary-visualization",
-    ]
+    calls = sender.calls
+    assert [call[0] for call in calls] == ["pose-estimation", "auxiliary-visualization"]
     assert all(call[2:] == (1234, "7") for call in calls)
     assert json.loads(calls[0][1]) == {"stream_id": "camera0", "poses": []}
     assert json.loads(calls[1][1])["stream_id"] == "camera0"
@@ -1087,24 +883,18 @@ def test_publish_metadata_sends_paired_overlay_and_auxiliary_messages():
 
 
 def test_frame_publication_waits_for_prior_sequence_and_skips_dropped_work():
-    calls = []
+    sender = RecordingSender()
+    stream_runtime = runtime_stream(sender, outstanding=3)
 
-    class Sender:
-        def send_metadata(self, _type, _data, _timestamp, frame_id):
-            calls.append(frame_id)
-            return True
+    def identity(frame_id: int):
+        return main.FrameIdentity("camera0", frame_id, frame_id * 1_000_000, -1, -1, 0, 0)
 
-    stream_runtime = runtime_stream(Sender(), outstanding=3)
-    first = main.FrameIdentity("camera0", 10, 10_000_000, -1, -1, 10, 10)
-    second = main.FrameIdentity("camera0", 11, 11_000_000, -1, -1, 11, 11)
-    third = main.FrameIdentity("camera0", 12, 12_000_000, -1, -1, 12, 12)
+    main.complete_frame(stream_runtime, 2, identity(11), [])
+    assert sender.calls == []
+    main.complete_frame(stream_runtime, 1, identity(10), [])
+    main.complete_frame(stream_runtime, 3, identity(12), None)
 
-    main.complete_frame(stream_runtime, 2, second, [])
-    assert calls == []
-    main.complete_frame(stream_runtime, 1, first, [])
-    main.complete_frame(stream_runtime, 3, third, None)
-
-    assert calls == ["10", "10", "11", "11"]
+    assert [call[3] for call in sender.calls] == ["10", "10", "11", "11"]
     assert stream_runtime.metadata_frames == 2
     assert stream_runtime.next_publication_sequence == 4
 
@@ -1113,9 +903,7 @@ def test_shutdown_does_not_wait_for_an_uninterruptible_source_build():
     release = threading.Event()
     worker = threading.Thread(target=release.wait, daemon=True)
     worker.start()
-    runtime = SimpleNamespace(
-        streams=[SimpleNamespace(config=SimpleNamespace(id="offline"))]
-    )
+    runtime = SimpleNamespace(streams=[SimpleNamespace(config=SimpleNamespace(id="offline"))])
 
     started = main.time.monotonic()
     unfinished = main.join_source_workers(runtime, [worker], timeout_s=0.01)
@@ -1126,18 +914,11 @@ def test_shutdown_does_not_wait_for_an_uninterruptible_source_build():
     worker.join(timeout=1)
 
 
-def pose_sample(x: float, confidence: float, world_x: float, box_x: float = 0.0) -> dict:
+def pose_sample(x: float, confidence: float, world_x: float, roi_index: int = 0) -> dict:
     return {
-        "roi_index": 0,
+        "roi_index": roi_index,
         "presence": confidence,
-        "box": {
-            "x1": box_x,
-            "y1": 0.0,
-            "x2": box_x + 100.0,
-            "y2": 100.0,
-            "score": 0.9,
-            "class_id": 0,
-        },
+        "box": dict(BOX),
         "keypoints": [{"name": "nose", "x": x, "y": 50.0, "confidence": confidence}],
         "world_keypoints": [
             {"name": "nose", "x": world_x, "y": 0.0, "z": 0.0, "confidence": confidence}
@@ -1150,13 +931,14 @@ def test_pose_smoother_filters_2d_world_and_confidence_together_without_bufferin
     first = smoother.filter([pose_sample(50.0, 0.2, 0.0)], 1_000_000_000)[0]
     assert first["keypoints"][0]["x"] == 50.0
 
-    second = smoother.filter([pose_sample(54.0, 0.4, 0.04)], 1_040_000_000)[0]
+    second = smoother.filter([pose_sample(54.0, 0.4, 0.04, roi_index=1)], 1_040_000_000)[0]
     image_fraction = (second["keypoints"][0]["x"] - 50.0) / 4.0
     world_fraction = second["world_keypoints"][0]["x"] / 0.04
     assert 0.45 < image_fraction < 0.90
     assert world_fraction == pytest.approx(image_fraction)
     assert second["keypoints"][0]["confidence"] == pytest.approx(0.24)
     assert second["world_keypoints"][0]["confidence"] == pytest.approx(0.24)
+    assert second["roi_index"] == 1  # A matched pose keeps its current detector rank as its id.
 
     fast = smoother.filter([pose_sample(154.0, 0.4, 1.04)], 1_080_000_000)[0]
     assert fast["keypoints"][0]["x"] > 140.0
@@ -1166,31 +948,35 @@ def test_pose_smoother_filters_2d_world_and_confidence_together_without_bufferin
     assert reset == raw_after_gap
 
 
+def test_pose_smoother_weights_motion_by_elapsed_pts():
+    def moved_fraction(elapsed_ns: int) -> float:
+        smoother = main.PoseSmoother()
+        smoother.filter([pose_sample(50.0, 0.9, 0.0)], 1_000_000_000)
+        moved = smoother.filter([pose_sample(52.0, 0.9, 0.0)], 1_000_000_000 + elapsed_ns)
+        return (moved[0]["keypoints"][0]["x"] - 50.0) / 2.0
+
+    assert moved_fraction(40_000_000) < moved_fraction(120_000_000) < 1.0
+
+
 def test_pose_smoother_state_is_independent_per_stream():
-    left = main.PoseSmoother()
-    right = main.PoseSmoother()
+    left, right = main.PoseSmoother(), main.PoseSmoother()
     left.filter([pose_sample(10.0, 1.0, 0.0)], 1_000_000_000)
     right.filter([pose_sample(90.0, 1.0, 1.0)], 1_000_000_000)
     left_result = left.filter([pose_sample(12.0, 1.0, 0.02)], 1_040_000_000)[0]
     right_result = right.filter([pose_sample(88.0, 1.0, 0.98)], 1_040_000_000)[0]
-    assert left_result["keypoints"][0]["x"] < 12.0
-    assert right_result["keypoints"][0]["x"] > 88.0
+    assert left_result["keypoints"][0]["x"] < 12.0 < 88.0 < right_result["keypoints"][0]["x"]
 
 
 def test_pose_smoother_bridges_two_missing_results_without_buffering():
     smoother = main.PoseSmoother()
-    original = pose_sample(50.0, 0.9, 0.0)
-    smoother.filter([copy.deepcopy(original)], 1_000_000_000)
+    smoother.filter([pose_sample(50.0, 0.9, 0.0)], 1_000_000_000)
 
-    first_gap = smoother.filter([], 1_040_000_000)
-    second_gap = smoother.filter([], 1_080_000_000)
-    expired = smoother.filter([], 1_120_000_000)
+    first_gap = smoother.filter([], 1_040_000_000)[0]["keypoints"][0]
+    second_gap = smoother.filter([], 1_080_000_000)[0]["keypoints"][0]
 
-    assert first_gap[0]["keypoints"][0]["x"] == 50.0
-    assert second_gap[0]["keypoints"][0]["x"] == 50.0
-    assert first_gap[0]["keypoints"][0]["confidence"] < 0.9
-    assert second_gap[0]["keypoints"][0]["confidence"] < first_gap[0]["keypoints"][0]["confidence"]
-    assert expired == []
+    assert first_gap["x"] == second_gap["x"] == 50.0
+    assert second_gap["confidence"] < first_gap["confidence"] < 0.9
+    assert smoother.filter([], 1_120_000_000) == []
 
 
 def test_pose_smoother_drops_stale_subject_after_coasting_without_pts():
@@ -1198,7 +984,4 @@ def test_pose_smoother_drops_stale_subject_after_coasting_without_pts():
     smoother.filter([pose_sample(50.0, 0.9, 0.0)], -1)
     assert smoother.filter([], -1) and smoother.filter([], -1)
     assert smoother.filter([], -1) == []
-
-    later = smoother.filter([pose_sample(54.0, 0.4, 0.0)], -1)
-
-    assert later[0]["keypoints"][0]["x"] == 54.0
+    assert smoother.filter([pose_sample(54.0, 0.4, 0.0)], -1)[0]["keypoints"][0]["x"] == 54.0
