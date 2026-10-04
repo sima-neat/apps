@@ -904,6 +904,26 @@ def make_pose_model(cfg: AppConfig):
     return pyneat.Model(cfg.pose_model_path, options)
 
 
+def copy_identity(identity: FrameIdentity, sample) -> None:
+    sample.stream_id = identity.stream_id
+    sample.frame_id = identity.frame_id
+    sample.pts_ns = identity.pts_ns
+    sample.dts_ns = identity.dts_ns
+    sample.duration_ns = identity.duration_ns
+    sample.input_seq = identity.input_seq
+    sample.orig_input_seq = identity.orig_input_seq
+
+
+def reliable_model_run_options():
+    options = pyneat.RunOptions()
+    options.preset = pyneat.RunPreset.Reliable
+    options.overflow_policy = pyneat.OverflowPolicy.Block
+    options.output_memory = pyneat.OutputMemory.ZeroCopy
+    options.input_timeout_ms = 30000
+    options.startup_preflight = False
+    return options
+
+
 def pose_input_sample(tensor, context: PoseInputContext | None):
     sample = pyneat.make_tensor_sample("pose_input", tensor)
     sample.payload_type = pyneat.PayloadType.Tensor
@@ -911,14 +931,7 @@ def pose_input_sample(tensor, context: PoseInputContext | None):
     sample.format = tensor.semantic.tess.format
     sample.payload_tag = sample.format
     if context is not None:
-        identity = context.identity
-        sample.stream_id = identity.stream_id
-        sample.frame_id = identity.frame_id
-        sample.pts_ns = identity.pts_ns
-        sample.dts_ns = identity.dts_ns
-        sample.duration_ns = identity.duration_ns
-        sample.input_seq = identity.input_seq
-        sample.orig_input_seq = identity.orig_input_seq
+        copy_identity(context.identity, sample)
     return sample
 
 
@@ -949,13 +962,9 @@ def build_pose_run(model):
     graph.add(model.inference())
     graph.add(model.postprocess())
     graph.add(pyneat.nodes.output("pose_output", pyneat.OutputOptions.every_frame(4)))
-    options = pyneat.RunOptions()
-    options.preset = pyneat.RunPreset.Reliable
-    options.overflow_policy = pyneat.OverflowPolicy.Block
-    options.output_memory = pyneat.OutputMemory.ZeroCopy
-    options.input_timeout_ms = 30000
-    options.startup_preflight = False
-    return graph, graph.build([pose_input_sample(seed_tensor, None)], options)
+    return graph, graph.build(
+        [pose_input_sample(seed_tensor, None)], reliable_model_run_options()
+    )
 
 
 def image_input_sample(name: str, tensor, identity: FrameIdentity | None):
@@ -965,13 +974,7 @@ def image_input_sample(name: str, tensor, identity: FrameIdentity | None):
     sample.format = "RGB"
     sample.payload_tag = sample.format
     if identity is not None:
-        sample.stream_id = identity.stream_id
-        sample.frame_id = identity.frame_id
-        sample.pts_ns = identity.pts_ns
-        sample.dts_ns = identity.dts_ns
-        sample.duration_ns = identity.duration_ns
-        sample.input_seq = identity.input_seq
-        sample.orig_input_seq = identity.orig_input_seq
+        copy_identity(identity, sample)
     return sample
 
 
@@ -1001,14 +1004,9 @@ def build_detector_run(model, max_width: int, max_height: int):
     )
     graph.connect(input_graph, model_graph)
     graph.connect(model_graph, output_graph)
-    options = pyneat.RunOptions()
-    options.preset = pyneat.RunPreset.Reliable
-    options.overflow_policy = pyneat.OverflowPolicy.Block
-    options.output_memory = pyneat.OutputMemory.ZeroCopy
-    options.input_timeout_ms = 30000
-    options.startup_preflight = False
     return graph, graph.build(
-        [image_input_sample("detector_input", seed_tensor, None)], options
+        [image_input_sample("detector_input", seed_tensor, None)],
+        reliable_model_run_options(),
     )
 
 
