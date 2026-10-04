@@ -122,7 +122,7 @@ ScalarConfig ScalarConfig::load(const std::filesystem::path& path) {
       }
       list_block_indent = -1;
     }
-    if (line.rfind("- ", 0) == 0) {
+    if (line == "-" || line.rfind("- ", 0) == 0) {
       list_block_indent = indent;
       continue;
     }
