@@ -1702,20 +1702,6 @@ def dispatch_pose_jobs(runtime: AppRuntime, cfg: AppConfig) -> None:
         set_error(runtime, error)
 
 
-def publish_aggregate(runtime: AppRuntime, job_id: int) -> None:
-    state = runtime.state
-    with state.condition:
-        aggregate = state.aggregates.pop(job_id, None)
-        state.condition.notify_all()
-    if aggregate is not None:
-        complete_frame(
-            runtime.streams[aggregate.stream_index],
-            aggregate.stream_sequence,
-            aggregate.identity,
-            aggregate.poses,
-        )
-
-
 def expire_pose_jobs(runtime: AppRuntime) -> None:
     now = time.monotonic()
     with runtime.state.condition:
@@ -1800,21 +1786,29 @@ def pull_pose_outputs(runtime: AppRuntime, cfg: AppConfig) -> None:
                 aggregate = state.aggregates.get(context.job_id)
                 expired = aggregate is None or aggregate.expired
             pose = None if expired else parse_pose_output(sample, context, cfg)
-            complete = False
+            completed = None
             with state.condition:
+                # Claim a completed aggregate under the same lock that counts the
+                # output, so a concurrent expiry pass cannot also publish it. An
+                # expired aggregate stays as a tombstone until its last output.
                 aggregate = state.aggregates.get(context.job_id)
                 if aggregate is not None:
                     aggregate.completed += 1
                     if not aggregate.expired and pose is not None:
                         aggregate.poses.append(pose)
-                    complete = aggregate.completed == aggregate.expected
-                    expired = aggregate.expired
-                    if complete and expired:
+                    if aggregate.completed >= aggregate.expected:
                         del state.aggregates[context.job_id]
                         state.condition.notify_all()
+                        if not aggregate.expired:
+                            completed = aggregate
             runtime.streams[context.stream_index].completed_rois += 1
-            if complete and not expired:
-                publish_aggregate(runtime, context.job_id)
+            if completed is not None:
+                complete_frame(
+                    runtime.streams[completed.stream_index],
+                    completed.stream_sequence,
+                    completed.identity,
+                    completed.poses,
+                )
     except Exception as error:  # noqa: BLE001 - propagate worker failures to the owner thread.
         set_error(runtime, error)
 

@@ -83,6 +83,54 @@ std::vector<T> expire_pending_fifo(std::deque<std::optional<T>>& pending,
   return expired;
 }
 
+// Pose aggregates are claimed exactly once, under the caller's state lock, by
+// whichever path gets there first. The output that completes a live aggregate
+// removes it; expiry marks it expired and leaves a tombstone that absorbs the
+// remaining late outputs. The claimant publishes outside the lock.
+//
+// Records one returned ROI output and returns the aggregate when that output
+// completes a live one.
+template <typename Aggregates, typename Pose>
+std::optional<typename Aggregates::mapped_type>
+record_pose_output(Aggregates& aggregates, const typename Aggregates::key_type& job_id,
+                   std::optional<Pose> pose) {
+  const auto found = aggregates.find(job_id);
+  if (found == aggregates.end()) {
+    return std::nullopt;
+  }
+  auto& aggregate = found->second;
+  ++aggregate.completed;
+  if (!aggregate.expired && pose.has_value()) {
+    aggregate.poses.push_back(std::move(*pose));
+  }
+  if (aggregate.completed < aggregate.expected) {
+    return std::nullopt;
+  }
+  std::optional<typename Aggregates::mapped_type> claimed;
+  if (!aggregate.expired) {
+    claimed = std::move(aggregate);
+  }
+  aggregates.erase(found);
+  return claimed;
+}
+
+// Marks every live aggregate whose deadline passed as expired and returns the
+// copies to publish with the poses gathered so far.
+template <typename Aggregates, typename ShouldExpire>
+std::vector<typename Aggregates::mapped_type>
+claim_expired_aggregates(Aggregates& aggregates, ShouldExpire&& should_expire) {
+  std::vector<typename Aggregates::mapped_type> expired;
+  for (auto& entry : aggregates) {
+    auto& aggregate = entry.second;
+    if (!aggregate.expired && should_expire(aggregate)) {
+      aggregate.expired = true;
+      expired.push_back(aggregate);
+      aggregate.poses.clear();
+    }
+  }
+  return expired;
+}
+
 template <typename T> class OrderedCompletionQueue {
 public:
   std::vector<T> complete(std::uint64_t sequence, T value) {

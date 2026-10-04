@@ -7,6 +7,8 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -202,6 +204,55 @@ bool test_math_contract() {
                      second_gap[0].keypoints[0].confidence < first_gap[0].keypoints[0].confidence,
                  "coasted pose confidence decays while the estimate is unavailable");
   }
+  return ok;
+}
+
+bool test_pose_aggregate_claims_are_exclusive() {
+  struct Aggregate {
+    std::uint64_t sequence = 0;
+    int expected = 1;
+    int completed = 0;
+    bool expired = false;
+    std::vector<int> poses;
+  };
+  const auto aggregate = [](std::uint64_t sequence, int expected) {
+    Aggregate value;
+    value.sequence = sequence;
+    value.expected = expected;
+    return value;
+  };
+  const auto always = [](const Aggregate&) { return true; };
+  bool ok = true;
+
+  // The last ROI output completes a live frame, then an expiry pass runs before
+  // the puller publishes: the output already claimed the frame.
+  std::map<std::uint64_t, Aggregate> aggregates{{7, aggregate(1, 1)}};
+  auto completed = blazepose_app::record_pose_output(aggregates, 7, std::optional<int>(42));
+  const auto expired = blazepose_app::claim_expired_aggregates(aggregates, always);
+  blazepose_app::OrderedCompletionQueue<std::vector<int>> publications;
+  std::size_t published = 0;
+  for (const auto& claimed : expired) {
+    published += publications.complete(claimed.sequence, claimed.poses).size();
+  }
+  if (completed.has_value()) {
+    published += publications.complete(completed->sequence, completed->poses).size();
+  }
+  ok &= expect(completed.has_value() && completed->poses == std::vector<int>{42} &&
+                   expired.empty() && aggregates.empty() && published == 1,
+               "a completed pose aggregate is claimed before a racing expiry pass");
+
+  // Expiry claims first and publishes the partial frame; the late output is
+  // absorbed by the tombstone and claims nothing.
+  aggregates = {{8, aggregate(2, 2)}};
+  const bool first_output_claims =
+      blazepose_app::record_pose_output(aggregates, 8, std::optional<int>(1)).has_value();
+  const auto partial = blazepose_app::claim_expired_aggregates(aggregates, always);
+  const bool late_output_claims =
+      blazepose_app::record_pose_output(aggregates, 8, std::optional<int>(2)).has_value();
+  ok &= expect(!first_output_claims && partial.size() == 1 &&
+                   partial[0].poses == std::vector<int>{1} && !late_output_claims &&
+                   aggregates.empty(),
+               "an expired aggregate publishes partial poses once and absorbs late outputs");
   return ok;
 }
 
@@ -533,6 +584,7 @@ int main(int argc, char** argv) {
     return 2;
   }
   bool ok = test_math_contract();
+  ok &= test_pose_aggregate_claims_are_exclusive();
   ok &= test_cli(argv[1]);
   ok &= test_stream_limit(argv[1]);
   ok &= test_duplicate_stream_identity(argv[1]);

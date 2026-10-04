@@ -1436,35 +1436,14 @@ void dispatch_pose_jobs(AppRuntime& app, const AppConfig& cfg) {
   }
 }
 
-void publish_completed_aggregate(AppRuntime& app, std::uint64_t job_id) {
-  PoseAggregate aggregate;
-  {
-    std::lock_guard<std::mutex> lock(app.state.mutex);
-    const auto found = app.state.aggregates.find(job_id);
-    if (found == app.state.aggregates.end()) {
-      return;
-    }
-    aggregate = std::move(found->second);
-    app.state.aggregates.erase(found);
-    app.state.cv.notify_all();
-  }
-  complete_frame(*app.streams[static_cast<std::size_t>(aggregate.stream_index)],
-                 aggregate.stream_sequence, aggregate.identity, std::move(aggregate.poses));
-}
-
 void expire_pose_jobs(AppRuntime& app) {
   std::vector<PoseAggregate> expired;
   const auto now = Clock::now();
   {
     std::lock_guard<std::mutex> lock(app.state.mutex);
-    for (auto& entry : app.state.aggregates) {
-      PoseAggregate& aggregate = entry.second;
-      if (!aggregate.expired && now >= aggregate.deadline) {
-        aggregate.expired = true;
-        expired.push_back(aggregate);
-        aggregate.poses.clear();
-      }
-    }
+    expired = blazepose_app::claim_expired_aggregates(
+        app.state.aggregates,
+        [now](const PoseAggregate& aggregate) { return now >= aggregate.deadline; });
   }
   for (PoseAggregate& aggregate : expired) {
     StreamRuntime& stream = *app.streams[static_cast<std::size_t>(aggregate.stream_index)];
@@ -1528,26 +1507,19 @@ void pull_pose_outputs(AppRuntime& app, const AppConfig& cfg) {
         expired = found == app.state.aggregates.end() || found->second.expired;
       }
       const auto pose = expired ? std::nullopt : parse_pose_output(sample, context, cfg);
-      bool complete = false;
+      std::optional<PoseAggregate> completed;
       {
+        // Claim a completed aggregate under the same lock that counts the output,
+        // so a concurrent expiry pass cannot also publish it.
         std::lock_guard<std::mutex> lock(app.state.mutex);
-        const auto found = app.state.aggregates.find(context.job_id);
-        if (found != app.state.aggregates.end()) {
-          ++found->second.completed;
-          if (!found->second.expired && pose.has_value()) {
-            found->second.poses.push_back(*pose);
-          }
-          complete = found->second.completed == found->second.expected;
-          expired = found->second.expired;
-          if (complete && expired) {
-            app.state.aggregates.erase(found);
-            app.state.cv.notify_all();
-          }
-        }
+        completed = blazepose_app::record_pose_output(app.state.aggregates, context.job_id, pose);
+        app.state.cv.notify_all();
       }
       ++app.streams[static_cast<std::size_t>(context.stream_index)]->completed_rois;
-      if (complete && !expired) {
-        publish_completed_aggregate(app, context.job_id);
+      if (completed.has_value()) {
+        complete_frame(*app.streams[static_cast<std::size_t>(completed->stream_index)],
+                       completed->stream_sequence, completed->identity,
+                       std::move(completed->poses));
       }
     }
   } catch (...) {

@@ -738,6 +738,58 @@ def test_pose_timeout_retains_correlation_until_late_roi_output(monkeypatch):
     assert state.error is None
 
 
+def test_completed_pose_aggregate_is_claimed_before_expiry_can_publish_it(monkeypatch):
+    identity = main.FrameIdentity("camera0", 1, 1_000_000, -1, -1, 1, 1)
+    context = main.PoseInputContext(1, 0, 0, 1, {}, (1, 0, 0, 0, 1, 0), identity)
+    state = main.SharedState(1)
+    state.pending_pose_outputs.append(context)
+    state.aggregates[1] = main.PoseAggregate(0, 1, 1, identity, main.time.monotonic() + 60.0)
+    runtime = SimpleNamespace(state=state, streams=[], pose_run=None)
+    expiry_runs = []
+
+    class RacingStream(SimpleNamespace):
+        armed = False
+
+        def __setattr__(self, name, value):
+            super().__setattr__(name, value)
+            if name == "completed_rois" and RacingStream.armed and not expiry_runs:
+                # The final ROI output has been counted under the state lock and the
+                # lock released. Before the puller publishes, the frame's deadline
+                # passes and the dispatcher runs an expiry pass.
+                with state.condition:
+                    for aggregate in state.aggregates.values():
+                        aggregate.deadline = 0.0
+                main.expire_pose_jobs(runtime)
+                expiry_runs.append(True)
+
+    stream = RacingStream(**vars(runtime_stream(SimpleNamespace(send_metadata=lambda *_: None))))
+    runtime.streams.append(stream)
+
+    class OneOutputRun:
+        @staticmethod
+        def pull(_name, _timeout):
+            with state.condition:
+                state.stopping = True
+            return object()
+
+        @staticmethod
+        def can_pull():
+            return True
+
+    runtime.pose_run = OneOutputRun()
+    monkeypatch.setattr(main, "parse_pose_output", lambda *_args: None)
+    RacingStream.armed = True
+
+    main.pull_pose_outputs(runtime, SimpleNamespace())
+
+    assert expiry_runs == [True]
+    assert state.error is None
+    assert stream.metadata_frames == 1
+    assert stream.outstanding_frames == 0
+    assert stream.timed_out_jobs == 0
+    assert not state.aggregates
+
+
 def test_incomplete_closed_stream_is_not_a_successful_finite_run():
     runtime = SimpleNamespace(
         streams=[
