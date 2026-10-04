@@ -256,6 +256,32 @@ bool test_pose_aggregate_claims_are_exclusive() {
   return ok;
 }
 
+bool test_failed_metadata_pair_does_not_count_toward_the_frame_limit() {
+  int metadata_frames = 0;
+  std::uint64_t send_failures = 0;
+  std::vector<std::string> sent;
+  bool fail_world = true;
+  const auto send = [&](const char* type) {
+    sent.emplace_back(type);
+    return !(fail_world && std::string(type) == "auxiliary-visualization");
+  };
+  const bool failed_pair = blazepose_app::send_metadata_pair(send, metadata_frames, send_failures);
+  bool ok =
+      expect(!failed_pair && metadata_frames == 0 && send_failures == 1 &&
+                 sent == std::vector<std::string>{"pose-estimation", "auxiliary-visualization"},
+             "a pair with a failed send is attempted in full but not counted");
+  fail_world = false;
+  ok &= expect(blazepose_app::send_metadata_pair(send, metadata_frames, send_failures) &&
+                   metadata_frames == 1 && send_failures == 1,
+               "a fully queued pair counts toward runtime.frames");
+  // Both frames completed, so none is outstanding; only one counts.
+  ok &= expect(blazepose_app::stream_can_admit_frame(metadata_frames, 0, 2) &&
+                   !blazepose_app::stream_is_drained(false, 0, metadata_frames, 2) &&
+                   blazepose_app::stream_is_drained(true, 0, metadata_frames, 2),
+               "failed pairs keep admitting frames and still drain when the source closes");
+  return ok;
+}
+
 bool test_cli(const std::string& binary) {
   bool ok = true;
   const auto help = spawn_and_wait(binary, {"--help"}, 20000);
@@ -607,6 +633,7 @@ int main(int argc, char** argv) {
   }
   bool ok = test_math_contract();
   ok &= test_pose_aggregate_claims_are_exclusive();
+  ok &= test_failed_metadata_pair_does_not_count_toward_the_frame_limit();
   ok &= test_cli(argv[1]);
   ok &= test_stream_limit(argv[1]);
   ok &= test_duplicate_stream_identity(argv[1]);

@@ -58,6 +58,7 @@ def runtime_stream(sender, *, outstanding: int = 1, temporal_filter: bool = Fals
         pending_publications={},
         next_publication_sequence=1,
         metadata_frames=0,
+        metadata_send_failures=0,
         outstanding_frames=outstanding,
         timed_out_jobs=0,
         detector_frames=0,
@@ -455,6 +456,7 @@ def test_pose_dispatch_aborts_expired_rejected_push_and_continues(monkeypatch):
     class Sender:
         def send_metadata(self, *args):
             calls.append(args)
+            return True
 
     class Tensor:
         def clone(self):
@@ -531,7 +533,7 @@ def test_rejected_detector_push_accepts_concurrent_expiry_tombstone(monkeypatch)
         def cvu():
             return object()
 
-    stream_runtime = runtime_stream(SimpleNamespace(send_metadata=lambda *_args: None))
+    stream_runtime = runtime_stream(SimpleNamespace(send_metadata=lambda *_args: True))
     identity = main.FrameIdentity("camera0", 1, 1_000_000, -1, -1, 1, 1)
     job = main.FrameJob(1, 1, 0, Tensor(), [], identity, main.time.monotonic() + 1.0)
     state = main.SharedState(1)
@@ -580,7 +582,7 @@ def test_detector_dispatch_aborts_expired_rejected_push_and_continues(monkeypatc
             return object()
 
     stream_runtime = runtime_stream(
-        SimpleNamespace(send_metadata=lambda *args: calls.append(args)), outstanding=2
+        SimpleNamespace(send_metadata=lambda *args: calls.append(args) or True), outstanding=2
     )
     identity = main.FrameIdentity("camera0", 1, 1_000_000, -1, -1, 1, 1)
     now = main.time.monotonic()
@@ -628,6 +630,7 @@ def test_detector_timeout_completes_without_output_and_discards_late_result(monk
     class Sender:
         def send_metadata(self, *args):
             calls.append(args)
+            return True
 
     stream_runtime = runtime_stream(Sender())
     identity = main.FrameIdentity("camera0", 1, 1_000_000, -1, -1, 1, 1)
@@ -683,7 +686,7 @@ def test_detector_dispatch_expires_while_tombstones_hold_capacity(monkeypatch):
         def try_push(*_args):
             raise AssertionError("an expired frame must not reach the detector")
 
-    stream_runtime = runtime_stream(SimpleNamespace(send_metadata=lambda *_args: None))
+    stream_runtime = runtime_stream(SimpleNamespace(send_metadata=lambda *_args: True))
     identity = main.FrameIdentity("camera0", 1, 1_000_000, -1, -1, 1, 1)
     state = main.SharedState(1)
     state.pending_detector_outputs.append(None)
@@ -720,7 +723,7 @@ def test_detector_dispatch_expires_while_tombstones_hold_capacity(monkeypatch):
 
 
 def test_pose_timeout_retains_correlation_until_late_roi_output(monkeypatch):
-    stream_runtime = runtime_stream(SimpleNamespace(send_metadata=lambda *_args: None))
+    stream_runtime = runtime_stream(SimpleNamespace(send_metadata=lambda *_args: True))
     identity = main.FrameIdentity("camera0", 1, 1_000_000, -1, -1, 1, 1)
     context = main.PoseInputContext(1, 0, 0, 1, {}, (1, 0, 0, 0, 1, 0), identity)
     state = main.SharedState(1)
@@ -787,7 +790,7 @@ def test_completed_pose_aggregate_is_claimed_before_expiry_can_publish_it(monkey
                 main.expire_pose_jobs(runtime)
                 expiry_runs.append(True)
 
-    stream = RacingStream(**vars(runtime_stream(SimpleNamespace(send_metadata=lambda *_: None))))
+    stream = RacingStream(**vars(runtime_stream(SimpleNamespace(send_metadata=lambda *_: True))))
     runtime.streams.append(stream)
 
     class OneOutputRun:
@@ -813,6 +816,45 @@ def test_completed_pose_aggregate_is_claimed_before_expiry_can_publish_it(monkey
     assert stream.outstanding_frames == 0
     assert stream.timed_out_jobs == 0
     assert not state.aggregates
+
+
+@pytest.mark.parametrize("failure", ["returns-false", "raises"])
+def test_failed_metadata_pair_completes_the_frame_without_counting_it(failure: str):
+    class Sender:
+        def __init__(self):
+            self.calls = []
+            self.fail = True
+
+        def send_metadata(self, metadata_type, *_args):
+            self.calls.append(metadata_type)
+            if not self.fail or metadata_type == "pose-estimation":
+                return True
+            if failure == "raises":
+                raise RuntimeError("metadata datagram could not be queued")
+            return False
+
+    sender = Sender()
+    stream = runtime_stream(sender, outstanding=2)
+    identity = main.FrameIdentity("camera0", 1, 1_000_000, -1, -1, 1, 1)
+
+    main.complete_frame(stream, 1, identity, [])
+
+    assert sender.calls == ["pose-estimation", "auxiliary-visualization"]
+    assert stream.metadata_frames == 0
+    assert stream.metadata_send_failures == 1
+    assert stream.outstanding_frames == 1
+
+    sender.fail = False
+    main.complete_frame(stream, 2, identity, [])
+
+    assert stream.metadata_frames == 1
+    assert stream.metadata_send_failures == 1
+    assert stream.outstanding_frames == 0
+    stream.closed = True
+    runtime = SimpleNamespace(streams=[stream])
+    assert main.all_streams_done(runtime, 2)
+    with pytest.raises(RuntimeError, match="before reaching runtime.frames=2: camera0"):
+        main.require_successful_completion(runtime, 2)
 
 
 def test_incomplete_closed_stream_is_not_a_successful_finite_run():
@@ -947,6 +989,7 @@ def test_publish_metadata_sends_paired_overlay_and_auxiliary_messages():
     class Sender:
         def send_metadata(self, *args):
             calls.append(args)
+            return True
 
     stream_runtime = runtime_stream(Sender(), temporal_filter=True)
     identity = main.FrameIdentity("camera0", 7, 1_234_000_000, -1, -1, 7, 7)
@@ -970,6 +1013,7 @@ def test_frame_publication_waits_for_prior_sequence_and_skips_dropped_work():
     class Sender:
         def send_metadata(self, _type, _data, _timestamp, frame_id):
             calls.append(frame_id)
+            return True
 
     stream_runtime = runtime_stream(Sender(), outstanding=3)
     first = main.FrameIdentity("camera0", 10, 10_000_000, -1, -1, 10, 10)
