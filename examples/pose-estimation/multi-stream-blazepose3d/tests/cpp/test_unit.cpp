@@ -452,6 +452,24 @@ bool test_pose_count_limit(const std::string& binary) {
   return ok;
 }
 
+bool test_roi_scale_must_be_finite_and_positive(const std::string& binary) {
+  bool ok = true;
+  for (const std::string value : {".nan", ".inf", "-.inf", "0", "-1.5"}) {
+    const fs::path config =
+        write_config("roi_scale", "  - id: camera0\n    url: rtsp://127.0.0.1/src0\n"
+                                  "    codec: h264\n    insight_channel: 0\n");
+    std::ofstream(config, std::ios::app) << "pose:\n  roi_scale: " << value << "\n";
+    const auto result =
+        spawn_and_wait(binary, {"--config", config.string(), "--validate-config-only"}, 20000);
+    ok &= expect(result.exit_code == 1 &&
+                     result.stderr_text.find("pose.roi_scale must be finite and > 0") !=
+                         std::string::npos,
+                 "pose.roi_scale " + value + " is rejected before it reaches ROI rounding");
+    remove_dir(config.parent_path().string());
+  }
+  return ok;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -470,5 +488,6 @@ int main(int argc, char** argv) {
   ok &= test_yaml_scalar_parity(argv[1]);
   ok &= test_metadata_contract_correlation();
   ok &= test_pose_count_limit(argv[1]);
+  ok &= test_roi_scale_must_be_finite_and_positive(argv[1]);
   return ok ? 0 : 1;
 }
