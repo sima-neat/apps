@@ -16,6 +16,3 @@ sima_neat_apps_module(
   E2E_TEST
   OUTPUT_TARGET_VAR MULTISTREAM_BLAZEPOSE3D_TARGET
 )
-
-find_package(yaml-cpp REQUIRED)
-target_link_libraries(${MULTISTREAM_BLAZEPOSE3D_TARGET} PRIVATE yaml-cpp)
