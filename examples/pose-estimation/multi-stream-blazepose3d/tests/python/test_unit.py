@@ -129,6 +129,15 @@ REJECTED_CONFIGS = [
     ("no-host", config_text().replace("host: 127.0.0.1", "host: ''"), "host must be set"),
     ("five-streams", config_text([stream(i) for i in range(5)]), "between 1 and 4 entries"),
     ("duplicate-id", config_text([stream(0), stream(1, id="camera0")]), "ids must be unique"),
+    ("numeric-id", config_text([stream(0, id=123)]), "id must be a string"),
+    (
+        "timestamp-id",
+        config_text().replace("id: camera0", "id: 2026-10-04"),
+        "id must be a string",
+    ),
+    ("boolean-url", config_text([stream(0, url=True)]), "url must be a string"),
+    ("null-id", config_text([stream(0, id=None)]), "id must be set"),
+    ("null-url", config_text([stream(0, url=None)]), "url must be set"),
     (
         "standalone-dash",
         config_text([stream(0), stream(1, id="camera0")]).replace(
