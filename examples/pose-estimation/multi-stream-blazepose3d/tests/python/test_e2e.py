@@ -74,7 +74,7 @@ class RtpVideoListener:
         if packet[0] & 0x10:
             if header_size + 4 > len(packet):
                 return None
-            extension_words = int.from_bytes(packet[header_size + 2 : header_size + 4])
+            extension_words = int.from_bytes(packet[header_size + 2 : header_size + 4], "big")
             header_size += 4 + 4 * extension_words
             if header_size >= len(packet):
                 return None
@@ -111,7 +111,7 @@ class RtpVideoListener:
             while position < len(payload):
                 if position + 2 > len(payload):
                     return False
-                nal_size = int.from_bytes(payload[position : position + 2])
+                nal_size = int.from_bytes(payload[position : position + 2], "big")
                 position += 2
                 if nal_size == 0 or position + nal_size > len(payload):
                     return False
@@ -141,7 +141,7 @@ class RtpVideoListener:
         while position < len(payload):
             if position + 2 > len(payload):
                 return False
-            nal_size = int.from_bytes(payload[position : position + 2])
+            nal_size = int.from_bytes(payload[position : position + 2], "big")
             position += 2
             if nal_size < 2 or position + nal_size > len(payload):
                 return False

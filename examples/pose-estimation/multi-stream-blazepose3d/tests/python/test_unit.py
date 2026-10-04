@@ -206,6 +206,26 @@ def test_config_defaults_null_codec_and_decodes_quoted_strings(tmp_path: Path):
     assert cfg.insight_host == "127.0.0.1"
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        "streams: [{id: camera0, url: rtsp://127.0.0.1/src0, insight_channel: 0}]\n",
+        "streams:\n  - {id: camera0, url: rtsp://127.0.0.1/src0, insight_channel: 0}\n",
+        "runtime: {frames: 1}\n",
+    ],
+)
+def test_flow_style_collections_are_rejected_like_cpp(tmp_path: Path, body: str):
+    path = tmp_path / "config.yaml"
+    path.write_text(config_text() + body, encoding="utf-8")
+    with pytest.raises(ValueError, match="flow-style YAML collections are not supported"):
+        main.load_app_config(path)
+
+
+def test_empty_flow_collections_stay_allowed(tmp_path: Path):
+    cfg = load_config(tmp_path, config_text() + "pose: {}\n")
+    assert len(cfg.streams) == 1
+
+
 class _Options:
     """Records attribute writes; unset attributes read as the -1 Core default."""
 
