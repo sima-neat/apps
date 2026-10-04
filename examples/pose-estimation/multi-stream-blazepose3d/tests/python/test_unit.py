@@ -392,7 +392,6 @@ def test_pose_presence_logit_is_activated_before_thresholding(monkeypatch):
         1,
         0,
         0,
-        1,
         {
             "x1": 0.0,
             "y1": 0.0,
@@ -435,7 +434,7 @@ def test_non_finite_landmarks_discard_only_that_pose(
     identity = main.FrameIdentity("camera0", 1, 0, -1, -1, 1, 1)
     box = {"x1": 0.0, "y1": 0.0, "x2": 100.0, "y2": 100.0, "score": 0.9, "class_id": 0}
     context = main.PoseInputContext(
-        1, 0, 0, 1, box, (1.0, 0.0, 0.0, 0.0, 1.0, 0.0), identity
+        1, 0, 0, box, (1.0, 0.0, 0.0, 0.0, 1.0, 0.0), identity
     )
     cfg = SimpleNamespace(pose_presence_threshold=0.5)
     assert main.parse_pose_output(object(), context, cfg) is not None
@@ -805,7 +804,7 @@ def test_detector_dispatch_expires_while_tombstones_hold_capacity(monkeypatch):
 def test_pose_timeout_retains_correlation_until_late_roi_output(monkeypatch):
     stream_runtime = runtime_stream(SimpleNamespace(send_metadata=lambda *_args: True))
     identity = main.FrameIdentity("camera0", 1, 1_000_000, -1, -1, 1, 1)
-    context = main.PoseInputContext(1, 0, 0, 1, {}, (1, 0, 0, 0, 1, 0), identity)
+    context = main.PoseInputContext(1, 0, 0, {}, (1, 0, 0, 0, 1, 0), identity)
     state = main.SharedState(1)
     state.pending_pose_outputs.append(context)
     state.aggregates[1] = main.PoseAggregate(
@@ -848,7 +847,7 @@ def test_pose_timeout_retains_correlation_until_late_roi_output(monkeypatch):
 
 def test_completed_pose_aggregate_is_claimed_before_expiry_can_publish_it(monkeypatch):
     identity = main.FrameIdentity("camera0", 1, 1_000_000, -1, -1, 1, 1)
-    context = main.PoseInputContext(1, 0, 0, 1, {}, (1, 0, 0, 0, 1, 0), identity)
+    context = main.PoseInputContext(1, 0, 0, {}, (1, 0, 0, 0, 1, 0), identity)
     state = main.SharedState(1)
     state.pending_pose_outputs.append(context)
     state.aggregates[1] = main.PoseAggregate(0, 1, 1, identity, main.time.monotonic() + 60.0)

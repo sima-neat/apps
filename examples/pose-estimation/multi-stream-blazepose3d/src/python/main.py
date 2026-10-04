@@ -131,7 +131,6 @@ class PoseInputContext:
     job_id: int
     stream_index: int
     roi_index: int
-    roi_count: int
     box: dict[str, Any]
     affine: tuple[float, float, float, float, float, float]
     identity: FrameIdentity
@@ -779,7 +778,6 @@ def build_source_options(
     # stream negotiates 30000/1001, which a 30/1 caps filter cannot accept.
     options.dec_fps = fps
     options.insert_queue = True
-    options.out_format = pyneat.Format.NV12
     options.decoder_name = f"decoder_{stream.id}"
     options.decoder_raw_output = True
     options.auto_caps_from_stream = True
@@ -789,11 +787,6 @@ def build_source_options(
         options.fallback_h264_width = width
         options.fallback_h264_height = height
         options.fallback_h264_fps = fps
-    options.output_caps.enable = True
-    options.output_caps.format = pyneat.Format.NV12
-    options.output_caps.width = width
-    options.output_caps.height = height
-    options.output_caps.memory = pyneat.CapsMemory.Any
     return options
 
 
@@ -857,7 +850,7 @@ def make_decoder(options):
             options.dec_width,
             options.dec_height,
             options.output_caps.fps,
-            options.output_caps.memory,
+            pyneat.CapsMemory.Any,
         )
     )
     graph.add(pyneat.nodes.output("analytics_frame"))
@@ -1709,7 +1702,6 @@ def dispatch_pose_jobs(runtime: AppRuntime, cfg: AppConfig) -> None:
                     job.job_id,
                     job.stream_index,
                     prepared.roi_index,
-                    len(prepared_inputs),
                     prepared.box,
                     prepared.affine,
                     job.identity,
