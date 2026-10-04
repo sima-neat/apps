@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import dataclasses
 import json
 import subprocess
 import sys
@@ -897,6 +898,47 @@ def test_frame_publication_waits_for_prior_sequence_and_skips_dropped_work():
     assert [call[3] for call in sender.calls] == ["10", "10", "11", "11"]
     assert stream_runtime.metadata_frames == 2
     assert stream_runtime.next_publication_sequence == 4
+
+
+def test_pushed_samples_carry_the_full_frame_identity(monkeypatch):
+    monkeypatch.setattr(
+        main,
+        "pyneat",
+        SimpleNamespace(
+            make_tensor_sample=lambda *_args: SimpleNamespace(),
+            PayloadType=SimpleNamespace(Image="image", Tensor="tensor"),
+        ),
+    )
+    identity = main.FrameIdentity("camera0", 7, 70, 69, 33, 5, 4)
+    tensor = SimpleNamespace(semantic=SimpleNamespace(tess=SimpleNamespace(format="BF16")))
+    context = main.PoseInputContext(1, 0, 0, BOX, UNIT_AFFINE, identity)
+    for sample in (
+        main.image_input_sample("detector_input", tensor, identity),
+        main.pose_input_sample(tensor, context),
+    ):
+        fields = [field.name for field in dataclasses.fields(identity)]
+        assert [getattr(sample, name) for name in fields] == list(dataclasses.astuple(identity))
+
+
+def test_shutdown_summary_reports_each_stream(capsys):
+    counters = {
+        "source_frames": 3,
+        "detector_frames": 3,
+        "metadata_frames": 2,
+        "metadata_send_failures": 1,
+        "selected_rois": 4,
+        "completed_rois": 4,
+        "detector_mailbox_drops": 0,
+        "pose_mailbox_drops": 1,
+        "timed_out_jobs": 1,
+    }
+    stream = SimpleNamespace(config=SimpleNamespace(id="camera0"), **counters)
+    main.print_summary(SimpleNamespace(streams=[stream]), 2.0)
+    output = capsys.readouterr().out.splitlines()
+    assert output == [
+        "[summary stream=camera0] " + " ".join(f"{key}={value}" for key, value in counters.items()),
+        "[summary aggregate] elapsed_s=2.000 metadata_fps=1.000 pose_fps=2.000",
+    ]
 
 
 def test_shutdown_does_not_wait_for_an_uninterruptible_source_build():
