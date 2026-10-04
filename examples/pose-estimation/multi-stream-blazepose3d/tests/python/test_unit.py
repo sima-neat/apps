@@ -436,6 +436,14 @@ def test_detector_outputs_keep_only_the_latest_frame_with_people(monkeypatch):
     assert stream_runtime.outstanding_frames == 1
 
 
+def test_accepted_input_without_output_stops_the_app(monkeypatch):
+    monkeypatch.setattr(main, "INFERENCE_STALL_TIMEOUT_S", 0.05)
+    run = SimpleNamespace(pull=lambda *_args: None, can_pull=lambda: True)
+    runtime = SimpleNamespace(state=main.SharedState(1))
+    with pytest.raises(RuntimeError, match="BlazePose inference stalled: no output for 0.05 s"):
+        main.pull_model_output(runtime, run, "pose_output", "BlazePose", main.deque(["roi"]))
+
+
 def test_pose_outputs_publish_a_frame_once_all_its_rois_return(monkeypatch):
     sender = RecordingSender()
     stream_runtime = runtime_stream(sender, outstanding=1)

@@ -210,6 +210,7 @@ At shutdown each stream prints `frames_in` (source frames admitted, which `runti
 - Replace all placeholders before running and verify both model paths.
 - Reduce `pose.max_people_per_frame` when pose throughput, rather than detection, is the bottleneck.
 - H.265 input and video passthrough require an Insight/browser environment that can decode HEVC.
+- `[ERR] YOLO26 inference stalled` or `[ERR] BlazePose inference stalled` means a shared model accepted input but returned no output for 5 s; the application stops and exits 1.
 
 ## Source Files
 

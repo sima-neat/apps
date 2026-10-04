@@ -2,6 +2,7 @@
 #include "support/testing/metadata_json_listener.h"
 #include "support/testing/test_process.h"
 
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -169,6 +170,24 @@ bool test_latest_work_and_metadata_pairs() {
   return ok;
 }
 
+// Mirrors test_accepted_input_without_output_stops_the_app in the Python unit test.
+bool test_inference_stall_timeout() {
+  using blazepose_app::inference_stalled;
+  using blazepose_app::kInferenceStallTimeout;
+  std::optional<std::chrono::steady_clock::time_point> waiting_since;
+  const auto start = std::chrono::steady_clock::now();
+  const auto late = start + kInferenceStallTimeout + std::chrono::milliseconds(1);
+  bool ok = expect(!inference_stalled(waiting_since, false, late) &&
+                       !inference_stalled(waiting_since, true, start) &&
+                       !inference_stalled(waiting_since, true, start + kInferenceStallTimeout) &&
+                       inference_stalled(waiting_since, true, late),
+                   "accepted input without output stalls only after the timeout");
+  ok &= expect(!inference_stalled(waiting_since, false, late) &&
+                   !inference_stalled(waiting_since, true, late),
+               "the stall timer restarts once no input is pending");
+  return ok;
+}
+
 bool test_metadata_contract_correlation() {
   using sima_examples::testing::MetadataJsonContract;
   using sima_examples::testing::MetadataJsonMessage;
@@ -268,6 +287,7 @@ int main(int argc, char** argv) {
   ok &= test_non_finite_landmarks_discard_only_that_pose();
   ok &= test_pose_smoother();
   ok &= test_latest_work_and_metadata_pairs();
+  ok &= test_inference_stall_timeout();
   ok &= test_metadata_contract_correlation();
   ok &= test_cli(argv[1]);
   ok &= test_config_validation(argv[1]);
