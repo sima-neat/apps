@@ -161,12 +161,16 @@ void write_config(const fs::path& path, const fs::path& detector, const fs::path
          << "\n    metadata_port_base: " << metadata_port_base << "\n";
 }
 
-// True when pose[name] holds 33 points with numeric x and y.
-bool has_body_points(const nlohmann::json& pose, const char* name) {
+// True when pose[name] holds 33 points with finite coordinates on every required axis.
+bool has_body_points(const nlohmann::json& pose, const char* name, bool require_z) {
+  const auto has_finite_coordinate = [](const nlohmann::json& point, const char* axis) {
+    return point.contains(axis) && point.at(axis).is_number() &&
+           std::isfinite(point.at(axis).get<double>());
+  };
   return pose.contains(name) && pose.at(name).size() == 33 &&
-         std::all_of(pose.at(name).begin(), pose.at(name).end(), [](const nlohmann::json& point) {
-           return point.contains("x") && point.at("x").is_number() && point.contains("y") &&
-                  point.at("y").is_number();
+         std::all_of(pose.at(name).begin(), pose.at(name).end(), [&](const nlohmann::json& point) {
+           return has_finite_coordinate(point, "x") && has_finite_coordinate(point, "y") &&
+                  (!require_z || has_finite_coordinate(point, "z"));
          });
 }
 
@@ -194,8 +198,8 @@ bool validate_metadata(const MetadataJsonListenerResult& result, int metadata_po
       }
       const auto& poses = overlay ? data.at("poses") : data.at("payload").at("poses");
       for (const auto& pose : poses) {
-        if (!has_body_points(pose, "keypoints") ||
-            (overlay && !has_body_points(pose, "world_keypoints"))) {
+        if (!has_body_points(pose, "keypoints", !overlay) ||
+            (overlay && !has_body_points(pose, "world_keypoints", true))) {
           error = "a " + message.metadata_type + " pose did not carry 33 valid keypoints";
           return false;
         }

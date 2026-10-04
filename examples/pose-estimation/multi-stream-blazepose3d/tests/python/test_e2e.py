@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import math
 import os
 import socket
 import subprocess
@@ -113,11 +114,13 @@ def source_caps(url: str) -> tuple[int, int, int]:
     return caps
 
 
-def has_body_points(pose, name: str) -> bool:
-    """pose[name] holds 33 points with numeric x and y."""
+def has_body_points(pose, name: str, axes: str) -> bool:
+    """pose[name] holds 33 points with finite coordinates on every required axis."""
     points = pose.get(name, [])
     return len(points) == 33 and all(
-        isinstance(point.get(axis), (int, float)) for point in points for axis in "xy"
+        type(point.get(axis)) in (int, float) and math.isfinite(point[axis])
+        for point in points
+        for axis in axes
     )
 
 
@@ -134,12 +137,18 @@ def metadata_problem(messages, metadata_port_base: int, num_ports: int) -> str |
         if data.get("stream_id") != f"camera{message.port - metadata_port_base}":
             return f"metadata on port {message.port} did not carry its stream id"
         if message.metadata_type == "pose-estimation":
-            poses, names = data["poses"], ("keypoints", "world_keypoints")
+            poses = data["poses"]
+            point_contracts = (("keypoints", "xy"), ("world_keypoints", "xyz"))
         elif (data.get("id"), data.get("renderer")) == ("world-pose", "blazepose-3d"):
-            poses, names = data["payload"]["poses"], ("keypoints",)
+            poses = data["payload"]["poses"]
+            point_contracts = (("keypoints", "xyz"),)
         else:
             return "auxiliary metadata did not use the world-pose BlazePose 3D envelope"
-        if not all(has_body_points(pose, name) for pose in poses for name in names):
+        if not all(
+            has_body_points(pose, name, axes)
+            for pose in poses
+            for name, axes in point_contracts
+        ):
             return f"a {message.metadata_type} pose did not carry 33 valid keypoints"
         frame = (message.port, message.timestamp_ms, message.frame_id)
         pose_counts[message.metadata_type][frame] = len(poses)
@@ -157,15 +166,29 @@ def metadata_problem(messages, metadata_port_base: int, num_ports: int) -> str |
 
 
 def test_metadata_problem_requires_pairs_on_every_port_and_stream_ids():
-    def message(port, metadata_type, frame_id, poses, stream_id=None, image_points=33):
+    def message(
+        port,
+        metadata_type,
+        frame_id,
+        poses,
+        stream_id=None,
+        image_points=33,
+        world_z=3.0,
+    ):
         data = {"stream_id": stream_id or f"camera{port - 9100}"}
-        point = {"x": 1.0, "y": 2}
+        image_point = {"x": 1.0, "y": 2}
+        world_point = {"x": 1.0, "y": 2}
+        if world_z is not None:
+            world_point["z"] = world_z
         if metadata_type == "pose-estimation":
-            pose = {"keypoints": [point] * image_points, "world_keypoints": [point] * 33}
+            pose = {
+                "keypoints": [image_point] * image_points,
+                "world_keypoints": [world_point] * 33,
+            }
             data["poses"] = [pose] * poses
         else:
             data.update(id="world-pose", renderer="blazepose-3d")
-            data["payload"] = {"poses": [{"keypoints": [point] * 33}] * poses}
+            data["payload"] = {"poses": [{"keypoints": [world_point] * 33}] * poses}
         return SimpleNamespace(
             port=port,
             metadata_type=metadata_type,
@@ -190,6 +213,14 @@ def test_metadata_problem_requires_pairs_on_every_port_and_stream_ids():
     assert "stream id" in metadata_problem([message(9100, "pose-estimation", "1", 1, "x")], 9100, 1)
     short_2d = message(9100, "pose-estimation", "1", 1, image_points=32)
     assert "33 valid keypoints" in metadata_problem([short_2d], 9100, 1)
+    missing_overlay_z = message(9100, "pose-estimation", "1", 1, world_z=None)
+    assert "33 valid keypoints" in metadata_problem([missing_overlay_z], 9100, 1)
+    missing_auxiliary_z = message(9100, "auxiliary-visualization", "1", 1, world_z=None)
+    assert "33 valid keypoints" in metadata_problem([missing_auxiliary_z], 9100, 1)
+    non_finite_z = message(9100, "auxiliary-visualization", "1", 1, world_z=float("nan"))
+    assert "33 valid keypoints" in metadata_problem([non_finite_z], 9100, 1)
+    boolean_z = message(9100, "auxiliary-visualization", "1", 1, world_z=True)
+    assert "33 valid keypoints" in metadata_problem([boolean_z], 9100, 1)
 
 
 @pytest.mark.e2e
