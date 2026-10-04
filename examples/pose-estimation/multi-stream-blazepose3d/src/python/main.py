@@ -4,19 +4,20 @@ from __future__ import annotations
 
 import argparse
 import copy
+import gc
 import glob
 import json
 import math
 import os
-import re
 import struct
 import sys
 import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
+from enum import Enum, auto
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import yaml
 
@@ -62,6 +63,12 @@ np = None
 pyneat = None
 
 
+class NonblockingPushResult(Enum):
+    ACCEPTED = auto()
+    ABORTED = auto()
+    CANCELLED = auto()
+
+
 @dataclass(frozen=True)
 class StreamConfig:
     id: str
@@ -82,44 +89,80 @@ class AppConfig:
     latency_ms: int = 100
     detector_min_score: float = 0.30
     detector_nms_iou: float = 0.60
+    max_detections: int = 100
+    max_inflight_per_stream: int = 4
     max_people_per_frame: int = 4
     roi_scale: float = 1.65
     pose_presence_threshold: float = 0.50
+    pose_temporal_filter_enabled: bool = True
     pose_job_timeout_ms: int = 1000
+    max_pending_jobs: int = 64
     frame_limit: int = 0
     insight_host: str = ""
     video_port_base: int = 9000
     metadata_port_base: int = 9100
+    video_enabled: bool = True
+
+
+@dataclass(frozen=True)
+class FrameIdentity:
+    stream_id: str
+    frame_id: int
+    pts_ns: int
+    dts_ns: int
+    duration_ns: int
+    input_seq: int
+    orig_input_seq: int
 
 
 @dataclass
 class FrameJob:
+    job_id: int
+    stream_sequence: int
     stream_index: int
     rgb: Any
     people: list[dict[str, Any]]
-    frame_id: int
-    pts_ns: int
+    identity: FrameIdentity
     deadline: float
 
 
 @dataclass(frozen=True)
 class PoseInputContext:
+    job_id: int
+    stream_index: int
+    roi_index: int
+    roi_count: int
     box: dict[str, Any]
     affine: tuple[float, float, float, float, float, float]
+    identity: FrameIdentity
+
+
+@dataclass(frozen=True)
+class PreparedPoseInput:
+    roi_index: int
+    box: dict[str, Any]
+    affine: tuple[float, float, float, float, float, float]
+    tensor: Any
+
+
+@dataclass
+class PoseAggregate:
+    stream_index: int
+    stream_sequence: int
+    expected: int
+    identity: FrameIdentity
+    deadline: float
+    completed: int = 0
+    expired: bool = False
+    poses: list[dict[str, Any]] = field(default_factory=list)
 
 
 def box_iou(left: dict[str, Any], right: dict[str, Any]) -> float:
-    intersection_width = max(
-        0.0, min(left["x2"], right["x2"]) - max(left["x1"], right["x1"])
-    )
-    intersection_height = max(
-        0.0, min(left["y2"], right["y2"]) - max(left["y1"], right["y1"])
-    )
+    intersection_width = max(0.0, min(left["x2"], right["x2"]) - max(left["x1"], right["x1"]))
+    intersection_height = max(0.0, min(left["y2"], right["y2"]) - max(left["y1"], right["y1"]))
     intersection = intersection_width * intersection_height
     left_area = max(0.0, left["x2"] - left["x1"]) * max(0.0, left["y2"] - left["y1"])
-    right_area = max(0.0, right["x2"] - right["x1"]) * max(
-        0.0, right["y2"] - right["y1"]
-    )
+    right_area = max(0.0, right["x2"] - right["x1"]) * max(0.0, right["y2"] - right["y1"])
     union_area = left_area + right_area - intersection
     return intersection / union_area if union_area > 0.0 else 0.0
 
@@ -131,6 +174,7 @@ class PoseSmoother:
     FAST_MOTION_THRESHOLD = 0.08
     MINIMUM_MATCH_IOU = 0.15
     RESET_AFTER_NS = 250_000_000
+    NOMINAL_FRAME_NS = 40_000_000
     MAX_COAST_FRAMES = 2
     COAST_CONFIDENCE_DECAY = 0.85
 
@@ -143,18 +187,32 @@ class PoseSmoother:
     def _blend(previous: float, current: float, alpha: float) -> float:
         return previous + alpha * (current - previous)
 
-    def filter(self, poses: list[dict[str, Any]], pts_ns: int) -> list[dict[str, Any]]:
-        if (
+    @staticmethod
+    def _adjusted_alpha(alpha: float, elapsed_frames: float) -> float:
+        return 1.0 - (1.0 - alpha) ** elapsed_frames
+
+    def _motion_alpha(self, normalized_motion: float, elapsed_frames: float) -> float:
+        amount = min(1.0, max(0.0, normalized_motion / self.FAST_MOTION_THRESHOLD))
+        alpha = self._blend(self.POSITION_ALPHA, self.FAST_MOTION_ALPHA, amount)
+        return self._adjusted_alpha(alpha, elapsed_frames)
+
+    def _reset_gap(self, pts_ns: int) -> bool:
+        return (
             pts_ns >= 0
             and self.last_pts_ns >= 0
-            and (
-                pts_ns <= self.last_pts_ns
-                or pts_ns - self.last_pts_ns > self.RESET_AFTER_NS
-            )
-        ):
-            self.previous = []
-            self.missing_frames = 0
+            and pts_ns - self.last_pts_ns > self.RESET_AFTER_NS
+        )
+
+    def reset(self) -> None:
+        self.previous = []
+        self.last_pts_ns = -1
+        self.missing_frames = 0
+
+    def filter(self, poses: list[dict[str, Any]], pts_ns: int) -> list[dict[str, Any]]:
         if not poses:
+            if self._reset_gap(pts_ns):
+                self.reset()
+                return poses
             if self.previous and self.missing_frames < self.MAX_COAST_FRAMES:
                 self.missing_frames += 1
                 coasted = copy.deepcopy(self.previous)
@@ -169,47 +227,52 @@ class PoseSmoother:
                         world["confidence"] = point["confidence"]
                 return coasted
             return poses
+        if self._reset_gap(pts_ns) or (
+            pts_ns >= 0 and self.last_pts_ns >= 0 and pts_ns <= self.last_pts_ns
+        ):
+            self.reset()
         self.missing_frames = 0
+
+        matches = [-1] * len(poses)
         used: set[int] = set()
-        for current in poses:
-            matches = [
-                (box_iou(current["box"], previous["box"]), index, previous)
-                for index, previous in enumerate(self.previous)
-                if index not in used
-            ]
-            if not matches:
+        for current_index, pose in enumerate(poses):
+            best_iou = self.MINIMUM_MATCH_IOU
+            for previous_index, previous in enumerate(self.previous):
+                if previous_index in used:
+                    continue
+                overlap = box_iou(pose["box"], previous["box"])
+                if overlap >= best_iou:
+                    best_iou = overlap
+                    matches[current_index] = previous_index
+            if matches[current_index] >= 0:
+                used.add(matches[current_index])
+
+        elapsed_frames = 1.0
+        if pts_ns >= 0 and self.last_pts_ns >= 0 and pts_ns > self.last_pts_ns:
+            elapsed_frames = min(6.0, max(1.0, (pts_ns - self.last_pts_ns) / self.NOMINAL_FRAME_NS))
+
+        for current_index, previous_index in enumerate(matches):
+            if previous_index < 0:
                 continue
-            overlap, previous_index, previous = max(matches, key=lambda match: match[0])
-            if overlap < self.MINIMUM_MATCH_IOU:
-                continue
-            used.add(previous_index)
+            current = poses[current_index]
+            previous = self.previous[previous_index]
             box = current["box"]
             previous_box = previous["box"]
-            scale = max(1.0, math.hypot(box["x2"] - box["x1"], box["y2"] - box["y1"]))
-            center_motion = (
-                math.hypot(
-                    (box["x1"] + box["x2"] - previous_box["x1"] - previous_box["x2"])
-                    * 0.5,
-                    (box["y1"] + box["y2"] - previous_box["y1"] - previous_box["y2"])
-                    * 0.5,
-                )
-                / scale
-            )
-            box_alpha = (
-                self.FAST_MOTION_ALPHA
-                if center_motion >= self.FAST_MOTION_THRESHOLD
-                else self.POSITION_ALPHA
-            )
+            width = max(0.0, box["x2"] - box["x1"])
+            height = max(0.0, box["y2"] - box["y1"])
+            scale = max(1.0, math.hypot(width, height))
+            center_motion = math.hypot(
+                (box["x1"] + box["x2"] - previous_box["x1"] - previous_box["x2"]) * 0.5,
+                (box["y1"] + box["y2"] - previous_box["y1"] - previous_box["y2"]) * 0.5,
+            ) / scale
+            box_alpha = self._motion_alpha(center_motion, elapsed_frames)
             for coordinate in ("x1", "y1", "x2", "y2"):
-                box[coordinate] = self._blend(
-                    previous_box[coordinate], box[coordinate], box_alpha
-                )
+                box[coordinate] = self._blend(previous_box[coordinate], box[coordinate], box_alpha)
+            confidence_alpha = self._adjusted_alpha(self.CONFIDENCE_ALPHA, elapsed_frames)
             current["presence"] = self._blend(
-                previous["presence"], current["presence"], self.CONFIDENCE_ALPHA
+                previous["presence"], current["presence"], confidence_alpha
             )
-            box["score"] = self._blend(
-                previous_box["score"], box["score"], self.CONFIDENCE_ALPHA
-            )
+            box["score"] = self._blend(previous_box["score"], box["score"], confidence_alpha)
 
             for point, old_point, world, old_world in zip(
                 current["keypoints"],
@@ -222,20 +285,14 @@ class PoseSmoother:
                     math.hypot(point["x"] - old_point["x"], point["y"] - old_point["y"])
                     / scale
                 )
-                alpha = (
-                    self.FAST_MOTION_ALPHA
-                    if motion >= self.FAST_MOTION_THRESHOLD
-                    else self.POSITION_ALPHA
-                )
+                alpha = self._motion_alpha(motion, elapsed_frames)
                 point["x"] = self._blend(old_point["x"], point["x"], alpha)
                 point["y"] = self._blend(old_point["y"], point["y"], alpha)
                 point["confidence"] = self._blend(
-                    old_point["confidence"], point["confidence"], self.CONFIDENCE_ALPHA
+                    old_point["confidence"], point["confidence"], confidence_alpha
                 )
                 for coordinate in ("x", "y", "z"):
-                    world[coordinate] = self._blend(
-                        old_world[coordinate], world[coordinate], alpha
-                    )
+                    world[coordinate] = self._blend(old_world[coordinate], world[coordinate], alpha)
                 world["confidence"] = point["confidence"]
 
         self.previous = poses
@@ -256,10 +313,20 @@ class StreamRuntime:
     source_graph: Any = None
     source_run: Any = None
     metadata_lock: threading.Lock = field(default_factory=threading.Lock)
+    pending_publications: dict[int, tuple[FrameIdentity, list[dict[str, Any]] | None]] = field(
+        default_factory=dict
+    )
+    next_publication_sequence: int = 1
     pose_smoother: PoseSmoother = field(default_factory=PoseSmoother)
+    pose_temporal_filter_enabled: bool = True
     metadata_frames: int = 0
     source_frames: int = 0
+    detector_frames: int = 0
+    selected_rois: int = 0
     completed_rois: int = 0
+    detector_mailbox_drops: int = 0
+    pose_mailbox_drops: int = 0
+    timed_out_jobs: int = 0
     outstanding_frames: int = 0
     closed: bool = False
 
@@ -269,7 +336,11 @@ class SharedState:
         self.condition = threading.Condition()
         self.detector_mailboxes: list[FrameJob | None] = [None] * stream_count
         self.pose_mailboxes: list[FrameJob | None] = [None] * stream_count
-        self.prepared_frames = deque()
+        # None entries are expired inputs retained only to discard their
+        # eventual FIFO-correlated model outputs.
+        self.pending_detector_outputs: deque[FrameJob | None] = deque()
+        self.pending_pose_outputs: deque[PoseInputContext] = deque()
+        self.aggregates: dict[int, PoseAggregate] = {}
         self.next_detector_stream = 0
         self.next_pose_stream = 0
         self.stopping = False
@@ -286,6 +357,7 @@ class AppRuntime:
     pose_model: Any
     streams: list[StreamRuntime]
     state: SharedState
+    next_job_id: int = 1
 
 
 def load_runtime_dependencies() -> None:
@@ -314,105 +386,109 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def section(raw: dict[str, Any], key: str) -> dict[str, Any]:
-    value = raw.get(key, {})
+    value = raw.get(key) or {}
     if not isinstance(value, dict):
         raise TypeError(f"{key} must be a mapping")
     return value
 
 
-def scalar(raw: dict[str, Any], key: str, default):
+def string_or(raw: dict[str, Any], key: str, default: str = "") -> str:
     value = raw.get(key, default)
-    kind = type(default)
-    if kind in {str, bool}:
-        if not isinstance(value, kind):
-            raise TypeError(f"{key} must be a {kind.__name__}")
-        return value
-    text = str(value)
-    pattern = (
-        r"[+-]?[0-9]+"
-        if kind is int
-        else r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?"
-    )
-    if not re.fullmatch(pattern, text):
-        raise ValueError(f"{key} has the wrong numeric type")
-    parsed = kind(text)
-    if kind is float and not math.isfinite(parsed):
-        raise ValueError(f"{key} must be finite")
-    return parsed
-
-
-def require(condition: bool, message: str) -> None:
-    if not condition:
-        raise ValueError(message)
-
-
-def parse_codec(value: str) -> str:
-    if value not in {"h264", "h265"}:
-        raise ValueError("stream codec must be h264 or h265")
+    if value is None:
+        return default
+    if not isinstance(value, str):
+        raise TypeError(f"{key} must be a string")
     return value
 
 
+def int_or(raw: dict[str, Any], key: str, default: int) -> int:
+    value = raw.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{key} must be an integer")
+    return value
+
+
+def float_or(raw: dict[str, Any], key: str, default: float) -> float:
+    value = raw.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"{key} must be numeric")
+    return float(value)
+
+
+def bool_or(raw: dict[str, Any], key: str, default: bool) -> bool:
+    value = raw.get(key, default)
+    if not isinstance(value, bool):
+        raise TypeError(f"{key} must be true or false")
+    return value
+
+
+def parse_codec(value: str) -> str:
+    lowered = value.lower()
+    if lowered in {"h264", "avc", "h.264"}:
+        return "h264"
+    if lowered in {"h265", "hevc", "h.265"}:
+        return "h265"
+    raise ValueError("stream codec must be h264/avc or h265/hevc")
+
+
 def validate_config(cfg: AppConfig) -> None:
-    require(bool(cfg.detector_model_path), "models.detector_path must be set")
-    require(bool(cfg.pose_model_path), "models.pose_path must be set")
-    require(1 <= len(cfg.streams) <= 4, "streams must contain between 1 and 4 entries")
-    require(bool(cfg.insight_host), "output.insight.host must be set")
-    require(cfg.latency_ms >= 0, "input.latency_ms must be >= 0")
-    require(
-        0.0 <= cfg.detector_min_score <= 1.0,
-        "detector.min_score must be between 0 and 1",
-    )
-    require(
-        0.0 <= cfg.detector_nms_iou <= 1.0, "detector.nms_iou must be between 0 and 1"
-    )
-    require(
-        1 <= cfg.max_people_per_frame <= 10,
-        "pose.max_people_per_frame must be between 1 and 10",
-    )
-    require(cfg.roi_scale > 0.0, "pose.roi_scale must be > 0")
-    require(
-        0.0 <= cfg.pose_presence_threshold <= 1.0,
-        "pose.presence_threshold must be between 0 and 1",
-    )
-    require(cfg.pose_job_timeout_ms > 0, "pose.job_timeout_ms must be > 0")
-    require(cfg.frame_limit >= 0, "runtime.frames must be >= 0")
-    require(
-        1 <= cfg.video_port_base <= 65535 and 1 <= cfg.metadata_port_base <= 65535,
-        "Insight port bases must be between 1 and 65535",
-    )
+    if not cfg.detector_model_path:
+        raise ValueError("models.detector_path must be set")
+    if not cfg.pose_model_path:
+        raise ValueError("models.pose_path must be set")
+    if not 1 <= len(cfg.streams) <= 4:
+        raise ValueError("streams must contain between 1 and 4 entries")
+    if not cfg.insight_host:
+        raise ValueError("output.insight.host must be set")
+    if cfg.latency_ms < 0:
+        raise ValueError("input.latency_ms must be >= 0")
+    if not 0.0 <= cfg.detector_min_score <= 1.0:
+        raise ValueError("detector.min_score must be between 0 and 1")
+    if not 0.0 <= cfg.detector_nms_iou <= 1.0:
+        raise ValueError("detector.nms_iou must be between 0 and 1")
+    if cfg.max_detections <= 0:
+        raise ValueError("detector.max_detections must be > 0")
+    if cfg.max_inflight_per_stream != -1 and cfg.max_inflight_per_stream <= 0:
+        raise ValueError("detector.max_inflight_per_stream must be -1 or > 0")
+    if not 1 <= cfg.max_people_per_frame <= 10:
+        raise ValueError("pose.max_people_per_frame must be between 1 and 10")
+    if cfg.roi_scale <= 0.0:
+        raise ValueError("pose.roi_scale must be > 0")
+    if not 0.0 <= cfg.pose_presence_threshold <= 1.0:
+        raise ValueError("pose.presence_threshold must be between 0 and 1")
+    if cfg.pose_job_timeout_ms <= 0:
+        raise ValueError("pose.job_timeout_ms must be > 0")
+    if cfg.max_pending_jobs <= 0:
+        raise ValueError("pose.max_pending_jobs must be > 0")
+    if cfg.frame_limit < 0:
+        raise ValueError("runtime.frames must be >= 0")
+    if not 1 <= cfg.video_port_base <= 65535 or not 1 <= cfg.metadata_port_base <= 65535:
+        raise ValueError("Insight port bases must be between 1 and 65535")
     ids = [stream.id for stream in cfg.streams]
     channels = [stream.insight_channel for stream in cfg.streams]
-    require(len(ids) == len(set(ids)), "stream ids must be unique")
-    require(
-        len(channels) == len(set(channels)), "stream insight channels must be unique"
-    )
+    if len(ids) != len(set(ids)):
+        raise ValueError("stream ids must be unique")
+    if len(channels) != len(set(channels)):
+        raise ValueError("stream insight channels must be unique")
     for stream in cfg.streams:
         no_explicit_caps = stream.width == stream.height == stream.fps == 0
-        complete_explicit_caps = (
-            stream.width > 0 and stream.height > 0 and stream.fps > 0
-        )
-        require(
-            no_explicit_caps or complete_explicit_caps,
-            "stream width, height, and fps must either all be omitted or all be > 0",
-        )
-        require(
-            cfg.video_port_base + stream.insight_channel <= 65535,
-            "stream video port must be <= 65535",
-        )
-        require(
-            cfg.metadata_port_base + stream.insight_channel <= 65535,
-            "stream metadata port must be <= 65535",
-        )
+        complete_explicit_caps = stream.width > 0 and stream.height > 0 and stream.fps > 0
+        if not (no_explicit_caps or complete_explicit_caps):
+            raise ValueError(
+                "stream width, height, and fps must either all be omitted or all be > 0"
+            )
+        if cfg.video_port_base + stream.insight_channel > 65535:
+            raise ValueError("stream video port must be <= 65535")
+        if cfg.metadata_port_base + stream.insight_channel > 65535:
+            raise ValueError("stream metadata port must be <= 65535")
     video_ports = {
         cfg.video_port_base + stream.insight_channel for stream in cfg.streams
     }
     metadata_ports = {
         cfg.metadata_port_base + stream.insight_channel for stream in cfg.streams
     }
-    require(
-        not video_ports & metadata_ports,
-        "Insight video and metadata ports must not overlap",
-    )
+    if cfg.video_enabled and video_ports & metadata_ports:
+        raise ValueError("Insight video and metadata ports must not overlap")
 
 
 def load_app_config(config_path: Path) -> AppConfig:
@@ -434,23 +510,23 @@ def load_app_config(config_path: Path) -> AppConfig:
     for index, value in enumerate(raw_streams):
         if not isinstance(value, dict):
             raise TypeError(f"streams[{index}] must be a mapping")
-        stream_id = scalar(value, "id", "")
-        url = scalar(value, "url", "")
-        channel = scalar(value, "insight_channel", -1)
+        stream_id = string_or(value, "id")
+        url = string_or(value, "url")
+        channel = int_or(value, "insight_channel", -1)
         if not stream_id:
             raise ValueError(f"streams[{index}].id must be set")
         if not url:
             raise ValueError(f"streams[{index}].url must be set")
         if channel < 0:
             raise ValueError(f"streams[{index}].insight_channel must be >= 0")
-        width = scalar(value, "width", 0)
-        height = scalar(value, "height", 0)
-        fps = scalar(value, "fps", 0)
+        width = int_or(value, "width", 0)
+        height = int_or(value, "height", 0)
+        fps = int_or(value, "fps", 0)
         streams.append(
             StreamConfig(
                 stream_id,
                 url,
-                parse_codec(scalar(value, "codec", "h264")),
+                parse_codec(string_or(value, "codec", "h264")),
                 channel,
                 width,
                 height,
@@ -459,21 +535,26 @@ def load_app_config(config_path: Path) -> AppConfig:
         )
 
     cfg = AppConfig(
-        detector_model_path=scalar(models, "detector_path", ""),
-        pose_model_path=scalar(models, "pose_path", ""),
+        detector_model_path=string_or(models, "detector_path"),
+        pose_model_path=string_or(models, "pose_path"),
         streams=streams,
-        tcp=scalar(input_cfg, "tcp", True),
-        latency_ms=scalar(input_cfg, "latency_ms", 100),
-        detector_min_score=scalar(detector, "min_score", 0.30),
-        detector_nms_iou=scalar(detector, "nms_iou", 0.60),
-        max_people_per_frame=scalar(pose, "max_people_per_frame", 4),
-        roi_scale=scalar(pose, "roi_scale", 1.65),
-        pose_presence_threshold=scalar(pose, "presence_threshold", 0.50),
-        pose_job_timeout_ms=scalar(pose, "job_timeout_ms", 1000),
-        frame_limit=scalar(runtime, "frames", 0),
-        insight_host=scalar(insight, "host", ""),
-        video_port_base=scalar(insight, "video_port_base", 9000),
-        metadata_port_base=scalar(insight, "metadata_port_base", 9100),
+        tcp=bool_or(input_cfg, "tcp", True),
+        latency_ms=int_or(input_cfg, "latency_ms", 100),
+        detector_min_score=float_or(detector, "min_score", 0.30),
+        detector_nms_iou=float_or(detector, "nms_iou", 0.60),
+        max_detections=int_or(detector, "max_detections", 100),
+        max_inflight_per_stream=int_or(detector, "max_inflight_per_stream", 4),
+        max_people_per_frame=int_or(pose, "max_people_per_frame", 4),
+        roi_scale=float_or(pose, "roi_scale", 1.65),
+        pose_presence_threshold=float_or(pose, "presence_threshold", 0.50),
+        pose_temporal_filter_enabled=bool_or(pose, "temporal_filter_enabled", True),
+        pose_job_timeout_ms=int_or(pose, "job_timeout_ms", 1000),
+        max_pending_jobs=int_or(pose, "max_pending_jobs", 64),
+        frame_limit=int_or(runtime, "frames", 0),
+        insight_host=string_or(insight, "host"),
+        video_port_base=int_or(insight, "video_port_base", 9000),
+        metadata_port_base=int_or(insight, "metadata_port_base", 9100),
+        video_enabled=bool_or(output, "video_enabled", True),
     )
     validate_config(cfg)
     return cfg
@@ -511,6 +592,7 @@ def decode_pose(
     affine: tuple[float, float, float, float, float, float],
     box: dict[str, Any],
     presence: float,
+    roi_index: int,
 ) -> dict[str, Any]:
     values = np.asarray(raw_landmarks, dtype=np.float32).reshape(39, 5)
     world_values = np.asarray(raw_world_landmarks, dtype=np.float32).reshape(39, 3)
@@ -536,6 +618,7 @@ def decode_pose(
         for index, raw in enumerate(world_values[:33])
     ]
     return {
+        "roi_index": roi_index,
         "presence": presence,
         "box": box,
         "keypoints": keypoints,
@@ -545,11 +628,11 @@ def decode_pose(
 
 def poses_data(poses: list[dict[str, Any]], stream_id: str) -> dict[str, Any]:
     published = []
-    for pose_index, pose in enumerate(poses, 1):
+    for pose in sorted(poses, key=lambda item: int(item["roi_index"])):
         box = pose["box"]
         published.append(
             {
-                "id": f"pose_{pose_index}",
+                "id": f"pose_{int(pose['roi_index']) + 1}",
                 "label": "person",
                 "presence": round(float(pose["presence"]), 3),
                 "confidence": round(float(box["score"]), 3),
@@ -587,24 +670,49 @@ def poses_data(poses: list[dict[str, Any]], stream_id: str) -> dict[str, Any]:
     return {"stream_id": stream_id, "poses": published}
 
 
-def world_pose_auxiliary_data(overlay: dict[str, Any]) -> dict[str, Any]:
-    return {
+def auxiliary_visualization_data(
+    view_id: str,
+    renderer: str,
+    payload: dict[str, Any],
+    title: str | None = None,
+) -> dict[str, Any]:
+    data = {
         "schema_version": 1,
-        "id": "world-pose",
-        "renderer": "blazepose-3d",
-        "title": "3D Pose",
-        "stream_id": overlay["stream_id"],
-        "payload": {
-            "poses": [
-                {
-                    "id": pose["id"],
-                    "presence": pose["presence"],
-                    "keypoints": pose["world_keypoints"],
-                }
-                for pose in overlay["poses"]
-            ]
-        },
+        "id": view_id,
+        "renderer": renderer,
+        "payload": payload,
     }
+    if title is not None:
+        data["title"] = title
+    return data
+
+
+def world_pose_auxiliary_data(
+    poses: list[dict[str, Any]], stream_id: str
+) -> dict[str, Any]:
+    world_poses = []
+    for pose in sorted(poses, key=lambda item: int(item["roi_index"])):
+        world_poses.append(
+            {
+                "id": f"pose_{int(pose['roi_index']) + 1}",
+                "presence": round(float(pose["presence"]), 3),
+                "keypoints": [
+                    {
+                        "name": point["name"],
+                        "x": round(float(point["x"]), 6),
+                        "y": round(float(point["y"]), 6),
+                        "z": round(float(point["z"]), 6),
+                        "confidence": round(float(point["confidence"]), 3),
+                    }
+                    for point in pose["world_keypoints"]
+                ],
+            }
+        )
+    data = auxiliary_visualization_data(
+        "world-pose", "blazepose-3d", {"poses": world_poses}, "3D Pose"
+    )
+    data["stream_id"] = stream_id
+    return data
 
 
 def rtsp_codec(codec: str):
@@ -751,7 +859,7 @@ def make_detector_model(cfg: AppConfig, max_width: int, max_height: int):
     options.decode_type = pyneat.BoxDecodeType.YoloV26
     options.score_threshold = cfg.detector_min_score
     options.nms_iou_threshold = cfg.detector_nms_iou
-    options.top_k = 100
+    options.top_k = cfg.max_detections
     return pyneat.Model(cfg.detector_model_path, options)
 
 
@@ -768,13 +876,21 @@ def make_pose_model(cfg: AppConfig):
     return pyneat.Model(cfg.pose_model_path, options)
 
 
-def pose_input_sample(tensor, pts_ns: int = -1):
+def pose_input_sample(tensor, context: PoseInputContext | None):
     sample = pyneat.make_tensor_sample("pose_input", tensor)
     sample.payload_type = pyneat.PayloadType.Tensor
     sample.media_type = "application/vnd.simaai.tensor"
     sample.format = tensor.semantic.tess.format
     sample.payload_tag = sample.format
-    sample.pts_ns = pts_ns
+    if context is not None:
+        identity = context.identity
+        sample.stream_id = identity.stream_id
+        sample.frame_id = identity.frame_id
+        sample.pts_ns = identity.pts_ns
+        sample.dts_ns = identity.dts_ns
+        sample.duration_ns = identity.duration_ns
+        sample.input_seq = identity.input_seq
+        sample.orig_input_seq = identity.orig_input_seq
     return sample
 
 
@@ -811,16 +927,23 @@ def build_pose_run(model):
     options.output_memory = pyneat.OutputMemory.ZeroCopy
     options.input_timeout_ms = 30000
     options.startup_preflight = False
-    return graph, graph.build([pose_input_sample(seed_tensor)], options)
+    return graph, graph.build([pose_input_sample(seed_tensor, None)], options)
 
 
-def image_input_sample(name: str, tensor, pts_ns: int = -1):
+def image_input_sample(name: str, tensor, identity: FrameIdentity | None):
     sample = pyneat.make_tensor_sample(name, tensor)
     sample.payload_type = pyneat.PayloadType.Image
     sample.media_type = "video/x-raw"
     sample.format = "RGB"
     sample.payload_tag = sample.format
-    sample.pts_ns = pts_ns
+    if identity is not None:
+        sample.stream_id = identity.stream_id
+        sample.frame_id = identity.frame_id
+        sample.pts_ns = identity.pts_ns
+        sample.dts_ns = identity.dts_ns
+        sample.duration_ns = identity.duration_ns
+        sample.input_seq = identity.input_seq
+        sample.orig_input_seq = identity.orig_input_seq
     return sample
 
 
@@ -857,8 +980,12 @@ def build_detector_run(model, max_width: int, max_height: int):
     options.input_timeout_ms = 30000
     options.startup_preflight = False
     return graph, graph.build(
-        [image_input_sample("detector_input", seed_tensor)], options
+        [image_input_sample("detector_input", seed_tensor, None)], options
     )
+
+
+def frame_output_name(stream_index: int) -> str:
+    return f"frame_{stream_index}"
 
 
 def make_rgb_output(stream: StreamRuntime):
@@ -867,17 +994,19 @@ def make_rgb_output(stream: StreamRuntime):
     graph.add(pyneat.nodes.video_convert())
     graph.add(pyneat.nodes.caps_raw("RGB", stream.width, stream.height, stream.fps))
     graph.add(
-        pyneat.nodes.output(f"frame_{stream.index}", pyneat.OutputOptions.latest())
+        pyneat.nodes.output(
+            frame_output_name(stream.index), pyneat.OutputOptions.latest()
+        )
     )
     return graph
 
 
-def realtime_link(stream: StreamRuntime):
+def realtime_link(cfg: AppConfig, stream: StreamRuntime):
     options = pyneat.GraphLinkOptions()
     options.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
     options.stream_id = stream.config.id
-    options.max_inflight_per_stream = 4
-    options.max_inflight_total = 4
+    options.max_inflight_per_stream = cfg.max_inflight_per_stream
+    options.max_inflight_total = cfg.max_inflight_per_stream
     return options
 
 
@@ -910,6 +1039,7 @@ def build_runtime(cfg: AppConfig) -> AppRuntime:
                 width,
                 height,
                 fps,
+                pose_temporal_filter_enabled=cfg.pose_temporal_filter_enabled,
             )
         )
 
@@ -918,16 +1048,19 @@ def build_runtime(cfg: AppConfig) -> AppRuntime:
         source = make_encoded_source(stream.source_options)
         decoder = make_decoder(stream.source_options)
         source_graph.connect(source, decoder)
-        source_graph.connect(decoder, make_rgb_output(stream), realtime_link(stream))
         source_graph.connect(
-            source, make_video_sender(cfg, stream), realtime_link(stream)
+            decoder, make_rgb_output(stream), realtime_link(cfg, stream)
         )
+        if cfg.video_enabled:
+            source_graph.connect(
+                source, make_video_sender(cfg, stream), realtime_link(cfg, stream)
+            )
         stream.source_graph = source_graph
         print(
             f"[stream {stream.config.id}] codec={stream.config.codec} "
             f"source={stream.width}x{stream.height}@{stream.fps} "
             f"channel={stream.config.insight_channel} "
-            f"video={cfg.video_port_base + stream.config.insight_channel} "
+            f"video={cfg.video_port_base + stream.config.insight_channel if cfg.video_enabled else 'disabled'} "
             f"metadata={stream.metadata_sender.metadata_port()}",
             flush=True,
         )
@@ -1022,7 +1155,7 @@ def select_people(
     sample, stream: StreamRuntime, cfg: AppConfig
 ) -> list[dict[str, Any]]:
     boxes = parse_boxes_strict(
-        extract_bbox_payload(sample), stream.width, stream.height, 100
+        extract_bbox_payload(sample), stream.width, stream.height, cfg.max_detections
     )
     people = sorted(
         (box for box in boxes if int(box["class_id"]) == 0),
@@ -1042,14 +1175,42 @@ def require_rgb_tensor(sample):
     return tensors[0]
 
 
-def publish_metadata_locked(stream: StreamRuntime, job: FrameJob, poses) -> None:
-    timestamp_ms = job.pts_ns // 1_000_000 if job.pts_ns >= 0 else -1
-    frame_id = str(job.frame_id) if job.frame_id >= 0 else ""
-    poses = stream.pose_smoother.filter(poses, job.pts_ns)
-    overlay = poses_data(poses, stream.config.id)
-    overlay_data = json.dumps(overlay, separators=(",", ":"))
+def identity_from_sample(sample) -> FrameIdentity:
+    return FrameIdentity(
+        str(sample.stream_id),
+        int(sample.frame_id),
+        int(sample.pts_ns),
+        int(sample.dts_ns),
+        int(sample.duration_ns),
+        int(sample.input_seq),
+        int(sample.orig_input_seq),
+    )
+
+
+def select_frame_id(
+    frame_id: int, orig_input_seq: int, input_seq: int, pull_sequence: int
+) -> int:
+    if frame_id >= 0:
+        return frame_id
+    if orig_input_seq >= 0:
+        return orig_input_seq
+    if input_seq >= 0:
+        return input_seq
+    return pull_sequence
+
+
+def publish_metadata_locked(
+    stream: StreamRuntime, identity: FrameIdentity, poses: list[dict[str, Any]]
+) -> None:
+    timestamp_ms = identity.pts_ns // 1_000_000 if identity.pts_ns >= 0 else -1
+    frame_id = str(identity.frame_id) if identity.frame_id >= 0 else ""
+    if stream.pose_temporal_filter_enabled:
+        poses = stream.pose_smoother.filter(poses, identity.pts_ns)
+    overlay_data = json.dumps(
+        poses_data(poses, identity.stream_id), separators=(",", ":")
+    )
     auxiliary_data = json.dumps(
-        world_pose_auxiliary_data(overlay),
+        world_pose_auxiliary_data(poses, identity.stream_id),
         separators=(",", ":"),
     )
     stream.metadata_sender.send_metadata(
@@ -1061,12 +1222,33 @@ def publish_metadata_locked(stream: StreamRuntime, job: FrameJob, poses) -> None
     stream.metadata_frames += 1
 
 
-def complete_frame(stream: StreamRuntime, job: FrameJob, poses=None) -> None:
-    # Only the pose worker publishes. Dropped frames need no completion queue.
+def complete_frame(
+    stream: StreamRuntime,
+    sequence: int,
+    identity: FrameIdentity,
+    poses: list[dict[str, Any]] | None,
+) -> None:
     with stream.metadata_lock:
-        if poses is not None:
-            publish_metadata_locked(stream, job, poses)
+        if (
+            sequence < stream.next_publication_sequence
+            or sequence in stream.pending_publications
+        ):
+            raise RuntimeError(f"duplicate frame completion for stream {stream.config.id}")
+        stream.pending_publications[sequence] = (identity, poses)
+        while stream.next_publication_sequence in stream.pending_publications:
+            ready_identity, ready_poses = stream.pending_publications.pop(
+                stream.next_publication_sequence
+            )
+            stream.next_publication_sequence += 1
+            if ready_poses is not None:
+                publish_metadata_locked(stream, ready_identity, ready_poses)
+        if stream.outstanding_frames <= 0:
+            raise RuntimeError("completed a frame that was not outstanding")
         stream.outstanding_frames -= 1
+
+
+def skip_frame(stream: StreamRuntime, job: FrameJob) -> None:
+    complete_frame(stream, job.stream_sequence, job.identity, None)
 
 
 def affine_from_tensor(tensor) -> tuple[float, float, float, float, float, float]:
@@ -1092,15 +1274,11 @@ def set_error(runtime: AppRuntime, error: BaseException) -> None:
 
 
 def take_next_job(
-    runtime: AppRuntime,
-    mailboxes: list[FrameJob | None],
-    next_stream_attr: str,
-    wait: bool = True,
+    runtime: AppRuntime, mailboxes: list[FrameJob | None], next_stream_attr: str
 ) -> FrameJob | None:
     state = runtime.state
     with state.condition:
-        if wait:
-            state.condition.wait_for(lambda: state.stopping or any(mailboxes))
+        state.condition.wait_for(lambda: state.stopping or any(mailboxes))
         if state.stopping:
             return None
         next_stream = getattr(state, next_stream_attr)
@@ -1114,45 +1292,56 @@ def take_next_job(
     return None
 
 
-def pump_requests(runtime, run, input_name, output_name, depth, next_request, consume):
-    """One owner pipelines bounded requests and consumes results in FIFO order."""
-    pending = deque()
-    current = None
-    while not runtime.state.stopping:
-        if current is None and len(pending) < depth:
-            current = next_request()
-        sent = False
-        if current is not None:
-            context, sample, deadline = current
-            if sample is not None and time.monotonic() >= deadline:
-                sample = None  # Unaccepted stale work occupies only an ordering marker.
-                current = (context, None, deadline)
-            if sample is None or run.try_push(input_name, [sample]):
-                pending.append(current)
-                current = None
-                sent = True
-            elif not run.can_push():
-                raise RuntimeError(f"{input_name} closed: {run.last_error()}")
-        if pending:
-            context, sample, deadline = pending[0]
-            output = None if sample is None else run.pull(output_name, 0 if sent else 2)
-            if sample is None or output is not None:
-                pending.popleft()
-                consume(context, output)
-            elif not run.can_pull():
-                raise RuntimeError(f"{output_name} closed: {run.last_error()}")
-            elif time.monotonic() >= deadline:
-                # Stop after an accepted request times out: its late output must
-                # never be mistaken for a subsequent frame's result.
-                raise RuntimeError(f"{output_name} inference timed out")
-        elif not sent:
-            with runtime.state.condition:
-                runtime.state.condition.wait(0.001 if current is not None else 0.02)
+def stream_can_admit_frame(stream: StreamRuntime, frame_limit: int) -> bool:
+    if frame_limit <= 0:
+        return True
+    with stream.metadata_lock:
+        return (
+            stream.metadata_frames < frame_limit
+            and stream.outstanding_frames < frame_limit - stream.metadata_frames
+        )
 
 
-def close_source_stream(
-    runtime: AppRuntime, stream: StreamRuntime, reason: str
-) -> None:
+def try_push_with_context(
+    runtime: AppRuntime,
+    run,
+    input_name: str,
+    sample,
+    pending: deque,
+    context,
+    rejection_message: str,
+    abort_retry: Callable[[], bool] | None = None,
+) -> NonblockingPushResult:
+    state = runtime.state
+    while True:
+        with state.condition:
+            if state.stopping:
+                return NonblockingPushResult.CANCELLED
+            if abort_retry is not None and abort_retry():
+                return NonblockingPushResult.ABORTED
+            pending.append(context)
+        accepted = run.try_push(input_name, [sample])
+        if accepted:
+            return NonblockingPushResult.ACCEPTED
+        with state.condition:
+            if pending and pending[-1] is None:
+                pending.pop()
+                state.condition.notify_all()
+                return NonblockingPushResult.CANCELLED
+            if not pending or pending[-1] is not context:
+                raise RuntimeError("model input context changed after a rejected push")
+            pending.pop()
+            if abort_retry is not None and abort_retry():
+                state.condition.notify_all()
+                return NonblockingPushResult.ABORTED
+            if state.stopping:
+                return NonblockingPushResult.CANCELLED
+            if not run.can_push():
+                raise RuntimeError(rejection_message)
+            state.condition.wait(0.001)
+
+
+def close_source_stream(runtime: AppRuntime, stream: StreamRuntime, reason: str) -> None:
     if not stream.closed:
         stream.closed = True
         print(
@@ -1167,7 +1356,7 @@ def close_source_stream(
 def pull_source_frames(runtime: AppRuntime, cfg: AppConfig, stream_index: int) -> None:
     state = runtime.state
     stream = runtime.streams[stream_index]
-    output = f"frame_{stream_index}"
+    output = frame_output_name(stream_index)
     while True:
         with state.condition:
             if state.stopping:
@@ -1190,31 +1379,43 @@ def pull_source_frames(runtime: AppRuntime, cfg: AppConfig, stream_index: int) -
             with state.condition:
                 if state.stopping:
                     return
-                if cfg.frame_limit > 0:
-                    with stream.metadata_lock:
-                        remaining = cfg.frame_limit - stream.metadata_frames
-                        if remaining <= 0 or stream.outstanding_frames >= remaining:
-                            continue
+                if not stream_can_admit_frame(stream, cfg.frame_limit):
+                    continue
+                source_identity = identity_from_sample(sample)
                 stream.source_frames += 1
-                candidates = (sample.frame_id, sample.orig_input_seq, sample.input_seq)
-                valid_ids = (value for value in candidates if value >= 0)
-                frame_id = next(valid_ids, stream.source_frames)
+                identity = FrameIdentity(
+                    stream.config.id,
+                    select_frame_id(
+                        source_identity.frame_id,
+                        source_identity.orig_input_seq,
+                        source_identity.input_seq,
+                        stream.source_frames,
+                    ),
+                    source_identity.pts_ns,
+                    source_identity.dts_ns,
+                    source_identity.duration_ns,
+                    source_identity.input_seq,
+                    source_identity.orig_input_seq,
+                )
                 job = FrameJob(
+                    runtime.next_job_id,
+                    stream.source_frames,
                     stream_index,
                     require_rgb_tensor(sample),
                     [],
-                    frame_id,
-                    int(sample.pts_ns),
+                    identity,
                     time.monotonic() + cfg.pose_job_timeout_ms / 1000.0,
                 )
+                runtime.next_job_id += 1
                 with stream.metadata_lock:
                     stream.outstanding_frames += 1
                 if state.detector_mailboxes[stream_index] is not None:
                     dropped = state.detector_mailboxes[stream_index]
+                    stream.detector_mailbox_drops += 1
                 state.detector_mailboxes[stream_index] = job
                 state.condition.notify_all()
             if dropped is not None:
-                complete_frame(stream, dropped)
+                skip_frame(stream, dropped)
         except Exception as error:  # noqa: BLE001 - isolate a failed source.
             close_source_stream(runtime, stream, str(error))
             return
@@ -1243,44 +1444,71 @@ def run_source_stream(runtime: AppRuntime, cfg: AppConfig, stream_index: int) ->
         close_source_stream(runtime, stream, str(error))
 
 
-def detector_worker(runtime: AppRuntime, cfg: AppConfig) -> None:
-    state = runtime.state
-
-    def next_request():
-        job = take_next_job(
-            runtime, state.detector_mailboxes, "next_detector_stream", wait=False
-        )
-        if job is None:
-            return None
-        return (
-            job,
-            image_input_sample("detector_input", job.rgb.cvu(), job.pts_ns),
-            job.deadline,
-        )
-
-    def consume(job, sample):
-        stream = runtime.streams[job.stream_index]
-        if sample is not None:
-            job.people = select_people(sample, stream, cfg)
-        with state.condition:
-            dropped = state.pose_mailboxes[job.stream_index]
-            state.pose_mailboxes[job.stream_index] = job
-            state.condition.notify_all()
-        if dropped is not None:
-            complete_frame(stream, dropped)
-
+def dispatch_detector_jobs(runtime: AppRuntime, cfg: AppConfig) -> None:
     try:
-        pump_requests(
-            runtime,
-            runtime.detector_run,
-            "detector_input",
-            "detector_output",
-            4,
-            next_request,
-            consume,
-        )
-    except Exception as error:  # noqa: BLE001 - worker errors propagate to the owner.
+        state = runtime.state
+        while True:
+            job = take_next_job(
+                runtime, state.detector_mailboxes, "next_detector_stream"
+            )
+            if job is None:
+                return
+            stream = runtime.streams[job.stream_index]
+            if time.monotonic() >= job.deadline:
+                stream.timed_out_jobs += 1
+                complete_frame(stream, job.stream_sequence, job.identity, [])
+                continue
+            detector_frame = job.rgb.cvu()
+            sample = image_input_sample("detector_input", detector_frame, job.identity)
+            with state.condition:
+                state.condition.wait_for(
+                    lambda: (
+                        state.stopping
+                        or len(state.pending_detector_outputs) < cfg.max_pending_jobs
+                    ),
+                    timeout=max(0.0, job.deadline - time.monotonic()),
+                )
+                expired_while_waiting = time.monotonic() >= job.deadline
+                if state.stopping:
+                    return
+            if expired_while_waiting:
+                stream.timed_out_jobs += 1
+                complete_frame(stream, job.stream_sequence, job.identity, [])
+                continue
+            push_result = try_push_with_context(
+                runtime,
+                runtime.detector_run,
+                "detector_input",
+                sample,
+                state.pending_detector_outputs,
+                job,
+                "YOLO26 Run rejected a frame input",
+                lambda job=job: time.monotonic() >= job.deadline,
+            )
+            if push_result is not NonblockingPushResult.ACCEPTED:
+                with state.condition:
+                    if state.stopping:
+                        return
+                if push_result is NonblockingPushResult.ABORTED:
+                    stream.timed_out_jobs += 1
+                    complete_frame(stream, job.stream_sequence, job.identity, [])
+                continue
+    except Exception as error:  # noqa: BLE001 - propagate worker failures to the owner thread.
         set_error(runtime, error)
+
+
+def expire_detector_jobs(runtime: AppRuntime) -> None:
+    now = time.monotonic()
+    expired = []
+    with runtime.state.condition:
+        for index, job in enumerate(runtime.state.pending_detector_outputs):
+            if job is not None and now >= job.deadline:
+                expired.append(job)
+                runtime.state.pending_detector_outputs[index] = None
+    for job in expired:
+        stream = runtime.streams[job.stream_index]
+        stream.timed_out_jobs += 1
+        complete_frame(stream, job.stream_sequence, job.identity, [])
 
 
 def writable_rgb_view(tensor):
@@ -1291,94 +1519,219 @@ def writable_rgb_view(tensor):
     return rgb_view if rgb_view.flags.writeable else rgb_view.copy()
 
 
-def prepare_pose_worker(runtime: AppRuntime, cfg: AppConfig) -> None:
-    state = runtime.state
+def pull_detector_outputs(runtime: AppRuntime, cfg: AppConfig) -> None:
     try:
-        while (
-            job := take_next_job(runtime, state.pose_mailboxes, "next_pose_stream")
-        ) is not None:
-            requests = []
-            if job.people and time.monotonic() < job.deadline:
-                output = pyneat.stages.preproc(
-                    [writable_rgb_view(job.rgb)],
-                    runtime.pose_model,
-                    rois=[
-                        pyneat.PreprocessRoi(0, *square_roi(box, cfg.roi_scale))
-                        for box in job.people
-                    ],
-                    image_format=pyneat.PixelFormat.RGB,
-                    copy=False,
-                )
-                if len(output) != len(job.people):
+        state = runtime.state
+        while True:
+            expire_detector_jobs(runtime)
+            with state.condition:
+                if state.stopping and not state.pending_detector_outputs:
+                    return
+            sample = runtime.detector_run.pull("detector_output", 20)
+            if sample is None:
+                with state.condition:
+                    if state.stopping:
+                        return
+                if not runtime.detector_run.can_pull():
+                    detail = runtime.detector_run.last_error()
                     raise RuntimeError(
-                        "BlazePose Preproc output count does not match ROI count"
+                        "YOLO26 output closed unexpectedly"
+                        + (f": {detail}" if detail else "")
                     )
-                for index, tensor in enumerate(output):
-                    context = PoseInputContext(
-                        job.people[index],
-                        affine_from_tensor(tensor),
+                continue
+            with state.condition:
+                if not state.pending_detector_outputs:
+                    if state.stopping:
+                        return
+                    raise RuntimeError(
+                        "YOLO26 output arrived without pending frame context"
                     )
-                    requests.append(
-                        (
-                            (job, context, index == len(output) - 1),
-                            pose_input_sample(tensor.clone().cvu(), job.pts_ns),
-                            job.deadline,
-                        )
+                job = state.pending_detector_outputs.popleft()
+                state.condition.notify_all()
+
+            if job is None:
+                continue
+
+            stream = runtime.streams[job.stream_index]
+            stream.detector_frames += 1
+            if time.monotonic() >= job.deadline:
+                stream.timed_out_jobs += 1
+                complete_frame(stream, job.stream_sequence, job.identity, [])
+                continue
+            job.people = select_people(sample, stream, cfg)
+            stream.selected_rois += len(job.people)
+            if not job.people:
+                complete_frame(stream, job.stream_sequence, job.identity, [])
+                continue
+
+            dropped = None
+            with state.condition:
+                if state.stopping:
+                    return
+                if state.pose_mailboxes[job.stream_index] is not None:
+                    dropped = state.pose_mailboxes[job.stream_index]
+                    stream.pose_mailbox_drops += 1
+                state.pose_mailboxes[job.stream_index] = job
+                state.condition.notify_all()
+            if dropped is not None:
+                skip_frame(stream, dropped)
+    except Exception as error:  # noqa: BLE001 - propagate worker failures to the owner thread.
+        set_error(runtime, error)
+
+
+def dispatch_pose_jobs(runtime: AppRuntime, cfg: AppConfig) -> None:
+    try:
+        while True:
+            job = take_next_job(
+                runtime, runtime.state.pose_mailboxes, "next_pose_stream"
+            )
+            if job is None:
+                return
+            stream = runtime.streams[job.stream_index]
+            if time.monotonic() >= job.deadline:
+                stream.timed_out_jobs += 1
+                complete_frame(stream, job.stream_sequence, job.identity, [])
+                continue
+            if not job.people:
+                complete_frame(stream, job.stream_sequence, job.identity, [])
+                continue
+
+            rgb_view = writable_rgb_view(job.rgb)
+            requested_rois = [
+                square_roi(box, cfg.roi_scale) for box in job.people
+            ]
+            output = pyneat.stages.preproc(
+                [rgb_view],
+                runtime.pose_model,
+                rois=[
+                    pyneat.PreprocessRoi(0, *roi) for roi in requested_rois
+                ],
+                image_format=pyneat.PixelFormat.RGB,
+                copy=False,
+            )
+            if len(output) != len(requested_rois):
+                raise RuntimeError(
+                    "BlazePose Preproc output count does not match ROI count"
+                )
+            prepared_inputs = []
+            for person_index, tensor in enumerate(output):
+                affine = affine_from_tensor(tensor)
+                # Detached asynchronous Runs may retain their input after push().
+                # Give each ROI independent EV74 storage before enqueueing.
+                prepared_inputs.append(
+                    PreparedPoseInput(
+                        person_index,
+                        job.people[person_index],
+                        affine,
+                        tensor.clone().cvu(),
                     )
-            else:
-                requests.append(((job, None, True), None, job.deadline))
+                )
+
+            state = runtime.state
             with state.condition:
                 state.condition.wait_for(
-                    lambda: state.stopping or not state.prepared_frames
+                    lambda state=state: (
+                        state.stopping or len(state.aggregates) < cfg.max_pending_jobs
+                    ),
+                    timeout=max(0.0, job.deadline - time.monotonic()),
                 )
                 if state.stopping:
                     return
-                state.prepared_frames.append(requests)
-                state.condition.notify_all()
-    except Exception as error:  # noqa: BLE001 - worker errors propagate to the owner.
+                expired_while_waiting = time.monotonic() >= job.deadline
+                if not expired_while_waiting:
+                    state.aggregates[job.job_id] = PoseAggregate(
+                        job.stream_index,
+                        job.stream_sequence,
+                        len(prepared_inputs),
+                        job.identity,
+                        job.deadline,
+                    )
+            if expired_while_waiting:
+                stream.timed_out_jobs += 1
+                complete_frame(stream, job.stream_sequence, job.identity, [])
+                continue
+
+            accepted_rois = 0
+            for prepared in prepared_inputs:
+                context = PoseInputContext(
+                    job.job_id,
+                    job.stream_index,
+                    prepared.roi_index,
+                    len(prepared_inputs),
+                    prepared.box,
+                    prepared.affine,
+                    job.identity,
+                )
+                sample = pose_input_sample(prepared.tensor, context)
+                push_result = try_push_with_context(
+                    runtime,
+                    runtime.pose_run,
+                    "pose_input",
+                    sample,
+                    state.pending_pose_outputs,
+                    context,
+                    "BlazePose Run rejected an ROI input",
+                    lambda job=job: time.monotonic() >= job.deadline,
+                )
+                if push_result is NonblockingPushResult.CANCELLED:
+                    with state.condition:
+                        if state.stopping:
+                            return
+                    raise RuntimeError(
+                        "BlazePose input context was cancelled unexpectedly"
+                    )
+                if push_result is not NonblockingPushResult.ACCEPTED:
+                    with state.condition:
+                        if state.stopping:
+                            return
+                    expire_pose_jobs(runtime)
+                    with state.condition:
+                        aggregate = state.aggregates.get(job.job_id)
+                        if aggregate is not None:
+                            aggregate.expected = accepted_rois
+                            if aggregate.expired and aggregate.completed >= aggregate.expected:
+                                del state.aggregates[job.job_id]
+                                state.condition.notify_all()
+                    break
+                accepted_rois += 1
+    except Exception as error:  # noqa: BLE001 - propagate worker failures to the owner thread.
         set_error(runtime, error)
 
 
-def pose_worker(runtime: AppRuntime, cfg: AppConfig) -> None:
+def publish_aggregate(runtime: AppRuntime, job_id: int) -> None:
     state = runtime.state
-    prepared = deque()
-    poses = []
-
-    def next_request():
-        if not prepared:
-            with state.condition:
-                if not state.prepared_frames:
-                    return None
-                prepared.extend(state.prepared_frames.popleft())
-                state.condition.notify_all()
-        return prepared.popleft()
-
-    def consume(context, sample):
-        job, roi, last = context
-        stream = runtime.streams[job.stream_index]
-        if sample is not None:
-            stream.completed_rois += 1
-            pose = parse_pose_output(sample, roi, cfg)
-            if pose is not None:
-                poses.append(pose)
-        if last:
-            # Requests for a frame are consecutive, so one local accumulator
-            # replaces the aggregate map and per-stream completion queues.
-            complete_frame(stream, job, list(poses))
-            poses.clear()
-
-    try:
-        pump_requests(
-            runtime,
-            runtime.pose_run,
-            "pose_input",
-            "pose_output",
-            4,
-            next_request,
-            consume,
+    with state.condition:
+        aggregate = state.aggregates.pop(job_id, None)
+        state.condition.notify_all()
+    if aggregate is not None:
+        complete_frame(
+            runtime.streams[aggregate.stream_index],
+            aggregate.stream_sequence,
+            aggregate.identity,
+            aggregate.poses,
         )
-    except Exception as error:  # noqa: BLE001 - worker errors propagate to the owner.
-        set_error(runtime, error)
+
+
+def expire_pose_jobs(runtime: AppRuntime) -> None:
+    now = time.monotonic()
+    with runtime.state.condition:
+        expired = []
+        for aggregate in runtime.state.aggregates.values():
+            if not aggregate.expired and now >= aggregate.deadline:
+                aggregate.expired = True
+                expired.append(
+                    (
+                        aggregate.stream_index,
+                        aggregate.stream_sequence,
+                        aggregate.identity,
+                        aggregate.poses,
+                    )
+                )
+                aggregate.poses = []
+    for stream_index, sequence, identity, poses in expired:
+        stream = runtime.streams[stream_index]
+        stream.timed_out_jobs += 1
+        complete_frame(stream, sequence, identity, poses)
 
 
 def parse_pose_output(sample, context: PoseInputContext, cfg: AppConfig):
@@ -1407,7 +1760,59 @@ def parse_pose_output(sample, context: PoseInputContext, cfg: AppConfig):
         context.affine,
         context.box,
         presence_probability,
+        context.roi_index,
     )
+
+
+def pull_pose_outputs(runtime: AppRuntime, cfg: AppConfig) -> None:
+    try:
+        state = runtime.state
+        while True:
+            with state.condition:
+                if state.stopping:
+                    return
+            sample = runtime.pose_run.pull("pose_output", 20)
+            if sample is None:
+                with state.condition:
+                    if state.stopping:
+                        return
+                if not runtime.pose_run.can_pull():
+                    detail = runtime.pose_run.last_error()
+                    raise RuntimeError(
+                        "BlazePose output closed unexpectedly"
+                        + (f": {detail}" if detail else "")
+                    )
+                expire_pose_jobs(runtime)
+                continue
+            expire_pose_jobs(runtime)
+            with state.condition:
+                if not state.pending_pose_outputs:
+                    if state.stopping:
+                        return
+                    raise RuntimeError(
+                        "BlazePose output arrived without pending ROI context"
+                    )
+                context = state.pending_pose_outputs.popleft()
+                aggregate = state.aggregates.get(context.job_id)
+                expired = aggregate is None or aggregate.expired
+            pose = None if expired else parse_pose_output(sample, context, cfg)
+            complete = False
+            with state.condition:
+                aggregate = state.aggregates.get(context.job_id)
+                if aggregate is not None:
+                    aggregate.completed += 1
+                    if not aggregate.expired and pose is not None:
+                        aggregate.poses.append(pose)
+                    complete = aggregate.completed == aggregate.expected
+                    expired = aggregate.expired
+                    if complete and expired:
+                        del state.aggregates[context.job_id]
+                        state.condition.notify_all()
+            runtime.streams[context.stream_index].completed_rois += 1
+            if complete and not expired:
+                publish_aggregate(runtime, context.job_id)
+    except Exception as error:  # noqa: BLE001 - propagate worker failures to the owner thread.
+        set_error(runtime, error)
 
 
 def all_streams_done(runtime: AppRuntime, frame_limit: int) -> bool:
@@ -1440,7 +1845,9 @@ def stop_runtime(runtime: AppRuntime) -> None:
             runtime.state.detector_mailboxes
         )
         runtime.state.pose_mailboxes = [None] * len(runtime.state.pose_mailboxes)
-        runtime.state.prepared_frames.clear()
+        runtime.state.pending_detector_outputs.clear()
+        runtime.state.pending_pose_outputs.clear()
+        runtime.state.aggregates.clear()
         source_runs = [
             stream.source_run
             for stream in runtime.streams
@@ -1454,6 +1861,17 @@ def stop_runtime(runtime: AppRuntime) -> None:
 
 
 def print_summary(runtime: AppRuntime, elapsed: float) -> None:
+    for stream in runtime.streams:
+        print(
+            f"[summary stream={stream.config.id}] source_frames={stream.source_frames} "
+            f"detector_frames={stream.detector_frames} "
+            f"metadata_frames={stream.metadata_frames} selected_rois={stream.selected_rois} "
+            f"completed_rois={stream.completed_rois} "
+            f"detector_mailbox_drops={stream.detector_mailbox_drops} "
+            f"pose_mailbox_drops={stream.pose_mailbox_drops} "
+            f"timed_out_jobs={stream.timed_out_jobs}",
+            flush=True,
+        )
     total_frames = sum(stream.metadata_frames for stream in runtime.streams)
     total_rois = sum(stream.completed_rois for stream in runtime.streams)
     print(
@@ -1462,6 +1880,21 @@ def print_summary(runtime: AppRuntime, elapsed: float) -> None:
         f"pose_fps={total_rois / elapsed if elapsed > 0 else 0.0:.3f}",
         flush=True,
     )
+
+
+def release_runtime_objects(runtime: AppRuntime) -> None:
+    """Release Python-owned graph cycles before nanobind module teardown."""
+    runtime.detector_run = None
+    runtime.pose_run = None
+    runtime.detector_graph = None
+    runtime.pose_graph = None
+    runtime.detector_model = None
+    runtime.pose_model = None
+    for stream in runtime.streams:
+        stream.source_run = None
+        stream.source_graph = None
+    runtime.streams.clear()
+    gc.collect()
 
 
 def join_source_workers(
@@ -1495,12 +1928,24 @@ def run_app(cfg: AppConfig) -> None:
         )
         for stream in runtime.streams
     ]
-    workers = [
-        threading.Thread(target=target, args=(runtime, cfg), daemon=True)
-        for target in (detector_worker, prepare_pose_worker, pose_worker)
-    ]
-    for worker in source_pullers + workers:
-        worker.start()
+    detector_dispatcher = threading.Thread(
+        target=dispatch_detector_jobs, args=(runtime, cfg), daemon=True
+    )
+    detector_puller = threading.Thread(
+        target=pull_detector_outputs, args=(runtime, cfg), daemon=True
+    )
+    pose_dispatcher = threading.Thread(
+        target=dispatch_pose_jobs, args=(runtime, cfg), daemon=True
+    )
+    pose_puller = threading.Thread(
+        target=pull_pose_outputs, args=(runtime, cfg), daemon=True
+    )
+    for puller in source_pullers:
+        puller.start()
+    detector_dispatcher.start()
+    detector_puller.start()
+    pose_dispatcher.start()
+    pose_puller.start()
     try:
         while not all_streams_done(runtime, cfg.frame_limit):
             with runtime.state.condition:
@@ -1515,8 +1960,10 @@ def run_app(cfg: AppConfig) -> None:
     finally:
         stop_runtime(runtime)
         unfinished_sources = join_source_workers(runtime, source_pullers)
-        for worker in workers:
-            worker.join()
+        detector_dispatcher.join()
+        detector_puller.join()
+        pose_dispatcher.join()
+        pose_puller.join()
         print_summary(runtime, time.monotonic() - started)
     error = runtime.state.error
     if unfinished_sources:
@@ -1526,6 +1973,10 @@ def run_app(cfg: AppConfig) -> None:
             file=sys.stderr,
             flush=True,
         )
+    else:
+        release_runtime_objects(runtime)
+    del runtime
+    gc.collect()
     if error is not None:
         raise error
 

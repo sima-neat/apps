@@ -20,22 +20,24 @@
 #include "support/object_detection/obj_detection_utils.h"
 #include "support/runtime/config_utils.h"
 #include "support/runtime/example_utils.h"
+#include "yaml_config.h"
 
 #include <nodes/groups/VideoSender.h>
 #include <nodes/io/MetadataSender.h>
 
 #include <opencv2/core/mat.hpp>
-#include <yaml-cpp/yaml.h>
+
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <condition_variable>
-#include <deque>
 #include <csignal>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -49,6 +51,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -83,14 +86,19 @@ struct AppConfig {
   int latency_ms = 100;
   double detector_min_score = 0.30;
   double detector_nms_iou = 0.60;
+  int max_detections = 100;
+  int max_inflight_per_stream = 4;
   int max_people_per_frame = 4;
   double roi_scale = 1.65;
   double pose_presence_threshold = 0.50;
+  bool pose_temporal_filter_enabled = true;
   int pose_job_timeout_ms = 1000;
+  int max_pending_jobs = 64;
   int frame_limit = 0;
   std::string insight_host;
   int video_port_base = 9000;
   int metadata_port_base = 9100;
+  bool video_enabled = true;
 };
 
 struct CliOptions {
@@ -98,30 +106,57 @@ struct CliOptions {
   bool validate_config_only = false;
 };
 
+struct FrameIdentity {
+  std::string stream_id;
+  int64_t frame_id = -1;
+  int64_t pts_ns = -1;
+  int64_t dts_ns = -1;
+  int64_t duration_ns = -1;
+  int64_t input_seq = -1;
+  int64_t orig_input_seq = -1;
+};
+
 struct FrameJob {
+  std::uint64_t job_id = 0;
+  std::uint64_t stream_sequence = 0;
   int stream_index = 0;
   neat::Tensor rgb;
   std::vector<blazepose_app::Box> people;
-  int64_t frame_id = -1;
-  int64_t pts_ns = -1;
+  FrameIdentity identity;
   Clock::time_point deadline;
 };
 
 struct PoseInputContext {
+  std::uint64_t job_id = 0;
+  int stream_index = 0;
+  int roi_index = 0;
+  int roi_count = 0;
   blazepose_app::Box box;
   blazepose_app::Affine affine;
+  FrameIdentity identity;
 };
 
-template <typename Context> struct InferenceRequest {
-  Context context;
-  std::optional<neat::Sample> input;
+struct PreparedPoseInput {
+  int roi_index = 0;
+  blazepose_app::Box box;
+  blazepose_app::Affine affine;
+  neat::Tensor tensor;
+};
+
+struct PoseAggregate {
+  int stream_index = 0;
+  std::uint64_t stream_sequence = 0;
+  int expected = 0;
+  int completed = 0;
+  bool expired = false;
+  FrameIdentity identity;
   Clock::time_point deadline;
+  std::vector<blazepose_app::Pose> poses;
 };
 
-struct PoseRequestContext {
-  std::shared_ptr<FrameJob> job;
-  PoseInputContext roi;
-  bool last;
+struct FramePublication {
+  FrameIdentity identity;
+  std::optional<std::vector<blazepose_app::Pose>> poses;
 };
 
 struct StreamRuntime {
@@ -135,10 +170,17 @@ struct StreamRuntime {
   int fps = 0;
   std::unique_ptr<neat::MetadataSender> metadata_sender;
   std::mutex metadata_mutex;
+  blazepose_app::OrderedCompletionQueue<FramePublication> publications;
   blazepose_app::PoseSmoother pose_smoother;
+  bool pose_temporal_filter_enabled = true;
   std::atomic<int> metadata_frames{0};
   std::atomic<std::uint64_t> source_frames{0};
+  std::atomic<std::uint64_t> detector_frames{0};
+  std::atomic<std::uint64_t> selected_rois{0};
   std::atomic<std::uint64_t> completed_rois{0};
+  std::atomic<std::uint64_t> detector_mailbox_drops{0};
+  std::atomic<std::uint64_t> pose_mailbox_drops{0};
+  std::atomic<std::uint64_t> timed_out_jobs{0};
   std::atomic<std::uint64_t> outstanding_frames{0};
   std::atomic<bool> closed{false};
   std::atomic<bool> source_worker_finished{false};
@@ -149,7 +191,11 @@ struct SharedState {
   std::condition_variable cv;
   std::vector<std::optional<FrameJob>> detector_mailboxes;
   std::vector<std::optional<FrameJob>> pose_mailboxes;
-  std::deque<InferenceRequest<PoseRequestContext>> prepared_frame;
+  // Empty entries are expired inputs retained only to discard their eventual
+  // FIFO-correlated model outputs without attaching them to newer frames.
+  std::deque<std::optional<FrameJob>> pending_detector_outputs;
+  std::deque<std::optional<PoseInputContext>> pending_pose_outputs;
+  std::unordered_map<std::uint64_t, PoseAggregate> aggregates;
   std::size_t next_detector_stream = 0;
   std::size_t next_pose_stream = 0;
   bool stopping = false;
@@ -165,36 +211,141 @@ struct AppRuntime {
   std::unique_ptr<neat::Model> pose_model;
   std::vector<std::unique_ptr<StreamRuntime>> streams;
   SharedState state;
+  std::atomic<std::uint64_t> next_job_id{1};
 };
 
-neat::nodes::groups::RtspCodec parse_codec(const std::string& value) {
-  if (value == "h264") {
-    return neat::nodes::groups::RtspCodec::H264;
-  }
-  if (value == "h265") {
-    return neat::nodes::groups::RtspCodec::H265;
-  }
-  throw std::runtime_error("stream codec must be h264 or h265");
+std::string lower_copy(std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  return value;
 }
 
-template <typename T> T setting(const YAML::Node& node, const char* path, T fallback) {
-  const std::string key(path);
-  if (!node || !node.IsMap()) {
-    throw std::runtime_error("configuration section must be a mapping: " + key);
+neat::nodes::groups::RtspCodec parse_codec(const std::string& value) {
+  const std::string lowered = lower_copy(value);
+  if (lowered == "h264" || lowered == "avc" || lowered == "h.264") {
+    return neat::nodes::groups::RtspCodec::H264;
   }
-  const auto dot = key.find('.');
-  const auto value = node[key.substr(0, dot)];
-  if (!value) {
-    return fallback;
+  if (lowered == "h265" || lowered == "hevc" || lowered == "h.265") {
+    return neat::nodes::groups::RtspCodec::H265;
   }
-  if (dot != std::string::npos) {
-    return setting(value, key.substr(dot + 1).c_str(), fallback);
+  throw std::runtime_error("stream codec must be h264/avc or h265/hevc");
+}
+
+std::string codec_name(neat::nodes::groups::RtspCodec codec) {
+  return codec == neat::nodes::groups::RtspCodec::H265 ? "h265" : "h264";
+}
+
+struct ParsedKeyValue {
+  std::string key;
+  blazepose_config::YamlScalar scalar;
+};
+
+ParsedKeyValue parse_key_value(const std::string& text, const std::string& where) {
+  const std::size_t separator = text.find(':');
+  if (separator == std::string::npos) {
+    throw std::runtime_error(where + " must be 'key: value'");
   }
-  try {
-    return value.as<T>();
-  } catch (const YAML::Exception&) {
-    throw std::runtime_error(key + " has the wrong type");
+  const std::string key = sima_examples::trim_copy(text.substr(0, separator));
+  if (key.empty()) {
+    throw std::runtime_error(where + " has an empty key");
   }
+  return {key, blazepose_config::parse_yaml_scalar(text.substr(separator + 1))};
+}
+
+std::string require_stream_string(const ParsedKeyValue& field) {
+  if (field.scalar.type != blazepose_config::YamlScalarType::String) {
+    throw std::runtime_error("stream " + field.key + " must be a string");
+  }
+  return field.scalar.value;
+}
+
+int require_stream_integer(const ParsedKeyValue& field) {
+  if (field.scalar.type != blazepose_config::YamlScalarType::Integer) {
+    throw std::runtime_error("stream " + field.key + " must be an integer");
+  }
+  return blazepose_config::parse_yaml_integer(field.scalar.value, "stream " + field.key);
+}
+
+void apply_stream_field(StreamConfig& stream, const ParsedKeyValue& field) {
+  if (field.key == "id") {
+    stream.id = require_stream_string(field);
+  } else if (field.key == "url") {
+    stream.url = require_stream_string(field);
+  } else if (field.key == "codec") {
+    stream.codec = parse_codec(require_stream_string(field));
+  } else if (field.key == "insight_channel") {
+    stream.insight_channel = require_stream_integer(field);
+  } else if (field.key == "width") {
+    stream.width = require_stream_integer(field);
+  } else if (field.key == "height") {
+    stream.height = require_stream_integer(field);
+  } else if (field.key == "fps") {
+    stream.fps = require_stream_integer(field);
+  } else {
+    throw std::runtime_error("unknown stream setting: " + field.key);
+  }
+}
+
+std::vector<StreamConfig> parse_streams(const fs::path& config_path) {
+  std::ifstream input(config_path);
+  if (!input.is_open()) {
+    throw std::runtime_error("failed to open config file: " + config_path.string());
+  }
+
+  std::vector<StreamConfig> streams;
+  std::optional<StreamConfig> current;
+  bool in_streams = false;
+  int streams_indent = -1;
+  auto commit = [&]() {
+    if (current.has_value()) {
+      streams.push_back(std::move(*current));
+      current.reset();
+    }
+  };
+
+  std::string raw_line;
+  int line_number = 0;
+  while (std::getline(input, raw_line)) {
+    ++line_number;
+    const std::string without_comment = blazepose_config::strip_yaml_inline_comment(raw_line);
+    if (sima_examples::trim_copy(without_comment).empty()) {
+      continue;
+    }
+    int indent = 0;
+    while (indent < static_cast<int>(without_comment.size()) &&
+           (without_comment[static_cast<std::size_t>(indent)] == ' ' ||
+            without_comment[static_cast<std::size_t>(indent)] == '\t')) {
+      ++indent;
+    }
+    const std::string line = sima_examples::trim_copy(without_comment);
+    if (!in_streams && line == "streams:") {
+      in_streams = true;
+      streams_indent = indent;
+      continue;
+    }
+    if (!in_streams) {
+      continue;
+    }
+    if (indent <= streams_indent && line.rfind("- ", 0) != 0) {
+      commit();
+      break;
+    }
+    if (line.rfind("- ", 0) == 0) {
+      commit();
+      current.emplace();
+      apply_stream_field(
+          *current,
+          parse_key_value(line.substr(2), "streams line " + std::to_string(line_number)));
+      continue;
+    }
+    if (!current.has_value()) {
+      throw std::runtime_error("streams must contain mapping entries");
+    }
+    apply_stream_field(*current,
+                       parse_key_value(line, "streams line " + std::to_string(line_number)));
+  }
+  commit();
+  return streams;
 }
 
 void validate_config(const AppConfig& cfg) {
@@ -208,12 +359,16 @@ void validate_config(const AppConfig& cfg) {
                          "detector.min_score must be between 0 and 1");
   sima_examples::require(cfg.detector_nms_iou >= 0.0 && cfg.detector_nms_iou <= 1.0,
                          "detector.nms_iou must be between 0 and 1");
+  sima_examples::require(cfg.max_detections > 0, "detector.max_detections must be > 0");
+  sima_examples::require(cfg.max_inflight_per_stream == -1 || cfg.max_inflight_per_stream > 0,
+                         "detector.max_inflight_per_stream must be -1 or > 0");
   sima_examples::require(cfg.max_people_per_frame > 0 && cfg.max_people_per_frame <= 10,
                          "pose.max_people_per_frame must be between 1 and 10");
   sima_examples::require(cfg.roi_scale > 0.0, "pose.roi_scale must be > 0");
   sima_examples::require(cfg.pose_presence_threshold >= 0.0 && cfg.pose_presence_threshold <= 1.0,
                          "pose.presence_threshold must be between 0 and 1");
   sima_examples::require(cfg.pose_job_timeout_ms > 0, "pose.job_timeout_ms must be > 0");
+  sima_examples::require(cfg.max_pending_jobs > 0, "pose.max_pending_jobs must be > 0");
   sima_examples::require(cfg.frame_limit >= 0, "runtime.frames must be >= 0");
   sima_examples::require(cfg.video_port_base > 0 && cfg.video_port_base <= 65535,
                          "output.insight.video_port_base must be between 1 and 65535");
@@ -229,10 +384,10 @@ void validate_config(const AppConfig& cfg) {
     sima_examples::require(!stream.url.empty(), "stream url must be set");
     sima_examples::require(stream.insight_channel >= 0, "stream insight_channel must be >= 0");
     const bool has_no_explicit_caps = stream.width == 0 && stream.height == 0 && stream.fps == 0;
-    const bool has_complete_explicit_caps = stream.width > 0 && stream.height > 0 && stream.fps > 0;
-    sima_examples::require(
-        has_no_explicit_caps || has_complete_explicit_caps,
-        "stream width, height, and fps must either all be omitted or all be > 0");
+    const bool has_complete_explicit_caps =
+        stream.width > 0 && stream.height > 0 && stream.fps > 0;
+    sima_examples::require(has_no_explicit_caps || has_complete_explicit_caps,
+                           "stream width, height, and fps must either all be omitted or all be > 0");
     sima_examples::require(stream.insight_channel <= 65535 - cfg.video_port_base,
                            "stream video port must be <= 65535");
     sima_examples::require(stream.insight_channel <= 65535 - cfg.metadata_port_base,
@@ -240,7 +395,9 @@ void validate_config(const AppConfig& cfg) {
     sima_examples::require(ids.insert(stream.id).second, "stream ids must be unique");
     sima_examples::require(channels.insert(stream.insight_channel).second,
                            "stream insight channels must be unique");
-    video_ports.insert(cfg.video_port_base + stream.insight_channel);
+    if (cfg.video_enabled) {
+      video_ports.insert(cfg.video_port_base + stream.insight_channel);
+    }
     metadata_ports.insert(cfg.metadata_port_base + stream.insight_channel);
   }
   std::vector<int> overlapping_ports;
@@ -251,33 +408,28 @@ void validate_config(const AppConfig& cfg) {
 }
 
 AppConfig load_app_config(const fs::path& config_path) {
-  const auto raw = YAML::LoadFile(config_path.string());
+  const auto raw = blazepose_config::TypedConfig::load(config_path);
   AppConfig cfg;
-  cfg.detector_model_path = setting(raw, "models.detector_path", std::string{});
-  cfg.pose_model_path = setting(raw, "models.pose_path", std::string{});
-  const auto streams = raw["streams"];
-  if (!streams || !streams.IsSequence()) {
-    throw std::runtime_error("streams must be a list");
-  }
-  for (const auto& value : streams) {
-    cfg.streams.push_back({setting(value, "id", std::string{}),
-                           setting(value, "url", std::string{}),
-                           parse_codec(setting(value, "codec", std::string{"h264"})),
-                           setting(value, "insight_channel", -1), setting(value, "width", 0),
-                           setting(value, "height", 0), setting(value, "fps", 0)});
-  }
-  cfg.tcp = setting(raw, "input.tcp", true);
-  cfg.latency_ms = setting(raw, "input.latency_ms", 100);
-  cfg.detector_min_score = setting(raw, "detector.min_score", 0.30);
-  cfg.detector_nms_iou = setting(raw, "detector.nms_iou", 0.60);
-  cfg.max_people_per_frame = setting(raw, "pose.max_people_per_frame", 4);
-  cfg.roi_scale = setting(raw, "pose.roi_scale", 1.65);
-  cfg.pose_presence_threshold = setting(raw, "pose.presence_threshold", 0.50);
-  cfg.pose_job_timeout_ms = setting(raw, "pose.job_timeout_ms", 1000);
-  cfg.frame_limit = setting(raw, "runtime.frames", 0);
-  cfg.insight_host = setting(raw, "output.insight.host", std::string{});
-  cfg.video_port_base = setting(raw, "output.insight.video_port_base", 9000);
-  cfg.metadata_port_base = setting(raw, "output.insight.metadata_port_base", 9100);
+  cfg.detector_model_path = raw.string_or("models.detector_path", "");
+  cfg.pose_model_path = raw.string_or("models.pose_path", "");
+  cfg.streams = parse_streams(config_path);
+  cfg.tcp = raw.bool_or("input.tcp", true);
+  cfg.latency_ms = raw.int_or("input.latency_ms", 100);
+  cfg.detector_min_score = raw.double_or("detector.min_score", 0.30);
+  cfg.detector_nms_iou = raw.double_or("detector.nms_iou", 0.60);
+  cfg.max_detections = raw.int_or("detector.max_detections", 100);
+  cfg.max_inflight_per_stream = raw.int_or("detector.max_inflight_per_stream", 4);
+  cfg.max_people_per_frame = raw.int_or("pose.max_people_per_frame", 4);
+  cfg.roi_scale = raw.double_or("pose.roi_scale", 1.65);
+  cfg.pose_presence_threshold = raw.double_or("pose.presence_threshold", 0.50);
+  cfg.pose_temporal_filter_enabled = raw.bool_or("pose.temporal_filter_enabled", true);
+  cfg.pose_job_timeout_ms = raw.int_or("pose.job_timeout_ms", 1000);
+  cfg.max_pending_jobs = raw.int_or("pose.max_pending_jobs", 64);
+  cfg.frame_limit = raw.int_or("runtime.frames", 0);
+  cfg.insight_host = raw.string_or("output.insight.host", "");
+  cfg.video_port_base = raw.int_or("output.insight.video_port_base", 9000);
+  cfg.metadata_port_base = raw.int_or("output.insight.metadata_port_base", 9100);
+  cfg.video_enabled = raw.bool_or("output.video_enabled", true);
   validate_config(cfg);
   return cfg;
 }
@@ -304,12 +456,16 @@ CliOptions parse_args(int argc, char** argv) {
   return options;
 }
 
+neat::FormatTag encoded_format(neat::nodes::groups::RtspCodec codec) {
+  return codec == neat::nodes::groups::RtspCodec::H265 ? neat::FormatTag::H265
+                                                       : neat::FormatTag::H264;
+}
+
 neat::InputOptions encoded_input_options(neat::nodes::groups::RtspCodec codec,
                                          neat::InputMemoryPolicy memory) {
   neat::InputOptions options;
   options.payload_type = neat::PayloadType::Encoded;
-  options.format =
-      codec == neat::nodes::groups::RtspCodec::H265 ? neat::FormatTag::H265 : neat::FormatTag::H264;
+  options.format = encoded_format(codec);
   options.memory_policy = memory;
   return options;
 }
@@ -432,7 +588,7 @@ std::unique_ptr<neat::Model> make_detector_model(const AppConfig& cfg, int max_w
   options.decode_type = neat::BoxDecodeType::YoloV26;
   options.score_threshold = cfg.detector_min_score;
   options.nms_iou_threshold = cfg.detector_nms_iou;
-  options.top_k = 100;
+  options.top_k = cfg.max_detections;
   return std::make_unique<neat::Model>(cfg.detector_model_path, options);
 }
 
@@ -473,7 +629,7 @@ void validate_pose_contract(const neat::Model& model) {
                          "BlazePose output 2 must be [1,117]");
 }
 
-neat::Sample pose_input_sample(const neat::Tensor& tensor, int64_t pts_ns = -1) {
+neat::Sample pose_input_sample(const neat::Tensor& tensor, const PoseInputContext* context) {
   neat::Sample sample = neat::make_tensor_sample("pose_input", tensor);
   sample.payload_type = neat::PayloadType::Tensor;
   sample.media_type = "application/vnd.simaai.tensor";
@@ -481,7 +637,15 @@ neat::Sample pose_input_sample(const neat::Tensor& tensor, int64_t pts_ns = -1) 
     sample.format = tensor.semantic.tess->format;
     sample.payload_tag = sample.format;
   }
-  sample.pts_ns = pts_ns;
+  if (context != nullptr) {
+    sample.stream_id = context->identity.stream_id;
+    sample.frame_id = context->identity.frame_id;
+    sample.pts_ns = context->identity.pts_ns;
+    sample.dts_ns = context->identity.dts_ns;
+    sample.duration_ns = context->identity.duration_ns;
+    sample.input_seq = context->identity.input_seq;
+    sample.orig_input_seq = context->identity.orig_input_seq;
+  }
   return sample;
 }
 
@@ -492,7 +656,7 @@ void build_pose_run(AppRuntime& app) {
   const neat::TensorList seed_tensors =
       neat::stages::Preproc(std::vector<cv::Mat>{seed_image}, *app.pose_model, seed_rois);
   sima_examples::require(seed_tensors.size() == 1, "BlazePose seed Preproc returned no tensor");
-  const neat::Sample seed = pose_input_sample(seed_tensors.front());
+  const neat::Sample seed = pose_input_sample(seed_tensors.front(), nullptr);
 
   app.pose_graph = neat::Graph("blazepose_runner");
   app.pose_graph.add(neat::nodes::Input("pose_input"));
@@ -509,13 +673,17 @@ void build_pose_run(AppRuntime& app) {
   app.pose_run = app.pose_graph.build(seed, options);
 }
 
-neat::GraphLinkOptions realtime_link(const StreamRuntime& stream) {
+neat::GraphLinkOptions realtime_link(const AppConfig& cfg, const StreamRuntime& stream) {
   neat::GraphLinkOptions options;
   options.policy = neat::GraphLinkPolicy::RealtimeLatestByStream;
   options.stream_id = stream.config.id;
-  options.max_inflight_per_stream = 4;
-  options.max_inflight_total = 4;
+  options.max_inflight_per_stream = cfg.max_inflight_per_stream;
+  options.max_inflight_total = cfg.max_inflight_per_stream;
   return options;
+}
+
+std::string frame_output_name(int stream_index) {
+  return "frame_" + std::to_string(stream_index);
 }
 
 neat::Graph make_rgb_output(const StreamRuntime& stream) {
@@ -523,8 +691,7 @@ neat::Graph make_rgb_output(const StreamRuntime& stream) {
   graph.add(neat::nodes::Input("analytics_frame"));
   graph.add(neat::nodes::VideoConvert());
   graph.add(neat::nodes::CapsRaw("RGB", stream.width, stream.height, stream.fps));
-  graph.add(
-      neat::nodes::Output("frame_" + std::to_string(stream.index), neat::OutputOptions::Latest()));
+  graph.add(neat::nodes::Output(frame_output_name(stream.index), neat::OutputOptions::Latest()));
   return graph;
 }
 
@@ -536,6 +703,7 @@ void initialize_streams(AppRuntime& app, const AppConfig& cfg) {
     stream->index = static_cast<int>(index);
     stream->config = cfg.streams[index];
     stream->source_options = probe_source(cfg, *stream);
+    stream->pose_temporal_filter_enabled = cfg.pose_temporal_filter_enabled;
     max_width = std::max(max_width, stream->width);
     max_height = std::max(max_height, stream->height);
 
@@ -561,26 +729,41 @@ void prepare_source_graphs(AppRuntime& app, const AppConfig& cfg) {
     const neat::Graph source = make_encoded_source(stream.source_options);
     const neat::Graph decoder = make_decoder(stream.source_options);
     stream.source_graph.connect(source, decoder);
-    stream.source_graph.connect(decoder, make_rgb_output(stream), realtime_link(stream));
-    stream.source_graph.connect(source, make_video_sender(cfg, stream), realtime_link(stream));
+    stream.source_graph.connect(decoder, make_rgb_output(stream), realtime_link(cfg, stream));
+    if (cfg.video_enabled) {
+      stream.source_graph.connect(source, make_video_sender(cfg, stream),
+                                  realtime_link(cfg, stream));
+    }
 
-    std::cout << "[stream " << stream.config.id << "] codec="
-              << (stream.config.codec == neat::nodes::groups::RtspCodec::H265 ? "h265" : "h264")
+    std::cout << "[stream " << stream.config.id << "] codec=" << codec_name(stream.config.codec)
               << " source=" << stream.width << "x" << stream.height << "@" << stream.fps
-              << " channel=" << stream.config.insight_channel
-              << " video=" << cfg.video_port_base + stream.config.insight_channel
-              << " metadata=" << stream.metadata_sender->metadata_port() << "\n";
+              << " channel=" << stream.config.insight_channel << " video=";
+    if (cfg.video_enabled) {
+      std::cout << cfg.video_port_base + stream.config.insight_channel;
+    } else {
+      std::cout << "disabled";
+    }
+    std::cout << " metadata=" << stream.metadata_sender->metadata_port() << "\n";
+
   }
 }
 
 neat::Sample image_input_sample(const std::string& name, const neat::Tensor& tensor,
-                                int64_t pts_ns = -1) {
+                                const FrameIdentity* identity) {
   neat::Sample sample = neat::make_tensor_sample(name, tensor);
   sample.payload_type = neat::PayloadType::Image;
   sample.media_type = "video/x-raw";
   sample.format = "RGB";
   sample.payload_tag = sample.format;
-  sample.pts_ns = pts_ns;
+  if (identity != nullptr) {
+    sample.stream_id = identity->stream_id;
+    sample.frame_id = identity->frame_id;
+    sample.pts_ns = identity->pts_ns;
+    sample.dts_ns = identity->dts_ns;
+    sample.duration_ns = identity->duration_ns;
+    sample.input_seq = identity->input_seq;
+    sample.orig_input_seq = identity->orig_input_seq;
+  }
   return sample;
 }
 
@@ -595,7 +778,7 @@ void build_detector_run(AppRuntime& app) {
   cv::Mat seed_image = cv::Mat::zeros(seed_height, seed_width, CV_8UC3);
   const neat::Tensor seed_tensor = neat::Tensor::from_cv_mat(
       seed_image, neat::ImageSpec::PixelFormat::RGB, neat::TensorMemory::EV74);
-  const neat::Sample seed = image_input_sample("detector_input", seed_tensor);
+  const neat::Sample seed = image_input_sample("detector_input", seed_tensor, nullptr);
 
   app.detector_graph = neat::Graph("yolo26_runner");
   auto input_options = app.detector_model->input_appsrc_options(false);
@@ -658,7 +841,7 @@ std::vector<blazepose_app::Box> select_people(const neat::Sample& detections, in
     throw std::runtime_error("failed to read detector BBOX output: " + error);
   }
   const std::vector<objdet::Box> boxes =
-      objdet::parse_boxes_strict(payload, width, height, 100, false);
+      objdet::parse_boxes_strict(payload, width, height, cfg.max_detections, false);
   std::vector<blazepose_app::Box> people;
   for (const objdet::Box& box : boxes) {
     if (box.class_id == 0) {
@@ -673,15 +856,22 @@ std::vector<blazepose_app::Box> select_people(const neat::Sample& detections, in
   return people;
 }
 
-void publish_frame_metadata_locked(StreamRuntime& stream, const FrameJob& job,
+FrameIdentity identity_from_sample(const neat::Sample& sample) {
+  return {sample.stream_id,   sample.frame_id,  sample.pts_ns,        sample.dts_ns,
+          sample.duration_ns, sample.input_seq, sample.orig_input_seq};
+}
+
+void publish_frame_metadata_locked(StreamRuntime& stream, const FrameIdentity& identity,
                                    std::vector<blazepose_app::Pose> poses) {
-  poses = stream.pose_smoother.filter(std::move(poses), job.pts_ns);
-  auto overlay = blazepose_app::poses_data_json(std::move(poses), stream.config.id);
-  const std::string overlay_data = overlay.dump();
+  if (stream.pose_temporal_filter_enabled) {
+    poses = stream.pose_smoother.filter(std::move(poses), identity.pts_ns);
+  }
+  const std::string overlay_data =
+      blazepose_app::poses_data_json(poses, identity.stream_id).dump();
   const std::string auxiliary_data =
-      blazepose_app::world_pose_auxiliary_data_json(std::move(overlay)).dump();
-  const int64_t timestamp_ms = job.pts_ns >= 0 ? job.pts_ns / 1'000'000 : -1;
-  const std::string frame_id = job.frame_id >= 0 ? std::to_string(job.frame_id) : "";
+      blazepose_app::world_pose_auxiliary_data_json(std::move(poses), identity.stream_id).dump();
+  const int64_t timestamp_ms = identity.pts_ns >= 0 ? identity.pts_ns / 1'000'000 : -1;
+  const std::string frame_id = identity.frame_id >= 0 ? std::to_string(identity.frame_id) : "";
   for (const auto& [type, data] : std::array<std::pair<const char*, const std::string*>, 2>{
            {{"pose-estimation", &overlay_data}, {"auxiliary-visualization", &auxiliary_data}}}) {
     std::string error;
@@ -693,14 +883,24 @@ void publish_frame_metadata_locked(StreamRuntime& stream, const FrameJob& job,
   ++stream.metadata_frames;
 }
 
-void complete_frame(StreamRuntime& stream, const FrameJob& job,
-                    std::optional<std::vector<blazepose_app::Pose>> poses = std::nullopt) {
-  // The pose worker is the only publisher; no reordering queue is needed.
+void complete_frame(StreamRuntime& stream, std::uint64_t sequence, const FrameIdentity& identity,
+  std::optional<std::vector<blazepose_app::Pose>> poses) {
   std::lock_guard<std::mutex> lock(stream.metadata_mutex);
-  if (poses) {
-    publish_frame_metadata_locked(stream, job, std::move(*poses));
+  for (FramePublication& publication :
+       stream.publications.complete(sequence, FramePublication{identity, std::move(poses)})) {
+    if (publication.poses.has_value()) {
+      publish_frame_metadata_locked(stream, publication.identity, std::move(*publication.poses));
+    }
   }
-  --stream.outstanding_frames;
+  const std::uint64_t previous = stream.outstanding_frames.fetch_sub(1);
+  if (previous == 0) {
+    stream.outstanding_frames.fetch_add(1);
+    throw std::runtime_error("completed a frame that was not outstanding");
+  }
+}
+
+void skip_frame(StreamRuntime& stream, const FrameJob& job) {
+  complete_frame(stream, job.stream_sequence, job.identity, std::nullopt);
 }
 
 std::vector<float> tensor_floats(const neat::Tensor& tensor, std::size_t expected) {
@@ -731,7 +931,7 @@ std::optional<blazepose_app::Pose> parse_pose_output(const neat::Sample& sample,
   const std::vector<float> landmarks = tensor_floats(tensors[0], 195);
   const std::vector<float> world_landmarks = tensor_floats(tensors[2], 117);
   return blazepose_app::decode_pose(landmarks, world_landmarks, context.affine, context.box,
-                                    presence_probability);
+                                    presence_probability, context.roi_index);
 }
 
 void record_error(AppRuntime& app) {
@@ -745,14 +945,12 @@ void record_error(AppRuntime& app) {
 
 std::optional<FrameJob> take_next_job(AppRuntime& app,
                                       std::vector<std::optional<FrameJob>>& mailboxes,
-                                      std::size_t& next_stream, bool wait = true) {
+                                      std::size_t& next_stream) {
   std::unique_lock<std::mutex> lock(app.state.mutex);
-  if (wait) {
-    app.state.cv.wait(lock, [&]() {
-      return app.state.stopping || std::any_of(mailboxes.begin(), mailboxes.end(),
-                                               [](const auto& item) { return item.has_value(); });
-    });
-  }
+  app.state.cv.wait(lock, [&]() {
+    return app.state.stopping || std::any_of(mailboxes.begin(), mailboxes.end(),
+                                             [](const auto& item) { return item.has_value(); });
+  });
   if (app.state.stopping) {
     return std::nullopt;
   }
@@ -786,7 +984,7 @@ void close_source_stream(AppRuntime& app, StreamRuntime& stream, const std::stri
 
 void pull_source_frames(AppRuntime& app, const AppConfig& cfg, int stream_index) {
   StreamRuntime& stream = *app.streams[static_cast<std::size_t>(stream_index)];
-  const std::string output = "frame_" + std::to_string(stream_index);
+  const std::string output = frame_output_name(stream_index);
   while (true) {
     {
       std::lock_guard<std::mutex> lock(app.state.mutex);
@@ -819,31 +1017,34 @@ void pull_source_frames(AppRuntime& app, const AppConfig& cfg, int stream_index)
         if (app.state.stopping) {
           return;
         }
-        const int remaining = cfg.frame_limit - stream.metadata_frames.load();
-        if (cfg.frame_limit > 0 && (remaining <= 0 || stream.outstanding_frames.load() >=
-                                                          static_cast<std::uint64_t>(remaining))) {
+        if (!blazepose_app::stream_can_admit_frame(
+                stream.metadata_frames.load(), stream.outstanding_frames.load(),
+                cfg.frame_limit)) {
           continue;
         }
         FrameJob job;
+        job.job_id = app.next_job_id.fetch_add(1);
         job.stream_index = stream_index;
         job.rgb = require_rgb_tensor(sample);
+        job.identity = identity_from_sample(sample);
+        job.identity.stream_id = stream.config.id;
         const std::uint64_t pull_sequence = stream.source_frames.fetch_add(1) + 1;
-        job.frame_id = sample.frame_id >= 0         ? sample.frame_id
-                       : sample.orig_input_seq >= 0 ? sample.orig_input_seq
-                       : sample.input_seq >= 0      ? sample.input_seq
-                                                    : static_cast<int64_t>(pull_sequence);
-        job.pts_ns = sample.pts_ns;
+        job.stream_sequence = pull_sequence;
+        job.identity.frame_id =
+            blazepose_app::select_frame_id(job.identity.frame_id, job.identity.orig_input_seq,
+                                           job.identity.input_seq, pull_sequence);
         job.deadline = Clock::now() + std::chrono::milliseconds(cfg.pose_job_timeout_ms);
         ++stream.outstanding_frames;
         auto& mailbox = app.state.detector_mailboxes[static_cast<std::size_t>(stream_index)];
         if (mailbox.has_value()) {
           dropped = std::move(*mailbox);
+          ++stream.detector_mailbox_drops;
         }
         mailbox = std::move(job);
         app.state.cv.notify_all();
       }
       if (dropped.has_value()) {
-        complete_frame(stream, *dropped);
+        skip_frame(stream, *dropped);
       }
     } catch (const std::exception& error) {
       close_source_stream(app, stream, error.what());
@@ -888,166 +1089,456 @@ void run_source_stream(AppRuntime& app, const AppConfig& cfg, int stream_index) 
   }
 }
 
-template <typename Context, typename Next, typename Consume>
-void pump_requests(AppRuntime& app, neat::Run& run, std::string_view input_name,
-                   std::string_view output_name, int depth, Next next_request, Consume consume) {
-  std::deque<InferenceRequest<Context>> pending;
-  std::optional<InferenceRequest<Context>> current;
-  while (true) {
-    {
-      std::lock_guard<std::mutex> lock(app.state.mutex);
-      if (app.state.stopping)
+template <typename Context>
+blazepose_app::NonblockingPushResult
+try_push_with_context_until(AppRuntime& app, neat::Run& run, std::string_view input_name,
+                            const neat::Sample& input, std::deque<std::optional<Context>>& pending,
+                            Context context, Clock::time_point deadline,
+                            const std::string& rejection_message) {
+  return blazepose_app::retry_nonblocking_push(
+      [&]() {
+        {
+          std::lock_guard<std::mutex> lock(app.state.mutex);
+          if (app.state.stopping) {
+            return blazepose_app::NonblockingPushAttempt::Cancelled;
+          }
+          pending.emplace_back(context);
+        }
+        if (run.try_push(input_name, input)) {
+          return blazepose_app::NonblockingPushAttempt::Accepted;
+        }
+        std::lock_guard<std::mutex> lock(app.state.mutex);
+        if (app.state.stopping) {
+          return blazepose_app::NonblockingPushAttempt::Cancelled;
+        }
+        if (pending.empty()) {
+          throw std::runtime_error("model input context disappeared after a rejected push");
+        }
+        if (!pending.back().has_value()) {
+          pending.pop_back();
+          app.state.cv.notify_all();
+          return blazepose_app::NonblockingPushAttempt::Cancelled;
+        }
+        pending.pop_back();
+        app.state.cv.notify_all();
+        if (!run.can_push()) {
+          throw std::runtime_error(rejection_message);
+        }
+        return blazepose_app::NonblockingPushAttempt::Retry;
+      },
+      [deadline]() { return Clock::now() >= deadline; },
+      [&]() {
+        std::unique_lock<std::mutex> lock(app.state.mutex);
+        app.state.cv.wait_until(lock,
+                                std::min(deadline, Clock::now() + std::chrono::milliseconds(1)),
+                                [&]() { return app.state.stopping; });
+      });
+}
+
+void dispatch_detector_jobs(AppRuntime& app, const AppConfig& cfg) {
+  try {
+    while (true) {
+      std::optional<FrameJob> maybe_job =
+          take_next_job(app, app.state.detector_mailboxes, app.state.next_detector_stream);
+      if (!maybe_job.has_value()) {
         return;
-    }
-    if (!current && pending.size() < static_cast<std::size_t>(depth)) {
-      current = next_request();
-    }
-    bool sent = false;
-    if (current) {
-      if (Clock::now() >= current->deadline) {
-        current->input.reset(); // Preserve order without submitting stale work.
       }
-      if (!current->input || run.try_push(input_name, *current->input)) {
-        pending.push_back(std::move(*current));
-        current.reset();
-        sent = true;
-      } else if (!run.can_push()) {
-        throw std::runtime_error(std::string(input_name) + " closed: " + run.last_error());
+      FrameJob job = std::move(*maybe_job);
+      StreamRuntime& stream = *app.streams[static_cast<std::size_t>(job.stream_index)];
+      if (Clock::now() >= job.deadline) {
+        ++stream.timed_out_jobs;
+        complete_frame(stream, job.stream_sequence, job.identity,
+                       std::vector<blazepose_app::Pose>{});
+        continue;
+      }
+      const neat::Tensor detector_frame = job.rgb.cvu();
+      const neat::Sample input =
+          image_input_sample("detector_input", detector_frame, &job.identity);
+      bool expired_while_waiting = false;
+      {
+        std::unique_lock<std::mutex> lock(app.state.mutex);
+        app.state.cv.wait_until(lock, job.deadline, [&]() {
+          return app.state.stopping || app.state.pending_detector_outputs.size() <
+                                           static_cast<std::size_t>(cfg.max_pending_jobs);
+        });
+        if (app.state.stopping) {
+          return;
+        }
+        expired_while_waiting = Clock::now() >= job.deadline;
+      }
+      if (expired_while_waiting) {
+        ++stream.timed_out_jobs;
+        complete_frame(stream, job.stream_sequence, job.identity,
+                       std::vector<blazepose_app::Pose>{});
+        continue;
+      }
+      const auto push_result = try_push_with_context_until(
+          app, app.detector_run, "detector_input", input, app.state.pending_detector_outputs, job,
+          job.deadline, "YOLO26 Run rejected a frame input");
+      if (push_result == blazepose_app::NonblockingPushResult::Aborted) {
+        ++stream.timed_out_jobs;
+        complete_frame(stream, job.stream_sequence, job.identity,
+                       std::vector<blazepose_app::Pose>{});
+      } else if (push_result == blazepose_app::NonblockingPushResult::Cancelled) {
+        std::lock_guard<std::mutex> lock(app.state.mutex);
+        if (app.state.stopping) {
+          return;
+        }
       }
     }
-    if (!pending.empty()) {
-      auto& front = pending.front();
-      neat::Sample output;
+  } catch (...) {
+    record_error(app);
+  }
+}
+
+void expire_detector_jobs(AppRuntime& app) {
+  std::vector<FrameJob> expired;
+  const auto now = Clock::now();
+  {
+    std::lock_guard<std::mutex> lock(app.state.mutex);
+    expired = blazepose_app::expire_pending_fifo(
+        app.state.pending_detector_outputs,
+        [now](const FrameJob& job) { return now >= job.deadline; });
+  }
+  for (const FrameJob& job : expired) {
+    StreamRuntime& stream = *app.streams[static_cast<std::size_t>(job.stream_index)];
+    ++stream.timed_out_jobs;
+    complete_frame(stream, job.stream_sequence, job.identity, std::vector<blazepose_app::Pose>{});
+  }
+}
+
+void pull_detector_outputs(AppRuntime& app, const AppConfig& cfg) {
+  try {
+    while (true) {
+      expire_detector_jobs(app);
+      neat::Sample sample;
       neat::PullError error;
-      const auto status =
-          front.input ? run.pull(output_name, sent ? 0 : 2, output, &error) : neat::PullStatus::Ok;
-      if (status == neat::PullStatus::Ok) {
-        consume(front.context, front.input ? &output : nullptr);
-        pending.pop_front();
-      } else if (status != neat::PullStatus::Timeout) {
-        throw std::runtime_error(std::string(output_name) + " closed: " + error.message);
-      } else if (Clock::now() >= front.deadline) {
-        // Never reuse a Run after an accepted input times out. Its late output
-        // must not be attached to a newer frame.
-        throw std::runtime_error(std::string(output_name) + " inference timed out");
+      const auto status = app.detector_run.pull("detector_output", 20, sample, &error);
+      if (status == neat::PullStatus::Timeout) {
+        std::lock_guard<std::mutex> lock(app.state.mutex);
+        if (app.state.stopping) {
+          return;
+        }
+        continue;
       }
-    } else if (!sent) {
-      std::unique_lock<std::mutex> lock(app.state.mutex);
-      app.state.cv.wait_for(lock, std::chrono::milliseconds(current ? 1 : 20));
-    }
-  }
-}
+      if (status == neat::PullStatus::Closed) {
+        std::lock_guard<std::mutex> lock(app.state.mutex);
+        if (app.state.stopping) {
+          return;
+        }
+        const std::string detail = app.detector_run.last_error();
+        throw std::runtime_error("YOLO26 output closed unexpectedly" +
+                                 (detail.empty() ? std::string{} : ": " + detail));
+      }
+      if (status != neat::PullStatus::Ok) {
+        throw std::runtime_error("failed to pull YOLO26 output: " + error.message);
+      }
 
-void detector_worker(AppRuntime& app, const AppConfig& cfg) {
-  auto next = [&]() -> std::optional<InferenceRequest<FrameJob>> {
-    auto job =
-        take_next_job(app, app.state.detector_mailboxes, app.state.next_detector_stream, false);
-    if (!job)
-      return std::nullopt;
-    auto input = image_input_sample("detector_input", job->rgb.cvu(), job->pts_ns);
-    const auto deadline = job->deadline;
-    return InferenceRequest<FrameJob>{std::move(*job), std::move(input), deadline};
-  };
-  auto consume = [&](FrameJob& job, const neat::Sample* output) {
-    auto& stream = *app.streams[static_cast<std::size_t>(job.stream_index)];
-    if (output) {
-      job.people = select_people(*output, stream.width, stream.height, cfg);
+      std::optional<FrameJob> pending;
+      {
+        std::lock_guard<std::mutex> lock(app.state.mutex);
+        if (app.state.pending_detector_outputs.empty()) {
+          if (app.state.stopping) {
+            return;
+          }
+          throw std::runtime_error("YOLO26 output arrived without pending frame context");
+        }
+        pending = std::move(app.state.pending_detector_outputs.front());
+        app.state.pending_detector_outputs.pop_front();
+        app.state.cv.notify_all();
+      }
+      if (!pending.has_value()) {
+        continue;
+      }
+      FrameJob job = std::move(*pending);
+      StreamRuntime& stream = *app.streams[static_cast<std::size_t>(job.stream_index)];
+      ++stream.detector_frames;
+      if (Clock::now() >= job.deadline) {
+        ++stream.timed_out_jobs;
+        complete_frame(stream, job.stream_sequence, job.identity,
+                       std::vector<blazepose_app::Pose>{});
+        continue;
+      }
+      job.people = select_people(sample, stream.width, stream.height, cfg);
+      stream.selected_rois.fetch_add(job.people.size());
+      if (job.people.empty()) {
+        complete_frame(stream, job.stream_sequence, job.identity,
+                       std::vector<blazepose_app::Pose>{});
+        continue;
+      }
+
+      std::optional<FrameJob> dropped;
+      {
+        std::lock_guard<std::mutex> lock(app.state.mutex);
+        if (app.state.stopping) {
+          return;
+        }
+        auto& mailbox = app.state.pose_mailboxes[static_cast<std::size_t>(job.stream_index)];
+        if (mailbox.has_value()) {
+          dropped = std::move(*mailbox);
+          ++stream.pose_mailbox_drops;
+        }
+        mailbox = std::move(job);
+        app.state.cv.notify_all();
+      }
+      if (dropped.has_value()) {
+        skip_frame(stream, *dropped);
+      }
     }
-    std::optional<FrameJob> dropped;
-    {
-      std::lock_guard<std::mutex> lock(app.state.mutex);
-      auto& mailbox = app.state.pose_mailboxes[static_cast<std::size_t>(job.stream_index)];
-      dropped = std::move(mailbox);
-      mailbox = std::move(job);
-      app.state.cv.notify_all();
-    }
-    if (dropped) {
-      complete_frame(stream, *dropped);
-    }
-  };
-  try {
-    pump_requests<FrameJob>(app, app.detector_run, "detector_input", "detector_output", 4, next,
-                            consume);
   } catch (...) {
     record_error(app);
   }
 }
 
-void prepare_pose_worker(AppRuntime& app, const AppConfig& cfg) {
+void expire_pose_jobs(AppRuntime& app);
+
+void dispatch_pose_jobs(AppRuntime& app, const AppConfig& cfg) {
   try {
-    while (auto incoming =
-               take_next_job(app, app.state.pose_mailboxes, app.state.next_pose_stream)) {
-      std::deque<InferenceRequest<PoseRequestContext>> prepared;
-      auto job = std::make_shared<FrameJob>(std::move(*incoming));
-      if (job->people.empty() || Clock::now() >= job->deadline) {
-        prepared.push_back({{job, {}, true}, std::nullopt, job->deadline});
-      } else {
-        auto rgb = job->rgb.map_cv_mat_view(neat::ImageSpec::PixelFormat::RGB);
-        if (!rgb)
-          throw std::runtime_error("failed to map packed RGB frame");
-        std::vector<neat::PreprocessRoi> rois;
-        for (const auto& person : job->people) {
-          const auto roi = blazepose_app::square_roi(person, cfg.roi_scale);
-          rois.push_back({0, roi.x, roi.y, roi.width, roi.height});
-        }
-        const auto inputs =
-            neat::stages::Preproc(std::vector<cv::Mat>{rgb->mat}, *app.pose_model, rois);
-        if (inputs.size() != rois.size()) {
-          throw std::runtime_error("BlazePose Preproc output count does not match ROI count");
-        }
-        for (std::size_t index = 0; index < inputs.size(); ++index) {
-          PoseInputContext roi{job->people[index], affine_from_tensor(inputs[index])};
-          prepared.push_back({{job, roi, index == inputs.size() - 1},
-                              pose_input_sample(inputs[index].clone().cvu(), job->pts_ns),
-                              job->deadline});
-        }
-      }
-      std::unique_lock<std::mutex> lock(app.state.mutex);
-      app.state.cv.wait(lock,
-                        [&] { return app.state.stopping || app.state.prepared_frame.empty(); });
-      if (app.state.stopping)
+    while (true) {
+      std::optional<FrameJob> maybe_job =
+          take_next_job(app, app.state.pose_mailboxes, app.state.next_pose_stream);
+      if (!maybe_job.has_value()) {
         return;
-      app.state.prepared_frame = std::move(prepared);
-      app.state.cv.notify_all();
+      }
+      FrameJob job = std::move(*maybe_job);
+      StreamRuntime& stream = *app.streams[static_cast<std::size_t>(job.stream_index)];
+      if (Clock::now() >= job.deadline) {
+        ++stream.timed_out_jobs;
+        complete_frame(stream, job.stream_sequence, job.identity,
+                       std::vector<blazepose_app::Pose>{});
+        continue;
+      }
+      if (job.people.empty()) {
+        complete_frame(stream, job.stream_sequence, job.identity,
+                       std::vector<blazepose_app::Pose>{});
+        continue;
+      }
+
+      auto rgb_view = job.rgb.map_cv_mat_view(neat::ImageSpec::PixelFormat::RGB);
+      if (!rgb_view.has_value()) {
+        throw std::runtime_error("failed to map packed RGB frame without copying");
+      }
+      std::vector<PreparedPoseInput> prepared_inputs;
+      prepared_inputs.reserve(job.people.size());
+      std::vector<blazepose_app::Roi> requested_rois;
+      requested_rois.reserve(job.people.size());
+      for (const blazepose_app::Box& person : job.people) {
+        requested_rois.push_back(blazepose_app::square_roi(person, cfg.roi_scale));
+      }
+      std::vector<neat::PreprocessRoi> pose_rois;
+      pose_rois.reserve(requested_rois.size());
+      for (const blazepose_app::Roi& roi : requested_rois) {
+        pose_rois.push_back({0, roi.x, roi.y, roi.width, roi.height});
+      }
+      const neat::TensorList output =
+          neat::stages::Preproc(std::vector<cv::Mat>{rgb_view->mat}, *app.pose_model, pose_rois);
+      if (output.size() != requested_rois.size()) {
+        throw std::runtime_error("BlazePose Preproc output count does not match ROI count");
+      }
+      for (std::size_t index = 0; index < output.size(); ++index) {
+        const std::size_t person_index = index;
+        const blazepose_app::Affine affine = affine_from_tensor(output[index]);
+        // Detached asynchronous Runs may retain their input after push(). Give
+        // each ROI independent EV74 storage so Preproc can recycle its pool.
+        prepared_inputs.push_back({static_cast<int>(person_index), job.people[person_index], affine,
+                                   output[index].clone().cvu()});
+      }
+
+      bool expired_while_waiting = false;
+      {
+        std::unique_lock<std::mutex> lock(app.state.mutex);
+        app.state.cv.wait_until(lock, job.deadline, [&]() {
+          return app.state.stopping ||
+                 app.state.aggregates.size() < static_cast<std::size_t>(cfg.max_pending_jobs);
+        });
+        if (app.state.stopping) {
+          return;
+        }
+        expired_while_waiting = Clock::now() >= job.deadline;
+        if (!expired_while_waiting) {
+          PoseAggregate aggregate;
+          aggregate.stream_index = job.stream_index;
+          aggregate.stream_sequence = job.stream_sequence;
+          aggregate.expected = static_cast<int>(prepared_inputs.size());
+          aggregate.identity = job.identity;
+          aggregate.deadline = job.deadline;
+          app.state.aggregates.emplace(job.job_id, std::move(aggregate));
+        }
+      }
+      if (expired_while_waiting) {
+        ++stream.timed_out_jobs;
+        complete_frame(stream, job.stream_sequence, job.identity,
+                       std::vector<blazepose_app::Pose>{});
+        continue;
+      }
+
+      int accepted_rois = 0;
+      for (const PreparedPoseInput& prepared : prepared_inputs) {
+        PoseInputContext context;
+        context.job_id = job.job_id;
+        context.stream_index = job.stream_index;
+        context.roi_index = prepared.roi_index;
+        context.roi_count = static_cast<int>(prepared_inputs.size());
+        context.box = prepared.box;
+        context.affine = prepared.affine;
+        context.identity = job.identity;
+        const neat::Sample input = pose_input_sample(prepared.tensor, &context);
+
+        const auto push_result = try_push_with_context_until(
+            app, app.pose_run, "pose_input", input, app.state.pending_pose_outputs, context,
+            job.deadline, "BlazePose Run rejected an ROI input");
+        if (push_result == blazepose_app::NonblockingPushResult::Cancelled) {
+          std::lock_guard<std::mutex> lock(app.state.mutex);
+          if (app.state.stopping) {
+            return;
+          }
+          throw std::runtime_error("BlazePose input context was cancelled unexpectedly");
+        }
+        if (push_result != blazepose_app::NonblockingPushResult::Accepted) {
+          {
+            std::lock_guard<std::mutex> lock(app.state.mutex);
+            if (app.state.stopping) {
+              return;
+            }
+            const auto aggregate = app.state.aggregates.find(job.job_id);
+            if (aggregate != app.state.aggregates.end()) {
+              aggregate->second.expected = accepted_rois;
+            }
+          }
+          expire_pose_jobs(app);
+          {
+            std::lock_guard<std::mutex> cleanup_lock(app.state.mutex);
+            const auto aggregate = app.state.aggregates.find(job.job_id);
+            if (aggregate != app.state.aggregates.end() && aggregate->second.expired &&
+                aggregate->second.completed >= aggregate->second.expected) {
+              app.state.aggregates.erase(aggregate);
+              app.state.cv.notify_all();
+            }
+          }
+          break;
+        }
+        ++accepted_rois;
+      }
     }
   } catch (...) {
     record_error(app);
   }
 }
 
-void pose_worker(AppRuntime& app, const AppConfig& cfg) {
-  std::deque<InferenceRequest<PoseRequestContext>> prepared;
-  std::vector<blazepose_app::Pose> poses;
-  auto next = [&]() -> std::optional<InferenceRequest<PoseRequestContext>> {
-    if (prepared.empty()) {
-      std::lock_guard<std::mutex> lock(app.state.mutex);
-      prepared.swap(app.state.prepared_frame);
-      app.state.cv.notify_all();
-      if (prepared.empty())
-        return std::nullopt;
+void publish_completed_aggregate(AppRuntime& app, std::uint64_t job_id) {
+  PoseAggregate aggregate;
+  {
+    std::lock_guard<std::mutex> lock(app.state.mutex);
+    const auto found = app.state.aggregates.find(job_id);
+    if (found == app.state.aggregates.end()) {
+      return;
     }
-    auto request = std::move(prepared.front());
-    prepared.pop_front();
-    return request;
-  };
-  auto consume = [&](PoseRequestContext& context, const neat::Sample* output) {
-    auto& job = *context.job;
-    auto& stream = *app.streams[static_cast<std::size_t>(job.stream_index)];
-    if (output) {
-      ++stream.completed_rois;
-      if (auto pose = parse_pose_output(*output, context.roi, cfg))
-        poses.push_back(std::move(*pose));
+    aggregate = std::move(found->second);
+    app.state.aggregates.erase(found);
+    app.state.cv.notify_all();
+  }
+  complete_frame(*app.streams[static_cast<std::size_t>(aggregate.stream_index)],
+                 aggregate.stream_sequence, aggregate.identity, std::move(aggregate.poses));
+}
+
+void expire_pose_jobs(AppRuntime& app) {
+  std::vector<PoseAggregate> expired;
+  const auto now = Clock::now();
+  {
+    std::lock_guard<std::mutex> lock(app.state.mutex);
+    for (auto& entry : app.state.aggregates) {
+      PoseAggregate& aggregate = entry.second;
+      if (!aggregate.expired && now >= aggregate.deadline) {
+        aggregate.expired = true;
+        expired.push_back(aggregate);
+        aggregate.poses.clear();
+      }
     }
-    if (context.last) {
-      // Each frame's ROIs are consecutive in the FIFO. No aggregate map or
-      // per-stream reordering queue is needed.
-      complete_frame(stream, job, std::move(poses));
-      poses.clear();
-    }
-  };
+  }
+  for (PoseAggregate& aggregate : expired) {
+    StreamRuntime& stream = *app.streams[static_cast<std::size_t>(aggregate.stream_index)];
+    ++stream.timed_out_jobs;
+    complete_frame(stream, aggregate.stream_sequence, aggregate.identity,
+                   std::move(aggregate.poses));
+  }
+}
+
+void pull_pose_outputs(AppRuntime& app, const AppConfig& cfg) {
   try {
-    pump_requests<PoseRequestContext>(app, app.pose_run, "pose_input", "pose_output", 4, next,
-                                      consume);
+    while (true) {
+      {
+        std::lock_guard<std::mutex> lock(app.state.mutex);
+        if (app.state.stopping && app.state.pending_pose_outputs.empty()) {
+          return;
+        }
+      }
+
+      neat::Sample sample;
+      neat::PullError error;
+      const auto status = app.pose_run.pull("pose_output", 20, sample, &error);
+      if (status == neat::PullStatus::Timeout) {
+        expire_pose_jobs(app);
+        continue;
+      }
+      if (status == neat::PullStatus::Closed) {
+        std::lock_guard<std::mutex> lock(app.state.mutex);
+        if (app.state.stopping) {
+          return;
+        }
+        const std::string detail = app.pose_run.last_error();
+        throw std::runtime_error("BlazePose output closed unexpectedly" +
+                                 (detail.empty() ? std::string{} : ": " + detail));
+      }
+      if (status != neat::PullStatus::Ok) {
+        throw std::runtime_error("failed to pull BlazePose output: " + error.message);
+      }
+      expire_pose_jobs(app);
+
+      std::optional<PoseInputContext> pending;
+      {
+        std::lock_guard<std::mutex> lock(app.state.mutex);
+        if (app.state.pending_pose_outputs.empty()) {
+          if (app.state.stopping) {
+            return;
+          }
+          throw std::runtime_error("BlazePose output arrived without pending ROI context");
+        }
+        pending = std::move(app.state.pending_pose_outputs.front());
+        app.state.pending_pose_outputs.pop_front();
+      }
+      if (!pending.has_value()) {
+        continue;
+      }
+      PoseInputContext context = std::move(*pending);
+      bool expired = false;
+      {
+        std::lock_guard<std::mutex> lock(app.state.mutex);
+        const auto found = app.state.aggregates.find(context.job_id);
+        expired = found == app.state.aggregates.end() || found->second.expired;
+      }
+      const auto pose = expired ? std::nullopt : parse_pose_output(sample, context, cfg);
+      bool complete = false;
+      {
+        std::lock_guard<std::mutex> lock(app.state.mutex);
+        const auto found = app.state.aggregates.find(context.job_id);
+        if (found != app.state.aggregates.end()) {
+          ++found->second.completed;
+          if (!found->second.expired && pose.has_value()) {
+            found->second.poses.push_back(*pose);
+          }
+          complete = found->second.completed == found->second.expected;
+          expired = found->second.expired;
+          if (complete && expired) {
+            app.state.aggregates.erase(found);
+            app.state.cv.notify_all();
+          }
+        }
+      }
+      ++app.streams[static_cast<std::size_t>(context.stream_index)]->completed_rois;
+      if (complete && !expired) {
+        publish_completed_aggregate(app, context.job_id);
+      }
+    }
   } catch (...) {
     record_error(app);
   }
@@ -1055,8 +1546,9 @@ void pose_worker(AppRuntime& app, const AppConfig& cfg) {
 
 bool all_streams_done(const AppRuntime& app, int frame_limit) {
   return std::all_of(app.streams.begin(), app.streams.end(), [frame_limit](const auto& stream) {
-    return (frame_limit > 0 && stream->metadata_frames.load() >= frame_limit) ||
-           (stream->closed.load() && stream->outstanding_frames.load() == 0);
+    return blazepose_app::stream_is_drained(
+        stream->closed.load(), stream->outstanding_frames.load(), stream->metadata_frames.load(),
+        frame_limit);
   });
 }
 
@@ -1078,8 +1570,9 @@ void require_successful_completion(const AppRuntime& app, int frame_limit) {
     }
     throw std::runtime_error(message.str());
   }
-  if (frame_limit == 0 && std::all_of(app.streams.begin(), app.streams.end(),
-                                      [](const auto& stream) { return stream->closed.load(); })) {
+  if (frame_limit == 0 &&
+      std::all_of(app.streams.begin(), app.streams.end(),
+                  [](const auto& stream) { return stream->closed.load(); })) {
     throw std::runtime_error("all source streams stopped");
   }
 }
@@ -1089,13 +1582,15 @@ void stop_runtime(AppRuntime& app) {
   {
     std::lock_guard<std::mutex> lock(app.state.mutex);
     app.state.stopping = true;
-    app.state.prepared_frame.clear();
     for (auto& mailbox : app.state.detector_mailboxes) {
       mailbox.reset();
     }
     for (auto& mailbox : app.state.pose_mailboxes) {
       mailbox.reset();
     }
+    app.state.pending_detector_outputs.clear();
+    app.state.pending_pose_outputs.clear();
+    app.state.aggregates.clear();
     for (auto& stream : app.streams) {
       if (stream->source_run) {
         source_runs.push_back(&stream->source_run);
@@ -1116,6 +1611,15 @@ void print_summary(const AppRuntime& app, double elapsed_seconds) {
   for (const auto& stream : app.streams) {
     total_frames += static_cast<std::uint64_t>(stream->metadata_frames.load());
     total_rois += stream->completed_rois.load();
+    std::cout << "[summary stream=" << stream->config.id
+              << "] source_frames=" << stream->source_frames.load()
+              << " detector_frames=" << stream->detector_frames.load()
+              << " metadata_frames=" << stream->metadata_frames.load()
+              << " selected_rois=" << stream->selected_rois.load()
+              << " completed_rois=" << stream->completed_rois.load()
+              << " detector_mailbox_drops=" << stream->detector_mailbox_drops.load()
+              << " pose_mailbox_drops=" << stream->pose_mailbox_drops.load()
+              << " timed_out_jobs=" << stream->timed_out_jobs.load() << "\n";
   }
   const double frame_fps = elapsed_seconds > 0.0 ? total_frames / elapsed_seconds : 0.0;
   const double pose_fps = elapsed_seconds > 0.0 ? total_rois / elapsed_seconds : 0.0;
@@ -1148,12 +1652,14 @@ void run_app(const AppConfig& cfg) {
   source_pullers.reserve(app->streams.size());
   for (const auto& stream : app->streams) {
     const int stream_index = stream->index;
-    source_pullers.emplace_back(
-        [app, cfg, stream_index]() { run_source_stream(*app, cfg, stream_index); });
+    source_pullers.emplace_back([app, cfg, stream_index]() {
+      run_source_stream(*app, cfg, stream_index);
+    });
   }
-  std::thread detector([app, &cfg]() { detector_worker(*app, cfg); });
-  std::thread prepare_pose([app, &cfg]() { prepare_pose_worker(*app, cfg); });
-  std::thread pose([app, &cfg]() { pose_worker(*app, cfg); });
+  std::thread detector_dispatcher([app, &cfg]() { dispatch_detector_jobs(*app, cfg); });
+  std::thread detector_puller([app, &cfg]() { pull_detector_outputs(*app, cfg); });
+  std::thread pose_dispatcher([app, &cfg]() { dispatch_pose_jobs(*app, cfg); });
+  std::thread pose_puller([app, &cfg]() { pull_pose_outputs(*app, cfg); });
 
   try {
     while (g_stop_requested == 0 && !all_streams_done(*app, cfg.frame_limit)) {
@@ -1178,8 +1684,9 @@ void run_app(const AppConfig& cfg) {
     StreamRuntime& stream = *app->streams[index];
     if (!stream.source_worker_finished.load()) {
       std::unique_lock<std::mutex> lock(app->state.mutex);
-      app->state.cv.wait_until(lock, source_shutdown_deadline,
-                               [&stream]() { return stream.source_worker_finished.load(); });
+      app->state.cv.wait_until(lock, source_shutdown_deadline, [&stream]() {
+        return stream.source_worker_finished.load();
+      });
     }
     if (stream.source_worker_finished.load()) {
       source_pullers[index].join();
@@ -1189,9 +1696,10 @@ void run_app(const AppConfig& cfg) {
       source_pullers[index].detach();
     }
   }
-  detector.join();
-  prepare_pose.join();
-  pose.join();
+  detector_dispatcher.join();
+  detector_puller.join();
+  pose_dispatcher.join();
+  pose_puller.join();
   std::signal(SIGINT, previous_signal);
   const double elapsed = std::chrono::duration<double>(Clock::now() - start).count();
   print_summary(*app, elapsed);

@@ -18,7 +18,7 @@ Detects people across RTSP streams with shared YOLO26 and BlazePose models, then
 
 C++ and Python use the same configuration, graph topology, scheduling policy, ROI transform, and metadata schemas.
 
-Each RTSP stream owns an independent source graph and run, so one disconnected source cannot close or stall the others. Each run has one dedicated pull owner. Frames stay NV12 through decode and freshness admission, then each admitted frame is converted once to packed RGB. One worker owns each shared model runner and pipelines a bounded FIFO of requests. A separate pose-preparation worker overlaps ROI preprocessing with inference and result handling.
+Each RTSP stream owns an independent source graph and run, so one disconnected source cannot close or stall the others. Each run has one dedicated pull owner. Frames stay NV12 through decode and freshness admission, then each admitted frame is converted once to packed RGB. Application-owned asynchronous queues feed one shared YOLO26 runner and one shared BlazePose runner through public push/pull APIs.
 
 ```text
 Per stream: RTSP encoded ─┬─> codec passthrough ─> Insight video
@@ -57,7 +57,17 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-The default detector is `yolo26m-det-int8-b1.tar.gz`. The `yolo26{n,s,m,l,x}-det-bf16-mla_tess-b1.tar.gz` packages and `yolo26m-det-bf16-b1.tar.gz` are also supported.
+The detector supports the same Model Zoo packages as the multi-stream detector and tracker:
+
+| Model file | Role |
+| --- | --- |
+| `yolo26m-det-int8-b1.tar.gz` | Default |
+| `yolo26n-det-bf16-mla_tess-b1.tar.gz` | Supported |
+| `yolo26s-det-bf16-mla_tess-b1.tar.gz` | Supported |
+| `yolo26m-det-bf16-mla_tess-b1.tar.gz` | Supported |
+| `yolo26l-det-bf16-mla_tess-b1.tar.gz` | Supported |
+| `yolo26x-det-bf16-mla_tess-b1.tar.gz` | Supported |
+| `yolo26m-det-bf16-b1.tar.gz` | Supported |
 
 Replace `<model-file>` with one file from the table:
 
@@ -79,7 +89,9 @@ sima-cli models download --stg \
   --output models
 ```
 
-The feature branch is temporary while [`sima-neat/models#136`](https://github.com/sima-neat/models/pull/136) is under review; use `--branch develop` after it merges.
+The feature-branch reference is temporary while
+[`sima-neat/models#136`](https://github.com/sima-neat/models/pull/136) is under
+review. Use `--branch develop` after that dependency merges.
 
 ## Model Contracts
 
@@ -126,7 +138,7 @@ The active video and metadata UDP ports must be disjoint. If you use sparse or n
 
 The optional `width`, `height`, and `fps` fields must be supplied together. When present, they avoid a startup probe so an offline channel cannot prevent healthy channels from starting; make them match the RTSP source's actual caps. Once running, a channel that closes or errors is isolated while the other channels continue.
 
-The per-stream filter matches poses by person-box overlap, damps small coordinate and confidence fluctuations, snaps toward deliberate fast motion, and bridges at most two misses with decaying confidence. It processes image and world landmarks together so the two views cannot drift apart.
+`pose.temporal_filter_enabled` defaults to `true`. The per-stream filter matches poses by person-box overlap, damps small coordinate and confidence fluctuations, and adapts toward the current frame during deliberate fast motion. It also bridges at most two missing detector or pose results with a confidence-decayed copy of the latest estimate. This removes one-frame visualization flashes without buffering future frames or adding inference latency. The filter processes image and world landmarks together before either metadata message is built, so the 2D overlay and 3D view remain frame-correlated and cannot drift apart. Disable it only when raw model output is required for measurement.
 
 ## Run
 
@@ -165,7 +177,8 @@ Every accepted frame produces a correlated pair of messages, including empty pos
   "world_keypoints":[{"name":"nose","x":0.01,"y":-0.42,"z":-0.08,"confidence":0.98}]}]}
 ```
 
-The separate `auxiliary-visualization` message uses the generic Insight schema and selects the built-in BlazePose renderer:
+The separate `auxiliary-visualization` message uses the generic Insight schema
+and selects the built-in BlazePose renderer:
 
 ```json
 {"schema_version":1,"id":"world-pose","renderer":"blazepose-3d","title":"3D Pose","stream_id":"entrance",
@@ -174,37 +187,49 @@ The separate `auxiliary-visualization` message uses the generic Insight schema a
   ]}]}}
 ```
 
-`MetadataSender` supplies the outer `type`, `timestamp`, and `frame_id` fields. Both messages are sent under the same per-stream lock, preventing mixed frame identities.
+`MetadataSender` supplies the outer `type`, `timestamp`, and `frame_id` fields.
+The two message types are sent while holding the same per-stream metadata lock,
+so one channel cannot interleave identities from different frames.
+
+The envelope builder accepts any renderer name and JSON object; it does not know
+about BlazePose fields. This example's world-pose helper supplies the
+`blazepose-3d` payload, while point clouds, meshes, trajectories, or other 3D
+data can reuse the same envelope with a separately registered Insight renderer.
 
 The keypoint confidence is the minimum of BlazePose landmark visibility and presence after sigmoid activation. The global pose-presence logit is also sigmoid-activated before it gates each ROI and is published as a probability.
+
+The application retains the source `stream_id`, frame ID, PTS, DTS, duration, and sequence numbers in its bounded FIFO context. Detached MLA/postprocess runners do not echo all of that identity, so output order is correlated against this retained context. Both metadata payloads include the original `stream_id`, and `MetadataSender` supplies the original PTS and frame ID. The hardware E2E tests listen on every configured metadata port and require the configured stream identity plus a non-empty 2D/3D pair with an identical `(port, timestamp, frame_id)` identity.
 
 ## Performance and Scheduling
 
 - Each source run starts and pulls on its own thread, so an offline source's startup timeout cannot delay healthy streams. `RealtimeLatestByStream` bounds admitted decoder-backed frames before the packed-RGB conversion.
 - Latest-only detector and pose mailboxes plus round-robin dispatch prevent stale work from accumulating and preserve fairness across streams.
-- Only the pose worker publishes, including empty detections, so results remain in source-frame order. Evicted mailbox entries are discarded.
+- A per-stream completion queue publishes results in source-frame order; work evicted from a latest-only mailbox advances the sequence without emitting stale metadata.
 - Each stream owns independent temporal-filter state. Small landmark and confidence fluctuations are damped without buffering frames, large motion receives a higher current-frame weight to limit visual lag, and a two-frame confidence-decayed coast hides isolated inference misses.
-- Each model worker pipelines at most four requests. Pose preparation has a one-frame handoff buffer, allowing CPU preprocessing, inference, and metadata publication to overlap without an unbounded work queue.
+- YOLO26 and BlazePose each use one shared model route. Increasing stream count does not create additional model routes.
 - Video uses H.264 or H.265 encoded passthrough with latest-only egress, so a slow receiver cannot backpressure analytics. The application does not draw on frames or re-encode them.
 - The current public `VideoConvert` node performs the one NV12-to-RGB conversion on A65 after admission. The RGB frame remains holder-backed in application code; Python passes the `Tensor` directly and C++ maps a non-owning `cv::Mat` view.
 - YOLO26 preprocessing stays inside the shared `Model::graph()` route; the application pushes each correlated RGB frame directly into that runner.
 - The public `stages::Preproc(..., rois)` API receives the fixed-size source RGB frame and all selected BlazePose ROIs in one batched call. Keeping the input dimensions stable lets Neat reuse one preprocessing runner instead of caching a new graph for every changing person-box crop; returned affine metadata still maps landmarks directly into source-frame coordinates. Full RGB frames are not cloned.
 
+The shutdown summary reports source and detector frames, selected and completed ROIs, both mailbox drop counts, timed-out jobs, metadata FPS, and pose FPS. These are application counters, not node profiling or graph visualization.
+
 ## Troubleshooting
 
 - Replace all placeholders before running and verify both model paths.
-- `pose.job_timeout_ms` skips stale queued work. An accepted inference that exceeds this deadline stops the application with an error, avoiding miscorrelation with a late result. Increase it for slower models.
+- Set `detector.max_inflight_per_stream` to `-1` to use the Core default.
+- Increase `pose.job_timeout_ms` only if valid jobs expire under sustained load.
 - Reduce `pose.max_people_per_frame` when pose throughput, rather than detection, is the bottleneck.
 - H.265 input and video passthrough require an Insight/browser environment that can decode HEVC.
 
 ## Source Files
 
-Sources are `src/cpp/main.cpp` and `src/python/main.py`; shared configuration is `src/common/config.yaml`.
+- C++ reference source: `src/cpp/main.cpp`
+- Python source: `src/python/main.py`
+- Shared configuration: `src/common/config.yaml`
 
 The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
 
 ## Development From Source
 
 To modify, compile, or test this example, use the [Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).
-
-The C++ source build also requires `yaml-cpp` (provided by the Neat Development Environment). Both language E2Es use one Python standard-library harness to check video and paired metadata; the C++ test invokes it against the compiled binary.
