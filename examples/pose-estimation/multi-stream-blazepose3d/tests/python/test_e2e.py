@@ -20,6 +20,7 @@ MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
 DETECTOR_MODEL = "yolo26m-det-int8-b1.tar.gz"
 POSE_MODEL = "blazepose_ghum_heavy_modalix_bf16_mpk.tar.gz"
 INSIGHT_HOST = "127.0.0.1"
+MAX_STREAMS = 4
 
 
 class RtpVideoListener:
@@ -126,7 +127,8 @@ class TestE2E:
         skip_unless_e2e_ready,
         e2e_config_writer,
     ):
-        urls = request.getfixturevalue(urls_fixture)
+        # The application accepts at most four streams; CI provides five per codec.
+        urls = request.getfixturevalue(urls_fixture)[:MAX_STREAMS]
         detector_model = Path(
             os.environ.get(
                 "SIMANEAT_APPS_TEST_DETECTOR_MODEL", models_dir / DETECTOR_MODEL
