@@ -135,6 +135,11 @@ REJECTED_CONFIGS = [
         config_text().replace("id: camera0", "id: 2026-10-04"),
         "id must be a string",
     ),
+    (
+        "block-scalar-id",
+        config_text().replace("id: camera0", "id: >-\n    camera0"),
+        "YAML block scalar values are not supported",
+    ),
     ("boolean-url", config_text([stream(0, url=True)]), "url must be a string"),
     ("null-id", config_text([stream(0, id=None)]), "id must be set"),
     ("null-url", config_text([stream(0, url=None)]), "url must be set"),
@@ -208,9 +213,10 @@ def test_config_reads_streams_and_settings(tmp_path: Path):
 
 
 def test_config_defaults_null_codec_and_decodes_quoted_strings(tmp_path: Path):
-    text = config_text([stream(0, codec=None)])
+    text = config_text([stream(0, id=">-", codec=None)])
     text = text.replace("host: 127.0.0.1", 'host: "127.0.0.\\x31"')
     cfg = load_config(tmp_path, text)
+    assert cfg.streams[0].id == ">-"
     assert cfg.streams[0].codec == "h264"
     assert cfg.insight_host == "127.0.0.1"
 
