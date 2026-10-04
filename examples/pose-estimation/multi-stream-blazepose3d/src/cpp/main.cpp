@@ -29,7 +29,6 @@
 
 #include <algorithm>
 #include <atomic>
-#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -215,14 +214,8 @@ struct AppRuntime {
   std::atomic<std::uint64_t> next_job_id{1};
 };
 
-std::string lower_copy(std::string value) {
-  std::transform(value.begin(), value.end(), value.begin(),
-                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-  return value;
-}
-
 neat::nodes::groups::RtspCodec parse_codec(const std::string& value) {
-  const std::string lowered = lower_copy(value);
+  const std::string lowered = blazepose_config::lower_copy(value);
   if (lowered == "h264" || lowered == "avc" || lowered == "h.264") {
     return neat::nodes::groups::RtspCodec::H264;
   }
@@ -253,38 +246,27 @@ ParsedKeyValue parse_key_value(const std::string& text, const std::string& where
   return {key, blazepose_config::parse_yaml_scalar(text.substr(separator + 1))};
 }
 
-std::string require_stream_string(const ParsedKeyValue& field) {
-  if (field.scalar.type != blazepose_config::YamlScalarType::String) {
-    throw std::runtime_error("stream " + field.key + " must be a string");
-  }
-  return field.scalar.value;
-}
-
-int require_stream_integer(const ParsedKeyValue& field) {
-  if (field.scalar.type != blazepose_config::YamlScalarType::Integer) {
-    throw std::runtime_error("stream " + field.key + " must be an integer");
-  }
-  return blazepose_config::parse_yaml_integer(field.scalar.value, "stream " + field.key);
-}
-
 void apply_stream_field(StreamConfig& stream, const ParsedKeyValue& field) {
+  using blazepose_config::require_integer;
+  using blazepose_config::require_string;
+  const std::string name = "stream " + field.key;
   if (field.key == "id") {
-    stream.id = require_stream_string(field);
+    stream.id = require_string(field.scalar, name);
   } else if (field.key == "url") {
-    stream.url = require_stream_string(field);
+    stream.url = require_string(field.scalar, name);
   } else if (field.key == "codec") {
     // An explicit null keeps the H.264 default, as Python's string_or does.
     if (field.scalar.type != blazepose_config::YamlScalarType::Null) {
-      stream.codec = parse_codec(require_stream_string(field));
+      stream.codec = parse_codec(require_string(field.scalar, name));
     }
   } else if (field.key == "insight_channel") {
-    stream.insight_channel = require_stream_integer(field);
+    stream.insight_channel = require_integer(field.scalar, name);
   } else if (field.key == "width") {
-    stream.width = require_stream_integer(field);
+    stream.width = require_integer(field.scalar, name);
   } else if (field.key == "height") {
-    stream.height = require_stream_integer(field);
+    stream.height = require_integer(field.scalar, name);
   } else if (field.key == "fps") {
-    stream.fps = require_stream_integer(field);
+    stream.fps = require_integer(field.scalar, name);
   } else {
     throw std::runtime_error("unknown stream setting: " + field.key);
   }
@@ -308,20 +290,14 @@ std::vector<StreamConfig> parse_streams(const fs::path& config_path) {
   };
 
   std::string raw_line;
+  std::string line;
+  int indent = 0;
   int line_number = 0;
   while (std::getline(input, raw_line)) {
     ++line_number;
-    const std::string without_comment = blazepose_config::strip_yaml_inline_comment(raw_line);
-    if (sima_examples::trim_copy(without_comment).empty()) {
+    if (!blazepose_config::scan_yaml_line(raw_line, indent, line)) {
       continue;
     }
-    int indent = 0;
-    while (indent < static_cast<int>(without_comment.size()) &&
-           (without_comment[static_cast<std::size_t>(indent)] == ' ' ||
-            without_comment[static_cast<std::size_t>(indent)] == '\t')) {
-      ++indent;
-    }
-    const std::string line = sima_examples::trim_copy(without_comment);
     if (!in_streams && line == "streams:") {
       in_streams = true;
       streams_indent = indent;
@@ -334,24 +310,20 @@ std::vector<StreamConfig> parse_streams(const fs::path& config_path) {
       commit();
       break;
     }
-    if (line == "-") {
-      commit();
-      current.emplace();
-      continue;
-    }
+    const std::string where = "streams line " + std::to_string(line_number);
     if (blazepose_config::is_sequence_entry(line)) {
+      // A standalone "-" opens an entry whose mapping continues on deeper lines.
       commit();
       current.emplace();
-      apply_stream_field(
-          *current,
-          parse_key_value(line.substr(2), "streams line " + std::to_string(line_number)));
+      if (line != "-") {
+        apply_stream_field(*current, parse_key_value(line.substr(2), where));
+      }
       continue;
     }
     if (!current.has_value()) {
       throw std::runtime_error("streams must contain mapping entries");
     }
-    apply_stream_field(*current,
-                       parse_key_value(line, "streams line " + std::to_string(line_number)));
+    apply_stream_field(*current, parse_key_value(line, where));
   }
   commit();
   return streams;
