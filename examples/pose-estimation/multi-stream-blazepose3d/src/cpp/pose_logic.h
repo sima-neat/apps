@@ -20,9 +20,6 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
-#include <cstdint>
-#include <deque>
-#include <map>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -36,29 +33,12 @@ constexpr std::size_t kRawLandmarkCount = 39;
 constexpr std::size_t kRawLandmarkWidth = 5;
 constexpr std::size_t kRawWorldLandmarkWidth = 3;
 
-enum class NonblockingPushAttempt { Accepted, Retry, Cancelled };
-enum class NonblockingPushResult { Accepted, Aborted, Cancelled };
-
-template <typename Attempt, typename ShouldAbort, typename Wait>
-NonblockingPushResult retry_nonblocking_push(Attempt&& attempt, ShouldAbort&& should_abort,
-                                             Wait&& wait) {
-  while (true) {
-    if (should_abort()) {
-      return NonblockingPushResult::Aborted;
-    }
-    switch (attempt()) {
-    case NonblockingPushAttempt::Accepted:
-      return NonblockingPushResult::Accepted;
-    case NonblockingPushAttempt::Cancelled:
-      return NonblockingPushResult::Cancelled;
-    case NonblockingPushAttempt::Retry:
-      if (should_abort()) {
-        return NonblockingPushResult::Aborted;
-      }
-      wait();
-      break;
-    }
-  }
+// Stores `value` as the newest work for one stream. Returns true when it replaced
+// older work, which is dropped so a slow stage never accumulates stale frames.
+template <typename T> bool keep_latest(std::optional<T>& slot, T value) {
+  const bool replaced = slot.has_value();
+  slot = std::move(value);
+  return replaced;
 }
 
 constexpr std::array<const char*, kBodyLandmarkCount> kLandmarkNames = {
@@ -70,107 +50,13 @@ constexpr std::array<const char*, kBodyLandmarkCount> kLandmarkNames = {
     "left_knee",   "right_knee",      "left_ankle",      "right_ankle",    "left_heel",
     "right_heel",  "left_foot_index", "right_foot_index"};
 
-template <typename T, typename Predicate>
-std::vector<T> expire_pending_fifo(std::deque<std::optional<T>>& pending,
-                                   Predicate&& should_expire) {
-  std::vector<T> expired;
-  for (auto& entry : pending) {
-    if (entry.has_value() && should_expire(*entry)) {
-      expired.push_back(std::move(*entry));
-      entry.reset();
-    }
-  }
-  return expired;
-}
-
-// Pose aggregates are claimed exactly once, under the caller's state lock, by
-// whichever path gets there first. The output that completes a live aggregate
-// removes it; expiry marks it expired and leaves a tombstone that absorbs the
-// remaining late outputs. The claimant publishes outside the lock.
-//
-// Records one returned ROI output and returns the aggregate when that output
-// completes a live one.
-template <typename Aggregates, typename Pose>
-std::optional<typename Aggregates::mapped_type>
-record_pose_output(Aggregates& aggregates, const typename Aggregates::key_type& job_id,
-                   std::optional<Pose> pose) {
-  const auto found = aggregates.find(job_id);
-  if (found == aggregates.end()) {
-    return std::nullopt;
-  }
-  auto& aggregate = found->second;
-  ++aggregate.completed;
-  if (!aggregate.expired && pose.has_value()) {
-    aggregate.poses.push_back(std::move(*pose));
-  }
-  if (aggregate.completed < aggregate.expected) {
-    return std::nullopt;
-  }
-  std::optional<typename Aggregates::mapped_type> claimed;
-  if (!aggregate.expired) {
-    claimed = std::move(aggregate);
-  }
-  aggregates.erase(found);
-  return claimed;
-}
-
-// Marks every live aggregate whose deadline passed as expired and returns the
-// copies to publish with the poses gathered so far.
-template <typename Aggregates, typename ShouldExpire>
-std::vector<typename Aggregates::mapped_type>
-claim_expired_aggregates(Aggregates& aggregates, ShouldExpire&& should_expire) {
-  std::vector<typename Aggregates::mapped_type> expired;
-  for (auto& entry : aggregates) {
-    auto& aggregate = entry.second;
-    if (!aggregate.expired && should_expire(aggregate)) {
-      aggregate.expired = true;
-      expired.push_back(aggregate);
-      aggregate.poses.clear();
-    }
-  }
-  return expired;
-}
-
-// Sends one frame's 2D/3D metadata pair through `send(type)`. runtime.frames
-// counts correlated pairs queued for Insight, so the frame counts only when both
-// sends succeed; otherwise it is counted as a send failure. Either way the
-// caller completes the frame, so admission and draining are unaffected.
-template <typename Send, typename FrameCount, typename FailureCount>
-bool send_metadata_pair(Send&& send, FrameCount& metadata_frames, FailureCount& send_failures) {
+// Sends one frame's 2D/3D metadata pair through `send(type)`. Both sends are
+// always attempted; the pair counts as published only when both succeed.
+template <typename Send> bool send_metadata_pair(Send&& send) {
   const bool overlay_sent = send("pose-estimation");
   const bool world_sent = send("auxiliary-visualization");
-  if (overlay_sent && world_sent) {
-    ++metadata_frames;
-    return true;
-  }
-  ++send_failures;
-  return false;
+  return overlay_sent && world_sent;
 }
-
-template <typename T> class OrderedCompletionQueue {
-public:
-  std::vector<T> complete(std::uint64_t sequence, T value) {
-    if (sequence < next_sequence_ || !pending_.emplace(sequence, std::move(value)).second) {
-      throw std::runtime_error("duplicate ordered completion");
-    }
-    std::vector<T> ready;
-    while (true) {
-      auto found = pending_.find(next_sequence_);
-      if (found == pending_.end()) {
-        return ready;
-      }
-      ready.push_back(std::move(found->second));
-      pending_.erase(found);
-      ++next_sequence_;
-    }
-  }
-
-  std::uint64_t next_sequence() const { return next_sequence_; }
-
-private:
-  std::map<std::uint64_t, T> pending_;
-  std::uint64_t next_sequence_ = 1;
-};
 
 struct Box {
   float x1 = 0.0F;
@@ -235,181 +121,49 @@ inline float blend(float previous, float current, float alpha) {
   return previous + alpha * (current - previous);
 }
 
+// Per-stream exponential smoothing of 2D and world landmarks. Each pose is
+// matched to the previous frame's pose with the highest box IoU; matched
+// landmarks move kAlpha of the way toward the new estimate, unmatched poses
+// pass through unchanged.
 class PoseSmoother {
 public:
-  static constexpr float kPositionAlpha = 0.45F;
-  static constexpr float kConfidenceAlpha = 0.20F;
-  static constexpr float kFastMotionAlpha = 0.90F;
-  static constexpr float kFastMotionThreshold = 0.08F;
+  static constexpr float kAlpha = 0.5F;
   static constexpr float kMinimumMatchIou = 0.15F;
-  static constexpr int64_t kResetAfterNs = 250'000'000;
-  static constexpr double kNominalFrameNs = 40'000'000.0;
-  static constexpr int kMaxCoastFrames = 2;
-  static constexpr float kCoastConfidenceDecay = 0.85F;
 
-  std::vector<Pose> filter(std::vector<Pose> poses, int64_t pts_ns) {
-    if (poses.empty()) {
-      if (is_reset_gap(pts_ns)) {
-        reset();
-        return poses;
-      }
-      if (!previous_.empty() && ++missing_frames_ <= kMaxCoastFrames) {
-        auto coasted = previous_;
-        const float decay = std::pow(kCoastConfidenceDecay, missing_frames_);
-        for (Pose& pose : coasted) {
-          pose.presence *= decay;
-          pose.box.score *= decay;
-          for (std::size_t index = 0; index < pose.keypoints.size(); ++index) {
-            pose.keypoints[index].confidence *= decay;
-            pose.world_keypoints[index].confidence = pose.keypoints[index].confidence;
-          }
-        }
-        return coasted;
-      }
-      if (!previous_.empty()) {
-        // The coast window is exhausted; without a usable PTS no reset gap can
-        // fire, so drop the stale subject before a new one appears.
-        reset();
-      }
-      return poses;
-    }
-    if (is_reset_gap(pts_ns) || (pts_ns >= 0 && last_pts_ns_ >= 0 && pts_ns <= last_pts_ns_)) {
-      reset();
-    }
-    missing_frames_ = 0;
-
-    std::vector<int> matches(poses.size(), -1);
+  std::vector<Pose> filter(std::vector<Pose> poses) {
     std::vector<bool> used(previous_.size(), false);
-    for (std::size_t current_index = 0; current_index < poses.size(); ++current_index) {
+    for (Pose& current : poses) {
+      int match = -1;
       float best_iou = kMinimumMatchIou;
-      for (std::size_t previous_index = 0; previous_index < previous_.size(); ++previous_index) {
-        if (used[previous_index]) {
-          continue;
-        }
-        const float overlap = box_iou(poses[current_index].box, previous_[previous_index].box);
+      for (std::size_t index = 0; index < previous_.size(); ++index) {
+        const float overlap = used[index] ? 0.0F : box_iou(current.box, previous_[index].box);
         if (overlap >= best_iou) {
           best_iou = overlap;
-          matches[current_index] = static_cast<int>(previous_index);
+          match = static_cast<int>(index);
         }
       }
-      if (matches[current_index] >= 0) {
-        used[static_cast<std::size_t>(matches[current_index])] = true;
-      }
-    }
-
-    const float elapsed_frames = elapsed_frame_count(pts_ns);
-    for (std::size_t current_index = 0; current_index < poses.size(); ++current_index) {
-      const int previous_index = matches[current_index];
-      if (previous_index < 0) {
+      if (match < 0) {
         continue;
       }
-      Pose& current = poses[current_index];
-      const Pose& previous = previous_[static_cast<std::size_t>(previous_index)];
-      const float width = std::max(0.0F, current.box.x2 - current.box.x1);
-      const float height = std::max(0.0F, current.box.y2 - current.box.y1);
-      const float scale = std::max(1.0F, std::hypot(width, height));
-      const float center_motion =
-          std::hypot((current.box.x1 + current.box.x2 - previous.box.x1 - previous.box.x2) * 0.5F,
-                     (current.box.y1 + current.box.y2 - previous.box.y1 - previous.box.y2) * 0.5F) /
-          scale;
-      const float box_alpha = motion_alpha(center_motion, elapsed_frames);
-      current.box.x1 = blend(previous.box.x1, current.box.x1, box_alpha);
-      current.box.y1 = blend(previous.box.y1, current.box.y1, box_alpha);
-      current.box.x2 = blend(previous.box.x2, current.box.x2, box_alpha);
-      current.box.y2 = blend(previous.box.y2, current.box.y2, box_alpha);
-      const float confidence_alpha = adjusted_alpha(kConfidenceAlpha, elapsed_frames);
-      current.presence = blend(previous.presence, current.presence, confidence_alpha);
-      current.box.score = blend(previous.box.score, current.box.score, confidence_alpha);
-
-      for (std::size_t landmark = 0; landmark < current.keypoints.size(); ++landmark) {
+      used[static_cast<std::size_t>(match)] = true;
+      const Pose& previous = previous_[static_cast<std::size_t>(match)];
+      for (std::size_t landmark = 0; landmark < kBodyLandmarkCount; ++landmark) {
         Keypoint& point = current.keypoints[landmark];
-        const Keypoint& previous_point = previous.keypoints[landmark];
-        const float motion =
-            std::hypot(point.x - previous_point.x, point.y - previous_point.y) / scale;
-        const float alpha = motion_alpha(motion, elapsed_frames);
-        point.x = blend(previous_point.x, point.x, alpha);
-        point.y = blend(previous_point.y, point.y, alpha);
-        point.confidence = blend(previous_point.confidence, point.confidence, confidence_alpha);
-
+        point.x = blend(previous.keypoints[landmark].x, point.x, kAlpha);
+        point.y = blend(previous.keypoints[landmark].y, point.y, kAlpha);
         WorldKeypoint& world = current.world_keypoints[landmark];
-        const WorldKeypoint& previous_world = previous.world_keypoints[landmark];
-        world.x = blend(previous_world.x, world.x, alpha);
-        world.y = blend(previous_world.y, world.y, alpha);
-        world.z = blend(previous_world.z, world.z, alpha);
-        world.confidence = point.confidence;
+        world.x = blend(previous.world_keypoints[landmark].x, world.x, kAlpha);
+        world.y = blend(previous.world_keypoints[landmark].y, world.y, kAlpha);
+        world.z = blend(previous.world_keypoints[landmark].z, world.z, kAlpha);
       }
     }
-
     previous_ = poses;
-    if (pts_ns >= 0) {
-      last_pts_ns_ = pts_ns;
-    }
     return poses;
   }
 
-  void reset() {
-    previous_.clear();
-    last_pts_ns_ = -1;
-    missing_frames_ = 0;
-  }
-
 private:
-  bool is_reset_gap(int64_t pts_ns) const {
-    return pts_ns >= 0 && last_pts_ns_ >= 0 && pts_ns - last_pts_ns_ > kResetAfterNs;
-  }
-
-  float elapsed_frame_count(int64_t pts_ns) const {
-    if (pts_ns < 0 || last_pts_ns_ < 0 || pts_ns <= last_pts_ns_) {
-      return 1.0F;
-    }
-    return static_cast<float>(std::clamp((pts_ns - last_pts_ns_) / kNominalFrameNs, 1.0, 6.0));
-  }
-
-  static float adjusted_alpha(float alpha, float elapsed_frames) {
-    return 1.0F - std::pow(1.0F - alpha, elapsed_frames);
-  }
-
-  float motion_alpha(float normalized_motion, float elapsed_frames) const {
-    const float amount = std::clamp(normalized_motion / kFastMotionThreshold, 0.0F, 1.0F);
-    const float alpha = blend(kPositionAlpha, kFastMotionAlpha, amount);
-    return adjusted_alpha(alpha, elapsed_frames);
-  }
-
   std::vector<Pose> previous_;
-  int64_t last_pts_ns_ = -1;
-  int missing_frames_ = 0;
 };
-
-inline int64_t select_frame_id(int64_t frame_id, int64_t orig_input_seq, int64_t input_seq,
-                               std::uint64_t pull_sequence) {
-  if (frame_id >= 0) {
-    return frame_id;
-  }
-  if (orig_input_seq >= 0) {
-    return orig_input_seq;
-  }
-  if (input_seq >= 0) {
-    return input_seq;
-  }
-  return static_cast<int64_t>(pull_sequence);
-}
-
-inline bool stream_is_drained(bool closed, std::uint64_t outstanding_frames, int metadata_frames,
-                              int frame_limit) {
-  return (frame_limit > 0 && metadata_frames >= frame_limit) ||
-         (closed && outstanding_frames == 0);
-}
-
-inline bool stream_can_admit_frame(int metadata_frames, std::uint64_t outstanding_frames,
-                                   int frame_limit) {
-  if (frame_limit <= 0) {
-    return true;
-  }
-  if (metadata_frames >= frame_limit) {
-    return false;
-  }
-  return outstanding_frames < static_cast<std::uint64_t>(frame_limit - metadata_frames);
-}
 
 inline int round_half_away_from_zero(double value) {
   return value >= 0.0 ? static_cast<int>(std::floor(value + 0.5))
@@ -494,12 +248,11 @@ inline nlohmann::json poses_data_json(std::vector<Pose> poses, const std::string
                            {"y", round_half_away_from_zero(point.y)},
                            {"confidence", std::round(point.confidence * 1000.0F) / 1000.0F}});
       const WorldKeypoint& world = pose.world_keypoints[index];
-      world_keypoints.push_back(
-          {{"name", kLandmarkNames[index]},
-           {"x", std::round(world.x * 1'000'000.0F) / 1'000'000.0F},
-           {"y", std::round(world.y * 1'000'000.0F) / 1'000'000.0F},
-           {"z", std::round(world.z * 1'000'000.0F) / 1'000'000.0F},
-           {"confidence", std::round(world.confidence * 1000.0F) / 1000.0F}});
+      world_keypoints.push_back({{"name", kLandmarkNames[index]},
+                                 {"x", std::round(world.x * 1'000'000.0F) / 1'000'000.0F},
+                                 {"y", std::round(world.y * 1'000'000.0F) / 1'000'000.0F},
+                                 {"z", std::round(world.z * 1'000'000.0F) / 1'000'000.0F},
+                                 {"confidence", std::round(world.confidence * 1000.0F) / 1000.0F}});
     }
     data["poses"].push_back(
         {{"id", "pose_" + std::to_string(pose.roi_index + 1)},
@@ -543,11 +296,6 @@ inline nlohmann::json world_pose_auxiliary_from_overlay(nlohmann::json overlay) 
       "world-pose", "blazepose-3d", {{"poses", std::move(world_poses)}}, "3D Pose");
   data["stream_id"] = std::move(overlay["stream_id"]);
   return data;
-}
-
-inline nlohmann::json world_pose_auxiliary_data_json(std::vector<Pose> poses,
-                                                     const std::string& stream_id) {
-  return world_pose_auxiliary_from_overlay(poses_data_json(std::move(poses), stream_id));
 }
 
 } // namespace blazepose_app
