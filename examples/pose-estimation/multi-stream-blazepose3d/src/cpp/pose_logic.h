@@ -21,6 +21,8 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
+#include <map>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -34,6 +36,31 @@ constexpr std::size_t kRawLandmarkCount = 39;
 constexpr std::size_t kRawLandmarkWidth = 5;
 constexpr std::size_t kRawWorldLandmarkWidth = 3;
 
+enum class NonblockingPushAttempt { Accepted, Retry, Cancelled };
+enum class NonblockingPushResult { Accepted, Aborted, Cancelled };
+
+template <typename Attempt, typename ShouldAbort, typename Wait>
+NonblockingPushResult retry_nonblocking_push(Attempt&& attempt, ShouldAbort&& should_abort,
+                                             Wait&& wait) {
+  while (true) {
+    if (should_abort()) {
+      return NonblockingPushResult::Aborted;
+    }
+    switch (attempt()) {
+    case NonblockingPushAttempt::Accepted:
+      return NonblockingPushResult::Accepted;
+    case NonblockingPushAttempt::Cancelled:
+      return NonblockingPushResult::Cancelled;
+    case NonblockingPushAttempt::Retry:
+      if (should_abort()) {
+        return NonblockingPushResult::Aborted;
+      }
+      wait();
+      break;
+    }
+  }
+}
+
 constexpr std::array<const char*, kBodyLandmarkCount> kLandmarkNames = {
     "nose",        "left_eye_inner",  "left_eye",        "left_eye_outer", "right_eye_inner",
     "right_eye",   "right_eye_outer", "left_ear",        "right_ear",      "mouth_left",
@@ -42,6 +69,44 @@ constexpr std::array<const char*, kBodyLandmarkCount> kLandmarkNames = {
     "right_index", "left_thumb",      "right_thumb",     "left_hip",       "right_hip",
     "left_knee",   "right_knee",      "left_ankle",      "right_ankle",    "left_heel",
     "right_heel",  "left_foot_index", "right_foot_index"};
+
+template <typename T, typename Predicate>
+std::vector<T> expire_pending_fifo(std::deque<std::optional<T>>& pending,
+                                   Predicate&& should_expire) {
+  std::vector<T> expired;
+  for (auto& entry : pending) {
+    if (entry.has_value() && should_expire(*entry)) {
+      expired.push_back(std::move(*entry));
+      entry.reset();
+    }
+  }
+  return expired;
+}
+
+template <typename T> class OrderedCompletionQueue {
+public:
+  std::vector<T> complete(std::uint64_t sequence, T value) {
+    if (sequence < next_sequence_ || !pending_.emplace(sequence, std::move(value)).second) {
+      throw std::runtime_error("duplicate ordered completion");
+    }
+    std::vector<T> ready;
+    while (true) {
+      auto found = pending_.find(next_sequence_);
+      if (found == pending_.end()) {
+        return ready;
+      }
+      ready.push_back(std::move(found->second));
+      pending_.erase(found);
+      ++next_sequence_;
+    }
+  }
+
+  std::uint64_t next_sequence() const { return next_sequence_; }
+
+private:
+  std::map<std::uint64_t, T> pending_;
+  std::uint64_t next_sequence_ = 1;
+};
 
 struct Box {
   float x1 = 0.0F;
@@ -82,10 +147,22 @@ struct WorldKeypoint {
 };
 
 struct Pose {
+  int roi_index = 0;
   float presence = 0.0F;
   Box box;
   std::array<Keypoint, kBodyLandmarkCount> keypoints{};
   std::array<WorldKeypoint, kBodyLandmarkCount> world_keypoints{};
+};
+
+struct PoseSmoothingOptions {
+  float position_alpha = 0.45F;
+  float confidence_alpha = 0.20F;
+  float fast_motion_alpha = 0.90F;
+  float fast_motion_threshold = 0.08F;
+  float minimum_match_iou = 0.15F;
+  int reset_after_ms = 250;
+  int max_coast_frames = 2;
+  float coast_confidence_decay = 0.85F;
 };
 
 inline float box_iou(const Box& left, const Box& right) {
@@ -107,16 +184,17 @@ inline float blend(float previous, float current, float alpha) {
 
 class PoseSmoother {
 public:
+  explicit PoseSmoother(PoseSmoothingOptions options = {}) : options_(options) {}
+
   std::vector<Pose> filter(std::vector<Pose> poses, int64_t pts_ns) {
-    if (pts_ns >= 0 && last_pts_ns_ >= 0 &&
-        (pts_ns <= last_pts_ns_ || pts_ns - last_pts_ns_ > kResetAfterNs)) {
-      previous_.clear();
-      missing_frames_ = 0;
-    }
     if (poses.empty()) {
-      if (!previous_.empty() && ++missing_frames_ <= kMaxCoastFrames) {
+      if (is_reset_gap(pts_ns)) {
+        reset();
+        return poses;
+      }
+      if (!previous_.empty() && ++missing_frames_ <= options_.max_coast_frames) {
         auto coasted = previous_;
-        const float decay = std::pow(kCoastDecay, missing_frames_);
+        const float decay = std::pow(options_.coast_confidence_decay, missing_frames_);
         for (Pose& pose : coasted) {
           pose.presence *= decay;
           pose.box.score *= decay;
@@ -129,26 +207,38 @@ public:
       }
       return poses;
     }
+    if (is_reset_gap(pts_ns) || (pts_ns >= 0 && last_pts_ns_ >= 0 && pts_ns <= last_pts_ns_)) {
+      reset();
+    }
     missing_frames_ = 0;
+
+    std::vector<int> matches(poses.size(), -1);
     std::vector<bool> used(previous_.size(), false);
-    for (Pose& current : poses) {
-      float best_iou = kMinimumMatchIou;
-      int match = -1;
+    for (std::size_t current_index = 0; current_index < poses.size(); ++current_index) {
+      float best_iou = options_.minimum_match_iou;
       for (std::size_t previous_index = 0; previous_index < previous_.size(); ++previous_index) {
         if (used[previous_index]) {
           continue;
         }
-        const float overlap = box_iou(current.box, previous_[previous_index].box);
+        const float overlap = box_iou(poses[current_index].box, previous_[previous_index].box);
         if (overlap >= best_iou) {
           best_iou = overlap;
-          match = static_cast<int>(previous_index);
+          matches[current_index] = static_cast<int>(previous_index);
         }
       }
-      if (match < 0) {
+      if (matches[current_index] >= 0) {
+        used[static_cast<std::size_t>(matches[current_index])] = true;
+      }
+    }
+
+    const float elapsed_frames = elapsed_frame_count(pts_ns);
+    for (std::size_t current_index = 0; current_index < poses.size(); ++current_index) {
+      const int previous_index = matches[current_index];
+      if (previous_index < 0) {
         continue;
       }
-      used[static_cast<std::size_t>(match)] = true;
-      const Pose& previous = previous_[static_cast<std::size_t>(match)];
+      Pose& current = poses[current_index];
+      const Pose& previous = previous_[static_cast<std::size_t>(previous_index)];
       const float width = std::max(0.0F, current.box.x2 - current.box.x1);
       const float height = std::max(0.0F, current.box.y2 - current.box.y1);
       const float scale = std::max(1.0F, std::hypot(width, height));
@@ -156,23 +246,25 @@ public:
           std::hypot((current.box.x1 + current.box.x2 - previous.box.x1 - previous.box.x2) * 0.5F,
                      (current.box.y1 + current.box.y2 - previous.box.y1 - previous.box.y2) * 0.5F) /
           scale;
-      const float box_alpha = motion_alpha(center_motion);
+      const float box_alpha = motion_alpha(center_motion, elapsed_frames);
       current.box.x1 = blend(previous.box.x1, current.box.x1, box_alpha);
       current.box.y1 = blend(previous.box.y1, current.box.y1, box_alpha);
       current.box.x2 = blend(previous.box.x2, current.box.x2, box_alpha);
       current.box.y2 = blend(previous.box.y2, current.box.y2, box_alpha);
-      current.presence = blend(previous.presence, current.presence, kConfidenceAlpha);
-      current.box.score = blend(previous.box.score, current.box.score, kConfidenceAlpha);
+      const float confidence_alpha =
+          adjusted_alpha(options_.confidence_alpha, elapsed_frames);
+      current.presence = blend(previous.presence, current.presence, confidence_alpha);
+      current.box.score = blend(previous.box.score, current.box.score, confidence_alpha);
 
       for (std::size_t landmark = 0; landmark < current.keypoints.size(); ++landmark) {
         Keypoint& point = current.keypoints[landmark];
         const Keypoint& previous_point = previous.keypoints[landmark];
         const float motion =
             std::hypot(point.x - previous_point.x, point.y - previous_point.y) / scale;
-        const float alpha = motion_alpha(motion);
+        const float alpha = motion_alpha(motion, elapsed_frames);
         point.x = blend(previous_point.x, point.x, alpha);
         point.y = blend(previous_point.y, point.y, alpha);
-        point.confidence = blend(previous_point.confidence, point.confidence, kConfidenceAlpha);
+        point.confidence = blend(previous_point.confidence, point.confidence, confidence_alpha);
 
         WorldKeypoint& world = current.world_keypoints[landmark];
         const WorldKeypoint& previous_world = previous.world_keypoints[landmark];
@@ -190,23 +282,72 @@ public:
     return poses;
   }
 
-private:
-  static float motion_alpha(float motion) {
-    return motion >= kFastMotionThreshold ? kFastMotionAlpha : kPositionAlpha;
+  void reset() {
+    previous_.clear();
+    last_pts_ns_ = -1;
+    missing_frames_ = 0;
   }
 
-  static constexpr float kPositionAlpha = 0.45F;
-  static constexpr float kConfidenceAlpha = 0.20F;
-  static constexpr float kFastMotionAlpha = 0.90F;
-  static constexpr float kFastMotionThreshold = 0.08F;
-  static constexpr float kMinimumMatchIou = 0.15F;
-  static constexpr int64_t kResetAfterNs = 250'000'000;
-  static constexpr int kMaxCoastFrames = 2;
-  static constexpr float kCoastDecay = 0.85F;
+private:
+  bool is_reset_gap(int64_t pts_ns) const {
+    return pts_ns >= 0 && last_pts_ns_ >= 0 &&
+           pts_ns - last_pts_ns_ > static_cast<int64_t>(options_.reset_after_ms) * 1'000'000;
+  }
+
+  float elapsed_frame_count(int64_t pts_ns) const {
+    if (pts_ns < 0 || last_pts_ns_ < 0 || pts_ns <= last_pts_ns_) {
+      return 1.0F;
+    }
+    constexpr double kNominalFrameNs = 40'000'000.0;
+    return static_cast<float>(std::clamp((pts_ns - last_pts_ns_) / kNominalFrameNs, 1.0, 6.0));
+  }
+
+  static float adjusted_alpha(float alpha, float elapsed_frames) {
+    return 1.0F - std::pow(1.0F - alpha, elapsed_frames);
+  }
+
+  float motion_alpha(float normalized_motion, float elapsed_frames) const {
+    const float amount = std::clamp(normalized_motion / options_.fast_motion_threshold, 0.0F, 1.0F);
+    const float alpha = blend(options_.position_alpha, options_.fast_motion_alpha, amount);
+    return adjusted_alpha(alpha, elapsed_frames);
+  }
+
+  PoseSmoothingOptions options_;
   std::vector<Pose> previous_;
   int64_t last_pts_ns_ = -1;
   int missing_frames_ = 0;
 };
+
+inline int64_t select_frame_id(int64_t frame_id, int64_t orig_input_seq, int64_t input_seq,
+                               std::uint64_t pull_sequence) {
+  if (frame_id >= 0) {
+    return frame_id;
+  }
+  if (orig_input_seq >= 0) {
+    return orig_input_seq;
+  }
+  if (input_seq >= 0) {
+    return input_seq;
+  }
+  return static_cast<int64_t>(pull_sequence);
+}
+
+inline bool stream_is_drained(bool closed, std::uint64_t outstanding_frames, int metadata_frames,
+                              int frame_limit) {
+  return (frame_limit > 0 && metadata_frames >= frame_limit) ||
+         (closed && outstanding_frames == 0);
+}
+
+inline bool stream_can_admit_frame(int metadata_frames, std::uint64_t outstanding_frames,
+                                   int frame_limit) {
+  if (frame_limit <= 0) {
+    return true;
+  }
+  if (metadata_frames >= frame_limit) {
+    return false;
+  }
+  return outstanding_frames < static_cast<std::uint64_t>(frame_limit - metadata_frames);
+}
 
 inline int round_half_away_from_zero(double value) {
   return value >= 0.0 ? static_cast<int>(std::floor(value + 0.5))
@@ -234,7 +375,7 @@ inline float sigmoid(float value) {
 
 inline Pose decode_pose(const std::vector<float>& raw_landmarks,
                         const std::vector<float>& raw_world_landmarks, const Affine& affine,
-                        const Box& box, float presence) {
+                        const Box& box, float presence, int roi_index) {
   if (raw_landmarks.size() != kRawLandmarkCount * kRawLandmarkWidth) {
     throw std::runtime_error("BlazePose screen-landmark output must contain 195 floats");
   }
@@ -243,6 +384,7 @@ inline Pose decode_pose(const std::vector<float>& raw_landmarks,
   }
 
   Pose pose;
+  pose.roi_index = roi_index;
   pose.presence = presence;
   pose.box = box;
   for (std::size_t index = 0; index < kBodyLandmarkCount; ++index) {
@@ -259,11 +401,12 @@ inline Pose decode_pose(const std::vector<float>& raw_landmarks,
 }
 
 inline nlohmann::json poses_data_json(std::vector<Pose> poses, const std::string& stream_id) {
+  std::sort(poses.begin(), poses.end(),
+            [](const Pose& left, const Pose& right) { return left.roi_index < right.roi_index; });
   nlohmann::json data;
   data["stream_id"] = stream_id;
   data["poses"] = nlohmann::json::array();
-  for (std::size_t pose_index = 0; pose_index < poses.size(); ++pose_index) {
-    const Pose& pose = poses[pose_index];
+  for (const Pose& pose : poses) {
     nlohmann::json keypoints = nlohmann::json::array();
     nlohmann::json world_keypoints = nlohmann::json::array();
     for (std::size_t index = 0; index < pose.keypoints.size(); ++index) {
@@ -273,14 +416,15 @@ inline nlohmann::json poses_data_json(std::vector<Pose> poses, const std::string
                            {"y", round_half_away_from_zero(point.y)},
                            {"confidence", std::round(point.confidence * 1000.0F) / 1000.0F}});
       const WorldKeypoint& world = pose.world_keypoints[index];
-      world_keypoints.push_back({{"name", kLandmarkNames[index]},
-                                 {"x", std::round(world.x * 1'000'000.0F) / 1'000'000.0F},
-                                 {"y", std::round(world.y * 1'000'000.0F) / 1'000'000.0F},
-                                 {"z", std::round(world.z * 1'000'000.0F) / 1'000'000.0F},
-                                 {"confidence", std::round(world.confidence * 1000.0F) / 1000.0F}});
+      world_keypoints.push_back(
+          {{"name", kLandmarkNames[index]},
+           {"x", std::round(world.x * 1'000'000.0F) / 1'000'000.0F},
+           {"y", std::round(world.y * 1'000'000.0F) / 1'000'000.0F},
+           {"z", std::round(world.z * 1'000'000.0F) / 1'000'000.0F},
+           {"confidence", std::round(world.confidence * 1000.0F) / 1000.0F}});
     }
     data["poses"].push_back(
-        {{"id", "pose_" + std::to_string(pose_index + 1)},
+        {{"id", "pose_" + std::to_string(pose.roi_index + 1)},
          {"label", "person"},
          {"presence", std::round(pose.presence * 1000.0F) / 1000.0F},
          {"confidence", std::round(pose.box.score * 1000.0F) / 1000.0F},
@@ -294,19 +438,43 @@ inline nlohmann::json poses_data_json(std::vector<Pose> poses, const std::string
   return data;
 }
 
-inline nlohmann::json world_pose_auxiliary_data_json(nlohmann::json overlay) {
-  auto world_poses = nlohmann::json::array();
-  for (auto& pose : overlay["poses"]) {
-    world_poses.push_back({{"id", std::move(pose["id"])},
-                           {"presence", std::move(pose["presence"])},
-                           {"keypoints", std::move(pose["world_keypoints"])}});
+inline nlohmann::json
+auxiliary_visualization_data_json(std::string id, std::string renderer, nlohmann::json payload,
+                                  std::optional<std::string> title = std::nullopt) {
+  nlohmann::json data = {{"schema_version", 1},
+                         {"id", std::move(id)},
+                         {"renderer", std::move(renderer)},
+                         {"payload", std::move(payload)}};
+  if (title.has_value()) {
+    data["title"] = std::move(*title);
   }
-  return {{"schema_version", 1},
-          {"id", "world-pose"},
-          {"renderer", "blazepose-3d"},
-          {"title", "3D Pose"},
-          {"stream_id", std::move(overlay["stream_id"])},
-          {"payload", {{"poses", std::move(world_poses)}}}};
+  return data;
+}
+
+inline nlohmann::json world_pose_auxiliary_data_json(std::vector<Pose> poses,
+                                                     const std::string& stream_id) {
+  std::sort(poses.begin(), poses.end(),
+            [](const Pose& left, const Pose& right) { return left.roi_index < right.roi_index; });
+  nlohmann::json world_poses = nlohmann::json::array();
+  for (const Pose& pose : poses) {
+    nlohmann::json keypoints = nlohmann::json::array();
+    for (std::size_t index = 0; index < pose.world_keypoints.size(); ++index) {
+      const WorldKeypoint& point = pose.world_keypoints[index];
+      keypoints.push_back({{"name", kLandmarkNames[index]},
+                           {"x", std::round(point.x * 1'000'000.0F) / 1'000'000.0F},
+                           {"y", std::round(point.y * 1'000'000.0F) / 1'000'000.0F},
+                           {"z", std::round(point.z * 1'000'000.0F) / 1'000'000.0F},
+                           {"confidence", std::round(point.confidence * 1000.0F) / 1000.0F}});
+    }
+    world_poses.push_back({{"id", "pose_" + std::to_string(pose.roi_index + 1)},
+                           {"presence", std::round(pose.presence * 1000.0F) / 1000.0F},
+                           {"keypoints", std::move(keypoints)}});
+  }
+
+  nlohmann::json data = auxiliary_visualization_data_json(
+      "world-pose", "blazepose-3d", {{"poses", std::move(world_poses)}}, "3D Pose");
+  data["stream_id"] = stream_id;
+  return data;
 }
 
 } // namespace blazepose_app

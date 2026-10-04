@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 import json
 import select
 import socket
 import struct
 import time
-from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
@@ -164,7 +164,7 @@ class MetadataJsonListener:
         self._sockets.clear()
         self._reassemblers.clear()
 
-    def __enter__(self):
+    def __enter__(self) -> "MetadataJsonListener":
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -179,9 +179,7 @@ class MetadataJsonListener:
 
         while time.monotonic() < deadline:
             remaining = max(0.0, deadline - time.monotonic())
-            readable, _, _ = select.select(
-                list(self._sockets.keys()), [], [], min(0.2, remaining)
-            )
+            readable, _, _ = select.select(list(self._sockets.keys()), [], [], min(0.2, remaining))
             for sock in readable:
                 datagram, _ = sock.recvfrom(65536)
                 port = self._sockets[sock]
@@ -223,13 +221,13 @@ class MetadataJsonListener:
     ) -> tuple[MetadataJsonMessage | None, str]:
         try:
             parsed = json.loads(payload.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        except Exception as exc:
             return None, f"json parse failed: {exc}"
 
         if not isinstance(parsed, dict):
             return None, "json root is not an object"
         metadata_type = parsed.get("type")
-        if metadata_type not in self._metadata_contracts:
+        if not isinstance(metadata_type, str) or metadata_type not in self._metadata_contracts:
             return None, "missing or invalid type"
         timestamp = parsed.get("timestamp")
         if not isinstance(timestamp, int):
