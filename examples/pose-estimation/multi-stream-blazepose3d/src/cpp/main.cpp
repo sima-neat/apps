@@ -840,10 +840,10 @@ void publish_frame_metadata_locked(StreamRuntime& stream, const FrameIdentity& i
   if (stream.pose_temporal_filter_enabled) {
     poses = stream.pose_smoother.filter(std::move(poses), identity.pts_ns);
   }
-  const std::string overlay_data =
-      blazepose_app::poses_data_json(poses, identity.stream_id).dump();
+  nlohmann::json overlay = blazepose_app::poses_data_json(std::move(poses), identity.stream_id);
+  const std::string overlay_data = overlay.dump();
   const std::string auxiliary_data =
-      blazepose_app::world_pose_auxiliary_data_json(std::move(poses), identity.stream_id).dump();
+      blazepose_app::world_pose_auxiliary_from_overlay(std::move(overlay)).dump();
   const int64_t timestamp_ms = identity.pts_ns >= 0 ? identity.pts_ns / 1'000'000 : -1;
   const std::string frame_id = identity.frame_id >= 0 ? std::to_string(identity.frame_id) : "";
   const auto send = [&](const char* type) {
