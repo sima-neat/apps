@@ -325,6 +325,35 @@ bool test_scalar_config_preserves_yaml_types(const std::string& binary) {
   return ok;
 }
 
+bool test_typed_settings_reject_explicit_null(const std::string& binary) {
+  bool ok = true;
+  struct Case {
+    std::string name;
+    std::string section;
+    std::string message;
+  };
+  for (const Case& test :
+       {Case{"null_bool", "output:\n  video_enabled: null\n", "must be true or false"},
+        Case{"null_int", "detector:\n  max_detections: null\n", "must be an integer"},
+        Case{"null_double", "pose:\n  roi_scale: null\n", "must be numeric"}}) {
+    const fs::path directory = create_test_scratch_dir("multi-stream-blazepose3d", test.name);
+    const fs::path config = directory / "config.yaml";
+    std::ofstream(config) << "models:\n  detector_path: detector.tar.gz\n"
+                             "  pose_path: pose.tar.gz\n"
+                             "streams:\n  - id: camera0\n"
+                             "    url: rtsp://127.0.0.1/src0\n    codec: h264\n"
+                             "    insight_channel: 0\n"
+                          << test.section;
+    const auto result =
+        spawn_and_wait(binary, {"--config", config.string(), "--validate-config-only"}, 20000);
+    ok &= expect(result.exit_code == 1 &&
+                     result.stderr_text.find(test.message) != std::string::npos,
+                 test.name + " is rejected consistently with Python YAML parsing");
+    remove_dir(directory.string());
+  }
+  return ok;
+}
+
 bool test_stream_mapping_order_and_explicit_caps(const std::string& binary) {
   const fs::path config = write_config(
       "stream_mapping_order",
@@ -510,6 +539,7 @@ int main(int argc, char** argv) {
   ok &= test_insight_ports_do_not_overlap(argv[1]);
   ok &= test_stream_strings_reject_yaml_non_strings(argv[1]);
   ok &= test_scalar_config_preserves_yaml_types(argv[1]);
+  ok &= test_typed_settings_reject_explicit_null(argv[1]);
   ok &= test_stream_mapping_order_and_explicit_caps(argv[1]);
   ok &= test_yaml_scalar_parity(argv[1]);
   ok &= test_metadata_contract_correlation();
