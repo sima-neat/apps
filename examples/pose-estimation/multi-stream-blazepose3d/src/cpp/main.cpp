@@ -45,7 +45,9 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <regex>
 #include <set>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -404,6 +406,63 @@ bool is_plain_yaml_null(std::string value) {
   return value == "null";
 }
 
+bool is_yaml_integer(std::string value) {
+  value.erase(std::remove(value.begin(), value.end(), '_'), value.end());
+  if (!value.empty() && (value.front() == '+' || value.front() == '-')) {
+    value.erase(0, 1);
+  }
+  if (value.empty()) {
+    return false;
+  }
+  const auto all_digits = [](const std::string& digits, int base) {
+    return !digits.empty() && std::all_of(digits.begin(), digits.end(), [base](unsigned char c) {
+      return std::isdigit(c) != 0 ? c - '0' < base
+                                  : base == 16 && std::tolower(c) >= 'a' && std::tolower(c) <= 'f';
+    });
+  };
+  if (value.size() > 2 && value.rfind("0b", 0) == 0) {
+    return all_digits(value.substr(2), 2);
+  }
+  if (value.size() > 2 && value.rfind("0x", 0) == 0) {
+    return all_digits(value.substr(2), 16);
+  }
+  if (value.find(':') != std::string::npos) {
+    std::istringstream segments(value);
+    std::string segment;
+    bool first = true;
+    while (std::getline(segments, segment, ':')) {
+      if (!all_digits(segment, 10) || (first && segment.front() == '0') ||
+          (!first && (segment.size() > 2 || (segment.size() == 2 &&
+                                             (segment[0] - '0') * 10 + (segment[1] - '0') > 59)))) {
+        return false;
+      }
+      first = false;
+    }
+    return value.back() != ':';
+  }
+  if (value.size() > 1 && value.front() == '0') {
+    return all_digits(value.substr(1), 8);
+  }
+  return all_digits(value, 10);
+}
+
+bool is_plain_yaml_string(const std::string& value) {
+  std::string lowered = value;
+  std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  if (lowered == "true" || lowered == "false" || lowered == "yes" || lowered == "no" ||
+      lowered == "on" || lowered == "off" || value.empty() || value.front() == '[' ||
+      value.front() == '{' || value.front() == '&' || value.front() == '*' ||
+      value.front() == '!' || is_yaml_integer(value)) {
+    return false;
+  }
+  static const std::regex number_pattern(
+      R"(^(?:[-+]?(?:[0-9][0-9_]*)\.[0-9_]*(?:[eE][-+][0-9]+)?|\.[0-9][0-9_]*(?:[eE][-+][0-9]+)?|[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+\.[0-9_]*|[-+]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN))$)");
+  static const std::regex timestamp_pattern(
+      R"(^(?:[0-9]{4}-[0-9]{2}-[0-9]{2}|[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}(?:[Tt]|[ \t]+)[0-9]{1,2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]*)?(?:[ \t]*(?:Z|[-+][0-9]{1,2}(?::[0-9]{2})?))?)$)");
+  return !std::regex_match(value, number_pattern) && !std::regex_match(value, timestamp_pattern);
+}
+
 // ScalarConfig skips YAML lists, so the stream entries are read here: a
 // "- key: value" line starts an entry and deeper "key: value" lines continue it.
 std::vector<StreamConfig> parse_streams(const fs::path& config_path) {
@@ -446,6 +505,15 @@ std::vector<StreamConfig> parse_streams(const fs::path& config_path) {
                         raw_value.back() == raw_value.front();
     if (quoted && (key == "insight_channel" || key == "width" || key == "height" || key == "fps")) {
       throw std::runtime_error("stream " + key + " must be an integer");
+    }
+    if (!quoted && (key == "id" || key == "url")) {
+      if (is_plain_yaml_null(raw_value)) {
+        apply_stream_field(streams.back(), key, "");
+        continue;
+      }
+      if (!is_plain_yaml_string(raw_value)) {
+        throw std::runtime_error("stream " + key + " must be a string");
+      }
     }
     if (key != "codec" || !is_plain_yaml_null(raw_value)) {
       apply_stream_field(streams.back(), key, decode_yaml_scalar(raw_value));
