@@ -16,9 +16,11 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <initializer_list>
 #include <iostream>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -72,10 +74,163 @@ SourceCaps probe_source_caps(const std::string& url) {
   return caps;
 }
 
-// Counts the UDP datagrams that arrive on each Insight video port.
-class VideoListener {
+struct RtpPayload {
+  const std::uint8_t* data;
+  std::size_t size;
+};
+
+std::optional<RtpPayload> rtp_payload(const std::uint8_t* packet, std::size_t size) {
+  if (size < 13 || packet[0] >> 6 != 2 || (packet[1] & 0x7F) != 96) {
+    return std::nullopt;
+  }
+  std::size_t header_size = 12 + 4 * (packet[0] & 0x0F);
+  if (header_size >= size) {
+    return std::nullopt;
+  }
+  if ((packet[0] & 0x10) != 0) {
+    if (header_size + 4 > size) {
+      return std::nullopt;
+    }
+    const std::size_t extension_words =
+        (static_cast<std::size_t>(packet[header_size + 2]) << 8) | packet[header_size + 3];
+    if (extension_words > (size - header_size - 4) / 4) {
+      return std::nullopt;
+    }
+    header_size += 4 + 4 * extension_words;
+    if (header_size >= size) {
+      return std::nullopt;
+    }
+  }
+  std::size_t payload_end = size;
+  if ((packet[0] & 0x20) != 0) {
+    const std::size_t padding = packet[size - 1];
+    if (padding == 0 || padding > payload_end - header_size) {
+      return std::nullopt;
+    }
+    payload_end -= padding;
+  }
+  if (header_size >= payload_end) {
+    return std::nullopt;
+  }
+  return RtpPayload{packet + header_size, payload_end - header_size};
+}
+
+bool is_codec_config_rtp(const std::uint8_t* packet, std::size_t size, const std::string& codec) {
+  const auto parsed = rtp_payload(packet, size);
+  if (!parsed.has_value()) {
+    return false;
+  }
+  const std::uint8_t* payload = parsed->data;
+  const std::size_t payload_size = parsed->size;
+  if (codec == "h264") {
+    const std::uint8_t nal_type = payload[0] & 0x1F;
+    if ((payload[0] & 0x80) != 0) {
+      return false;
+    }
+    if (nal_type == 7) {
+      return payload_size >= 2;
+    }
+    if (nal_type == 28) {
+      return payload_size >= 3 && (payload[1] & 0xC0) == 0x80 && (payload[1] & 0x20) == 0 &&
+             (payload[1] & 0x1F) == 7;
+    }
+    if (nal_type != 24) {
+      return false;
+    }
+    std::size_t position = 1;
+    bool found_sps = false;
+    std::uint8_t max_nri = 0;
+    while (position < payload_size) {
+      if (position + 2 > payload_size) {
+        return false;
+      }
+      const std::size_t nal_size =
+          (static_cast<std::size_t>(payload[position]) << 8) | payload[position + 1];
+      position += 2;
+      if (nal_size == 0 || nal_size > payload_size - position) {
+        return false;
+      }
+      if ((payload[position] & 0x80) != 0) {
+        return false;
+      }
+      max_nri = std::max(max_nri, static_cast<std::uint8_t>(payload[position] & 0x60));
+      found_sps = found_sps || (nal_size >= 2 && (payload[position] & 0x9F) == 7);
+      position += nal_size;
+    }
+    return found_sps && (payload[0] & 0x60) == max_nri;
+  }
+  if (payload_size < 2 || (payload[0] & 0x80) != 0 || (payload[1] & 0x07) == 0) {
+    return false;
+  }
+  const std::uint8_t nal_type = (payload[0] >> 1) & 0x3F;
+  if (nal_type == 32) {
+    return payload_size >= 3;
+  }
+  if (nal_type == 49) {
+    return payload_size >= 4 && (payload[2] & 0xC0) == 0x80 && (payload[2] & 0x3F) == 32;
+  }
+  if (nal_type != 48) {
+    return false;
+  }
+  std::size_t position = 2;
+  bool found_vps = false;
+  while (position < payload_size) {
+    if (position + 2 > payload_size) {
+      return false;
+    }
+    const std::size_t nal_size =
+        (static_cast<std::size_t>(payload[position]) << 8) | payload[position + 1];
+    position += 2;
+    if (nal_size < 2 || nal_size > payload_size - position) {
+      return false;
+    }
+    const std::uint8_t* nal = payload + position;
+    found_vps = found_vps || (nal_size >= 3 && (nal[0] & 0x80) == 0 &&
+                              ((nal[0] >> 1) & 0x3F) == 32 && (nal[1] & 0x07) != 0);
+    position += nal_size;
+  }
+  return found_vps;
+}
+
+bool test_rtp_packet_validation() {
+  const auto packet = [](std::initializer_list<std::uint8_t> payload) {
+    std::vector<std::uint8_t> bytes{0x80, 96, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1};
+    bytes.reserve(bytes.size() + payload.size());
+    for (const std::uint8_t value : payload) {
+      bytes.push_back(value);
+    }
+    return bytes;
+  };
+  const auto accepted = [](const std::vector<std::uint8_t>& bytes, const std::string& codec) {
+    return is_codec_config_rtp(bytes.data(), bytes.size(), codec);
+  };
+  const auto h264 = packet({0x67, 1});
+  const auto h265 = packet({0x40, 1, 1});
+  const auto overlapping_h264 = packet({0x61, 1});
+  const auto overlapping_h265 = packet({0x02, 1});
+  const auto h264_stap = packet({0x78, 0, 2, 0x67, 1});
+  const auto h264_fu = packet({28, 0x87, 1});
+  const auto h265_ap = packet({0x60, 1, 0, 3, 0x40, 1, 1});
+  const auto h265_fu = packet({0x62, 1, 0xA0, 1});
+  auto wrong_payload = h264;
+  wrong_payload[1] = 97;
+  return accepted(h264, "h264") && !accepted(h264, "h265") && accepted(h265, "h265") &&
+         !accepted(h265, "h264") && !accepted(overlapping_h264, "h264") &&
+         !accepted(overlapping_h264, "h265") && !accepted(overlapping_h265, "h264") &&
+         !accepted(overlapping_h265, "h265") && accepted(h264_stap, "h264") &&
+         accepted(h264_fu, "h264") && accepted(h265_ap, "h265") && accepted(h265_fu, "h265") &&
+         !accepted(packet({0x67}), "h264") && !accepted(packet({0x40, 1}), "h265") &&
+         !accepted(packet({24, 0, 1, 0x67}), "h264") &&
+         !accepted(packet({24, 0, 2, 0x67, 1}), "h264") &&
+         !accepted(packet({0x60, 1, 0, 2, 0x40, 1}), "h265") && !accepted(packet({28}), "h264") &&
+         !accepted(packet({0x62, 1}), "h265") && !accepted(packet({28, 0xC7, 1}), "h264") &&
+         !accepted(packet({0x62, 1, 0xE0, 1}), "h265") && !accepted(wrong_payload, "h264");
+}
+
+class RtpVideoListener {
 public:
-  VideoListener(int base_port, int num_ports) : packets_(static_cast<std::size_t>(num_ports), 0) {
+  RtpVideoListener(int base_port, int num_ports, std::string codec)
+      : codec_(std::move(codec)), packets_(static_cast<std::size_t>(num_ports), 0) {
     for (int offset = 0; offset < num_ports; ++offset) {
       const int fd = socket(AF_INET, SOCK_DGRAM, 0);
       if (fd < 0) {
@@ -100,7 +255,7 @@ public:
     }
   }
 
-  ~VideoListener() {
+  ~RtpVideoListener() {
     stopping_ = true;
     for (std::thread& worker : workers_) {
       worker.join();
@@ -126,7 +281,8 @@ private:
   void receive(std::size_t index) {
     std::array<std::uint8_t, 65536> packet{};
     while (!stopping_) {
-      if (recv(sockets_[index], packet.data(), packet.size(), 0) > 0) {
+      const ssize_t size = recv(sockets_[index], packet.data(), packet.size(), 0);
+      if (size > 0 && is_codec_config_rtp(packet.data(), static_cast<std::size_t>(size), codec_)) {
         std::lock_guard<std::mutex> lock(mutex_);
         ++packets_[index];
       }
@@ -135,6 +291,7 @@ private:
 
   std::vector<int> sockets_;
   std::vector<std::thread> workers_;
+  std::string codec_;
   mutable std::mutex mutex_;
   std::vector<int> packets_;
   std::atomic<bool> stopping_{false};
@@ -249,7 +406,7 @@ int run_case(const std::string& binary, const fs::path& detector, const fs::path
     remove_dir(run_dir.string());
     return 1;
   }
-  VideoListener video_listener(video_port_base, num_ports);
+  RtpVideoListener video_listener(video_port_base, num_ports, codec);
   if (!video_listener.ok()) {
     std::cerr << "[FAIL] video listener: " << video_listener.error() << "\n";
     remove_dir(run_dir.string());
@@ -301,6 +458,10 @@ int main(int argc, char** argv) {
   if (argc < 2) {
     std::cerr << "[ERR] usage: " << argv[0] << " <example-binary>\n";
     return 2;
+  }
+  if (!test_rtp_packet_validation()) {
+    std::cerr << "[FAIL] RTP payload type and codec-header validation\n";
+    return 1;
   }
   const auto env_path = [](const char* name, const fs::path& fallback) {
     const char* value = env_or_null(name);

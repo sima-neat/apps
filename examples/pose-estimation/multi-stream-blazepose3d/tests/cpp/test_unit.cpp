@@ -246,6 +246,14 @@ bool test_config_validation(const std::string& binary) {
        config(replaced(stream_entry(0), "id: camera0", "id: camera'one # comment") +
               replaced(stream_entry(1), "id: camera1", "id: \"camera'one\"")),
        "stream ids must be unique"},
+      {"single_quote_escape",
+       config(replaced(stream_entry(0), "id: camera0", "id: 'camera''s'") +
+              replaced(stream_entry(1), "id: camera1", "id: \"camera's\"")),
+       "stream ids must be unique"},
+      {"double_quote_escape",
+       config(replaced(stream_entry(0), "id: camera0", "id: \"camera\\\"one\"") +
+              replaced(stream_entry(1), "id: camera1", "id: 'camera\"one'")),
+       "stream ids must be unique"},
       {"duplicate_channel",
        config(stream_entry(0) + replaced(stream_entry(1), "channel: 1", "channel: 0")),
        "stream insight channels must be unique"},
