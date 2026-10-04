@@ -351,6 +351,21 @@ def test_roi_landmark_and_metadata_contract():
     json.dumps([data, auxiliary, generic])
 
 
+def test_select_people_discards_non_finite_scores(monkeypatch):
+    boxes = [
+        {**BOX, "score": float("nan")},
+        {**BOX, "score": float("inf")},
+        {**BOX, "score": 0.9},
+        {**BOX, "score": 1.0, "class_id": 1},
+    ]
+    monkeypatch.setattr(main, "extract_bbox_payload", lambda _sample: b"bbox")
+    monkeypatch.setattr(main, "parse_boxes_strict", lambda *_args: boxes)
+    stream = SimpleNamespace(width=640, height=480)
+    cfg = SimpleNamespace(max_people_per_frame=4)
+
+    assert main.select_people(object(), stream, cfg) == [boxes[2]]
+
+
 class FakeTensor:
     def __init__(self, values):
         self.values = np.asarray(values, dtype=np.float32)

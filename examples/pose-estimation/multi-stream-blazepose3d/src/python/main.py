@@ -934,7 +934,11 @@ def select_people(
         extract_bbox_payload(sample), stream.width, stream.height, MAX_DETECTIONS
     )
     people = sorted(
-        (box for box in boxes if int(box["class_id"]) == 0),
+        (
+            box
+            for box in boxes
+            if int(box["class_id"]) == 0 and math.isfinite(float(box["score"]))
+        ),
         key=lambda box: float(box["score"]),
         reverse=True,
     )

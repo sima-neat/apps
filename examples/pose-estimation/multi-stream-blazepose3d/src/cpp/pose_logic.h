@@ -96,6 +96,10 @@ struct Box {
   int class_id = -1;
 };
 
+inline bool is_finite_person_box(const Box& box) {
+  return box.class_id == 0 && std::isfinite(box.score);
+}
+
 struct Roi {
   int x = 0;
   int y = 0;
