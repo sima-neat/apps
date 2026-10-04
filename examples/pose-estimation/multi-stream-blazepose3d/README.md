@@ -31,7 +31,7 @@ Application: latest RGB mailbox per stream ─> shared YOLO26 Model graph
              ─> 33 image + world keypoints ─> paired correlated Insight metadata
 ```
 
-The source runs and both model runners are fixed after startup. Configure one to four cameras, then restart the application after adding, removing, or editing a stream. Separate source runs accept different resolutions and isolate disconnects without rebuilding either shared model graph.
+The source runs and both model runners are fixed after startup. Configure one to four cameras, then restart the application after adding, removing, or editing a stream. Separate source runs accept different resolutions without rebuilding either shared model graph.
 
 ## Preview
 
@@ -132,11 +132,11 @@ output:
     host: <insight-host-ip>
 ```
 
-Configure one to four streams. Each stream needs a unique stable `id` and `insight_channel`. Sources may have different resolutions. `pose.max_people_per_frame` bounds how many highest-confidence person boxes are sent to BlazePose per admitted frame; its maximum of 10 keeps each JSON metadata datagram below the sender limit.
+Each stream needs a unique stable `id` and `insight_channel`. `pose.max_people_per_frame` bounds how many highest-confidence person boxes are sent to BlazePose per admitted frame; its maximum of 10 keeps each JSON metadata datagram below the sender limit.
 
 The active video and metadata UDP ports must be disjoint. If you use sparse or non-zero channel numbers, choose `video_port_base` and `metadata_port_base` so no `base + insight_channel` value overlaps.
 
-The optional `width`, `height`, and `fps` fields must be supplied together. When present, they avoid a startup probe so an offline channel cannot prevent healthy channels from starting; make them match the RTSP source's actual caps. The FPS is a decoder hint and is not pinned into caps, so a 29.97 fps (30000/1001) camera works with `fps: 30`, as it does when probed. Once running, a channel that closes or errors is isolated while the other channels continue.
+The optional `width`, `height`, and `fps` fields must be supplied together. When present, they avoid a startup probe so an offline channel cannot prevent healthy channels from starting; make them match the RTSP source's actual caps. The FPS is a decoder hint and is not pinned into caps, so a 29.97 fps (30000/1001) camera works with `fps: 30`, as it does when probed.
 
 `pose.temporal_filter_enabled` defaults to `true`. The per-stream filter matches poses by person-box overlap, damps small coordinate and confidence fluctuations, and adapts toward the current frame during deliberate fast motion. It also bridges at most two missing detector or pose results with a confidence-decayed copy of the latest estimate. This removes one-frame visualization flashes without buffering future frames or adding inference latency. The filter processes image and world landmarks together before either metadata message is built, so the 2D overlay and 3D view remain frame-correlated and cannot drift apart. Disable it only when raw model output is required for measurement.
 
@@ -198,14 +198,13 @@ data can reuse the same envelope with a separately registered Insight renderer.
 
 The keypoint confidence is the minimum of BlazePose landmark visibility and presence after sigmoid activation. The global pose-presence logit is also sigmoid-activated before it gates each ROI and is published as a probability.
 
-The application retains the source `stream_id`, frame ID, PTS, DTS, duration, and sequence numbers in its bounded FIFO context. Detached MLA/postprocess runners do not echo all of that identity, so output order is correlated against this retained context. Both metadata payloads include the original `stream_id`, and `MetadataSender` supplies the original PTS and frame ID. The C++ and Python hardware E2E tests each run up to four H.264 and four H.265 streams, and listen on every configured metadata port. They require the configured stream identity and, on every port, a 2D/3D pair with an identical `(port, timestamp, frame_id)` identity and pose count; empty pairs count, because a source may show nobody. At least one port must publish a non-empty pair with 33 image and world keypoints per pose. They also require codec-valid RTP on every configured video port.
+The application retains the source `stream_id`, frame ID, PTS, DTS, duration, and sequence numbers in its bounded FIFO context. Detached MLA/postprocess runners do not echo all of that identity, so output order is correlated against this retained context. Both metadata payloads include the original `stream_id`. The C++ and Python hardware E2E tests each run up to four H.264 and four H.265 streams, and listen on every configured metadata port. They require the configured stream identity and, on every port, a 2D/3D pair with an identical `(port, timestamp, frame_id)` identity and pose count; empty pairs count, because a source may show nobody. At least one port must publish a non-empty pair with 33 image and world keypoints per pose. They also require codec-valid RTP on every configured video port.
 
 ## Performance and Scheduling
 
 - Each source run starts and pulls on its own thread, so an offline source's startup timeout cannot delay healthy streams. `RealtimeLatestByStream` bounds admitted decoder-backed frames before the packed-RGB conversion.
 - Latest-only detector and pose mailboxes plus round-robin dispatch prevent stale work from accumulating and preserve fairness across streams.
 - A per-stream completion queue publishes results in source-frame order; work evicted from a latest-only mailbox advances the sequence without emitting stale metadata.
-- Each stream owns independent temporal-filter state. Small landmark and confidence fluctuations are damped without buffering frames, large motion receives a higher current-frame weight to limit visual lag, and a two-frame confidence-decayed coast hides isolated inference misses.
 - YOLO26 and BlazePose each use one shared model route. Increasing stream count does not create additional model routes.
 - Video uses H.264 or H.265 encoded passthrough with latest-only egress, so a slow receiver cannot backpressure analytics. The application does not draw on frames or re-encode them.
 - The current public `VideoConvert` node performs the one NV12-to-RGB conversion on A65 after admission. The RGB frame remains holder-backed in application code; Python passes the `Tensor` directly and C++ maps a non-owning `cv::Mat` view.
