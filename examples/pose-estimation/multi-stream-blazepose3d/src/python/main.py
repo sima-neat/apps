@@ -743,7 +743,10 @@ def build_source_options(
     options.latency_ms = cfg.latency_ms
     options.tcp = cfg.tcp
     options.payload_type = 96
-    options.source_fps = fps
+    # The integer FPS (probed and rounded, or configured) is only the decoder's
+    # rate hint. Pinning it into caps would reject NTSC-rate cameras: a 29.97 fps
+    # stream negotiates 30000/1001, which a 30/1 caps filter cannot accept.
+    options.dec_fps = fps
     options.insert_queue = True
     options.out_format = pyneat.Format.NV12
     options.decoder_name = f"decoder_{stream.id}"
@@ -754,11 +757,11 @@ def build_source_options(
     if stream.codec == "h264":
         options.fallback_h264_width = width
         options.fallback_h264_height = height
+        options.fallback_h264_fps = fps
     options.output_caps.enable = True
     options.output_caps.format = pyneat.Format.NV12
     options.output_caps.width = width
     options.output_caps.height = height
-    options.output_caps.fps = fps
     options.output_caps.memory = pyneat.CapsMemory.Any
     return options
 
@@ -787,6 +790,7 @@ def make_encoded_source(options):
     encoded.auto_caps_from_stream = options.auto_caps_from_stream
     encoded.fallback_h264_width = options.fallback_h264_width
     encoded.fallback_h264_height = options.fallback_h264_height
+    encoded.fallback_h264_fps = options.fallback_h264_fps
     graph = pyneat.Graph("encoded_source")
     graph.add(pyneat.groups.rtsp_encoded_input(encoded))
     return graph
@@ -806,7 +810,7 @@ def make_decoder(options):
     decode.next_element = options.decoder_next_element
     decode.dec_width = options.dec_width
     decode.dec_height = options.dec_height
-    decode.dec_fps = options.source_fps
+    decode.dec_fps = options.dec_fps
     decode.num_buffers = options.num_buffers
     graph = pyneat.Graph(f"decoder_{options.decoder_name}")
     graph.connect(
@@ -821,7 +825,7 @@ def make_decoder(options):
             "NV12",
             options.dec_width,
             options.dec_height,
-            options.source_fps,
+            options.output_caps.fps,
             options.output_caps.memory,
         )
     )
@@ -992,7 +996,7 @@ def make_rgb_output(stream: StreamRuntime):
     graph = pyneat.Graph(f"rgb_{stream.index}")
     graph.add(pyneat.nodes.input("analytics_frame"))
     graph.add(pyneat.nodes.video_convert())
-    graph.add(pyneat.nodes.caps_raw("RGB", stream.width, stream.height, stream.fps))
+    graph.add(pyneat.nodes.caps_raw("RGB", stream.width, stream.height))
     graph.add(
         pyneat.nodes.output(
             frame_output_name(stream.index), pyneat.OutputOptions.latest()
