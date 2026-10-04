@@ -122,7 +122,12 @@ class RtpVideoListener:
                 position += nal_size
             return found_sps and payload[0] & 0x60 == max_nri
 
-        if len(payload) < 2 or payload[0] & 0x80 or payload[1] & 0x07 == 0:
+        if (
+            len(payload) < 2
+            or payload[0] & 0x81
+            or payload[1] & 0xF8
+            or payload[1] & 0x07 == 0
+        ):
             return False
         nal_type = payload[0] >> 1 & 0x3F
         if nal_type == 32:
@@ -143,7 +148,8 @@ class RtpVideoListener:
             nal = payload[position : position + nal_size]
             found_vps |= (
                 nal_size >= 3
-                and not nal[0] & 0x80
+                and not nal[0] & 0x81
+                and not nal[1] & 0xF8
                 and nal[0] >> 1 & 0x3F == 32
                 and nal[1] & 0x07 != 0
             )
@@ -170,6 +176,7 @@ def test_rtp_video_packet_validation():
     assert not h265._is_codec_config_rtp(header + bytes([0x61, 0x01]))
     assert not h264._is_codec_config_rtp(header + bytes([0x02, 0x01]))
     assert not h265._is_codec_config_rtp(header + bytes([0x02, 0x01]))
+    assert not h265._is_codec_config_rtp(header + bytes([0x41, 0x9A, 0x01]))
     assert h264._is_codec_config_rtp(header + bytes([0x78, 0, 2, 0x67, 1]))
     assert h264._is_codec_config_rtp(header + bytes([28, 0x87, 1]))
     assert h265._is_codec_config_rtp(header + bytes([0x60, 1, 0, 3, 0x40, 1, 1]))
@@ -184,6 +191,9 @@ def test_rtp_video_packet_validation():
     assert not h264._is_codec_config_rtp(header + bytes([24, 0, 1, 0x67]))
     assert not h264._is_codec_config_rtp(header + bytes([24, 0, 2, 0x67, 1]))
     assert not h265._is_codec_config_rtp(header + bytes([0x60, 1, 0, 2, 0x40, 1]))
+    assert not h265._is_codec_config_rtp(header + bytes([0x60, 1, 0, 3, 0x41, 1, 1]))
+    assert not h265._is_codec_config_rtp(header + bytes([0x61, 1, 0, 3, 0x40, 1, 1]))
+    assert not h265._is_codec_config_rtp(header + bytes([0x63, 1, 0xA0, 1]))
     assert not h264._is_codec_config_rtp(header + bytes([28, 0xC7, 1]))
     assert not h265._is_codec_config_rtp(header + bytes([0x62, 1, 0xE0, 1]))
     assert not h264._is_codec_config_rtp(b"not-rtp")

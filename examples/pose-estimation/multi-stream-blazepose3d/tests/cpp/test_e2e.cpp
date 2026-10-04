@@ -159,7 +159,8 @@ bool is_codec_config_rtp(const std::uint8_t* packet, std::size_t size, const std
     }
     return found_sps && (payload[0] & 0x60) == max_nri;
   }
-  if (payload_size < 2 || (payload[0] & 0x80) != 0 || (payload[1] & 0x07) == 0) {
+  if (payload_size < 2 || (payload[0] & 0x81) != 0 || (payload[1] & 0xF8) != 0 ||
+      (payload[1] & 0x07) == 0) {
     return false;
   }
   const std::uint8_t nal_type = (payload[0] >> 1) & 0x3F;
@@ -185,7 +186,7 @@ bool is_codec_config_rtp(const std::uint8_t* packet, std::size_t size, const std
       return false;
     }
     const std::uint8_t* nal = payload + position;
-    found_vps = found_vps || (nal_size >= 3 && (nal[0] & 0x80) == 0 &&
+    found_vps = found_vps || (nal_size >= 3 && (nal[0] & 0x81) == 0 && (nal[1] & 0xF8) == 0 &&
                               ((nal[0] >> 1) & 0x3F) == 32 && (nal[1] & 0x07) != 0);
     position += nal_size;
   }
@@ -208,6 +209,7 @@ bool test_rtp_packet_validation() {
   const auto h265 = packet({0x40, 1, 1});
   const auto overlapping_h264 = packet({0x61, 1});
   const auto overlapping_h265 = packet({0x02, 1});
+  const auto overlapping_h264_vps = packet({0x41, 0x9A, 1});
   const auto h264_stap = packet({0x78, 0, 2, 0x67, 1});
   const auto h264_fu = packet({28, 0x87, 1});
   const auto h265_ap = packet({0x60, 1, 0, 3, 0x40, 1, 1});
@@ -217,11 +219,14 @@ bool test_rtp_packet_validation() {
   return accepted(h264, "h264") && !accepted(h264, "h265") && accepted(h265, "h265") &&
          !accepted(h265, "h264") && !accepted(overlapping_h264, "h264") &&
          !accepted(overlapping_h264, "h265") && !accepted(overlapping_h265, "h264") &&
-         !accepted(overlapping_h265, "h265") && accepted(h264_stap, "h264") &&
-         accepted(h264_fu, "h264") && accepted(h265_ap, "h265") && accepted(h265_fu, "h265") &&
-         !accepted(packet({0x67}), "h264") && !accepted(packet({0x40, 1}), "h265") &&
-         !accepted(packet({24, 0, 1, 0x67}), "h264") &&
+         !accepted(overlapping_h265, "h265") && !accepted(overlapping_h264_vps, "h265") &&
+         accepted(h264_stap, "h264") && accepted(h264_fu, "h264") && accepted(h265_ap, "h265") &&
+         accepted(h265_fu, "h265") && !accepted(packet({0x67}), "h264") &&
+         !accepted(packet({0x40, 1}), "h265") && !accepted(packet({24, 0, 1, 0x67}), "h264") &&
          !accepted(packet({24, 0, 2, 0x67, 1}), "h264") &&
+         !accepted(packet({0x60, 1, 0, 3, 0x41, 1, 1}), "h265") &&
+         !accepted(packet({0x61, 1, 0, 3, 0x40, 1, 1}), "h265") &&
+         !accepted(packet({0x63, 1, 0xA0, 1}), "h265") &&
          !accepted(packet({0x60, 1, 0, 2, 0x40, 1}), "h265") && !accepted(packet({28}), "h264") &&
          !accepted(packet({0x62, 1}), "h265") && !accepted(packet({28, 0xC7, 1}), "h264") &&
          !accepted(packet({0x62, 1, 0xE0, 1}), "h265") && !accepted(wrong_payload, "h264");

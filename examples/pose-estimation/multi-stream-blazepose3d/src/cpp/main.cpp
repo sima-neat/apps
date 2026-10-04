@@ -251,7 +251,7 @@ std::string strip_yaml_comment(const std::string& text) {
 
 void append_utf8(std::string& output, std::uint32_t code_point) {
   if (code_point > 0x10FFFF || (code_point >= 0xD800 && code_point <= 0xDFFF)) {
-    throw std::runtime_error("invalid Unicode escape in stream value");
+    throw std::runtime_error("invalid Unicode escape in YAML scalar");
   }
   if (code_point <= 0x7F) {
     output.push_back(static_cast<char>(code_point));
@@ -272,7 +272,7 @@ void append_utf8(std::string& output, std::uint32_t code_point) {
 
 std::uint32_t parse_hex_escape(const std::string& value, std::size_t& index, std::size_t digits) {
   if (index + digits >= value.size()) {
-    throw std::runtime_error("incomplete YAML escape in stream value");
+    throw std::runtime_error("incomplete YAML escape in YAML scalar");
   }
   std::uint32_t code_point = 0;
   for (std::size_t offset = 1; offset <= digits; ++offset) {
@@ -285,7 +285,7 @@ std::uint32_t parse_hex_escape(const std::string& value, std::size_t& index, std
     } else if (digit >= 'A' && digit <= 'F') {
       code_point |= static_cast<std::uint32_t>(digit - 'A' + 10);
     } else {
-      throw std::runtime_error("invalid hexadecimal YAML escape in stream value");
+      throw std::runtime_error("invalid hexadecimal YAML escape in YAML scalar");
     }
   }
   index += digits;
@@ -297,7 +297,7 @@ std::string decode_yaml_scalar(const std::string& value) {
     return value;
   }
   if (value.back() != value.front()) {
-    throw std::runtime_error("unterminated quoted stream value");
+    throw std::runtime_error("unterminated quoted YAML scalar");
   }
   std::string decoded;
   decoded.reserve(value.size() - 2);
@@ -305,7 +305,7 @@ std::string decode_yaml_scalar(const std::string& value) {
     for (std::size_t index = 1; index + 1 < value.size(); ++index) {
       if (value[index] == '\'') {
         if (index + 2 >= value.size() || value[index + 1] != '\'') {
-          throw std::runtime_error("invalid single-quoted stream value");
+          throw std::runtime_error("invalid single-quoted YAML scalar");
         }
         ++index;
       }
@@ -320,7 +320,7 @@ std::string decode_yaml_scalar(const std::string& value) {
       continue;
     }
     if (++index + 1 >= value.size()) {
-      throw std::runtime_error("incomplete YAML escape in stream value");
+      throw std::runtime_error("incomplete YAML escape in YAML scalar");
     }
     const char escaped = value[index];
     switch (escaped) {
@@ -385,10 +385,23 @@ std::string decode_yaml_scalar(const std::string& value) {
       append_utf8(decoded, parse_hex_escape(value, index, 8));
       break;
     default:
-      throw std::runtime_error("unsupported YAML escape in stream value");
+      throw std::runtime_error("unsupported YAML escape in YAML scalar");
     }
   }
   return decoded;
+}
+
+bool is_plain_yaml_null(std::string value) {
+  value = sima_examples::trim_copy(value);
+  if (!value.empty() && (value.front() == '\'' || value.front() == '"')) {
+    return false;
+  }
+  if (value.empty() || value == "~") {
+    return true;
+  }
+  std::transform(value.begin(), value.end(), value.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  return value == "null";
 }
 
 // ScalarConfig skips YAML lists, so the stream entries are read here: a
@@ -434,42 +447,15 @@ std::vector<StreamConfig> parse_streams(const fs::path& config_path) {
     if (quoted && (key == "insight_channel" || key == "width" || key == "height" || key == "fps")) {
       throw std::runtime_error("stream " + key + " must be an integer");
     }
-    apply_stream_field(streams.back(), key, decode_yaml_scalar(raw_value));
+    if (key != "codec" || !is_plain_yaml_null(raw_value)) {
+      apply_stream_field(streams.back(), key, decode_yaml_scalar(raw_value));
+    }
   }
   return streams;
 }
 
-bool is_yaml_null(std::string value) {
-  value = sima_examples::trim_copy(value);
-  if (value.size() >= 2 && (value.front() == '"' || value.front() == '\'') &&
-      value.back() == value.front()) {
-    value = sima_examples::trim_copy(value.substr(1, value.size() - 2));
-  }
-  if (value == "~") {
-    return true;
-  }
-  std::transform(value.begin(), value.end(), value.begin(),
-                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-  return value == "null";
-}
-
-// ScalarConfig removes scalar quotes and maps explicit `null` to a missing
-// optional value. Preserve Python's typed-field behavior by rejecting those
-// representations before ScalarConfig applies conversions or defaults.
-void reject_invalid_typed_fields(const fs::path& config_path) {
-  static const std::unordered_map<std::string, std::string> errors = {
-      {"input.tcp", " must be true or false"},
-      {"input.latency_ms", " must be an integer"},
-      {"detector.min_score", " must be numeric"},
-      {"detector.nms_iou", " must be numeric"},
-      {"pose.max_people_per_frame", " must be an integer"},
-      {"pose.roi_scale", " must be numeric"},
-      {"pose.presence_threshold", " must be numeric"},
-      {"pose.temporal_filter_enabled", " must be true or false"},
-      {"runtime.frames", " must be an integer"},
-      {"output.insight.video_port_base", " must be an integer"},
-      {"output.insight.metadata_port_base", " must be an integer"},
-  };
+std::unordered_map<std::string, std::string> load_raw_scalars(const fs::path& config_path) {
+  std::unordered_map<std::string, std::string> scalars;
   std::ifstream input(config_path);
   std::vector<std::pair<int, std::string>> stack;
   int list_block_indent = -1;
@@ -506,17 +492,63 @@ void reject_invalid_typed_fields(const fs::path& config_path) {
     }
     full_key += (full_key.empty() ? "" : ".") + key;
     const std::string value = sima_examples::trim_copy(line.substr(colon + 1));
-    const auto error = errors.find(full_key);
-    const bool quoted = value.size() >= 2 && (value.front() == '"' || value.front() == '\'') &&
-                        value.back() == value.front();
-    if (error != errors.end() &&
-        (value.empty() || quoted || value.find('#') != std::string::npos || is_yaml_null(value))) {
-      throw std::runtime_error(full_key + error->second);
-    }
+    scalars[full_key] = value;
     if (value.empty() || value == "{}") {
       stack.emplace_back(indent, key);
     }
   }
+  return scalars;
+}
+
+bool is_yaml_null(std::string value) {
+  value = sima_examples::trim_copy(value);
+  if (value.size() >= 2 && (value.front() == '"' || value.front() == '\'') &&
+      value.back() == value.front()) {
+    value = sima_examples::trim_copy(value.substr(1, value.size() - 2));
+  }
+  if (value == "~") {
+    return true;
+  }
+  std::transform(value.begin(), value.end(), value.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  return value == "null";
+}
+
+// ScalarConfig removes scalar quotes and maps explicit `null` to a missing
+// optional value. Preserve Python's typed-field behavior by rejecting those
+// representations before ScalarConfig applies conversions or defaults.
+void reject_invalid_typed_fields(const std::unordered_map<std::string, std::string>& raw_scalars) {
+  static const std::unordered_map<std::string, std::string> errors = {
+      {"input.tcp", " must be true or false"},
+      {"input.latency_ms", " must be an integer"},
+      {"detector.min_score", " must be numeric"},
+      {"detector.nms_iou", " must be numeric"},
+      {"pose.max_people_per_frame", " must be an integer"},
+      {"pose.roi_scale", " must be numeric"},
+      {"pose.presence_threshold", " must be numeric"},
+      {"pose.temporal_filter_enabled", " must be true or false"},
+      {"runtime.frames", " must be an integer"},
+      {"output.insight.video_port_base", " must be an integer"},
+      {"output.insight.metadata_port_base", " must be an integer"},
+  };
+  for (const auto& [full_key, value] : raw_scalars) {
+    const auto error = errors.find(full_key);
+    const bool quoted = value.size() >= 2 && (value.front() == '"' || value.front() == '\'') &&
+                        value.back() == value.front();
+    if (error != errors.end() && (value.empty() || value == "{}" || quoted ||
+                                  value.find('#') != std::string::npos || is_yaml_null(value))) {
+      throw std::runtime_error(full_key + error->second);
+    }
+  }
+}
+
+std::string decoded_string_or(const std::unordered_map<std::string, std::string>& raw_scalars,
+                              const std::string& key, const std::string& default_value) {
+  const auto value = raw_scalars.find(key);
+  if (value == raw_scalars.end() || is_plain_yaml_null(value->second)) {
+    return default_value;
+  }
+  return decode_yaml_scalar(value->second);
 }
 
 void validate_config(const AppConfig& cfg) {
@@ -567,11 +599,12 @@ void validate_config(const AppConfig& cfg) {
 }
 
 AppConfig load_app_config(const fs::path& config_path) {
-  reject_invalid_typed_fields(config_path);
+  const auto raw_scalars = load_raw_scalars(config_path);
+  reject_invalid_typed_fields(raw_scalars);
   const auto raw = sima_examples::ScalarConfig::load(config_path);
   AppConfig cfg;
-  cfg.detector_model_path = raw.string_or("models.detector_path", "");
-  cfg.pose_model_path = raw.string_or("models.pose_path", "");
+  cfg.detector_model_path = decoded_string_or(raw_scalars, "models.detector_path", "");
+  cfg.pose_model_path = decoded_string_or(raw_scalars, "models.pose_path", "");
   cfg.streams = parse_streams(config_path);
   cfg.tcp = raw.bool_or("input.tcp", true);
   cfg.latency_ms = raw.int_or("input.latency_ms", 100);
@@ -582,7 +615,7 @@ AppConfig load_app_config(const fs::path& config_path) {
   cfg.pose_presence_threshold = raw.double_or("pose.presence_threshold", 0.50);
   cfg.pose_temporal_filter_enabled = raw.bool_or("pose.temporal_filter_enabled", true);
   cfg.frame_limit = raw.int_or("runtime.frames", 0);
-  cfg.insight_host = raw.string_or("output.insight.host", "");
+  cfg.insight_host = decoded_string_or(raw_scalars, "output.insight.host", "");
   cfg.video_port_base = raw.int_or("output.insight.video_port_base", 9000);
   cfg.metadata_port_base = raw.int_or("output.insight.metadata_port_base", 9100);
   validate_config(cfg);
