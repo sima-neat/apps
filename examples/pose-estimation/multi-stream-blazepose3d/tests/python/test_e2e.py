@@ -69,13 +69,48 @@ class VideoListener:
 def runtime_dependencies_ready() -> bool:
     return all(
         importlib.util.find_spec(name) is not None
-        for name in ("cv2", "numpy", "pyneat")
+        for name in ("numpy", "pyneat")
     )
 
 
 def env_int(name: str, default: int) -> int:
     value = os.environ.get(name, "").strip()
     return int(value) if value else default
+
+
+def source_caps(url: str) -> tuple[int, int, int]:
+    result = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-rtsp_transport",
+            "tcp",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height,avg_frame_rate",
+            "-of",
+            "json",
+            url,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    if result.returncode:
+        raise RuntimeError(f"failed to probe E2E source {url}: {result.stderr}")
+    streams = json.loads(result.stdout).get("streams", [])
+    if len(streams) != 1:
+        raise RuntimeError(f"E2E source must expose one video stream: {url}")
+    stream = streams[0]
+    numerator, denominator = map(int, stream.get("avg_frame_rate", "0/1").split("/"))
+    fps = round(numerator / denominator) if denominator else 0
+    caps = (stream.get("width", 0), stream.get("height", 0), fps)
+    if any(value <= 0 for value in caps):
+        raise RuntimeError(f"failed to resolve E2E source caps: {url}")
+    return caps
 
 
 def has_body_points(pose, name: str) -> bool:
@@ -196,15 +231,18 @@ class TestE2E:
         )
         metadata_port_base = env_int("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100)
         video_port_base = env_int("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000)
-        streams = [
-            {
+        streams = []
+        for index, url in enumerate(urls):
+            width, height, fps = source_caps(url)
+            streams.append({
                 "id": f"camera{index}",
                 "url": url,
                 "codec": codec,
                 "insight_channel": index,
-            }
-            for index, url in enumerate(urls)
-        ]
+                "width": width,
+                "height": height,
+                "fps": fps,
+            })
         config = e2e_config_writer(
             {
                 "models": {

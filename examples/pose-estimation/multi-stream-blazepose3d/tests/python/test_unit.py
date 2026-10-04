@@ -35,6 +35,9 @@ def stream(index: int, *, channel: int | None = None, **fields) -> dict:
         "url": f"rtsp://127.0.0.1/src{index}",
         "codec": "h265" if index == 1 else "h264",
         "insight_channel": index if channel is None else channel,
+        "width": 640,
+        "height": 480,
+        "fps": 30,
         **fields,
     }
 
@@ -76,6 +79,7 @@ def runtime_stream(sender=None, *, temporal_filter: bool = False, outstanding: i
         metadata_lock=threading.Lock(),
         metadata_sender=sender or RecordingSender(),
         pose_smoother=main.PoseSmoother(),
+        last_published_frame_id=0,
         pose_temporal_filter_enabled=temporal_filter,
         frames_in=0,
         frames_out=0,
@@ -141,7 +145,11 @@ REJECTED_CONFIGS = [
         config_text([stream(0, channel=60000)], {"video_port_base": 1}),
         "stream metadata port must be <= 65535",
     ),
-    ("partial-caps", config_text([stream(0, width=1920)]), "all be omitted or all be > 0"),
+    (
+        "missing-caps",
+        config_text([stream(0, width=0, height=0, fps=0)]),
+        "width, height, and fps must all be > 0",
+    ),
     ("unknown-codec", config_text([stream(0, codec="hevc")]), "codec must be h264 or h265"),
     ("eleven-people", config_text(pose={"max_people_per_frame": 11}), "between 1 and 10"),
 ] + [
@@ -171,7 +179,7 @@ def test_config_reads_streams_and_settings(tmp_path: Path):
     )
     assert cfg.streams == [
         main.StreamConfig("camera0", "rtsp://127.0.0.1/src0", "h264", 0, 1920, 1080, 30),
-        main.StreamConfig("camera1", "rtsp://127.0.0.1/src1", "h265", 1),
+        main.StreamConfig("camera1", "rtsp://127.0.0.1/src1", "h265", 1, 640, 480, 30),
     ]
     assert (cfg.pose_temporal_filter_enabled, cfg.frame_limit) == (False, 8)
     assert main.load_app_config(main.DEFAULT_CONFIG).pose_temporal_filter_enabled
@@ -368,6 +376,22 @@ def test_publish_frame_sends_a_correlated_pair_and_counts_only_full_pairs(failur
     auxiliary = json.loads(sender.calls[1][1])
     assert (auxiliary["stream_id"], auxiliary["payload"]) == ("camera0", {"poses": []})
     assert stream_runtime.frames_out == (1 if failure is None else 0)
+
+
+def test_publish_frame_discards_a_pose_result_older_than_an_empty_frame():
+    sender = RecordingSender()
+    stream_runtime = runtime_stream(sender, temporal_filter=True)
+    newer = main.FrameIdentity("camera0", 8, 1_267_000_000)
+
+    main.publish_frame(stream_runtime, newer, [])
+    main.publish_frame(stream_runtime, IDENTITY, [pose_sample(50.0, 0.0)])
+
+    assert [call[0] for call in sender.calls] == [
+        "pose-estimation",
+        "auxiliary-visualization",
+    ]
+    assert stream_runtime.last_published_frame_id == 8
+    assert stream_runtime.pose_smoother.previous == []
 
 
 def test_pushed_samples_carry_stream_id_frame_id_and_pts(monkeypatch):

@@ -139,6 +139,7 @@ struct StreamRuntime {
   std::mutex metadata_mutex;
   bool pose_temporal_filter_enabled = true;
   blazepose_app::PoseSmoother pose_smoother;
+  std::uint64_t last_published_frame_id = 0;
   std::atomic<int> frames_in{0};
   std::atomic<int> frames_out{0};
   // Admitted frames that are still queued or inside a model.
@@ -292,11 +293,8 @@ void validate_config(const AppConfig& cfg) {
     sima_examples::require(!stream.id.empty(), "stream id must be set");
     sima_examples::require(!stream.url.empty(), "stream url must be set");
     sima_examples::require(stream.insight_channel >= 0, "stream insight_channel must be >= 0");
-    const bool no_caps = stream.width == 0 && stream.height == 0 && stream.fps == 0;
-    const bool all_caps = stream.width > 0 && stream.height > 0 && stream.fps > 0;
-    sima_examples::require(
-        no_caps || all_caps,
-        "stream width, height, and fps must either all be omitted or all be > 0");
+    sima_examples::require(stream.width > 0 && stream.height > 0 && stream.fps > 0,
+                           "stream width, height, and fps must all be > 0");
     sima_examples::require(stream.insight_channel <= 65535 - cfg.video_port_base,
                            "stream video port must be <= 65535");
     sima_examples::require(stream.insight_channel <= 65535 - cfg.metadata_port_base,
@@ -364,37 +362,19 @@ neat::InputOptions encoded_input_options(neat::nodes::groups::RtspCodec codec,
   return options;
 }
 
-neat::nodes::groups::RtspDecodedInputOptions probe_source(const AppConfig& cfg,
-                                                          StreamRuntime& runtime) {
-  if (runtime.config.width > 0) {
-    runtime.width = runtime.config.width;
-    runtime.height = runtime.config.height;
-    runtime.fps = runtime.config.fps;
-  } else {
-    sima_examples::RtspStreamInfo probe;
-    sima_examples::RtspProbeOptions probe_options;
-    probe_options.payload_type = 96;
-    probe_options.latency_ms = cfg.latency_ms;
-    probe_options.rtsp_tcp = cfg.tcp;
-    if (!sima_examples::probe_rtsp_stream_info(runtime.config.url, probe_options, probe)) {
-      throw std::runtime_error("failed to probe RTSP stream: " + runtime.config.url +
-                               "; configure width, height, and fps to start while it is offline");
-    }
-    runtime.width = probe.width;
-    runtime.height = probe.height;
-    runtime.fps = probe.fps;
-  }
-  sima_examples::require(runtime.width > 0 && runtime.height > 0 && runtime.fps > 0,
-                         "RTSP probe must resolve width, height, and FPS for " + runtime.config.id);
-
+neat::nodes::groups::RtspDecodedInputOptions make_source_options(const AppConfig& cfg,
+                                                                 StreamRuntime& runtime) {
+  runtime.width = runtime.config.width;
+  runtime.height = runtime.config.height;
+  runtime.fps = runtime.config.fps;
   neat::nodes::groups::RtspDecodedInputOptions options;
   options.url = runtime.config.url;
   options.codec = runtime.config.codec;
   options.latency_ms = cfg.latency_ms;
   options.tcp = cfg.tcp;
   options.payload_type = 96;
-  // The integer FPS (probed and rounded, or configured) is only the decoder's
-  // rate hint. Pinning it into caps would reject NTSC-rate cameras: a 29.97 fps
+  // The configured integer FPS is only the decoder's rate hint. Pinning it into
+  // caps would reject NTSC-rate cameras: a 29.97 fps
   // stream negotiates 30000/1001, which a 30/1 caps filter cannot accept.
   options.dec_fps = runtime.fps;
   options.insert_queue = true;
@@ -597,7 +577,7 @@ void initialize_streams(AppRuntime& app, const AppConfig& cfg) {
     auto stream = std::make_unique<StreamRuntime>();
     stream->index = static_cast<int>(index);
     stream->config = cfg.streams[index];
-    stream->source_options = probe_source(cfg, *stream);
+    stream->source_options = make_source_options(cfg, *stream);
     stream->pose_temporal_filter_enabled = cfg.pose_temporal_filter_enabled;
     max_width = std::max(max_width, stream->width);
     max_height = std::max(max_height, stream->height);
@@ -741,6 +721,9 @@ void finish_frame(AppRuntime& app, StreamRuntime& stream) {
 void publish_frame(StreamRuntime& stream, const FrameIdentity& identity,
                    std::vector<blazepose_app::Pose> poses) {
   std::lock_guard<std::mutex> lock(stream.metadata_mutex);
+  if (!blazepose_app::claim_newer_frame(identity.frame_id, stream.last_published_frame_id)) {
+    return;
+  }
   if (stream.pose_temporal_filter_enabled) {
     poses = stream.pose_smoother.filter(std::move(poses));
   }
@@ -1243,7 +1226,7 @@ void run_app(const AppConfig& cfg) {
   source_pullers.reserve(app->streams.size());
   for (const auto& stream : app->streams) {
     StreamRuntime* runtime = stream.get();
-    source_pullers.emplace_back([app, &cfg, runtime]() { run_source_stream(*app, cfg, *runtime); });
+    source_pullers.emplace_back([app, cfg, runtime]() { run_source_stream(*app, cfg, *runtime); });
   }
   std::vector<std::thread> model_workers;
   for (auto* worker :

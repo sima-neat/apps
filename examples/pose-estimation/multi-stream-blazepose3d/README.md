@@ -75,7 +75,40 @@ sima-cli models download --stg \
   --variant modalix_bf16 \
   --branch feat/blazepose-ghum-heavy \
   --output models
+
+python3 - <<'PY'
+from pathlib import Path
+import shutil
+import tempfile
+import zipfile
+
+root = Path("models/blazepose_ghum_heavy/modalix_bf16")
+target = root / "blazepose_ghum_heavy_modalix_bf16_mpk.tar.gz"
+if not target.is_file():
+    packages = list(root.glob("*.zip"))
+    if len(packages) != 1:
+        raise SystemExit(f"expected one model-package zip under {root}, found {len(packages)}")
+    with zipfile.ZipFile(packages[0]) as package:
+        members = [item for item in package.infolist() if Path(item.filename).name == target.name]
+        if len(members) != 1:
+            raise SystemExit(f"expected one {target.name} in {packages[0]}, found {len(members)}")
+        temporary = None
+        try:
+            with package.open(members[0]) as source, tempfile.NamedTemporaryFile(
+                dir=root, prefix=f"{target.name}.", delete=False
+            ) as destination:
+                temporary = Path(destination.name)
+                shutil.copyfileobj(source, destination)
+            temporary.replace(target)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+print(target)
+PY
 ```
+
+The extraction step is a no-op when `sima-cli` downloads the model pack
+directly, and unwraps the model-package zip returned by newer CLI releases.
 
 The feature-branch reference is temporary while
 [`sima-neat/models#136`](https://github.com/sima-neat/models/pull/136) is under
@@ -114,6 +147,9 @@ streams:
     url: rtsp://camera.example/warehouse
     codec: h265
     insight_channel: 1
+    width: 1280
+    height: 720
+    fps: 30
 
 output:
   insight:
@@ -124,7 +160,11 @@ Each stream needs a unique stable `id` and `insight_channel`. `pose.max_people_p
 
 The active video and metadata UDP ports must be disjoint. If you use sparse or non-zero channel numbers, choose `video_port_base` and `metadata_port_base` so no `base + insight_channel` value overlaps.
 
-The optional `width`, `height`, and `fps` fields must be supplied together. When present, they avoid a startup probe so an offline channel cannot prevent healthy channels from starting; make them match the RTSP source's actual caps. The FPS is a decoder hint and is not pinned into caps, so a 29.97 fps (30000/1001) camera works with `fps: 30`, as it does when probed.
+Every stream requires `width`, `height`, and `fps`; make them match the RTSP
+source's actual caps. Requiring them avoids probing every camera before the
+independent source workers start, so an offline channel cannot prevent healthy
+channels from running. The FPS is a decoder hint and is not pinned into caps,
+so a 29.97 fps (30000/1001) camera works with `fps: 30`.
 
 `pose.temporal_filter_enabled` defaults to `true`. Each stream matches its poses to the previous frame's by person-box overlap and moves the matched image and world landmarks halfway toward the new estimate, so the 2D overlay and 3D view are smoothed together. Disable it when raw model output is required.
 

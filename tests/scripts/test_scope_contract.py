@@ -673,6 +673,71 @@ def test_download_models_unwraps_a_registry_model_package(tmp_path):
     assert list(models_dir.glob("*.tmp.*")) == []
 
 
+def test_download_models_rejects_a_corrupt_registry_model_package(tmp_path):
+    _require_modern_bash()
+    query = _write_registry_scope_query(
+        tmp_path,
+        [("demo", "demo_modalix_bf16_mpk.tar.gz")],
+        ref="feat/model-branch",
+        variant="modalix_bf16",
+    )
+    package = tmp_path / "demo_modalix_bf16_default.zip"
+    payload = b"unique model payload"
+    with zipfile.ZipFile(package, "w") as archive:
+        archive.writestr("demo-models/components/model/demo_modalix_bf16_mpk.tar.gz", payload)
+    damaged = bytearray(package.read_bytes())
+    payload_offset = damaged.index(payload)
+    damaged[payload_offset] ^= 0xFF
+    package.write_bytes(damaged)
+    cli, calls = _write_registry_variant_cli(tmp_path, [])
+    cli.write_text(
+        cli.read_text(encoding="utf-8")
+        + f'cp "{package}" "$output/$model_id/$variant/"\n',
+        encoding="utf-8",
+    )
+    models_dir = tmp_path / "models"
+
+    result = _run_registry_download(models_dir, query, cli, calls)
+
+    assert result.returncode != 0
+    assert "requested file demo_modalix_bf16_mpk.tar.gz was not downloaded" in result.stderr
+    assert not (models_dir / "demo_modalix_bf16_mpk.tar.gz").exists()
+    assert list(models_dir.glob("*.tmp.*")) == []
+
+
+@pytest.mark.parametrize("matching_members", [0, 2], ids=["missing", "ambiguous"])
+def test_download_models_rejects_an_invalid_registry_model_package_layout(
+    tmp_path, matching_members
+):
+    _require_modern_bash()
+    expected = "demo_modalix_bf16_mpk.tar.gz"
+    query = _write_registry_scope_query(
+        tmp_path,
+        [("demo", expected)],
+        ref="feat/model-branch",
+        variant="modalix_bf16",
+    )
+    package = tmp_path / "demo_modalix_bf16_default.zip"
+    with zipfile.ZipFile(package, "w") as archive:
+        archive.writestr("manifest.json", "{}")
+        for index in range(matching_members):
+            archive.writestr(f"component-{index}/{expected}", b"mpk")
+    cli, calls = _write_registry_variant_cli(tmp_path, [])
+    cli.write_text(
+        cli.read_text(encoding="utf-8")
+        + f'cp "{package}" "$output/$model_id/$variant/"\n',
+        encoding="utf-8",
+    )
+    models_dir = tmp_path / "models"
+
+    result = _run_registry_download(models_dir, query, cli, calls)
+
+    assert result.returncode != 0
+    assert f"expected one {expected}" in result.stderr
+    assert not (models_dir / expected).exists()
+    assert list(models_dir.glob("*.tmp.*")) == []
+
+
 def test_download_models_reports_missing_registry_variant_file(tmp_path):
     _require_modern_bash()
     query = _write_registry_scope_query(

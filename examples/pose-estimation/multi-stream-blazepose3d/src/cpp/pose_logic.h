@@ -21,6 +21,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -40,6 +41,17 @@ template <typename T> bool keep_latest(std::optional<T>& slot, T value) {
   const bool replaced = slot.has_value();
   slot = std::move(value);
   return replaced;
+}
+
+// Claims `frame_id` for publication when it is newer than every frame already
+// claimed on the stream. Completed older inference must not be sent after a
+// newer empty frame has cleared the viewer and its temporal-filter state.
+inline bool claim_newer_frame(std::uint64_t frame_id, std::uint64_t& last_claimed_frame_id) {
+  if (frame_id <= last_claimed_frame_id) {
+    return false;
+  }
+  last_claimed_frame_id = frame_id;
+  return true;
 }
 
 // Accepted model input with no output for this long means the shared Run is stuck.
