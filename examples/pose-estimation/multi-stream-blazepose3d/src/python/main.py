@@ -717,32 +717,24 @@ def auxiliary_visualization_data(
     return data
 
 
-def world_pose_auxiliary_data(
-    poses: list[dict[str, Any]], stream_id: str
-) -> dict[str, Any]:
-    world_poses = []
-    for pose in sorted(poses, key=lambda item: int(item["roi_index"])):
-        world_poses.append(
-            {
-                "id": f"pose_{int(pose['roi_index']) + 1}",
-                "presence": round(float(pose["presence"]), 3),
-                "keypoints": [
-                    {
-                        "name": point["name"],
-                        "x": round(float(point["x"]), 6),
-                        "y": round(float(point["y"]), 6),
-                        "z": round(float(point["z"]), 6),
-                        "confidence": round(float(point["confidence"]), 3),
-                    }
-                    for point in pose["world_keypoints"]
-                ],
-            }
-        )
+def world_pose_auxiliary_from_overlay(overlay: dict[str, Any]) -> dict[str, Any]:
+    """Build the 3D view from the 2D message's world keypoints, so both carry
+    the same rounded values without decoding them twice."""
+    world_poses = [
+        {"id": pose["id"], "presence": pose["presence"], "keypoints": pose["world_keypoints"]}
+        for pose in overlay["poses"]
+    ]
     data = auxiliary_visualization_data(
         "world-pose", "blazepose-3d", {"poses": world_poses}, "3D Pose"
     )
-    data["stream_id"] = stream_id
+    data["stream_id"] = overlay["stream_id"]
     return data
+
+
+def world_pose_auxiliary_data(
+    poses: list[dict[str, Any]], stream_id: str
+) -> dict[str, Any]:
+    return world_pose_auxiliary_from_overlay(poses_data(poses, stream_id))
 
 
 def rtsp_codec(codec: str):
@@ -1232,12 +1224,10 @@ def publish_metadata_locked(
     frame_id = str(identity.frame_id) if identity.frame_id >= 0 else ""
     if stream.pose_temporal_filter_enabled:
         poses = stream.pose_smoother.filter(poses, identity.pts_ns)
-    overlay_data = json.dumps(
-        poses_data(poses, identity.stream_id), separators=(",", ":")
-    )
+    overlay = poses_data(poses, identity.stream_id)
+    overlay_data = json.dumps(overlay, separators=(",", ":"))
     auxiliary_data = json.dumps(
-        world_pose_auxiliary_data(poses, identity.stream_id),
-        separators=(",", ":"),
+        world_pose_auxiliary_from_overlay(overlay), separators=(",", ":")
     )
     # runtime.frames counts correlated pairs queued for Insight, so a frame counts
     # only when both messages were queued. A failed pair still completes its frame.

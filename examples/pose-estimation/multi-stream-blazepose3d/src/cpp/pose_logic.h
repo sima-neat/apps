@@ -536,30 +536,25 @@ auxiliary_visualization_data_json(std::string id, std::string renderer, nlohmann
   return data;
 }
 
-inline nlohmann::json world_pose_auxiliary_data_json(std::vector<Pose> poses,
-                                                     const std::string& stream_id) {
-  std::sort(poses.begin(), poses.end(),
-            [](const Pose& left, const Pose& right) { return left.roi_index < right.roi_index; });
+// Builds the 3D view from the 2D message's world keypoints, so both carry the
+// same rounded values without decoding them twice. Serialize `overlay` first:
+// its id, presence and world keypoints are moved into the result.
+inline nlohmann::json world_pose_auxiliary_from_overlay(nlohmann::json overlay) {
   nlohmann::json world_poses = nlohmann::json::array();
-  for (const Pose& pose : poses) {
-    nlohmann::json keypoints = nlohmann::json::array();
-    for (std::size_t index = 0; index < pose.world_keypoints.size(); ++index) {
-      const WorldKeypoint& point = pose.world_keypoints[index];
-      keypoints.push_back({{"name", kLandmarkNames[index]},
-                           {"x", std::round(point.x * 1'000'000.0F) / 1'000'000.0F},
-                           {"y", std::round(point.y * 1'000'000.0F) / 1'000'000.0F},
-                           {"z", std::round(point.z * 1'000'000.0F) / 1'000'000.0F},
-                           {"confidence", std::round(point.confidence * 1000.0F) / 1000.0F}});
-    }
-    world_poses.push_back({{"id", "pose_" + std::to_string(pose.roi_index + 1)},
-                           {"presence", std::round(pose.presence * 1000.0F) / 1000.0F},
-                           {"keypoints", std::move(keypoints)}});
+  for (nlohmann::json& pose : overlay["poses"]) {
+    world_poses.push_back({{"id", std::move(pose["id"])},
+                           {"presence", std::move(pose["presence"])},
+                           {"keypoints", std::move(pose["world_keypoints"])}});
   }
-
   nlohmann::json data = auxiliary_visualization_data_json(
       "world-pose", "blazepose-3d", {{"poses", std::move(world_poses)}}, "3D Pose");
-  data["stream_id"] = stream_id;
+  data["stream_id"] = std::move(overlay["stream_id"]);
   return data;
+}
+
+inline nlohmann::json world_pose_auxiliary_data_json(std::vector<Pose> poses,
+                                                     const std::string& stream_id) {
+  return world_pose_auxiliary_from_overlay(poses_data_json(std::move(poses), stream_id));
 }
 
 } // namespace blazepose_app
