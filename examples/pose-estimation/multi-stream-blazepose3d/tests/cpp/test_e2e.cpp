@@ -184,8 +184,9 @@ int run_case(const std::string& binary, const fs::path& detector, const fs::path
   const int num_ports = static_cast<int>(urls.size());
   listener_options.num_ports = num_ports;
   listener_options.timeout_ms = 10000;
-  // A frame without people publishes nothing, so not every port must publish
-  // metadata; every port must still receive video.
+  // Every accepted frame publishes a pair, even without people, so every port
+  // must receive a correlated 2D/3D pair.
+  listener_options.require_all_ports = true;
   listener_options.contracts = {{"pose-estimation", "poses", 0},
                                 {"auxiliary-visualization", "payload.poses", 0}};
   MetadataJsonListener listener(listener_options);
@@ -202,19 +203,19 @@ int run_case(const std::string& binary, const fs::path& detector, const fs::path
   }
 
   const ProcessResult process = spawn_and_wait(binary, {"--config", config.string()}, timeout_ms);
-  // The application has exited; drain the buffered metadata until one port holds
-  // a non-empty 2D/3D pair, a datagram is invalid, or 10 s pass.
+  // The application has exited; drain the buffered metadata until every port holds
+  // a 2D/3D pair, one of them non-empty, a datagram is invalid, or 10 s pass.
   MetadataJsonListenerResult metadata;
   std::string metadata_error = "timed out waiting for a non-empty 2D/3D metadata pair";
   const auto metadata_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
   while (std::chrono::steady_clock::now() < metadata_deadline && metadata.error.empty()) {
     listener.poll_messages(metadata, 250);
     std::string error;
-    if (validate_metadata(metadata, metadata_port_base, error)) {
+    if (validate_metadata(metadata, metadata_port_base, error) && metadata.success) {
       metadata_error.clear();
       break;
     }
-    metadata_error = error;
+    metadata_error = error.empty() ? "not every metadata port received a 2D/3D pair" : error;
   }
   if (!metadata.error.empty()) {
     metadata_error = metadata.error;

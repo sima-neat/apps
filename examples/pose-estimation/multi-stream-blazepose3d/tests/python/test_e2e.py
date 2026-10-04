@@ -78,9 +78,9 @@ def env_int(name: str, default: int) -> int:
     return int(value) if value else default
 
 
-def metadata_problem(messages, metadata_port_base: int) -> str | None:
+def metadata_problem(messages, metadata_port_base: int, num_ports: int) -> str | None:
     """Every message carries its port's stream id and 33 world keypoints per pose,
-    and at least one port publishes a non-empty 2D/3D pair for one frame."""
+    every port publishes a 2D/3D pair for one frame, and one such pair is non-empty."""
     pose_counts: dict[str, dict[tuple, int]] = {
         "pose-estimation": {},
         "auxiliary-visualization": {},
@@ -100,15 +100,19 @@ def metadata_problem(messages, metadata_port_base: int) -> str | None:
         frame = (message.port, message.timestamp_ms, message.frame_id)
         pose_counts[message.metadata_type][frame] = len(poses)
     world = pose_counts["auxiliary-visualization"]
-    if not any(
-        count > 0 and world.get(frame) == count
+    paired = {
+        frame: count
         for frame, count in pose_counts["pose-estimation"].items()
-    ):
+        if world.get(frame) == count
+    }
+    if not any(paired.values()):
         return "no stream published a non-empty 2D/3D BlazePose pair for one frame"
+    if len({port for port, _, _ in paired}) < num_ports:
+        return "not every metadata port published a 2D/3D BlazePose pair for one frame"
     return None
 
 
-def test_metadata_problem_requires_one_non_empty_pair_and_stream_ids():
+def test_metadata_problem_requires_pairs_on_every_port_and_stream_ids():
     def message(port, metadata_type, frame_id, poses, stream_id=None):
         data = {"stream_id": stream_id or f"camera{port - 9100}"}
         if metadata_type == "pose-estimation":
@@ -128,11 +132,16 @@ def test_metadata_problem_requires_one_non_empty_pair_and_stream_ids():
         message(9101, "pose-estimation", "1", 2),
         message(9101, "auxiliary-visualization", "1", 2),
     ]
-    assert metadata_problem(pair, 9100) is None
-    assert "non-empty" in metadata_problem(pair[:1], 9100)
+    empty = [
+        message(9100, "pose-estimation", "1", 0),
+        message(9100, "auxiliary-visualization", "1", 0),
+    ]
+    assert metadata_problem(empty + pair, 9100, 2) is None
+    assert "every metadata port" in metadata_problem(pair, 9100, 2)
+    assert "non-empty" in metadata_problem(empty + pair[:1], 9100, 2)
     split = [pair[0], message(9101, "auxiliary-visualization", "2", 2)]
-    assert "non-empty" in metadata_problem(split, 9100)
-    assert "stream id" in metadata_problem([message(9100, "pose-estimation", "1", 1, "x")], 9100)
+    assert "non-empty" in metadata_problem(split, 9100, 2)
+    assert "stream id" in metadata_problem([message(9100, "pose-estimation", "1", 1, "x")], 9100, 1)
 
 
 @pytest.mark.e2e
@@ -207,6 +216,7 @@ class TestE2E:
                 INSIGHT_HOST,
                 metadata_port_base,
                 num_ports=len(urls),
+                require_all_ports=True,
                 metadata_contracts={
                     "pose-estimation": "poses",
                     "auxiliary-visualization": "payload.poses",
@@ -222,15 +232,15 @@ class TestE2E:
                 check=False,
                 timeout=test_timeout_ms / 1000,
             )
-            # The application has exited; drain the buffered metadata until one
-            # port holds a non-empty 2D/3D pair or a message is invalid.
+            # The application has exited; drain the buffered metadata until every
+            # port holds a 2D/3D pair, one of them non-empty, or a message is invalid.
             messages = []
             problem = "no metadata was received"
             deadline = time.monotonic() + 10.0
             while problem is not None and time.monotonic() < deadline:
                 remaining = max(0.0, deadline - time.monotonic())
                 messages.extend(listener.wait_for_messages(min(1.0, remaining)).messages)
-                problem = metadata_problem(messages, metadata_port_base)
+                problem = metadata_problem(messages, metadata_port_base, len(urls))
 
         assert process.returncode == 0, (
             f"main.py exited with {process.returncode}\n"
