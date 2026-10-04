@@ -222,6 +222,33 @@ void apply_stream_field(StreamConfig& stream, const std::string& key, const std:
   }
 }
 
+std::string strip_yaml_comment(const std::string& text) {
+  const std::size_t colon = text.find(':');
+  const std::size_t value_start =
+      colon == std::string::npos ? std::string::npos : text.find_first_not_of(" \t", colon + 1);
+  const char quote =
+      value_start != std::string::npos && (text[value_start] == '\'' || text[value_start] == '"')
+          ? text[value_start]
+          : '\0';
+  bool in_quote = quote != '\0';
+  for (std::size_t index = 0; index < text.size(); ++index) {
+    const char character = text[index];
+    if (in_quote && quote == '"' && character == '\\' && index + 1 < text.size()) {
+      ++index;
+    } else if (in_quote && character == quote) {
+      if (quote == '\'' && index + 1 < text.size() && text[index + 1] == quote) {
+        ++index;
+      } else if (index != value_start) {
+        in_quote = false;
+      }
+    } else if (character == '#' && !in_quote &&
+               (index == 0 || std::isspace(static_cast<unsigned char>(text[index - 1])))) {
+      return text.substr(0, index);
+    }
+  }
+  return text;
+}
+
 // ScalarConfig skips YAML lists, so the stream entries are read here: a
 // "- key: value" line starts an entry and deeper "key: value" lines continue it.
 std::vector<StreamConfig> parse_streams(const fs::path& config_path) {
@@ -230,8 +257,7 @@ std::vector<StreamConfig> parse_streams(const fs::path& config_path) {
   int streams_indent = -1;
   std::string raw_line;
   while (std::getline(input, raw_line)) {
-    const std::size_t comment = raw_line.find(" #");
-    const std::string text = raw_line.substr(0, comment);
+    const std::string text = strip_yaml_comment(raw_line);
     std::string line = sima_examples::trim_copy(text);
     if (line.empty() || line.front() == '#') {
       continue;
@@ -301,8 +327,7 @@ void reject_null_typed_fields(const fs::path& config_path) {
   int list_block_indent = -1;
   std::string raw_line;
   while (std::getline(input, raw_line)) {
-    const std::size_t comment = raw_line.find(" #");
-    const std::string text = raw_line.substr(0, comment);
+    const std::string text = strip_yaml_comment(raw_line);
     const std::string line = sima_examples::trim_copy(text);
     if (line.empty() || line.front() == '#') {
       continue;
