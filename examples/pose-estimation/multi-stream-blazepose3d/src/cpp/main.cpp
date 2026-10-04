@@ -1592,10 +1592,12 @@ void run_app(const AppConfig& cfg) {
       run_source_stream(*app, cfg, stream_index);
     });
   }
-  std::thread detector_dispatcher([app, &cfg]() { dispatch_detector_jobs(*app, cfg); });
-  std::thread detector_puller([app, &cfg]() { pull_detector_outputs(*app, cfg); });
-  std::thread pose_dispatcher([app, &cfg]() { dispatch_pose_jobs(*app, cfg); });
-  std::thread pose_puller([app, &cfg]() { pull_pose_outputs(*app, cfg); });
+  // Dedicated detector and pose dispatcher and puller threads.
+  std::vector<std::thread> model_workers;
+  for (auto* worker :
+       {dispatch_detector_jobs, pull_detector_outputs, dispatch_pose_jobs, pull_pose_outputs}) {
+    model_workers.emplace_back([app, &cfg, worker]() { worker(*app, cfg); });
+  }
 
   try {
     while (g_stop_requested == 0 && !all_streams_done(*app, cfg.frame_limit)) {
@@ -1632,10 +1634,9 @@ void run_app(const AppConfig& cfg) {
       source_pullers[index].detach();
     }
   }
-  detector_dispatcher.join();
-  detector_puller.join();
-  pose_dispatcher.join();
-  pose_puller.join();
+  for (std::thread& worker : model_workers) {
+    worker.join();
+  }
   std::signal(SIGINT, previous_signal);
   const double elapsed = std::chrono::duration<double>(Clock::now() - start).count();
   print_summary(*app, elapsed);

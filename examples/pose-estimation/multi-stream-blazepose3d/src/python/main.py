@@ -23,39 +23,13 @@ import yaml
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
 LANDMARK_NAMES = (
-    "nose",
-    "left_eye_inner",
-    "left_eye",
-    "left_eye_outer",
-    "right_eye_inner",
-    "right_eye",
-    "right_eye_outer",
-    "left_ear",
-    "right_ear",
-    "mouth_left",
-    "mouth_right",
-    "left_shoulder",
-    "right_shoulder",
-    "left_elbow",
-    "right_elbow",
-    "left_wrist",
-    "right_wrist",
-    "left_pinky",
-    "right_pinky",
-    "left_index",
-    "right_index",
-    "left_thumb",
-    "right_thumb",
-    "left_hip",
-    "right_hip",
-    "left_knee",
-    "right_knee",
-    "left_ankle",
-    "right_ankle",
-    "left_heel",
-    "right_heel",
-    "left_foot_index",
-    "right_foot_index",
+    "nose", "left_eye_inner", "left_eye", "left_eye_outer", "right_eye_inner",
+    "right_eye", "right_eye_outer", "left_ear", "right_ear", "mouth_left",
+    "mouth_right", "left_shoulder", "right_shoulder", "left_elbow", "right_elbow",
+    "left_wrist", "right_wrist", "left_pinky", "right_pinky", "left_index",
+    "right_index", "left_thumb", "right_thumb", "left_hip", "right_hip",
+    "left_knee", "right_knee", "left_ankle", "right_ankle", "left_heel",
+    "right_heel", "left_foot_index", "right_foot_index",
 )
 
 cv2 = None
@@ -1957,24 +1931,18 @@ def run_app(cfg: AppConfig) -> None:
         )
         for stream in runtime.streams
     ]
-    detector_dispatcher = threading.Thread(
-        target=dispatch_detector_jobs, args=(runtime, cfg), daemon=True
-    )
-    detector_puller = threading.Thread(
-        target=pull_detector_outputs, args=(runtime, cfg), daemon=True
-    )
-    pose_dispatcher = threading.Thread(
-        target=dispatch_pose_jobs, args=(runtime, cfg), daemon=True
-    )
-    pose_puller = threading.Thread(
-        target=pull_pose_outputs, args=(runtime, cfg), daemon=True
-    )
-    for puller in source_pullers:
-        puller.start()
-    detector_dispatcher.start()
-    detector_puller.start()
-    pose_dispatcher.start()
-    pose_puller.start()
+    # Dedicated detector and pose dispatcher and puller threads.
+    model_workers = [
+        threading.Thread(target=worker, args=(runtime, cfg), daemon=True)
+        for worker in (
+            dispatch_detector_jobs,
+            pull_detector_outputs,
+            dispatch_pose_jobs,
+            pull_pose_outputs,
+        )
+    ]
+    for thread in source_pullers + model_workers:
+        thread.start()
     try:
         while not all_streams_done(runtime, cfg.frame_limit):
             with runtime.state.condition:
@@ -1989,10 +1957,8 @@ def run_app(cfg: AppConfig) -> None:
     finally:
         stop_runtime(runtime)
         unfinished_sources = join_source_workers(runtime, source_pullers)
-        detector_dispatcher.join()
-        detector_puller.join()
-        pose_dispatcher.join()
-        pose_puller.join()
+        for worker in model_workers:
+            worker.join()
         print_summary(runtime, time.monotonic() - started)
     error = runtime.state.error
     if unfinished_sources:
