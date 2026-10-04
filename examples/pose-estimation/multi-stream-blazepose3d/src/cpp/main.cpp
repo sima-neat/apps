@@ -28,6 +28,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -264,6 +265,85 @@ std::vector<StreamConfig> parse_streams(const fs::path& config_path) {
   return streams;
 }
 
+bool is_yaml_null(std::string value) {
+  value = sima_examples::trim_copy(value);
+  if (value.size() >= 2 && (value.front() == '"' || value.front() == '\'') &&
+      value.back() == value.front()) {
+    value = sima_examples::trim_copy(value.substr(1, value.size() - 2));
+  }
+  if (value == "~") {
+    return true;
+  }
+  std::transform(value.begin(), value.end(), value.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  return value == "null";
+}
+
+// ScalarConfig intentionally maps explicit `null` to a missing optional value.
+// This shared C++/Python config instead rejects null typed fields, so scan the
+// supported block-style scalar paths before applying defaults.
+void reject_null_typed_fields(const fs::path& config_path) {
+  static const std::unordered_map<std::string, std::string> errors = {
+      {"input.tcp", " must be true or false"},
+      {"input.latency_ms", " must be an integer"},
+      {"detector.min_score", " must be numeric"},
+      {"detector.nms_iou", " must be numeric"},
+      {"pose.max_people_per_frame", " must be an integer"},
+      {"pose.roi_scale", " must be numeric"},
+      {"pose.presence_threshold", " must be numeric"},
+      {"pose.temporal_filter_enabled", " must be true or false"},
+      {"runtime.frames", " must be an integer"},
+      {"output.insight.video_port_base", " must be an integer"},
+      {"output.insight.metadata_port_base", " must be an integer"},
+  };
+  std::ifstream input(config_path);
+  std::vector<std::pair<int, std::string>> stack;
+  int list_block_indent = -1;
+  std::string raw_line;
+  while (std::getline(input, raw_line)) {
+    const std::size_t comment = raw_line.find(" #");
+    const std::string text = raw_line.substr(0, comment);
+    const std::string line = sima_examples::trim_copy(text);
+    if (line.empty() || line.front() == '#') {
+      continue;
+    }
+    const int indent = static_cast<int>(text.find_first_not_of(" \t"));
+    if (list_block_indent >= 0) {
+      if (indent > list_block_indent) {
+        continue;
+      }
+      list_block_indent = -1;
+    }
+    if (line.rfind("- ", 0) == 0) {
+      list_block_indent = indent;
+      continue;
+    }
+    const std::size_t colon = line.find(':');
+    if (colon == std::string::npos) {
+      continue;
+    }
+    while (!stack.empty() && indent <= stack.back().first) {
+      stack.pop_back();
+    }
+    const std::string key = sima_examples::trim_copy(line.substr(0, colon));
+    std::string full_key;
+    for (const auto& [parent_indent, parent_key] : stack) {
+      static_cast<void>(parent_indent);
+      full_key += (full_key.empty() ? "" : ".") + parent_key;
+    }
+    full_key += (full_key.empty() ? "" : ".") + key;
+    const std::string value = sima_examples::trim_copy(line.substr(colon + 1));
+    const auto error = errors.find(full_key);
+    if (error != errors.end() &&
+        (value.empty() || value.find('#') != std::string::npos || is_yaml_null(value))) {
+      throw std::runtime_error(full_key + error->second);
+    }
+    if (value.empty() || value == "{}") {
+      stack.emplace_back(indent, key);
+    }
+  }
+}
+
 void validate_config(const AppConfig& cfg) {
   sima_examples::require(!cfg.detector_model_path.empty(), "models.detector_path must be set");
   sima_examples::require(!cfg.pose_model_path.empty(), "models.pose_path must be set");
@@ -312,6 +392,7 @@ void validate_config(const AppConfig& cfg) {
 }
 
 AppConfig load_app_config(const fs::path& config_path) {
+  reject_null_typed_fields(config_path);
   const auto raw = sima_examples::ScalarConfig::load(config_path);
   AppConfig cfg;
   cfg.detector_model_path = raw.string_or("models.detector_path", "");
