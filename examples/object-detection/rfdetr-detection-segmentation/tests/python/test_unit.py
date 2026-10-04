@@ -437,32 +437,13 @@ class TestMalformedConfigFiles:
             main.load_config(config_path)
 
 
-# The backbone bridge asks these questions after a pull returns no sample: a timeout keeps
-# the bridge going, a closed output or runtime error stops the whole run through
-# bridge_error. The bridge itself is a thread inside run(), so the helper is tested here.
+# After a pull returns no sample the backbone bridge keeps going; a runtime error raised by
+# the pull stops the whole run through bridge_error. pyneat's pull returns None for a
+# closed output as for a timeout. The bridge is a thread inside run(), so only the helper
+# is tested here.
 @pytest.mark.unit
 def test_backbone_pull_timeout_is_not_a_sample():
     run = FakeRun("timeout")
     run.pull("backbone", 500)
 
     assert main.pull_result_has_sample(run, None, "backbone") is False
-
-
-@pytest.mark.unit
-def test_closed_backbone_output_ends_the_run_with_the_reason():
-    run = FakeRun(("closed", "source reached EOS"))
-    run.pull("backbone", 500)
-
-    with pytest.raises(
-        RuntimeError, match="backbone output closed unexpectedly: source reached EOS"
-    ):
-        main.pull_result_has_sample(run, None, "backbone")
-
-
-@pytest.mark.unit
-def test_backbone_runtime_error_ends_the_run():
-    run = FakeRun(("error", "queue torn down"))
-    run.pull("backbone", 500)
-
-    with pytest.raises(RuntimeError, match="runtime error: queue torn down"):
-        main.pull_result_has_sample(run, None, "backbone")

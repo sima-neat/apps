@@ -280,9 +280,9 @@ class TestMalformedConfigFiles:
 class TestPullOutcomes:
     """The pull loop, driven by a run that yields no sample.
 
-    A timeout is a warning and another pull; a closed output and a runtime error end the
-    run with a message. A closed output used to end the loop quietly, which reported a
-    source that died after zero frames as a completed run.
+    A timeout is a warning and another pull, and a runtime error raised by the pull ends
+    the run without a summary. pyneat's pull returns None for a closed output as for a
+    timeout, so Python cannot yet tell a source that ended from a slow one.
     """
 
     def test_timeout_is_not_a_sample(self):
@@ -292,31 +292,13 @@ class TestPullOutcomes:
 
         assert example.pull_result_has_sample(run, None, "detections") is False
 
-    def test_closed_output_ends_the_run_with_the_reason(self):
+    def test_run_pipeline_warns_on_timeout_and_stops_on_runtime_error(self, capsys):
         example = load_example()
-        run = FakeRun(("closed", "source reached EOS"))
-        run.pull("detections", 20000)
-
-        with pytest.raises(
-            RuntimeError, match="detections output closed unexpectedly: source reached EOS"
-        ):
-            example.pull_result_has_sample(run, None, "detections")
-
-    def test_runtime_error_ends_the_run(self):
-        example = load_example()
-        run = FakeRun(("error", "queue torn down"))
-        run.pull("detections", 20000)
-
-        with pytest.raises(RuntimeError, match="runtime error: queue torn down"):
-            example.pull_result_has_sample(run, None, "detections")
-
-    def test_run_pipeline_does_not_report_a_closed_output_as_success(self, capsys):
-        example = load_example()
-        run = FakeRun("timeout", ("closed", "source reached EOS"))
+        run = FakeRun("timeout", ("error", "queue torn down"))
         runtime = SimpleNamespace(run=run)
         cfg = SimpleNamespace(frames=0, profile=False, profile_interval=1)
 
-        with pytest.raises(RuntimeError, match="detections output closed unexpectedly"):
+        with pytest.raises(RuntimeError, match="queue torn down"):
             example.run_pipeline(runtime, cfg)
 
         captured = capsys.readouterr()

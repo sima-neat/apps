@@ -308,8 +308,9 @@ class TestArgParsing:
 class TestPullOutcomes:
     """The frame loop, driven by a run that yields no sample.
 
-    A timeout is a warning and another pull; a closed output ends the run with a message
-    instead of waiting forever on a dead stream.
+    A timeout is a warning and another pull, and a runtime error raised by the pull ends
+    the run. pyneat's pull returns None for a closed output as for a timeout, so Python
+    cannot yet tell a stream that ended from a slow one.
     """
 
     def test_timeout_is_not_a_sample(self):
@@ -318,24 +319,8 @@ class TestPullOutcomes:
 
         assert main.pull_result_has_sample(run, None, "frame") is False
 
-    def test_closed_output_ends_the_run_with_the_reason(self):
-        run = FakeRun(("closed", "source reached EOS"))
-        run.pull("frame", main.PULL_TIMEOUT_MS)
-
-        with pytest.raises(
-            RuntimeError, match="frame output closed unexpectedly: source reached EOS"
-        ):
-            main.pull_result_has_sample(run, None, "frame")
-
-    def test_runtime_error_ends_the_run(self):
-        run = FakeRun(("error", "queue torn down"))
-        run.pull("frame", main.PULL_TIMEOUT_MS)
-
-        with pytest.raises(RuntimeError, match="runtime error: queue torn down"):
-            main.pull_result_has_sample(run, None, "frame")
-
-    def test_run_warns_on_timeout_and_stops_on_closed_source(self, monkeypatch, capsys):
-        run = FakeRun("timeout", ("closed", "source reached EOS"))
+    def test_run_warns_on_timeout_and_stops_on_runtime_error(self, monkeypatch, capsys):
+        run = FakeRun("timeout", ("error", "queue torn down"))
         video = SimpleNamespace(port=9000, closed=False)
         video.close = lambda: setattr(video, "closed", True)
         monkeypatch.setattr(main, "probe_stream", lambda url, tcp: (640, 640, 30))
@@ -347,9 +332,7 @@ class TestPullOutcomes:
             insight_host="127.0.0.1", save_dir="", save_every=0, profile=False, profile_interval=1,
         )
 
-        with pytest.raises(
-            RuntimeError, match="frame output closed unexpectedly: source reached EOS"
-        ):
+        with pytest.raises(RuntimeError, match="queue torn down"):
             main.run(cfg)
 
         captured = capsys.readouterr()

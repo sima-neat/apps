@@ -10,29 +10,27 @@ pytestmark = pytest.mark.unit
 
 
 def test_outcomes_are_answered_in_order():
-    run = FakeRun(
-        "timeout",
-        ("sample", "frame"),
-        ("error", "queue torn down"),
-        ("closed", "source reached EOS"),
-    )
+    run = FakeRun("timeout", ("sample", "frame"), "closed", ("error", "queue torn down"))
 
     assert run.pull("detections", 50) is None
     assert (run.running(), run.last_error()) == (True, "")
     assert run.pull("detections", 50) == "frame"
     assert (run.running(), run.last_error()) == (True, "")
     assert run.pull("detections", 50) is None
-    assert (run.running(), run.last_error()) == (True, "queue torn down")
-    assert run.pull("detections", 50) is None
-    assert (run.running(), run.last_error()) == (False, "source reached EOS")
+    assert (run.running(), run.last_error()) == (True, "")
+    with pytest.raises(RuntimeError, match="queue torn down"):
+        run.pull("detections", 50)
+    assert (run.running(), run.last_error()) == (False, "queue torn down")
     assert run.pulls == [("detections", 50)] * 4
 
 
-def test_a_closed_output_without_a_reason_has_no_error():
-    run = FakeRun(("closed", ""))
-    run.pull("detections", 50)
+def test_a_closed_output_looks_like_a_timeout():
+    timed_out = FakeRun("timeout")
+    closed = FakeRun("closed")
 
-    assert (run.running(), run.last_error()) == (False, "")
+    assert timed_out.pull("detections", 50) is None
+    assert closed.pull("detections", 50) is None
+    assert (closed.running(), closed.last_error()) == (timed_out.running(), timed_out.last_error())
 
 
 def test_pulling_past_the_script_fails_instead_of_spinning():

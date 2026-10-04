@@ -387,8 +387,9 @@ class TestLabelsRule:
 class TestPullOutcomes:
     """The pull loop, driven by a run that yields no sample.
 
-    A timeout is a warning and another pull; a closed output and a runtime error end the
-    run with a message, so a dead source is neither a healthy wait nor a completed run.
+    A timeout is a warning and another pull, and a runtime error raised by the pull ends
+    the run without a summary. pyneat's pull returns None for a closed output as for a
+    timeout, so Python cannot yet tell a source that ended from a slow one.
     """
 
     def test_timeout_is_not_a_sample(self):
@@ -397,28 +398,12 @@ class TestPullOutcomes:
 
         assert main.pull_result_has_sample(run, None, "detections") is False
 
-    def test_closed_output_ends_the_run_with_the_reason(self):
-        run = FakeRun(("closed", "source reached EOS"))
-        run.pull("detections", 20000)
-
-        with pytest.raises(
-            RuntimeError, match="detections output closed unexpectedly: source reached EOS"
-        ):
-            main.pull_result_has_sample(run, None, "detections")
-
-    def test_runtime_error_ends_the_run(self):
-        run = FakeRun(("error", "queue torn down"))
-        run.pull("detections", 20000)
-
-        with pytest.raises(RuntimeError, match="runtime error: queue torn down"):
-            main.pull_result_has_sample(run, None, "detections")
-
-    def test_run_pipeline_warns_on_timeout_and_stops_on_closed_output(self, capsys):
-        run = FakeRun("timeout", ("closed", "source reached EOS"))
+    def test_run_pipeline_warns_on_timeout_and_stops_on_runtime_error(self, capsys):
+        run = FakeRun("timeout", ("error", "queue torn down"))
         runtime = SimpleNamespace(run=run, output_name="detections")
         cfg = SimpleNamespace(frames=0, profile=False, profile_interval=1)
 
-        with pytest.raises(RuntimeError, match="detections output closed unexpectedly"):
+        with pytest.raises(RuntimeError, match="queue torn down"):
             main.run_pipeline(runtime, cfg)
 
         captured = capsys.readouterr()
