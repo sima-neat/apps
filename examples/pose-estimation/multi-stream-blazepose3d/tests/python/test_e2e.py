@@ -78,9 +78,18 @@ def env_int(name: str, default: int) -> int:
     return int(value) if value else default
 
 
+def has_body_points(pose, name: str) -> bool:
+    """pose[name] holds 33 points with numeric x and y."""
+    points = pose.get(name, [])
+    return len(points) == 33 and all(
+        isinstance(point.get(axis), (int, float)) for point in points for axis in "xy"
+    )
+
+
 def metadata_problem(messages, metadata_port_base: int, num_ports: int) -> str | None:
-    """Every message carries its port's stream id and 33 world keypoints per pose,
-    every port publishes a 2D/3D pair for one frame, and one such pair is non-empty."""
+    """Every message carries its port's stream id and 33 valid keypoints per pose
+    (image and world for 2D poses), every port publishes a 2D/3D pair for one
+    frame, and one such pair is non-empty."""
     pose_counts: dict[str, dict[tuple, int]] = {
         "pose-estimation": {},
         "auxiliary-visualization": {},
@@ -90,13 +99,13 @@ def metadata_problem(messages, metadata_port_base: int, num_ports: int) -> str |
         if data.get("stream_id") != f"camera{message.port - metadata_port_base}":
             return f"metadata on port {message.port} did not carry its stream id"
         if message.metadata_type == "pose-estimation":
-            poses, points = data["poses"], "world_keypoints"
+            poses, names = data["poses"], ("keypoints", "world_keypoints")
         elif (data.get("id"), data.get("renderer")) == ("world-pose", "blazepose-3d"):
-            poses, points = data["payload"]["poses"], "keypoints"
+            poses, names = data["payload"]["poses"], ("keypoints",)
         else:
             return "auxiliary metadata did not use the world-pose BlazePose 3D envelope"
-        if not all(len(pose.get(points, [])) == 33 for pose in poses):
-            return f"a {message.metadata_type} pose did not carry 33 world keypoints"
+        if not all(has_body_points(pose, name) for pose in poses for name in names):
+            return f"a {message.metadata_type} pose did not carry 33 valid keypoints"
         frame = (message.port, message.timestamp_ms, message.frame_id)
         pose_counts[message.metadata_type][frame] = len(poses)
     world = pose_counts["auxiliary-visualization"]
@@ -113,13 +122,15 @@ def metadata_problem(messages, metadata_port_base: int, num_ports: int) -> str |
 
 
 def test_metadata_problem_requires_pairs_on_every_port_and_stream_ids():
-    def message(port, metadata_type, frame_id, poses, stream_id=None):
+    def message(port, metadata_type, frame_id, poses, stream_id=None, image_points=33):
         data = {"stream_id": stream_id or f"camera{port - 9100}"}
+        point = {"x": 1.0, "y": 2}
         if metadata_type == "pose-estimation":
-            data["poses"] = [{"world_keypoints": [{}] * 33}] * poses
+            pose = {"keypoints": [point] * image_points, "world_keypoints": [point] * 33}
+            data["poses"] = [pose] * poses
         else:
             data.update(id="world-pose", renderer="blazepose-3d")
-            data["payload"] = {"poses": [{"keypoints": [{}] * 33}] * poses}
+            data["payload"] = {"poses": [{"keypoints": [point] * 33}] * poses}
         return SimpleNamespace(
             port=port,
             metadata_type=metadata_type,
@@ -142,6 +153,8 @@ def test_metadata_problem_requires_pairs_on_every_port_and_stream_ids():
     split = [pair[0], message(9101, "auxiliary-visualization", "2", 2)]
     assert "non-empty" in metadata_problem(split, 9100, 2)
     assert "stream id" in metadata_problem([message(9100, "pose-estimation", "1", 1, "x")], 9100, 1)
+    short_2d = message(9100, "pose-estimation", "1", 1, image_points=32)
+    assert "33 valid keypoints" in metadata_problem([short_2d], 9100, 1)
 
 
 @pytest.mark.e2e

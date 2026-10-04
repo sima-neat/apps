@@ -121,8 +121,18 @@ void write_config(const fs::path& path, const fs::path& detector, const fs::path
          << "\n    metadata_port_base: " << metadata_port_base << "\n";
 }
 
-// Every message carries its port's stream id and 33 world keypoints per pose, and
-// at least one port publishes a non-empty 2D/3D pair for one frame.
+// True when pose[name] holds 33 points with numeric x and y.
+bool has_body_points(const nlohmann::json& pose, const char* name) {
+  return pose.contains(name) && pose.at(name).size() == 33 &&
+         std::all_of(pose.at(name).begin(), pose.at(name).end(), [](const nlohmann::json& point) {
+           return point.contains("x") && point.at("x").is_number() && point.contains("y") &&
+                  point.at("y").is_number();
+         });
+}
+
+// Every message carries its port's stream id and 33 valid keypoints per pose (image
+// and world for 2D poses), and at least one port publishes a non-empty 2D/3D pair
+// for one frame.
 bool validate_metadata(const MetadataJsonListenerResult& result, int metadata_port_base,
                        std::string& error) {
   using FrameKey = std::tuple<int, int64_t, std::string>;
@@ -144,9 +154,9 @@ bool validate_metadata(const MetadataJsonListenerResult& result, int metadata_po
       }
       const auto& poses = overlay ? data.at("poses") : data.at("payload").at("poses");
       for (const auto& pose : poses) {
-        const char* points = overlay ? "world_keypoints" : "keypoints";
-        if (!pose.contains(points) || pose[points].size() != 33) {
-          error = "a " + message.metadata_type + " pose did not carry 33 world keypoints";
+        if (!has_body_points(pose, "keypoints") ||
+            (overlay && !has_body_points(pose, "world_keypoints"))) {
+          error = "a " + message.metadata_type + " pose did not carry 33 valid keypoints";
           return false;
         }
       }

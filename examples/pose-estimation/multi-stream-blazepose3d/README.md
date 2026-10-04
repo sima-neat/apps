@@ -191,7 +191,7 @@ data can reuse the same envelope with a separately registered Insight renderer.
 
 The keypoint confidence is the minimum of BlazePose landmark visibility and presence after sigmoid activation. The global pose-presence logit is also sigmoid-activated before it gates each ROI and is published as a probability.
 
-Each frame's stream ID, frame ID and PTS stay with its queued work, so a result is always published on its own stream's channel with its source timestamp. The C++ and Python hardware E2E tests each run up to four H.264 and four H.265 streams. They require video on every configured video port, the configured stream identity in every metadata message, a 2D/3D pair on every metadata port, and at least one non-empty pair with 33 world keypoints per pose and one `(port, timestamp, frame_id)` identity.
+Each frame's stream ID, frame ID and PTS stay with its queued work, so a result is always published on its own stream's channel with its source timestamp. The C++ and Python hardware E2E tests each run up to four H.264 and four H.265 streams. They require video on every configured video port, the configured stream identity in every metadata message, 33 valid image and world keypoints in every 2D pose and 33 world keypoints in every 3D pose, a 2D/3D pair with one `(port, timestamp, frame_id)` identity on every metadata port, and at least one non-empty pair.
 
 ## Performance and Scheduling
 
