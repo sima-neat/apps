@@ -162,6 +162,13 @@ def test_stream_mapping_order_and_explicit_caps_match_cpp(tmp_path: Path):
     )
 
 
+def test_unknown_stream_setting_is_rejected_like_cpp(tmp_path: Path):
+    entry = stream(0)
+    entry["enabled"] = True
+    with pytest.raises(ValueError, match="unknown stream setting: enabled"):
+        main.load_app_config(write_config(tmp_path, [entry]))
+
+
 def test_stream_caps_must_be_complete(tmp_path: Path):
     incomplete = stream(0)
     incomplete["width"] = 1920

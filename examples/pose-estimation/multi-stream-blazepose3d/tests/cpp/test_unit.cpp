@@ -661,6 +661,20 @@ bool test_video_port_range_applies_only_when_video_is_enabled(const std::string&
   return ok;
 }
 
+bool test_unknown_stream_setting_is_rejected(const std::string& binary) {
+  const fs::path config = write_config(
+      "unknown_stream_setting", "  - id: camera0\n    url: rtsp://127.0.0.1/src0\n"
+                                "    codec: h264\n    insight_channel: 0\n    enabled: true\n");
+  const auto result =
+      spawn_and_wait(binary, {"--config", config.string(), "--validate-config-only"}, 20000);
+  const bool ok =
+      expect(result.exit_code == 1 &&
+                 result.stderr_text.find("unknown stream setting: enabled") != std::string::npos,
+             "an unknown stream setting is rejected like the Python loader");
+  remove_dir(config.parent_path().string());
+  return ok;
+}
+
 bool test_roi_scale_must_be_finite_and_positive(const std::string& binary) {
   bool ok = true;
   for (const std::string value : {".nan", ".inf", "-.inf", "0", "-1.5"}) {
@@ -704,6 +718,7 @@ int main(int argc, char** argv) {
   ok &= test_pose_count_limit(argv[1]);
   ok &= test_roi_scale_must_be_finite_and_positive(argv[1]);
   ok &= test_standalone_sequence_dash_starts_a_stream(argv[1]);
+  ok &= test_unknown_stream_setting_is_rejected(argv[1]);
   ok &= test_video_port_range_applies_only_when_video_is_enabled(argv[1]);
   return ok ? 0 : 1;
 }
