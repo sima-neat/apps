@@ -496,6 +496,9 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("Insight video and metadata ports must not overlap")
 
 
+STREAM_SETTINGS = frozenset({"id", "url", "codec", "insight_channel", "width", "height", "fps"})
+
+
 def load_app_config(config_path: Path) -> AppConfig:
     raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     if not isinstance(raw, dict):
@@ -515,6 +518,9 @@ def load_app_config(config_path: Path) -> AppConfig:
     for index, value in enumerate(raw_streams):
         if not isinstance(value, dict):
             raise TypeError(f"streams[{index}] must be a mapping")
+        for key in value:
+            if key not in STREAM_SETTINGS:
+                raise ValueError(f"unknown stream setting: {key}")
         stream_id = string_or(value, "id")
         url = string_or(value, "url")
         channel = int_or(value, "insight_channel", -1)
