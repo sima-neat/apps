@@ -20,7 +20,6 @@
 #include "support/object_detection/obj_detection_utils.h"
 #include "support/runtime/config_utils.h"
 #include "support/runtime/example_utils.h"
-#include "yaml_config.h"
 
 #include <nodes/groups/VideoSender.h>
 #include <nodes/io/MetadataSender.h>
@@ -61,6 +60,9 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
+constexpr int kMaxDetections = 100;
+constexpr int kMaxInflightPerStream = 4;
+
 volatile std::sig_atomic_t g_stop_requested = 0;
 
 void request_stop(int) {
@@ -85,76 +87,43 @@ struct AppConfig {
   int latency_ms = 100;
   double detector_min_score = 0.30;
   double detector_nms_iou = 0.60;
-  int max_detections = 100;
-  int max_inflight_per_stream = 4;
   int max_people_per_frame = 4;
   double roi_scale = 1.65;
   double pose_presence_threshold = 0.50;
   bool pose_temporal_filter_enabled = true;
-  int pose_job_timeout_ms = 1000;
-  int max_pending_jobs = 64;
   int frame_limit = 0;
   std::string insight_host;
   int video_port_base = 9000;
   int metadata_port_base = 9100;
-  bool video_enabled = true;
-};
-
-struct CliOptions {
-  fs::path config_path;
-  bool validate_config_only = false;
 };
 
 struct FrameIdentity {
   std::string stream_id;
   int64_t frame_id = -1;
   int64_t pts_ns = -1;
-  int64_t dts_ns = -1;
-  int64_t duration_ns = -1;
-  int64_t input_seq = -1;
-  int64_t orig_input_seq = -1;
 };
 
 struct FrameJob {
   std::uint64_t job_id = 0;
-  std::uint64_t stream_sequence = 0;
   int stream_index = 0;
   neat::Tensor rgb;
   std::vector<blazepose_app::Box> people;
   FrameIdentity identity;
-  Clock::time_point deadline;
 };
 
 struct PoseInputContext {
   std::uint64_t job_id = 0;
-  int stream_index = 0;
   int roi_index = 0;
   blazepose_app::Box box;
   blazepose_app::Affine affine;
-  FrameIdentity identity;
-};
-
-struct PreparedPoseInput {
-  int roi_index = 0;
-  blazepose_app::Box box;
-  blazepose_app::Affine affine;
-  neat::Tensor tensor;
 };
 
 struct PoseAggregate {
   int stream_index = 0;
-  std::uint64_t stream_sequence = 0;
   int expected = 0;
   int completed = 0;
-  bool expired = false;
   FrameIdentity identity;
-  Clock::time_point deadline;
   std::vector<blazepose_app::Pose> poses;
-};
-
-struct FramePublication {
-  FrameIdentity identity;
-  std::optional<std::vector<blazepose_app::Pose>> poses;
 };
 
 struct StreamRuntime {
@@ -168,19 +137,12 @@ struct StreamRuntime {
   int fps = 0;
   std::unique_ptr<neat::MetadataSender> metadata_sender;
   std::mutex metadata_mutex;
-  blazepose_app::OrderedCompletionQueue<FramePublication> publications;
-  blazepose_app::PoseSmoother pose_smoother;
   bool pose_temporal_filter_enabled = true;
-  std::atomic<int> metadata_frames{0};
-  std::atomic<std::uint64_t> metadata_send_failures{0};
-  std::atomic<std::uint64_t> source_frames{0};
-  std::atomic<std::uint64_t> detector_frames{0};
-  std::atomic<std::uint64_t> selected_rois{0};
-  std::atomic<std::uint64_t> completed_rois{0};
-  std::atomic<std::uint64_t> detector_mailbox_drops{0};
-  std::atomic<std::uint64_t> pose_mailbox_drops{0};
-  std::atomic<std::uint64_t> timed_out_jobs{0};
-  std::atomic<std::uint64_t> outstanding_frames{0};
+  blazepose_app::PoseSmoother pose_smoother;
+  std::atomic<int> frames_in{0};
+  std::atomic<int> frames_out{0};
+  // Admitted frames that are still queued or inside a model.
+  std::atomic<int> outstanding_frames{0};
   std::atomic<bool> closed{false};
   std::atomic<bool> source_worker_finished{false};
 };
@@ -188,12 +150,12 @@ struct StreamRuntime {
 struct SharedState {
   std::mutex mutex;
   std::condition_variable cv;
+  // Latest-only work per stream; newer frames replace queued ones.
   std::vector<std::optional<FrameJob>> detector_mailboxes;
   std::vector<std::optional<FrameJob>> pose_mailboxes;
-  // Empty entries are expired inputs retained only to discard their eventual
-  // FIFO-correlated model outputs without attaching them to newer frames.
-  std::deque<std::optional<FrameJob>> pending_detector_outputs;
-  std::deque<std::optional<PoseInputContext>> pending_pose_outputs;
+  // FIFO context for each input pushed to a shared model, in output order.
+  std::deque<FrameJob> pending_detector_outputs;
+  std::deque<PoseInputContext> pending_pose_outputs;
   std::unordered_map<std::uint64_t, PoseAggregate> aggregates;
   std::size_t next_detector_stream = 0;
   std::size_t next_pose_stream = 0;
@@ -214,117 +176,90 @@ struct AppRuntime {
 };
 
 neat::nodes::groups::RtspCodec parse_codec(const std::string& value) {
-  const std::string lowered = blazepose_config::lower_copy(value);
-  if (lowered == "h264" || lowered == "avc" || lowered == "h.264") {
+  if (value == "h264") {
     return neat::nodes::groups::RtspCodec::H264;
   }
-  if (lowered == "h265" || lowered == "hevc" || lowered == "h.265") {
+  if (value == "h265") {
     return neat::nodes::groups::RtspCodec::H265;
   }
-  throw std::runtime_error("stream codec must be h264/avc or h265/hevc");
+  throw std::runtime_error("stream codec must be h264 or h265");
 }
 
 std::string codec_name(neat::nodes::groups::RtspCodec codec) {
   return codec == neat::nodes::groups::RtspCodec::H265 ? "h265" : "h264";
 }
 
-struct ParsedKeyValue {
-  std::string key;
-  blazepose_config::YamlScalar scalar;
-};
-
-ParsedKeyValue parse_key_value(const std::string& text, const std::string& where) {
-  const std::size_t separator = text.find(':');
-  if (separator == std::string::npos) {
-    throw std::runtime_error(where + " must be 'key: value'");
-  }
-  const std::string key = sima_examples::trim_copy(text.substr(0, separator));
-  if (key.empty()) {
-    throw std::runtime_error(where + " has an empty key");
-  }
-  return {key, blazepose_config::parse_yaml_scalar(text.substr(separator + 1))};
-}
-
-void apply_stream_field(StreamConfig& stream, const ParsedKeyValue& field) {
-  using blazepose_config::require_integer;
-  using blazepose_config::require_string;
-  const std::string name = "stream " + field.key;
-  if (field.key == "id") {
-    stream.id = require_string(field.scalar, name);
-  } else if (field.key == "url") {
-    stream.url = require_string(field.scalar, name);
-  } else if (field.key == "codec") {
-    // An explicit null keeps the H.264 default, as Python's string_or does.
-    if (field.scalar.type != blazepose_config::YamlScalarType::Null) {
-      stream.codec = parse_codec(require_string(field.scalar, name));
+void apply_stream_field(StreamConfig& stream, const std::string& key, const std::string& value) {
+  const auto integer = [&]() {
+    std::size_t used = 0;
+    int parsed = 0;
+    try {
+      parsed = std::stoi(value, &used);
+    } catch (const std::exception&) {
+      used = 0;
     }
-  } else if (field.key == "insight_channel") {
-    stream.insight_channel = require_integer(field.scalar, name);
-  } else if (field.key == "width") {
-    stream.width = require_integer(field.scalar, name);
-  } else if (field.key == "height") {
-    stream.height = require_integer(field.scalar, name);
-  } else if (field.key == "fps") {
-    stream.fps = require_integer(field.scalar, name);
-  } else {
-    throw std::runtime_error("unknown stream setting: " + field.key);
+    if (used == 0 || used != value.size()) {
+      throw std::runtime_error("stream " + key + " must be an integer");
+    }
+    return parsed;
+  };
+  if (key == "id") {
+    stream.id = value;
+  } else if (key == "url") {
+    stream.url = value;
+  } else if (key == "codec") {
+    stream.codec = parse_codec(value);
+  } else if (key == "insight_channel") {
+    stream.insight_channel = integer();
+  } else if (key == "width") {
+    stream.width = integer();
+  } else if (key == "height") {
+    stream.height = integer();
+  } else if (key == "fps") {
+    stream.fps = integer();
   }
 }
 
+// ScalarConfig skips YAML lists, so the stream entries are read here: a
+// "- key: value" line starts an entry and deeper "key: value" lines continue it.
 std::vector<StreamConfig> parse_streams(const fs::path& config_path) {
   std::ifstream input(config_path);
-  if (!input.is_open()) {
-    throw std::runtime_error("failed to open config file: " + config_path.string());
-  }
-
   std::vector<StreamConfig> streams;
-  std::optional<StreamConfig> current;
-  bool in_streams = false;
   int streams_indent = -1;
-  auto commit = [&]() {
-    if (current.has_value()) {
-      streams.push_back(std::move(*current));
-      current.reset();
-    }
-  };
-
   std::string raw_line;
-  std::string line;
-  int indent = 0;
-  int line_number = 0;
   while (std::getline(input, raw_line)) {
-    ++line_number;
-    if (!blazepose_config::scan_yaml_line(raw_line, indent, line)) {
+    const std::size_t comment = raw_line.find(" #");
+    const std::string text = raw_line.substr(0, comment);
+    std::string line = sima_examples::trim_copy(text);
+    if (line.empty() || line.front() == '#') {
       continue;
     }
-    if (!in_streams && line == "streams:") {
-      in_streams = true;
-      streams_indent = indent;
-      continue;
-    }
-    if (!in_streams) {
-      continue;
-    }
-    if (indent <= streams_indent && !blazepose_config::is_sequence_entry(line)) {
-      commit();
-      break;
-    }
-    const std::string where = "streams line " + std::to_string(line_number);
-    if (blazepose_config::is_sequence_entry(line)) {
-      // A standalone "-" opens an entry whose mapping continues on deeper lines.
-      commit();
-      current.emplace();
-      if (line != "-") {
-        apply_stream_field(*current, parse_key_value(line.substr(2), where));
+    const int indent = static_cast<int>(text.find_first_not_of(" \t"));
+    if (streams_indent < 0) {
+      if (line == "streams:") {
+        streams_indent = indent;
       }
       continue;
     }
-    if (!current.has_value()) {
-      throw std::runtime_error("streams must contain mapping entries");
+    const bool entry = line.rfind("- ", 0) == 0;
+    if (indent <= streams_indent && !entry) {
+      break;
     }
-    apply_stream_field(*current, parse_key_value(line, where));
+    if (entry) {
+      streams.emplace_back();
+      line = sima_examples::trim_copy(line.substr(2));
+    }
+    const std::size_t colon = line.find(':');
+    if (streams.empty() || colon == std::string::npos) {
+      throw std::runtime_error("streams must be a list of 'key: value' mappings");
+    }
+    std::string value = sima_examples::trim_copy(line.substr(colon + 1));
+    if (value.size() >= 2 && (value.front() == '"' || value.front() == '\'') &&
+        value.back() == value.front()) {
+      value = value.substr(1, value.size() - 2);
+    }
+    apply_stream_field(streams.back(), sima_examples::trim_copy(line.substr(0, colon)), value);
   }
-  commit();
   return streams;
 }
 
@@ -339,47 +274,36 @@ void validate_config(const AppConfig& cfg) {
                          "detector.min_score must be between 0 and 1");
   sima_examples::require(cfg.detector_nms_iou >= 0.0 && cfg.detector_nms_iou <= 1.0,
                          "detector.nms_iou must be between 0 and 1");
-  sima_examples::require(cfg.max_detections > 0, "detector.max_detections must be > 0");
-  sima_examples::require(cfg.max_inflight_per_stream == -1 || cfg.max_inflight_per_stream > 0,
-                         "detector.max_inflight_per_stream must be -1 or > 0");
   sima_examples::require(cfg.max_people_per_frame > 0 && cfg.max_people_per_frame <= 10,
                          "pose.max_people_per_frame must be between 1 and 10");
   sima_examples::require(std::isfinite(cfg.roi_scale) && cfg.roi_scale > 0.0,
                          "pose.roi_scale must be finite and > 0");
   sima_examples::require(cfg.pose_presence_threshold >= 0.0 && cfg.pose_presence_threshold <= 1.0,
                          "pose.presence_threshold must be between 0 and 1");
-  sima_examples::require(cfg.pose_job_timeout_ms > 0, "pose.job_timeout_ms must be > 0");
-  sima_examples::require(cfg.max_pending_jobs > 0, "pose.max_pending_jobs must be > 0");
   sima_examples::require(cfg.frame_limit >= 0, "runtime.frames must be >= 0");
-  sima_examples::require(cfg.video_port_base > 0 && cfg.video_port_base <= 65535,
-                         "output.insight.video_port_base must be between 1 and 65535");
-  sima_examples::require(cfg.metadata_port_base > 0 && cfg.metadata_port_base <= 65535,
-                         "output.insight.metadata_port_base must be between 1 and 65535");
+  sima_examples::require(cfg.video_port_base > 0 && cfg.video_port_base <= 65535 &&
+                             cfg.metadata_port_base > 0 && cfg.metadata_port_base <= 65535,
+                         "Insight port bases must be between 1 and 65535");
 
   std::set<std::string> ids;
-  std::set<int> channels;
   std::set<int> video_ports;
   std::set<int> metadata_ports;
   for (const StreamConfig& stream : cfg.streams) {
     sima_examples::require(!stream.id.empty(), "stream id must be set");
     sima_examples::require(!stream.url.empty(), "stream url must be set");
     sima_examples::require(stream.insight_channel >= 0, "stream insight_channel must be >= 0");
-    const bool has_no_explicit_caps = stream.width == 0 && stream.height == 0 && stream.fps == 0;
-    const bool has_complete_explicit_caps =
-        stream.width > 0 && stream.height > 0 && stream.fps > 0;
-    sima_examples::require(has_no_explicit_caps || has_complete_explicit_caps,
-                           "stream width, height, and fps must either all be omitted or all be > 0");
-    sima_examples::require(!cfg.video_enabled ||
-                               stream.insight_channel <= 65535 - cfg.video_port_base,
+    const bool no_caps = stream.width == 0 && stream.height == 0 && stream.fps == 0;
+    const bool all_caps = stream.width > 0 && stream.height > 0 && stream.fps > 0;
+    sima_examples::require(
+        no_caps || all_caps,
+        "stream width, height, and fps must either all be omitted or all be > 0");
+    sima_examples::require(stream.insight_channel <= 65535 - cfg.video_port_base,
                            "stream video port must be <= 65535");
     sima_examples::require(stream.insight_channel <= 65535 - cfg.metadata_port_base,
                            "stream metadata port must be <= 65535");
     sima_examples::require(ids.insert(stream.id).second, "stream ids must be unique");
-    sima_examples::require(channels.insert(stream.insight_channel).second,
+    sima_examples::require(video_ports.insert(cfg.video_port_base + stream.insight_channel).second,
                            "stream insight channels must be unique");
-    if (cfg.video_enabled) {
-      video_ports.insert(cfg.video_port_base + stream.insight_channel);
-    }
     metadata_ports.insert(cfg.metadata_port_base + stream.insight_channel);
   }
   std::vector<int> overlapping_ports;
@@ -390,7 +314,7 @@ void validate_config(const AppConfig& cfg) {
 }
 
 AppConfig load_app_config(const fs::path& config_path) {
-  const auto raw = blazepose_config::TypedConfig::load(config_path);
+  const auto raw = sima_examples::ScalarConfig::load(config_path);
   AppConfig cfg;
   cfg.detector_model_path = raw.string_or("models.detector_path", "");
   cfg.pose_model_path = raw.string_or("models.pose_path", "");
@@ -399,55 +323,43 @@ AppConfig load_app_config(const fs::path& config_path) {
   cfg.latency_ms = raw.int_or("input.latency_ms", 100);
   cfg.detector_min_score = raw.double_or("detector.min_score", 0.30);
   cfg.detector_nms_iou = raw.double_or("detector.nms_iou", 0.60);
-  cfg.max_detections = raw.int_or("detector.max_detections", 100);
-  cfg.max_inflight_per_stream = raw.int_or("detector.max_inflight_per_stream", 4);
   cfg.max_people_per_frame = raw.int_or("pose.max_people_per_frame", 4);
   cfg.roi_scale = raw.double_or("pose.roi_scale", 1.65);
   cfg.pose_presence_threshold = raw.double_or("pose.presence_threshold", 0.50);
   cfg.pose_temporal_filter_enabled = raw.bool_or("pose.temporal_filter_enabled", true);
-  cfg.pose_job_timeout_ms = raw.int_or("pose.job_timeout_ms", 1000);
-  cfg.max_pending_jobs = raw.int_or("pose.max_pending_jobs", 64);
   cfg.frame_limit = raw.int_or("runtime.frames", 0);
   cfg.insight_host = raw.string_or("output.insight.host", "");
   cfg.video_port_base = raw.int_or("output.insight.video_port_base", 9000);
   cfg.metadata_port_base = raw.int_or("output.insight.metadata_port_base", 9100);
-  cfg.video_enabled = raw.bool_or("output.video_enabled", true);
   validate_config(cfg);
   return cfg;
 }
 
-CliOptions parse_args(int argc, char** argv) {
-  CliOptions options;
-  options.config_path = sima_examples::default_config_path(SIMANEAT_APPS_EXAMPLE_SOURCE_DIR);
+fs::path parse_args(int argc, char** argv) {
+  fs::path config_path = sima_examples::default_config_path(SIMANEAT_APPS_EXAMPLE_SOURCE_DIR);
   for (int index = 1; index < argc; ++index) {
     const std::string arg = argv[index];
     if (arg == "--config") {
       if (index + 1 >= argc) {
         throw std::runtime_error("--config requires a path");
       }
-      options.config_path = argv[++index];
-    } else if (arg == "--validate-config-only") {
-      options.validate_config_only = true;
+      config_path = argv[++index];
     } else if (arg == "--help" || arg == "-h") {
-      std::cout << "Usage: " << argv[0] << " [--config <path>] [--validate-config-only]\n";
+      std::cout << "Usage: " << argv[0] << " [--config <path>]\n";
       std::exit(0);
     } else {
       throw std::runtime_error("unknown argument: " + arg);
     }
   }
-  return options;
-}
-
-neat::FormatTag encoded_format(neat::nodes::groups::RtspCodec codec) {
-  return codec == neat::nodes::groups::RtspCodec::H265 ? neat::FormatTag::H265
-                                                       : neat::FormatTag::H264;
+  return config_path;
 }
 
 neat::InputOptions encoded_input_options(neat::nodes::groups::RtspCodec codec,
                                          neat::InputMemoryPolicy memory) {
   neat::InputOptions options;
   options.payload_type = neat::PayloadType::Encoded;
-  options.format = encoded_format(codec);
+  options.format =
+      codec == neat::nodes::groups::RtspCodec::H265 ? neat::FormatTag::H265 : neat::FormatTag::H264;
   options.memory_policy = memory;
   return options;
 }
@@ -568,7 +480,7 @@ std::unique_ptr<neat::Model> make_detector_model(const AppConfig& cfg, int max_w
   options.decode_type = neat::BoxDecodeType::YoloV26;
   options.score_threshold = cfg.detector_min_score;
   options.nms_iou_threshold = cfg.detector_nms_iou;
-  options.top_k = cfg.max_detections;
+  options.top_k = kMaxDetections;
   return std::make_unique<neat::Model>(cfg.detector_model_path, options);
 }
 
@@ -613,10 +525,6 @@ void copy_identity(const FrameIdentity& identity, neat::Sample& sample) {
   sample.stream_id = identity.stream_id;
   sample.frame_id = identity.frame_id;
   sample.pts_ns = identity.pts_ns;
-  sample.dts_ns = identity.dts_ns;
-  sample.duration_ns = identity.duration_ns;
-  sample.input_seq = identity.input_seq;
-  sample.orig_input_seq = identity.orig_input_seq;
 }
 
 neat::RunOptions reliable_model_run_options() {
@@ -629,7 +537,7 @@ neat::RunOptions reliable_model_run_options() {
   return options;
 }
 
-neat::Sample pose_input_sample(const neat::Tensor& tensor, const PoseInputContext* context) {
+neat::Sample pose_input_sample(const neat::Tensor& tensor, const FrameIdentity* identity) {
   neat::Sample sample = neat::make_tensor_sample("pose_input", tensor);
   sample.payload_type = neat::PayloadType::Tensor;
   sample.media_type = "application/vnd.simaai.tensor";
@@ -637,8 +545,8 @@ neat::Sample pose_input_sample(const neat::Tensor& tensor, const PoseInputContex
     sample.format = tensor.semantic.tess->format;
     sample.payload_tag = sample.format;
   }
-  if (context != nullptr) {
-    copy_identity(context->identity, sample);
+  if (identity != nullptr) {
+    copy_identity(*identity, sample);
   }
   return sample;
 }
@@ -660,12 +568,12 @@ void build_pose_run(AppRuntime& app) {
   app.pose_run = app.pose_graph.build(seed, reliable_model_run_options());
 }
 
-neat::GraphLinkOptions realtime_link(const AppConfig& cfg, const StreamRuntime& stream) {
+neat::GraphLinkOptions realtime_link(const StreamRuntime& stream) {
   neat::GraphLinkOptions options;
   options.policy = neat::GraphLinkPolicy::RealtimeLatestByStream;
   options.stream_id = stream.config.id;
-  options.max_inflight_per_stream = cfg.max_inflight_per_stream;
-  options.max_inflight_total = cfg.max_inflight_per_stream;
+  options.max_inflight_per_stream = kMaxInflightPerStream;
+  options.max_inflight_total = kMaxInflightPerStream;
   return options;
 }
 
@@ -716,22 +624,13 @@ void prepare_source_graphs(AppRuntime& app, const AppConfig& cfg) {
     const neat::Graph source = make_encoded_source(stream.source_options);
     const neat::Graph decoder = make_decoder(stream.source_options);
     stream.source_graph.connect(source, decoder);
-    stream.source_graph.connect(decoder, make_rgb_output(stream), realtime_link(cfg, stream));
-    if (cfg.video_enabled) {
-      stream.source_graph.connect(source, make_video_sender(cfg, stream),
-                                  realtime_link(cfg, stream));
-    }
-
+    stream.source_graph.connect(decoder, make_rgb_output(stream), realtime_link(stream));
+    stream.source_graph.connect(source, make_video_sender(cfg, stream), realtime_link(stream));
     std::cout << "[stream " << stream.config.id << "] codec=" << codec_name(stream.config.codec)
               << " source=" << stream.width << "x" << stream.height << "@" << stream.fps
-              << " channel=" << stream.config.insight_channel << " video=";
-    if (cfg.video_enabled) {
-      std::cout << cfg.video_port_base + stream.config.insight_channel;
-    } else {
-      std::cout << "disabled";
-    }
-    std::cout << " metadata=" << stream.metadata_sender->metadata_port() << "\n";
-
+              << " channel=" << stream.config.insight_channel
+              << " video=" << cfg.video_port_base + stream.config.insight_channel
+              << " metadata=" << stream.metadata_sender->metadata_port() << "\n";
   }
 }
 
@@ -815,7 +714,7 @@ std::vector<blazepose_app::Box> select_people(const neat::Sample& detections, in
     throw std::runtime_error("failed to read detector BBOX output: " + error);
   }
   const std::vector<objdet::Box> boxes =
-      objdet::parse_boxes_strict(payload, width, height, cfg.max_detections, false);
+      objdet::parse_boxes_strict(payload, width, height, kMaxDetections, false);
   std::vector<blazepose_app::Box> people;
   for (const objdet::Box& box : boxes) {
     if (box.class_id == 0) {
@@ -830,22 +729,28 @@ std::vector<blazepose_app::Box> select_people(const neat::Sample& detections, in
   return people;
 }
 
-FrameIdentity identity_from_sample(const neat::Sample& sample) {
-  return {sample.stream_id,   sample.frame_id,  sample.pts_ns,        sample.dts_ns,
-          sample.duration_ns, sample.input_seq, sample.orig_input_seq};
+// Marks one admitted frame as finished: published, dropped for newer work, or
+// without people.
+void finish_frame(AppRuntime& app, StreamRuntime& stream) {
+  std::lock_guard<std::mutex> lock(app.state.mutex);
+  --stream.outstanding_frames;
+  app.state.cv.notify_all();
 }
 
-void publish_frame_metadata_locked(StreamRuntime& stream, const FrameIdentity& identity,
-                                   std::vector<blazepose_app::Pose> poses) {
+// Publishes one frame's 2D and 3D metadata. The per-stream lock keeps the two
+// messages of one frame from interleaving with another frame's.
+void publish_frame(StreamRuntime& stream, const FrameIdentity& identity,
+                   std::vector<blazepose_app::Pose> poses) {
+  std::lock_guard<std::mutex> lock(stream.metadata_mutex);
   if (stream.pose_temporal_filter_enabled) {
-    poses = stream.pose_smoother.filter(std::move(poses), identity.pts_ns);
+    poses = stream.pose_smoother.filter(std::move(poses));
   }
   nlohmann::json overlay = blazepose_app::poses_data_json(std::move(poses), identity.stream_id);
   const std::string overlay_data = overlay.dump();
   const std::string auxiliary_data =
       blazepose_app::world_pose_auxiliary_from_overlay(std::move(overlay)).dump();
   const int64_t timestamp_ms = identity.pts_ns >= 0 ? identity.pts_ns / 1'000'000 : -1;
-  const std::string frame_id = identity.frame_id >= 0 ? std::to_string(identity.frame_id) : "";
+  const std::string frame_id = std::to_string(identity.frame_id);
   const auto send = [&](const char* type) {
     const std::string& data =
         std::string_view(type) == "pose-estimation" ? overlay_data : auxiliary_data;
@@ -857,36 +762,9 @@ void publish_frame_metadata_locked(StreamRuntime& stream, const FrameIdentity& i
               << " metadata send failed: " << error << "\n";
     return false;
   };
-  blazepose_app::send_metadata_pair(send, stream.metadata_frames, stream.metadata_send_failures);
-}
-
-void complete_frame(StreamRuntime& stream, std::uint64_t sequence, const FrameIdentity& identity,
-  std::optional<std::vector<blazepose_app::Pose>> poses) {
-  std::lock_guard<std::mutex> lock(stream.metadata_mutex);
-  for (FramePublication& publication :
-       stream.publications.complete(sequence, FramePublication{identity, std::move(poses)})) {
-    if (publication.poses.has_value()) {
-      publish_frame_metadata_locked(stream, publication.identity, std::move(*publication.poses));
-    }
+  if (blazepose_app::send_metadata_pair(send)) {
+    ++stream.frames_out;
   }
-  const std::uint64_t previous = stream.outstanding_frames.fetch_sub(1);
-  if (previous == 0) {
-    stream.outstanding_frames.fetch_add(1);
-    throw std::runtime_error("completed a frame that was not outstanding");
-  }
-}
-
-void skip_frame(StreamRuntime& stream, const FrameJob& job) {
-  complete_frame(stream, job.stream_sequence, job.identity, std::nullopt);
-}
-
-void publish_empty_frame(StreamRuntime& stream, const FrameJob& job) {
-  complete_frame(stream, job.stream_sequence, job.identity, std::vector<blazepose_app::Pose>{});
-}
-
-void time_out_frame(StreamRuntime& stream, const FrameJob& job) {
-  ++stream.timed_out_jobs;
-  publish_empty_frame(stream, job);
 }
 
 std::vector<float> tensor_floats(const neat::Tensor& tensor, std::size_t expected) {
@@ -929,6 +807,7 @@ void record_error(AppRuntime& app) {
   app.state.cv.notify_all();
 }
 
+// Waits for queued work and takes it round-robin across streams.
 std::optional<FrameJob> take_next_job(AppRuntime& app,
                                       std::vector<std::optional<FrameJob>>& mailboxes,
                                       std::size_t& next_stream) {
@@ -965,12 +844,12 @@ void close_source_stream(AppRuntime& app, StreamRuntime& stream, const std::stri
   if (!stream.closed.exchange(true)) {
     std::cerr << "[warn] stream " << stream.config.id << " stopped: " << reason << "\n";
   }
+  std::lock_guard<std::mutex> lock(app.state.mutex);
   app.state.cv.notify_all();
 }
 
-void pull_source_frames(AppRuntime& app, const AppConfig& cfg, int stream_index) {
-  StreamRuntime& stream = *app.streams[static_cast<std::size_t>(stream_index)];
-  const std::string output = frame_output_name(stream_index);
+void pull_source_frames(AppRuntime& app, const AppConfig& cfg, StreamRuntime& stream) {
+  const std::string output = frame_output_name(stream.index);
   while (true) {
     {
       std::lock_guard<std::mutex> lock(app.state.mutex);
@@ -978,7 +857,7 @@ void pull_source_frames(AppRuntime& app, const AppConfig& cfg, int stream_index)
         return;
       }
     }
-    if (cfg.frame_limit > 0 && stream.metadata_frames.load() >= cfg.frame_limit) {
+    if (cfg.frame_limit > 0 && stream.frames_in.load() >= cfg.frame_limit) {
       close_source_stream(app, stream, "runtime frame limit reached");
       return;
     }
@@ -997,40 +876,24 @@ void pull_source_frames(AppRuntime& app, const AppConfig& cfg, int stream_index)
         close_source_stream(app, stream, "failed to pull RGB source frame: " + error.message);
         return;
       }
-      std::optional<FrameJob> dropped;
+      FrameJob job;
+      job.job_id = app.next_job_id.fetch_add(1);
+      job.stream_index = stream.index;
+      job.rgb = require_rgb_tensor(sample);
+      job.identity = {stream.config.id, stream.frames_in.load() + 1, sample.pts_ns};
+      bool dropped = false;
       {
         std::lock_guard<std::mutex> lock(app.state.mutex);
         if (app.state.stopping) {
           return;
         }
-        if (!blazepose_app::stream_can_admit_frame(
-                stream.metadata_frames.load(), stream.outstanding_frames.load(),
-                cfg.frame_limit)) {
-          continue;
+        ++stream.frames_in;
+        dropped = blazepose_app::keep_latest(
+            app.state.detector_mailboxes[static_cast<std::size_t>(stream.index)], std::move(job));
+        if (!dropped) {
+          ++stream.outstanding_frames;
         }
-        FrameJob job;
-        job.job_id = app.next_job_id.fetch_add(1);
-        job.stream_index = stream_index;
-        job.rgb = require_rgb_tensor(sample);
-        job.identity = identity_from_sample(sample);
-        job.identity.stream_id = stream.config.id;
-        const std::uint64_t pull_sequence = stream.source_frames.fetch_add(1) + 1;
-        job.stream_sequence = pull_sequence;
-        job.identity.frame_id =
-            blazepose_app::select_frame_id(job.identity.frame_id, job.identity.orig_input_seq,
-                                           job.identity.input_seq, pull_sequence);
-        job.deadline = Clock::now() + std::chrono::milliseconds(cfg.pose_job_timeout_ms);
-        ++stream.outstanding_frames;
-        auto& mailbox = app.state.detector_mailboxes[static_cast<std::size_t>(stream_index)];
-        if (mailbox.has_value()) {
-          dropped = std::move(*mailbox);
-          ++stream.detector_mailbox_drops;
-        }
-        mailbox = std::move(job);
         app.state.cv.notify_all();
-      }
-      if (dropped.has_value()) {
-        skip_frame(stream, *dropped);
       }
     } catch (const std::exception& error) {
       close_source_stream(app, stream, error.what());
@@ -1039,13 +902,13 @@ void pull_source_frames(AppRuntime& app, const AppConfig& cfg, int stream_index)
   }
 }
 
-void run_source_stream(AppRuntime& app, const AppConfig& cfg, int stream_index) {
-  StreamRuntime& stream = *app.streams[static_cast<std::size_t>(stream_index)];
+void run_source_stream(AppRuntime& app, const AppConfig& cfg, StreamRuntime& stream) {
   struct Completion {
     AppRuntime& app;
     StreamRuntime& stream;
     ~Completion() {
       stream.source_worker_finished = true;
+      std::lock_guard<std::mutex> lock(app.state.mutex);
       app.state.cv.notify_all();
     }
   } completion{app, stream};
@@ -1057,10 +920,9 @@ void run_source_stream(AppRuntime& app, const AppConfig& cfg, int stream_index) 
     bool stopping = false;
     {
       std::lock_guard<std::mutex> lock(app.state.mutex);
-      if (app.state.stopping) {
+      stopping = app.state.stopping;
+      if (stopping) {
         stream.closed = true;
-        stopping = true;
-        app.state.cv.notify_all();
       } else {
         stream.source_run = std::move(source_run);
       }
@@ -1069,101 +931,57 @@ void run_source_stream(AppRuntime& app, const AppConfig& cfg, int stream_index) 
       source_run.close();
       return;
     }
-    pull_source_frames(app, cfg, stream_index);
+    pull_source_frames(app, cfg, stream);
   } catch (const std::exception& error) {
     close_source_stream(app, stream, error.what());
   }
 }
 
+// Pushes one model input without the blocking push API. Its FIFO context is
+// queued first so the output puller can always correlate the result. Returns
+// false when the application is stopping.
 template <typename Context>
-blazepose_app::NonblockingPushResult
-try_push_with_context_until(AppRuntime& app, neat::Run& run, std::string_view input_name,
-                            const neat::Sample& input, std::deque<std::optional<Context>>& pending,
-                            Context context, Clock::time_point deadline,
-                            const std::string& rejection_message) {
-  return blazepose_app::retry_nonblocking_push(
-      [&]() {
-        {
-          std::lock_guard<std::mutex> lock(app.state.mutex);
-          if (app.state.stopping) {
-            return blazepose_app::NonblockingPushAttempt::Cancelled;
-          }
-          pending.emplace_back(context);
-        }
-        if (run.try_push(input_name, input)) {
-          return blazepose_app::NonblockingPushAttempt::Accepted;
-        }
-        std::lock_guard<std::mutex> lock(app.state.mutex);
-        if (app.state.stopping) {
-          return blazepose_app::NonblockingPushAttempt::Cancelled;
-        }
-        if (pending.empty()) {
-          throw std::runtime_error("model input context disappeared after a rejected push");
-        }
-        if (!pending.back().has_value()) {
-          pending.pop_back();
-          app.state.cv.notify_all();
-          return blazepose_app::NonblockingPushAttempt::Cancelled;
-        }
-        pending.pop_back();
-        app.state.cv.notify_all();
-        if (!run.can_push()) {
-          throw std::runtime_error(rejection_message);
-        }
-        return blazepose_app::NonblockingPushAttempt::Retry;
-      },
-      [deadline]() { return Clock::now() >= deadline; },
-      [&]() {
-        std::unique_lock<std::mutex> lock(app.state.mutex);
-        app.state.cv.wait_until(lock,
-                                std::min(deadline, Clock::now() + std::chrono::milliseconds(1)),
-                                [&]() { return app.state.stopping; });
-      });
+bool push_with_context(AppRuntime& app, neat::Run& run, std::string_view input_name,
+                       const neat::Sample& input, std::deque<Context>& pending,
+                       const Context& context, const std::string& rejection_message) {
+  while (true) {
+    {
+      std::lock_guard<std::mutex> lock(app.state.mutex);
+      if (app.state.stopping) {
+        return false;
+      }
+      pending.push_back(context);
+    }
+    if (run.try_push(input_name, input)) {
+      return true;
+    }
+    std::unique_lock<std::mutex> lock(app.state.mutex);
+    if (app.state.stopping) {
+      return false;
+    }
+    pending.pop_back();
+    if (!run.can_push()) {
+      throw std::runtime_error(rejection_message);
+    }
+    app.state.cv.wait_for(lock, std::chrono::milliseconds(1), [&]() { return app.state.stopping; });
+  }
 }
 
-void dispatch_detector_jobs(AppRuntime& app, const AppConfig& cfg) {
+void dispatch_detector_jobs(AppRuntime& app, const AppConfig& /*cfg*/) {
   try {
     while (true) {
-      std::optional<FrameJob> maybe_job =
+      const std::optional<FrameJob> job =
           take_next_job(app, app.state.detector_mailboxes, app.state.next_detector_stream);
-      if (!maybe_job.has_value()) {
+      if (!job.has_value()) {
         return;
       }
-      FrameJob job = std::move(*maybe_job);
-      StreamRuntime& stream = *app.streams[static_cast<std::size_t>(job.stream_index)];
-      if (Clock::now() >= job.deadline) {
-        time_out_frame(stream, job);
-        continue;
-      }
-      const neat::Tensor detector_frame = job.rgb.cvu();
+      const neat::Tensor detector_frame = job->rgb.cvu();
       const neat::Sample input =
-          image_input_sample("detector_input", detector_frame, &job.identity);
-      bool expired_while_waiting = false;
-      {
-        std::unique_lock<std::mutex> lock(app.state.mutex);
-        app.state.cv.wait_until(lock, job.deadline, [&]() {
-          return app.state.stopping || app.state.pending_detector_outputs.size() <
-                                           static_cast<std::size_t>(cfg.max_pending_jobs);
-        });
-        if (app.state.stopping) {
-          return;
-        }
-        expired_while_waiting = Clock::now() >= job.deadline;
-      }
-      if (expired_while_waiting) {
-        time_out_frame(stream, job);
-        continue;
-      }
-      const auto push_result = try_push_with_context_until(
-          app, app.detector_run, "detector_input", input, app.state.pending_detector_outputs, job,
-          job.deadline, "YOLO26 Run rejected a frame input");
-      if (push_result == blazepose_app::NonblockingPushResult::Aborted) {
-        time_out_frame(stream, job);
-      } else if (push_result == blazepose_app::NonblockingPushResult::Cancelled) {
-        std::lock_guard<std::mutex> lock(app.state.mutex);
-        if (app.state.stopping) {
-          return;
-        }
+          image_input_sample("detector_input", detector_frame, &job->identity);
+      if (!push_with_context(app, app.detector_run, "detector_input", input,
+                             app.state.pending_detector_outputs, *job,
+                             "YOLO26 Run rejected a frame input")) {
+        return;
       }
     }
   } catch (...) {
@@ -1171,48 +989,39 @@ void dispatch_detector_jobs(AppRuntime& app, const AppConfig& cfg) {
   }
 }
 
-void expire_detector_jobs(AppRuntime& app) {
-  std::vector<FrameJob> expired;
-  const auto now = Clock::now();
-  {
-    std::lock_guard<std::mutex> lock(app.state.mutex);
-    expired = blazepose_app::expire_pending_fifo(
-        app.state.pending_detector_outputs,
-        [now](const FrameJob& job) { return now >= job.deadline; });
-  }
-  for (const FrameJob& job : expired) {
-    time_out_frame(*app.streams[static_cast<std::size_t>(job.stream_index)], job);
+// Pulls one output of a shared model. Returns false when the application is
+// stopping, and throws when the Run closed or failed on its own.
+bool pull_model_output(AppRuntime& app, neat::Run& run, const char* output, const char* model,
+                       neat::Sample& sample) {
+  while (true) {
+    neat::PullError error;
+    const auto status = run.pull(output, 20, sample, &error);
+    if (status == neat::PullStatus::Ok) {
+      return true;
+    }
+    {
+      std::lock_guard<std::mutex> lock(app.state.mutex);
+      if (app.state.stopping) {
+        return false;
+      }
+    }
+    if (status == neat::PullStatus::Closed) {
+      const std::string detail = run.last_error();
+      throw std::runtime_error(std::string(model) + " output closed unexpectedly" +
+                               (detail.empty() ? std::string{} : ": " + detail));
+    }
+    if (status != neat::PullStatus::Timeout) {
+      throw std::runtime_error(std::string("failed to pull ") + model +
+                               " output: " + error.message);
+    }
   }
 }
 
 void pull_detector_outputs(AppRuntime& app, const AppConfig& cfg) {
   try {
-    while (true) {
-      expire_detector_jobs(app);
-      neat::Sample sample;
-      neat::PullError error;
-      const auto status = app.detector_run.pull("detector_output", 20, sample, &error);
-      if (status == neat::PullStatus::Timeout) {
-        std::lock_guard<std::mutex> lock(app.state.mutex);
-        if (app.state.stopping) {
-          return;
-        }
-        continue;
-      }
-      if (status == neat::PullStatus::Closed) {
-        std::lock_guard<std::mutex> lock(app.state.mutex);
-        if (app.state.stopping) {
-          return;
-        }
-        const std::string detail = app.detector_run.last_error();
-        throw std::runtime_error("YOLO26 output closed unexpectedly" +
-                                 (detail.empty() ? std::string{} : ": " + detail));
-      }
-      if (status != neat::PullStatus::Ok) {
-        throw std::runtime_error("failed to pull YOLO26 output: " + error.message);
-      }
-
-      std::optional<FrameJob> pending;
+    neat::Sample sample;
+    while (pull_model_output(app, app.detector_run, "detector_output", "YOLO26", sample)) {
+      FrameJob job;
       {
         std::lock_guard<std::mutex> lock(app.state.mutex);
         if (app.state.pending_detector_outputs.empty()) {
@@ -1221,51 +1030,33 @@ void pull_detector_outputs(AppRuntime& app, const AppConfig& cfg) {
           }
           throw std::runtime_error("YOLO26 output arrived without pending frame context");
         }
-        pending = std::move(app.state.pending_detector_outputs.front());
+        job = std::move(app.state.pending_detector_outputs.front());
         app.state.pending_detector_outputs.pop_front();
-        app.state.cv.notify_all();
       }
-      if (!pending.has_value()) {
-        continue;
-      }
-      FrameJob job = std::move(*pending);
       StreamRuntime& stream = *app.streams[static_cast<std::size_t>(job.stream_index)];
-      ++stream.detector_frames;
-      if (Clock::now() >= job.deadline) {
-        time_out_frame(stream, job);
-        continue;
-      }
       job.people = select_people(sample, stream.width, stream.height, cfg);
-      stream.selected_rois.fetch_add(job.people.size());
       if (job.people.empty()) {
-        publish_empty_frame(stream, job);
+        finish_frame(app, stream);
         continue;
       }
-
-      std::optional<FrameJob> dropped;
+      bool dropped = false;
       {
         std::lock_guard<std::mutex> lock(app.state.mutex);
         if (app.state.stopping) {
           return;
         }
-        auto& mailbox = app.state.pose_mailboxes[static_cast<std::size_t>(job.stream_index)];
-        if (mailbox.has_value()) {
-          dropped = std::move(*mailbox);
-          ++stream.pose_mailbox_drops;
-        }
-        mailbox = std::move(job);
+        dropped = blazepose_app::keep_latest(
+            app.state.pose_mailboxes[static_cast<std::size_t>(job.stream_index)], std::move(job));
         app.state.cv.notify_all();
       }
-      if (dropped.has_value()) {
-        skip_frame(stream, *dropped);
+      if (dropped) {
+        finish_frame(app, stream);
       }
     }
   } catch (...) {
     record_error(app);
   }
 }
-
-void expire_pose_jobs(AppRuntime& app);
 
 void dispatch_pose_jobs(AppRuntime& app, const AppConfig& cfg) {
   try {
@@ -1276,16 +1067,6 @@ void dispatch_pose_jobs(AppRuntime& app, const AppConfig& cfg) {
         return;
       }
       FrameJob job = std::move(*maybe_job);
-      StreamRuntime& stream = *app.streams[static_cast<std::size_t>(job.stream_index)];
-      if (Clock::now() >= job.deadline) {
-        time_out_frame(stream, job);
-        continue;
-      }
-      if (job.people.empty()) {
-        publish_empty_frame(stream, job);
-        continue;
-      }
-
       auto rgb_view = job.rgb.map_cv_mat_view(neat::ImageSpec::PixelFormat::RGB);
       if (!rgb_view.has_value()) {
         throw std::runtime_error("failed to map packed RGB frame without copying");
@@ -1301,86 +1082,29 @@ void dispatch_pose_jobs(AppRuntime& app, const AppConfig& cfg) {
       if (output.size() != pose_rois.size()) {
         throw std::runtime_error("BlazePose Preproc output count does not match ROI count");
       }
-      std::vector<PreparedPoseInput> prepared_inputs;
-      prepared_inputs.reserve(output.size());
+      std::vector<std::pair<PoseInputContext, neat::Tensor>> inputs;
+      inputs.reserve(output.size());
       for (std::size_t index = 0; index < output.size(); ++index) {
         // Detached asynchronous Runs may retain their input after push(). Give
         // each ROI independent EV74 storage so Preproc can recycle its pool.
-        prepared_inputs.push_back({static_cast<int>(index), job.people[index],
-                                   affine_from_tensor(output[index]), output[index].clone().cvu()});
+        inputs.emplace_back(PoseInputContext{job.job_id, static_cast<int>(index), job.people[index],
+                                             affine_from_tensor(output[index])},
+                            output[index].clone().cvu());
       }
-
-      bool expired_while_waiting = false;
       {
-        std::unique_lock<std::mutex> lock(app.state.mutex);
-        app.state.cv.wait_until(lock, job.deadline, [&]() {
-          return app.state.stopping ||
-                 app.state.aggregates.size() < static_cast<std::size_t>(cfg.max_pending_jobs);
-        });
-        if (app.state.stopping) {
+        std::lock_guard<std::mutex> lock(app.state.mutex);
+        PoseAggregate aggregate;
+        aggregate.stream_index = job.stream_index;
+        aggregate.expected = static_cast<int>(inputs.size());
+        aggregate.identity = job.identity;
+        app.state.aggregates.emplace(job.job_id, std::move(aggregate));
+      }
+      for (const auto& [context, tensor] : inputs) {
+        if (!push_with_context(
+                app, app.pose_run, "pose_input", pose_input_sample(tensor, &job.identity),
+                app.state.pending_pose_outputs, context, "BlazePose Run rejected an ROI input")) {
           return;
         }
-        expired_while_waiting = Clock::now() >= job.deadline;
-        if (!expired_while_waiting) {
-          PoseAggregate aggregate;
-          aggregate.stream_index = job.stream_index;
-          aggregate.stream_sequence = job.stream_sequence;
-          aggregate.expected = static_cast<int>(prepared_inputs.size());
-          aggregate.identity = job.identity;
-          aggregate.deadline = job.deadline;
-          app.state.aggregates.emplace(job.job_id, std::move(aggregate));
-        }
-      }
-      if (expired_while_waiting) {
-        time_out_frame(stream, job);
-        continue;
-      }
-
-      int accepted_rois = 0;
-      for (const PreparedPoseInput& prepared : prepared_inputs) {
-        PoseInputContext context;
-        context.job_id = job.job_id;
-        context.stream_index = job.stream_index;
-        context.roi_index = prepared.roi_index;
-        context.box = prepared.box;
-        context.affine = prepared.affine;
-        context.identity = job.identity;
-        const neat::Sample input = pose_input_sample(prepared.tensor, &context);
-
-        const auto push_result = try_push_with_context_until(
-            app, app.pose_run, "pose_input", input, app.state.pending_pose_outputs, context,
-            job.deadline, "BlazePose Run rejected an ROI input");
-        if (push_result == blazepose_app::NonblockingPushResult::Cancelled) {
-          std::lock_guard<std::mutex> lock(app.state.mutex);
-          if (app.state.stopping) {
-            return;
-          }
-          throw std::runtime_error("BlazePose input context was cancelled unexpectedly");
-        }
-        if (push_result != blazepose_app::NonblockingPushResult::Accepted) {
-          {
-            std::lock_guard<std::mutex> lock(app.state.mutex);
-            if (app.state.stopping) {
-              return;
-            }
-            const auto aggregate = app.state.aggregates.find(job.job_id);
-            if (aggregate != app.state.aggregates.end()) {
-              aggregate->second.expected = accepted_rois;
-            }
-          }
-          expire_pose_jobs(app);
-          {
-            std::lock_guard<std::mutex> cleanup_lock(app.state.mutex);
-            const auto aggregate = app.state.aggregates.find(job.job_id);
-            if (aggregate != app.state.aggregates.end() && aggregate->second.expired &&
-                aggregate->second.completed >= aggregate->second.expected) {
-              app.state.aggregates.erase(aggregate);
-              app.state.cv.notify_all();
-            }
-          }
-          break;
-        }
-        ++accepted_rois;
       }
     }
   } catch (...) {
@@ -1388,55 +1112,11 @@ void dispatch_pose_jobs(AppRuntime& app, const AppConfig& cfg) {
   }
 }
 
-void expire_pose_jobs(AppRuntime& app) {
-  std::vector<PoseAggregate> expired;
-  const auto now = Clock::now();
-  {
-    std::lock_guard<std::mutex> lock(app.state.mutex);
-    expired = blazepose_app::claim_expired_aggregates(
-        app.state.aggregates,
-        [now](const PoseAggregate& aggregate) { return now >= aggregate.deadline; });
-  }
-  for (PoseAggregate& aggregate : expired) {
-    StreamRuntime& stream = *app.streams[static_cast<std::size_t>(aggregate.stream_index)];
-    ++stream.timed_out_jobs;
-    complete_frame(stream, aggregate.stream_sequence, aggregate.identity,
-                   std::move(aggregate.poses));
-  }
-}
-
 void pull_pose_outputs(AppRuntime& app, const AppConfig& cfg) {
   try {
-    while (true) {
-      {
-        std::lock_guard<std::mutex> lock(app.state.mutex);
-        if (app.state.stopping && app.state.pending_pose_outputs.empty()) {
-          return;
-        }
-      }
-
-      neat::Sample sample;
-      neat::PullError error;
-      const auto status = app.pose_run.pull("pose_output", 20, sample, &error);
-      if (status == neat::PullStatus::Timeout) {
-        expire_pose_jobs(app);
-        continue;
-      }
-      if (status == neat::PullStatus::Closed) {
-        std::lock_guard<std::mutex> lock(app.state.mutex);
-        if (app.state.stopping) {
-          return;
-        }
-        const std::string detail = app.pose_run.last_error();
-        throw std::runtime_error("BlazePose output closed unexpectedly" +
-                                 (detail.empty() ? std::string{} : ": " + detail));
-      }
-      if (status != neat::PullStatus::Ok) {
-        throw std::runtime_error("failed to pull BlazePose output: " + error.message);
-      }
-      expire_pose_jobs(app);
-
-      std::optional<PoseInputContext> pending;
+    neat::Sample sample;
+    while (pull_model_output(app, app.pose_run, "pose_output", "BlazePose", sample)) {
+      PoseInputContext context;
       {
         std::lock_guard<std::mutex> lock(app.state.mutex);
         if (app.state.pending_pose_outputs.empty()) {
@@ -1445,33 +1125,29 @@ void pull_pose_outputs(AppRuntime& app, const AppConfig& cfg) {
           }
           throw std::runtime_error("BlazePose output arrived without pending ROI context");
         }
-        pending = std::move(app.state.pending_pose_outputs.front());
+        context = app.state.pending_pose_outputs.front();
         app.state.pending_pose_outputs.pop_front();
       }
-      if (!pending.has_value()) {
-        continue;
-      }
-      PoseInputContext context = std::move(*pending);
-      bool expired = false;
+      const auto pose = parse_pose_output(sample, context, cfg);
+      std::optional<PoseAggregate> completed;
       {
         std::lock_guard<std::mutex> lock(app.state.mutex);
         const auto found = app.state.aggregates.find(context.job_id);
-        expired = found == app.state.aggregates.end() || found->second.expired;
+        if (found == app.state.aggregates.end()) {
+          return; // stop_runtime() cleared the in-flight frames.
+        }
+        if (pose.has_value()) {
+          found->second.poses.push_back(*pose);
+        }
+        if (++found->second.completed == found->second.expected) {
+          completed = std::move(found->second);
+          app.state.aggregates.erase(found);
+        }
       }
-      const auto pose = expired ? std::nullopt : parse_pose_output(sample, context, cfg);
-      std::optional<PoseAggregate> completed;
-      {
-        // Claim a completed aggregate under the same lock that counts the output,
-        // so a concurrent expiry pass cannot also publish it.
-        std::lock_guard<std::mutex> lock(app.state.mutex);
-        completed = blazepose_app::record_pose_output(app.state.aggregates, context.job_id, pose);
-        app.state.cv.notify_all();
-      }
-      ++app.streams[static_cast<std::size_t>(context.stream_index)]->completed_rois;
       if (completed.has_value()) {
-        complete_frame(*app.streams[static_cast<std::size_t>(completed->stream_index)],
-                       completed->stream_sequence, completed->identity,
-                       std::move(completed->poses));
+        StreamRuntime& stream = *app.streams[static_cast<std::size_t>(completed->stream_index)];
+        publish_frame(stream, completed->identity, std::move(completed->poses));
+        finish_frame(app, stream);
       }
     }
   } catch (...) {
@@ -1479,36 +1155,25 @@ void pull_pose_outputs(AppRuntime& app, const AppConfig& cfg) {
   }
 }
 
-bool all_streams_done(const AppRuntime& app, int frame_limit) {
-  return std::all_of(app.streams.begin(), app.streams.end(), [frame_limit](const auto& stream) {
-    return blazepose_app::stream_is_drained(
-        stream->closed.load(), stream->outstanding_frames.load(), stream->metadata_frames.load(),
-        frame_limit);
+bool all_streams_done(const AppRuntime& app) {
+  return std::all_of(app.streams.begin(), app.streams.end(), [](const auto& stream) {
+    return stream->closed.load() && stream->outstanding_frames.load() == 0;
   });
 }
 
 void require_successful_completion(const AppRuntime& app, int frame_limit) {
-  std::vector<std::string> incomplete;
+  if (frame_limit == 0) {
+    throw std::runtime_error("all source streams stopped");
+  }
+  std::string incomplete;
   for (const auto& stream : app.streams) {
-    if (frame_limit > 0 && stream->metadata_frames.load() < frame_limit) {
-      incomplete.push_back(stream->config.id);
+    if (stream->frames_in.load() < frame_limit) {
+      incomplete += (incomplete.empty() ? "" : ", ") + stream->config.id;
     }
   }
   if (!incomplete.empty()) {
-    std::ostringstream message;
-    message << "source streams stopped before reaching runtime.frames=" << frame_limit << ": ";
-    for (std::size_t index = 0; index < incomplete.size(); ++index) {
-      if (index != 0) {
-        message << ", ";
-      }
-      message << incomplete[index];
-    }
-    throw std::runtime_error(message.str());
-  }
-  if (frame_limit == 0 &&
-      std::all_of(app.streams.begin(), app.streams.end(),
-                  [](const auto& stream) { return stream->closed.load(); })) {
-    throw std::runtime_error("all source streams stopped");
+    throw std::runtime_error("source streams stopped before reaching runtime.frames=" +
+                             std::to_string(frame_limit) + ": " + incomplete);
   }
 }
 
@@ -1540,29 +1205,6 @@ void stop_runtime(AppRuntime& app) {
   app.pose_run.close();
 }
 
-void print_summary(const AppRuntime& app, double elapsed_seconds) {
-  std::uint64_t total_frames = 0;
-  std::uint64_t total_rois = 0;
-  for (const auto& stream : app.streams) {
-    total_frames += static_cast<std::uint64_t>(stream->metadata_frames.load());
-    total_rois += stream->completed_rois.load();
-    std::cout << "[summary stream=" << stream->config.id
-              << "] source_frames=" << stream->source_frames.load()
-              << " detector_frames=" << stream->detector_frames.load()
-              << " metadata_frames=" << stream->metadata_frames.load()
-              << " metadata_send_failures=" << stream->metadata_send_failures.load()
-              << " selected_rois=" << stream->selected_rois.load()
-              << " completed_rois=" << stream->completed_rois.load()
-              << " detector_mailbox_drops=" << stream->detector_mailbox_drops.load()
-              << " pose_mailbox_drops=" << stream->pose_mailbox_drops.load()
-              << " timed_out_jobs=" << stream->timed_out_jobs.load() << "\n";
-  }
-  const double frame_fps = elapsed_seconds > 0.0 ? total_frames / elapsed_seconds : 0.0;
-  const double pose_fps = elapsed_seconds > 0.0 ? total_rois / elapsed_seconds : 0.0;
-  std::cout << "[summary aggregate] elapsed_s=" << elapsed_seconds << " metadata_fps=" << frame_fps
-            << " pose_fps=" << pose_fps << "\n";
-}
-
 void run_app(const AppConfig& cfg) {
   if (!fs::exists(cfg.detector_model_path)) {
     throw std::runtime_error("detector model not found: " + cfg.detector_model_path);
@@ -1583,16 +1225,14 @@ void run_app(const AppConfig& cfg) {
 
   g_stop_requested = 0;
   auto previous_signal = std::signal(SIGINT, request_stop);
-  const auto start = Clock::now();
+  // Each source run starts and pulls on its own thread, so an offline source
+  // cannot delay the others; the shared models have dedicated workers.
   std::vector<std::thread> source_pullers;
   source_pullers.reserve(app->streams.size());
   for (const auto& stream : app->streams) {
-    const int stream_index = stream->index;
-    source_pullers.emplace_back([app, cfg, stream_index]() {
-      run_source_stream(*app, cfg, stream_index);
-    });
+    StreamRuntime* runtime = stream.get();
+    source_pullers.emplace_back([app, &cfg, runtime]() { run_source_stream(*app, cfg, *runtime); });
   }
-  // Dedicated detector and pose dispatcher and puller threads.
   std::vector<std::thread> model_workers;
   for (auto* worker :
        {dispatch_detector_jobs, pull_detector_outputs, dispatch_pose_jobs, pull_pose_outputs}) {
@@ -1600,14 +1240,12 @@ void run_app(const AppConfig& cfg) {
   }
 
   try {
-    while (g_stop_requested == 0 && !all_streams_done(*app, cfg.frame_limit)) {
-      std::unique_lock<std::mutex> lock(app->state.mutex);
-      app->state.cv.wait_for(lock, std::chrono::milliseconds(50), [&]() {
-        return app->state.error || g_stop_requested != 0 || all_streams_done(*app, cfg.frame_limit);
-      });
-      if (app->state.error) {
-        std::rethrow_exception(app->state.error);
-      }
+    std::unique_lock<std::mutex> lock(app->state.mutex);
+    while (g_stop_requested == 0 && !app->state.error && !all_streams_done(*app)) {
+      app->state.cv.wait_for(lock, std::chrono::milliseconds(50));
+    }
+    if (app->state.error) {
+      std::rethrow_exception(app->state.error);
     }
     if (g_stop_requested == 0) {
       require_successful_completion(*app, cfg.frame_limit);
@@ -1620,11 +1258,10 @@ void run_app(const AppConfig& cfg) {
   const auto source_shutdown_deadline = Clock::now() + std::chrono::milliseconds(500);
   for (std::size_t index = 0; index < source_pullers.size(); ++index) {
     StreamRuntime& stream = *app->streams[index];
-    if (!stream.source_worker_finished.load()) {
+    {
       std::unique_lock<std::mutex> lock(app->state.mutex);
-      app->state.cv.wait_until(lock, source_shutdown_deadline, [&stream]() {
-        return stream.source_worker_finished.load();
-      });
+      app->state.cv.wait_until(lock, source_shutdown_deadline,
+                               [&stream]() { return stream.source_worker_finished.load(); });
     }
     if (stream.source_worker_finished.load()) {
       source_pullers[index].join();
@@ -1638,8 +1275,11 @@ void run_app(const AppConfig& cfg) {
     worker.join();
   }
   std::signal(SIGINT, previous_signal);
-  const double elapsed = std::chrono::duration<double>(Clock::now() - start).count();
-  print_summary(*app, elapsed);
+  for (const auto& stream : app->streams) {
+    std::cout << "[summary stream=" << stream->config.id
+              << "] frames_in=" << stream->frames_in.load()
+              << " frames_out=" << stream->frames_out.load() << "\n";
+  }
   if (app->state.error) {
     std::rethrow_exception(app->state.error);
   }
@@ -1649,18 +1289,12 @@ void run_app(const AppConfig& cfg) {
 
 int main(int argc, char** argv) {
   try {
-    const CliOptions cli = parse_args(argc, argv);
-    if (!fs::exists(cli.config_path)) {
-      std::cerr << "Error: config file not found: " << cli.config_path << "\n";
+    const fs::path config_path = parse_args(argc, argv);
+    if (!fs::exists(config_path)) {
+      std::cerr << "Error: config file not found: " << config_path << "\n";
       return 2;
     }
-    const AppConfig cfg = load_app_config(cli.config_path);
-    if (cli.validate_config_only) {
-      std::cout << "Config validated: " << cli.config_path << " (streams=" << cfg.streams.size()
-                << ", max_people_per_frame=" << cfg.max_people_per_frame << ")\n";
-      return 0;
-    }
-    run_app(cfg);
+    run_app(load_app_config(config_path));
     return 0;
   } catch (const std::exception& error) {
     std::cerr << "[ERR] " << error.what() << "\n";
