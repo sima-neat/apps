@@ -1126,3 +1126,14 @@ def test_pose_smoother_bridges_two_missing_results_without_buffering():
     assert first_gap[0]["keypoints"][0]["confidence"] < 0.9
     assert second_gap[0]["keypoints"][0]["confidence"] < first_gap[0]["keypoints"][0]["confidence"]
     assert expired == []
+
+
+def test_pose_smoother_drops_stale_subject_after_coasting_without_pts():
+    smoother = main.PoseSmoother()
+    smoother.filter([pose_sample(50.0, 0.9, 0.0)], -1)
+    assert smoother.filter([], -1) and smoother.filter([], -1)
+    assert smoother.filter([], -1) == []
+
+    later = smoother.filter([pose_sample(54.0, 0.4, 0.0)], -1)
+
+    assert later[0]["keypoints"][0]["x"] == 54.0
