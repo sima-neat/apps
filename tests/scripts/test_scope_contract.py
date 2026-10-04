@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -643,6 +644,33 @@ def test_download_models_fetches_one_registry_variant(tmp_path):
     assert repeated.returncode == 0, repeated.stderr
     assert "[skip] demo already exists" in repeated.stdout
     assert len(calls.read_text(encoding="utf-8").splitlines()) == 1
+
+
+def test_download_models_unwraps_a_registry_model_package(tmp_path):
+    _require_modern_bash()
+    query = _write_registry_scope_query(
+        tmp_path,
+        [("demo", "demo_modalix_bf16_mpk.tar.gz")],
+        ref="feat/model-branch",
+        variant="modalix_bf16",
+    )
+    package = tmp_path / "demo_modalix_bf16_default.zip"
+    with zipfile.ZipFile(package, "w") as archive:
+        archive.writestr("demo-models/manifest.json", "{}")
+        archive.writestr("demo-models/components/model/demo_modalix_bf16_mpk.tar.gz", b"mpk")
+    cli, calls = _write_registry_variant_cli(tmp_path, [])
+    cli.write_text(
+        cli.read_text(encoding="utf-8")
+        + f'cp "{package}" "$output/$model_id/$variant/"\n',
+        encoding="utf-8",
+    )
+    models_dir = tmp_path / "models"
+
+    result = _run_registry_download(models_dir, query, cli, calls)
+
+    assert result.returncode == 0, result.stderr
+    assert (models_dir / "demo_modalix_bf16_mpk.tar.gz").read_bytes() == b"mpk"
+    assert list(models_dir.glob("*.tmp.*")) == []
 
 
 def test_download_models_reports_missing_registry_variant_file(tmp_path):
