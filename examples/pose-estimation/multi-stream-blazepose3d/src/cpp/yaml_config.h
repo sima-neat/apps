@@ -525,9 +525,10 @@ public:
 
   [[nodiscard]] int int_or(const std::string& key, int default_value) const {
     const auto it = scalars_.find(key);
-    if (it == scalars_.end() || it->second.type == YamlScalarType::Null) {
+    if (it == scalars_.end()) {
       return default_value;
     }
+    // An explicit null is a present value of the wrong type, as in Python.
     if (it->second.type != YamlScalarType::Integer) {
       throw std::runtime_error(key + " must be an integer");
     }
@@ -536,9 +537,10 @@ public:
 
   [[nodiscard]] double double_or(const std::string& key, double default_value) const {
     const auto it = scalars_.find(key);
-    if (it == scalars_.end() || it->second.type == YamlScalarType::Null) {
+    if (it == scalars_.end()) {
       return default_value;
     }
+    // An explicit null is a present value of the wrong type, as in Python.
     if (it->second.type != YamlScalarType::Integer && it->second.type != YamlScalarType::Number) {
       throw std::runtime_error(key + " must be numeric");
     }
@@ -549,9 +551,10 @@ public:
 
   [[nodiscard]] bool bool_or(const std::string& key, bool default_value) const {
     const auto it = scalars_.find(key);
-    if (it == scalars_.end() || it->second.type == YamlScalarType::Null) {
+    if (it == scalars_.end()) {
       return default_value;
     }
+    // An explicit null is a present value of the wrong type, as in Python.
     if (it->second.type != YamlScalarType::Boolean) {
       throw std::runtime_error(key + " must be true or false");
     }
