@@ -1,3 +1,4 @@
+#include "examples/pose-estimation/multi-stream-blazepose3d/src/cpp/pose_logic.h"
 #include "support/testing/metadata_json_listener.h"
 #include "support/testing/test_config.h"
 #include "support/testing/test_process.h"
@@ -323,17 +324,90 @@ void write_config(const fs::path& path, const fs::path& detector, const fs::path
          << "\n    metadata_port_base: " << metadata_port_base << "\n";
 }
 
-// True when pose[name] holds 33 points with finite coordinates on every required axis.
+bool has_probability(const nlohmann::json& object, const char* name) {
+  return object.contains(name) && object.at(name).is_number() &&
+         std::isfinite(object.at(name).get<double>()) && object.at(name).get<double>() >= 0.0 &&
+         object.at(name).get<double>() <= 1.0;
+}
+
+// True when pose[name] holds all named body points with finite coordinates and confidence.
 bool has_body_points(const nlohmann::json& pose, const char* name, bool require_z) {
   const auto has_finite_coordinate = [](const nlohmann::json& point, const char* axis) {
     return point.contains(axis) && point.at(axis).is_number() &&
            std::isfinite(point.at(axis).get<double>());
   };
-  return pose.contains(name) && pose.at(name).size() == 33 &&
-         std::all_of(pose.at(name).begin(), pose.at(name).end(), [&](const nlohmann::json& point) {
-           return has_finite_coordinate(point, "x") && has_finite_coordinate(point, "y") &&
-                  (!require_z || has_finite_coordinate(point, "z"));
-         });
+  if (!pose.contains(name) || !pose.at(name).is_array() ||
+      pose.at(name).size() != blazepose_app::kLandmarkNames.size()) {
+    return false;
+  }
+  for (std::size_t index = 0; index < pose.at(name).size(); ++index) {
+    const auto& point = pose.at(name).at(index);
+    if (point.value("name", "") != blazepose_app::kLandmarkNames[index] ||
+        !has_probability(point, "confidence") || !has_finite_coordinate(point, "x") ||
+        !has_finite_coordinate(point, "y") || (require_z && !has_finite_coordinate(point, "z"))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool valid_overlay_pose(const nlohmann::json& pose) {
+  if (!pose.contains("id") || !pose.at("id").is_string() ||
+      pose.at("id").get<std::string>().empty() || pose.value("label", "") != "person" ||
+      !has_probability(pose, "presence") || !has_probability(pose, "confidence") ||
+      !pose.contains("bbox") || !pose.at("bbox").is_array() || pose.at("bbox").size() != 4) {
+    return false;
+  }
+  for (const auto& coordinate : pose.at("bbox")) {
+    if (!coordinate.is_number() || !std::isfinite(coordinate.get<double>())) {
+      return false;
+    }
+  }
+  return pose.at("bbox").at(2).get<double>() >= 0.0 && pose.at("bbox").at(3).get<double>() >= 0.0 &&
+         has_body_points(pose, "keypoints", false) &&
+         has_body_points(pose, "world_keypoints", true);
+}
+
+bool valid_auxiliary_pose(const nlohmann::json& pose) {
+  return pose.contains("id") && pose.at("id").is_string() &&
+         !pose.at("id").get<std::string>().empty() && has_probability(pose, "presence") &&
+         has_body_points(pose, "keypoints", true);
+}
+
+nlohmann::json body_points(bool with_z) {
+  nlohmann::json points = nlohmann::json::array();
+  for (const char* name : blazepose_app::kLandmarkNames) {
+    nlohmann::json point = {{"name", name}, {"x", 1.0}, {"y", 2.0}, {"confidence", 0.9}};
+    if (with_z) {
+      point["z"] = 3.0;
+    }
+    points.push_back(std::move(point));
+  }
+  return points;
+}
+
+bool test_pose_schema_validation() {
+  nlohmann::json overlay = {{"id", "pose_1"},
+                            {"label", "person"},
+                            {"presence", 0.9},
+                            {"confidence", 0.8},
+                            {"bbox", {1, 2, 3, 4}},
+                            {"keypoints", body_points(false)},
+                            {"world_keypoints", body_points(true)}};
+  nlohmann::json auxiliary = {
+      {"id", "pose_1"}, {"presence", 0.9}, {"keypoints", body_points(true)}};
+  if (!valid_overlay_pose(overlay) || !valid_auxiliary_pose(auxiliary)) {
+    return false;
+  }
+  overlay.erase("bbox");
+  auxiliary["presence"] = 2.0;
+  if (valid_overlay_pose(overlay) || valid_auxiliary_pose(auxiliary)) {
+    return false;
+  }
+  overlay["bbox"] = {1, 2, 3, 4};
+  overlay["keypoints"][0].erase("name");
+  overlay["world_keypoints"][0]["confidence"] = true;
+  return !valid_overlay_pose(overlay);
 }
 
 // Every message carries its port's stream id and 33 valid keypoints per pose (image
@@ -360,9 +434,8 @@ bool validate_metadata(const MetadataJsonListenerResult& result, int metadata_po
       }
       const auto& poses = overlay ? data.at("poses") : data.at("payload").at("poses");
       for (const auto& pose : poses) {
-        if (!has_body_points(pose, "keypoints", !overlay) ||
-            (overlay && !has_body_points(pose, "world_keypoints", true))) {
-          error = "a " + message.metadata_type + " pose did not carry 33 valid keypoints";
+        if ((overlay && !valid_overlay_pose(pose)) || (!overlay && !valid_auxiliary_pose(pose))) {
+          error = "a " + message.metadata_type + " pose did not satisfy the advertised schema";
           return false;
         }
       }
@@ -466,6 +539,10 @@ int main(int argc, char** argv) {
   }
   if (!test_rtp_packet_validation()) {
     std::cerr << "[FAIL] RTP payload type and codec-header validation\n";
+    return 1;
+  }
+  if (!test_pose_schema_validation()) {
+    std::cerr << "[FAIL] advertised pose metadata schema validation\n";
     return 1;
   }
   const auto env_path = [](const char* name, const fs::path& fallback) {
