@@ -16,8 +16,8 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <mutex>
-#include <set>
 #include <string>
 #include <thread>
 #include <tuple>
@@ -154,11 +154,11 @@ void write_config(const fs::path& path, const fs::path& detector, const fs::path
 
 bool validate_metadata(const MetadataJsonListenerResult& result, int metadata_port_base,
                        int num_ports, std::string& error) {
-  bool found_pose = false;
-  bool found_world_pose = false;
+  // Pose counts per (port, timestamp, frame_id). Every accepted frame publishes
+  // both messages, including empty pose arrays when nobody is in view.
   using FrameKey = std::tuple<int, int64_t, std::string>;
-  std::set<FrameKey> pose_frames;
-  std::set<FrameKey> world_pose_frames;
+  std::map<FrameKey, std::size_t> pose_frames;
+  std::map<FrameKey, std::size_t> world_pose_frames;
   try {
     for (const auto& message : result.messages) {
       const auto parsed = nlohmann::json::parse(message.payload);
@@ -172,7 +172,6 @@ bool validate_metadata(const MetadataJsonListenerResult& result, int metadata_po
       if (message.metadata_type == "pose-estimation") {
         const auto& poses = parsed.at("data").at("poses");
         for (const auto& pose : poses) {
-          found_pose = true;
           if (!pose.contains("keypoints") || !pose["keypoints"].is_array() ||
               pose["keypoints"].size() != 33 || !pose.contains("world_keypoints") ||
               !pose["world_keypoints"].is_array() || pose["world_keypoints"].size() != 33 ||
@@ -191,9 +190,7 @@ bool validate_metadata(const MetadataJsonListenerResult& result, int metadata_po
             }
           }
         }
-        if (!poses.empty()) {
-          pose_frames.insert(frame);
-        }
+        pose_frames[frame] = poses.size();
         continue;
       }
 
@@ -205,7 +202,6 @@ bool validate_metadata(const MetadataJsonListenerResult& result, int metadata_po
       }
       const auto& poses = data.at("payload").at("poses");
       for (const auto& pose : poses) {
-        found_world_pose = true;
         if (!pose.contains("keypoints") || !pose["keypoints"].is_array() ||
             pose["keypoints"].size() != 33 || !pose.contains("presence") ||
             !pose["presence"].is_number() || pose["presence"].get<double>() < 0.0 ||
@@ -223,31 +219,31 @@ bool validate_metadata(const MetadataJsonListenerResult& result, int metadata_po
           }
         }
       }
-      if (!poses.empty()) {
-        world_pose_frames.insert(frame);
-      }
+      world_pose_frames[frame] = poses.size();
     }
   } catch (const std::exception& exception) {
     error = std::string("failed to validate pose metadata: ") + exception.what();
     return false;
   }
-  if (!found_pose) {
-    error = "no 2D BlazePose result was published";
-    return false;
-  }
-  if (!found_world_pose) {
-    error = "no 3D BlazePose result was published";
-    return false;
-  }
+  // A frame is paired when both messages share its identity and pose count.
+  const auto paired = [&](const auto& entry) {
+    const auto world = world_pose_frames.find(entry.first);
+    return world != world_pose_frames.end() && world->second == entry.second;
+  };
   for (int port = metadata_port_base; port < metadata_port_base + num_ports; ++port) {
-    const bool matched =
-        std::any_of(pose_frames.begin(), pose_frames.end(), [&](const auto& frame) {
-          return std::get<0>(frame) == port && world_pose_frames.count(frame) != 0;
-        });
+    const bool matched = std::any_of(pose_frames.begin(), pose_frames.end(), [&](const auto& e) {
+      return std::get<0>(e.first) == port && paired(e);
+    });
     if (!matched) {
       error = "2D and 3D metadata did not share a frame identity on port " + std::to_string(port);
       return false;
     }
+  }
+  const bool found_pose = std::any_of(pose_frames.begin(), pose_frames.end(),
+                                      [&](const auto& e) { return e.second > 0 && paired(e); });
+  if (!found_pose) {
+    error = "no stream published a non-empty paired 2D/3D BlazePose result";
+    return false;
   }
   return true;
 }
@@ -270,8 +266,8 @@ int run_case(const std::string& binary, const fs::path& detector, const fs::path
   listener_options.timeout_ms = 10000;
   listener_options.require_all_ports = true;
   // Every accepted frame publishes a pair, including empty pose arrays, so the
-  // listener accepts empty arrays and validate_metadata() requires a non-empty
-  // 2D/3D pair with one frame identity on every port.
+  // listener accepts empty arrays. validate_metadata() requires a 2D/3D pair with
+  // one frame identity on every port and a non-empty pair on at least one port.
   listener_options.contracts = {{"pose-estimation", "poses", 0},
                                 {"auxiliary-visualization", "payload.poses", 0}};
   MetadataJsonListener listener(listener_options);
@@ -289,7 +285,8 @@ int run_case(const std::string& binary, const fs::path& detector, const fs::path
 
   const ProcessResult process = spawn_and_wait(binary, {"--config", config.string()}, timeout_ms);
   // The application has exited; drain the buffered metadata until every port
-  // holds a non-empty correlated pair, a datagram is invalid, or 10 s pass.
+  // holds a correlated 2D/3D pair and at least one pair is non-empty, a datagram
+  // is invalid, or 10 s pass.
   MetadataJsonListenerResult metadata;
   std::string metadata_error = "timed out waiting for paired 2D/3D metadata on every port";
   const auto metadata_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
