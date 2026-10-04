@@ -129,6 +129,13 @@ REJECTED_CONFIGS = [
     ("no-host", config_text().replace("host: 127.0.0.1", "host: ''"), "host must be set"),
     ("five-streams", config_text([stream(i) for i in range(5)]), "between 1 and 4 entries"),
     ("duplicate-id", config_text([stream(0), stream(1, id="camera0")]), "ids must be unique"),
+    (
+        "standalone-dash",
+        config_text([stream(0), stream(1, id="camera0")]).replace(
+            "- id: camera0", "-\n  id: camera0", 1
+        ),
+        "ids must be unique",
+    ),
     ("duplicate-channel", config_text([stream(0), stream(1, channel=0)]), "channels must be"),
     (
         "port-overlap",
@@ -150,10 +157,14 @@ REJECTED_CONFIGS = [
         config_text([stream(0, width=0, height=0, fps=0)]),
         "width, height, and fps must all be > 0",
     ),
+    ("quoted-width", config_text([stream(0, width="640")]), "width must be an integer"),
     ("unknown-codec", config_text([stream(0, codec="hevc")]), "codec must be h264 or h265"),
     ("eleven-people", config_text(pose={"max_people_per_frame": 11}), "between 1 and 10"),
     ("null-frames", config_text(runtime={"frames": None}), "frames must be an integer"),
     ("null-tcp", config_text(input={"tcp": None}), "tcp must be true or false"),
+    ("quoted-frames", config_text(runtime={"frames": "1"}), "frames must be an integer"),
+    ("quoted-tcp", config_text(input={"tcp": "true"}), "tcp must be true or false"),
+    ("quoted-min-score", config_text(detector={"min_score": "0.5"}), "min_score must be numeric"),
 ] + [
     (f"roi-scale-{value}", config_text() + f"pose:\n  roi_scale: {value}\n", "finite and > 0")
     for value in (".nan", ".inf", "0")

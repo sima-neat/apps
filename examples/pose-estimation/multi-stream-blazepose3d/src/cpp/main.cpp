@@ -411,20 +411,30 @@ std::vector<StreamConfig> parse_streams(const fs::path& config_path) {
       }
       continue;
     }
-    const bool entry = line.rfind("- ", 0) == 0;
+    const bool entry = line == "-" || line.rfind("- ", 0) == 0;
     if (indent <= streams_indent && !entry) {
       break;
     }
     if (entry) {
       streams.emplace_back();
-      line = sima_examples::trim_copy(line.substr(2));
+      line = line == "-" ? "" : sima_examples::trim_copy(line.substr(2));
+      if (line.empty()) {
+        continue;
+      }
     }
     const std::size_t colon = line.find(':');
     if (streams.empty() || colon == std::string::npos) {
       throw std::runtime_error("streams must be a list of 'key: value' mappings");
     }
-    const std::string value = decode_yaml_scalar(sima_examples::trim_copy(line.substr(colon + 1)));
-    apply_stream_field(streams.back(), sima_examples::trim_copy(line.substr(0, colon)), value);
+    const std::string key = sima_examples::trim_copy(line.substr(0, colon));
+    const std::string raw_value = sima_examples::trim_copy(line.substr(colon + 1));
+    const bool quoted = raw_value.size() >= 2 &&
+                        (raw_value.front() == '"' || raw_value.front() == '\'') &&
+                        raw_value.back() == raw_value.front();
+    if (quoted && (key == "insight_channel" || key == "width" || key == "height" || key == "fps")) {
+      throw std::runtime_error("stream " + key + " must be an integer");
+    }
+    apply_stream_field(streams.back(), key, decode_yaml_scalar(raw_value));
   }
   return streams;
 }
@@ -443,10 +453,10 @@ bool is_yaml_null(std::string value) {
   return value == "null";
 }
 
-// ScalarConfig intentionally maps explicit `null` to a missing optional value.
-// This shared C++/Python config instead rejects null typed fields, so scan the
-// supported block-style scalar paths before applying defaults.
-void reject_null_typed_fields(const fs::path& config_path) {
+// ScalarConfig removes scalar quotes and maps explicit `null` to a missing
+// optional value. Preserve Python's typed-field behavior by rejecting those
+// representations before ScalarConfig applies conversions or defaults.
+void reject_invalid_typed_fields(const fs::path& config_path) {
   static const std::unordered_map<std::string, std::string> errors = {
       {"input.tcp", " must be true or false"},
       {"input.latency_ms", " must be an integer"},
@@ -477,7 +487,7 @@ void reject_null_typed_fields(const fs::path& config_path) {
       }
       list_block_indent = -1;
     }
-    if (line.rfind("- ", 0) == 0) {
+    if (line == "-" || line.rfind("- ", 0) == 0) {
       list_block_indent = indent;
       continue;
     }
@@ -497,8 +507,10 @@ void reject_null_typed_fields(const fs::path& config_path) {
     full_key += (full_key.empty() ? "" : ".") + key;
     const std::string value = sima_examples::trim_copy(line.substr(colon + 1));
     const auto error = errors.find(full_key);
+    const bool quoted = value.size() >= 2 && (value.front() == '"' || value.front() == '\'') &&
+                        value.back() == value.front();
     if (error != errors.end() &&
-        (value.empty() || value.find('#') != std::string::npos || is_yaml_null(value))) {
+        (value.empty() || quoted || value.find('#') != std::string::npos || is_yaml_null(value))) {
       throw std::runtime_error(full_key + error->second);
     }
     if (value.empty() || value == "{}") {
@@ -555,7 +567,7 @@ void validate_config(const AppConfig& cfg) {
 }
 
 AppConfig load_app_config(const fs::path& config_path) {
-  reject_null_typed_fields(config_path);
+  reject_invalid_typed_fields(config_path);
   const auto raw = sima_examples::ScalarConfig::load(config_path);
   AppConfig cfg;
   cfg.detector_model_path = raw.string_or("models.detector_path", "");
