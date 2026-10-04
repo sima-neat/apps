@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import copy
 import gc
 import glob
 import json
@@ -15,7 +14,6 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from enum import Enum, auto
 from pathlib import Path
 from typing import Any, Callable
 
@@ -32,15 +30,12 @@ LANDMARK_NAMES = (
     "right_heel", "left_foot_index", "right_foot_index",
 )
 
+MAX_DETECTIONS = 100
+MAX_INFLIGHT_PER_STREAM = 4
+
 cv2 = None
 np = None
 pyneat = None
-
-
-class NonblockingPushResult(Enum):
-    ACCEPTED = auto()
-    ABORTED = auto()
-    CANCELLED = auto()
 
 
 @dataclass(frozen=True)
@@ -63,19 +58,14 @@ class AppConfig:
     latency_ms: int = 100
     detector_min_score: float = 0.30
     detector_nms_iou: float = 0.60
-    max_detections: int = 100
-    max_inflight_per_stream: int = 4
     max_people_per_frame: int = 4
     roi_scale: float = 1.65
     pose_presence_threshold: float = 0.50
     pose_temporal_filter_enabled: bool = True
-    pose_job_timeout_ms: int = 1000
-    max_pending_jobs: int = 64
     frame_limit: int = 0
     insight_host: str = ""
     video_port_base: int = 9000
     metadata_port_base: int = 9100
-    video_enabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -83,50 +73,31 @@ class FrameIdentity:
     stream_id: str
     frame_id: int
     pts_ns: int
-    dts_ns: int
-    duration_ns: int
-    input_seq: int
-    orig_input_seq: int
 
 
 @dataclass
 class FrameJob:
     job_id: int
-    stream_sequence: int
     stream_index: int
     rgb: Any
-    people: list[dict[str, Any]]
     identity: FrameIdentity
-    deadline: float
+    people: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
 class PoseInputContext:
     job_id: int
-    stream_index: int
     roi_index: int
     box: dict[str, Any]
     affine: tuple[float, float, float, float, float, float]
-    identity: FrameIdentity
-
-
-@dataclass(frozen=True)
-class PreparedPoseInput:
-    roi_index: int
-    box: dict[str, Any]
-    affine: tuple[float, float, float, float, float, float]
-    tensor: Any
 
 
 @dataclass
 class PoseAggregate:
     stream_index: int
-    stream_sequence: int
     expected: int
     identity: FrameIdentity
-    deadline: float
     completed: int = 0
-    expired: bool = False
     poses: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -141,141 +112,51 @@ def box_iou(left: dict[str, Any], right: dict[str, Any]) -> float:
 
 
 class PoseSmoother:
-    POSITION_ALPHA = 0.45
-    CONFIDENCE_ALPHA = 0.20
-    FAST_MOTION_ALPHA = 0.90
-    FAST_MOTION_THRESHOLD = 0.08
+    """Per-stream exponential smoothing of 2D and world landmarks.
+
+    Each pose is matched to the previous frame's pose with the highest box IoU;
+    matched landmarks move ALPHA of the way toward the new estimate, unmatched
+    poses pass through unchanged.
+    """
+
+    ALPHA = 0.5
     MINIMUM_MATCH_IOU = 0.15
-    RESET_AFTER_NS = 250_000_000
-    NOMINAL_FRAME_NS = 40_000_000
-    MAX_COAST_FRAMES = 2
-    COAST_CONFIDENCE_DECAY = 0.85
 
     def __init__(self) -> None:
         self.previous: list[dict[str, Any]] = []
-        self.last_pts_ns = -1
-        self.missing_frames = 0
 
-    @staticmethod
-    def _blend(previous: float, current: float, alpha: float) -> float:
-        return previous + alpha * (current - previous)
-
-    @staticmethod
-    def _adjusted_alpha(alpha: float, elapsed_frames: float) -> float:
-        return 1.0 - (1.0 - alpha) ** elapsed_frames
-
-    def _motion_alpha(self, normalized_motion: float, elapsed_frames: float) -> float:
-        amount = min(1.0, max(0.0, normalized_motion / self.FAST_MOTION_THRESHOLD))
-        alpha = self._blend(self.POSITION_ALPHA, self.FAST_MOTION_ALPHA, amount)
-        return self._adjusted_alpha(alpha, elapsed_frames)
-
-    def _reset_gap(self, pts_ns: int) -> bool:
-        return (
-            pts_ns >= 0
-            and self.last_pts_ns >= 0
-            and pts_ns - self.last_pts_ns > self.RESET_AFTER_NS
-        )
-
-    def reset(self) -> None:
-        self.previous = []
-        self.last_pts_ns = -1
-        self.missing_frames = 0
-
-    def filter(self, poses: list[dict[str, Any]], pts_ns: int) -> list[dict[str, Any]]:
-        if not poses:
-            if self._reset_gap(pts_ns):
-                self.reset()
-                return poses
-            if self.previous and self.missing_frames < self.MAX_COAST_FRAMES:
-                self.missing_frames += 1
-                coasted = copy.deepcopy(self.previous)
-                decay = self.COAST_CONFIDENCE_DECAY**self.missing_frames
-                for pose in coasted:
-                    pose["presence"] *= decay
-                    pose["box"]["score"] *= decay
-                    for point, world in zip(
-                        pose["keypoints"], pose["world_keypoints"], strict=True
-                    ):
-                        point["confidence"] *= decay
-                        world["confidence"] = point["confidence"]
-                return coasted
-            if self.previous:
-                # The coast window is exhausted; without a usable PTS no reset gap
-                # can fire, so drop the stale subject before a new one appears.
-                self.reset()
-            return poses
-        if self._reset_gap(pts_ns) or (
-            pts_ns >= 0 and self.last_pts_ns >= 0 and pts_ns <= self.last_pts_ns
-        ):
-            self.reset()
-        self.missing_frames = 0
-
-        matches = [-1] * len(poses)
+    def filter(self, poses: list[dict[str, Any]]) -> list[dict[str, Any]]:
         used: set[int] = set()
-        for current_index, pose in enumerate(poses):
-            best_iou = self.MINIMUM_MATCH_IOU
-            for previous_index, previous in enumerate(self.previous):
-                if previous_index in used:
-                    continue
-                overlap = box_iou(pose["box"], previous["box"])
+        for current in poses:
+            match, best_iou = -1, self.MINIMUM_MATCH_IOU
+            for index, previous in enumerate(self.previous):
+                overlap = 0.0 if index in used else box_iou(current["box"], previous["box"])
                 if overlap >= best_iou:
-                    best_iou = overlap
-                    matches[current_index] = previous_index
-            if matches[current_index] >= 0:
-                used.add(matches[current_index])
-
-        elapsed_frames = 1.0
-        if pts_ns >= 0 and self.last_pts_ns >= 0 and pts_ns > self.last_pts_ns:
-            elapsed_frames = min(6.0, max(1.0, (pts_ns - self.last_pts_ns) / self.NOMINAL_FRAME_NS))
-
-        for current_index, previous_index in enumerate(matches):
-            if previous_index < 0:
+                    match, best_iou = index, overlap
+            if match < 0:
                 continue
-            current = poses[current_index]
-            previous = self.previous[previous_index]
-            box = current["box"]
-            previous_box = previous["box"]
-            width = max(0.0, box["x2"] - box["x1"])
-            height = max(0.0, box["y2"] - box["y1"])
-            scale = max(1.0, math.hypot(width, height))
-            center_motion = math.hypot(
-                (box["x1"] + box["x2"] - previous_box["x1"] - previous_box["x2"]) * 0.5,
-                (box["y1"] + box["y2"] - previous_box["y1"] - previous_box["y2"]) * 0.5,
-            ) / scale
-            box_alpha = self._motion_alpha(center_motion, elapsed_frames)
-            for coordinate in ("x1", "y1", "x2", "y2"):
-                box[coordinate] = self._blend(previous_box[coordinate], box[coordinate], box_alpha)
-            confidence_alpha = self._adjusted_alpha(self.CONFIDENCE_ALPHA, elapsed_frames)
-            current["presence"] = self._blend(
-                previous["presence"], current["presence"], confidence_alpha
-            )
-            box["score"] = self._blend(previous_box["score"], box["score"], confidence_alpha)
-
-            for point, old_point, world, old_world in zip(
-                current["keypoints"],
-                previous["keypoints"],
-                current["world_keypoints"],
-                previous["world_keypoints"],
-                strict=True,
-            ):
-                motion = (
-                    math.hypot(point["x"] - old_point["x"], point["y"] - old_point["y"])
-                    / scale
-                )
-                alpha = self._motion_alpha(motion, elapsed_frames)
-                point["x"] = self._blend(old_point["x"], point["x"], alpha)
-                point["y"] = self._blend(old_point["y"], point["y"], alpha)
-                point["confidence"] = self._blend(
-                    old_point["confidence"], point["confidence"], confidence_alpha
-                )
-                for coordinate in ("x", "y", "z"):
-                    world[coordinate] = self._blend(old_world[coordinate], world[coordinate], alpha)
-                world["confidence"] = point["confidence"]
-
+            used.add(match)
+            for key, coordinates in (("keypoints", "xy"), ("world_keypoints", "xyz")):
+                for point, old in zip(current[key], self.previous[match][key], strict=True):
+                    for axis in coordinates:
+                        point[axis] = old[axis] + self.ALPHA * (point[axis] - old[axis])
         self.previous = poses
-        if pts_ns >= 0:
-            self.last_pts_ns = pts_ns
         return poses
+
+
+def keep_latest(mailboxes: list, index: int, job) -> bool:
+    """Store `job` as the newest work for one stream; True when it replaced older
+    work, which is dropped so a slow stage never accumulates stale frames."""
+    replaced = mailboxes[index] is not None
+    mailboxes[index] = job
+    return replaced
+
+
+def send_metadata_pair(send: Callable[[str], bool]) -> bool:
+    """Attempt both messages of a frame; the pair counts only if both were sent."""
+    overlay_sent = send("pose-estimation")
+    world_sent = send("auxiliary-visualization")
+    return overlay_sent and world_sent
 
 
 @dataclass
@@ -287,24 +168,14 @@ class StreamRuntime:
     width: int
     height: int
     fps: int
+    pose_temporal_filter_enabled: bool = True
     source_graph: Any = None
     source_run: Any = None
     metadata_lock: threading.Lock = field(default_factory=threading.Lock)
-    pending_publications: dict[int, tuple[FrameIdentity, list[dict[str, Any]] | None]] = field(
-        default_factory=dict
-    )
-    next_publication_sequence: int = 1
     pose_smoother: PoseSmoother = field(default_factory=PoseSmoother)
-    pose_temporal_filter_enabled: bool = True
-    metadata_frames: int = 0
-    metadata_send_failures: int = 0
-    source_frames: int = 0
-    detector_frames: int = 0
-    selected_rois: int = 0
-    completed_rois: int = 0
-    detector_mailbox_drops: int = 0
-    pose_mailbox_drops: int = 0
-    timed_out_jobs: int = 0
+    frames_in: int = 0
+    frames_out: int = 0
+    # Admitted frames that are still queued or inside a model.
     outstanding_frames: int = 0
     closed: bool = False
 
@@ -312,11 +183,11 @@ class StreamRuntime:
 class SharedState:
     def __init__(self, stream_count: int) -> None:
         self.condition = threading.Condition()
+        # Latest-only work per stream; newer frames replace queued ones.
         self.detector_mailboxes: list[FrameJob | None] = [None] * stream_count
         self.pose_mailboxes: list[FrameJob | None] = [None] * stream_count
-        # None entries are expired inputs retained only to discard their
-        # eventual FIFO-correlated model outputs.
-        self.pending_detector_outputs: deque[FrameJob | None] = deque()
+        # FIFO context for each input pushed to a shared model, in output order.
+        self.pending_detector_outputs: deque[FrameJob] = deque()
         self.pending_pose_outputs: deque[PoseInputContext] = deque()
         self.aggregates: dict[int, PoseAggregate] = {}
         self.next_detector_stream = 0
@@ -359,7 +230,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         description="Multi-stream RTSP YOLO26-to-BlazePose Insight application"
     )
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
-    parser.add_argument("--validate-config-only", action="store_true")
     return parser.parse_args(argv)
 
 
@@ -401,12 +271,9 @@ def bool_or(raw: dict[str, Any], key: str, default: bool) -> bool:
 
 
 def parse_codec(value: str) -> str:
-    lowered = value.lower()
-    if lowered in {"h264", "avc", "h.264"}:
-        return "h264"
-    if lowered in {"h265", "hevc", "h.265"}:
-        return "h265"
-    raise ValueError("stream codec must be h264/avc or h265/hevc")
+    if value not in {"h264", "h265"}:
+        raise ValueError("stream codec must be h264 or h265")
+    return value
 
 
 def validate_config(cfg: AppConfig) -> None:
@@ -424,76 +291,45 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("detector.min_score must be between 0 and 1")
     if not 0.0 <= cfg.detector_nms_iou <= 1.0:
         raise ValueError("detector.nms_iou must be between 0 and 1")
-    if cfg.max_detections <= 0:
-        raise ValueError("detector.max_detections must be > 0")
-    if cfg.max_inflight_per_stream != -1 and cfg.max_inflight_per_stream <= 0:
-        raise ValueError("detector.max_inflight_per_stream must be -1 or > 0")
     if not 1 <= cfg.max_people_per_frame <= 10:
         raise ValueError("pose.max_people_per_frame must be between 1 and 10")
     if not math.isfinite(cfg.roi_scale) or cfg.roi_scale <= 0.0:
         raise ValueError("pose.roi_scale must be finite and > 0")
     if not 0.0 <= cfg.pose_presence_threshold <= 1.0:
         raise ValueError("pose.presence_threshold must be between 0 and 1")
-    if cfg.pose_job_timeout_ms <= 0:
-        raise ValueError("pose.job_timeout_ms must be > 0")
-    if cfg.max_pending_jobs <= 0:
-        raise ValueError("pose.max_pending_jobs must be > 0")
     if cfg.frame_limit < 0:
         raise ValueError("runtime.frames must be >= 0")
     if not 1 <= cfg.video_port_base <= 65535 or not 1 <= cfg.metadata_port_base <= 65535:
         raise ValueError("Insight port bases must be between 1 and 65535")
-    ids = [stream.id for stream in cfg.streams]
-    channels = [stream.insight_channel for stream in cfg.streams]
-    if len(ids) != len(set(ids)):
-        raise ValueError("stream ids must be unique")
-    if len(channels) != len(set(channels)):
-        raise ValueError("stream insight channels must be unique")
     for stream in cfg.streams:
-        no_explicit_caps = stream.width == stream.height == stream.fps == 0
-        complete_explicit_caps = stream.width > 0 and stream.height > 0 and stream.fps > 0
-        if not (no_explicit_caps or complete_explicit_caps):
+        if not stream.id:
+            raise ValueError("stream id must be set")
+        if not stream.url:
+            raise ValueError("stream url must be set")
+        if stream.insight_channel < 0:
+            raise ValueError("stream insight_channel must be >= 0")
+        no_caps = stream.width == stream.height == stream.fps == 0
+        all_caps = stream.width > 0 and stream.height > 0 and stream.fps > 0
+        if not (no_caps or all_caps):
             raise ValueError(
                 "stream width, height, and fps must either all be omitted or all be > 0"
             )
-        if cfg.video_enabled and cfg.video_port_base + stream.insight_channel > 65535:
+        if cfg.video_port_base + stream.insight_channel > 65535:
             raise ValueError("stream video port must be <= 65535")
         if cfg.metadata_port_base + stream.insight_channel > 65535:
             raise ValueError("stream metadata port must be <= 65535")
-    video_ports = {
-        cfg.video_port_base + stream.insight_channel for stream in cfg.streams
-    }
-    metadata_ports = {
-        cfg.metadata_port_base + stream.insight_channel for stream in cfg.streams
-    }
-    if cfg.video_enabled and video_ports & metadata_ports:
+    if len({stream.id for stream in cfg.streams}) != len(cfg.streams):
+        raise ValueError("stream ids must be unique")
+    channels = {stream.insight_channel for stream in cfg.streams}
+    if len(channels) != len(cfg.streams):
+        raise ValueError("stream insight channels must be unique")
+    video_ports = {cfg.video_port_base + channel for channel in channels}
+    if video_ports & {cfg.metadata_port_base + channel for channel in channels}:
         raise ValueError("Insight video and metadata ports must not overlap")
 
 
-STREAM_SETTINGS = frozenset({"id", "url", "codec", "insight_channel", "width", "height", "fps"})
-
-
-FLOW_STYLE_ERROR = "flow-style YAML collections are not supported; use block style"
-
-
-def reject_flow_collections(text: str) -> None:
-    """Accept only block-style YAML, the subset the C++ entry point also reads."""
-    pending = [yaml.compose(text)]
-    while pending:
-        node = pending.pop()
-        if isinstance(node, yaml.MappingNode):
-            if node.flow_style and node.value:
-                raise ValueError(f"{FLOW_STYLE_ERROR} (line {node.start_mark.line + 1})")
-            pending.extend(child for pair in node.value for child in pair)
-        elif isinstance(node, yaml.SequenceNode):
-            if node.flow_style and node.value:
-                raise ValueError(f"{FLOW_STYLE_ERROR} (line {node.start_mark.line + 1})")
-            pending.extend(node.value)
-
-
 def load_app_config(config_path: Path) -> AppConfig:
-    text = config_path.read_text(encoding="utf-8")
-    reject_flow_collections(text)
-    raw = yaml.safe_load(text) or {}
+    raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     if not isinstance(raw, dict):
         raise TypeError("config root must be a mapping")
     models = section(raw, "models")
@@ -503,41 +339,21 @@ def load_app_config(config_path: Path) -> AppConfig:
     runtime = section(raw, "runtime")
     output = section(raw, "output")
     insight = section(output, "insight")
-
-    raw_streams = raw.get("streams")
-    if not isinstance(raw_streams, list) or not raw_streams:
-        raise ValueError("streams must be a non-empty list")
-    streams: list[StreamConfig] = []
-    for index, value in enumerate(raw_streams):
-        if not isinstance(value, dict):
-            raise TypeError(f"streams[{index}] must be a mapping")
-        for key in value:
-            if key not in STREAM_SETTINGS:
-                raise ValueError(f"unknown stream setting: {key}")
-        stream_id = string_or(value, "id")
-        url = string_or(value, "url")
-        channel = int_or(value, "insight_channel", -1)
-        if not stream_id:
-            raise ValueError(f"streams[{index}].id must be set")
-        if not url:
-            raise ValueError(f"streams[{index}].url must be set")
-        if channel < 0:
-            raise ValueError(f"streams[{index}].insight_channel must be >= 0")
-        width = int_or(value, "width", 0)
-        height = int_or(value, "height", 0)
-        fps = int_or(value, "fps", 0)
-        streams.append(
-            StreamConfig(
-                stream_id,
-                url,
-                parse_codec(string_or(value, "codec", "h264")),
-                channel,
-                width,
-                height,
-                fps,
-            )
+    raw_streams = raw.get("streams") or []
+    if not isinstance(raw_streams, list) or not all(isinstance(item, dict) for item in raw_streams):
+        raise ValueError("streams must be a list of 'key: value' mappings")
+    streams = [
+        StreamConfig(
+            string_or(item, "id"),
+            string_or(item, "url"),
+            parse_codec(string_or(item, "codec", "h264")),
+            int_or(item, "insight_channel", -1),
+            int_or(item, "width", 0),
+            int_or(item, "height", 0),
+            int_or(item, "fps", 0),
         )
-
+        for item in raw_streams
+    ]
     cfg = AppConfig(
         detector_model_path=string_or(models, "detector_path"),
         pose_model_path=string_or(models, "pose_path"),
@@ -546,19 +362,14 @@ def load_app_config(config_path: Path) -> AppConfig:
         latency_ms=int_or(input_cfg, "latency_ms", 100),
         detector_min_score=float_or(detector, "min_score", 0.30),
         detector_nms_iou=float_or(detector, "nms_iou", 0.60),
-        max_detections=int_or(detector, "max_detections", 100),
-        max_inflight_per_stream=int_or(detector, "max_inflight_per_stream", 4),
         max_people_per_frame=int_or(pose, "max_people_per_frame", 4),
         roi_scale=float_or(pose, "roi_scale", 1.65),
         pose_presence_threshold=float_or(pose, "presence_threshold", 0.50),
         pose_temporal_filter_enabled=bool_or(pose, "temporal_filter_enabled", True),
-        pose_job_timeout_ms=int_or(pose, "job_timeout_ms", 1000),
-        max_pending_jobs=int_or(pose, "max_pending_jobs", 64),
         frame_limit=int_or(runtime, "frames", 0),
         insight_host=string_or(insight, "host"),
         video_port_base=int_or(insight, "video_port_base", 9000),
         metadata_port_base=int_or(insight, "metadata_port_base", 9100),
-        video_enabled=bool_or(output, "video_enabled", True),
     )
     validate_config(cfg)
     return cfg
@@ -705,12 +516,6 @@ def world_pose_auxiliary_from_overlay(overlay: dict[str, Any]) -> dict[str, Any]
     return data
 
 
-def world_pose_auxiliary_data(
-    poses: list[dict[str, Any]], stream_id: str
-) -> dict[str, Any]:
-    return world_pose_auxiliary_from_overlay(poses_data(poses, stream_id))
-
-
 def rtsp_codec(codec: str):
     return pyneat.RtspCodec.H265 if codec == "h265" else pyneat.RtspCodec.H264
 
@@ -756,14 +561,10 @@ def build_source_options(
     return options
 
 
-def encoded_format(codec):
-    return pyneat.Format.H265 if codec == pyneat.RtspCodec.H265 else pyneat.Format.H264
-
-
 def encoded_input_options(codec, memory_policy):
     options = pyneat.InputOptions()
     options.payload_type = pyneat.PayloadType.Encoded
-    options.format = encoded_format(codec)
+    options.format = pyneat.Format.H265 if codec == pyneat.RtspCodec.H265 else pyneat.Format.H264
     options.memory_policy = memory_policy
     return options
 
@@ -853,7 +654,7 @@ def make_detector_model(cfg: AppConfig, max_width: int, max_height: int):
     options.decode_type = pyneat.BoxDecodeType.YoloV26
     options.score_threshold = cfg.detector_min_score
     options.nms_iou_threshold = cfg.detector_nms_iou
-    options.top_k = cfg.max_detections
+    options.top_k = MAX_DETECTIONS
     return pyneat.Model(cfg.detector_model_path, options)
 
 
@@ -874,10 +675,6 @@ def copy_identity(identity: FrameIdentity, sample) -> None:
     sample.stream_id = identity.stream_id
     sample.frame_id = identity.frame_id
     sample.pts_ns = identity.pts_ns
-    sample.dts_ns = identity.dts_ns
-    sample.duration_ns = identity.duration_ns
-    sample.input_seq = identity.input_seq
-    sample.orig_input_seq = identity.orig_input_seq
 
 
 def reliable_model_run_options():
@@ -890,14 +687,14 @@ def reliable_model_run_options():
     return options
 
 
-def pose_input_sample(tensor, context: PoseInputContext | None):
+def pose_input_sample(tensor, identity: FrameIdentity | None):
     sample = pyneat.make_tensor_sample("pose_input", tensor)
     sample.payload_type = pyneat.PayloadType.Tensor
     sample.media_type = "application/vnd.simaai.tensor"
     sample.format = tensor.semantic.tess.format
     sample.payload_tag = sample.format
-    if context is not None:
-        copy_identity(context.identity, sample)
+    if identity is not None:
+        copy_identity(identity, sample)
     return sample
 
 
@@ -993,12 +790,12 @@ def make_rgb_output(stream: StreamRuntime):
     return graph
 
 
-def realtime_link(cfg: AppConfig, stream: StreamRuntime):
+def realtime_link(stream: StreamRuntime):
     options = pyneat.GraphLinkOptions()
     options.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
     options.stream_id = stream.config.id
-    options.max_inflight_per_stream = cfg.max_inflight_per_stream
-    options.max_inflight_total = cfg.max_inflight_per_stream
+    options.max_inflight_per_stream = MAX_INFLIGHT_PER_STREAM
+    options.max_inflight_total = MAX_INFLIGHT_PER_STREAM
     return options
 
 
@@ -1040,19 +837,14 @@ def build_runtime(cfg: AppConfig) -> AppRuntime:
         source = make_encoded_source(stream.source_options)
         decoder = make_decoder(stream.source_options)
         source_graph.connect(source, decoder)
-        source_graph.connect(
-            decoder, make_rgb_output(stream), realtime_link(cfg, stream)
-        )
-        if cfg.video_enabled:
-            source_graph.connect(
-                source, make_video_sender(cfg, stream), realtime_link(cfg, stream)
-            )
+        source_graph.connect(decoder, make_rgb_output(stream), realtime_link(stream))
+        source_graph.connect(source, make_video_sender(cfg, stream), realtime_link(stream))
         stream.source_graph = source_graph
         print(
             f"[stream {stream.config.id}] codec={stream.config.codec} "
             f"source={stream.width}x{stream.height}@{stream.fps} "
             f"channel={stream.config.insight_channel} "
-            f"video={cfg.video_port_base + stream.config.insight_channel if cfg.video_enabled else 'disabled'} "
+            f"video={cfg.video_port_base + stream.config.insight_channel} "
             f"metadata={stream.metadata_sender.metadata_port()}",
             flush=True,
         )
@@ -1147,7 +939,7 @@ def select_people(
     sample, stream: StreamRuntime, cfg: AppConfig
 ) -> list[dict[str, Any]]:
     boxes = parse_boxes_strict(
-        extract_bbox_payload(sample), stream.width, stream.height, cfg.max_detections
+        extract_bbox_payload(sample), stream.width, stream.height, MAX_DETECTIONS
     )
     people = sorted(
         (box for box in boxes if int(box["class_id"]) == 0),
@@ -1167,100 +959,51 @@ def require_rgb_tensor(sample):
     return tensors[0]
 
 
-def identity_from_sample(sample) -> FrameIdentity:
-    return FrameIdentity(
-        str(sample.stream_id),
-        int(sample.frame_id),
-        int(sample.pts_ns),
-        int(sample.dts_ns),
-        int(sample.duration_ns),
-        int(sample.input_seq),
-        int(sample.orig_input_seq),
-    )
+def finish_frame(runtime: AppRuntime, stream: StreamRuntime) -> None:
+    """Mark one admitted frame finished: published, replaced by newer work, or
+    without people."""
+    with runtime.state.condition:
+        stream.outstanding_frames -= 1
+        runtime.state.condition.notify_all()
 
 
-def select_frame_id(
-    frame_id: int, orig_input_seq: int, input_seq: int, pull_sequence: int
-) -> int:
-    if frame_id >= 0:
-        return frame_id
-    if orig_input_seq >= 0:
-        return orig_input_seq
-    if input_seq >= 0:
-        return input_seq
-    return pull_sequence
-
-
-def publish_metadata_locked(
+def publish_frame(
     stream: StreamRuntime, identity: FrameIdentity, poses: list[dict[str, Any]]
 ) -> None:
-    timestamp_ms = identity.pts_ns // 1_000_000 if identity.pts_ns >= 0 else -1
-    frame_id = str(identity.frame_id) if identity.frame_id >= 0 else ""
-    if stream.pose_temporal_filter_enabled:
-        poses = stream.pose_smoother.filter(poses, identity.pts_ns)
-    overlay = poses_data(poses, identity.stream_id)
-    overlay_data = json.dumps(overlay, separators=(",", ":"))
-    auxiliary_data = json.dumps(
-        world_pose_auxiliary_from_overlay(overlay), separators=(",", ":")
-    )
-    # runtime.frames counts correlated pairs queued for Insight, so a frame counts
-    # only when both messages were queued. A failed pair still completes its frame.
-    pair_sent = True
-    for metadata_type, data in (
-        ("pose-estimation", overlay_data),
-        ("auxiliary-visualization", auxiliary_data),
-    ):
-        try:
-            sent = bool(
-                stream.metadata_sender.send_metadata(metadata_type, data, timestamp_ms, frame_id)
-            )
-            error = ""
-        except RuntimeError as exc:  # pyneat raises when the sender reports an error.
-            sent, error = False, str(exc)
-        if not sent:
-            pair_sent = False
-            print(
-                f"[warn] stream {stream.config.id} {metadata_type} metadata send failed: {error}",
-                file=sys.stderr,
-            )
-    if pair_sent:
-        stream.metadata_frames += 1
-    else:
-        stream.metadata_send_failures += 1
-
-
-def complete_frame(
-    stream: StreamRuntime,
-    sequence: int,
-    identity: FrameIdentity,
-    poses: list[dict[str, Any]] | None,
-) -> None:
+    """Send one frame's 2D and 3D metadata. The per-stream lock keeps the two
+    messages of one frame from interleaving with another frame's."""
     with stream.metadata_lock:
-        if (
-            sequence < stream.next_publication_sequence
-            or sequence in stream.pending_publications
-        ):
-            raise RuntimeError(f"duplicate frame completion for stream {stream.config.id}")
-        stream.pending_publications[sequence] = (identity, poses)
-        while stream.next_publication_sequence in stream.pending_publications:
-            ready_identity, ready_poses = stream.pending_publications.pop(
-                stream.next_publication_sequence
-            )
-            stream.next_publication_sequence += 1
-            if ready_poses is not None:
-                publish_metadata_locked(stream, ready_identity, ready_poses)
-        if stream.outstanding_frames <= 0:
-            raise RuntimeError("completed a frame that was not outstanding")
-        stream.outstanding_frames -= 1
+        if stream.pose_temporal_filter_enabled:
+            poses = stream.pose_smoother.filter(poses)
+        overlay = poses_data(poses, identity.stream_id)
+        payloads = {
+            "pose-estimation": json.dumps(overlay, separators=(",", ":")),
+            "auxiliary-visualization": json.dumps(
+                world_pose_auxiliary_from_overlay(overlay), separators=(",", ":")
+            ),
+        }
+        timestamp_ms = identity.pts_ns // 1_000_000 if identity.pts_ns >= 0 else -1
 
+        def send(metadata_type: str) -> bool:
+            try:
+                sent = bool(
+                    stream.metadata_sender.send_metadata(
+                        metadata_type, payloads[metadata_type], timestamp_ms, str(identity.frame_id)
+                    )
+                )
+                error = ""
+            except RuntimeError as exc:  # pyneat raises when the sender reports an error.
+                sent, error = False, str(exc)
+            if not sent:
+                print(
+                    f"[warn] stream {stream.config.id} {metadata_type} "
+                    f"metadata send failed: {error}",
+                    file=sys.stderr,
+                )
+            return sent
 
-def skip_frame(stream: StreamRuntime, job: FrameJob) -> None:
-    complete_frame(stream, job.stream_sequence, job.identity, None)
-
-
-def time_out_frame(stream: StreamRuntime, job: FrameJob) -> None:
-    stream.timed_out_jobs += 1
-    complete_frame(stream, job.stream_sequence, job.identity, [])
+        if send_metadata_pair(send):
+            stream.frames_out += 1
 
 
 def affine_from_tensor(tensor) -> tuple[float, float, float, float, float, float]:
@@ -1288,6 +1031,7 @@ def set_error(runtime: AppRuntime, error: BaseException) -> None:
 def take_next_job(
     runtime: AppRuntime, mailboxes: list[FrameJob | None], next_stream_attr: str
 ) -> FrameJob | None:
+    """Wait for queued work and take it round-robin across streams."""
     state = runtime.state
     with state.condition:
         state.condition.wait_for(lambda: state.stopping or any(mailboxes))
@@ -1304,52 +1048,26 @@ def take_next_job(
     return None
 
 
-def stream_can_admit_frame(stream: StreamRuntime, frame_limit: int) -> bool:
-    if frame_limit <= 0:
-        return True
-    with stream.metadata_lock:
-        return (
-            stream.metadata_frames < frame_limit
-            and stream.outstanding_frames < frame_limit - stream.metadata_frames
-        )
-
-
-def try_push_with_context(
-    runtime: AppRuntime,
-    run,
-    input_name: str,
-    sample,
-    pending: deque,
-    context,
-    rejection_message: str,
-    abort_retry: Callable[[], bool] | None = None,
-) -> NonblockingPushResult:
+def push_with_context(
+    runtime: AppRuntime, run, input_name: str, sample, pending: deque, context, rejection: str
+) -> bool:
+    """Push one model input without the blocking push binding. Its FIFO context
+    is queued first so the output puller can always correlate the result.
+    Returns False when the application is stopping."""
     state = runtime.state
     while True:
         with state.condition:
             if state.stopping:
-                return NonblockingPushResult.CANCELLED
-            if abort_retry is not None and abort_retry():
-                return NonblockingPushResult.ABORTED
+                return False
             pending.append(context)
-        accepted = run.try_push(input_name, [sample])
-        if accepted:
-            return NonblockingPushResult.ACCEPTED
+        if run.try_push(input_name, [sample]):
+            return True
         with state.condition:
-            if pending and pending[-1] is None:
-                pending.pop()
-                state.condition.notify_all()
-                return NonblockingPushResult.CANCELLED
-            if not pending or pending[-1] is not context:
-                raise RuntimeError("model input context changed after a rejected push")
-            pending.pop()
-            if abort_retry is not None and abort_retry():
-                state.condition.notify_all()
-                return NonblockingPushResult.ABORTED
             if state.stopping:
-                return NonblockingPushResult.CANCELLED
+                return False
+            pending.pop()
             if not run.can_push():
-                raise RuntimeError(rejection_message)
+                raise RuntimeError(rejection)
             state.condition.wait(0.001)
 
 
@@ -1365,19 +1083,14 @@ def close_source_stream(runtime: AppRuntime, stream: StreamRuntime, reason: str)
         runtime.state.condition.notify_all()
 
 
-def pull_source_frames(runtime: AppRuntime, cfg: AppConfig, stream_index: int) -> None:
+def pull_source_frames(runtime: AppRuntime, cfg: AppConfig, stream: StreamRuntime) -> None:
     state = runtime.state
-    stream = runtime.streams[stream_index]
-    output = frame_output_name(stream_index)
+    output = frame_output_name(stream.index)
     while True:
         with state.condition:
             if state.stopping:
                 return
-        with stream.metadata_lock:
-            frame_limit_reached = (
-                cfg.frame_limit > 0 and stream.metadata_frames >= cfg.frame_limit
-            )
-        if frame_limit_reached:
+        if cfg.frame_limit > 0 and stream.frames_in >= cfg.frame_limit:
             close_source_stream(runtime, stream, "runtime frame limit reached")
             return
         try:
@@ -1387,105 +1100,65 @@ def pull_source_frames(runtime: AppRuntime, cfg: AppConfig, stream_index: int) -
             if sample is None:
                 close_source_stream(runtime, stream, "source reached end of stream")
                 return
-            dropped = None
+            rgb = require_rgb_tensor(sample)
             with state.condition:
                 if state.stopping:
                     return
-                if not stream_can_admit_frame(stream, cfg.frame_limit):
-                    continue
-                source_identity = identity_from_sample(sample)
-                stream.source_frames += 1
-                identity = FrameIdentity(
-                    stream.config.id,
-                    select_frame_id(
-                        source_identity.frame_id,
-                        source_identity.orig_input_seq,
-                        source_identity.input_seq,
-                        stream.source_frames,
-                    ),
-                    source_identity.pts_ns,
-                    source_identity.dts_ns,
-                    source_identity.duration_ns,
-                    source_identity.input_seq,
-                    source_identity.orig_input_seq,
-                )
-                job = FrameJob(
-                    runtime.next_job_id,
-                    stream.source_frames,
-                    stream_index,
-                    require_rgb_tensor(sample),
-                    [],
-                    identity,
-                    time.monotonic() + cfg.pose_job_timeout_ms / 1000.0,
-                )
+                stream.frames_in += 1
+                identity = FrameIdentity(stream.config.id, stream.frames_in, int(sample.pts_ns))
+                job = FrameJob(runtime.next_job_id, stream.index, rgb, identity)
                 runtime.next_job_id += 1
-                with stream.metadata_lock:
+                if not keep_latest(state.detector_mailboxes, stream.index, job):
                     stream.outstanding_frames += 1
-                if state.detector_mailboxes[stream_index] is not None:
-                    dropped = state.detector_mailboxes[stream_index]
-                    stream.detector_mailbox_drops += 1
-                state.detector_mailboxes[stream_index] = job
                 state.condition.notify_all()
-            if dropped is not None:
-                skip_frame(stream, dropped)
         except Exception as error:  # noqa: BLE001 - isolate a failed source.
             close_source_stream(runtime, stream, str(error))
             return
 
 
-def run_source_stream(runtime: AppRuntime, cfg: AppConfig, stream_index: int) -> None:
-    stream = runtime.streams[stream_index]
+def run_source_stream(runtime: AppRuntime, cfg: AppConfig, stream: StreamRuntime) -> None:
     try:
         options = pyneat.RunOptions()
         options.preset = pyneat.RunPreset.Realtime
         options.output_memory = pyneat.OutputMemory.ZeroCopy
         source_run = stream.source_graph.build(options)
-        stopping = False
         with runtime.state.condition:
-            if runtime.state.stopping:
+            stopping = runtime.state.stopping
+            if stopping:
                 stream.closed = True
-                stopping = True
-                runtime.state.condition.notify_all()
             else:
                 stream.source_run = source_run
         if stopping:
             source_run.close()
             return
-        pull_source_frames(runtime, cfg, stream_index)
+        pull_source_frames(runtime, cfg, stream)
     except Exception as error:  # noqa: BLE001 - isolate a failed source.
         close_source_stream(runtime, stream, str(error))
+
+
+def pull_model_output(runtime: AppRuntime, run, output: str, model: str):
+    """Pull one output of a shared model; None when the application is stopping.
+    Raises when the Run closed on its own."""
+    while True:
+        sample = run.pull(output, 20)
+        if sample is not None:
+            return sample
+        with runtime.state.condition:
+            if runtime.state.stopping:
+                return None
+        if not run.can_pull():
+            detail = run.last_error()
+            raise RuntimeError(
+                f"{model} output closed unexpectedly" + (f": {detail}" if detail else "")
+            )
 
 
 def dispatch_detector_jobs(runtime: AppRuntime, cfg: AppConfig) -> None:
     try:
         state = runtime.state
-        while True:
-            job = take_next_job(
-                runtime, state.detector_mailboxes, "next_detector_stream"
-            )
-            if job is None:
-                return
-            stream = runtime.streams[job.stream_index]
-            if time.monotonic() >= job.deadline:
-                time_out_frame(stream, job)
-                continue
-            detector_frame = job.rgb.cvu()
-            sample = image_input_sample("detector_input", detector_frame, job.identity)
-            with state.condition:
-                state.condition.wait_for(
-                    lambda: (
-                        state.stopping
-                        or len(state.pending_detector_outputs) < cfg.max_pending_jobs
-                    ),
-                    timeout=max(0.0, job.deadline - time.monotonic()),
-                )
-                expired_while_waiting = time.monotonic() >= job.deadline
-                if state.stopping:
-                    return
-            if expired_while_waiting:
-                time_out_frame(stream, job)
-                continue
-            push_result = try_push_with_context(
+        while job := take_next_job(runtime, state.detector_mailboxes, "next_detector_stream"):
+            sample = image_input_sample("detector_input", job.rgb.cvu(), job.identity)
+            if not push_with_context(
                 runtime,
                 runtime.detector_run,
                 "detector_input",
@@ -1493,29 +1166,38 @@ def dispatch_detector_jobs(runtime: AppRuntime, cfg: AppConfig) -> None:
                 state.pending_detector_outputs,
                 job,
                 "YOLO26 Run rejected a frame input",
-                lambda job=job: time.monotonic() >= job.deadline,
-            )
-            if push_result is not NonblockingPushResult.ACCEPTED:
-                with state.condition:
-                    if state.stopping:
-                        return
-                if push_result is NonblockingPushResult.ABORTED:
-                    time_out_frame(stream, job)
-                continue
+            ):
+                return
     except Exception as error:  # noqa: BLE001 - propagate worker failures to the owner thread.
         set_error(runtime, error)
 
 
-def expire_detector_jobs(runtime: AppRuntime) -> None:
-    now = time.monotonic()
-    expired = []
-    with runtime.state.condition:
-        for index, job in enumerate(runtime.state.pending_detector_outputs):
-            if job is not None and now >= job.deadline:
-                expired.append(job)
-                runtime.state.pending_detector_outputs[index] = None
-    for job in expired:
-        time_out_frame(runtime.streams[job.stream_index], job)
+def pull_detector_outputs(runtime: AppRuntime, cfg: AppConfig) -> None:
+    try:
+        state = runtime.state
+        while (
+            sample := pull_model_output(runtime, runtime.detector_run, "detector_output", "YOLO26")
+        ) is not None:
+            with state.condition:
+                if not state.pending_detector_outputs:
+                    if state.stopping:
+                        return
+                    raise RuntimeError("YOLO26 output arrived without pending frame context")
+                job = state.pending_detector_outputs.popleft()
+            stream = runtime.streams[job.stream_index]
+            job.people = select_people(sample, stream, cfg)
+            if not job.people:
+                finish_frame(runtime, stream)
+                continue
+            with state.condition:
+                if state.stopping:
+                    return
+                dropped = keep_latest(state.pose_mailboxes, job.stream_index, job)
+                state.condition.notify_all()
+            if dropped:
+                finish_frame(runtime, stream)
+    except Exception as error:  # noqa: BLE001 - propagate worker failures to the owner thread.
+        set_error(runtime, error)
 
 
 def writable_rgb_view(tensor):
@@ -1526,201 +1208,46 @@ def writable_rgb_view(tensor):
     return rgb_view if rgb_view.flags.writeable else rgb_view.copy()
 
 
-def pull_detector_outputs(runtime: AppRuntime, cfg: AppConfig) -> None:
-    try:
-        state = runtime.state
-        while True:
-            expire_detector_jobs(runtime)
-            with state.condition:
-                if state.stopping and not state.pending_detector_outputs:
-                    return
-            sample = runtime.detector_run.pull("detector_output", 20)
-            if sample is None:
-                with state.condition:
-                    if state.stopping:
-                        return
-                if not runtime.detector_run.can_pull():
-                    detail = runtime.detector_run.last_error()
-                    raise RuntimeError(
-                        "YOLO26 output closed unexpectedly"
-                        + (f": {detail}" if detail else "")
-                    )
-                continue
-            with state.condition:
-                if not state.pending_detector_outputs:
-                    if state.stopping:
-                        return
-                    raise RuntimeError(
-                        "YOLO26 output arrived without pending frame context"
-                    )
-                job = state.pending_detector_outputs.popleft()
-                state.condition.notify_all()
-
-            if job is None:
-                continue
-
-            stream = runtime.streams[job.stream_index]
-            stream.detector_frames += 1
-            if time.monotonic() >= job.deadline:
-                time_out_frame(stream, job)
-                continue
-            job.people = select_people(sample, stream, cfg)
-            stream.selected_rois += len(job.people)
-            if not job.people:
-                complete_frame(stream, job.stream_sequence, job.identity, [])
-                continue
-
-            dropped = None
-            with state.condition:
-                if state.stopping:
-                    return
-                if state.pose_mailboxes[job.stream_index] is not None:
-                    dropped = state.pose_mailboxes[job.stream_index]
-                    stream.pose_mailbox_drops += 1
-                state.pose_mailboxes[job.stream_index] = job
-                state.condition.notify_all()
-            if dropped is not None:
-                skip_frame(stream, dropped)
-    except Exception as error:  # noqa: BLE001 - propagate worker failures to the owner thread.
-        set_error(runtime, error)
-
-
 def dispatch_pose_jobs(runtime: AppRuntime, cfg: AppConfig) -> None:
     try:
-        while True:
-            job = take_next_job(
-                runtime, runtime.state.pose_mailboxes, "next_pose_stream"
-            )
-            if job is None:
-                return
-            stream = runtime.streams[job.stream_index]
-            if time.monotonic() >= job.deadline:
-                time_out_frame(stream, job)
-                continue
-            if not job.people:
-                complete_frame(stream, job.stream_sequence, job.identity, [])
-                continue
-
-            rgb_view = writable_rgb_view(job.rgb)
-            requested_rois = [
-                square_roi(box, cfg.roi_scale) for box in job.people
-            ]
+        state = runtime.state
+        while job := take_next_job(runtime, state.pose_mailboxes, "next_pose_stream"):
+            rois = [pyneat.PreprocessRoi(0, *square_roi(box, cfg.roi_scale)) for box in job.people]
             output = pyneat.stages.preproc(
-                [rgb_view],
+                [writable_rgb_view(job.rgb)],
                 runtime.pose_model,
-                rois=[
-                    pyneat.PreprocessRoi(0, *roi) for roi in requested_rois
-                ],
+                rois=rois,
                 image_format=pyneat.PixelFormat.RGB,
                 copy=False,
             )
-            if len(output) != len(requested_rois):
-                raise RuntimeError(
-                    "BlazePose Preproc output count does not match ROI count"
+            if len(output) != len(rois):
+                raise RuntimeError("BlazePose Preproc output count does not match ROI count")
+            # Detached asynchronous Runs may retain their input after push().
+            # Give each ROI independent EV74 storage before enqueueing.
+            inputs = [
+                (
+                    PoseInputContext(job.job_id, index, box, affine_from_tensor(tensor)),
+                    tensor.clone().cvu(),
                 )
-            prepared_inputs = []
-            for person_index, tensor in enumerate(output):
-                affine = affine_from_tensor(tensor)
-                # Detached asynchronous Runs may retain their input after push().
-                # Give each ROI independent EV74 storage before enqueueing.
-                prepared_inputs.append(
-                    PreparedPoseInput(
-                        person_index,
-                        job.people[person_index],
-                        affine,
-                        tensor.clone().cvu(),
-                    )
-                )
-
-            state = runtime.state
+                for index, (box, tensor) in enumerate(zip(job.people, output, strict=True))
+            ]
             with state.condition:
-                state.condition.wait_for(
-                    lambda state=state: (
-                        state.stopping or len(state.aggregates) < cfg.max_pending_jobs
-                    ),
-                    timeout=max(0.0, job.deadline - time.monotonic()),
+                state.aggregates[job.job_id] = PoseAggregate(
+                    job.stream_index, len(inputs), job.identity
                 )
-                if state.stopping:
-                    return
-                expired_while_waiting = time.monotonic() >= job.deadline
-                if not expired_while_waiting:
-                    state.aggregates[job.job_id] = PoseAggregate(
-                        job.stream_index,
-                        job.stream_sequence,
-                        len(prepared_inputs),
-                        job.identity,
-                        job.deadline,
-                    )
-            if expired_while_waiting:
-                time_out_frame(stream, job)
-                continue
-
-            accepted_rois = 0
-            for prepared in prepared_inputs:
-                context = PoseInputContext(
-                    job.job_id,
-                    job.stream_index,
-                    prepared.roi_index,
-                    prepared.box,
-                    prepared.affine,
-                    job.identity,
-                )
-                sample = pose_input_sample(prepared.tensor, context)
-                push_result = try_push_with_context(
+            for context, tensor in inputs:
+                if not push_with_context(
                     runtime,
                     runtime.pose_run,
                     "pose_input",
-                    sample,
+                    pose_input_sample(tensor, job.identity),
                     state.pending_pose_outputs,
                     context,
                     "BlazePose Run rejected an ROI input",
-                    lambda job=job: time.monotonic() >= job.deadline,
-                )
-                if push_result is NonblockingPushResult.CANCELLED:
-                    with state.condition:
-                        if state.stopping:
-                            return
-                    raise RuntimeError(
-                        "BlazePose input context was cancelled unexpectedly"
-                    )
-                if push_result is not NonblockingPushResult.ACCEPTED:
-                    with state.condition:
-                        if state.stopping:
-                            return
-                    expire_pose_jobs(runtime)
-                    with state.condition:
-                        aggregate = state.aggregates.get(job.job_id)
-                        if aggregate is not None:
-                            aggregate.expected = accepted_rois
-                            if aggregate.expired and aggregate.completed >= aggregate.expected:
-                                del state.aggregates[job.job_id]
-                                state.condition.notify_all()
-                    break
-                accepted_rois += 1
+                ):
+                    return
     except Exception as error:  # noqa: BLE001 - propagate worker failures to the owner thread.
         set_error(runtime, error)
-
-
-def expire_pose_jobs(runtime: AppRuntime) -> None:
-    now = time.monotonic()
-    with runtime.state.condition:
-        expired = []
-        for aggregate in runtime.state.aggregates.values():
-            if not aggregate.expired and now >= aggregate.deadline:
-                aggregate.expired = True
-                expired.append(
-                    (
-                        aggregate.stream_index,
-                        aggregate.stream_sequence,
-                        aggregate.identity,
-                        aggregate.poses,
-                    )
-                )
-                aggregate.poses = []
-    for stream_index, sequence, identity, poses in expired:
-        stream = runtime.streams[stream_index]
-        stream.timed_out_jobs += 1
-        complete_frame(stream, sequence, identity, poses)
 
 
 def parse_pose_output(sample, context: PoseInputContext, cfg: AppConfig):
@@ -1760,83 +1287,47 @@ def parse_pose_output(sample, context: PoseInputContext, cfg: AppConfig):
 def pull_pose_outputs(runtime: AppRuntime, cfg: AppConfig) -> None:
     try:
         state = runtime.state
-        while True:
-            with state.condition:
-                if state.stopping:
-                    return
-            sample = runtime.pose_run.pull("pose_output", 20)
-            if sample is None:
-                with state.condition:
-                    if state.stopping:
-                        return
-                if not runtime.pose_run.can_pull():
-                    detail = runtime.pose_run.last_error()
-                    raise RuntimeError(
-                        "BlazePose output closed unexpectedly"
-                        + (f": {detail}" if detail else "")
-                    )
-                expire_pose_jobs(runtime)
-                continue
-            expire_pose_jobs(runtime)
+        while (
+            sample := pull_model_output(runtime, runtime.pose_run, "pose_output", "BlazePose")
+        ) is not None:
             with state.condition:
                 if not state.pending_pose_outputs:
                     if state.stopping:
                         return
-                    raise RuntimeError(
-                        "BlazePose output arrived without pending ROI context"
-                    )
+                    raise RuntimeError("BlazePose output arrived without pending ROI context")
                 context = state.pending_pose_outputs.popleft()
-                aggregate = state.aggregates.get(context.job_id)
-                expired = aggregate is None or aggregate.expired
-            pose = None if expired else parse_pose_output(sample, context, cfg)
-            completed = None
+            pose = parse_pose_output(sample, context, cfg)
             with state.condition:
-                # Claim a completed aggregate under the same lock that counts the
-                # output, so a concurrent expiry pass cannot also publish it. An
-                # expired aggregate stays as a tombstone until its last output.
                 aggregate = state.aggregates.get(context.job_id)
-                if aggregate is not None:
-                    aggregate.completed += 1
-                    if not aggregate.expired and pose is not None:
-                        aggregate.poses.append(pose)
-                    if aggregate.completed >= aggregate.expected:
-                        del state.aggregates[context.job_id]
-                        state.condition.notify_all()
-                        if not aggregate.expired:
-                            completed = aggregate
-            runtime.streams[context.stream_index].completed_rois += 1
-            if completed is not None:
-                complete_frame(
-                    runtime.streams[completed.stream_index],
-                    completed.stream_sequence,
-                    completed.identity,
-                    completed.poses,
-                )
+                if aggregate is None:
+                    return  # stop_runtime() cleared the in-flight frames.
+                if pose is not None:
+                    aggregate.poses.append(pose)
+                aggregate.completed += 1
+                completed = aggregate.completed == aggregate.expected
+                if completed:
+                    del state.aggregates[context.job_id]
+            if completed:
+                stream = runtime.streams[aggregate.stream_index]
+                publish_frame(stream, aggregate.identity, aggregate.poses)
+                finish_frame(runtime, stream)
     except Exception as error:  # noqa: BLE001 - propagate worker failures to the owner thread.
         set_error(runtime, error)
 
 
-def all_streams_done(runtime: AppRuntime, frame_limit: int) -> bool:
-    return all(
-        (frame_limit > 0 and stream.metadata_frames >= frame_limit)
-        or (stream.closed and stream.outstanding_frames == 0)
-        for stream in runtime.streams
-    )
+def all_streams_done(runtime: AppRuntime) -> bool:
+    return all(stream.closed and stream.outstanding_frames == 0 for stream in runtime.streams)
 
 
 def require_successful_completion(runtime: AppRuntime, frame_limit: int) -> None:
-    incomplete = [
-        stream.config.id
-        for stream in runtime.streams
-        if frame_limit > 0 and stream.metadata_frames < frame_limit
-    ]
+    if frame_limit == 0:
+        raise RuntimeError("all source streams stopped")
+    incomplete = [stream.config.id for stream in runtime.streams if stream.frames_in < frame_limit]
     if incomplete:
         raise RuntimeError(
             f"source streams stopped before reaching runtime.frames={frame_limit}: "
             + ", ".join(incomplete)
         )
-    if frame_limit == 0 and all(stream.closed for stream in runtime.streams):
-        raise RuntimeError("all source streams stopped")
 
 
 def stop_runtime(runtime: AppRuntime) -> None:
@@ -1861,28 +1352,13 @@ def stop_runtime(runtime: AppRuntime) -> None:
     runtime.pose_run.close()
 
 
-def print_summary(runtime: AppRuntime, elapsed: float) -> None:
+def print_summary(runtime: AppRuntime) -> None:
     for stream in runtime.streams:
         print(
-            f"[summary stream={stream.config.id}] source_frames={stream.source_frames} "
-            f"detector_frames={stream.detector_frames} "
-            f"metadata_frames={stream.metadata_frames} "
-            f"metadata_send_failures={stream.metadata_send_failures} "
-            f"selected_rois={stream.selected_rois} "
-            f"completed_rois={stream.completed_rois} "
-            f"detector_mailbox_drops={stream.detector_mailbox_drops} "
-            f"pose_mailbox_drops={stream.pose_mailbox_drops} "
-            f"timed_out_jobs={stream.timed_out_jobs}",
+            f"[summary stream={stream.config.id}] frames_in={stream.frames_in} "
+            f"frames_out={stream.frames_out}",
             flush=True,
         )
-    total_frames = sum(stream.metadata_frames for stream in runtime.streams)
-    total_rois = sum(stream.completed_rois for stream in runtime.streams)
-    print(
-        f"[summary aggregate] elapsed_s={elapsed:.3f} "
-        f"metadata_fps={total_frames / elapsed if elapsed > 0 else 0.0:.3f} "
-        f"pose_fps={total_rois / elapsed if elapsed > 0 else 0.0:.3f}",
-        flush=True,
-    )
 
 
 def release_runtime_objects(runtime: AppRuntime) -> None:
@@ -1922,16 +1398,12 @@ def run_app(cfg: AppConfig) -> None:
         raise RuntimeError(f"pose model not found: {cfg.pose_model_path}")
     load_runtime_dependencies()
     runtime = build_runtime(cfg)
-    started = time.monotonic()
+    # Each source run starts and pulls on its own thread, so an offline source
+    # cannot delay the others; the shared models have dedicated workers.
     source_pullers = [
-        threading.Thread(
-            target=run_source_stream,
-            args=(runtime, cfg, stream.index),
-            daemon=True,
-        )
+        threading.Thread(target=run_source_stream, args=(runtime, cfg, stream), daemon=True)
         for stream in runtime.streams
     ]
-    # Dedicated detector and pose dispatcher and puller threads.
     model_workers = [
         threading.Thread(target=worker, args=(runtime, cfg), daemon=True)
         for worker in (
@@ -1944,11 +1416,11 @@ def run_app(cfg: AppConfig) -> None:
     for thread in source_pullers + model_workers:
         thread.start()
     try:
-        while not all_streams_done(runtime, cfg.frame_limit):
-            with runtime.state.condition:
-                if runtime.state.error is not None:
-                    raise runtime.state.error
+        with runtime.state.condition:
+            while runtime.state.error is None and not all_streams_done(runtime):
                 runtime.state.condition.wait(0.05)
+            if runtime.state.error is not None:
+                raise runtime.state.error
         require_successful_completion(runtime, cfg.frame_limit)
     except KeyboardInterrupt:
         pass
@@ -1959,7 +1431,7 @@ def run_app(cfg: AppConfig) -> None:
         unfinished_sources = join_source_workers(runtime, source_pullers)
         for worker in model_workers:
             worker.join()
-        print_summary(runtime, time.monotonic() - started)
+        print_summary(runtime)
     error = runtime.state.error
     if unfinished_sources:
         print(
@@ -1982,14 +1454,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Error: config file not found: {args.config}", file=sys.stderr)
         return 2
     try:
-        cfg = load_app_config(args.config)
-        if args.validate_config_only:
-            print(
-                f"Config validated: {args.config} (streams={len(cfg.streams)}, "
-                f"max_people_per_frame={cfg.max_people_per_frame})"
-            )
-            return 0
-        run_app(cfg)
+        run_app(load_app_config(args.config))
         return 0
     except Exception as error:  # noqa: BLE001 - CLI boundary converts failures to exit status.
         print(f"[ERR] {error}", file=sys.stderr)
