@@ -152,6 +152,17 @@ def test_pose_count_is_bounded_by_metadata_transport(tmp_path: Path):
         main.load_app_config(path)
 
 
+@pytest.mark.parametrize("roi_scale", [".nan", ".inf", "-.inf", "0", "-1.5"])
+def test_roi_scale_must_be_finite_and_positive(tmp_path: Path, roi_scale: str):
+    path = write_config(tmp_path, [stream(0)])
+    path.write_text(
+        path.read_text(encoding="utf-8") + f"pose:\n  roi_scale: {roi_scale}\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="pose.roi_scale must be finite and > 0"):
+        main.load_app_config(path)
+
+
 def test_roi_landmark_and_metadata_contract():
     box = {"x1": 10.0, "y1": 20.0, "x2": 30.0, "y2": 60.0, "score": 0.9, "class_id": 0}
     roi = main.square_roi(box, 1.5)

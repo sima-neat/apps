@@ -32,6 +32,7 @@
 #include <atomic>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <csignal>
 #include <cstdint>
@@ -364,7 +365,8 @@ void validate_config(const AppConfig& cfg) {
                          "detector.max_inflight_per_stream must be -1 or > 0");
   sima_examples::require(cfg.max_people_per_frame > 0 && cfg.max_people_per_frame <= 10,
                          "pose.max_people_per_frame must be between 1 and 10");
-  sima_examples::require(cfg.roi_scale > 0.0, "pose.roi_scale must be > 0");
+  sima_examples::require(std::isfinite(cfg.roi_scale) && cfg.roi_scale > 0.0,
+                         "pose.roi_scale must be finite and > 0");
   sima_examples::require(cfg.pose_presence_threshold >= 0.0 && cfg.pose_presence_threshold <= 1.0,
                          "pose.presence_threshold must be between 0 and 1");
   sima_examples::require(cfg.pose_job_timeout_ms > 0, "pose.job_timeout_ms must be > 0");

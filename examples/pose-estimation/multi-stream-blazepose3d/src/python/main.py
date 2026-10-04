@@ -452,8 +452,8 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("detector.max_inflight_per_stream must be -1 or > 0")
     if not 1 <= cfg.max_people_per_frame <= 10:
         raise ValueError("pose.max_people_per_frame must be between 1 and 10")
-    if cfg.roi_scale <= 0.0:
-        raise ValueError("pose.roi_scale must be > 0")
+    if not math.isfinite(cfg.roi_scale) or cfg.roi_scale <= 0.0:
+        raise ValueError("pose.roi_scale must be finite and > 0")
     if not 0.0 <= cfg.pose_presence_threshold <= 1.0:
         raise ValueError("pose.presence_threshold must be between 0 and 1")
     if cfg.pose_job_timeout_ms <= 0:
