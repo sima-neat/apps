@@ -143,20 +143,6 @@ inline std::string unquote(std::string value) {
   return decoded;
 }
 
-inline std::string join_stack(const std::vector<std::pair<int, std::string>>& stack) {
-  std::ostringstream out;
-  bool first = true;
-  for (const auto& [indent, key] : stack) {
-    static_cast<void>(indent);
-    if (!first) {
-      out << '.';
-    }
-    first = false;
-    out << key;
-  }
-  return out.str();
-}
-
 inline bool is_yaml_integer(const std::string& value) {
   std::string scalar = value;
   scalar.erase(std::remove(scalar.begin(), scalar.end(), '_'), scalar.end());
@@ -487,9 +473,9 @@ public:
         continue;
       }
 
-      std::string full_key = detail::join_stack(stack);
-      if (!full_key.empty()) {
-        full_key += '.';
+      std::string full_key;
+      for (const auto& parent : stack) {
+        full_key += parent.second + '.';
       }
       full_key += key;
       config.scalars_[full_key] = parse_yaml_scalar(value);
