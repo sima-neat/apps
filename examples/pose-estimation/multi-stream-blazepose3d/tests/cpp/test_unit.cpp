@@ -293,6 +293,33 @@ bool test_failed_metadata_pair_does_not_count_toward_the_frame_limit() {
   return ok;
 }
 
+bool test_non_finite_landmarks_discard_only_that_pose() {
+  const blazepose_app::Box box{0.0F, 0.0F, 100.0F, 100.0F, 0.9F, 0};
+  const blazepose_app::Affine affine{1.0, 0.0, 0.0, 0.0, 1.0, 0.0};
+  const std::vector<float> screen(195, 0.0F);
+  const std::vector<float> world(117, 0.0F);
+  bool ok =
+      expect(blazepose_app::decode_finite_pose(screen, world, affine, box, 0.9F, 0).has_value(),
+             "finite BlazePose landmarks decode a pose");
+  struct Case {
+    const char* name;
+    bool world;
+    std::size_t index;
+    float value;
+  };
+  for (const Case& test :
+       {Case{"screen NaN", false, 0, std::nanf("")}, Case{"screen infinity", false, 194, INFINITY},
+        Case{"world NaN", true, 0, std::nanf("")}, Case{"world -infinity", true, 116, -INFINITY}}) {
+    std::vector<float> bad_screen = screen;
+    std::vector<float> bad_world = world;
+    (test.world ? bad_world : bad_screen)[test.index] = test.value;
+    ok &= expect(
+        !blazepose_app::decode_finite_pose(bad_screen, bad_world, affine, box, 0.9F, 0).has_value(),
+        std::string("a ") + test.name + " landmark discards only that pose");
+  }
+  return ok;
+}
+
 bool test_cli(const std::string& binary) {
   bool ok = true;
   const auto help = spawn_and_wait(binary, {"--help"}, 20000);
@@ -661,6 +688,7 @@ int main(int argc, char** argv) {
   }
   bool ok = test_math_contract();
   ok &= test_pose_aggregate_claims_are_exclusive();
+  ok &= test_non_finite_landmarks_discard_only_that_pose();
   ok &= test_failed_metadata_pair_does_not_count_toward_the_frame_limit();
   ok &= test_cli(argv[1]);
   ok &= test_stream_limit(argv[1]);
