@@ -55,9 +55,13 @@ class RtpVideoListener:
         if header_size + 2 > len(packet):
             return False
         nal_type = packet[header_size] >> 1 & 0x3F
+        # Single-layer HEVC has nuh_layer_id 0; this also rejects AVC slices such
+        # as 0x41 0x9a whose bytes would otherwise parse as an HEVC header.
+        layer_id = (packet[header_size] & 0x01) << 5 | packet[header_size + 1] >> 3
         return (
             not packet[header_size] & 0x80
             and nal_type <= 49
+            and layer_id == 0
             and packet[header_size + 1] & 0x07 != 0
         )
 
@@ -97,6 +101,9 @@ def test_h264_rtp_packet_validation():
     assert h264._is_video_rtp(h264_packet)
     assert not hevc._is_video_rtp(h264_packet)
     assert hevc._is_video_rtp(hevc_packet)
+    avc_non_idr_packet = bytes([0x80, 96, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0x41, 0x9A])
+    assert h264._is_video_rtp(avc_non_idr_packet)
+    assert not hevc._is_video_rtp(avc_non_idr_packet)
     assert not h264._is_video_rtp(b"not-rtp")
 
 

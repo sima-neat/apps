@@ -108,7 +108,11 @@ private:
       return false;
     }
     const std::uint8_t nal_type = (packet[header_size] >> 1) & 0x3F;
-    return (packet[header_size] & 0x80) == 0 && nal_type <= 49 &&
+    // Single-layer HEVC has nuh_layer_id 0; this also rejects AVC slices such
+    // as 0x41 0x9a whose bytes would otherwise parse as an HEVC header.
+    const std::uint8_t layer_id = static_cast<std::uint8_t>(
+        ((packet[header_size] & 0x01) << 5) | (packet[header_size + 1] >> 3));
+    return (packet[header_size] & 0x80) == 0 && nal_type <= 49 && layer_id == 0 &&
            (packet[header_size + 1] & 0x07) != 0;
   }
 
