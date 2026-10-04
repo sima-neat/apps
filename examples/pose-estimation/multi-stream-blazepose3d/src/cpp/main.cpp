@@ -129,7 +129,6 @@ struct PoseInputContext {
   std::uint64_t job_id = 0;
   int stream_index = 0;
   int roi_index = 0;
-  int roi_count = 0;
   blazepose_app::Box box;
   blazepose_app::Affine affine;
   FrameIdentity identity;
@@ -487,7 +486,6 @@ neat::nodes::groups::RtspDecodedInputOptions probe_source(const AppConfig& cfg,
   // stream negotiates 30000/1001, which a 30/1 caps filter cannot accept.
   options.dec_fps = runtime.fps;
   options.insert_queue = true;
-  options.out_format = "NV12";
   options.decoder_name = "decoder_" + runtime.config.id;
   options.decoder_raw_output = true;
   options.auto_caps_from_stream = true;
@@ -498,11 +496,6 @@ neat::nodes::groups::RtspDecodedInputOptions probe_source(const AppConfig& cfg,
     options.fallback_h264_height = runtime.height;
     options.fallback_h264_fps = runtime.fps;
   }
-  options.output_caps.enable = true;
-  options.output_caps.format = "NV12";
-  options.output_caps.width = runtime.width;
-  options.output_caps.height = runtime.height;
-  options.output_caps.memory = neat::CapsMemory::Any;
   return options;
 }
 
@@ -1368,7 +1361,6 @@ void dispatch_pose_jobs(AppRuntime& app, const AppConfig& cfg) {
         context.job_id = job.job_id;
         context.stream_index = job.stream_index;
         context.roi_index = prepared.roi_index;
-        context.roi_count = static_cast<int>(prepared_inputs.size());
         context.box = prepared.box;
         context.affine = prepared.affine;
         context.identity = job.identity;
