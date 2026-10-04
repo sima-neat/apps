@@ -325,6 +325,7 @@ def validate_config(cfg: AppConfig) -> None:
 
 FLOW_STYLE_ERROR = "flow-style YAML collections are not supported; use block style"
 BLOCK_SCALAR_ERROR = "YAML block scalar values are not supported; use a quoted string"
+QUOTED_KEY_ERROR = "quoted YAML mapping keys are not supported; use plain keys"
 
 
 def reject_flow_collections(text: str) -> None:
@@ -335,6 +336,16 @@ def reject_flow_collections(text: str) -> None:
         if isinstance(node, yaml.MappingNode):
             if node.flow_style and node.value:
                 raise ValueError(f"{FLOW_STYLE_ERROR} (line {node.start_mark.line + 1})")
+            quoted_key = next(
+                (
+                    key
+                    for key, _value in node.value
+                    if isinstance(key, yaml.ScalarNode) and key.style in ("'", '"')
+                ),
+                None,
+            )
+            if quoted_key is not None:
+                raise ValueError(f"{QUOTED_KEY_ERROR} (line {quoted_key.start_mark.line + 1})")
             pending.extend(child for pair in node.value for child in pair)
         elif isinstance(node, yaml.SequenceNode):
             if node.flow_style and node.value:

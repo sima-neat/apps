@@ -149,6 +149,11 @@ REJECTED_CONFIGS = [
     ),
     ("five-streams", config_text([stream(i) for i in range(5)]), "between 1 and 4 entries"),
     ("duplicate-id", config_text([stream(0), stream(1, id="camera0")]), "ids must be unique"),
+    (
+        "quoted-stream-key",
+        config_text().replace("- id: camera0", '- "id": camera0'),
+        "quoted YAML mapping keys are not supported",
+    ),
     ("numeric-id", config_text([stream(0, id=123)]), "id must be a string"),
     (
         "timestamp-id",
