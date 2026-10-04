@@ -24,7 +24,7 @@ import main
 main.np = np
 pytestmark = pytest.mark.unit
 
-IDENTITY = main.FrameIdentity("camera0", 7, 1_234_000_000)
+IDENTITY = main.FrameIdentity("camera0", 7, 1_234_000_000, 7)
 BOX = {"x1": 0.0, "y1": 0.0, "x2": 100.0, "y2": 100.0, "score": 0.9, "class_id": 0}
 UNIT_AFFINE = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0)
 
@@ -79,7 +79,7 @@ def runtime_stream(sender=None, *, temporal_filter: bool = False, outstanding: i
         metadata_lock=threading.Lock(),
         metadata_sender=sender or RecordingSender(),
         pose_smoother=main.PoseSmoother(),
-        last_published_frame_id=0,
+        last_published_sequence=0,
         pose_temporal_filter_enabled=temporal_filter,
         frames_in=0,
         frames_out=0,
@@ -176,6 +176,23 @@ REJECTED_CONFIGS = [
         "ids must be unique",
     ),
     ("duplicate-channel", config_text([stream(0), stream(1, channel=0)]), "channels must be"),
+    (
+        "octal-channel",
+        config_text([stream(9), stream(1)]).replace("insight_channel: 1", "insight_channel: 011"),
+        "channels must be",
+    ),
+    (
+        "hex-channel",
+        config_text([stream(9), stream(1)]).replace("insight_channel: 1", "insight_channel: 0x9"),
+        "channels must be",
+    ),
+    (
+        "octal-port-overlap",
+        config_text(insight={"video_port_base": 110, "metadata_port_base": 72}).replace(
+            "video_port_base: 110", "video_port_base: 0110"
+        ),
+        "video and metadata ports must not overlap",
+    ),
     (
         "port-overlap",
         config_text([stream(0), stream(1, channel=100)], {"video_port_base": 9000}),
@@ -486,7 +503,7 @@ def test_publish_frame_sends_a_correlated_pair_and_counts_only_full_pairs(failur
 def test_publish_frame_discards_a_pose_result_older_than_an_empty_frame():
     sender = RecordingSender()
     stream_runtime = runtime_stream(sender, temporal_filter=True)
-    newer = main.FrameIdentity("camera0", 8, 1_267_000_000)
+    newer = main.FrameIdentity("camera0", 3, 1_267_000_000, 8)
 
     main.publish_frame(stream_runtime, newer, [])
     main.publish_frame(stream_runtime, IDENTITY, [pose_sample(50.0, 0.0)])
@@ -495,7 +512,8 @@ def test_publish_frame_discards_a_pose_result_older_than_an_empty_frame():
         "pose-estimation",
         "auxiliary-visualization",
     ]
-    assert stream_runtime.last_published_frame_id == 8
+    assert all(call[3] == "3" for call in sender.calls)
+    assert stream_runtime.last_published_sequence == 8
     assert stream_runtime.pose_smoother.previous == []
 
 
@@ -514,6 +532,32 @@ def test_pushed_samples_carry_stream_id_frame_id_and_pts(monkeypatch):
         main.pose_input_sample(tensor, IDENTITY),
     ):
         assert (sample.stream_id, sample.frame_id, sample.pts_ns) == ("camera0", 7, 1_234_000_000)
+
+
+def test_source_jobs_keep_source_frame_id_and_local_order(monkeypatch):
+    samples = iter(
+        [
+            SimpleNamespace(frame_id=41, pts_ns=1_000_000_000),
+            SimpleNamespace(frame_id=57, pts_ns=2_000_000_000),
+            None,
+        ]
+    )
+    stream_runtime = runtime_stream()
+    stream_runtime.source_run = SimpleNamespace(pull=lambda *_args: next(samples))
+    state = main.SharedState(1)
+    runtime = SimpleNamespace(state=state, next_job_id=1)
+    monkeypatch.setattr(main, "require_rgb_tensor", lambda sample: f"rgb-{sample.frame_id}")
+
+    main.pull_source_frames(runtime, SimpleNamespace(frame_limit=0), stream_runtime)
+
+    latest = state.detector_mailboxes[0]
+    assert latest is not None
+    assert (latest.identity.frame_id, latest.identity.sequence, latest.identity.pts_ns) == (
+        57,
+        2,
+        2_000_000_000,
+    )
+    assert (stream_runtime.frames_in, stream_runtime.outstanding_frames) == (2, 1)
 
 
 def test_model_push_retries_without_using_the_blocking_python_binding():

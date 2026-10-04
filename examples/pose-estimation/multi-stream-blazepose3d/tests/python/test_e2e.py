@@ -42,7 +42,9 @@ class RtpVideoListener:
         self._codec = codec
         self._config_counts = [0] * num_ports
         self._vcl_counts = [0] * num_ports
+        self._vcl_timestamps = [set() for _ in range(num_ports)]
         self._fu_progress = [None] * num_ports
+        self._lock = threading.Lock()
         self._sockets = []
         self._threads = []
         for offset in range(num_ports):
@@ -71,11 +73,14 @@ class RtpVideoListener:
                 packet = sock.recv(65536)
             except TimeoutError:
                 continue
-            if self._is_codec_config_rtp(packet):
-                self._config_counts[index] += 1
+            config = self._is_codec_config_rtp(packet)
             evidence = self._vcl_evidence_rtp(packet)
-            if evidence is not None and self._completes_vcl_access_unit(index, evidence):
-                self._vcl_counts[index] += 1
+            with self._lock:
+                if config:
+                    self._config_counts[index] += 1
+                if evidence is not None and self._completes_vcl_access_unit(index, evidence):
+                    self._vcl_counts[index] += 1
+                    self._vcl_timestamps[index].add(evidence[6])
 
     @staticmethod
     def _rtp_payload(packet: bytes):
@@ -291,10 +296,19 @@ class RtpVideoListener:
 
     @property
     def received_all_ports(self) -> bool:
-        return all(
-            config > 0 and vcl > 0
-            for config, vcl in zip(self._config_counts, self._vcl_counts, strict=True)
-        )
+        with self._lock:
+            return all(
+                config > 0 and vcl > 0
+                for config, vcl in zip(self._config_counts, self._vcl_counts, strict=True)
+            )
+
+    def has_correlated_timestamp(self, port_offset: int, timestamp_ms: int) -> bool:
+        expected = timestamp_ms * 90 & 0xFFFFFFFF
+        with self._lock:
+            return any(
+                min((actual - expected) & 0xFFFFFFFF, (expected - actual) & 0xFFFFFFFF) <= 89
+                for actual in self._vcl_timestamps[port_offset]
+            )
 
 
 def test_rtp_video_packet_validation():
@@ -371,9 +385,12 @@ def test_rtp_video_packet_validation():
     assert h265._completes_vcl_access_unit(0, h265._vcl_evidence_rtp(h265_end))
     h264._config_counts = [1]
     h264._vcl_counts = [0]
+    h264._vcl_timestamps = [{99}]
     assert not h264.received_all_ports
     h264._vcl_counts[0] = 1
     assert h264.received_all_ports
+    assert h264.has_correlated_timestamp(0, 1)
+    assert not h264.has_correlated_timestamp(0, 3)
 
 
 def runtime_dependencies_ready() -> bool:
@@ -477,7 +494,12 @@ def paired_pose_content_matches(overlay, auxiliary) -> bool:
     )
 
 
-def metadata_problem(messages, metadata_port_base: int, num_ports: int) -> str | None:
+def metadata_problem(
+    messages,
+    metadata_port_base: int,
+    num_ports: int,
+    video: RtpVideoListener | None = None,
+) -> str | None:
     """Every message carries its port's stream id and 33 valid keypoints per pose
     (image and world for 2D poses), every port publishes a 2D/3D pair for one
     frame, and one such pair is non-empty."""
@@ -511,6 +533,17 @@ def metadata_problem(messages, metadata_port_base: int, num_ports: int) -> str |
         return "no stream published a non-empty content-matched 2D/3D pair for one frame"
     if len({port for port, _, _ in paired}) < num_ports:
         return "not every metadata port published a content-matched 2D/3D pair for one frame"
+    if video is not None:
+        paired = {
+            frame: poses
+            for frame, poses in paired.items()
+            if video.has_correlated_timestamp(
+                frame[0] - metadata_port_base,
+                frame[1],
+            )
+        }
+        if len({port for port, _, _ in paired}) < num_ports:
+            return "not every metadata port published a pair correlated to video PTS"
     if not any(paired.values()):
         return "no stream published a non-empty content-matched 2D/3D pair for one frame"
     return None
@@ -573,6 +606,12 @@ def test_metadata_problem_requires_pairs_on_every_port_and_stream_ids():
         message(9100, "auxiliary-visualization", "1", 0),
     ]
     assert metadata_problem(empty + pair, 9100, 2) is None
+    correlated_video = SimpleNamespace(has_correlated_timestamp=lambda _port, timestamp: timestamp == 1)
+    assert metadata_problem(empty + pair, 9100, 2, correlated_video) is None
+    uncorrelated_video = SimpleNamespace(has_correlated_timestamp=lambda _port, _timestamp: False)
+    assert "correlated to video PTS" in metadata_problem(
+        empty + pair, 9100, 2, uncorrelated_video
+    )
     assert "every metadata port" in metadata_problem(pair, 9100, 2)
     assert "every metadata port" in metadata_problem(empty + pair[:1], 9100, 2)
     split = [pair[0], message(9101, "auxiliary-visualization", "2", 2)]
@@ -741,7 +780,7 @@ class TestE2E:
             while problem is not None and time.monotonic() < deadline:
                 remaining = max(0.0, deadline - time.monotonic())
                 messages.extend(listener.wait_for_messages(min(1.0, remaining)).messages)
-                problem = metadata_problem(messages, metadata_port_base, len(urls))
+                problem = metadata_problem(messages, metadata_port_base, len(urls), video)
 
         assert process.returncode == 0, (
             f"main.py exited with {process.returncode}\n"
