@@ -136,6 +136,15 @@ The output lists the speech-to-text model and any chat model you loaded.
 
 ## Optional Features
 
+Everything below is optional — the workflow above is all most users need. The
+features are grouped here so you can jump to what you want:
+
+- **Models:** [Switch models on the fly](#switch-models-on-the-fly) · [Switch the speech-to-text model](#switch-the-speech-to-text-model) · [Download models from Hugging Face](#download-models-from-hugging-face)
+- **Audio:** [Audio API (OpenAI-compatible)](#audio-api-openai-compatible) · [Text-to-speech (voices & languages)](#text-to-speech-voices--languages)
+- **Front ends & access:** [Terminal chat (CLI)](#terminal-chat-cli) · [Backend-only mode](#backend-only-mode-for-insight-and-other-front-ends) · [Manual Process Start](#manual-process-start) · [API checks](#api-checks)
+- **More features:** [RAG](#rag) · [Benchmark (TTFT / TPS)](#benchmark-ttft--tps) · [SiMaSentry Solutions](#simasentry-solutions-med--safe--sec-demo-harnesses) · [Markdown & fonts](#markdown--fonts)
+- **Setup & operations:** [Setup options](#setup-options) · [Reset the accelerator](#reset-the-accelerator) · [Update](#update) · [Clean up](#clean-up)
+
 ### Setup options
 Seed the catalog with one or more chat/VLM models at install time instead of
 downloading them from the UI (space-separated Hugging Face repos):
