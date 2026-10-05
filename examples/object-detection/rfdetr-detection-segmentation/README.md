@@ -22,7 +22,7 @@ The backbone output and transformer input each use a four-entry blocking queue t
 
 MJPEG reserves 32 decoded buffers so decoding can continue while inference and preview retain frames. This is tested headroom for the application, not an exact count of graph-held buffers. The raw NV12 storage is about 44 MB at 720p, 100 MB at 1080p, or 398 MB at 4K, before alignment.
 
-TCP sources use RTP timestamps directly to avoid arrival-time corrections during high-rate replay. MJPEG preview encoding defaults to 60 FPS with bounded raw-frame admission; inference keeps the full input rate. H.264 and H.265 video remain encoded passthrough.
+TCP sources use RTP timestamps directly to avoid arrival-time corrections during high-rate replay. H.264 and H.265 video reach Insight as encoded passthrough. MJPEG video is re-encoded to H.264 from the decoded frames; when the encoder falls behind, the preview keeps the newest frames and inference keeps the full input rate.
 
 ## Preview
 
@@ -94,7 +94,6 @@ Edit `$APP_DIR/src/common/config.yaml`:
 - For detection, set `model.detection.variant` to `small` or `medium`.
 - Set `source.rtsp_url` and select `source.codec` as `h264`, `h265`, or `mjpeg`.
 - Leave `source.width`, `height`, and `fps` at `0` to probe the stream. Width and height are fallbacks; a positive FPS overrides the detected value.
-- `output.insight.raw_video_max_fps` limits MJPEG preview encoding, independently of inference. The default is 60; use 0 to retain the source rate. It does not affect H.264/H.265 passthrough.
 - Set `output.insight.host`, `video_port`, and `metadata_port` to the values reported by Insight.
 - Keep `inference.frames: 0` to run continuously, or set a finite result count.
 

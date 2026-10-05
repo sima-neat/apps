@@ -133,7 +133,6 @@ struct Config {
   std::string insight_host;
   int video_port = 9000;
   int metadata_port = 9100;
-  int raw_video_max_fps = 60;
 };
 
 struct CliOptions {
@@ -213,7 +212,6 @@ Config load_config(const fs::path& path) {
   cfg.insight_host = raw.string_or("output.insight.host", "");
   cfg.video_port = raw.int_or("output.insight.video_port", 9000);
   cfg.metadata_port = raw.int_or("output.insight.metadata_port", 9100);
-  cfg.raw_video_max_fps = raw.int_or("output.insight.raw_video_max_fps", 60);
 
   sima_examples::require(!cfg.backbone.empty() && !cfg.transformer.empty(),
                          model_prefix + "backbone and transformer must be set");
@@ -234,8 +232,6 @@ Config load_config(const fs::path& path) {
     sima_examples::require(cfg.mask_grid_size >= kMaskSize,
                            "inference.segmentation.mask_grid_size must be >= 108");
   }
-  sima_examples::require(cfg.raw_video_max_fps >= 0,
-                         "output.insight.raw_video_max_fps must be >= 0");
   sima_examples::require(!cfg.insight_host.empty(), "output.insight.host must be set");
   sima_examples::require(cfg.video_port > 0 && cfg.video_port <= 65535 && cfg.metadata_port > 0 &&
                              cfg.metadata_port <= 65535,
@@ -658,10 +654,6 @@ neat::SimaDecodeType decode_type(SourceCodec codec) {
   return codec == SourceCodec::H265 ? neat::SimaDecodeType::H265 : neat::SimaDecodeType::MJPEG;
 }
 
-int preview_fps(const Config& cfg, const SourceGeometry& geometry) {
-  return cfg.raw_video_max_fps > 0 ? std::min(geometry.fps, cfg.raw_video_max_fps) : geometry.fps;
-}
-
 neat::nodes::groups::RtspEncodedInputOptions source_options(const Config& cfg,
                                                             const SourceGeometry& geometry) {
   neat::nodes::groups::RtspEncodedInputOptions opt;
@@ -699,7 +691,7 @@ neat::nodes::groups::VideoSenderOptions video_options(const Config& cfg,
                                                       const SourceGeometry& geometry) {
   auto opt = cfg.codec == SourceCodec::Mjpeg
                  ? neat::nodes::groups::VideoSenderOptions::H264RtpUdpFromRaw(
-                       geometry.width, geometry.height, preview_fps(cfg, geometry))
+                       geometry.width, geometry.height, geometry.fps)
                  : neat::nodes::groups::VideoSenderOptions::Passthrough(rtsp_codec(cfg.codec));
   opt.host = cfg.insight_host;
   opt.video_port_base = cfg.video_port;
@@ -845,11 +837,6 @@ neat::Graph build_graph(const Config& cfg, neat::Model& backbone, const SourceGe
   decoder.add(neat::nodes::SimaDecode(decoder_options(cfg, geometry)));
 
   neat::Graph video("video");
-  if (cfg.codec == SourceCodec::Mjpeg) {
-    video.add(neat::nodes::VideoRate());
-    video.add(
-        neat::nodes::CapsRaw("NV12", geometry.width, geometry.height, preview_fps(cfg, geometry)));
-  }
   video.add(neat::nodes::groups::VideoSender(video_options(cfg, geometry)));
 
   neat::Graph inference("inference");

@@ -49,7 +49,6 @@ class Config:
     insight_host: str
     video_port: int
     metadata_port: int
-    raw_video_max_fps: int
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -134,7 +133,6 @@ def load_config(path: Path) -> Config:
         insight_host=str(insight.get("host", "")),
         video_port=int(insight.get("video_port", 9000)),
         metadata_port=int(insight.get("metadata_port", 9100)),
-        raw_video_max_fps=int(insight.get("raw_video_max_fps", 60)),
     )
     if not cfg.backbone or not cfg.transformer:
         raise ValueError(f"model.{task} backbone and transformer must be set")
@@ -144,8 +142,6 @@ def load_config(path: Path) -> Config:
         raise ValueError("source.rtsp_url must be an RTSP URL")
     if cfg.latency_ms < 0 or cfg.frames < 0:
         raise ValueError("source.latency_ms and inference.frames must be >= 0")
-    if cfg.raw_video_max_fps < 0:
-        raise ValueError("output.insight.raw_video_max_fps must be >= 0")
     if cfg.width < 0 or cfg.height < 0 or cfg.fps < 0:
         raise ValueError("source.width, source.height, and source.fps must be >= 0")
     if not 0.0 <= cfg.min_score <= 1.0:
@@ -489,10 +485,6 @@ def decode_type(cfg: Config):
     return pyneat.SimaDecodeType.H265 if cfg.codec == "h265" else pyneat.SimaDecodeType.MJPEG
 
 
-def preview_fps(cfg: Config, fps: int) -> int:
-    return min(fps, cfg.raw_video_max_fps) if cfg.raw_video_max_fps else fps
-
-
 def source_options(cfg: Config, width: int, height: int, fps: int):
     opt = pyneat.RtspEncodedInputOptions()
     opt.url = cfg.rtsp_url
@@ -524,7 +516,7 @@ def decoder_options(cfg: Config, width: int, height: int, fps: int):
 
 def video_options(cfg: Config, width: int, height: int, fps: int):
     opt = (
-        pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(width, height, preview_fps(cfg, fps))
+        pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(width, height, fps)
         if cfg.codec == "mjpeg"
         else pyneat.VideoSenderOptions.passthrough(rtsp_codec(cfg))
     )
@@ -686,9 +678,6 @@ def build_graph(cfg: Config, backbone, width: int, height: int, fps: int):
     decoder.add(pyneat.nodes.sima_decode(decoder_options(cfg, width, height, fps)))
 
     video = pyneat.Graph("video")
-    if cfg.codec == "mjpeg":
-        video.add(pyneat.nodes.video_rate())
-        video.add(pyneat.nodes.caps_raw("NV12", width, height, preview_fps(cfg, fps)))
     video.add(pyneat.groups.video_sender(video_options(cfg, width, height, fps)))
 
     inference = pyneat.Graph("inference")

@@ -110,7 +110,6 @@ def test_config_selects_one_model_pair(tmp_path, variant, size):
 
     selected = main.load_config(path)
 
-    assert selected.raw_video_max_fps == 60
     assert selected.variant == variant
     assert selected.input_size == size
     assert selected.backbone.startswith(variant)
@@ -219,17 +218,3 @@ def test_segmentation_metadata_contains_polygons(mask_grid_size):
     assert segment["mask_format"] == "polygon"
     assert len(segment["mask"]) >= 3
     assert all(0 <= x < 1280 and 0 <= y < 720 for x, y in segment["mask"])
-
-
-@pytest.mark.unit
-@pytest.mark.parametrize("limit", [0, 30, -1])
-def test_raw_preview_rate_configuration(tmp_path, limit):
-    raw = yaml.safe_load((EXAMPLE_DIR / "src/common/config.yaml").read_text())
-    raw["output"]["insight"]["raw_video_max_fps"] = limit
-    path = tmp_path / "config.yaml"
-    path.write_text(yaml.safe_dump(raw))
-    if limit < 0:
-        with pytest.raises(ValueError, match="raw_video_max_fps"):
-            main.load_config(path)
-    else:
-        assert main.load_config(path).raw_video_max_fps == limit
