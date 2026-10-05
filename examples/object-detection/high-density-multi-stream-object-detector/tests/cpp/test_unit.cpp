@@ -1,5 +1,6 @@
 #include "support/object_detection/detection_egress.h"
 #include "../../src/cpp/detection_watchdog.h"
+#include "../../src/cpp/metadata_measurement.h"
 #include "support/testing/test_process.h"
 
 #include <nlohmann/json.hpp>
@@ -242,7 +243,7 @@ bool test_validate_config_only_accepts_named_profiles(const std::string& binary)
   };
 
   constexpr std::array<ProfileExpectation, 3> profiles{{
-      {"config.yaml", 16, 30, 16, 1, 1, 8},
+      {"config.yaml", 16, 0, 16, 1, 1, 8},
       {"config-24x720p20fps.yaml", 24, 20, 4, 2, 4, 24},
       {"config-48x720p10fps.yaml", 48, 10, 1, 2, 1, 8},
   }};
@@ -813,6 +814,21 @@ bool test_detection_watchdog_tracks_deadlines() {
 } // namespace
 
 int main(int argc, char** argv) {
+  high_density::MetadataMeasurement measurement(2, 100, 3);
+  bool measurement_ok = !measurement.observe(0, 100, false, false, 1.0);
+  measurement_ok &= !measurement.observe(0, 101, true, false, 2.0);
+  measurement_ok &= !measurement.observe(1, 100, false, false, 3.0);
+  measurement_ok &= measurement.total == 0;
+  measurement_ok &= !measurement.observe(1, 101, false, true, 4.0);
+  measurement_ok &= !measurement.observe(0, 102, true, false, 5.0);
+  measurement_ok &= !measurement.observe(1, 102, true, false, 6.0);
+  measurement_ok &= measurement.observe(0, 103, true, false, 7.0);
+  measurement_ok &= measurement.total == 3 && measurement.elapsed == 4.0 &&
+                    measurement.frames == std::vector<std::uint64_t>{2, 1} &&
+                    measurement.failures == std::vector<std::uint64_t>{0, 1};
+  if (!expect_true(measurement_ok, "metadata measurement excludes warm-up and failed sends"))
+    return 1;
+
   if (argc == 2 && std::string(argv[1]) == "--detection-egress-only") {
     return test_metadata_fast_path_preserves_insight_payload() ? 0 : 1;
   }

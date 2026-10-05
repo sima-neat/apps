@@ -222,25 +222,11 @@ std::string configured_model_path(const std::string& example_name, const std::st
   return (fs::path(models_dir) / fs::path(configured).filename()).string();
 }
 
-double e2e_double(const std::string& example_name, const std::string& section,
-                  const std::string& key) {
-  const std::string path = full_key(example_name, section, key);
-  const ScalarConfig& config = example_common_config(example_name);
-  require_present(config, path);
-  return config.double_or(path, 0.0);
-}
-
 int e2e_int(const std::string& example_name, const std::string& section, const std::string& key) {
   const std::string path = full_key(example_name, section, key);
   const ScalarConfig& config = example_common_config(example_name);
   require_present(config, path);
   return config.int_or(path, 0);
-}
-
-bool e2e_bool(const std::string& example_name, const std::string& section, const std::string& key,
-              bool default_value) {
-  return example_common_config(example_name)
-      .bool_or(full_key(example_name, section, key), default_value);
 }
 
 std::filesystem::path write_e2e_config(const std::string& example_name,
