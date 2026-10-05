@@ -574,11 +574,14 @@ def _write_fake_neat_json(
     tag: str,
     env: str,
     runtime_channel: str | None = None,
+    runtime_version: str | None = None,
+    gst_plugins_version: str | None = None,
 ) -> Path:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     neat_path = bin_dir / "neat"
     component_channel = (runtime_channel or channel).replace("/", "-")
+    runtime_version = runtime_version or f"0.4.0+{component_channel}.123456789abc"
     payload = {
         "components": {
             "core": {
@@ -586,8 +589,8 @@ def _write_fake_neat_json(
                 "tag": tag,
                 "provenance": {"vulcanEnvironment": env},
             },
-            "runtime": {"version": f"0.4.0+{component_channel}.123456789abc"},
-            "gstPlugins": {"version": f"0.4.0+{component_channel}.123456789abc"},
+            "runtime": {"version": runtime_version},
+            "gstPlugins": {"version": gst_plugins_version or runtime_version},
         }
     }
     neat_path.write_text(
@@ -607,6 +610,30 @@ def _write_fake_neat_json(
     )
     neat_path.chmod(0o755)
     return bin_dir
+
+
+def _core_metadata_env(
+    version: str = "0.4.0+scratch-core-for-test.123456789abc",
+    *,
+    branch: str = "scratch-core-for-test",
+    tag: str = "scratchsha1",
+) -> dict[str, str]:
+    metadata = {
+        "resources": [
+            f"neat-runtime_{version}_arm64.deb",
+            f"neat-gst-plugins_{version}_arm64.deb",
+        ]
+    }
+    branch_key = branch.replace("/", "%252F")
+    return {
+        "NEAT_APPS_TEST_URL_BODIES": json.dumps(
+            {
+                f"https://core.test/{branch_key}/{tag}/metadata.json": json.dumps(
+                    metadata
+                )
+            }
+        )
+    }
 
 
 def _write_fake_sysroot(tmp_path: Path) -> dict[str, str]:
@@ -703,6 +730,7 @@ def _sysroot_sync_env(
         "NEAT_APPS_TEST_SIMA_CLI_JSON": json.dumps(resolve),
         "NEAT_APPS_TEST_URL_BODIES": json.dumps(
             {
+                **json.loads(_core_metadata_env()["NEAT_APPS_TEST_URL_BODIES"]),
                 metadata_url: json.dumps(metadata),
                 manifest_url: manifest_text,
             }
@@ -961,60 +989,198 @@ def test_vulcan_core_install_uses_minimal_temp_dir(tmp_path):
     assert not install_dir.exists()
 
 
-def test_vulcan_core_install_skips_when_neat_json_matches(tmp_path):
+@pytest.mark.parametrize(
+    ("branch", "tag", "runtime_version"),
+    [
+        (
+            "scratch-core-for-test",
+            "scratchsha1",
+            "0.4.0+scratch-core-for-test.123456789abc",
+        ),
+        ("v0.5.0", "release-sha", "0.5.0"),
+        ("feature/core-artifact", "pinnedsha2", "0.5.0+internals-branch.abc123"),
+    ],
+)
+@pytest.mark.parametrize("artifact_env", ["production", "staging"])
+def test_vulcan_core_install_skips_when_neat_json_matches(
+    tmp_path, branch, tag, runtime_version, artifact_env
+):
     _write_fake_neat_json(
         tmp_path,
-        channel="scratch-core-for-test",
-        tag="scratchsha1",
-        env="prod",
+        channel=branch,
+        tag=tag,
+        env=artifact_env,
+        runtime_version=runtime_version,
     )
 
     proc = _run_build(
         tmp_path,
+        neat_core={"ref": branch, "spec": tag},
         args=["--only-install-neat-core"],
         env={
-            "NEAT_APPS_DEPENDENCY_BRANCH": "scratch-core-for-test",
+            **_core_metadata_env(runtime_version, branch=branch, tag=tag),
             "NEAT_CORE_INSTALL_MODE": "vulcan",
-            "NEAT_VULCAN_ENV": "production",
+            "NEAT_VULCAN_ENV": artifact_env,
         },
     )
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
-    assert (
-        "NEAT core already installed (scratch-core-for-test/scratchsha1)" in proc.stdout
+    assert f"NEAT core already installed ({branch}/{tag})" in proc.stdout
+
+
+@pytest.mark.parametrize("artifact_env", ["staging", "development"])
+def test_vulcan_core_install_does_not_check_production_metadata_for_other_envs(
+    tmp_path, artifact_env
+):
+    _write_fake_sima_cli(tmp_path)
+    _write_fake_neat_json(
+        tmp_path,
+        channel="scratch-core-for-test",
+        tag="scratchsha1",
+        env=artifact_env,
+    )
+    metadata = next(
+        iter(json.loads(_core_metadata_env()["NEAT_APPS_TEST_URL_BODIES"]).values())
+    )
+    metadata_url = (
+        "https://artifacts.neat.sima.ai/core/"
+        "scratch-core-for-test/scratchsha1/metadata.json"
+    )
+    proc = _run_build(
+        tmp_path,
+        args=["--only-install-neat-core"],
+        env={
+            "NEAT_ARTIFACTS_BASE_URL": "",
+            "NEAT_APPS_TEST_URL_BODIES": json.dumps({metadata_url: metadata}),
+            "NEAT_APPS_DEPENDENCY_BRANCH": "scratch-core-for-test",
+            "NEAT_CORE_INSTALL_MODE": "vulcan",
+            "NEAT_VULCAN_ENV": artifact_env,
+            "NEAT_APPS_TEST_SIMA_CLI_CWD": str(tmp_path / "sima-cli-cwd.txt"),
+            "NEAT_APPS_TEST_SIMA_CLI_ARGS": str(tmp_path / "sima-cli-args.txt"),
+        },
+    )
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert "NEAT core already installed" not in proc.stdout
+    assert metadata_url not in _curl_log(tmp_path)
+    assert (tmp_path / "sima-cli-args.txt").read_text().strip() == (
+        f"neat install --env {artifact_env} -d . -t minimal "
+        "core@scratch-core-for-test:scratchsha1"
     )
 
 
-def test_vulcan_core_install_repairs_mixed_runtime_branch(tmp_path):
-    sima_cli_cwd = tmp_path / "sima-cli-cwd.txt"
-    sima_cli_args = tmp_path / "sima-cli-args.txt"
+@pytest.mark.parametrize(
+    ("runtime_version", "gst_version"),
+    [
+        ("0.5.0+different-runtime-branch.new", "0.5.0+scratch-core-for-test.new"),
+        ("0.5.0+scratch-core-for-test.old", "0.5.0+scratch-core-for-test.new"),
+        ("0.5.0+scratch-core-for-test.new", "0.5.0+scratch-core-for-test.old"),
+    ],
+)
+def test_vulcan_core_install_refreshes_republished_dependencies(
+    tmp_path, runtime_version, gst_version
+):
     _write_fake_sima_cli(tmp_path)
     _write_fake_neat_json(
         tmp_path,
         channel="scratch-core-for-test",
         tag="scratchsha1",
         env="prod",
-        runtime_channel="different-runtime-branch",
+        runtime_version=runtime_version,
+        gst_plugins_version=gst_version,
     )
-
     proc = _run_build(
         tmp_path,
         args=["--only-install-neat-core"],
         env={
+            **_core_metadata_env("0.5.0+scratch-core-for-test.new"),
             "NEAT_APPS_DEPENDENCY_BRANCH": "scratch-core-for-test",
             "NEAT_CORE_INSTALL_MODE": "vulcan",
             "NEAT_VULCAN_ENV": "production",
-            "NEAT_APPS_TEST_SIMA_CLI_CWD": str(sima_cli_cwd),
-            "NEAT_APPS_TEST_SIMA_CLI_ARGS": str(sima_cli_args),
+            "NEAT_APPS_TEST_SIMA_CLI_CWD": str(tmp_path / "sima-cli-cwd.txt"),
+            "NEAT_APPS_TEST_SIMA_CLI_ARGS": str(tmp_path / "sima-cli-args.txt"),
         },
     )
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
     assert "NEAT core already installed" not in proc.stdout
-    assert (
-        sima_cli_args.read_text(encoding="utf-8")
-        .strip()
-        .endswith("core@scratch-core-for-test:scratchsha1")
+    assert (tmp_path / "sima-cli-args.txt").read_text().strip().endswith(
+        "core@scratch-core-for-test:scratchsha1"
+    )
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        None,
+        "{",
+        "[]",
+        "{}",
+        '{"resources":null}',
+        '{"resources":[null]}',
+        '{"resources":["neat-runtime_0.5.0_arm64.deb"]}',
+        json.dumps(
+            {
+                "resources": [
+                    "neat-runtime__arm64.deb",
+                    "neat-gst-plugins_0.5.0_arm64.deb",
+                ]
+            }
+        ),
+        json.dumps(
+            {
+                "resources": [
+                    "neat-runtime_0.5.0_arm64.deb",
+                    "neat-runtime_0.5.0_arm64.deb",
+                    "neat-gst-plugins_0.5.0_arm64.deb",
+                ]
+            }
+        ),
+        json.dumps(
+            {
+                "resources": [
+                    "neat-runtime_0.5.0_arm64.deb",
+                    "neat-runtime_0.5.1_arm64.deb",
+                    "neat-gst-plugins_0.5.0_arm64.deb",
+                ]
+            }
+        ),
+    ],
+)
+def test_vulcan_core_install_refreshes_when_metadata_is_unverifiable(
+    tmp_path, metadata
+):
+    _write_fake_sima_cli(tmp_path)
+    _write_fake_neat_json(
+        tmp_path,
+        channel="scratch-core-for-test",
+        tag="scratchsha1",
+        env="prod",
+        runtime_version="0.5.0",
+    )
+    bodies = {}
+    if metadata is not None:
+        bodies["https://core.test/scratch-core-for-test/scratchsha1/metadata.json"] = (
+            metadata
+        )
+    proc = _run_build(
+        tmp_path,
+        args=["--only-install-neat-core"],
+        env={
+            "NEAT_APPS_TEST_URL_BODIES": json.dumps(bodies),
+            "NEAT_APPS_DEPENDENCY_BRANCH": "scratch-core-for-test",
+            "NEAT_CORE_INSTALL_MODE": "vulcan",
+            "NEAT_VULCAN_ENV": "production",
+            "NEAT_APPS_TEST_SIMA_CLI_CWD": str(tmp_path / "sima-cli-cwd.txt"),
+            "NEAT_APPS_TEST_SIMA_CLI_ARGS": str(tmp_path / "sima-cli-args.txt"),
+        },
+    )
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert "NEAT core already installed" not in proc.stdout
+    assert "Traceback" not in proc.stderr
+    assert (tmp_path / "sima-cli-args.txt").read_text().strip().endswith(
+        "core@scratch-core-for-test:scratchsha1"
     )
 
 
