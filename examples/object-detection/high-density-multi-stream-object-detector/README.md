@@ -34,7 +34,7 @@ The three checked-in profiles use the same application and model:
 
 | Config | Streams | Source resolution and FPS | Expected FPS per channel |
 | --- | ---: | --- | ---: |
-| `config.yaml` | 16 | 1280×720 at 30 FPS | 30 FPS |
+| `config.yaml` | 16 | 1280×720 at 30 or 29.97 FPS, detected from the source | Source rate |
 | `config-24x720p20fps.yaml` | 24 | 1280×720 at 20 FPS | 20 FPS |
 | `config-48x720p10fps.yaml` | 48 | 1280×720 at 10 FPS | 10 FPS |
 
@@ -86,13 +86,40 @@ sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/mod
 cd ..
 ```
 
-Set `model.path` in the selected config to the downloaded package. Relative paths resolve from the config file; absolute paths are also supported.
+Set `model.path` in the selected config to the downloaded package.
+
+A relative `model.path` resolves from the config file, not from `prebuilt-apps/`.
+A bare `models/yolo26n-det-int8-b1.tar.gz` therefore points at
+`${APP_DIR}/src/common/models/` and fails with
+`ModelPack: invalid_archive: archive path does not exist`. Use an absolute path
+to the file downloaded above.
+
+Print it from `prebuilt-apps/`:
+
+```bash
+echo "$(pwd)/models/yolo26n-det-int8-b1.tar.gz"
+```
+
+Then set that value as `model.path` in the selected config. Change only that
+line; `labels` and `decode_type` must keep their packaged values:
+
+```yaml
+model:
+  path: <paste-the-printed-path>
+  labels: examples/object-detection/high-density-multi-stream-object-detector/src/common/coco_label.txt
+  decode_type: yolo26
+```
+
+`model.labels` is the exception: it resolves from the Apps root, so the packaged
+value needs no change.
 
 ## Prepare Insight
 
-[Insight](https://developer.sima.ai/software/tools/insight/) can host the input streams and render each output channel. Install videos directly from the Insight catalog or through YouTube support. In the Insight Web UI, start the required streams and copy their RTSP URLs into `streams`. Use the host and UDP port ranges reported by `neat` for the output settings.
+[Insight](https://developer.sima.ai/software/tools/insight/) can host the input streams and render each output channel. Install videos directly from the Insight catalog or through YouTube support. In the Insight Web UI, start the required streams and copy their RTSP URLs into `streams`. Use the host and UDP port ranges reported by `neat` for the output settings. Use a host and published port that the target can reach, not `localhost` and not an address only Insight's own machine can resolve. Verify the URL from the target before running; the application prints the resolved source and its dimensions on startup.
 
-Verify each source before starting the application:
+Verify each source before starting the application. A Modalix DevKit does not
+ship `ffprobe`, so run this from the machine hosting the sources or from any
+workstation with FFmpeg installed:
 
 ```bash
 ffprobe -v error \
@@ -118,7 +145,7 @@ Set `input.codec` to `h264`/`avc` or `h265`/`hevc`. H.264 is the default in all 
 
 Do not add the removed `inference.fan_in_policy` setting. Ordinary `connect()` and `build()` select the eligible realtime fan-in lowering automatically. Video/metadata synchronization is performed by Insight from each payload's source RTP timestamp; there is no application-side video-delay setting.
 
-Do not change `input.width`, `input.height`, or `input.fps` unless the RTSP sources also change. `input.skip_rtsp_probe` is enabled, so those values are the source contract.
+The default 16-stream config uses `input.fps: 0` and enables probing, so the source determines its frame rate. Keep `input.width` and `input.height` matched to the source. The 24- and 48-stream profiles keep explicit FPS values and skip probing; their configured dimensions and frame rates must match the sources.
 
 Insight channel and port mapping is deterministic:
 
@@ -173,16 +200,55 @@ Use one active Insight viewer while validating metadata. Insight currently has a
 
 - Every configured Insight channel receives live video.
 - Detection boxes appear on the matching channel.
-- Video and metadata advance at 30 FPS for 16 streams, 20 FPS for 24 streams, or 10 FPS for 48 streams.
+- Video and metadata follow the source cadence for 16 streams, 20 FPS for 24 streams, or 10 FPS for 48 streams.
 - Final per-stream counters show every stream advancing; the application fails with the missing channel IDs if a stream never starts or later stops.
 - No detection timeout or stalled channel is reported. Metadata sender counters expose any nonblocking UDP drops without stalling inference.
 
 If channels do not start, confirm that every publisher was already reachable and that the configured source caps match the selected profile. Restart the application after restarting the publishers.
 
+## Troubleshooting
+
+Check the configuration before involving hardware. This validates and exits
+without opening a stream or touching Insight:
+
+```bash
+"$APP" --config "$CONFIG" --validate-config-only
+```
+
+- `ModelPack: invalid_archive: archive path does not exist` at run time means
+  `model.path` resolved from the config file rather than from `prebuilt-apps/`.
+  Use the absolute path printed in Prepare the Model. Validation does not open
+  the archive, so this appears only once the run starts.
+- `output.insight.max_visible_streams cannot exceed stream count` means the
+  profile's visible-stream count is higher than the number of entries under
+  `streams`. Reduce it, or add the missing stream URLs.
+- `failed to probe RTSP frame rate` from the C++ binary does not tell you which
+  problem you have. The shipped profiles set `input.width` and `input.height` but
+  leave `input.fps` at `0`, so the configured dimensions are used as-is and only
+  the frame rate is probed. An unreachable source and a reachable source that
+  advertises no frame rate both end at this same message. Confirm the URL is
+  reachable from the board before assuming the latter, and set `input.fps` only
+  once you have.
+- The Python entrypoint does distinguish the two: an unreachable source raises
+  `failed to open RTSP source for probing: <url>` before any dimension or rate
+  check.
+- Either way, verify the URL from the board itself rather than from the machine
+  running Insight; the URL Insight displays is not always reachable from the
+  target.
+- `timed out waiting for two initial detections from streams: …` names the
+  streams that produced fewer than two inference results before the timeout. The
+  count is per result pulled from the pipeline, not per object found, so footage
+  containing nothing the model reports still primes normally. A named stream is
+  one that is not delivering frames, and the sources are the place to look rather
+  than the model or the board. In reproducing this example, publishing all sixteen
+  streams from the same board that consumed them starved most of them; publishing
+  from a separate machine on the network ran the documented profile cleanly.
+
 ## Source Files
 
 - C++ reference source: `src/cpp/main.cpp`
 - Python implementation: `src/python/main.py`
+- Python throughput measurement: `src/python/metadata_measurement.py`
 - Default 16-stream profile: `src/common/config.yaml`
 - 24-stream profile: `src/common/config-24x720p20fps.yaml`
 - 48-stream profile: `src/common/config-48x720p10fps.yaml`

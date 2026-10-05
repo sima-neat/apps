@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Audio API · Neat GenAI Studio</title>
+  <link rel="icon" type="image/png" href="/static/icons/neat-logo.png">
+  <link rel="stylesheet" href="playground.css">
+</head>
+<body>
+  <header class="pg-header">
+    <a id="backButton" class="back-btn" href="/" target="_top" title="Back to the Studio (Esc)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg><span>Back to Studio</span>
+    </a>
+    <div class="pg-brand">
+      <img id="logo" class="pg-brand-mark" src="/static/icons/neat-mark.png" alt="Neat">
+      <div class="pg-brand-text"><span class="pg-title">Audio API</span><span class="pg-sub">playground · /v1/audio</span></div>
+    </div>
+    <nav class="pg-tabs" role="tablist" aria-label="Modes">
+      <button class="pg-tab" role="tab" data-tab="speech" aria-selected="true" type="button">Speech</button>
+      <button class="pg-tab" role="tab" data-tab="transcription" aria-selected="false" type="button">Transcription</button>
+      <button class="pg-tab" role="tab" data-tab="echo" aria-selected="false" type="button">Echo</button>
+      <button class="pg-tab" role="tab" data-tab="translate" aria-selected="false" type="button">Translate</button>
+    </nav>
+    <span class="pg-spacer"></span>
+    <span id="conn" class="pg-pill"><i class="dot"></i><span>connecting…</span></span>
+    <button id="themeButton" class="icon-btn" type="button" title="Toggle theme" aria-label="Toggle theme">
+      <svg id="themeSun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+      <svg id="themeMoon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" hidden><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+    </button>
+    <a id="newTab" class="icon-btn" href="/playground/" target="_blank" rel="noopener" title="Open in a new tab" aria-label="Open in a new tab">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-9 9M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/></svg>
+    </a>
+  </header>
+
+  <main>
+    <!-- ================= Speech ================= -->
+    <section id="panel-speech" class="pg-panel" role="tabpanel">
+      <div class="pg-grid">
+        <div class="card">
+          <div class="card-head"><h2>Compose</h2><span class="route">POST /v1/audio/speech</span></div>
+          <label class="field">
+            <span>Text <code>input</code></span>
+            <textarea id="sp-input" class="textarea" spellcheck="true">Hello from Neat GenAI Studio. This sentence was synthesized on the Modalix accelerator.</textarea>
+          </label>
+          <div class="row">
+            <label class="field"><span>Engine <code>model</code></span><select id="sp-engine" class="select"></select></label>
+            <label class="field"><span>Voice <code>voice</code></span><select id="sp-voice" class="select"></select></label>
+            <label class="field"><span>Language <code>language</code></span><select id="sp-language" class="select"></select></label>
+          </div>
+          <div class="field">
+            <span>Speed <code>speed</code></span>
+            <div class="slider"><input id="sp-speed" type="range" min="0.25" max="4" step="0.05" value="1"><output id="sp-speedOut">1.00×</output></div>
+            <div class="hint">Engines clamp to their own range (Supertonic 0.7–2.0, Piper 0.5–2.0); the effective value returns in <code>X-Speed</code>. Only <code>wav</code> is produced.</div>
+          </div>
+          <div class="actions">
+            <button id="sp-run" class="btn primary" type="button">
+              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span>Synthesize</span>
+            </button>
+            <button id="sp-stop" class="btn" type="button" disabled>Cancel</button>
+            <span class="hint">⌘/Ctrl + Enter</span>
+          </div>
+          <div id="sp-status" class="status"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>Output</h2><span id="sp-size" class="route">–</span><button id="sp-clear" class="copy-btn" type="button">Clear</button></div>
+          <div id="sp-wave" class="wave"><canvas id="sp-canvas"></canvas><div class="cursor"></div><div id="sp-placeholder" class="placeholder">Synthesize to hear the result</div></div>
+          <div class="player-row">
+            <button id="sp-play" class="btn" type="button" disabled>
+              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span>Play</span>
+            </button>
+            <audio id="sp-audio" controls preload="auto" hidden></audio>
+            <a id="sp-download" class="btn" download="speech.wav" hidden>Download WAV</a>
+          </div>
+          <div class="stats">
+            <div class="stat"><b id="st-engine">–</b><span>engine</span></div>
+            <div class="stat"><b id="st-voice">–</b><span>voice</span></div>
+            <div class="stat"><b id="st-speed">–</b><span>speed</span></div>
+            <div class="stat"><b id="st-dur">–</b><span>audio s</span></div>
+            <div class="stat"><b id="st-gen">–</b><span>gen s</span></div>
+            <div class="stat"><b id="st-rtf">–</b><span>RTF</span></div>
+          </div>
+          <details class="panel" open>
+            <summary>Request &amp; curl</summary>
+            <div class="panel-body">
+              <pre id="sp-req">{}</pre>
+              <div class="copy-row"><span>Same call from a shell</span><button class="copy-btn" data-copy="sp-curl" type="button">Copy</button></div>
+              <pre id="sp-curl"></pre>
+            </div>
+          </details>
+          <details class="panel">
+            <summary>Response headers</summary>
+            <div class="panel-body"><pre id="sp-headers"></pre></div>
+          </details>
+          <details class="panel">
+            <summary>Engines, voices &amp; languages <code>GET /v1/audio/voices</code></summary>
+            <div class="panel-body"><pre id="sp-voicesJson"></pre></div>
+          </details>
+        </div>
+      </div>
+      <div class="ref">
+        <span><code>input</code> ≤ 4096 chars</span><span><code>model</code> default | supertonic | piper-plus | piper-tts</span>
+        <span><code>speed</code> 0.25–4.0</span><span><code>response_format</code> wav</span><span><code>language</code> ISO code (extension)</span>
+      </div>
+    </section>
+
+    <!-- ================= Transcription ================= -->
+    <section id="panel-transcription" class="pg-panel" role="tabpanel" hidden>
+      <div class="pg-grid">
+        <div class="card">
+          <div class="card-head">
+            <h2>Audio in</h2>
+            <div class="seg" role="tablist" aria-label="Transcription mode">
+              <button class="seg-btn" data-trmode="clip" aria-selected="true" type="button">Clip</button>
+              <button class="seg-btn" data-trmode="live" aria-selected="false" type="button">Live</button>
+            </div>
+            <span class="route">POST /v1/audio/transcriptions</span>
+          </div>
+
+          <!-- Clip mode: record or drop a file, transcribe once -->
+          <div id="tr-clipMode" class="stack">
+            <div class="actions">
+              <button id="tr-rec" class="btn primary rec-btn" type="button"><i class="rec-dot"></i><span>Record</span></button>
+              <button id="tr-recStop" class="btn" type="button" disabled>Stop</button>
+              <span id="tr-recTime" class="hint"></span>
+            </div>
+            <div class="meter"><i id="tr-level"></i></div>
+            <label id="tr-drop" class="drop">
+              <input id="tr-file" type="file" accept="audio/*,video/webm,.wav,.webm,.ogg,.mp3,.m4a,.flac">
+              <span id="tr-dropText">… or drop an audio file here / click to choose</span>
+            </label>
+            <div id="tr-wave" class="wave"><canvas id="tr-canvas"></canvas><div class="cursor"></div><div id="tr-placeholder" class="placeholder">No clip yet</div></div>
+            <div class="player-row">
+              <button id="tr-play" class="btn" type="button" disabled>
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span>Play clip</span>
+              </button>
+              <audio id="tr-audio" controls preload="auto" hidden></audio>
+              <span id="tr-clipInfo" class="hint"></span>
+            </div>
+            <div class="row">
+              <label class="field"><span>Language <code>language</code></span><select id="tr-language" class="select"></select></label>
+              <label class="field"><span>Format <code>response_format</code></span>
+                <select id="tr-format" class="select"><option value="verbose_json" selected>verbose_json</option><option value="json">json</option><option value="text">text</option></select>
+              </label>
+              <label class="field"><span>Model <code>model</code></span><input id="tr-model" class="input" type="text" placeholder="active speech-to-text model"></label>
+            </div>
+            <div class="actions">
+              <button id="tr-run" class="btn primary" type="button" disabled>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 12h3l3-7 4 14 3-7h3"/></svg><span>Transcribe</span>
+              </button>
+              <button id="tr-cancel" class="btn" type="button" disabled>Cancel</button>
+            </div>
+            <div id="tr-status" class="status"></div>
+          </div>
+
+          <!-- Live mode: hands-free, utterances are cut by voice activity and
+               transcribed one after another -->
+          <div id="tr-liveMode" class="stack" hidden>
+            <div class="live-head">
+              <button id="tl-start" class="btn primary rec-btn" type="button"><i class="rec-dot"></i><span>Start listening</span></button>
+              <button id="tl-stop" class="btn" type="button" disabled>Stop</button>
+              <span id="tl-state" class="state-chip idle"><i></i><span>idle</span></span>
+            </div>
+            <div class="meter vad"><i id="tl-level"></i><b id="tl-threshold"></b></div>
+            <div class="row">
+              <label class="field"><span>Language <code>language</code></span><select id="tl-language" class="select"></select></label>
+              <label class="field"><span>Model <code>model</code></span><input id="tl-model" class="input" type="text" placeholder="active speech-to-text model"></label>
+            </div>
+            <div class="row">
+              <div class="field">
+                <span>Sensitivity <code>VAD</code></span>
+                <div class="slider"><input id="tl-sens" type="range" min="0" max="1" step="0.05" value="0.5"><output id="tl-sensOut">0.50</output></div>
+              </div>
+              <div class="field">
+                <span>End of utterance <code>silence</code></span>
+                <div class="slider"><input id="tl-silence" type="range" min="300" max="2000" step="50" value="700"><output id="tl-silenceOut">700 ms</output></div>
+              </div>
+            </div>
+            <label class="check"><input id="tl-hideIgnored" type="checkbox"> Hide segments the Studio would ignore (noise, low confidence)</label>
+            <div class="hint">Speech is detected in the browser, cut at the pause you set and posted as 16 kHz WAV, one utterance at a time, with <code>response_format=verbose_json</code>. Nothing leaves this origin.</div>
+            <div id="tl-status" class="status"></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <!-- Clip result -->
+          <div id="tr-clipOut" class="stack">
+            <div class="card-head"><h2>Transcript</h2><span id="tr-elapsed" class="route">–</span><button id="tr-clear" class="copy-btn" type="button">Clear</button></div>
+            <div id="tr-result" class="transcript empty">The transcript appears here.</div>
+            <table id="tr-meta" class="meta" hidden>
+              <tbody>
+                <tr><td>model <code>X-ASR-Model</code></td><td id="m-model">–</td></tr>
+                <tr><td>language</td><td id="m-lang">–</td></tr>
+                <tr><td>no_speech_prob</td><td id="m-nospeech">–</td></tr>
+                <tr><td>avg_logprob</td><td id="m-logprob">–</td></tr>
+                <tr><td>Studio filter</td><td id="m-ignored">–</td></tr>
+              </tbody>
+            </table>
+            <details class="panel" open>
+              <summary>curl</summary>
+              <div class="panel-body">
+                <div class="copy-row"><span>Same call from a shell</span><button class="copy-btn" data-copy="tr-curl" type="button">Copy</button></div>
+                <pre id="tr-curl"></pre>
+              </div>
+            </details>
+            <details class="panel">
+              <summary>Raw response</summary>
+              <div class="panel-body"><pre id="tr-raw"></pre></div>
+            </details>
+          </div>
+
+          <!-- Live result -->
+          <div id="tr-liveOut" class="stack" hidden>
+            <div class="card-head">
+              <h2>Live transcript</h2>
+              <div class="actions tight">
+                <button id="tl-copy" class="copy-btn" type="button">Copy all</button>
+                <button id="tl-clear" class="copy-btn" type="button">Clear</button>
+              </div>
+            </div>
+            <div id="tl-log" class="live-log"><div class="placeholder">Start listening and speak. Each utterance appears here as soon as it is transcribed.</div></div>
+            <div class="stats">
+              <div class="stat"><b id="tl-count">0</b><span>utterances</span></div>
+              <div class="stat"><b id="tl-words">0</b><span>words</span></div>
+              <div class="stat"><b id="tl-speech">0.0</b><span>speech s</span></div>
+              <div class="stat"><b id="tl-latency">–</b><span>avg latency s</span></div>
+              <div class="stat"><b id="tl-rtf">–</b><span>avg RTF</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="ref">
+        <span><code>file</code> WAV, WebM/Opus, MP4, MP3, FLAC… ≤ 25 MiB</span><span><code>language</code> auto or ISO code</span>
+        <span><code>response_format</code> json | verbose_json | text</span><span><code>model</code> optional</span>
+      </div>
+    </section>
+
+    <!-- ================= Echo: speak, get transcribed, hear it spoken back ================= -->
+    <section id="panel-echo" class="pg-panel" role="tabpanel" hidden>
+      <div class="pg-grid">
+        <div class="card">
+          <div class="card-head"><h2>Voice loop</h2><span class="route">transcriptions → speech</span></div>
+          <div class="echo-stage">
+            <button id="ec-start" class="echo-btn" type="button" aria-label="Start">
+              <span class="ring"></span>
+              <svg class="mic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+              <svg class="stopi" viewBox="0 0 24 24" fill="currentColor" hidden><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+            </button>
+            <div id="ec-state" class="echo-state idle">Press to start, then just talk. What you say is transcribed and spoken straight back.</div>
+            <div class="meter vad"><i id="ec-level"></i><b id="ec-threshold"></b></div>
+          </div>
+          <div class="row">
+            <label class="field"><span>Voice engine <code>model</code></span><select id="ec-engine" class="select"></select></label>
+            <label class="field"><span>Voice <code>voice</code></span><select id="ec-voice" class="select"></select></label>
+          </div>
+          <div class="row">
+            <label class="field"><span>Listen in <code>language</code></span><select id="ec-asrLanguage" class="select"></select></label>
+            <label class="field"><span>Speak back in</span>
+              <select id="ec-ttsLanguage" class="select"><option value="auto" selected>match what was heard</option></select>
+            </label>
+          </div>
+          <div class="row">
+            <div class="field">
+              <span>Speed <code>speed</code></span>
+              <div class="slider"><input id="ec-speed" type="range" min="0.25" max="4" step="0.05" value="1"><output id="ec-speedOut">1.00×</output></div>
+            </div>
+            <div class="field">
+              <span>End of utterance <code>silence</code></span>
+              <div class="slider"><input id="ec-silence" type="range" min="300" max="2000" step="50" value="600"><output id="ec-silenceOut">600 ms</output></div>
+            </div>
+          </div>
+          <div class="field">
+            <span>Sensitivity <code>VAD</code></span>
+            <div class="slider"><input id="ec-sens" type="range" min="0" max="1" step="0.05" value="0.5"><output id="ec-sensOut">0.50</output></div>
+          </div>
+          <div class="hint">The microphone is muted while the reply plays, then listening resumes. Use headphones or keep the volume moderate so the reply is not picked up again.</div>
+          <div id="ec-status" class="status"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>Conversation</h2>
+            <div class="actions tight"><button id="ec-clear" class="copy-btn" type="button">Clear</button></div>
+          </div>
+          <div id="ec-turns" class="turns"><div class="placeholder">Each turn shows what was heard and the reply that was spoken back, with timings.</div></div>
+          <div id="ec-wave" class="wave short"><canvas id="ec-canvas"></canvas><div class="cursor"></div><div id="ec-placeholder" class="placeholder">Last reply</div></div>
+          <div class="player-row">
+            <button id="ec-play" class="btn" type="button" disabled>
+              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span>Play</span>
+            </button>
+            <audio id="ec-audio" controls preload="auto" hidden></audio>
+          </div>
+          <div class="stats">
+            <div class="stat"><b id="ec-count">0</b><span>turns</span></div>
+            <div class="stat"><b id="ec-asr">–</b><span>avg ASR s</span></div>
+            <div class="stat"><b id="ec-tts">–</b><span>avg TTS s</span></div>
+            <div class="stat"><b id="ec-turn">–</b><span>avg to reply s</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="ref">
+        <span>1 · utterance cut by voice activity</span><span>2 · <code>POST /v1/audio/transcriptions</code> (verbose_json)</span>
+        <span>3 · <code>POST /v1/audio/speech</code> with the transcript</span><span>4 · played back, mic resumes</span>
+      </div>
+    </section>
+
+    <!-- ================= Translate: speak or type in one language, get another ================= -->
+    <section id="panel-translate" class="pg-panel" role="tabpanel" hidden>
+      <div class="pg-grid">
+        <div class="card">
+          <div class="card-head"><h2>Translate</h2><span id="xl-route" class="route">transcriptions → chat → speech</span></div>
+          <div class="row">
+            <label class="field"><span>From <code>language</code></span><select id="xl-source" class="select"></select></label>
+            <div class="swap-wrap"><button id="xl-swap" class="icon-btn" type="button" title="Swap languages" aria-label="Swap languages">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h13M16 3l4 4-4 4M17 17H4M8 21l-4-4 4-4"/></svg>
+            </button></div>
+            <label class="field"><span>To</span><select id="xl-target" class="select"></select></label>
+          </div>
+          <label class="field"><span>Tone <code>register</code></span>
+            <select id="xl-tone" class="select">
+              <option value="neutral" selected>Neutral · as spoken</option>
+              <option value="formal">Formal · polite, formal address</option>
+              <option value="casual">Casual · everyday, informal address</option>
+              <option value="friendly">Friendly · warm and upbeat</option>
+              <option value="business">Business · professional and concise</option>
+              <option value="simple">Simple · plain words for learners</option>
+            </select>
+          </label>
+          <div id="xl-model" class="model-note"><i class="dot"></i><span>checking the chat model…</span></div>
+          <div class="echo-stage">
+            <button id="xl-start" class="echo-btn" type="button" aria-label="Start listening">
+              <span class="ring"></span>
+              <svg class="mic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+              <svg class="stopi" viewBox="0 0 24 24" fill="currentColor" hidden><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+            </button>
+            <div id="xl-state" class="echo-state idle">Press to listen and speak, or type below. Each utterance is translated as soon as you pause.</div>
+            <div class="meter vad"><i id="xl-level"></i><b id="xl-threshold"></b></div>
+          </div>
+          <div class="compose">
+            <textarea id="xl-text" class="textarea short" placeholder="…or type text to translate (Ctrl/⌘ + Enter)"></textarea>
+            <button id="xl-send" class="btn primary" type="button">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h14M13 6l6 6-6 6"/></svg><span>Translate</span>
+            </button>
+          </div>
+          <label class="check"><input id="xl-speak" type="checkbox" checked> Speak the translation</label>
+          <div class="row">
+            <label class="field"><span>Voice engine <code>model</code></span><select id="xl-engine" class="select"></select></label>
+            <label class="field"><span>Voice <code>voice</code></span><select id="xl-voice" class="select"></select></label>
+          </div>
+          <div class="row">
+            <div class="field">
+              <span>Speed <code>speed</code></span>
+              <div class="slider"><input id="xl-speed" type="range" min="0.25" max="4" step="0.05" value="1"><output id="xl-speedOut">1.00×</output></div>
+            </div>
+            <div class="field">
+              <span>End of utterance <code>silence</code></span>
+              <div class="slider"><input id="xl-silence" type="range" min="300" max="2000" step="50" value="700"><output id="xl-silenceOut">700 ms</output></div>
+            </div>
+          </div>
+          <div class="field">
+            <span>Sensitivity <code>VAD</code></span>
+            <div class="slider"><input id="xl-sens" type="range" min="0" max="1" step="0.05" value="0.5"><output id="xl-sensOut">0.50</output></div>
+          </div>
+          <div class="hint">Into English with a neutral tone, speech goes through Whisper's translate task, with the original transcribed alongside. With another tone, or into any other language, Whisper transcribes what you said and the loaded chat model translates it. The microphone is muted while a translation plays.</div>
+          <div id="xl-status" class="status"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>Translations</h2>
+            <div class="actions tight">
+              <button id="xl-copy" class="copy-btn" type="button">Copy all</button>
+              <button id="xl-clear" class="copy-btn" type="button">Clear</button>
+            </div>
+          </div>
+          <div id="xl-turns" class="turns"><div class="placeholder">Each turn shows the original with its detected language and the translation, with ASR, LLM and TTS timings.</div></div>
+          <div id="xl-wave" class="wave short"><canvas id="xl-canvas"></canvas><div class="cursor"></div><div id="xl-placeholder" class="placeholder">Last spoken translation</div></div>
+          <div class="player-row">
+            <button id="xl-play" class="btn" type="button" disabled>
+              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span>Play</span>
+            </button>
+            <audio id="xl-audio" controls preload="auto" hidden></audio>
+          </div>
+          <div class="stats">
+            <div class="stat"><b id="xl-count">0</b><span>translations</span></div>
+            <div class="stat"><b id="xl-asr">–</b><span>avg ASR s</span></div>
+            <div class="stat"><b id="xl-llm">–</b><span>avg LLM s</span></div>
+            <div class="stat"><b id="xl-tts">–</b><span>avg TTS s</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="ref">
+        <span>→ English: <code>POST /v1/audio/translations</code></span>
+        <span>other targets: <code>POST /v1/audio/transcriptions</code> then <code>POST /v1/chat/completions</code></span>
+        <span>spoken with <code>POST /v1/audio/speech</code></span>
+      </div>
+    </section>
+  </main>
+
+  <script src="playground.js"></script>
+</body>
+</html>

@@ -67,7 +67,7 @@ Set `model.path` in the config to the downloaded package.
 
 [Insight](https://developer.sima.ai/software/tools/insight/) can host the input stream and render the video and detection metadata. Install videos directly from the Insight catalog or through Insight's YouTube support.
 
-In the Insight Web UI, start the required stream and copy its source URL. Use RTSP for H.264 or H.265; for MJPEG, Insight supports both RTSP and HTTP URLs. Set `source.codec` to `h264`/`avc`, `h265`/`hevc`, or `mjpeg`. Decoded frames are encoded as H.264 for Insight output.
+In the Insight Web UI, start the required stream and copy its source URL. Use RTSP for H.264 or H.265; for MJPEG, Insight supports both RTSP and HTTP URLs. Set `source.codec` to `h264`/`avc`, `h265`/`hevc`, or `mjpeg`. Decoded frames are encoded as H.264 for Insight output. Use a host and published port that the target can reach, not `localhost` and not an address only Insight's own machine can resolve. Verify the URL from the target before running; the application prints the resolved source and its dimensions on startup.
 
 ## Configure
 
@@ -92,6 +92,30 @@ pip install -r ${APP_DIR}/src/python/requirements.txt
 python3 ${APP_DIR}/src/python/main.py \
   --config ${APP_DIR}/src/common/config.yaml
 ```
+
+## Expected Result
+
+The application prints the resolved source on startup and a count when the frame
+limit is reached:
+
+```text
+processed=200 video_sender=<insight-host>:9000
+```
+
+The packaged config ships `inference.frames: 0`, which runs continuously. The
+closing `processed=` line prints only when a finite limit is reached, and
+interrupting the run with Ctrl-C skips it. For a bounded check that ends by
+itself, set a positive limit first:
+
+```yaml
+inference:
+  frames: 200
+```
+
+Left at `0`, the live Insight stream is the success signal instead. Either way,
+to confirm detections without watching Insight, set `output.save_dir` to a
+directory and `output.save_every` to a non-zero interval; the application then
+writes annotated frames there as it runs.
 
 ## Troubleshooting
 

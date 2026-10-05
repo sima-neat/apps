@@ -57,28 +57,35 @@ class PiperPlusTTS:
         logging.info("PiperPlusTTS loaded %s (languages: %s)",
                      self.model_path, sorted(self.languages))
 
-    def set_utterance_speed(self, speed):
-        """Map a 0.5–2.0x speed multiplier to piper's ``length_scale``
-        (inverse: higher = slower)."""
+    SPEED_MIN, SPEED_MAX = 0.5, 2.0
+
+    def clamp_speed(self, speed):
+        """The engine's effective speed for a requested multiplier."""
         try:
             speed = float(speed)
         except (TypeError, ValueError):
             speed = 1.0
-        speed = max(0.5, min(2.0, speed))
-        self.length_scale = 1.0 / speed
+        return max(self.SPEED_MIN, min(self.SPEED_MAX, speed))
+
+    def set_utterance_speed(self, speed):
+        """Map a 0.5–2.0x speed multiplier to piper's ``length_scale``
+        (inverse: higher = slower)."""
+        self.length_scale = 1.0 / self.clamp_speed(speed)
 
     def supports(self, language):
         return bool(language) and language in self.languages
 
-    def synthesize(self, text, language=None):
+    def synthesize(self, text, language=None, speed=None):
         """Synthesize ``text`` and return a WAV ``BytesIO``. ``language`` is
-        mapped to the model's ``language_id`` (``None`` -> auto-detect)."""
+        mapped to the model's ``language_id`` (``None`` -> auto-detect).
+        ``speed`` applies to this call only; ``None`` uses the configured one."""
         language_id = self.lang_ids.get(language) if language else None
+        length_scale = self.length_scale if speed is None else 1.0 / self.clamp_speed(speed)
         buf = io.BytesIO()
         with wave.open(buf, "wb") as wav_file:
             self.voice.synthesize(
                 text, wav_file,
-                length_scale=self.length_scale,
+                length_scale=length_scale,
                 language_id=language_id,
             )
         buf.seek(0)

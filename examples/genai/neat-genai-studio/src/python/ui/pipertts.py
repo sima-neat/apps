@@ -193,15 +193,21 @@ class PiperTTS:
         # fail fast. Dedicated Piper voices never load the unsplit ONNX model.
         _request({"cmd": "load", "model": self.model_path})
 
-    def set_utterance_speed(self, speed):
+    SPEED_MIN, SPEED_MAX = 0.5, 2.0
+
+    def clamp_speed(self, speed):
+        """The engine's effective speed for a requested multiplier."""
         try:
             speed = float(speed)
         except (TypeError, ValueError):
             speed = 1.0
-        self.speed = max(0.5, min(2.0, speed))
+        return max(self.SPEED_MIN, min(self.SPEED_MAX, speed))
 
-    def synthesize(self, text, language=None):
-        chunks = list(self.synthesize_stream(text, language=language))
+    def set_utterance_speed(self, speed):
+        self.speed = self.clamp_speed(speed)
+
+    def synthesize(self, text, language=None, speed=None):
+        chunks = list(self.synthesize_stream(text, language=language, speed=speed))
         if not chunks:
             return io.BytesIO()
         frames = []
@@ -227,10 +233,13 @@ class PiperTTS:
         output.seek(0)
         return output
 
-    def synthesize_stream(self, text, language=None):
+    def synthesize_stream(self, text, language=None, speed=None):
+        """``speed`` applies to this call only (the API's per-request speed);
+        ``None`` uses the configured utterance speed."""
         stream = _request_stream({
             "cmd": "synth_stream", "model": self.model_path,
-            "text": text, "speed": self.speed,
+            "text": text,
+            "speed": self.speed if speed is None else self.clamp_speed(speed),
         })
         try:
             for data in stream:

@@ -272,8 +272,11 @@ _CURRENCY = re.compile(
     r"\$\s?(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?|\.\d+)"
     r"\s?(bn|BN|[KkMmBb]|thousand|million|billion|trillion)?(?![\w^])")
 _MATH_DISPLAY_DOLLAR = re.compile(r"\$\$(.{1,2000}?)\$\$", re.DOTALL)
-_MATH_DISPLAY_BRACKET = re.compile(r"\\\[(.{1,2000}?)\\\]", re.DOTALL)
-_MATH_INLINE_PAREN = re.compile(r"\\\((.{1,2000}?)\\\)", re.DOTALL)
+# The delimited-math bodies exclude a nested opener: without that, a run of
+# unclosed openers costs length x 2000 (each start lazily scans the whole
+# window before failing), which is ~1.2 s for 8k of "\[" on a Modalix core.
+_MATH_DISPLAY_BRACKET = re.compile(r"\\\[((?:(?!\\\[).){1,2000}?)\\\]", re.DOTALL)
+_MATH_INLINE_PAREN = re.compile(r"\\\(((?:(?!\\\().){1,2000}?)\\\)", re.DOTALL)
 _MATH_INLINE_DOLLAR = re.compile(r"\$([^$\n]{1,800}?)\$")
 _HR = re.compile(r"(?m)^[ \t]{0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$")
 # ATX heading: the '#'s must be followed by a space or end of line, so "#42" (a

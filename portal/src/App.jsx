@@ -337,7 +337,7 @@ function CatalogPage({ catalog }) {
     tag: "",
   });
   const options = extractFilterOptions(catalog.examples);
-  const filtered = catalog.examples.filter((example) => matchesFilters(example, filters, ""));
+  const filtered = catalog.examples.filter((example) => matchesFilters(example, filters));
 
   return (
     <div className="portal-shell">

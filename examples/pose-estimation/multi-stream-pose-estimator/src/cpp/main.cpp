@@ -18,6 +18,7 @@
 #include "neat/nodes.h"
 #include "support/runtime/config_utils.h"
 #include "support/runtime/example_utils.h"
+#include "support/runtime/pull_status.h"
 
 #include <nodes/groups/VideoSender.h>
 #include <nodes/io/MetadataSender.h>
@@ -926,11 +927,8 @@ void run_app(const AppConfig& cfg) {
     simaai::neat::PullError pull_error;
     const auto status = app.run.pull("poses", kPullTimeoutMs, sample, &pull_error);
     const double pull_end = sima_examples::time_ms();
-    if (status == simaai::neat::PullStatus::Timeout || status == simaai::neat::PullStatus::Closed) {
+    if (!sima_examples::pull_status_has_sample(status, "poses", pull_error, app.run.last_error())) {
       continue;
-    }
-    if (status != simaai::neat::PullStatus::Ok) {
-      throw std::runtime_error("failed to pull poses: " + pull_error.message);
     }
     const int stream_index = stream_index_from_sample(sample, static_cast<int>(app.streams.size()));
     process_output_sample(app.streams[static_cast<std::size_t>(stream_index)], cfg, sample,
