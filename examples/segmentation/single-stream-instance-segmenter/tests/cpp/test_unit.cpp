@@ -1,6 +1,7 @@
 // Unit test for single-stream-instance-segmenter: CLI handling and the
 // configuration rules --validate-config-only can reach without a model or a
 // stream.
+#include "support/runtime/pull_status.h"
 #include "support/testing/test_checks.h"
 #include "support/testing/test_process.h"
 
@@ -11,6 +12,7 @@
 
 namespace fs = std::filesystem;
 
+using sima_examples::pull_status_has_sample;
 using sima_examples::testing::expect_contains;
 using sima_examples::testing::expect_not_contains;
 using sima_examples::testing::expect_true;
@@ -54,8 +56,8 @@ bool test_missing_config_file_fails(const std::string& binary) {
 // "used when source.url is empty", so the empty value has to fall through.
 bool test_empty_url_falls_back_to_the_legacy_key(const std::string& binary) {
   const auto r = validate_config_body(kExampleName, binary, "empty_url_falls_back",
-                          minimal_config("  url: \"\"\n"
-                                         "  rtsp_url: rtsp://127.0.0.1:8554/legacy\n"));
+                                      minimal_config("  url: \"\"\n"
+                                                     "  rtsp_url: rtsp://127.0.0.1:8554/legacy\n"));
   return expect_true(r.exit_code == 0, "empty url with a legacy rtsp_url validates") &&
          expect_contains(r.stdout_text, "source=source.rtsp_url",
                          "empty url selects the legacy rtsp_url");
@@ -63,7 +65,7 @@ bool test_empty_url_falls_back_to_the_legacy_key(const std::string& binary) {
 
 bool test_absent_url_falls_back_to_the_legacy_key(const std::string& binary) {
   const auto r = validate_config_body(kExampleName, binary, "absent_url_falls_back",
-                          minimal_config("  rtsp_url: rtsp://127.0.0.1:8554/legacy\n"));
+                                      minimal_config("  rtsp_url: rtsp://127.0.0.1:8554/legacy\n"));
   return expect_true(r.exit_code == 0, "absent url with a legacy rtsp_url validates") &&
          expect_contains(r.stdout_text, "source=source.rtsp_url",
                          "absent url selects the legacy rtsp_url");
@@ -71,8 +73,8 @@ bool test_absent_url_falls_back_to_the_legacy_key(const std::string& binary) {
 
 bool test_present_url_wins_over_the_legacy_key(const std::string& binary) {
   const auto r = validate_config_body(kExampleName, binary, "present_url_wins",
-                          minimal_config("  url: rtsp://127.0.0.1:8554/src1\n"
-                                         "  rtsp_url: rtsp://127.0.0.1:8554/legacy\n"));
+                                      minimal_config("  url: rtsp://127.0.0.1:8554/src1\n"
+                                                     "  rtsp_url: rtsp://127.0.0.1:8554/legacy\n"));
   return expect_true(r.exit_code == 0, "url beside a legacy rtsp_url validates") &&
          expect_contains(r.stdout_text, "source=source.url", "present url is selected") &&
          expect_not_contains(r.stdout_text, "source.rtsp_url", "legacy rtsp_url is not selected") &&
@@ -81,8 +83,8 @@ bool test_present_url_wins_over_the_legacy_key(const std::string& binary) {
 
 bool test_both_urls_empty_is_rejected(const std::string& binary) {
   const auto r = validate_config_body(kExampleName, binary, "both_urls_empty",
-                          minimal_config("  url: \"\"\n"
-                                         "  rtsp_url: \"\"\n"));
+                                      minimal_config("  url: \"\"\n"
+                                                     "  rtsp_url: \"\"\n"));
   return expect_true(r.exit_code != 0, "empty url and empty rtsp_url is rejected") &&
          expect_contains(r.stderr_text, "source.url or source.rtsp_url must be set",
                          "both-empty error names both keys");
@@ -91,9 +93,9 @@ bool test_both_urls_empty_is_rejected(const std::string& binary) {
 // The Python loader once accepted this because Path("") is "."; the C++ side
 // is held to the rule so the two implementations cannot drift apart.
 bool test_empty_labels_is_rejected(const std::string& binary) {
-  const auto r =
-      validate_config_body(kExampleName, binary, "empty_labels",
-               minimal_config("  url: rtsp://127.0.0.1:8554/src1\n", "  labels: \"\"\n"));
+  const auto r = validate_config_body(
+      kExampleName, binary, "empty_labels",
+      minimal_config("  url: rtsp://127.0.0.1:8554/src1\n", "  labels: \"\"\n"));
   return expect_true(r.exit_code != 0, "empty model.labels is rejected") &&
          expect_contains(r.stderr_text, "model.labels must be set",
                          "empty labels error names the key");
@@ -186,6 +188,30 @@ bool test_configuration_rules_are_enforced(const std::string& binary) {
   return ok;
 }
 
+bool test_closed_output_is_terminal() {
+  using simaai::neat::PullStatus;
+  simaai::neat::PullError pull_error;
+  pull_error.message = "queue torn down";
+  const auto thrown_message = [&](PullStatus status) -> std::string {
+    try {
+      (void)pull_status_has_sample(status, "segments", pull_error, "source reached EOS");
+    } catch (const std::runtime_error& error) {
+      return error.what();
+    }
+    return "";
+  };
+  return expect_true(thrown_message(PullStatus::Closed) ==
+                         "segments output closed unexpectedly: source reached EOS",
+                     "closed output ends the run with the runtime's reason") &&
+         expect_true(thrown_message(PullStatus::Error) ==
+                         "failed to pull segments: queue torn down",
+                     "pull error ends the run with its message") &&
+         expect_true(!pull_status_has_sample(PullStatus::Timeout, "segments", pull_error, ""),
+                     "timeout is not a sample") &&
+         expect_true(pull_status_has_sample(PullStatus::Ok, "segments", pull_error, ""),
+                     "successful pull is a sample");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -205,5 +231,6 @@ int main(int argc, char** argv) {
   ok &= test_both_urls_empty_is_rejected(binary);
   ok &= test_empty_labels_is_rejected(binary);
   ok &= test_configuration_rules_are_enforced(binary);
+  ok &= test_closed_output_is_terminal();
   return ok ? 0 : 1;
 }

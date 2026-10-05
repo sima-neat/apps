@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 from tests.utils.config_cases import config_writer, load_example_main
+from tests.utils.fake_run import FakeRun
 
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
@@ -563,3 +564,32 @@ class TestSampleAccess:
         bundle = self._Sample(self._Kind.Bundle, fields=[frame, segments])
 
         assert main.segment_tensors_from_sample(bundle) == ["boxes"]
+
+
+@pytest.mark.unit
+class TestPullOutcomes:
+    """The pull loop, driven by a run that yields no sample.
+
+    A timeout is a warning and another pull, and a runtime error raised by the pull ends
+    the run without a summary. pyneat's pull returns None for a closed output as for a
+    timeout, so Python cannot yet tell a source that ended from a slow one.
+    """
+
+    def test_timeout_is_not_a_sample(self):
+        run = FakeRun("timeout")
+        run.pull("segments", 20000)
+
+        assert main.pull_result_has_sample(run, None, "segments") is False
+
+    def test_run_pipeline_warns_on_timeout_and_stops_on_runtime_error(self, capsys):
+        run = FakeRun("timeout", ("error", "queue torn down"))
+        runtime = SimpleNamespace(run=run, output_name="segments")
+        cfg = SimpleNamespace(frames=0, profile=False, profile_interval=1)
+
+        with pytest.raises(RuntimeError, match="queue torn down"):
+            main.run_pipeline(runtime, cfg)
+
+        captured = capsys.readouterr()
+        assert captured.err.count("[warn] timed out waiting for segmentation output") == 1
+        assert "processed=" not in captured.out
+        assert run.pulls == [("segments", 20000)] * 2

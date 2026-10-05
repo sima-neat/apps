@@ -2,11 +2,13 @@
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
 from tests.utils.config_cases import config_writer, load_example_main
+from tests.utils.fake_run import FakeRun
 
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
@@ -272,3 +274,34 @@ class TestMalformedConfigFiles:
 
         with pytest.raises(ValueError, match="source.rtsp_url must be set"):
             main_module.load_app_config(config_path)
+
+
+@pytest.mark.unit
+class TestPullOutcomes:
+    """The pull loop, driven by a run that yields no sample.
+
+    A timeout is a warning and another pull, and a runtime error raised by the pull ends
+    the run without a summary. pyneat's pull returns None for a closed output as for a
+    timeout, so Python cannot yet tell a source that ended from a slow one.
+    """
+
+    def test_timeout_is_not_a_sample(self):
+        example = load_example()
+        run = FakeRun("timeout")
+        run.pull("detections", 20000)
+
+        assert example.pull_result_has_sample(run, None, "detections") is False
+
+    def test_run_pipeline_warns_on_timeout_and_stops_on_runtime_error(self, capsys):
+        example = load_example()
+        run = FakeRun("timeout", ("error", "queue torn down"))
+        runtime = SimpleNamespace(run=run)
+        cfg = SimpleNamespace(frames=0, profile=False, profile_interval=1)
+
+        with pytest.raises(RuntimeError, match="queue torn down"):
+            example.run_pipeline(runtime, cfg)
+
+        captured = capsys.readouterr()
+        assert captured.err.count("[warn] timed out waiting for detections") == 1
+        assert "processed=" not in captured.out
+        assert run.pulls == [("detections", 20000)] * 2

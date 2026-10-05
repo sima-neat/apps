@@ -62,7 +62,6 @@ class StreamRuntime:
     output_fps: int
     video_port: int
     processed: int = 0
-    closed: bool = False
 
 
 @dataclass
@@ -785,7 +784,7 @@ def maybe_save_debug_frame(
 def all_streams_done(streams: list[StreamRuntime], frame_limit: int) -> bool:
     if frame_limit <= 0:
         return False
-    return all(stream.processed >= frame_limit or stream.closed for stream in streams)
+    return all(stream.processed >= frame_limit for stream in streams)
 
 
 def process_output_sample(stream: StreamRuntime, cfg: AppConfig, sample, detection_pull_ms: float) -> None:
@@ -824,16 +823,29 @@ def drain_debug_frames(app: AppRuntime, cfg: AppConfig) -> None:
                 stream.latest_debug_frame = tensor_bgr_from_decoded(tensor)
 
 
+def pull_result_has_sample(run, sample, output_name: str) -> bool:
+    if sample is not None:
+        return True
+    last_error_fn = getattr(run, "last_error", None)
+    last_error = last_error_fn() if callable(last_error_fn) else ""
+    running_fn = getattr(run, "running", None)
+    running = running_fn() if callable(running_fn) else True
+    if not running:
+        message = f"{output_name} output closed unexpectedly"
+        if last_error:
+            message += f": {last_error}"
+        raise RuntimeError(message)
+    if last_error:
+        raise RuntimeError(f"runtime error: {last_error}")
+    return False
+
+
 def process_run_once(app: AppRuntime, cfg: AppConfig, output_name: str) -> bool:
     drain_debug_frames(app, cfg)
     pull_start = time_ms()
     sample = app.run.pull(output_name, 50)
     pull_end = time_ms()
-    if sample is None:
-        last_error_fn = getattr(app.run, "last_error", None)
-        last_error = last_error_fn() if callable(last_error_fn) else ""
-        if last_error:
-            raise RuntimeError(f"runtime error: {last_error}")
+    if not pull_result_has_sample(app.run, sample, output_name):
         return False
     stream_index = stream_index_from_sample(sample, len(app.streams))
     process_output_sample(app.streams[stream_index], cfg, sample, pull_end - pull_start)
