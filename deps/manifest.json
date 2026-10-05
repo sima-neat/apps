@@ -1,7 +1,6 @@
 {
   "neat-core": {
-    "branch": "release-0.4-pc",
-    "spec": "ab20dfe105c1"
+    "policy": "snap"
   },
   "sdk": {
     "channel": "develop"
