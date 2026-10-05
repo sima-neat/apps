@@ -28,6 +28,11 @@ struct MultiStreamSourceCase {
 void record_unavailable_case(const std::string& fail_reason, const std::string& skip_reason,
                              int& rc);
 
+// The scoped models that are present on disk. A missing one is reported like a missing
+// stream: a failure under strict e2e mode, which sets `rc`, otherwise a skip.
+std::vector<std::string> available_model_paths(const std::vector<std::string>& model_paths,
+                                               int& rc);
+
 // Runs `run_case` for every case whose URL is set, reports the ones that are not, and turns
 // "nothing ran" into the suite's skip-or-fail exit; `suite_label` names the suite in that
 // message. Returns the exit code for main.

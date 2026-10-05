@@ -68,6 +68,13 @@ available by calling `scripts/download_models.sh`, which skips models already
 present under `SIMANEAT_APPS_TEST_MODELS_DIR`. Set
 `NEAT_APPS_SKIP_MODEL_DOWNLOAD=1` to disable this step.
 
+A suite runs with the first model listed under `e2e.<language>.models`. Examples
+that advertise several model variants list the ones worth exercising under
+`e2e.<language>.variants`; with `SIMANEAT_APPS_TEST_MODEL_VARIANTS=1`, which
+`nightly-e2e.yml` sets, those are downloaded too and each e2e test runs once per
+model, named after it. Pull request runs leave the variable unset and stay at one
+model per suite.
+
 The README `Model` row remains customer-facing metadata. Test selection and
 test model downloads are controlled by `examples/*/*/tests/test-scope.yaml`, so large
 or blocked examples can stay documented without blocking CI. If a test is
@@ -99,6 +106,7 @@ tests/
     test_output_assertions.py  # harness self-tests; run by test.sh --unit
     test_config_cases.py       # self-tests for the shared config-test helpers
     test_fake_run.py           # self-tests for the scripted run
+    test_model_variants.py     # self-tests for per-model e2e generation
   scripts/
     test_*_contract.py         # repository contract tests; need a source checkout,
                                # run with: pytest -c tests/pytest.ini tests/scripts

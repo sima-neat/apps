@@ -39,6 +39,7 @@ CONFIG_ENV_VARS=(
   SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT
   SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT
   NEAT_APPS_SKIP_MODEL_DOWNLOAD
+  SIMANEAT_APPS_TEST_MODEL_VARIANTS
 )
 
 PROCESS_ENV_WAS_SET=()
@@ -115,6 +116,8 @@ Environment:
   SIMANEAT_APPS_TEST_REQUIRE_E2E    Backward-compatible strict e2e env flag
   SIMANEAT_APPS_TEST_SCOPE_FILE     Test scope source (default: examples)
   NEAT_APPS_SKIP_MODEL_DOWNLOAD     Skip e2e model download (1=yes, default: 0)
+  SIMANEAT_APPS_TEST_MODEL_VARIANTS  Also run each e2e suite with the model variants its
+                                    test-scope.yaml lists (1=yes, default: 0; nightly sets it)
 EOF
 }
 

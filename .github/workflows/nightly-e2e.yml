@@ -79,6 +79,7 @@ jobs:
           SIMANEAT_TEST_RTSP_MJPEG_URLS: ${{ vars.SIMANEAT_TEST_RTSP_MJPEG_URLS }}
           SIMANEAT_TEST_HTTP_MJPEG_URL: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URL }}
           SIMANEAT_TEST_HTTP_MJPEG_URLS: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URLS }}
+          SIMANEAT_APPS_TEST_MODEL_VARIANTS: "1"
         run: |
           if [[ -x /usr/bin/fix_devkit_runtime.sh ]]; then
             /usr/bin/fix_devkit_runtime.sh || echo "/usr/bin/fix_devkit_runtime.sh failed; continuing with existing devkit runtime state."
@@ -100,6 +101,7 @@ jobs:
           SIMANEAT_TEST_RTSP_MJPEG_URLS: ${{ vars.SIMANEAT_TEST_RTSP_MJPEG_URLS }}
           SIMANEAT_TEST_HTTP_MJPEG_URL: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URL }}
           SIMANEAT_TEST_HTTP_MJPEG_URLS: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URLS }}
+          SIMANEAT_APPS_TEST_MODEL_VARIANTS: "1"
         run: |
           if [[ -x /usr/bin/fix_devkit_runtime.sh ]]; then
             /usr/bin/fix_devkit_runtime.sh || echo "/usr/bin/fix_devkit_runtime.sh failed; continuing with existing devkit runtime state."
@@ -164,6 +166,7 @@ jobs:
           SIMANEAT_TEST_RTSP_MJPEG_URLS: ${{ vars.SIMANEAT_TEST_RTSP_MJPEG_URLS }}
           SIMANEAT_TEST_HTTP_MJPEG_URL: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URL }}
           SIMANEAT_TEST_HTTP_MJPEG_URLS: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URLS }}
+          SIMANEAT_APPS_TEST_MODEL_VARIANTS: "1"
         run: |
           if [[ -x /usr/bin/fix_devkit_runtime.sh ]]; then
             /usr/bin/fix_devkit_runtime.sh || echo "/usr/bin/fix_devkit_runtime.sh failed; continuing with existing devkit runtime state."
@@ -185,6 +188,7 @@ jobs:
           SIMANEAT_TEST_RTSP_MJPEG_URLS: ${{ vars.SIMANEAT_TEST_RTSP_MJPEG_URLS }}
           SIMANEAT_TEST_HTTP_MJPEG_URL: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URL }}
           SIMANEAT_TEST_HTTP_MJPEG_URLS: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URLS }}
+          SIMANEAT_APPS_TEST_MODEL_VARIANTS: "1"
         run: |
           if [[ -x /usr/bin/fix_devkit_runtime.sh ]]; then
             /usr/bin/fix_devkit_runtime.sh || echo "/usr/bin/fix_devkit_runtime.sh failed; continuing with existing devkit runtime state."

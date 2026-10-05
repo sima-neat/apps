@@ -19,9 +19,10 @@ constexpr const char* kExampleName = "multi-stream-object-detector";
 constexpr const char* kE2eInsightHost = "127.0.0.1";
 
 int run_source_case(const std::string& binary, const std::string& model_path,
-                    const fs::path& labels_file, const MultiStreamSourceCase& source_case) {
+                    const fs::path& labels_file, const MultiStreamSourceCase& source_case,
+                    const std::string& label) {
   const std::string output_dir = create_test_output_dir(
-      kExampleName, "test_multi_stream_" + source_case.codec + "_insight_and_save_pipeline");
+      kExampleName, "test_multi_stream_" + label + "_insight_and_save_pipeline");
   if (output_dir.empty()) {
     return 1;
   }
@@ -52,8 +53,8 @@ int run_source_case(const std::string& binary, const std::string& model_path,
   metadata_options.require_all_ports = true;
   MetadataJsonListener metadata_listener(metadata_options);
   if (!metadata_listener.ok()) {
-    std::cerr << "[FAIL] " << source_case.codec
-              << " metadata listener failed: " << metadata_listener.error() << "\n";
+    std::cerr << "[FAIL] " << label << " metadata listener failed: " << metadata_listener.error()
+              << "\n";
     remove_dir(output_dir);
     return 1;
   }
@@ -64,7 +65,7 @@ int run_source_case(const std::string& binary, const std::string& model_path,
   int rc = 0;
   const std::string exit_problem_text = exit_problem(result);
   if (!exit_problem_text.empty()) {
-    std::cerr << "[FAIL] " << source_case.codec << " " << exit_problem_text << "\n";
+    std::cerr << "[FAIL] " << label << " " << exit_problem_text << "\n";
     std::cerr << "stdout:\n" << result.stdout_text << "\n";
     std::cerr << "stderr:\n" << result.stderr_text << "\n";
     rc = 1;
@@ -73,22 +74,22 @@ int run_source_case(const std::string& binary, const std::string& model_path,
     // Two streams are configured above, so both must advance on their own.
     const std::string problem = streamed_frames_problem(output_dir, total_saved_frames, 2);
     if (!problem.empty()) {
-      std::cerr << "[FAIL] " << source_case.codec << " " << problem << "\n";
+      std::cerr << "[FAIL] " << label << " " << problem << "\n";
       rc = 1;
     } else {
-      std::cout << "[OK] " << source_case.codec << " multi-camera object detector produced "
-                << files << " sampled output files\n";
+      std::cout << "[OK] " << label << " multi-camera object detector produced " << files
+                << " sampled output files\n";
     }
   }
   if (rc == 0) {
     const MetadataJsonListenerResult metadata = metadata_listener.wait_for_messages();
     if (!metadata.success) {
-      std::cerr << "[FAIL] " << source_case.codec
+      std::cerr << "[FAIL] " << label
                 << " object-detection metadata was not received on all streams: " << metadata.error
                 << "\n";
       rc = 1;
     } else {
-      std::cout << "[OK] " << source_case.codec << " object-detection metadata received on "
+      std::cout << "[OK] " << label << " object-detection metadata received on "
                 << metadata.ports_with_valid_json.size() << " streams\n";
     }
   }
@@ -108,8 +109,10 @@ int main(int argc, char** argv) {
   const std::string binary = argv[1];
   const char* models_dir_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
   const std::string models_dir = models_dir_raw ? models_dir_raw : "models";
-  const std::string model_path = configured_model_path(kExampleName, models_dir);
-  if (model_path.empty() || !fs::exists(model_path)) {
+  int rc = 0;
+  const std::vector<std::string> model_paths =
+      available_model_paths(configured_model_paths(kExampleName, models_dir), rc);
+  if (model_paths.empty()) {
     return skip_or_fail("configured detector model not found under SIMANEAT_APPS_TEST_MODELS_DIR");
   }
 
@@ -124,9 +127,18 @@ int main(int argc, char** argv) {
       {"h265", rtsp_h265_urls_from_env()},
   };
 
-  return run_multistream_source_cases("multi-stream object detector", source_cases, 2,
-                                      [&](const MultiStreamSourceCase& source_case) {
-                                        return run_source_case(binary, model_path, labels_file,
-                                                               source_case);
-                                      });
+  const int cases_rc = run_multistream_source_cases(
+      "multi-stream object detector", source_cases, 2,
+      [&](const MultiStreamSourceCase& source_case) {
+        int case_rc = 0;
+        for (const std::string& model_path : model_paths) {
+          const std::string label =
+              model_case_label(source_case.codec, model_path, model_paths.size());
+          if (run_source_case(binary, model_path, labels_file, source_case, label) != 0) {
+            case_rc = 1;
+          }
+        }
+        return case_rc;
+      });
+  return rc != 0 ? rc : cases_rc;
 }
