@@ -623,6 +623,23 @@ def send_metadata(runtime: PipelineRuntime, sample, scores, landmarks) -> None:
     )
 
 
+def pull_result_has_sample(run, sample, output_name: str) -> bool:
+    if sample is not None:
+        return True
+    last_error_fn = getattr(run, "last_error", None)
+    last_error = last_error_fn() if callable(last_error_fn) else ""
+    running_fn = getattr(run, "running", None)
+    running = running_fn() if callable(running_fn) else True
+    if not running:
+        message = f"{output_name} output closed unexpectedly"
+        if last_error:
+            message += f": {last_error}"
+        raise RuntimeError(message)
+    if last_error:
+        raise RuntimeError(f"runtime error: {last_error}")
+    return False
+
+
 def run_pipeline(runtime: PipelineRuntime, cfg: AppConfig) -> int:
     profile = ProfileWindow(cfg.profile, cfg.profile_interval)
     processed = 0
@@ -631,12 +648,7 @@ def run_pipeline(runtime: PipelineRuntime, cfg: AppConfig) -> int:
         pull_start = time_ms()
         sample = runtime.run.pull("detections", 20000)
         pull_end = time_ms()
-        if sample is None:
-            pull_error = str(runtime.run.last_error() or "")
-            if pull_error:
-                raise RuntimeError(f"failed to pull detections: {pull_error}")
-            if not runtime.run.running():
-                break
+        if not pull_result_has_sample(runtime.run, sample, "detections"):
             print("[warn] timed out waiting for detections", file=sys.stderr)
             continue
 

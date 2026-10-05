@@ -479,6 +479,23 @@ def transformer_inputs(model, feature, gathered, top_k: int) -> list:
     return ordered
 
 
+def pull_result_has_sample(run, sample, output_name: str) -> bool:
+    if sample is not None:
+        return True
+    last_error_fn = getattr(run, "last_error", None)
+    last_error = last_error_fn() if callable(last_error_fn) else ""
+    running_fn = getattr(run, "running", None)
+    running = running_fn() if callable(running_fn) else True
+    if not running:
+        message = f"{output_name} output closed unexpectedly"
+        if last_error:
+            message += f": {last_error}"
+        raise RuntimeError(message)
+    if last_error:
+        raise RuntimeError(f"runtime error: {last_error}")
+    return False
+
+
 def run(cfg: Config) -> int:
     global pyneat
     import pyneat
@@ -646,7 +663,7 @@ def run(cfg: Config) -> int:
         try:
             while not stop.is_set():
                 sample = source_run.pull("backbone", 500)
-                if sample is None:
+                if not pull_result_has_sample(source_run, sample, "backbone"):
                     continue
                 feature, scores, proposals = split_backbone(sample, proposal_count)
                 gathered = stable_topk_gather(

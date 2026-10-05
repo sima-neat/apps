@@ -18,6 +18,7 @@
 #include "neat/nodes.h"
 #include "support/runtime/config_utils.h"
 #include "support/runtime/example_utils.h"
+#include "support/runtime/pull_status.h"
 #include <csignal>
 #include <nodes/groups/VideoSender.h>
 #include <nodes/io/MetadataSender.h>
@@ -1033,15 +1034,10 @@ void run_pipeline(PipelineRuntime& runtime, const AppConfig& cfg) {
     const double pull_start = time_ms();
     const auto status = runtime.run.pull(runtime.output_name, 20000, sample, &pull_error);
     const double pull_end = time_ms();
-    if (status == simaai::neat::PullStatus::Timeout) {
+    if (!sima_examples::pull_status_has_sample(status, runtime.output_name, pull_error,
+                                               runtime.run.last_error())) {
       std::cerr << "[warn] timed out waiting for segmentation output\n";
       continue;
-    }
-    if (status == simaai::neat::PullStatus::Closed) {
-      break;
-    }
-    if (status != simaai::neat::PullStatus::Ok) {
-      throw std::runtime_error("failed to pull segmentation output: " + pull_error.message);
     }
 
     const double decode_start = time_ms();

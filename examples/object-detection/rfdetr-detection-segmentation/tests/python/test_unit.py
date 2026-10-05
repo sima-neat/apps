@@ -12,6 +12,7 @@ import numpy as np
 import pytest
 
 from tests.utils.config_cases import config_writer, load_example_main
+from tests.utils.fake_run import FakeRun
 import yaml
 
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -434,3 +435,15 @@ class TestMalformedConfigFiles:
 
         with pytest.raises(ValueError, match="model must be a mapping"):
             main.load_config(config_path)
+
+
+# After a pull returns no sample the backbone bridge keeps going; a runtime error raised by
+# the pull stops the whole run through bridge_error. pyneat's pull returns None for a
+# closed output as for a timeout. The bridge is a thread inside run(), so only the helper
+# is tested here.
+@pytest.mark.unit
+def test_backbone_pull_timeout_is_not_a_sample():
+    run = FakeRun("timeout")
+    run.pull("backbone", 500)
+
+    assert main.pull_result_has_sample(run, None, "backbone") is False

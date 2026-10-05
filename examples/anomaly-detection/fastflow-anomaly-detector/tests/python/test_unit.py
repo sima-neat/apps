@@ -5,9 +5,12 @@ import importlib.util
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
+
+from tests.utils.fake_run import FakeRun
 
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
@@ -299,3 +302,41 @@ class TestArgParsing:
         )
         assert r.returncode == 0
         assert "Config validated" in r.stdout
+
+
+@pytest.mark.unit
+class TestPullOutcomes:
+    """The frame loop, driven by a run that yields no sample.
+
+    A timeout is a warning and another pull, and a runtime error raised by the pull ends
+    the run. pyneat's pull returns None for a closed output as for a timeout, so Python
+    cannot yet tell a stream that ended from a slow one.
+    """
+
+    def test_timeout_is_not_a_sample(self):
+        run = FakeRun("timeout")
+        run.pull("frame", main.PULL_TIMEOUT_MS)
+
+        assert main.pull_result_has_sample(run, None, "frame") is False
+
+    def test_run_warns_on_timeout_and_stops_on_runtime_error(self, monkeypatch, capsys):
+        run = FakeRun("timeout", ("error", "queue torn down"))
+        video = SimpleNamespace(port=9000, closed=False)
+        video.close = lambda: setattr(video, "closed", True)
+        monkeypatch.setattr(main, "probe_stream", lambda url, tcp: (640, 640, 30))
+        monkeypatch.setattr(main, "build_model", lambda cfg, width, height: (object(), 32))
+        monkeypatch.setattr(main, "InsightVideo", lambda cfg, width, height, fps: video)
+        monkeypatch.setattr(main, "build_source", lambda cfg, width, height, fps: (object(), run))
+        cfg = SimpleNamespace(
+            rtsp_url="rtsp://camera/live", tcp=True, frames=0, threshold=0.5, min_region_px=300,
+            insight_host="127.0.0.1", save_dir="", save_every=0, profile=False, profile_interval=1,
+        )
+
+        with pytest.raises(RuntimeError, match="queue torn down"):
+            main.run(cfg)
+
+        captured = capsys.readouterr()
+        assert captured.err.count("[warn] timed out waiting for a frame") == 1
+        assert run.pulls == [("frame", main.PULL_TIMEOUT_MS)] * 2
+        # The run and the video sender are still released on the way out.
+        assert run.closed_by_app and video.closed
