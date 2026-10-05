@@ -311,6 +311,23 @@ def frame_tensor(sample):
     return field.tensor if field.kind == pyneat.SampleKind.Tensor else field.tensors[0]
 
 
+def pull_result_has_sample(run, sample, output_name: str) -> bool:
+    if sample is not None:
+        return True
+    last_error_fn = getattr(run, "last_error", None)
+    last_error = last_error_fn() if callable(last_error_fn) else ""
+    running_fn = getattr(run, "running", None)
+    running = running_fn() if callable(running_fn) else True
+    if not running:
+        message = f"{output_name} output closed unexpectedly"
+        if last_error:
+            message += f": {last_error}"
+        raise RuntimeError(message)
+    if last_error:
+        raise RuntimeError(f"runtime error: {last_error}")
+    return False
+
+
 def run(cfg: Config) -> None:
     width, height, fps = probe_stream(cfg.rtsp_url, cfg.tcp)
     if width != height:
@@ -331,7 +348,7 @@ def run(cfg: Config) -> None:
     try:
         while cfg.frames <= 0 or processed < cfg.frames:
             sample = graph_run.pull("frame", PULL_TIMEOUT_MS)
-            if sample is None:
+            if not pull_result_has_sample(graph_run, sample, "frame"):
                 print("[warn] timed out waiting for a frame", file=sys.stderr)
                 continue
             # Release the sample right away: the decoder's small buffer pool stalls otherwise.

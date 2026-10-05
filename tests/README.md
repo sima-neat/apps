@@ -105,6 +105,7 @@ tests/
   harness/
     test_output_assertions.py  # harness self-tests; run by test.sh --unit
     test_config_cases.py       # self-tests for the shared config-test helpers
+    test_fake_run.py           # self-tests for the scripted run
     test_model_variants.py     # self-tests for per-model e2e generation
   scripts/
     test_*_contract.py         # repository contract tests; need a source checkout,

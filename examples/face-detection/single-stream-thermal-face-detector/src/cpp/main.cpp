@@ -32,6 +32,7 @@
 #include "neat.h"
 #include "support/runtime/config_utils.h"
 #include "support/runtime/example_utils.h"
+#include "support/runtime/pull_status.h"
 
 #include <csignal>
 #include <nodes/groups/VideoSender.h>
@@ -687,15 +688,10 @@ void run_pipeline(PipelineRuntime& runtime, const AppConfig& cfg) {
     const double pull_start = sima_examples::time_ms();
     const auto status = runtime.run.pull("detections", 20000, sample, &pull_error);
     const double pull_end = sima_examples::time_ms();
-    if (status == simaai::neat::PullStatus::Timeout) {
+    if (!sima_examples::pull_status_has_sample(status, "detections", pull_error,
+                                               runtime.run.last_error())) {
       std::cerr << "[warn] timed out waiting for detections\n";
       continue;
-    }
-    if (status == simaai::neat::PullStatus::Closed) {
-      break;
-    }
-    if (status != simaai::neat::PullStatus::Ok) {
-      throw std::runtime_error("failed to pull detections: " + pull_error.message);
     }
 
     const auto tensors = simaai::neat::tensors_from_sample(sample, false);

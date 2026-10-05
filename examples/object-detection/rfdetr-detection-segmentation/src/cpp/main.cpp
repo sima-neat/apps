@@ -7,6 +7,7 @@
 #include "neat/nodes.h"
 #include "support/runtime/config_utils.h"
 #include "support/runtime/example_utils.h"
+#include "support/runtime/pull_status.h"
 
 #include <nodes/groups/VideoSender.h>
 #include <nodes/io/MetadataSender.h>
@@ -812,11 +813,14 @@ int run(const Config& cfg) {
   std::thread transformer_bridge([&] {
     try {
       while (!g_stop.load()) {
-        auto sample = source_run.pull("backbone", 500);
-        if (!sample.has_value()) {
+        neat::Sample sample;
+        neat::PullError pull_error;
+        const auto status = source_run.pull("backbone", 500, sample, &pull_error);
+        if (!sima_examples::pull_status_has_sample(status, "backbone", pull_error,
+                                                   source_run.last_error())) {
           continue;
         }
-        const auto outputs = split_backbone(*sample, proposal_count);
+        const auto outputs = split_backbone(sample, proposal_count);
         auto gathered = stable_topk_gather(read_floats(outputs.scores),
                                            read_floats(outputs.proposals), cfg.top_k);
         neat::Tensor gathered_tensor =
@@ -825,10 +829,10 @@ int run(const Config& cfg) {
         transformer_sample.kind = neat::SampleKind::TensorSet;
         transformer_sample.tensors =
             transformer_inputs(transformer, outputs.feature, gathered_tensor, cfg.top_k);
-        copy_identity(*sample, transformer_sample);
+        copy_identity(sample, transformer_sample);
         {
           std::lock_guard lock(identity_mutex);
-          source_pts[identity_key(*sample)] = sample->pts_ns;
+          source_pts[identity_key(sample)] = sample.pts_ns;
           if (source_pts.size() > 8U) {
             source_pts.erase(source_pts.begin());
           }
