@@ -3,10 +3,10 @@ model:                       # Detection model selection.
   labels: examples/object-detection/usb-camera-object-detector/src/common/coco_label.txt
 
 source:                      # USB (UVC) camera capture.
-  device: <video-capture-node>   # e.g. /dev/video96. Find it: see Prepare the Camera.
-  width: 1920                # Capture width.
-  height: 1080               # Capture height.
-  fps: 30                    # Capture rate. Must be supported by the camera at this resolution.
+  device: <video-capture-node>   # Required: find your USB camera with v4l2-ctl --list-devices.
+  width: 1920                # Example default; choose a width listed under MJPG.
+  height: 1080               # Choose the matching height for that MJPG mode.
+  fps: 30                    # Choose an FPS listed for that MJPG resolution.
   flip: none                 # none, rotate-180, horizontal-flip, or vertical-flip.
   override_fragment: ""      # Diagnostic: replace the camera with any NV12 GStreamer fragment.
 
