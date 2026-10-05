@@ -216,7 +216,7 @@ class EnvironmentDiscoveryTests(unittest.TestCase):
                 self.assertEqual(supertonic_tts._supertonic_python(), str(legacy / ".venv" / "bin" / "python"))
 
     def test_default_venv_is_beside_the_example(self):
-        # src/python/ui/supertonic_tts.py -> <example>/.venv-supertonic
+        # src/python/ui/tts/supertonic_tts.py -> <example>/.venv-supertonic
         self.assertEqual(supertonic_tts.DEFAULT_VENV.name, ".venv-supertonic")
         self.assertTrue((supertonic_tts.DEFAULT_VENV.parent / "setup.sh").is_file())
 

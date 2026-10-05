@@ -35,10 +35,10 @@ def _pipertts_python():
     if p and Path(p).exists():
         return p
     here = Path(__file__).resolve()
-    # .../src/python/ui/pipertts.py -> example dir is parents[3]
+    # .../src/python/ui/tts/pipertts.py -> example dir is parents[4]
     candidates = []
     if len(here.parents) > 3:
-        candidates.append(here.parents[3] / ".venv-pipertts" / "bin" / "python")
+        candidates.append(here.parents[4] / ".venv-pipertts" / "bin" / "python")
     candidates.append(Path.cwd() / ".venv-pipertts" / "bin" / "python")
     for cand in candidates:
         if cand.exists():
@@ -150,7 +150,7 @@ def prepare_voice_for_streaming(model_path):
         result = subprocess.run(
             [
                 py,
-                str(Path(__file__).resolve().parent.parent / "split_voices.py"),
+                str(Path(__file__).resolve().parent / "split_voices.py"),
                 str(model_path),
             ],
             check=False,
