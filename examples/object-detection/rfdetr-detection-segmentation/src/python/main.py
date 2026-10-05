@@ -20,6 +20,7 @@ import yaml
 
 NUM_CLASSES = 91
 MASK_SIZE = 108
+SEGMENTATION_INPUT_SIZE = 432
 CLASSIFICATION_TOP_K = 300
 METADATA_BYTE_BUDGET = 32_768
 
@@ -30,8 +31,6 @@ class Config:
     variant: str
     backbone: str
     transformer: str
-    input_size: int
-    feature_size: int
     top_k: int
     labels: Path
     rtsp_url: str
@@ -89,14 +88,9 @@ def load_config(path: Path) -> Config:
     if task == "detection":
         detection = _mapping(model, "detection")
         variant = str(detection.get("variant", "small")).lower()
-        if variant not in {"small", "medium"}:
-            raise ValueError("model.detection.variant must be small or medium")
         selected = _mapping(detection, variant)
         inference_options = _mapping(inference, "detection")
-        input_size, feature_size, top_k = {
-            "small": (512, 32, 300),
-            "medium": (576, 36, 300),
-        }[variant]
+        top_k = 300
         max_results_key = "max_detections"
         default_score = 0.5
         default_max_results = 100
@@ -104,7 +98,7 @@ def load_config(path: Path) -> Config:
         variant = "segmentation"
         selected = _mapping(model, "segmentation")
         inference_options = _mapping(inference, "segmentation")
-        input_size, feature_size, top_k = 432, 36, 200
+        top_k = 200
         max_results_key = "max_segments"
         default_score = 0.3
         default_max_results = 24
@@ -114,8 +108,6 @@ def load_config(path: Path) -> Config:
         variant=variant,
         backbone=str(selected.get("backbone", "")),
         transformer=str(selected.get("transformer", "")),
-        input_size=input_size,
-        feature_size=feature_size,
         top_k=top_k,
         labels=Path(labels_path),
         rtsp_url=str(source.get("rtsp_url", "")),
@@ -566,8 +558,8 @@ def build_backbone(cfg: Config, width: int, height: int):
     opt.preprocess.color_convert.output_format = pyneat.PreprocessColorFormat.RGB
     opt.preprocess.preset = pyneat.NormalizePreset.ImageNet
     if cfg.task == "segmentation":
-        opt.preprocess.resize.width = cfg.input_size
-        opt.preprocess.resize.height = cfg.input_size
+        opt.preprocess.resize.width = SEGMENTATION_INPUT_SIZE
+        opt.preprocess.resize.height = SEGMENTATION_INPUT_SIZE
     opt.processcvu.pre_run_target = "EV74"
     opt.processcvu.post_run_target = "A65"
     return pyneat.Model(cfg.backbone, opt)
@@ -582,8 +574,15 @@ def build_transformer(cfg: Config):
     return pyneat.Model(cfg.transformer, opt)
 
 
-def require_model_contract(cfg: Config, backbone, transformer) -> None:
-    side = cfg.feature_size
+def feature_side(backbone) -> int:
+    """The backbone's square feature grid sets the proposal count for every model size."""
+    outputs = backbone.output_specs()
+    if not outputs or len(outputs[0].shape) != 4:
+        raise RuntimeError("RF-DETR backbone must output a feature grid")
+    return int(outputs[0].shape[1])
+
+
+def require_model_contract(cfg: Config, backbone, transformer, side: int) -> None:
     transformer_outputs = [[1, cfg.top_k, 4], [1, cfg.top_k, NUM_CLASSES]]
     if cfg.task == "segmentation":
         transformer_outputs.append([1, MASK_SIZE, MASK_SIZE, cfg.top_k])
@@ -707,7 +706,8 @@ def run(cfg: Config) -> int:
     width, height, fps = probe_source_geometry(cfg)
     backbone = build_backbone(cfg, width, height)
     transformer = build_transformer(cfg)
-    require_model_contract(cfg, backbone, transformer)
+    side = feature_side(backbone)
+    require_model_contract(cfg, backbone, transformer, side)
 
     graph = build_graph(cfg, backbone, width, height, fps)
     transformer_runner = transformer.build(
@@ -726,7 +726,7 @@ def run(cfg: Config) -> int:
 
     stop = threading.Event()
     bridge_error: list[BaseException] = []
-    proposal_count = cfg.feature_size**2
+    proposal_count = side**2
     transformer_input_shapes = tuple(tuple(spec.shape) for spec in transformer.input_specs())
 
     def transformer_bridge() -> None:

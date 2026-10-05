@@ -2,7 +2,7 @@ model:                          # Select one RF-DETR task and its model pair.
   task: detection               # detection or segmentation.
   labels: examples/object-detection/rfdetr-detection-segmentation/src/common/coco-labels.txt
   detection:
-    variant: small              # small or medium.
+    variant: small              # Name of a model pair below.
     small:
       backbone: models/rfdetr-small-backbone.tar.gz
       transformer: models/rfdetr-small-transformer.tar.gz

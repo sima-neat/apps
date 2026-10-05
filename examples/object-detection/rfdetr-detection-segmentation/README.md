@@ -91,7 +91,7 @@ cd ..
 Edit `$APP_DIR/src/common/config.yaml`:
 
 - Set `model.task` to `detection` or `segmentation`.
-- For detection, set `model.detection.variant` to `small` or `medium`.
+- For detection, set `model.detection.variant` to the name of a model pair under `model.detection`, such as `small` or `medium`. To run another RF-DETR detection size, add its backbone and transformer under a new name; the application reads the input and feature sizes from the model.
 - Set `source.rtsp_url` and select `source.codec` as `h264`, `h265`, or `mjpeg`.
 - Leave `source.width`, `height`, and `fps` at `0` to probe the stream. Width and height are fallbacks; a positive FPS overrides the detected value.
 - Set `output.insight.host`, `video_port`, and `metadata_port` to the values reported by Insight.

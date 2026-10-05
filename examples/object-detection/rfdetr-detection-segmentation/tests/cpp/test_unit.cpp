@@ -146,7 +146,7 @@ int main(int argc, char** argv) {
   }
 
   const std::string temp_dir =
-      create_test_scratch_dir("rfdetr-detection-segmentation", "unknown-model-variant");
+      create_test_scratch_dir("rfdetr-detection-segmentation", "model-variant");
   if (temp_dir.empty()) {
     std::cerr << "[FAIL] could not create config test directory\n";
     ++failures;
@@ -158,11 +158,11 @@ int main(int argc, char** argv) {
     config.close();
     try {
       (void)load_config(config_path);
-      std::cerr << "[FAIL] config must reject model variants other than small and medium\n";
+      std::cerr << "[FAIL] config must reject a variant without a model pair\n";
       ++failures;
     } catch (const std::exception& error) {
-      if (std::string(error.what()).find("small or medium") == std::string::npos) {
-        std::cerr << "[FAIL] invalid model variant error must name the supported variants\n";
+      if (std::string(error.what()).find("model.detection.large") == std::string::npos) {
+        std::cerr << "[FAIL] missing model pair error must name the selected variant\n";
         ++failures;
       }
     }
@@ -177,9 +177,9 @@ int main(int argc, char** argv) {
     config.close();
     try {
       const auto selected = load_config(config_path);
-      if (selected.task != Task::Segmentation || selected.input_size != 432 ||
-          selected.feature_size != 36 || selected.top_k != 200 || selected.mask_grid_size != 640 ||
-          selected.backbone != "segmentation-b.tar.gz" || selected.min_score != 0.3F) {
+      if (selected.task != Task::Segmentation || selected.top_k != 200 ||
+          selected.mask_grid_size != 640 || selected.backbone != "segmentation-b.tar.gz" ||
+          selected.min_score != 0.3F) {
         std::cerr << "[FAIL] config must select the fixed segmentation model contract\n";
         ++failures;
       }
@@ -190,15 +190,15 @@ int main(int argc, char** argv) {
 
     config.open(config_path, std::ios::trunc);
     config << "model:\n  task: detection\n  labels: labels.txt\n  detection:\n"
-              "    variant: small\n    small:\n      backbone: small-b.tar.gz\n"
-              "      transformer: small-t.tar.gz\n"
+              "    variant: large\n    large:\n      backbone: large-b.tar.gz\n"
+              "      transformer: large-t.tar.gz\n"
               "source:\n  rtsp_url: rtsp://camera/live\n"
               "inference:\n  segmentation:\n    mask_threshold: 2.0\n"
               "output:\n  insight:\n    host: 127.0.0.1\n";
     config.close();
     try {
       const auto selected = load_config(config_path);
-      if (selected.task != Task::Detection || selected.input_size != 512) {
+      if (selected.task != Task::Detection || selected.backbone != "large-b.tar.gz") {
         std::cerr << "[FAIL] inactive segmentation settings must not affect detection\n";
         ++failures;
       }

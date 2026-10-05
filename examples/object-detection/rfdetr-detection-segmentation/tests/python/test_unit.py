@@ -83,8 +83,8 @@ def test_postprocess_uses_sparse_coco_ids_and_source_geometry():
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize(("variant", "size"), [("small", 512), ("medium", 576)])
-def test_config_selects_one_model_pair(tmp_path, variant, size):
+@pytest.mark.parametrize("variant", ["nano", "small", "medium", "large"])
+def test_config_selects_one_model_pair(tmp_path, variant):
     labels = tmp_path / "labels.txt"
     labels.write_text("\n".join(f"label-{index}" for index in range(91)) + "\n")
     config = {
@@ -93,8 +93,10 @@ def test_config_selects_one_model_pair(tmp_path, variant, size):
             "labels": str(labels),
             "detection": {
                 "variant": variant,
-                "small": {"backbone": "small-b.tar.gz", "transformer": "small-t.tar.gz"},
-                "medium": {"backbone": "medium-b.tar.gz", "transformer": "medium-t.tar.gz"},
+                **{
+                    name: {"backbone": f"{name}-b.tar.gz", "transformer": f"{name}-t.tar.gz"}
+                    for name in ("nano", "small", "medium", "large")
+                },
             },
         },
         "source": {"rtsp_url": "rtsp://camera/live", "codec": "h265"},
@@ -111,7 +113,6 @@ def test_config_selects_one_model_pair(tmp_path, variant, size):
     selected = main.load_config(path)
 
     assert selected.variant == variant
-    assert selected.input_size == size
     assert selected.backbone.startswith(variant)
     assert selected.codec == "h265"
     assert (selected.width, selected.height, selected.fps) == (0, 0, 0)
@@ -149,7 +150,6 @@ def test_config_selects_segmentation_model_pair(tmp_path, mask_grid_size):
     assert selected.mask_grid_size == (mask_grid_size or 640)
     assert selected.task == "segmentation"
     assert selected.backbone == "segmentation-b.tar.gz"
-    assert selected.input_size == 432
     assert selected.top_k == 200
 
 
@@ -177,7 +177,7 @@ def test_probed_geometry_uses_configured_fallbacks_and_fps_override():
 
 
 @pytest.mark.unit
-def test_config_rejects_unknown_model_variant(tmp_path):
+def test_config_rejects_variant_without_model_pair(tmp_path):
     config = {
         "model": {"task": "detection", "detection": {"variant": "large"}},
         "source": {},
@@ -187,7 +187,7 @@ def test_config_rejects_unknown_model_variant(tmp_path):
     path = tmp_path / "config.yaml"
     path.write_text(yaml.safe_dump(config))
 
-    with pytest.raises(ValueError, match="small or medium"):
+    with pytest.raises(ValueError, match="large"):
         main.load_config(path)
 
 

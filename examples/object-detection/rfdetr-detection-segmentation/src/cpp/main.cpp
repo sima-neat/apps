@@ -42,6 +42,7 @@ namespace {
 
 constexpr int kNumClasses = 91;
 constexpr int kMaskSize = 108;
+constexpr int kSegmentationInputSize = 432;
 constexpr int kClassificationTopK = 300;
 constexpr std::size_t kMetadataByteBudget = 32'768;
 std::atomic<bool> g_stop{false};
@@ -114,8 +115,6 @@ struct Config {
   std::string variant;
   std::string backbone;
   std::string transformer;
-  int input_size = 0;
-  int feature_size = 0;
   int top_k = 0;
   fs::path labels;
   std::string rtsp_url;
@@ -172,20 +171,13 @@ Config load_config(const fs::path& path) {
   std::string inference_prefix;
   if (cfg.task == Task::Detection) {
     cfg.variant = lower_copy(raw.string_or("model.detection.variant", "small"));
-    if (cfg.variant != "small" && cfg.variant != "medium") {
-      throw std::runtime_error("model.detection.variant must be small or medium");
-    }
     model_prefix = "model.detection." + cfg.variant + ".";
     inference_prefix = "inference.detection.";
-    cfg.input_size = cfg.variant == "small" ? 512 : 576;
-    cfg.feature_size = cfg.input_size / 16;
     cfg.top_k = 300;
   } else {
     cfg.variant = "segmentation";
     model_prefix = "model.segmentation.";
     inference_prefix = "inference.segmentation.";
-    cfg.input_size = 432;
-    cfg.feature_size = 36;
     cfg.top_k = 200;
   }
   cfg.backbone = raw.string_or(model_prefix + "backbone", "");
@@ -739,8 +731,8 @@ neat::Model build_backbone(const Config& cfg, const SourceGeometry& geometry) {
   opt.preprocess.color_convert.output_format = neat::PreprocessColorFormat::RGB;
   opt.preprocess.preset = neat::NormalizePreset::ImageNet;
   if (cfg.task == Task::Segmentation) {
-    opt.preprocess.resize.width = cfg.input_size;
-    opt.preprocess.resize.height = cfg.input_size;
+    opt.preprocess.resize.width = kSegmentationInputSize;
+    opt.preprocess.resize.height = kSegmentationInputSize;
   }
   opt.processcvu.pre_run_target = "EV74";
   opt.processcvu.post_run_target = "A65";
@@ -756,7 +748,16 @@ neat::Model build_transformer(const Config& cfg) {
   return neat::Model(cfg.transformer, opt);
 }
 
-void require_model_contract(const Config& cfg, neat::Model& backbone, neat::Model& transformer) {
+// The backbone's square feature grid sets the proposal count for every model size.
+int feature_side(neat::Model& backbone) {
+  const auto outputs = backbone.output_specs();
+  sima_examples::require(!outputs.empty() && outputs.front().shape.size() == 4U,
+                         "RF-DETR backbone must output a feature grid");
+  return static_cast<int>(outputs.front().shape[1]);
+}
+
+void require_model_contract(const Config& cfg, neat::Model& backbone, neat::Model& transformer,
+                            int side) {
   const auto has_specs = [](const auto& specs, const std::vector<std::vector<int64_t>>& shapes) {
     if (specs.size() != shapes.size()) {
       return false;
@@ -769,7 +770,6 @@ void require_model_contract(const Config& cfg, neat::Model& backbone, neat::Mode
     }
     return true;
   };
-  const int side = cfg.feature_size;
   std::vector<std::vector<int64_t>> transformer_outputs = {{1, cfg.top_k, 4},
                                                            {1, cfg.top_k, kNumClasses}};
   if (cfg.task == Task::Segmentation) {
@@ -864,7 +864,8 @@ int run(const Config& cfg) {
   const auto labels = load_labels(cfg.labels);
   neat::Model backbone = build_backbone(cfg, geometry);
   neat::Model transformer = build_transformer(cfg);
-  require_model_contract(cfg, backbone, transformer);
+  const int side = feature_side(backbone);
+  require_model_contract(cfg, backbone, transformer, side);
 
   neat::Graph graph = build_graph(cfg, backbone, geometry);
   neat::Model::Runner transformer_runner = transformer.build(
@@ -879,7 +880,7 @@ int run(const Config& cfg) {
             << " metadata=" << metadata_sender.metadata_port() << "\n";
 
   // Select the top proposals on the host and hand them to the transformer.
-  const int proposal_count = cfg.feature_size * cfg.feature_size;
+  const int proposal_count = side * side;
   std::string transformer_bridge_error;
   std::thread transformer_bridge([&] {
     try {
