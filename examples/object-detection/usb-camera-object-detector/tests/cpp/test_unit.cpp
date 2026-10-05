@@ -273,6 +273,13 @@ bool test_override_reported_as_source(const std::string& binary) {
   return ok;
 }
 
+bool test_omitted_device_is_rejected(const std::string& binary) {
+  auto body = config_body();
+  const std::string line = "  device: /dev/video16\n";
+  body.erase(body.find(line), line.size());
+  return validate_rejects(binary, "omitted_device", body, "source.device", "omitted camera device");
+}
+
 // An override supplies its own source, so the device is not required.
 bool test_override_allows_empty_device(const std::string& binary) {
   const fs::path config_path =
@@ -369,6 +376,7 @@ int main(int argc, char** argv) {
   ok &= test_wrapped_override_fragment_is_folded(binary);
   ok &= test_override_reported_as_source(binary);
   ok &= test_override_allows_empty_device(binary);
+  ok &= test_omitted_device_is_rejected(binary);
   ok &= test_missing_model_path_is_rejected(binary);
   ok &= test_missing_labels_file_is_rejected(binary);
   ok &= test_empty_labels_file_is_rejected(binary);

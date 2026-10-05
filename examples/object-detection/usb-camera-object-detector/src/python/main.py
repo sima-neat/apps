@@ -268,7 +268,7 @@ def build_app_config(raw: dict) -> AppConfig:
     return AppConfig(
         model_path=string_or(model, "path"),
         labels_path=Path(string_or(model, "labels", str(default_labels))),
-        device=string_or(source, "device", "/dev/video16"),
+        device=string_or(source, "device"),
         width=int_or(source, "width", 1920),
         height=int_or(source, "height", 1080),
         fps=int_or(source, "fps", 30),
@@ -322,9 +322,11 @@ class UsbCamera:
 
     def __init__(self, cfg: AppConfig, cv2):
         self.capture = cv2.VideoCapture(cfg.device, cv2.CAP_V4L2)
+        self.started = False
         self.caps = camera_caps(cfg)
         self.dropped_frames = 0
         try:
+            self.wait_any = cv2.VideoCapture.waitAny
             if not self.capture.isOpened():
                 raise RuntimeError(f"Cannot open USB camera {cfg.device}")
             mjpg = cv2.VideoWriter_fourcc(*"MJPG")
@@ -344,9 +346,28 @@ class UsbCamera:
             self.close()
             raise
 
-    def read(self) -> bytes:
+    def read(self, stop=None) -> bytes | None:
+        deadline = time.monotonic() + 20
         for _ in range(8):
-            ok, frame = self.capture.read()
+            if self.started:
+                # waitAny grabs only ready frames; retrieve preserves compressed bytes.
+                # Poll so shutdown never races release() against an active read().
+                while stop is None or not stop.is_set():
+                    ready, indices = self.wait_any([self.capture], 100_000_000)
+                    if ready and len(indices):
+                        break
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError("USB camera timed out waiting for a frame")
+                else:
+                    return None
+                if stop is not None and stop.is_set():
+                    return None
+                ok, frame = self.capture.retrieve()
+            else:
+                # Initialize V4L2 before starting the capture worker. OpenCV's
+                # backend timeout bounds this initial grab.
+                ok, frame = self.capture.read()
+                self.started = True
             if not ok or frame is None:
                 raise RuntimeError("USB camera stopped delivering frames")
             data = frame.tobytes()
@@ -363,7 +384,9 @@ class UsbCamera:
         self.capture.release()
 
 
-def parse_bbox_payload(payload: bytes, img_w: int, img_h: int, max_detections: int) -> list[dict]:
+def parse_bbox_payload(
+    payload: bytes, img_w: int, img_h: int, max_detections: int, min_score: float = 0.0
+) -> list[dict]:
     """Parse a BBOX payload into detections clamped to the frame."""
     if not payload or len(payload) < 4:
         return []
@@ -378,12 +401,18 @@ def parse_bbox_payload(payload: bytes, img_w: int, img_h: int, max_detections: i
     for _ in range(count):
         x, y, w, h, score, class_id = struct.unpack_from(BBOX_RECORD_FORMAT, payload, offset)
         offset += BBOX_RECORD_SIZE
+        if not min_score <= score <= 1 or class_id < 0:
+            continue
+        x1, y1 = max(0, min(x, img_w)), max(0, min(y, img_h))
+        x2, y2 = max(0, min(x + w, img_w)), max(0, min(y + h, img_h))
+        if x2 <= x1 or y2 <= y1:
+            continue
         detections.append(
             {
-                "x1": max(0.0, min(float(x), float(img_w))),
-                "y1": max(0.0, min(float(y), float(img_h))),
-                "x2": max(0.0, min(float(x + w), float(img_w))),
-                "y2": max(0.0, min(float(y + h), float(img_h))),
+                "x1": float(x1),
+                "y1": float(y1),
+                "x2": float(x2),
+                "y2": float(y2),
                 "score": float(score),
                 "class_id": int(class_id),
             }
@@ -589,7 +618,9 @@ def run_pipeline(runtime: PipelineRuntime, cfg: AppConfig, camera=None) -> int:
                     encoded = runtime.seed
                     runtime.seed = None
                 else:
-                    data = camera.read()
+                    data = camera.read(stop)
+                    if data is None:
+                        break
                     encoded = pyneat.make_encoded_sample(
                         data, camera.caps, pts_ns=time.monotonic_ns() - capture_start,
                         duration_ns=1_000_000_000 // cfg.fps)
@@ -603,6 +634,8 @@ def run_pipeline(runtime: PipelineRuntime, cfg: AppConfig, camera=None) -> int:
         except Exception as error:
             if not stop.is_set():
                 capture_errors.append(error)
+        finally:
+            camera.close()
 
     producer = threading.Thread(target=feed_camera, name="usb-capture") if camera is not None else None
     if producer is not None:
@@ -622,7 +655,7 @@ def run_pipeline(runtime: PipelineRuntime, cfg: AppConfig, camera=None) -> int:
             last_output = time.monotonic()
 
             boxes = parse_bbox_payload(
-                extract_bbox_payload(sample), cfg.width, cfg.height, cfg.max_detections
+                extract_bbox_payload(sample), cfg.width, cfg.height, cfg.max_detections, cfg.min_score
             )
 
             metadata_start = time_ms()

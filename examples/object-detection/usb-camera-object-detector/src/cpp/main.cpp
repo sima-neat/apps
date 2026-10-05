@@ -68,7 +68,7 @@ void handle_signal(int) {
 struct Config {
   std::string model_path;
   std::string labels_path;
-  std::string device = "/dev/video16";
+  std::string device;
   int width = kDefaultWidth;
   int height = kDefaultHeight;
   int fps = kDefaultFps;
@@ -125,7 +125,7 @@ Config load_config(const fs::path& config_path) {
   cfg.labels_path = raw.string_or("model.labels",
                                   "examples/object-detection/usb-camera-object-detector/src/common/"
                                   "coco_label.txt");
-  cfg.device = raw.string_or("source.device", "/dev/video16");
+  cfg.device = raw.string_or("source.device", "");
   cfg.width = raw.int_or("source.width", kDefaultWidth);
   cfg.height = raw.int_or("source.height", kDefaultHeight);
   cfg.fps = raw.int_or("source.fps", kDefaultFps);
@@ -255,12 +255,33 @@ public:
            ",height=" + std::to_string(opt.height) + ",framerate=" + std::to_string(opt.fps) + "/1";
   }
 
-  std::vector<std::uint8_t> read() {
+  void close() { capture_.release(); }
+
+  std::vector<std::uint8_t> read(std::stop_token stop = {}) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
     // Do not feed a truncated JPEG to the request/response decoder: jpegparse
     // can wait for another buffer while the application waits for its output.
     for (int attempt = 0; attempt < 8; ++attempt) {
       cv::Mat frame;
-      if (!capture_.read(frame) || frame.empty()) {
+      bool ok = false;
+      if (started_) {
+        // Keep capture ownership on this thread. Never release mapped buffers
+        // concurrently with a read; poll for frames so stop requests are observed.
+        std::vector<int> ready;
+        while (!stop.stop_requested() && !g_stop.load()) {
+          if (cv::VideoCapture::waitAny({capture_}, ready, 100000000) && !ready.empty()) break;
+          if (std::chrono::steady_clock::now() >= deadline)
+            throw std::runtime_error("USB camera timed out waiting for a frame");
+        }
+        if (stop.stop_requested() || g_stop.load()) return {};
+        ok = capture_.retrieve(frame);
+      } else {
+        // V4L2 initialization happens before the worker starts and uses the
+        // OpenCV backend's bounded initial-grab timeout.
+        ok = capture_.read(frame);
+        started_ = true;
+      }
+      if (!ok || frame.empty()) {
         throw std::runtime_error("USB camera stopped delivering frames");
       }
       const auto size = frame.total() * frame.elemSize();
@@ -279,12 +300,13 @@ public:
   std::string caps;
 
 private:
+  bool started_ = false;
   std::uint64_t dropped_frames_ = 0;
   cv::VideoCapture capture_;
 };
 
 std::vector<Box> parse_bbox_payload(const std::vector<uint8_t>& payload, int img_w, int img_h,
-                                    int max_detections) {
+                                    int max_detections, float min_score) {
   std::vector<Box> boxes;
   if (payload.size() < sizeof(uint32_t)) {
     return boxes;
@@ -321,10 +343,12 @@ std::vector<Box> parse_bbox_payload(const std::vector<uint8_t>& payload, int img
     Box box;
     box.x1 = clamp(static_cast<float>(x), img_w);
     box.y1 = clamp(static_cast<float>(y), img_h);
-    box.x2 = clamp(static_cast<float>(x + w), img_w);
-    box.y2 = clamp(static_cast<float>(y + h), img_h);
+    box.x2 = clamp(static_cast<float>(static_cast<int64_t>(x) + w), img_w);
+    box.y2 = clamp(static_cast<float>(static_cast<int64_t>(y) + h), img_h);
     box.score = score;
     box.class_id = static_cast<int>(class_id);
+    if (!(score >= min_score && score <= 1.0f) || class_id < 0 ||
+        box.x2 <= box.x1 || box.y2 <= box.y1) continue;
     boxes.push_back(box);
   }
   return boxes;
@@ -586,7 +610,8 @@ int main(int argc, char** argv) {
             if (frame_id == 0) {
               encoded = seed;
             } else {
-              auto bytes = camera->read();
+              auto bytes = camera->read(stop);
+              if (bytes.empty()) break;
               const auto pts = std::chrono::duration_cast<std::chrono::nanoseconds>(
                   std::chrono::steady_clock::now() - capture_start).count();
               encoded = neat::make_encoded_sample(std::move(bytes), camera->caps, pts, -1,
@@ -603,6 +628,7 @@ int main(int argc, char** argv) {
             capture_error = std::current_exception();
           }
         }
+        camera->close();
       });
     }
     auto check_capture_error = [&] {
@@ -639,7 +665,7 @@ int main(int argc, char** argv) {
         }
 
         const auto boxes = parse_bbox_payload(bbox_payload_from_sample(sample), cfg.width, cfg.height,
-                                              cfg.max_detections);
+                                              cfg.max_detections, cfg.min_score);
         if (!metadata_sender.send_metadata(
             "object-detection", build_metadata_json(boxes, labels, cfg.width, cfg.height),
             sample.pts_ns >= 0 ? static_cast<int64_t>(sample.pts_ns / 1000000) : -1,

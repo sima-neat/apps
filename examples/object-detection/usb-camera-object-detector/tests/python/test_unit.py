@@ -141,10 +141,18 @@ class TestConfigLoading:
         cfg = main.build_app_config({"model": {"path": "models/pack.tar.gz", "labels": "l.txt"}})
 
         assert (cfg.width, cfg.height, cfg.fps) == (1920, 1080, 30)
-        assert cfg.device == "/dev/video16"
+        assert cfg.device == ""
         assert cfg.max_detections == 100
         assert cfg.queue_depth == 3
         assert cfg.profile is False
+
+    def test_omitted_device_is_rejected_without_override(self):
+        raw = valid_config()
+        del raw["source"]["device"]
+        with pytest.raises(ValueError, match="source.device"):
+            main.validate_config(main.build_app_config(raw))
+        raw["source"]["override_fragment"] = "videotestsrc ! queue"
+        main.validate_config(main.build_app_config(raw))
 
     @pytest.mark.parametrize(
         "section,key,value,message",
@@ -275,6 +283,8 @@ class FakeCapture:
         data = next(self.frames, None)
         return (False, None) if data is None else (True, SimpleNamespace(tobytes=lambda: data))
 
+    retrieve = read
+
     def release(self):
         self.released = True
 
@@ -282,6 +292,7 @@ class FakeCapture:
 def fake_cv2(capture):
     module = SimpleNamespace(CAP_V4L2=200, VideoCapture=lambda *args: capture,
                              VideoWriter_fourcc=lambda *args: 1196444237)
+    module.VideoCapture.waitAny = lambda streams, timeout: (True, [0])
     for key in ("FOURCC", "FRAME_WIDTH", "FRAME_HEIGHT", "FPS", "BUFFERSIZE", "CONVERT_RGB"):
         setattr(module, "CAP_PROP_" + key, key)
     return module
@@ -333,6 +344,52 @@ class TestUsbCapture:
             main.UsbCamera(main.build_app_config(valid_config()), fake_cv2(capture))
         assert capture.released
 
+    def test_stalled_camera_can_be_cancelled_without_concurrent_release(self):
+        import threading
+        import time
+
+        capture = FakeCapture([b"\xff\xd8seed\xff\xd9"])
+        cv2 = fake_cv2(capture)
+        waiting = threading.Event()
+        def wait_any(streams, timeout):
+            assert timeout == 100_000_000
+            assert not capture.released
+            waiting.set()
+            time.sleep(timeout / 1e9)
+            return False, []
+        cv2.VideoCapture.waitAny = wait_any
+        camera = main.UsbCamera(main.build_app_config(valid_config()), cv2)
+        camera.read()  # initialize before starting the producer
+        stop = threading.Event()
+        result = []
+        def capture_frame():
+            try:
+                result.append(camera.read(stop))
+            finally:
+                camera.close()
+        worker = threading.Thread(target=capture_frame)
+        worker.start()
+        try:
+            assert waiting.wait(1)
+        finally:
+            stop.set()
+            worker.join(1)
+        assert not worker.is_alive()
+        assert result == [None]
+        assert capture.released
+
+    def test_stalled_camera_times_out(self, monkeypatch):
+        capture = FakeCapture([b"\xff\xd8seed\xff\xd9"])
+        cv2 = fake_cv2(capture)
+        cv2.VideoCapture.waitAny = lambda *args: (False, [])
+        camera = main.UsbCamera(main.build_app_config(valid_config()), cv2)
+        camera.read()
+        times = iter([0, 21])
+        monkeypatch.setattr(main.time, "monotonic", lambda: next(times))
+        with pytest.raises(RuntimeError, match="timed out"):
+            camera.read()
+        camera.close()
+
     def test_override_description_is_preserved(self):
         override = "videotestsrc ! video/x-raw,format=NV12 ! queue"
         cfg = main.build_app_config(config_with(source={"override_fragment": override}))
@@ -353,7 +410,7 @@ class TestCaptureLifecycle:
             pushed.set()
             return True
 
-        def read():
+        def read(stop=None):
             assert closed.wait(2), "capture was not stopped"
             return b"\xff\xd8\xff\xd9"
 
@@ -372,7 +429,7 @@ class TestCaptureLifecycle:
         runtime = SimpleNamespace(seed=SimpleNamespace(), video_port=9000,
                                   run=SimpleNamespace(push=push, pull=pull, close=closed.set))
         cfg = main.build_app_config(config_with(inference={"frames": 1}))
-        camera = SimpleNamespace(read=read, caps="image/jpeg")
+        camera = SimpleNamespace(read=read, caps="image/jpeg", close=lambda: None)
         if fail_metadata:
             with pytest.raises(RuntimeError, match="metadata send failed"):
                 main.run_pipeline(runtime, cfg, camera)
@@ -387,7 +444,7 @@ class TestCaptureLifecycle:
 
         failed, closed = threading.Event(), threading.Event()
 
-        def read():
+        def read(stop=None):
             failed.set()
             raise RuntimeError("USB camera stopped delivering frames")
 
@@ -398,7 +455,7 @@ class TestCaptureLifecycle:
         runtime = SimpleNamespace(seed=None, run=SimpleNamespace(pull=pull, close=closed.set))
         with pytest.raises(RuntimeError, match="stopped delivering frames"):
             main.run_pipeline(runtime, main.build_app_config(valid_config()),
-                              SimpleNamespace(read=read, caps="image/jpeg"))
+                              SimpleNamespace(read=read, caps="image/jpeg", close=lambda: None))
         assert closed.is_set()
         assert not any(t.name == "usb-capture" for t in threading.enumerate())
 
@@ -467,6 +524,16 @@ class TestBboxPayload:
     @pytest.mark.parametrize("payload", [b"", b"\x00", b"\x01\x00\x00"])
     def test_short_payloads_return_no_detections(self, payload):
         assert main.parse_bbox_payload(payload, 1920, 1080, 100) == []
+
+    def test_filters_padding_degenerate_boxes_and_invalid_scores(self):
+        payload = bbox_payload([
+            (0, 0, 0, 0, 0.0, 0), (2000, 0, 20, 20, 0.9, 0),
+            (10, 10, -5, 20, 0.9, 0), (10, 10, 20, 20, 0.1, 0),
+            (10, 10, 20, 20, float("nan"), 0), (10, 10, 20, 20, 1.5, 0),
+            (10, 10, 20, 20, 0.9, -1), (10, 10, 20, 20, 0.8, 0),
+        ])
+        boxes = main.parse_bbox_payload(payload, 1920, 1080, 100, 0.3)
+        assert len(boxes) == 1 and boxes[0]["score"] == pytest.approx(0.8)
 
     def test_header_only_payload_returns_no_detections(self):
         assert main.parse_bbox_payload(struct.pack("<I", 0), 1920, 1080, 100) == []
@@ -553,6 +620,10 @@ class TestModelAcquisition:
 
     def test_scope_models_are_downloadable_artifacts(self):
         for model_id, model in self.scope()["models"].items():
+            if model["source"] == "modelzoo":
+                assert model["name"] == "yolo_26n"
+                assert model["file"] == "yolo_26n_mpk.tar.gz"
+                continue
             assert model["source"] == "url", f"{model_id} must be a downloadable artifact"
             assert model["url"].startswith("https://"), f"{model_id} needs an https url"
             assert model["url"].endswith(model["file"]), f"{model_id} url must end with its file"
@@ -560,6 +631,8 @@ class TestModelAcquisition:
     def test_scope_model_urls_are_modelzoo_version_agnostic(self):
         """The Model Zoo version is resolved at download time, never hardcoded."""
         for model_id, model in self.scope()["models"].items():
+            if model["source"] == "modelzoo":
+                continue
             assert "{modelzoo_version}" in model["url"], (
                 f"{model_id} url must use the {{modelzoo_version}} placeholder"
             )
@@ -580,6 +653,9 @@ class TestModelAcquisition:
     def test_documented_download_matches_the_scope_url(self):
         readme = (EXAMPLE_DIR / "README.md").read_text(encoding="utf-8")
         for model in self.scope()["models"].values():
+            if model["source"] == "modelzoo":
+                assert "get " + model["name"] in readme
+                continue
             documented = model["url"].replace("{modelzoo_version}", "${MODELZOO_VERSION}")
             assert documented in readme, f"README does not document {documented}"
 

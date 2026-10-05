@@ -1,4 +1,8 @@
 models:
+  yolo_26n:
+    source: modelzoo
+    name: yolo_26n
+    file: yolo_26n_mpk.tar.gz
   yolo26m-det-bf16-mla_tess-b1:
     source: url
     url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26-detection/yolo26m-det-bf16-mla_tess-b1.tar.gz
@@ -14,8 +18,8 @@ e2e:
   python:
     enabled: true
     models:
-    - yolo26m-det-bf16-mla_tess-b1
+    - yolo_26n
   cpp:
     enabled: true
     models:
-    - yolo26m-det-bf16-mla_tess-b1
+    - yolo_26n

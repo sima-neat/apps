@@ -39,7 +39,10 @@ falls behind. Neat's configured input queue bounds pending work.
 The capture helper verifies the negotiated resolution and frame rate and rejects
 non-MJPEG output. It discards truncated JPEGs before they reach `JpegParse`, and
 reports an error after eight consecutive incomplete frames. Shutdown closes the
-Neat Run, joins the capture worker, and releases the camera.
+Neat Run and cancels the capture worker. After startup, the worker polls for
+frames in 100 ms intervals, releases its own camera, and is then joined. A camera
+that supplies no frames for 20 seconds produces a clear timeout error.
+`source.device` is required unless a diagnostic source override is supplied.
 
 The C++ and Python implementations read the same `src/common/config.yaml` and
 build the same graph.
@@ -322,3 +325,8 @@ The packaged C++ source is an implementation reference. Run the executable under
 ## Development From Source
 
 To modify, compile, or test this example, use the [Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).
+
+The USB-camera end-to-end tests require `ffprobe` on the test target. They repeat
+the bundled COCO image as an NV12 source, receive and decode H.264 over UDP, and
+validate nonempty detection metadata in both languages. Camera capture and
+shutdown still require separate DevKit validation.

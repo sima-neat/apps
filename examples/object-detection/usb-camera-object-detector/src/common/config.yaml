@@ -6,7 +6,7 @@ source:                      # USB (UVC) camera capture.
   device: <video-capture-node>   # e.g. /dev/video96. Find it: see Prepare the Camera.
   width: 1920                # Capture width.
   height: 1080               # Capture height.
-  fps: 30                    # Capture rate. MJPEG sustains 30 fps at 1080p; raw YUYV cannot.
+  fps: 30                    # Capture rate. Must be supported by the camera at this resolution.
   flip: none                 # none, rotate-180, horizontal-flip, or vertical-flip.
   override_fragment: ""      # Diagnostic: replace the camera with any NV12 GStreamer fragment.
 
@@ -29,11 +29,11 @@ output:                      # Insight receiver.
     bitrate_kbps: 4000       # H.264 encoder bitrate.
 
 # Test harness settings only. Normal example runs ignore this section.
-# The e2e tests have no camera, so they drive the same graph from a synthetic
+# The e2e tests have no camera, so they drive the same graph from a fixed COCO image repeated as an
 # NV12 source through source.override_fragment.
 testing:
   e2e:
     source:
-      override_fragment: "videotestsrc pattern=smpte is-live=true ! video/x-raw,format=NV12,width=1920,height=1080,framerate=30/1 ! queue leaky=downstream max-size-buffers=2"
+      override_fragment: "filesrc location=assets/datasets-test/coco/000000265108.jpg ! jpegdec ! imagefreeze is-live=true ! videoscale ! videoconvert ! video/x-raw,format=NV12,width=1920,height=1080,framerate=30/1 ! queue leaky=downstream max-size-buffers=2"
     inference:
       frames: 30
