@@ -85,6 +85,26 @@ Without `--decode-type`, the model runs through the route its package declares. 
 
 See the maintained [benchmark results](https://github.com/sima-neat/apps/blob/main/examples/benchmarking/model-benchmark/BENCHMARK_RESULTS.md) for measurements from Apps-supported packages.
 
+## Expected Result
+
+The application prints headline metrics and the path it wrote the full report to:
+
+```text
+latency_ms=7.153341385999992
+fps=300.716959903217
+avg_power_watts=14.03314393939394
+energy_joules=46.6746557159697
+report_json=sandbox/model-benchmark/report.json
+```
+
+The `report_json=` line names where the full report was written; trust it rather
+than either setting, because `--output-json` takes precedence over
+`output.report_json` and the documented run above passes that flag.
+
+These numbers depend on the model package and the board, so treat them as an
+example of the shape rather than a target; compare your own against the
+maintained benchmark results linked in the `Benchmark Results` section above.
+
 ## Troubleshooting
 
 - Activate `~/pyneat` if the `pyneat` module is unavailable.
