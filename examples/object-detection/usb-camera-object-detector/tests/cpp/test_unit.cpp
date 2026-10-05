@@ -293,6 +293,46 @@ bool test_literal_block_scalar_keeps_lines() {
                      "literal YAML block preserves line breaks and # text");
 }
 
+bool test_explicit_block_indentation(const std::string& binary) {
+  bool ok = true;
+  for (const std::string header : {">2-", ">-2"}) {
+    const std::string frag = source_description_for(
+        binary, "test_explicit_folded_" + header,
+        config_body("  override_fragment: " + header + "\n"
+                    "    videotestsrc pattern=smpte is-live=true\n"
+                    "    ! video/x-raw,format=NV12\n"),
+        &ok);
+    ok &= expect_true(frag ==
+                          "videotestsrc pattern=smpte is-live=true "
+                          "! video/x-raw,format=NV12",
+                      header + " folds at the declared indentation");
+  }
+  for (const std::string header : {"|2-", "|-2"}) {
+    const fs::path path = write_config(
+        "test_explicit_literal_" + header,
+        config_body("  override_fragment: " + header + "\n"
+                    "    videotestsrc pattern=ball\n"
+                    "    ! video/x-raw,format=NV12\n"));
+    const std::string fragment = sima_examples::ScalarConfig::load(path).string_or(
+        "source.override_fragment", "");
+    remove_dir(path.parent_path().string());
+    ok &= expect_true(fragment == "videotestsrc pattern=ball\n! video/x-raw,format=NV12",
+                      header + " preserves literal lines at the declared indentation");
+  }
+  const fs::path nested = write_config(
+      "test_explicit_folded_nested_indent",
+      config_body("  override_fragment: >2-\n"
+                  "    first line\n"
+                  "      indented line\n"
+                  "    last line\n"));
+  const std::string nested_value = sima_examples::ScalarConfig::load(nested).string_or(
+      "source.override_fragment", "");
+  remove_dir(nested.parent_path().string());
+  ok &= expect_true(nested_value == "first line\n  indented line\nlast line",
+                    "folded block preserves line breaks around extra indentation");
+  return ok;
+}
+
 bool test_override_reported_as_source(const std::string& binary) {
   const fs::path config_path =
       write_config("test_override_reported_as_source",
@@ -409,6 +449,7 @@ int main(int argc, char** argv) {
   ok &= test_wrapped_override_fragment_is_folded(binary);
   ok &= test_block_scalar_override_matches_python(binary);
   ok &= test_literal_block_scalar_keeps_lines();
+  ok &= test_explicit_block_indentation(binary);
   ok &= test_override_reported_as_source(binary);
   ok &= test_override_allows_empty_device(binary);
   ok &= test_omitted_device_is_rejected(binary);
@@ -429,9 +470,21 @@ int main(int argc, char** argv) {
   ok &= validate_rejects(binary, "test_rejects_out_of_range_min_score",
                          config_body("", "  min_score: 1.50\n"), "inference.min_score",
                          "out-of-range inference.min_score");
+  ok &= validate_rejects(binary, "test_rejects_nan_min_score",
+                         config_body("", "  min_score: nan\n"), "inference.min_score",
+                         "non-finite inference.min_score");
+  ok &= validate_rejects(binary, "test_rejects_infinite_min_score",
+                         config_body("", "  min_score: inf\n"), "inference.min_score",
+                         "infinite inference.min_score");
   ok &= validate_rejects(binary, "test_rejects_out_of_range_nms",
                          config_body("", "  nms_iou: 1.20\n"), "inference.nms_iou",
                          "out-of-range inference.nms_iou");
+  ok &= validate_rejects(binary, "test_rejects_nan_nms",
+                         config_body("", "  nms_iou: nan\n"), "inference.nms_iou",
+                         "non-finite inference.nms_iou");
+  ok &= validate_rejects(binary, "test_rejects_infinite_nms",
+                         config_body("", "  nms_iou: inf\n"), "inference.nms_iou",
+                         "infinite inference.nms_iou");
   ok &= validate_rejects(binary, "test_rejects_zero_max_detections",
                          config_body("", "  max_detections: 0\n"), "inference.max_detections",
                          "zero inference.max_detections");

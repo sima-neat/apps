@@ -151,18 +151,32 @@ ScalarConfig ScalarConfig::load(const std::filesystem::path& path) {
       continue;
     }
 
-    if (value == ">" || value == ">-" || value == ">+" ||
-        value == "|" || value == "|-" || value == "|+") {
+    bool block_header = !value.empty() && (value.front() == '>' || value.front() == '|');
+    char chomp = '\0';
+    int explicit_indent = 0;
+    for (std::size_t i = 1; block_header && i < value.size(); ++i) {
+      const char c = value[i];
+      if ((c == '-' || c == '+') && chomp == '\0') {
+        chomp = c;
+      } else if (c >= '1' && c <= '9' && explicit_indent == 0) {
+        explicit_indent = c - '0';
+      } else {
+        block_header = false;
+      }
+    }
+    if (block_header) {
       const bool folded = value.front() == '>';
-      const char chomp = value.size() == 2 ? value.back() : '\0';
       std::vector<std::string> block;
-      int content_indent = -1;
+      int content_indent = explicit_indent ? indent + explicit_indent : -1;
       while (index + 1 < raw_lines.size()) {
         const std::string& next = raw_lines[index + 1];
         const bool blank = trim_copy(next).empty();
         const int next_indent = leading_indent(next);
         if (!blank && next_indent <= indent) break;
         if (!blank && content_indent < 0) content_indent = next_indent;
+        if (!blank && next_indent < content_indent) {
+          throw std::runtime_error("invalid block indentation for " + key);
+        }
         block.push_back(next);
         ++index;
       }
@@ -176,7 +190,10 @@ ScalarConfig ScalarConfig::load(const std::filesystem::path& path) {
           if (!folded) {
             value += '\n';
           } else if (!blank) {
-            value += trim_copy(block[i - 1]).empty() ? '\n' : ' ';
+            const bool previous_blank = trim_copy(block[i - 1]).empty();
+            const bool more_indented = leading_indent(line) > content_indent ||
+                                       (!previous_blank && leading_indent(block[i - 1]) > content_indent);
+            value += previous_blank || more_indented ? '\n' : ' ';
           } else if (trim_copy(block[i - 1]).empty()) {
             value += '\n';
           }

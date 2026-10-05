@@ -167,10 +167,10 @@ Config load_config(const fs::path& config_path) {
   if (cfg.frames < 0) {
     throw std::runtime_error("inference.frames must be >= 0");
   }
-  if (cfg.min_score < 0.0f || cfg.min_score > 1.0f) {
+  if (!std::isfinite(cfg.min_score) || cfg.min_score < 0.0f || cfg.min_score > 1.0f) {
     throw std::runtime_error("inference.min_score must be in [0.0, 1.0]");
   }
-  if (cfg.nms_iou < 0.0f || cfg.nms_iou > 1.0f) {
+  if (!std::isfinite(cfg.nms_iou) || cfg.nms_iou < 0.0f || cfg.nms_iou > 1.0f) {
     throw std::runtime_error("inference.nms_iou must be in [0.0, 1.0]");
   }
   if (cfg.max_detections <= 0) {
