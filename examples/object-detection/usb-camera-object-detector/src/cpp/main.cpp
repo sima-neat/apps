@@ -264,23 +264,16 @@ public:
     for (int attempt = 0; attempt < 8; ++attempt) {
       cv::Mat frame;
       bool ok = false;
-      if (started_) {
-        // Keep capture ownership on this thread. Never release mapped buffers
-        // concurrently with a read; poll for frames so stop requests are observed.
-        std::vector<int> ready;
-        while (!stop.stop_requested() && !g_stop.load()) {
-          if (cv::VideoCapture::waitAny({capture_}, ready, 100000000) && !ready.empty()) break;
-          if (std::chrono::steady_clock::now() >= deadline)
-            throw std::runtime_error("USB camera timed out waiting for a frame");
-        }
-        if (stop.stop_requested() || g_stop.load()) return {};
-        ok = capture_.retrieve(frame);
-      } else {
-        // V4L2 initialization happens before the worker starts and uses the
-        // OpenCV backend's bounded initial-grab timeout.
-        ok = capture_.read(frame);
-        started_ = true;
+      // waitAny handles the first grab too. A stopped camera cannot strand
+      // startup in an unbounded read before the producer thread exists.
+      std::vector<int> ready;
+      while (!stop.stop_requested() && !g_stop.load()) {
+        if (cv::VideoCapture::waitAny({capture_}, ready, 100000000) && !ready.empty()) break;
+        if (std::chrono::steady_clock::now() >= deadline)
+          throw std::runtime_error("USB camera timed out waiting for a frame");
       }
+      if (stop.stop_requested() || g_stop.load()) return {};
+      ok = capture_.retrieve(frame);
       if (!ok || frame.empty()) {
         throw std::runtime_error("USB camera stopped delivering frames");
       }
@@ -300,7 +293,6 @@ public:
   std::string caps;
 
 private:
-  bool started_ = false;
   std::uint64_t dropped_frames_ = 0;
   cv::VideoCapture capture_;
 };
@@ -550,10 +542,13 @@ int main(int argc, char** argv) {
       source_graph.add(neat::nodes::Input("jpeg", ingress));
       source_graph.add(neat::nodes::JpegParse());
       source_graph.add(neat::nodes::SimaDecode(decode));
-      if (cfg.flip != "none") {
-        source_graph.add(neat::nodes::Custom("videoflip method=" + flip_methods().at(cfg.flip)));
-      }
-      seed = neat::make_encoded_sample(camera->read(), camera->caps, 0, -1, 1000000000LL / cfg.fps);
+      auto first_frame = camera->read();
+      if (g_stop.load()) return 130;
+      seed = neat::make_encoded_sample(std::move(first_frame), camera->caps, 0, -1,
+                                       1000000000LL / cfg.fps);
+    }
+    if (cfg.flip != "none") {
+      source_graph.add(neat::nodes::Custom("videoflip method=" + flip_methods().at(cfg.flip)));
     }
     auto branch = neat::graphs::Branch("camera", {"video", "model"});
     neat::Graph graph("usb_camera_object_detector");

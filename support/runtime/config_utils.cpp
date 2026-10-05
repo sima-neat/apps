@@ -151,6 +151,49 @@ ScalarConfig ScalarConfig::load(const std::filesystem::path& path) {
       continue;
     }
 
+    if (value == ">" || value == ">-" || value == ">+" ||
+        value == "|" || value == "|-" || value == "|+") {
+      const bool folded = value.front() == '>';
+      const char chomp = value.size() == 2 ? value.back() : '\0';
+      std::vector<std::string> block;
+      int content_indent = -1;
+      while (index + 1 < raw_lines.size()) {
+        const std::string& next = raw_lines[index + 1];
+        const bool blank = trim_copy(next).empty();
+        const int next_indent = leading_indent(next);
+        if (!blank && next_indent <= indent) break;
+        if (!blank && content_indent < 0) content_indent = next_indent;
+        block.push_back(next);
+        ++index;
+      }
+      value.clear();
+      for (std::size_t i = 0; i < block.size(); ++i) {
+        const std::string& line = block[i];
+        const bool blank = trim_copy(line).empty();
+        const std::string content = blank ? "" : line.substr(
+            std::min<std::size_t>(line.size(), static_cast<std::size_t>(content_indent)));
+        if (i > 0) {
+          if (!folded) {
+            value += '\n';
+          } else if (!blank) {
+            value += trim_copy(block[i - 1]).empty() ? '\n' : ' ';
+          } else if (trim_copy(block[i - 1]).empty()) {
+            value += '\n';
+          }
+        }
+        value += content;
+      }
+      if (!block.empty()) value += '\n';
+      if (chomp != '+') {
+        while (!value.empty() && value.back() == '\n') value.pop_back();
+        if (chomp != '-' && !block.empty()) value += '\n';
+      }
+      std::string full_key = join_stack(stack);
+      if (!full_key.empty()) full_key += '.';
+      config.scalars_[full_key + key] = value;
+      continue;
+    }
+
     // YAML folds a plain scalar across more-indented continuation lines, and
     // emitters such as PyYAML wrap long values that way. Only a non-empty value
     // can fold: an empty one opens a nested mapping, which the branch above has

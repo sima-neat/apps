@@ -1,6 +1,7 @@
 // Unit test for usb-camera-object-detector: CLI handling, configuration validation,
 // and the resolved capture/decode route. Runs without a camera, a model, or a board.
 #include "support/testing/test_process.h"
+#include "support/runtime/config_utils.h"
 
 #include <filesystem>
 #include <fstream>
@@ -260,6 +261,38 @@ bool test_wrapped_override_fragment_is_folded(const std::string& binary) {
                      "wrapped override fragment folds into one value");
 }
 
+bool test_block_scalar_override_matches_python(const std::string& binary) {
+  bool ok = true;
+  const std::string frag = source_description_for(
+      binary, "test_block_scalar_override_matches_python",
+      config_body("  override_fragment: >-\n"
+                  "    videotestsrc pattern=smpte is-live=true\n"
+                  "    ! video/x-raw,format=NV12,width=1920,height=1080\n"
+                  "    ! queue leaky=downstream max-size-buffers=2\n"),
+      &ok);
+  if (!ok) return false;
+  return expect_true(frag ==
+                         "videotestsrc pattern=smpte is-live=true "
+                         "! video/x-raw,format=NV12,width=1920,height=1080 "
+                         "! queue leaky=downstream max-size-buffers=2",
+                     "folded YAML block matches Python's override fragment");
+}
+
+bool test_literal_block_scalar_keeps_lines() {
+  const fs::path path = write_config(
+      "test_literal_block_scalar_keeps_lines",
+      config_body("  override_fragment: |-\n"
+                  "    videotestsrc pattern=ball # retained inside the scalar\n"
+                  "    ! video/x-raw,format=NV12\n"));
+  const std::string fragment = sima_examples::ScalarConfig::load(path).string_or(
+      "source.override_fragment", "");
+  remove_dir(path.parent_path().string());
+  return expect_true(fragment ==
+                         "videotestsrc pattern=ball # retained inside the scalar\n"
+                         "! video/x-raw,format=NV12",
+                     "literal YAML block preserves line breaks and # text");
+}
+
 bool test_override_reported_as_source(const std::string& binary) {
   const fs::path config_path =
       write_config("test_override_reported_as_source",
@@ -374,6 +407,8 @@ int main(int argc, char** argv) {
   ok &= test_source_honours_capture_mode(binary);
   ok &= test_override_replaces_the_camera(binary);
   ok &= test_wrapped_override_fragment_is_folded(binary);
+  ok &= test_block_scalar_override_matches_python(binary);
+  ok &= test_literal_block_scalar_keeps_lines();
   ok &= test_override_reported_as_source(binary);
   ok &= test_override_allows_empty_device(binary);
   ok &= test_omitted_device_is_rejected(binary);

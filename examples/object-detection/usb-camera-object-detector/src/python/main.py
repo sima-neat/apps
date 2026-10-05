@@ -322,7 +322,6 @@ class UsbCamera:
 
     def __init__(self, cfg: AppConfig, cv2):
         self.capture = cv2.VideoCapture(cfg.device, cv2.CAP_V4L2)
-        self.started = False
         self.caps = camera_caps(cfg)
         self.dropped_frames = 0
         try:
@@ -349,25 +348,19 @@ class UsbCamera:
     def read(self, stop=None) -> bytes | None:
         deadline = time.monotonic() + 20
         for _ in range(8):
-            if self.started:
-                # waitAny grabs only ready frames; retrieve preserves compressed bytes.
-                # Poll so shutdown never races release() against an active read().
-                while stop is None or not stop.is_set():
-                    ready, indices = self.wait_any([self.capture], 100_000_000)
-                    if ready and len(indices):
-                        break
-                    if time.monotonic() >= deadline:
-                        raise RuntimeError("USB camera timed out waiting for a frame")
-                else:
-                    return None
-                if stop is not None and stop.is_set():
-                    return None
-                ok, frame = self.capture.retrieve()
+            # waitAny also handles the first grab. Polling bounds startup and
+            # lets a signal or worker stop interrupt a camera with no first frame.
+            while stop is None or not stop.is_set():
+                ready, indices = self.wait_any([self.capture], 100_000_000)
+                if ready and len(indices):
+                    break
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("USB camera timed out waiting for a frame")
             else:
-                # Initialize V4L2 before starting the capture worker. OpenCV's
-                # backend timeout bounds this initial grab.
-                ok, frame = self.capture.read()
-                self.started = True
+                return None
+            if stop is not None and stop.is_set():
+                return None
+            ok, frame = self.capture.retrieve()
             if not ok or frame is None:
                 raise RuntimeError("USB camera stopped delivering frames")
             data = frame.tobytes()
@@ -542,10 +535,10 @@ def build_pipeline(cfg: AppConfig, camera=None) -> PipelineRuntime:
         source_graph.add(pyneat.nodes.input("jpeg", ingress))
         source_graph.add(pyneat.nodes.jpeg_parse())
         source_graph.add(pyneat.nodes.sima_decode(decode))
-        if cfg.flip != "none":
-            source_graph.add(pyneat.nodes.custom(f"videoflip method={FLIP_METHODS[cfg.flip]}"))
         seed = pyneat.make_encoded_sample(camera.read(), camera.caps, pts_ns=0,
                                           duration_ns=1_000_000_000 // cfg.fps)
+    if cfg.flip != "none":
+        source_graph.add(pyneat.nodes.custom(f"videoflip method={FLIP_METHODS[cfg.flip]}"))
 
     branch = pyneat.graphs.branch("camera", ["video", "model"])
     graph = pyneat.Graph("usb_camera_object_detector")

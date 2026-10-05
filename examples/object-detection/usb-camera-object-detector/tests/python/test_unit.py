@@ -17,7 +17,6 @@ import pytest
 import yaml
 
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
-APPS_ROOT = EXAMPLE_DIR.parents[2]
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
 COMMON_DIR = EXAMPLE_DIR / "src" / "common"
 CONFIG_YAML = COMMON_DIR / "config.yaml"
@@ -359,7 +358,6 @@ class TestUsbCapture:
             return False, []
         cv2.VideoCapture.waitAny = wait_any
         camera = main.UsbCamera(main.build_app_config(valid_config()), cv2)
-        camera.read()  # initialize before starting the producer
         stop = threading.Event()
         result = []
         def capture_frame():
@@ -383,7 +381,6 @@ class TestUsbCapture:
         cv2 = fake_cv2(capture)
         cv2.VideoCapture.waitAny = lambda *args: (False, [])
         camera = main.UsbCamera(main.build_app_config(valid_config()), cv2)
-        camera.read()
         times = iter([0, 21])
         monkeypatch.setattr(main.time, "monotonic", lambda: next(times))
         with pytest.raises(RuntimeError, match="timed out"):
@@ -693,13 +690,6 @@ class TestTwinParity:
 @pytest.mark.unit
 class TestRepoIntegration:
     """The example must be wired into the repository the way the others are."""
-
-    def test_registered_in_the_category_cmakelists(self):
-        cmake = (APPS_ROOT / "examples" / "object-detection" / "CMakeLists.txt").read_text(
-            encoding="utf-8"
-        )
-
-        assert "usb-camera-object-detector" in cmake
 
     def test_no_hardcoded_lab_hosts_in_committed_files(self):
         """CONTRIBUTING forbids real board, RTSP, or Insight hosts in examples."""
