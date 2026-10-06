@@ -90,6 +90,9 @@ Open `${APP_DIR}/src/common/config.yaml` and set:
 - `streams[].model` — the downloaded package for that stream.
 - `output.insight.host` — the host running Insight.
 
+`inference.fps` must remain `0`: this application uses each camera's source frame
+rate. Configure a lower rate at the camera or RTSP streamer when needed.
+
 Drop stream entries to run fewer than four models; the example accepts one to four. Stream *i*
 publishes video on `output.insight.video_port_base + i` and metadata on
 `output.insight.metadata_port_base + i`.

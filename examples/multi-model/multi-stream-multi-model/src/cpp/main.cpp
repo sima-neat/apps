@@ -549,7 +549,8 @@ void validate_config(const AppConfig& cfg) {
   sima_examples::require(!cfg.insight_host.empty(), "output.insight.host must be set");
   sima_examples::require(cfg.latency_ms >= 0, "input.latency_ms must be >= 0");
   sima_examples::require(cfg.frames >= 0, "inference.frames must be >= 0");
-  sima_examples::require(cfg.fps >= 0, "inference.fps must be >= 0");
+  sima_examples::require(cfg.fps == 0,
+      "inference.fps must be 0; configure frame rate at the RTSP source");
   sima_examples::require(cfg.max_inflight_per_stream > 0,
                          "inference.max_inflight_per_stream must be > 0");
   sima_examples::require(cfg.min_score >= 0.0 && cfg.min_score <= 1.0,
@@ -1372,9 +1373,6 @@ void build_stream_runtime(const AppConfig& cfg, const StreamConfig& stream_cfg,
   sima_examples::require(runtime.frame_w > 0 && runtime.frame_h > 0,
                          "failed to probe RTSP frame dimensions");
   sima_examples::require(runtime.output_fps > 0, "failed to probe RTSP frame rate");
-  if (cfg.fps > 0) {
-    runtime.output_fps = cfg.fps;
-  }
 
   runtime.model = build_model(cfg, stream_cfg, runtime.frame_w, runtime.frame_h);
   runtime.labels = labels;

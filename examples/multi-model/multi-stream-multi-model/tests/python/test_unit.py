@@ -681,3 +681,12 @@ def test_worker_failure_returns_nonzero_and_closes_runs(monkeypatch, tmp_path, f
     assert main.main(["--config", str(path)]) == 1
     assert stream.closed
     assert len(closed) == 2
+
+
+@pytest.mark.parametrize("fps", [-1, 15, 60])
+def test_application_fps_cap_is_rejected(tmp_path, fps):
+    import main
+    from dataclasses import replace
+    cfg = main.load_app_config(write_config(tmp_path, DEFAULT_STREAMS))
+    with pytest.raises(ValueError, match="configure frame rate at the RTSP source"):
+        main.validate_config(replace(cfg, fps=fps))

@@ -362,8 +362,8 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("input.latency_ms must be >= 0")
     if cfg.frames < 0:
         raise ValueError("inference.frames must be >= 0")
-    if cfg.fps < 0:
-        raise ValueError("inference.fps must be >= 0")
+    if cfg.fps != 0:
+        raise ValueError("inference.fps must be 0; configure frame rate at the RTSP source")
     if cfg.max_inflight_per_stream <= 0:
         raise ValueError("inference.max_inflight_per_stream must be > 0")
     if not 0.0 <= cfg.min_score <= 1.0:
@@ -1132,7 +1132,7 @@ def make_video_options(cfg: AppConfig, stream_index: int):
 
 def build_stream_runtime(cfg: AppConfig, stream_cfg: StreamConfig, labels: list[str]) -> StreamRuntime:
     frame_w, frame_h, fps = probe_rtsp(stream_cfg.url, cfg)
-    output_fps = cfg.fps if cfg.fps > 0 else fps
+    output_fps = fps
 
     source_options = build_source_options(cfg, stream_cfg.url, fps, frame_w, frame_h)
     model = build_model(cfg, stream_cfg, frame_w, frame_h)

@@ -241,6 +241,20 @@ bool test_stream_scalar_types(const std::string& binary) {
   return ok;
 }
 
+bool test_unsupported_fps_cap(const std::string& binary) {
+  bool ok = true;
+  for (int fps : {-1, 15, 60}) {
+    const auto path = write_config("test_unsupported_fps_cap", std::string(kOneStream) +
+        "inference:\n  fps: " + std::to_string(fps) + "\n" + kInsightOutput);
+    const auto result = validate(binary, path);
+    ok &= expect_true(result.exit_code == 1, "application FPS cap is rejected");
+    ok &= expect_contains(result.stderr_text, "configure frame rate at the RTSP source",
+                          "FPS error explains how to set source rate");
+    remove_dir(path.parent_path().string());
+  }
+  return ok;
+}
+
 bool test_negative_inflight_limit(const std::string& binary) {
   const fs::path path = write_config("test_negative_inflight_limit",
       std::string(kOneStream) + "inference:\n  max_inflight_per_stream: -1\n" + kInsightOutput);
@@ -285,6 +299,7 @@ int main(int argc, char** argv) {
   const std::string binary = argv[1];
   bool ok = true;
   ok &= test_stream_scalar_types(binary);
+  ok &= test_unsupported_fps_cap(binary);
   ok &= test_negative_inflight_limit(binary);
   ok &= test_insight_port_ranges(binary);
   ok &= test_help_runs(binary);
