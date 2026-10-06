@@ -198,7 +198,7 @@ bool test_validate_config_only_rejects_invalid_inflight_limit(const std::string&
 
   const auto result = validate(binary, config_path);
   const bool ok = expect_true(result.exit_code == 1, "invalid inflight limit is rejected") &&
-                  expect_contains(result.stderr_text, "max_inflight_per_stream must be -1 or > 0",
+                  expect_contains(result.stderr_text, "max_inflight_per_stream must be > 0",
                                   "invalid inflight error names the setting");
   remove_dir(config_path.parent_path().string());
   return ok;
@@ -218,6 +218,14 @@ bool test_validate_config_only_rejects_invalid_mask_threshold(const std::string&
                                   "invalid mask threshold error names the setting");
   remove_dir(config_path.parent_path().string());
   return ok;
+}
+
+bool test_negative_inflight_limit(const std::string& binary) {
+  const fs::path path = write_config("test_negative_inflight_limit",
+      std::string(kOneStream) + "inference:\n  max_inflight_per_stream: -1\n" + kInsightOutput);
+  const auto result = validate(binary, path);
+  remove_dir(path.parent_path().string());
+  return expect_true(result.exit_code == 1, "negative inflight limit is rejected");
 }
 
 bool test_insight_port_ranges(const std::string& binary) {
@@ -255,6 +263,7 @@ int main(int argc, char** argv) {
 
   const std::string binary = argv[1];
   bool ok = true;
+  ok &= test_negative_inflight_limit(binary);
   ok &= test_insight_port_ranges(binary);
   ok &= test_help_runs(binary);
   ok &= test_missing_config_file_fails_cleanly(binary);

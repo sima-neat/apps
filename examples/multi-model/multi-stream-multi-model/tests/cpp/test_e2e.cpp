@@ -11,6 +11,10 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <array>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 namespace fs = std::filesystem;
 using namespace sima_examples::testing;
@@ -28,6 +32,37 @@ struct StreamSlot {
   const char* model_file;
   const char* metadata_type;
   const char* data_array_key;
+};
+
+class VideoListeners {
+public:
+  std::vector<int> sockets;
+  ~VideoListeners() { for (int fd : sockets) ::close(fd); }
+  bool bind_ports(int base) {
+    for (int i = 0; i < 4; ++i) {
+      const int fd = ::socket(AF_INET, SOCK_DGRAM, 0);
+      if (fd < 0) return false;
+      sockets.push_back(fd);
+      sockaddr_in address{};
+      address.sin_family = AF_INET;
+      address.sin_port = htons(base + i);
+      address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+      if (::bind(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) return false;
+    }
+    return true;
+  }
+  bool check(const std::string& codec) {
+    bool ok = true;
+    for (std::size_t i = 0; i < sockets.size(); ++i) {
+      std::array<unsigned char, 65536> packet{};
+      const auto size = ::recv(sockets[i], packet.data(), packet.size(), MSG_DONTWAIT);
+      if (size < 12 || packet[0] >> 6 != 2 || (packet[1] & 0x7f) != (codec == "h264" ? 96 : 98)) {
+        std::cerr << "[FAIL] stream " << i << " did not deliver valid " << codec << " RTP video\n";
+        ok = false;
+      }
+    }
+    return ok;
+  }
 };
 
 const std::vector<StreamSlot>& stream_slots() {
@@ -161,6 +196,11 @@ int run_source_case(const std::string& binary, const std::vector<std::string>& m
                     {"inference.frames", "140"}});
   append_streams_block(config_path, source_case.urls, model_paths);
 
+  VideoListeners videos;
+  if (!videos.bind_ports(video_port_base)) {
+    std::cerr << "[FAIL] cannot bind video listener ports\n";
+    return 1;
+  }
   const MetadataListeners listeners =
       bind_metadata_listeners(source_case.codec, metadata_port_base);
   if (listeners.empty()) {
@@ -193,6 +233,7 @@ int run_source_case(const std::string& binary, const std::vector<std::string>& m
                 << " sampled output files across " << stream_slots().size() << " streams\n";
     }
   }
+  if (rc == 0 && !videos.check(source_case.codec)) rc = 1;
   if (rc == 0 && !check_metadata(source_case.codec, metadata_port_base, listeners)) {
     rc = 1;
   }

@@ -364,8 +364,8 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("inference.frames must be >= 0")
     if cfg.fps < 0:
         raise ValueError("inference.fps must be >= 0")
-    if cfg.max_inflight_per_stream != -1 and cfg.max_inflight_per_stream <= 0:
-        raise ValueError("inference.max_inflight_per_stream must be -1 or > 0")
+    if cfg.max_inflight_per_stream <= 0:
+        raise ValueError("inference.max_inflight_per_stream must be > 0")
     if not 0.0 <= cfg.min_score <= 1.0:
         raise ValueError("inference.min_score must be between 0 and 1")
     if not 0.0 <= cfg.nms_iou <= 1.0:
@@ -1409,7 +1409,7 @@ def run_stream_consumer(cfg: AppConfig, stream: StreamRuntime) -> None:
     push-then-pull would serialise every stage and cap the stream at the slowest one.
     """
     try:
-        while cfg.frames <= 0 or stream.processed < cfg.frames:
+        while not stream.closed and (cfg.frames <= 0 or stream.processed < cfg.frames):
             pull_start = time_ms()
             sample = stream.model_run.pull(MODEL_OUTPUT, 50)
             pull_end = time_ms()
@@ -1446,6 +1446,18 @@ def run_app(cfg: AppConfig) -> None:
         )
 
     workers: list[threading.Thread] = []
+    failures: list[Exception] = []
+    failure_lock = threading.Lock()
+
+    def worker(target, *args):
+        try:
+            target(*args)
+        except Exception as exc:
+            with failure_lock:
+                failures.append(exc)
+            for runtime in app.streams:
+                runtime.closed = True
+
     try:
         if cfg.profile:
             print(f"Backend:\n{app.source_graph.describe_backend()}")
@@ -1456,22 +1468,24 @@ def run_app(cfg: AppConfig) -> None:
 
         for stream in app.streams:
             workers.append(
-                threading.Thread(target=run_stream_feeder, args=(app, cfg, stream), daemon=True)
+                threading.Thread(target=worker, args=(run_stream_feeder, app, cfg, stream), daemon=True)
             )
             workers.append(
-                threading.Thread(target=run_stream_consumer, args=(cfg, stream), daemon=True)
+                threading.Thread(target=worker, args=(run_stream_consumer, cfg, stream), daemon=True)
             )
-        for worker in workers:
-            worker.start()
-        for worker in workers:
-            worker.join()
+        for thread in workers:
+            thread.start()
+        for thread in workers:
+            thread.join()
+        if failures:
+            raise RuntimeError(f"stream worker failed: {failures[0]}") from failures[0]
     except KeyboardInterrupt:
         raise
     finally:
         for stream in app.streams:
             stream.closed = True
-        for worker in workers:
-            worker.join(timeout=2.0)
+        for thread in workers:
+            thread.join(timeout=2.0)
         for stream in app.streams:
             if stream.model_run is not None:
                 stream.model_run.close()

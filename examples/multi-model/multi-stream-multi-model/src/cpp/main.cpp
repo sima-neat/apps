@@ -524,8 +524,8 @@ void validate_config(const AppConfig& cfg) {
   sima_examples::require(cfg.latency_ms >= 0, "input.latency_ms must be >= 0");
   sima_examples::require(cfg.frames >= 0, "inference.frames must be >= 0");
   sima_examples::require(cfg.fps >= 0, "inference.fps must be >= 0");
-  sima_examples::require(cfg.max_inflight_per_stream == -1 || cfg.max_inflight_per_stream > 0,
-                         "inference.max_inflight_per_stream must be -1 or > 0");
+  sima_examples::require(cfg.max_inflight_per_stream > 0,
+                         "inference.max_inflight_per_stream must be > 0");
   sima_examples::require(cfg.min_score >= 0.0 && cfg.min_score <= 1.0,
                          "inference.min_score must be between 0 and 1");
   sima_examples::require(cfg.nms_iou >= 0.0 && cfg.nms_iou <= 1.0,
@@ -1549,9 +1549,8 @@ void run_stream_feeder(AppRuntime& app, const AppConfig& cfg, StreamRuntime& str
       break;
     }
     if (status != simaai::neat::PullStatus::Ok) {
-      std::cerr << "[ERR] stream " << stream.index << " source pull: " << pull_error.message
-                << "\n";
-      break;
+      throw std::runtime_error("stream " + std::to_string(stream.index) +
+                               " source pull: " + pull_error.message);
     }
     // Wait for a slot rather than discarding the frame: every frame dropped here is a frame
     // Insight renders with no overlay. Bounded, so a wedged model cannot hang the feeder.
@@ -1611,7 +1610,8 @@ void run_stream_feeder(AppRuntime& app, const AppConfig& cfg, StreamRuntime& str
 void run_stream_consumer(const AppConfig& cfg, StreamRuntime& stream) {
   constexpr int kPullTimeoutMs = 50;
 
-  while (g_stop_requested == 0 && (cfg.frames <= 0 || stream.processed < cfg.frames)) {
+  while (g_stop_requested == 0 && !stream.closed.load() &&
+         (cfg.frames <= 0 || stream.processed < cfg.frames)) {
     const double pull_start = sima_examples::time_ms();
     simaai::neat::Sample sample;
     simaai::neat::PullError pull_error;
@@ -1629,8 +1629,8 @@ void run_stream_consumer(const AppConfig& cfg, StreamRuntime& stream) {
       break;
     }
     if (status != simaai::neat::PullStatus::Ok) {
-      std::cerr << "[ERR] stream " << stream.index << " model pull: " << pull_error.message << "\n";
-      break;
+      throw std::runtime_error("stream " + std::to_string(stream.index) +
+                               " model pull: " + pull_error.message);
     }
     stream.in_flight.fetch_sub(1);
     FrameStamp stamp;
@@ -1680,12 +1680,23 @@ void run_app(const AppConfig& cfg) {
   // edge queue and killing it before anything pulls.
   app.source_run = app.source_graph.build(build_source_run_options());
 
+  std::mutex failure_mutex;
+  std::exception_ptr failure;
+  auto worker = [&](auto task) {
+    try {
+      task();
+    } catch (...) {
+      std::lock_guard<std::mutex> lock(failure_mutex);
+      if (!failure) failure = std::current_exception();
+      for (auto& stream : app.streams) stream->closed.store(true);
+    }
+  };
   std::vector<std::thread> workers;
   workers.reserve(app.streams.size() * 2);
   for (auto& stream : app.streams) {
     StreamRuntime* rt = stream.get();
-    workers.emplace_back([&app, &cfg, rt] { run_stream_feeder(app, cfg, *rt); });
-    workers.emplace_back([&cfg, rt] { run_stream_consumer(cfg, *rt); });
+    workers.emplace_back([&, rt] { worker([&] { run_stream_feeder(app, cfg, *rt); }); });
+    workers.emplace_back([&, rt] { worker([&] { run_stream_consumer(cfg, *rt); }); });
   }
   for (auto& worker : workers) {
     worker.join();
@@ -1705,6 +1716,7 @@ void run_app(const AppConfig& cfg) {
     std::cout << "\n";
   }
   std::signal(SIGINT, previous_sigint);
+  if (failure) std::rethrow_exception(failure);
 }
 
 } // namespace

@@ -187,12 +187,13 @@ class TestConfigLoading:
 
         assert cfg.max_inflight_per_stream == 3
 
-    def test_invalid_inflight_limit_is_rejected(self, tmp_path: Path):
+    @pytest.mark.parametrize("limit", [0, -1])
+    def test_invalid_inflight_limit_is_rejected(self, tmp_path: Path, limit):
         from main import load_app_config
 
-        config_path = write_config(tmp_path, DEFAULT_STREAMS[:1], max_inflight_per_stream=0)
+        config_path = write_config(tmp_path, DEFAULT_STREAMS[:1], max_inflight_per_stream=limit)
 
-        with pytest.raises(ValueError, match="max_inflight_per_stream must be -1 or > 0"):
+        with pytest.raises(ValueError, match="max_inflight_per_stream must be > 0"):
             load_app_config(config_path)
 
     def test_unknown_task_is_rejected(self, tmp_path: Path):
@@ -610,6 +611,7 @@ def test_debug_frames_stay_paired_with_results(monkeypatch, tmp_path):
         imwrite=lambda path, frame: saved.append(frame.copy()) or True))
     main.run_stream_feeder(SimpleNamespace(source_run=SimpleNamespace(pull=source_pull)), cfg, stream)
     assert len(stream.pending) == 2
+    stream.closed = False
     main.run_stream_consumer(cfg, stream)
     assert [int(frame[0, 0, 0]) for frame in saved] == [10, 20]
     assert [call[3] for call in stream.metadata_sender.calls] == ["1", "2"]
@@ -649,3 +651,33 @@ def test_probe_honors_transport_and_restores_environment(monkeypatch, tcp, opene
             main.probe_rtsp("rtsp://camera", cfg)
     assert released == [True]
     assert main.os.environ[key] == "inherited-options"
+
+
+@pytest.mark.parametrize("failing", ["run_stream_feeder", "run_stream_consumer"])
+def test_worker_failure_returns_nonzero_and_closes_runs(monkeypatch, tmp_path, failing):
+    import main
+    from dataclasses import replace
+    closed = []
+    run = SimpleNamespace(close=lambda: closed.append(True))
+    graph = SimpleNamespace(build=lambda options: run)
+    stream = make_stream("detection", FakeMetadataSender())
+    cfg = replace(_config(), streams=[SimpleNamespace(index=0)], frames=1)
+    path = tmp_path / "config.yaml"
+    path.write_text("unused")
+    monkeypatch.setattr(main, "load_app_config", lambda path: cfg)
+    monkeypatch.setattr(main, "load_runtime_dependencies", lambda: None)
+    monkeypatch.setattr(main, "load_labels", lambda path: ["person"])
+    monkeypatch.setattr(main, "pyneat", SimpleNamespace(Graph=lambda: graph))
+    monkeypatch.setattr(main, "build_stream_runtime", lambda *args: stream)
+    monkeypatch.setattr(main, "connect_source_stream", lambda *args: None)
+    monkeypatch.setattr(main, "build_model_graph", lambda *args: graph)
+    monkeypatch.setattr(main, "build_model_run_options", lambda *args: None)
+    monkeypatch.setattr(main, "build_source_run_options", lambda: None)
+    monkeypatch.setattr(main, "run_stream_feeder", lambda *args: None)
+    monkeypatch.setattr(main, "run_stream_consumer", lambda *args: None)
+    def fail(*args):
+        raise ValueError("malformed model output")
+    monkeypatch.setattr(main, failing, fail)
+    assert main.main(["--config", str(path)]) == 1
+    assert stream.closed
+    assert len(closed) == 2

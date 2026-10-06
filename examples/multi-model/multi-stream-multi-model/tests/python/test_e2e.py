@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import sys
 import subprocess
+import socket
 
 import pytest
 
@@ -109,6 +110,13 @@ class TestE2E:
         # One listener per stream: the four channels carry three different Insight contracts, so a
         # single shared listener could not tell a wrong-typed stream from a silent one.
         with contextlib.ExitStack() as stack:
+            video_sockets = []
+            video_base = _env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000)
+            for index in range(len(STREAM_SLOTS)):
+                sock = stack.enter_context(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
+                sock.bind((E2E_INSIGHT_HOST, video_base + index))
+                sock.setblocking(False)
+                video_sockets.append(sock)
             listeners = [
                 (
                     index,
@@ -130,6 +138,11 @@ class TestE2E:
                 cmd, capture_output=True, text=True,
                 timeout=test_timeout_ms / 1000, cwd=str(EXAMPLE_DIR),
             )
+            for index, sock in enumerate(video_sockets):
+                packet = sock.recv(65535)
+                assert len(packet) >= 12 and packet[0] >> 6 == 2, f"stream {index}: invalid RTP"
+                assert packet[1] & 0x7f == (96 if codec == "h264" else 98), (
+                    f"stream {index}: unexpected video payload type")
             received = [
                 (index, metadata_type, listener.wait_for_messages(5.0))
                 for index, metadata_type, listener in listeners
