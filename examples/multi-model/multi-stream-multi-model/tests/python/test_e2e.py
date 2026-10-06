@@ -138,8 +138,15 @@ class TestE2E:
                 cmd, capture_output=True, text=True,
                 timeout=test_timeout_ms / 1000, cwd=str(EXAMPLE_DIR),
             )
+            assert result.returncode == 0, (
+                f"main.py exited with code {result.returncode}\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
             for index, sock in enumerate(video_sockets):
-                packet = sock.recv(65535)
+                try:
+                    packet = sock.recv(65535)
+                except BlockingIOError:
+                    pytest.fail(f"stream {index}: no {codec} RTP video received")
                 assert len(packet) >= 12 and packet[0] >> 6 == 2, f"stream {index}: invalid RTP"
                 assert packet[1] & 0x7f == (96 if codec == "h264" else 98), (
                     f"stream {index}: unexpected video payload type")
@@ -148,10 +155,6 @@ class TestE2E:
                 for index, metadata_type, listener in listeners
             ]
 
-        assert result.returncode == 0, (
-            f"main.py exited with code {result.returncode}\n"
-            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-        )
         for index, metadata_type, metadata in received:
             assert metadata.success, (
                 f"stream {index} did not publish {metadata_type} metadata on port "

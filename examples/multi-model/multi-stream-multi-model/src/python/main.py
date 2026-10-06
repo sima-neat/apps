@@ -888,7 +888,8 @@ def build_source_options(cfg: AppConfig, url: str, fps: int, width: int, height:
     opt.url = url
     opt.latency_ms = cfg.latency_ms
     opt.tcp = cfg.tcp
-    opt.payload_type = 96
+    # Let RTSP negotiate dynamic RTP payload numbers from the source SDP.
+    opt.payload_type = 0
     opt.insert_queue = True
     opt.decoder_name = "decoder"
     opt.decoder_raw_output = True
@@ -919,6 +920,7 @@ def build_encoded_source_graph(opt) -> pyneat.Graph:
     encoded_opt = pyneat.RtspEncodedInputOptions()
     encoded_opt.url = opt.url
     encoded_opt.codec = opt.codec
+    encoded_opt.payload_type = opt.payload_type
     encoded_opt.latency_ms = opt.latency_ms
     encoded_opt.tcp = opt.tcp
     encoded_opt.source_fps = opt.source_fps

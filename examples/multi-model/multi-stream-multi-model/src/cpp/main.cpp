@@ -1077,7 +1077,7 @@ build_source_options(const AppConfig& cfg, const std::string& url, int& fps_out,
                      int& height_out) {
   sima_examples::RtspStreamInfo probe;
   sima_examples::RtspProbeOptions probe_options;
-  probe_options.payload_type = 96;
+  probe_options.payload_type = 0;
   probe_options.latency_ms = cfg.latency_ms;
   probe_options.rtsp_tcp = cfg.tcp;
   probe_options.debug = cfg.profile;
@@ -1087,7 +1087,8 @@ build_source_options(const AppConfig& cfg, const std::string& url, int& fps_out,
   opt.url = url;
   opt.latency_ms = cfg.latency_ms;
   opt.tcp = cfg.tcp;
-  opt.payload_type = 96;
+  // RTP dynamic payload numbers are advertised by the RTSP source.
+  opt.payload_type = 0;
   opt.insert_queue = true;
   opt.out_format = "NV12";
   opt.decoder_name = "decoder";
@@ -1154,6 +1155,7 @@ build_encoded_source_graph(const simaai::neat::nodes::groups::RtspDecodedInputOp
   simaai::neat::nodes::groups::RtspEncodedInputOptions encoded_opt;
   encoded_opt.url = opt.url;
   encoded_opt.codec = opt.codec;
+  encoded_opt.payload_type = opt.payload_type;
   encoded_opt.latency_ms = opt.latency_ms;
   encoded_opt.tcp = opt.tcp;
   encoded_opt.source_fps = opt.source_fps;

@@ -690,3 +690,23 @@ def test_application_fps_cap_is_rejected(tmp_path, fps):
     cfg = main.load_app_config(write_config(tmp_path, DEFAULT_STREAMS))
     with pytest.raises(ValueError, match="configure frame rate at the RTSP source"):
         main.validate_config(replace(cfg, fps=fps))
+
+
+@pytest.mark.parametrize("codec", ["h264", "h265"])
+def test_rtsp_source_negotiates_dynamic_payload(monkeypatch, codec):
+    import main
+    from dataclasses import replace
+    captured = []
+    graph = SimpleNamespace(add=captured.append)
+    codecs = SimpleNamespace(H264="h264", H265="h265")
+    monkeypatch.setattr(main, "pyneat", SimpleNamespace(
+        RtspDecodedInputOptions=lambda: SimpleNamespace(output_caps=SimpleNamespace()),
+        RtspEncodedInputOptions=SimpleNamespace,
+        RtspCodec=codecs, Format=SimpleNamespace(NV12="NV12"),
+        CapsMemory=SimpleNamespace(Any="Any"), Graph=lambda name: graph,
+        groups=SimpleNamespace(rtsp_encoded_input=lambda opt: opt)))
+    opt = main.build_source_options(replace(_config(), codec=codec), "rtsp://camera", 30, 1280, 720)
+    assert opt.payload_type == 0
+    main.build_encoded_source_graph(opt)
+    assert captured[0].payload_type == 0
+    assert captured[0].codec == codec
