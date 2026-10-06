@@ -31,6 +31,7 @@
 #include "neat.h"
 #include "support/runtime/config_utils.h"
 #include "support/runtime/example_utils.h"
+#include "support/runtime/pull_status.h"
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -43,7 +44,6 @@
 #include <filesystem>
 #include <iostream>
 #include <memory>
-#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -404,16 +404,19 @@ void run(const Config& cfg) {
   };
   try {
     while (g_stop_requested == 0 && (cfg.frames <= 0 || processed < cfg.frames)) {
-      std::optional<simaai::neat::Sample> sample = source.run.pull("frame", kPullTimeoutMs);
-      if (!sample) {
+      simaai::neat::Sample sample;
+      simaai::neat::PullError pull_error;
+      const auto status = source.run.pull("frame", kPullTimeoutMs, sample, &pull_error);
+      if (!sima_examples::pull_status_has_sample(status, "frame", pull_error,
+                                                 source.run.last_error())) {
         std::cerr << "[warn] timed out waiting for a frame\n";
         continue;
       }
       // Release the sample right away: the decoder's small buffer pool stalls otherwise.
       cv::Mat frame;
       std::string err;
-      sima_examples::require(sima_examples::nv12_to_bgr(frame_tensor(*sample), frame, err), err);
-      sample.reset();
+      sima_examples::require(sima_examples::nv12_to_bgr(frame_tensor(sample), frame, err), err);
+      sample = simaai::neat::Sample{};
       const cv::Mat anomaly_map =
           map_of(detector.model->run(std::vector<cv::Mat>{frame}, kPullTimeoutMs).front(),
                  detector.map_side);

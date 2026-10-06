@@ -99,7 +99,7 @@ Set `model.path` to the downloaded package and `model.family` to the family it b
 
 [Insight](https://developer.sima.ai/software/tools/insight/) can host the input stream and render segmentation metadata. Install videos directly from the Insight catalog or through Insight's YouTube support.
 
-In the Insight Web UI, start the required stream and copy its source URL. Use RTSP for H.264 or H.265; for MJPEG, Insight supports both RTSP and HTTP URLs. Set `source.codec` to `h264`/`avc`, `h265`/`hevc`, or `mjpeg`. Decoded frames are encoded as H.264 for Insight output.
+In the Insight Web UI, start the required stream and copy its source URL. Use RTSP for H.264 or H.265; for MJPEG, Insight supports both RTSP and HTTP URLs. Set `source.codec` to `h264`/`avc`, `h265`/`hevc`, or `mjpeg`. Decoded frames are encoded as H.264 for Insight output. Use a host and published port that the target can reach, not `localhost` and not an address only Insight's own machine can resolve. Verify the URL from the target before running; the application prints the resolved source and its dimensions on startup.
 
 ## Configure
 
@@ -133,7 +133,29 @@ Startup prints the resolved source, model family, stream geometry, and Insight p
 source=rtsp://192.0.2.10:8554/stream type=rtsp codec=h264 model=yolo26 stream=1920x1080@30 insight=192.0.2.20 video=9000 metadata=9100 channel=0
 ```
 
-Insight then shows the live stream with one colored mask and label per detected instance. Stopping the run prints the processed frame count and the video destination.
+Insight then shows the live stream with one colored mask and label per detected instance.
+
+The application prints a count when the frame limit is reached:
+
+```text
+processed=200 dropped_segments=0 saved=0 unpaired=0 video_sender=<insight-host>:9000
+```
+
+The packaged config ships `inference.frames: 0`, which runs continuously. The
+closing line prints only when a finite limit is reached, and interrupting the
+run with Ctrl-C skips it. For a bounded check that ends by itself, set a
+positive limit first:
+
+```yaml
+inference:
+  frames: 200
+```
+
+Left at `0`, the live Insight stream is the success signal instead.
+`dropped_segments` counts segments the pipeline discarded and should stay at or
+near `0`. To confirm masks without watching Insight, set `output.save_dir` to a
+directory and `output.save_every` to a non-zero interval; the application then
+writes annotated frames there as it runs, and `saved` counts them.
 
 ## Troubleshooting
 

@@ -15,6 +15,122 @@ using sima_examples::testing::create_test_scratch_dir;
 using sima_examples::testing::remove_dir;
 using sima_examples::testing::spawn_and_wait;
 
+namespace {
+
+// Configuration rules load_config enforces (Refs #526), driven in-process the
+// way the variant check above is: each config is the minimal valid one with
+// exactly one value broken, and the exception must name the rule.
+struct RuleCase {
+  const char* name;
+  const char* body;
+  const char* message;
+};
+
+int configuration_rule_failures() {
+  const std::vector<RuleCase> cases = {
+      {"backbone-empty",
+       "model:\n  task: detection\n  labels: labels.txt\n  detection:\n    variant: small\n    "
+       "small:\n      backbone: ''\n      transformer: small-t.tar.gz\nsource:\n  rtsp_url: "
+       "rtsp://camera/live\ninference:\n  detection: {}\noutput:\n  insight:\n    host: "
+       "127.0.0.1\n",
+       "backbone and transformer must be set"},
+      {"labels-empty",
+       "model:\n  task: detection\n  labels: ''\n  detection:\n    variant: small\n    small:\n    "
+       "  backbone: small-b.tar.gz\n      transformer: small-t.tar.gz\nsource:\n  rtsp_url: "
+       "rtsp://camera/live\ninference:\n  detection: {}\noutput:\n  insight:\n    host: "
+       "127.0.0.1\n",
+       "model.labels must be set"},
+      {"rtsp-url-not-rtsp",
+       "model:\n  task: detection\n  labels: labels.txt\n  detection:\n    variant: small\n    "
+       "small:\n      backbone: small-b.tar.gz\n      transformer: small-t.tar.gz\nsource:\n  "
+       "rtsp_url: http://127.0.0.1:8080/stream\ninference:\n  detection: {}\noutput:\n  insight:\n "
+       "   host: 127.0.0.1\n",
+       "source.rtsp_url must be an RTSP URL"},
+      {"latency-negative",
+       "model:\n  task: detection\n  labels: labels.txt\n  detection:\n    variant: small\n    "
+       "small:\n      backbone: small-b.tar.gz\n      transformer: small-t.tar.gz\nsource:\n  "
+       "rtsp_url: rtsp://camera/live\n  latency_ms: -1\ninference:\n  detection: {}\noutput:\n  "
+       "insight:\n    host: 127.0.0.1\n",
+       "source.latency_ms and inference.frames must be >= 0"},
+      {"frames-negative",
+       "model:\n  task: detection\n  labels: labels.txt\n  detection:\n    variant: small\n    "
+       "small:\n      backbone: small-b.tar.gz\n      transformer: small-t.tar.gz\nsource:\n  "
+       "rtsp_url: rtsp://camera/live\ninference:\n  frames: -1\n  detection: {}\noutput:\n  "
+       "insight:\n    host: 127.0.0.1\n",
+       "source.latency_ms and inference.frames must be >= 0"},
+      {"width-negative",
+       "model:\n  task: detection\n  labels: labels.txt\n  detection:\n    variant: small\n    "
+       "small:\n      backbone: small-b.tar.gz\n      transformer: small-t.tar.gz\nsource:\n  "
+       "rtsp_url: rtsp://camera/live\n  width: -1\ninference:\n  detection: {}\noutput:\n  "
+       "insight:\n    host: 127.0.0.1\n",
+       "source.width, source.height, and source.fps must be >= 0"},
+      {"min-score-above",
+       "model:\n  task: detection\n  labels: labels.txt\n  detection:\n    variant: small\n    "
+       "small:\n      backbone: small-b.tar.gz\n      transformer: small-t.tar.gz\nsource:\n  "
+       "rtsp_url: rtsp://camera/live\ninference:\n  detection:\n    min_score: 1.5\noutput:\n  "
+       "insight:\n    host: 127.0.0.1\n",
+       "min_score must be in [0, 1]"},
+      {"max-detections-zero",
+       "model:\n  task: detection\n  labels: labels.txt\n  detection:\n    variant: small\n    "
+       "small:\n      backbone: small-b.tar.gz\n      transformer: small-t.tar.gz\nsource:\n  "
+       "rtsp_url: rtsp://camera/live\ninference:\n  detection:\n    max_detections: 0\noutput:\n  "
+       "insight:\n    host: 127.0.0.1\n",
+       "max_detections/max_segments must be > 0"},
+      {"mask-threshold-above",
+       "model:\n  task: segmentation\n  labels: labels.txt\n  segmentation:\n    backbone: "
+       "seg-b.tar.gz\n    transformer: seg-t.tar.gz\nsource:\n  rtsp_url: "
+       "rtsp://camera/live\ninference:\n  segmentation:\n    mask_threshold: 2.0\noutput:\n  "
+       "insight:\n    host: 127.0.0.1\n",
+       "inference.segmentation.mask_threshold must be in [0, 1]"},
+      {"mask-grid-below",
+       "model:\n  task: segmentation\n  labels: labels.txt\n  segmentation:\n    backbone: "
+       "seg-b.tar.gz\n    transformer: seg-t.tar.gz\nsource:\n  rtsp_url: "
+       "rtsp://camera/live\ninference:\n  segmentation:\n    mask_grid_size: 107\noutput:\n  "
+       "insight:\n    host: 127.0.0.1\n",
+       "inference.segmentation.mask_grid_size must be >= 108"},
+      {"insight-host-empty",
+       "model:\n  task: detection\n  labels: labels.txt\n  detection:\n    variant: small\n    "
+       "small:\n      backbone: small-b.tar.gz\n      transformer: small-t.tar.gz\nsource:\n  "
+       "rtsp_url: rtsp://camera/live\ninference:\n  detection: {}\noutput:\n  insight:\n    host: "
+       "''\n",
+       "output.insight.host must be set"},
+      {"video-port-zero",
+       "model:\n  task: detection\n  labels: labels.txt\n  detection:\n    variant: small\n    "
+       "small:\n      backbone: small-b.tar.gz\n      transformer: small-t.tar.gz\nsource:\n  "
+       "rtsp_url: rtsp://camera/live\ninference:\n  detection: {}\noutput:\n  insight:\n    host: "
+       "127.0.0.1\n    video_port: 0\n",
+       "Insight ports must be in [1, 65535]"},
+  };
+  int failures = 0;
+  const std::string temp_dir =
+      create_test_scratch_dir("rfdetr-detection-segmentation", "configuration-rules");
+  if (temp_dir.empty()) {
+    std::cerr << "[FAIL] could not create config test directory\n";
+    return 1;
+  }
+  const fs::path config_path = fs::path(temp_dir) / "config.yaml";
+  for (const RuleCase& c : cases) {
+    std::ofstream(config_path, std::ios::trunc) << c.body;
+    try {
+      (void)load_config(config_path);
+      std::cerr << "[FAIL] " << c.name << ": config must be rejected\n";
+      ++failures;
+    } catch (const std::exception& error) {
+      if (std::string(error.what()).find(c.message) == std::string::npos) {
+        std::cerr << "[FAIL] " << c.name << ": error does not name the rule: " << error.what()
+                  << "\n";
+        ++failures;
+      } else {
+        std::cout << "[OK] " << c.name << " is rejected by its rule\n";
+      }
+    }
+  }
+  remove_dir(temp_dir);
+  return failures;
+}
+
+} // namespace
+
 int main(int argc, char** argv) {
   if (argc < 2) {
     std::cerr << "[ERR] usage: " << argv[0] << " <example-binary>\n";
@@ -204,5 +320,40 @@ int main(int argc, char** argv) {
     std::cerr << "[FAIL] a missing config should fail clearly\n";
     ++failures;
   }
+  failures += configuration_rule_failures();
+  // The pull loop treats a timeout as "try again" and a closed output or pull error as the
+  // end of the run, carrying the runtime's own reason.
+  {
+    using sima_examples::pull_status_has_sample;
+    using simaai::neat::PullStatus;
+    simaai::neat::PullError pull_error;
+    pull_error.message = "queue torn down";
+    const auto thrown_message = [&](PullStatus status) -> std::string {
+      try {
+        (void)pull_status_has_sample(status, "backbone", pull_error, "source reached EOS");
+      } catch (const std::runtime_error& error) {
+        return error.what();
+      }
+      return "";
+    };
+    const std::string closed = thrown_message(PullStatus::Closed);
+    const std::string errored = thrown_message(PullStatus::Error);
+    if (closed != "backbone output closed unexpectedly: source reached EOS") {
+      std::cerr << "[FAIL] closed output should end the run with the reason, got: " << closed
+                << "\n";
+      ++failures;
+    } else if (errored != "failed to pull backbone: queue torn down") {
+      std::cerr << "[FAIL] pull error should end the run with its message, got: " << errored
+                << "\n";
+      ++failures;
+    } else if (pull_status_has_sample(PullStatus::Timeout, "backbone", pull_error, "") ||
+               !pull_status_has_sample(PullStatus::Ok, "backbone", pull_error, "")) {
+      std::cerr << "[FAIL] a timeout is not a sample and a successful pull is\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] closed output and pull error are terminal, timeout is not\n";
+    }
+  }
+
   return failures == 0 ? 0 : 1;
 }

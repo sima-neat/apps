@@ -85,6 +85,8 @@ class AppConfig:
     video_port: int = 9000
     metadata_port: int = 9100
     output: OutputConfig = OutputConfig("", 0, MASK_ALPHA, MASK_THRESHOLD, True)
+    # Which key supplied source_url: "source.url" or the legacy "source.rtsp_url".
+    source_key: str = "source.url"
 
 
 @dataclass
@@ -282,7 +284,8 @@ def validate_config(cfg: AppConfig) -> None:
             "model.input_size must be a positive multiple of "
             f"{MASK_STRIDE * max(YOLOV8_STRIDES)}"
         )
-    if not str(cfg.labels_path):
+    # Path("") is ".", so an empty value in the file arrives here as ".".
+    if str(cfg.labels_path) in ("", "."):
         raise ValueError("model.labels must be set")
     if not cfg.insight_host:
         raise ValueError("output.insight.host must be set")
@@ -326,10 +329,20 @@ def load_app_config(config_path: Path) -> AppConfig:
     output = section(raw, "output")
     insight = section(output, "insight")
 
+    labels_path = string_or(model, "labels", str(DEFAULT_LABELS))
+    # config.yaml documents source.rtsp_url as the fallback "when source.url
+    # is empty", so an empty value must fall through, not just an absent key.
+    # The key that supplied the URL is kept so --validate-config-only can report
+    # the choice without echoing the URL, which can carry credentials.
+    source_url = string_or(source, "url")
+    source_key = "source.url" if source_url else "source.rtsp_url"
+    source_url = source_url or string_or(source, "rtsp_url")
+
     cfg = AppConfig(
         model_path=string_or(model, "path"),
-        labels_path=Path(string_or(model, "labels", str(DEFAULT_LABELS))),
-        source_url=string_or(source, "url", string_or(source, "rtsp_url")),
+        labels_path=Path(labels_path),
+        source_url=source_url,
+        source_key=source_key,
         model_family=parse_model_family(string_or(model, "family", YOLO26)),
         input_size=int_or(model, "input_size", DEFAULT_INPUT_SIZE),
         source_type=parse_source_type(string_or(source, "type", "rtsp")),
@@ -1324,6 +1337,23 @@ def save_frame(
     return True
 
 
+def pull_result_has_sample(run, sample, output_name: str) -> bool:
+    if sample is not None:
+        return True
+    last_error_fn = getattr(run, "last_error", None)
+    last_error = last_error_fn() if callable(last_error_fn) else ""
+    running_fn = getattr(run, "running", None)
+    running = running_fn() if callable(running_fn) else True
+    if not running:
+        message = f"{output_name} output closed unexpectedly"
+        if last_error:
+            message += f": {last_error}"
+        raise RuntimeError(message)
+    if last_error:
+        raise RuntimeError(f"runtime error: {last_error}")
+    return False
+
+
 def run_pipeline(runtime: PipelineRuntime, cfg: AppConfig) -> int:
     profile = ProfileWindow(cfg.profile, cfg.profile_interval)
     processed = 0
@@ -1334,7 +1364,7 @@ def run_pipeline(runtime: PipelineRuntime, cfg: AppConfig) -> int:
         pull_start = time_ms()
         sample = pull_segments(runtime, 20000)
         pull_end = time_ms()
-        if sample is None:
+        if not pull_result_has_sample(runtime.run, sample, runtime.output_name):
             print("[warn] timed out waiting for segmentation output", file=sys.stderr)
             continue
 
@@ -1386,7 +1416,9 @@ def main(argv: list[str] | None = None) -> int:
         args = parse_args(argv)
         cfg = load_app_config(args.config)
         if args.validate_config_only:
-            print(f"Config validated: {args.config}")
+            # Reports which key supplied the source, not its value: a URL can
+            # carry credentials and this line ends up in terminal and CI logs.
+            print(f"Config validated: {args.config} (source={cfg.source_key})")
             return 0
 
         load_runtime_dependencies()

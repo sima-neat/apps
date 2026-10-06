@@ -45,8 +45,14 @@ e2e:
     models:
     - yolo26m-seg-bf16-b1
     - yolo_v8n_seg
+    variants:
+    - yolo26n-seg-bf16-mla_tess
+    - yolo26m-seg-int8-b1
   cpp:
     enabled: true
     models:
     - yolo26m-seg-bf16-b1
     - yolo_v8n_seg
+    variants:
+    - yolo26n-seg-bf16-mla_tess
+    - yolo26m-seg-int8-b1

@@ -835,6 +835,7 @@ window.onload = function () {
   initBenchmark();
   initShowcase();
   initSolutions();
+  initPlayground();
   initShutdownButton();
   initRagInspect();
   initVersionModal();
@@ -4056,6 +4057,7 @@ function populateModelSelect(catalog) {
     option.value = m.name;
     const size = m.sizeBytes ? `  ·  ${fmtBytes(m.sizeBytes)}` : '';
     const incomplete = m.complete === false;
+    const unsupported = m.supported === false;
     const dot = incomplete ? '⚠ ' : (m.loaded ? '● ' : '○ ');
     option.textContent = `${dot}${m.name}  ·  ${typeBadge(m.type)}${size}${incomplete ? '  ·  incomplete' : ''}`;
     option.dataset.loaded = m.loaded ? 'true' : 'false';
@@ -4184,6 +4186,7 @@ function renderInstalledList() {
   const activeName = control ? _activeChatModel : getSelectedChatModel();
   filtered.forEach(m => {
     const incomplete = m.complete === false;
+    const unsupported = m.supported === false;
     const isActive = !!m.name && m.name === activeName;
     const row = document.createElement('div');
     row.className = 'hub-result model-row' + (isActive ? ' is-active' : '');
@@ -4222,9 +4225,14 @@ function renderInstalledList() {
       if (m.loaded) {
         btn.textContent = 'Unload'; btn.classList.add('model-unload'); btn.disabled = busy;
         btn.addEventListener('click', (e) => { e.stopPropagation(); unloadModel(m.name); });
-      } else if (incomplete) {
-        btn.textContent = 'Incomplete'; btn.disabled = true;
-        btn.title = `${m.incompleteReason || 'Weights are incomplete'} — re-download from Hugging Face below.`;
+      } else if (incomplete || unsupported) {
+        // Unsupported is NOT a broken download: re-fetching gigabytes would
+        // fail identically, so do not offer that as the remedy.
+        btn.textContent = unsupported ? 'Unsupported' : 'Incomplete';
+        btn.disabled = true;
+        btn.title = unsupported
+          ? (m.unsupportedReason || 'This build cannot run on the installed runtime.')
+          : `${m.incompleteReason || 'Weights are incomplete'} — re-download from Hugging Face below.`;
       } else if (_modelBusy && m.name === _pendingLoad) {
         btn.textContent = 'Loading…'; btn.disabled = true;
       } else {
@@ -4671,6 +4679,7 @@ function renderAsrList() {
   const busy = serverBusy();
   filtered.forEach(m => {
     const incomplete = m.complete === false;
+    const unsupported = m.supported === false;
     const isActive = !!m.name && m.name === _asrActive;
     const row = document.createElement('div');
     row.className = 'hub-result model-row' + (isActive ? ' is-active' : '');
@@ -4721,10 +4730,12 @@ function renderAsrList() {
       if (isActive) {
         btn.textContent = 'Active';
         btn.disabled = true;
-      } else if (incomplete) {
-        btn.textContent = 'Incomplete';
+      } else if (incomplete || unsupported) {
+        btn.textContent = unsupported ? 'Unsupported' : 'Incomplete';
         btn.disabled = true;
-        btn.title = `${m.incompleteReason || 'Weights are incomplete'} — re-download from the Add Model tab.`;
+        btn.title = unsupported
+          ? (m.unsupportedReason || 'This build cannot run on the installed runtime.')
+          : `${m.incompleteReason || 'Weights are incomplete'} — re-download from the Add Model tab.`;
       } else if (busy && m.name === _asrPending) {
         btn.textContent = 'Switching…';
         btn.disabled = true;
@@ -5151,7 +5162,7 @@ async function initHubControls() {
   if (hubSearch) hubSearch.addEventListener('input', applyHubFilters);
   const hubRefresh = document.getElementById('hubRefreshButton');
   if (hubRefresh) hubRefresh.addEventListener('click', () => { _hubLoaded = true; loadHubModels(); });
-  ['hubFilterType', 'hubFilterParams', 'hubFilterFamily', 'hubSortBy'].forEach(id => {
+  ['hubFilterOrg', 'hubFilterType', 'hubFilterParams', 'hubFilterFamily', 'hubSortBy'].forEach(id => {
     const el = document.getElementById(id); if (el) el.addEventListener('change', applyHubFilters);
   });
 
@@ -5195,8 +5206,11 @@ async function loadHubModels() {
       // The server classifies from Hub metadata (pipeline_tag/tags), which is
       // reliable; the repo-name guess is only for older servers.
       const t = m.type ? m.type.toUpperCase() : hubModelType(m.repoId);
-      return { ...m, _type: t, _params: b, _bucket: hubParamsBucket(b), _family: hubModelFamily(m.repoId) };
+      const org = m.org || (m.repoId.includes('/') ? m.repoId.split('/')[0] : '');
+      return { ...m, _type: t, _org: org, _params: b, _bucket: hubParamsBucket(b),
+               _family: hubModelFamily(m.repoId) };
     });
+    populateHubOrgFilter();
     populateHubFamilyFilter();
     applyHubFilters();
   } catch (err) {
@@ -5236,6 +5250,22 @@ function hubModelFamily(repoId) {
   return m ? (m[0][0].toUpperCase() + m[0].slice(1)) : 'Other';
 }
 
+// Which Hugging Face accounts the current results came from. Built from the
+// results rather than the configured org list, so it only ever offers accounts
+// that actually returned something.
+function populateHubOrgFilter() {
+  const sel = document.getElementById('hubFilterOrg');
+  if (!sel) return;
+  const cur = sel.value;
+  const orgs = Array.from(new Set(_hubAllModels.map(m => m._org).filter(Boolean)))
+    .sort((a, b) => a.localeCompare(b));
+  sel.innerHTML = '<option value="">All accounts</option>'
+    + orgs.map(o => `<option value="${escHtml(o)}">${escHtml(o)}</option>`).join('');
+  if (orgs.includes(cur)) sel.value = cur;
+  // One account configured: the filter would be a no-op, so keep it out of the way.
+  sel.style.display = orgs.length > 1 ? '' : 'none';
+}
+
 function populateHubFamilyFilter() {
   const sel = document.getElementById('hubFilterFamily');
   if (!sel) return;
@@ -5250,6 +5280,7 @@ function applyHubFilters() {
   const ft = document.getElementById('hubFilterType')?.value || '';
   const fp = document.getElementById('hubFilterParams')?.value || '';
   const ff = document.getElementById('hubFilterFamily')?.value || '';
+  const fo = document.getElementById('hubFilterOrg')?.value || '';
   const filtered = _hubAllModels.filter(m => {
     // Fully-installed models live in the Installed section above; only offer the
     // Hugging Face row for new models and incomplete ones (which need re-download).
@@ -5258,6 +5289,7 @@ function applyHubFilters() {
     if (ft && m._type !== ft) return false;
     if (fp && m._bucket !== fp) return false;
     if (ff && m._family !== ff) return false;
+    if (fo && m._org !== fo) return false;
     return true;
   });
   const sort = document.getElementById('hubSortBy')?.value || 'downloads';
@@ -5312,7 +5344,9 @@ function renderHubResults(data) {
       (p != null ? `<span class="hub-badge">${p}B</span>` : '') +
       sizeBadge +
       `<span class="hub-badge hub-badge-fam">${fam}</span>` +
-      (incomplete ? `<span class="hub-badge hub-badge-warn" title="Local copy is missing files — re-download to fix">⚠ incomplete</span>` : '');
+      (item.unsupportedReason
+        ? `<span class="hub-badge hub-badge-warn" title="${escHtml(item.unsupportedReason)}">⚠ unsupported</span>`
+        : incomplete ? `<span class="hub-badge hub-badge-warn" title="Local copy is missing files — re-download to fix">⚠ incomplete</span>` : '');
     meta.innerHTML = `<span class="hub-repo">${item.repoId}</span><span class="hub-badges">${badges}</span><span class="hub-sub">${sub}</span>`;
     const info = document.createElement('button');
     info.className = 'hub-info';
@@ -5321,11 +5355,17 @@ function renderHubResults(data) {
     info.textContent = 'ℹ';
     info.addEventListener('click', () => showHubCard(item.repoId));
     const btn = document.createElement('button');
-    btn.className = 'setting-button hub-download-btn' + (incomplete ? ' hub-redownload' : '');
-    btn.textContent = incomplete ? 'Re-download' : (item.alreadyInCatalog ? 'In catalog' : 'Download');
-    btn.disabled = !!(item.alreadyInCatalog && !incomplete);
-    if (incomplete) btn.title = 'The on-disk copy is incomplete — download again to repair it';
-    btn.addEventListener('click', () => hubDownload(item.repoId, row, btn));
+    // The server judges the encoder layout from the repo's own file list, so a
+    // build this runtime cannot load is refused here rather than after the
+    // download has already cost gigabytes.
+    const unsupported = !!item.unsupportedReason;
+    btn.className = 'setting-button hub-download-btn' + (incomplete && !unsupported ? ' hub-redownload' : '');
+    btn.textContent = unsupported ? 'Unsupported'
+      : (incomplete ? 'Re-download' : (item.alreadyInCatalog ? 'In catalog' : 'Download'));
+    btn.disabled = unsupported || !!(item.alreadyInCatalog && !incomplete);
+    if (unsupported) btn.title = item.unsupportedReason;
+    else if (incomplete) btn.title = 'The on-disk copy is incomplete — download again to repair it';
+    if (!unsupported) btn.addEventListener('click', () => hubDownload(item.repoId, row, btn));
     row.appendChild(meta);
     row.appendChild(info);
     row.appendChild(btn);
@@ -6306,6 +6346,89 @@ function closeShowcase() {
     } catch (e) { /* ignore */ }
   }
   _showcaseEntered = false;
+}
+
+// ---- Audio API playground (/playground/), embedded in-app ----------------
+// The header's waveform button opens the playground full-screen in an iframe
+// (same origin; it calls /v1/audio/* directly and follows the Studio theme).
+// The page's "Back to Studio" link / Esc posts {type:'sima-studio:close-playground'}
+// to close; standalone, that link simply navigates to /.
+let _playgroundEntered = false;
+let _playgroundGen = 0;              // bumps on every open/close: stale fullscreen promises no-op
+
+function _exitFullscreenQuietly() {
+  try {
+    if (document.fullscreenElement || document.webkitFullscreenElement) {
+      const p = (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+      if (p && p.catch) p.catch(() => {});
+    }
+  } catch (e) { /* ignore */ }
+}
+
+function openPlayground() {
+  const modal = document.getElementById('playgroundModal');
+  const frame = document.getElementById('playgroundFrame');
+  if (!modal || !frame) return;
+  frame.src = '/playground/';        // always a fresh load (close unloads it)
+  frame.style.display = 'block';
+  modal.style.display = 'flex';
+  document.body.classList.add('playground-open');
+  _playgroundEntered = false;
+  const gen = ++_playgroundGen;
+  try {
+    const rf = modal.requestFullscreen || modal.webkitRequestFullscreen;
+    if (rf) {
+      const p = rf.call(modal);
+      if (p && p.then) {
+        _playgroundEntered = true;
+        p.then(() => {
+          // Closed before fullscreen was granted: leave it again. (A reopen in
+          // the meantime wants fullscreen, so only a hidden modal exits.)
+          if (modal.style.display === 'none') _exitFullscreenQuietly();
+        }, () => { if (gen === _playgroundGen) _playgroundEntered = false; });
+      }
+    }
+  } catch (e) { /* ignore */ }
+  setTimeout(() => { try { frame.contentWindow && frame.contentWindow.focus(); } catch (e) { /* ignore */ } }, 80);
+}
+
+function closePlayground() {
+  const modal = document.getElementById('playgroundModal');
+  const frame = document.getElementById('playgroundFrame');
+  if (!modal) return;
+  modal.style.display = 'none';
+  // Unload the page: stops audio and releases the microphone. about:blank
+  // rather than '' (an empty src reflects as the document URL and stays truthy).
+  if (frame) { frame.style.display = 'none'; frame.src = 'about:blank'; }
+  document.body.classList.remove('playground-open');
+  _playgroundGen += 1;
+  if (_playgroundEntered) _exitFullscreenQuietly();
+  _playgroundEntered = false;
+}
+
+function initPlayground() {
+  const btn = document.getElementById('playgroundButton');
+  const modal = document.getElementById('playgroundModal');
+  if (!btn || !modal) return;
+  btn.addEventListener('click', (e) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || (e.button && e.button !== 0)) return;
+    e.preventDefault();
+    openPlayground();
+  });
+  window.addEventListener('message', (e) => {
+    const frame = document.getElementById('playgroundFrame');
+    if (!frame || e.source !== frame.contentWindow) return;
+    if (e.origin !== window.location.origin) return;
+    if (e.data && typeof e.data === 'object' && e.data.type === 'sima-studio:close-playground') closePlayground();
+  });
+  document.addEventListener('fullscreenchange', () => {
+    // Leaving browser fullscreen (Esc handled by the browser) closes the playground too.
+    if (_playgroundEntered && !document.fullscreenElement && modal.style.display !== 'none') closePlayground();
+  });
+  // Esc while focus is on the Studio itself (the frame handles its own keys).
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && modal.style.display !== 'none') closePlayground();
+  });
 }
 
 // ---- Solutions: SiMaSentry harness suites (Med/Safe/Sec), embedded in-app ----

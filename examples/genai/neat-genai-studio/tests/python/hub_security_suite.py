@@ -14,25 +14,50 @@ except ModuleNotFoundError as exc:  # pragma: no cover - environment check
         "PyYAML is required to run the Studio unit tests (pip install PyYAML)"
     ) from exc
 
-from server.hub import _catalog_target, hub_download_stream, safe_name, validated_repo_id
+from server.hub import (_catalog_target, classify_hub_repo, hub_download_stream,
+                        safe_name, validated_repo_id)
 from server.model_manager import parse_param_count
 from shared.config import HubConfig
 
 
 class HubPathSecurityTests(unittest.TestCase):
     def setUp(self):
-        self.hub = HubConfig(allow_download=True, orgs=("simaai", "TDoSiMa"))
+        self.hub = HubConfig(allow_download=True,
+                             orgs=("simaai", "TDoSiMa", "florianvoss"))
 
     def test_accepts_existing_model_id_shapes(self):
         values = (
             "simaai/Qwen2.5-VL-7B-Instruct-GPTQ-a16w4",
             "TDoSiMa/gemma-4-E4B-it_GPTQ_INT4-emb-int8-8k",
+            "florianvoss/whisper-large-v3-turbo-a16w8-layered-encoder",
         )
         for value in values:
             with self.subTest(value=value):
                 self.assertEqual(validated_repo_id(value, self.hub), value)
         self.assertEqual(safe_name(values[0]), values[0].split("/", 1)[1])
         self.assertEqual(safe_name(values[1]), values[1].replace("/", "@", 1))
+
+    def test_shipped_defaults_cover_every_searched_org(self):
+        """The configured default must match the orgs the app advertises.
+
+        An org missing here is silently unreachable: hub_search skips it and
+        validated_repo_id refuses its repos, with no error naming the cause.
+        """
+        from shared.config import _load_hub_config
+        self.assertEqual(_load_hub_config({}).orgs,
+                         ("simaai", "TDoSiMa", "florianvoss"))
+
+    def test_community_whisper_repos_are_typed_as_asr(self):
+        for name in ("whisper-small-a16w8-layered-encoder",
+                     "whisper-medium-a16w8-layered-encoder",
+                     "whisper-large-v3-turbo-a16w8-layered-encoder"):
+            repo = f"florianvoss/{name}"
+            with self.subTest(repo=repo):
+                self.assertEqual(
+                    classify_hub_repo(repo, "automatic-speech-recognition"), "asr")
+                # Non-simaai repos are stored under "<org>@<name>" so two orgs
+                # publishing the same model name cannot collide on disk.
+                self.assertEqual(safe_name(repo), f"florianvoss@{name}")
 
     def test_rejects_traversal_and_unconfigured_organizations(self):
         values = (

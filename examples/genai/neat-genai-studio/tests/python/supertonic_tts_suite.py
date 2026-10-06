@@ -164,41 +164,71 @@ class EnvironmentDiscoveryTests(unittest.TestCase):
     def test_not_available_when_paths_are_missing(self):
         with mock.patch.dict(os.environ, {
             "SUPERTONIC_PYTHON": "/nonexistent/python",
-            "SUPERTONIC_REPO_ROOT": "/nonexistent/repo",
-            "SUPERTONIC_APP_ROOT": "/nonexistent/app",
+            "SUPERTONIC_MODELS_ROOT": "/nonexistent/models",
         }):
             self.assertIsNone(supertonic_tts._supertonic_python())
             self.assertFalse(supertonic_tts.available())
 
-    def test_available_requires_venv_checkout_and_models(self):
+    def test_available_requires_venv_and_models(self):
         import tempfile
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            app = root / "app"
-            repo = root / "repo"
-            (app / ".venv" / "bin").mkdir(parents=True)
-            (app / ".venv" / "bin" / "python").write_text("")
-            env = {
-                "SUPERTONIC_REPO_ROOT": str(repo),
-                "SUPERTONIC_APP_ROOT": str(app),
-            }
-            env.pop("SUPERTONIC_PYTHON", None)
-            with mock.patch.dict(os.environ, env, clear=False):
-                os.environ.pop("SUPERTONIC_PYTHON", None)
-                self.assertEqual(
-                    supertonic_tts._supertonic_python(),
-                    str(app / ".venv" / "bin" / "python"),
-                )
-                self.assertFalse(supertonic_tts.available())   # no checkout yet
-                (repo / "app" / "supertonic_sima").mkdir(parents=True)
-                (repo / "app" / "supertonic_sima" / "__init__.py").write_text("")
+            venv_py = root / ".venv-supertonic" / "bin" / "python"
+            venv_py.parent.mkdir(parents=True)
+            venv_py.write_text("")
+            models = root / "models"
+            with mock.patch.dict(os.environ, {
+                "SUPERTONIC_PYTHON": str(venv_py),
+                "SUPERTONIC_MODELS_ROOT": str(models),
+            }):
+                self.assertEqual(supertonic_tts._supertonic_python(), str(venv_py))
+                self.assertEqual(supertonic_tts.models_root(), models)
                 self.assertFalse(supertonic_tts.available())   # no models yet
-                (app / "models" / "supertonic-3" / "onnx").mkdir(parents=True)
-                (app / "models" / "supertonic-3" / "onnx" / "tts.json").write_text("{}")
-                (app / "models" / "supertonic-3-sima").mkdir(parents=True)
-                (app / "models" / "supertonic-3-sima"
+                (models / "supertonic-3" / "onnx").mkdir(parents=True)
+                (models / "supertonic-3" / "onnx" / "tts.json").write_text("{}")
+                (models / "supertonic-3-sima").mkdir(parents=True)
+                (models / "supertonic-3-sima"
                  / "supertonic_vector_field_sima_mpk.tar.gz").write_bytes(b"")
                 self.assertTrue(supertonic_tts.available())
+
+    def test_supertonic_venv_env_names_the_interpreter(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            venv = Path(tmp) / "custom-venv"
+            (venv / "bin").mkdir(parents=True)
+            (venv / "bin" / "python").write_text("")
+            with mock.patch.dict(os.environ, {"SUPERTONIC_VENV": str(venv)}, clear=False):
+                os.environ.pop("SUPERTONIC_PYTHON", None)
+                self.assertEqual(supertonic_tts._supertonic_python(), str(venv / "bin" / "python"))
+            with mock.patch.dict(os.environ, {"SUPERTONIC_VENV": str(Path(tmp) / "missing")}, clear=False):
+                os.environ.pop("SUPERTONIC_PYTHON", None)
+                self.assertIsNone(supertonic_tts._supertonic_python())
+
+    def test_legacy_app_root_venv_is_used_until_migrated(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            legacy = Path(tmp) / "supertonic-tts"
+            (legacy / ".venv" / "bin").mkdir(parents=True)
+            (legacy / ".venv" / "bin" / "python").write_text("")
+            with mock.patch.object(supertonic_tts, "DEFAULT_VENV", Path(tmp) / "missing"), \
+                 mock.patch.dict(os.environ, {"SUPERTONIC_APP_ROOT": str(legacy)}, clear=False):
+                os.environ.pop("SUPERTONIC_PYTHON", None); os.environ.pop("SUPERTONIC_VENV", None)
+                self.assertEqual(supertonic_tts._supertonic_python(), str(legacy / ".venv" / "bin" / "python"))
+
+    def test_default_venv_is_beside_the_example(self):
+        # src/python/ui/supertonic_tts.py -> <example>/.venv-supertonic
+        self.assertEqual(supertonic_tts.DEFAULT_VENV.name, ".venv-supertonic")
+        self.assertTrue((supertonic_tts.DEFAULT_VENV.parent / "setup.sh").is_file())
+
+    def test_legacy_app_root_maps_to_its_models_subdir(self):
+        env = {"SUPERTONIC_APP_ROOT": "/data/old-supertonic"}
+        with mock.patch.dict(os.environ, env, clear=False):
+            os.environ.pop("SUPERTONIC_MODELS_ROOT", None)
+            self.assertEqual(supertonic_tts.models_root(), Path("/data/old-supertonic/models"))
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("SUPERTONIC_MODELS_ROOT", None)
+            os.environ.pop("SUPERTONIC_APP_ROOT", None)
+            self.assertEqual(supertonic_tts.models_root(), Path(supertonic_tts.DEFAULT_MODELS_ROOT))
 
     def test_worker_spawn_fails_clearly_without_runtime(self):
         with mock.patch.dict(os.environ, {"SUPERTONIC_PYTHON": "/nonexistent/python"}):
@@ -206,6 +236,56 @@ class EnvironmentDiscoveryTests(unittest.TestCase):
             with self.assertRaises(RuntimeError) as ctx:
                 supertonic_tts.SupertonicTTS()
             self.assertIn("Supertonic runtime venv not found", str(ctx.exception))
+
+
+class VendoredRuntimeTests(unittest.TestCase):
+    """The vendored supertonic_sima package: importable pieces without the
+    runtime, and no absolute paths left behind."""
+
+    PACKAGE = Path(supertonic_tts.__file__).resolve().parent / "supertonic_sima"
+
+    def _load(self, name):
+        # Load a single module by file so the package __init__ (which pulls in
+        # the engine and therefore pyneat) is not executed on a host.
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            f"vendored_{name}", self.PACKAGE / f"{name}.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_runtime_closure_is_present_with_provenance_headers(self):
+        for name in ("__init__", "audio", "engine", "inputs", "text"):
+            path = self.PACKAGE / f"{name}.py"
+            self.assertTrue(path.is_file(), path)
+            head = path.read_text(encoding="utf-8")[:400]
+            self.assertIn("Vendored from", head)
+            self.assertIn("3b837b3e1b6a378ab8c24c3c04b079429b67e237", head)
+
+    def test_text_contract_matches_the_client(self):
+        text = self._load("text")
+        self.assertEqual(tuple(text.AVAILABLE_VOICES), supertonic_tts.VOICES)
+        self.assertAlmostEqual(text.MIN_SPEED, 0.7)
+        self.assertAlmostEqual(text.MAX_SPEED, 2.0)
+        self.assertIn("ko", text.AVAILABLE_LANGUAGES)
+        self.assertNotIn("zh", text.AVAILABLE_LANGUAGES)
+
+    def test_emoji_pattern_strips_emoji_and_keeps_text(self):
+        # The class was rewritten as ordered ranges (CodeQL); same code points.
+        text = self._load("text")
+        strip = text._EMOJI_PATTERN.sub
+        self.assertEqual(strip("", "hi \U0001f600\U0001f1fa\U0001f1f8 there \u2600"), "hi  there ")
+        self.assertEqual(strip("", "caf\u00e9 \u2013 na\u00efve 100%"), "caf\u00e9 \u2013 na\u00efve 100%")
+        for cp in (0x2600, 0x26ff, 0x2700, 0x27bf, 0x1f1e6, 0x1f1ff, 0x1f300, 0x1f5ff, 0x1f600, 0x1f64f,
+                   0x1f680, 0x1f6ff, 0x1f700, 0x1f77f, 0x1f780, 0x1f7ff, 0x1f800, 0x1f8ff, 0x1f900, 0x1f9ff,
+                   0x1fa00, 0x1fa6f, 0x1fa70, 0x1faff):
+            self.assertTrue(text._EMOJI_PATTERN.fullmatch(chr(cp)), hex(cp))
+        for cp in (0x25ff, 0x27c0, 0x1f1e5, 0x1f200, 0x1fb00):
+            self.assertIsNone(text._EMOJI_PATTERN.fullmatch(chr(cp)), hex(cp))
+
+    def test_no_absolute_paths_in_the_vendored_code(self):
+        for path in self.PACKAGE.glob("*.py"):
+            self.assertNotIn("/media/nvme", path.read_text(encoding="utf-8"), path)
 
 
 class ClientConfigurationTests(unittest.TestCase):
@@ -346,6 +426,25 @@ class ClientConfigurationTests(unittest.TestCase):
                 next(stream)
         self.assertTrue(proc.killed)
         self.assertIsNone(supertonic_tts._worker)
+
+    def test_per_call_speed_is_clamped_and_does_not_stick(self):
+        tts = self._client()
+        tts.set_utterance_speed(1.0)
+        captured = {}
+
+        def fake_stream(req):
+            captured.update(req)
+            yield b"RIFF"
+
+        with mock.patch.object(supertonic_tts, "_request_stream", side_effect=fake_stream):
+            list(tts.synthesize_stream("Hello.", language="en", speed=3.5))
+            self.assertAlmostEqual(captured["speed"], 2.0)     # clamped to the contract
+            list(tts.synthesize_stream("Hello.", language="en", speed=0.25))
+            self.assertAlmostEqual(captured["speed"], 0.7)
+            list(tts.synthesize_stream("Hello.", language="en"))
+            self.assertAlmostEqual(captured["speed"], 1.0)     # configured speed unchanged
+        self.assertAlmostEqual(tts.speed, 1.0)
+        self.assertAlmostEqual(tts.clamp_speed("garbage"), 1.0)
 
     def test_blank_text_makes_no_request(self):
         tts = self._client()

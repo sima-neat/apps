@@ -18,6 +18,8 @@
 #include "neat/nodes.h"
 #include "support/runtime/config_utils.h"
 #include "support/runtime/example_utils.h"
+#include "support/runtime/pull_status.h"
+#include <csignal>
 #include <nodes/groups/VideoSender.h>
 #include <nodes/io/MetadataSender.h>
 
@@ -50,6 +52,15 @@ namespace fs = std::filesystem;
 using sima_examples::time_ms;
 
 namespace {
+
+// SIGINT ends the pull loop so the run is closed and the counters printed, the
+// way the multistream applications already stop. The e2e harness stops the
+// application this way and checks that it exits cleanly.
+volatile std::sig_atomic_t g_stop_requested = 0;
+
+void request_stop(int) {
+  g_stop_requested = 1;
+}
 
 /// MetadataSender rejects a payload above 65507 bytes, and the rejection surfaces as an error the
 /// application has to handle mid-stream. Half of that leaves room for the envelope and keeps the
@@ -214,6 +225,8 @@ struct AppConfig {
   fs::path labels_path;
   int input_size = 640;
   std::string source_url;
+  // Which key supplied source_url: "source.url" or the legacy "source.rtsp_url".
+  std::string source_key = "source.url";
   SourceType source_type = SourceType::Rtsp;
   SourceCodec source_codec = SourceCodec::H264;
   int latency_ms = 200;
@@ -445,8 +458,14 @@ AppConfig load_app_config(const fs::path& config_path) {
   cfg.model_path = raw.string_or("model.path", "");
   cfg.input_size = raw.int_or("model.input_size", 640);
   cfg.labels_path = raw.string_or("model.labels", default_labels.string());
+  // config.yaml documents source.rtsp_url as the fallback "when source.url is
+  // empty", so an empty value must fall through, not just an absent key.
   const std::string legacy_rtsp_url = raw.string_or("source.rtsp_url", "");
-  cfg.source_url = raw.string_or("source.url", legacy_rtsp_url);
+  cfg.source_url = raw.string_or("source.url", "");
+  if (cfg.source_url.empty()) {
+    cfg.source_url = legacy_rtsp_url;
+    cfg.source_key = "source.rtsp_url";
+  }
   cfg.source_type = parse_source_type(raw.string_or("source.type", "rtsp"));
   cfg.source_codec = parse_source_codec(raw.string_or("source.codec", "h264"));
   cfg.latency_ms = raw.int_or("source.latency_ms", 200);
@@ -1443,21 +1462,18 @@ void run_pipeline(PipelineRuntime& runtime, const AppConfig& cfg) {
   int dropped_total = 0;
   int saved = 0;
   int unpaired = 0;
-  while (cfg.frames <= 0 || processed < cfg.frames) {
+  g_stop_requested = 0;
+  std::signal(SIGINT, request_stop);
+  while (g_stop_requested == 0 && (cfg.frames <= 0 || processed < cfg.frames)) {
     simaai::neat::Sample sample;
     simaai::neat::PullError pull_error;
     const double pull_start = time_ms();
     const auto status = pull_segments(runtime, 20000, sample, pull_error);
     const double pull_end = time_ms();
-    if (status == simaai::neat::PullStatus::Timeout) {
+    if (!sima_examples::pull_status_has_sample(status, runtime.output_name, pull_error,
+                                               runtime.run.last_error())) {
       std::cerr << "[warn] timed out waiting for segmentation output\n";
       continue;
-    }
-    if (status == simaai::neat::PullStatus::Closed) {
-      break;
-    }
-    if (status != simaai::neat::PullStatus::Ok) {
-      throw std::runtime_error("failed to pull segmentation output: " + pull_error.message);
     }
 
     const double decode_start = time_ms();
@@ -1506,7 +1522,10 @@ int main(int argc, char** argv) {
     const CliOptions cli = parse_args(argc, argv);
     const AppConfig cfg = load_app_config(cli.config_path);
     if (cli.validate_config_only) {
-      std::cout << "Config validated: " << cli.config_path << "\n";
+      // Reports which key supplied the source, not its value: a URL can carry
+      // credentials and this line ends up in terminal and CI logs.
+      std::cout << "Config validated: " << cli.config_path << " (source=" << cfg.source_key
+                << ")\n";
       return 0;
     }
     if (!cfg.save_dir.empty()) {

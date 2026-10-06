@@ -1,51 +1,30 @@
 #include "examples/tracking/yolo26-tiny-drone-tracker/src/cpp/utils/runtime_api.cpp"
 #include "examples/tracking/yolo26-tiny-drone-tracker/src/cpp/utils/tracker_api.cpp"
+#include "support/runtime/pull_status.h"
+#include "support/testing/test_checks.h"
 #include "support/testing/test_process.h"
 
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <string>
+#include <vector>
 
 namespace fs = std::filesystem;
 
-using sima_examples::testing::create_test_scratch_dir;
+using sima_examples::pull_status_has_sample;
+using sima_examples::testing::expect_contains;
+using sima_examples::testing::expect_true;
 using sima_examples::testing::remove_dir;
 using sima_examples::testing::spawn_and_wait;
+using sima_examples::testing::write_scratch_config;
 using yolo26_tiny_drone_tracker::append_decode_output_nodes;
 using yolo26_tiny_drone_tracker::configure_output_fps;
 using yolo26_tiny_drone_tracker::Detection;
 using yolo26_tiny_drone_tracker::ObjectTracker;
-using yolo26_tiny_drone_tracker::pull_status_has_sample;
 using yolo26_tiny_drone_tracker::samples_correlate;
 using yolo26_tiny_drone_tracker::TrackerConfig;
 
 namespace {
-
-bool expect_true(bool condition, const std::string& message) {
-  if (!condition) {
-    std::cerr << "[FAIL] " << message << "\n";
-    return false;
-  }
-  std::cout << "[OK] " << message << "\n";
-  return true;
-}
-
-bool expect_contains(const std::string& haystack, const std::string& needle,
-                     const std::string& message) {
-  return expect_true(haystack.find(needle) != std::string::npos, message);
-}
-
-fs::path write_config(const std::string& test_name, const std::string& body) {
-  const std::string temp_dir = create_test_scratch_dir("yolo26-tiny-drone-tracker", test_name);
-  if (temp_dir.empty()) {
-    throw std::runtime_error("failed to create temp directory");
-  }
-  const fs::path config_path = fs::path(temp_dir) / "config.yaml";
-  std::ofstream out(config_path);
-  out << body;
-  return config_path;
-}
 
 bool test_help_runs(const std::string& binary) {
   const auto result = spawn_and_wait(binary, {"--help"}, 20000);
@@ -63,22 +42,23 @@ bool test_missing_config_file_fails_cleanly(const std::string& binary) {
 }
 
 bool test_validate_config_only_accepts_four_streams(const std::string& binary) {
-  const fs::path config_path = write_config("test_validate_config_only_accepts_four_streams",
-                                            "model:\n"
-                                            "  path: models/yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz\n"
-                                            "streams:\n"
-                                            "  - rtsp://127.0.0.1:8554/src1\n"
-                                            "  - rtsp://127.0.0.1:8554/src2\n"
-                                            "  - rtsp://127.0.0.1:8554/src3\n"
-                                            "  - rtsp://127.0.0.1:8554/src4\n"
-                                            "input:\n"
-                                            "  codec: hevc\n"
-                                            "inference:\n"
-                                            "  max_inflight_per_stream: 3\n"
-                                            "  max_inflight_total: 12\n"
-                                            "output:\n"
-                                            "  insight:\n"
-                                            "    host: 127.0.0.1\n");
+  const fs::path config_path = write_scratch_config(
+      "yolo26-tiny-drone-tracker", "test_validate_config_only_accepts_four_streams",
+      "model:\n"
+      "  path: models/yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz\n"
+      "streams:\n"
+      "  - rtsp://127.0.0.1:8554/src1\n"
+      "  - rtsp://127.0.0.1:8554/src2\n"
+      "  - rtsp://127.0.0.1:8554/src3\n"
+      "  - rtsp://127.0.0.1:8554/src4\n"
+      "input:\n"
+      "  codec: hevc\n"
+      "inference:\n"
+      "  max_inflight_per_stream: 3\n"
+      "  max_inflight_total: 12\n"
+      "output:\n"
+      "  insight:\n"
+      "    host: 127.0.0.1\n");
 
   const auto result =
       spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
@@ -94,18 +74,19 @@ bool test_validate_config_only_accepts_four_streams(const std::string& binary) {
 }
 
 bool test_validate_config_only_rejects_too_many_streams(const std::string& binary) {
-  const fs::path config_path = write_config("test_validate_config_only_rejects_too_many_streams",
-                                            "model:\n"
-                                            "  path: models/yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz\n"
-                                            "streams:\n"
-                                            "  - rtsp://127.0.0.1:8554/src1\n"
-                                            "  - rtsp://127.0.0.1:8554/src2\n"
-                                            "  - rtsp://127.0.0.1:8554/src3\n"
-                                            "  - rtsp://127.0.0.1:8554/src4\n"
-                                            "  - rtsp://127.0.0.1:8554/src5\n"
-                                            "output:\n"
-                                            "  insight:\n"
-                                            "    host: 127.0.0.1\n");
+  const fs::path config_path = write_scratch_config(
+      "yolo26-tiny-drone-tracker", "test_validate_config_only_rejects_too_many_streams",
+      "model:\n"
+      "  path: models/yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz\n"
+      "streams:\n"
+      "  - rtsp://127.0.0.1:8554/src1\n"
+      "  - rtsp://127.0.0.1:8554/src2\n"
+      "  - rtsp://127.0.0.1:8554/src3\n"
+      "  - rtsp://127.0.0.1:8554/src4\n"
+      "  - rtsp://127.0.0.1:8554/src5\n"
+      "output:\n"
+      "  insight:\n"
+      "    host: 127.0.0.1\n");
 
   const auto result =
       spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
@@ -117,17 +98,17 @@ bool test_validate_config_only_rejects_too_many_streams(const std::string& binar
 }
 
 bool test_validate_config_only_rejects_invalid_inflight_limit(const std::string& binary) {
-  const fs::path config_path =
-      write_config("test_validate_config_only_rejects_invalid_inflight_limit",
-                   "model:\n"
-                   "  path: models/yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz\n"
-                   "streams:\n"
-                   "  - rtsp://127.0.0.1:8554/src1\n"
-                   "inference:\n"
-                   "  max_inflight_total: 0\n"
-                   "output:\n"
-                   "  insight:\n"
-                   "    host: 127.0.0.1\n");
+  const fs::path config_path = write_scratch_config(
+      "yolo26-tiny-drone-tracker", "test_validate_config_only_rejects_invalid_inflight_limit",
+      "model:\n"
+      "  path: models/yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz\n"
+      "streams:\n"
+      "  - rtsp://127.0.0.1:8554/src1\n"
+      "inference:\n"
+      "  max_inflight_total: 0\n"
+      "output:\n"
+      "  insight:\n"
+      "    host: 127.0.0.1\n");
 
   const auto result =
       spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
@@ -139,55 +120,57 @@ bool test_validate_config_only_rejects_invalid_inflight_limit(const std::string&
 }
 
 bool test_validate_config_only_checks_full_port_ranges(const std::string& binary) {
-  const std::string prefix =
-      "model:\n"
-      "  path: models/yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz\n"
-      "streams:\n"
-      "  - rtsp://127.0.0.1:8554/src1\n"
-      "  - rtsp://127.0.0.1:8554/src2\n"
-      "  - rtsp://127.0.0.1:8554/src3\n"
-      "  - rtsp://127.0.0.1:8554/src4\n"
-      "output:\n"
-      "  insight:\n"
-      "    host: 127.0.0.1\n";
+  const std::string prefix = "model:\n"
+                             "  path: models/yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz\n"
+                             "streams:\n"
+                             "  - rtsp://127.0.0.1:8554/src1\n"
+                             "  - rtsp://127.0.0.1:8554/src2\n"
+                             "  - rtsp://127.0.0.1:8554/src3\n"
+                             "  - rtsp://127.0.0.1:8554/src4\n"
+                             "output:\n"
+                             "  insight:\n"
+                             "    host: 127.0.0.1\n";
 
-  const fs::path valid_video_path = write_config(
-      "test_validate_config_only_accepts_last_video_port_at_udp_limit",
+  const fs::path valid_video_path = write_scratch_config(
+      "yolo26-tiny-drone-tracker", "test_validate_config_only_accepts_last_video_port_at_udp_limit",
       prefix + "    video_port_base: 65532\n    metadata_port_base: 9000\n");
   const auto valid_video = spawn_and_wait(
       binary, {"--config", valid_video_path.string(), "--validate-config-only"}, 20000);
 
-  const fs::path valid_metadata_path = write_config(
-      "test_validate_config_only_accepts_last_metadata_port_at_udp_limit",
-      prefix + "    video_port_base: 9000\n    metadata_port_base: 65532\n");
+  const fs::path valid_metadata_path =
+      write_scratch_config("yolo26-tiny-drone-tracker",
+                           "test_validate_config_only_accepts_last_metadata_port_at_udp_limit",
+                           prefix + "    video_port_base: 9000\n    metadata_port_base: 65532\n");
   const auto valid_metadata = spawn_and_wait(
       binary, {"--config", valid_metadata_path.string(), "--validate-config-only"}, 20000);
 
-  const fs::path video_path = write_config(
-      "test_validate_config_only_rejects_video_port_overflow",
+  const fs::path video_path = write_scratch_config(
+      "yolo26-tiny-drone-tracker", "test_validate_config_only_rejects_video_port_overflow",
       prefix + "    video_port_base: 65533\n    metadata_port_base: 9000\n");
   const auto video =
       spawn_and_wait(binary, {"--config", video_path.string(), "--validate-config-only"}, 20000);
 
-  const fs::path metadata_path = write_config(
-      "test_validate_config_only_rejects_metadata_port_overflow",
+  const fs::path metadata_path = write_scratch_config(
+      "yolo26-tiny-drone-tracker", "test_validate_config_only_rejects_metadata_port_overflow",
       prefix + "    video_port_base: 9000\n    metadata_port_base: 65533\n");
-  const auto metadata = spawn_and_wait(
-      binary, {"--config", metadata_path.string(), "--validate-config-only"}, 20000);
+  const auto metadata =
+      spawn_and_wait(binary, {"--config", metadata_path.string(), "--validate-config-only"}, 20000);
 
-  const fs::path overlap_path = write_config(
-      "test_validate_config_only_rejects_overlapping_port_ranges",
+  const fs::path overlap_path = write_scratch_config(
+      "yolo26-tiny-drone-tracker", "test_validate_config_only_rejects_overlapping_port_ranges",
       prefix + "    video_port_base: 9000\n    metadata_port_base: 9001\n");
-  const auto overlap = spawn_and_wait(
-      binary, {"--config", overlap_path.string(), "--validate-config-only"}, 20000);
+  const auto overlap =
+      spawn_and_wait(binary, {"--config", overlap_path.string(), "--validate-config-only"}, 20000);
 
-  const fs::path reverse_overlap_path = write_config(
-      "test_validate_config_only_rejects_reverse_overlapping_port_ranges",
-      prefix + "    video_port_base: 9001\n    metadata_port_base: 9000\n");
+  const fs::path reverse_overlap_path =
+      write_scratch_config("yolo26-tiny-drone-tracker",
+                           "test_validate_config_only_rejects_reverse_overlapping_port_ranges",
+                           prefix + "    video_port_base: 9001\n    metadata_port_base: 9000\n");
   const auto reverse_overlap = spawn_and_wait(
       binary, {"--config", reverse_overlap_path.string(), "--validate-config-only"}, 20000);
 
-  const fs::path metadata_only_path = write_config(
+  const fs::path metadata_only_path = write_scratch_config(
+      "yolo26-tiny-drone-tracker",
       "test_validate_config_only_allows_overlap_when_video_is_disabled",
       prefix + "    video_port_base: 9000\n    metadata_port_base: 9000\n  video_enabled: false\n");
   const auto metadata_only = spawn_and_wait(
@@ -205,10 +188,8 @@ bool test_validate_config_only_checks_full_port_ranges(const std::string& binary
       expect_true(overlap.exit_code == 1, "overlapping port ranges are rejected") &&
       expect_contains(overlap.stderr_text, "port ranges must not overlap",
                       "overlapping port error explains the conflict") &&
-      expect_true(reverse_overlap.exit_code == 1,
-                  "reverse overlapping port ranges are rejected") &&
-      expect_true(metadata_only.exit_code == 0,
-                  "overlap is allowed when video output is disabled");
+      expect_true(reverse_overlap.exit_code == 1, "reverse overlapping port ranges are rejected") &&
+      expect_true(metadata_only.exit_code == 0, "overlap is allowed when video output is disabled");
   remove_dir(valid_video_path.parent_path().string());
   remove_dir(valid_metadata_path.parent_path().string());
   remove_dir(video_path.parent_path().string());
@@ -370,13 +351,124 @@ bool test_tracker_expires_stale_state_before_creating_replacement() {
   config.center_distance_enabled = false;
   ObjectTracker tracker(config);
   const auto first = tracker.update({Detection{0.0f, 0.0f, 10.0f, 10.0f, 0.9f, 0}}, 0);
-  const auto replacement =
-      tracker.update({Detection{100.0f, 0.0f, 110.0f, 10.0f, 0.9f, 0}}, 1);
+  const auto replacement = tracker.update({Detection{100.0f, 0.0f, 110.0f, 10.0f, 0.9f, 0}}, 1);
   return expect_true(replacement.size() == 1, "expired track capacity accepts replacement") &&
          expect_true(replacement.front().track_id != first.front().track_id,
                      "replacement receives a new track id") &&
          expect_true(tracker.active_track_count() == 1,
                      "replacement preserves the active-track bound");
+}
+
+// ---------------------------------------------------------------------------
+// Configuration rules --validate-config-only can reach without a model or a
+// stream (Refs #526). Each case is the minimal valid config with exactly one
+// value broken, and asserts the message that names the rule, so a failure
+// says which rule stopped firing.
+// ---------------------------------------------------------------------------
+struct ConfigParts {
+  std::string sections;      // extra top-level sections, e.g. "input:\n  latency_ms: -1\n"
+  std::string output_extra;  // extra keys under output:, e.g. "  save_every: -1\n"
+  std::string insight_extra; // extra keys under output.insight:, e.g. "    video_port_base: 0\n"
+  std::string model_path = "models/model.tar.gz";
+  std::string host = "127.0.0.1";
+};
+
+struct RejectedConfig {
+  const char* name;
+  ConfigParts parts;
+  const char* message;
+};
+
+std::string config_body(const ConfigParts& parts) {
+  return "model:\n  path: '" + parts.model_path + "'\n" +
+         std::string("streams:\n  - rtsp://127.0.0.1:8554/src1\n") + parts.sections + "output:\n" +
+         parts.output_extra + "  insight:\n    host: '" + parts.host + "'\n" + parts.insight_extra;
+}
+
+bool test_configuration_rules_are_enforced(const std::string& binary) {
+  const std::vector<RejectedConfig> cases = {
+      {"model-path-empty", {"", "", "", ""}, "model.path must be set"},
+      {"insight-host-empty",
+       {"", "", "", "models/model.tar.gz", ""},
+       "output.insight.host must be set"},
+      {"codec-unsupported",
+       {"input:\n  codec: vp9\n", "", ""},
+       "input.codec must be h264/avc or h265/hevc"},
+      {"latency-negative", {"input:\n  latency_ms: -1\n", "", ""}, "input.latency_ms must be >= 0"},
+      {"frames-negative", {"inference:\n  frames: -1\n", "", ""}, "inference.frames must be >= 0"},
+      {"fps-negative", {"inference:\n  fps: -1\n", "", ""}, "inference.fps must be >= 0"},
+      {"num-classes-zero",
+       {"inference:\n  num_classes: 0\n", "", ""},
+       "inference.num_classes must be > 0"},
+      {"target-class-negative",
+       {"inference:\n  target_class_id: -1\n", "", ""},
+       "inference.target_class_id must be >= 0"},
+      {"target-class-outside-num-classes",
+       {"inference:\n  num_classes: 2\n  target_class_id: 2\n", "", ""},
+       "must be less than inference.num_classes"},
+      {"target-label-empty",
+       {"inference:\n  target_label: ''\n", "", ""},
+       "inference.target_label must be set"},
+      {"min-score-above",
+       {"inference:\n  min_score: 1.5\n", "", ""},
+       "inference.min_score must be between 0 and 1"},
+      {"nms-below",
+       {"inference:\n  nms_iou: -0.5\n", "", ""},
+       "inference.nms_iou must be between 0 and 1"},
+      {"max-detections-zero",
+       {"inference:\n  max_detections: 0\n", "", ""},
+       "inference.max_detections must be > 0"},
+      {"warmup-negative",
+       {"runtime:\n  warmup_frames: -1\n", "", ""},
+       "runtime.warmup_frames must be >= 0"},
+      {"match-iou-above",
+       {"tracking:\n  match_iou_threshold: 2\n", "", ""},
+       "tracking.match_iou_threshold must be between 0 and 1"},
+      {"high-score-below-min-score",
+       {"inference:\n  min_score: 0.5\ntracking:\n  high_score_threshold: 0.4\n", "", ""},
+       "tracking.high_score_threshold must be in [inference.min_score, 1]"},
+      {"new-track-below-high-score",
+       {"tracking:\n  high_score_threshold: 0.6\n  new_track_threshold: 0.5\n", "", ""},
+       "tracking.new_track_threshold must be in [high_score_threshold, 1]"},
+      {"center-distance-negative",
+       {"tracking:\n  max_center_distance: -1\n", "", ""},
+       "tracking.max_center_distance must be >= 0"},
+      {"momentum-at-one",
+       {"tracking:\n  velocity_momentum: 1\n", "", ""},
+       "tracking.velocity_momentum must be in [0, 1)"},
+      {"max-missing-negative",
+       {"tracking:\n  max_missing_frames: -1\n", "", ""},
+       "tracking.max_missing_frames must be >= 0"},
+      {"min-hits-zero",
+       {"tracking:\n  min_confirmed_hits: 0\n", "", ""},
+       "tracking.min_confirmed_hits must be >= 1"},
+      {"max-active-zero",
+       {"tracking:\n  max_active_tracks: 0\n", "", ""},
+       "tracking.max_active_tracks must be >= 1"},
+      {"save-every-negative", {"", "  save_every: -1\n", ""}, "output.save_every must be >= 0"},
+  };
+
+  bool ok = true;
+  for (const RejectedConfig& c : cases) {
+    const fs::path config_path = write_scratch_config(
+        "yolo26-tiny-drone-tracker", std::string("rule_") + c.name, config_body(c.parts));
+    const auto result =
+        spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
+    ok &= expect_true(result.exit_code != 0, std::string(c.name) + " is rejected") &&
+          expect_contains(result.stderr_text, c.message, std::string(c.name) + " names its rule");
+    remove_dir(config_path.parent_path().string());
+  }
+
+  // The control: the same minimal config with nothing broken validates, so the
+  // rejections above are about the broken value and not about the baseline.
+  const fs::path config_path = write_scratch_config("yolo26-tiny-drone-tracker", "rule_baseline",
+                                                    config_body(ConfigParts{}));
+  const auto result =
+      spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
+  ok &= expect_true(result.exit_code == 0, "minimal config validates") &&
+        expect_contains(result.stdout_text, "Config validated", "validated line is printed");
+  remove_dir(config_path.parent_path().string());
+  return ok;
 }
 
 } // namespace
@@ -395,6 +487,7 @@ int main(int argc, char** argv) {
   ok &= test_validate_config_only_rejects_too_many_streams(binary);
   ok &= test_validate_config_only_rejects_invalid_inflight_limit(binary);
   ok &= test_validate_config_only_checks_full_port_ranges(binary);
+  ok &= test_configuration_rules_are_enforced(binary);
   ok &= test_requested_fps_configures_videorate();
   ok &= test_closed_detection_output_is_terminal();
   ok &= test_debug_frames_require_matching_identity();

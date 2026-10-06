@@ -1,11 +1,11 @@
 """SupertonicTTS — client to the isolated Supertonic 3 (MLA) synthesis worker.
 
-Supertonic 3 on Modalix (https://github.com/florianvoss-commit/supertonic-sima)
-runs the eight-step vector field and the vocoder on the MLA through PyNeat and
-the text front end on the CPU through ONNX Runtime. Its runtime environment
-(``pyneat``, ``onnxruntime``, ``numpy==1.26.4``) is separate from the Studio UI
-venv, so this class talks to a persistent worker process
-(``supertonic_worker.py``) running in that environment over the same
+Supertonic 3 on Modalix runs the eight-step vector field and the vocoder on the
+MLA through PyNeat and the text front end on the CPU through ONNX Runtime. Its
+runtime (the vendored ``supertonic_sima`` package next to this file) needs
+``pyneat``, ``onnxruntime`` and ``numpy==1.26.4``, which the Studio UI venv does
+not carry, so this class talks to a persistent worker process
+(``supertonic_worker.py``) running in ``.venv-supertonic`` over the same
 length-prefixed stdin/stdout protocol the piper-tts worker uses. One shared
 worker serves every voice and language.
 
@@ -32,8 +32,9 @@ import unicodedata
 import wave
 from pathlib import Path
 
-DEFAULT_REPO_ROOT = "/media/nvme/repos/supertonic-sima"
-DEFAULT_APP_ROOT = "/media/nvme/supertonic-tts"
+DEFAULT_MODELS_ROOT = "/media/nvme/supertonic-tts/models"
+# EXAMPLE_DIR/.venv-supertonic: this file is src/python/ui/supertonic_tts.py.
+DEFAULT_VENV = Path(__file__).resolve().parents[3] / ".venv-supertonic"
 DEFAULT_VOICE = "M1"
 VOICES = tuple(f"F{i}" for i in range(1, 6)) + tuple(f"M{i}" for i in range(1, 6))
 VOICE_LABELS = {
@@ -57,30 +58,52 @@ class WorkerDied(RuntimeError):
 # Environment discovery
 # --------------------------------------------------------------------------
 
-def repo_root():
-    return Path(os.environ.get("SUPERTONIC_REPO_ROOT") or DEFAULT_REPO_ROOT)
+_legacy_root_warned = False
 
 
-def app_root():
-    return Path(os.environ.get("SUPERTONIC_APP_ROOT") or DEFAULT_APP_ROOT)
+def models_root():
+    """Where the model files live: ``SUPERTONIC_MODELS_ROOT``, else the
+    pre-vendoring ``SUPERTONIC_APP_ROOT`` (its ``models`` subdirectory, so
+    existing installs keep working), else the default."""
+    global _legacy_root_warned
+    explicit = os.environ.get("SUPERTONIC_MODELS_ROOT")
+    if explicit:
+        return Path(explicit)
+    legacy = os.environ.get("SUPERTONIC_APP_ROOT")
+    if legacy:
+        if not _legacy_root_warned:
+            logging.warning("SUPERTONIC_APP_ROOT is deprecated; set SUPERTONIC_MODELS_ROOT "
+                            "(using %s/models)", legacy)
+            _legacy_root_warned = True
+        return Path(legacy) / "models"
+    return Path(DEFAULT_MODELS_ROOT)
 
 
 def _supertonic_python():
-    """Interpreter of the Supertonic runtime venv, or None when not installed."""
+    """Interpreter of the Supertonic runtime venv, or None when not installed:
+    ``SUPERTONIC_PYTHON``, else ``SUPERTONIC_VENV`` (the path setup.sh persisted
+    in the config, exported by run.sh / run_ui), else the default venv."""
     p = os.environ.get("SUPERTONIC_PYTHON")
     if p:
         return p if Path(p).exists() else None
-    cand = app_root() / ".venv" / "bin" / "python"
-    return str(cand) if cand.exists() else None
+    venv = os.environ.get("SUPERTONIC_VENV")
+    cand = (Path(venv) if venv else DEFAULT_VENV) / "bin" / "python"
+    if cand.exists():
+        return str(cand)
+    # Pre-vendoring install not migrated yet: its venv beside the models.
+    legacy = os.environ.get("SUPERTONIC_APP_ROOT")
+    if not venv and legacy:
+        old = Path(legacy) / ".venv" / "bin" / "python"
+        if old.exists():
+            return str(old)
+    return None
 
 
 def available():
-    """True when the runtime venv, the checkout and the model assets exist."""
+    """True when the runtime venv and the model assets exist."""
     if _supertonic_python() is None:
         return False
-    if not (repo_root() / "app" / "supertonic_sima" / "__init__.py").is_file():
-        return False
-    models = app_root() / "models"
+    models = models_root()
     return (models / "supertonic-3" / "onnx" / "tts.json").is_file() and (
         models / "supertonic-3-sima" / "supertonic_vector_field_sima_mpk.tar.gz"
     ).is_file()
@@ -216,10 +239,9 @@ def _ensure_worker():
     if not py:
         raise RuntimeError(
             "Supertonic runtime venv not found (set SUPERTONIC_PYTHON or run "
-            "setup.sh with the supertonic-sima repository available)")
+            "setup.sh with INSTALL_SUPERTONIC=1)")
     env = dict(os.environ)
-    env.setdefault("SUPERTONIC_REPO_ROOT", str(repo_root()))
-    env.setdefault("SUPERTONIC_APP_ROOT", str(app_root()))
+    env["SUPERTONIC_MODELS_ROOT"] = str(models_root())
     _worker = subprocess.Popen(
         [py, _worker_script()],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, bufsize=0, env=env,
@@ -367,21 +389,27 @@ class SupertonicTTS:
         self.voice = voice
         return True
 
-    def set_utterance_speed(self, speed):
+    def clamp_speed(self, speed):
+        """The engine's effective speed for a requested multiplier: the Studio
+        slider allows 0.5x and the API 0.25x-4x, but the model contract is
+        ``min_speed``..``max_speed`` (0.7-2.0)."""
         try:
             speed = float(speed)
         except (TypeError, ValueError):
             speed = 1.0
-        # The Studio slider allows 0.5x; the model contract starts at 0.7x.
-        self.speed = max(self.min_speed, min(self.max_speed, speed))
+        return max(self.min_speed, min(self.max_speed, speed))
+
+    def set_utterance_speed(self, speed):
+        self.speed = self.clamp_speed(speed)
 
     def supports(self, language):
         return bool(language) and language in self.languages
 
     # -- synthesis -----------------------------------------------------------
-    def synthesize_stream(self, text, language=None, voice=None):
-        """Yield one WAV ``BytesIO`` per text segment. ``voice`` overrides the
-        configured speaker for this call only (ignored when unknown)."""
+    def synthesize_stream(self, text, language=None, voice=None, speed=None):
+        """Yield one WAV ``BytesIO`` per text segment. ``voice`` and ``speed``
+        override the configured speaker/speed for this call only (an unknown
+        voice is ignored; ``None`` speed uses the configured one)."""
         language = language if self.supports(language) else "en"
         voice = voice if voice in self.voices else self.voice
         segments = segment_text(text, language)
@@ -389,7 +417,8 @@ class SupertonicTTS:
             return
         req = {
             "cmd": "synth_stream", "segments": segments, "voice": voice,
-            "language": language, "speed": self.speed,
+            "language": language,
+            "speed": self.speed if speed is None else self.clamp_speed(speed),
         }
         # The worker exits on a runtime failure (e.g. its MLA runners died under
         # an accelerator reset). If that happened before any audio was produced,
@@ -409,8 +438,8 @@ class SupertonicTTS:
             finally:
                 stream.close()
 
-    def synthesize(self, text, language=None, voice=None):
-        chunks = list(self.synthesize_stream(text, language=language, voice=voice))
+    def synthesize(self, text, language=None, voice=None, speed=None):
+        chunks = list(self.synthesize_stream(text, language=language, voice=voice, speed=speed))
         if not chunks:
             return io.BytesIO()
         if len(chunks) == 1:
