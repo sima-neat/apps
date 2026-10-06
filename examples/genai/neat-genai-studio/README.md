@@ -439,7 +439,8 @@ its settings. Insight relays every call, so the browser only talks to Insight.
    the Neat Development Environment it uses the paired DevKit. Otherwise enter
    the board address under **Settings**.
 
-`/health` tells Insight which backend API it is talking to (`api_version`) and
+`/health` tells Insight which backend API it is talking to (`api_version`),
+which optional features the board has (`features`, for example `rag`), and
 reports a voice engine that failed to load, such as Supertonic while the
 accelerator was unavailable. A later speech request retries loading it.
 
@@ -463,11 +464,12 @@ POST /v1/audio/transcriptions      speech to text in the spoken language
 POST /v1/audio/translations        speech to English text
 GET  /models/status, /models/catalog; POST /models/load, /models/unload, /models/asr, ...
 GET/POST /tts/engine; GET /supertonic/voices, /piperplus/voices, /voices; POST /supertonic/select, /piperplus/select, /voices/select   voice settings
+GET  /rag/status, /rag/inspect, /rag/search?query=...&k=3; POST /rag/upload (Markdown), /rag/reset, /rag/clear   documents (RAG)
 POST /shutdown                     stop everything (not reachable cross-origin)
 ```
 
 Everything else (the UI pages, `/playground/`, static files, the Studio's own
-chat, RAG and camera routes) answers 404 in this mode. Browser pages on other
+chat and camera routes) answers 404 in this mode. Browser pages on other
 origins are refused by default; list the origins that may call the API, or `*`:
 
 ```bash
@@ -663,6 +665,24 @@ Retrieved context is size-capped before it's added to a prompt so it can't
 overflow the on-board model's small context window. Because the single-writer
 `milvus.db` is guarded by port reachability, avoid **cold-starting the CLI's RAG
 and the web UI at the same instant** against the same database.
+
+#### Answer from documents through the API
+`POST /v1/chat/completions` answers from the RAG database when the request adds
+`"neat_rag": true`, or `{"k": 5}` for the number of passages (1 to 10, default 3).
+The Studio searches with the last user message, adds the matching passages
+before it, and removes the field before the request reaches the model server.
+The response headers `X-RAG-Hits` and `X-RAG-Sources` say which passages were
+used. This works in the full Studio and in backend-only mode, which also starts
+the RAG service:
+
+```bash
+B=https://127.0.0.1:5000
+curl -sk -N $B/v1/chat/completions -H 'Content-Type: application/json' -D - -d '{
+  "model": "Qwen3-VL-4B-Instruct-GPTQ-a16w4", "stream": true, "neat_rag": true,
+  "messages": [{"role": "user", "content": "What does the Neat Library let developers do?"}]}'
+curl -sk -F file=@/path/to/document.md $B/rag/upload   # replace the database with this document
+curl -sk -X POST $B/rag/reset                           # back to the bundled document
+```
 
 #### Reset or clear the RAG database
 - **Reset to Default** rebuilds RAG from the bundled `src/common/rag/neat.md`.

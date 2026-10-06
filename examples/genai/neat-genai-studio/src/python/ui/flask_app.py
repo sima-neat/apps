@@ -53,6 +53,7 @@ from asr_metadata import (
 import supertonic_tts
 from talk_controller import TalkController
 import backend_mode
+import rag_chat
 from audio_api import (
     MAX_TRANSCRIPTION_BYTES,
     AudioApiError,
@@ -1215,6 +1216,22 @@ class AppContext:
             if self.max_tokens:
                 payload.setdefault('max_tokens', int(self.max_tokens))
             _normalize_openai_image_parts(payload)
+            # Extension: "neat_rag" answers from the user's documents (rag_chat.py).
+            rag_headers = {}
+            rag = rag_chat.rag_options(payload)
+            if rag is not None:
+                if not self.rag_enabled:
+                    return jsonify({'error': {'message': 'Document search (RAG) is disabled on this board. '
+                                                         'Set app.rag.enabled in config.local.yaml.'}}), 409
+                question = rag_chat.last_user_text(payload.get('messages') or [])
+                try:
+                    hits = ensure_rag_modules_loaded().search(question, k=rag['k']) if question else []
+                except Exception as exc:  # noqa: BLE001
+                    logging.error(f"RAG search failed: {exc}")
+                    return jsonify({'error': {'message': 'The document search service is not available yet. '
+                                                         'Try again in a moment, or rebuild the documents.'}}), 503
+                payload['messages'] = rag_chat.with_passages(payload.get('messages') or [], hits)
+                rag_headers = {'X-RAG-Hits': str(len(hits)), 'X-RAG-Sources': rag_chat.sources_header(hits)}
             url = f"http://{self.app.config['SIMAAI_IP_ADDR']}/v1/chat/completions"
             try:
                 upstream = requests.post(url, json=payload, stream=True, timeout=(10, 600))
@@ -1244,7 +1261,7 @@ class AppContext:
                 stream_with_context(relay()),
                 status=upstream.status_code,
                 content_type=upstream.headers.get('Content-Type', 'text/event-stream'),
-                headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
+                headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no', **rag_headers},
             )
 
         @self.app.route('/stop', methods=['POST'])
@@ -1529,6 +1546,45 @@ class AppContext:
                     "message": "RAG DB is not available"
                 }, 503
 
+        @self.app.route('/rag/status', methods=['GET'])
+        def rag_status():
+            """Whether document search is enabled, its service answers, and what
+            the database was built from (the build-metadata sidecar)."""
+            if not self.rag_enabled:
+                return jsonify({"enabled": False, "service": "disabled", "database": False, "meta": None})
+            from rag.inspect_db import read_rag_meta, default_db_path
+            db_path = default_db_path()
+            try:
+                up = ensure_rag_modules_loaded().is_server_up()
+            except Exception:  # noqa: BLE001
+                up = False
+            exists = os.path.isfile(db_path)
+            return jsonify({
+                "enabled": True,
+                "service": "ok" if up else ("starting" if exists else "no-database"),
+                "database": exists,
+                "meta": read_rag_meta(db_path) if exists else None,
+            })
+
+        @self.app.route('/rag/search', methods=['GET'])
+        def rag_search():
+            """The passages chat would add for ``query`` (``k`` up to 10)."""
+            if not self.rag_enabled:
+                return jsonify({"error": "RAG is disabled"}), 409
+            query = (request.args.get("query") or "").strip()
+            if not query:
+                return jsonify({"error": "query is required"}), 400
+            try:
+                k = max(1, min(rag_chat.MAX_K, int(request.args.get("k", rag_chat.DEFAULT_K))))
+            except (TypeError, ValueError):
+                k = rag_chat.DEFAULT_K
+            try:
+                hits = ensure_rag_modules_loaded().search(query, k=k)
+            except Exception as exc:  # noqa: BLE001
+                logging.error(f"RAG search failed: {exc}")
+                return jsonify({"error": "The RAG database service is not available"}), 503
+            return jsonify({"results": [dict(rag_chat.passage_source(h), content=h.get("content", "")) for h in hits]})
+
         @self.app.route('/rag/inspect', methods=['GET'])
         def rag_inspect():
             """Inspect the RAG database: the build-metadata sidecar plus every
@@ -1635,7 +1691,7 @@ class AppContext:
             return jsonify(backend_mode.health_payload(
                 mode='backend-only' if self.backend_only else 'studio',
                 version=_studio_version(), status=status, engines=engines, error=error,
-                engine_failures=failures))
+                engine_failures=failures, rag_enabled=self.rag_enabled))
 
         @self.app.route('/v1/audio/voices', methods=['GET'])
         @self.app.route('/audio/voices', methods=['GET'])
@@ -1810,6 +1866,7 @@ class AppContext:
             def upload_image_disabled():
                 return jsonify({'error': 'Image upload is disabled in LLM-only mode'}), 400
 
+        @self.app.route("/rag/upload", methods=["POST"])
         @self.app.route("/upload-to-rag", methods=["POST"])
         def upload_to_rag():
             if not self.rag_enabled:
@@ -1982,6 +2039,7 @@ class AppContext:
 
             return Response(stream_with_context(_stream()), mimetype="text/plain")
 
+        @self.app.route("/rag/reset", methods=["POST"])
         @self.app.route("/reset-rag", methods=["POST"])
         def reset_rag():
             """Rebuild the RAG database from the bundled default Markdown."""
@@ -2068,6 +2126,7 @@ class AppContext:
 
             return Response(stream_with_context(_stream()), mimetype="text/plain")
 
+        @self.app.route("/rag/clear", methods=["POST"])
         @self.app.route("/clear-rag", methods=["POST"])
         def clear_rag():
             """Clear the RAG database — stop the service and remove the DB files."""
@@ -2428,9 +2487,8 @@ def run_ui(app_cfg, backend_only=False):
     genai_app.setup_router()
     cleanup()
 
-    if genai_app.backend_only:
-        logging.info("RAG database service not started (backend-only mode)")
-    elif genai_app.rag_enabled:
+    # Backend-only mode serves the /rag/ routes and chat's "neat_rag" option too.
+    if genai_app.rag_enabled:
         logging.info("Starting RAG database service")
         ensure_rag_modules_loaded()
         vectodb_proc = start_service()
