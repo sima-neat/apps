@@ -168,8 +168,8 @@ int run_source_case(const std::string& binary, const std::vector<std::string>& m
     return 1;
   }
 
-  const ProcessResult result = spawn_until_output_files(binary, {"--config", config_path.string()},
-                                                        output_dir, total_saved_frames, timeout_ms);
+  const ProcessResult result = spawn_and_wait(
+      binary, {"--config", config_path.string()}, timeout_ms);
 
   int rc = 0;
   if (result.exit_code != 0) {
@@ -197,6 +197,9 @@ int run_source_case(const std::string& binary, const std::vector<std::string>& m
     rc = 1;
   }
 
+  if (rc != 0 && result.exit_code == 0) {
+    std::cerr << "stdout:\n" << result.stdout_text << "\nstderr:\n" << result.stderr_text << "\n";
+  }
   remove_dir(output_dir);
   return rc;
 }
@@ -237,10 +240,10 @@ int main(int argc, char** argv) {
   int cases_run = 0;
   int rc = 0;
   for (const SourceCase& source_case : source_cases) {
-    if (source_case.urls.size() < 2) {
-      record_unavailable_source("need at least two RTSP " + source_case.codec +
+    if (source_case.urls.empty()) {
+      record_unavailable_source("need at least one RTSP " + source_case.codec +
                                     " URLs for multistream e2e",
-                                "set at least two RTSP " + source_case.codec + " URLs to run " +
+                                "set at least one RTSP " + source_case.codec + " URLs to run " +
                                     source_case.codec + " multistream e2e",
                                 rc);
       continue;

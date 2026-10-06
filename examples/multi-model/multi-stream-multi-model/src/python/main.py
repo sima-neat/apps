@@ -278,7 +278,7 @@ def int_or(raw: dict, key: str, default: int) -> int:
     value = raw.get(key, default)
     if value is None:
         return default
-    if not isinstance(value, int):
+    if isinstance(value, bool) or not isinstance(value, int):
         raise ValueError(f"{key} must be an integer")
     return int(value)
 
@@ -287,7 +287,7 @@ def float_or(raw: dict, key: str, default: float) -> float:
     value = raw.get(key, default)
     if value is None:
         return default
-    if not isinstance(value, (int, float)):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{key} must be numeric")
     return float(value)
 
@@ -856,14 +856,26 @@ def rtsp_codec(codec: str):
     return pyneat.RtspCodec.H265 if codec == "h265" else pyneat.RtspCodec.H264
 
 
-def probe_rtsp(url: str) -> tuple[int, int, int]:
-    cap = cv2.VideoCapture(url)
-    if not cap.isOpened():
-        raise RuntimeError(f"failed to open RTSP source for probing: {url}")
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
-    fps = int(round(cap.get(cv2.CAP_PROP_FPS) or 0))
-    cap.release()
+def probe_rtsp(url: str, cfg: AppConfig) -> tuple[int, int, int]:
+    options_key = "OPENCV_FFMPEG_CAPTURE_OPTIONS"
+    previous = os.environ.get(options_key)
+    transport = "tcp" if cfg.tcp else "udp"
+    os.environ[options_key] = f"rtsp_transport;{transport}|max_delay;{cfg.latency_ms * 1000}"
+    cap = None
+    try:
+        cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
+        if not cap.isOpened():
+            raise RuntimeError(f"failed to open RTSP source for probing: {url}")
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+        fps = int(round(cap.get(cv2.CAP_PROP_FPS) or 0))
+    finally:
+        if cap is not None:
+            cap.release()
+        if previous is None:
+            os.environ.pop(options_key, None)
+        else:
+            os.environ[options_key] = previous
     if width <= 0 or height <= 0:
         raise RuntimeError("failed to probe RTSP frame size")
     if fps <= 0:
@@ -1119,7 +1131,7 @@ def make_video_options(cfg: AppConfig, stream_index: int):
 
 
 def build_stream_runtime(cfg: AppConfig, stream_cfg: StreamConfig, labels: list[str]) -> StreamRuntime:
-    frame_w, frame_h, fps = probe_rtsp(stream_cfg.url)
+    frame_w, frame_h, fps = probe_rtsp(stream_cfg.url, cfg)
     output_fps = cfg.fps if cfg.fps > 0 else fps
 
     source_options = build_source_options(cfg, stream_cfg.url, fps, frame_w, frame_h)

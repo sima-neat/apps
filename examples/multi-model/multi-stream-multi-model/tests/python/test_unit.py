@@ -615,3 +615,37 @@ def test_debug_frames_stay_paired_with_results(monkeypatch, tmp_path):
     assert [call[3] for call in stream.metadata_sender.calls] == ["1", "2"]
     assert not stream.pending
     assert stream.in_flight == 0
+
+
+@pytest.mark.parametrize("helper", ["int_or", "float_or"])
+@pytest.mark.parametrize("value", [True, False])
+def test_numeric_helpers_reject_booleans(helper, value):
+    import main
+    with pytest.raises(ValueError):
+        getattr(main, helper)({"value": value}, "value", 0)
+
+
+@pytest.mark.parametrize("tcp", [True, False])
+@pytest.mark.parametrize("opened", [True, False])
+def test_probe_honors_transport_and_restores_environment(monkeypatch, tcp, opened):
+    import main
+    from dataclasses import replace
+    key = "OPENCV_FFMPEG_CAPTURE_OPTIONS"
+    monkeypatch.setenv(key, "inherited-options")
+    released = []
+    def capture(url, backend):
+        assert backend == 99
+        assert main.os.environ[key] == f"rtsp_transport;{'tcp' if tcp else 'udp'}|max_delay;175000"
+        return SimpleNamespace(isOpened=lambda: opened,
+            get=lambda prop: {1: 1920, 2: 1080, 3: 30}[prop],
+            release=lambda: released.append(True))
+    monkeypatch.setattr(main, "cv2", SimpleNamespace(VideoCapture=capture,
+        CAP_FFMPEG=99, CAP_PROP_FRAME_WIDTH=1, CAP_PROP_FRAME_HEIGHT=2, CAP_PROP_FPS=3))
+    cfg = replace(_config(), tcp=tcp, latency_ms=175)
+    if opened:
+        assert main.probe_rtsp("rtsp://camera", cfg) == (1920, 1080, 30)
+    else:
+        with pytest.raises(RuntimeError, match="failed to open"):
+            main.probe_rtsp("rtsp://camera", cfg)
+    assert released == [True]
+    assert main.os.environ[key] == "inherited-options"

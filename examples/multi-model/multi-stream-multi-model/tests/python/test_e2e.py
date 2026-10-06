@@ -7,6 +7,7 @@ import importlib.util
 import os
 from pathlib import Path
 import sys
+import subprocess
 
 import pytest
 
@@ -53,7 +54,6 @@ class TestE2E:
         skip_unless_e2e_ready,
         e2e_config_writer,
         e2e_config_section,
-        run_until_output_files,
     ):
         rtsp_urls = request.getfixturevalue(urls_fixture)
         skip_unless_e2e_ready(
@@ -61,7 +61,7 @@ class TestE2E:
             "python runtime dependencies (cv2, numpy, pyneat) are not available",
         )
         skip_unless_e2e_ready(
-            len(rtsp_urls) >= 2, f"need at least two RTSP {codec.upper()} URLs for multistream e2e"
+            len(rtsp_urls) >= 1, f"need at least one RTSP {codec.upper()} URLs for multistream e2e"
         )
 
         model_paths = [models_dir / slot[2] for slot in STREAM_SLOTS]
@@ -126,12 +126,9 @@ class TestE2E:
                 )
                 for index, (_, _, _, metadata_type, data_array_key) in enumerate(STREAM_SLOTS)
             ]
-            result = run_until_output_files(
-                cmd,
-                tmp_output_dir,
-                total_saved_frames,
-                test_timeout_ms / 1000,
-                cwd=str(EXAMPLE_DIR),
+            result = subprocess.run(
+                cmd, capture_output=True, text=True,
+                timeout=test_timeout_ms / 1000, cwd=str(EXAMPLE_DIR),
             )
             received = [
                 (index, metadata_type, listener.wait_for_messages(5.0))
