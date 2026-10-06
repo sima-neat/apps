@@ -7,6 +7,7 @@ APPS_MANIFEST="${DEPS_DIR}/manifest.json"
 NEAT_CORE_METADATA="${DEPS_DIR}/neat-core.json"
 NEAT_DEBS_DIR="${DEPS_DIR}/debs"
 NEAT_INSTALLER_URL="${NEAT_INSTALLER_URL:-https://tools.sima-neat.com/install-neat.sh}"
+NEAT_ARTIFACTS_BASE_URL_EXPLICIT="${NEAT_ARTIFACTS_BASE_URL:+1}"
 NEAT_ARTIFACTS_BASE_URL="${NEAT_ARTIFACTS_BASE_URL:-https://artifacts.neat.sima.ai/core}"
 ELXR_SDK_RELEASE_FILE="${ELXR_SDK_RELEASE_FILE:-/etc/sdk-release}"
 NEAT_CORE_INSTALL_DIR=""
@@ -521,7 +522,7 @@ neat_core_installed_matches() {
   local expected_branch="$1"
   local expected_version="$2"
   local expected_env="${3:-}"
-  local expected_branch_key expected_env_key status_json
+  local expected_branch_key expected_env_key artifact_branch_key status_json metadata_json
 
   if ! command -v neat >/dev/null 2>&1; then
     return 1
@@ -532,11 +533,20 @@ neat_core_installed_matches() {
 
   expected_branch_key="$(sanitize_branch_key "${expected_branch}")"
   expected_env_key="$(normalize_vulcan_env "${expected_env}")"
+  # The default artifact index is production; other environments need their own
+  # explicit index before its metadata can justify skipping an installation.
+  if [[ -n "${expected_env_key}" && "${expected_env_key}" != "prod" &&
+        -z "${NEAT_ARTIFACTS_BASE_URL_EXPLICIT}" ]]; then
+    return 1
+  fi
   status_json="$(neat --json 2>/dev/null)" || return 1
+  artifact_branch_key="$(core_artifact_branch_key "${expected_branch}")"
+  metadata_json="$(download_text "${NEAT_ARTIFACTS_BASE_URL}/${artifact_branch_key}/${expected_version}/metadata.json" 2>/dev/null)" || return 1
 
-  if ! NEAT_STATUS_JSON="${status_json}" python3 - "${expected_branch}" "${expected_branch_key}" "${expected_version}" "${expected_env_key}" <<'PY'
+  if ! NEAT_STATUS_JSON="${status_json}" NEAT_CORE_METADATA_JSON="${metadata_json}" python3 - "${expected_branch}" "${expected_branch_key}" "${expected_version}" "${expected_env_key}" <<'PY'
 import json
 import os
+import re
 import sys
 
 expected_branch = sys.argv[1]
@@ -546,17 +556,22 @@ expected_env = sys.argv[4]
 
 try:
     data = json.loads(os.environ["NEAT_STATUS_JSON"])
-except json.JSONDecodeError:
+    metadata = json.loads(os.environ["NEAT_CORE_METADATA_JSON"])
+    resources = metadata["resources"]
+    core = data["components"]["core"]
+    runtime_version = data["components"]["runtime"]["version"]
+    gst_plugins_version = data["components"]["gstPlugins"]["version"]
+except (ValueError, KeyError, TypeError):
     raise SystemExit(1)
 
-core = data.get("components", {}).get("core", {})
+if not isinstance(core, dict) or not isinstance(resources, list) or not all(
+    isinstance(resource, str) for resource in resources
+):
+    raise SystemExit(1)
+
 channel = str(core.get("channel", "")).strip()
 tag = str(core.get("tag", "")).strip()
 actual_env = str(core.get("provenance", {}).get("vulcanEnvironment", "")).strip()
-runtime_version = str(data.get("components", {}).get("runtime", {}).get("version", "")).strip()
-gst_plugins_version = str(
-    data.get("components", {}).get("gstPlugins", {}).get("version", "")
-).strip()
 
 def normalize_env(value: str) -> str:
     if value in {"production", "prod", "prd"}:
@@ -574,15 +589,23 @@ if tag != expected_version:
 if expected_env and normalize_env(actual_env) != expected_env:
     raise SystemExit(1)
 
-# The Core provenance marker is not sufficient on a persistent runner: an
-# interrupted installation can leave the requested Core package beside runtime
-# and GStreamer packages from another branch. Those mixed packages made
-# `neat --json` report the requested Core tag while BoxDecode still loaded an
-# older plugin. Require the installed board-side components to come from the
-# same branch before skipping installation.
-expected_component_prefix = f"+{expected_branch_key}."
-for version in (runtime_version, gst_plugins_version):
-    if expected_component_prefix not in version:
+# A Core source revision can be rebuilt with newer snap dependencies. Compare
+# the selected package versions, including releases without a branch suffix.
+for package, installed_version in (
+    ("neat-runtime", runtime_version),
+    ("neat-gst-plugins", gst_plugins_version),
+):
+    candidates = [
+        resource.rsplit("/", 1)[-1] for resource in resources
+        if resource.rsplit("/", 1)[-1].startswith(package + "_")
+    ]
+    if len(candidates) != 1:
+        raise SystemExit(1)
+    match = re.fullmatch(
+        re.escape(package) + r"_([0-9][A-Za-z0-9.+:~\-]*)_[a-z0-9-]+\.deb",
+        candidates[0],
+    )
+    if not match or installed_version != match.group(1):
         raise SystemExit(1)
 PY
   then
@@ -985,10 +1008,10 @@ receipt = artifact["sysroot-version"]
 consumer_base = consumer["platform-version"]
 if not isinstance(receipt, str) or (
     receipt
-    and not re.fullmatch(r"[0-9]+(?:[.][0-9]+){2}(?:~pre[0-9]+)?", receipt)
+    and not re.fullmatch(r"[0-9]+(?:[.][0-9]+){2}(?:~(?:pre[0-9]+|git[0-9]{12}[.][0-9a-f]{7,40}-[0-9]+))?", receipt)
 ):
     raise SystemExit("invalid sysroot-version")
-if receipt and consumer_base != receipt.split("~pre", 1)[0]:
+if receipt and consumer_base != receipt.split("~", 1)[0]:
     raise SystemExit("platform-version does not match the Internals receipt")
 print(receipt)
 PY
@@ -1001,7 +1024,7 @@ PY
     return 0
   fi
 
-  if [[ "${receipt}" == *"~pre"* ]]; then
+  if [[ "${receipt}" == *"~"* ]]; then
     echo "Updating SDK sysroot to Core's Internals receipt ${receipt}"
     if ! run_privileged sysroot update "${receipt}"; then
       echo "ERROR: Failed to update SDK sysroot to ${receipt}." >&2
