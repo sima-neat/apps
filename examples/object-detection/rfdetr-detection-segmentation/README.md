@@ -162,9 +162,11 @@ as `RF-DETR detection configuration is valid`.
 
 - `source.codec must be h264/avc, h265/hevc, or mjpeg` means `source.codec` names
   a codec this example does not decode. Set it to match the source.
-- `model.task must be detection or segmentation`, and
-  `model.detection.variant must be small or medium`, mean the selected task or
-  variant is not one of the supported values.
+- `model.task must be detection or segmentation` means `model.task` is not one
+  of the supported tasks.
+- A `model.detection.variant` with no model pair under `model.detection`, for
+  example `large`, fails with `large must be a mapping` in Python and
+  `model.detection.large.backbone and transformer must be set` in C++.
 - `model archive must use .tar.gz: None` means one half of the model pair was
   left blank in the config. Both `backbone` and `transformer` must name a
   downloaded archive for the selected task and variant. This is specific to the

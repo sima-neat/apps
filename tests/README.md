@@ -182,7 +182,7 @@ installed. NumPy and OpenCV are what the e2e output assertions and the harness
 self-tests decode saved frames with; this is the same set CI installs:
 
 ```bash
-${PYTHON_TEST_BIN:-python3} -m pip install pytest PyYAML "numpy<2" "opencv-python-headless<4.12"
+${PYTHON_TEST_BIN:-python3} -m pip install pytest PyYAML "opencv-python-headless<4.12"
 ```
 
 Without NumPy or OpenCV the harness self-tests under `tests/harness` skip with

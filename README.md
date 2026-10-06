@@ -1,7 +1,7 @@
 # SiMa Neat Apps
 
 ![Vulcan CI](https://github.com/sima-neat/apps/actions/workflows/vulcan-ci.yml/badge.svg)
-![Neat Development Environment](https://img.shields.io/badge/Neat%20Development%20Environment-2.1.3-green)
+![Neat Development Environment](https://img.shields.io/badge/Neat%20Development%20Environment-3.0.0-green)
 ![Language](https://img.shields.io/badge/C%2B%2B-20-informational)
 
 SiMa Neat Apps provides runnable C++ and Python examples for detection,
