@@ -26,6 +26,9 @@ from server.control_api import serve_control_api
 from server.load_log import LoadLogTap
 from server.model_manager import ModelManager
 
+# How many catalogued speech models to try when the configured one fails.
+_ASR_FALLBACK_LIMIT = 3
+
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -86,7 +89,39 @@ def start_openai_server(cfg: AppConfig):
             flush=True,
         )
 
-        server.start()
+        try:
+            server.start()
+        except Exception as exc:
+            # start() warms every registered model, so ONE unusable startup
+            # model takes the whole studio down with it — and the ASR model is
+            # the likely culprit, because a runtime update can change which
+            # Whisper build layout it accepts. Drop it and start without
+            # speech-to-text rather than leaving the user with nothing: every
+            # other model is still loadable, and a working one can be selected
+            # from the UI.
+            if served_asr_name is None:
+                raise
+            print(f"startup ASR model '{served_asr_name}' cannot be used: {exc}",
+                  file=sys.stderr, flush=True)
+            print("dropped it; looking for another speech model in the catalog",
+                  file=sys.stderr, flush=True)
+            # remove_model's return value is authoritative: retrying start()
+            # with the model still registered just warms it again and fails
+            # identically, so the recovery would not actually recover.
+            removed = False
+            try:
+                removed = bool(server.remove_model(served_asr_name))
+            except Exception as rm_exc:  # noqa: BLE001 - reported below
+                print(f"could not unregister it: {rm_exc}", file=sys.stderr, flush=True)
+            if not removed:
+                raise RuntimeError(
+                    f"the startup speech model '{served_asr_name}' could not be "
+                    "unregistered, so the server cannot start without it. Remove "
+                    "server.models.asr from the config, or point it at a model "
+                    "this runtime accepts."
+                ) from exc
+            served_asr_name = None
+            server.start()
         return server, served_asr_name
     except BaseException:
         if server is not None:
@@ -184,6 +219,60 @@ def main() -> int:
                     served_asr_name, cfg.asr_model.path, "asr", False, None
                 )
         manager.scan_catalog()
+
+        # No speech model active — either none was configured, or the runtime
+        # refused the configured one above. Try the other speech models already
+        # in the catalog and keep the first that loads. Encoder layout
+        # requirements have changed between runtime builds in both directions, so
+        # trying is the only reliable test; a user whose runtime moved under them
+        # gets working transcription instead of silence. Bounded, and
+        # STUDIO_ASR_FALLBACK=0 turns it off.
+        # Only when a CONFIGURED model failed. An omitted `asr:` is a documented
+        # choice — the fully decoupled mode starts with nothing resident — so
+        # inventing a model there would override the user and take accelerator
+        # memory they did not ask to spend.
+        if (cfg.asr_model is not None and manager.active_asr() is None
+                and os.environ.get("STUDIO_ASR_FALLBACK", "1") != "0"):
+            # Exclude the model that just failed BY PATH, not only by name: a
+            # configured alias and the directory basename are two catalog entries
+            # for one directory, so a name-only check retries the failure and
+            # burns one of the few attempts a third candidate needs.
+            failed_name = cfg.asr_model.name if cfg.asr_model else None
+            failed_path = None
+            if cfg.asr_model and cfg.asr_model.path:
+                try:
+                    failed_path = Path(cfg.asr_model.path).resolve()
+                except Exception:  # noqa: BLE001 - name check still applies
+                    failed_path = None
+            tried = 0
+            for entry in manager.catalog():
+                if tried >= _ASR_FALLBACK_LIMIT:
+                    break
+                if entry.get("type") != "asr" or entry.get("complete") is False:
+                    continue
+                if entry["name"] == failed_name:
+                    continue          # just failed; do not retry it
+                if failed_path is not None and \
+                        manager.resolved_model_path(entry["name"]) == failed_path:
+                    continue          # same directory under its other name
+                tried += 1
+                try:
+                    manager.set_active_asr(entry["name"])
+                except Exception as exc:  # noqa: BLE001 - try the next candidate
+                    print(f"speech model '{entry['name']}' did not load: "
+                          f"{str(exc).splitlines()[0][:200]}", file=sys.stderr, flush=True)
+                    continue
+                print(f"using '{entry['name']}' for speech-to-text "
+                      f"(the configured model is unavailable)", flush=True)
+                break
+            else:
+                print(
+                    "no speech model in the catalog loads on this runtime"
+                    if tried else
+                    "no other speech model in the catalog to fall back to",
+                    file=sys.stderr, flush=True)
+                print("starting without speech-to-text — download one from "
+                      "Settings -> Add Model", file=sys.stderr, flush=True)
 
         control_httpd = serve_control_api(manager, cfg.control.host, cfg.control.port)
         print(

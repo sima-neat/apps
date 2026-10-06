@@ -30,7 +30,8 @@ import wave
 from pathlib import Path
 
 from shared.chat_template import repair_chat_template_files
-from shared.config import HubConfig, classify_model_dir, model_dir_complete
+from shared.config import (HubConfig, classify_model_dir, model_dir_complete,
+                           model_dir_supported)
 
 
 def parse_param_count(name: str) -> str | None:
@@ -272,6 +273,7 @@ class ModelManager:
         entries = []                                # outside the lock (walks are slow)
         for info in infos:
             complete, reason = self._is_model_complete(info.get("path"))
+            supported, unsupported_reason = model_dir_supported(info.get("path"))
             path = info.get("path")
             entries.append({
                 "name": info["name"],
@@ -295,6 +297,11 @@ class ModelManager:
                 "stagesTotal": self._count_elf_stages(path),
                 "complete": complete,
                 "incompleteReason": reason or None,
+                # Distinct from "complete": an unsupported build downloaded
+                # perfectly. Conflating them tells the user to re-download
+                # gigabytes that will fail the same way.
+                "supported": supported,
+                "unsupportedReason": unsupported_reason or None,
             })
         entries.sort(key=lambda e: (e["type"] == "asr", e["name"].lower()))
         return entries
@@ -427,6 +434,9 @@ class ModelManager:
             # Refuse to load a model whose weights are missing/partial — otherwise
             # it fails deep in the MLA with a confusing error.
             complete, reason = self._is_model_complete(path)
+            ok_supported, why_unsupported = model_dir_supported(path)
+            if not ok_supported:
+                raise ValueError(f"'{name}' cannot be loaded — {why_unsupported}")
             if not complete:
                 raise ValueError(
                     f"'{name}' cannot be loaded — {reason}. Re-download it from Add Model."
@@ -988,8 +998,8 @@ class ModelManager:
         # adds the configured `asr.name` while the catalog scan adds the
         # directory's basename. Deleting the "other" name would rmtree the weights
         # the active model is serving from, so compare resolved paths too.
-        active_path = self._resolved_path(self._active_asr)
-        if active_path and self._resolved_path(name) == active_path:
+        active_path = self.resolved_model_path(self._active_asr)
+        if active_path and self.resolved_model_path(name) == active_path:
             raise ValueError(
                 f"'{name}' is the active speech-to-text model under another name "
                 f"({self._active_asr}) — switch to another ASR model first."
@@ -1002,10 +1012,10 @@ class ModelManager:
             return False
         if name == self._configured_asr:
             return True
-        configured_path = self._resolved_path(self._configured_asr)
-        return bool(configured_path) and self._resolved_path(name) == configured_path
+        configured_path = self.resolved_model_path(self._configured_asr)
+        return bool(configured_path) and self.resolved_model_path(name) == configured_path
 
-    def _resolved_path(self, name: str | None):
+    def resolved_model_path(self, name: str | None):
         """Resolved on-disk path for a catalog entry, or None."""
         if not name:
             return None
@@ -1075,7 +1085,7 @@ class ModelManager:
             # server restarts.
             registered = [
                 served for served in self._server_model_names()
-                if served == name or self._resolved_path(served) == path
+                if served == name or self.resolved_model_path(served) == path
             ]
             for served in registered:
                 self._stop_model_streams(served)

@@ -39,6 +39,7 @@ from asr_switching_suite import (  # noqa: E402
     AsrSwitchingTests,
     AsrWarmupBehaviourTests,
     AsrWarmupPayloadTests,
+    EncoderLayoutIsNotJudgedLocallyTests,
     MlaFailureClassificationTests,
 )
 from hub_security_suite import HubPathSecurityTests  # noqa: E402,F401
@@ -49,11 +50,24 @@ from cli_think_suite import (  # noqa: E402,F401
     ThinkSplitterTests as CliThinkSplitterTests,
 )
 from asr_metadata_suite import AsrMetadataTests  # noqa: E402,F401
+from audio_api_suite import (  # noqa: E402,F401
+    FormatTranscriptionTests as AudioApiFormatTranscriptionTests,
+    SpeechRequestTests as AudioApiSpeechRequestTests,
+    TranscriptionFormTests as AudioApiTranscriptionFormTests,
+    VoicesListingTests as AudioApiVoicesListingTests,
+)
+from shell_config_suite import ShellConfigValueTests, ShellWebConfigTests  # noqa: E402,F401
+from backend_mode_suite import (  # noqa: E402,F401
+    BackendPathTests,
+    CorsPolicyTests as BackendCorsPolicyTests,
+    HealthPayloadTests as BackendHealthPayloadTests,
+)
 from supertonic_tts_suite import (  # noqa: E402,F401
     ClientConfigurationTests as SupertonicClientConfigurationTests,
     DurationFallbackTests as SupertonicDurationFallbackTests,
     EnvironmentDiscoveryTests as SupertonicEnvironmentDiscoveryTests,
     SegmentTextTests as SupertonicSegmentTextTests,
+    VendoredRuntimeTests as SupertonicVendoredRuntimeTests,
 )
 from voice_catalog_suite import (  # noqa: E402,F401
     test_catalog_has_simple_licenses_and_pinned_sources,
@@ -69,25 +83,68 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.mark.unit
+def test_ui_config_reads_backend_settings(tmp_path) -> None:
+    """app.web.headless and the persisted backend CORS allowlist (string or list)."""
+    from shared.config import load_ui_config
+
+    plain = tmp_path / "plain.yaml"
+    plain.write_text("app:\n  web:\n    port: 5000\n", encoding="utf-8")
+    cfg = load_ui_config(plain, tmp_path)
+    assert (cfg.web.headless, cfg.web.cors_origins) == (False, "")
+
+    text = tmp_path / "text.yaml"
+    text.write_text('app:\n  web:\n    port: 5000\n    headless: true\n'
+                    '    cors_origins: "http://a:3000, https://b"\n', encoding="utf-8")
+    cfg = load_ui_config(text, tmp_path)
+    assert (cfg.web.headless, cfg.web.cors_origins) == (True, "http://a:3000, https://b")
+
+    listed = tmp_path / "list.yaml"
+    listed.write_text("app:\n  web:\n    port: 5000\n    cors_origins:\n      - http://a:3000\n      - '*'\n",
+                      encoding="utf-8")
+    assert load_ui_config(listed, tmp_path).web.cors_origins == "http://a:3000,*"
+
+
 def test_ui_config_reads_supertonic_paths(tmp_path) -> None:
-    """app.tts.supertonic persists the machine-specific Supertonic paths that
-    setup.sh wrote, and defaults apply when the section is absent."""
+    """app.tts.supertonic persists the machine-specific Supertonic models root
+    that setup.sh wrote; a pre-vendoring app_root maps to its models/ subdir and
+    defaults apply when the section is absent."""
     from shared.config import load_ui_config
 
     base = "app:\n  web:\n    port: 5000\n"
     with_paths = tmp_path / "with.yaml"
     with_paths.write_text(
+        base + "  tts:\n    supertonic:\n      models_root: /data/st-models\n", encoding="utf-8")
+    cfg = load_ui_config(with_paths, tmp_path)
+    assert cfg.supertonic.models_root == "/data/st-models"
+    assert cfg.supertonic.venv == ""
+
+    custom_venv = tmp_path / "venv.yaml"
+    custom_venv.write_text(
+        base + "  tts:\n    supertonic:\n      models_root: /data/st-models\n"
+        "      venv: /data/st-venv\n", encoding="utf-8")
+    assert load_ui_config(custom_venv, tmp_path).supertonic.venv == "/data/st-venv"
+
+    # A config written before the runtime was vendored named the parent dir.
+    legacy = tmp_path / "legacy.yaml"
+    legacy.write_text(
         base + "  tts:\n    supertonic:\n      repo_root: /data/st-repo\n"
         "      app_root: /data/st-app\n", encoding="utf-8")
-    cfg = load_ui_config(with_paths, tmp_path)
-    assert cfg.supertonic.repo_root == "/data/st-repo"
-    assert cfg.supertonic.app_root == "/data/st-app"
+    cfg = load_ui_config(legacy, tmp_path)
+    assert cfg.supertonic.models_root == "/data/st-app/models"
+    assert cfg.supertonic.venv == ""          # no <app_root>/.venv on this host
+
+    # ...and its runtime venv is carried over while it still exists.
+    app_root = tmp_path / "st-app"
+    (app_root / ".venv" / "bin").mkdir(parents=True)
+    (app_root / ".venv" / "bin" / "python").write_text("")
+    legacy_venv = tmp_path / "legacy-venv.yaml"
+    legacy_venv.write_text(base + f"  tts:\n    supertonic:\n      app_root: {app_root}\n", encoding="utf-8")
+    assert load_ui_config(legacy_venv, tmp_path).supertonic.venv == str(app_root / ".venv")
 
     without = tmp_path / "without.yaml"
     without.write_text(base, encoding="utf-8")
     cfg = load_ui_config(without, tmp_path)
-    assert cfg.supertonic.repo_root == "/media/nvme/repos/supertonic-sima"
-    assert cfg.supertonic.app_root == "/media/nvme/supertonic-tts"
+    assert cfg.supertonic.models_root == ""   # unset: the runtime default decides
 
 
 @pytest.mark.unit
@@ -107,6 +164,7 @@ __all__ = [
     "AsrSwitchingTests",
     "AsrWarmupBehaviourTests",
     "AsrWarmupPayloadTests",
+    "EncoderLayoutIsNotJudgedLocallyTests",
     "MlaFailureClassificationTests",
     "HubPathSecurityTests",
     "CliNoThinkRewriteTests",
@@ -114,8 +172,13 @@ __all__ = [
     "CliStreamTokenCountTests",
     "CliThinkSplitterTests",
     "AsrMetadataTests",
+    "AudioApiFormatTranscriptionTests",
+    "AudioApiSpeechRequestTests",
+    "AudioApiTranscriptionFormTests",
+    "AudioApiVoicesListingTests",
     "SupertonicClientConfigurationTests",
     "SupertonicDurationFallbackTests",
     "SupertonicEnvironmentDiscoveryTests",
     "SupertonicSegmentTextTests",
+    "SupertonicVendoredRuntimeTests",
 ]

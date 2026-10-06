@@ -16,3 +16,11 @@ sima_neat_apps_module(
   E2E_TEST
   OUTPUT_TARGET_VAR MULTISTREAM_POSE_ESTIMATOR_TARGET
 )
+
+# The unit test exercises the shared pull-outcome helper, which needs the Neat headers.
+if (TARGET multi-stream-pose-estimator_unit_test)
+  target_link_libraries(multi-stream-pose-estimator_unit_test
+    PRIVATE
+      SimaNeatApps::support_runtime
+  )
+endif()

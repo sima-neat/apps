@@ -675,6 +675,8 @@ body.rag-inspect-open { overflow: hidden; }
   border-radius: 999px; padding: 3px 9px;
 }
 .solutions-frame { flex: 1 1 auto; width: 100%; height: 100%; border: 0; display: block; }
+.playground-modal { background: var(--bg); color: var(--text); }
+body.playground-open { overflow: hidden; }
 body.solutions-open { overflow: hidden; }
 
 .bench-modal {
