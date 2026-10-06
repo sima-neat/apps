@@ -91,21 +91,22 @@ int run_calibrate_then_score(const std::string& binary, const std::string& model
 
   auto score = spawn_and_wait(binary, {"--config", config_path.string()}, timeout);
 
+  // One decodable overlay per input image.
+  const int expected_images = supported_image_count(input_dir);
   const int output_files = count_output_files(out_dir);
+  const std::string output_problem = saved_frames_problem(out_dir, expected_images);
 
   int rc = 0;
   if (score.exit_code != 0) {
     std::cerr << "[FAIL] exit code " << score.exit_code << "\n";
     std::cerr << "stderr:\n" << score.stderr_text << "\n";
     rc = 1;
-  } else if (output_files == 0) {
-    std::cerr << "[FAIL] expected overlay output files but output directory is empty\n";
-    rc = 1;
-  } else if (!all_output_files_nonempty(out_dir)) {
-    std::cerr << "[FAIL] some output files are empty\n";
+  } else if (!output_problem.empty()) {
+    std::cerr << "[FAIL] overlay output: " << output_problem << "\n";
     rc = 1;
   } else {
-    std::cout << "[OK] calibrate+score produced " << output_files << " output files\n";
+    std::cout << "[OK] calibrate+score produced " << output_files << " decodable overlays for "
+              << expected_images << " input images\n";
   }
 
   remove_dir(out_dir);

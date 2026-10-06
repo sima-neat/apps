@@ -2,6 +2,7 @@
 conventions. Calibrates on the bundled nominal set, scores the images in
 SIMANEAT_APPS_TEST_INPUT_DIR, and checks verdicts and overlays on the bundled
 held-out normal and defect images."""
+import json
 import os
 import re
 import subprocess
@@ -10,6 +11,8 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+
+from tests.utils.output_assertions import assert_saved_frames_are_usable, supported_image_files
 
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 APPS_ROOT = EXAMPLE_DIR.parent.parent.parent
@@ -96,8 +99,14 @@ class TestE2E:
             f"--calibrate exited with code {calibrate.returncode}\n"
             f"stdout:\n{calibrate.stdout}\nstderr:\n{calibrate.stderr}"
         )
-        assert bank_path.is_file() and bank_path.stat().st_size > 0
-        assert meta_path.is_file() and meta_path.stat().st_size > 0
+        bank = np.load(bank_path)
+        assert bank.ndim == 2 and bank.shape[0] > 0 and bank.shape[1] == 1536, (
+            f"memory bank has unexpected shape {bank.shape}"
+        )
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        assert meta["threshold"]["value"] > 0 and "patch_threshold" in meta, (
+            f"bank_meta.json is missing the calibrated thresholds: {meta}"
+        )
 
         score = subprocess.run(
             [sys.executable, str(MAIN_PY), "--config", str(config_path)],
@@ -108,13 +117,8 @@ class TestE2E:
             f"stdout:\n{score.stdout}\nstderr:\n{score.stderr}"
         )
 
-        output_files = [
-            path for path in tmp_output_dir.iterdir()
-            if path.is_file() and path.name != "config.yaml"
-        ]
-        assert output_files, "Expected overlay output files but output directory is empty"
-        for f in output_files:
-            assert f.stat().st_size > 0, f"Output file is empty: {f.name}"
+        # One decodable overlay per input image.
+        assert_saved_frames_are_usable(tmp_output_dir, len(supported_image_files(test_images_dir)))
 
     def test_partial_write_failure_fails_the_run(
         self,
