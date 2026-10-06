@@ -58,8 +58,9 @@ class RagPassageTests(unittest.TestCase):
         self.assertEqual(out[0]["content"], "Be brief.")
         question = out[1]["content"]
         self.assertTrue(question.startswith(rag_chat.INSTRUCTION))
-        self.assertIn("[1] Neat Library Overview › What Neat Is", question)
-        self.assertIn(HIT["content"], question)
+        self.assertIn("Information:\n" + HIT["content"], question)
+        self.assertNotIn("What Neat Is", question, "headings stay out of the prompt; small models copied them")
+        self.assertNotIn("[1]", question)
         self.assertTrue(question.endswith("Question: What is Neat?"))
         self.assertEqual(messages[1]["content"], "What is Neat?", "the request's own list is not changed")
 

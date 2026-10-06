@@ -19,10 +19,10 @@ MAX_K = 10
 # model's context.
 MAX_PASSAGE_CHARS = 1500
 
-INSTRUCTION = (
-    "Answer using the passages below from the user's documents when they are "
-    "relevant, and say so when they don't contain the answer."
-)
+# Plain wording and bare passage text: on a DevKit, Qwen3 0.6B copied
+# numbered labels, headings and longer instructions into its answers, and
+# answered correctly with this form (sources are reported in X-RAG-Sources).
+INSTRUCTION = "Use this information from my documents to answer the question."
 
 
 def rag_options(payload: dict) -> dict | None:
@@ -78,13 +78,8 @@ def with_passages(messages: list, hits: list) -> list:
     message, so one added mid-conversation would be ignored."""
     if not hits:
         return list(messages)
-    blocks = []
-    for i, hit in enumerate(hits, 1):
-        text = str(hit.get("content") or "").strip()[:MAX_PASSAGE_CHARS]
-        where = passage_source(hit)
-        label = " — ".join(p for p in (where["source"], where["heading"]) if p)
-        blocks.append(f"[{i}]{' ' + label if label else ''}\n{text}")
-    context = INSTRUCTION + "\n\n" + "\n\n".join(blocks) + "\n\nQuestion: "
+    passages = [str(hit.get("content") or "").strip()[:MAX_PASSAGE_CHARS] for hit in hits]
+    context = INSTRUCTION + "\n\nInformation:\n" + "\n\n".join(p for p in passages if p) + "\n\nQuestion: "
     out = [dict(m) for m in messages]
     last_user = max((i for i, m in enumerate(out) if m.get("role") == "user"), default=None)
     if last_user is None:
