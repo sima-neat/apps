@@ -1,4 +1,4 @@
-"""Multi-camera RTSP YOLO26 Insight example using pyneat."""
+"""Multi-stream, multi-class RTSP YOLO26 tracker with Insight output using pyneat."""
 
 from __future__ import annotations
 
@@ -14,7 +14,12 @@ import time
 
 import yaml
 
-from utils.tracker import PeopleTracker, TrackedDetection
+from utils.tracker import (
+    ClassTrackerConfig,
+    MultiClassTracker,
+    TrackedDetection,
+    parse_class_configs,
+)
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
 
@@ -36,20 +41,19 @@ class AppConfig:
     fps: int = 0
     max_inflight_per_stream: int = 4
     max_inflight_total: int = 16
-    person_class_id: int = 0
-    min_score: float = 0.55
+    min_score: float = 0.10
     nms_iou: float = 0.60
     max_detections: int = 50
     profile: bool = False
     warmup_frames: int = 30
-    tracker_iou_threshold: float = 0.3
-    tracker_max_missing: int = 15
+    tracker_classes: tuple[ClassTrackerConfig, ...] = ()
     insight_host: str = "127.0.0.1"
     video_port_base: int = 9000
     metadata_port_base: int = 9100
     video_enabled: bool = True
     save_dir: str = ""
     save_every: int = 0
+    detections_log: str = ""
 
 
 @dataclass
@@ -58,7 +62,7 @@ class StreamRuntime:
     url: str
     source_options: object
     metadata_sender: object
-    tracker: PeopleTracker
+    tracker: MultiClassTracker
     profile: "ProfileWindow"
     latest_debug_frame: object | None
     frame_w: int
@@ -66,6 +70,8 @@ class StreamRuntime:
     output_fps: int
     video_port: int
     processed: int = 0
+    closed: bool = False
+    detections_log: object | None = None
 
 
 @dataclass
@@ -148,7 +154,7 @@ def time_ms() -> float:
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Multi-camera RTSP YOLO26 Insight example")
+    parser = argparse.ArgumentParser(description="Multi-stream, multi-class RTSP YOLO26 tracker")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--validate-config-only", action="store_true")
     return parser.parse_args(argv)
@@ -225,8 +231,6 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("inference.max_inflight_per_stream must be -1 or > 0")
     if cfg.max_inflight_total != -1 and cfg.max_inflight_total <= 0:
         raise ValueError("inference.max_inflight_total must be -1 or > 0")
-    if cfg.person_class_id < 0:
-        raise ValueError("inference.person_class_id must be >= 0")
     if not 0.0 <= cfg.min_score <= 1.0:
         raise ValueError("inference.min_score must be between 0 and 1")
     if not 0.0 <= cfg.nms_iou <= 1.0:
@@ -235,10 +239,13 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("inference.max_detections must be > 0")
     if cfg.warmup_frames < 0:
         raise ValueError("runtime.warmup_frames must be >= 0")
-    if not 0.0 <= cfg.tracker_iou_threshold <= 1.0:
-        raise ValueError("tracking.iou_threshold must be between 0 and 1")
-    if cfg.tracker_max_missing < 0:
-        raise ValueError("tracking.max_missing_frames must be >= 0")
+    if not cfg.tracker_classes:
+        raise ValueError("tracking.classes must be set")
+    for class_cfg in cfg.tracker_classes:
+        if cfg.min_score > class_cfg.low_score_threshold:
+            raise ValueError(
+                f"inference.min_score must be <= low_score_threshold of class '{class_cfg.label}'"
+            )
     if cfg.video_port_base <= 0:
         raise ValueError("output.insight.video_port_base must be > 0")
     if cfg.metadata_port_base <= 0:
@@ -279,20 +286,19 @@ def load_app_config(config_path: Path) -> AppConfig:
         fps=int_or(inference, "fps", 0),
         max_inflight_per_stream=int_or(inference, "max_inflight_per_stream", 4),
         max_inflight_total=int_or(inference, "max_inflight_total", 16),
-        person_class_id=int_or(inference, "person_class_id", 0),
-        min_score=float_or(inference, "min_score", 0.55),
+        min_score=float_or(inference, "min_score", 0.10),
         nms_iou=float_or(inference, "nms_iou", 0.60),
         max_detections=int_or(inference, "max_detections", 50),
         profile=bool_or(runtime, "profile", False),
         warmup_frames=int_or(runtime, "warmup_frames", 30),
-        tracker_iou_threshold=float_or(tracking, "iou_threshold", 0.3),
-        tracker_max_missing=int_or(tracking, "max_missing_frames", 15),
+        tracker_classes=parse_class_configs(tracking.get("classes")),
         insight_host=string_or(insight, "host"),
         video_port_base=int_or(insight, "video_port_base", 9000),
         metadata_port_base=int_or(insight, "metadata_port_base", 9100),
         video_enabled=bool_or(output, "video_enabled", True),
         save_dir=string_or(output, "debug_dir"),
         save_every=int_or(output, "save_every", 0),
+        detections_log=string_or(output, "detections_log"),
     )
     validate_config(cfg)
     return cfg
@@ -360,27 +366,25 @@ def parse_boxes_strict(payload: bytes, img_w: int, img_h: int, expected_topk: in
     return boxes
 
 
-def filter_people(boxes: list[dict], person_class_id: int) -> list[dict]:
-    return [box for box in boxes if int(box["class_id"]) == person_class_id]
-
-
 def build_metadata_tracks(
     tracks: list[TrackedDetection], frame_w: int, frame_h: int
 ) -> list[dict]:
     metadata_tracks = []
     for track in tracks:
-        x = max(0, int(track.x1))
-        y = max(0, int(track.y1))
-        w = max(0, int(track.x2 - track.x1))
-        h = max(0, int(track.y2 - track.y1))
-        if x + w > frame_w:
-            w = frame_w - x
-        if y + h > frame_h:
-            h = frame_h - y
+        # Clip both endpoints before measuring: a predicted box can extend past
+        # either edge, and clamping only the origin leaves the width too large.
+        x1 = min(max(track.x1, 0.0), float(frame_w))
+        y1 = min(max(track.y1, 0.0), float(frame_h))
+        x2 = min(max(track.x2, 0.0), float(frame_w))
+        y2 = min(max(track.y2, 0.0), float(frame_h))
+        x = int(x1)
+        y = int(y1)
+        w = max(0, int(x2) - x)
+        h = max(0, int(y2) - y)
         metadata_tracks.append(
             {
                 "id": str(track.track_id),
-                "label": "person",
+                "label": track.label,
                 "confidence": float(track.score),
                 "bbox": [float(x), float(y), float(max(0, w)), float(max(0, h))],
             }
@@ -646,7 +650,7 @@ def build_stream_runtime(cfg: AppConfig, stream_index: int, url: str) -> StreamR
         url=url,
         source_options=source_options,
         metadata_sender=metadata_sender,
-        tracker=PeopleTracker(cfg.tracker_iou_threshold, cfg.tracker_max_missing),
+        tracker=MultiClassTracker(cfg.tracker_classes),
         profile=ProfileWindow(cfg.profile, stream_index),
         latest_debug_frame=None,
         frame_w=frame_w,
@@ -748,6 +752,13 @@ def tensor_bgr_from_decoded(tensor):
     return np.ascontiguousarray(frame)
 
 
+# BGR colors for debug overlays, indexed by track ID.
+TRACK_COLORS = (
+    (75, 25, 230), (75, 180, 60), (25, 225, 255), (200, 130, 0), (48, 130, 245),
+    (180, 30, 145), (240, 240, 70), (230, 50, 240), (60, 245, 210), (212, 190, 250),
+)
+
+
 def draw_tracks(frame, tracks: list[TrackedDetection], min_score: float) -> None:
     for track in tracks:
         score = float(track.score)
@@ -759,17 +770,32 @@ def draw_tracks(frame, tracks: list[TrackedDetection], min_score: float) -> None
         y2 = min(frame.shape[0] - 1, int(round(track.y2)))
         if x2 <= x1 or y2 <= y1:
             continue
-        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        label = f"track id={track.track_id} score={score:.6f}"
+        color = TRACK_COLORS[track.track_id % len(TRACK_COLORS)]
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+        label = f"{track.label} id={track.track_id} score={score:.2f}"
         cv2.putText(
             frame,
             label,
             (x1, max(0, y1 - 4)),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.4,
-            (0, 255, 0),
-            1,
+            0.6,
+            color,
+            2,
         )
+
+
+def write_detections_log(stream: StreamRuntime, boxes: list[dict]) -> None:
+    """Append this frame's raw detections as one JSON line for offline tracker replay."""
+    dets = [
+        [round(b["x1"], 1), round(b["y1"], 1), round(b["x2"], 1), round(b["y2"], 1),
+         round(b["score"], 4), b["class_id"]]
+        for b in boxes
+    ]
+    stream.detections_log.write(
+        json.dumps({"stream": stream.index, "frame": stream.processed, "dets": dets},
+                   separators=(",", ":"))
+        + "\n"
+    )
 
 
 def maybe_save_debug_frame(
@@ -787,10 +813,14 @@ def maybe_save_debug_frame(
         print(f"[warn] failed to write output frame: {out_path}", file=sys.stderr)
 
 
+# Consecutive empty 50 ms pulls tolerated before a finite run gives up on a source.
+IDLE_PULLS_BEFORE_CLOSE = 100
+
+
 def all_streams_done(streams: list[StreamRuntime], frame_limit: int) -> bool:
     if frame_limit <= 0:
         return False
-    return all(stream.processed >= frame_limit for stream in streams)
+    return all(stream.processed >= frame_limit or stream.closed for stream in streams)
 
 
 def process_output_sample(stream: StreamRuntime, cfg: AppConfig, sample, detection_pull_ms: float) -> None:
@@ -799,9 +829,10 @@ def process_output_sample(stream: StreamRuntime, cfg: AppConfig, sample, detecti
 
     payload = extract_bbox_payload(sample)
     boxes = parse_boxes_strict(payload, stream.frame_w, stream.frame_h, cfg.max_detections)
-    people = filter_people(boxes, cfg.person_class_id)
+    if stream.detections_log is not None:
+        write_detections_log(stream, boxes)
     tracker_start = time_ms()
-    tracks = stream.tracker.update(people, stream.processed)
+    tracks = stream.tracker.update(boxes, stream.processed)
     tracker_end = time_ms()
 
     stream.processed += 1
@@ -838,29 +869,16 @@ def drain_debug_frames(app: AppRuntime, cfg: AppConfig) -> None:
                 stream.latest_debug_frame = tensor_bgr_from_decoded(tensor)
 
 
-def pull_result_has_sample(run, sample, output_name: str) -> bool:
-    if sample is not None:
-        return True
-    last_error_fn = getattr(run, "last_error", None)
-    last_error = last_error_fn() if callable(last_error_fn) else ""
-    running_fn = getattr(run, "running", None)
-    running = running_fn() if callable(running_fn) else True
-    if not running:
-        message = f"{output_name} output closed unexpectedly"
-        if last_error:
-            message += f": {last_error}"
-        raise RuntimeError(message)
-    if last_error:
-        raise RuntimeError(f"runtime error: {last_error}")
-    return False
-
-
 def process_run_once(app: AppRuntime, cfg: AppConfig, output_name: str) -> bool:
     drain_debug_frames(app, cfg)
     pull_start = time_ms()
     sample = app.run.pull(output_name, 50)
     pull_end = time_ms()
-    if not pull_result_has_sample(app.run, sample, output_name):
+    if sample is None:
+        last_error_fn = getattr(app.run, "last_error", None)
+        last_error = last_error_fn() if callable(last_error_fn) else ""
+        if last_error:
+            raise RuntimeError(f"runtime error: {last_error}")
         return False
     stream_index = stream_index_from_sample(sample, len(app.streams))
     process_output_sample(app.streams[stream_index], cfg, sample, pull_end - pull_start)
@@ -881,6 +899,9 @@ def run_app(cfg: AppConfig) -> None:
     app = AppRuntime(graph=pyneat.Graph(), run=None, model=model, streams=[])
     for index, url in enumerate(cfg.rtsp_urls):
         stream = build_stream_runtime(cfg, index, url)
+        if cfg.detections_log:
+            stream.detections_log = open(f"{cfg.detections_log}.stream{index}.jsonl", "w",
+                                         encoding="utf-8")
         app.streams.append(stream)
         connect_stream_graph(app, cfg, stream, detector_graph)
     app.graph.connect(detector_graph, detections_graph)
@@ -889,14 +910,31 @@ def run_app(cfg: AppConfig) -> None:
         if cfg.profile:
             print(f"Backend:\n{app.graph.describe_backend()}")
         app.run = app.graph.build(build_run_options())
+        idle_pulls = 0
         while not all_streams_done(app.streams, cfg.frames):
-            process_run_once(app, cfg, "detections")
+            if process_run_once(app, cfg, "detections"):
+                idle_pulls = 0
+                continue
+            # A finite run must not hang when a source ends or drops before
+            # reaching the frame limit: nothing else marks a stream closed.
+            idle_pulls += 1
+            if cfg.frames > 0 and idle_pulls >= IDLE_PULLS_BEFORE_CLOSE:
+                for stream in app.streams:
+                    if stream.processed < cfg.frames and not stream.closed:
+                        stream.closed = True
+                        print(
+                            f"[warn] stream {stream.index} source ended after "
+                            f"{stream.processed} frames (requested {cfg.frames})",
+                            file=sys.stderr,
+                        )
     except KeyboardInterrupt:
         raise
     finally:
         if app.run is not None:
             app.run.close()
         for stream in app.streams:
+            if stream.detections_log is not None:
+                stream.detections_log.close()
             stream.profile.flush()
             print(f"[stream {stream.index}] processed={stream.processed}")
 
@@ -911,6 +949,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.validate_config_only:
             print(
                 f"Config validated: {args.config} (streams={len(cfg.rtsp_urls)}, "
+                f"classes={','.join(c.label for c in cfg.tracker_classes)}, "
                 f"max_inflight_per_stream={cfg.max_inflight_per_stream}, "
                 f"max_inflight_total={cfg.max_inflight_total})"
             )

@@ -16,16 +16,16 @@
 #include "neat/models.h"
 #include "neat/node_groups.h"
 #include "neat/nodes.h"
-#include "examples/tracking/multi-stream-people-tracker/src/cpp/utils/tracker_api.cpp"
+#include "examples/tracking/multi-stream-tracker/src/cpp/utils/tracker_api.cpp"
 #include "support/object_detection/obj_detection_utils.h"
 #include "support/runtime/config_utils.h"
 #include "support/runtime/example_utils.h"
-#include "support/runtime/pull_status.h"
 
 #include <nodes/groups/VideoSender.h>
 #include <nodes/io/MetadataSender.h>
 
 #include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -35,6 +35,8 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
+#include <sstream>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -42,9 +44,10 @@
 #include <vector>
 
 namespace fs = std::filesystem;
-using multi_stream_people_tracker::Detection;
-using multi_stream_people_tracker::PeopleTracker;
-using multi_stream_people_tracker::TrackedDetection;
+using multi_stream_tracker::Detection;
+using multi_stream_tracker::ClassTrackerConfig;
+using multi_stream_tracker::MultiClassTracker;
+using multi_stream_tracker::TrackedDetection;
 
 namespace {
 
@@ -65,20 +68,19 @@ struct AppConfig {
   int fps = 0;
   int max_inflight_per_stream = 4;
   int max_inflight_total = 16;
-  int person_class_id = 0;
-  double min_score = 0.55;
+  double min_score = 0.10;
   double nms_iou = 0.60;
   int max_detections = 50;
   bool profile = false;
   int warmup_frames = 30;
-  float tracker_iou_threshold = 0.3f;
-  int tracker_max_missing = 15;
+  std::vector<ClassTrackerConfig> tracker_classes;
   std::string insight_host = "127.0.0.1";
   int video_port_base = 9000;
   int metadata_port_base = 9100;
   bool video_enabled = true;
   fs::path save_dir;
   int save_every = 0;
+  std::string detections_log;
 };
 
 std::string lower_copy(std::string value) {
@@ -153,7 +155,7 @@ struct StreamRuntime {
   std::string url;
   simaai::neat::nodes::groups::RtspDecodedInputOptions source_options;
   std::unique_ptr<simaai::neat::MetadataSender> metadata_sender;
-  PeopleTracker tracker;
+  MultiClassTracker tracker;
   ProfileWindow profile;
   std::optional<cv::Mat> latest_debug_frame;
   int frame_w = 0;
@@ -161,6 +163,8 @@ struct StreamRuntime {
   int output_fps = 0;
   int video_port = 0;
   int processed = 0;
+  bool closed = false;
+  std::unique_ptr<std::ofstream> detections_log;
 };
 
 struct AppRuntime {
@@ -265,6 +269,102 @@ std::vector<std::string> parse_streams(const fs::path& config_path) {
   return streams;
 }
 
+int leading_spaces(const std::string& line) {
+  int indent = 0;
+  while (indent < static_cast<int>(line.size()) &&
+         (line[static_cast<std::size_t>(indent)] == ' ' ||
+          line[static_cast<std::size_t>(indent)] == '\t')) {
+    ++indent;
+  }
+  return indent;
+}
+
+/// Reads `tracking.classes` as a list of flat `key: value` mappings.
+std::vector<multi_stream_tracker::ClassEntry> parse_tracking_classes(const fs::path& config_path) {
+  std::ifstream input(config_path);
+  if (!input.is_open()) {
+    throw std::runtime_error("failed to open config file: " + config_path.string());
+  }
+
+  std::vector<multi_stream_tracker::ClassEntry> entries;
+  int tracking_indent = -1;
+  int classes_indent = -1;
+  int item_indent = -1;
+  bool found = false;
+  std::string raw_line;
+  while (std::getline(input, raw_line)) {
+    const std::string without_comment = strip_inline_comment(raw_line);
+    const std::string line = sima_examples::trim_copy(without_comment);
+    if (line.empty()) {
+      continue;
+    }
+    const int indent = leading_spaces(without_comment);
+
+    // A block list may indent its entries at or beyond the owning key, so a
+    // `- ` line level with `classes:` still belongs to the list.
+    const bool list_item = line == "-" || line.rfind("- ", 0) == 0;
+
+    if (tracking_indent >= 0 && indent <= tracking_indent) {
+      tracking_indent = -1;
+      classes_indent = -1;
+    }
+    if (classes_indent >= 0 && indent <= classes_indent &&
+        !(list_item && indent == classes_indent)) {
+      classes_indent = -1;
+    }
+    if (tracking_indent < 0 && indent == 0 && line == "tracking:") {
+      tracking_indent = indent;
+      continue;
+    }
+    if (tracking_indent < 0) {
+      continue;
+    }
+    if (classes_indent < 0) {
+      if (line.rfind("classes:", 0) == 0) {
+        if (sima_examples::trim_copy(line.substr(8)) != "") {
+          throw std::runtime_error("tracking.classes must be a block list of mappings");
+        }
+        classes_indent = indent;
+        found = true;
+      }
+      continue;
+    }
+
+    std::string item = line;
+    if (list_item) {
+      if (item_indent >= 0 && indent != item_indent) {
+        throw std::runtime_error("tracking.classes entries must use the same indentation");
+      }
+      item_indent = indent;
+      entries.emplace_back();
+      item = sima_examples::trim_copy(item.substr(1));
+      if (item.empty()) {
+        continue;
+      }
+    } else if (entries.empty() || indent <= item_indent) {
+      throw std::runtime_error("tracking.classes entries must start with '- '");
+    }
+    const auto colon = item.find(':');
+    if (colon == std::string::npos) {
+      throw std::runtime_error("tracking.classes[" + std::to_string(entries.size() - 1) +
+                               "] must be a mapping with a 'class' key");
+    }
+    const std::string key = sima_examples::trim_copy(item.substr(0, colon));
+    for (const auto& existing : entries.back()) {
+      if (existing.first == key) {
+        throw std::runtime_error("tracking.classes[" + std::to_string(entries.size() - 1) +
+                                 "]: repeated key '" + key + "'");
+      }
+    }
+    entries.back().emplace_back(key, unquote(item.substr(colon + 1)));
+  }
+  if (!found) {
+    throw std::runtime_error("tracking.classes must list 1 to " +
+                             std::to_string(multi_stream_tracker::kMaxClasses) + " classes");
+  }
+  return entries;
+}
+
 void validate_config(const AppConfig& cfg) {
   sima_examples::require(!cfg.model_path.empty(), "model.path must be set");
   sima_examples::require(!cfg.rtsp_urls.empty(), "streams must be set");
@@ -277,16 +377,18 @@ void validate_config(const AppConfig& cfg) {
                          "inference.max_inflight_per_stream must be -1 or > 0");
   sima_examples::require(cfg.max_inflight_total == -1 || cfg.max_inflight_total > 0,
                          "inference.max_inflight_total must be -1 or > 0");
-  sima_examples::require(cfg.person_class_id >= 0, "inference.person_class_id must be >= 0");
   sima_examples::require(cfg.min_score >= 0.0 && cfg.min_score <= 1.0,
                          "inference.min_score must be between 0 and 1");
   sima_examples::require(cfg.nms_iou >= 0.0 && cfg.nms_iou <= 1.0,
                          "inference.nms_iou must be between 0 and 1");
   sima_examples::require(cfg.max_detections > 0, "inference.max_detections must be > 0");
   sima_examples::require(cfg.warmup_frames >= 0, "runtime.warmup_frames must be >= 0");
-  sima_examples::require(cfg.tracker_iou_threshold >= 0.0f && cfg.tracker_iou_threshold <= 1.0f,
-                         "tracking.iou_threshold must be between 0 and 1");
-  sima_examples::require(cfg.tracker_max_missing >= 0, "tracking.max_missing_frames must be >= 0");
+  sima_examples::require(!cfg.tracker_classes.empty(), "tracking.classes must be set");
+  for (const auto& class_cfg : cfg.tracker_classes) {
+    sima_examples::require(cfg.min_score <= class_cfg.low_score_threshold,
+                           "inference.min_score must be <= low_score_threshold of class '" +
+                               class_cfg.label + "'");
+  }
   sima_examples::require(cfg.video_port_base > 0, "output.insight.video_port_base must be > 0");
   sima_examples::require(cfg.metadata_port_base > 0,
                          "output.insight.metadata_port_base must be > 0");
@@ -306,20 +408,20 @@ AppConfig load_app_config(const fs::path& config_path) {
   cfg.fps = raw.int_or("inference.fps", 0);
   cfg.max_inflight_per_stream = raw.int_or("inference.max_inflight_per_stream", 4);
   cfg.max_inflight_total = raw.int_or("inference.max_inflight_total", 16);
-  cfg.person_class_id = raw.int_or("inference.person_class_id", 0);
-  cfg.min_score = raw.double_or("inference.min_score", 0.55);
+  cfg.min_score = raw.double_or("inference.min_score", 0.10);
   cfg.nms_iou = raw.double_or("inference.nms_iou", 0.60);
   cfg.max_detections = raw.int_or("inference.max_detections", 50);
   cfg.profile = raw.bool_or("runtime.profile", false);
   cfg.warmup_frames = raw.int_or("runtime.warmup_frames", 30);
-  cfg.tracker_iou_threshold = static_cast<float>(raw.double_or("tracking.iou_threshold", 0.3));
-  cfg.tracker_max_missing = raw.int_or("tracking.max_missing_frames", 15);
+  cfg.tracker_classes =
+      multi_stream_tracker::parse_class_configs(parse_tracking_classes(config_path));
   cfg.insight_host = raw.string_or("output.insight.host", "");
   cfg.video_port_base = raw.int_or("output.insight.video_port_base", 9000);
   cfg.metadata_port_base = raw.int_or("output.insight.metadata_port_base", 9100);
   cfg.video_enabled = raw.bool_or("output.video_enabled", true);
   cfg.save_dir = raw.string_or("output.debug_dir", "");
   cfg.save_every = raw.int_or("output.save_every", 0);
+  cfg.detections_log = raw.string_or("output.detections_log", "");
   validate_config(cfg);
   return cfg;
 }
@@ -345,16 +447,13 @@ bool extract_bbox_payload(const simaai::neat::Sample& sample, std::vector<std::u
   return objdet::extract_bbox_payload(sample, payload, err);
 }
 
-std::vector<Detection> filter_people(const std::vector<objdet::Box>& boxes, int person_class_id) {
-  std::vector<Detection> people;
-  people.reserve(boxes.size());
+std::vector<Detection> to_detections(const std::vector<objdet::Box>& boxes) {
+  std::vector<Detection> detections;
+  detections.reserve(boxes.size());
   for (const auto& box : boxes) {
-    if (box.class_id != person_class_id) {
-      continue;
-    }
-    people.push_back(Detection{box.x1, box.y1, box.x2, box.y2, box.score, box.class_id});
+    detections.push_back(Detection{box.x1, box.y1, box.x2, box.y2, box.score, box.class_id});
   }
-  return people;
+  return detections;
 }
 
 std::vector<sima_examples::MetadataBox>
@@ -362,23 +461,16 @@ build_metadata_tracks(const std::vector<TrackedDetection>& tracks, int frame_w, 
   std::vector<sima_examples::MetadataBox> metadata_boxes;
   metadata_boxes.reserve(tracks.size());
   for (const auto& track : tracks) {
-    int x1 = std::max(0, static_cast<int>(track.x1));
-    int y1 = std::max(0, static_cast<int>(track.y1));
-    int w = std::max(0, static_cast<int>(track.x2 - track.x1));
-    int h = std::max(0, static_cast<int>(track.y2 - track.y1));
-    if (x1 + w > frame_w)
-      w = frame_w - x1;
-    if (y1 + h > frame_h)
-      h = frame_h - y1;
+    const auto box = multi_stream_tracker::clip_box_to_frame(track, frame_w, frame_h);
 
     sima_examples::MetadataBox obj;
     obj.id = std::to_string(track.track_id);
-    obj.label = "person";
+    obj.label = track.label;
     obj.confidence = track.score;
-    obj.x = static_cast<float>(x1);
-    obj.y = static_cast<float>(y1);
-    obj.w = static_cast<float>(std::max(0, w));
-    obj.h = static_cast<float>(std::max(0, h));
+    obj.x = static_cast<float>(box.x);
+    obj.y = static_cast<float>(box.y);
+    obj.w = static_cast<float>(box.w);
+    obj.h = static_cast<float>(box.h);
     metadata_boxes.push_back(obj);
   }
   return metadata_boxes;
@@ -629,7 +721,7 @@ StreamRuntime build_stream_runtime(const AppConfig& cfg, int stream_index, const
   StreamRuntime runtime;
   runtime.index = stream_index;
   runtime.url = url;
-  runtime.tracker = PeopleTracker(cfg.tracker_iou_threshold, cfg.tracker_max_missing);
+  runtime.tracker = MultiClassTracker(cfg.tracker_classes);
   const auto source_options =
       build_source_options(cfg, url, runtime.output_fps, runtime.frame_w, runtime.frame_h);
   sima_examples::require(runtime.frame_w > 0 && runtime.frame_h > 0,
@@ -711,6 +803,26 @@ void send_metadata(StreamRuntime& stream, const simaai::neat::Sample& sample,
   }
 }
 
+/// Appends this frame's raw detections as one JSON line for offline tracker replay.
+void write_detections_log(StreamRuntime& stream, const std::vector<Detection>& detections) {
+  std::ostringstream line;
+  line << std::fixed << "{\"stream\":" << stream.index << ",\"frame\":" << stream.processed
+       << ",\"dets\":[";
+  for (std::size_t i = 0; i < detections.size(); ++i) {
+    const auto& d = detections[i];
+    line << (i ? "," : "") << std::setprecision(1) << "[" << d.x1 << "," << d.y1 << "," << d.x2
+         << "," << d.y2 << "," << std::setprecision(4) << d.score << "," << d.class_id << "]";
+  }
+  line << "]}\n";
+  *stream.detections_log << line.str();
+}
+
+// BGR colors for debug overlays, indexed by track ID.
+const std::vector<cv::Scalar> kTrackColors = {
+    {75, 25, 230},  {75, 180, 60},  {25, 225, 255}, {200, 130, 0},  {48, 130, 245},
+    {180, 30, 145}, {240, 240, 70}, {230, 50, 240}, {60, 245, 210}, {212, 190, 250},
+};
+
 void maybe_save_debug_frame(const AppConfig& cfg, const StreamRuntime& stream, const cv::Mat* frame,
                             const std::vector<TrackedDetection>& tracks) {
   if (cfg.save_dir.empty() || cfg.save_every <= 0 || stream.processed % cfg.save_every != 0) {
@@ -721,13 +833,23 @@ void maybe_save_debug_frame(const AppConfig& cfg, const StreamRuntime& stream, c
   }
 
   cv::Mat bgr = frame->clone();
-  std::vector<objdet::Box> draw_boxes;
-  draw_boxes.reserve(tracks.size());
   for (const auto& track : tracks) {
-    draw_boxes.push_back(
-        objdet::Box{track.x1, track.y1, track.x2, track.y2, track.score, track.track_id});
+    const int x1 = std::max(0, static_cast<int>(std::lround(track.x1)));
+    const int y1 = std::max(0, static_cast<int>(std::lround(track.y1)));
+    const int x2 = std::min(bgr.cols - 1, static_cast<int>(std::lround(track.x2)));
+    const int y2 = std::min(bgr.rows - 1, static_cast<int>(std::lround(track.y2)));
+    if (track.score < cfg.min_score || x2 <= x1 || y2 <= y1) {
+      continue;
+    }
+    char score[16];
+    std::snprintf(score, sizeof(score), "%.2f", track.score);
+    const std::string label =
+        track.label + " id=" + std::to_string(track.track_id) + " score=" + score;
+    const cv::Scalar& color = kTrackColors[static_cast<std::size_t>(track.track_id) % kTrackColors.size()];
+    cv::rectangle(bgr, cv::Point(x1, y1), cv::Point(x2, y2), color, 2);
+    cv::putText(bgr, label, cv::Point(x1, std::max(0, y1 - 4)), cv::FONT_HERSHEY_SIMPLEX, 0.6, color,
+                2);
   }
-  objdet::draw_boxes(bgr, draw_boxes, cfg.min_score, cv::Scalar(0, 255, 0), "track ");
   const auto out_path = cfg.save_dir / ("stream_" + std::to_string(stream.index) + "_frame_" +
                                         std::to_string(stream.processed) + ".jpg");
   if (!cv::imwrite(out_path.string(), bgr)) {
@@ -740,7 +862,7 @@ bool all_streams_done(const std::vector<StreamRuntime>& streams, int frame_limit
     return false;
   }
   return std::all_of(streams.begin(), streams.end(), [frame_limit](const StreamRuntime& stream) {
-    return stream.processed >= frame_limit;
+    return stream.processed >= frame_limit || stream.closed;
   });
 }
 
@@ -758,9 +880,12 @@ void process_output_sample(StreamRuntime& stream, const AppConfig& cfg,
   }
   const auto boxes = objdet::parse_boxes_strict(payload, stream.frame_w, stream.frame_h,
                                                 cfg.max_detections, false);
-  const auto people = filter_people(boxes, cfg.person_class_id);
+  const auto detections = to_detections(boxes);
+  if (stream.detections_log) {
+    write_detections_log(stream, detections);
+  }
   const double tracker_start = sima_examples::time_ms();
-  const auto tracks = stream.tracker.update(people, stream.processed);
+  const auto tracks = stream.tracker.update(detections, stream.processed);
   const double tracker_end = sima_examples::time_ms();
 
   ++stream.processed;
@@ -823,9 +948,11 @@ bool process_run_once(AppRuntime& app, const AppConfig& cfg, const std::string& 
   simaai::neat::PullError pull_error;
   const auto status = app.run.pull(output_name, kPullTimeoutMs, sample, &pull_error);
   const double pull_end = sima_examples::time_ms();
-  if (!sima_examples::pull_status_has_sample(status, output_name, pull_error,
-                                             app.run.last_error())) {
+  if (status == simaai::neat::PullStatus::Timeout || status == simaai::neat::PullStatus::Closed) {
     return false;
+  }
+  if (status != simaai::neat::PullStatus::Ok) {
+    throw std::runtime_error("failed to pull " + output_name + ": " + pull_error.message);
   }
   const int stream_index = stream_index_from_sample(sample, static_cast<int>(app.streams.size()));
   process_output_sample(app.streams[static_cast<std::size_t>(stream_index)], cfg, sample,
@@ -853,6 +980,12 @@ void run_app(const AppConfig& cfg) {
 
   for (std::size_t index = 0; index < cfg.rtsp_urls.size(); ++index) {
     app.streams.push_back(build_stream_runtime(cfg, static_cast<int>(index), cfg.rtsp_urls[index]));
+    if (!cfg.detections_log.empty()) {
+      const std::string path = cfg.detections_log + ".stream" + std::to_string(index) + ".jsonl";
+      app.streams.back().detections_log = std::make_unique<std::ofstream>(path);
+      sima_examples::require(app.streams.back().detections_log->is_open(),
+                             "failed to open output.detections_log: " + path);
+    }
     connect_stream_graph(app, cfg, app.streams.back(), detector_graph);
   }
   app.graph.connect(detector_graph, detections_graph);
@@ -887,8 +1020,12 @@ int main(int argc, char** argv) {
 
     const AppConfig cfg = load_app_config(cli.config_path);
     if (cli.validate_config_only) {
+      std::string classes;
+      for (const auto& class_cfg : cfg.tracker_classes) {
+        classes += (classes.empty() ? "" : ",") + class_cfg.label;
+      }
       std::cout << "Config validated: " << cli.config_path << " (streams=" << cfg.rtsp_urls.size()
-                << ", max_inflight_per_stream=" << cfg.max_inflight_per_stream
+                << ", classes=" << classes << ", max_inflight_per_stream=" << cfg.max_inflight_per_stream
                 << ", max_inflight_total=" << cfg.max_inflight_total << ")\n";
       return 0;
     }

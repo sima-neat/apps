@@ -69,12 +69,12 @@ def test_generate_catalog_uses_repo_level_portal_assets_for_example():
         APPS_ROOT
         / "examples"
         / "tracking"
-        / "multi-stream-people-tracker"
+        / "multi-stream-tracker"
     )
 
     assert module.find_image_path(app_dir) == (
         "portal/assets/examples/tracking/"
-        "multi-stream-people-tracker/image.png"
+        "multi-stream-tracker/image.png"
     )
 
 
