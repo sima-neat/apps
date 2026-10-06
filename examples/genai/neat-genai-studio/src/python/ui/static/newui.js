@@ -87,6 +87,11 @@ function getChatModelCapabilities() {
 // The dropdown is only a *selection* that the Load button acts on, so it can
 // differ from the active model while the user browses the catalog.
 let _activeChatModel = '';
+// Resident chat/VLM models, most recently used first, and how many the server
+// keeps resident at once (from /models/catalog). Above one, several models stay
+// loaded and the main page lets the user pick which one answers.
+let _residentChatModels = [];
+let _maxResidentChatModels = 1;
 // Match the original Multimodal Assistant behavior: automatically enable image
 // prompting whenever a vision-capable model becomes active.
 let _visionPromptModel = '';
@@ -4005,6 +4010,8 @@ async function refreshCatalog() {
     const data = await resp.json();
     if (!data || !Array.isArray(data.catalog)) throw new Error('malformed catalog');
     const catalog = data.catalog;
+    if (Array.isArray(data.resident)) _residentChatModels = data.resident;
+    if (data.maxResident) _maxResidentChatModels = Math.max(1, Number(data.maxResident) || 1);
     // Update capabilities so vision detection works for any catalog model.
     const caps = window.SIMA_CONFIG.chatModelCapabilities || {};
     catalog.forEach(m => {
@@ -4074,11 +4081,15 @@ function populateModelSelect(catalog) {
   }
   select.value = selection;
 
-  // Active model = the one actually resident. With the control API only one
-  // chat/VLM is loaded at a time; in static mode every model is preloaded so
-  // the active one follows the current selection.
+  // Active model = the resident one chat requests go to. With the control API
+  // several chat/VLM models can be resident: keep the user's pick while it stays
+  // loaded, else follow the most recently used one (the server's LRU order). In
+  // static mode every model is preloaded so the active one follows the selection.
   if (controlEnabled()) {
-    _activeChatModel = loaded.includes(defaultModel) ? defaultModel : (loaded[0] || '');
+    if (!loaded.includes(_activeChatModel)) {
+      const mru = _residentChatModels.find(n => loaded.includes(n));
+      _activeChatModel = mru || (loaded.includes(defaultModel) ? defaultModel : (loaded[0] || ''));
+    }
   } else {
     _activeChatModel = select.value || defaultModel || (chatModels[0] && chatModels[0].name) || '';
   }
@@ -4216,6 +4227,15 @@ function renderInstalledList() {
       del.addEventListener('click', (e) => { e.stopPropagation(); deleteModel(m.name); });
       row.appendChild(del);
 
+      if (m.loaded && !isActive) {
+        const use = document.createElement('button');
+        use.className = 'setting-button model-action'; use.type = 'button';
+        use.textContent = 'Use'; use.disabled = busy;
+        use.title = `Chat with ${m.name} (already loaded)`;
+        use.addEventListener('click', (e) => { e.stopPropagation(); activateLoadedModel(m.name); });
+        row.appendChild(use);
+      }
+
       const btn = document.createElement('button');
       btn.className = 'setting-button model-action'; btn.type = 'button';
       if (m.loaded) {
@@ -4287,6 +4307,64 @@ function updateActiveModelPill() {
     }
   }
   updateHomeModelIndicator();
+  renderModelSwitchers();
+}
+
+// With more than one chat/VLM model resident, the header pill and the home
+// screen become a picker so the user can choose which model answers without
+// opening Settings. Switching is instant: every listed model is already loaded.
+function renderModelSwitchers() {
+  const loaded = _catalog.filter(m => (m.type || 'chat') !== 'asr' && m.loaded).map(m => m.name);
+  const multi = loaded.length > 1;
+  const active = getSelectedChatModel();
+  [['headerModelSwitch', 'headerModelName', 'headerModelSwitch'],
+   ['homeModelSwitch', 'homeModelIndicator', 'homeModelSwitchWrap']].forEach(([selId, plainId, wrapId]) => {
+    const sel = document.getElementById(selId);
+    const plain = document.getElementById(plainId);
+    const wrap = document.getElementById(wrapId);
+    if (!sel || !wrap) return;
+    if (plain) plain.style.display = multi ? 'none' : '';
+    wrap.style.display = multi ? '' : 'none';
+    if (!multi) return;
+    const want = loaded.join('\n');
+    if (sel.dataset.models !== want) {
+      sel.dataset.models = want;
+      while (sel.firstChild) sel.removeChild(sel.firstChild);
+      loaded.forEach(name => {
+        const option = document.createElement('option');
+        option.value = name;
+        option.textContent = name;
+        sel.appendChild(option);
+      });
+    }
+    sel.value = active;
+    sel.disabled = serverBusy();
+  });
+}
+
+// Make an already-resident model the one chat requests go to. Nothing loads, so
+// this is instant; the server is told only so its least-recently-used order —
+// which decides what the next load evicts — follows the user's choice.
+async function activateLoadedModel(name) {
+  if (!name || name === getSelectedChatModel() || serverBusy()) return;
+  if (!controlEnabled()) {
+    selectInstalledModel(name);
+    return;
+  }
+  _activeChatModel = name;
+  setModelStatus(`Active: ${name}`, 'ready');
+  updateActiveModelPill();
+  updateManageButtons();
+  if (typeof updateSelectedModelVisionState === 'function') updateSelectedModelVisionState();
+  try {
+    await fetch('/models/load', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name })
+    });
+  } catch (err) {
+    console.warn('Could not mark the model most recently used:', err);
+  }
+  await refreshCatalog();
 }
 
 // Show the active model on the home (empty) screen so it is clear which model
@@ -4315,6 +4393,7 @@ function updateHomeModelIndicator() {
 function updateManageButtons() {
   renderInstalledList();
   renderAsrList();
+  renderModelSwitchers();   // locked while a model operation is in flight
   updateComposerEnabled();
 }
 
@@ -4367,6 +4446,11 @@ function initModelManage() {
   // Info / delete / load / unload are per-row buttons in the list now.
   const sel = document.getElementById('chatModelSelect');
   if (sel) sel.addEventListener('change', updateManageButtons);
+
+  ['headerModelSwitch', 'homeModelSwitch'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('change', () => activateLoadedModel(el.value));
+  });
 
   const retry = document.getElementById('modelLoadRetry');
   const viewLogs = document.getElementById('modelLoadErrorLogs');
@@ -4742,8 +4826,8 @@ async function loadModelAndActivate(name) {
   const select = document.getElementById('chatModelSelect');
   const option = select && Array.from(select.options).find(o => o.value === name);
   if (option && option.dataset.loaded === 'true') {
-    if (typeof updateSelectedModelVisionState === 'function') updateSelectedModelVisionState();
-    return; // already resident
+    await activateLoadedModel(name);   // already resident: just switch to it
+    return;
   }
   // Incomplete weights can't load — surface it directly.
   if (option && option.dataset.complete === 'false') {
@@ -4758,10 +4842,9 @@ async function loadModelAndActivate(name) {
   updateManageButtons();
   clearModelError();
   await resetLoadLog();
-  // Loading a chat/VLM model evicts the currently-resident one — say so explicitly.
-  const resident = select
-    ? Array.from(select.options).filter(o => o.dataset.loaded === 'true' && o.value !== name).map(o => o.value)
-    : [];
+  // Loading a chat/VLM model evicts the least recently used ones beyond the
+  // resident limit — say so explicitly.
+  const resident = _residentChatModels.filter(n => n !== name).slice(_maxResidentChatModels - 1);
   const switchNote = resident.length ? `Unloading ${resident.join(', ')} — ` : '';
   setModelStatus(`${switchNote}Loading ${name}… preparing`, 'loading');
   setModelLoadBar('active');
@@ -4781,6 +4864,7 @@ async function loadModelAndActivate(name) {
     const secs = (typeof data.load_seconds === 'number') ? data.load_seconds : null;
     const timeNote = (secs != null && secs > 0) ? ` in ${secs.toFixed(1)}s` : '';
     setModelStatus(`Ready: ${name}${timeNote}${evictedNote}`, 'ready');
+    _activeChatModel = data.name || name;   // the new model answers from now on
     // A newly loaded model starts with a fresh context — clear the chat.
     newChat();
   } catch (err) {

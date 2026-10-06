@@ -39,6 +39,7 @@
         <div class="model-name-pill header-pill" id="headerModelPill" title="Active model" style="display: none;">
           <span class="header-pill-dot"></span>
           <span id="headerModelName"></span>
+          <select id="headerModelSwitch" class="model-switch" aria-label="Model that answers" style="display: none;"></select>
         </div>
         <button id="newChatButton" class="header-icon-btn" type="button" title="New chat" aria-label="New chat">
           <img src="{{ url_for('static', filename='icons/refresh.png') }}" alt="New chat" width="16" height="16">
@@ -148,6 +149,10 @@
               <span class="chat-empty-model-dot"></span>
               <span id="homeModelName">No model loaded</span>
             </button>
+            <label class="chat-empty-model loaded" id="homeModelSwitchWrap" title="Loaded models — pick the one that answers" style="display: none;">
+              <span class="chat-empty-model-dot"></span>
+              <select id="homeModelSwitch" class="model-switch" aria-label="Model that answers"></select>
+            </label>
             <div class="suggest-row">
               <button class="suggest-chip" data-q="Explain Einstein's mass–energy equivalence, E = mc², and what it means."
                 onclick="useSuggestion(this)">Explain E = mc²</button>

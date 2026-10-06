@@ -61,6 +61,15 @@ class _ControlHandler(BaseHTTPRequestHandler):
         except Exception:
             return {}
 
+    def _catalog_payload(self) -> dict:
+        # The resident order (most recently used first) and the limit let the
+        # UI pick the active chat model and predict which load evicts what.
+        return {
+            "catalog": self.manager.scan_catalog(),
+            "resident": self.manager.resident(),
+            "maxResident": self.manager.max_resident,
+        }
+
     def do_GET(self) -> None:  # noqa: N802
         parsed = urllib.parse.urlsplit(self.path)
         path = parsed.path.rstrip("/")
@@ -72,7 +81,7 @@ class _ControlHandler(BaseHTTPRequestHandler):
                 after = int((query.get("after", ["0"])[0]) or 0)
                 self._send_json(self.manager.load_logs(after))
             elif path == "/control/catalog":
-                self._send_json({"catalog": self.manager.scan_catalog()})
+                self._send_json(self._catalog_payload())
             elif path == "/control/card":
                 name = (query.get("name", [""])[0])
                 self._send_json(self.manager.model_card(name))
@@ -98,7 +107,7 @@ class _ControlHandler(BaseHTTPRequestHandler):
             elif path == "/control/delete":
                 self._send_json(self.manager.delete(str(body.get("name", ""))))
             elif path == "/control/rescan":
-                self._send_json({"catalog": self.manager.scan_catalog()})
+                self._send_json(self._catalog_payload())
             elif path == "/control/benchmark":
                 self._send_json(self.manager.benchmark_start(
                     num_samples=body.get("num_samples", 5),

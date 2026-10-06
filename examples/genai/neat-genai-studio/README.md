@@ -84,6 +84,7 @@ Edit `config.local.yaml` only to change:
 
 - `server.models.catalog_dir`: the directory scanned for models (default `/media/nvme/llima/models`).
 - `server.models.chat`: chat or vision-language models to load at startup (none by default).
+- `server.models.max_resident_chat_models`: how many chat or vision-language models stay loaded at once (default `1`; see [Keep several models loaded](#keep-several-models-loaded)).
 - `server.models.asr`: the speech-to-text model active at startup. Models from Hugging Face accounts other than `simaai` are named `<org>@<name>`, for example `florianvoss@whisper-small-a16w8-layered-encoder`.
 - `server.hub.allow_download`: whether the interface may download models from Hugging Face.
 - `app.rag.enabled`: retrieval-augmented search.
@@ -159,8 +160,9 @@ Other useful environment variables:
   catalog, e.g. `florianvoss/whisper-medium-a16w8-layered-encoder`, so you can
   switch between them
   at runtime from **Settings → Models**.
-- `MAX_RESIDENT_CHAT_MODELS`: kept for advanced use; by default only one
-  chat/VLM model is resident and loading a new one clears the others.
+- `MAX_RESIDENT_CHAT_MODELS`: how many chat/VLM models stay loaded at once
+  (default `1`: loading a new model replaces the loaded one). See
+  [Keep several models loaded](#keep-several-models-loaded).
 - `ALLOW_HUB_DOWNLOAD`: `true`/`false` to enable/disable in-UI Hugging Face
   downloads (default `true`).
 - `HUB_ORGS`: space-separated Hugging Face accounts the in-UI browser searches
@@ -279,15 +281,39 @@ An explicit `/image` still takes precedence for that one message.
 ### Switch models on the fly
 The **Settings → Models** tab shows models downloaded to the board in a searchable list. Loaded models are marked
 `● loaded`, on-disk ones `○ downloaded`; press **Load** on a not-yet-loaded model
-to load it at runtime and unload all other chat/VLM models (speech-to-text has
-its own slot and is untouched), so the MLA holds just the active model. A **Load status** panel pins to the
-top of the tab and shows the live progress bar while it loads. The studio cancels
-the outgoing model's in-flight generation and waits for its memory to be released
-before loading the new one, then warms it so your first message is instant.
+to load it at runtime. By default the Studio keeps one chat/VLM model loaded, so
+loading another unloads it (speech-to-text has its own slot and is untouched). A
+**Load status** panel pins to the top of the tab and shows the live progress bar
+while it loads. The studio cancels the outgoing model's in-flight generation and
+waits for its memory to be released before loading the new one, then warms it so
+your first message is instant.
 
 If a switch hits an accelerator error, the Studio rolls back the failed model
 registration and reports the error. It does not restart or reset board services;
 restart the Studio to free the accelerator, then load the model again.
+
+### Keep several models loaded
+To run several chat/VLM models side by side, for example to compare them, raise
+`server.models.max_resident_chat_models` in `config.local.yaml` (or set
+`MAX_RESIDENT_CHAT_MODELS` before running `setup.sh`), then restart the Studio.
+Loading a model then keeps the others loaded until the limit is reached; past
+it, the least recently used model is unloaded. How many fit depends on the
+models' sizes: when a model does not fit beside the loaded ones, the load fails
+with an accelerator error and the loaded models stay as they were — unload one
+and try again.
+
+With two or more models loaded, the model name on the home screen and in the
+header becomes a picker: choose the model that answers the next message. The
+**Use** button in **Settings → Models** does the same. Every loaded model is
+also served on the OpenAI-compatible API by its name, so other clients can use
+any of them at the same time:
+
+```bash
+curl -s http://127.0.0.1:9998/v1/models | python3 -m json.tool
+curl -s http://127.0.0.1:9998/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"<loaded-model-name>","messages":[{"role":"user","content":"Hello"}]}'
+```
 
 ### Switch the speech-to-text model
 The same tab lists your speech-to-text (ASR) models in their own

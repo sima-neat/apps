@@ -656,7 +656,7 @@ HELP = f"""{MUTED}Commands:
   /load [name]       load a model (no name → arrow-key menu)
   /download          browse Hugging Face — pick one, several, or all models to
                      download (Space to multi-select, 'a' for all), then load one
-  /unload [name]     unload a model (no name → unload the loaded LLM/VLM)
+  /unload [name]     unload a model (no name → unload the active LLM/VLM)
   /delete [name]     delete a model's weights from disk (no name → menu; asks to
                      confirm; aliases /rm, /remove)
   /image [path]      attach an image to your next message (VLM only; no path → prompt)
@@ -961,15 +961,16 @@ def _post_load_with_progress(ctrl, name, do_post):
 
 def load_model(ctrl, name, oai=None, auto_retry=True):
     """Load a model via the control API. Returns True on success. Loading a
-    chat/VLM model evicts any other resident one, so that is made explicit."""
+    chat/VLM model evicts the least recently used ones beyond the resident
+    limit, so that is made explicit."""
     try:
-        resident = [m.get("name") for m in catalog(ctrl)
-                    if m.get("loaded") and m.get("type", "chat") != "asr"
-                    and m.get("name") != name]
+        state = ctrl_get(ctrl, "/control/catalog")
+        others = [n for n in state.get("resident") or [] if n != name]
+        victims = others[max(1, int(state.get("maxResident") or 1)) - 1:]
     except Exception:
-        resident = []
-    if resident:
-        print(f"{MUTED}  unloading {', '.join(resident)}, then loading {name}…{RESET}")
+        victims = []
+    if victims:
+        print(f"{MUTED}  unloading {', '.join(victims)}, then loading {name}…{RESET}")
     else:
         print(f"{MUTED}  loading {name}…{RESET}")
 
@@ -1149,8 +1150,8 @@ def browse_and_download(ctrl, config_path, oai=None):
         print(f"{OK}✔ downloaded {len(downloaded)}/{total}: {', '.join(downloaded)}{RESET}")
         if failed:
             print(f"{ERR}  failed: {', '.join(failed)}{RESET}")
-        print(f"{MUTED}  loading {downloaded[0]} (only one model is resident; "
-              f"/load to switch).{RESET}")
+        print(f"{MUTED}  loading {downloaded[0]} (/load to load or switch to "
+              f"another).{RESET}")
     first = downloaded[0]
     return first if load_model(ctrl, first, oai=oai) else None
 
@@ -2071,9 +2072,11 @@ def main():
                     print(f"{MUTED}  note: the current model isn't a VLM — frames send "
                           f"once you load one.{RESET}")
             elif cmd == "unload":
-                names = [arg] if arg else [
+                # Several chat models can be resident; a bare /unload frees the
+                # one this REPL is chatting with.
+                names = [arg] if arg else ([active] if active else [
                     m.get('name') for m in catalog(ctrl)
-                    if m.get('loaded') and m.get('type', 'chat') != 'asr']
+                    if m.get('loaded') and m.get('type', 'chat') != 'asr'])
                 if not names:
                     print(f"{MUTED}  no LLM/VLM is loaded.{RESET}")
                     continue
