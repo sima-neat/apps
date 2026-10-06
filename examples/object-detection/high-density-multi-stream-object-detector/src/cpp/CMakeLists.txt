@@ -11,3 +11,8 @@ endif()
 include("${CMAKE_CURRENT_LIST_DIR}/../../../../../cmake/ExampleModule.cmake")
 
 sima_neat_apps_module("high-density-multi-stream-object-detector" UNIT_TEST E2E_TEST)
+
+if (BUILD_TESTING)
+  find_package(OpenCV REQUIRED COMPONENTS core videoio)
+  target_link_libraries(high-density-multi-stream-object-detector_e2e_test PRIVATE opencv_videoio)
+endif()

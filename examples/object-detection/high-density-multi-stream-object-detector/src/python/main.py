@@ -460,7 +460,8 @@ def validate_config(cfg: AppConfig) -> None:
     if not cfg.model_path:
         raise ValueError("model.path must be set")
     normalize_box_decode_type(cfg.decode_type)
-    if not str(cfg.labels_path):
+    # Path("") is ".", so an empty value in the file arrives here as ".".
+    if str(cfg.labels_path) in ("", "."):
         raise ValueError("model.labels must be set")
     if not cfg.rtsp_urls:
         raise ValueError("streams must be set")

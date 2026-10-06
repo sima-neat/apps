@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.utils.process_assertions import assert_exited_cleanly
 from tests.utils.output_assertions import assert_streamed_frames_are_usable
 
 from tests.utils.metadata_json_listener import MetadataJsonListener
@@ -121,10 +122,7 @@ class TestE2E:
             )
             metadata = metadata_listener.wait_for_messages(5.0)
 
-        assert result.returncode == 0, (
-            f"main.py exited with code {result.returncode}\n"
-            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-        )
+        assert_exited_cleanly(result)
         assert metadata.success, (
             f"tracking metadata was not received on all streams: {metadata.error}"
         )

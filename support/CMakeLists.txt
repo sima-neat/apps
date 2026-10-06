@@ -9,6 +9,7 @@ add_library(SimaNeatApps::support_runtime ALIAS sima_neat_apps_support_runtime)
 target_link_libraries(sima_neat_apps_support_runtime
   PUBLIC
     SimaNeatApps::sima_neat
+    opencv_videoio
 )
 
 target_link_libraries(sima_neat_apps_support_runtime PUBLIC nlohmann_json::nlohmann_json)
@@ -31,6 +32,8 @@ if (BUILD_TESTING)
   add_library(sima_neat_apps_support_testing STATIC
     runtime/config_utils.cpp
     testing/metadata_json_listener.cpp
+    testing/source_cases.cpp
+    testing/test_checks.cpp
     testing/test_config.cpp
     testing/test_process.cpp
   )

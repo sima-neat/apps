@@ -80,6 +80,7 @@ function(_sima_neat_apps_ensure_support_runtime apps_root)
   target_link_libraries(sima_neat_apps_support_runtime
     PUBLIC
       SimaNeatApps::sima_neat
+      opencv_videoio
       nlohmann_json::nlohmann_json
   )
 
@@ -107,6 +108,8 @@ function(_sima_neat_apps_ensure_support_testing apps_root)
   add_library(sima_neat_apps_support_testing STATIC
     "${apps_root}/support/runtime/config_utils.cpp"
     "${apps_root}/support/testing/metadata_json_listener.cpp"
+    "${apps_root}/support/testing/source_cases.cpp"
+    "${apps_root}/support/testing/test_checks.cpp"
     "${apps_root}/support/testing/test_config.cpp"
     "${apps_root}/support/testing/test_process.cpp"
   )
