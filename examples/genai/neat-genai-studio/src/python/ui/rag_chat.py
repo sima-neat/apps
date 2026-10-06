@@ -3,8 +3,8 @@
 A client (the Insight GenAI tab, curl, another app) opts in with a non-OpenAI
 request field, ``"neat_rag": true`` or ``{"k": 3}``. The Studio removes the
 field before the request reaches the model server, searches the RAG database
-with the last user message, and adds the matching passages as a system
-message, so every client gets the same retrieval as the Studio's own chat.
+with the last user message, and adds the matching passages to that message,
+so every client gets the same retrieval as the Studio's own chat.
 """
 
 from __future__ import annotations
@@ -72,8 +72,10 @@ def passage_source(hit: Mapping) -> dict:
 
 
 def with_passages(messages: list, hits: list) -> list:
-    """``messages`` with the passages added as a system message right before
-    the last user message (after the client's own system prompt, if any)."""
+    """``messages`` with the passages placed in the last user message, ahead of
+    the question, as the Studio's own chat does. A separate system message is
+    not used: chat templates such as Qwen's honour only a leading system
+    message, so one added mid-conversation would be ignored."""
     if not hits:
         return list(messages)
     blocks = []
@@ -82,10 +84,22 @@ def with_passages(messages: list, hits: list) -> list:
         where = passage_source(hit)
         label = " — ".join(p for p in (where["source"], where["heading"]) if p)
         blocks.append(f"[{i}]{' ' + label if label else ''}\n{text}")
-    note = {"role": "system", "content": INSTRUCTION + "\n\n" + "\n\n".join(blocks)}
-    out = list(messages)
-    last_user = max((i for i, m in enumerate(out) if m.get("role") == "user"), default=len(out))
-    out.insert(last_user, note)
+    context = INSTRUCTION + "\n\n" + "\n\n".join(blocks) + "\n\nQuestion: "
+    out = [dict(m) for m in messages]
+    last_user = max((i for i, m in enumerate(out) if m.get("role") == "user"), default=None)
+    if last_user is None:
+        return out + [{"role": "user", "content": context.rstrip()}]
+    content = out[last_user].get("content")
+    if isinstance(content, list):
+        parts = [dict(p) for p in content]
+        first_text = next((i for i, p in enumerate(parts) if p.get("type") == "text"), None)
+        if first_text is None:
+            parts.insert(0, {"type": "text", "text": context.rstrip()})
+        else:
+            parts[first_text]["text"] = context + str(parts[first_text].get("text", ""))
+        out[last_user]["content"] = parts
+    else:
+        out[last_user]["content"] = context + str(content or "")
     return out
 
 

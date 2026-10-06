@@ -1928,6 +1928,14 @@ class AppContext:
                     meta_path = str(Path(RAG_DB_PATH).with_suffix(".meta.json"))
                     if os.path.exists(new_meta_path):
                         os.replace(new_meta_path, meta_path)
+                        # The database was built from a temporary copy; record
+                        # the name the user uploaded instead.
+                        try:
+                            meta = json.loads(Path(meta_path).read_text(encoding="utf-8"))
+                            meta["input"] = filename
+                            Path(meta_path).write_text(json.dumps(meta, indent=2), encoding="utf-8")
+                        except (OSError, ValueError) as exc:
+                            logging.warning(f"Could not record the uploaded file name: {exc}")
                     elif os.path.exists(meta_path):
                         os.unlink(meta_path)
                     if backup_path:

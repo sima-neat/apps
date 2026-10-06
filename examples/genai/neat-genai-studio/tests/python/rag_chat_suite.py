@@ -49,16 +49,27 @@ class RagQuestionTests(unittest.TestCase):
 
 
 class RagPassageTests(unittest.TestCase):
-    def test_passages_go_right_before_the_question_after_the_clients_system_prompt(self):
+    def test_passages_go_into_the_question_and_the_system_prompt_stays_first(self):
         messages = [{"role": "system", "content": "Be brief."},
                     {"role": "user", "content": "What is Neat?"}]
         out = rag_chat.with_passages(messages, [HIT])
-        self.assertEqual([m["role"] for m in out], ["system", "system", "user"])
+        self.assertEqual([m["role"] for m in out], ["system", "user"],
+                         "no second system message: chat templates ignore one mid-conversation")
         self.assertEqual(out[0]["content"], "Be brief.")
-        self.assertIn(rag_chat.INSTRUCTION, out[1]["content"])
-        self.assertIn("[1] Neat Library Overview › What Neat Is", out[1]["content"])
-        self.assertIn(HIT["content"], out[1]["content"])
-        self.assertEqual(messages[0]["content"], "Be brief.", "the request's own list is not changed")
+        question = out[1]["content"]
+        self.assertTrue(question.startswith(rag_chat.INSTRUCTION))
+        self.assertIn("[1] Neat Library Overview › What Neat Is", question)
+        self.assertIn(HIT["content"], question)
+        self.assertTrue(question.endswith("Question: What is Neat?"))
+        self.assertEqual(messages[1]["content"], "What is Neat?", "the request's own list is not changed")
+
+    def test_a_picture_question_keeps_its_picture(self):
+        messages = [{"role": "user", "content": [
+            {"type": "text", "text": "What is this?"},
+            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,xx"}}]}]
+        parts = rag_chat.with_passages(messages, [HIT])[0]["content"]
+        self.assertEqual([p["type"] for p in parts], ["text", "image_url"])
+        self.assertTrue(parts[0]["text"].endswith("Question: What is this?"))
 
     def test_no_hits_leaves_the_conversation_as_it_was(self):
         messages = [{"role": "user", "content": "hi"}]
