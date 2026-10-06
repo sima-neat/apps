@@ -392,7 +392,6 @@ def make_stream(task: str, sender: FakeMetadataSender):
         metadata_sender=sender,
         labels=["person"],
         profile=main.ProfileWindow(False, 0, task),
-        latest_debug_frame=None,
         frame_w=100,
         frame_h=100,
         output_fps=30,
@@ -406,7 +405,10 @@ class TestMetadata:
     def setup_method(self):
         import main
 
-        main.load_runtime_dependencies()
+        import cv2
+
+        main.cv2 = cv2
+        main.np = np
 
     def test_detection_stream_publishes_object_detection(self):
         import main
@@ -498,7 +500,10 @@ class TestSegmentationBudget:
     def setup_method(self):
         import main
 
-        main.load_runtime_dependencies()
+        import cv2
+
+        main.cv2 = cv2
+        main.np = np
 
     def test_budget_drops_lowest_confidence_first(self):
         """A full frame of detailed silhouettes overruns one datagram, so the tail is dropped."""
@@ -545,3 +550,68 @@ def _comb_mask():
     for x in range(10, 150, 4):
         cv2.rectangle(mask, (x, 20), (x + 2, 60), 255, -1)
     return mask
+
+
+@pytest.mark.parametrize("video,metadata,enabled,valid", [
+    (65532, 9100, True, True),
+    (65533, 9100, True, False),
+    (9000, 65532, True, True),
+    (9000, 65533, True, False),
+    (9000, 9003, True, False),
+    (9003, 9000, True, False),
+    (9000, 9004, True, True),
+    (9000, 9000, False, True),
+    (2147483647, 9100, True, False),
+])
+def test_insight_port_ranges(tmp_path, video, metadata, enabled, valid):
+    import main
+
+    path = write_config(tmp_path, DEFAULT_STREAMS, extra_output=[
+        f"    video_port_base: {video}",
+        f"    metadata_port_base: {metadata}",
+        f"  video_enabled: {str(enabled).lower()}",
+    ])
+    if valid:
+        main.load_app_config(path)
+    else:
+        with pytest.raises(ValueError, match="port"):
+            main.load_app_config(path)
+
+
+def test_debug_frames_stay_paired_with_results(monkeypatch, tmp_path):
+    import main
+
+    from dataclasses import replace
+
+    cfg = replace(_config(), save_dir=str(tmp_path), save_every=1,
+                  warmup_frames=0, frames=2, max_inflight_per_stream=2)
+    stream = make_stream("detection", FakeMetadataSender())
+    frames = [np.full((8, 8, 3), value, dtype=np.uint8) for value in (10, 20)]
+    samples = iter([SimpleNamespace(pts_ns=100, frame_id=1, tensor=frames[0]),
+                    SimpleNamespace(pts_ns=200, frame_id=2, tensor=frames[1])])
+
+    def source_pull(*args):
+        try:
+            return next(samples)
+        except StopIteration:
+            stream.closed = True
+            return None
+
+    outputs = iter([object(), object()])
+    stream.model_run = SimpleNamespace(push=lambda *args: True,
+                                       pull=lambda *args: next(outputs))
+    monkeypatch.setattr(main, "first_tensor_from_sample", lambda sample: sample.tensor)
+    monkeypatch.setattr(main, "copy_nv12_for_model", lambda tensor: tensor)
+    monkeypatch.setattr(main, "tensor_bgr_from_decoded", lambda tensor: tensor.copy())
+    monkeypatch.setattr(main, "decode_results", lambda *args: [])
+    monkeypatch.setattr(main, "draw_boxes", lambda *args: None)
+    saved = []
+    monkeypatch.setattr(main, "cv2", SimpleNamespace(
+        imwrite=lambda path, frame: saved.append(frame.copy()) or True))
+    main.run_stream_feeder(SimpleNamespace(source_run=SimpleNamespace(pull=source_pull)), cfg, stream)
+    assert len(stream.pending) == 2
+    main.run_stream_consumer(cfg, stream)
+    assert [int(frame[0, 0, 0]) for frame in saved] == [10, 20]
+    assert [call[3] for call in stream.metadata_sender.calls] == ["1", "2"]
+    assert not stream.pending
+    assert stream.in_flight == 0

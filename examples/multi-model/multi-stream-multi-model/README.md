@@ -16,27 +16,9 @@
 
 Runs a different model on each of four RTSP cameras in one process, and sends every camera's video and its own detection, segmentation, or pose metadata to Insight.
 
-Each stream owns its own model archive, its own on-device decode, and its own Insight channel. Stream identity holds end to end: the frame pulled from camera *i* is inferred by model *i*, decoded for task *i*, and published on channel *i*. The four models share one MLA, so this is also the honest way to see what four concurrent networks cost.
-
-The four decoders live in **one** graph and `Run`, because Neat requests a decoder-admission lease
-only when a single graph holds more than one decoder. Each model lives in a `Run` of **its own**:
-four model graphs in a single `Run` couple to each other, and one stream then stalls permanently
-while its neighbours keep running at the source rate. Separate `Run`s are why the host pulls each
-decoded frame and pushes it into its model — a data path cannot cross a `Run` boundary. Video stays
-in-graph as an encoded passthrough, so only the NV12 frame makes that round trip.
-
-A frame pushed into a `Run` arrives with no presentation timestamp, so the model's results come
-back stamped `-1`. Insight matches an overlay to the frame it describes by timestamp, and metadata
-without one is drawn over whatever frame is on screen — boxes visibly trail the objects they
-describe. Each stream therefore carries its source frame's timestamp across the `Run` boundary in
-a queue: push and pull are FIFO-paired, so the oldest queued stamp belongs to the result just
-pulled.
-
-Insight draws an overlay only on frames it has metadata for, so a frame the application skips
-renders bare and the overlay visibly blinks. The feeder therefore waits briefly for an in-flight
-slot instead of discarding the frame it just pulled, and the decoded-frame endpoint keeps a few
-buffers rather than only the newest. Both still drop under genuine overload, which is what a live
-camera wants.
+Each stream uses its own model and Insight channel. The default configuration runs
+object detection, instance segmentation, pose estimation, and object detection on
+streams 0–3. Source timestamps keep each overlay paired with its camera frame.
 
 ## Preview
 
@@ -61,44 +43,39 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-This example loads one model per stream. The defaults below cover all three tasks:
+Download these four packages from `prebuilt-apps/`. The commands put them in
+`models/`. Set each `streams[].model` to the matching path below and keep the
+archives compressed.
 
-| Model file | Slot | Task | `decode` | Role |
+| Stream | Task | Model package | Source | `decode` |
 | --- | --- | --- | --- | --- |
-| `yolo_11s_mpk.tar.gz` | 0 | detection | `yolov8` | Default |
-| `yolo_11s_seg_mpk.tar.gz` | 1 | segmentation | `yolov8` | Default |
-| `yolo26m-pose-int8-b1.tar.gz` | 2 | pose | `yolo26` | Default |
-| `yolo26m-det-int8-b1.tar.gz` | 3 | detection | `yolo26` | Default |
-| `yolo_v8s_mpk.tar.gz` | any | detection | `yolov8` | Supported |
-| `yolo_v8s_seg_mpk.tar.gz` | any | segmentation | `yolov8` | Supported |
-| `yolo_26s_seg_mpk.tar.gz` | any | segmentation | `yolo26` | Supported |
-
-The YOLO26 slots use the direct `-int8-b1` artifacts rather than the Model Zoo `yolo_26*` packages.
-The zoo YOLO26 packages load and run, but decode into far more instances than the scene contains
-(around 26 poses for a single person, around 37 objects where the direct artifact finds 6), and no
-score threshold filters them. Serializing those phantom instances is expensive enough to cap
-throughput, so use the artifacts listed above.
-
-`decode` names the shape of the package's detection head, which is what selects the on-device
-BoxDecode family — not the model's version number. YOLO26 packages carry raw l/t/r/b distance
-heads, while the Model Zoo YOLO11 and YOLOv8 packages carry the YOLOv8 head layout, so a YOLO11
-package is configured as `yolov8`. Setting this wrong produces a running pipeline with nonsense
-boxes, so keep it aligned with the package you download.
-
-Model packages come from the Model Zoo release below, which can differ from the installed platform version.
+| 0 | Detection | `models/yolo_11s_mpk.tar.gz` | Model Zoo | `yolov8` |
+| 1 | Segmentation | `models/yolo_11s_seg_mpk.tar.gz` | Model Zoo | `yolov8` |
+| 2 | Pose | `models/yolo26m-pose-int8-b1.tar.gz` | Direct artifact | `yolo26` |
+| 3 | Detection | `models/yolo26m-det-int8-b1.tar.gz` | Direct artifact | `yolo26` |
 
 ```bash
-export MODELZOO_VERSION="2.1.3"
+MODELZOO_VERSION="2.1.3"
+MODEL_BASE="https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}"
 mkdir -p models
 cd models
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/model_zoo/gen2/object_detection/yolo_11s/yolo_11s_mpk.tar.gz"
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/model_zoo/gen2/instance_segmentation/yolo_11s_seg/yolo_11s_seg_mpk.tar.gz"
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26-pose/yolo26m-pose-int8-b1.tar.gz"
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26-detection/yolo26m-det-int8-b1.tar.gz"
+
+# Stream 0: YOLO11s detection
+sima-cli download "${MODEL_BASE}/model_zoo/gen2/object_detection/yolo_11s/yolo_11s_mpk.tar.gz"
+# Stream 1: YOLO11s segmentation
+sima-cli download "${MODEL_BASE}/model_zoo/gen2/instance_segmentation/yolo_11s_seg/yolo_11s_seg_mpk.tar.gz"
+# Stream 2: YOLO26m pose
+sima-cli download "${MODEL_BASE}/models/modalix/yolo26-pose/yolo26m-pose-int8-b1.tar.gz"
+# Stream 3: YOLO26m detection
+sima-cli download "${MODEL_BASE}/models/modalix/yolo26-detection/yolo26m-det-int8-b1.tar.gz"
+
 cd ..
 ```
 
-Set each `streams[].model` in the example config to the matching downloaded package.
+The download release is 2.1.3, matching `modelzoo-version` in `deps/manifest.json`.
+Use the listed direct YOLO26 artifacts; the Model Zoo YOLO26 packages are not
+validated for this workflow. The `decode` setting selects the package's head
+layout: use `yolov8` for these YOLO11 packages and `yolo26` for these YOLO26 packages.
 
 ## Configure
 

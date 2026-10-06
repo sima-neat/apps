@@ -136,10 +136,11 @@ constexpr std::array<std::pair<int, int>, 17> kCocoSkeleton = {{{0, 1},
                                                                 {12, 14},
                                                                 {14, 16}}};
 
-/// The source frame's own timing, carried from the feeder to the consumer.
+/// Source timing and optional debug image, carried together from feeder to consumer.
 struct FrameStamp {
   int64_t pts_ns = -1;
   int64_t frame_id = -1;
+  cv::Mat debug_frame;
 };
 
 /// One keypoint in source-frame pixel space. `visibility` is the decoder's per-joint confidence
@@ -290,14 +291,13 @@ struct StreamRuntime {
   std::unique_ptr<simaai::neat::MetadataSender> metadata_sender;
   std::vector<std::string> labels;
   ProfileWindow profile;
-  std::optional<cv::Mat> latest_debug_frame;
   int frame_w = 0;
   int frame_h = 0;
   int output_fps = 0;
   int video_port = 0;
   int processed = 0;
   int dropped_segments = 0;
-  bool closed = false;
+  std::atomic<bool> closed{false};
 
   /// This stream's model, in a Run of its own. Four model graphs in one Run couple to each
   /// other: one stream stalls for good while its neighbours keep running at the source rate.
@@ -311,8 +311,6 @@ struct StreamRuntime {
   /// FIFO-paired under OverflowPolicy::Block, which makes a queue enough to re-pair them.
   std::mutex pending_mutex;
   std::deque<FrameStamp> pending;
-  /// Guards latest_debug_frame: the feeder writes it while the consumer reads it.
-  mutable std::mutex debug_frame_mutex;
   /// Set by the feeder so the consumer knows no more frames are coming.
   std::atomic<bool> feed_done{false};
   /// Frames handed to the model but not yet pulled back. This is the backpressure bound.
@@ -537,6 +535,15 @@ void validate_config(const AppConfig& cfg) {
   sima_examples::require(cfg.video_port_base > 0, "output.insight.video_port_base must be > 0");
   sima_examples::require(cfg.metadata_port_base > 0,
                          "output.insight.metadata_port_base must be > 0");
+  const int port_count = static_cast<int>(cfg.streams.size());
+  sima_examples::require(cfg.video_port_base <= 65536 - port_count,
+                         "output.insight.video_port_base range must fit within 1..65535");
+  sima_examples::require(cfg.metadata_port_base <= 65536 - port_count,
+                         "output.insight.metadata_port_base range must fit within 1..65535");
+  sima_examples::require(!cfg.video_enabled ||
+                             cfg.video_port_base + port_count <= cfg.metadata_port_base ||
+                             cfg.metadata_port_base + port_count <= cfg.video_port_base,
+                         "output.insight video and metadata port ranges must not overlap");
   sima_examples::require(cfg.mask_threshold >= 0.0 && cfg.mask_threshold <= 1.0,
                          "output.mask_threshold must be between 0 and 1");
   sima_examples::require(cfg.mask_alpha >= 0.0 && cfg.mask_alpha <= 1.0,
@@ -1469,18 +1476,14 @@ int send_metadata(const AppConfig& cfg, StreamRuntime& stream, const FrameStamp&
 }
 
 void maybe_save_debug_frame(const AppConfig& cfg, const StreamRuntime& stream,
-                            const FrameResults& results) {
+                            const FrameResults& results, const cv::Mat& debug_frame) {
   if (!save_frames_enabled(cfg) || stream.processed % cfg.save_every != 0) {
     return;
   }
-  cv::Mat frame;
-  {
-    std::lock_guard<std::mutex> lock(stream.debug_frame_mutex);
-    if (!stream.latest_debug_frame || stream.latest_debug_frame->empty()) {
-      return;
-    }
-    frame = stream.latest_debug_frame->clone();
+  if (debug_frame.empty()) {
+    return;
   }
+  cv::Mat frame = debug_frame.clone();
   switch (stream.task) {
   case Task::Segmentation:
     draw_segments(frame, results.segments, stream.labels, cfg);
@@ -1518,7 +1521,7 @@ void process_output_sample(const AppConfig& cfg, StreamRuntime& stream,
   const double metadata_start = sima_examples::time_ms();
   stream.dropped_segments += send_metadata(cfg, stream, stamp, results);
   const double metadata_end = sima_examples::time_ms();
-  maybe_save_debug_frame(cfg, stream, results);
+  maybe_save_debug_frame(cfg, stream, results, stamp.debug_frame);
   stream.profile.add(result_pull_ms, metadata_end - metadata_start,
                      static_cast<int>(results.size()));
 }
@@ -1552,9 +1555,13 @@ void run_stream_feeder(AppRuntime& app, const AppConfig& cfg, StreamRuntime& str
     }
     // Wait for a slot rather than discarding the frame: every frame dropped here is a frame
     // Insight renders with no overlay. Bounded, so a wedged model cannot hang the feeder.
-    for (int waited = 0; stream.in_flight.load() >= depth && waited < 50 && g_stop_requested == 0;
+    for (int waited = 0; stream.in_flight.load() >= depth && waited < 50 &&
+         g_stop_requested == 0 && !stream.closed.load();
          ++waited) {
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    if (stream.closed.load() || g_stop_requested != 0) {
+      break;
     }
     if (stream.in_flight.load() >= depth) {
       continue;
@@ -1571,12 +1578,11 @@ void run_stream_feeder(AppRuntime& app, const AppConfig& cfg, StreamRuntime& str
       std::cerr << "[warn] stream " << stream.index << " frame copy: " << e.what() << "\n";
       continue;
     }
+    cv::Mat bgr;
     if (save_frames_enabled(cfg)) {
-      cv::Mat bgr;
       std::string err;
-      if (sima_examples::nv12_to_bgr(frame, bgr, err)) {
-        std::lock_guard<std::mutex> lock(stream.debug_frame_mutex);
-        stream.latest_debug_frame = std::move(bgr);
+      if (!sima_examples::nv12_to_bgr(frame, bgr, err)) {
+        bgr.release();
       }
     }
 
@@ -1584,7 +1590,7 @@ void run_stream_feeder(AppRuntime& app, const AppConfig& cfg, StreamRuntime& str
     // returns, and a consumer that found the queue empty would have nothing to pair it with.
     {
       std::lock_guard<std::mutex> lock(stream.pending_mutex);
-      stream.pending.push_back(FrameStamp{frame_sample.pts_ns, frame_sample.frame_id});
+      stream.pending.push_back(FrameStamp{frame_sample.pts_ns, frame_sample.frame_id, std::move(bgr)});
     }
     stream.in_flight.fetch_add(1);
     if (!stream.model_run.push(kModelInput, simaai::neat::TensorList{frame})) {

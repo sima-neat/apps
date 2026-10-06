@@ -147,7 +147,6 @@ class StreamRuntime:
     metadata_sender: object
     labels: list[str]
     profile: "ProfileWindow"
-    latest_debug_frame: object | None
     frame_w: int
     frame_h: int
     output_fps: int
@@ -164,7 +163,6 @@ class StreamRuntime:
     # the graph's internal edge queue.
     in_flight: int = 0
     feed_done: bool = False
-    debug_frame_lock: object = field(default_factory=threading.Lock)
     # Timing of frames handed to the model, oldest first.
     #
     # The model lives in its own Run, and a tensor pushed into it arrives with no PTS, so its
@@ -380,6 +378,16 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("output.insight.video_port_base must be > 0")
     if cfg.metadata_port_base <= 0:
         raise ValueError("output.insight.metadata_port_base must be > 0")
+    port_count = len(cfg.streams)
+    for name, base in (("video_port_base", cfg.video_port_base),
+                       ("metadata_port_base", cfg.metadata_port_base)):
+        if base > 65536 - port_count:
+            raise ValueError(f"output.insight.{name} range must fit within 1..65535")
+    if cfg.video_enabled and not (
+        cfg.video_port_base + port_count <= cfg.metadata_port_base
+        or cfg.metadata_port_base + port_count <= cfg.video_port_base
+    ):
+        raise ValueError("output.insight video and metadata port ranges must not overlap")
     if not 0.0 <= cfg.mask_threshold <= 1.0:
         raise ValueError("output.mask_threshold must be between 0 and 1")
     if not 0.0 <= cfg.mask_alpha <= 1.0:
@@ -1144,7 +1152,6 @@ def build_stream_runtime(cfg: AppConfig, stream_cfg: StreamConfig, labels: list[
         metadata_sender=metadata_sender,
         labels=labels,
         profile=ProfileWindow(cfg.profile, stream_cfg.index, stream_cfg.task),
-        latest_debug_frame=None,
         frame_w=frame_w,
         frame_h=frame_h,
         output_fps=output_fps,
@@ -1293,13 +1300,14 @@ def draw_poses(frame, poses: list[dict], min_visibility: float) -> None:
             )
 
 
-def maybe_save_debug_frame(cfg: AppConfig, stream: StreamRuntime, results: list[dict]) -> None:
+def maybe_save_debug_frame(
+    cfg: AppConfig, stream: StreamRuntime, results: list[dict], debug_frame
+) -> None:
     if not save_frames_enabled(cfg) or stream.processed % cfg.save_every != 0:
         return
-    with stream.debug_frame_lock:
-        if stream.latest_debug_frame is None:
-            return
-        frame = stream.latest_debug_frame.copy()
+    if debug_frame is None:
+        return
+    frame = debug_frame.copy()
     if stream.task == TASK_DETECTION:
         draw_boxes(frame, results, stream.labels, cfg.min_score)
     elif stream.task == TASK_SEGMENTATION:
@@ -1313,7 +1321,7 @@ def maybe_save_debug_frame(cfg: AppConfig, stream: StreamRuntime, results: list[
 
 
 def process_output_sample(
-    cfg: AppConfig, stream: StreamRuntime, sample, stamp, result_pull_ms: float
+    cfg: AppConfig, stream: StreamRuntime, sample, stamp, debug_frame, result_pull_ms: float
 ) -> None:
     if cfg.frames > 0 and stream.processed >= cfg.frames:
         return
@@ -1327,7 +1335,7 @@ def process_output_sample(
     metadata_start = time_ms()
     stream.dropped_segments += send_metadata(cfg, stream, stamp, results)
     metadata_end = time_ms()
-    maybe_save_debug_frame(cfg, stream, results)
+    maybe_save_debug_frame(cfg, stream, results, debug_frame)
     stream.profile.add(result_pull_ms, metadata_end - metadata_start, len(results))
 
 
@@ -1353,6 +1361,8 @@ def run_stream_feeder(app: AppRuntime, cfg: AppConfig, stream: StreamRuntime) ->
             while stream.in_flight >= depth and waited < 50 and not stream.closed:
                 time.sleep(0.001)
                 waited += 1
+            if stream.closed:
+                break
             if stream.in_flight >= depth:
                 continue
             tensor = first_tensor_from_sample(sample)
@@ -1363,14 +1373,12 @@ def run_stream_feeder(app: AppRuntime, cfg: AppConfig, stream: StreamRuntime) ->
             except Exception as exc:
                 print(f"[warn] stream {stream.index} frame copy: {exc}", file=sys.stderr)
                 continue
-            if save_frames_enabled(cfg):
-                with stream.debug_frame_lock:
-                    stream.latest_debug_frame = tensor_bgr_from_decoded(tensor)
+            debug_frame = tensor_bgr_from_decoded(tensor) if save_frames_enabled(cfg) else None
             # Recorded before the push: under Block the result can come back the instant push
             # returns, and a consumer that found the queue empty would have nothing to pair it
             # with.
             with stream.pending_lock:
-                stream.pending.append((sample.pts_ns, sample.frame_id))
+                stream.pending.append(((sample.pts_ns, sample.frame_id), debug_frame))
             stream.in_flight += 1
             if not stream.model_run.push(MODEL_INPUT, [frame]):
                 stream.in_flight -= 1
@@ -1400,8 +1408,8 @@ def run_stream_consumer(cfg: AppConfig, stream: StreamRuntime) -> None:
                 continue
             stream.in_flight -= 1
             with stream.pending_lock:
-                stamp = stream.pending.popleft() if stream.pending else (-1, -1)
-            process_output_sample(cfg, stream, sample, stamp, pull_end - pull_start)
+                stamp, debug_frame = stream.pending.popleft() if stream.pending else ((-1, -1), None)
+            process_output_sample(cfg, stream, sample, stamp, debug_frame, pull_end - pull_start)
     finally:
         stream.closed = True
 

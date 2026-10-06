@@ -220,6 +220,31 @@ bool test_validate_config_only_rejects_invalid_mask_threshold(const std::string&
   return ok;
 }
 
+bool test_insight_port_ranges(const std::string& binary) {
+  struct Case { int video; int metadata; bool enabled; bool valid; };
+  const Case cases[] = {{65532, 9100, true, true}, {65533, 9100, true, false},
+                        {9000, 65532, true, true}, {9000, 65533, true, false},
+                        {9000, 9003, true, false}, {9003, 9000, true, false},
+                        {9000, 9004, true, true}, {9000, 9000, false, true},
+                        {2147483647, 9100, true, false}};
+  bool ok = true;
+  for (const auto& item : cases) {
+    const fs::path path = write_config("test_insight_port_ranges",
+        std::string(kFourStreams) + "output:\n  video_enabled: " +
+        (item.enabled ? "true" : "false") + "\n  insight:\n    host: 127.0.0.1\n" +
+        "    video_port_base: " + std::to_string(item.video) + "\n" +
+        "    metadata_port_base: " + std::to_string(item.metadata) + "\n");
+    const auto result = validate(binary, path);
+    ok &= expect_true(result.exit_code == (item.valid ? 0 : 1),
+                      "Insight port range validation matches expected result");
+    if (!item.valid) {
+      ok &= expect_contains(result.stderr_text, "port", "invalid port error names port setting");
+    }
+    remove_dir(path.parent_path().string());
+  }
+  return ok;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -230,6 +255,7 @@ int main(int argc, char** argv) {
 
   const std::string binary = argv[1];
   bool ok = true;
+  ok &= test_insight_port_ranges(binary);
   ok &= test_help_runs(binary);
   ok &= test_missing_config_file_fails_cleanly(binary);
   ok &= test_validate_config_only_reports_every_stream_task(binary);
