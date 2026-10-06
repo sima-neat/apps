@@ -710,3 +710,6 @@ def test_rtsp_source_negotiates_dynamic_payload(monkeypatch, codec):
     main.build_encoded_source_graph(opt)
     assert captured[0].payload_type == 0
     assert captured[0].codec == codec
+    assert captured[0].source_fps == (0 if codec == "h265" else 30)
+    assert opt.output_caps.fps == (0 if codec == "h265" else 30)
+    assert opt.source_fps == 30

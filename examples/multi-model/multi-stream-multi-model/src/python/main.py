@@ -905,7 +905,8 @@ def build_source_options(cfg: AppConfig, url: str, fps: int, width: int, height:
     opt.output_caps.format = pyneat.Format.NV12
     opt.output_caps.width = width
     opt.output_caps.height = height
-    opt.output_caps.fps = fps
+    # The integer probe is a decoder hint, not an exact H.265 caps constraint.
+    opt.output_caps.fps = 0 if cfg.codec == "h265" else fps
     opt.output_caps.memory = pyneat.CapsMemory.Any
     return opt
 
@@ -923,7 +924,7 @@ def build_encoded_source_graph(opt) -> pyneat.Graph:
     encoded_opt.payload_type = opt.payload_type
     encoded_opt.latency_ms = opt.latency_ms
     encoded_opt.tcp = opt.tcp
-    encoded_opt.source_fps = opt.source_fps
+    encoded_opt.source_fps = 0 if opt.codec == pyneat.RtspCodec.H265 else opt.source_fps
     if opt.codec == pyneat.RtspCodec.H264:
         encoded_opt.fallback_h264_width = opt.fallback_h264_width
         encoded_opt.fallback_h264_height = opt.fallback_h264_height

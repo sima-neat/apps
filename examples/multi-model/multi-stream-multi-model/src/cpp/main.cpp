@@ -1114,7 +1114,8 @@ build_source_options(const AppConfig& cfg, const std::string& url, int& fps_out,
     opt.output_caps.format = "NV12";
     opt.output_caps.width = width_out;
     opt.output_caps.height = height_out;
-    opt.output_caps.fps = fps_out;
+    // H.265 timing may be fractional or absent; the integer probe is only a hint.
+    opt.output_caps.fps = cfg.codec == simaai::neat::nodes::groups::RtspCodec::H265 ? 0 : fps_out;
     opt.output_caps.memory = simaai::neat::CapsMemory::Any;
   }
   return opt;
@@ -1158,7 +1159,9 @@ build_encoded_source_graph(const simaai::neat::nodes::groups::RtspDecodedInputOp
   encoded_opt.payload_type = opt.payload_type;
   encoded_opt.latency_ms = opt.latency_ms;
   encoded_opt.tcp = opt.tcp;
-  encoded_opt.source_fps = opt.source_fps;
+  // Preserve the parser's native H.265 rate instead of enforcing a rounded probe value.
+  encoded_opt.source_fps = opt.codec == simaai::neat::nodes::groups::RtspCodec::H265
+                               ? 0 : opt.source_fps;
   if (opt.codec == simaai::neat::nodes::groups::RtspCodec::H264) {
     encoded_opt.fallback_h264_width = opt.fallback_h264_width;
     encoded_opt.fallback_h264_height = opt.fallback_h264_height;
