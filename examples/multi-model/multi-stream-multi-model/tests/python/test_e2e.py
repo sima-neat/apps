@@ -158,6 +158,11 @@ class TestE2E:
                 f"{metadata_port_base + index}: {metadata.error}"
             )
 
+            assert metadata.messages and all(
+                message.timestamp_ms >= 0 and message.frame_id
+                for message in metadata.messages
+            ), f"stream {index} metadata is missing a usable source timestamp or frame ID"
+
         saved = [
             path
             for path in tmp_output_dir.rglob("*")

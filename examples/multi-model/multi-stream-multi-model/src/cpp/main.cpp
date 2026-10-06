@@ -1310,17 +1310,8 @@ simaai::neat::Tensor copy_nv12_for_model(const simaai::neat::Tensor& input) {
   if (!input.is_nv12() || !sima_examples::infer_dims(input, width, height)) {
     throw std::runtime_error("expected an NV12 frame with valid dimensions");
   }
-  const auto bytes = input.copy_nv12_contiguous();
-  if (bytes.empty()) {
-    throw std::runtime_error("NV12 copy produced no bytes");
-  }
-  auto out = simaai::neat::Tensor::from_vector(bytes, {static_cast<std::int64_t>(bytes.size())},
-                                               simaai::neat::TensorMemory::EV74);
-  std::string err;
-  if (!sima_examples::init_nv12_tensor_meta(out, width, height, err)) {
-    throw std::runtime_error(err);
-  }
-  return out;
+  // Preserve the native NV12 plane metadata and CVU device placement.
+  return input.contiguous().cvu();
 }
 
 /// The host pushes decoded frames in here, so the input is a plain NV12 image endpoint.

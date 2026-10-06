@@ -140,10 +140,15 @@ bool check_metadata(const std::string& codec, int metadata_port_base,
   bool ok = true;
   for (std::size_t index = 0; index < listeners.size(); ++index) {
     const MetadataJsonListenerResult result = listeners[index]->wait_for_messages();
-    if (!result.success) {
+    bool valid_stamps = !result.messages.empty();
+    for (const auto& message : result.messages) {
+      valid_stamps = valid_stamps && message.timestamp_ms >= 0 && !message.frame_id.empty();
+    }
+    if (!result.success || !valid_stamps) {
       std::cerr << "[FAIL] " << codec << " stream " << index << " did not publish "
                 << stream_slots()[index].metadata_type << " metadata on port "
-                << metadata_port_base + static_cast<int>(index) << ": " << result.error << "\n";
+                << metadata_port_base + static_cast<int>(index) << ": " << result.error
+                << (valid_stamps ? "" : "; missing usable source timestamp or frame ID") << "\n";
       ok = false;
     } else {
       std::cout << "[OK] " << codec << " stream " << index << " published "
