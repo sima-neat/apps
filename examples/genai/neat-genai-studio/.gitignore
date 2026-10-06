@@ -8,7 +8,5 @@ config.local.yaml
 .neat-genai-studio.url
 .neat-genai-server.log
 .neat-genai-server.status
-.neat-genai-reset.token
-.neat-genai-reset.request
 .local-certs/
 config.local.yaml.bak

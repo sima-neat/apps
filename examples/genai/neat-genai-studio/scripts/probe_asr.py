@@ -27,8 +27,8 @@ _REFUSAL = (
     "unsupported",
     "incompatible",
 )
-_INCONCLUSIVE = ("mlashm", "mla_load", "dispatcher", "failed to acquire",
-                 "cannot allocate memory", "out of memory", "shm memory handle")
+_INCONCLUSIVE = ("mla_load", "failed to acquire", "cannot allocate memory",
+                 "out of memory", "shm memory handle")
 
 
 def _silence_wav(seconds: float = 1.0, rate: int = 16000) -> bytes:
