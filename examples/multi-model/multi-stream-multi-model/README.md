@@ -8,7 +8,7 @@
 | Difficulty | Advanced |
 | Tags | multi-model, multi-stream, detection, segmentation, pose, yolo11, yolo26, rtsp, insight |
 | Languages | C++, Python |
-| Status | stable |
+| Status | experimental |
 | Binary Name | multi-stream-multi-model |
 | Model | yolo_11s |
 
@@ -25,6 +25,9 @@ streams 0–3. Source timestamps keep each overlay paired with its camera frame.
 ![Multi stream multi model preview](../../../portal/assets/examples/multi-model/multi-stream-multi-model/image.png)
 
 ## Prerequisites
+
+This application is experimental. The exact branch-package installation and
+installed README workflow still need validation before it is marked stable.
 
 - `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
 - Up to four RTSP H.264 or H.265 sources, and an [Insight](https://developer.sima.ai/software/tools/insight/) host reachable from the target. Pointing several streams at the same camera is fine; each one still builds its own decode and its own model.

@@ -220,6 +220,27 @@ bool test_validate_config_only_rejects_invalid_mask_threshold(const std::string&
   return ok;
 }
 
+bool test_stream_scalar_types(const std::string& binary) {
+  bool ok = true;
+  for (const std::string key : {"url", "model"}) {
+    for (const std::string value : {"null", "Null", "NULL", "~", "true", "false", "42",
+                                   "1.5", "[value]", "{path: value}", "", "\"  \""}) {
+      const auto path = write_config("test_stream_scalar_types",
+          "streams:\n  - url: rtsp://127.0.0.1:8554/src1\n    model: models/model.tar.gz\n    " +
+          key + ": " + value + "\n" + kInsightOutput);
+      const auto result = validate(binary, path);
+      ok &= expect_true(result.exit_code == 1, key + " rejects non-string or empty YAML value");
+      remove_dir(path.parent_path().string());
+    }
+    const auto path = write_config("test_quoted_stream_scalar",
+        "streams:\n  - url: rtsp://127.0.0.1:8554/src1\n    model: models/model.tar.gz\n    " +
+        key + ": \"null\"\n" + kInsightOutput);
+    ok &= expect_true(validate(binary, path).exit_code == 0, key + " accepts quoted string null");
+    remove_dir(path.parent_path().string());
+  }
+  return ok;
+}
+
 bool test_negative_inflight_limit(const std::string& binary) {
   const fs::path path = write_config("test_negative_inflight_limit",
       std::string(kOneStream) + "inference:\n  max_inflight_per_stream: -1\n" + kInsightOutput);
@@ -263,6 +284,7 @@ int main(int argc, char** argv) {
 
   const std::string binary = argv[1];
   bool ok = true;
+  ok &= test_stream_scalar_types(binary);
   ok &= test_negative_inflight_limit(binary);
   ok &= test_insight_port_ranges(binary);
   ok &= test_help_runs(binary);

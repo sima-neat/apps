@@ -41,6 +41,7 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <regex>
 #include <iostream>
 #include <functional>
 #include <memory>
@@ -447,6 +448,29 @@ int leading_indent(const std::string& line) {
   return indent;
 }
 
+void require_stream_string(const std::string& entry, const std::string& key,
+                           std::size_t index) {
+  const std::string raw = sima_examples::trim_copy(entry.substr(entry.find(':') + 1));
+  const bool quoted = raw.size() >= 2 &&
+      ((raw.front() == '\'' && raw.back() == '\'') ||
+       (raw.front() == '"' && raw.back() == '"'));
+  const std::string value = unquote(raw);
+  const std::string lower = lower_copy(raw);
+  static const std::regex number(
+      R"(^[+-]?([0-9][0-9_]*(\.[0-9_]*)?|\.[0-9_]+)([eE][+-]?[0-9_]+)?$)");
+  static const std::regex radix(R"(^[+-]?0[xXbBoO][0-9a-fA-F_]+$)");
+  static const std::regex date(R"(^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt ].*)?$)");
+  const bool typed = lower == "null" || lower == "~" || lower == "true" ||
+      lower == "false" || lower == "yes" || lower == "no" || lower == "on" ||
+      lower == "off" || lower == ".nan" || lower == ".inf" || lower == "+.inf" ||
+      lower == "-.inf" || std::regex_match(raw, number) || std::regex_match(raw, radix) ||
+      std::regex_match(raw, date) || (!raw.empty() &&
+      (raw.front() == '[' || raw.front() == '{' || raw.front() == '!' ||
+       raw.front() == '&' || raw.front() == '*'));
+  sima_examples::require(!sima_examples::trim_copy(value).empty() && (quoted || !typed),
+      "streams[" + std::to_string(index) + "]." + key + " must be a non-empty string");
+}
+
 std::vector<StreamConfig> parse_streams(const fs::path& config_path) {
   std::ifstream input(config_path);
   if (!input.is_open()) {
@@ -494,12 +518,14 @@ std::vector<StreamConfig> parse_streams(const fs::path& config_path) {
     }
     StreamConfig& stream = streams.back();
     if (key == "url") {
+      require_stream_string(entry, key, streams.size() - 1);
       stream.url = value;
     } else if (key == "task") {
       stream.task = parse_task(value, streams.size() - 1);
     } else if (key == "decode") {
       stream.decode = parse_decode(value, streams.size() - 1);
     } else if (key == "model") {
+      require_stream_string(entry, key, streams.size() - 1);
       stream.model_path = value;
     }
   }
