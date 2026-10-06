@@ -224,12 +224,14 @@ int run_source_case(const std::string& binary, const std::vector<std::string>& m
     rc = 1;
   } else {
     const int files = count_output_files(output_dir);
+    const std::string frames_problem =
+        streamed_frames_problem(output_dir, total_saved_frames, stream_slots().size());
     if (files < total_saved_frames) {
       std::cerr << "[FAIL] " << source_case.codec << " expected at least " << total_saved_frames
                 << " sampled output files, got " << files << "\n";
       rc = 1;
-    } else if (!all_output_files_nonempty(output_dir)) {
-      std::cerr << "[FAIL] " << source_case.codec << " some sampled output files are empty\n";
+    } else if (!frames_problem.empty()) {
+      std::cerr << "[FAIL] " << source_case.codec << " " << frames_problem << "\n";
       rc = 1;
     } else if (!every_stream_saved_a_frame(output_dir)) {
       rc = 1;

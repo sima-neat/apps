@@ -5,7 +5,6 @@
 #include "neat/nodes.h"
 
 #include <cstdint>
-#include <stdexcept>
 #include <string>
 
 namespace yolo26_tiny_drone_tracker {
@@ -44,22 +43,6 @@ append_decode_output_nodes(simaai::neat::Graph& graph,
   if (!options.extra_fragment.empty()) {
     graph.add(simaai::neat::nodes::Custom(options.extra_fragment));
   }
-}
-
-inline bool pull_status_has_sample(simaai::neat::PullStatus status, const std::string& output_name,
-                                   const simaai::neat::PullError& pull_error,
-                                   const std::string& run_error) {
-  if (status == simaai::neat::PullStatus::Timeout) {
-    return false;
-  }
-  if (status == simaai::neat::PullStatus::Closed) {
-    throw std::runtime_error(output_name + " output closed unexpectedly" +
-                             (run_error.empty() ? std::string{} : ": " + run_error));
-  }
-  if (status != simaai::neat::PullStatus::Ok) {
-    throw std::runtime_error("failed to pull " + output_name + ": " + pull_error.message);
-  }
-  return true;
 }
 
 inline bool sample_identities_correlate(int64_t first_frame_id, int64_t first_pts_ns,

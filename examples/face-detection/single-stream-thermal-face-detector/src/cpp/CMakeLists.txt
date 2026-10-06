@@ -27,3 +27,11 @@ if (BUILD_TESTING)
     LABELS "unit"
   )
 endif()
+
+# The unit test exercises the shared pull-outcome helper, which needs the Neat headers.
+if (TARGET single-stream-thermal-face-detector_unit_test)
+  target_link_libraries(single-stream-thermal-face-detector_unit_test
+    PRIVATE
+      SimaNeatApps::support_runtime
+  )
+endif()

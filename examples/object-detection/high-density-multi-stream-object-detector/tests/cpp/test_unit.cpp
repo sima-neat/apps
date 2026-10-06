@@ -1,5 +1,7 @@
 #include "support/object_detection/detection_egress.h"
 #include "../../src/cpp/detection_watchdog.h"
+#include "../../src/cpp/metadata_measurement.h"
+#include "support/testing/test_checks.h"
 #include "support/testing/test_process.h"
 
 #include <nlohmann/json.hpp>
@@ -9,34 +11,21 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <string>
 #include <vector>
 
 namespace fs = std::filesystem;
 
-using sima_examples::testing::create_test_scratch_dir;
+using sima_examples::testing::expect_contains;
+using sima_examples::testing::expect_true;
 using sima_examples::testing::remove_dir;
 using sima_examples::testing::spawn_and_wait;
+using sima_examples::testing::write_scratch_config;
 
 namespace {
 
 constexpr const char* kModelPath = "models/yolo26n-det-int8-b1.tar.gz";
-
-bool expect_true(bool condition, const std::string& message) {
-  if (!condition) {
-    std::cerr << "[FAIL] " << message << "\n";
-    return false;
-  }
-  std::cout << "[OK] " << message << "\n";
-  return true;
-}
-
-bool expect_contains(const std::string& haystack, const std::string& needle,
-                     const std::string& message) {
-  return expect_true(haystack.find(needle) != std::string::npos, message);
-}
 
 struct TestBox {
   float x1 = 0.0f;
@@ -142,18 +131,6 @@ bool test_metadata_fast_path_preserves_insight_payload() {
   return ok;
 }
 
-fs::path write_config(const std::string& test_name, const std::string& body) {
-  const std::string temp_dir =
-      create_test_scratch_dir("high-density-multi-stream-object-detector", test_name);
-  if (temp_dir.empty()) {
-    throw std::runtime_error("failed to create temp directory");
-  }
-  const fs::path config_path = fs::path(temp_dir) / "config.yaml";
-  std::ofstream out(config_path);
-  out << body;
-  return config_path;
-}
-
 std::string stream_entries(int count) {
   std::string out;
   for (int index = 1; index <= count; ++index) {
@@ -200,7 +177,7 @@ bool test_missing_config_file_fails_cleanly(const std::string& binary) {
 
 bool test_validate_config_only_accepts_twenty_four_streams(const std::string& binary) {
   const fs::path config_path =
-      write_config("test_validate_config_only_accepts_twenty_four_streams", valid_config(24, 1));
+      write_scratch_config("high-density-multi-stream-object-detector", "test_validate_config_only_accepts_twenty_four_streams", valid_config(24, 1));
 
   const auto result =
       spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
@@ -242,7 +219,7 @@ bool test_validate_config_only_accepts_named_profiles(const std::string& binary)
   };
 
   constexpr std::array<ProfileExpectation, 3> profiles{{
-      {"config.yaml", 16, 30, 16, 1, 1, 8},
+      {"config.yaml", 16, 0, 16, 1, 1, 8},
       {"config-24x720p20fps.yaml", 24, 20, 4, 2, 4, 24},
       {"config-48x720p10fps.yaml", 48, 10, 1, 2, 1, 8},
   }};
@@ -283,7 +260,7 @@ bool test_validate_config_only_accepts_named_profiles(const std::string& binary)
 
 bool test_validate_config_only_accepts_insight_visible_limit(const std::string& binary) {
   const fs::path config_path =
-      write_config("test_validate_config_only_accepts_insight_visible_limit",
+      write_scratch_config("high-density-multi-stream-object-detector", "test_validate_config_only_accepts_insight_visible_limit",
                    model_header() + "streams:\n" + stream_entries(24) +
                        "input:\n"
                        "  tcp: true\n"
@@ -313,7 +290,7 @@ bool test_validate_config_only_accepts_insight_visible_limit(const std::string& 
 
 bool test_validate_config_only_rejects_overlapping_insight_ports(const std::string& binary) {
   const fs::path config_path =
-      write_config("test_validate_config_only_rejects_overlapping_insight_ports",
+      write_scratch_config("high-density-multi-stream-object-detector", "test_validate_config_only_rejects_overlapping_insight_ports",
                    model_header() + "streams:\n" + stream_entries(4) +
                        "inference:\n"
                        "  workers: 1\n"
@@ -335,7 +312,7 @@ bool test_validate_config_only_rejects_overlapping_insight_ports(const std::stri
 
 bool test_validate_config_only_accepts_forty_streams(const std::string& binary) {
   const fs::path config_path =
-      write_config("test_validate_config_only_accepts_forty_streams", valid_config(40, 1));
+      write_scratch_config("high-density-multi-stream-object-detector", "test_validate_config_only_accepts_forty_streams", valid_config(40, 1));
 
   const auto result =
       spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
@@ -348,7 +325,7 @@ bool test_validate_config_only_accepts_forty_streams(const std::string& binary) 
 
 bool test_validate_config_only_rejects_removed_output_paths(const std::string& binary) {
   const fs::path config_path =
-      write_config("test_validate_config_only_rejects_removed_output_paths",
+      write_scratch_config("high-density-multi-stream-object-detector", "test_validate_config_only_rejects_removed_output_paths",
                    model_header() + "streams:\n" + stream_entries(1) +
                        "inference:\n"
                        "  workers: 1\n"
@@ -369,7 +346,7 @@ bool test_validate_config_only_rejects_removed_output_paths(const std::string& b
 bool test_validate_config_only_rejects_insight_visible_limit_above_stream_count(
     const std::string& binary) {
   const fs::path config_path =
-      write_config("test_validate_config_only_rejects_insight_visible_limit_above_stream_count",
+      write_scratch_config("high-density-multi-stream-object-detector", "test_validate_config_only_rejects_insight_visible_limit_above_stream_count",
                    model_header() + "streams:\n" + stream_entries(4) +
                        "input:\n"
                        "  tcp: true\n"
@@ -391,7 +368,7 @@ bool test_validate_config_only_rejects_insight_visible_limit_above_stream_count(
 }
 
 bool test_validate_config_only_accepts_yolov8_decode_type(const std::string& binary) {
-  const fs::path config_path = write_config("test_validate_config_only_accepts_yolov8_decode_type",
+  const fs::path config_path = write_scratch_config("high-density-multi-stream-object-detector", "test_validate_config_only_accepts_yolov8_decode_type",
                                             valid_config(4, 1, "yolov8"));
 
   const auto result =
@@ -402,7 +379,7 @@ bool test_validate_config_only_accepts_yolov8_decode_type(const std::string& bin
 }
 
 bool test_validate_config_only_accepts_input_caps(const std::string& binary) {
-  const fs::path config_path = write_config("test_validate_config_only_accepts_input_caps",
+  const fs::path config_path = write_scratch_config("high-density-multi-stream-object-detector", "test_validate_config_only_accepts_input_caps",
                                             model_header() + "streams:\n" + stream_entries(4) +
                                                 "input:\n"
                                                 "  codec: hevc\n"
@@ -426,7 +403,7 @@ bool test_validate_config_only_accepts_input_caps(const std::string& binary) {
 }
 
 bool test_validate_config_only_accepts_decoder_tuning(const std::string& binary) {
-  const fs::path config_path = write_config("test_validate_config_only_accepts_decoder_tuning",
+  const fs::path config_path = write_scratch_config("high-density-multi-stream-object-detector", "test_validate_config_only_accepts_decoder_tuning",
                                             model_header() + "streams:\n" + stream_entries(2) +
                                                 "input:\n"
                                                 "  tcp: true\n"
@@ -455,7 +432,7 @@ bool test_validate_config_only_accepts_decoder_tuning(const std::string& binary)
 
 bool test_validate_config_only_rejects_too_many_streams(const std::string& binary) {
   const fs::path config_path =
-      write_config("test_validate_config_only_rejects_too_many_streams", valid_config(81, 1));
+      write_scratch_config("high-density-multi-stream-object-detector", "test_validate_config_only_rejects_too_many_streams", valid_config(81, 1));
 
   const auto result =
       spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
@@ -468,7 +445,7 @@ bool test_validate_config_only_rejects_too_many_streams(const std::string& binar
 
 bool test_validate_config_only_rejects_invalid_worker_count(const std::string& binary) {
   const fs::path config_path =
-      write_config("test_validate_config_only_rejects_invalid_worker_count", valid_config(4, 2));
+      write_scratch_config("high-density-multi-stream-object-detector", "test_validate_config_only_rejects_invalid_worker_count", valid_config(4, 2));
 
   const auto result =
       spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
@@ -481,7 +458,7 @@ bool test_validate_config_only_rejects_invalid_worker_count(const std::string& b
 
 bool test_validate_config_only_checks_internal_queue_depth(const std::string& binary) {
   const fs::path disabled_path =
-      write_config("test_validate_config_only_accepts_disabled_internal_queue",
+      write_scratch_config("high-density-multi-stream-object-detector", "test_validate_config_only_accepts_disabled_internal_queue",
                    model_header() + "streams:\n" + stream_entries(4) +
                        "input:\n"
                        "  tcp: true\n"
@@ -499,7 +476,7 @@ bool test_validate_config_only_checks_internal_queue_depth(const std::string& bi
   remove_dir(disabled_path.parent_path().string());
 
   const fs::path oversized_path =
-      write_config("test_validate_config_only_rejects_oversized_internal_queue",
+      write_scratch_config("high-density-multi-stream-object-detector", "test_validate_config_only_rejects_oversized_internal_queue",
                    model_header() + "streams:\n" + stream_entries(4) +
                        "input:\n"
                        "  tcp: true\n"
@@ -519,7 +496,7 @@ bool test_validate_config_only_checks_internal_queue_depth(const std::string& bi
 }
 
 bool test_validate_config_only_checks_max_inflight_limits(const std::string& binary) {
-  const fs::path tuned_path = write_config("test_validate_config_only_accepts_tuned_max_inflight",
+  const fs::path tuned_path = write_scratch_config("high-density-multi-stream-object-detector", "test_validate_config_only_accepts_tuned_max_inflight",
                                            model_header() + "streams:\n" + stream_entries(4) +
                                                "inference:\n"
                                                "  workers: 1\n"
@@ -538,7 +515,7 @@ bool test_validate_config_only_checks_max_inflight_limits(const std::string& bin
   remove_dir(tuned_path.parent_path().string());
 
   const fs::path invalid_path =
-      write_config("test_validate_config_only_rejects_invalid_max_inflight",
+      write_scratch_config("high-density-multi-stream-object-detector", "test_validate_config_only_rejects_invalid_max_inflight",
                    model_header() + "streams:\n" + stream_entries(4) +
                        "inference:\n"
                        "  workers: 1\n"
@@ -554,7 +531,7 @@ bool test_validate_config_only_checks_max_inflight_limits(const std::string& bin
   remove_dir(invalid_path.parent_path().string());
 
   const fs::path invalid_total_path =
-      write_config("test_validate_config_only_rejects_invalid_max_inflight_total",
+      write_scratch_config("high-density-multi-stream-object-detector", "test_validate_config_only_rejects_invalid_max_inflight_total",
                    model_header() + "streams:\n" + stream_entries(4) +
                        "inference:\n"
                        "  workers: 1\n"
@@ -576,7 +553,7 @@ bool test_validate_config_only_checks_liveness_limits(const std::string& binary)
                            "inference:\n"
                            "  workers: 1\n"
                            "  max_inflight_total: 12\n";
-  const fs::path tuned_path = write_config("test_validate_config_only_accepts_tuned_liveness",
+  const fs::path tuned_path = write_scratch_config("high-density-multi-stream-object-detector", "test_validate_config_only_accepts_tuned_liveness",
                                            base + "runtime:\n"
                                                   "  stream_detection_timeout_ms: 45000\n"
                                                   "  no_detection_timeout_ms: 60000\n"
@@ -593,7 +570,7 @@ bool test_validate_config_only_checks_liveness_limits(const std::string& binary)
   remove_dir(tuned_path.parent_path().string());
 
   const fs::path invalid_timeout_path =
-      write_config("test_validate_config_only_rejects_invalid_no_detection_timeout",
+      write_scratch_config("high-density-multi-stream-object-detector", "test_validate_config_only_rejects_invalid_no_detection_timeout",
                    base + "runtime:\n"
                           "  no_detection_timeout_ms: 0\n"
                           "output:\n"
@@ -607,7 +584,7 @@ bool test_validate_config_only_checks_liveness_limits(const std::string& binary)
   remove_dir(invalid_timeout_path.parent_path().string());
 
   const fs::path invalid_stream_timeout_path =
-      write_config("test_validate_config_only_rejects_invalid_stream_detection_timeout",
+      write_scratch_config("high-density-multi-stream-object-detector", "test_validate_config_only_rejects_invalid_stream_detection_timeout",
                    base + "runtime:\n"
                           "  stream_detection_timeout_ms: 0\n"
                           "output:\n"
@@ -624,7 +601,7 @@ bool test_validate_config_only_checks_liveness_limits(const std::string& binary)
 }
 
 bool test_validate_config_only_rejects_empty_streams(const std::string& binary) {
-  const fs::path config_path = write_config("test_validate_config_only_rejects_empty_streams",
+  const fs::path config_path = write_scratch_config("high-density-multi-stream-object-detector", "test_validate_config_only_rejects_empty_streams",
                                             model_header() + "streams: []\n"
                                                              "output:\n"
                                                              "  insight:\n"
@@ -640,7 +617,7 @@ bool test_validate_config_only_rejects_empty_streams(const std::string& binary) 
 }
 
 bool test_validate_config_only_rejects_fps_scheduler_knob(const std::string& binary) {
-  const fs::path config_path = write_config("test_validate_config_only_rejects_fps_scheduler_knob",
+  const fs::path config_path = write_scratch_config("high-density-multi-stream-object-detector", "test_validate_config_only_rejects_fps_scheduler_knob",
                                             model_header() + "streams:\n" + stream_entries(4) +
                                                 "input:\n"
                                                 "  tcp: true\n"
@@ -662,7 +639,7 @@ bool test_validate_config_only_rejects_fps_scheduler_knob(const std::string& bin
 
 bool test_validate_config_only_rejects_legacy_fan_in_policy(const std::string& binary) {
   const fs::path config_path =
-      write_config("test_validate_config_only_rejects_legacy_fan_in_policy",
+      write_scratch_config("high-density-multi-stream-object-detector", "test_validate_config_only_rejects_legacy_fan_in_policy",
                    model_header() + "streams:\n" + stream_entries(4) +
                        "inference:\n"
                        "  workers: 1\n"
@@ -684,7 +661,7 @@ bool test_validate_config_only_rejects_legacy_fan_in_policy(const std::string& b
 
 bool test_validate_config_only_rejects_invalid_decoder_tuning(const std::string& binary) {
   const fs::path config_path =
-      write_config("test_validate_config_only_rejects_invalid_decoder_tuning",
+      write_scratch_config("high-density-multi-stream-object-detector", "test_validate_config_only_rejects_invalid_decoder_tuning",
                    model_header() + "streams:\n" + stream_entries(2) +
                        "input:\n"
                        "  tcp: true\n"
@@ -810,9 +787,112 @@ bool test_detection_watchdog_tracks_deadlines() {
   return ok;
 }
 
+// ---------------------------------------------------------------------------
+// Configuration rules --validate-config-only can reach without a model or a
+// stream (Refs #526). Each case is the minimal valid config with exactly one
+// value broken, and asserts the message that names the rule. The rules the
+// cases above already own (stream cap, worker count, inflight and queue
+// limits, liveness timeouts, removed keys, probe skip, port overlap, visible
+// stream cap) are not repeated.
+// ---------------------------------------------------------------------------
+struct RuleCase {
+  const char* name;
+  const char* model_extra;     // extra lines under model:, e.g. "  labels: ''\n"
+  const char* input_extra;     // extra lines under input:
+  const char* inference_extra; // extra lines under inference:
+  const char* extra_sections;  // extra top-level sections, e.g. "runtime:\n  warmup_frames: -1\n"
+  const char* insight_extra;   // extra lines under output.insight:
+  const char* model_path;
+  const char* host;
+  const char* message;
+};
+
+std::string rule_config(const RuleCase& c) {
+  return std::string("model:\n  path: '") + c.model_path + "'\n" + c.model_extra + "streams:\n" +
+         stream_entries(1) + "input:\n  tcp: true\n  latency_ms: 100\n" + c.input_extra +
+         "inference:\n  workers: 1\n" + c.inference_extra + c.extra_sections +
+         "output:\n  insight:\n    host: '" + c.host + "'\n" + c.insight_extra;
+}
+
+bool test_configuration_rules_are_enforced(const std::string& binary) {
+  const std::vector<RuleCase> cases = {
+      {"model-path-empty", "", "", "", "", "", "", "127.0.0.1", "model.path must be set"},
+      {"model-labels-empty", "  labels: ''\n", "", "", "", "", kModelPath, "127.0.0.1",
+       "model.labels must be set"},
+      {"latency-negative", "", "  latency_ms: -1\n", "", "", "", kModelPath, "127.0.0.1",
+       "input.latency_ms must be >= 0"},
+      {"width-negative", "", "  width: -1\n", "", "", "", kModelPath, "127.0.0.1",
+       "input.width must be >= 0"},
+      {"height-negative", "", "  height: -1\n", "", "", "", kModelPath, "127.0.0.1",
+       "input.height must be >= 0"},
+      {"fps-negative", "", "  fps: -1\n", "", "", "", kModelPath, "127.0.0.1",
+       "input.fps must be >= 0"},
+      {"width-without-height", "", "  width: 640\n", "", "", "", kModelPath, "127.0.0.1",
+       "input.width and input.height must be set together"},
+      {"decoder-buffers-zero", "", "  decoder_buffers: 0\n", "", "", "", kModelPath, "127.0.0.1",
+       "input.decoder_buffers must be > 0"},
+      {"decoder-buffers-above", "", "  decoder_buffers: 65\n", "", "", "", kModelPath, "127.0.0.1",
+       "input.decoder_buffers must be <= 64"},
+      {"decoder-input-buffers-zero", "", "  decoder_input_buffers: 0\n", "", "", "", kModelPath,
+       "127.0.0.1", "input.decoder_input_buffers must be > 0"},
+      {"queue-depth-zero", "", "", "  queue_depth: 0\n", "", "", kModelPath, "127.0.0.1",
+       "inference.queue_depth must be > 0"},
+      {"queue-depth-above", "", "", "  queue_depth: 33\n", "", "", kModelPath, "127.0.0.1",
+       "inference.queue_depth must be <= 32"},
+      {"inflight-per-stream-above", "", "", "  max_inflight_per_stream: 33\n", "", "", kModelPath,
+       "127.0.0.1", "inference.max_inflight_per_stream must be <= 32"},
+      {"min-score-above", "", "", "  min_score: 1.5\n", "", "", kModelPath, "127.0.0.1",
+       "inference.min_score must be between 0 and 1"},
+      {"nms-below", "", "", "  nms_iou: -0.5\n", "", "", kModelPath, "127.0.0.1",
+       "inference.nms_iou must be between 0 and 1"},
+      {"max-detections-zero", "", "", "  max_detections: 0\n", "", "", kModelPath, "127.0.0.1",
+       "inference.max_detections must be > 0"},
+      {"warmup-negative", "", "", "", "runtime:\n  warmup_frames: -1\n", "", kModelPath,
+       "127.0.0.1", "runtime.warmup_frames must be >= 0"},
+      {"initial-timeout-zero", "", "", "", "runtime:\n  initial_detection_timeout_ms: 0\n", "",
+       kModelPath, "127.0.0.1", "runtime.initial_detection_timeout_ms must be > 0"},
+      {"insight-host-empty", "", "", "", "", "", kModelPath, "", "output.insight.host must be set"},
+      {"video-port-base-zero", "", "", "", "", "    video_port_base: 0\n", kModelPath, "127.0.0.1",
+       "output.insight.video_port_base must be > 0"},
+      {"video-port-base-above", "", "", "", "", "    video_port_base: 65536\n", kModelPath,
+       "127.0.0.1", "output.insight.video_port_base must be <= 65535"},
+      {"metadata-port-base-zero", "", "", "", "", "    metadata_port_base: 0\n", kModelPath,
+       "127.0.0.1", "output.insight.metadata_port_base must be > 0"},
+      {"metadata-port-base-above", "", "", "", "", "    metadata_port_base: 65536\n", kModelPath,
+       "127.0.0.1", "output.insight.metadata_port_base must be <= 65535"},
+      {"visible-streams-below-minus-one", "", "", "", "", "    max_visible_streams: -2\n",
+       kModelPath, "127.0.0.1", "output.insight.max_visible_streams must be >= -1"},
+  };
+  bool ok = true;
+  for (const RuleCase& c : cases) {
+    const fs::path config_path = write_scratch_config("high-density-multi-stream-object-detector", std::string("rule_") + c.name, rule_config(c));
+    const auto result =
+        spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
+    ok &= expect_true(result.exit_code != 0, std::string(c.name) + " is rejected") &&
+          expect_contains(result.stderr_text, c.message, std::string(c.name) + " names its rule");
+    remove_dir(config_path.parent_path().string());
+  }
+  return ok;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
+  high_density::MetadataMeasurement measurement(2, 100, 3);
+  bool measurement_ok = !measurement.observe(0, 100, false, false, 1.0);
+  measurement_ok &= !measurement.observe(0, 101, true, false, 2.0);
+  measurement_ok &= !measurement.observe(1, 100, false, false, 3.0);
+  measurement_ok &= measurement.total == 0;
+  measurement_ok &= !measurement.observe(1, 101, false, true, 4.0);
+  measurement_ok &= !measurement.observe(0, 102, true, false, 5.0);
+  measurement_ok &= !measurement.observe(1, 102, true, false, 6.0);
+  measurement_ok &= measurement.observe(0, 103, true, false, 7.0);
+  measurement_ok &= measurement.total == 3 && measurement.elapsed == 4.0 &&
+                    measurement.frames == std::vector<std::uint64_t>{2, 1} &&
+                    measurement.failures == std::vector<std::uint64_t>{0, 1};
+  if (!expect_true(measurement_ok, "metadata measurement excludes warm-up and failed sends"))
+    return 1;
+
   if (argc == 2 && std::string(argv[1]) == "--detection-egress-only") {
     return test_metadata_fast_path_preserves_insight_payload() ? 0 : 1;
   }
@@ -848,6 +928,7 @@ int main(int argc, char** argv) {
   ok &= test_validate_config_only_rejects_fps_scheduler_knob(binary);
   ok &= test_validate_config_only_rejects_legacy_fan_in_policy(binary);
   ok &= test_validate_config_only_rejects_invalid_decoder_tuning(binary);
+  ok &= test_configuration_rules_are_enforced(binary);
   ok &= test_detection_watchdog_tracks_deadlines();
   return ok ? 0 : 1;
 }

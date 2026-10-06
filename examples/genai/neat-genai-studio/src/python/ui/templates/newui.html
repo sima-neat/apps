@@ -55,6 +55,11 @@
             </linearGradient></defs>
             <path d="M12 2 L22 12 L12 22 L2 12 Z" fill="url(#scMark)"/></svg>
         </a>
+        <a id="playgroundButton" class="header-icon-btn" href="/playground/"
+          title="Audio API playground — try speech and transcription" aria-label="Open the audio API playground">
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+            <path d="M3 12h2M7 8v8M11 4v16M15 7v10M19 10v4"/></svg>
+        </a>
         <a id="solutionsButton" class="header-icon-btn" href="/solutions/"
           title="SiMaSentry Solutions — Med, Safe &amp; Sec demo suites" aria-label="Open solutions">
           <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><defs>
@@ -91,15 +96,43 @@
       <!-- Chat main -->
       <main id="chatSection" class="chat-section">
 
+        <!-- Grouped by pipeline stage — your voice in, the model's answer, its
+             voice out — so each number reads against the step that produced it. -->
         <div id="metricsSection" class="metrics-section">
-          <div class="metric-item"><span class="metric-value" id="transcribeTime">0s</span><span class="metric-label">Transcribe</span></div>
-          <div class="metric-item"><span class="metric-value" id="asrLanguage">—</span><span class="metric-label">ASR Language</span></div>
-          <div class="metric-item"><span class="metric-value" id="asrNoSpeech">—</span><span class="metric-label">No Speech</span></div>
-          <div class="metric-item"><span class="metric-value" id="asrLogprob">—</span><span class="metric-label">Avg Logprob</span></div>
-          <div class="metric-item"><span class="metric-value" id="firstTokenTime">0s</span><span class="metric-label">First Token</span></div>
-          <div class="metric-item"><span class="metric-value" id="firstAudioTime">0s</span><span class="metric-label">First Audio</span></div>
-          <div class="metric-item"><span class="metric-value" id="tpsValue">0</span><span class="metric-label">TPS</span></div>
-          <div class="metric-item"><span class="metric-value" id="rtfValue">0</span><span class="metric-label">RTF</span></div>
+          <div class="metric-group">
+            <div class="metric-group-head">
+              <span class="metric-group-icon" aria-hidden="true">🎙</span>
+              <span>Heard you</span>
+              <span class="metric-group-model" id="asrModelName" title=""></span>
+            </div>
+            <div class="metric-group-items">
+              <div class="metric-item"><span class="metric-value" id="transcribeTime">0s</span><span class="metric-label">Transcribe</span></div>
+              <div class="metric-item"><span class="metric-value" id="asrLanguage">—</span><span class="metric-label">Language</span></div>
+              <div class="metric-item" title="How likely the clip held no speech at all — lower is better"><span class="metric-value" id="asrNoSpeech">—</span><span class="metric-label">No Speech</span></div>
+              <div class="metric-item" title="Average token log-probability of the transcript — negative, and closer to 0 means more confident"><span class="metric-value" id="asrLogprob">—</span><span class="metric-label">Avg Logprob</span></div>
+            </div>
+          </div>
+          <div class="metric-group">
+            <div class="metric-group-head">
+              <span class="metric-group-icon" aria-hidden="true">💬</span>
+              <span>Answered</span>
+            </div>
+            <div class="metric-group-items">
+              <div class="metric-item" title="Time to first token"><span class="metric-value" id="firstTokenTime">0s</span><span class="metric-label">First Token</span></div>
+              <div class="metric-item" title="Generation speed in tokens per second"><span class="metric-value" id="tpsValue">0</span><span class="metric-label">Tokens/s</span></div>
+            </div>
+          </div>
+          <div class="metric-group">
+            <div class="metric-group-head">
+              <span class="metric-group-icon" aria-hidden="true">🔊</span>
+              <span>Spoke back</span>
+              <span class="metric-group-model" id="ttsEngineName" title=""></span>
+            </div>
+            <div class="metric-group-items">
+              <div class="metric-item"><span class="metric-value" id="firstAudioTime">0s</span><span class="metric-label">First Audio</span></div>
+              <div class="metric-item" title="Real-time factor: seconds of compute per second of speech — below 1 is faster than real time"><span class="metric-value" id="rtfValue">0</span><span class="metric-label">RTF</span></div>
+            </div>
+          </div>
         </div>
 
         <div id="chatMessages" class="chat-messages">
@@ -309,12 +342,29 @@
                   </details>
                 </div>
 
+                <div class="setting-row model-reset-row">
+                  <button id="mlaResetButton" class="setting-button" type="button"
+                    title="Unload all models and reset the accelerator (restarts the model server briefly)">↻&nbsp; Reset MLA</button>
+                  <span class="hub-note">Frees models wedged in the accelerator. The studio never does this on its own.</span>
+                </div>
+
                 <div class="model-list-group" id="modelInstalledGroup">
                   <div class="model-list-head">
                     <span class="model-list-title">Downloaded &mdash; on this board</span>
                     <span id="modelInstalledCount" class="model-list-count"></span>
                   </div>
                   <div id="modelInstalledList" class="model-list"></div>
+                </div>
+
+                <!-- Speech-to-text has its own slot: exactly one ASR model is
+                     resident, and switching it never disturbs the chat model. -->
+                <div class="model-list-group" id="asrModelGroup">
+                  <div class="model-list-head">
+                    <span class="model-list-title">Speech&#8209;to&#8209;text &mdash; transcribes your voice</span>
+                    <span id="asrActiveName" class="model-list-count"></span>
+                  </div>
+                  <div id="asrModelList" class="model-list"></div>
+                  <div class="hub-note" id="asrModelNote">Your choice applies until the studio restarts. To make it permanent, set <code>server.models.asr</code> in <code>config.local.yaml</code>.</div>
                 </div>
 
               </div>
@@ -326,6 +376,9 @@
                 <button id="hubRefreshButton" class="icon-button" type="button" title="Refresh the Hugging Face list">⟳</button>
               </div>
               <div class="model-filters">
+                <select id="hubFilterOrg" class="setting-select" title="Hugging Face account">
+                  <option value="">All accounts</option>
+                </select>
                 <select id="hubFilterType" class="setting-select" title="Model type">
                   <option value="">All types</option>
                   <option value="LLM">LLM</option>
@@ -417,6 +470,11 @@
                 <label for="piperPlusVoiceSelect" class="setting-label">Piper Plus multilingual voice</label>
                 <select id="piperPlusVoiceSelect" class="setting-select"></select>
                 <div id="piperPlusVoiceStatus" class="voice-status"></div>
+              </div>
+              <div class="setting-row voice-language-group" id="supertonicVoiceRow" style="display: none;">
+                <label for="supertonicVoiceSelect" class="setting-label">Supertonic voice</label>
+                <select id="supertonicVoiceSelect" class="setting-select"></select>
+                <div id="supertonicVoiceStatus" class="voice-status"></div>
               </div>
               <div class="setting-row voice-language-group" id="browserVoiceRow" style="display: none;">
                 <label for="browserVoiceSelect" class="setting-label">Browser voice</label>
@@ -606,6 +664,13 @@
       <button id="showcaseCloseBtn" class="showcase-fab-btn showcase-close" type="button"
         title="Close showcase (Esc)" aria-label="Close showcase">✕</button>
     </div>
+  </div>
+
+  <!-- Full-screen Audio API playground (/playground/): Speech and Transcription
+       tabs exercising /v1/audio/* on this origin, themed like the Studio. -->
+  <div id="playgroundModal" class="solutions-modal playground-modal" style="display: none;" role="dialog" aria-modal="true" aria-label="Audio API playground">
+    <iframe id="playgroundFrame" class="solutions-frame" title="Audio API playground"
+      style="display: none;" allow="microphone; autoplay; fullscreen" referrerpolicy="same-origin"></iframe>
   </div>
 
   <!-- Full-screen Solutions: SiMaSentry harness suites (Med / Safe / Sec), vendored

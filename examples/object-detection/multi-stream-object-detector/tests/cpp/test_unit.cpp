@@ -1,3 +1,4 @@
+#include "support/runtime/pull_status.h"
 #include "support/testing/test_process.h"
 
 #include <filesystem>
@@ -7,6 +8,7 @@
 
 namespace fs = std::filesystem;
 
+using sima_examples::pull_status_has_sample;
 using sima_examples::testing::create_test_scratch_dir;
 using sima_examples::testing::remove_dir;
 using sima_examples::testing::spawn_and_wait;
@@ -147,6 +149,30 @@ bool test_validate_config_only_rejects_invalid_inflight_limit(const std::string&
   return ok;
 }
 
+bool test_closed_output_is_terminal() {
+  using simaai::neat::PullStatus;
+  simaai::neat::PullError pull_error;
+  pull_error.message = "queue torn down";
+  const auto thrown_message = [&](PullStatus status) -> std::string {
+    try {
+      (void)pull_status_has_sample(status, "detections", pull_error, "source reached EOS");
+    } catch (const std::runtime_error& error) {
+      return error.what();
+    }
+    return "";
+  };
+  return expect_true(thrown_message(PullStatus::Closed) ==
+                         "detections output closed unexpectedly: source reached EOS",
+                     "closed output ends the run with the runtime's reason") &&
+         expect_true(thrown_message(PullStatus::Error) ==
+                         "failed to pull detections: queue torn down",
+                     "pull error ends the run with its message") &&
+         expect_true(!pull_status_has_sample(PullStatus::Timeout, "detections", pull_error, ""),
+                     "timeout is not a sample") &&
+         expect_true(pull_status_has_sample(PullStatus::Ok, "detections", pull_error, ""),
+                     "successful pull is a sample");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -163,5 +189,6 @@ int main(int argc, char** argv) {
   ok &= test_validate_config_only_rejects_too_many_streams(binary);
   ok &= test_validate_config_only_rejects_empty_streams(binary);
   ok &= test_validate_config_only_rejects_invalid_inflight_limit(binary);
+  ok &= test_closed_output_is_terminal();
   return ok ? 0 : 1;
 }
