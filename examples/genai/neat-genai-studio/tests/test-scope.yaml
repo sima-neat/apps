@@ -20,7 +20,8 @@ e2e:
     # (spoken replies, ASR switching) is verified on a DevKit by hand,
     # and the audio API end to end with src/python/ui/apitest/audio_e2e.sh
     # (speech -> transcription with the spoken words, German speech ->
-    # English translation, chat; non-zero exit on any failure).
+    # English translation, chat, and answers from documents when RAG is on;
+    # non-zero exit on any failure).
     # Tracked as a follow-up in the repository issues.
     reason: GenAI model assets (chat, ASR, Supertonic TTS) are not available to the test harness yet.
     models: []

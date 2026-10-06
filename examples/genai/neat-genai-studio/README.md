@@ -500,8 +500,10 @@ curl -sk -X OPTIONS $B/v1/audio/speech -H 'Origin: http://10.0.0.5:3000' \
 the speech routes against a backend started this way, and
 `src/python/ui/apitest/audio_e2e.sh [host:port | base URL]` checks the audio
 workflow end to end against any running instance: synthesized speech is
-transcribed back to its words, German speech translates to English, and the
-chat model answers; it exits non-zero on any failure. The `apitest` scripts
+transcribed back to its words, German speech translates to English, the
+chat model answers, and, when `/health` lists `features.rag`, document search
+returns passages and a chat with `neat_rag` uses them; it exits non-zero on any
+failure. The `apitest` scripts
 take a full base URL (`http://…` when `app.web.https` is false) or `STUDIO_URL`.
 
 ### Text-to-speech (voices & languages)
