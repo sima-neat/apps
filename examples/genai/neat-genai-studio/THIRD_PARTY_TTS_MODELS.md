@@ -22,13 +22,22 @@ entry.
   pinned upstream model by graph surgery and SiMa model-compiler quantization
   (BF16 activations, INT8 vector-field weights, BF16 vocoder); same licence as
   the base model
-- Integration software: <https://github.com/florianvoss-commit/supertonic-sima>
-- Attribution: Supertone Inc. (Supertonic 3); Florian Voss (Modalix port)
+- Compiled-package repository revision pinned in `setup.sh`:
+  `9229108c974ef57810abce0889ac713a59e341a1` (that repository also carries a
+  `LICENSE` file; review it together with the model card)
+- Integration software: the runtime package under
+  `src/python/ui/supertonic_sima/` is vendored from
+  <https://github.com/florianvoss-commit/supertonic-sima> at commit
+  `3b837b3e1b6a378ab8c24c3c04b079429b67e237`, at the upstream author's request.
+  That repository publishes no licence file; a licence statement for the
+  vendored code has been requested from upstream and this notice will be updated
+  when it is available.
+- Attribution: Supertone Inc. (Supertonic 3); the Modalix port's upstream author
 
-Supertonic is not part of `voice_catalog.json`: its assets are installed by the
-upstream repository's `scripts/setup_devkit.sh`, which verifies every compiled
-artifact against pinned SHA-256 checksums and downloads the CPU models at the
-pinned revision. Set `INSTALL_SUPERTONIC=0` to leave it out.
+Supertonic is not part of `voice_catalog.json`: `setup.sh` downloads its assets
+from Hugging Face at the pinned revisions above and verifies every compiled
+artifact against SHA-256 checksums recorded in the script. Set
+`INSTALL_SUPERTONIC=0` to leave it out.
 
 ## Piper Plus CSS10 (default multilingual/Japanese voice)
 

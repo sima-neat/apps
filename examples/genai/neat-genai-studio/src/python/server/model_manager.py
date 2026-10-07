@@ -30,7 +30,8 @@ import wave
 from pathlib import Path
 
 from shared.chat_template import repair_chat_template_files
-from shared.config import HubConfig, classify_model_dir, model_dir_complete
+from shared.config import (HubConfig, classify_model_dir, model_dir_complete,
+                           model_dir_supported)
 
 
 def parse_param_count(name: str) -> str | None:
@@ -92,15 +93,12 @@ _ASR_WARM_TIMEOUT_S = 300
 _DEFAULT_SEC_PER_GB = 2.7
 
 _MLA_FAILURE_MARKERS = (
-    "mlashm",
     "mla_load",
     "mla load",
     "bulk load",
-    "dispatcher is unavailable",
-    "dispatcher_unavailable",
     "warmup failed",
     "failed to acquire",
-    # Allocation failures matter as much as dispatcher ones: accelerator memory
+    # Allocation failures matter as much as load failures: accelerator memory
     # is not always reclaimed when models are switched, and the load then fails
     # with a plain "Cannot allocate memory" naming neither the MLA nor a remedy.
     "cannot allocate memory",
@@ -130,8 +128,6 @@ class ModelManager:
         openai_base_url: str,
         warmup: bool = True,
         asr_warmup: bool = True,
-        mla_reset_exit_code: int = 75,
-        mla_reset_enabled: bool = True,
         switch_settle_s: float = 0.6,
         log_tap=None,
     ) -> None:
@@ -151,13 +147,9 @@ class ModelManager:
         self._openai_base_url = openai_base_url.rstrip("/")
         self._warmup = warmup
         self._asr_warmup = asr_warmup
-        # Sentinel exit code that asks the supervisor (run.sh) to reset the MLA
-        # dispatcher and relaunch. Only ever used for an explicit user request.
-        self._mla_reset_exit_code = int(mla_reset_exit_code)
-        self._mla_reset_enabled = bool(mla_reset_enabled)
         # After unloading the outgoing model, wait briefly so its RAII free
-        # (which returns MLA memory to the dispatcher) completes before loading
-        # the replacement — avoids transient double-residency (MLA_LOAD_FAILED).
+        # (which returns its MLA memory) completes before loading the
+        # replacement — avoids transient double-residency (MLA_LOAD_FAILED).
         self._switch_settle_s = max(0.0, float(switch_settle_s))
         self._lock = threading.RLock()
         # Serializes mutating operations (load/unload/delete) end-to-end WITHOUT
@@ -272,6 +264,7 @@ class ModelManager:
         entries = []                                # outside the lock (walks are slow)
         for info in infos:
             complete, reason = self._is_model_complete(info.get("path"))
+            supported, unsupported_reason = model_dir_supported(info.get("path"))
             path = info.get("path")
             entries.append({
                 "name": info["name"],
@@ -295,6 +288,11 @@ class ModelManager:
                 "stagesTotal": self._count_elf_stages(path),
                 "complete": complete,
                 "incompleteReason": reason or None,
+                # Distinct from "complete": an unsupported build downloaded
+                # perfectly. Conflating them tells the user to re-download
+                # gigabytes that will fail the same way.
+                "supported": supported,
+                "unsupportedReason": unsupported_reason or None,
             })
         entries.sort(key=lambda e: (e["type"] == "asr", e["name"].lower()))
         return entries
@@ -427,6 +425,9 @@ class ModelManager:
             # Refuse to load a model whose weights are missing/partial — otherwise
             # it fails deep in the MLA with a confusing error.
             complete, reason = self._is_model_complete(path)
+            ok_supported, why_unsupported = model_dir_supported(path)
+            if not ok_supported:
+                raise ValueError(f"'{name}' cannot be loaded — {why_unsupported}")
             if not complete:
                 raise ValueError(
                     f"'{name}' cannot be loaded — {reason}. Re-download it from Add Model."
@@ -988,8 +989,8 @@ class ModelManager:
         # adds the configured `asr.name` while the catalog scan adds the
         # directory's basename. Deleting the "other" name would rmtree the weights
         # the active model is serving from, so compare resolved paths too.
-        active_path = self._resolved_path(self._active_asr)
-        if active_path and self._resolved_path(name) == active_path:
+        active_path = self.resolved_model_path(self._active_asr)
+        if active_path and self.resolved_model_path(name) == active_path:
             raise ValueError(
                 f"'{name}' is the active speech-to-text model under another name "
                 f"({self._active_asr}) — switch to another ASR model first."
@@ -1002,10 +1003,10 @@ class ModelManager:
             return False
         if name == self._configured_asr:
             return True
-        configured_path = self._resolved_path(self._configured_asr)
-        return bool(configured_path) and self._resolved_path(name) == configured_path
+        configured_path = self.resolved_model_path(self._configured_asr)
+        return bool(configured_path) and self.resolved_model_path(name) == configured_path
 
-    def _resolved_path(self, name: str | None):
+    def resolved_model_path(self, name: str | None):
         """Resolved on-disk path for a catalog entry, or None."""
         if not name:
             return None
@@ -1075,7 +1076,7 @@ class ModelManager:
             # server restarts.
             registered = [
                 served for served in self._server_model_names()
-                if served == name or self._resolved_path(served) == path
+                if served == name or self.resolved_model_path(served) == path
             ]
             for served in registered:
                 self._stop_model_streams(served)
@@ -1254,52 +1255,6 @@ class ModelManager:
         except Exception as exc:  # noqa: BLE001 - surfaced to caller
             return False, str(exc)
 
-    def _request_supervised_reset(self, reason: str, message: str) -> dict:
-        """Ask the supervisor (run.sh) to reset the MLA dispatcher and relaunch.
-
-        A dispatcher restart cannot be done from inside this process — it frees
-        the models this process still holds and the runtime cannot reconnect — so
-        exit with the sentinel code once the HTTP response has had a moment to
-        flush. run.sh resets the dispatcher and relaunches just the model server;
-        the UI stays up and reconnects.
-        """
-        logging.error(
-            "requesting supervised MLA reset + relaunch (%s; exit code %d)",
-            reason, self._mla_reset_exit_code,
-        )
-
-        def _exit_soon() -> None:
-            time.sleep(1.5)
-            os._exit(self._mla_reset_exit_code)
-
-        threading.Thread(target=_exit_soon, daemon=True).start()
-        return {"state": "resetting", "reset": True, "message": message}
-
-    def reset_mla(self) -> dict:
-        """Explicit, user-triggered accelerator reset.
-
-        Drains in-flight streams best-effort and deliberately WITHOUT taking
-        ``_op_lock``: the whole point is that it still works when a load has
-        wedged and is holding that lock. Nothing else in the studio calls this —
-        startup and load failures leave the board runtime alone.
-        """
-        if not self._mla_reset_enabled:
-            # Refuse before scheduling the sentinel exit. Returning success here
-            # would still tear the server down and interrupt generations, which
-            # is exactly what MLA_RESET=0 is set to prevent.
-            raise ValueError(
-                "Accelerator reset is disabled on this board (MLA_RESET=0)."
-            )
-        for victim in list(self._resident):
-            try:
-                self._stop_model_streams(victim)
-            except Exception:
-                pass
-        return self._request_supervised_reset(
-            "user requested MLA reset",
-            "Resetting the accelerator and restarting. Reconnecting shortly…",
-        )
-
     @staticmethod
     def _is_probe_timeout(detail: str) -> bool:
         """A warm-up that ran out of time proved nothing.
@@ -1356,8 +1311,8 @@ class ModelManager:
             f"Model '{name}' could not be loaded: the accelerator (MLA) reported "
             "an error. Accelerator memory is not always reclaimed when models are "
             "switched, so this can follow several switches even when the model "
-            "fits on its own. Use 'Reset MLA' in Settings -> Models (or /reset in "
-            "the CLI) to clear the accelerator, then load it again."
+            "fits on its own. Restart the Studio to free the accelerator, then "
+            "load it again."
         )
 
     # -- status ----------------------------------------------------------------

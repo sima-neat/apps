@@ -24,6 +24,9 @@ def _request_shutdown(signum, frame):
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=DEFAULT_UI_CONFIG)
+    parser.add_argument("--backend-only", action="store_true",
+                        help="serve the API endpoints only, without the web UI "
+                             "(also app.web.headless: true in the config)")
     return parser
 
 
@@ -46,7 +49,7 @@ def main() -> int:
     try:
         from flask_app import run_ui
 
-        run_ui(cfg)
+        run_ui(cfg, backend_only=args.backend_only or cfg.web.headless)
     except KeyboardInterrupt:
         print("\nstopping Flask UI...", flush=True)
     except Exception as exc:

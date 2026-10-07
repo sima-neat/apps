@@ -53,18 +53,16 @@ int main(int argc, char** argv) {
                                                         output_dir, total_saved_frames, timeout_ms);
 
   int rc = 0;
-  if (result.exit_code != 0) {
-    std::cerr << "[FAIL] exit code " << result.exit_code << "\n";
+  const std::string exit_problem_text = exit_problem(result);
+  if (!exit_problem_text.empty()) {
+    std::cerr << "[FAIL] " << exit_problem_text << "\n";
     std::cerr << "stdout:\n" << result.stdout_text << "\nstderr:\n" << result.stderr_text << "\n";
     rc = 1;
   } else {
     const int files = count_output_files(output_dir);
-    if (files < total_saved_frames) {
-      std::cerr << "[FAIL] expected at least " << total_saved_frames
-                << " sampled output files, got " << files << "\n";
-      rc = 1;
-    } else if (!all_output_files_nonempty(output_dir)) {
-      std::cerr << "[FAIL] some sampled output files are empty\n";
+    const std::string problem = streamed_frames_problem(output_dir, total_saved_frames);
+    if (!problem.empty()) {
+      std::cerr << "[FAIL] " << problem << "\n";
       rc = 1;
     } else {
       std::cout << "[OK] produced " << files << " sampled output files\n";

@@ -145,11 +145,37 @@ jobs:
         tar -tzf neat-apps-tests.tar.gz neat-apps-tests/tests/test.sh >/dev/null
         ls -lh "${runtime_archives[0]}" neat-apps-tests.tar.gz
 
+  contract-tests:
+    name: Repository Contract Tests
+    # tests/scripts holds the repository contract tests: README layout, the
+    # runtime manifest, the Model Zoo pin, portal assets and the test scope.
+    # They read build.sh, the workflows and the portal sources, so they need a
+    # source checkout, which the runtime the Modalix job overlays the tests
+    # onto does not carry. They run here, on the host, against the checkout.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          clean: true
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install test dependencies
+        run: python3 -m pip install pytest PyYAML
+
+      - name: Run repository contract tests
+        run: python3 -m pytest -c tests/pytest.ini --rootdir=. -v tests/scripts
+
   publish-vulcan-artifacts:
     name: Publish to Vulcan
     needs:
       - resolve-vulcan-config
       - test-runtime
+      - contract-tests
     uses: sima-neat/.github/.github/workflows/vulcan-publish-artifacts.yml@main
     with:
       aws_region: ${{ needs.resolve-vulcan-config.outputs.aws_region }}
@@ -277,17 +303,9 @@ jobs:
 
       - name: Install test dependencies
         run: |
-          if ! command -v ffprobe >/dev/null 2>&1; then
-            elevate=()
-            if [[ "$(id -u)" -ne 0 ]]; then
-              elevate=(sudo -n)
-            fi
-            "${elevate[@]}" apt-get update
-            "${elevate[@]}" env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ffmpeg
-          fi
           source "${PYNEAT_ACTIVATE}"
           echo "Using Python test interpreter: ${PYTHON_TEST_BIN}"
-          "${PYTHON_TEST_BIN}" -m pip install pytest "numpy<2" "opencv-python-headless<4.12" PyYAML
+          "${PYTHON_TEST_BIN}" -m pip install pytest "opencv-python-headless<4.12" PyYAML
           "${PYTHON_TEST_BIN}" -c "import pyneat; print('Using pyneat:', pyneat.__file__)"
 
       - name: Run all activated Apps tests

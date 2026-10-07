@@ -835,6 +835,7 @@ window.onload = function () {
   initBenchmark();
   initShowcase();
   initSolutions();
+  initPlayground();
   initShutdownButton();
   initRagInspect();
   initVersionModal();
@@ -4056,6 +4057,7 @@ function populateModelSelect(catalog) {
     option.value = m.name;
     const size = m.sizeBytes ? `  ·  ${fmtBytes(m.sizeBytes)}` : '';
     const incomplete = m.complete === false;
+    const unsupported = m.supported === false;
     const dot = incomplete ? '⚠ ' : (m.loaded ? '● ' : '○ ');
     option.textContent = `${dot}${m.name}  ·  ${typeBadge(m.type)}${size}${incomplete ? '  ·  incomplete' : ''}`;
     option.dataset.loaded = m.loaded ? 'true' : 'false';
@@ -4101,7 +4103,6 @@ function populateModelSelect(catalog) {
 // <select id="chatModelSelect"> stays the source of truth for the rest of the app.
 let _catalog = [];
 let _pendingLoad = '';    // name of the model currently loading (for the row label)
-let _resetting = false;   // an accelerator reset + server relaunch is in flight
 let _loadTicker = null;   // client-side load countdown (see startLoadTicker)
 let _lastServerLoadUpdate = 0;   // when the server last reported real progress
 let _asrActive = '';     // ASR model serving transcriptions (from the catalog)
@@ -4184,6 +4185,7 @@ function renderInstalledList() {
   const activeName = control ? _activeChatModel : getSelectedChatModel();
   filtered.forEach(m => {
     const incomplete = m.complete === false;
+    const unsupported = m.supported === false;
     const isActive = !!m.name && m.name === activeName;
     const row = document.createElement('div');
     row.className = 'hub-result model-row' + (isActive ? ' is-active' : '');
@@ -4222,9 +4224,14 @@ function renderInstalledList() {
       if (m.loaded) {
         btn.textContent = 'Unload'; btn.classList.add('model-unload'); btn.disabled = busy;
         btn.addEventListener('click', (e) => { e.stopPropagation(); unloadModel(m.name); });
-      } else if (incomplete) {
-        btn.textContent = 'Incomplete'; btn.disabled = true;
-        btn.title = `${m.incompleteReason || 'Weights are incomplete'} — re-download from Hugging Face below.`;
+      } else if (incomplete || unsupported) {
+        // Unsupported is NOT a broken download: re-fetching gigabytes would
+        // fail identically, so do not offer that as the remedy.
+        btn.textContent = unsupported ? 'Unsupported' : 'Incomplete';
+        btn.disabled = true;
+        btn.title = unsupported
+          ? (m.unsupportedReason || 'This build cannot run on the installed runtime.')
+          : `${m.incompleteReason || 'Weights are incomplete'} — re-download from Hugging Face below.`;
       } else if (_modelBusy && m.name === _pendingLoad) {
         btn.textContent = 'Loading…'; btn.disabled = true;
       } else {
@@ -4309,24 +4316,17 @@ function updateHomeModelIndicator() {
 // Refresh the per-row actions in the model list (Load / Unload / active state)
 // and composer whenever model state changes.
 function updateManageButtons() {
-  // Deliberately NOT disabled by _modelBusy: a wedged load holds that flag for
-  // the life of the request (up to 600s), which is exactly when this recovery
-  // action is needed. reset_mla() bypasses the server's op-lock for the same
-  // reason. Only a reset already in flight disables it.
-  const mlaReset = document.getElementById('mlaResetButton');
-  if (mlaReset) mlaReset.disabled = _resetting;
   renderInstalledList();
   renderAsrList();
   updateComposerEnabled();
 }
 
-// A model is usable for chat only once it is FULLY resident (not mid-load and
-// not mid-reset). The composer is locked until then.
+// A model is usable for chat only once it is FULLY resident (not mid-load).
+// The composer is locked until then.
 function serverBusy() {
   // Any state in which the model server cannot service a request: a model
-  // operation in flight, or a reset during which the old server is exiting and
-  // the replacement is not yet up.
-  return _modelBusy || _resetting;
+  // operation in flight.
+  return _modelBusy;
 }
 
 function modelReady() {
@@ -4370,9 +4370,6 @@ function initModelManage() {
   // Info / delete / load / unload are per-row buttons in the list now.
   const sel = document.getElementById('chatModelSelect');
   if (sel) sel.addEventListener('change', updateManageButtons);
-
-  const mlaReset = document.getElementById('mlaResetButton');
-  if (mlaReset) mlaReset.addEventListener('click', () => resetMla());
 
   const retry = document.getElementById('modelLoadRetry');
   const viewLogs = document.getElementById('modelLoadErrorLogs');
@@ -4525,119 +4522,6 @@ function modelLoadHints(name) {
   return { est: m.estimatedLoadS, stages: m.stagesTotal };
 }
 
-// Reset the accelerator: asks the model server to exit with the sentinel code so
-// the supervisor (run.sh) restarts the MLA dispatcher — which owns models across
-// processes, so killing the server alone does not free them — and relaunches it.
-// Explicit only: nothing else in the studio triggers this.
-// The reset route is board-wide, so run.sh prints a token at startup that the
-// browser must send. Ask once and remember it; a 401 forgets it (see above).
-// Returns '' when none is stored and the user typed nothing (the server may
-// not require one), or null when the prompt was cancelled.
-const RESET_TOKEN_KEY = 'resetMlaToken';
-function getResetToken() {
-  let token = '';
-  try { token = localStorage.getItem(RESET_TOKEN_KEY) || ''; } catch (e) { /* ignore */ }
-  if (token) return token;
-  const typed = window.prompt(
-    'Reset MLA needs the token run.sh printed at startup '
-    + '(also in .neat-genai-reset.token on the board). Leave empty if the Studio '
-    + 'runs with STUDIO_RESET_AUTH=0.');
-  if (typed === null) return null;
-  token = typed.trim();
-  if (token) { try { localStorage.setItem(RESET_TOKEN_KEY, token); } catch (e) { /* ignore */ } }
-  return token;
-}
-
-async function resetMla() {
-  if (_resetting) return;
-  if (!window.confirm('Reset the accelerator (MLA)?\n\nThis unloads all models and briefly '
-      + 'restarts the model server — it will be unavailable for a few seconds. '
-      + 'In-progress generation will stop.')) return;
-  _resetting = true;
-  stopLoadPolling();          // the outgoing server's log feed is about to die
-  stopLoadTicker();
-  clearModelError();
-  updateManageButtons();
-  setModelStatus('Resetting the accelerator and restarting…', 'loading');
-  setModelLoadBar('active');
-  try {
-    // The server exits ~1.5s after replying, so this may never return — that is
-    // the success path, not a failure. A response that does arrive can still be
-    // a refusal (MLA_RESET=0 answers 400): surface it instead of waiting for a
-    // restart that will never happen and then reporting the old server as new.
-    let refused = '';
-    try {
-      const headers = {};
-      const token = getResetToken();
-      if (token === null) {                // the prompt was cancelled
-        _resetting = false;
-        setModelLoadBar(null);
-        updateManageButtons();
-        setModelStatus('Reset cancelled', '');
-        return;
-      }
-      if (token) headers['X-Reset-Token'] = token;
-      const r = await fetch('/models/reset-mla', { method: 'POST', headers });
-      if (!r.ok) {
-        const d = await r.json().catch(() => ({}));
-        if (r.status === 401) {
-          try { localStorage.removeItem(RESET_TOKEN_KEY); } catch (e) { /* ignore */ }
-        }
-        refused = (d && (d.error || d.message)) || `reset refused (HTTP ${r.status})`;
-      }
-    } catch (e) {
-      // The UI process stays up while the model server restarts, and the route
-      // turns the model server's disconnect into a normal HTTP response, so a
-      // rejected fetch here is a browser<->Studio transport failure, not a
-      // reset that started. Do not wait for a restart and then report one.
-      refused = `could not reach the Studio (${e && e.message ? e.message : 'network error'})`;
-    }
-    if (refused) {
-      // Nothing was reset: release the lock but keep the refusal on screen
-      // (the restart cleanup below would replace it with the catalog status).
-      _resetting = false;
-      setModelLoadBar(null);
-      updateManageButtons();
-      setModelStatus(`Reset refused: ${refused}`, 'error');
-      return;
-    }
-    await waitForServerBack();
-  } finally {
-    if (_resetting) {
-      // Always release the lock, even if the wait threw, so the UI cannot get
-      // stuck with every action disabled.
-      _resetting = false;
-      _modelBusy = false;       // a wedged load is gone with the restart
-      setModelLoadBar(null);
-      clearModelError();        // drop a stale error a concurrent load's 502 raised
-      await refreshCatalog();
-      updateManageButtons();
-      if (typeof updateSelectedModelVisionState === 'function') updateSelectedModelVisionState();
-    }
-  }
-}
-
-// Poll /models/status until the relaunched model server answers.
-async function waitForServerBack() {
-  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-  const start = Date.now();
-  const timeoutMs = 90000;
-  await sleep(2500);          // let the old process exit before polling
-  while (Date.now() - start < timeoutMs) {
-    try {
-      const r = await fetch('/models/status', { cache: 'no-store' });
-      if (r.ok) {
-        const d = await r.json().catch(() => ({}));
-        // Back up. Whether the dispatcher itself was reset depends on run.sh
-        // having the privileges, so do not over-claim a full accelerator reset.
-        if (d && !d.error) { setModelStatus('Model server restarted — ready', 'ready'); return; }
-      }
-    } catch (e) { /* still down */ }
-    await sleep(1500);
-  }
-  setModelStatus('Reset requested, but the server is slow to return — check run.sh.', 'error');
-}
-
 // ---- Speech-to-text (ASR) models --------------------------------------------
 // Kept in their own list because they never compete with chat/VLM models for the
 // same slot: exactly one ASR model is resident, and picking another evicts it
@@ -4671,6 +4555,7 @@ function renderAsrList() {
   const busy = serverBusy();
   filtered.forEach(m => {
     const incomplete = m.complete === false;
+    const unsupported = m.supported === false;
     const isActive = !!m.name && m.name === _asrActive;
     const row = document.createElement('div');
     row.className = 'hub-result model-row' + (isActive ? ' is-active' : '');
@@ -4721,10 +4606,12 @@ function renderAsrList() {
       if (isActive) {
         btn.textContent = 'Active';
         btn.disabled = true;
-      } else if (incomplete) {
-        btn.textContent = 'Incomplete';
+      } else if (incomplete || unsupported) {
+        btn.textContent = unsupported ? 'Unsupported' : 'Incomplete';
         btn.disabled = true;
-        btn.title = `${m.incompleteReason || 'Weights are incomplete'} — re-download from the Add Model tab.`;
+        btn.title = unsupported
+          ? (m.unsupportedReason || 'This build cannot run on the installed runtime.')
+          : `${m.incompleteReason || 'Weights are incomplete'} — re-download from the Add Model tab.`;
       } else if (busy && m.name === _asrPending) {
         btn.textContent = 'Switching…';
         btn.disabled = true;
@@ -4861,7 +4748,7 @@ async function loadModelAndActivate(name) {
     if (typeof updateSelectedModelVisionState === 'function') updateSelectedModelVisionState();
     return; // already resident
   }
-  // Incomplete weights can't load — surface it directly (a reset won't help).
+  // Incomplete weights can't load — surface it directly.
   if (option && option.dataset.complete === 'false') {
     setModelStatus('Model weights are incomplete', 'error');
     showModelError(name, `${option.dataset.incompleteReason || 'The weights are incomplete'}. Re-download it from the Add Model tab.`);
@@ -5151,7 +5038,7 @@ async function initHubControls() {
   if (hubSearch) hubSearch.addEventListener('input', applyHubFilters);
   const hubRefresh = document.getElementById('hubRefreshButton');
   if (hubRefresh) hubRefresh.addEventListener('click', () => { _hubLoaded = true; loadHubModels(); });
-  ['hubFilterType', 'hubFilterParams', 'hubFilterFamily', 'hubSortBy'].forEach(id => {
+  ['hubFilterOrg', 'hubFilterType', 'hubFilterParams', 'hubFilterFamily', 'hubSortBy'].forEach(id => {
     const el = document.getElementById(id); if (el) el.addEventListener('change', applyHubFilters);
   });
 
@@ -5195,8 +5082,11 @@ async function loadHubModels() {
       // The server classifies from Hub metadata (pipeline_tag/tags), which is
       // reliable; the repo-name guess is only for older servers.
       const t = m.type ? m.type.toUpperCase() : hubModelType(m.repoId);
-      return { ...m, _type: t, _params: b, _bucket: hubParamsBucket(b), _family: hubModelFamily(m.repoId) };
+      const org = m.org || (m.repoId.includes('/') ? m.repoId.split('/')[0] : '');
+      return { ...m, _type: t, _org: org, _params: b, _bucket: hubParamsBucket(b),
+               _family: hubModelFamily(m.repoId) };
     });
+    populateHubOrgFilter();
     populateHubFamilyFilter();
     applyHubFilters();
   } catch (err) {
@@ -5236,6 +5126,22 @@ function hubModelFamily(repoId) {
   return m ? (m[0][0].toUpperCase() + m[0].slice(1)) : 'Other';
 }
 
+// Which Hugging Face accounts the current results came from. Built from the
+// results rather than the configured org list, so it only ever offers accounts
+// that actually returned something.
+function populateHubOrgFilter() {
+  const sel = document.getElementById('hubFilterOrg');
+  if (!sel) return;
+  const cur = sel.value;
+  const orgs = Array.from(new Set(_hubAllModels.map(m => m._org).filter(Boolean)))
+    .sort((a, b) => a.localeCompare(b));
+  sel.innerHTML = '<option value="">All accounts</option>'
+    + orgs.map(o => `<option value="${escHtml(o)}">${escHtml(o)}</option>`).join('');
+  if (orgs.includes(cur)) sel.value = cur;
+  // One account configured: the filter would be a no-op, so keep it out of the way.
+  sel.style.display = orgs.length > 1 ? '' : 'none';
+}
+
 function populateHubFamilyFilter() {
   const sel = document.getElementById('hubFilterFamily');
   if (!sel) return;
@@ -5250,6 +5156,7 @@ function applyHubFilters() {
   const ft = document.getElementById('hubFilterType')?.value || '';
   const fp = document.getElementById('hubFilterParams')?.value || '';
   const ff = document.getElementById('hubFilterFamily')?.value || '';
+  const fo = document.getElementById('hubFilterOrg')?.value || '';
   const filtered = _hubAllModels.filter(m => {
     // Fully-installed models live in the Installed section above; only offer the
     // Hugging Face row for new models and incomplete ones (which need re-download).
@@ -5258,6 +5165,7 @@ function applyHubFilters() {
     if (ft && m._type !== ft) return false;
     if (fp && m._bucket !== fp) return false;
     if (ff && m._family !== ff) return false;
+    if (fo && m._org !== fo) return false;
     return true;
   });
   const sort = document.getElementById('hubSortBy')?.value || 'downloads';
@@ -5312,7 +5220,9 @@ function renderHubResults(data) {
       (p != null ? `<span class="hub-badge">${p}B</span>` : '') +
       sizeBadge +
       `<span class="hub-badge hub-badge-fam">${fam}</span>` +
-      (incomplete ? `<span class="hub-badge hub-badge-warn" title="Local copy is missing files — re-download to fix">⚠ incomplete</span>` : '');
+      (item.unsupportedReason
+        ? `<span class="hub-badge hub-badge-warn" title="${escHtml(item.unsupportedReason)}">⚠ unsupported</span>`
+        : incomplete ? `<span class="hub-badge hub-badge-warn" title="Local copy is missing files — re-download to fix">⚠ incomplete</span>` : '');
     meta.innerHTML = `<span class="hub-repo">${item.repoId}</span><span class="hub-badges">${badges}</span><span class="hub-sub">${sub}</span>`;
     const info = document.createElement('button');
     info.className = 'hub-info';
@@ -5321,11 +5231,17 @@ function renderHubResults(data) {
     info.textContent = 'ℹ';
     info.addEventListener('click', () => showHubCard(item.repoId));
     const btn = document.createElement('button');
-    btn.className = 'setting-button hub-download-btn' + (incomplete ? ' hub-redownload' : '');
-    btn.textContent = incomplete ? 'Re-download' : (item.alreadyInCatalog ? 'In catalog' : 'Download');
-    btn.disabled = !!(item.alreadyInCatalog && !incomplete);
-    if (incomplete) btn.title = 'The on-disk copy is incomplete — download again to repair it';
-    btn.addEventListener('click', () => hubDownload(item.repoId, row, btn));
+    // The server judges the encoder layout from the repo's own file list, so a
+    // build this runtime cannot load is refused here rather than after the
+    // download has already cost gigabytes.
+    const unsupported = !!item.unsupportedReason;
+    btn.className = 'setting-button hub-download-btn' + (incomplete && !unsupported ? ' hub-redownload' : '');
+    btn.textContent = unsupported ? 'Unsupported'
+      : (incomplete ? 'Re-download' : (item.alreadyInCatalog ? 'In catalog' : 'Download'));
+    btn.disabled = unsupported || !!(item.alreadyInCatalog && !incomplete);
+    if (unsupported) btn.title = item.unsupportedReason;
+    else if (incomplete) btn.title = 'The on-disk copy is incomplete — download again to repair it';
+    if (!unsupported) btn.addEventListener('click', () => hubDownload(item.repoId, row, btn));
     row.appendChild(meta);
     row.appendChild(info);
     row.appendChild(btn);
@@ -6306,6 +6222,89 @@ function closeShowcase() {
     } catch (e) { /* ignore */ }
   }
   _showcaseEntered = false;
+}
+
+// ---- Audio API playground (/playground/), embedded in-app ----------------
+// The header's waveform button opens the playground full-screen in an iframe
+// (same origin; it calls /v1/audio/* directly and follows the Studio theme).
+// The page's "Back to Studio" link / Esc posts {type:'sima-studio:close-playground'}
+// to close; standalone, that link simply navigates to /.
+let _playgroundEntered = false;
+let _playgroundGen = 0;              // bumps on every open/close: stale fullscreen promises no-op
+
+function _exitFullscreenQuietly() {
+  try {
+    if (document.fullscreenElement || document.webkitFullscreenElement) {
+      const p = (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+      if (p && p.catch) p.catch(() => {});
+    }
+  } catch (e) { /* ignore */ }
+}
+
+function openPlayground() {
+  const modal = document.getElementById('playgroundModal');
+  const frame = document.getElementById('playgroundFrame');
+  if (!modal || !frame) return;
+  frame.src = '/playground/';        // always a fresh load (close unloads it)
+  frame.style.display = 'block';
+  modal.style.display = 'flex';
+  document.body.classList.add('playground-open');
+  _playgroundEntered = false;
+  const gen = ++_playgroundGen;
+  try {
+    const rf = modal.requestFullscreen || modal.webkitRequestFullscreen;
+    if (rf) {
+      const p = rf.call(modal);
+      if (p && p.then) {
+        _playgroundEntered = true;
+        p.then(() => {
+          // Closed before fullscreen was granted: leave it again. (A reopen in
+          // the meantime wants fullscreen, so only a hidden modal exits.)
+          if (modal.style.display === 'none') _exitFullscreenQuietly();
+        }, () => { if (gen === _playgroundGen) _playgroundEntered = false; });
+      }
+    }
+  } catch (e) { /* ignore */ }
+  setTimeout(() => { try { frame.contentWindow && frame.contentWindow.focus(); } catch (e) { /* ignore */ } }, 80);
+}
+
+function closePlayground() {
+  const modal = document.getElementById('playgroundModal');
+  const frame = document.getElementById('playgroundFrame');
+  if (!modal) return;
+  modal.style.display = 'none';
+  // Unload the page: stops audio and releases the microphone. about:blank
+  // rather than '' (an empty src reflects as the document URL and stays truthy).
+  if (frame) { frame.style.display = 'none'; frame.src = 'about:blank'; }
+  document.body.classList.remove('playground-open');
+  _playgroundGen += 1;
+  if (_playgroundEntered) _exitFullscreenQuietly();
+  _playgroundEntered = false;
+}
+
+function initPlayground() {
+  const btn = document.getElementById('playgroundButton');
+  const modal = document.getElementById('playgroundModal');
+  if (!btn || !modal) return;
+  btn.addEventListener('click', (e) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || (e.button && e.button !== 0)) return;
+    e.preventDefault();
+    openPlayground();
+  });
+  window.addEventListener('message', (e) => {
+    const frame = document.getElementById('playgroundFrame');
+    if (!frame || e.source !== frame.contentWindow) return;
+    if (e.origin !== window.location.origin) return;
+    if (e.data && typeof e.data === 'object' && e.data.type === 'sima-studio:close-playground') closePlayground();
+  });
+  document.addEventListener('fullscreenchange', () => {
+    // Leaving browser fullscreen (Esc handled by the browser) closes the playground too.
+    if (_playgroundEntered && !document.fullscreenElement && modal.style.display !== 'none') closePlayground();
+  });
+  // Esc while focus is on the Studio itself (the frame handles its own keys).
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && modal.style.display !== 'none') closePlayground();
+  });
 }
 
 // ---- Solutions: SiMaSentry harness suites (Med/Safe/Sec), embedded in-app ----

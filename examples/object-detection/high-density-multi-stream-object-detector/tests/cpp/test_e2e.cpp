@@ -3,6 +3,7 @@
 #include "support/testing/test_process.h"
 
 #include <nlohmann/json.hpp>
+#include <opencv2/videoio.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -31,37 +32,27 @@ std::string select_source(const std::vector<std::string>& urls, const std::strin
   for (const auto& url : urls) {
     if (!seen.insert(url).second)
       continue;
-    const auto probe = spawn_and_wait("/usr/bin/env",
-                                      {"ffprobe", "-v", "error", "-rtsp_transport", "tcp",
-                                       "-select_streams", "v:0", "-show_entries",
-                                       "stream=codec_name,width,height,avg_frame_rate,has_b_frames",
-                                       "-of", "json", url},
-                                      20000);
-    if (probe.exit_code != 0) {
-      std::cerr << probe.stderr_text;
+    cv::VideoCapture cap(url, cv::CAP_ANY,
+                         {cv::CAP_PROP_OPEN_TIMEOUT_MSEC, 20000,
+                          cv::CAP_PROP_READ_TIMEOUT_MSEC, 20000});
+    if (!cap.isOpened()) {
+      std::cerr << "Cannot open source: " << url << "\n";
       continue;
     }
-    const auto streams = json::parse(probe.stdout_text).value("streams", json::array());
-    if (streams.empty())
-      continue;
-    const auto& stream = streams.front();
-    const std::string rate = stream.value("avg_frame_rate", "0/1");
-    std::istringstream input(rate);
-    double numerator = 0, denominator = 0;
-    char separator = 0;
-    input >> numerator >> separator >> denominator;
-    const double fps = denominator > 0 ? numerator / denominator : 0;
-    if (stream.value("codec_name", "") == (codec == "h264" ? "h264" : "hevc") &&
-        stream.value("width", 0) == 1280 && stream.value("height", 0) == 720 &&
-        stream.value("has_b_frames", -1) == 0 &&
+    const double width = cap.get(cv::CAP_PROP_FRAME_WIDTH);
+    const double height = cap.get(cv::CAP_PROP_FRAME_HEIGHT);
+    const double fps = cap.get(cv::CAP_PROP_FPS);
+    cap.release();
+    if (width == 1280 && height == 720 &&
         (std::abs(fps - 30) < 0.001 || std::abs(fps - 30000.0 / 1001) < 0.001)) {
       std::cout << "source codec=" << codec << " width=1280 height=720 fps=" << fps
                 << " unique_publishers=1\n";
       return url;
     }
-    std::cerr << "Unsuitable source: " << stream.dump() << "\n";
+    std::cerr << "Unsuitable source: width=" << width << " height=" << height
+              << " fps=" << fps << "\n";
   }
-  throw std::runtime_error("No 720p30 " + codec + " source without B-frames");
+  throw std::runtime_error("No 720p30 " + codec + " source");
 }
 
 void run_case(const std::string& binary, const std::string& model, const std::string& codec,

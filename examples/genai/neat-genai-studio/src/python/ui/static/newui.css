@@ -675,6 +675,8 @@ body.rag-inspect-open { overflow: hidden; }
   border-radius: 999px; padding: 3px 9px;
 }
 .solutions-frame { flex: 1 1 auto; width: 100%; height: 100%; border: 0; display: block; }
+.playground-modal { background: var(--bg); color: var(--text); }
+body.playground-open { overflow: hidden; }
 body.solutions-open { overflow: hidden; }
 
 .bench-modal {
@@ -925,12 +927,6 @@ body.solutions-open { overflow: hidden; }
 .model-unload-button:disabled { opacity: .5; cursor: default; }
 .model-unload-button[hidden] { display: none; }
 /* Load status is its own block, divided from the Load action above it. */
-.model-reset-row {
-  /* Set the recovery action apart from the load-status panel above it: it
-     acts on the board runtime, not on this load, and sat flush against it. */
-  margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); gap: 8px;
-}
-.model-reset-row .setting-button { align-self: flex-start; }
 .model-load-progress {
   margin-top: 16px; padding-top: 13px; border-top: 1px solid var(--border);
   display: flex; flex-direction: column; gap: 8px;

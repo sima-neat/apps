@@ -151,11 +151,17 @@ e2e:
     enabled: true
     models:
       - model_id
+    variants:          # optional: also run the suite with these models when
+      - other_model_id # SIMANEAT_APPS_TEST_MODEL_VARIANTS=1, as the nightly run does
   cpp:
     enabled: true
     models:
       - model_id
 ```
+
+The first entry under `models` is the model the suite runs with; every entry is
+downloaded. `variants` are exercised only when `SIMANEAT_APPS_TEST_MODEL_VARIANTS=1`,
+which the nightly workflow sets, so a pull request run stays at one model per suite.
 
 Disable unsupported coverage in `test-scope.yaml` and include a short reason
 for disabled e2e paths. Enabled coverage must have the matching test file:
@@ -175,6 +181,11 @@ for disabled e2e paths. Enabled coverage must have the matching test file:
 python3 scripts/validate_readmes.py
 python3 scripts/generate_catalog.py >/tmp/apps-catalog.json
 ```
+
+Both Python scripts need Python 3.10 or newer. Under 3.9 they fail at import
+with `TypeError: unsupported operand type(s) for |`, which reads like a bug in
+the script rather than a version mismatch. macOS ships 3.9 as the system
+`python3`; run them with `python3.11` or another 3.10+ interpreter there.
 
 Run e2e validation when its hardware, model, RTSP, and service prerequisites are
 available:

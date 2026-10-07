@@ -16,7 +16,13 @@
 
 Run RF-DETR detection or instance segmentation on one H.264, H.265, or MJPEG RTSP stream and view the result in Insight.
 
-The application decodes to NV12 once. EV74 converts, resizes, and normalizes each frame for the selected backbone. A one-frame queue drops stale decoded frames if inference falls behind. Host code then selects the strongest proposals and passes the matching boxes and feature tensor to the transformer. Insight receives the source video and matching detection boxes or segmentation polygons.
+The application decodes to NV12 once. A 4-frame queue replaces stale decoded frames when inference falls behind. EV74 converts, resizes, and normalizes admitted frames for the backbone. Host code selects the strongest proposals and passes their boxes and feature tensor to the transformer. Insight receives video and matching detection boxes or segmentation polygons.
+
+The backbone output and transformer input each use a four-entry blocking queue to preserve completed backbone work. These capacities do not include buffers held by active stages.
+
+MJPEG reserves 32 decoded buffers so decoding can continue while inference and preview retain frames. This is tested headroom for the application, not an exact count of graph-held buffers. The raw NV12 storage is about 44 MB at 720p, 100 MB at 1080p, or 398 MB at 4K, before alignment.
+
+TCP sources use RTP timestamps directly to avoid arrival-time corrections during high-rate replay. H.264 and H.265 video reach Insight as encoded passthrough. MJPEG video is re-encoded to H.264 from the decoded frames; when the encoder falls behind, the preview keeps the newest frames and inference keeps the full input rate.
 
 ## Preview
 
@@ -112,6 +118,68 @@ python3 "$APP_DIR/src/python/main.py" --config "$APP_DIR/src/common/config.yaml"
 ```
 
 Insight receives `object-detection` metadata for detection or `segmentation` polygon metadata for segmentation. Stop a continuous run with Ctrl-C.
+
+## Expected Result
+
+This application writes nothing to disk; its output is the Insight stream plus a
+startup line and a closing summary:
+
+```text
+RF-DETR detection small h264: rtsp://<host>:<port>/<stream> (1280x720@30) -> Insight video=9000 metadata=9100
+RF-DETR detection: completed=200 output_fps=30.8
+```
+
+The `output_fps` value above is Python's, which prints one decimal place. The
+C++ binary prints the same line at the default stream precision, for example
+`output_fps=30.7692`.
+
+The startup line prints as soon as the source is probed, so it confirms the
+task, variant, codec and resolution straight away. Check that probed resolution
+matches the source you intended.
+
+The packaged config ships `inference.frames: 0`, which runs continuously. Both
+implementations handle `SIGINT`, so stopping with Ctrl-C still prints the closing
+`completed=` line. Set a positive `inference.frames` if you want the run to end
+on its own instead.
+
+`completed` reports the frames processed, and `output_fps` should track the
+source frame rate; a much lower `output_fps` means the pipeline is not keeping
+up with the source.
+
+## Troubleshooting
+
+Check the configuration before involving hardware. This validates and exits
+without opening a stream:
+
+```bash
+python3 ${APP_DIR}/src/python/main.py \
+  --config ${APP_DIR}/src/common/config.yaml --validate-config-only
+```
+
+A valid configuration prints, for example, `RF-DETR detection small
+configuration is valid`. The C++ binary prints the same line without the variant,
+as `RF-DETR detection configuration is valid`.
+
+- `source.codec must be h264/avc, h265/hevc, or mjpeg` means `source.codec` names
+  a codec this example does not decode. Set it to match the source.
+- `model.task must be detection or segmentation` means `model.task` is not one
+  of the supported tasks.
+- A `model.detection.variant` with no model pair under `model.detection`, for
+  example `large`, fails with `large must be a mapping` in Python and
+  `model.detection.large.backbone and transformer must be set` in C++.
+- `model archive must use .tar.gz: None` means one half of the model pair was
+  left blank in the config. Both `backbone` and `transformer` must name a
+  downloaded archive for the selected task and variant. This is specific to the
+  Python entrypoint, where a blank value becomes the literal string `None` and
+  slips past validation, so the failure appears only once the run starts. The
+  C++ binary rejects the same config during validation, naming the selected
+  variant, for example
+  `model.detection.small.backbone and transformer must be set`.
+- `failed to resolve RTSP width, height, and FPS` means the source could not be
+  probed, usually because the URL is not reachable from the board. Verify it from
+  the board itself; the URL Insight displays is not always reachable from the
+  target. Where the source is reachable but does not report its properties, set
+  `source.width`, `source.height` and `source.fps` as fallbacks.
 
 ## Performance
 
