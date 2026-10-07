@@ -10,9 +10,7 @@ library (+ PyYAML to read the config).
 from __future__ import annotations
 
 import argparse
-import http.client
 import json
-import socket
 import os
 import re
 import shutil
@@ -409,46 +407,6 @@ def catalog(ctrl):
         return []
 
 
-def _is_reset_disconnect(reason):
-    """True for the transport errors a server that replies and then exits
-    produces: the only ones that mean the reset was accepted."""
-    return isinstance(reason, (http.client.RemoteDisconnected, ConnectionResetError,
-                               http.client.IncompleteRead, BrokenPipeError))
-
-
-def _request_supervisor_reset():
-    """Ask run.sh to reset a model server that cannot answer its control API.
-    Returns True when the request was handed over."""
-    request_file = os.environ.get("NEAT_RESET_REQUEST_FILE", "")
-    if not request_file:
-        print(f"{ERR}  the model server is not responding and no supervisor is "
-              f"available to reset it (start the Studio with run.sh --cli).{RESET}")
-        return False
-    try:
-        with open(request_file, "w", encoding="utf-8") as handle:
-            handle.write("reset\n")
-    except OSError as exc:
-        print(f"{ERR}  could not hand the reset to the supervisor: {exc}{RESET}")
-        return False
-    print(f"{MUTED}  model server is not responding — asked run.sh to reset it…{RESET}")
-    return True
-
-
-def wait_gone(oai, timeout=30):
-    """Wait for the model server to stop answering. Used after requesting a
-    reset: the endpoint replies before exiting, so 'is it back?' is meaningless
-    until the outgoing process has actually gone."""
-    deadline = time.monotonic() + timeout
-    url = f"http://{oai[0]}:{oai[1]}/v1/models"
-    while time.monotonic() < deadline:
-        try:
-            _http(url, timeout=2)
-        except Exception:
-            return True
-        time.sleep(0.5)
-    return False
-
-
 def wait_ready(oai, timeout=90):
     deadline = time.monotonic() + timeout
     url = f"http://{oai[0]}:{oai[1]}/v1/models"
@@ -741,7 +699,6 @@ HELP = f"""{MUTED}Commands:
   /think [on|off]    let reasoning models think before answering (default on).
                      Reasoning streams dimmed and stays out of history/export;
                      off sends /no_think, like the web UI's Thinking toggle
-  /reset             reset the accelerator (MLA) and relaunch the model server
   /benchmark [sel] [runs] [tok]   TTFT/TPS benchmark. sel: blank=active model,
                      'all', or a comma-list. e.g. /benchmark all 5 128 (aliases /bench, /perf)
   /rag [filter]      inspect the RAG database — list ingested chunks (aliases /docs)
@@ -2147,61 +2104,6 @@ def main():
                 if not (active and cur and cur.get("supportsVision")):
                     print(f"{MUTED}  note: the current model isn't a VLM — frames send "
                           f"once you load one.{RESET}")
-            elif cmd == "reset":
-                # Explicit accelerator reset: the server exits with the sentinel
-                # code and run.sh restarts the MLA dispatcher and relaunches it,
-                # so the request itself usually dies with the connection.
-                print(f"{MUTED}  resetting the accelerator and relaunching the "
-                      f"model server…{RESET}")
-                if os.environ.get("MLA_RESET", "1") != "1":
-                    print(f"{ERR}  accelerator reset is disabled (MLA_RESET=0).{RESET}")
-                    continue
-                try:
-                    ctrl_post(ctrl, "/control/reset_mla", {}, timeout=10)
-                except (socket.timeout, TimeoutError) as exc:
-                    # No answer at all: the server is wedged (typically inside a
-                    # native model load) and cannot service its own control API.
-                    # Hand the reset to run.sh, which polls the request file.
-                    if not _request_supervisor_reset():
-                        continue
-                except urllib.error.HTTPError as exc:
-                    # The server answered, so it is not resetting: MLA_RESET=0
-                    # refuses with 400. The reason is in the JSON body, which
-                    # str(exc) does not include.
-                    try:
-                        detail = json.loads(exc.read().decode("utf-8") or "{}").get("error") or ""
-                    except Exception:  # noqa: BLE001
-                        detail = ""
-                    print(f"{ERR}  reset refused ({exc.code}): {detail or exc.reason}{RESET}")
-                    continue
-                except urllib.error.URLError as exc:
-                    if isinstance(exc.reason, (socket.timeout, TimeoutError, ConnectionRefusedError)):
-                        # No server answered: wedged (timeout) or already down
-                        # (refused). Neither is a reset; hand it to run.sh,
-                        # whose watchdog performs the reset once a server is up.
-                        if not _request_supervisor_reset():
-                            continue
-                    elif not _is_reset_disconnect(exc.reason):
-                        print(f"{ERR}  reset request failed: {exc.reason}{RESET}")
-                        continue
-                    # A mid-reply disconnect is the success path: the server
-                    # replied and exited.
-                except (http.client.RemoteDisconnected, ConnectionResetError, http.client.IncompleteRead):
-                    pass   # the server exited mid-reply: success
-                except Exception as exc:  # noqa: BLE001
-                    print(f"{ERR}  reset request failed: {exc}{RESET}")
-                    continue
-                active = ""
-                camera_device = None      # no model resident → no live camera
-                # The endpoint replies BEFORE exiting (~1.5s later), so polling
-                # immediately would find the outgoing server and report success
-                # while nothing has been reset. Wait for it to go away first.
-                if not wait_gone(oai, timeout=30):
-                    print(f"{ERR}  the model server did not stop — check run.sh.{RESET}")
-                elif wait_ready(oai, timeout=180):
-                    print(f"{OK}✔ model server is back. Load a model with /load.{RESET}")
-                else:
-                    print(f"{ERR}  the model server did not come back — check run.sh.{RESET}")
             elif cmd == "unload":
                 names = [arg] if arg else [
                     m.get('name') for m in catalog(ctrl)

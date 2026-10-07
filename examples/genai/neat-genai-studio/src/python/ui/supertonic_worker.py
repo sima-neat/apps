@@ -6,10 +6,8 @@ duration predictor / text encoder on the CPU through ONNX Runtime. Those
 packages (``pyneat``, ``onnxruntime``, ``numpy==1.26.4``) are not part of the
 Studio UI environment, so the engine (the vendored ``supertonic_sima`` package
 next to this file) lives in the venv that ``setup.sh`` builds and the UI talks
-to it through this subprocess. A crashed or reset worker is simply respawned by
-the client, which also covers the Studio's supervised accelerator reset:
-restarting the MLA dispatcher tears down every runner in every process,
-including this one.
+to it through this subprocess. A crashed worker is simply respawned by the
+client.
 
 Protocol over stdin/stdout (identical to ``pipertts_worker.py``; the worker
 duplicates its stdout before the Neat runtime initializes because the runtime
@@ -259,9 +257,9 @@ def _serve(stdin, respond, ensure_engine, describe, current_runtime) -> None:
             except Exception:
                 pass
         except Exception as exc:  # noqa: BLE001
-            # Anything else is a runtime failure, typically the MLA runners dying
-            # under an accelerator reset. Report it as fatal, then exit so the
-            # client respawns a fresh process (reloading the models).
+            # Anything else is a runtime failure, typically the MLA runners
+            # dying. Report it as fatal, then exit so the client respawns a
+            # fresh process (reloading the models).
             try:
                 respond(3, f"{type(exc).__name__}: {exc}".encode("utf-8", "replace"))
             except Exception:
