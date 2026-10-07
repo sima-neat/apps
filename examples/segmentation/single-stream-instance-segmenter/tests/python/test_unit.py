@@ -836,7 +836,8 @@ class TestFramePairing:
 
         assert main.frame_for(runtime, -1) is None
 
-    def test_ring_keeps_the_newest_frames(self):
+    def test_ring_keeps_the_newest_frames(self, monkeypatch):
+        monkeypatch.setattr(main, "host_frame_copy", lambda sample: f"copy_{sample.frame_id}")
         pulled = [SimpleNamespace(frame_id=index) for index in range(main.FRAME_RING_CAPACITY + 4)]
         runtime = SimpleNamespace(frames=[], frame_output_name="frame",
                                   run=SimpleNamespace(pull=lambda name, timeout: (
@@ -845,7 +846,39 @@ class TestFramePairing:
         main.drain_frames(runtime)
 
         assert len(runtime.frames) == main.FRAME_RING_CAPACITY
-        assert runtime.frames[-1][0] == main.FRAME_RING_CAPACITY + 3
+        newest = main.FRAME_RING_CAPACITY + 3
+        assert runtime.frames[-1] == (newest, f"copy_{newest}")
+
+    def test_ring_holds_host_copies_not_pulled_samples(self, monkeypatch):
+        # A retained sample holds a decoder-buffer loan, and the decoder stalls once its
+        # in-flight frames are all on loan, so only the copied pixels may outlive the drain.
+        pulled = [SimpleNamespace(frame_id=1)]
+        copied = []
+
+        def copy(sample):
+            copied.append(sample)
+            return np.zeros((6, 4), dtype=np.uint8)
+
+        monkeypatch.setattr(main, "host_frame_copy", copy)
+        runtime = SimpleNamespace(frames=[], frame_output_name="frame",
+                                  run=SimpleNamespace(pull=lambda name, timeout: (
+                                      pulled.pop(0) if pulled else None)))
+
+        main.drain_frames(runtime)
+
+        assert len(copied) == 1
+        assert all(retained is not copied[0] for _, retained in runtime.frames)
+
+    def test_retained_nv12_converts_to_bgr_when_saved(self):
+        main.load_runtime_dependencies()
+        bgr =main.bgr_from_host_frame(np.full((6, 4), 128, dtype=np.uint8))
+
+        assert bgr.shape == (4, 4, 3)
+
+    def test_retained_bgr_is_used_as_it_is(self):
+        frame = np.zeros((4, 4, 3), dtype=np.uint8)
+
+        assert main.bgr_from_host_frame(frame) is frame
 
 
 @pytest.mark.unit

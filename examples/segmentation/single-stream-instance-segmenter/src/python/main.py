@@ -105,7 +105,8 @@ class PipelineRuntime:
     #: Separate decoded-frame output, used when frames are paired by this application instead
     #: of by a graph-side join. Empty when the graph joins them.
     frame_output_name: str = ""
-    #: Recent decoded frames, oldest first, waiting to be paired with their segments.
+    #: Host copies of recent decoded frames, oldest first, waiting to be paired with their
+    #: segments.
     frames: list = field(default_factory=list)
 
 
@@ -491,9 +492,35 @@ def joined_field(sample, label: str, bundle_index: int):
 
 
 #: How many decoded frames may wait for their segments. The segments branch trails the frame
-#: branch by the model and host-decode latency, so this only has to cover that lag. Output
-#: memory is owned on this route, so a retained frame costs memory, not a pipeline buffer.
+#: branch by the model and host-decode latency, so this only has to cover that lag. The ring
+#: holds host copies, so a retained frame costs memory, not a pipeline buffer.
 FRAME_RING_CAPACITY = 16
+
+
+def host_frame_copy(sample):
+    """Copies a decoded frame out of the pipeline so the pulled sample can be released at once.
+
+    A pulled sample keeps a loan on the decoder buffer behind it even when output memory is
+    owned, and the decoder stalls once its few in-flight frames are all on loan. The ring
+    therefore keeps pixels, never samples. NV12 stays NV12 until a frame is actually saved.
+    """
+    tensor = frame_tensor_from_sample(sample)
+    if not tensor.is_nv12():
+        return tensor_bgr_from_decoded(tensor)
+    width = tensor_dim(tensor, "width")
+    height = tensor_dim(tensor, "height")
+    payload = np.frombuffer(tensor.copy_payload_bytes(), dtype=np.uint8)
+    expected = width * height * 3 // 2
+    if payload.size < expected:
+        raise RuntimeError(f"NV12 payload too small: {payload.size} < {expected}")
+    return payload[:expected].reshape((height * 3 // 2, width))
+
+
+def bgr_from_host_frame(frame):
+    """The BGR picture for a host_frame_copy() result."""
+    if frame.ndim == 2:
+        return np.ascontiguousarray(cv2.cvtColor(frame, cv2.COLOR_YUV2BGR_NV12))
+    return frame
 
 
 def drain_frames(runtime) -> None:
@@ -505,7 +532,7 @@ def drain_frames(runtime) -> None:
         frame = runtime.run.pull(runtime.frame_output_name, 0)
         if frame is None:
             return
-        runtime.frames.append((frame.frame_id, frame))
+        runtime.frames.append((frame.frame_id, host_frame_copy(frame)))
         if len(runtime.frames) > FRAME_RING_CAPACITY:
             runtime.frames.pop(0)
 
@@ -743,7 +770,6 @@ def decode_yolov8_segments(
     boxes, scores, classes, coefficients = yolov8_candidates(
         boxes, scores, coefficients, input_size, min_score
     )
-    keep = nms_per_class(boxes, scores, classes, nms_iou, max_detections)
 
     scale, pad_x, pad_y = letterbox_params(frame_w, frame_h, input_size)
     frame_shape = (frame_h, frame_w, 3)
@@ -751,11 +777,17 @@ def decode_yolov8_segments(
     limit = np.array([frame_w, frame_h, frame_w, frame_h], dtype=np.float64)
     # Single precision throughout, so the C++ implementation decodes the same coordinates.
     frame_boxes = np.clip((boxes - padding) / scale, 0.0, limit).astype(np.float32)
+    # A prediction lying entirely in the letterbox padding has no frame to occupy, so it is
+    # dropped before the cap. Discarding it afterwards would let it consume one of the
+    # max_detections slots and push out a valid lower-ranked detection.
+    inside = (frame_boxes[:, 2] > frame_boxes[:, 0]) & (frame_boxes[:, 3] > frame_boxes[:, 1])
+    frame_boxes, scores = frame_boxes[inside], scores[inside]
+    classes, coefficients = classes[inside], coefficients[inside]
+
+    keep = nms_per_class(frame_boxes, scores, classes, nms_iou, max_detections)
     detections = []
     for index in keep:
         x1, y1, x2, y2 = (float(value) for value in frame_boxes[index])
-        if x2 <= x1 or y2 <= y1:
-            continue
         candidate = detection(x1, y1, x2, y2, scores[index], int(classes[index]), None)
         frame_rect = frame_rect_for_detection(candidate, frame_shape)
         candidate["mask"] = yolov8_instance_mask(
@@ -1317,18 +1349,17 @@ def save_due(cfg: AppConfig, processed: int) -> bool:
 
 
 def save_frame(
-    cfg: AppConfig, processed: int, sample, detections: list[dict], labels: list[str]
+    cfg: AppConfig, processed: int, frame, detections: list[dict], labels: list[str]
 ) -> bool:
-    """Writes one annotated frame. Returns False when the decoded frame it needs is gone.
+    """Writes one annotated BGR frame. Returns False when the decoded frame it needs is gone.
 
     The YOLO26 route joins frames to results inside the graph and always has its partner. The
     YOLOv8 route pairs them in the run loop, and a source faster than the model makes the two
     branches retain different frames, so some results have no picture to annotate. Those are
     counted and reported rather than silently skipped.
     """
-    if sample is None:
+    if frame is None:
         return False
-    frame = tensor_bgr_from_decoded(frame_tensor_from_sample(sample))
     annotated = overlay_segmentation(frame, detections, cfg.min_score, cfg.output, labels)
     out_path = Path(cfg.output.save_dir) / f"frame_{processed}.jpg"
     if not cv2.imwrite(str(out_path), annotated):
@@ -1386,11 +1417,13 @@ def run_pipeline(runtime: PipelineRuntime, cfg: AppConfig) -> int:
 
         processed += 1
         if save_due(cfg, processed):
-            frame_sample = sample
             if runtime.frame_output_name:
                 drain_frames(runtime)
-                frame_sample = frame_for(runtime, sample.frame_id)
-            if save_frame(cfg, processed, frame_sample, detections, runtime.labels):
+                retained = frame_for(runtime, sample.frame_id)
+                frame = None if retained is None else bgr_from_host_frame(retained)
+            else:
+                frame = tensor_bgr_from_decoded(frame_tensor_from_sample(sample))
+            if save_frame(cfg, processed, frame, detections, runtime.labels):
                 saved += 1
             else:
                 unpaired += 1

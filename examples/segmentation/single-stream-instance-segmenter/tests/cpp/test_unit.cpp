@@ -493,12 +493,11 @@ int main(int argc, char** argv) {
   {
     PipelineRuntime runtime;
     for (const std::int64_t frame_id : {7, 8, 9}) {
-      simaai::neat::Sample frame;
-      frame.frame_id = frame_id;
-      runtime.frames.emplace_back(frame_id, std::move(frame));
+      runtime.frames.emplace_back(frame_id,
+                                  cv::Mat(1, 1, CV_8UC1, cv::Scalar(static_cast<int>(frame_id))));
     }
     const auto* paired = frame_for(runtime, 8);
-    if (paired == nullptr || paired->frame_id != 8) {
+    if (paired == nullptr || paired->at<std::uint8_t>(0, 0) != 8) {
       std::cerr << "[FAIL] a retained frame must pair with the segments it produced\n";
       ++failures;
     } else if (frame_for(runtime, 3) != nullptr || frame_for(runtime, -1) != nullptr) {
@@ -506,6 +505,23 @@ int main(int argc, char** argv) {
       ++failures;
     } else {
       std::cout << "[OK] frames pair with the segments they produced\n";
+    }
+  }
+
+  // Test 5: the ring keeps host pixels, not pipeline samples. A retained sample would hold a
+  // decoder-buffer loan, and the decoder stalls once its in-flight frames are all on loan.
+  {
+    const cv::Mat nv12(6, 4, CV_8UC1, cv::Scalar(128));
+    const cv::Mat bgr = bgr_from_host_frame(nv12);
+    const cv::Mat already_bgr(4, 4, CV_8UC3, cv::Scalar(1, 2, 3));
+    if (bgr.rows != 4 || bgr.cols != 4 || bgr.type() != CV_8UC3) {
+      std::cerr << "[FAIL] a retained NV12 frame must convert to a BGR picture of its size\n";
+      ++failures;
+    } else if (bgr_from_host_frame(already_bgr).data != already_bgr.data) {
+      std::cerr << "[FAIL] a retained BGR frame must be used as it is\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] retained host frames convert to BGR only when saved\n";
     }
   }
 

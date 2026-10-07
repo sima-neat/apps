@@ -330,8 +330,9 @@ struct PipelineRuntime {
   /// Separate decoded-frame output, used when frames are paired by this application instead
   /// of by a graph-side join. Empty when the graph joins them.
   std::string frame_output_name;
-  /// Recent decoded frames, oldest first, waiting to be paired with their segments.
-  std::deque<std::pair<std::int64_t, simaai::neat::Sample>> frames;
+  /// Host copies of recent decoded frames, oldest first, waiting to be paired with their
+  /// segments.
+  std::deque<std::pair<std::int64_t, cv::Mat>> frames;
   int frame_w = 0;
   int frame_h = 0;
   int output_fps = 30;
@@ -772,6 +773,33 @@ float iou_xyxy(const Yolov8Candidate& a, const Yolov8Candidate& b) {
 }
 
 /// Greedy per-class NMS, highest score first, capped at `max_detections`.
+/// Candidates in frame pixels, with the letterbox removed.
+///
+/// A prediction lying entirely in the letterbox padding has no frame to occupy, so it is dropped
+/// here rather than after the cap. Discarding it later would let it consume one of the
+/// `max_detections` slots and push out a valid lower-ranked detection.
+std::vector<Yolov8Candidate> to_frame_space(const std::vector<Yolov8Candidate>& candidates,
+                                            int input_size, int frame_w, int frame_h) {
+  const double scale = std::min(static_cast<double>(input_size) / frame_w,
+                                static_cast<double>(input_size) / frame_h);
+  const double pad_x = (static_cast<double>(input_size) - frame_w * scale) * 0.5;
+  const double pad_y = (static_cast<double>(input_size) - frame_h * scale) * 0.5;
+
+  std::vector<Yolov8Candidate> mapped;
+  mapped.reserve(candidates.size());
+  for (const auto& candidate : candidates) {
+    Yolov8Candidate framed = candidate;
+    framed.x1 = static_cast<float>(std::clamp((candidate.x1 - pad_x) / scale, 0.0, 1.0 * frame_w));
+    framed.y1 = static_cast<float>(std::clamp((candidate.y1 - pad_y) / scale, 0.0, 1.0 * frame_h));
+    framed.x2 = static_cast<float>(std::clamp((candidate.x2 - pad_x) / scale, 0.0, 1.0 * frame_w));
+    framed.y2 = static_cast<float>(std::clamp((candidate.y2 - pad_y) / scale, 0.0, 1.0 * frame_h));
+    if (framed.x2 > framed.x1 && framed.y2 > framed.y1) {
+      mapped.push_back(framed);
+    }
+  }
+  return mapped;
+}
+
 std::vector<Yolov8Candidate> nms_per_class(std::vector<Yolov8Candidate> candidates, double nms_iou,
                                            int max_detections) {
   std::stable_sort(candidates.begin(), candidates.end(),
@@ -822,27 +850,21 @@ std::vector<SegmentationDetection>
 decode_yolov8_segments(const simaai::neat::TensorList& tensors, int frame_w, int frame_h,
                        const AppConfig& cfg) {
   const Yolov8Heads heads = split_yolov8_heads(tensors, cfg.input_size);
-  const auto kept = nms_per_class(yolov8_candidates(heads, cfg.input_size, cfg.min_score),
-                                  cfg.nms_iou, cfg.max_detections);
-
-  // Undo the letterbox the model preprocess applied, so boxes land in frame pixels.
-  const double scale = std::min(static_cast<double>(cfg.input_size) / frame_w,
-                                static_cast<double>(cfg.input_size) / frame_h);
-  const double pad_x = (static_cast<double>(cfg.input_size) - frame_w * scale) * 0.5;
-  const double pad_y = (static_cast<double>(cfg.input_size) - frame_h * scale) * 0.5;
+  // The letterbox is removed before NMS so the cap only ever spends slots on real detections.
+  const auto kept = nms_per_class(
+      to_frame_space(yolov8_candidates(heads, cfg.input_size, cfg.min_score), cfg.input_size,
+                     frame_w, frame_h),
+      cfg.nms_iou, cfg.max_detections);
   const cv::Size frame_size(frame_w, frame_h);
 
   std::vector<SegmentationDetection> detections;
   detections.reserve(kept.size());
   for (const auto& candidate : kept) {
     SegmentationDetection det;
-    det.x1 = static_cast<float>(std::clamp((candidate.x1 - pad_x) / scale, 0.0, 1.0 * frame_w));
-    det.y1 = static_cast<float>(std::clamp((candidate.y1 - pad_y) / scale, 0.0, 1.0 * frame_h));
-    det.x2 = static_cast<float>(std::clamp((candidate.x2 - pad_x) / scale, 0.0, 1.0 * frame_w));
-    det.y2 = static_cast<float>(std::clamp((candidate.y2 - pad_y) / scale, 0.0, 1.0 * frame_h));
-    if (det.x2 <= det.x1 || det.y2 <= det.y1) {
-      continue;
-    }
+    det.x1 = candidate.x1;
+    det.y1 = candidate.y1;
+    det.x2 = candidate.x2;
+    det.y2 = candidate.y2;
     det.score = candidate.score;
     det.class_id = candidate.class_id;
     det.mask = yolov8_instance_mask(heads.proto, candidate.coefficients,
@@ -1166,9 +1188,37 @@ simaai::neat::Tensor frame_tensor_from_sample(const simaai::neat::Sample& sample
 }
 
 /// How many decoded frames may wait for their segments. The segments branch trails the frame
-/// branch by the model and host-decode latency, so this only has to cover that lag. Output
-/// memory is owned on this route, so a retained frame costs memory, not a pipeline buffer.
+/// branch by the model and host-decode latency, so this only has to cover that lag. The ring
+/// holds host copies, so a retained frame costs memory, not a pipeline buffer.
 constexpr std::size_t kFrameRingCapacity = 16;
+
+/// Copies a decoded frame out of the pipeline so the pulled sample can be released at once.
+///
+/// A pulled sample keeps a loan on the decoder buffer behind it even when output memory is
+/// owned, and the decoder stalls once its few in-flight frames are all on loan. The ring
+/// therefore keeps pixels, never samples. NV12 stays NV12 until a frame is actually saved.
+cv::Mat host_frame_copy(const simaai::neat::Sample& sample) {
+  const simaai::neat::Tensor tensor = frame_tensor_from_sample(sample);
+  const int width = tensor.width();
+  const int height = tensor.height();
+  if (tensor.is_nv12() && width > 0 && height > 0) {
+    cv::Mat nv12(height + height / 2, width, CV_8UC1);
+    if (tensor.copy_nv12_contiguous_to(nv12.data, nv12.total())) {
+      return nv12;
+    }
+  }
+  return tensor_bgr_from_decoded(tensor);
+}
+
+/// The BGR picture for a host_frame_copy() result.
+cv::Mat bgr_from_host_frame(const cv::Mat& frame) {
+  if (frame.type() != CV_8UC1) {
+    return frame;
+  }
+  cv::Mat bgr;
+  cv::cvtColor(frame, bgr, cv::COLOR_YUV2BGR_NV12);
+  return bgr;
+}
 
 /// Moves every frame the run has ready into the ring, dropping the oldest past capacity.
 /// Draining every iteration is what keeps the frame output queue from backing up.
@@ -1180,8 +1230,7 @@ void drain_frames(PipelineRuntime& runtime) {
         simaai::neat::PullStatus::Ok) {
       return;
     }
-    const std::int64_t frame_id = frame.frame_id;
-    runtime.frames.emplace_back(frame_id, std::move(frame));
+    runtime.frames.emplace_back(frame.frame_id, host_frame_copy(frame));
     if (runtime.frames.size() > kFrameRingCapacity) {
       runtime.frames.pop_front();
     }
@@ -1211,7 +1260,7 @@ simaai::neat::PullStatus pull_segments(PipelineRuntime& runtime, int timeout_ms,
 }
 
 /// The retained frame a segments sample was computed from, or null when it has aged out.
-const simaai::neat::Sample* frame_for(const PipelineRuntime& runtime, std::int64_t frame_id) {
+const cv::Mat* frame_for(const PipelineRuntime& runtime, std::int64_t frame_id) {
   if (frame_id < 0) {
     return nullptr;
   }
@@ -1431,19 +1480,18 @@ bool save_due(const AppConfig& cfg, int processed) {
   return !cfg.save_dir.empty() && cfg.save_every > 0 && processed % cfg.save_every == 0;
 }
 
-/// Writes one annotated frame. Returns false when the decoded frame it needs is gone.
+/// Writes one annotated BGR frame. Returns false when the decoded frame it needs is gone.
 ///
 /// The YOLO26 route joins frames to results inside the graph and always has its partner. The
 /// YOLOv8 route pairs them here, and a source faster than the model makes the two branches
 /// retain different frames, so some results have no picture to annotate. Those are counted and
 /// reported rather than silently skipped.
-bool save_frame(const AppConfig& cfg, int processed, const simaai::neat::Sample* sample,
+bool save_frame(const AppConfig& cfg, int processed, const cv::Mat& frame,
                 const std::vector<SegmentationDetection>& detections,
                 const std::vector<std::string>& labels) {
-  if (sample == nullptr) {
+  if (frame.empty()) {
     return false;
   }
-  const cv::Mat frame = tensor_bgr_from_decoded(frame_tensor_from_sample(*sample));
   const cv::Mat annotated = overlay_segmentation(frame, detections, labels, cfg);
   const auto out_path = cfg.save_dir / ("frame_" + std::to_string(processed) + ".jpg");
   if (!cv::imwrite(out_path.string(), annotated)) {
@@ -1491,12 +1539,16 @@ void run_pipeline(PipelineRuntime& runtime, const AppConfig& cfg) {
 
     ++processed;
     if (save_due(cfg, processed)) {
-      const simaai::neat::Sample* frame_sample = &sample;
+      cv::Mat frame;
       if (!runtime.frame_output_name.empty()) {
         drain_frames(runtime);
-        frame_sample = frame_for(runtime, sample.frame_id);
+        if (const cv::Mat* retained = frame_for(runtime, sample.frame_id)) {
+          frame = bgr_from_host_frame(*retained);
+        }
+      } else {
+        frame = tensor_bgr_from_decoded(frame_tensor_from_sample(sample));
       }
-      if (save_frame(cfg, processed, frame_sample, detections, runtime.labels)) {
+      if (save_frame(cfg, processed, frame, detections, runtime.labels)) {
         ++saved;
       } else {
         ++unpaired;
