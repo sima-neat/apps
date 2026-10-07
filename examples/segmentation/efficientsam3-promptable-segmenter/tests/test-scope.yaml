@@ -1,0 +1,13 @@
+models: {}
+unit:
+  python: true
+  cpp: true
+e2e:
+  python:
+    enabled: false
+    reason: The EfficientSAM3 model and text encoder packages are not published yet. tests/python/test_e2e.py passes on a Modalix DevKit with local packages.
+    models: []
+  cpp:
+    enabled: false
+    reason: The EfficientSAM3 model and text encoder packages are not published yet. tests/cpp/test_e2e.cpp passes on a Modalix DevKit with local packages.
+    models: []

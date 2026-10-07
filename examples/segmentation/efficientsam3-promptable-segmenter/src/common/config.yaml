@@ -1,0 +1,30 @@
+model:
+  path: <model-path>         # Compiled model archive, e.g. models/efficientsam3/efficientsam3_rv_e48xt_flash_mpk.tar.gz.
+  text_encoder: <text-encoder-path>  # Text encoder package, e.g. models/efficientsam3/efficientsam3_text_encoder_mpk.tar.gz. Runs once at startup.
+
+prompt:
+  text: "person"             # What to segment: any short noun phrase, e.g. "red car", "dog", "traffic sign".
+
+source:
+  rtsp_url: <rtsp-url>       # H.264 RTSP stream, e.g. rtsp://<insight-host-ip>:8554/src1.
+  tcp: true                  # Use TCP for RTSP transport.
+  latency_ms: 100            # RTSP receive latency in milliseconds.
+
+inference:
+  frames: 0                  # Segmented-frame limit. 0 means run continuously.
+  min_score: 0.30            # Instance score (query probability x presence) that counts as a match. EfficientSAM3
+                             # scores found objects about 0.3-0.8; presence keeps absent prompts below 0.1.
+  max_detections: 20         # Max instances per frame.
+  mask_threshold: 0.50       # Mask probability inside the outline.
+
+runtime:
+  profile: false             # Print aggregate profiling summaries.
+  profile_interval: 100      # Rolling profile window in segmented frames.
+
+output:
+  save_dir: ""               # Optional directory for annotated frames.
+  save_every: 0              # Save every Nth segmented frame. 0 disables saving.
+  insight:
+    host: <insight-host-ip>  # Host running the Insight receiver/viewer.
+    video_port: 9000         # UDP video port.
+    metadata_port: 9100      # UDP metadata port.
