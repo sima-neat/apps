@@ -420,9 +420,9 @@ class SupertonicTTS:
             "language": language,
             "speed": self.speed if speed is None else self.clamp_speed(speed),
         }
-        # The worker exits on a runtime failure (e.g. its MLA runners died under
-        # an accelerator reset). If that happened before any audio was produced,
-        # respawn it and retry this utterance once.
+        # The worker exits on a runtime failure (e.g. its MLA runners died). If
+        # that happened before any audio was produced, respawn it and retry this
+        # utterance once.
         for attempt in (0, 1):
             yielded = False
             stream = _request_stream(req)

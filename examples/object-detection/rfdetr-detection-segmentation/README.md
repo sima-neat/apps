@@ -16,7 +16,13 @@
 
 Run RF-DETR detection or instance segmentation on one H.264, H.265, or MJPEG RTSP stream and view the result in Insight.
 
-The application decodes to NV12 once. EV74 converts, resizes, and normalizes each frame for the selected backbone. A one-frame queue drops stale decoded frames if inference falls behind. Host code then selects the strongest proposals and passes the matching boxes and feature tensor to the transformer. Insight receives the source video and matching detection boxes or segmentation polygons.
+The application decodes to NV12 once. A 4-frame queue replaces stale decoded frames when inference falls behind. EV74 converts, resizes, and normalizes admitted frames for the backbone. Host code selects the strongest proposals and passes their boxes and feature tensor to the transformer. Insight receives video and matching detection boxes or segmentation polygons.
+
+The backbone output and transformer input each use a four-entry blocking queue to preserve completed backbone work. These capacities do not include buffers held by active stages.
+
+MJPEG reserves 32 decoded buffers so decoding can continue while inference and preview retain frames. This is tested headroom for the application, not an exact count of graph-held buffers. The raw NV12 storage is about 44 MB at 720p, 100 MB at 1080p, or 398 MB at 4K, before alignment.
+
+TCP sources use RTP timestamps directly to avoid arrival-time corrections during high-rate replay. H.264 and H.265 video reach Insight as encoded passthrough. MJPEG video is re-encoded to H.264 from the decoded frames; when the encoder falls behind, the preview keeps the newest frames and inference keeps the full input rate.
 
 ## Preview
 
@@ -156,9 +162,11 @@ as `RF-DETR detection configuration is valid`.
 
 - `source.codec must be h264/avc, h265/hevc, or mjpeg` means `source.codec` names
   a codec this example does not decode. Set it to match the source.
-- `model.task must be detection or segmentation`, and
-  `model.detection.variant must be small or medium`, mean the selected task or
-  variant is not one of the supported values.
+- `model.task must be detection or segmentation` means `model.task` is not one
+  of the supported tasks.
+- A `model.detection.variant` with no model pair under `model.detection`, for
+  example `large`, fails with `large must be a mapping` in Python and
+  `model.detection.large.backbone and transformer must be set` in C++.
 - `model archive must use .tar.gz: None` means one half of the model pair was
   left blank in the config. Both `backbone` and `transformer` must name a
   downloaded archive for the selected task and variant. This is specific to the

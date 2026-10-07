@@ -202,28 +202,6 @@ class TestConfigLoading:
 
 
 class TestRuntimeOptions:
-    def test_encoded_input_options_carry_codec_format(self, monkeypatch):
-        class FakeInputOptions:
-            format = ""
-
-        fake_pyneat = SimpleNamespace(
-            InputOptions=FakeInputOptions,
-            PayloadType=SimpleNamespace(Encoded="encoded"),
-            Format=SimpleNamespace(H264="h264", H265="h265"),
-            RtspCodec=SimpleNamespace(H264="codec-h264", H265="codec-h265"),
-            InputMemoryPolicy=SimpleNamespace(Ev74="ev74", SystemMemory="system"),
-        )
-        monkeypatch.setattr(main_module, "pyneat", fake_pyneat)
-
-        decode = main_module.encoded_decode_input_options(fake_pyneat.RtspCodec.H265)
-        video = main_module.encoded_video_input_options(fake_pyneat.RtspCodec.H265)
-        h264_decode = main_module.encoded_decode_input_options(fake_pyneat.RtspCodec.H264)
-        h264_video = main_module.encoded_video_input_options(fake_pyneat.RtspCodec.H264)
-
-        assert decode.format == "h265"
-        assert video.format == "h265"
-        assert h264_decode.format == "h264"
-        assert h264_video.format == "h264"
 
     def test_realtime_link_sets_inflight_limits(self, monkeypatch):
         fake_pyneat = SimpleNamespace(
@@ -287,7 +265,7 @@ class TestMetadata:
         runtime = main_module.StreamRuntime(
             index=0,
             url="rtsp://127.0.0.1:8554/src1",
-            source_options=None,
+            source_fps=30,
             metadata_sender=sender,
             tracker=main_module.PeopleTracker(),
             profile=main_module.ProfileWindow(False, 0),
