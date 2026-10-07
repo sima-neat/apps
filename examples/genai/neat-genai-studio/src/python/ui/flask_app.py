@@ -1078,8 +1078,11 @@ class AppContext:
 
         @self.app.route('/models/load', methods=['POST'])
         def models_load():
-            name = (request.get_json(silent=True) or {}).get('name', '')
-            return _proxy_control('POST', '/control/load', 600, {'name': name})
+            body = request.get_json(silent=True) or {}
+            # "unload" names the loaded models the user chose to free; without
+            # it a load past the resident limit comes back 409 with the choice.
+            return _proxy_control('POST', '/control/load', 600,
+                                  {'name': body.get('name', ''), 'unload': body.get('unload') or []})
 
         @self.app.route('/models/asr', methods=['POST'])
         def models_asr():

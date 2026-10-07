@@ -4,7 +4,7 @@
 Wraps a live ``pyneat.GenAIServer`` so chat/VLM models can be loaded and
 unloaded on the fly (no restart), scans an on-disk catalog of compatible
 models, keeps up to ``max_resident_chat_models`` chat/VLM models resident at
-once (evicting the least recently used beyond that), and can download
+once (past that, a load names which resident model to unload), and can download
 additional compatible models from the Hugging Face Hub when the board is
 online.
 
@@ -112,6 +112,22 @@ _MLA_FAILURE_MARKERS = (
 def _is_mla_failure(detail: str) -> bool:
     text = (detail or "").lower()
     return any(marker in text for marker in _MLA_FAILURE_MARKERS)
+
+
+class ResidentLimitReached(ValueError):
+    """A load would exceed the resident limit and the caller did not say which
+    resident chat/VLM model to unload. Carries the choice the caller must make."""
+
+    def __init__(self, name: str, resident: list, max_resident: int, needed: int):
+        self.name = name
+        self.resident = list(resident)
+        self.max_resident = max_resident
+        self.needed = needed
+        super().__init__(
+            f"Loading '{name}' would exceed the limit of {max_resident} loaded "
+            f"chat models. Choose {needed} of the loaded models to unload "
+            f"({', '.join(self.resident)})."
+        )
 
 
 class ModelManager:
@@ -370,19 +386,28 @@ class ModelManager:
 
     # -- load / unload ---------------------------------------------------------
 
-    def load(self, name: str) -> dict:
-        """Load a model, evicting the least recently used chat/VLM models
-        beyond ``max_resident_chat_models``.
+    def load(self, name: str, unload: list | None = None) -> dict:
+        """Load a model, unloading the resident chat/VLM models named in
+        ``unload`` first.
 
-        Up to that many chat/VLM models stay resident side by side; the default
-        of one makes every load a switch. Eviction is clean (cancel the victim's
-        in-flight streams, then unload, then wait so the MLA memory is actually
-        returned before the new model loads), and the new model is warmed
-        synchronously so an MLA load failure is caught here and surfaced during
-        the load rather than on the user's first chat. Loading a model that is
-        already resident only marks it most recently used.
+        Up to ``max_resident_chat_models`` chat/VLM models stay resident side by
+        side. With the default limit of one every load is a switch and replaces
+        the resident model. Above one, a load that would exceed the limit is
+        refused with ``ResidentLimitReached`` unless ``unload`` names enough
+        resident models to make room: nothing is evicted the caller did not
+        choose, because other clients may be using it through the OpenAI API.
+        ``unload`` may also free room for a model that did not fit in
+        accelerator memory beside the others.
+
+        Eviction is clean (cancel the victim's in-flight streams, then unload,
+        then wait so the MLA memory is actually returned before the new model
+        loads), and the new model is warmed synchronously so an MLA load failure
+        is caught here and surfaced during the load rather than on the user's
+        first chat. Loading a model that is already resident only marks it most
+        recently used.
         """
         name = (name or "").strip()
+        unload = [str(v).strip() for v in (unload or []) if str(v).strip()]
         with self._op_lock:
             if name not in self._catalog:
                 self.scan_catalog()
@@ -457,14 +482,26 @@ class ModelManager:
 
             # ASR models have their own slot: switching evicts the previous ASR
             # and leaves the resident chat/VLM models alone (and vice versa).
-            # Chat/VLM models evict only the least recently used ones that would
-            # push the resident set past its limit (_resident is MRU first).
+            # Chat/VLM models evict only what the caller chose, except that a
+            # limit of one keeps the plain "loading replaces the model" switch.
             if is_asr:
                 victims = [v for v in self._loaded_asr_names() if v != name]
             else:
                 with self._lock:
                     others = [v for v in self._resident if v != name]
-                victims = others[self._max_resident - 1:]
+                unknown = [v for v in unload if v not in others]
+                if unknown:
+                    raise ValueError(
+                        f"Cannot unload {', '.join(unknown)}: not a loaded chat model")
+                if self._max_resident == 1:
+                    victims = others
+                else:
+                    victims = [v for v in others if v in unload]
+                    needed = len(others) - len(victims) - (self._max_resident - 1)
+                    if needed > 0:
+                        raise ResidentLimitReached(
+                            name, [v for v in others if v not in victims],
+                            self._max_resident, needed)
 
             size_bytes = self._size_of(path)
             # Estimate and learn against the ELF bytes actually transferred, so

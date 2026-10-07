@@ -43,7 +43,10 @@ from asr_switching_suite import (  # noqa: E402
     MlaFailureClassificationTests,
 )
 from hub_security_suite import HubPathSecurityTests  # noqa: E402,F401
-from resident_models_suite import ResidentChatModelTests  # noqa: E402,F401
+from resident_models_suite import (  # noqa: E402,F401
+    ResidentChatModelTests,
+    ResidentLimitControlApiTests,
+)
 from cli_think_suite import (  # noqa: E402,F401
     NoThinkRewriteTests as CliNoThinkRewriteTests,
     StreamTokenCountTests as CliStreamTokenCountTests,

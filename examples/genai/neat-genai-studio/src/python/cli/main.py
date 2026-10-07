@@ -960,22 +960,47 @@ def _post_load_with_progress(ctrl, name, do_post):
 
 
 def load_model(ctrl, name, oai=None, auto_retry=True):
-    """Load a model via the control API. Returns True on success. Loading a
-    chat/VLM model evicts the least recently used ones beyond the resident
-    limit, so that is made explicit."""
+    """Load a model via the control API. Returns True on success. With the
+    default limit of one, loading replaces the loaded chat/VLM model; above it,
+    a load past the limit asks which loaded model to unload, and nothing else
+    is unloaded."""
     try:
         state = ctrl_get(ctrl, "/control/catalog")
         others = [n for n in state.get("resident") or [] if n != name]
-        victims = others[max(1, int(state.get("maxResident") or 1)) - 1:]
+        limit = max(1, int(state.get("maxResident") or 1))
     except Exception:
-        victims = []
+        others, limit = [], 1
+    unload = []
+    if limit == 1:
+        victims = others
+    else:
+        needed = len(others) - (limit - 1)
+        if needed > 0:
+            items = [(n, n) for n in others]
+            prompt = (f"{len(others)} chat models are loaded (the limit). "
+                      f"Unload {'one' if needed == 1 else needed} to load {name}:")
+            picked = select_menu(items, prompt) if needed == 1 else select_multi(items, prompt)
+            picked = [picked] if isinstance(picked, str) else (picked or [])
+            if len(picked) < needed:
+                print(f"{MUTED}  did not load {name}.{RESET}")
+                return False
+            unload = picked
+        victims = unload
     if victims:
         print(f"{MUTED}  unloading {', '.join(victims)}, then loading {name}…{RESET}")
     else:
         print(f"{MUTED}  loading {name}…{RESET}")
 
     def _attempt():
-        r = ctrl_post(ctrl, "/control/load", {"name": name})
+        try:
+            r = ctrl_post(ctrl, "/control/load", {"name": name, "unload": unload})
+        except urllib.error.HTTPError as exc:
+            # The control API explains refusals (limit reached, model does not
+            # fit) in the JSON body; show that rather than "HTTP Error 409".
+            try:
+                r = json.loads(exc.read().decode("utf-8") or "{}")
+            except Exception:  # noqa: BLE001
+                raise exc
         if isinstance(r, dict) and r.get("error"):
             raise RuntimeError(r["error"])
         return r

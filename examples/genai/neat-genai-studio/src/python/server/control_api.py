@@ -14,7 +14,7 @@ import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from server.model_manager import ModelManager
+from server.model_manager import ModelManager, ResidentLimitReached
 
 
 class _ControlServer(ThreadingHTTPServer):
@@ -99,7 +99,10 @@ class _ControlHandler(BaseHTTPRequestHandler):
         try:
             body = self._read_json()
             if path == "/control/load":
-                self._send_json(self.manager.load(str(body.get("name", ""))))
+                unload = body.get("unload") or []
+                if isinstance(unload, str):
+                    unload = [unload]
+                self._send_json(self.manager.load(str(body.get("name", "")), unload))
             elif path == "/control/asr":
                 self._send_json(self.manager.set_active_asr(str(body.get("name", ""))))
             elif path == "/control/unload":
@@ -119,6 +122,12 @@ class _ControlHandler(BaseHTTPRequestHandler):
                 self._send_json(self.manager.benchmark_stop())
             else:
                 self._send_json({"error": "not found"}, 404)
+        except ResidentLimitReached as exc:
+            # Not a bad request: the client asks the user which loaded model
+            # to unload and retries with {"unload": [...]}.
+            self._send_json({"error": str(exc), "code": "resident_limit",
+                             "resident": exc.resident, "maxResident": exc.max_resident,
+                             "needed": exc.needed}, 409)
         except ValueError as exc:
             self._send_json({"error": str(exc)}, 400)
         except Exception as exc:  # noqa: BLE001

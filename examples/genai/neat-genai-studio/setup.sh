@@ -35,8 +35,8 @@ ASR_CATALOG_MODEL_REPOS="${ASR_CATALOG_MODEL_REPOS:-}"
 RAG_EMBEDDING_REPO="thenlper/gte-small"
 CHAT_MODEL_NAME="${CHAT_MODEL_NAME:-${CHAT_MODEL_REPO##*/}}"
 # Chat/VLM models kept loaded at once (ASR is always kept). With 1, loading a new
-# model replaces the loaded one; above 1, the least recently used is unloaded
-# once the limit is reached.
+# model replaces the loaded one; above 1, the Studio asks which loaded model to
+# unload once the limit is reached.
 MAX_RESIDENT_CHAT_MODELS="${MAX_RESIDENT_CHAT_MODELS:-1}"
 ALLOW_HUB_DOWNLOAD="${ALLOW_HUB_DOWNLOAD:-true}"
 # Hugging Face accounts searched for compatible models (space-separated):
@@ -190,7 +190,7 @@ Environment:
   CATALOG_MODEL_REPOS           Extra compatible HF repos to seed the catalog
                                 (space-separated). default: empty
   MAX_RESIDENT_CHAT_MODELS      Chat/VLM models kept loaded at once; past the
-                                limit the least recently used is unloaded.
+                                limit the Studio asks which one to unload.
                                 default: 1
   CREATE_ALIAS                  Create the neat-ai shell alias, 1 or 0.
                                 If unset, interactive setup prompts; otherwise 0.

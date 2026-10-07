@@ -296,6 +296,19 @@ body.spectrum-accents .bench-stats-metric { color: var(--accent-strong); }
 }
 .model-switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
 .model-switch option { color: var(--text); background: var(--surface); }
+/* Which loaded model to unload: opened from Settings and the benchmark, so it
+   sits above both. */
+.unload-choice-modal { z-index: 3500; }
+.unload-choice-text { margin: 0 0 12px; color: var(--text-2); font-size: 14px; line-height: 1.45; }
+.unload-choice-list { display: flex; flex-direction: column; gap: 6px; }
+.unload-choice-row {
+  display: flex; align-items: center; gap: 10px; padding: 9px 12px; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2);
+  font-size: 13.5px; overflow-wrap: anywhere;
+}
+.unload-choice-row:has(input:checked) { border-color: color-mix(in srgb, var(--accent) 60%, var(--border)); }
+.unload-choice-hint { margin-left: auto; flex: none; font-size: 11px; color: var(--text-3); }
+.unload-choice-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 .suggest-row { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 6px; }
 .suggest-chip {
   background: var(--surface); border: 1px solid var(--border); color: var(--text-2);

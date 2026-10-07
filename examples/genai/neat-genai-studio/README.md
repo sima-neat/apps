@@ -296,11 +296,22 @@ restart the Studio to free the accelerator, then load the model again.
 To run several chat/VLM models side by side, for example to compare them, raise
 `server.models.max_resident_chat_models` in `config.local.yaml` (or set
 `MAX_RESIDENT_CHAT_MODELS` before running `setup.sh`), then restart the Studio.
-Loading a model then keeps the others loaded until the limit is reached; past
-it, the least recently used model is unloaded. How many fit depends on the
-models' sizes: when a model does not fit beside the loaded ones, the load fails
-with an accelerator error and the loaded models stay as they were — unload one
-and try again.
+Loading a model then keeps the others loaded. Once the limit is reached, the
+Studio never unloads a model on its own, because another client may be using
+it: loading one more asks which loaded model to unload (the CLI asks the same
+in `/load`). How many fit also depends on the models' sizes. When a model does
+not fit in accelerator memory beside the loaded ones, the load fails, the loaded
+models stay as they were, and the browser offers to unload one and try again.
+
+Other clients can make the same choice through the control API: past the
+limit, `POST /control/load` answers `409` with the loaded models, and the
+request succeeds once it names the ones to unload:
+
+```bash
+curl -s http://127.0.0.1:9997/control/load \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"<catalog-model-name>","unload":["<loaded-model-name>"]}' | python3 -m json.tool
+```
 
 With two or more models loaded, the model name on the home screen and in the
 header becomes a picker: choose the model that answers the next message. The

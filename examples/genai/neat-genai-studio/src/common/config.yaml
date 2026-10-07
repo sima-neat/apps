@@ -11,7 +11,7 @@ server:                      # Local OpenAI-compatible model server.
     catalog_dir: <path-to-models-catalog-dir> # Directory scanned for loadable models.
     # Chat/VLM models kept loaded at once. With 1, loading a new model replaces
     # the loaded one. Raise it to keep several loaded side by side; past the limit
-    # the least recently used is unloaded. How many fit depends on model sizes.
+    # the Studio asks which loaded model to unload. How many fit depends on sizes.
     # Speech-to-text has its own slot and is unaffected.
     max_resident_chat_models: 1
     chat:                    # Chat/VLM models loaded at startup (OPTIONAL).

@@ -614,6 +614,24 @@
     </div>
   </div>
 
+  <!-- Asked when a load needs room: which loaded chat model(s) to unload -->
+  <div id="unloadChoiceModal" class="settings-modal unload-choice-modal" style="display: none;"
+    role="dialog" aria-modal="true" aria-labelledby="unloadChoiceTitle">
+    <div class="settings-modal-card version-modal-card">
+      <div class="settings-modal-head">
+        <span class="settings-modal-title" id="unloadChoiceTitle">Unload a model?</span>
+      </div>
+      <div class="settings-modal-body">
+        <p id="unloadChoiceText" class="unload-choice-text"></p>
+        <div id="unloadChoiceList" class="unload-choice-list"></div>
+        <div class="unload-choice-actions">
+          <button id="unloadChoiceCancel" class="setting-button" type="button">Cancel</button>
+          <button id="unloadChoiceConfirm" class="setting-button model-unload" type="button">Unload and load</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div id="modelCardModal" class="settings-modal" style="display: none;">
     <div class="settings-modal-card">
       <div class="settings-modal-head">
