@@ -5,6 +5,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+import numpy as np
+
 BBox = tuple[float, float, float, float]
 
 
@@ -20,24 +22,48 @@ def _center(box: BBox) -> tuple[float, float]:
     return 0.5 * (box[0] + box[2]), 0.5 * (box[1] + box[3])
 
 
-def _iou_xyxy(a: BBox, b: BBox) -> float:
-    xx1 = max(a[0], b[0])
-    yy1 = max(a[1], b[1])
-    xx2 = min(a[2], b[2])
-    yy2 = min(a[3], b[3])
-    intersection = max(0.0, xx2 - xx1) * max(0.0, yy2 - yy1)
-    union_area = _width(a) * _height(a) + _width(b) * _height(b) - intersection
-    return intersection / union_area if union_area > 0 else 0.0
-
-
-def _normalized_center_distance(a: BBox, b: BBox) -> float:
-    ax, ay = _center(a)
-    bx, by = _center(b)
-    scale = max(
-        1.0,
-        0.5 * (math.hypot(_width(a), _height(a)) + math.hypot(_width(b), _height(b))),
+def _box_sizes(boxes: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    return (
+        np.maximum(0.0, boxes[:, 2] - boxes[:, 0]),
+        np.maximum(0.0, boxes[:, 3] - boxes[:, 1]),
     )
-    return math.hypot(ax - bx, ay - by) / scale
+
+
+def _iou_matrix(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """IoU of every row of `a` with every row of `b`."""
+    width_a, height_a = _box_sizes(a)
+    width_b, height_b = _box_sizes(b)
+    overlap_w = np.maximum(
+        0.0,
+        np.minimum(a[:, None, 2], b[None, :, 2])
+        - np.maximum(a[:, None, 0], b[None, :, 0]),
+    )
+    overlap_h = np.maximum(
+        0.0,
+        np.minimum(a[:, None, 3], b[None, :, 3])
+        - np.maximum(a[:, None, 1], b[None, :, 1]),
+    )
+    intersection = overlap_w * overlap_h
+    union_area = (
+        (width_a * height_a)[:, None] + (width_b * height_b)[None, :] - intersection
+    )
+    return np.divide(
+        intersection, union_area, out=np.zeros_like(intersection), where=union_area > 0
+    )
+
+
+def _center_distance_matrix(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Center distance of every row of `a` to every row of `b`, scaled by box diagonals."""
+    width_a, height_a = _box_sizes(a)
+    width_b, height_b = _box_sizes(b)
+    dx = 0.5 * (a[:, None, 0] + a[:, None, 2]) - 0.5 * (b[None, :, 0] + b[None, :, 2])
+    dy = 0.5 * (a[:, None, 1] + a[:, None, 3]) - 0.5 * (b[None, :, 1] + b[None, :, 3])
+    scale = np.maximum(
+        1.0,
+        0.5
+        * (np.hypot(width_a, height_a)[:, None] + np.hypot(width_b, height_b)[None, :]),
+    )
+    return np.hypot(dx, dy) / scale
 
 
 def _bbox(detection: dict) -> BBox:
@@ -144,7 +170,8 @@ class ObjectTracker:
 
     def _associate(
         self,
-        detections: list[dict],
+        boxes: np.ndarray,
+        class_ids: np.ndarray,
         detection_indices: list[int],
         frame_index: int,
         matched_tracks: set[int],
@@ -153,37 +180,48 @@ class ObjectTracker:
         *,
         confirmed_only: bool,
     ) -> None:
-        candidates: list[tuple[float, int, int]] = []
-        for track_id, track in self._tracks.items():
-            if track_id in matched_tracks:
-                continue
-            if confirmed_only and track.hits < self.config.min_confirmed_hits:
-                continue
-            predicted = track.predict(frame_index)
-            for detection_index in detection_indices:
-                if detection_index in matched_detections:
-                    continue
-                detection = detections[detection_index]
-                if int(detection["class_id"]) != track.class_id:
-                    continue
-                bbox = _bbox(detection)
-                iou = _iou_xyxy(predicted, bbox)
-                center_distance = _normalized_center_distance(predicted, bbox)
-                center_match = (
-                    self.config.center_distance_enabled
-                    and center_distance <= self.config.max_center_distance
-                )
-                if iou < self.config.match_iou_threshold and not center_match:
-                    continue
-                affinity = (
-                    iou + 1.0 / (1.0 + center_distance)
-                    if self.config.center_distance_enabled
-                    else iou
-                )
-                candidates.append((affinity, track_id, detection_index))
+        track_ids = [
+            track_id
+            for track_id, track in self._tracks.items()
+            if track_id not in matched_tracks
+            and not (confirmed_only and track.hits < self.config.min_confirmed_hits)
+        ]
+        detection_ids = [
+            index for index in detection_indices if index not in matched_detections
+        ]
+        if not track_ids or not detection_ids:
+            return
 
-        candidates.sort(key=lambda item: (-item[0], item[1], item[2]))
-        for _affinity, track_id, detection_index in candidates:
+        # Score every track/detection pair at once; a per-pair Python loop costs
+        # tens of milliseconds per frame with the detector's 100 boxes.
+        tracks = [self._tracks[track_id] for track_id in track_ids]
+        predicted = np.array(
+            [track.predict(frame_index) for track in tracks], dtype=np.float64
+        )
+        candidates = boxes[detection_ids]
+        iou = _iou_matrix(predicted, candidates)
+        eligible = (
+            np.array([track.class_id for track in tracks])[:, None]
+            == class_ids[detection_ids][None, :]
+        )
+        if self.config.center_distance_enabled:
+            center_distance = _center_distance_matrix(predicted, candidates)
+            eligible &= (iou >= self.config.match_iou_threshold) | (
+                center_distance <= self.config.max_center_distance
+            )
+            affinity = iou + 1.0 / (1.0 + center_distance)
+        else:
+            eligible &= iou >= self.config.match_iou_threshold
+            affinity = iou
+
+        rows, cols = np.nonzero(eligible)
+        pair_tracks = np.asarray(track_ids)[rows]
+        pair_detections = np.asarray(detection_ids)[cols]
+        # Greedy assignment in (-affinity, track_id, detection_index) order.
+        order = np.lexsort((pair_detections, pair_tracks, -affinity[rows, cols]))
+        for track_id, detection_index in zip(
+            pair_tracks[order].tolist(), pair_detections[order].tolist()
+        ):
             if track_id in matched_tracks or detection_index in matched_detections:
                 continue
             matched_tracks.add(track_id)
@@ -215,9 +253,17 @@ class ObjectTracker:
         matched_tracks: set[int] = set()
         matched_detections: set[int] = set()
         assignments: dict[int, int] = {}
+        boxes = np.array(
+            [_bbox(detection) for detection in detections], dtype=np.float64
+        )
+        boxes = boxes.reshape(-1, 4)
+        class_ids = np.array(
+            [int(detection["class_id"]) for detection in detections], dtype=np.int64
+        )
 
         self._associate(
-            detections,
+            boxes,
+            class_ids,
             high,
             frame_index,
             matched_tracks,
@@ -228,7 +274,8 @@ class ObjectTracker:
         # A low-score observation may recover a confirmed identity, but it can
         # neither confirm a tentative identity nor create a new one.
         self._associate(
-            detections,
+            boxes,
+            class_ids,
             low,
             frame_index,
             matched_tracks,
