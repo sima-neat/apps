@@ -156,3 +156,16 @@ class ShellConfigValueTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SetupPyyamlTests(unittest.TestCase):
+    """The model server runs in the Neat environment (~/pyneat on Platform
+    3.0), which has no PyYAML; setup.sh adds it there, but only into a venv."""
+
+    def test_pyyaml_is_installed_only_into_a_venv(self):
+        text = (Path(__file__).resolve().parents[2] / "setup.sh").read_text(encoding="utf-8")
+        block = text[text.index("if ! \"${PYNEAT_PYTHON}\" -c 'import yaml'"):]
+        block = block[:block.index("\nfi\n") + 4]
+        self.assertIn("sys.prefix == sys.base_prefix", block)
+        self.assertIn('-m pip install "PyYAML==', block)
+        self.assertIn("exit 1", block)

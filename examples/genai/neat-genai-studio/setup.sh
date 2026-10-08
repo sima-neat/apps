@@ -260,6 +260,21 @@ then
 fi
 ok "pyneat available (${C_DIM}${PYNEAT_PYTHON}${C_RESET})"
 
+# The model server runs in the Neat environment and reads its configuration with
+# PyYAML. Platform 2.x's system Python carries it; the ~/pyneat venv that
+# Platform 3.0 installs does not, so add it there (only into a venv, never into
+# a system interpreter).
+if ! "${PYNEAT_PYTHON}" -c 'import yaml' >/dev/null 2>&1; then
+  if "${PYNEAT_PYTHON}" -c 'import sys; raise SystemExit(sys.prefix == sys.base_prefix)' >/dev/null 2>&1; then
+    info "Installing PyYAML into the Neat environment for the model server…"
+    "${PYNEAT_PYTHON}" -m pip install "PyYAML==6.0.3" || { errln "Could not install PyYAML into ${PYNEAT_PYTHON}."; exit 1; }
+  else
+    errln "PyYAML is not importable from ${PYNEAT_PYTHON}; the model server needs it."
+    info "Install it for that interpreter, or set PYNEAT_PYTHON to a Neat venv."
+    exit 1
+  fi
+fi
+
 install_cpu_torch_if_needed() {
   case "$(uname -m)" in
     x86_64|amd64|aarch64|arm64)
