@@ -557,10 +557,11 @@ selector in Settings.
   language (a few seconds) and other languages load on their first spoken
   reply. Without Supertonic every installed engine loads at startup as before.
 - **Supertonic runs in its own venv and worker too.** Its runtime needs `pyneat`,
-  `onnxruntime` and `numpy 1.26`, which the UI venv does not carry, so `setup.sh`
-  builds `./.venv-supertonic` (requirements in
-  `src/python/requirements-supertonic.txt`, plus the PyNeat wheel fetched with
-  `sima-cli neat install core -t pyneat`) and downloads the model files with
+  `onnxruntime` and the numpy that PyNeat is built against, which the UI venv
+  does not carry, so `setup.sh` builds `./.venv-supertonic` (requirements in
+  `src/python/requirements-supertonic.txt`, plus the installed PyNeat linked
+  from the Neat environment, or on older platforms the PyNeat wheel fetched
+  with `sima-cli neat install core -t pyneat`) and downloads the model files with
   the venv's `hf`: the upstream CPU models and voice styles from
   [Supertone/supertonic-3](https://huggingface.co/Supertone/supertonic-3) and
   the precompiled MLA packages from
