@@ -382,8 +382,13 @@
   // Read aloud / Stop under a finished answer.
   function paintSpeakButton(m) {
     if (!m.footEl) return;
-    const old = m.footEl.querySelector('.parallel-speak');
-    if (old) old.remove();
+    m.footEl.querySelectorAll('.parallel-speak, .parallel-speak-error').forEach((e) => e.remove());
+    if (m.speechError) {
+      const note = document.createElement('span');
+      note.className = 'parallel-speak-error';
+      note.textContent = m.speechError;
+      m.footEl.appendChild(note);
+    }
     const speaking = speech.owner === m;
     if (!speaking && (m.pending || !cleanForSpeech(answerOf(m.text)))) return;
     const btn = document.createElement('button');
@@ -393,6 +398,7 @@
     btn.addEventListener('click', () => {
       unlockAudio();
       if (speech.owner === m) { stopSpeech(); return; }
+      m.speechError = null;
       const reading = startReading(m, m.panel);
       reading.feed(answerOf(m.text), true);
     });
@@ -496,13 +502,20 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ input }),
           });
-          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+          if (!resp.ok) {
+            const body = await resp.json().catch(() => ({}));
+            throw new Error(body.error || `HTTP ${resp.status}`);
+          }
           const blob = await resp.blob();
           if (!alive()) break;
           ready.push(URL.createObjectURL(blob));
           play();
         } catch (err) {
-          // Skip a sentence the voice could not read; keep going with the rest.
+          // Say why once; a voice that can't read one sentence may read the next.
+          if (!reply.speechError) {
+            reply.speechError = `Couldn't read aloud: ${err.message}.`;
+            paintSpeakButton(reply);
+          }
         }
       }
       synthesizing = false;
