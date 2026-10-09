@@ -14,7 +14,6 @@ ui/server.log
 .venv/
 ui/uploads/
 *.wav
-!ui/static/fillers/*.wav
 ui/.milvus*
 ui/milvus.db*
 ui/milvus.meta.json
