@@ -7,6 +7,9 @@
 #   4. /v1/audio/transcriptions of that WAV contains the sentence's key words
 #   5. /v1/audio/speech in German, then /v1/audio/translations returns English
 #   6. /v1/chat/completions answers (only when a chat model is loaded)
+#   7. documents (RAG), when /health lists features.rag: /rag/search returns
+#      passages, and with a chat model, chat with "neat_rag" uses at least one
+#      (X-RAG-Hits) and answers
 #
 # Usage: ./audio_e2e.sh [host:port | base URL]   (http://… when app.web.https is false)
 # Exit status 0 when every step passes, 1 otherwise. Needs curl and python3.
@@ -99,6 +102,35 @@ if [ -n "$MODEL" ]; then
   if [ -n "$answer" ]; then pass "chat (${MODEL}): ${answer}"; else fail "chat: $(head -c 200 "$TMP/chat.json")"; fi
 else
   printf '  [SKIP] chat: no chat model loaded\n'
+fi
+
+# 7. documents (RAG), when the board offers them
+RAG="$(json "$TMP/health.json" "(d.get('features') or {}).get('rag')")"
+if [ "$RAG" = True ]; then
+  Q="What does the Neat Library let developers do?"
+  curl -ksS --max-time 30 -G "${BASE}/rag/search" --data-urlencode "query=${Q}" --data-urlencode k=2 -o "$TMP/rag.json"
+  hits="$(json "$TMP/rag.json" "len([r for r in d['results'] if r.get('content')])")"
+  if [ "${hits:-0}" -ge 1 ] 2>/dev/null; then
+    pass "documents search: ${hits} passage(s), top \"$(json "$TMP/rag.json" "d['results'][0]['heading']")\""
+  else
+    fail "documents search: no passages ($(head -c 200 "$TMP/rag.json"))"
+  fi
+  if [ -n "$MODEL" ]; then
+    curl -ksS --max-time 180 -X POST "${BASE}/v1/chat/completions" -H 'Content-Type: application/json' -D "$TMP/ragchat.h" \
+      -d "{\"model\":\"${MODEL}\",\"stream\":false,\"max_tokens\":64,\"temperature\":0,\"neat_rag\":{\"k\":2},\"messages\":[{\"role\":\"user\",\"content\":\"${Q}\"}]}" \
+      -o "$TMP/ragchat.json"
+    used="$(tr -d '\r' < "$TMP/ragchat.h" | awk -F': ' 'tolower($1)=="x-rag-hits"{print $2}')"
+    answer="$(json "$TMP/ragchat.json" "d['choices'][0]['message']['content'].strip()")"
+    if [ "${used:-0}" -ge 1 ] 2>/dev/null && [ -n "$answer" ]; then
+      pass "chat from documents: ${used} passage(s) used; ${answer}"
+    else
+      fail "chat from documents: X-RAG-Hits=${used:-none} ($(head -c 200 "$TMP/ragchat.json"))"
+    fi
+  else
+    printf '  [SKIP] chat from documents: no chat model loaded\n'
+  fi
+else
+  printf '  [SKIP] documents: /health does not list features.rag (RAG off, or a Studio without document search)\n'
 fi
 
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
