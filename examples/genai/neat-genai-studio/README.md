@@ -135,6 +135,24 @@ The output lists the speech-to-text model and any chat model you loaded.
 - **A model fails to load with an accelerator error:** restart the Studio (`${APP_DIR}/run.sh stop`, then `${APP_DIR}/run.sh`) to free the accelerator, then load the model again.
 - **Start over:** `${APP_DIR}/run.sh --clean`, then `${APP_DIR}/setup.sh`. Downloaded models are kept.
 
+### Limits and what the Studio does at them
+The board has fixed limits. The Studio checks them before it asks the board to
+do something it can't, and says what happened instead of failing silently.
+
+| Situation | What the Studio does |
+| --- | --- |
+| **Accelerator memory full**: loading a model that won't fit beside the loaded ones | Refused before anything is loaded or unloaded: the browser says how much the model needs and how much is free, and offers the loaded models to unload, largest first. The control API answers `409` with `"code": "no_room"`. Sizes are each model's accelerator files (`acceleratorBytes` in the catalog) against 16 GiB; set `STUDIO_MLA_BYTES` for another board. |
+| **More models than the limit** (`max_resident_chat_models`) | Refused, and the browser asks which loaded model to unload (`409`, `"code": "resident_limit"`). |
+| **A load fails anyway** (memory not handed back by earlier unloads) | Only the new model is rolled back; the others stay loaded. Restart the Studio to free the accelerator. |
+| **Storage full**: a download bigger than the free space | Refused before it starts, keeping 1 GB free for the board. A disk that fills during a download is reported as such; download again after deleting a model and the finished files are reused. A half-downloaded model is marked incomplete and can't be loaded. |
+| **Context full**: a conversation longer than the model reads at once | Each model's window is read from its compiled files (`contextTokens` in the catalog: 2048 for LFM2.5-230M and Gemma 3, 8192 for the LFM2.5 VL models). The oldest turns are left out so the model still answers; the chat says so once, and a Parallel panel says so under the answer (`X-Context-Dropped` on the API). Token counts are estimates that run high. |
+| **One message longer than the window** | Refused with the reason instead of an empty reply, and taken out of the conversation so later messages still work (`413`, `"code": "context_full"` on the API). |
+| **An empty reply anyway** | The chat or the panel says the conversation is probably too long, and suggests a new chat. |
+| **Accelerator busy** (Platform 3.0: `rc=-11`, kernel log `no free bank`, when several models run at once) | Retried once automatically when no text had come back yet; otherwise the error is shown under that answer only. |
+| **A picture for a model that doesn't see images** | In Parallel with **Same prompt**, those models sit the message out with a note; their panels never get the picture. |
+| **No voice for the reply's language** | Read aloud says it can't read that answer instead of staying silent. |
+| **A model unloaded while its panel is open** | Its panel goes away; sending from a stale panel says the model is no longer loaded. |
+
 ## Optional Features
 
 ### Setup options

@@ -2414,8 +2414,29 @@ socket.on('generation_error', (data) => {
   if (currentAssistantMessage) {
     currentAssistantMessage.classList.remove('speaking', 'streaming-text');
   }
+  // A reply refused before any text leaves its "Processing..." placeholder
+  // empty: the error takes its place.
+  if (currentAssistantMessage && /^\s*(Processing\.\.\.)?\s*$/.test(currentAssistantMessage.innerText || '')) {
+    currentAssistantMessage.remove();
+  }
   const message = (data && data.message) || 'Response generation failed. Please try again.';
   addChatMessage(`⚠️ ${message}`, false, false);
+  setTimeout(flushChatNotices, 0);
+});
+// The Studio explains something about the current reply: earlier messages
+// left out to fit the model's window, or a reply that came back empty.
+// A note that arrives while a reply is still being written waits for the
+// reply to end: the page writes a streaming reply into its latest message.
+let _pendingChatNotices = [];
+function flushChatNotices() {
+  const notices = _pendingChatNotices;
+  _pendingChatNotices = [];
+  notices.forEach(text => addChatMessage(`ℹ️ ${text}`, false, false));
+}
+socket.on('chat_notice', (data) => {
+  if (!data || !data.text) return;
+  _pendingChatNotices.push(data.text);
+  if (!activeGeneration) flushChatNotices();
 });
 socket.on('end', (data) => {
   console.log('Received end event:', data);
@@ -2457,6 +2478,8 @@ socket.on('end', (data) => {
     // Don't remove audio-playing class here - let actual audio end handle it
     // The 'end' event is for text streaming, not audio playback
   }
+  // Notes held back while the reply was written go under it now.
+  setTimeout(flushChatNotices, 0);
 
   // Don't hide abort button here - keep it visible during audio playback
   // hideAbortButton(); // Moved to audio completion
@@ -4930,6 +4953,10 @@ async function loadModelAndActivate(name, unload) {
       // Another client loaded a model since the last refresh: ask again.
       retry = { resident: data.resident || [], needed: data.needed || 1,
                 reason: 'The loaded models changed and the limit is reached.' };
+    } else if (resp.status === 409 && data.code === 'no_room') {
+      // Memory full: the Studio refused before loading. Offer the loaded
+      // models to unload, largest first.
+      retry = { resident: data.resident || [], needed: 1, reason: data.error };
     } else if (resp.status === 503 && others.some(n => !victims.includes(n))) {
       // An accelerator failure with other models still loaded most likely
       // means the new one does not fit beside them: offer to free room.

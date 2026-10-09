@@ -58,6 +58,12 @@ from readme_package_suite import (  # noqa: E402,F401
     ReadmePackagePathsTests,
 )
 from studio_client_suite import NoThinkTransformTests  # noqa: E402,F401
+from edge_cases_suite import (  # noqa: E402,F401
+    BusyAcceleratorTests,
+    ContextWindowTests,
+    MemoryFullTests,
+    StorageFullTests,
+)
 from worker_ipc_suite import (  # noqa: E402,F401
     ReadExactTests,
     ReadFrameTests,

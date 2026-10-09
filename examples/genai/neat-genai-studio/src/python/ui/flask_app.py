@@ -36,6 +36,7 @@ import socket
 import subprocess
 
 from shared.config import HubConfig
+from shared.chat_limits import accelerator_busy, fit_to_window, too_long_alone
 from shared.studio_client import apply_no_think
 from shared.board_camera import (
     capture_camera_frame,
@@ -463,6 +464,7 @@ class AppContext:
 
     def clear_conversation_history(self):
         """Clear the conversation history."""
+        self._context_noted = False
         with self._state_lock:
             self.conversation_history = []
             self.current_response = ""
@@ -626,6 +628,24 @@ class AppContext:
         self.app.config['RAG_FILE_PROCESSING_URL'] = self.ragserver or ""
         self.app.config['RAG_EMBEDDING_MODEL_DIR'] = self.rag_embedding_model_dir
         self.app.config['VISION_IMAGE_SIZE'] = self.vision_image_size
+
+    def context_window(self, model):
+        """The tokens ``model`` can read at once (its compiled context window),
+        from the model server's catalog; cached, and None when unknown."""
+        cache = getattr(self, '_context_windows', None)
+        now = time.monotonic()
+        if cache is None or now - cache[0] > 60 or (model and model not in cache[1]):
+            windows = {}
+            try:
+                resp = requests.get(f"{self.control_base_url.rstrip('/')}/control/catalog", timeout=5)
+                for entry in (resp.json() or {}).get('catalog', []):
+                    if entry.get('name'):
+                        windows[entry['name']] = entry.get('contextTokens')
+            except Exception:  # noqa: BLE001 - unknown window: send as is
+                windows = cache[1] if cache else {}
+            cache = (now, windows)
+            self._context_windows = cache
+        return cache[1].get(model)
 
     def get_config(self):
         return self.app.config
@@ -1218,15 +1238,72 @@ class AppContext:
             if self.max_tokens:
                 payload.setdefault('max_tokens', int(self.max_tokens))
             _normalize_openai_image_parts(payload)
+            # Context full: leave out the oldest turns so the request fits the
+            # model's window, and say how many in X-Context-Dropped; a message
+            # too long on its own is refused with a reason.
+            model = payload.get('model')
+            window = self.context_window(model)
+            payload['messages'], dropped = fit_to_window(payload.get('messages') or [], window)
+            if too_long_alone(payload['messages'], window):
+                return jsonify({'error': {'message': (
+                    f"The message is longer than {model} can read at once (about {window} tokens). "
+                    "Shorten it, or use a model with a longer window."), 'code': 'context_full'}}), 413
             url = f"http://{self.app.config['SIMAAI_IP_ADDR']}/v1/chat/completions"
+
+            def open_upstream():
+                return requests.post(url, json=payload, stream=True, timeout=(10, 600))
+
             try:
-                upstream = requests.post(url, json=payload, stream=True, timeout=(10, 600))
+                upstream = open_upstream()
             except requests.RequestException as exc:
                 logging.error(f"Chat proxy: model server unreachable: {exc}")
                 return jsonify({'error': 'model server unreachable'}), 502
+            streaming = bool(payload.get('stream'))
+
+            def first_event(resp):
+                """Read up to the first event that carries text or an error,
+                holding the lines read so far; returns (held_lines, error)."""
+                held = []
+                lines = resp.iter_lines(chunk_size=None)   # pass tokens on as they arrive
+                for line in lines:
+                    held.append(line)
+                    text = line.decode('utf-8', 'replace').strip()
+                    if not text.startswith('data:'):
+                        continue
+                    data = text[5:].strip()
+                    if data == '[DONE]':
+                        return held, lines, None
+                    try:
+                        obj = json.loads(data)
+                    except ValueError:
+                        continue
+                    if obj.get('error'):
+                        err = obj['error']
+                        return held, lines, str(err.get('message') if isinstance(err, dict) else err)
+                    delta = ((obj.get('choices') or [{}])[0].get('delta') or {}).get('content')
+                    if delta:
+                        return held, lines, None
+                return held, lines, None
 
             def relay():
+                nonlocal upstream
                 try:
+                    if streaming and upstream.ok:
+                        # Busy accelerator: the 3.0 driver now and then refuses a
+                        # job while several models run ("no free bank", rc=-11).
+                        # If that comes before any text, one more try is safe.
+                        held, lines, error = first_event(upstream)
+                        if error and accelerator_busy(error):
+                            logging.warning("Chat proxy: accelerator busy for %s; retrying once", model)
+                            upstream.close()
+                            time.sleep(0.4)
+                            upstream = open_upstream()
+                            held, lines, error = first_event(upstream)
+                        for line in held:
+                            yield line + b"\n"
+                        for line in lines:
+                            yield line + b"\n"
+                        return
                     for chunk in upstream.iter_content(chunk_size=None):
                         if chunk:
                             yield chunk
@@ -1247,7 +1324,9 @@ class AppContext:
                 stream_with_context(relay()),
                 status=upstream.status_code,
                 content_type=upstream.headers.get('Content-Type', 'text/event-stream'),
-                headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
+                headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no',
+                         'X-Context-Dropped': str(dropped),
+                         'X-Context-Window': str(window or '')},
             )
 
         @self.app.route('/stop', methods=['POST'])
@@ -2209,65 +2288,126 @@ def stream_chat_request(messages, model, config, generation_id, socketio_event='
         if not genai_app.start_assistant_response(generation_id):
             return None
         
-        with requests.post(url, json=payload, stream=True) as resp:
-            resp.raise_for_status()
+        # Context full: leave out the oldest turns so the request fits what the
+        # model can read; a message too long on its own is refused with a reason.
+        window = genai_app.context_window(model)
+        payload["messages"], dropped = fit_to_window(payload["messages"], window)
+        if too_long_alone(payload["messages"], window):
+            # Take the message back out of the history, or every later turn
+            # would carry it and fail the same way.
+            with genai_app._state_lock:
+                history = genai_app.conversation_history
+                if history and history[-1].get('role') == 'user':
+                    history.pop()
+            genai_app.fail_generation(
+                generation_id,
+                f"Your message is longer than {model} can read at once (about {window} tokens). "
+                "Shorten it, or ask a model with a longer window.")
+            return None
+        # Notes for the user go out after the reply has finished: the page
+        # writes a streaming reply into its latest message.
+        notices = []
+        if dropped and not getattr(genai_app, '_context_noted', False):
+            genai_app._context_noted = True
+            notices.append(
+                f"This conversation is longer than {model} can read at once ({window} tokens), "
+                "so its earliest messages are left out. Start a new chat to begin fresh.")
+
+        got_content = False
+        stream_error = None
+        # Busy accelerator: the 3.0 driver now and then refuses a job while
+        # several models run ("no free bank", rc=-11). Nothing was generated, so
+        # one more try is safe.
+        for attempt in range(2):
+            stream_error = None
+            try:
+                with requests.post(url, json=payload, stream=True) as resp:
+                    resp.raise_for_status()
             
-            for line in resp.iter_lines():
-                if not genai_app.is_generation_current(generation_id):
-                    break
-                if line:
-                    decoded = line.decode('utf-8')
-                    if decoded.startswith('data: '):
-                        data_str = decoded[6:]
-                        if data_str == '[DONE]':
+                    for line in resp.iter_lines():
+                        if not genai_app.is_generation_current(generation_id):
                             break
+                        if line:
+                            decoded = line.decode('utf-8')
+                            if decoded.startswith('data: '):
+                                data_str = decoded[6:]
+                                if data_str == '[DONE]':
+                                    break
                         
-                        try:
-                            chunk_json = json.loads(data_str)
-                            if not genai_app.is_generation_current(generation_id):
-                                break
-                            
-                            # Handle Metrics
-                            if 'ttft' in chunk_json:
-                                genai_app.emit('ttfs', round(float(chunk_json['ttft']), 2))
-                            
-                            if 'tps' in chunk_json:
-                                genai_app.emit('tps', round(float(chunk_json['tps']), 2))
-
-                            # Handle Content
-                            if 'choices' in chunk_json and len(chunk_json['choices']) > 0:
-                                delta = chunk_json['choices'][0].get('delta', {})
-                                content = delta.get('content', '')
-                                
-                                if content:
-                                    if not genai_app.add_to_current_response(generation_id, content):
+                                try:
+                                    chunk_json = json.loads(data_str)
+                                    if not genai_app.is_generation_current(generation_id):
                                         break
-                                    # Update UI (the client splits <think> itself)
-                                    genai_app.emit(socketio_event, {"results": content})
+                                    # An error from the model server (the 3.0 driver's
+                                    # "no free bank", a runtime failure) ends this try.
+                                    if chunk_json.get('error'):
+                                        err = chunk_json['error']
+                                        stream_error = str(err.get('message') if isinstance(err, dict) else err)
+                                        break
+                            
+                                    # Handle Metrics
+                                    if 'ttft' in chunk_json:
+                                        genai_app.emit('ttfs', round(float(chunk_json['ttft']), 2))
+                            
+                                    if 'tps' in chunk_json:
+                                        genai_app.emit('tps', round(float(chunk_json['tps']), 2))
 
-                                    # Trigger TTS on the ANSWER only — never speak
-                                    # the model's <think> reasoning aloud.
-                                    _full_reply += content
-                                    answer_so_far = _answer_part(_full_reply)
-                                    # A </think> can retroactively move earlier text
-                                    # into reasoning, shrinking the answer — reset so
-                                    # the real answer still gets spoken.
-                                    if len(answer_so_far) < _tts_spoken:
-                                        _tts_spoken = 0
-                                    if len(answer_so_far) > _tts_spoken:
-                                        send_talk_text(answer_so_far[_tts_spoken:], generation_id)
-                                        _tts_spoken = len(answer_so_far)
+                                    # Handle Content
+                                    if 'choices' in chunk_json and len(chunk_json['choices']) > 0:
+                                        delta = chunk_json['choices'][0].get('delta', {})
+                                        content = delta.get('content', '')
                                 
-                        except Exception: 
-                            pass
+                                        if content:
+                                            got_content = True
+                                            if not genai_app.add_to_current_response(generation_id, content):
+                                                break
+                                            # Update UI (the client splits <think> itself)
+                                            genai_app.emit(socketio_event, {"results": content})
+
+                                            # Trigger TTS on the ANSWER only — never speak
+                                            # the model's <think> reasoning aloud.
+                                            _full_reply += content
+                                            answer_so_far = _answer_part(_full_reply)
+                                            # A </think> can retroactively move earlier text
+                                            # into reasoning, shrinking the answer — reset so
+                                            # the real answer still gets spoken.
+                                            if len(answer_so_far) < _tts_spoken:
+                                                _tts_spoken = 0
+                                            if len(answer_so_far) > _tts_spoken:
+                                                send_talk_text(answer_so_far[_tts_spoken:], generation_id)
+                                                _tts_spoken = len(answer_so_far)
+                                
+                                except Exception: 
+                                    pass
             
-            # Finalize
-            if genai_app.finish_assistant_response(generation_id):
-                if genai_app.talk_ctrl is not None:
-                    send_talk_text('END', generation_id)
-                else:
-                    if genai_app.complete_generation(generation_id):
-                        genai_app.emit('end', {})
+            except requests.HTTPError as exc:
+                stream_error = (exc.response.text if exc.response is not None else str(exc))[:300]
+            if (stream_error and not got_content and attempt == 0
+                    and accelerator_busy(stream_error)
+                    and genai_app.is_generation_current(generation_id)):
+                logging.warning("Accelerator busy for %s; retrying once: %s", model, stream_error)
+                time.sleep(0.4)
+                continue
+            break
+
+        if stream_error and genai_app.is_generation_current(generation_id):
+            genai_app.fail_generation(generation_id, f"{model} could not answer: {stream_error}")
+            return None
+        if not got_content and genai_app.is_generation_current(generation_id):
+            # Past the window the runtime ends the reply with no text and no error.
+            notices.append(
+                f"{model} didn't answer: this conversation is probably longer than it can "
+                "read at once. Start a new chat.")
+
+        # Finalize
+        if genai_app.finish_assistant_response(generation_id):
+            if genai_app.talk_ctrl is not None:
+                send_talk_text('END', generation_id)
+            else:
+                if genai_app.complete_generation(generation_id):
+                    genai_app.emit('end', {})
+        for text in notices:
+            genai_app.emit('chat_notice', {'text': text})
 
     except Exception as e:
         if genai_app.is_generation_current(generation_id):

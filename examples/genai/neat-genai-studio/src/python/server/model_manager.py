@@ -31,6 +31,7 @@ import wave
 from pathlib import Path
 
 from shared.chat_template import repair_chat_template_files
+from shared.chat_limits import context_window_from_elfs
 from shared.config import (HubConfig, classify_model_dir, model_dir_complete,
                            model_dir_supported)
 
@@ -112,6 +113,28 @@ _MLA_FAILURE_MARKERS = (
 def _is_mla_failure(detail: str) -> bool:
     text = (detail or "").lower()
     return any(marker in text for marker in _MLA_FAILURE_MARKERS)
+
+
+# The accelerator memory the loaded models share: 16 GiB on a Modalix DevKit.
+# STUDIO_MLA_BYTES overrides it for other boards.
+ACCELERATOR_BYTES = int(os.environ.get("STUDIO_MLA_BYTES", str(16 * 2**30)))
+
+
+class ModelDoesNotFit(ValueError):
+    """A load would not fit in accelerator memory beside the models that stay
+    loaded. Carries the loaded models the caller can choose to unload, largest
+    first, so the client can offer that choice instead of attempting a load the
+    accelerator refuses (which does not always hand its memory back)."""
+
+    def __init__(self, name: str, need: int, free: int, resident: list):
+        self.name = name
+        self.need = need
+        self.free = max(0, free)
+        self.resident = list(resident)
+        super().__init__(
+            f"'{name}' needs about {need / 1e9:.1f} GB of accelerator memory and about "
+            f"{self.free / 1e9:.1f} GB is free beside the loaded models. Unload one of "
+            f"them first ({', '.join(self.resident) or 'none loaded'}).")
 
 
 class ResidentLimitReached(ValueError):
@@ -295,6 +318,11 @@ class ModelManager:
                 "activeAsr": (info.get("type") == "asr"
                               and info["name"] == active_asr),
                 "sizeBytes": self._size_of(path),
+                # Accelerator memory it takes (its ELF stages) and the tokens it
+                # can read at once, fixed when it was compiled; past that window
+                # the runtime answers with an empty reply.
+                "acceleratorBytes": self._elf_bytes(path),
+                "contextTokens": self._context_tokens(path),
                 # How long this model is expected to take to load, so the client
                 # can run its own countdown. add_model() does the bulk MLA load
                 # in native code without releasing the GIL, which freezes this
@@ -503,6 +531,10 @@ class ModelManager:
                             name, [v for v in others if v not in victims],
                             self._max_resident, needed)
 
+            # Memory full: refuse up front, naming what to unload, rather than
+            # attempting a load the accelerator will refuse.
+            self._check_fits(name, path, victims)
+
             size_bytes = self._size_of(path)
             # Estimate and learn against the ELF bytes actually transferred, so
             # the rate stays comparable across models whose directories carry
@@ -700,6 +732,33 @@ class ModelManager:
             return "size unknown"
         gb = size_bytes / 1e9
         return f"{gb:.1f} GB" if gb >= 1 else f"{size_bytes / 1e6:.0f} MB"
+
+    def _context_tokens(self, path) -> int | None:
+        if not path:
+            return None
+        try:
+            return context_window_from_elfs(f.name for f in Path(path).glob("elf_files/*.elf"))
+        except OSError:
+            return None
+
+    def _check_fits(self, name: str, path, victims: list) -> None:
+        """Refuse a load the accelerator memory can't hold beside the models
+        that stay loaded. Sizes are each model's ELF stages, what the runtime
+        transfers; a model of unknown size is let through."""
+        need = self._elf_bytes(path)
+        if not need:
+            return
+        staying = [n for n in self._server_model_names() if n != name and n not in victims]
+        held = 0
+        for other in staying:
+            other_path = self.resolved_model_path(other)
+            held += (self._elf_bytes(other_path) or 0) if other_path else 0
+        if held + need <= ACCELERATOR_BYTES:
+            return
+        with self._lock:
+            chat = [n for n in self._resident if n in staying]
+        chat.sort(key=lambda n: self._elf_bytes(self.resolved_model_path(n)) or 0, reverse=True)
+        raise ModelDoesNotFit(name, need, ACCELERATOR_BYTES - held, chat)
 
     def _elf_bytes(self, path) -> int | None:
         """Total size of the ELF stages — the bytes the accelerator actually

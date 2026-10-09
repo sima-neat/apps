@@ -375,6 +375,7 @@
     const stats = statsText(m);
     if (stats) bits.push(`<span class="parallel-stats">${stats}</span>`);
     if (m.state) bits.push(`<span class="parallel-state is-${m.stateKind || 'busy'}">${esc(m.state)}</span>`);
+    if (m.contextNote) bits.push(`<span class="parallel-state is-muted">${esc(m.contextNote)}</span>`);
     m.footEl.innerHTML = bits.join('');
     paintSpeakButton(m);
   }
@@ -637,6 +638,13 @@
       let message = `HTTP ${resp.status}`;
       try { const j = JSON.parse(detail); message = (j.error && (j.error.message || j.error)) || message; } catch (e) { /* not JSON */ }
       throw new Error(String(message));
+    }
+    // The Studio leaves out the oldest turns when a conversation outgrows the
+    // model's window, and says so in these headers.
+    const dropped = Number(resp.headers.get('X-Context-Dropped') || 0);
+    if (dropped > 0) {
+      const win = resp.headers.get('X-Context-Window');
+      reply.contextNote = `Earlier messages were left out to fit what ${name} can read at once${win ? ` (${win} tokens)` : ''}.`;
     }
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();

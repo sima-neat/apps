@@ -14,7 +14,7 @@ import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from server.model_manager import ModelManager, ResidentLimitReached
+from server.model_manager import ModelDoesNotFit, ModelManager, ResidentLimitReached
 
 
 class _ControlServer(ThreadingHTTPServer):
@@ -122,6 +122,11 @@ class _ControlHandler(BaseHTTPRequestHandler):
                 self._send_json(self.manager.benchmark_stop())
             else:
                 self._send_json({"error": "not found"}, 404)
+        except ModelDoesNotFit as exc:
+            # Memory full: the client offers to unload the largest models first.
+            self._send_json({"error": str(exc), "code": "no_room",
+                             "resident": exc.resident, "needBytes": exc.need,
+                             "freeBytes": exc.free}, 409)
         except ResidentLimitReached as exc:
             # Not a bad request: the client asks the user which loaded model
             # to unload and retries with {"unload": [...]}.
