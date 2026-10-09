@@ -6,6 +6,7 @@ import argparse
 import json
 import math
 import os
+import sys
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -230,7 +231,8 @@ def save_frame(path: Path, frame, segments: list[dict]) -> None:
         cv2.rectangle(annotated, (x, y), (x + w, y + h), color, 2)
         cv2.putText(annotated, f"{segment['label']} {segment['confidence']:.2f}", (x, max(12, y - 4)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
-    cv2.imwrite(str(path), annotated)
+    if not cv2.imwrite(str(path), annotated):
+        print(f"[warn] failed to write output frame: {path}", file=sys.stderr)
 
 
 def run(cfg: Config) -> None:

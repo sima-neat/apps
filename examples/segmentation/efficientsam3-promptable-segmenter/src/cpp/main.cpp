@@ -370,7 +370,9 @@ void save_frame(const fs::path& path, const cv::Mat& frame, const std::vector<Se
                 cv::Point(x0, std::max(12, y0 - 4)), cv::FONT_HERSHEY_SIMPLEX, 0.5, color, 1,
                 cv::LINE_AA);
   }
-  cv::imwrite(path.string(), annotated);
+  if (!cv::imwrite(path.string(), annotated)) {
+    std::cerr << "[warn] failed to write output frame: " << path.string() << "\n";
+  }
 }
 
 // ------------------------------------------------------------------------------------- run
