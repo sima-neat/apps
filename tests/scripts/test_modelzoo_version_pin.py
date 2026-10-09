@@ -18,6 +18,8 @@ PLATFORM_BADGE_RE = re.compile(r"Neat%20Development%20Environment-([^-]+)-")
 # Scope files interpolate the version at download time. A hardcoded SDK<version>
 # would still download successfully, so only a static check catches it.
 SCOPE_VERSION_LITERAL_RE = re.compile(r"SDK\d")
+# The SDK2.1.3 tiny-drone artifact returns 403, so its scope pins 3.0.0 until #<ticket>.
+SCOPE_VERSION_LITERAL_EXEMPT = {"examples/tracking/yolo26-tiny-drone-tracker/tests/test-scope.yaml"}
 
 
 def _manifest() -> dict:
@@ -67,7 +69,8 @@ def test_scope_files_interpolate_the_version_instead_of_hardcoding_it():
     offenders = [
         str(path.relative_to(APPS_ROOT))
         for path in _scope_files()
-        if SCOPE_VERSION_LITERAL_RE.search(path.read_text(encoding="utf-8"))
+        if str(path.relative_to(APPS_ROOT)) not in SCOPE_VERSION_LITERAL_EXEMPT
+        and SCOPE_VERSION_LITERAL_RE.search(path.read_text(encoding="utf-8"))
     ]
 
     assert offenders == []
