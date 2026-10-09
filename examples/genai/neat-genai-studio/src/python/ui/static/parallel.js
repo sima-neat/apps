@@ -24,6 +24,11 @@
   // all of them (until the user changes the ticks).
   let chosen = null;
   const drafts = new Map();   // model name -> unsent text in its prompt box
+  // 'different': each panel has its own prompt box and Send. 'same': one
+  // shared box sends the same prompt to every panel at once.
+  let promptMode = 'different';
+  const SHARED = '__shared__';  // the shared box's key for pictures and the camera
+  let sharedImage = null;
 
   // The loaded chat/VLM models, from the catalog newui.js keeps up to date.
   const loaded = () => (typeof _catalog !== 'undefined' && Array.isArray(_catalog)
@@ -112,12 +117,23 @@
       + '<div><div class="parallel-title">Parallel · <span class="parallel-count"></span></div>'
       + '<div class="parallel-sub">Each model has its own prompt and Send. They run at the same time on the accelerator.</div></div>'
       + '<div class="parallel-head-actions">'
+      + '<label class="parallel-mode-pick">Prompt <select class="parallel-mode-select" aria-label="Same or different prompts">'
+      + '<option value="different">Different prompts</option><option value="same">Same prompt</option></select></label>'
       + '<div class="parallel-models-pick">'
       + '<button type="button" class="parallel-btn parallel-models-btn" aria-haspopup="true" aria-expanded="false"></button>'
       + '<div class="parallel-models-menu" role="group" aria-label="Models with a panel" hidden></div></div>'
       + '<button type="button" class="parallel-btn parallel-stop-all">Stop all</button>'
       + '<button type="button" class="parallel-btn parallel-close">Back to chat</button></div></div>'
       + '<div class="parallel-grid"></div>'
+      + '<div class="parallel-shared" hidden>'
+      + '<div class="parallel-attach parallel-shared-attach"></div>'
+      + '<div class="parallel-composer">'
+      + '<textarea rows="2" placeholder="One prompt for every panel" aria-label="Prompt for every panel"></textarea>'
+      + '<div class="parallel-composer-row">'
+      + '<button type="button" class="parallel-btn parallel-picture">Picture</button>'
+      + '<button type="button" class="parallel-btn parallel-cam">Camera</button>'
+      + '<span class="parallel-shared-note"></span><span class="parallel-spacer"></span>'
+      + '<button type="button" class="parallel-btn parallel-send parallel-send-all">Send to all</button></div></div></div>'
       + '<input type="file" accept="image/*" class="parallel-file" hidden>';
     view.querySelector('.parallel-close').addEventListener('click', () => setOpen(false));
     const menuBtn = view.querySelector('.parallel-models-btn');
@@ -143,6 +159,26 @@
       panels.forEach((p) => p.controller && p.controller.abort());
     });
     view.querySelector('.parallel-file').addEventListener('change', onFileChosen);
+    view.querySelector('.parallel-mode-select').addEventListener('change', (e) => {
+      promptMode = e.target.value === 'same' ? 'same' : 'different';
+      syncMode();
+    });
+    const shared = view.querySelector('.parallel-shared');
+    const sharedTa = shared.querySelector('textarea');
+    sharedTa.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendShared(); }
+    });
+    sharedTa.addEventListener('input', syncShared);
+    shared.querySelector('.parallel-send-all').addEventListener('click', () => {
+      if (anyBusy()) panels.forEach((p) => p.controller && p.controller.abort());
+      else sendShared();
+    });
+    shared.querySelector('.parallel-picture').addEventListener('click', () => {
+      fileTarget = SHARED;
+      view.querySelector('.parallel-file').click();
+    });
+    shared.querySelector('.parallel-cam').addEventListener('click', () => openCamera(SHARED));
+    syncMode();
     document.body.appendChild(view);
     window.addEventListener('resize', () => { if (open) placeView(); });
     document.addEventListener('keydown', (e) => { if (open && e.key === 'Escape' && !view.querySelector('.parallel-camera')) setOpen(false); });
@@ -154,10 +190,12 @@
     e.target.value = '';
     if (!file || !fileTarget) return;
     try {
-      panelState(fileTarget).image = await scaleImage(file);
+      const image = await scaleImage(file);
+      if (fileTarget === SHARED) { sharedImage = image; renderSharedAttachment(); return; }
+      panelState(fileTarget).image = image;
       renderPanels(true);
     } catch (err) {
-      alertInPanel(fileTarget, 'That file could not be read as an image.');
+      if (fileTarget !== SHARED) alertInPanel(fileTarget, 'That file could not be read as an image.');
     }
   }
 
@@ -200,6 +238,7 @@
     grid.style.setProperty('--panels', String(Math.max(1, shown.length)));
     grid.innerHTML = '';
     shown.forEach((n) => grid.appendChild(buildPanel(models.find((m) => m.name === n))));
+    requestAnimationFrame(syncShared);
     if (open && names.length < 2) setOpen(false);
   }
 
@@ -295,6 +334,11 @@
 
   function messageEl(m) {
     const div = document.createElement('div');
+    if (m.role === 'note') {
+      div.className = 'parallel-note';
+      div.textContent = m.text;
+      return div;
+    }
     if (m.role === 'user') {
       div.className = 'parallel-msg is-user';
       div.innerHTML = (m.image ? `<img src="${m.image}" alt="Sent with this message">` : '') + `<div>${esc(m.text)}</div>`;
@@ -327,15 +371,15 @@
 
   // ---- sending ----
 
-  async function send(model) {
+  async function send(model, given) {
     const name = model.name;
     const el = panelEl(name);
     const state = panelState(name);
     if (!el || state.controller) return;
     const ta = el.querySelector('textarea');
     const vision = isVision(model);
-    const image = vision ? state.image : null;
-    const text = ta.value.trim() || (image ? 'Describe this image.' : '');
+    const image = vision ? (given ? given.image : state.image) : null;
+    const text = (given ? given.text : ta.value.trim()) || (image ? 'Describe this image.' : '');
     if (!text) return;
     if (!loaded().some((m) => m.name === name)) {
       alertInPanel(name, `${name} is no longer loaded. Load it again in Settings.`);
@@ -349,10 +393,12 @@
       : text;
     const messages = [{ role: 'system', content: SYSTEM_PROMPT + (image ? WITH_IMAGE : WITHOUT_IMAGE) }, ...history, { role: 'user', content }];
 
-    ta.value = '';
-    drafts.delete(name);
-    state.image = null;
-    renderAttachment(name);
+    if (!given) {
+      ta.value = '';
+      drafts.delete(name);
+      state.image = null;
+      renderAttachment(name);
+    }
     const reply = { role: 'assistant', text: '', tokens: 0, tps: null, ttftS: null, totalS: null, pending: true, state: 'Waiting for the first token…', stateKind: 'busy' };
     state.messages.push({ role: 'user', text, image }, reply);
     renderThread(name);
@@ -455,16 +501,82 @@
     throw new Error('The reply stopped early: the connection closed before it finished.');
   }
 
+  // ---- same prompt for every panel ----
+
+  const shownNames = () => Array.from(view.querySelectorAll('.parallel-panel')).map((p) => p.dataset.model);
+  const anyBusy = () => shownNames().some((n) => panelState(n).controller);
+
+  function syncMode() {
+    if (!view) return;
+    const same = promptMode === 'same';
+    view.classList.toggle('is-same', same);
+    view.querySelector('.parallel-shared').hidden = !same;
+    view.querySelector('.parallel-mode-select').value = promptMode;
+    view.querySelector('.parallel-sub').textContent = same
+      ? 'One prompt goes to every panel at once; each panel keeps its own conversation.'
+      : 'Each model has its own prompt and Send. They run at the same time on the accelerator.';
+    syncShared();
+  }
+
+  function renderSharedAttachment() {
+    const box = view.querySelector('.parallel-shared-attach');
+    box.innerHTML = sharedImage ? `<img src="${sharedImage}" alt="Picture for the next message"><button type="button" class="parallel-link">Remove</button>` : '';
+    if (sharedImage) box.querySelector('button').addEventListener('click', () => { sharedImage = null; renderSharedAttachment(); });
+    syncShared();
+  }
+
+  // The shared box's buttons and its note about pictures and text-only models.
+  function syncShared() {
+    if (!view) return;
+    const shared = view.querySelector('.parallel-shared');
+    const models = loaded().filter((m) => shownNames().includes(m.name));
+    const seeing = models.filter(isVision);
+    shared.querySelector('.parallel-picture').hidden = !seeing.length;
+    shared.querySelector('.parallel-cam').hidden = !seeing.length;
+    const busy = anyBusy();
+    const btn = shared.querySelector('.parallel-send-all');
+    btn.textContent = busy ? 'Stop all' : `Send to ${models.length}`;
+    btn.classList.toggle('is-stop', busy);
+    const blind = models.filter((m) => !isVision(m));
+    shared.querySelector('.parallel-shared-note').textContent = sharedImage && blind.length
+      ? `${blind.map((m) => m.name).join(' and ')} can't take images, so only ${seeing.map((m) => m.name).join(' and ')} will answer.`
+      : '';
+  }
+
+  // Send the shared prompt to every shown panel at once. A model that can't
+  // see the attached picture sits that message out, with a note in its panel.
+  function sendShared() {
+    const shared = view.querySelector('.parallel-shared');
+    const ta = shared.querySelector('textarea');
+    const image = sharedImage;
+    const text = ta.value.trim() || (image ? 'Describe this image.' : '');
+    if (!text || anyBusy()) return;
+    const models = loaded().filter((m) => shownNames().includes(m.name));
+    ta.value = '';
+    sharedImage = null;
+    renderSharedAttachment();
+    models.forEach((m) => {
+      if (image && !isVision(m)) {
+        panelState(m.name).messages.push({ role: 'note', text: `“${text}” had a picture: ${m.name} can't take images, so it didn't answer.` });
+        renderThread(m.name);
+        return;
+      }
+      send(m, { text, image: isVision(m) ? image : null }).finally(syncShared);
+    });
+    setTimeout(syncShared, 50);
+  }
+
   // ---- camera (one at a time) ----
 
   let camStream = null;
   async function openCamera(name) {
-    const el = panelEl(name);
+    const el = name === SHARED ? view.querySelector('.parallel-shared') : panelEl(name);
     if (!el || view.querySelector('.parallel-camera')) return;
     try {
       camStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
     } catch (err) {
-      alertInPanel(name, `The camera isn't available (${err.message}). Allow camera access for this page, then try again.`);
+      if (name !== SHARED) alertInPanel(name, `The camera isn't available (${err.message}). Allow camera access for this page, then try again.`);
+      else view.querySelector('.parallel-shared-note').textContent = "The camera isn't available: allow camera access for this page.";
       return;
     }
     const box = document.createElement('div');
@@ -483,8 +595,10 @@
       canvas.width = Math.round(video.videoWidth * scale);
       canvas.height = Math.round(video.videoHeight * scale);
       canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
-      panelState(name).image = canvas.toDataURL('image/jpeg', 0.9);
+      const image = canvas.toDataURL('image/jpeg', 0.9);
       close();
+      if (name === SHARED) { sharedImage = image; renderSharedAttachment(); return; }
+      panelState(name).image = image;
       renderAttachment(name);
     });
     el.querySelector('.parallel-attach').before(box);
@@ -494,7 +608,7 @@
   // panels change when a model is loaded or unloaded.
   function tick() {
     syncButton();
-    if (open) renderPanels(false);
+    if (open) { renderPanels(false); syncShared(); }
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', tick);

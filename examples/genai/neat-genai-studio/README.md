@@ -321,6 +321,11 @@ The **Parallel** button in the header (three columns) opens a panel for every
 loaded model, each with its own prompt box, **Send** button and conversation.
 The **Models** dropdown lists the loaded models with a checkbox each: ticked
 models get a panel, so you can work with two, three or all of them.
+**Prompt** chooses **Different prompts** (a box and **Send** in every panel) or
+**Same prompt** (one box under the panels sends the same message to all of
+them at once, while each panel keeps its own conversation). With **Same
+prompt**, a picture goes only to the models that see images; a text-only
+model's panel notes that it sat that message out.
 Send any panel at any time: the models answer at the same time, each panel shows
 its tokens, tokens per second and time to first token, and models that see
 images also take a picture or a camera frame. The panels keep their own
