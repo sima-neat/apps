@@ -87,6 +87,20 @@ class RagPassageTests(unittest.TestCase):
         self.assertEqual(json.loads(header), [{"source": "", "heading": "Neat Library Overview › What Neat Is", "score": 0.8123}])
 
 
+class RagSearchFailedTests(unittest.TestCase):
+    def test_cleared_documents_ask_for_an_upload_or_reset(self):
+        message, status = rag_chat.search_failed_reply(database_exists=False)
+        self.assertEqual(status, 409)
+        self.assertIn("cleared", message)
+        self.assertIn("Upload a Markdown file or reset", message)
+        self.assertNotIn("Try again", message)
+
+    def test_a_built_database_whose_service_is_down_says_try_again(self):
+        message, status = rag_chat.search_failed_reply(database_exists=True)
+        self.assertEqual(status, 503)
+        self.assertIn("Try again in a moment", message)
+
+
 class RagEventLoopTests(unittest.TestCase):
     """Building a database on a Flask worker thread (upload, reset) needs an
     event loop there; worker threads have none by default."""

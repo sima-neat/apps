@@ -674,8 +674,10 @@ and the web UI at the same instant** against the same database.
 The Studio searches with the last user message, adds the matching passages
 before it, and removes the field before the request reaches the model server.
 The response headers `X-RAG-Hits` and `X-RAG-Sources` say which passages were
-used. This works in the full Studio and in backend-only mode, which also starts
-the RAG service:
+used. A request with `neat_rag` answers 409 when RAG is turned off in the
+config or the documents were cleared (upload one or reset), and 503 while the
+search service is starting. This works in the full Studio and in backend-only
+mode, which also starts the RAG service:
 
 ```bash
 B=https://127.0.0.1:5000

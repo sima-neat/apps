@@ -1228,8 +1228,9 @@ class AppContext:
                     hits = ensure_rag_modules_loaded().search(question, k=rag['k']) if question else []
                 except Exception as exc:  # noqa: BLE001
                     logging.error(f"RAG search failed: {exc}")
-                    return jsonify({'error': {'message': 'The document search service is not available yet. '
-                                                         'Try again in a moment, or rebuild the documents.'}}), 503
+                    from rag.inspect_db import default_db_path
+                    message, status = rag_chat.search_failed_reply(os.path.isfile(default_db_path()))
+                    return jsonify({'error': {'message': message}}), status
                 payload['messages'] = rag_chat.with_passages(payload.get('messages') or [], hits)
                 rag_headers = {'X-RAG-Hits': str(len(hits)), 'X-RAG-Sources': rag_chat.sources_header(hits)}
             url = f"http://{self.app.config['SIMAAI_IP_ADDR']}/v1/chat/completions"

@@ -102,3 +102,15 @@ def sources_header(hits: list) -> str:
     """``X-RAG-Sources``: the passages used, as compact JSON (ASCII only, so it
     is a valid header value)."""
     return json.dumps([passage_source(h) for h in hits], ensure_ascii=True, separators=(",", ":"))
+
+
+def search_failed_reply(database_exists: bool) -> tuple[str, int]:
+    """The error message and HTTP status for a chat with documents whose
+    search failed. Without a database (the documents were cleared, or none
+    were ever built) the user has to upload or reset, so 409; otherwise the
+    service is still starting or has stopped, so 503."""
+    if not database_exists:
+        return ("No documents are loaded on the board: they were cleared, or none were built. "
+                "Upload a Markdown file or reset to the default document."), 409
+    return ("The document search service is not available yet. "
+            "Try again in a moment, or rebuild the documents."), 503

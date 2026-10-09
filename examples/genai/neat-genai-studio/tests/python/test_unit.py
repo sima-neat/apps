@@ -50,7 +50,13 @@ from cli_think_suite import (  # noqa: E402,F401
 )
 from asr_metadata_suite import AsrMetadataTests  # noqa: E402,F401
 from talk_controller_suite import SupertonicRetryTests  # noqa: E402,F401
-from rag_chat_suite import RagEventLoopTests, RagOptionTests, RagPassageTests, RagQuestionTests  # noqa: E402,F401
+from rag_chat_suite import (  # noqa: E402,F401
+    RagEventLoopTests,
+    RagOptionTests,
+    RagPassageTests,
+    RagQuestionTests,
+    RagSearchFailedTests,
+)
 from readme_package_suite import (  # noqa: E402,F401
     LauncherPackagePathsTests,
     ReadmePackagePathsTests,
