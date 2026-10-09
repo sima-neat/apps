@@ -1625,15 +1625,17 @@ class AppContext:
                 status = resp.json()
             except Exception as exc:  # noqa: BLE001
                 error = type(exc).__name__
-            engines = []
+            engines, failures = [], {}
             if self.talk_ctrl is not None:
                 try:
                     engines = self.talk_ctrl.voice_engine()['engines']
+                    failures = self.talk_ctrl.engine_failures()
                 except Exception:  # noqa: BLE001
                     engines = []
             return jsonify(backend_mode.health_payload(
                 mode='backend-only' if self.backend_only else 'studio',
-                version=_studio_version(), status=status, engines=engines, error=error))
+                version=_studio_version(), status=status, engines=engines, error=error,
+                engine_failures=failures))
 
         @self.app.route('/v1/audio/voices', methods=['GET'])
         @self.app.route('/audio/voices', methods=['GET'])

@@ -53,6 +53,11 @@ class TalkController:
         self.prefer_piper_plus = False  # prefer piper-plus over dedicated piper-tts voices
         self.st = None              # Supertonic 3 MLA engine (all voices/languages)
         self.st_lock = threading.Lock()   # guards Supertonic voice switches
+        # Why an installed Supertonic failed to load (None when it loaded or is
+        # not installed), and when it was last tried: /health reports the error
+        # and a later request retries instead of staying without it.
+        self.st_error = None
+        self._st_last_attempt = 0.0
         # Supertonic is preferred whenever it loaded: it runs on the MLA and
         # speaks every language the Studio offers except Norwegian.
         self.prefer_supertonic = False
@@ -273,8 +278,12 @@ class TalkController:
             "current": getattr(self, "pp_current", None),
         }
 
+    # A failed load is retried on a later request at most this often.
+    ST_RETRY_INTERVAL_S = 30.0
+
     def _init_supertonic(self):
         """Load the Supertonic 3 MLA engine when its runtime is installed."""
+        self._st_last_attempt = time.monotonic()
         if not supertonic_tts.available():
             logging.info("Supertonic runtime not installed (venv %s, models %s) — MLA TTS "
                          "unavailable; run setup.sh with INSTALL_SUPERTONIC=1.",
@@ -285,12 +294,30 @@ class TalkController:
             st = supertonic_tts.SupertonicTTS(voice=self.st_voice_default())
             st.set_utterance_speed(self.utterance_speed)
             self.st = st
+            self.st_error = None
             self.prefer_supertonic = True
             logging.info("Supertonic 3 (MLA) ready: voice %s, %d steps, languages: %s",
                          st.voice, st.steps, sorted(st.languages))
         except Exception as e:  # noqa: BLE001
             logging.warning("Failed to load Supertonic 3 engine: %s", e)
+            self.st_error = str(e) or type(e).__name__
             supertonic_tts.shutdown_worker()
+
+    def retry_supertonic(self):
+        """Load Supertonic again if it failed earlier (for example while the
+        accelerator was unavailable) and the last try is old enough."""
+        if self.st is not None or self.st_error is None:
+            return
+        if time.monotonic() - self._st_last_attempt < self.ST_RETRY_INTERVAL_S:
+            return
+        with self.st_lock:
+            if self.st is None and self.st_error is not None:
+                logging.info("Retrying Supertonic 3, which failed to load: %s", self.st_error)
+                self._init_supertonic()
+
+    def engine_failures(self):
+        """Installed engines that failed to load, with their errors."""
+        return {'supertonic': self.st_error} if self.st is None and self.st_error else {}
 
     @staticmethod
     def st_voice_default():
@@ -775,6 +802,7 @@ class TalkController:
             raise ValueError("No text provided for TTS synthesis.")
 
         start_time = time.time()
+        self.retry_supertonic()
         language, piper = self.engine_for_request(engine, language)
         requested_voice = (voice or '').strip()
         if requested_voice.lower() == 'default':

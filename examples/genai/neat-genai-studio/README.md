@@ -423,6 +423,26 @@ microphone needs the HTTPS page the Studio serves by default.
 **Back to Studio** (top left, or Esc) returns to the chat; standalone it links
 to the Studio root. Source: `src/python/ui/playground/`.
 
+### Use it from Insight
+Neat Insight has a **GenAI Studio** tab that chats with the Studio on the board:
+text, pictures, speech to text and replies read aloud, with model management in
+its settings. Insight relays every call, so the browser only talks to Insight.
+
+1. On the board, start the backend without the Studio's own web UI:
+
+   ```bash
+   ${APP_DIR}/run.sh --backend-only
+   ```
+
+2. Open Insight, select the **GenAI Studio** tab, and follow its tutorial. On
+   the board itself Insight finds the backend at `https://127.0.0.1:5000`; from
+   the Neat Development Environment it uses the paired DevKit. Otherwise enter
+   the board address under **Settings**.
+
+`/health` tells Insight which backend API it is talking to (`api_version`) and
+reports a voice engine that failed to load, such as Supertonic while the
+accelerator was unavailable. A later speech request retries loading it.
+
 ### Backend-only mode (for Insight and other front ends)
 `${APP_DIR}/run.sh --backend-only` starts the model server and the Studio's API
 endpoints without the web UI, so another front end (for example Insight) can
