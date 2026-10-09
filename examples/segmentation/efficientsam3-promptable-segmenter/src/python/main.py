@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -87,7 +88,9 @@ def encode_prompt(cfg: Config):
     return text, int((tokens != 0).sum())
 
 
-def probe_stream(url: str) -> tuple[int, int, int]:
+def probe_stream(url: str, tcp: bool) -> tuple[int, int, int]:
+    if tcp:
+        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
     capture = cv2.VideoCapture(url)
     width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -237,7 +240,7 @@ def run(cfg: Config) -> None:
     model_options.queue_depth = PIPELINE_DEPTH
     image = np.zeros((MODEL_SIZE, MODEL_SIZE, 3), np.float32)
     runner = pyneat.Model(cfg.model_path).build([ev74_tensor(image), text_tensor], run_options=model_options)
-    width, height, fps = probe_stream(cfg.rtsp_url)
+    width, height, fps = probe_stream(cfg.rtsp_url, cfg.tcp)
     graph_run = build_source(cfg, width, height, fps)
     metadata_options = pyneat.MetadataSenderOptions()
     metadata_options.host = cfg.insight_host
