@@ -457,8 +457,11 @@ void run(const Config& cfg) {
       const std::vector<Segment> segments =
           segments_of(detection_rows, mask_planes, cfg, width, height);
       for (const auto& message : overlay.add_result(pts_ms, segments_json(segments))) {
-        metadata.send_metadata("segmentation", message.data, message.timestamp_ms,
-                               message.frame_id);
+        std::string error;
+        if (!metadata.send_metadata("segmentation", message.data, message.timestamp_ms,
+                                    message.frame_id, &error)) {
+          throw std::runtime_error("Insight metadata send failed: " + error);
+        }
       }
 
       ++processed;
