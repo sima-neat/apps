@@ -18,7 +18,7 @@ PLATFORM_BADGE_RE = re.compile(r"Neat%20Development%20Environment-([^-]+)-")
 # Scope files interpolate the version at download time. A hardcoded SDK<version>
 # would still download successfully, so only a static check catches it.
 SCOPE_VERSION_LITERAL_RE = re.compile(r"SDK\d")
-# The SDK2.1.3 tiny-drone artifact returns 403, so its scope pins 3.0.0 until #<ticket>.
+# The SDK2.1.3 tiny-drone artifact returns 403, so its scope pins 3.0.0 until #585.
 SCOPE_VERSION_LITERAL_EXEMPT = {"examples/tracking/yolo26-tiny-drone-tracker/tests/test-scope.yaml"}
 
 
