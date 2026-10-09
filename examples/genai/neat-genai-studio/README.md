@@ -143,7 +143,7 @@ features are grouped here so you can jump to what you want:
 - **Audio:** [Audio API (OpenAI-compatible)](#audio-api-openai-compatible) · [Text-to-speech (voices & languages)](#text-to-speech-voices--languages)
 - **Front ends & access:** [Terminal chat (CLI)](#terminal-chat-cli) · [Backend-only mode](#backend-only-mode-for-insight-and-other-front-ends) · [Manual Process Start](#manual-process-start) · [API checks](#api-checks)
 - **More features:** [RAG](#rag) · [Benchmark (TTFT / TPS)](#benchmark-ttft--tps) · [SiMaSentry Solutions](#simasentry-solutions-med--safe--sec-demo-harnesses) · [Markdown & fonts](#markdown--fonts)
-- **Setup & operations:** [Setup options](#setup-options) · [Reset the accelerator](#reset-the-accelerator) · [Update](#update) · [Clean up](#clean-up)
+- **Setup & operations:** [Setup options](#setup-options) · [Update](#update) · [Clean up](#clean-up)
 
 ### Setup options
 Seed the catalog with one or more chat/VLM models at install time instead of
