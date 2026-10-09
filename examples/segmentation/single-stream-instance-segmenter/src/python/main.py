@@ -1,9 +1,13 @@
-"""Single-camera RTSP YOLO26 segmentation Insight example using pyneat."""
+"""Single-camera RTSP/MJPEG instance segmentation Insight example using pyneat.
+
+Runs one YOLO26 or YOLOv8 segmentation package over the same graph, host decode,
+overlay, and Insight metadata path. ``model.family`` selects the decode boundary.
+"""
 
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from fractions import Fraction
 import glob
 import json
@@ -19,14 +23,30 @@ DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
 DEFAULT_LABELS = DEFAULT_CONFIG.parent / "coco_label.txt"
 MASK_ALPHA = 0.55
 MASK_THRESHOLD = 0.50
+DEFAULT_INPUT_SIZE = 640
+
+#: Model families this application decodes. YOLO26 decodes on the MLA through the packaged
+#: BoxDecode route; YOLOv8 surfaces raw heads that are decoded here. Both produce the same
+#: detection records, so everything after ``decode_segments`` is family independent.
+YOLO26 = "yolo26"
+YOLOV8 = "yolov8"
 
 # MetadataSender rejects a payload above 65507 bytes, and pyneat raises on the rejection. Half of
 # that leaves room for the envelope and keeps the datagram count low enough for Insight to
 # reassemble within its 250 ms window.
 METADATA_BYTE_BUDGET = 32768
-#: YOLO26 emits masks at one quarter of the model input per dimension, so a 160x160 head
-#: corresponds to a 640x640 input.
+#: Both families emit masks at one quarter of the model input per dimension, so a 160x160
+#: mask grid corresponds to a 640x640 input.
 MASK_STRIDE = 4
+#: BoxDecode returns YOLO26 masks on a fixed grid, independent of the model input size.
+YOLO26_MASK_GRID = 160
+#: YOLOv8 head contract: three feature levels of box, class, and mask-coefficient tensors,
+#: followed by the mask prototypes.
+YOLOV8_HEAD_TENSORS = 10
+YOLOV8_STRIDES = (8, 16, 32)
+#: Distribution-focal-loss bins per box side, and prototype/coefficient depth.
+DFL_BINS = 16
+MASK_COEFFICIENTS = 32
 
 cv2 = None
 np = None
@@ -47,6 +67,8 @@ class AppConfig:
     model_path: str
     labels_path: Path
     source_url: str
+    model_family: str = YOLO26
+    input_size: int = DEFAULT_INPUT_SIZE
     source_type: str = "rtsp"
     source_codec: str = "h264"
     latency_ms: int = 200
@@ -80,6 +102,12 @@ class PipelineRuntime:
     frame_h: int
     output_fps: int
     video_port: int
+    #: Separate decoded-frame output, used when frames are paired by this application instead
+    #: of by a graph-side join. Empty when the graph joins them.
+    frame_output_name: str = ""
+    #: Host copies of recent decoded frames, oldest first, waiting to be paired with their
+    #: segments.
+    frames: list = field(default_factory=list)
 
 
 class ProfileWindow:
@@ -160,7 +188,7 @@ def time_ms() -> float:
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Single-camera RTSP YOLO26 segmentation Insight example"
+        description="Single-camera RTSP/MJPEG instance segmentation Insight example"
     )
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--validate-config-only", action="store_true")
@@ -220,6 +248,15 @@ def bool_or(raw: dict, key: str, default: bool) -> bool:
     return bool(value)
 
 
+def parse_model_family(value: str) -> str:
+    lowered = value.strip().lower()
+    if lowered in {"yolo26", "yolo-26", "yolov26"}:
+        return YOLO26
+    if lowered in {"yolov8", "yolo-v8", "yolo_v8"}:
+        return YOLOV8
+    raise ValueError("model.family must be yolo26 or yolov8")
+
+
 def parse_source_type(value: str) -> str:
     lowered = value.lower()
     if lowered in {"rtsp", "http", "https"}:
@@ -243,6 +280,11 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("source.url or source.rtsp_url must be set")
     if not cfg.model_path:
         raise ValueError("model.path must be set")
+    if cfg.input_size <= 0 or cfg.input_size % (MASK_STRIDE * max(YOLOV8_STRIDES)) != 0:
+        raise ValueError(
+            "model.input_size must be a positive multiple of "
+            f"{MASK_STRIDE * max(YOLOV8_STRIDES)}"
+        )
     # Path("") is ".", so an empty value in the file arrives here as ".".
     if str(cfg.labels_path) in ("", "."):
         raise ValueError("model.labels must be set")
@@ -302,6 +344,8 @@ def load_app_config(config_path: Path) -> AppConfig:
         labels_path=Path(labels_path),
         source_url=source_url,
         source_key=source_key,
+        model_family=parse_model_family(string_or(model, "family", YOLO26)),
+        input_size=int_or(model, "input_size", DEFAULT_INPUT_SIZE),
         source_type=parse_source_type(string_or(source, "type", "rtsp")),
         source_codec=parse_source_codec(string_or(source, "codec", "h264")),
         latency_ms=int_or(source, "latency_ms", 200),
@@ -341,6 +385,36 @@ def load_labels(labels_path: Path) -> list[str]:
 
 def tensor_to_numpy(tensor) -> object:
     return np.asarray(tensor.to_numpy(copy=True))
+
+
+def numpy_dtype(tensor) -> object:
+    dtypes = {
+        pyneat.TensorDType.UInt8: np.uint8,
+        pyneat.TensorDType.Int8: np.int8,
+        pyneat.TensorDType.UInt16: np.uint16,
+        pyneat.TensorDType.Int16: np.int16,
+        pyneat.TensorDType.Int32: np.int32,
+        pyneat.TensorDType.Float32: np.float32,
+        pyneat.TensorDType.Float64: np.float64,
+    }
+    dtype = dtypes.get(tensor.dtype)
+    if dtype is None:
+        raise RuntimeError(f"unsupported tensor dtype: {tensor.dtype}")
+    return dtype
+
+
+def tensor_to_hwc_f32(tensor) -> object:
+    """One head tensor as a dense HWC float32 array, dropping a leading batch axis of 1."""
+    shape = tuple(int(dim) for dim in tensor.shape)
+    array = np.frombuffer(tensor.copy_dense_bytes_tight(), dtype=numpy_dtype(tensor))
+    array = array.reshape(shape).astype(np.float32)
+    if array.ndim == 4:
+        if array.shape[0] != 1:
+            raise RuntimeError(f"only batch size 1 is supported, got {array.shape[0]}")
+        array = array[0]
+    if array.ndim != 3:
+        raise RuntimeError(f"unexpected head tensor rank {array.ndim}")
+    return array
 
 
 def tensor_dim(tensor, name: str) -> int:
@@ -417,8 +491,88 @@ def joined_field(sample, label: str, bundle_index: int):
     raise RuntimeError(f"joined output missing {label} field")
 
 
+#: How many decoded frames may wait for their segments. The segments branch trails the frame
+#: branch by the model and host-decode latency, so this only has to cover that lag. The ring
+#: holds host copies, so a retained frame costs memory, not a pipeline buffer.
+FRAME_RING_CAPACITY = 16
+
+
+def host_frame_copy(sample):
+    """Copies a decoded frame out of the pipeline so the pulled sample can be released at once.
+
+    A pulled sample keeps a loan on the decoder buffer behind it even when output memory is
+    owned, and the decoder stalls once its few in-flight frames are all on loan. The ring
+    therefore keeps pixels, never samples. NV12 stays NV12 until a frame is actually saved.
+    """
+    tensor = frame_tensor_from_sample(sample)
+    if not tensor.is_nv12():
+        return tensor_bgr_from_decoded(tensor)
+    width = tensor_dim(tensor, "width")
+    height = tensor_dim(tensor, "height")
+    payload = np.frombuffer(tensor.copy_payload_bytes(), dtype=np.uint8)
+    expected = width * height * 3 // 2
+    if payload.size < expected:
+        raise RuntimeError(f"NV12 payload too small: {payload.size} < {expected}")
+    return payload[:expected].reshape((height * 3 // 2, width))
+
+
+def bgr_from_host_frame(frame):
+    """The BGR picture for a host_frame_copy() result."""
+    if frame.ndim == 2:
+        return np.ascontiguousarray(cv2.cvtColor(frame, cv2.COLOR_YUV2BGR_NV12))
+    return frame
+
+
+def drain_frames(runtime) -> None:
+    """Moves every frame the run has ready into the ring, dropping the oldest past capacity.
+
+    Draining every iteration is what keeps the frame output queue from backing up.
+    """
+    while True:
+        frame = runtime.run.pull(runtime.frame_output_name, 0)
+        if frame is None:
+            return
+        runtime.frames.append((frame.frame_id, host_frame_copy(frame)))
+        if len(runtime.frames) > FRAME_RING_CAPACITY:
+            runtime.frames.pop(0)
+
+
+def pull_segments(runtime, timeout_ms: int):
+    """Waits for the next segments sample while keeping the frame branch drained.
+
+    A single long blocking pull would leave the frame output queue unattended, and the frames
+    discarded there under the keep-latest policy are exactly the partners a saved frame needs,
+    so the wait is split into short slices with a drain between them.
+    """
+    if not runtime.frame_output_name:
+        return runtime.run.pull(runtime.output_name, timeout_ms)
+    slice_ms = 20
+    deadline = time_ms() + timeout_ms
+    while True:
+        drain_frames(runtime)
+        sample = runtime.run.pull(runtime.output_name, slice_ms)
+        if sample is not None or time_ms() >= deadline:
+            return sample
+
+
+def frame_for(runtime, frame_id: int):
+    """The retained frame a segments sample was computed from, or None when it has aged out."""
+    if frame_id < 0:
+        return None
+    for retained_id, frame in reversed(runtime.frames):
+        if retained_id == frame_id:
+            return frame
+    return None
+
+
 def frame_tensor_from_sample(sample):
-    tensors = extract_tensors(joined_field(sample, "frame", 0))
+    # A graph-joined bundle carries the frame in a field; a separate frame output is the sample.
+    field_sample = (
+        joined_field(sample, "frame", 0)
+        if getattr(sample, "kind", None) == pyneat.SampleKind.Bundle
+        else sample
+    )
+    tensors = extract_tensors(field_sample)
     if not tensors:
         raise RuntimeError("joined frame field has no tensor")
     return tensors[0]
@@ -437,7 +591,26 @@ def segment_tensors_from_sample(sample) -> list:
     return tensors
 
 
-def decode_segmentation_output(tensors: list, frame_w: int, frame_h: int, max_detections: int):
+def detection(x1: float, y1: float, x2: float, y2: float, score: float, class_id: int, mask):
+    """One decoded instance, in the single representation both families produce.
+
+    ``x1..y2`` are frame pixels, ``score`` is a probability, and ``mask`` is a uint8 mask grid
+    covering the letterboxed model input at ``MASK_STRIDE`` cells per pixel. Everything
+    downstream of the decoders - overlays, polygons, Insight metadata - reads only these keys.
+    """
+    return {
+        "x1": float(x1),
+        "y1": float(y1),
+        "x2": float(x2),
+        "y2": float(y2),
+        "score": float(score),
+        "class_id": int(class_id),
+        "mask": mask,
+    }
+
+
+def decode_yolo26_segments(tensors: list, frame_w: int, frame_h: int, max_detections: int):
+    """YOLO26 boundary: the MLA already ran BoxDecode, so this only unpacks its payload."""
     decoded = pyneat.decode_segmentation(
         tensors,
         clamp_to=(frame_w, frame_h),
@@ -448,24 +621,195 @@ def decode_segmentation_output(tensors: list, frame_w: int, frame_h: int, max_de
     for item in decoded:
         boxes = tensor_to_numpy(item.boxes).astype(np.float32)
         masks = tensor_to_numpy(item.masks).astype(np.uint8)
-        for row, mask in zip(boxes.reshape((-1, 6)), masks.reshape((-1, 160, 160))):
+        mask_shape = (-1, YOLO26_MASK_GRID, YOLO26_MASK_GRID)
+        for row, mask in zip(boxes.reshape((-1, 6)), masks.reshape(mask_shape)):
             x1, y1, x2, y2, score, class_id = row.tolist()
             if x2 <= x1 or y2 <= y1:
                 continue
-            detections.append(
-                {
-                    "x1": float(x1),
-                    "y1": float(y1),
-                    "x2": float(x2),
-                    "y2": float(y2),
-                    "score": float(score),
-                    "class_id": int(class_id),
-                    "mask": mask,
-                }
-            )
+            detections.append(detection(x1, y1, x2, y2, score, int(class_id), mask))
             if len(detections) >= max_detections:
                 return detections
     return detections
+
+
+def letterbox_params(frame_w: int, frame_h: int, input_size: int) -> tuple[float, float, float]:
+    """Scale and padding the preprocessor applies when it letterboxes a frame."""
+    scale = min(input_size / frame_w, input_size / frame_h)
+    return scale, (input_size - frame_w * scale) * 0.5, (input_size - frame_h * scale) * 0.5
+
+
+def split_yolov8_heads(heads: list, input_size: int):
+    """Group the packaged YOLOv8 head tensors and check them against ``model.input_size``."""
+    if len(heads) < YOLOV8_HEAD_TENSORS:
+        raise RuntimeError(
+            f"YOLOv8 decode expects {YOLOV8_HEAD_TENSORS} head tensors, got {len(heads)}"
+        )
+    boxes, scores, coefficients, proto = heads[0:3], heads[3:6], heads[6:9], heads[9]
+    if proto.ndim != 3 or proto.shape[2] != MASK_COEFFICIENTS:
+        raise RuntimeError(f"unexpected prototype tensor shape {proto.shape}")
+    if proto.shape[0] != proto.shape[1] or proto.shape[0] * MASK_STRIDE != input_size:
+        raise RuntimeError(
+            f"prototype grid {proto.shape[0]}x{proto.shape[1]} does not match "
+            f"model.input_size {input_size}"
+        )
+    for stride, box, score, coefficient in zip(YOLOV8_STRIDES, boxes, scores, coefficients):
+        grid = input_size // stride
+        if box.shape[:2] != (grid, grid) or box.shape[2] != 4 * DFL_BINS:
+            raise RuntimeError(
+                f"unexpected box head shape {box.shape} for stride {stride} at "
+                f"model.input_size {input_size}"
+            )
+        if score.shape[:2] != (grid, grid) or score.shape[2] <= 0:
+            raise RuntimeError(f"unexpected class head shape {score.shape}")
+        if coefficient.shape[:2] != (grid, grid) or coefficient.shape[2] != MASK_COEFFICIENTS:
+            raise RuntimeError(f"unexpected mask-coefficient head shape {coefficient.shape}")
+    return boxes, scores, coefficients, proto
+
+
+def yolov8_candidates(boxes, scores, coefficients, input_size: int, min_score: float):
+    """Boxes in letterboxed model pixels, class probabilities, and mask coefficients."""
+    bins = np.arange(DFL_BINS, dtype=np.float32)
+    threshold = np.float32(min_score)
+    level_boxes, level_scores, level_classes, level_coefficients = [], [], [], []
+    for box, score, coefficient in zip(boxes, scores, coefficients):
+        stride = np.float32(input_size / box.shape[0])
+        # The packaged class head already carries probabilities, so it is thresholded as is.
+        class_ids = score.argmax(axis=2)
+        best = np.take_along_axis(score, class_ids[..., None], axis=2)[..., 0]
+        rows, columns = np.nonzero(best >= threshold)
+        if rows.size == 0:
+            continue
+        logits = box[rows, columns].reshape((-1, 4, DFL_BINS)).astype(np.float32)
+        weights = np.exp(logits - logits.max(axis=2, keepdims=True))
+        distance = (weights @ bins) / weights.sum(axis=2) * stride
+        center_x = (columns.astype(np.float32) + np.float32(0.5)) * stride
+        center_y = (rows.astype(np.float32) + np.float32(0.5)) * stride
+        level_box = np.clip(
+            np.stack(
+                [
+                    center_x - distance[:, 0],
+                    center_y - distance[:, 1],
+                    center_x + distance[:, 2],
+                    center_y + distance[:, 3],
+                ],
+                axis=1,
+            ),
+            np.float32(0.0),
+            np.float32(input_size),
+        )
+        # Degenerate cells cannot become instances, and dropping them here keeps the
+        # candidate list identical to the C++ decoder's.
+        valid = (level_box[:, 2] > level_box[:, 0]) & (level_box[:, 3] > level_box[:, 1])
+        level_boxes.append(level_box[valid])
+        level_scores.append(best[rows, columns].astype(np.float32)[valid])
+        level_classes.append(class_ids[rows, columns].astype(np.int32)[valid])
+        level_coefficients.append(coefficient[rows, columns].astype(np.float32)[valid])
+
+    if not level_boxes:
+        empty_boxes = np.zeros((0, 4), dtype=np.float32)
+        return (
+            empty_boxes,
+            np.zeros((0,), dtype=np.float32),
+            np.zeros((0,), dtype=np.int32),
+            np.zeros((0, MASK_COEFFICIENTS), dtype=np.float32),
+        )
+    return (
+        np.concatenate(level_boxes),
+        np.concatenate(level_scores),
+        np.concatenate(level_classes),
+        np.concatenate(level_coefficients),
+    )
+
+
+def nms_per_class(boxes, scores, classes, nms_iou: float, max_detections: int):
+    """Greedy per-class NMS, highest score first, capped at ``max_detections``."""
+    if boxes.shape[0] == 0:
+        return np.zeros((0,), dtype=np.intp)
+    x1, y1, x2, y2 = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
+    areas = (x2 - x1) * (y2 - y1)
+    # Stable descending, so candidates tying on score are kept in the order both
+    # implementations visit their cells in.
+    order = np.argsort(-scores, kind="stable")
+    keep = []
+    while order.size > 0 and len(keep) < max_detections:
+        best = order[0]
+        keep.append(best)
+        rest = order[1:]
+        if rest.size == 0:
+            break
+        overlap_w = np.maximum(0.0, np.minimum(x2[best], x2[rest]) - np.maximum(x1[best], x1[rest]))
+        overlap_h = np.maximum(0.0, np.minimum(y2[best], y2[rest]) - np.maximum(y1[best], y1[rest]))
+        intersection = overlap_w * overlap_h
+        union = areas[best] + areas[rest] - intersection
+        iou = np.divide(intersection, union, out=np.zeros_like(intersection), where=union > 0)
+        order = rest[(classes[rest] != classes[best]) | (iou <= nms_iou)]
+    return np.asarray(keep, dtype=np.intp)
+
+
+def yolov8_instance_mask(proto, coefficients, frame_rect, frame_shape):
+    """Prototype mask for one instance, on the same grid BoxDecode returns for YOLO26."""
+    mask = np.zeros(proto.shape[:2], dtype=np.uint8)
+    x0, y0, x1, y1 = mask_rect_for_frame_rect(frame_rect, frame_shape, proto.shape[:2])
+    activated = 255.0 / (1.0 + np.exp(-(proto[y0:y1, x0:x1] @ coefficients)))
+    # Rounded, not truncated, so the C++ saturate_cast path produces identical mask bytes.
+    mask[y0:y1, x0:x1] = np.clip(np.rint(activated), 0.0, 255.0).astype(np.uint8)
+    return mask
+
+
+def decode_yolov8_segments(
+    heads: list,
+    frame_w: int,
+    frame_h: int,
+    input_size: int,
+    min_score: float,
+    nms_iou: float,
+    max_detections: int,
+):
+    """YOLOv8 boundary: decode raw heads here into the shared detection representation."""
+    boxes, scores, coefficients, proto = split_yolov8_heads(heads, input_size)
+    boxes, scores, classes, coefficients = yolov8_candidates(
+        boxes, scores, coefficients, input_size, min_score
+    )
+
+    scale, pad_x, pad_y = letterbox_params(frame_w, frame_h, input_size)
+    frame_shape = (frame_h, frame_w, 3)
+    padding = np.array([pad_x, pad_y, pad_x, pad_y], dtype=np.float64)
+    limit = np.array([frame_w, frame_h, frame_w, frame_h], dtype=np.float64)
+    # Single precision throughout, so the C++ implementation decodes the same coordinates.
+    frame_boxes = np.clip((boxes - padding) / scale, 0.0, limit).astype(np.float32)
+    # A prediction lying entirely in the letterbox padding has no frame to occupy, so it is
+    # dropped before the cap. Discarding it afterwards would let it consume one of the
+    # max_detections slots and push out a valid lower-ranked detection.
+    inside = (frame_boxes[:, 2] > frame_boxes[:, 0]) & (frame_boxes[:, 3] > frame_boxes[:, 1])
+    frame_boxes, scores = frame_boxes[inside], scores[inside]
+    classes, coefficients = classes[inside], coefficients[inside]
+
+    keep = nms_per_class(frame_boxes, scores, classes, nms_iou, max_detections)
+    detections = []
+    for index in keep:
+        x1, y1, x2, y2 = (float(value) for value in frame_boxes[index])
+        candidate = detection(x1, y1, x2, y2, scores[index], int(classes[index]), None)
+        frame_rect = frame_rect_for_detection(candidate, frame_shape)
+        candidate["mask"] = yolov8_instance_mask(
+            proto, coefficients[index], frame_rect, frame_shape
+        )
+        detections.append(candidate)
+    return detections
+
+
+def decode_segments(cfg: AppConfig, tensors: list, frame_w: int, frame_h: int):
+    """The one place model family changes behavior."""
+    if cfg.model_family == YOLO26:
+        return decode_yolo26_segments(tensors, frame_w, frame_h, cfg.max_detections)
+    return decode_yolov8_segments(
+        [tensor_to_hwc_f32(tensor) for tensor in tensors[:YOLOV8_HEAD_TENSORS]],
+        frame_w,
+        frame_h,
+        cfg.input_size,
+        cfg.min_score,
+        cfg.nms_iou,
+        cfg.max_detections,
+    )
 
 
 def fps_from_rate(value: str) -> int:
@@ -647,18 +991,32 @@ def resolve_source_geometry(cfg: AppConfig) -> tuple[int, int, int]:
 
 
 def make_model(cfg: AppConfig, frame_w: int, frame_h: int):
+    """Load the segmentation package. Only the postprocess contract differs per family."""
     opt = pyneat.ModelOptions()
     opt.preprocess.kind = pyneat.InputKind.Image
-    opt.preprocess.enable = pyneat.AutoFlag.On
+    # The decoder emits NV12; the model preprocess letterboxes it onto the model input.
     opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.NV12
     if frame_w > 0 and frame_h > 0:
         opt.preprocess.input_max_width = frame_w
         opt.preprocess.input_max_height = frame_h
-    opt.preprocess.preset = pyneat.NormalizePreset.COCO_YOLO
-    opt.decode_type = pyneat.BoxDecodeType.YoloV26Seg
-    opt.score_threshold = cfg.min_score
-    opt.nms_iou_threshold = cfg.nms_iou
-    opt.top_k = cfg.max_detections
+    if cfg.model_family == YOLO26:
+        opt.preprocess.enable = pyneat.AutoFlag.On
+        opt.preprocess.preset = pyneat.NormalizePreset.COCO_YOLO
+        # BoxDecode runs on device and emits the segmentation payload this app unpacks.
+        opt.decode_type = pyneat.BoxDecodeType.YoloV26Seg
+        opt.score_threshold = cfg.min_score
+        opt.nms_iou_threshold = cfg.nms_iou
+        opt.top_k = cfg.max_detections
+    else:
+        # YOLOv8 leaves decode_type unset so the route surfaces the raw float heads that
+        # decode_yolov8_segments() consumes. The decode inverts a letterbox, so the resize
+        # policy is requested rather than assumed, and the YOLO normalization is requested
+        # explicitly: without it the model sees unnormalized pixels and its class scores
+        # collapse to a fraction of their proper range.
+        opt.preprocess.enable = pyneat.AutoFlag.On
+        opt.preprocess.preset = pyneat.NormalizePreset.COCO_YOLO
+        opt.preprocess.resize.enable = pyneat.AutoFlag.On
+        opt.preprocess.resize.mode = pyneat.ResizeMode.Letterbox
     return pyneat.Model(cfg.model_path, opt)
 
 
@@ -705,24 +1063,40 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
     model_graph = pyneat.Graph("model")
     model_graph.connect(pyneat.nodes.input("model"), model)
 
+    # The YOLO26 decode is a cheap payload unpack, so its output can queue frames. The YOLOv8
+    # decode runs on the host and cannot match the source rate; queueing there pins the whole
+    # detess stage output pool and starves it, so that output keeps only the newest sample.
     segments_graph = pyneat.Graph("segments")
-    segments_graph.add(pyneat.nodes.output("segments", pyneat.OutputOptions.every_frame(4)))
+    segments_options = (
+        pyneat.OutputOptions.every_frame(4)
+        if cfg.model_family == YOLO26
+        else pyneat.OutputOptions.every_frame(1)
+    )
+    segments_graph.add(pyneat.nodes.output("segments", segments_options))
 
     graph = pyneat.Graph()
     graph.connect(source, branch)
     graph.connect(branch, video_graph)
     graph.connect(branch, model_graph)
     graph.connect(model_graph, segments_graph)
+    frame_output_name = ""
+    output_name = "segments"
     if save_frames:
         frame_graph = pyneat.Graph("frame")
         frame_graph.add(pyneat.nodes.output("frame", pyneat.OutputOptions.every_frame(4)))
-        joined = pyneat.graphs.combine(
-            ["frame", "segments"], "segmentation_output", pyneat.CombinePolicy.ByFrame
-        )
         graph.connect(branch, frame_graph)
-        graph.connect(frame_graph, joined)
-        graph.connect(segments_graph, joined)
-    output_name = "segmentation_output" if save_frames else "segments"
+        if cfg.model_family == YOLO26:
+            joined = pyneat.graphs.combine(
+                ["frame", "segments"], "segmentation_output", pyneat.CombinePolicy.ByFrame
+            )
+            graph.connect(frame_graph, joined)
+            graph.connect(segments_graph, joined)
+            output_name = "segmentation_output"
+        else:
+            # The graph-side join retains more model-output buffers than a YOLOv8 package's
+            # fixed pool can serve, so this route publishes both streams and pairs them on
+            # frame_id in the run loop.
+            frame_output_name = "frame"
     if cfg.profile:
         print(f"Backend:\n{graph.describe_backend()}")
 
@@ -730,13 +1104,18 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
     run_options.preset = pyneat.RunPreset.Realtime
     run_options.queue_depth = 3
     run_options.overflow_policy = pyneat.OverflowPolicy.KeepLatest
-    run_options.output_memory = pyneat.OutputMemory.ZeroCopy
+    # Measured on Modalix: the YOLOv8 head tensors must be copied out of the detess stage pool
+    # at pull time, or the stage starves while the host decode runs. YOLO26 pulls one small
+    # BoxDecode payload and keeps the cheaper zero-copy path.
+    run_options.output_memory = (
+        pyneat.OutputMemory.ZeroCopy if cfg.model_family == YOLO26 else pyneat.OutputMemory.Owned
+    )
     run = graph.build(run_options)
 
     metadata_sender = build_metadata_sender(cfg)
     print(
         f"source={cfg.source_url} type={cfg.source_type} codec={cfg.source_codec} "
-        f"stream={frame_w}x{frame_h}@{fps} "
+        f"model={cfg.model_family} stream={frame_w}x{frame_h}@{fps} "
         f"insight={cfg.insight_host} video={video_port} "
         f"metadata={metadata_sender.metadata_port()} channel=0"
     )
@@ -747,6 +1126,7 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
         metadata_sender=metadata_sender,
         labels=labels,
         output_name=output_name,
+        frame_output_name=frame_output_name,
         frame_w=frame_w,
         frame_h=frame_h,
         output_fps=fps,
@@ -961,18 +1341,31 @@ def send_metadata(
     return dropped
 
 
-def maybe_save_frame(
-    cfg: AppConfig, processed: int, sample, detections: list[dict], labels: list[str]
-) -> None:
-    if not cfg.output.save_dir or cfg.output.save_every <= 0:
-        return
-    if processed % cfg.output.save_every != 0:
-        return
-    frame = tensor_bgr_from_decoded(frame_tensor_from_sample(sample))
+def save_due(cfg: AppConfig, processed: int) -> bool:
+    """Whether this result is due an annotated frame."""
+    return bool(cfg.output.save_dir) and cfg.output.save_every > 0 and (
+        processed % cfg.output.save_every == 0
+    )
+
+
+def save_frame(
+    cfg: AppConfig, processed: int, frame, detections: list[dict], labels: list[str]
+) -> bool:
+    """Writes one annotated BGR frame. Returns False when the decoded frame it needs is gone.
+
+    The YOLO26 route joins frames to results inside the graph and always has its partner. The
+    YOLOv8 route pairs them in the run loop, and a source faster than the model makes the two
+    branches retain different frames, so some results have no picture to annotate. Those are
+    counted and reported rather than silently skipped.
+    """
+    if frame is None:
+        return False
     annotated = overlay_segmentation(frame, detections, cfg.min_score, cfg.output, labels)
     out_path = Path(cfg.output.save_dir) / f"frame_{processed}.jpg"
     if not cv2.imwrite(str(out_path), annotated):
         print(f"[warn] failed to write output frame: {out_path}", file=sys.stderr)
+        return False
+    return True
 
 
 def pull_result_has_sample(run, sample, output_name: str) -> bool:
@@ -996,20 +1389,19 @@ def run_pipeline(runtime: PipelineRuntime, cfg: AppConfig) -> int:
     profile = ProfileWindow(cfg.profile, cfg.profile_interval)
     processed = 0
     dropped_total = 0
+    saved = 0
+    unpaired = 0
     while cfg.frames <= 0 or processed < cfg.frames:
         pull_start = time_ms()
-        sample = runtime.run.pull(runtime.output_name, 20000)
+        sample = pull_segments(runtime, 20000)
         pull_end = time_ms()
         if not pull_result_has_sample(runtime.run, sample, runtime.output_name):
             print("[warn] timed out waiting for segmentation output", file=sys.stderr)
             continue
 
         decode_start = time_ms()
-        detections = decode_segmentation_output(
-            segment_tensors_from_sample(sample),
-            runtime.frame_w,
-            runtime.frame_h,
-            cfg.max_detections,
+        detections = decode_segments(
+            cfg, segment_tensors_from_sample(sample), runtime.frame_w, runtime.frame_h
         )
         decode_end = time_ms()
 
@@ -1024,7 +1416,17 @@ def run_pipeline(runtime: PipelineRuntime, cfg: AppConfig) -> int:
         dropped_total += dropped
 
         processed += 1
-        maybe_save_frame(cfg, processed, sample, detections, runtime.labels)
+        if save_due(cfg, processed):
+            if runtime.frame_output_name:
+                drain_frames(runtime)
+                retained = frame_for(runtime, sample.frame_id)
+                frame = None if retained is None else bgr_from_host_frame(retained)
+            else:
+                frame = tensor_bgr_from_decoded(frame_tensor_from_sample(sample))
+            if save_frame(cfg, processed, frame, detections, runtime.labels):
+                saved += 1
+            else:
+                unpaired += 1
         profile.add(
             pull_end - pull_start,
             decode_end - decode_start,
@@ -1036,6 +1438,7 @@ def run_pipeline(runtime: PipelineRuntime, cfg: AppConfig) -> int:
     profile.flush()
     print(
         f"processed={processed} dropped_segments={dropped_total} "
+        f"saved={saved} unpaired={unpaired} "
         f"video_sender={cfg.insight_host}:{runtime.video_port}"
     )
     return processed
