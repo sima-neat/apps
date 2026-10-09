@@ -758,12 +758,16 @@ rather than silently recovered from.
 Use this only when you want two explicit terminals. `${APP_DIR}/run.sh` also
 sets up the text-to-speech workers, which this manual start does not.
 
-Terminal 1, model server + control API (from `prebuilt-apps/`):
+Terminal 1, model server + control API (from `prebuilt-apps/`). The server runs
+in the Neat environment, which may not have PyYAML, so give it a JSON copy of the
+config made with the app's own venv, as `run.sh` does:
 
 ```bash
 APP_DIR=examples/genai/neat-genai-studio
+"${APP_DIR}/.venv/bin/python" -c 'import json, sys, yaml; json.dump(yaml.safe_load(open(sys.argv[1])) or {}, open(sys.argv[2], "w"))' \
+  "${APP_DIR}/config.local.yaml" "${APP_DIR}/.neat-genai-server-config.json"
 ~/pyneat/bin/python "${APP_DIR}/src/python/server/main.py" \
-  --config "${APP_DIR}/config.local.yaml"
+  --config "${APP_DIR}/.neat-genai-server-config.json"
 ```
 
 Terminal 2, web interface (from `prebuilt-apps/`):
