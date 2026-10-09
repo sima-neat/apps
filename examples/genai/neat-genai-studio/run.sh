@@ -961,8 +961,30 @@ fi
 export NEAT_RUN_PID="$$"
 export RUN_PID_FILE="${PID_FILE}"
 
+# The model server runs in the Neat environment (PYNEAT_PYTHON), which may not
+# carry PyYAML (Platform 3.0's ~/pyneat does not). The app's own Python converts
+# the YAML config to JSON for it, so the Neat environment is never modified.
+SERVER_CONFIG_JSON="${EXAMPLE_DIR}/.neat-genai-server-config.json"
+write_server_config() {
+  "${APP_PYTHON}" - "${CONFIG_PATH}" "${SERVER_CONFIG_JSON}" <<'YAML_TO_JSON'
+import json
+import sys
+
+import yaml
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    config = yaml.safe_load(source) or {}
+with open(sys.argv[2], "w", encoding="utf-8") as target:
+    json.dump(config, target)
+YAML_TO_JSON
+}
+
 launch_server() {
   step "Starting the Neat model server (OpenAI-compatible)…"
+  if ! write_server_config; then
+    errln "Could not read ${CONFIG_PATH} with ${APP_PYTHON}; run ./setup.sh first."
+    return 1
+  fi
   # In CLI mode the model server shares the terminal with the interactive chat,
   # so its logs would land on the "you ▸" prompt. Send them to a log file
   # instead; the CLI drives the server over HTTP and doesn't need its stdout.
@@ -973,10 +995,10 @@ launch_server() {
     rm -f "${SERVER_STATUS_FILE}"
     setsid bash -c \
       '"$1" "$2" --config "$3" >"$4" 2>&1; s=$?; echo "$s" >"$5"; exit "$s"' _ \
-      "${PYNEAT_PYTHON}" "${PYTHON_DIR}/server/main.py" "${CONFIG_PATH}" \
+      "${PYNEAT_PYTHON}" "${PYTHON_DIR}/server/main.py" "${SERVER_CONFIG_JSON}" \
       "${SERVER_LOG}" "${SERVER_STATUS_FILE}" &
   else
-    setsid "${PYNEAT_PYTHON}" "${PYTHON_DIR}/server/main.py" --config "${CONFIG_PATH}" &
+    setsid "${PYNEAT_PYTHON}" "${PYTHON_DIR}/server/main.py" --config "${SERVER_CONFIG_JSON}" &
   fi
   server_pid="$!"
   pids[0]="${server_pid}"

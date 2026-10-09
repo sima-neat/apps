@@ -66,7 +66,7 @@ from audio_api_suite import (  # noqa: E402,F401
     VoicesListingTests as AudioApiVoicesListingTests,
 )
 from shell_config_suite import (  # noqa: E402,F401
-    SetupPyyamlTests,
+    ServerConfigWithoutPyyamlTests,
     ShellConfigValueTests,
     ShellWebConfigTests,
 )
