@@ -326,6 +326,12 @@ models get a panel, so you can work with two, three or all of them.
 them at once, while each panel keeps its own conversation). With **Same
 prompt**, a picture goes only to the models that see images; a text-only
 model's panel notes that it sat that message out.
+
+**Read aloud** at the top of a panel reads that panel's answers aloud,
+sentence by sentence as they are written, with the board's voices. One panel
+at a time can have it on: turning it on in another panel turns it off in the
+first. Every finished answer also has its own **Read aloud** button; only one
+reading plays at a time.
 Send any panel at any time: the models answer at the same time, each panel shows
 its tokens, tokens per second and time to first token, and models that see
 images also take a picture or a camera frame. The panels keep their own

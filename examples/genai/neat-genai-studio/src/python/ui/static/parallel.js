@@ -238,7 +238,7 @@
     grid.style.setProperty('--panels', String(Math.max(1, shown.length)));
     grid.innerHTML = '';
     shown.forEach((n) => grid.appendChild(buildPanel(models.find((m) => m.name === n))));
-    requestAnimationFrame(syncShared);
+    requestAnimationFrame(() => { syncShared(); syncSpeakToggles(); });
     if (open && names.length < 2) setOpen(false);
   }
 
@@ -251,6 +251,7 @@
     el.innerHTML = '<div class="parallel-panel-head">'
       + `<span class="parallel-panel-name" title="${esc(model.name)}">${esc(model.name)}</span>`
       + `<span class="parallel-badge${vision ? ' is-vlm' : ''}">${vision ? 'Sees images' : 'Text only'}</span>`
+      + '<button type="button" class="parallel-link parallel-speak-toggle" aria-pressed="false">Read aloud</button>'
       + '<button type="button" class="parallel-link parallel-new">New chat</button></div>'
       + '<div class="parallel-thread"></div>'
       + '<div class="parallel-attach"></div>'
@@ -270,6 +271,14 @@
     el.querySelector('.parallel-send').addEventListener('click', () => {
       if (state.controller) state.controller.abort();
       else send(model);
+    });
+    el.querySelector('.parallel-speak-toggle').addEventListener('click', () => {
+      unlockAudio();
+      const turnOn = readAloudPanel !== model.name;
+      if (!turnOn && speech.ownerPanel === model.name) stopSpeech();
+      if (turnOn && speech.ownerPanel && speech.ownerPanel !== model.name) stopSpeech();
+      readAloudPanel = turnOn ? model.name : null;
+      syncSpeakToggles();
     });
     el.querySelector('.parallel-new').addEventListener('click', () => {
       if (state.controller) state.controller.abort();
@@ -367,6 +376,160 @@
     if (stats) bits.push(`<span class="parallel-stats">${stats}</span>`);
     if (m.state) bits.push(`<span class="parallel-state is-${m.stateKind || 'busy'}">${esc(m.state)}</span>`);
     m.footEl.innerHTML = bits.join('');
+    paintSpeakButton(m);
+  }
+
+  // Read aloud / Stop under a finished answer.
+  function paintSpeakButton(m) {
+    if (!m.footEl) return;
+    const old = m.footEl.querySelector('.parallel-speak');
+    if (old) old.remove();
+    const speaking = speech.owner === m;
+    if (!speaking && (m.pending || !cleanForSpeech(answerOf(m.text)))) return;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'parallel-link parallel-speak';
+    btn.textContent = speaking ? 'Stop speaking' : 'Read aloud';
+    btn.addEventListener('click', () => {
+      unlockAudio();
+      if (speech.owner === m) { stopSpeech(); return; }
+      const reading = startReading(m, m.panel);
+      reading.feed(answerOf(m.text), true);
+    });
+    m.footEl.appendChild(btn);
+  }
+
+  // ---- read aloud ----
+  // One panel at a time can have Read aloud on; its answers are spoken sentence
+  // by sentence as they stream, using the board's voices (/v1/audio/speech).
+  // Only one reading plays at a time: starting another stops the current one.
+
+  let readAloudPanel = null;
+  const speech = { token: 0, owner: null, ownerPanel: null, audio: null };
+  const SILENT_WAV = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=';
+
+  // Browsers only let a page play sound it started from a click; play a silent
+  // clip on the click so the speech that arrives later can play on the same element.
+  function unlockAudio() {
+    if (!speech.audio) speech.audio = new Audio();
+    if (speech.owner) return;
+    speech.audio.src = SILENT_WAV;
+    speech.audio.play().catch(() => {});
+  }
+
+  function cleanForSpeech(md) {
+    return String(md || '')
+      .replace(/```[\s\S]*?(```|$)/g, ' ')
+      .replace(/`([^`]*)`/g, '$1')
+      .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+      .replace(/[*_#>|~]+/g, ' ')
+      .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function syncSpeakToggles() {
+    if (!view) return;
+    view.querySelectorAll('.parallel-panel').forEach((el) => {
+      const on = readAloudPanel === el.dataset.model;
+      const btn = el.querySelector('.parallel-speak-toggle');
+      btn.classList.toggle('is-on', on);
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+      btn.textContent = on ? 'Reading aloud' : 'Read aloud';
+      btn.title = on ? 'This panel reads its answers aloud. Click to turn it off.'
+        : 'Read this panel\'s answers aloud (turns it off in the other panels)';
+    });
+  }
+
+  function refreshSpeakButtons() {
+    panels.forEach((p) => p.messages.forEach((m) => { if (m.role === 'assistant') paintSpeakButton(m); }));
+  }
+
+  function stopSpeech() {
+    speech.token += 1;
+    if (speech.audio) { speech.audio.onended = null; speech.audio.pause(); }
+    speech.owner = null;
+    speech.ownerPanel = null;
+    refreshSpeakButtons();
+  }
+
+  // A reading of `reply`: feed(text, final) takes the answer so far; complete
+  // sentences are turned into speech one after another and played in order.
+  function startReading(reply, panelName) {
+    stopSpeech();
+    const token = speech.token;
+    speech.owner = reply;
+    speech.ownerPanel = panelName;
+    refreshSpeakButtons();
+    let taken = 0;            // characters of the answer already queued
+    let carry = '';           // a scrap held for the next sentence
+    const pending = [];       // sentences waiting to be synthesized
+    const ready = [];         // audio URLs waiting to play
+    let synthesizing = false;
+    let playing = false;
+    let finished = false;
+    const alive = () => speech.token === token;
+    const done = () => {
+      if (alive() && finished && !pending.length && !ready.length && !synthesizing && !playing) {
+        speech.owner = null;
+        speech.ownerPanel = null;
+        refreshSpeakButtons();
+      }
+    };
+    const play = () => {
+      if (playing || !ready.length || !alive()) { done(); return; }
+      playing = true;
+      const url = ready.shift();
+      const audio = speech.audio || (speech.audio = new Audio());
+      audio.onended = () => { URL.revokeObjectURL(url); playing = false; play(); };
+      audio.src = url;
+      audio.play().catch(() => { playing = false; done(); });
+    };
+    const synth = async () => {
+      if (synthesizing) return;
+      synthesizing = true;
+      while (pending.length && alive()) {
+        const input = pending.shift();
+        try {
+          const resp = await fetch('/v1/audio/speech', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ input }),
+          });
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+          const blob = await resp.blob();
+          if (!alive()) break;
+          ready.push(URL.createObjectURL(blob));
+          play();
+        } catch (err) {
+          // Skip a sentence the voice could not read; keep going with the rest.
+        }
+      }
+      synthesizing = false;
+      done();
+    };
+    return {
+      feed(answer, final) {
+        if (!alive()) return;
+        const text = String(answer || '');
+        let end = taken;
+        if (final) end = text.length;
+        else {
+          const re = /[.!?。！？](\s|$)|\n\n/g;
+          re.lastIndex = taken;
+          let match;
+          while ((match = re.exec(text))) end = match.index + match[0].length;
+        }
+        if (end > taken) {
+          // A list number ("1.") or other scrap waits for the sentence after it.
+          const piece = `${carry} ${cleanForSpeech(text.slice(taken, end))}`.trim();
+          taken = end;
+          if (piece.replace(/[^\p{L}]/gu, '').length < 3 && !final) carry = piece;
+          else if (piece) { carry = ''; pending.push(piece.slice(0, 900)); synth(); }
+        }
+        if (final) { finished = true; done(); }
+      },
+    };
   }
 
   // ---- sending ----
@@ -399,7 +562,9 @@
       state.image = null;
       renderAttachment(name);
     }
-    const reply = { role: 'assistant', text: '', tokens: 0, tps: null, ttftS: null, totalS: null, pending: true, state: 'Waiting for the first token…', stateKind: 'busy' };
+    const reply = { role: 'assistant', panel: name, text: '', tokens: 0, tps: null, ttftS: null, totalS: null, pending: true, state: 'Waiting for the first token…', stateKind: 'busy' };
+    // The panel with Read aloud on speaks its answers as they are written.
+    if (readAloudPanel === name) { unlockAudio(); reply.reading = startReading(reply, name); }
     state.messages.push({ role: 'user', text, image }, reply);
     renderThread(name);
     const controller = new AbortController();
@@ -410,6 +575,7 @@
     for (let attempt = 0; ; attempt += 1) {
       try {
         await stream(name, messages, reply, controller, t0);
+        if (reply.reading) reply.reading.feed(answerOf(reply.text), true);
         reply.pending = false;
         reply.totalS = (performance.now() - t0) / 1000;
         if (!answerOf(reply.text).trim()) {
@@ -424,11 +590,13 @@
         const stopped = err && err.name === 'AbortError';
         if (!stopped && attempt === 0 && acceleratorBusy(err && err.message)) {
           reply.text = ''; reply.tokens = 0; reply.ttftS = null;
+          if (reply.reading) { const again = readAloudPanel === name; stopSpeech(); reply.reading = again ? startReading(reply, name) : null; }
           reply.state = 'The accelerator was busy; trying again…';
           paintReply(reply, true);
           await new Promise((r) => setTimeout(r, 400));
           if (!controller.signal.aborted) continue;
         }
+        if (reply.reading) { if (stopped) stopSpeech(); else reply.reading.feed(answerOf(reply.text), true); }
         reply.pending = false;
         reply.totalS = (performance.now() - t0) / 1000;
         reply.failed = !stopped;
@@ -493,6 +661,7 @@
         const parts = typeof splitThinking === 'function' ? splitThinking(reply.text) : { present: false };
         reply.state = parts.present && !parts.closed ? 'Thinking…' : 'Generating…';
         if (serverTps != null) reply.tps = serverTps;
+        if (reply.reading) reply.reading.feed(parts.answer != null ? parts.answer : answerOf(reply.text), false);
         paintReply(reply, false);
         const thread = panelEl(name) && panelEl(name).querySelector('.parallel-thread');
         if (thread) thread.scrollTop = thread.scrollHeight;
