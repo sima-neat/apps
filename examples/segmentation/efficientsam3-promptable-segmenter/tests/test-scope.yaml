@@ -1,0 +1,23 @@
+models:
+  efficientsam3:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/efficientsam3_mpk.tar.gz
+    file: efficientsam3_mpk.tar.gz
+  efficientsam3_text_encoder:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/efficientsam3_text_encoder_mpk.tar.gz
+    file: efficientsam3_text_encoder_mpk.tar.gz
+unit:
+  python: true
+  cpp: true
+e2e:
+  python:
+    enabled: true
+    models:
+    - efficientsam3
+    - efficientsam3_text_encoder
+  cpp:
+    enabled: true
+    models:
+    - efficientsam3
+    - efficientsam3_text_encoder
