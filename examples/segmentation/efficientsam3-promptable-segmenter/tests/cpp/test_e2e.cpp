@@ -61,7 +61,7 @@ int main(int argc, char** argv) {
   }
   const char* models_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
   const fs::path models_dir = models_raw != nullptr ? models_raw : "models";
-  const fs::path model = models_dir / "efficientsam3_rv_e48xt_flash_mpk.tar.gz";
+  const fs::path model = models_dir / "efficientsam3_mpk.tar.gz";
   const fs::path text_encoder = models_dir / "efficientsam3_text_encoder_mpk.tar.gz";
   if (!fs::exists(model) || !fs::exists(text_encoder)) {
     return skip_or_fail("missing EfficientSAM3 artifacts under SIMANEAT_APPS_TEST_MODELS_DIR");

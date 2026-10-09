@@ -10,7 +10,7 @@
 | Languages | C++, Python |
 | Status | stable |
 | Binary Name | efficientsam3-promptable-segmenter |
-| Model | efficientsam3_rv_e48xt_flash_mpk |
+| Model | efficientsam3_mpk |
 
 ## Concept
 
@@ -57,10 +57,21 @@ The application needs two model packages:
 
 | Model package | Role | Source |
 | --- | --- | --- |
-| `efficientsam3_rv_e48xt_flash_mpk.tar.gz` | Default segmentation model, runs for every segmented frame | Not published yet |
-| `efficientsam3_text_encoder_mpk.tar.gz` | Text encoder, runs once at startup | Not published yet |
+| `efficientsam3_mpk.tar.gz` | Default segmentation model, runs for every segmented frame | Direct artifact |
+| `efficientsam3_text_encoder_mpk.tar.gz` | Text encoder, runs once at startup | Direct artifact |
 
-Neither package can be downloaded yet. Place both under `models/efficientsam3/` and set `model.path` and `model.text_encoder` in the config to them.
+Model packages come from the Model Zoo release below, which can differ from the installed platform version.
+
+```bash
+export MODELZOO_VERSION="2.1.3"
+mkdir -p models
+cd models
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/efficientsam3_mpk.tar.gz"
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/efficientsam3_text_encoder_mpk.tar.gz"
+cd ..
+```
+
+Set `model.path` and `model.text_encoder` in the config to the two downloaded packages.
 
 ## Prepare Insight
 

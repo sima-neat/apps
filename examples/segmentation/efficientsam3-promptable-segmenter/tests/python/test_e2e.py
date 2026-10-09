@@ -15,7 +15,7 @@ from tests.utils.metadata_json_listener import MetadataJsonListener
 
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
-MODEL = "efficientsam3_rv_e48xt_flash_mpk.tar.gz"
+MODEL = "efficientsam3_mpk.tar.gz"
 TEXT_ENCODER = "efficientsam3_text_encoder_mpk.tar.gz"
 FRAMES = 40
 

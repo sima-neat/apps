@@ -1,6 +1,6 @@
 model:
-  path: <model-path>         # Compiled model archive, e.g. models/efficientsam3/efficientsam3_rv_e48xt_flash_mpk.tar.gz.
-  text_encoder: <text-encoder-path>  # Text encoder package, e.g. models/efficientsam3/efficientsam3_text_encoder_mpk.tar.gz. Runs once at startup.
+  path: <model-path>         # Compiled model archive, e.g. models/efficientsam3_mpk.tar.gz.
+  text_encoder: <text-encoder-path>  # Text encoder package, e.g. models/efficientsam3_text_encoder_mpk.tar.gz. Runs once at startup.
 
 prompt:
   text: "person"             # What to segment: any short noun phrase, e.g. "red car", "dog", "traffic sign".
