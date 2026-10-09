@@ -1,0 +1,464 @@
+// ---- Parallel panels: a chat panel per loaded model, each sent on its own ----
+// Every loaded chat/VLM model gets a panel with its own prompt box, Send
+// button and conversation. Each panel streams from the same-origin
+// /v1/chat/completions proxy (the OpenAI-compatible model server), so the
+// panels run at the same time and independently of the main chat, whose
+// server-side history they never touch. Panels keep their history in the page.
+(function () {
+  'use strict';
+
+  const SYSTEM_PROMPT = 'Answer clearly and concisely. Use Markdown formatting when it helps. '
+    + 'Answer the question in the language it was asked in.';
+  const WITH_IMAGE = ' The current message includes an image. Answer using what you see in it.';
+  const WITHOUT_IMAGE = ' No image is attached to the current message; if asked about one, say so.';
+  const SPECTRUM_SVG = '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" '
+    + 'stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="5" height="16" rx="1.2"/>'
+    + '<rect x="9.5" y="4" width="5" height="16" rx="1.2"/><rect x="16" y="4" width="5" height="16" rx="1.2"/></svg>';
+
+  // model name -> { messages: [{role, text, image}|{role:'assistant', ...}], image, controller }
+  const panels = new Map();
+  let view = null;
+  let open = false;
+  let shownModels = '';
+
+  // The loaded chat/VLM models, from the catalog newui.js keeps up to date.
+  const loaded = () => (typeof _catalog !== 'undefined' && Array.isArray(_catalog)
+    ? _catalog.filter((m) => (m.type || 'chat') !== 'asr' && m.loaded)
+    : []);
+  const isVision = (m) => !!m.supportsVision;
+  const esc = (s) => (typeof escHtml === 'function' ? escHtml(s) : String(s));
+  const answerOf = (text) => (typeof splitThinking === 'function' ? splitThinking(text || '').answer : (text || ''));
+
+  function panelState(name) {
+    if (!panels.has(name)) panels.set(name, { messages: [], image: null, controller: null });
+    return panels.get(name);
+  }
+
+  // The 3.0 accelerator driver now and then refuses a job while several models
+  // run at once ("no free bank", rc=-11); one retry gets through.
+  function acceleratorBusy(message) {
+    return /rc=-11|resource temporarily unavailable|no free bank|queued wait failed/i.test(String(message || ''));
+  }
+
+  function fmt(n, digits) { return Number.isFinite(n) ? n.toFixed(digits) : '—'; }
+
+  function statsText(s) {
+    const parts = [];
+    if (s.tokens) parts.push(`${s.tokens} token${s.tokens === 1 ? '' : 's'}`);
+    if (s.tps != null) parts.push(`${fmt(s.tps, 1)} tok/s`);
+    if (s.ttftS != null) parts.push(`first token ${fmt(s.ttftS, 2)}s`);
+    if (s.totalS != null) parts.push(`${fmt(s.totalS, 1)}s`);
+    return parts.join(' · ');
+  }
+
+  // ---- header button ----
+
+  function ensureButton() {
+    if (document.getElementById('parallelButton')) return;
+    const anchor = document.getElementById('benchmarkButton');
+    if (!anchor) return;
+    const btn = document.createElement('button');
+    btn.id = 'parallelButton';
+    btn.className = 'header-icon-btn';
+    btn.type = 'button';
+    btn.style.display = 'none';
+    btn.setAttribute('aria-pressed', 'false');
+    btn.innerHTML = SPECTRUM_SVG;
+    btn.addEventListener('click', () => setOpen(!open));
+    anchor.insertAdjacentElement('beforebegin', btn);
+  }
+
+  function syncButton() {
+    ensureButton();
+    const btn = document.getElementById('parallelButton');
+    if (!btn) return;
+    const enough = loaded().length >= 2;
+    btn.style.display = enough || open ? '' : 'none';
+    btn.classList.toggle('is-on', open);
+    btn.setAttribute('aria-pressed', open ? 'true' : 'false');
+    const label = open ? 'Back to the chat' : 'Parallel: a chat panel for each loaded model, each with its own Send';
+    btn.title = label;
+    btn.setAttribute('aria-label', label);
+  }
+
+  // ---- the view ----
+
+  function setOpen(on) {
+    open = !!on && (loaded().length >= 2 || !on);
+    if (!view) buildView();
+    view.hidden = !open;
+    document.body.classList.toggle('parallel-open', open);
+    if (open) { placeView(); renderPanels(true); }
+    syncButton();
+  }
+
+  function placeView() {
+    const header = document.querySelector('.app-header');
+    const top = header ? Math.round(header.getBoundingClientRect().bottom) : 64;
+    view.style.top = `${top}px`;
+  }
+
+  function buildView() {
+    view = document.createElement('section');
+    view.id = 'parallelView';
+    view.className = 'parallel-view';
+    view.hidden = true;
+    view.setAttribute('aria-label', 'Parallel panels');
+    view.innerHTML = '<div class="parallel-head">'
+      + '<div><div class="parallel-title">Parallel · <span class="parallel-count"></span></div>'
+      + '<div class="parallel-sub">Each model has its own prompt and Send. They run at the same time on the accelerator.</div></div>'
+      + '<div class="parallel-head-actions">'
+      + '<button type="button" class="parallel-btn parallel-stop-all">Stop all</button>'
+      + '<button type="button" class="parallel-btn parallel-close">Back to chat</button></div></div>'
+      + '<div class="parallel-grid"></div>'
+      + '<input type="file" accept="image/*" class="parallel-file" hidden>';
+    view.querySelector('.parallel-close').addEventListener('click', () => setOpen(false));
+    view.querySelector('.parallel-stop-all').addEventListener('click', () => {
+      panels.forEach((p) => p.controller && p.controller.abort());
+    });
+    view.querySelector('.parallel-file').addEventListener('change', onFileChosen);
+    document.body.appendChild(view);
+    window.addEventListener('resize', () => { if (open) placeView(); });
+    document.addEventListener('keydown', (e) => { if (open && e.key === 'Escape' && !view.querySelector('.parallel-camera')) setOpen(false); });
+  }
+
+  let fileTarget = null;
+  async function onFileChosen(e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file || !fileTarget) return;
+    try {
+      panelState(fileTarget).image = await scaleImage(file);
+      renderPanels(true);
+    } catch (err) {
+      alertInPanel(fileTarget, 'That file could not be read as an image.');
+    }
+  }
+
+  async function scaleImage(blob, maxSide = 896) {
+    const bitmap = await createImageBitmap(blob);
+    const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(bitmap.width * scale);
+    canvas.height = Math.round(bitmap.height * scale);
+    canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    if (bitmap.close) bitmap.close();
+    return canvas.toDataURL('image/jpeg', 0.9);
+  }
+
+  // Rebuild the panels when the set of loaded models changes; otherwise keep
+  // each panel (and anything typed in it) as it is.
+  function renderPanels(force) {
+    if (!view) return;
+    const models = loaded();
+    const key = models.map((m) => m.name).join('|');
+    view.querySelector('.parallel-count').textContent = `${models.length} model${models.length === 1 ? '' : 's'}`;
+    if (!force && key === shownModels) return;
+    const drafts = {};
+    view.querySelectorAll('.parallel-panel').forEach((el) => {
+      drafts[el.dataset.model] = el.querySelector('textarea').value;
+    });
+    shownModels = key;
+    const grid = view.querySelector('.parallel-grid');
+    grid.style.setProperty('--panels', String(Math.max(1, models.length)));
+    grid.innerHTML = '';
+    models.forEach((m) => grid.appendChild(buildPanel(m, drafts[m.name] || '')));
+    if (open && models.length < 2) setOpen(false);
+  }
+
+  function buildPanel(model, draft) {
+    const state = panelState(model.name);
+    const vision = isVision(model);
+    const el = document.createElement('div');
+    el.className = 'parallel-panel';
+    el.dataset.model = model.name;
+    el.innerHTML = '<div class="parallel-panel-head">'
+      + `<span class="parallel-panel-name" title="${esc(model.name)}">${esc(model.name)}</span>`
+      + `<span class="parallel-badge${vision ? ' is-vlm' : ''}">${vision ? 'Sees images' : 'Text only'}</span>`
+      + '<button type="button" class="parallel-link parallel-new">New chat</button></div>'
+      + '<div class="parallel-thread"></div>'
+      + '<div class="parallel-attach"></div>'
+      + '<div class="parallel-composer">'
+      + `<textarea rows="2" placeholder="Message ${esc(model.name)}" aria-label="Message ${esc(model.name)}"></textarea>`
+      + '<div class="parallel-composer-row">'
+      + (vision ? '<button type="button" class="parallel-btn parallel-picture">Picture</button>'
+        + '<button type="button" class="parallel-btn parallel-cam">Camera</button>' : '')
+      + '<span class="parallel-spacer"></span>'
+      + '<button type="button" class="parallel-btn parallel-send">Send</button></div></div>';
+    const ta = el.querySelector('textarea');
+    ta.value = draft;
+    ta.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(model); }
+    });
+    el.querySelector('.parallel-send').addEventListener('click', () => {
+      if (state.controller) state.controller.abort();
+      else send(model);
+    });
+    el.querySelector('.parallel-new').addEventListener('click', () => {
+      if (state.controller) state.controller.abort();
+      state.messages = [];
+      renderThread(model.name);
+    });
+    if (vision) {
+      el.querySelector('.parallel-picture').addEventListener('click', () => {
+        fileTarget = model.name;
+        view.querySelector('.parallel-file').click();
+      });
+      el.querySelector('.parallel-cam').addEventListener('click', () => openCamera(model.name));
+    }
+    // Fill the thread after the panel is in the DOM.
+    requestAnimationFrame(() => { renderThread(model.name); renderAttachment(model.name); syncSend(model.name); });
+    return el;
+  }
+
+  const panelEl = (name) => (view ? Array.from(view.querySelectorAll('.parallel-panel')).find((p) => p.dataset.model === name) : null);
+
+  function syncSend(name) {
+    const el = panelEl(name);
+    if (!el) return;
+    const busy = !!panelState(name).controller;
+    const btn = el.querySelector('.parallel-send');
+    btn.textContent = busy ? 'Stop' : 'Send';
+    btn.classList.toggle('is-stop', busy);
+  }
+
+  function renderAttachment(name) {
+    const el = panelEl(name);
+    if (!el) return;
+    const box = el.querySelector('.parallel-attach');
+    const image = panelState(name).image;
+    box.innerHTML = image ? `<img src="${image}" alt="Picture for the next message"><button type="button" class="parallel-link">Remove</button>` : '';
+    if (image) box.querySelector('button').addEventListener('click', () => { panelState(name).image = null; renderAttachment(name); });
+  }
+
+  function alertInPanel(name, text) {
+    const el = panelEl(name);
+    if (!el) return;
+    const note = document.createElement('div');
+    note.className = 'parallel-note is-error';
+    note.textContent = text;
+    el.querySelector('.parallel-thread').appendChild(note);
+  }
+
+  // Draw a panel's conversation. Streaming replies update their own bubble.
+  function renderThread(name) {
+    const el = panelEl(name);
+    if (!el) return;
+    const thread = el.querySelector('.parallel-thread');
+    const state = panelState(name);
+    thread.innerHTML = '';
+    if (!state.messages.length) {
+      thread.innerHTML = '<div class="parallel-empty">Type a message and press Send. This panel keeps its own conversation.</div>';
+      return;
+    }
+    state.messages.forEach((m) => thread.appendChild(messageEl(m)));
+    thread.scrollTop = thread.scrollHeight;
+  }
+
+  function messageEl(m) {
+    const div = document.createElement('div');
+    if (m.role === 'user') {
+      div.className = 'parallel-msg is-user';
+      div.innerHTML = (m.image ? `<img src="${m.image}" alt="Sent with this message">` : '') + `<div>${esc(m.text)}</div>`;
+      return div;
+    }
+    div.className = 'parallel-msg is-assistant';
+    div.innerHTML = '<div class="parallel-body message-text"></div><div class="parallel-foot"></div>';
+    m.bodyEl = div.querySelector('.parallel-body');
+    m.footEl = div.querySelector('.parallel-foot');
+    paintReply(m, true);
+    return div;
+  }
+
+  function paintReply(m, final) {
+    if (!m.bodyEl) return;
+    const answer = answerOf(m.text);
+    if (final || typeof setMarkdownThrottled !== 'function') {
+      if (typeof cancelPendingRender === 'function') cancelPendingRender(m.bodyEl);
+      if (typeof renderMarkdownInto === 'function') renderMarkdownInto(m.bodyEl, answer || (m.pending ? '…' : ''));
+      else m.bodyEl.textContent = answer;
+    } else {
+      setMarkdownThrottled(m.bodyEl, answer);
+    }
+    const bits = [];
+    const stats = statsText(m);
+    if (stats) bits.push(`<span class="parallel-stats">${stats}</span>`);
+    if (m.state) bits.push(`<span class="parallel-state is-${m.stateKind || 'busy'}">${esc(m.state)}</span>`);
+    m.footEl.innerHTML = bits.join('');
+  }
+
+  // ---- sending ----
+
+  async function send(model) {
+    const name = model.name;
+    const el = panelEl(name);
+    const state = panelState(name);
+    if (!el || state.controller) return;
+    const ta = el.querySelector('textarea');
+    const vision = isVision(model);
+    const image = vision ? state.image : null;
+    const text = ta.value.trim() || (image ? 'Describe this image.' : '');
+    if (!text) return;
+    if (!loaded().some((m) => m.name === name)) {
+      alertInPanel(name, `${name} is no longer loaded. Load it again in Settings.`);
+      return;
+    }
+    const history = state.messages
+      .filter((m) => m.role === 'user' || (m.role === 'assistant' && !m.failed && answerOf(m.text).trim()))
+      .map((m) => ({ role: m.role, content: m.role === 'assistant' ? answerOf(m.text) : m.text }));
+    const content = image
+      ? [{ type: 'text', text }, { type: 'image_url', image_url: { url: image } }]
+      : text;
+    const messages = [{ role: 'system', content: SYSTEM_PROMPT + (image ? WITH_IMAGE : WITHOUT_IMAGE) }, ...history, { role: 'user', content }];
+
+    ta.value = '';
+    state.image = null;
+    renderAttachment(name);
+    const reply = { role: 'assistant', text: '', tokens: 0, tps: null, ttftS: null, totalS: null, pending: true, state: 'Waiting for the first token…', stateKind: 'busy' };
+    state.messages.push({ role: 'user', text, image }, reply);
+    renderThread(name);
+    const controller = new AbortController();
+    state.controller = controller;
+    syncSend(name);
+
+    const t0 = performance.now();
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await stream(name, messages, reply, controller, t0);
+        reply.pending = false;
+        reply.totalS = (performance.now() - t0) / 1000;
+        if (!answerOf(reply.text).trim()) {
+          reply.failed = true;
+          reply.state = `No answer: this conversation is probably longer than ${name} can read at once. Press New chat.`;
+          reply.stateKind = 'error';
+        } else {
+          reply.state = '';
+        }
+        break;
+      } catch (err) {
+        const stopped = err && err.name === 'AbortError';
+        if (!stopped && attempt === 0 && acceleratorBusy(err && err.message)) {
+          reply.text = ''; reply.tokens = 0; reply.ttftS = null;
+          reply.state = 'The accelerator was busy; trying again…';
+          paintReply(reply, true);
+          await new Promise((r) => setTimeout(r, 400));
+          if (!controller.signal.aborted) continue;
+        }
+        reply.pending = false;
+        reply.totalS = (performance.now() - t0) / 1000;
+        reply.failed = !stopped;
+        reply.state = stopped ? 'Stopped' : `Failed: ${err && err.message ? err.message : err}`;
+        reply.stateKind = stopped ? 'muted' : 'error';
+        break;
+      }
+    }
+    state.controller = null;
+    paintReply(reply, true);
+    syncSend(name);
+    const thread = panelEl(name) && panelEl(name).querySelector('.parallel-thread');
+    if (thread) thread.scrollTop = thread.scrollHeight;
+  }
+
+  async function stream(name, messages, reply, controller, t0) {
+    const resp = await fetch('/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: name, messages, stream: true }),
+      signal: controller.signal,
+    });
+    if (!resp.ok || !resp.body) {
+      const detail = await resp.text().catch(() => '');
+      let message = `HTTP ${resp.status}`;
+      try { const j = JSON.parse(detail); message = (j.error && (j.error.message || j.error)) || message; } catch (e) { /* not JSON */ }
+      throw new Error(String(message));
+    }
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let tFirst = null;
+    let tLast = null;
+    let serverTps = null;
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      buffer += decoder.decode(chunk.value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (const raw of lines) {
+        const line = raw.trim();
+        if (!line.startsWith('data:')) continue;
+        const data = line.slice(5).trim();
+        if (data === '[DONE]') {
+          if (serverTps != null) reply.tps = serverTps;
+          else if (tFirst != null && tLast > tFirst && reply.tokens > 1) reply.tps = (reply.tokens - 1) / ((tLast - tFirst) / 1000);
+          return;
+        }
+        let obj;
+        try { obj = JSON.parse(data); } catch (e) { continue; }
+        if (obj.error) throw new Error(String(obj.error.message || obj.error));
+        if (obj.tps != null && Number.isFinite(Number(obj.tps))) serverTps = Number(obj.tps);
+        if (obj.generated_tokens != null && Number.isFinite(Number(obj.generated_tokens))) reply.tokens = Number(obj.generated_tokens);
+        const delta = obj.choices && obj.choices[0] && obj.choices[0].delta && obj.choices[0].delta.content;
+        if (!delta) continue;
+        const now = performance.now();
+        if (tFirst == null) { tFirst = now; reply.ttftS = (now - t0) / 1000; }
+        tLast = now;
+        reply.tokens += 1;
+        reply.text += delta;
+        const parts = typeof splitThinking === 'function' ? splitThinking(reply.text) : { present: false };
+        reply.state = parts.present && !parts.closed ? 'Thinking…' : 'Generating…';
+        if (serverTps != null) reply.tps = serverTps;
+        paintReply(reply, false);
+        const thread = panelEl(name) && panelEl(name).querySelector('.parallel-thread');
+        if (thread) thread.scrollTop = thread.scrollHeight;
+      }
+    }
+    throw new Error('The reply stopped early: the connection closed before it finished.');
+  }
+
+  // ---- camera (one at a time) ----
+
+  let camStream = null;
+  async function openCamera(name) {
+    const el = panelEl(name);
+    if (!el || view.querySelector('.parallel-camera')) return;
+    try {
+      camStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    } catch (err) {
+      alertInPanel(name, `The camera isn't available (${err.message}). Allow camera access for this page, then try again.`);
+      return;
+    }
+    const box = document.createElement('div');
+    box.className = 'parallel-camera';
+    box.innerHTML = '<video autoplay playsinline muted></video><div class="parallel-composer-row">'
+      + '<button type="button" class="parallel-btn parallel-snap">Use this picture</button>'
+      + '<button type="button" class="parallel-link parallel-cancel">Cancel</button></div>';
+    const video = box.querySelector('video');
+    video.srcObject = camStream;
+    const close = () => { if (camStream) camStream.getTracks().forEach((t) => t.stop()); camStream = null; box.remove(); };
+    box.querySelector('.parallel-cancel').addEventListener('click', close);
+    box.querySelector('.parallel-snap').addEventListener('click', () => {
+      if (!video.videoWidth) return;
+      const canvas = document.createElement('canvas');
+      const scale = Math.min(1, 896 / Math.max(video.videoWidth, video.videoHeight));
+      canvas.width = Math.round(video.videoWidth * scale);
+      canvas.height = Math.round(video.videoHeight * scale);
+      canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+      panelState(name).image = canvas.toDataURL('image/jpeg', 0.9);
+      close();
+      renderAttachment(name);
+    });
+    el.querySelector('.parallel-attach').before(box);
+  }
+
+  // Follow the loaded models: the button appears with two or more, and the
+  // panels change when a model is loaded or unloaded.
+  function tick() {
+    syncButton();
+    if (open) renderPanels(false);
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', tick);
+  else tick();
+  setInterval(tick, 1500);
+})();

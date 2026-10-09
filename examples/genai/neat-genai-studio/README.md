@@ -315,7 +315,17 @@ curl -s http://127.0.0.1:9997/control/load \
 
 With two or more models loaded, the model name on the home screen and in the
 header becomes a picker: choose the model that answers the next message. The
-**Use** button in **Settings → Models** does the same. Every loaded model is
+**Use** button in **Settings → Models** does the same.
+
+The **Parallel** button in the header (three columns) opens a panel for every
+loaded model, each with its own prompt box, **Send** button and conversation.
+Send any panel at any time: the models answer at the same time, each panel shows
+its tokens, tokens per second and time to first token, and models that see
+images also take a picture or a camera frame. The panels keep their own
+conversations and don't change the main chat; **Back to chat** returns to it.
+**New chat** in a panel starts that panel over.
+
+Every loaded model is
 also served on the OpenAI-compatible API by its name, so other clients can use
 any of them at the same time:
 
