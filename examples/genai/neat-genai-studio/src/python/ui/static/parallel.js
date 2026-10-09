@@ -20,6 +20,10 @@
   let view = null;
   let open = false;
   let shownModels = '';
+  // The loaded models ticked in the Models dropdown get a panel; null means
+  // all of them (until the user changes the ticks).
+  let chosen = null;
+  const drafts = new Map();   // model name -> unsent text in its prompt box
 
   // The loaded chat/VLM models, from the catalog newui.js keeps up to date.
   const loaded = () => (typeof _catalog !== 'undefined' && Array.isArray(_catalog)
@@ -108,11 +112,33 @@
       + '<div><div class="parallel-title">Parallel · <span class="parallel-count"></span></div>'
       + '<div class="parallel-sub">Each model has its own prompt and Send. They run at the same time on the accelerator.</div></div>'
       + '<div class="parallel-head-actions">'
+      + '<div class="parallel-models-pick">'
+      + '<button type="button" class="parallel-btn parallel-models-btn" aria-haspopup="true" aria-expanded="false"></button>'
+      + '<div class="parallel-models-menu" role="group" aria-label="Models with a panel" hidden></div></div>'
       + '<button type="button" class="parallel-btn parallel-stop-all">Stop all</button>'
       + '<button type="button" class="parallel-btn parallel-close">Back to chat</button></div></div>'
       + '<div class="parallel-grid"></div>'
       + '<input type="file" accept="image/*" class="parallel-file" hidden>';
     view.querySelector('.parallel-close').addEventListener('click', () => setOpen(false));
+    const menuBtn = view.querySelector('.parallel-models-btn');
+    const menu = view.querySelector('.parallel-models-menu');
+    const setMenu = (on) => { menu.hidden = !on; menuBtn.setAttribute('aria-expanded', on ? 'true' : 'false'); };
+    menuBtn.addEventListener('click', () => setMenu(menu.hidden));
+    document.addEventListener('mousedown', (e) => {
+      if (!menu.hidden && !e.target.closest('.parallel-models-pick')) setMenu(false);
+    });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !menu.hidden) setMenu(false); });
+    menu.addEventListener('change', (e) => {
+      const box = e.target.closest('input[type=checkbox]');
+      if (!box) return;
+      const names = loaded().map((m) => m.name);
+      const set = new Set(chosen || names);
+      if (box.checked) set.add(box.value);
+      else set.delete(box.value);
+      if (!set.size) { box.checked = true; return; }   // keep at least one panel
+      chosen = names.filter((n) => set.has(n));
+      renderPanels(true);
+    });
     view.querySelector('.parallel-stop-all').addEventListener('click', () => {
       panels.forEach((p) => p.controller && p.controller.abort());
     });
@@ -146,27 +172,38 @@
     return canvas.toDataURL('image/jpeg', 0.9);
   }
 
-  // Rebuild the panels when the set of loaded models changes; otherwise keep
-  // each panel (and anything typed in it) as it is.
+  // Rebuild the panels when the loaded models or the ticked models change;
+  // otherwise keep each panel (and anything typed in it) as it is. Models not
+  // shown keep their conversations for when they are ticked again.
   function renderPanels(force) {
     if (!view) return;
     const models = loaded();
-    const key = models.map((m) => m.name).join('|');
-    view.querySelector('.parallel-count').textContent = `${models.length} model${models.length === 1 ? '' : 's'}`;
+    const names = models.map((m) => m.name);
+    let shown = chosen ? chosen.filter((n) => names.includes(n)) : names;
+    if (!shown.length) { chosen = null; shown = names; }
+    view.querySelector('.parallel-count').textContent =
+      `${shown.length} of ${names.length} loaded model${names.length === 1 ? '' : 's'}`;
+    view.querySelector('.parallel-models-btn').textContent = `Models · ${shown.length} ▾`;
+    const key = `${names.join('|')}#${shown.join('|')}`;
     if (!force && key === shownModels) return;
-    const drafts = {};
-    view.querySelectorAll('.parallel-panel').forEach((el) => {
-      drafts[el.dataset.model] = el.querySelector('textarea').value;
-    });
     shownModels = key;
+    const menu = view.querySelector('.parallel-models-menu');
+    menu.innerHTML = models.map((m) => {
+      const on = shown.includes(m.name);
+      const last = on && shown.length === 1;
+      return `<label class="parallel-models-option${last ? ' is-locked' : ''}">`
+        + `<input type="checkbox" value="${esc(m.name)}"${on ? ' checked' : ''}${last ? ' disabled' : ''}>`
+        + `<span>${esc(m.name)}</span>`
+        + `<span class="parallel-badge${isVision(m) ? ' is-vlm' : ''}">${isVision(m) ? 'Sees images' : 'Text only'}</span></label>`;
+    }).join('') + '<div class="parallel-models-hint">Ticked models get a panel.</div>';
     const grid = view.querySelector('.parallel-grid');
-    grid.style.setProperty('--panels', String(Math.max(1, models.length)));
+    grid.style.setProperty('--panels', String(Math.max(1, shown.length)));
     grid.innerHTML = '';
-    models.forEach((m) => grid.appendChild(buildPanel(m, drafts[m.name] || '')));
-    if (open && models.length < 2) setOpen(false);
+    shown.forEach((n) => grid.appendChild(buildPanel(models.find((m) => m.name === n))));
+    if (open && names.length < 2) setOpen(false);
   }
 
-  function buildPanel(model, draft) {
+  function buildPanel(model) {
     const state = panelState(model.name);
     const vision = isVision(model);
     const el = document.createElement('div');
@@ -186,7 +223,8 @@
       + '<span class="parallel-spacer"></span>'
       + '<button type="button" class="parallel-btn parallel-send">Send</button></div></div>';
     const ta = el.querySelector('textarea');
-    ta.value = draft;
+    ta.value = drafts.get(model.name) || '';
+    ta.addEventListener('input', () => drafts.set(model.name, ta.value));
     ta.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(model); }
     });
@@ -312,6 +350,7 @@
     const messages = [{ role: 'system', content: SYSTEM_PROMPT + (image ? WITH_IMAGE : WITHOUT_IMAGE) }, ...history, { role: 'user', content }];
 
     ta.value = '';
+    drafts.delete(name);
     state.image = null;
     renderAttachment(name);
     const reply = { role: 'assistant', text: '', tokens: 0, tps: null, ttftS: null, totalS: null, pending: true, state: 'Waiting for the first token…', stateKind: 'busy' };

@@ -1650,3 +1650,19 @@ body.resizing video { pointer-events: none; }
   .parallel-grid { grid-template-columns: 1fr; overflow-y: auto; }
   .parallel-panel { min-height: 360px; }
 }
+.parallel-models-pick { position: relative; }
+.parallel-models-btn { min-width: 110px; }
+.parallel-models-menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 50; min-width: 300px;
+  display: grid; gap: 2px; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface); box-shadow: var(--shadow-md);
+}
+.parallel-models-menu[hidden] { display: none; }
+.parallel-models-option {
+  display: flex; align-items: center; gap: 8px; padding: 6px 6px; border-radius: 8px;
+  font-size: 13px; color: var(--text); cursor: pointer;
+}
+.parallel-models-option:hover { background: var(--surface-2); }
+.parallel-models-option span:first-of-type { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.parallel-models-option.is-locked { cursor: default; }
+.parallel-models-hint { padding: 4px 6px 0; font-size: 11.5px; color: var(--text-3); }

@@ -319,6 +319,8 @@ header becomes a picker: choose the model that answers the next message. The
 
 The **Parallel** button in the header (three columns) opens a panel for every
 loaded model, each with its own prompt box, **Send** button and conversation.
+The **Models** dropdown lists the loaded models with a checkbox each: ticked
+models get a panel, so you can work with two, three or all of them.
 Send any panel at any time: the models answer at the same time, each panel shows
 its tokens, tokens per second and time to first token, and models that see
 images also take a picture or a camera frame. The panels keep their own
