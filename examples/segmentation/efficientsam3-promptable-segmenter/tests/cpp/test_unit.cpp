@@ -4,14 +4,18 @@
 #include "../../src/cpp/main.cpp"
 #undef main
 
+#include "support/testing/test_config.h"
 #include "support/testing/test_process.h"
 
 #include <iostream>
 #include <string>
 #include <vector>
 
+using sima_examples::testing::create_test_scratch_dir;
 using sima_examples::testing::ProcessResult;
+using sima_examples::testing::remove_dir;
 using sima_examples::testing::spawn_and_wait;
+using sima_examples::testing::write_e2e_config;
 
 namespace {
 
@@ -108,6 +112,20 @@ int main(int argc, char** argv) {
   check(packaged.prompt == "person" && packaged.min_score == 0.3 && packaged.max_detections == 20 &&
             packaged.mask_threshold == 0.5 && packaged.metadata_port == 9100,
         "packaged config loads");
+  const std::string scratch =
+      create_test_scratch_dir("efficientsam3-promptable-segmenter", "profile-interval");
+  const fs::path zero_interval = fs::path(scratch) / "config.yaml";
+  write_e2e_config("efficientsam3-promptable-segmenter", zero_interval,
+                   {{"runtime.profile_interval", "0"}});
+  try {
+    (void)load_config(zero_interval);
+    check(false, "profile_interval 0 is rejected");
+  } catch (const std::exception& error) {
+    check(std::string(error.what()).find("runtime.profile_interval must be > 0") !=
+              std::string::npos,
+          "profile_interval 0 is rejected");
+  }
+  remove_dir(scratch);
 
   const ClipTokenizer tokenizer(config_path.parent_path() / "bpe_simple_vocab_16e6.txt.gz");
   for (const auto& [prompt, ids] : kTokens) {
@@ -136,6 +154,13 @@ int main(int argc, char** argv) {
   cfg.max_detections = 1;
   const std::vector<Segment> best = result.segments(cfg);
   check(best.size() == 1 && best.front().id == "seg_1", "max_detections keeps the best scores");
+  cfg.max_detections = packaged.max_detections;
+  cfg.prompt = std::string(20000, 'x');
+  const std::string budgeted = segments_json(result.segments(cfg));
+  const auto kept = nlohmann::json::parse(budgeted).at("segments");
+  check(budgeted.size() <= kMetadataByteBudget && kept.size() == 1 &&
+            kept.at(0).at("id") == "seg_1",
+        "metadata keeps the best segments within the byte budget");
 
   const cv::Mat empty(kMaskSide, kMaskSide, CV_32F, cv::Scalar(-10.0F));
   check(mask_outline(empty, {100, 100, 300, 300}, 1920, 1080, 0.0F).empty(),

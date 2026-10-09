@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+import yaml
 
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
@@ -71,6 +72,16 @@ def test_packaged_config_loads():
 
 
 @pytest.mark.unit
+def test_config_rejects_a_non_positive_profile_interval(tmp_path):
+    raw = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
+    raw["runtime"]["profile_interval"] = 0
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+    with pytest.raises(ValueError, match="runtime.profile_interval must be > 0"):
+        main.load_config(path)
+
+
+@pytest.mark.unit
 @pytest.mark.parametrize("prompt", TOKENS)
 def test_tokenizer_matches_clip(prompt):
     expected = TOKENS[prompt]
@@ -87,7 +98,16 @@ def test_tokenizer_truncates_and_keeps_the_end_token():
 def test_segments_match_the_cpp_implementation():
     detections, masks = frame_result()
     segments = main.segments_of(detections, masks, config(), 1920, 1080)
-    assert json.dumps({"segments": segments}, separators=(",", ":")) == SEGMENTS_JSON
+    assert main.segments_json(segments) == SEGMENTS_JSON
+
+
+@pytest.mark.unit
+def test_metadata_keeps_the_best_segments_within_the_byte_budget():
+    detections, masks = frame_result()
+    segments = main.segments_of(detections, masks, config(prompt="x" * 20000), 1920, 1080)
+    payload = main.segments_json(segments)
+    assert len(payload) <= main.METADATA_BYTE_BUDGET
+    assert [s["id"] for s in json.loads(payload)["segments"]] == ["seg_1"]
 
 
 @pytest.mark.unit

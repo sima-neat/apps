@@ -45,6 +45,8 @@ constexpr int kVocabSize = 49408;
 // Three frames on the model keep the MLA busy while the host prepares and reads frames (13 FPS; 11
 // FPS with two).
 constexpr int kPipelineDepth = 3;
+// MetadataSender rejects a message above 65507 bytes; half of it leaves room for the envelope.
+constexpr std::size_t kMetadataByteBudget = 32'768;
 
 volatile std::sig_atomic_t g_stop_requested = 0;
 
@@ -92,6 +94,7 @@ Config load_config(const fs::path& path) {
   cfg.metadata_port = raw.int_or("output.insight.metadata_port", 9100);
   cfg.save_dir = raw.string_or("output.save_dir", "");
   cfg.save_every = raw.int_or("output.save_every", 0);
+  sima_examples::require(cfg.profile_interval > 0, "runtime.profile_interval must be > 0");
   return cfg;
 }
 
@@ -292,18 +295,24 @@ std::vector<Segment> segments_of(const cv::Mat& detections, const cv::Mat& masks
 
 std::string segments_json(const std::vector<Segment>& segments) {
   nlohmann::ordered_json items = nlohmann::ordered_json::array();
+  std::size_t size = sizeof(R"({"segments":[]})") - 1U;
   for (const Segment& segment : segments) {
     nlohmann::ordered_json mask = nlohmann::ordered_json::array();
     for (const cv::Point& point : segment.mask) {
       mask.push_back({point.x, point.y});
     }
     const auto& [x0, y0, x1, y1] = segment.box;
-    items.push_back({{"id", segment.id},
-                     {"label", segment.label},
-                     {"confidence", segment.confidence},
-                     {"bbox", {x0, y0, x1 - x0, y1 - y0}},
-                     {"mask_format", "polygon"},
-                     {"mask", mask}});
+    nlohmann::ordered_json item = {{"id", segment.id},
+                                   {"label", segment.label},
+                                   {"confidence", segment.confidence},
+                                   {"bbox", {x0, y0, x1 - x0, y1 - y0}},
+                                   {"mask_format", "polygon"},
+                                   {"mask", mask}};
+    size += item.dump().size() + 1U;
+    if (size > kMetadataByteBudget) {
+      break;
+    }
+    items.push_back(std::move(item));
   }
   return nlohmann::ordered_json{{"segments", items}}.dump();
 }

@@ -26,6 +26,8 @@ TEXT_TOKENS = 16
 TEXT_DIM = 256
 VOCAB_SIZE = 49408
 PIPELINE_DEPTH = 3
+# MetadataSender rejects a message above 65507 bytes; half of it leaves room for the envelope.
+METADATA_BYTE_BUDGET = 32768
 
 
 @dataclass(frozen=True)
@@ -53,6 +55,8 @@ def load_config(path: Path) -> Config:
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     source, inference, runtime, output = raw["source"], raw["inference"], raw["runtime"], raw["output"]
     insight = output["insight"]
+    if runtime["profile_interval"] <= 0:
+        raise ValueError("runtime.profile_interval must be > 0")
     return Config(
         model_path=raw["model"]["path"],
         text_encoder=raw["model"]["text_encoder"],
@@ -191,6 +195,17 @@ def segments_of(detections, masks, cfg: Config, width: int, height: int) -> list
     return segments
 
 
+def segments_json(segments: list[dict]) -> str:
+    """Serializes the best-scoring segments that fit the metadata byte budget."""
+    kept, size = [], len('{"segments":[]}')
+    for segment in segments:
+        size += len(json.dumps(segment, separators=(",", ":"))) + 1
+        if size > METADATA_BYTE_BUDGET:
+            break
+        kept.append(segment)
+    return json.dumps({"segments": kept}, separators=(",", ":"))
+
+
 # Insight draws metadata only on the frame with its timestamp, and the model segments every second or
 # third frame, so every frame is sent the result of the segmented frame nearest to it in time.
 class OverlayClock:
@@ -278,8 +293,7 @@ def run(cfg: Config) -> None:
             pts_ms, saved_frame = in_flight.popleft()
             detections, masks = (tensor.to_numpy(copy=False) for tensor in result.tensors)
             segments = segments_of(detections[0], masks, cfg, width, height)
-            result_json = json.dumps({"segments": segments}, separators=(",", ":"))
-            for data, timestamp_ms, frame_id in overlay.add_result(pts_ms, result_json):
+            for data, timestamp_ms, frame_id in overlay.add_result(pts_ms, segments_json(segments)):
                 metadata.send_metadata("segmentation", data, timestamp_ms, frame_id)
 
             processed += 1
