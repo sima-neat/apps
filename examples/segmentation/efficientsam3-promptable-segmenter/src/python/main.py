@@ -173,7 +173,7 @@ def mask_outline(mask_logits, box, width: int, height: int, logit_threshold: flo
 
 
 def segments_of(detections, masks, cfg: Config, width: int, height: int) -> list[dict]:
-    logit_threshold = math.log(cfg.mask_threshold / (1.0 - cfg.mask_threshold))
+    logit_threshold = np.log(np.float64(cfg.mask_threshold) / (1.0 - cfg.mask_threshold))
     best = np.argsort(-detections[:, 4], kind="stable")[:cfg.max_detections]
     sx, sy = width / MODEL_SIZE, height / MODEL_SIZE
     segments = []
