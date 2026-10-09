@@ -87,6 +87,11 @@ function getChatModelCapabilities() {
 // The dropdown is only a *selection* that the Load button acts on, so it can
 // differ from the active model while the user browses the catalog.
 let _activeChatModel = '';
+// Resident chat/VLM models, most recently used first, and how many the server
+// keeps resident at once (from /models/catalog). Above one, several models stay
+// loaded and the main page lets the user pick which one answers.
+let _residentChatModels = [];
+let _maxResidentChatModels = 1;
 // Match the original Multimodal Assistant behavior: automatically enable image
 // prompting whenever a vision-capable model becomes active.
 let _visionPromptModel = '';
@@ -2409,8 +2414,29 @@ socket.on('generation_error', (data) => {
   if (currentAssistantMessage) {
     currentAssistantMessage.classList.remove('speaking', 'streaming-text');
   }
+  // A reply refused before any text leaves its "Processing..." placeholder
+  // empty: the error takes its place.
+  if (currentAssistantMessage && /^\s*(Processing\.\.\.)?\s*$/.test(currentAssistantMessage.innerText || '')) {
+    currentAssistantMessage.remove();
+  }
   const message = (data && data.message) || 'Response generation failed. Please try again.';
   addChatMessage(`⚠️ ${message}`, false, false);
+  setTimeout(flushChatNotices, 0);
+});
+// The Studio explains something about the current reply: earlier messages
+// left out to fit the model's window, or a reply that came back empty.
+// A note that arrives while a reply is still being written waits for the
+// reply to end: the page writes a streaming reply into its latest message.
+let _pendingChatNotices = [];
+function flushChatNotices() {
+  const notices = _pendingChatNotices;
+  _pendingChatNotices = [];
+  notices.forEach(text => addChatMessage(`ℹ️ ${text}`, false, false));
+}
+socket.on('chat_notice', (data) => {
+  if (!data || !data.text) return;
+  _pendingChatNotices.push(data.text);
+  if (!activeGeneration) flushChatNotices();
 });
 socket.on('end', (data) => {
   console.log('Received end event:', data);
@@ -2452,6 +2478,8 @@ socket.on('end', (data) => {
     // Don't remove audio-playing class here - let actual audio end handle it
     // The 'end' event is for text streaming, not audio playback
   }
+  // Notes held back while the reply was written go under it now.
+  setTimeout(flushChatNotices, 0);
 
   // Don't hide abort button here - keep it visible during audio playback
   // hideAbortButton(); // Moved to audio completion
@@ -4005,6 +4033,8 @@ async function refreshCatalog() {
     const data = await resp.json();
     if (!data || !Array.isArray(data.catalog)) throw new Error('malformed catalog');
     const catalog = data.catalog;
+    if (Array.isArray(data.resident)) _residentChatModels = data.resident;
+    if (data.maxResident) _maxResidentChatModels = Math.max(1, Number(data.maxResident) || 1);
     // Update capabilities so vision detection works for any catalog model.
     const caps = window.SIMA_CONFIG.chatModelCapabilities || {};
     catalog.forEach(m => {
@@ -4074,11 +4104,15 @@ function populateModelSelect(catalog) {
   }
   select.value = selection;
 
-  // Active model = the one actually resident. With the control API only one
-  // chat/VLM is loaded at a time; in static mode every model is preloaded so
-  // the active one follows the current selection.
+  // Active model = the resident one chat requests go to. With the control API
+  // several chat/VLM models can be resident: keep the user's pick while it stays
+  // loaded, else follow the most recently used one (the server's LRU order). In
+  // static mode every model is preloaded so the active one follows the selection.
   if (controlEnabled()) {
-    _activeChatModel = loaded.includes(defaultModel) ? defaultModel : (loaded[0] || '');
+    if (!loaded.includes(_activeChatModel)) {
+      const mru = _residentChatModels.find(n => loaded.includes(n));
+      _activeChatModel = mru || (loaded.includes(defaultModel) ? defaultModel : (loaded[0] || ''));
+    }
   } else {
     _activeChatModel = select.value || defaultModel || (chatModels[0] && chatModels[0].name) || '';
   }
@@ -4216,6 +4250,15 @@ function renderInstalledList() {
       del.addEventListener('click', (e) => { e.stopPropagation(); deleteModel(m.name); });
       row.appendChild(del);
 
+      if (m.loaded && !isActive) {
+        const use = document.createElement('button');
+        use.className = 'setting-button model-action'; use.type = 'button';
+        use.textContent = 'Use'; use.disabled = busy;
+        use.title = `Chat with ${m.name} (already loaded)`;
+        use.addEventListener('click', (e) => { e.stopPropagation(); activateLoadedModel(m.name); });
+        row.appendChild(use);
+      }
+
       const btn = document.createElement('button');
       btn.className = 'setting-button model-action'; btn.type = 'button';
       if (m.loaded) {
@@ -4287,6 +4330,65 @@ function updateActiveModelPill() {
     }
   }
   updateHomeModelIndicator();
+  renderModelSwitchers();
+}
+
+// With more than one chat/VLM model resident, the header pill and the home
+// screen become a picker so the user can choose which model answers without
+// opening Settings. Switching is instant: every listed model is already loaded.
+function renderModelSwitchers() {
+  const loaded = _catalog.filter(m => (m.type || 'chat') !== 'asr' && m.loaded).map(m => m.name);
+  const multi = loaded.length > 1;
+  const active = getSelectedChatModel();
+  [['headerModelSwitch', 'headerModelName', 'headerModelSwitch'],
+   ['homeModelSwitch', 'homeModelIndicator', 'homeModelSwitchWrap']].forEach(([selId, plainId, wrapId]) => {
+    const sel = document.getElementById(selId);
+    const plain = document.getElementById(plainId);
+    const wrap = document.getElementById(wrapId);
+    if (!sel || !wrap) return;
+    if (plain) plain.style.display = multi ? 'none' : '';
+    wrap.style.display = multi ? '' : 'none';
+    if (!multi) return;
+    const want = loaded.join('\n');
+    if (sel.dataset.models !== want) {
+      sel.dataset.models = want;
+      while (sel.firstChild) sel.removeChild(sel.firstChild);
+      loaded.forEach(name => {
+        const option = document.createElement('option');
+        option.value = name;
+        option.textContent = name;
+        sel.appendChild(option);
+      });
+    }
+    sel.value = active;
+    sel.disabled = serverBusy();
+  });
+}
+
+// Make an already-resident model the one chat requests go to. Nothing loads, so
+// this is instant; the server is told only so its most-recently-used order —
+// which picks the fallback after an unload and the "used least recently" hint
+// when asking what to unload — follows the user's choice.
+async function activateLoadedModel(name) {
+  if (!name || name === getSelectedChatModel() || serverBusy()) return;
+  if (!controlEnabled()) {
+    selectInstalledModel(name);
+    return;
+  }
+  _activeChatModel = name;
+  setModelStatus(`Active: ${name}`, 'ready');
+  updateActiveModelPill();
+  updateManageButtons();
+  if (typeof updateSelectedModelVisionState === 'function') updateSelectedModelVisionState();
+  try {
+    await fetch('/models/load', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name })
+    });
+  } catch (err) {
+    console.warn('Could not mark the model most recently used:', err);
+  }
+  await refreshCatalog();
 }
 
 // Show the active model on the home (empty) screen so it is clear which model
@@ -4315,6 +4417,7 @@ function updateHomeModelIndicator() {
 function updateManageButtons() {
   renderInstalledList();
   renderAsrList();
+  renderModelSwitchers();   // locked while a model operation is in flight
   updateComposerEnabled();
 }
 
@@ -4367,6 +4470,11 @@ function initModelManage() {
   // Info / delete / load / unload are per-row buttons in the list now.
   const sel = document.getElementById('chatModelSelect');
   if (sel) sel.addEventListener('change', updateManageButtons);
+
+  ['headerModelSwitch', 'homeModelSwitch'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('change', () => activateLoadedModel(el.value));
+  });
 
   const retry = document.getElementById('modelLoadRetry');
   const viewLogs = document.getElementById('modelLoadErrorLogs');
@@ -4737,13 +4845,65 @@ function initModelCardModal() {
   });
 }
 
-async function loadModelAndActivate(name) {
+// Ask which loaded chat model(s) to unload so `name` can load. Resolves to the
+// chosen names, or null when the user cancels. Nothing is unloaded without this
+// choice: another client may be using a loaded model through the OpenAI API.
+function chooseModelsToUnload(name, resident, needed, reason) {
+  return new Promise(resolve => {
+    const modal = document.getElementById('unloadChoiceModal');
+    const list = document.getElementById('unloadChoiceList');
+    const text = document.getElementById('unloadChoiceText');
+    const ok = document.getElementById('unloadChoiceConfirm');
+    const cancel = document.getElementById('unloadChoiceCancel');
+    if (!modal || !list || !ok || !cancel) { resolve(null); return; }
+    const what = needed === 1 ? 'one of them' : `${needed} of them`;
+    text.textContent = `${reason} Choose ${what} to unload so ${name} can load.`;
+    list.innerHTML = '';
+    resident.forEach((model, i) => {
+      const row = document.createElement('label');
+      row.className = 'unload-choice-row';
+      const input = document.createElement('input');
+      input.type = needed === 1 ? 'radio' : 'checkbox';
+      input.name = 'unloadChoice';
+      input.value = model;
+      const label = document.createElement('span');
+      label.textContent = model;
+      row.append(input, label);
+      // resident is most recently used first, so the last one is the oldest.
+      if (resident.length > 1 && i === resident.length - 1) {
+        const hint = document.createElement('span');
+        hint.className = 'unload-choice-hint';
+        hint.textContent = 'used least recently';
+        row.appendChild(hint);
+      }
+      list.appendChild(row);
+    });
+    const chosen = () => Array.from(list.querySelectorAll('input:checked')).map(i => i.value);
+    const update = () => { ok.disabled = chosen().length < needed; };
+    const onKey = (e) => { if (e.key === 'Escape') done(null); };
+    function done(value) {
+      modal.style.display = 'none';
+      list.onchange = ok.onclick = cancel.onclick = modal.onclick = null;
+      document.removeEventListener('keydown', onKey);
+      resolve(value);
+    }
+    list.onchange = update;
+    ok.onclick = () => done(chosen());
+    cancel.onclick = () => done(null);
+    modal.onclick = (e) => { if (e.target === modal) done(null); };
+    document.addEventListener('keydown', onKey);
+    update();
+    modal.style.display = 'flex';
+  });
+}
+
+async function loadModelAndActivate(name, unload) {
   if (!name || _modelBusy) return;
   const select = document.getElementById('chatModelSelect');
   const option = select && Array.from(select.options).find(o => o.value === name);
   if (option && option.dataset.loaded === 'true') {
-    if (typeof updateSelectedModelVisionState === 'function') updateSelectedModelVisionState();
-    return; // already resident
+    await activateLoadedModel(name);   // already resident: just switch to it
+    return;
   }
   // Incomplete weights can't load — surface it directly.
   if (option && option.dataset.complete === 'false') {
@@ -4752,17 +4912,31 @@ async function loadModelAndActivate(name) {
     return;
   }
 
+  // Past the resident limit, ask which loaded model makes room before starting.
+  // A limit of one keeps the plain switch: the loaded model is replaced.
+  const others = _residentChatModels.filter(n => n !== name);
+  unload = Array.isArray(unload) ? unload : [];
+  if (_maxResidentChatModels > 1) {
+    const needed = others.length - unload.length - (_maxResidentChatModels - 1);
+    if (needed > 0) {
+      const picked = await chooseModelsToUnload(
+        name, others.filter(n => !unload.includes(n)), needed,
+        `${others.length} chat models are loaded, the most this board is set to keep.`);
+      if (!picked) { setModelStatus(`Did not load ${name}`, 'muted'); return; }
+      unload = unload.concat(picked);
+    }
+  }
+  const victims = _maxResidentChatModels > 1 ? unload : others;
+  let retry = null;   // set when the user can free room and try again
+
   _modelBusy = true;
   _pendingLoad = name;   // the list row shows "Loading…" for this model
   if (select) select.disabled = true;
   updateManageButtons();
   clearModelError();
   await resetLoadLog();
-  // Loading a chat/VLM model evicts the currently-resident one — say so explicitly.
-  const resident = select
-    ? Array.from(select.options).filter(o => o.dataset.loaded === 'true' && o.value !== name).map(o => o.value)
-    : [];
-  const switchNote = resident.length ? `Unloading ${resident.join(', ')} — ` : '';
+  // Say explicitly which loaded models this load unloads.
+  const switchNote = victims.length ? `Unloading ${victims.join(', ')} — ` : '';
   setModelStatus(`${switchNote}Loading ${name}… preparing`, 'loading');
   setModelLoadBar('active');
   startLoadPolling(name);
@@ -4772,15 +4946,30 @@ async function loadModelAndActivate(name) {
     const resp = await fetch('/models/load', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name })
+      body: JSON.stringify({ name, unload })
     });
     const data = await resp.json().catch(() => ({}));
+    if (resp.status === 409 && data.code === 'resident_limit') {
+      // Another client loaded a model since the last refresh: ask again.
+      retry = { resident: data.resident || [], needed: data.needed || 1,
+                reason: 'The loaded models changed and the limit is reached.' };
+    } else if (resp.status === 409 && data.code === 'no_room') {
+      // Memory full: the Studio refused before loading. Offer the loaded
+      // models to unload, largest first.
+      retry = { resident: data.resident || [], needed: 1, reason: data.error };
+    } else if (resp.status === 503 && others.some(n => !victims.includes(n))) {
+      // An accelerator failure with other models still loaded most likely
+      // means the new one does not fit beside them: offer to free room.
+      retry = { resident: others.filter(n => !victims.includes(n)), needed: 1,
+                reason: `${name} did not fit in accelerator memory beside the loaded models.` };
+    }
     if (!resp.ok) throw new Error(data.error || 'load failed');
     const ev = Array.isArray(data.evicted) ? data.evicted : (data.evicted ? [data.evicted] : []);
     const evictedNote = ev.length ? ` · unloaded ${ev.join(', ')}` : '';
     const secs = (typeof data.load_seconds === 'number') ? data.load_seconds : null;
     const timeNote = (secs != null && secs > 0) ? ` in ${secs.toFixed(1)}s` : '';
     setModelStatus(`Ready: ${name}${timeNote}${evictedNote}`, 'ready');
+    _activeChatModel = data.name || name;   // the new model answers from now on
     // A newly loaded model starts with a fresh context — clear the chat.
     newChat();
   } catch (err) {
@@ -4798,6 +4987,13 @@ async function loadModelAndActivate(name) {
     if (select) select.value = name;
     updateManageButtons();
     if (typeof updateSelectedModelVisionState === 'function') updateSelectedModelVisionState();
+  }
+  if (retry && retry.resident.length) {
+    const picked = await chooseModelsToUnload(name, retry.resident, retry.needed, retry.reason);
+    if (picked) {
+      clearModelError();
+      await loadModelAndActivate(name, unload.concat(picked));
+    }
   }
 }
 

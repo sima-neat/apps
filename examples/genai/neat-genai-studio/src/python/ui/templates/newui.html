@@ -39,6 +39,7 @@
         <div class="model-name-pill header-pill" id="headerModelPill" title="Active model" style="display: none;">
           <span class="header-pill-dot"></span>
           <span id="headerModelName"></span>
+          <select id="headerModelSwitch" class="model-switch" aria-label="Model that answers" style="display: none;"></select>
         </div>
         <button id="newChatButton" class="header-icon-btn" type="button" title="New chat" aria-label="New chat">
           <img src="{{ url_for('static', filename='icons/refresh.png') }}" alt="New chat" width="16" height="16">
@@ -148,6 +149,10 @@
               <span class="chat-empty-model-dot"></span>
               <span id="homeModelName">No model loaded</span>
             </button>
+            <label class="chat-empty-model loaded" id="homeModelSwitchWrap" title="Loaded models — pick the one that answers" style="display: none;">
+              <span class="chat-empty-model-dot"></span>
+              <select id="homeModelSwitch" class="model-switch" aria-label="Model that answers"></select>
+            </label>
             <div class="suggest-row">
               <button class="suggest-chip" data-q="Explain Einstein's mass–energy equivalence, E = mc², and what it means."
                 onclick="useSuggestion(this)">Explain E = mc²</button>
@@ -609,6 +614,24 @@
     </div>
   </div>
 
+  <!-- Asked when a load needs room: which loaded chat model(s) to unload -->
+  <div id="unloadChoiceModal" class="settings-modal unload-choice-modal" style="display: none;"
+    role="dialog" aria-modal="true" aria-labelledby="unloadChoiceTitle">
+    <div class="settings-modal-card version-modal-card">
+      <div class="settings-modal-head">
+        <span class="settings-modal-title" id="unloadChoiceTitle">Unload a model?</span>
+      </div>
+      <div class="settings-modal-body">
+        <p id="unloadChoiceText" class="unload-choice-text"></p>
+        <div id="unloadChoiceList" class="unload-choice-list"></div>
+        <div class="unload-choice-actions">
+          <button id="unloadChoiceCancel" class="setting-button" type="button">Cancel</button>
+          <button id="unloadChoiceConfirm" class="setting-button model-unload" type="button">Unload and load</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div id="modelCardModal" class="settings-modal" style="display: none;">
     <div class="settings-modal-card">
       <div class="settings-modal-head">
@@ -926,6 +949,7 @@
     });
   </script>
   <script src="{{ url_for('static', filename='newui.js') }}"></script>
+  <script src="{{ url_for('static', filename='parallel.js') }}"></script>
   <script src="{{ url_for('static', filename='socket.io.min.js') }}"></script>
 </body>
 

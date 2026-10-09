@@ -43,6 +43,10 @@ from asr_switching_suite import (  # noqa: E402
     MlaFailureClassificationTests,
 )
 from hub_security_suite import HubPathSecurityTests  # noqa: E402,F401
+from resident_models_suite import (  # noqa: E402,F401
+    ResidentChatModelTests,
+    ResidentLimitControlApiTests,
+)
 from cli_think_suite import (  # noqa: E402,F401
     NoThinkRewriteTests as CliNoThinkRewriteTests,
     StreamTokenCountTests as CliStreamTokenCountTests,
@@ -54,6 +58,12 @@ from readme_package_suite import (  # noqa: E402,F401
     ReadmePackagePathsTests,
 )
 from studio_client_suite import NoThinkTransformTests  # noqa: E402,F401
+from edge_cases_suite import (  # noqa: E402,F401
+    BusyAcceleratorTests,
+    ContextWindowTests,
+    MemoryFullTests,
+    StorageFullTests,
+)
 from worker_ipc_suite import (  # noqa: E402,F401
     ReadExactTests,
     ReadFrameTests,

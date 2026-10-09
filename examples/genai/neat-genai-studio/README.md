@@ -84,6 +84,7 @@ Edit `config.local.yaml` only to change:
 
 - `server.models.catalog_dir`: the directory scanned for models (default `/media/nvme/llima/models`).
 - `server.models.chat`: chat or vision-language models to load at startup (none by default).
+- `server.models.max_resident_chat_models`: how many chat or vision-language models stay loaded at once (default `1`; see [Keep several models loaded](#keep-several-models-loaded)).
 - `server.models.asr`: the speech-to-text model active at startup. Models from Hugging Face accounts other than `simaai` are named `<org>@<name>`, for example `florianvoss@whisper-small-a16w8-layered-encoder`.
 - `server.hub.allow_download`: whether the interface may download models from Hugging Face.
 - `app.rag.enabled`: retrieval-augmented search.
@@ -134,6 +135,24 @@ The output lists the speech-to-text model and any chat model you loaded.
 - **A model fails to load with an accelerator error:** restart the Studio (`${APP_DIR}/run.sh stop`, then `${APP_DIR}/run.sh`) to free the accelerator, then load the model again.
 - **Start over:** `${APP_DIR}/run.sh --clean`, then `${APP_DIR}/setup.sh`. Downloaded models are kept.
 
+### Limits and what the Studio does at them
+The board has fixed limits. The Studio checks them before it asks the board to
+do something it can't, and says what happened instead of failing silently.
+
+| Situation | What the Studio does |
+| --- | --- |
+| **Accelerator memory full**: loading a model that won't fit beside the loaded ones | Refused before anything is loaded or unloaded: the browser says how much the model needs and how much is free, and offers the loaded models to unload, largest first. The control API answers `409` with `"code": "no_room"`. Sizes are each model's accelerator files (`acceleratorBytes` in the catalog) against 16 GiB; set `STUDIO_MLA_BYTES` for another board. |
+| **More models than the limit** (`max_resident_chat_models`) | Refused, and the browser asks which loaded model to unload (`409`, `"code": "resident_limit"`). |
+| **A load fails anyway** (memory not handed back by earlier unloads) | Only the new model is rolled back; the others stay loaded. Restart the Studio to free the accelerator. |
+| **Storage full**: a download bigger than the free space | Refused before it starts, keeping 1 GB free for the board. A disk that fills during a download is reported as such; download again after deleting a model and the finished files are reused. A half-downloaded model is marked incomplete and can't be loaded. |
+| **Context full**: a conversation longer than the model reads at once | Each model's window is read from its compiled files (`contextTokens` in the catalog: 2048 for LFM2.5-230M and Gemma 3, 8192 for the LFM2.5 VL models). The oldest turns are left out so the model still answers; the chat says so once, and a Parallel panel says so under the answer (`X-Context-Dropped` on the API). Token counts are estimates that run high. |
+| **One message longer than the window** | Refused with the reason instead of an empty reply, and taken out of the conversation so later messages still work (`413`, `"code": "context_full"` on the API). |
+| **An empty reply anyway** | The chat or the panel says the conversation is probably too long, and suggests a new chat. |
+| **Accelerator busy** (Platform 3.0: `rc=-11`, kernel log `no free bank`, when several models run at once) | Retried once automatically when no text had come back yet; otherwise the error is shown under that answer only. |
+| **A picture for a model that doesn't see images** | In Parallel with **Same prompt**, those models sit the message out with a note; their panels never get the picture. |
+| **No voice for the reply's language** | Read aloud says it can't read that answer instead of staying silent. |
+| **A model unloaded while its panel is open** | Its panel goes away; sending from a stale panel says the model is no longer loaded. |
+
 ## Optional Features
 
 ### Setup options
@@ -159,8 +178,9 @@ Other useful environment variables:
   catalog, e.g. `florianvoss/whisper-medium-a16w8-layered-encoder`, so you can
   switch between them
   at runtime from **Settings → Models**.
-- `MAX_RESIDENT_CHAT_MODELS`: kept for advanced use; by default only one
-  chat/VLM model is resident and loading a new one clears the others.
+- `MAX_RESIDENT_CHAT_MODELS`: how many chat/VLM models stay loaded at once
+  (default `1`: loading a new model replaces the loaded one). See
+  [Keep several models loaded](#keep-several-models-loaded).
 - `ALLOW_HUB_DOWNLOAD`: `true`/`false` to enable/disable in-UI Hugging Face
   downloads (default `true`).
 - `HUB_ORGS`: space-separated Hugging Face accounts the in-UI browser searches
@@ -279,15 +299,73 @@ An explicit `/image` still takes precedence for that one message.
 ### Switch models on the fly
 The **Settings → Models** tab shows models downloaded to the board in a searchable list. Loaded models are marked
 `● loaded`, on-disk ones `○ downloaded`; press **Load** on a not-yet-loaded model
-to load it at runtime and unload all other chat/VLM models (speech-to-text has
-its own slot and is untouched), so the MLA holds just the active model. A **Load status** panel pins to the
-top of the tab and shows the live progress bar while it loads. The studio cancels
-the outgoing model's in-flight generation and waits for its memory to be released
-before loading the new one, then warms it so your first message is instant.
+to load it at runtime. By default the Studio keeps one chat/VLM model loaded, so
+loading another unloads it (speech-to-text has its own slot and is untouched). A
+**Load status** panel pins to the top of the tab and shows the live progress bar
+while it loads. The studio cancels the outgoing model's in-flight generation and
+waits for its memory to be released before loading the new one, then warms it so
+your first message is instant.
 
 If a switch hits an accelerator error, the Studio rolls back the failed model
 registration and reports the error. It does not restart or reset board services;
 restart the Studio to free the accelerator, then load the model again.
+
+### Keep several models loaded
+To run several chat/VLM models side by side, for example to compare them, raise
+`server.models.max_resident_chat_models` in `config.local.yaml` (or set
+`MAX_RESIDENT_CHAT_MODELS` before running `setup.sh`), then restart the Studio.
+Loading a model then keeps the others loaded. Once the limit is reached, the
+Studio never unloads a model on its own, because another client may be using
+it: loading one more asks which loaded model to unload (the CLI asks the same
+in `/load`). How many fit also depends on the models' sizes. When a model does
+not fit in accelerator memory beside the loaded ones, the load fails, the loaded
+models stay as they were, and the browser offers to unload one and try again.
+
+Other clients can make the same choice through the control API: past the
+limit, `POST /control/load` answers `409` with the loaded models, and the
+request succeeds once it names the ones to unload:
+
+```bash
+curl -s http://127.0.0.1:9997/control/load \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"<catalog-model-name>","unload":["<loaded-model-name>"]}' | python3 -m json.tool
+```
+
+With two or more models loaded, the model name on the home screen and in the
+header becomes a picker: choose the model that answers the next message. The
+**Use** button in **Settings → Models** does the same.
+
+The **Parallel** button in the header (three columns) opens a panel for every
+loaded model, each with its own prompt box, **Send** button and conversation.
+The **Models** dropdown lists the loaded models with a checkbox each: ticked
+models get a panel, so you can work with two, three or all of them.
+**Prompt** chooses **Different prompts** (a box and **Send** in every panel) or
+**Same prompt** (one box under the panels sends the same message to all of
+them at once, while each panel keeps its own conversation). With **Same
+prompt**, a picture goes only to the models that see images; a text-only
+model's panel notes that it sat that message out.
+
+**Read aloud** at the top of a panel reads that panel's answers aloud,
+sentence by sentence as they are written, with the board's voices. One panel
+at a time can have it on: turning it on in another panel turns it off in the
+first. Every finished answer also has its own **Read aloud** button; only one
+reading plays at a time.
+Send any panel at any time: the models answer at the same time, each panel shows
+its tokens, tokens per second and time to first token, and models that see
+images also take a picture or a camera frame. The panels keep their own
+conversations and don't change the main chat; **Back to chat** returns to it.
+**New chat** in a panel starts that panel over.
+
+Every loaded model is
+also served on the OpenAI-compatible API by its name, so other clients can use
+any of them at the same time:
+
+```bash
+curl -s http://127.0.0.1:9998/v1/models | python3 -m json.tool
+curl -s http://127.0.0.1:9998/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"<loaded-model-name>","messages":[{"role":"user","content":"Hello"}]}'
+```
 
 ### Switch the speech-to-text model
 The same tab lists your speech-to-text (ASR) models in their own

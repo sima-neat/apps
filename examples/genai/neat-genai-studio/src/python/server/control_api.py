@@ -14,7 +14,7 @@ import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from server.model_manager import ModelManager
+from server.model_manager import ModelDoesNotFit, ModelManager, ResidentLimitReached
 
 
 class _ControlServer(ThreadingHTTPServer):
@@ -61,6 +61,15 @@ class _ControlHandler(BaseHTTPRequestHandler):
         except Exception:
             return {}
 
+    def _catalog_payload(self) -> dict:
+        # The resident order (most recently used first) and the limit let the
+        # UI pick the active chat model and predict which load evicts what.
+        return {
+            "catalog": self.manager.scan_catalog(),
+            "resident": self.manager.resident(),
+            "maxResident": self.manager.max_resident,
+        }
+
     def do_GET(self) -> None:  # noqa: N802
         parsed = urllib.parse.urlsplit(self.path)
         path = parsed.path.rstrip("/")
@@ -72,7 +81,7 @@ class _ControlHandler(BaseHTTPRequestHandler):
                 after = int((query.get("after", ["0"])[0]) or 0)
                 self._send_json(self.manager.load_logs(after))
             elif path == "/control/catalog":
-                self._send_json({"catalog": self.manager.scan_catalog()})
+                self._send_json(self._catalog_payload())
             elif path == "/control/card":
                 name = (query.get("name", [""])[0])
                 self._send_json(self.manager.model_card(name))
@@ -90,7 +99,10 @@ class _ControlHandler(BaseHTTPRequestHandler):
         try:
             body = self._read_json()
             if path == "/control/load":
-                self._send_json(self.manager.load(str(body.get("name", ""))))
+                unload = body.get("unload") or []
+                if isinstance(unload, str):
+                    unload = [unload]
+                self._send_json(self.manager.load(str(body.get("name", "")), unload))
             elif path == "/control/asr":
                 self._send_json(self.manager.set_active_asr(str(body.get("name", ""))))
             elif path == "/control/unload":
@@ -98,7 +110,7 @@ class _ControlHandler(BaseHTTPRequestHandler):
             elif path == "/control/delete":
                 self._send_json(self.manager.delete(str(body.get("name", ""))))
             elif path == "/control/rescan":
-                self._send_json({"catalog": self.manager.scan_catalog()})
+                self._send_json(self._catalog_payload())
             elif path == "/control/benchmark":
                 self._send_json(self.manager.benchmark_start(
                     num_samples=body.get("num_samples", 5),
@@ -110,6 +122,17 @@ class _ControlHandler(BaseHTTPRequestHandler):
                 self._send_json(self.manager.benchmark_stop())
             else:
                 self._send_json({"error": "not found"}, 404)
+        except ModelDoesNotFit as exc:
+            # Memory full: the client offers to unload the largest models first.
+            self._send_json({"error": str(exc), "code": "no_room",
+                             "resident": exc.resident, "needBytes": exc.need,
+                             "freeBytes": exc.free}, 409)
+        except ResidentLimitReached as exc:
+            # Not a bad request: the client asks the user which loaded model
+            # to unload and retries with {"unload": [...]}.
+            self._send_json({"error": str(exc), "code": "resident_limit",
+                             "resident": exc.resident, "maxResident": exc.max_resident,
+                             "needed": exc.needed}, 409)
         except ValueError as exc:
             self._send_json({"error": str(exc)}, 400)
         except Exception as exc:  # noqa: BLE001

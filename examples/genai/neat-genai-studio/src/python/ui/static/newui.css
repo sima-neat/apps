@@ -288,6 +288,27 @@ body.spectrum-accents .bench-stats-metric { color: var(--accent-strong); }
 .chat-empty-model .chat-empty-model-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-3); flex: none; }
 .chat-empty-model.loaded .chat-empty-model-dot { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 25%, transparent); }
 .chat-empty-model.empty { color: var(--text-3); }
+/* With several chat models loaded, the header pill and the home indicator turn
+   into a picker for the model that answers. */
+.model-switch {
+  font: inherit; color: inherit; background: transparent; border: 0; padding: 0;
+  min-width: 0; max-width: 100%; cursor: pointer; text-overflow: ellipsis;
+}
+.model-switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.model-switch option { color: var(--text); background: var(--surface); }
+/* Which loaded model to unload: opened from Settings and the benchmark, so it
+   sits above both. */
+.unload-choice-modal { z-index: 3500; }
+.unload-choice-text { margin: 0 0 12px; color: var(--text-2); font-size: 14px; line-height: 1.45; }
+.unload-choice-list { display: flex; flex-direction: column; gap: 6px; }
+.unload-choice-row {
+  display: flex; align-items: center; gap: 10px; padding: 9px 12px; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2);
+  font-size: 13.5px; overflow-wrap: anywhere;
+}
+.unload-choice-row:has(input:checked) { border-color: color-mix(in srgb, var(--accent) 60%, var(--border)); }
+.unload-choice-hint { margin-left: auto; flex: none; font-size: 11px; color: var(--text-3); }
+.unload-choice-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 .suggest-row { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 6px; }
 .suggest-chip {
   background: var(--surface); border: 1px solid var(--border); color: var(--text-2);
@@ -1528,3 +1549,142 @@ body.resizing video { pointer-events: none; }
 .drop-overlay.is-blocked .drop-overlay-icon { color: var(--err); }
 .drop-overlay-title { font-size: 17px; font-weight: 700; color: var(--text); }
 .drop-overlay-sub { font-size: 13px; color: var(--text-3); max-width: 360px; }
+
+/* ---- Parallel panels: a chat panel per loaded model, each with its own Send ---- */
+.header-icon-btn.is-on {
+  color: var(--accent-strong);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface-2));
+}
+.parallel-view {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  top: 64px;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 16px 16px;
+  background: var(--bg);
+}
+.parallel-view[hidden] { display: none; }
+.parallel-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; }
+.parallel-title { font-size: 15px; font-weight: 600; color: var(--text); }
+.parallel-sub { font-size: 12px; color: var(--text-3); }
+.parallel-head-actions { display: flex; gap: 8px; }
+.parallel-grid {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(var(--panels, 2), minmax(0, 1fr));
+  gap: 12px;
+}
+.parallel-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  min-height: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+.parallel-panel-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.parallel-panel-name { font-weight: 600; font-size: 14px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.parallel-badge {
+  flex: none; font-size: 10px; font-weight: 600; letter-spacing: .02em; padding: 1px 7px; border-radius: 999px;
+  border: 1px solid var(--border); color: var(--text-2); background: var(--surface-2);
+}
+.parallel-badge.is-vlm {
+  color: var(--accent-strong);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+}
+.parallel-link {
+  margin-left: auto; flex: none; border: 0; background: none; padding: 2px 4px; cursor: pointer;
+  font: inherit; font-size: 12px; color: var(--accent-strong);
+}
+.parallel-link:disabled { color: var(--text-3); cursor: default; }
+.parallel-thread { flex: 1; min-height: 80px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+.parallel-empty { font-size: 13px; color: var(--text-3); padding: 6px 2px; }
+.parallel-msg { max-width: 100%; font-size: 14px; line-height: 1.5; }
+.parallel-msg.is-user {
+  align-self: flex-end; max-width: 88%; padding: 8px 12px; border-radius: 14px;
+  background: var(--user-bubble); color: var(--user-bubble-text);
+}
+.parallel-msg.is-user img { display: block; max-width: 160px; max-height: 120px; border-radius: 8px; margin-bottom: 6px; }
+.parallel-msg.is-assistant { color: var(--text); }
+.parallel-body { min-width: 0; }
+.parallel-body pre, .parallel-body table { max-width: 100%; overflow-x: auto; display: block; }
+.parallel-foot { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 4px; font-size: 11.5px; color: var(--text-3); }
+.parallel-state.is-busy { color: var(--accent-strong); }
+.parallel-state.is-error { color: var(--err); }
+.parallel-state.is-muted { color: var(--text-3); }
+.parallel-note.is-error { font-size: 12.5px; color: var(--err); }
+.parallel-attach { display: flex; align-items: center; gap: 8px; }
+.parallel-attach:empty { display: none; }
+.parallel-attach img { max-height: 64px; border-radius: 8px; border: 1px solid var(--border); }
+.parallel-camera { display: grid; gap: 6px; }
+.parallel-camera video { width: 100%; border-radius: var(--radius-sm); background: #0b0f14; }
+.parallel-composer { display: grid; gap: 6px; }
+.parallel-composer textarea {
+  width: 100%; resize: vertical; min-height: 52px; padding: 8px 10px; box-sizing: border-box;
+  border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); color: var(--text);
+  font: inherit; font-size: 14px;
+}
+.parallel-composer textarea:focus { outline: none; border-color: var(--accent); }
+.parallel-composer-row { display: flex; align-items: center; gap: 6px; }
+.parallel-spacer { flex: 1; }
+.parallel-btn {
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
+  border-radius: 10px; padding: 6px 12px; font: inherit; font-size: 13px; cursor: pointer;
+}
+.parallel-btn:hover { border-color: var(--border-strong); }
+.parallel-send { background: var(--accent); border-color: var(--accent); color: var(--accent-contrast); font-weight: 600; min-width: 72px; }
+.parallel-send.is-stop { background: var(--surface-2); border-color: var(--err); color: var(--err); }
+@media (max-width: 900px) {
+  .parallel-grid { grid-template-columns: 1fr; overflow-y: auto; }
+  .parallel-panel { min-height: 360px; }
+}
+.parallel-models-pick { position: relative; }
+.parallel-models-btn { min-width: 110px; }
+.parallel-models-menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 50; min-width: 300px;
+  display: grid; gap: 2px; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface); box-shadow: var(--shadow-md);
+}
+.parallel-models-menu[hidden] { display: none; }
+.parallel-models-option {
+  display: flex; align-items: center; gap: 8px; padding: 6px 6px; border-radius: 8px;
+  font-size: 13px; color: var(--text); cursor: pointer;
+}
+.parallel-models-option:hover { background: var(--surface-2); }
+.parallel-models-option span:first-of-type { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.parallel-models-option.is-locked { cursor: default; }
+.parallel-models-hint { padding: 4px 6px 0; font-size: 11.5px; color: var(--text-3); }
+.parallel-mode-pick { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-2); }
+.parallel-mode-select {
+  padding: 5px 8px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2);
+  color: var(--text); font: inherit; font-size: 13px;
+}
+/* Same prompt: the panels' own boxes give way to one shared box under them. */
+.parallel-view.is-same .parallel-panel .parallel-composer,
+.parallel-view.is-same .parallel-panel .parallel-attach { display: none; }
+.parallel-shared {
+  display: grid; gap: 6px; padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow-sm);
+}
+.parallel-shared[hidden] { display: none; }
+.parallel-shared [hidden] { display: none; }
+.parallel-shared-note { font-size: 12px; color: var(--accent-strong); }
+.parallel-note { font-size: 12.5px; color: var(--text-3); font-style: italic; }
+.parallel-panel-head .parallel-new { margin-left: 0; }
+.parallel-speak-toggle.is-on {
+  color: var(--accent-contrast); background: var(--accent); border-radius: 999px; padding: 2px 10px;
+}
+.parallel-foot .parallel-speak { margin-left: 0; padding: 0 2px; font-size: 11.5px; }
+.parallel-speak-error { color: var(--err); font-size: 11.5px; }
