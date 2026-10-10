@@ -3,7 +3,7 @@
 Supertonic 3 on Modalix runs the eight-step vector field and the vocoder on the
 MLA through PyNeat and the text front end on the CPU through ONNX Runtime. Its
 runtime (the vendored ``supertonic_sima`` package next to this file) needs
-``pyneat``, ``onnxruntime`` and ``numpy==1.26.4``, which the Studio UI venv does
+``pyneat``, ``onnxruntime`` and ``numpy``, which the Studio UI venv does
 not carry, so this class talks to a persistent worker process
 (``supertonic_worker.py``) running in ``.venv-supertonic`` over the same
 length-prefixed stdin/stdout protocol the piper-tts worker uses. One shared

@@ -47,7 +47,7 @@ TTS_LANGUAGES="${TTS_LANGUAGES:-}"
 TTS_OPTIONAL_VOICES="${TTS_OPTIONAL_VOICES:-}"
 # Supertonic 3 (MLA-accelerated multilingual TTS). The runtime is vendored under
 # src/python/ui/tts/supertonic_sima/ and runs in its own venv (pyneat + onnxruntime +
-# numpy 1.26, which the UI venv cannot host); the model files come from Hugging
+# the numpy that PyNeat is built against); the model files come from Hugging
 # Face at pinned revisions and are checksum-verified. INSTALL_SUPERTONIC=0 skips it.
 INSTALL_SUPERTONIC="${INSTALL_SUPERTONIC:-1}"
 # Paths: environment > what an earlier setup persisted in CONFIG_PATH
@@ -285,7 +285,7 @@ resolve_supertonic_paths
 
 # Supertonic 3: hybrid TTS whose vector field and vocoder run on the MLA through
 # PyNeat. The runtime package is vendored in src/python/ui/tts/supertonic_sima/; its
-# dependencies (pyneat, onnxruntime, numpy 1.26) cannot share the UI venv, so an
+# dependencies (pyneat, onnxruntime, PyNeat's numpy) cannot share the UI venv, so an
 # isolated venv is built here and the model files are downloaded from Hugging
 # Face at pinned revisions and verified by checksum. The UI talks to it through
 # supertonic_worker.py. Optional: a failure here only leaves the CPU engines in
@@ -375,6 +375,46 @@ _local_pyneat_wheel() {
   return 1
 }
 
+# Platform 3.0 installs PyNeat into the Neat environment (PYNEAT_PYTHON,
+# ~/pyneat) and sima-cli no longer provides a wheel. When that environment runs
+# the same Python version as the Supertonic venv, link the installed pyneat
+# distribution (its top-level entries from RECORD plus its .dist-info) into the
+# venv: the worker then runs exactly the installed runtime while the venv keeps
+# its own numpy and onnxruntime pins.
+_link_installed_pyneat() {
+  local target venv_version listing path
+  target="$("${SUPERTONIC_VENV}/bin/python" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])' 2>/dev/null)" \
+    || return 1
+  venv_version="$("${SUPERTONIC_VENV}/bin/python" -c 'import sys; print("%d.%d" % sys.version_info[:2])')" || return 1
+  listing="$("${PYNEAT_PYTHON}" - "${venv_version}" <<'PY' 2>/dev/null
+import sys
+from importlib.metadata import distribution
+from pathlib import Path
+if "%d.%d" % sys.version_info[:2] != sys.argv[1]:
+    raise SystemExit(1)
+dist = distribution("pyneat")
+root = Path(dist.locate_file(""))
+top = {f.parts[0] for f in dist.files or () if f.parts and f.parts[0] not in ("..", "bin")}
+for name in sorted(top):
+    if (root / name).exists():
+        print(root / name)
+PY
+)" || return 1
+  [[ -n "${listing}" ]] || return 1
+  local -a links=()
+  local link
+  while IFS= read -r path; do
+    link="${target}/$(basename "${path}")"
+    links+=("${link}")
+    ln -sfn "${path}" "${link}" || break
+  done <<<"${listing}"
+  _supertonic_runtime_ok && return 0
+  # Remove the links again so a later wheel install cannot write through them
+  # into the Neat environment.
+  rm -f "${links[@]}"
+  return 1
+}
+
 _supertonic_venv() {
   # The PyNeat wheel comes from sima-cli, which the DevKit exposes on PATH only
   # for login shells.
@@ -387,10 +427,6 @@ _supertonic_venv() {
     wheel_override="$(_local_pyneat_wheel "${want_version}" || true)"
     [[ -n "${wheel_override}" ]] && info "Using the PyNeat wheel matching the installed runtime (${want_version})."
   fi
-  if [[ -z "${wheel_override}" ]] && ! command -v sima-cli >/dev/null 2>&1; then
-    warn "sima-cli is required to fetch the PyNeat wheel for Supertonic; Supertonic TTS skipped."
-    return 1
-  fi
   step "Creating isolated Supertonic venv: ${C_DIM}${SUPERTONIC_VENV}${C_RESET}"
   python3 -m venv --clear "${SUPERTONIC_VENV}" \
     || _supertonic_venv_failed "Could not create ${SUPERTONIC_VENV}; Supertonic TTS skipped." || return 1
@@ -400,6 +436,10 @@ _supertonic_venv() {
   "${SUPERTONIC_VENV}/bin/python" -m pip install -r "${EXAMPLE_DIR}/src/python/requirements-supertonic.txt" \
     || _supertonic_venv_failed "Supertonic requirements failed to install; Supertonic TTS skipped." || return 1
   local wheel_dir status=0
+  if [[ -z "${PYNEAT_WHEEL}" ]] && _link_installed_pyneat; then
+    ok "Supertonic venv ready (PyNeat ${want_version:-unknown} linked from ${PYNEAT_PYTHON})."
+    return 0
+  fi
   if [[ -n "${wheel_override}" ]]; then
     # --no-deps: the wheel must not move the pinned numpy/onnxruntime.
     "${SUPERTONIC_VENV}/bin/python" -m pip install --no-deps "${wheel_override}" \

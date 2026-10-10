@@ -3,7 +3,7 @@
 
 Supertonic runs its vector field and vocoder on the MLA through PyNeat and its
 duration predictor / text encoder on the CPU through ONNX Runtime. Those
-packages (``pyneat``, ``onnxruntime``, ``numpy==1.26.4``) are not part of the
+packages (``pyneat``, ``onnxruntime``, ``numpy``) are not part of the
 Studio UI environment, so the engine (the vendored ``supertonic_sima`` package
 next to this file) lives in the venv that ``setup.sh`` builds and the UI talks
 to it through this subprocess. A crashed worker is simply respawned by the
