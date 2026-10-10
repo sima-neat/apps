@@ -44,6 +44,16 @@ std::string unquote(std::string value) {
   return value;
 }
 
+int leading_indent(const std::string& line) {
+  int indent = 0;
+  while (indent < static_cast<int>(line.size()) &&
+         (line[static_cast<std::size_t>(indent)] == ' ' ||
+          line[static_cast<std::size_t>(indent)] == '\t')) {
+    ++indent;
+  }
+  return indent;
+}
+
 std::string join_stack(const std::vector<std::pair<int, std::string>>& stack) {
   std::ostringstream out;
   bool first = true;
@@ -98,23 +108,21 @@ ScalarConfig ScalarConfig::load(const std::filesystem::path& path) {
     throw std::runtime_error("failed to open config file: " + path.string());
   }
 
+  std::vector<std::string> raw_lines;
+  for (std::string raw_line; std::getline(input, raw_line);) {
+    raw_lines.push_back(raw_line);
+  }
+
   ScalarConfig config;
   std::vector<std::pair<int, std::string>> stack;
   int list_block_indent = -1;
-  std::string raw_line;
-  while (std::getline(input, raw_line)) {
-    const std::string without_comment = strip_inline_comment(raw_line);
+  for (std::size_t index = 0; index < raw_lines.size(); ++index) {
+    const std::string without_comment = strip_inline_comment(raw_lines[index]);
     if (trim_copy(without_comment).empty()) {
       continue;
     }
 
-    int indent = 0;
-    while (indent < static_cast<int>(without_comment.size()) &&
-           (without_comment[static_cast<std::size_t>(indent)] == ' ' ||
-            without_comment[static_cast<std::size_t>(indent)] == '\t')) {
-      ++indent;
-    }
-
+    const int indent = leading_indent(without_comment);
     const std::string line = trim_copy(without_comment);
     if (list_block_indent >= 0) {
       if (indent > list_block_indent) {
@@ -141,6 +149,81 @@ ScalarConfig ScalarConfig::load(const std::filesystem::path& path) {
     if (value.empty() || value == "{}") {
       stack.emplace_back(indent, key);
       continue;
+    }
+
+    bool block_header = !value.empty() && (value.front() == '>' || value.front() == '|');
+    char chomp = '\0';
+    int explicit_indent = 0;
+    for (std::size_t i = 1; block_header && i < value.size(); ++i) {
+      const char c = value[i];
+      if ((c == '-' || c == '+') && chomp == '\0') {
+        chomp = c;
+      } else if (c >= '1' && c <= '9' && explicit_indent == 0) {
+        explicit_indent = c - '0';
+      } else {
+        block_header = false;
+      }
+    }
+    if (block_header) {
+      const bool folded = value.front() == '>';
+      std::vector<std::string> block;
+      int content_indent = explicit_indent ? indent + explicit_indent : -1;
+      while (index + 1 < raw_lines.size()) {
+        const std::string& next = raw_lines[index + 1];
+        const bool blank = trim_copy(next).empty();
+        const int next_indent = leading_indent(next);
+        if (!blank && next_indent <= indent) break;
+        if (!blank && content_indent < 0) content_indent = next_indent;
+        if (!blank && next_indent < content_indent) {
+          throw std::runtime_error("invalid block indentation for " + key);
+        }
+        block.push_back(next);
+        ++index;
+      }
+      value.clear();
+      for (std::size_t i = 0; i < block.size(); ++i) {
+        const std::string& line = block[i];
+        const bool blank = trim_copy(line).empty();
+        const std::string content = blank ? "" : line.substr(
+            std::min<std::size_t>(line.size(), static_cast<std::size_t>(content_indent)));
+        if (i > 0) {
+          if (!folded) {
+            value += '\n';
+          } else if (!blank) {
+            const bool previous_blank = trim_copy(block[i - 1]).empty();
+            const bool more_indented = leading_indent(line) > content_indent ||
+                                       (!previous_blank && leading_indent(block[i - 1]) > content_indent);
+            value += previous_blank || more_indented ? '\n' : ' ';
+          } else if (trim_copy(block[i - 1]).empty()) {
+            value += '\n';
+          }
+        }
+        value += content;
+      }
+      if (!block.empty()) value += '\n';
+      if (chomp != '+') {
+        while (!value.empty() && value.back() == '\n') value.pop_back();
+        if (chomp != '-' && !block.empty()) value += '\n';
+      }
+      std::string full_key = join_stack(stack);
+      if (!full_key.empty()) full_key += '.';
+      config.scalars_[full_key + key] = value;
+      continue;
+    }
+
+    // YAML folds a plain scalar across more-indented continuation lines, and
+    // emitters such as PyYAML wrap long values that way. Only a non-empty value
+    // can fold: an empty one opens a nested mapping, which the branch above has
+    // already taken. Without this, a wrapped value parsed in Python but failed
+    // in C++ with "invalid config line".
+    while (index + 1 < raw_lines.size()) {
+      const std::string next = strip_inline_comment(raw_lines[index + 1]);
+      if (trim_copy(next).empty() || leading_indent(next) <= indent) {
+        break;
+      }
+      value += ' ';
+      value += trim_copy(next);
+      ++index;
     }
 
     std::string full_key = join_stack(stack);
