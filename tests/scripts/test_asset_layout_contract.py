@@ -87,7 +87,8 @@ def test_direct_pytest_defaults_to_test_assets(monkeypatch):
 
 def test_direct_classification_pytest_uses_test_fixture():
     e2e_path = (
-        APPS_ROOT / "examples/classification/image-classifier/tests/python/test_e2e.py"
+        APPS_ROOT
+        / "examples/classification/image-classification-explorer/tests/python/test_e2e.py"
     )
     source = e2e_path.read_text(encoding="utf-8")
 
