@@ -136,6 +136,15 @@ The output lists the speech-to-text model and any chat model you loaded.
 
 ## Optional Features
 
+Everything below is optional — the workflow above is all most users need. The
+features are grouped here so you can jump to what you want:
+
+- **Models:** [Switch models on the fly](#switch-models-on-the-fly) · [Switch the speech-to-text model](#switch-the-speech-to-text-model) · [Download models from Hugging Face](#download-models-from-hugging-face)
+- **Audio:** [Audio API (OpenAI-compatible)](#audio-api-openai-compatible) · [Text-to-speech (voices & languages)](#text-to-speech-voices--languages)
+- **Front ends & access:** [Terminal chat (CLI)](#terminal-chat-cli) · [Backend-only mode](#backend-only-mode-for-insight-and-other-front-ends) · [Manual Process Start](#manual-process-start) · [API checks](#api-checks)
+- **More features:** [RAG](#rag) · [Benchmark (TTFT / TPS)](#benchmark-ttft--tps) · [SiMaSentry Solutions](#simasentry-solutions-med--safe--sec-demo-harnesses) · [Markdown & fonts](#markdown--fonts)
+- **Setup & operations:** [Setup options](#setup-options) · [Update](#update) · [Clean up](#clean-up)
+
 ### Setup options
 Seed the catalog with one or more chat/VLM models at install time instead of
 downloading them from the UI (space-separated Hugging Face repos):
@@ -499,7 +508,7 @@ selector in Settings.
   engine and answers 503 when it cannot speak the requested `language`; any
   other value (`default`, `tts-1`, …) goes through the router below.
 - **Supertonic 3** is the MLA-accelerated engine (runtime vendored under
-  `src/python/ui/supertonic_sima/`, models from Hugging Face). It
+  `src/python/ui/tts/supertonic_sima/`, models from Hugging Face). It
   is preferred for every language it speaks whenever its runtime is installed
   (see below), synthesizes at a real-time factor of about 0.07 on a Modalix
   DevKit, and offers ten speakers (F1-F5, M1-M5) under **Settings → Supertonic
@@ -568,7 +577,7 @@ selector in Settings.
   both at commit revisions pinned in `setup.sh` and verified by SHA-256. No
   on-device compilation is needed, and nothing is cloned from an external
   repository: the runtime package itself is vendored in
-  `src/python/ui/supertonic_sima/` (see its README for provenance and how to
+  `src/python/ui/tts/supertonic_sima/` (see its README for provenance and how to
   refresh it). Every `setup.sh` run (including `--dependencies-only`) checks all
   19 model files against the SHA-256 of the pinned revisions and re-fetches any
   that are missing or different, so an interrupted, corrupted or outdated
@@ -589,7 +598,7 @@ selector in Settings.
   checkout can simply be deleted. The worker holds the two Supertonic models on
   the MLA next to the chat and speech-to-text models.
 
-The authoritative reviewed catalog is `src/python/ui/voice_catalog.json`. Each
+The authoritative reviewed catalog is `src/python/ui/tts/voice_catalog.json`. Each
 entry has a compact licence label, pinned upstream repository revision, and
 SHA-256 checksums. Models under `CC-BY-NC-SA-4.0` are excluded. Runtime
 discovery ignores models outside the catalog. See

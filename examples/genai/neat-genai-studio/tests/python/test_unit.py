@@ -31,6 +31,10 @@ UI_PYTHON = SRC_PYTHON / "ui"
 if str(UI_PYTHON) not in sys.path:
     sys.path.insert(0, str(UI_PYTHON))   # the ui suites import their modules bare
 
+TTS_PYTHON = UI_PYTHON / "tts"
+if str(TTS_PYTHON) not in sys.path:
+    sys.path.insert(0, str(TTS_PYTHON))  # TTS engines/workers/catalog live in ui/tts
+
 TESTS_DIR = Path(__file__).resolve().parent
 if str(TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(TESTS_DIR))
