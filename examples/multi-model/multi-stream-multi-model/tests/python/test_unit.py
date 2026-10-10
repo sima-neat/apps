@@ -1,0 +1,715 @@
+"""Unit tests for multi-stream-multi-model (Python)."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+import subprocess
+import sys
+import textwrap
+from types import SimpleNamespace
+
+import numpy as np
+import pytest
+
+
+EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
+PYTHON_DIR = EXAMPLE_DIR / "src" / "python"
+MAIN_PY = PYTHON_DIR / "main.py"
+COMMON_CONFIG = EXAMPLE_DIR / "src" / "common" / "config.yaml"
+
+if str(PYTHON_DIR) not in sys.path:
+    sys.path.insert(0, str(PYTHON_DIR))
+
+pytestmark = pytest.mark.unit
+
+DEFAULT_STREAMS = [
+    ("rtsp://127.0.0.1:8554/src1", "detection", "yolov8", "models/yolo_11s_mpk.tar.gz"),
+    ("rtsp://127.0.0.1:8554/src2", "segmentation", "yolov8", "models/yolo_11s_seg_mpk.tar.gz"),
+    ("rtsp://127.0.0.1:8554/src3", "pose", "yolo26", "models/yolo26m-pose-int8-b1.tar.gz"),
+    ("rtsp://127.0.0.1:8554/src4", "detection", "yolo26", "models/yolo26m-det-int8-b1.tar.gz"),
+]
+
+
+def write_config(
+    tmp_path: Path,
+    streams: list[tuple[str, str, str, str]],
+    codec: str | None = None,
+    max_inflight_per_stream: int | None = None,
+    extra_output: list[str] | None = None,
+) -> Path:
+    stream_lines: list[str] = []
+    for url, task, decode, model in streams:
+        stream_lines.append(f"  - url: {url}")
+        stream_lines.append(f"    task: {task}")
+        if decode:
+            stream_lines.append(f"    decode: {decode}")
+        stream_lines.append(f"    model: {model}")
+
+    input_config = ["input:", f"  codec: {codec}"] if codec else []
+    inference: list[str] = []
+    if max_inflight_per_stream is not None:
+        inference.append("inference:")
+        inference.append(f"  max_inflight_per_stream: {max_inflight_per_stream}")
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "model:",
+                f"  labels: {EXAMPLE_DIR / 'src' / 'common' / 'coco_label.txt'}",
+                "streams:",
+                *stream_lines,
+                *input_config,
+                *inference,
+                "output:",
+                "  insight:",
+                "    host: 127.0.0.1",
+                *(extra_output or []),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return config_path
+
+
+class TestMainEntrypoint:
+    def test_help_runs(self):
+        result = subprocess.run(
+            [sys.executable, str(MAIN_PY), "--help"],
+            capture_output=True,
+            text=True,
+            cwd=str(EXAMPLE_DIR),
+            timeout=20,
+        )
+
+        assert result.returncode == 0
+        assert "--config" in result.stdout
+        assert "--validate-config-only" in result.stdout
+
+    def test_missing_config_file_fails_cleanly(self):
+        result = subprocess.run(
+            [sys.executable, str(MAIN_PY), "--config", "does-not-exist.yaml"],
+            capture_output=True,
+            text=True,
+            cwd=str(EXAMPLE_DIR),
+            timeout=20,
+        )
+
+        assert result.returncode == 2
+        assert "config file not found" in result.stderr
+
+    def test_validate_config_only_reports_tasks(self, tmp_path: Path):
+        config_path = write_config(tmp_path, DEFAULT_STREAMS)
+
+        result = subprocess.run(
+            [sys.executable, str(MAIN_PY), "--config", str(config_path), "--validate-config-only"],
+            capture_output=True,
+            text=True,
+            cwd=str(EXAMPLE_DIR),
+            timeout=20,
+        )
+
+        assert result.returncode == 0
+        assert "streams=4" in result.stdout
+        assert "tasks=detection,segmentation,pose,detection" in result.stdout
+
+    def test_packaged_config_validates(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(MAIN_PY),
+                "--config",
+                str(COMMON_CONFIG),
+                "--validate-config-only",
+            ],
+            capture_output=True,
+            text=True,
+            cwd=str(EXAMPLE_DIR),
+            timeout=20,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert "tasks=detection,segmentation,pose,detection" in result.stdout
+
+
+class TestConfigLoading:
+    def test_each_stream_carries_its_own_task_decode_and_model(self, tmp_path: Path):
+        from main import load_app_config
+
+        cfg = load_app_config(write_config(tmp_path, DEFAULT_STREAMS))
+
+        assert [stream.task for stream in cfg.streams] == [
+            "detection",
+            "segmentation",
+            "pose",
+            "detection",
+        ]
+        assert [stream.decode for stream in cfg.streams] == [
+            "yolov8",
+            "yolov8",
+            "yolo26",
+            "yolo26",
+        ]
+        assert [stream.index for stream in cfg.streams] == [0, 1, 2, 3]
+        assert cfg.streams[2].model_path == "models/yolo26m-pose-int8-b1.tar.gz"
+        assert cfg.insight_host == "127.0.0.1"
+        assert cfg.warmup_frames == 30
+        assert cfg.max_inflight_per_stream == 4
+
+    def test_decode_defaults_to_yolo26(self, tmp_path: Path):
+        from main import load_app_config
+
+        cfg = load_app_config(
+            write_config(tmp_path, [("rtsp://127.0.0.1:8554/src1", "pose", "", "models/m.tar.gz")])
+        )
+
+        assert cfg.streams[0].decode == "yolo26"
+
+    @pytest.mark.parametrize(("codec", "expected"), [("avc", "h264"), ("hevc", "h265")])
+    def test_codec_alias_is_accepted(self, tmp_path: Path, codec: str, expected: str):
+        from main import load_app_config
+
+        cfg = load_app_config(write_config(tmp_path, DEFAULT_STREAMS[:1], codec=codec))
+
+        assert cfg.codec == expected
+
+    def test_custom_inflight_limits_are_accepted(self, tmp_path: Path):
+        from main import load_app_config
+
+        cfg = load_app_config(
+            write_config(
+                tmp_path,
+                DEFAULT_STREAMS[:1],
+                max_inflight_per_stream=3,
+            )
+        )
+
+        assert cfg.max_inflight_per_stream == 3
+
+    @pytest.mark.parametrize("limit", [0, -1])
+    def test_invalid_inflight_limit_is_rejected(self, tmp_path: Path, limit):
+        from main import load_app_config
+
+        config_path = write_config(tmp_path, DEFAULT_STREAMS[:1], max_inflight_per_stream=limit)
+
+        with pytest.raises(ValueError, match="max_inflight_per_stream must be > 0"):
+            load_app_config(config_path)
+
+    def test_unknown_task_is_rejected(self, tmp_path: Path):
+        from main import load_app_config
+
+        config_path = write_config(
+            tmp_path, [("rtsp://127.0.0.1:8554/src1", "tracking", "yolo26", "models/m.tar.gz")]
+        )
+
+        with pytest.raises(ValueError, match=r"streams\[0\].task must be one of"):
+            load_app_config(config_path)
+
+    def test_unknown_decode_family_is_rejected(self, tmp_path: Path):
+        from main import load_app_config
+
+        config_path = write_config(
+            tmp_path, [("rtsp://127.0.0.1:8554/src1", "detection", "yolov5", "models/m.tar.gz")]
+        )
+
+        with pytest.raises(ValueError, match=r"streams\[0\].decode must be one of"):
+            load_app_config(config_path)
+
+    def test_stream_without_model_is_rejected(self, tmp_path: Path):
+        from main import load_app_config
+
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            textwrap.dedent(
+                """
+                streams:
+                  - url: rtsp://127.0.0.1:8554/src1
+                    task: detection
+                output:
+                  insight:
+                    host: 127.0.0.1
+                """
+            ).strip(),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match=r"streams\[0\].model"):
+            load_app_config(config_path)
+
+    def test_more_than_four_streams_is_rejected(self, tmp_path: Path):
+        from main import load_app_config
+
+        streams = DEFAULT_STREAMS + [
+            ("rtsp://127.0.0.1:8554/src5", "detection", "yolo26", "models/m.tar.gz")
+        ]
+
+        with pytest.raises(ValueError, match="up to four streams"):
+            load_app_config(write_config(tmp_path, streams))
+
+    def test_empty_streams_is_rejected(self, tmp_path: Path):
+        from main import load_app_config
+
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            textwrap.dedent(
+                """
+                streams: []
+                output:
+                  insight:
+                    host: 127.0.0.1
+                """
+            ).strip(),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match="streams"):
+            load_app_config(config_path)
+
+    def test_invalid_mask_threshold_is_rejected(self, tmp_path: Path):
+        from main import load_app_config
+
+        config_path = write_config(
+            tmp_path, DEFAULT_STREAMS[:1], extra_output=["  mask_threshold: 1.5"]
+        )
+
+        with pytest.raises(ValueError, match="mask_threshold"):
+            load_app_config(config_path)
+
+
+class TestRuntimeOptions:
+    def test_encoded_input_options_carry_codec_format(self, monkeypatch):
+        import main
+
+        class FakeInputOptions:
+            format = ""
+
+        fake_pyneat = SimpleNamespace(
+            InputOptions=FakeInputOptions,
+            PayloadType=SimpleNamespace(Encoded="encoded"),
+            Format=SimpleNamespace(H264="h264", H265="h265"),
+            RtspCodec=SimpleNamespace(H264="codec-h264", H265="codec-h265"),
+            InputMemoryPolicy=SimpleNamespace(Ev74="ev74", SystemMemory="system"),
+        )
+        monkeypatch.setattr(main, "pyneat", fake_pyneat)
+
+        assert main.encoded_decode_input_options(fake_pyneat.RtspCodec.H265).format == "h265"
+        assert main.encoded_video_input_options(fake_pyneat.RtspCodec.H265).format == "h265"
+        assert main.encoded_decode_input_options(fake_pyneat.RtspCodec.H264).format == "h264"
+        assert main.encoded_video_input_options(fake_pyneat.RtspCodec.H264).format == "h264"
+
+    def test_realtime_link_tags_its_stream(self, monkeypatch):
+        import main
+
+        fake_pyneat = SimpleNamespace(
+            GraphLinkOptions=type("GraphLinkOptions", (), {}),
+            GraphLinkPolicy=SimpleNamespace(RealtimeLatestByStream="latest-by-stream"),
+        )
+        monkeypatch.setattr(main, "pyneat", fake_pyneat)
+
+        link = main.realtime_link(2, 4)
+
+        assert link.policy == "latest-by-stream"
+        assert link.queue_depth == 4
+        assert link.stream_id == "stream2"
+
+    def test_source_frame_endpoints_are_distinct_per_stream(self):
+        """Streams share one source Run, so their frame endpoints must not collide."""
+        import main
+
+        names = [main.source_frame_name(index) for index in range(4)]
+
+        assert len(set(names)) == len(names)
+        assert names[2] == "frame_2"
+
+    def test_model_endpoints_are_shared_because_each_model_has_its_own_run(self):
+        """Model endpoint names are constants: nothing shares a Run with another model."""
+        import main
+
+        assert main.MODEL_INPUT == "image"
+        assert main.MODEL_OUTPUT == "results"
+
+    @pytest.mark.parametrize(
+        ("task", "decode", "expected"),
+        [
+            ("detection", "yolov8", "YoloV8"),
+            ("detection", "yolo26", "YoloV26"),
+            ("segmentation", "yolov8", "YoloV8Seg"),
+            ("segmentation", "yolo26", "YoloV26Seg"),
+            ("pose", "yolov8", "YoloV8Pose"),
+            ("pose", "yolo26", "YoloV26Pose"),
+        ],
+    )
+    def test_decode_family_follows_task_and_head_layout(
+        self, monkeypatch, task: str, decode: str, expected: str
+    ):
+        import main
+
+        fake_pyneat = SimpleNamespace(
+            BoxDecodeType=SimpleNamespace(
+                YoloV8="YoloV8",
+                YoloV8Seg="YoloV8Seg",
+                YoloV8Pose="YoloV8Pose",
+                YoloV26="YoloV26",
+                YoloV26Seg="YoloV26Seg",
+                YoloV26Pose="YoloV26Pose",
+            )
+        )
+        monkeypatch.setattr(main, "pyneat", fake_pyneat)
+
+        assert main.decode_type_for(task, decode) == expected
+
+
+class FakeMetadataSender:
+    def __init__(self):
+        self.calls = []
+
+    def send_metadata(self, metadata_type, data_json, timestamp_ms, frame_id):
+        self.calls.append((metadata_type, data_json, timestamp_ms, frame_id))
+        return True
+
+
+class FakeSample:
+    frame_id = 42
+    pts_ns = 1_234_000_000
+
+
+# The stamp the feeder captured from the source frame. The model lives in its own Run and its
+# results come back with no PTS, so the metadata timestamp has to come from here or Insight
+# cannot correlate the overlay to the frame it describes.
+SOURCE_STAMP = (1_234_000_000, 42)
+
+
+def make_stream(task: str, sender: FakeMetadataSender):
+    import main
+
+    return main.StreamRuntime(
+        index=0,
+        task=task,
+        url="rtsp://127.0.0.1:8554/src1",
+        model_path="models/model.tar.gz",
+        source_options=None,
+        model=None,
+        metadata_sender=sender,
+        labels=["person"],
+        profile=main.ProfileWindow(False, 0, task),
+        frame_w=100,
+        frame_h=100,
+        output_fps=30,
+        video_port=9000,
+    )
+
+
+class TestMetadata:
+    """Every task publishes on its own Insight contract, from one shared send path."""
+
+    def setup_method(self):
+        import main
+
+        import cv2
+
+        main.cv2 = cv2
+        main.np = np
+
+    def test_detection_stream_publishes_object_detection(self):
+        import main
+
+        sender = FakeMetadataSender()
+        stream = make_stream("detection", sender)
+        boxes = [
+            {"x1": 10.0, "y1": 20.0, "x2": 40.0, "y2": 60.0, "score": 0.75, "class_id": 0}
+        ]
+
+        dropped = main.send_metadata(_config(), stream, SOURCE_STAMP, boxes)
+
+        assert dropped == 0
+        metadata_type, data_json, timestamp_ms, frame_id = sender.calls[0]
+        assert metadata_type == "object-detection"
+        # Insight correlates overlay to frame on this timestamp; -1 or a missing value makes it
+        # paint the newest metadata onto whatever frame is on screen.
+        assert timestamp_ms == 1234
+        assert frame_id == "42"
+        assert json.loads(data_json) == {
+            "objects": [
+                {
+                    "id": "obj_1",
+                    "label": "person",
+                    "confidence": 0.75,
+                    "bbox": [10.0, 20.0, 30.0, 40.0],
+                }
+            ]
+        }
+
+    def test_pose_stream_publishes_named_keypoints(self):
+        import main
+
+        sender = FakeMetadataSender()
+        stream = make_stream("pose", sender)
+        poses = [
+            {
+                "x1": 10.0,
+                "y1": 20.0,
+                "x2": 40.0,
+                "y2": 60.0,
+                "score": 0.9,
+                "keypoints": [
+                    {"x": float(i), "y": float(i * 2), "visibility": 0.5}
+                    for i in range(len(main.COCO_KEYPOINT_NAMES))
+                ],
+            }
+        ]
+
+        main.send_metadata(_config(), stream, SOURCE_STAMP, poses)
+
+        metadata_type, data_json, _, _ = sender.calls[0]
+        assert metadata_type == "pose-estimation"
+        data = json.loads(data_json)
+        assert data["poses"][0]["label"] == "person"
+        assert data["poses"][0]["bbox"] == [10, 20, 30, 40]
+        assert [point["name"] for point in data["poses"][0]["keypoints"]] == list(
+            main.COCO_KEYPOINT_NAMES
+        )
+
+    def test_segmentation_stream_publishes_frame_absolute_polygons(self):
+        import main
+
+        sender = FakeMetadataSender()
+        stream = make_stream("segmentation", sender)
+        detections = [
+            {
+                "x1": 8.0,
+                "y1": 8.0,
+                "x2": 56.0,
+                "y2": 56.0,
+                "score": 0.9,
+                "class_id": 0,
+                "mask": np.full((160, 160), 255, dtype=np.uint8),
+            }
+        ]
+
+        main.send_metadata(_config(), stream, SOURCE_STAMP, detections)
+
+        metadata_type, data_json, _, _ = sender.calls[0]
+        assert metadata_type == "segmentation"
+        segment = json.loads(data_json)["segments"][0]
+        assert segment["mask_format"] == "polygon"
+        assert len(segment["mask"]) >= 3
+        assert all(0 <= x <= 100 and 0 <= y <= 100 for x, y in segment["mask"])
+
+
+class TestSegmentationBudget:
+    def setup_method(self):
+        import main
+
+        import cv2
+
+        main.cv2 = cv2
+        main.np = np
+
+    def test_budget_drops_lowest_confidence_first(self):
+        """A full frame of detailed silhouettes overruns one datagram, so the tail is dropped."""
+        import main
+
+        detections = [
+            {
+                "x1": 0.0,
+                "y1": 0.0,
+                "x2": 1920.0,
+                "y2": 1080.0,
+                "score": 0.5 + 0.005 * index,
+                "class_id": 0,
+                "mask": _comb_mask(),
+            }
+            for index in range(50)
+        ]
+
+        data, dropped = main.segmentation_metadata_data(
+            detections, ["person"], (1080, 1920, 3), 0.5
+        )
+        payload = json.dumps(data, separators=(",", ":"))
+
+        assert len(payload) <= main.METADATA_BYTE_BUDGET
+        assert dropped > 0
+        assert len(data["segments"]) + dropped == len(detections)
+        lowest_kept = min(segment["confidence"] for segment in data["segments"])
+        assert lowest_kept == pytest.approx(0.5 + 0.005 * dropped, abs=1e-3)
+
+
+def _config():
+    """Config with defaults only, for the metadata paths that read thresholds off it."""
+    import main
+
+    return main.AppConfig(streams=[], labels_path=Path("coco_label.txt"))
+
+
+def _comb_mask():
+    """A mask whose contour keeps many vertices, so the byte budget is actually exercised."""
+    import cv2
+
+    mask = np.zeros((160, 160), dtype=np.uint8)
+    cv2.rectangle(mask, (10, 60), (150, 150), 255, -1)
+    for x in range(10, 150, 4):
+        cv2.rectangle(mask, (x, 20), (x + 2, 60), 255, -1)
+    return mask
+
+
+@pytest.mark.parametrize("video,metadata,enabled,valid", [
+    (65532, 9100, True, True),
+    (65533, 9100, True, False),
+    (9000, 65532, True, True),
+    (9000, 65533, True, False),
+    (9000, 9003, True, False),
+    (9003, 9000, True, False),
+    (9000, 9004, True, True),
+    (9000, 9000, False, True),
+    (2147483647, 9100, True, False),
+])
+def test_insight_port_ranges(tmp_path, video, metadata, enabled, valid):
+    import main
+
+    path = write_config(tmp_path, DEFAULT_STREAMS, extra_output=[
+        f"    video_port_base: {video}",
+        f"    metadata_port_base: {metadata}",
+        f"  video_enabled: {str(enabled).lower()}",
+    ])
+    if valid:
+        main.load_app_config(path)
+    else:
+        with pytest.raises(ValueError, match="port"):
+            main.load_app_config(path)
+
+
+def test_debug_frames_stay_paired_with_results(monkeypatch, tmp_path):
+    import main
+
+    from dataclasses import replace
+
+    cfg = replace(_config(), save_dir=str(tmp_path), save_every=1,
+                  warmup_frames=0, frames=2, max_inflight_per_stream=2)
+    stream = make_stream("detection", FakeMetadataSender())
+    frames = [np.full((8, 8, 3), value, dtype=np.uint8) for value in (10, 20)]
+    samples = iter([SimpleNamespace(pts_ns=100, frame_id=1, tensor=frames[0]),
+                    SimpleNamespace(pts_ns=200, frame_id=2, tensor=frames[1])])
+
+    def source_pull(*args):
+        try:
+            return next(samples)
+        except StopIteration:
+            stream.closed = True
+            return None
+
+    outputs = iter([object(), object()])
+    stream.model_run = SimpleNamespace(push=lambda *args: True,
+                                       pull=lambda *args: next(outputs))
+    monkeypatch.setattr(main, "first_tensor_from_sample", lambda sample: sample.tensor)
+    monkeypatch.setattr(main, "copy_nv12_for_model", lambda tensor: tensor)
+    monkeypatch.setattr(main, "tensor_bgr_from_decoded", lambda tensor: tensor.copy())
+    monkeypatch.setattr(main, "decode_results", lambda *args: [])
+    monkeypatch.setattr(main, "draw_boxes", lambda *args: None)
+    saved = []
+    monkeypatch.setattr(main, "cv2", SimpleNamespace(
+        imwrite=lambda path, frame: saved.append(frame.copy()) or True))
+    main.run_stream_feeder(SimpleNamespace(source_run=SimpleNamespace(pull=source_pull)), cfg, stream)
+    assert len(stream.pending) == 2
+    stream.closed = False
+    main.run_stream_consumer(cfg, stream)
+    assert [int(frame[0, 0, 0]) for frame in saved] == [10, 20]
+    assert [call[3] for call in stream.metadata_sender.calls] == ["1", "2"]
+    assert not stream.pending
+    assert stream.in_flight == 0
+
+
+@pytest.mark.parametrize("helper", ["int_or", "float_or"])
+@pytest.mark.parametrize("value", [True, False])
+def test_numeric_helpers_reject_booleans(helper, value):
+    import main
+    with pytest.raises(ValueError):
+        getattr(main, helper)({"value": value}, "value", 0)
+
+
+@pytest.mark.parametrize("tcp", [True, False])
+@pytest.mark.parametrize("opened", [True, False])
+def test_probe_honors_transport_and_restores_environment(monkeypatch, tcp, opened):
+    import main
+    from dataclasses import replace
+    key = "OPENCV_FFMPEG_CAPTURE_OPTIONS"
+    monkeypatch.setenv(key, "inherited-options")
+    released = []
+    def capture(url, backend):
+        assert backend == 99
+        assert main.os.environ[key] == f"rtsp_transport;{'tcp' if tcp else 'udp'}|max_delay;175000"
+        return SimpleNamespace(isOpened=lambda: opened,
+            get=lambda prop: {1: 1920, 2: 1080, 3: 30}[prop],
+            release=lambda: released.append(True))
+    monkeypatch.setattr(main, "cv2", SimpleNamespace(VideoCapture=capture,
+        CAP_FFMPEG=99, CAP_PROP_FRAME_WIDTH=1, CAP_PROP_FRAME_HEIGHT=2, CAP_PROP_FPS=3))
+    cfg = replace(_config(), tcp=tcp, latency_ms=175)
+    if opened:
+        assert main.probe_rtsp("rtsp://camera", cfg) == (1920, 1080, 30)
+    else:
+        with pytest.raises(RuntimeError, match="failed to open"):
+            main.probe_rtsp("rtsp://camera", cfg)
+    assert released == [True]
+    assert main.os.environ[key] == "inherited-options"
+
+
+@pytest.mark.parametrize("failing", ["run_stream_feeder", "run_stream_consumer"])
+def test_worker_failure_returns_nonzero_and_closes_runs(monkeypatch, tmp_path, failing):
+    import main
+    from dataclasses import replace
+    closed = []
+    run = SimpleNamespace(close=lambda: closed.append(True))
+    graph = SimpleNamespace(build=lambda options: run)
+    stream = make_stream("detection", FakeMetadataSender())
+    cfg = replace(_config(), streams=[SimpleNamespace(index=0)], frames=1)
+    path = tmp_path / "config.yaml"
+    path.write_text("unused")
+    monkeypatch.setattr(main, "load_app_config", lambda path: cfg)
+    monkeypatch.setattr(main, "load_runtime_dependencies", lambda: None)
+    monkeypatch.setattr(main, "load_labels", lambda path: ["person"])
+    monkeypatch.setattr(main, "pyneat", SimpleNamespace(Graph=lambda: graph))
+    monkeypatch.setattr(main, "build_stream_runtime", lambda *args: stream)
+    monkeypatch.setattr(main, "connect_source_stream", lambda *args: None)
+    monkeypatch.setattr(main, "build_model_graph", lambda *args: graph)
+    monkeypatch.setattr(main, "build_model_run_options", lambda *args: None)
+    monkeypatch.setattr(main, "build_source_run_options", lambda: None)
+    monkeypatch.setattr(main, "run_stream_feeder", lambda *args: None)
+    monkeypatch.setattr(main, "run_stream_consumer", lambda *args: None)
+    def fail(*args):
+        raise ValueError("malformed model output")
+    monkeypatch.setattr(main, failing, fail)
+    assert main.main(["--config", str(path)]) == 1
+    assert stream.closed
+    assert len(closed) == 2
+
+
+@pytest.mark.parametrize("fps", [-1, 15, 60])
+def test_application_fps_cap_is_rejected(tmp_path, fps):
+    import main
+    from dataclasses import replace
+    cfg = main.load_app_config(write_config(tmp_path, DEFAULT_STREAMS))
+    with pytest.raises(ValueError, match="configure frame rate at the RTSP source"):
+        main.validate_config(replace(cfg, fps=fps))
+
+
+@pytest.mark.parametrize("codec", ["h264", "h265"])
+def test_rtsp_source_negotiates_dynamic_payload(monkeypatch, codec):
+    import main
+    from dataclasses import replace
+    captured = []
+    graph = SimpleNamespace(add=captured.append)
+    codecs = SimpleNamespace(H264="h264", H265="h265")
+    monkeypatch.setattr(main, "pyneat", SimpleNamespace(
+        RtspDecodedInputOptions=lambda: SimpleNamespace(output_caps=SimpleNamespace()),
+        RtspEncodedInputOptions=SimpleNamespace,
+        RtspCodec=codecs, Format=SimpleNamespace(NV12="NV12"),
+        CapsMemory=SimpleNamespace(Any="Any"), Graph=lambda name: graph,
+        groups=SimpleNamespace(rtsp_encoded_input=lambda opt: opt)))
+    opt = main.build_source_options(replace(_config(), codec=codec), "rtsp://camera", 30, 1280, 720)
+    assert opt.payload_type == 0
+    main.build_encoded_source_graph(opt)
+    assert captured[0].payload_type == 0
+    assert captured[0].codec == codec
+    assert captured[0].source_fps == (0 if codec == "h265" else 30)
+    assert opt.output_caps.fps == (0 if codec == "h265" else 30)
+    assert opt.source_fps == 30
