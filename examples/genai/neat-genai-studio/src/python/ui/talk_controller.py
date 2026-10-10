@@ -20,6 +20,10 @@ import traceback
 import wave
 from pathlib import Path
 
+import sys as _sys, os as _os
+_TTS_DIR = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "tts")
+if _TTS_DIR not in _sys.path:
+    _sys.path.insert(0, _TTS_DIR)
 import supertonic_tts
 from audio_api import SPEECH_ENGINE_ALIASES, AudioApiError, build_voices_listing
 from tts_text import sanitize_for_tts
@@ -705,7 +709,7 @@ class TalkController:
 
     def _sanitize_for_tts(self, text: str) -> str:
         # Strip Markdown and LaTeX so Piper utters the prose, not the formatting
-        # ("star star", "dollar x caret 2", raw URLs). See ui/tts_text.py.
+        # ("star star", "dollar x caret 2", raw URLs). See ui/tts/tts_text.py.
         return sanitize_for_tts(text)
 
     

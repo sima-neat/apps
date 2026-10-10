@@ -20,7 +20,7 @@ from pathlib import Path
 
 EXAMPLE = Path(__file__).resolve().parents[2]
 SETUP = EXAMPLE / "setup.sh"
-ENGINE = EXAMPLE / "src" / "python" / "ui" / "supertonic_sima" / "engine.py"
+ENGINE = EXAMPLE / "src" / "python" / "ui" / "tts" / "supertonic_sima" / "engine.py"
 REQUIREMENTS = EXAMPLE / "src" / "python" / "requirements-supertonic.txt"
 
 

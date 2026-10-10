@@ -566,7 +566,7 @@ migrate_piper_voices() {
   if ! "${py}" -c "import onnx" >/dev/null 2>&1; then
     "${py}" -m pip install "onnx>=1.17,<2" || return 1
   fi
-  "${py}" "${PYTHON_DIR}/split_voices.py" "${assets}"
+  "${py}" "${PYTHON_DIR}/ui/tts/split_voices.py" "${assets}"
 }
 
 do_update() {
