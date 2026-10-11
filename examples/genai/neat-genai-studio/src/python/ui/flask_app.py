@@ -50,6 +50,10 @@ from asr_metadata import (
     analyze_transcription,
     normalize_language_code,
 )
+import sys as _sys, os as _os
+_TTS_DIR = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "tts")
+if _TTS_DIR not in _sys.path:
+    _sys.path.insert(0, _TTS_DIR)
 import supertonic_tts
 from talk_controller import TalkController
 import backend_mode
