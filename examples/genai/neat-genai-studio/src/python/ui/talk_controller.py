@@ -431,6 +431,11 @@ class TalkController:
         elif engine in ("supertonic", "supertonic-tts", "st", "mla"):
             if self.st is None:
                 self.retry_supertonic()     # it may have failed to load earlier
+            if self.st is None and self.st_error is not None:
+                # A retry another request started may still be loading (it holds
+                # st_lock): wait for it instead of rejecting the choice.
+                with self.st_lock:
+                    pass
             if self.st is None:
                 return False
             flags = {"browser_tts": False, "prefer_supertonic": True}

@@ -189,5 +189,28 @@ class SupertonicRetryTests(unittest.TestCase):
         self.assertTrue(ctrl.prefer_supertonic and ctrl.engine_chosen)
 
 
+    def test_choosing_supertonic_waits_for_a_retry_already_loading_it(self):
+        # Another request is mid-retry: the cooldown has just moved, so this
+        # choice does not retry itself, but must wait for that load to finish.
+        ctrl = _controller(st_error="load-failed", last_attempt=100.0)
+        ctrl.browser_tts = False
+        ctrl._preferred_engine_key = lambda: "supertonic"
+        loaded = mock.Mock(voice="M1", steps=8, languages={"en"})
+        ctrl.st_lock.acquire()
+
+        def finish_load():
+            talk_controller.time.sleep(0.2)
+            ctrl.st, ctrl.st_error = loaded, None
+            ctrl.st_lock.release()
+
+        loader = talk_controller.threading.Thread(target=finish_load)
+        with mock.patch.object(talk_controller.time, "monotonic", return_value=100.0):
+            loader.start()
+            chosen = ctrl.set_voice_engine("supertonic")
+        loader.join(5)
+        self.assertTrue(chosen)
+        self.assertTrue(ctrl.prefer_supertonic and ctrl.engine_chosen)
+
+
 if __name__ == "__main__":
     unittest.main()
