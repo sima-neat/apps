@@ -25,6 +25,7 @@ def _controller(st=None, st_error=None, last_attempt=0.0):
     ctrl.st_lock = talk_controller.threading.Lock()
     ctrl._engine_lock = talk_controller.threading.Lock()
     ctrl._engine_choice_id = 0
+    ctrl._engine_applied_id = 0
     ctrl.engine_chosen = False
     return ctrl
 
@@ -264,6 +265,30 @@ class SupertonicRetryTests(unittest.TestCase):
             ctrl.retry_supertonic()      # cooldown not over: must wait, not return early
         loader.join(5)
         self.assertIs(ctrl.st, loaded)
+
+
+    def test_an_invalid_newer_choice_does_not_cancel_a_valid_one_loading(self):
+        ctrl = _controller()
+        ctrl.browser_tts = False
+        ctrl.prefer_supertonic = False
+        ctrl.prefer_piper_plus = False
+        ctrl._preferred_engine_key = lambda: "x"
+        invalid_done = talk_controller.threading.Event()
+
+        def slow_piper_plus_load():
+            invalid_done.wait(5)
+            return True
+
+        ctrl._ensure_piper_plus_loaded = slow_piper_plus_load
+        results = []
+        valid = talk_controller.threading.Thread(target=lambda: results.append(ctrl.set_voice_engine("piper-plus")))
+        valid.start()
+        talk_controller.time.sleep(0.1)
+        self.assertFalse(ctrl.set_voice_engine("not-an-engine"))
+        invalid_done.set()
+        valid.join(5)
+        self.assertEqual(results, [True])
+        self.assertTrue(ctrl.prefer_piper_plus)      # the valid choice was applied
 
 
 if __name__ == "__main__":

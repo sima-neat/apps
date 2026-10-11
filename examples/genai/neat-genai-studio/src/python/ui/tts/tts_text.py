@@ -381,12 +381,20 @@ def _normalize_spaces(text: str) -> str:
 # the whole request on U+FE0F ("unsupported characters after preprocessing").
 # One range per character class: CodeQL misreads several astral ranges in one
 # class as overlapping (py/overly-large-range); the code points are the same.
+# Keyboard symbols carry meaning ("Press ⌘C"): speak their key names.
+_KEY_NAMES = {
+    "\u2318": "Command", "\u2325": "Option", "\u2303": "Control", "\u21E7": "Shift",
+    "\u21E5": "Tab", "\u232B": "Delete", "\u2326": "Forward Delete", "\u23CE": "Return",
+    "\u238B": "Escape",
+}
+_KEY_SYMBOLS = re.compile("[" + "".join(_KEY_NAMES) + "]")
+
 _EMOJI = re.compile(
     "(?:[\U0001F000-\U0001FAFF]"   # pictographs, emoticons, transport, flags, skin tones
     "|[\U000E0020-\U000E007F]"     # tag sequences (subdivision flags)
-    "|[\u2300-\u23FF]"             # technical symbols used as emoji (watch, hourglass)
+    "|[\u231A\u231B\u2328\u23CF\u23E9-\u23F3\u23F8-\u23FA]"  # watch, hourglass, keyboard, media buttons
     "|[\u2600-\u27BF]"             # miscellaneous symbols and dingbats
-    "|[\u2B00-\u2BFF]"             # arrows and stars used as emoji
+    "|[\u2B05-\u2B07\u2B1B\u2B1C\u2B50\u2B55]"                # arrows, squares, star and circle used as emoji
     "|[\uFE0E\uFE0F\u200D\u20E3])+"
 )
 
@@ -462,6 +470,7 @@ def sanitize_for_tts(text: str) -> str:
     # 10. Final safety sweep: no formatting artifact character may survive, and
     #     no emoji (speech engines reject them).
     text = _ARTIFACTS.sub(" ", text)
+    text = _KEY_SYMBOLS.sub(lambda m: f" {_KEY_NAMES[m.group()]} ", text)
     text = _EMOJI.sub(" ", text)
 
     # 11. Whitespace and legibility cleanup. (No hyphen-joining: a spaced hyphen is
