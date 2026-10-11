@@ -379,15 +379,15 @@ def _normalize_spaces(text: str) -> str:
 # Emoji and their companions (variation selectors, zero-width joiner, keycap,
 # skin tones, flags, tag sequences). Speech engines reject them: Supertonic fails
 # the whole request on U+FE0F ("unsupported characters after preprocessing").
+# One range per character class: CodeQL misreads several astral ranges in one
+# class as overlapping (py/overly-large-range); the code points are the same.
 _EMOJI = re.compile(
-    "["
-    "\U0001F000-\U0001FAFF"   # pictographs, emoticons, transport, flags, skin tones
-    "\U000E0020-\U000E007F"   # tag sequences (subdivision flags)
-    "\u2300-\u23FF"           # technical symbols used as emoji (watch, hourglass)
-    "\u2600-\u27BF"           # miscellaneous symbols and dingbats
-    "\u2B00-\u2BFF"           # arrows and stars used as emoji
-    "\uFE0E\uFE0F\u200D\u20E3"
-    "]+"
+    "(?:[\U0001F000-\U0001FAFF]"   # pictographs, emoticons, transport, flags, skin tones
+    "|[\U000E0020-\U000E007F]"     # tag sequences (subdivision flags)
+    "|[\u2300-\u23FF]"             # technical symbols used as emoji (watch, hourglass)
+    "|[\u2600-\u27BF]"             # miscellaneous symbols and dingbats
+    "|[\u2B00-\u2BFF]"             # arrows and stars used as emoji
+    "|[\uFE0E\uFE0F\u200D\u20E3])+"
 )
 
 

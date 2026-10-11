@@ -52,5 +52,33 @@ class SupertonicRetryTests(unittest.TestCase):
             init.assert_not_called()
 
 
+    def test_waiters_do_not_retry_after_another_request_retried(self):
+        # Two requests passed the deadline check; the first retried (and moved
+        # the attempt time) while the second waited for the lock.
+        ctrl = _controller(st_error="busy", last_attempt=100.0)
+        now = 100.0 + ctrl.ST_RETRY_INTERVAL_S
+
+        def first_retry(prefer=True):
+            ctrl._st_last_attempt = now
+
+        with mock.patch.object(talk_controller.time, "monotonic", return_value=now), \
+                mock.patch.object(ctrl, "_init_supertonic", side_effect=first_retry) as init:
+            ctrl.retry_supertonic()
+            ctrl.retry_supertonic()
+        init.assert_called_once()
+
+    def test_a_retry_keeps_the_voice_engine_the_user_chose(self):
+        ctrl = _controller(st_error="busy", last_attempt=100.0)
+        ctrl.prefer_supertonic = False   # the user picked piper-tts meanwhile
+        ctrl.utterance_speed = 1.0
+        loaded = mock.Mock(voice="M1", steps=8, languages={"en"})
+        with mock.patch.object(talk_controller.time, "monotonic", return_value=100.0 + ctrl.ST_RETRY_INTERVAL_S), \
+                mock.patch.object(talk_controller.supertonic_tts, "available", return_value=True), \
+                mock.patch.object(talk_controller.supertonic_tts, "SupertonicTTS", return_value=loaded):
+            ctrl.retry_supertonic()
+        self.assertIs(ctrl.st, loaded)
+        self.assertFalse(ctrl.prefer_supertonic)
+
+
 if __name__ == "__main__":
     unittest.main()

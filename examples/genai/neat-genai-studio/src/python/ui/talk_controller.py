@@ -285,8 +285,10 @@ class TalkController:
     # A failed load is retried on a later request at most this often.
     ST_RETRY_INTERVAL_S = 30.0
 
-    def _init_supertonic(self):
-        """Load the Supertonic 3 MLA engine when its runtime is installed."""
+    def _init_supertonic(self, prefer=True):
+        """Load the Supertonic 3 MLA engine when its runtime is installed.
+        ``prefer`` makes it the default engine; a retry passes False so a
+        voice engine the user chose meanwhile stays selected."""
         self._st_last_attempt = time.monotonic()
         if not supertonic_tts.available():
             logging.info("Supertonic runtime not installed (venv %s, models %s) — MLA TTS "
@@ -299,7 +301,8 @@ class TalkController:
             st.set_utterance_speed(self.utterance_speed)
             self.st = st
             self.st_error = None
-            self.prefer_supertonic = True
+            if prefer:
+                self.prefer_supertonic = True
             logging.info("Supertonic 3 (MLA) ready: voice %s, %d steps, languages: %s",
                          st.voice, st.steps, sorted(st.languages))
         except Exception as e:  # noqa: BLE001
@@ -315,9 +318,12 @@ class TalkController:
         if time.monotonic() - self._st_last_attempt < self.ST_RETRY_INTERVAL_S:
             return
         with self.st_lock:
-            if self.st is None and self.st_error is not None:
+            # Requests that waited for the lock while another retried must not
+            # retry again: recheck the deadline that retry has just moved.
+            if (self.st is None and self.st_error is not None
+                    and time.monotonic() - self._st_last_attempt >= self.ST_RETRY_INTERVAL_S):
                 logging.info("Retrying Supertonic 3, which failed to load: %s", self.st_error)
-                self._init_supertonic()
+                self._init_supertonic(prefer=False)
 
     def engine_failures(self):
         """Installed engines that failed to load, with their errors."""
