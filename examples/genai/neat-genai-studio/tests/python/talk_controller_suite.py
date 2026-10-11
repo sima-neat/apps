@@ -23,6 +23,8 @@ def _controller(st=None, st_error=None, last_attempt=0.0):
     ctrl.st_error = st_error
     ctrl._st_last_attempt = last_attempt
     ctrl.st_lock = talk_controller.threading.Lock()
+    ctrl._engine_lock = talk_controller.threading.Lock()
+    ctrl.engine_chosen = False
     return ctrl
 
 
@@ -113,6 +115,29 @@ class SupertonicRetryTests(unittest.TestCase):
             ctrl.retry_supertonic()
         self.assertIs(ctrl.st, loaded)
         self.assertFalse(ctrl.prefer_supertonic)
+
+
+    def test_engine_choice_and_retry_preference_share_one_lock(self):
+        # Both writers of the preference flags take _engine_lock, so a choice
+        # made while a retry finishes cannot be overwritten between check and set.
+        ctrl = _controller(st_error="busy", last_attempt=100.0)
+        ctrl.prefer_supertonic = False
+        ctrl.browser_tts = False
+        ctrl.utterance_speed = 1.0
+        lock = mock.MagicMock(wraps=talk_controller.threading.Lock())
+        lock.__enter__ = mock.Mock(return_value=None)
+        lock.__exit__ = mock.Mock(return_value=False)
+        ctrl._engine_lock = lock
+        loaded = mock.Mock(voice="M1", steps=8, languages={"en"})
+        with mock.patch.object(talk_controller.time, "monotonic", return_value=100.0 + ctrl.ST_RETRY_INTERVAL_S), \
+                mock.patch.object(talk_controller.supertonic_tts, "available", return_value=True), \
+                mock.patch.object(talk_controller.supertonic_tts, "SupertonicTTS", return_value=loaded):
+            ctrl.retry_supertonic()
+        self.assertEqual(lock.__enter__.call_count, 1)
+        ctrl._preferred_engine_key = lambda: "browser"
+        self.assertTrue(ctrl.set_voice_engine("browser"))
+        self.assertEqual(lock.__enter__.call_count, 2)
+        self.assertTrue(ctrl.engine_chosen and ctrl.browser_tts)
 
 
 if __name__ == "__main__":

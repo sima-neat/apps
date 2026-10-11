@@ -68,6 +68,9 @@ class TalkController:
         # True once the user picks a voice engine (set_voice_engine): a later
         # Supertonic retry then keeps that choice instead of the default.
         self.engine_chosen = False
+        # Guards the engine preference flags (not the slow engine loads), so a
+        # Supertonic retry and set_voice_engine cannot interleave their updates.
+        self._engine_lock = threading.Lock()
         self.browser_tts = False    # when True, no server synthesis — the client speaks via Web Speech
         self.utterance_speed = 1.0
         self.missing_voice_warnings = set()
@@ -306,8 +309,9 @@ class TalkController:
             self.st_error = None
             # Read the user's choice now, after the slow load: an engine picked
             # while a retry was loading must not be overridden.
-            if prefer and not getattr(self, "engine_chosen", False):
-                self.prefer_supertonic = True
+            with self._engine_lock:
+                if prefer and not self.engine_chosen:
+                    self.prefer_supertonic = True
             logging.info("Supertonic 3 (MLA) ready: voice %s, %d steps, languages: %s",
                          st.voice, st.steps, sorted(st.languages))
         except Exception as e:  # noqa: BLE001
@@ -407,28 +411,28 @@ class TalkController:
         Languages only one engine supports are unaffected. CPU engines that
         were deferred at startup load here, on first selection."""
         engine = (engine or "").strip().lower()
+        # Load what the choice needs first (slow), then update the flags together
+        # under _engine_lock.
         if engine in ("browser", "web", "webspeech", "web-speech"):
-            self.browser_tts = True
+            flags = {"browser_tts": True}
         elif engine in ("supertonic", "supertonic-tts", "st", "mla"):
             if self.st is None:
                 return False
-            self.browser_tts = False
-            self.prefer_supertonic = True
+            flags = {"browser_tts": False, "prefer_supertonic": True}
         elif engine in ("piper-plus", "piperplus", "pp"):
             if not self._ensure_piper_plus_loaded():
                 return False
-            self.browser_tts = False
-            self.prefer_supertonic = False
-            self.prefer_piper_plus = True
+            flags = {"browser_tts": False, "prefer_supertonic": False, "prefer_piper_plus": True}
         elif engine in ("piper-tts", "pipertts", "piper", "rhasspy"):
             if not self._ensure_pipers_loaded(language):
                 return False
-            self.browser_tts = False
-            self.prefer_supertonic = False
-            self.prefer_piper_plus = False
+            flags = {"browser_tts": False, "prefer_supertonic": False, "prefer_piper_plus": False}
         else:
             return False
-        self.engine_chosen = True
+        with self._engine_lock:
+            for name, value in flags.items():
+                setattr(self, name, value)
+            self.engine_chosen = True
         logging.info("Preferred TTS engine set to %s", self._preferred_engine_key())
         return True
 
