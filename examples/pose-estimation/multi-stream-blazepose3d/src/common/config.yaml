@@ -1,0 +1,41 @@
+models:                              # Model packages are supplied at runtime.
+  detector_path: <detector-model-path> # Default: yolo26m-det-int8-b1.tar.gz.
+  pose_path: <blazepose-model-path>  # Model Registry blazepose_ghum_heavy/modalix_bf16 package.
+
+streams:                             # Configure one to four cameras; restart after edits.
+  - id: camera0                     # Unique stable stream identity.
+    url: <rtsp-url>                 # RTSP source URL.
+    codec: h264                     # h264 or h265.
+    insight_channel: 0              # Unique Insight video/metadata channel.
+    width: 1920                     # Required source dimensions and decoder FPS hint.
+    height: 1080
+    fps: 30
+
+input:
+  tcp: true                         # Use TCP for RTSP transport.
+  latency_ms: 100                   # RTSP receive latency in milliseconds.
+
+detector:
+  min_score: 0.30                   # YOLO score threshold.
+  nms_iou: 0.60                     # YOLO NMS IoU threshold.
+
+pose:
+  max_people_per_frame: 4           # Highest-confidence people sent to BlazePose; maximum 10.
+  roi_scale: 1.65                   # Square ROI expansion around each person box.
+  presence_threshold: 0.50          # Global BlazePose presence threshold.
+  temporal_filter_enabled: true     # Per-stream exponential smoothing of matched 2D/3D landmarks.
+
+runtime:
+  frames: 0                         # Source frames per stream; 0 runs until interrupted.
+
+output:
+  insight:
+    host: <insight-host-ip>         # Host running Insight.
+    video_port_base: 9000           # Insight videoUDP base port.
+    metadata_port_base: 9100        # Insight metadataUDP base port.
+
+# Test harness settings only. Normal runs ignore this section.
+testing:
+  e2e:
+    runtime:
+      frames: 12
