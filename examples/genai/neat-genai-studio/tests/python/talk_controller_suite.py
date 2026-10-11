@@ -248,5 +248,23 @@ class SupertonicRetryTests(unittest.TestCase):
         self.assertFalse(ctrl.prefer_piper_plus)
 
 
+    def test_a_speech_request_waits_for_a_load_already_in_progress(self):
+        ctrl = _controller(st_error="load-failed", last_attempt=100.0)
+        loaded = mock.Mock(voice="M1", steps=8, languages={"en"})
+        ctrl.st_lock.acquire()           # another request is mid-retry
+
+        def finish_load():
+            talk_controller.time.sleep(0.2)
+            ctrl.st, ctrl.st_error = loaded, None
+            ctrl.st_lock.release()
+
+        loader = talk_controller.threading.Thread(target=finish_load)
+        with mock.patch.object(talk_controller.time, "monotonic", return_value=100.0):
+            loader.start()
+            ctrl.retry_supertonic()      # cooldown not over: must wait, not return early
+        loader.join(5)
+        self.assertIs(ctrl.st, loaded)
+
+
 if __name__ == "__main__":
     unittest.main()

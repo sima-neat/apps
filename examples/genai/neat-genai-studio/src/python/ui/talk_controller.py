@@ -337,6 +337,11 @@ class TalkController:
         if self.st is not None or self.st_error is None:
             return
         if time.monotonic() - self._st_last_attempt < self.ST_RETRY_INTERVAL_S:
+            if self.st_lock.locked():
+                # Another request is loading it right now: wait for that load
+                # instead of answering "failed" while it is about to succeed.
+                with self.st_lock:
+                    pass
             return
         with self.st_lock:
             # Requests that waited for the lock while another retried must not
@@ -434,12 +439,8 @@ class TalkController:
             flags = {"browser_tts": True}
         elif engine in ("supertonic", "supertonic-tts", "st", "mla"):
             if self.st is None:
-                self.retry_supertonic()     # it may have failed to load earlier
-            if self.st is None and self.st_error is not None:
-                # A retry another request started may still be loading (it holds
-                # st_lock): wait for it instead of rejecting the choice.
-                with self.st_lock:
-                    pass
+                # Retries a failed load, or waits for one already in progress.
+                self.retry_supertonic()
             if self.st is None:
                 return False
             flags = {"browser_tts": False, "prefer_supertonic": True}
