@@ -65,6 +65,9 @@ class TalkController:
         # Supertonic is preferred whenever it loaded: it runs on the MLA and
         # speaks every language the Studio offers except Norwegian.
         self.prefer_supertonic = False
+        # True once the user picks a voice engine (set_voice_engine): a later
+        # Supertonic retry then keeps that choice instead of the default.
+        self.engine_chosen = False
         self.browser_tts = False    # when True, no server synthesis — the client speaks via Web Speech
         self.utterance_speed = 1.0
         self.missing_voice_warnings = set()
@@ -287,8 +290,8 @@ class TalkController:
 
     def _init_supertonic(self, prefer=True):
         """Load the Supertonic 3 MLA engine when its runtime is installed.
-        ``prefer`` makes it the default engine; a retry passes False so a
-        voice engine the user chose meanwhile stays selected."""
+        ``prefer`` makes it the default engine; a retry passes False when the
+        user has chosen a voice engine meanwhile, so that choice stays."""
         self._st_last_attempt = time.monotonic()
         if not supertonic_tts.available():
             logging.info("Supertonic runtime not installed (venv %s, models %s) — MLA TTS "
@@ -323,7 +326,7 @@ class TalkController:
             if (self.st is None and self.st_error is not None
                     and time.monotonic() - self._st_last_attempt >= self.ST_RETRY_INTERVAL_S):
                 logging.info("Retrying Supertonic 3, which failed to load: %s", self.st_error)
-                self._init_supertonic(prefer=False)
+                self._init_supertonic(prefer=not getattr(self, "engine_chosen", False))
 
     def engine_failures(self):
         """Installed engines that failed to load, with their errors."""
@@ -423,6 +426,7 @@ class TalkController:
             self.prefer_piper_plus = False
         else:
             return False
+        self.engine_chosen = True
         logging.info("Preferred TTS engine set to %s", self._preferred_engine_key())
         return True
 

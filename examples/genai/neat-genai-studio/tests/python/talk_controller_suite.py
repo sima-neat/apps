@@ -70,6 +70,7 @@ class SupertonicRetryTests(unittest.TestCase):
     def test_a_retry_keeps_the_voice_engine_the_user_chose(self):
         ctrl = _controller(st_error="busy", last_attempt=100.0)
         ctrl.prefer_supertonic = False   # the user picked piper-tts meanwhile
+        ctrl.engine_chosen = True
         ctrl.utterance_speed = 1.0
         loaded = mock.Mock(voice="M1", steps=8, languages={"en"})
         with mock.patch.object(talk_controller.time, "monotonic", return_value=100.0 + ctrl.ST_RETRY_INTERVAL_S), \
@@ -78,6 +79,21 @@ class SupertonicRetryTests(unittest.TestCase):
             ctrl.retry_supertonic()
         self.assertIs(ctrl.st, loaded)
         self.assertFalse(ctrl.prefer_supertonic)
+
+
+    def test_a_retry_restores_supertonic_when_no_engine_was_chosen(self):
+        # Startup failed, so Piper spoke meanwhile only because Supertonic was
+        # missing; once it loads it is the default again.
+        ctrl = _controller(st_error="busy", last_attempt=100.0)
+        ctrl.prefer_supertonic = False
+        ctrl.engine_chosen = False
+        ctrl.utterance_speed = 1.0
+        loaded = mock.Mock(voice="M1", steps=8, languages={"en"})
+        with mock.patch.object(talk_controller.time, "monotonic", return_value=100.0 + ctrl.ST_RETRY_INTERVAL_S), \
+                mock.patch.object(talk_controller.supertonic_tts, "available", return_value=True), \
+                mock.patch.object(talk_controller.supertonic_tts, "SupertonicTTS", return_value=loaded):
+            ctrl.retry_supertonic()
+        self.assertTrue(ctrl.prefer_supertonic)
 
 
 if __name__ == "__main__":
