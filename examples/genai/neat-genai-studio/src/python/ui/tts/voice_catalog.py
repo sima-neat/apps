@@ -18,7 +18,7 @@ from pathlib import Path
 
 
 CATALOG_PATH = Path(__file__).with_name("voice_catalog.json")
-ASSETS_PATH = Path(__file__).with_name("assets")
+ASSETS_PATH = Path(__file__).resolve().parent.parent / "assets"  # voice assets stay in ui/assets
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
 

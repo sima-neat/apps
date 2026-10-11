@@ -1,7 +1,7 @@
 # Third-party TTS models
 
 Neat GenAI Studio installs and loads server-side voices only from
-[`voice_catalog.json`](src/python/ui/voice_catalog.json). Each entry records a
+[`voice_catalog.json`](src/python/ui/tts/voice_catalog.json). Each entry records a
 short licence label, pinned upstream repository revision, and SHA-256 checksum
 for every downloaded file. A model that is merely present in `assets/` is not
 eligible to load. Models under `CC-BY-NC-SA-4.0` are excluded.
@@ -26,7 +26,7 @@ entry.
   `9229108c974ef57810abce0889ac713a59e341a1` (that repository also carries a
   `LICENSE` file; review it together with the model card)
 - Integration software: the runtime package under
-  `src/python/ui/supertonic_sima/` is vendored from
+  `src/python/ui/tts/supertonic_sima/` is vendored from
   <https://github.com/florianvoss-commit/supertonic-sima> at commit
   `3b837b3e1b6a378ab8c24c3c04b079429b67e237`, at the upstream author's request.
   That repository publishes no licence file; a licence statement for the

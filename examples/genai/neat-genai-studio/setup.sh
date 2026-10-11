@@ -46,7 +46,7 @@ DEFAULT_TTS_LANGUAGES="en,de,es,fr,it,ja,pt,vi,zh"
 TTS_LANGUAGES="${TTS_LANGUAGES:-}"
 TTS_OPTIONAL_VOICES="${TTS_OPTIONAL_VOICES:-}"
 # Supertonic 3 (MLA-accelerated multilingual TTS). The runtime is vendored under
-# src/python/ui/supertonic_sima/ and runs in its own venv (pyneat + onnxruntime +
+# src/python/ui/tts/supertonic_sima/ and runs in its own venv (pyneat + onnxruntime +
 # numpy 1.26, which the UI venv cannot host); the model files come from Hugging
 # Face at pinned revisions and are checksum-verified. INSTALL_SUPERTONIC=0 skips it.
 INSTALL_SUPERTONIC="${INSTALL_SUPERTONIC:-1}"
@@ -284,7 +284,7 @@ ok "UI virtual environment ready."
 resolve_supertonic_paths
 
 # Supertonic 3: hybrid TTS whose vector field and vocoder run on the MLA through
-# PyNeat. The runtime package is vendored in src/python/ui/supertonic_sima/; its
+# PyNeat. The runtime package is vendored in src/python/ui/tts/supertonic_sima/; its
 # dependencies (pyneat, onnxruntime, numpy 1.26) cannot share the UI venv, so an
 # isolated venv is built here and the model files are downloaded from Hugging
 # Face at pinned revisions and verified by checksum. The UI talks to it through
@@ -334,7 +334,7 @@ _supertonic_bad_files() {
 _supertonic_runtime_ok() {
   local py="${SUPERTONIC_VENV}/bin/python"
   [[ -x "${py}" ]] || return 1
-  PYTHONPATH="${EXAMPLE_DIR}/src/python/ui" "${py}" - <<'PY' >/dev/null 2>&1
+  PYTHONPATH="${EXAMPLE_DIR}/src/python/ui/tts" "${py}" - <<'PY' >/dev/null 2>&1
 import numpy, onnxruntime, pyneat
 import supertonic_sima
 PY

@@ -6,7 +6,7 @@ import time
 # The module under test lives in src/python/ui (this check is run from the
 # tests directory by tests/python/test_unit.py and by hand).
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                "..", "..", "src", "python", "ui"))
+                                "..", "..", "src", "python", "ui", "tts"))
 from tts_text import sanitize_for_tts as s
 
 FORBIDDEN = set("*`#$~|{}\\^＊")

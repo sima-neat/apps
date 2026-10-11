@@ -36,8 +36,8 @@ from worker_ipc import read_frame, send_request
 _WORKER_LABEL = "Supertonic worker"
 
 DEFAULT_MODELS_ROOT = "/media/nvme/supertonic-tts/models"
-# EXAMPLE_DIR/.venv-supertonic: this file is src/python/ui/supertonic_tts.py.
-DEFAULT_VENV = Path(__file__).resolve().parents[3] / ".venv-supertonic"
+# EXAMPLE_DIR/.venv-supertonic: this file is src/python/ui/tts/supertonic_tts.py.
+DEFAULT_VENV = Path(__file__).resolve().parents[4] / ".venv-supertonic"
 DEFAULT_VOICE = "M1"
 VOICES = tuple(f"F{i}" for i in range(1, 6)) + tuple(f"M{i}" for i in range(1, 6))
 VOICE_LABELS = {
