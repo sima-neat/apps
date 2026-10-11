@@ -64,7 +64,7 @@ Edit `$APP_DIR/src/common/config.yaml`:
 
 - Set `model.name` and `model.variant`. `model.dir` is the directory holding the installed models.
 - For RTSP, keep `source.type: rtsp`, set `source.rtsp.url`, and set `source.rtsp.codec` to `h264`, `h265`, or `mjpeg`. The application reads the size and frame rate from the stream; a positive `source.rtsp.fps` overrides the frame rate.
-- For a MIPI camera, set `source.type: camera` and the capture size and frame rate under `source.camera`. The camera path has not been verified on hardware yet.
+- For a MIPI camera, set `source.type: camera` and the capture size and frame rate under `source.camera`. The camera path is not verified: on Platform 3.0.0 it currently stops with `A pipeline stage stopped while processing data`. Use RTSP until camera capture works.
 - Set `insight.host`, `video_port`, and `metadata_port` to the values reported by Insight.
 - Keep `inference.frames: 0` to run until Ctrl-C, or set a finite result count.
 
