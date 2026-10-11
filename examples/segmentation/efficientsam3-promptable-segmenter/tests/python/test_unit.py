@@ -72,12 +72,20 @@ def test_packaged_config_loads():
 
 
 @pytest.mark.unit
-def test_config_rejects_a_non_positive_profile_interval(tmp_path):
+@pytest.mark.parametrize(
+    ("section", "key", "value", "message"),
+    [
+        ("inference", "min_score", 1.5, r"inference.min_score must be in \[0, 1\]"),
+        ("inference", "mask_threshold", -0.1, r"inference.mask_threshold must be in \[0, 1\]"),
+        ("runtime", "profile_interval", 0, "runtime.profile_interval must be > 0"),
+    ],
+)
+def test_config_rejects_invalid_values(tmp_path, section, key, value, message):
     raw = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
-    raw["runtime"]["profile_interval"] = 0
+    raw[section][key] = value
     path = tmp_path / "config.yaml"
     path.write_text(yaml.safe_dump(raw), encoding="utf-8")
-    with pytest.raises(ValueError, match="runtime.profile_interval must be > 0"):
+    with pytest.raises(ValueError, match=message):
         main.load_config(path)
 
 

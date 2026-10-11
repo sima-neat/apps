@@ -113,17 +113,20 @@ int main(int argc, char** argv) {
             packaged.mask_threshold == 0.5 && packaged.metadata_port == 9100,
         "packaged config loads");
   const std::string scratch =
-      create_test_scratch_dir("efficientsam3-promptable-segmenter", "profile-interval");
-  const fs::path zero_interval = fs::path(scratch) / "config.yaml";
-  write_e2e_config("efficientsam3-promptable-segmenter", zero_interval,
-                   {{"runtime.profile_interval", "0"}});
-  try {
-    (void)load_config(zero_interval);
-    check(false, "profile_interval 0 is rejected");
-  } catch (const std::exception& error) {
-    check(std::string(error.what()).find("runtime.profile_interval must be > 0") !=
-              std::string::npos,
-          "profile_interval 0 is rejected");
+      create_test_scratch_dir("efficientsam3-promptable-segmenter", "invalid-config");
+  const fs::path invalid_config = fs::path(scratch) / "config.yaml";
+  for (const auto& [key, value, message] : std::vector<std::array<std::string, 3>>{
+           {"inference.min_score", "1.5", "inference.min_score must be in [0, 1]"},
+           {"inference.mask_threshold", "-0.1", "inference.mask_threshold must be in [0, 1]"},
+           {"runtime.profile_interval", "0", "runtime.profile_interval must be > 0"}}) {
+    write_e2e_config("efficientsam3-promptable-segmenter", invalid_config, {{key, value}});
+    try {
+      (void)load_config(invalid_config);
+      check(false, key + " " + value + " is rejected");
+    } catch (const std::exception& error) {
+      check(std::string(error.what()).find(message) != std::string::npos,
+            key + " " + value + " is rejected");
+    }
   }
   remove_dir(scratch);
 

@@ -55,6 +55,10 @@ def load_config(path: Path) -> Config:
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     source, inference, runtime, output = raw["source"], raw["inference"], raw["runtime"], raw["output"]
     insight = output["insight"]
+    if not 0.0 <= inference["min_score"] <= 1.0:
+        raise ValueError("inference.min_score must be in [0, 1]")
+    if not 0.0 <= inference["mask_threshold"] <= 1.0:
+        raise ValueError("inference.mask_threshold must be in [0, 1]")
     if runtime["profile_interval"] <= 0:
         raise ValueError("runtime.profile_interval must be > 0")
     return Config(
