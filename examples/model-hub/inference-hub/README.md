@@ -16,7 +16,7 @@
 
 Run a YOLO26, RF-DETR, or ResNet-50 model from the Model Registry on an RTSP stream or MIPI camera and view the video and results in Insight.
 
-`main.py` owns the pipeline: it decodes the source once, forwards the video to Insight, and passes the newest decoded frames to the selected model. A 4-frame queue replaces stale frames when inference falls behind. Each folder under `src/python/hub_models/` holds one model family: `config.yaml` names its labels, Model Registry build, components, and variants, and `model.py` builds the Neat model and turns its output into Insight metadata. To add a model, add a folder with the same two files.
+`main.py` owns the pipeline: it decodes the source once, forwards the video to Insight, and passes the newest decoded frames to the selected model. A 4-frame queue replaces stale frames when inference falls behind. Each folder under `src/python/hub_models/` holds one model family: `config.yaml` names its labels, Model Registry build, components, and variants, and `model.py` holds that model's own preprocessing, postprocessing, and orchestration, such as RF-DETR's two stages.
 
 ## Preview
 
