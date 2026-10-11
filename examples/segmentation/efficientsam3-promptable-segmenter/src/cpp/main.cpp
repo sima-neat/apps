@@ -464,11 +464,12 @@ void run(const Config& cfg) {
       const neat::Tensor& masks = result.tensors[1];
       const neat::Mapping detections_view = detections.view_read();
       const neat::Mapping masks_view = masks.view_read();
-      const auto queries = static_cast<int>(masks.shape.at(2));
-      const cv::Mat detection_rows(queries, static_cast<int>(detections.shape.at(2)), CV_32F,
+      const std::size_t mask_rank = masks.shape.size();
+      const auto queries = static_cast<int>(masks.shape.at(mask_rank - 1));
+      const cv::Mat detection_rows(queries, static_cast<int>(detections.shape.back()), CV_32F,
                                    detections_view.data);
-      const cv::Mat mask_planes(static_cast<int>(masks.shape.at(0)),
-                                static_cast<int>(masks.shape.at(1)), CV_32FC(queries),
+      const cv::Mat mask_planes(static_cast<int>(masks.shape.at(mask_rank - 3)),
+                                static_cast<int>(masks.shape.at(mask_rank - 2)), CV_32FC(queries),
                                 masks_view.data);
       const std::vector<Segment> segments =
           segments_of(detection_rows, mask_planes, cfg, width, height);

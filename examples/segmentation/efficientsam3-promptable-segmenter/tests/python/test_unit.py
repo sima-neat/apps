@@ -111,6 +111,13 @@ def test_segments_match_the_cpp_implementation():
 
 
 @pytest.mark.unit
+def test_segments_accept_outputs_with_a_batch_axis():
+    detections, masks = frame_result()
+    segments = main.segments_of(detections[None], masks[None], config(), 1920, 1080)
+    assert main.segments_json(segments) == SEGMENTS_JSON
+
+
+@pytest.mark.unit
 def test_metadata_keeps_the_best_segments_within_the_byte_budget():
     detections, masks = frame_result()
     segments = main.segments_of(detections, masks, config(prompt="x" * 20000), 1920, 1080)

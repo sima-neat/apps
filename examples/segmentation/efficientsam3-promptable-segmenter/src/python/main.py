@@ -184,6 +184,8 @@ def mask_outline(mask_logits, box, width: int, height: int, logit_threshold: flo
 
 
 def segments_of(detections, masks, cfg: Config, width: int, height: int) -> list[dict]:
+    detections = detections.reshape(-1, detections.shape[-1])
+    masks = masks.reshape(masks.shape[-3:])
     logit_threshold = np.log(np.float64(cfg.mask_threshold) / (1.0 - cfg.mask_threshold))
     best = np.argsort(-detections[:, 4], kind="stable")[:cfg.max_detections]
     sx, sy = width / MODEL_SIZE, height / MODEL_SIZE
@@ -298,7 +300,7 @@ def run(cfg: Config) -> None:
                 raise RuntimeError("timed out waiting for the model")
             pts_ms, saved_frame = in_flight.popleft()
             detections, masks = (tensor.to_numpy(copy=False) for tensor in result.tensors)
-            segments = segments_of(detections[0], masks, cfg, width, height)
+            segments = segments_of(detections, masks, cfg, width, height)
             for data, timestamp_ms, frame_id in overlay.add_result(pts_ms, segments_json(segments)):
                 metadata.send_metadata("segmentation", data, timestamp_ms, frame_id)
 
