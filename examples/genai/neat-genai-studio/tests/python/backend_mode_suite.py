@@ -109,8 +109,8 @@ class HealthPayloadTests(unittest.TestCase):
     def test_lists_an_engine_that_failed_to_load_with_its_error(self):
         engines = [{"key": "piper-tts", "loaded": True}, {"key": "browser", "loaded": True}]
         body = health_payload(mode="backend-only", version="1.2", status=self.STATUS, engines=engines,
-                              engine_failures={"supertonic": "accelerator runtime is not available"})
-        self.assertIn({"key": "supertonic", "loaded": False, "error": "accelerator runtime is not available"},
+                              engine_failures={"supertonic": "accelerator-unavailable"})
+        self.assertIn({"key": "supertonic", "loaded": False, "error": "accelerator-unavailable"},
                       body["tts"]["engines"])
         self.assertTrue(body["ok"])  # the model server is fine; one voice engine is not
 
