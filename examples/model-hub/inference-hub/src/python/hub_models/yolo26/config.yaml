@@ -1,0 +1,12 @@
+labels: coco80.txt        # File under src/common/labels.
+build: modalix_int8       # Model Registry build profile: modalix_int8 or modalix_bf16.
+components: [model]       # Model Registry components this model loads.
+variants:                 # model.variant -> Model Registry model ID.
+  n: yolo26n
+  s: yolo26s
+  m: yolo26m
+  l: yolo26l
+  x: yolo26x
+min_score: 0.4            # Minimum detection confidence.
+nms_iou: 0.6              # IoU above which overlapping boxes are suppressed.
+max_detections: 100       # Maximum boxes per frame.
