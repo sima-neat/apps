@@ -30,8 +30,8 @@ def _controller(st=None, st_error=None, last_attempt=0.0):
 
 class SupertonicRetryTests(unittest.TestCase):
     def test_failure_is_reported_until_supertonic_loads(self):
-        failed = _controller(st_error="accelerator runtime is not available")
-        self.assertEqual(failed.engine_failures(), {"supertonic": "accelerator runtime is not available"})
+        failed = _controller(st_error="accelerator-unavailable")
+        self.assertEqual(failed.engine_failures(), {"supertonic": "accelerator-unavailable"})
         self.assertEqual(_controller(st=object(), st_error=None).engine_failures(), {})
         self.assertEqual(_controller().engine_failures(), {})
 
@@ -60,7 +60,7 @@ class SupertonicRetryTests(unittest.TestCase):
         ctrl = _controller(st_error="busy", last_attempt=100.0)
         now = 100.0 + ctrl.ST_RETRY_INTERVAL_S
 
-        def first_retry(*_args, **_kwargs):
+        def first_retry():
             ctrl._st_last_attempt = now
 
         with mock.patch.object(talk_controller.time, "monotonic", return_value=now), \
@@ -117,27 +117,76 @@ class SupertonicRetryTests(unittest.TestCase):
         self.assertFalse(ctrl.prefer_supertonic)
 
 
-    def test_engine_choice_and_retry_preference_share_one_lock(self):
-        # Both writers of the preference flags take _engine_lock, so a choice
-        # made while a retry finishes cannot be overwritten between check and set.
-        ctrl = _controller(st_error="busy", last_attempt=100.0)
+    def test_a_choice_made_during_the_retry_check_waits_for_it(self):
+        # Hold _engine_lock as set_voice_engine would while the retry finishes:
+        # the retry's check-and-set must wait, then see the choice.
+        ctrl = _controller(st_error="load-failed", last_attempt=100.0)
         ctrl.prefer_supertonic = False
-        ctrl.browser_tts = False
         ctrl.utterance_speed = 1.0
-        lock = mock.MagicMock(wraps=talk_controller.threading.Lock())
-        lock.__enter__ = mock.Mock(return_value=None)
-        lock.__exit__ = mock.Mock(return_value=False)
-        ctrl._engine_lock = lock
         loaded = mock.Mock(voice="M1", steps=8, languages={"en"})
+        ctrl._engine_lock.acquire()
         with mock.patch.object(talk_controller.time, "monotonic", return_value=100.0 + ctrl.ST_RETRY_INTERVAL_S), \
                 mock.patch.object(talk_controller.supertonic_tts, "available", return_value=True), \
                 mock.patch.object(talk_controller.supertonic_tts, "SupertonicTTS", return_value=loaded):
+            retry = talk_controller.threading.Thread(target=ctrl.retry_supertonic)
+            retry.start()
+            retry.join(0.2)
+            self.assertTrue(retry.is_alive())        # blocked on _engine_lock
+            ctrl.engine_chosen = True                # the user's choice lands first
+            ctrl._engine_lock.release()
+            retry.join(5)
+        self.assertFalse(retry.is_alive())
+        self.assertIs(ctrl.st, loaded)
+        self.assertFalse(ctrl.prefer_supertonic)
+
+    def test_failures_are_reported_as_fixed_reasons(self):
+        reason = talk_controller.TalkController._load_failure_reason
+        self.assertEqual(reason(RuntimeError("[dispatcher_unavailable] /opt/x busy")), "accelerator-unavailable")
+        self.assertEqual(reason(RuntimeError("accelerator runtime is not available")), "accelerator-unavailable")
+        self.assertEqual(reason(RuntimeError("Traceback ... /home/sima/x.py line 3")), "load-failed")
+
+    def test_a_failed_load_records_only_the_reason(self):
+        ctrl = _controller()
+        with mock.patch.object(talk_controller.supertonic_tts, "available", return_value=True), \
+                mock.patch.object(talk_controller.supertonic_tts, "SupertonicTTS",
+                                  side_effect=RuntimeError("worker died: /home/sima/secret/path")), \
+                mock.patch.object(talk_controller.supertonic_tts, "shutdown_worker"):
+            ctrl._init_supertonic()
+        self.assertIsNone(ctrl.st)
+        self.assertEqual(ctrl.engine_failures(), {"supertonic": "load-failed"})
+
+    def test_a_retry_that_finds_no_runtime_stops_retrying(self):
+        ctrl = _controller(st_error="load-failed", last_attempt=100.0)
+        with mock.patch.object(talk_controller.time, "monotonic", return_value=100.0 + ctrl.ST_RETRY_INTERVAL_S), \
+                mock.patch.object(talk_controller.supertonic_tts, "available", return_value=False), \
+                mock.patch.object(talk_controller.supertonic_tts, "_supertonic_python", return_value=""), \
+                mock.patch.object(talk_controller.supertonic_tts, "models_root", return_value=""):
             ctrl.retry_supertonic()
-        self.assertEqual(lock.__enter__.call_count, 1)
-        ctrl._preferred_engine_key = lambda: "browser"
-        self.assertTrue(ctrl.set_voice_engine("browser"))
-        self.assertEqual(lock.__enter__.call_count, 2)
-        self.assertTrue(ctrl.engine_chosen and ctrl.browser_tts)
+        self.assertIsNone(ctrl.st_error)
+        self.assertEqual(ctrl.engine_failures(), {})
+
+    def test_speech_api_says_load_failed_not_not_installed(self):
+        ctrl = _controller(st_error="load-failed")
+        with self.assertRaises(ctrl.EngineUnavailable) as raised:
+            ctrl.engine_for_request("supertonic", "en")
+        self.assertEqual(raised.exception.reason, "load-failed")
+        self.assertIn("load-failed", ctrl.ENGINE_REFUSALS)
+        with self.assertRaises(ctrl.EngineUnavailable) as raised:
+            _controller().engine_for_request("supertonic", "en")
+        self.assertEqual(raised.exception.reason, "not-installed")
+
+    def test_choosing_supertonic_retries_a_failed_load(self):
+        ctrl = _controller(st_error="load-failed", last_attempt=100.0)
+        ctrl.browser_tts = False
+        ctrl._preferred_engine_key = lambda: "supertonic"
+        loaded = mock.Mock(voice="M1", steps=8, languages={"en"})
+        ctrl.utterance_speed = 1.0
+        with mock.patch.object(talk_controller.time, "monotonic", return_value=100.0 + ctrl.ST_RETRY_INTERVAL_S), \
+                mock.patch.object(talk_controller.supertonic_tts, "available", return_value=True), \
+                mock.patch.object(talk_controller.supertonic_tts, "SupertonicTTS", return_value=loaded):
+            self.assertTrue(ctrl.set_voice_engine("supertonic"))
+        self.assertIs(ctrl.st, loaded)
+        self.assertTrue(ctrl.prefer_supertonic and ctrl.engine_chosen)
 
 
 if __name__ == "__main__":

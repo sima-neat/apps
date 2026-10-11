@@ -291,16 +291,27 @@ class TalkController:
     # A failed load is retried on a later request at most this often.
     ST_RETRY_INTERVAL_S = 30.0
 
-    def _init_supertonic(self, prefer=True):
+    @staticmethod
+    def _load_failure_reason(error):
+        """A fixed reason for /health and the speech API; the full message is
+        only logged (it can hold paths or worker output)."""
+        text = str(error)
+        if re.search(r"dispatcher_unavailable|accelerator runtime is not available", text, re.I):
+            return "accelerator-unavailable"
+        return "load-failed"
+
+    def _init_supertonic(self):
         """Load the Supertonic 3 MLA engine when its runtime is installed.
-        A successful load makes it the default engine (``prefer``) unless the
-        user has chosen a voice engine, so a retry never overrides that choice."""
+        A successful load makes it the default engine unless the user has
+        chosen a voice engine, so a retry never overrides that choice."""
         self._st_last_attempt = time.monotonic()
         if not supertonic_tts.available():
             logging.info("Supertonic runtime not installed (venv %s, models %s) — MLA TTS "
                          "unavailable; run setup.sh with INSTALL_SUPERTONIC=1.",
                          supertonic_tts._supertonic_python() or supertonic_tts.DEFAULT_VENV,
                          supertonic_tts.models_root())
+            # Not installed (any more): nothing to retry, and no load failure to report.
+            self.st_error = None
             return
         try:
             st = supertonic_tts.SupertonicTTS(voice=self.st_voice_default())
@@ -310,13 +321,13 @@ class TalkController:
             # Read the user's choice now, after the slow load: an engine picked
             # while a retry was loading must not be overridden.
             with self._engine_lock:
-                if prefer and not self.engine_chosen:
+                if not self.engine_chosen:
                     self.prefer_supertonic = True
             logging.info("Supertonic 3 (MLA) ready: voice %s, %d steps, languages: %s",
                          st.voice, st.steps, sorted(st.languages))
         except Exception as e:  # noqa: BLE001
             logging.warning("Failed to load Supertonic 3 engine: %s", e)
-            self.st_error = str(e) or type(e).__name__
+            self.st_error = self._load_failure_reason(e)
             supertonic_tts.shutdown_worker()
 
     def retry_supertonic(self):
@@ -335,8 +346,10 @@ class TalkController:
                 self._init_supertonic()
 
     def engine_failures(self):
-        """Installed engines that failed to load, with their errors."""
-        return {'supertonic': self.st_error} if self.st is None and self.st_error else {}
+        """Installed engines that failed to load, with their reason
+        ('accelerator-unavailable' or 'load-failed')."""
+        st, err = self.st, self.st_error    # one read each: a retry may finish meanwhile
+        return {'supertonic': err} if st is None and err else {}
 
     @staticmethod
     def st_voice_default():
@@ -416,6 +429,8 @@ class TalkController:
         if engine in ("browser", "web", "webspeech", "web-speech"):
             flags = {"browser_tts": True}
         elif engine in ("supertonic", "supertonic-tts", "st", "mla"):
+            if self.st is None:
+                self.retry_supertonic()     # it may have failed to load earlier
             if self.st is None:
                 return False
             flags = {"browser_tts": False, "prefer_supertonic": True}
@@ -766,6 +781,7 @@ class TalkController:
 
     ENGINE_REFUSALS = {
         'not-installed': 'that engine is not installed on this Studio',
+        'load-failed': 'that engine failed to load; the Studio tries it again shortly',
         'no-voice': 'that engine has no voice for the requested language',
         'none': 'no TTS engine can speak the requested language',
     }
@@ -788,7 +804,7 @@ class TalkController:
             return language, eng
         if key == 'supertonic':
             if self.st is None:
-                raise self.EngineUnavailable('not-installed', key)
+                raise self.EngineUnavailable('load-failed' if self.st_error else 'not-installed', key)
             if self.st.supports(language):
                 return language, self.st
             raise self.EngineUnavailable('no-voice', key)

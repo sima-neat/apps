@@ -450,7 +450,11 @@ its settings. Insight relays every call, so the browser only talks to Insight.
 
 `/health` tells Insight which backend API it is talking to (`api_version`) and
 reports a voice engine that failed to load, such as Supertonic while the
-accelerator was unavailable. A later speech request retries loading it.
+accelerator was unavailable, with a fixed reason (`accelerator-unavailable` or
+`load-failed`; the details are in the Studio log). A speech request, or choosing
+the engine under **Settings → Voice engine**, retries loading it at most every
+30 s. Until then the speech API answers 503 with reason `load-failed` for that
+engine.
 
 ### Backend-only mode (for Insight and other front ends)
 `${APP_DIR}/run.sh --backend-only` starts the model server and the Studio's API
