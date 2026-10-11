@@ -291,7 +291,7 @@ def run(cfg: Config) -> None:
                     preprocess(frame, image)
                     runner.push([ev74_tensor(image), text_tensor])
                     pushed += 1
-                    save = cfg.save_dir and cfg.save_every and pushed % cfg.save_every == 0
+                    save = cfg.save_dir and cfg.save_every > 0 and pushed % cfg.save_every == 0
                     in_flight.append((sample.pts_ns // 1_000_000, frame if save else None))
                     continue
 
