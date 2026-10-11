@@ -841,6 +841,11 @@ class TalkController:
         """
         if not text:
             raise ValueError("No text provided for TTS synthesis.")
+        sanitized_text = self._sanitize_for_tts(text)
+        if not sanitized_text.strip():
+            # Only emoji or markup (for example "👍🏽"): nothing an engine can
+            # speak, and an empty synthesis would end in a 500.
+            raise AudioApiError(400, "'input' has no speakable text after removing emoji and markup", 'input')
 
         start_time = time.time()
         self.retry_supertonic()
@@ -849,7 +854,6 @@ class TalkController:
         if requested_voice.lower() == 'default':
             requested_voice = ''
 
-        sanitized_text = self._sanitize_for_tts(text)
         # ``speed`` is per request: it never touches the utterance speed the UI
         # slider set (that used to be a side effect of the API).
         if piper is self.st:

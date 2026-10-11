@@ -212,5 +212,15 @@ class SupertonicRetryTests(unittest.TestCase):
         self.assertTrue(ctrl.prefer_supertonic and ctrl.engine_chosen)
 
 
+    def test_speech_with_nothing_speakable_is_a_400_not_a_500(self):
+        ctrl = _controller()
+        with mock.patch.object(ctrl, "engine_for_request") as pick:
+            for text in ("\U0001F44D\U0001F3FD", "**\u2728**"):
+                with self.subTest(text=text), self.assertRaises(talk_controller.AudioApiError) as raised:
+                    ctrl.tts_on_demand(text)
+                self.assertEqual((raised.exception.status, raised.exception.param), (400, "input"))
+        pick.assert_not_called()   # rejected before any engine is chosen or loaded
+
+
 if __name__ == "__main__":
     unittest.main()
