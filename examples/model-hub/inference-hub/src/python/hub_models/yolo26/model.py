@@ -1,4 +1,4 @@
-"""YOLO26 object detection: Neat decodes the boxes and applies NMS on A65."""
+"""YOLO26 object detection: Neat decodes the boxes on A65; YOLO26 needs no NMS."""
 
 from __future__ import annotations
 
@@ -18,7 +18,6 @@ class Model(base.Model):
         )
         opt.decode_type = pyneat.BoxDecodeType.YoloV26
         opt.score_threshold = cfg["min_score"]
-        opt.nms_iou_threshold = cfg["nms_iou"]
         opt.top_k = cfg["max_detections"]
         self.neat_model = pyneat.Model(packs["model"], opt)
         self.labels = labels

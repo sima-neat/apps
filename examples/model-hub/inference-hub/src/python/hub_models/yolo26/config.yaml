@@ -8,5 +8,4 @@ variants:                 # model.variant -> Model Registry model ID.
   l: yolo26l
   x: yolo26x
 min_score: 0.4            # Minimum detection confidence.
-nms_iou: 0.6              # IoU above which overlapping boxes are suppressed.
 max_detections: 100       # Maximum boxes per frame.
