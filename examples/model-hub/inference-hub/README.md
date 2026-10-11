@@ -20,7 +20,7 @@ Run a YOLO26, RF-DETR, or ResNet-50 model from the Model Registry on an RTSP str
 
 ## Preview
 
-![Inference hub preview](../../../portal/assets/examples/model-hub/inference-hub/image.jpg)
+![Inference hub preview](../../../portal/assets/examples/model-hub/inference-hub/image.png)
 
 ## Prerequisites
 
