@@ -71,6 +71,7 @@ class TalkController:
         # Guards the engine preference flags (not the slow engine loads), so a
         # Supertonic retry and set_voice_engine cannot interleave their updates.
         self._engine_lock = threading.Lock()
+        self._engine_choice_id = 0   # newest set_voice_engine call; older ones may not apply
         self.browser_tts = False    # when True, no server synthesis — the client speaks via Web Speech
         self.utterance_speed = 1.0
         self.missing_voice_warnings = set()
@@ -424,8 +425,11 @@ class TalkController:
         Languages only one engine supports are unaffected. CPU engines that
         were deferred at startup load here, on first selection."""
         engine = (engine or "").strip().lower()
+        with self._engine_lock:
+            self._engine_choice_id += 1
+            choice_id = self._engine_choice_id
         # Load what the choice needs first (slow), then update the flags together
-        # under _engine_lock.
+        # under _engine_lock, unless a newer choice arrived during the load.
         if engine in ("browser", "web", "webspeech", "web-speech"):
             flags = {"browser_tts": True}
         elif engine in ("supertonic", "supertonic-tts", "st", "mla"):
@@ -450,6 +454,11 @@ class TalkController:
         else:
             return False
         with self._engine_lock:
+            if choice_id != self._engine_choice_id:
+                # A newer choice arrived during the load and wins; this call is
+                # not an error (the API answers with the engine now in use).
+                logging.info("Voice engine choice %r superseded by a newer one", engine)
+                return True
             for name, value in flags.items():
                 setattr(self, name, value)
             self.engine_chosen = True

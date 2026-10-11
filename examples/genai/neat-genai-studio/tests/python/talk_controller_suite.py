@@ -24,6 +24,7 @@ def _controller(st=None, st_error=None, last_attempt=0.0):
     ctrl._st_last_attempt = last_attempt
     ctrl.st_lock = talk_controller.threading.Lock()
     ctrl._engine_lock = talk_controller.threading.Lock()
+    ctrl._engine_choice_id = 0
     ctrl.engine_chosen = False
     return ctrl
 
@@ -220,6 +221,31 @@ class SupertonicRetryTests(unittest.TestCase):
                     ctrl.tts_on_demand(text)
                 self.assertEqual((raised.exception.status, raised.exception.param), (400, "input"))
         pick.assert_not_called()   # rejected before any engine is chosen or loaded
+
+
+    def test_a_slow_older_engine_choice_does_not_override_a_newer_one(self):
+        ctrl = _controller()
+        ctrl.browser_tts = False
+        ctrl.prefer_supertonic = False
+        ctrl.prefer_piper_plus = False
+        ctrl._preferred_engine_key = lambda: "x"
+        newer_done = talk_controller.threading.Event()
+
+        def slow_piper_plus_load():
+            newer_done.wait(5)           # the newer "browser" choice completes meanwhile
+            return True
+
+        ctrl._ensure_piper_plus_loaded = slow_piper_plus_load
+        older = talk_controller.threading.Thread(target=lambda: results.append(ctrl.set_voice_engine("piper-plus")))
+        results = []
+        older.start()
+        talk_controller.time.sleep(0.1)
+        self.assertTrue(ctrl.set_voice_engine("browser"))
+        newer_done.set()
+        older.join(5)
+        self.assertEqual(results, [True])           # answered, but the stale choice was not applied
+        self.assertTrue(ctrl.browser_tts)
+        self.assertFalse(ctrl.prefer_piper_plus)
 
 
 if __name__ == "__main__":
