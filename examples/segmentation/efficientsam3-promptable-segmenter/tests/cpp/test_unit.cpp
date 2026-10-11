@@ -117,6 +117,7 @@ int main(int argc, char** argv) {
   const fs::path invalid_config = fs::path(scratch) / "config.yaml";
   for (const auto& [key, value, message] : std::vector<std::array<std::string, 3>>{
            {"inference.min_score", "1.5", "inference.min_score must be in [0, 1]"},
+           {"inference.max_detections", "-1", "inference.max_detections must be > 0"},
            {"inference.mask_threshold", "-0.1", "inference.mask_threshold must be in [0, 1]"},
            {"runtime.profile_interval", "0", "runtime.profile_interval must be > 0"}}) {
     write_e2e_config("efficientsam3-promptable-segmenter", invalid_config, {{key, value}});

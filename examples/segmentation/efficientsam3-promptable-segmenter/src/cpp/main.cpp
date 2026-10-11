@@ -96,6 +96,7 @@ Config load_config(const fs::path& path) {
   cfg.save_every = raw.int_or("output.save_every", 0);
   sima_examples::require(cfg.min_score >= 0.0 && cfg.min_score <= 1.0,
                          "inference.min_score must be in [0, 1]");
+  sima_examples::require(cfg.max_detections > 0, "inference.max_detections must be > 0");
   sima_examples::require(cfg.mask_threshold >= 0.0 && cfg.mask_threshold <= 1.0,
                          "inference.mask_threshold must be in [0, 1]");
   sima_examples::require(cfg.profile_interval > 0, "runtime.profile_interval must be > 0");

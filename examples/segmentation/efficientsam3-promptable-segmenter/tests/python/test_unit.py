@@ -76,6 +76,7 @@ def test_packaged_config_loads():
     ("section", "key", "value", "message"),
     [
         ("inference", "min_score", 1.5, r"inference.min_score must be in \[0, 1\]"),
+        ("inference", "max_detections", -1, "inference.max_detections must be > 0"),
         ("inference", "mask_threshold", -0.1, r"inference.mask_threshold must be in \[0, 1\]"),
         ("runtime", "profile_interval", 0, "runtime.profile_interval must be > 0"),
     ],

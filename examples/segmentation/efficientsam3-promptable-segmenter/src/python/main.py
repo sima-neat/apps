@@ -57,6 +57,8 @@ def load_config(path: Path) -> Config:
     insight = output["insight"]
     if not 0.0 <= inference["min_score"] <= 1.0:
         raise ValueError("inference.min_score must be in [0, 1]")
+    if inference["max_detections"] <= 0:
+        raise ValueError("inference.max_detections must be > 0")
     if not 0.0 <= inference["mask_threshold"] <= 1.0:
         raise ValueError("inference.mask_threshold must be in [0, 1]")
     if runtime["profile_interval"] <= 0:
