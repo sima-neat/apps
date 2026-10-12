@@ -721,8 +721,10 @@ success or ❌ on failure, so a client must check that line rather than the
 status code. They answer JSON errors before the update starts: 409 while
 another document update is running or when RAG is turned off in the config,
 413 for a document larger than 10 MiB, and 400 for a missing or non-Markdown
-file. An update replaces the whole database; if it fails or the client
-disconnects, the previous database is restored.
+file. An update replaces the whole database; if it fails, or the client
+disconnects before it finishes, the previous database is restored. An update
+that finished (the search service is back up) is kept even if the client
+leaves before the last progress line.
 
 `features.rag` in `/health` reflects the configuration (`app.rag.enabled`);
 `GET /rag/status` reports whether the search service is actually up
