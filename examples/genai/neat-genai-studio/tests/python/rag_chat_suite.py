@@ -84,6 +84,20 @@ class ChatRequestShapeTests(unittest.TestCase):
                 self.assertEqual(rag_chat.chat_request_error(body)[1], None)
 
 
+class RagContextBudgetTests(unittest.TestCase):
+    def test_passages_together_fit_the_budget_and_only_those_are_used(self):
+        hits = [{"content": "x" * 1300, "metadata": {"Header_1": f"Part {i}"}} for i in range(10)]
+        kept = rag_chat.fit_passages(hits)
+        self.assertLessEqual(sum(len(h["content"]) for h in kept), rag_chat.MAX_CONTEXT_CHARS + 1)
+        self.assertEqual(len(kept), 3)          # two whole passages and a trimmed third
+        self.assertTrue(kept[-1]["content"].endswith("…"))
+        self.assertEqual(json.loads(rag_chat.sources_header(kept))[-1]["heading"], "Part 2")
+
+    def test_small_passages_all_fit_and_empty_ones_are_skipped(self):
+        hits = [{"content": "short"}, {"content": "  "}, {"content": "also short"}]
+        self.assertEqual([h["content"] for h in rag_chat.fit_passages(hits)], ["short", "also short"])
+
+
 class RagPassageTests(unittest.TestCase):
     def test_passages_go_into_the_question_and_the_system_prompt_stays_first(self):
         messages = [{"role": "system", "content": "Be brief."},
@@ -161,6 +175,12 @@ class RagSearchFailedTests(unittest.TestCase):
         message, status = rag_chat.search_failed_reply(database_exists=True)
         self.assertEqual(status, 503)
         self.assertIn("Try again in a moment", message)
+
+    def test_a_service_that_exited_says_waiting_wont_help(self):
+        message, status = rag_chat.search_failed_reply(database_exists=True, service_failed=True)
+        self.assertEqual(status, 503)
+        self.assertIn("stopped", message)
+        self.assertNotIn("Try again in a moment", message)
 
 
 class RagEventLoopTests(unittest.TestCase):

@@ -726,7 +726,9 @@ disconnects, the previous database is restored.
 
 `features.rag` in `/health` reflects the configuration (`app.rag.enabled`);
 `GET /rag/status` reports whether the search service is actually up
-(`service` is `ok`, `starting`, `no-database`, or `disabled` when RAG is off).
+(`service` is `ok`, `starting`, `failed` when the service exited (for example
+a missing embedding model; see the Studio's log), `no-database`, or `disabled`
+when RAG is off).
 
 Passage text is added to the user's question, so the model follows any
 instructions inside an uploaded document as if the user had written them.

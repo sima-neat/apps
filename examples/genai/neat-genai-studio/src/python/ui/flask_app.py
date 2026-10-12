@@ -258,6 +258,14 @@ def stop_service():
             vectodb_proc.wait(timeout=5)
     vectodb_proc = None
 
+def rag_service_failed():
+    """Whether the document search service this Studio started has exited
+    (a missing embedding model, a database it can't open): then it is not
+    "starting" and won't come up by waiting."""
+    proc = vectodb_proc
+    return proc is not None and proc.poll() is not None
+
+
 def restore_rag_database(backup_path, replacement_installed):
     """After a failed or abandoned update: put the previous database back and
     restart the service on it (no restart when there was none)."""
@@ -1296,11 +1304,12 @@ class AppContext:
                     return jsonify({'error': {'message': 'With neat_rag, the last user message must contain text',
                                               'param': 'messages', 'type': 'invalid_request_error'}}), 400
                 try:
-                    hits = ensure_rag_modules_loaded().search(question, k=rag['k'])
+                    # Only what fits the model's small window is used and reported.
+                    hits = rag_chat.fit_passages(ensure_rag_modules_loaded().search(question, k=rag['k']))
                 except Exception as exc:  # noqa: BLE001
                     logging.error(f"RAG search failed: {exc}")
                     from rag.inspect_db import default_db_path
-                    message, status = rag_chat.search_failed_reply(os.path.isfile(default_db_path()))
+                    message, status = rag_chat.search_failed_reply(os.path.isfile(default_db_path()), rag_service_failed())
                     return jsonify({'error': {'message': message}}), status
                 payload['messages'] = rag_chat.with_passages(payload['messages'], hits)
                 rag_headers = {'X-RAG-Hits': str(len(hits)),
@@ -1632,9 +1641,15 @@ class AppContext:
             except Exception:  # noqa: BLE001
                 up = False
             exists = os.path.isfile(db_path)
+            if up:
+                service = "ok"
+            elif not exists:
+                service = "no-database"
+            else:
+                service = "failed" if rag_service_failed() else "starting"
             return jsonify({
                 "enabled": True,
-                "service": "ok" if up else ("starting" if exists else "no-database"),
+                "service": service,
                 "database": exists,
                 "meta": read_rag_meta(db_path) if exists else None,
             })
@@ -1656,7 +1671,7 @@ class AppContext:
             except Exception as exc:  # noqa: BLE001
                 logging.error(f"RAG search failed: {exc}")
                 from rag.inspect_db import default_db_path
-                message, status = rag_chat.search_failed_reply(os.path.isfile(default_db_path()))
+                message, status = rag_chat.search_failed_reply(os.path.isfile(default_db_path()), rag_service_failed())
                 return jsonify({"error": message}), status
             source = rag_document_name()
             return jsonify({"results": [dict(rag_chat.passage_source(h, source), content=h.get("content", ""))

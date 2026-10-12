@@ -22,6 +22,9 @@ MAX_K = 10
 # Passages are trimmed so a large chunk can't crowd the question out of the
 # model's context.
 MAX_PASSAGE_CHARS = 1500
+# All passages together, as the CLI's chat caps them: the board's models have
+# small fixed context windows, and the question must still fit after them.
+MAX_CONTEXT_CHARS = 3000
 # X-RAG-Sources stays well inside common proxy and client header limits.
 MAX_HEADING_CHARS = 120
 MAX_SOURCES_HEADER_BYTES = 4096
@@ -134,6 +137,25 @@ def passage_source(hit: Mapping, default_source: str = "") -> dict:
     }
 
 
+def fit_passages(hits: list) -> list:
+    """The hits that fit the context budget, in search order, each trimmed to
+    ``MAX_PASSAGE_CHARS`` and together at most ``MAX_CONTEXT_CHARS``. Only
+    these are given to the model and reported as sources."""
+    kept, total = [], 0
+    for hit in hits or []:
+        text = str(hit.get("content") or "").strip()[:MAX_PASSAGE_CHARS]
+        if not text:
+            continue
+        room = MAX_CONTEXT_CHARS - total
+        if len(text) > room:
+            if room > 200:            # only a worthwhile remainder
+                kept.append({**hit, "content": text[:room].rstrip() + "…"})
+            break
+        kept.append({**hit, "content": text})
+        total += len(text)
+    return kept
+
+
 def with_passages(messages: list, hits: list) -> list:
     """``messages`` with the passages placed in the last user message, ahead of
     the question, as the Studio's own chat does. A separate system message is
@@ -174,13 +196,17 @@ def sources_header(hits: list, default_source: str = "") -> str:
         sources.pop()
 
 
-def search_failed_reply(database_exists: bool) -> tuple[str, int]:
+def search_failed_reply(database_exists: bool, service_failed: bool = False) -> tuple[str, int]:
     """The error message and HTTP status for a chat with documents whose
     search failed. Without a database (the documents were cleared, or none
-    were ever built) the user has to upload or reset, so 409; otherwise the
-    service is still starting or has stopped, so 503."""
+    were ever built) the user has to upload or reset, so 409; a service that
+    exited won't recover by waiting, so 503 that says so; otherwise the
+    service is still starting, so 503 to try again."""
     if not database_exists:
         return ("No documents are loaded on the board: they were cleared, or none were built. "
                 "Upload a Markdown file or reset to the default document."), 409
+    if service_failed:
+        return ("The document search service stopped (see the Studio's log). "
+                "Restart GenAI Studio, or reset the documents."), 503
     return ("The document search service is not available yet. "
             "Try again in a moment, or rebuild the documents."), 503

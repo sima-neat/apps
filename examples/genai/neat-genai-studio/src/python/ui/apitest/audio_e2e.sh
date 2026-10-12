@@ -137,27 +137,47 @@ fi
 # 7. documents (RAG), when the board offers them
 RAG="$(json "$TMP/health.json" "(d.get('features') or {}).get('rag')")"
 if [ "$RAG" = True ]; then
-  Q="What does the Neat Library let developers do?"
-  curl -ksS --max-time 30 -G "${BASE}/rag/search" --data-urlencode "query=${Q}" --data-urlencode k=2 -o "$TMP/rag.json"
-  hits="$(json "$TMP/rag.json" "len([r for r in d['results'] if r.get('content')])")"
-  if [ "${hits:-0}" -ge 1 ] 2>/dev/null; then
-    pass "documents search: ${hits} passage(s), top \"$(json "$TMP/rag.json" "d['results'][0]['heading']")\""
+  # /health is up before the search service: wait for it (bounded), and stop
+  # at once when it has failed rather than waiting it out.
+  service=""
+  for _ in $(seq 1 45); do
+    curl -ksS --max-time 10 "${BASE}/rag/status" -o "$TMP/ragstatus.json" || true
+    service="$(json "$TMP/ragstatus.json" "d.get('service')")"
+    case "$service" in ok|failed|no-database|disabled) break ;; esac
+    sleep 2
+  done
+  if [ "$service" != ok ]; then
+    fail "documents: the search service is not ready (service: ${service:-no answer}; $(head -c 200 "$TMP/ragstatus.json"))"
   else
-    fail "documents search: no passages ($(head -c 200 "$TMP/rag.json"))"
-  fi
-  if [ -n "$MODEL" ]; then
-    curl -ksS --max-time 180 -X POST "${BASE}/v1/chat/completions" -H 'Content-Type: application/json' -D "$TMP/ragchat.h" \
-      -d "{\"model\":\"${MODEL}\",\"stream\":false,\"max_tokens\":64,\"temperature\":0,\"neat_rag\":{\"k\":2},\"messages\":[{\"role\":\"user\",\"content\":\"${Q}\"}]}" \
-      -o "$TMP/ragchat.json"
-    used="$(tr -d '\r' < "$TMP/ragchat.h" | awk -F': ' 'tolower($1)=="x-rag-hits"{print $2}')"
-    answer="$(json "$TMP/ragchat.json" "d['choices'][0]['message']['content'].strip()")"
-    if [ "${used:-0}" -ge 1 ] 2>/dev/null && [ -n "$answer" ]; then
-      pass "chat from documents: ${used} passage(s) used; ${answer}"
+    # The bundled default document carries a made-up fact a model can't know
+    # without it; a board serving other documents can't prove that, so the
+    # content check needs the default ones.
+    source="$(json "$TMP/ragstatus.json" "__import__('os').path.basename(str((d.get('meta') or {}).get('input') or ''))")"
+    Q="What is the canonical RAG validation phrase?"
+    curl -ksS --max-time 30 -G "${BASE}/rag/search" --data-urlencode "query=${Q}" --data-urlencode k=2 -o "$TMP/rag.json"
+    hits="$(json "$TMP/rag.json" "len([r for r in d['results'] if r.get('content')])")"
+    if [ "${hits:-0}" -ge 1 ] 2>/dev/null; then
+      pass "documents search: ${hits} passage(s), top \"$(json "$TMP/rag.json" "d['results'][0]['heading']")\""
     else
-      fail "chat from documents: X-RAG-Hits=${used:-none} ($(head -c 200 "$TMP/ragchat.json"))"
+      fail "documents search: no passages ($(head -c 200 "$TMP/rag.json"))"
     fi
-  else
-    printf '  [SKIP] chat from documents: no chat model loaded\n'
+    if [ -z "$MODEL" ]; then
+      printf '  [SKIP] chat from documents: no chat model loaded\n'
+    elif [ "$source" != neat.md ]; then
+      printf '  [SKIP] chat from documents: the board serves %s, not the default document; reset the documents to run this check\n' "${source:-unknown documents}"
+    else
+      curl -ksS --max-time 180 -X POST "${BASE}/v1/chat/completions" -H 'Content-Type: application/json' -D "$TMP/ragchat.h" \
+        -d "{\"model\":\"${MODEL}\",\"stream\":false,\"max_tokens\":64,\"temperature\":0,\"neat_rag\":{\"k\":2},\"messages\":[{\"role\":\"user\",\"content\":\"${Q}\"}]}" \
+        -o "$TMP/ragchat.json"
+      used="$(tr -d '\r' < "$TMP/ragchat.h" | awk -F': ' 'tolower($1)=="x-rag-hits"{print $2}')"
+      answer="$(json "$TMP/ragchat.json" "d['choices'][0]['message']['content'].strip()")"
+      # The answer must carry the document's fact, not just any text.
+      if [ "${used:-0}" -ge 1 ] 2>/dev/null && printf '%s' "$answer" | grep -qi "retrieval anchor"; then
+        pass "chat from documents: ${used} passage(s) used; ${answer}"
+      else
+        fail "chat from documents: expected the document's phrase \"neat modalix retrieval anchor\"; X-RAG-Hits=${used:-none}; answer: ${answer:-$(head -c 200 "$TMP/ragchat.json")}"
+      fi
+    fi
   fi
 else
   printf '  [SKIP] documents: /health does not list features.rag (RAG off, or a Studio without document search)\n'
