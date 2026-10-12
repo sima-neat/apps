@@ -688,9 +688,11 @@ The Studio searches with the last user message, adds the matching passages
 before it, and removes the field before the request reaches the model server.
 The response headers `X-RAG-Hits` and `X-RAG-Sources` say which passages were
 used. A request with `neat_rag` answers 409 when RAG is turned off in the
-config or the documents were cleared (upload one or reset), and 503 while the
-search service is starting. This works in the full Studio and in backend-only
-mode, which also starts the RAG service:
+config or the documents were cleared (upload one or reset), 503 while the
+search service is starting, and 400 when `messages` is not a list of objects.
+`GET /rag/search` answers with the same statuses. This works in the full
+Studio and in backend-only mode, which also starts the RAG service when a
+database exists:
 
 ```bash
 B=https://127.0.0.1:5000
@@ -700,6 +702,24 @@ curl -sk -N $B/v1/chat/completions -H 'Content-Type: application/json' -D - -d '
 curl -sk -F file=@/path/to/document.md $B/rag/upload   # replace the database with this document
 curl -sk -X POST $B/rag/reset                           # back to the bundled document
 ```
+
+`POST /rag/upload`, `/rag/reset` and `/rag/clear` answer `200` with
+`text/plain` progress, one line per step, and the last line starts with ✅ on
+success or ❌ on failure, so a client must check that line rather than the
+status code. They answer JSON errors before the update starts: 409 while
+another document update is running or when RAG is turned off in the config,
+413 for a document larger than 10 MiB, and 400 for a missing or non-Markdown
+file. An update replaces the whole database; if it fails or the client
+disconnects, the previous database is restored.
+
+`features.rag` in `/health` reflects the configuration (`app.rag.enabled`);
+`GET /rag/status` reports whether the search service is actually up
+(`service` is `ok`, `starting` or `no-database`).
+
+Passage text is added to the user's question, so the model follows any
+instructions inside an uploaded document as if the user had written them.
+Upload only documents you trust; in backend-only mode `/rag/upload` is
+reachable by any client that can reach the Studio.
 
 #### Reset or clear the RAG database
 - **Reset to Default** rebuilds RAG from the bundled `src/common/rag/neat.md`.

@@ -47,6 +47,13 @@ class RagQuestionTests(unittest.TestCase):
         self.assertEqual(rag_chat.last_user_text(messages), "What is Neat?")
         self.assertEqual(rag_chat.last_user_text([]), "")
 
+    def test_messages_must_be_a_list_of_objects(self):
+        # The chat route answers 400 for these instead of failing with a 500.
+        self.assertTrue(rag_chat.messages_are_valid([]))
+        self.assertTrue(rag_chat.messages_are_valid([{"role": "user", "content": "hi"}]))
+        for messages in ("hi", {"role": "user"}, ["hi"], [{"role": "user"}, None], None):
+            self.assertFalse(rag_chat.messages_are_valid(messages), messages)
+
 
 class RagPassageTests(unittest.TestCase):
     def test_passages_go_into_the_question_and_the_system_prompt_stays_first(self):
@@ -82,9 +89,35 @@ class RagPassageTests(unittest.TestCase):
         self.assertLess(len(note), rag_chat.MAX_PASSAGE_CHARS + 400)
 
     def test_sources_header_is_ascii_json_with_headings_and_scores(self):
-        header = rag_chat.sources_header([HIT])
+        header = rag_chat.sources_header([HIT], "neat.md")
         header.encode("ascii")  # a valid HTTP header value
-        self.assertEqual(json.loads(header), [{"source": "", "heading": "Neat Library Overview › What Neat Is", "score": 0.8123}])
+        self.assertEqual(json.loads(header), [{"source": "neat.md", "heading": "Neat Library Overview › What Neat Is",
+                                               "score": 0.8123}])
+
+    def test_the_source_is_the_document_the_database_was_built_from(self):
+        self.assertEqual(rag_chat.document_name({"input": "/data/apps/src/common/rag/neat.md"}), "neat.md")
+        self.assertEqual(rag_chat.document_name({"input": "guide.md"}), "guide.md")
+        self.assertEqual(rag_chat.document_name({}), "")
+        self.assertEqual(rag_chat.passage_source(HIT)["source"], "")
+        named = dict(HIT, metadata=dict(HIT["metadata"], source="other.md"))
+        self.assertEqual(rag_chat.passage_source(named, "neat.md")["source"], "other.md",
+                         "a passage that names its file keeps it")
+
+    def test_long_headings_and_many_sources_fit_one_header(self):
+        long_hit = dict(HIT, metadata={"Header_1": "ü" * 500})
+        self.assertEqual(len(rag_chat.passage_source(long_hit)["heading"]), rag_chat.MAX_HEADING_CHARS)
+        header = rag_chat.sources_header([long_hit] * rag_chat.MAX_K, "x" * 200 + ".md")
+        header.encode("ascii")
+        self.assertLessEqual(len(header), rag_chat.MAX_SOURCES_HEADER_BYTES)
+        sources = json.loads(header)
+        self.assertTrue(0 < len(sources) < rag_chat.MAX_K, "trailing entries are dropped, the first ones kept")
+        self.assertEqual(sources[0]["heading"], "ü" * rag_chat.MAX_HEADING_CHARS)
+
+    def test_a_malformed_content_part_does_not_break_the_passages(self):
+        messages = [{"role": "user", "content": ["stray", {"type": "text", "text": "q"}]}]
+        parts = rag_chat.with_passages(messages, [HIT])[0]["content"]
+        self.assertEqual(parts[0], "stray")
+        self.assertTrue(parts[1]["text"].endswith("Question: q"))
 
 
 class RagSearchFailedTests(unittest.TestCase):
@@ -128,6 +161,30 @@ class RagEventLoopTests(unittest.TestCase):
         thread.start()
         thread.join()
         self.assertEqual(seen, {"before": "none", "after": True, "again": True})
+
+    def test_the_route_closes_the_loop_it_created(self):
+        import asyncio
+        import threading
+
+        from rag.event_loop import close_thread_event_loop, ensure_thread_event_loop
+
+        seen = {}
+
+        def worker():
+            loop = ensure_thread_event_loop()
+            close_thread_event_loop()
+            seen["closed"] = loop.is_closed()
+            try:
+                asyncio.get_event_loop()
+                seen["after"] = "had one"
+            except RuntimeError:
+                seen["after"] = "none"
+            close_thread_event_loop()   # nothing created: no error
+
+        thread = threading.Thread(target=worker)
+        thread.start()
+        thread.join()
+        self.assertEqual(seen, {"closed": True, "after": "none"})
 
 
 if __name__ == "__main__":

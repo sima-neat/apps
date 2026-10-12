@@ -9,6 +9,11 @@ never hit this.
 """
 
 import asyncio
+import threading
+
+# The loop ensure_thread_event_loop created for each thread, so the route that
+# built a database can close it again (worker threads are reused).
+_created = threading.local()
 
 
 def ensure_thread_event_loop() -> asyncio.AbstractEventLoop:
@@ -18,4 +23,17 @@ def ensure_thread_event_loop() -> asyncio.AbstractEventLoop:
     except RuntimeError:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        _created.loop = loop
         return loop
+
+
+def close_thread_event_loop() -> None:
+    """Close and unset the loop ensure_thread_event_loop created for this
+    thread, if it created one; a loop the thread already had is left alone."""
+    loop = getattr(_created, "loop", None)
+    if loop is None:
+        return
+    _created.loop = None
+    asyncio.set_event_loop(None)
+    if not loop.is_closed():
+        loop.close()

@@ -58,6 +58,7 @@ import supertonic_tts
 from talk_controller import TalkController
 import backend_mode
 import rag_chat
+from rag.event_loop import close_thread_event_loop
 from audio_api import (
     MAX_TRANSCRIPTION_BYTES,
     AudioApiError,
@@ -187,6 +188,15 @@ create_markdown_vectordb = None
 validate_rag_database = None
 wait_for_rag_service = None
 
+# One document update at a time: upload, import, reset and clear each stop the
+# RAG service and replace or remove its database, so two at once would race.
+RAG_UPDATE_LOCK = threading.Lock()
+RAG_UPDATE_BUSY = "A document update is already running; try again when it finishes."
+# Largest Markdown file /rag/upload accepts, and the request body allowed
+# around it (multipart envelope and form fields).
+MAX_RAG_UPLOAD_BYTES = 10 * 1024 * 1024
+RAG_UPLOAD_REQUEST_LIMIT = MAX_RAG_UPLOAD_BYTES + 1024 * 1024
+
 
 def save_image_upload_as_base64(image_file, upload_folder):
     filename = secure_filename(image_file.filename or "")
@@ -247,6 +257,53 @@ def stop_service():
             os.killpg(pgid, signal.SIGKILL)
             vectodb_proc.wait(timeout=5)
     vectodb_proc = None
+
+def restore_rag_database(backup_path, replacement_installed):
+    """After a failed or abandoned update: put the previous database back and
+    restart the service on it (no restart when there was none)."""
+    global vectodb_proc
+    stop_service()
+    if replacement_installed and os.path.exists(RAG_DB_PATH):
+        os.unlink(RAG_DB_PATH)
+    if backup_path and os.path.exists(backup_path):
+        os.replace(backup_path, RAG_DB_PATH)
+    if os.path.exists(RAG_DB_PATH):
+        try:
+            vectodb_proc = start_service()
+            wait_for_rag_service(vectodb_proc)
+        except Exception:  # noqa: BLE001
+            logging.exception("Failed to restore the previous RAG service")
+
+
+def rag_update_response(stream):
+    """Stream a document update that holds ``RAG_UPDATE_LOCK``, releasing it
+    once: when the stream ends, or when the response closes because the
+    client went away (possibly before the stream started)."""
+    released = []
+
+    def release():
+        if not released:
+            released.append(True)
+            RAG_UPDATE_LOCK.release()
+
+    def run():
+        try:
+            yield from stream
+        finally:
+            close_thread_event_loop()
+            release()
+
+    response = Response(stream_with_context(run()), mimetype="text/plain")
+    response.call_on_close(release)
+    return response
+
+
+def rag_document_name():
+    """The file the current database was built from, for passages that do not
+    name one (empty when unknown)."""
+    from rag.inspect_db import read_rag_meta
+    return rag_chat.document_name(read_rag_meta())
+
 
 def handle_shutdown_signal(signum, _frame):
     logging.info("Received signal %s; stopping RAG database service", signum)
@@ -1227,6 +1284,9 @@ class AppContext:
                 if not self.rag_enabled:
                     return jsonify({'error': {'message': 'Document search (RAG) is disabled on this board. '
                                                          'Set app.rag.enabled in config.local.yaml.'}}), 409
+                if not rag_chat.messages_are_valid(payload.get('messages') or []):
+                    return jsonify({'error': 'With neat_rag, messages must be a list of objects',
+                                    'param': 'messages'}), 400
                 question = rag_chat.last_user_text(payload.get('messages') or [])
                 try:
                     hits = ensure_rag_modules_loaded().search(question, k=rag['k']) if question else []
@@ -1236,7 +1296,8 @@ class AppContext:
                     message, status = rag_chat.search_failed_reply(os.path.isfile(default_db_path()))
                     return jsonify({'error': {'message': message}}), status
                 payload['messages'] = rag_chat.with_passages(payload.get('messages') or [], hits)
-                rag_headers = {'X-RAG-Hits': str(len(hits)), 'X-RAG-Sources': rag_chat.sources_header(hits)}
+                rag_headers = {'X-RAG-Hits': str(len(hits)),
+                               'X-RAG-Sources': rag_chat.sources_header(hits, rag_document_name())}
             url = f"http://{self.app.config['SIMAAI_IP_ADDR']}/v1/chat/completions"
             try:
                 upstream = requests.post(url, json=payload, stream=True, timeout=(10, 600))
@@ -1587,8 +1648,12 @@ class AppContext:
                 hits = ensure_rag_modules_loaded().search(query, k=k)
             except Exception as exc:  # noqa: BLE001
                 logging.error(f"RAG search failed: {exc}")
-                return jsonify({"error": "The RAG database service is not available"}), 503
-            return jsonify({"results": [dict(rag_chat.passage_source(h), content=h.get("content", "")) for h in hits]})
+                from rag.inspect_db import default_db_path
+                message, status = rag_chat.search_failed_reply(os.path.isfile(default_db_path()))
+                return jsonify({"error": message}), status
+            source = rag_document_name()
+            return jsonify({"results": [dict(rag_chat.passage_source(h, source), content=h.get("content", ""))
+                                        for h in hits]})
 
         @self.app.route('/rag/inspect', methods=['GET'])
         def rag_inspect():
@@ -1871,32 +1936,69 @@ class AppContext:
             def upload_image_disabled():
                 return jsonify({'error': 'Image upload is disabled in LLM-only mode'}), 400
 
+        def rag_route_error(message, status):
+            """The /rag/ API answers errors as JSON; the UI's own routes keep
+            plain text."""
+            if request.path.startswith("/rag/"):
+                return jsonify({"error": message}), status
+            return message, status
+
+        def rag_disabled_reply():
+            # /rag/ answers 409 like /rag/search and chat with neat_rag.
+            if request.path.startswith("/rag/"):
+                return jsonify({"error": "RAG is disabled"}), 409
+            return "RAG is disabled", 403
+
         @self.app.route("/rag/upload", methods=["POST"])
         @self.app.route("/upload-to-rag", methods=["POST"])
         def upload_to_rag():
             if not self.rag_enabled:
-                return "RAG is disabled", 403
+                return rag_disabled_reply()
 
-            uploaded_file = request.files.get("file")
+            too_large = f"The document is larger than {MAX_RAG_UPLOAD_BYTES // (1024 * 1024)} MiB."
+            declared = request.content_length
+            if declared is not None and declared > RAG_UPLOAD_REQUEST_LIMIT:
+                return rag_route_error(too_large, 413)
+            try:
+                request.max_content_length = RAG_UPLOAD_REQUEST_LIMIT   # bounds a chunked body too
+            except AttributeError:
+                pass  # Flask < 3.1: the file's own size is still checked below
+            try:
+                uploaded_file = request.files.get("file")
+            except RequestEntityTooLarge:
+                return rag_route_error(too_large, 413)
             if not uploaded_file:
-                return "No file provided", 400
+                return rag_route_error("No file provided", 400)
 
             filename = secure_filename(uploaded_file.filename)
             if not filename.lower().endswith(".md"):
-                return "Only Markdown RAG upload is supported locally.", 400
-
-            with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1]) as tmp:
-                uploaded_file.save(tmp)
-                tmp_path = tmp.name
+                return rag_route_error("Only Markdown RAG upload is supported locally.", 400)
+            size = _upload_size(uploaded_file)
+            if size is not None and size > MAX_RAG_UPLOAD_BYTES:
+                return rag_route_error(too_large, 413)
+            # Read now: the request's files are closed once the response starts
+            # streaming. Bounded, so at most the limit (plus one byte) is held.
+            data = uploaded_file.stream.read(MAX_RAG_UPLOAD_BYTES + 1)
+            if len(data) > MAX_RAG_UPLOAD_BYTES:
+                return rag_route_error(too_large, 413)
+            if not RAG_UPDATE_LOCK.acquire(blocking=False):
+                return rag_route_error(RAG_UPDATE_BUSY, 409)
 
             def stream_response():
                 global vectodb_proc
                 yield "⏳ Starting...\n"
+                tmp_path = None
                 new_db_path = None
                 backup_path = None
                 service_stopped = False
                 replacement_installed = False
                 try:
+                    # Written here rather than before streaming, so a client that
+                    # goes away before the first line leaves no temporary file.
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1]) as tmp:
+                        tmp_path = tmp.name
+                        tmp.write(data)
+
                     ensure_rag_modules_loaded()
                     yield "📚 Creating VectorDB from Markdown...\n"
                     fd, new_db_path = tempfile.mkstemp(
@@ -1946,26 +2048,27 @@ class AppContext:
                     if backup_path:
                         os.unlink(backup_path)
                         backup_path = None
+                    service_stopped = False   # done: nothing to roll back
                     yield "✅ Markdown RAG database is ready.\n"
 
-                except Exception as e:
-                    logging.exception("RAG document upload failed: %s", e)
+                except BaseException as e:
+                    # BaseException too: a client that disconnects mid-update
+                    # raises GeneratorExit at a yield, and the previous
+                    # database must still come back.
+                    if isinstance(e, Exception):
+                        logging.exception("RAG document upload failed: %s", e)
+                    else:
+                        logging.warning("RAG document upload interrupted (%s); restoring the previous database",
+                                        type(e).__name__)
                     if service_stopped:
-                        stop_service()
-                        if replacement_installed and os.path.exists(RAG_DB_PATH):
-                            os.unlink(RAG_DB_PATH)
-                        if backup_path and os.path.exists(backup_path):
-                            os.replace(backup_path, RAG_DB_PATH)
-                            backup_path = None
-                        if os.path.exists(RAG_DB_PATH):
-                            try:
-                                vectodb_proc = start_service()
-                                wait_for_rag_service(vectodb_proc)
-                            except Exception:  # noqa: BLE001
-                                logging.exception("Failed to restore the previous RAG service")
+                        restore_rag_database(backup_path, replacement_installed)
+                        backup_path = None
+                    if not isinstance(e, Exception):
+                        raise   # the client is gone; nothing more can be sent
                     yield "❌ RAG document upload failed.\n"
                 finally:
-                    os.unlink(tmp_path)
+                    if tmp_path and os.path.exists(tmp_path):
+                        os.unlink(tmp_path)
                     if new_db_path and os.path.exists(new_db_path):
                         os.unlink(new_db_path)
                     if new_db_path:
@@ -1973,12 +2076,14 @@ class AppContext:
                         if os.path.exists(new_meta_path):
                             os.unlink(new_meta_path)
 
-            return Response(stream_with_context(stream_response()), mimetype="text/plain")
+            return rag_update_response(stream_response())
         
         @self.app.route("/import-rag-db", methods=["POST"])
         def import_rag_db():
             if not self.rag_enabled:
                 return "RAG is disabled", 403
+            if not RAG_UPDATE_LOCK.acquire(blocking=False):
+                return RAG_UPDATE_BUSY, 409
 
             def _stream():
                 global vectodb_proc
@@ -2029,35 +2134,35 @@ class AppContext:
                         os.unlink(backup_path)
                         backup_path = None
 
+                    service_stopped = False   # done: nothing to roll back
                     yield "✅ Import completed and service restarted.\n"
-                except Exception as e:
-                    logging.exception("RAG database import failed: %s", e)
+                except BaseException as e:
+                    # BaseException too: see upload_to_rag.
+                    if isinstance(e, Exception):
+                        logging.exception("RAG database import failed: %s", e)
+                    else:
+                        logging.warning("RAG database import interrupted (%s); restoring the previous database",
+                                        type(e).__name__)
                     if service_stopped:
-                        stop_service()
-                        if replacement_installed and os.path.exists(RAG_DB_PATH):
-                            os.unlink(RAG_DB_PATH)
-                        if backup_path and os.path.exists(backup_path):
-                            os.replace(backup_path, RAG_DB_PATH)
-                            backup_path = None
-                        if os.path.exists(RAG_DB_PATH):
-                            try:
-                                vectodb_proc = start_service()
-                                wait_for_rag_service(vectodb_proc)
-                            except Exception:  # noqa: BLE001
-                                logging.exception("Failed to restore the previous RAG service")
+                        restore_rag_database(backup_path, replacement_installed)
+                        backup_path = None
+                    if not isinstance(e, Exception):
+                        raise
                     yield "❌ RAG database import failed.\n"
                 finally:
                     if 'tmp_path' in locals() and os.path.exists(tmp_path):
                         os.unlink(tmp_path)
 
-            return Response(stream_with_context(_stream()), mimetype="text/plain")
+            return rag_update_response(_stream())
 
         @self.app.route("/rag/reset", methods=["POST"])
         @self.app.route("/reset-rag", methods=["POST"])
         def reset_rag():
             """Rebuild the RAG database from the bundled default Markdown."""
             if not self.rag_enabled:
-                return "RAG is disabled", 403
+                return rag_disabled_reply()
+            if not RAG_UPDATE_LOCK.acquire(blocking=False):
+                return rag_route_error(RAG_UPDATE_BUSY, 409)
             default_md = Path(__file__).resolve().parents[2] / "common" / "rag" / "neat.md"
 
             def _stream():
@@ -2112,22 +2217,20 @@ class AppContext:
                     if backup_path:
                         os.unlink(backup_path)
                         backup_path = None
+                    service_stopped = False   # done: nothing to roll back
                     yield "✅ RAG database reset to default.\n"
-                except Exception as e:  # noqa: BLE001
-                    logging.exception("RAG database reset failed: %s", e)
+                except BaseException as e:  # noqa: BLE001
+                    # BaseException too: see upload_to_rag.
+                    if isinstance(e, Exception):
+                        logging.exception("RAG database reset failed: %s", e)
+                    else:
+                        logging.warning("RAG database reset interrupted (%s); restoring the previous database",
+                                        type(e).__name__)
                     if service_stopped:
-                        stop_service()
-                        if replacement_installed and os.path.exists(RAG_DB_PATH):
-                            os.unlink(RAG_DB_PATH)
-                        if backup_path and os.path.exists(backup_path):
-                            os.replace(backup_path, RAG_DB_PATH)
-                            backup_path = None
-                        if os.path.exists(RAG_DB_PATH):
-                            try:
-                                vectodb_proc = start_service()
-                                wait_for_rag_service(vectodb_proc)
-                            except Exception:  # noqa: BLE001
-                                logging.exception("Failed to restore the previous RAG service")
+                        restore_rag_database(backup_path, replacement_installed)
+                        backup_path = None
+                    if not isinstance(e, Exception):
+                        raise
                     yield "❌ RAG database reset failed.\n"
                 finally:
                     if new_db_path and os.path.exists(new_db_path):
@@ -2137,14 +2240,16 @@ class AppContext:
                         if os.path.exists(new_meta_path):
                             os.unlink(new_meta_path)
 
-            return Response(stream_with_context(_stream()), mimetype="text/plain")
+            return rag_update_response(_stream())
 
         @self.app.route("/rag/clear", methods=["POST"])
         @self.app.route("/clear-rag", methods=["POST"])
         def clear_rag():
             """Clear the RAG database — stop the service and remove the DB files."""
             if not self.rag_enabled:
-                return "RAG is disabled", 403
+                return rag_disabled_reply()
+            if not RAG_UPDATE_LOCK.acquire(blocking=False):
+                return rag_route_error(RAG_UPDATE_BUSY, 409)
 
             def _stream():
                 global vectodb_proc
@@ -2168,7 +2273,7 @@ class AppContext:
                     logging.exception("RAG database cleanup failed: %s", e)
                     yield "❌ RAG database cleanup failed.\n"
 
-            return Response(stream_with_context(_stream()), mimetype="text/plain")
+            return rag_update_response(_stream())
 
 
 
@@ -2502,9 +2607,15 @@ def run_ui(app_cfg, backend_only=False):
 
     # Backend-only mode serves the /rag/ routes and chat's "neat_rag" option too.
     if genai_app.rag_enabled:
-        logging.info("Starting RAG database service")
         ensure_rag_modules_loaded()
-        vectodb_proc = start_service()
+        # Without a database (cleared, or never built) the service stays off,
+        # so /rag/status keeps reporting "no-database" and chat with neat_rag
+        # answers 409 until a document is uploaded or reset.
+        if os.path.isfile(RAG_DB_PATH):
+            logging.info("Starting RAG database service")
+            vectodb_proc = start_service()
+        else:
+            logging.info("No RAG database at %s; upload a document or reset to start the service", RAG_DB_PATH)
     else:
         logging.info("RAG database service disabled")
 

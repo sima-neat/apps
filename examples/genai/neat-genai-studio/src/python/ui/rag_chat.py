@@ -10,6 +10,7 @@ so every client gets the same retrieval as the Studio's own chat.
 from __future__ import annotations
 
 import json
+from pathlib import PurePath
 from typing import Any, Iterable, Mapping
 
 REQUEST_FIELD = "neat_rag"
@@ -18,6 +19,9 @@ MAX_K = 10
 # Passages are trimmed so a large chunk can't crowd the question out of the
 # model's context.
 MAX_PASSAGE_CHARS = 1500
+# X-RAG-Sources stays well inside common proxy and client header limits.
+MAX_HEADING_CHARS = 120
+MAX_SOURCES_HEADER_BYTES = 4096
 
 # Plain wording and bare passage text: on a DevKit, Qwen3 0.6B copied
 # numbered labels, headings and longer instructions into its answers, and
@@ -50,6 +54,12 @@ def message_text(content: Any) -> str:
     return ""
 
 
+def messages_are_valid(messages: Any) -> bool:
+    """Whether ``messages`` can be searched and given passages: a list of
+    objects. The chat route answers 400 otherwise."""
+    return isinstance(messages, list) and all(isinstance(m, Mapping) for m in messages)
+
+
 def last_user_text(messages: Iterable[Mapping]) -> str:
     """The question to search with: the last user message's text, without the
     ``/no_think`` switch some clients prepend."""
@@ -60,13 +70,21 @@ def last_user_text(messages: Iterable[Mapping]) -> str:
     return ""
 
 
-def passage_source(hit: Mapping) -> dict:
-    """Where a passage came from, for the client: file and section heading."""
+def document_name(meta: Mapping) -> str:
+    """The file a database was built from, from its build-metadata sidecar
+    (``rag.inspect_db.read_rag_meta``): the base name of ``input``."""
+    return PurePath(str((meta or {}).get("input") or "")).name
+
+
+def passage_source(hit: Mapping, default_source: str = "") -> dict:
+    """Where a passage came from, for the client: file and section heading.
+    ``default_source`` names the file when the passage itself does not (the
+    Studio's databases are built from one document)."""
     meta = hit.get("metadata") or {}
     headings = [str(meta[k]) for k in sorted(meta) if k.lower().startswith("header") and meta[k]]
     return {
-        "source": str(meta.get("source") or meta.get("file") or ""),
-        "heading": " › ".join(headings),
+        "source": str(meta.get("source") or meta.get("file") or default_source or ""),
+        "heading": " › ".join(headings)[:MAX_HEADING_CHARS],
         "score": round(float(hit.get("score") or 0.0), 4),
     }
 
@@ -86,8 +104,9 @@ def with_passages(messages: list, hits: list) -> list:
         return out + [{"role": "user", "content": context.rstrip()}]
     content = out[last_user].get("content")
     if isinstance(content, list):
-        parts = [dict(p) for p in content]
-        first_text = next((i for i, p in enumerate(parts) if p.get("type") == "text"), None)
+        parts = [dict(p) if isinstance(p, Mapping) else p for p in content]
+        first_text = next((i for i, p in enumerate(parts)
+                           if isinstance(p, dict) and p.get("type") == "text"), None)
         if first_text is None:
             parts.insert(0, {"type": "text", "text": context.rstrip()})
         else:
@@ -98,10 +117,16 @@ def with_passages(messages: list, hits: list) -> list:
     return out
 
 
-def sources_header(hits: list) -> str:
+def sources_header(hits: list, default_source: str = "") -> str:
     """``X-RAG-Sources``: the passages used, as compact JSON (ASCII only, so it
-    is a valid header value)."""
-    return json.dumps([passage_source(h) for h in hits], ensure_ascii=True, separators=(",", ":"))
+    is a valid header value). Trailing entries are dropped to keep it within
+    ``MAX_SOURCES_HEADER_BYTES``."""
+    sources = [passage_source(h, default_source) for h in hits]
+    while True:
+        header = json.dumps(sources, ensure_ascii=True, separators=(",", ":"))
+        if len(header) <= MAX_SOURCES_HEADER_BYTES or not sources:
+            return header
+        sources.pop()
 
 
 def search_failed_reply(database_exists: bool) -> tuple[str, int]:
