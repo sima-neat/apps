@@ -48,6 +48,9 @@ class RagQuestionTests(unittest.TestCase):
         ]
         self.assertEqual(rag_chat.last_user_text(messages), "What is Neat?")
         self.assertEqual(rag_chat.last_user_text([]), "")
+        long = "x" * 70000 + " What is Neat?"
+        self.assertEqual(len(rag_chat.last_user_text([{"role": "user", "content": long}])), rag_chat.MAX_QUERY_CHARS)
+        self.assertTrue(rag_chat.last_user_text([{"role": "user", "content": long}]).endswith("What is Neat?"))
 
     def test_messages_must_be_a_list_of_objects(self):
         # The chat route answers 400 for these instead of failing with a 500.

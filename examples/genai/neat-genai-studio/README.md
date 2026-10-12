@@ -690,7 +690,10 @@ The response headers `X-RAG-Hits` and `X-RAG-Sources` say which passages were
 used. A request with `neat_rag` answers 409 when RAG is turned off in the
 config or the documents were cleared (upload one or reset), 503 while the
 search service is starting, and 400 when `messages` is not a non-empty list
-of objects. Any chat request whose body is not a JSON object answers 400.
+of objects or the last user message has no text (for example only a picture).
+Any chat request whose body is not a JSON object answers 400. Errors use the
+OpenAI shape, `{"error": {"message": ...}}`. The search uses at most the last
+2000 characters of the question.
 `GET /rag/search` answers with the same statuses. This works in the full
 Studio and in backend-only mode, which also starts the RAG service when a
 database exists:
@@ -715,7 +718,7 @@ disconnects, the previous database is restored.
 
 `features.rag` in `/health` reflects the configuration (`app.rag.enabled`);
 `GET /rag/status` reports whether the search service is actually up
-(`service` is `ok`, `starting` or `no-database`).
+(`service` is `ok`, `starting`, `no-database`, or `disabled` when RAG is off).
 
 Passage text is added to the user's question, so the model follows any
 instructions inside an uploaded document as if the user had written them.

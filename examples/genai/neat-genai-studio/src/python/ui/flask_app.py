@@ -26,7 +26,7 @@ from flask import Flask, Response, render_template, jsonify, request, send_from_
 from flask_socketio import SocketIO
 
 from collections import deque
-from pathlib import Path
+from pathlib import Path, PurePath
 from werkzeug.utils import secure_filename
 from werkzeug.exceptions import RequestEntityTooLarge
 import tempfile
@@ -1277,7 +1277,7 @@ class AppContext:
             if payload is None:
                 payload = {}
             if not isinstance(payload, dict):
-                return jsonify({'error': 'The request body must be a JSON object.'}), 400
+                return jsonify({'error': {'message': 'The request body must be a JSON object.'}}), 400
             if self.max_tokens:
                 payload.setdefault('max_tokens', int(self.max_tokens))
             _normalize_openai_image_parts(payload)
@@ -1290,11 +1290,15 @@ class AppContext:
                                                          'Set app.rag.enabled in config.local.yaml.'}}), 409
                 # The raw value: a default here would let null or {} through as [].
                 if not rag_chat.messages_are_valid(payload.get('messages')):
-                    return jsonify({'error': 'With neat_rag, messages must be a non-empty list of objects',
-                                    'param': 'messages'}), 400
+                    return jsonify({'error': {'message': 'With neat_rag, messages must be a non-empty list of objects',
+                                              'param': 'messages'}}), 400
                 question = rag_chat.last_user_text(payload['messages'])
+                if not question:
+                    # Nothing to search with (no user text, e.g. only a picture).
+                    return jsonify({'error': {'message': 'With neat_rag, the last user message must contain text',
+                                              'param': 'messages'}}), 400
                 try:
-                    hits = ensure_rag_modules_loaded().search(question, k=rag['k']) if question else []
+                    hits = ensure_rag_modules_loaded().search(question, k=rag['k'])
                 except Exception as exc:  # noqa: BLE001
                     logging.error(f"RAG search failed: {exc}")
                     from rag.inspect_db import default_db_path
@@ -1975,9 +1979,12 @@ class AppContext:
             if not uploaded_file:
                 return rag_route_error("No file provided", 400)
 
-            filename = secure_filename(uploaded_file.filename)
-            if not filename.lower().endswith(".md"):
+            # Checked on the name as sent: secure_filename drops non-Latin
+            # letters ("日本語.md" -> "md"). The name is shown as the source.
+            original = PurePath(str(uploaded_file.filename or "").replace("\\", "/")).name
+            if not original.lower().endswith(".md"):
                 return rag_route_error("Only Markdown RAG upload is supported locally.", 400)
+            filename = original[-200:]
             size = _upload_size(uploaded_file)
             if size is not None and size > MAX_RAG_UPLOAD_BYTES:
                 return rag_route_error(too_large, 413)
@@ -2353,7 +2360,10 @@ def _normalize_openai_image_parts(payload):
     while pyneat expects {"type": "image", "image": u} (the format the Studio
     itself sends in add_user_message). Mutates payload in place.
     """
-    for message in payload.get('messages') or []:
+    messages = payload.get('messages')
+    if not isinstance(messages, list):   # malformed: left for validation to reject
+        return
+    for message in messages:
         content = message.get('content') if isinstance(message, dict) else None
         if not isinstance(content, list):
             continue

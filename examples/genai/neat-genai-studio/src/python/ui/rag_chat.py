@@ -60,13 +60,19 @@ def messages_are_valid(messages: Any) -> bool:
     return isinstance(messages, list) and bool(messages) and all(isinstance(m, Mapping) for m in messages)
 
 
+# The search query goes to the RAG service in a URL, which its server limits
+# (about 64 KiB, less for non-ASCII text); the embedder reads at most 512
+# tokens anyway. The end is kept: that is where the question usually is.
+MAX_QUERY_CHARS = 2000
+
+
 def last_user_text(messages: Iterable[Mapping]) -> str:
     """The question to search with: the last user message's text, without the
-    ``/no_think`` switch some clients prepend."""
+    ``/no_think`` switch some clients prepend, at most ``MAX_QUERY_CHARS``."""
     for message in reversed(list(messages or [])):
         if message.get("role") == "user":
             text = message_text(message.get("content"))
-            return text.replace("/no_think", "").strip()
+            return text.replace("/no_think", "").strip()[-MAX_QUERY_CHARS:]
     return ""
 
 
