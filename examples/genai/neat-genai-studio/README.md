@@ -689,7 +689,8 @@ before it, and removes the field before the request reaches the model server.
 The response headers `X-RAG-Hits` and `X-RAG-Sources` say which passages were
 used. A request with `neat_rag` answers 409 when RAG is turned off in the
 config or the documents were cleared (upload one or reset), 503 while the
-search service is starting, and 400 when `messages` is not a list of objects.
+search service is starting, and 400 when `messages` is not a non-empty list
+of objects. Any chat request whose body is not a JSON object answers 400.
 `GET /rag/search` answers with the same statuses. This works in the full
 Studio and in backend-only mode, which also starts the RAG service when a
 database exists:

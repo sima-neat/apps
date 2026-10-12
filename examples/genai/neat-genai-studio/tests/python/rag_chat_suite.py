@@ -51,9 +51,8 @@ class RagQuestionTests(unittest.TestCase):
 
     def test_messages_must_be_a_list_of_objects(self):
         # The chat route answers 400 for these instead of failing with a 500.
-        self.assertTrue(rag_chat.messages_are_valid([]))
         self.assertTrue(rag_chat.messages_are_valid([{"role": "user", "content": "hi"}]))
-        for messages in ("hi", {"role": "user"}, ["hi"], [{"role": "user"}, None], None):
+        for messages in ("hi", {"role": "user"}, ["hi"], [{"role": "user"}, None], None, [], {}, "", 0, False):
             self.assertFalse(rag_chat.messages_are_valid(messages), messages)
 
 

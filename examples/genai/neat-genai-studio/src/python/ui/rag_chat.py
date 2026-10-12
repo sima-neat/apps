@@ -55,9 +55,9 @@ def message_text(content: Any) -> str:
 
 
 def messages_are_valid(messages: Any) -> bool:
-    """Whether ``messages`` can be searched and given passages: a list of
-    objects. The chat route answers 400 otherwise."""
-    return isinstance(messages, list) and all(isinstance(m, Mapping) for m in messages)
+    """Whether ``messages`` can be searched and given passages: a non-empty
+    list of objects. The chat route answers 400 otherwise."""
+    return isinstance(messages, list) and bool(messages) and all(isinstance(m, Mapping) for m in messages)
 
 
 def last_user_text(messages: Iterable[Mapping]) -> str:

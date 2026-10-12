@@ -1273,7 +1273,11 @@ class AppContext:
             # be blocked as mixed content (and lack CORS headers).
             # These generations bypass the Studio's conversation history and
             # TTS by design — the harness keeps its own history client-side.
-            payload = request.get_json(silent=True) or {}
+            payload = request.get_json(silent=True)
+            if payload is None:
+                payload = {}
+            if not isinstance(payload, dict):
+                return jsonify({'error': 'The request body must be a JSON object.'}), 400
             if self.max_tokens:
                 payload.setdefault('max_tokens', int(self.max_tokens))
             _normalize_openai_image_parts(payload)
@@ -1284,10 +1288,11 @@ class AppContext:
                 if not self.rag_enabled:
                     return jsonify({'error': {'message': 'Document search (RAG) is disabled on this board. '
                                                          'Set app.rag.enabled in config.local.yaml.'}}), 409
-                if not rag_chat.messages_are_valid(payload.get('messages') or []):
-                    return jsonify({'error': 'With neat_rag, messages must be a list of objects',
+                # The raw value: a default here would let null or {} through as [].
+                if not rag_chat.messages_are_valid(payload.get('messages')):
+                    return jsonify({'error': 'With neat_rag, messages must be a non-empty list of objects',
                                     'param': 'messages'}), 400
-                question = rag_chat.last_user_text(payload.get('messages') or [])
+                question = rag_chat.last_user_text(payload['messages'])
                 try:
                     hits = ensure_rag_modules_loaded().search(question, k=rag['k']) if question else []
                 except Exception as exc:  # noqa: BLE001
@@ -1295,7 +1300,7 @@ class AppContext:
                     from rag.inspect_db import default_db_path
                     message, status = rag_chat.search_failed_reply(os.path.isfile(default_db_path()))
                     return jsonify({'error': {'message': message}}), status
-                payload['messages'] = rag_chat.with_passages(payload.get('messages') or [], hits)
+                payload['messages'] = rag_chat.with_passages(payload['messages'], hits)
                 rag_headers = {'X-RAG-Hits': str(len(hits)),
                                'X-RAG-Sources': rag_chat.sources_header(hits, rag_document_name())}
             url = f"http://{self.app.config['SIMAAI_IP_ADDR']}/v1/chat/completions"
