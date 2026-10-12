@@ -27,6 +27,8 @@ class RagOptionTests(unittest.TestCase):
         self.assertEqual(rag_chat.rag_options({"neat_rag": {"k": 50}}), {"k": rag_chat.MAX_K})
         self.assertEqual(rag_chat.rag_options({"neat_rag": {"k": 0}}), {"k": 1})
         self.assertEqual(rag_chat.rag_options({"neat_rag": {"k": "x"}}), {"k": rag_chat.DEFAULT_K})
+        for huge in (float("inf"), float("-inf"), float("nan")):   # JSON 1e999 decodes to inf
+            self.assertEqual(rag_chat.rag_options({"neat_rag": {"k": huge}}), {"k": rag_chat.DEFAULT_K})
 
     def test_absent_false_or_disabled_means_no_documents(self):
         for payload in ({}, {"neat_rag": False}, {"neat_rag": {"enabled": False}}, {"neat_rag": "yes"}):

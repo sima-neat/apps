@@ -38,7 +38,7 @@ def rag_options(payload: dict) -> dict | None:
     if isinstance(value, Mapping) and value.get("enabled", True):
         try:
             k = int(value.get("k", DEFAULT_K))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):   # OverflowError: 1e999 is infinity
             k = DEFAULT_K
         return {"k": max(1, min(MAX_K, k))}
     return None
