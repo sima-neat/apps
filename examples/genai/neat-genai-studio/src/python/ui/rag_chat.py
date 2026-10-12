@@ -5,6 +5,9 @@ request field, ``"neat_rag": true`` or ``{"k": 3}``. The Studio removes the
 field before the request reaches the model server, searches the RAG database
 with the last user message, and adds the matching passages to that message,
 so every client gets the same retrieval as the Studio's own chat.
+
+``chat_request_error`` checks the shape of every chat request first, with or
+without ``neat_rag``, so the code after it can rely on that shape.
 """
 
 from __future__ import annotations
@@ -54,10 +57,46 @@ def message_text(content: Any) -> str:
     return ""
 
 
-def messages_are_valid(messages: Any) -> bool:
-    """Whether ``messages`` can be searched and given passages: a non-empty
-    list of objects. The chat route answers 400 otherwise."""
-    return isinstance(messages, list) and bool(messages) and all(isinstance(m, Mapping) for m in messages)
+def _part_error(part: Any, where: str) -> str | None:
+    if not isinstance(part, Mapping) or not isinstance(part.get("type"), str):
+        return f"{where} must be an object with a string type"
+    if part["type"] == "text" and not isinstance(part.get("text"), str):
+        return f"{where} of type text needs a string text"
+    if part["type"] == "image_url":
+        image = part.get("image_url")
+        if not isinstance(image, Mapping) or not isinstance(image.get("url"), str):
+            return f"{where} of type image_url needs image_url.url as a string"
+    return None
+
+
+def chat_request_error(payload: Any) -> tuple[str, str | None] | None:
+    """Why a ``/v1/chat/completions`` body can't be handled, as ``(message,
+    param)``, or None when its shape is sound: a JSON object whose
+    ``messages`` is a non-empty list of objects with a string ``role`` and a
+    ``content`` that is a string or a list of parts (``null`` only for an
+    assistant message). The route answers 400 with it before anything reads
+    the request. Other fields are left to the model server."""
+    if not isinstance(payload, Mapping):
+        return "The request body must be a JSON object", None
+    messages = payload.get("messages")
+    if not isinstance(messages, list) or not messages:
+        return "messages must be a non-empty list", "messages"
+    for i, message in enumerate(messages):
+        where = f"messages[{i}]"
+        if not isinstance(message, Mapping) or not isinstance(message.get("role"), str):
+            return f"{where} must be an object with a string role", "messages"
+        content = message.get("content")
+        if content is None and message["role"] == "assistant":
+            continue
+        if isinstance(content, str):
+            continue
+        if not isinstance(content, list):
+            return f"{where}.content must be a string or a list of parts", "messages"
+        for j, part in enumerate(content):
+            error = _part_error(part, f"{where}.content[{j}]")
+            if error:
+                return error, "messages"
+    return None
 
 
 # The search query goes to the RAG service in a URL, which its server limits

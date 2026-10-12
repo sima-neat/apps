@@ -1274,10 +1274,12 @@ class AppContext:
             # These generations bypass the Studio's conversation history and
             # TTS by design — the harness keeps its own history client-side.
             payload = request.get_json(silent=True)
-            if payload is None:
-                payload = {}
-            if not isinstance(payload, dict):
-                return jsonify({'error': {'message': 'The request body must be a JSON object.'}}), 400
+            # The whole shape is checked once, before anything reads the request.
+            invalid = rag_chat.chat_request_error(payload)
+            if invalid:
+                message, param = invalid
+                return jsonify({'error': {'message': message, 'param': param,
+                                          'type': 'invalid_request_error'}}), 400
             if self.max_tokens:
                 payload.setdefault('max_tokens', int(self.max_tokens))
             _normalize_openai_image_parts(payload)
@@ -1288,15 +1290,11 @@ class AppContext:
                 if not self.rag_enabled:
                     return jsonify({'error': {'message': 'Document search (RAG) is disabled on this board. '
                                                          'Set app.rag.enabled in config.local.yaml.'}}), 409
-                # The raw value: a default here would let null or {} through as [].
-                if not rag_chat.messages_are_valid(payload.get('messages')):
-                    return jsonify({'error': {'message': 'With neat_rag, messages must be a non-empty list of objects',
-                                              'param': 'messages'}}), 400
                 question = rag_chat.last_user_text(payload['messages'])
                 if not question:
                     # Nothing to search with (no user text, e.g. only a picture).
                     return jsonify({'error': {'message': 'With neat_rag, the last user message must contain text',
-                                              'param': 'messages'}}), 400
+                                              'param': 'messages', 'type': 'invalid_request_error'}}), 400
                 try:
                     hits = ensure_rag_modules_loaded().search(question, k=rag['k'])
                 except Exception as exc:  # noqa: BLE001
@@ -2358,20 +2356,16 @@ def _normalize_openai_image_parts(payload):
 
     The Solutions harnesses send {"type": "image_url", "image_url": {"url": u}}
     while pyneat expects {"type": "image", "image": u} (the format the Studio
-    itself sends in add_user_message). Mutates payload in place.
+    itself sends in add_user_message). Mutates payload in place. The payload
+    has passed rag_chat.chat_request_error.
     """
-    messages = payload.get('messages')
-    if not isinstance(messages, list):   # malformed: left for validation to reject
-        return
-    for message in messages:
-        content = message.get('content') if isinstance(message, dict) else None
+    for message in payload['messages']:
+        content = message.get('content')
         if not isinstance(content, list):
             continue
         for i, part in enumerate(content):
-            if isinstance(part, dict) and part.get('type') == 'image_url':
-                url = (part.get('image_url') or {}).get('url')
-                if url:
-                    content[i] = {'type': 'image', 'image': url}
+            if part['type'] == 'image_url' and part['image_url']['url']:
+                content[i] = {'type': 'image', 'image': part['image_url']['url']}
 
 
 def stream_chat_request(messages, model, config, generation_id, socketio_event='update', gen_params=None):

@@ -52,11 +52,36 @@ class RagQuestionTests(unittest.TestCase):
         self.assertEqual(len(rag_chat.last_user_text([{"role": "user", "content": long}])), rag_chat.MAX_QUERY_CHARS)
         self.assertTrue(rag_chat.last_user_text([{"role": "user", "content": long}]).endswith("What is Neat?"))
 
-    def test_messages_must_be_a_list_of_objects(self):
-        # The chat route answers 400 for these instead of failing with a 500.
-        self.assertTrue(rag_chat.messages_are_valid([{"role": "user", "content": "hi"}]))
-        for messages in ("hi", {"role": "user"}, ["hi"], [{"role": "user"}, None], None, [], {}, "", 0, False):
-            self.assertFalse(rag_chat.messages_are_valid(messages), messages)
+
+
+class ChatRequestShapeTests(unittest.TestCase):
+    """The chat route answers 400 with chat_request_error's reason, before
+    anything reads the request, instead of failing later with a 500."""
+
+    def test_sound_requests_pass(self):
+        image = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}}
+        for payload in (
+            {"messages": [{"role": "user", "content": "hi"}]},
+            {"messages": [{"role": "system", "content": "s"}, {"role": "user", "content": [{"type": "text", "text": "q"}, image]}]},
+            {"messages": [{"role": "assistant", "content": None}, {"role": "user", "content": "q"}], "neat_rag": True},
+        ):
+            self.assertIsNone(rag_chat.chat_request_error(payload), payload)
+
+    def test_every_malformed_shape_has_a_reason(self):
+        bad_messages = (None, 1, True, 1.5, "hi", {}, [], ["hi"], [None], [{"content": "x"}], [{"role": 1, "content": "x"}],
+                        [{"role": "user"}], [{"role": "user", "content": None}], [{"role": "user", "content": 5}],
+                        [{"role": "user", "content": [5]}], [{"role": "user", "content": [{"text": "x"}]}],
+                        [{"role": "user", "content": [{"type": "text", "text": 5}]}],
+                        [{"role": "user", "content": [{"type": "image_url", "image_url": "data:x"}]}],
+                        [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": 5}}]}])
+        for messages in bad_messages:
+            with self.subTest(messages=messages):
+                message, param = rag_chat.chat_request_error({"messages": messages})
+                self.assertEqual(param, "messages")
+                self.assertTrue(message)
+        for body in ([], "x", 1, None):
+            with self.subTest(body=body):
+                self.assertEqual(rag_chat.chat_request_error(body)[1], None)
 
 
 class RagPassageTests(unittest.TestCase):
