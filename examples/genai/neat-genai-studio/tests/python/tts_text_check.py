@@ -31,6 +31,27 @@ def check(inp, *needles, absent=()):
     return out
 
 
+# --- Emoji: speech engines reject them (Supertonic fails on U+FE0F) ---
+for emoji_text in ("Great work! \u270c\ufe0f \U0001F44D\U0001F3FD Done.",
+                   "Flags \U0001F1EF\U0001F1F5 and \U0001F469\u200d\U0001F4BB coder",
+                   "Keycap 1\ufe0f\u20e3 star \u2b50 check \u2705"):
+    out = check(emoji_text)
+    bad = [c for c in out if ord(c) >= 0x2300 and not c.isalpha()]
+    if bad:
+        print(f"EMOJI {[hex(ord(c)) for c in bad]} survived: {emoji_text!r} -> {out!r}")
+        fails += 1
+check("Great work! \u270c\ufe0f \U0001F44D\U0001F3FD Done.", "Great work!", "Done.")
+# Keyboard symbols are spoken, not dropped with the emoji; emoji in their block still go.
+check("Press \u2318C, then \u2325\u21E7K.", "Press Command C", "Option Shift K")
+check("Wait \u231B then \u23E9 skip", "Wait", "then", "skip", absent=("\u231B", "\u23E9"))
+# Music symbols are spoken; other text symbols in emoji blocks are kept; a text
+# symbol written with U+FE0F (its emoji form) is removed with it.
+check("Play B\u266D major then F\u266F minor.", "Play B flat major", "F sharp minor")
+check("Rated \u2605 and \u2713 done, \u2300 note", "\u2605", "\u2713", "\u2300")
+check("Sunny \u2600\uFE0F day", "Sunny", "day", absent=("\u2600", "\uFE0F"))
+check("Caf\u00e9 \u00fcber na\u00efve \u65e5\u672c\u8a9e \u0939\u093f\u0928\u094d\u0926\u0940",
+      "Caf\u00e9", "\u00fcber", "\u65e5\u672c\u8a9e", "\u0939\u093f\u0928\u094d\u0926\u0940")
+
 # --- Original battery (must still hold) ---
 check("**bold** and *italic*", "bold", "italic")
 check("Use `pip install foo` now", "pip install foo")

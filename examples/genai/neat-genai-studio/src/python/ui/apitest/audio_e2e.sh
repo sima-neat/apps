@@ -1,10 +1,14 @@
 #!/bin/bash
 # End-to-end check of the Studio's audio workflow against a running instance
 # (web or --backend-only): every step must produce useful output, not just 200.
-#   1. /health reports the model server reachable and an ASR model active
+#   1. /health reports the model server reachable and an ASR model active, and
+#      the Insight contract: api_version 1, voice engines with key/loaded, and a
+#      failed engine's error only as a fixed reason (accelerator-unavailable,
+#      load-failed); an engine that loads on demand is loaded:false with no error
 #   2. /v1/audio/voices lists at least one server-side engine
 #   3. /v1/audio/speech synthesizes an English sentence (RIFF WAV, > 1 s)
-#   4. /v1/audio/transcriptions of that WAV contains the sentence's key words
+#   4. /v1/audio/transcriptions of that WAV contains the sentence's key words;
+#      a sentence with emoji is spoken without them, and emoji-only input is 400
 #   5. /v1/audio/speech in German, then /v1/audio/translations returns English
 #   6. /v1/chat/completions answers (only when a chat model is loaded)
 #
@@ -40,6 +44,13 @@ else
   fail "health: model server unreachable or no ASR model ($(head -c 200 "$TMP/health.json" 2>/dev/null))"
 fi
 
+# 1b. the backend contract Insight relies on
+if [ "$(json "$TMP/health.json" "d.get('api_version') == 1 and isinstance(d['tts']['engines'], list) and all('key' in e and 'loaded' in e for e in d['tts']['engines']) and all(e['error'] in ('accelerator-unavailable', 'load-failed') for e in d['tts']['engines'] if 'error' in e)")" = "True" ]; then
+  pass "health contract: api_version 1, engines $(json "$TMP/health.json" "' '.join(e['key'] + (' (failed: ' + e['error'] + ')' if 'error' in e else '' if e['loaded'] else ' (loads on demand)') for e in d['tts']['engines'])")"
+else
+  fail "health contract: api_version / tts.engines not as documented ($(head -c 300 "$TMP/health.json" 2>/dev/null))"
+fi
+
 # 2. voices
 ENGINE=default
 if curl -ksS --max-time 10 "${BASE}/v1/audio/voices" -o "$TMP/voices.json" \
@@ -71,6 +82,25 @@ if speak "$EN" en "$TMP/en.wav"; then
   fi
 else
   fail "speech (en): no usable WAV"
+fi
+
+# 4b. emoji are dropped from speech, and input with nothing speakable is refused
+if speak "Hello \ud83d\udc4b, have a good night \ud83c\udf19." en "$TMP/emoji.wav"; then
+  curl -ksS --max-time 120 -X POST "${BASE}/v1/audio/transcriptions" -F "file=@$TMP/emoji.wav" -F response_format=text -o "$TMP/emoji.txt"
+  if contains_all "$TMP/emoji.txt" hello night; then
+    pass "speech with emoji: $(tr -d '\n' < "$TMP/emoji.txt")"
+  else
+    fail "speech with emoji: transcription lacks the words: $(head -c 200 "$TMP/emoji.txt")"
+  fi
+else
+  fail "speech with emoji: no usable WAV"
+fi
+code="$(curl -ksS --max-time 30 -X POST "${BASE}/v1/audio/speech" -H 'Content-Type: application/json' \
+  -d '{"input":"\ud83d\udc4d\ud83c\udffd","model":"default","language":"en"}' -o "$TMP/emoji_only.json" -w '%{http_code}')"
+if [ "$code" = 400 ] && [ "$(json "$TMP/emoji_only.json" "d.get('param')")" = input ]; then
+  pass "emoji-only input: 400 on input"
+else
+  fail "emoji-only input: expected 400 on input, got ${code} $(head -c 200 "$TMP/emoji_only.json")"
 fi
 
 # 5. German speech -> translation to English
