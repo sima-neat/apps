@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.utils.output_assertions import assert_saved_frames_are_usable
+
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
 # Mirrors main.OUTPUT_TAG; the app is run as a subprocess, not imported.
@@ -64,15 +66,10 @@ class TestE2E:
         )
 
         expected = len([path for path in input_dir.iterdir() if path.is_file()])
-        output_files = [
-            path
-            for path in tmp_output_dir.iterdir()
-            if path.is_file() and path.name != "config.yaml"
-        ]
+        output_files = assert_saved_frames_are_usable(tmp_output_dir, expected)
         assert len(output_files) == expected, (
             f"Expected {expected} annotated images, found {len(output_files)}"
         )
-        assert all(path.stat().st_size > 0 for path in output_files)
         assert all(path.suffix.lower() in IMAGE_EXTENSIONS for path in output_files)
 
         # The checks above pass even when every detection list is empty, because

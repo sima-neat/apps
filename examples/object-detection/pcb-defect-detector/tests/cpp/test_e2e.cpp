@@ -124,6 +124,7 @@ int main(int argc, char** argv) {
 
   const int expected_files = count_input_images(input_dir);
   const int output_files = count_output_files(out_dir);
+  const std::string output_problem = saved_frames_problem(out_dir, expected_files);
 
   int rc = 0;
   if (result.exit_code != 0) {
@@ -134,8 +135,8 @@ int main(int argc, char** argv) {
     std::cerr << "[FAIL] expected " << expected_files << " annotated images, found " << output_files
               << "\n";
     rc = 1;
-  } else if (!all_output_files_nonempty(out_dir)) {
-    std::cerr << "[FAIL] some output files are empty\n";
+  } else if (!output_problem.empty()) {
+    std::cerr << "[FAIL] " << output_problem << "\n";
     rc = 1;
   } else if (result.stdout_text.find("Per-class totals:") == std::string::npos) {
     std::cerr << "[FAIL] run did not report per-class defect totals\n";
