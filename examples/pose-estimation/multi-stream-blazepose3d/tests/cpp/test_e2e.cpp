@@ -4,6 +4,7 @@
 #include "support/testing/test_process.h"
 
 #include <nlohmann/json.hpp>
+#include <opencv2/videoio.hpp>
 
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -47,29 +48,16 @@ struct SourceCaps {
 };
 
 SourceCaps probe_source_caps(const std::string& url) {
-  const auto probe =
-      spawn_and_wait("/usr/bin/env",
-                     {"ffprobe", "-v", "error", "-rtsp_transport", "tcp", "-select_streams", "v:0",
-                      "-show_entries", "stream=width,height,avg_frame_rate", "-of", "json", url},
-                     20000);
-  if (probe.exit_code != 0) {
-    throw std::runtime_error("failed to probe E2E source " + url + ": " + probe.stderr_text);
+  cv::VideoCapture cap(url, cv::CAP_ANY,
+                       {cv::CAP_PROP_OPEN_TIMEOUT_MSEC, 20000, cv::CAP_PROP_READ_TIMEOUT_MSEC,
+                        20000});
+  if (!cap.isOpened()) {
+    throw std::runtime_error("failed to open E2E source for probing: " + url);
   }
-  const auto streams =
-      nlohmann::json::parse(probe.stdout_text).value("streams", nlohmann::json::array());
-  if (streams.size() != 1) {
-    throw std::runtime_error("E2E source must expose one video stream: " + url);
-  }
-  const auto& stream = streams.front();
-  const std::string rate = stream.value("avg_frame_rate", "0/1");
-  std::istringstream input(rate);
-  double numerator = 0.0;
-  double denominator = 0.0;
-  char separator = 0;
-  input >> numerator >> separator >> denominator;
-  const SourceCaps caps{stream.value("width", 0), stream.value("height", 0),
-                        denominator > 0.0 ? static_cast<int>(std::round(numerator / denominator))
-                                          : 0};
+  const SourceCaps caps{static_cast<int>(cap.get(cv::CAP_PROP_FRAME_WIDTH)),
+                        static_cast<int>(cap.get(cv::CAP_PROP_FRAME_HEIGHT)),
+                        static_cast<int>(std::round(cap.get(cv::CAP_PROP_FPS)))};
+  cap.release();
   if (caps.width <= 0 || caps.height <= 0 || caps.fps <= 0) {
     throw std::runtime_error("failed to resolve E2E source caps: " + url);
   }

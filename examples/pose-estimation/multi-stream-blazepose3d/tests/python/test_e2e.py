@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
+import cv2
 import pytest
 
 from tests.utils.metadata_json_listener import MetadataJsonListener
@@ -406,35 +407,18 @@ def env_int(name: str, default: int) -> int:
 
 
 def source_caps(url: str) -> tuple[int, int, int]:
-    result = subprocess.run(
-        [
-            "ffprobe",
-            "-v",
-            "error",
-            "-rtsp_transport",
-            "tcp",
-            "-select_streams",
-            "v:0",
-            "-show_entries",
-            "stream=width,height,avg_frame_rate",
-            "-of",
-            "json",
-            url,
-        ],
-        capture_output=True,
-        text=True,
-        timeout=20,
-        check=False,
+    cap = cv2.VideoCapture(
+        url, cv2.CAP_ANY,
+        [cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 20000, cv2.CAP_PROP_READ_TIMEOUT_MSEC, 20000],
     )
-    if result.returncode:
-        raise RuntimeError(f"failed to probe E2E source {url}: {result.stderr}")
-    streams = json.loads(result.stdout).get("streams", [])
-    if len(streams) != 1:
-        raise RuntimeError(f"E2E source must expose one video stream: {url}")
-    stream = streams[0]
-    numerator, denominator = map(int, stream.get("avg_frame_rate", "0/1").split("/"))
-    fps = round(numerator / denominator) if denominator else 0
-    caps = (stream.get("width", 0), stream.get("height", 0), fps)
+    if not cap.isOpened():
+        raise RuntimeError(f"failed to open E2E source for probing: {url}")
+    caps = (
+        int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0),
+        int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0),
+        round(cap.get(cv2.CAP_PROP_FPS) or 0),
+    )
+    cap.release()
     if any(value <= 0 for value in caps):
         raise RuntimeError(f"failed to resolve E2E source caps: {url}")
     return caps
