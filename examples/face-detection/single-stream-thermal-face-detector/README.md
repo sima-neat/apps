@@ -36,7 +36,7 @@ reference visualization's boxes.
 ## Prerequisites
 
 - `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/))
-  on a supported Modalix or DevKit target, or in a Neat SDK container paired with one.
+  on the Modalix DevKit, or in a Neat SDK container paired with it.
 - A running [Neat Insight](https://developer.sima.ai/software/tools/insight/)
   instance reachable from the target, with an RTSP source containing faces.
 - The model expects an 800x800 compiled canvas; its on-device preprocess accepts
@@ -44,7 +44,7 @@ reference visualization's boxes.
 
 ## Install Apps
 
-Install on a supported Modalix or DevKit target, or under `/workspace` in a Neat SDK container paired with it. Only the example itself must run on the target. If the Core and Insight selected by Apps are already installed, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps` to skip reinstalling them. See [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
+Install on the Modalix DevKit, or under `/workspace` in a Neat SDK container paired with it. Only the example itself must run on the DevKit. If the Core and Insight selected by Apps are already installed, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps` to skip reinstalling them. See [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
 
 Install the latest Neat Apps runtime and enter the installed bundle:
 
