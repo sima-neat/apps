@@ -984,6 +984,7 @@ def test_nv12_planes_view_the_mapped_buffer_with_plane_offsets_and_strides(monke
             fake_plane("uv", height // 2, width, stride, uv_offset),
         ],
         shape=[height, width],
+        dtype="uint8",
         storage=SimpleNamespace(size_bytes=buffer.size),
         byte_offset=0,
     )
@@ -999,8 +1000,14 @@ def test_nv12_planes_view_the_mapped_buffer_with_plane_offsets_and_strides(monke
         SimpleNamespace(
             PlaneRole=SimpleNamespace(Y="y", UV="uv"),
             TensorLayout=SimpleNamespace(Unknown="unknown"),
+            TensorDType=SimpleNamespace(UInt8="uint8"),
+            ImageSpec=lambda: "unspecified image",
+            Device=lambda: "cpu",
             make_tensor_sample=lambda _name, tensor: SimpleNamespace(
-                planes=list(tensor.planes), shape=list(tensor.shape)
+                planes=list(tensor.planes),
+                shape=list(tensor.shape),
+                semantic=SimpleNamespace(image="nv12"),
+                device="cvu",
             ),
         ),
     )
@@ -1013,6 +1020,8 @@ def test_nv12_planes_view_the_mapped_buffer_with_plane_offsets_and_strides(monke
     assert np.shares_memory(y_view, buffer) and not y_view.flags.writeable
     # Only the header copy is re-described as a dense byte range; the frame keeps its planes.
     assert (headers[0].planes, headers[0].shape, headers[0].strides_bytes) == ([], [28], [1])
+    # The header copy maps as a plain CPU byte range, not as an NV12 image.
+    assert (headers[0].semantic.image, headers[0].device) == ("unspecified image", "cpu")
     assert (len(frame.planes), frame.shape) == (2, [height, width])
     frame.planes[1].byte_offset = buffer.size
     with pytest.raises(RuntimeError, match="exceed its buffer"):
