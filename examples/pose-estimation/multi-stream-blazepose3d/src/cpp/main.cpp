@@ -25,6 +25,8 @@
 #include <nodes/io/MetadataSender.h>
 
 #include <opencv2/core/mat.hpp>
+#include <opencv2/core/utility.hpp>
+#include <opencv2/imgproc.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -66,6 +68,7 @@ using Clock = std::chrono::steady_clock;
 
 constexpr int kMaxDetections = 100;
 constexpr int kMaxInflightPerStream = 4;
+constexpr int kPoseInputSize = 256;
 
 volatile std::sig_atomic_t g_stop_requested = 0;
 
@@ -111,7 +114,7 @@ struct FrameIdentity {
 struct FrameJob {
   std::uint64_t job_id = 0;
   int stream_index = 0;
-  neat::Tensor rgb;
+  neat::Tensor frame;
   std::vector<blazepose_app::Box> people;
   FrameIdentity identity;
 };
@@ -921,7 +924,7 @@ std::unique_ptr<neat::Model> make_detector_model(const AppConfig& cfg, int max_w
   neat::Model::Options options;
   options.preprocess.kind = neat::InputKind::Image;
   options.preprocess.enable = neat::AutoFlag::On;
-  options.preprocess.color_convert.input_format = neat::PreprocessColorFormat::RGB;
+  options.preprocess.color_convert.input_format = neat::PreprocessColorFormat::NV12;
   options.preprocess.input_max_width = max_width;
   options.preprocess.input_max_height = max_height;
   options.preprocess.preset = neat::NormalizePreset::COCO_YOLO;
@@ -942,6 +945,8 @@ std::unique_ptr<neat::Model> make_pose_model(const AppConfig& cfg) {
   options.preprocess.resize.height = 256;
   options.preprocess.resize.mode = neat::ResizeMode::Stretch;
   options.preprocess.normalize.enable = neat::AutoFlag::On;
+  options.preprocess.input_max_width = kPoseInputSize;
+  options.preprocess.input_max_height = kPoseInputSize;
   return std::make_unique<neat::Model>(cfg.pose_model_path, options);
 }
 
@@ -949,8 +954,9 @@ void validate_detector_contract(const neat::Model& model) {
   const auto inputs = model.input_specs();
   const auto outputs = model.output_specs();
   sima_examples::require(inputs.size() == 1, "YOLO26 must have one input");
-  sima_examples::require(inputs[0].shape == std::vector<int64_t>({-1, -1, 3}),
-                         "YOLO26 public input must be dynamic HWC RGB");
+  sima_examples::require(inputs[0].shape.size() >= 2 && inputs[0].shape[0] == -1 &&
+                             inputs[0].shape[1] == -1,
+                         "YOLO26 public input must be a dynamic-size image");
   sima_examples::require(outputs.size() == 1, "YOLO26 must expose one decoded BBOX output");
 }
 
@@ -985,34 +991,31 @@ neat::RunOptions reliable_model_run_options() {
   return options;
 }
 
-neat::Sample pose_input_sample(const neat::Tensor& tensor, const FrameIdentity* identity) {
-  neat::Sample sample = neat::make_tensor_sample("pose_input", tensor);
-  sample.payload_type = neat::PayloadType::Tensor;
-  sample.media_type = "application/vnd.simaai.tensor";
-  if (tensor.semantic.tess.has_value()) {
-    sample.format = tensor.semantic.tess->format;
-    sample.payload_tag = sample.format;
-  }
-  if (identity != nullptr) {
-    copy_identity(*identity, sample);
-  }
-  return sample;
-}
+neat::Sample image_input_sample(const std::string& name, const neat::Tensor& tensor,
+                                const FrameIdentity* identity);
 
+// BlazePose receives fixed-size RGB crops, so its full model route (CVU
+// normalization, MLA inference and output cast) runs as one persistent,
+// pipelined Run instead of a synchronous Preproc call per frame.
 void build_pose_run(AppRuntime& app) {
   validate_pose_contract(*app.pose_model);
-  cv::Mat seed_image = cv::Mat::zeros(256, 256, CV_8UC3);
-  const std::vector<neat::PreprocessRoi> seed_rois = {{0, 0, 0, 256, 256}};
-  const neat::TensorList seed_tensors =
-      neat::stages::Preproc(std::vector<cv::Mat>{seed_image}, *app.pose_model, seed_rois);
-  sima_examples::require(seed_tensors.size() == 1, "BlazePose seed Preproc returned no tensor");
-  const neat::Sample seed = pose_input_sample(seed_tensors.front(), nullptr);
+  const cv::Mat seed_image = cv::Mat::zeros(kPoseInputSize, kPoseInputSize, CV_8UC3);
+  const neat::Sample seed = image_input_sample(
+      "pose_input",
+      neat::Tensor::from_cv_mat(seed_image, neat::ImageSpec::PixelFormat::RGB,
+                                neat::TensorMemory::EV74),
+      nullptr);
 
   app.pose_graph = neat::Graph("blazepose_runner");
-  app.pose_graph.add(neat::nodes::Input("pose_input"));
-  app.pose_graph.add(app.pose_model->inference());
-  app.pose_graph.add(app.pose_model->postprocess());
-  app.pose_graph.add(neat::nodes::Output("pose_output", neat::OutputOptions::EveryFrame(4)));
+  auto input_options = app.pose_model->input_appsrc_options(false);
+  input_options.block = true;
+  neat::Graph input_graph;
+  input_graph.add(neat::nodes::Input("pose_input", input_options));
+  const neat::Graph model_graph = app.pose_model->graph();
+  neat::Graph output_graph;
+  output_graph.add(neat::nodes::Output("pose_output", neat::OutputOptions::EveryFrame(4)));
+  app.pose_graph.connect(input_graph, model_graph);
+  app.pose_graph.connect(model_graph, output_graph);
   app.pose_run = app.pose_graph.build(seed, reliable_model_run_options());
 }
 
@@ -1029,11 +1032,11 @@ std::string frame_output_name(int stream_index) {
   return "frame_" + std::to_string(stream_index);
 }
 
-neat::Graph make_rgb_output(const StreamRuntime& stream) {
-  neat::Graph graph("rgb_" + std::to_string(stream.index));
+// Decoded NV12 frames reach the application unconverted: YOLO26 preprocessing
+// converts color on the CVU, and BlazePose converts only its small ROI crops.
+neat::Graph make_frame_output(const StreamRuntime& stream) {
+  neat::Graph graph("frame_" + std::to_string(stream.index));
   graph.add(neat::nodes::Input("analytics_frame"));
-  graph.add(neat::nodes::VideoConvert());
-  graph.add(neat::nodes::CapsRaw("RGB", stream.width, stream.height));
   graph.add(neat::nodes::Output(frame_output_name(stream.index), neat::OutputOptions::Latest()));
   return graph;
 }
@@ -1072,7 +1075,7 @@ void prepare_source_graphs(AppRuntime& app, const AppConfig& cfg) {
     const neat::Graph source = make_encoded_source(stream.source_options);
     const neat::Graph decoder = make_decoder(stream.source_options);
     stream.source_graph.connect(source, decoder);
-    stream.source_graph.connect(decoder, make_rgb_output(stream), realtime_link(stream));
+    stream.source_graph.connect(decoder, make_frame_output(stream), realtime_link(stream));
     stream.source_graph.connect(source, make_video_sender(cfg, stream), realtime_link(stream));
     std::cout << "[stream " << stream.config.id << "] codec=" << codec_name(stream.config.codec)
               << " source=" << stream.width << "x" << stream.height << "@" << stream.fps
@@ -1087,12 +1090,28 @@ neat::Sample image_input_sample(const std::string& name, const neat::Tensor& ten
   neat::Sample sample = neat::make_tensor_sample(name, tensor);
   sample.payload_type = neat::PayloadType::Image;
   sample.media_type = "video/x-raw";
-  sample.format = "RGB";
+  const auto format = tensor.image_format();
+  sample.format = format == neat::ImageSpec::PixelFormat::NV12 ? "NV12" : "RGB";
   sample.payload_tag = sample.format;
   if (identity != nullptr) {
     copy_identity(*identity, sample);
   }
   return sample;
+}
+
+// A zero NV12 image at the largest source size negotiates the detector input.
+neat::Tensor nv12_seed(int width, int height) {
+  const int64_t y_bytes = static_cast<int64_t>(width) * height;
+  neat::Tensor tensor;
+  tensor.storage = neat::make_cpu_owned_storage(static_cast<std::size_t>(y_bytes + y_bytes / 2));
+  tensor.dtype = neat::TensorDType::UInt8;
+  tensor.semantic.image = neat::ImageSpec{neat::ImageSpec::PixelFormat::NV12, ""};
+  tensor.shape = {height, width};
+  tensor.axis_semantics = {neat::TensorAxisSemantic::H, neat::TensorAxisSemantic::W};
+  tensor.planes = {{neat::PlaneRole::Y, {height, width}, {width, 1}, 0},
+                   {neat::PlaneRole::UV, {height / 2, width}, {width, 1}, y_bytes}};
+  tensor.read_only = false;
+  return tensor.cvu();
 }
 
 void build_detector_run(AppRuntime& app) {
@@ -1103,10 +1122,8 @@ void build_detector_run(AppRuntime& app) {
     seed_width = std::max(seed_width, stream->width);
     seed_height = std::max(seed_height, stream->height);
   }
-  cv::Mat seed_image = cv::Mat::zeros(seed_height, seed_width, CV_8UC3);
-  const neat::Tensor seed_tensor = neat::Tensor::from_cv_mat(
-      seed_image, neat::ImageSpec::PixelFormat::RGB, neat::TensorMemory::EV74);
-  const neat::Sample seed = image_input_sample("detector_input", seed_tensor, nullptr);
+  const neat::Sample seed =
+      image_input_sample("detector_input", nv12_seed(seed_width, seed_height), nullptr);
 
   app.detector_graph = neat::Graph("yolo26_runner");
   auto input_options = app.detector_model->input_appsrc_options(false);
@@ -1142,14 +1159,14 @@ bool extract_bbox_payload(const neat::Sample& sample, std::vector<std::uint8_t>&
   return objdet::extract_bbox_payload(sample, payload, error);
 }
 
-neat::Tensor require_rgb_tensor(const neat::Sample& sample) {
+neat::Tensor require_nv12_tensor(const neat::Sample& sample) {
   const neat::TensorList tensors = neat::tensors_from_sample(sample, false);
   if (tensors.size() != 1) {
-    throw std::runtime_error("RGB frame output must contain one tensor");
+    throw std::runtime_error("decoded frame output must contain one tensor");
   }
   const auto format = tensors.front().image_format();
-  if (!format.has_value() || *format != neat::ImageSpec::PixelFormat::RGB) {
-    throw std::runtime_error("VideoConvert output is not RGB");
+  if (!format.has_value() || *format != neat::ImageSpec::PixelFormat::NV12) {
+    throw std::runtime_error("decoded frame is not NV12");
   }
   return tensors.front();
 }
@@ -1196,17 +1213,20 @@ void publish_frame(StreamRuntime& stream, const FrameIdentity& identity,
   if (stream.pose_temporal_filter_enabled) {
     poses = stream.pose_smoother.filter(std::move(poses));
   }
-  nlohmann::json overlay = blazepose_app::poses_data_json(std::move(poses), identity.stream_id);
-  const std::string overlay_data = overlay.dump();
-  const std::string auxiliary_data =
-      blazepose_app::world_pose_auxiliary_from_overlay(std::move(overlay)).dump();
   const int64_t timestamp_ms = identity.pts_ns >= 0 ? identity.pts_ns / 1'000'000 : -1;
   const std::string frame_id = std::to_string(identity.frame_id);
+  // Serialize each envelope once; send_metadata() would re-parse the data JSON.
+  nlohmann::json overlay = blazepose_app::poses_data_json(std::move(poses), identity.stream_id);
+  const std::string overlay_message =
+      blazepose_app::metadata_message("pose-estimation", overlay, timestamp_ms, frame_id);
+  nlohmann::json auxiliary = blazepose_app::world_pose_auxiliary_from_overlay(std::move(overlay));
+  const std::string auxiliary_message = blazepose_app::metadata_message(
+      "auxiliary-visualization", auxiliary, timestamp_ms, frame_id);
   const auto send = [&](const char* type) {
-    const std::string& data =
-        std::string_view(type) == "pose-estimation" ? overlay_data : auxiliary_data;
+    const std::string& message =
+        std::string_view(type) == "pose-estimation" ? overlay_message : auxiliary_message;
     std::string error;
-    if (stream.metadata_sender->send_metadata(type, data, timestamp_ms, frame_id, &error)) {
+    if (stream.metadata_sender->send_raw_json(message, &error)) {
       return true;
     }
     std::cerr << "[warn] stream " << stream.config.id << " " << type
@@ -1258,37 +1278,62 @@ void record_error(AppRuntime& app) {
   app.state.cv.notify_all();
 }
 
-// Waits for queued work and takes it round-robin across streams.
+// Waits for queued work that `ready` admits and takes it round-robin across streams.
+template <typename Ready>
 std::optional<FrameJob> take_next_job(AppRuntime& app,
                                       std::vector<std::optional<FrameJob>>& mailboxes,
-                                      std::size_t& next_stream) {
+                                      std::size_t& next_stream, Ready&& ready) {
   std::unique_lock<std::mutex> lock(app.state.mutex);
+  std::optional<std::size_t> index;
   app.state.cv.wait(lock, [&]() {
-    return app.state.stopping || std::any_of(mailboxes.begin(), mailboxes.end(),
-                                             [](const auto& item) { return item.has_value(); });
+    index = blazepose_app::next_ready_stream(mailboxes, next_stream, ready);
+    return app.state.stopping || index.has_value();
   });
   if (app.state.stopping) {
     return std::nullopt;
   }
-  for (std::size_t offset = 0; offset < mailboxes.size(); ++offset) {
-    const std::size_t index = (next_stream + offset) % mailboxes.size();
-    if (mailboxes[index].has_value()) {
-      FrameJob job = std::move(*mailboxes[index]);
-      mailboxes[index].reset();
-      next_stream = (index + 1) % mailboxes.size();
-      return job;
-    }
-  }
-  return std::nullopt;
+  FrameJob job = std::move(*mailboxes[*index]);
+  mailboxes[*index].reset();
+  next_stream = (*index + 1) % mailboxes.size();
+  // An emptied pose mailbox lets the detector take that stream's next frame.
+  app.state.cv.notify_all();
+  return job;
 }
 
-blazepose_app::Affine affine_from_tensor(const neat::Tensor& tensor) {
-  if (!tensor.semantic.preprocess.has_value()) {
-    throw std::runtime_error("BlazePose Preproc output is missing affine metadata");
+// Crops one square ROI from an NV12 frame straight to the pose input size and
+// converts only that crop to RGB. Each plane is resampled with pixel-center
+// alignment; area outside the frame is black (Y=16, UV=128).
+cv::Mat crop_nv12_roi_rgb(const neat::Nv12View& frame, const blazepose_app::Roi& roi) {
+  const cv::Size y_size(kPoseInputSize, kPoseInputSize);
+  const cv::Size uv_size(kPoseInputSize / 2, kPoseInputSize / 2);
+  const cv::Mat y_plane(frame.height, frame.width, CV_8UC1, const_cast<std::uint8_t*>(frame.y),
+                        static_cast<std::size_t>(frame.y_stride));
+  const cv::Mat uv_plane(frame.height / 2, frame.width / 2, CV_8UC2,
+                         const_cast<std::uint8_t*>(frame.uv),
+                         static_cast<std::size_t>(frame.uv_stride));
+  const double scale = static_cast<double>(roi.width) / kPoseInputSize;
+  const double offset = 0.5 * scale - 0.5;
+  const cv::Matx23d y_map(scale, 0.0, roi.x + offset, 0.0, scale, roi.y + offset);
+  const cv::Matx23d uv_map(scale, 0.0, roi.x * 0.5 + offset, 0.0, scale, roi.y * 0.5 + offset);
+  cv::Mat y_crop;
+  cv::Mat uv_crop;
+  const cv::Rect frame_rect(0, 0, frame.width, frame.height);
+  const cv::Rect roi_rect(roi.x, roi.y, roi.width, roi.height);
+  if ((roi_rect & frame_rect) == roi_rect && roi.x % 2 == 0 && roi.y % 2 == 0 &&
+      roi.width >= 2) {
+    // An in-frame ROI on the chroma grid is a plain resize of each plane.
+    cv::resize(y_plane(roi_rect), y_crop, y_size, 0, 0, cv::INTER_LINEAR);
+    cv::resize(uv_plane(cv::Rect(roi.x / 2, roi.y / 2, roi.width / 2, roi.height / 2)), uv_crop,
+               uv_size, 0, 0, cv::INTER_LINEAR);
+  } else {
+    cv::warpAffine(y_plane, y_crop, y_map, y_size, cv::INTER_LINEAR | cv::WARP_INVERSE_MAP,
+                   cv::BORDER_CONSTANT, cv::Scalar(16));
+    cv::warpAffine(uv_plane, uv_crop, uv_map, uv_size, cv::INTER_LINEAR | cv::WARP_INVERSE_MAP,
+                   cv::BORDER_CONSTANT, cv::Scalar(128, 128));
   }
-  const auto& meta = *tensor.semantic.preprocess;
-  return {meta.affine_m00, meta.affine_m01, meta.affine_m02,
-          meta.affine_m10, meta.affine_m11, meta.affine_m12};
+  cv::Mat rgb;
+  cv::cvtColorTwoPlane(y_crop, uv_crop, rgb, cv::COLOR_YUV2RGB_NV12);
+  return rgb;
 }
 
 void close_source_stream(AppRuntime& app, StreamRuntime& stream, const std::string& reason) {
@@ -1324,13 +1369,13 @@ void pull_source_frames(AppRuntime& app, const AppConfig& cfg, StreamRuntime& st
         return;
       }
       if (status != neat::PullStatus::Ok) {
-        close_source_stream(app, stream, "failed to pull RGB source frame: " + error.message);
+        close_source_stream(app, stream, "failed to pull decoded source frame: " + error.message);
         return;
       }
       FrameJob job;
       job.job_id = app.next_job_id.fetch_add(1);
       job.stream_index = stream.index;
-      job.rgb = require_rgb_tensor(sample);
+      job.frame = require_nv12_tensor(sample);
       job.identity = {stream.config.id, sample.frame_id, sample.pts_ns,
                       static_cast<std::uint64_t>(stream.frames_in.load() + 1)};
       bool dropped = false;
@@ -1422,14 +1467,17 @@ bool push_with_context(AppRuntime& app, neat::Run& run, std::string_view input_n
 void dispatch_detector_jobs(AppRuntime& app, const AppConfig& /*cfg*/) {
   try {
     while (true) {
+      // While a stream's previous frame waits for BlazePose, a new detection of
+      // that stream would only replace it; leave the shared MLA to other work.
       const std::optional<FrameJob> job =
-          take_next_job(app, app.state.detector_mailboxes, app.state.next_detector_stream);
+          take_next_job(app, app.state.detector_mailboxes, app.state.next_detector_stream,
+                        [&app](std::size_t stream_index) {
+                          return !app.state.pose_mailboxes[stream_index].has_value();
+                        });
       if (!job.has_value()) {
         return;
       }
-      const neat::Tensor detector_frame = job->rgb.cvu();
-      const neat::Sample input =
-          image_input_sample("detector_input", detector_frame, &job->identity);
+      const neat::Sample input = image_input_sample("detector_input", job->frame, &job->identity);
       if (!push_with_context(app, app.detector_run, "detector_input", input,
                              app.state.pending_detector_outputs, *job,
                              "YOLO26 Run rejected a frame input")) {
@@ -1526,34 +1574,39 @@ void dispatch_pose_jobs(AppRuntime& app, const AppConfig& cfg) {
   try {
     while (true) {
       std::optional<FrameJob> maybe_job =
-          take_next_job(app, app.state.pose_mailboxes, app.state.next_pose_stream);
+          take_next_job(app, app.state.pose_mailboxes, app.state.next_pose_stream,
+                        [](std::size_t) { return true; });
       if (!maybe_job.has_value()) {
         return;
       }
       FrameJob job = std::move(*maybe_job);
-      auto rgb_view = job.rgb.map_cv_mat_view(neat::ImageSpec::PixelFormat::RGB);
-      if (!rgb_view.has_value()) {
-        throw std::runtime_error("failed to map packed RGB frame without copying");
+      const auto nv12 = job.frame.map_nv12_read();
+      if (!nv12.has_value()) {
+        throw std::runtime_error("failed to map the decoded NV12 frame");
       }
-      std::vector<neat::PreprocessRoi> pose_rois;
-      pose_rois.reserve(job.people.size());
+      const int people = static_cast<int>(job.people.size());
+      std::vector<blazepose_app::Roi> rois;
+      rois.reserve(job.people.size());
       for (const blazepose_app::Box& person : job.people) {
-        const blazepose_app::Roi roi = blazepose_app::square_roi(person, cfg.roi_scale);
-        pose_rois.push_back({0, roi.x, roi.y, roi.width, roi.height});
+        rois.push_back(blazepose_app::square_roi(person, cfg.roi_scale));
       }
-      const neat::TensorList output =
-          neat::stages::Preproc(std::vector<cv::Mat>{rgb_view->mat}, *app.pose_model, pose_rois);
-      if (output.size() != pose_rois.size()) {
-        throw std::runtime_error("BlazePose Preproc output count does not match ROI count");
-      }
+      // Reading decoder memory dominates each crop, so the ROIs are cropped
+      // concurrently.
+      std::vector<neat::Tensor> crops(job.people.size());
+      cv::parallel_for_(cv::Range(0, people), [&](const cv::Range& range) {
+        for (int index = range.start; index < range.end; ++index) {
+          crops[index] = neat::Tensor::from_cv_mat(crop_nv12_roi_rgb(nv12->view, rois[index]),
+                                                   neat::ImageSpec::PixelFormat::RGB,
+                                                   neat::TensorMemory::EV74);
+        }
+      });
       std::vector<std::pair<PoseInputContext, neat::Tensor>> inputs;
-      inputs.reserve(output.size());
-      for (std::size_t index = 0; index < output.size(); ++index) {
-        // Detached asynchronous Runs may retain their input after push(). Give
-        // each ROI independent EV74 storage so Preproc can recycle its pool.
-        inputs.emplace_back(PoseInputContext{job.job_id, static_cast<int>(index), job.people[index],
-                                             affine_from_tensor(output[index])},
-                            output[index].clone().cvu());
+      inputs.reserve(job.people.size());
+      for (int index = 0; index < people; ++index) {
+        inputs.emplace_back(PoseInputContext{job.job_id, index, job.people[index],
+                                             blazepose_app::roi_input_affine(rois[index],
+                                                                             kPoseInputSize)},
+                            std::move(crops[index]));
       }
       {
         std::lock_guard<std::mutex> lock(app.state.mutex);
@@ -1565,7 +1618,7 @@ void dispatch_pose_jobs(AppRuntime& app, const AppConfig& cfg) {
       }
       for (const auto& [context, tensor] : inputs) {
         if (!push_with_context(
-                app, app.pose_run, "pose_input", pose_input_sample(tensor, &job.identity),
+                app, app.pose_run, "pose_input", image_input_sample("pose_input", tensor, &job.identity),
                 app.state.pending_pose_outputs, context, "BlazePose Run rejected an ROI input")) {
           return;
         }
