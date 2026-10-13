@@ -6,6 +6,7 @@
 #include "support/testing/test_config.h"
 #include "support/testing/test_process.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <iostream>
 #include <cstdlib>
@@ -272,18 +273,18 @@ int main(int argc, char** argv) {
   // Core letterboxes and maps coordinates for input that is not 640x640.
   //
   // Every bundled fixture is exactly the model's own 640x640 input, so the
-  // letterbox is an identity operation and the happy-path check would pass even
-  // if the application did the geometry itself. Rescaling the fixtures to three
-  // different sizes exercises Core's on-device letterbox and its mapping of
-  // boxes back to source coordinates, through the single graph seeded at the
-  // configured ingress capacity.
+  // letterbox is an identity operation. Each fixture is scaled *up* and then
+  // padded into a landscape, portrait, or square frame, so Core's on-device
+  // letterbox must resize and pad along either axis through the single graph
+  // seeded at the configured ingress capacity.
   //
-  // Each fixture is scaled *up*, so the defects are still present at full detail
-  // and the same classes must still be reported. A wrong mapping would place
-  // boxes in letterbox space instead of source space, and the annotated image
-  // would no longer match the source dimensions.
+  // The scaled boards keep their defects at full detail, so the same classes
+  // must still be reported. This does not check box positions: the application
+  // saves the source frame, so the output size only shows that the annotated
+  // image is that frame.
   if (rc == 0) {
-    const double scales[] = {2.0, 1.5, 1.25};
+    // {scale, extra width, extra height} as fractions of the scaled board.
+    const double frames[][3] = {{2.0, 0.25, 0.0}, {1.5, 0.0, 0.25}, {1.25, 0.0, 0.0}};
     const auto mixed_input = fs::path(out_dir).parent_path() / "mixed-input";
     fs::create_directories(mixed_input);
 
@@ -300,12 +301,16 @@ int main(int argc, char** argv) {
         rc = 1;
         break;
       }
-      const double scale = scales[index % (sizeof(scales) / sizeof(scales[0]))];
-      cv::Mat resized;
-      cv::resize(source, resized,
-                 cv::Size(static_cast<int>(source.cols * scale),
-                          static_cast<int>(source.rows * scale)),
+      const double* frame = frames[index % (sizeof(frames) / sizeof(frames[0]))];
+      cv::Mat scaled;
+      cv::resize(source, scaled,
+                 cv::Size(static_cast<int>(source.cols * frame[0]),
+                          static_cast<int>(source.rows * frame[0])),
                  0, 0, cv::INTER_CUBIC);
+      cv::Mat resized;
+      cv::copyMakeBorder(scaled, resized, 0, static_cast<int>(scaled.rows * frame[2]), 0,
+                         static_cast<int>(scaled.cols * frame[1]), cv::BORDER_CONSTANT,
+                         cv::Scalar(114, 114, 114));
       cv::imwrite((mixed_input / entry.path().filename()).string(), resized);
 
       const std::string stem = entry.path().stem().string();
@@ -335,6 +340,16 @@ int main(int argc, char** argv) {
     if (rc == 0 && distinct.size() < 2) {
       std::cerr << "[FAIL] the rescaled fixtures must span more than one size or this test "
                    "does not exercise mixed resolutions at all\n";
+      rc = 1;
+    }
+    const auto has_frame = [&](bool landscape) {
+      return std::any_of(expected_sizes.begin(), expected_sizes.end(), [&](const auto& entry) {
+        return landscape ? entry.second.width > entry.second.height
+                         : entry.second.width < entry.second.height;
+      });
+    };
+    if (rc == 0 && (!has_frame(true) || !has_frame(false))) {
+      std::cerr << "[FAIL] the rescaled fixtures must include landscape and portrait frames\n";
       rc = 1;
     }
     if (rc == 0 && expected_classes.empty()) {
@@ -399,9 +414,8 @@ int main(int argc, char** argv) {
           }
           if (annotated.cols != size.width || annotated.rows != size.height) {
             std::cerr << "[FAIL] " << name << " was written at " << annotated.cols << "x"
-                      << annotated.rows << " but its source is " << size.width << "x"
-                      << size.height
-                      << "; detections were not mapped back to source coordinates\n";
+                      << annotated.rows << " but its source is " << size.width << "x" << size.height
+                      << "; the output is not the source frame\n";
             rc = 1;
             break;
           }

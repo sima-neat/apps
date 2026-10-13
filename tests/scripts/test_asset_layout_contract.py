@@ -43,6 +43,7 @@ RUNTIME_PCB_IMAGES = {
 }
 TEST_PCB_IMAGES = {
     "pcb_01_missing_hole.jpg",
+    "pcb_02_open_circuit.jpg",
     "pcb_03_spur.jpg",
     "pcb_04_spurious_copper.jpg",
 }

@@ -152,16 +152,15 @@ class TestE2E:
         """Core letterboxes and maps coordinates for input that is not 640x640.
 
         Every bundled fixture is exactly the model's own 640x640 input, so the
-        letterbox is an identity operation and the happy-path test would pass
-        even if the application did the geometry itself. Rescaling the fixtures
-        to three different sizes exercises Core's on-device letterbox and its
-        mapping of boxes back to source coordinates, through the single graph
-        seeded at the configured ingress capacity.
+        letterbox is an identity operation. Each fixture is scaled *up* and then
+        padded into a landscape, portrait, or square frame, so Core's on-device
+        letterbox must resize and pad along either axis through the single
+        graph seeded at the configured ingress capacity.
 
-        Each fixture is scaled *up*, so the defects are still present at full
-        detail and the same classes must still be reported. A wrong mapping
-        would place boxes in letterbox space instead of source space, and the
-        annotated image would no longer match the source dimensions.
+        The scaled boards keep their defects at full detail, so the same
+        classes must still be reported. This does not check box positions: the
+        application saves the source frame, so the output size only shows that
+        the annotated image is that frame.
         """
         import cv2
 
@@ -171,9 +170,10 @@ class TestE2E:
             f"PCB test images are missing or empty: {source_dir}",
         )
 
-        # Distinct sizes, all larger than the model input, so every image needs a
-        # real letterbox through the single graph.
-        scales = [2.0, 1.5, 1.25]
+        # (scale, extra width, extra height) as fractions of the scaled board:
+        # landscape, portrait, and square frames, all larger than the model
+        # input, so every image needs a real letterbox through the single graph.
+        frames = [(2.0, 0.25, 0.0), (1.5, 0.0, 0.25), (1.25, 0.0, 0.0)]
         mixed_dir = tmp_output_dir.parent / "mixed-input"
         mixed_dir.mkdir(parents=True, exist_ok=True)
         expected_sizes = {}
@@ -181,11 +181,16 @@ class TestE2E:
         for index, path in enumerate(fixtures):
             image = cv2.imread(str(path))
             assert image is not None, f"could not read fixture {path}"
-            scale = scales[index % len(scales)]
+            scale, extra_width, extra_height = frames[index % len(frames)]
             height, width = image.shape[:2]
-            resized = cv2.resize(
+            scaled = cv2.resize(
                 image, (int(width * scale), int(height * scale)),
                 interpolation=cv2.INTER_CUBIC,
+            )
+            resized = cv2.copyMakeBorder(
+                scaled, 0, int(scaled.shape[0] * extra_height),
+                0, int(scaled.shape[1] * extra_width),
+                cv2.BORDER_CONSTANT, value=(114, 114, 114),
             )
             cv2.imwrite(str(mixed_dir / path.name), resized)
             expected_sizes[f"{path.stem}{OUTPUT_TAG}{path.suffix}"] = (
@@ -196,6 +201,9 @@ class TestE2E:
             "the rescaled fixtures must span more than one size or this test "
             "does not exercise mixed resolutions at all"
         )
+        assert any(w > h for w, h in expected_sizes.values()) and any(
+            w < h for w, h in expected_sizes.values()
+        ), "the rescaled fixtures must include landscape and portrait frames"
 
         mixed_output = tmp_output_dir.parent / "mixed-output"
         mixed_output.mkdir(parents=True, exist_ok=True)
@@ -240,8 +248,7 @@ class TestE2E:
             assert annotated is not None, f"could not read annotated output {written}"
             assert (annotated.shape[1], annotated.shape[0]) == (width, height), (
                 f"{name} was written at {annotated.shape[1]}x{annotated.shape[0]} but its "
-                f"source is {width}x{height}; detections were not mapped back to source "
-                f"coordinates"
+                f"source is {width}x{height}; the output is not the source frame"
             )
 
         # Same content, only larger, so the model must still name the same defects.
