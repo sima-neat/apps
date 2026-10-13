@@ -29,7 +29,8 @@ CARD_BINARY="${PCIE_CARD_BINARY:-}"
 HOST_BINARY="${PCIE_HOST_BINARY:-${APPS_ROOT}/build-host-pcie/${APP_NAME}-host}"
 REMOTE_DIR="${PCIE_REMOTE_RUN_DIR:-}"
 READINESS_TIMEOUT="${PCIE_CARD_READINESS_TIMEOUT:-120}"
-SHUTDOWN_TIMEOUT="${PCIE_SHUTDOWN_TIMEOUT:-15}"
+SHUTDOWN_TIMEOUT="${PCIE_SHUTDOWN_TIMEOUT:-30}"
+ALLOW_DIRTY_CARD="${PCIE_ALLOW_DIRTY_CARD:-0}"
 
 HOST_PID=""
 CARD_STARTED=0
@@ -54,12 +55,19 @@ Options:
   --readiness-timeout SEC     Card startup timeout (default: ${READINESS_TIMEOUT})
   --shutdown-timeout SEC      Per-process graceful shutdown timeout
                                (default: ${SHUTDOWN_TIMEOUT})
+  --allow-dirty-card          Start even if the previous card application had
+                               to be killed and the card was not rebooted since
   -h, --help                  Show this help
 
 Environment variables with equivalent defaults:
   PCIE_CARD_HOST, PCIE_CARD_USER, PCIE_CARD_SSH_PORT, PCIE_CARD_SSH_KEY,
   PCIE_CARD_BINARY, PCIE_HOST_BINARY, PCIE_REMOTE_RUN_DIR,
-  PCIE_CARD_READINESS_TIMEOUT, PCIE_SHUTDOWN_TIMEOUT
+  PCIE_CARD_READINESS_TIMEOUT, PCIE_SHUTDOWN_TIMEOUT, PCIE_ALLOW_DIRTY_CARD
+
+A card application that ignores SIGINT is killed with SIGTERM/SIGKILL. That can
+leave PCIe endpoint queue state behind on the card, and later sessions may then
+stall or crash the card. The launcher records this in the card runtime
+directory and refuses to start again until the card has been rebooted.
 EOF
 }
 
@@ -134,6 +142,10 @@ while [[ $# -gt 0 ]]; do
       SHUTDOWN_TIMEOUT="$2"
       shift 2
       ;;
+    --allow-dirty-card)
+      ALLOW_DIRTY_CARD=1
+      shift
+      ;;
     -h | --help)
       usage
       exit 0
@@ -174,6 +186,7 @@ CARD_TARGET="${CARD_USER}@${CARD_HOST}"
 REMOTE_CONFIG="${REMOTE_DIR}/config.yaml"
 REMOTE_PID_FILE="${REMOTE_DIR}/card.pid"
 REMOTE_LOG="${REMOTE_DIR}/card.log"
+REMOTE_DIRTY_FILE="${REMOTE_DIR}/card.dirty"
 
 SSH_OPTIONS=(
   -i "${SSH_IDENTITY}"
@@ -193,6 +206,7 @@ REMOTE_DIR_Q="$(shell_quote "${REMOTE_DIR}")"
 REMOTE_CONFIG_Q="$(shell_quote "${REMOTE_CONFIG}")"
 REMOTE_PID_FILE_Q="$(shell_quote "${REMOTE_PID_FILE}")"
 REMOTE_LOG_Q="$(shell_quote "${REMOTE_LOG}")"
+REMOTE_DIRTY_FILE_Q="$(shell_quote "${REMOTE_DIRTY_FILE}")"
 
 remote_exec() {
   ssh "${SSH_OPTIONS[@]}" "${CARD_TARGET}" "$1"
@@ -249,6 +263,11 @@ if [[ -f ${REMOTE_PID_FILE_Q} ]]; then
         done
         if kill -0 \"\${pid}\" 2>/dev/null; then
           echo 'Card did not stop after SIGINT; sending SIGTERM.' >&2
+          {
+            echo \"\$(date '+%Y-%m-%d %H:%M:%S') card application PID \${pid} did not stop after SIGINT and was killed\"
+            echo \"boot_id=\$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)\"
+          } >${REMOTE_DIRTY_FILE_Q}
+          echo 'The card was left in an unclean state; reboot it before starting a new session.' >&2
           kill -TERM \"\${pid}\" 2>/dev/null
           sleep 3
         fi
@@ -310,6 +329,27 @@ test -x ${CARD_BINARY_Q} || {
   exit 1
 }
 mkdir -p ${REMOTE_DIR_Q}
+if [[ -f ${REMOTE_DIRTY_FILE_Q} ]]; then
+  # The dirty marker records the boot_id of the boot it was written on.
+  # /proc/sys/kernel/random/boot_id is regenerated only on reboot, so comparing
+  # it is immune to wall-clock steps (e.g. NTP correcting the card's clock after
+  # connectivity returns) that a date/uptime-derived boot time is not: a forward
+  # step could make the derived boot time look newer than the marker and wrongly
+  # clear the guard, and a backward step could reject a genuinely rebooted card.
+  marked_boot=\$(sed -n 's/^boot_id=//p' ${REMOTE_DIRTY_FILE_Q} 2>/dev/null | head -n1)
+  current_boot=\$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)
+  if [[ -n \"\${marked_boot}\" && -n \"\${current_boot}\" && \"\${marked_boot}\" != \"\${current_boot}\" ]]; then
+    # A different boot_id means the card has rebooted since the unclean stop.
+    rm -f ${REMOTE_DIRTY_FILE_Q}
+  elif [[ ${ALLOW_DIRTY_CARD} -eq 1 ]]; then
+    echo 'WARNING: starting on a card that was not rebooted after an unclean stop (--allow-dirty-card).' >&2
+    rm -f ${REMOTE_DIRTY_FILE_Q}
+  else
+    echo \"The previous session did not stop cleanly: \$(head -n1 ${REMOTE_DIRTY_FILE_Q})\" >&2
+    echo 'Reboot the card before starting a new session (or pass --allow-dirty-card to override).' >&2
+    exit 1
+  fi
+fi
 if [[ -f ${REMOTE_PID_FILE_Q} ]]; then
   pid=\$(cat ${REMOTE_PID_FILE_Q} 2>/dev/null || true)
   if [[ \"\${pid}\" =~ ^[1-9][0-9]*$ ]] && kill -0 \"\${pid}\" 2>/dev/null; then
