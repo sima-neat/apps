@@ -27,7 +27,7 @@ These results measure the compiled model package only. They do not include camer
 | `depth_anything_v2_vits` | `depth_anything_v2_vits_mpk.tar.gz` | depth-estimator | `detessdequant` | 1 | 20.841 / 55.01 |
 | `retinaface_mobilenet25` | `retinaface_mobilenet25_mod_0_mpk.tar.gz` | face-detector | `detessdequant` | 9 | 4.540 / 637.29 |
 | `detr_resnet50_modified_class_embed_bbox_embed` | `detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz` | detr-object-detector | `detessdequant` | 2 | 23.426 / 68.86 |
-| `yolo_v8n_seg` | `yolo_v8n_seg_mpk.tar.gz` | yolov8-instance-segmenter | `detessdequant` | 10 | 6.749 / 385.41 |
+| `yolo_v8n_seg` | `yolo_v8n_seg_mpk.tar.gz` | single-stream-instance-segmenter | `detessdequant` | 10 | 6.749 / 385.41 |
 
 ## YOLO26 Detection
 
