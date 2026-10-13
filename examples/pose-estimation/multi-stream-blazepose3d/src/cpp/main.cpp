@@ -97,7 +97,7 @@ struct AppConfig {
   int latency_ms = 100;
   double detector_min_score = 0.30;
   double detector_nms_iou = 0.60;
-  int max_people_per_frame = 4;
+  int max_people_per_frame = 1;
   double roi_scale = 1.65;
   double pose_presence_threshold = 0.50;
   bool pose_temporal_filter_enabled = true;
@@ -815,7 +815,7 @@ AppConfig load_app_config(const fs::path& config_path) {
   cfg.latency_ms = yaml_int_or(raw_scalars, "input.latency_ms", 100);
   cfg.detector_min_score = raw.double_or("detector.min_score", 0.30);
   cfg.detector_nms_iou = raw.double_or("detector.nms_iou", 0.60);
-  cfg.max_people_per_frame = yaml_int_or(raw_scalars, "pose.max_people_per_frame", 4);
+  cfg.max_people_per_frame = yaml_int_or(raw_scalars, "pose.max_people_per_frame", 1);
   cfg.roi_scale = raw.double_or("pose.roi_scale", 1.65);
   cfg.pose_presence_threshold = raw.double_or("pose.presence_threshold", 0.50);
   cfg.pose_temporal_filter_enabled =
