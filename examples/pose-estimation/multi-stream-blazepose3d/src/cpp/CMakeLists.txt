@@ -16,3 +16,8 @@ sima_neat_apps_module(
   E2E_TEST
   OUTPUT_TARGET_VAR MULTISTREAM_BLAZEPOSE3D_TARGET
 )
+
+if (BUILD_TESTING)
+  find_package(OpenCV REQUIRED COMPONENTS core videoio)
+  target_link_libraries(multi-stream-blazepose3d_e2e_test PRIVATE opencv_videoio)
+endif()
