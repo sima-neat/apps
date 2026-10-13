@@ -9,10 +9,14 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
 import json
 import os
 import re
 import tempfile
+import time
+import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -21,6 +25,17 @@ CATALOG_PATH = Path(__file__).with_name("voice_catalog.json")
 ASSETS_PATH = Path(__file__).resolve().parent.parent / "assets"  # voice assets stay in api/assets
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
+# Hugging Face rate-limits anonymous downloads per IP address, and an office
+# network shares one, so a busy moment answers 429. Retry that, server errors
+# and dropped connections a few times before giving up.
+_DOWNLOAD_TIMEOUT_S = 60
+_DOWNLOAD_ATTEMPTS = 4
+_RETRY_STATUSES = {429, 500, 502, 503, 504}
+_MAX_RETRY_WAIT_S = 30
+_sleep = time.sleep
+_TRANSIENT_ERRORS = (
+    urllib.error.URLError, http.client.HTTPException, TimeoutError, ConnectionError,
+)
 
 
 class VoiceCatalogError(ValueError):
@@ -110,6 +125,40 @@ def _sha256(path):
     return digest.hexdigest()
 
 
+def _retry_wait(error, attempt):
+    """Seconds to wait before the next attempt, or None when not worth retrying."""
+    if isinstance(error, urllib.error.HTTPError):
+        if error.code not in _RETRY_STATUSES:
+            return None
+        retry_after = (error.headers or {}).get("Retry-After", "")
+        if retry_after.strip().isdigit():
+            return min(int(retry_after), _MAX_RETRY_WAIT_S)
+    elif not isinstance(error, _TRANSIENT_ERRORS):
+        return None
+    return min(2 ** attempt, _MAX_RETRY_WAIT_S)
+
+
+def _fetch(url, temp_path):
+    name = Path(urllib.parse.urlsplit(url).path).name
+    for attempt in range(1, _DOWNLOAD_ATTEMPTS + 1):
+        try:
+            with urllib.request.urlopen(url, timeout=_DOWNLOAD_TIMEOUT_S) as response, \
+                    Path(temp_path).open("wb") as output:
+                while chunk := response.read(1024 * 1024):
+                    output.write(chunk)
+            return
+        except _TRANSIENT_ERRORS as error:
+            wait = _retry_wait(error, attempt)
+            if wait is None or attempt == _DOWNLOAD_ATTEMPTS:
+                raise VoiceCatalogError(
+                    f"could not download {name} ({error}). Run setup.sh again to "
+                    "resume; files already verified are kept."
+                ) from error
+            print(f"⏳ {name}: {error}; retrying in {wait}s "
+                  f"(attempt {attempt + 1} of {_DOWNLOAD_ATTEMPTS})")
+            _sleep(wait)
+
+
 def _download(url, target, expected_sha256):
     target = Path(target)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -122,9 +171,7 @@ def _download(url, target, expected_sha256):
     temp_path = Path(temp_name)
     try:
         print(f"⬇️  downloading: {target.name}")
-        with urllib.request.urlopen(url) as response, temp_path.open("wb") as output:
-            while chunk := response.read(1024 * 1024):
-                output.write(chunk)
+        _fetch(url, temp_path)
         actual = _sha256(temp_path)
         if actual != expected_sha256:
             raise VoiceCatalogError(
@@ -203,6 +250,14 @@ def main(argv=None):
     install.add_argument("--assets", type=Path, default=ASSETS_PATH)
     args = parser.parse_args(argv)
 
+    try:
+        return _run(args)
+    except VoiceCatalogError as error:
+        print(f"❌ {error}")
+        return 1
+
+
+def _run(args):
     catalog = load_catalog()
     if args.command == "repair":
         repaired = repair_voices(assets_path=args.assets, catalog=catalog)
