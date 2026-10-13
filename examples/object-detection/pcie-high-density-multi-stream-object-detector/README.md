@@ -109,10 +109,10 @@ The host application is not precompiled. Install the PCIe host package for the h
 
 ```bash
 # Ubuntu 22.04
-sima-cli neat install core/pciehost/ubuntu22/amd64@v0.4.0
+sima-cli neat install core/pciehost/ubuntu22/amd64@v0.6.0
 
 # Ubuntu 24.04
-sima-cli neat install core/pciehost/ubuntu24/amd64@v0.4.0
+sima-cli neat install core/pciehost/ubuntu24/amd64@v0.6.0
 ```
 
 Build the host application from the Apps repository root:

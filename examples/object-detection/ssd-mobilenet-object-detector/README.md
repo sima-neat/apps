@@ -42,8 +42,7 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-The tested model is SSD-MobileNetV2 INT8 with tessellation inside the MLA. Download its SDK
-2.1.3 artifact:
+The tested model is SSD-MobileNetV2 INT8 with tessellation inside the MLA. Download it:
 
 ```bash
 export MODELZOO_VERSION="2.1.3"
