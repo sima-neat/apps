@@ -1877,16 +1877,21 @@ int main(int argc, char** argv) {
     const bool used_fallback_sample = input_path.empty();
     if (expected_class_id.has_value() && used_fallback_sample && images.size() == 1 &&
         !profiles.empty()) {
+      // Every profile, not just the first: the README states class 1 should win
+      // for each model, so a regression in any model but the first produced no
+      // note at all.
       const auto& first = results.front();
-      const auto it = first.predictions.find(profiles.front().name);
-      if (it != first.predictions.end() && !it->second.top_k.empty()) {
+      for (const auto& profile : profiles) {
+        const auto it = first.predictions.find(profile.name);
+        if (it == first.predictions.end() || it->second.top_k.empty())
+          continue;
         const auto& top1 = it->second.top_k.front();
         if (top1.index != *expected_class_id || top1.prob < min_probability) {
           // Formatted separately: std::fixed and setprecision are sticky, and
           // applied inline they would also reformat min_probability below.
           std::ostringstream probability;
           probability << std::fixed << std::setprecision(4) << top1.prob;
-          std::cerr << "Note: " << profiles.front().name << " top1=" << top1.index << " ("
+          std::cerr << "Note: " << profile.name << " top1=" << top1.index << " ("
                     << probability.str()
                     << ") did not match expected_class_id=" << *expected_class_id
                     << " (min_probability=" << python_float_text(min_probability)

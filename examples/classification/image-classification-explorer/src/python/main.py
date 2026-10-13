@@ -1236,7 +1236,10 @@ def main() -> int:
 
     try:
         publish_report(output_dir, results, profiles, skipped, class_summary, timing)
-    except OSError as exc:
+    except (OSError, UnicodeError) as exc:
+        # UnicodeEncodeError is a ValueError, not an OSError, so a path holding
+        # non-UTF-8 bytes used to escape here as a traceback rather than the
+        # documented runtime error.
         print(f"Error: failed to write report to {output_dir}: {exc}", file=sys.stderr)
         return 6
 
@@ -1248,14 +1251,19 @@ def main() -> int:
 
     used_fallback_sample = not input_path
     if expected_class_id is not None and used_fallback_sample and len(images) == 1 and profiles:
+        # Every profile, not just the first: the README states class 1 should win
+        # for each model, and the e2e suites assert it for each, so a regression
+        # in any model but the first produced no note at all.
         first = results[0]
-        pred = first.predictions.get(profiles[0].name)
-        if pred and pred.top_k:
+        for profile in profiles:
+            pred = first.predictions.get(profile.name)
+            if not pred or not pred.top_k:
+                continue
             top1_id = pred.top_k[0][0]
             top1_prob = pred.top_k[0][2]
             if top1_id != expected_class_id or top1_prob < min_probability:
                 print(
-                    f"Note: {profiles[0].name} top1={top1_id} ({top1_prob:.4f}) did not match "
+                    f"Note: {profile.name} top1={top1_id} ({top1_prob:.4f}) did not match "
                     f"expected_class_id={expected_class_id} (min_probability={min_probability}); "
                     "see report for details.",
                     file=sys.stderr,
