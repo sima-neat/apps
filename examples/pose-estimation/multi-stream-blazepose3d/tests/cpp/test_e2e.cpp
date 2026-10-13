@@ -503,6 +503,16 @@ public:
     return true;
   }
 
+  std::string port_counts() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::ostringstream counts;
+    for (std::size_t index = 0; index < config_packets_.size(); ++index) {
+      counts << (index ? "; " : "") << "port " << index << ": config=" << config_packets_[index]
+             << " vcl=" << vcl_access_units_[index];
+    }
+    return counts.str();
+  }
+
   bool has_correlated_timestamp(int port_offset, int64_t timestamp_ms) const {
     if (port_offset < 0 || static_cast<std::size_t>(port_offset) >= vcl_timestamps_.size() ||
         timestamp_ms < 0) {
@@ -569,7 +579,7 @@ void write_config(const fs::path& path, const fs::path& detector, const fs::path
   output << "input:\n  tcp: true\n  latency_ms: 100\n"
             "detector:\n  min_score: 0.30\n  nms_iou: 0.60\n"
             "pose:\n  max_people_per_frame: 2\n  roi_scale: 1.65\n  presence_threshold: 0.0\n"
-            "runtime:\n  frames: 30\noutput:\n  insight:\n    host: "
+            "runtime:\n  frames: 90\noutput:\n  insight:\n    host: "
          << kInsightHost << "\n    video_port_base: " << video_port_base
          << "\n    metadata_port_base: " << metadata_port_base << "\n";
 }
@@ -822,7 +832,8 @@ int run_case(const std::string& binary, const fs::path& detector, const fs::path
     result = 1;
   } else if (!video_listener.received_all_ports()) {
     std::cerr << "[FAIL] " << codec
-              << " did not emit codec configuration and a VCL access unit on every video port\n";
+              << " did not emit codec configuration and a VCL access unit on every video port ("
+              << video_listener.port_counts() << ")\n";
     result = 1;
   } else if (!metadata_error.empty()) {
     std::cerr << "[FAIL] " << codec << " metadata: " << metadata_error << "\n";
