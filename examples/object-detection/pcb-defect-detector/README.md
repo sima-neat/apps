@@ -112,6 +112,8 @@ Each input image produces one annotated copy in `io.output_dir`, named `<stem>_p
 pcb_01_missing_hole.jpg -> pcb_01_missing_hole_pcb.jpg
 ```
 
+Each run first deletes the `*_pcb` images an earlier run left in `io.output_dir`, so the folder holds only the current batch's results. Other files there are kept.
+
 Each run prints a per-image line with the defect count and class breakdown, followed by per-class totals for the folder.
 
 ## Troubleshooting

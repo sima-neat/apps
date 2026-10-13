@@ -253,6 +253,26 @@ fs::path output_path_for(const fs::path& image_path, const fs::path& output_dir)
          (image_path.stem().string() + kOutputTag + image_path.extension().string());
 }
 
+// Deletes annotated images an earlier run left in output_dir. A leftover image
+// is indistinguishable from this batch's result, for example one for a board
+// removed from the input since. Only files this application names
+// (<stem>_pcb.<image extension>) are removed; other files are kept.
+size_t clear_old_outputs(const fs::path& output_dir) {
+  const std::string tag = kOutputTag;
+  std::vector<fs::path> old_outputs;
+  for (const auto& entry : fs::directory_iterator(output_dir)) {
+    const std::string stem = entry.path().stem().string();
+    if (entry.is_regular_file() && is_image(entry.path()) && stem.size() > tag.size() &&
+        stem.compare(stem.size() - tag.size(), tag.size(), tag) == 0) {
+      old_outputs.push_back(entry.path());
+    }
+  }
+  for (const fs::path& path : old_outputs) {
+    fs::remove(path);
+  }
+  return old_outputs.size();
+}
+
 void draw_boxes(cv::Mat& frame, const std::vector<simaai::neat::Box>& boxes,
                 const std::vector<std::string>& labels) {
   for (const auto& box : boxes) {
@@ -446,8 +466,19 @@ int main(int argc, char** argv) {
               << "\n";
     return 2;
   }
+  size_t removed = 0;
+  try {
+    removed = clear_old_outputs(output_dir);
+  } catch (const fs::filesystem_error& e) {
+    std::cerr << "Error: cannot clear old outputs in " << output_dir.string() << ": " << e.what()
+              << "\n";
+    return 2;
+  }
 
   std::cout << "Model: " << cfg.model_path << "\n";
+  if (removed > 0) {
+    std::cout << "Removed " << removed << " annotated image(s) from an earlier run\n";
+  }
   std::cout << "Found " << images.size() << " images in " << input_dir.string() << "\n";
   std::vector<fs::path> all_images;
   all_images.reserve(images.size() * static_cast<size_t>(cfg.num_runs));

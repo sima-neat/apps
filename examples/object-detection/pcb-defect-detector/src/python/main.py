@@ -281,6 +281,23 @@ def output_path_for(image_path: Path, output_dir: Path) -> Path:
     return output_dir / f"{image_path.stem}{OUTPUT_TAG}{image_path.suffix}"
 
 
+def clear_old_outputs(output_dir: Path) -> int:
+    """Delete annotated images an earlier run left in output_dir.
+
+    A leftover image is indistinguishable from this batch's result, for example
+    one for a board removed from the input since. Only files this application
+    names (<stem>_pcb.<image extension>) are removed; other files are kept.
+    """
+    old_outputs = [
+        path for path in output_dir.iterdir()
+        if path.is_file() and is_image(path)
+        and path.stem.endswith(OUTPUT_TAG) and path.stem != OUTPUT_TAG
+    ]
+    for path in old_outputs:
+        path.unlink()
+    return len(old_outputs)
+
+
 def decode_detections(outputs, img_w: int, img_h: int, cfg: AppConfig) -> list[dict]:
     """Decode the model's BBOX payload into source-image coordinates.
 
@@ -475,8 +492,15 @@ def main() -> int:
     except OSError as error:
         print(f"Error: cannot create {cfg.output_dir}: {error}", file=sys.stderr)
         return 2
+    try:
+        removed = clear_old_outputs(cfg.output_dir)
+    except OSError as error:
+        print(f"Error: cannot clear old outputs in {cfg.output_dir}: {error}", file=sys.stderr)
+        return 2
 
     print(f"Model: {cfg.model_path}", flush=True)
+    if removed:
+        print(f"Removed {removed} annotated image(s) from an earlier run", flush=True)
     print(f"Found {len(images)} images in {cfg.input_dir}", flush=True)
     all_images = images * cfg.num_runs
     if cfg.num_runs > 1:

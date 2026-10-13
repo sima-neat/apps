@@ -621,6 +621,76 @@ int main(int argc, char** argv) {
     remove_dir(readonly_out.string());
   }
 
+  // With output.overlay off, every board is still inspected but nothing is
+  // written. The output directory starts with annotated images from an earlier
+  // run, one of them for a board no longer in the input. They must be gone
+  // afterwards or they would read as this batch's results, while files the
+  // application does not name must survive.
+  if (rc == 0) {
+    const auto quiet_out = fs::path(out_dir).parent_path() / "overlay-off-output";
+    fs::create_directories(quiet_out);
+    fs::path fixture;
+    for (const auto& entry : fs::directory_iterator(input_dir)) {
+      if (entry.is_regular_file() && (fixture.empty() || entry.path() < fixture)) {
+        fixture = entry.path();
+      }
+    }
+    const std::vector<std::string> old_outputs = {
+        fixture.stem().string() + kOutputTag + fixture.extension().string(),
+        std::string("pcb_99_removed_board") + kOutputTag + ".jpg"};
+    const std::set<std::string> user_files = {"notes.txt", "reference.jpg"};
+    for (const auto& name : old_outputs) {
+      fs::copy_file(fixture, quiet_out / name, fs::copy_options::overwrite_existing);
+    }
+    for (const auto& name : user_files) {
+      fs::copy_file(fixture, quiet_out / name, fs::copy_options::overwrite_existing);
+    }
+
+    const fs::path quiet_config = fs::path(out_dir).parent_path() / "config_overlay_off.yaml";
+    write_e2e_config(kExample, quiet_config,
+                     {{"model.path", model_path},
+                      {"model.labels", labels_file},
+                      {"io.input_dir", input_dir},
+                      {"io.output_dir", quiet_out.string()},
+                      {"output.overlay", "false"}});
+    const auto quiet = spawn_and_wait(binary, {"--config", quiet_config.string()}, timeout);
+    const int quiet_failed = summary_field(quiet.stdout_text, "failed=");
+    const int quiet_with_defects = summary_field(quiet.stdout_text, "images_with_defects=");
+    const int image_count = count_input_images(input_dir);
+    std::set<std::string> left;
+    for (const auto& entry : fs::directory_iterator(quiet_out)) {
+      left.insert(entry.path().filename().string());
+    }
+
+    if (quiet.exit_code != 0) {
+      std::cerr << "[FAIL] overlay off exited with code " << quiet.exit_code << "\n";
+      std::cerr << "stderr:\n" << quiet.stderr_text << "\n";
+      rc = 1;
+    } else if (quiet_failed != 0 || quiet_with_defects != image_count) {
+      std::cerr << "[FAIL] overlay off must still inspect every board, got failed=" << quiet_failed
+                << " images_with_defects=" << quiet_with_defects << " of " << image_count << "\n";
+      std::cerr << "stdout:\n" << quiet.stdout_text << "\n";
+      rc = 1;
+    } else if (const std::string problem = board_defect_problem(input_dir, quiet.stdout_text);
+               !problem.empty()) {
+      std::cerr << "[FAIL] overlay off: " << problem << "\nstdout:\n" << quiet.stdout_text << "\n";
+      rc = 1;
+    } else if (left != user_files) {
+      std::cerr << "[FAIL] overlay off must write no images and remove the earlier run's "
+                   "annotated images while keeping other files, but the output holds:";
+      for (const auto& name : left) {
+        std::cerr << " " << name;
+      }
+      std::cerr << "\n";
+      rc = 1;
+    } else {
+      std::cout << "[OK] overlay off inspected " << image_count
+                << " boards, wrote no images, and removed " << old_outputs.size()
+                << " annotated images from an earlier run\n";
+    }
+    remove_dir(quiet_out.string());
+  }
+
   remove_dir(out_dir);
   return rc;
 }
