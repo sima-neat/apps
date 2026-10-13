@@ -172,6 +172,92 @@ inline float blend(float previous, float current, float alpha) {
 // matched to the previous frame's pose with the highest box IoU; matched
 // landmarks move kAlpha of the way toward the new estimate, unmatched poses
 // pass through unchanged.
+// YOLO26 re-detects a tracked stream at least every this many admitted frames,
+// so people entering the scene are found.
+constexpr int kRedetectInterval = 5;
+
+// Smallest box around a pose's image landmarks, scored by its presence.
+inline Box keypoint_box(const Pose& pose) {
+  Box box{pose.keypoints[0].x, pose.keypoints[0].y, pose.keypoints[0].x, pose.keypoints[0].y,
+          pose.presence, 0};
+  for (const Keypoint& point : pose.keypoints) {
+    box.x1 = std::min(box.x1, point.x);
+    box.y1 = std::min(box.y1, point.y);
+    box.x2 = std::max(box.x2, point.x);
+    box.y2 = std::max(box.y2, point.y);
+  }
+  return box;
+}
+
+// Per-stream ROI tracking: each frame's landmarks give the next frame's person
+// boxes, so a tracked stream skips YOLO26. YOLO26 still runs when nothing is
+// tracked, and refreshes the tracked people every kRedetectInterval frames so
+// people who enter the scene are found.
+struct RoiTracker {
+  enum class Route {
+    Detect,          // Nothing is tracked: YOLO26 finds the people of this frame.
+    Track,           // BlazePose runs on the tracked boxes.
+    TrackAndRefresh, // As Track, and YOLO26 also refreshes the tracked people.
+  };
+
+  std::vector<Box> people;
+  std::uint64_t sequence = 0;        // Results of frames up to here are stale.
+  std::uint64_t routed_sequence = 0; // Newest admitted frame.
+  int frames_since_detection = 0;
+  bool detection_pending = false;
+
+  Route route(std::uint64_t frame_sequence) {
+    routed_sequence = frame_sequence;
+    if (people.empty()) {
+      detection_pending = true;
+      frames_since_detection = 0;
+      return Route::Detect;
+    }
+    if (++frames_since_detection >= kRedetectInterval && !detection_pending) {
+      detection_pending = true;
+      frames_since_detection = 0;
+      return Route::TrackAndRefresh;
+    }
+    return Route::Track;
+  }
+
+  // Records a YOLO26 result. It replaces the tracked people, and the results of
+  // frames admitted before it can no longer override it. A refresh that finds
+  // nobody keeps tracking; BlazePose presence decides when tracking is lost.
+  void on_detection(const std::vector<Box>& detected, bool refresh) {
+    detection_pending = false;
+    if (refresh && detected.empty()) {
+      return;
+    }
+    people = detected;
+    sequence = routed_sequence;
+  }
+
+  // Records the people found by BlazePose in a frame newer than the last
+  // update. An empty list ends tracking and forces detection.
+  void observe(const std::vector<Box>& boxes, std::uint64_t frame_sequence) {
+    if (frame_sequence > sequence) {
+      people = boxes;
+      sequence = frame_sequence;
+    }
+  }
+};
+
+// Boxes around the poses of one frame, most present first, for the tracker.
+inline std::vector<Box> tracked_boxes(const std::vector<Pose>& poses, std::size_t max_people) {
+  std::vector<Box> boxes;
+  boxes.reserve(poses.size());
+  for (const Pose& pose : poses) {
+    boxes.push_back(keypoint_box(pose));
+  }
+  std::sort(boxes.begin(), boxes.end(),
+            [](const Box& left, const Box& right) { return left.score > right.score; });
+  if (boxes.size() > max_people) {
+    boxes.resize(max_people);
+  }
+  return boxes;
+}
+
 class PoseSmoother {
 public:
   static constexpr float kAlpha = 0.5F;

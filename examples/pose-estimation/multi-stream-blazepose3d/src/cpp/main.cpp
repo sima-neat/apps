@@ -25,7 +25,6 @@
 #include <nodes/io/MetadataSender.h>
 
 #include <opencv2/core/mat.hpp>
-#include <opencv2/core/utility.hpp>
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
@@ -69,6 +68,10 @@ using Clock = std::chrono::steady_clock;
 constexpr int kMaxDetections = 100;
 constexpr int kMaxInflightPerStream = 4;
 constexpr int kPoseInputSize = 256;
+constexpr int kSourceOutputBuffers = 6;
+// Decoded NV12 frames stay zero-copy while queued for YOLO26 or BlazePose; the
+// source Run lends this many more device buffers than its default.
+constexpr int kSourceQueueDepth = 8;
 
 volatile std::sig_atomic_t g_stop_requested = 0;
 
@@ -111,12 +114,22 @@ struct FrameIdentity {
   std::uint64_t sequence = 0;
 };
 
+// One BlazePose input: an RGB ROI crop and its map back to source pixels.
+struct PoseCrop {
+  blazepose_app::Affine affine;
+  neat::Tensor tensor;
+};
+
 struct FrameJob {
   std::uint64_t job_id = 0;
   int stream_index = 0;
   neat::Tensor frame;
+  std::vector<PoseCrop> crops;
   std::vector<blazepose_app::Box> people;
   FrameIdentity identity;
+  // Detection only refreshes the stream's tracked people; the frame itself is
+  // published by its tracked pose job.
+  bool tracker_refresh = false;
 };
 
 struct PoseInputContext {
@@ -148,6 +161,8 @@ struct StreamRuntime {
   bool pose_temporal_filter_enabled = true;
   blazepose_app::PoseSmoother pose_smoother;
   std::uint64_t last_published_sequence = 0;
+  // Guarded by SharedState::mutex.
+  blazepose_app::RoiTracker tracker;
   std::atomic<int> frames_in{0};
   std::atomic<int> frames_out{0};
   // Admitted frames that are still queued or inside a model.
@@ -156,18 +171,27 @@ struct StreamRuntime {
   std::atomic<bool> source_worker_finished{false};
 };
 
+// One frame's completed poses, waiting for metadata serialization and send.
+struct Publication {
+  int stream_index = 0;
+  FrameIdentity identity;
+  std::vector<blazepose_app::Pose> poses;
+};
+
 struct SharedState {
   std::mutex mutex;
   std::condition_variable cv;
   // Latest-only work per stream; newer frames replace queued ones.
   std::vector<std::optional<FrameJob>> detector_mailboxes;
   std::vector<std::optional<FrameJob>> pose_mailboxes;
+  std::vector<std::optional<Publication>> publish_mailboxes;
   // FIFO context for each input pushed to a shared model, in output order.
   std::deque<FrameJob> pending_detector_outputs;
   std::deque<PoseInputContext> pending_pose_outputs;
   std::unordered_map<std::uint64_t, PoseAggregate> aggregates;
   std::size_t next_detector_stream = 0;
   std::size_t next_pose_stream = 0;
+  std::size_t next_publish_stream = 0;
   bool stopping = false;
   std::exception_ptr error;
 };
@@ -1037,7 +1061,11 @@ std::string frame_output_name(int stream_index) {
 neat::Graph make_frame_output(const StreamRuntime& stream) {
   neat::Graph graph("frame_" + std::to_string(stream.index));
   graph.add(neat::nodes::Input("analytics_frame"));
-  graph.add(neat::nodes::Output(frame_output_name(stream.index), neat::OutputOptions::Latest()));
+  // Latest-only with room for a short burst: frames that arrive back to back
+  // are not overwritten before the pull loop takes them.
+  neat::OutputOptions output = neat::OutputOptions::Latest();
+  output.max_buffers = kSourceOutputBuffers;
+  graph.add(neat::nodes::Output(frame_output_name(stream.index), output));
   return graph;
 }
 
@@ -1336,12 +1364,43 @@ cv::Mat crop_nv12_roi_rgb(const neat::Nv12View& frame, const blazepose_app::Roi&
   return rgb;
 }
 
+// Crops the BlazePose inputs of `job.people` from its NV12 frame and releases
+// the decoder buffer. Runs on the stream's own thread, so the shared pose
+// dispatcher only pushes ready inputs.
+void crop_people(FrameJob& job, const AppConfig& cfg) {
+  const auto nv12 = job.frame.map_nv12_read();
+  if (!nv12.has_value()) {
+    throw std::runtime_error("failed to map the decoded NV12 frame");
+  }
+  job.crops.clear();
+  job.crops.reserve(job.people.size());
+  for (const blazepose_app::Box& person : job.people) {
+    const blazepose_app::Roi roi = blazepose_app::square_roi(person, cfg.roi_scale);
+    job.crops.push_back({blazepose_app::roi_input_affine(roi, kPoseInputSize),
+                         neat::Tensor::from_cv_mat(crop_nv12_roi_rgb(nv12->view, roi),
+                                                   neat::ImageSpec::PixelFormat::RGB,
+                                                   neat::TensorMemory::EV74)});
+  }
+  job.frame = neat::Tensor{};
+}
+
 void close_source_stream(AppRuntime& app, StreamRuntime& stream, const std::string& reason) {
   if (!stream.closed.exchange(true)) {
     std::cerr << "[warn] stream " << stream.config.id << " stopped: " << reason << "\n";
   }
   std::lock_guard<std::mutex> lock(app.state.mutex);
   app.state.cv.notify_all();
+}
+
+// Queues a frame for YOLO26, replacing older queued detection work. Only
+// frames that will be published count as outstanding. Caller holds the mutex.
+void queue_detection(AppRuntime& app, StreamRuntime& stream, FrameJob job) {
+  std::optional<FrameJob>& slot =
+      app.state.detector_mailboxes[static_cast<std::size_t>(stream.index)];
+  const int replaced = slot.has_value() && !slot->tracker_refresh ? 1 : 0;
+  const int added = job.tracker_refresh ? 0 : 1;
+  slot = std::move(job);
+  stream.outstanding_frames += added - replaced;
 }
 
 void pull_source_frames(AppRuntime& app, const AppConfig& cfg, StreamRuntime& stream) {
@@ -1378,16 +1437,38 @@ void pull_source_frames(AppRuntime& app, const AppConfig& cfg, StreamRuntime& st
       job.frame = require_nv12_tensor(sample);
       job.identity = {stream.config.id, sample.frame_id, sample.pts_ns,
                       static_cast<std::uint64_t>(stream.frames_in.load() + 1)};
-      bool dropped = false;
+      const auto index = static_cast<std::size_t>(stream.index);
+      bool tracked = false;
       {
         std::lock_guard<std::mutex> lock(app.state.mutex);
         if (app.state.stopping) {
           return;
         }
         ++stream.frames_in;
-        dropped = blazepose_app::keep_latest(
-            app.state.detector_mailboxes[static_cast<std::size_t>(stream.index)], std::move(job));
-        if (!dropped) {
+        const auto route = stream.tracker.route(job.identity.sequence);
+        if (route == blazepose_app::RoiTracker::Route::Detect) {
+          queue_detection(app, stream, std::move(job));
+        } else {
+          if (route == blazepose_app::RoiTracker::Route::TrackAndRefresh) {
+            FrameJob refresh = job;
+            refresh.tracker_refresh = true;
+            queue_detection(app, stream, std::move(refresh));
+          }
+          job.people = stream.tracker.people;
+          tracked = true;
+        }
+        app.state.cv.notify_all();
+      }
+      if (!tracked) {
+        continue;
+      }
+      crop_people(job, cfg);
+      {
+        std::lock_guard<std::mutex> lock(app.state.mutex);
+        if (app.state.stopping) {
+          return;
+        }
+        if (!blazepose_app::keep_latest(app.state.pose_mailboxes[index], std::move(job))) {
           ++stream.outstanding_frames;
         }
         app.state.cv.notify_all();
@@ -1413,6 +1494,7 @@ void run_source_stream(AppRuntime& app, const AppConfig& cfg, StreamRuntime& str
     neat::RunOptions options;
     options.preset = neat::RunPreset::Realtime;
     options.output_memory = neat::OutputMemory::ZeroCopy;
+    options.queue_depth = kSourceQueueDepth;
     neat::Run source_run = stream.source_graph.build(options);
     bool stopping = false;
     {
@@ -1472,7 +1554,8 @@ void dispatch_detector_jobs(AppRuntime& app, const AppConfig& /*cfg*/) {
       const std::optional<FrameJob> job =
           take_next_job(app, app.state.detector_mailboxes, app.state.next_detector_stream,
                         [&app](std::size_t stream_index) {
-                          return !app.state.pose_mailboxes[stream_index].has_value();
+                          return !app.state.pose_mailboxes[stream_index].has_value() ||
+                                 app.state.detector_mailboxes[stream_index]->tracker_refresh;
                         });
       if (!job.has_value()) {
         return;
@@ -1545,12 +1628,20 @@ void pull_detector_outputs(AppRuntime& app, const AppConfig& cfg) {
       }
       StreamRuntime& stream = *app.streams[static_cast<std::size_t>(job.stream_index)];
       job.people = select_people(sample, stream.width, stream.height, cfg);
+      {
+        std::lock_guard<std::mutex> lock(app.state.mutex);
+        stream.tracker.on_detection(job.people, job.tracker_refresh);
+      }
+      if (job.tracker_refresh) {
+        continue;
+      }
       if (job.people.empty()) {
         // An empty pair clears the stream's previous poses in Insight.
         publish_frame(stream, job.identity, {});
         finish_frame(app, stream);
         continue;
       }
+      crop_people(job, cfg);
       bool dropped = false;
       {
         std::lock_guard<std::mutex> lock(app.state.mutex);
@@ -1580,33 +1671,12 @@ void dispatch_pose_jobs(AppRuntime& app, const AppConfig& cfg) {
         return;
       }
       FrameJob job = std::move(*maybe_job);
-      const auto nv12 = job.frame.map_nv12_read();
-      if (!nv12.has_value()) {
-        throw std::runtime_error("failed to map the decoded NV12 frame");
-      }
-      const int people = static_cast<int>(job.people.size());
-      std::vector<blazepose_app::Roi> rois;
-      rois.reserve(job.people.size());
-      for (const blazepose_app::Box& person : job.people) {
-        rois.push_back(blazepose_app::square_roi(person, cfg.roi_scale));
-      }
-      // Reading decoder memory dominates each crop, so the ROIs are cropped
-      // concurrently.
-      std::vector<neat::Tensor> crops(job.people.size());
-      cv::parallel_for_(cv::Range(0, people), [&](const cv::Range& range) {
-        for (int index = range.start; index < range.end; ++index) {
-          crops[index] = neat::Tensor::from_cv_mat(crop_nv12_roi_rgb(nv12->view, rois[index]),
-                                                   neat::ImageSpec::PixelFormat::RGB,
-                                                   neat::TensorMemory::EV74);
-        }
-      });
       std::vector<std::pair<PoseInputContext, neat::Tensor>> inputs;
-      inputs.reserve(job.people.size());
-      for (int index = 0; index < people; ++index) {
-        inputs.emplace_back(PoseInputContext{job.job_id, index, job.people[index],
-                                             blazepose_app::roi_input_affine(rois[index],
-                                                                             kPoseInputSize)},
-                            std::move(crops[index]));
+      inputs.reserve(job.crops.size());
+      for (std::size_t index = 0; index < job.crops.size(); ++index) {
+        inputs.emplace_back(PoseInputContext{job.job_id, static_cast<int>(index),
+                                             job.people[index], job.crops[index].affine},
+                            std::move(job.crops[index].tensor));
       }
       {
         std::lock_guard<std::mutex> lock(app.state.mutex);
@@ -1664,9 +1734,60 @@ void pull_pose_outputs(AppRuntime& app, const AppConfig& cfg) {
       }
       if (completed.has_value()) {
         StreamRuntime& stream = *app.streams[static_cast<std::size_t>(completed->stream_index)];
-        publish_frame(stream, completed->identity, std::move(completed->poses));
-        finish_frame(app, stream);
+        {
+          std::lock_guard<std::mutex> lock(app.state.mutex);
+          stream.tracker.observe(
+              blazepose_app::tracked_boxes(completed->poses,
+                                           static_cast<std::size_t>(cfg.max_people_per_frame)),
+              completed->identity.sequence);
+        }
+        // Metadata serialization runs on the publisher thread so this thread
+        // only drains BlazePose outputs.
+        bool dropped = false;
+        {
+          std::lock_guard<std::mutex> lock(app.state.mutex);
+          if (app.state.stopping) {
+            return;
+          }
+          dropped = blazepose_app::keep_latest(
+              app.state.publish_mailboxes[static_cast<std::size_t>(completed->stream_index)],
+              Publication{completed->stream_index, completed->identity,
+                          std::move(completed->poses)});
+          app.state.cv.notify_all();
+        }
+        if (dropped) {
+          finish_frame(app, stream);
+        }
       }
+    }
+  } catch (...) {
+    record_error(app);
+  }
+}
+
+void publish_results(AppRuntime& app, const AppConfig& /*cfg*/) {
+  try {
+    while (true) {
+      Publication publication;
+      {
+        std::unique_lock<std::mutex> lock(app.state.mutex);
+        std::optional<std::size_t> index;
+        app.state.cv.wait(lock, [&]() {
+          index = blazepose_app::next_ready_stream(app.state.publish_mailboxes,
+                                                   app.state.next_publish_stream,
+                                                   [](std::size_t) { return true; });
+          return app.state.stopping || index.has_value();
+        });
+        if (app.state.stopping) {
+          return;
+        }
+        publication = std::move(*app.state.publish_mailboxes[*index]);
+        app.state.publish_mailboxes[*index].reset();
+        app.state.next_publish_stream = (*index + 1) % app.state.publish_mailboxes.size();
+      }
+      StreamRuntime& stream = *app.streams[static_cast<std::size_t>(publication.stream_index)];
+      publish_frame(stream, publication.identity, std::move(publication.poses));
+      finish_frame(app, stream);
     }
   } catch (...) {
     record_error(app);
@@ -1706,6 +1827,9 @@ void stop_runtime(AppRuntime& app) {
     for (auto& mailbox : app.state.pose_mailboxes) {
       mailbox.reset();
     }
+    for (auto& mailbox : app.state.publish_mailboxes) {
+      mailbox.reset();
+    }
     app.state.pending_detector_outputs.clear();
     app.state.pending_pose_outputs.clear();
     app.state.aggregates.clear();
@@ -1735,6 +1859,7 @@ void run_app(const AppConfig& cfg) {
   app->streams.reserve(cfg.streams.size());
   app->state.detector_mailboxes.resize(cfg.streams.size());
   app->state.pose_mailboxes.resize(cfg.streams.size());
+  app->state.publish_mailboxes.resize(cfg.streams.size());
   initialize_streams(*app, cfg);
   prepare_source_graphs(*app, cfg);
   build_detector_run(*app);
@@ -1753,7 +1878,8 @@ void run_app(const AppConfig& cfg) {
   }
   std::vector<std::thread> model_workers;
   for (auto* worker :
-       {dispatch_detector_jobs, pull_detector_outputs, dispatch_pose_jobs, pull_pose_outputs}) {
+       {dispatch_detector_jobs, pull_detector_outputs, dispatch_pose_jobs, pull_pose_outputs,
+        publish_results}) {
     model_workers.emplace_back([app, &cfg, worker]() { worker(*app, cfg); });
   }
 
