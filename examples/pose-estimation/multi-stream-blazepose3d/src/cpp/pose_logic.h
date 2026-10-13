@@ -43,6 +43,20 @@ template <typename T> bool keep_latest(std::optional<T>& slot, T value) {
   return replaced;
 }
 
+// Returns the first stream from `next` onward, wrapping around, whose mailbox
+// holds work and which `ready(index)` admits.
+template <typename T, typename Ready>
+std::optional<std::size_t> next_ready_stream(const std::vector<std::optional<T>>& mailboxes,
+                                             std::size_t next, Ready&& ready) {
+  for (std::size_t offset = 0; offset < mailboxes.size(); ++offset) {
+    const std::size_t index = (next + offset) % mailboxes.size();
+    if (mailboxes[index].has_value() && ready(index)) {
+      return index;
+    }
+  }
+  return std::nullopt;
+}
+
 // Claims a local sequence when it is newer than every frame already published.
 // Completed older inference must not be sent after a newer empty frame has
 // cleared the viewer and its temporal-filter state.
@@ -213,6 +227,14 @@ inline Roi square_roi(const Box& box, double scale) {
           round_half_away_from_zero(center_y - static_cast<double>(side) * 0.5), side, side};
 }
 
+// Maps pose-input coordinates of a square ROI crop resized to input_size back
+// to source-frame pixels.
+inline Affine roi_input_affine(const Roi& roi, int input_size) {
+  const double scale_x = static_cast<double>(roi.width) / input_size;
+  const double scale_y = static_cast<double>(roi.height) / input_size;
+  return {scale_x, 0.0, static_cast<double>(roi.x), 0.0, scale_y, static_cast<double>(roi.y)};
+}
+
 inline float sigmoid(float value) {
   if (value >= 0.0F) {
     const float z = std::exp(-value);
@@ -318,6 +340,25 @@ auxiliary_visualization_data_json(std::string id, std::string renderer, nlohmann
 // Builds the 3D view from the 2D message's world keypoints, so both carry the
 // same rounded values without decoding them twice. Serialize `overlay` first:
 // its id, presence and world keypoints are moved into the result.
+// Serializes one Insight metadata message ({type, data, timestamp, frame_id}),
+// the same envelope MetadataSender::send_metadata() builds, without re-parsing
+// the data from a string. `data` is moved into the envelope and back.
+inline std::string metadata_message(const std::string& type, nlohmann::json& data,
+                                    int64_t timestamp_ms, const std::string& frame_id) {
+  nlohmann::json message;
+  message["type"] = type;
+  message["data"] = std::move(data);
+  if (timestamp_ms >= 0) {
+    message["timestamp"] = timestamp_ms;
+  }
+  if (!frame_id.empty()) {
+    message["frame_id"] = frame_id;
+  }
+  std::string serialized = message.dump();
+  data = std::move(message["data"]);
+  return serialized;
+}
+
 inline nlohmann::json world_pose_auxiliary_from_overlay(nlohmann::json overlay) {
   nlohmann::json world_poses = nlohmann::json::array();
   for (nlohmann::json& pose : overlay["poses"]) {
