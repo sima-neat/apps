@@ -342,6 +342,35 @@ std::vector<simaai::neat::Box> decode_detections(const simaai::neat::TensorList&
   return boxes;
 }
 
+simaai::neat::Model::Options model_options(const Config& cfg,
+                                           const std::vector<std::string>& labels) {
+  simaai::neat::Model::Options opt;
+  opt.preprocess.kind = simaai::neat::InputKind::Image;
+  opt.preprocess.enable = simaai::neat::AutoFlag::On;
+  opt.preprocess.color_convert.input_format = simaai::neat::PreprocessColorFormat::BGR;
+  opt.preprocess.preset = simaai::neat::NormalizePreset::COCO_YOLO;
+  // Resize stays at the model package default: letterbox, grey padding.
+  opt.preprocess.input_max_width = cfg.input_max_width;
+  opt.preprocess.input_max_height = cfg.input_max_height;
+  opt.decode_type = simaai::neat::BoxDecodeType::YoloV26;
+  opt.score_threshold = cfg.score_threshold;
+  opt.nms_iou_threshold = cfg.nms_iou;
+  opt.top_k = cfg.max_detections;
+  opt.num_classes = static_cast<int>(labels.size());
+  return opt;
+}
+
+simaai::neat::RunOptions run_options(const Config& cfg) {
+  simaai::neat::RunOptions opt;
+  opt.queue_depth = cfg.queue_depth;
+  // Realtime is the only preset that applies a new input size on the first
+  // frame; the others hold a frame until a second one of the same size
+  // arrives, which a one-image-at-a-time batch never sends. Its KeepLatest
+  // overflow policy never drops here, because run() pushes blocking.
+  opt.preset = simaai::neat::RunPreset::Realtime;
+  return opt;
+}
+
 std::string format_counts(const std::map<std::string, int>& counts) {
   std::string out = "{";
   bool first = true;
@@ -449,35 +478,15 @@ int main(int argc, char** argv) {
   std::cout << "Found " << images.size() << " images in " << input_dir.string() << "\n";
 
   try {
-    simaai::neat::Model::Options model_opt;
-    model_opt.preprocess.kind = simaai::neat::InputKind::Image;
-    model_opt.preprocess.enable = simaai::neat::AutoFlag::On;
-    model_opt.preprocess.color_convert.input_format = simaai::neat::PreprocessColorFormat::BGR;
-    model_opt.preprocess.preset = simaai::neat::NormalizePreset::COCO_YOLO;
-    model_opt.decode_type = simaai::neat::BoxDecodeType::YoloV26;
-    model_opt.score_threshold = cfg.score_threshold;
-    model_opt.nms_iou_threshold = cfg.nms_iou;
-    model_opt.top_k = cfg.max_detections;
-    model_opt.num_classes = static_cast<int>(labels.size());
-    // Resize stays at the model package default: letterbox, grey padding.
-    model_opt.preprocess.input_max_width = cfg.input_max_width;
-    model_opt.preprocess.input_max_height = cfg.input_max_height;
-
-    simaai::neat::Model model(cfg.model_path, model_opt);
-
-    simaai::neat::RunOptions run_opt;
-    run_opt.queue_depth = cfg.queue_depth;
-    // Realtime applies new input caps on the first frame. The other presets wait
-    // for a second frame at the same size, which a folder of images never sends.
-    run_opt.preset = simaai::neat::RunPreset::Realtime;
+    simaai::neat::Model model(cfg.model_path, model_options(cfg, labels));
 
     // The build seed fixes the graph's input caps, so it is a frame at the
     // configured capacity rather than any particular board.
     const cv::Mat graph_seed(cfg.input_max_height, cfg.input_max_width, CV_8UC3,
                              cv::Scalar(114, 114, 114));
 
-    simaai::neat::Model::Runner runner =
-        model.build(std::vector<cv::Mat>{graph_seed}, simaai::neat::Model::RouteOptions{}, run_opt);
+    simaai::neat::Model::Runner runner = model.build(
+        std::vector<cv::Mat>{graph_seed}, simaai::neat::Model::RouteOptions{}, run_options(cfg));
     // One-off graph settling and first-touch allocation, which runtime.timeout_ms
     // does not cover.
     runner.run(std::vector<cv::Mat>{graph_seed}, std::max(cfg.timeout_ms, kWarmupTimeoutMs));

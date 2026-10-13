@@ -8,6 +8,8 @@ from pathlib import Path
 
 import types
 
+import numpy as np
+import pyneat
 import pytest
 import yaml
 
@@ -78,19 +80,6 @@ class TestArgParsing:
     def test_config_defaults_to_shared_common_config(self):
         """Without --config the packaged src/common/config.yaml is used."""
         assert main.parse_args([]).config == CONFIG_YAML
-
-
-@pytest.fixture
-def runtime_modules():
-    """Bind cv2/np/pyneat onto the module the way main() does.
-
-    Requested only by the few tests that call a helper needing them, so the
-    host-only tests still run (and fail) on a machine without the runtime.
-    """
-    for attr, name in (("cv2", "cv2"), ("np", "numpy"), ("pyneat", "pyneat")):
-        if getattr(main, attr, None) is None:
-            module = pytest.importorskip(name)
-            setattr(main, attr, module)
 
 
 @pytest.mark.unit
@@ -419,18 +408,16 @@ class TestDetectionOutput:
             "io": {"input_dir": str(tmp_path), "output_dir": str(tmp_path / "out")},
         })
 
-    def test_no_output_tensors_raises(self, tmp_path: Path, runtime_modules):
-        pytest.importorskip("pyneat")
+    def test_no_output_tensors_raises(self, tmp_path: Path):
         with pytest.raises(RuntimeError, match="no detection tensors"):
             main.decode_detections([], 640, 640, self._config(tmp_path))
 
-    def test_missing_bbox_tensor_raises(self, tmp_path: Path, monkeypatch, runtime_modules):
+    def test_missing_bbox_tensor_raises(self, tmp_path: Path, monkeypatch):
         """An output route that returns non-detection tensors is a failure.
 
         Treating it as zero defects would report an incompatible model package
         as a clean inspection.
         """
-        pyneat = pytest.importorskip("pyneat")
         monkeypatch.setattr(pyneat.detections, "read_detection_format", lambda t: "FEATURE_POINTS_V1")
         monkeypatch.setattr(pyneat.detections, "format_is_bbox", lambda f: False)
 
@@ -438,9 +425,8 @@ class TestDetectionOutput:
             main.decode_detections([self._FakeTensor("FEATURE_POINTS_V1")], 640, 640,
                                    self._config(tmp_path))
 
-    def test_valid_empty_result_is_zero_detections_not_an_error(self, tmp_path: Path, monkeypatch, runtime_modules):
+    def test_valid_empty_result_is_zero_detections_not_an_error(self, tmp_path: Path, monkeypatch):
         """A BBOX payload with count zero is a real 'no defects' answer."""
-        pyneat = pytest.importorskip("pyneat")
         monkeypatch.setattr(pyneat.detections, "read_detection_format", lambda t: "BBOX")
         monkeypatch.setattr(pyneat.detections, "format_is_bbox", lambda f: True)
         monkeypatch.setattr(pyneat.detections, "decode_bbox_tensor",
@@ -454,9 +440,7 @@ class TestDetectionOutput:
 class TestOverlay:
     """Validate the annotation overlay."""
 
-    def test_overlay_changes_pixels(self, runtime_modules):
-        np = pytest.importorskip("numpy")
-        pytest.importorskip("cv2")
+    def test_overlay_changes_pixels(self):
 
         frame = np.zeros((120, 160, 3), dtype=np.uint8)
         before = frame.copy()
@@ -468,9 +452,7 @@ class TestOverlay:
 
         assert not np.array_equal(before, frame)
 
-    def test_overlay_skips_degenerate_boxes(self, runtime_modules):
-        np = pytest.importorskip("numpy")
-        pytest.importorskip("cv2")
+    def test_overlay_skips_degenerate_boxes(self):
 
         frame = np.zeros((120, 160, 3), dtype=np.uint8)
         before = frame.copy()

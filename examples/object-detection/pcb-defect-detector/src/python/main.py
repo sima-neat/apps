@@ -22,6 +22,9 @@ import math
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+import cv2
+import numpy as np
+import pyneat
 import yaml
 
 
@@ -348,6 +351,34 @@ def to_bgr_tensor(bgr):
     )
 
 
+def model_options(cfg: AppConfig, labels: list[str]) -> pyneat.ModelOptions:
+    opt = pyneat.ModelOptions()
+    opt.preprocess.kind = pyneat.InputKind.Image
+    opt.preprocess.enable = pyneat.AutoFlag.On
+    opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.BGR
+    opt.preprocess.preset = pyneat.NormalizePreset.COCO_YOLO
+    # Resize stays at the model package default: letterbox, grey padding.
+    opt.preprocess.input_max_width = cfg.input_max_width
+    opt.preprocess.input_max_height = cfg.input_max_height
+    opt.decode_type = pyneat.BoxDecodeType.YoloV26
+    opt.score_threshold = cfg.score_threshold
+    opt.nms_iou_threshold = cfg.nms_iou
+    opt.top_k = cfg.max_detections
+    opt.num_classes = len(labels)
+    return opt
+
+
+def run_options(cfg: AppConfig) -> pyneat.RunOptions:
+    opt = pyneat.RunOptions()
+    opt.queue_depth = cfg.queue_depth
+    # Realtime is the only preset that applies a new input size on the first
+    # frame; the others hold a frame until a second one of the same size
+    # arrives, which a one-image-at-a-time batch never sends. Its KeepLatest
+    # overflow policy never drops here, because run() pushes blocking.
+    opt.preset = pyneat.RunPreset.Realtime
+    return opt
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="PCB defect detection pipeline (YOLO26n)")
     parser.add_argument(
@@ -427,11 +458,6 @@ def main() -> int:
         print(f"No images found in {cfg.input_dir}", file=sys.stderr)
         return 3
 
-    global cv2, np, pyneat
-    import cv2
-    import numpy as np
-    import pyneat
-
     try:
         cfg.output_dir.mkdir(parents=True, exist_ok=True)
     except OSError as error:
@@ -456,26 +482,7 @@ def main() -> int:
 
 
     try:
-        opt = pyneat.ModelOptions()
-        opt.preprocess.kind = pyneat.InputKind.Image
-        opt.preprocess.enable = pyneat.AutoFlag.On
-        opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.BGR
-        opt.preprocess.preset = pyneat.NormalizePreset.COCO_YOLO
-        # Resize stays at the model package default: letterbox, grey padding.
-        opt.preprocess.input_max_width = cfg.input_max_width
-        opt.preprocess.input_max_height = cfg.input_max_height
-        opt.decode_type = pyneat.BoxDecodeType.YoloV26
-        opt.score_threshold = cfg.score_threshold
-        opt.nms_iou_threshold = cfg.nms_iou
-        opt.top_k = cfg.max_detections
-        opt.num_classes = len(labels)
-        model = pyneat.Model(cfg.model_path, opt)
-
-        run_opt = pyneat.RunOptions()
-        run_opt.queue_depth = cfg.queue_depth
-        # Realtime applies new input caps on the first frame. The other presets
-        # wait for a second frame at the same size, which a folder never sends.
-        run_opt.preset = pyneat.RunPreset.Realtime
+        model = pyneat.Model(cfg.model_path, model_options(cfg, labels))
 
         # The build seed fixes the graph's input caps, so it is a frame at the
         # configured capacity rather than any particular board.
@@ -484,7 +491,7 @@ def main() -> int:
         runner = model.build(
             [to_bgr_tensor(seed)],
             route_options=pyneat.ModelRouteOptions(),
-            run_options=run_opt,
+            run_options=run_options(cfg),
         )
         # One-off graph settling and first-touch allocation, which
         # runtime.timeout_ms does not cover.
