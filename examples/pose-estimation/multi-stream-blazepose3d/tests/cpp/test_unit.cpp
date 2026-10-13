@@ -113,6 +113,92 @@ bool test_math_and_metadata_contract() {
   return ok;
 }
 
+bool test_roi_tracking() {
+  bool ok = true;
+  const blazepose_app::Roi roi{-10, 20, 512, 512};
+  const auto affine = blazepose_app::roi_input_affine(roi, 256);
+  ok &= expect(near(static_cast<float>(affine.m00), 2.0F) &&
+                   near(static_cast<float>(affine.m02), -10.0F) &&
+                   near(static_cast<float>(affine.m11), 2.0F) &&
+                   near(static_cast<float>(affine.m12), 20.0F) && affine.m01 == 0.0 &&
+                   affine.m10 == 0.0,
+               "pose-input coordinates of a 256x256 ROI crop map back to source pixels");
+
+  blazepose_app::Pose pose = pose_at(40.0F, 0.0F);
+  pose.presence = 0.8F;
+  for (auto& point : pose.keypoints) {
+    point = {50.0F, 60.0F, 0.9F};
+  }
+  pose.keypoints[3] = {10.0F, 90.0F, 0.9F};
+  pose.keypoints[7] = {70.0F, 30.0F, 0.9F};
+  const auto box = blazepose_app::keypoint_box(pose);
+  ok &= expect(near(box.x1, 10.0F) && near(box.y1, 30.0F) && near(box.x2, 70.0F) &&
+                   near(box.y2, 90.0F) && near(box.score, 0.8F) && box.class_id == 0,
+               "a tracked box spans the pose's image landmarks and is scored by presence");
+  blazepose_app::Pose weaker = pose;
+  weaker.presence = 0.6F;
+  const auto boxes = blazepose_app::tracked_boxes({weaker, pose}, 1);
+  ok &= expect(boxes.size() == 1 && near(boxes[0].score, 0.8F),
+               "tracked boxes keep the most present poses up to the person limit");
+
+  using Route = blazepose_app::RoiTracker::Route;
+  using Clock = std::chrono::steady_clock;
+  const Clock::time_point start{};
+  blazepose_app::RoiTracker tracker;
+  ok &= expect(tracker.route(1, start) == Route::Detect && tracker.detection_pending,
+               "a stream with nobody tracked sends its frame to YOLO26");
+  const std::vector<blazepose_app::Box> person = {box};
+  tracker.on_detection(person, false);
+  ok &= expect(tracker.people.size() == 1 && !tracker.detection_pending,
+               "YOLO26's people start tracking");
+  const auto later = start + std::chrono::milliseconds(50);
+  ok &= expect(tracker.route(2, later) == Route::Track,
+               "tracked frames skip YOLO26 before the refresh period");
+  const auto due = start + blazepose_app::kRedetectPeriod;
+  ok &= expect(tracker.route(3, due) == Route::TrackAndRefresh && tracker.detection_pending,
+               "a tracked stream is refreshed by YOLO26 once the period elapses");
+  ok &= expect(tracker.route(4, due + blazepose_app::kRedetectPeriod) == Route::Track,
+               "no second refresh starts while one is pending");
+  tracker.on_detection({}, true);
+  ok &= expect(tracker.people.size() == 1 && !tracker.detection_pending,
+               "a refresh that finds nobody keeps tracking");
+  blazepose_app::Box entering = box;
+  entering.x1 += 200.0F;
+  entering.x2 += 200.0F;
+  tracker.route(5, due + 2 * blazepose_app::kRedetectPeriod);
+  tracker.on_detection({box, entering}, true);
+  tracker.observe(person, 5);
+  ok &= expect(tracker.people.size() == 2,
+               "a refresh adds people, and frames admitted before it cannot override it");
+  tracker.observe(person, 6);
+  ok &= expect(tracker.people.size() == 1, "newer BlazePose results update the tracked people");
+  tracker.observe({}, 7);
+  ok &= expect(tracker.people.empty() && tracker.route(8, due) == Route::Detect,
+               "losing every pose ends tracking and the next frame is detected");
+
+  std::vector<std::optional<int>> mailboxes = {std::nullopt, 1, 2};
+  ok &= expect(blazepose_app::next_ready_stream(mailboxes, 2, [](std::size_t) { return true; }) ==
+                       std::optional<std::size_t>(2) &&
+                   blazepose_app::next_ready_stream(
+                       mailboxes, 2, [](std::size_t index) { return index != 2; }) ==
+                       std::optional<std::size_t>(1),
+               "round-robin selection skips empty and unready streams");
+  return ok;
+}
+
+bool test_metadata_message() {
+  nlohmann::json data = {{"stream_id", "camera0"}, {"poses", nlohmann::json::array()}};
+  const std::string message = blazepose_app::metadata_message("pose-estimation", data, 1234, "42");
+  bool ok = expect(message == R"({"data":{"poses":[],"stream_id":"camera0"},"frame_id":"42",)"
+                              R"("timestamp":1234,"type":"pose-estimation"})" &&
+                       data.at("stream_id") == "camera0",
+                   "metadata is serialized once in MetadataSender's envelope and data survives");
+  ok &= expect(blazepose_app::metadata_message("pose-estimation", data, -1, "") ==
+                   R"({"data":{"poses":[],"stream_id":"camera0"},"type":"pose-estimation"})",
+               "an unknown timestamp and frame ID are omitted as in MetadataSender");
+  return ok;
+}
+
 bool test_non_finite_landmarks_discard_only_that_pose() {
   const blazepose_app::Box box{0.0F, 0.0F, 100.0F, 100.0F, 0.9F, 0};
   const blazepose_app::Affine affine{1.0, 0.0, 0.0, 0.0, 1.0, 0.0};
@@ -402,6 +488,8 @@ int main(int argc, char** argv) {
     return 2;
   }
   bool ok = test_math_and_metadata_contract();
+  ok &= test_roi_tracking();
+  ok &= test_metadata_message();
   ok &= test_non_finite_landmarks_discard_only_that_pose();
   ok &= test_non_finite_detector_scores_are_discarded();
   ok &= test_pose_smoother();
