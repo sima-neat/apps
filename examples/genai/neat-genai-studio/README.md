@@ -432,6 +432,31 @@ microphone needs the HTTPS page the Studio serves by default.
 **Back to Studio** (top left, or Esc) returns to the chat; standalone it links
 to the Studio root. Source: `src/python/ui/playground/`.
 
+### Use it from Insight
+Neat Insight has a **GenAI Studio** tab that chats with the Studio on the board:
+text, pictures, speech to text and replies read aloud, with model management in
+its settings. Insight relays every call, so the browser only talks to Insight.
+
+1. On the board, start the backend without the Studio's own web UI:
+
+   ```bash
+   ${APP_DIR}/run.sh --backend-only
+   ```
+
+2. Open Insight, select the **GenAI Studio** tab, and follow its tutorial. On
+   the board itself Insight finds the backend at `https://127.0.0.1:5000`; from
+   the Neat Development Environment it uses the paired DevKit. Otherwise enter
+   the board address under **Settings**.
+
+`/health` tells Insight which backend API it is talking to (`api_version`),
+which optional features the board has (`features`, for example `rag`), and
+reports a voice engine that failed to load, such as Supertonic while the
+accelerator was unavailable, with a fixed reason (`accelerator-unavailable` or
+`load-failed`; the details are in the Studio log). A speech request, or choosing
+the engine under **Settings → Voice engine**, retries loading it at most every
+30 s. Until then the speech API answers 503 with reason `load-failed` for that
+engine.
+
 ### Backend-only mode (for Insight and other front ends)
 `${APP_DIR}/run.sh --backend-only` starts the model server and the Studio's API
 endpoints without the web UI, so another front end (for example Insight) can
@@ -452,11 +477,12 @@ POST /v1/audio/transcriptions      speech to text in the spoken language
 POST /v1/audio/translations        speech to English text
 GET  /models/status, /models/catalog; POST /models/load, /models/unload, /models/asr, ...
 GET/POST /tts/engine; GET /supertonic/voices, /piperplus/voices, /voices; POST /supertonic/select, /piperplus/select, /voices/select   voice settings
+GET  /rag/status, /rag/inspect, /rag/search?query=...&k=3; POST /rag/upload (Markdown), /rag/reset, /rag/clear   documents (RAG)
 POST /shutdown                     stop everything (not reachable cross-origin)
 ```
 
 Everything else (the UI pages, `/playground/`, static files, the Studio's own
-chat, RAG and camera routes) answers 404 in this mode. Browser pages on other
+chat and camera routes) answers 404 in this mode. Browser pages on other
 origins are refused by default; list the origins that may call the API, or `*`:
 
 ```bash
@@ -487,8 +513,10 @@ curl -sk -X OPTIONS $B/v1/audio/speech -H 'Origin: http://10.0.0.5:3000' \
 the speech routes against a backend started this way, and
 `src/python/ui/apitest/audio_e2e.sh [host:port | base URL]` checks the audio
 workflow end to end against any running instance: synthesized speech is
-transcribed back to its words, German speech translates to English, and the
-chat model answers; it exits non-zero on any failure. The `apitest` scripts
+transcribed back to its words, German speech translates to English, the
+chat model answers, and, when `/health` lists `features.rag`, document search
+returns passages and a chat with `neat_rag` uses them; it exits non-zero on any
+failure. The `apitest` scripts
 take a full base URL (`http://…` when `app.web.https` is false) or `STUDIO_URL`.
 
 ### Text-to-speech (voices & languages)
@@ -653,6 +681,62 @@ Retrieved context is size-capped before it's added to a prompt so it can't
 overflow the on-board model's small context window. Because the single-writer
 `milvus.db` is guarded by port reachability, avoid **cold-starting the CLI's RAG
 and the web UI at the same instant** against the same database.
+
+#### Answer from documents through the API
+`POST /v1/chat/completions` answers from the RAG database when the request adds
+`"neat_rag": true`, or `{"k": 5}` for the number of passages (1 to 10, default 3).
+The Studio searches with the last user message, adds the matching passages
+before it, and removes the field before the request reaches the model server.
+The response headers `X-RAG-Hits` and `X-RAG-Sources` say which passages were
+used. A request with `neat_rag` answers 409 when RAG is turned off in the
+config or the documents were cleared (upload one or reset), 503 while the
+search service is starting, and 400 when the last user message has no text
+(for example only a picture). The search uses at most the last 2000
+characters of the question.
+
+Every chat request, with or without `neat_rag`, is checked before it is
+used: the body must be a JSON object whose `messages` is a non-empty list of
+objects with a string `role` and a `content` that is a string or a list of
+parts (each with a string `type`; `text` parts need a string `text`,
+`image_url` parts an `image_url.url` string), or `null` for an assistant
+message. Anything else answers 400 in the OpenAI error shape,
+`{"error": {"message": ..., "param": ...}}`, where `param` names the field
+when there is one (`messages`) and is `null` for a body that isn't a JSON
+object.
+`GET /rag/search` answers with the same statuses. This works in the full
+Studio and in backend-only mode, which also starts the RAG service when a
+database exists:
+
+```bash
+B=https://127.0.0.1:5000
+curl -sk -N $B/v1/chat/completions -H 'Content-Type: application/json' -D - -d '{
+  "model": "Qwen3-VL-4B-Instruct-GPTQ-a16w4", "stream": true, "neat_rag": true,
+  "messages": [{"role": "user", "content": "What does the Neat Library let developers do?"}]}'
+curl -sk -F file=@/path/to/document.md $B/rag/upload   # replace the database with this document
+curl -sk -X POST $B/rag/reset                           # back to the bundled document
+```
+
+`POST /rag/upload`, `/rag/reset` and `/rag/clear` answer `200` with
+`text/plain` progress, one line per step, and the last line starts with ✅ on
+success or ❌ on failure, so a client must check that line rather than the
+status code. They answer JSON errors before the update starts: 409 while
+another document update is running or when RAG is turned off in the config,
+413 for a document larger than 10 MiB, and 400 for a missing or non-Markdown
+file. An update replaces the whole database; if it fails, or the client
+disconnects before it finishes, the previous database is restored. An update
+that finished (the search service is back up) is kept even if the client
+leaves before the last progress line.
+
+`features.rag` in `/health` reflects the configuration (`app.rag.enabled`);
+`GET /rag/status` reports whether the search service is actually up
+(`service` is `ok`, `starting`, `failed` when the service exited (for example
+a missing embedding model; see the Studio's log), `no-database`, or `disabled`
+when RAG is off).
+
+Passage text is added to the user's question, so the model follows any
+instructions inside an uploaded document as if the user had written them.
+Upload only documents you trust; in backend-only mode `/rag/upload` is
+reachable by any client that can reach the Studio.
 
 #### Reset or clear the RAG database
 - **Reset to Default** rebuilds RAG from the bundled `src/common/rag/neat.md`.
