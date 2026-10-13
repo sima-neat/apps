@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import enum
 import gc
 import glob
 import json
@@ -31,9 +32,19 @@ LANDMARK_NAMES = (
 
 MAX_DETECTIONS = 100
 MAX_INFLIGHT_PER_STREAM = 4
+POSE_INPUT_SIZE = 256
+SOURCE_OUTPUT_BUFFERS = 6
+# Decoded NV12 frames stay zero-copy while queued for YOLO26 or BlazePose; the
+# source Run lends this many more device buffers than its default.
+SOURCE_QUEUE_DEPTH = 8
 # Accepted model input with no output for this long means the shared Run is stuck.
 INFERENCE_STALL_TIMEOUT_S = 5.0
+# YOLO26 re-detects a tracked stream at least this often, so people entering the
+# scene are found. A period rather than a frame count keeps the detector's share
+# of the shared MLA independent of the stream frame rate.
+REDETECT_PERIOD_S = 0.2
 
+cv2 = None
 np = None
 pyneat = None
 
@@ -58,7 +69,7 @@ class AppConfig:
     latency_ms: int = 100
     detector_min_score: float = 0.30
     detector_nms_iou: float = 0.60
-    max_people_per_frame: int = 4
+    max_people_per_frame: int = 1
     roi_scale: float = 1.65
     pose_presence_threshold: float = 0.50
     pose_temporal_filter_enabled: bool = True
@@ -76,13 +87,25 @@ class FrameIdentity:
     sequence: int
 
 
+@dataclass(frozen=True)
+class PoseCrop:
+    """One BlazePose input: an RGB ROI crop and its map back to source pixels."""
+
+    affine: tuple[float, float, float, float, float, float]
+    tensor: Any
+
+
 @dataclass
 class FrameJob:
     job_id: int
     stream_index: int
-    rgb: Any
+    frame: Any
     identity: FrameIdentity
     people: list[dict[str, Any]] = field(default_factory=list)
+    crops: list[PoseCrop] = field(default_factory=list)
+    # Detection only refreshes the stream's tracked people; the frame itself is
+    # published by its tracked pose job.
+    tracker_refresh: bool = False
 
 
 @dataclass(frozen=True)
@@ -145,12 +168,95 @@ class PoseSmoother:
         return poses
 
 
+def keypoint_box(pose: dict[str, Any]) -> dict[str, Any]:
+    """Smallest box around a pose's image landmarks, scored by its presence."""
+    xs = [float(point["x"]) for point in pose["keypoints"]]
+    ys = [float(point["y"]) for point in pose["keypoints"]]
+    return {
+        "x1": min(xs),
+        "y1": min(ys),
+        "x2": max(xs),
+        "y2": max(ys),
+        "score": float(pose["presence"]),
+        "class_id": 0,
+    }
+
+
+def tracked_boxes(poses: list[dict[str, Any]], max_people: int) -> list[dict[str, Any]]:
+    """Boxes around the poses of one frame, most present first, for the tracker."""
+    boxes = sorted((keypoint_box(pose) for pose in poses), key=lambda box: -box["score"])
+    return boxes[:max_people]
+
+
+class Route(enum.Enum):
+    DETECT = "detect"  # Nothing is tracked: YOLO26 finds the people of this frame.
+    TRACK = "track"  # BlazePose runs on the tracked boxes.
+    TRACK_AND_REFRESH = "track_and_refresh"  # As TRACK, and YOLO26 also refreshes them.
+
+
+class RoiTracker:
+    """Per-stream ROI tracking: each frame's landmarks give the next frame's
+    person boxes, so a tracked stream skips YOLO26. YOLO26 still runs when
+    nothing is tracked, and refreshes the tracked people every
+    REDETECT_PERIOD_S so people who enter the scene are found."""
+
+    def __init__(self) -> None:
+        self.people: list[dict[str, Any]] = []
+        self.sequence = 0  # Results of frames up to here are stale.
+        self.routed_sequence = 0  # Newest admitted frame.
+        self.last_detection = 0.0
+        self.detection_pending = False
+
+    def route(self, frame_sequence: int, now: float) -> Route:
+        """Route one admitted frame; `now` is a time.monotonic() reading."""
+        self.routed_sequence = frame_sequence
+        if not self.people:
+            self.detection_pending = True
+            self.last_detection = now
+            return Route.DETECT
+        if now - self.last_detection >= REDETECT_PERIOD_S and not self.detection_pending:
+            self.detection_pending = True
+            self.last_detection = now
+            return Route.TRACK_AND_REFRESH
+        return Route.TRACK
+
+    def on_detection(self, detected: list[dict[str, Any]], refresh: bool) -> None:
+        """Record a YOLO26 result. It replaces the tracked people, and the
+        results of frames admitted before it can no longer override it. A
+        refresh that finds nobody keeps tracking; BlazePose presence decides
+        when tracking is lost."""
+        self.detection_pending = False
+        if refresh and not detected:
+            return
+        self.people = list(detected)
+        self.sequence = self.routed_sequence
+
+    def observe(self, boxes: list[dict[str, Any]], frame_sequence: int) -> None:
+        """Record the people found by BlazePose in a frame newer than the last
+        update. An empty list ends tracking and forces detection."""
+        if frame_sequence > self.sequence:
+            self.people = boxes
+            self.sequence = frame_sequence
+
+
 def keep_latest(mailboxes: list, index: int, job) -> bool:
     """Store `job` as the newest work for one stream; True when it replaced older
     work, which is dropped so a slow stage never accumulates stale frames."""
     replaced = mailboxes[index] is not None
     mailboxes[index] = job
     return replaced
+
+
+def next_ready_stream(
+    mailboxes: list, next_stream: int, ready: Callable[[int], bool]
+) -> int | None:
+    """First stream from `next_stream` onward, wrapping around, whose mailbox
+    holds work and which `ready(index)` admits."""
+    for offset in range(len(mailboxes)):
+        index = (next_stream + offset) % len(mailboxes)
+        if mailboxes[index] is not None and ready(index):
+            return index
+    return None
 
 
 def send_metadata_pair(send: Callable[[str], bool]) -> bool:
@@ -175,11 +281,22 @@ class StreamRuntime:
     metadata_lock: threading.Lock = field(default_factory=threading.Lock)
     pose_smoother: PoseSmoother = field(default_factory=PoseSmoother)
     last_published_sequence: int = 0
+    # Guarded by SharedState.condition.
+    tracker: RoiTracker = field(default_factory=RoiTracker)
     frames_in: int = 0
     frames_out: int = 0
     # Admitted frames that are still queued or inside a model.
     outstanding_frames: int = 0
     closed: bool = False
+
+
+@dataclass
+class Publication:
+    """One frame's completed poses, waiting for metadata serialization and send."""
+
+    stream_index: int
+    identity: FrameIdentity
+    poses: list[dict[str, Any]]
 
 
 class SharedState:
@@ -188,12 +305,14 @@ class SharedState:
         # Latest-only work per stream; newer frames replace queued ones.
         self.detector_mailboxes: list[FrameJob | None] = [None] * stream_count
         self.pose_mailboxes: list[FrameJob | None] = [None] * stream_count
+        self.publish_mailboxes: list[Publication | None] = [None] * stream_count
         # FIFO context for each input pushed to a shared model, in output order.
         self.pending_detector_outputs: deque[FrameJob] = deque()
         self.pending_pose_outputs: deque[PoseInputContext] = deque()
         self.aggregates: dict[int, PoseAggregate] = {}
         self.next_detector_stream = 0
         self.next_pose_stream = 0
+        self.next_publish_stream = 0
         self.stopping = False
         self.error: BaseException | None = None
 
@@ -212,15 +331,17 @@ class AppRuntime:
 
 
 def load_runtime_dependencies() -> None:
-    global np, pyneat
+    global cv2, np, pyneat
     if pyneat is not None:
         return
     for path in glob.glob("/usr/lib/python3*/dist-packages"):
         if path not in sys.path:
             sys.path.insert(0, path)
+    import cv2 as cv2_module
     import numpy as np_module
     import pyneat as pyneat_module
 
+    cv2 = cv2_module
     np = np_module
     pyneat = pyneat_module
 
@@ -392,7 +513,7 @@ def load_app_config(config_path: Path) -> AppConfig:
         latency_ms=int_or(input_cfg, "latency_ms", 100),
         detector_min_score=float_or(detector, "min_score", 0.30),
         detector_nms_iou=float_or(detector, "nms_iou", 0.60),
-        max_people_per_frame=int_or(pose, "max_people_per_frame", 4),
+        max_people_per_frame=int_or(pose, "max_people_per_frame", 1),
         roi_scale=float_or(pose, "roi_scale", 1.65),
         pose_presence_threshold=float_or(pose, "presence_threshold", 0.50),
         pose_temporal_filter_enabled=bool_or(pose, "temporal_filter_enabled", True),
@@ -421,6 +542,73 @@ def square_roi(box: dict[str, Any], scale: float) -> tuple[int, int, int, int]:
         side,
         side,
     )
+
+
+def roi_input_affine(
+    roi: tuple[int, int, int, int], input_size: int
+) -> tuple[float, float, float, float, float, float]:
+    """Map pose-input coordinates of a square ROI crop resized to input_size
+    back to source-frame pixels."""
+    x, y, width, height = roi
+    return (width / input_size, 0.0, float(x), 0.0, height / input_size, float(y))
+
+
+def resize_nv12_roi(y_plane, uv_plane, roi: tuple[int, int, int, int]):
+    """Resample an in-frame ROI on the chroma grid: a plain resize of each plane."""
+    x, y, width, height = roi
+    y_crop = cv2.resize(
+        y_plane[y : y + height, x : x + width],
+        (POSE_INPUT_SIZE, POSE_INPUT_SIZE),
+        interpolation=cv2.INTER_LINEAR,
+    )
+    uv_crop = cv2.resize(
+        uv_plane[y // 2 : y // 2 + height // 2, x // 2 : x // 2 + width // 2],
+        (POSE_INPUT_SIZE // 2, POSE_INPUT_SIZE // 2),
+        interpolation=cv2.INTER_LINEAR,
+    )
+    return y_crop, uv_crop
+
+
+def warp_nv12_roi(y_plane, uv_plane, roi: tuple[int, int, int, int]):
+    """Resample any ROI with pixel-center alignment; area outside the frame is
+    black (Y=16, UV=128)."""
+    x, y, width, _height = roi
+    scale = width / POSE_INPUT_SIZE
+    offset = 0.5 * scale - 0.5
+    y_map = np.array([[scale, 0.0, x + offset], [0.0, scale, y + offset]])
+    uv_map = np.array([[scale, 0.0, x * 0.5 + offset], [0.0, scale, y * 0.5 + offset]])
+    flags = cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP
+    y_crop = cv2.warpAffine(
+        y_plane,
+        y_map,
+        (POSE_INPUT_SIZE, POSE_INPUT_SIZE),
+        flags=flags,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=(16,),
+    )
+    uv_crop = cv2.warpAffine(
+        uv_plane,
+        uv_map,
+        (POSE_INPUT_SIZE // 2, POSE_INPUT_SIZE // 2),
+        flags=flags,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=(128, 128),
+    )
+    return y_crop, uv_crop
+
+
+def crop_nv12_roi_rgb(y_plane, uv_plane, roi: tuple[int, int, int, int]):
+    """Crop one square ROI from NV12 planes straight to the pose input size and
+    convert only that crop to RGB. `y_plane` is (H, W) and `uv_plane` is
+    (H/2, W/2, 2)."""
+    x, y, width, height = roi
+    frame_height, frame_width = y_plane.shape[:2]
+    inside = x >= 0 and y >= 0 and x + width <= frame_width and y + height <= frame_height
+    if inside and x % 2 == 0 and y % 2 == 0 and width % 2 == 0 and width >= 2:
+        y_crop, uv_crop = resize_nv12_roi(y_plane, uv_plane, roi)
+    else:
+        y_crop, uv_crop = warp_nv12_roi(y_plane, uv_plane, roi)
+    return cv2.cvtColorTwoPlane(y_crop, uv_crop, cv2.COLOR_YUV2RGB_NV12)
 
 
 def sigmoid(value: float) -> float:
@@ -513,6 +701,21 @@ def poses_data(poses: list[dict[str, Any]], stream_id: str) -> dict[str, Any]:
             }
         )
     return {"stream_id": stream_id, "poses": published}
+
+
+def metadata_message(
+    metadata_type: str, data: dict[str, Any], timestamp_ms: int, frame_id: str
+) -> str:
+    """Serialize one Insight metadata message ({type, data, timestamp,
+    frame_id}) byte-for-byte as MetadataSender.send_metadata() builds it:
+    nlohmann::json orders object keys, writes compact separators and raw
+    UTF-8."""
+    message: dict[str, Any] = {"type": metadata_type, "data": data}
+    if timestamp_ms >= 0:
+        message["timestamp"] = timestamp_ms
+    if frame_id:
+        message["frame_id"] = frame_id
+    return json.dumps(message, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
 def auxiliary_visualization_data(
@@ -662,7 +865,7 @@ def make_detector_model(cfg: AppConfig, max_width: int, max_height: int):
     options = pyneat.ModelOptions()
     options.preprocess.kind = pyneat.InputKind.Image
     options.preprocess.enable = pyneat.AutoFlag.On
-    options.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.RGB
+    options.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.NV12
     options.preprocess.input_max_width = max_width
     options.preprocess.input_max_height = max_height
     options.preprocess.preset = pyneat.NormalizePreset.COCO_YOLO
@@ -683,6 +886,8 @@ def make_pose_model(cfg: AppConfig):
     options.preprocess.resize.height = 256
     options.preprocess.resize.mode = pyneat.ResizeMode.Stretch
     options.preprocess.normalize.enable = pyneat.AutoFlag.On
+    options.preprocess.input_max_width = POSE_INPUT_SIZE
+    options.preprocess.input_max_height = POSE_INPUT_SIZE
     return pyneat.Model(cfg.pose_model_path, options)
 
 
@@ -702,18 +907,25 @@ def reliable_model_run_options():
     return options
 
 
-def pose_input_sample(tensor, identity: FrameIdentity | None):
-    sample = pyneat.make_tensor_sample("pose_input", tensor)
-    sample.payload_type = pyneat.PayloadType.Tensor
-    sample.media_type = "application/vnd.simaai.tensor"
-    sample.format = tensor.semantic.tess.format
-    sample.payload_tag = sample.format
-    if identity is not None:
-        copy_identity(identity, sample)
-    return sample
+def model_runner(name: str, model, input_name: str, output_name: str, seed):
+    """One persistent, pipelined Run of a model's full route (CVU
+    preprocessing, MLA inference and postprocessing) behind a blocking input."""
+    graph = pyneat.Graph(name)
+    input_options = model.input_appsrc_options(False)
+    input_options.block = True
+    input_graph = pyneat.Graph()
+    input_graph.add(pyneat.nodes.input(input_name, input_options))
+    model_graph = model.graph()
+    output_graph = pyneat.Graph()
+    output_graph.add(pyneat.nodes.output(output_name, pyneat.OutputOptions.every_frame(4)))
+    graph.connect(input_graph, model_graph)
+    graph.connect(model_graph, output_graph)
+    return graph, graph.build([seed], reliable_model_run_options())
 
 
 def build_pose_run(model):
+    """BlazePose receives fixed-size RGB crops, so its full model route runs
+    as one persistent Run instead of a synchronous Preproc call per frame."""
     inputs = model.input_specs()
     outputs = model.output_specs()
     if len(inputs) != 1 or list(inputs[0].shape) != [-1, -1, 3]:
@@ -726,22 +938,18 @@ def build_pose_run(model):
         raise RuntimeError(
             "BlazePose contract must be one input and [1,195], [1,1], [1,117]"
         )
-    seed_image = np.zeros((256, 256, 3), dtype=np.uint8)
-    seed_roi = pyneat.PreprocessRoi(0, 0, 0, 256, 256)
-    seed_tensor = pyneat.stages.preproc(
-        [seed_image],
-        model,
-        rois=[seed_roi],
+    seed_tensor = pyneat.Tensor.from_numpy(
+        np.zeros((POSE_INPUT_SIZE, POSE_INPUT_SIZE, 3), dtype=np.uint8),
+        copy=True,
         image_format=pyneat.PixelFormat.RGB,
-        copy=False,
-    )[0]
-    graph = pyneat.Graph("blazepose_runner")
-    graph.add(pyneat.nodes.input("pose_input"))
-    graph.add(model.inference())
-    graph.add(model.postprocess())
-    graph.add(pyneat.nodes.output("pose_output", pyneat.OutputOptions.every_frame(4)))
-    return graph, graph.build(
-        [pose_input_sample(seed_tensor, None)], reliable_model_run_options()
+        memory=pyneat.TensorMemory.EV74,
+    )
+    return model_runner(
+        "blazepose_runner",
+        model,
+        "pose_input",
+        "pose_output",
+        image_input_sample("pose_input", seed_tensor, None),
     )
 
 
@@ -749,42 +957,58 @@ def image_input_sample(name: str, tensor, identity: FrameIdentity | None):
     sample = pyneat.make_tensor_sample(name, tensor)
     sample.payload_type = pyneat.PayloadType.Image
     sample.media_type = "video/x-raw"
-    sample.format = "RGB"
+    sample.format = "NV12" if tensor.image_format() == pyneat.PixelFormat.NV12 else "RGB"
     sample.payload_tag = sample.format
     if identity is not None:
         copy_identity(identity, sample)
     return sample
 
 
+def nv12_seed(width: int, height: int):
+    """A zero NV12 image at the largest source size negotiates the detector input."""
+    y_bytes = width * height
+    tensor = pyneat.Tensor.from_numpy(
+        np.zeros((height * 3 // 2, width), dtype=np.uint8),
+        copy=True,
+        image_format=pyneat.PixelFormat.NV12,
+        memory=pyneat.TensorMemory.CPU,
+    )
+    planes = []
+    for role, rows, offset in (
+        (pyneat.PlaneRole.Y, height, 0),
+        (pyneat.PlaneRole.UV, height // 2, y_bytes),
+    ):
+        plane = pyneat.Plane()
+        plane.role = role
+        plane.shape = [rows, width]
+        plane.strides_bytes = [width, 1]
+        plane.byte_offset = offset
+        planes.append(plane)
+    tensor.shape = [height, width]
+    tensor.strides_bytes = []
+    tensor.axis_semantics = [pyneat.TensorAxisSemantic.H, pyneat.TensorAxisSemantic.W]
+    tensor.planes = planes
+    tensor.read_only = False
+    return tensor.cvu()
+
+
 def build_detector_run(model, max_width: int, max_height: int):
     inputs = model.input_specs()
     outputs = model.output_specs()
-    if len(inputs) != 1 or list(inputs[0].shape) != [-1, -1, 3]:
-        raise RuntimeError("YOLO26 public input must be dynamic HWC RGB")
+    if (
+        len(inputs) != 1
+        or len(inputs[0].shape) < 2
+        or list(inputs[0].shape[:2]) != [-1, -1]
+    ):
+        raise RuntimeError("YOLO26 public input must be a dynamic-size image")
     if len(outputs) != 1:
         raise RuntimeError("YOLO26 must expose one decoded BBOX output")
-    seed_image = np.zeros((max_height, max_width, 3), dtype=np.uint8)
-    seed_tensor = pyneat.Tensor.from_numpy(
-        seed_image,
-        copy=True,
-        image_format=pyneat.PixelFormat.RGB,
-        memory=pyneat.TensorMemory.EV74,
-    )
-    graph = pyneat.Graph("yolo26_runner")
-    input_options = model.input_appsrc_options(False)
-    input_options.block = True
-    input_graph = pyneat.Graph()
-    input_graph.add(pyneat.nodes.input("detector_input", input_options))
-    model_graph = model.graph()
-    output_graph = pyneat.Graph()
-    output_graph.add(
-        pyneat.nodes.output("detector_output", pyneat.OutputOptions.every_frame(4))
-    )
-    graph.connect(input_graph, model_graph)
-    graph.connect(model_graph, output_graph)
-    return graph, graph.build(
-        [image_input_sample("detector_input", seed_tensor, None)],
-        reliable_model_run_options(),
+    return model_runner(
+        "yolo26_runner",
+        model,
+        "detector_input",
+        "detector_output",
+        image_input_sample("detector_input", nv12_seed(max_width, max_height), None),
     )
 
 
@@ -792,16 +1016,17 @@ def frame_output_name(stream_index: int) -> str:
     return f"frame_{stream_index}"
 
 
-def make_rgb_output(stream: StreamRuntime):
-    graph = pyneat.Graph(f"rgb_{stream.index}")
+def make_frame_output(stream: StreamRuntime):
+    """Decoded NV12 frames reach the application unconverted: YOLO26
+    preprocessing converts color on the CVU, and BlazePose converts only its
+    small ROI crops."""
+    graph = pyneat.Graph(f"frame_{stream.index}")
     graph.add(pyneat.nodes.input("analytics_frame"))
-    graph.add(pyneat.nodes.video_convert())
-    graph.add(pyneat.nodes.caps_raw("RGB", stream.width, stream.height))
-    graph.add(
-        pyneat.nodes.output(
-            frame_output_name(stream.index), pyneat.OutputOptions.latest()
-        )
-    )
+    # Latest-only with room for a short burst: frames that arrive back to back
+    # are not overwritten before the pull loop takes them.
+    output = pyneat.OutputOptions.latest()
+    output.max_buffers = SOURCE_OUTPUT_BUFFERS
+    graph.add(pyneat.nodes.output(frame_output_name(stream.index), output))
     return graph
 
 
@@ -844,7 +1069,7 @@ def build_runtime(cfg: AppConfig) -> AppRuntime:
         source = make_encoded_source(stream.source_options)
         decoder = make_decoder(stream.source_options)
         source_graph.connect(source, decoder)
-        source_graph.connect(decoder, make_rgb_output(stream), realtime_link(stream))
+        source_graph.connect(decoder, make_frame_output(stream), realtime_link(stream))
         source_graph.connect(source, make_video_sender(cfg, stream), realtime_link(stream))
         stream.source_graph = source_graph
         print(
@@ -960,14 +1185,81 @@ def select_people(
     return people[: cfg.max_people_per_frame]
 
 
-def require_rgb_tensor(sample):
+def require_nv12_tensor(sample):
     tensors = tensors_from_sample(sample)
     if len(tensors) != 1:
-        raise RuntimeError("RGB frame output must contain one tensor")
-    image = tensors[0].semantic.image
-    if image is None or image.format != pyneat.PixelFormat.RGB:
-        raise RuntimeError("VideoConvert output is not RGB")
+        raise RuntimeError("decoded frame output must contain one tensor")
+    if tensors[0].image_format() != pyneat.PixelFormat.NV12:
+        raise RuntimeError("decoded frame is not NV12")
     return tensors[0]
+
+
+def nv12_planes(frame):
+    """Read-only Y (H, W) and interleaved UV (H/2, W/2, 2) views of a decoded
+    NV12 frame's mapped buffer, honoring each plane's byte offset and row
+    stride, without copying the frame."""
+    planes = {plane.role: plane for plane in frame.planes}
+    y_plane = planes.get(pyneat.PlaneRole.Y)
+    uv_plane = planes.get(pyneat.PlaneRole.UV)
+    if y_plane is None or uv_plane is None:
+        raise RuntimeError("decoded NV12 frame is missing its Y/UV planes")
+    height, width = (int(value) for value in y_plane.shape[:2])
+    if width <= 0 or height <= 0 or width % 2 or height % 2:
+        raise RuntimeError("decoded NV12 frame must have even, positive dimensions")
+    y_stride = int(y_plane.strides_bytes[0]) if y_plane.strides_bytes else width
+    uv_stride = int(uv_plane.strides_bytes[0]) if uv_plane.strides_bytes else width
+    if y_stride < width or uv_stride < width:
+        raise RuntimeError("decoded NV12 frame has an invalid plane stride")
+    y_offset, uv_offset = int(y_plane.byte_offset), int(uv_plane.byte_offset)
+    extent = max(
+        y_offset + y_stride * (height - 1) + width,
+        uv_offset + uv_stride * (height // 2 - 1) + width,
+    )
+    if min(y_offset, uv_offset) < 0 or extent > frame.storage.size_bytes - frame.byte_offset:
+        raise RuntimeError("decoded NV12 frame planes exceed its buffer")
+    # Python cannot map a composite (planar) tensor. Describe the same mapped
+    # buffer as one dense byte range on a copy of the tensor header, which
+    # DLPack exports without copying the pixels.
+    dense = tensors_from_sample(pyneat.make_tensor_sample("nv12", frame))[0]
+    dense.planes = []
+    dense.layout = pyneat.TensorLayout.Unknown
+    dense.axis_semantics = []
+    dense.shape = [extent]
+    dense.strides_bytes = [1]
+    data = np.from_dlpack(dense)
+    y_view = np.lib.stride_tricks.as_strided(
+        data[y_offset:], shape=(height, width), strides=(y_stride, 1), writeable=False
+    )
+    uv_view = np.lib.stride_tricks.as_strided(
+        data[uv_offset:],
+        shape=(height // 2, width // 2, 2),
+        strides=(uv_stride, 2, 1),
+        writeable=False,
+    )
+    return y_view, uv_view
+
+
+def crop_people(job: FrameJob, cfg: AppConfig) -> None:
+    """Crop the BlazePose inputs of `job.people` from its NV12 frame and
+    release the decoder buffer. Runs on the stream's own thread or the
+    detector-output thread, so the shared pose dispatcher only pushes ready
+    inputs."""
+    y_plane, uv_plane = nv12_planes(job.frame)
+    job.crops = []
+    for person in job.people:
+        roi = square_roi(person, cfg.roi_scale)
+        job.crops.append(
+            PoseCrop(
+                roi_input_affine(roi, POSE_INPUT_SIZE),
+                pyneat.Tensor.from_numpy(
+                    crop_nv12_roi_rgb(y_plane, uv_plane, roi),
+                    copy=True,
+                    image_format=pyneat.PixelFormat.RGB,
+                    memory=pyneat.TensorMemory.EV74,
+                ),
+            )
+        )
+    job.frame = None
 
 
 def finish_frame(runtime: AppRuntime, stream: StreamRuntime) -> None:
@@ -988,22 +1280,25 @@ def publish_frame(
         stream.last_published_sequence = identity.sequence
         if stream.pose_temporal_filter_enabled:
             poses = stream.pose_smoother.filter(poses)
+        timestamp_ms = identity.pts_ns // 1_000_000 if identity.pts_ns >= 0 else -1
+        frame_id = str(identity.frame_id)
+        # Serialize each envelope once; send_metadata() would re-parse the data JSON.
         overlay = poses_data(poses, identity.stream_id)
-        payloads = {
-            "pose-estimation": json.dumps(overlay, separators=(",", ":")),
-            "auxiliary-visualization": json.dumps(
-                world_pose_auxiliary_from_overlay(overlay), separators=(",", ":")
+        messages = {
+            "pose-estimation": metadata_message(
+                "pose-estimation", overlay, timestamp_ms, frame_id
+            ),
+            "auxiliary-visualization": metadata_message(
+                "auxiliary-visualization",
+                world_pose_auxiliary_from_overlay(overlay),
+                timestamp_ms,
+                frame_id,
             ),
         }
-        timestamp_ms = identity.pts_ns // 1_000_000 if identity.pts_ns >= 0 else -1
 
         def send(metadata_type: str) -> bool:
             try:
-                sent = bool(
-                    stream.metadata_sender.send_metadata(
-                        metadata_type, payloads[metadata_type], timestamp_ms, str(identity.frame_id)
-                    )
-                )
+                sent = bool(stream.metadata_sender.send_raw_json(messages[metadata_type]))
                 error = ""
             except RuntimeError as exc:  # pyneat raises when the sender reports an error.
                 sent, error = False, str(exc)
@@ -1019,20 +1314,6 @@ def publish_frame(
             stream.frames_out += 1
 
 
-def affine_from_tensor(tensor) -> tuple[float, float, float, float, float, float]:
-    meta = tensor.semantic.preprocess
-    if meta is None:
-        raise RuntimeError("BlazePose Preproc output is missing affine metadata")
-    return (
-        float(meta.affine_m00),
-        float(meta.affine_m01),
-        float(meta.affine_m02),
-        float(meta.affine_m10),
-        float(meta.affine_m11),
-        float(meta.affine_m12),
-    )
-
-
 def set_error(runtime: AppRuntime, error: BaseException) -> None:
     with runtime.state.condition:
         if runtime.state.error is None:
@@ -1042,23 +1323,34 @@ def set_error(runtime: AppRuntime, error: BaseException) -> None:
 
 
 def take_next_job(
-    runtime: AppRuntime, mailboxes: list[FrameJob | None], next_stream_attr: str
-) -> FrameJob | None:
-    """Wait for queued work and take it round-robin across streams."""
+    runtime: AppRuntime,
+    mailboxes_attr: str,
+    next_stream_attr: str,
+    ready: Callable[[int], bool] = lambda _index: True,
+):
+    """Wait for queued work that `ready` admits and take it round-robin across
+    streams."""
     state = runtime.state
     with state.condition:
-        state.condition.wait_for(lambda: state.stopping or any(mailboxes))
+        index = None
+
+        def available() -> bool:
+            nonlocal index
+            index = next_ready_stream(
+                getattr(state, mailboxes_attr), getattr(state, next_stream_attr), ready
+            )
+            return state.stopping or index is not None
+
+        state.condition.wait_for(available)
         if state.stopping:
             return None
-        next_stream = getattr(state, next_stream_attr)
-        for offset in range(len(mailboxes)):
-            index = (next_stream + offset) % len(mailboxes)
-            if mailboxes[index] is not None:
-                job = mailboxes[index]
-                mailboxes[index] = None
-                setattr(state, next_stream_attr, (index + 1) % len(mailboxes))
-                return job
-    return None
+        mailboxes = getattr(state, mailboxes_attr)
+        job = mailboxes[index]
+        mailboxes[index] = None
+        setattr(state, next_stream_attr, (index + 1) % len(mailboxes))
+        # An emptied pose mailbox lets the detector take that stream's next frame.
+        state.condition.notify_all()
+        return job
 
 
 def push_with_context(
@@ -1096,6 +1388,18 @@ def close_source_stream(runtime: AppRuntime, stream: StreamRuntime, reason: str)
         runtime.state.condition.notify_all()
 
 
+def queue_detection(runtime: AppRuntime, stream: StreamRuntime, job: FrameJob) -> None:
+    """Queue a frame for YOLO26, replacing older queued detection work. Only
+    frames that will be published count as outstanding. Caller holds the
+    condition."""
+    mailboxes = runtime.state.detector_mailboxes
+    queued = mailboxes[stream.index]
+    replaced = 1 if queued is not None and not queued.tracker_refresh else 0
+    added = 0 if job.tracker_refresh else 1
+    mailboxes[stream.index] = job
+    stream.outstanding_frames += added - replaced
+
+
 def pull_source_frames(runtime: AppRuntime, cfg: AppConfig, stream: StreamRuntime) -> None:
     state = runtime.state
     output = frame_output_name(stream.index)
@@ -1113,7 +1417,7 @@ def pull_source_frames(runtime: AppRuntime, cfg: AppConfig, stream: StreamRuntim
             if sample is None:
                 close_source_stream(runtime, stream, "source reached end of stream")
                 return
-            rgb = require_rgb_tensor(sample)
+            frame = require_nv12_tensor(sample)
             with state.condition:
                 if state.stopping:
                     return
@@ -1124,9 +1428,31 @@ def pull_source_frames(runtime: AppRuntime, cfg: AppConfig, stream: StreamRuntim
                     int(sample.pts_ns),
                     stream.frames_in,
                 )
-                job = FrameJob(runtime.next_job_id, stream.index, rgb, identity)
+                job = FrameJob(runtime.next_job_id, stream.index, frame, identity)
                 runtime.next_job_id += 1
-                if not keep_latest(state.detector_mailboxes, stream.index, job):
+                route = stream.tracker.route(identity.sequence, time.monotonic())
+                if route == Route.DETECT:
+                    queue_detection(runtime, stream, job)
+                else:
+                    if route == Route.TRACK_AND_REFRESH:
+                        queue_detection(
+                            runtime,
+                            stream,
+                            FrameJob(
+                                job.job_id, stream.index, frame, identity, tracker_refresh=True
+                            ),
+                        )
+                    job.people = list(stream.tracker.people)
+                state.condition.notify_all()
+            # Only the queued jobs may keep the decoder buffer while the next pull waits.
+            del sample, frame
+            if route == Route.DETECT:
+                continue
+            crop_people(job, cfg)
+            with state.condition:
+                if state.stopping:
+                    return
+                if not keep_latest(state.pose_mailboxes, stream.index, job):
                     stream.outstanding_frames += 1
                 state.condition.notify_all()
         except Exception as error:  # noqa: BLE001 - isolate a failed source.
@@ -1139,6 +1465,7 @@ def run_source_stream(runtime: AppRuntime, cfg: AppConfig, stream: StreamRuntime
         options = pyneat.RunOptions()
         options.preset = pyneat.RunPreset.Realtime
         options.output_memory = pyneat.OutputMemory.ZeroCopy
+        options.queue_depth = SOURCE_QUEUE_DEPTH
         source_run = stream.source_graph.build(options)
         with runtime.state.condition:
             stopping = runtime.state.stopping
@@ -1184,8 +1511,18 @@ def pull_model_output(runtime: AppRuntime, run, output: str, model: str, pending
 def dispatch_detector_jobs(runtime: AppRuntime, cfg: AppConfig) -> None:
     try:
         state = runtime.state
-        while job := take_next_job(runtime, state.detector_mailboxes, "next_detector_stream"):
-            sample = image_input_sample("detector_input", job.rgb.cvu(), job.identity)
+        # While a stream's previous frame waits for BlazePose, a new detection of
+        # that stream would only replace it; leave the shared MLA to other work.
+        def ready(index: int) -> bool:
+            return (
+                state.pose_mailboxes[index] is None
+                or state.detector_mailboxes[index].tracker_refresh
+            )
+
+        while job := take_next_job(
+            runtime, "detector_mailboxes", "next_detector_stream", ready
+        ):
+            sample = image_input_sample("detector_input", job.frame, job.identity)
             if not push_with_context(
                 runtime,
                 runtime.detector_run,
@@ -1196,6 +1533,8 @@ def dispatch_detector_jobs(runtime: AppRuntime, cfg: AppConfig) -> None:
                 "YOLO26 Run rejected a frame input",
             ):
                 return
+            # The pending context owns the frame now; do not pin it while idle.
+            del job, sample
     except Exception as error:  # noqa: BLE001 - propagate worker failures to the owner thread.
         set_error(runtime, error)
 
@@ -1220,11 +1559,19 @@ def pull_detector_outputs(runtime: AppRuntime, cfg: AppConfig) -> None:
                 job = state.pending_detector_outputs.popleft()
             stream = runtime.streams[job.stream_index]
             job.people = select_people(sample, stream, cfg)
+            with state.condition:
+                stream.tracker.on_detection(job.people, job.tracker_refresh)
+            if job.tracker_refresh or not job.people:
+                # Nothing is cropped from this frame; release its decoder buffer.
+                job.frame = None
+            if job.tracker_refresh:
+                continue
             if not job.people:
                 # An empty pair clears the stream's previous poses in Insight.
                 publish_frame(stream, job.identity, [])
                 finish_frame(runtime, stream)
                 continue
+            crop_people(job, cfg)
             with state.condition:
                 if state.stopping:
                     return
@@ -1236,36 +1583,13 @@ def pull_detector_outputs(runtime: AppRuntime, cfg: AppConfig) -> None:
         set_error(runtime, error)
 
 
-def writable_rgb_view(tensor):
-    rgb_view = np.asarray(tensor.to_numpy(copy=False))
-    if rgb_view.ndim != 3 or rgb_view.shape[2] != 3:
-        raise RuntimeError("RGB frame must be a packed HWC image")
-    # stages.preproc uses DLPack, which cannot export a read-only NumPy array.
-    return rgb_view if rgb_view.flags.writeable else rgb_view.copy()
-
-
 def dispatch_pose_jobs(runtime: AppRuntime, cfg: AppConfig) -> None:
     try:
         state = runtime.state
-        while job := take_next_job(runtime, state.pose_mailboxes, "next_pose_stream"):
-            rois = [pyneat.PreprocessRoi(0, *square_roi(box, cfg.roi_scale)) for box in job.people]
-            output = pyneat.stages.preproc(
-                [writable_rgb_view(job.rgb)],
-                runtime.pose_model,
-                rois=rois,
-                image_format=pyneat.PixelFormat.RGB,
-                copy=False,
-            )
-            if len(output) != len(rois):
-                raise RuntimeError("BlazePose Preproc output count does not match ROI count")
-            # Detached asynchronous Runs may retain their input after push().
-            # Give each ROI independent EV74 storage before enqueueing.
+        while job := take_next_job(runtime, "pose_mailboxes", "next_pose_stream"):
             inputs = [
-                (
-                    PoseInputContext(job.job_id, index, box, affine_from_tensor(tensor)),
-                    tensor.clone().cvu(),
-                )
-                for index, (box, tensor) in enumerate(zip(job.people, output, strict=True))
+                (PoseInputContext(job.job_id, index, box, crop.affine), crop.tensor)
+                for index, (box, crop) in enumerate(zip(job.people, job.crops, strict=True))
             ]
             with state.condition:
                 state.aggregates[job.job_id] = PoseAggregate(
@@ -1276,7 +1600,7 @@ def dispatch_pose_jobs(runtime: AppRuntime, cfg: AppConfig) -> None:
                     runtime,
                     runtime.pose_run,
                     "pose_input",
-                    pose_input_sample(tensor, job.identity),
+                    image_input_sample("pose_input", tensor, job.identity),
                     state.pending_pose_outputs,
                     context,
                     "BlazePose Run rejected an ROI input",
@@ -1345,10 +1669,36 @@ def pull_pose_outputs(runtime: AppRuntime, cfg: AppConfig) -> None:
                 completed = aggregate.completed == aggregate.expected
                 if completed:
                     del state.aggregates[context.job_id]
-            if completed:
-                stream = runtime.streams[aggregate.stream_index]
-                publish_frame(stream, aggregate.identity, aggregate.poses)
+            if not completed:
+                continue
+            stream = runtime.streams[aggregate.stream_index]
+            with state.condition:
+                stream.tracker.observe(
+                    tracked_boxes(aggregate.poses, cfg.max_people_per_frame),
+                    aggregate.identity.sequence,
+                )
+                if state.stopping:
+                    return
+                # Metadata serialization runs on the publisher thread so this
+                # thread only drains BlazePose outputs.
+                dropped = keep_latest(
+                    state.publish_mailboxes,
+                    aggregate.stream_index,
+                    Publication(aggregate.stream_index, aggregate.identity, aggregate.poses),
+                )
+                state.condition.notify_all()
+            if dropped:
                 finish_frame(runtime, stream)
+    except Exception as error:  # noqa: BLE001 - propagate worker failures to the owner thread.
+        set_error(runtime, error)
+
+
+def publish_results(runtime: AppRuntime, cfg: AppConfig) -> None:
+    try:
+        while publication := take_next_job(runtime, "publish_mailboxes", "next_publish_stream"):
+            stream = runtime.streams[publication.stream_index]
+            publish_frame(stream, publication.identity, publication.poses)
+            finish_frame(runtime, stream)
     except Exception as error:  # noqa: BLE001 - propagate worker failures to the owner thread.
         set_error(runtime, error)
 
@@ -1375,6 +1725,7 @@ def stop_runtime(runtime: AppRuntime) -> None:
             runtime.state.detector_mailboxes
         )
         runtime.state.pose_mailboxes = [None] * len(runtime.state.pose_mailboxes)
+        runtime.state.publish_mailboxes = [None] * len(runtime.state.publish_mailboxes)
         runtime.state.pending_detector_outputs.clear()
         runtime.state.pending_pose_outputs.clear()
         runtime.state.aggregates.clear()
@@ -1449,6 +1800,7 @@ def run_app(cfg: AppConfig) -> None:
             pull_detector_outputs,
             dispatch_pose_jobs,
             pull_pose_outputs,
+            publish_results,
         )
     ]
     for thread in source_pullers + model_workers:
