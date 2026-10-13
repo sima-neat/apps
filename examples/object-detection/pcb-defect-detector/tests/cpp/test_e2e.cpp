@@ -62,6 +62,49 @@ int summary_field(const std::string& text, const std::string& key) {
   return std::atoi(text.c_str() + at + key.size());
 }
 
+// Each fixture is named "<n>_<index>_<defect>" after the defect it contains, so
+// that board's own progress line must report it. Checking per image rather than
+// the run's totals catches class outputs swapped or misattributed between
+// boards. Returns the first problem, or "" when every board reports its defect.
+std::string board_defect_problem(const fs::path& fixture_dir, const std::string& stdout_text) {
+  int named = 0;
+  for (const auto& entry : fs::directory_iterator(fixture_dir)) {
+    if (!entry.is_regular_file()) {
+      continue;
+    }
+    const std::string name = entry.path().filename().string();
+    const std::string stem = entry.path().stem().string();
+    const std::size_t first = stem.find('_');
+    const std::size_t second =
+        first == std::string::npos ? std::string::npos : stem.find('_', first + 1);
+    if (second == std::string::npos) {
+      continue;
+    }
+    ++named;
+    const std::string defect = stem.substr(second + 1);
+    // "[i/N] <image> [-> <output>] (<n> defects) {class: n, ...}"
+    const std::size_t at = stdout_text.find("] " + name + " ");
+    if (at == std::string::npos) {
+      return "no progress line for " + name;
+    }
+    const std::size_t end = stdout_text.find('\n', at);
+    const std::string line =
+        stdout_text.substr(at, end == std::string::npos ? std::string::npos : end - at);
+    const std::size_t counts = line.find(" {");
+    // Match a whole key: "spur" is a prefix of "spurious_copper".
+    if (counts == std::string::npos ||
+        (line.find("{" + defect + ":", counts) == std::string::npos &&
+         line.find(" " + defect + ":", counts + 1) == std::string::npos)) {
+      return name + " is named for " + defect + ", but its result reads: " + line;
+    }
+  }
+  if (named == 0) {
+    return "no defect class could be derived from the fixture names in " + fixture_dir.string() +
+           "; the class assertion would pass vacuously";
+  }
+  return {};
+}
+
 int main(int argc, char** argv) {
   if (argc < 2) {
     std::cerr << "[ERR] usage: " << argv[0] << " <example-binary>\n";
@@ -165,107 +208,58 @@ int main(int argc, char** argv) {
       std::cerr << "[FAIL] expected at least one defect per board, got " << total_defects << "\n";
       std::cerr << "stdout:\n" << result.stdout_text << "\n";
       rc = 1;
+    } else if (const std::string problem = board_defect_problem(input_dir, result.stdout_text);
+               !problem.empty()) {
+      // This is what proves PCB detection works rather than that the process
+      // merely ran.
+      std::cerr << "[FAIL] " << problem << "\nstdout:\n" << result.stdout_text << "\n";
+      rc = 1;
     } else {
-      // Each fixture is named after the defect it contains, so the reported
-      // classes must include it. This is what proves PCB detection works rather
-      // than that the process merely ran.
-      //
-      // Scope the search to the "Per-class totals:" line. Searching the whole of
-      // stdout would be inert: the application echoes each input filename as it
-      // works, so "missing_hole" is present whatever the model reported, and the
-      // check could never fail.
-      const std::string totals_line = extract_line(result.stdout_text, "Per-class totals:");
-
-      std::vector<std::string> missing;
-      std::vector<std::string> expected_classes;
-      std::vector<std::string> unparsable;
+      // Everything above reads stdout or file metadata. An application that
+      // reported detections but wrote an untouched copy of its input would
+      // still pass all of it -- exactly the "saves unchanged images" failure
+      // this test exists to catch. Compare decoded pixels so the overlay has
+      // to be present in the file that ships.
+      int unannotated = 0;
       for (const auto& entry : fs::directory_iterator(input_dir)) {
         if (!entry.is_regular_file()) {
           continue;
         }
-        const std::string stem = entry.path().stem().string();       // pcb_01_missing_hole
-        const std::size_t first = stem.find('_');
-        const std::size_t second = stem.find('_', first + 1);
-        if (first == std::string::npos || second == std::string::npos) {
-          unparsable.push_back(stem);
-          continue;
+        const fs::path written = fs::path(out_dir) / (entry.path().stem().string() + kOutputTag +
+                                                      entry.path().extension().string());
+        const cv::Mat before = cv::imread(entry.path().string());
+        const cv::Mat after = cv::imread(written.string());
+        if (before.empty() || after.empty()) {
+          std::cerr << "[FAIL] could not read " << (before.empty() ? entry.path() : written)
+                    << "\n";
+          rc = 1;
+          break;
         }
-        const std::string defect = stem.substr(second + 1);          // missing_hole
-        expected_classes.push_back(defect);
-        // Match a whole key, not a substring: "spur" is a prefix of
-        // "spurious_copper", so a raw find() would let one satisfy the other.
-        if (totals_line.find(defect + ":") == std::string::npos) {
-          missing.push_back(defect);
+        if (before.size() != after.size()) {
+          std::cerr << "[FAIL] " << written.filename().string() << " is " << after.cols << "x"
+                    << after.rows << " but its source is " << before.cols << "x" << before.rows
+                    << "\n";
+          rc = 1;
+          break;
+        }
+        cv::Mat diff;
+        cv::absdiff(before, after, diff);
+        std::vector<cv::Mat> channels;
+        cv::split(diff, channels);
+        cv::Mat strongest = cv::max(channels[0], cv::max(channels[1], channels[2]));
+        const int changed = cv::countNonZero(strongest > kAnnotationDelta);
+        if (changed < kMinAnnotatedPixels) {
+          std::cerr << "[FAIL] " << written.filename().string() << " has only " << changed
+                    << " pixel(s); the board was reported as defective but the saved image "
+                       "carries no visible overlay\n";
+          ++unannotated;
+          rc = 1;
         }
       }
-
-      if (expected_classes.empty()) {
-        // Without this the loop above asserts nothing and the test passes
-        // vacuously.
-        std::cerr << "[FAIL] no defect class could be derived from the fixture names; "
-                     "the class assertion would pass vacuously\n";
-        for (const auto& stem : unparsable) {
-          std::cerr << "       unparsable fixture: " << stem << "\n";
-        }
-        rc = 1;
-      } else if (!missing.empty()) {
-        std::cerr << "[FAIL] fixtures are named for the defects they contain, but these were "
-                     "never detected:";
-        for (const auto& defect : missing) {
-          std::cerr << ' ' << defect;
-        }
-        std::cerr << "\nstdout:\n" << result.stdout_text << "\n";
-        rc = 1;
-      } else {
-        // Everything above reads stdout or file metadata. An application that
-        // reported detections but wrote an untouched copy of its input would
-        // still pass all of it -- exactly the "saves unchanged images" failure
-        // this test exists to catch. Compare decoded pixels so the overlay has
-        // to be present in the file that ships.
-        int unannotated = 0;
-        for (const auto& entry : fs::directory_iterator(input_dir)) {
-          if (!entry.is_regular_file()) {
-            continue;
-          }
-          const fs::path written =
-              fs::path(out_dir) /
-              (entry.path().stem().string() + kOutputTag + entry.path().extension().string());
-          const cv::Mat before = cv::imread(entry.path().string());
-          const cv::Mat after = cv::imread(written.string());
-          if (before.empty() || after.empty()) {
-            std::cerr << "[FAIL] could not read " << (before.empty() ? entry.path() : written)
-                      << "\n";
-            rc = 1;
-            break;
-          }
-          if (before.size() != after.size()) {
-            std::cerr << "[FAIL] " << written.filename().string() << " is " << after.cols << "x"
-                      << after.rows << " but its source is " << before.cols << "x" << before.rows
-                      << "\n";
-            rc = 1;
-            break;
-          }
-          cv::Mat diff;
-          cv::absdiff(before, after, diff);
-          std::vector<cv::Mat> channels;
-          cv::split(diff, channels);
-          cv::Mat strongest = cv::max(channels[0], cv::max(channels[1], channels[2]));
-          const int changed = cv::countNonZero(strongest > kAnnotationDelta);
-          if (changed < kMinAnnotatedPixels) {
-            std::cerr << "[FAIL] " << written.filename().string()
-                      << " has only " << changed
-                      << " pixel(s); the board was reported as defective but the saved image "
-                         "carries no visible overlay\n";
-            ++unannotated;
-            rc = 1;
-          }
-        }
-        if (rc == 0 && unannotated == 0) {
-          std::cout << "[OK] PCB defect detection produced " << output_files
-                    << " annotated images, " << total_defects << " defects across "
-                    << images_with_defects
-                    << " board(s), every named defect class detected, every output drawn on\n";
-        }
+      if (rc == 0 && unannotated == 0) {
+        std::cout << "[OK] PCB defect detection produced " << output_files << " annotated images, "
+                  << total_defects << " defects across " << images_with_defects
+                  << " board(s), every board reported its named defect, every output drawn on\n";
       }
     }
   }
@@ -289,7 +283,6 @@ int main(int argc, char** argv) {
     fs::create_directories(mixed_input);
 
     std::vector<std::pair<std::string, cv::Size>> expected_sizes;
-    std::set<std::string> expected_classes;
     int index = 0;
     for (const auto& entry : fs::directory_iterator(input_dir)) {
       if (!entry.is_regular_file()) {
@@ -313,19 +306,9 @@ int main(int argc, char** argv) {
                          cv::Scalar(114, 114, 114));
       cv::imwrite((mixed_input / entry.path().filename()).string(), resized);
 
-      const std::string stem = entry.path().stem().string();
-      expected_sizes.emplace_back(stem + kOutputTag + entry.path().extension().string(),
+      expected_sizes.emplace_back(entry.path().stem().string() + kOutputTag +
+                                      entry.path().extension().string(),
                                   resized.size());
-
-      // Fixtures are named "<n>_<index>_<defect>", so the defect follows the
-      // second underscore.
-      const std::size_t first = stem.find('_');
-      const std::size_t second = first == std::string::npos
-                                     ? std::string::npos
-                                     : stem.find('_', first + 1);
-      if (second != std::string::npos) {
-        expected_classes.insert(stem.substr(second + 1));
-      }
       ++index;
     }
 
@@ -350,11 +333,6 @@ int main(int argc, char** argv) {
     };
     if (rc == 0 && (!has_frame(true) || !has_frame(false))) {
       std::cerr << "[FAIL] the rescaled fixtures must include landscape and portrait frames\n";
-      rc = 1;
-    }
-    if (rc == 0 && expected_classes.empty()) {
-      std::cerr << "[FAIL] no defect class could be derived from the fixture names in "
-                << input_dir << "; the class assertion would pass vacuously\n";
       rc = 1;
     }
 
@@ -422,28 +400,19 @@ int main(int argc, char** argv) {
         }
       }
 
-      // Same content, only larger, so the model must still name the same defects.
+      // Same content, only larger, so each board must still report its defect.
       if (rc == 0) {
-        const std::string totals_line = extract_line(mixed.stdout_text, "Per-class totals:");
-        std::vector<std::string> missing;
-        for (const auto& defect : expected_classes) {
-          if (totals_line.find(defect + ":") == std::string::npos) {
-            missing.push_back(defect);
-          }
-        }
-        if (!missing.empty()) {
-          std::cerr << "[FAIL] after rescaling, these defects were no longer detected:";
-          for (const auto& defect : missing) {
-            std::cerr << " " << defect;
-          }
-          std::cerr << "\n  Core's letterbox or its coordinate mapping is not handling "
+        const std::string problem = board_defect_problem(mixed_input, mixed.stdout_text);
+        if (!problem.empty()) {
+          std::cerr << "[FAIL] after rescaling, " << problem
+                    << "\n  Core's letterbox or its coordinate mapping is not handling "
                        "non-native input sizes\n";
           std::cerr << "stdout:\n" << mixed.stdout_text << "\n";
           rc = 1;
         } else {
           std::cout << "[OK] mixed resolutions (" << distinct.size()
                     << " distinct sizes) went through Core's preprocessing: " << mixed_defects
-                    << " defects, every named class still detected, outputs at source size\n";
+                    << " defects, every board still reports its defect, outputs at source size\n";
         }
       }
       remove_dir(mixed_out.string());

@@ -24,6 +24,35 @@ ANNOTATION_DELTA = 60
 MIN_ANNOTATED_PIXELS = 200
 
 
+def classes_per_image(stdout: str) -> dict[str, set[str]]:
+    """Map each image name to the classes its progress line reports.
+
+    Progress lines read "[i/N] <image> [-> <output>] (<n> defects) {class: n, ...}".
+    """
+    lines = re.findall(
+        r"^\[\d+/\d+\] (\S+)(?: -> \S+)? \(\d+ defects\) (\{[^}]*\})$", stdout, re.MULTILINE
+    )
+    return {name: set(re.findall(r"([a-z_]+):", counts)) for name, counts in lines}
+
+
+def assert_each_board_reports_its_defect(fixtures: list[Path], stdout: str) -> None:
+    """Each fixture is named after the defect it contains, so that board's own
+    result must report it. Checking per image rather than the run's totals
+    catches class outputs swapped or misattributed between boards."""
+    named = {path.name: path.stem.split("_", 2)[2] for path in fixtures
+             if path.stem.count("_") >= 2}
+    # Without this the loop below asserts nothing and the test passes vacuously.
+    # A fixture renamed to fewer than two underscores would otherwise drop out.
+    assert named, "no defect class could be derived from the fixture names"
+    reported = classes_per_image(stdout)
+    for name, defect in sorted(named.items()):
+        assert name in reported, f"no progress line for {name}:\n{stdout}"
+        assert defect in reported[name], (
+            f"{name} is named for {defect}, but its result reports "
+            f"{sorted(reported[name])}:\n{stdout}"
+        )
+
+
 @pytest.mark.e2e
 class TestE2E:
     def test_full_pipeline(
@@ -91,31 +120,11 @@ class TestE2E:
             f"expected at least one defect per board, got {total_defects}:\n{stdout}"
         )
 
-        # Each fixture is named after the defect it contains, so the class the
-        # model reports must include it. This is what actually proves PCB
-        # detection works rather than that the process merely ran.
-        per_class = re.search(r"Per-class totals: (\{.*\})", stdout)
-        assert per_class, f"per-class totals missing from stdout:\n{stdout}"
-        reported_classes = set(re.findall(r"([a-z_]+):", per_class.group(1)))
-
-        expected_classes = {
-            path.stem.split("_", 2)[2]
-            for path in input_dir.iterdir()
-            if path.is_file() and path.stem.count("_") >= 2
-        }
-        # Without this the set difference below asserts nothing at all and the
-        # test passes vacuously -- exactly the failure mode this test exists to
-        # prevent. A fixture renamed to fewer than two underscores would
-        # otherwise drop out silently.
-        assert expected_classes, (
-            "no defect class could be derived from the fixture names in "
-            f"{input_dir}; the class assertion would pass vacuously"
-        )
-
-        missing = expected_classes - reported_classes
-        assert not missing, (
-            f"fixtures are named for the defects they contain, but "
-            f"{sorted(missing)} were never detected (reported: {sorted(reported_classes)}):\n{stdout}"
+        # This is what actually proves PCB detection works rather than that the
+        # process merely ran.
+        assert "Per-class totals:" in stdout, f"per-class totals missing from stdout:\n{stdout}"
+        assert_each_board_reports_its_defect(
+            [path for path in input_dir.iterdir() if path.is_file()], stdout
         )
 
         # Everything above reads stdout or file metadata. An application that
@@ -251,23 +260,8 @@ class TestE2E:
                 f"source is {width}x{height}; the output is not the source frame"
             )
 
-        # Same content, only larger, so the model must still name the same defects.
-        per_class = re.search(r"Per-class totals: (\{.*\})", result.stdout)
-        assert per_class, f"per-class totals missing from stdout:\n{result.stdout}"
-        reported_classes = set(re.findall(r"([a-z_]+):", per_class.group(1)))
-        expected_classes = {
-            path.stem.split("_", 2)[2] for path in fixtures if path.stem.count("_") >= 2
-        }
-        assert expected_classes, (
-            f"no defect class could be derived from the fixture names in {source_dir}; "
-            f"the class assertion would pass vacuously"
-        )
-        missing = expected_classes - reported_classes
-        assert not missing, (
-            f"after rescaling, {sorted(missing)} were no longer detected "
-            f"(reported: {sorted(reported_classes)}); Core's letterbox or its "
-            f"coordinate mapping is not handling non-native input sizes:\n{result.stdout}"
-        )
+        # Same content, only larger, so each board must still report its defect.
+        assert_each_board_reports_its_defect(fixtures, result.stdout)
 
     def test_unreadable_input_reports_failure_and_exits_nonzero(
         self, e2e_model_path, apps_root, tmp_output_dir, test_timeout_ms,
