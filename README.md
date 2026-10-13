@@ -11,14 +11,18 @@ only when modifying or building their source.
 
 ## Install Apps
 
-On a supported Modalix or DevKit target, install the latest Apps runtime from main and enter the installed bundle:
+Run the installation on the Modalix DevKit. If the DevKit has no internet access, run it under `/workspace` in a Neat SDK container paired with the DevKit. Pairing normally shares `/workspace` with the DevKit over NFS, so the bundle appears at the same path there. Run the examples on the DevKit.
+
+The Apps installer also installs the Core selected for the Apps package and the latest Insight through `sima-cli`. From a paired SDK container, Core is installed on the DevKit as well. After pairing, the DevKit already has the SDK's Core and Insight runs in the SDK container. If that Core matches the one selected for this Apps package, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps` to skip both. The installer does not check this, so a mismatch appears only when an example runs. See [Dependency Selection](#dependency-selection).
+
+Install the latest Apps runtime from main and enter the installed bundle:
 
 ```bash
 sima-cli neat install apps
 cd prebuilt-apps
 ```
 
-Use `-d <install-root>` to install `prebuilt-apps/` under another directory. The Apps installer installs the Core selected for the Apps package and installs Insight through `sima-cli`. Run the remaining commands from the installed `prebuilt-apps/` directory.
+Use `-d <install-root>` to install `prebuilt-apps/` under another directory. Run the remaining commands from the installed `prebuilt-apps/` directory.
 
 Run the same command with the same installation root to upgrade Apps. Before replacing an existing installation, the installer asks for confirmation, carries `models/` into the new bundle, and retains the remaining previous files under `.prebuilt-apps-backup/`. If that backup already exists, the installer warns before replacing it.
 

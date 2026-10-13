@@ -127,23 +127,36 @@ def cors_headers(origin: str, request_headers: str | None = None) -> dict:
     }
 
 
+# Version of the backend API that integrating front ends (Insight) build on.
+# Bump it on a breaking change to a route or payload they use.
+API_VERSION = 1
+
+
 def health_payload(*, mode: str, version: str, status: Mapping | None,
-                   engines: Iterable[Mapping], error: str | None = None) -> dict:
+                   engines: Iterable[Mapping], error: str | None = None,
+                   engine_failures: Mapping[str, str] | None = None) -> dict:
     """``GET /health``: what an integrating front end needs to know before it
     calls the API. ``status`` is the control API's /control/status (None when
-    the model server is unreachable)."""
+    the model server is unreachable). ``engine_failures`` maps an installed TTS
+    engine that failed to load to its error; it is listed with ``loaded: false``
+    and that error so a front end can say what is wrong."""
     reachable = bool(status) and not error
     status = status or {}
     catalog = status.get("catalog") or []
     chat_loaded = [m.get("name") for m in catalog
                    if m.get("loaded") and (m.get("type") or "chat") != "asr"]
+    tts_engines = [{"key": e.get("key"), "loaded": bool(e.get("loaded"))}
+                   for e in engines if e.get("key") != "browser"]
+    listed = {e["key"] for e in tts_engines}
+    tts_engines += [{"key": key, "loaded": False, "error": str(err)}
+                    for key, err in (engine_failures or {}).items() if key not in listed]
     return {
         "ok": reachable,
+        "api_version": API_VERSION,
         "mode": mode,
         "version": version,
         "model_server": {"reachable": reachable, "error": error},
         "asr_model": status.get("asrModel") or None,
         "chat_models_loaded": chat_loaded,
-        "tts": {"engines": [{"key": e.get("key"), "loaded": bool(e.get("loaded"))}
-                            for e in engines if e.get("key") != "browser"]},
+        "tts": {"engines": tts_engines},
     }

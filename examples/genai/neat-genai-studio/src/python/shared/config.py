@@ -8,8 +8,6 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-import yaml
-
 
 EXAMPLE_ROOT = Path(__file__).resolve().parents[3]
 COMMON_DIR = Path(__file__).resolve().parents[2] / "common"
@@ -127,12 +125,24 @@ class AppConfig:
     supertonic: SupertonicConfig = SupertonicConfig()
 
 
+def read_config_file(path: Path) -> dict:
+    """The parsed configuration. The model server runs in the Neat environment,
+    which may not carry PyYAML (Platform 3.0's ~/pyneat does not), so run.sh
+    hands it a JSON copy and PyYAML is imported only for a YAML file."""
+    text = path.read_text(encoding="utf-8")
+    if path.suffix == ".json":
+        return json.loads(text) or {}
+    import yaml
+
+    return yaml.safe_load(text) or {}
+
+
 def load_config(path: Path = DEFAULT_CONFIG, apps_root: Path = PATH_ROOT) -> AppConfig:
     return load_server_config(path, apps_root)
 
 
 def load_server_config(path: Path = DEFAULT_SERVER_CONFIG, apps_root: Path = PATH_ROOT) -> AppConfig:
-    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    raw = read_config_file(path)
     raw = raw.get("server", raw)
 
     openai = raw.get("openai", {})
@@ -200,7 +210,7 @@ def _load_supertonic_config(raw: dict) -> SupertonicConfig:
 
 
 def load_ui_config(path: Path = DEFAULT_UI_CONFIG, apps_root: Path = PATH_ROOT) -> AppConfig:
-    config = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    config = read_config_file(path)
     raw = config.get("app", config)
     server = config.get("server", {})
 
