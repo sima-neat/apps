@@ -9,6 +9,7 @@ import threading
 from pathlib import Path
 from types import SimpleNamespace
 
+import cv2
 import numpy as np
 import pytest
 import yaml
@@ -22,6 +23,7 @@ if str(PYTHON_DIR) not in sys.path:
 import main
 
 main.np = np
+main.cv2 = cv2
 pytestmark = pytest.mark.unit
 
 IDENTITY = main.FrameIdentity("camera0", 7, 1_234_000_000, 7)
@@ -59,15 +61,23 @@ def load_config(tmp_path: Path, text: str) -> main.AppConfig:
 
 
 class RecordingSender:
+    """Records each raw envelope as (type, data, timestamp, frame_id)."""
+
     def __init__(self, fail: str | None = None):
         self.calls = []
+        self.messages = []
         self.fail = fail
 
-    def send_metadata(self, *args):
-        self.calls.append(args)
-        if self.fail == "raises" and args[0] == "auxiliary-visualization":
+    def send_raw_json(self, message: str):
+        self.messages.append(message)
+        envelope = json.loads(message)
+        metadata_type = envelope["type"]
+        self.calls.append(
+            (metadata_type, envelope["data"], envelope.get("timestamp"), envelope.get("frame_id"))
+        )
+        if self.fail == "raises" and metadata_type == "auxiliary-visualization":
             raise RuntimeError("metadata datagram could not be queued")
-        return not (self.fail == "returns-false" and args[0] == "auxiliary-visualization")
+        return not (self.fail == "returns-false" and metadata_type == "auxiliary-visualization")
 
 
 def runtime_stream(sender=None, *, temporal_filter: bool = False, outstanding: int = 0):
@@ -79,6 +89,7 @@ def runtime_stream(sender=None, *, temporal_filter: bool = False, outstanding: i
         metadata_lock=threading.Lock(),
         metadata_sender=sender or RecordingSender(),
         pose_smoother=main.PoseSmoother(),
+        tracker=main.RoiTracker(),
         last_published_sequence=0,
         pose_temporal_filter_enabled=temporal_filter,
         frames_in=0,
@@ -447,14 +458,6 @@ def test_non_finite_landmarks_discard_only_that_pose(monkeypatch, poison):
     assert parse_pose(monkeypatch, 4.0, poison) is None
 
 
-def test_pose_preprocess_copies_readonly_tensor_exports():
-    image = np.zeros((4, 4, 3), dtype=np.uint8)
-    image.flags.writeable = False
-    exported = main.writable_rgb_view(SimpleNamespace(to_numpy=lambda *, copy: image))
-    assert exported.flags.writeable
-    assert not np.shares_memory(exported, image)
-
-
 def pose_sample(x: float, world_x: float, box_x: float = 0.0) -> dict:
     return {
         "roi_index": 0,
@@ -494,8 +497,8 @@ def test_publish_frame_sends_a_correlated_pair_and_counts_only_full_pairs(failur
 
     assert [call[0] for call in sender.calls] == ["pose-estimation", "auxiliary-visualization"]
     assert all(call[2:] == (1234, "7") for call in sender.calls)
-    assert json.loads(sender.calls[0][1]) == {"stream_id": "camera0", "poses": []}
-    auxiliary = json.loads(sender.calls[1][1])
+    assert sender.calls[0][1] == {"stream_id": "camera0", "poses": []}
+    auxiliary = sender.calls[1][1]
     assert (auxiliary["stream_id"], auxiliary["payload"]) == ("camera0", {"poses": []})
     assert stream_runtime.frames_out == (1 if failure is None else 0)
 
@@ -517,21 +520,28 @@ def test_publish_frame_discards_a_pose_result_older_than_an_empty_frame():
     assert stream_runtime.pose_smoother.previous == []
 
 
-def test_pushed_samples_carry_stream_id_frame_id_and_pts(monkeypatch):
+def test_pushed_samples_carry_stream_id_frame_id_pts_and_image_format(monkeypatch):
     monkeypatch.setattr(
         main,
         "pyneat",
         SimpleNamespace(
             make_tensor_sample=lambda *_args: SimpleNamespace(),
-            PayloadType=SimpleNamespace(Image="image", Tensor="tensor"),
+            PayloadType=SimpleNamespace(Image="image"),
+            PixelFormat=SimpleNamespace(NV12="nv12", RGB="rgb"),
         ),
     )
-    tensor = SimpleNamespace(semantic=SimpleNamespace(tess=SimpleNamespace(format="BF16")))
-    for sample in (
-        main.image_input_sample("detector_input", tensor, IDENTITY),
-        main.pose_input_sample(tensor, IDENTITY),
+    for name, image_format, expected in (
+        ("detector_input", "nv12", "NV12"),
+        ("pose_input", "rgb", "RGB"),
     ):
+        tensor = SimpleNamespace(image_format=lambda image_format=image_format: image_format)
+        sample = main.image_input_sample(name, tensor, IDENTITY)
         assert (sample.stream_id, sample.frame_id, sample.pts_ns) == ("camera0", 7, 1_234_000_000)
+        assert (sample.payload_type, sample.format, sample.payload_tag) == (
+            "image",
+            expected,
+            expected,
+        )
 
 
 def test_source_jobs_keep_source_frame_id_and_local_order(monkeypatch):
@@ -546,10 +556,11 @@ def test_source_jobs_keep_source_frame_id_and_local_order(monkeypatch):
     stream_runtime.source_run = SimpleNamespace(pull=lambda *_args: next(samples))
     state = main.SharedState(1)
     runtime = SimpleNamespace(state=state, next_job_id=1)
-    monkeypatch.setattr(main, "require_rgb_tensor", lambda sample: f"rgb-{sample.frame_id}")
+    monkeypatch.setattr(main, "require_nv12_tensor", lambda sample: f"nv12-{sample.frame_id}")
 
     main.pull_source_frames(runtime, SimpleNamespace(frame_limit=0), stream_runtime)
 
+    # Nothing is tracked, so both frames route to YOLO26 and the newer replaces the older.
     latest = state.detector_mailboxes[0]
     assert latest is not None
     assert (latest.identity.frame_id, latest.identity.sequence, latest.identity.pts_ns) == (
@@ -557,6 +568,47 @@ def test_source_jobs_keep_source_frame_id_and_local_order(monkeypatch):
         2,
         2_000_000_000,
     )
+    assert (latest.frame, latest.tracker_refresh) == ("nv12-57", False)
+    assert (stream_runtime.frames_in, stream_runtime.outstanding_frames) == (2, 1)
+    assert state.pose_mailboxes == [None]
+
+
+def test_tracked_frames_are_cropped_on_the_source_thread_and_refresh_detection(monkeypatch):
+    samples = iter(
+        [
+            SimpleNamespace(frame_id=41, pts_ns=1_000_000_000),
+            SimpleNamespace(frame_id=57, pts_ns=2_000_000_000),
+            None,
+        ]
+    )
+    stream_runtime = runtime_stream()
+    stream_runtime.tracker.people = [BOX]
+    stream_runtime.tracker.last_detection = -1.0  # A refresh is due.
+    stream_runtime.source_run = SimpleNamespace(pull=lambda *_args: next(samples))
+    state = main.SharedState(1)
+    runtime = SimpleNamespace(state=state, next_job_id=1)
+    monkeypatch.setattr(main, "require_nv12_tensor", lambda sample: f"nv12-{sample.frame_id}")
+    cropped = []
+
+    def fake_crop(job, _cfg):
+        cropped.append((threading.get_ident(), job.frame))
+        job.crops = ["crop"]
+        job.frame = None
+
+    monkeypatch.setattr(main, "crop_people", fake_crop)
+    monkeypatch.setattr(main.time, "monotonic", lambda: 1_000.0)
+
+    main.pull_source_frames(runtime, SimpleNamespace(frame_limit=0), stream_runtime)
+
+    assert cropped == [(threading.get_ident(), "nv12-41"), (threading.get_ident(), "nv12-57")]
+    # Frame 41 refreshed the tracker; the refresh is never counted as outstanding.
+    refresh = state.detector_mailboxes[0]
+    assert (refresh.identity.frame_id, refresh.tracker_refresh, refresh.people) == (41, True, [])
+    assert refresh.frame == "nv12-41"
+    # Frame 57 replaced 41 in the pose mailbox; only one admitted frame is outstanding.
+    pose_job = state.pose_mailboxes[0]
+    assert (pose_job.identity.frame_id, pose_job.people, pose_job.crops) == (57, [BOX], ["crop"])
+    assert pose_job.frame is None
     assert (stream_runtime.frames_in, stream_runtime.outstanding_frames) == (2, 1)
 
 
@@ -588,10 +640,17 @@ def test_detector_outputs_keep_only_the_latest_frame_with_people(monkeypatch):
     sender = RecordingSender()
     stream_runtime = runtime_stream(sender, outstanding=3)
     state = main.SharedState(1)
-    jobs = [main.FrameJob(job_id, 0, object(), IDENTITY) for job_id in (1, 2, 3)]
+    jobs = [main.FrameJob(job_id, 0, f"nv12-{job_id}", IDENTITY) for job_id in (1, 2, 3)]
     state.pending_detector_outputs.extend(jobs)
     people = iter([[], [BOX], [BOX]])
     monkeypatch.setattr(main, "select_people", lambda *_args: next(people))
+    cropped = []
+
+    def fake_crop(job, _cfg):
+        cropped.append(job.frame)
+        job.frame = None
+
+    monkeypatch.setattr(main, "crop_people", fake_crop)
     runtime = SimpleNamespace(
         state=state, streams=[stream_runtime], detector_run=LateOutputRun(state, outputs=3)
     )
@@ -599,14 +658,47 @@ def test_detector_outputs_keep_only_the_latest_frame_with_people(monkeypatch):
     main.pull_detector_outputs(runtime, SimpleNamespace())
 
     assert state.error is None
+    # Detection frames are cropped on this thread, which releases their decoder buffer.
+    assert cropped == ["nv12-2", "nv12-3"]
+    assert jobs[2].frame is None
     # Job 1 had nobody and job 2 was replaced by job 3; both are finished.
     assert state.pose_mailboxes == [jobs[2]]
     # Job 1 still publishes an empty pair so Insight clears stale poses.
-    assert [(call[0], json.loads(call[1])["stream_id"]) for call in sender.calls] == [
+    assert [(call[0], call[1]["stream_id"]) for call in sender.calls] == [
         ("pose-estimation", "camera0"),
         ("auxiliary-visualization", "camera0"),
     ]
     assert stream_runtime.outstanding_frames == 1
+    assert stream_runtime.tracker.people == [BOX]
+    assert not stream_runtime.tracker.detection_pending
+
+
+def test_refresh_detections_update_the_tracker_and_are_never_published(monkeypatch):
+    sender = RecordingSender()
+    stream_runtime = runtime_stream(sender, outstanding=0)
+    stream_runtime.tracker.people = [BOX]
+    stream_runtime.tracker.detection_pending = True
+    stream_runtime.tracker.routed_sequence = 9
+    state = main.SharedState(1)
+    newcomer = {**BOX, "x1": 300.0, "x2": 400.0}
+    state.pending_detector_outputs.extend(
+        main.FrameJob(job_id, 0, "nv12", IDENTITY, tracker_refresh=True) for job_id in (1, 2)
+    )
+    people = iter([[], [newcomer]])
+    monkeypatch.setattr(main, "select_people", lambda *_args: next(people))
+    monkeypatch.setattr(main, "crop_people", lambda *_args: pytest.fail("refresh was cropped"))
+    runtime = SimpleNamespace(
+        state=state, streams=[stream_runtime], detector_run=LateOutputRun(state, outputs=2)
+    )
+
+    main.pull_detector_outputs(runtime, SimpleNamespace())
+
+    assert state.error is None
+    assert sender.calls == []
+    assert state.pose_mailboxes == [None]
+    assert stream_runtime.outstanding_frames == 0
+    # The empty refresh kept tracking; the second replaced the people.
+    assert (stream_runtime.tracker.people, stream_runtime.tracker.sequence) == ([newcomer], 9)
 
 
 def test_accepted_input_without_output_stops_the_app(monkeypatch):
@@ -631,12 +723,30 @@ def test_pose_outputs_publish_a_frame_once_all_its_rois_return(monkeypatch):
         state=state, streams=[stream_runtime], pose_run=LateOutputRun(state, outputs=2)
     )
 
-    main.pull_pose_outputs(runtime, SimpleNamespace())
+    main.pull_pose_outputs(runtime, SimpleNamespace(max_people_per_frame=1))
 
     assert state.error is None
     assert not state.aggregates
+    # The completed frame waits for the publisher; its landmarks track the next frame.
+    publication = state.publish_mailboxes[0]
+    assert (publication.identity, len(publication.poses)) == (IDENTITY, 1)
+    assert stream_runtime.tracker.people == [main.keypoint_box(pose_sample(50.0, 0.0))]
+    assert stream_runtime.tracker.sequence == IDENTITY.sequence
+    assert sender.calls == []
+
+    state.stopping = False
+    publisher = threading.Thread(
+        target=main.publish_results, args=(runtime, SimpleNamespace()), daemon=True
+    )
+    publisher.start()
+    with state.condition:
+        assert state.condition.wait_for(lambda: stream_runtime.outstanding_frames == 0, 2)
+        state.stopping = True
+        state.condition.notify_all()
+    publisher.join(timeout=2)
+    assert not publisher.is_alive()
     assert [call[0] for call in sender.calls] == ["pose-estimation", "auxiliary-visualization"]
-    assert len(json.loads(sender.calls[0][1])["poses"]) == 1
+    assert len(sender.calls[0][1]["poses"]) == 1
     assert (stream_runtime.frames_out, stream_runtime.outstanding_frames) == (1, 0)
 
 
@@ -726,3 +836,273 @@ def test_shutdown_summary_reports_frames_in_and_out_per_stream(capsys):
     stream_runtime.frames_in, stream_runtime.frames_out = 8, 5
     main.print_summary(SimpleNamespace(streams=[stream_runtime]))
     assert capsys.readouterr().out == "[summary stream=camera0] frames_in=8 frames_out=5\n"
+
+
+def test_one_person_per_frame_is_the_default(tmp_path: Path):
+    assert main.AppConfig("detector.tar.gz", "pose.tar.gz", []).max_people_per_frame == 1
+    assert load_config(tmp_path, config_text()).max_people_per_frame == 1
+
+
+def test_roi_tracker_detects_until_people_are_tracked_then_refreshes_on_a_period():
+    tracker = main.RoiTracker()
+    assert tracker.route(1, 10.0) == main.Route.DETECT
+    # Nothing is tracked yet, so every frame still needs YOLO26.
+    assert tracker.route(2, 10.01) == main.Route.DETECT
+    tracker.on_detection([BOX], refresh=False)
+    assert (tracker.people, tracker.sequence, tracker.detection_pending) == ([BOX], 2, False)
+    assert tracker.route(3, 10.2) == main.Route.TRACK
+    # The period counts from the last detection request (frame 2 at 10.01).
+    assert tracker.route(4, 10.25) == main.Route.TRACK_AND_REFRESH
+    # No second refresh while the first is pending, however long it takes.
+    assert tracker.route(5, 11.0) == main.Route.TRACK
+    tracker.on_detection([], refresh=True)
+    # A refresh that finds nobody keeps tracking.
+    assert (tracker.people, tracker.sequence) == ([BOX], 2)
+    assert tracker.route(6, 11.0) == main.Route.TRACK_AND_REFRESH
+
+
+def test_roi_tracker_ignores_landmarks_older_than_the_last_detection():
+    tracker = main.RoiTracker()
+    tracker.route(1, 0.0)
+    tracker.observe([BOX], 1)
+    assert (tracker.people, tracker.sequence) == ([BOX], 1)
+    moved = {**BOX, "x1": 50.0, "x2": 150.0}
+    tracker.route(5, 0.3)
+    tracker.on_detection([moved], refresh=True)
+    assert tracker.sequence == 5
+    # Frames admitted before the detection finish later but must not override it.
+    tracker.observe([BOX], 4)
+    tracker.observe([BOX], 5)
+    assert tracker.people == [moved]
+    # A newer frame without people ends tracking and forces detection.
+    tracker.observe([], 6)
+    assert tracker.route(7, 0.31) == main.Route.DETECT
+
+
+def test_keypoint_box_and_tracked_boxes():
+    def pose(points, presence):
+        return {
+            "presence": presence,
+            "keypoints": [{"x": x, "y": y} for x, y in points],
+        }
+
+    low = pose([(10.0, 50.0), (30.0, 20.0), (25.0, 80.0)], 0.6)
+    high = pose([(100.0, 100.0), (120.0, 140.0)], 0.9)
+    assert main.keypoint_box(low) == {
+        "x1": 10.0,
+        "y1": 20.0,
+        "x2": 30.0,
+        "y2": 80.0,
+        "score": 0.6,
+        "class_id": 0,
+    }
+    assert main.tracked_boxes([low, high], 4) == [main.keypoint_box(high), main.keypoint_box(low)]
+    assert main.tracked_boxes([low, high], 1) == [main.keypoint_box(high)]
+    assert main.tracked_boxes([], 1) == []
+
+
+def test_metadata_envelope_matches_core_send_metadata():
+    data = {"stream_id": "kamera-é", "poses": [{"id": "pose_1", "presence": 0.93, "bbox": [1, 2]}]}
+    message = main.metadata_message("pose-estimation", data, 1234, "7")
+    # MetadataSender.send_metadata() dumps nlohmann::json: sorted keys, compact
+    # separators and raw UTF-8.
+    assert message == (
+        '{"data":{"poses":[{"bbox":[1,2],"id":"pose_1","presence":0.93}],'
+        '"stream_id":"kamera-é"},"frame_id":"7","timestamp":1234,"type":"pose-estimation"}'
+    )
+    # The data is the same the previous send_metadata(type, json.dumps(data)) path carried.
+    assert json.loads(message)["data"] == json.loads(json.dumps(data, separators=(",", ":")))
+    assert main.metadata_message("auxiliary-visualization", {}, -1, "") == (
+        '{"data":{},"type":"auxiliary-visualization"}'
+    )
+
+
+def test_roi_input_affine_maps_pose_input_back_to_source_pixels():
+    assert main.roi_input_affine((-10, 20, 512, 512), 256) == (2.0, 0.0, -10.0, 0.0, 2.0, 20.0)
+
+
+def nv12_gradient(width: int = 320, height: int = 240):
+    columns, rows = np.meshgrid(np.arange(width), np.arange(height))
+    y_plane = (16 + (columns * 0.5 + rows * 0.25)).astype(np.uint8)
+    uv_columns, uv_rows = np.meshgrid(np.arange(width // 2), np.arange(height // 2))
+    uv_plane = np.stack(
+        [(64 + uv_columns * 0.5).astype(np.uint8), (192 - uv_rows * 0.5).astype(np.uint8)],
+        axis=-1,
+    )
+    return y_plane, uv_plane
+
+
+def test_crop_resize_fast_path_matches_the_affine_warp():
+    y_plane, uv_plane = nv12_gradient()
+    roi = (40, 20, 180, 180)
+    fast = main.resize_nv12_roi(y_plane, uv_plane, roi)
+    warped = main.warp_nv12_roi(y_plane, uv_plane, roi)
+    for fast_plane, warped_plane in zip(fast, warped, strict=True):
+        assert fast_plane.shape == warped_plane.shape
+        # Edges may differ by the resize's clamped border sample.
+        difference = np.abs(fast_plane.astype(int) - warped_plane.astype(int))
+        assert difference.max() <= 1
+    rgb = main.crop_nv12_roi_rgb(y_plane, uv_plane, roi)
+    assert (rgb.shape, rgb.dtype) == ((256, 256, 3), np.uint8)
+    expected = cv2.cvtColorTwoPlane(*fast, cv2.COLOR_YUV2RGB_NV12)
+    assert np.array_equal(rgb, expected)
+
+
+def test_crop_pads_area_outside_the_frame_black():
+    y_plane, uv_plane = nv12_gradient()
+    # The left half of this ROI lies outside the frame.
+    rgb = main.crop_nv12_roi_rgb(y_plane, uv_plane, (-100, 20, 200, 200))
+    assert rgb.shape == (256, 256, 3)
+    assert rgb[:, :100].max() <= 1
+    assert rgb[:, 160:].max(axis=2).min() > 20
+
+
+def fake_plane(role, rows, width, stride, offset):
+    return SimpleNamespace(
+        role=role, shape=[rows, width], strides_bytes=[stride, 1], byte_offset=offset
+    )
+
+
+class DenseHeader(SimpleNamespace):
+    """A tensor-header copy whose DLPack export is `buffer[:shape[0]]`."""
+
+    def __dlpack__(self, **kwargs):
+        return self.buffer[: self.shape[0]].__dlpack__(**kwargs)
+
+    def __dlpack_device__(self):
+        return self.buffer.__dlpack_device__()
+
+
+def test_nv12_planes_view_the_mapped_buffer_with_plane_offsets_and_strides(monkeypatch):
+    width, height, stride, uv_offset = 4, 2, 8, 24
+    buffer = np.full(uv_offset + stride, 255, dtype=np.uint8)
+    buffer[0:4], buffer[8:12] = [1, 2, 3, 4], [5, 6, 7, 8]
+    buffer[uv_offset : uv_offset + 4] = [10, 20, 30, 40]
+    frame = SimpleNamespace(
+        planes=[
+            fake_plane("y", height, width, stride, 0),
+            fake_plane("uv", height // 2, width, stride, uv_offset),
+        ],
+        shape=[height, width],
+        storage=SimpleNamespace(size_bytes=buffer.size),
+        byte_offset=0,
+    )
+    headers = []
+
+    def header_copy(sample):
+        headers.append(DenseHeader(buffer=buffer, **vars(sample)))
+        return headers[-1:]
+
+    monkeypatch.setattr(
+        main,
+        "pyneat",
+        SimpleNamespace(
+            PlaneRole=SimpleNamespace(Y="y", UV="uv"),
+            TensorLayout=SimpleNamespace(Unknown="unknown"),
+            make_tensor_sample=lambda _name, tensor: SimpleNamespace(
+                planes=list(tensor.planes), shape=list(tensor.shape)
+            ),
+        ),
+    )
+    monkeypatch.setattr(main, "tensors_from_sample", header_copy)
+
+    y_view, uv_view = main.nv12_planes(frame)
+
+    assert y_view.tolist() == [[1, 2, 3, 4], [5, 6, 7, 8]]
+    assert uv_view.tolist() == [[[10, 20], [30, 40]]]
+    assert np.shares_memory(y_view, buffer) and not y_view.flags.writeable
+    # Only the header copy is re-described as a dense byte range; the frame keeps its planes.
+    assert (headers[0].planes, headers[0].shape, headers[0].strides_bytes) == ([], [28], [1])
+    assert (len(frame.planes), frame.shape) == (2, [height, width])
+    frame.planes[1].byte_offset = buffer.size
+    with pytest.raises(RuntimeError, match="exceed its buffer"):
+        main.nv12_planes(frame)
+
+
+def test_crop_people_converts_each_person_and_releases_the_frame(monkeypatch):
+    y_plane, uv_plane = nv12_gradient()
+    monkeypatch.setattr(main, "nv12_planes", lambda frame: (y_plane, uv_plane))
+    imported = []
+
+    def from_numpy(array, **kwargs):
+        imported.append((array.shape, kwargs))
+        return f"tensor-{len(imported)}"
+
+    monkeypatch.setattr(
+        main,
+        "pyneat",
+        SimpleNamespace(
+            Tensor=SimpleNamespace(from_numpy=from_numpy),
+            PixelFormat=SimpleNamespace(RGB="rgb"),
+            TensorMemory=SimpleNamespace(EV74="ev74"),
+        ),
+    )
+    box = {"x1": 40.0, "y1": 40.0, "x2": 80.0, "y2": 120.0, "score": 0.9, "class_id": 0}
+    job = main.FrameJob(1, 0, "nv12", IDENTITY, people=[box, BOX])
+    main.crop_people(job, SimpleNamespace(roi_scale=1.0))
+    assert job.frame is None
+    assert [crop.tensor for crop in job.crops] == ["tensor-1", "tensor-2"]
+    assert job.crops[0].affine == main.roi_input_affine(main.square_roi(box, 1.0), 256)
+    assert imported[0] == (
+        (256, 256, 3),
+        {"copy": True, "image_format": "rgb", "memory": "ev74"},
+    )
+
+
+def test_queue_detection_counts_only_published_frames():
+    stream_runtime = runtime_stream()
+    runtime = SimpleNamespace(state=main.SharedState(1))
+    refresh = main.FrameJob(1, 0, "nv12", IDENTITY, tracker_refresh=True)
+    frame = main.FrameJob(2, 0, "nv12", IDENTITY)
+    main.queue_detection(runtime, stream_runtime, refresh)
+    assert stream_runtime.outstanding_frames == 0
+    main.queue_detection(runtime, stream_runtime, frame)
+    assert stream_runtime.outstanding_frames == 1
+    main.queue_detection(runtime, stream_runtime, main.FrameJob(3, 0, "nv12", IDENTITY))
+    assert stream_runtime.outstanding_frames == 1
+    # A refresh replacing a publishable frame finishes that frame.
+    main.queue_detection(runtime, stream_runtime, refresh)
+    assert stream_runtime.outstanding_frames == 0
+    assert runtime.state.detector_mailboxes == [refresh]
+
+
+def test_detector_takes_a_stream_only_when_its_pose_mailbox_is_empty_or_for_a_refresh():
+    state = main.SharedState(2)
+    runtime = SimpleNamespace(state=state)
+    state.detector_mailboxes = [
+        main.FrameJob(1, 0, "nv12", IDENTITY),
+        main.FrameJob(2, 1, "nv12", IDENTITY, tracker_refresh=True),
+    ]
+    state.pose_mailboxes = ["pose-0", "pose-1"]
+
+    def ready(index):
+        refresh = state.detector_mailboxes[index].tracker_refresh
+        return state.pose_mailboxes[index] is None or refresh
+
+    def take():
+        return main.take_next_job(runtime, "detector_mailboxes", "next_detector_stream", ready)
+
+    assert take().job_id == 2
+    assert main.next_ready_stream(state.detector_mailboxes, 0, ready) is None
+    state.pose_mailboxes[0] = None
+    assert take().job_id == 1
+
+
+def test_a_replaced_publication_finishes_its_frame(monkeypatch):
+    stream_runtime = runtime_stream(outstanding=2)
+    state = main.SharedState(1)
+    state.publish_mailboxes[0] = main.Publication(0, IDENTITY, [])
+    state.aggregates[2] = main.PoseAggregate(0, 1, main.FrameIdentity("camera0", 8, 0, 8))
+    state.pending_pose_outputs.append(main.PoseInputContext(2, 0, BOX, UNIT_AFFINE))
+    monkeypatch.setattr(main, "parse_pose_output", lambda *_args: None)
+    runtime = SimpleNamespace(
+        state=state, streams=[stream_runtime], pose_run=LateOutputRun(state, outputs=1)
+    )
+
+    main.pull_pose_outputs(runtime, SimpleNamespace(max_people_per_frame=1))
+
+    assert state.error is None
+    assert state.publish_mailboxes[0].identity.sequence == 8
+    assert stream_runtime.outstanding_frames == 1
+    # A frame where BlazePose found nobody ends tracking.
+    assert (stream_runtime.tracker.people, stream_runtime.tracker.sequence) == ([], 8)
