@@ -1,0 +1,17 @@
+models:
+  yolo26n_plc:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26n_plc_mpk.tar.gz
+    file: yolo26n_plc_mpk.tar.gz
+unit:
+  python: true
+  cpp: true
+e2e:
+  python:
+    enabled: true
+    models:
+    - yolo26n_plc
+  cpp:
+    enabled: true
+    models:
+    - yolo26n_plc
