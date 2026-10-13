@@ -572,9 +572,22 @@ _supertonic_refresh_requirements() {
 # file against its pinned checksum, re-fetching anything missing or different.
 # `refresh` (dependency-only mode) also re-applies the pins to a usable venv.
 # Always returns 0: Supertonic is optional and the CPU engines remain.
+# The board's platform version (DISTRO_VERSION in /etc/buildinfo), or nothing
+# when it cannot be read, for example off the board.
+_platform_version() {
+  sed -n 's/^DISTRO_VERSION *= *//p' "${SIMA_BUILDINFO:-/etc/buildinfo}" 2>/dev/null | head -n1
+}
+
 install_supertonic() {
-  local refresh="${1:-}"
+  local refresh="${1:-}" platform
   section "Supertonic 3 (MLA text-to-speech)"
+  # The vector estimator pinned here is the Platform 3.0 compile; older Core
+  # rejects it. Leave an older board's Supertonic files untouched.
+  platform="$(_platform_version)"
+  if [[ -n "${platform}" && "${platform%%.*}" =~ ^[0-9]+$ && "${platform%%.*}" -lt 3 ]]; then
+    warn "Supertonic needs Platform 3.0 or newer (this board: ${platform}); skipped. The CPU TTS engines remain available."
+    return 0
+  fi
   if _supertonic_runtime_ok; then
     if [[ "${refresh}" == "refresh" ]] && ! _supertonic_refresh_requirements; then
       _supertonic_venv || return 0

@@ -184,7 +184,8 @@ Other useful environment variables:
   is built (default `./.venv-supertonic`); see
   [Text-to-speech](#text-to-speech-voices--languages). The models root is
   written to `config.local.yaml` under `app.tts.supertonic`, so `run.sh` finds a
-  non-default location without re-exporting it.
+  non-default location without re-exporting it. Supertonic needs Platform 3.0 or
+  newer; on an older board `setup.sh` skips it and leaves its files untouched.
 - `TTS_OPTIONAL_VOICES`: optional voice ids to install, for example
   `mera,en_US-ljspeech-medium,zh_CN-chaowen-medium`.
 
@@ -597,8 +598,8 @@ selector in Settings.
   `onnxruntime` and the numpy that PyNeat is built against, which the UI venv
   does not carry, so `setup.sh` builds `./.venv-supertonic` (requirements in
   `src/python/requirements-supertonic.txt`, plus the installed PyNeat linked
-  from the Neat environment, or on older platforms the PyNeat wheel fetched
-  with `sima-cli neat install core -t pyneat`) and downloads the model files with
+  from the Neat environment, or when its Python version differs the PyNeat wheel
+  fetched with `sima-cli neat install core -t pyneat`) and downloads the model files with
   the venv's `hf`: the upstream CPU models and voice styles from
   [Supertone/supertonic-3](https://huggingface.co/Supertone/supertonic-3) and
   the precompiled vocoder and runtime data from

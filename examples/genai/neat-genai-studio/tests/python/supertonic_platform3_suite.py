@@ -194,6 +194,30 @@ class VectorEstimatorTests(unittest.TestCase):
             self.assertEqual(found.stdout.strip(), str(cli))
             self.assertNotEqual(run(Path(tmp) / "missing").returncode, 0)
 
+    def test_setup_skips_supertonic_on_a_platform_older_than_3_0(self):
+        # The pinned vector estimator is the Platform 3.0 compile; an older board
+        # keeps its Supertonic files and skips the install.
+        script = "\n".join([
+            "section() { :; }", "warn() { echo \"WARN $*\"; }",
+            "_supertonic_runtime_ok() { echo REACHED; return 1; }", "_supertonic_venv() { return 1; }",
+            _setup_function("_platform_version"), _setup_function("install_supertonic"),
+            "install_supertonic",
+        ])
+        with tempfile.TemporaryDirectory() as tmp:
+            def run(version):
+                info = Path(tmp) / "buildinfo"
+                if version is None:
+                    info.unlink(missing_ok=True)
+                else:
+                    info.write_text(f"DISTRO = eLxr\nDISTRO_VERSION = {version}\nCODENAME = agate\n")
+                return subprocess.run(["bash", "-c", script], env={"PATH": "/usr/bin:/bin", "SIMA_BUILDINFO": str(info)},
+                                      capture_output=True, text=True).stdout
+            older = run("2.1.3")
+            self.assertIn("needs Platform 3.0 or newer (this board: 2.1.3)", older)
+            self.assertNotIn("REACHED", older)
+            self.assertIn("REACHED", run("3.0.0"))
+            self.assertIn("REACHED", run(None))                 # unknown platform: try the install
+
     def test_the_worker_passes_the_pinned_checksum_to_the_engine(self):
         source = WORKER.read_text(encoding="utf-8")
         self.assertIn('expected_mpk_sha256=json.loads(VECTOR_ESTIMATOR.read_text())["sha256"]', source)
