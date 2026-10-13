@@ -385,6 +385,33 @@ class TestLoadLabelMap:
         label_file.write_text("cat\ndog\nbird\n")
         assert main.load_label_map(str(label_file), 3) == ["cat", "dog", "bird"]
 
+    @pytest.mark.parametrize(
+        "raw, offset, byte",
+        [
+            (b"goldfish\ncaf\xe9\nbird\n", 12, 0xE9),   # Latin-1 text
+            (b"a\x80b\nc\nd\n", 1, 0x80),               # bare continuation byte
+            (b"ab\xc0\x80\nc\nd\n", 2, 0xC0),           # overlong encoding
+            (b"ab\xed\xa0\x80\nc\nd\n", 2, 0xED),       # UTF-16 surrogate
+            (b"cat\ndog\nbird\xe2\x82", 12, 0xE2),      # truncated at EOF
+        ],
+    )
+    def test_invalid_utf8_is_a_configuration_error(self, tmp_path, raw, offset, byte):
+        """A label map that is not UTF-8 must be refused while reading the
+        configuration, naming the first bad byte and where it is. The offset is
+        the contract the C++ entrypoint matches, so it is pinned per malformed
+        form, not just for one: CPython reports the lead byte of the ill-formed
+        sequence for all of them, and the C++ validator has to agree."""
+        label_file = tmp_path / "labels.txt"
+        label_file.write_bytes(raw)
+
+        with pytest.raises(ValueError) as caught:
+            main.load_label_map(str(label_file), 3)
+
+        message = str(caught.value)
+        assert "is not valid UTF-8" in message
+        assert f"byte 0x{byte:02x} at offset {offset}" in message
+        assert "save the file as UTF-8" in message
+
     def test_too_few_labels_raises(self, tmp_path):
         label_file = tmp_path / "labels.txt"
         label_file.write_text("cat\n")

@@ -24,6 +24,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <optional>
@@ -956,6 +957,65 @@ std::vector<ModelProfile> load_profiles(const sima_examples::ScalarConfig& raw,
 // INT32_MAX alone let a typo exhaust memory before the model was even loaded.
 constexpr int kMaxNumericLabels = 100000;
 
+// Offset of the first byte that does not begin a well-formed UTF-8 sequence, or
+// npos when the whole buffer decodes. Python opens the label map with
+// encoding="utf-8", so an invalid file is a configuration error there; C++ used
+// to keep the raw bytes and only fail later inside json::dump(), which cost a
+// full inference pass and reported exit 6 instead of exit 2.
+//
+// Rejects exactly what Python rejects: continuation bytes and 0xC0/0xC1/0xF5..0xFF
+// as leads, truncated sequences, overlong encodings, surrogates, and anything
+// above U+10FFFF. CPython reports the lead byte's offset for every one of those
+// forms, so returning it here makes both messages identical.
+std::size_t first_invalid_utf8(const std::string& bytes) {
+  const auto* p = reinterpret_cast<const unsigned char*>(bytes.data());
+  const std::size_t n = bytes.size();
+  std::size_t i = 0;
+  while (i < n) {
+    const unsigned char c = p[i];
+    if (c < 0x80) {
+      ++i;
+      continue;
+    }
+    std::size_t len = 0;
+    unsigned int cp = 0;
+    if ((c & 0xE0) == 0xC0) {
+      len = 2;
+      cp = c & 0x1Fu;
+    } else if ((c & 0xF0) == 0xE0) {
+      len = 3;
+      cp = c & 0x0Fu;
+    } else if ((c & 0xF8) == 0xF0) {
+      len = 4;
+      cp = c & 0x07u;
+    } else {
+      return i; // a continuation byte, or 0xF8..0xFF, used as a lead
+    }
+    if (i + len > n)
+      return i; // truncated at end of file
+    for (std::size_t k = 1; k < len; ++k) {
+      if ((p[i + k] & 0xC0) != 0x80)
+        return i;
+      cp = (cp << 6) | (p[i + k] & 0x3Fu);
+    }
+    const bool overlong =
+        (len == 2 && cp < 0x80) || (len == 3 && cp < 0x800) || (len == 4 && cp < 0x10000);
+    const bool surrogate = cp >= 0xD800 && cp <= 0xDFFF;
+    if (overlong || surrogate || cp > 0x10FFFF)
+      return i;
+    i += len;
+  }
+  return std::string::npos;
+}
+
+std::string utf8_error(const fs::path& label_path, const std::string& bytes, std::size_t offset) {
+  std::ostringstream byte_hex;
+  byte_hex << std::hex << std::setw(2) << std::setfill('0')
+           << static_cast<unsigned>(static_cast<unsigned char>(bytes[offset]));
+  return "label map " + label_path.string() + " is not valid UTF-8 (byte 0x" + byte_hex.str() +
+         " at offset " + std::to_string(offset) + "); save the file as UTF-8";
+}
+
 std::vector<std::string> load_label_map(const std::string& path, int num_classes) {
   std::vector<std::string> labels;
   if (path.empty()) {
@@ -995,8 +1055,15 @@ std::vector<std::string> load_label_map(const std::string& path, int num_classes
   }
   // Positional: physical line index == class id, so blank lines are never dropped
   // (that would silently shift every later label).
+  const std::string contents((std::istreambuf_iterator<char>(in)),
+                             std::istreambuf_iterator<char>());
+  const std::size_t bad = first_invalid_utf8(contents);
+  if (bad != std::string::npos) {
+    throw ConfigError(utf8_error(label_path, contents, bad));
+  }
+  std::istringstream lines(contents);
   std::string line;
-  while (std::getline(in, line)) {
+  while (std::getline(lines, line)) {
     labels.push_back(sima_examples::trim_copy(line));
   }
   if (static_cast<int>(labels.size()) < num_classes) {
@@ -1423,7 +1490,17 @@ std::optional<std::string> make_thumbnail(const fs::path& image_path, const fs::
   } catch (const std::exception&) {
     return std::nullopt;
   }
-  cv::Mat img = cv::imread(image_path.string(), cv::IMREAD_COLOR);
+  cv::Mat img;
+  try {
+    img = cv::imread(image_path.string(), cv::IMREAD_COLOR);
+  } catch (const cv::Exception&) {
+    // Some builds throw instead of returning an empty Mat. Unguarded, this
+    // second decode of a corrupt file escaped write_html_report and aborted
+    // publication with exit 6 - no report at all - while inference had already
+    // recorded the per-image error it is supposed to report. Python's
+    // make_thumbnail catches cv2.error here for the same reason.
+    return std::nullopt;
+  }
   if (img.empty())
     return std::nullopt;
   try {
@@ -1443,8 +1520,18 @@ std::optional<std::string> make_thumbnail(const fs::path& image_path, const fs::
   fs::create_directories(thumb_dir);
   const std::string name = stable_digest(image_path.string()) + ".jpg";
   const fs::path thumb_path = thumb_dir / name;
-  if (!cv::imwrite(thumb_path.string(), resized)) {
-    throw std::runtime_error("failed to write thumbnail: " + thumb_path.string());
+  bool written = false;
+  try {
+    written = cv::imwrite(thumb_path.string(), resized);
+  } catch (const cv::Exception& exc) {
+    // A failed write is a real failure in both entrypoints, unlike a failed
+    // decode. Python raises OSError with this wording; it said "thumbnail:"
+    // here and "thumbnail" there, so the two differed by a colon.
+    throw std::runtime_error("failed to write thumbnail " + thumb_path.string() + ": " +
+                             exc.what());
+  }
+  if (!written) {
+    throw std::runtime_error("failed to write thumbnail " + thumb_path.string());
   }
   return "thumbnails/" + name;
 }

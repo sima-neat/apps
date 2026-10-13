@@ -230,6 +230,67 @@ int main(int argc, char** argv) {
     }
   }
 
+  // Scenario 3: a corrupt file with a supported extension must stay a per-image
+  // error. Publication decodes each image a second time to build its thumbnail,
+  // and that decode throws on some OpenCV builds - which aborted the whole
+  // report rather than omitting one thumbnail. Only a real run reaches it, so
+  // this cannot live in the unit test: it needs a loaded model and a published
+  // report.
+  if (failures == 0) {
+    auto bad_out = create_test_output_dir("image-classification-explorer", "test_corrupt_image");
+    if (bad_out.empty())
+      return 1;
+    const fs::path bad_dir = fs::path(bad_out) / "input";
+    fs::create_directories(bad_dir);
+    fs::copy_file(image_path, bad_dir / "goldfish.jpeg");
+    {
+      // Not a JPEG: a plausible truncation, SOI marker and nothing decodable.
+      std::ofstream corrupt(bad_dir / "corrupt.jpg", std::ios::binary);
+      corrupt.put(static_cast<char>(0xFF)).put(static_cast<char>(0xD8));
+      corrupt << "not actually an image";
+    }
+
+    const fs::path bad_config = fs::path(bad_out).parent_path() / "config-corrupt.yaml";
+    const fs::path bad_report = fs::path(bad_out) / "report";
+    ConfigScalars bad_overrides = {{"io.input", bad_dir.string()},
+                                   {"io.fallback_image_url", "null"},
+                                   {"io.output_dir", bad_report.string()}};
+    for (size_t i = 0; i < kModelNames.size(); ++i) {
+      bad_overrides[std::string("models.") + kModelNames[i] + ".path"] = model_paths[i].string();
+    }
+    write_e2e_config("image-classification-explorer", bad_config, bad_overrides);
+
+    auto br = spawn_and_wait(binary, {"--config", bad_config.string()}, timeout);
+    if (br.exit_code != 0) {
+      std::cerr << "[FAIL] corrupt-image run exited " << br.exit_code
+                << "; a corrupt input must stay a per-image error and still publish\nstderr:\n"
+                << br.stderr_text << "\n";
+      ++failures;
+    } else if (!fs::exists(bad_report / "report.json") || !fs::exists(bad_report / "report.html")) {
+      std::cerr << "[FAIL] corrupt-image run published no report\n";
+      ++failures;
+    } else {
+      std::ifstream in(bad_report / "report.json");
+      json report;
+      in >> report;
+      bool saw_good = false;
+      for (const auto& image : report.at("images")) {
+        const fs::path path = image.value("path", "");
+        if (path.filename() == "goldfish.jpeg" && image.contains("predictions"))
+          saw_good = true;
+      }
+      // The good image still has to be classified: a guard that swallowed the
+      // whole run would also satisfy "a report exists".
+      if (!saw_good) {
+        std::cerr << "[FAIL] corrupt-image run lost the predictions for the valid image\n";
+        ++failures;
+      } else {
+        std::cout << "[OK] a corrupt image stayed a per-image error and the report was published\n";
+      }
+    }
+    remove_dir(bad_out);
+  }
+
   if (failures == 0) {
     std::cout << "[OK] classification explorer pipeline completed successfully\n";
   }

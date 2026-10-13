@@ -567,16 +567,28 @@ def load_label_map(path: str | None, num_classes: int) -> list[str]:
                 label_path = bundled
                 break
     try:
-        with label_path.open("r", encoding="utf-8") as handle:
-            # Positional: physical line index == class id, so blank lines are never
-            # dropped (that would silently shift every later label).
-            labels = [line.strip() for line in handle.read().splitlines()]
+        raw = label_path.read_bytes()
     except OSError as exc:
         # Worded and detailed as the C++ entrypoint words it: strerror alone,
         # because str(exc) would repeat the path that already precedes it.
         raise ValueError(
             f"failed to open label map {label_path}: {exc.strerror or exc}"
         ) from exc
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        # Decoded from bytes rather than through an encoding= handle so the
+        # reported offset is absolute in the file and not into whatever chunk
+        # the text reader happened to buffer. The message replaces the raw codec
+        # one ("'utf-8' codec can't decode byte ... in position ..."), which the
+        # C++ entrypoint cannot reproduce and which does not name the file.
+        raise ValueError(
+            f"label map {label_path} is not valid UTF-8 "
+            f"(byte 0x{raw[exc.start]:02x} at offset {exc.start}); save the file as UTF-8"
+        ) from exc
+    # Positional: physical line index == class id, so blank lines are never
+    # dropped (that would silently shift every later label).
+    labels = [line.strip() for line in text.splitlines()]
     if len(labels) < num_classes:
         raise ValueError(
             f"label map {label_path} has {len(labels)} entries, expected at least {num_classes}"

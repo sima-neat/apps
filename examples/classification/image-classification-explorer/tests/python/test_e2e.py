@@ -474,6 +474,11 @@ class TestE2E:
         # check C++ reported "0 entries" instead of naming the real problem.
         ("label map is a directory",
          "models:\n  m:\n    path: m.tar.gz\n    label_map: A_DIRECTORY\n", 2),
+        # Python decoded the label map and C++ kept the raw bytes, so Python
+        # refused it as a configuration error while C++ ran every model first
+        # and only failed inside json::dump() - exit 2 against exit 6.
+        ("label map is not valid UTF-8",
+         "models:\n  m:\n    path: m.tar.gz\n    label_map: BAD_UTF8_LABELS\n", 2),
         ("quoted and unquoted duplicate key",
          'models:\n  foo:\n    path: /nonexistent/m.tar.gz\n    top_k: 0\n'
          '  "foo":\n    path: /nonexistent/m.tar.gz\n',
@@ -499,6 +504,11 @@ class TestE2E:
             self_symlink.symlink_to(self_symlink)
         blank_line = tmp_output_dir.parent / "blank-line-labels.txt"
         blank_line.write_text("cat\n\nbird\n")
+        # Latin-1, the way a label file edited on a Windows box arrives. 0xe9 at
+        # offset 7 is a lead byte with no continuation, which both entrypoints
+        # must name the same way.
+        bad_utf8 = tmp_output_dir.parent / "latin1-labels.txt"
+        bad_utf8.write_bytes(b"goldfish\ncaf\xe9\nbird\n")
 
         mismatches = []
         for label, body, expected in self.FAILURE_CASES:
@@ -508,7 +518,8 @@ class TestE2E:
                 body = (body.replace("TOO_SHORT_LABELS", str(too_short))
                             .replace("A_DIRECTORY", str(a_directory))
                             .replace("SELF_SYMLINK", str(self_symlink))
-                            .replace("BLANK_LINE_LABELS", str(blank_line)))
+                            .replace("BLANK_LINE_LABELS", str(blank_line))
+                            .replace("BAD_UTF8_LABELS", str(bad_utf8)))
                 config_path.write_text(body)
                 argument = str(config_path)
 
