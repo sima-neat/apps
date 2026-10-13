@@ -83,9 +83,10 @@ class RtpVideoListener:
                     self._vcl_counts[index] += 1
                     self._vcl_timestamps[index].add(evidence[6])
 
-    @staticmethod
-    def _rtp_payload(packet: bytes):
-        if len(packet) < 13 or packet[0] >> 6 != 2 or packet[1] & 0x7F != 96:
+    def _rtp_payload(self, packet: bytes):
+        # Core's VideoSender publishes H.265 as RTP payload type 98 and H.264 as 96.
+        payload_type = 98 if self._codec == "h265" else 96
+        if len(packet) < 13 or packet[0] >> 6 != 2 or packet[1] & 0x7F != payload_type:
             return None
         header_size = 12 + 4 * (packet[0] & 0x0F)
         if header_size >= len(packet):
@@ -316,44 +317,48 @@ def test_rtp_video_packet_validation():
     h264 = RtpVideoListener(INSIGHT_HOST, 0, 0, "h264")
     h265 = RtpVideoListener(INSIGHT_HOST, 0, 0, "h265")
     header = bytes([0x80, 96, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1])
+    header265 = bytes([0x80, 98]) + header[2:]
     h264_sps = header + bytes([0x67, 0x01])
-    h265_vps = header + bytes([0x40, 0x01, 0x01])
+    h265_vps = header265 + bytes([0x40, 0x01, 0x01])
     assert h264._is_codec_config_rtp(h264_sps)
-    assert not h265._is_codec_config_rtp(h264_sps)
+    assert not h265._is_codec_config_rtp(header265 + bytes([0x67, 0x01]))
     assert h265._is_codec_config_rtp(h265_vps)
-    assert not h264._is_codec_config_rtp(h265_vps)
+    assert not h264._is_codec_config_rtp(header + bytes([0x40, 0x01, 0x01]))
+    # Each codec is accepted only on the payload type VideoSender uses for it.
+    assert not h265._is_codec_config_rtp(header + bytes([0x40, 0x01, 0x01]))
+    assert not h264._is_codec_config_rtp(header265 + bytes([0x67, 0x01]))
     # Ordinary slice headers overlap and therefore cannot prove the codec.
     assert not h264._is_codec_config_rtp(header + bytes([0x61, 0x01]))
-    assert not h265._is_codec_config_rtp(header + bytes([0x61, 0x01]))
+    assert not h265._is_codec_config_rtp(header265 + bytes([0x61, 0x01]))
     assert not h264._is_codec_config_rtp(header + bytes([0x02, 0x01]))
-    assert not h265._is_codec_config_rtp(header + bytes([0x02, 0x01]))
-    assert not h265._is_codec_config_rtp(header + bytes([0x41, 0x9A, 0x01]))
+    assert not h265._is_codec_config_rtp(header265 + bytes([0x02, 0x01]))
+    assert not h265._is_codec_config_rtp(header265 + bytes([0x41, 0x9A, 0x01]))
     assert h264._is_codec_config_rtp(header + bytes([0x78, 0, 2, 0x67, 1]))
     assert h264._is_codec_config_rtp(header + bytes([28, 0x87, 1]))
-    assert h265._is_codec_config_rtp(header + bytes([0x60, 1, 0, 3, 0x40, 1, 1]))
-    assert h265._is_codec_config_rtp(header + bytes([0x62, 1, 0xA0, 1]))
+    assert h265._is_codec_config_rtp(header265 + bytes([0x60, 1, 0, 3, 0x40, 1, 1]))
+    assert h265._is_codec_config_rtp(header265 + bytes([0x62, 1, 0xA0, 1]))
     assert not h264._is_codec_config_rtp(bytes([0x80, 97]) + h264_sps[2:])
     assert not h264._is_codec_config_rtp(header + bytes([24]))
     assert not h264._is_codec_config_rtp(header + bytes([28]))
-    assert not h265._is_codec_config_rtp(header + bytes([0x60, 1]))
-    assert not h265._is_codec_config_rtp(header + bytes([0x62, 1]))
+    assert not h265._is_codec_config_rtp(header265 + bytes([0x60, 1]))
+    assert not h265._is_codec_config_rtp(header265 + bytes([0x62, 1]))
     assert not h264._is_codec_config_rtp(header + bytes([0x67]))
-    assert not h265._is_codec_config_rtp(header + bytes([0x40, 1]))
+    assert not h265._is_codec_config_rtp(header265 + bytes([0x40, 1]))
     assert not h264._is_codec_config_rtp(header + bytes([24, 0, 1, 0x67]))
     assert not h264._is_codec_config_rtp(header + bytes([24, 0, 2, 0x67, 1]))
-    assert not h265._is_codec_config_rtp(header + bytes([0x60, 1, 0, 2, 0x40, 1]))
-    assert not h265._is_codec_config_rtp(header + bytes([0x60, 1, 0, 3, 0x41, 1, 1]))
-    assert not h265._is_codec_config_rtp(header + bytes([0x61, 1, 0, 3, 0x40, 1, 1]))
-    assert not h265._is_codec_config_rtp(header + bytes([0x63, 1, 0xA0, 1]))
+    assert not h265._is_codec_config_rtp(header265 + bytes([0x60, 1, 0, 2, 0x40, 1]))
+    assert not h265._is_codec_config_rtp(header265 + bytes([0x60, 1, 0, 3, 0x41, 1, 1]))
+    assert not h265._is_codec_config_rtp(header265 + bytes([0x61, 1, 0, 3, 0x40, 1, 1]))
+    assert not h265._is_codec_config_rtp(header265 + bytes([0x63, 1, 0xA0, 1]))
     assert not h264._is_codec_config_rtp(header + bytes([28, 0xC7, 1]))
-    assert not h265._is_codec_config_rtp(header + bytes([0x62, 1, 0xE0, 1]))
+    assert not h265._is_codec_config_rtp(header265 + bytes([0x62, 1, 0xE0, 1]))
     assert not h264._is_codec_config_rtp(b"not-rtp")
 
-    def packet(payload, *, marker=False, sequence=1, timestamp=1):
+    def packet(payload, *, marker=False, sequence=1, timestamp=1, payload_type=96):
         return bytes(
             [
                 0x80,
-                (0x80 if marker else 0) | 96,
+                (0x80 if marker else 0) | payload_type,
                 sequence >> 8,
                 sequence & 0xFF,
                 timestamp >> 24,
@@ -369,7 +374,7 @@ def test_rtp_video_packet_validation():
 
     assert h264._vcl_evidence_rtp(h264_sps) is None
     assert h264._vcl_evidence_rtp(packet([0x65, 1], marker=True))[0]
-    assert h265._vcl_evidence_rtp(packet([0x26, 1, 1], marker=True))[0]
+    assert h265._vcl_evidence_rtp(packet([0x26, 1, 1], marker=True, payload_type=98))[0]
     h264._fu_progress = [None]
     h264_fragments = [
         packet([28, 0x85, 1], sequence=10, timestamp=99),
@@ -380,8 +385,8 @@ def test_rtp_video_packet_validation():
     assert not h264._completes_vcl_access_unit(0, h264._vcl_evidence_rtp(h264_fragments[1]))
     assert h264._completes_vcl_access_unit(0, h264._vcl_evidence_rtp(h264_fragments[2]))
     h265._fu_progress = [None]
-    h265_start = packet([0x62, 1, 0x93, 1], sequence=20, timestamp=100)
-    h265_end = packet([0x62, 1, 0x53, 1], marker=True, sequence=21, timestamp=100)
+    h265_start = packet([0x62, 1, 0x93, 1], sequence=20, timestamp=100, payload_type=98)
+    h265_end = packet([0x62, 1, 0x53, 1], marker=True, sequence=21, timestamp=100, payload_type=98)
     assert not h265._completes_vcl_access_unit(0, h265._vcl_evidence_rtp(h265_start))
     assert h265._completes_vcl_access_unit(0, h265._vcl_evidence_rtp(h265_end))
     h264._config_counts = [1]

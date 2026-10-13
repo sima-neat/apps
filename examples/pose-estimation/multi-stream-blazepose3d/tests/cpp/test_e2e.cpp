@@ -48,9 +48,9 @@ struct SourceCaps {
 };
 
 SourceCaps probe_source_caps(const std::string& url) {
-  cv::VideoCapture cap(url, cv::CAP_ANY,
-                       {cv::CAP_PROP_OPEN_TIMEOUT_MSEC, 20000, cv::CAP_PROP_READ_TIMEOUT_MSEC,
-                        20000});
+  cv::VideoCapture cap(
+      url, cv::CAP_ANY,
+      {cv::CAP_PROP_OPEN_TIMEOUT_MSEC, 20000, cv::CAP_PROP_READ_TIMEOUT_MSEC, 20000});
   if (!cap.isOpened()) {
     throw std::runtime_error("failed to open E2E source for probing: " + url);
   }
@@ -72,8 +72,14 @@ struct RtpPayload {
   bool marker;
 };
 
-std::optional<RtpPayload> rtp_payload(const std::uint8_t* packet, std::size_t size) {
-  if (size < 13 || packet[0] >> 6 != 2 || (packet[1] & 0x7F) != 96) {
+// Core's VideoSender publishes H.265 as RTP payload type 98 and H.264 as 96.
+int video_payload_type(const std::string& codec) {
+  return codec == "h265" ? 98 : 96;
+}
+
+std::optional<RtpPayload> rtp_payload(const std::uint8_t* packet, std::size_t size,
+                                      int payload_type) {
+  if (size < 13 || packet[0] >> 6 != 2 || (packet[1] & 0x7F) != payload_type) {
     return std::nullopt;
   }
   std::size_t header_size = 12 + 4 * (packet[0] & 0x0F);
@@ -115,7 +121,7 @@ std::optional<RtpPayload> rtp_payload(const std::uint8_t* packet, std::size_t si
 }
 
 bool is_codec_config_rtp(const std::uint8_t* packet, std::size_t size, const std::string& codec) {
-  const auto parsed = rtp_payload(packet, size);
+  const auto parsed = rtp_payload(packet, size, video_payload_type(codec));
   if (!parsed.has_value()) {
     return false;
   }
@@ -205,7 +211,7 @@ struct VclEvidence {
 
 std::optional<VclEvidence> vcl_evidence_rtp(const std::uint8_t* packet, std::size_t size,
                                             const std::string& codec) {
-  const auto parsed = rtp_payload(packet, size);
+  const auto parsed = rtp_payload(packet, size, video_payload_type(codec));
   if (!parsed.has_value()) {
     return std::nullopt;
   }
@@ -376,9 +382,17 @@ bool test_rtp_packet_validation() {
     }
     return bytes;
   };
-  const auto accepted = [](const std::vector<std::uint8_t>& bytes, const std::string& codec) {
+  // Packets are built as H.264 (96); retag them with the codec's payload type so the NAL
+  // checks below exercise the codec parser. Other payload types are left as built.
+  const auto accepted = [](std::vector<std::uint8_t> bytes, const std::string& codec) {
+    if ((bytes[1] & 0x7F) == 96) {
+      bytes[1] = static_cast<std::uint8_t>((bytes[1] & 0x80) | video_payload_type(codec));
+    }
     return is_codec_config_rtp(bytes.data(), bytes.size(), codec);
   };
+  auto h265_on_h264_payload_type = packet({0x40, 1, 1});
+  auto h264_on_h265_payload_type = packet({0x67, 1});
+  h264_on_h265_payload_type[1] = 98;
   const auto h264 = packet({0x67, 1});
   const auto h265 = packet({0x40, 1, 1});
   const auto overlapping_h264 = packet({0x61, 1});
@@ -391,7 +405,8 @@ bool test_rtp_packet_validation() {
   auto wrong_payload = h264;
   wrong_payload[1] = 97;
   const auto h264_vcl = packet({0x65, 1}, true);
-  const auto h265_vcl = packet({0x26, 1, 1}, true);
+  auto h265_vcl = packet({0x26, 1, 1}, true);
+  h265_vcl[1] = static_cast<std::uint8_t>(0x80 | 98);
   const auto h264_start = packet({28, 0x85, 1}, false, 10, 99);
   const auto h264_middle = packet({28, 0x05, 1}, false, 11, 99);
   const auto h264_end = packet({28, 0x45, 1}, true, 12, 99);
@@ -421,6 +436,10 @@ bool test_rtp_packet_validation() {
          !accepted(packet({0x60, 1, 0, 2, 0x40, 1}), "h265") && !accepted(packet({28}), "h264") &&
          !accepted(packet({0x62, 1}), "h265") && !accepted(packet({28, 0xC7, 1}), "h264") &&
          !accepted(packet({0x62, 1, 0xE0, 1}), "h265") && !accepted(wrong_payload, "h264") &&
+         !is_codec_config_rtp(h265_on_h264_payload_type.data(), h265_on_h264_payload_type.size(),
+                              "h265") &&
+         !is_codec_config_rtp(h264_on_h265_payload_type.data(), h264_on_h265_payload_type.size(),
+                              "h264") &&
          h264_vcl_evidence.has_value() && h264_vcl_evidence->complete &&
          h265_vcl_evidence.has_value() && h265_vcl_evidence->complete && fragmented_vcl &&
          !vcl_evidence_rtp(h264.data(), h264.size(), "h264").has_value();
