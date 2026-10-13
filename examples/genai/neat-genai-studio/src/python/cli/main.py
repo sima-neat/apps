@@ -26,6 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Board-camera capture is shared with the Flask UI backend.
 from shared.board_camera import capture_camera_frame, default_camera_device, cam_label as _cam_label  # noqa: E402
+from shared.studio_client import apply_no_think  # noqa: E402
 
 
 # ---- colour (matches run.sh; degrades on non-TTY / NO_COLOR / dumb) ----------
@@ -355,31 +356,24 @@ def render_md_line(ln, state):
     return _inline_md(ln)
 
 
-def render_markdown_ansi(text):
-    """Render a whole Markdown block. ANSI styling on a TTY; either way LaTeX math
-    is converted to Unicode for readability (render_md_line handles both cases)."""
-    state = [False, False]
-    return "\n".join(render_md_line(ln, state) for ln in text.split("\n"))
-
-
 def load_config(config_path):
-    """Return ((ctrl_host, ctrl_port), (oai_host, oai_port), max_tokens)."""
-    ctrl = ("127.0.0.1", 9997)
-    oai = ("127.0.0.1", 9998)
-    max_tokens = 512
+    """Return ((ctrl_host, ctrl_port), (oai_host, oai_port), max_tokens).
+
+    Delegates to the shared loader so the CLI reads control/OpenAI hosts and
+    ``max_tokens`` exactly as the server and UI do, and keeps the CLI's original
+    behaviour of falling back to defaults when the config is missing or invalid.
+    """
+    from pathlib import Path
+    from shared.config import load_ui_config
     try:
-        import yaml
-        with open(config_path, "r", encoding="utf-8") as fh:
-            cfg = yaml.safe_load(fh) or {}
-        app = cfg.get("app", {}) or {}
-        c = app.get("control", {}) or {}
-        o = app.get("openai", {}) or {}
-        ctrl = (c.get("client_host", ctrl[0]), int(c.get("port", ctrl[1])))
-        oai = (o.get("client_host", oai[0]), int(o.get("port", oai[1])))
-        max_tokens = int((app.get("request", {}) or {}).get("max_tokens", max_tokens))
+        cfg = load_ui_config(Path(config_path))
+        return (
+            (cfg.control.client_host, cfg.control.port),
+            (cfg.openai.client_host, cfg.openai.port),
+            cfg.request.max_tokens,
+        )
     except Exception:
-        pass
-    return ctrl, oai, max_tokens
+        return ("127.0.0.1", 9997), ("127.0.0.1", 9998), 512
 
 
 def _http(url, data=None, method=None, timeout=60):
@@ -417,29 +411,6 @@ def wait_ready(oai, timeout=90):
         except Exception:
             time.sleep(0.5)
     return False
-
-
-def _without_thinking(messages):
-    """Copy of ``messages`` with ``/no_think`` appended to the last user turn —
-    the same switch the web UI uses for reasoning models."""
-    out = [dict(m) for m in messages]
-    for m in reversed(out):
-        if m.get("role") != "user":
-            continue
-        content = m.get("content")
-        if isinstance(content, str):
-            m["content"] = (content + " /no_think").strip()
-        elif isinstance(content, list):
-            parts = [dict(p) for p in content]
-            for part in reversed(parts):
-                if part.get("type") == "text":
-                    part["text"] = (part.get("text", "") + " /no_think").strip()
-                    break
-            else:
-                parts.append({"type": "text", "text": "/no_think"})
-            m["content"] = parts
-        break
-    return out
 
 
 class _ThinkSplitter:
@@ -540,7 +511,7 @@ def stream_chat(oai, model, messages, max_tokens, render=False, think=True):
     separately, and is kept out of the returned text. With think=False the
     request asks the model not to reason, the way the web UI's toggle does."""
     payload = {"model": model,
-               "messages": messages if think else _without_thinking(messages),
+               "messages": messages if think else apply_no_think(messages),
                "max_tokens": max_tokens, "stream": True}
     if not think:
         payload["chat_template_kwargs"] = {"enable_thinking": False}
@@ -1025,24 +996,19 @@ def load_model(ctrl, name, oai=None, auto_retry=True):
 
 
 def _hub_config(config_path):
-    """Read catalog_dir + Hugging Face settings from the config."""
+    """Read catalog_dir + Hugging Face settings from the config.
+
+    Delegates to the shared loader (``server.models.catalog_dir`` and
+    ``server.hub``) so the CLI resolves the catalog directory and hub orgs the
+    same way the UI does, falling back to defaults if the config is unreadable.
+    """
     from pathlib import Path
-    catalog_dir, allow, orgs = None, True, ("simaai", "TDoSiMa", "florianvoss")
+    from shared.config import HubConfig, load_ui_config
     try:
-        import yaml
-        with open(config_path, "r", encoding="utf-8") as fh:
-            cfg = yaml.safe_load(fh) or {}
-        models = (cfg.get("server", {}) or {}).get("models", {}) or {}
-        if models.get("catalog_dir"):
-            catalog_dir = Path(str(models["catalog_dir"])).expanduser()
-        hub = (cfg.get("server", {}) or {}).get("hub", {}) or {}
-        allow = bool(hub.get("allow_download", True))
-        raw = hub.get("orgs", hub.get("org", list(orgs)))
-        orgs = tuple(x for x in ([raw] if isinstance(raw, str) else raw) if x)
+        cfg = load_ui_config(Path(config_path))
+        return cfg.catalog_dir, cfg.hub
     except Exception:
-        pass
-    from shared.config import HubConfig
-    return catalog_dir, HubConfig(allow_download=allow, orgs=orgs)
+        return None, HubConfig(allow_download=True)
 
 
 def hub_available(config_path):

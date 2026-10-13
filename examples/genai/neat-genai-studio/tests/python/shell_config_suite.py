@@ -156,3 +156,50 @@ class ShellConfigValueTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+
+class ServerConfigWithoutPyyamlTests(unittest.TestCase):
+    """The model server runs in the Neat environment, which may lack PyYAML
+    (Platform 3.0's ~/pyneat). run.sh converts the YAML config to JSON with the
+    app's own Python, and the server reads that JSON without importing yaml."""
+
+    EXAMPLE = Path(__file__).resolve().parents[2]
+
+    def _convert(self, config: Path, target: Path) -> None:
+        run_sh = (self.EXAMPLE / "run.sh").read_text(encoding="utf-8")
+        start = run_sh.index("write_server_config() {")
+        end = run_sh.index("\n}\n", start) + 3
+        script = (f'APP_PYTHON="{sys.executable}"; CONFIG_PATH="$1"; SERVER_CONFIG_JSON="$2"\n'
+                  + run_sh[start:end] + "\nwrite_server_config\n")
+        subprocess.run(["bash", "-c", script, "_", str(config), str(target)], check=True)
+
+    def test_server_config_loads_from_json_without_pyyaml(self):
+        config = self.EXAMPLE / "src" / "common" / "config.yaml"
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "server-config.json"
+            self._convert(config, target)
+            probe = (
+                "import sys; sys.modules['yaml'] = None\n"
+                "from pathlib import Path\n"
+                "from shared.config import load_server_config\n"
+                f"cfg = load_server_config(Path({str(target)!r}))\n"
+                "print(repr(cfg))\n"
+            )
+            out = subprocess.run([sys.executable, "-c", probe], check=True, capture_output=True, text=True,
+                                 cwd=self.EXAMPLE / "src" / "python")
+            from shared.config import load_server_config
+            expected = load_server_config(config)
+            # The whole parsed configuration, not only that it loads.
+            self.assertEqual(out.stdout.strip(), repr(expected))
+
+    def test_run_sh_starts_the_server_with_the_json_copy(self):
+        run_sh = (self.EXAMPLE / "run.sh").read_text(encoding="utf-8")
+        self.assertIn('server/main.py" --config "${SERVER_CONFIG_JSON}"', run_sh)
+        self.assertIn('server/main.py" "${SERVER_CONFIG_JSON}"', run_sh)
+        self.assertNotIn('server/main.py" --config "${CONFIG_PATH}"', run_sh)
+
+    def test_setup_does_not_modify_the_neat_environment(self):
+        setup = (self.EXAMPLE / "setup.sh").read_text(encoding="utf-8")
+        self.assertNotIn("import yaml'", setup)
+        self.assertNotIn('pip install "PyYAML', setup)
