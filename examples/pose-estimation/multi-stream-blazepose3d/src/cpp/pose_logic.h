@@ -172,9 +172,10 @@ inline float blend(float previous, float current, float alpha) {
 // matched to the previous frame's pose with the highest box IoU; matched
 // landmarks move kAlpha of the way toward the new estimate, unmatched poses
 // pass through unchanged.
-// YOLO26 re-detects a tracked stream at least every this many admitted frames,
-// so people entering the scene are found.
-constexpr int kRedetectInterval = 5;
+// YOLO26 re-detects a tracked stream at least this often, so people entering
+// the scene are found. A period rather than a frame count keeps the detector's
+// share of the shared MLA independent of the stream frame rate.
+constexpr std::chrono::milliseconds kRedetectPeriod{200};
 
 // Smallest box around a pose's image landmarks, scored by its presence.
 inline Box keypoint_box(const Pose& pose) {
@@ -191,8 +192,8 @@ inline Box keypoint_box(const Pose& pose) {
 
 // Per-stream ROI tracking: each frame's landmarks give the next frame's person
 // boxes, so a tracked stream skips YOLO26. YOLO26 still runs when nothing is
-// tracked, and refreshes the tracked people every kRedetectInterval frames so
-// people who enter the scene are found.
+// tracked, and refreshes the tracked people every kRedetectPeriod so people who
+// enter the scene are found.
 struct RoiTracker {
   enum class Route {
     Detect,          // Nothing is tracked: YOLO26 finds the people of this frame.
@@ -203,19 +204,19 @@ struct RoiTracker {
   std::vector<Box> people;
   std::uint64_t sequence = 0;        // Results of frames up to here are stale.
   std::uint64_t routed_sequence = 0; // Newest admitted frame.
-  int frames_since_detection = 0;
+  std::chrono::steady_clock::time_point last_detection{};
   bool detection_pending = false;
 
-  Route route(std::uint64_t frame_sequence) {
+  Route route(std::uint64_t frame_sequence, std::chrono::steady_clock::time_point now) {
     routed_sequence = frame_sequence;
     if (people.empty()) {
       detection_pending = true;
-      frames_since_detection = 0;
+      last_detection = now;
       return Route::Detect;
     }
-    if (++frames_since_detection >= kRedetectInterval && !detection_pending) {
+    if (now - last_detection >= kRedetectPeriod && !detection_pending) {
       detection_pending = true;
-      frames_since_detection = 0;
+      last_detection = now;
       return Route::TrackAndRefresh;
     }
     return Route::Track;

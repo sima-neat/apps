@@ -1445,7 +1445,7 @@ void pull_source_frames(AppRuntime& app, const AppConfig& cfg, StreamRuntime& st
           return;
         }
         ++stream.frames_in;
-        const auto route = stream.tracker.route(job.identity.sequence);
+        const auto route = stream.tracker.route(job.identity.sequence, Clock::now());
         if (route == blazepose_app::RoiTracker::Route::Detect) {
           queue_detection(app, stream, std::move(job));
         } else {
