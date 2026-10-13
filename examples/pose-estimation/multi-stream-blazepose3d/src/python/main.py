@@ -1206,6 +1206,14 @@ def nv12_planes(frame):
     height, width = (int(value) for value in y_plane.shape[:2])
     if width <= 0 or height <= 0 or width % 2 or height % 2:
         raise RuntimeError("decoded NV12 frame must have even, positive dimensions")
+    if frame.dtype != pyneat.TensorDType.UInt8 or [int(v) for v in uv_plane.shape[:2]] != [
+        height // 2,
+        width,
+    ]:
+        raise RuntimeError("decoded NV12 frame has an unexpected plane layout")
+    for plane in (y_plane, uv_plane):
+        if len(plane.strides_bytes) > 1 and int(plane.strides_bytes[1]) != 1:
+            raise RuntimeError("decoded NV12 frame planes must have packed rows")
     y_stride = int(y_plane.strides_bytes[0]) if y_plane.strides_bytes else width
     uv_stride = int(uv_plane.strides_bytes[0]) if uv_plane.strides_bytes else width
     if y_stride < width or uv_stride < width:
@@ -1226,6 +1234,12 @@ def nv12_planes(frame):
     dense.axis_semantics = []
     dense.shape = [extent]
     dense.strides_bytes = [1]
+    # A plain CPU byte range maps the buffer in place, as C++ map_nv12_read()
+    # does, instead of DLPack transferring the frame as an image.
+    semantic = dense.semantic
+    semantic.image = pyneat.ImageSpec()
+    dense.semantic = semantic
+    dense.device = pyneat.Device()
     data = np.from_dlpack(dense)
     y_view = np.lib.stride_tricks.as_strided(
         data[y_offset:], shape=(height, width), strides=(y_stride, 1), writeable=False
