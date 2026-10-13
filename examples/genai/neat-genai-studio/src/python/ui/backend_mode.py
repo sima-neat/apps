@@ -23,20 +23,22 @@ API_PREFIXES = (
     "/piperplus/",   # Piper Plus voice selection
     "/supertonic/",  # Supertonic voice selection
     "/voices/",      # piper-tts voice selection
+    "/rag/",         # document search (RAG): status, upload, reset, clear, search
 )
 API_EXACT = ("/", "/health", "/voices", "/shutdown", "/favicon.ico")
 
 # Paths that may answer cross-origin browser requests when CORS is enabled:
 # the API surface, never /shutdown.
 CORS_PREFIXES = ("/v1/", "/audio/", "/models/", "/benchmark/", "/tts/",
-                 "/piperplus/", "/supertonic/", "/voices/")
+                 "/piperplus/", "/supertonic/", "/voices/", "/rag/")
 CORS_EXACT = ("/health", "/voices")
 
 CORS_METHODS = "GET, POST, OPTIONS"
 CORS_MAX_AGE = "600"
 # Response headers a cross-origin page may read (timings, engine, model).
 EXPOSE_HEADERS = ("X-ASR-Model", "X-Task", "X-Elapsed-Time", "X-Engine", "X-Voice",
-                  "X-Language", "X-Speed", "X-RTF", "X-Audio-Duration")
+                  "X-Language", "X-Speed", "X-RTF", "X-Audio-Duration",
+                  "X-RAG-Hits", "X-RAG-Sources")
 
 
 def _matches(path: str, prefixes: Iterable[str], exact: Iterable[str]) -> bool:
@@ -134,7 +136,8 @@ API_VERSION = 1
 
 def health_payload(*, mode: str, version: str, status: Mapping | None,
                    engines: Iterable[Mapping], error: str | None = None,
-                   engine_failures: Mapping[str, str] | None = None) -> dict:
+                   engine_failures: Mapping[str, str] | None = None,
+                   rag_enabled: bool = False) -> dict:
     """``GET /health``: what an integrating front end needs to know before it
     calls the API. ``status`` is the control API's /control/status (None when
     the model server is unreachable). ``engine_failures`` maps an installed TTS
@@ -159,4 +162,6 @@ def health_payload(*, mode: str, version: str, status: Mapping | None,
         "asr_model": status.get("asrModel") or None,
         "chat_models_loaded": chat_loaded,
         "tts": {"engines": tts_engines},
+        # Optional features, so a front end can hide what this board lacks.
+        "features": {"rag": bool(rag_enabled), "benchmark": True},
     }
