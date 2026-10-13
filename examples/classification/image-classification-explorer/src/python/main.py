@@ -528,6 +528,12 @@ def load_profiles(raw: dict[str, Any]) -> list[ModelProfile]:
                 f"models.{name}.input_width/input_height must be positive, got "
                 f"{profile.input_width}x{profile.input_height}"
             )
+        if profile.input_width > MAX_INPUT_DIMENSION or profile.input_height > MAX_INPUT_DIMENSION:
+            raise ValueError(
+                f"models.{name}.input_width/input_height exceeds the supported maximum of "
+                f"{MAX_INPUT_DIMENSION}, got {profile.input_width}x{profile.input_height}; "
+                f"check the value against the model's documented input size"
+            )
         profiles.append(profile)
     return profiles
 
@@ -536,6 +542,10 @@ def load_profiles(raw: dict[str, Any]) -> list[ModelProfile]:
 # INT32_MAX alone let a typo exhaust memory before the model was even loaded.
 # No classification model has more classes than this by orders of magnitude.
 MAX_NUMERIC_LABELS = 100_000
+# Each input is resized to input_width x input_height before inference, so these
+# bound an allocation per image: 100000x100000 would ask OpenCV for ~30 GB.
+# Classification models are two orders of magnitude below this.
+MAX_INPUT_DIMENSION = 8192
 
 
 def load_label_map(path: str | None, num_classes: int) -> list[str]:

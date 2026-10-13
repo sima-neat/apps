@@ -425,6 +425,11 @@ class TestE2E:
          "models:\n  m:\n    path: /nonexistent/m.tar.gz\n", 6),
         # num_classes bounds an eager allocation of numeric labels; INT32_MAX
         # alone let a typo exhaust memory before the model was loaded.
+        # input_width/height bound a per-image resize allocation; 100000x100000
+        # would ask OpenCV for roughly 30 GB.
+        ("input dimensions beyond the supported maximum",
+         "models:\n  m:\n    path: /nonexistent/m.tar.gz\n"
+         "    input_width: 100000\n    input_height: 100000\n", 2),
         ("num_classes beyond the numeric-label limit",
          "models:\n  m:\n    path: /nonexistent/m.tar.gz\n    num_classes: 100000000\n", 2),
         ("quoted models section",

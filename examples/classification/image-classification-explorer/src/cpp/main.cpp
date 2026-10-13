@@ -842,6 +842,10 @@ std::string bundled_asset(const std::string& name) {
 }
 
 // --- Configuration: reading config.yaml and validating every setting -----------
+// Each input is resized to input_width x input_height before inference, so these
+// bound an allocation per image: 100000x100000 would ask OpenCV for ~30 GB.
+constexpr int kMaxInputDimension = 8192;
+
 std::vector<ModelProfile> load_profiles(const sima_examples::ScalarConfig& raw,
                                         const fs::path& config_path) {
   const auto known_names = profile_names(raw);
@@ -932,6 +936,13 @@ std::vector<ModelProfile> load_profiles(const sima_examples::ScalarConfig& raw,
                         "got " +
                         std::to_string(profile.input_width) + "x" +
                         std::to_string(profile.input_height));
+    }
+    if (profile.input_width > kMaxInputDimension || profile.input_height > kMaxInputDimension) {
+      throw ConfigError(
+          "models." + name + ".input_width/input_height exceeds the supported maximum of " +
+          std::to_string(kMaxInputDimension) + ", got " + std::to_string(profile.input_width) +
+          "x" + std::to_string(profile.input_height) +
+          "; check the value against the model's documented input size");
     }
     profiles.push_back(std::move(profile));
   }
