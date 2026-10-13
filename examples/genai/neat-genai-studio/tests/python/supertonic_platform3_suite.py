@@ -172,6 +172,28 @@ class VectorEstimatorTests(unittest.TestCase):
         self.assertIn("_supertonic_vector_estimator", models)
         self.assertIn('sima-cli download "${url}"', _setup_function("_supertonic_vector_estimator"))
 
+    def test_setup_finds_sima_cli_outside_a_login_shell(self):
+        # The DevKit puts sima-cli on PATH only for login shells; both sima-cli
+        # steps must find it when setup.sh runs over ssh.
+        self.assertIn("if ! _find_sima_cli; then", _setup_function("_supertonic_vector_estimator"))
+        self.assertIn("_find_sima_cli", _setup_function("_supertonic_venv"))
+        helper = _setup_function("_find_sima_cli")
+        with tempfile.TemporaryDirectory() as tmp:
+            venv_bin = Path(tmp) / "bin"
+            venv_bin.mkdir()
+            cli = venv_bin / "sima-cli"
+            cli.write_text("#!/bin/sh\n")
+            cli.chmod(0o755)
+            run = lambda bin_dir: subprocess.run(
+                ["bash", "-c", f"{helper}\n_find_sima_cli && command -v sima-cli"],
+                env={"PATH": "/usr/bin:/bin", "SIMA_CLI_VENV_BIN": str(bin_dir)},
+                capture_output=True, text=True,
+            )
+            found = run(venv_bin)
+            self.assertEqual(found.returncode, 0, found.stderr)
+            self.assertEqual(found.stdout.strip(), str(cli))
+            self.assertNotEqual(run(Path(tmp) / "missing").returncode, 0)
+
     def test_the_worker_passes_the_pinned_checksum_to_the_engine(self):
         source = WORKER.read_text(encoding="utf-8")
         self.assertIn('expected_mpk_sha256=json.loads(VECTOR_ESTIMATOR.read_text())["sha256"]', source)

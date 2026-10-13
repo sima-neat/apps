@@ -415,12 +415,19 @@ PY
   return 1
 }
 
-_supertonic_venv() {
-  # The PyNeat wheel comes from sima-cli, which the DevKit exposes on PATH only
-  # for login shells.
-  if ! command -v sima-cli >/dev/null 2>&1 && [[ -x /data/sima-cli/.venv/bin/sima-cli ]]; then
-    export PATH="${PATH}:/data/sima-cli/.venv/bin"
+_find_sima_cli() {
+  # The DevKit puts sima-cli on PATH only for login shells, so setup.sh run over
+  # ssh, or from another script, would not see it.
+  local venv_bin="${SIMA_CLI_VENV_BIN:-/data/sima-cli/.venv/bin}"
+  if ! command -v sima-cli >/dev/null 2>&1 && [[ -x "${venv_bin}/sima-cli" ]]; then
+    export PATH="${PATH}:${venv_bin}"
   fi
+  command -v sima-cli >/dev/null 2>&1
+}
+
+_supertonic_venv() {
+  # The PyNeat wheel comes from sima-cli.
+  _find_sima_cli || true
   local want_version wheel_override="${PYNEAT_WHEEL}"
   want_version="$(_installed_pyneat_version)"
   if [[ -z "${wheel_override}" && -n "${want_version}" ]]; then
@@ -497,7 +504,7 @@ _supertonic_vector_estimator() {
     ok "Platform 3.0 vector estimator already downloaded."
     return 0
   fi
-  if ! command -v sima-cli >/dev/null 2>&1; then
+  if ! _find_sima_cli; then
     warn "sima-cli is needed to download the Platform 3.0 vector estimator from the SiMa model zoo."
     warn "Install sima-cli, or run: sima-cli download ${url} -d ${dir}  (then run setup.sh again)"
     return 1
