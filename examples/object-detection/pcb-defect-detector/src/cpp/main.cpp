@@ -42,8 +42,6 @@ constexpr int kDefaultMaxDetections = 300;
 constexpr int kDefaultTimeoutMs = 8000;
 constexpr int kDefaultNumRuns = 1;
 constexpr int kDefaultQueueDepth = 8;
-// Floor for the one-off priming run of the graph seed.
-constexpr int kWarmupTimeoutMs = 30000;
 // Appended to the stem of every annotated image.
 constexpr const char* kOutputTag = "_pcb";
 // Ingress capacity of the graph; boards up to this size share one graph.
@@ -255,8 +253,6 @@ fs::path output_path_for(const fs::path& image_path, const fs::path& output_dir)
          (image_path.stem().string() + kOutputTag + image_path.extension().string());
 }
 
-
-
 void draw_boxes(cv::Mat& frame, const std::vector<simaai::neat::Box>& boxes,
                 const std::vector<std::string>& labels) {
   for (const auto& box : boxes) {
@@ -288,10 +284,7 @@ void draw_boxes(cv::Mat& frame, const std::vector<simaai::neat::Box>& boxes,
 // vector when a valid response found nothing.
 std::vector<simaai::neat::Box> decode_detections(const simaai::neat::TensorList& outputs,
                                                  int image_width, int image_height,
-                                                 int max_detections, float score_threshold) {
-  if (outputs.empty()) {
-    throw std::runtime_error("model returned no detection tensors");
-  }
+                                                 float score_threshold) {
   if (outputs.size() != 1) {
     throw std::runtime_error("expected one BBOX tensor from model-managed BoxDecode, got " +
                              std::to_string(outputs.size()));
@@ -299,13 +292,8 @@ std::vector<simaai::neat::Box> decode_detections(const simaai::neat::TensorList&
 
   // An untagged tensor would otherwise parse permissively into zero boxes and
   // read as a clean board, so require the BBOX tag explicitly.
-  std::string detection_format;
-  try {
-    detection_format = simaai::neat::read_detection_format(outputs.front());
-  } catch (const std::exception&) {  // a non-detection tensor has no format tag
-    detection_format.clear();
-  }
-  if (detection_format.empty() || !simaai::neat::detection_format_is_bbox(detection_format)) {
+  const std::string detection_format = simaai::neat::read_detection_format(outputs.front());
+  if (!simaai::neat::detection_format_is_bbox(detection_format)) {
     throw std::runtime_error(
         "model returned no BBOX detection tensor (format: '" +
         (detection_format.empty() ? std::string("<none>") : detection_format) +
@@ -313,8 +301,8 @@ std::vector<simaai::neat::Box> decode_detections(const simaai::neat::TensorList&
   }
 
   // strict=true rejects a truncated or over-long payload instead of decoding it
-  // as zero boxes. expected_topk is 0 because strict also throws on it; the cap
-  // is applied below.
+  // as zero boxes. The decoder sizes the payload for top_k boxes, so the result
+  // never exceeds max_detections.
   simaai::neat::BoxDecodeResult decoded;
   try {
     decoded = simaai::neat::decode_bbox_tensor(outputs.front(), image_width, image_height,
@@ -335,9 +323,6 @@ std::vector<simaai::neat::Box> decode_detections(const simaai::neat::TensorList&
       continue;
     }
     boxes.push_back(box);
-    if (static_cast<int>(boxes.size()) >= max_detections) {
-      break;
-    }
   }
   return boxes;
 }
@@ -388,7 +373,6 @@ std::string format_counts(const std::map<std::string, int>& counts) {
 
 int main(int argc, char** argv) {
   std::cout.setf(std::ios::unitbuf);
-  std::cerr.setf(std::ios::unitbuf);
 
   CliOptions cli;
   try {
@@ -399,7 +383,7 @@ int main(int argc, char** argv) {
   }
 
   std::error_code config_error;
-  if (!fs::is_regular_file(cli.config_path, config_error) || config_error) {
+  if (!fs::is_regular_file(cli.config_path, config_error)) {
     std::cerr << "Error: config file not found: " << cli.config_path.string() << "\n";
     return 2;
   }
@@ -427,7 +411,7 @@ int main(int argc, char** argv) {
   const fs::path input_dir = cfg.input_dir;
   const fs::path output_dir = cfg.output_dir;
   std::error_code input_error;
-  if (!fs::is_directory(input_dir, input_error) || input_error) {
+  if (!fs::is_directory(input_dir, input_error)) {
     std::cerr << "Input directory does not exist: " << input_dir.string() << "\n";
     return 2;
   }
@@ -463,19 +447,28 @@ int main(int argc, char** argv) {
     return 2;
   }
 
+  std::cout << "Model: " << cfg.model_path << "\n";
+  std::cout << "Found " << images.size() << " images in " << input_dir.string() << "\n";
+  std::vector<fs::path> all_images;
+  all_images.reserve(images.size() * static_cast<size_t>(cfg.num_runs));
+  for (int run = 0; run < cfg.num_runs; ++run) {
+    all_images.insert(all_images.end(), images.begin(), images.end());
+  }
+  if (cfg.num_runs > 1) {
+    std::cout << "Looping " << cfg.num_runs << "x over " << images.size() << " images ("
+              << all_images.size() << " total)\n";
+  }
+
   // Declared outside the try so the catch below can still report what was
   // completed and what had already failed when a systemic error aborts the run.
   std::vector<std::string> failed_images;
   std::map<std::string, int> per_class;
-  std::size_t all_images_total = 0;
   int processed = 0;
   int images_with_defects = 0;
   int total_defects = 0;
   // The image in flight when a systemic failure aborts the batch, so the summary
   // names it rather than reporting failed=0.
   std::string aborted_on;
-  std::cout << "Model: " << cfg.model_path << "\n";
-  std::cout << "Found " << images.size() << " images in " << input_dir.string() << "\n";
 
   try {
     simaai::neat::Model model(cfg.model_path, model_options(cfg, labels));
@@ -487,23 +480,8 @@ int main(int argc, char** argv) {
 
     simaai::neat::Model::Runner runner = model.build(
         std::vector<cv::Mat>{graph_seed}, simaai::neat::Model::RouteOptions{}, run_options(cfg));
-    // One-off graph settling and first-touch allocation, which runtime.timeout_ms
-    // does not cover.
-    runner.run(std::vector<cv::Mat>{graph_seed}, std::max(cfg.timeout_ms, kWarmupTimeoutMs));
-
-    std::vector<fs::path> all_images;
-    all_images.reserve(images.size() * static_cast<size_t>(cfg.num_runs));
-    for (int run = 0; run < cfg.num_runs; ++run) {
-      all_images.insert(all_images.end(), images.begin(), images.end());
-    }
-    if (cfg.num_runs > 1) {
-      std::cout << "Looping " << cfg.num_runs << "x over " << images.size() << " images ("
-                << all_images.size() << " total)\n";
-    }
 
     const auto pipeline_start = std::chrono::steady_clock::now();
-
-    all_images_total = all_images.size();
 
     for (const auto& image_path : all_images) {
       aborted_on = image_path.filename().string();
@@ -533,7 +511,7 @@ int main(int argc, char** argv) {
       // Throws rather than reporting a clean board when the model produced no
       // usable detection output; a valid empty result yields an empty vector.
       const std::vector<simaai::neat::Box> boxes =
-          decode_detections(out, bgr.cols, bgr.rows, cfg.max_detections, cfg.score_threshold);
+          decode_detections(out, bgr.cols, bgr.rows, cfg.score_threshold);
 
       std::map<std::string, int> counts;
       for (const auto& box : boxes) {
@@ -608,10 +586,6 @@ int main(int argc, char** argv) {
       std::cerr << (failed_images.size() > 5 ? ", ...\n" : "\n");
       return 4;
     }
-    if (processed != static_cast<int>(all_images.size())) {  // defensive
-      std::cerr << "Error: processed " << processed << " of " << all_images.size() << " images\n";
-      return 4;
-    }
     return 0;
   } catch (const std::exception& e) {
     // A systemic failure repeats on every image, so stop the batch but still
@@ -620,8 +594,7 @@ int main(int argc, char** argv) {
     if (!aborted_on.empty()) {
       failed_images.push_back(aborted_on);
     }
-    std::cerr << "Aborted after " << processed << "/"
-              << (all_images_total > 0 ? all_images_total : images.size())
+    std::cerr << "Aborted after " << processed << "/" << all_images.size()
               << " images | images_with_defects=" << images_with_defects
               << " total_defects=" << total_defects
               << " failed=" << failed_images.size() << "\n";

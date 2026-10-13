@@ -409,7 +409,7 @@ class TestDetectionOutput:
         })
 
     def test_no_output_tensors_raises(self, tmp_path: Path):
-        with pytest.raises(RuntimeError, match="no detection tensors"):
+        with pytest.raises(RuntimeError, match="expected one BBOX tensor"):
             main.decode_detections([], 640, 640, self._config(tmp_path))
 
     def test_missing_bbox_tensor_raises(self, tmp_path: Path, monkeypatch):

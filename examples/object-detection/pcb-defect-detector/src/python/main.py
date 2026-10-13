@@ -54,8 +54,6 @@ IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp")
 
 # Appended to the stem of every annotated image.
 OUTPUT_TAG = "_pcb"
-# Floor for the one-off priming run of the graph seed.
-WARMUP_TIMEOUT_MS = 30000
 # Ingress capacity of the graph; boards up to this size share one graph.
 DEFAULT_INPUT_MAX_WIDTH = 3840
 DEFAULT_INPUT_MAX_HEIGHT = 2160
@@ -200,8 +198,6 @@ def validate_config(cfg: AppConfig) -> None:
     """Raise ValueError when a resolved configuration cannot be run."""
     if not cfg.model_path:
         raise ValueError("model.path must be set to a compiled model package")
-    if not str(cfg.labels_path):
-        raise ValueError("model.labels must point to a labels file")
     if cfg.input_max_width < 1:
         raise ValueError(f"model.input_max_width must be >= 1, got {cfg.input_max_width}")
     if cfg.input_max_height < 1:
@@ -266,30 +262,25 @@ def decode_detections(outputs, img_w: int, img_h: int, cfg: AppConfig) -> list[d
     Raises RuntimeError if the response is not a usable detection result;
     returns [] when a valid response found nothing.
     """
-    if not outputs:
-        raise RuntimeError("model returned no detection tensors")
     if len(outputs) != 1:
         raise RuntimeError(
             f"expected one BBOX tensor from model-managed BoxDecode, got {len(outputs)}"
         )
 
     bbox_tensor = outputs[0]
-    try:
-        detection_format = pyneat.detections.read_detection_format(bbox_tensor)
-    except Exception:  # noqa: BLE001 - a non-detection tensor has no format tag
-        detection_format = ""
-    if not detection_format or not pyneat.detections.format_is_bbox(detection_format):
+    detection_format = pyneat.detections.read_detection_format(bbox_tensor)
+    if not pyneat.detections.format_is_bbox(detection_format):
         raise RuntimeError(
             f"model returned no BBOX detection tensor (format: '{detection_format or '<none>'}'); "
             "the model package must expose YOLO26 BoxDecode output"
         )
 
     # strict=True rejects a truncated or over-long payload instead of decoding it
-    # as zero boxes. expected_topk is 0 because strict also throws on it; the cap
-    # is applied below.
+    # as zero boxes. The decoder sizes the payload for top_k boxes, so the result
+    # never exceeds max_detections.
     try:
         result = pyneat.detections.decode_bbox_tensor(bbox_tensor, img_w, img_h, 0, True)
-    except Exception as error:  # noqa: BLE001 - Core raises a plain runtime error
+    except Exception as error:
         raise RuntimeError(f"malformed BBOX payload: {error}") from error
 
     detections: list[dict] = []
@@ -305,12 +296,10 @@ def decode_detections(outputs, img_w: int, img_h: int, cfg: AppConfig) -> list[d
         detections.append(
             dict(x1=x1, y1=y1, x2=x2, y2=y2, score=float(box.score), class_id=int(box.class_id))
         )
-        if len(detections) >= cfg.max_detections:
-            break
     return detections
 
 
-def draw_boxes(bgr, detections: list[dict], labels: list[str], thickness: int = 2) -> None:
+def draw_boxes(bgr, detections: list[dict], labels: list[str]) -> None:
     """Draw class-colored defect boxes and labels on a BGR image in place."""
     for detection in detections:
         x1 = max(0, round_half_up(detection["x1"]))
@@ -321,7 +310,7 @@ def draw_boxes(bgr, detections: list[dict], labels: list[str], thickness: int = 
             continue
 
         color = class_color(detection["class_id"])
-        cv2.rectangle(bgr, (x1, y1), (x2, y2), color, thickness)
+        cv2.rectangle(bgr, (x1, y1), (x2, y2), color, 2)
 
         text = f"{class_name(detection['class_id'], labels)} {detection['score']:.2f}"
         (text_w, text_h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
@@ -341,8 +330,6 @@ def draw_boxes(bgr, detections: list[dict], labels: list[str], thickness: int = 
 
 def to_bgr_tensor(bgr):
     """Wrap a raw BGR uint8 image in a pyneat tensor placed in EV74 memory."""
-    if bgr is None or bgr.size == 0:
-        raise ValueError("empty input image")
     return pyneat.Tensor.from_numpy(
         np.ascontiguousarray(bgr, dtype=np.uint8),
         copy=True,
@@ -409,7 +396,7 @@ def main() -> int:
     except OSError as error:
         print(f"Error: failed to read config {args.config}: {error}", file=sys.stderr)
         return 2
-    except (ValueError, AttributeError, TypeError) as error:
+    except ValueError as error:
         print(f"Error: {error}", file=sys.stderr)
         return 2
 
@@ -423,7 +410,7 @@ def main() -> int:
             cfg = replace(cfg, nms_iou=args.nms)
         validate_config(cfg)
         labels = load_labels(cfg.labels_path)
-    except (ValueError, TypeError, AttributeError, OSError) as error:
+    except (ValueError, OSError) as error:
         print(f"Error: {error}", file=sys.stderr)
         return 2
 
@@ -466,12 +453,18 @@ def main() -> int:
 
     print(f"Model: {cfg.model_path}", flush=True)
     print(f"Found {len(images)} images in {cfg.input_dir}", flush=True)
+    all_images = images * cfg.num_runs
+    if cfg.num_runs > 1:
+        print(
+            f"Looping {cfg.num_runs}x over {len(images)} images "
+            f"({len(all_images)} total)",
+            flush=True,
+        )
 
     # Inputs we were asked to inspect but could not complete.
     failed_images: list[str] = []
     # Declared before the try so the abort handler can always report progress,
     # even when the failure happens before the loop starts.
-    all_images: list[Path] = []
     processed = 0
     runner = None
     images_with_defects = 0
@@ -479,7 +472,6 @@ def main() -> int:
     # The image in flight when a systemic failure aborts the batch, so the summary
     # names it rather than reporting failed=0.
     aborted_on = ""
-
 
     try:
         model = pyneat.Model(cfg.model_path, model_options(cfg, labels))
@@ -493,18 +485,6 @@ def main() -> int:
             route_options=pyneat.ModelRouteOptions(),
             run_options=run_options(cfg),
         )
-        # One-off graph settling and first-touch allocation, which
-        # runtime.timeout_ms does not cover.
-        runner.run([to_bgr_tensor(seed)], timeout_ms=max(cfg.timeout_ms, WARMUP_TIMEOUT_MS))
-
-
-        all_images = images * cfg.num_runs
-        if cfg.num_runs > 1:
-            print(
-                f"Looping {cfg.num_runs}x over {len(images)} images "
-                f"({len(all_images)} total)",
-                flush=True,
-            )
 
         pipeline_start = time.perf_counter()
 
@@ -576,12 +556,11 @@ def main() -> int:
     except Exception as error:  # noqa: BLE001 - report any runtime failure to the caller
         # A systemic failure repeats on every image, so stop the batch but still
         # report what completed and what failed.
-        sys.stdout.flush()
         if aborted_on:
             failed_images.append(aborted_on)
         print(f"Error: {error}", file=sys.stderr)
         print(
-            f"Aborted after {processed}/{len(all_images) or len(images)} images | "
+            f"Aborted after {processed}/{len(all_images)} images | "
             f"images_with_defects={images_with_defects} "
             f"total_defects={sum(per_class.values())} failed={len(failed_images)}",
             file=sys.stderr,
@@ -612,12 +591,6 @@ def main() -> int:
         print(
             f"Error: {len(failed_images)} of {len(all_images)} image(s) could not be "
             f"processed or saved: {shown}{suffix}",
-            file=sys.stderr,
-        )
-        return 4
-    if processed != len(all_images):
-        print(
-            f"Error: processed {processed} of {len(all_images)} images",
             file=sys.stderr,
         )
         return 4
