@@ -11,6 +11,10 @@ only when modifying or building their source.
 
 ## Install Apps
 
+Run the installation on a supported Modalix or DevKit target, or in a Neat SDK container paired with the DevKit. In the SDK container, install under `/workspace`, which the pairing shares with the DevKit, and run the examples on the DevKit from the same directory.
+
+The Apps installer also installs the Core selected for the Apps package and the latest Insight through `sima-cli`. In a paired SDK container, it installs Core into the SDK and onto the DevKit, and installs Insight in the container. If that Core and Insight are already installed, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps` to skip both. The installer does not compare the installed Core with the one selected for the Apps package, so a version mismatch appears only when an example runs. See [Dependency Selection](#dependency-selection).
+
 Install the latest Apps runtime from main and enter the installed bundle:
 
 ```bash
@@ -18,17 +22,7 @@ sima-cli neat install apps
 cd prebuilt-apps
 ```
 
-Run the installation on a supported Modalix or DevKit target, or in a Neat SDK container paired with the DevKit. In the SDK container, install under `/workspace`, which the pairing shares with the DevKit, and run the examples on the DevKit from the same directory.
-
 Use `-d <install-root>` to install `prebuilt-apps/` under another directory. Run the remaining commands from the installed `prebuilt-apps/` directory.
-
-The Apps installer also installs the Core selected for the Apps package and the latest Insight through `sima-cli`. In a paired SDK container, it installs Core into the SDK and onto the DevKit, and installs Insight in the container. If that Core and Insight are already installed, skip both:
-
-```bash
-NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps
-```
-
-The installer does not compare the installed Core with the one selected for the Apps package, so a version mismatch appears only when an example runs. See [Dependency Selection](#dependency-selection).
 
 Run the same command with the same installation root to upgrade Apps. Before replacing an existing installation, the installer asks for confirmation, carries `models/` into the new bundle, and retains the remaining previous files under `.prebuilt-apps-backup/`. If that backup already exists, the installer warns before replacing it.
 

@@ -26,6 +26,8 @@ Segments objects in a folder of images with YOLOv8 and saves annotated images wi
 
 ## Install Apps
 
+Run these commands on the DevKit, or under `/workspace` in a Neat SDK container paired with the DevKit. If the Core and Insight selected by Apps are already installed, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps` to skip reinstalling them. See [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
+
 Install the latest Neat Apps runtime and enter the installed bundle:
 
 ```bash
@@ -34,9 +36,7 @@ cd prebuilt-apps
 APP_DIR=examples/segmentation/yolov8-instance-segmenter
 ```
 
-Run the remaining commands from `prebuilt-apps/`.
-
-Install on the DevKit, or under `/workspace` in a Neat SDK container paired with the DevKit, and run the example on the DevKit. If the Core and Insight selected by Apps are already installed, run `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps` to skip reinstalling them. See [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
+Run the remaining commands from `prebuilt-apps/` on the DevKit.
 
 ## Prepare the Model
 
