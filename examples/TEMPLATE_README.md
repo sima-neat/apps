@@ -26,7 +26,7 @@ Add an application-specific image under `portal/assets/examples/<category>/<exam
 
 ## Prerequisites
 
-- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
+- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target, or in a Neat SDK container paired with one.
 - <Example-specific input, service, or hardware requirements.>
 
 ## Install Apps
@@ -40,6 +40,8 @@ APP_DIR=examples/<category>/<example>
 ```
 
 Run the remaining commands from `prebuilt-apps/`.
+
+Install on the DevKit, or under `/workspace` in a Neat SDK container paired with the DevKit, and run the example on the DevKit. If the Core and Insight selected by Apps are already installed, run `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps` to skip reinstalling them. See [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
 
 ## Prepare the Model
 

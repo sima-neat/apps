@@ -49,6 +49,8 @@ APP_DIR=examples/tracking/yolo26-tiny-drone-tracker
 
 Run the remaining commands from `prebuilt-apps/`.
 
+Install on the DevKit, or under `/workspace` in a Neat SDK container paired with the DevKit, and run the example on the DevKit. If the Core and Insight selected by Apps are already installed, run `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps` to skip reinstalling them. See [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
+
 ## Prepare the Model
 
 Download the tested SDK 2.1.3 model artifact:

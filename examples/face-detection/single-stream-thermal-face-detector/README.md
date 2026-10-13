@@ -36,7 +36,7 @@ reference visualization's boxes.
 ## Prerequisites
 
 - `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/))
-  on a supported Modalix or DevKit target.
+  on a supported Modalix or DevKit target, or in a Neat SDK container paired with one.
 - A running [Neat Insight](https://developer.sima.ai/software/tools/insight/)
   instance reachable from the target, with an RTSP source containing faces.
 - The model expects an 800x800 compiled canvas; its on-device preprocess accepts
@@ -53,6 +53,8 @@ APP_DIR=examples/face-detection/single-stream-thermal-face-detector
 ```
 
 Run the remaining commands from `prebuilt-apps/`.
+
+Install on the DevKit, or under `/workspace` in a Neat SDK container paired with the DevKit, and run the example on the DevKit. If the Core and Insight selected by Apps are already installed, run `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps` to skip reinstalling them. See [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
 
 ## Prepare the Model
 

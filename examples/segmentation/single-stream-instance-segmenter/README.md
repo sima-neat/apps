@@ -26,7 +26,7 @@ Metadata is sent as `type: "segmentation"` with one `data.segments[]` entry per 
 
 ## Prerequisites
 
-- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
+- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target, or in a Neat SDK container paired with one.
 - An RTSP H.264, RTSP H.265, RTSP MJPEG, or HTTP MJPEG source and an [Insight](https://developer.sima.ai/software/tools/insight/) URL reachable from the target.
 
 ## Install Apps
@@ -40,6 +40,8 @@ APP_DIR=examples/segmentation/single-stream-instance-segmenter
 ```
 
 Run the remaining commands from `prebuilt-apps/`.
+
+Install on the DevKit, or under `/workspace` in a Neat SDK container paired with the DevKit, and run the example on the DevKit. If the Core and Insight selected by Apps are already installed, run `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps` to skip reinstalling them. See [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
 
 ## Prepare the Model
 

@@ -46,6 +46,13 @@ APP_DIR=examples/genai/neat-genai-studio
 Run the remaining commands from `prebuilt-apps/`. In a new shell, run the `cd`
 and `APP_DIR=` lines again first.
 
+Install on the DevKit, or under `/workspace` in a Neat SDK container
+paired with the DevKit, and run the example on the DevKit. If the Core
+and Insight selected by Apps are already installed, run
+`NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps` to skip
+reinstalling them. See
+[Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
+
 ## Prepare the Model
 Install the Studio's environments, models, and voices:
 
