@@ -611,6 +611,24 @@ class TestScalarConfigSemantics:
         assert main.config_str(8, "io.output_dir", "fallback") == "8"
 
 
+class TestThumbnailDecoderErrors:
+    def test_raising_imread_yields_no_thumbnail_not_a_traceback(self, tmp_path, monkeypatch):
+        """Some OpenCV builds raise instead of returning None. is_decodable_image
+        already catches cv2.error; the thumbnail path called imread unguarded, so
+        a corrupt file turned a per-image error into a traceback and no report."""
+        import cv2
+
+        img = tmp_path / "a.jpg"
+        _make_image(img)
+        fingerprint = main.file_fingerprint(img)
+
+        def raising_imread(*_args, **_kwargs):
+            raise cv2.error("simulated decoder failure")
+
+        monkeypatch.setattr(cv2, "imread", raising_imread)
+        assert main.make_thumbnail(img, tmp_path / "thumbs", fingerprint=fingerprint) is None
+
+
 class TestDateScalars:
     def test_unquoted_date_is_its_iso_text(self):
         """PyYAML resolves `2026-10-02` to a date while ScalarConfig hands C++

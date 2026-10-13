@@ -1124,10 +1124,11 @@ std::vector<fs::path> discover_images(const std::string& input_path,
     // directory that becomes unreadable part-way through aborted the run with
     // exit 6 instead of the documented input error. Python's iterdir() failure
     // is caught and reported the same way.
-    for (; it != fs::directory_iterator(); it.increment(ec)) {
-      if (ec) {
-        throw InputError("failed to read input directory " + path.string() + ": " + ec.message());
-      }
+    // Incremented inside the body, not in the for-increment: a failed
+    // increment sets the iterator to the end, so the loop condition exited
+    // before the check below could ever see `ec` and a directory that became
+    // unreadable mid-scan published a silently truncated report.
+    for (; it != fs::directory_iterator();) {
       const auto& entry = *it;
       // The throwing overload aborts the entire scan when one entry cannot be
       // stat'ed - a dangling or self-referential symlink - and the run exits
@@ -1137,6 +1138,11 @@ std::vector<fs::path> discover_images(const std::string& input_path,
       std::error_code entry_ec;
       if (entry.is_regular_file(entry_ec) && !entry_ec)
         entries.push_back(normalize_like_pathlib(entry.path()));
+
+      it.increment(ec);
+      if (ec) {
+        throw InputError("failed to read input directory " + path.string() + ": " + ec.message());
+      }
     }
   }
   std::sort(entries.begin(), entries.end(),

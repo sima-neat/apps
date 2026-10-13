@@ -870,7 +870,13 @@ def make_thumbnail(image_path: Path, thumb_dir: Path, max_side: int = 160,
         check_unchanged(image_path, fingerprint)
     except (OSError, ValueError):
         return None
-    img = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+    try:
+        img = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+    except cv2.error:
+        # Some builds raise instead of returning None, which is why
+        # is_decodable_image catches this too. Unguarded here, a corrupt file
+        # turned a per-image error into a traceback and no report at all.
+        return None
     if img is None:
         return None
     try:
