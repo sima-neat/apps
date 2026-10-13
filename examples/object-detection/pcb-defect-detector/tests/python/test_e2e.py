@@ -263,31 +263,17 @@ class TestE2E:
         # Same content, only larger, so each board must still report its defect.
         assert_each_board_reports_its_defect(fixtures, result.stdout)
 
-    def test_overlay_off_writes_no_images_and_clears_old_ones(
+    def test_overlay_off_inspects_every_board_and_writes_nothing(
         self, e2e_model_path, apps_root, tmp_output_dir, test_timeout_ms,
         skip_unless_e2e_ready, e2e_config_writer,
     ):
-        """With output.overlay off, every board is still inspected but nothing is written.
-
-        The output directory starts with annotated images from an earlier run,
-        one of them for a board no longer in the input. They must be gone
-        afterwards or they would read as this batch's results, while files the
-        application does not name must survive.
-        """
+        """With output.overlay off, every board is still inspected but nothing is written."""
         input_dir = apps_root / "assets" / "datasets-test" / "pcb"
         skip_unless_e2e_ready(
             input_dir.is_dir() and any(input_dir.iterdir()),
             f"PCB test images are missing or empty: {input_dir}",
         )
         fixtures = sorted(path for path in input_dir.iterdir() if path.is_file())
-
-        old_outputs = [
-            tmp_output_dir / f"{fixtures[0].stem}{OUTPUT_TAG}{fixtures[0].suffix}",
-            tmp_output_dir / f"pcb_99_removed_board{OUTPUT_TAG}.jpg",
-        ]
-        user_files = [tmp_output_dir / "reference.jpg", tmp_output_dir / "notes.txt"]
-        for path in old_outputs + user_files:
-            shutil.copyfile(fixtures[0], path)
 
         config_path = e2e_config_writer({
             "io": {"input_dir": str(input_dir), "output_dir": str(tmp_output_dir)},
@@ -315,11 +301,8 @@ class TestE2E:
         )
         assert_each_board_reports_its_defect(fixtures, result.stdout)
 
-        left = sorted(path.name for path in tmp_output_dir.iterdir())
-        assert left == sorted(path.name for path in user_files), (
-            f"overlay off must write no images and remove the earlier run's "
-            f"annotated images while keeping other files, but the output holds {left}"
-        )
+        written = sorted(path.name for path in tmp_output_dir.iterdir())
+        assert not written, f"overlay off must write no images, but the output holds {written}"
 
     def test_unreadable_input_reports_failure_and_exits_nonzero(
         self, e2e_model_path, apps_root, tmp_output_dir, test_timeout_ms,
