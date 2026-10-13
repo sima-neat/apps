@@ -560,6 +560,32 @@ class TestTracker:
         assert len(second) == 1
         assert first[0].track_id == second[0].track_id
 
+    def test_association_prefers_higher_overlap_then_lower_track_id(self):
+        def box(x1, class_id=0):
+            return {
+                "x1": x1,
+                "y1": 0,
+                "x2": x1 + 10,
+                "y2": 10,
+                "score": 0.9,
+                "class_id": class_id,
+            }
+
+        def tracker_with_two_tracks():
+            tracker = main_module.ObjectTracker(
+                main_module.TrackerConfig(match_iou_threshold=0.3, velocity_momentum=0.0)
+            )
+            tracker.update([box(0), box(6)], frame_index=0)
+            return tracker
+
+        # IoU 0.33 with track 1 and 0.82 with track 2: the higher overlap wins.
+        assert tracker_with_two_tracks().update([box(5)], frame_index=1)[0].track_id == 2
+        # Equal IoU 0.54 with both tracks: the lower track ID wins.
+        assert tracker_with_two_tracks().update([box(3)], frame_index=1)[0].track_id == 1
+        # A class mismatch blocks the match even at full overlap, so a new track starts.
+        mismatched = tracker_with_two_tracks().update([box(0, class_id=1)], frame_index=1)
+        assert mismatched[0].track_id == 3
+
     def test_tracker_drops_track_after_missing_budget(self):
         tracker = main_module.ObjectTracker(
             main_module.TrackerConfig(match_iou_threshold=0.3, max_missing_frames=1)
