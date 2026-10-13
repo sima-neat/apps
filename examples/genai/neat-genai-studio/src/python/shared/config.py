@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-
-import yaml
 
 
 EXAMPLE_ROOT = Path(__file__).resolve().parents[3]
@@ -58,12 +57,25 @@ class WebConfig:
     host: str
     port: int
     https: bool
+    headless: bool = False   # backend-only: serve the API endpoints, not the web UI
+    cors_origins: str = ""   # backend-only CORS allowlist (comma list or *); env BACKEND_CORS_ORIGINS overrides
 
 
 @dataclass(frozen=True)
 class RagConfig:
     enabled: bool
     embedding_model_dir: str
+
+
+@dataclass(frozen=True)
+class SupertonicConfig:
+    """Where the Supertonic 3 (MLA TTS) model files and runtime venv live.
+    Machine-specific, so setup.sh persists both here and run.sh and the UI read
+    the same values; SUPERTONIC_MODELS_ROOT / SUPERTONIC_VENV (or
+    SUPERTONIC_PYTHON) in the environment still override. ``venv`` empty means
+    the default ``<example>/.venv-supertonic``."""
+    models_root: str = ""   # empty: supertonic_tts.models_root() decides (env, legacy env, default)
+    venv: str = ""
 
 
 @dataclass(frozen=True)
@@ -80,7 +92,7 @@ class ControlConfig:
 @dataclass(frozen=True)
 class HubConfig:
     allow_download: bool
-    orgs: tuple[str, ...] = ("simaai", "TDoSiMa")
+    orgs: tuple[str, ...] = ("simaai", "TDoSiMa", "florianvoss")
 
     @property
     def org(self) -> str:
@@ -107,8 +119,22 @@ class AppConfig:
     control: ControlConfig = ControlConfig(host="127.0.0.1", client_host="127.0.0.1", port=9997)
     catalog_dir: Path | None = None
     max_resident_chat_models: int = 1
-    hub: HubConfig = HubConfig(allow_download=True, orgs=("simaai", "TDoSiMa"))
+    hub: HubConfig = HubConfig(allow_download=True,
+                              orgs=("simaai", "TDoSiMa", "florianvoss"))
     ui: UIConfig = UIConfig(font_family="Inter", font_size=15)
+    supertonic: SupertonicConfig = SupertonicConfig()
+
+
+def read_config_file(path: Path) -> dict:
+    """The parsed configuration. The model server runs in the Neat environment,
+    which may not carry PyYAML (Platform 3.0's ~/pyneat does not), so run.sh
+    hands it a JSON copy and PyYAML is imported only for a YAML file."""
+    text = path.read_text(encoding="utf-8")
+    if path.suffix == ".json":
+        return json.loads(text) or {}
+    import yaml
+
+    return yaml.safe_load(text) or {}
 
 
 def load_config(path: Path = DEFAULT_CONFIG, apps_root: Path = PATH_ROOT) -> AppConfig:
@@ -116,7 +142,7 @@ def load_config(path: Path = DEFAULT_CONFIG, apps_root: Path = PATH_ROOT) -> App
 
 
 def load_server_config(path: Path = DEFAULT_SERVER_CONFIG, apps_root: Path = PATH_ROOT) -> AppConfig:
-    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    raw = read_config_file(path)
     raw = raw.get("server", raw)
 
     openai = raw.get("openai", {})
@@ -146,6 +172,8 @@ def load_server_config(path: Path = DEFAULT_SERVER_CONFIG, apps_root: Path = PAT
             host=str(web.get("host", "0.0.0.0") or "0.0.0.0"),
             port=int(web.get("port", 5000)),
             https=_load_bool(web.get("https", True)),
+            headless=_load_bool(web.get("headless", False)),
+            cors_origins=_load_cors_origins(web.get("cors_origins")),
         ),
         rag=_load_rag_config(rag, apps_root),
         control=_load_control_config(control),
@@ -156,8 +184,33 @@ def load_server_config(path: Path = DEFAULT_SERVER_CONFIG, apps_root: Path = PAT
     )
 
 
+def _load_cors_origins(value) -> str:
+    """app.web.cors_origins as one comma-separated string (a YAML list works too)."""
+    if not value:
+        return ""
+    if isinstance(value, (list, tuple)):
+        return ",".join(str(v).strip() for v in value if str(v).strip())
+    return str(value).strip()
+
+
+def _load_supertonic_config(raw: dict) -> SupertonicConfig:
+    defaults = SupertonicConfig()
+    models_root = raw.get("models_root")
+    if not models_root and raw.get("app_root"):
+        # Pre-vendoring config: the models lived under <app_root>/models.
+        models_root = str(Path(str(raw["app_root"])) / "models")
+    venv = raw.get("venv")
+    if not venv and raw.get("app_root"):
+        # Pre-vendoring config: the runtime venv lived at <app_root>/.venv. Used
+        # only when it exists (supertonic_tts checks), until setup.sh migrates.
+        legacy_venv = Path(str(raw["app_root"])) / ".venv"
+        venv = str(legacy_venv) if (legacy_venv / "bin" / "python").exists() else ""
+    return SupertonicConfig(models_root=str(models_root or defaults.models_root or ""),
+                            venv=str(venv or ""))
+
+
 def load_ui_config(path: Path = DEFAULT_UI_CONFIG, apps_root: Path = PATH_ROOT) -> AppConfig:
-    config = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    config = read_config_file(path)
     raw = config.get("app", config)
     server = config.get("server", {})
 
@@ -169,6 +222,7 @@ def load_ui_config(path: Path = DEFAULT_UI_CONFIG, apps_root: Path = PATH_ROOT) 
     control = raw.get("control", {})
     hub = server.get("hub", {})
     ui = raw.get("ui", {})
+    supertonic = (raw.get("tts", {}) or {}).get("supertonic", {}) or {}
     chat_models = _load_chat_model_names(server_models, apps_root)
 
     return AppConfig(
@@ -188,6 +242,8 @@ def load_ui_config(path: Path = DEFAULT_UI_CONFIG, apps_root: Path = PATH_ROOT) 
             host=str(web.get("host", "0.0.0.0") or "0.0.0.0"),
             port=int(web.get("port", 5000)),
             https=_load_bool(web.get("https", True)),
+            headless=_load_bool(web.get("headless", False)),
+            cors_origins=_load_cors_origins(web.get("cors_origins")),
         ),
         rag=_load_rag_config(rag, apps_root),
         control=_load_control_config(control),
@@ -195,6 +251,7 @@ def load_ui_config(path: Path = DEFAULT_UI_CONFIG, apps_root: Path = PATH_ROOT) 
         max_resident_chat_models=max(1, int(server_models.get("max_resident_chat_models", 1) or 1)),
         hub=_load_hub_config(hub),
         ui=_load_ui_section(ui),
+        supertonic=_load_supertonic_config(supertonic),
     )
 
 
@@ -324,6 +381,29 @@ def classify_model_dir(model_dir: Path) -> dict | None:
         }
 
     return None
+
+
+def layered_encoder_reason(elf_names) -> str:
+    """Deprecated: always "". Kept so older callers keep working.
+
+    This used to refuse Whisper builds whose encoder is split into per-layer ELF
+    files, because the runtime loaded the encoder as one combined stage. That
+    requirement then INVERTED inside a single version: 0.4.0 needs a combined
+    stage, 0.4.0+develop.7d003ef needs 12 layered files and calls the combined
+    one "Unsupported legacy Whisper model". Neither layout is right in general,
+    the model directory does not say which runtime compiled it, and guessing
+    wrong blocks the only models that work. The runtime now reports the mismatch
+    precisely — naming the layout it found, the one it needs and the remedy — so
+    let it decide and surface its message.
+    """
+    return ""
+
+
+def model_dir_supported(path) -> tuple[bool, str]:
+    """Always (True, ""). See layered_encoder_reason for why nothing is refused
+    here: encoder layout is a runtime-version question the files cannot answer.
+    Kept so the catalog's `supported` field stays populated for clients."""
+    return True, ""
 
 
 def model_dir_complete(path) -> tuple[bool, str]:
@@ -475,7 +555,7 @@ def _load_control_config(raw: object) -> ControlConfig:
 
 def _load_hub_config(raw: object) -> HubConfig:
     hub = raw if isinstance(raw, dict) else {}
-    raw_orgs = hub.get("orgs", hub.get("org", ["simaai", "TDoSiMa"]))
+    raw_orgs = hub.get("orgs", hub.get("org", ["simaai", "TDoSiMa", "florianvoss"]))
     if isinstance(raw_orgs, str):
         orgs = tuple(o.strip() for o in raw_orgs.replace(",", " ").split() if o.strip())
     elif isinstance(raw_orgs, (list, tuple)):
@@ -483,7 +563,7 @@ def _load_hub_config(raw: object) -> HubConfig:
     else:
         orgs = ()
     if not orgs:
-        orgs = ("simaai", "TDoSiMa")
+        orgs = ("simaai", "TDoSiMa", "florianvoss")
     return HubConfig(
         allow_download=_load_bool(hub.get("allow_download", True)),
         orgs=orgs,

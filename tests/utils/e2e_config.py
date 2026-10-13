@@ -8,7 +8,7 @@ from typing import Any
 
 import yaml
 
-from tests.utils.test_scope import load_scope
+from tests.utils.test_scope import load_scope, suite_models
 
 APPS_ROOT = Path(__file__).resolve().parents[2]
 
@@ -88,17 +88,33 @@ def configured_model_path(config: dict[str, Any]) -> Path | None:
 
 
 def resolve_configured_model_path(common_config: Path, models_dir: Path) -> Path | None:
-    scoped = resolve_scoped_model_path(common_config, models_dir)
-    if scoped is not None:
+    paths = resolve_configured_model_paths(common_config, models_dir)
+    return paths[0] if paths else None
+
+
+def resolve_configured_model_paths(common_config: Path, models_dir: Path) -> list[Path]:
+    """The models an e2e suite runs with: the scope's selection, else the config's model.
+
+    The scope's first selected model is the suite's model. With
+    SIMANEAT_APPS_TEST_MODEL_VARIANTS=1 the scope's ``variants`` follow it, and a test
+    that takes ``e2e_model_path`` is generated once per model.
+    """
+    scoped = resolve_scoped_model_paths(common_config, models_dir)
+    if scoped:
         return scoped
 
     model_path = configured_model_path(load_common_config(common_config))
     if model_path is None:
-        return None
-    return models_dir / model_path.name
+        return []
+    return [models_dir / model_path.name]
 
 
 def resolve_scoped_model_path(common_config: Path, models_dir: Path) -> Path | None:
+    paths = resolve_scoped_model_paths(common_config, models_dir)
+    return paths[0] if paths else None
+
+
+def resolve_scoped_model_paths(common_config: Path, models_dir: Path) -> list[Path]:
     scope_file = Path(
         str(
             os.environ.get(
@@ -108,7 +124,7 @@ def resolve_scoped_model_path(common_config: Path, models_dir: Path) -> Path | N
         )
     )
     if not scope_file.exists():
-        return None
+        return []
 
     scope = load_scope(scope_file, APPS_ROOT)
     examples = required_mapping(scope.get("examples"), "examples")
@@ -116,21 +132,25 @@ def resolve_scoped_model_path(common_config: Path, models_dir: Path) -> Path | N
     example_key = f"{example_dir.parent.name}/{example_dir.name}"
     entry = examples.get(example_key)
     if not isinstance(entry, dict):
-        return None
-
-    e2e = entry.get("e2e", {})
-    python_e2e = e2e.get("python", {}) if isinstance(e2e, dict) else {}
-    selected = python_e2e.get("models", []) if isinstance(python_e2e, dict) else []
-    if not selected:
-        return None
+        return []
 
     models = entry.get("models", {})
-    model = models.get(str(selected[0])) if isinstance(models, dict) else None
-    if not isinstance(model, dict):
-        return None
+    if not isinstance(models, dict):
+        return []
+    try:
+        selected = suite_models(entry, "python")
+    except ValueError:
+        return []
 
-    file_name = str(model.get("file", "") or "").strip()
-    return models_dir / file_name if file_name else None
+    paths: list[Path] = []
+    for model_id in selected:
+        model = models.get(str(model_id))
+        if not isinstance(model, dict):
+            continue
+        file_name = str(model.get("file", "") or "").strip()
+        if file_name:
+            paths.append(models_dir / file_name)
+    return paths
 
 
 def apply_model_path(config: dict[str, Any], model_path: Path | None) -> None:
@@ -182,13 +202,16 @@ def write_merged_config(
     config_path: Path,
     overrides: dict[str, Any],
     models_dir: Path | None = None,
+    model_path: Path | None = None,
 ) -> Path:
     config = load_common_config(common_config)
     e2e_overrides = runtime_e2e_overrides(config)
     config.pop("testing", None)
     deep_update(config, e2e_overrides)
     materialize_repo_paths(config)
-    if models_dir is not None:
+    if model_path is not None:
+        apply_model_path(config, model_path)
+    elif models_dir is not None:
         apply_model_path(config, resolve_configured_model_path(common_config, models_dir))
 
     config_path.write_text(

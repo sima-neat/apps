@@ -5,6 +5,8 @@ EXAMPLE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON_DIR="${EXAMPLE_DIR}/src/python"
 DEFAULT_APP_VENV="${EXAMPLE_DIR}/.venv"
 DEFAULT_LOCAL_CONFIG="${EXAMPLE_DIR}/config.local.yaml"
+# shellcheck source=src/common/config_value.sh
+source "${EXAMPLE_DIR}/src/common/config_value.sh"
 
 if [[ -z "${CONFIG_PATH:-}" ]]; then
   if [[ -f "${DEFAULT_LOCAL_CONFIG}" ]]; then
@@ -37,12 +39,41 @@ if [[ -z "${PIPERTTS_PYTHON:-}" && -x "${EXAMPLE_DIR}/.venv-pipertts/bin/python"
   PIPERTTS_PYTHON="${EXAMPLE_DIR}/.venv-pipertts/bin/python"
 fi
 export PIPERTTS_PYTHON="${PIPERTTS_PYTHON:-}"
+# Supertonic 3 (MLA TTS): the vendored runtime runs from ./.venv-supertonic (see
+# setup.sh); its model files' location is persisted under app.tts.supertonic in
+# the local config, with SUPERTONIC_MODELS_ROOT in the environment overriding.
+# Resolved by resolve_supertonic_env once the config path is final. The UI
+# spawns supertonic_worker.py with the resolved interpreter; when it is absent
+# the engine is simply not offered.
+SUPERTONIC_PYTHON="${SUPERTONIC_PYTHON:-}"
+SUPERTONIC_VENV_EXPLICIT="${SUPERTONIC_VENV:-}"
+SUPERTONIC_VENV="${SUPERTONIC_VENV:-${EXAMPLE_DIR}/.venv-supertonic}"
 SHUTDOWN_GRACE_SECONDS="${SHUTDOWN_GRACE_SECONDS:-10}"
+# Bounded relaunches so a server that dies immediately cannot respawn forever:
+# the budget counts consecutive relaunches that fail within
+# RELAUNCH_STABLE_SECONDS; one that stays up that long clears it.
+MLA_MAX_RESTART_RETRIES="${MLA_MAX_RESTART_RETRIES:-4}"
+RELAUNCH_STABLE_SECONDS="${RELAUNCH_STABLE_SECONDS:-60}"
+# Where the CLI-mode server records its exit status (see launch_server).
+SERVER_STATUS_FILE="${SERVER_STATUS_FILE:-${EXAMPLE_DIR}/.neat-genai-server.status}"
 RAG_WORKER_PATTERN="${PYTHON_DIR}/rag/vectordb_worker.py"
 SERVER_PATTERN="${PYTHON_DIR}/server/main.py"
 UI_PATTERN="${PYTHON_DIR}/ui/main.py"
 # PID file for the running instance (enables `./run.sh stop`).
 PID_FILE="${RUN_PID_FILE:-${EXAMPLE_DIR}/.neat-genai-studio.pid}"
+# Which mode the running instance was started in (web / backend-only / cli),
+# written beside the pid file so `status` can say so.
+MODE_FILE="${PID_FILE%.pid}.mode"
+# The running instance records the URL it is actually serving: a later
+# --open-browser must open that, not a URL recomputed from the launcher's own
+# (possibly different) CONFIG_PATH.
+URL_FILE="${PID_FILE%.pid}.url"
+# --backend-only: model server + the Studio's API endpoints, no web UI.
+BACKEND_ONLY="${BACKEND_ONLY:-0}"
+# --open-browser: open the web UI in the desktop browser once it answers (the
+# desktop icon uses this). With a running instance it just opens the browser.
+OPEN_BROWSER="${OPEN_BROWSER:-0}"
+BROWSER_WAITER_PID=""
 STOP_TIMEOUT="${STOP_TIMEOUT:-20}"
 # Terminal chat instead of the web UI (set by `./run.sh --cli`).
 CLI_MODE="${CLI_MODE:-0}"
@@ -119,18 +150,89 @@ section() {
 }
 
 # Best-effort browser URL from the app.web block of the config (scheme/host/port).
-web_url() {
-  local host port https scheme ip
-  host="$(awk '/^  web:/{f=1;next} f&&/^  [a-z]/{f=0} f&&/host:/{print $2;exit}' "${CONFIG_PATH}" 2>/dev/null || true)"
-  port="$(awk '/^  web:/{f=1;next} f&&/^  [a-z]/{f=0} f&&/port:/{print $2;exit}' "${CONFIG_PATH}" 2>/dev/null || true)"
-  https="$(awk '/^  web:/{f=1;next} f&&/^  [a-z]/{f=0} f&&/https:/{print $2;exit}' "${CONFIG_PATH}" 2>/dev/null || true)"
+web_config_value() { web_config_scalar "${CONFIG_PATH}" "$1"; }
+
+# A host as it must appear in a URL: IPv6 literals in brackets.
+url_host() {
+  local h="$1"
+  if [[ "${h}" == *:* && "${h}" != \[*\] ]]; then printf '[%s]' "${h}"; else printf '%s' "${h}"; fi
+}
+# True for the "listen on every interface" hosts (or none configured).
+wildcard_host() { [[ -z "$1" || "$1" == "0.0.0.0" || "$1" == "::" || "$1" == "[::]" ]]; }
+
+# _web_url_for <host-or-empty>: the UI URL with that host (scheme and port from
+# the config). Returns 1 when the config has no port.
+_web_url_for() {
+  local port https scheme
+  port="$(web_config_value port)"
+  https="$(web_config_value https)"
   [[ -n "${port}" ]] || return 1
-  scheme="http"; [[ "${https}" == "true" ]] && scheme="https"
-  if [[ -z "${host}" || "${host}" == "0.0.0.0" || "${host}" == "::" ]]; then
-    ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  # https defaults to true in shared.config when the key is absent.
+  scheme="https"; [[ -n "${https}" ]] && ! config_true "${https}" && scheme="http"
+  printf '%s://%s:%s' "${scheme}" "$(url_host "$1")" "${port}"
+}
+
+# The UI URL to give other machines: the configured host, or this board's first
+# LAN address (IPv4 preferred) when the UI listens on every interface.
+web_url() {
+  local host ip
+  host="$(web_config_value host)"
+  if wildcard_host "${host}"; then
+    ip="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -v ':' | grep -m1 . || true)"
+    [[ -n "${ip}" ]] || ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
     host="${ip:-localhost}"
   fi
-  printf '%s://%s:%s' "${scheme}" "${host}" "${port}"
+  _web_url_for "${host}"
+}
+
+# The UI URL for a browser on this board: localhost when the UI listens on every
+# interface (it keeps working if the IP changes), else the configured host.
+local_web_url() {
+  local host
+  host="$(web_config_value host)"
+  wildcard_host "${host}" && host="localhost"
+  _web_url_for "${host}"
+}
+
+# Wait until the web UI answers (its /health route), up to UI_READY_TIMEOUT s.
+wait_for_ui() {
+  local url="$1" deadline=$((SECONDS + ${UI_READY_TIMEOUT:-300}))
+  command -v curl >/dev/null 2>&1 || { sleep 20; return 0; }
+  while [[ "${SECONDS}" -lt "${deadline}" ]]; do
+    curl -k -s -o /dev/null --max-time 2 "${url}/health" && return 0
+    sleep 1
+  done
+  return 1
+}
+
+# Open `url` in the desktop's default browser, detached from this terminal so
+# closing it does not take the browser along. With "wait" as the second
+# argument, also wait (up to 10 s) for the opener to hand the URL over before
+# returning: a caller that exits right away would otherwise close the desktop
+# icon's terminal and kill the opener before the browser receives the URL.
+open_url() {
+  local url="$1" wait_for_handoff="${2:-}"
+  if [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
+    warn "No graphical display in this session; open ${url} in a browser yourself."
+    return 1
+  fi
+  local opener
+  for opener in xdg-open x-www-browser sensible-browser; do
+    if command -v "${opener}" >/dev/null 2>&1; then
+      setsid "${opener}" "${url}" >/dev/null 2>&1 < /dev/null &
+      if [[ "${wait_for_handoff}" == "wait" ]]; then
+        local opener_pid=$! waited=0
+        while kill -0 "${opener_pid}" 2>/dev/null && (( waited < 20 )); do
+          sleep 0.5; waited=$(( waited + 1 ))
+        done
+      fi
+      ok "Opened ${C_ACCENT}${url}${C_RESET} in the browser."
+      info "First visit: the browser warns about the Studio's self-signed certificate; choose Advanced → proceed (it is this board)."
+      return 0
+    fi
+  done
+  warn "No browser opener (xdg-open) found; open ${url} yourself."
+  return 1
 }
 
 # Aligned "label   value" line for the System section.
@@ -197,6 +299,7 @@ system_info() {
   _kv "neat-llima" "${llima_ver:-unknown}"
   [[ -n "${runtime_ver}" ]] && _kv "neat-runtime" "${runtime_ver}"
   _kv "python" "${py_ver:-unknown}"
+  _kv "supertonic" "$(supertonic_installed && echo "models ${SUPERTONIC_MODELS_ROOT_RESOLVED:-}" || echo "not installed (./setup.sh installs it)")"
   _kv "host" "$(uname -sm 2>/dev/null || echo unknown)"
 }
 
@@ -207,9 +310,17 @@ Usage:
   ./run.sh            Start the model server and web UI (Ctrl+C to stop).
                       Runs ./setup.sh automatically on the first launch.
   ./run.sh --cli      Start the model server and a terminal chat (no web UI).
+  ./run.sh --backend-only
+                      Start the model server and the Studio's API endpoints
+                      (chat, speech, transcription, translation, voices, models,
+                      /health) without the web UI, for other front ends such as
+                      Insight. BACKEND_CORS_ORIGINS enables browser CORS.
   ./run.sh --chat [MODEL]      Terminal chat; load MODEL and chat (skips the menu).
   ./run.sh --download [REPO]   Terminal chat; download REPO (or prompt) first.
   ./run.sh --benchmark [MODEL] Terminal chat; benchmark MODEL (or prompt). --bench.
+  ./run.sh --open-browser
+                      Start (if not running) and open the web UI in the
+                      desktop browser once it answers; used by the desktop icon.
   ./run.sh stop       Cleanly stop a running instance.
   ./run.sh status     Report whether the studio is running.
   ./run.sh update     Update to the latest version (preserves models, config,
@@ -221,6 +332,9 @@ Environment:
   AUTO_SETUP=0        Do not auto-run ./setup.sh on first launch (error instead).
   NEAT_APPS_BRANCH    Branch to pull for `update` (default: main).
   UPDATE_DEPS=1       Run full setup.sh dependency refresh during `update`.
+  BACKEND_CORS_ORIGINS
+                      With --backend-only: origins (comma-separated, or *) whose
+                      browser pages may call the API (CORS). Default: none.
 USAGE
 }
 
@@ -228,9 +342,22 @@ do_status() {
   if [[ -f "${PID_FILE}" ]]; then
     local pid; pid="$(cat "${PID_FILE}" 2>/dev/null || true)"
     if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
-      ok "Neat GenAI Studio is running (pid ${pid})."
-      local url; url="$(web_url || true)"
-      [[ -n "${url}" ]] && info "Web UI: ${C_ACCENT}${url}${C_RESET}"
+      local mode; mode="$(cat "${MODE_FILE}" 2>/dev/null || echo web)"
+      # Report the URL the RUNNING instance recorded: recomputing it here would
+      # describe this invocation's config, which a CONFIG_PATH override makes a
+      # different (possibly unreachable) endpoint. Fall back for an instance
+      # started before the url file existed.
+      local url; url="$(cat "${URL_FILE}" 2>/dev/null || true)"
+      [[ -n "${url}" ]] || url="$(web_url || true)"
+      if [[ "${mode}" == "backend-only" ]]; then
+        ok "Neat GenAI Studio is running (pid ${pid}, backend-only: API endpoints, no web UI)."
+        [[ -n "${url}" ]] && info "API: ${C_ACCENT}${url}${C_RESET}  health: ${C_ACCENT}${url}/health${C_RESET}"
+      elif [[ "${mode}" == "cli" ]]; then
+        ok "Neat GenAI Studio is running (pid ${pid}, cli: terminal chat, no web UI)."
+      else
+        ok "Neat GenAI Studio is running (pid ${pid}${mode:+, ${mode}})."
+        [[ -n "${url}" ]] && info "Web UI: ${C_ACCENT}${url}${C_RESET}"
+      fi
       return 0
     fi
   fi
@@ -254,11 +381,11 @@ do_stop() {
         warn "Not responding after ${STOP_TIMEOUT}s; sending KILL…"
         kill -KILL "${pid}" 2>/dev/null || true
       fi
-      rm -f "${PID_FILE}"
+      rm -f "${PID_FILE}" "${MODE_FILE}" "${URL_FILE}" "${SERVER_STATUS_FILE}"
       ok "Stopped."
       return 0
     fi
-    rm -f "${PID_FILE}"
+    rm -f "${PID_FILE}" "${MODE_FILE}" "${URL_FILE}" "${SERVER_STATUS_FILE}"
   fi
   # No recorded instance — best-effort cleanup of any stray studio processes.
   info "No running instance recorded; cleaning up any stray processes…"
@@ -274,6 +401,54 @@ do_stop() {
   ok "Done."
 }
 
+# Supertonic paths: environment > app.tts.supertonic in the config > defaults.
+# Only values that are set are exported, so the UI applies the same precedence.
+_supertonic_config_value() { supertonic_config_value "${CONFIG_PATH}" "$1"; }
+resolve_supertonic_env() {
+  local models legacy
+  # Pre-vendoring config/env: everything lived under app_root (<app_root>/models
+  # and the runtime venv <app_root>/.venv), until setup.sh migrates the install.
+  legacy="${SUPERTONIC_APP_ROOT:-$(_supertonic_config_value app_root)}"
+  models="${SUPERTONIC_MODELS_ROOT:-$(_supertonic_config_value models_root)}"
+  if [[ -z "${models}" && -n "${legacy}" ]]; then
+    models="${legacy}/models"
+  fi
+  [[ -n "${models}" ]] && export SUPERTONIC_MODELS_ROOT="${models}"
+  # The venv setup.sh built (persisted as app.tts.supertonic.venv when it was
+  # not the default); SUPERTONIC_VENV / SUPERTONIC_PYTHON in the environment win.
+  if [[ -z "${SUPERTONIC_VENV_EXPLICIT}" ]]; then
+    local venv
+    venv="$(_supertonic_config_value venv)"
+    [[ -n "${venv}" ]] && SUPERTONIC_VENV="${venv}"
+  fi
+  if [[ -z "${SUPERTONIC_PYTHON}" && -x "${SUPERTONIC_VENV}/bin/python" ]]; then
+    SUPERTONIC_PYTHON="${SUPERTONIC_VENV}/bin/python"
+  fi
+  # An install from before the runtime was vendored has no new venv yet: keep
+  # using its <app_root>/.venv (it has numpy/onnxruntime/pyneat; the worker
+  # imports the vendored package) so updating never drops the default engine.
+  if [[ -z "${SUPERTONIC_PYTHON}" && -n "${legacy}" && -x "${legacy}/.venv/bin/python" ]]; then
+    SUPERTONIC_PYTHON="${legacy}/.venv/bin/python"
+  fi
+  export SUPERTONIC_PYTHON SUPERTONIC_VENV
+  # Effective path (default applied) for run.sh's own use: the banner and --clean.
+  SUPERTONIC_MODELS_ROOT_RESOLVED="${models:-/media/nvme/supertonic-tts/models}"
+}
+# Same test as supertonic_tts.available(): runtime interpreter plus the two
+# marker model files (setup.sh verifies every file's checksum).
+supertonic_installed() {
+  [[ -n "${SUPERTONIC_PYTHON}" \
+     && -f "${SUPERTONIC_MODELS_ROOT_RESOLVED}/supertonic-3/onnx/tts.json" \
+     && -f "${SUPERTONIC_MODELS_ROOT_RESOLVED}/supertonic-3-sima/supertonic_vector_field_sima_mpk.tar.gz" ]]
+}
+# What a dependency refresh would change for Supertonic: its pinned requirements
+# and the reviewed model revisions/checksums in setup.sh.
+supertonic_fingerprint() {
+  {
+    cat "${PYTHON_DIR}/requirements-supertonic.txt" 2>/dev/null
+    grep -E '^SUPERTONIC_(UPSTREAM|SIMA)_HF_REVISION=|^[0-9a-f]{64}  supertonic-3' "${EXAMPLE_DIR}/setup.sh" 2>/dev/null
+  } | sha256sum | cut -d' ' -f1
+}
 # Remove app-generated data (venvs, generated config, RAG db, downloaded TTS
 # voices, pid, caches, logs). Confirms first unless -y/--yes or CLEAN_YES=1.
 # Downloaded chat/VLM/ASR models under catalog_dir are left intact.
@@ -285,17 +460,40 @@ do_clean() {
     do_stop >/dev/null 2>&1 || true
   fi
 
+  resolve_supertonic_env
   local -a targets=() t
+  # The Supertonic venv under the example directory is app-generated and always
+  # removed. One configured elsewhere (SUPERTONIC_VENV / app.tts.supertonic.venv)
+  # and the downloaded model files are kept unless CLEAN_SUPERTONIC=1.
+  case "${SUPERTONIC_VENV}/" in
+    "${EXAMPLE_DIR}"/*) [[ -e "${SUPERTONIC_VENV}" ]] && targets+=("${SUPERTONIC_VENV}") ;;
+    *)
+      if [[ "${CLEAN_SUPERTONIC:-0}" == "1" ]]; then
+        [[ -e "${SUPERTONIC_VENV}" ]] && targets+=("${SUPERTONIC_VENV}")
+      elif [[ -e "${SUPERTONIC_VENV}" ]]; then
+        info "Keeping the Supertonic venv outside this directory: ${SUPERTONIC_VENV} (CLEAN_SUPERTONIC=1 removes it)."
+      fi ;;
+  esac
+  if [[ "${CLEAN_SUPERTONIC:-0}" == "1" && -e "${SUPERTONIC_MODELS_ROOT_RESOLVED}" ]]; then
+    targets+=("${SUPERTONIC_MODELS_ROOT_RESOLVED}")
+  fi
   for t in \
     "${DEFAULT_APP_VENV}" \
     "${EXAMPLE_DIR}/.venv-pipertts" \
     "${DEFAULT_LOCAL_CONFIG}" \
+    "${DEFAULT_LOCAL_CONFIG}.bak" \
     "${PID_FILE}" \
+    "${MODE_FILE}" \
     "${PYTHON_DIR}/ui/milvus.db" \
     "${PYTHON_DIR}/ui/milvus.meta.json" \
     "${PYTHON_DIR}/ui/assets/piper-plus" \
     "${PYTHON_DIR}/ui/assets/mms-tts-kor"; do
     [[ -e "$t" ]] && targets+=("$t")
+  done
+  # The desktop icon / menu entry setup.sh installed for this checkout.
+  for t in "${XDG_DATA_HOME:-${HOME}/.local/share}/applications/neat-genai-studio.desktop" \
+           "${XDG_DESKTOP_DIR:-${HOME}/Desktop}/neat-genai-studio.desktop"; do
+    [[ -f "$t" ]] && grep -qF "${EXAMPLE_DIR}/" "$t" && targets+=("$t")
   done
   # Downloaded rhasspy .onnx voices (committed .onnx.json configs are kept),
   # __pycache__ dirs, and any *.log files the app produced.
@@ -321,6 +519,9 @@ do_clean() {
   local catalog; catalog="$(sed -n 's/^[[:space:]]*catalog_dir:[[:space:]]*\(.*\)/\1/p' \
     "${CONFIG_PATH}" 2>/dev/null | head -n1)"
   [[ -n "${catalog}" ]] && info "Downloaded models under ${C_DIM}${catalog}${C_RESET} are kept."
+  if [[ "${CLEAN_SUPERTONIC:-0}" != "1" && -e "${SUPERTONIC_MODELS_ROOT_RESOLVED}" ]]; then
+    info "Supertonic models under ${C_DIM}${SUPERTONIC_MODELS_ROOT_RESOLVED}${C_RESET} are kept (CLEAN_SUPERTONIC=1 removes them)."
+  fi
 
   if [[ "${yes}" != "-y" && "${yes}" != "--yes" && "${CLEAN_YES:-0}" != "1" ]]; then
     printf '   Remove these? [y/N] '
@@ -365,11 +566,13 @@ migrate_piper_voices() {
   if ! "${py}" -c "import onnx" >/dev/null 2>&1; then
     "${py}" -m pip install "onnx>=1.17,<2" || return 1
   fi
-  "${py}" "${PYTHON_DIR}/split_voices.py" "${assets}"
+  "${py}" "${PYTHON_DIR}/ui/tts/split_voices.py" "${assets}"
 }
 
 do_update() {
   local branch="${NEAT_APPS_BRANCH:-main}"
+  local supertonic_before
+  supertonic_before="$(supertonic_fingerprint)"
   if do_status >/dev/null 2>&1; then
     warn "The studio is running — restart it (./run.sh stop, then start) after updating."
   fi
@@ -407,23 +610,64 @@ do_update() {
     else
       errln "curl or wget is required to update."; rm -rf "${tmp}"; return 1
     fi
-    root="$(tar -tzf "${tmp}/src.tar.gz" 2>/dev/null | head -1 | cut -d/ -f1)"
+    # Read the whole listing (awk, not head/grep -q): under pipefail, a reader
+    # that exits early kills tar with SIGPIPE and the update aborts with 141.
+    root="$(tar -tzf "${tmp}/src.tar.gz" 2>/dev/null | awk -F/ 'NR == 1 { print $1 }')"
     ex_path="${root}/examples/genai/neat-genai-studio"
-    if ! tar -tzf "${tmp}/src.tar.gz" 2>/dev/null | grep -qxF "${ex_path}/"; then
+    if ! tar -tzf "${tmp}/src.tar.gz" 2>/dev/null | grep -xF "${ex_path}/" >/dev/null; then
       errln "neat-genai-studio not found in the archive (branch ${branch})."
       rm -rf "${tmp}"; return 1
     fi
     tar -xzf "${tmp}/src.tar.gz" -C "${tmp}" "${ex_path}" \
       || { errln "Extract failed."; rm -rf "${tmp}"; return 1; }
     step "Applying update (keeping your models, venvs, config and RAG db)…"
+    # The Supertonic venv and models root are configurable and may be pointed at
+    # a non-default directory INSIDE the example, where --delete-delay would
+    # erase them — a custom runtime and potentially gigabytes of models — while
+    # this step claims to keep them. Resolve the configured paths and exclude any
+    # that fall under EXAMPLE_DIR, on top of the default locations below.
+    # Resolve the persisted paths FIRST: they are only populated by
+    # resolve_supertonic_env, and reading them unset aborts under `set -u` —
+    # which would break the documented update rather than protect anything. It
+    # also picks up a custom venv recorded only in config.local.yaml.
+    resolve_supertonic_env
+    local -a keep=()
+    local cfg_path abs rel
+    for cfg_path in "${SUPERTONIC_VENV:-}" "${SUPERTONIC_MODELS_ROOT:-}"; do
+      [[ -n "${cfg_path}" ]] || continue
+      # Resolve without requiring the directory to exist yet; `local x=$(...)`
+      # always returns 0, so the status is checked separately.
+      abs=""
+      if [[ -d "${cfg_path}" ]]; then
+        abs="$(cd "${cfg_path}" 2>/dev/null && pwd -P)" || abs=""
+      elif [[ -d "$(dirname "${cfg_path}")" ]]; then
+        abs="$(cd "$(dirname "${cfg_path}")" 2>/dev/null && pwd -P)" || abs=""
+        [[ -n "${abs}" ]] && abs="${abs}/$(basename "${cfg_path}")"
+      else
+        abs="${cfg_path}"
+      fi
+      [[ -n "${abs}" ]] || continue
+      case "${abs}" in
+        "${EXAMPLE_DIR}"/*)
+          rel="${abs#"${EXAMPLE_DIR}"/}"
+          keep+=( "--exclude=/${rel}/" )
+          info "Keeping configured path: ${C_DIM}${rel}${C_RESET}"
+          ;;
+      esac
+    done
     # Mirror tracked source so files deleted by a release disappear locally.
     # Explicitly exclude every install-owned path from transfer and deletion.
     rsync -a --delete-delay --delay-updates \
+      ${keep[@]+"${keep[@]}"} \
       --exclude='/.venv/' \
       --exclude='/.venv-pipertts/' \
+      --exclude='/.venv-supertonic/' \
       --exclude='/config.local.yaml' \
+      --exclude='/config.local.yaml.bak' \
       --exclude='/.local-certs/' \
       --exclude='/.neat-genai-studio.pid' \
+      --exclude='/.neat-genai-studio.mode' \
+      --exclude='/.neat-genai-studio.url' \
       --exclude='*.log' \
       --exclude='/src/python/ui/uploads/' \
       --exclude='/src/python/ui/.milvus.db.lock' \
@@ -444,8 +688,15 @@ do_update() {
   # model, voice, config and RAG stages.
   if [[ "${UPDATE_DEPS:-0}" == "0" ]]; then
     info "Python dependency refresh skipped (set UPDATE_DEPS=1 to enable it)."
+    if [[ "$(supertonic_fingerprint)" != "${supertonic_before}" ]]; then
+      warn "This update changes the Supertonic requirements or model revisions; run UPDATE_DEPS=1 ./run.sh update (or ./setup.sh) to apply them."
+    fi
   else
     step "Refreshing Python dependencies…"
+    # setup.sh must refresh the Supertonic runtime this installation actually
+    # uses: hand it the persisted venv and models root (config.local.yaml),
+    # not its defaults, unless the environment already names them.
+    resolve_supertonic_env
     if "${EXAMPLE_DIR}/setup.sh" --dependencies-only; then
       ok "Python dependencies refreshed."
     else
@@ -464,6 +715,8 @@ case "${1:-run}" in
   update|--update|upgrade) do_update; exit 0 ;;
   -h|--help|help) usage; exit 0 ;;
   --cli|cli) CLI_MODE=1 ;;   # fall through to launch, then run the terminal chat
+  --backend-only|backend-only|backend) BACKEND_ONLY=1 ;;   # fall through to launch, headless
+  --open-browser|open) OPEN_BROWSER=1 ;;   # fall through to launch, then open the UI
   # CLI shortcuts: launch the terminal chat straight into a mode. An optional
   # second argument (a model name, or HF repo for download) is forwarded too.
   --chat|chat)
@@ -518,6 +771,8 @@ if [[ ! -f "${CONFIG_PATH}" ]]; then
 fi
 info "Config: ${C_DIM}${CONFIG_PATH}${C_RESET}"
 
+resolve_supertonic_env
+
 # `neat` runs an online update check, so allow skipping this with SHOW_SYSTEM_INFO=0.
 if [[ "${SHOW_SYSTEM_INFO:-1}" != "0" ]]; then
   section "System"
@@ -553,8 +808,8 @@ finally:
 }
 
 # Stop stale Studio processes from a previous (e.g. crashed) run and wait for
-# the OpenAI port to become available. Do not touch the board runtime or restart
-# the MLA dispatcher during normal application startup.
+# the OpenAI port to become available. Do not touch the board runtime during
+# normal application startup.
 prepare_clean_start() {
   step "Clearing stale Neat GenAI Studio processes…"
   if command -v pkill >/dev/null 2>&1; then
@@ -616,6 +871,7 @@ cleanup() {
   trap '' INT TERM
 
   step "Shutting down Neat GenAI Studio…"
+  if [[ -n "${BROWSER_WAITER_PID}" ]]; then kill "${BROWSER_WAITER_PID}" 2>/dev/null || true; fi
 
   # Graceful: both Python entrypoints handle SIGTERM — the model server releases
   # its models on the MLA and the UI stops the RAG worker before exiting.
@@ -636,14 +892,19 @@ cleanup() {
     wait "${pid}" 2>/dev/null || true
   done
   # In --cli mode the watchdog may have relaunched the model server under a new
-  # process group (not in our remembered groups) — sweep any stray one.
+  # process group (not in our remembered groups, since the watchdog runs in a
+  # subshell). Sweep it with the same grace the supervised server gets, so a
+  # loaded server can still release its MLA models in server.stop().
   if [[ "${CLI_MODE}" == "1" ]] && command -v pkill >/dev/null 2>&1; then
     pkill -TERM -f "${SERVER_PATTERN}" 2>/dev/null || true
-    sleep 1
+    local sweep_deadline=$((SECONDS + SHUTDOWN_GRACE_SECONDS))
+    while pgrep -f "${SERVER_PATTERN}" >/dev/null 2>&1 && [[ "${SECONDS}" -lt "${sweep_deadline}" ]]; do
+      sleep 1
+    done
     pkill -KILL -f "${SERVER_PATTERN}" 2>/dev/null || true
   fi
   stop_stale_rag_worker
-  rm -f "${PID_FILE}"
+  rm -f "${PID_FILE}" "${MODE_FILE}" "${URL_FILE}" "${SERVER_STATUS_FILE}"
   ok "Neat GenAI Studio stopped."
 }
 
@@ -652,38 +913,143 @@ cleanup() {
 if [[ -f "${PID_FILE}" ]]; then
   existing="$(cat "${PID_FILE}" 2>/dev/null || true)"
   if [[ -n "${existing}" ]] && kill -0 "${existing}" 2>/dev/null; then
+    if [[ "${OPEN_BROWSER}" == "1" ]]; then
+      ok "Neat GenAI Studio is already running (pid ${existing})."
+      _mode="$(cat "${MODE_FILE}" 2>/dev/null || echo web)"
+      if [[ "${_mode}" != "web" ]]; then
+        warn "It runs in ${_mode} mode (no web UI); stop it (./run.sh stop) and start ./run.sh to use the UI."
+        exit 1
+      fi
+      # Prefer the URL the running instance recorded; fall back to resolving it
+      # locally for an instance started before this was written.
+      _url="$(cat "${URL_FILE}" 2>/dev/null || true)"
+      [[ -n "${_url}" ]] || _url="$(local_web_url || true)"
+      [[ -n "${_url}" ]] && open_url "${_url}" wait
+      exit 0
+    fi
     errln "Neat GenAI Studio is already running (pid ${existing})."
     info "Run './run.sh stop' first, or './run.sh status' to check."
     exit 1
   fi
-  rm -f "${PID_FILE}"
+  rm -f "${PID_FILE}" "${MODE_FILE}" "${URL_FILE}" "${SERVER_STATUS_FILE}"
 fi
 
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+# Closing the terminal window (the desktop icon runs us in one) stops the Studio
+# cleanly instead of leaving the setsid'd processes behind.
+trap 'exit 129' HUP
+
+# app.web.headless: true in the config is the same as --backend-only (the UI
+# process reads it too); resolve it before the mode is recorded and branched on.
+if [[ "${BACKEND_ONLY}" != "1" && "${CLI_MODE}" != "1" ]]; then
+  config_true "$(web_config_value headless)" && BACKEND_ONLY=1
+fi
 
 # Record this instance so `./run.sh stop` can find it (removed by cleanup).
 echo "$$" > "${PID_FILE}"
+if [[ "${CLI_MODE}" == "1" ]]; then echo cli; elif [[ "${BACKEND_ONLY}" == "1" ]]; then echo backend-only; else echo web; fi > "${MODE_FILE}"
+# Backend-only serves its API on the same host/port, and `status` reports that
+# URL too, so record it in both modes. Only --cli has no HTTP surface.
+if [[ "${CLI_MODE}" != "1" ]]; then
+  _self_url="$(local_web_url || true)"
+  [[ -n "${_self_url}" ]] && printf '%s\n' "${_self_url}" > "${URL_FILE}"
+fi
 # Expose the supervisor PID + PID file to the UI so it can offer a GUI "Shut down"
 # button (it SIGTERMs this process, which runs cleanup — same as `./run.sh stop`).
 export NEAT_RUN_PID="$$"
 export RUN_PID_FILE="${PID_FILE}"
 
+# The model server runs in the Neat environment (PYNEAT_PYTHON), which may not
+# carry PyYAML (Platform 3.0's ~/pyneat does not). The app's own Python converts
+# the YAML config to JSON for it, so the Neat environment is never modified.
+SERVER_CONFIG_JSON="${EXAMPLE_DIR}/.neat-genai-server-config.json"
+write_server_config() {
+  "${APP_PYTHON}" - "${CONFIG_PATH}" "${SERVER_CONFIG_JSON}" <<'YAML_TO_JSON'
+import json
+import sys
+
+import yaml
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    config = yaml.safe_load(source) or {}
+with open(sys.argv[2], "w", encoding="utf-8") as target:
+    json.dump(config, target)
+YAML_TO_JSON
+}
+
 launch_server() {
   step "Starting the Neat model server (OpenAI-compatible)…"
+  if ! write_server_config; then
+    errln "Could not read ${CONFIG_PATH} with ${APP_PYTHON}; run ./setup.sh first."
+    return 1
+  fi
   # In CLI mode the model server shares the terminal with the interactive chat,
   # so its logs would land on the "you ▸" prompt. Send them to a log file
   # instead; the CLI drives the server over HTTP and doesn't need its stdout.
   if [[ "${CLI_MODE}" == "1" ]]; then
-    setsid "${PYNEAT_PYTHON}" "${PYTHON_DIR}/server/main.py" --config "${CONFIG_PATH}" \
-      >"${SERVER_LOG}" 2>&1 &
+    # Wrap the server so its exit status lands in a file: the CLI watchdog polls
+    # a sibling PID and so cannot `wait` for it, and without the status it could
+    # not tell a clean exit from a crash.
+    rm -f "${SERVER_STATUS_FILE}"
+    setsid bash -c \
+      '"$1" "$2" --config "$3" >"$4" 2>&1; s=$?; echo "$s" >"$5"; exit "$s"' _ \
+      "${PYNEAT_PYTHON}" "${PYTHON_DIR}/server/main.py" "${SERVER_CONFIG_JSON}" \
+      "${SERVER_LOG}" "${SERVER_STATUS_FILE}" &
   else
-    setsid "${PYNEAT_PYTHON}" "${PYTHON_DIR}/server/main.py" --config "${CONFIG_PATH}" &
+    setsid "${PYNEAT_PYTHON}" "${PYTHON_DIR}/server/main.py" --config "${SERVER_CONFIG_JSON}" &
   fi
   server_pid="$!"
   pids[0]="${server_pid}"
   remember_process_group "${server_pid}"
+}
+
+# Background watchdog for --cli mode, which has no supervisor loop: if the model
+# server crashes, relaunch it so the CLI can reconnect. Poll-based, since a
+# backgrounded subshell cannot `wait` a sibling PID; bounded so a broken server
+# cannot respawn forever. Strays are swept by cleanup().
+#
+# This is the CLI-mode counterpart of the web-mode supervisor loop below
+# (search "Supervisor: watch both processes"). They deliberately are NOT merged:
+# the CLI watchdog runs in a backgrounded subshell and must poll
+# SERVER_STATUS_FILE, watches only the server, and relaunches it (through
+# launch_server, within the bounded RELAUNCH_STABLE_SECONDS retry budget) when it
+# crashes; the web loop runs in the launcher shell, `wait`s the server, also
+# watches the UI, and stops the Studio when either exits.
+cli_supervise() {
+  # `tries` counts consecutive relaunches that did not survive: a relaunched
+  # server that stays up for RELAUNCH_STABLE_SECONDS clears it, so a crash
+  # loop cannot continue indefinitely.
+  local tries=0 status launched_at=0
+  while true; do
+    sleep 2
+    if kill -0 "${server_pid}" 2>/dev/null; then
+      if [[ "${tries}" -gt 0 && $((SECONDS - launched_at)) -ge "${RELAUNCH_STABLE_SECONDS}" ]]; then
+        tries=0
+      fi
+      continue
+    fi
+
+    status=""
+    for _ in 1 2 3 4 5; do
+      [[ -s "${SERVER_STATUS_FILE}" ]] && { status="$(cat "${SERVER_STATUS_FILE}" 2>/dev/null)"; break; }
+      sleep 0.4
+    done
+    if [[ "${status}" == "0" ]]; then
+      return 0    # clean exit: nothing to recover
+    fi
+    if [[ "${tries}" -ge "${MLA_MAX_RESTART_RETRIES}" ]]; then
+      errln "Model server keeps exiting (last status ${status:-?}); not relaunching again — /quit and restart the Studio."
+      return 0
+    fi
+    tries=$((tries + 1))
+    # Relaunch so the prompt is not left talking to a dead server.
+    warn "Model server exited with status ${status:-?}; relaunching it (models must be loaded again with /load)."
+    launch_server
+    launched_at="${SECONDS}"
+    sleep "${MODEL_SERVER_START_DELAY:-2}"
+  done
 }
 
 prepare_clean_start
@@ -710,14 +1076,24 @@ if [[ "${CLI_MODE}" == "1" ]]; then
   info "Model server logs → ${C_DIM}${SERVER_LOG}${C_RESET}"
   printf '\n'
   trap - INT            # let the Python CLI own Ctrl+C (abort a reply, not exit)
+  cli_supervise &
+  cli_watchdog_pid="$!"
   "${APP_PYTHON}" "${PYTHON_DIR}/cli/main.py" --config "${CONFIG_PATH}" \
     ${CLI_EXTRA_ARGS[@]+"${CLI_EXTRA_ARGS[@]}"} || true
+  kill "${cli_watchdog_pid}" 2>/dev/null || true
   exit 0                # -> EXIT trap stops the model server
 fi
 
-section "Web UI"
-step "Starting the Neat GenAI Studio web UI…"
-setsid "${APP_PYTHON}" "${PYTHON_DIR}/ui/main.py" --config "${CONFIG_PATH}" &
+ui_args=(--config "${CONFIG_PATH}")
+if [[ "${BACKEND_ONLY}" == "1" ]]; then
+  section "Backend (headless)"
+  step "Starting the Neat GenAI Studio API endpoints (no web UI)…"
+  ui_args+=(--backend-only)
+else
+  section "Web UI"
+  step "Starting the Neat GenAI Studio web UI…"
+fi
+setsid "${APP_PYTHON}" "${PYTHON_DIR}/ui/main.py" "${ui_args[@]}" &
 pids[1]="$!"
 ui_pid="${pids[1]}"
 remember_process_group "${ui_pid}"
@@ -725,14 +1101,30 @@ remember_process_group "${ui_pid}"
 printf '\n'
 ok "Neat GenAI Studio is starting up."
 _url="$(web_url || true)"
-if [[ -n "${_url}" ]]; then
+if [[ -n "${_url}" && "${BACKEND_ONLY}" == "1" ]]; then
+  info "Backend-only: API on ${C_ACCENT}${C_BOLD}${_url}${C_RESET} (no web UI); readiness at ${C_ACCENT}${_url}/health${C_RESET}."
+  # Set at all (even empty) wins over the config, as in the UI process.
+  if [[ -n "${BACKEND_CORS_ORIGINS+set}" ]]; then _cors="${BACKEND_CORS_ORIGINS}"; else _cors="$(web_config_value cors_origins)"; fi
+  info "CORS for browser front ends: ${_cors:-off (app.web.cors_origins or BACKEND_CORS_ORIGINS allows origins)}."
+elif [[ -n "${_url}" ]]; then
   info "Open ${C_ACCENT}${C_BOLD}${_url}${C_RESET} in your browser once it finishes loading."
+fi
+if [[ "${OPEN_BROWSER}" == "1" ]]; then
+  if [[ "${BACKEND_ONLY}" == "1" ]]; then
+    warn "--open-browser is ignored in backend-only mode (there is no web UI)."
+  else
+    _local_url="$(local_web_url || true)"
+    if [[ -n "${_local_url}" ]]; then
+      info "The browser opens on ${C_ACCENT}${_local_url}${C_RESET} as soon as the UI answers."
+      ( if wait_for_ui "${_local_url}"; then open_url "${_local_url}"; else warn "The web UI did not answer in time; open ${_local_url} yourself."; fi ) &
+      BROWSER_WAITER_PID="$!"
+    fi
+  fi
 fi
 info "Press ${C_BOLD}Ctrl+C${C_RESET} to stop, or run ${C_BOLD}./run.sh stop${C_RESET} from another shell."
 printf '\n'
 
-# Supervisor: keep both processes alive. A child failure stops the Studio; board
-# runtime recovery remains outside this application.
+# Supervisor: watch both processes; when either exits, the Studio stops.
 status=0
 while true; do
   if ! child_running "${server_pid}"; then

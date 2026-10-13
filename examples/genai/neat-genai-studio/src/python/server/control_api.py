@@ -91,6 +91,8 @@ class _ControlHandler(BaseHTTPRequestHandler):
             body = self._read_json()
             if path == "/control/load":
                 self._send_json(self.manager.load(str(body.get("name", ""))))
+            elif path == "/control/asr":
+                self._send_json(self.manager.set_active_asr(str(body.get("name", ""))))
             elif path == "/control/unload":
                 self._send_json(self.manager.unload(str(body.get("name", ""))))
             elif path == "/control/delete":

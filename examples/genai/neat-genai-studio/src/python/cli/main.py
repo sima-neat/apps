@@ -15,6 +15,7 @@ import os
 import re
 import shutil
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -25,6 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Board-camera capture is shared with the Flask UI backend.
 from shared.board_camera import capture_camera_frame, default_camera_device, cam_label as _cam_label  # noqa: E402
+from shared.studio_client import apply_no_think  # noqa: E402
 
 
 # ---- colour (matches run.sh; degrades on non-TTY / NO_COLOR / dumb) ----------
@@ -354,31 +356,24 @@ def render_md_line(ln, state):
     return _inline_md(ln)
 
 
-def render_markdown_ansi(text):
-    """Render a whole Markdown block. ANSI styling on a TTY; either way LaTeX math
-    is converted to Unicode for readability (render_md_line handles both cases)."""
-    state = [False, False]
-    return "\n".join(render_md_line(ln, state) for ln in text.split("\n"))
-
-
 def load_config(config_path):
-    """Return ((ctrl_host, ctrl_port), (oai_host, oai_port), max_tokens)."""
-    ctrl = ("127.0.0.1", 9997)
-    oai = ("127.0.0.1", 9998)
-    max_tokens = 512
+    """Return ((ctrl_host, ctrl_port), (oai_host, oai_port), max_tokens).
+
+    Delegates to the shared loader so the CLI reads control/OpenAI hosts and
+    ``max_tokens`` exactly as the server and UI do, and keeps the CLI's original
+    behaviour of falling back to defaults when the config is missing or invalid.
+    """
+    from pathlib import Path
+    from shared.config import load_ui_config
     try:
-        import yaml
-        with open(config_path, "r", encoding="utf-8") as fh:
-            cfg = yaml.safe_load(fh) or {}
-        app = cfg.get("app", {}) or {}
-        c = app.get("control", {}) or {}
-        o = app.get("openai", {}) or {}
-        ctrl = (c.get("client_host", ctrl[0]), int(c.get("port", ctrl[1])))
-        oai = (o.get("client_host", oai[0]), int(o.get("port", oai[1])))
-        max_tokens = int((app.get("request", {}) or {}).get("max_tokens", max_tokens))
+        cfg = load_ui_config(Path(config_path))
+        return (
+            (cfg.control.client_host, cfg.control.port),
+            (cfg.openai.client_host, cfg.openai.port),
+            cfg.request.max_tokens,
+        )
     except Exception:
-        pass
-    return ctrl, oai, max_tokens
+        return ("127.0.0.1", 9997), ("127.0.0.1", 9998), 512
 
 
 def _http(url, data=None, method=None, timeout=60):
@@ -418,21 +413,132 @@ def wait_ready(oai, timeout=90):
     return False
 
 
-def stream_chat(oai, model, messages, max_tokens, render=False):
-    """Stream a completion. Returns (text, ttft_seconds, tps, tokens).
+class _ThinkSplitter:
+    """Separate a reasoning model's ``<think>…</think>`` block from its answer
+    while the reply streams. Deltas are fed in; ``feed`` yields
+    ``(kind, text)`` pieces with kind ``"think"`` or ``"answer"``. A tag split
+    across deltas is held back until it can be resolved."""
+
+    OPEN, CLOSE = "<think>", "</think>"
+    # Text streamed before either tag is undecided: a template that injects
+    # <think> makes the model open with its reasoning and emit only </think>.
+    # Hold this many characters back before treating the prefix as an answer,
+    # so ordinary reasoning traces are shown as reasoning from the start; a
+    # trace longer than the hold is reclassified when its </think> arrives.
+    HOLD_CHARS = 160
+
+    def __init__(self):
+        self.in_think = False
+        self.saw_open = False
+        self.decided = False      # the undecided prefix has been released as answer
+        self.pending = ""
+
+    def feed(self, delta):
+        self.pending += delta
+        out = []
+        while self.pending:
+            tag = self.CLOSE if self.in_think else self.OPEN
+            idx = self.pending.find(tag)
+            if not self.in_think and not self.saw_open:
+                # Template-injected reasoning: the runtime put <think> in the
+                # prompt, so the model emits only </think>. Everything before
+                # it was reasoning. While the prefix is still held nothing has
+                # been shown, so it is simply emitted as reasoning; once the
+                # hold was released, tell the caller to reclassify what it saw.
+                close = self.pending.find(self.CLOSE)
+                if close >= 0 and (idx < 0 or close < idx):
+                    if close:
+                        out.append(("think", self.pending[:close]))
+                    if self.decided:
+                        out.append(("reclassify", ""))
+                    self.pending = self.pending[close + len(self.CLOSE):]
+                    self.saw_open = True
+                    continue
+                if idx < 0 and not self.decided:
+                    if len(self.pending) < self.HOLD_CHARS:
+                        break                       # keep holding
+                    self.decided = True             # long enough: it is an answer
+                if idx < 0:
+                    # Hold back a possible </think> prefix as well.
+                    tag_alt = self.CLOSE
+                    keep = 0
+                    for n in range(min(len(tag_alt) - 1, len(self.pending)), 0, -1):
+                        if tag_alt.startswith(self.pending[-n:]) or tag.startswith(self.pending[-n:]):
+                            keep = n
+                            break
+                    emit = self.pending[:len(self.pending) - keep]
+                    self.pending = self.pending[len(self.pending) - keep:]
+                    if emit:
+                        out.append(("answer", emit))
+                    break
+            if idx >= 0:
+                if idx:
+                    out.append(("think" if self.in_think else "answer", self.pending[:idx]))
+                self.pending = self.pending[idx + len(tag):]
+                if self.in_think:
+                    self.in_think = False
+                else:
+                    self.in_think = True
+                    self.saw_open = True
+                continue
+            # No full tag: emit everything except a suffix that could still be
+            # the start of one.
+            keep = 0
+            for n in range(min(len(tag) - 1, len(self.pending)), 0, -1):
+                if tag.startswith(self.pending[-n:]):
+                    keep = n
+                    break
+            emit, self.pending = self.pending[:len(self.pending) - keep], self.pending[len(self.pending) - keep:]
+            if emit:
+                out.append(("think" if self.in_think else "answer", emit))
+            break
+        return out
+
+    def flush(self):
+        rest, self.pending = self.pending, ""
+        self.decided = True
+        return [("think" if self.in_think else "answer", rest)] if rest else []
+
+
+def stream_chat(oai, model, messages, max_tokens, render=False, think=True):
+    """Stream a completion. Returns (text, ttft_seconds, tps, tokens,
+    reasoning_tokens). ``text`` is the answer with any reasoning block removed.
     With render=True the response is shown live, rendered as Markdown line-by-line
     (complete lines are rendered as they arrive; the trailing partial line is
     flushed at the end) so the reply is visible while it streams. A live token
     count trails the current line. With render=False raw tokens are printed as
-    they arrive."""
-    payload = {"model": model, "messages": messages,
+    they arrive. Reasoning (``<think>…</think>``) streams dimmed, is counted
+    separately, and is kept out of the returned text. With think=False the
+    request asks the model not to reason, the way the web UI's toggle does."""
+    payload = {"model": model,
+               "messages": messages if think else apply_no_think(messages),
                "max_tokens": max_tokens, "stream": True}
+    if not think:
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
     req = urllib.request.Request(
         f"http://{oai[0]}:{oai[1]}/v1/chat/completions",
         data=json.dumps(payload).encode("utf-8"),
         headers={"Content-Type": "application/json"}, method="POST")
     parts, ttft, tps, tokens = [], None, None, 0
+    reasoning_tokens, think_open, held_deltas = 0, False, 0
+    splitter = _ThinkSplitter()
     buf, md_state = "", [False, False]   # render: [in code fence, in $$ math block]
+
+    def _show_think(text):
+        nonlocal think_open
+        if not think_open:
+            sys.stdout.write("\r\x1b[K" if render else "")
+            sys.stdout.write(f"{DIM}💭 thinking…{RESET}\n")
+            think_open = True
+        sys.stdout.write(f"{DIM}{text}{RESET}")
+        sys.stdout.flush()
+
+    def _end_think():
+        nonlocal think_open
+        if think_open:
+            sys.stdout.write(f"\n{DIM}💭 {reasoning_tokens} reasoning tok{RESET}\n")
+            sys.stdout.flush()
+            think_open = False
 
     def _redraw_partial():
         # Show the in-progress line live with a trailing "… N tok" count, redrawn
@@ -475,26 +581,74 @@ def stream_chat(oai, model, messages, max_tokens, render=False):
             if not delta:
                 continue
             clean = _CTRL_TOKENS.sub("", delta)
-            if clean:
-                parts.append(clean)
+            if not clean:
+                continue
+            # Tokens are counted per incoming delta, not per emitted piece: the
+            # splitter buffers the undecided prefix and would otherwise report a
+            # whole held run as one token. A delta that arrives while the prefix
+            # is still held is counted once the hold resolves, on whichever side
+            # it lands.
+            was_in_think = splitter.in_think
+            pieces = splitter.feed(clean)
+            if (not pieces and not splitter.decided and not splitter.in_think
+                    and not splitter.saw_open):
+                held_deltas += 1                    # undecided prefix, counted later
+                continue
+            delta_side = "think" if (splitter.in_think or was_in_think
+                                     or (pieces and pieces[-1][0] == "think")) else "answer"
+            if delta_side == "think":
+                reasoning_tokens += 1
+            else:
                 tokens += 1
+            for kind, piece in pieces:
+                if kind == "reclassify":
+                    # Everything streamed so far was template-injected reasoning:
+                    # keep it out of the answer and count it as reasoning.
+                    reasoning_tokens += tokens
+                    tokens, parts, buf = 0, [], ""
+                    sys.stdout.write(f"\n{DIM}💭 (the text above was the model's reasoning){RESET}\n")
+                    _end_think()
+                    continue
+                if kind == "think":
+                    reasoning_tokens += held_deltas   # a held prefix that turned out to be reasoning
+                    held_deltas = 0
+                    _show_think(piece)
+                    continue
+                _end_think()
+                parts.append(piece)
+                tokens += held_deltas               # a held prefix released as answer
+                held_deltas = 0
                 if render:
-                    buf += clean
+                    buf += piece
                     while "\n" in buf:   # flush every completed line as rendered Markdown
                         line_text, buf = buf.split("\n", 1)
                         sys.stdout.write("\r\x1b[K")   # drop the partial+counter line
                         print(render_md_line(line_text, md_state))
                     _redraw_partial()   # keep the in-progress line + live count visible
                 else:
-                    sys.stdout.write(clean)
+                    sys.stdout.write(piece)
                     sys.stdout.flush()
+    for kind, piece in splitter.flush():
+        if kind == "think":
+            reasoning_tokens += held_deltas
+            held_deltas = 0
+            _show_think(piece)
+        else:
+            parts.append(piece)
+            tokens += held_deltas
+            held_deltas = 0
+            if render:
+                buf += piece
+            else:
+                sys.stdout.write(piece)
+    _end_think()
     if render:
         sys.stdout.write("\r\x1b[K")   # clear the trailing partial+counter
         if buf:
             print(render_md_line(buf, md_state))   # render the last (unterminated) line
         else:
             sys.stdout.flush()
-    return "".join(parts), ttft, tps, tokens
+    return "".join(parts), ttft, tps, tokens, reasoning_tokens
 
 
 HELP = f"""{MUTED}Commands:
@@ -513,6 +667,9 @@ HELP = f"""{MUTED}Commands:
   /new               clear the conversation history
   /export [file]     save this chat to a .log file (default neat-chat-<time>.log)
   /tokens <n>        set the max response tokens
+  /think [on|off]    let reasoning models think before answering (default on).
+                     Reasoning streams dimmed and stays out of history/export;
+                     off sends /no_think, like the web UI's Thinking toggle
   /benchmark [sel] [runs] [tok]   TTFT/TPS benchmark. sel: blank=active model,
                      'all', or a comma-list. e.g. /benchmark all 5 128 (aliases /bench, /perf)
   /rag [filter]      inspect the RAG database — list ingested chunks (aliases /docs)
@@ -712,6 +869,96 @@ def _arrow_multiselect(items, prompt):
 
 
 # ---- model loading + Hugging Face (reuses server/hub.py, like the UI) --------
+def fmt_secs(s):
+    """Compact duration: 45s, 1m 20s."""
+    try:
+        s = max(0, int(round(float(s))))
+    except (TypeError, ValueError):
+        return ""
+    return f"{s}s" if s < 60 else f"{s // 60}m {s % 60:02d}s"
+
+
+def _load_progress_line(ld):
+    """One redraw of the load bar from a /control/status `loading` block.
+
+    Mirrors the download bar's look so the two read as the same thing. The
+    accelerator reports no per-stage signal on current runtimes, so the percent
+    is usually an estimate against the model's measured load time — the stage
+    count is shown as scale, and "~" marks the countdown as approximate.
+    """
+    bits = []
+    pct = ld.get("pct")
+    if isinstance(pct, (int, float)):
+        filled = max(0, min(20, int(pct / 5)))
+        bits.append(f"[{'█' * filled}{'░' * (20 - filled)}] {int(pct)}%")
+    done, total = ld.get("filesDone"), ld.get("filesTotal")
+    if total and done is not None:
+        bits.append(f"stage {done}/{total}")
+    elif ld.get("stagesTotal"):
+        bits.append(f"{ld['stagesTotal']} stages")
+    if ld.get("elapsedS") is not None:
+        bits.append(fmt_secs(ld["elapsedS"]))
+    remain = ld.get("remainingS")
+    if remain is not None:
+        bits.append(f"~{fmt_secs(remain)} left" if remain > 0 else "finishing…")
+    return "  ".join(b for b in bits if b)
+
+
+def _post_load_with_progress(ctrl, name, do_post):
+    """Run `do_post` on a worker thread and draw live load progress until it
+    returns. Falls back to the plain blocking call when stdout is not a TTY (a
+    redirected log should not collect carriage returns and escape codes)."""
+    if not sys.stdout.isatty():
+        return do_post()
+
+    box = {}
+
+    def _work():
+        try:
+            box["result"] = do_post()
+        except BaseException as exc:  # noqa: BLE001 - re-raised on the main thread
+            box["error"] = exc
+
+    # The native model transfer holds the GIL, so the control API usually stops
+    # answering for the whole load. Poll it with a short timeout and, while it
+    # is silent, drive the bar from the catalog's own estimate (measured load
+    # time and stage count), as the browser does.
+    hint = next((m for m in catalog(ctrl) if m.get("name") == name), {}) or {}
+    est = hint.get("estimatedLoadS")
+    est = float(est) if isinstance(est, (int, float)) and est > 0 else None
+    stages = hint.get("stagesTotal")
+    started = time.monotonic()
+    worker = threading.Thread(target=_work, name="model-load", daemon=True)
+    worker.start()
+    drew = False
+    while worker.is_alive():
+        worker.join(0.5)
+        if not worker.is_alive():
+            break
+        try:
+            ld = (_http(f"http://{ctrl[0]}:{ctrl[1]}/control/status", timeout=2) or {}).get("loading")
+        except Exception:
+            ld = None
+        if not (ld and ld.get("name") == name):
+            elapsed = time.monotonic() - started
+            ld = {"name": name, "elapsedS": elapsed, "stagesTotal": stages}
+            if est:
+                ld["pct"] = min(99.0, elapsed / est * 100.0)   # hold at 99: done when the call returns
+                ld["remainingS"] = max(0.0, est - elapsed)
+        if ld and ld.get("name") == name:
+            line = _load_progress_line(ld)
+            if line:
+                sys.stdout.write(f"\r\x1b[K{MUTED}  {line}{RESET}")
+                sys.stdout.flush()
+                drew = True
+    if drew:
+        sys.stdout.write("\r\x1b[K")   # clear the bar before the result line
+        sys.stdout.flush()
+    if "error" in box:
+        raise box["error"]
+    return box.get("result")
+
+
 def load_model(ctrl, name, oai=None, auto_retry=True):
     """Load a model via the control API. Returns True on success. Loading a
     chat/VLM model evicts any other resident one, so that is made explicit."""
@@ -733,7 +980,7 @@ def load_model(ctrl, name, oai=None, auto_retry=True):
         return r
 
     try:
-        r = _attempt()
+        r = _post_load_with_progress(ctrl, name, _attempt)
     except Exception as exc:  # noqa: BLE001
         print(f"{ERR}  {exc}{RESET}")
         return False
@@ -749,24 +996,19 @@ def load_model(ctrl, name, oai=None, auto_retry=True):
 
 
 def _hub_config(config_path):
-    """Read catalog_dir + Hugging Face settings from the config."""
+    """Read catalog_dir + Hugging Face settings from the config.
+
+    Delegates to the shared loader (``server.models.catalog_dir`` and
+    ``server.hub``) so the CLI resolves the catalog directory and hub orgs the
+    same way the UI does, falling back to defaults if the config is unreadable.
+    """
     from pathlib import Path
-    catalog_dir, allow, orgs = None, True, ("simaai", "TDoSiMa")
+    from shared.config import HubConfig, load_ui_config
     try:
-        import yaml
-        with open(config_path, "r", encoding="utf-8") as fh:
-            cfg = yaml.safe_load(fh) or {}
-        models = (cfg.get("server", {}) or {}).get("models", {}) or {}
-        if models.get("catalog_dir"):
-            catalog_dir = Path(str(models["catalog_dir"])).expanduser()
-        hub = (cfg.get("server", {}) or {}).get("hub", {}) or {}
-        allow = bool(hub.get("allow_download", True))
-        raw = hub.get("orgs", hub.get("org", list(orgs)))
-        orgs = tuple(x for x in ([raw] if isinstance(raw, str) else raw) if x)
+        cfg = load_ui_config(Path(config_path))
+        return cfg.catalog_dir, cfg.hub
     except Exception:
-        pass
-    from shared.config import HubConfig
-    return catalog_dir, HubConfig(allow_download=allow, orgs=orgs)
+        return None, HubConfig(allow_download=True)
 
 
 def hub_available(config_path):
@@ -1620,6 +1862,8 @@ def main():
     ap.add_argument("--config", required=True)
     ap.add_argument("--model", default="", help="model to make active on start")
     ap.add_argument("--max-tokens", type=int, default=0)
+    ap.add_argument("--no-think", action="store_true",
+                    help="start with reasoning off for reasoning models (see /think)")
     # Jump straight to an action, skipping the interactive startup menu. Each
     # takes an optional model: `--chat MODEL` loads it and chats, `--download REPO`
     # downloads it, `--benchmark MODEL` benchmarks it (bare flag prompts/menus).
@@ -1635,6 +1879,7 @@ def main():
 
     ctrl, oai, cfg_max = load_config(args.config)
     max_tokens = args.max_tokens or cfg_max
+    think = not args.no_think    # reasoning models think unless told otherwise (/think)
 
     print(f"{ACCENT}{BOLD}▸{RESET} Neat GenAI Studio — terminal chat")
     print(f"{MUTED}  connecting to the model server ({oai[0]}:{oai[1]})…{RESET}")
@@ -1907,6 +2152,17 @@ def main():
                     print(f"{OK}✔ exported {turns} turn(s) to {path}{RESET}")
                 except Exception as exc:  # noqa: BLE001
                     print(f"{ERR}  export failed: {exc}{RESET}")
+            elif cmd in ("think", "thinking", "reason"):
+                choice = arg.strip().lower()
+                if choice in ("on", "1", "true", "yes"):
+                    think = True
+                elif choice in ("off", "0", "false", "no"):
+                    think = False
+                elif choice:
+                    print(f"{MUTED}  usage: /think on|off{RESET}")
+                    continue
+                print(f"{OK}✔ thinking {'on' if think else 'off'}{RESET}"
+                      f"{MUTED}  (reasoning models only; others are unaffected){RESET}")
             elif cmd in ("tokens", "max"):
                 try:
                     max_tokens = max(1, int(arg))
@@ -2006,7 +2262,8 @@ def main():
         else:
             print(f"{TEAL}{BOLD}neat ◂{RESET} ", end="", flush=True)
         try:
-            text, ttft, tps, tokens = stream_chat(oai, active, msgs, max_tokens, render=render)
+            text, ttft, tps, tokens, reasoning_tokens = stream_chat(
+                oai, active, msgs, max_tokens, render=render, think=think)
         except KeyboardInterrupt:
             try:
                 _http(f"http://{oai[0]}:{oai[1]}/stop", {"model": active}, timeout=5)
@@ -2025,7 +2282,7 @@ def main():
             print()   # render mode already printed the reply live, line-by-line
         bits = []
         if tokens:
-            bits.append(f"{tokens} tok")
+            bits.append(f"{tokens} tok" + (f" (+{reasoning_tokens} reasoning)" if reasoning_tokens else ""))
         if ttft is not None:
             bits.append(f"ttft {ttft * 1000:.0f}ms")
         if tps is not None:

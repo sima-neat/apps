@@ -16,3 +16,11 @@ sima_neat_apps_module(
   E2E_TEST
   OUTPUT_TARGET_VAR MULTISTREAM_OBJECT_DETECTION_INSIGHT_TARGET
 )
+
+# The unit test exercises the shared pull-outcome helper, which needs the Neat headers.
+if (TARGET multi-stream-object-detector_unit_test)
+  target_link_libraries(multi-stream-object-detector_unit_test
+    PRIVATE
+      SimaNeatApps::support_runtime
+  )
+endif()

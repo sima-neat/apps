@@ -134,7 +134,56 @@ python3 ${APP_DIR}/src/python/main.py \
 Open the Insight video viewer for the channel (e.g. `/api/viewer-url?src=0`) to
 watch the annotated stream.
 
+## Expected Result
+
+This application writes nothing to disk; its output is the Insight video channel
+plus the landmark metadata channel. It prints the resolved source on startup and
+a count when the frame limit is reached:
+
+```text
+rtsp=rtsp://<host>:<port>/<stream> stream=1280x720@30 insight=<insight-host> video=9000 metadata=9100 channel=0
+processed=200 video_sender=<insight-host>:9000
+```
+
+The packaged config ships `inference.frames: 0`, which runs continuously. The
+closing `processed=` line prints only when a finite limit is reached, and
+interrupting the run with Ctrl-C skips it in both implementations. For a bounded
+check that ends by itself and prints the count, set a positive limit first:
+
+```yaml
+inference:
+  frames: 200
+```
+
+Left at `0`, the live Insight stream is the success signal instead.
+
+Either way, `processed` reports frames pushed through the pipeline, not faces
+found, so a healthy count does not by itself confirm detections. Confirm those
+in Insight, which draws the five landmarks as labeled dots on the stream.
+
 ## Debugging Notes
+
+Check the configuration before involving hardware. This validates and exits
+without opening a stream:
+
+```bash
+python3 ${APP_DIR}/src/python/main.py \
+  --config ${APP_DIR}/src/common/config.yaml --validate-config-only
+```
+
+- `source.rtsp_url must be set`, `model.path must be set` and
+  `output.insight.host must be set` mean the value is empty or missing. Note that
+  validation does not detect an unedited placeholder: the packaged
+  `<rtsp-url>` and `<insight-host-ip>` are non-empty strings and pass, so a config
+  you have not filled in still validates cleanly.
+- `method SETUP failed: 461 Unsupported Transport` was observed once at startup
+  against an Insight-hosted source, after which the pipeline built and the run
+  completed normally. Treat a single occurrence as noise unless the pipeline also
+  fails to start.
+- If the run reports no frames at all, verify the RTSP URL from the board itself
+  rather than from the machine running Insight. The URL Insight displays is not
+  always reachable from the target, and the ports table above explains why.
+
 - If the viewer shows video but no overlays, confirm `output.insight.host` and the
   metadata port are reachable and match the viewer's channel. Use Insight's
   `/api/ingest/stats` to check `metadata.messages_received`.

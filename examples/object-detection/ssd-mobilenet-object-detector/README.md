@@ -83,6 +83,24 @@ python3 ${APP_DIR}/src/python/main.py \
   --config ${APP_DIR}/src/common/config.yaml
 ```
 
+## Expected Result
+
+The application prints one line per image with the file it wrote and the number
+of objects found:
+
+```text
+[1/21] 000000081061.jpg -> 000000081061_jpg.png (3 detections)
+[2/21] 000000116439.jpg -> 000000116439_jpg.png (2 detections)
+[3/21] 000000129492.jpg -> 000000129492_jpg.png (3 detections)
+```
+
+`io.output_dir` then holds one annotated PNG per input image; with the packaged
+`assets/datasets/coco` folder that is 21 files. Both implementations print this
+format.
+
+Set `io.detections_json` to also write the class, score and box for every
+detection, which is easier to check than reading the images.
+
 ## Troubleshooting
 
 - Verify `model.path` and the labels file if detections are missing.

@@ -36,10 +36,13 @@ std::string example_key_for_name(const std::string& example_name) {
   return example_dir.parent_path().filename().string() + "/" + example_dir.filename().string();
 }
 
-std::string scoped_model_file_from_env(const std::string& example_name) {
+// Every model file the scope lists for this example, in scope order: the suite's model
+// first, then any variants the run was asked to cover.
+std::vector<std::string> scoped_model_files_from_env(const std::string& example_name) {
+  std::vector<std::string> files;
   const char* raw = std::getenv("SIMANEAT_APPS_TEST_MODEL_FILES");
   if (!raw || !*raw) {
-    return {};
+    return files;
   }
 
   const std::string target_example = example_key_for_name(example_name);
@@ -52,10 +55,13 @@ std::string scoped_model_file_from_env(const std::string& example_name) {
     }
     const std::string example_key = line.substr(0, separator);
     if (example_key == target_example) {
-      return sima_examples::trim_copy(line.substr(separator + 1));
+      const std::string file = sima_examples::trim_copy(line.substr(separator + 1));
+      if (!file.empty()) {
+        files.push_back(file);
+      }
     }
   }
-  return {};
+  return files;
 }
 
 bool starts_with(const std::string& value, const std::string& prefix) {
@@ -206,9 +212,14 @@ const ScalarConfig& example_common_config(const std::string& example_name) {
   return it->second;
 }
 
-std::string configured_model_path(const std::string& example_name, const std::string& models_dir) {
-  if (const std::string scoped = scoped_model_file_from_env(example_name); !scoped.empty()) {
-    return (fs::path(models_dir) / fs::path(scoped).filename()).string();
+std::vector<std::string> configured_model_paths(const std::string& example_name,
+                                                const std::string& models_dir) {
+  std::vector<std::string> paths;
+  for (const std::string& scoped : scoped_model_files_from_env(example_name)) {
+    paths.push_back((fs::path(models_dir) / fs::path(scoped).filename()).string());
+  }
+  if (!paths.empty()) {
+    return paths;
   }
 
   const ScalarConfig& config = example_common_config(example_name);
@@ -216,18 +227,29 @@ std::string configured_model_path(const std::string& example_name, const std::st
   if (configured.empty()) {
     configured = config.string_or("model", "");
   }
-  if (configured.empty()) {
-    return {};
+  if (!configured.empty()) {
+    paths.push_back((fs::path(models_dir) / fs::path(configured).filename()).string());
   }
-  return (fs::path(models_dir) / fs::path(configured).filename()).string();
+  return paths;
 }
 
-double e2e_double(const std::string& example_name, const std::string& section,
-                  const std::string& key) {
-  const std::string path = full_key(example_name, section, key);
-  const ScalarConfig& config = example_common_config(example_name);
-  require_present(config, path);
-  return config.double_or(path, 0.0);
+std::string configured_model_path(const std::string& example_name, const std::string& models_dir) {
+  const std::vector<std::string> paths = configured_model_paths(example_name, models_dir);
+  return paths.empty() ? std::string{} : paths.front();
+}
+
+std::string model_case_label(const std::string& case_name, const std::string& model_path,
+                             std::size_t model_count) {
+  if (model_count < 2) {
+    return case_name;
+  }
+  std::string model_id = fs::path(model_path).filename().string();
+  const std::string archive = ".tar.gz";
+  if (model_id.size() > archive.size() &&
+      model_id.compare(model_id.size() - archive.size(), archive.size(), archive) == 0) {
+    model_id.erase(model_id.size() - archive.size());
+  }
+  return case_name + "_" + model_id;
 }
 
 int e2e_int(const std::string& example_name, const std::string& section, const std::string& key) {
@@ -235,12 +257,6 @@ int e2e_int(const std::string& example_name, const std::string& section, const s
   const ScalarConfig& config = example_common_config(example_name);
   require_present(config, path);
   return config.int_or(path, 0);
-}
-
-bool e2e_bool(const std::string& example_name, const std::string& section, const std::string& key,
-              bool default_value) {
-  return example_common_config(example_name)
-      .bool_or(full_key(example_name, section, key), default_value);
 }
 
 std::filesystem::path write_e2e_config(const std::string& example_name,

@@ -53,9 +53,11 @@ let ragServerStatusText = "";
 let currentSystemPrompt = '';
 let systemPromptRequestInFlight = false;
 // Preferred TTS engine (defaults to piper-tts, matching the backend). Drives
-// which voice-selection setting is shown (rhasspy voice vs piper-plus voice).
+// which voice-selection setting is shown (rhasspy voice vs piper-plus voice vs
+// Supertonic speaker). The server reports the real current engine on load.
 let _currentTtsEngine = 'piper-tts';
 let _ppVoicesAvailable = false;
+let _stVoicesAvailable = false;
 // Used for TTS routing while the transcription selector remains on Auto-detect.
 // English is the safe default for typed prompts before the first recording.
 let _detectedSpeechLanguage = 'en';
@@ -833,6 +835,7 @@ window.onload = function () {
   initBenchmark();
   initShowcase();
   initSolutions();
+  initPlayground();
   initShutdownButton();
   initRagInspect();
   initVersionModal();
@@ -1219,7 +1222,7 @@ function sendTextMessage() {
     // Text-only mode: clear if single-shot, then add message and process
     clearIfSingleShotMode();
     addChatMessage(message, true, false); // No image preview for text-only
-    startProcessing('', message);
+    startProcessing(message);
   }
 }
 
@@ -1486,7 +1489,7 @@ function captureAndAnimateSnap(textchat = null) {
     if (textchat) {
       addChatMessage(textchat, true, false);
     }
-    startProcessing('', textchat, !textchat);
+    startProcessing(textchat, !textchat);
     return;
   }
 
@@ -1605,20 +1608,20 @@ function captureAndAnimateSnap(textchat = null) {
   }
 
   // Send the final request to the backend immediately after capture.
-  startProcessing('', isAudioQuery ? null : queryText, isAudioQuery);
+  startProcessing(isAudioQuery ? null : queryText, isAudioQuery);
 }
 
 
-function startProcessing(resultMessage, textchat = null, waitForTranscription = false) {
+function startProcessing(textchat = null, waitForTranscription = false) {
   return enqueueRequest(async () => {
     if (activeGeneration) {
       await stop(true);
     }
-    await startProcessingInternal(resultMessage, textchat, waitForTranscription);
+    await startProcessingInternal(textchat, waitForTranscription);
   });
 }
 
-async function startProcessingInternal(resultMessage, textchat = null, waitForTranscription = false) {
+async function startProcessingInternal(textchat = null, waitForTranscription = false) {
   stopAudio();
 
   // Reset metrics
@@ -1680,7 +1683,7 @@ async function startProcessingInternal(resultMessage, textchat = null, waitForTr
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
       updateAsrMetrics(data.asr);
-      displayResult(data.question || resultMessage, 'static/sample_audio.wav', data.ttt);
+      showTranscribeTime(data.ttt);
       if (data.ignored) {
         activeGeneration = false;
         receivedEndSignal = true;
@@ -1701,7 +1704,7 @@ async function startProcessingInternal(resultMessage, textchat = null, waitForTr
     } catch (error) {
       activeGeneration = false;
       console.error('Error uploading files:', error);
-      displayResult('Error processing request', 'static/sample_audio.wav');
+      showTranscribeTime();
     }
   };
 
@@ -1721,7 +1724,7 @@ async function startProcessingInternal(resultMessage, textchat = null, waitForTr
     } catch (error) {
       activeGeneration = false;
       console.error('Error preparing image blob:', error);
-      displayResult('Error preparing image', 'static/sample_audio.wav');
+      showTranscribeTime();
     }
   } else {
     await sendRequest();
@@ -1958,13 +1961,10 @@ function _findTextRange(container, needle, fromNorm) {
   return range;
 }
 
-function displayResult(text, audioSrc, ttt = 0) {
-  // Only update metrics - text display is now handled by WebSocket events
-  // The assistant message should already exist from startProcessing()
+// The reply text arrives over the WebSocket (handleTextUpdate); the upload
+// response only carries the transcription time.
+function showTranscribeTime(ttt = 0) {
   document.getElementById('transcribeTime').textContent = ttt + 's';
-
-  // Note: text parameter (data.question) is ignored since it's just echoing user input
-  // Actual LLM response comes through handleTextUpdate() via WebSocket
 }
 
 
@@ -2204,6 +2204,7 @@ socket.on('audio_chunk', (data) => {
 
   if (data.tps != null) { const t = document.getElementById('tpsValue'); if (t) t.textContent = data.tps; }
   if (data.rtf != null) { const r = document.getElementById('rtfValue'); if (r) r.textContent = data.rtf; }
+  if (data.engine) updateTtsEngineIndicator(data.engine, data.voice);
 
   // Browser TTS: the server sent only the (already sanitized) sentence text —
   // speak it locally with the Web Speech API instead of playing server audio.
@@ -2329,6 +2330,18 @@ function scrollChatToBottom() {
 }
 
 function updateAsrMetrics(metadata) {
+  // The server names the model that produced THIS transcript. That is the
+  // attribution for the "Heard you" numbers, not the server's current
+  // selection: a clip recorded under model A can finish after a switch to B.
+  // So show the producer in the caption, and when it differs from what we
+  // believe is active, ask the catalog rather than adopting the producer.
+  if (metadata && metadata.model) {
+    _asrLastProducer = metadata.model;
+    updateAsrModelIndicator();
+    if (metadata.model !== _asrActive && typeof refreshCatalog === 'function') {
+      refreshCatalog();   // sets _asrActive from the server's activeAsr flag
+    }
+  }
   if (!metadata || typeof metadata !== 'object') return;
   const language = metadata.language || '—';
   const noSpeech = metadata.no_speech_prob == null ? NaN : Number(metadata.no_speech_prob);
@@ -2343,7 +2356,11 @@ function updateAsrMetrics(metadata) {
   if (logprobEl) {
     logprobEl.textContent = Number.isFinite(avgLogprob) ? avgLogprob.toFixed(2) : '—';
   }
-  if (metadata.language_detected && metadata.language) {
+  // Adopt the detected language only from a clip that actually held speech.
+  // Whisper still guesses a language for silence or noise (an ignored result),
+  // and that guess is arbitrary — adopting it (e.g. 'nn') would make every
+  // following typed prompt ask for a voice no engine has, silencing replies.
+  if (metadata.language_detected && metadata.language && !metadata.ignored) {
     _detectedSpeechLanguage = metadata.tts_language || metadata.language;
     updateVoiceEngineForLanguage();
   }
@@ -2632,18 +2649,22 @@ function setVoiceRowVisible(visible) {
   if (voiceRow) {
     // Keep the allowlisted server voice catalog reachable while Browser is
     // active so a language omitted during setup can be installed from the UI.
-    const show = visible && _currentTtsEngine !== 'piper-plus';
+    const show = visible && _currentTtsEngine !== 'piper-plus' && _currentTtsEngine !== 'supertonic';
     voiceRow.style.display = show ? 'block' : 'none';
   }
 }
 
 // Show only the voice-selection setting relevant to the active engine:
-// piper-plus -> its voice picker; piper-tts -> the rhasspy voice picker;
-// browser -> the device-voice picker.
+// supertonic -> its speaker picker; piper-plus -> its voice picker;
+// piper-tts -> the rhasspy voice picker; browser -> the device-voice picker.
 function applyEngineVoiceVisibility() {
   const ppRow = document.getElementById('piperPlusVoiceRow');
   if (ppRow) {
     ppRow.style.display = (_currentTtsEngine === 'piper-plus' && _ppVoicesAvailable) ? '' : 'none';
+  }
+  const stRow = document.getElementById('supertonicVoiceRow');
+  if (stRow) {
+    stRow.style.display = (_currentTtsEngine === 'supertonic' && _stVoicesAvailable) ? '' : 'none';
   }
   const brRow = document.getElementById('browserVoiceRow');
   if (brRow) {
@@ -3024,7 +3045,48 @@ async function initPiperPlusVoices() {
   };
 }
 
-// ---- Voice engine picker (piper-plus vs rhasspy piper-tts) ----------------
+// ---- Supertonic speaker picker (F1-F5 / M1-M5 on the MLA engine) -----------
+async function initSupertonicVoices() {
+  const sel = document.getElementById('supertonicVoiceSelect');
+  const row = document.getElementById('supertonicVoiceRow');
+  if (!sel || !row) return;
+  let data;
+  try {
+    data = await (await fetch('/supertonic/voices')).json();
+  } catch (e) { _stVoicesAvailable = false; row.style.display = 'none'; return; }
+  const voices = (data && data.voices) || [];
+  _stVoicesAvailable = voices.length > 0;
+  if (!voices.length) { row.style.display = 'none'; return; }
+  sel.innerHTML = '';
+  voices.forEach(v => {
+    const o = document.createElement('option');
+    o.value = v.key;
+    o.textContent = v.label || v.key;
+    sel.appendChild(o);
+  });
+  if (data.current) sel.value = data.current;
+  applyEngineVoiceVisibility();   // show only if Supertonic is the active engine
+  sel.onchange = async () => {
+    const status = document.getElementById('supertonicVoiceStatus');
+    if (status) status.textContent = 'Switching…';
+    sel.disabled = true;
+    try {
+      const r = await fetch('/supertonic/select', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: sel.value })
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || d.status !== 'ok') throw new Error((d && d.error) || 'failed to switch');
+      if (status) status.textContent = 'Active';
+    } catch (err) {
+      if (status) status.textContent = 'Failed: ' + err.message;
+    } finally {
+      sel.disabled = false;
+    }
+  };
+}
+
+// ---- Voice engine picker (supertonic / piper-plus / rhasspy piper-tts) -----
 // Shows ONLY the engine(s) that can speak the currently selected language, so a
 // language is never offered an incompatible engine. When both engines support
 // it, the user can choose which is preferred; when only one does, it's shown
@@ -3040,12 +3102,14 @@ async function updateVoiceEngineForLanguage() {
   } catch (e) { row.style.display = 'none'; return; }
   const engines = (data && data.engines) || [];
   if (data.current) _currentTtsEngine = data.current;
+  updateTtsEngineIndicator();
   if (!engines.length) { row.style.display = 'none'; applyEngineVoiceVisibility(); return; }
   sel.innerHTML = '';
   engines.forEach(e => {
     const o = document.createElement('option');
     o.value = e.key;
-    o.textContent = e.label || e.key;
+    // CPU engines stay out of RAM until selected; say so in the picker.
+    o.textContent = (e.label || e.key) + (e.loaded === false ? ' · loads on select' : '');
     sel.appendChild(o);
   });
   sel.value = engines.some(e => e.key === _currentTtsEngine) ? _currentTtsEngine : engines[0].value;
@@ -3054,17 +3118,20 @@ async function updateVoiceEngineForLanguage() {
   row.style.display = '';              // always show the supported engine(s)
   sel.onchange = async () => {
     const status = document.getElementById('voiceEngineStatus');
-    if (status) status.textContent = 'Saving…';
+    const chosen = engines.find(e => e.key === sel.value);
+    if (status) status.textContent = (chosen && chosen.loaded === false) ? 'Loading engine…' : 'Saving…';
     sel.disabled = true;
     try {
       const r = await fetch('/tts/engine', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ engine: sel.value })
+        body: JSON.stringify({ engine: sel.value, lang: getSelectedVoiceLanguage() })
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok || d.status !== 'ok') throw new Error((d && d.error) || 'failed');
       _currentTtsEngine = sel.value;
       applyEngineVoiceVisibility();     // swap which voice picker is shown
+      updateTtsEngineIndicator();
+      if (chosen && chosen.loaded === false) { updateVoiceEngineForLanguage(); initPiperPlusVoices(); return; }
       if (status) status.textContent = 'Active';
     } catch (err) {
       if (status) status.textContent = 'Failed: ' + err.message;
@@ -3079,6 +3146,7 @@ window.addEventListener('DOMContentLoaded', () => {
   const langRow = document.getElementById('languageRow');
   if (langRow) langRow.style.display = 'block';
   initPiperPlusVoices();
+  initSupertonicVoices();
   updateVoiceEngineForLanguage();   // also drives refreshVoiceOptions via applyEngineVoiceVisibility
   // Device speech voices often load asynchronously — repopulate the Browser
   // voice picker when they arrive (only relevant while that engine is active).
@@ -3926,8 +3994,17 @@ async function initStudioModelManager() {
 async function refreshCatalog() {
   try {
     const resp = await fetch('/models/catalog');
+    // The proxy answers a JSON error (502) while the control API is briefly
+    // unavailable, e.g. during a native model load. That is not an empty
+    // catalog: adopting it would clear the active ASR and disable recording
+    // while the model is still serving. Keep the last known state instead.
+    if (!resp.ok) {
+      const d = await resp.json().catch(() => ({}));
+      throw new Error((d && d.error) || `HTTP ${resp.status}`);
+    }
     const data = await resp.json();
-    const catalog = (data && data.catalog) || [];
+    if (!data || !Array.isArray(data.catalog)) throw new Error('malformed catalog');
+    const catalog = data.catalog;
     // Update capabilities so vision detection works for any catalog model.
     const caps = window.SIMA_CONFIG.chatModelCapabilities || {};
     catalog.forEach(m => {
@@ -3949,6 +4026,12 @@ function populateModelSelect(catalog) {
   const select = document.getElementById('chatModelSelect');
   if (!select) return;
   _catalog = catalog || [];
+  // Speech models are tracked separately: they never appear in the chat select,
+  // and exactly one of them is active at a time.
+  const asrModels = _catalog.filter(m => (m.type || 'chat') === 'asr');
+  _asrActive = (asrModels.find(m => m.activeAsr) || {}).name || '';
+  updateAsrModelIndicator();
+  updateComposerEnabled();     // the record button depends on an active ASR
   const chatModels = catalog.filter(m => (m.type || 'chat') !== 'asr');
   const previous = select.value;
   while (select.firstChild) select.removeChild(select.firstChild);
@@ -3971,6 +4054,7 @@ function populateModelSelect(catalog) {
     option.value = m.name;
     const size = m.sizeBytes ? `  ·  ${fmtBytes(m.sizeBytes)}` : '';
     const incomplete = m.complete === false;
+    const unsupported = m.supported === false;
     const dot = incomplete ? '⚠ ' : (m.loaded ? '● ' : '○ ');
     option.textContent = `${dot}${m.name}  ·  ${typeBadge(m.type)}${size}${incomplete ? '  ·  incomplete' : ''}`;
     option.dataset.loaded = m.loaded ? 'true' : 'false';
@@ -4016,6 +4100,11 @@ function populateModelSelect(catalog) {
 // <select id="chatModelSelect"> stays the source of truth for the rest of the app.
 let _catalog = [];
 let _pendingLoad = '';    // name of the model currently loading (for the row label)
+let _loadTicker = null;   // client-side load countdown (see startLoadTicker)
+let _lastServerLoadUpdate = 0;   // when the server last reported real progress
+let _asrActive = '';     // ASR model serving transcriptions (from the catalog)
+let _asrLastProducer = '';   // ASR model that produced the latest transcript
+let _asrPending = '';    // ASR model mid-switch (for the row label)
 
 function escHtml(s) {
   return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -4089,10 +4178,11 @@ function renderInstalledList() {
   }
 
   const control = controlEnabled();
-  const busy = _modelBusy;
+  const busy = serverBusy();
   const activeName = control ? _activeChatModel : getSelectedChatModel();
   filtered.forEach(m => {
     const incomplete = m.complete === false;
+    const unsupported = m.supported === false;
     const isActive = !!m.name && m.name === activeName;
     const row = document.createElement('div');
     row.className = 'hub-result model-row' + (isActive ? ' is-active' : '');
@@ -4131,9 +4221,14 @@ function renderInstalledList() {
       if (m.loaded) {
         btn.textContent = 'Unload'; btn.classList.add('model-unload'); btn.disabled = busy;
         btn.addEventListener('click', (e) => { e.stopPropagation(); unloadModel(m.name); });
-      } else if (incomplete) {
-        btn.textContent = 'Incomplete'; btn.disabled = true;
-        btn.title = `${m.incompleteReason || 'Weights are incomplete'} — re-download from Hugging Face below.`;
+      } else if (incomplete || unsupported) {
+        // Unsupported is NOT a broken download: re-fetching gigabytes would
+        // fail identically, so do not offer that as the remedy.
+        btn.textContent = unsupported ? 'Unsupported' : 'Incomplete';
+        btn.disabled = true;
+        btn.title = unsupported
+          ? (m.unsupportedReason || 'This build cannot run on the installed runtime.')
+          : `${m.incompleteReason || 'Weights are incomplete'} — re-download from Hugging Face below.`;
       } else if (_modelBusy && m.name === _pendingLoad) {
         btn.textContent = 'Loading…'; btn.disabled = true;
       } else {
@@ -4219,13 +4314,20 @@ function updateHomeModelIndicator() {
 // and composer whenever model state changes.
 function updateManageButtons() {
   renderInstalledList();
+  renderAsrList();
   updateComposerEnabled();
 }
 
-// A model is usable for chat only once it is FULLY resident (not mid-load and
-// not mid-reset). The composer is locked until then.
+// A model is usable for chat only once it is FULLY resident (not mid-load).
+// The composer is locked until then.
+function serverBusy() {
+  // Any state in which the model server cannot service a request: a model
+  // operation in flight.
+  return _modelBusy;
+}
+
 function modelReady() {
-  return !!getSelectedChatModel() && !_modelBusy;
+  return !!getSelectedChatModel() && !serverBusy();
 }
 
 // Enable/disable the chat input interface based on model readiness.
@@ -4241,7 +4343,16 @@ function updateComposerEnabled() {
         : 'Load a model in Settings to start chatting…');
   }
   if (send) send.disabled = !ready;
-  if (typeof recordButton !== 'undefined' && recordButton) recordButton.disabled = !ready;
+  if (typeof recordButton !== 'undefined' && recordButton) {
+    // Recording also needs a speech-to-text model. In control mode the catalog
+    // is authoritative: with ASR_MODEL_REPO="" (or after a failed switch) none
+    // is active, and every upload would only come back "unavailable".
+    const asrMissing = controlEnabled() && !_asrActive;
+    recordButton.disabled = !ready || asrMissing;
+    recordButton.title = asrMissing
+      ? 'No speech-to-text model is active — pick one under Settings → Models'
+      : '';
+  }
   if (composer) composer.classList.toggle('composer-locked', !ready);
   // Snap/upload additionally require a vision model. When not ready, force them
   // off here (the load-start case); when ready, updateSelectedModelVisionState ->
@@ -4263,7 +4374,12 @@ function initModelManage() {
     const box = document.getElementById('modelLoadError');
     const target = (box && box.dataset.model) || (sel && sel.value);
     clearModelError();
-    if (target) loadModelAndActivate(target);
+    if (!target) return;
+    // An ASR retry must go through the switch path so the UI process learns
+    // the new name; a plain load would leave transcription on the old model.
+    const entry = _catalog.find(m => m.name === target);
+    if (entry && (entry.type || 'chat') === 'asr') switchAsrModel(target);
+    else loadModelAndActivate(target);
   });
   if (viewLogs) viewLogs.addEventListener('click', () => {
     const det = document.getElementById('modelLogDetails');
@@ -4296,9 +4412,10 @@ async function unloadModel(name) {
   }
 }
 
-async function deleteModel(name) {
+async function deleteModel(name, extraWarning) {
   if (!name) return;
-  if (!window.confirm(`Delete "${name}" from disk? This removes the model weights and cannot be undone.`)) return;
+  if (!window.confirm(`Delete "${name}" from disk? This removes the model weights `
+    + `and cannot be undone.${extraWarning || ''}`)) return;
   setModelStatus(`Deleting ${name}…`, 'loading');
   try {
     const resp = await fetch('/models/delete', {
@@ -4314,6 +4431,243 @@ async function deleteModel(name) {
   } finally {
     await refreshCatalog();
     refreshDiskInfo();    // freeing weights returns space to the NVMe
+  }
+}
+
+// Name the model behind the "Heard you" metrics, so the numbers below it are
+// attributable — they change meaningfully when you switch speech models.
+function updateAsrModelIndicator() {
+  const el = document.getElementById('asrModelName');
+  if (!el) return;
+  // In control mode the catalog is authoritative — an empty _asrActive means the
+  // server reports none active, and naming the configured model anyway would
+  // credit transcripts to a model that is not running. The configured name is
+  // only a stand-in for static mode, which has no catalog to consult.
+  // Prefer the producer of the latest transcript (what the numbers describe);
+  // before any recording, name the active model.
+  const name = _asrLastProducer || _asrActive
+    || (controlEnabled() ? '' : (window.SIMA_CONFIG?.asrModelName || ''));
+  el.textContent = name;
+  el.title = name ? `Transcribed by ${name}` : '';
+}
+
+// Name the engine behind the "Spoke back" metrics, mirroring the ASR indicator.
+// Before anything has been spoken it shows the engine the router will use for
+// the selected language; each audio chunk then names the engine (and speaker)
+// that actually produced it, so RTF reads against the right engine.
+const TTS_ENGINE_LABELS = {
+  'supertonic': 'Supertonic 3',
+  'piper-plus': 'piper-plus',
+  'piper-tts': 'piper-tts',
+  'browser': 'Browser',
+};
+function updateTtsEngineIndicator(engine, voice) {
+  const el = document.getElementById('ttsEngineName');
+  if (!el) return;
+  const key = engine || _currentTtsEngine;
+  const label = TTS_ENGINE_LABELS[key] || key || '';
+  el.textContent = label && voice ? `${label} · ${voice}` : label;
+  el.title = label ? `Spoken by ${el.textContent}` : '';
+}
+
+// Drive the load bar from the browser's own clock.
+//
+// The server cannot report progress while a load is in flight: add_model() does
+// the bulk MLA transfer in native code without releasing the GIL, so the whole
+// model-server process — control API included — stops answering for the entire
+// load (measured: 6s timeouts, zero bytes, for a 20s load). Polling therefore
+// yields nothing exactly when there is something to show. So take the estimate
+// from the catalog BEFORE starting, and count down locally.
+//
+// Server-side polling still runs and wins whenever it does answer (a short load,
+// or an ASR warm-up, where the process is responsive); this only fills the gap.
+function startLoadTicker(name, estimateS, stagesTotal) {
+  stopLoadTicker();
+  _lastServerLoadUpdate = 0;
+  const started = Date.now();
+  const est = (typeof estimateS === 'number' && estimateS > 0) ? estimateS : null;
+  const tick = () => {
+    // Server-reported progress is authoritative; only fill in while it is silent.
+    if (Date.now() - _lastServerLoadUpdate < 2000) return;
+    const elapsed = (Date.now() - started) / 1000;
+    // Hold at 99: the load is finished when the request returns, not when the
+    // estimate runs out, and a bar that sits at 100% while still working lies.
+    const pct = est ? Math.min(99, Math.floor(elapsed / est * 100)) : null;
+    const parts = [];
+    if (pct != null) parts.push(`${pct}%`);
+    if (stagesTotal) parts.push(`${stagesTotal} stages`);
+    parts.push(fmtDuration(Math.round(elapsed)));
+    if (est) {
+      const remain = Math.max(0, est - elapsed);
+      parts.push(remain > 0 ? `~${fmtDuration(Math.round(remain))} left` : 'finishing…');
+    }
+    setModelStatus(`Loading ${name} · ${parts.join(' · ')}`, 'loading');
+    setModelLoadBar(pct != null ? pct : 'active');
+  };
+  tick();
+  _loadTicker = setInterval(tick, 250);
+}
+
+function stopLoadTicker() {
+  if (_loadTicker) { clearInterval(_loadTicker); _loadTicker = null; }
+}
+
+// The catalog carries a per-model estimate and stage count; both may be absent
+// for a model the board has never sized.
+function modelLoadHints(name) {
+  const m = _catalog.find(x => x.name === name) || {};
+  return { est: m.estimatedLoadS, stages: m.stagesTotal };
+}
+
+// ---- Speech-to-text (ASR) models --------------------------------------------
+// Kept in their own list because they never compete with chat/VLM models for the
+// same slot: exactly one ASR model is resident, and picking another evicts it
+// without disturbing the loaded chat model. The chat filters (LLM/VLM, parameter
+// count, family) are meaningless here, so only the search box applies.
+function renderAsrList() {
+  const list = document.getElementById('asrModelList');
+  if (!list) return;
+  const text = (document.getElementById('modelSearchInput')?.value || '').trim().toLowerCase();
+  const models = _catalog.filter(m => (m.type || 'chat') === 'asr')
+                         .sort((a, b) => a.name.localeCompare(b.name));
+
+  const nameEl = document.getElementById('asrActiveName');
+  if (nameEl) nameEl.textContent = _asrActive || (models.length ? 'none active' : '');
+  const noteEl = document.getElementById('asrModelNote');
+  if (noteEl) noteEl.style.display = models.length > 1 ? '' : 'none';
+
+  list.innerHTML = '';
+  if (!models.length) {
+    list.innerHTML = `<div class="hub-note">No speech-to-text model${_hubEnabled
+      ? ' — download a Whisper model from the “Add Model” tab.' : '.'}</div>`;
+    return;
+  }
+  const filtered = models.filter(m => !text || m.name.toLowerCase().includes(text));
+  if (!filtered.length) {
+    list.innerHTML = '<div class="hub-note">No speech-to-text models match the search.</div>';
+    return;
+  }
+
+  const control = controlEnabled();
+  const busy = serverBusy();
+  filtered.forEach(m => {
+    const incomplete = m.complete === false;
+    const unsupported = m.supported === false;
+    const isActive = !!m.name && m.name === _asrActive;
+    const row = document.createElement('div');
+    row.className = 'hub-result model-row' + (isActive ? ' is-active' : '');
+
+    const meta = document.createElement('div');
+    meta.className = 'hub-result-meta';
+    const size = m.sizeBytes ? fmtBytes(m.sizeBytes) : '';
+    const stateCls = incomplete ? 'is-incomplete' : (isActive ? 'is-loaded' : '');
+    const stateTxt = incomplete ? '⚠ incomplete' : (isActive ? '🎙 active' : '○ downloaded');
+    const badges = `<span class="hub-badge hub-badge-asr">${typeBadge('asr')}</span>`
+      + (size ? `<span class="hub-badge">${size}</span>` : '')
+      + (m.pinned ? '<span class="hub-badge">startup default</span>' : '')
+      + `<span class="hub-badge model-state ${stateCls}">${stateTxt}</span>`;
+    meta.innerHTML = `<span class="hub-repo">${escHtml(m.name)}</span>`
+      + `<span class="hub-badges">${badges}</span>`;
+    row.appendChild(meta);
+
+    const info = document.createElement('button');
+    info.className = 'hub-info';
+    info.type = 'button';
+    info.textContent = 'ℹ';
+    info.title = `Model card & metadata for ${m.name}`;
+    info.addEventListener('click', (e) => { e.stopPropagation(); showModelCard(m.name); });
+    row.appendChild(info);
+
+    if (control) {
+      // The active model has no delete button — the server refuses it anyway.
+      if (!isActive) {
+        const del = document.createElement('button');
+        del.className = 'hub-info hub-danger';
+        del.type = 'button';
+        del.textContent = '🗑';
+        del.title = `Delete ${m.name} from disk`;
+        del.disabled = busy;
+        del.addEventListener('click', (e) => {
+          e.stopPropagation();
+          deleteModel(m.name, m.pinned
+            ? ' It is the startup default, so after a restart no speech-to-text '
+              + 'model will be active until you pick one.'
+            : '');
+        });
+        row.appendChild(del);
+      }
+
+      const btn = document.createElement('button');
+      btn.className = 'setting-button model-action';
+      btn.type = 'button';
+      if (isActive) {
+        btn.textContent = 'Active';
+        btn.disabled = true;
+      } else if (incomplete || unsupported) {
+        btn.textContent = unsupported ? 'Unsupported' : 'Incomplete';
+        btn.disabled = true;
+        btn.title = unsupported
+          ? (m.unsupportedReason || 'This build cannot run on the installed runtime.')
+          : `${m.incompleteReason || 'Weights are incomplete'} — re-download from the Add Model tab.`;
+      } else if (busy && m.name === _asrPending) {
+        btn.textContent = 'Switching…';
+        btn.disabled = true;
+      } else {
+        btn.textContent = 'Use';
+        btn.classList.add('model-load');
+        btn.disabled = busy;
+        btn.addEventListener('click', (e) => { e.stopPropagation(); switchAsrModel(m.name); });
+      }
+      row.appendChild(btn);
+    }
+    list.appendChild(row);
+  });
+}
+
+// Make another ASR model active. Mirrors loadModelAndActivate, minus the chat
+// select and minus newChat() — switching how your voice is transcribed is no
+// reason to throw away the conversation.
+async function switchAsrModel(name) {
+  if (!name || _modelBusy || name === _asrActive) return;
+  _modelBusy = true;
+  _asrPending = name;
+  updateManageButtons();
+  clearModelError();
+  await resetLoadLog();
+
+  const note = _asrActive ? `Unloading ${_asrActive} — ` : '';
+  setModelStatus(`${note}Switching speech-to-text to ${name}…`, 'loading');
+  setModelLoadBar('active');
+  startLoadPolling(name);
+  const asrHints = modelLoadHints(name);
+  startLoadTicker(name, asrHints.est, asrHints.stages);
+  try {
+    const resp = await fetch('/models/asr', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name })
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.error || 'switch failed');
+    _asrActive = data.activeAsr || name;
+    updateComposerEnabled();
+    const evicted = Array.isArray(data.evicted) ? data.evicted : [];
+    const evictedNote = evicted.length ? ` · unloaded ${evicted.join(', ')}` : '';
+    const secs = (typeof data.load_seconds === 'number') ? data.load_seconds : null;
+    const timeNote = (secs != null && secs > 0) ? ` in ${secs.toFixed(1)}s` : '';
+    setModelStatus(`Speech-to-text ready: ${_asrActive}${timeNote}${evictedNote}`, 'ready');
+  } catch (err) {
+    setModelStatus('Speech-to-text switch failed — see details below', 'error');
+    showModelError(name, err.message);
+  } finally {
+    stopLoadPolling();
+    stopLoadTicker();
+    _modelBusy = false;
+    _asrPending = '';
+    await pollLoadLogsOnce(name);
+    setModelLoadBar(null);
+    await refreshCatalog();   // re-derives _asrActive from the catalog's activeAsr
+    updateManageButtons();
   }
 }
 
@@ -4391,7 +4745,7 @@ async function loadModelAndActivate(name) {
     if (typeof updateSelectedModelVisionState === 'function') updateSelectedModelVisionState();
     return; // already resident
   }
-  // Incomplete weights can't load — surface it directly (a reset won't help).
+  // Incomplete weights can't load — surface it directly.
   if (option && option.dataset.complete === 'false') {
     setModelStatus('Model weights are incomplete', 'error');
     showModelError(name, `${option.dataset.incompleteReason || 'The weights are incomplete'}. Re-download it from the Add Model tab.`);
@@ -4412,6 +4766,8 @@ async function loadModelAndActivate(name) {
   setModelStatus(`${switchNote}Loading ${name}… preparing`, 'loading');
   setModelLoadBar('active');
   startLoadPolling(name);
+  const hints = modelLoadHints(name);
+  startLoadTicker(name, hints.est, hints.stages);
   try {
     const resp = await fetch('/models/load', {
       method: 'POST',
@@ -4432,6 +4788,7 @@ async function loadModelAndActivate(name) {
     showModelError(name, err.message);
   } finally {
     stopLoadPolling();
+    stopLoadTicker();
     if (select) select.disabled = false;
     _modelBusy = false;
     _pendingLoad = '';
@@ -4455,20 +4812,33 @@ let _logLineCount = 0;
 
 function applyLoadingStatus(ld, name) {
   if (!ld || ld.name !== name) return;
-  let txt;
-  // Only show the stage count when the server has a REAL completed count;
-  // filesDone == null means no per-stage signal, so use elapsed time instead.
+  _lastServerLoadUpdate = Date.now();
+  const parts = [];
+  // Percent first — it is what the eye goes to. `estimated` says whether it is
+  // derived from counted stages or from elapsed-vs-expected time.
+  if (ld.pct != null) parts.push(`${ld.pct}%`);
+
   if (ld.filesTotal && ld.filesDone != null) {
-    txt = `Loading ${name}… stage ${ld.filesDone} of ${ld.filesTotal}`;
-  } else {
-    txt = `Loading ${name}… ${fmtDuration(ld.elapsedS)}`;
+    // Real per-stage counter (older runtimes report one).
+    parts.push(`stage ${ld.filesDone} of ${ld.filesTotal}`);
+  } else if (ld.stagesTotal) {
+    // Current runtimes load every stage in one bulk call and count nothing, so
+    // show the scale of the work rather than a counter frozen at zero.
+    parts.push(`${ld.stagesTotal} stages`);
   }
-  if (ld.etaS != null) {
-    const remain = Math.max(0, ld.etaS - ld.elapsedS);
-    txt += ` · ~${fmtDuration(remain)} left`;
+  parts.push(fmtDuration(ld.elapsedS));
+
+  // The countdown. Say "~" while it is an estimate so the number is not read as
+  // a promise, and stop counting down past zero on a slower-than-expected load.
+  const remain = (ld.remainingS != null)
+    ? ld.remainingS
+    : (ld.etaS != null ? Math.max(0, ld.etaS - ld.elapsedS) : null);
+  if (remain != null) {
+    parts.push(remain > 0 ? `~${fmtDuration(remain)} left` : 'finishing…');
   }
-  setModelStatus(txt, 'loading');
-  setModelLoadBar('active');   // indeterminate — model load has no true percentage
+
+  setModelStatus(`Loading ${name} · ${parts.join(' · ')}`, 'loading');
+  setModelLoadBar(ld.pct != null ? ld.pct : 'active');
 }
 
 function processLoadUpdate(d, name) {
@@ -4623,7 +4993,17 @@ function setModelLoadBar(state) {
     return;
   }
   bar.style.display = 'block';
-  if (fill) { fill.style.width = '100%'; fill.classList.add('indeterminate'); }
+  if (fill) {
+    if (typeof state === 'number' && isFinite(state)) {
+      // A real percentage: fill to it and drop the barber-pole animation.
+      fill.classList.remove('indeterminate');
+      fill.style.width = `${Math.max(0, Math.min(100, state))}%`;
+    } else {
+      // No percentage available — keep the indeterminate sweep.
+      fill.style.width = '100%';
+      fill.classList.add('indeterminate');
+    }
+  }
   // Pin the status panel to the top and bring it into view — with per-row Load
   // buttons the click may happen far below it (especially on a small screen).
   if (panel) {
@@ -4642,10 +5022,11 @@ async function initHubControls() {
   // Models tab: search + type/size/family/sort filters + rescan act on the
   // DOWNLOADED list only.
   const modelSearch = document.getElementById('modelSearchInput');
-  if (modelSearch) modelSearch.addEventListener('input', renderInstalledList);
+  if (modelSearch) modelSearch.addEventListener('input', updateManageButtons);
   ['modelFilterType', 'modelFilterParams', 'modelFilterFamily', 'modelSortBy'].forEach(id => {
     const el = document.getElementById(id); if (el) el.addEventListener('change', renderInstalledList);
   });
+  updateAsrModelIndicator();
   const modelRefresh = document.getElementById('modelRefreshButton');
   if (modelRefresh) modelRefresh.addEventListener('click', () => refreshCatalog());
 
@@ -4654,7 +5035,7 @@ async function initHubControls() {
   if (hubSearch) hubSearch.addEventListener('input', applyHubFilters);
   const hubRefresh = document.getElementById('hubRefreshButton');
   if (hubRefresh) hubRefresh.addEventListener('click', () => { _hubLoaded = true; loadHubModels(); });
-  ['hubFilterType', 'hubFilterParams', 'hubFilterFamily', 'hubSortBy'].forEach(id => {
+  ['hubFilterOrg', 'hubFilterType', 'hubFilterParams', 'hubFilterFamily', 'hubSortBy'].forEach(id => {
     const el = document.getElementById(id); if (el) el.addEventListener('change', applyHubFilters);
   });
 
@@ -4698,8 +5079,11 @@ async function loadHubModels() {
       // The server classifies from Hub metadata (pipeline_tag/tags), which is
       // reliable; the repo-name guess is only for older servers.
       const t = m.type ? m.type.toUpperCase() : hubModelType(m.repoId);
-      return { ...m, _type: t, _params: b, _bucket: hubParamsBucket(b), _family: hubModelFamily(m.repoId) };
+      const org = m.org || (m.repoId.includes('/') ? m.repoId.split('/')[0] : '');
+      return { ...m, _type: t, _org: org, _params: b, _bucket: hubParamsBucket(b),
+               _family: hubModelFamily(m.repoId) };
     });
+    populateHubOrgFilter();
     populateHubFamilyFilter();
     applyHubFilters();
   } catch (err) {
@@ -4739,6 +5123,22 @@ function hubModelFamily(repoId) {
   return m ? (m[0][0].toUpperCase() + m[0].slice(1)) : 'Other';
 }
 
+// Which Hugging Face accounts the current results came from. Built from the
+// results rather than the configured org list, so it only ever offers accounts
+// that actually returned something.
+function populateHubOrgFilter() {
+  const sel = document.getElementById('hubFilterOrg');
+  if (!sel) return;
+  const cur = sel.value;
+  const orgs = Array.from(new Set(_hubAllModels.map(m => m._org).filter(Boolean)))
+    .sort((a, b) => a.localeCompare(b));
+  sel.innerHTML = '<option value="">All accounts</option>'
+    + orgs.map(o => `<option value="${escHtml(o)}">${escHtml(o)}</option>`).join('');
+  if (orgs.includes(cur)) sel.value = cur;
+  // One account configured: the filter would be a no-op, so keep it out of the way.
+  sel.style.display = orgs.length > 1 ? '' : 'none';
+}
+
 function populateHubFamilyFilter() {
   const sel = document.getElementById('hubFilterFamily');
   if (!sel) return;
@@ -4753,6 +5153,7 @@ function applyHubFilters() {
   const ft = document.getElementById('hubFilterType')?.value || '';
   const fp = document.getElementById('hubFilterParams')?.value || '';
   const ff = document.getElementById('hubFilterFamily')?.value || '';
+  const fo = document.getElementById('hubFilterOrg')?.value || '';
   const filtered = _hubAllModels.filter(m => {
     // Fully-installed models live in the Installed section above; only offer the
     // Hugging Face row for new models and incomplete ones (which need re-download).
@@ -4761,6 +5162,7 @@ function applyHubFilters() {
     if (ft && m._type !== ft) return false;
     if (fp && m._bucket !== fp) return false;
     if (ff && m._family !== ff) return false;
+    if (fo && m._org !== fo) return false;
     return true;
   });
   const sort = document.getElementById('hubSortBy')?.value || 'downloads';
@@ -4815,7 +5217,9 @@ function renderHubResults(data) {
       (p != null ? `<span class="hub-badge">${p}B</span>` : '') +
       sizeBadge +
       `<span class="hub-badge hub-badge-fam">${fam}</span>` +
-      (incomplete ? `<span class="hub-badge hub-badge-warn" title="Local copy is missing files — re-download to fix">⚠ incomplete</span>` : '');
+      (item.unsupportedReason
+        ? `<span class="hub-badge hub-badge-warn" title="${escHtml(item.unsupportedReason)}">⚠ unsupported</span>`
+        : incomplete ? `<span class="hub-badge hub-badge-warn" title="Local copy is missing files — re-download to fix">⚠ incomplete</span>` : '');
     meta.innerHTML = `<span class="hub-repo">${item.repoId}</span><span class="hub-badges">${badges}</span><span class="hub-sub">${sub}</span>`;
     const info = document.createElement('button');
     info.className = 'hub-info';
@@ -4824,11 +5228,17 @@ function renderHubResults(data) {
     info.textContent = 'ℹ';
     info.addEventListener('click', () => showHubCard(item.repoId));
     const btn = document.createElement('button');
-    btn.className = 'setting-button hub-download-btn' + (incomplete ? ' hub-redownload' : '');
-    btn.textContent = incomplete ? 'Re-download' : (item.alreadyInCatalog ? 'In catalog' : 'Download');
-    btn.disabled = !!(item.alreadyInCatalog && !incomplete);
-    if (incomplete) btn.title = 'The on-disk copy is incomplete — download again to repair it';
-    btn.addEventListener('click', () => hubDownload(item.repoId, row, btn));
+    // The server judges the encoder layout from the repo's own file list, so a
+    // build this runtime cannot load is refused here rather than after the
+    // download has already cost gigabytes.
+    const unsupported = !!item.unsupportedReason;
+    btn.className = 'setting-button hub-download-btn' + (incomplete && !unsupported ? ' hub-redownload' : '');
+    btn.textContent = unsupported ? 'Unsupported'
+      : (incomplete ? 'Re-download' : (item.alreadyInCatalog ? 'In catalog' : 'Download'));
+    btn.disabled = unsupported || !!(item.alreadyInCatalog && !incomplete);
+    if (unsupported) btn.title = item.unsupportedReason;
+    else if (incomplete) btn.title = 'The on-disk copy is incomplete — download again to repair it';
+    if (!unsupported) btn.addEventListener('click', () => hubDownload(item.repoId, row, btn));
     row.appendChild(meta);
     row.appendChild(info);
     row.appendChild(btn);
@@ -5453,12 +5863,16 @@ function askVision(query) {
   setVisionQuestion(query);
   if (typeof clearIfSingleShotMode === 'function') clearIfSingleShotMode();
   addChatMessage(query, true, true);
-  startProcessing('', query, false);
+  startProcessing(query, false);
   if (input) input.value = '';
 }
 
 // ---- Continuous camera loop: repeatedly ask the VLM about the live camera ----
 let _visionLoop = { on: false, prompt: '', delayMs: 800 };
+// Bumped on every start and stop. A startup that is mid-await when the
+// loop is stopped (or restarted) sees a stale token and bows out, so it
+// cannot clear a fresh conversation or race a second runner.
+let _visionLoopToken = 0;
 
 function waitForGenerationEnd(timeoutMs) {
   timeoutMs = timeoutMs || 90000;
@@ -5474,6 +5888,21 @@ function waitForGenerationEnd(timeoutMs) {
   });
 }
 
+// Each loop pass is a fresh look at the world, so drop the conversation once its
+// answer lands. The server appends a user message per iteration — a base64 frame
+// included — plus the reply, and never trims, so without this a running loop
+// grows history without bound: memory climbs on the board, and with "Include
+// chat history" on the prompt walks into the context limit within a few frames.
+async function clearLoopContext() {
+  chatHistory = [];
+  try {
+    await fetch('/clear-history', { method: 'POST' });
+  } catch (err) {
+    // Non-fatal: the next iteration still asks, it just carries the old turns.
+    console.warn('Could not clear context between loop iterations:', err);
+  }
+}
+
 function setVisionLoopUI(on) {
   const btn = document.getElementById('visionLoopBtn');
   if (!btn) return;
@@ -5482,8 +5911,8 @@ function setVisionLoopUI(on) {
   btn.textContent = on ? '■ Stop' : '↻ Loop';
 }
 
-async function visionLoopRun() {
-  while (_visionLoop.on) {
+async function visionLoopRun(token) {
+  while (_visionLoop.on && token === _visionLoopToken) {
     // The loop only makes sense on the live camera with a vision model.
     if (!isVisionOpen() || _visionSource !== 'camera' || !selectedChatModelSupportsVision()) {
       stopVisionLoop();
@@ -5499,6 +5928,10 @@ async function visionLoopRun() {
     // Let the request register as active, then wait for it to complete.
     await new Promise((r) => setTimeout(r, 500));
     await waitForGenerationEnd();
+    // Only once the answer is really finished — waitForGenerationEnd also
+    // returns on its 90s timeout, and clearing mid-stream would drop the
+    // generation id out from under the streaming thread and cut the reply off.
+    if (!activeGeneration) await clearLoopContext();
     if (!_visionLoop.on) break;
     await new Promise((r) => setTimeout(r, _visionLoop.delayMs));
   }
@@ -5513,11 +5946,28 @@ function startVisionLoop() {
   _visionLoop.on = true;
   setVisionLoopUI(true);
   setVisionAskHint('Looping — asking about the live camera continuously. Tap Stop to end.');
-  visionLoopRun();
+  startVisionLoopRun(++_visionLoopToken);
+}
+
+// Start from a clean slate, so the first frame is not judged against whatever
+// was said before the loop began — but never clear while a reply is streaming:
+// that drops the server's generation id, so the stream ends without its `end`
+// event and the loop would then wait out waitForGenerationEnd's full timeout.
+async function startVisionLoopRun(token) {
+  if (activeGeneration) {
+    try { await stop(true); } catch (e) { /* best effort */ }
+    await waitForGenerationEnd(15000);
+    if (token !== _visionLoopToken) return;   // stopped or restarted meanwhile
+  }
+  await clearLoopContext();
+  if (token !== _visionLoopToken) return;
+  visionLoopRun(token);
 }
 
 function stopVisionLoop() {
   _visionLoop.on = false;
+  _visionLoopToken++;          // invalidate any startup still mid-await
+
   setVisionLoopUI(false);
   if (isVisionOpen()) setVisionAskHint('');
 }
@@ -5658,7 +6108,7 @@ function submitVisionVoiceQuery() {
   if (typeof clearIfSingleShotMode === 'function') clearIfSingleShotMode();
   // Audio + image path: waitForTranscription=true so the transcript comes back
   // via the 'transcription' socket event (displayTranscribedQuery).
-  startProcessing('', null, true);
+  startProcessing(null, true);
 }
 
 // Mirror the newest assistant answer from the chat into the vision overlay so
@@ -5769,6 +6219,89 @@ function closeShowcase() {
     } catch (e) { /* ignore */ }
   }
   _showcaseEntered = false;
+}
+
+// ---- Audio API playground (/playground/), embedded in-app ----------------
+// The header's waveform button opens the playground full-screen in an iframe
+// (same origin; it calls /v1/audio/* directly and follows the Studio theme).
+// The page's "Back to Studio" link / Esc posts {type:'sima-studio:close-playground'}
+// to close; standalone, that link simply navigates to /.
+let _playgroundEntered = false;
+let _playgroundGen = 0;              // bumps on every open/close: stale fullscreen promises no-op
+
+function _exitFullscreenQuietly() {
+  try {
+    if (document.fullscreenElement || document.webkitFullscreenElement) {
+      const p = (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+      if (p && p.catch) p.catch(() => {});
+    }
+  } catch (e) { /* ignore */ }
+}
+
+function openPlayground() {
+  const modal = document.getElementById('playgroundModal');
+  const frame = document.getElementById('playgroundFrame');
+  if (!modal || !frame) return;
+  frame.src = '/playground/';        // always a fresh load (close unloads it)
+  frame.style.display = 'block';
+  modal.style.display = 'flex';
+  document.body.classList.add('playground-open');
+  _playgroundEntered = false;
+  const gen = ++_playgroundGen;
+  try {
+    const rf = modal.requestFullscreen || modal.webkitRequestFullscreen;
+    if (rf) {
+      const p = rf.call(modal);
+      if (p && p.then) {
+        _playgroundEntered = true;
+        p.then(() => {
+          // Closed before fullscreen was granted: leave it again. (A reopen in
+          // the meantime wants fullscreen, so only a hidden modal exits.)
+          if (modal.style.display === 'none') _exitFullscreenQuietly();
+        }, () => { if (gen === _playgroundGen) _playgroundEntered = false; });
+      }
+    }
+  } catch (e) { /* ignore */ }
+  setTimeout(() => { try { frame.contentWindow && frame.contentWindow.focus(); } catch (e) { /* ignore */ } }, 80);
+}
+
+function closePlayground() {
+  const modal = document.getElementById('playgroundModal');
+  const frame = document.getElementById('playgroundFrame');
+  if (!modal) return;
+  modal.style.display = 'none';
+  // Unload the page: stops audio and releases the microphone. about:blank
+  // rather than '' (an empty src reflects as the document URL and stays truthy).
+  if (frame) { frame.style.display = 'none'; frame.src = 'about:blank'; }
+  document.body.classList.remove('playground-open');
+  _playgroundGen += 1;
+  if (_playgroundEntered) _exitFullscreenQuietly();
+  _playgroundEntered = false;
+}
+
+function initPlayground() {
+  const btn = document.getElementById('playgroundButton');
+  const modal = document.getElementById('playgroundModal');
+  if (!btn || !modal) return;
+  btn.addEventListener('click', (e) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || (e.button && e.button !== 0)) return;
+    e.preventDefault();
+    openPlayground();
+  });
+  window.addEventListener('message', (e) => {
+    const frame = document.getElementById('playgroundFrame');
+    if (!frame || e.source !== frame.contentWindow) return;
+    if (e.origin !== window.location.origin) return;
+    if (e.data && typeof e.data === 'object' && e.data.type === 'sima-studio:close-playground') closePlayground();
+  });
+  document.addEventListener('fullscreenchange', () => {
+    // Leaving browser fullscreen (Esc handled by the browser) closes the playground too.
+    if (_playgroundEntered && !document.fullscreenElement && modal.style.display !== 'none') closePlayground();
+  });
+  // Esc while focus is on the Studio itself (the frame handles its own keys).
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && modal.style.display !== 'none') closePlayground();
+  });
 }
 
 // ---- Solutions: SiMaSentry harness suites (Med/Safe/Sec), embedded in-app ----
@@ -6281,7 +6814,7 @@ function updateBenchModelState() {
   const run = document.getElementById('benchRunBtn');
   const hint = document.getElementById('benchHint');
   const n = benchSelectedModels().length;
-  const busy = _modelBusy;
+  const busy = serverBusy();
   if (run) {
     run.disabled = n === 0 || busy;
     run.textContent = n > 1 ? `Run benchmark · ${n} models` : 'Run benchmark';

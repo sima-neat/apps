@@ -82,12 +82,33 @@ python3 ${APP_DIR}/src/python/main.py \
   --config ${APP_DIR}/src/common/config.yaml
 ```
 
+## Expected Result
+
+The application prints the image count, one line per image, and a final total:
+
+```text
+Found 21 images
+[1/21] 000000081061.jpg -> 000000081061.png (3 detections)
+Done: 21 images processed
+```
+
+`io.output_dir` then holds one annotated PNG per input image; with the packaged
+`assets/datasets/coco` folder that is 21 files. The C++ binary prints the same
+lines with the input filename in quotes.
+
+Running a second time adds a `Cleared N stale output images` line before the
+rest, in both implementations, where `N` is however many image files the previous
+run left in `io.output_dir`. Setting `io.output_dir` to the same folder as
+`io.input_dir` skips that cleanup and reports
+`Skipping output cleanup because output_dir matches input_dir` on stderr; keep
+them separate.
+
 ## Troubleshooting
 
 - Verify `model.path` and the labels file if detections are missing.
 - Confirm the input folder contains `.jpg`, `.jpeg`, `.png`, or `.bmp` files.
 - Adjust `decode.score_threshold` and `decode.nms_iou` when tuning detections.
-- Use `--profile` to inspect pipeline timing.
+- Set `runtime.profile: true` in the config to print pipeline timing summaries.
 
 ## Source Files
 

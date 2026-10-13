@@ -86,7 +86,7 @@ LLiMa stores models under `/media/nvme/llima/models/` by default. Set `LLIMA_MOD
 
 [Insight](https://developer.sima.ai/software/tools/insight/) can host the input stream and render the video and detection metadata. Install videos directly from the Insight catalog or through Insight's YouTube support.
 
-In the Insight Web UI, start the required stream and copy its RTSP URL. Use the host and UDP port ranges reported by `neat` for the output settings.
+In the Insight Web UI, start the required stream and copy its RTSP URL. Use the host and UDP port ranges reported by `neat` for the output settings. Use a host and published port that the target can reach, not `localhost` and not an address only Insight's own machine can resolve. Verify the URL from the target before running; the application prints the resolved source and its dimensions on startup.
 
 ## Configure
 
@@ -122,6 +122,26 @@ python3 ${APP_DIR}/src/python/detector_app.py \
 ```
 
 The GenAI path checks `/v1/models`, waits at least `genai.interval_seconds` between requests, and bounds queued and in-flight work with `genai.max_pending_requests`.
+
+## Expected Result
+
+Both lines below come from the **detector** terminal, not the server's. The
+detector's startup banner reports the GenAI endpoint it will call, and it prints
+each vision-language response as that response arrives:
+
+```text
+[genai-server] enabled model=Qwen3-VL-4B-Instruct-GPTQ-a16w4 url=http://127.0.0.1:9998 interval=5s
+[response #001] The person is seated and holding an object with both hands, appearing to rest or interact with it.
+```
+
+The server terminal prints its own lines instead, `added model: ...` followed by
+`serving GenAI API on http://0.0.0.0:9998`; check there if the detector reports
+the endpoint as unreachable.
+
+Responses are deliberately infrequent. `genai.interval_seconds` sets the minimum
+gap between requests, so at the default of `5` a short run produces only a
+handful, and a response appears only when the detector has a person to crop. Few
+responses is not a fault; none at all, on a source containing people, is.
 
 ## Troubleshooting
 

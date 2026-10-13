@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 from pathlib import Path
@@ -20,6 +21,7 @@ VALID_KINDS = {"unit", "e2e"}
 MODEL_FIELDS = ("source", "name", "url", "file", "repo", "path", "ref", "spec")
 SCOPE_FILE_NAME = "test-scope.yaml"
 SCOPE_FILE_SUBPATH = Path("tests") / SCOPE_FILE_NAME
+MODEL_VARIANTS_ENV = "SIMANEAT_APPS_TEST_MODEL_VARIANTS"
 
 
 def load_yaml_mapping(path: Path) -> dict[str, Any]:
@@ -171,6 +173,39 @@ def enabled_models(entry: dict[str, Any], language: str) -> list[str]:
     return raw
 
 
+def enabled_variants(entry: dict[str, Any], language: str) -> list[str]:
+    """Models the e2e suite is also run with when the run asks for variants."""
+    raw = e2e_config(entry, language).get("variants", [])
+    if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
+        raise ValueError("e2e model variants must be a list of strings")
+    return raw
+
+
+def model_variants_enabled() -> bool:
+    return os.environ.get(MODEL_VARIANTS_ENV, "").strip() == "1"
+
+
+def suite_models(entry: dict[str, Any], language: str) -> list[str]:
+    """The models a suite is run with, in order: its first selected model, then the
+    variants when SIMANEAT_APPS_TEST_MODEL_VARIANTS=1."""
+    selected = enabled_models(entry, language)
+    if not selected:
+        return []
+    models = [selected[0]]
+    if model_variants_enabled():
+        models.extend(v for v in enabled_variants(entry, language) if v not in models)
+    return models
+
+
+def downloadable_models(entry: dict[str, Any], language: str) -> list[str]:
+    """Every model the suite may need: its selection, plus the variants when
+    SIMANEAT_APPS_TEST_MODEL_VARIANTS=1."""
+    models = list(enabled_models(entry, language))
+    if model_variants_enabled():
+        models.extend(v for v in enabled_variants(entry, language) if v not in models)
+    return models
+
+
 def validate_scope(scope: dict[str, Any], apps_root: Path) -> list[str]:
     errors: list[str] = []
     scoped_examples = set(scope["examples"])
@@ -247,8 +282,20 @@ def validate_scope(scope: dict[str, Any], apps_root: Path) -> list[str]:
                     errors.append(
                         f"{example_key}: e2e.{language} is enabled but models is empty"
                     )
+                variants = enabled_variants(entry, language)
+                for model_id in variants:
+                    if model_id not in models:
+                        errors.append(
+                            f"{example_key}: e2e.{language} variants reference undefined "
+                            f"model {model_id}"
+                        )
+                    elif model_id in selected_models:
+                        errors.append(
+                            f"{example_key}: e2e.{language} variant {model_id} is already "
+                            "in models"
+                        )
                 if is_enabled(entry, language, "e2e"):
-                    for model_id in selected_models:
+                    for model_id in [*selected_models, *variants]:
                         model = models.get(model_id)
                         if (
                             isinstance(model, dict)
@@ -315,7 +362,7 @@ def scoped_models(
         for language in languages:
             if not is_enabled(entry, language, "e2e"):
                 continue
-            for model_id in enabled_models(entry, language):
+            for model_id in downloadable_models(entry, language):
                 model = models[model_id]
                 identity = (model_id, *model_fields(model))
                 result.setdefault(identity, (model_id, model))
@@ -333,13 +380,10 @@ def scoped_model_files(
         if not is_enabled(entry, language, "e2e"):
             continue
         models = entry.get("models", {})
-        selected = enabled_models(entry, language)
-        if not selected:
-            continue
-        model = models[selected[0]]
-        file_name = model_field(model, "file")
-        if file_name:
-            result.append((example_key, file_name))
+        for model_id in suite_models(entry, language):
+            file_name = model_field(models[model_id], "file")
+            if file_name:
+                result.append((example_key, file_name))
     return result
 
 

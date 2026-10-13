@@ -66,7 +66,7 @@ Set `model.path` in the config to the downloaded package.
 
 [Insight](https://developer.sima.ai/software/tools/insight/) can host the input streams and render each output channel. Install videos directly from the Insight catalog or through Insight's YouTube support.
 
-In the Insight Web UI, start the required streams and copy their RTSP URLs into `streams`. Use the host and UDP port ranges reported by `neat` for the output settings.
+In the Insight Web UI, start the required streams and copy their RTSP URLs into `streams`. Use the host and UDP port ranges reported by `neat` for the output settings. Use a host and published port that the target can reach, not `localhost` and not an address only Insight's own machine can resolve. Verify the URL from the target before running; the application prints the resolved source and its dimensions on startup.
 
 ## Configure
 
@@ -99,6 +99,41 @@ pip install -r ${APP_DIR}/src/python/requirements.txt
 python3 ${APP_DIR}/src/python/main.py \
   --config ${APP_DIR}/src/common/config.yaml
 ```
+
+## Expected Result
+
+The application prints one startup line per stream, then per-stream profile and
+processed counts:
+
+```text
+[profile stream=2] frames=70 output_fps=20.364721259721044 avg_detection_pull_ms=0.43236884301794426 avg_metadata_send_ms=0.5690935856795737 avg_boxes=2.0
+[stream 2] processed=200
+```
+
+The two implementations format these numbers differently: Python prints the full
+float, the C++ binary prints at the default stream precision of six significant
+digits. Compare the magnitudes rather than the digits.
+
+The `[profile stream=N]` lines appear while the run is in progress, once
+`runtime.warmup_frames` has passed, so they are visible without stopping the
+application. Every configured stream should appear.
+
+The `[stream N] processed=` summaries are printed at the end, and the packaged
+config ships `inference.frames: 0`, which runs continuously. Unlike the
+single-stream examples, both implementations here still print them on Ctrl-C. Set
+a positive limit for a bounded check that ends by itself instead:
+
+```yaml
+inference:
+  frames: 200
+```
+
+A stream stuck with no progress while others advance is worth investigating on
+its own: verify that source independently before assuming a model or config
+problem. To inspect results without Insight, set `output.debug_dir` to a
+directory **and** `output.save_every` to a positive interval. Both are required:
+the packaged config ships `save_every: 0`, which disables saving even when
+`debug_dir` is set.
 
 ## Troubleshooting
 

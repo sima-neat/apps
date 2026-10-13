@@ -73,7 +73,10 @@ Use the source video packaged with Apps:
 
 In the Insight Web UI, open `RTSP Source`, upload this video, start its stream,
 and copy the RTSP URL into `streams`. Use the host and UDP port ranges reported
-by `neat` for the output settings.
+by `neat` for the output settings. Use a host and published port that the target
+can reach, not `localhost` and not an address only Insight's own machine can
+resolve. Verify the URL from the target before running; the application prints
+the resolved source and its dimensions on startup.
 
 ## Configure
 
@@ -118,6 +121,23 @@ pip install -r "$APP_DIR/src/python/requirements.txt"
 python3 "$APP_DIR/src/python/main.py" \
   --config "$APP_DIR/src/common/config.yaml"
 ```
+
+## Expected Result
+
+Each stream reports its own progress while the run is in flight:
+
+```text
+[profile stream=0] frames=100 output_fps=27.0271 avg_detection_pull_ms=27.4154 avg_tracker_ms=0.50715 avg_metadata_send_ms=1.45828 avg_tracks=46.76
+```
+
+`avg_tracks` is the mean number of active tracks per processed frame. On the
+packaged anti-UAV source it runs to several dozen, because the model is tuned for
+small objects and that footage is dense with them; values between roughly 35 and
+50 are ordinary there. Expect a much lower figure on other material.
+
+The two implementations format these numbers differently: Python prints the full
+float, the C++ binary prints at the default stream precision of six significant
+digits. Compare the magnitudes rather than the digits.
 
 ## Troubleshooting
 

@@ -35,7 +35,13 @@ e2e:
     enabled: true
     models:
     - yolo26m-pose-int8-b1
+    variants:
+    - yolo26n-pose-bf16-mla_tess-b1
+    - yolo26m-pose-bf16-b1
   cpp:
     enabled: true
     models:
     - yolo26m-pose-int8-b1
+    variants:
+    - yolo26n-pose-bf16-mla_tess-b1
+    - yolo26m-pose-bf16-b1

@@ -340,10 +340,10 @@ decode_yolov8_instances_from_detess(const std::vector<simaai::neat::Tensor>& ten
         const size_t cls_base =
             (static_cast<size_t>(y) * static_cast<size_t>(reg.w) + static_cast<size_t>(x)) *
             static_cast<size_t>(cls.c);
-        int best_cls = -1;
-        float best_score = 0.0f;
-        for (int c = 0; c < cls.c; ++c) {
-          const float s = sigmoid(cls.data[cls_base + static_cast<size_t>(c)]);
+        int best_cls = 0;
+        float best_score = cls.data[cls_base];
+        for (int c = 1; c < cls.c; ++c) {
+          const float s = cls.data[cls_base + static_cast<size_t>(c)];
           if (s > best_score) {
             best_score = s;
             best_cls = c;

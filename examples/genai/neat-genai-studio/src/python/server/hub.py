@@ -21,7 +21,8 @@ from pathlib import Path
 from typing import Iterator
 
 from shared.chat_template import repair_chat_template_files
-from shared.config import HubConfig, classify_model_dir, model_dir_complete
+from shared.config import (HubConfig, classify_model_dir, layered_encoder_reason,
+                           model_dir_complete)
 
 
 _internet_cache: dict = {"ok": None, "at": 0.0, "refreshing": False}
@@ -163,6 +164,24 @@ _VLM_NAME_HINTS = ("vlm", "-vl", "vl-", "_vl", "vision", "multimodal", "llava",
                    "idefics", "siglip")
 
 
+def _hub_unsupported_reason(siblings) -> str:
+    """Why a repo's weights cannot be loaded here, from its Hub file list.
+
+    Uses the same rule as the on-disk check, so a build is described
+    identically before and after downloading. Silent when the Hub did not
+    return a file list — a missing listing is not evidence of a problem.
+    """
+    if os.environ.get("STUDIO_ALLOW_LAYERED_ASR") == "1" or not siblings:
+        return ""
+    try:
+        names = [(getattr(s, "rfilename", "") or "").rsplit("/", 1)[-1] for s in siblings]
+    except Exception:  # noqa: BLE001 - a listing we cannot read blocks nothing
+        return ""
+    if not any(n == "whisper_config.json" for n in names):
+        return ""
+    return layered_encoder_reason(names)
+
+
 def classify_hub_repo(repo_id: str, pipeline_tag=None, tags=None) -> str:
     """Best-effort repo modality: ``"llm"`` | ``"vlm"`` | ``"asr"``."""
     tag = (pipeline_tag or "").strip().lower()
@@ -258,6 +277,10 @@ def hub_search(catalog_dir: Path | None, hub: HubConfig, query: str, limit: int 
                     "sizeBytes": getattr(m, "used_storage", None) or getattr(m, "usedStorage", None),
                     "alreadyInCatalog": in_catalog,
                     "catalogComplete": (model_dir_complete(local)[0] if in_catalog else None),
+                    # Judged from the repo's own file list, so an encoder layout
+                    # this runtime cannot load is reported BEFORE the download
+                    # rather than after gigabytes have been fetched.
+                    "unsupportedReason": _hub_unsupported_reason(siblings) or None,
                 })
         except Exception:  # noqa: BLE001 - one organization must not hide the others
             logging.exception("Hugging Face search failed for organization %s", author)

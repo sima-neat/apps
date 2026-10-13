@@ -1,8 +1,8 @@
 # API Surface Map
 
-Use this file to discover important Neat Library API areas without turning the
-skill into an API manual. Mention the area, then inspect the current packaged
-source before writing code or explaining behavior.
+Use the relevant section to locate a public API in matching packaged Core
+source. Paths below are relative to that source root; installed headers provide
+the callable contract. Read only the headers and docs needed for the task.
 
 ## Contents
 
@@ -13,10 +13,14 @@ source before writing code or explaining behavior.
 - GenAI Surface
 - Diagnostics And Measurement
 - Python Surface
-- Tools Outside This Skill
 
 ## Core Application Surface
 
+- Application entry point and development loop
+  - Inspect `include/neat.h`
+  - Read `docs/develop-apps/development-workflow/index.md`
+- Generated C++ and Python API reference
+  - Read `docs/reference/`
 - `Model`, `Model::Options`, `Model::RouteOptions`, and `Model::Runner`
   - Inspect `include/model/Model.h`
   - Read `docs/develop-apps/development-workflow/model.mdx`
@@ -24,15 +28,18 @@ source before writing code or explaining behavior.
   - Inspect `include/pipeline/Graph.h`
   - Inspect `include/pipeline/GraphOptions.h`
   - Read `docs/develop-apps/development-workflow/graph.mdx`
+  - Read `docs/develop-apps/advanced-concepts/application-design/graphs.md` for graph composition details
 - `Run`, `RunOptions`, push/pull, endpoint names, measurement, and close/drain behavior
   - Inspect `include/pipeline/Run.h`
   - Read `docs/develop-apps/development-workflow/overview.mdx`
+  - Read `docs/develop-apps/development-workflow/pipeline.mdx` for the built pipeline and runtime view
 
 ## Data And Boundary Types
 
 - `Tensor`, `TensorList`, `TensorSpec`, dtype/layout/pixel-format helpers, and OpenCV/NumPy adapters
-  - Inspect `include/pipeline/Tensor*.h`
+  - Inspect `include/pipeline/Tensor.h`, `include/pipeline/TensorCore.h`, and `include/pipeline/TensorTypes.h`
   - Read `docs/develop-apps/development-workflow/core_types.mdx`
+  - Read `docs/develop-apps/advanced-concepts/data-model-contracts/data_formats.md` for data and media format contracts
 - `Sample`, bundles, frame IDs, timestamps, and metadata-carrying payloads
   - Inspect `include/pipeline/Tensor.h`
   - Read `docs/develop-apps/development-workflow/core_types.mdx`
@@ -49,6 +56,7 @@ source before writing code or explaining behavior.
 - Public node umbrella includes
   - Inspect `include/neat/nodes.h`
   - Inspect `include/neat/node_groups.h`
+  - Read `docs/develop-apps/development-workflow/node.mdx` for public nodes and node groups
 - Boundary nodes and common graph nodes
   - Inspect `include/nodes/io/Input.h`
   - Inspect `include/nodes/common/Output.h`
@@ -60,9 +68,11 @@ source before writing code or explaining behavior.
   - Inspect `include/nodes/io/StillImageInput.h`
   - Inspect `include/nodes/io/UdpOutput.h`
   - Inspect `include/nodes/io/MetadataSender.h`
+  - Read `docs/develop-apps/advanced-concepts/application-design/metadata_sender.md` for metadata output patterns
 - Pre-built node groups for common application plumbing
   - Inspect `include/nodes/groups/*.h`
   - Start with `RtspEncodedInput.h`, `RtspDecodedInput.h`, `VideoSender.h`, `ImageInputGroup.h`, and `ModelGroups.h`
+  - Read `docs/develop-apps/advanced-concepts/application-design/video_sender.md` for video output patterns
 
 ## Model Pre/Post And Decode Helpers
 
@@ -117,15 +127,3 @@ source before writing code or explaining behavior.
 - Inspect `python/src/module.cpp` in packaged core source for binding truth.
 - Read `docs/reference/pythonapi/` when present in the installed docs.
 - For NumPy/image interop, inspect binding definitions for `Tensor`, `ModelOptions`, `RunOptions`, `GenAIModel`, and `GenAIServer`.
-
-## Tools Outside This Skill
-
-These are important Neat ecosystem areas, but this skill should only route to
-their docs. Do not inline their workflows here.
-
-- Model Compiler and model preparation
-  - Read the Model Compiler and compile-a-model docs.
-- LLiMa compile, test, and benchmark workflows
-  - Read the LLiMa / GenAI tooling docs.
-- Insight visualization or UI workflows
-  - Read the Insight docs.

@@ -727,3 +727,56 @@ def test_download_models_resolves_modelzoo_version_from_manifest(
     assert sima_cli_args.read_text(encoding="utf-8").strip() == (
         f"modelzoo -v {expected_version} get resnet_50"
     )
+
+
+def _scope_with_variants(example_key: str) -> dict:
+    scope = _scope(example_key)
+    entry = scope["examples"][example_key]
+    entry["models"]["small-model"] = {
+        "source": "modelzoo",
+        "name": "small_model",
+        "file": "small_model_mpk.tar.gz",
+    }
+    entry["e2e"]["cpp"]["variants"] = ["small-model"]
+    return scope
+
+
+def test_scoped_model_files_add_variants_only_when_asked(monkeypatch):
+    example_key = "classification/demo-example"
+    scope = _scope_with_variants(example_key)
+
+    monkeypatch.delenv(test_scope.MODEL_VARIANTS_ENV, raising=False)
+    assert scoped_model_files(scope, "cpp", "e2e") == [(example_key, "demo_model_mpk.tar.gz")]
+
+    monkeypatch.setenv(test_scope.MODEL_VARIANTS_ENV, "1")
+    assert scoped_model_files(scope, "cpp", "e2e") == [
+        (example_key, "demo_model_mpk.tar.gz"),
+        (example_key, "small_model_mpk.tar.gz"),
+    ]
+
+
+def test_scoped_models_download_variants_only_when_asked(monkeypatch):
+    scope = _scope_with_variants("classification/demo-example")
+
+    monkeypatch.delenv(test_scope.MODEL_VARIANTS_ENV, raising=False)
+    assert [m["file"] for _, m in scoped_models(scope, ["cpp"], "e2e")] == ["demo_model_mpk.tar.gz"]
+
+    monkeypatch.setenv(test_scope.MODEL_VARIANTS_ENV, "1")
+    assert [m["file"] for _, m in scoped_models(scope, ["cpp"], "e2e")] == [
+        "demo_model_mpk.tar.gz",
+        "small_model_mpk.tar.gz",
+    ]
+
+
+def test_validate_scope_checks_variants(tmp_path):
+    example_key = _write_example(tmp_path)
+    _write_cpp_tests(tmp_path, example_key)
+    scope = _scope_with_variants(example_key)
+    assert validate_scope(scope, tmp_path) == []
+
+    scope["examples"][example_key]["e2e"]["cpp"]["variants"] = ["missing-model", "demo-model"]
+    assert validate_scope(scope, tmp_path) == [
+        f"{example_key}: e2e.cpp variants reference undefined model missing-model",
+        f"{example_key}: e2e.cpp variant demo-model is already in models",
+    ]
+

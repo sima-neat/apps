@@ -3,6 +3,7 @@ foreach(example IN ITEMS
     pcie-high-density-multi-stream-object-detector
     detr-object-detector
     pcb-defect-detector
+    rfdetr-detection-segmentation
     single-stream-object-detector
     ssd-mobilenet-object-detector
     yolo26-object-detector
