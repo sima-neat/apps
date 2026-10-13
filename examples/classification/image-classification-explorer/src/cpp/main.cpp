@@ -1649,8 +1649,13 @@ void publish_report(const fs::path& output_dir_arg, const std::vector<ImageResul
     for (const auto& entry : fs::directory_iterator(output_dir)) {
       const std::string name = entry.path().filename().string();
       has_entries = true;
+      // The marker has to be a regular file, not merely a name in the listing. A
+      // *directory* called kReportMarker would otherwise make a customer directory
+      // look application-owned, and the swap below deletes what it replaces,
+      // including anything nested under that fake marker. Same test the scratch
+      // directories below use.
       if (name == kReportMarker)
-        has_marker = true;
+        has_marker = path_is_regular_file(entry.path());
       else if (kReportEntries.count(name) == 0)
         foreign.push_back(name);
     }

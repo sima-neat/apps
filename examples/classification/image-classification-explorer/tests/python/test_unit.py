@@ -1276,6 +1276,31 @@ models:
         assert (out_dir / "report.html").read_text() == "customer data"
         assert not (out_dir / "report.json").exists()
 
+    def test_marker_that_is_a_directory_is_not_ownership(self, tmp_path, monkeypatch, capsys):
+        """The marker is recognised by being a regular file. A directory with the
+        marker's name, next to names that look like a report, must not make a
+        customer directory look application-owned - publication replaces
+        output_dir wholesale, so that would delete the nested data."""
+        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
+        img = tmp_path / "a.jpg"
+        _make_image(img)
+        out_dir = tmp_path / "out"
+        fake_marker = out_dir / main.REPORT_MARKER
+        fake_marker.mkdir(parents=True)
+        (fake_marker / "customer.txt").write_text("keep me", encoding="utf-8")
+        (out_dir / "report.html").write_text("customer data", encoding="utf-8")
+        config_path = tmp_path / "config.yaml"
+        _write_config(config_path, img, out_dir)
+        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
+
+        rc = main.main()
+
+        assert rc == 6
+        assert "not created by this application" in capsys.readouterr().err
+        assert (fake_marker / "customer.txt").read_text() == "keep me"
+        assert (out_dir / "report.html").read_text() == "customer data"
+        assert not (out_dir / "report.json").exists()
+
     def test_output_dir_with_foreign_entries_is_refused(self, tmp_path, monkeypatch, capsys):
         """A previous report directory that has since gained unrelated files is
         refused too."""

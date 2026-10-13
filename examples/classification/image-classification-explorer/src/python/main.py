@@ -1086,7 +1086,12 @@ def publish_report(output_dir: Path, results: list[ImageResult], profiles: list[
             raise OSError(f"output_dir {output_dir} exists and is not a directory")
         entries = sorted(p.name for p in output_dir.iterdir())
         foreign = [name for name in entries if name not in REPORT_ENTRIES]
-        if entries and REPORT_MARKER not in entries:
+        # The marker has to be a regular file, not merely a name in the listing.
+        # A *directory* called REPORT_MARKER would otherwise make a customer
+        # directory look application-owned, and the swap below deletes what it
+        # replaces, including anything nested under that fake marker. Same test
+        # the scratch directories below use.
+        if entries and not (output_dir / REPORT_MARKER).is_file():
             raise OSError(
                 f"output_dir {output_dir} was not created by this application "
                 f"(missing {REPORT_MARKER}); use an empty or dedicated directory"

@@ -284,6 +284,36 @@ int main(int argc, char** argv) {
       std::cout << "[OK] output_dir without the ownership marker was refused\n";
     }
 
+    // The marker is recognised by being a regular file. A *directory* with the
+    // marker's name, beside names that look like a report, must not pass the
+    // ownership check: publication replaces output_dir wholesale, so it would
+    // delete the data nested under the fake marker.
+    {
+      const auto fake = work / "fake";
+      fs::create_directories(fake / ".image-classification-explorer-report");
+      {
+        std::ofstream(fake / ".image-classification-explorer-report" / "customer.txt")
+            << "keep me\n";
+      }
+      {
+        std::ofstream(fake / "report.html") << "customer page\n";
+      }
+      write_config(fake);
+      auto fake_refused =
+          spawn_and_wait(binary, {"--config", (work / "config.yaml").string()}, 20000);
+      if (fake_refused.exit_code == 0 ||
+          fake_refused.stderr_text.find("not created by this application") == std::string::npos ||
+          !fs::exists(fake / ".image-classification-explorer-report" / "customer.txt") ||
+          !fs::exists(fake / "report.html")) {
+        std::cerr << "[FAIL] marker directory: expected refusal, got exit "
+                  << fake_refused.exit_code << "\nstderr:\n"
+                  << fake_refused.stderr_text << "\n";
+        ++failures;
+      } else {
+        std::cout << "[OK] a directory named like the ownership marker was refused\n";
+      }
+    }
+
     write_config(work / "report");
     auto ok = spawn_and_wait(binary, {"--config", (work / "config.yaml").string()}, 20000);
     auto second = spawn_and_wait(binary, {"--config", (work / "config.yaml").string()}, 20000);
