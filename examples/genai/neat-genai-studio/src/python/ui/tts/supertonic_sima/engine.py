@@ -270,11 +270,15 @@ class SupertonicModalix:
         timeout_ms: int,
         verify_hashes: bool,
         steps: int = DEFAULT_STEPS,
+        expected_mpk_sha256: str | None = None,
     ) -> None:
         self.model_dir = model_dir.resolve()
         self.mpk_path = mpk_path.resolve()
         self.runtime_data_path = runtime_data_path.resolve()
         self.artifact_manifest_path = artifact_manifest_path.resolve()
+        # The vector estimator's checksum when it does not come from the
+        # manifest's release (Platform 3.0's compile; see vector_estimator.json).
+        self.expected_mpk_sha256 = expected_mpk_sha256
         self.vocoder_backend = vocoder_backend
         self.vocoder_mpk_path = vocoder_mpk_path.resolve()
         self.vocoder_manifest_path = vocoder_manifest_path.resolve()
@@ -416,7 +420,7 @@ class SupertonicModalix:
     def _verify_artifacts(self) -> None:
         manifest = json.loads(self.artifact_manifest_path.read_text())
         try:
-            expected_mpk = manifest["compiled"]["archive"]["sha256"]
+            expected_mpk = self.expected_mpk_sha256 or manifest["compiled"]["archive"]["sha256"]
             expected_runtime = manifest["graph_surgery"]["runtime_data"]["sha256"]
         except KeyError as error:
             raise ValueError(

@@ -601,9 +601,13 @@ selector in Settings.
   with `sima-cli neat install core -t pyneat`) and downloads the model files with
   the venv's `hf`: the upstream CPU models and voice styles from
   [Supertone/supertonic-3](https://huggingface.co/Supertone/supertonic-3) and
-  the precompiled MLA packages from
+  the precompiled vocoder and runtime data from
   [florianvoss/supertonic-3-sima](https://huggingface.co/florianvoss/supertonic-3-sima),
-  both at commit revisions pinned in `setup.sh` and verified by SHA-256. No
+  both at commit revisions pinned in `setup.sh`. The vector estimator compiled
+  for Platform 3.0 comes from the SiMa model zoo and is downloaded with
+  `sima-cli download`, which asks you to sign in once if needed (the address
+  and checksum are in `src/python/ui/tts/supertonic_sima/vector_estimator.json`).
+  Every file is verified by SHA-256. No
   on-device compilation is needed, and nothing is cloned from an external
   repository: the runtime package itself is vendored in
   `src/python/ui/tts/supertonic_sima/` (see its README for provenance and how to

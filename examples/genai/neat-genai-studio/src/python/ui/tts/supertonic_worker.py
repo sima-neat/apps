@@ -80,6 +80,10 @@ def _import_runtime():
     return supertonic_sima
 
 
+# The Platform 3.0 vector estimator (the SiMa model zoo's compile), shared with setup.sh.
+VECTOR_ESTIMATOR = Path(__file__).resolve().parent / "supertonic_sima" / "vector_estimator.json"
+
+
 def _build_engine(runtime):
     model_root = Path(os.environ["SUPERTONIC_MODELS_ROOT"])
     compiled = model_root / "supertonic-3-sima"
@@ -99,6 +103,7 @@ def _build_engine(runtime):
         timeout_ms=120_000,
         verify_hashes=True,
         steps=steps,
+        expected_mpk_sha256=json.loads(VECTOR_ESTIMATOR.read_text())["sha256"],
     )
 
 

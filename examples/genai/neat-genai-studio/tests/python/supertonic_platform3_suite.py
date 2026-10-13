@@ -22,6 +22,8 @@ EXAMPLE = Path(__file__).resolve().parents[2]
 SETUP = EXAMPLE / "setup.sh"
 ENGINE = EXAMPLE / "src" / "python" / "ui" / "tts" / "supertonic_sima" / "engine.py"
 REQUIREMENTS = EXAMPLE / "src" / "python" / "requirements-supertonic.txt"
+VECTOR_PIN = EXAMPLE / "src" / "python" / "ui" / "tts" / "supertonic_sima" / "vector_estimator.json"
+WORKER = EXAMPLE / "src" / "python" / "ui" / "tts" / "supertonic_worker.py"
 
 
 def _setup_function(name: str) -> str:
@@ -147,6 +149,60 @@ class PyneatLinkTests(unittest.TestCase):
             """))
         self.assertEqual(self._run(runtime_ok=True, venv_python=fake), 1)
         self.assertFalse((self.purelib / "pyneat").exists())
+
+
+class VectorEstimatorTests(unittest.TestCase):
+    """Platform 3.0's vector estimator comes from the SiMa model zoo; the URL and
+    checksum in vector_estimator.json are what setup.sh downloads and checks
+    and what the engine accepts."""
+
+    def setUp(self):
+        import json
+        self.pin = json.loads(VECTOR_PIN.read_text(encoding="utf-8"))
+
+    def test_the_pin_points_at_the_model_zoo(self):
+        self.assertTrue(self.pin["url"].startswith("https://docs.sima.ai/pkg_downloads/"))
+        self.assertRegex(self.pin["sha256"], r"^[0-9a-f]{64}$")
+
+    def test_setup_checks_the_same_checksum_and_no_longer_fetches_it_from_hugging_face(self):
+        sums = _setup_function("_supertonic_checksums")
+        self.assertIn(f"{self.pin['sha256']}  supertonic-3-sima/supertonic_vector_field_sima_mpk.tar.gz", sums)
+        models = _setup_function("_supertonic_models")
+        self.assertNotIn("supertonic_vector_field_sima_mpk.tar.gz", models)
+        self.assertIn("_supertonic_vector_estimator", models)
+        self.assertIn('sima-cli download "${url}"', _setup_function("_supertonic_vector_estimator"))
+
+    def test_the_worker_passes_the_pinned_checksum_to_the_engine(self):
+        source = WORKER.read_text(encoding="utf-8")
+        self.assertIn('expected_mpk_sha256=json.loads(VECTOR_ESTIMATOR.read_text())["sha256"]', source)
+
+    def test_the_engine_checks_the_pinned_checksum_instead_of_the_manifest(self):
+        import hashlib
+        import json
+        import types
+        tree = ast.parse(ENGINE.read_text(encoding="utf-8"))
+        cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "SupertonicModalix")
+        method = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == "_verify_artifacts")
+        namespace = {"json": json, "_sha256": lambda path: hashlib.sha256(Path(path).read_bytes()).hexdigest()}
+        exec(compile(ast.Module(body=[method], type_ignores=[]), str(ENGINE), "exec"), namespace)
+        verify = namespace["_verify_artifacts"]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            mpk, runtime, manifest = root / "mpk", root / "runtime", root / "manifest.json"
+            mpk.write_bytes(b"platform 3.0 compile")
+            runtime.write_bytes(b"runtime")
+            sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
+            manifest.write_text(json.dumps({"compiled": {"archive": {"sha256": "0" * 64}},
+                                            "graph_surgery": {"runtime_data": {"sha256": sha(runtime)}}}))
+            engine = types.SimpleNamespace(artifact_manifest_path=manifest, mpk_path=mpk, runtime_data_path=runtime,
+                                           vocoder_backend="cpu", expected_mpk_sha256=sha(mpk))
+            verify(engine)                                  # the pin wins over the manifest's old checksum
+            engine.expected_mpk_sha256 = None
+            with self.assertRaisesRegex(ValueError, "MPK SHA-256 mismatch"):
+                verify(engine)                              # without a pin, the manifest still decides
+            engine.expected_mpk_sha256 = "1" * 64
+            with self.assertRaisesRegex(ValueError, "MPK SHA-256 mismatch"):
+                verify(engine)                              # a wrong file is still refused
 
 
 if __name__ == "__main__":
