@@ -115,31 +115,54 @@ def _section(raw: dict, name: str) -> dict:
 _INT_TEXT = re.compile(r"^[+-]?[0-9]+$")
 
 
+def _value(section: dict, key: str):
+    """Raw config value, or None when unset.
+
+    The C++ parser treats an empty value and any spelling of null, quoted or
+    not, as unset and falls back to the default.
+    """
+    value = section.get(key)
+    if isinstance(value, str) and value.strip().lower() == "null":
+        return None
+    return value
+
+
+def _str(section: dict, key: str, default: str) -> str:
+    """Text config value; unset falls back to the default like the C++ parser."""
+    value = _value(section, key)
+    return default if value is None else str(value)
+
+
 def _int(section: dict, key: str, default: int, name: str) -> int:
     """Integer config value, accepting the same spellings as the C++ parser.
 
     The C++ parser unquotes before parsing, so "8000" and 8000 are the same
     setting. A YAML float such as 1.0 reaches it as the text "1.0", which it
-    rejects, so it is rejected here too.
+    rejects, so it is rejected here too. Inside quotes it skips leading
+    whitespace but rejects trailing whitespace.
     """
-    value = section.get(key)
+    value = _value(section, key)
     if value is None:
         return default
     if isinstance(value, int) and not isinstance(value, bool):
         return value
-    if isinstance(value, str) and _INT_TEXT.match(value.strip()):
+    if isinstance(value, str) and value == value.rstrip() and _INT_TEXT.match(value.lstrip()):
         return int(value)
     raise ValueError(f"{name} must be an integer, got {value!r}")
 
 
 def _float(section: dict, key: str, default: float, name: str) -> float:
-    """Floating-point config value, accepting the same spellings as the C++ parser."""
-    value = section.get(key)
+    """Floating-point config value, accepting the same spellings as the C++ parser.
+
+    Like the integer parser, it skips leading but rejects trailing whitespace
+    inside quotes.
+    """
+    value = _value(section, key)
     if value is None:
         return default
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return float(value)
-    if isinstance(value, str) and "_" not in value:
+    if isinstance(value, str) and "_" not in value and value == value.rstrip():
         try:
             return float(value)
         except ValueError:
@@ -151,15 +174,16 @@ def _bool(section: dict, key: str, default: bool, name: str) -> bool:
     """Boolean config value, accepting the same spellings as the C++ parser.
 
     A quoted YAML scalar arrives as a string, and every nonempty string is
-    truthy in Python, so "false" would silently mean True.
+    truthy in Python, so "false" would silently mean True. The C++ parser
+    compares the quoted text exactly, so surrounding whitespace is rejected.
     """
-    value = section.get(key)
+    value = _value(section, key)
     if value is None:
         return default
     if isinstance(value, bool):
         return value
-    if isinstance(value, str) and value.strip().lower() in ("true", "false"):
-        return value.strip().lower() == "true"
+    if isinstance(value, str) and value.lower() in ("true", "false"):
+        return value.lower() == "true"
     raise ValueError(f"{name} must be true or false, got {value!r}")
 
 
@@ -172,17 +196,18 @@ def build_app_config(raw: dict) -> AppConfig:
     output_cfg = _section(raw, "output")
 
     return AppConfig(
-        model_path=str(model_cfg.get("path", "")),
-        labels_path=Path(str(model_cfg.get(
+        model_path=_str(model_cfg, "path", ""),
+        labels_path=Path(_str(
+            model_cfg,
             "labels",
             "examples/object-detection/pcb-defect-detector/src/common/pcb_label.txt",
-        ))),
+        )),
         input_max_width=_int(model_cfg, "input_max_width", DEFAULT_INPUT_MAX_WIDTH,
                              "model.input_max_width"),
         input_max_height=_int(model_cfg, "input_max_height", DEFAULT_INPUT_MAX_HEIGHT,
                               "model.input_max_height"),
-        input_dir=Path(str(io_cfg.get("input_dir", "assets/datasets/pcb"))),
-        output_dir=Path(str(io_cfg.get("output_dir", "sandbox/pcb-defect-detector"))),
+        input_dir=Path(_str(io_cfg, "input_dir", "assets/datasets/pcb")),
+        output_dir=Path(_str(io_cfg, "output_dir", "sandbox/pcb-defect-detector")),
         score_threshold=_float(decode_cfg, "score_threshold", 0.25, "decode.score_threshold"),
         nms_iou=_float(decode_cfg, "nms_iou", 0.45, "decode.nms_iou"),
         max_detections=_int(decode_cfg, "max_detections", 300, "decode.max_detections"),

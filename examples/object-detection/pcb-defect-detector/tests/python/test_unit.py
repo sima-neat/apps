@@ -114,7 +114,7 @@ class TestConfigLoading:
         raw["output"] = {"overlay": raw_value}
         assert main.build_app_config(raw).overlay is expected
 
-    @pytest.mark.parametrize("bad", ["yes", "no", "1", "0", 1, 0, ""])
+    @pytest.mark.parametrize("bad", ["yes", "no", "1", "0", 1, 0, "", " true", "false "])
     def test_non_boolean_values_are_rejected(self, bad):
         """The C++ parser accepts only true/false; Python must agree."""
         raw = valid_config()
@@ -123,7 +123,7 @@ class TestConfigLoading:
             main.build_app_config(raw)
 
     @pytest.mark.parametrize("raw_value,expected", [
-        (8000, 8000), ("8000", 8000), ("+8000", 8000), (" 8000 ", 8000),
+        (8000, 8000), ("8000", 8000), ("+8000", 8000), (" 8000", 8000),
     ])
     def test_quoted_integers_match_the_cpp_parser(self, raw_value, expected):
         """The C++ parser unquotes before parsing, so "8000" is the same setting."""
@@ -131,7 +131,9 @@ class TestConfigLoading:
         raw["runtime"]["timeout_ms"] = raw_value
         assert main.build_app_config(raw).timeout_ms == expected
 
-    @pytest.mark.parametrize("bad", [1.0, 1.5, "1.0", "8e3", "abc", "", True, "1_0"])
+    @pytest.mark.parametrize(
+        "bad", [1.0, 1.5, "1.0", "8e3", "abc", "", True, "1_0", "8000 ", " 8000 "]
+    )
     def test_non_integer_values_are_rejected(self, bad):
         """The C++ parser rejects anything stoi cannot fully consume; Python must agree."""
         raw = valid_config()
@@ -141,6 +143,7 @@ class TestConfigLoading:
 
     @pytest.mark.parametrize("raw_value,expected", [
         (0.25, 0.25), ("0.25", 0.25), (1, 1.0), ("1", 1.0), ("2.5e-1", 0.25),
+        (" 0.25", 0.25),
     ])
     def test_quoted_floats_match_the_cpp_parser(self, raw_value, expected):
         """A quoted "0.25" parses in C++ via stod; Python must accept it too."""
@@ -148,7 +151,7 @@ class TestConfigLoading:
         raw["decode"]["score_threshold"] = raw_value
         assert main.build_app_config(raw).score_threshold == pytest.approx(expected)
 
-    @pytest.mark.parametrize("bad", ["abc", "", True, "0_25"])
+    @pytest.mark.parametrize("bad", ["abc", "", True, "0_25", "0.45 "])
     def test_non_numeric_values_are_rejected(self, bad):
         """The C++ parser rejects anything stod cannot fully consume; Python must agree."""
         raw = valid_config()
@@ -161,6 +164,27 @@ class TestConfigLoading:
         raw["model"]["path"] = ""
         with pytest.raises(ValueError, match="model.path"):
             main.validate_config(main.build_app_config(raw))
+
+    @pytest.mark.parametrize("null", [None, "null", "NULL"])
+    def test_null_model_path_is_rejected(self, null):
+        """PyYAML reads a blank or null value as None; it must not become "None"."""
+        raw = valid_config()
+        raw["model"]["path"] = null
+        with pytest.raises(ValueError, match="model.path"):
+            main.validate_config(main.build_app_config(raw))
+
+    @pytest.mark.parametrize("null", [None, "null"])
+    def test_null_settings_fall_back_to_defaults(self, null):
+        """The C++ parser treats null as unset, so both twins use the default."""
+        raw = valid_config()
+        raw["model"]["labels"] = null
+        raw["io"] = {"input_dir": null, "output_dir": null}
+        raw["runtime"]["timeout_ms"] = null
+        cfg = main.build_app_config(raw)
+        assert cfg.labels_path.name == "pcb_label.txt"
+        assert cfg.input_dir == Path("assets/datasets/pcb")
+        assert cfg.output_dir == Path("sandbox/pcb-defect-detector")
+        assert cfg.timeout_ms == 8000
 
     @pytest.mark.parametrize(
         "section,key,value",

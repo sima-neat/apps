@@ -303,6 +303,15 @@ int main(int argc, char** argv) {
   ok &= validate_rejects(binary, "test_rejects_zero_queue_depth",
                          config_body("", "  queue_depth: 0\n"), "runtime.queue_depth",
                          "zero runtime.queue_depth");
+  // The Python twin mirrors both rules; its unit tests cover the same values.
+  ok &= validate_rejects(binary, "test_rejects_trailing_space_in_quoted_integer",
+                         config_body("", "  timeout_ms: \"8000 \"\n"), "runtime.timeout_ms",
+                         "trailing whitespace in a quoted runtime.timeout_ms");
+  std::string null_model_path = config_body();
+  const std::string shipped_path = "path: models/yolo26n_plc_mpk.tar.gz";
+  null_model_path.replace(null_model_path.find(shipped_path), shipped_path.size(), "path: null");
+  ok &= validate_rejects(binary, "test_rejects_null_model_path", null_model_path, "model.path",
+                         "null model.path");
 
   return ok ? 0 : 1;
 }
