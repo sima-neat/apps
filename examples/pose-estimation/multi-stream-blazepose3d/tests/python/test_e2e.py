@@ -297,6 +297,16 @@ class RtpVideoListener:
         return False
 
     @property
+    def port_counts(self) -> str:
+        with self._lock:
+            return "; ".join(
+                f"port {index}: config={config} vcl={vcl}"
+                for index, (config, vcl) in enumerate(
+                    zip(self._config_counts, self._vcl_counts, strict=True)
+                )
+            )
+
+    @property
     def received_all_ports(self) -> bool:
         with self._lock:
             return all(
@@ -727,7 +737,7 @@ class TestE2E:
                 },
                 "streams": streams,
                 "pose": {"max_people_per_frame": 2, "presence_threshold": 0.0},
-                "runtime": {"frames": 30},
+                "runtime": {"frames": 90},
                 "output": {
                     "insight": {
                         "host": INSIGHT_HOST,
@@ -776,6 +786,7 @@ class TestE2E:
             f"stdout:\n{process.stdout}\nstderr:\n{process.stderr}"
         )
         assert video.received_all_ports, (
-            f"{codec} video was not emitted on every configured video port"
+            f"{codec} video was not emitted on every configured video port "
+            f"({video.port_counts})"
         )
         assert problem is None, problem
