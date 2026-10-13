@@ -1348,7 +1348,7 @@ cv::Mat crop_nv12_roi_rgb(const neat::Nv12View& frame, const blazepose_app::Roi&
   const cv::Rect frame_rect(0, 0, frame.width, frame.height);
   const cv::Rect roi_rect(roi.x, roi.y, roi.width, roi.height);
   if ((roi_rect & frame_rect) == roi_rect && roi.x % 2 == 0 && roi.y % 2 == 0 &&
-      roi.width >= 2) {
+      roi.width % 2 == 0 && roi.width >= 2) {
     // An in-frame ROI on the chroma grid is a plain resize of each plane.
     cv::resize(y_plane(roi_rect), y_crop, y_size, 0, 0, cv::INTER_LINEAR);
     cv::resize(uv_plane(cv::Rect(roi.x / 2, roi.y / 2, roi.width / 2, roi.height / 2)), uv_crop,

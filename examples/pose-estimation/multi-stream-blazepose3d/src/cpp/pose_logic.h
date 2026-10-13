@@ -168,10 +168,6 @@ inline float blend(float previous, float current, float alpha) {
   return previous + alpha * (current - previous);
 }
 
-// Per-stream exponential smoothing of 2D and world landmarks. Each pose is
-// matched to the previous frame's pose with the highest box IoU; matched
-// landmarks move kAlpha of the way toward the new estimate, unmatched poses
-// pass through unchanged.
 // YOLO26 re-detects a tracked stream at least this often, so people entering
 // the scene are found. A period rather than a frame count keeps the detector's
 // share of the shared MLA independent of the stream frame rate.
@@ -259,6 +255,10 @@ inline std::vector<Box> tracked_boxes(const std::vector<Pose>& poses, std::size_
   return boxes;
 }
 
+// Per-stream exponential smoothing of 2D and world landmarks. Each pose is
+// matched to the previous frame's pose with the highest box IoU; matched
+// landmarks move kAlpha of the way toward the new estimate, unmatched poses
+// pass through unchanged.
 class PoseSmoother {
 public:
   static constexpr float kAlpha = 0.5F;
@@ -424,9 +424,6 @@ auxiliary_visualization_data_json(std::string id, std::string renderer, nlohmann
   return data;
 }
 
-// Builds the 3D view from the 2D message's world keypoints, so both carry the
-// same rounded values without decoding them twice. Serialize `overlay` first:
-// its id, presence and world keypoints are moved into the result.
 // Serializes one Insight metadata message ({type, data, timestamp, frame_id}),
 // the same envelope MetadataSender::send_metadata() builds, without re-parsing
 // the data from a string. `data` is moved into the envelope and back.
@@ -446,6 +443,9 @@ inline std::string metadata_message(const std::string& type, nlohmann::json& dat
   return serialized;
 }
 
+// Builds the 3D view from the 2D message's world keypoints, so both carry the
+// same rounded values without decoding them twice. Serialize `overlay` first:
+// its id, presence and world keypoints are moved into the result.
 inline nlohmann::json world_pose_auxiliary_from_overlay(nlohmann::json overlay) {
   nlohmann::json world_poses = nlohmann::json::array();
   for (nlohmann::json& pose : overlay["poses"]) {
