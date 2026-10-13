@@ -29,7 +29,7 @@ This synthetic model benchmark does not measure input decoding, Insight output, 
 
 ## Install Apps
 
-Run these commands on the DevKit, or under `/workspace` in a Neat SDK container paired with the DevKit. If the Core and Insight selected by Apps are already installed, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps` to skip reinstalling them. See [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
+Install on the DevKit, or under `/workspace` in a Neat SDK container paired with the DevKit. Only the example itself must run on the DevKit. If the Core and Insight selected by Apps are already installed, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps` to skip reinstalling them. See [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
 
 Install the latest Neat Apps runtime and enter the installed bundle:
 
@@ -39,7 +39,7 @@ cd prebuilt-apps
 APP_DIR=examples/benchmarking/model-benchmark
 ```
 
-Run the remaining commands from `prebuilt-apps/` on the DevKit.
+Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
