@@ -11,9 +11,9 @@ only when modifying or building their source.
 
 ## Install Apps
 
-Run the installation on the Modalix DevKit, or in a Neat SDK container paired with it. In the SDK container, install under `/workspace`, which the pairing shares with the DevKit, and run the examples on the DevKit from the same directory.
+Run the installation on the Modalix DevKit. If the DevKit has no internet access, run it under `/workspace` in a Neat SDK container paired with the DevKit. Pairing normally shares `/workspace` with the DevKit over NFS, so the bundle appears at the same path there. Run the examples on the DevKit.
 
-The Apps installer also installs the Core selected for the Apps package and the latest Insight through `sima-cli`. In a paired SDK container, it installs Core into the SDK and onto the DevKit, and installs Insight in the container. If that Core and Insight are already installed, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps` to skip both. The installer does not compare the installed Core with the one selected for the Apps package, so a version mismatch appears only when an example runs. See [Dependency Selection](#dependency-selection).
+The Apps installer also installs the Core selected for the Apps package and the latest Insight through `sima-cli`. From a paired SDK container, Core is installed on the DevKit as well. After pairing, the DevKit already has the SDK's Core and Insight runs in the SDK container. If that Core matches the one selected for this Apps package, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps` to skip both. The installer does not check this, so a mismatch appears only when an example runs. See [Dependency Selection](#dependency-selection).
 
 Install the latest Apps runtime from main and enter the installed bundle:
 
