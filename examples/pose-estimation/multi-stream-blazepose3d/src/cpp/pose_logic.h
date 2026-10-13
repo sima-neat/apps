@@ -175,8 +175,8 @@ constexpr std::chrono::milliseconds kRedetectPeriod{200};
 
 // Smallest box around a pose's image landmarks, scored by its presence.
 inline Box keypoint_box(const Pose& pose) {
-  Box box{pose.keypoints[0].x, pose.keypoints[0].y, pose.keypoints[0].x, pose.keypoints[0].y,
-          pose.presence, 0};
+  Box box{pose.keypoints[0].x, pose.keypoints[0].y, pose.keypoints[0].x,
+          pose.keypoints[0].y, pose.presence,       0};
   for (const Keypoint& point : pose.keypoints) {
     box.x1 = std::min(box.x1, point.x);
     box.y1 = std::min(box.y1, point.y);
