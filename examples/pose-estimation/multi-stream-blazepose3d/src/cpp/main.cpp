@@ -1024,11 +1024,11 @@ neat::Sample image_input_sample(const std::string& name, const neat::Tensor& ten
 void build_pose_run(AppRuntime& app) {
   validate_pose_contract(*app.pose_model);
   const cv::Mat seed_image = cv::Mat::zeros(kPoseInputSize, kPoseInputSize, CV_8UC3);
-  const neat::Sample seed = image_input_sample(
-      "pose_input",
-      neat::Tensor::from_cv_mat(seed_image, neat::ImageSpec::PixelFormat::RGB,
-                                neat::TensorMemory::EV74),
-      nullptr);
+  const neat::Sample seed =
+      image_input_sample("pose_input",
+                         neat::Tensor::from_cv_mat(seed_image, neat::ImageSpec::PixelFormat::RGB,
+                                                   neat::TensorMemory::EV74),
+                         nullptr);
 
   app.pose_graph = neat::Graph("blazepose_runner");
   auto input_options = app.pose_model->input_appsrc_options(false);
@@ -1248,8 +1248,8 @@ void publish_frame(StreamRuntime& stream, const FrameIdentity& identity,
   const std::string overlay_message =
       blazepose_app::metadata_message("pose-estimation", overlay, timestamp_ms, frame_id);
   nlohmann::json auxiliary = blazepose_app::world_pose_auxiliary_from_overlay(std::move(overlay));
-  const std::string auxiliary_message = blazepose_app::metadata_message(
-      "auxiliary-visualization", auxiliary, timestamp_ms, frame_id);
+  const std::string auxiliary_message =
+      blazepose_app::metadata_message("auxiliary-visualization", auxiliary, timestamp_ms, frame_id);
   const auto send = [&](const char* type) {
     const std::string& message =
         std::string_view(type) == "pose-estimation" ? overlay_message : auxiliary_message;
@@ -1376,10 +1376,10 @@ void crop_people(FrameJob& job, const AppConfig& cfg) {
   job.crops.reserve(job.people.size());
   for (const blazepose_app::Box& person : job.people) {
     const blazepose_app::Roi roi = blazepose_app::square_roi(person, cfg.roi_scale);
-    job.crops.push_back({blazepose_app::roi_input_affine(roi, kPoseInputSize),
-                         neat::Tensor::from_cv_mat(crop_nv12_roi_rgb(nv12->view, roi),
-                                                   neat::ImageSpec::PixelFormat::RGB,
-                                                   neat::TensorMemory::EV74)});
+    job.crops.push_back(
+        {blazepose_app::roi_input_affine(roi, kPoseInputSize),
+         neat::Tensor::from_cv_mat(crop_nv12_roi_rgb(nv12->view, roi),
+                                   neat::ImageSpec::PixelFormat::RGB, neat::TensorMemory::EV74)});
   }
   job.frame = neat::Tensor{};
 }
@@ -1674,8 +1674,8 @@ void dispatch_pose_jobs(AppRuntime& app, const AppConfig& cfg) {
       std::vector<std::pair<PoseInputContext, neat::Tensor>> inputs;
       inputs.reserve(job.crops.size());
       for (std::size_t index = 0; index < job.crops.size(); ++index) {
-        inputs.emplace_back(PoseInputContext{job.job_id, static_cast<int>(index),
-                                             job.people[index], job.crops[index].affine},
+        inputs.emplace_back(PoseInputContext{job.job_id, static_cast<int>(index), job.people[index],
+                                             job.crops[index].affine},
                             std::move(job.crops[index].tensor));
       }
       {
@@ -1687,9 +1687,10 @@ void dispatch_pose_jobs(AppRuntime& app, const AppConfig& cfg) {
         app.state.aggregates.emplace(job.job_id, std::move(aggregate));
       }
       for (const auto& [context, tensor] : inputs) {
-        if (!push_with_context(
-                app, app.pose_run, "pose_input", image_input_sample("pose_input", tensor, &job.identity),
-                app.state.pending_pose_outputs, context, "BlazePose Run rejected an ROI input")) {
+        if (!push_with_context(app, app.pose_run, "pose_input",
+                               image_input_sample("pose_input", tensor, &job.identity),
+                               app.state.pending_pose_outputs, context,
+                               "BlazePose Run rejected an ROI input")) {
           return;
         }
       }
@@ -1877,9 +1878,8 @@ void run_app(const AppConfig& cfg) {
     source_pullers.emplace_back([app, cfg, runtime]() { run_source_stream(*app, cfg, *runtime); });
   }
   std::vector<std::thread> model_workers;
-  for (auto* worker :
-       {dispatch_detector_jobs, pull_detector_outputs, dispatch_pose_jobs, pull_pose_outputs,
-        publish_results}) {
+  for (auto* worker : {dispatch_detector_jobs, pull_detector_outputs, dispatch_pose_jobs,
+                       pull_pose_outputs, publish_results}) {
     model_workers.emplace_back([app, &cfg, worker]() { worker(*app, cfg); });
   }
 

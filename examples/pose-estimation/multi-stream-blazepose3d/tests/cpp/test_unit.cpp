@@ -117,12 +117,11 @@ bool test_roi_tracking() {
   bool ok = true;
   const blazepose_app::Roi roi{-10, 20, 512, 512};
   const auto affine = blazepose_app::roi_input_affine(roi, 256);
-  ok &= expect(near(static_cast<float>(affine.m00), 2.0F) &&
-                   near(static_cast<float>(affine.m02), -10.0F) &&
-                   near(static_cast<float>(affine.m11), 2.0F) &&
-                   near(static_cast<float>(affine.m12), 20.0F) && affine.m01 == 0.0 &&
-                   affine.m10 == 0.0,
-               "pose-input coordinates of a 256x256 ROI crop map back to source pixels");
+  ok &= expect(
+      near(static_cast<float>(affine.m00), 2.0F) && near(static_cast<float>(affine.m02), -10.0F) &&
+          near(static_cast<float>(affine.m11), 2.0F) &&
+          near(static_cast<float>(affine.m12), 20.0F) && affine.m01 == 0.0 && affine.m10 == 0.0,
+      "pose-input coordinates of a 256x256 ROI crop map back to source pixels");
 
   blazepose_app::Pose pose = pose_at(40.0F, 0.0F);
   pose.presence = 0.8F;
@@ -179,8 +178,8 @@ bool test_roi_tracking() {
   std::vector<std::optional<int>> mailboxes = {std::nullopt, 1, 2};
   ok &= expect(blazepose_app::next_ready_stream(mailboxes, 2, [](std::size_t) { return true; }) ==
                        std::optional<std::size_t>(2) &&
-                   blazepose_app::next_ready_stream(
-                       mailboxes, 2, [](std::size_t index) { return index != 2; }) ==
+                   blazepose_app::next_ready_stream(mailboxes, 2,
+                                                    [](std::size_t index) { return index != 2; }) ==
                        std::optional<std::size_t>(1),
                "round-robin selection skips empty and unready streams");
   return ok;
