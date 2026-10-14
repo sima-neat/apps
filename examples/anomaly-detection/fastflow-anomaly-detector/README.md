@@ -128,7 +128,16 @@ Set `runtime.profile` to `true` for a rolling frame-rate line. Both applications
 
 ## Use Your Own Model
 
-**1. Train and export with anomalib.** Train FastFlow on square photos of good parts with [anomalib](https://github.com/open-edge-platform/anomalib), using its `Fastflow` model and `Folder` dataset. Set `flow_steps: 4` and `conv3x3_only: true` in the model config: anomalib's default of 8 steps loses pixel accuracy in bfloat16 on the MLA, 4 steps keep it. Export at 256x256:
+**1. Train and export with anomalib 2.6.** Install anomalib 2.6.2 in a Python environment of its own:
+
+```bash
+pip install anomalib==2.6.2
+anomalib install
+```
+
+From 2.7.0 on, anomalib exports ONNX only through `torch.export`, which writes a different graph at opset 18 that `compile_model.py` does not handle. A model already trained with 2.7.0 needs no retraining: export its checkpoint with 2.6.2.
+
+Train FastFlow on square photos of good parts with [anomalib](https://github.com/open-edge-platform/anomalib), using its `Fastflow` model and `Folder` dataset. Set `flow_steps: 4` and `conv3x3_only: true` in the model config: anomalib's default of 8 steps loses pixel accuracy in bfloat16 on the MLA, 4 steps keep it. Export at 256x256:
 
 ```bash
 anomalib export --model Fastflow --ckpt_path model.ckpt --export_type onnx --input_size "[256, 256]"
