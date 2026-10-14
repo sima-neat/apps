@@ -1034,6 +1034,158 @@ std::size_t first_invalid_utf8(const std::string& bytes) {
   return std::string::npos;
 }
 
+// Python reads the label map as text, so two of its rules decide what a label
+// is, and neither is the ASCII rule std::getline plus trim_copy implemented:
+// str.splitlines() ends a line at any of ten code points, and str.strip()
+// removes any of twenty-nine whitespace code points. The same file therefore
+// produced different labels in JSON, CSV and HTML - and a line holding only
+// U+00A0 was blank to Python (a configuration error) but a label to C++. These
+// two tables are that pair of rules, enumerated; the sets are closed, so they
+// are listed rather than approximated. Verified against CPython.
+bool is_python_linebreak(unsigned int cp) {
+  switch (cp) {
+  case 0x000A:
+  case 0x000B:
+  case 0x000C:
+  case 0x000D:
+  case 0x001C:
+  case 0x001D:
+  case 0x001E:
+  case 0x0085:
+  case 0x2028:
+  case 0x2029:
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool is_python_space(unsigned int cp) {
+  switch (cp) {
+  case 0x0009:
+  case 0x000A:
+  case 0x000B:
+  case 0x000C:
+  case 0x000D:
+  case 0x001C:
+  case 0x001D:
+  case 0x001E:
+  case 0x001F:
+  case 0x0020:
+  case 0x0085:
+  case 0x00A0:
+  case 0x1680:
+  case 0x2000:
+  case 0x2001:
+  case 0x2002:
+  case 0x2003:
+  case 0x2004:
+  case 0x2005:
+  case 0x2006:
+  case 0x2007:
+  case 0x2008:
+  case 0x2009:
+  case 0x200A:
+  case 0x2028:
+  case 0x2029:
+  case 0x202F:
+  case 0x205F:
+  case 0x3000:
+    return true;
+  default:
+    return false;
+  }
+}
+
+// One code point at `offset`. The caller has already run first_invalid_utf8 over
+// the buffer, so a false return means a bug rather than bad input, and the
+// callers below stop trimming instead of guessing.
+bool decode_utf8_at(const std::string& bytes, std::size_t offset, unsigned int& cp,
+                    std::size_t& length) {
+  const auto* p = reinterpret_cast<const unsigned char*>(bytes.data());
+  const unsigned char c = p[offset];
+  if (c < 0x80) {
+    cp = c;
+    length = 1;
+  } else if ((c & 0xE0) == 0xC0) {
+    cp = c & 0x1Fu;
+    length = 2;
+  } else if ((c & 0xF0) == 0xE0) {
+    cp = c & 0x0Fu;
+    length = 3;
+  } else if ((c & 0xF8) == 0xF0) {
+    cp = c & 0x07u;
+    length = 4;
+  } else {
+    return false;
+  }
+  if (offset + length > bytes.size())
+    return false;
+  for (std::size_t k = 1; k < length; ++k) {
+    if ((p[offset + k] & 0xC0) != 0x80)
+      return false;
+    cp = (cp << 6) | (p[offset + k] & 0x3Fu);
+  }
+  return true;
+}
+
+// str.strip() with no argument.
+std::string trim_like_python(const std::string& value) {
+  std::size_t start = 0;
+  std::size_t end = value.size();
+  while (start < end) {
+    unsigned int cp = 0;
+    std::size_t length = 0;
+    if (!decode_utf8_at(value, start, cp, length) || !is_python_space(cp))
+      break;
+    start += length;
+  }
+  while (end > start) {
+    // Step back to the lead byte of the last code point.
+    std::size_t lead = end - 1;
+    while (lead > start && (static_cast<unsigned char>(value[lead]) & 0xC0) == 0x80)
+      --lead;
+    unsigned int cp = 0;
+    std::size_t length = 0;
+    if (!decode_utf8_at(value, lead, cp, length) || lead + length != end || !is_python_space(cp))
+      break;
+    end = lead;
+  }
+  return value.substr(start, end - start);
+}
+
+// str.splitlines() followed by str.strip() on each line, which is exactly what
+// the Python entrypoint does to the same bytes.
+std::vector<std::string> split_and_trim_like_python(const std::string& text) {
+  std::vector<std::string> lines;
+  std::string current;
+  std::size_t i = 0;
+  while (i < text.size()) {
+    unsigned int cp = 0;
+    std::size_t length = 0;
+    if (!decode_utf8_at(text, i, cp, length)) {
+      current.push_back(text[i]);
+      ++i;
+      continue;
+    }
+    if (is_python_linebreak(cp)) {
+      lines.push_back(trim_like_python(current));
+      current.clear();
+      i += length;
+      // CRLF is one boundary, not two.
+      if (cp == 0x000D && i < text.size() && text[i] == '\n')
+        ++i;
+      continue;
+    }
+    current.append(text, i, length);
+    i += length;
+  }
+  // splitlines() yields no trailing empty element for text that ends in a break.
+  if (!current.empty())
+    lines.push_back(trim_like_python(current));
+  return lines;
+}
+
 std::string utf8_error(const fs::path& label_path, const std::string& bytes, std::size_t offset) {
   std::ostringstream byte_hex;
   byte_hex << std::hex << std::setw(2) << std::setfill('0')
@@ -1087,11 +1239,7 @@ std::vector<std::string> load_label_map(const std::string& path, int num_classes
   if (bad != std::string::npos) {
     throw ConfigError(utf8_error(label_path, contents, bad));
   }
-  std::istringstream lines(contents);
-  std::string line;
-  while (std::getline(lines, line)) {
-    labels.push_back(sima_examples::trim_copy(line));
-  }
+  labels = split_and_trim_like_python(contents);
   if (static_cast<int>(labels.size()) < num_classes) {
     throw ConfigError("label map " + label_path.string() + " has " + std::to_string(labels.size()) +
                       " entries, expected at least " + std::to_string(num_classes));

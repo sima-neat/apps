@@ -479,6 +479,15 @@ class TestE2E:
         # and only failed inside json::dump() - exit 2 against exit 6.
         ("label map is not valid UTF-8",
          "models:\n  m:\n    path: m.tar.gz\n    label_map: BAD_UTF8_LABELS\n", 2),
+        # Python strips Unicode whitespace and splits on Unicode line
+        # boundaries; C++ did neither, so the same label map produced different
+        # labels and disagreed about which lines were blank.
+        ("label line is only U+00A0",
+         "models:\n  m:\n    path: m.tar.gz\n    label_map: NBSP_BLANK_LABELS\n"
+         "    num_classes: 3\n", 2),
+        ("label map uses U+2028 as a line break",
+         "models:\n  m:\n    path: m.tar.gz\n    label_map: U2028_LABELS\n"
+         "    num_classes: 3\n", 2),
         ("quoted and unquoted duplicate key",
          'models:\n  foo:\n    path: /nonexistent/m.tar.gz\n    top_k: 0\n'
          '  "foo":\n    path: /nonexistent/m.tar.gz\n',
@@ -509,6 +518,15 @@ class TestE2E:
         # must name the same way.
         bad_utf8 = tmp_output_dir.parent / "latin1-labels.txt"
         bad_utf8.write_bytes(b"goldfish\ncaf\xe9\nbird\n")
+        # A line holding only U+00A0: blank to Python's str.strip(), a label to
+        # an ASCII trim. Both must call it blank and refuse it.
+        nbsp_blank = tmp_output_dir.parent / "nbsp-blank-labels.txt"
+        nbsp_blank.write_text("goldfish\n\u00a0\nbird\n", encoding="utf-8")
+        # U+2028 is a line boundary to str.splitlines() but not to std::getline,
+        # so C++ used to see one label where Python saw two - every later class
+        # id mapped to a different name.
+        line_sep = tmp_output_dir.parent / "u2028-labels.txt"
+        line_sep.write_text("goldfish\u2028\nbird\n", encoding="utf-8")
 
         mismatches = []
         for label, body, expected in self.FAILURE_CASES:
@@ -519,7 +537,9 @@ class TestE2E:
                             .replace("A_DIRECTORY", str(a_directory))
                             .replace("SELF_SYMLINK", str(self_symlink))
                             .replace("BLANK_LINE_LABELS", str(blank_line))
-                            .replace("BAD_UTF8_LABELS", str(bad_utf8)))
+                            .replace("BAD_UTF8_LABELS", str(bad_utf8))
+                            .replace("NBSP_BLANK_LABELS", str(nbsp_blank))
+                            .replace("U2028_LABELS", str(line_sep)))
                 config_path.write_text(body)
                 argument = str(config_path)
 

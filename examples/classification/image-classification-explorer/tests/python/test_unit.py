@@ -412,6 +412,41 @@ class TestLoadLabelMap:
         assert f"byte 0x{byte:02x} at offset {offset}" in message
         assert "save the file as UTF-8" in message
 
+    @pytest.mark.parametrize(
+        "raw, expected",
+        [
+            # str.strip() removes Unicode whitespace, not only ASCII.
+            ("goldfish\u00a0\ncat\nbird\n", ["goldfish", "cat", "bird"]),
+            ("\u2003goldfish\u3000\ncat\nbird\n", ["goldfish", "cat", "bird"]),
+            # str.splitlines() ends a line at ten code points, not just \n.
+            ("goldfish\u2028cat\nbird\n", ["goldfish", "cat", "bird"]),
+            ("goldfish\x0bcat\nbird\n", ["goldfish", "cat", "bird"]),
+            ("goldfish\x85cat\nbird\n", ["goldfish", "cat", "bird"]),
+            # CRLF is one boundary, not two.
+            ("goldfish\r\ncat\r\nbird\r\n", ["goldfish", "cat", "bird"]),
+        ],
+    )
+    def test_unicode_text_rules_pin_the_labels(self, tmp_path, raw, expected):
+        """These are the two rules the C++ entrypoint has to match: which code
+        points end a line, and which it strips. Pinned here because the C++
+        implementation enumerates both sets by hand, so this is the table it is
+        enumerated against."""
+        label_file = tmp_path / "labels.txt"
+        label_file.write_text(raw, encoding="utf-8")
+
+        assert main.load_label_map(str(label_file), 3) == expected
+
+    def test_a_line_of_only_unicode_space_is_blank(self, tmp_path):
+        """Blank-line detection follows the same rule: U+00A0 alone is a blank
+        label to Python, and an ASCII trim called it a valid one."""
+        label_file = tmp_path / "labels.txt"
+        label_file.write_text("goldfish\n\u00a0\nbird\n", encoding="utf-8")
+
+        with pytest.raises(ValueError) as caught:
+            main.load_label_map(str(label_file), 3)
+
+        assert "line 2 is blank" in str(caught.value)
+
     def test_too_few_labels_raises(self, tmp_path):
         label_file = tmp_path / "labels.txt"
         label_file.write_text("cat\n")
