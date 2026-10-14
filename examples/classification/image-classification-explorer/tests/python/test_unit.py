@@ -1384,6 +1384,60 @@ models:
         assert (out_dir / "notes.txt").read_text() == "customer data"
 
     @pytest.mark.parametrize("where", ["staging", "previous"])
+    def test_foreign_file_in_a_marked_scratch_dir_is_refused(
+        self, tmp_path, monkeypatch, capsys, where
+    ):
+        """An interrupted publish leaves a *marked* scratch directory behind, so
+        the marker alone cannot authorise rmtree: anything added to it afterwards
+        was deleted by the next run. Its contents get the same scrutiny a
+        completed report gets."""
+        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
+        img = tmp_path / "a.jpg"
+        _make_image(img)
+        out_dir = tmp_path / "out"
+        scratch = out_dir.parent / f".{out_dir.name}.{where}"
+        scratch.mkdir(parents=True)
+        # Exactly what an interrupted run leaves: a real marker it wrote first.
+        (scratch / main.REPORT_MARKER).write_text("generated\n", encoding="utf-8")
+        victim = scratch / "notes-added-after-the-interruption.txt"
+        victim.write_text("keep me", encoding="utf-8")
+
+        config_path = tmp_path / "config.yaml"
+        _write_config(config_path, img, out_dir)
+        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
+
+        rc = main.main()
+
+        assert rc == 6
+        assert "not part of a previous report" in capsys.readouterr().err
+        assert victim.read_text() == "keep me", "cleanup deleted data added after an interruption"
+
+    @pytest.mark.parametrize("where", ["staging", "previous"])
+    def test_a_genuine_leftover_scratch_dir_is_still_cleared(
+        self, tmp_path, monkeypatch, where
+    ):
+        """The guard above must not strand a run: a scratch directory holding
+        only what this application writes is still removed and the run
+        proceeds."""
+        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
+        img = tmp_path / "a.jpg"
+        _make_image(img)
+        out_dir = tmp_path / "out"
+        scratch = out_dir.parent / f".{out_dir.name}.{where}"
+        (scratch / "thumbnails").mkdir(parents=True)
+        (scratch / main.REPORT_MARKER).write_text("generated\n", encoding="utf-8")
+        (scratch / "report.json").write_text("{}", encoding="utf-8")
+        (scratch / "thumbnails" / "0123456789abcdef.jpg").write_bytes(b"\xff\xd8stale")
+
+        config_path = tmp_path / "config.yaml"
+        _write_config(config_path, img, out_dir)
+        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
+
+        assert main.main() == 0
+        assert (out_dir / "report.json").is_file()
+        assert not scratch.exists()
+
+    @pytest.mark.parametrize("where", ["staging", "previous"])
     def test_marker_symlink_in_a_scratch_dir_is_refused(self, tmp_path, monkeypatch, capsys, where):
         """The marker authorises recursive deletion, so it has to be the file
         itself. `is_file()` follows symlinks, so a link named like the marker and

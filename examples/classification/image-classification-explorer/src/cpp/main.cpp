@@ -1934,11 +1934,83 @@ bool is_thumbnail_name(const std::string& name) {
 // cross-process locking or recovery protocol: the two scratch names are fixed,
 // are the only paths outside output_dir this touches, and are cleared on entry,
 // so a run interrupted mid-swap costs the previous report and nothing else.
+const std::set<std::string> kReportEntries = {"report.json", "report.csv", "report.html",
+                                              "thumbnails", kReportMarker};
+
+// Every entry name in `path`, and those that are not part of a report, written
+// into `entries_out` and `foreign_out`.
+//
+// A whitelisted name is not enough, because the caller is about to replace or
+// delete this directory: a report.json that is really a directory, or a note
+// left inside thumbnails/, would be destroyed while the top-level listing still
+// looked like a previous report - the opposite of what the README promises.
+//
+// Checking the types plus every name under thumbnails/ is exhaustive rather
+// than a sample: the writers only ever produce regular files at the top level
+// and <digest>.jpg inside thumbnails/, so afterwards no directory is left for
+// foreign data to hide in and no recursion is needed.
+void inspect_report_dir(const fs::path& path, std::vector<std::string>& entries_out,
+                        std::vector<std::string>& foreign_out) {
+  std::error_code scan_ec;
+  fs::directory_iterator it(path, scan_ec);
+  if (scan_ec) {
+    throw std::runtime_error("failed to read " + path.string() + ": " + scan_ec.message());
+  }
+  for (; it != fs::directory_iterator();) {
+    const auto& entry = *it;
+    const std::string name = entry.path().filename().string();
+    entries_out.push_back(name);
+    if (name == kReportMarker) {
+      // The marker's own type is checked by the caller, which is the only place
+      // that knows whether it grants ownership here.
+    } else if (kReportEntries.count(name) == 0) {
+      foreign_out.push_back(name);
+    } else if (name == "thumbnails") {
+      if (!path_is_directory(entry.path())) {
+        foreign_out.push_back(name);
+      } else {
+        std::error_code thumb_ec;
+        fs::directory_iterator thumbs(entry.path(), thumb_ec);
+        if (thumb_ec) {
+          throw std::runtime_error("failed to read " + entry.path().string() + ": " +
+                                   thumb_ec.message());
+        }
+        for (; thumbs != fs::directory_iterator();) {
+          const auto& thumb = *thumbs;
+          const std::string thumb_name = thumb.path().filename().string();
+          if (!path_is_real_file(thumb.path()) || !is_thumbnail_name(thumb_name))
+            foreign_out.push_back("thumbnails/" + thumb_name);
+          thumbs.increment(thumb_ec);
+          if (thumb_ec) {
+            throw std::runtime_error("failed to read " + entry.path().string() + ": " +
+                                     thumb_ec.message());
+          }
+        }
+      }
+    } else if (!path_is_real_file(entry.path())) {
+      foreign_out.push_back(name);
+    }
+    it.increment(scan_ec);
+    if (scan_ec) {
+      throw std::runtime_error("failed to read " + path.string() + ": " + scan_ec.message());
+    }
+  }
+  // Sorted so the names a message lists are the same ones, in the same order,
+  // as the Python entrypoint lists.
+  std::sort(foreign_out.begin(), foreign_out.end());
+}
+
+// Up to three names from `foreign`, for an error message.
+std::string list_foreign(const std::vector<std::string>& foreign) {
+  std::string listed;
+  for (size_t i = 0; i < foreign.size() && i < 3; ++i)
+    listed += (i ? ", " : "") + foreign[i];
+  return listed;
+}
+
 void publish_report(const fs::path& output_dir_arg, const std::vector<ImageResult>& results,
                     const std::vector<ModelProfile>& profiles,
                     const std::vector<std::string>& skipped, double total_ms) {
-  static const std::set<std::string> kReportEntries = {"report.json", "report.csv", "report.html",
-                                                       "thumbnails", kReportMarker};
   // weakly_canonical resolves symlinks in the existing part of the path (like
   // Python's Path.resolve()), so a symlinked output_dir has its *target*
   // replaced and the link itself is left in place.
@@ -1953,69 +2025,24 @@ void publish_report(const fs::path& output_dir_arg, const std::vector<ImageResul
       throw std::runtime_error("output_dir " + output_dir.string() +
                                " exists and is not a directory");
     }
+    std::vector<std::string> entries;
     std::vector<std::string> foreign;
-    bool has_marker = false;
-    bool has_entries = false;
-    for (const auto& entry : fs::directory_iterator(output_dir)) {
-      const std::string name = entry.path().filename().string();
-      has_entries = true;
-      // The marker has to be a regular file, not merely a name in the listing. A
-      // *directory* called kReportMarker would otherwise make a customer directory
-      // look application-owned, and the swap below deletes what it replaces,
-      // including anything nested under that fake marker. Same test the scratch
-      // directories below use.
-      if (name == kReportMarker) {
-        has_marker = path_is_real_file(entry.path());
-      } else if (kReportEntries.count(name) == 0) {
-        foreign.push_back(name);
-      } else if (name == "thumbnails") {
-        // A whitelisted name is not enough. The swap below replaces the whole
-        // directory and deletes what it replaced, so a note left inside
-        // thumbnails/, or a report.json that is really a directory, was
-        // destroyed while the top-level listing still looked like a previous
-        // report - the opposite of what the README promises. Checking the types
-        // plus every name under thumbnails/ is exhaustive rather than a sample:
-        // the writers only ever produce regular files at the top level and
-        // <digest>.jpg inside thumbnails/, so afterwards no directory is left
-        // for foreign data to hide in and no recursion is needed.
-        if (!path_is_directory(entry.path())) {
-          foreign.push_back(name);
-        } else {
-          std::error_code scan_ec;
-          fs::directory_iterator thumbs(entry.path(), scan_ec);
-          if (scan_ec) {
-            throw std::runtime_error("failed to read " + entry.path().string() + ": " +
-                                     scan_ec.message());
-          }
-          for (; thumbs != fs::directory_iterator();) {
-            const auto& thumb = *thumbs;
-            const std::string thumb_name = thumb.path().filename().string();
-            if (!path_is_real_file(thumb.path()) || !is_thumbnail_name(thumb_name))
-              foreign.push_back("thumbnails/" + thumb_name);
-            thumbs.increment(scan_ec);
-            if (scan_ec) {
-              throw std::runtime_error("failed to read " + entry.path().string() + ": " +
-                                       scan_ec.message());
-            }
-          }
-        }
-      } else if (!path_is_real_file(entry.path())) {
-        foreign.push_back(name);
-      }
-    }
+    inspect_report_dir(output_dir, entries, foreign);
+    const bool has_entries = !entries.empty();
+    // The marker has to be a regular file, not merely a name in the listing. A
+    // *directory* called kReportMarker would otherwise make a customer directory
+    // look application-owned, and the swap below deletes what it replaces,
+    // including anything nested under that fake marker.
+    const bool has_marker = path_is_real_file(output_dir / kReportMarker);
     if (has_entries && !has_marker) {
       throw std::runtime_error("output_dir " + output_dir.string() +
                                " was not created by this application (missing " + kReportMarker +
                                "); use an empty or dedicated directory");
     }
     if (!foreign.empty()) {
-      std::sort(foreign.begin(), foreign.end());
-      std::string listed;
-      for (size_t i = 0; i < foreign.size() && i < 3; ++i)
-        listed += (i ? ", " : "") + foreign[i];
       throw std::runtime_error("output_dir " + output_dir.string() +
                                " contains entries that are not part of a previous report (" +
-                               listed + "); use a dedicated directory");
+                               list_foreign(foreign) + "); use a dedicated directory");
     }
   }
   // Exact names, and even then only removed once they prove they are ours. A
@@ -2032,6 +2059,20 @@ void publish_report(const fs::path& output_dir_arg, const std::vector<ImageResul
       throw std::runtime_error(scratch.string() +
                                " exists and was not created by this application; move or remove "
                                "it, or choose a different io.output_dir");
+    }
+    // The marker alone was enough to authorise remove_all here, which is the
+    // same mistake the output_dir check used to make: an interrupted publish
+    // leaves a marked directory behind, and anything added to it afterwards was
+    // deleted by the next run. The contents get the same scrutiny as a
+    // completed report before anything is removed.
+    std::vector<std::string> scratch_entries;
+    std::vector<std::string> scratch_foreign;
+    inspect_report_dir(scratch, scratch_entries, scratch_foreign);
+    if (!scratch_foreign.empty()) {
+      throw std::runtime_error(scratch.string() +
+                               " contains entries that are not part of a previous report (" +
+                               list_foreign(scratch_foreign) +
+                               "); move or remove it, or choose a different io.output_dir");
     }
     fs::remove_all(scratch, ignored);
   }

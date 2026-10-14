@@ -1112,6 +1112,41 @@ def write_html_report(path: Path, results: list[ImageResult], profiles: list[Mod
 # --- Publication: swapping the report directory into place safely ----------------
 
 
+def inspect_report_dir(path: Path) -> tuple[list[str], list[str]]:
+    """Every entry name in `path`, and those that are not part of a report.
+
+    A whitelisted *name* is not enough, because the caller is about to replace
+    or delete this directory: a `report.json` that is really a directory, or a
+    note left inside `thumbnails/`, would be destroyed while the top-level
+    listing still looked like a previous report - the opposite of what the
+    README promises.
+
+    Checking the types, plus every name under `thumbnails/`, is exhaustive
+    rather than a sample: the writers only ever produce regular files at the top
+    level and `<digest>.jpg` inside `thumbnails/`, so afterwards no directory is
+    left for foreign data to hide in, and no recursion is needed.
+    """
+    entries = sorted(p.name for p in path.iterdir())
+    foreign = [name for name in entries if name not in REPORT_ENTRIES]
+    for name in entries:
+        if name in foreign:
+            continue
+        entry = path / name
+        if name == "thumbnails":
+            if not entry.is_dir():
+                foreign.append(name)
+                continue
+            for thumb in entry.iterdir():
+                if not is_real_file(thumb) or not THUMBNAIL_NAME.match(thumb.name):
+                    foreign.append(f"thumbnails/{thumb.name}")
+        elif not is_real_file(entry):
+            foreign.append(name)
+    # Sorted so the names a message lists are the same ones, in the same order,
+    # as the C++ entrypoint lists.
+    foreign.sort()
+    return entries, foreign
+
+
 def publish_report(output_dir: Path, results: list[ImageResult], profiles: list[ModelProfile],
                    skipped: list[str], class_summary: ClassSummary,
                    timing: dict[str, Any]) -> None:
@@ -1135,40 +1170,11 @@ def publish_report(output_dir: Path, results: list[ImageResult], profiles: list[
     if output_dir.exists():
         if not output_dir.is_dir():
             raise OSError(f"output_dir {output_dir} exists and is not a directory")
-        entries = sorted(p.name for p in output_dir.iterdir())
-        foreign = [name for name in entries if name not in REPORT_ENTRIES]
-        # A whitelisted *name* is not enough. The swap below replaces the whole
-        # directory and deletes what it replaced, so a `report.json` that is
-        # really a directory, or a note left inside `thumbnails/`, was destroyed
-        # while the top-level listing still looked like a previous report - the
-        # opposite of what the README promises.
-        #
-        # Checking the types, plus every name under thumbnails/, is exhaustive
-        # rather than a sample: the writers only ever produce regular files at
-        # the top level and <digest>.jpg inside thumbnails/, so after these
-        # checks there is no directory left for foreign data to hide in, and no
-        # recursion is needed.
-        for name in entries:
-            if name in foreign:
-                continue
-            entry = output_dir / name
-            if name == "thumbnails":
-                if not entry.is_dir():
-                    foreign.append(name)
-                    continue
-                for thumb in entry.iterdir():
-                    if not is_real_file(thumb) or not THUMBNAIL_NAME.match(thumb.name):
-                        foreign.append(f"thumbnails/{thumb.name}")
-            elif not is_real_file(entry):
-                foreign.append(name)
-        # Sorted so the names the message lists are the same ones, in the same
-        # order, as the C++ entrypoint lists.
-        foreign.sort()
+        entries, foreign = inspect_report_dir(output_dir)
         # The marker has to be a regular file, not merely a name in the listing.
         # A *directory* called REPORT_MARKER would otherwise make a customer
         # directory look application-owned, and the swap below deletes what it
-        # replaces, including anything nested under that fake marker. Same test
-        # the scratch directories below use.
+        # replaces, including anything nested under that fake marker.
         if entries and not is_real_file(output_dir / REPORT_MARKER):
             raise OSError(
                 f"output_dir {output_dir} was not created by this application "
@@ -1193,6 +1199,18 @@ def publish_report(output_dir: Path, results: list[ImageResult], profiles: list[
             raise OSError(
                 f"{scratch} exists and was not created by this application; "
                 f"move or remove it, or choose a different io.output_dir"
+            )
+        # The marker alone was enough to authorise rmtree here, which is the
+        # same mistake the output_dir check used to make: an interrupted publish
+        # leaves a marked directory behind, and anything added to it afterwards
+        # was deleted by the next run. The contents get the same scrutiny as a
+        # completed report before anything is removed.
+        _, scratch_foreign = inspect_report_dir(scratch)
+        if scratch_foreign:
+            raise OSError(
+                f"{scratch} contains entries that are not part of a previous "
+                f"report ({', '.join(scratch_foreign[:3])}); move or remove it, or choose a "
+                f"different io.output_dir"
             )
         shutil.rmtree(scratch, ignore_errors=True)
     staging.mkdir()
