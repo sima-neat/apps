@@ -1193,8 +1193,7 @@ def require_nv12_tensor(sample):
 
 def nv12_planes(frame):
     """Read-only Y (H, W) and interleaved UV (H/2, W/2, 2) views of a decoded
-    NV12 frame's mapped buffer, honoring each plane's byte offset and row
-    stride, without copying the frame."""
+    NV12 frame, honoring each plane's byte offset and row stride."""
     planes = {plane.role: plane for plane in frame.planes}
     y_plane = planes.get(pyneat.PlaneRole.Y)
     uv_plane = planes.get(pyneat.PlaneRole.UV)
@@ -1220,24 +1219,11 @@ def nv12_planes(frame):
         y_offset + y_stride * (height - 1) + width,
         uv_offset + uv_stride * (height // 2 - 1) + width,
     )
-    if min(y_offset, uv_offset) < 0 or extent > frame.storage.size_bytes - frame.byte_offset:
+    # Copy the decoded frame out of its mapped buffer, as the other Python
+    # examples do, then view each plane at its byte offset and row stride.
+    data = np.frombuffer(frame.copy_payload_bytes(), dtype=np.uint8)
+    if min(y_offset, uv_offset) < 0 or extent > data.size:
         raise RuntimeError("decoded NV12 frame planes exceed its buffer")
-    # Python cannot map a composite (planar) tensor. Describe the same mapped
-    # buffer as one dense byte range on a copy of the tensor header, which
-    # DLPack exports without copying the pixels.
-    dense = tensors_from_sample(pyneat.make_tensor_sample("nv12", frame))[0]
-    dense.planes = []
-    dense.layout = pyneat.TensorLayout.Unknown
-    dense.axis_semantics = []
-    dense.shape = [extent]
-    dense.strides_bytes = [1]
-    # A plain CPU byte range maps the buffer in place, as C++ map_nv12_read()
-    # does, instead of DLPack transferring the frame as an image.
-    semantic = dense.semantic
-    semantic.image = pyneat.ImageSpec()
-    dense.semantic = semantic
-    dense.device = pyneat.Device()
-    data = np.from_dlpack(dense)
     y_view = np.lib.stride_tricks.as_strided(
         data[y_offset:], shape=(height, width), strides=(y_stride, 1), writeable=False
     )
