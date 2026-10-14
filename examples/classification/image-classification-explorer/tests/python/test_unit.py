@@ -1384,6 +1384,35 @@ models:
         assert (out_dir / "notes.txt").read_text() == "customer data"
 
     @pytest.mark.parametrize("where", ["staging", "previous"])
+    def test_symlinked_scratch_dir_is_refused(self, tmp_path, monkeypatch, capsys, where):
+        """A scratch path that is itself a symlink to a marked report directory
+        must be refused, not followed. Both entrypoints used to accept it and
+        then behave differently: C++ unlinked the customer's symlink and carried
+        on, Python left it and died at mkdir."""
+        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
+        img = tmp_path / "a.jpg"
+        _make_image(img)
+        out_dir = tmp_path / "out"
+        # A directory that looks exactly like one of ours, somewhere else.
+        elsewhere = tmp_path / "someone-elses-report"
+        elsewhere.mkdir()
+        (elsewhere / main.REPORT_MARKER).write_text("generated\n", encoding="utf-8")
+        (elsewhere / "report.json").write_text("{}", encoding="utf-8")
+        scratch = out_dir.parent / f".{out_dir.name}.{where}"
+        scratch.symlink_to(elsewhere)
+
+        config_path = tmp_path / "config.yaml"
+        _write_config(config_path, img, out_dir)
+        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
+
+        rc = main.main()
+
+        assert rc == 6
+        assert "was not created by this application" in capsys.readouterr().err
+        assert scratch.is_symlink(), "the customer's symlink was removed"
+        assert (elsewhere / "report.json").is_file()
+
+    @pytest.mark.parametrize("where", ["staging", "previous"])
     def test_foreign_file_in_a_marked_scratch_dir_is_refused(
         self, tmp_path, monkeypatch, capsys, where
     ):

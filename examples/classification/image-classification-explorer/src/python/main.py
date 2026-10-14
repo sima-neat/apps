@@ -112,6 +112,20 @@ def is_real_file(path: Path) -> bool:
     return path.is_file() and not path.is_symlink()
 
 
+def is_real_dir(path: Path) -> bool:
+    """True only for a directory that is not a symlink to one.
+
+    Same reasoning as `is_real_file`, for the container rather than its
+    contents. A scratch path that is a symlink to a marked report directory used
+    to be accepted as this application's own, and the two entrypoints then did
+    different things to it: C++ `remove_all` unlinked the customer's symlink and
+    carried on, while Python `shutil.rmtree(..., ignore_errors=True)` silently
+    left it and the run died at `staging.mkdir()`. Neither is right, so both now
+    refuse it.
+    """
+    return path.is_dir() and not path.is_symlink()
+
+
 def file_fingerprint(path: Path) -> tuple[int, int]:
     """Size and mtime, deliberately not a digest of the contents.
 
@@ -1195,7 +1209,7 @@ def publish_report(output_dir: Path, results: list[ImageResult], profiles: list[
     for scratch in (staging, previous):
         if not scratch.exists():
             continue
-        if not scratch.is_dir() or not is_real_file(scratch / REPORT_MARKER):
+        if not is_real_dir(scratch) or not is_real_file(scratch / REPORT_MARKER):
             raise OSError(
                 f"{scratch} exists and was not created by this application; "
                 f"move or remove it, or choose a different io.output_dir"

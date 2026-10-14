@@ -278,6 +278,19 @@ bool path_is_real_file(const fs::path& p) {
   return !ec && fs::is_regular_file(status);
 }
 
+// A directory that is not a symlink to one - the same reasoning as
+// path_is_real_file, for the container rather than its contents. A scratch path
+// that is a symlink to a marked report directory used to be accepted as this
+// application's own, and the two entrypoints then did different things to it:
+// remove_all unlinked the customer's symlink here and the run carried on, while
+// Python's rmtree(ignore_errors=True) silently left it and the run died at
+// mkdir. Neither is right, so both refuse it now.
+bool path_is_real_directory(const fs::path& p) {
+  std::error_code ec;
+  const auto status = fs::symlink_status(p, ec);
+  return !ec && fs::is_directory(status);
+}
+
 // PyYAML resolves `~` to null, so `input: ~` means "not set". ScalarConfig only
 // recognises the spelling `null`, so without this C++ would look for a file
 // literally named "~" while Python downloaded the fallback sample.
@@ -2055,7 +2068,7 @@ void publish_report(const fs::path& output_dir_arg, const std::vector<ImageResul
   for (const fs::path& scratch : {staging, previous}) {
     if (!path_exists(scratch))
       continue;
-    if (!path_is_directory(scratch) || !path_is_real_file(scratch / kReportMarker)) {
+    if (!path_is_real_directory(scratch) || !path_is_real_file(scratch / kReportMarker)) {
       throw std::runtime_error(scratch.string() +
                                " exists and was not created by this application; move or remove "
                                "it, or choose a different io.output_dir");
