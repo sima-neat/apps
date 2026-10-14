@@ -63,12 +63,14 @@
 
   function rowHasError(row, models) {
     // Scoped to the selection, like rowAgreement/rowClassText/rowMaxConfidence.
-    // data-has-error is whole-row metadata: reading it here made the Errors
-    // filter and the result sort claim an error for a row whose every *shown*
-    // model succeeded, because the error belonged to a model the user had
-    // unchecked. The per-model cells already say which model failed - the
-    // writers mark the failing one class="error" - so this needs no new
-    // metadata and the report HTML is unchanged.
+    // The per-model cells are the source of truth: the writers mark the failing
+    // one class="error", so scoping needs no new metadata and the report HTML is
+    // unchanged. Reading data-has-error instead made the Errors filter, the
+    // result sort and the row highlight all claim an error for a row whose every
+    // *shown* model had succeeded, because the error belonged to a model the
+    // user had unchecked. applyFilters now writes that attribute from this
+    // function, so it carries the selection rather than the whole row - do not
+    // read it back in here.
     for (const cell of row.querySelectorAll('[data-model-col]')) {
       if (cell.classList.contains('error') && models.includes(cell.dataset.modelCol)) return true;
     }
@@ -97,10 +99,20 @@
     });
 
     for (const row of rows) {
+      const rowError = rowHasError(row, models);
+      // The orange highlight is a CSS rule on data-has-error, so the attribute
+      // has to track the selection as well. The writers set it for the whole
+      // row, which is right on load - every model is selected then - and wrong
+      // as soon as one is unchecked: the row stayed highlighted while every
+      // model still shown had succeeded. Recomputing it here, rather than
+      // moving the rule onto a second attribute, keeps one source of truth and
+      // leaves a report opened without scripting correctly highlighted from the
+      // writers' value.
+      row.dataset.hasError = rowError ? '1' : '0';
       let visible;
 
       if (resultQuery === 'error') {
-        visible = rowHasError(row, models);
+        visible = rowError;
       } else {
         const agree = rowAgreement(row, models);
         if (resultQuery === 'agree') visible = agree === true;
