@@ -935,10 +935,28 @@ std::vector<ModelProfile> load_profiles(const sima_examples::ScalarConfig& raw,
                         ": profile names may only contain letters, digits, '_' and '-'");
     }
   }
+  // A name declared twice configures the two entrypoints differently and neither
+  // behaviour is worth keeping: PyYAML drops the first mapping whole and the last
+  // wins, while ScalarConfig flattens the file and merges the two field by field,
+  // so a first `foo` with `top_k: 0` and a second with only a new `path` left C++
+  // holding the invalid top_k and Python running a different model on the
+  // default. Both reject it now. The text scan is the only place the duplicate
+  // still exists - ScalarConfig has already merged it away - and unquote_yaml_key
+  // makes `foo:` and `"foo":` one name, as they are in YAML.
+  {
+    std::set<std::string> seen;
+    for (const auto& key : ordered) {
+      const std::string name = unquote_yaml_key(key);
+      if (!seen.insert(name).second) {
+        throw ConfigError("models: profile name " + name +
+                          " is declared more than once; remove the duplicate in config.yaml");
+      }
+    }
+  }
   // ScalarConfig has no scalar for an empty mapping, but the text scan does. Keep
   // those extra declared profile names so the required-field validation below can
   // reject them just as Python does. Fall back only when the scan misses a scalar
-  // profile or contains duplicates.
+  // profile.
   std::set<std::string> ordered_set(ordered.begin(), ordered.end());
   std::set<std::string> known_set(known_names.begin(), known_names.end());
   if (ordered.size() != ordered_set.size() ||

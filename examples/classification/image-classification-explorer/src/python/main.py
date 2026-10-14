@@ -213,9 +213,54 @@ def download_image(url: str, base: Path) -> Path:
 # --- Configuration: reading config.yaml and validating every setting -------------
 
 
+def duplicate_profile_names(text: str) -> list[str]:
+    """Profile names declared more than once under `models`.
+
+    PyYAML collapses duplicate keys before the mapping reaches Python - the last
+    wins, whole mapping and all - while the C++ reader flattens the file and
+    ends up merging the two mappings field by field. The same file therefore
+    configured the two entrypoints differently: with a first `foo` carrying
+    `top_k: 0` and a second carrying only a new `path`, C++ kept the invalid
+    top_k and refused the configuration while Python used the default and ran a
+    different model. Neither behaviour is worth preserving, so both reject the
+    duplicate instead.
+
+    Read from the node tree rather than the constructed mapping, which is the
+    only place the duplicate still exists. A quoted and an unquoted spelling of
+    one name are the same key, and compose() has already removed the quotes, so
+    they collapse here exactly as they do in C++.
+    """
+    try:
+        root = yaml.compose(text)
+    except yaml.YAMLError:
+        return []  # a parse error is reported by safe_load, with its own message
+    if not isinstance(root, yaml.MappingNode):
+        return []
+    for key_node, value_node in root.value:
+        if not (isinstance(key_node, yaml.ScalarNode) and key_node.value == "models"):
+            continue
+        if not isinstance(value_node, yaml.MappingNode):
+            return []
+        seen: set[str] = set()
+        duplicates: list[str] = []
+        for profile_key, _ in value_node.value:
+            if not isinstance(profile_key, yaml.ScalarNode):
+                continue
+            if profile_key.value in seen and profile_key.value not in duplicates:
+                duplicates.append(profile_key.value)
+            seen.add(profile_key.value)
+        return duplicates
+    return []
+
+
 def load_config(config_path: Path) -> dict[str, Any]:
-    with config_path.open("r", encoding="utf-8") as handle:
-        loaded = yaml.safe_load(handle)
+    text = config_path.read_text(encoding="utf-8")
+    for name in duplicate_profile_names(text):
+        raise ValueError(
+            f"models: profile name {name} is declared more than once; "
+            f"remove the duplicate in config.yaml"
+        )
+    loaded = yaml.safe_load(text)
     # An empty file is an empty configuration; a file holding a bare scalar is
     # not a configuration at all, and `or {}` would hide that.
     if loaded is None:

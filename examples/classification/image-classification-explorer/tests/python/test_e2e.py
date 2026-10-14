@@ -318,7 +318,6 @@ class TestE2E:
         "quoted null section",
         "escaped integer setting",
         "escaped min_probability",
-        "quoted and unquoted duplicate key",
         # Both exit 2 and both name the setting, but Python has arbitrary-size
         # integers: it parses the sexagesimal value and reports it as out of
         # 32-bit range ("...: 59999999999999999999940"), while C++ cannot hold
@@ -509,10 +508,21 @@ class TestE2E:
         ("sexagesimal accumulation overflows long long",
          "runtime:\n  timeout_ms: 9223372036854775807:59\n"
          "models:\n  m:\n    path: m.tar.gz\n", 2),
+        # A duplicate profile used to configure the two entrypoints differently:
+        # PyYAML dropped the first mapping whole, ScalarConfig merged the two
+        # field by field, so C++ kept the invalid top_k (exit 2) while Python
+        # used the default and failed loading a different model (exit 6). Both
+        # refuse the duplicate now, with the same message.
         ("quoted and unquoted duplicate key",
          'models:\n  foo:\n    path: /nonexistent/m.tar.gz\n    top_k: 0\n'
          '  "foo":\n    path: /nonexistent/m.tar.gz\n',
-         6),
+         2),
+        ("duplicate profile, second omits a field the first set",
+         "models:\n  foo:\n    path: /nonexistent/a.tar.gz\n    top_k: 0\n"
+         "  foo:\n    path: /nonexistent/b.tar.gz\n", 2),
+        ("duplicate profile, both mappings complete",
+         "models:\n  foo:\n    path: /nonexistent/a.tar.gz\n"
+         "  foo:\n    path: /nonexistent/b.tar.gz\n", 2),
     ]
 
     def test_cpp_and_python_fail_identically(
