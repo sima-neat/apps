@@ -1,0 +1,50 @@
+model:                                         # PatchCore feature-extractor model selection.
+  path: models/patchcore_wide_resnet50_2_bf16_mla.tar.gz
+
+source:
+  type: video_file
+  image_dir: assets/datasets/patchcore/images   # Used when type=image_dir.
+  video_path: assets/datasets/patchcore/video/test.mp4
+  rtsp:                                          # Used when type=rtsp.
+    url: ""                                     # Required for type=rtsp, e.g. rtsp://<host>:8554/<stream>.
+    codec: h264                                 # h264, h265, or mjpeg.
+    tcp: true                                   # RTSP transport; set false for a UDP-only source.
+    latency_ms: 200                             # RTSP receive latency in milliseconds.
+    width: 0                                    # Only needed for h265/mjpeg; leave 0 for h264.
+    height: 0                                   # Only needed for h265/mjpeg; leave 0 for h264.
+
+memory_bank:                                    # Host-side kNN reference set (not part of the compiled graph).
+  path: sandbox/patchcore-anomaly-detector/memory_bank.npy       # Coreset, written by --calibrate.
+  meta_path: sandbox/patchcore-anomaly-detector/bank_meta.json   # Model hash, coreset stats, and threshold.
+
+calibration:                                    # Used only by --calibrate.
+  nominal_images_dir: assets/datasets/patchcore/nominal   # Demo set (16 known-good images); use your own.
+  coreset_ratio: 0.0004                         # Fraction of nominal patches kept in the bank. Smaller is
+                                                 # faster but coarser; bank size grows with the nominal set.
+  seed: 0
+  threshold_percentile: 99.0                    # Image verdict threshold = this percentile of nominal image
+                                                 # scores; the same percentile of nominal patch scores sets
+                                                 # the overlay highlight threshold.
+  threshold_images_dir: ""                      # Optional held-out nominal set; "" reuses nominal_images_dir.
+  threshold_margin: 1.2                         # Multiplier on both percentile thresholds, for headroom on
+                                                 # video/rtsp input. 1.0 = no margin.
+
+scoring:
+  num_neighbors: 9                              # Neighborhood-reweighting support-set size (paper Eq. 7-8).
+  gaussian_sigma: 4.0                           # Anomaly-map smoothing sigma, in output pixels.
+
+output:
+  dir: sandbox/patchcore-anomaly-detector        # Folder for annotated overlay images.
+  save_every: 60
+  overlay_alpha: 0.45                           # Blend weight of highlighted (above patch threshold) regions.
+  insight:                                      # video_file/rtsp only: live view.
+    host: <insight-host-ip>              # Host running the Insight receiver/viewer.
+    video_port: 9000
+    channel: 0                                  # Insight channel index.
+    bitrate_kbps: 4000                          # H.264 encoder bitrate for the pushed video stream.
+
+runtime:
+  timeout_ms: 15000                             # Per-image/frame model timeout for --calibrate, image_dir,
+                                                 # and video_file (rtsp runs the model inside its graph).
+  frames: 0                                     # video_file/rtsp frame limit; 0 = run until the source ends.
+  profile: false                                # Reserved; currently unused.
