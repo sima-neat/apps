@@ -68,13 +68,6 @@ input:
   decoder_input_buffers: 2
   decoder_tuning: throughput-low-latency
 
-runtime:
-  profile: false
-  warmup_frames: 0
-  initial_detection_timeout_ms: 600000
-  stream_detection_timeout_ms: 30000
-  no_detection_timeout_ms: 30000
-
 inference:
   workers: 1
   queue_depth: 1
