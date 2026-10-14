@@ -61,6 +61,20 @@
     return ids.every((id) => id === ids[0]);
   }
 
+  function rowHasError(row, models) {
+    // Scoped to the selection, like rowAgreement/rowClassText/rowMaxConfidence.
+    // data-has-error is whole-row metadata: reading it here made the Errors
+    // filter and the result sort claim an error for a row whose every *shown*
+    // model succeeded, because the error belonged to a model the user had
+    // unchecked. The per-model cells already say which model failed - the
+    // writers mark the failing one class="error" - so this needs no new
+    // metadata and the report HTML is unchanged.
+    for (const cell of row.querySelectorAll('[data-model-col]')) {
+      if (cell.classList.contains('error') && models.includes(cell.dataset.modelCol)) return true;
+    }
+    return false;
+  }
+
   function rowMaxConfidence(row, models) {
     const top1 = rowTop1(row);
     const probs = models.map((m) => top1[m] && top1[m].prob).filter((v) => v !== undefined);
@@ -83,11 +97,10 @@
     });
 
     for (const row of rows) {
-      const hasError = row.dataset.hasError === '1';
       let visible;
 
       if (resultQuery === 'error') {
-        visible = hasError;
+        visible = rowHasError(row, models);
       } else {
         const agree = rowAgreement(row, models);
         if (resultQuery === 'agree') visible = agree === true;
@@ -129,8 +142,8 @@
       sorted.sort((a, b) => rowClassText(a, models).localeCompare(rowClassText(b, models)));
     } else if (sortKey === 'result') {
       sorted.sort((a, b) => {
-        const ra = a.dataset.hasError === '1' ? 2 : (rowAgreement(a, models) === false ? 1 : 0);
-        const rb = b.dataset.hasError === '1' ? 2 : (rowAgreement(b, models) === false ? 1 : 0);
+        const ra = rowHasError(a, models) ? 2 : (rowAgreement(a, models) === false ? 1 : 0);
+        const rb = rowHasError(b, models) ? 2 : (rowAgreement(b, models) === false ? 1 : 0);
         return ra - rb;
       });
     } else {
