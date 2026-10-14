@@ -24,7 +24,7 @@ jobs:
     needs: resolve-test-runner
     runs-on:
       group: ${{ needs.resolve-test-runner.outputs.modalix_runner_group }}
-      labels: [self-hosted, Linux, ARM64, modalix]
+      labels: [self-hosted, Linux, ARM64, modalix, rtsp]
     strategy:
       fail-fast: false
       matrix:
@@ -117,7 +117,7 @@ jobs:
     needs: resolve-test-runner
     runs-on:
       group: ${{ needs.resolve-test-runner.outputs.modalix_runner_group }}
-      labels: [self-hosted, Linux, ARM64, modalix]
+      labels: [self-hosted, Linux, ARM64, modalix, rtsp]
 
     steps:
       - name: Checkout code

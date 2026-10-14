@@ -35,6 +35,11 @@ The interface and its fonts and JavaScript libraries run locally. Internet acces
 Run every command below in a shell on the board.
 
 ## Install Apps
+If the Core and Insight selected by Apps are already installed, run the
+install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps` to
+skip reinstalling them. See
+[Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
+
 Install the Apps bundle, enter it, and name the Studio's directory:
 
 ```bash
