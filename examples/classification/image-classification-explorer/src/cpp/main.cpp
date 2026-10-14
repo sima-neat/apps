@@ -520,6 +520,25 @@ std::string stable_digest(const std::string& value) {
 using FileFingerprint = std::pair<std::uintmax_t, fs::file_time_type>;
 
 // --- Inputs: fingerprinting, decoding and the fallback image cache -------------
+// Size and mtime, deliberately not a digest of the contents. This catches a
+// mid-run replacement that changes either, which is every ordinary way an input
+// moves under a run: an edit, a re-export, a partial copy. It does not catch a
+// replacement that keeps the byte length *and* restores the timestamp, as
+// `rsync --times` or `cp -p` would.
+//
+// Closing that needs the contents, and the contents are the expensive part.
+// check_unchanged runs twice per profile per image plus twice more for the
+// thumbnail - ten reads per image with the four profiles the README ships - so
+// hashing here would add ten full passes over every input on top of the decodes
+// inference already does. Snapshotting each input instead doubles the disk the
+// input set occupies, for a tool documented as reading the customer's directory
+// in place.
+//
+// The trade is deliberate and matches the rest of the application: the README
+// already states that concurrent modification during a run is out of scope and
+// undetected. This guard exists to stop two models and the thumbnail silently
+// reporting on different bytes under one row, not to defend against an
+// adversary. Kept identical to the Python docstring on purpose.
 std::optional<FileFingerprint> file_fingerprint(const fs::path& path) {
   std::error_code ec;
   const auto size = fs::file_size(path, ec);
