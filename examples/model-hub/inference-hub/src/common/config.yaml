@@ -1,0 +1,26 @@
+model:
+  name: yolo26                  # Folder under src/python/hub_models: yolo26, resnet50, or rf_detr.
+  variant: m                    # A variant listed in that folder's config.yaml.
+  dir: models                   # Directory holding the installed Model Registry packages.
+
+source:
+  type: rtsp                    # rtsp or camera.
+  rtsp:
+    url: rtsp://<rtsp-source-ip>:<port>/<stream-name>
+    codec: h264                 # h264, h265, or mjpeg.
+    tcp: true                   # Receive RTSP over TCP.
+    latency_ms: 10              # RTSP receive latency.
+    fps: 0                      # Frame rate override. 0 reads it from the stream.
+  camera:                       # MIPI camera through libcamera.
+    name: ""                    # Camera name from `cam -l`. Empty selects the default camera.
+    width: 1920                 # Capture width; the sensor must support it.
+    height: 1080                # Capture height; the sensor must support it.
+    fps: 30                     # Capture frame rate.
+
+inference:
+  frames: 0                     # Results to publish before exiting. 0 runs until Ctrl-C.
+
+insight:
+  host: <insight-host-ip>       # Insight host reachable from the board.
+  video_port: 9000              # Video ingest port.
+  metadata_port: 9100           # Metadata ingest port.

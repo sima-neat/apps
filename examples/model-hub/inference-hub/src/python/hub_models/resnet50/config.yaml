@@ -1,0 +1,6 @@
+labels: imagenet1k.txt    # File under src/common/labels.
+build: modalix_int8       # Model Registry build profile: modalix_int8 or modalix_bf16.
+components: [model]       # Model Registry components this model loads.
+variants:                 # model.variant -> Model Registry model ID.
+  default: resnet_50
+top_k: 5                  # Classes sent per frame; Insight draws the first three.

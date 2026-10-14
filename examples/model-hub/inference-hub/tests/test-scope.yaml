@@ -1,0 +1,13 @@
+models: {}
+unit:
+  python: true
+  cpp: false
+e2e:
+  python:
+    enabled: false
+    reason: Model Registry packages cannot be installed in CI yet.
+    models: []
+  cpp:
+    enabled: false
+    reason: Python-only example.
+    models: []
