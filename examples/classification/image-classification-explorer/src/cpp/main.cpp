@@ -457,6 +457,14 @@ std::optional<std::string> config_scalar(const sima_examples::ScalarConfig& raw,
   // decode *to* null, and `~` is null to PyYAML and not to ScalarConfig.
   if (decoded == "~" || lower_copy(decoded) == "null")
     return std::nullopt;
+  if (decoded.find('\0') != std::string::npos) {
+    // YAML permits "\0", the filesystem does not. Rejected while reading the
+    // configuration rather than left to the path APIs: fs::path truncates at the
+    // NUL, so the report went to a directory the customer had not named, and
+    // Python's Path.resolve() raised a bare ValueError that escaped as a
+    // traceback and exit 1, outside the documented 2/3/6 contract.
+    throw ConfigError(key + " contains a NUL character; remove it from config.yaml");
+  }
   return decoded;
 }
 
@@ -797,6 +805,42 @@ std::string strip_yaml_comment(const std::string& line) {
 // (Python's dict/YAML loader preserves declaration order; ScalarConfig does not).
 // Falls back to an empty vector (caller falls back to alphabetical) if the file
 // can't be read or doesn't look like the expected shape.
+// Keys at the document's top level, in declaration order and *with* duplicates.
+// ScalarConfig flattens the file, so by the time it is loaded a repeated `io:`
+// has already been merged into one section and the duplicate is unrecoverable -
+// the text is the only place it still exists, which is why this reads the file
+// again rather than the parsed config. Same fidelity as ordered_model_keys: a
+// key is a line at the top indent whose text contains a key colon.
+std::vector<std::string> top_level_keys(const fs::path& config_path) {
+  std::ifstream in(config_path);
+  if (!in.is_open())
+    return {};
+
+  std::vector<std::string> keys;
+  std::string raw_line;
+  int top_indent = -1;
+  while (std::getline(in, raw_line)) {
+    const std::string trimmed = strip_yaml_comment(raw_line);
+    if (trimmed.empty())
+      continue;
+    int indent = 0;
+    while (indent < static_cast<int>(raw_line.size()) &&
+           (raw_line[static_cast<size_t>(indent)] == ' ' ||
+            raw_line[static_cast<size_t>(indent)] == '\t'))
+      ++indent;
+    if (top_indent == -1)
+      top_indent = indent;
+    if (indent != top_indent)
+      continue;
+    if (trimmed.front() == '-')
+      continue; // a sequence item, not a mapping key
+    const auto colon = find_key_colon(trimmed);
+    if (colon != std::string::npos)
+      keys.push_back(sima_examples::trim_copy(trimmed.substr(0, colon)));
+  }
+  return keys;
+}
+
 std::vector<std::string> ordered_model_keys(const fs::path& config_path) {
   std::ifstream in(config_path);
   if (!in.is_open())
@@ -948,7 +992,7 @@ std::vector<ModelProfile> load_profiles(const sima_examples::ScalarConfig& raw,
     for (const auto& key : ordered) {
       const std::string name = unquote_yaml_key(key);
       if (!seen.insert(name).second) {
-        throw ConfigError("models: profile name " + name +
+        throw ConfigError("models." + name +
                           " is declared more than once; remove the duplicate in config.yaml");
       }
     }
@@ -2203,6 +2247,23 @@ int main(int argc, char** argv) {
         throw ConfigError(e.what());
       }
     }();
+
+    // A key declared twice configures the two entrypoints differently and
+    // nothing fails: with a repeated `io:` whose first mapping sets `input` and
+    // whose second sets only `output_dir`, C++ classified the customer's file
+    // while Python classified a fallback image it downloaded - both exit 0, both
+    // write a report, and the reports describe different inputs. PyYAML keeps
+    // only the last mapping; ScalarConfig merges the two. Reject it instead.
+    {
+      std::set<std::string> seen;
+      for (const auto& key : top_level_keys(args.config_path)) {
+        const std::string name = unquote_yaml_key(key);
+        if (!seen.insert(name).second) {
+          throw ConfigError(name + " is declared more than once; remove the duplicate in "
+                                   "config.yaml");
+        }
+      }
+    }
 
     // `io: /images` or `runtime: 5000` leaves ScalarConfig holding a scalar at
     // the section name, and every nested lookup below would quietly fall back to

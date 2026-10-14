@@ -520,6 +520,19 @@ class TestE2E:
         ("duplicate profile, second omits a field the first set",
          "models:\n  foo:\n    path: /nonexistent/a.tar.gz\n    top_k: 0\n"
          "  foo:\n    path: /nonexistent/b.tar.gz\n", 2),
+        # A repeated top-level section was the worst divergence found: both
+        # entrypoints exited 0 and wrote a report, but C++ classified the file
+        # the customer named while Python classified a fallback it downloaded,
+        # because PyYAML kept only the last `io:` mapping.
+        ("duplicate top-level section",
+         "io:\n  input: TOO_SHORT_LABELS\nio:\n  output_dir: /tmp/dup-top\n"
+         "models:\n  m:\n    path: m.tar.gz\n", 2),
+        # YAML allows "\0" in a scalar; the filesystem does not. Python raised a
+        # bare ValueError from Path.resolve() (traceback, exit 1 - outside the
+        # documented contract) and C++ truncated the path at the NUL and wrote
+        # the report somewhere the customer had not named.
+        ("NUL in output_dir",
+         'io:\n  output_dir: "report\\0bad"\nmodels:\n  m:\n    path: m.tar.gz\n', 2),
         ("duplicate profile, both mappings complete",
          "models:\n  foo:\n    path: /nonexistent/a.tar.gz\n"
          "  foo:\n    path: /nonexistent/b.tar.gz\n", 2),

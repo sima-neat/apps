@@ -213,16 +213,26 @@ def download_image(url: str, base: Path) -> Path:
 # --- Configuration: reading config.yaml and validating every setting -------------
 
 
-def duplicate_profile_names(text: str) -> list[str]:
-    """Profile names declared more than once under `models`.
+def duplicate_config_keys(text: str) -> list[str]:
+    """Keys declared more than once at the top level or under `models`.
 
     PyYAML collapses duplicate keys before the mapping reaches Python - the last
     wins, whole mapping and all - while the C++ reader flattens the file and
     ends up merging the two mappings field by field. The same file therefore
-    configured the two entrypoints differently: with a first `foo` carrying
-    `top_k: 0` and a second carrying only a new `path`, C++ kept the invalid
-    top_k and refused the configuration while Python used the default and ran a
-    different model. Neither behaviour is worth preserving, so both reject the
+    configured the two entrypoints differently.
+
+    Under `models`, a first `foo` carrying `top_k: 0` and a second carrying only
+    a new `path` left C++ holding the invalid top_k while Python used the
+    default and ran a different model.
+
+    At the top level it is worse, because nothing fails. A repeated `io:` whose
+    first mapping sets `input` and whose second sets only `output_dir` made C++
+    classify the customer's file and Python classify a fallback image it
+    downloaded - both exit 0, both write a report, and the reports describe
+    different inputs. Python also reached the network although the discarded
+    mapping had set `fallback_image_url: null`.
+
+    Neither behaviour is worth preserving, so both entrypoints reject the
     duplicate instead.
 
     Read from the node tree rather than the constructed mapping, which is the
@@ -230,35 +240,42 @@ def duplicate_profile_names(text: str) -> list[str]:
     one name are the same key, and compose() has already removed the quotes, so
     they collapse here exactly as they do in C++.
     """
+    def duplicates_in(mapping: "yaml.MappingNode", prefix: str) -> list[str]:
+        seen: set[str] = set()
+        found: list[str] = []
+        for key_node, _ in mapping.value:
+            if not isinstance(key_node, yaml.ScalarNode):
+                continue
+            name = prefix + key_node.value
+            if key_node.value in seen and name not in found:
+                found.append(name)
+            seen.add(key_node.value)
+        return found
+
     try:
         root = yaml.compose(text)
     except yaml.YAMLError:
         return []  # a parse error is reported by safe_load, with its own message
     if not isinstance(root, yaml.MappingNode):
         return []
+    # Top level first: a repeated `io:` is the damaging case, because both
+    # entrypoints then accept the file and classify different inputs.
+    found = duplicates_in(root, "")
     for key_node, value_node in root.value:
-        if not (isinstance(key_node, yaml.ScalarNode) and key_node.value == "models"):
-            continue
-        if not isinstance(value_node, yaml.MappingNode):
-            return []
-        seen: set[str] = set()
-        duplicates: list[str] = []
-        for profile_key, _ in value_node.value:
-            if not isinstance(profile_key, yaml.ScalarNode):
-                continue
-            if profile_key.value in seen and profile_key.value not in duplicates:
-                duplicates.append(profile_key.value)
-            seen.add(profile_key.value)
-        return duplicates
-    return []
+        if (
+            isinstance(key_node, yaml.ScalarNode)
+            and key_node.value == "models"
+            and isinstance(value_node, yaml.MappingNode)
+        ):
+            found.extend(duplicates_in(value_node, "models."))
+    return found
 
 
 def load_config(config_path: Path) -> dict[str, Any]:
     text = config_path.read_text(encoding="utf-8")
-    for name in duplicate_profile_names(text):
+    for name in duplicate_config_keys(text):
         raise ValueError(
-            f"models: profile name {name} is declared more than once; "
-            f"remove the duplicate in config.yaml"
+            f"{name} is declared more than once; remove the duplicate in config.yaml"
         )
     loaded = yaml.safe_load(text)
     # An empty file is an empty configuration; a file holding a bare scalar is
@@ -539,6 +556,14 @@ def config_str(value: Any, key: str, default: str | None) -> str | None:
         text = scalar_text(value)
         if text is None:
             return default
+        if "\0" in text:
+            # YAML permits "\0", the filesystem does not. Rejected while reading
+            # the configuration rather than left to the path APIs: Path.resolve()
+            # raises a bare ValueError that escaped as a traceback and exit 1,
+            # outside the documented 2/3/6 contract, and C++ silently truncated
+            # the value at the NUL and wrote the report to a directory the
+            # customer had not named.
+            raise ValueError(f"{key} contains a NUL character; remove it from config.yaml")
         if len(text) >= 2 and ((text[0] == "[" and text[-1] == "]")
                                or (text[0] == "{" and text[-1] == "}")):
             # C++ cannot tell this from an unquoted flow collection, which both
