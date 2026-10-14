@@ -96,6 +96,12 @@ from supertonic_tts_suite import (  # noqa: E402,F401
     SegmentTextTests as SupertonicSegmentTextTests,
     VendoredRuntimeTests as SupertonicVendoredRuntimeTests,
 )
+from supertonic_platform3_suite import (  # noqa: E402,F401
+    BatchAxisTests as SupertonicBatchAxisTests,
+    NumpyPinTests as SupertonicNumpyPinTests,
+    PyneatLinkTests as SupertonicPyneatLinkTests,
+    VectorEstimatorTests as SupertonicVectorEstimatorTests,
+)
 from voice_catalog_suite import (  # noqa: E402,F401
     test_catalog_has_simple_licenses_and_pinned_sources,
     test_catalog_rejects_blocked_license,

@@ -189,7 +189,8 @@ Other useful environment variables:
   is built (default `./.venv-supertonic`); see
   [Text-to-speech](#text-to-speech-voices--languages). The models root is
   written to `config.local.yaml` under `app.tts.supertonic`, so `run.sh` finds a
-  non-default location without re-exporting it.
+  non-default location without re-exporting it. Supertonic needs Platform 3.0 or
+  newer; on an older board `setup.sh` skips it and leaves its files untouched.
 - `TTS_OPTIONAL_VOICES`: optional voice ids to install, for example
   `mera,en_US-ljspeech-medium,zh_CN-chaowen-medium`.
 
@@ -599,15 +600,20 @@ selector in Settings.
   language (a few seconds) and other languages load on their first spoken
   reply. Without Supertonic every installed engine loads at startup as before.
 - **Supertonic runs in its own venv and worker too.** Its runtime needs `pyneat`,
-  `onnxruntime` and `numpy 1.26`, which the UI venv does not carry, so `setup.sh`
-  builds `./.venv-supertonic` (requirements in
-  `src/python/requirements-supertonic.txt`, plus the PyNeat wheel fetched with
-  `sima-cli neat install core -t pyneat`) and downloads the model files with
+  `onnxruntime` and the numpy that PyNeat is built against, which the UI venv
+  does not carry, so `setup.sh` builds `./.venv-supertonic` (requirements in
+  `src/python/requirements-supertonic.txt`, plus the installed PyNeat linked
+  from the Neat environment, or when its Python version differs the PyNeat wheel
+  fetched with `sima-cli neat install core -t pyneat`) and downloads the model files with
   the venv's `hf`: the upstream CPU models and voice styles from
   [Supertone/supertonic-3](https://huggingface.co/Supertone/supertonic-3) and
-  the precompiled MLA packages from
+  the precompiled vocoder and runtime data from
   [florianvoss/supertonic-3-sima](https://huggingface.co/florianvoss/supertonic-3-sima),
-  both at commit revisions pinned in `setup.sh` and verified by SHA-256. No
+  both at commit revisions pinned in `setup.sh`. The vector estimator compiled
+  for Platform 3.0 comes from the SiMa model zoo and is downloaded with
+  `sima-cli download`, which asks you to sign in once if needed (the address
+  and checksum are in `src/python/ui/tts/supertonic_sima/vector_estimator.json`).
+  Every file is verified by SHA-256. No
   on-device compilation is needed, and nothing is cloned from an external
   repository: the runtime package itself is vendored in
   `src/python/ui/tts/supertonic_sima/` (see its README for provenance and how to

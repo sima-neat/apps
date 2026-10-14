@@ -47,7 +47,7 @@ TTS_LANGUAGES="${TTS_LANGUAGES:-}"
 TTS_OPTIONAL_VOICES="${TTS_OPTIONAL_VOICES:-}"
 # Supertonic 3 (MLA-accelerated multilingual TTS). The runtime is vendored under
 # src/python/ui/tts/supertonic_sima/ and runs in its own venv (pyneat + onnxruntime +
-# numpy 1.26, which the UI venv cannot host); the model files come from Hugging
+# the numpy that PyNeat is built against); the model files come from Hugging
 # Face at pinned revisions and are checksum-verified. INSTALL_SUPERTONIC=0 skips it.
 INSTALL_SUPERTONIC="${INSTALL_SUPERTONIC:-1}"
 # Paths: environment > what an earlier setup persisted in CONFIG_PATH
@@ -285,7 +285,7 @@ resolve_supertonic_paths
 
 # Supertonic 3: hybrid TTS whose vector field and vocoder run on the MLA through
 # PyNeat. The runtime package is vendored in src/python/ui/tts/supertonic_sima/; its
-# dependencies (pyneat, onnxruntime, numpy 1.26) cannot share the UI venv, so an
+# dependencies (pyneat, onnxruntime, PyNeat's numpy) cannot share the UI venv, so an
 # isolated venv is built here and the model files are downloaded from Hugging
 # Face at pinned revisions and verified by checksum. The UI talks to it through
 # supertonic_worker.py. Optional: a failure here only leaves the CPU engines in
@@ -309,7 +309,7 @@ b76cbf62bac707c710cf0ae5aba5e31eea1a6339a9734bfae33ab98499534a50  supertonic-3/v
 ea1ac35ccb91b0d7ecad533a2fbd0eec10c91513d8951e3b25fbba99954e159b  supertonic-3/voice_styles/M3.json
 ca8eefad4fcd989c9379032ff3e50738adc547eeb5e221b82593a6d7b3bac303  supertonic-3/voice_styles/M4.json
 dd22b92740314321f8ae11c5e87f8dd60d060f15dd3a632b5adf77f471f77af2  supertonic-3/voice_styles/M5.json
-2f6b8c918e0c402453e48bd2686dbea429e6ce1dd98151c940d88229980e8dd2  supertonic-3-sima/supertonic_vector_field_sima_mpk.tar.gz
+48e851eaec6dce94f8d830cbc00d4a007fd5f42adba3b1a5a10b8f2a76d431f6  supertonic-3-sima/supertonic_vector_field_sima_mpk.tar.gz
 90b2d6a089c8527826dd1d0cb5b557316ac703045f422d6e1332deeabd84e0cb  supertonic-3-sima/supertonic_vocoder_sima_bf16_mpk.tar.gz
 4e9a4d85592f720c9a497cf94164290ccdddd0c5d104577fb810c936d2abf9f9  supertonic-3-sima/supertonic_runtime_data.npz
 31285c6d2ed7c1bca84a78c6b3477edc0ac9f0442a8062adc2627574555a4e3e  supertonic-3-sima/artifact_manifest.json
@@ -375,21 +375,64 @@ _local_pyneat_wheel() {
   return 1
 }
 
-_supertonic_venv() {
-  # The PyNeat wheel comes from sima-cli, which the DevKit exposes on PATH only
-  # for login shells.
-  if ! command -v sima-cli >/dev/null 2>&1 && [[ -x /data/sima-cli/.venv/bin/sima-cli ]]; then
-    export PATH="${PATH}:/data/sima-cli/.venv/bin"
+# Platform 3.0 installs PyNeat into the Neat environment (PYNEAT_PYTHON,
+# ~/pyneat) and sima-cli no longer provides a wheel. When that environment runs
+# the same Python version as the Supertonic venv, link the installed pyneat
+# distribution (its top-level entries from RECORD plus its .dist-info) into the
+# venv: the worker then runs exactly the installed runtime while the venv keeps
+# its own numpy and onnxruntime pins.
+_link_installed_pyneat() {
+  local target venv_version listing path
+  target="$("${SUPERTONIC_VENV}/bin/python" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])' 2>/dev/null)" \
+    || return 1
+  venv_version="$("${SUPERTONIC_VENV}/bin/python" -c 'import sys; print("%d.%d" % sys.version_info[:2])')" || return 1
+  listing="$("${PYNEAT_PYTHON}" - "${venv_version}" <<'PY' 2>/dev/null
+import sys
+from importlib.metadata import distribution
+from pathlib import Path
+if "%d.%d" % sys.version_info[:2] != sys.argv[1]:
+    raise SystemExit(1)
+dist = distribution("pyneat")
+root = Path(dist.locate_file(""))
+top = {f.parts[0] for f in dist.files or () if f.parts and f.parts[0] not in ("..", "bin")}
+for name in sorted(top):
+    if (root / name).exists():
+        print(root / name)
+PY
+)" || return 1
+  [[ -n "${listing}" ]] || return 1
+  local -a links=()
+  local link
+  while IFS= read -r path; do
+    link="${target}/$(basename "${path}")"
+    links+=("${link}")
+    ln -sfn "${path}" "${link}" || break
+  done <<<"${listing}"
+  _supertonic_runtime_ok && return 0
+  # Remove the links again so a later wheel install cannot write through them
+  # into the Neat environment.
+  rm -f "${links[@]}"
+  return 1
+}
+
+_find_sima_cli() {
+  # The DevKit puts sima-cli on PATH only for login shells, so setup.sh run over
+  # ssh, or from another script, would not see it.
+  local venv_bin="${SIMA_CLI_VENV_BIN:-/data/sima-cli/.venv/bin}"
+  if ! command -v sima-cli >/dev/null 2>&1 && [[ -x "${venv_bin}/sima-cli" ]]; then
+    export PATH="${PATH}:${venv_bin}"
   fi
+  command -v sima-cli >/dev/null 2>&1
+}
+
+_supertonic_venv() {
+  # The PyNeat wheel comes from sima-cli.
+  _find_sima_cli || true
   local want_version wheel_override="${PYNEAT_WHEEL}"
   want_version="$(_installed_pyneat_version)"
   if [[ -z "${wheel_override}" && -n "${want_version}" ]]; then
     wheel_override="$(_local_pyneat_wheel "${want_version}" || true)"
     [[ -n "${wheel_override}" ]] && info "Using the PyNeat wheel matching the installed runtime (${want_version})."
-  fi
-  if [[ -z "${wheel_override}" ]] && ! command -v sima-cli >/dev/null 2>&1; then
-    warn "sima-cli is required to fetch the PyNeat wheel for Supertonic; Supertonic TTS skipped."
-    return 1
   fi
   step "Creating isolated Supertonic venv: ${C_DIM}${SUPERTONIC_VENV}${C_RESET}"
   python3 -m venv --clear "${SUPERTONIC_VENV}" \
@@ -400,6 +443,10 @@ _supertonic_venv() {
   "${SUPERTONIC_VENV}/bin/python" -m pip install -r "${EXAMPLE_DIR}/src/python/requirements-supertonic.txt" \
     || _supertonic_venv_failed "Supertonic requirements failed to install; Supertonic TTS skipped." || return 1
   local wheel_dir status=0
+  if [[ -z "${PYNEAT_WHEEL}" ]] && _link_installed_pyneat; then
+    ok "Supertonic venv ready (PyNeat ${want_version:-unknown} linked from ${PYNEAT_PYTHON})."
+    return 0
+  fi
   if [[ -n "${wheel_override}" ]]; then
     # --no-deps: the wheel must not move the pinned numpy/onnxruntime.
     "${SUPERTONIC_VENV}/bin/python" -m pip install --no-deps "${wheel_override}" \
@@ -437,6 +484,42 @@ _supertonic_venv() {
   ok "Supertonic venv ready."
 }
 
+# The vector estimator compiled for Platform 3.0 comes from the SiMa model zoo,
+# not from the Hugging Face repo (its 2.1.3 compile does not load on Core 0.6).
+# The URL and checksum are in vector_estimator.json, which the engine also reads.
+# sima-cli downloads it, signing in to the model zoo if needed.
+_supertonic_vector_estimator() {
+  local pin="${EXAMPLE_DIR}/src/python/ui/tts/supertonic_sima/vector_estimator.json"
+  local target="${SUPERTONIC_MODELS_ROOT}/supertonic-3-sima/supertonic_vector_field_sima_mpk.tar.gz"
+  local dir="${target%/*}" url sum name tmp
+  url="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["url"])' "${pin}")" || return 1
+  sum="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha256"])' "${pin}")" || return 1
+  name="$(basename "${url}")"
+  mkdir -p "${dir}" || return 1
+  # Downloaded by hand into the same folder: take it under the name the engine uses.
+  if [[ ! -f "${target}" && -f "${dir}/${name}" && "$(sha256sum "${dir}/${name}" | cut -d' ' -f1)" == "${sum}" ]]; then
+    mv -f "${dir}/${name}" "${target}"
+  fi
+  if [[ -f "${target}" && "$(sha256sum "${target}" | cut -d' ' -f1)" == "${sum}" ]]; then
+    ok "Platform 3.0 vector estimator already downloaded."
+    return 0
+  fi
+  if ! _find_sima_cli; then
+    warn "sima-cli is needed to download the Platform 3.0 vector estimator from the SiMa model zoo."
+    warn "Install sima-cli, or run: sima-cli download ${url} -d ${dir}  (then run setup.sh again)"
+    return 1
+  fi
+  step "Downloading the Platform 3.0 vector estimator from the SiMa model zoo…"
+  tmp="$(mktemp -d "${SUPERTONIC_MODELS_ROOT}/.vector-estimator.XXXXXX")" || return 1
+  if ! sima-cli download "${url}" -d "${tmp}"; then
+    rm -rf "${tmp}"
+    warn "The model zoo download failed. Retry, or run: sima-cli download ${url} -d ${dir}  (then run setup.sh again)"
+    return 1
+  fi
+  mv -f "${tmp}/${name}" "${target}"
+  rm -rf "${tmp}"
+}
+
 _supertonic_models() {
   local hf="${SUPERTONIC_VENV}/bin/hf"
   if [[ ! -x "${hf}" ]]; then
@@ -447,13 +530,13 @@ _supertonic_models() {
   export HF_HOME="${SUPERTONIC_MODELS_ROOT}/.hf-cache"   # keep the cache off the root filesystem
   step "Downloading the compiled MLA packages (${SUPERTONIC_SIMA_HF_REPO}@${SUPERTONIC_SIMA_HF_REVISION:0:12})…"
   "${hf}" download "${SUPERTONIC_SIMA_HF_REPO}" \
-    supertonic_vector_field_sima_mpk.tar.gz \
     supertonic_vocoder_sima_bf16_mpk.tar.gz \
     supertonic_runtime_data.npz \
     artifact_manifest.json \
     vocoder_bf16_manifest.json \
     --revision "${SUPERTONIC_SIMA_HF_REVISION}" \
     --local-dir "${SUPERTONIC_MODELS_ROOT}/supertonic-3-sima" || return 1
+  _supertonic_vector_estimator || return 1
   step "Downloading the upstream CPU models and voice styles (${SUPERTONIC_UPSTREAM_HF_REPO}@${SUPERTONIC_UPSTREAM_HF_REVISION:0:12})…"
   "${hf}" download "${SUPERTONIC_UPSTREAM_HF_REPO}" \
     onnx/duration_predictor.onnx onnx/text_encoder.onnx onnx/tts.json onnx/unicode_indexer.json \
@@ -489,9 +572,22 @@ _supertonic_refresh_requirements() {
 # file against its pinned checksum, re-fetching anything missing or different.
 # `refresh` (dependency-only mode) also re-applies the pins to a usable venv.
 # Always returns 0: Supertonic is optional and the CPU engines remain.
+# The board's platform version (DISTRO_VERSION in /etc/buildinfo), or nothing
+# when it cannot be read, for example off the board.
+_platform_version() {
+  sed -n 's/^DISTRO_VERSION *= *//p' "${SIMA_BUILDINFO:-/etc/buildinfo}" 2>/dev/null | head -n1
+}
+
 install_supertonic() {
-  local refresh="${1:-}"
+  local refresh="${1:-}" platform
   section "Supertonic 3 (MLA text-to-speech)"
+  # The vector estimator pinned here is the Platform 3.0 compile; older Core
+  # rejects it. Leave an older board's Supertonic files untouched.
+  platform="$(_platform_version)"
+  if [[ -n "${platform}" && "${platform%%.*}" =~ ^[0-9]+$ && "${platform%%.*}" -lt 3 ]]; then
+    warn "Supertonic needs Platform 3.0 or newer (this board: ${platform}); skipped. The CPU TTS engines remain available."
+    return 0
+  fi
   if _supertonic_runtime_ok; then
     if [[ "${refresh}" == "refresh" ]] && ! _supertonic_refresh_requirements; then
       _supertonic_venv || return 0
