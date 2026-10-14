@@ -23,13 +23,14 @@ API_PREFIXES = (
     "/supertonic/",  # Supertonic voice selection
     "/voices/",      # piper-tts voice selection
     "/rag/",         # document search (RAG): status, upload, reset, clear, search
+    "/board-camera/",  # cameras attached to the board: list, snapshot
 )
 API_EXACT = ("/", "/health", "/voices", "/shutdown")
 
 # Paths that may answer cross-origin browser requests when CORS is enabled:
 # the API surface, never /shutdown.
 CORS_PREFIXES = ("/v1/", "/audio/", "/models/", "/benchmark/", "/tts/",
-                 "/piperplus/", "/supertonic/", "/voices/", "/rag/")
+                 "/piperplus/", "/supertonic/", "/voices/", "/rag/", "/board-camera/")
 CORS_EXACT = ("/health", "/voices")
 
 CORS_METHODS = "GET, POST, OPTIONS"
@@ -162,5 +163,5 @@ def health_payload(*, mode: str, version: str, status: Mapping | None,
         "chat_models_loaded": chat_loaded,
         "tts": {"engines": tts_engines},
         # Optional features, so a front end can hide what this board lacks.
-        "features": {"rag": bool(rag_enabled), "benchmark": True},
+        "features": {"rag": bool(rag_enabled), "benchmark": True, "board_camera": True},
     }

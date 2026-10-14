@@ -46,6 +46,12 @@ import supertonic_tts
 from talk_controller import TalkController
 import backend_mode
 import rag_chat
+from shared.board_camera import (
+    capture_camera_frame,
+    default_camera_device,
+    list_camera_devices,
+    normalize_camera_device,
+)
 from rag.event_loop import close_thread_event_loop
 from audio_api import (
     MAX_TRANSCRIPTION_BYTES,
@@ -1093,6 +1099,30 @@ class AppContext:
                 mode='backend-only',
                 version=_studio_version(), status=status, engines=engines, error=error,
                 engine_failures=failures, rag_enabled=self.rag_enabled))
+
+        # Cameras attached to the board (/dev/video*): a front end lists them and
+        # attaches a snapshot to its next chat message.
+        @self.app.route('/board-camera/devices', methods=['GET'])
+        def board_camera_devices():
+            return jsonify({
+                'devices': list_camera_devices(),
+                'default': default_camera_device(),
+            })
+
+        @self.app.route('/board-camera/snapshot', methods=['GET'])
+        def board_camera_snapshot():
+            device = (request.args.get('device') or '').strip()
+            try:
+                node = normalize_camera_device(device) if device else None
+            except ValueError:
+                return jsonify({'error': 'Invalid board camera device'}), 400
+            try:
+                jpeg, tool = capture_camera_frame(node)
+            except RuntimeError as exc:
+                logging.error(f"Board camera capture failed: {exc}")
+                return jsonify({'error': 'Board camera capture failed'}), 503
+            return Response(jpeg, mimetype='image/jpeg',
+                            headers={'Cache-Control': 'no-store', 'X-Capture-Tool': tool})
 
         @self.app.route('/v1/audio/voices', methods=['GET'])
         @self.app.route('/audio/voices', methods=['GET'])

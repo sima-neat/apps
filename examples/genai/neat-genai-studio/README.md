@@ -205,6 +205,7 @@ GET  /models/hub/search?q=, /models/hub/card?repoId=; POST /models/hub/download 
 POST /benchmark/run, /benchmark/stop; GET /benchmark/status              TTFT / TPS benchmark
 GET/POST /tts/engine; GET /supertonic/voices, /piperplus/voices, /voices; POST /supertonic/select, /piperplus/select, /voices/select
 GET  /rag/status, /rag/inspect, /rag/search?query=...&k=3; POST /rag/upload (Markdown), /rag/reset, /rag/clear
+GET  /board-camera/devices; /board-camera/snapshot?device=/dev/videoN   cameras on the board; a JPEG snapshot
 POST /shutdown                     stop the Studio (not reachable cross-origin)
 ```
 
