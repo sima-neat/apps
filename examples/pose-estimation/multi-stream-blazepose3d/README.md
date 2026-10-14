@@ -233,7 +233,7 @@ Each frame's stream ID, frame ID and PTS stay with its queued work, so a result 
 - No full frame is converted or copied on the A65: each stream's thread crops its ROIs from the NV12 planes and converts only the 256×256 crops, then releases the decoder buffer.
 - Metadata is serialized once per message and sent on a dedicated publisher thread.
 
-On a Modalix DevKit (Platform 3.0) with four 720p H.264 RTSP streams of one person each, the C++ application publishes every source frame at 30 and 60 fps per stream. With 120 fps sources it publishes about 97 fps per stream (about 390 BlazePose inferences per second); BlazePose Heavy on the MLA is then the limit. The Python application publishes about 29 fps per stream with the same sources; its per-crop work runs under the Python GIL.
+On a Modalix DevKit (Platform 3.0) with four 720p H.264 RTSP streams of one person each, the C++ application publishes every source frame at 30 and 60 fps per stream. With 120 fps sources it publishes about 97 fps per stream (about 390 BlazePose inferences per second); BlazePose Heavy on the MLA is then the limit. The Python application publishes every frame at 30 fps per stream and about 42 fps per stream with 120 fps sources; its per-frame cropping, landmark decoding and metadata run under the Python GIL.
 
 At shutdown each stream prints `frames_in` (source frames admitted, which `runtime.frames` limits) and `frames_out` (metadata pairs whose two messages were both queued for Insight). A failed send is logged and does not count.
 
