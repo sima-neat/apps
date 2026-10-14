@@ -13,7 +13,7 @@ without ``neat_rag``, so the code after it can rely on that shape.
 from __future__ import annotations
 
 import json
-from pathlib import PurePath
+from pathlib import Path, PurePath
 from typing import Any, Iterable, Mapping
 
 REQUEST_FIELD = "neat_rag"
@@ -210,3 +210,12 @@ def search_failed_reply(database_exists: bool, service_failed: bool = False) -> 
                 "Restart GenAI Studio, or reset the documents."), 503
     return ("The document search service is not available yet. "
             "Try again in a moment, or rebuild the documents."), 503
+
+
+def other_database(served: str | None, expected: str) -> str | None:
+    """The database the document search service serves when it is not this
+    Studio's (``expected``), else None. A service that reports no path (not
+    up, or an older service) is not treated as another database."""
+    if not served:
+        return None
+    return None if Path(served).resolve() == Path(expected).resolve() else served

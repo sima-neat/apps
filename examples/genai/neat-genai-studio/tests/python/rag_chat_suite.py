@@ -5,7 +5,9 @@ Pure Python: no Flask, no RAG service."""
 from __future__ import annotations
 
 import json
+import tempfile
 import unittest
+from pathlib import Path
 
 import rag_chat
 
@@ -181,6 +183,32 @@ class RagSearchFailedTests(unittest.TestCase):
         self.assertEqual(status, 503)
         self.assertIn("stopped", message)
         self.assertNotIn("Try again in a moment", message)
+
+
+class RagServedDatabaseTests(unittest.TestCase):
+    """The Studio searches only a service that serves its own database, not
+    one the CLI started on the same port with `/rag db`."""
+
+    def test_the_same_file_is_not_another_database(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "milvus.db"
+            self.assertIsNone(rag_chat.other_database(str(db), str(db)))
+            self.assertIsNone(rag_chat.other_database(f"{tmp}/./milvus.db", str(db)))
+
+    def test_a_different_file_is_reported(self):
+        self.assertEqual(rag_chat.other_database("/data/cli/milvus.db", "/opt/studio/milvus.db"),
+                         "/data/cli/milvus.db")
+
+    def test_a_service_without_a_path_is_left_to_the_search(self):
+        self.assertIsNone(rag_chat.other_database(None, "/opt/studio/milvus.db"))
+        self.assertIsNone(rag_chat.other_database("", "/opt/studio/milvus.db"))
+
+    def test_every_studio_rag_call_goes_through_the_checked_client(self):
+        source = (Path(__file__).resolve().parents[2] / "src/python/ui/flask_app.py").read_text(encoding="utf-8")
+        for target in ("ensure_rag_modules_loaded()", "rag_db_client"):
+            for call in (".search(", ".is_server_up(", ".list_documents("):
+                self.assertNotIn(target + call, source)
+        self.assertGreaterEqual(source.count("checked_rag_client()"), 6)
 
 
 class RagEventLoopTests(unittest.TestCase):

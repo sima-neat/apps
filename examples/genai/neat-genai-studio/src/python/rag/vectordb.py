@@ -14,7 +14,7 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_milvus import Milvus
 import threading
 import requests
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 # milvus-lite emits a pkg_resources deprecation warning on import.
 # We suppress this known third-party warning to keep service logs clean.
@@ -198,6 +198,16 @@ class RagDbClient:
         except ValueError as json_err:
             log.error(f"Invalid JSON response: {json_err}")
             raise
+
+    def served_db_path(self) -> Optional[str]:
+        """The database file the service on this port serves (its ``/`` page),
+        or None when no service answers."""
+        try:
+            resp = requests.get(f"{self.base_url}/", timeout=self.timeout)
+            resp.raise_for_status()
+            return resp.json().get("db_path")
+        except (requests.RequestException, ValueError):
+            return None
 
     def list_documents(self, limit: int = 16383) -> Dict[str, Any]:
         """Fetch every ingested chunk from the running VectorDB service."""
