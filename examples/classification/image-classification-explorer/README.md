@@ -148,6 +148,24 @@ the same time is not supported and is not detected: give each concurrent run its
 own output directory. A run interrupted part-way through replacing the directory
 costs the previous report; the next run writes a fresh one.
 
+**How large a collection is practical.** The input directory is not capped, but
+the report is one HTML page and every result is held in memory until it is
+written, so the collection size that is useful is smaller than the one that
+fits. Measured on a Modalix DevKit with the four models above, at about 288 ms
+and 6 KB of report per image:
+
+| Images | Run time | `report.json` | `report.html` |
+| ---: | ---: | ---: | ---: |
+| 1,000 | ~5 min | 3 MB | 3 MB |
+| 10,000 | ~48 min | 34 MB | 26 MB |
+| 50,000 | ~4 h | 170 MB | 130 MB |
+| 100,000 | ~8 h | 340 MB | 259 MB |
+
+Past roughly 10,000 images `report.html` stops being practical to open and
+browse, which is what the report is for, and a large enough collection can
+exhaust memory and end the run with no report at all. Split bigger collections
+across several runs, each with its own `io.output_dir`.
+
 Each run replaces the previous contents of `io.output_dir` as a unit, so the directory is either
 the complete previous report or the complete new one. Use an empty or dedicated directory: a run
 only replaces a directory that carries the hidden `.image-classification-explorer-report` marker
