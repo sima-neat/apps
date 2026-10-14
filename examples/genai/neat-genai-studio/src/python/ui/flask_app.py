@@ -248,10 +248,11 @@ class RagServiceMismatch(RuntimeError):
 
     def __init__(self, served):
         self.served = served
-        super().__init__(
-            f"The document search service on this board is serving another database ({served}), "
-            "probably started from the CLI. Stop it, then restart the Studio."
-        )
+        if served == rag_chat.UNNAMED_DATABASE:
+            what = "does not say which database it serves (an older or a different service)"
+        else:
+            what = f"is serving another database ({served}), probably started from the CLI"
+        super().__init__(f"The document search service on this board {what}. Stop it, then restart the Studio.")
 
 
 def checked_rag_client():

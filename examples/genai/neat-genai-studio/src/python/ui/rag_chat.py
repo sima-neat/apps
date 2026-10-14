@@ -212,10 +212,17 @@ def search_failed_reply(database_exists: bool, service_failed: bool = False) -> 
             "Try again in a moment, or rebuild the documents."), 503
 
 
+UNNAMED_DATABASE = "a database it does not name"
+
+
 def other_database(served: str | None, expected: str) -> str | None:
     """The database the document search service serves when it is not this
-    Studio's (``expected``), else None. A service that reports no path (not
-    up, or an older service) is not treated as another database."""
-    if not served:
+    Studio's (``expected``), else None. ``served`` is None when no service
+    answers or it is still loading (left to the search to report), and ""
+    when the service does not say which database it serves: that is refused
+    too, since its results cannot be attributed."""
+    if served is None:
         return None
+    if not served:
+        return UNNAMED_DATABASE
     return None if Path(served).resolve() == Path(expected).resolve() else served

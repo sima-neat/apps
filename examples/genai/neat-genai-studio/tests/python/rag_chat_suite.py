@@ -199,9 +199,11 @@ class RagServedDatabaseTests(unittest.TestCase):
         self.assertEqual(rag_chat.other_database("/data/cli/milvus.db", "/opt/studio/milvus.db"),
                          "/data/cli/milvus.db")
 
-    def test_a_service_without_a_path_is_left_to_the_search(self):
+    def test_no_service_or_a_loading_one_is_left_to_the_search(self):
         self.assertIsNone(rag_chat.other_database(None, "/opt/studio/milvus.db"))
-        self.assertIsNone(rag_chat.other_database("", "/opt/studio/milvus.db"))
+
+    def test_a_service_that_does_not_name_its_database_is_refused(self):
+        self.assertEqual(rag_chat.other_database("", "/opt/studio/milvus.db"), rag_chat.UNNAMED_DATABASE)
 
     def test_every_studio_rag_call_goes_through_the_checked_client(self):
         source = (Path(__file__).resolve().parents[2] / "src/python/ui/flask_app.py").read_text(encoding="utf-8")
@@ -209,6 +211,34 @@ class RagServedDatabaseTests(unittest.TestCase):
             for call in (".search(", ".is_server_up(", ".list_documents("):
                 self.assertNotIn(target + call, source)
         self.assertGreaterEqual(source.count("checked_rag_client()"), 6)
+
+
+class RagServiceIdentityTests(unittest.TestCase):
+    """What vectordb.served_database() makes of a RAG service's ``/`` page.
+    Taken from the source so the test does not import the service's stack."""
+
+    @classmethod
+    def setUpClass(cls):
+        import ast
+        from typing import Any, Optional
+        path = Path(__file__).resolve().parents[2] / "src/python/rag/vectordb.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "served_database")
+        namespace = {"Any": Any, "Optional": Optional}
+        exec(compile(ast.Module(body=[fn], type_ignores=[]), str(path), "exec"), namespace)
+        cls.served = staticmethod(namespace["served_database"])
+
+    def test_a_named_database(self):
+        self.assertEqual(self.served({"service": "rag-vectordb", "db_path": "/x/milvus.db"}), "/x/milvus.db")
+
+    def test_a_loading_service_is_left_to_the_search(self):
+        self.assertIsNone(self.served({"service": "rag-vectordb", "db_path": None}))
+
+    def test_a_reply_that_does_not_name_a_database_is_refused(self):
+        for reply in (None, ["list"], {"service": "rag-vectordb"}, {"db_path": "/x/milvus.db"},
+                      {"service": "other", "db_path": "/x/milvus.db"}, {"service": "rag-vectordb", "db_path": ""},
+                      {"service": "rag-vectordb", "db_path": 3}):
+            self.assertEqual(self.served(reply), "", reply)
 
 
 class RagEventLoopTests(unittest.TestCase):

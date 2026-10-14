@@ -171,6 +171,19 @@ class VectorDB:
 
 
 
+def served_database(info: Any) -> Optional[str]:
+    """The database a RAG service's ``/`` page (``info``, None when it did not
+    answer with JSON) says it serves. None while this service is still loading
+    (``db_path: null``); "" when the reply does not name a database, which
+    callers treat as another database."""
+    if not isinstance(info, dict) or info.get("service") != "rag-vectordb" or "db_path" not in info:
+        return ""
+    path = info["db_path"]
+    if path is None:
+        return None
+    return path if isinstance(path, str) and path else ""
+
+
 class RagDbClient:
     def __init__(self, host: str = "127.0.0.1", port: int = 9100, timeout: int = 10):
         self.base_url = f"http://{host}:{port}"
@@ -200,14 +213,16 @@ class RagDbClient:
             raise
 
     def served_db_path(self) -> Optional[str]:
-        """The database file the service on this port serves (its ``/`` page),
-        or None when no service answers."""
+        """The database the service on this port serves; see served_database()."""
         try:
             resp = requests.get(f"{self.base_url}/", timeout=self.timeout)
-            resp.raise_for_status()
-            return resp.json().get("db_path")
-        except (requests.RequestException, ValueError):
+        except requests.RequestException:
             return None
+        try:
+            info = resp.json() if resp.ok else None
+        except ValueError:
+            info = None
+        return served_database(info)
 
     def list_documents(self, limit: int = 16383) -> Dict[str, Any]:
         """Fetch every ingested chunk from the running VectorDB service."""
