@@ -344,6 +344,43 @@ int main(int argc, char** argv) {
       }
     }
 
+    // The marker authorises recursive deletion, so it has to be the file itself:
+    // is_regular_file follows symlinks, so a link named like the marker and
+    // pointing at any regular file handed that authority over a stranger's
+    // directory, which remove_all then emptied.
+    {
+      const auto victim_dir = work / ".symlinked.previous";
+      fs::create_directories(victim_dir);
+      {
+        std::ofstream(victim_dir / "someone-elses-work.txt") << "keep me\n";
+      }
+      const auto bait = work / "any-regular-file.txt";
+      {
+        std::ofstream(bait) << "target\n";
+      }
+      std::error_code link_ec;
+      fs::create_symlink(bait, victim_dir / ".image-classification-explorer-report", link_ec);
+      if (link_ec) {
+        std::cerr << "[FAIL] could not create the marker symlink: " << link_ec.message() << "\n";
+        ++failures;
+      } else {
+        write_config(work / "symlinked");
+        auto refused_link =
+            spawn_and_wait(binary, {"--config", (work / "config.yaml").string()}, 20000);
+        if (refused_link.exit_code == 0 ||
+            refused_link.stderr_text.find("was not created by this application") ==
+                std::string::npos ||
+            !fs::exists(victim_dir / "someone-elses-work.txt")) {
+          std::cerr << "[FAIL] marker symlink: expected refusal, got exit "
+                    << refused_link.exit_code << "\nstderr:\n"
+                    << refused_link.stderr_text << "\n";
+          ++failures;
+        } else {
+          std::cout << "[OK] a symlink named like the ownership marker was refused\n";
+        }
+      }
+    }
+
     write_config(work / "report");
     auto ok = spawn_and_wait(binary, {"--config", (work / "config.yaml").string()}, 20000);
     auto second = spawn_and_wait(binary, {"--config", (work / "config.yaml").string()}, 20000);

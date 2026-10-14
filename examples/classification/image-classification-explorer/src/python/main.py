@@ -98,6 +98,20 @@ def stable_digest(value: str) -> str:
 # --- Inputs: fingerprinting, decoding and the fallback image cache ---------------
 
 
+def is_real_file(path: Path) -> bool:
+    """True only for a regular file that is not a symlink to one.
+
+    `Path.is_file()` follows symlinks. That matters because the marker is what
+    authorises publication to replace a directory and delete what it replaced:
+    a link named like the marker, pointing at any regular file, granted that
+    authority over a directory this application had never written. The same
+    predicate is used for the report entries so that "regular file" means one
+    thing throughout the ownership check - the writers never create symlinks, so
+    a link among the report entries is not this application's output either.
+    """
+    return path.is_file() and not path.is_symlink()
+
+
 def file_fingerprint(path: Path) -> tuple[int, int]:
     """Size and mtime, deliberately not a digest of the contents.
 
@@ -1143,9 +1157,9 @@ def publish_report(output_dir: Path, results: list[ImageResult], profiles: list[
                     foreign.append(name)
                     continue
                 for thumb in entry.iterdir():
-                    if not thumb.is_file() or not THUMBNAIL_NAME.match(thumb.name):
+                    if not is_real_file(thumb) or not THUMBNAIL_NAME.match(thumb.name):
                         foreign.append(f"thumbnails/{thumb.name}")
-            elif not entry.is_file():
+            elif not is_real_file(entry):
                 foreign.append(name)
         # Sorted so the names the message lists are the same ones, in the same
         # order, as the C++ entrypoint lists.
@@ -1155,7 +1169,7 @@ def publish_report(output_dir: Path, results: list[ImageResult], profiles: list[
         # directory look application-owned, and the swap below deletes what it
         # replaces, including anything nested under that fake marker. Same test
         # the scratch directories below use.
-        if entries and not (output_dir / REPORT_MARKER).is_file():
+        if entries and not is_real_file(output_dir / REPORT_MARKER):
             raise OSError(
                 f"output_dir {output_dir} was not created by this application "
                 f"(missing {REPORT_MARKER}); use an empty or dedicated directory"
@@ -1175,7 +1189,7 @@ def publish_report(output_dir: Path, results: list[ImageResult], profiles: list[
     for scratch in (staging, previous):
         if not scratch.exists():
             continue
-        if not scratch.is_dir() or not (scratch / REPORT_MARKER).is_file():
+        if not scratch.is_dir() or not is_real_file(scratch / REPORT_MARKER):
             raise OSError(
                 f"{scratch} exists and was not created by this application; "
                 f"move or remove it, or choose a different io.output_dir"

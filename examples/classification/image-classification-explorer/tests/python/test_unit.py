@@ -1383,6 +1383,58 @@ models:
         assert "not part of a previous report" in capsys.readouterr().err
         assert (out_dir / "notes.txt").read_text() == "customer data"
 
+    @pytest.mark.parametrize("where", ["staging", "previous"])
+    def test_marker_symlink_in_a_scratch_dir_is_refused(self, tmp_path, monkeypatch, capsys, where):
+        """The marker authorises recursive deletion, so it has to be the file
+        itself. `is_file()` follows symlinks, so a link named like the marker and
+        pointing at any regular file used to hand that authority over a stranger's
+        directory - and rmtree then emptied it."""
+        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
+        img = tmp_path / "a.jpg"
+        _make_image(img)
+        out_dir = tmp_path / "out"
+        scratch = out_dir.parent / f".{out_dir.name}.{where}"
+        scratch.mkdir(parents=True)
+        victim = scratch / "someone-elses-work.txt"
+        victim.write_text("keep me", encoding="utf-8")
+        bait = tmp_path / "any-regular-file.txt"
+        bait.write_text("target", encoding="utf-8")
+        (scratch / main.REPORT_MARKER).symlink_to(bait)
+
+        config_path = tmp_path / "config.yaml"
+        _write_config(config_path, img, out_dir)
+        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
+
+        rc = main.main()
+
+        assert rc == 6
+        assert "was not created by this application" in capsys.readouterr().err
+        assert victim.read_text() == "keep me", "publication emptied a stranger's directory"
+        assert bait.read_text() == "target"
+
+    def test_marker_symlink_in_output_dir_is_refused(self, tmp_path, monkeypatch, capsys):
+        """Same rule for output_dir itself, which is swapped away and deleted."""
+        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
+        img = tmp_path / "a.jpg"
+        _make_image(img)
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        victim = out_dir / "report.html"
+        victim.write_text("customer data", encoding="utf-8")
+        bait = tmp_path / "any-regular-file.txt"
+        bait.write_text("target", encoding="utf-8")
+        (out_dir / main.REPORT_MARKER).symlink_to(bait)
+
+        config_path = tmp_path / "config.yaml"
+        _write_config(config_path, img, out_dir)
+        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
+
+        rc = main.main()
+
+        assert rc == 6
+        assert "was not created by this application" in capsys.readouterr().err
+        assert victim.read_text() == "customer data"
+
     @pytest.mark.parametrize("plant", ["nested-file", "nested-dir", "report-json-is-a-dir"])
     def test_foreign_data_nested_under_a_report_name_is_refused(
         self, tmp_path, monkeypatch, capsys, plant

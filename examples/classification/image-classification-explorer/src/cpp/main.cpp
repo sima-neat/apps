@@ -264,6 +264,20 @@ bool path_is_regular_file(const fs::path& p) {
   return fs::is_regular_file(p, ec) && !ec;
 }
 
+// A regular file that is not a symlink to one. symlink_status does not follow
+// the final component, unlike is_regular_file above. This matters because the
+// marker is what authorises publication to replace a directory and delete what
+// it replaced: a link named like the marker, pointing at any regular file,
+// granted that authority over a directory this application had never written.
+// Used for the report entries too, so "regular file" means one thing throughout
+// the ownership check - the writers never create symlinks, so a link among the
+// report entries is not this application's output either.
+bool path_is_real_file(const fs::path& p) {
+  std::error_code ec;
+  const auto status = fs::symlink_status(p, ec);
+  return !ec && fs::is_regular_file(status);
+}
+
 // PyYAML resolves `~` to null, so `input: ~` means "not set". ScalarConfig only
 // recognises the spelling `null`, so without this C++ would look for a file
 // literally named "~" while Python downloaded the fallback sample.
@@ -1951,7 +1965,7 @@ void publish_report(const fs::path& output_dir_arg, const std::vector<ImageResul
       // including anything nested under that fake marker. Same test the scratch
       // directories below use.
       if (name == kReportMarker) {
-        has_marker = path_is_regular_file(entry.path());
+        has_marker = path_is_real_file(entry.path());
       } else if (kReportEntries.count(name) == 0) {
         foreign.push_back(name);
       } else if (name == "thumbnails") {
@@ -1976,7 +1990,7 @@ void publish_report(const fs::path& output_dir_arg, const std::vector<ImageResul
           for (; thumbs != fs::directory_iterator();) {
             const auto& thumb = *thumbs;
             const std::string thumb_name = thumb.path().filename().string();
-            if (!path_is_regular_file(thumb.path()) || !is_thumbnail_name(thumb_name))
+            if (!path_is_real_file(thumb.path()) || !is_thumbnail_name(thumb_name))
               foreign.push_back("thumbnails/" + thumb_name);
             thumbs.increment(scan_ec);
             if (scan_ec) {
@@ -1985,7 +1999,7 @@ void publish_report(const fs::path& output_dir_arg, const std::vector<ImageResul
             }
           }
         }
-      } else if (!path_is_regular_file(entry.path())) {
+      } else if (!path_is_real_file(entry.path())) {
         foreign.push_back(name);
       }
     }
@@ -2014,7 +2028,7 @@ void publish_report(const fs::path& output_dir_arg, const std::vector<ImageResul
   for (const fs::path& scratch : {staging, previous}) {
     if (!path_exists(scratch))
       continue;
-    if (!path_is_directory(scratch) || !path_is_regular_file(scratch / kReportMarker)) {
+    if (!path_is_directory(scratch) || !path_is_real_file(scratch / kReportMarker)) {
       throw std::runtime_error(scratch.string() +
                                " exists and was not created by this application; move or remove "
                                "it, or choose a different io.output_dir");
