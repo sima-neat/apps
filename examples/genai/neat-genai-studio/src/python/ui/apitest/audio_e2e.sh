@@ -1,6 +1,6 @@
 #!/bin/bash
 # End-to-end check of the Studio's audio workflow against a running instance
-# (web or --backend-only): every step must produce useful output, not just 200.
+# (started with ./run.sh): every step must produce useful output, not just 200.
 #   1. /health reports the model server reachable and an ASR model active, and
 #      the Insight contract: api_version 1, voice engines with key/loaded, and a
 #      failed engine's error only as a fixed reason (accelerator-unavailable,

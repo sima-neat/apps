@@ -210,10 +210,10 @@ class RagServedDatabaseTests(unittest.TestCase):
         for target in ("ensure_rag_modules_loaded()", "rag_db_client"):
             for call in (".search(", ".is_server_up(", ".list_documents("):
                 self.assertNotIn(target + call, source)
-        # chat API, standalone chat, /rag/search, /rag/status, /rag/inspect, health
-        self.assertEqual(source.count("client, other = studio_rag_client()"), 6)
+        # chat API, /rag/search, /rag/status, /rag/inspect
+        self.assertEqual(source.count("client, other = studio_rag_client()"), 4)
         # The refusal is built from the path, never from an exception (CodeQL).
-        self.assertEqual(source.count("rag_chat.mismatch_message(other)"), 5)
+        self.assertEqual(source.count("rag_chat.mismatch_message(other)"), 4)
         self.assertNotIn("RagServiceMismatch", source)
 
     def test_the_mismatch_message_names_the_database_and_what_to_do(self):
@@ -221,13 +221,6 @@ class RagServedDatabaseTests(unittest.TestCase):
         self.assertIn("/data/cli/milvus.db", text)
         self.assertIn("Stop it, then restart the Studio.", text)
         self.assertIn("does not say which database", rag_chat.mismatch_message(rag_chat.UNNAMED_DATABASE))
-
-    def test_the_standalone_page_shows_a_failed_request_in_the_chat(self):
-        page = (Path(__file__).resolve().parents[2] / "src/python/ui/static/newui.js").read_text(encoding="utf-8")
-        start = page.index("const response = await fetch('/upload', {")
-        handler = page[page.index("} catch (error) {", start):page.index("};", page.index("} catch (error) {", start))]
-        self.assertIn("addChatMessage(", handler)
-        self.assertIn("hideAbortButton()", handler)
 
 
 class RagServiceIdentityTests(unittest.TestCase):

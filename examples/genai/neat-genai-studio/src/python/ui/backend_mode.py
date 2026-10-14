@@ -1,6 +1,6 @@
-"""Backend-only (headless) mode for Neat GenAI Studio: which paths the web
-process serves when started with ``--backend-only``, and the opt-in CORS policy
-for browser front ends on other origins (for example Insight).
+"""The Neat GenAI Studio backend's API surface: which paths the web process
+serves, and the opt-in CORS policy for browser front ends on other origins
+(for example Insight).
 
 Pure Python on purpose (no Flask import) so the unit suite covers every
 decision; ``flask_app`` applies these in ``before_request`` / ``after_request``.
@@ -11,9 +11,8 @@ from __future__ import annotations
 from typing import Iterable, Mapping
 from urllib.parse import urlsplit
 
-# Path prefixes (ending in "/") and exact paths served in backend-only mode.
-# Everything else (the web UI pages, the Studio's own chat/RAG/camera routes)
-# answers 404 there.
+# Path prefixes (ending in "/") and exact paths the backend serves. Everything
+# else answers 404.
 API_PREFIXES = (
     "/v1/",          # OpenAI-compatible chat, audio speech/transcriptions/translations/voices
     "/audio/",       # the same audio routes without the /v1 prefix
@@ -25,7 +24,7 @@ API_PREFIXES = (
     "/voices/",      # piper-tts voice selection
     "/rag/",         # document search (RAG): status, upload, reset, clear, search
 )
-API_EXACT = ("/", "/health", "/voices", "/shutdown", "/favicon.ico")
+API_EXACT = ("/", "/health", "/voices", "/shutdown")
 
 # Paths that may answer cross-origin browser requests when CORS is enabled:
 # the API surface, never /shutdown.
@@ -47,7 +46,7 @@ def _matches(path: str, prefixes: Iterable[str], exact: Iterable[str]) -> bool:
 
 
 def path_allowed(path: str) -> bool:
-    """True when ``path`` is part of the backend-only API surface."""
+    """True when ``path`` is part of the backend API surface."""
     return _matches(path, API_PREFIXES, API_EXACT)
 
 

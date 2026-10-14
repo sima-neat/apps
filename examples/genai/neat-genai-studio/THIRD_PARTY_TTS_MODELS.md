@@ -66,8 +66,8 @@ this notice file.
 - Base-model credit: ayousanz, Piper Plus multilingual base model (CC BY 4.0)
 - Apache License 2.0 text: <https://www.apache.org/licenses/LICENSE-2.0>
 
-MERA is never part of the default download. Select it in the Studio voice
-picker or set `TTS_OPTIONAL_VOICES=mera` to download it from its pinned commit.
+MERA is never part of the default download. Select it as the Piper Plus voice
+(Insight's GenAI voice settings, or `POST /piperplus/select`) or set `TTS_OPTIONAL_VOICES=mera` to download it from its pinned commit.
 The Apache 2.0 and CC BY 4.0 notices above must remain with redistributed model
 copies.
 

@@ -1,6 +1,6 @@
 #!/bin/bash
 # Transcribe an audio file through the Studio's OpenAI-compatible endpoint
-# (POST /v1/audio/transcriptions on the web UI port; the Studio proxies it to
+# (POST /v1/audio/transcriptions on the backend port; the Studio proxies it to
 # the model server's active speech-to-text model).
 #
 # Usage:

@@ -26,8 +26,8 @@ class BackendPathTests(unittest.TestCase):
                      "/rag/status", "/rag/inspect", "/rag/search", "/rag/upload", "/rag/reset", "/rag/clear"):
             self.assertTrue(path_allowed(path), path)
 
-    def test_web_ui_and_studio_chat_are_not(self):
-        for path in ("/playground/", "/playground/index.html", "/solutions/", "/showcase",
+    def test_removed_web_ui_routes_are_not(self):
+        for path in ("/favicon.ico", "/playground/", "/playground/index.html", "/solutions/", "/showcase",
                      "/config.js", "/static/newui.js", "/upload", "/stop", "/clear-history",
                      "/upload-to-rag", "/reset-rag", "/clear-rag", "/raghealth", "/board-camera/devices", "/voicesx",
                      "/v1", "/modelsx"):
