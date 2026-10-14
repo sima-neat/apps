@@ -16,6 +16,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <initializer_list>
@@ -48,6 +49,8 @@ struct SourceCaps {
 };
 
 SourceCaps probe_source_caps(const std::string& url) {
+  // Probe over TCP, the transport the application uses.
+  setenv("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp", 1);
   cv::VideoCapture cap(
       url, cv::CAP_ANY,
       {cv::CAP_PROP_OPEN_TIMEOUT_MSEC, 20000, cv::CAP_PROP_READ_TIMEOUT_MSEC, 20000});
