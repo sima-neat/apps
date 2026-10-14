@@ -493,7 +493,14 @@ constexpr int kProbabilityDecimals = 6;
 double round_probability(double value) {
   const double factor = 1e6; // 10^kProbabilityDecimals
   static_assert(kProbabilityDecimals == 6, "factor must match kProbabilityDecimals");
-  return std::round(value * factor) / factor;
+  // nearbyint, not round: round() breaks a tie away from zero while Python's
+  // round() breaks it to even, so the two disagreed on every probability whose
+  // sixth decimal is an exact half. That needs `value * factor` to land on .5
+  // exactly, which only a dyadic value does - 113/128 = 0.8828125 became
+  // 0.882813 here and 0.882812 there, and the reports are compared byte for
+  // byte. nearbyint honours the current rounding mode, which is round-to-nearest
+  // ties-to-even unless someone changes it; nothing here does.
+  return std::nearbyint(value * factor) / factor;
 }
 
 // FNV-1a (64-bit). std::hash is not specified to be stable across builds, and
@@ -1110,7 +1117,16 @@ fs::path fallback_cache_path(const std::string& url, const fs::path& base) {
 fs::path download_fallback_image(const std::string& url, const fs::path& base) {
   const fs::path dest = fallback_cache_path(url, base);
   if (path_exists(dest)) {
-    if (!cv::imread(dest.string(), cv::IMREAD_COLOR).empty())
+    // A throwing decode means the same thing as an empty one: the cache entry is
+    // not usable. Unguarded, it escaped as exit 6 instead of refetching, so a
+    // corrupt cache entry was permanently fatal rather than self-healing.
+    bool usable = false;
+    try {
+      usable = !cv::imread(dest.string(), cv::IMREAD_COLOR).empty();
+    } catch (const cv::Exception&) {
+      usable = false;
+    }
+    if (usable)
       return dest;
     // Truncated or corrupted since it was cached: refetch rather than classify it.
     std::error_code stale;
@@ -1129,7 +1145,18 @@ fs::path download_fallback_image(const std::string& url, const fs::path& base) {
   if (!sima_examples::download_file(url, temporary)) {
     throw InputError("failed to download fallback image: " + url);
   }
-  if (cv::imread(temporary.string(), cv::IMREAD_COLOR).empty()) {
+  // Same translation for a throwing decode, and the temporary is removed on that
+  // path too: letting cv::Exception escape reported exit 6 instead of the
+  // documented input error (3) and left the partial download behind. This is
+  // the default first-run path when io.input is unset, so an HTML error page
+  // served with HTTP 200 by a proxy reaches it.
+  bool decodable = false;
+  try {
+    decodable = !cv::imread(temporary.string(), cv::IMREAD_COLOR).empty();
+  } catch (const cv::Exception&) {
+    decodable = false;
+  }
+  if (!decodable) {
     fs::remove(temporary, ec);
     throw InputError("failed to download fallback image: " + url +
                      ": downloaded file is not a decodable image");
