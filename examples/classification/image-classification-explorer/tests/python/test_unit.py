@@ -1348,6 +1348,61 @@ models:
         assert "not part of a previous report" in capsys.readouterr().err
         assert (out_dir / "notes.txt").read_text() == "customer data"
 
+    @pytest.mark.parametrize("plant", ["nested-file", "nested-dir", "report-json-is-a-dir"])
+    def test_foreign_data_nested_under_a_report_name_is_refused(
+        self, tmp_path, monkeypatch, capsys, plant
+    ):
+        """A whitelisted top-level name is not enough. Publication replaces the
+        whole directory and deletes what it replaced, so data tucked inside
+        thumbnails/ - or a report.json that is really a directory - used to be
+        destroyed while the listing still looked like a previous report."""
+        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
+        img = tmp_path / "a.jpg"
+        _make_image(img)
+        out_dir = tmp_path / "out"
+        config_path = tmp_path / "config.yaml"
+        _write_config(config_path, img, out_dir)
+        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
+        assert main.main() == 0
+        assert (out_dir / main.REPORT_MARKER).is_file()
+
+        if plant == "nested-file":
+            victim = out_dir / "thumbnails" / "notes.txt"
+            victim.write_text("customer data", encoding="utf-8")
+        elif plant == "nested-dir":
+            victim = out_dir / "thumbnails" / "subdir" / "deep.txt"
+            victim.parent.mkdir()
+            victim.write_text("customer data", encoding="utf-8")
+        else:
+            (out_dir / "report.json").unlink()
+            victim = out_dir / "report.json" / "deep.txt"
+            victim.parent.mkdir()
+            victim.write_text("customer data", encoding="utf-8")
+
+        rc = main.main()
+
+        assert rc == 6
+        assert "not part of a previous report" in capsys.readouterr().err
+        assert victim.read_text() == "customer data", "publication deleted nested customer data"
+
+    def test_genuine_thumbnails_are_still_accepted(self, tmp_path, monkeypatch):
+        """The guard above must not reject the application's own output: a second
+        run over the same directory has to keep working."""
+        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
+        img = tmp_path / "a.jpg"
+        _make_image(img)
+        out_dir = tmp_path / "out"
+        config_path = tmp_path / "config.yaml"
+        _write_config(config_path, img, out_dir)
+        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
+
+        assert main.main() == 0
+        thumbs = sorted((out_dir / "thumbnails").iterdir())
+        assert thumbs, "the first run wrote no thumbnail, so this proves nothing"
+        assert all(main.THUMBNAIL_NAME.match(t.name) for t in thumbs), [t.name for t in thumbs]
+        assert main.main() == 0
+        assert (out_dir / "report.json").is_file()
+
     def test_empty_existing_output_dir_is_accepted(self, tmp_path, monkeypatch):
         monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
         img = tmp_path / "a.jpg"

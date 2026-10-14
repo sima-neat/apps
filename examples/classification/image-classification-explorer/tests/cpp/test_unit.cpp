@@ -314,6 +314,36 @@ int main(int argc, char** argv) {
       }
     }
 
+    // A whitelisted top-level name is not enough: publication replaces the whole
+    // directory, so a note left inside thumbnails/ was deleted while the listing
+    // still looked like a previous report.
+    {
+      const auto nested = work / "nested";
+      fs::create_directories(nested / "thumbnails");
+      {
+        std::ofstream(nested / ".image-classification-explorer-report") << "generated\n";
+      }
+      {
+        std::ofstream(nested / "report.json") << "{}\n";
+      }
+      {
+        std::ofstream(nested / "thumbnails" / "notes.txt") << "customer data\n";
+      }
+      write_config(nested);
+      auto nested_refused =
+          spawn_and_wait(binary, {"--config", (work / "config.yaml").string()}, 20000);
+      if (nested_refused.exit_code == 0 ||
+          nested_refused.stderr_text.find("not part of a previous report") == std::string::npos ||
+          !fs::exists(nested / "thumbnails" / "notes.txt")) {
+        std::cerr << "[FAIL] nested foreign file: expected refusal, got exit "
+                  << nested_refused.exit_code << "\nstderr:\n"
+                  << nested_refused.stderr_text << "\n";
+        ++failures;
+      } else {
+        std::cout << "[OK] a foreign file nested under thumbnails/ was refused\n";
+      }
+    }
+
     write_config(work / "report");
     auto ok = spawn_and_wait(binary, {"--config", (work / "config.yaml").string()}, 20000);
     auto second = spawn_and_wait(binary, {"--config", (work / "config.yaml").string()}, 20000);

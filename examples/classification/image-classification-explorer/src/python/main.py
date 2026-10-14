@@ -37,6 +37,10 @@ BUNDLED_LABEL_MAP_REF = "src/common/imagenet_labels.txt"
 # accept exactly the same names instead of diverging on exotic YAML keys.
 PROFILE_NAME_RE = re.compile(r"[A-Za-z0-9_-]+")
 REPORT_ENTRIES = ("report.json", "report.csv", "report.html", "thumbnails", REPORT_MARKER)
+# make_thumbnail names every file it writes stable_digest(path) + ".jpg", and
+# stable_digest is 16 lowercase hex digits, so this matches exactly the set of
+# names a report can legitimately contain under thumbnails/.
+THUMBNAIL_NAME = re.compile(r"[0-9a-f]{16}\.jpg\Z")
 # Both entrypoints compute softmax the same way and narrow the result to
 # float32, so the values agree. Rounding keeps the reports free of digits a
 # float32 probability does not actually carry.
@@ -1119,6 +1123,33 @@ def publish_report(output_dir: Path, results: list[ImageResult], profiles: list[
             raise OSError(f"output_dir {output_dir} exists and is not a directory")
         entries = sorted(p.name for p in output_dir.iterdir())
         foreign = [name for name in entries if name not in REPORT_ENTRIES]
+        # A whitelisted *name* is not enough. The swap below replaces the whole
+        # directory and deletes what it replaced, so a `report.json` that is
+        # really a directory, or a note left inside `thumbnails/`, was destroyed
+        # while the top-level listing still looked like a previous report - the
+        # opposite of what the README promises.
+        #
+        # Checking the types, plus every name under thumbnails/, is exhaustive
+        # rather than a sample: the writers only ever produce regular files at
+        # the top level and <digest>.jpg inside thumbnails/, so after these
+        # checks there is no directory left for foreign data to hide in, and no
+        # recursion is needed.
+        for name in entries:
+            if name in foreign:
+                continue
+            entry = output_dir / name
+            if name == "thumbnails":
+                if not entry.is_dir():
+                    foreign.append(name)
+                    continue
+                for thumb in entry.iterdir():
+                    if not thumb.is_file() or not THUMBNAIL_NAME.match(thumb.name):
+                        foreign.append(f"thumbnails/{thumb.name}")
+            elif not entry.is_file():
+                foreign.append(name)
+        # Sorted so the names the message lists are the same ones, in the same
+        # order, as the C++ entrypoint lists.
+        foreign.sort()
         # The marker has to be a regular file, not merely a name in the listing.
         # A *directory* called REPORT_MARKER would otherwise make a customer
         # directory look application-owned, and the swap below deletes what it

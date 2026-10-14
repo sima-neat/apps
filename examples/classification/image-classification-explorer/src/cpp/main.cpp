@@ -1750,6 +1750,21 @@ void write_html_report(const fs::path& path, const std::vector<ImageResult>& res
 // a `report.html`) can never be swapped away.
 const char* const kReportMarker = ".image-classification-explorer-report";
 
+// make_thumbnail names every file it writes stable_digest(path) + ".jpg", and
+// stable_digest is 16 lowercase hex digits, so this matches exactly the set of
+// names a report can legitimately contain under thumbnails/. Kept in step with
+// THUMBNAIL_NAME in the Python entrypoint.
+bool is_thumbnail_name(const std::string& name) {
+  if (name.size() != 20 || name.compare(16, 4, ".jpg") != 0)
+    return false;
+  for (size_t i = 0; i < 16; ++i) {
+    const char c = name[i];
+    if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')))
+      return false;
+  }
+  return true;
+}
+
 // --- Publication: swapping the report directory into place safely --------------
 // True when a process with this id still exists (it may be another run of this
 // application mid-swap, whose backup must not be touched).
@@ -1787,10 +1802,44 @@ void publish_report(const fs::path& output_dir_arg, const std::vector<ImageResul
       // look application-owned, and the swap below deletes what it replaces,
       // including anything nested under that fake marker. Same test the scratch
       // directories below use.
-      if (name == kReportMarker)
+      if (name == kReportMarker) {
         has_marker = path_is_regular_file(entry.path());
-      else if (kReportEntries.count(name) == 0)
+      } else if (kReportEntries.count(name) == 0) {
         foreign.push_back(name);
+      } else if (name == "thumbnails") {
+        // A whitelisted name is not enough. The swap below replaces the whole
+        // directory and deletes what it replaced, so a note left inside
+        // thumbnails/, or a report.json that is really a directory, was
+        // destroyed while the top-level listing still looked like a previous
+        // report - the opposite of what the README promises. Checking the types
+        // plus every name under thumbnails/ is exhaustive rather than a sample:
+        // the writers only ever produce regular files at the top level and
+        // <digest>.jpg inside thumbnails/, so afterwards no directory is left
+        // for foreign data to hide in and no recursion is needed.
+        if (!path_is_directory(entry.path())) {
+          foreign.push_back(name);
+        } else {
+          std::error_code scan_ec;
+          fs::directory_iterator thumbs(entry.path(), scan_ec);
+          if (scan_ec) {
+            throw std::runtime_error("failed to read " + entry.path().string() + ": " +
+                                     scan_ec.message());
+          }
+          for (; thumbs != fs::directory_iterator();) {
+            const auto& thumb = *thumbs;
+            const std::string thumb_name = thumb.path().filename().string();
+            if (!path_is_regular_file(thumb.path()) || !is_thumbnail_name(thumb_name))
+              foreign.push_back("thumbnails/" + thumb_name);
+            thumbs.increment(scan_ec);
+            if (scan_ec) {
+              throw std::runtime_error("failed to read " + entry.path().string() + ": " +
+                                       scan_ec.message());
+            }
+          }
+        }
+      } else if (!path_is_regular_file(entry.path())) {
+        foreign.push_back(name);
+      }
     }
     if (has_entries && !has_marker) {
       throw std::runtime_error("output_dir " + output_dir.string() +
