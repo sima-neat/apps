@@ -422,6 +422,8 @@ def env_int(name: str, default: int) -> int:
 
 
 def source_caps(url: str) -> tuple[int, int, int]:
+    # Probe over TCP, the transport the application uses.
+    os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
     cap = cv2.VideoCapture(
         url, cv2.CAP_ANY,
         [cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 20000, cv2.CAP_PROP_READ_TIMEOUT_MSEC, 20000],
