@@ -377,10 +377,11 @@ def test_roi_landmark_and_metadata_contract():
     raw_world = np.zeros((39, 3), dtype=np.float32)
     raw_world[0] = [0.1, -0.2, 0.3]
     pose = main.decode_pose(raw, raw_world, (2.0, 0.0, 10.0, 0.0, 3.0, 20.0), box, 0.93, 2)
-    nose, world_nose = pose["keypoints"][0], pose["world_keypoints"][0]
-    assert (nose["x"], nose["y"]) == pytest.approx((18.0, 44.0))
-    assert nose["confidence"] == world_nose["confidence"] == pytest.approx(main.sigmoid(-2.0))
-    assert (world_nose["x"], world_nose["y"], world_nose["z"]) == pytest.approx((0.1, -0.2, 0.3))
+    nose, world_nose = pose["image"][0], pose["world"][0]
+    assert tuple(nose[:2]) == pytest.approx((18.0, 44.0))
+    assert nose[2] == world_nose[3] == pytest.approx(main.sigmoid(-2.0))
+    assert tuple(world_nose[:3]) == pytest.approx((0.1, -0.2, 0.3))
+    assert pose["image"].shape == (33, 3) and pose["world"].shape == (33, 4)
 
     data = main.poses_data([pose], "camera0")
     published = data["poses"][0]
@@ -388,6 +389,14 @@ def test_roi_landmark_and_metadata_contract():
     assert (published["id"], published["presence"]) == ("pose_3", pytest.approx(0.93))
     assert len(published["keypoints"]) == len(published["world_keypoints"]) == 33
     assert published["keypoints"][0]["name"] == published["world_keypoints"][0]["name"] == "nose"
+    assert published["keypoints"][0] == {"name": "nose", "x": 18, "y": 44, "confidence": 0.119}
+    assert published["world_keypoints"][0] == {
+        "name": "nose",
+        "x": 0.1,
+        "y": -0.2,
+        "z": 0.3,
+        "confidence": 0.119,
+    }
 
     auxiliary = main.world_pose_auxiliary_from_overlay(data)
     assert {key: auxiliary[key] for key in ("schema_version", "id", "renderer", "stream_id")} == {
@@ -463,8 +472,8 @@ def pose_sample(x: float, world_x: float, box_x: float = 0.0) -> dict:
         "roi_index": 0,
         "presence": 0.9,
         "box": {**BOX, "x1": box_x, "x2": box_x + 100.0},
-        "keypoints": [{"name": "nose", "x": x, "y": 50.0, "confidence": 0.9}],
-        "world_keypoints": [{"name": "nose", "x": world_x, "y": 0.0, "z": 0.0, "confidence": 0.9}],
+        "image": np.array([[x, 50.0, 0.9]]),
+        "world": np.array([[world_x, 0.0, 0.0, 0.9]]),
     }
 
 
@@ -474,11 +483,12 @@ def test_pose_smoother_blends_matched_2d_and_world_landmarks_per_stream():
     other_stream.filter([pose_sample(90.0, 1.0)])
 
     matched = smoother.filter([pose_sample(54.0, 0.04)])[0]
-    assert matched["keypoints"][0]["x"] == pytest.approx(52.0)
-    assert matched["world_keypoints"][0]["x"] == pytest.approx(0.02)
+    assert matched["image"][0, 0] == pytest.approx(52.0)
+    assert matched["image"][0, 2] == 0.9  # confidence is not smoothed
+    assert matched["world"][0, 0] == pytest.approx(0.02)
     unmatched = smoother.filter([pose_sample(400.0, 1.0, box_x=300.0)])[0]
-    assert unmatched["keypoints"][0]["x"] == 400.0
-    assert other_stream.filter([pose_sample(80.0, 1.0)])[0]["keypoints"][0]["x"] == 85.0
+    assert unmatched["image"][0, 0] == 400.0
+    assert other_stream.filter([pose_sample(80.0, 1.0)])[0]["image"][0, 0] == 85.0
 
 
 def test_keep_latest_replaces_queued_work():
@@ -883,7 +893,7 @@ def test_keypoint_box_and_tracked_boxes():
     def pose(points, presence):
         return {
             "presence": presence,
-            "keypoints": [{"x": x, "y": y} for x, y in points],
+            "image": np.array([[x, y, 1.0] for x, y in points]),
         }
 
     low = pose([(10.0, 50.0), (30.0, 20.0), (25.0, 80.0)], 0.6)

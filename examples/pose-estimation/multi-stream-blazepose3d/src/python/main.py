@@ -160,23 +160,23 @@ class PoseSmoother:
             if match < 0:
                 continue
             used.add(match)
-            for key, coordinates in (("keypoints", "xy"), ("world_keypoints", "xyz")):
-                for point, old in zip(current[key], self.previous[match][key], strict=True):
-                    for axis in coordinates:
-                        point[axis] = old[axis] + self.ALPHA * (point[axis] - old[axis])
+            # Image landmarks hold (x, y, confidence); world landmarks (x, y, z, confidence).
+            for key, axes in (("image", 2), ("world", 3)):
+                old = self.previous[match][key][:, :axes]
+                current[key][:, :axes] = old + self.ALPHA * (current[key][:, :axes] - old)
         self.previous = poses
         return poses
 
 
 def keypoint_box(pose: dict[str, Any]) -> dict[str, Any]:
     """Smallest box around a pose's image landmarks, scored by its presence."""
-    xs = [float(point["x"]) for point in pose["keypoints"]]
-    ys = [float(point["y"]) for point in pose["keypoints"]]
+    low = pose["image"][:, :2].min(axis=0)
+    high = pose["image"][:, :2].max(axis=0)
     return {
-        "x1": min(xs),
-        "y1": min(ys),
-        "x2": max(xs),
-        "y2": max(ys),
+        "x1": float(low[0]),
+        "y1": float(low[1]),
+        "x2": float(high[0]),
+        "y2": float(high[1]),
         "score": float(pose["presence"]),
         "class_id": 0,
     }
@@ -619,6 +619,17 @@ def sigmoid(value: float) -> float:
     return z / (1.0 + z)
 
 
+def sigmoid_array(values):
+    """Numerically stable logistic function over an array."""
+    exp = np.exp(-np.abs(values))
+    return np.where(values >= 0.0, 1.0 / (1.0 + exp), exp / (1.0 + exp))
+
+
+def round_away(values, scale: float = 1.0):
+    """Round half away from zero to 1/scale, as the C++ application does."""
+    return np.sign(values) * np.floor(np.abs(values) * scale + 0.5) / scale
+
+
 def decode_pose(
     raw_landmarks: Any,
     raw_world_landmarks: Any,
@@ -627,35 +638,26 @@ def decode_pose(
     presence: float,
     roi_index: int,
 ) -> dict[str, Any]:
-    values = np.asarray(raw_landmarks, dtype=np.float32).reshape(39, 5)
-    world_values = np.asarray(raw_world_landmarks, dtype=np.float32).reshape(39, 3)
+    """Decode the 33 body landmarks in one array pass. `image` rows are
+    (x, y, confidence) in source pixels; `world` rows are (x, y, z,
+    confidence)."""
+    values = np.asarray(raw_landmarks, dtype=np.float64).reshape(39, 5)[:33]
+    world_values = np.asarray(raw_world_landmarks, dtype=np.float64).reshape(39, 3)[:33]
     m00, m01, m02, m10, m11, m12 = affine
-    keypoints = []
-    for index, raw in enumerate(values[:33]):
-        keypoints.append(
-            {
-                "name": LANDMARK_NAMES[index],
-                "x": float(m00 * raw[0] + m01 * raw[1] + m02),
-                "y": float(m10 * raw[0] + m11 * raw[1] + m12),
-                "confidence": min(sigmoid(float(raw[3])), sigmoid(float(raw[4]))),
-            }
+    confidence = np.minimum(sigmoid_array(values[:, 3]), sigmoid_array(values[:, 4]))
+    image = np.column_stack(
+        (
+            m00 * values[:, 0] + m01 * values[:, 1] + m02,
+            m10 * values[:, 0] + m11 * values[:, 1] + m12,
+            confidence,
         )
-    world_keypoints = [
-        {
-            "name": LANDMARK_NAMES[index],
-            "x": float(raw[0]),
-            "y": float(raw[1]),
-            "z": float(raw[2]),
-            "confidence": keypoints[index]["confidence"],
-        }
-        for index, raw in enumerate(world_values[:33])
-    ]
+    )
     return {
         "roi_index": roi_index,
         "presence": presence,
         "box": box,
-        "keypoints": keypoints,
-        "world_keypoints": world_keypoints,
+        "image": image,
+        "world": np.column_stack((world_values, confidence)),
     }
 
 
@@ -663,12 +665,18 @@ def poses_data(poses: list[dict[str, Any]], stream_id: str) -> dict[str, Any]:
     published = []
     for pose in sorted(poses, key=lambda item: int(item["roi_index"])):
         box = pose["box"]
+        image, world = pose["image"], pose["world"]
+        # Round each array once, then build the named dicts from plain lists.
+        xy = round_away(image[:, :2]).astype(np.int64).tolist()
+        confidence = round_away(image[:, 2], 1000.0).tolist()
+        world_xyz = round_away(world[:, :3], 1_000_000.0).tolist()
+        world_confidence = round_away(world[:, 3], 1000.0).tolist()
         published.append(
             {
                 "id": f"pose_{int(pose['roi_index']) + 1}",
                 "label": "person",
-                "presence": round(float(pose["presence"]), 3),
-                "confidence": round(float(box["score"]), 3),
+                "presence": float(round_away(float(pose["presence"]), 1000.0)),
+                "confidence": float(round_away(float(box["score"]), 1000.0)),
                 "bbox": [
                     round_half_away_from_zero(float(box["x1"])),
                     round_half_away_from_zero(float(box["y1"])),
@@ -680,23 +688,12 @@ def poses_data(poses: list[dict[str, Any]], stream_id: str) -> dict[str, Any]:
                     ),
                 ],
                 "keypoints": [
-                    {
-                        "name": point["name"],
-                        "x": round_half_away_from_zero(float(point["x"])),
-                        "y": round_half_away_from_zero(float(point["y"])),
-                        "confidence": round(float(point["confidence"]), 3),
-                    }
-                    for point in pose["keypoints"]
+                    {"name": name, "x": x, "y": y, "confidence": score}
+                    for name, (x, y), score in zip(LANDMARK_NAMES, xy, confidence)
                 ],
                 "world_keypoints": [
-                    {
-                        "name": point["name"],
-                        "x": round(float(point["x"]), 6),
-                        "y": round(float(point["y"]), 6),
-                        "z": round(float(point["z"]), 6),
-                        "confidence": round(float(point["confidence"]), 3),
-                    }
-                    for point in pose["world_keypoints"]
+                    {"name": name, "x": x, "y": y, "z": z, "confidence": score}
+                    for name, (x, y, z), score in zip(LANDMARK_NAMES, world_xyz, world_confidence)
                 ],
             }
         )
@@ -1628,7 +1625,7 @@ def parse_pose_output(sample, context: PoseInputContext, cfg: AppConfig):
     tensors = tensors_from_sample(sample)
     if len(tensors) != 3:
         raise RuntimeError("BlazePose output must contain three tensors")
-    presence = np.asarray(tensors[1].to_numpy(copy=True), dtype=np.float32).reshape(-1)
+    presence = np.asarray(tensors[1].to_numpy(copy=False), dtype=np.float32).reshape(-1)
     if presence.size != 1:
         raise RuntimeError("BlazePose presence output must contain one float")
     if not math.isfinite(float(presence[0])):
@@ -1636,14 +1633,15 @@ def parse_pose_output(sample, context: PoseInputContext, cfg: AppConfig):
     presence_probability = sigmoid(float(presence[0]))
     if presence_probability < cfg.pose_presence_threshold:
         return None
-    landmarks = np.asarray(tensors[0].to_numpy(copy=True), dtype=np.float32).reshape(-1)
+    landmarks = np.asarray(tensors[0].to_numpy(copy=False), dtype=np.float32).reshape(-1)
     if landmarks.size != 195:
         raise RuntimeError("BlazePose screen-landmark output must contain 195 floats")
     world_landmarks = np.asarray(
-        tensors[2].to_numpy(copy=True), dtype=np.float32
+        tensors[2].to_numpy(copy=False), dtype=np.float32
     ).reshape(-1)
     if world_landmarks.size != 117:
         raise RuntimeError("BlazePose world-landmark output must contain 117 floats")
+    # The views read the pulled sample in place; decode_pose keeps copies.
     # A non-finite landmark would fail integer rounding when the frame is
     # published, so discard only this ROI's pose; the frame still publishes.
     if not (np.isfinite(landmarks).all() and np.isfinite(world_landmarks).all()):
