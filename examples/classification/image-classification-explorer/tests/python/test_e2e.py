@@ -319,6 +319,16 @@ class TestE2E:
         "escaped integer setting",
         "escaped min_probability",
         "quoted and unquoted duplicate key",
+        # Both exit 2 and both name the setting, but Python has arbitrary-size
+        # integers: it parses the sexagesimal value and reports it as out of
+        # 32-bit range ("...: 59999999999999999999940"), while C++ cannot hold
+        # it in a long long and reports "must be an integer, got
+        # 999999999999999999999:00". Matching the text would mean arbitrary
+        # -precision sexagesimal parsing in C++ for a value no configuration
+        # will contain. Neither message misleads, so the exit code is what is
+        # pinned here.
+        "sexagesimal integer overflows long long",
+        "sexagesimal accumulation overflows long long",
     })
 
     FAILURE_CASES = [
@@ -488,6 +498,17 @@ class TestE2E:
         ("label map uses U+2028 as a line break",
          "models:\n  m:\n    path: m.tar.gz\n    label_map: U2028_LABELS\n"
          "    num_classes: 3\n", 2),
+        # YAML 1.1 sexagesimal with a component wider than long long. C++ let
+        # std::stoll throw out of the parser (exit 6) where Python's arbitrary
+        # -size int plus the int32 range check reports a config error (exit 2).
+        ("sexagesimal integer overflows long long",
+         "runtime:\n  timeout_ms: 999999999999999999999:00\n"
+         "models:\n  m:\n    path: m.tar.gz\n", 2),
+        # The accumulation itself overflowed here - signed overflow is
+        # undefined, so this one was UB that happened to land on exit 2.
+        ("sexagesimal accumulation overflows long long",
+         "runtime:\n  timeout_ms: 9223372036854775807:59\n"
+         "models:\n  m:\n    path: m.tar.gz\n", 2),
         ("quoted and unquoted duplicate key",
          'models:\n  foo:\n    path: /nonexistent/m.tar.gz\n    top_k: 0\n'
          '  "foo":\n    path: /nonexistent/m.tar.gz\n',

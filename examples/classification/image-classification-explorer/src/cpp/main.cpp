@@ -100,11 +100,29 @@ std::optional<long long> parse_yaml_int(const std::string& text) {
     };
     if (!all_digits(parts[0]) || parts[0].front() == '0')
       return std::nullopt;
-    long long total = std::stoll(parts[0]);
-    for (std::size_t i = 1; i < parts.size(); ++i) {
-      if (!all_digits(parts[i]) || parts[i].size() > 2 || std::stoll(parts[i]) > 59)
-        return std::nullopt;
-      total = total * 60 + std::stoll(parts[i]);
+    long long total = 0;
+    // Guarded the way the radix path below is: an out-of-range scalar is "not
+    // an integer", which is what config_int reports as a configuration error,
+    // and what PyYAML plus _check_int32 produce on the Python side. Without the
+    // catch, std::stoll on a component wider than long long escaped as exit 6
+    // where Python exits 2.
+    try {
+      total = std::stoll(parts[0]);
+      for (std::size_t i = 1; i < parts.size(); ++i) {
+        if (!all_digits(parts[i]) || parts[i].size() > 2)
+          return std::nullopt;
+        const long long unit = std::stoll(parts[i]);
+        if (unit > 59)
+          return std::nullopt;
+        // Checked before multiplying, not after: signed overflow is undefined,
+        // so `9223372036854775807:59` was not merely wrong, it was UB that
+        // happened to wrap into an out-of-range value.
+        if (total > (std::numeric_limits<long long>::max() - unit) / 60)
+          return std::nullopt;
+        total = total * 60 + unit;
+      }
+    } catch (const std::exception&) {
+      return std::nullopt;
     }
     return negative ? -total : total;
   }
