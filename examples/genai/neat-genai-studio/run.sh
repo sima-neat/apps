@@ -369,6 +369,18 @@ supertonic_fingerprint() {
     grep -E '^SUPERTONIC_(UPSTREAM|SIMA)_HF_REVISION=|^[0-9a-f]{64}  supertonic-3' "${EXAMPLE_DIR}/setup.sh" 2>/dev/null
   } | sha256sum | cut -d' ' -f1
 }
+# Desktop icons and menu entries an earlier setup.sh installed for this
+# checkout. They started the removed web UI through src/common/desktop-launch.sh,
+# so they no longer work.
+old_desktop_entries() {
+  local t
+  for t in "${XDG_DATA_HOME:-${HOME}/.local/share}/applications/neat-genai-studio.desktop" \
+           "${XDG_DESKTOP_DIR:-${HOME}/Desktop}/neat-genai-studio.desktop"; do
+    [[ -f "$t" ]] && grep -qF "${EXAMPLE_DIR}/" "$t" && printf '%s\n' "$t"
+  done
+  return 0
+}
+
 # Remove app-generated data (venvs, generated config, RAG db, downloaded TTS
 # voices, pid, caches, logs). Confirms first unless -y/--yes or CLEAN_YES=1.
 # Downloaded chat/VLM/ASR models under catalog_dir are left intact.
@@ -409,6 +421,8 @@ do_clean() {
     "${PYTHON_DIR}/ui/assets/mms-tts-kor"; do
     [[ -e "$t" ]] && targets+=("$t")
   done
+  # A desktop icon / menu entry an earlier setup.sh installed for this checkout.
+  while IFS= read -r t; do targets+=("$t"); done < <(old_desktop_entries)
   # Downloaded rhasspy .onnx voices (committed .onnx.json configs are kept),
   # __pycache__ dirs, and any *.log files the app produced.
   while IFS= read -r -d '' t; do targets+=("$t"); done \
@@ -633,6 +647,9 @@ case "${1:-run}" in
 esac
 
 banner
+
+# An icon from an earlier setup.sh would start the removed web UI: remove it.
+while IFS= read -r t; do rm -f "$t" && info "Removed an old desktop icon: $t"; done < <(old_desktop_entries)
 
 # First launch: if setup.sh hasn't created the app venv (and local config) yet,
 # run it now so `./run.sh` works out of the box. AUTO_SETUP=0 opts out.
