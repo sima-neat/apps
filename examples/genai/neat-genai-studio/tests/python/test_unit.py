@@ -62,6 +62,8 @@ from rag_chat_suite import (  # noqa: E402,F401
     RagPassageTests,
     RagQuestionTests,
     RagSearchFailedTests,
+    RagServedDatabaseTests,
+    RagServiceIdentityTests,
 )
 from readme_package_suite import (  # noqa: E402,F401
     LauncherPackagePathsTests,
