@@ -242,28 +242,14 @@ def ensure_rag_modules_loaded():
     rag_db_client = RagDbClient()
     return rag_db_client
 
-class RagServiceMismatch(RuntimeError):
-    """The document search service on the RAG port serves another database,
-    e.g. one the CLI started with `/rag db`."""
-
-    def __init__(self, served):
-        self.served = served
-        if served == rag_chat.UNNAMED_DATABASE:
-            what = "does not say which database it serves (an older or a different service)"
-        else:
-            what = f"is serving another database ({served}), probably started from the CLI"
-        super().__init__(f"The document search service on this board {what}. Stop it, then restart the Studio.")
-
-
-def checked_rag_client():
-    """The RAG client, once the service on its port is serving this Studio's
-    database. A service that does not answer is left to the caller's request
-    to report, as before."""
+def studio_rag_client():
+    """(client, other): the RAG client, and the database that the service on
+    its port serves when it is not this Studio's (e.g. one the CLI started with
+    `/rag db`), else None. Callers answer ``other`` with
+    rag_chat.mismatch_message() instead of searching. A service that does not
+    answer is left to the caller's request to report, as before."""
     client = ensure_rag_modules_loaded()
-    other = rag_chat.other_database(client.served_db_path(), RAG_DB_PATH)
-    if other:
-        raise RagServiceMismatch(other)
-    return client
+    return client, rag_chat.other_database(client.served_db_path(), RAG_DB_PATH)
 
 
 def stop_service():
@@ -1327,16 +1313,19 @@ class AppContext:
                     # Nothing to search with (no user text, e.g. only a picture).
                     return jsonify({'error': {'message': 'With neat_rag, the last user message must contain text',
                                               'param': 'messages', 'type': 'invalid_request_error'}}), 400
+                other = None
                 try:
-                    # Only what fits the model's small window is used and reported.
-                    hits = rag_chat.fit_passages(checked_rag_client().search(question, k=rag['k']))
-                except RagServiceMismatch as exc:
-                    return jsonify({'error': {'message': str(exc)}}), 409
+                    client, other = studio_rag_client()
+                    if not other:
+                        # Only what fits the model's small window is used and reported.
+                        hits = rag_chat.fit_passages(client.search(question, k=rag['k']))
                 except Exception as exc:  # noqa: BLE001
                     logging.error(f"RAG search failed: {exc}")
                     from rag.inspect_db import default_db_path
                     message, status = rag_chat.search_failed_reply(os.path.isfile(default_db_path()), rag_service_failed())
                     return jsonify({'error': {'message': message}}), status
+                if other:
+                    return jsonify({'error': {'message': rag_chat.mismatch_message(other)}}), 409
                 payload['messages'] = rag_chat.with_passages(payload['messages'], hits)
                 rag_headers = {'X-RAG-Hits': str(len(hits)),
                                'X-RAG-Sources': rag_chat.sources_header(hits, rag_document_name())}
@@ -1579,15 +1568,18 @@ class AppContext:
             # if we have the query and search_rag flag is on, search the rag database
             if search_rag and self.rag_enabled and len(full_query_str) > 0:
                 # Same answers as the OpenAI-compatible chat route: JSON the page shows.
+                other = None
                 try:
-                    rag = checked_rag_client().search(query_str)
-                except RagServiceMismatch as exc:
-                    return jsonify({'error': str(exc)}), 409
+                    client, other = studio_rag_client()
+                    if not other:
+                        rag = client.search(query_str)
                 except Exception as exc:  # noqa: BLE001
                     logging.error(f"RAG search failed: {exc}")
                     from rag.inspect_db import default_db_path
                     message, status = rag_chat.search_failed_reply(os.path.isfile(default_db_path()), rag_service_failed())
                     return jsonify({'error': message}), status
+                if other:
+                    return jsonify({'error': rag_chat.mismatch_message(other)}), 409
                 rag_used = True
                 rag_hits = len(rag)
                 full_query_str = f"{query_str}\n\nThe context is:\n\n{[entry['content'] for entry in rag]}"
@@ -1645,7 +1637,8 @@ class AppContext:
                 }, 200
 
             try:
-                rag_db_status = checked_rag_client().is_server_up()
+                client, other = studio_rag_client()
+                rag_db_status = not other and client.is_server_up()
             except Exception as e:
                 logging.error(f"Exception checking RAG DB server: {e}")
                 rag_db_status = False
@@ -1671,9 +1664,11 @@ class AppContext:
             db_path = default_db_path()
             mismatch = None
             try:
-                up = checked_rag_client().is_server_up()
-            except RagServiceMismatch as exc:
-                up, mismatch = False, str(exc)
+                client, other = studio_rag_client()
+                if other:
+                    up, mismatch = False, rag_chat.mismatch_message(other)
+                else:
+                    up = client.is_server_up()
             except Exception:  # noqa: BLE001
                 up = False
             exists = os.path.isfile(db_path)
@@ -1705,15 +1700,18 @@ class AppContext:
                 k = max(1, min(rag_chat.MAX_K, int(request.args.get("k", rag_chat.DEFAULT_K))))
             except (TypeError, ValueError):
                 k = rag_chat.DEFAULT_K
+            other = None
             try:
-                hits = checked_rag_client().search(query, k=k)
-            except RagServiceMismatch as exc:
-                return jsonify({"error": str(exc)}), 409
+                client, other = studio_rag_client()
+                if not other:
+                    hits = client.search(query, k=k)
             except Exception as exc:  # noqa: BLE001
                 logging.error(f"RAG search failed: {exc}")
                 from rag.inspect_db import default_db_path
                 message, status = rag_chat.search_failed_reply(os.path.isfile(default_db_path()), rag_service_failed())
                 return jsonify({"error": message}), status
+            if other:
+                return jsonify({"error": rag_chat.mismatch_message(other)}), 409
             source = rag_document_name()
             return jsonify({"results": [dict(rag_chat.passage_source(h, source), content=h.get("content", ""))
                                         for h in hits]})
@@ -1744,13 +1742,14 @@ class AppContext:
                 "error": None,
             }
             try:
-                client = checked_rag_client()
-                data = client.list_documents(limit=limit)
-                result["documents"] = data.get("documents", []) or []
-                result["count"] = data.get("count", len(result["documents"]))
-                result["collection"] = data.get("collection")
-            except RagServiceMismatch as e:
-                result["error"] = str(e)
+                client, other = studio_rag_client()
+                if other:
+                    result["error"] = rag_chat.mismatch_message(other)
+                else:
+                    data = client.list_documents(limit=limit)
+                    result["documents"] = data.get("documents", []) or []
+                    result["count"] = data.get("count", len(result["documents"]))
+                    result["collection"] = data.get("collection")
             except Exception as e:  # noqa: BLE001
                 logging.error(f"RAG inspect error: {e}")
                 result["error"] = "Could not read the RAG database"
