@@ -1703,8 +1703,15 @@ async function startProcessingInternal(textchat = null, waitForTranscription = f
       }
     } catch (error) {
       activeGeneration = false;
+      receivedEndSignal = true;
+      pendingNewGenerationAudio = false;
+      shouldPlayAudio = false;
+      hideAbortButton();
       console.error('Error uploading files:', error);
       showTranscribeTime();
+      // The Studio's JSON error (a stopped document service, another database
+      // on its port, a camera or speech failure), so the chat is not left silent.
+      addChatMessage(error && error.message ? error.message : 'The request failed. Please try again.', false, false);
     }
   };
 

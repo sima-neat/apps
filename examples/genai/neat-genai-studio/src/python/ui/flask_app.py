@@ -1578,7 +1578,16 @@ class AppContext:
 
             # if we have the query and search_rag flag is on, search the rag database
             if search_rag and self.rag_enabled and len(full_query_str) > 0:
-                rag = checked_rag_client().search(query_str)
+                # Same answers as the OpenAI-compatible chat route: JSON the page shows.
+                try:
+                    rag = checked_rag_client().search(query_str)
+                except RagServiceMismatch as exc:
+                    return jsonify({'error': str(exc)}), 409
+                except Exception as exc:  # noqa: BLE001
+                    logging.error(f"RAG search failed: {exc}")
+                    from rag.inspect_db import default_db_path
+                    message, status = rag_chat.search_failed_reply(os.path.isfile(default_db_path()), rag_service_failed())
+                    return jsonify({'error': message}), status
                 rag_used = True
                 rag_hits = len(rag)
                 full_query_str = f"{query_str}\n\nThe context is:\n\n{[entry['content'] for entry in rag]}"

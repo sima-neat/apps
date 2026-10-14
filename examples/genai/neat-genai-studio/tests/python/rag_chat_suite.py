@@ -211,6 +211,17 @@ class RagServedDatabaseTests(unittest.TestCase):
             for call in (".search(", ".is_server_up(", ".list_documents("):
                 self.assertNotIn(target + call, source)
         self.assertGreaterEqual(source.count("checked_rag_client()"), 6)
+        # Each search answers the mismatch as JSON instead of an HTML 500.
+        searches = source.count("checked_rag_client().search(")
+        self.assertEqual(searches, 3)
+        self.assertEqual(source.count("except RagServiceMismatch"), searches + 2)  # + /rag/status, /rag/inspect
+
+    def test_the_standalone_page_shows_a_failed_request_in_the_chat(self):
+        page = (Path(__file__).resolve().parents[2] / "src/python/ui/static/newui.js").read_text(encoding="utf-8")
+        start = page.index("const response = await fetch('/upload', {")
+        handler = page[page.index("} catch (error) {", start):page.index("};", page.index("} catch (error) {", start))]
+        self.assertIn("addChatMessage(", handler)
+        self.assertIn("hideAbortButton()", handler)
 
 
 class RagServiceIdentityTests(unittest.TestCase):
