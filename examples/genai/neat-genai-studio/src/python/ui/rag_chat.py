@@ -226,3 +226,13 @@ def other_database(served: str | None, expected: str) -> str | None:
     if not served:
         return UNNAMED_DATABASE
     return None if Path(served).resolve() == Path(expected).resolve() else served
+
+
+def mismatch_message(served: str) -> str:
+    """What to tell the user when the document search service serves another
+    database (``served``, or UNNAMED_DATABASE)."""
+    if served == UNNAMED_DATABASE:
+        what = "does not say which database it serves (an older or a different service)"
+    else:
+        what = f"is serving another database ({served}), probably started from the CLI"
+    return f"The document search service on this board {what}. Stop it, then restart the Studio."

@@ -205,16 +205,22 @@ class RagServedDatabaseTests(unittest.TestCase):
     def test_a_service_that_does_not_name_its_database_is_refused(self):
         self.assertEqual(rag_chat.other_database("", "/opt/studio/milvus.db"), rag_chat.UNNAMED_DATABASE)
 
-    def test_every_studio_rag_call_goes_through_the_checked_client(self):
+    def test_every_studio_rag_call_checks_the_served_database(self):
         source = (Path(__file__).resolve().parents[2] / "src/python/ui/flask_app.py").read_text(encoding="utf-8")
         for target in ("ensure_rag_modules_loaded()", "rag_db_client"):
             for call in (".search(", ".is_server_up(", ".list_documents("):
                 self.assertNotIn(target + call, source)
-        self.assertGreaterEqual(source.count("checked_rag_client()"), 6)
-        # Each search answers the mismatch as JSON instead of an HTML 500.
-        searches = source.count("checked_rag_client().search(")
-        self.assertEqual(searches, 3)
-        self.assertEqual(source.count("except RagServiceMismatch"), searches + 2)  # + /rag/status, /rag/inspect
+        # chat API, standalone chat, /rag/search, /rag/status, /rag/inspect, health
+        self.assertEqual(source.count("client, other = studio_rag_client()"), 6)
+        # The refusal is built from the path, never from an exception (CodeQL).
+        self.assertEqual(source.count("rag_chat.mismatch_message(other)"), 5)
+        self.assertNotIn("RagServiceMismatch", source)
+
+    def test_the_mismatch_message_names_the_database_and_what_to_do(self):
+        text = rag_chat.mismatch_message("/data/cli/milvus.db")
+        self.assertIn("/data/cli/milvus.db", text)
+        self.assertIn("Stop it, then restart the Studio.", text)
+        self.assertIn("does not say which database", rag_chat.mismatch_message(rag_chat.UNNAMED_DATABASE))
 
     def test_the_standalone_page_shows_a_failed_request_in_the_chat(self):
         page = (Path(__file__).resolve().parents[2] / "src/python/ui/static/newui.js").read_text(encoding="utf-8")
