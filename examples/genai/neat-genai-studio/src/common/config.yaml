@@ -9,9 +9,14 @@ server:                      # Local OpenAI-compatible model server.
 
   models:                    # Models served by the local server.
     catalog_dir: <path-to-models-catalog-dir> # Directory scanned for loadable models.
-    # Only one chat/VLM model is resident at a time: loading a new one clears all
-    # other chat/VLM models. Speech-to-text has its own slot and is unaffected.
-    max_resident_chat_models: 1
+    # Chat/VLM models kept loaded side by side. Past the limit a load is refused
+    # until the request names a loaded model to unload; with 1, loading a new
+    # model replaces the loaded one. How many fit depends on sizes.
+    # Speech-to-text has its own slot and is unaffected.
+    max_resident_chat_models: 2
+    # Accelerator memory the loaded models share, in GiB (16 on a Modalix
+    # DevKit). A load that won't fit beside the loaded models is refused.
+    accelerator_memory_gib: 16
     chat:                    # Chat/VLM models loaded at startup (OPTIONAL).
       # Optional: use an empty list (chat: []) to start with no model resident and
       # load any compatible catalog model on demand (Insight's GenAI tab or the

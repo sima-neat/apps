@@ -3,7 +3,8 @@
 
 Wraps a live ``pyneat.GenAIServer`` so chat/VLM models can be loaded and
 unloaded on the fly (no restart), scans an on-disk catalog of compatible
-models, keeps a bounded set resident in RAM (LRU eviction), and can download
+models, keeps up to ``max_resident_chat_models`` chat/VLM models resident at
+once (past that, a load names which resident model to unload), and can download
 additional compatible models from the Hugging Face Hub when the board is
 online.
 
@@ -11,7 +12,7 @@ pyneat's ``add_model`` / ``remove_model`` are thread-safe and may be called
 after ``server.start()``; this class serializes catalog mutations under a lock.
 ASR (speech-to-text) models get their own slot: exactly one is resident at a
 time and switching to another evicts the previous one, so an ASR switch never
-disturbs the resident chat/VLM model (and vice versa).
+disturbs the resident chat/VLM models (and vice versa).
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ import wave
 from pathlib import Path
 
 from shared.chat_template import repair_chat_template_files
+from shared.chat_limits import context_window_from_elfs
 from shared.config import (HubConfig, classify_model_dir, model_dir_complete,
                            model_dir_supported)
 
@@ -113,6 +115,44 @@ def _is_mla_failure(detail: str) -> bool:
     return any(marker in text for marker in _MLA_FAILURE_MARKERS)
 
 
+# The accelerator memory the loaded models share: 16 GiB on a Modalix DevKit
+# (server.models.accelerator_memory_gib sets it for other boards).
+ACCELERATOR_BYTES = 16 * 2**30
+
+
+class ModelDoesNotFit(ValueError):
+    """A load would not fit in accelerator memory beside the models that stay
+    loaded. Carries the loaded models the caller can choose to unload, largest
+    first, so the client can offer that choice instead of attempting a load the
+    accelerator refuses (which does not always hand its memory back)."""
+
+    def __init__(self, name: str, need: int, free: int, resident: list):
+        self.name = name
+        self.need = need
+        self.free = max(0, free)
+        self.resident = list(resident)
+        super().__init__(
+            f"'{name}' needs about {need / 1e9:.1f} GB of accelerator memory and about "
+            f"{self.free / 1e9:.1f} GB is free beside the loaded models. Unload one of "
+            f"them first ({', '.join(self.resident) or 'none loaded'}).")
+
+
+class ResidentLimitReached(ValueError):
+    """A load would exceed the resident limit and the caller did not say which
+    resident chat/VLM model to unload. Carries the choice the caller must make."""
+
+    def __init__(self, name: str, resident: list, max_resident: int, needed: int):
+        self.name = name
+        self.resident = list(resident)
+        self.max_resident = max_resident
+        self.needed = needed
+        super().__init__(
+            f"Loading '{name}' would exceed the limit of {max_resident} loaded "
+            f"chat models. Choose {needed} of the loaded models to unload "
+            f"({', '.join(self.resident)})."
+        )
+
+
 class ModelManager:
     """Loads/unloads models on a running GenAIServer and tracks the catalog."""
 
@@ -130,8 +170,10 @@ class ModelManager:
         asr_warmup: bool = True,
         switch_settle_s: float = 0.6,
         log_tap=None,
+        accelerator_bytes: int | None = None,
     ) -> None:
         self._server = server
+        self._accelerator_bytes = int(accelerator_bytes or ACCELERATOR_BYTES)
         self._catalog_dir = Path(catalog_dir) if catalog_dir else None
         self._max_resident = max(1, int(max_resident_chat_models))
         # What config pins at startup (immutable) vs what serves transcriptions
@@ -278,6 +320,14 @@ class ModelManager:
                 "activeAsr": (info.get("type") == "asr"
                               and info["name"] == active_asr),
                 "sizeBytes": self._size_of(path),
+                # Accelerator memory it takes (its ELF stages) and the tokens it
+                # can read at once, fixed when it was compiled; past that window
+                # the runtime answers with an empty reply.
+                "acceleratorBytes": self._elf_bytes(path),
+                "contextTokens": self._context_tokens(path),
+                # The model's tokenizer, so the Studio can count a request's
+                # tokens exactly when it runs on this machine.
+                "tokenizerPath": self._tokenizer_path(path),
                 # How long this model is expected to take to load, so the client
                 # can run its own countdown. add_model() does the bulk MLA load
                 # in native code without releasing the GIL, which freezes this
@@ -351,6 +401,15 @@ class ModelManager:
                 if name not in asr and name not in self._resident:
                     self._resident.append(name)
 
+    def resident(self) -> list[str]:
+        """Resident chat/VLM models, most recently used first."""
+        with self._lock:
+            return list(self._resident)
+
+    @property
+    def max_resident(self) -> int:
+        return self._max_resident
+
     def touch(self, name: str) -> None:
         """Mark a resident model most-recently-used."""
         with self._lock:
@@ -360,16 +419,32 @@ class ModelManager:
 
     # -- load / unload ---------------------------------------------------------
 
-    def load(self, name: str) -> dict:
-        """Load a model, clearing every other chat/VLM model first.
+    def load(self, name: str, unload: list | None = None) -> dict:
+        """Load a model, unloading the resident chat/VLM models named in
+        ``unload`` first.
 
-        Only one chat/VLM model is kept resident at a time. Switching evicts the
-        others cleanly (cancel their in-flight streams, then unload, then wait so
-        the MLA memory is actually returned before the new model loads), then
-        warms the new model synchronously so an MLA load failure is caught here
-        and surfaced during the load rather than on the user's first chat.
+        Up to ``max_resident_chat_models`` chat/VLM models stay resident side by
+        side. With the default limit of one every load is a switch and replaces
+        the resident model. Above one, a load that would exceed the limit is
+        refused with ``ResidentLimitReached`` unless ``unload`` names enough
+        resident models to make room: nothing is evicted the caller did not
+        choose, because other clients may be using it through the OpenAI API.
+        ``unload`` may also free room for a model that did not fit in
+        accelerator memory beside the others.
+
+        Eviction is clean (cancel the victim's in-flight streams, then unload,
+        then wait so the MLA memory is actually returned before the new model
+        loads), and the new model is warmed synchronously so an MLA load failure
+        is caught here and surfaced during the load rather than on the user's
+        first chat. Loading a model that is already resident only marks it most
+        recently used.
         """
         name = (name or "").strip()
+        if isinstance(unload, str):
+            unload = [unload]
+        if unload is not None and not (isinstance(unload, list) and all(isinstance(v, str) for v in unload)):
+            raise ValueError("unload must be a model name or a list of model names")
+        unload = [v.strip() for v in (unload or []) if v.strip()]
         with self._op_lock:
             if name not in self._catalog:
                 self.scan_catalog()
@@ -443,12 +518,31 @@ class ModelManager:
                 pass
 
             # ASR models have their own slot: switching evicts the previous ASR
-            # and leaves the resident chat/VLM model alone (and vice versa).
+            # and leaves the resident chat/VLM models alone (and vice versa).
+            # Chat/VLM models evict only what the caller chose, except that a
+            # limit of one keeps the plain "loading replaces the model" switch.
             if is_asr:
                 victims = [v for v in self._loaded_asr_names() if v != name]
             else:
                 with self._lock:
-                    victims = [v for v in self._resident if v != name]
+                    others = [v for v in self._resident if v != name]
+                unknown = [v for v in unload if v not in others]
+                if unknown:
+                    raise ValueError(
+                        f"Cannot unload {', '.join(unknown)}: not a loaded chat model")
+                if self._max_resident == 1:
+                    victims = others
+                else:
+                    victims = [v for v in others if v in unload]
+                    needed = len(others) - len(victims) - (self._max_resident - 1)
+                    if needed > 0:
+                        raise ResidentLimitReached(
+                            name, [v for v in others if v not in victims],
+                            self._max_resident, needed)
+
+            # Memory full: refuse up front, naming what to unload, rather than
+            # attempting a load the accelerator will refuse.
+            self._check_fits(name, path, victims)
 
             size_bytes = self._size_of(path)
             # Estimate and learn against the ELF bytes actually transferred, so
@@ -474,7 +568,7 @@ class ModelManager:
                 + (f", est {self._loading['estTotalS']:.0f}s" if self._loading.get("estTotalS") else "")
             )
             try:
-                # Clear every other chat/VLM model. _stop_model_streams (an HTTP
+                # Evict the victims. _stop_model_streams (an HTTP
                 # /stop) and remove_model (which triggers the outgoing model's RAII
                 # free of MLA memory) can each block for seconds — do them WITHOUT
                 # holding _lock so status polls stay responsive during the switch.
@@ -488,6 +582,11 @@ class ModelManager:
                         if not self._server.remove_model(victim):
                             raise RuntimeError("the runtime reported it was not removed")
                         evicted.append(victim)
+                        # Recorded at once: if a later victim fails, the ones
+                        # already gone must not stay listed as loaded.
+                        if not is_asr:
+                            with self._lock:
+                                self._resident = [v for v in self._resident if v != victim]
                     except Exception as exc:
                         # Whichever slot: if the outgoing model will not free,
                         # adding the replacement leaves two resident (which can
@@ -506,9 +605,10 @@ class ModelManager:
                         # transcription until the replacement is registered.
                         self._active_asr = None
                     else:
-                        self._resident = []
-                # Let the free complete before loading the replacement, so the
-                # old and new model are never briefly co-resident.
+                        self._resident = [v for v in self._resident
+                                          if v not in evicted]
+                # Let the free complete before loading the replacement, so an
+                # evicted model and its replacement are never briefly co-resident.
                 if evicted and self._switch_settle_s:
                     time.sleep(self._switch_settle_s)
 
@@ -531,7 +631,8 @@ class ModelManager:
                     if is_asr:
                         self._active_asr = served
                     else:
-                        self._resident = [served]
+                        self._resident = [served] + [
+                            v for v in self._resident if v != served]
 
                 # add_model only registers; the real MLA load is deferred to first
                 # inference. Warm synchronously so a load failure is catchable and
@@ -588,15 +689,17 @@ class ModelManager:
                             "cold_start": True, "load_seconds": round(time.monotonic() - started, 1)}
 
                 if _is_mla_failure(detail):
-                    return self._handle_mla_failure(name, detail)
+                    return self._handle_mla_failure(served, detail)
 
                 # Non-MLA warm failure: roll back so manager state stays consistent.
+                # Only the new model is removed; the others are still resident.
                 try:
-                    self._server.remove_model(name)
+                    self._server.remove_model(served)
                 except Exception:
                     pass
                 with self._lock:
-                    self._resident = []
+                    if served in self._resident:
+                        self._resident.remove(served)
                 self._record_error(name, detail, kind="load")
                 raise RuntimeError(f"Model '{name}' failed to load: {detail}")
             finally:
@@ -606,7 +709,7 @@ class ModelManager:
         """Make ``name`` the ASR model that serves transcriptions.
 
         Only one ASR model is resident at a time, so this evicts the previous
-        one. The resident chat/VLM model is untouched.
+        one. The resident chat/VLM models are untouched.
         """
         name = (name or "").strip()
         if not name:
@@ -643,6 +746,38 @@ class ModelManager:
             return "size unknown"
         gb = size_bytes / 1e9
         return f"{gb:.1f} GB" if gb >= 1 else f"{size_bytes / 1e6:.0f} MB"
+
+    def _context_tokens(self, path) -> int | None:
+        if not path:
+            return None
+        try:
+            return context_window_from_elfs(f.name for f in Path(path).glob("elf_files/*.elf"))
+        except OSError:
+            return None
+
+    @staticmethod
+    def _tokenizer_path(path) -> str | None:
+        tokenizer = Path(path) / "devkit" / "tokenizer.json" if path else None
+        return str(tokenizer) if tokenizer and tokenizer.is_file() else None
+
+    def _check_fits(self, name: str, path, victims: list) -> None:
+        """Refuse a load the accelerator memory can't hold beside the models
+        that stay loaded. Sizes are each model's ELF stages, what the runtime
+        transfers; a model of unknown size is let through."""
+        need = self._elf_bytes(path)
+        if not need:
+            return
+        staying = [n for n in self._server_model_names() if n != name and n not in victims]
+        held = 0
+        for other in staying:
+            other_path = self.resolved_model_path(other)
+            held += (self._elf_bytes(other_path) or 0) if other_path else 0
+        if held + need <= self._accelerator_bytes:
+            return
+        with self._lock:
+            chat = [n for n in self._resident if n in staying]
+        chat.sort(key=lambda n: self._elf_bytes(self.resolved_model_path(n)) or 0, reverse=True)
+        raise ModelDoesNotFit(name, need, self._accelerator_bytes - held, chat)
 
     def _elf_bytes(self, path) -> int | None:
         """Total size of the ELF stages — the bytes the accelerator actually
@@ -1304,15 +1439,23 @@ class ModelManager:
             pass
         with self._lock:
             if name in self._resident:
-                self._resident = []
+                self._resident.remove(name)
             if name == self._active_asr:
                 self._active_asr = None
+            others = [v for v in self._resident if v != name]
+        # With other chat models still resident the likeliest cause is that the
+        # new one does not fit beside them, and unloading one is the cheaper fix.
+        co_resident = (
+            f"It may not fit beside the other loaded models ({', '.join(others)}); "
+            "unload one of them and try again. "
+            if others else ""
+        )
         raise RuntimeError(
             f"Model '{name}' could not be loaded: the accelerator (MLA) reported "
-            "an error. Accelerator memory is not always reclaimed when models are "
-            "switched, so this can follow several switches even when the model "
-            "fits on its own. Restart the Studio to free the accelerator, then "
-            "load it again."
+            f"an error. {co_resident}Accelerator memory is not always reclaimed "
+            "when models are switched, so this can follow several switches even "
+            "when the model fits on its own. Restart the Studio to free the "
+            "accelerator, then load it again."
         )
 
     # -- status ----------------------------------------------------------------
@@ -1349,6 +1492,7 @@ class ModelManager:
             "catalog": self.catalog(),
             "loaded": self._server_model_names(),
             "maxResident": self._max_resident,
+            "resident": self.resident(),
             # The ASR model serving transcriptions now, and the one a restart
             # re-selects from config (they differ after a runtime switch).
             "asrModel": self._active_asr,
