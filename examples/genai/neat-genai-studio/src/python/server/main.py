@@ -182,6 +182,7 @@ def main() -> int:
             server,
             catalog_dir=cfg.catalog_dir,
             max_resident_chat_models=cfg.max_resident_chat_models,
+            accelerator_bytes=int(cfg.accelerator_memory_gib * 2**30),
             # The runtime may serve the model under a different name than the
             # configured one; the manager must track what is actually loaded, or
             # it reports no active ASR and a later switch fails to evict it.
