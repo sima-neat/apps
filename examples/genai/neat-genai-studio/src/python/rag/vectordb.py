@@ -363,8 +363,14 @@ def validate_database(db_path: Union[str, Path], timeout: int = 120) -> None:
         raise ValueError("Uploaded file is not a valid RAG database")
 
 
-def wait_for_service(proc: subprocess.Popen, timeout: int = 35) -> None:
-    """Wait until the worker has initialized its database and serves HTTP."""
+def wait_for_service(proc: subprocess.Popen, timeout: int = 35, db_path: Optional[str] = None) -> None:
+    """Wait until this worker (``proc``) serves ``db_path`` (default: the
+    database the worker opens) over HTTP. Another service answering on the
+    port, such as one the CLI started with `/rag db`, does not count: the wait
+    goes on until this worker serves, exits (it could not take the port), or
+    the time runs out, so a document update is never committed on a service
+    that isn't the Studio's."""
+    expected = Path(db_path or os.environ.get("VECTOR_DB_PATH", RAG_DB_PATH)).resolve()
     deadline = time.monotonic() + timeout
     port = int(os.environ.get("PORT", DEFAULT_VDB_PORT))
     url = f"http://127.0.0.1:{port}/"
@@ -374,10 +380,14 @@ def wait_for_service(proc: subprocess.Popen, timeout: int = 35) -> None:
         try:
             response = requests.get(url, timeout=1)
             response.raise_for_status()
+            served = served_database(response.json())
+        except (requests.RequestException, ValueError):
+            served = None
+        if served and Path(served).resolve() == expected and proc.poll() is None:
             return
-        except requests.RequestException:
-            time.sleep(0.5)
-    raise TimeoutError("RAG database service did not become ready")
+        time.sleep(0.5)
+    raise TimeoutError("RAG database service did not become ready "
+                       "(is another document service using its port?)")
 
 if __name__ == "__main__":
     import argparse

@@ -251,6 +251,75 @@ class RagServiceIdentityTests(unittest.TestCase):
             self.assertEqual(self.served(reply), "", reply)
 
 
+class RagServiceWaitTests(unittest.TestCase):
+    """vectordb.wait_for_service(): a document update is committed only once
+    the Studio's own worker serves its database, never on another service that
+    answers on the port (e.g. the CLI's /rag db)."""
+
+    @classmethod
+    def setUpClass(cls):
+        import ast
+        from typing import Any, Optional
+        path = Path(__file__).resolve().parents[2] / "src/python/rag/vectordb.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        fns = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in ("served_database", "wait_for_service")]
+        cls.source = ast.Module(body=fns, type_ignores=[])
+        cls.path = str(path)
+        cls.Any, cls.Optional = Any, Optional
+
+    def wait(self, replies, exits_at=None, timeout=5):
+        import os
+        import types
+        clock = {"t": 0.0}
+        calls = {"n": 0}
+
+        class Resp:
+            def __init__(self, body): self.body = body
+            def raise_for_status(self): pass
+            def json(self): return self.body
+
+        class RequestException(Exception):
+            pass
+
+        def get(url, timeout):
+            calls["n"] += 1
+            reply = replies[min(calls["n"] - 1, len(replies) - 1)]
+            if reply is None:
+                raise RequestException("refused")
+            return Resp(reply)
+
+        proc = types.SimpleNamespace(poll=lambda: 1 if exits_at is not None and calls["n"] >= exits_at else None)
+        namespace = {
+            "Any": self.Any, "Optional": self.Optional, "Path": Path, "os": os,
+            "RAG_DB_PATH": "/studio/milvus.db", "DEFAULT_VDB_PORT": 9100,
+            "requests": types.SimpleNamespace(get=get, RequestException=RequestException),
+            "time": types.SimpleNamespace(monotonic=lambda: clock["t"],
+                                          sleep=lambda s: clock.__setitem__("t", clock["t"] + s)),
+        }
+        exec(compile(self.source, self.path, "exec"), namespace)
+        namespace["wait_for_service"](proc, timeout=timeout, db_path="/studio/milvus.db")
+        return calls["n"]
+
+    def test_ready_once_the_studios_database_is_served(self):
+        mine = {"service": "rag-vectordb", "db_path": "/studio/milvus.db"}
+        loading = {"service": "rag-vectordb", "db_path": None}
+        self.assertEqual(self.wait([None, loading, mine]), 3)
+
+    def test_another_service_on_the_port_is_not_ready(self):
+        other = {"service": "rag-vectordb", "db_path": "/data/cli/milvus.db"}
+        with self.assertRaises(TimeoutError):
+            self.wait([other])
+
+    def test_a_worker_that_exits_fails_even_while_another_service_answers(self):
+        other = {"service": "rag-vectordb", "db_path": "/data/cli/milvus.db"}
+        with self.assertRaisesRegex(RuntimeError, "exited during startup"):
+            self.wait([other], exits_at=2)
+
+    def test_an_unnamed_service_is_not_ready(self):
+        with self.assertRaises(TimeoutError):
+            self.wait([{"service": "something-else"}])
+
+
 class RagEventLoopTests(unittest.TestCase):
     """Building a database on a Flask worker thread (upload, reset) needs an
     event loop there; worker threads have none by default."""
