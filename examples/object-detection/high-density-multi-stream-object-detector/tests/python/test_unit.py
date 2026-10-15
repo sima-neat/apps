@@ -1318,3 +1318,53 @@ def test_measurement_excludes_warmup_and_failed_sends():
     assert measurement.observe(0, 103, True, False, 7.0)
     assert measurement.summary() == dict(frames=3, elapsed_s=4.0, aggregate_fps=0.75,
                                         per_stream_frames=[2, 1], per_stream_send_failures=[0, 1])
+
+
+class TestQualificationOptions:
+    @pytest.fixture(autouse=True)
+    def clean_environment(self, monkeypatch):
+        import os
+        for key in tuple(os.environ):
+            if key.startswith("SIMANEAT_APPS_TEST_HD_"):
+                monkeypatch.delenv(key)
+        monkeypatch.syspath_prepend(str(Path(__file__).parent))
+
+    def test_defaults_match_registered_16_stream_case(self):
+        from high_density_qualification import qualification_options
+        assert qualification_options() == (16, 30, 5000, "config.yaml", {})
+
+    def test_density_options_preserve_explicit_counts(self, monkeypatch):
+        from high_density_qualification import qualification_options
+        for key, value in {"STREAMS": "80", "SOURCE_FPS": "10", "MEASURE_FRAMES": "24000",
+                           "PROFILE": "config-48x720p10fps.yaml", "DECODER_BUFFERS": "3",
+                           "INPUT_BUFFERS": "2"}.items():
+            monkeypatch.setenv("SIMANEAT_APPS_TEST_HD_" + key, value)
+        assert qualification_options() == (80, 10, 24000, "config-48x720p10fps.yaml",
+                                            {"decoder_buffers": 3, "decoder_input_buffers": 2})
+
+    @pytest.mark.parametrize("key,value", [("STREAMS", "0"), ("STREAMS", "81"),
+        ("SOURCE_FPS", "0"), ("MEASURE_FRAMES", "15"), ("DECODER_BUFFERS", "0"),
+        ("INPUT_BUFFERS", "-1"), ("STREAMS", "48x"), ("PROFILE", "missing.yaml")])
+    def test_invalid_options_fail_instead_of_falling_back(self, monkeypatch, key, value):
+        from high_density_qualification import qualification_options
+        monkeypatch.setenv("SIMANEAT_APPS_TEST_HD_" + key, value)
+        with pytest.raises(ValueError):
+            qualification_options()
+
+
+@pytest.mark.parametrize("key,value,diagnostic", [
+    ("codec", "mjpeg", "input.codec"),
+    ("codec", "av1", "input.codec"),
+    ("decoder_buffers", "0", "input.decoder_buffers"),
+    ("decoder_buffers", "-1", "input.decoder_buffers"),
+    ("decoder_input_buffers", "0", "input.decoder_input_buffers"),
+    ("decoder_input_buffers", "-1", "input.decoder_input_buffers"),
+])
+def test_decoder_invalid_config_cli(tmp_path, key, value, diagnostic):
+    config = write_config(tmp_path, ["rtsp://127.0.0.1:8554/source"],
+                          input_extra=f"{key}: {value}")
+    result = subprocess.run([sys.executable, str(MAIN_PY), "--config", str(config),
+                             "--validate-config-only"], capture_output=True, text=True,
+                            timeout=20)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert diagnostic in result.stderr

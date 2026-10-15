@@ -454,6 +454,26 @@ bool test_validate_config_only_accepts_decoder_tuning(const std::string& binary)
   return ok;
 }
 
+bool test_validate_config_only_rejects_invalid_decoder_settings(const std::string& binary) {
+  bool ok = true;
+  for (const auto& setting : {std::make_pair("codec", "mjpeg"), std::make_pair("codec", "av1"),
+                              std::make_pair("decoder_buffers", "0"),
+                              std::make_pair("decoder_buffers", "-1"),
+                              std::make_pair("decoder_input_buffers", "0"),
+                              std::make_pair("decoder_input_buffers", "-1")}) {
+    const auto config_path = write_config("invalid_decoder_setting", model_header() +
+        "streams:\n" + stream_entries(1) + "input:\n  " + setting.first + ": " + setting.second +
+        "\ninference:\n  workers: 1\noutput:\n  insight:\n    host: 127.0.0.1\n");
+    const auto result = spawn_and_wait(binary,
+        {"--config", config_path.string(), "--validate-config-only"}, 20000);
+    ok &= expect_true(result.exit_code == 1, "invalid decoder setting is rejected");
+    ok &= expect_contains(result.stderr_text, std::string("input.") + setting.first,
+                           "error identifies invalid decoder setting");
+    remove_dir(config_path.parent_path().string());
+  }
+  return ok;
+}
+
 bool test_validate_config_only_rejects_too_many_streams(const std::string& binary) {
   const fs::path config_path =
       write_config("test_validate_config_only_rejects_too_many_streams", valid_config(81, 1));
@@ -854,6 +874,7 @@ int main(int argc, char** argv) {
   ok &= test_validate_config_only_accepts_yolov8_decode_type(binary);
   ok &= test_validate_config_only_accepts_input_caps(binary);
   ok &= test_validate_config_only_accepts_decoder_tuning(binary);
+  ok &= test_validate_config_only_rejects_invalid_decoder_settings(binary);
   ok &= test_validate_config_only_rejects_too_many_streams(binary);
   ok &= test_validate_config_only_rejects_insight_visible_limit_above_stream_count(binary);
   ok &= test_validate_config_only_rejects_invalid_worker_count(binary);
