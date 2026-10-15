@@ -124,6 +124,7 @@ only to change:
 
 - `server.models.catalog_dir`: the directory scanned for models (default `/media/nvme/llima/models`).
 - `server.models.chat`: chat or vision-language models to load at startup (none by default).
+- `server.models.max_resident_chat_models`: how many chat or vision-language models stay loaded at once (default `2`; see [Keep several models loaded](#keep-several-models-loaded)).
 - `server.models.asr`: the speech-to-text model active at startup. Models from Hugging Face accounts other than `simaai` are named `<org>@<name>`, for example `florianvoss@whisper-small-a16w8-layered-encoder`.
 - `server.hub.allow_download`: whether models may be downloaded from Hugging Face.
 - `app.request.max_tokens`: the default response length for chat requests that do not set `max_tokens`.
@@ -241,12 +242,45 @@ the speech routes. The other scripts there (`speech.sh`, `transcriptions.sh`,
 full base URL (`http://…` when `app.web.https` is false) or `STUDIO_URL`.
 
 ### Models
-Only one chat/VLM model is resident at a time: `POST /models/load` loads a
-catalog model and unloads the other chat/VLM models, after cancelling the
-outgoing model's generation and waiting for its memory to be released, then
-warms it. If a switch hits an accelerator error, the failed registration is
-rolled back and the error reported. `GET /models/logs/stream` streams the load
-progress as server-sent events.
+`POST /models/load` loads a catalog model and warms it. `GET /models/logs/stream`
+streams the load progress as server-sent events. If a load hits an accelerator
+error, only the new model's registration is rolled back; the loaded models stay,
+and the error is reported.
+
+#### Keep several models loaded
+Up to `server.models.max_resident_chat_models` chat/VLM models stay loaded side
+by side (default `2`; set `MAX_RESIDENT_CHAT_MODELS` before `setup.sh` to change
+it), for example to compare them. Each loaded model answers on
+`/v1/chat/completions` under its own name, and clients can use them at the same
+time. With `1`, loading a model replaces the loaded one.
+
+Past the limit, the Studio never unloads a model on its own, because another
+client may be using it. The load is refused with `409` and the loaded models,
+and it succeeds once the request names the ones to unload:
+
+```bash
+curl -sk -X POST $B/models/load -H 'Content-Type: application/json' \
+  -d '{"name":"<catalog-model-name>","unload":["<loaded-model-name>"]}'
+```
+
+`GET /models/status` lists the loaded models (`resident`, most recently used
+first) and the limit (`maxResident`). Each catalog entry reports the
+accelerator memory the model takes (`acceleratorBytes`), the tokens it reads at
+once (`contextTokens`), and its tokenizer (`tokenizerPath`).
+
+#### Limits and what the Studio does at them
+The board has fixed limits. The Studio checks them before it asks the board to
+do something it can't, and answers with a reason instead of failing silently.
+
+| Situation | What the Studio does |
+| --- | --- |
+| **More models than the limit** | Refused before anything changes (`409`, `"code": "resident_limit"`, with `resident` and how many to unload in `needed`). |
+| **Accelerator memory full**: a model that won't fit beside the loaded ones | Refused before anything is loaded or unloaded (`409`, `"code": "no_room"`, with `needBytes`, `freeBytes` and the loaded models). The budget is `server.models.accelerator_memory_gib` (16 on a Modalix DevKit). |
+| **A load fails anyway** (memory not handed back by earlier unloads) | Only the new model is rolled back; the others stay loaded. Restart the Studio to free the accelerator. |
+| **Storage full**: a download bigger than the free space | Refused before it starts, keeping 1 GB free for the board. A disk that fills during a download is reported as such. |
+| **Context full**: a conversation longer than the model reads at once | The oldest turns are left out so the model still answers, and `X-Context-Dropped` says how many (`X-Context-Window` gives the window). Tokens are counted with the model's own tokenizer when the Studio runs on the same board as the model server, and estimated otherwise. |
+| **One message longer than the window** | Refused with the reason instead of an empty reply (`413`, `"code": "context_full"`). |
+| **Accelerator busy** (Platform 3.0: `rc=-11`, kernel log `no free bank`, when several models run at once) | Retried once automatically when no text had come back yet; otherwise the error is passed on. |
 
 Speech-to-text has its own slot. `POST /models/asr` makes another ASR model
 active (evicting the previous one) without touching the chat model. The switch
