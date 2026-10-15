@@ -48,6 +48,7 @@ from asr_switching_suite import (  # noqa: E402
 )
 from hub_security_suite import HubPathSecurityTests  # noqa: E402,F401
 from asr_metadata_suite import AsrMetadataTests  # noqa: E402,F401
+from board_camera_suite import ResolveCameraNodeTests  # noqa: E402,F401
 from talk_controller_suite import SupertonicRetryTests  # noqa: E402,F401
 from rag_chat_suite import (  # noqa: E402,F401
     ChatRequestShapeTests,
