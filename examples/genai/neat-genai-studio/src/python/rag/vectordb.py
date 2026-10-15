@@ -254,6 +254,9 @@ def index_endpoint():
         "message": "This is the RAG VectorDB API, not the Multimodal Assistant UI.",
         "search": "/search?query=<text>&k=3&min_score=-1",
         "db_path": ragdb.db_path if ragdb else None,
+        # Which worker answered: a Studio waiting for the worker it started
+        # compares this with that process.
+        "pid": os.getpid(),
     })
 
 
@@ -363,8 +366,15 @@ def validate_database(db_path: Union[str, Path], timeout: int = 120) -> None:
         raise ValueError("Uploaded file is not a valid RAG database")
 
 
-def wait_for_service(proc: subprocess.Popen, timeout: int = 35) -> None:
-    """Wait until the worker has initialized its database and serves HTTP."""
+def wait_for_service(proc: subprocess.Popen, timeout: int = 35, db_path: Optional[str] = None) -> None:
+    """Wait until this worker (``proc``) serves ``db_path`` (default: the
+    database the worker opens) over HTTP. Another service answering on the
+    port does not count, even one serving the same file (the CLI's `/rag db`,
+    or a worker left over from an earlier Studio): the answer must come from
+    ``proc`` itself (its ``pid``). The wait goes on until this worker serves,
+    exits (it could not take the port), or the time runs out, so a document
+    update is never committed on a service that isn't the one just started."""
+    expected = Path(db_path or os.environ.get("VECTOR_DB_PATH", RAG_DB_PATH)).resolve()
     deadline = time.monotonic() + timeout
     port = int(os.environ.get("PORT", DEFAULT_VDB_PORT))
     url = f"http://127.0.0.1:{port}/"
@@ -374,10 +384,16 @@ def wait_for_service(proc: subprocess.Popen, timeout: int = 35) -> None:
         try:
             response = requests.get(url, timeout=1)
             response.raise_for_status()
+            info = response.json()
+            served = served_database(info)
+        except (requests.RequestException, ValueError):
+            info, served = None, None
+        answered_by_proc = isinstance(info, dict) and info.get("pid") == proc.pid
+        if answered_by_proc and served and Path(served).resolve() == expected and proc.poll() is None:
             return
-        except requests.RequestException:
-            time.sleep(0.5)
-    raise TimeoutError("RAG database service did not become ready")
+        time.sleep(0.5)
+    raise TimeoutError("RAG database service did not become ready "
+                       "(is another document service using its port?)")
 
 if __name__ == "__main__":
     import argparse
