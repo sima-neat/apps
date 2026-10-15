@@ -23,13 +23,14 @@ class BackendPathTests(unittest.TestCase):
                      "/v1/audio/translations", "/audio/transcriptions", "/models/status",
                      "/models/load", "/benchmark/run", "/tts/engine", "/voices",
                      "/voices/select", "/supertonic/voice", "/piperplus/voices", "/shutdown",
-                     "/rag/status", "/rag/inspect", "/rag/search", "/rag/upload", "/rag/reset", "/rag/clear"):
+                     "/rag/status", "/rag/inspect", "/rag/search", "/rag/upload", "/rag/reset", "/rag/clear",
+                     "/board-camera/devices", "/board-camera/snapshot"):
             self.assertTrue(path_allowed(path), path)
 
-    def test_web_ui_and_studio_chat_are_not(self):
-        for path in ("/playground/", "/playground/index.html", "/solutions/", "/showcase",
+    def test_removed_web_ui_routes_are_not(self):
+        for path in ("/favicon.ico", "/playground/", "/playground/index.html", "/solutions/", "/showcase",
                      "/config.js", "/static/newui.js", "/upload", "/stop", "/clear-history",
-                     "/upload-to-rag", "/reset-rag", "/clear-rag", "/raghealth", "/board-camera/devices", "/voicesx",
+                     "/upload-to-rag", "/reset-rag", "/clear-rag", "/raghealth", "/board-camerax", "/voicesx",
                      "/v1", "/modelsx"):
             self.assertFalse(path_allowed(path), path)
 
@@ -101,7 +102,7 @@ class HealthPayloadTests(unittest.TestCase):
 
     def test_lists_optional_features(self):
         on = health_payload(mode="backend-only", version="1.2", status=self.STATUS, engines=self.ENGINES, rag_enabled=True)
-        self.assertEqual(on["features"], {"rag": True, "benchmark": True})
+        self.assertEqual(on["features"], {"rag": True, "benchmark": True, "board_camera": True})
         off = health_payload(mode="backend-only", version="1.2", status=self.STATUS, engines=self.ENGINES)
         self.assertFalse(off["features"]["rag"])
         self.assertEqual(off["api_version"], 1, "adding features is not a breaking change")

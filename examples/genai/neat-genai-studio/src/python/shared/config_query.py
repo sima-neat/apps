@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Print one Studio config value exactly as the UI reads it (load_ui_config).
+"""Print one Studio config value exactly as the backend reads it (load_ui_config).
 
 run.sh and setup.sh call this so the supervisor and the installer interpret a
 customer's config.local.yaml with the same YAML semantics (block or flow style,
 any indentation, quoting, booleans) as the application itself:
 
-    python3 src/python/shared/config_query.py --config config.local.yaml web.headless
+    python3 src/python/shared/config_query.py --config config.local.yaml web.port
 
 Booleans print as true/false, unset values as an empty line. Exit status 2 when
 the config cannot be loaded (the shell callers then fall back to their own
@@ -26,7 +26,6 @@ FIELDS = {
     "web.host": lambda c: c.web.host,
     "web.port": lambda c: c.web.port,
     "web.https": lambda c: c.web.https,
-    "web.headless": lambda c: c.web.headless,
     "web.cors_origins": lambda c: c.web.cors_origins,
     "supertonic.models_root": lambda c: c.supertonic.models_root,
     "supertonic.venv": lambda c: c.supertonic.venv,

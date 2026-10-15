@@ -1,6 +1,6 @@
-"""Backend-only (headless) mode for Neat GenAI Studio: which paths the web
-process serves when started with ``--backend-only``, and the opt-in CORS policy
-for browser front ends on other origins (for example Insight).
+"""The Neat GenAI Studio backend's API surface: which paths the web process
+serves, and the opt-in CORS policy for browser front ends on other origins
+(for example Insight).
 
 Pure Python on purpose (no Flask import) so the unit suite covers every
 decision; ``flask_app`` applies these in ``before_request`` / ``after_request``.
@@ -11,9 +11,8 @@ from __future__ import annotations
 from typing import Iterable, Mapping
 from urllib.parse import urlsplit
 
-# Path prefixes (ending in "/") and exact paths served in backend-only mode.
-# Everything else (the web UI pages, the Studio's own chat/RAG/camera routes)
-# answers 404 there.
+# Path prefixes (ending in "/") and exact paths the backend serves. Everything
+# else answers 404.
 API_PREFIXES = (
     "/v1/",          # OpenAI-compatible chat, audio speech/transcriptions/translations/voices
     "/audio/",       # the same audio routes without the /v1 prefix
@@ -24,13 +23,14 @@ API_PREFIXES = (
     "/supertonic/",  # Supertonic voice selection
     "/voices/",      # piper-tts voice selection
     "/rag/",         # document search (RAG): status, upload, reset, clear, search
+    "/board-camera/",  # cameras attached to the board: list, snapshot
 )
-API_EXACT = ("/", "/health", "/voices", "/shutdown", "/favicon.ico")
+API_EXACT = ("/", "/health", "/voices", "/shutdown")
 
 # Paths that may answer cross-origin browser requests when CORS is enabled:
 # the API surface, never /shutdown.
 CORS_PREFIXES = ("/v1/", "/audio/", "/models/", "/benchmark/", "/tts/",
-                 "/piperplus/", "/supertonic/", "/voices/", "/rag/")
+                 "/piperplus/", "/supertonic/", "/voices/", "/rag/", "/board-camera/")
 CORS_EXACT = ("/health", "/voices")
 
 CORS_METHODS = "GET, POST, OPTIONS"
@@ -47,7 +47,7 @@ def _matches(path: str, prefixes: Iterable[str], exact: Iterable[str]) -> bool:
 
 
 def path_allowed(path: str) -> bool:
-    """True when ``path`` is part of the backend-only API surface."""
+    """True when ``path`` is part of the backend API surface."""
     return _matches(path, API_PREFIXES, API_EXACT)
 
 
@@ -163,5 +163,5 @@ def health_payload(*, mode: str, version: str, status: Mapping | None,
         "chat_models_loaded": chat_loaded,
         "tts": {"engines": tts_engines},
         # Optional features, so a front end can hide what this board lacks.
-        "features": {"rag": bool(rag_enabled), "benchmark": True},
+        "features": {"rag": bool(rag_enabled), "benchmark": True, "board_camera": True},
     }
