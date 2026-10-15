@@ -224,7 +224,9 @@ curl -sk -N $B/v1/chat/completions -H 'Content-Type: application/json' \
 end to end against a running backend: synthesized speech is transcribed back to
 its words, German speech translates to English, the chat model answers, and,
 when `/health` lists `features.rag`, document search returns passages and a
-chat with `neat_rag` uses them; it exits non-zero on any failure.
+chat with `neat_rag` uses them, and the board camera lists its devices. With
+`BOARD_CAMERA_DEVICE=/dev/videoN` set to a camera attached to the board, it
+also checks that a snapshot returns a JPEG. It exits non-zero on any failure.
 `src/python/ui/apitest/backend_runtime_test.sh` exercises the model server and
 the speech routes. The other scripts there (`speech.sh`, `transcriptions.sh`,
 `translations.sh`, `chat.sh`, `completions.sh`) wrap single calls. They take a
