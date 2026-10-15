@@ -1113,11 +1113,11 @@ class AppContext:
         def board_camera_snapshot():
             device = (request.args.get('device') or '').strip()
             try:
-                node = normalize_camera_device(device) if device else None
+                normalize_camera_device(device) if device else None
             except ValueError:
                 return jsonify({'error': 'Invalid board camera device'}), 400
             try:
-                jpeg, tool = capture_camera_frame(node)
+                jpeg, tool = capture_camera_frame(device or None)
             except RuntimeError as exc:
                 logging.error(f"Board camera capture failed: {exc}")
                 return jsonify({'error': 'Board camera capture failed'}), 503

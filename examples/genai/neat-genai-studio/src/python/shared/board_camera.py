@@ -47,6 +47,22 @@ def normalize_camera_device(device):
     raise ValueError(f"invalid camera device {device!r} — use an index or a /dev/video* path")
 
 
+def resolve_camera_node(device=None):
+    """The /dev/video* node to capture from: ``device`` (an index or a
+    /dev/video* path, validated by normalize_camera_device), else the default.
+    The node returned is the board's own entry from /dev, never the request's
+    string, and one that does not exist raises ``RuntimeError``."""
+    requested = (str(device).strip() if device is not None else "") or default_camera_device()
+    try:
+        wanted = normalize_camera_device(requested)
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
+    for node in glob.glob("/dev/video[0-9]*"):
+        if node == wanted:
+            return node
+    raise RuntimeError(f"no camera device {wanted} on this board")
+
+
 def list_camera_devices():
     """Enumerate /dev/video* nodes with their driver-reported names.
 
@@ -95,8 +111,7 @@ def capture_camera_frame(device=None, timeout=12):
     ``device`` may be an index (``0`` → ``/dev/video0``) or a node path; it
     defaults to ``$NEAT_CAMERA_DEVICE`` or ``/dev/video16``.
     """
-    dev = (str(device).strip() if device is not None else "") or default_camera_device()
-    dev_node = f"/dev/video{dev}" if dev.isdigit() else dev
+    dev_node = resolve_camera_node(device)
 
     errors = []
     fd, tmp_path = tempfile.mkstemp(prefix="neat-cam-", suffix=".jpg")
@@ -152,13 +167,10 @@ def capture_camera_frame(device=None, timeout=12):
             # cv2 takes an integer index, so map "/dev/video2" → 2 (matching the
             # dev_node the other tools use); refuse a node we can't map rather
             # than silently opening index 0 (the wrong camera).
-            if dev.isdigit():
-                idx = int(dev)
-            else:
-                mnum = re.search(r"(\d+)$", dev)
-                if mnum is None:
-                    raise RuntimeError(f"cannot map {dev_node} to a camera index")
-                idx = int(mnum.group(1))
+            suffix = dev_node[len("/dev/video"):]
+            if not suffix.isdigit():
+                raise RuntimeError(f"cannot map {dev_node} to a camera index")
+            idx = int(suffix)
             cap = cv2.VideoCapture(idx)
             try:
                 ok, frame = False, None
