@@ -288,7 +288,7 @@ class RagServiceWaitTests(unittest.TestCase):
                 raise RequestException("refused")
             return Resp(reply)
 
-        proc = types.SimpleNamespace(poll=lambda: 1 if exits_at is not None and calls["n"] >= exits_at else None)
+        proc = types.SimpleNamespace(pid=4242, poll=lambda: 1 if exits_at is not None and calls["n"] >= exits_at else None)
         namespace = {
             "Any": self.Any, "Optional": self.Optional, "Path": Path, "os": os,
             "RAG_DB_PATH": "/studio/milvus.db", "DEFAULT_VDB_PORT": 9100,
@@ -300,18 +300,27 @@ class RagServiceWaitTests(unittest.TestCase):
         namespace["wait_for_service"](proc, timeout=timeout, db_path="/studio/milvus.db")
         return calls["n"]
 
-    def test_ready_once_the_studios_database_is_served(self):
-        mine = {"service": "rag-vectordb", "db_path": "/studio/milvus.db"}
-        loading = {"service": "rag-vectordb", "db_path": None}
+    def test_ready_once_the_started_worker_serves_the_studios_database(self):
+        mine = {"service": "rag-vectordb", "db_path": "/studio/milvus.db", "pid": 4242}
+        loading = {"service": "rag-vectordb", "db_path": None, "pid": 4242}
         self.assertEqual(self.wait([None, loading, mine]), 3)
 
+    def test_another_worker_on_the_same_database_is_not_ready(self):
+        # A worker left over from an earlier Studio (or the CLI's /rag db on
+        # the Studio's file) reports the same path, but not the same process.
+        old = {"service": "rag-vectordb", "db_path": "/studio/milvus.db", "pid": 1111}
+        with self.assertRaises(TimeoutError):
+            self.wait([old])
+        with self.assertRaisesRegex(RuntimeError, "exited during startup"):
+            self.wait([old], exits_at=2)
+
     def test_another_service_on_the_port_is_not_ready(self):
-        other = {"service": "rag-vectordb", "db_path": "/data/cli/milvus.db"}
+        other = {"service": "rag-vectordb", "db_path": "/data/cli/milvus.db", "pid": 1111}
         with self.assertRaises(TimeoutError):
             self.wait([other])
 
     def test_a_worker_that_exits_fails_even_while_another_service_answers(self):
-        other = {"service": "rag-vectordb", "db_path": "/data/cli/milvus.db"}
+        other = {"service": "rag-vectordb", "db_path": "/data/cli/milvus.db", "pid": 1111}
         with self.assertRaisesRegex(RuntimeError, "exited during startup"):
             self.wait([other], exits_at=2)
 
