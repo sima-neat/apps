@@ -32,9 +32,9 @@ if [[ -z "${APP_PYTHON:-}" ]]; then
   fi
 fi
 
-# Interpreter of the isolated piper-tts venv — the UI's subprocess TTS worker
+# Interpreter of the isolated piper-tts venv — the backend's subprocess TTS worker
 # uses it for the de/it/no/vi rhasspy voices (piper-tts and piper-plus can't
-# share a venv). Exported so the UI child process inherits it.
+# share a venv). Exported so the backend process inherits it.
 if [[ -z "${PIPERTTS_PYTHON:-}" && -x "${EXAMPLE_DIR}/.venv-pipertts/bin/python" ]]; then
   PIPERTTS_PYTHON="${EXAMPLE_DIR}/.venv-pipertts/bin/python"
 fi
@@ -42,44 +42,23 @@ export PIPERTTS_PYTHON="${PIPERTTS_PYTHON:-}"
 # Supertonic 3 (MLA TTS): the vendored runtime runs from ./.venv-supertonic (see
 # setup.sh); its model files' location is persisted under app.tts.supertonic in
 # the local config, with SUPERTONIC_MODELS_ROOT in the environment overriding.
-# Resolved by resolve_supertonic_env once the config path is final. The UI
+# Resolved by resolve_supertonic_env once the config path is final. The backend
 # spawns supertonic_worker.py with the resolved interpreter; when it is absent
 # the engine is simply not offered.
 SUPERTONIC_PYTHON="${SUPERTONIC_PYTHON:-}"
 SUPERTONIC_VENV_EXPLICIT="${SUPERTONIC_VENV:-}"
 SUPERTONIC_VENV="${SUPERTONIC_VENV:-${EXAMPLE_DIR}/.venv-supertonic}"
 SHUTDOWN_GRACE_SECONDS="${SHUTDOWN_GRACE_SECONDS:-10}"
-# Bounded relaunches so a server that dies immediately cannot respawn forever:
-# the budget counts consecutive relaunches that fail within
-# RELAUNCH_STABLE_SECONDS; one that stays up that long clears it.
-MLA_MAX_RESTART_RETRIES="${MLA_MAX_RESTART_RETRIES:-4}"
-RELAUNCH_STABLE_SECONDS="${RELAUNCH_STABLE_SECONDS:-60}"
-# Where the CLI-mode server records its exit status (see launch_server).
-SERVER_STATUS_FILE="${SERVER_STATUS_FILE:-${EXAMPLE_DIR}/.neat-genai-server.status}"
 RAG_WORKER_PATTERN="${PYTHON_DIR}/rag/vectordb_worker.py"
 SERVER_PATTERN="${PYTHON_DIR}/server/main.py"
 UI_PATTERN="${PYTHON_DIR}/ui/main.py"
 # PID file for the running instance (enables `./run.sh stop`).
 PID_FILE="${RUN_PID_FILE:-${EXAMPLE_DIR}/.neat-genai-studio.pid}"
-# Which mode the running instance was started in (web / backend-only / cli),
-# written beside the pid file so `status` can say so.
-MODE_FILE="${PID_FILE%.pid}.mode"
-# The running instance records the URL it is actually serving: a later
-# --open-browser must open that, not a URL recomputed from the launcher's own
-# (possibly different) CONFIG_PATH.
+# The running instance records the URL it is actually serving, so `status`
+# reports that, not a URL recomputed from its own (possibly different)
+# CONFIG_PATH.
 URL_FILE="${PID_FILE%.pid}.url"
-# --backend-only: model server + the Studio's API endpoints, no web UI.
-BACKEND_ONLY="${BACKEND_ONLY:-0}"
-# --open-browser: open the web UI in the desktop browser once it answers (the
-# desktop icon uses this). With a running instance it just opens the browser.
-OPEN_BROWSER="${OPEN_BROWSER:-0}"
-BROWSER_WAITER_PID=""
 STOP_TIMEOUT="${STOP_TIMEOUT:-20}"
-# Terminal chat instead of the web UI (set by `./run.sh --cli`).
-CLI_MODE="${CLI_MODE:-0}"
-CLI_EXTRA_ARGS=()   # flags forwarded to cli/main.py (e.g. --chat, --download, --benchmark)
-# In CLI mode the model server's logs go here (kept off the chat terminal).
-SERVER_LOG="${SERVER_LOG:-${EXAMPLE_DIR}/.neat-genai-server.log}"
 
 # ---------------------------------------------------------------------------
 # Pretty output: the Neat sparkle banner + colourised status lines. Everything
@@ -160,7 +139,7 @@ url_host() {
 # True for the "listen on every interface" hosts (or none configured).
 wildcard_host() { [[ -z "$1" || "$1" == "0.0.0.0" || "$1" == "::" || "$1" == "[::]" ]]; }
 
-# _web_url_for <host-or-empty>: the UI URL with that host (scheme and port from
+# _web_url_for <host-or-empty>: the backend URL with that host (scheme and port from
 # the config). Returns 1 when the config has no port.
 _web_url_for() {
   local port https scheme
@@ -172,8 +151,8 @@ _web_url_for() {
   printf '%s://%s:%s' "${scheme}" "$(url_host "$1")" "${port}"
 }
 
-# The UI URL to give other machines: the configured host, or this board's first
-# LAN address (IPv4 preferred) when the UI listens on every interface.
+# The backend URL to give other machines (Insight): the configured host, or this
+# board's first LAN address (IPv4 preferred) when it listens on every interface.
 web_url() {
   local host ip
   host="$(web_config_value host)"
@@ -185,54 +164,13 @@ web_url() {
   _web_url_for "${host}"
 }
 
-# The UI URL for a browser on this board: localhost when the UI listens on every
-# interface (it keeps working if the IP changes), else the configured host.
+# The backend URL on this board: localhost when it listens on every interface
+# (it keeps working if the IP changes), else the configured host.
 local_web_url() {
   local host
   host="$(web_config_value host)"
   wildcard_host "${host}" && host="localhost"
   _web_url_for "${host}"
-}
-
-# Wait until the web UI answers (its /health route), up to UI_READY_TIMEOUT s.
-wait_for_ui() {
-  local url="$1" deadline=$((SECONDS + ${UI_READY_TIMEOUT:-300}))
-  command -v curl >/dev/null 2>&1 || { sleep 20; return 0; }
-  while [[ "${SECONDS}" -lt "${deadline}" ]]; do
-    curl -k -s -o /dev/null --max-time 2 "${url}/health" && return 0
-    sleep 1
-  done
-  return 1
-}
-
-# Open `url` in the desktop's default browser, detached from this terminal so
-# closing it does not take the browser along. With "wait" as the second
-# argument, also wait (up to 10 s) for the opener to hand the URL over before
-# returning: a caller that exits right away would otherwise close the desktop
-# icon's terminal and kill the opener before the browser receives the URL.
-open_url() {
-  local url="$1" wait_for_handoff="${2:-}"
-  if [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
-    warn "No graphical display in this session; open ${url} in a browser yourself."
-    return 1
-  fi
-  local opener
-  for opener in xdg-open x-www-browser sensible-browser; do
-    if command -v "${opener}" >/dev/null 2>&1; then
-      setsid "${opener}" "${url}" >/dev/null 2>&1 < /dev/null &
-      if [[ "${wait_for_handoff}" == "wait" ]]; then
-        local opener_pid=$! waited=0
-        while kill -0 "${opener_pid}" 2>/dev/null && (( waited < 20 )); do
-          sleep 0.5; waited=$(( waited + 1 ))
-        done
-      fi
-      ok "Opened ${C_ACCENT}${url}${C_RESET} in the browser."
-      info "First visit: the browser warns about the Studio's self-signed certificate; choose Advanced → proceed (it is this board)."
-      return 0
-    fi
-  done
-  warn "No browser opener (xdg-open) found; open ${url} yourself."
-  return 1
 }
 
 # Aligned "label   value" line for the System section.
@@ -307,20 +245,10 @@ usage() {
   banner
   cat <<'USAGE'
 Usage:
-  ./run.sh            Start the model server and web UI (Ctrl+C to stop).
+  ./run.sh            Start the model server and the Studio backend: the API
+                      Insight's GenAI tab calls (chat, speech, transcription,
+                      translation, voices, models, RAG, /health). Ctrl+C stops.
                       Runs ./setup.sh automatically on the first launch.
-  ./run.sh --cli      Start the model server and a terminal chat (no web UI).
-  ./run.sh --backend-only
-                      Start the model server and the Studio's API endpoints
-                      (chat, speech, transcription, translation, voices, models,
-                      /health) without the web UI, for other front ends such as
-                      Insight. BACKEND_CORS_ORIGINS enables browser CORS.
-  ./run.sh --chat [MODEL]      Terminal chat; load MODEL and chat (skips the menu).
-  ./run.sh --download [REPO]   Terminal chat; download REPO (or prompt) first.
-  ./run.sh --benchmark [MODEL] Terminal chat; benchmark MODEL (or prompt). --bench.
-  ./run.sh --open-browser
-                      Start (if not running) and open the web UI in the
-                      desktop browser once it answers; used by the desktop icon.
   ./run.sh stop       Cleanly stop a running instance.
   ./run.sh status     Report whether the studio is running.
   ./run.sh update     Update to the latest version (preserves models, config,
@@ -333,8 +261,8 @@ Environment:
   NEAT_APPS_BRANCH    Branch to pull for `update` (default: main).
   UPDATE_DEPS=1       Run full setup.sh dependency refresh during `update`.
   BACKEND_CORS_ORIGINS
-                      With --backend-only: origins (comma-separated, or *) whose
-                      browser pages may call the API (CORS). Default: none.
+                      Origins (comma-separated, or *) whose browser pages may
+                      call the API (CORS). Default: app.web.cors_origins.
 USAGE
 }
 
@@ -342,22 +270,14 @@ do_status() {
   if [[ -f "${PID_FILE}" ]]; then
     local pid; pid="$(cat "${PID_FILE}" 2>/dev/null || true)"
     if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
-      local mode; mode="$(cat "${MODE_FILE}" 2>/dev/null || echo web)"
       # Report the URL the RUNNING instance recorded: recomputing it here would
       # describe this invocation's config, which a CONFIG_PATH override makes a
       # different (possibly unreachable) endpoint. Fall back for an instance
       # started before the url file existed.
       local url; url="$(cat "${URL_FILE}" 2>/dev/null || true)"
       [[ -n "${url}" ]] || url="$(web_url || true)"
-      if [[ "${mode}" == "backend-only" ]]; then
-        ok "Neat GenAI Studio is running (pid ${pid}, backend-only: API endpoints, no web UI)."
-        [[ -n "${url}" ]] && info "API: ${C_ACCENT}${url}${C_RESET}  health: ${C_ACCENT}${url}/health${C_RESET}"
-      elif [[ "${mode}" == "cli" ]]; then
-        ok "Neat GenAI Studio is running (pid ${pid}, cli: terminal chat, no web UI)."
-      else
-        ok "Neat GenAI Studio is running (pid ${pid}${mode:+, ${mode}})."
-        [[ -n "${url}" ]] && info "Web UI: ${C_ACCENT}${url}${C_RESET}"
-      fi
+      ok "Neat GenAI Studio is running (pid ${pid})."
+      [[ -n "${url}" ]] && info "API: ${C_ACCENT}${url}${C_RESET}  health: ${C_ACCENT}${url}/health${C_RESET}"
       return 0
     fi
   fi
@@ -381,11 +301,11 @@ do_stop() {
         warn "Not responding after ${STOP_TIMEOUT}s; sending KILL…"
         kill -KILL "${pid}" 2>/dev/null || true
       fi
-      rm -f "${PID_FILE}" "${MODE_FILE}" "${URL_FILE}" "${SERVER_STATUS_FILE}"
+      rm -f "${PID_FILE}" "${URL_FILE}"
       ok "Stopped."
       return 0
     fi
-    rm -f "${PID_FILE}" "${MODE_FILE}" "${URL_FILE}" "${SERVER_STATUS_FILE}"
+    rm -f "${PID_FILE}" "${URL_FILE}"
   fi
   # No recorded instance — best-effort cleanup of any stray studio processes.
   info "No running instance recorded; cleaning up any stray processes…"
@@ -402,7 +322,7 @@ do_stop() {
 }
 
 # Supertonic paths: environment > app.tts.supertonic in the config > defaults.
-# Only values that are set are exported, so the UI applies the same precedence.
+# Only values that are set are exported, so the backend applies the same precedence.
 _supertonic_config_value() { supertonic_config_value "${CONFIG_PATH}" "$1"; }
 resolve_supertonic_env() {
   local models legacy
@@ -449,6 +369,18 @@ supertonic_fingerprint() {
     grep -E '^SUPERTONIC_(UPSTREAM|SIMA)_HF_REVISION=|^[0-9a-f]{64}  supertonic-3' "${EXAMPLE_DIR}/setup.sh" 2>/dev/null
   } | sha256sum | cut -d' ' -f1
 }
+# Desktop icons and menu entries an earlier setup.sh installed for this
+# checkout. They started the removed web UI through src/common/desktop-launch.sh,
+# so they no longer work.
+old_desktop_entries() {
+  local t
+  for t in "${XDG_DATA_HOME:-${HOME}/.local/share}/applications/neat-genai-studio.desktop" \
+           "${XDG_DESKTOP_DIR:-${HOME}/Desktop}/neat-genai-studio.desktop"; do
+    [[ -f "$t" ]] && grep -qF "${EXAMPLE_DIR}/" "$t" && printf '%s\n' "$t"
+  done
+  return 0
+}
+
 # Remove app-generated data (venvs, generated config, RAG db, downloaded TTS
 # voices, pid, caches, logs). Confirms first unless -y/--yes or CLEAN_YES=1.
 # Downloaded chat/VLM/ASR models under catalog_dir are left intact.
@@ -483,18 +415,14 @@ do_clean() {
     "${DEFAULT_LOCAL_CONFIG}" \
     "${DEFAULT_LOCAL_CONFIG}.bak" \
     "${PID_FILE}" \
-    "${MODE_FILE}" \
     "${PYTHON_DIR}/ui/milvus.db" \
     "${PYTHON_DIR}/ui/milvus.meta.json" \
     "${PYTHON_DIR}/ui/assets/piper-plus" \
     "${PYTHON_DIR}/ui/assets/mms-tts-kor"; do
     [[ -e "$t" ]] && targets+=("$t")
   done
-  # The desktop icon / menu entry setup.sh installed for this checkout.
-  for t in "${XDG_DATA_HOME:-${HOME}/.local/share}/applications/neat-genai-studio.desktop" \
-           "${XDG_DESKTOP_DIR:-${HOME}/Desktop}/neat-genai-studio.desktop"; do
-    [[ -f "$t" ]] && grep -qF "${EXAMPLE_DIR}/" "$t" && targets+=("$t")
-  done
+  # A desktop icon / menu entry an earlier setup.sh installed for this checkout.
+  while IFS= read -r t; do targets+=("$t"); done < <(old_desktop_entries)
   # Downloaded rhasspy .onnx voices (committed .onnx.json configs are kept),
   # __pycache__ dirs, and any *.log files the app produced.
   while IFS= read -r -d '' t; do targets+=("$t"); done \
@@ -714,25 +642,14 @@ case "${1:-run}" in
   --clean|clean) do_clean "${2:-}"; exit 0 ;;
   update|--update|upgrade) do_update; exit 0 ;;
   -h|--help|help) usage; exit 0 ;;
-  --cli|cli) CLI_MODE=1 ;;   # fall through to launch, then run the terminal chat
-  --backend-only|backend-only|backend) BACKEND_ONLY=1 ;;   # fall through to launch, headless
-  --open-browser|open) OPEN_BROWSER=1 ;;   # fall through to launch, then open the UI
-  # CLI shortcuts: launch the terminal chat straight into a mode. An optional
-  # second argument (a model name, or HF repo for download) is forwarded too.
-  --chat|chat)
-    CLI_MODE=1; CLI_EXTRA_ARGS+=(--chat)
-    if [[ -n "${2:-}" ]]; then CLI_EXTRA_ARGS+=("$2"); fi ;;
-  --download|download|dl)
-    CLI_MODE=1; CLI_EXTRA_ARGS+=(--download)
-    if [[ -n "${2:-}" ]]; then CLI_EXTRA_ARGS+=("$2"); fi ;;
-  --benchmark|--bench|benchmark|bench)
-    CLI_MODE=1; CLI_EXTRA_ARGS+=(--benchmark)
-    if [[ -n "${2:-}" ]]; then CLI_EXTRA_ARGS+=("$2"); fi ;;
   run|start) ;;  # fall through to launch
   *) errln "unknown command: $1"; usage; exit 2 ;;
 esac
 
 banner
+
+# An icon from an earlier setup.sh would start the removed web UI: remove it.
+while IFS= read -r t; do rm -f "$t" && info "Removed an old desktop icon: $t"; done < <(old_desktop_entries)
 
 # First launch: if setup.sh hasn't created the app venv (and local config) yet,
 # run it now so `./run.sh` works out of the box. AUTO_SETUP=0 opts out.
@@ -871,10 +788,9 @@ cleanup() {
   trap '' INT TERM
 
   step "Shutting down Neat GenAI Studio…"
-  if [[ -n "${BROWSER_WAITER_PID}" ]]; then kill "${BROWSER_WAITER_PID}" 2>/dev/null || true; fi
 
   # Graceful: both Python entrypoints handle SIGTERM — the model server releases
-  # its models on the MLA and the UI stops the RAG worker before exiting.
+  # its models on the MLA and the backend stops the RAG worker before exiting.
   signal_process_groups TERM
 
   local deadline=$((SECONDS + SHUTDOWN_GRACE_SECONDS))
@@ -891,20 +807,8 @@ cleanup() {
   for pid in "${pids[@]}"; do
     wait "${pid}" 2>/dev/null || true
   done
-  # In --cli mode the watchdog may have relaunched the model server under a new
-  # process group (not in our remembered groups, since the watchdog runs in a
-  # subshell). Sweep it with the same grace the supervised server gets, so a
-  # loaded server can still release its MLA models in server.stop().
-  if [[ "${CLI_MODE}" == "1" ]] && command -v pkill >/dev/null 2>&1; then
-    pkill -TERM -f "${SERVER_PATTERN}" 2>/dev/null || true
-    local sweep_deadline=$((SECONDS + SHUTDOWN_GRACE_SECONDS))
-    while pgrep -f "${SERVER_PATTERN}" >/dev/null 2>&1 && [[ "${SECONDS}" -lt "${sweep_deadline}" ]]; do
-      sleep 1
-    done
-    pkill -KILL -f "${SERVER_PATTERN}" 2>/dev/null || true
-  fi
   stop_stale_rag_worker
-  rm -f "${PID_FILE}" "${MODE_FILE}" "${URL_FILE}" "${SERVER_STATUS_FILE}"
+  rm -f "${PID_FILE}" "${URL_FILE}"
   ok "Neat GenAI Studio stopped."
 }
 
@@ -913,51 +817,26 @@ cleanup() {
 if [[ -f "${PID_FILE}" ]]; then
   existing="$(cat "${PID_FILE}" 2>/dev/null || true)"
   if [[ -n "${existing}" ]] && kill -0 "${existing}" 2>/dev/null; then
-    if [[ "${OPEN_BROWSER}" == "1" ]]; then
-      ok "Neat GenAI Studio is already running (pid ${existing})."
-      _mode="$(cat "${MODE_FILE}" 2>/dev/null || echo web)"
-      if [[ "${_mode}" != "web" ]]; then
-        warn "It runs in ${_mode} mode (no web UI); stop it (./run.sh stop) and start ./run.sh to use the UI."
-        exit 1
-      fi
-      # Prefer the URL the running instance recorded; fall back to resolving it
-      # locally for an instance started before this was written.
-      _url="$(cat "${URL_FILE}" 2>/dev/null || true)"
-      [[ -n "${_url}" ]] || _url="$(local_web_url || true)"
-      [[ -n "${_url}" ]] && open_url "${_url}" wait
-      exit 0
-    fi
     errln "Neat GenAI Studio is already running (pid ${existing})."
     info "Run './run.sh stop' first, or './run.sh status' to check."
     exit 1
   fi
-  rm -f "${PID_FILE}" "${MODE_FILE}" "${URL_FILE}" "${SERVER_STATUS_FILE}"
+  rm -f "${PID_FILE}" "${URL_FILE}"
 fi
 
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-# Closing the terminal window (the desktop icon runs us in one) stops the Studio
-# cleanly instead of leaving the setsid'd processes behind.
+# Closing the terminal window stops the Studio cleanly instead of leaving the
+# setsid'd processes behind.
 trap 'exit 129' HUP
-
-# app.web.headless: true in the config is the same as --backend-only (the UI
-# process reads it too); resolve it before the mode is recorded and branched on.
-if [[ "${BACKEND_ONLY}" != "1" && "${CLI_MODE}" != "1" ]]; then
-  config_true "$(web_config_value headless)" && BACKEND_ONLY=1
-fi
 
 # Record this instance so `./run.sh stop` can find it (removed by cleanup).
 echo "$$" > "${PID_FILE}"
-if [[ "${CLI_MODE}" == "1" ]]; then echo cli; elif [[ "${BACKEND_ONLY}" == "1" ]]; then echo backend-only; else echo web; fi > "${MODE_FILE}"
-# Backend-only serves its API on the same host/port, and `status` reports that
-# URL too, so record it in both modes. Only --cli has no HTTP surface.
-if [[ "${CLI_MODE}" != "1" ]]; then
-  _self_url="$(local_web_url || true)"
-  [[ -n "${_self_url}" ]] && printf '%s\n' "${_self_url}" > "${URL_FILE}"
-fi
-# Expose the supervisor PID + PID file to the UI so it can offer a GUI "Shut down"
-# button (it SIGTERMs this process, which runs cleanup — same as `./run.sh stop`).
+_self_url="$(local_web_url || true)"
+[[ -n "${_self_url}" ]] && printf '%s\n' "${_self_url}" > "${URL_FILE}"
+# Expose the supervisor PID + PID file to the backend for POST /shutdown (it
+# SIGTERMs this process, which runs cleanup — same as `./run.sh stop`).
 export NEAT_RUN_PID="$$"
 export RUN_PID_FILE="${PID_FILE}"
 
@@ -985,71 +864,10 @@ launch_server() {
     errln "Could not read ${CONFIG_PATH} with ${APP_PYTHON}; run ./setup.sh first."
     return 1
   fi
-  # In CLI mode the model server shares the terminal with the interactive chat,
-  # so its logs would land on the "you ▸" prompt. Send them to a log file
-  # instead; the CLI drives the server over HTTP and doesn't need its stdout.
-  if [[ "${CLI_MODE}" == "1" ]]; then
-    # Wrap the server so its exit status lands in a file: the CLI watchdog polls
-    # a sibling PID and so cannot `wait` for it, and without the status it could
-    # not tell a clean exit from a crash.
-    rm -f "${SERVER_STATUS_FILE}"
-    setsid bash -c \
-      '"$1" "$2" --config "$3" >"$4" 2>&1; s=$?; echo "$s" >"$5"; exit "$s"' _ \
-      "${PYNEAT_PYTHON}" "${PYTHON_DIR}/server/main.py" "${SERVER_CONFIG_JSON}" \
-      "${SERVER_LOG}" "${SERVER_STATUS_FILE}" &
-  else
-    setsid "${PYNEAT_PYTHON}" "${PYTHON_DIR}/server/main.py" --config "${SERVER_CONFIG_JSON}" &
-  fi
+  setsid "${PYNEAT_PYTHON}" "${PYTHON_DIR}/server/main.py" --config "${SERVER_CONFIG_JSON}" &
   server_pid="$!"
   pids[0]="${server_pid}"
   remember_process_group "${server_pid}"
-}
-
-# Background watchdog for --cli mode, which has no supervisor loop: if the model
-# server crashes, relaunch it so the CLI can reconnect. Poll-based, since a
-# backgrounded subshell cannot `wait` a sibling PID; bounded so a broken server
-# cannot respawn forever. Strays are swept by cleanup().
-#
-# This is the CLI-mode counterpart of the web-mode supervisor loop below
-# (search "Supervisor: watch both processes"). They deliberately are NOT merged:
-# the CLI watchdog runs in a backgrounded subshell and must poll
-# SERVER_STATUS_FILE, watches only the server, and relaunches it (through
-# launch_server, within the bounded RELAUNCH_STABLE_SECONDS retry budget) when it
-# crashes; the web loop runs in the launcher shell, `wait`s the server, also
-# watches the UI, and stops the Studio when either exits.
-cli_supervise() {
-  # `tries` counts consecutive relaunches that did not survive: a relaunched
-  # server that stays up for RELAUNCH_STABLE_SECONDS clears it, so a crash
-  # loop cannot continue indefinitely.
-  local tries=0 status launched_at=0
-  while true; do
-    sleep 2
-    if kill -0 "${server_pid}" 2>/dev/null; then
-      if [[ "${tries}" -gt 0 && $((SECONDS - launched_at)) -ge "${RELAUNCH_STABLE_SECONDS}" ]]; then
-        tries=0
-      fi
-      continue
-    fi
-
-    status=""
-    for _ in 1 2 3 4 5; do
-      [[ -s "${SERVER_STATUS_FILE}" ]] && { status="$(cat "${SERVER_STATUS_FILE}" 2>/dev/null)"; break; }
-      sleep 0.4
-    done
-    if [[ "${status}" == "0" ]]; then
-      return 0    # clean exit: nothing to recover
-    fi
-    if [[ "${tries}" -ge "${MLA_MAX_RESTART_RETRIES}" ]]; then
-      errln "Model server keeps exiting (last status ${status:-?}); not relaunching again — /quit and restart the Studio."
-      return 0
-    fi
-    tries=$((tries + 1))
-    # Relaunch so the prompt is not left talking to a dead server.
-    warn "Model server exited with status ${status:-?}; relaunching it (models must be loaded again with /load)."
-    launch_server
-    launched_at="${SECONDS}"
-    sleep "${MODEL_SERVER_START_DELAY:-2}"
-  done
 }
 
 prepare_clean_start
@@ -1067,33 +885,9 @@ if ! child_running "${server_pid}"; then
   exit "${status}"
 fi
 
-# CLI mode: skip the web UI and run an interactive terminal chat in the
-# foreground against the model server we just started. When it exits, the EXIT
-# trap tears the model server down.
-if [[ "${CLI_MODE}" == "1" ]]; then
-  section "Terminal chat"
-  step "Launching the CLI — type ${C_BOLD}/help${C_RESET} for commands, ${C_BOLD}/quit${C_RESET} to exit."
-  info "Model server logs → ${C_DIM}${SERVER_LOG}${C_RESET}"
-  printf '\n'
-  trap - INT            # let the Python CLI own Ctrl+C (abort a reply, not exit)
-  cli_supervise &
-  cli_watchdog_pid="$!"
-  "${APP_PYTHON}" "${PYTHON_DIR}/cli/main.py" --config "${CONFIG_PATH}" \
-    ${CLI_EXTRA_ARGS[@]+"${CLI_EXTRA_ARGS[@]}"} || true
-  kill "${cli_watchdog_pid}" 2>/dev/null || true
-  exit 0                # -> EXIT trap stops the model server
-fi
-
-ui_args=(--config "${CONFIG_PATH}")
-if [[ "${BACKEND_ONLY}" == "1" ]]; then
-  section "Backend (headless)"
-  step "Starting the Neat GenAI Studio API endpoints (no web UI)…"
-  ui_args+=(--backend-only)
-else
-  section "Web UI"
-  step "Starting the Neat GenAI Studio web UI…"
-fi
-setsid "${APP_PYTHON}" "${PYTHON_DIR}/ui/main.py" "${ui_args[@]}" &
+section "Backend"
+step "Starting the Neat GenAI Studio backend (API endpoints)…"
+setsid "${APP_PYTHON}" "${PYTHON_DIR}/ui/main.py" --config "${CONFIG_PATH}" &
 pids[1]="$!"
 ui_pid="${pids[1]}"
 remember_process_group "${ui_pid}"
@@ -1101,25 +895,11 @@ remember_process_group "${ui_pid}"
 printf '\n'
 ok "Neat GenAI Studio is starting up."
 _url="$(web_url || true)"
-if [[ -n "${_url}" && "${BACKEND_ONLY}" == "1" ]]; then
-  info "Backend-only: API on ${C_ACCENT}${C_BOLD}${_url}${C_RESET} (no web UI); readiness at ${C_ACCENT}${_url}/health${C_RESET}."
-  # Set at all (even empty) wins over the config, as in the UI process.
+if [[ -n "${_url}" ]]; then
+  info "API on ${C_ACCENT}${C_BOLD}${_url}${C_RESET}; readiness at ${C_ACCENT}${_url}/health${C_RESET}. Point Insight's GenAI tab at it."
+  # Set at all (even empty) wins over the config, as in the backend process.
   if [[ -n "${BACKEND_CORS_ORIGINS+set}" ]]; then _cors="${BACKEND_CORS_ORIGINS}"; else _cors="$(web_config_value cors_origins)"; fi
   info "CORS for browser front ends: ${_cors:-off (app.web.cors_origins or BACKEND_CORS_ORIGINS allows origins)}."
-elif [[ -n "${_url}" ]]; then
-  info "Open ${C_ACCENT}${C_BOLD}${_url}${C_RESET} in your browser once it finishes loading."
-fi
-if [[ "${OPEN_BROWSER}" == "1" ]]; then
-  if [[ "${BACKEND_ONLY}" == "1" ]]; then
-    warn "--open-browser is ignored in backend-only mode (there is no web UI)."
-  else
-    _local_url="$(local_web_url || true)"
-    if [[ -n "${_local_url}" ]]; then
-      info "The browser opens on ${C_ACCENT}${_local_url}${C_RESET} as soon as the UI answers."
-      ( if wait_for_ui "${_local_url}"; then open_url "${_local_url}"; else warn "The web UI did not answer in time; open ${_local_url} yourself."; fi ) &
-      BROWSER_WAITER_PID="$!"
-    fi
-  fi
 fi
 info "Press ${C_BOLD}Ctrl+C${C_RESET} to stop, or run ${C_BOLD}./run.sh stop${C_RESET} from another shell."
 printf '\n'
