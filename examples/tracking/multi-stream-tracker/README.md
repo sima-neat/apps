@@ -81,8 +81,8 @@ tracking:
   classes:
     - class: person
     - class: car
-      match_iou_threshold: 0.15
-      max_missing_frames: 45
+      low_match_iou_threshold: 0.25
+      max_missing_frames: 20
       velocity_noise: 0.0125
 ```
 
@@ -97,6 +97,8 @@ tracking:
 | `min_confirmed_hits` | 2 | Matches before a track is published. |
 | `position_noise` | 0.05 | Kalman position noise, relative to box height. |
 | `velocity_noise` | 0.00625 | Kalman velocity noise. Raise it for objects that change speed quickly. |
+
+The table lists the built-in defaults, which follow ByteTrack. The shipped `src/common/config.yaml` sets every key for both classes, with score thresholds suited to the default `yolo26m-det-int8-b1` package; a car cannot recover through the built-in `low_match_iou_threshold` of 0.50 at road speed.
 
 The app rejects empty, duplicate (`car` and `2` count as duplicates), unknown, and more than five classes. It also rejects unknown keys. `inference.min_score` must not exceed any class's `low_score_threshold`, or the detector drops the low-score detections the tracker needs.
 

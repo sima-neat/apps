@@ -28,9 +28,9 @@ inference:                   # Detection controls.
 tracking:                    # ByteTrack-style tracker, one instance per class per stream.
   classes:                   # 1 to 5 entries. `class` is a COCO name or id; other keys are optional.
     - class: person
-      high_score_threshold: 0.50    # Detections at or above this score start matching (stage 1).
+      high_score_threshold: 0.40    # Detections at or above this score start matching (stage 1).
       low_score_threshold: 0.10     # Detections between low and high only recover active tracks (stage 2).
-      new_track_threshold: 0.60     # Minimum score to start a new track.
+      new_track_threshold: 0.50     # Minimum score to start a new track; stricter than matching.
       match_iou_threshold: 0.20     # Minimum IoU for high-score and tentative matches.
       low_match_iou_threshold: 0.50 # Minimum IoU for low-score recovery matches.
       max_missing_frames: 30        # Frames a lost track can wait to be re-matched.
@@ -38,9 +38,15 @@ tracking:                    # ByteTrack-style tracker, one instance per class p
       position_noise: 0.05          # Kalman position noise, relative to box height.
       velocity_noise: 0.00625       # Kalman velocity noise, relative to box height.
     - class: car
-      match_iou_threshold: 0.15     # Faster motion leaves less box overlap between frames.
-      max_missing_frames: 45
-      velocity_noise: 0.0125        # Let the velocity estimate adapt faster.
+      high_score_threshold: 0.30    # Cars score lower than people on the int8 default model.
+      low_score_threshold: 0.10     # Weak detections only recover an active car track.
+      new_track_threshold: 0.40     # Small, angled or partly occluded cars rarely reach 0.50.
+      match_iou_threshold: 0.20     # Minimum IoU for high-score and tentative matches.
+      low_match_iou_threshold: 0.25 # Road speed leaves too little overlap for 0.50.
+      max_missing_frames: 20        # A fast lost track drifts; a new ID beats a wrong one.
+      min_confirmed_hits: 2         # Matches before a new track is published.
+      position_noise: 0.05          # Kalman position noise, relative to box height.
+      velocity_noise: 0.0125        # Faster motion needs a quicker velocity estimate.
 
 output:                      # Insight output plus optional local debug saves.
   insight:                   # Live video and metadata destination.
