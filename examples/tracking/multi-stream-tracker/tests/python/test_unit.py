@@ -15,7 +15,8 @@ import pytest
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 PYTHON_DIR = EXAMPLE_DIR / "src" / "python"
 MAIN_PY = PYTHON_DIR / "main.py"
-GOLDEN = EXAMPLE_DIR / "tests" / "common" / "tracker_golden.json"
+EXPECTED_TRACKS = EXAMPLE_DIR / "tests" / "common" / "expected_tracks.json"
+LABELS_FILE = EXAMPLE_DIR / "src" / "common" / "coco_label.txt"
 
 DEFAULT_CLASSES = """\
 tracking:
@@ -27,6 +28,13 @@ tracking:
 
 if str(PYTHON_DIR) not in sys.path:
     sys.path.insert(0, str(PYTHON_DIR))
+
+
+def shipped_labels() -> tuple[str, ...]:
+    """The shipped labels file, so class resolution is tested against real data."""
+    from utils.tracker import load_labels
+
+    return load_labels(LABELS_FILE)
 
 pytestmark = pytest.mark.unit
 
@@ -54,6 +62,7 @@ def write_config(
             [
                 "model:",
                 "  path: models/yolo26m-det-int8-b1.tar.gz",
+                f"  labels: {LABELS_FILE}",
                 "streams:",
                 stream_lines,
                 *input_config,
@@ -226,6 +235,69 @@ class TestConfigLoading:
         assert "max_inflight_total=16" in result.stdout
 
 
+class TestLabels:
+    def test_load_labels_reads_the_shipped_file(self):
+        from utils.tracker import load_labels
+
+        labels = load_labels(LABELS_FILE)
+        assert len(labels) == 80
+        assert labels[0] == "person"
+        assert labels[2] == "car"
+
+    def test_load_labels_rejects_a_missing_file(self, tmp_path: Path):
+        from utils.tracker import load_labels
+
+        with pytest.raises(ValueError, match="labels file does not exist"):
+            load_labels(tmp_path / "absent.txt")
+
+    def test_load_labels_rejects_an_empty_file(self, tmp_path: Path):
+        from utils.tracker import load_labels
+
+        empty = tmp_path / "empty.txt"
+        empty.write_text("\n   \n", encoding="utf-8")
+        with pytest.raises(ValueError, match="labels file is empty"):
+            load_labels(empty)
+
+    def test_classes_resolve_against_a_non_coco_labels_file(self, tmp_path: Path):
+        from utils.tracker import load_labels, parse_class_configs
+
+        labels_path = tmp_path / "pcb_label.txt"
+        labels_path.write_text("Missing_hole\nMouse_bite\nSpur\n", encoding="utf-8")
+        labels = load_labels(labels_path)
+
+        configs = parse_class_configs([{"class": "spur"}, {"class": 0}], labels)
+        assert [(c.class_id, c.label) for c in configs] == [(2, "Spur"), (0, "Missing_hole")]
+
+    def test_non_coco_classes_are_rejected_with_the_file_in_mind(self, tmp_path: Path):
+        from utils.tracker import load_labels, parse_class_configs
+
+        labels_path = tmp_path / "pcb_label.txt"
+        labels_path.write_text("Missing_hole\nMouse_bite\n", encoding="utf-8")
+        labels = load_labels(labels_path)
+
+        with pytest.raises(ValueError, match="unsupported class: 'person'"):
+            parse_class_configs([{"class": "person"}], labels)
+        with pytest.raises(ValueError, match="unsupported class id 2; expected 0..1"):
+            parse_class_configs([{"class": 2}], labels)
+
+    def test_app_config_rejects_a_missing_labels_file(self, tmp_path: Path):
+        from main import load_app_config
+
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "model:\n"
+            "  path: models/yolo26m-det-int8-b1.tar.gz\n"
+            f"  labels: {tmp_path / 'absent.txt'}\n"
+            "streams:\n"
+            "  - rtsp://127.0.0.1:8554/src1\n"
+            + DEFAULT_CLASSES
+            + "output:\n  insight:\n    host: 127.0.0.1\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="labels file does not exist"):
+            load_app_config(config_path)
+
+
 class TestRuntimeOptions:
     def test_realtime_link_sets_inflight_limits(self, monkeypatch):
         import main
@@ -270,7 +342,7 @@ class TestMetadata:
             url="rtsp://127.0.0.1:8554/src1",
             source_fps=30,
             metadata_sender=sender,
-            tracker=MultiClassTracker(parse_class_configs([{"class": "person"}])),
+            tracker=MultiClassTracker(parse_class_configs([{"class": "person"}], shipped_labels())),
             profile=ProfileWindow(False, 0),
             latest_debug_frame=None,
             frame_w=100,
@@ -344,7 +416,7 @@ class TestClassConfig:
         from utils.tracker import parse_class_configs
 
         names = ["person", "car", "bicycle", "dog", "truck"][:count]
-        configs = parse_class_configs([{"class": name} for name in names])
+        configs = parse_class_configs([{"class": name} for name in names], shipped_labels())
 
         assert [c.label for c in configs] == names
 
@@ -376,12 +448,14 @@ class TestClassConfig:
         from utils.tracker import parse_class_configs
 
         with pytest.raises(ValueError, match=message):
-            parse_class_configs(classes)
+            parse_class_configs(classes, shipped_labels())
 
     def test_accepts_numeric_ids_and_names(self):
         from utils.tracker import parse_class_configs
 
-        configs = parse_class_configs([{"class": 2}, {"class": "Traffic Light"}, {"class": "7"}])
+        configs = parse_class_configs(
+            [{"class": 2}, {"class": "Traffic Light"}, {"class": "7"}], shipped_labels()
+        )
 
         assert [(c.class_id, c.label) for c in configs] == [(2, "car"), (9, "traffic light"), (7, "truck")]
 
@@ -430,7 +504,7 @@ class TestTracker:
     def make(self, classes):
         from utils.tracker import MultiClassTracker, parse_class_configs
 
-        return MultiClassTracker(parse_class_configs(classes))
+        return MultiClassTracker(parse_class_configs(classes, shipped_labels()))
 
     def test_reuses_track_id_for_moving_object(self):
         tracker = self.make([{"class": "person"}])
@@ -567,16 +641,16 @@ class TestTracker:
         assert linear_assignment([], 1) == []
 
 
-class TestGoldenParity:
+class TestExpectedTracks:
     """Replays the shared fixture that the C++ unit test also replays."""
 
     @pytest.mark.parametrize(
-        "case", json.loads(GOLDEN.read_text())["cases"], ids=lambda case: case["name"]
+        "case", json.loads(EXPECTED_TRACKS.read_text())["cases"], ids=lambda case: case["name"]
     )
-    def test_matches_golden(self, case):
+    def test_matches_expected_tracks(self, case):
         from utils.tracker import MultiClassTracker, parse_class_configs
 
-        tracker = MultiClassTracker(parse_class_configs(case["classes"]))
+        tracker = MultiClassTracker(parse_class_configs(case["classes"], shipped_labels()))
         for f, (dets, expected) in enumerate(zip(case["frames"], case["expected"])):
             out = tracker.update(
                 [{"x1": d[0], "y1": d[1], "x2": d[2], "y2": d[3], "score": d[4], "class_id": d[5]} for d in dets],

@@ -72,9 +72,9 @@ In the Insight Web UI, start the required streams and copy their RTSP URLs into 
 
 ## Configure
 
-Open `${APP_DIR}/src/common/config.yaml`. Set `model.path`, add each RTSP URL under `streams`, and set the Insight host and starting video and metadata ports. Set `input.codec` to match the streams.
+Open `${APP_DIR}/src/common/config.yaml`. Set `model.path` and `model.labels`, add each RTSP URL under `streams`, and set the Insight host and starting video and metadata ports. Set `input.codec` to match the streams.
 
-List the classes to track under `tracking.classes`. The list takes one to five entries. `class` is a COCO class name or ID. Every other key is optional and applies to that class only:
+List the classes to track under `tracking.classes`. The list takes one to five entries. `class` is a name or zero-based class id from the `model.labels` file, which ships as `src/common/coco_label.txt` with one COCO class per line in detector class-id order. Every other key is optional and applies to that class only:
 
 ```yaml
 tracking:
@@ -124,7 +124,7 @@ python3 ${APP_DIR}/src/python/main.py \
 
 ## Tracker
 
-Each stream runs one tracker per configured class, so a detection can only match a track of its own class, and tracks never change class. Track IDs are unique within a stream. The C++ and Python trackers are the same algorithm. `tests/common/tracker_golden.json` holds shared replay cases that both unit tests must reproduce exactly.
+Each stream runs one tracker per configured class, so a detection can only match a track of its own class, and tracks never change class. Track IDs are unique within a stream. The C++ and Python trackers are the same algorithm. `tests/common/expected_tracks.json` holds shared replay cases that both unit tests must reproduce exactly; `tools/write_expected_tracks.py` rewrites it.
 
 The tracker follows ByteTrack:
 
@@ -191,7 +191,7 @@ python3 examples/tracking/multi-stream-tracker/tools/compare_trackers.py \
 ## Troubleshooting
 
 - Start with one stream before scaling to multiple inputs.
-- Verify `model.path`, every RTSP URL, and the Insight port ranges.
+- Verify `model.path`, `model.labels`, every RTSP URL, and the Insight port ranges.
 - Set either inflight limit to `-1` to use the Core default.
 - Use `output.debug_dir` and `output.save_every` to save sampled overlays. They are drawn on the latest decoded frame, which can be a few frames newer than the detections, so fast objects can look offset. Insight matches metadata to video by timestamp and does not have this offset.
 - All streams must have the same resolution.

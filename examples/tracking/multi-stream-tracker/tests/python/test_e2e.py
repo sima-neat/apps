@@ -40,7 +40,7 @@ def assert_tracking_metadata(metadata, expected_labels: set[str]) -> None:
     label, a positive integer id, and a box inside the frame. Whether any track
     is published depends on the stream content, so an empty run is not treated
     as a failure here; that tracking produces tracks at all is covered by the
-    unit tests and the golden parity cases.
+    unit tests and the expected-tracks cases.
     """
     checked = 0
     for message in metadata.messages:

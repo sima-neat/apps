@@ -73,17 +73,21 @@ struct ClassTrackerConfig {
   void validate() const;
 };
 
-/// COCO class labels in YOLO26 detector class-id order.
-const std::vector<std::string>& coco_labels();
+/// Reads the detector's class labels, one per line in class-id order. Throws when
+/// the file is missing or empty.
+std::vector<std::string> load_labels(const std::string& labels_path);
 
-/// Maps a COCO class name or numeric id to (class_id, label). Throws on unknown classes.
-std::pair<int, std::string> resolve_class(const std::string& value);
+/// Maps a class name or numeric id from `labels` to (class_id, label). Throws on
+/// unknown classes.
+std::pair<int, std::string> resolve_class(const std::string& value,
+                                          const std::vector<std::string>& labels);
 
 /// One `key: value` mapping from a `tracking.classes` entry, in file order.
 using ClassEntry = std::vector<std::pair<std::string, std::string>>;
 
 /// Parses and validates 1 to kMaxClasses entries. Throws on invalid or duplicate classes.
-std::vector<ClassTrackerConfig> parse_class_configs(const std::vector<ClassEntry>& entries);
+std::vector<ClassTrackerConfig> parse_class_configs(const std::vector<ClassEntry>& entries,
+                                                    const std::vector<std::string>& labels);
 
 /// Minimum-cost assignment (Hungarian); pairs whose cost exceeds `max_cost` are dropped.
 std::vector<std::pair<int, int>> linear_assignment(const std::vector<std::vector<double>>& cost,

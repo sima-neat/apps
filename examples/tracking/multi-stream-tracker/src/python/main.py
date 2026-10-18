@@ -18,6 +18,7 @@ from utils.tracker import (
     ClassTrackerConfig,
     MultiClassTracker,
     TrackedDetection,
+    load_labels,
     parse_class_configs,
 )
 
@@ -267,6 +268,9 @@ def load_app_config(config_path: Path) -> AppConfig:
     output = section(raw, "output")
     insight = section(output, "insight")
 
+    default_labels = Path(__file__).resolve().parents[1] / "common" / "coco_label.txt"
+    labels = load_labels(Path(string_or(model, "labels", str(default_labels))).expanduser())
+
     streams = raw.get("streams")
     if not isinstance(streams, list) or not streams:
         raise ValueError("streams must be a non-empty list")
@@ -291,7 +295,7 @@ def load_app_config(config_path: Path) -> AppConfig:
         max_detections=int_or(inference, "max_detections", 50),
         profile=bool_or(runtime, "profile", False),
         warmup_frames=int_or(runtime, "warmup_frames", 30),
-        tracker_classes=parse_class_configs(tracking.get("classes")),
+        tracker_classes=parse_class_configs(tracking.get("classes"), labels),
         insight_host=string_or(insight, "host"),
         video_port_base=int_or(insight, "video_port_base", 9000),
         metadata_port_base=int_or(insight, "metadata_port_base", 9100),

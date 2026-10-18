@@ -154,9 +154,17 @@ int run_source_case(const std::string& binary, const std::string& model_path,
   const int total_saved_frames = e2e_int(kExampleName, "testing.e2e.output", "total_saved_frames");
   const int timeout_ms = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
 
+  const fs::path labels_file =
+      example_common_config_path(kExampleName).parent_path() / "coco_label.txt";
+  if (!fs::exists(labels_file)) {
+    std::cerr << "[FAIL] labels file not found: " << labels_file << "\n";
+    return 1;
+  }
+
   const fs::path config_path = fs::path(output_dir).parent_path() / "config.yaml";
   write_e2e_config(kExampleName, config_path,
                    {{"model.path", model_path},
+                    {"model.labels", labels_file.string()},
                     {"input.codec", source_case.codec},
                     {"output.debug_dir", output_dir},
                     {"output.insight.host", kE2eInsightHost},
@@ -217,8 +225,9 @@ int run_source_case(const std::string& binary, const std::string& model_path,
       rc = 1;
     } else {
       std::set<std::string> expected_labels;
-      for (const auto& config : multi_stream_tracker::parse_class_configs(
-               configured_class_entries())) {
+      const auto labels = multi_stream_tracker::load_labels(labels_file.string());
+      for (const auto& config :
+           multi_stream_tracker::parse_class_configs(configured_class_entries(), labels)) {
         expected_labels.insert(config.label);
       }
       if (!tracking_metadata_is_valid(metadata, expected_labels)) {

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <fstream>
 #include <limits>
 #include <set>
 #include <stdexcept>
@@ -144,12 +145,16 @@ MatchResult match(const std::vector<Track*>& tracks, const std::vector<Candidate
   return result;
 }
 
-std::string lower_trim(const std::string& value) {
-  const auto start = value.find_first_not_of(" \t");
+std::string trim(const std::string& value) {
+  const auto start = value.find_first_not_of(" \t\r");
   if (start == std::string::npos)
     return {};
-  const auto end = value.find_last_not_of(" \t");
-  std::string out = value.substr(start, end - start + 1);
+  const auto end = value.find_last_not_of(" \t\r");
+  return value.substr(start, end - start + 1);
+}
+
+std::string lower_trim(const std::string& value) {
+  std::string out = trim(value);
   std::transform(out.begin(), out.end(), out.begin(),
                  [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
   return out;
@@ -167,57 +172,50 @@ bool parse_number(const std::string& value, double& out) {
 
 } // namespace
 
-const std::vector<std::string>& coco_labels() {
-  static const std::vector<std::string> labels = {
-      "person",        "bicycle",      "car",
-      "motorcycle",    "airplane",     "bus",
-      "train",         "truck",        "boat",
-      "traffic light", "fire hydrant", "stop sign",
-      "parking meter", "bench",        "bird",
-      "cat",           "dog",          "horse",
-      "sheep",         "cow",          "elephant",
-      "bear",          "zebra",        "giraffe",
-      "backpack",      "umbrella",     "handbag",
-      "tie",           "suitcase",     "frisbee",
-      "skis",          "snowboard",    "sports ball",
-      "kite",          "baseball bat", "baseball glove",
-      "skateboard",    "surfboard",    "tennis racket",
-      "bottle",        "wine glass",   "cup",
-      "fork",          "knife",        "spoon",
-      "bowl",          "banana",       "apple",
-      "sandwich",      "orange",       "broccoli",
-      "carrot",        "hot dog",      "pizza",
-      "donut",         "cake",         "chair",
-      "couch",         "potted plant", "bed",
-      "dining table",  "toilet",       "tv",
-      "laptop",        "mouse",        "remote",
-      "keyboard",      "cell phone",   "microwave",
-      "oven",          "toaster",      "sink",
-      "refrigerator",  "book",         "clock",
-      "vase",          "scissors",     "teddy bear",
-      "hair drier",    "toothbrush",
-  };
+std::vector<std::string> load_labels(const std::string& labels_path) {
+  std::ifstream input(labels_path);
+  if (!input.is_open()) {
+    throw std::runtime_error("labels file does not exist: " + labels_path);
+  }
+  std::vector<std::string> labels;
+  std::string line;
+  while (std::getline(input, line)) {
+    const std::string label = trim(line);
+    if (!label.empty()) {
+      labels.push_back(label);
+    }
+  }
+  if (labels.empty()) {
+    throw std::runtime_error("labels file is empty: " + labels_path);
+  }
   return labels;
 }
 
-std::pair<int, std::string> resolve_class(const std::string& value) {
-  const auto& labels = coco_labels();
+std::pair<int, std::string> resolve_class(const std::string& value,
+                                          const std::vector<std::string>& labels) {
   const std::string name = lower_trim(value);
   if (!name.empty() && std::all_of(name.begin(), name.end(), [](unsigned char c) {
         return std::isdigit(c) != 0;
       })) {
-    const long id = name.size() > 3 ? -1 : std::stol(name);
-    if (id < 0 || id >= static_cast<long>(labels.size())) {
+    std::size_t id = labels.size();
+    try {
+      id = std::stoul(name);
+    } catch (const std::exception&) {
+      id = labels.size(); // Out of range below, with the same message as any other bad id.
+    }
+    if (id >= labels.size()) {
       throw std::runtime_error("unsupported class id " + name + "; expected 0.." +
                                std::to_string(labels.size() - 1));
     }
-    return {static_cast<int>(id), labels[static_cast<std::size_t>(id)]};
+    return {static_cast<int>(id), labels[id]};
   }
-  const auto it = std::find(labels.begin(), labels.end(), name);
-  if (name.empty() || it == labels.end()) {
-    throw std::runtime_error("unsupported class: '" + value + "'; use a COCO class name or id");
+  for (std::size_t id = 0; id < labels.size(); ++id) {
+    if (lower_trim(labels[id]) == name) {
+      return {static_cast<int>(id), labels[id]};
+    }
   }
-  return {static_cast<int>(it - labels.begin()), name};
+  throw std::runtime_error("unsupported class: '" + value +
+                           "'; use a class name or id from the labels file");
 }
 
 void ClassTrackerConfig::validate() const {
@@ -257,7 +255,8 @@ void ClassTrackerConfig::validate() const {
   }
 }
 
-std::vector<ClassTrackerConfig> parse_class_configs(const std::vector<ClassEntry>& entries) {
+std::vector<ClassTrackerConfig> parse_class_configs(const std::vector<ClassEntry>& entries,
+                                                    const std::vector<std::string>& labels) {
   if (entries.empty() || entries.size() > kMaxClasses) {
     throw std::runtime_error("tracking.classes must list 1 to " + std::to_string(kMaxClasses) +
                              " classes");
@@ -273,7 +272,7 @@ std::vector<ClassTrackerConfig> parse_class_configs(const std::vector<ClassEntry
       throw std::runtime_error(prefix + " must be a mapping with a 'class' key");
     }
     ClassTrackerConfig config;
-    std::tie(config.class_id, config.label) = resolve_class(class_it->second);
+    std::tie(config.class_id, config.label) = resolve_class(class_it->second, labels);
     if (!seen.insert(config.class_id).second) {
       throw std::runtime_error(prefix + ": duplicate class '" + config.label + "'");
     }

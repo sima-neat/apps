@@ -1,5 +1,6 @@
 model:                       # Detector model selection.
   path: <model-path>         # Example: models/<model-pack>.tar.gz
+  labels: examples/tracking/multi-stream-tracker/src/common/coco_label.txt  # One class per line, in class-id order.
 
 streams:                     # RTSP inputs, one entry per camera.
   - <rtsp-url-1>             # Example: rtsp://<rtsp-source-ip>:<port>/<stream-name>
@@ -26,7 +27,7 @@ inference:                   # Detection controls.
   max_detections: 50         # Max detections to keep per frame after NMS.
 
 tracking:                    # ByteTrack-style tracker, one instance per class per stream.
-  classes:                   # 1 to 5 entries. `class` is a COCO name or id; other keys are optional.
+  classes:                   # 1 to 5 entries. `class` is a name or id from model.labels; other keys are optional.
     - class: person
       high_score_threshold: 0.40    # Detections at or above this score start matching (stage 1).
       low_score_threshold: 0.10     # Detections between low and high only recover active tracks (stage 2).

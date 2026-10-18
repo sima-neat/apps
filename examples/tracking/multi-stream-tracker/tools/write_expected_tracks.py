@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Regenerate tests/common/tracker_golden.json from the Python tracker.
+"""Rewrite tests/common/expected_tracks.json from the Python tracker.
 
 The C++ and Python unit tests replay every case and must reproduce the
 expected track IDs, classes, labels, and boxes. Inputs are quantized to values
 that float and double represent exactly, so both languages see the same numbers.
 
 Usage:
-  python3 tools/make_tracker_golden.py [--race-log PATH]
+  python3 tools/write_expected_tracks.py [--race-log PATH]
 """
 
 from __future__ import annotations
@@ -20,10 +20,11 @@ EXAMPLE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(EXAMPLE_DIR / "src" / "python"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from compare_trackers import load_log, make_scenario  # noqa: E402
+from compare_trackers import SHIPPED_LABELS_FILE, load_log, make_scenario  # noqa: E402
+from utils.tracker import load_labels  # noqa: E402
 from utils.tracker import MultiClassTracker, parse_class_configs  # noqa: E402
 
-OUTPUT = EXAMPLE_DIR / "tests" / "common" / "tracker_golden.json"
+OUTPUT = EXAMPLE_DIR / "tests" / "common" / "expected_tracks.json"
 
 TWO_CLASSES = [
     {"class": "person", "max_missing_frames": 20},
@@ -42,15 +43,15 @@ RACE_CLASSES = [
 ]
 
 
-def _q(value: float, step: float) -> float:
+def round_to_step(value: float, step: float) -> float:
     return round(value / step) * step
 
 
 def quantize(frames: list[list[dict]]) -> list[list[list[float]]]:
     return [
         [
-            [_q(d["x1"], 1 / 16), _q(d["y1"], 1 / 16), _q(d["x2"], 1 / 16), _q(d["y2"], 1 / 16),
-             _q(d["score"], 1 / 1024), int(d["class_id"])]
+            [round_to_step(d["x1"], 1 / 16), round_to_step(d["y1"], 1 / 16), round_to_step(d["x2"], 1 / 16), round_to_step(d["y2"], 1 / 16),
+             round_to_step(d["score"], 1 / 1024), int(d["class_id"])]
             for d in dets
         ]
         for dets in frames
@@ -76,7 +77,7 @@ def five_class_frames() -> list[list[dict]]:
 
 
 def run_case(name: str, classes: list[dict], inputs: list[list[list[float]]]) -> dict:
-    tracker = MultiClassTracker(parse_class_configs(classes))
+    tracker = MultiClassTracker(parse_class_configs(classes, load_labels(SHIPPED_LABELS_FILE)))
     expected = []
     for f, dets in enumerate(inputs):
         det_dicts = [

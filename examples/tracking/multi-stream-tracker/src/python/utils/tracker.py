@@ -12,10 +12,11 @@ independent of the others, so the filter is stored as four 2x2 blocks
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field, fields
 import math
+from pathlib import Path
 
-from utils.coco import COCO_LABELS
 
 MAX_CLASSES = 5
 _GATED_COST = 1.0e6
@@ -141,24 +142,39 @@ class ClassTrackerConfig:
 _SETTING_KEYS = {f.name for f in fields(ClassTrackerConfig)} - {"class_id", "label"}
 
 
-def resolve_class(value: object) -> tuple[int, str]:
-    """Map a COCO class name or id to ``(class_id, label)``."""
+def load_labels(labels_path: Path) -> tuple[str, ...]:
+    """Read the detector's class labels, one per line in class-id order."""
+    if not labels_path.is_file():
+        raise ValueError(f"labels file does not exist: {labels_path}")
+    labels = tuple(
+        line.strip()
+        for line in labels_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    )
+    if not labels:
+        raise ValueError(f"labels file is empty: {labels_path}")
+    return labels
+
+
+def resolve_class(value: object, labels: Sequence[str]) -> tuple[int, str]:
+    """Map a class name or id from the labels file to ``(class_id, label)``."""
     if isinstance(value, bool):
         raise ValueError(f"unsupported class: {value!r}")
     if isinstance(value, str) and value.strip().isdigit():
         value = int(value.strip())
     if isinstance(value, int):
-        if 0 <= value < len(COCO_LABELS):
-            return value, COCO_LABELS[value]
-        raise ValueError(f"unsupported class id {value}; expected 0..{len(COCO_LABELS) - 1}")
+        if 0 <= value < len(labels):
+            return value, labels[value]
+        raise ValueError(f"unsupported class id {value}; expected 0..{len(labels) - 1}")
     if isinstance(value, str) and value.strip():
         name = value.strip().lower()
-        if name in COCO_LABELS:
-            return COCO_LABELS.index(name), name
-    raise ValueError(f"unsupported class: {value!r}; use a COCO class name or id")
+        for class_id, label in enumerate(labels):
+            if label.strip().lower() == name:
+                return class_id, label
+    raise ValueError(f"unsupported class: {value!r}; use a class name or id from the labels file")
 
 
-def parse_class_configs(raw: object) -> tuple[ClassTrackerConfig, ...]:
+def parse_class_configs(raw: object, labels: Sequence[str]) -> tuple[ClassTrackerConfig, ...]:
     """Parse and validate the ``tracking.classes`` list."""
     if not isinstance(raw, list) or not 1 <= len(raw) <= MAX_CLASSES:
         raise ValueError(f"tracking.classes must list 1 to {MAX_CLASSES} classes")
@@ -167,7 +183,7 @@ def parse_class_configs(raw: object) -> tuple[ClassTrackerConfig, ...]:
     for index, entry in enumerate(raw):
         if not isinstance(entry, dict) or "class" not in entry:
             raise ValueError(f"tracking.classes[{index}] must be a mapping with a 'class' key")
-        class_id, label = resolve_class(entry["class"])
+        class_id, label = resolve_class(entry["class"], labels)
         if class_id in seen:
             raise ValueError(f"tracking.classes[{index}]: duplicate class '{label}'")
         seen.add(class_id)

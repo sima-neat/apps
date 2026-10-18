@@ -413,8 +413,12 @@ AppConfig load_app_config(const fs::path& config_path) {
   cfg.max_detections = raw.int_or("inference.max_detections", 50);
   cfg.profile = raw.bool_or("runtime.profile", false);
   cfg.warmup_frames = raw.int_or("runtime.warmup_frames", 30);
+  const auto default_labels =
+      fs::path(SIMANEAT_APPS_EXAMPLE_SOURCE_DIR).parent_path() / "common" / "coco_label.txt";
+  const auto labels =
+      multi_stream_tracker::load_labels(raw.string_or("model.labels", default_labels.string()));
   cfg.tracker_classes =
-      multi_stream_tracker::parse_class_configs(parse_tracking_classes(config_path));
+      multi_stream_tracker::parse_class_configs(parse_tracking_classes(config_path), labels);
   cfg.insight_host = raw.string_or("output.insight.host", "");
   cfg.video_port_base = raw.int_or("output.insight.video_port_base", 9000);
   cfg.metadata_port_base = raw.int_or("output.insight.metadata_port_base", 9100);

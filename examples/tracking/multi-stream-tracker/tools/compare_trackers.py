@@ -38,8 +38,11 @@ from utils.tracker import (  # noqa: E402
     MultiClassTracker,
     _iou_xyxy,
     linear_assignment,
+    load_labels,
     parse_class_configs,
 )
+
+SHIPPED_LABELS_FILE = EXAMPLE_DIR / "src" / "common" / "coco_label.txt"
 
 BASELINE_MIN_SCORE = 0.30  # Previous app's detector threshold.
 
@@ -99,19 +102,19 @@ class GreedyCvCandidate:
 
 
 class ByteTrackCandidate:
-    def __init__(self, classes_cfg: list[dict]) -> None:
-        self.tracker = MultiClassTracker(parse_class_configs(classes_cfg))
+    def __init__(self, classes_cfg: list[dict], labels: tuple[str, ...]) -> None:
+        self.tracker = MultiClassTracker(parse_class_configs(classes_cfg, labels))
 
     def update(self, dets: list[dict], frame: int):
         return [((t.x1, t.y1, t.x2, t.y2), t.track_id, t.class_id) for t in self.tracker.update(dets, frame)]
 
 
-def build_candidates(classes_cfg: list[dict]):
-    class_ids = [c.class_id for c in parse_class_configs(classes_cfg)]
+def build_tracker_candidates(classes_cfg: list[dict], labels: tuple[str, ...]):
+    class_ids = [c.class_id for c in parse_class_configs(classes_cfg, labels)]
     return {
         "greedy_iou": GreedyIouCandidate(class_ids),
         "greedy_cv": GreedyCvCandidate(class_ids),
-        "bytetrack": ByteTrackCandidate(classes_cfg),
+        "bytetrack": ByteTrackCandidate(classes_cfg, labels),
     }
 
 
@@ -120,8 +123,18 @@ def build_candidates(classes_cfg: list[dict]):
 # --------------------------------------------------------------------------- #
 
 
-def _obj(gid, cls, x, y, vx, vy, w, h):
-    return {"gid": gid, "cls": cls, "x": x, "y": y, "vx": vx, "vy": vy, "w": w, "h": h}
+def moving_object(object_id, class_id, x, y, speed_x, speed_y, width, height):
+    """One scenario object. The keys are the compact per-frame format used below."""
+    return {
+        "gid": object_id,
+        "cls": class_id,
+        "x": x,
+        "y": y,
+        "vx": speed_x,
+        "vy": speed_y,
+        "w": width,
+        "h": height,
+    }
 
 
 def make_scenario(name: str, seed: int, frames: int = 150):
@@ -135,30 +148,30 @@ def make_scenario(name: str, seed: int, frames: int = 150):
     hide_when_overlapped = set()  # gids not detected while overlapping another object
     if name == "crossing":
         objs = [
-            _obj(1, person, 100, 300, 8, 0, 60, 150),
-            _obj(2, person, 1100, 315, -8, 0, 55, 140),
-            _obj(3, car, 100, 600, 14, 0, 200, 110),
-            _obj(4, car, 1900, 615, -14, 0, 190, 105),
+            moving_object(1, person, 100, 300, 8, 0, 60, 150),
+            moving_object(2, person, 1100, 315, -8, 0, 55, 140),
+            moving_object(3, car, 100, 600, 14, 0, 200, 110),
+            moving_object(4, car, 1900, 615, -14, 0, 190, 105),
         ]
         hide_when_overlapped = {2, 4}
     elif name == "short_occlusion":
-        objs = [_obj(1, person, 100, 300, 5, 0, 60, 150), _obj(2, car, 100, 600, 14, 0, 200, 110)]
+        objs = [moving_object(1, person, 100, 300, 5, 0, 60, 150), moving_object(2, car, 100, 600, 14, 0, 200, 110)]
         occluded = {1: set(range(60, 70)), 2: set(range(50, 58))}
     elif name == "missed_detections":
-        objs = [_obj(g, person, 100 + 150 * g, 200 + 40 * g, 3, 1, 60, 150) for g in range(1, 5)]
-        objs += [_obj(10 + g, car, 100, 500 + 150 * g, 10 + 3 * g, 0, 200, 110) for g in range(2)]
+        objs = [moving_object(g, person, 100 + 150 * g, 200 + 40 * g, 3, 1, 60, 150) for g in range(1, 5)]
+        objs += [moving_object(10 + g, car, 100, 500 + 150 * g, 10 + 3 * g, 0, 200, 110) for g in range(2)]
         miss_rate = 0.25
     elif name == "low_confidence":
-        objs = [_obj(g, person, 200 + 200 * g, 300, 4, 0, 60, 150) for g in range(1, 4)]
-        objs += [_obj(10, car, 100, 650, 15, 0, 200, 110)]
+        objs = [moving_object(g, person, 200 + 200 * g, 300, 4, 0, 60, 150) for g in range(1, 4)]
+        objs += [moving_object(10, car, 100, 650, 15, 0, 200, 110)]
         low_conf_rate = 0.35
     elif name == "different_speeds":
         objs = [
-            _obj(1, person, 400, 300, 1, 0, 60, 150),
-            _obj(2, person, 600, 320, 2, 1, 60, 150),
-            _obj(3, car, 50, 600, 45, 0, 200, 110),
-            _obj(4, car, 1800, 800, -70, 0, 220, 120),
-            _obj(5, person, 0, 100, 25, 0, 50, 120),
+            moving_object(1, person, 400, 300, 1, 0, 60, 150),
+            moving_object(2, person, 600, 320, 2, 1, 60, 150),
+            moving_object(3, car, 50, 600, 45, 0, 200, 110),
+            moving_object(4, car, 1800, 800, -70, 0, 220, 120),
+            moving_object(5, person, 0, 100, 25, 0, 50, 120),
         ]
         miss_rate = 0.15
     else:
@@ -194,7 +207,7 @@ def make_scenario(name: str, seed: int, frames: int = 150):
     return out
 
 
-def evaluate_gt(frames, candidate) -> dict:
+def evaluate_with_ground_truth(frames, candidate) -> dict:
     """CLEAR-MOT (IoU >= 0.5, class-aware) plus IDF1 from matched pairs."""
     fn = fp = idsw = frag = gt_total = trk_total = 0
     last_id: dict[int, int] = {}
@@ -256,7 +269,7 @@ def load_log(path: Path):
     return frames
 
 
-def evaluate_proxy(frames, candidate, rebirth_window: int = 30) -> dict:
+def evaluate_fragmentation(frames, candidate, rebirth_window: int = 30) -> dict:
     spans: dict[int, dict] = {}
     for f, dets in enumerate(frames):
         for box, tid, cls in candidate.update(dets, f):
@@ -285,7 +298,7 @@ def evaluate_proxy(frames, candidate, rebirth_window: int = 30) -> dict:
     }
 
 
-def _table(title: str, rows: dict[str, dict]) -> str:
+def format_table(title: str, rows: dict[str, dict]) -> str:
     keys = list(next(iter(rows.values())).keys())
     lines = [f"\n### {title}\n", "| tracker | " + " | ".join(keys) + " |", "|---" * (len(keys) + 1) + "|"]
     for name, metrics in rows.items():
@@ -307,26 +320,33 @@ def main(argv=None) -> int:
 
     synthetic_classes = [{"class": "person"}, {"class": "car"}]
     results: dict = {"synthetic": {}, "logs": {}}
+    shipped_labels = load_labels(SHIPPED_LABELS_FILE)
     for scenario in SCENARIOS:
         totals: dict[str, dict] = {}
         for seed in range(args.seeds):
             frames = make_scenario(scenario, seed)
-            for name, cand in build_candidates(synthetic_classes).items():
-                m = evaluate_gt(frames, cand)
+            for name, cand in build_tracker_candidates(synthetic_classes, shipped_labels).items():
+                m = evaluate_with_ground_truth(frames, cand)
                 agg = totals.setdefault(name, {k: 0.0 for k in m})
                 for k, v in m.items():
                     agg[k] += v / args.seeds
         results["synthetic"][scenario] = totals
-        print(_table(f"synthetic: {scenario} (mean of {args.seeds} seeds)", totals))
+        print(format_table(f"synthetic: {scenario} (mean of {args.seeds} seeds)", totals))
 
     if args.log:
         raw = yaml.safe_load(args.config.read_text()) if args.config else {}
         classes_cfg = ((raw or {}).get("tracking") or {}).get("classes") or synthetic_classes
+        # Resolve class names the way the app would: against the labels file its config names.
+        labels_value = ((raw or {}).get("model") or {}).get("labels")
+        labels = load_labels(Path(labels_value) if labels_value else SHIPPED_LABELS_FILE)
         for log in args.log:
             frames = load_log(log)
-            rows = {name: evaluate_proxy(frames, cand) for name, cand in build_candidates(classes_cfg).items()}
+            rows = {
+                name: evaluate_fragmentation(frames, cand)
+                for name, cand in build_tracker_candidates(classes_cfg, labels).items()
+            }
             results["logs"][log.name] = rows
-            print(_table(f"log: {log.name} ({len(frames)} frames, no ground truth)", rows))
+            print(format_table(f"log: {log.name} ({len(frames)} frames, no ground truth)", rows))
 
     if args.json:
         args.json.write_text(json.dumps(results, indent=2))

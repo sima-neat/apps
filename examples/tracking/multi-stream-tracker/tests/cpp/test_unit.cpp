@@ -25,6 +25,29 @@ using sima_examples::testing::spawn_and_wait;
 
 namespace {
 
+// The shipped labels file, so class resolution is tested against real data. Found
+// the same way as the expected-tracks file, which must work from any working directory.
+fs::path labels_file() {
+  std::vector<fs::path> candidates;
+#ifdef MULTI_STREAM_TRACKER_SOURCE_DIR
+  candidates.push_back(fs::path(MULTI_STREAM_TRACKER_SOURCE_DIR) / ".." / "common" /
+                       "coco_label.txt");
+#endif
+  candidates.push_back("examples/tracking/multi-stream-tracker/src/common/coco_label.txt");
+  for (const auto& path : candidates) {
+    if (fs::exists(path)) {
+      return fs::weakly_canonical(path);
+    }
+  }
+  return {};
+}
+
+const std::vector<std::string>& shipped_labels() {
+  static const std::vector<std::string> cached =
+      multi_stream_tracker::load_labels(labels_file().string());
+  return cached;
+}
+
 bool expect_true(bool condition, const std::string& message) {
   if (!condition) {
     std::cerr << "[FAIL] " << message << "\n";
@@ -44,6 +67,11 @@ const std::string kTwoClasses = "tracking:\n"
                                 "    - class: person\n"
                                 "    - class: car   # comment\n"
                                 "      max_missing_frames: 45\n";
+
+// Every fixture needs the same model block, and the labels path varies by checkout.
+std::string model_block(const std::string& model_file) {
+  return "model:\n  path: models/" + model_file + "\n  labels: " + labels_file().string() + "\n";
+}
 
 fs::path write_config(const std::string& test_name, const std::string& body) {
   const std::string temp_dir = create_test_scratch_dir("multi-stream-tracker", test_name);
@@ -73,22 +101,21 @@ bool test_missing_config_file_fails_cleanly(const std::string& binary) {
 
 bool test_validate_config_only_accepts_four_streams(const std::string& binary) {
   const fs::path config_path = write_config("test_validate_config_only_accepts_four_streams",
-                                            "model:\n"
-                                            "  path: models/yolo26m-det-int8-b1.tar.gz\n"
-                                            "streams:\n"
-                                            "  - rtsp://127.0.0.1:8554/src1\n"
-                                            "  - rtsp://127.0.0.1:8554/src2\n"
-                                            "  - rtsp://127.0.0.1:8554/src3\n"
-                                            "  - rtsp://127.0.0.1:8554/src4\n"
-                                            "input:\n"
-                                            "  codec: hevc\n"
-                                            "inference:\n"
-                                            "  max_inflight_per_stream: 3\n"
-                                            "  max_inflight_total: 12\n"
-                                            + kTwoClasses +
-                                            "output:\n"
-                                            "  insight:\n"
-                                            "    host: 127.0.0.1\n");
+                                            model_block("yolo26m-det-int8-b1.tar.gz") +
+                                                "streams:\n"
+                                                "  - rtsp://127.0.0.1:8554/src1\n"
+                                                "  - rtsp://127.0.0.1:8554/src2\n"
+                                                "  - rtsp://127.0.0.1:8554/src3\n"
+                                                "  - rtsp://127.0.0.1:8554/src4\n"
+                                                "input:\n"
+                                                "  codec: hevc\n"
+                                                "inference:\n"
+                                                "  max_inflight_per_stream: 3\n"
+                                                "  max_inflight_total: 12\n" +
+                                                kTwoClasses +
+                                                "output:\n"
+                                                "  insight:\n"
+                                                "    host: 127.0.0.1\n");
 
   const auto result =
       spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
@@ -106,18 +133,17 @@ bool test_validate_config_only_accepts_four_streams(const std::string& binary) {
 
 bool test_validate_config_only_rejects_too_many_streams(const std::string& binary) {
   const fs::path config_path = write_config("test_validate_config_only_rejects_too_many_streams",
-                                            "model:\n"
-                                            "  path: models/yolo26m-det-int8-b1.tar.gz\n"
-                                            "streams:\n"
-                                            "  - rtsp://127.0.0.1:8554/src1\n"
-                                            "  - rtsp://127.0.0.1:8554/src2\n"
-                                            "  - rtsp://127.0.0.1:8554/src3\n"
-                                            "  - rtsp://127.0.0.1:8554/src4\n"
-                                            "  - rtsp://127.0.0.1:8554/src5\n"
-                                            + kTwoClasses +
-                                            "output:\n"
-                                            "  insight:\n"
-                                            "    host: 127.0.0.1\n");
+                                            model_block("yolo26m-det-int8-b1.tar.gz") +
+                                                "streams:\n"
+                                                "  - rtsp://127.0.0.1:8554/src1\n"
+                                                "  - rtsp://127.0.0.1:8554/src2\n"
+                                                "  - rtsp://127.0.0.1:8554/src3\n"
+                                                "  - rtsp://127.0.0.1:8554/src4\n"
+                                                "  - rtsp://127.0.0.1:8554/src5\n" +
+                                                kTwoClasses +
+                                                "output:\n"
+                                                "  insight:\n"
+                                                "    host: 127.0.0.1\n");
 
   const auto result =
       spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
@@ -131,16 +157,15 @@ bool test_validate_config_only_rejects_too_many_streams(const std::string& binar
 bool test_validate_config_only_rejects_invalid_inflight_limit(const std::string& binary) {
   const fs::path config_path =
       write_config("test_validate_config_only_rejects_invalid_inflight_limit",
-                   "model:\n"
-                   "  path: models/yolo26m-det-int8-b1.tar.gz\n"
-                   "streams:\n"
-                   "  - rtsp://127.0.0.1:8554/src1\n"
-                   "inference:\n"
-                   "  max_inflight_total: 0\n"
-                   + kTwoClasses +
-                   "output:\n"
-                   "  insight:\n"
-                   "    host: 127.0.0.1\n");
+                   model_block("yolo26m-det-int8-b1.tar.gz") +
+                       "streams:\n"
+                       "  - rtsp://127.0.0.1:8554/src1\n"
+                       "inference:\n"
+                       "  max_inflight_total: 0\n" +
+                       kTwoClasses +
+                       "output:\n"
+                       "  insight:\n"
+                       "    host: 127.0.0.1\n");
 
   const auto result =
       spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
@@ -162,12 +187,12 @@ std::vector<ClassEntry> entries(std::initializer_list<ClassEntry> list) {
 }
 
 MultiClassTracker make_tracker(const std::vector<ClassEntry>& classes) {
-  return MultiClassTracker(multi_stream_tracker::parse_class_configs(classes));
+  return MultiClassTracker(multi_stream_tracker::parse_class_configs(classes, shipped_labels()));
 }
 
 bool expect_rejects(const std::vector<ClassEntry>& classes, const std::string& needle) {
   try {
-    multi_stream_tracker::parse_class_configs(classes);
+    multi_stream_tracker::parse_class_configs(classes, shipped_labels());
   } catch (const std::exception& e) {
     return expect_contains(e.what(), needle, "invalid classes rejected: " + needle);
   }
@@ -176,10 +201,9 @@ bool expect_rejects(const std::vector<ClassEntry>& classes, const std::string& n
 
 bool run_validate(const std::string& binary, const std::string& test_name,
                   const std::string& tracking, int expected_code, const std::string& needle) {
-  const fs::path config_path = write_config(test_name, "model:\n"
-                                                       "  path: models/m.tar.gz\n"
-                                                       "streams:\n"
-                                                       "  - rtsp://127.0.0.1:8554/src1\n" +
+  const fs::path config_path = write_config(test_name, model_block("m.tar.gz") +
+                                                           "streams:\n"
+                                                           "  - rtsp://127.0.0.1:8554/src1\n" +
                                                            tracking +
                                                            "output:\n"
                                                            "  insight:\n"
@@ -201,12 +225,12 @@ bool test_config_accepts_one_to_five_classes() {
     for (std::size_t i = 0; i < count; ++i) {
       classes.push_back({{"class", names[i]}});
     }
-    const auto configs = multi_stream_tracker::parse_class_configs(classes);
+    const auto configs = multi_stream_tracker::parse_class_configs(classes, shipped_labels());
     ok &= expect_true(configs.size() == count && configs.back().label == names[count - 1],
                       "accepts " + std::to_string(count) + " classes");
   }
   const auto ids = multi_stream_tracker::parse_class_configs(
-      entries({{{"class", "2"}}, {{"class", "Traffic Light"}}, {{"class", "7"}}}));
+      entries({{{"class", "2"}}, {{"class", "Traffic Light"}}, {{"class", "7"}}}), shipped_labels());
   ok &= expect_true(ids[0].class_id == 2 && ids[0].label == "car" && ids[1].class_id == 9 &&
                         ids[1].label == "traffic light" && ids[2].label == "truck",
                     "accepts numeric ids and names");
@@ -519,7 +543,7 @@ bool test_linear_assignment() {
                      "assignment drops pairs above max cost");
 }
 
-fs::path find_golden(const std::string& binary) {
+fs::path find_expected_tracks(const std::string& binary) {
   std::vector<fs::path> candidates;
 #ifdef MULTI_STREAM_TRACKER_SOURCE_DIR
   candidates.push_back(fs::path(MULTI_STREAM_TRACKER_SOURCE_DIR) / "../../tests/common");
@@ -531,22 +555,22 @@ fs::path find_golden(const std::string& binary) {
   }
   candidates.push_back(fs::path(binary).parent_path() / "../../tests/common");
   for (const auto& dir : candidates) {
-    if (fs::exists(dir / "tracker_golden.json")) {
-      return dir / "tracker_golden.json";
+    if (fs::exists(dir / "expected_tracks.json")) {
+      return dir / "expected_tracks.json";
     }
   }
   return {};
 }
 
-bool test_golden_parity(const std::string& binary) {
-  const fs::path path = find_golden(binary);
-  if (!expect_true(!path.empty(), "golden fixture found")) {
+bool test_matches_expected_tracks(const std::string& binary) {
+  const fs::path path = find_expected_tracks(binary);
+  if (!expect_true(!path.empty(), "expected-tracks fixture found")) {
     return false;
   }
   std::ifstream input(path);
-  const auto golden = nlohmann::json::parse(input);
+  const auto expected = nlohmann::json::parse(input);
   bool ok = true;
-  for (const auto& test_case : golden.at("cases")) {
+  for (const auto& test_case : expected.at("cases")) {
     std::vector<ClassEntry> classes;
     for (const auto& entry : test_case.at("classes")) {
       ClassEntry pairs;
@@ -577,11 +601,67 @@ bool test_golden_parity(const std::string& binary) {
                    std::fabs(out[i].y2 - e[6].get<double>()) < 1e-2;
       }
       if (!case_ok) {
-        std::cerr << "[FAIL] golden mismatch at frame " << f << "\n";
+        std::cerr << "[FAIL] expected-tracks mismatch at frame " << f << "\n";
       }
     }
-    ok &= expect_true(case_ok, "golden parity: " + test_case.at("name").get<std::string>());
+    ok &= expect_true(case_ok, "matches expected tracks: " + test_case.at("name").get<std::string>());
   }
+  return ok;
+}
+
+bool test_labels_file_handling() {
+  bool ok = true;
+  const std::string temp_dir = create_test_scratch_dir("multi-stream-tracker", "labels");
+  if (temp_dir.empty()) {
+    return expect_true(false, "labels test scratch dir");
+  }
+
+  ok &= expect_true(shipped_labels().size() == 80 && shipped_labels()[0] == "person" && shipped_labels()[2] == "car",
+                    "shipped labels file is read in class-id order");
+
+  try {
+    multi_stream_tracker::load_labels((fs::path(temp_dir) / "absent.txt").string());
+    ok &= expect_true(false, "missing labels file rejected");
+  } catch (const std::exception& e) {
+    ok &= expect_contains(e.what(), "labels file does not exist", "missing labels file rejected");
+  }
+
+  const fs::path empty_file = fs::path(temp_dir) / "empty.txt";
+  std::ofstream(empty_file) << "\n   \n";
+  try {
+    multi_stream_tracker::load_labels(empty_file.string());
+    ok &= expect_true(false, "empty labels file rejected");
+  } catch (const std::exception& e) {
+    ok &= expect_contains(e.what(), "labels file is empty", "empty labels file rejected");
+  }
+
+  // A non-COCO detector: names resolve whatever their case, ids follow the file.
+  const fs::path pcb_file = fs::path(temp_dir) / "pcb_label.txt";
+  std::ofstream(pcb_file) << "Missing_hole\nMouse_bite\nSpur\n";
+  const auto pcb_labels = multi_stream_tracker::load_labels(pcb_file.string());
+  const auto configs = multi_stream_tracker::parse_class_configs(
+      entries({{{"class", "spur"}}, {{"class", "0"}}}), pcb_labels);
+  ok &= expect_true(configs.size() == 2 && configs[0].class_id == 2 && configs[0].label == "Spur" &&
+                        configs[1].class_id == 0 && configs[1].label == "Missing_hole",
+                    "non-COCO labels file resolves names and ids");
+
+  try {
+    multi_stream_tracker::parse_class_configs(entries({{{"class", "person"}}}), pcb_labels);
+    ok &= expect_true(false, "class outside the labels file rejected");
+  } catch (const std::exception& e) {
+    ok &= expect_contains(e.what(), "unsupported class: 'person'",
+                          "class outside the labels file rejected");
+  }
+
+  try {
+    multi_stream_tracker::parse_class_configs(entries({{{"class", "3"}}}), pcb_labels);
+    ok &= expect_true(false, "class id outside the labels file rejected");
+  } catch (const std::exception& e) {
+    ok &= expect_contains(e.what(), "unsupported class id 3; expected 0..2",
+                          "class id outside the labels file rejected");
+  }
+
+  remove_dir(temp_dir);
   return ok;
 }
 
@@ -594,12 +674,18 @@ int main(int argc, char** argv) {
   }
 
   const std::string binary = argv[1];
+  if (labels_file().empty()) {
+    std::cerr << "[FAIL] labels file not found: src/common/coco_label.txt\n";
+    return 1;
+  }
+
   bool ok = true;
   ok &= test_help_runs(binary);
   ok &= test_missing_config_file_fails_cleanly(binary);
   ok &= test_validate_config_only_accepts_four_streams(binary);
   ok &= test_validate_config_only_rejects_too_many_streams(binary);
   ok &= test_validate_config_only_rejects_invalid_inflight_limit(binary);
+  ok &= test_labels_file_handling();
   ok &= test_config_accepts_one_to_five_classes();
   ok &= test_config_rejects_invalid_classes();
   ok &= test_config_file_classes(binary);
@@ -616,6 +702,6 @@ int main(int argc, char** argv) {
   ok &= test_tracker_class_specific_settings();
   ok &= test_tracker_streams_are_independent();
   ok &= test_linear_assignment();
-  ok &= test_golden_parity(binary);
+  ok &= test_matches_expected_tracks(binary);
   return ok ? 0 : 1;
 }
