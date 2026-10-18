@@ -1,5 +1,5 @@
 import { marked } from "marked";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, Route, Routes, useNavigate, useParams } from "react-router-dom";
 import {
   extractFilterOptions,
@@ -327,17 +327,21 @@ function DeveloperCenterShellFallback({ theme, onToggleTheme }) {
 }
 
 function CatalogPage({ catalog }) {
+  const [query, setQuery] = useState("");
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [showDownloadModal, setShowDownloadModal] = useState(false);
   const [filters, setFilters] = useState({
     category: "",
-    difficulty: "",
-    languages: "",
-    status: "",
     model: "",
-    tag: "",
   });
   const options = extractFilterOptions(catalog.examples);
-  const filtered = catalog.examples.filter((example) => matchesFilters(example, filters));
+  const search = query.trim().toLowerCase();
+  const filtered = catalog.examples.filter((example) => (
+    matchesFilters(example, filters)
+    && [example.name, example.summary, example.category, formatTaskLabel(example.category), example.model,
+      example.difficulty, example.languages, example.status, ...(example.tags || [])]
+      .join(" ").toLowerCase().includes(search)
+  ));
 
   return (
     <div className="portal-shell">
@@ -378,7 +382,57 @@ function CatalogPage({ catalog }) {
         </div>
       </header>
 
+      <section className="catalog-toolbar" aria-label="Search and filter examples">
+        <label className="catalog-search">
+          <span className="sr-only">Search examples</span>
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="m21 21-4.35-4.35m2.35-5.15A7.5 7.5 0 1 1 4 11.5a7.5 7.5 0 0 1 15 0Z" />
+          </svg>
+          <input
+            type="search"
+            placeholder="Search examples, tasks, or models…"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+        </label>
+        <button
+          className="filter-toggle"
+          type="button"
+          aria-expanded={filtersOpen}
+          aria-controls="example-filters"
+          onClick={() => setFiltersOpen((open) => !open)}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M7 12h10m-7 5h4" /></svg>
+          Filters
+        </button>
+      </section>
+
       <div className="portal-layout">
+        <aside id="example-filters" className="filter-panel" data-open={filtersOpen}>
+          <FilterGroup
+            label="Task"
+            value={filters.category}
+            options={options.categories}
+            formatLabel={formatTaskLabel}
+            onChange={(value) => setFilters((current) => ({ ...current, category: value }))}
+          />
+          <FilterGroup
+            label="Model"
+            value={filters.model}
+            options={options.models}
+            onChange={(value) => setFilters((current) => ({ ...current, model: value }))}
+          />
+          <button
+            className="clear-button"
+            type="button"
+            onClick={() => {
+              setFilters({ category: "", model: "" });
+              setQuery("");
+            }}
+          >
+            Clear Filters
+          </button>
+        </aside>
         <main className="card-grid">
           {filtered.map((example) => (
             <ExampleCard key={example.id} example={example} />
@@ -390,91 +444,63 @@ function CatalogPage({ catalog }) {
             </div>
           ) : null}
         </main>
-
-        <aside className="filter-panel">
-          <FilterGroup
-            label="Category"
-            value={filters.category}
-            options={options.categories}
-            onChange={(value) => setFilters((current) => ({ ...current, category: value }))}
-          />
-          <FilterGroup
-            label="Difficulty"
-            value={filters.difficulty}
-            options={options.difficulties}
-            onChange={(value) => setFilters((current) => ({ ...current, difficulty: value }))}
-          />
-          <FilterGroup
-            label="Languages"
-            value={filters.languages}
-            options={options.languages}
-            onChange={(value) => setFilters((current) => ({ ...current, languages: value }))}
-          />
-          <FilterGroup
-            label="Status"
-            value={filters.status}
-            options={options.statuses}
-            onChange={(value) => setFilters((current) => ({ ...current, status: value }))}
-          />
-          <FilterGroup
-            label="Model"
-            value={filters.model}
-            options={options.models}
-            onChange={(value) => setFilters((current) => ({ ...current, model: value }))}
-          />
-          <FilterGroup
-            label="Tag"
-            value={filters.tag}
-            options={options.tags}
-            onChange={(value) => setFilters((current) => ({ ...current, tag: value }))}
-          />
-          <button
-            className="clear-button"
-            type="button"
-            onClick={() => setFilters({ category: "", difficulty: "", languages: "", status: "", model: "", tag: "" })}
-          >
-            Clear Filters
-          </button>
-        </aside>
       </div>
-      {showDownloadModal ? (
-        <div className="modal-backdrop" role="presentation" onClick={() => setShowDownloadModal(false)}>
-          <div
-            className="download-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="download-modal-title"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="download-modal-header">
-              <div>
-                <p className="eyebrow">Download</p>
-                <h2 id="download-modal-title">Download Neat Apps</h2>
-              </div>
-              <button
-                className="modal-close"
-                type="button"
-                aria-label="Dismiss download instructions"
-                onClick={() => setShowDownloadModal(false)}
-              >
-                <svg viewBox="0 0 24 24" focusable="false">
-                  <path
-                    d="M6.7 5.3a1 1 0 0 0-1.4 1.4L10.6 12l-5.3 5.3a1 1 0 1 0 1.4 1.4l5.3-5.3 5.3 5.3a1 1 0 0 0 1.4-1.4L13.4 12l5.3-5.3a1 1 0 1 0-1.4-1.4L12 10.6 6.7 5.3Z"
-                    fill="currentColor"
-                  />
-                </svg>
-              </button>
-            </div>
-            <p className="download-modal-copy">
-              To download the current prebuilt Apps runtime, run:
-            </p>
-            <pre className="download-code">
-              <code>{`sima-cli neat install apps`}</code>
-            </pre>
-          </div>
-        </div>
-      ) : null}
+      {showDownloadModal ? <AppsDownloadDialog onClose={() => setShowDownloadModal(false)} /> : null}
     </div>
+  );
+}
+
+function AppsDownloadDialog({ onClose }) {
+  const dialogRef = useRef(null);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    dialog.showModal();
+    return () => dialog.close();
+  }, []);
+
+  return (
+    <dialog
+      ref={dialogRef}
+      className="download-modal"
+      aria-labelledby="download-modal-title"
+      onClose={onClose}
+      onClick={(event) => {
+        if (event.target !== event.currentTarget) return;
+        const bounds = event.currentTarget.getBoundingClientRect();
+        if (event.clientX < bounds.left || event.clientX > bounds.right ||
+            event.clientY < bounds.top || event.clientY > bounds.bottom) {
+          event.currentTarget.close();
+        }
+      }}
+    >
+      <div className="download-modal-header">
+        <div>
+          <p className="eyebrow">Download</p>
+          <h2 id="download-modal-title">Download Neat Apps</h2>
+        </div>
+        <button
+          className="modal-close"
+          type="button"
+          autoFocus
+          aria-label="Dismiss download instructions"
+          onClick={() => dialogRef.current.close()}
+        >
+          <svg viewBox="0 0 24 24" focusable="false">
+            <path
+              d="M6.7 5.3a1 1 0 0 0-1.4 1.4L10.6 12l-5.3 5.3a1 1 0 1 0 1.4 1.4l5.3-5.3 5.3 5.3a1 1 0 0 0 1.4-1.4L13.4 12l5.3-5.3a1 1 0 1 0-1.4-1.4L12 10.6 6.7 5.3Z"
+              fill="currentColor"
+            />
+          </svg>
+        </button>
+      </div>
+      <p className="download-modal-copy">
+        To install the complete Neat Apps bundle, run:
+      </p>
+      <pre className="download-code">
+        <code>{`sima-cli neat install apps`}</code>
+      </pre>
+    </dialog>
   );
 }
 
@@ -499,7 +525,7 @@ function ExampleCard({ example }) {
         />
       </div>
       <div className="card-body">
-        <p className="card-category">{example.category}</p>
+        <p className="card-category">{formatTaskLabel(example.category)}</p>
         <h2>{displayName}</h2>
         <div className="card-summary" dangerouslySetInnerHTML={{ __html: summaryHtml }} />
       </div>
@@ -508,76 +534,59 @@ function ExampleCard({ example }) {
 }
 
 function DetailPage({ catalog }) {
+  const [showDownloadModal, setShowDownloadModal] = useState(false);
   const { "*": appPath = "" } = useParams();
   const navigate = useNavigate();
   const decodedId = decodeURIComponent(appPath);
   const example = findExample(catalog, decodedId);
   const githubUrl = githubUrlForExample(example);
-  const sections = (example?.sections || []).filter(
-    (section) => !["metadata", "concept"].includes(section.slug),
-  );
   const displayName = example?.name || example?.binary_name || decodedId;
-  const binaryLabel = example?.binary_name || "";
-  const modelLabel = example?.model || "";
-  const modelUrl = example?.model_url || "";
+  const previewImage = example?.image_path ? portalAssetUrl(example.image_path) : "";
   const summaryHtml = marked.parseInline(example?.summary || "No summary available.");
   const docPanelRef = useRef(null);
-  const [activeSection, setActiveSection] = useState(sections[0]?.slug || "");
+  const [activeSection, setActiveSection] = useState("");
+  const preview = example?.sections?.find(({slug}) => slug === "preview");
+  const previewNotesHtml = preview
+    ? (previewImage ? renderPreviewNotes(preview.markdown, previewImage) : renderMarkdown(preview.markdown))
+    : "";
+  const groups = useMemo(() => {
+    const content = example?.sections || [];
+    const setup = new Set([
+      "prerequisites", "install-apps", "prepare-the-model", "prepare-insight",
+      "prepare-an-rtsp-source", "configure", "build-the-host-application",
+    ]);
+    const run = new Set(["run", "expected-result", "benchmark-results", "performance"]);
+    return [
+      {id: "setup", title: "Setup", sections: content.filter(({slug}) => setup.has(slug))},
+      {id: "execution", title: "Run", sections: content.filter(({slug}) => run.has(slug))},
+      {id: "use-your-own-model", title: "Use Your Own Model", sections: content.filter(({slug}) => slug === "use-your-own-model")},
+      {id: "reference", title: "Reference", sections: content.filter(({slug}) => (
+        !["metadata", "concept", "preview", "use-your-own-model"].includes(slug) && !setup.has(slug) && !run.has(slug)
+      ))},
+    ].filter((group) => group.sections.length);
+  }, [example]);
 
   useEffect(() => {
-    setActiveSection(sections[0]?.slug || "");
-  }, [decodedId, sections]);
+    setActiveSection(groups[0]?.id || "");
+    const target = document.getElementById(window.location.hash.slice(1));
+    if (target) target.scrollIntoView();
+    else window.scrollTo(0, 0);
+  }, [decodedId, groups]);
 
   useEffect(() => {
-    window.scrollTo(0, 0);
-    if (docPanelRef.current) {
-      docPanelRef.current.scrollTo({ top: 0, behavior: "auto" });
-    }
-  }, [decodedId]);
-
-  useEffect(() => {
-    if (!sections.length) {
-      return undefined;
-    }
-
-    const root = docPanelRef.current;
-    if (!root) {
-      return undefined;
-    }
-
-    const targets = sections
-      .map((section) => root.querySelector(`#${CSS.escape(section.slug)}`))
-      .filter(Boolean);
-
-    if (!targets.length) {
-      return undefined;
-    }
-
+    const targets = [...(docPanelRef.current?.querySelectorAll("[data-doc-group]") || [])];
+    if (!targets.length) return undefined;
     const updateActiveSection = () => {
-      const readingOffset = Math.max(96, Math.round(root.clientHeight * 0.18));
-      const readingLine = root.scrollTop + readingOffset;
-      let nextActive = targets[0].id;
-      let bestDistance = Number.POSITIVE_INFINITY;
-
+      let current = targets[0].id;
       for (const target of targets) {
-        const targetTop =
-          root.scrollTop +
-          target.getBoundingClientRect().top -
-          root.getBoundingClientRect().top;
-        const distance = Math.abs(targetTop - readingLine);
-        if (distance < bestDistance) {
-          bestDistance = distance;
-          nextActive = target.id;
-        }
+        if (target.getBoundingClientRect().top <= 140) current = target.id;
       }
-
-      setActiveSection((current) => (current === nextActive ? current : nextActive));
+      setActiveSection(current);
     };
-
     updateActiveSection();
-    root.addEventListener("scroll", updateActiveSection, { passive: true });
-    return () => root.removeEventListener("scroll", updateActiveSection);
-  }, [sections]);
+    window.addEventListener("scroll", updateActiveSection, {passive: true});
+    return () => window.removeEventListener("scroll", updateActiveSection);
+  }, [groups]);
 
   if (!example) {
     return (
@@ -591,33 +600,29 @@ function DetailPage({ catalog }) {
   }
 
   return (
-    <div className="detail-shell">
-      <div className="detail-topbar">
-        <button
-          className="back-link icon-link"
-          type="button"
-          onClick={() => navigate("/")}
-          aria-label="Back to catalog"
-          title="Back to catalog"
-        >
-          <span aria-hidden="true">⌂</span>
-        </button>
-      </div>
+    <main className="detail-shell">
+      <nav className="detail-breadcrumbs" aria-label="Breadcrumb">
+        <Link to="/">Examples</Link>
+        <span aria-hidden="true">/</span>
+        <span aria-current="page">{displayName}</span>
+      </nav>
 
-      <section className="detail-hero">
+      <header className={`detail-hero${previewImage ? "" : " detail-hero-no-image"}`}>
         <div className="detail-hero-copy">
-          <p className="eyebrow">{example.category}</p>
           <h1>{displayName}</h1>
-          <p className="hero-text" dangerouslySetInnerHTML={{ __html: summaryHtml }} />
           <div className="detail-meta">
+            <Chip label={formatTaskLabel(example.category)} tone="status" />
             <Chip label={example.difficulty || "Unspecified"} tone="difficulty" />
             <Chip label={example.status || "experimental"} tone="status" />
             {example.languages ? <Chip label={example.languages} tone="languages" /> : null}
-            {example.model ? <ModelChip label={modelLabel} url={modelUrl} /> : null}
-            <Chip label={binaryLabel} tone="binary" />
+            {example.model ? <ModelChip label={example.model} url={example.model_url} /> : null}
+            {example.binary_name ? <Chip label={example.binary_name} tone="binary" /> : null}
+          </div>
+          <p className="hero-text" dangerouslySetInnerHTML={{ __html: summaryHtml }} />
+          <div className="detail-actions">
             {githubUrl ? (
               <a
-                className="chip chip-github"
+                className="example-source-link"
                 href={githubUrl}
                 target="_blank"
                 rel="noreferrer"
@@ -632,72 +637,78 @@ function DetailPage({ catalog }) {
                 </svg>
               </a>
             ) : null}
+            <button className="hero-action download-apps-action" type="button" onClick={() => setShowDownloadModal(true)}>
+              <span className="hero-action-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 3v12m-5-5 5 5 5-5M5 17v4h14v-4" />
+                </svg>
+              </span>
+              Download
+            </button>
           </div>
         </div>
-      </section>
+        {previewImage ? (
+          <figure id="preview" className="detail-preview">
+            <img src={previewImage} alt={`${displayName} preview`} />
+          </figure>
+        ) : null}
+      </header>
 
-      <div className="detail-layout">
-        <article ref={docPanelRef} className="doc-panel">
-          {sections.length > 0 ? (
-            <div className="doc-content">
-              {sections.map((section) => (
-                <section key={section.slug} id={section.slug} className="doc-section">
-                  <header className="section-header">
-                    <p className="section-kicker">Section</p>
-                    <h2>{section.title}</h2>
-                  </header>
-                  <div
-                    className="markdown-body"
-                    dangerouslySetInnerHTML={{ __html: renderMarkdown(section.markdown) }}
-                  />
+      <nav className="detail-section-nav" aria-label="Example sections">
+        {groups.map((group) => (
+          <a key={group.id} href={`#${group.id}`} aria-current={activeSection === group.id ? "location" : undefined}>
+            {group.title}
+          </a>
+        ))}
+      </nav>
+
+      <article ref={docPanelRef} className="example-documentation">
+        {previewNotesHtml ? (
+          <div id="preview-notes" className="markdown-body example-preview-notes" dangerouslySetInnerHTML={{ __html: previewNotesHtml }} />
+        ) : null}
+        {groups.map((group) => (
+          <section key={group.id} id={group.id} data-doc-group="" className="example-doc-group">
+            <h2>{group.title}</h2>
+            {group.sections.map((section) => {
+              const html = renderMarkdown(section.markdown);
+              if (!html.trim()) return null;
+              return (
+                <section key={section.slug} id={section.slug === group.id ? undefined : section.slug} className="doc-section">
+                  {section.title !== group.title ? <h3>{section.title}</h3> : null}
+                  <div className="markdown-body" dangerouslySetInnerHTML={{ __html: html }} />
                 </section>
-              ))}
-            </div>
-          ) : (
-            <div className="empty-state">
-              <h2>No sections available.</h2>
-            </div>
-          )}
-        </article>
-
-        <nav className="toc-panel" aria-label="Table of contents">
-          <p className="toc-title">On this page</p>
-          {sections.map((section) => (
-            <button
-              key={section.slug}
-              className={`toc-button ${activeSection === section.slug ? "active" : ""}`}
-              type="button"
-              onClick={() => {
-                const root = docPanelRef.current;
-                const target = root?.querySelector(`#${CSS.escape(section.slug)}`);
-                if (root && target) {
-                  const topPadding = 32;
-                  const targetTop =
-                    root.scrollTop +
-                    target.getBoundingClientRect().top -
-                    root.getBoundingClientRect().top;
-                  root.scrollTo({ top: Math.max(targetTop - topPadding, 0), behavior: "smooth" });
-                }
-                setActiveSection(section.slug);
-              }}
-            >
-              {section.title}
-            </button>
-          ))}
-        </nav>
-      </div>
-    </div>
+              );
+            })}
+          </section>
+        ))}
+      </article>
+      {showDownloadModal ? <AppsDownloadDialog onClose={() => setShowDownloadModal(false)} /> : null}
+    </main>
   );
 }
 
-function FilterGroup({ label, value, options, onChange }) {
+function renderPreviewNotes(markdown, previewImage) {
+  // Keep preview captions and diagrams; the image is already beside the title.
+  const tokens = marked.lexer(normalizeMarkdownAssetUrls(markdown));
+  marked.walkTokens(tokens, (token) => {
+    if (token.type === "image" && token.href === previewImage) {
+      token.type = "text";
+      token.text = "";
+      token.raw = "";
+      token.tokens = [];
+    }
+  });
+  return marked.parser(tokens).replace(/<p>\s*<\/p>/g, "").trim();
+}
+
+function FilterGroup({ label, value, options, onChange, formatLabel = formatDisplayLabel }) {
   return (
     <label className="filter-group">
       <span>{label}</span>
       <select value={value} onChange={(event) => onChange(event.target.value)}>
         <option value="">All</option>
         {options.map((option) => (
-          <option key={option} value={option}>{formatDisplayLabel(option)}</option>
+          <option key={option} value={option}>{formatLabel(option)}</option>
         ))}
       </select>
     </label>
@@ -724,6 +735,12 @@ function ModelChip({ label, url }) {
       {label}
     </a>
   );
+}
+
+function formatTaskLabel(value) {
+  if (value === "classification") return "Image Classification";
+  if (value === "genai") return "GenAI";
+  return formatDisplayLabel(value);
 }
 
 function slugTone(category) {
