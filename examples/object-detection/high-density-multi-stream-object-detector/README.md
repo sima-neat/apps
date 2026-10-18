@@ -14,7 +14,7 @@
 
 ## Concept
 
-Runs one YOLO26 detector across 16, 30, or 60 RTSP streams and sends synchronized video and detection metadata to Insight.
+Runs one YOLO26 detector across 20, 30, or 60 RTSP streams and sends synchronized video and detection metadata to Insight.
 
 Unlike the general multi-stream detector, this application tunes the pipeline for high stream counts.
 
@@ -34,7 +34,7 @@ The three checked-in profiles use the same application and model:
 
 | Config | Streams | Source resolution and FPS | Expected FPS per channel |
 | --- | ---: | --- | ---: |
-| `config.yaml` | 16 | 1280×720 at 30 or 29.97 FPS, detected from the source | Source rate |
+| `config.yaml` | 20 | 1280×720 at 30 or 29.97 FPS, detected from the source | Source rate |
 | `config-30x720p20fps.yaml` | 30 | 1280×720 at 20 FPS | 20 FPS |
 | `config-60x720p10fps.yaml` | 60 | 1280×720 at 10 FPS | 10 FPS |
 
@@ -50,7 +50,7 @@ A 48-stream run in Insight:
 
 - A Modalix DevKit compatible with the selected Apps release, with the decoder service running.
 - An [Insight](https://developer.sima.ai/software/tools/insight/) URL reachable from the DevKit.
-- 16, 30, or 60 H.264 or H.265 RTSP sources matching `input.codec` and the selected profile.
+- 20, 30, or 60 H.264 or H.265 RTSP sources matching `input.codec` and the selected profile.
 - For H.265, the computer running the Insight viewer must support hardware HEVC decoding; Chromium does not provide a software decoder fallback for WebRTC H.265.
 - H.265 playback in Chrome on macOS renders, but is not stable. Chrome's WebRTC HEVC decoder can stop producing frames mid-stream and fall back to a null decoder that discards what follows, at which point the tile stalls until the viewer reconnects it.
 - Constant source frame rate, 1280×720 resolution, no B-frames in the selected codec, and a short, regular IDR interval. The validated sources use one IDR per second.
@@ -143,11 +143,11 @@ Choose one config under `${APP_DIR}/src/common/` and edit:
 
 Set `input.codec` to `h264`/`avc` or `h265`/`hevc`. H.264 is the default in all checked-in density profiles and remains the validated high-density configuration.
 
-`inference.max_inflight_per_stream` and `inference.max_inflight_total` bound raw decoder-backed frames admitted to the shared detector. The 16- and 60-stream profiles use a total limit of eight; the 30-stream profile uses 30 so one aggregate frame interval can be admitted without an unbounded queue. The realtime mux retains only the latest pending frame for each stream.
+`inference.max_inflight_per_stream` and `inference.max_inflight_total` bound raw decoder-backed frames admitted to the shared detector. The 20- and 60-stream profiles use a total limit of eight; the 30-stream profile uses 30 so one aggregate frame interval can be admitted without an unbounded queue. The realtime mux retains only the latest pending frame for each stream.
 
 Do not add the removed `inference.fan_in_policy` setting. Ordinary `connect()` and `build()` select the eligible realtime fan-in lowering automatically. The `runtime` settings (`profile`, `warmup_frames`, and the `*_detection_timeout_ms` deadlines) are still validated so existing configs keep loading, but they have no effect and the application prints a warning when they are present. The application publishes metadata from the first valid detection result and runs continuously until interrupted; warmup, throughput measurement, and progress deadlines belong to the E2E receiver. Video/metadata synchronization is performed by Insight from each payload's source RTP timestamp; there is no application-side video-delay setting.
 
-The default 16-stream config uses `input.fps: 0` and enables probing, so the source determines its frame rate. Keep `input.width` and `input.height` matched to the source. The 30- and 60-stream profiles keep explicit FPS values and skip probing; their configured dimensions and frame rates must match the sources.
+The default 20-stream config uses `input.fps: 0` and enables probing, so the source determines its frame rate. Keep `input.width` and `input.height` matched to the source. The 30- and 60-stream profiles keep explicit FPS values and skip probing; their configured dimensions and frame rates must match the sources.
 
 Insight channel and port mapping is deterministic:
 
@@ -202,7 +202,7 @@ Use one active Insight viewer while validating metadata. Insight currently has a
 
 - Every configured Insight channel receives live video.
 - Detection boxes appear on the matching channel.
-- Video and metadata follow the source cadence for 16 streams, 20 FPS for 30 streams, or 10 FPS for 60 streams.
+- Video and metadata follow the source cadence for 20 streams, 20 FPS for 30 streams, or 10 FPS for 60 streams.
 - Nonblocking metadata-send failures are reported as rate-limited warnings without stalling inference.
 - `Ctrl-C` closes the graph and exits cleanly.
 
@@ -241,7 +241,7 @@ without opening a stream or touching Insight:
 
 - C++ reference source: `src/cpp/main.cpp`
 - Python implementation: `src/python/main.py`
-- Default 16-stream profile: `src/common/config.yaml`
+- Default 20-stream profile: `src/common/config.yaml`
 - 30-stream profile: `src/common/config-30x720p20fps.yaml`
 - 60-stream profile: `src/common/config-60x720p10fps.yaml`
 - COCO labels: `src/common/coco_label.txt`
@@ -250,4 +250,4 @@ The packaged C++ source is an implementation reference. Run the executable under
 
 ## Development From Source
 
-To modify, compile, or test this example, use the [Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md). The 16-, 30-, and 60-stream profiles still require Modalix, live RTSP publishers, and Insight for runtime validation.
+To modify, compile, or test this example, use the [Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md). The 20-, 30-, and 60-stream profiles still require Modalix, live RTSP publishers, and Insight for runtime validation.

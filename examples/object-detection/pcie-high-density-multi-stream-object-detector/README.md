@@ -39,7 +39,7 @@ repository, then use `run.sh` to start and stop both sides.
   and matching Neat PCIe host development package.
 - A Modalix PCIe Card with matching Neat Core and Internals packages.
 - Passwordless SSH access to the card using `~/.ssh/sima_neat_pcie_ed25519`.
-- 16, 30, or 60 H.264 RTSP sources and an Insight instance reachable from the host.
+- 20, 30, or 60 H.264 RTSP sources and an Insight instance reachable from the host.
 - A source checkout of this Apps repository on the host.
 
 ## Install Apps
@@ -82,7 +82,7 @@ On the host, copy the profile closest to the intended workload:
 
 | Profile | Streams | Input |
 | --- | ---: | --- |
-| `config.yaml` | 16 | 1280x720 at 30 FPS |
+| `config.yaml` | 20 | 1280x720 at 30 FPS |
 | `config-30x720p20fps.yaml` | 30 | 1280x720 at 20 FPS |
 | `config-60x720p10fps.yaml` | 60 | 1280x720 at 10 FPS |
 
@@ -94,7 +94,7 @@ cp "$APP_DIR/src/common/config-60x720p10fps.yaml" "$APP_DIR/src/common/config.lo
 Edit `config.local.yaml` and set:
 
 - `model.path` to the absolute model path on the card.
-- `streams` to exactly 16, 30, or 60 RTSP URLs.
+- `streams` to exactly 20, 30, or 60 RTSP URLs.
 - `output.insight.host` to the Insight address.
 - `card.card_id` and `card.queue` if their defaults are not appropriate.
 
@@ -189,7 +189,7 @@ usage measured with `yolo26n-det-int8-b1`:
 
 | Profile | CMA in use |
 | --- | ---: |
-| 16 x 720p30 | 0.5 GB |
+| 20 x 720p30 | Not measured |
 | 30 x 720p20 | Not measured |
 | 60 x 720p10 | Not measured |
 

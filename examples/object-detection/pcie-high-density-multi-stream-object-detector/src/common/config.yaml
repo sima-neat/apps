@@ -1,6 +1,6 @@
-# Default PCIe profile: 16 x 720p at 30 FPS.
+# Default PCIe profile: 20 x 720p at 30 FPS.
 profile:
-  name: 16x720p30fps
+  name: 20x720p30fps
 
 model:
   path: <model-path>
@@ -11,7 +11,7 @@ card:
   card_id: 0
   queue: 0
 
-# Populate exactly 16 URLs.
+# Populate exactly 20 URLs.
 streams: []
 
 input:
