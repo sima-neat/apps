@@ -260,6 +260,36 @@ const std::string& MetadataJsonListener::error() const {
   return err_;
 }
 
+MetadataJsonListenerResult MetadataJsonListener::drain_pending() {
+  MetadataJsonListenerResult result;
+  if (!ok()) {
+    result.error = err_;
+    return result;
+  }
+
+  for (auto& sock : sockets_) {
+    pollfd pfd{sock.fd, POLLIN, 0};
+    while (true) {
+      pfd.revents = 0;
+      const int rc = ::poll(&pfd, 1, 0);
+      if (rc < 0 && errno == EINTR) {
+        continue;
+      }
+      if (rc < 0) {
+        result.error = std::string("poll failed: ") + std::strerror(errno);
+        break;
+      }
+      if (rc == 0 || (pfd.revents & POLLIN) == 0) {
+        break;
+      }
+      (void)handle_datagram(sock, result);
+    }
+    sock.reassembler = MetadataReassembler{};
+  }
+  result.success = result.error.empty();
+  return result;
+}
+
 bool MetadataJsonListener::bind_ports() {
   sockets_.clear();
   sockets_.reserve(static_cast<size_t>(opt_.num_ports));
@@ -410,6 +440,7 @@ MetadataJsonListenerResult MetadataJsonListener::wait_for_messages() {
   }
 
   if (result.error.empty()) {
+    result.timed_out = true;
     result.error = opt_.require_all_ports
                        ? "timed out waiting for valid json on all configured ports"
                        : "timed out waiting for valid json on any configured port";

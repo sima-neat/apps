@@ -49,9 +49,8 @@ def _run(script: str, *args: str, python: str | None = None) -> str:
 WEB = """app:
   web:
     host: "0.0.0.0"
-    port: 5000   # the UI
-    https: 'false'
-    headless: "True"
+    port: 5000   # the backend API
+    https: "True"
     cors_origins: "http://a:3000, https://b"   # allowlist
   tts:
     supertonic:
@@ -69,8 +68,7 @@ class ShellWebConfigTests(unittest.TestCase):
     def test_quoted_and_commented_scalars(self):
         self.assertEqual(self._web("host"), "0.0.0.0")
         self.assertEqual(self._web("port"), "5000")
-        self.assertEqual(self._web("https"), "false")
-        self.assertEqual(self._web("headless"), "true")       # normalized by the loader
+        self.assertEqual(self._web("https"), "true")          # normalized by the loader
         self.assertEqual(self._web("cors_origins"), "http://a:3000, https://b")
         self.assertEqual(self._web("models_root"), "")      # other section
 
@@ -85,16 +83,15 @@ class ShellWebConfigTests(unittest.TestCase):
             self.assertEqual(_run('web_config_list "$1" https', str(config)), "true")   # loader value
 
     def test_any_indentation_and_no_app_root_like_the_loader(self):
-        four = ("app:\n    web:\n        headless: true\n        https: false\n"
+        four = ("app:\n    web:\n        https: false\n"
                 "    tts:\n        supertonic:\n            models_root: /m4\n")
-        top = "web:\n  headless: yes\ntts:\n  supertonic:\n    venv: /v\n"
+        top = "web:\n  https: yes\ntts:\n  supertonic:\n    venv: /v\n"
         with tempfile.TemporaryDirectory() as tmp:
             a = Path(tmp) / "four.yaml"; a.write_text(four, encoding="utf-8")
             b = Path(tmp) / "top.yaml"; b.write_text(top, encoding="utf-8")
-            self.assertEqual(_run('web_config_scalar "$1" headless', str(a)), "true")
             self.assertEqual(_run('web_config_scalar "$1" https', str(a)), "false")
             self.assertEqual(_run('supertonic_config_value "$1" models_root', str(a)), "/m4")
-            self.assertEqual(_run('web_config_scalar "$1" headless', str(b)), "true")
+            self.assertEqual(_run('web_config_scalar "$1" https', str(b)), "true")
             self.assertEqual(_run('supertonic_config_value "$1" venv', str(b)), "/v")
         # the Python loader agrees on the same files
         import sys
@@ -103,15 +100,14 @@ class ShellWebConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             a = Path(tmp) / "four.yaml"; a.write_text(four, encoding="utf-8")
             cfg = load_ui_config(a, Path(tmp))
-            self.assertEqual((cfg.web.headless, cfg.web.https, cfg.supertonic.models_root), (True, False, "/m4"))
+            self.assertEqual((cfg.web.https, cfg.supertonic.models_root), (False, "/m4"))
 
     def test_flow_style_mapping_reads_like_the_loader(self):
-        text = ('app:\n  web: {host: 0.0.0.0, port: 5000, headless: true, https: "false",'
+        text = ('app:\n  web: {host: 0.0.0.0, port: 5000, https: "false",'
                 ' cors_origins: [http://a:3000, "https://b"]}\n'
                 '  tts: {supertonic: {models_root: /flow, venv: /fv}}\n')
         with tempfile.TemporaryDirectory() as tmp:
             c = Path(tmp) / "flow.yaml"; c.write_text(text, encoding="utf-8")
-            self.assertEqual(_run('web_config_scalar "$1" headless', str(c)), "true")
             self.assertEqual(_run('web_config_scalar "$1" https', str(c)), "false")
             self.assertEqual(_run('web_config_scalar "$1" port', str(c)), "5000")
             self.assertEqual(_run('web_config_list "$1" cors_origins', str(c)), "http://a:3000,https://b")
@@ -123,7 +119,7 @@ class ShellWebConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             c = Path(tmp) / "c.yaml"; c.write_text(WEB, encoding="utf-8")
             env = dict(os.environ, STUDIO_CONFIG_PYTHON="/nonexistent/python", PATH="/usr/bin:/bin")
-            script = 'source "$1"; _studio_config_python() { return 1; }; web_config_scalar "$2" headless'
+            script = 'source "$1"; _studio_config_python() { return 1; }; web_config_scalar "$2" https'
             out = subprocess.run(["bash", "-c", script, "_", str(HELPER), str(c)],
                                  check=True, capture_output=True, text=True, env=env)
             self.assertEqual(out.stdout.strip(), "True")
@@ -156,3 +152,49 @@ class ShellConfigValueTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+
+class ServerConfigWithoutPyyamlTests(unittest.TestCase):
+    """The model server runs in the Neat environment, which may lack PyYAML
+    (Platform 3.0's ~/pyneat). run.sh converts the YAML config to JSON with the
+    app's own Python, and the server reads that JSON without importing yaml."""
+
+    EXAMPLE = Path(__file__).resolve().parents[2]
+
+    def _convert(self, config: Path, target: Path) -> None:
+        run_sh = (self.EXAMPLE / "run.sh").read_text(encoding="utf-8")
+        start = run_sh.index("write_server_config() {")
+        end = run_sh.index("\n}\n", start) + 3
+        script = (f'APP_PYTHON="{sys.executable}"; CONFIG_PATH="$1"; SERVER_CONFIG_JSON="$2"\n'
+                  + run_sh[start:end] + "\nwrite_server_config\n")
+        subprocess.run(["bash", "-c", script, "_", str(config), str(target)], check=True)
+
+    def test_server_config_loads_from_json_without_pyyaml(self):
+        config = self.EXAMPLE / "src" / "common" / "config.yaml"
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "server-config.json"
+            self._convert(config, target)
+            probe = (
+                "import sys; sys.modules['yaml'] = None\n"
+                "from pathlib import Path\n"
+                "from shared.config import load_server_config\n"
+                f"cfg = load_server_config(Path({str(target)!r}))\n"
+                "print(repr(cfg))\n"
+            )
+            out = subprocess.run([sys.executable, "-c", probe], check=True, capture_output=True, text=True,
+                                 cwd=self.EXAMPLE / "src" / "python")
+            from shared.config import load_server_config
+            expected = load_server_config(config)
+            # The whole parsed configuration, not only that it loads.
+            self.assertEqual(out.stdout.strip(), repr(expected))
+
+    def test_run_sh_starts_the_server_with_the_json_copy(self):
+        run_sh = (self.EXAMPLE / "run.sh").read_text(encoding="utf-8")
+        self.assertIn('server/main.py" --config "${SERVER_CONFIG_JSON}"', run_sh)
+        self.assertNotIn('server/main.py" --config "${CONFIG_PATH}"', run_sh)
+
+    def test_setup_does_not_modify_the_neat_environment(self):
+        setup = (self.EXAMPLE / "setup.sh").read_text(encoding="utf-8")
+        self.assertNotIn("import yaml'", setup)
+        self.assertNotIn('pip install "PyYAML', setup)

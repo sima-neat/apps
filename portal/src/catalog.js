@@ -14,64 +14,27 @@ export async function loadCatalog() {
 }
 
 export function extractFilterOptions(examples) {
-  const difficulties = new Set();
-  const languages = new Set();
-  const statuses = new Set();
-  const models = new Set();
-  const tags = new Set();
   const categories = new Set();
+  const models = new Set();
 
   for (const example of examples) {
-    if (example.difficulty) {
-      difficulties.add(example.difficulty);
-    }
-    if (example.languages) {
-      languages.add(example.languages);
-    }
-    if (example.status) {
-      statuses.add(example.status);
-    }
-    if (example.model) {
-      models.add(example.model);
-    }
     if (example.category) {
       categories.add(example.category);
     }
-    for (const tag of example.tags || []) {
-      tags.add(tag);
+    if (example.model) {
+      models.add(example.model);
     }
   }
 
   return {
     categories: [...categories].sort(),
-    difficulties: [...difficulties].sort(),
-    languages: [...languages].sort(),
-    statuses: [...statuses].sort(),
     models: [...models].sort(),
-    tags: [...tags].sort(),
   };
 }
 
 export function matchesFilters(example, filters) {
-  if (filters.category && example.category !== filters.category) {
-    return false;
-  }
-  if (filters.difficulty && example.difficulty !== filters.difficulty) {
-    return false;
-  }
-  if (filters.languages && example.languages !== filters.languages) {
-    return false;
-  }
-  if (filters.status && example.status !== filters.status) {
-    return false;
-  }
-  if (filters.model && example.model !== filters.model) {
-    return false;
-  }
-  if (filters.tag && !(example.tags || []).includes(filters.tag)) {
-    return false;
-  }
-  return true;
+  return (!filters.category || example.category === filters.category)
+    && (!filters.model || example.model === filters.model);
 }
 
 export function findExample(catalog, id) {

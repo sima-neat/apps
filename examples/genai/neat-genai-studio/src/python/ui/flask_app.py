@@ -8,29 +8,21 @@
 #
 # All rights reserved.
 #########################################################
-import base64
-import hmac
 import ipaddress
 import json
 import logging
 import math
 import os
 import requests
-import shutil
 import re
 import sys
 import threading
-import queue
 import time
 
 # Flask imports
-from flask import Flask, Response, render_template, jsonify, request, send_from_directory, stream_with_context
-from flask_socketio import SocketIO
+from flask import Flask, Response, jsonify, request, stream_with_context
 
-from collections import deque
-import wave
-import traceback
-from pathlib import Path
+from pathlib import Path, PurePath
 from werkzeug.utils import secure_filename
 from werkzeug.exceptions import RequestEntityTooLarge
 import tempfile
@@ -40,27 +32,30 @@ import socket
 import subprocess
 
 from shared.config import HubConfig
+from server import hub as hub_helpers
+from asr_metadata import (
+    DEFAULT_LOGPROB_THRESHOLD,
+    DEFAULT_NO_SPEECH_THRESHOLD,
+    analyze_transcription,
+)
+import sys as _sys, os as _os
+_TTS_DIR = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "tts")
+if _TTS_DIR not in _sys.path:
+    _sys.path.insert(0, _TTS_DIR)
+import supertonic_tts
+from talk_controller import TalkController
+import backend_mode
+import rag_chat
 from shared.board_camera import (
     capture_camera_frame,
     default_camera_device,
     list_camera_devices,
     normalize_camera_device,
 )
-from server import hub as hub_helpers
-from tts_text import sanitize_for_tts   # Markdown/LaTeX → speakable text (stdlib only)
-from asr_metadata import (
-    DEFAULT_LOGPROB_THRESHOLD,
-    DEFAULT_NO_SPEECH_THRESHOLD,
-    analyze_transcription,
-    normalize_language_code,
-)
-import supertonic_tts
-import backend_mode
+from rag.event_loop import close_thread_event_loop
 from audio_api import (
-    SPEECH_ENGINE_ALIASES,
     MAX_TRANSCRIPTION_BYTES,
     AudioApiError,
-    build_voices_listing,
     format_transcription,
     parse_speech_request,
     parse_transcription_form,
@@ -69,7 +64,6 @@ from voice_catalog import (
     asset_paths as catalog_asset_paths,
     catalog_voices,
     install_voice as install_catalog_voice,
-    installed_voices,
     load_catalog,
     voice_by_id,
 )
@@ -130,7 +124,7 @@ def _https_credentials():
 
 
 def _studio_version():
-    """Best-effort version info for the About/version modal: git commit, branch and
+    """Best-effort version info for / and /health: git commit, branch and
     date of the example checkout, or 'unknown' when run from a standalone (non-git)
     fetch. Cached after the first call."""
     global _VERSION_CACHE
@@ -159,7 +153,7 @@ def _studio_version():
 
 
 def _supervisor_pid():
-    """PID of the run.sh supervisor so the GUI can trigger a graceful shutdown.
+    """PID of the run.sh supervisor so /shutdown can stop the Studio gracefully.
     run.sh exports NEAT_RUN_PID and also writes its PID to a file."""
     val = (os.environ.get('NEAT_RUN_PID') or '').strip()
     if val.isdigit() and int(val) > 0:
@@ -178,31 +172,22 @@ def _supervisor_pid():
 
 
 genai_app = None
-ttfs = 0
 
 vectodb_proc = None
 rag_db_client = None
 RAG_DB_PATH = None
 start_service = None
 create_markdown_vectordb = None
-validate_rag_database = None
 wait_for_rag_service = None
 
-
-def save_image_upload_as_base64(image_file, upload_folder):
-    filename = secure_filename(image_file.filename or "")
-    if not filename:
-        raise ValueError("Invalid image file name")
-
-    upload_dir = Path(upload_folder).resolve()
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    image_path = (upload_dir / filename).resolve()
-    # Raises ValueError if filename resolution escapes upload_dir.
-    image_path.relative_to(upload_dir)
-
-    image_file.save(str(image_path))
-    with image_path.open('rb') as img_file:
-        return image_path, base64.b64encode(img_file.read()).decode('utf-8')
+# One document update at a time: upload, import, reset and clear each stop the
+# RAG service and replace or remove its database, so two at once would race.
+RAG_UPDATE_LOCK = threading.Lock()
+RAG_UPDATE_BUSY = "A document update is already running; try again when it finishes."
+# Largest Markdown file /rag/upload accepts, and the request body allowed
+# around it (multipart envelope and form fields).
+MAX_RAG_UPLOAD_BYTES = 10 * 1024 * 1024
+RAG_UPLOAD_REQUEST_LIMIT = MAX_RAG_UPLOAD_BYTES + 1024 * 1024
 
 
 def ensure_rag_modules_loaded():
@@ -210,7 +195,6 @@ def ensure_rag_modules_loaded():
     global RAG_DB_PATH
     global start_service
     global create_markdown_vectordb
-    global validate_rag_database
     global wait_for_rag_service
 
     if rag_db_client is not None:
@@ -219,7 +203,6 @@ def ensure_rag_modules_loaded():
     from rag.vectordb import (
         RAG_DB_PATH as _RAG_DB_PATH,
         start_service as _start_service,
-        validate_database as _validate_database,
         wait_for_service as _wait_for_service,
         RagDbClient,
     )
@@ -228,10 +211,19 @@ def ensure_rag_modules_loaded():
     RAG_DB_PATH = _RAG_DB_PATH
     start_service = _start_service
     create_markdown_vectordb = _create_markdown_vectordb
-    validate_rag_database = _validate_database
     wait_for_rag_service = _wait_for_service
     rag_db_client = RagDbClient()
     return rag_db_client
+
+def studio_rag_client():
+    """(client, other): the RAG client, and the database that the service on
+    its port serves when it is not this Studio's (e.g. one started by another
+    process), else None. Callers answer ``other`` with
+    rag_chat.mismatch_message() instead of searching. A service that does not
+    answer is left to the caller's request to report, as before."""
+    client = ensure_rag_modules_loaded()
+    return client, rag_chat.other_database(client.served_db_path(), RAG_DB_PATH)
+
 
 def stop_service():
     global vectodb_proc
@@ -249,6 +241,61 @@ def stop_service():
             vectodb_proc.wait(timeout=5)
     vectodb_proc = None
 
+def rag_service_failed():
+    """Whether the document search service this Studio started has exited
+    (a missing embedding model, a database it can't open): then it is not
+    "starting" and won't come up by waiting."""
+    proc = vectodb_proc
+    return proc is not None and proc.poll() is not None
+
+
+def restore_rag_database(backup_path, replacement_installed):
+    """After a failed or abandoned update: put the previous database back and
+    restart the service on it (no restart when there was none)."""
+    global vectodb_proc
+    stop_service()
+    if replacement_installed and os.path.exists(RAG_DB_PATH):
+        os.unlink(RAG_DB_PATH)
+    if backup_path and os.path.exists(backup_path):
+        os.replace(backup_path, RAG_DB_PATH)
+    if os.path.exists(RAG_DB_PATH):
+        try:
+            vectodb_proc = start_service()
+            wait_for_rag_service(vectodb_proc)
+        except Exception:  # noqa: BLE001
+            logging.exception("Failed to restore the previous RAG service")
+
+
+def rag_update_response(stream):
+    """Stream a document update that holds ``RAG_UPDATE_LOCK``, releasing it
+    once: when the stream ends, or when the response closes because the
+    client went away (possibly before the stream started)."""
+    released = []
+
+    def release():
+        if not released:
+            released.append(True)
+            RAG_UPDATE_LOCK.release()
+
+    def run():
+        try:
+            yield from stream
+        finally:
+            close_thread_event_loop()
+            release()
+
+    response = Response(stream_with_context(run()), mimetype="text/plain")
+    response.call_on_close(release)
+    return response
+
+
+def rag_document_name():
+    """The file the current database was built from, for passages that do not
+    name one (empty when unknown)."""
+    from rag.inspect_db import read_rag_meta
+    return rag_chat.document_name(read_rag_meta())
+
+
 def handle_shutdown_signal(signum, _frame):
     logging.info("Received signal %s; stopping RAG database service", signum)
     stop_service()
@@ -263,10 +310,6 @@ signal.signal(signal.SIGTERM, handle_shutdown_signal)
 
 class AppConstants:
     DEFAULT_SIMA_SERVER_IP = "127.0.0.1:9998"
-    DEFAULT_CAMERA_IDX = 0
-    DEFAULT_MODEL_QUERY_STR='Describe what you see in the picture.'
-    DEFAULT_HTTP_PORT = 8081
-    DEFAULT_UPLOADS_DIR = 'uploads'
 
 
 def _env_float(name, default):
@@ -279,1058 +322,26 @@ def _env_float(name, default):
         logging.warning("Invalid %s; using %s", name, default)
         return default
 
-class TalkController:
-    def __init__(self, supported_langs=None):
-        self._next = None
-        self.prefix = ''
-        self.totalk = ''
-        self.talk = []
-        self.pipers = {}            # rhasspy piper-tts voices, keyed by language
-        self.pp = None              # active piper-plus multilingual engine
-        self.pp_models = []         # installed piper-plus voices (selectable)
-        self.pp_current = None      # key of the active piper-plus voice
-        self.pp_lock = threading.Lock()   # guards runtime piper-plus voice switches
-        self._pp_swap_lock = threading.Lock()   # swaps (pp, pp_current) as one unit
-        self.prefer_piper_plus = False  # prefer piper-plus over dedicated piper-tts voices
-        self.st = None              # Supertonic 3 MLA engine (all voices/languages)
-        self.st_lock = threading.Lock()   # guards Supertonic voice switches
-        # Supertonic is preferred whenever it loaded: it runs on the MLA and
-        # speaks every language the Studio offers except Norwegian.
-        self.prefer_supertonic = False
-        self.browser_tts = False    # when True, no server synthesis — the client speaks via Web Speech
-        self.utterance_speed = 1.0
-        self.missing_voice_warnings = set()
-        self._cpu_engine_lock = threading.Lock()   # serializes deferred CPU engine loads
-        langs = supported_langs or ['en']
-        # Supertonic is the default engine. When it loads, the CPU engines stay
-        # out of RAM until a user selects them; only languages Supertonic cannot
-        # speak (Chinese, Norwegian) get their dedicated Piper voice at startup.
-        # Without Supertonic every installed CPU engine loads as before.
-        self._init_supertonic()
-        if self.st is None:
-            self._init_piper_plus()
-            self._init_pipers_threaded(langs)
-        else:
-            uncovered = [lang for lang in langs if not self.st.supports(lang)]
-            if uncovered:
-                self._init_pipers_threaded(uncovered)
-            logging.info("CPU TTS engines (piper-plus, piper-tts) load on demand "
-                         "when selected under Settings -> Voice engine.")
-        
-        self.lock = threading.Lock()
-        self._reset_tps_counters()
-
-        self.current_language = 'en'
-        self.supported_langs = supported_langs or ['en']
-        self._log_tts_coverage()
-        # When False, spoken responses (PiperTTS) are skipped entirely — no
-        # synthesis compute and no audio_chunk emitted.
-        self.tts_enabled = True
-        # Create a thread-safe queue for incoming subwords
-        self.queue = queue.Queue()
-        self.running = True
-        self.worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
-        self.worker_thread.start()
-        self.full_response = []
-
-        # Chunking state
-        self.chunk_count = 0
-        self.permissive_chunks = 3  # first N chunks use permissive boundaries
-        self.min_chars_first_chunks = 20  # require at least this many chars before first N flushes
-
-    def _engine_name(self, eng):
-        if eng is None:
-            return None
-        if eng is self.st:
-            return 'supertonic'
-        if eng is self.pp or getattr(eng, 'studio_voice_key', None):
-            return 'piper-plus'
-        return 'piper-tts'
-
-    def _engine_voice(self, eng):
-        """Speaker label for the metrics strip, where an engine has one."""
-        if eng is not None and eng is self.st:
-            return self.st.voice
-        if eng is not None and getattr(eng, 'studio_voice_key', None):
-            return eng.studio_voice_key      # the voice this instance was built for
-        return None
-
-    def _log_tts_coverage(self):
-        """One line per UI language naming the engine that will speak it. The
-        per-engine loaders run concurrently, so only this summary is
-        authoritative about what has no server voice."""
-        for lang in self.supported_langs:
-            effective, eng = self._get_piper(lang)
-            name = self._engine_name(eng)
-            if name is None:
-                logging.info("TTS coverage: %s -> browser/text only", lang)
-            elif effective != lang:
-                logging.info("TTS coverage: %s -> %s (via '%s' voice)", lang, name, effective)
-            else:
-                logging.info("TTS coverage: %s -> %s", lang, name)
-
-    def set_language(self, lang):
-        self.current_language = lang if lang in self.supported_langs else 'xx'
-
-    def set_tts_enabled(self, enabled):
-        self.tts_enabled = bool(enabled)
-
-    def set_utterance_speed(self, speed):
-        try:
-            speed = float(speed)
-        except (TypeError, ValueError):
-            speed = 1.0
-        self.utterance_speed = max(0.5, min(2.0, speed))
-        for eng in list(self.pipers.values()) + [self.pp, self.st]:
-            if eng is not None and hasattr(eng, 'set_utterance_speed'):
-                eng.set_utterance_speed(self.utterance_speed)
-
-    def _init_pipers_threaded(self, langs):
-        threads = []
-        assets = Path("assets")
-
-        def load_piper(lang_code, onnx_file):
-            from pipertts import PiperTTS # import here if needed locally
-            try:
-                piper = PiperTTS(model_path=str(onnx_file))
-                piper.set_utterance_speed(self.utterance_speed)
-                self.pipers[lang_code] = piper
-                logging.info("Loaded Piper model for %s (streaming)", lang_code)
-            except Exception as e:
-                logging.warning(f"Failed to load Piper model for {lang_code}: {e}")
-
-        for lang in langs:
-            found = False
-            voices = installed_voices(
-                VOICE_CATALOG, assets_path=assets, engine="piper-tts", language=lang
-            )
-            voices.sort(key=lambda voice: not voice.get("default", False))
-            if voices:
-                model_path = next(
-                    path for path in catalog_asset_paths(voices[0], assets)
-                    if path.suffix == ".onnx"
-                )
-                thread = threading.Thread(target=load_piper, args=(lang, model_path))
-                thread.start()
-                threads.append(thread)
-                found = True
-            if not found:
-                if self.pp is not None and self.pp.supports(lang):
-                    logging.info("No dedicated voice installed for '%s' — using Piper Plus.", lang)
-                elif self.st is not None and self.st.supports(lang):
-                    logging.info("No dedicated voice installed for '%s' — using Supertonic.", lang)
-                elif lang == 'ko':
-                    logging.info("No Korean server voice — browser/text only.")
-                else:
-                    logging.warning("No server TTS voice installed for language: %s", lang)
-
-        for t in threads:
-            t.join()
-
-    def _scan_piper_plus(self):
-        """Installed Piper Plus models from the reviewed catalog, default first."""
-        assets = Path("assets")
-        voices = installed_voices(
-            VOICE_CATALOG, assets_path=assets, engine="piper-plus"
-        )
-        voices.sort(key=lambda voice: not voice.get("default", False))
-        models = []
-        for voice in voices:
-            paths = catalog_asset_paths(voice, assets)
-            onnx = next(path for path in paths if path.suffix == ".onnx")
-            cfg = next((path for path in paths if path.name == "config.json"), None)
-            models.append({
-                "key": voice["id"],
-                "label": voice["label"],
-                "onnx": onnx,
-                "config": cfg,
-                "license": voice["license"],
-            })
-        return models
-
-    def _init_piper_plus(self):
-        """Load the default installed Piper Plus voice. The engine in use is
-        only ever replaced by a fully built one (never set to None meanwhile),
-        so concurrent requests see either the old or the new voice."""
-        self.pp_models = self._scan_piper_plus()
-        if not self.pp_models:
-            logging.info("No piper-plus voice found under assets/piper-plus/ — "
-                         "multilingual alternative unavailable (run voice_install.sh).")
-            return
-        self._load_piper_plus(self.pp_models[0]["key"])
-
-    def _load_piper_plus(self, key):
-        """Build the piper-plus voice `key` and swap it in atomically (engine and
-        its key together). Returns True on success; on failure the previous
-        voice, if any, stays active."""
-        entry = next((m for m in getattr(self, "pp_models", []) if m["key"] == key), None)
-        if entry is None:
-            return False
-        try:
-            from piperplus_tts import PiperPlusTTS
-            pp = PiperPlusTTS(entry["onnx"], config_path=entry["config"])
-            pp.set_utterance_speed(self.utterance_speed)
-            pp.studio_voice_key = key
-        except Exception as e:  # noqa: BLE001
-            logging.warning("Failed to load piper-plus voice '%s': %s", key, e)
-            return False
-        with self._pp_swap_lock:
-            self.pp, self.pp_current = pp, key
-        logging.info("piper-plus voice '%s' ready (languages: %s)",
-                     key, sorted(pp.languages))
-        return True
-
-    def set_piper_plus_voice(self, key):
-        """Install a catalogued model when needed and switch to it."""
-        with self.pp_lock:
-            catalog_voice = voice_by_id(key, VOICE_CATALOG)
-            if catalog_voice is None or catalog_voice["engine"] != "piper-plus":
-                return False
-            try:
-                # The installer also verifies existing files against the pinned
-                # checksums, so a corrupt or manually replaced model is repaired.
-                install_catalog_voice(catalog_voice, assets_path=Path("assets"))
-                self.pp_models = self._scan_piper_plus()
-                return self._load_piper_plus(key)
-            except Exception:  # noqa: BLE001
-                logging.exception("Could not install/load Piper Plus voice '%s'", key)
-                return False
-
-    def piper_plus_voices(self):
-        """Available piper-plus voices + the current one, for the UI picker."""
-        installed = {
-            voice["id"] for voice in installed_voices(
-                VOICE_CATALOG, assets_path=Path("assets"), engine="piper-plus")
-        }
-        return {
-            "voices": [
-                {
-                    "key": voice["id"],
-                    "label": voice["label"],
-                    "installed": voice["id"] in installed,
-                }
-                for voice in catalog_voices(VOICE_CATALOG, engine="piper-plus")
-            ],
-            "current": getattr(self, "pp_current", None),
-        }
-
-    def _init_supertonic(self):
-        """Load the Supertonic 3 MLA engine when its runtime is installed."""
-        if not supertonic_tts.available():
-            logging.info("Supertonic runtime not installed (venv %s, models %s) — MLA TTS "
-                         "unavailable; run setup.sh with INSTALL_SUPERTONIC=1.",
-                         supertonic_tts._supertonic_python() or supertonic_tts.DEFAULT_VENV,
-                         supertonic_tts.models_root())
-            return
-        try:
-            st = supertonic_tts.SupertonicTTS(voice=self.st_voice_default())
-            st.set_utterance_speed(self.utterance_speed)
-            self.st = st
-            self.prefer_supertonic = True
-            logging.info("Supertonic 3 (MLA) ready: voice %s, %d steps, languages: %s",
-                         st.voice, st.steps, sorted(st.languages))
-        except Exception as e:  # noqa: BLE001
-            logging.warning("Failed to load Supertonic 3 engine: %s", e)
-            supertonic_tts.shutdown_worker()
-
-    @staticmethod
-    def st_voice_default():
-        voice = (os.environ.get("SUPERTONIC_VOICE") or supertonic_tts.DEFAULT_VOICE).strip()
-        return voice if voice in supertonic_tts.VOICES else supertonic_tts.DEFAULT_VOICE
-
-    def set_supertonic_voice(self, key):
-        """Switch the Supertonic speaker (F1-F5, M1-M5). Returns True on success."""
-        with self.st_lock:
-            if self.st is None:
-                return False
-            return self.st.set_voice((key or "").strip().upper())
-
-    def supertonic_voices(self):
-        """Supertonic speakers + the current one, for the UI picker."""
-        if self.st is None:
-            return {"voices": [], "current": None}
-        return {
-            "voices": [
-                {"key": voice, "label": supertonic_tts.VOICE_LABELS.get(voice, voice)}
-                for voice in self.st.voices
-            ],
-            "current": self.st.voice,
-        }
-
-    # -- deferred CPU engine loading -------------------------------------------
-    def _installed_piper_plus(self, language=None):
-        """Catalogued piper-plus models on disk (optionally speaking `language`)."""
-        return installed_voices(
-            VOICE_CATALOG, assets_path=Path("assets"), engine="piper-plus",
-            language=language)
-
-    def _installed_pipers(self, language=None):
-        """Catalogued dedicated Piper voices on disk (optionally for `language`)."""
-        return installed_voices(
-            VOICE_CATALOG, assets_path=Path("assets"), engine="piper-tts",
-            language=language)
-
-    def _ensure_piper_plus_loaded(self):
-        """Load piper-plus on selection. A failed attempt (transient worker or
-        memory error) is retried on the next selection rather than remembered,
-        so the user can recover without restarting. Returns True when an
-        engine is up."""
-        with self._cpu_engine_lock:
-            if self.pp is None:
-                self._init_piper_plus()
-            return self.pp is not None
-
-    def _load_piper_language(self, language):
-        """Load the dedicated Piper voice for one language if it is installed
-        and not resident yet. Voices load one at a time in the Piper worker, so
-        this is deliberately per language: loading everything on selection would
-        queue tens of seconds of loads ahead of the first utterance."""
-        if not language or language in self.pipers or not self._installed_pipers(language):
-            return language in self.pipers
-        with self._cpu_engine_lock:
-            if language not in self.pipers:
-                self._init_pipers_threaded([language])
-        return language in self.pipers
-
-    def _ensure_pipers_loaded(self, language=None):
-        """Make piper-tts selectable: load the voice for `language` now; other
-        languages load on their first utterance. Returns True when the engine
-        has at least one usable voice (loaded or installed)."""
-        self._load_piper_language(language)
-        return bool(self.pipers) or bool(self._installed_pipers())
-
-    def set_voice_engine(self, engine, language=None):
-        """Choose the preferred TTS engine for languages several can speak.
-        'supertonic' -> the MLA engine; 'piper-plus' -> prefer piper-plus;
-        'piper-tts' -> prefer rhasspy piper; 'browser' -> client-side speech.
-        Languages only one engine supports are unaffected. CPU engines that
-        were deferred at startup load here, on first selection."""
-        engine = (engine or "").strip().lower()
-        if engine in ("browser", "web", "webspeech", "web-speech"):
-            self.browser_tts = True
-        elif engine in ("supertonic", "supertonic-tts", "st", "mla"):
-            if self.st is None:
-                return False
-            self.browser_tts = False
-            self.prefer_supertonic = True
-        elif engine in ("piper-plus", "piperplus", "pp"):
-            if not self._ensure_piper_plus_loaded():
-                return False
-            self.browser_tts = False
-            self.prefer_supertonic = False
-            self.prefer_piper_plus = True
-        elif engine in ("piper-tts", "pipertts", "piper", "rhasspy"):
-            if not self._ensure_pipers_loaded(language):
-                return False
-            self.browser_tts = False
-            self.prefer_supertonic = False
-            self.prefer_piper_plus = False
-        else:
-            return False
-        logging.info("Preferred TTS engine set to %s", self._preferred_engine_key())
-        return True
-
-    def _preferred_engine_key(self):
-        if self.browser_tts:
-            return "browser"
-        if self.prefer_supertonic and self.st is not None:
-            return "supertonic"
-        return "piper-plus" if self.prefer_piper_plus else "piper-tts"
-
-    def voice_engine(self, language=None):
-        """Engines that can speak `language` (all loaded engines when language is
-        None), plus the one actually used for it. Only engines that support the
-        language are returned, so the UI never offers an incompatible engine."""
-        engines = []
-        st_ok = self.st is not None and (language is None or self.st.supports(language))
-        pp_loaded = self.pp is not None and (language is None or self.pp.supports(language))
-        # Deferred engines are offered when their models are installed; selecting
-        # one loads it.
-        pp_ok = pp_loaded or (self.pp is None and bool(self._installed_piper_plus(language)))
-        tts_loaded = bool(self.pipers) and (language is None or language in self.pipers)
-        tts_ok = tts_loaded or (
-            (language is None or language not in self.pipers)
-            and bool(self._installed_pipers(language)))
-        if st_ok:
-            engines.append({"key": "supertonic", "label": "Supertonic 3 (MLA, multilingual)",
-                            "loaded": True})
-        if pp_ok:
-            engines.append({"key": "piper-plus", "label": "piper-plus (multilingual)",
-                            "loaded": pp_loaded})
-        if tts_ok:
-            engines.append({"key": "piper-tts", "label": "piper-tts (rhasspy voices)",
-                            "loaded": tts_loaded})
-        # Browser TTS runs entirely in the client via the Web Speech API, so it is
-        # always available and works for any language the device has a voice for.
-        engines.append({"key": "browser", "label": "Browser (device voices)", "loaded": True})
-        # The engine the router actually uses for this language.
-        if self.browser_tts:
-            current = "browser"
-        else:
-            current = self._preferred_engine_key()
-            if language and current == "piper-tts" and language not in self.pipers \
-                    and self._installed_pipers(language):
-                pass   # deferred dedicated voice: it loads on the first utterance
-            elif language:
-                _, eng = self._get_piper(language)
-                if eng is not None and eng is self.st:
-                    current = "supertonic"
-                elif eng is not None and eng is self.pp:
-                    current = "piper-plus"
-                elif eng is not None and eng in self.pipers.values():
-                    current = "piper-tts"
-        keys = [e["key"] for e in engines]
-        if current not in keys:
-            current = keys[0]
-        return {"engines": engines, "current": current}
-
-    def _get_piper(self, language, load=False):
-        """Route a language to the best available TTS engine, returning
-        ``(effective_language, engine)`` or ``(None, None)`` when nothing can
-        speak it. Preference: Supertonic (when preferred) → piper-plus (when
-        preferred) → a dedicated catalogued voice → piper-plus → Supertonic →
-        English as a *latin-script only* fallback.
-        CJK/Korean never fall back to an English voice — better silent than
-        mispronounced. With ``load=True`` (synthesis paths) an installed but
-        deferred dedicated voice is loaded before it is chosen."""
-        if self.prefer_supertonic and self.st is not None and self.st.supports(language):
-            return language, self.st
-        if self.prefer_piper_plus and self.pp is not None and self.pp.supports(language):
-            return language, self.pp
-        if load and language not in self.pipers:
-            self._load_piper_language(language)
-        if language in self.pipers:
-            return language, self.pipers[language]
-        if self.pp is not None and self.pp.supports(language):
-            return language, self.pp
-        # Supertonic covers languages no CPU voice is installed for (incl. Korean).
-        if self.st is not None and self.st.supports(language):
-            return language, self.st
-        if language not in ('ja', 'ko', 'zh'):
-            if 'en' in self.pipers:
-                return 'en', self.pipers['en']
-            if self.st is not None and self.st.supports('en'):
-                return 'en', self.st
-        return None, None
-
-    def has_voice(self, language='en'):
-        _, piper = self._get_piper(language)
-        return piper is not None
-
-    def _warn_missing_voice_once(self, language):
-        if language in self.missing_voice_warnings:
-            return
-        self.missing_voice_warnings.add(language)
-        logging.warning(f"No Piper voice loaded for language '{language}'. Skipping TTS audio.")
-
-    def _reset_tps_counters(self):
-        self.tps = 0.0
-        self.tps_history = []
-        self.max_tps_history = 10
-
-    def _worker_loop(self):
-        while self.running:
-            try:
-                item = self.queue.get(timeout=0.05)
-                if item == "__STOP__":
-                    logging.info("TTS worker loop stopping.")
-                    break
-                try:
-                    self._process_subword(item)
-                except Exception as e:
-                    logging.error(f"Error in _process_subword: {e}")
-                    logging.debug(traceback.format_exc())
-            except queue.Empty:
-                continue
-            except Exception as e:
-                # Catch anything unexpected (e.g., bad queue state)
-                logging.error(f"Unexpected error in TTS worker loop: {e}")
-                logging.debug(traceback.format_exc())
-
-    def enqueue(self, data):
-        """
-        Enqueue incoming data containing the subword and tokens-per-second (tps).
-        Smooths tps over the last N samples.
-        Expected data format: {'text': subword, 'tokens_per_sec': tps}
-        """
-        subword = data.get('text', '')
-        new_tps = data.get('tokens_per_sec', 0.0)
-        generation_id = data.get('generation_id')
-
-        subword = subword.replace('*', '').replace('＊', '')
-
-        self.queue.put({
-            'text': subword,
-            'generation_id': generation_id,
-        })
-
-        # Update TPS history and compute average
-        self.tps_history.append(new_tps)
-        if len(self.tps_history) > self.max_tps_history:
-            self.tps_history.pop(0)
-
-        # Compute the average TPS
-        if self.tps_history:
-            self.tps = sum(self.tps_history) / len(self.tps_history)
-            logging.debug(f'Current average TPS is {self.tps}')
-        else:
-            self.tps = 0.0
-
-    def stop(self):
-        self.running = False
-        self.queue.put("__STOP__")
-        self.worker_thread.join()
-
-    def _get_wav_duration(self, buffer):
-        logging.info("Calculating WAV duration")
-        buffer.seek(0)
-        with wave.open(buffer, 'rb') as wav_file:
-            frames = wav_file.getnframes()
-            rate = wav_file.getframerate()
-            duration = frames / float(rate)
-        
-        logging.info(f'WAV duration: {duration:.2f} seconds')
-        return duration
-
-    def _flush_talk(self, generation_id, force=False):
-        """Synthesize buffered text, bypassing the early-chunk minimum at END."""
-        if force and self._next is not None:
-            self.talk.append(self._next)
-            self._next = None
-        if not self.talk:
-            return
-
-        self.totalk = self.generate_talk()
-        start_time = time.time()
-        sanitized_sentence = self._sanitize_for_tts(self.totalk)
-        logging.info(f"{self.full_response} : {sanitized_sentence}")
-
-        if (
-            not force
-            and self.tts_enabled
-            and self.current_language != 'xx'
-            and self.chunk_count < self.permissive_chunks
-            and len(sanitized_sentence) < self.min_chars_first_chunks
-        ):
-            # Keep the entire fragment in order until more text arrives. When
-            # END arrives, force=True flushes it regardless of its length.
-            if self._next is not None:
-                self.talk.append(self._next)
-                self._next = None
-            return
-
-        if not sanitized_sentence.strip():
-            pass
-        elif sanitized_sentence in self.full_response:
-            logging.info(f"Skipping synthesis for repeated text: {self.totalk}")
-            self._reset_tps_counters()
-        elif self.tts_enabled and self.current_language != 'xx':
-            if self.browser_tts:
-                if generation_id is not None and not genai_app.is_generation_current(generation_id):
-                    return
-                self.full_response.append(sanitized_sentence)
-                genai_app.emit('audio_chunk', {
-                    'text': sanitized_sentence.strip(),
-                    'browser': True,
-                    'lang': self.current_language,
-                    'tps': round(self.tps, 2),
-                    'engine': 'browser',
-                })
-                self.chunk_count += 1
-            else:
-                _, piper = self._get_piper(self.current_language, load=True)
-                if piper is None:
-                    self._warn_missing_voice_once(self.current_language)
-                else:
-                    self.full_response.append(sanitized_sentence)
-                    audio_duration = 0.0
-                    elapsed_time = 0.0
-                    if hasattr(piper, 'synthesize_stream'):
-                        buffers = piper.synthesize_stream(
-                            sanitized_sentence, language=self.current_language
-                        )
-                    else:
-                        buffers = [piper.synthesize(
-                            sanitized_sentence, language=self.current_language
-                        )]
-                    try:
-                        for buffer in buffers:
-                            if generation_id is not None and not genai_app.is_generation_current(generation_id):
-                                return
-                            elapsed_time = time.time() - start_time
-                            audio_duration += self._get_wav_duration(buffer)
-                            rtf = elapsed_time / audio_duration if audio_duration > 0 else 0
-                            genai_app.emit('audio_chunk', {
-                                'text': sanitized_sentence.strip(),
-                                'audio': buffer.getvalue(),
-                                'tps': round(self.tps, 2),
-                                'rtf': round(rtf, 2),
-                                'engine': self._engine_name(piper),
-                                'voice': self._engine_voice(piper),
-                            })
-                    finally:
-                        close = getattr(buffers, 'close', None)
-                        if close is not None:
-                            close()
-                    logging.info(f"[Timing] self.piper.synthesize took {elapsed_time:.3f} seconds for [{sanitized_sentence}]")
-                    self.chunk_count += 1
-
-        self.talk = []
-        if self._next is not None:
-            self.talk.append(self._next)
-            self._next = None
-
-    def _process_subword(self, item):
-        subword = item.get('text', '')
-        generation_id = item.get('generation_id')
-        if generation_id is not None and not genai_app.is_generation_current(generation_id):
-            return
-
-        mod_subword = ''
-
-        if subword != 'END':  # End of streaming
-            if '<0x0A>' in subword:
-                mod_subword = re.sub(r"<0x([0-9A-Fa-f]+)>", "", subword)
-            if '</s>' in subword:
-                mod_subword = re.sub(r"</s>", "", subword)
-
-            if self.check_punctuation(subword):
-                if mod_subword:
-                    # Split on both English and CJK punctuation marks
-                    parts = re.split(r'([。！？\.?!])', mod_subword)
-                    if len(parts) > 1:
-                        tmp = parts[0] + (parts[1] if len(parts) > 1 else '')
-                        self._next = ''.join(parts[2:]) if len(parts) > 2 else ''
-                        self.talk.append(tmp)
-                    else:
-                        self.talk.append(mod_subword)
-                else:
-                    self.talk.append(subword)
-
-                self._flush_talk(generation_id)
-            else:
-                self.talk.append(subword)
-        else:
-            # A response can end with a short sentence that did not satisfy the
-            # initial chunk-size threshold. Never discard that final fragment.
-            self._flush_talk(generation_id, force=True)
-            avg_tps = (sum(self.tps_history) / len(self.tps_history)) if getattr(self, 'tps_history', None) else 0.0
-            logging.info(f"[TTS] Average tokens/sec for answer: {avg_tps:.2f}")
-            genai_app.emit('end', {})
-            self.chunk_count = 0
-            self._reset_tps_counters()
-            if generation_id is not None:
-                genai_app.complete_generation(generation_id)
-
-    def reset(self):
-        with self.lock:
-            logging.info("TalkController reset called. Clearing state and queue.")
-            self._next = None
-            self.prefix = ''
-            self.totalk = ''
-            self.talk = []
-            self.full_response = []
-
-            while not self.queue.empty():
-                try:
-                    self.queue.get_nowait()
-                except queue.Empty:
-                    break
-
-    def check_punctuation(self, word):
-        # Dynamic boundaries: first N chunks permissive, then strict
-        if self.chunk_count < self.permissive_chunks:
-            return bool(re.search(r"[。！？\.,?!:;]", word))
-        else:
-            return bool(re.search(r"[。！？\.?!]", word))
-
-    def generate_talk(self):
-        # Simply join tokens as-is, preserving the model's intended spacing
-        return "".join(self.talk)
-
-    def _sanitize_for_tts(self, text: str) -> str:
-        # Strip Markdown and LaTeX so Piper utters the prose, not the formatting
-        # ("star star", "dollar x caret 2", raw URLs). See ui/tts_text.py.
-        return sanitize_for_tts(text)
-
-    
-    class EngineUnavailable(Exception):
-        """An explicitly requested engine cannot serve the request. ``reason``
-        is one of the keys of ENGINE_REFUSALS: the API answers with that fixed
-        text, never with exception details."""
-        def __init__(self, reason, engine=""):
-            super().__init__(reason)
-            self.reason, self.engine = reason, engine
-
-    ENGINE_REFUSALS = {
-        'not-installed': 'that engine is not installed on this Studio',
-        'no-voice': 'that engine has no voice for the requested language',
-        'none': 'no TTS engine can speak the requested language',
-    }
-
-    ENGINE_KEYS = SPEECH_ENGINE_ALIASES      # one map with the request parser (audio_api)
-
-    def engine_for_request(self, engine, language):
-        """Resolve an explicit ``model`` from the speech API to one engine.
-
-        A recognized engine name is honored or refused: it never falls back to
-        the UI's preference. Anything else (``default``, ``tts-1``, empty)
-        goes through the router. Returns ``(effective_language, engine)``;
-        raises ``EngineUnavailable`` when nothing can speak ``language``.
-        """
-        key = self.ENGINE_KEYS.get((engine or '').strip().lower())
-        if key is None:
-            language, eng = self._get_piper(language, load=True)
-            if eng is None:
-                raise self.EngineUnavailable('none')
-            return language, eng
-        if key == 'supertonic':
-            if self.st is None:
-                raise self.EngineUnavailable('not-installed', key)
-            if self.st.supports(language):
-                return language, self.st
-            raise self.EngineUnavailable('no-voice', key)
-        if key == 'piper-plus':
-            if not self._installed_piper_plus():
-                raise self.EngineUnavailable('not-installed', key)
-            self._ensure_piper_plus_loaded()
-            pp = self.pp                  # one read: a voice switch may swap it
-            if pp is not None and pp.supports(language):
-                return language, pp
-            raise self.EngineUnavailable('no-voice', key)
-        # piper-tts: the dedicated voice for this language, loaded on demand.
-        if self._load_piper_language(language):
-            return language, self.pipers[language]
-        raise self.EngineUnavailable('no-voice', key)
-
-    def tts_on_demand(self, text, language='en', engine=None, voice=None, speed=None):
-        """
-        Perform TTS synthesis on-demand for the given text and return audio bytes and timing info.
-
-        ``engine`` is the request's ``model``: a recognized engine name is
-        dispatched to exactly that engine (``EngineUnavailable`` when it cannot
-        serve ``language``); other values use the router, which raises the same
-        when no engine can speak the language. ``voice`` selects a Supertonic
-        speaker (F1-F5, M1-M5) for this request only. The Piper engines have one
-        loaded voice per language (chosen in the Studio's voice settings), so a
-        ``voice`` naming anything else is refused with ``AudioApiError`` (400)
-        rather than answered with a different voice than was asked for.
-        """
-        if not text:
-            raise ValueError("No text provided for TTS synthesis.")
-
-        start_time = time.time()
-        language, piper = self.engine_for_request(engine, language)
-        requested_voice = (voice or '').strip()
-        if requested_voice.lower() == 'default':
-            requested_voice = ''
-
-        sanitized_text = self._sanitize_for_tts(text)
-        # ``speed`` is per request: it never touches the utterance speed the UI
-        # slider set (that used to be a side effect of the API).
-        if piper is self.st:
-            if requested_voice and requested_voice not in self.st.voices:
-                raise AudioApiError(
-                    400, f"voice '{requested_voice}' is not a Supertonic voice "
-                    f"(one of {', '.join(self.st.voices)})", 'voice')
-            used_voice = requested_voice or self.st.voice
-            buffer = piper.synthesize(sanitized_text, language=language, voice=used_voice, speed=speed)
-        else:
-            used_voice = self._engine_voice(piper) or self._piper_voice_id(language)
-            if requested_voice and requested_voice != used_voice:
-                raise AudioApiError(
-                    400, f"voice '{requested_voice}' is not the voice loaded for "
-                    f"{self._engine_name(piper)} in '{language}' ('{used_voice}'); "
-                    f"Piper voices are selected in the Studio's voice settings, "
-                    f"omit 'voice' to use the loaded one", 'voice')
-            buffer = piper.synthesize(sanitized_text, language=language, speed=speed)
-        elapsed_time = time.time() - start_time
-        audio_duration = self._get_wav_duration(buffer)
-        rtf = elapsed_time / audio_duration if audio_duration > 0 else 0
-        effective_speed = (piper.clamp_speed(speed) if speed is not None
-                           else getattr(piper, 'speed', None))
-        if effective_speed is None and hasattr(piper, 'length_scale'):   # piper-plus state
-            effective_speed = 1.0 / piper.length_scale if piper.length_scale else 1.0
-
-        logging.info(f"[On-Demand TTS] Synthesized audio in {elapsed_time:.3f} sec (RTF: {rtf:.2f})")
-
-        return {
-            'audio_bytes': buffer.getvalue(),
-            'elapsed_time': elapsed_time,
-            'audio_duration': audio_duration,
-            'rtf': rtf,
-            'engine': self._engine_name(piper),
-            'voice': used_voice,
-            'language': language,
-            'speed': effective_speed,
-        }
-
-    def _piper_voice_id(self, language):
-        """Catalog id of the dedicated Piper voice loaded for ``language``."""
-        piper = self.pipers.get(language)
-        if piper is None:
-            return None
-        return Path(getattr(piper, 'model_path', '')).stem or None
-
-    def voices_listing(self):
-        """``GET /v1/audio/voices``: every server-side engine with the languages
-        and voices it offers, whether or not it is loaded yet."""
-        supertonic = None
-        if self.st is not None:
-            supertonic = {
-                'languages': sorted(self.st.languages),
-                'voices': [
-                    {'id': v, 'label': supertonic_tts.VOICE_LABELS.get(v, v),
-                     'default': v == self.st.voice}
-                    for v in self.st.voices
-                ],
-            }
-        pp_voices = catalog_voices(VOICE_CATALOG, engine="piper-plus")
-        pp_installed = {v['id'] for v in self._installed_piper_plus()}
-        piper_plus = None
-        if pp_voices:
-            piper_plus = {
-                'languages': sorted({lang for v in pp_voices for lang in v['languages']}),
-                'voices': [
-                    {'id': v['id'], 'label': v['label'], 'languages': v['languages'],
-                     'installed': v['id'] in pp_installed,
-                     'default': v['id'] == self.pp_current}
-                    for v in pp_voices
-                ],
-            }
-        tts_installed = self._installed_pipers()
-        piper_tts = None
-        if tts_installed:
-            piper_tts = {
-                'languages': sorted({lang for v in tts_installed for lang in v['languages']}),
-                'voices': [
-                    {'id': v['id'], 'label': v['label'], 'language': v['languages'][0],
-                     'installed': True, 'loaded': v['languages'][0] in self.pipers,
-                     'default': v['id'] == self._piper_voice_id(v['languages'][0])}
-                    for v in tts_installed
-                ],
-            }
-        return build_voices_listing(
-            self.voice_engine()['engines'],
-            supertonic=supertonic, piper_plus=piper_plus, piper_tts=piper_tts,
-            default_engine=None if self.browser_tts else self._preferred_engine_key(),
-        )
 
 class AppContext:
     def __init__(self):
         self.app = None
-        self.socketio = None
         self.current_voice_by_lang = {}
         self.talk_ctrl = None
-        self.llm_only = False
-        self.backend_only = False   # --backend-only: API endpoints, no web UI (backend_mode.py)
-        self.cors_origins = ()      # BACKEND_CORS_ORIGINS, honoured in backend-only mode only
-        self.system_prompt = None
-        self.model_display_name = ""
-        self.chat_model_name = "model"
-        self.chat_model_names = ("model",)
-        self.chat_model_capabilities = {"model": {"supportsVision": True, "imageSize": None}}
-        self.active_chat_model_name = "model"
+        self.cors_origins = ()      # BACKEND_CORS_ORIGINS / app.web.cors_origins (backend_mode.py)
         self.asr_model_name = ""
         self.max_tokens = None
         self.web_host = "0.0.0.0"
         self.web_port = 5000
         self.rag_enabled = True
         self.rag_embedding_model_dir = ""
-        self.vision_image_size = None
 
         # Runtime model management + appearance
         self.control_base_url = "http://127.0.0.1:9997"
         self.catalog_dir = None
         self.hub_config = HubConfig(allow_download=True,
                                     orgs=("simaai", "TDoSiMa", "florianvoss"))
-        self.ui_font_family = "Inter"
-        self.ui_font_size = 15
-        self._catalog_names_cache = (0.0, frozenset())
         self._asr_name_cache = (0.0, "")
-
-        # Conversation history for OpenAI-style chat
-        self.conversation_history = []
-        self.current_response = ""  # Accumulate raw LLM response during streaming
-        self._state_lock = threading.RLock()
-        self._generation_counter = 0
-        self._active_generation_id = None
-
-    def _build_system_prompt_message(self):
-        if not self.system_prompt:
-            return None
-
-        if self.llm_only:
-            content = self.system_prompt
-        else:
-            content = [{"type": "text", "text": self.system_prompt}]
-        return {"role": "system", "content": content}
-
-    def set_system_prompt(self, prompt=None):
-        normalized = (prompt or '').strip()
-        self.system_prompt = normalized if normalized else None
-        # Update or remove the system message in-place
-        existing_index = next(
-            (idx for idx, message in enumerate(self.conversation_history) if message.get('role') == 'system'),
-            None
-        )
-        system_message = self._build_system_prompt_message()
-        if system_message:
-            if existing_index is not None:
-                self.conversation_history[existing_index] = system_message
-            else:
-                self.conversation_history.insert(0, system_message)
-        elif existing_index is not None:
-            self.conversation_history.pop(existing_index)
-
-        if self.system_prompt:
-            logging.info("System prompt updated.")
-        else:
-            logging.info("System prompt cleared.")
-
-    def get_system_prompt(self):
-        return self.system_prompt or ""
-
-    def add_user_message(self, content, has_image=False, image_base64=None):
-        """Add a user message to conversation history, with optional image support."""
-        if has_image and image_base64:
-            # Construct the full data URI required by the server's backend.
-            # This assumes a default MIME type of "image/jpeg".
-            image_data_uri = f"data:image/jpeg;base64,{image_base64}"
-            
-            # Multi-modal format with the correctly formatted image data
-            message_content = [
-                {"type": "image", "image": image_data_uri},
-                {"type": "text", "text": content}
-            ]
-        else:
-            # Simple text format
-            if self.llm_only:
-                message_content = content
-            else:
-                message_content = [{"type": "text", "text": content}]
-
-        with self._state_lock:
-            self.conversation_history.append({"role": "user", "content": message_content})
-            total_messages = len(self.conversation_history)
-        logging.info(
-            f"Added user message (image: {has_image}). "
-            f"Total messages: {total_messages}"
-        )
-
-
-    def _append_current_response_to_history_locked(self):
-        if not self.current_response:
-            return False
-
-        # Store only the answer in history — the model's <think> reasoning should
-        # not be fed back on later turns (it bloats context and, for reasoning
-        # models like Qwen3, degrades quality).
-        stored = _answer_part(self.current_response).strip() or self.current_response
-        if self.llm_only:
-            assistant_content = stored
-        else:
-            assistant_content = [{"type": "text", "text": stored}]
-        self.conversation_history.append({"role": "assistant", "content": assistant_content})
-        self.current_response = ""
-        logging.info(f"Added assistant response to history. Total messages: {len(self.conversation_history)}")
-        return True
-
-    def start_assistant_response(self, generation_id):
-        """Start accumulating a new assistant response."""
-        with self._state_lock:
-            if self._active_generation_id != generation_id:
-                return False
-            self.current_response = ""
-            return True
-
-    def add_to_current_response(self, generation_id, text):
-        """Add text to the current assistant response being accumulated."""
-        with self._state_lock:
-            if self._active_generation_id != generation_id:
-                return False
-            self.current_response += text
-            return True
-
-    def finish_assistant_response(self, generation_id):
-        """Finish the current assistant response and add it to history."""
-        with self._state_lock:
-            if self._active_generation_id != generation_id:
-                return False
-            self._append_current_response_to_history_locked()
-            return True
-
-    def complete_generation(self, generation_id):
-        with self._state_lock:
-            if self._active_generation_id != generation_id:
-                return False
-            self._active_generation_id = None
-            return True
-
-    def fail_generation(self, generation_id, message):
-        """Terminate one failed generation and notify the browser exactly once."""
-        with self._state_lock:
-            if self._active_generation_id != generation_id:
-                return False
-            self._append_current_response_to_history_locked()
-            self._active_generation_id = None
-        if self.talk_ctrl is not None:
-            self.talk_ctrl.reset()
-        self.emit('generation_error', {'message': message})
-        self.emit('end', {})
-        return True
-
-    def interrupt_active_generation(self, preserve_partial):
-        with self._state_lock:
-            had_active_generation = self._active_generation_id is not None
-            if preserve_partial:
-                self._append_current_response_to_history_locked()
-            self.current_response = ""
-            self._active_generation_id = None
-            return had_active_generation
-
-    def begin_generation(self, chat_model_name=None):
-        with self._state_lock:
-            self._generation_counter += 1
-            generation_id = self._generation_counter
-            self._active_generation_id = generation_id
-            if chat_model_name:
-                self.active_chat_model_name = chat_model_name
-            self.current_response = ""
-            return generation_id
-
-    def is_generation_current(self, generation_id):
-        with self._state_lock:
-            return self._active_generation_id == generation_id
-
-    def clear_conversation_history(self):
-        """Clear the conversation history."""
-        with self._state_lock:
-            self.conversation_history = []
-            self.current_response = ""
-            self._active_generation_id = None
-        logging.info("Conversation history cleared")
-        # Reinsert system prompt if present
-        system_message = self._build_system_prompt_message()
-        if system_message:
-            with self._state_lock:
-                self.conversation_history.insert(0, system_message)
-
-    def _known_catalog_names(self):
-        """Names the control API currently reports as available (short cache)."""
-        cached_at, names = self._catalog_names_cache
-        if (time.monotonic() - cached_at) < 3 and names:
-            return names
-        try:
-            resp = requests.get(
-                f"{self.control_base_url.rstrip('/')}/control/status", timeout=5
-            )
-            data = resp.json()
-            names = frozenset(entry.get("name", "") for entry in data.get("catalog", []))
-        except Exception:
-            names = frozenset()
-        self._catalog_names_cache = (time.monotonic(), names)
-        return names
 
     def set_asr_model_name(self, name):
         """Point transcription at a new ASR model after a successful switch."""
@@ -1381,54 +392,17 @@ class AppContext:
         self._asr_name_cache = (time.monotonic(), name)
         return name
 
-    def resolve_chat_model(self, requested_model=None):
-        model_name = str(requested_model or self.chat_model_name).strip()
-        if not model_name:
-            raise ValueError("No model is loaded. Select or download a model to start chatting.")
-        if model_name in self.chat_model_names:
-            return model_name
-        if model_name in self._known_catalog_names():
-            return model_name
-        raise ValueError(f"Unknown chat model: {model_name}")
-
-    def get_conversation_history(self):
-        """Get the current conversation history."""
-        with self._state_lock:
-            return self.conversation_history.copy()
-
-
-    def update_settings(self, camidx, model_server_ip, ragserver, httponly, apionly, llm_only, model_name=None, vision_image_size=None):
-        self.camidx = AppConstants.DEFAULT_CAMERA_IDX if camidx is None else camidx
+    def update_settings(self, model_server_ip, httponly):
         self.model_server_ip = AppConstants.DEFAULT_SIMA_SERVER_IP if model_server_ip is None else model_server_ip
-        self.ragserver = ragserver
         self.httponly = httponly
-        self.apionly = apionly
-        self.llm_only = llm_only
-        self.model_display_name = model_name or ""
-        self.vision_image_size = vision_image_size
         self.update_config()
-        # Align system prompt format with current mode
-        if self.system_prompt:
-            self.set_system_prompt(self.system_prompt)
 
-        if not self.apionly:
-            self.talk_ctrl = TalkController([
-                'en', 'fr', 'es', 'de', 'it', 'zh', 'vi', 'ja', 'pt', 'ko', 'no'
-            ])
+        self.talk_ctrl = TalkController([
+            'en', 'fr', 'es', 'de', 'it', 'zh', 'vi', 'ja', 'pt', 'ko', 'no'
+        ])
 
     def update_from_config(self, app_cfg):
         model_server = f"{app_cfg.openai.client_host}:{app_cfg.openai.port}"
-        self.chat_model_names = tuple(model.name for model in app_cfg.chat_models)
-        self.chat_model_capabilities = {
-            model.name: {
-                "supportsVision": bool(model.supports_vision),
-                "imageSize": model.vision_image_size,
-            }
-            for model in app_cfg.chat_models
-        }
-        # Models are optional at startup; the UI loads them on demand from the catalog.
-        self.chat_model_name = self.chat_model_names[0] if self.chat_model_names else ""
-        self.active_chat_model_name = self.chat_model_name
         self.asr_model_name = app_cfg.asr_model.name if app_cfg.asr_model else ""
         self.max_tokens = app_cfg.request.max_tokens
         self.web_host = app_cfg.web.host
@@ -1440,47 +414,21 @@ class AppContext:
         self.control_base_url = app_cfg.control.base_url
         self.catalog_dir = app_cfg.catalog_dir
         self.hub_config = app_cfg.hub
-        self.ui_font_family = app_cfg.ui.font_family
-        self.ui_font_size = app_cfg.ui.font_size
-        self.update_settings(
-            camidx=None,
-            model_server_ip=model_server,
-            ragserver=None,
-            httponly=not app_cfg.web.https,
-            apionly=False,
-            llm_only=False,
-            model_name=app_cfg.chat_model.name if app_cfg.chat_model else "",
-            vision_image_size=None
-        )
-        if app_cfg.request.system_prompt:
-            self.set_system_prompt(app_cfg.request.system_prompt)
+        self.update_settings(model_server_ip=model_server, httponly=not app_cfg.web.https)
 
     def update_config(self):
-        self.app.config['CAMERA_IDX'] = self.camidx
         self.app.config['SIMAAI_IP_ADDR'] = self.model_server_ip
-        self.app.config['SIMAAI_IP_PORT'] =  AppConstants.DEFAULT_HTTP_PORT
-        self.app.config['UPLOAD_FOLDER'] = AppConstants.DEFAULT_UPLOADS_DIR
-        self.app.config['MODEL_DISPLAY_NAME'] = self.model_display_name
-        self.app.config['CHAT_MODEL_NAME'] = self.chat_model_name
-        self.app.config['CHAT_MODEL_NAMES'] = list(self.chat_model_names)
-        self.app.config['CHAT_MODEL_CAPABILITIES'] = self.chat_model_capabilities
         self.app.config['ASR_MODEL_NAME'] = self.asr_model_name
-        self.app.config['MAX_TOKENS'] = self.max_tokens
-        self.app.config['RAG_ENABLED'] = self.rag_enabled
-        self.app.config['RAG_FILE_PROCESSING_URL'] = self.ragserver or ""
-        self.app.config['RAG_EMBEDDING_MODEL_DIR'] = self.rag_embedding_model_dir
-        self.app.config['VISION_IMAGE_SIZE'] = self.vision_image_size
 
     def get_config(self):
         return self.app.config
         
     def initialize(self):
-        self.app = Flask(__name__)
-        self.socketio = SocketIO(self.app)
+        self.app = Flask(__name__, static_folder=None)
 
         def _cors_allowed_origin():
-            """The request's Origin when backend-only CORS allows it for this path."""
-            if not (self.backend_only and self.cors_origins):
+            """The request's Origin when the CORS allowlist allows it for this path."""
+            if not self.cors_origins:
                 return None
             origin = request.headers.get("Origin") or ""
             if origin and backend_mode.cors_path(request.path) \
@@ -1490,11 +438,8 @@ class AppContext:
 
         @self.app.before_request
         def _backend_only_gate():
-            """Backend-only mode serves the API surface only (backend_mode.py):
-            the UI pages, static files and the Studio's own chat/RAG/camera
-            routes answer 404, and an allowed CORS preflight is answered here."""
-            if not self.backend_only:
-                return None
+            """Only the API surface is served (backend_mode.py): any other path
+            answers 404, and an allowed CORS preflight is answered here."""
             if not backend_mode.path_allowed(request.path):
                 return jsonify({"error": "Not available in backend-only mode.",
                                 "health": "/health"}), 404
@@ -1520,10 +465,10 @@ class AppContext:
         def _reject_cross_origin_mutation():
             """Keep browser mutations on the Studio's own origin.
 
-            Headerless local API/CLI clients remain supported. Browsers provide
-            Origin, Referer, or Sec-Fetch-Site for cross-origin requests. In
-            backend-only mode, origins on the BACKEND_CORS_ORIGINS allowlist may
-            call the API paths.
+            Headerless local API clients remain supported. Browsers provide
+            Origin, Referer, or Sec-Fetch-Site for cross-origin requests.
+            Origins on the BACKEND_CORS_ORIGINS allowlist may call the API
+            paths.
             """
             if request.method not in {"POST", "PUT", "PATCH", "DELETE"}:
                 return None
@@ -1544,136 +489,12 @@ class AppContext:
                 return jsonify({"error": "Cross-origin request rejected"}), 403
             return None
 
-        # Cache-bust static assets: append each file's mtime to its URL so the
-        # browser refetches newui.js / newui.css after an update instead of
-        # serving a stale cached copy (the cause of "I don't see your change").
-        @self.app.url_defaults
-        def _static_cache_bust(endpoint, values):
-            if endpoint == 'static' and 'filename' in values:
-                try:
-                    fp = os.path.join(self.app.static_folder, values['filename'])
-                    values['v'] = int(os.path.getmtime(fp))
-                except OSError:
-                    pass
-
-        if not os.path.exists(AppConstants.DEFAULT_UPLOADS_DIR):
-            os.makedirs(AppConstants.DEFAULT_UPLOADS_DIR)
-
-        # Note: setup_router() is now called after update_settings()
-
-        # Setup config.js route early so it's always available
-        @self.app.route('/config.js')
-        def config_js():
-            llm_only_val = 'true' if self.llm_only else 'false'
-            height_val = ''
-            width_val = ''
-            if isinstance(self.vision_image_size, dict):
-                height_val = str(self.vision_image_size.get('height', ''))
-                width_val = str(self.vision_image_size.get('width', ''))
-            # Use quotes around the values to make them strings in JavaScript
-            hub_org = self.hub_config.org if self.hub_config else "simaai"
-            js = (
-                "window.SIMA_CONFIG=window.SIMA_CONFIG||{};"
-                f"window.SIMA_CONFIG.llmOnly='{llm_only_val}';"
-                f"window.SIMA_CONFIG.ragEnabled='{str(self.rag_enabled).lower()}';"
-                f"window.SIMA_CONFIG.chatModels={json.dumps(list(self.chat_model_names))};"
-                f"window.SIMA_CONFIG.defaultChatModel={json.dumps(self.chat_model_name)};"
-                f"window.SIMA_CONFIG.chatModelCapabilities={json.dumps(self.chat_model_capabilities)};"
-                f"window.SIMA_CONFIG.visionImageHeight='{height_val}';"
-                f"window.SIMA_CONFIG.visionImageWidth='{width_val}';"
-                # Seeds the metrics caption before the first catalog fetch (and
-                # is all there is in static mode); the catalog wins once loaded.
-                f"window.SIMA_CONFIG.asrModelName={json.dumps(self.asr_model_name)};"
-                "window.SIMA_CONFIG.controlEnabled='true';"
-                f"window.SIMA_CONFIG.hubOrg={json.dumps(hub_org)};"
-                f"window.SIMA_CONFIG.defaultFontFamily={json.dumps(self.ui_font_family)};"
-                f"window.SIMA_CONFIG.defaultFontSize={json.dumps(self.ui_font_size)};"
-                f"window.SIMA_CONFIG.defaultMaxTokens={json.dumps(self.max_tokens)};"
-                f"window.SIMA_CONFIG.version={json.dumps(_studio_version())};"
-            )
-            return self.app.response_class(js, mimetype='application/javascript')
-
-    def emit(self, ep, obj):
-        self.socketio.emit(ep, obj)
-
     def run(self):
-        if not self.httponly:
-            ssl_context = _https_credentials()
-            self.socketio.run(self.app, host=self.web_host, port=self.web_port,
-                            ssl_context=ssl_context,
-                            debug=False, allow_unsafe_werkzeug=True)
-        else:
-            self.socketio.run(self.app, host=self.web_host, port=self.web_port,
-                            debug=False, allow_unsafe_werkzeug=True)
-            
-    def run_stop(self):
-        logging.info('Stopping processing...')
-        self.interrupt_active_generation(preserve_partial=True)
-
-        try:
-            success = post_stop_to_sima(self.active_chat_model_name)
-            if not success:
-                return jsonify({'status': 'error', 'message': 'Failed to send stop signal to SiMa.ai server.'}), 500
-        except Exception as e:
-            logging.error(f"Failed to post stop to SiMa.ai: {e}")
-            return jsonify({'status': 'error', 'message': 'Exception while contacting SiMa.ai server.'}), 500
-
-        try:
-            if self.talk_ctrl != None:
-                self.talk_ctrl.reset()
-        
-        except Exception as e:
-            logging.error(f"Failed to reset talk controller: {e}")
-            return jsonify({'status': 'error', 'message': 'Failed to reset talk controller.'}), 500
-
+        ssl_context = None if self.httponly else _https_credentials()
+        self.app.run(host=self.web_host, port=self.web_port,
+                     ssl_context=ssl_context, debug=False, threaded=True)
 
     def setup_router(self):
-
-        @self.app.route('/')
-        def newui():
-            self.socketio.emit('update', {"hello" : "world"})
-            if not self.apionly:
-                return render_template('newui.html',
-                                     llm_only=self.llm_only,
-                                     model_name=self.model_display_name)
-
-            return render_template('apionly.html')
-
-        @self.app.route('/showcase')
-        def showcase():
-            # Conference / booth "present mode": a marketing slideshow about SiMa
-            # Modalix + LLiMa + Palette Neat. Its Launch buttons return to "/".
-            return render_template('showcase.html')
-
-        # SiMaSentry Solutions: vendored static harness suite (Mission Control
-        # portal + Med/Safe/Sec verticals) under ui/harnesses/. Served as plain
-        # files — the pages are self-contained and chat with the loaded model
-        # through the same-origin /v1/chat/completions proxy below.
-        harness_dir = str(APP_DIR / 'harnesses')
-
-        @self.app.route('/solutions/')
-        def solutions_portal():
-            return send_from_directory(harness_dir, 'index.html')
-
-        @self.app.route('/solutions/<path:filename>')
-        def solutions_asset(filename):
-            if filename.endswith('/'):
-                filename += 'index.html'
-            return send_from_directory(harness_dir, filename)
-
-        # Audio API playground: a single same-origin page (Speech, Transcription
-        # with a clip and a hands-free live mode, and Echo: speak, get transcribed,
-        # hear it spoken back) that exercises /v1/audio/* directly. Themed like the
-        # Studio and embedded from the header's Audio API button.
-        playground_dir = str(APP_DIR / 'playground')
-
-        @self.app.route('/playground/')
-        def playground_index():
-            return send_from_directory(playground_dir, 'index.html')
-
-        @self.app.route('/playground/<path:filename>')
-        def playground_asset(filename):
-            return send_from_directory(playground_dir, filename)
 
         @self.app.route('/tts/engine', methods=['GET'])
         def tts_engine_get():
@@ -1755,7 +576,7 @@ class AppContext:
         def select_voice():
             try:
                 if self.talk_ctrl is None:
-                    return jsonify({'error': 'TTS engine not initialized, start the app with --apionly disabled.'}), 503
+                    return jsonify({'error': 'TTS engine not initialized.'}), 503
 
                 data = request.get_json() or {}
                 lang = data.get('lang', 'en')
@@ -1796,20 +617,6 @@ class AppContext:
                     # Drop reference to old instance; GC will reclaim when unreferenced
                     del old
 
-                # Play a short confirmation line with the newly selected voice
-                try:
-                    confirm_text = "Successfully switched to this voice and fully loaded now."
-                    # Prefer the controller's sanitizer if available
-                    if hasattr(self.talk_ctrl, '_sanitize_for_tts'):
-                        confirm_text = self.talk_ctrl._sanitize_for_tts(confirm_text)
-                    buffer = new_voice.synthesize(confirm_text)
-                    genai_app.emit('system_audio', {
-                        'text': confirm_text,
-                        'audio': buffer.getvalue()
-                    })
-                except Exception as ee:
-                    logging.warning(f"Voice switch confirmation audio failed: {ee}")
-
                 return jsonify({
                     'status': 'ok',
                     'lang': lang,
@@ -1835,11 +642,6 @@ class AppContext:
             except requests.RequestException as exc:
                 logging.warning("Control API request failed: %s", exc)
                 return jsonify({'error': 'control API unreachable'}), 502
-
-        @self.app.route('/favicon.ico')
-        def favicon():
-            # Serve the Neat logo for bare /favicon.ico requests too.
-            return self.app.send_static_file('icons/neat-logo.png')
 
         @self.app.route('/models/status', methods=['GET'])
         def models_status():
@@ -1950,51 +752,6 @@ class AppContext:
             return Response(resp.content, status=resp.status_code,
                             mimetype='application/json')
 
-        @self.app.route('/models/reset-mla', methods=['POST'])
-        def models_reset_mla():
-            # Board-wide operation on a network-exposed, login-less UI: require
-            # the token run.sh printed from any client that is not on the board.
-            # The cross-origin guard above only covers browser-originated
-            # requests, so it is not an authorization boundary for this route.
-            if os.environ.get('STUDIO_RESET_AUTH', '1') == '1':
-                expected = os.environ.get('STUDIO_RESET_TOKEN', '')
-                provided = request.headers.get('X-Reset-Token', '')
-                on_board = request.remote_addr in ('127.0.0.1', '::1')
-                if not on_board and not (expected and hmac.compare_digest(provided, expected)):
-                    return jsonify({
-                        'error': 'Reset MLA needs the reset token that run.sh printed '
-                                 'at startup (X-Reset-Token header).',
-                        'auth': 'reset-token',
-                    }), 401
-            # The server exits ~1.5s after replying, so the response may not
-            # arrive at all — a dropped connection here is success, not failure.
-            # A server wedged inside a native model load is different: it
-            # accepts the connection but never answers (the GIL is held), so the
-            # request times out. That is exactly the case the button exists for,
-            # and only the supervisor (run.sh) can recover it: ask it through the
-            # request file it polls.
-            if os.environ.get('MLA_RESET', '1') != '1':
-                return jsonify({'error': 'Accelerator reset is disabled (MLA_RESET=0).'}), 400
-            try:
-                resp = requests.post(_control_url('/control/reset_mla'), timeout=10)
-            except requests.Timeout:
-                request_file = os.environ.get('NEAT_RESET_REQUEST_FILE', '')
-                if not request_file:
-                    return jsonify({'error': 'The model server is not responding and no '
-                                             'supervisor is available to reset it '
-                                             '(start the Studio with run.sh).'}), 503
-                try:
-                    Path(request_file).write_text('reset\n', encoding='utf-8')
-                except OSError as exc:
-                    logging.error("Could not write the reset request file %s: %s", request_file, exc)
-                    return jsonify({'error': 'Could not hand the reset to the supervisor.'}), 500
-                logging.warning("Model server unresponsive; reset handed to the supervisor")
-                return jsonify({'state': 'resetting', 'reset': True, 'via': 'supervisor'}), 202
-            except requests.RequestException:
-                return jsonify({'state': 'resetting', 'reset': True}), 202
-            return Response(resp.content, status=resp.status_code,
-                            mimetype='application/json')
-
         @self.app.route('/models/unload', methods=['POST'])
         def models_unload():
             name = (request.get_json(silent=True) or {}).get('name', '')
@@ -2025,9 +782,9 @@ class AppContext:
 
         @self.app.route('/shutdown', methods=['POST'])
         def shutdown_studio():
-            # Stop the whole studio from the GUI. run.sh writes its PID (and
-            # exports NEAT_RUN_PID); a SIGTERM to it runs run.sh's cleanup, which
-            # gracefully stops both the UI and the model server — the same path as
+            # Stop the whole studio. run.sh writes its PID (and exports
+            # NEAT_RUN_PID); a SIGTERM to it runs run.sh's cleanup, which
+            # gracefully stops both the backend and the model server — the same path as
             # `./run.sh stop`. The kill is deferred so the HTTP response flushes.
             def _shutdown():
                 time.sleep(0.6)
@@ -2097,16 +854,48 @@ class AppContext:
 
         @self.app.route('/v1/chat/completions', methods=['POST'])
         def proxy_chat_completions():
-            # Same-origin streaming proxy to the model server's OpenAI API,
-            # used by the Solutions harnesses: the Studio page is HTTPS while
-            # the model server is HTTP on :9998, so direct browser calls would
-            # be blocked as mixed content (and lack CORS headers).
-            # These generations bypass the Studio's conversation history and
-            # TTS by design — the harness keeps its own history client-side.
-            payload = request.get_json(silent=True) or {}
+            # Streaming proxy to the model server's OpenAI API: the backend is
+            # HTTPS while the model server is HTTP on :9998, so browser callers
+            # would be blocked as mixed content (and lack CORS headers). The
+            # caller keeps the conversation history.
+            payload = request.get_json(silent=True)
+            # The whole shape is checked once, before anything reads the request.
+            invalid = rag_chat.chat_request_error(payload)
+            if invalid:
+                message, param = invalid
+                return jsonify({'error': {'message': message, 'param': param,
+                                          'type': 'invalid_request_error'}}), 400
             if self.max_tokens:
                 payload.setdefault('max_tokens', int(self.max_tokens))
             _normalize_openai_image_parts(payload)
+            # Extension: "neat_rag" answers from the user's documents (rag_chat.py).
+            rag_headers = {}
+            rag = rag_chat.rag_options(payload)
+            if rag is not None:
+                if not self.rag_enabled:
+                    return jsonify({'error': {'message': 'Document search (RAG) is disabled on this board. '
+                                                         'Set app.rag.enabled in config.local.yaml.'}}), 409
+                question = rag_chat.last_user_text(payload['messages'])
+                if not question:
+                    # Nothing to search with (no user text, e.g. only a picture).
+                    return jsonify({'error': {'message': 'With neat_rag, the last user message must contain text',
+                                              'param': 'messages', 'type': 'invalid_request_error'}}), 400
+                other = None
+                try:
+                    client, other = studio_rag_client()
+                    if not other:
+                        # Only what fits the model's small window is used and reported.
+                        hits = rag_chat.fit_passages(client.search(question, k=rag['k']))
+                except Exception as exc:  # noqa: BLE001
+                    logging.error(f"RAG search failed: {exc}")
+                    from rag.inspect_db import default_db_path
+                    message, status = rag_chat.search_failed_reply(os.path.isfile(default_db_path()), rag_service_failed())
+                    return jsonify({'error': {'message': message}}), status
+                if other:
+                    return jsonify({'error': {'message': rag_chat.mismatch_message(other)}}), 409
+                payload['messages'] = rag_chat.with_passages(payload['messages'], hits)
+                rag_headers = {'X-RAG-Hits': str(len(hits)),
+                               'X-RAG-Sources': rag_chat.sources_header(hits, rag_document_name())}
             url = f"http://{self.app.config['SIMAAI_IP_ADDR']}/v1/chat/completions"
             try:
                 upstream = requests.post(url, json=payload, stream=True, timeout=(10, 600))
@@ -2120,10 +909,9 @@ class AppContext:
                         if chunk:
                             yield chunk
                 except GeneratorExit:
-                    # Browser aborted (harness Stop button or iframe unloaded):
-                    # free the accelerator instead of letting generation run out.
-                    # Note /stop is per-model, so a concurrent Studio generation
-                    # on the same model would also stop (single-user semantics).
+                    # The caller aborted: free the accelerator instead of letting
+                    # generation run out. Note /stop is per-model, so a concurrent
+                    # generation on the same model would also stop.
                     try:
                         post_stop_to_sima(payload.get('model'))
                     except Exception:
@@ -2136,290 +924,70 @@ class AppContext:
                 stream_with_context(relay()),
                 status=upstream.status_code,
                 content_type=upstream.headers.get('Content-Type', 'text/event-stream'),
-                headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
+                headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no', **rag_headers},
             )
 
-        @self.app.route('/stop', methods=['POST'])
-        def stop_processing():
-            logging.info('Received /stop request. Attempting to stop processing...')
-            result = self.run_stop()
-            if result is not None:
-                return result
-            return jsonify({'status': 'stopped'}), 200
-
-        @self.app.route('/clear-history', methods=['POST'])
-        def clear_history():
-            logging.info('Received /clear-history request. Clearing conversation history...')
-            self.clear_conversation_history()
-            return jsonify({'status': 'history cleared'}), 200
-
-        @self.app.route('/system-prompt', methods=['GET', 'POST'])
-        def system_prompt():
-            if request.method == 'GET':
-                return jsonify({'system_prompt': self.get_system_prompt()})
-
+        @self.app.route('/rag/status', methods=['GET'])
+        def rag_status():
+            """Whether document search is enabled, its service answers, and what
+            the database was built from (the build-metadata sidecar)."""
+            if not self.rag_enabled:
+                return jsonify({"enabled": False, "service": "disabled", "database": False, "meta": None})
+            from rag.inspect_db import read_rag_meta, default_db_path
+            db_path = default_db_path()
+            mismatch = None
             try:
-                data = request.get_json(silent=True) or {}
-                prompt = data.get('system_prompt', '')
-                self.set_system_prompt(prompt)
-                self.clear_conversation_history()
-                return jsonify({'system_prompt': self.get_system_prompt()})
-            except Exception as e:
-                logging.error(f"System prompt update failed: {e}")
-                return jsonify({'error': 'Failed to update system prompt'}), 500
-            
-        @self.app.route('/upload', methods=['POST'])
-        def upload():
-            global ttfs
-            audio_file = None
-            image_file = None
-            elapsed_time = 0
-            query_str = ''
-            result = None
-            asr = None
-
-            # Handle file uploads
-            if 'audio_data' in request.files:
-                audio_file = request.files['audio_data']
-            if 'image_data' in request.files:
-                image_file = request.files['image_data']
-
-            # Handle form fields
-            language = request.form.get('language', 'auto')
-            # For typed prompts while ASR is in auto mode, keep using the most
-            # recently detected UI language (English before the first recording).
-            response_language = normalize_language_code(
-                request.form.get('responseLanguage', '')
-            ) or 'en'
-            utterance_speed = request.form.get('utteranceSpeed', '1.0')
-            chat = request.form.get('textchat', '').strip()
-            search_rag = request.form.get('searchRag', 'false').lower() == 'true'
-            include_chat_history = request.form.get('includeChatHistory', 'true').lower() == 'true'
-            enable_tts = request.form.get('enableTts', 'true').lower() == 'true'
-            use_board_camera = request.form.get('useBoardCamera', 'false').lower() == 'true'
-            board_camera_device = request.form.get('boardCameraDevice', '').strip()
-            gen_params = _read_gen_params(request.form)
-            cfg = genai_app.get_config()
-            try:
-                selected_model = self.resolve_chat_model(request.form.get('chatModel'))
-            except ValueError:
-                return jsonify({'error': 'Invalid chat model'}), 400
-
-            self.talk_ctrl.reset()
-            initial_tts_language = (
-                response_language
-                if str(language).strip().lower() == 'auto'
-                else normalize_language_code(language)
-            )
-            # In auto mode the browser echoes the last *detected* speech
-            # language for typed prompts. When that is not a language any
-            # server voice speaks, a typed prompt would otherwise be answered
-            # silently; speak English instead. Voice input keeps its own
-            # routing below (unsupported detected languages stay text-only).
-            if (str(language).strip().lower() == 'auto'
-                    and initial_tts_language not in self.talk_ctrl.supported_langs):
-                initial_tts_language = 'en'
-            self.talk_ctrl.set_language(initial_tts_language)
-            # Set before any tokens are enqueued so the worker never synthesizes.
-            self.talk_ctrl.set_tts_enabled(enable_tts)
-            self.talk_ctrl.set_utterance_speed(utterance_speed)
-            had_active_generation = self.interrupt_active_generation(
-                preserve_partial=include_chat_history
-            )
-            if had_active_generation:
-                try:
-                    post_stop_to_sima(self.active_chat_model_name)
-                except Exception as e:
-                    logging.error(f"Failed to stop previous generation before new request: {e}")
-
-            # Save image if available and convert to base64
-            image_path = None
-            image_base64 = None
-            audio_path = None
-
-            if image_file:
-                try:
-                    image_path, image_base64 = save_image_upload_as_base64(image_file, cfg['UPLOAD_FOLDER'])
-                except ValueError:
-                    return jsonify({'error': 'Invalid image file name'}), 400
-            elif use_board_camera and not self.llm_only:
-                # Grab a fresh frame from the camera attached to the devkit
-                # board itself (not the browser's webcam) for this prompt.
-                try:
-                    node = normalize_camera_device(board_camera_device) if board_camera_device else None
-                    jpeg, tool = capture_camera_frame(node)
-                except ValueError:
-                    return jsonify({'error': 'Invalid board camera device'}), 400
-                except RuntimeError as exc:
-                    logging.error(f"Board camera capture failed: {exc}")
-                    return jsonify({'error': 'Board camera capture failed'}), 503
-                image_base64 = base64.b64encode(jpeg).decode('utf-8')
-                logging.info(f"Attached board-camera frame (via {tool})")
-
-            # If textchat is present, use it directly
-            if chat:
-                query_str = chat
-            elif audio_file:
-                try:
-                    # Use MLA Backend transcription - read directly from FileStorage
-                    start_time = time.time()
-                    audio_bytes = audio_file.read()
-                    asr_used = []
-                    result = post_audio_to_mla(audio_bytes, language=language,
-                                               used_model=asr_used)
-
-                    if result:
-                        elapsed_time = round(time.time() - start_time, 2)
-                        asr = analyze_transcription(
-                            result,
-                            requested_language=language,
-                            supported_tts_languages=self.talk_ctrl.supported_langs,
-                            no_speech_threshold=_env_float(
-                                'ASR_NO_SPEECH_THRESHOLD', DEFAULT_NO_SPEECH_THRESHOLD
-                            ),
-                            logprob_threshold=_env_float(
-                                'ASR_LOGPROB_THRESHOLD', DEFAULT_LOGPROB_THRESHOLD
-                            ),
-                        )
-                        query_str = asr['text']
-                        logging.info(
-                            "ASR result text=%r requested_language=%s detected_language=%s "
-                            "resolved_language=%s tts_language=%s no_speech_prob=%s "
-                            "avg_logprob=%s ignored=%s",
-                            query_str,
-                            language,
-                            asr['language'] if asr['language_detected'] else None,
-                            asr['language'],
-                            asr['tts_language'],
-                            asr['no_speech_prob'],
-                            asr['avg_logprob'],
-                            asr['reason'],
-                        )
-
-                        # Route this response through the voice matching the
-                        # detected language. Unsupported languages intentionally
-                        # produce text only instead of using a mismatched voice.
-                        self.talk_ctrl.set_language(asr['tts_language'] or 'xx')
-
-                        # Name the model that actually served this request, so
-                        # the browser cannot credit a model that was switched to
-                        # afterwards, and so ignored results are attributable too.
-                        if asr_used:
-                            asr['model'] = asr_used[0]
-
-                        if asr['ignored']:
-                            message = (
-                                'No clear speech detected. Please try again.'
-                                if asr['reason'] in ('no_speech', 'low_confidence')
-                                else 'No transcription was produced. Please try again.'
-                            )
-                            return jsonify({
-                                'ignored': True,
-                                'message': message,
-                                'question': '',
-                                'ttt': elapsed_time,
-                                'asr': asr,
-                                'rag_used': False,
-                                'rag_hits': 0,
-                            })
-
-                        self.socketio.emit('transcription', asr)
-                    else:
-                        logging.warning("Backend transcription returned no result")
-                        return jsonify({
-                            'error': 'Speech transcription is unavailable. Please try again.'
-                        }), 503
-                except Exception as e:
-                    logging.exception("Speech transcription failed: %s", e)
-                    return jsonify({
-                        'error': 'Speech transcription is unavailable. Please try again.'
-                    }), 503
-
-            # Handle polite endings
-            if ('Thank you' in query_str) or ('Thanks' in query_str):
-                query_str = AppConstants.DEFAULT_MODEL_QUERY_STR
-
-            full_query_str = query_str
-            rag_used = False
-            rag_hits = 0
-
-            # if we have the query and search_rag flag is on, search the rag database
-            if search_rag and self.rag_enabled and len(full_query_str) > 0:
-                ensure_rag_modules_loaded()
-                rag = rag_db_client.search(query_str)
-                rag_used = True
-                rag_hits = len(rag)
-                full_query_str = f"{query_str}\n\nThe context is:\n\n{[entry['content'] for entry in rag]}"
-
-            # Add user message to conversation history (detect if image is present)
-            has_image = image_base64 is not None
-            self.add_user_message(full_query_str, has_image=has_image, image_base64=image_base64)
-            generation_id = self.begin_generation(selected_model)
-
-            ttfs = 0
-            logging.info(f"Query string: {full_query_str}")
-
-            # Build messages list based on includeChatHistory flag
-            if include_chat_history:
-                # Pass full conversation history
-                conversation_history = self.get_conversation_history()
-                logging.info(f"Using full conversation history ({len(conversation_history)} messages)")
+                client, other = studio_rag_client()
+                if other:
+                    up, mismatch = False, rag_chat.mismatch_message(other)
+                else:
+                    up = client.is_server_up()
+            except Exception:  # noqa: BLE001
+                up = False
+            exists = os.path.isfile(db_path)
+            if mismatch:
+                service = "failed"
+            elif up:
+                service = "ok"
+            elif not exists:
+                service = "no-database"
             else:
-                # Single-shot mode: only current message + optional system prompt
-                conversation_history = []
-                system_message = self._build_system_prompt_message()
-                if system_message:
-                    conversation_history.append(system_message)
-                # Add only the current user message (last one added)
-                current_messages = self.get_conversation_history()
-                if current_messages:
-                    # Find the last user message
-                    for msg in reversed(current_messages):
-                        if msg.get('role') == 'user':
-                            conversation_history.append(msg)
-                            break
-                logging.info(f"Using single-shot mode (history disabled, {len(conversation_history)} messages)")
-
-            thread = threading.Thread(
-                target=stream_chat_request,
-                args=[conversation_history, selected_model, cfg, generation_id],
-                kwargs={'gen_params': gen_params}
-            )
-            thread.start()
-
+                service = "failed" if rag_service_failed() else "starting"
             return jsonify({
-                'question': query_str,
-                'ttt': elapsed_time,
-                'asr': asr,
-                'rag_used': rag_used,
-                'rag_hits': rag_hits,
+                "enabled": True,
+                "service": service,
+                "database": exists,
+                "meta": read_rag_meta(db_path) if exists else None,
+                **({"error": mismatch} if mismatch else {}),
             })
 
-        @self.app.route('/raghealth', methods=['GET'])
-        def check_rag_server():
+        @self.app.route('/rag/search', methods=['GET'])
+        def rag_search():
+            """The passages chat would add for ``query`` (``k`` up to 10)."""
             if not self.rag_enabled:
-                return {
-                    "rag_db": "disabled",
-                    "message": "RAG is disabled"
-                }, 200
-
+                return jsonify({"error": "RAG is disabled"}), 409
+            query = (request.args.get("query") or "").strip()
+            if not query:
+                return jsonify({"error": "query is required"}), 400
             try:
-                client = ensure_rag_modules_loaded()
-                rag_db_status = client.is_server_up()
-            except Exception as e:
-                logging.error(f"Exception checking RAG DB server: {e}")
-                rag_db_status = False
-
-            if rag_db_status:
-                return {
-                    "rag_db": "ok",
-                    "message": "RAG DB is available"
-                }, 200
-            else:
-                return {
-                    "rag_db": "unavailable",
-                    "message": "RAG DB is not available"
-                }, 503
+                k = max(1, min(rag_chat.MAX_K, int(request.args.get("k", rag_chat.DEFAULT_K))))
+            except (TypeError, ValueError):
+                k = rag_chat.DEFAULT_K
+            other = None
+            try:
+                client, other = studio_rag_client()
+                if not other:
+                    hits = client.search(query, k=k)
+            except Exception as exc:  # noqa: BLE001
+                logging.error(f"RAG search failed: {exc}")
+                from rag.inspect_db import default_db_path
+                message, status = rag_chat.search_failed_reply(os.path.isfile(default_db_path()), rag_service_failed())
+                return jsonify({"error": message}), status
+            if other:
+                return jsonify({"error": rag_chat.mismatch_message(other)}), 409
+            source = rag_document_name()
+            return jsonify({"results": [dict(rag_chat.passage_source(h, source), content=h.get("content", ""))
+                                        for h in hits]})
 
         @self.app.route('/rag/inspect', methods=['GET'])
         def rag_inspect():
@@ -2447,11 +1015,14 @@ class AppContext:
                 "error": None,
             }
             try:
-                client = ensure_rag_modules_loaded()
-                data = client.list_documents(limit=limit)
-                result["documents"] = data.get("documents", []) or []
-                result["count"] = data.get("count", len(result["documents"]))
-                result["collection"] = data.get("collection")
+                client, other = studio_rag_client()
+                if other:
+                    result["error"] = rag_chat.mismatch_message(other)
+                else:
+                    data = client.list_documents(limit=limit)
+                    result["documents"] = data.get("documents", []) or []
+                    result["count"] = data.get("count", len(result["documents"]))
+                    result["collection"] = data.get("collection")
             except Exception as e:  # noqa: BLE001
                 logging.error(f"RAG inspect error: {e}")
                 result["error"] = "Could not read the RAG database"
@@ -2468,7 +1039,7 @@ class AppContext:
                 except AudioApiError as exc:
                     return jsonify(exc.payload()), exc.status
                 if self.talk_ctrl is None:
-                    return jsonify({'error': 'TTS engine not initialized, start the app with --apionly disabled.'}), 503
+                    return jsonify({'error': 'TTS engine not initialized.'}), 503
                 if req.used_speed_alias:
                     logging.info("speech request used a deprecated speed field; use 'speed'")
                 logging.info("Received TTS request: model=%s, voice=%s, language=%s, speed=%s",
@@ -2517,15 +1088,41 @@ class AppContext:
                 status = resp.json()
             except Exception as exc:  # noqa: BLE001
                 error = type(exc).__name__
-            engines = []
+            engines, failures = [], {}
             if self.talk_ctrl is not None:
                 try:
                     engines = self.talk_ctrl.voice_engine()['engines']
+                    failures = self.talk_ctrl.engine_failures()
                 except Exception:  # noqa: BLE001
                     engines = []
             return jsonify(backend_mode.health_payload(
-                mode='backend-only' if self.backend_only else 'studio',
-                version=_studio_version(), status=status, engines=engines, error=error))
+                mode='backend-only',
+                version=_studio_version(), status=status, engines=engines, error=error,
+                engine_failures=failures, rag_enabled=self.rag_enabled))
+
+        # Cameras attached to the board (/dev/video*): a front end lists them and
+        # attaches a snapshot to its next chat message.
+        @self.app.route('/board-camera/devices', methods=['GET'])
+        def board_camera_devices():
+            return jsonify({
+                'devices': list_camera_devices(),
+                'default': default_camera_device(),
+            })
+
+        @self.app.route('/board-camera/snapshot', methods=['GET'])
+        def board_camera_snapshot():
+            device = (request.args.get('device') or '').strip()
+            try:
+                normalize_camera_device(device) if device else None
+            except ValueError:
+                return jsonify({'error': 'Invalid board camera device'}), 400
+            try:
+                jpeg, tool = capture_camera_frame(device or None)
+            except RuntimeError as exc:
+                logging.error(f"Board camera capture failed: {exc}")
+                return jsonify({'error': 'Board camera capture failed'}), 503
+            return Response(jpeg, mimetype='image/jpeg',
+                            headers={'Cache-Control': 'no-store', 'X-Capture-Tool': tool})
 
         @self.app.route('/v1/audio/voices', methods=['GET'])
         @self.app.route('/audio/voices', methods=['GET'])
@@ -2534,7 +1131,7 @@ class AppContext:
             offers (OpenAI has no discovery call). Engines are listed whether or
             not they are loaded; selecting one loads it."""
             if self.talk_ctrl is None:
-                return jsonify({'error': 'TTS engine not initialized, start the app with --apionly disabled.'}), 503
+                return jsonify({'error': 'TTS engine not initialized.'}), 503
             try:
                 return jsonify(self.talk_ctrl.voices_listing())
             except Exception:
@@ -2624,107 +1221,66 @@ class AppContext:
                 resp.headers[key] = value
             return resp
 
-        # Board camera: a /dev/video* device plugged into the devkit board
-        # itself, as opposed to the in-browser camera (the *client's* webcam).
-        # These are plain hardware reads, so they stay registered even in
-        # LLM-only mode; vision gating applies where a frame enters a chat.
-        @self.app.route('/board-camera/devices', methods=['GET'])
-        def board_camera_devices():
-            return jsonify({
-                'devices': list_camera_devices(),
-                'default': default_camera_device(),
-            })
+        def rag_route_error(message, status):
+            """The /rag/ API answers errors as JSON."""
+            return jsonify({"error": message}), status
 
-        @self.app.route('/board-camera/snapshot', methods=['GET'])
-        def board_camera_snapshot():
-            device = (request.args.get('device') or '').strip()
-            try:
-                node = normalize_camera_device(device) if device else None
-            except ValueError:
-                return jsonify({'error': 'Invalid board camera device'}), 400
-            try:
-                jpeg, tool = capture_camera_frame(node)
-            except RuntimeError as exc:
-                logging.error(f"Board camera capture failed: {exc}")
-                return jsonify({'error': 'Board camera capture failed'}), 503
-            return Response(jpeg, mimetype='image/jpeg',
-                            headers={'Cache-Control': 'no-store', 'X-Capture-Tool': tool})
+        def rag_disabled_reply():
+            # 409, like /rag/search and chat with neat_rag.
+            return jsonify({"error": "RAG is disabled"}), 409
 
-        # Only register image upload route if not in LLM-only mode
-        if not self.llm_only:
-            @self.app.route('/upload_image', methods=['POST'])
-            def upload_image():
-                image_file = None
-                query_str = AppConstants.DEFAULT_MODEL_QUERY_STR
-
-                if 'image_data' in request.files:
-                    image_file = request.files['image_data']
-
-                cfg = genai_app.get_config()
-                try:
-                    selected_model = self.resolve_chat_model(request.form.get('chatModel'))
-                except ValueError:
-                    return jsonify({'error': 'Invalid chat model'}), 400
-
-                had_active_generation = self.interrupt_active_generation(preserve_partial=True)
-                if had_active_generation:
-                    try:
-                        post_stop_to_sima(self.active_chat_model_name)
-                    except Exception as e:
-                        logging.error(f"Failed to stop previous generation before image request: {e}")
-
-                image_path = None
-                image_base64 = None
-                if image_file:
-                    try:
-                        image_path, image_base64 = save_image_upload_as_base64(image_file, cfg['UPLOAD_FOLDER'])
-                    except ValueError:
-                        return jsonify({'error': 'Invalid image file name'}), 400
-
-                # Add to conversation history and start assistant response (always has image)
-                self.add_user_message(query_str, has_image=True, image_base64=image_base64)
-                generation_id = self.begin_generation(selected_model)
-
-                logging.info(f"Query string {query_str}")
-                conversation_history = self.get_conversation_history()
-                thread = threading.Thread(
-                    target=stream_chat_request,
-                    args=[conversation_history, selected_model, cfg, generation_id],
-                    kwargs={'gen_params': _read_gen_params(request.form)}
-                )
-                thread.start()
-                return {'question' : query_str}
-        else:
-            # Return error for image upload when in LLM-only mode
-            @self.app.route('/upload_image', methods=['POST'])
-            def upload_image_disabled():
-                return jsonify({'error': 'Image upload is disabled in LLM-only mode'}), 400
-
-        @self.app.route("/upload-to-rag", methods=["POST"])
+        @self.app.route("/rag/upload", methods=["POST"])
         def upload_to_rag():
             if not self.rag_enabled:
-                return "RAG is disabled", 403
+                return rag_disabled_reply()
 
-            uploaded_file = request.files.get("file")
+            too_large = f"The document is larger than {MAX_RAG_UPLOAD_BYTES // (1024 * 1024)} MiB."
+            declared = request.content_length
+            if declared is not None and declared > RAG_UPLOAD_REQUEST_LIMIT:
+                return rag_route_error(too_large, 413)
+            try:
+                request.max_content_length = RAG_UPLOAD_REQUEST_LIMIT   # bounds a chunked body too
+            except AttributeError:
+                pass  # Flask < 3.1: the file's own size is still checked below
+            try:
+                uploaded_file = request.files.get("file")
+            except RequestEntityTooLarge:
+                return rag_route_error(too_large, 413)
             if not uploaded_file:
-                return "No file provided", 400
+                return rag_route_error("No file provided", 400)
 
-            filename = secure_filename(uploaded_file.filename)
-            if not filename.lower().endswith(".md"):
-                return "Only Markdown RAG upload is supported locally.", 400
-
-            with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1]) as tmp:
-                uploaded_file.save(tmp)
-                tmp_path = tmp.name
+            # Checked on the name as sent: secure_filename drops non-Latin
+            # letters ("日本語.md" -> "md"). The name is shown as the source.
+            original = PurePath(str(uploaded_file.filename or "").replace("\\", "/")).name
+            if not original.lower().endswith(".md"):
+                return rag_route_error("Only Markdown RAG upload is supported locally.", 400)
+            filename = original[-200:]
+            size = _upload_size(uploaded_file)
+            if size is not None and size > MAX_RAG_UPLOAD_BYTES:
+                return rag_route_error(too_large, 413)
+            # Read now: the request's files are closed once the response starts
+            # streaming. Bounded, so at most the limit (plus one byte) is held.
+            data = uploaded_file.stream.read(MAX_RAG_UPLOAD_BYTES + 1)
+            if len(data) > MAX_RAG_UPLOAD_BYTES:
+                return rag_route_error(too_large, 413)
+            if not RAG_UPDATE_LOCK.acquire(blocking=False):
+                return rag_route_error(RAG_UPDATE_BUSY, 409)
 
             def stream_response():
                 global vectodb_proc
                 yield "⏳ Starting...\n"
+                tmp_path = None
                 new_db_path = None
                 backup_path = None
                 service_stopped = False
                 replacement_installed = False
                 try:
+                    # Written here rather than before streaming, so a client that
+                    # goes away before the first line leaves no temporary file.
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".md") as tmp:
+                        tmp_path = tmp.name
+                        tmp.write(data)
+
                     ensure_rag_modules_loaded()
                     yield "📚 Creating VectorDB from Markdown...\n"
                     fd, new_db_path = tempfile.mkstemp(
@@ -2761,31 +1317,40 @@ class AppContext:
                     meta_path = str(Path(RAG_DB_PATH).with_suffix(".meta.json"))
                     if os.path.exists(new_meta_path):
                         os.replace(new_meta_path, meta_path)
+                        # The database was built from a temporary copy; record
+                        # the name the user uploaded instead.
+                        try:
+                            meta = json.loads(Path(meta_path).read_text(encoding="utf-8"))
+                            meta["input"] = filename
+                            Path(meta_path).write_text(json.dumps(meta, indent=2), encoding="utf-8")
+                        except (OSError, ValueError) as exc:
+                            logging.warning(f"Could not record the uploaded file name: {exc}")
                     elif os.path.exists(meta_path):
                         os.unlink(meta_path)
                     if backup_path:
                         os.unlink(backup_path)
                         backup_path = None
+                    service_stopped = False   # done: nothing to roll back
                     yield "✅ Markdown RAG database is ready.\n"
 
-                except Exception as e:
-                    logging.exception("RAG document upload failed: %s", e)
+                except BaseException as e:
+                    # BaseException too: a client that disconnects mid-update
+                    # raises GeneratorExit at a yield, and the previous
+                    # database must still come back.
+                    if isinstance(e, Exception):
+                        logging.exception("RAG document upload failed: %s", e)
+                    else:
+                        logging.warning("RAG document upload interrupted (%s); restoring the previous database",
+                                        type(e).__name__)
                     if service_stopped:
-                        stop_service()
-                        if replacement_installed and os.path.exists(RAG_DB_PATH):
-                            os.unlink(RAG_DB_PATH)
-                        if backup_path and os.path.exists(backup_path):
-                            os.replace(backup_path, RAG_DB_PATH)
-                            backup_path = None
-                        if os.path.exists(RAG_DB_PATH):
-                            try:
-                                vectodb_proc = start_service()
-                                wait_for_rag_service(vectodb_proc)
-                            except Exception:  # noqa: BLE001
-                                logging.exception("Failed to restore the previous RAG service")
+                        restore_rag_database(backup_path, replacement_installed)
+                        backup_path = None
+                    if not isinstance(e, Exception):
+                        raise   # the client is gone; nothing more can be sent
                     yield "❌ RAG document upload failed.\n"
                 finally:
-                    os.unlink(tmp_path)
+                    if tmp_path and os.path.exists(tmp_path):
+                        os.unlink(tmp_path)
                     if new_db_path and os.path.exists(new_db_path):
                         os.unlink(new_db_path)
                     if new_db_path:
@@ -2793,90 +1358,15 @@ class AppContext:
                         if os.path.exists(new_meta_path):
                             os.unlink(new_meta_path)
 
-            return Response(stream_with_context(stream_response()), mimetype="text/plain")
+            return rag_update_response(stream_response())
         
-        @self.app.route("/import-rag-db", methods=["POST"])
-        def import_rag_db():
-            if not self.rag_enabled:
-                return "RAG is disabled", 403
-
-            def _stream():
-                global vectodb_proc
-                db_file = request.files.get("dbfile")
-                if not db_file:
-                    yield "❌ No file provided\n"
-                    return
-
-                yield "📥 Uploading database file...\n"
-                backup_path = None
-                service_stopped = False
-                replacement_installed = False
-                try:
-                    ensure_rag_modules_loaded()
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as tmp:
-                        db_file.save(tmp)
-                        tmp_path = tmp.name
-
-                    yield "🛑 Stopping existing vectordb service for validation...\n"
-                    stop_service()
-                    service_stopped = True
-
-                    yield "🔎 Validating uploaded database...\n"
-                    validate_rag_database(tmp_path)
-
-                    if os.path.exists(RAG_DB_PATH):
-                        fd, backup_path = tempfile.mkstemp(
-                            prefix=f".{Path(RAG_DB_PATH).name}.backup-",
-                            dir=str(Path(RAG_DB_PATH).parent),
-                        )
-                        os.close(fd)
-                        os.unlink(backup_path)
-                        os.replace(RAG_DB_PATH, backup_path)
-
-                    yield "✅ Database validated. Installing...\n"
-                    shutil.move(tmp_path, RAG_DB_PATH)
-                    replacement_installed = True
-
-                    yield "🚀 Starting vectordb service with new database...\n"
-                    vectodb_proc = start_service()
-                    wait_for_rag_service(vectodb_proc)
-
-                    meta_path = str(Path(RAG_DB_PATH).with_suffix(".meta.json"))
-                    if os.path.exists(meta_path):
-                        os.unlink(meta_path)
-
-                    if backup_path:
-                        os.unlink(backup_path)
-                        backup_path = None
-
-                    yield "✅ Import completed and service restarted.\n"
-                except Exception as e:
-                    logging.exception("RAG database import failed: %s", e)
-                    if service_stopped:
-                        stop_service()
-                        if replacement_installed and os.path.exists(RAG_DB_PATH):
-                            os.unlink(RAG_DB_PATH)
-                        if backup_path and os.path.exists(backup_path):
-                            os.replace(backup_path, RAG_DB_PATH)
-                            backup_path = None
-                        if os.path.exists(RAG_DB_PATH):
-                            try:
-                                vectodb_proc = start_service()
-                                wait_for_rag_service(vectodb_proc)
-                            except Exception:  # noqa: BLE001
-                                logging.exception("Failed to restore the previous RAG service")
-                    yield "❌ RAG database import failed.\n"
-                finally:
-                    if 'tmp_path' in locals() and os.path.exists(tmp_path):
-                        os.unlink(tmp_path)
-
-            return Response(stream_with_context(_stream()), mimetype="text/plain")
-
-        @self.app.route("/reset-rag", methods=["POST"])
+        @self.app.route("/rag/reset", methods=["POST"])
         def reset_rag():
             """Rebuild the RAG database from the bundled default Markdown."""
             if not self.rag_enabled:
-                return "RAG is disabled", 403
+                return rag_disabled_reply()
+            if not RAG_UPDATE_LOCK.acquire(blocking=False):
+                return rag_route_error(RAG_UPDATE_BUSY, 409)
             default_md = Path(__file__).resolve().parents[2] / "common" / "rag" / "neat.md"
 
             def _stream():
@@ -2931,22 +1421,20 @@ class AppContext:
                     if backup_path:
                         os.unlink(backup_path)
                         backup_path = None
+                    service_stopped = False   # done: nothing to roll back
                     yield "✅ RAG database reset to default.\n"
-                except Exception as e:  # noqa: BLE001
-                    logging.exception("RAG database reset failed: %s", e)
+                except BaseException as e:  # noqa: BLE001
+                    # BaseException too: see upload_to_rag.
+                    if isinstance(e, Exception):
+                        logging.exception("RAG database reset failed: %s", e)
+                    else:
+                        logging.warning("RAG database reset interrupted (%s); restoring the previous database",
+                                        type(e).__name__)
                     if service_stopped:
-                        stop_service()
-                        if replacement_installed and os.path.exists(RAG_DB_PATH):
-                            os.unlink(RAG_DB_PATH)
-                        if backup_path and os.path.exists(backup_path):
-                            os.replace(backup_path, RAG_DB_PATH)
-                            backup_path = None
-                        if os.path.exists(RAG_DB_PATH):
-                            try:
-                                vectodb_proc = start_service()
-                                wait_for_rag_service(vectodb_proc)
-                            except Exception:  # noqa: BLE001
-                                logging.exception("Failed to restore the previous RAG service")
+                        restore_rag_database(backup_path, replacement_installed)
+                        backup_path = None
+                    if not isinstance(e, Exception):
+                        raise
                     yield "❌ RAG database reset failed.\n"
                 finally:
                     if new_db_path and os.path.exists(new_db_path):
@@ -2956,13 +1444,15 @@ class AppContext:
                         if os.path.exists(new_meta_path):
                             os.unlink(new_meta_path)
 
-            return Response(stream_with_context(_stream()), mimetype="text/plain")
+            return rag_update_response(_stream())
 
-        @self.app.route("/clear-rag", methods=["POST"])
+        @self.app.route("/rag/clear", methods=["POST"])
         def clear_rag():
             """Clear the RAG database — stop the service and remove the DB files."""
             if not self.rag_enabled:
-                return "RAG is disabled", 403
+                return rag_disabled_reply()
+            if not RAG_UPDATE_LOCK.acquire(blocking=False):
+                return rag_route_error(RAG_UPDATE_BUSY, 409)
 
             def _stream():
                 global vectodb_proc
@@ -2986,218 +1476,26 @@ class AppContext:
                     logging.exception("RAG database cleanup failed: %s", e)
                     yield "❌ RAG database cleanup failed.\n"
 
-            return Response(stream_with_context(_stream()), mimetype="text/plain")
+            return rag_update_response(_stream())
 
 
-
-
-token_timestamps = deque()
-
-def send_talk_text(in_text, generation_id=None):
-    now = time.time()
-    token_timestamps.append(now)
-
-    # Remove timestamps older than 3 seconds
-    while token_timestamps and (now - token_timestamps[0]) > 3:
-        token_timestamps.popleft()
-
-    # Calculate tokens per second
-    token_count = len(token_timestamps)
-    tokens_per_sec = token_count / 3.0  # Window size is 3 seconds
-
-    # Pass both the text and the calculated tokens_per_sec into the queue
-    if genai_app.talk_ctrl != None:
-        genai_app.talk_ctrl.enqueue({
-            'text': in_text,
-            'generation_id': generation_id,
-            'tokens_per_sec': tokens_per_sec, 
-            'ttfs': ttfs
-        })
-
-    # Optional debug log
-    logging.debug(f"Enqueued text: '{in_text}' | Tokens/sec: {tokens_per_sec:.2f}")
-            
-
-
-def cleanup():
-    shutil.rmtree('./uploads')
-    os.mkdir('./uploads')
-
-# Function to post the file to another server
-def _read_gen_params(form):
-    """Per-request generation settings from the UI. The SiMa runtime honors
-    max_tokens (response length); it decodes greedily (no temperature) and the
-    context window is fixed by the compiled model."""
-    params = {}
-    raw = form.get('maxTokens')
-    try:
-        value = int(raw)
-        if value > 0:
-            params['max_tokens'] = value
-    except (TypeError, ValueError):
-        pass
-    if str(form.get('noThink', '')).lower() in ('true', '1', 'yes'):
-        params['no_think'] = True
-    return params
-
-
-def _apply_no_think(messages):
-    """Return a copy of ``messages`` with ``/no_think`` appended to the last user
-    turn (Qwen3's soft switch to disable reasoning). The shared history is not
-    mutated, so it only affects this request."""
-    if not messages:
-        return messages
-    out = list(messages)
-    for i in range(len(out) - 1, -1, -1):
-        m = out[i]
-        if not (isinstance(m, dict) and m.get('role') == 'user'):
-            continue
-        m = dict(m)
-        content = m.get('content')
-        if isinstance(content, str):
-            m['content'] = (content + ' /no_think').strip()
-        elif isinstance(content, list):
-            new = list(content)
-            for j in range(len(new) - 1, -1, -1):
-                part = new[j]
-                if isinstance(part, dict) and part.get('type') == 'text':
-                    part = dict(part)
-                    part['text'] = (part.get('text', '') + ' /no_think').strip()
-                    new[j] = part
-                    break
-            else:
-                new.append({'type': 'text', 'text': '/no_think'})
-            m['content'] = new
-        out[i] = m
-        break
-    return out
-
-
-def _answer_part(raw):
-    """The portion of a streamed reply outside <think>…</think> — i.e. what should
-    be spoken (reasoning is never sent to TTS)."""
-    open_i = raw.find('<think>')
-    if open_i == -1:
-        close_i = raw.find('</think>')          # template pre-filled <think>
-        return raw[close_i + 8:] if close_i != -1 else raw
-    pre = raw[:open_i]
-    after = raw[open_i + 7:]
-    close_i = after.find('</think>')
-    return pre if close_i == -1 else pre + after[close_i + 8:]
 
 
 def _normalize_openai_image_parts(payload):
     """Rewrite OpenAI-standard image parts to the pyneat server's schema.
 
-    The Solutions harnesses send {"type": "image_url", "image_url": {"url": u}}
-    while pyneat expects {"type": "image", "image": u} (the format the Studio
-    itself sends in add_user_message). Mutates payload in place.
+    OpenAI clients send {"type": "image_url", "image_url": {"url": u}} while
+    pyneat expects {"type": "image", "image": u}. Mutates payload in place. The payload
+    has passed rag_chat.chat_request_error.
     """
-    for message in payload.get('messages') or []:
-        content = message.get('content') if isinstance(message, dict) else None
+    for message in payload['messages']:
+        content = message.get('content')
         if not isinstance(content, list):
             continue
         for i, part in enumerate(content):
-            if isinstance(part, dict) and part.get('type') == 'image_url':
-                url = (part.get('image_url') or {}).get('url')
-                if url:
-                    content[i] = {'type': 'image', 'image': url}
+            if part['type'] == 'image_url' and part['image_url']['url']:
+                content[i] = {'type': 'image', 'image': part['image_url']['url']}
 
-
-def stream_chat_request(messages, model, config, generation_id, socketio_event='update', gen_params=None):
-    """
-    Streams chat completions from backend to frontend, handling TTS and history.
-    """
-    gen_params = gen_params or {}
-    url = f"http://{config['SIMAAI_IP_ADDR']}/v1/chat/completions"
-    no_think = bool(gen_params.get('no_think'))
-    payload = {
-        "model": model,
-        "messages": _apply_no_think(messages) if no_think else messages,
-        "stream": True
-    }
-    if no_think:
-        # Also pass the chat-template switch, for runtimes that honor it.
-        payload["chat_template_kwargs"] = {"enable_thinking": False}
-    # Per-request max response tokens overrides the config default.
-    max_tokens = gen_params.get('max_tokens') or config.get('MAX_TOKENS')
-    if max_tokens:
-        payload["max_tokens"] = int(max_tokens)
-    _full_reply = ""   # accumulated content, to keep reasoning out of TTS
-    _tts_spoken = 0    # length of the answer already sent to TTS
-
-    try:
-        if not genai_app.start_assistant_response(generation_id):
-            return None
-        
-        with requests.post(url, json=payload, stream=True) as resp:
-            resp.raise_for_status()
-            
-            for line in resp.iter_lines():
-                if not genai_app.is_generation_current(generation_id):
-                    break
-                if line:
-                    decoded = line.decode('utf-8')
-                    if decoded.startswith('data: '):
-                        data_str = decoded[6:]
-                        if data_str == '[DONE]':
-                            break
-                        
-                        try:
-                            chunk_json = json.loads(data_str)
-                            if not genai_app.is_generation_current(generation_id):
-                                break
-                            
-                            # Handle Metrics
-                            if 'ttft' in chunk_json:
-                                genai_app.emit('ttfs', round(float(chunk_json['ttft']), 2))
-                            
-                            if 'tps' in chunk_json:
-                                genai_app.emit('tps', round(float(chunk_json['tps']), 2))
-
-                            # Handle Content
-                            if 'choices' in chunk_json and len(chunk_json['choices']) > 0:
-                                delta = chunk_json['choices'][0].get('delta', {})
-                                content = delta.get('content', '')
-                                
-                                if content:
-                                    if not genai_app.add_to_current_response(generation_id, content):
-                                        break
-                                    # Update UI (the client splits <think> itself)
-                                    genai_app.emit(socketio_event, {"results": content})
-
-                                    # Trigger TTS on the ANSWER only — never speak
-                                    # the model's <think> reasoning aloud.
-                                    _full_reply += content
-                                    answer_so_far = _answer_part(_full_reply)
-                                    # A </think> can retroactively move earlier text
-                                    # into reasoning, shrinking the answer — reset so
-                                    # the real answer still gets spoken.
-                                    if len(answer_so_far) < _tts_spoken:
-                                        _tts_spoken = 0
-                                    if len(answer_so_far) > _tts_spoken:
-                                        send_talk_text(answer_so_far[_tts_spoken:], generation_id)
-                                        _tts_spoken = len(answer_so_far)
-                                
-                        except Exception: 
-                            pass
-            
-            # Finalize
-            if genai_app.finish_assistant_response(generation_id):
-                if genai_app.talk_ctrl is not None:
-                    send_talk_text('END', generation_id)
-                else:
-                    if genai_app.complete_generation(generation_id):
-                        genai_app.emit('end', {})
-
-    except Exception as e:
-        if genai_app.is_generation_current(generation_id):
-            logging.error(f"Backend Stream Error: {e}")
-            genai_app.fail_generation(
-                generation_id,
-                'Response generation failed. Please try again.',
-            )
-        return None
 
 def post_stop_to_sima(model_name=None):
     cfg = genai_app.get_config()
@@ -3292,22 +1590,6 @@ def transcribe_audio(audio_bytes, *, language='auto', model=None, filename='audi
     return result, model
 
 
-def post_audio_to_mla(audio_bytes, language='auto', used_model=None):
-    """
-    Sends an audio file (as bytes) to the SIMA model server for transcription.
-    Returns the result dict, or None on any failure (the /upload path's contract).
-    """
-    try:
-        result, model = transcribe_audio(audio_bytes, language=language)
-    except TranscriptionError:
-        return None
-    # Report back which model served this request. Resolving again after the
-    # call would race a concurrent switch and mislabel the transcript.
-    if isinstance(used_model, list):
-        used_model.append(model)
-    return result
-
-
 def configure_logging(log_filename='server.log'):
     if logging.getLogger().handlers:
         return
@@ -3320,15 +1602,12 @@ def configure_logging(log_filename='server.log'):
         ]
     )
 
-def run_ui(app_cfg, backend_only=False):
+def run_ui(app_cfg):
     global genai_app
     global vectodb_proc
 
     configure_logging()
-    if backend_only:
-        logging.info('Initializing Neat GenAI Studio in backend-only mode (API endpoints and TTS, no web UI)....')
-    else:
-        logging.info('Initializing Neat GenAI Studio app (frontend and TTS) please wait....')
+    logging.info('Initializing the Neat GenAI Studio backend (API endpoints and TTS), please wait....')
     # Supertonic paths, before the TTS engines initialize: an explicit
     # environment override (run.sh exports one only when set) wins, then the
     # persisted config, then the module defaults.
@@ -3337,26 +1616,25 @@ def run_ui(app_cfg, backend_only=False):
     if app_cfg.supertonic.venv and not os.environ.get("SUPERTONIC_PYTHON"):
         os.environ.setdefault("SUPERTONIC_VENV", app_cfg.supertonic.venv)
     genai_app = AppContext()
-    genai_app.backend_only = bool(backend_only)
     # The environment overrides the persisted allowlist (app.web.cors_origins).
     cors_raw = backend_mode.effective_cors_setting(os.environ, app_cfg.web.cors_origins)
-    if backend_only:
-        genai_app.cors_origins = backend_mode.parse_cors_origins(cors_raw)
-        logging.info("Backend-only CORS: %s", genai_app.cors_origins or "off")
-    elif cors_raw.strip():
-        logging.warning("The CORS allowlist (app.web.cors_origins / BACKEND_CORS_ORIGINS) is only honoured in backend-only mode; ignored.")
+    genai_app.cors_origins = backend_mode.parse_cors_origins(cors_raw)
+    logging.info("CORS: %s", genai_app.cors_origins or "off")
     genai_app.initialize()
     genai_app.update_from_config(app_cfg)
     genai_app.setup_router()
-    cleanup()
 
-    if genai_app.backend_only:
-        logging.info("RAG database service not started (backend-only mode)")
-    elif not genai_app.apionly and genai_app.rag_enabled:
-        logging.info("Starting RAG database service")
+    if genai_app.rag_enabled:
         ensure_rag_modules_loaded()
-        vectodb_proc = start_service()
-    elif not genai_app.apionly:
+        # Without a database (cleared, or never built) the service stays off,
+        # so /rag/status keeps reporting "no-database" and chat with neat_rag
+        # answers 409 until a document is uploaded or reset.
+        if os.path.isfile(RAG_DB_PATH):
+            logging.info("Starting RAG database service")
+            vectodb_proc = start_service()
+        else:
+            logging.info("No RAG database at %s; upload a document or reset to start the service", RAG_DB_PATH)
+    else:
         logging.info("RAG database service disabled")
 
     try:

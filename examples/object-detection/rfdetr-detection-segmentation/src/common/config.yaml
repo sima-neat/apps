@@ -17,7 +17,7 @@ source:                         # H.264, H.265, or MJPEG RTSP source properties.
   rtsp_url: rtsp://<rtsp-source-ip>:<port>/<stream-name>
   codec: h264                   # h264/avc, h265/hevc, or mjpeg/jpeg.
   tcp: true                     # Use RTSP over TCP.
-  latency_ms: 100               # RTSP receive latency.
+  latency_ms: 10                # RTSP receive latency.
   width: 0                      # Optional width fallback. 0 uses the probe.
   height: 0                     # Optional height fallback. 0 uses the probe.
   fps: 0                        # Optional FPS override. 0 uses the probe.

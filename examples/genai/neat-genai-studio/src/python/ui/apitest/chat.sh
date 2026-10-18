@@ -1,6 +1,6 @@
 #!/bin/bash
 # Streams a chat completion through the Studio's same-origin proxy
-# (POST /v1/chat/completions on the web UI port).
+# (POST /v1/chat/completions on the backend port).
 #
 # Usage:
 #   ./chat.sh [host:port | base URL] ["prompt"]
