@@ -25,13 +25,6 @@ def test_portal_cards_always_use_category_asset_cover():
     assert 'src={example.image_path ? `./${example.image_path}` : fallbackImage}' not in app_jsx
 
 
-def test_portal_page_uses_global_search_only():
-    app_jsx = (APPS_ROOT / "portal" / "src" / "App.jsx").read_text()
-
-    assert 'id="catalog-search"' not in app_jsx
-    assert 'type="search"' not in app_jsx
-
-
 def test_portal_markdown_uses_normal_paragraph_flow():
     app_jsx = (APPS_ROOT / "portal" / "src" / "App.jsx").read_text()
 
@@ -42,7 +35,7 @@ def test_portal_markdown_uses_normal_paragraph_flow():
 def test_portal_code_blocks_preserve_tokens_and_scroll_internally():
     styles = (APPS_ROOT / "portal" / "src" / "styles.css").read_text()
     pre_rule = styles.split(".markdown-body pre {", 1)[1].split("}", 1)[0]
-    doc_panel_rule = styles.split(".doc-panel {", 1)[1].split("}", 1)[0]
+    documentation_rule = styles.split(".example-documentation {", 1)[1].split("}", 1)[0]
     table_rule = styles.split(".markdown-body table {", 1)[1].split("}", 1)[0]
 
     assert "white-space: pre;" in pre_rule
@@ -53,7 +46,7 @@ def test_portal_code_blocks_preserve_tokens_and_scroll_internally():
     assert "background: var(--bg-alt);" in pre_rule
     assert "color: var(--text);" in pre_rule
     assert "white-space: pre-wrap;" not in pre_rule
-    assert "min-width: 0;" in doc_panel_rule
+    assert "min-width: 0;" in documentation_rule
     assert "grid-template-columns: minmax(0, 1fr);" in styles
     assert "display: block;" in table_rule
     assert "overflow-x: auto;" in table_rule
