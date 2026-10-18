@@ -26,28 +26,28 @@ VERSION_PYTHON="${PYTHON_TEST_BIN:-python3}"
 export SIMA_CLI_CHECK_FOR_UPDATE="${SIMA_CLI_CHECK_FOR_UPDATE:-0}"
 
 # Model assets follow the published Model Zoo release, which can lag the platform
-# release. Direct artifacts under models/ use modelzoo-version, with
-# platform-version as the fallback for manifests written before the two versions
-# were separated. The sima-cli modelzoo catalog and its model_zoo/ tree are
-# published separately and use official-modelzoo-version.
-detect_manifest_version() {
-    "$VERSION_PYTHON" - "$ROOT/deps/manifest.json" "$@" <<'PY'
+# release. modelzoo-version selects it; platform-version is the fallback for
+# manifests written before the two versions were separated.
+detect_modelzoo_version() {
+    "$VERSION_PYTHON" - "$ROOT/deps/manifest.json" <<'PY'
 import json
 import sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
-override, keys = sys.argv[2], sys.argv[3:]
 try:
     manifest = json.loads(path.read_text(encoding="utf-8"))
 except FileNotFoundError:
-    print(f"ERROR: Missing manifest: {path}. Set {override} to override.", file=sys.stderr)
+    print(
+        f"ERROR: Missing manifest: {path}. Set NEAT_APPS_MODELZOO_VERSION to override.",
+        file=sys.stderr,
+    )
     raise SystemExit(1)
 
-version = next((manifest[key] for key in keys if manifest.get(key)), None)
+version = manifest.get("modelzoo-version") or manifest.get("platform-version")
 if not isinstance(version, str) or not version.strip():
     print(
-        f"ERROR: {path} must define {' or '.join(keys)} as a non-empty string.",
+        f"ERROR: {path} must define modelzoo-version or platform-version as a non-empty string.",
         file=sys.stderr,
     )
     raise SystemExit(1)
@@ -56,19 +56,10 @@ PY
 }
 
 MODELZOO_VERSION="${NEAT_APPS_MODELZOO_VERSION:-}"
-OFFICIAL_MODELZOO_VERSION="${NEAT_APPS_OFFICIAL_MODELZOO_VERSION:-}"
 
-# Callers run under `|| failed=1`, where set -e is off, so they check the
-# return status themselves.
 ensure_modelzoo_version() {
     if [[ -z "$MODELZOO_VERSION" ]]; then
-        MODELZOO_VERSION="$(detect_manifest_version NEAT_APPS_MODELZOO_VERSION modelzoo-version platform-version)" || return 1
-    fi
-}
-
-ensure_official_modelzoo_version() {
-    if [[ -z "$OFFICIAL_MODELZOO_VERSION" ]]; then
-        OFFICIAL_MODELZOO_VERSION="$(detect_manifest_version NEAT_APPS_OFFICIAL_MODELZOO_VERSION official-modelzoo-version)" || return 1
+        MODELZOO_VERSION="$(detect_modelzoo_version)"
     fi
 }
 
@@ -82,8 +73,7 @@ Options:
   --scope-file <path>   Test scope source file or directory (default: examples)
   --kind <kind>         Scope kind to resolve (default: e2e)
   --language <lang>     Scope language to include; repeatable (python, cpp)
-  NEAT_APPS_MODELZOO_VERSION overrides the version of direct model artifacts.
-  NEAT_APPS_OFFICIAL_MODELZOO_VERSION overrides the sima-cli modelzoo version.
+  NEAT_APPS_MODELZOO_VERSION can override the Model Zoo version.
   -h, --help            Show help
 EOF
 }
@@ -212,12 +202,12 @@ download_modelzoo_model() {
         return 0
     fi
     ensure_sima_cli_bin
-    ensure_official_modelzoo_version || return 1
+    ensure_modelzoo_version
 
     local before
     before=$(find "$MODELS_DIR" -maxdepth 1 -type f -name '*.tar.gz' | wc -l)
-    echo "[download] $model_id (modelzoo: $model_name, official-modelzoo-version: $OFFICIAL_MODELZOO_VERSION)"
-    (cd "$MODELS_DIR" && "$SIMA_CLI_BIN" modelzoo -v "$OFFICIAL_MODELZOO_VERSION" get "$model_name")
+    echo "[download] $model_id (modelzoo: $model_name, modelzoo-version: $MODELZOO_VERSION)"
+    (cd "$MODELS_DIR" && "$SIMA_CLI_BIN" modelzoo -v "$MODELZOO_VERSION" get "$model_name")
 
     local after
     after=$(find "$MODELS_DIR" -maxdepth 1 -type f -name '*.tar.gz' | wc -l)
@@ -237,12 +227,8 @@ download_url_model() {
     local tmpdir
     local downloaded_files=()
     if [[ "$url" == *"{modelzoo_version}"* ]]; then
-        ensure_modelzoo_version || return 1
+        ensure_modelzoo_version
         url="${url//\{modelzoo_version\}/$MODELZOO_VERSION}"
-    fi
-    if [[ "$url" == *"{official_modelzoo_version}"* ]]; then
-        ensure_official_modelzoo_version || return 1
-        url="${url//\{official_modelzoo_version\}/$OFFICIAL_MODELZOO_VERSION}"
     fi
 
     # An unsubstituted placeholder would otherwise reach sima-cli verbatim and

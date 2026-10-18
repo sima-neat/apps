@@ -674,83 +674,6 @@ def test_download_models_retries_after_failed_registry_copy(tmp_path):
     assert len(calls.read_text(encoding="utf-8").splitlines()) == 2
 
 
-def test_download_models_expands_official_modelzoo_version_placeholder(tmp_path):
-    _require_modern_bash()
-
-    fake_scope_python = tmp_path / "fake_scope_python"
-    fake_scope_python.write_text(
-        "#!/usr/bin/env bash\n"
-        "printf 'url-demo\\turl\\t\\thttps://example.test/SDK{official_modelzoo_version}/model_zoo/demo-file.tar.gz\\tdemo-file.tar.gz\\t\\t\\n'\n",
-        encoding="utf-8",
-    )
-    fake_scope_python.chmod(0o755)
-
-    sima_cli_args = tmp_path / "sima-cli-args.txt"
-    fake_sima_cli = tmp_path / "sima-cli"
-    fake_sima_cli.write_text(
-        "#!/usr/bin/env bash\n"
-        'printf \'%s\\n\' "$*" > "$NEAT_APPS_TEST_SIMA_CLI_ARGS"\n'
-        "touch demo-file.tar.gz\n",
-        encoding="utf-8",
-    )
-    fake_sima_cli.chmod(0o755)
-
-    result = subprocess.run(
-        [
-            "bash",
-            str(APPS_ROOT / "scripts" / "download_models.sh"),
-            "--language",
-            "python",
-        ],
-        cwd=APPS_ROOT,
-        env={
-            **os.environ,
-            "MODELS_DIR": str(tmp_path / "models"),
-            "TEST_SCOPE_PYTHON_BIN": str(fake_scope_python),
-            "SIMA_CLI_BIN": str(fake_sima_cli),
-            "NEAT_APPS_MODELZOO_VERSION": "3.0.0",
-            "NEAT_APPS_OFFICIAL_MODELZOO_VERSION": "2.1.1",
-            "NEAT_APPS_TEST_SIMA_CLI_ARGS": str(sima_cli_args),
-        },
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert "https://example.test/SDK2.1.1/model_zoo/demo-file.tar.gz" in (
-        sima_cli_args.read_text(encoding="utf-8")
-    )
-
-
-def _download_script_with_manifest(tmp_path, manifest_json: str) -> tuple[Path, Path]:
-    root = tmp_path / "apps"
-    script = root / "scripts" / "download_models.sh"
-    manifest = root / "deps" / "manifest.json"
-    script.parent.mkdir(parents=True)
-    manifest.parent.mkdir(parents=True)
-    script.write_text(
-        (APPS_ROOT / "scripts" / "download_models.sh").read_text(encoding="utf-8"),
-        encoding="utf-8",
-    )
-    script.chmod(0o755)
-    manifest.write_text(manifest_json, encoding="utf-8")
-    return root, script
-
-
-def _recording_sima_cli(tmp_path) -> tuple[Path, Path]:
-    args = tmp_path / "sima-cli-args.txt"
-    cli = tmp_path / "sima-cli"
-    cli.write_text(
-        "#!/usr/bin/env bash\n"
-        'printf \'%s\\n\' "$*" > "$NEAT_APPS_TEST_SIMA_CLI_ARGS"\n'
-        "touch demo-file.tar.gz\n",
-        encoding="utf-8",
-    )
-    cli.chmod(0o755)
-    return cli, args
-
-
 @pytest.mark.parametrize(
     ("manifest_json", "expected_version"),
     [
@@ -763,46 +686,27 @@ def test_download_models_resolves_modelzoo_version_from_manifest(
     tmp_path, manifest_json, expected_version
 ):
     _require_modern_bash()
-    root, script = _download_script_with_manifest(tmp_path, manifest_json)
-    fake_cli, cli_args = _recording_sima_cli(tmp_path)
-    fake_scope_python = tmp_path / "fake_scope_python"
-    fake_scope_python.write_text(
-        "#!/usr/bin/env bash\n"
-        "printf 'url-demo\\turl\\t\\thttps://example.test/SDK{modelzoo_version}/demo-file.tar.gz\\tdemo-file.tar.gz\\t\\t\\n'\n",
+
+    root = tmp_path / "apps"
+    script = root / "scripts" / "download_models.sh"
+    manifest = root / "deps" / "manifest.json"
+    script.parent.mkdir(parents=True)
+    manifest.parent.mkdir(parents=True)
+    script.write_text(
+        (APPS_ROOT / "scripts" / "download_models.sh").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
-    fake_scope_python.chmod(0o755)
+    script.chmod(0o755)
+    manifest.write_text(manifest_json, encoding="utf-8")
 
-    result = subprocess.run(
-        ["bash", str(script), "--language", "python"],
-        cwd=root,
-        env={
-            **os.environ,
-            "MODELS_DIR": str(tmp_path / "models"),
-            "PYTHON_TEST_BIN": sys.executable,
-            "TEST_SCOPE_PYTHON_BIN": str(fake_scope_python),
-            "SIMA_CLI_BIN": str(fake_cli),
-            "NEAT_APPS_TEST_SIMA_CLI_ARGS": str(cli_args),
-        },
-        capture_output=True,
-        text=True,
-        check=False,
+    sima_cli_args = tmp_path / "sima-cli-args.txt"
+    fake_sima_cli = tmp_path / "sima-cli"
+    fake_sima_cli.write_text(
+        "#!/usr/bin/env bash\n"
+        'printf \'%s\\n\' "$*" > "$NEAT_APPS_TEST_SIMA_CLI_ARGS"\n',
+        encoding="utf-8",
     )
-
-    assert result.returncode == 0, result.stderr
-    assert f"https://example.test/SDK{expected_version}/demo-file.tar.gz" in (
-        cli_args.read_text(encoding="utf-8")
-    )
-
-
-def test_download_models_resolves_official_modelzoo_version_from_manifest(tmp_path):
-    _require_modern_bash()
-    root, script = _download_script_with_manifest(
-        tmp_path,
-        '{"platform-version": "3.0.0", "modelzoo-version": "3.0.0", '
-        '"official-modelzoo-version": "2.1.2"}\n',
-    )
-    fake_cli, cli_args = _recording_sima_cli(tmp_path)
+    fake_sima_cli.chmod(0o755)
 
     result = subprocess.run(
         ["bash", str(script), "resnet_50"],
@@ -811,8 +715,8 @@ def test_download_models_resolves_official_modelzoo_version_from_manifest(tmp_pa
             **os.environ,
             "MODELS_DIR": str(tmp_path / "models"),
             "PYTHON_TEST_BIN": sys.executable,
-            "SIMA_CLI_BIN": str(fake_cli),
-            "NEAT_APPS_TEST_SIMA_CLI_ARGS": str(cli_args),
+            "SIMA_CLI_BIN": str(fake_sima_cli),
+            "NEAT_APPS_TEST_SIMA_CLI_ARGS": str(sima_cli_args),
         },
         capture_output=True,
         text=True,
@@ -820,32 +724,9 @@ def test_download_models_resolves_official_modelzoo_version_from_manifest(tmp_pa
     )
 
     assert result.returncode == 0, result.stderr
-    assert cli_args.read_text(encoding="utf-8").strip() == "modelzoo -v 2.1.2 get resnet_50"
-
-
-def test_download_models_requires_official_modelzoo_version_for_modelzoo(tmp_path):
-    _require_modern_bash()
-    root, script = _download_script_with_manifest(
-        tmp_path, '{"platform-version": "3.0.0", "modelzoo-version": "3.0.0"}\n'
+    assert sima_cli_args.read_text(encoding="utf-8").strip() == (
+        f"modelzoo -v {expected_version} get resnet_50"
     )
-    fake_cli, _ = _recording_sima_cli(tmp_path)
-
-    result = subprocess.run(
-        ["bash", str(script), "resnet_50"],
-        cwd=root,
-        env={
-            **os.environ,
-            "MODELS_DIR": str(tmp_path / "models"),
-            "PYTHON_TEST_BIN": sys.executable,
-            "SIMA_CLI_BIN": str(fake_cli),
-        },
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-    assert result.returncode != 0
-    assert "official-modelzoo-version" in result.stderr
 
 
 def _scope_with_variants(example_key: str) -> dict:

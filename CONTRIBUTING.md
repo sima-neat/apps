@@ -85,13 +85,10 @@ Each example README must identify:
 - the corresponding `sima-cli` command when that source supports it
 - the downloaded package selected by `model.path`
 
-Use `models/` for user-managed packages. Model downloads use a Model Zoo
-version, which can differ from the installed platform version. Direct artifacts
-under `pkg_downloads/SDK<version>/models/` use `modelzoo-version` in
-`deps/manifest.json` and the `{modelzoo_version}` scope placeholder.
-`sima-cli modelzoo` and the `model_zoo/` tree are published separately and use
-`official-modelzoo-version` and `{official_modelzoo_version}`. Keep the literal
-documented in each example README in sync with the field for the tree it uses.
+Use `models/` for user-managed packages. Model downloads use the Model Zoo
+version, which can differ from the installed platform version. Take it from
+`modelzoo-version` in `deps/manifest.json`, and keep the literal documented in
+example READMEs in sync with that field.
 
 Do not infer application support from every model declared in
 `tests/test-scope.yaml`. That file owns test acquisition. Confirm supported

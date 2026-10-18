@@ -48,7 +48,7 @@ Use any compatible compiled MPK. Apps CI exercises the benchmark with `yolo26m-d
 Model packages come from the Model Zoo release below, which can differ from the installed platform version. Download a Model Zoo package:
 
 ```bash
-export MODELZOO_VERSION="2.1.3"
+export MODELZOO_VERSION="3.0.0"
 mkdir -p models
 cd models
 sima-cli modelzoo -v "${MODELZOO_VERSION}" get <model-name>
