@@ -143,7 +143,7 @@ SSH, binary, timeout, or runtime-directory options.
 
 - Every active stream continues producing results.
 - Insight shows video and matching detections on the corresponding channels.
-- The 60-stream, 10 FPS profile reaches approximately 600 aggregate FPS after startup.
+- The 60-stream, 10 FPS profile targets approximately 600 aggregate FPS after startup. This rate has not been measured on a PCIe card.
 
 ## Troubleshooting
 

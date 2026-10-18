@@ -32,13 +32,13 @@ Detection metadata includes the source `rtp_timestamp` and is sent with nonblock
 
 The three checked-in profiles use the same application and model:
 
-| Config | Streams | Source resolution and FPS | Expected FPS per channel |
+| Config | Streams | Source resolution and FPS | Target FPS per channel |
 | --- | ---: | --- | ---: |
 | `config.yaml` | 20 | 1280×720 at 30 or 29.97 FPS, detected from the source | Source rate |
 | `config-30x720p20fps.yaml` | 30 | 1280×720 at 20 FPS | 20 FPS |
 | `config-60x720p10fps.yaml` | 60 | 1280×720 at 10 FPS | 10 FPS |
 
-The expected rate applies to both Insight video and detection metadata after startup.
+The target rate applies to both Insight video and detection metadata after startup. Each profile needs about 600 aggregate FPS, and none is yet validated to sustain its target: a C++ run of the 30-stream profile measured 18.6 to 20.2 FPS per channel.
 
 ## Preview
 
@@ -202,7 +202,7 @@ Use one active Insight viewer while validating metadata. Insight currently has a
 
 - Every configured Insight channel receives live video.
 - Detection boxes appear on the matching channel.
-- Video and metadata follow the source cadence for 20 streams, 20 FPS for 30 streams, or 10 FPS for 60 streams.
+- Video and metadata approach the source cadence for 20 streams, 20 FPS for 30 streams, or 10 FPS for 60 streams. See the profile table for the measured rate.
 - Nonblocking metadata-send failures are reported as rate-limited warnings without stalling inference.
 - `Ctrl-C` closes the graph and exits cleanly.
 
