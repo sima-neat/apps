@@ -220,8 +220,8 @@ bool test_validate_config_only_accepts_named_profiles(const std::string& binary)
 
   constexpr std::array<ProfileExpectation, 3> profiles{{
       {"config.yaml", 16, 0, 16, 1, 1, 8},
-      {"config-24x720p20fps.yaml", 24, 20, 4, 2, 4, 24},
-      {"config-48x720p10fps.yaml", 48, 10, 1, 2, 1, 8},
+      {"config-30x720p20fps.yaml", 30, 20, 4, 2, 4, 30},
+      {"config-60x720p10fps.yaml", 60, 10, 1, 2, 1, 8},
   }};
   const fs::path common_dir =
       "examples/object-detection/high-density-multi-stream-object-detector/src/common";

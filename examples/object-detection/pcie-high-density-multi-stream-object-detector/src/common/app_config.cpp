@@ -120,8 +120,8 @@ std::filesystem::path resolve_path(const std::filesystem::path& config_path,
 }
 
 void validate(const AppConfig& config) {
-  require(config.stream_count == 16 || config.stream_count == 24 || config.stream_count == 48,
-          "streams must contain exactly 16, 24, or 48 RTSP URLs");
+  require(config.stream_count == 16 || config.stream_count == 30 || config.stream_count == 60,
+          "streams must contain exactly 16, 30, or 60 RTSP URLs");
   require(config.decode_type == "yolo26" || config.decode_type == "yolov8",
           "model.decode_type must be yolo26 or yolov8");
   require(config.queue >= 0 && config.queue <= 5, "card.queue must be in [0, 5]");

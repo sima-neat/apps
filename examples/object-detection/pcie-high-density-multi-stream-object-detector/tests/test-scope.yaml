@@ -12,4 +12,4 @@ e2e:
     reason: This application is C++ only.
   cpp:
     enabled: false
-    reason: Requires a PCIe host/card pair, 16, 24, or 48 live RTSP sources, and Insight.
+    reason: Requires a PCIe host/card pair, 16, 30, or 60 live RTSP sources, and Insight.

@@ -39,7 +39,7 @@ repository, then use `run.sh` to start and stop both sides.
   and matching Neat PCIe host development package.
 - A Modalix PCIe Card with matching Neat Core and Internals packages.
 - Passwordless SSH access to the card using `~/.ssh/sima_neat_pcie_ed25519`.
-- 16, 24, or 48 H.264 RTSP sources and an Insight instance reachable from the host.
+- 16, 30, or 60 H.264 RTSP sources and an Insight instance reachable from the host.
 - A source checkout of this Apps repository on the host.
 
 ## Install Apps
@@ -83,18 +83,18 @@ On the host, copy the profile closest to the intended workload:
 | Profile | Streams | Input |
 | --- | ---: | --- |
 | `config.yaml` | 16 | 1280x720 at 30 FPS |
-| `config-24x720p20fps.yaml` | 24 | 1280x720 at 20 FPS |
-| `config-48x720p10fps.yaml` | 48 | 1280x720 at 10 FPS |
+| `config-30x720p20fps.yaml` | 30 | 1280x720 at 20 FPS |
+| `config-60x720p10fps.yaml` | 60 | 1280x720 at 10 FPS |
 
 ```bash
 APP_DIR=examples/object-detection/pcie-high-density-multi-stream-object-detector
-cp "$APP_DIR/src/common/config-48x720p10fps.yaml" "$APP_DIR/src/common/config.local.yaml"
+cp "$APP_DIR/src/common/config-60x720p10fps.yaml" "$APP_DIR/src/common/config.local.yaml"
 ```
 
 Edit `config.local.yaml` and set:
 
 - `model.path` to the absolute model path on the card.
-- `streams` to exactly 16, 24, or 48 RTSP URLs.
+- `streams` to exactly 16, 30, or 60 RTSP URLs.
 - `output.insight.host` to the Insight address.
 - `card.card_id` and `card.queue` if their defaults are not appropriate.
 
@@ -143,7 +143,7 @@ SSH, binary, timeout, or runtime-directory options.
 
 - Every active stream continues producing results.
 - Insight shows video and matching detections on the corresponding channels.
-- The 48-stream, 10 FPS profile reaches approximately 480 aggregate FPS after startup.
+- The 60-stream, 10 FPS profile reaches approximately 600 aggregate FPS after startup.
 
 ## Troubleshooting
 
@@ -190,8 +190,8 @@ usage measured with `yolo26n-det-int8-b1`:
 | Profile | CMA in use |
 | --- | ---: |
 | 16 x 720p30 | 0.5 GB |
-| 24 x 720p20 | 1.0 GB |
-| 48 x 720p10 | 1.4 GB |
+| 30 x 720p20 | Not measured |
+| 60 x 720p10 | Not measured |
 
 Lower `input.decoder_buffers` or `pcie.pool_size` if `CmaFree` on the card approaches zero.
 
