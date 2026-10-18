@@ -2,7 +2,8 @@
 # (app/supertonic_sima/engine.py) at commit 3b837b3e1b6a378ab8c24c3c04b079429b67e237,
 # included in Neat GenAI Studio at the upstream author's request. See README.md
 # in this directory for how to refresh it and THIRD_PARTY_TTS_MODELS.md for
-# attribution. Local changes: DEFAULT_ASSET_ROOT / DEFAULT_OUTPUT_ROOT removed (unused; the worker passes every path explicitly).
+# attribution. Local changes: DEFAULT_ASSET_ROOT / DEFAULT_OUTPUT_ROOT removed (unused; the worker passes every path explicitly);
+# _drop_batch_axes accepts the leading batch axis of one that PyNeat 0.6 (Platform 3.0) reports on tensor specs and outputs.
 #!/usr/bin/env python3
 """Persistent hybrid Supertonic 3 engine for a SiMa Modalix DevKit.
 
@@ -99,12 +100,22 @@ def _style_nchw(value: np.ndarray) -> np.ndarray:
     return np.ascontiguousarray(value.transpose(0, 2, 1)[:, :, None, :])
 
 
+def _drop_batch_axes(shape: tuple[int, ...], rank: int) -> tuple[int, ...]:
+    """Drop leading axes of size one beyond ``rank``. PyNeat 0.6 reports some
+    batch-one tensors with a leading batch axis, e.g. (1, 1, 192, 144) for the
+    public (1, 192, 144); the data is the same."""
+    shape = tuple(shape)
+    while len(shape) > rank and shape[0] == 1:
+        shape = shape[1:]
+    return shape
+
+
 def _shape_from_spec(spec: Any) -> tuple[int, ...] | None:
     shape = getattr(spec, "shape", None)
     if shape is None:
         return None
     try:
-        return tuple(int(value) for value in shape)
+        return _drop_batch_axes(tuple(int(value) for value in shape), 3)
     except (TypeError, ValueError):
         return None
 
@@ -143,6 +154,7 @@ def _first_public_output_array(
     if not tensors:
         raise RuntimeError("MLA runner returned no output tensor")
     value = np.asarray(tensors[0].to_numpy(copy=False), dtype=np.float32)
+    value = value.reshape(_drop_batch_axes(value.shape, len(expected_public_shape)))
     if value.shape != expected_public_shape:
         raise RuntimeError(
             f"MLA output shape {value.shape} != expected {expected_public_shape}"
@@ -258,11 +270,15 @@ class SupertonicModalix:
         timeout_ms: int,
         verify_hashes: bool,
         steps: int = DEFAULT_STEPS,
+        expected_mpk_sha256: str | None = None,
     ) -> None:
         self.model_dir = model_dir.resolve()
         self.mpk_path = mpk_path.resolve()
         self.runtime_data_path = runtime_data_path.resolve()
         self.artifact_manifest_path = artifact_manifest_path.resolve()
+        # The vector estimator's checksum when it does not come from the
+        # manifest's release (Platform 3.0's compile; see vector_estimator.json).
+        self.expected_mpk_sha256 = expected_mpk_sha256
         self.vocoder_backend = vocoder_backend
         self.vocoder_mpk_path = vocoder_mpk_path.resolve()
         self.vocoder_manifest_path = vocoder_manifest_path.resolve()
@@ -404,7 +420,7 @@ class SupertonicModalix:
     def _verify_artifacts(self) -> None:
         manifest = json.loads(self.artifact_manifest_path.read_text())
         try:
-            expected_mpk = manifest["compiled"]["archive"]["sha256"]
+            expected_mpk = self.expected_mpk_sha256 or manifest["compiled"]["archive"]["sha256"]
             expected_runtime = manifest["graph_surgery"]["runtime_data"]["sha256"]
         except KeyError as error:
             raise ValueError(

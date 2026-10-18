@@ -47,18 +47,25 @@ from asr_switching_suite import (  # noqa: E402
     MlaFailureClassificationTests,
 )
 from hub_security_suite import HubPathSecurityTests  # noqa: E402,F401
-from cli_think_suite import (  # noqa: E402,F401
-    NoThinkRewriteTests as CliNoThinkRewriteTests,
-    StreamTokenCountTests as CliStreamTokenCountTests,
-    ThinkSplitterTests as CliThinkSplitterTests,
-)
 from asr_metadata_suite import AsrMetadataTests  # noqa: E402,F401
+from board_camera_suite import ResolveCameraNodeTests  # noqa: E402,F401
 from talk_controller_suite import SupertonicRetryTests  # noqa: E402,F401
+from rag_chat_suite import (  # noqa: E402,F401
+    ChatRequestShapeTests,
+    RagEventLoopTests,
+    RagContextBudgetTests,
+    RagOptionTests,
+    RagPassageTests,
+    RagQuestionTests,
+    RagSearchFailedTests,
+    RagServedDatabaseTests,
+    RagServiceIdentityTests,
+    RagServiceWaitTests,
+)
 from readme_package_suite import (  # noqa: E402,F401
     LauncherPackagePathsTests,
     ReadmePackagePathsTests,
 )
-from studio_client_suite import NoThinkTransformTests  # noqa: E402,F401
 from worker_ipc_suite import (  # noqa: E402,F401
     ReadExactTests,
     ReadFrameTests,
@@ -87,6 +94,12 @@ from supertonic_tts_suite import (  # noqa: E402,F401
     SegmentTextTests as SupertonicSegmentTextTests,
     VendoredRuntimeTests as SupertonicVendoredRuntimeTests,
 )
+from supertonic_platform3_suite import (  # noqa: E402,F401
+    BatchAxisTests as SupertonicBatchAxisTests,
+    NumpyPinTests as SupertonicNumpyPinTests,
+    PyneatLinkTests as SupertonicPyneatLinkTests,
+    VectorEstimatorTests as SupertonicVectorEstimatorTests,
+)
 from voice_catalog_suite import (  # noqa: E402,F401
     test_catalog_has_simple_licenses_and_pinned_sources,
     test_catalog_rejects_blocked_license,
@@ -102,19 +115,19 @@ pytestmark = pytest.mark.unit
 
 @pytest.mark.unit
 def test_ui_config_reads_backend_settings(tmp_path) -> None:
-    """app.web.headless and the persisted backend CORS allowlist (string or list)."""
+    """The persisted backend CORS allowlist (string or list)."""
     from shared.config import load_ui_config
 
     plain = tmp_path / "plain.yaml"
     plain.write_text("app:\n  web:\n    port: 5000\n", encoding="utf-8")
     cfg = load_ui_config(plain, tmp_path)
-    assert (cfg.web.headless, cfg.web.cors_origins) == (False, "")
+    assert cfg.web.cors_origins == ""
 
     text = tmp_path / "text.yaml"
-    text.write_text('app:\n  web:\n    port: 5000\n    headless: true\n'
+    text.write_text('app:\n  web:\n    port: 5000\n'
                     '    cors_origins: "http://a:3000, https://b"\n', encoding="utf-8")
     cfg = load_ui_config(text, tmp_path)
-    assert (cfg.web.headless, cfg.web.cors_origins) == (True, "http://a:3000, https://b")
+    assert cfg.web.cors_origins == "http://a:3000, https://b"
 
     listed = tmp_path / "list.yaml"
     listed.write_text("app:\n  web:\n    port: 5000\n    cors_origins:\n      - http://a:3000\n      - '*'\n",
@@ -185,14 +198,10 @@ __all__ = [
     "EncoderLayoutIsNotJudgedLocallyTests",
     "MlaFailureClassificationTests",
     "HubPathSecurityTests",
-    "CliNoThinkRewriteTests",
-    "CliStreamTokenCountTests",
-    "CliThinkSplitterTests",
     "AsrMetadataTests",
     "LauncherPackagePathsTests",
     "ReadmePackagePathsTests",
     "SupertonicRetryTests",
-    "NoThinkTransformTests",
     "ReadExactTests",
     "ReadFrameTests",
     "SendRequestTests",

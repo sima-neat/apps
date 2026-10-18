@@ -3,7 +3,7 @@
 
 Supertonic runs its vector field and vocoder on the MLA through PyNeat and its
 duration predictor / text encoder on the CPU through ONNX Runtime. Those
-packages (``pyneat``, ``onnxruntime``, ``numpy==1.26.4``) are not part of the
+packages (``pyneat``, ``onnxruntime``, ``numpy``) are not part of the
 Studio UI environment, so the engine (the vendored ``supertonic_sima`` package
 next to this file) lives in the venv that ``setup.sh`` builds and the UI talks
 to it through this subprocess. A crashed worker is simply respawned by the
@@ -80,6 +80,10 @@ def _import_runtime():
     return supertonic_sima
 
 
+# The Platform 3.0 vector estimator (the SiMa model zoo's compile), shared with setup.sh.
+VECTOR_ESTIMATOR = Path(__file__).resolve().parent / "supertonic_sima" / "vector_estimator.json"
+
+
 def _build_engine(runtime):
     model_root = Path(os.environ["SUPERTONIC_MODELS_ROOT"])
     compiled = model_root / "supertonic-3-sima"
@@ -99,6 +103,7 @@ def _build_engine(runtime):
         timeout_ms=120_000,
         verify_hashes=True,
         steps=steps,
+        expected_mpk_sha256=json.loads(VECTOR_ESTIMATOR.read_text())["sha256"],
     )
 
 
