@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
-  project(multi-stream-people-tracker LANGUAGES CXX)
+  project(multi-stream-tracker LANGUAGES CXX)
   set(CMAKE_CXX_STANDARD 20)
   set(CMAKE_CXX_STANDARD_REQUIRED ON)
   set(CMAKE_CXX_EXTENSIONS OFF)
@@ -18,40 +18,49 @@ if (NOT TARGET SimaNeatApps::support_runtime)
   _sima_neat_apps_ensure_support_runtime("${APPS_ROOT}")
 endif()
 
-add_library(multi_stream_people_tracker_lib STATIC
+add_library(multi_stream_tracker_lib STATIC
   "${CMAKE_CURRENT_LIST_DIR}/utils/tracker.cpp"
 )
-target_link_libraries(multi_stream_people_tracker_lib
+target_link_libraries(multi_stream_tracker_lib
   PUBLIC
     SimaNeatApps::sima_neat
     SimaNeatApps::support_runtime
 )
-target_include_directories(multi_stream_people_tracker_lib
+target_include_directories(multi_stream_tracker_lib
   PUBLIC
     "${APPS_ROOT}"
 )
-target_compile_definitions(multi_stream_people_tracker_lib
+target_compile_definitions(multi_stream_tracker_lib
   PUBLIC
-    MULTI_CAMERA_PEOPLE_TRACKING_SOURCE_DIR="${CMAKE_CURRENT_LIST_DIR}"
+    MULTI_STREAM_TRACKER_SOURCE_DIR="${CMAKE_CURRENT_LIST_DIR}"
 )
 
 sima_neat_apps_module(
-  "multi-stream-people-tracker"
+  "multi-stream-tracker"
   UNIT_TEST
   E2E_TEST
-  OUTPUT_TARGET_VAR MULTI_CAMERA_PEOPLE_TRACKING_TARGET
+  OUTPUT_TARGET_VAR MULTI_STREAM_TRACKER_TARGET
   SOURCES
     "${CMAKE_CURRENT_LIST_DIR}/main.cpp"
 )
 
-target_link_libraries("${MULTI_CAMERA_PEOPLE_TRACKING_TARGET}"
+target_link_libraries("${MULTI_STREAM_TRACKER_TARGET}"
   PRIVATE
-    multi_stream_people_tracker_lib
+    multi_stream_tracker_lib
 )
 
-if (TARGET multi-stream-people-tracker_unit_test)
-  target_link_libraries(multi-stream-people-tracker_unit_test
+if (TARGET multi-stream-tracker_unit_test)
+  target_link_libraries(multi-stream-tracker_unit_test
     PRIVATE
-      multi_stream_people_tracker_lib
+      multi_stream_tracker_lib
+  )
+endif()
+
+# The e2e test resolves the configured class labels through the tracker API, so
+# it needs the same library as the unit test.
+if (TARGET multi-stream-tracker_e2e_test)
+  target_link_libraries(multi-stream-tracker_e2e_test
+    PRIVATE
+      multi_stream_tracker_lib
   )
 endif()
