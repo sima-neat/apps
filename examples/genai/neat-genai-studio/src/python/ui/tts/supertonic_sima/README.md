@@ -8,15 +8,21 @@ so the Studio does not clone or execute an external repository at install time.
 Only the runtime closure is included: `__init__.py`, `audio.py`, `engine.py`,
 `inputs.py`, `text.py`. Upstream's `config.py` (argparse defaults for its example
 apps) and `server.py` (its standalone HTTP server) are deliberately omitted; the
-graph surgery and compilation tooling stays upstream. The one local change is the
-removal of two absolute default paths from `engine.py` (the worker passes every
-path explicitly).
+graph surgery and compilation tooling stays upstream. The local changes are in
+`engine.py`: two absolute default paths are removed (the worker passes every
+path explicitly), `expected_mpk_sha256` lets the worker pass the Platform 3.0
+vector estimator's checksum (the manifest describes the 2.1.3 compile), and
+`_drop_batch_axes` accepts the leading batch axis of one
+that PyNeat 0.6 (Platform 3.0) reports on tensor specs and outputs.
 
 It runs only inside `supertonic_worker.py`, in the isolated `.venv-supertonic`
-environment that `setup.sh` builds (PyNeat, onnxruntime, numpy 1.26). The Studio
+environment that `setup.sh` builds (PyNeat, onnxruntime, numpy). The Studio
 UI process never imports it. The model files it needs are downloaded by `setup.sh`
-from Hugging Face at pinned revisions (`Supertone/supertonic-3` and the compiled
-MLA packages in `florianvoss/supertonic-3-sima`) and verified by checksum; see
+from Hugging Face at pinned revisions (`Supertone/supertonic-3`, and the compiled
+vocoder and runtime data in `florianvoss/supertonic-3-sima`), except the vector
+estimator compiled for Platform 3.0, which comes from the SiMa model zoo
+(`vector_estimator.json` here: its address and checksum, which `setup.sh` and the
+engine both check). Everything is verified by checksum; see
 `THIRD_PARTY_TTS_MODELS.md` for attribution and licence notes.
 
 ## Refreshing from upstream

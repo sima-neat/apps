@@ -1,6 +1,6 @@
-"""Backend-only (headless) mode for Neat GenAI Studio: which paths the web
-process serves when started with ``--backend-only``, and the opt-in CORS policy
-for browser front ends on other origins (for example Insight).
+"""The Neat GenAI Studio backend's API surface: which paths the web process
+serves, and the opt-in CORS policy for browser front ends on other origins
+(for example Insight).
 
 Pure Python on purpose (no Flask import) so the unit suite covers every
 decision; ``flask_app`` applies these in ``before_request`` / ``after_request``.
@@ -11,9 +11,8 @@ from __future__ import annotations
 from typing import Iterable, Mapping
 from urllib.parse import urlsplit
 
-# Path prefixes (ending in "/") and exact paths served in backend-only mode.
-# Everything else (the web UI pages, the Studio's own chat/RAG/camera routes)
-# answers 404 there.
+# Path prefixes (ending in "/") and exact paths the backend serves. Everything
+# else answers 404.
 API_PREFIXES = (
     "/v1/",          # OpenAI-compatible chat, audio speech/transcriptions/translations/voices
     "/audio/",       # the same audio routes without the /v1 prefix
@@ -23,20 +22,23 @@ API_PREFIXES = (
     "/piperplus/",   # Piper Plus voice selection
     "/supertonic/",  # Supertonic voice selection
     "/voices/",      # piper-tts voice selection
+    "/rag/",         # document search (RAG): status, upload, reset, clear, search
+    "/board-camera/",  # cameras attached to the board: list, snapshot
 )
-API_EXACT = ("/", "/health", "/voices", "/shutdown", "/favicon.ico")
+API_EXACT = ("/", "/health", "/voices", "/shutdown")
 
 # Paths that may answer cross-origin browser requests when CORS is enabled:
 # the API surface, never /shutdown.
 CORS_PREFIXES = ("/v1/", "/audio/", "/models/", "/benchmark/", "/tts/",
-                 "/piperplus/", "/supertonic/", "/voices/")
+                 "/piperplus/", "/supertonic/", "/voices/", "/rag/", "/board-camera/")
 CORS_EXACT = ("/health", "/voices")
 
 CORS_METHODS = "GET, POST, OPTIONS"
 CORS_MAX_AGE = "600"
 # Response headers a cross-origin page may read (timings, engine, model).
 EXPOSE_HEADERS = ("X-ASR-Model", "X-Task", "X-Elapsed-Time", "X-Engine", "X-Voice",
-                  "X-Language", "X-Speed", "X-RTF", "X-Audio-Duration")
+                  "X-Language", "X-Speed", "X-RTF", "X-Audio-Duration",
+                  "X-RAG-Hits", "X-RAG-Sources")
 
 
 def _matches(path: str, prefixes: Iterable[str], exact: Iterable[str]) -> bool:
@@ -45,7 +47,7 @@ def _matches(path: str, prefixes: Iterable[str], exact: Iterable[str]) -> bool:
 
 
 def path_allowed(path: str) -> bool:
-    """True when ``path`` is part of the backend-only API surface."""
+    """True when ``path`` is part of the backend API surface."""
     return _matches(path, API_PREFIXES, API_EXACT)
 
 
@@ -134,7 +136,8 @@ API_VERSION = 1
 
 def health_payload(*, mode: str, version: str, status: Mapping | None,
                    engines: Iterable[Mapping], error: str | None = None,
-                   engine_failures: Mapping[str, str] | None = None) -> dict:
+                   engine_failures: Mapping[str, str] | None = None,
+                   rag_enabled: bool = False) -> dict:
     """``GET /health``: what an integrating front end needs to know before it
     calls the API. ``status`` is the control API's /control/status (None when
     the model server is unreachable). ``engine_failures`` maps an installed TTS
@@ -159,4 +162,6 @@ def health_payload(*, mode: str, version: str, status: Mapping | None,
         "asr_model": status.get("asrModel") or None,
         "chat_models_loaded": chat_loaded,
         "tts": {"engines": tts_engines},
+        # Optional features, so a front end can hide what this board lacks.
+        "features": {"rag": bool(rag_enabled), "benchmark": True, "board_camera": True},
     }

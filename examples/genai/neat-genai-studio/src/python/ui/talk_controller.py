@@ -2,21 +2,16 @@
 
 Extracted from ui/flask_app.py to keep the web app focused on routing. Owns the
 Supertonic (MLA) and CPU (piper-plus, piper-tts) engines, the browser-TTS mode,
-engine/voice selection, and turning streamed reply text into spoken audio. The
-owning AppContext sets ``self.app`` after construction; this controller calls
-back through it to emit ``audio_chunk``/``end`` events and to check or complete
-the active generation.
+engine/voice selection, and on-demand synthesis for the speech API.
 """
 
 from __future__ import annotations
 
 import logging
 import os
-import queue
 import re
 import threading
 import time
-import traceback
 import wave
 from pathlib import Path
 
@@ -41,13 +36,6 @@ VOICE_CATALOG = load_catalog()
 
 class TalkController:
     def __init__(self, supported_langs=None):
-        # Set by AppContext after construction; used to emit audio chunks and
-        # to check/complete the active generation. None until wired.
-        self.app = None
-        self._next = None
-        self.prefix = ''
-        self.totalk = ''
-        self.talk = []
         self.pipers = {}            # rhasspy piper-tts voices, keyed by language
         self.pp = None              # active piper-plus multilingual engine
         self.pp_models = []         # installed piper-plus voices (selectable)
@@ -75,7 +63,6 @@ class TalkController:
         self._engine_applied_id = 0   # the newest call that applied its choice
         self.browser_tts = False    # when True, no server synthesis — the client speaks via Web Speech
         self.utterance_speed = 1.0
-        self.missing_voice_warnings = set()
         self._cpu_engine_lock = threading.Lock()   # serializes deferred CPU engine loads
         langs = supported_langs or ['en']
         # Supertonic is the default engine. When it loads, the CPU engines stay
@@ -91,28 +78,11 @@ class TalkController:
             if uncovered:
                 self._init_pipers_threaded(uncovered)
             logging.info("CPU TTS engines (piper-plus, piper-tts) load on demand "
-                         "when selected under Settings -> Voice engine.")
+                         "when selected (POST /tts/engine or a speech request).")
         
         self.lock = threading.Lock()
-        self._reset_tps_counters()
-
-        self.current_language = 'en'
         self.supported_langs = supported_langs or ['en']
         self._log_tts_coverage()
-        # When False, spoken responses (PiperTTS) are skipped entirely — no
-        # synthesis compute and no audio_chunk emitted.
-        self.tts_enabled = True
-        # Create a thread-safe queue for incoming subwords
-        self.queue = queue.Queue()
-        self.running = True
-        self.worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
-        self.worker_thread.start()
-        self.full_response = []
-
-        # Chunking state
-        self.chunk_count = 0
-        self.permissive_chunks = 3  # first N chunks use permissive boundaries
-        self.min_chars_first_chunks = 20  # require at least this many chars before first N flushes
 
     def _engine_name(self, eng):
         if eng is None:
@@ -144,22 +114,6 @@ class TalkController:
                 logging.info("TTS coverage: %s -> %s (via '%s' voice)", lang, name, effective)
             else:
                 logging.info("TTS coverage: %s -> %s", lang, name)
-
-    def set_language(self, lang):
-        self.current_language = lang if lang in self.supported_langs else 'xx'
-
-    def set_tts_enabled(self, enabled):
-        self.tts_enabled = bool(enabled)
-
-    def set_utterance_speed(self, speed):
-        try:
-            speed = float(speed)
-        except (TypeError, ValueError):
-            speed = 1.0
-        self.utterance_speed = max(0.5, min(2.0, speed))
-        for eng in list(self.pipers.values()) + [self.pp, self.st]:
-            if eng is not None and hasattr(eng, 'set_utterance_speed'):
-                eng.set_utterance_speed(self.utterance_speed)
 
     def _init_pipers_threaded(self, langs):
         threads = []
@@ -552,70 +506,6 @@ class TalkController:
                 return 'en', self.st
         return None, None
 
-    def _warn_missing_voice_once(self, language):
-        if language in self.missing_voice_warnings:
-            return
-        self.missing_voice_warnings.add(language)
-        logging.warning(f"No Piper voice loaded for language '{language}'. Skipping TTS audio.")
-
-    def _reset_tps_counters(self):
-        self.tps = 0.0
-        self.tps_history = []
-        self.max_tps_history = 10
-
-    def _worker_loop(self):
-        while self.running:
-            try:
-                item = self.queue.get(timeout=0.05)
-                if item == "__STOP__":
-                    logging.info("TTS worker loop stopping.")
-                    break
-                try:
-                    self._process_subword(item)
-                except Exception as e:
-                    logging.error(f"Error in _process_subword: {e}")
-                    logging.debug(traceback.format_exc())
-            except queue.Empty:
-                continue
-            except Exception as e:
-                # Catch anything unexpected (e.g., bad queue state)
-                logging.error(f"Unexpected error in TTS worker loop: {e}")
-                logging.debug(traceback.format_exc())
-
-    def enqueue(self, data):
-        """
-        Enqueue incoming data containing the subword and tokens-per-second (tps).
-        Smooths tps over the last N samples.
-        Expected data format: {'text': subword, 'tokens_per_sec': tps}
-        """
-        subword = data.get('text', '')
-        new_tps = data.get('tokens_per_sec', 0.0)
-        generation_id = data.get('generation_id')
-
-        subword = subword.replace('*', '').replace('＊', '')
-
-        self.queue.put({
-            'text': subword,
-            'generation_id': generation_id,
-        })
-
-        # Update TPS history and compute average
-        self.tps_history.append(new_tps)
-        if len(self.tps_history) > self.max_tps_history:
-            self.tps_history.pop(0)
-
-        # Compute the average TPS
-        if self.tps_history:
-            self.tps = sum(self.tps_history) / len(self.tps_history)
-            logging.debug(f'Current average TPS is {self.tps}')
-        else:
-            self.tps = 0.0
-
-    def stop(self):
-        self.running = False
-        self.queue.put("__STOP__")
-        self.worker_thread.join()
-
     def _get_wav_duration(self, buffer):
         logging.info("Calculating WAV duration")
         buffer.seek(0)
@@ -626,162 +516,6 @@ class TalkController:
         
         logging.info(f'WAV duration: {duration:.2f} seconds')
         return duration
-
-    def _flush_talk(self, generation_id, force=False):
-        """Synthesize buffered text, bypassing the early-chunk minimum at END."""
-        if force and self._next is not None:
-            self.talk.append(self._next)
-            self._next = None
-        if not self.talk:
-            return
-
-        self.totalk = self.generate_talk()
-        start_time = time.time()
-        sanitized_sentence = self._sanitize_for_tts(self.totalk)
-        logging.info(f"{self.full_response} : {sanitized_sentence}")
-
-        if (
-            not force
-            and self.tts_enabled
-            and self.current_language != 'xx'
-            and self.chunk_count < self.permissive_chunks
-            and len(sanitized_sentence) < self.min_chars_first_chunks
-        ):
-            # Keep the entire fragment in order until more text arrives. When
-            # END arrives, force=True flushes it regardless of its length.
-            if self._next is not None:
-                self.talk.append(self._next)
-                self._next = None
-            return
-
-        if not sanitized_sentence.strip():
-            pass
-        elif sanitized_sentence in self.full_response:
-            logging.info(f"Skipping synthesis for repeated text: {self.totalk}")
-            self._reset_tps_counters()
-        elif self.tts_enabled and self.current_language != 'xx':
-            if self.browser_tts:
-                if generation_id is not None and not self.app.is_generation_current(generation_id):
-                    return
-                self.full_response.append(sanitized_sentence)
-                self.app.emit('audio_chunk', {
-                    'text': sanitized_sentence.strip(),
-                    'browser': True,
-                    'lang': self.current_language,
-                    'tps': round(self.tps, 2),
-                    'engine': 'browser',
-                })
-                self.chunk_count += 1
-            else:
-                _, piper = self._get_piper(self.current_language, load=True)
-                if piper is None:
-                    self._warn_missing_voice_once(self.current_language)
-                else:
-                    self.full_response.append(sanitized_sentence)
-                    audio_duration = 0.0
-                    elapsed_time = 0.0
-                    if hasattr(piper, 'synthesize_stream'):
-                        buffers = piper.synthesize_stream(
-                            sanitized_sentence, language=self.current_language
-                        )
-                    else:
-                        buffers = [piper.synthesize(
-                            sanitized_sentence, language=self.current_language
-                        )]
-                    try:
-                        for buffer in buffers:
-                            if generation_id is not None and not self.app.is_generation_current(generation_id):
-                                return
-                            elapsed_time = time.time() - start_time
-                            audio_duration += self._get_wav_duration(buffer)
-                            rtf = elapsed_time / audio_duration if audio_duration > 0 else 0
-                            self.app.emit('audio_chunk', {
-                                'text': sanitized_sentence.strip(),
-                                'audio': buffer.getvalue(),
-                                'tps': round(self.tps, 2),
-                                'rtf': round(rtf, 2),
-                                'engine': self._engine_name(piper),
-                                'voice': self._engine_voice(piper),
-                            })
-                    finally:
-                        close = getattr(buffers, 'close', None)
-                        if close is not None:
-                            close()
-                    logging.info(f"[Timing] self.piper.synthesize took {elapsed_time:.3f} seconds for [{sanitized_sentence}]")
-                    self.chunk_count += 1
-
-        self.talk = []
-        if self._next is not None:
-            self.talk.append(self._next)
-            self._next = None
-
-    def _process_subword(self, item):
-        subword = item.get('text', '')
-        generation_id = item.get('generation_id')
-        if generation_id is not None and not self.app.is_generation_current(generation_id):
-            return
-
-        mod_subword = ''
-
-        if subword != 'END':  # End of streaming
-            if '<0x0A>' in subword:
-                mod_subword = re.sub(r"<0x([0-9A-Fa-f]+)>", "", subword)
-            if '</s>' in subword:
-                mod_subword = re.sub(r"</s>", "", subword)
-
-            if self.check_punctuation(subword):
-                if mod_subword:
-                    # Split on both English and CJK punctuation marks
-                    parts = re.split(r'([。！？\.?!])', mod_subword)
-                    if len(parts) > 1:
-                        tmp = parts[0] + (parts[1] if len(parts) > 1 else '')
-                        self._next = ''.join(parts[2:]) if len(parts) > 2 else ''
-                        self.talk.append(tmp)
-                    else:
-                        self.talk.append(mod_subword)
-                else:
-                    self.talk.append(subword)
-
-                self._flush_talk(generation_id)
-            else:
-                self.talk.append(subword)
-        else:
-            # A response can end with a short sentence that did not satisfy the
-            # initial chunk-size threshold. Never discard that final fragment.
-            self._flush_talk(generation_id, force=True)
-            avg_tps = (sum(self.tps_history) / len(self.tps_history)) if getattr(self, 'tps_history', None) else 0.0
-            logging.info(f"[TTS] Average tokens/sec for answer: {avg_tps:.2f}")
-            self.app.emit('end', {})
-            self.chunk_count = 0
-            self._reset_tps_counters()
-            if generation_id is not None:
-                self.app.complete_generation(generation_id)
-
-    def reset(self):
-        with self.lock:
-            logging.info("TalkController reset called. Clearing state and queue.")
-            self._next = None
-            self.prefix = ''
-            self.totalk = ''
-            self.talk = []
-            self.full_response = []
-
-            while not self.queue.empty():
-                try:
-                    self.queue.get_nowait()
-                except queue.Empty:
-                    break
-
-    def check_punctuation(self, word):
-        # Dynamic boundaries: first N chunks permissive, then strict
-        if self.chunk_count < self.permissive_chunks:
-            return bool(re.search(r"[。！？\.,?!:;]", word))
-        else:
-            return bool(re.search(r"[。！？\.?!]", word))
-
-    def generate_talk(self):
-        # Simply join tokens as-is, preserving the model's intended spacing
-        return "".join(self.talk)
 
     def _sanitize_for_tts(self, text: str) -> str:
         # Strip Markdown and LaTeX so Piper utters the prose, not the formatting

@@ -49,7 +49,6 @@ class OpenAIConfig:
 @dataclass(frozen=True)
 class RequestConfig:
     max_tokens: int
-    system_prompt: str
 
 
 @dataclass(frozen=True)
@@ -57,8 +56,7 @@ class WebConfig:
     host: str
     port: int
     https: bool
-    headless: bool = False   # backend-only: serve the API endpoints, not the web UI
-    cors_origins: str = ""   # backend-only CORS allowlist (comma list or *); env BACKEND_CORS_ORIGINS overrides
+    cors_origins: str = ""   # CORS allowlist (comma list or *); env BACKEND_CORS_ORIGINS overrides
 
 
 @dataclass(frozen=True)
@@ -100,12 +98,6 @@ class HubConfig:
 
 
 @dataclass(frozen=True)
-class UIConfig:
-    font_family: str
-    font_size: int
-
-
-@dataclass(frozen=True)
 class AppConfig:
     openai: OpenAIConfig
     # chat/VLM and ASR models are optional: the server can start with none resident
@@ -121,7 +113,6 @@ class AppConfig:
     max_resident_chat_models: int = 1
     hub: HubConfig = HubConfig(allow_download=True,
                               orgs=("simaai", "TDoSiMa", "florianvoss"))
-    ui: UIConfig = UIConfig(font_family="Inter", font_size=15)
     supertonic: SupertonicConfig = SupertonicConfig()
 
 
@@ -152,7 +143,6 @@ def load_server_config(path: Path = DEFAULT_SERVER_CONFIG, apps_root: Path = PAT
     rag = raw.get("rag", {})
     control = raw.get("control", {})
     hub = raw.get("hub", {})
-    ui = raw.get("ui", {})
     chat_models = _load_startup_chat_models(models, apps_root)
 
     return AppConfig(
@@ -166,13 +156,11 @@ def load_server_config(path: Path = DEFAULT_SERVER_CONFIG, apps_root: Path = PAT
         asr_model=_load_optional_model(models, "asr", apps_root),
         request=RequestConfig(
             max_tokens=int(request.get("max_tokens", 512)),
-            system_prompt=str(request.get("system_prompt", "") or ""),
         ),
         web=WebConfig(
             host=str(web.get("host", "0.0.0.0") or "0.0.0.0"),
             port=int(web.get("port", 5000)),
             https=_load_bool(web.get("https", True)),
-            headless=_load_bool(web.get("headless", False)),
             cors_origins=_load_cors_origins(web.get("cors_origins")),
         ),
         rag=_load_rag_config(rag, apps_root),
@@ -180,7 +168,6 @@ def load_server_config(path: Path = DEFAULT_SERVER_CONFIG, apps_root: Path = PAT
         catalog_dir=_load_optional_dir(models.get("catalog_dir"), apps_root),
         max_resident_chat_models=max(1, int(models.get("max_resident_chat_models", 1) or 1)),
         hub=_load_hub_config(hub),
-        ui=_load_ui_section(ui),
     )
 
 
@@ -221,7 +208,6 @@ def load_ui_config(path: Path = DEFAULT_UI_CONFIG, apps_root: Path = PATH_ROOT) 
     rag = raw.get("rag", {})
     control = raw.get("control", {})
     hub = server.get("hub", {})
-    ui = raw.get("ui", {})
     supertonic = (raw.get("tts", {}) or {}).get("supertonic", {}) or {}
     chat_models = _load_chat_model_names(server_models, apps_root)
 
@@ -236,13 +222,11 @@ def load_ui_config(path: Path = DEFAULT_UI_CONFIG, apps_root: Path = PATH_ROOT) 
         asr_model=_load_optional_model_name(server_models, "asr"),
         request=RequestConfig(
             max_tokens=int(request.get("max_tokens", 512)),
-            system_prompt=str(request.get("system_prompt", "") or ""),
         ),
         web=WebConfig(
             host=str(web.get("host", "0.0.0.0") or "0.0.0.0"),
             port=int(web.get("port", 5000)),
             https=_load_bool(web.get("https", True)),
-            headless=_load_bool(web.get("headless", False)),
             cors_origins=_load_cors_origins(web.get("cors_origins")),
         ),
         rag=_load_rag_config(rag, apps_root),
@@ -250,7 +234,6 @@ def load_ui_config(path: Path = DEFAULT_UI_CONFIG, apps_root: Path = PATH_ROOT) 
         catalog_dir=_load_optional_dir(server_models.get("catalog_dir"), apps_root),
         max_resident_chat_models=max(1, int(server_models.get("max_resident_chat_models", 1) or 1)),
         hub=_load_hub_config(hub),
-        ui=_load_ui_section(ui),
         supertonic=_load_supertonic_config(supertonic),
     )
 
@@ -569,13 +552,6 @@ def _load_hub_config(raw: object) -> HubConfig:
         orgs=orgs,
     )
 
-
-def _load_ui_section(raw: object) -> UIConfig:
-    ui = raw if isinstance(raw, dict) else {}
-    return UIConfig(
-        font_family=str(ui.get("font_family", "Inter") or "Inter").strip(),
-        font_size=int(ui.get("font_size", 15) or 15),
-    )
 
 
 def _load_optional_dir(value: object, apps_root: Path) -> Path | None:
