@@ -1,4 +1,4 @@
-# Profile: 48 x 720p @ 10 FPS (q1/i2/m1).
+# Profile: 60 x 720p @ 10 FPS (q1/i2/m1).
 # Relative model paths use this file; label paths use the Apps root.
 model:
   path: <model-path>
@@ -54,6 +54,18 @@ streams:
   - <rtsp-url-46>
   - <rtsp-url-47>
   - <rtsp-url-48>
+  - <rtsp-url-49>
+  - <rtsp-url-50>
+  - <rtsp-url-51>
+  - <rtsp-url-52>
+  - <rtsp-url-53>
+  - <rtsp-url-54>
+  - <rtsp-url-55>
+  - <rtsp-url-56>
+  - <rtsp-url-57>
+  - <rtsp-url-58>
+  - <rtsp-url-59>
+  - <rtsp-url-60>
 
 input:
   codec: h264                # h264/avc or h265/hevc.
@@ -83,5 +95,5 @@ output:
     host: <insight-host-ip>
     video_port_base: 9000
     metadata_port_base: 9100
-    max_visible_streams: 48
+    max_visible_streams: 60
   video_enabled: true

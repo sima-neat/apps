@@ -123,10 +123,10 @@ class TestConfigLoading:
             "max_inflight_total",
         ),
         [
-            ("config.yaml", 16, 0, 8, 2, "throughput-low-latency", 16, 1, 1, 8),
+            ("config.yaml", 20, 0, 8, 2, "throughput-low-latency", 16, 1, 1, 8),
             (
-                "config-24x720p20fps.yaml",
-                24,
+                "config-30x720p20fps.yaml",
+                30,
                 20,
                 16,
                 2,
@@ -134,11 +134,11 @@ class TestConfigLoading:
                 4,
                 2,
                 4,
-                24,
+                30,
             ),
             (
-                "config-48x720p10fps.yaml",
-                48,
+                "config-60x720p10fps.yaml",
+                60,
                 10,
                 4,
                 2,
@@ -189,9 +189,9 @@ class TestConfigLoading:
         assert not Path(raw["model"]["path"]).is_absolute()
         assert not Path(raw["model"]["labels"]).is_absolute()
 
-    def test_default_config_uses_16_streams_and_auto_fps(self):
+    def test_default_config_uses_20_streams_and_auto_fps(self):
         default = yaml.safe_load((COMMON_DIR / "config.yaml").read_text(encoding="utf-8"))
-        assert len(default["streams"]) == 16
+        assert len(default["streams"]) == 20
         assert default["input"]["fps"] == 0
         assert default["input"]["skip_rtsp_probe"] is False
 

@@ -1,4 +1,4 @@
-# Default profile: 16 x 720p at the input stream cadence.
+# Default profile: 20 x 720p at the input stream cadence.
 # Relative model paths use this file; label paths use the Apps root.
 model:
   path: <model-path>
@@ -22,6 +22,10 @@ streams:
   - <rtsp-url-14>
   - <rtsp-url-15>
   - <rtsp-url-16>
+  - <rtsp-url-17>
+  - <rtsp-url-18>
+  - <rtsp-url-19>
+  - <rtsp-url-20>
 
 input:
   codec: h264                # h264/avc or h265/hevc.
@@ -51,5 +55,5 @@ output:
     host: <insight-host-ip>
     video_port_base: 9000
     metadata_port_base: 9100
-    max_visible_streams: 16
+    max_visible_streams: 20
   video_enabled: true
