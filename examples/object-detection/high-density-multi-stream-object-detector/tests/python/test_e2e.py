@@ -1,4 +1,4 @@
-"""Run 16 real RTSP pipelines and verify Insight metadata and send throughput."""
+"""Run 20 real RTSP pipelines and verify Insight metadata and send throughput."""
 
 import json
 import os
@@ -51,7 +51,7 @@ def select_source(urls, codec):
 def validate_metadata_message(message, base_port):
     payload = json.loads(message.payload)
     index = message.port - base_port
-    assert 0 <= index < 16, "metadata arrived on an unexpected port"
+    assert 0 <= index < 20, "metadata arrived on an unexpected port"
     assert payload["type"] == "object-detection"
     assert isinstance(payload["data"]["objects"], list)
     assert payload["stream_index"] == index
@@ -70,7 +70,7 @@ def test_metadata_throughput(
     port = int(os.environ.get("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", "9100"))
     config = e2e_config_writer(
         {
-            "streams": [url] * 16,
+            "streams": [url] * 20,
             "input": {"codec": codec, "width": 1280, "height": 720, "fps": 0},
             "output": {
                 "video_enabled": True,
@@ -80,14 +80,14 @@ def test_metadata_throughput(
                     "video_port_base": int(
                         os.environ.get("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", "9000")
                     ),
-                    "max_visible_streams": 16,
+                    "max_visible_streams": 20,
                 },
             },
         }
     )
     start = time.monotonic()
     tracker = ReceivedMetadataTracker(
-        16,
+        20,
         100,
         5000,
         int(
@@ -106,7 +106,7 @@ def test_metadata_throughput(
     )
     receiver_failure = ""
     forced_kill = False
-    with MetadataJsonListener("127.0.0.1", port, num_ports=16) as listener:
+    with MetadataJsonListener("127.0.0.1", port, num_ports=20) as listener:
         process = subprocess.Popen(
             [
                 sys.executable,
@@ -190,5 +190,5 @@ def test_metadata_throughput(
         "per_stream_frames": tracker.measured_frames,
     }
     print(f"{codec}: {json.dumps(summary)}")
-    assert aggregate_fps > 450
+    assert aggregate_fps > 562.5
     assert min(tracker.measured_frames) / tracker.elapsed_s > 28.125
