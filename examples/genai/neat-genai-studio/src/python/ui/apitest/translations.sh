@@ -1,6 +1,6 @@
 #!/bin/bash
 # Translate speech in any language into English text through the Studio's
-# OpenAI-compatible endpoint (POST /v1/audio/translations on the web UI port;
+# OpenAI-compatible endpoint (POST /v1/audio/translations on the backend port;
 # the Studio proxies it to the active Whisper model's translate task).
 #
 # Usage:

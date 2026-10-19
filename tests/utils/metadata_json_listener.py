@@ -25,6 +25,7 @@ class MetadataJsonResult:
     ports_with_valid_json: set[int] = field(default_factory=set)
     messages: list[MetadataJsonMessage] = field(default_factory=list)
     error: str = ""
+    timed_out: bool = False
 
 
 _CHUNK_MAGIC = 0x4E
@@ -164,6 +165,44 @@ class MetadataJsonListener:
     def __exit__(self, exc_type, exc, tb) -> None:
         self.close()
 
+    def drain_pending(self) -> MetadataJsonResult:
+        """Drain and validate queued datagrams without waiting for new input."""
+        ports_with_valid_json: set[int] = set()
+        messages: list[MetadataJsonMessage] = []
+        last_error = ""
+        for sock in self._sockets:
+            while True:
+                try:
+                    datagram, _ = sock.recvfrom(65536)
+                except BlockingIOError:
+                    break
+                except InterruptedError:
+                    continue
+                payload, error = self._reassemblers[sock].accept(datagram)
+                if payload is None:
+                    if error:
+                        last_error = error
+                    continue
+                message, error = self._parse_message(self._sockets[sock], payload)
+                if message is None:
+                    last_error = error
+                    continue
+                messages.append(message)
+                if message.object_count < self._min_object_count:
+                    last_error = (
+                        f"data.{self._data_array_key} contains {message.object_count} objects; "
+                        f"expected at least {self._min_object_count}"
+                    )
+                    continue
+                ports_with_valid_json.add(message.port)
+            self._reassemblers[sock] = _MetadataReassembler()
+        return MetadataJsonResult(
+            success=not last_error,
+            ports_with_valid_json=ports_with_valid_json,
+            messages=messages,
+            error=last_error,
+        )
+
     def wait_for_messages(self, timeout_s: float) -> MetadataJsonResult:
         ports_with_valid_json: set[int] = set()
         messages: list[MetadataJsonMessage] = []
@@ -194,12 +233,25 @@ class MetadataJsonListener:
                     continue
                 ports_with_valid_json.add(port)
                 if self._success_reached(ports_with_valid_json):
-                    return MetadataJsonResult(True, ports_with_valid_json, messages)
+                    error = "" if last_error == "metadata timeout" else last_error
+                    return MetadataJsonResult(
+                        success=True,
+                        ports_with_valid_json=ports_with_valid_json,
+                        messages=messages,
+                        error=error,
+                    )
 
         missing = sorted(set(self._sockets.values()) - ports_with_valid_json)
+        timed_out = last_error == "metadata timeout"
         if missing:
             last_error = f"missing metadata on ports {missing}; last_error={last_error}"
-        return MetadataJsonResult(False, ports_with_valid_json, messages, last_error)
+        return MetadataJsonResult(
+            success=False,
+            ports_with_valid_json=ports_with_valid_json,
+            messages=messages,
+            error=last_error,
+            timed_out=timed_out,
+        )
 
     def _success_reached(self, ports_with_valid_json: set[int]) -> bool:
         if self._require_all_ports:

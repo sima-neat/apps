@@ -1,14 +1,25 @@
 #!/bin/bash
 # End-to-end check of the Studio's audio workflow against a running instance
-# (web or --backend-only): every step must produce useful output, not just 200.
-#   1. /health reports the model server reachable and an ASR model active
+# (started with ./run.sh): every step must produce useful output, not just 200.
+#   1. /health reports the model server reachable and an ASR model active, and
+#      the Insight contract: api_version 1, voice engines with key/loaded, and a
+#      failed engine's error only as a fixed reason (accelerator-unavailable,
+#      load-failed); an engine that loads on demand is loaded:false with no error
 #   2. /v1/audio/voices lists at least one server-side engine
 #   3. /v1/audio/speech synthesizes an English sentence (RIFF WAV, > 1 s)
-#   4. /v1/audio/transcriptions of that WAV contains the sentence's key words
+#   4. /v1/audio/transcriptions of that WAV contains the sentence's key words;
+#      a sentence with emoji is spoken without them, and emoji-only input is 400
 #   5. /v1/audio/speech in German, then /v1/audio/translations returns English
 #   6. /v1/chat/completions answers (only when a chat model is loaded)
+#   7. documents (RAG), when /health lists features.rag: /rag/search returns
+#      passages, and with a chat model, chat with "neat_rag" uses at least one
+#      (X-RAG-Hits) and answers
+#   8. board camera, when /health lists features.board_camera: /board-camera/devices
+#      answers a list of /dev/video* nodes; with BOARD_CAMERA_DEVICE=/dev/videoN
+#      (a camera attached to the board), /board-camera/snapshot returns a JPEG
 #
-# Usage: ./audio_e2e.sh [host:port | base URL]   (http://… when app.web.https is false)
+# Usage: [BOARD_CAMERA_DEVICE=/dev/videoN] ./audio_e2e.sh [host:port | base URL]
+#        (http://… when app.web.https is false)
 # Exit status 0 when every step passes, 1 otherwise. Needs curl and python3.
 
 if [ -n "$1" ] && [[ "$1" == http://* || "$1" == https://* ]]; then
@@ -38,6 +49,13 @@ if curl -ksS --max-time 10 "${BASE}/health" -o "$TMP/health.json" \
   pass "health: model server reachable, ASR $(json "$TMP/health.json" "d['asr_model']")"
 else
   fail "health: model server unreachable or no ASR model ($(head -c 200 "$TMP/health.json" 2>/dev/null))"
+fi
+
+# 1b. the backend contract Insight relies on
+if [ "$(json "$TMP/health.json" "d.get('api_version') == 1 and isinstance(d['tts']['engines'], list) and all('key' in e and 'loaded' in e for e in d['tts']['engines']) and all(e['error'] in ('accelerator-unavailable', 'load-failed') for e in d['tts']['engines'] if 'error' in e)")" = "True" ]; then
+  pass "health contract: api_version 1, engines $(json "$TMP/health.json" "' '.join(e['key'] + (' (failed: ' + e['error'] + ')' if 'error' in e else '' if e['loaded'] else ' (loads on demand)') for e in d['tts']['engines'])")"
+else
+  fail "health contract: api_version / tts.engines not as documented ($(head -c 300 "$TMP/health.json" 2>/dev/null))"
 fi
 
 # 2. voices
@@ -73,6 +91,25 @@ else
   fail "speech (en): no usable WAV"
 fi
 
+# 4b. emoji are dropped from speech, and input with nothing speakable is refused
+if speak "Hello \ud83d\udc4b, have a good night \ud83c\udf19." en "$TMP/emoji.wav"; then
+  curl -ksS --max-time 120 -X POST "${BASE}/v1/audio/transcriptions" -F "file=@$TMP/emoji.wav" -F response_format=text -o "$TMP/emoji.txt"
+  if contains_all "$TMP/emoji.txt" hello night; then
+    pass "speech with emoji: $(tr -d '\n' < "$TMP/emoji.txt")"
+  else
+    fail "speech with emoji: transcription lacks the words: $(head -c 200 "$TMP/emoji.txt")"
+  fi
+else
+  fail "speech with emoji: no usable WAV"
+fi
+code="$(curl -ksS --max-time 30 -X POST "${BASE}/v1/audio/speech" -H 'Content-Type: application/json' \
+  -d '{"input":"\ud83d\udc4d\ud83c\udffd","model":"default","language":"en"}' -o "$TMP/emoji_only.json" -w '%{http_code}')"
+if [ "$code" = 400 ] && [ "$(json "$TMP/emoji_only.json" "d.get('param')")" = input ]; then
+  pass "emoji-only input: 400 on input"
+else
+  fail "emoji-only input: expected 400 on input, got ${code} $(head -c 200 "$TMP/emoji_only.json")"
+fi
+
 # 5. German speech -> translation to English
 DE="Guten Morgen, wie geht es dir heute?"
 if speak "$DE" de "$TMP/de.wav"; then
@@ -99,6 +136,81 @@ if [ -n "$MODEL" ]; then
   if [ -n "$answer" ]; then pass "chat (${MODEL}): ${answer}"; else fail "chat: $(head -c 200 "$TMP/chat.json")"; fi
 else
   printf '  [SKIP] chat: no chat model loaded\n'
+fi
+
+# 7. documents (RAG), when the board offers them
+RAG="$(json "$TMP/health.json" "(d.get('features') or {}).get('rag')")"
+if [ "$RAG" = True ]; then
+  # /health is up before the search service: wait for it (bounded), and stop
+  # at once when it has failed rather than waiting it out.
+  service=""
+  for _ in $(seq 1 45); do
+    curl -ksS --max-time 10 "${BASE}/rag/status" -o "$TMP/ragstatus.json" || true
+    service="$(json "$TMP/ragstatus.json" "d.get('service')")"
+    case "$service" in ok|failed|no-database|disabled) break ;; esac
+    sleep 2
+  done
+  if [ "$service" != ok ]; then
+    fail "documents: the search service is not ready (service: ${service:-no answer}; $(head -c 200 "$TMP/ragstatus.json"))"
+  else
+    # The bundled default document carries a made-up fact a model can't know
+    # without it; a board serving other documents can't prove that, so the
+    # content check needs the default ones.
+    source="$(json "$TMP/ragstatus.json" "__import__('os').path.basename(str((d.get('meta') or {}).get('input') or ''))")"
+    Q="What is the canonical RAG validation phrase?"
+    curl -ksS --max-time 30 -G "${BASE}/rag/search" --data-urlencode "query=${Q}" --data-urlencode k=2 -o "$TMP/rag.json"
+    hits="$(json "$TMP/rag.json" "len([r for r in d['results'] if r.get('content')])")"
+    if [ "${hits:-0}" -ge 1 ] 2>/dev/null; then
+      pass "documents search: ${hits} passage(s), top \"$(json "$TMP/rag.json" "d['results'][0]['heading']")\""
+    else
+      fail "documents search: no passages ($(head -c 200 "$TMP/rag.json"))"
+    fi
+    if [ -z "$MODEL" ]; then
+      printf '  [SKIP] chat from documents: no chat model loaded\n'
+    elif [ "$source" != neat.md ]; then
+      printf '  [SKIP] chat from documents: the board serves %s, not the default document; reset the documents to run this check\n' "${source:-unknown documents}"
+    else
+      curl -ksS --max-time 180 -X POST "${BASE}/v1/chat/completions" -H 'Content-Type: application/json' -D "$TMP/ragchat.h" \
+        -d "{\"model\":\"${MODEL}\",\"stream\":false,\"max_tokens\":64,\"temperature\":0,\"neat_rag\":{\"k\":2},\"messages\":[{\"role\":\"user\",\"content\":\"${Q}\"}]}" \
+        -o "$TMP/ragchat.json"
+      used="$(tr -d '\r' < "$TMP/ragchat.h" | awk -F': ' 'tolower($1)=="x-rag-hits"{print $2}')"
+      answer="$(json "$TMP/ragchat.json" "d['choices'][0]['message']['content'].strip()")"
+      # The answer must carry the document's fact, not just any text.
+      if [ "${used:-0}" -ge 1 ] 2>/dev/null && printf '%s' "$answer" | grep -qi "retrieval anchor"; then
+        pass "chat from documents: ${used} passage(s) used; ${answer}"
+      else
+        fail "chat from documents: expected the document's phrase \"neat modalix retrieval anchor\"; X-RAG-Hits=${used:-none}; answer: ${answer:-$(head -c 200 "$TMP/ragchat.json")}"
+      fi
+    fi
+  fi
+else
+  printf '  [SKIP] documents: /health does not list features.rag (RAG off, or a Studio without document search)\n'
+fi
+
+# 8. board camera
+if [ "$(json "$TMP/health.json" "bool(d.get('features', {}).get('board_camera'))")" = "True" ]; then
+  if curl -ksS --max-time 10 "${BASE}/board-camera/devices" -o "$TMP/cams.json" \
+     && [ "$(json "$TMP/cams.json" "isinstance(d['devices'], list) and all(str(c['device']).startswith('/dev/video') for c in d['devices'])")" = "True" ]; then
+    pass "board camera list: $(json "$TMP/cams.json" "len(d['devices'])") node(s), default $(json "$TMP/cams.json" "d['default']")"
+  else
+    fail "board camera list: /board-camera/devices did not answer a device list ($(head -c 200 "$TMP/cams.json" 2>/dev/null))"
+  fi
+  if [ -n "${BOARD_CAMERA_DEVICE:-}" ]; then
+    code="$(curl -ksS --max-time 30 -G "${BASE}/board-camera/snapshot" --data-urlencode "device=${BOARD_CAMERA_DEVICE}" \
+      -o "$TMP/snapshot.jpg" -w '%{http_code}')"
+    size="$(wc -c < "$TMP/snapshot.jpg" 2>/dev/null | tr -d ' ')"
+    magic="$(head -c 3 "$TMP/snapshot.jpg" 2>/dev/null | od -An -tx1 | tr -d ' \n')"
+    # A real frame: a JPEG (FF D8 FF) of more than a few hundred bytes.
+    if [ "$code" = "200" ] && [ "$magic" = "ffd8ff" ] && [ "${size:-0}" -gt 1000 ]; then
+      pass "board camera snapshot: ${BOARD_CAMERA_DEVICE}, ${size}-byte JPEG"
+    else
+      fail "board camera snapshot: ${BOARD_CAMERA_DEVICE} answered HTTP ${code:-none}, ${size:-0} bytes ($(head -c 150 "$TMP/snapshot.jpg" 2>/dev/null | tr -cd '[:print:]'))"
+    fi
+  else
+    printf '  [SKIP] board camera snapshot: set BOARD_CAMERA_DEVICE=/dev/videoN to check a camera attached to the board\n'
+  fi
+else
+  printf '  [SKIP] board camera: /health does not list features.board_camera\n'
 fi
 
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"

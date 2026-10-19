@@ -22,13 +22,15 @@ class BackendPathTests(unittest.TestCase):
         for path in ("/", "/health", "/v1/chat/completions", "/v1/audio/speech",
                      "/v1/audio/translations", "/audio/transcriptions", "/models/status",
                      "/models/load", "/benchmark/run", "/tts/engine", "/voices",
-                     "/voices/select", "/supertonic/voice", "/piperplus/voices", "/shutdown"):
+                     "/voices/select", "/supertonic/voice", "/piperplus/voices", "/shutdown",
+                     "/rag/status", "/rag/inspect", "/rag/search", "/rag/upload", "/rag/reset", "/rag/clear",
+                     "/board-camera/devices", "/board-camera/snapshot"):
             self.assertTrue(path_allowed(path), path)
 
-    def test_web_ui_and_studio_chat_are_not(self):
-        for path in ("/playground/", "/playground/index.html", "/solutions/", "/showcase",
+    def test_removed_web_ui_routes_are_not(self):
+        for path in ("/favicon.ico", "/playground/", "/playground/index.html", "/solutions/", "/showcase",
                      "/config.js", "/static/newui.js", "/upload", "/stop", "/clear-history",
-                     "/upload-to-rag", "/rag/inspect", "/board-camera/devices", "/voicesx",
+                     "/upload-to-rag", "/reset-rag", "/clear-rag", "/raghealth", "/board-camerax", "/voicesx",
                      "/v1", "/modelsx"):
             self.assertFalse(path_allowed(path), path)
 
@@ -37,6 +39,7 @@ class BackendPathTests(unittest.TestCase):
         self.assertFalse(cors_path("/"))
         self.assertTrue(cors_path("/v1/audio/speech"))
         self.assertTrue(cors_path("/health"))
+        self.assertTrue(cors_path("/rag/upload"))
 
 
 class CorsPolicyTests(unittest.TestCase):
@@ -91,6 +94,30 @@ class HealthPayloadTests(unittest.TestCase):
         self.assertTrue(body["model_server"]["reachable"])
         self.assertEqual(body["asr_model"], "whisper-small-a16w8")
         self.assertEqual(body["chat_models_loaded"], ["Gemma"])
+        self.assertEqual([e["key"] for e in body["tts"]["engines"]], ["supertonic", "piper-tts"])
+
+    def test_reports_the_api_version(self):
+        body = health_payload(mode="backend-only", version="1.2", status=self.STATUS, engines=self.ENGINES)
+        self.assertEqual(body["api_version"], 1)
+
+    def test_lists_optional_features(self):
+        on = health_payload(mode="backend-only", version="1.2", status=self.STATUS, engines=self.ENGINES, rag_enabled=True)
+        self.assertEqual(on["features"], {"rag": True, "benchmark": True, "board_camera": True})
+        off = health_payload(mode="backend-only", version="1.2", status=self.STATUS, engines=self.ENGINES)
+        self.assertFalse(off["features"]["rag"])
+        self.assertEqual(off["api_version"], 1, "adding features is not a breaking change")
+
+    def test_lists_an_engine_that_failed_to_load_with_its_error(self):
+        engines = [{"key": "piper-tts", "loaded": True}, {"key": "browser", "loaded": True}]
+        body = health_payload(mode="backend-only", version="1.2", status=self.STATUS, engines=engines,
+                              engine_failures={"supertonic": "accelerator-unavailable"})
+        self.assertIn({"key": "supertonic", "loaded": False, "error": "accelerator-unavailable"},
+                      body["tts"]["engines"])
+        self.assertTrue(body["ok"])  # the model server is fine; one voice engine is not
+
+    def test_an_engine_that_loaded_is_not_also_listed_as_failed(self):
+        body = health_payload(mode="studio", version="1.2", status=self.STATUS, engines=self.ENGINES,
+                              engine_failures={"supertonic": "stale"})
         self.assertEqual([e["key"] for e in body["tts"]["engines"]], ["supertonic", "piper-tts"])
 
     def test_unreachable(self):
