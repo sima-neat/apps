@@ -407,7 +407,8 @@ std::optional<bool> parse_yaml_bool(const std::string& text) {
   return std::nullopt;
 }
 
-std::string unquote_yaml_key(const std::string& key); // defined below
+std::string unquote_yaml_key(const std::string& key);    // defined below
+std::string strip_yaml_comment(const std::string& line); // defined below
 
 // ScalarConfig unquotes values but not keys, so a quoted section or profile
 // name is stored with its quotes and `models.m.path` misses entirely. PyYAML
@@ -773,6 +774,75 @@ std::vector<std::string> split_csv(const std::string& value) {
 // scanning the raw scalar map. The profile name is everything before the final
 // ".<field>", so a declared name containing '.' surfaces intact and can be rejected
 // with a clear message instead of being silently truncated.
+// Items of a block sequence under `parent: / key:`, in file order.
+//
+// ScalarConfig drops block-sequence entries outright (it skips any line opening
+// with "- "), so a perfectly ordinary
+//
+//     output_format:
+//       - html
+//       - json
+//
+// reached C++ as nothing at all while PyYAML gave Python the full list - the
+// two entrypoints silently ran different configurations, which is the failure
+// this application exists to avoid. The flow form `[html, json]` survives
+// ScalarConfig as text and is handled by config_formats; this covers the block
+// form, which has to come from the file itself.
+std::vector<std::string> block_sequence_items(const fs::path& config_path,
+                                              const std::string& parent_key,
+                                              const std::string& key) {
+  std::ifstream in(config_path);
+  if (!in.is_open())
+    return {};
+
+  std::vector<std::string> items;
+  std::string raw_line;
+  bool in_parent = false;
+  int parent_indent = -1;
+  int key_indent = -1;
+  while (std::getline(in, raw_line)) {
+    const std::string trimmed = strip_yaml_comment(raw_line);
+    if (trimmed.empty())
+      continue;
+    int indent = 0;
+    while (indent < static_cast<int>(raw_line.size()) &&
+           (raw_line[static_cast<size_t>(indent)] == ' ' ||
+            raw_line[static_cast<size_t>(indent)] == '\t'))
+      ++indent;
+
+    if (key_indent >= 0) {
+      // YAML allows a block sequence's entries at the key's own indent as well
+      // as deeper, and yaml.safe_dump - which writes the configs the tests
+      // generate - uses the same-indent form. Requiring deeper indentation read
+      // nothing from exactly the spelling most tools emit.
+      if (indent >= key_indent && trimmed.rfind("- ", 0) == 0) {
+        items.push_back(sima_examples::trim_copy(trimmed.substr(2)));
+        continue;
+      }
+      break; // the sequence ended
+    }
+    if (!in_parent) {
+      if (indent == 0 && unquote_yaml_key(trimmed.substr(0, trimmed.find(':'))) == parent_key) {
+        in_parent = true;
+        parent_indent = indent;
+      }
+      continue;
+    }
+    if (indent <= parent_indent)
+      break; // left the parent mapping without finding the key
+    const auto colon = find_key_colon(trimmed);
+    if (colon == std::string::npos)
+      continue;
+    if (unquote_yaml_key(sima_examples::trim_copy(trimmed.substr(0, colon))) != key)
+      continue;
+    // Only a key with no inline value can open a block sequence.
+    if (!sima_examples::trim_copy(trimmed.substr(colon + 1)).empty())
+      break;
+    key_indent = indent;
+  }
+  return items;
+}
+
 const std::array<const char*, 3> kReportFormats = {"html", "json", "csv"};
 
 // Which report files to write, defaulting to html alone.
@@ -787,11 +857,23 @@ const std::array<const char*, 3> kReportFormats = {"html", "json", "csv"};
 // Returned in kReportFormats order, not the order written, so the value behaves
 // as a set and both entrypoints iterate it identically.
 std::vector<std::string> config_formats(const sima_examples::ScalarConfig& raw,
-                                        const std::string& key) {
+                                        const std::string& key, const fs::path& config_path) {
   const auto value = config_scalar(raw, key);
-  if (!value.has_value())
-    return {"html"};
-  std::string text = sima_examples::trim_copy(*value);
+  std::string text;
+  if (value.has_value()) {
+    text = sima_examples::trim_copy(*value);
+  } else {
+    // Either absent, or written as a block sequence that ScalarConfig dropped.
+    const auto dot = key.find('.');
+    const auto items =
+        dot == std::string::npos
+            ? std::vector<std::string>{}
+            : block_sequence_items(config_path, key.substr(0, dot), key.substr(dot + 1));
+    if (items.empty())
+      return {"html"};
+    for (std::size_t i = 0; i < items.size(); ++i)
+      text += (i ? "," : "") + items[i];
+  }
   if (text.size() >= 2 && text.front() == '[' && text.back() == ']')
     text = text.substr(1, text.size() - 2);
 
@@ -2461,7 +2543,8 @@ int main(int argc, char** argv) {
         "https://raw.githubusercontent.com/EliSchwartz/imagenet-sample-images/master/"
         "n01443537_goldfish.JPEG");
     auto extensions = split_csv(config_scalar_or(raw, "io.extensions", ".jpg,.jpeg,.png,.bmp"));
-    const std::vector<std::string> formats = config_formats(raw, "io.output_format");
+    const std::vector<std::string> formats =
+        config_formats(raw, "io.output_format", args.config_path);
     if (extensions.empty())
       extensions.assign(kDefaultExtensions.begin(), kDefaultExtensions.end());
     const fs::path output_dir =

@@ -1,4 +1,14 @@
 // Unit test for image-classification-explorer: validates CLI arg handling.
+//
+// Configuration-error cases are deliberately NOT here. The failure matrix in
+// tests/python/test_e2e.py (test_cpp_and_python_fail_identically) runs each one
+// against *both* entrypoints and compares the exit code and the message text,
+// which is strictly more than a C++-only check of the same input proves - and
+// the divergences found on this application were message-level, not exit-code
+// level. What remains here is what the matrix structurally cannot cover:
+// publication and ownership behaviour, which needs a completed run; positive
+// cases, since the matrix holds only failures; cross-language digests; argument
+// handling that is not expressible as a config file; and the packaged layout.
 #include "support/testing/test_process.h"
 
 #include <chrono>
@@ -82,21 +92,6 @@ int main(int argc, char** argv) {
     }
   }
 
-  // Test 2: a missing config file produces a nonzero exit.
-  {
-    auto r = spawn_and_wait(binary, {"--config", "/nonexistent/config.yaml"}, 20000);
-    // 2 is the configuration-error code the Python entrypoint uses.
-    if (r.exit_code != 2 || r.stderr_text.find("Invalid configuration") == std::string::npos) {
-      std::cerr << "[FAIL] missing config: expected exit 2 and an \"Invalid configuration\" "
-                   "message, got "
-                << r.exit_code << "\nstderr:\n"
-                << r.stderr_text << "\n";
-      ++failures;
-    } else {
-      std::cout << "[OK] missing config produced a configuration error (exit 2)\n";
-    }
-  }
-
   // Test 3: an unrecognized flag produces a nonzero exit.
   {
     auto r = spawn_and_wait(binary, {"--bogus"}, 20000);
@@ -107,32 +102,6 @@ int main(int argc, char** argv) {
       ++failures;
     } else {
       std::cout << "[OK] unknown flag produced a usage error (exit 2)\n";
-    }
-  }
-
-  // Test 4: an empty profile must be rejected instead of silently ignored.
-  {
-    namespace fs = std::filesystem;
-    const auto config_path =
-        fs::temp_directory_path() /
-        ("image-classification-explorer-empty-profile-" +
-         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".yaml");
-    {
-      std::ofstream config(config_path);
-      config << "models:\n"
-             << "  valid:\n"
-             << "    path: valid-model.tar.gz\n"
-             << "  bad: {}\n";
-    }
-    auto r = spawn_and_wait(binary, {"--config", config_path.string()}, 20000);
-    fs::remove(config_path);
-    if (r.exit_code == 0 ||
-        r.stderr_text.find("models.bad.path is required") == std::string::npos) {
-      std::cerr << "[FAIL] empty profile: expected required-path error, got exit " << r.exit_code
-                << "\n";
-      ++failures;
-    } else {
-      std::cout << "[OK] empty model profile was rejected\n";
     }
   }
 
@@ -212,34 +181,6 @@ int main(int argc, char** argv) {
     }
     fs::permissions(locked_dir, fs::perms::owner_all);
     fs::remove_all(locked_dir);
-  }
-
-  // Test 7: a profile name containing '.' is rejected with a clear message instead
-  // of being truncated to a nonexistent profile.
-  {
-    namespace fs = std::filesystem;
-    const auto config_path =
-        fs::temp_directory_path() /
-        ("image-classification-explorer-dotted-name-" +
-         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".yaml");
-    {
-      std::ofstream config(config_path);
-      config << "models:\n"
-             << "  resnet.v2:\n"
-             << "    path: /nonexistent/resnet_v2.tar.gz\n";
-    }
-    auto r = spawn_and_wait(binary, {"--config", config_path.string()}, 20000);
-    fs::remove(config_path);
-    if (r.exit_code == 0 ||
-        r.stderr_text.find("models.resnet.v2: profile names may only contain") ==
-            std::string::npos) {
-      std::cerr << "[FAIL] dotted profile name: expected rejection, got exit " << r.exit_code
-                << "\nstderr:\n"
-                << r.stderr_text << "\n";
-      ++failures;
-    } else {
-      std::cout << "[OK] dotted model profile name was rejected\n";
-    }
   }
 
   // Test 8: output_dir is replaced as a whole, so a directory holding anything
@@ -441,39 +382,6 @@ int main(int argc, char** argv) {
     fs::remove_all(work);
   }
 
-  // Test 9: a blank line inside the first num_classes label-map lines is rejected
-  // instead of silently shifting every later class id.
-  {
-    namespace fs = std::filesystem;
-    const auto stamp = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
-    const auto labels_path =
-        fs::temp_directory_path() / ("image-classification-explorer-labels-" + stamp + ".txt");
-    const auto config_path =
-        fs::temp_directory_path() / ("image-classification-explorer-labels-" + stamp + ".yaml");
-    {
-      std::ofstream(labels_path) << "cat\n\nbird\ndog\n";
-    }
-    {
-      std::ofstream config(config_path);
-      config << "models:\n"
-             << "  m:\n"
-             << "    path: /nonexistent/m.tar.gz\n"
-             << "    num_classes: 3\n"
-             << "    label_map: " << labels_path.string() << "\n";
-    }
-    auto r = spawn_and_wait(binary, {"--config", config_path.string()}, 20000);
-    fs::remove(config_path);
-    fs::remove(labels_path);
-    if (r.exit_code == 0 || r.stderr_text.find("line 2 is blank") == std::string::npos) {
-      std::cerr << "[FAIL] blank label line: expected rejection, got exit " << r.exit_code
-                << "\nstderr:\n"
-                << r.stderr_text << "\n";
-      ++failures;
-    } else {
-      std::cout << "[OK] blank label-map line was rejected\n";
-    }
-  }
-
   // Test 10: a quoted YAML profile key must be reported without its quotes, so
   // C++ metadata matches what Python's YAML loader produces.
   {
@@ -499,95 +407,6 @@ int main(int argc, char** argv) {
     } else {
       std::cout << "[OK] quoted YAML profile key was unquoted\n";
     }
-  }
-
-  // Test 11: a missing custom label map whose basename matches the bundled one
-  // must be rejected rather than silently loading the shipped ImageNet map.
-  {
-    namespace fs = std::filesystem;
-    const auto stamp = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
-    const auto config_path =
-        fs::temp_directory_path() / ("image-classification-explorer-labelmap-" + stamp + ".yaml");
-    const auto missing =
-        fs::temp_directory_path() / ("no-such-dir-" + stamp) / "imagenet_labels.txt";
-    {
-      std::ofstream config(config_path);
-      config << "models:\n"
-             << "  m:\n"
-             << "    path: /nonexistent/m.tar.gz\n"
-             << "    label_map: " << missing.string() << "\n";
-    }
-    auto r = spawn_and_wait(binary, {"--config", config_path.string()}, 20000);
-    fs::remove(config_path);
-    if (r.exit_code == 0 || r.stderr_text.find("failed to open label map") == std::string::npos) {
-      std::cerr << "[FAIL] missing custom label map: expected rejection, got exit " << r.exit_code
-                << "\nstderr:\n"
-                << r.stderr_text << "\n";
-      ++failures;
-    } else {
-      std::cout << "[OK] missing custom label map was rejected\n";
-    }
-  }
-
-  // Test 13: a profile name containing a colon cannot be addressed through the
-  // config keys, so it must be rejected by its real name rather than silently
-  // truncated at the first colon.
-  {
-    namespace fs = std::filesystem;
-    const auto config_path =
-        fs::temp_directory_path() /
-        ("image-classification-explorer-colon-name-" +
-         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".yaml");
-    {
-      std::ofstream config(config_path);
-      config << "models:\n"
-             << "  \"resnet:50\":\n"
-             << "    path: /nonexistent/resnet_50.tar.gz\n";
-    }
-    auto r = spawn_and_wait(binary, {"--config", config_path.string()}, 20000);
-    fs::remove(config_path);
-    if (r.exit_code == 0 ||
-        r.stderr_text.find("models.resnet:50: profile names may only contain") ==
-            std::string::npos) {
-      std::cerr << "[FAIL] colon profile name: expected rejection naming resnet:50, got exit "
-                << r.exit_code << "\nstderr:\n"
-                << r.stderr_text << "\n";
-      ++failures;
-    } else {
-      std::cout << "[OK] colon in a model profile name was rejected by its real name\n";
-    }
-  }
-
-  // Test 14: unquoted YAML scalars that are not strings (bool, null, integers in
-  // any spelling) must be rejected, because PyYAML turns them into Python
-  // objects whose text differs from the raw spelling C++ reads.
-  {
-    namespace fs = std::filesystem;
-    const char* const kNonStringKeys[] = {"true", "null", "01", "1_0",
-                                          "0x1",  "-1",   "+2", "2026-09-22"};
-    for (const auto* key : kNonStringKeys) {
-      const auto config_path =
-          fs::temp_directory_path() /
-          ("image-classification-explorer-nonstring-" + std::string(key) + "-" +
-           std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".yaml");
-      {
-        std::ofstream config(config_path);
-        config << "models:\n"
-               << "  " << key << ":\n"
-               << "    path: /nonexistent/m.tar.gz\n";
-      }
-      auto r = spawn_and_wait(binary, {"--config", config_path.string()}, 20000);
-      fs::remove(config_path);
-      if (r.exit_code == 0 ||
-          r.stderr_text.find("is not a string; quote it in config.yaml") == std::string::npos) {
-        std::cerr << "[FAIL] unquoted non-string key '" << key << "': expected rejection, got exit "
-                  << r.exit_code << "\nstderr:\n"
-                  << r.stderr_text << "\n";
-        ++failures;
-      }
-    }
-    if (failures == 0)
-      std::cout << "[OK] unquoted non-string profile names were rejected\n";
   }
 
   // Test 15: the same names are accepted when quoted, which makes them strings
@@ -619,67 +438,6 @@ int main(int argc, char** argv) {
     }
   }
 
-  // Test 16: a non-integral scalar must be rejected rather than truncated, so
-  // both entrypoints run the same settings.
-  {
-    namespace fs = std::filesystem;
-    const auto config_path =
-        fs::temp_directory_path() /
-        ("image-classification-explorer-float-topk-" +
-         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".yaml");
-    {
-      std::ofstream config(config_path);
-      config << "models:\n"
-             << "  m:\n"
-             << "    path: /nonexistent/m.tar.gz\n"
-             << "    top_k: 1.9\n";
-    }
-    auto r = spawn_and_wait(binary, {"--config", config_path.string()}, 20000);
-    fs::remove(config_path);
-    // "nonzero" would also be satisfied by the missing model archive, so check
-    // that the configuration itself was rejected, with the code Python uses.
-    if (r.exit_code != 2 ||
-        r.stderr_text.find("models.m.top_k must be an integer") == std::string::npos) {
-      std::cerr << "[FAIL] non-integral top_k: expected exit 2 naming top_k, got " << r.exit_code
-                << "\nstderr:\n"
-                << r.stderr_text << "\n";
-      ++failures;
-    } else {
-      std::cout << "[OK] non-integral top_k was rejected\n";
-    }
-  }
-
-  // Test 19: a zero or negative per-image timeout is not a usable bound.
-  {
-    namespace fs = std::filesystem;
-    for (const char* timeout : {"0", "-1"}) {
-      const auto config_path =
-          fs::temp_directory_path() /
-          ("image-classification-explorer-timeout-" +
-           std::string(timeout == std::string("0") ? "zero" : "negative") + "-" +
-           std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".yaml");
-      {
-        std::ofstream config(config_path);
-        config << "runtime:\n"
-               << "  timeout_ms: " << timeout << "\n"
-               << "models:\n"
-               << "  m:\n"
-               << "    path: /nonexistent/m.tar.gz\n";
-      }
-      auto r = spawn_and_wait(binary, {"--config", config_path.string()}, 20000);
-      fs::remove(config_path);
-      if (r.exit_code == 0 ||
-          r.stderr_text.find("runtime.timeout_ms must be positive") == std::string::npos) {
-        std::cerr << "[FAIL] timeout_ms " << timeout << ": expected rejection, got exit "
-                  << r.exit_code << "\nstderr:\n"
-                  << r.stderr_text << "\n";
-        ++failures;
-      }
-    }
-    if (failures == 0)
-      std::cout << "[OK] non-positive runtime.timeout_ms was rejected\n";
-  }
-
   // Test 23: the thumbnail digest must match Python's, so both implementations
   // name thumbnails identically and neither renames them between runs.
   {
@@ -697,63 +455,6 @@ int main(int argc, char** argv) {
       ++failures;
     } else {
       std::cout << "[OK] thumbnail digest matches the Python implementation\n";
-    }
-  }
-
-  // Test 24: a malformed validation block is rejected during configuration
-  // loading, not after the report has been written.
-  {
-    namespace fs = std::filesystem;
-    const auto config_path =
-        fs::temp_directory_path() /
-        ("image-classification-explorer-validation-" +
-         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".yaml");
-    {
-      std::ofstream config(config_path);
-      config << "validation:\n"
-             << "  expected_class_id: abc\n"
-             << "models:\n"
-             << "  m:\n"
-             << "    path: /nonexistent/m.tar.gz\n";
-    }
-    auto r = spawn_and_wait(binary, {"--config", config_path.string()}, 20000);
-    fs::remove(config_path);
-    if (r.exit_code == 0 || r.stderr_text.find("validation.expected_class_id must be an integer") ==
-                                std::string::npos) {
-      std::cerr << "[FAIL] malformed validation: expected rejection, got exit " << r.exit_code
-                << "\nstderr:\n"
-                << r.stderr_text << "\n";
-      ++failures;
-    } else {
-      std::cout << "[OK] malformed validation.expected_class_id was rejected up front\n";
-    }
-  }
-
-  // Test 25: an unreadable input path is an input error (exit 3), the code the
-  // Python entrypoint uses, not a generic runtime failure.
-  {
-    namespace fs = std::filesystem;
-    const auto config_path =
-        fs::temp_directory_path() /
-        ("image-classification-explorer-missing-input-" +
-         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".yaml");
-    {
-      std::ofstream config(config_path);
-      config << "io:\n"
-             << "  output_format: [html, json, csv]\n"
-             << "  input: /nonexistent/directory/of/images\n"
-             << "models:\n"
-             << "  m:\n"
-             << "    path: /nonexistent/m.tar.gz\n";
-    }
-    auto r = spawn_and_wait(binary, {"--config", config_path.string()}, 20000);
-    fs::remove(config_path);
-    if (r.exit_code != 3 || r.stderr_text.find("input path does not exist") == std::string::npos) {
-      std::cerr << "[FAIL] missing input: expected exit 3, got " << r.exit_code << "\nstderr:\n"
-                << r.stderr_text << "\n";
-      ++failures;
-    } else {
-      std::cout << "[OK] missing input path produced an input error (exit 3)\n";
     }
   }
 

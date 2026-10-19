@@ -122,7 +122,7 @@ class TestE2E:
         output_dir = tmp_output_dir.parent / "report"
         config_path = e2e_config_writer(
             {
-                "io": {"input": str(image_env), "output_dir": str(output_dir)},
+                "io": {"input": str(image_env), "output_dir": str(output_dir), "output_format": ["html", "json", "csv"]},
                 "models": {name: {"path": str(paths[name])} for name in MODEL_NAMES},
             }
         )
@@ -180,7 +180,7 @@ class TestE2E:
         output_dir = tmp_output_dir.parent / "report"
         config_path = e2e_config_writer(
             {
-                "io": {"input": str(test_images_dir), "output_dir": str(output_dir)},
+                "io": {"input": str(test_images_dir), "output_dir": str(output_dir), "output_format": ["html", "json", "csv"]},
                 "models": {name: {"path": str(paths[name])} for name in MODEL_NAMES},
             }
         )
@@ -260,7 +260,7 @@ class TestE2E:
             (cpp_out, lambda cfg: [binary, "--config", str(cfg)]),
         ):
             config = e2e_config_writer(
-                {"io": {"input": relative_input, "output_dir": str(output_dir)},
+                {"io": {"input": relative_input, "output_dir": str(output_dir), "output_format": ["html", "json", "csv"]},
                  "models": models}
             )
             argv = command(config)
@@ -647,7 +647,7 @@ class TestE2E:
         output_dir = tmp_output_dir.parent / "report"
         config_path = tmp_output_dir.parent / "config.yaml"
         config_path.write_text(yaml.safe_dump({
-            "io": {"input": str(image_env), "output_dir": str(output_dir)},
+            "io": {"input": str(image_env), "output_dir": str(output_dir), "output_format": ["html", "json", "csv"]},
             "models": {model_name: {"path": str(model_path)}},
         }))
 

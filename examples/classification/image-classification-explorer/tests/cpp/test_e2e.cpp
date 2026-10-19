@@ -69,6 +69,7 @@ int main(int argc, char** argv) {
   const fs::path report_dir = fs::path(out_dir) / "report";
   ConfigScalars overrides = {{"io.input", image_path},
                              {"io.fallback_image_url", "null"},
+                             {"io.output_format", "[html, json, csv]"},
                              {"io.output_dir", report_dir.string()}};
   for (size_t i = 0; i < kModelNames.size(); ++i) {
     overrides[std::string("models.") + kModelNames[i] + ".path"] = model_paths[i].string();
@@ -176,6 +177,7 @@ int main(int argc, char** argv) {
       const fs::path dir_report = fs::path(dir_out) / "report";
       ConfigScalars dir_overrides = {{"io.input", images_dir},
                                      {"io.fallback_image_url", "null"},
+                                     {"io.output_format", "[html, json, csv]"},
                                      {"io.output_dir", dir_report.string()}};
       for (size_t i = 0; i < kModelNames.size(); ++i) {
         dir_overrides[std::string("models.") + kModelNames[i] + ".path"] = model_paths[i].string();
