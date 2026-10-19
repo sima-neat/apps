@@ -28,11 +28,6 @@ YOLOv5s-Face returns raw box and landmark outputs. The C++ and Python applicatio
 ## Preview
 ![Thermal face detector reference preview](../../../portal/assets/examples/face-detection/single-stream-thermal-face-detector/image.png)
 
-The reference visualization pairs a thermal stream with its visible-light
-source and shows face, eye, and mouth regions. The application publishes
-the five facial landmarks to Insight as labeled dots; it does not publish the
-reference visualization's boxes.
-
 ## Prerequisites
 
 - `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/))
@@ -162,6 +157,10 @@ Left at `0`, the live Insight stream is the success signal instead.
 Either way, `processed` reports frames pushed through the pipeline, not faces
 found, so a healthy count does not by itself confirm detections. Confirm those
 in Insight, which draws the five landmarks as labeled dots on the stream.
+
+The preview image is a reference visualization: it pairs the thermal stream
+with its visible-light source and draws face, eye, and mouth boxes. The
+application publishes only the five landmarks, not those boxes.
 
 ## Debugging Notes
 

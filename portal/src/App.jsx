@@ -338,7 +338,7 @@ function CatalogPage({ catalog }) {
   const search = query.trim().toLowerCase();
   const filtered = catalog.examples.filter((example) => (
     matchesFilters(example, filters)
-    && [example.name, example.summary, example.category, formatTaskLabel(example.category), example.model,
+    && [example.name, example.summary, example.category, formatCategoryLabel(example.category), example.model,
       example.difficulty, example.languages, example.status, ...(example.tags || [])]
       .join(" ").toLowerCase().includes(search)
   ));
@@ -390,7 +390,7 @@ function CatalogPage({ catalog }) {
           </svg>
           <input
             type="search"
-            placeholder="Search examples, tasks, or models…"
+            placeholder="Search examples, categories, or models…"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
           />
@@ -410,10 +410,10 @@ function CatalogPage({ catalog }) {
       <div className="portal-layout">
         <aside id="example-filters" className="filter-panel" data-open={filtersOpen}>
           <FilterGroup
-            label="Task"
+            label="Category"
             value={filters.category}
             options={options.categories}
-            formatLabel={formatTaskLabel}
+            formatLabel={formatCategoryLabel}
             onChange={(value) => setFilters((current) => ({ ...current, category: value }))}
           />
           <FilterGroup
@@ -525,7 +525,7 @@ function ExampleCard({ example }) {
         />
       </div>
       <div className="card-body">
-        <p className="card-category">{formatTaskLabel(example.category)}</p>
+        <p className="card-category">{formatCategoryLabel(example.category)}</p>
         <h2>{displayName}</h2>
         <div className="card-summary" dangerouslySetInnerHTML={{ __html: summaryHtml }} />
       </div>
@@ -545,10 +545,6 @@ function DetailPage({ catalog }) {
   const summaryHtml = marked.parseInline(example?.summary || "No summary available.");
   const docPanelRef = useRef(null);
   const [activeSection, setActiveSection] = useState("");
-  const preview = example?.sections?.find(({slug}) => slug === "preview");
-  const previewNotesHtml = preview
-    ? (previewImage ? renderPreviewNotes(preview.markdown, previewImage) : renderMarkdown(preview.markdown))
-    : "";
   const groups = useMemo(() => {
     const content = example?.sections || [];
     const setup = new Set([
@@ -611,7 +607,7 @@ function DetailPage({ catalog }) {
         <div className="detail-hero-copy">
           <h1>{displayName}</h1>
           <div className="detail-meta">
-            <Chip label={formatTaskLabel(example.category)} tone="status" />
+            <Chip label={formatCategoryLabel(example.category)} tone="status" />
             <Chip label={example.difficulty || "Unspecified"} tone="difficulty" />
             <Chip label={example.status || "experimental"} tone="status" />
             {example.languages ? <Chip label={example.languages} tone="languages" /> : null}
@@ -663,9 +659,6 @@ function DetailPage({ catalog }) {
       </nav>
 
       <article ref={docPanelRef} className="example-documentation">
-        {previewNotesHtml ? (
-          <div id="preview-notes" className="markdown-body example-preview-notes" dangerouslySetInnerHTML={{ __html: previewNotesHtml }} />
-        ) : null}
         {groups.map((group) => (
           <section key={group.id} id={group.id} data-doc-group="" className="example-doc-group">
             <h2>{group.title}</h2>
@@ -685,20 +678,6 @@ function DetailPage({ catalog }) {
       {showDownloadModal ? <AppsDownloadDialog onClose={() => setShowDownloadModal(false)} /> : null}
     </main>
   );
-}
-
-function renderPreviewNotes(markdown, previewImage) {
-  // Keep preview captions and diagrams; the image is already beside the title.
-  const tokens = marked.lexer(normalizeMarkdownAssetUrls(markdown));
-  marked.walkTokens(tokens, (token) => {
-    if (token.type === "image" && token.href === previewImage) {
-      token.type = "text";
-      token.text = "";
-      token.raw = "";
-      token.tokens = [];
-    }
-  });
-  return marked.parser(tokens).replace(/<p>\s*<\/p>/g, "").trim();
 }
 
 function FilterGroup({ label, value, options, onChange, formatLabel = formatDisplayLabel }) {
@@ -737,7 +716,7 @@ function ModelChip({ label, url }) {
   );
 }
 
-function formatTaskLabel(value) {
+function formatCategoryLabel(value) {
   if (value === "classification") return "Image Classification";
   if (value === "genai") return "GenAI";
   return formatDisplayLabel(value);

@@ -20,6 +20,12 @@ Runs YOLO26 object detection across many RTSP streams using a host and Modalix P
 
 ![PCIe high-density detector preview](../../../portal/assets/examples/object-detection/pcie-high-density-multi-stream-object-detector/image.png)
 
+## How It Works
+
+The host receives each RTSP stream and sends the encoded video to both Insight and the card. The
+card decodes the video, runs the shared model, and returns detections, which the host publishes to
+Insight as metadata.
+
 ```text
 Host machine                         Modalix PCIe Card
 ============                         ==================
@@ -28,9 +34,6 @@ N x RTSP/H.264  -- encoded video --> N decoders
                                       --> box decode/NMS
 Insight metadata <-- BBOX results -- neatpciesink
 ```
-
-The precompiled Apps package provides the card application. Build the host application from this
-repository, then use `run.sh` to start and stop both sides.
 
 ## Prerequisites
 
