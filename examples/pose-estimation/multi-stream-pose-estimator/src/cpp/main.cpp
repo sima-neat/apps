@@ -436,10 +436,11 @@ std::vector<Pose> decode_poses(const simaai::neat::Sample& sample, int frame_w, 
 ///
 /// Pixel rounding and three-decimal confidence preserve overlay precision while keeping the
 /// configured 50-pose maximum within Core's logical metadata-message limit.
+/// Poses carry no `id`: Insight colors poses by `id`, and this app does not track people
+/// across frames, so a per-frame index would change a person's color.
 std::string pose_metadata_data_json(const std::vector<Pose>& poses) {
   nlohmann::json data;
   data["poses"] = nlohmann::json::array();
-  int pose_index = 1;
   for (const auto& pose : poses) {
     nlohmann::json keypoints = nlohmann::json::array();
     for (std::size_t k = 0; k < pose.keypoints.size(); ++k) {
@@ -449,8 +450,7 @@ std::string pose_metadata_data_json(const std::vector<Pose>& poses) {
                            {"y", std::lround(point.y)},
                            {"confidence", std::round(point.visibility * 1000.0f) / 1000.0f}});
     }
-    data["poses"].push_back({{"id", "pose_" + std::to_string(pose_index++)},
-                             {"label", "person"},
+    data["poses"].push_back({{"label", "person"},
                              {"confidence", std::round(pose.score * 1000.0f) / 1000.0f},
                              {"bbox",
                               {std::lround(pose.x1), std::lround(pose.y1),

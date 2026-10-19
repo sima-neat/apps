@@ -34,7 +34,7 @@ void require(bool condition, const std::string& message) {
 std::pair<int, json> validate_metadata_message(const MetadataJsonMessage& message, int base_port) {
   const auto payload = json::parse(message.payload);
   const int index = message.port - base_port;
-  require(index >= 0 && index < 16, "metadata arrived on an unexpected port");
+  require(index >= 0 && index < 20, "metadata arrived on an unexpected port");
   require(payload.at("type") == "object-detection" && payload.at("data").at("objects").is_array(),
           "invalid object-detection metadata schema");
   require(payload.at("stream_index") == index &&
@@ -93,19 +93,19 @@ void run_case(const std::string& binary, const std::string& model, const std::st
        {"input.fps", "0"},
        {"output.video_enabled", "true"},
        {"output.insight.host", "127.0.0.1"},
-       {"output.insight.max_visible_streams", "16"},
+       {"output.insight.max_visible_streams", "20"},
        {"output.insight.video_port_base", std::to_string(video)},
        {"output.insight.metadata_port_base", std::to_string(port)}},
-      {{"streams", std::vector<std::string>(16, url)}});
+      {{"streams", std::vector<std::string>(20, url)}});
   MetadataJsonListenerOptions options;
   options.base_port = port;
-  options.num_ports = 16;
+  options.num_ports = 20;
   options.timeout_ms = 200;
   MetadataJsonListener listener(options);
   require(listener.ok(), listener.error());
   using Tracker = high_density::testing::ReceivedMetadataTracker;
   const auto start = Tracker::Clock::now();
-  Tracker tracker(16, 100, 5000,
+  Tracker tracker(20, 100, 5000,
                   std::chrono::milliseconds(env_int_or_default(
                       "SIMANEAT_APPS_HIGH_DENSITY_INITIAL_PROGRESS_TIMEOUT_MS", 90000)),
                   std::chrono::milliseconds(env_int_or_default(
@@ -164,7 +164,7 @@ void run_case(const std::string& binary, const std::string& model, const std::st
   };
 
   // spawn_until() sleeps 100 ms between calls, and each round reads one datagram, so
-  // a single round per call would starve all but the first of the 16 metadata
+  // a single round per call would starve all but the first of the 20 metadata
   // sockets. Keep receiving for a slice instead; returning between slices still lets
   // spawn_until() notice an early exit or the overall timeout.
   // spawn_until() sends SIGINT as soon as this returns true; remember when, so the
@@ -216,7 +216,7 @@ void run_case(const std::string& binary, const std::string& model, const std::st
   std::cout << codec << ": " << summary.dump() << "\n";
   require(tracker.total_measured() == 5000, "expected exactly 5000 measured frames");
   require(elapsed > 0, "invalid measurement interval");
-  require(fps > 450, "metadata throughput must exceed 450 FPS");
+  require(fps > 562.5, "metadata throughput must exceed 562.5 FPS");
   for (const auto count : tracker.measured_frames())
     require(static_cast<double>(count) / elapsed > 28.125,
             "per-stream throughput must exceed 28.125 FPS");

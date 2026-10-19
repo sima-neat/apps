@@ -18,8 +18,6 @@ Classifies one image with ResNet50 and prints the top five predictions with conf
 
 ## Preview
 
-The pipeline classifies this goldfish image:
-
 ![Image classifier goldfish input](../../../portal/assets/examples/classification/image-classifier/image.jpeg)
 
 ## Prerequisites

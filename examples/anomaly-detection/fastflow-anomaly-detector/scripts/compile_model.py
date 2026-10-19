@@ -4,7 +4,7 @@
     activate-model-compiler
     python3 scripts/compile_model.py --model model.onnx --calib-images /data/my_product/train/good
 
-Converts an anomalib 2.x export to bfloat16 and writes ``build/<name>/<name>_mpk.tar.gz``.
+Converts an anomalib 2.6 export (ONNX opset 14) to bfloat16 and writes ``build/<name>/<name>_mpk.tar.gz``.
 Set ``model.path`` to it and ``model.normalize`` to mean 0 and stddev 1.
 
 The export's per-image LayerNorm and 5-D map average are patched first, because the Model
@@ -33,6 +33,8 @@ from afe.load.importers.general_importer import onnx_source
 def prepare(src: Path, dst: Path) -> tuple[str, list[int]]:
     """Static batch of one, the anomaly_map output only, and the two patches."""
     model = onnx.load(str(src))
+    opset = next(o.version for o in model.opset_import if o.domain in ("", "ai.onnx"))
+    assert opset == 14, f"opset {opset}, not 14: export with anomalib 2.6, not 2.7, whose torch.export graph differs"
     (inp,) = model.graph.input
     shape = [d.dim_value or 1 for d in inp.type.tensor_type.shape.dim]
     model, ok = simplify(model, overwrite_input_shapes={inp.name: shape})

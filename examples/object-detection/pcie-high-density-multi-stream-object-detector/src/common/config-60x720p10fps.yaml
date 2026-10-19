@@ -1,6 +1,6 @@
-# PCIe profile: 48 x 720p at 10 FPS.
+# PCIe profile: 60 x 720p at 10 FPS.
 profile:
-  name: 48x720p10fps
+  name: 60x720p10fps
 
 model:
   path: <model-path>
@@ -11,7 +11,7 @@ card:
   card_id: 0
   queue: 0
 
-# Populate exactly 48 URLs.
+# Populate exactly 60 URLs.
 streams: []
 
 input:

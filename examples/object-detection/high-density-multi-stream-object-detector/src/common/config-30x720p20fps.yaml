@@ -1,4 +1,4 @@
-# Profile: 24 x 720p @ 20 FPS (q4/i2/m4).
+# Profile: 30 x 720p @ 20 FPS (q4/i2/m4).
 model:                       # Detector model selection.
   path: <model-path>         # Absolute or relative to this config file.
   labels: examples/object-detection/high-density-multi-stream-object-detector/src/common/coco_label.txt
@@ -29,6 +29,12 @@ streams:                     # RTSP inputs, one entry per camera.
   - <rtsp-url-22>
   - <rtsp-url-23>
   - <rtsp-url-24>
+  - <rtsp-url-25>
+  - <rtsp-url-26>
+  - <rtsp-url-27>
+  - <rtsp-url-28>
+  - <rtsp-url-29>
+  - <rtsp-url-30>
 
 input:                       # RTSP input transport settings.
   codec: h264                # h264/avc or h265/hevc.
@@ -48,7 +54,7 @@ inference:                   # Detection controls.
   queue_depth: 4             # Terminal detection output and Run queue depth.
   internal_queue_depth: 2    # Two global model-stage handoffs; not per-camera decoded queues.
   max_inflight_per_stream: 4 # Proven per-stream mux credit for approximately 20 detections/s.
-  max_inflight_total: 24     # One bounded raw-frame credit per stream across the shared detector.
+  max_inflight_total: 30     # One bounded raw-frame credit per stream across the shared detector.
   min_score: 0.30            # Detection score threshold used by the validated Insight run.
   nms_iou: 0.60              # NMS IOU threshold.
   max_detections: 50         # Max detections to keep per frame after NMS.
@@ -58,5 +64,5 @@ output:                      # Insight video and metadata output.
     host: <insight-host-ip>  # Host running the Insight receiver/viewer.
     video_port_base: 9000    # Base UDP port for video channels.
     metadata_port_base: 9100 # Base UDP port for metadata channels.
-    max_visible_streams: 24  # Publish all 24 video and metadata channels to Insight.
+    max_visible_streams: 30  # Publish all 30 video and metadata channels to Insight.
   video_enabled: true        # Disable to publish metadata only.

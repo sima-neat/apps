@@ -50,7 +50,7 @@ GROUPS: tuple[tuple[str, tuple[ModelRow, ...]], ...] = (
                      "detr-object-detector",
                      "models/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz"),
             ModelRow("yolo_v8n_seg", "yolo_v8n_seg_mpk.tar.gz",
-                     "yolov8-instance-segmenter", "models/yolo_v8n_seg_mpk.tar.gz"),
+                     "single-stream-instance-segmenter", "models/yolo_v8n_seg_mpk.tar.gz"),
         ),
     ),
     (

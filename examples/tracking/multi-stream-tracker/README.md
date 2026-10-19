@@ -133,60 +133,11 @@ The tracker follows ByteTrack:
 3. Low-score detections can only extend tracks that are still active. This recovers objects whose confidence drops briefly, without creating false tracks.
 4. Unmatched high-score detections above `new_track_threshold` start tentative tracks. These are published after `min_confirmed_hits` matches.
 
-### Why ByteTrack
+### Limits
 
-Three trackers were compared on the same recorded detections using `tools/compare_trackers.py`:
-
-- `greedy_iou`: the previous people-tracker matcher, with no motion model.
-- `greedy_cv`: greedy IoU with constant-velocity prediction, from `yolo26-tiny-drone-tracker`.
-- `bytetrack`: this example.
-
-The real videos have no ground-truth labels, so the report uses proxies: unique ID count, mean track length, short-lived tracks and re-births. Read these as fragmentation measures, not identity accuracy. They cannot separate a genuinely continuous track from an object the tracker never admitted: ByteTrack holds new tracks for `min_confirmed_hits` and requires `new_track_threshold`, so two stationary objects scoring 0.90 and 0.55 yield two baseline IDs but one ByteTrack ID. Identity claims below rest on the synthetic scenarios, where ground truth exists. Detections came from `yolo26m-det-bf16-mla_tess-b1` on a Modalix DevKit.
-
-| Video (classes) | Tracker | Unique IDs | Mean track length | Tracks < 5 frames | Re-births |
-| --- | --- | --- | --- | --- | --- |
-| Motorbike race, 1080p30, 900 frames (person, motorcycle) | greedy_iou | 399 | 17.9 | 198 | 11 |
-| | greedy_cv | 381 | 20.6 | 144 | 52 |
-| | **bytetrack** | **157** | **39.0** | **4** | **0** |
-| Pedestrians crossing, 720p30, 600 frames | greedy_iou | 33 | 64.8 | 5 | 1 |
-| | greedy_cv | 30 | 74.7 | 2 | 0 |
-| | **bytetrack** | **22** | **94.0** | **2** | **0** |
-| Highway 1, 720p16, 600 frames (car, truck) | greedy_iou | 462 | 11.4 | 224 | 28 |
-| | greedy_cv | 261 | 24.8 | 94 | 11 |
-| | **bytetrack** | **125** | **36.6** | **17** | **1** |
-| Intersection, 720p16, 600 frames (car, truck, bus) | greedy_iou | 104 | 33.3 | 36 | 9 |
-| | greedy_cv | 70 | 64.9 | 10 | 3 |
-| | **bytetrack** | **22** | **115.2** | **1** | **0** |
-| Highway 2, 720p16, 600 frames (car, truck) | greedy_iou | 243 | 11.2 | 124 | 9 |
-| | greedy_cv | 203 | 15.2 | 87 | 8 |
-| | **bytetrack** | **105** | **23.0** | **17** | **0** |
-
-A re-birth is a new track that starts where a track of the same class ended within the previous 30 frames.
-
-Synthetic scenarios with ground truth (mean of 10 seeds; IDF1 and ID switches, higher and lower are better):
-
-| Scenario | greedy_iou | greedy_cv | bytetrack |
-| --- | --- | --- | --- |
-| Crossing with occlusion | 0.651 / 3.0 | 0.974 / 0.0 | **0.978 / 0.0** |
-| Short occlusion (8–10 frames) | 0.553 / 2.0 | 0.953 / 0.0 | **0.963 / 0.0** |
-| 25% missed detections | 0.852 / 0.0 | 0.852 / 0.0 | 0.849 / 0.0 |
-| Low-confidence frames | 0.893 / 0.0 | 0.992 / 0.0 | **0.992 / 0.0** |
-| Different speeds (up to 70 px/frame) | 0.733 / 16.9 | 0.899 / 1.6 | **0.905 / 0.5** |
-
-ByteTrack produces the least fragmented output on every real video, and the synthetic scenarios — the only ones with ground truth — show that this comes with equal or better identity accuracy (IDF1) and fewer ID switches, not at its expense. It also removes the synthetic false positives, because unconfirmed and low-score detections never start a track. It stays small, at about 300 lines per language with no dependencies.
-
-Known limits:
-
-- ByteTrack publishes fewer boxes (FN is slightly higher) because it holds new tracks for `min_confirmed_hits` frames and does not draw lost tracks.
-- There is no appearance model, so an object hidden longer than `max_missing_frames`, or one that crosses a same-class object while both are occluded, can still get a new ID.
-- Scene cuts in edited video, such as the race footage, always start new IDs.
-
-To reproduce the comparison from a source checkout, record logs with `output.detections_log`, then run:
-
-```bash
-python3 examples/tracking/multi-stream-tracker/tools/compare_trackers.py \
-  --config <config.yaml> --log <prefix>.stream0.jsonl
-```
+- A new track is published only after `min_confirmed_hits` matches, and lost tracks are not drawn, so an object appears a frame or two after the detector first sees it.
+- There is no appearance model, so an object hidden longer than `max_missing_frames`, or one that crosses a same-class object while both are occluded, gets a new ID.
+- Scene cuts start new IDs.
 
 ## Troubleshooting
 
@@ -202,7 +153,7 @@ python3 examples/tracking/multi-stream-tracker/tools/compare_trackers.py \
 - C++ tracker helpers: `src/cpp/utils/`
 - Python source: `src/python/main.py`
 - Python tracker helpers: `src/python/utils/`
-- Tracker comparison tools (source checkout only): `tools/`
+- Development tools (source checkout only): `tools/`
 - Shared runtime files: `src/common/`
 
 The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
