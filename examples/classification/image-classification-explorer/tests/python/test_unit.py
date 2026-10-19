@@ -900,6 +900,29 @@ class TestUnicodeEscapesInSettings:
         assert main.config_str(value, "io.output_dir", None) == expected
 
 
+    @pytest.mark.parametrize(
+        "raw, expected",
+        [
+            ("report\\u00e9", "report\u00e9"),
+            ("caf\\u00e9", "caf\u00e9"),
+            ("\\u65e5\\u672c", "\u65e5\u672c"),
+            ("\\U0001F600", "\U0001F600"),
+            ("plain", "plain"),
+        ],
+    )
+    def test_unquoted_escape_keeps_the_code_point(self, raw, expected):
+        """The *unquoted* path has its own decoder. Fixing only the C++ one left
+        `io.output_dir: report\\u00e9` publishing to `reporté` in C++ and
+        `report?` in Python - the same divergence, the other way round."""
+        assert main.decode_yaml_escapes(raw) == expected
+
+    @pytest.mark.parametrize("raw", ["\\ud800", "\\U0011FFFF"])
+    def test_unencodable_escape_keeps_the_marker(self, raw):
+        """A lone surrogate is not a character and nothing beyond U+10FFFF
+        exists; both keep the marker the validators reject, as C++ does."""
+        assert main.decode_yaml_escapes(raw) == "?"
+
+
 class TestOutputFormat:
     """io.output_format selects which reports are written."""
 

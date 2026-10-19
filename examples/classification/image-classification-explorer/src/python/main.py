@@ -324,9 +324,20 @@ def decode_yaml_escapes(text: str) -> str:
         digits = text[i + 2:i + 2 + width] if width else ""
         if width and len(digits) == width and all(ch in "0123456789abcdefABCDEF" for ch in digits):
             code = int(digits, 16)
-            # Mirrors the C++ side, which cannot emit a wider code point as one
-            # byte and substitutes a character the validators reject.
-            out.append(chr(code) if code <= 0x7F else "?")
+            # The code point itself, as PyYAML decodes the same escape inside a
+            # double-quoted scalar. This used to substitute "?" above ASCII, to
+            # mirror a C++ decoder that could not emit a wider code point - but
+            # that one encodes UTF-8 now, so keeping the substitution here made
+            # `io.output_dir: report\u00e9` publish to `reporté` in C++ and
+            # `report?` in Python: the same divergence, the other way round.
+            #
+            # A lone surrogate is not a character and nothing can encode it, so
+            # it keeps the old marker, as does a value beyond Unicode - both are
+            # rejected downstream by their real spelling.
+            if code <= 0x7F or (code <= 0x10FFFF and not 0xD800 <= code <= 0xDFFF):
+                out.append(chr(code))
+            else:
+                out.append("?")
             i += 2 + width
             continue
         out.append(text[i])
