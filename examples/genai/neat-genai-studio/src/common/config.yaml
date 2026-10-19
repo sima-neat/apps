@@ -13,7 +13,7 @@ server:                      # Local OpenAI-compatible model server.
     # until the request names a loaded model to unload; with 1, loading a new
     # model replaces the loaded one. How many fit depends on sizes.
     # Speech-to-text has its own slot and is unaffected.
-    max_resident_chat_models: 2
+    max_resident_chat_models: 1
     # Accelerator memory the loaded models share, in GiB (16 on a Modalix
     # DevKit). A load that won't fit beside the loaded models is refused.
     accelerator_memory_gib: 16

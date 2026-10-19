@@ -110,7 +110,7 @@ class AppConfig:
     rag: RagConfig
     control: ControlConfig = ControlConfig(host="127.0.0.1", client_host="127.0.0.1", port=9997)
     catalog_dir: Path | None = None
-    max_resident_chat_models: int = 2
+    max_resident_chat_models: int = 1
     accelerator_memory_gib: float = 16.0
     hub: HubConfig = HubConfig(allow_download=True,
                               orgs=("simaai", "TDoSiMa", "florianvoss"))
@@ -167,7 +167,7 @@ def load_server_config(path: Path = DEFAULT_SERVER_CONFIG, apps_root: Path = PAT
         rag=_load_rag_config(rag, apps_root),
         control=_load_control_config(control),
         catalog_dir=_load_optional_dir(models.get("catalog_dir"), apps_root),
-        max_resident_chat_models=max(1, int(models.get("max_resident_chat_models", 2) or 2)),
+        max_resident_chat_models=max(1, int(models.get("max_resident_chat_models", 1) or 1)),
         accelerator_memory_gib=_load_positive_number(models, "accelerator_memory_gib", 16.0),
         hub=_load_hub_config(hub),
     )
@@ -234,7 +234,7 @@ def load_ui_config(path: Path = DEFAULT_UI_CONFIG, apps_root: Path = PATH_ROOT) 
         rag=_load_rag_config(rag, apps_root),
         control=_load_control_config(control),
         catalog_dir=_load_optional_dir(server_models.get("catalog_dir"), apps_root),
-        max_resident_chat_models=max(1, int(server_models.get("max_resident_chat_models", 2) or 2)),
+        max_resident_chat_models=max(1, int(server_models.get("max_resident_chat_models", 1) or 1)),
         hub=_load_hub_config(hub),
         supertonic=_load_supertonic_config(supertonic),
     )

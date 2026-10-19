@@ -37,7 +37,7 @@ CHAT_MODEL_NAME="${CHAT_MODEL_NAME:-${CHAT_MODEL_REPO##*/}}"
 # Chat/VLM models kept loaded at once (ASR is always kept). With 1, loading a new
 # model replaces the loaded one; above 1, a load past the limit is refused until
 # the request names a loaded model to unload.
-MAX_RESIDENT_CHAT_MODELS="${MAX_RESIDENT_CHAT_MODELS:-2}"
+MAX_RESIDENT_CHAT_MODELS="${MAX_RESIDENT_CHAT_MODELS:-1}"
 ALLOW_HUB_DOWNLOAD="${ALLOW_HUB_DOWNLOAD:-true}"
 # Hugging Face accounts searched for compatible models (space-separated):
 # simaai (official precompiled) + TDoSiMa and florianvoss (community).
@@ -197,7 +197,7 @@ Environment:
                                 (space-separated). default: empty
   MAX_RESIDENT_CHAT_MODELS      Chat/VLM models kept loaded at once; past the
                                 limit a load must name one to unload.
-                                default: 2
+                                default: 1
   WEB_HOST, WEB_PORT, WEB_HTTPS, WEB_CORS_ORIGINS
                                 app.web settings written to the config. Default:
                                 the values in an existing config (kept on re-run),

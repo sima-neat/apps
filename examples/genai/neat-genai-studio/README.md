@@ -124,7 +124,7 @@ only to change:
 
 - `server.models.catalog_dir`: the directory scanned for models (default `/media/nvme/llima/models`).
 - `server.models.chat`: chat or vision-language models to load at startup (none by default).
-- `server.models.max_resident_chat_models`: how many chat or vision-language models stay loaded at once (default `2`; see [Keep several models loaded](#keep-several-models-loaded)).
+- `server.models.max_resident_chat_models`: how many chat or vision-language models stay loaded at once (default `1`; see [Keep several models loaded](#keep-several-models-loaded)).
 - `server.models.asr`: the speech-to-text model active at startup. Models from Hugging Face accounts other than `simaai` are named `<org>@<name>`, for example `florianvoss@whisper-small-a16w8-layered-encoder`.
 - `server.hub.allow_download`: whether models may be downloaded from Hugging Face.
 - `app.request.max_tokens`: the default response length for chat requests that do not set `max_tokens`.
@@ -248,11 +248,13 @@ error, only the new model's registration is rolled back; the loaded models stay,
 and the error is reported.
 
 #### Keep several models loaded
-Up to `server.models.max_resident_chat_models` chat/VLM models stay loaded side
-by side (default `2`; set `MAX_RESIDENT_CHAT_MODELS` before `setup.sh` to change
-it), for example to compare them. Each loaded model answers on
-`/v1/chat/completions` under its own name, and clients can use them at the same
-time. With `1`, loading a model replaces the loaded one.
+By default one chat/VLM model is loaded at a time, and loading another replaces
+it. To keep several loaded side by side, for example to compare them, raise
+`server.models.max_resident_chat_models` in `config.local.yaml` (or set
+`MAX_RESIDENT_CHAT_MODELS` before `setup.sh`), then restart the Studio. Each
+loaded model answers on `/v1/chat/completions` under its own name, and clients
+can use them at the same time. The Insight GenAI tab expects one loaded chat
+model until it supports several, so keep the default for it.
 
 Past the limit, the Studio never unloads a model on its own, because another
 client may be using it. The load is refused with `409` and the loaded models,
