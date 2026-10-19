@@ -338,7 +338,7 @@ function CatalogPage({ catalog }) {
   const search = query.trim().toLowerCase();
   const filtered = catalog.examples.filter((example) => (
     matchesFilters(example, filters)
-    && [example.name, example.summary, example.category, formatTaskLabel(example.category), example.model,
+    && [example.name, example.summary, example.category, formatCategoryLabel(example.category), example.model,
       example.difficulty, example.languages, example.status, ...(example.tags || [])]
       .join(" ").toLowerCase().includes(search)
   ));
@@ -390,7 +390,7 @@ function CatalogPage({ catalog }) {
           </svg>
           <input
             type="search"
-            placeholder="Search examples, tasks, or models…"
+            placeholder="Search examples, categories, or models…"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
           />
@@ -410,10 +410,10 @@ function CatalogPage({ catalog }) {
       <div className="portal-layout">
         <aside id="example-filters" className="filter-panel" data-open={filtersOpen}>
           <FilterGroup
-            label="Task"
+            label="Category"
             value={filters.category}
             options={options.categories}
-            formatLabel={formatTaskLabel}
+            formatLabel={formatCategoryLabel}
             onChange={(value) => setFilters((current) => ({ ...current, category: value }))}
           />
           <FilterGroup
@@ -525,7 +525,7 @@ function ExampleCard({ example }) {
         />
       </div>
       <div className="card-body">
-        <p className="card-category">{formatTaskLabel(example.category)}</p>
+        <p className="card-category">{formatCategoryLabel(example.category)}</p>
         <h2>{displayName}</h2>
         <div className="card-summary" dangerouslySetInnerHTML={{ __html: summaryHtml }} />
       </div>
@@ -607,7 +607,7 @@ function DetailPage({ catalog }) {
         <div className="detail-hero-copy">
           <h1>{displayName}</h1>
           <div className="detail-meta">
-            <Chip label={formatTaskLabel(example.category)} tone="status" />
+            <Chip label={formatCategoryLabel(example.category)} tone="status" />
             <Chip label={example.difficulty || "Unspecified"} tone="difficulty" />
             <Chip label={example.status || "experimental"} tone="status" />
             {example.languages ? <Chip label={example.languages} tone="languages" /> : null}
@@ -716,7 +716,7 @@ function ModelChip({ label, url }) {
   );
 }
 
-function formatTaskLabel(value) {
+function formatCategoryLabel(value) {
   if (value === "classification") return "Image Classification";
   if (value === "genai") return "GenAI";
   return formatDisplayLabel(value);
