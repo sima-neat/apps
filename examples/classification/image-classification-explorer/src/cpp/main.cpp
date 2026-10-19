@@ -2624,10 +2624,23 @@ int main(int argc, char** argv) {
         results.begin(), results.end(), [](const ImageResult& r) { return !r.errors.empty(); });
     std::cout << "Done in " << std::fixed << std::setprecision(1) << total_ms
               << " ms. Report written to " << output_dir.string() << "\n";
-    std::cout << "  report.html, report.json, report.csv\n";
-    if (images_with_errors > 0) {
-      std::cout << "  " << images_with_errors
-                << " image(s) had at least one model failure (see report.json)\n";
+    // Name what was actually written. A hardcoded list advertised report.json
+    // and report.csv after io.output_format stopped writing them by default, so
+    // a successful run pointed the customer at files that do not exist.
+    {
+      const auto has = [&formats](const char* f) {
+        return std::find(formats.begin(), formats.end(), f) != formats.end();
+      };
+      std::string written;
+      for (const auto& f : formats)
+        written += (written.empty() ? "" : ", ") + ("report." + f);
+      if (has("html"))
+        written += ", thumbnails/";
+      std::cout << "  " << written << "\n";
+      if (images_with_errors > 0) {
+        std::cout << "  " << images_with_errors << " image(s) had at least one model failure (see "
+                  << (has("json") ? "report.json" : "the per-model error cells") << ")\n";
+      }
     }
 
     // Parsed with the rest of the configuration further up, so a malformed value

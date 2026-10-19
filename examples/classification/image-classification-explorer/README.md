@@ -150,7 +150,8 @@ Example report (4 models against a directory of images):
 Files with an unsupported extension are listed under **Skipped files** and are not classified;
 subdirectories of the input directory are not listed, since the scan is one level deep.
 Files with a supported extension that cannot be decoded stay in the main table with a per-model
-`error` cell (and an `errors` entry in `report.json`); neither case stops the run.
+`error` cell (and, when `json` is selected, an `errors` entry in `report.json`);
+neither case stops the run.
 
 One run writes one report. Two runs publishing into the same `io.output_dir` at
 the same time is not supported and is not detected: give each concurrent run its
@@ -187,13 +188,18 @@ you ran: the run ends with a summary naming the report directory, and every
 model agrees on the sample image.
 
 ```text
-Done in 3292.5 ms. Report written to report
-  report.html, report.json, report.csv
+Done in 3292.5 ms. Report written to sandbox/report
+  report.html, thumbnails/
 ```
 
+The summary names the files that run actually wrote, so it follows
+`io.output_format`: with the shipped `[html]` it lists `report.html` and
+`thumbnails/`, and adding `json` or `csv` adds those.
+
 With `io.input` left `null`, the bundled goldfish sample is classified by every
-profile in `config.yaml`. Opening `report.html`, or reading `report.csv`, should
-show class `1` winning for each model:
+profile in `config.yaml`. Opening `report.html` should show class `1` winning
+for each model. The same results read more compactly from `report.csv`, which
+needs `csv` in `io.output_format`:
 
 ```text
 image                     model            status  top1_class_id  top1_label  top1_probability
@@ -246,8 +252,9 @@ A per-image, per-model inference failure does not fail the run: it is recorded
 in the report and the exit code stays `0`.
 
 - Check `report.json`'s `skipped` list and each image's `errors` object for files that failed to
-  process. `errors` is keyed by model name, so one image can record a failure for one model while
-  retaining predictions from the others.
+  process (add `json` to `io.output_format`; `report.html` shows the same failures in its
+  per-model cells). `errors` is keyed by model name, so one image can record a failure for one
+  model while retaining predictions from the others.
 
 ## Source Files
 

@@ -1575,9 +1575,16 @@ def main() -> int:
 
     images_with_errors = sum(1 for r in results if r.errors)
     print(f"Done in {total_ms:.1f} ms. Report written to {output_dir}")
-    print("  report.html, report.json, report.csv")
+    # Name what was actually written. A hardcoded list advertised report.json
+    # and report.csv after io.output_format stopped writing them by default,
+    # so a successful run pointed the customer at files that do not exist.
+    written = [f"report.{f}" for f in formats]
+    if "html" in formats:
+        written.append("thumbnails/")
+    print(f"  {', '.join(written)}")
     if images_with_errors:
-        print(f"  {images_with_errors} image(s) had at least one model failure (see report.json)")
+        where = "report.json" if "json" in formats else "the per-model error cells"
+        print(f"  {images_with_errors} image(s) had at least one model failure (see {where})")
 
     used_fallback_sample = not input_path
     if expected_class_id is not None and used_fallback_sample and len(images) == 1 and profiles:
