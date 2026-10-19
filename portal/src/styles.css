@@ -918,10 +918,6 @@ select {
   min-width: 0;
 }
 
-.example-preview-notes {
-  padding-top: 28px;
-}
-
 .example-doc-group {
   padding: 44px 0 8px;
   scroll-margin-top: 112px;

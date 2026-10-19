@@ -18,8 +18,6 @@ Finds SuperPoint feature points in a video and streams the annotated video to In
 
 ## Preview
 
-Frame from the included TUM RGB-D `freiburg1_desk` sequence:
-
 ![SuperPoint feature overlay](../../../portal/assets/examples/feature-extraction/superpoint-feature-extractor/image.png)
 
 ## Prerequisites

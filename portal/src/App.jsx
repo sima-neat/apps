@@ -545,10 +545,6 @@ function DetailPage({ catalog }) {
   const summaryHtml = marked.parseInline(example?.summary || "No summary available.");
   const docPanelRef = useRef(null);
   const [activeSection, setActiveSection] = useState("");
-  const preview = example?.sections?.find(({slug}) => slug === "preview");
-  const previewNotesHtml = preview
-    ? (previewImage ? renderPreviewNotes(preview.markdown, previewImage) : renderMarkdown(preview.markdown))
-    : "";
   const groups = useMemo(() => {
     const content = example?.sections || [];
     const setup = new Set([
@@ -663,9 +659,6 @@ function DetailPage({ catalog }) {
       </nav>
 
       <article ref={docPanelRef} className="example-documentation">
-        {previewNotesHtml ? (
-          <div id="preview-notes" className="markdown-body example-preview-notes" dangerouslySetInnerHTML={{ __html: previewNotesHtml }} />
-        ) : null}
         {groups.map((group) => (
           <section key={group.id} id={group.id} data-doc-group="" className="example-doc-group">
             <h2>{group.title}</h2>
@@ -685,20 +678,6 @@ function DetailPage({ catalog }) {
       {showDownloadModal ? <AppsDownloadDialog onClose={() => setShowDownloadModal(false)} /> : null}
     </main>
   );
-}
-
-function renderPreviewNotes(markdown, previewImage) {
-  // Keep preview captions and diagrams; the image is already beside the title.
-  const tokens = marked.lexer(normalizeMarkdownAssetUrls(markdown));
-  marked.walkTokens(tokens, (token) => {
-    if (token.type === "image" && token.href === previewImage) {
-      token.type = "text";
-      token.text = "";
-      token.raw = "";
-      token.tokens = [];
-    }
-  });
-  return marked.parser(tokens).replace(/<p>\s*<\/p>/g, "").trim();
 }
 
 function FilterGroup({ label, value, options, onChange, formatLabel = formatDisplayLabel }) {
