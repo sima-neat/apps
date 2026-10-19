@@ -744,7 +744,9 @@ select {
 .filter-panel {
   position: sticky;
   top: 84px;
-  padding: 0;
+  /* The scroll container clips at its padding edge; leave room for glyphs and focus rings. */
+  margin: 0 -4px;
+  padding: 0 4px;
   border: 0;
   background: transparent;
   height: fit-content;
@@ -1053,6 +1055,7 @@ select {
     position: static;
     max-height: none;
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin: 0;
     padding: 18px;
     border-radius: 12px;
     background: color-mix(in srgb, var(--bg-alt) 88%, var(--accent-soft));
