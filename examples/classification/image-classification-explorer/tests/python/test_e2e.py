@@ -513,6 +513,10 @@ class TestE2E:
         # field by field, so C++ kept the invalid top_k (exit 2) while Python
         # used the default and failed loading a different model (exit 6). Both
         # refuse the duplicate now, with the same message.
+        # csv-only with a failing model: the summary used to send the customer
+        # to "the per-model error cells" in an HTML report that was not written.
+        ("csv-only output with a failing model",
+         "io:\n  output_format: [csv]\nmodels:\n  m:\n    path: /nonexistent/m.tar.gz\n", 6),
         ("quoted and unquoted duplicate key",
          'models:\n  foo:\n    path: /nonexistent/m.tar.gz\n    top_k: 0\n'
          '  "foo":\n    path: /nonexistent/m.tar.gz\n',

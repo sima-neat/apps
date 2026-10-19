@@ -246,10 +246,36 @@ std::string decode_escapes_only(const std::string& body) {
       }
       const unsigned long code = std::stoul(digits, nullptr, 16);
       i += width;
-      // Only the ASCII range can appear in a valid profile name; anything wider
-      // is emitted as a byte the name validator will reject, exactly as an
-      // undecodable name is rejected today.
-      out += static_cast<char>(code <= 0x7f ? code : '?');
+      // Encoded as UTF-8, the way PyYAML decodes the same escape. This decoder
+      // was written for profile names, where anything outside ASCII is invalid,
+      // and substituting '?' was harmless there. It now serves every scalar,
+      // including paths and URLs: `io.output_dir: "report\u00e9"` became
+      // `reporté` in Python and `report?` in C++, so one configuration file
+      // published to two different directories.
+      //
+      // Profile names are unaffected: is_valid_profile_name admits only
+      // letters, digits, '_' and '-', and a multi-byte sequence is none of
+      // those, so a non-ASCII name is still rejected - by its real spelling
+      // now, rather than as a row of question marks.
+      if (code <= 0x7f) {
+        out += static_cast<char>(code);
+      } else if (code >= 0xD800 && code <= 0xDFFF) {
+        out += '?'; // a lone surrogate is not a character; keep the old marker
+      } else if (code <= 0x7ff) {
+        out += static_cast<char>(0xC0 | (code >> 6));
+        out += static_cast<char>(0x80 | (code & 0x3F));
+      } else if (code <= 0xffff) {
+        out += static_cast<char>(0xE0 | (code >> 12));
+        out += static_cast<char>(0x80 | ((code >> 6) & 0x3F));
+        out += static_cast<char>(0x80 | (code & 0x3F));
+      } else if (code <= 0x10FFFF) {
+        out += static_cast<char>(0xF0 | (code >> 18));
+        out += static_cast<char>(0x80 | ((code >> 12) & 0x3F));
+        out += static_cast<char>(0x80 | ((code >> 6) & 0x3F));
+        out += static_cast<char>(0x80 | (code & 0x3F));
+      } else {
+        out += '?'; // beyond Unicode; nothing sensible to emit
+      }
       break;
     }
     default:
@@ -1289,6 +1315,25 @@ std::size_t first_invalid_utf8(const std::string& bytes) {
   return std::string::npos;
 }
 
+// A path as text that is safe to put in a document declaring itself UTF-8:
+// every byte that is not part of a well-formed sequence becomes U+FFFD.
+std::string printable_path(const fs::path& path) {
+  const std::string raw = path.string();
+  std::string out;
+  std::size_t i = 0;
+  while (i < raw.size()) {
+    const std::size_t bad = first_invalid_utf8(raw.substr(i));
+    if (bad == std::string::npos) {
+      out += raw.substr(i);
+      break;
+    }
+    out += raw.substr(i, bad);
+    out += "\xEF\xBF\xBD"; // U+FFFD
+    i += bad + 1;
+  }
+  return out;
+}
+
 // Python reads the label map as text, so two of its rules decide what a label
 // is, and neither is the ASCII rule std::getline plus trim_copy implemented:
 // str.splitlines() ends a line at any of ten code points, and str.strip()
@@ -1666,6 +1711,16 @@ std::vector<fs::path> discover_images(const std::string& input_path,
 
   std::vector<fs::path> images;
   for (const auto& entry : entries) {
+    // A name the filesystem holds as bytes that are not UTF-8. Streaming those
+    // into report.html, which declares itself UTF-8, produced a mangled
+    // document and exit 0 here, while Python carried the same name through
+    // surrogate escapes and segfaulted the interpreter inside the native
+    // decoder. Skipping is what both can agree on, and it is how every other
+    // unusable entry in the directory is already treated.
+    if (first_invalid_utf8(entry.string()) != std::string::npos) {
+      skipped.push_back(printable_path(entry) + ": file name is not valid UTF-8");
+      continue;
+    }
     const std::string raw_ext = entry.extension().string();
     const std::string ext = lower_copy(raw_ext);
     if (std::find(extensions.begin(), extensions.end(), ext) == extensions.end()) {
@@ -2638,8 +2693,14 @@ int main(int argc, char** argv) {
         written += ", thumbnails/";
       std::cout << "  " << written << "\n";
       if (images_with_errors > 0) {
+        // Every selected format carries the failures, so name one that exists.
+        // A two-way json/html choice sent a csv-only run to "the per-model
+        // error cells" in an HTML report that was never written.
+        const char* where = has("json")   ? "report.json"
+                            : has("html") ? "the per-model error cells in report.html"
+                                          : "the error column in report.csv";
         std::cout << "  " << images_with_errors << " image(s) had at least one model failure (see "
-                  << (has("json") ? "report.json" : "the per-model error cells") << ")\n";
+                  << where << ")\n";
       }
     }
 

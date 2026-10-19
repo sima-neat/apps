@@ -773,6 +773,25 @@ def load_label_map(path: str | None, num_classes: int) -> list[str]:
     return labels
 
 
+def is_utf8_path(path: Path) -> bool:
+    """Whether the whole path round-trips as UTF-8.
+
+    `os.fsencode` recovers the bytes the filesystem actually holds, including
+    the ones Python represents as surrogate escapes; a strict decode then says
+    whether they are text both entrypoints can agree on.
+    """
+    try:
+        os.fsencode(path).decode("utf-8")
+    except (UnicodeDecodeError, UnicodeEncodeError, ValueError):
+        return False
+    return True
+
+
+def _printable_path(path: Path) -> str:
+    """The path as text safe to put in a report that declares itself UTF-8."""
+    return os.fsencode(path).decode("utf-8", "replace")
+
+
 def discover_images(input_path: str | None, extensions: tuple[str, ...],
                      fallback_url: str, fallback_dest: Path) -> tuple[list[Path], list[str]]:
     """Return (images, skipped_descriptions) in deterministic order."""
@@ -792,6 +811,15 @@ def discover_images(input_path: str | None, extensions: tuple[str, ...],
     skipped: list[str] = []
     for entry in sorted(path.iterdir(), key=lambda p: p.name):
         if not entry.is_file():
+            continue
+        if not is_utf8_path(entry):
+            # A name the filesystem holds as bytes that are not UTF-8. Python
+            # carries those through surrogate escapes, and handing such a str to
+            # the native decoder segfaulted the interpreter mid-run; C++ streamed
+            # the raw bytes into a document declared UTF-8 and exited 0 with a
+            # mangled name. Skipping is what both can agree on, and it is how
+            # every other unusable entry in the directory is already treated.
+            skipped.append(f"{_printable_path(entry)}: file name is not valid UTF-8")
             continue
         if entry.suffix.lower() not in extensions:
             skipped.append(f"{entry}: unsupported extension {entry.suffix or '(none)'}")
@@ -1583,7 +1611,15 @@ def main() -> int:
         written.append("thumbnails/")
     print(f"  {', '.join(written)}")
     if images_with_errors:
-        where = "report.json" if "json" in formats else "the per-model error cells"
+        # Every selected format carries the failures, so name one that exists.
+        # A two-way json/html choice sent a csv-only run to "the per-model
+        # error cells" in an HTML report that was never written.
+        if "json" in formats:
+            where = "report.json"
+        elif "html" in formats:
+            where = "the per-model error cells in report.html"
+        else:
+            where = "the error column in report.csv"
         print(f"  {images_with_errors} image(s) had at least one model failure (see {where})")
 
     used_fallback_sample = not input_path

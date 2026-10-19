@@ -881,6 +881,25 @@ class TestReports:
         }
 
 
+class TestUnicodeEscapesInSettings:
+    """A double-quoted escape must decode the same in both entrypoints."""
+
+    @pytest.mark.parametrize(
+        "escaped, expected",
+        [
+            ('"report\\u00e9"', "report\u00e9"),
+            ('"caf\\u00e9/out"', "caf\u00e9/out"),
+            ('"\\u65e5\\u672c"', "\u65e5\u672c"),
+        ],
+    )
+    def test_escape_decodes_to_the_character(self, escaped, expected):
+        """C++ substituted '?' for anything outside ASCII here, so
+        `output_dir: "report\\u00e9"` published to `report\u00e9` in Python and
+        `report?` in C++ - one config file, two directories."""
+        value = yaml.safe_load(f"v: {escaped}")["v"]
+        assert main.config_str(value, "io.output_dir", None) == expected
+
+
 class TestOutputFormat:
     """io.output_format selects which reports are written."""
 
@@ -940,6 +959,38 @@ class TestOutputFormat:
         assert (out_dir / "report.html").is_file()
         assert (out_dir / "thumbnails").is_dir()
         assert not (out_dir / "report.json").exists()
+
+
+class TestNonUtf8Inputs:
+    """File names the filesystem holds as non-UTF-8 bytes."""
+
+    def test_non_utf8_filename_is_skipped_not_classified(self, tmp_path, monkeypatch, capsys):
+        """Python carried such a name through surrogate escapes and segfaulted
+        the interpreter inside the native decoder; C++ streamed the raw bytes
+        into a document declaring itself UTF-8. Both skip it now."""
+        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
+        good = tmp_path / "in" / "good.jpg"
+        good.parent.mkdir()
+        _make_image(good)
+        bad = os.path.join(os.fsencode(str(tmp_path / "in")), b"bad\xff\xfename.jpg")
+        shutil.copyfile(good, os.fsdecode(bad))
+
+        out_dir = tmp_path / "out"
+        config_path = tmp_path / "config.yaml"
+        _write_config(config_path, tmp_path / "in", out_dir)
+        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
+
+        assert main.main() == 0
+        payload = json.loads((out_dir / "report.json").read_text())
+        paths = [i["path"] for i in payload["images"]]
+        assert len(paths) == 1 and paths[0].endswith("good.jpg"), paths
+        assert any("not valid UTF-8" in entry for entry in payload["skipped"]), payload["skipped"]
+
+    def test_is_utf8_path(self, tmp_path):
+        assert main.is_utf8_path(tmp_path / "plain.jpg")
+        assert main.is_utf8_path(tmp_path / "caf\u00e9.jpg")
+        bad = os.fsdecode(os.path.join(os.fsencode(str(tmp_path)), b"bad\xff.jpg"))
+        assert not main.is_utf8_path(Path(bad))
 
 
 class TestFakeHardwarePipeline:
