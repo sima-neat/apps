@@ -90,6 +90,13 @@ web_config_list() {
   yaml_lookup "$1" "$(_studio_path "$1" "web.$2")" list
 }
 
+# rag_config_enabled <config.yaml>             -> app.rag.enabled (the loader
+# answers false when the key is missing, the fallback reader an empty line)
+rag_config_enabled() {
+  studio_config_query "$1" rag.enabled && return 0
+  yaml_lookup "$1" "$(_studio_path "$1" "rag.enabled")" scalar
+}
+
 # Truthiness as shared.config._load_bool: 1/true/yes/on in any case.
 config_true() {
   case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in

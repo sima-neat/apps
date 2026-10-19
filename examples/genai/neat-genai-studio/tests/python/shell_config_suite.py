@@ -131,6 +131,32 @@ class ShellWebConfigTests(unittest.TestCase):
             self.assertEqual(_run('config_true "$1" && echo y || echo n', value), "n", value)
 
 
+class ShellRagConfigTests(unittest.TestCase):
+    """rag_config_enabled, which setup.sh reads to keep a SETUP_RAG choice."""
+
+    def _enabled(self, text):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / "c.yaml"
+            config.write_text(text, encoding="utf-8")
+            return _run('rag_config_enabled "$1"', str(config))
+
+    def test_values_read_like_the_loader(self):
+        self.assertEqual(self._enabled("app:\n  rag:\n    enabled: true\n"), "true")
+        self.assertEqual(self._enabled("app:\n  rag:\n    enabled: false   # SETUP_RAG=1\n"), "false")
+        self.assertEqual(self._enabled("app:\n  rag: {enabled: 'yes'}\n"), "true")
+        self.assertEqual(self._enabled("rag:\n  enabled: on\n"), "true")             # no app: root
+        self.assertEqual(self._enabled("app:\n  web:\n    port: 5000\n"), "false")   # loader default
+
+    def test_fallback_reader_without_a_yaml_python(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            c = Path(tmp) / "c.yaml"
+            c.write_text("app:\n  rag:\n    enabled: false   # SETUP_RAG=1\n", encoding="utf-8")
+            script = 'source "$1"; _studio_config_python() { return 1; }; rag_config_enabled "$2"'
+            out = subprocess.run(["bash", "-c", script, "_", str(HELPER), str(c)],
+                                 check=True, capture_output=True, text=True)
+            self.assertEqual(out.stdout.strip(), "false")
+
+
 class ShellConfigValueTests(unittest.TestCase):
     def test_quoted_and_plain_values(self):
         self.assertEqual(_read(CONFIG, "models_root"), "/data/st # models")

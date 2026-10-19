@@ -80,8 +80,10 @@ from audio_api_suite import (  # noqa: E402,F401
 from shell_config_suite import (  # noqa: E402,F401
     ServerConfigWithoutPyyamlTests,
     ShellConfigValueTests,
+    ShellRagConfigTests,
     ShellWebConfigTests,
 )
+from setup_rag_suite import SetupRagSwitchTests  # noqa: E402,F401
 from backend_mode_suite import (  # noqa: E402,F401
     BackendPathTests,
     CorsPolicyTests as BackendCorsPolicyTests,

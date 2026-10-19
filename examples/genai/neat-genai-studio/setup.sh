@@ -88,6 +88,12 @@ SUPERTONIC_SIMA_HF_REPO="florianvoss/supertonic-3-sima"
 SUPERTONIC_SIMA_HF_REVISION="${SUPERTONIC_SIMA_HF_REVISION:-9229108c974ef57810abce0889ac713a59e341a1}"
 SKIP_MODEL_DOWNLOAD="${SKIP_MODEL_DOWNLOAD:-0}"
 CPU_TORCH_VERSION="${CPU_TORCH_VERSION:-2.8.0+cpu}"
+# Document search (RAG): CPU-only PyTorch, the LangChain/Milvus packages, the
+# gte-small embedding model and the default database. SETUP_RAG=0 skips all of
+# them and writes app.rag.enabled: false, so a board short on disk or memory
+# still finishes setup. Unset, a re-run keeps what CONFIG_PATH already says
+# (resolve_setup_rag), so a dependency refresh does not bring RAG back.
+SETUP_RAG="${SETUP_RAG:-}"
 DEPENDENCIES_ONLY=0
 
 # ---------------------------------------------------------------------------
@@ -210,6 +216,11 @@ Environment:
   SUPERTONIC_MODELS_ROOT        Where the Supertonic model files are stored
                                 default: /media/nvme/supertonic-tts/models
   SUPERTONIC_VENV               Runtime venv path. default: ./.venv-supertonic
+  SETUP_RAG                     Install document search (RAG): CPU PyTorch,
+                                the RAG packages, the embedding model and the
+                                default database, 1 or 0. 0 writes
+                                app.rag.enabled: false. default: the existing
+                                config's app.rag.enabled, else 1
   CPU_TORCH_VERSION             CPU-only PyTorch version for RAG installs
                                 default: 2.8.0+cpu
   SKIP_MODEL_DOWNLOAD           Write config without downloading models, 1 or 0
@@ -254,6 +265,19 @@ then
 fi
 ok "pyneat available (${C_DIM}${PYNEAT_PYTHON}${C_RESET})"
 
+# SETUP_RAG: environment > the existing config's app.rag.enabled > 1.
+resolve_setup_rag() {
+  if [[ -z "${SETUP_RAG}" ]]; then
+    if [[ -f "${CONFIG_PATH}" ]]; then
+      [[ -x "${APP_VENV}/bin/python" ]] && export STUDIO_CONFIG_PYTHON="${APP_VENV}/bin/python"
+      SETUP_RAG="$(rag_config_enabled "${CONFIG_PATH}")"
+    else
+      SETUP_RAG=1
+    fi
+  fi
+  if config_true "${SETUP_RAG}"; then SETUP_RAG=1; else SETUP_RAG=0; fi
+}
+
 install_cpu_torch_if_needed() {
   case "$(uname -m)" in
     x86_64|amd64|aarch64|arm64)
@@ -266,14 +290,21 @@ install_cpu_torch_if_needed() {
 }
 
 section "Python environment"
+resolve_setup_rag
 step "Creating backend virtual environment: ${C_DIM}${APP_VENV}${C_RESET}"
 python3 -m venv "${APP_VENV}"
 "${APP_VENV}/bin/python" -m pip install --upgrade pip
-install_cpu_torch_if_needed
-info "Installing backend + RAG requirements (incl. piper-plus)…"
-"${APP_VENV}/bin/python" -m pip install \
-  -r "${EXAMPLE_DIR}/src/python/requirements.txt" \
-  -r "${EXAMPLE_DIR}/src/python/requirements-rag.txt"
+if [[ "${SETUP_RAG}" == "1" ]]; then
+  install_cpu_torch_if_needed
+  info "Installing backend + RAG requirements (incl. piper-plus)…"
+  "${APP_VENV}/bin/python" -m pip install \
+    -r "${EXAMPLE_DIR}/src/python/requirements.txt" \
+    -r "${EXAMPLE_DIR}/src/python/requirements-rag.txt"
+else
+  info "Installing backend requirements (incl. piper-plus); document search (RAG) skipped (SETUP_RAG=0)…"
+  "${APP_VENV}/bin/python" -m pip install \
+    -r "${EXAMPLE_DIR}/src/python/requirements.txt"
+fi
 ok "Backend virtual environment ready."
 resolve_supertonic_paths
 
@@ -681,8 +712,10 @@ if [[ "${SKIP_MODEL_DOWNLOAD}" != "1" ]]; then
     write_repo_marker "${repo}" "${MODELS_DIR}/${name}"
   done
 
-  step "Downloading RAG embedding model: ${RAG_EMBEDDING_REPO}"
-  "${APP_VENV}/bin/hf" download "${RAG_EMBEDDING_REPO}" --local-dir "${RAG_EMBEDDING_DIR}"
+  if [[ "${SETUP_RAG}" == "1" ]]; then
+    step "Downloading RAG embedding model: ${RAG_EMBEDDING_REPO}"
+    "${APP_VENV}/bin/hf" download "${RAG_EMBEDDING_REPO}" --local-dir "${RAG_EMBEDDING_DIR}"
+  fi
 
   for repo in ${CATALOG_MODEL_REPOS}; do
     name="$(catalog_dir_name "${repo}")"
@@ -783,6 +816,11 @@ if [[ -f "${CONFIG_PATH}" ]]; then
   cp -p "${CONFIG_PATH}" "${CONFIG_PATH}.bak"
   info "Previous config kept as ${C_DIM}${CONFIG_PATH}.bak${C_RESET} (web settings carried over: host ${WEB_HOST}, port ${WEB_PORT}, https ${WEB_HTTPS}${WEB_CORS_ORIGINS:+, cors_origins ${WEB_CORS_ORIGINS}})."
 fi
+if [[ "${SETUP_RAG}" == "1" ]]; then
+  RAG_ENABLED_YAML="true"
+else
+  RAG_ENABLED_YAML="false   # SETUP_RAG=1 ./setup.sh installs document search"
+fi
 cat > "${CONFIG_PATH}" <<YAML
 server:
   openai:
@@ -831,13 +869,13 @@ app:
       venv: "$([[ "${SUPERTONIC_VENV}" == "${SUPERTONIC_DEFAULT_VENV}" ]] || printf '%s' "${SUPERTONIC_VENV}")"
 
   rag:
-    enabled: true
+    enabled: ${RAG_ENABLED_YAML}
     embedding_model_dir: ${RAG_EMBEDDING_DIR}
 
 YAML
 ok "Config written."
 
-if [[ "${SKIP_MODEL_DOWNLOAD}" != "1" ]]; then
+if [[ "${SKIP_MODEL_DOWNLOAD}" != "1" && "${SETUP_RAG}" == "1" ]]; then
   section "RAG database"
   step "Creating default RAG database…"
   (
