@@ -12,6 +12,7 @@
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <chrono>
 #include <cmath>
@@ -772,6 +773,71 @@ std::vector<std::string> split_csv(const std::string& value) {
 // scanning the raw scalar map. The profile name is everything before the final
 // ".<field>", so a declared name containing '.' surfaces intact and can be rejected
 // with a clear message instead of being silently truncated.
+const std::array<const char*, 3> kReportFormats = {"html", "json", "csv"};
+
+// Which report files to write, defaulting to html alone.
+//
+// Accepts a YAML sequence (`[html, json]`) or a comma-separated scalar
+// (`html,json`). ScalarConfig flattens the file, so a sequence arrives here as
+// the literal text "[html, json]" - PyYAML gives Python a real list from the
+// same bytes, and io.extensions in the same block already uses the comma form
+// for exactly this reason. Supporting both spellings is what keeps the two
+// entrypoints reading one file the same way.
+//
+// Returned in kReportFormats order, not the order written, so the value behaves
+// as a set and both entrypoints iterate it identically.
+std::vector<std::string> config_formats(const sima_examples::ScalarConfig& raw,
+                                        const std::string& key) {
+  const auto value = config_scalar(raw, key);
+  if (!value.has_value())
+    return {"html"};
+  std::string text = sima_examples::trim_copy(*value);
+  if (text.size() >= 2 && text.front() == '[' && text.back() == ']')
+    text = text.substr(1, text.size() - 2);
+
+  // A plain comma split, not split_csv: that one is for io.extensions and
+  // prepends a '.' to every entry, which turned `html` into `.html` here.
+  std::vector<std::string> parts;
+  {
+    std::stringstream ss(text);
+    std::string item;
+    while (std::getline(ss, item, ','))
+      parts.push_back(item);
+  }
+
+  std::vector<std::string> chosen;
+  for (const std::string& part : parts) {
+    std::string name = sima_examples::trim_copy(part);
+    if (name.size() >= 2 && ((name.front() == '"' && name.back() == '"') ||
+                             (name.front() == '\'' && name.back() == '\'')))
+      name = name.substr(1, name.size() - 2);
+    name = lower_copy(sima_examples::trim_copy(name));
+    if (name.empty())
+      continue;
+    if (std::find(kReportFormats.begin(), kReportFormats.end(), name) == kReportFormats.end()) {
+      std::string allowed;
+      for (size_t i = 0; i < kReportFormats.size(); ++i)
+        allowed += (i ? ", " : "") + std::string(kReportFormats[i]);
+      throw ConfigError(key + " contains '" + sima_examples::trim_copy(part) +
+                        "', which is not a report format; use any of " + allowed);
+    }
+    if (std::find(chosen.begin(), chosen.end(), name) == chosen.end())
+      chosen.push_back(name);
+  }
+  if (chosen.empty()) {
+    std::string allowed;
+    for (size_t i = 0; i < kReportFormats.size(); ++i)
+      allowed += (i ? ", " : "") + std::string(kReportFormats[i]);
+    throw ConfigError(key + " selects no report format; use any of " + allowed);
+  }
+  std::vector<std::string> ordered;
+  for (const char* f : kReportFormats) {
+    if (std::find(chosen.begin(), chosen.end(), f) != chosen.end())
+      ordered.emplace_back(f);
+  }
+  return ordered;
+}
+
 std::vector<std::string> profile_names(const sima_examples::ScalarConfig& raw) {
   std::vector<std::string> names;
   std::set<std::string> seen;
@@ -1547,6 +1613,36 @@ simaai::neat::Model build_model(const ModelProfile& profile) {
   return simaai::neat::Model(profile.path, opt);
 }
 
+// One untimed inference, so the first measured image does not pay the one-time
+// setup cost on behalf of every later one.
+//
+// Measured on a Modalix DevKit over 21 COCO images before this existed: the
+// first timed call was 939.2 ms for resnet_50, 757.3 ms for densenet_121,
+// 351.0 ms for resnet_18 and 328.8 ms for efficientnet_b0, against medians of
+// 3.0, 3.2, 2.7 and 2.7 ms for the other twenty. The report therefore showed a
+// threefold spread between models on its first row that does not exist in
+// steady state - actively misleading in an application whose purpose is
+// comparing models.
+//
+// A blank tensor rather than the first real image: the result is discarded, and
+// warming up on a customer image would make the warm-up fail whenever that
+// image does, turning a measurement detail into a second failure path. Kept in
+// step with warm_up() in the Python entrypoint.
+void warm_up(simaai::neat::Model& model, const ModelProfile& profile, int timeout_ms) {
+  try {
+    const cv::Mat blank = cv::Mat::zeros(profile.input_height, profile.input_width, CV_8UC3);
+    const auto input =
+        simaai::neat::Tensor::from_cv_mat(blank, simaai::neat::ImageSpec::PixelFormat::RGB);
+    (void)model.run(simaai::neat::TensorList{input}, timeout_ms);
+  } catch (const std::exception& e) {
+    // A failed warm-up costs accuracy of the first measurement, nothing more.
+    // The real inferences report their own per-image, per-model errors, so
+    // failing the run here would turn a timing refinement into an outage.
+    std::cerr << "  warm-up for " << profile.name << " did not run (" << e.what()
+              << "); first measurement may include setup cost\n";
+  }
+}
+
 Prediction classify(simaai::neat::Model& model, const ModelProfile& profile,
                     const fs::path& image_path, int timeout_ms) {
   const cv::Mat rgb = sima_examples::load_rgb_resized(image_path.string(), profile.input_width,
@@ -1596,6 +1692,7 @@ std::vector<ImageResult> run_all(std::vector<ModelProfile>& profiles,
   for (auto& profile : profiles) {
     std::cout << "Loading model '" << profile.name << "': " << profile.path << "\n";
     simaai::neat::Model model = build_model(profile);
+    warm_up(model, profile, timeout_ms);
     for (auto& result : results) {
       try {
         check_unchanged(result.image_path, result.fingerprint);
@@ -1650,9 +1747,18 @@ void write_json_report(const fs::path& path, const std::vector<ImageResult>& res
   payload["timing"] = {
       {"total_ms", total_ms}, {"image_count", results.size()}, {"model_count", profiles.size()}};
 
+  // Keyed by predicted class rather than by model: one class used to appear in
+  // up to four separate per-model blocks with nothing showing which models
+  // agreed on it, which is the question this application exists to answer.
+  // Keyed by class id, not label, so two distinct classes that share a label are
+  // never merged - the id is the identity. Profiles may carry different label
+  // maps, so the label recorded is the one used by the first profile, in
+  // declaration order, that predicted the class; label_rank tracks that.
   json class_summary = json::object();
-  for (const auto& profile : profiles)
-    class_summary[profile.name] = json::object();
+  std::map<std::string, std::size_t> label_rank;
+  std::map<std::string, std::size_t> profile_order;
+  for (std::size_t i = 0; i < profiles.size(); ++i)
+    profile_order[profiles[i].name] = i;
 
   json images = json::array();
   for (const auto& result : results) {
@@ -1672,12 +1778,24 @@ void write_json_report(const fs::path& path, const std::vector<ImageResult>& res
         }
         predictions[profile.name] = {{"top_k", top_k}, {"inference_ms", it->second.inference_ms}};
         if (!it->second.top_k.empty()) {
-          // Keyed by class id so distinct classes sharing a label are never merged.
           const int class_id = it->second.top_k.front().index;
-          auto& entry = class_summary[profile.name][std::to_string(class_id)];
+          const std::string key = std::to_string(class_id);
+          auto& entry = class_summary[key];
           if (!entry.is_object())
-            entry = {{"label", label_for(profile, class_id)}, {"count", 0}};
-          entry["count"] = entry["count"].get<int>() + 1;
+            entry = {
+                {"label", label_for(profile, class_id)}, {"models", json::object()}, {"total", 0}};
+          auto& models = entry["models"];
+          models[profile.name] =
+              models.contains(profile.name) ? models[profile.name].get<int>() + 1 : 1;
+          entry["total"] = entry["total"].get<int>() + 1;
+          // Lowest profile index wins the spelling, so the label does not depend
+          // on which image happened to be classified first.
+          const std::size_t rank = profile_order.at(profile.name);
+          const auto rank_it = label_rank.find(key);
+          if (rank_it == label_rank.end() || rank < rank_it->second) {
+            entry["label"] = label_for(profile, class_id);
+            label_rank[key] = rank;
+          }
         }
       }
       entry["predictions"] = predictions;
@@ -1858,17 +1976,25 @@ void write_html_report(const fs::path& path, const std::vector<ImageResult>& res
         top1_obj[profile.name] = {{"class_id", it->second.top_k.front().index},
                                   {"label", label_for(profile, it->second.top_k.front().index)},
                                   {"prob", round_probability(it->second.top_k.front().prob)}};
-        std::ostringstream top_str;
-        bool first = true;
-        for (const auto& s : it->second.top_k) {
-          if (!first)
-            top_str << "<br>";
-          first = false;
-          top_str << html_escape(label_for(profile, s.index)) << " (" << std::fixed
+        // The top-1 is the prediction; the rest is context. Rendering all five
+        // identically made every cell a five-line block in which the reader had
+        // to know that the first line was the answer. Kept in step with the
+        // Python writer, which emits the same markup.
+        const auto& best = it->second.top_k.front();
+        std::ostringstream runners;
+        for (std::size_t k = 1; k < it->second.top_k.size(); ++k) {
+          const auto& s = it->second.top_k[k];
+          runners << "<br>" << html_escape(label_for(profile, s.index)) << " (" << std::fixed
                   << std::setprecision(2) << (s.prob * 100.0) << "%)";
         }
-        cells << "<td data-model-col=\"" << html_escape(profile.name) << "\">" << top_str.str()
-              << "<br><span class=\"timing\">" << std::fixed << std::setprecision(1)
+        cells << "<td data-model-col=\"" << html_escape(profile.name) << "\">"
+              << "<span class=\"top1\">" << html_escape(label_for(profile, best.index)) << " ("
+              << std::fixed << std::setprecision(2) << (best.prob * 100.0) << "%)</span>";
+        if (it->second.top_k.size() > 1) {
+          cells << "<details class=\"runners\"><summary>top " << it->second.top_k.size()
+                << "</summary><span class=\"runner-list\">" << runners.str() << "</span></details>";
+        }
+        cells << "<br><span class=\"timing\">inference " << std::fixed << std::setprecision(1)
               << it->second.inference_ms << " ms</span></td>";
       } else if (err_it != result.errors.end()) {
         cells << "<td data-model-col=\"" << html_escape(profile.name) << "\" class=\"error\">"
@@ -1897,34 +2023,59 @@ void write_html_report(const fs::path& path, const std::vector<ImageResult>& res
                      << html_escape(profile.name) << "\" checked> " << html_escape(profile.name)
                      << "</label>";
 
-  // model -> class id -> count (keyed by id so distinct classes sharing a label
-  // are never merged).
-  std::map<std::string, std::map<int, int>> class_summary;
+  // class id -> per-model top-1 counts, label and total. Keyed by predicted
+  // class rather than by model so one row names every model that predicted it;
+  // by id rather than label so distinct classes sharing a label stay separate.
+  struct ClassRow {
+    std::map<std::string, int> models;
+    std::string label;
+    std::size_t label_rank = std::numeric_limits<std::size_t>::max();
+    int total = 0;
+  };
+  std::map<int, ClassRow> class_summary;
   for (const auto& result : results) {
-    for (const auto& profile : profiles) {
+    for (std::size_t i = 0; i < profiles.size(); ++i) {
+      const auto& profile = profiles[i];
       const auto it = result.predictions.find(profile.name);
       if (it == result.predictions.end() || it->second.top_k.empty())
         continue;
-      class_summary[profile.name][it->second.top_k.front().index]++;
+      const int class_id = it->second.top_k.front().index;
+      ClassRow& row = class_summary[class_id];
+      row.models[profile.name]++;
+      row.total++;
+      // Lowest profile index wins the spelling, as in the Python writer.
+      if (i < row.label_rank) {
+        row.label = label_for(profile, class_id);
+        row.label_rank = i;
+      }
     }
   }
+  std::vector<std::pair<int, const ClassRow*>> ordered;
+  ordered.reserve(class_summary.size());
+  for (const auto& [class_id, row] : class_summary)
+    ordered.emplace_back(class_id, &row);
+  // Most frequent first, then by class id, matching the Python writer.
+  std::stable_sort(ordered.begin(), ordered.end(), [](const auto& a, const auto& b) {
+    if (a.second->total != b.second->total)
+      return a.second->total > b.second->total;
+    return a.first < b.first;
+  });
   std::ostringstream summary_rows;
-  for (const auto& profile : profiles) {
-    const auto model_it = class_summary.find(profile.name);
-    if (model_it == class_summary.end())
-      continue;
-    std::vector<std::pair<int, int>> ordered(model_it->second.begin(), model_it->second.end());
-    // Most frequent first, then by class id, matching the Python writer.
-    std::stable_sort(ordered.begin(), ordered.end(), [](const auto& a, const auto& b) {
-      if (a.second != b.second)
-        return a.second > b.second;
-      return a.first < b.first;
-    });
-    for (const auto& [class_id, count] : ordered) {
-      summary_rows << "<tr><td>" << html_escape(profile.name) << "</td><td>" << class_id
-                   << "</td><td>" << html_escape(label_for(profile, class_id)) << "</td><td>"
-                   << count << "</td></tr>";
+  for (const auto& [class_id, row] : ordered) {
+    std::ostringstream agreed;
+    bool first_model = true;
+    for (const auto& profile : profiles) {
+      const auto model_it = row->models.find(profile.name);
+      if (model_it == row->models.end())
+        continue;
+      if (!first_model)
+        agreed << ", ";
+      first_model = false;
+      agreed << html_escape(profile.name) << " (" << model_it->second << ")";
     }
+    summary_rows << "<tr><td>" << class_id << "</td><td>" << html_escape(row->label) << "</td><td>"
+                 << row->models.size() << " of " << profiles.size() << "</td><td>" << agreed.str()
+                 << "</td><td>" << row->total << "</td></tr>";
   }
 
   std::ostringstream skipped_rows;
@@ -1985,8 +2136,9 @@ void write_html_report(const fs::path& path, const std::vector<ImageResult>& res
       << "<table id=\"reportTable\">\n<thead><tr><th>Image</th><th>Path</th>" << header_cols.str()
       << "<th>Models Agree?</th></tr></thead>\n<tbody>\n"
       << rows.str() << "</tbody>\n</table>\n"
-      << "<h2>Per-class summary</h2>\n<table><thead><tr><th>Model</th><th>Class id</th>"
-         "<th>Predicted class</th><th>Count</th></tr></thead><tbody>"
+      << "<h2>Per-class summary</h2>\n<table><thead><tr><th>Class id</th>"
+         "<th>Predicted class</th><th>Models</th><th>Which models (top-1 count)</th>"
+         "<th>Total</th></tr></thead><tbody>"
       << summary_rows.str() << "</tbody></table>\n"
       << "<h2>Skipped files</h2>\n<ul>" << (skipped.empty() ? "<li>None</li>" : skipped_rows.str())
       << "</ul>\n"
@@ -2103,7 +2255,8 @@ std::string list_foreign(const std::vector<std::string>& foreign) {
 
 void publish_report(const fs::path& output_dir_arg, const std::vector<ImageResult>& results,
                     const std::vector<ModelProfile>& profiles,
-                    const std::vector<std::string>& skipped, double total_ms) {
+                    const std::vector<std::string>& skipped, double total_ms,
+                    const std::vector<std::string>& formats) {
   // weakly_canonical resolves symlinks in the existing part of the path (like
   // Python's Path.resolve()), so a symlinked output_dir has its *target*
   // replaced and the link itself is left in place.
@@ -2178,9 +2331,20 @@ void publish_report(const fs::path& output_dir_arg, const std::vector<ImageResul
     close_or_throw(marker, staging / kReportMarker);
   }
   try {
-    write_json_report(staging / "report.json", results, profiles, skipped, total_ms);
-    write_csv_report(staging / "report.csv", results, profiles);
-    write_html_report(staging / "report.html", results, profiles, skipped, staging);
+    // Only what io.output_format asked for. The thumbnails follow html rather
+    // than being skipped separately: they are referenced only by report.html,
+    // and make_thumbnail is called from the html writer, so not writing html
+    // writes no thumbnails. They were 288 KB of the roughly 420 KB this
+    // application produced for 21 images.
+    const auto wants = [&formats](const char* f) {
+      return std::find(formats.begin(), formats.end(), f) != formats.end();
+    };
+    if (wants("json"))
+      write_json_report(staging / "report.json", results, profiles, skipped, total_ms);
+    if (wants("csv"))
+      write_csv_report(staging / "report.csv", results, profiles);
+    if (wants("html"))
+      write_html_report(staging / "report.html", results, profiles, skipped, staging);
     {
       std::ofstream marker(staging / kReportMarker);
       marker << "generated by image-classification-explorer\n";
@@ -2297,10 +2461,15 @@ int main(int argc, char** argv) {
         "https://raw.githubusercontent.com/EliSchwartz/imagenet-sample-images/master/"
         "n01443537_goldfish.JPEG");
     auto extensions = split_csv(config_scalar_or(raw, "io.extensions", ".jpg,.jpeg,.png,.bmp"));
+    const std::vector<std::string> formats = config_formats(raw, "io.output_format");
     if (extensions.empty())
       extensions.assign(kDefaultExtensions.begin(), kDefaultExtensions.end());
     const fs::path output_dir =
-        normalize_like_pathlib(config_scalar_or(raw, "io.output_dir", "report"));
+        // sandbox/ rather than ./report: the value resolves against the working
+        // directory and the README says to run from the bundle root, so a bare
+        // `report` left the report and its thumbnails in whatever directory the
+        // customer ran from. `sandbox/` is already in .gitignore.
+        normalize_like_pathlib(config_scalar_or(raw, "io.output_dir", "sandbox/report"));
     // Parse the validation block up front: std::stoi on a malformed value would
     // otherwise throw after the report had already been written.
     std::optional<int> expected_class_id;
@@ -2362,7 +2531,7 @@ int main(int argc, char** argv) {
     }
 
     try {
-      publish_report(output_dir, results, profiles, skipped, total_ms);
+      publish_report(output_dir, results, profiles, skipped, total_ms, formats);
     } catch (const std::exception& e) {
       throw std::runtime_error("failed to write report to " + output_dir.string() + ": " +
                                e.what());

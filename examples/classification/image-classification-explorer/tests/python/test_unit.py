@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
@@ -127,12 +128,18 @@ def _make_fake_pyneat(num_classes=5, fail_message=None, fail_run_for_paths=None)
 
 
 def _write_config(path, input_path, output_dir, model_path="fake_model.tar.gz",
-                  extensions=".jpg,.jpeg,.png,.bmp", num_classes=5):
+                  extensions=".jpg,.jpeg,.png,.bmp", num_classes=5,
+                  output_format="[html, json, csv]"):
+    # All three formats by default: most tests here assert on report.json or
+    # report.csv, and io.output_format ships as [html] alone. A test that wants
+    # the shipped behaviour passes output_format explicitly.
     path.write_text(f"""
 io:
+  output_format: [html, json, csv]
   input: {input_path}
   output_dir: {output_dir}
   extensions: {extensions}
+  output_format: {output_format}
 models:
   m:
     path: {model_path}
@@ -805,9 +812,9 @@ class TestReports:
         r2 = main.ImageResult(image_path=Path("img2.jpg"), errors={"a": "failed to read image"})
         return [r1, r2]
 
-    def _sample_profile(self):
+    def _sample_profile(self, name="a"):
         return main.ModelProfile(
-            name="a", path="m.tar.gz", input_width=224, input_height=224,
+            name=name, path="m.tar.gz", input_width=224, input_height=224,
             preprocess="imagenet", output="softmax", num_classes=1000, label_map=None, top_k=5,
         )
 
@@ -837,10 +844,28 @@ class TestReports:
         assert any("error" in line for line in lines)
 
     def test_build_class_summary(self):
+        """Keyed by predicted class, naming the models that predicted it."""
         results = self._sample_results()
         profiles = [self._sample_profile()]
         summary = main.build_class_summary(results, profiles)
-        assert summary["a"]["1"] == {"label": "cat", "count": 1}
+        assert summary["1"] == {"label": "cat", "models": {"a": 1}, "total": 1}
+
+    def test_class_summary_names_every_model_that_agreed(self):
+        """The point of the re-key: one row per class showing which models
+        predicted it, instead of the same class hiding in several per-model
+        blocks with nothing relating them."""
+        r1 = main.ImageResult(image_path=Path("img1.jpg"))
+        r1.predictions["a"] = main.Prediction(top_k=[(1, "cat", 0.9)], inference_ms=1.0)
+        r1.predictions["b"] = main.Prediction(top_k=[(1, "cat", 0.8)], inference_ms=1.0)
+        r2 = main.ImageResult(image_path=Path("img2.jpg"))
+        r2.predictions["a"] = main.Prediction(top_k=[(1, "cat", 0.7)], inference_ms=1.0)
+        r2.predictions["b"] = main.Prediction(top_k=[(2, "dog", 0.6)], inference_ms=1.0)
+        profiles = [self._sample_profile(), self._sample_profile(name="b")]
+
+        summary = main.build_class_summary([r1, r2], profiles)
+
+        assert summary["1"] == {"label": "cat", "models": {"a": 2, "b": 1}, "total": 3}
+        assert summary["2"] == {"label": "dog", "models": {"b": 1}, "total": 1}
 
     def test_class_summary_keeps_same_label_classes_separate(self):
         """Regression: 134 and 517 both display as "crane" but are distinct
@@ -850,10 +875,71 @@ class TestReports:
         r2 = main.ImageResult(image_path=Path("img2.jpg"))
         r2.predictions["a"] = main.Prediction(top_k=[(517, "crane", 0.8)], inference_ms=1.0)
         summary = main.build_class_summary([r1, r2], [self._sample_profile()])
-        assert summary["a"] == {
-            "134": {"label": "crane", "count": 1},
-            "517": {"label": "crane", "count": 1},
+        assert summary == {
+            "134": {"label": "crane", "models": {"a": 1}, "total": 1},
+            "517": {"label": "crane", "models": {"a": 1}, "total": 1},
         }
+
+
+class TestOutputFormat:
+    """io.output_format selects which reports are written."""
+
+    @pytest.mark.parametrize(
+        "spelling, expected",
+        [
+            (None, ["html"]),                       # absent: ships as html alone
+            ("[html]", ["html"]),
+            ("[html, json, csv]", ["html", "json", "csv"]),
+            ("html,json", ["html", "json"]),        # comma form, as io.extensions uses
+            ("[json]", ["json"]),
+            ("[CSV]", ["csv"]),                     # case-insensitive
+            ("[json, json]", ["json"]),             # duplicates collapse
+            ("[csv, html]", ["html", "csv"]),       # normalised order, not written order
+        ],
+    )
+    def test_accepted_spellings(self, spelling, expected):
+        value = None if spelling is None else yaml.safe_load(f"v: {spelling}")["v"]
+        assert main.config_formats(value) == expected
+
+    @pytest.mark.parametrize("bad", ["[html, pdf]", "[]", "pdf"])
+    def test_rejected_values(self, bad):
+        value = yaml.safe_load(f"v: {bad}")["v"]
+        with pytest.raises(ValueError) as caught:
+            main.config_formats(value)
+        assert "io.output_format" in str(caught.value)
+
+    def test_only_requested_files_are_written(self, tmp_path, monkeypatch):
+        """json alone writes no report.html and no thumbnails - the thumbnails
+        are referenced only by the HTML, and were 288 KB of roughly 420 KB for
+        21 images."""
+        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
+        img = tmp_path / "a.jpg"
+        _make_image(img)
+        out_dir = tmp_path / "out"
+        config_path = tmp_path / "config.yaml"
+        _write_config(config_path, img, out_dir, output_format="[json]")
+        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
+
+        assert main.main() == 0
+        assert (out_dir / "report.json").is_file()
+        assert not (out_dir / "report.html").exists()
+        assert not (out_dir / "report.csv").exists()
+        assert not (out_dir / "thumbnails").exists()
+
+    def test_html_alone_still_writes_thumbnails(self, tmp_path, monkeypatch):
+        """The shipped default: the browsable report and the images it shows."""
+        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
+        img = tmp_path / "a.jpg"
+        _make_image(img)
+        out_dir = tmp_path / "out"
+        config_path = tmp_path / "config.yaml"
+        _write_config(config_path, img, out_dir, output_format="[html]")
+        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
+
+        assert main.main() == 0
+        assert (out_dir / "report.html").is_file()
+        assert (out_dir / "thumbnails").is_dir()
+        assert not (out_dir / "report.json").exists()
 
 
 class TestFakeHardwarePipeline:
@@ -957,6 +1043,7 @@ class TestFakeHardwarePipeline:
         config_path = tmp_path / "config.yaml"
         config_path.write_text(f"""
 io:
+  output_format: [html, json, csv]
   input: {tmp_path}
   output_dir: {out_dir}
 models:
@@ -999,6 +1086,7 @@ models:
         config_path = tmp_path / "config.yaml"
         config_path.write_text(f"""
 io:
+  output_format: [html, json, csv]
   input: {tmp_path}
   output_dir: {out_dir}
 models:
@@ -1024,12 +1112,13 @@ models:
         assert "b" in image_entry["errors"]
         assert "simulated inference failure" in image_entry["errors"]["b"]
         assert "b" not in image_entry["predictions"]
-        # class_summary must only count what the report actually shows.
+        # class_summary must only count what the report actually shows: the
+        # failing model contributes nothing, so its name is absent from the
+        # entry rather than present with a zero count.
         top1 = image_entry["predictions"]["a"]["top_k"][0]
-        assert payload["class_summary"]["a"] == {
-            str(top1["class_id"]): {"label": top1["label"], "count": 1}
+        assert payload["class_summary"] == {
+            str(top1["class_id"]): {"label": top1["label"], "models": {"a": 1}, "total": 1}
         }
-        assert payload["class_summary"].get("b", {}) == {}
 
 
     def test_models_are_loaded_one_at_a_time(self, tmp_path, monkeypatch):
@@ -1042,6 +1131,7 @@ models:
         config_path = tmp_path / "config.yaml"
         config_path.write_text(f"""
 io:
+  output_format: [html, json, csv]
   input: {tmp_path}
   output_dir: {out_dir}
 models:
@@ -1127,6 +1217,7 @@ models:
         config_path = tmp_path / "config.yaml"
         config_path.write_text(f"""
 io:
+  output_format: [html, json, csv]
   input: {img}
   output_dir: {out_dir}
 models:
@@ -1196,6 +1287,7 @@ models:
         config_path = tmp_path / "config.yaml"
         config_path.write_text(f"""
 io:
+  output_format: [html, json, csv]
   input: {img}
   output_dir: {out_dir}
   extensions: null
@@ -1746,6 +1838,7 @@ class TestArgParsing:
         config_path = tmp_path / "config.yaml"
         config_path.write_text(f"""
 io:
+  output_format: [html, json, csv]
   input: {img}
   output_dir: {out_dir}
 validation:
@@ -1787,6 +1880,7 @@ models:
         config_path = tmp_path / "config.yaml"
         config_path.write_text(f"""
 io:
+  output_format: [html, json, csv]
   input: {img}
   output_dir: {out_dir}
   extensions: jpg, .png

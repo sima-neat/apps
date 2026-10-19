@@ -4,6 +4,12 @@
   th { background: #f4f4f4; position: sticky; top: 0; }
   img { max-width: 100px; max-height: 100px; }
   .timing { color: #888; font-size: 11px; }
+  /* The top-1 is the prediction; the remaining top-k is context behind a
+     toggle, so a cell reads as one answer rather than a five-line block. */
+  .top1 { font-weight: 600; }
+  .runners { display: inline; }
+  .runners > summary { color: #666; font-size: 11px; cursor: pointer; display: inline; }
+  .runner-list { color: #444; font-size: 12px; }
   .error { color: #b00020; }
   tr[data-has-error="1"] { background: #fff6e5; }
   #controls { margin: 12px 0; display: flex; gap: 12px; align-items: flex-start; flex-wrap: wrap; }

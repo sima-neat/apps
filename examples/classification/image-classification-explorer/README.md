@@ -75,8 +75,10 @@ Open `${APP_DIR}/src/common/config.yaml`:
 - `io.input` — a single image path or a directory of images. The directory is read one level
   deep: files directly inside it are classified and subdirectories are ignored. Leave empty to
   classify the bundled sample goldfish image (downloads it on first run; needs network access).
-- `io.output_dir` — dedicated directory where `report.html`, `report.json`, `report.csv`, and
+- `io.output_dir` — dedicated directory where the selected reports and
   `thumbnails/` are written; each run replaces its previous contents.
+- `io.output_format` — which reports to write: any of `html`, `json`, `csv`.
+  Ships as `[html]`; `thumbnails/` is written only when `html` is selected.
 
 Remove a `models` entry to run with fewer models, or add one to compare an additional model.
 Profile names may contain letters, digits, `_` and `-` (they become config keys, report columns
@@ -116,14 +118,21 @@ python3 ${APP_DIR}/src/python/main.py \
 
 ## Understanding the Report
 
-Each run writes to `io.output_dir` (default `report/`):
+Each run writes to `io.output_dir` (default `sandbox/report/`). `io.output_format`
+selects which of these are written; it ships as `[html]`, and the formats are
+`html`, `json` and `csv`:
 
-| File | Contents |
-| --- | --- |
-| `report.html` | Browsable report: thumbnails, per-model predictions and confidence, agreement/disagreement, filtering, sorting. |
-| `report.json` | Same results in machine-readable form: predictions, timing, per-class summary, skipped files. |
-| `report.csv` | Flat per-image, per-model rows: top-1 class, confidence, inference time, full top-k. |
-| `thumbnails/` | Small JPEG copies of each classified image, referenced by `report.html`. |
+| File | Written when | Contents |
+| --- | --- | --- |
+| `report.html` | `html` | Browsable report: thumbnails, per-model predictions and confidence, agreement/disagreement, filtering, sorting. |
+| `thumbnails/` | `html` | Small JPEG copies of each classified image, referenced by `report.html`. |
+| `report.json` | `json` | Same results in machine-readable form: predictions, timing, per-class summary, skipped files. |
+| `report.csv` | `csv` | Flat per-image, per-model rows: top-1 class, confidence, inference time, full top-k. |
+
+The thumbnails follow `html` because nothing else references them; for 21 images
+they were 288 KB of roughly 420 KB written, so a run that only needs `json`
+writes considerably less. Request several formats with
+`output_format: [html, json, csv]`.
 
 Open `report.html` in a browser. It lists every classified image with a thumbnail and each
 selected model's top predictions and confidence. Use the controls above the table to:

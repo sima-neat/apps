@@ -190,6 +190,7 @@ int main(int argc, char** argv) {
       {
         std::ofstream config(config_path);
         config << "io:\n"
+               << "  output_format: [html, json, csv]\n"
                << "  input: " << locked_dir.string() << "\n"
                << "models:\n"
                << "  m:\n"
@@ -258,6 +259,7 @@ int main(int argc, char** argv) {
     auto write_config = [&](const fs::path& output_dir) {
       std::ofstream config(work / "config.yaml");
       config << "io:\n"
+             << "  output_format: [html, json, csv]\n"
              << "  input: " << (work / "input.txt").string() << "\n"
              << "  output_dir: " << output_dir.string() << "\n"
              << "models:\n"
@@ -738,6 +740,7 @@ int main(int argc, char** argv) {
     {
       std::ofstream config(config_path);
       config << "io:\n"
+             << "  output_format: [html, json, csv]\n"
              << "  input: /nonexistent/directory/of/images\n"
              << "models:\n"
              << "  m:\n"
@@ -769,6 +772,7 @@ int main(int argc, char** argv) {
     {
       std::ofstream config(work / "config.yaml");
       config << "io:\n"
+             << "  output_format: [html, json, csv]\n"
              << "  input: " << images.string() << "\n"
              << "  output_dir: " << (work / "report").string() << "\n"
              << "  extensions: jpg\n"
@@ -811,6 +815,7 @@ int main(int argc, char** argv) {
     {
       std::ofstream config(work / "config.yaml");
       config << "io:\n"
+             << "  output_format: [html, json, csv]\n"
              << "  input: " << images.string() << "\n"
              << "  output_dir: " << (work / "report").string() << "\n"
              << "models:\n"
@@ -863,6 +868,7 @@ int main(int argc, char** argv) {
     auto run_with = [&](const std::string& output_dir_value) {
       std::ofstream config(work / "config.yaml");
       config << "io:\n"
+             << "  output_format: [html, json, csv]\n"
              << "  input: " << (work / "input.txt").string() << "\n"
              << "  output_dir: " << output_dir_value << "\n"
              << "models:\n"
@@ -878,10 +884,11 @@ int main(int argc, char** argv) {
     // `010` is octal 8 to PyYAML, so the directory is "8" in Python.
     auto numeric = run_with("010");
     const bool canonical = fs::exists(work / "8") && !fs::exists(work / "010");
-    // `"null"` is unquoted before the null test, so C++ falls back to "report";
-    // Python now does the same rather than creating a directory named "null".
+    // `"null"` is unquoted before the null test, so C++ falls back to the
+    // default `sandbox/report`; Python now does the same rather than creating a
+    // directory named "null".
     auto nulled = run_with("\"null\"");
-    const bool defaulted = fs::exists(work / "report") && !fs::exists(work / "null");
+    const bool defaulted = fs::exists(work / "sandbox" / "report") && !fs::exists(work / "null");
 
     if (numeric.exit_code != 0 || nulled.exit_code != 0 || !canonical || !defaulted) {
       std::cerr << "[FAIL] output_dir canonicalisation: numeric_exit=" << numeric.exit_code
@@ -935,6 +942,7 @@ int main(int argc, char** argv) {
       {
         std::ofstream config(config_path);
         config << "io:\n"
+               << "  output_format: [html, json, csv]\n"
                << "  input: " << (pkg / "input.txt").string() << "\n"
                << "  output_dir: " << (pkg / "report").string() << "\n"
                << "models:\n"

@@ -52,7 +52,11 @@ CONFIG_DIRECTORY: Path | None = None
 # Reject anything outside that range so both entrypoints accept the same values.
 INT32_MIN, INT32_MAX = -2**31, 2**31 - 1
 
-ClassSummary = dict[str, dict[str, dict[str, Any]]]  # model -> class id (str) -> {label, count}
+# class id (str) -> {"label": str, "models": {model name: count}, "total": int}
+# Keyed by predicted class rather than by model: one class used to appear in up
+# to four separate per-model blocks with nothing showing which models agreed on
+# it, which is the question this application exists to answer.
+ClassSummary = dict[str, dict[str, Any]]
 
 
 @dataclass
@@ -590,6 +594,50 @@ def config_str(value: Any, key: str, default: str | None) -> str | None:
     raise ValueError(f"{key} must be a scalar, got {yaml_text(value)}")
 
 
+REPORT_FORMATS = ("html", "json", "csv")
+
+
+def config_formats(value: Any, key: str = "io.output_format") -> list[str]:
+    """Which report files to write, defaulting to html alone.
+
+    Accepts a YAML sequence (`[html, json]`) or a comma-separated scalar
+    (`html,json`). Both spellings are allowed because the C++ reader flattens
+    the file to scalars and cannot see a sequence as one - it reads `[html]` as
+    the text "[html]" - and `io.extensions` in the same block already uses the
+    comma form for that reason. Supporting both means neither entrypoint is
+    reading something the other cannot.
+
+    Returns the formats in REPORT_FORMATS order, not the order written, so the
+    value is a set rather than a sequence and both entrypoints iterate it the
+    same way.
+    """
+    if value is None:
+        return ["html"]
+    if isinstance(value, (list, tuple)):
+        items = [yaml_text(v) for v in value]
+    else:
+        text = scalar_text(value) if isinstance(value, str) else yaml_text(value)
+        if text is None:
+            return ["html"]
+        text = text.strip()
+        if text.startswith("[") and text.endswith("]"):
+            text = text[1:-1]
+        items = [part for part in (p.strip() for p in text.split(",")) if part]
+    chosen = []
+    for item in items:
+        name = item.strip().strip("\"'").lower()
+        if name not in REPORT_FORMATS:
+            raise ValueError(
+                f"{key} contains {item!r}, which is not a report format; "
+                f"use any of {', '.join(REPORT_FORMATS)}"
+            )
+        if name not in chosen:
+            chosen.append(name)
+    if not chosen:
+        raise ValueError(f"{key} selects no report format; use any of {', '.join(REPORT_FORMATS)}")
+    return [f for f in REPORT_FORMATS if f in chosen]
+
+
 def load_profiles(raw: dict[str, Any]) -> list[ModelProfile]:
     models_cfg = config_section(raw, "models")
     if not models_cfg:
@@ -867,6 +915,37 @@ def classify(model, profile: ModelProfile, image_path: Path, timeout_ms: int) ->
     return Prediction(top_k=top_k, inference_ms=inference_ms)
 
 
+def warm_up(model, profile: ModelProfile, timeout_ms: int) -> None:
+    """One untimed inference, so the first measured image does not pay the
+    one-time setup cost on behalf of every later one.
+
+    Measured on a Modalix DevKit over 21 COCO images before this existed: the
+    first timed call was 939.2 ms for resnet_50, 757.3 ms for densenet_121,
+    351.0 ms for resnet_18 and 328.8 ms for efficientnet_b0, against medians of
+    3.0, 3.2, 2.7 and 2.7 ms for the other twenty. The report therefore showed a
+    threefold spread between models on its first row that does not exist in
+    steady state - actively misleading in an application whose purpose is
+    comparing models.
+
+    A blank tensor rather than the first real image: the result is discarded, and
+    warming up on a customer image would make the warm-up fail whenever that
+    image does, turning a measurement detail into a second failure path.
+    """
+    import numpy as np
+    import pyneat
+
+    blank = np.zeros((profile.input_height, profile.input_width, 3), dtype=np.uint8)
+    tensor = pyneat.Tensor.from_numpy(blank, copy=True, image_format=pyneat.PixelFormat.RGB)
+    try:
+        model.run([tensor], timeout_ms=timeout_ms)
+    except Exception as exc:  # noqa: BLE001 - never fatal; see below
+        # A failed warm-up costs accuracy of the first measurement, nothing more.
+        # The real inferences below report their own per-image, per-model errors,
+        # so failing the run here would turn a timing refinement into an outage.
+        print(f"  warm-up for {profile.name} did not run ({exc}); "
+              f"first measurement may include setup cost", file=sys.stderr)
+
+
 def run_all(profiles: list[ModelProfile], images: list[Path], timeout_ms: int) -> list[ImageResult]:
     # Fingerprint every input up front: models are loaded one at a time, so each
     # image is re-read per model, and agreement is only meaningful if those reads
@@ -881,6 +960,7 @@ def run_all(profiles: list[ModelProfile], images: list[Path], timeout_ms: int) -
     for profile in profiles:
         print(f"Loading model '{profile.name}': {profile.path}")
         model = build_model(profile)
+        warm_up(model, profile, timeout_ms)
         try:
             for result in results:
                 try:
@@ -922,16 +1002,34 @@ def agreement(result: ImageResult, profile_names: list[str]) -> bool | None:
 
 
 def build_class_summary(results: list[ImageResult], profiles: list[ModelProfile]) -> ClassSummary:
-    """Count top-1 predictions per model, keyed by class id so distinct classes
-    that share a label are never merged."""
-    summary: ClassSummary = {p.name: {} for p in profiles}
+    """Count top-1 predictions, keyed by predicted class.
+
+    Keyed by class id, not by label, so two distinct classes that happen to
+    share a label are never merged - the id is the identity.
+
+    Profiles may carry different label maps, so one class id can have different
+    spellings. The label recorded here is the one used by the first profile, in
+    declaration order, that predicted the class; the id disambiguates.
+    """
+    order = {p.name: i for i, p in enumerate(profiles)}
+    unranked = len(order)
+    summary: ClassSummary = {}
+    label_rank: dict[str, int] = {}
     for result in results:
         for name, pred in result.predictions.items():
             if not pred.top_k:
                 continue
             class_id, label, _ = pred.top_k[0]
-            entry = summary.setdefault(name, {}).setdefault(str(class_id), {"label": label, "count": 0})
-            entry["count"] += 1
+            key = str(class_id)
+            entry = summary.setdefault(key, {"label": label, "models": {}, "total": 0})
+            entry["models"][name] = entry["models"].get(name, 0) + 1
+            entry["total"] += 1
+            # Lowest profile index wins the spelling, so the label does not
+            # depend on which image happened to be classified first.
+            rank = order.get(name, unranked)
+            if rank < label_rank.get(key, unranked + 1):
+                entry["label"] = label
+                label_rank[key] = rank
     return summary
 
 
@@ -1093,10 +1191,23 @@ def write_html_report(path: Path, results: list[ImageResult], profiles: list[Mod
         for name in profile_names:
             pred = result.predictions.get(name)
             if pred is not None and pred.top_k:
-                top_str = "<br>".join(f"{html_escape(lbl)} ({p:.2%})" for _, lbl, p in pred.top_k)
+                # The top-1 is the prediction; the rest is context. Rendering all
+                # five identically made every cell a five-line block in which the
+                # reader had to know that the first line was the answer.
+                _, top_label, top_prob = pred.top_k[0]
+                runners = "".join(
+                    f"<br>{html_escape(lbl)} ({p:.2%})" for _, lbl, p in pred.top_k[1:]
+                )
+                rest = (
+                    f'<details class="runners"><summary>top {len(pred.top_k)}</summary>'
+                    f'<span class="runner-list">{runners}</span></details>'
+                    if runners else ""
+                )
                 cells.append(
-                    f'<td data-model-col="{html_escape(name)}">{top_str}<br>'
-                    f'<span class="timing">{pred.inference_ms:.1f} ms</span></td>'
+                    f'<td data-model-col="{html_escape(name)}">'
+                    f'<span class="top1">{html_escape(top_label)} ({top_prob:.2%})</span>'
+                    f'{rest}'
+                    f'<br><span class="timing">inference {pred.inference_ms:.1f} ms</span></td>'
                 )
             elif name in result.errors:
                 cells.append(
@@ -1127,12 +1238,25 @@ def write_html_report(path: Path, results: list[ImageResult], profiles: list[Mod
     )
     # Most frequent first, then by class id: counts tie often, and ordering by
     # insertion would differ from the C++ map, which is ordered by class id.
+    # One row per predicted class, naming the models that predicted it. Most
+    # frequent first, then by class id: counts tie often, and insertion order
+    # would differ from the C++ map, which is ordered by class id.
+    def _summary_row(class_id: str, entry: dict[str, Any]) -> str:
+        agreed = ", ".join(
+            f"{html_escape(n)} ({entry['models'][n]})"
+            for n in profile_names if n in entry["models"]
+        )
+        return (
+            f"<tr><td>{html_escape(class_id)}</td>"
+            f"<td>{html_escape(entry['label'])}</td>"
+            f"<td>{len(entry['models'])} of {len(profile_names)}</td>"
+            f"<td>{agreed}</td><td>{entry['total']}</td></tr>"
+        )
+
     summary_rows = "".join(
-        f"<tr><td>{html_escape(name)}</td><td>{html_escape(class_id)}</td>"
-        f"<td>{html_escape(entry['label'])}</td><td>{entry['count']}</td></tr>"
-        for name, per_class in class_summary.items()
+        _summary_row(class_id, entry)
         for class_id, entry in sorted(
-            per_class.items(), key=lambda kv: (-kv[1]["count"], int(kv[0]))
+            class_summary.items(), key=lambda kv: (-kv[1]["total"], int(kv[0]))
         )
     )
     skipped_rows = "".join(f"<li>{html_escape(s)}</li>" for s in skipped)
@@ -1182,7 +1306,7 @@ def write_html_report(path: Path, results: list[ImageResult], profiles: list[Mod
 {''.join(rows)}</tbody>
 </table>
 <h2>Per-class summary</h2>
-<table><thead><tr><th>Model</th><th>Class id</th><th>Predicted class</th><th>Count</th></tr></thead><tbody>{summary_rows}</tbody></table>
+<table><thead><tr><th>Class id</th><th>Predicted class</th><th>Models</th><th>Which models (top-1 count)</th><th>Total</th></tr></thead><tbody>{summary_rows}</tbody></table>
 <h2>Skipped files</h2>
 <ul>{skipped_rows if skipped_rows else '<li>None</li>'}</ul>
 <script>
@@ -1233,7 +1357,7 @@ def inspect_report_dir(path: Path) -> tuple[list[str], list[str]]:
 
 def publish_report(output_dir: Path, results: list[ImageResult], profiles: list[ModelProfile],
                    skipped: list[str], class_summary: ClassSummary,
-                   timing: dict[str, Any]) -> None:
+                   timing: dict[str, Any], formats: list[str]) -> None:
     """Write the complete report into a sibling staging directory, then swap the
     whole `output_dir` for it. Readers never see a mixture of old and new files,
     and a failure at any point leaves the previous report in place.
@@ -1303,9 +1427,19 @@ def publish_report(output_dir: Path, results: list[ImageResult], profiles: list[
     (staging / REPORT_MARKER).write_text("generated by image-classification-explorer\n",
                                          encoding="utf-8")
     try:
-        write_json_report(staging / "report.json", results, profiles, skipped, class_summary, timing)
-        write_csv_report(staging / "report.csv", results, profiles)
-        write_html_report(staging / "report.html", results, profiles, skipped, class_summary, staging)
+        # Only what io.output_format asked for. The thumbnails follow html
+        # rather than being skipped separately: they are referenced only by
+        # report.html, and make_thumbnail is called from the html writer, so
+        # not writing html writes no thumbnails. They were 288 KB of the
+        # roughly 420 KB this application produced for 21 images.
+        if "json" in formats:
+            write_json_report(staging / "report.json", results, profiles, skipped,
+                              class_summary, timing)
+        if "csv" in formats:
+            write_csv_report(staging / "report.csv", results, profiles)
+        if "html" in formats:
+            write_html_report(staging / "report.html", results, profiles, skipped,
+                              class_summary, staging)
         (staging / REPORT_MARKER).write_text("generated by image-classification-explorer\n",
                                              encoding="utf-8")
 
@@ -1371,7 +1505,12 @@ def main() -> int:
             "n01443537_goldfish.JPEG",
         )
         input_path = config_str(io_cfg.get("input"), "io.input", None)
-        output_dir = Path(config_str(io_cfg.get("output_dir"), "io.output_dir", "report"))
+        # sandbox/ rather than ./report: the value resolves against the working
+        # directory and the README says to run from the bundle root, so a bare
+        # `report` left the report and its thumbnails in whatever directory the
+        # customer ran from. `sandbox/` is already in .gitignore.
+        output_dir = Path(config_str(io_cfg.get("output_dir"), "io.output_dir", "sandbox/report"))
+        formats = config_formats(io_cfg.get("output_format"))
         # P8: fail on a malformed validation block now, not after a successful run.
         validation = config_section(raw, "validation")
         expected_class_id = validation.get("expected_class_id")
@@ -1426,7 +1565,7 @@ def main() -> int:
     }
 
     try:
-        publish_report(output_dir, results, profiles, skipped, class_summary, timing)
+        publish_report(output_dir, results, profiles, skipped, class_summary, timing, formats)
     except (OSError, UnicodeError) as exc:
         # UnicodeEncodeError is a ValueError, not an OSError, so a path holding
         # non-UTF-8 bytes used to escape here as a traceback rather than the
