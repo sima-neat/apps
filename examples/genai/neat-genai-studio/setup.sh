@@ -819,7 +819,7 @@ fi
 if [[ "${SETUP_RAG}" == "1" ]]; then
   RAG_ENABLED_YAML="true"
 else
-  RAG_ENABLED_YAML="false   # SETUP_RAG=1 ./setup.sh installs document search"
+  RAG_ENABLED_YAML="false   # SETUP_RAG=1 ${EXAMPLE_DIR}/setup.sh installs document search"
 fi
 cat > "${CONFIG_PATH}" <<YAML
 server:

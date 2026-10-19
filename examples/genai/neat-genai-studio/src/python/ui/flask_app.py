@@ -874,7 +874,7 @@ class AppContext:
             if rag is not None:
                 if not self.rag_enabled:
                     return jsonify({'error': {'message': 'Document search (RAG) is disabled on this board. '
-                                                         'Install it with SETUP_RAG=1 ./setup.sh.'}}), 409
+                                                         'Run the Studio\'s setup.sh with SETUP_RAG=1 to install it.'}}), 409
                 question = rag_chat.last_user_text(payload['messages'])
                 if not question:
                     # Nothing to search with (no user text, e.g. only a picture).
@@ -1632,7 +1632,8 @@ def run_ui(app_cfg):
             # turned on by hand afterwards.
             raise SystemExit(
                 f"app.rag.enabled is true but the RAG packages are not installed ({exc.name}). "
-                "Run SETUP_RAG=1 ./setup.sh, or set app.rag.enabled: false.") from exc
+                f"Run SETUP_RAG=1 {Path(__file__).resolve().parents[3] / 'setup.sh'}, "
+                "or set app.rag.enabled: false.") from exc
         # Without a database (cleared, or never built) the service stays off,
         # so /rag/status keeps reporting "no-database" and chat with neat_rag
         # answers 409 until a document is uploaded or reset.

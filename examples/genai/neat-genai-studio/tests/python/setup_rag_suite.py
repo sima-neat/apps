@@ -96,6 +96,8 @@ class SetupRagSwitchTests(unittest.TestCase):
         rag = self._rag_config()
         self.assertFalse(rag.enabled)
         self.assertEqual(rag.embedding_model_dir, str(self.tmp / "models" / "gte-small"))
+        # The hint names the script itself, not a path relative to some directory.
+        self.assertIn(f"SETUP_RAG=1 {SETUP}", self.config.read_text(encoding="utf-8"))
 
     def test_rerun_and_dependency_refresh_keep_the_choice(self):
         self._setup(SETUP_RAG="0")
