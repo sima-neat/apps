@@ -8,8 +8,8 @@ models:
     name: blazepose_ghum_heavy
     ref: feat/blazepose-ghum-heavy
     spec: latest
-    variant: modalix_bf16
-    file: blazepose_ghum_heavy_modalix_bf16_mpk.tar.gz
+    variant: w16a16
+    file: blazepose_ghum_heavy_w16a16_mpk.tar.gz
 unit:
   python: true
   cpp: true

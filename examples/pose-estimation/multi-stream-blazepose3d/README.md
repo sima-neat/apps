@@ -75,7 +75,7 @@ Download the published BlazePose GHUM Heavy package from the Model Registry:
 ```bash
 sima-cli models download --stg \
   --id blazepose_ghum_heavy \
-  --variant modalix_bf16 \
+  --variant w16a16 \
   --branch feat/blazepose-ghum-heavy \
   --output models
 
@@ -85,8 +85,8 @@ import shutil
 import tempfile
 import zipfile
 
-root = Path("models/blazepose_ghum_heavy/modalix_bf16")
-target = root / "blazepose_ghum_heavy_modalix_bf16_mpk.tar.gz"
+root = Path("models/blazepose_ghum_heavy/w16a16")
+target = root / "blazepose_ghum_heavy_w16a16_mpk.tar.gz"
 if not target.is_file():
     packages = list(root.glob("*.zip"))
     if len(packages) != 1:
@@ -136,7 +136,7 @@ Edit `${APP_DIR}/src/common/config.yaml`:
 ```yaml
 models:
   detector_path: models/yolo26m-det-int8-b1.tar.gz
-  pose_path: models/blazepose_ghum_heavy/modalix_bf16/blazepose_ghum_heavy_modalix_bf16_mpk.tar.gz
+  pose_path: models/blazepose_ghum_heavy/w16a16/blazepose_ghum_heavy_w16a16_mpk.tar.gz
 
 streams:
   - id: entrance

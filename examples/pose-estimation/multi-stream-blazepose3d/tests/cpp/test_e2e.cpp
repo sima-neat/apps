@@ -38,7 +38,7 @@ namespace {
 
 constexpr const char* kExampleName = "multi-stream-blazepose3d";
 constexpr const char* kInsightHost = "127.0.0.1";
-constexpr const char* kPoseModel = "blazepose_ghum_heavy_modalix_bf16_mpk.tar.gz";
+constexpr const char* kPoseModel = "blazepose_ghum_heavy_w16a16_mpk.tar.gz";
 constexpr const char* kDetectorModel = "yolo26m-det-int8-b1.tar.gz";
 constexpr std::size_t kMaxStreams = 4;
 

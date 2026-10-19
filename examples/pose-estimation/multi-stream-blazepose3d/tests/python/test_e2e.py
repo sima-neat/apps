@@ -22,7 +22,7 @@ from tests.utils.metadata_json_listener import MetadataJsonListener
 EXAMPLE_DIR = Path(__file__).resolve().parents[2]
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
 DETECTOR_MODEL = "yolo26m-det-int8-b1.tar.gz"
-POSE_MODEL = "blazepose_ghum_heavy_modalix_bf16_mpk.tar.gz"
+POSE_MODEL = "blazepose_ghum_heavy_w16a16_mpk.tar.gz"
 INSIGHT_HOST = "127.0.0.1"
 MAX_STREAMS = 4
 LANDMARK_NAMES = (
