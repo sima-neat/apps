@@ -404,6 +404,9 @@ def pose_metadata_data(poses: list[dict]) -> dict:
 
     Pixel rounding and three-decimal confidence preserve overlay precision while keeping the
     configured 50-pose maximum within Core's logical metadata-message limit.
+
+    Poses carry no ``id``: Insight colors poses by ``id``, and this app does not track people
+    across frames, so a per-frame index would change a person's color.
     """
     def round_pixel(value: float) -> int:
         return math.floor(value + 0.5) if value >= 0 else math.ceil(value - 0.5)
@@ -412,7 +415,7 @@ def pose_metadata_data(poses: list[dict]) -> dict:
         return math.floor(value * 1000.0 + 0.5) / 1000.0
 
     published = []
-    for index, pose in enumerate(poses, start=1):
+    for pose in poses:
         keypoints = [
             {
                 "name": COCO_KEYPOINT_NAMES[k],
@@ -424,7 +427,6 @@ def pose_metadata_data(poses: list[dict]) -> dict:
         ]
         published.append(
             {
-                "id": f"pose_{index}",
                 "label": "person",
                 "confidence": round_confidence(pose["score"]),
                 "bbox": [
