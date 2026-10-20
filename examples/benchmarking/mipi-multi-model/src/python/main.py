@@ -19,26 +19,18 @@ from model_profiles import (
     profile_named,
 )
 
-DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
+COMMON_DIR = Path(__file__).resolve().parents[1] / "common"
+DEFAULT_CONFIG = COMMON_DIR / "config.yaml"
 DEFAULT_MODELS_DIR = Path("models")
 OUTPUT_NAME = "results"
 CAMERA_WIDTH = 1920
 CAMERA_HEIGHT = 1080
 CAMERA_FPS = 30
 CAMERA_BUFFER = "camera0"
-CAMERA_CAPTURE_BUFFERS = 32
 MASK_STRIDE = 4
 MASK_THRESHOLD = 0.50
 METADATA_BYTE_BUDGET = 32_768
-DEFAULT_LABELS = (
-    Path(__file__).resolve().parents[5]
-    / "examples"
-    / "segmentation"
-    / "single-stream-instance-segmenter"
-    / "src"
-    / "common"
-    / "coco_label.txt"
-)
+DEFAULT_LABELS = COMMON_DIR / "coco_label.txt"
 
 
 @dataclass(frozen=True)
@@ -110,15 +102,15 @@ def model_options(pyneat, profile: Profile, package: ModelPackage):
         preprocess.preset = pyneat.NormalizePreset.COCO_YOLO
         options.advanced_execution.preprocess_target = "EV74"
 
-    if profile.preprocessing == "torchvision_ssdlite":
+    if profile.preprocessing == "tensorflow_ssd":
         preprocess = options.preprocess
         preprocess.kind = pyneat.InputKind.Image
         preprocess.enable = pyneat.AutoFlag.On
         preprocess.resize.enable = pyneat.AutoFlag.On
         preprocess.resize.mode = pyneat.ResizeMode.Stretch
         preprocess.normalize.enable = pyneat.AutoFlag.On
-        preprocess.normalize.mean = [0.485, 0.456, 0.406]
-        preprocess.normalize.stddev = [0.229, 0.224, 0.225]
+        preprocess.normalize.mean = [0.5, 0.5, 0.5]
+        preprocess.normalize.stddev = [0.5, 0.5, 0.5]
         preprocess.normalize.has_explicit_stats = True
         preprocess.color_convert.output_format = pyneat.PreprocessColorFormat.RGB
         options.num_classes = 91
@@ -148,13 +140,11 @@ def make_graph(
     profile: Profile,
     package: ModelPackage,
     *,
-    allow_camera_copy: bool = False,
     insight_host: str = "",
     insight_video_port: int = 9000,
     insight_channel: int = 0,
     insight_bitrate_kbps: int = 2500,
 ):
-    model = pyneat.Model(str(package.path), model_options(pyneat, profile, package))
     camera = pyneat.CameraInputOptions()
     camera.width = CAMERA_WIDTH
     camera.height = CAMERA_HEIGHT
@@ -162,7 +152,7 @@ def make_graph(
     camera.framerate_den = 1
     camera.format = "NV12"
     camera.buffer_name = CAMERA_BUFFER
-    camera.allow_cpu_fallback = allow_camera_copy
+    camera.allow_cpu_fallback = False
 
     connected_insight = bool(insight_host)
     route = pyneat.ModelRouteOptions()
@@ -176,12 +166,11 @@ def make_graph(
         route.advanced_execution.postprocess_target = "EV74"
 
     camera_graph = pyneat.Graph(f"mipi_{profile.name}_camera")
-    camera_graph.add(
-        pyneat.nodes.camera_input(
-            camera,
-            capture_buffer_count=CAMERA_CAPTURE_BUFFERS,
-        )
-    )
+    camera_graph.add(pyneat.nodes.camera_input(camera))
+    # A composed graph describes its execution plan rather than the camera
+    # pipeline, so check the camera stage before connecting any consumer.
+    require_strict_zero_copy(camera_graph.describe_backend(False))
+    model = pyneat.Model(str(package.path), model_options(pyneat, profile, package))
     model_graph = model.graph(route)
     model_graph.add(pyneat.nodes.output(OUTPUT_NAME))
     if not connected_insight:
@@ -460,15 +449,14 @@ def send_insight_metadata(sender, pyneat, profile: Profile, sample, labels: list
 
 
 def require_strict_zero_copy(backend: str) -> None:
-    current_contract = "simaai-zero-copy-required=true" in backend
-    legacy_040_contract = (
-        "external-buffer-mode=required" in backend
-        and "neatcamerabridge" in backend.lower()
-        and "copy-allowed=false" in backend
-    )
-    if not (current_contract or legacy_040_contract):
-        raise RuntimeError("camera backend does not require zero-copy")
-    if "neatcamerabridge" in backend.lower() and "copy-allowed=false" not in backend:
+    """Reject a negotiated camera backend that can copy frames on the CPU.
+
+    Strict CameraInput makes libcamerasrc capture into downstream DMA-BUFs and
+    configures Neat's camera bridge to refuse copies.
+    """
+    if "external-buffer-mode=required" not in backend:
+        raise RuntimeError("camera backend does not require zero-copy capture")
+    if "copy-allowed=false" not in backend or "copy-allowed=true" in backend:
         raise RuntimeError("camera bridge permits a CPU copy")
 
 
@@ -497,11 +485,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--continuous", action="store_true")
     parser.add_argument("--timeout-ms", type=int)
     parser.add_argument("--describe", action="store_true", help="print the negotiated backend")
-    parser.add_argument(
-        "--allow-camera-copy",
-        action="store_true",
-        help="allow Neat's camera bridge when strict DMA-BUF allocation is unavailable",
-    )
     parser.add_argument("--insight-host", default="")
     parser.add_argument("--insight-video-port", type=int, default=9000)
     parser.add_argument("--insight-metadata-port", type=int, default=9100)
@@ -549,17 +532,13 @@ def main(argv: list[str] | None = None) -> int:
             pyneat,
             config.profile,
             package,
-            allow_camera_copy=args.allow_camera_copy,
             insight_host=args.insight_host,
             insight_video_port=args.insight_video_port,
             insight_channel=args.insight_channel,
             insight_bitrate_kbps=args.insight_bitrate_kbps,
         )
-        backend = graph.describe_backend(False)
-        if not args.allow_camera_copy and not args.insight_host:
-            require_strict_zero_copy(backend)
         if args.describe:
-            print(backend)
+            print(graph.describe_backend(False))
 
         run_options = pyneat.RunOptions()
         run_options.preset = pyneat.RunPreset.Realtime
@@ -616,10 +595,9 @@ def main(argv: list[str] | None = None) -> int:
         finally:
             run.close()
 
-        camera_mode = "camera-bridge" if args.allow_camera_copy else "strict-zero-copy"
         destination = " + Insight" if args.insight_host else ""
         print(
-            f"PASS {camera_mode} MIPI -> {config.profile.title} -> "
+            f"PASS strict-zero-copy MIPI -> {config.profile.title} -> "
             f"{OUTPUT_NAME}{destination}"
         )
         return 0

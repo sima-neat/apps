@@ -21,6 +21,13 @@ DEFAULT_CONFIG = EXAMPLE_DIR / "src" / "common" / "config.yaml"
 sys.path.insert(0, str(PYTHON_DIR))
 
 
+STRICT_BACKEND = (
+    "libcamerasrc name=camera_src0 external-buffer-mode=required ! "
+    "capsfilter name=camera_caps0 ! "
+    "neatcamerabridge name=camera_bridge0 buffer-name=camera0 copy-allowed=false ! output"
+)
+
+
 def load_module():
     spec = importlib.util.spec_from_file_location("mipi_multi_model", MAIN_PY)
     assert spec is not None and spec.loader is not None
@@ -135,21 +142,18 @@ def test_raw_segmentation_accepts_sdk_200_without_packaged_decoder(tmp_path: Pat
 
 
 @pytest.mark.unit
-def test_registry_fetch_selects_exact_flat_artifact(tmp_path: Path, monkeypatch) -> None:
-    import model_profiles
+def test_package_accepts_any_compiled_tar_gz_name(tmp_path: Path) -> None:
+    from model_profiles import ModelPackageError, inspect_package, profile_named
 
-    profile = model_profiles.profile_named("ssd")
+    package_path = tmp_path / "yolo26n-det-bf16-mla_tess-b1.tar.gz"
+    write_package(package_path)
+    package = inspect_package(package_path, profile_named("detect"))
+    assert package.path == package_path.resolve()
 
-    def fake_install(command, *, check) -> None:
-        assert check is True
-        staging = Path(command[-1])
-        write_package(staging / profile.archive)
-        write_package(staging / "ssd_mobilenet_v3_modalix_bf16_tess_mla_mpk.tar.gz")
-
-    monkeypatch.setattr(model_profiles.subprocess, "run", fake_install)
-    package = model_profiles.fetch_profile(profile, tmp_path / "models")
-
-    assert package.path == (tmp_path / "models" / profile.archive).resolve()
+    onnx_path = tmp_path / "yolo26n.onnx"
+    onnx_path.write_bytes(b"onnx")
+    with pytest.raises(ModelPackageError, match=r"\.tar\.gz"):
+        inspect_package(onnx_path, profile_named("detect"))
 
 
 class FakeOptions:
@@ -241,7 +245,8 @@ def test_ssd_sets_only_its_required_recipe(tmp_path: Path) -> None:
     assert options.preprocess.color_convert.input_format == "nv12"
     assert options.preprocess.color_convert.output_format == "rgb"
     assert options.preprocess.resize.mode == "stretch"
-    assert options.preprocess.normalize.mean == [0.485, 0.456, 0.406]
+    assert options.preprocess.normalize.mean == [0.5, 0.5, 0.5]
+    assert options.preprocess.normalize.stddev == [0.5, 0.5, 0.5]
     assert options.num_classes == 91
     assert options.score_threshold == "default-score"
     assert options.top_k == "default-top-k"
@@ -279,6 +284,9 @@ def test_graph_has_named_camera_route_and_manual_output(tmp_path: Path) -> None:
         def add(self, node) -> None:
             added.append(node)
 
+        def describe_backend(self, _verbose: bool) -> str:
+            return STRICT_BACKEND
+
     fake = fake_pyneat()
     fake.Model = Model
     fake.ModelRouteOptions = lambda: SimpleNamespace(
@@ -304,59 +312,9 @@ def test_graph_has_named_camera_route_and_manual_output(tmp_path: Path) -> None:
     assert added[0][0] == "camera"
     assert added[0][1].buffer_name == "camera0"
     assert added[0][1].allow_cpu_fallback is False
-    assert added[0][2]["capture_buffer_count"] == 32
+    assert added[0][2] == {}
     assert isinstance(added[1], ModelGraph)
     assert model_added == [("output", "results")]
-
-
-@pytest.mark.unit
-def test_graph_camera_copy_is_an_explicit_opt_in(tmp_path: Path) -> None:
-    module = load_module()
-    package_path = tmp_path / "fixture_mpk.tar.gz"
-    write_package(package_path)
-    profile = module.profile_named("classify")
-    package = module.inspect_package(package_path, profile)
-    camera_seen = None
-
-    class ModelGraph:
-        def add(self, node) -> None:
-            pass
-
-    class Model:
-        def __init__(self, path, options) -> None:
-            pass
-
-        def graph(self, route):
-            return ModelGraph()
-
-    class Graph:
-        def __init__(self, name) -> None:
-            pass
-
-        def add(self, node) -> None:
-            pass
-
-    def camera_input(options, **kwargs):
-        nonlocal camera_seen
-        camera_seen = options
-        return "camera"
-
-    fake = fake_pyneat()
-    fake.Model = Model
-    fake.CameraInputOptions = lambda: SimpleNamespace()
-    fake.ModelRouteOptions = lambda: SimpleNamespace(
-        include_input=True,
-        include_output=False,
-        upstream_name="",
-        buffer_name="",
-        name_suffix="",
-        advanced_execution=SimpleNamespace(preprocess_target="", postprocess_target=""),
-    )
-    fake.Graph = Graph
-    fake.nodes = SimpleNamespace(camera_input=camera_input, output=lambda name: name)
-
-    module.make_graph(fake, profile, package, allow_camera_copy=True)
-    assert camera_seen.allow_cpu_fallback is True
 
 
 @pytest.mark.unit
@@ -380,6 +338,9 @@ def test_insight_graph_keeps_model_and_video_branches_realtime(tmp_path: Path) -
 
         def connect(self, *nodes) -> None:
             connections.append(nodes)
+
+        def describe_backend(self, _verbose: bool) -> str:
+            return STRICT_BACKEND if self.name.endswith("_camera") else "ExecutionGraphPlan {}"
 
     class Model:
         def __init__(self, path, options) -> None:
@@ -434,14 +395,76 @@ def test_insight_graph_keeps_model_and_video_branches_realtime(tmp_path: Path) -
 @pytest.mark.unit
 def test_strict_zero_copy_contract() -> None:
     module = load_module()
-    module.require_strict_zero_copy("libcamerasrc simaai-zero-copy-required=true ! output")
-    module.require_strict_zero_copy(
-        "libcamerasrc external-buffer-mode=required ! "
-        "neatcamerabridge copy-allowed=false ! output"
-    )
+    module.require_strict_zero_copy(STRICT_BACKEND)
     with pytest.raises(RuntimeError, match="does not require"):
-        module.require_strict_zero_copy("libcamerasrc ! output")
+        module.require_strict_zero_copy(
+            STRICT_BACKEND.replace("external-buffer-mode=required", "external-buffer-mode=preferred")
+        )
+    with pytest.raises(RuntimeError, match="does not require"):
+        module.require_strict_zero_copy("libcamerasrc ! neatcamerabridge copy-allowed=false")
     with pytest.raises(RuntimeError, match="permits a CPU copy"):
         module.require_strict_zero_copy(
-            "libcamerasrc simaai-zero-copy-required=true ! neatcamerabridge ! output"
+            STRICT_BACKEND.replace("copy-allowed=false", "copy-allowed=true")
         )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("insight_host", ["", "127.0.0.1"])
+def test_graph_rejects_copying_camera_before_composition(
+    tmp_path: Path, insight_host: str
+) -> None:
+    module = load_module()
+    package_path = tmp_path / "fixture_mpk.tar.gz"
+    write_package(package_path)
+    profile = module.profile_named("detect")
+    package = module.inspect_package(package_path, profile)
+    composed = []
+
+    class Graph:
+        def __init__(self, name) -> None:
+            self.name = name
+
+        def add(self, node) -> None:
+            composed.append(node)
+
+        def describe_backend(self, _verbose: bool) -> str:
+            return STRICT_BACKEND.replace("copy-allowed=false", "copy-allowed=true")
+
+    class Model:
+        def __init__(self, path, options) -> None:
+            pass
+
+        def graph(self, route):
+            raise AssertionError("the model must not be composed onto a copying camera")
+
+    fake = fake_pyneat()
+    fake.Model = lambda path, options: Model(path, options)
+    fake.Graph = Graph
+    fake.CameraInputOptions = lambda: SimpleNamespace()
+    fake.ModelRouteOptions = lambda: SimpleNamespace(
+        include_input=True,
+        include_output=False,
+        upstream_name="",
+        buffer_name="",
+        name_suffix="",
+        advanced_execution=SimpleNamespace(preprocess_target="", postprocess_target=""),
+    )
+    fake.nodes = SimpleNamespace(camera_input=lambda options: ("camera", options))
+
+    with pytest.raises(RuntimeError, match="permits a CPU copy"):
+        module.make_graph(fake, profile, package, insight_host=insight_host)
+    assert composed == [("camera", composed[0][1])]
+
+
+@pytest.mark.unit
+def test_camera_copy_escape_hatch_is_not_offered() -> None:
+    module = load_module()
+    with pytest.raises(SystemExit):
+        module.main(["--allow-camera-copy", "--validate-config-only"])
+
+
+@pytest.mark.unit
+def test_insight_labels_ship_with_the_example() -> None:
+    module = load_module()
+    assert module.DEFAULT_LABELS.parent == EXAMPLE_DIR / "src" / "common"
+    assert module.load_labels()[0] == "person"

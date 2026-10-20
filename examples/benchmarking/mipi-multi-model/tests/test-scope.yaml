@@ -11,12 +11,10 @@ models:
     source: modelzoo
     name: yolo_26n_seg
     file: yolo_26n_seg_mpk.tar.gz
-  ssd_mobilenet_v3:
-    source: model-registry
-    name: ssd_mobilenet_v3
-    ref: develop
-    spec: latest
-    file: ssd_mobilenet_v3_modalix_int8_tess_mla_mpk.tar.gz
+  ssd_mobilenet_v2:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/ssd_mobilenet_v2_modalix_int8_tess_mla_mpk.tar.gz
+    file: ssd_mobilenet_v2_modalix_int8_tess_mla_mpk.tar.gz
   resnet_50:
     source: modelzoo
     name: resnet_50

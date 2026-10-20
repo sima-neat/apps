@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-import shutil
-import subprocess
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
 MODEL_ZOO_VERSION = "2.1.3"
-BOARD_TYPE = "modalix"
 
 
 class ModelPackageError(RuntimeError):
@@ -24,14 +20,13 @@ class Profile:
     archive: str
     decode_type: str | None = None
     modelzoo_id: str | None = None
-    registry_target: str | None = None
     preprocessing: str | None = None
 
     @property
     def source(self) -> str:
         if self.modelzoo_id:
             return f"Model Zoo {MODEL_ZOO_VERSION}: {self.modelzoo_id}"
-        return f"sima-neat/models: {self.registry_target}"
+        return f"SDK {MODEL_ZOO_VERSION} download: {self.archive}"
 
 
 @dataclass(frozen=True)
@@ -68,12 +63,11 @@ PROFILES = {
         ),
         Profile(
             "ssd",
-            "SSD-MobileNet V3 object detection",
+            "SSD-MobileNet V2 object detection",
             "detection",
-            "ssd_mobilenet_v3_modalix_int8_tess_mla_mpk.tar.gz",
+            "ssd_mobilenet_v2_modalix_int8_tess_mla_mpk.tar.gz",
             decode_type="Ssd",
-            registry_target="models/ssd_mobilenet_v3@develop:latest",
-            preprocessing="torchvision_ssdlite",
+            preprocessing="tensorflow_ssd",
         ),
         Profile(
             "classify",
@@ -102,66 +96,12 @@ def profile_named(name: str) -> Profile:
 
 
 def inspect_package(path: Path, profile: Profile) -> ModelPackage:
-    """Resolve an MPK path; Neat owns package parsing and compatibility checks."""
+    """Resolve a model package path; Neat owns package parsing and compatibility checks."""
     del profile
     path = path.expanduser().resolve()
     if not path.is_file():
         raise ModelPackageError(f"model package does not exist: {path}")
-    if not path.name.endswith("_mpk.tar.gz"):
-        raise ModelPackageError(f"model must be a directly consumable *_mpk.tar.gz: {path}")
+    if not path.name.endswith(".tar.gz"):
+        raise ModelPackageError(f"model must be a compiled .tar.gz package: {path}")
 
     return ModelPackage(path)
-
-
-def fetch_profile(profile: Profile, models_dir: Path) -> ModelPackage:
-    """Fetch one canonical tar.gz through sima-cli and validate it."""
-    models_dir = models_dir.expanduser().resolve()
-    models_dir.mkdir(parents=True, exist_ok=True)
-    destination = models_dir / profile.archive
-
-    try:
-        if profile.modelzoo_id:
-            subprocess.run(
-                [
-                    "sima-cli",
-                    "modelzoo",
-                    "-v",
-                    MODEL_ZOO_VERSION,
-                    "--boardtype",
-                    BOARD_TYPE,
-                    "get",
-                    profile.modelzoo_id,
-                ],
-                cwd=models_dir,
-                check=True,
-            )
-        elif profile.registry_target:
-            with tempfile.TemporaryDirectory(prefix="mipi-model-") as temporary:
-                staging = Path(temporary)
-                subprocess.run(
-                    [
-                        "sima-cli",
-                        "neat",
-                        "install",
-                        "--stg",
-                        profile.registry_target,
-                        "--install-dir",
-                        str(staging),
-                    ],
-                    check=True,
-                )
-                selected = sorted(staging.glob(f"**/{profile.archive}"))
-                if len(selected) != 1:
-                    raise ModelPackageError(
-                        f"registry install produced {len(selected)} copies of "
-                        f"{profile.archive}"
-                    )
-                shutil.copy2(selected[0], destination)
-        else:
-            raise ModelPackageError(f"profile {profile.name} has no package source")
-    except FileNotFoundError as exc:
-        raise ModelPackageError("sima-cli is not installed or is not on PATH") from exc
-    except subprocess.CalledProcessError as exc:
-        raise ModelPackageError(f"sima-cli model fetch failed with exit code {exc.returncode}") from exc
-
-    return inspect_package(destination, profile)
