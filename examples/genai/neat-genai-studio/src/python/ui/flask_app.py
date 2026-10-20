@@ -639,8 +639,8 @@ class AppContext:
                 try:
                     params, body = backend_mode.control_payload(
                         method, request.args.items(multi=True), request.get_json(silent=True))
-                except ValueError as exc:
-                    return jsonify({'error': str(exc)}), 400
+                except ValueError:
+                    return jsonify({'error': backend_mode.NOT_A_JSON_OBJECT}), 400
                 try:
                     resp = requests.request(method, _control_url(target), params=params,
                                             json=body, timeout=timeout)

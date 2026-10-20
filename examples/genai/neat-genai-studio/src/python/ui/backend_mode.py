@@ -148,6 +148,9 @@ CONTROL_ROUTES = {
 }
 
 
+NOT_A_JSON_OBJECT = "Request body must be a JSON object"
+
+
 def control_payload(method: str, query: Iterable, body) -> tuple:
     """(params, json) for relaying a request to the control API: the query
     pairs for GET; for POST the JSON object, or {} without a body. Raises
@@ -157,7 +160,7 @@ def control_payload(method: str, query: Iterable, body) -> tuple:
     if body is None:
         return None, {}
     if not isinstance(body, dict):
-        raise ValueError("Request body must be a JSON object")
+        raise ValueError(NOT_A_JSON_OBJECT)
     return None, body
 
 
