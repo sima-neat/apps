@@ -216,8 +216,13 @@ std::vector<ScoredIndex> topk_with_softmax(const std::vector<float>& v, int k) {
 
   std::vector<int> idx(n);
   std::iota(idx.begin(), idx.end(), 0);
-  std::partial_sort(idx.begin(), idx.begin() + k, idx.end(),
-                    [&v](int a, int b) { return v[a] > v[b]; });
+  // Tie-break by ascending index so equal scores resolve deterministically and
+  // identically to the Python implementation's np.lexsort((arange(n), -scores)).
+  std::partial_sort(idx.begin(), idx.begin() + k, idx.end(), [&v](int a, int b) {
+    if (v[a] != v[b])
+      return v[a] > v[b];
+    return a < b;
+  });
 
   const float maxv = *std::max_element(v.begin(), v.end());
   double sum = 0.0;

@@ -1188,9 +1188,10 @@ simaai::neat::Tensor frame_tensor_from_sample(const simaai::neat::Sample& sample
 }
 
 /// How many decoded frames may wait for their segments. The segments branch trails the frame
-/// branch by the model and host-decode latency, so this only has to cover that lag. The ring
-/// holds host copies, so a retained frame costs memory, not a pipeline buffer.
-constexpr std::size_t kFrameRingCapacity = 16;
+/// branch by the model and host-decode latency, so this has to cover that lag. On H.265 the lag
+/// reaches 16 frames, so a 16-frame ring evicts the partner just before its segments arrive.
+/// The ring holds host copies, so a retained frame costs memory, not a pipeline buffer.
+constexpr std::size_t kFrameRingCapacity = 64;
 
 /// Copies a decoded frame out of the pipeline so the pulled sample can be released at once.
 ///

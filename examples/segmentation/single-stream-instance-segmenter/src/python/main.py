@@ -492,9 +492,10 @@ def joined_field(sample, label: str, bundle_index: int):
 
 
 #: How many decoded frames may wait for their segments. The segments branch trails the frame
-#: branch by the model and host-decode latency, so this only has to cover that lag. The ring
-#: holds host copies, so a retained frame costs memory, not a pipeline buffer.
-FRAME_RING_CAPACITY = 16
+#: branch by the model and host-decode latency, so this has to cover that lag. On H.265 the lag
+#: reaches 16 frames, so a 16-frame ring evicts the partner just before its segments arrive.
+#: The ring holds host copies, so a retained frame costs memory, not a pipeline buffer.
+FRAME_RING_CAPACITY = 64
 
 
 def host_frame_copy(sample):
