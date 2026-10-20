@@ -424,7 +424,9 @@ do_clean() {
     "${PYTHON_DIR}/api/milvus.meta.json" \
     "${PYTHON_DIR}/api/assets/piper-plus" \
     "${PYTHON_DIR}/api/assets/mms-tts-kor" \
-    "${PYTHON_DIR}/ui"; do
+    "${PYTHON_DIR}/ui/milvus.db" \
+    "${PYTHON_DIR}/ui/milvus.meta.json" \
+    "${PYTHON_DIR}/ui/assets"; do
     [[ -e "$t" ]] && targets+=("$t")
   done
   # A desktop icon / menu entry an earlier setup.sh installed for this checkout.
@@ -479,7 +481,9 @@ do_clean() {
 # src/python/ui/ became src/python/api/. An update keeps the install's own files
 # (voices, RAG database, uploads, logs) where they were, so the first start
 # after it moves them into api/. A file api/ already has is dropped from ui/
-# when identical, otherwise left there and reported. Remove after one release.
+# when identical, otherwise left there and reported. ui/tts/ holds the
+# split_voices.py shim the previous run.sh calls during the update, so it stays.
+# Remove after one release, with that shim.
 migrate_legacy_ui_dir() {
   local old="${PYTHON_DIR}/ui" new="${PYTHON_DIR}/api" src rel moved=0
   [[ -d "${old}" ]] || return 0
@@ -493,19 +497,30 @@ migrate_legacy_ui_dir() {
       continue
     fi
     mkdir -p "$(dirname "${new}/${rel}")" && mv "${src}" "${new}/${rel}" && moved=$((moved + 1))
-  done < <(find "${old}" \( -type f -o -type l \) -print0)
+  done < <(find "${old}" -path "${old}/tts" -prune -o \( -type f -o -type l \) -print0)
   find "${old}" -depth -type d -empty -delete 2>/dev/null || true
-  if [[ -d "${old}" ]]; then
+  if [[ -n "$(find "${old}" -path "${old}/tts" -prune -o \( -type f -o -type l \) -print 2>/dev/null)" ]]; then
     warn "src/python/ui/ is now src/python/api/; these files were left in ui/ because api/ has a different copy:"
-    find "${old}" \( -type f -o -type l \) | sed "s|^${PYTHON_DIR}/|    |" >&2
+    find "${old}" -path "${old}/tts" -prune -o \( -type f -o -type l \) -print | sed "s|^${PYTHON_DIR}/|    |" >&2
     warn "Remove src/python/ui/ once you have kept anything you need from it."
   elif [[ "${moved}" -gt 0 ]]; then
     ok "Moved ${moved} file(s) from src/python/ui/ to src/python/api/ (the folder was renamed)."
   fi
 }
 
+# Where the installed voices are: an update from before the ui/ -> api/ rename
+# leaves them in ui/assets until the next start moves them (migrate_legacy_ui_dir).
+voice_assets_dir() {
+  if [[ -d "${PYTHON_DIR}/ui/assets" ]]; then
+    printf '%s\n' "${PYTHON_DIR}/ui/assets"
+  else
+    printf '%s\n' "${PYTHON_DIR}/api/assets"
+  fi
+}
+
 migrate_piper_voices() {
-  local assets="${PYTHON_DIR}/api/assets" py voice encoder decoder needs_split=0
+  local assets py voice encoder decoder needs_split=0
+  assets="$(voice_assets_dir)"
   py="${PIPERTTS_PYTHON:-${EXAMPLE_DIR}/.venv-pipertts/bin/python}"
   for voice in "${assets}"/*.onnx; do
     [[ -e "${voice}" ]] || continue
@@ -618,7 +633,8 @@ do_update() {
       esac
     done
     # Mirror tracked source so files deleted by a release disappear locally.
-    # Explicitly exclude every install-owned path from transfer and deletion.
+    # Explicitly exclude every install-owned path from transfer and deletion,
+    # in ui/ too until an install's first start moves its files to api/.
     rsync -a --delete-delay --delay-updates \
       ${keep[@]+"${keep[@]}"} \
       --exclude='/.venv/' \
@@ -639,6 +655,14 @@ do_update() {
       --exclude='/src/python/api/assets/*.onnx.json' \
       --exclude='/src/python/api/assets/piper-plus/' \
       --exclude='/src/python/api/assets/mms-tts-kor/' \
+      --exclude='/src/python/ui/uploads/' \
+      --exclude='/src/python/ui/.milvus.db.lock' \
+      --exclude='/src/python/ui/milvus.db' \
+      --exclude='/src/python/ui/milvus.meta.json' \
+      --exclude='/src/python/ui/assets/*.onnx' \
+      --exclude='/src/python/ui/assets/*.onnx.json' \
+      --exclude='/src/python/ui/assets/piper-plus/' \
+      --exclude='/src/python/ui/assets/mms-tts-kor/' \
       "${tmp}/${ex_path}/" "${EXAMPLE_DIR}/" \
       || { errln "Source replacement failed."; rm -rf "${tmp}"; return 1; }
     rm -rf "${tmp}"
@@ -690,6 +714,14 @@ banner
 
 # An icon from an earlier setup.sh would start the removed web UI: remove it.
 while IFS= read -r t; do rm -f "$t" && info "Removed an old desktop icon: $t"; done < <(old_desktop_entries)
+
+# Move an updated install's files out of the old ui/ folder before setup and
+# the Piper voice preparation use them, but never under a running Studio (the
+# call after the stale-process cleanup below covers that case).
+if ! do_status >/dev/null 2>&1 \
+     && ! { command -v pgrep >/dev/null 2>&1 && pgrep -f "${API_PATTERN}|${LEGACY_UI_PATTERN}" >/dev/null 2>&1; }; then
+  migrate_legacy_ui_dir
+fi
 
 # First launch: if setup.sh hasn't created the app venv (and local config) yet,
 # run it now so `./run.sh` works out of the box. AUTO_SETUP=0 opts out.

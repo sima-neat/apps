@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Compatibility shim — temporary, remove one release after the api/tts/ move.
+"""Compatibility shim — temporary, remove one release after the move into
+ui/tts/ (now api/tts/).
 
-The voice splitter moved to ``api/tts/split_voices.py``. A customer running
+The voice splitter is ``api/tts/split_voices.py``. A customer running
 ``run.sh update`` from a pre-move release executes the *old* in-memory
 ``migrate_piper_voices`` function, which still invokes this path — and by then
 the pull has relocated the real script. Forward to the new location so that one

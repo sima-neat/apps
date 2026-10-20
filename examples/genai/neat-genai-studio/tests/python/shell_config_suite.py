@@ -3,6 +3,7 @@ Supertonic paths (src/common/config_value.sh), exercised through bash."""
 
 from __future__ import annotations
 
+import re
 import subprocess
 import tempfile
 import unittest
@@ -207,6 +208,44 @@ class LegacyUiDirMigrationTests(unittest.TestCase):
             self.assertEqual((py / "ui" / "milvus.db").read_text(), "old documents")
             self.assertFalse((py / "ui" / "assets").exists())          # identical copy dropped
             self.assertIn("ui/milvus.db", out.stderr)
+
+    def test_the_split_voices_shim_in_ui_tts_stays(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            py = Path(tmp)
+            (py / "ui" / "tts").mkdir(parents=True)
+            (py / "ui" / "tts" / "split_voices.py").write_text("shim")
+            (py / "ui" / "milvus.db").write_text("db")
+            (py / "api").mkdir()
+
+            out = self._migrate(py)
+
+            self.assertEqual((py / "ui" / "tts" / "split_voices.py").read_text(), "shim")
+            self.assertFalse((py / "api" / "tts").exists())
+            self.assertEqual((py / "api" / "milvus.db").read_text(), "db")
+            self.assertEqual(out.stderr, "")
+
+    def test_update_keeps_install_files_in_ui_until_they_move(self):
+        # Every install-owned api/ path the update mirror protects is also
+        # protected under ui/, so a second update before the first start
+        # cannot delete files that have not moved yet.
+        run_sh = (self.EXAMPLE / "run.sh").read_text(encoding="utf-8")
+        api = re.findall(r"--exclude='/src/python/api/([^']+)'", run_sh)
+        ui = re.findall(r"--exclude='/src/python/ui/([^']+)'", run_sh)
+        self.assertTrue(api)
+        self.assertEqual(sorted(api), sorted(ui))
+
+    def test_the_old_updater_path_forwards_to_the_splitter(self):
+        shim = self.EXAMPLE / "src" / "python" / "ui" / "tts" / "split_voices.py"
+        with tempfile.TemporaryDirectory() as tmp:
+            py = Path(tmp)
+            (py / "ui" / "tts").mkdir(parents=True)
+            (py / "api" / "tts").mkdir(parents=True)
+            (py / "ui" / "tts" / "split_voices.py").write_text(shim.read_text(encoding="utf-8"))
+            (py / "api" / "tts" / "split_voices.py").write_text(
+                "import sys\nprint('split', sys.argv[1:])\n")
+            out = subprocess.run([sys.executable, str(py / "ui" / "tts" / "split_voices.py"), "/assets"],
+                                 check=True, capture_output=True, text=True)
+            self.assertEqual(out.stdout.strip(), "split ['/assets']")
 
     def test_nothing_happens_without_a_ui_folder(self):
         with tempfile.TemporaryDirectory() as tmp:
