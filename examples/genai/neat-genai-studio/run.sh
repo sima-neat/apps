@@ -694,7 +694,7 @@ do_update() {
   # configs now downloaded by setup.sh: fetch any missing file of a voice that
   # is still installed, so it keeps showing up.
   step "Checking the installed voices…"
-  python3 "${PYTHON_DIR}/ui/tts/voice_catalog.py" repair --assets "${PYTHON_DIR}/ui/assets" \
+  python3 "${PYTHON_DIR}/api/tts/voice_catalog.py" repair --assets "$(voice_assets_dir)" \
     || warn "Some voice files could not be restored; run ./setup.sh to reinstall the voices."
   migrate_piper_voices || { errln "Piper voice migration failed."; return 1; }
   ok "Update complete."
