@@ -1,7 +1,7 @@
 # Third-party TTS models
 
 Neat GenAI Studio installs and loads server-side voices only from
-[`voice_catalog.json`](src/python/ui/tts/voice_catalog.json). Each entry records a
+[`voice_catalog.json`](src/python/api/tts/voice_catalog.json). Each entry records a
 short licence label, pinned upstream repository revision, and SHA-256 checksum
 for every downloaded file. A model that is merely present in `assets/` is not
 eligible to load. Models under `CC-BY-NC-SA-4.0` are excluded.
@@ -20,7 +20,7 @@ entry.
 - Compiled vector estimator for Platform 3.0: the SiMa model zoo
   (`supertonic_vector_estimator_mpk_develop1132.tar.gz`, Model Compiler develop,
   `sima-mlc` 3.0.0.dev0+develop.1132; address and checksum in
-  `src/python/ui/tts/supertonic_sima/vector_estimator.json`), compiled from the
+  `src/python/api/tts/supertonic_sima/vector_estimator.json`), compiled from the
   same pinned upstream model and graph surgery; same licence as the base model
 - Compiled vocoder and runtime data: `florianvoss/supertonic-3-sima`
   (<https://huggingface.co/florianvoss/supertonic-3-sima>), derived from the
@@ -31,7 +31,7 @@ entry.
   `9229108c974ef57810abce0889ac713a59e341a1` (that repository also carries a
   `LICENSE` file; review it together with the model card)
 - Integration software: the runtime package under
-  `src/python/ui/tts/supertonic_sima/` is vendored from
+  `src/python/api/tts/supertonic_sima/` is vendored from
   <https://github.com/florianvoss-commit/supertonic-sima> at commit
   `3b837b3e1b6a378ab8c24c3c04b079429b67e237`, at the upstream author's request.
   That repository publishes no licence file; a licence statement for the

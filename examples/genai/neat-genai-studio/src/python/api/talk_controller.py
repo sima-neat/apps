@@ -1,6 +1,6 @@
 """The Studio's text-to-speech controller.
 
-Extracted from ui/flask_app.py to keep the web app focused on routing. Owns the
+Extracted from api/studio_api.py to keep the API server focused on routing. Owns the
 Supertonic (MLA) and CPU (piper-plus, piper-tts) engines, the browser-TTS mode,
 engine/voice selection, and on-demand synthesis for the speech API.
 """
@@ -519,7 +519,7 @@ class TalkController:
 
     def _sanitize_for_tts(self, text: str) -> str:
         # Strip Markdown and LaTeX so Piper utters the prose, not the formatting
-        # ("star star", "dollar x caret 2", raw URLs). See ui/tts/tts_text.py.
+        # ("star star", "dollar x caret 2", raw URLs). See api/tts/tts_text.py.
         return sanitize_for_tts(text)
 
     

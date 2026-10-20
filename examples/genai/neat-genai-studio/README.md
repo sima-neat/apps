@@ -143,7 +143,7 @@ ${APP_DIR}/run.sh
 ```
 
 `run.sh` starts the model server (`${APP_DIR}/src/python/server/main.py`) and
-the Studio backend (`${APP_DIR}/src/python/ui/main.py`). When startup finishes
+the Studio backend (`${APP_DIR}/src/python/api/main.py`). When startup finishes
 it prints the backend address, `https://<board-ip>:5000`, and keeps running
 until you press `Ctrl+C`. If `setup.sh` has not been run yet, `run.sh` runs it
 first.
@@ -228,14 +228,14 @@ curl -sk -N $B/v1/chat/completions -H 'Content-Type: application/json' \
   -d '{"model":"<catalog-model-name>","stream":true,"messages":[{"role":"user","content":"Say hello."}]}'
 ```
 
-`src/python/ui/apitest/audio_e2e.sh [host:port | base URL]` checks the workflow
+`src/python/api/apitest/audio_e2e.sh [host:port | base URL]` checks the workflow
 end to end against a running backend: synthesized speech is transcribed back to
 its words, German speech translates to English, the chat model answers, and,
 when `/health` lists `features.rag`, document search returns passages and a
 chat with `neat_rag` uses them, and the board camera lists its devices. With
 `BOARD_CAMERA_DEVICE=/dev/videoN` set to a camera attached to the board, it
 also checks that a snapshot returns a JPEG. It exits non-zero on any failure.
-`src/python/ui/apitest/backend_runtime_test.sh` exercises the model server and
+`src/python/api/apitest/backend_runtime_test.sh` exercises the model server and
 the speech routes. The other scripts there (`speech.sh`, `transcriptions.sh`,
 `translations.sh`, `chat.sh`, `completions.sh`) wrap single calls. They take a
 full base URL (`http://…` when `app.web.https` is false) or `STUDIO_URL`.
@@ -307,7 +307,7 @@ environment of `run.sh`.
   engine is `supertonic` when its runtime loaded and `piper-tts` otherwise;
   `POST /tts/engine` changes the preference for languages more than one engine
   can speak.
-- **Supertonic 3** runtime is vendored under `src/python/ui/tts/supertonic_sima/`
+- **Supertonic 3** runtime is vendored under `src/python/api/tts/supertonic_sima/`
   (see its README for provenance). It synthesizes at a real-time factor of about
   0.07 on a Modalix DevKit and offers ten speakers (F1-F5, M1-M5).
   `SUPERTONIC_VOICE` picks the startup speaker; `SUPERTONIC_STEPS` (5-12,
@@ -318,7 +318,7 @@ environment of `run.sh`.
   and [florianvoss/supertonic-3-sima](https://huggingface.co/florianvoss/supertonic-3-sima)
   at pinned revisions, and the Platform 3.0 vector estimator from the SiMa model
   zoo with `sima-cli download` (address and checksum in
-  `src/python/ui/tts/supertonic_sima/vector_estimator.json`). Every file is
+  `src/python/api/tts/supertonic_sima/vector_estimator.json`). Every file is
   verified by SHA-256, and each `setup.sh` run repairs missing or changed files.
   Supertonic needs Platform 3.0 or newer; when the runtime is missing the engine
   is not offered. The models root and venv are persisted under
@@ -331,7 +331,7 @@ environment of `run.sh`.
 - **Japanese** defaults to Piper Plus CSS10; **MERA** is an optional Piper Plus
   model downloaded and verified when it is selected. **Chinese** defaults to the
   dedicated Huayan Piper voice. **Korean** needs Supertonic 3.
-- The reviewed catalog is `src/python/ui/tts/voice_catalog.json`: compact
+- The reviewed catalog is `src/python/api/tts/voice_catalog.json`: compact
   licence labels, pinned upstream revisions and SHA-256 checksums. Models under
   `CC-BY-NC-SA-4.0` are excluded. See
   [Third-party TTS models](https://github.com/sima-neat/apps/blob/main/examples/genai/neat-genai-studio/THIRD_PARTY_TTS_MODELS.md)
@@ -339,7 +339,7 @@ environment of `run.sh`.
 
 ### RAG
 RAG is enabled by default after `setup.sh`, which builds
-`src/python/ui/milvus.db` (and `milvus.meta.json`) from the bundled
+`src/python/api/milvus.db` (and `milvus.meta.json`) from the bundled
 `src/common/rag/neat.md`. The backend starts the search service when the
 database exists. A `SETUP_RAG=0` install leaves RAG off and the RAG requests
 below answer 409; `SETUP_RAG=1 ${APP_DIR}/setup.sh` adds it later.
@@ -383,7 +383,7 @@ To use a different embedding model or disable RAG, edit `app.rag` in
 ```bash
 "${APP_DIR}/.venv/bin/python" "${APP_DIR}/src/python/rag/create_db.py" \
   --input /path/to/document.md \
-  --output "${APP_DIR}/src/python/ui/milvus.db" \
+  --output "${APP_DIR}/src/python/api/milvus.db" \
   --embedding-model "${LLIMA_MODELS_PATH:-/media/nvme/llima/models}/gte-small"
 ```
 
@@ -437,7 +437,7 @@ Terminal 2, backend (from `prebuilt-apps/`):
 
 ```bash
 APP_DIR=examples/genai/neat-genai-studio
-"${APP_DIR}/.venv/bin/python" "${APP_DIR}/src/python/ui/main.py" \
+"${APP_DIR}/.venv/bin/python" "${APP_DIR}/src/python/api/main.py" \
   --config "${APP_DIR}/config.local.yaml"
 ```
 
@@ -448,10 +448,10 @@ The model server's control API (`http://127.0.0.1:9997/control/status`,
 ## Source Files
 - Launcher and setup: `run.sh`, `setup.sh`
 - Model server and control API: `src/python/server/`
-- Backend API, speech, and voices: `src/python/ui/`
+- Backend API, speech, and voices: `src/python/api/`
 - Shared configuration and helpers: `src/common/`, `src/python/shared/`
 - RAG tools and default document: `src/python/rag/`, `src/common/rag/`
-- Manual API scripts: `src/python/ui/apitest/`
+- Manual API scripts: `src/python/api/apitest/`
 
 ## Development From Source
 See the Apps repository [contributor guide](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md)
@@ -466,5 +466,9 @@ Outside the installed bundle, the Studio can also be fetched on its own with
 `NEAT_APPS_BRANCH=<branch>` picks the branch and `UPDATE_DEPS=1` also refreshes
 the Python environments.
 
-Do not commit the generated `config.local.yaml`, `src/python/ui/milvus.db`, or
-`src/python/ui/milvus.meta.json`.
+The backend folder was called ui before it became `src/python/api/`. After
+`run.sh update` from such a version, the next `run.sh` start moves the
+installed voices, RAG database and uploads into `src/python/api/`.
+
+Do not commit the generated `config.local.yaml`, `src/python/api/milvus.db`, or
+`src/python/api/milvus.meta.json`.

@@ -4,7 +4,7 @@ The suites live beside this module as ``*_suite.py`` (deliberately not
 ``test_*.py``, so an ad-hoc ``pytest`` over the tree does not collect them a
 second time). The installed bundle packages ``src/python`` wholesale, so tests
 must not live there. This module is what the repository harness collects: it
-puts ``src/python`` and ``src/python/ui`` on the path, re-exports the TestCase
+puts ``src/python`` and ``src/python/api`` on the path, re-exports the TestCase
 classes, and marks them as unit coverage so ``./tests/test.sh --unit`` runs
 them. Run one suite in place with ``python -m unittest asr_switching_suite``
 from this directory (with the same two paths on PYTHONPATH).
@@ -27,13 +27,13 @@ SRC_PYTHON = EXAMPLE_DIR / "src" / "python"
 if str(SRC_PYTHON) not in sys.path:
     sys.path.insert(0, str(SRC_PYTHON))
 
-UI_PYTHON = SRC_PYTHON / "ui"
-if str(UI_PYTHON) not in sys.path:
-    sys.path.insert(0, str(UI_PYTHON))   # the ui suites import their modules bare
+API_PYTHON = SRC_PYTHON / "api"
+if str(API_PYTHON) not in sys.path:
+    sys.path.insert(0, str(API_PYTHON))   # the api suites import their modules bare
 
-TTS_PYTHON = UI_PYTHON / "tts"
+TTS_PYTHON = API_PYTHON / "tts"
 if str(TTS_PYTHON) not in sys.path:
-    sys.path.insert(0, str(TTS_PYTHON))  # TTS engines/workers/catalog live in ui/tts
+    sys.path.insert(0, str(TTS_PYTHON))  # TTS engines/workers/catalog live in api/tts
 
 TESTS_DIR = Path(__file__).resolve().parent
 if str(TESTS_DIR) not in sys.path:
@@ -78,6 +78,7 @@ from audio_api_suite import (  # noqa: E402,F401
     VoicesListingTests as AudioApiVoicesListingTests,
 )
 from shell_config_suite import (  # noqa: E402,F401
+    LegacyUiDirMigrationTests,
     ServerConfigWithoutPyyamlTests,
     ShellConfigValueTests,
     ShellRagConfigTests,

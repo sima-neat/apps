@@ -1,13 +1,13 @@
-# Voices setup.sh downloads from the reviewed catalog (ui/tts/voice_catalog.json)
-ui/assets/
+# Voices setup.sh downloads from the reviewed catalog (api/tts/voice_catalog.json)
+api/assets/
 ffmpeg-build
-ui/server.log
+api/server.log
 **/__pycache__/
 .venv/
 *.wav
-ui/.milvus*
-ui/milvus.db*
-ui/milvus.meta.json
+api/.milvus*
+api/milvus.db*
+api/milvus.meta.json
 .cache/*
 .venv-*/*
 *.tar.gz

@@ -1548,7 +1548,7 @@ def configure_logging(log_filename='server.log'):
         ]
     )
 
-def run_ui(app_cfg):
+def run_api(app_cfg):
     global genai_app
     global vectodb_proc
 

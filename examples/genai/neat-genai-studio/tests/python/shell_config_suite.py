@@ -157,6 +157,64 @@ class ShellRagConfigTests(unittest.TestCase):
             self.assertEqual(out.stdout.strip(), "false")
 
 
+class LegacyUiDirMigrationTests(unittest.TestCase):
+    """run.sh moves an updated install's own files from src/python/ui/ (the
+    backend folder before it became api/) into api/ on the next start."""
+
+    EXAMPLE = Path(__file__).resolve().parents[2]
+
+    def _migrate(self, python_dir: Path) -> subprocess.CompletedProcess:
+        run_sh = (self.EXAMPLE / "run.sh").read_text(encoding="utf-8")
+        start = run_sh.index("migrate_legacy_ui_dir() {")
+        end = run_sh.index("\n}\n", start) + 3
+        script = ('ok() { echo "OK $*"; }; warn() { echo "WARN $*" >&2; }\n'
+                  f'PYTHON_DIR="$1"\n{run_sh[start:end]}\nmigrate_legacy_ui_dir\n')
+        return subprocess.run(["bash", "-c", script, "_", str(python_dir)],
+                              check=True, capture_output=True, text=True)
+
+    def test_install_files_move_and_regenerated_ones_are_dropped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            py = Path(tmp)
+            files = {"assets/en_US-x.onnx": "voice", "assets/piper-plus/ja/m.onnx": "ja",
+                     "milvus.db": "db", "milvus.meta.json": "{}", "uploads/doc.md": "# doc",
+                     "server.log": "log", ".milvus.db.lock": "", "__pycache__/x.pyc": "c"}
+            for rel, text in files.items():
+                (py / "ui" / rel).parent.mkdir(parents=True, exist_ok=True)
+                (py / "ui" / rel).write_text(text)
+            (py / "api" / "assets").mkdir(parents=True)
+
+            out = self._migrate(py)
+
+            self.assertFalse((py / "ui").exists())
+            for rel in ("assets/en_US-x.onnx", "assets/piper-plus/ja/m.onnx", "milvus.db",
+                        "milvus.meta.json", "uploads/doc.md", "server.log"):
+                self.assertEqual((py / "api" / rel).read_text(), files[rel], rel)
+            self.assertFalse((py / "api" / ".milvus.db.lock").exists())
+            self.assertFalse((py / "api" / "__pycache__").exists())
+            self.assertIn("OK Moved 6 file(s)", out.stdout)
+
+    def test_existing_api_files_are_never_overwritten(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            py = Path(tmp)
+            for side, db, voice in (("ui", "old documents", "same"), ("api", "new default", "same")):
+                (py / side / "assets").mkdir(parents=True)
+                (py / side / "milvus.db").write_text(db)
+                (py / side / "assets" / "v.onnx").write_text(voice)
+
+            out = self._migrate(py)
+
+            self.assertEqual((py / "api" / "milvus.db").read_text(), "new default")
+            self.assertEqual((py / "ui" / "milvus.db").read_text(), "old documents")
+            self.assertFalse((py / "ui" / "assets").exists())          # identical copy dropped
+            self.assertIn("ui/milvus.db", out.stderr)
+
+    def test_nothing_happens_without_a_ui_folder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "api").mkdir()
+            out = self._migrate(Path(tmp))
+            self.assertEqual((out.stdout, out.stderr), ("", ""))
+
+
 class ShellConfigValueTests(unittest.TestCase):
     def test_quoted_and_plain_values(self):
         self.assertEqual(_read(CONFIG, "models_root"), "/data/st # models")

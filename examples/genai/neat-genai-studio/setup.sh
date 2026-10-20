@@ -46,7 +46,7 @@ DEFAULT_TTS_LANGUAGES="en,de,es,fr,it,ja,pt,vi,zh"
 TTS_LANGUAGES="${TTS_LANGUAGES:-}"
 TTS_OPTIONAL_VOICES="${TTS_OPTIONAL_VOICES:-}"
 # Supertonic 3 (MLA-accelerated multilingual TTS). The runtime is vendored under
-# src/python/ui/tts/supertonic_sima/ and runs in its own venv (pyneat + onnxruntime +
+# src/python/api/tts/supertonic_sima/ and runs in its own venv (pyneat + onnxruntime +
 # the numpy that PyNeat is built against); the model files come from Hugging
 # Face at pinned revisions and are checksum-verified. INSTALL_SUPERTONIC=0 skips it.
 INSTALL_SUPERTONIC="${INSTALL_SUPERTONIC:-1}"
@@ -309,7 +309,7 @@ ok "Backend virtual environment ready."
 resolve_supertonic_paths
 
 # Supertonic 3: hybrid TTS whose vector field and vocoder run on the MLA through
-# PyNeat. The runtime package is vendored in src/python/ui/tts/supertonic_sima/; its
+# PyNeat. The runtime package is vendored in src/python/api/tts/supertonic_sima/; its
 # dependencies (pyneat, onnxruntime, PyNeat's numpy) cannot share the backend venv, so an
 # isolated venv is built here and the model files are downloaded from Hugging
 # Face at pinned revisions and verified by checksum. The backend talks to it through
@@ -359,7 +359,7 @@ _supertonic_bad_files() {
 _supertonic_runtime_ok() {
   local py="${SUPERTONIC_VENV}/bin/python"
   [[ -x "${py}" ]] || return 1
-  PYTHONPATH="${EXAMPLE_DIR}/src/python/ui/tts" "${py}" - <<'PY' >/dev/null 2>&1
+  PYTHONPATH="${EXAMPLE_DIR}/src/python/api/tts" "${py}" - <<'PY' >/dev/null 2>&1
 import numpy, onnxruntime, pyneat
 import supertonic_sima
 PY
@@ -514,7 +514,7 @@ _supertonic_venv() {
 # The URL and checksum are in vector_estimator.json, which the engine also reads.
 # sima-cli downloads it, signing in to the model zoo if needed.
 _supertonic_vector_estimator() {
-  local pin="${EXAMPLE_DIR}/src/python/ui/tts/supertonic_sima/vector_estimator.json"
+  local pin="${EXAMPLE_DIR}/src/python/api/tts/supertonic_sima/vector_estimator.json"
   local target="${SUPERTONIC_MODELS_ROOT}/supertonic-3-sima/supertonic_vector_field_sima_mpk.tar.gz"
   local dir="${target%/*}" url sum name tmp
   url="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["url"])' "${pin}")" || return 1
@@ -882,7 +882,7 @@ if [[ "${SKIP_MODEL_DOWNLOAD}" != "1" && "${SETUP_RAG}" == "1" ]]; then
     cd "${EXAMPLE_DIR}/src/python"
     "${APP_VENV}/bin/python" rag/create_db.py \
       --input "${EXAMPLE_DIR}/src/common/rag/neat.md" \
-      --output ui/milvus.db \
+      --output api/milvus.db \
       --embedding-model "${RAG_EMBEDDING_DIR}"
   )
   ok "RAG database ready."
