@@ -1,0 +1,680 @@
+// Unit test for image-classification-explorer: validates CLI arg handling.
+//
+// Configuration-error cases are deliberately NOT here. The failure matrix in
+// tests/python/test_e2e.py (test_cpp_and_python_fail_identically) runs each one
+// against *both* entrypoints and compares the exit code and the message text,
+// which is strictly more than a C++-only check of the same input proves - and
+// the divergences found on this application were message-level, not exit-code
+// level. What remains here is what the matrix structurally cannot cover:
+// publication and ownership behaviour, which needs a completed run; positive
+// cases, since the matrix holds only failures; cross-language digests; argument
+// handling that is not expressible as a config file; and the packaged layout.
+#include "support/testing/test_process.h"
+
+#include <chrono>
+#include <cstdint>
+#include <filesystem>
+#include <unistd.h>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
+#include <sstream>
+#include <string>
+#include <vector>
+
+using sima_examples::testing::ProcessResult;
+using sima_examples::testing::spawn_and_wait;
+
+namespace {
+
+// The repository copy of a file shipped under src/common, for building a fake
+// packaged layout in the test.
+std::filesystem::path find_bundled_source(const std::string& name) {
+  namespace fs = std::filesystem;
+  const std::vector<fs::path> candidates = {
+      fs::path("examples/classification/image-classification-explorer/src/common") / name,
+      fs::path("src") / "common" / name,
+      fs::path("../src/common") / name,
+  };
+  for (const auto& candidate : candidates) {
+    std::error_code ec;
+    if (fs::is_regular_file(candidate, ec) && !ec)
+      return candidate;
+  }
+  return {};
+}
+
+// spawn_and_wait always inherits the caller's directory; this runs the binary
+// somewhere else, which is the whole point of the packaged-layout check.
+sima_examples::testing::ProcessResult spawn_and_wait_in(const std::string& binary,
+                                                        const std::vector<std::string>& args,
+                                                        int timeout_ms,
+                                                        const std::string& working_directory) {
+  namespace fs = std::filesystem;
+  const fs::path previous = fs::current_path();
+  fs::current_path(working_directory);
+  auto result = sima_examples::testing::spawn_and_wait(binary, args, timeout_ms);
+  fs::current_path(previous);
+  return result;
+}
+
+} // namespace
+
+int main(int argc, char** argv) {
+  if (argc < 2) {
+    std::cerr << "[ERR] usage: " << argv[0] << " <example-binary>\n";
+    return 2;
+  }
+  const std::string binary = argv[1];
+  int failures = 0;
+
+  // These checks write throwaway configurations into temporary directories, so
+  // the application under test can only find src/common through the repository
+  // layout. ctest supplies that working directory; say so plainly rather than
+  // letting a later filesystem call abort with an unhandled exception.
+  if (find_bundled_source("report.css").empty()) {
+    std::cerr << "[ERR] run this from the repository root: src/common was not found from "
+              << std::filesystem::current_path() << "\n";
+    return 2;
+  }
+
+  // Test 1: --help prints usage.
+  {
+    auto r = spawn_and_wait(binary, {"--help"}, 20000);
+    if (r.exit_code != 0) {
+      std::cerr << "[FAIL] --help: expected exit 0, got " << r.exit_code << "\n";
+      ++failures;
+    } else if (r.stdout_text.find("Usage") == std::string::npos) {
+      std::cerr << "[FAIL] --help: stdout does not contain Usage\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] --help printed usage\n";
+    }
+  }
+
+  // Test 3: an unrecognized flag produces a nonzero exit.
+  {
+    auto r = spawn_and_wait(binary, {"--bogus"}, 20000);
+    // argparse exits 2 for a usage error; the C++ entrypoint matches it.
+    if (r.exit_code != 2) {
+      std::cerr << "[FAIL] unknown flag: expected exit 2, got " << r.exit_code << "\nstderr:\n"
+                << r.stderr_text << "\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] unknown flag produced a usage error (exit 2)\n";
+    }
+  }
+
+  // Test 5: profiles run in declaration order even when `models:` carries an
+  // inline YAML comment (the order scanner must strip comments, not fall back
+  // to alphabetical order).
+  {
+    namespace fs = std::filesystem;
+    const auto config_path =
+        fs::temp_directory_path() /
+        ("image-classification-explorer-model-order-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".yaml");
+    {
+      std::ofstream config(config_path);
+      config << "models:   # profiles, non-alphabetical on purpose\n"
+             << "  zeta:  # loaded first\n"
+             << "    path: /nonexistent/zeta.tar.gz\n"
+             << "  alpha:\n"
+             << "    path: /nonexistent/alpha.tar.gz\n";
+    }
+    auto r = spawn_and_wait(binary, {"--config", config_path.string()}, 20000);
+    fs::remove(config_path);
+    const auto zeta = r.stdout_text.find("Loading model 'zeta'");
+    const auto alpha = r.stdout_text.find("Loading model 'alpha'");
+    if (r.exit_code == 0) {
+      std::cerr << "[FAIL] model order: expected nonzero exit for missing model files\n";
+      ++failures;
+    } else if (zeta == std::string::npos || alpha != std::string::npos) {
+      std::cerr << "[FAIL] model order: expected 'zeta' to load first (declaration order), "
+                << "stdout:\n"
+                << r.stdout_text << "\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] declared model order preserved with inline YAML comment\n";
+    }
+  }
+
+  // Test 6: an input directory that exists but cannot be enumerated must fail
+  // with a concise error, not an uncaught exception. (Skipped when running as
+  // root, where permission bits do not apply.)
+  {
+    namespace fs = std::filesystem;
+    const auto stamp = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    const auto locked_dir =
+        fs::temp_directory_path() / ("image-classification-explorer-locked-" + stamp);
+    const auto config_path =
+        fs::temp_directory_path() / ("image-classification-explorer-locked-" + stamp + ".yaml");
+    fs::create_directories(locked_dir);
+    fs::permissions(locked_dir, fs::perms::none);
+    std::error_code probe;
+    fs::directory_iterator probe_it(locked_dir, probe);
+    if (!probe) {
+      std::cout << "[SKIP] unreadable input directory: permissions not enforced (root?)\n";
+    } else {
+      {
+        std::ofstream config(config_path);
+        config << "io:\n"
+               << "  output_format: [html, json, csv]\n"
+               << "  input: " << locked_dir.string() << "\n"
+               << "models:\n"
+               << "  m:\n"
+               << "    path: /nonexistent/m.tar.gz\n";
+      }
+      auto r = spawn_and_wait(binary, {"--config", config_path.string()}, 20000);
+      fs::remove(config_path);
+      // Exit 3 is the input-error code the Python entrypoint uses for this.
+      if (r.exit_code != 3 ||
+          r.stderr_text.find("failed to read input directory") == std::string::npos ||
+          r.stderr_text.find("terminate") != std::string::npos) {
+        std::cerr << "[FAIL] unreadable input directory: expected exit 3 and a read failure, got "
+                  << r.exit_code << "\nstderr:\n"
+                  << r.stderr_text << "\n";
+        ++failures;
+      } else {
+        std::cout << "[OK] unreadable input directory produced an input error (exit 3)\n";
+      }
+    }
+    fs::permissions(locked_dir, fs::perms::owner_all);
+    fs::remove_all(locked_dir);
+  }
+
+  // Test 8: output_dir is replaced as a whole, so a directory holding anything
+  // other than a previous report is refused; a clean one receives the report.
+  // Uses an unsupported-extension input so no model is loaded.
+  {
+    namespace fs = std::filesystem;
+    const auto stamp = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    const auto work = fs::temp_directory_path() / ("image-classification-explorer-out-" + stamp);
+    fs::create_directories(work / "shared");
+    {
+      std::ofstream(work / "shared" / "notes.txt") << "customer data\n";
+    }
+    {
+      std::ofstream(work / "input.txt") << "not an image\n";
+    }
+    auto write_config = [&](const fs::path& output_dir) {
+      std::ofstream config(work / "config.yaml");
+      config << "io:\n"
+             << "  output_format: [html, json, csv]\n"
+             << "  input: " << (work / "input.txt").string() << "\n"
+             << "  output_dir: " << output_dir.string() << "\n"
+             << "models:\n"
+             << "  m:\n"
+             << "    path: /nonexistent/m.tar.gz\n";
+    };
+
+    // A customer directory without the ownership marker - even one that holds
+    // a report.html - must never be swapped away.
+    {
+      std::ofstream(work / "shared" / "report.html") << "customer page\n";
+    }
+    write_config(work / "shared");
+    auto refused = spawn_and_wait(binary, {"--config", (work / "config.yaml").string()}, 20000);
+    if (refused.exit_code == 0 ||
+        refused.stderr_text.find("not created by this application") == std::string::npos ||
+        !fs::exists(work / "shared" / "notes.txt") ||
+        !fs::exists(work / "shared" / "report.html")) {
+      std::cerr << "[FAIL] unowned output_dir: expected refusal, got exit " << refused.exit_code
+                << "\nstderr:\n"
+                << refused.stderr_text << "\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] output_dir without the ownership marker was refused\n";
+    }
+
+    // The marker is recognised by being a regular file. A *directory* with the
+    // marker's name, beside names that look like a report, must not pass the
+    // ownership check: publication replaces output_dir wholesale, so it would
+    // delete the data nested under the fake marker.
+    {
+      const auto fake = work / "fake";
+      fs::create_directories(fake / ".image-classification-explorer-report");
+      {
+        std::ofstream(fake / ".image-classification-explorer-report" / "customer.txt")
+            << "keep me\n";
+      }
+      {
+        std::ofstream(fake / "report.html") << "customer page\n";
+      }
+      write_config(fake);
+      auto fake_refused =
+          spawn_and_wait(binary, {"--config", (work / "config.yaml").string()}, 20000);
+      if (fake_refused.exit_code == 0 ||
+          fake_refused.stderr_text.find("not created by this application") == std::string::npos ||
+          !fs::exists(fake / ".image-classification-explorer-report" / "customer.txt") ||
+          !fs::exists(fake / "report.html")) {
+        std::cerr << "[FAIL] marker directory: expected refusal, got exit "
+                  << fake_refused.exit_code << "\nstderr:\n"
+                  << fake_refused.stderr_text << "\n";
+        ++failures;
+      } else {
+        std::cout << "[OK] a directory named like the ownership marker was refused\n";
+      }
+    }
+
+    // A whitelisted top-level name is not enough: publication replaces the whole
+    // directory, so a note left inside thumbnails/ was deleted while the listing
+    // still looked like a previous report.
+    {
+      const auto nested = work / "nested";
+      fs::create_directories(nested / "thumbnails");
+      {
+        std::ofstream(nested / ".image-classification-explorer-report") << "generated\n";
+      }
+      {
+        std::ofstream(nested / "report.json") << "{}\n";
+      }
+      {
+        std::ofstream(nested / "thumbnails" / "notes.txt") << "customer data\n";
+      }
+      write_config(nested);
+      auto nested_refused =
+          spawn_and_wait(binary, {"--config", (work / "config.yaml").string()}, 20000);
+      if (nested_refused.exit_code == 0 ||
+          nested_refused.stderr_text.find("not part of a previous report") == std::string::npos ||
+          !fs::exists(nested / "thumbnails" / "notes.txt")) {
+        std::cerr << "[FAIL] nested foreign file: expected refusal, got exit "
+                  << nested_refused.exit_code << "\nstderr:\n"
+                  << nested_refused.stderr_text << "\n";
+        ++failures;
+      } else {
+        std::cout << "[OK] a foreign file nested under thumbnails/ was refused\n";
+      }
+    }
+
+    // The marker authorises recursive deletion, so it has to be the file itself:
+    // is_regular_file follows symlinks, so a link named like the marker and
+    // pointing at any regular file handed that authority over a stranger's
+    // directory, which remove_all then emptied.
+    {
+      const auto victim_dir = work / ".symlinked.previous";
+      fs::create_directories(victim_dir);
+      {
+        std::ofstream(victim_dir / "someone-elses-work.txt") << "keep me\n";
+      }
+      const auto bait = work / "any-regular-file.txt";
+      {
+        std::ofstream(bait) << "target\n";
+      }
+      std::error_code link_ec;
+      fs::create_symlink(bait, victim_dir / ".image-classification-explorer-report", link_ec);
+      if (link_ec) {
+        std::cerr << "[FAIL] could not create the marker symlink: " << link_ec.message() << "\n";
+        ++failures;
+      } else {
+        write_config(work / "symlinked");
+        auto refused_link =
+            spawn_and_wait(binary, {"--config", (work / "config.yaml").string()}, 20000);
+        if (refused_link.exit_code == 0 ||
+            refused_link.stderr_text.find("was not created by this application") ==
+                std::string::npos ||
+            !fs::exists(victim_dir / "someone-elses-work.txt")) {
+          std::cerr << "[FAIL] marker symlink: expected refusal, got exit "
+                    << refused_link.exit_code << "\nstderr:\n"
+                    << refused_link.stderr_text << "\n";
+          ++failures;
+        } else {
+          std::cout << "[OK] a symlink named like the ownership marker was refused\n";
+        }
+      }
+    }
+
+    write_config(work / "report");
+    auto ok = spawn_and_wait(binary, {"--config", (work / "config.yaml").string()}, 20000);
+    auto second = spawn_and_wait(binary, {"--config", (work / "config.yaml").string()}, 20000);
+    bool leftovers = false;
+    for (const auto& entry : fs::directory_iterator(work)) {
+      if (entry.path().filename().string().rfind(".report.", 0) == 0)
+        leftovers = true;
+    }
+    if (ok.exit_code != 0 || second.exit_code != 0 ||
+        !fs::exists(work / "report" / "report.json") ||
+        !fs::exists(work / "report" / "report.csv") ||
+        !fs::exists(work / "report" / "report.html") ||
+        !fs::exists(work / "report" / ".image-classification-explorer-report") || leftovers) {
+      std::cerr << "[FAIL] dedicated output_dir: expected report files after two runs, exits "
+                << ok.exit_code << "/" << second.exit_code << ", leftovers=" << leftovers
+                << "\nstderr:\n"
+                << ok.stderr_text << second.stderr_text << "\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] dedicated output_dir was written and replaced without leftovers\n";
+    }
+
+    // A previous report that has since gained unrelated files is refused too.
+    {
+      std::ofstream(work / "report" / "notes.txt") << "customer data\n";
+    }
+    auto foreign = spawn_and_wait(binary, {"--config", (work / "config.yaml").string()}, 20000);
+    if (foreign.exit_code == 0 ||
+        foreign.stderr_text.find("not part of a previous report") == std::string::npos ||
+        !fs::exists(work / "report" / "notes.txt")) {
+      std::cerr << "[FAIL] foreign entries: expected refusal, got exit " << foreign.exit_code
+                << "\nstderr:\n"
+                << foreign.stderr_text << "\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] previous report with foreign entries was refused\n";
+    }
+
+    // A symlinked output_dir keeps the link and replaces its target.
+    fs::create_directories(work / "real_report");
+    fs::create_directory_symlink(work / "real_report", work / "linked");
+    write_config(work / "linked");
+    auto via_link = spawn_and_wait(binary, {"--config", (work / "config.yaml").string()}, 20000);
+    auto via_link2 = spawn_and_wait(binary, {"--config", (work / "config.yaml").string()}, 20000);
+    if (via_link.exit_code != 0 || via_link2.exit_code != 0 || !fs::is_symlink(work / "linked") ||
+        fs::read_symlink(work / "linked") != work / "real_report" ||
+        !fs::exists(work / "real_report" / "report.json")) {
+      std::cerr << "[FAIL] symlinked output_dir: expected link preserved and target replaced, "
+                   "exits "
+                << via_link.exit_code << "/" << via_link2.exit_code << "\nstderr:\n"
+                << via_link.stderr_text << via_link2.stderr_text << "\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] symlinked output_dir kept the link and replaced its target\n";
+    }
+    fs::remove_all(work);
+  }
+
+  // Test 10: a quoted YAML profile key must be reported without its quotes, so
+  // C++ metadata matches what Python's YAML loader produces.
+  {
+    namespace fs = std::filesystem;
+    const auto config_path =
+        fs::temp_directory_path() /
+        ("image-classification-explorer-quoted-key-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".yaml");
+    {
+      std::ofstream config(config_path);
+      config << "models:\n"
+             << "  \"resnet_50\":\n"
+             << "    path: /nonexistent/resnet_50.tar.gz\n";
+    }
+    auto r = spawn_and_wait(binary, {"--config", config_path.string()}, 20000);
+    fs::remove(config_path);
+    const bool unquoted = r.stdout_text.find("Loading model 'resnet_50'") != std::string::npos;
+    const bool quoted = r.stdout_text.find("\"resnet_50\"") != std::string::npos;
+    if (!unquoted || quoted) {
+      std::cerr << "[FAIL] quoted profile key: expected unquoted model name, stdout:\n"
+                << r.stdout_text << "\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] quoted YAML profile key was unquoted\n";
+    }
+  }
+
+  // Test 15: the same names are accepted when quoted, which makes them strings
+  // in both implementations. (Fails later on the missing model file, not on the
+  // name, so assert the name was accepted.)
+  {
+    namespace fs = std::filesystem;
+    const auto config_path =
+        fs::temp_directory_path() /
+        ("image-classification-explorer-quoted-numeric-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".yaml");
+    {
+      std::ofstream config(config_path);
+      config << "models:\n"
+             << "  \"1\":\n"
+             << "    path: /nonexistent/m.tar.gz\n";
+    }
+    auto r = spawn_and_wait(binary, {"--config", config_path.string()}, 20000);
+    fs::remove(config_path);
+    if (r.stderr_text.find("is not a string") != std::string::npos ||
+        r.stdout_text.find("Loading model '1'") == std::string::npos) {
+      std::cerr << "[FAIL] quoted numeric name: expected it to be accepted, exit " << r.exit_code
+                << "\nstdout:\n"
+                << r.stdout_text << "stderr:\n"
+                << r.stderr_text << "\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] quoted numeric profile name was accepted\n";
+    }
+  }
+
+  // Test 23: the thumbnail digest must match Python's, so both implementations
+  // name thumbnails identically and neither renames them between runs.
+  {
+    const std::string expected = "771220d11190d381"; // pinned in test_unit.py too
+    std::uint64_t digest = 0xCBF29CE484222325ULL;
+    for (unsigned char byte : std::string("/a/b.jpg")) {
+      digest ^= static_cast<std::uint64_t>(byte);
+      digest *= 0x100000001B3ULL;
+    }
+    std::ostringstream out;
+    out << std::hex << std::setw(16) << std::setfill('0') << digest;
+    if (out.str() != expected) {
+      std::cerr << "[FAIL] thumbnail digest: expected " << expected << ", got " << out.str()
+                << "\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] thumbnail digest matches the Python implementation\n";
+    }
+  }
+
+  // Test 26: `extensions: jpg` (no leading dot) must still match .jpg files.
+  {
+    namespace fs = std::filesystem;
+    const auto stamp = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    const auto work = fs::temp_directory_path() / ("image-classification-explorer-ext-" + stamp);
+    const auto images = work / "images";
+    fs::create_directories(images);
+    {
+      std::ofstream(images / "a.jpg") << "not really an image\n";
+    }
+    // The config lives outside the scanned directory: a .yaml inside it would
+    // itself be reported as an unsupported extension.
+    {
+      std::ofstream config(work / "config.yaml");
+      config << "io:\n"
+             << "  output_format: [html, json, csv]\n"
+             << "  input: " << images.string() << "\n"
+             << "  output_dir: " << (work / "report").string() << "\n"
+             << "  extensions: jpg\n"
+             << "models:\n"
+             << "  m:\n"
+             << "    path: /nonexistent/m.tar.gz\n";
+    }
+    auto r = spawn_and_wait(binary, {"--config", (work / "config.yaml").string()}, 20000);
+    // The model cannot load, so the run fails - but the file must have been
+    // accepted as an input rather than reported as an unsupported extension.
+    const bool skipped_it =
+        (r.stdout_text + r.stderr_text).find("unsupported extension") != std::string::npos;
+    const bool classified = r.stdout_text.find("Classifying 1 image(s)") != std::string::npos;
+    if (skipped_it || !classified) {
+      std::cerr << "[FAIL] extensions without a dot: skipped=" << skipped_it
+                << " classified=" << classified << "\nstdout:\n"
+                << r.stdout_text << "\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] an extension without a leading dot still matched\n";
+    }
+    fs::remove_all(work);
+  }
+
+  // Test 28: an entry that cannot be stat'ed must not abort the scan. The
+  // throwing is_regular_file() overload raised filesystem_error on a
+  // self-referential symlink, so the run ended at exit 6 with no report while
+  // Python skipped the entry and continued.
+  {
+    namespace fs = std::filesystem;
+    const auto stamp = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    const auto work = fs::temp_directory_path() / ("image-classification-explorer-loop-" + stamp);
+    const auto images = work / "images";
+    fs::create_directories(images);
+    {
+      std::ofstream(images / "a.jpg") << "not really an image\n";
+    }
+    std::error_code link_ec;
+    fs::create_symlink("loop", images / "loop", link_ec); // points at itself
+    {
+      std::ofstream config(work / "config.yaml");
+      config << "io:\n"
+             << "  output_format: [html, json, csv]\n"
+             << "  input: " << images.string() << "\n"
+             << "  output_dir: " << (work / "report").string() << "\n"
+             << "models:\n"
+             << "  m:\n"
+             << "    path: /nonexistent/m.tar.gz\n";
+    }
+    auto r = spawn_and_wait(binary, {"--config", (work / "config.yaml").string()}, 20000);
+    // The model cannot load, so the run still fails - but the scan must have
+    // completed and found the one real image.
+    const bool classified = r.stdout_text.find("Classifying 1 image(s)") != std::string::npos;
+    const bool filesystem_error =
+        (r.stdout_text + r.stderr_text).find("filesystem error") != std::string::npos;
+    if (link_ec) {
+      std::cout << "[OK] unstatable directory entry (skipped: symlinks unavailable here)\n";
+    } else if (!classified || filesystem_error) {
+      std::cerr << "[FAIL] unstatable directory entry: classified=" << classified
+                << " filesystem_error=" << filesystem_error << " exit " << r.exit_code
+                << "\nstdout:\n"
+                << r.stdout_text << "\nstderr:\n"
+                << r.stderr_text << "\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] an unstatable directory entry was skipped, not fatal\n";
+    }
+    fs::remove_all(work);
+  }
+
+  // Test 29: a numeric or null-like output_dir must name the same directory
+  // here as in Python. PyYAML resolves `010` to 8 and unquotes `"null"` to a
+  // plain string, while ScalarConfig sees only text and cannot tell either
+  // spelling apart, so both sides canonicalise. Uses an unsupported-extension
+  // input so no model is loaded.
+  {
+    namespace fs = std::filesystem;
+    const auto stamp = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    const auto work =
+        fs::temp_directory_path() / ("image-classification-explorer-dirname-" + stamp);
+    fs::create_directories(work);
+    {
+      std::ofstream(work / "input.txt") << "not an image\n";
+    }
+    // The run happens with `work` as the working directory, so the report
+    // assets are resolved through the config-file anchor rather than a
+    // repo-relative path. Put them beside config.yaml, as a package does.
+    for (const char* asset : {"report.css", "report.js"}) {
+      const fs::path source = find_bundled_source(asset);
+      if (!source.empty())
+        fs::copy_file(source, work / asset, fs::copy_options::overwrite_existing);
+    }
+    auto run_with = [&](const std::string& output_dir_value) {
+      std::ofstream config(work / "config.yaml");
+      config << "io:\n"
+             << "  output_format: [html, json, csv]\n"
+             << "  input: " << (work / "input.txt").string() << "\n"
+             << "  output_dir: " << output_dir_value << "\n"
+             << "models:\n"
+             << "  m:\n"
+             << "    path: /nonexistent/m.tar.gz\n";
+      config.close();
+      // Absolute: spawn_and_wait_in changes the working directory, which is
+      // what makes the relative output_dir below resolve inside `work`.
+      return spawn_and_wait_in(fs::absolute(binary).string(),
+                               {"--config", (work / "config.yaml").string()}, 20000, work.string());
+    };
+
+    // `010` is octal 8 to PyYAML, so the directory is "8" in Python.
+    auto numeric = run_with("010");
+    const bool canonical = fs::exists(work / "8") && !fs::exists(work / "010");
+    // `"null"` is unquoted before the null test, so C++ falls back to the
+    // default `sandbox/report`; Python now does the same rather than creating a
+    // directory named "null".
+    auto nulled = run_with("\"null\"");
+    const bool defaulted = fs::exists(work / "sandbox" / "report") && !fs::exists(work / "null");
+
+    if (numeric.exit_code != 0 || nulled.exit_code != 0 || !canonical || !defaulted) {
+      std::cerr << "[FAIL] output_dir canonicalisation: numeric_exit=" << numeric.exit_code
+                << " canonical=" << canonical << " nulled_exit=" << nulled.exit_code
+                << " defaulted=" << defaulted << "\nstderr:\n"
+                << numeric.stderr_text << nulled.stderr_text << "\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] numeric and null-like output_dir names match Python\n";
+    }
+    fs::remove_all(work);
+  }
+
+  // Test 27: the packaged layout works from an unrelated working directory.
+  //
+  // SIMANEAT_APPS_EXAMPLE_SOURCE_DIR is repository-relative, so a customer who
+  // runs the shipped binary from their own directory with an explicit --config
+  // can only find src/common through the executable. Recreate that layout - a
+  // copy of the binary under src/cpp/pre-built/ beside a src/common/ - and run
+  // it from somewhere else entirely.
+  {
+    namespace fs = std::filesystem;
+    const auto stamp = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    const auto pkg = fs::temp_directory_path() / ("image-classification-explorer-pkg-" + stamp);
+    const auto bin_dir = pkg / "src" / "cpp" / "pre-built";
+    const auto common = pkg / "src" / "common";
+    fs::create_directories(bin_dir);
+    fs::create_directories(common);
+
+    std::error_code ec;
+    fs::copy_file(binary, bin_dir / "image-classification-explorer",
+                  fs::copy_options::overwrite_existing, ec);
+    if (ec) {
+      std::cerr << "[SKIP] packaged layout: could not copy the binary: " << ec.message() << "\n";
+    } else {
+      fs::permissions(bin_dir / "image-classification-explorer",
+                      fs::perms::owner_all | fs::perms::group_exec | fs::perms::others_exec,
+                      fs::perm_options::add, ec);
+
+      // The label map and the report assets both have to be found.
+      for (const char* name : {"imagenet_labels.txt", "report.css", "report.js"}) {
+        const fs::path source = find_bundled_source(name);
+        if (!source.empty())
+          fs::copy_file(source, common / name, fs::copy_options::overwrite_existing, ec);
+      }
+
+      {
+        std::ofstream(pkg / "input.txt") << "not an image\n";
+      }
+      const auto config_path = pkg / "config.yaml";
+      {
+        std::ofstream config(config_path);
+        config << "io:\n"
+               << "  output_format: [html, json, csv]\n"
+               << "  input: " << (pkg / "input.txt").string() << "\n"
+               << "  output_dir: " << (pkg / "report").string() << "\n"
+               << "models:\n"
+               << "  m:\n"
+               << "    path: /nonexistent/m.tar.gz\n"
+               << "    num_classes: 1000\n"
+               << "    label_map: src/common/imagenet_labels.txt\n";
+      }
+
+      // Run from a directory unrelated to the package.
+      const auto elsewhere = fs::temp_directory_path();
+      auto r = spawn_and_wait_in((bin_dir / "image-classification-explorer").string(),
+                                 {"--config", config_path.string()}, 20000, elsewhere.string());
+      const bool found_labels = r.stderr_text.find("failed to open label map") == std::string::npos;
+      const bool found_assets =
+          r.stderr_text.find("failed to read bundled report asset") == std::string::npos;
+      // The absence of two strings is also true of a binary that never ran, so
+      // require the run to have succeeded and written its report.
+      const bool published = r.exit_code == 0 && fs::exists(pkg / "report" / "report.html");
+      if (!found_labels || !found_assets || !published) {
+        std::cerr << "[FAIL] packaged layout: labels_found=" << found_labels
+                  << " assets_found=" << found_assets << " published=" << published << " exit "
+                  << r.exit_code << "\nstderr:\n"
+                  << r.stderr_text << "\n";
+        ++failures;
+      } else {
+        std::cout << "[OK] packaged layout resolved src/common from another directory\n";
+      }
+    }
+    fs::remove_all(pkg, ec);
+  }
+
+  return failures > 0 ? 1 : 0;
+}

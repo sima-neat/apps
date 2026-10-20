@@ -39,7 +39,7 @@ GROUPS: tuple[tuple[str, tuple[ModelRow, ...]], ...] = (
     (
         "General Models",
         (
-            ModelRow("resnet_50", "resnet_50_mpk.tar.gz", "image-classifier",
+            ModelRow("resnet_50", "resnet_50_mpk.tar.gz", "image-classification-explorer",
                      "models/resnet_50_mpk.tar.gz"),
             ModelRow("depth_anything_v2_vits", "depth_anything_v2_vits_mpk.tar.gz",
                      "depth-estimator", "models/depth_anything_v2_vits_mpk.tar.gz"),
@@ -50,7 +50,7 @@ GROUPS: tuple[tuple[str, tuple[ModelRow, ...]], ...] = (
                      "detr-object-detector",
                      "models/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz"),
             ModelRow("yolo_v8n_seg", "yolo_v8n_seg_mpk.tar.gz",
-                     "yolov8-instance-segmenter", "models/yolo_v8n_seg_mpk.tar.gz"),
+                     "single-stream-instance-segmenter", "models/yolo_v8n_seg_mpk.tar.gz"),
         ),
     ),
     (

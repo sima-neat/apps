@@ -42,8 +42,6 @@ The target rate applies to both Insight video and detection metadata after start
 
 ## Preview
 
-A 48-stream run in Insight:
-
 ![High-density multi-stream object detector in Insight](../../../portal/assets/examples/object-detection/high-density-multi-stream-object-detector/image.png)
 
 ## Prerequisites

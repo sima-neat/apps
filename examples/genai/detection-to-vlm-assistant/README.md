@@ -68,7 +68,7 @@ cd ..
 
 Set `model.path` to the downloaded detector package.
 
-The default VLM is `Qwen3-VL-4B-Instruct-GPTQ-a16w4`.
+The default VLM is `Qwen3-VL-4B-Instruct-Autoround-a16w4`.
 
 Search the supported models:
 
@@ -79,7 +79,7 @@ llima search
 Install the default model:
 
 ```bash
-llima pull Qwen3-VL-4B-Instruct-GPTQ-a16w4
+llima pull Qwen3-VL-4B-Instruct-Autoround-a16w4
 ```
 
 LLiMa stores models under `/media/nvme/llima/models/` by default. Set `LLIMA_MODELS_PATH` before `llima pull` to use another model directory, then update `genai_server.model.path` accordingly.
@@ -132,7 +132,7 @@ detector's startup banner reports the GenAI endpoint it will call, and it prints
 each vision-language response as that response arrives:
 
 ```text
-[genai-server] enabled model=Qwen3-VL-4B-Instruct-GPTQ-a16w4 url=http://127.0.0.1:9998 interval=5s
+[genai-server] enabled model=Qwen3-VL-4B-Instruct-Autoround-a16w4 url=http://127.0.0.1:9998 interval=5s
 [response #001] The person is seated and holding an object with both hands, appearing to rest or interact with it.
 ```
 

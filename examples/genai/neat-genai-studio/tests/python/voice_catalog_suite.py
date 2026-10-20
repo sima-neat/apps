@@ -3,6 +3,8 @@ from pathlib import Path
 
 import pytest
 
+import voice_catalog
+
 from voice_catalog import (
     VoiceCatalogError,
     installation_plan,
@@ -72,3 +74,30 @@ def test_catalog_rejects_blocked_license(tmp_path):
     path.write_text(json.dumps(catalog), encoding="utf-8")
     with pytest.raises(VoiceCatalogError, match="blocked license"):
         load_catalog(path)
+
+
+def test_repair_completes_only_partly_installed_voices(tmp_path, monkeypatch):
+    # A git update removed thorsten's config while its downloaded model stayed:
+    # repair fetches the config again. Paola was never installed: left alone.
+    catalog = load_catalog()
+    thorsten = voice_by_id("de_DE-thorsten-medium", catalog)
+    model, config = voice_catalog.asset_paths(thorsten, tmp_path)
+    model.parent.mkdir(parents=True, exist_ok=True)
+    model.write_bytes(b"model")
+    fetched = []
+
+    def fake_download(url, target, expected_sha256):
+        fetched.append(Path(target).name)
+        Path(target).write_bytes(b"x")
+
+    monkeypatch.setattr(voice_catalog, "_download", fake_download)
+    assert voice_catalog.repair_voices(assets_path=tmp_path, catalog=catalog) == ["de_DE-thorsten-medium"]
+    assert config.name in fetched
+    assert not any("paola" in name for name in fetched)
+    assert voice_catalog.repair_voices(assets_path=tmp_path, catalog=catalog) == []
+    # A config on its own (older packages shipped Norwegian's) installs nothing.
+    norwegian = voice_by_id("no_NO-talesyntese-medium", catalog)
+    voice_catalog.asset_paths(norwegian, tmp_path)[1].write_bytes(b"config only")
+    fetched.clear()
+    assert voice_catalog.repair_voices(assets_path=tmp_path, catalog=catalog) == []
+    assert fetched == []

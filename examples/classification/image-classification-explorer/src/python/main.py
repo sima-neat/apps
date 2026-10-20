@@ -1,0 +1,1670 @@
+"""Classify a single image or a directory of images with one or more models
+and generate a browsable HTML report plus JSON/CSV results."""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import datetime
+import json
+import os
+import re
+import shutil
+import sys
+import time
+import tempfile
+import urllib.error
+import urllib.request
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+DEFAULT_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp")
+# Marker proving a directory was produced by this application; publish_report
+# only ever replaces a directory that carries it (or an empty one).
+REPORT_MARKER = ".image-classification-explorer-report"
+# The shipped config references the bundled label map by its in-package path,
+# which is relative to the example directory rather than the caller's cwd. Only
+# this exact reference falls back to the bundled copy; any other missing
+# label_map path is a configuration error.
+BUNDLED_LABEL_MAP_REF = "src/common/imagenet_labels.txt"
+# Profile names travel through config keys, report columns, CSV/JSON fields and
+# the HTML controls, and the C++ side addresses them through dotted, colon-
+# separated config keys. Restrict them to a portable set so both languages
+# accept exactly the same names instead of diverging on exotic YAML keys.
+PROFILE_NAME_RE = re.compile(r"[A-Za-z0-9_-]+")
+REPORT_ENTRIES = ("report.json", "report.csv", "report.html", "thumbnails", REPORT_MARKER)
+# make_thumbnail names every file it writes stable_digest(path) + ".jpg", and
+# stable_digest is 16 lowercase hex digits, so this matches exactly the set of
+# names a report can legitimately contain under thumbnails/.
+THUMBNAIL_NAME = re.compile(r"[0-9a-f]{16}\.jpg\Z")
+# Both entrypoints compute softmax the same way and narrow the result to
+# float32, so the values agree. Rounding keeps the reports free of digits a
+# float32 probability does not actually carry.
+PROBABILITY_DECIMALS = 6
+# Directory of the configuration in use, set once in main(); see
+# bundled_candidates().
+CONFIG_DIRECTORY: Path | None = None
+# The C++ ScalarConfig parses scalars with std::stoi, which is limited to int32.
+# Reject anything outside that range so both entrypoints accept the same values.
+INT32_MIN, INT32_MAX = -2**31, 2**31 - 1
+
+# class id (str) -> {"label": str, "models": {model name: count}, "total": int}
+# Keyed by predicted class rather than by model: one class used to appear in up
+# to four separate per-model blocks with nothing showing which models agreed on
+# it, which is the question this application exists to answer.
+ClassSummary = dict[str, dict[str, Any]]
+
+
+@dataclass
+class ModelProfile:
+    name: str
+    path: str
+    input_width: int
+    input_height: int
+    preprocess: str
+    output: str
+    num_classes: int
+    label_map: str | None
+    top_k: int
+    labels: list[str] = field(default_factory=list)
+
+
+@dataclass
+class Prediction:
+    top_k: list[tuple[int, str, float]]
+    inference_ms: float
+
+
+@dataclass
+class ImageResult:
+    image_path: Path
+    # (size, mtime_ns) captured once, so every model and the thumbnail are known
+    # to describe the same bytes even if the file is replaced mid-run.
+    fingerprint: tuple[int, int] | None = None
+    predictions: dict[str, Prediction] = field(default_factory=dict)  # model name -> Prediction
+    errors: dict[str, str] = field(default_factory=dict)  # model name -> error message
+
+
+def stable_digest(value: str) -> str:
+    """FNV-1a (64-bit), so thumbnail names are identical across runs, machines
+    and both implementations. Python's built-in hash() is salted per process and
+    would rename every thumbnail on each run."""
+    digest = 0xCBF29CE484222325
+    for byte in value.encode("utf-8"):
+        digest = ((digest ^ byte) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+    return f"{digest:016x}"
+
+
+# --- Inputs: fingerprinting, decoding and the fallback image cache ---------------
+
+
+def is_real_file(path: Path) -> bool:
+    """True only for a regular file that is not a symlink to one.
+
+    `Path.is_file()` follows symlinks. That matters because the marker is what
+    authorises publication to replace a directory and delete what it replaced:
+    a link named like the marker, pointing at any regular file, granted that
+    authority over a directory this application had never written. The same
+    predicate is used for the report entries so that "regular file" means one
+    thing throughout the ownership check - the writers never create symlinks, so
+    a link among the report entries is not this application's output either.
+    """
+    return path.is_file() and not path.is_symlink()
+
+
+def is_real_dir(path: Path) -> bool:
+    """True only for a directory that is not a symlink to one.
+
+    Same reasoning as `is_real_file`, for the container rather than its
+    contents. A scratch path that is a symlink to a marked report directory used
+    to be accepted as this application's own, and the two entrypoints then did
+    different things to it: C++ `remove_all` unlinked the customer's symlink and
+    carried on, while Python `shutil.rmtree(..., ignore_errors=True)` silently
+    left it and the run died at `staging.mkdir()`. Neither is right, so both now
+    refuse it.
+    """
+    return path.is_dir() and not path.is_symlink()
+
+
+def file_fingerprint(path: Path) -> tuple[int, int]:
+    """Size and mtime, deliberately not a digest of the contents.
+
+    This catches a mid-run replacement that changes either, which is every
+    ordinary way an input moves under a run: an edit, a re-export, a partial
+    copy. It does not catch a replacement that keeps the byte length *and*
+    restores the timestamp, as `rsync --times` or `cp -p` would.
+
+    Closing that needs the contents, and the contents are the expensive part.
+    `check_unchanged` runs twice per profile per image plus twice more for the
+    thumbnail - ten reads per image with the four profiles the README ships -
+    so hashing here would add ten full passes over every input on top of the
+    decodes inference already does. Snapshotting each input instead doubles the
+    disk the input set occupies, for a tool documented as reading the
+    customer's directory in place.
+
+    The trade is deliberate and matches the rest of the application: the README
+    already states that concurrent modification during a run is out of scope
+    and undetected. This guard exists to stop two models and the thumbnail
+    silently reporting on *different* bytes under one row, not to defend
+    against an adversary.
+    """
+    info = path.stat()
+    return (info.st_size, info.st_mtime_ns)
+
+
+def check_unchanged(path: Path, expected: tuple[int, int] | None) -> None:
+    """Refuse to mix results from different versions of the same input file."""
+    if expected is None:
+        # Fail closed. Passing here made every later check a no-op for this
+        # file, so separate models and the thumbnail could each read a
+        # different replacement under one report entry.
+        raise ValueError(f"input could not be fingerprinted: {path}")
+    if file_fingerprint(path) != expected:
+        raise ValueError(f"input changed while the run was in progress: {path}")
+
+
+def is_decodable_image(path: Path) -> bool:
+    import cv2
+
+    try:
+        return cv2.imread(str(path), cv2.IMREAD_COLOR) is not None
+    except cv2.error:
+        return False  # some builds raise instead of returning None on bad data
+
+
+def fallback_cache_path(url: str, base: Path) -> Path:
+    """Cache path for a fallback URL.
+
+    The URL is part of the file name, so different URLs never share a cache
+    entry and there is no separate "which URL is this?" marker that could be
+    left paired with another run's bytes. The digest is the same FNV-1a the C++
+    implementation uses, so both share one cache entry rather than downloading
+    the same image twice."""
+    return base.with_name(f"{base.stem}-{stable_digest(url)}{base.suffix}")
+
+
+def download_image(url: str, base: Path) -> Path:
+    """Download a fallback image into a URL-keyed cache entry.
+
+    The download lands on a process-private temporary file, is decoded before
+    it is published, and is then moved into place with a single atomic rename.
+    Concurrent runs (same URL or not) therefore cannot observe or leave a
+    half-updated cache entry, and a non-image payload served with HTTP 200
+    (e.g. a proxy error page) is never cached."""
+    dest = fallback_cache_path(url, base)
+    if dest.exists():
+        if is_decodable_image(dest):
+            return dest
+        dest.unlink(missing_ok=True)  # truncated or corrupted since it was cached
+
+    print(f"Downloading {url} ...")
+    temporary = dest.with_name(f"{dest.name}.tmp-{os.getpid()}")
+    try:
+        urllib.request.urlretrieve(url, temporary)
+        if not is_decodable_image(temporary):
+            raise ValueError("downloaded file is not a decodable image")
+        temporary.replace(dest)
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        temporary.unlink(missing_ok=True)
+        raise FileNotFoundError(f"failed to download fallback image: {url}: {exc}") from exc
+    return dest
+
+
+# --- Configuration: reading config.yaml and validating every setting -------------
+
+
+def duplicate_config_keys(text: str) -> list[str]:
+    """Keys declared more than once at the top level or under `models`.
+
+    PyYAML collapses duplicate keys before the mapping reaches Python - the last
+    wins, whole mapping and all - while the C++ reader flattens the file and
+    ends up merging the two mappings field by field. The same file therefore
+    configured the two entrypoints differently.
+
+    Under `models`, a first `foo` carrying `top_k: 0` and a second carrying only
+    a new `path` left C++ holding the invalid top_k while Python used the
+    default and ran a different model.
+
+    At the top level it is worse, because nothing fails. A repeated `io:` whose
+    first mapping sets `input` and whose second sets only `output_dir` made C++
+    classify the customer's file and Python classify a fallback image it
+    downloaded - both exit 0, both write a report, and the reports describe
+    different inputs. Python also reached the network although the discarded
+    mapping had set `fallback_image_url: null`.
+
+    Neither behaviour is worth preserving, so both entrypoints reject the
+    duplicate instead.
+
+    Read from the node tree rather than the constructed mapping, which is the
+    only place the duplicate still exists. A quoted and an unquoted spelling of
+    one name are the same key, and compose() has already removed the quotes, so
+    they collapse here exactly as they do in C++.
+    """
+    def duplicates_in(mapping: "yaml.MappingNode", prefix: str) -> list[str]:
+        seen: set[str] = set()
+        found: list[str] = []
+        for key_node, _ in mapping.value:
+            if not isinstance(key_node, yaml.ScalarNode):
+                continue
+            name = prefix + key_node.value
+            if key_node.value in seen and name not in found:
+                found.append(name)
+            seen.add(key_node.value)
+        return found
+
+    try:
+        root = yaml.compose(text)
+    except yaml.YAMLError:
+        return []  # a parse error is reported by safe_load, with its own message
+    if not isinstance(root, yaml.MappingNode):
+        return []
+    # Top level first: a repeated `io:` is the damaging case, because both
+    # entrypoints then accept the file and classify different inputs.
+    found = duplicates_in(root, "")
+    for key_node, value_node in root.value:
+        if (
+            isinstance(key_node, yaml.ScalarNode)
+            and key_node.value == "models"
+            and isinstance(value_node, yaml.MappingNode)
+        ):
+            found.extend(duplicates_in(value_node, "models."))
+    return found
+
+
+def load_config(config_path: Path) -> dict[str, Any]:
+    text = config_path.read_text(encoding="utf-8")
+    for name in duplicate_config_keys(text):
+        raise ValueError(
+            f"{name} is declared more than once; remove the duplicate in config.yaml"
+        )
+    loaded = yaml.safe_load(text)
+    # An empty file is an empty configuration; a file holding a bare scalar is
+    # not a configuration at all, and `or {}` would hide that.
+    if loaded is None:
+        return {}
+    if not isinstance(loaded, dict):
+        raise ValueError(f"{config_path} must contain a YAML mapping at the top level")
+    return loaded
+
+
+def decode_yaml_escapes(text: str) -> str:
+    """Decode the escapes a double-quoted YAML scalar carries.
+
+    PyYAML decodes them for a quoted value and leaves them literal for an
+    unquoted one; ScalarConfig unquotes without decoding, so C++ never sees the
+    difference. Decoding unconditionally on both sides is what makes the same
+    file mean the same thing - the alternative leaves one spelling agreeing and
+    the other not. The cost is that a literal backslash in a value is read as an
+    escape, identically in both entrypoints."""
+    # A single-quoted YAML scalar escapes an apostrophe by doubling it, so
+    # `'report''s'` is `report's`. ScalarConfig strips the outer quotes and
+    # leaves the pair, and the quote style is gone before either side sees it,
+    # so both collapse unconditionally.
+    text = text.replace("''", "'")
+    out: list[str] = []
+    i = 0
+    simple = {"0": "\0", "a": "\a", "b": "\b", "t": "\t", "\t": "\t", "n": "\n",
+              "v": "\v", "f": "\f", "r": "\r", "e": "\x1b", " ": " ",
+              '"': '"', "/": "/", "\\": "\\"}
+    while i < len(text):
+        if text[i] != "\\" or i + 1 >= len(text):
+            out.append(text[i])
+            i += 1
+            continue
+        esc = text[i + 1]
+        if esc in simple:
+            out.append(simple[esc])
+            i += 2
+            continue
+        width = {"x": 2, "u": 4, "U": 8}.get(esc)
+        digits = text[i + 2:i + 2 + width] if width else ""
+        if width and len(digits) == width and all(ch in "0123456789abcdefABCDEF" for ch in digits):
+            code = int(digits, 16)
+            # The code point itself, as PyYAML decodes the same escape inside a
+            # double-quoted scalar. This used to substitute "?" above ASCII, to
+            # mirror a C++ decoder that could not emit a wider code point - but
+            # that one encodes UTF-8 now, so keeping the substitution here made
+            # `io.output_dir: report\u00e9` publish to `reporté` in C++ and
+            # `report?` in Python: the same divergence, the other way round.
+            #
+            # A lone surrogate is not a character and nothing can encode it, so
+            # it keeps the old marker, as does a value beyond Unicode - both are
+            # rejected downstream by their real spelling.
+            if code <= 0x7F or (code <= 0x10FFFF and not 0xD800 <= code <= 0xDFFF):
+                out.append(chr(code))
+            else:
+                out.append("?")
+            i += 2 + width
+            continue
+        out.append(text[i])
+        i += 1
+    return "".join(out)
+
+
+def parse_yaml_float(text: str) -> float | None:
+    """The fourth YAML scalar type, matched the way PyYAML matches it.
+
+    A '.' or an exponent is required so this never claims a value the integer
+    reader owns, and the whole string must match so a path like `models/v1.0` or
+    an extension `.jpg` is left alone."""
+    body = text.strip()
+    if not body:
+        return None
+    # YAML spells these with a leading dot, and only with it: `.nan` is a float
+    # while a bare `nan` stays a string.
+    special = {".nan": float("nan"), ".inf": float("inf"), "+.inf": float("inf"),
+               "-.inf": float("-inf")}
+    if body.lower() in special:
+        return special[body.lower()]
+    if body[0] in "+-":
+        body = body[1:]
+    body = body.replace("_", "")
+    if not body or ("." not in body and "e" not in body.lower()):
+        return None
+    try:
+        value = float(body)
+    except ValueError:
+        return None
+    return -value if text.strip()[0] == "-" else value
+
+
+def parse_yaml_bool(text: str) -> bool | None:
+    """Recognise the YAML 1.1 Boolean spellings PyYAML resolves.
+
+    PyYAML turns `yes` into True and Python renders that as "true", while
+    ScalarConfig passes the word `yes` through unchanged. Both sides canonicalise
+    so the same file names the same thing."""
+    lowered = text.strip().lower()
+    if lowered in {"true", "yes", "on"}:
+        return True
+    if lowered in {"false", "no", "off"}:
+        return False
+    return None
+
+
+def parse_yaml_int(text: str) -> int | None:
+    """Parse an integer with the YAML 1.1 rules PyYAML applies to a bare scalar.
+
+    A quoted `"010"` reaches this function as text, and ScalarConfig cannot see
+    the quotes, so C++ reads every value as YAML and gets 8. Reading it as base
+    10 here would make the same file mean 10 to one entrypoint and 8 to the
+    other."""
+    body = text.strip()
+    if not body:
+        return None
+    negative = body[0] == "-"
+    if body[0] in "+-":
+        body = body[1:]
+    body = body.replace("_", "")
+    if not body:
+        return None
+    # YAML 1.1 sexagesimal: `1:20` is 80, which PyYAML resolves, so a quoted
+    # spelling of the same value must mean the same thing here.
+    if ":" in body:
+        # PyYAML's grammar exactly: [1-9][0-9]* then one or more :[0-5]?[0-9].
+        # So `1:20` is 80 while `1:60`, `1:99` and `0:30` stay strings.
+        parts = body.split(":")
+        if not parts[0] or not parts[0].isdigit() or parts[0][0] == "0":
+            return None
+        total = int(parts[0])
+        for part in parts[1:]:
+            if not part.isdigit() or len(part) > 2 or int(part) > 59:
+                return None
+            total = total * 60 + int(part)
+        return -total if negative else total
+    base = 10
+    lowered = body.lower()
+    if lowered.startswith(("0x", "0b", "0o")):
+        base = {"x": 16, "b": 2, "o": 8}[lowered[1]]
+        body = body[2:]
+    elif len(body) > 1 and body[0] == "0":
+        base = 8  # YAML 1.1 bare octal
+    if not body:
+        return None
+    try:
+        parsed = int(body, base)
+    except ValueError:
+        return None
+    return -parsed if negative else parsed
+
+
+def yaml_text(value: Any) -> str:
+    """Render a parsed YAML value as the text C++ reads from the same file.
+
+    Error messages name the offending value, and repr() is the wrong renderer
+    for that: it writes a string in quotes and a bool as `True`, neither of
+    which is what the customer wrote or what the C++ entrypoint prints for the
+    same file. A collection is named by its shape, because ScalarConfig keeps
+    `[a,b]` verbatim while PyYAML hands back a parsed list - the two can agree
+    on the shape but never on the spelling."""
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (datetime.date, datetime.datetime)):
+        # PyYAML resolves an unquoted `2026-10-02` to a date; ScalarConfig hands
+        # C++ the text. isoformat() is that text, so a dated output directory
+        # names the same thing in both instead of being rejected here.
+        return value.isoformat()
+    if isinstance(value, (list, tuple)):
+        return "a list"
+    if isinstance(value, dict):
+        return "a mapping"
+    return str(value)
+
+
+def config_int(value: Any, key: str, default: int) -> int:
+    """Read an integer config value the way the C++ ScalarConfig does.
+
+    PyYAML hands back real Python objects, so `top_k: 1.9` arrives as a float
+    that int() would silently truncate to 1 while C++ rejects the same file as
+    non-integral. Accept only genuine integers (or their exact text form) so
+    both entrypoints run the same settings."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        raise ValueError(f"{key} must be an integer, got {yaml_text(value)}")
+    if isinstance(value, int):
+        return _check_int32(value, key)
+    if isinstance(value, str):
+        decoded = scalar_text(value)
+        if decoded is None:
+            return default
+        parsed = parse_yaml_int(decoded)
+        if parsed is None:
+            raise ValueError(f"{key} must be an integer, got {yaml_text(value)}")
+        return _check_int32(parsed, key)
+    raise ValueError(f"{key} must be an integer, got {yaml_text(value)}")
+
+
+def config_float(value: Any, key: str, default: float) -> float:
+    """Read a floating-point config value the way the C++ ScalarConfig does.
+
+    ScalarConfig parses every scalar from text, so a quoted `"0.2"` is a number
+    there; rejecting it here would make the two entrypoints accept different
+    configurations."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        raise ValueError(f"{key} must be a number, got {yaml_text(value)}")
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        # Through the same readers as config_str and config_int: C++ takes this
+        # setting from config_scalar, so float() here made `"010"` 10.0 against
+        # its YAML-octal 8, and `"null"` an error against its default.
+        text = scalar_text(value)
+        if text is None:
+            return default
+        whole = parse_yaml_int(text)
+        if whole is not None:
+            return float(whole)
+        number = parse_yaml_float(text)
+        if number is not None:
+            return number
+        raise ValueError(f"{key} must be a number, got {yaml_text(value)}")
+    raise ValueError(f"{key} must be a number, got {yaml_text(value)}")
+
+
+def _check_int32(value: int, key: str) -> int:
+    if not INT32_MIN <= value <= INT32_MAX:
+        raise ValueError(f"{key} is out of range for a 32-bit integer: {value}")
+    return value
+
+
+def normalize_extension(value: str) -> str:
+    """Accept `jpg` as well as `.jpg`. Path.suffix always carries the dot, so an
+    entry without one would silently match nothing."""
+    text = value.strip().lower()
+    return text if text.startswith(".") else f".{text}"
+
+
+def scalar_text(value: str) -> str | None:
+    """Apply ScalarConfig's scalar rules to a string, or None when it reads as null.
+
+    One place, because every reader needs it: C++ takes its text from
+    config_scalar, so decoding or null-handling in only the string path left the
+    integer and float settings disagreeing."""
+    decoded = decode_yaml_escapes(value).strip()
+    if decoded == "~" or decoded.lower() == "null":
+        return None
+    return decoded
+
+
+def config_section(raw: dict[str, Any], name: str) -> dict[str, Any]:
+    """Read a top-level section.
+
+    Absent or null means "use the defaults"; anything else must be a mapping.
+    `raw.get(name) or {}` cannot make that distinction, because a falsy scalar
+    such as `io: false` or `runtime: 0` collapses to an empty mapping and the
+    defaults are applied to a configuration the customer got wrong."""
+    value = raw.get(name)
+    if value is None:
+        return {}
+    # ScalarConfig unquotes before testing for null, so `io: "null"` is absent to
+    # C++ and the defaults apply. Python saw a string and rejected the file.
+    if isinstance(value, str) and scalar_text(value) is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"`{name}` must be a mapping, got {yaml_text(value)}")
+    return value
+
+
+def config_str(value: Any, key: str, default: str | None) -> str | None:
+    """Read a string config value the way the C++ ScalarConfig does.
+
+    `key: null` means "not set" and falls back to the default rather than
+    becoming the text "None". Other scalars are rendered as the text C++ reads
+    from the same file: it sees every value as text and cannot tell `path: 5`
+    from `path: "5"`, so rejecting one here would make the two entrypoints
+    accept different configurations. Booleans are rendered YAML-style
+    (`true`/`false`) rather than Python-style for the same reason."""
+    if value is None:
+        return default
+    if isinstance(value, (datetime.date, datetime.datetime)):
+        return value.isoformat()
+    if isinstance(value, str):
+        text = scalar_text(value)
+        if text is None:
+            return default
+        if "\0" in text:
+            # YAML permits "\0", the filesystem does not. Rejected while reading
+            # the configuration rather than left to the path APIs: Path.resolve()
+            # raises a bare ValueError that escaped as a traceback and exit 1,
+            # outside the documented 2/3/6 contract, and C++ silently truncated
+            # the value at the NUL and wrote the report to a directory the
+            # customer had not named.
+            raise ValueError(f"{key} contains a NUL character; remove it from config.yaml")
+        if len(text) >= 2 and ((text[0] == "[" and text[-1] == "]")
+                               or (text[0] == "{" and text[-1] == "}")):
+            # C++ cannot tell this from an unquoted flow collection, which both
+            # reject, so a quoted one is rejected here too rather than accepted
+            # by one entrypoint only.
+            shape = "a list" if text[0] == "[" else "a mapping"
+            raise ValueError(f"{key} must be a scalar, got {shape}")
+        # Likewise C++ cannot tell `010` from `"010"`; both canonicalise, so
+        # both name the same directory either way.
+        number = parse_yaml_int(text)
+        if number is not None:
+            return str(number)
+        number = parse_yaml_float(text)
+        if number is not None:
+            return str(number)
+        flag = parse_yaml_bool(text)
+        if flag is not None:
+            return "true" if flag else "false"
+        return text
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    raise ValueError(f"{key} must be a scalar, got {yaml_text(value)}")
+
+
+REPORT_FORMATS = ("html", "json", "csv")
+
+
+def config_formats(value: Any, key: str = "io.output_format") -> list[str]:
+    """Which report files to write, defaulting to html alone.
+
+    Accepts a YAML sequence (`[html, json]`) or a comma-separated scalar
+    (`html,json`). Both spellings are allowed because the C++ reader flattens
+    the file to scalars and cannot see a sequence as one - it reads `[html]` as
+    the text "[html]" - and `io.extensions` in the same block already uses the
+    comma form for that reason. Supporting both means neither entrypoint is
+    reading something the other cannot.
+
+    Returns the formats in REPORT_FORMATS order, not the order written, so the
+    value is a set rather than a sequence and both entrypoints iterate it the
+    same way.
+    """
+    if value is None:
+        return ["html"]
+    if isinstance(value, (list, tuple)):
+        items = [yaml_text(v) for v in value]
+    else:
+        text = scalar_text(value) if isinstance(value, str) else yaml_text(value)
+        if text is None:
+            return ["html"]
+        text = text.strip()
+        if text.startswith("[") and text.endswith("]"):
+            text = text[1:-1]
+        items = [part for part in (p.strip() for p in text.split(",")) if part]
+    chosen = []
+    for item in items:
+        name = item.strip().strip("\"'").lower()
+        if name not in REPORT_FORMATS:
+            raise ValueError(
+                f"{key} contains {item!r}, which is not a report format; "
+                f"use any of {', '.join(REPORT_FORMATS)}"
+            )
+        if name not in chosen:
+            chosen.append(name)
+    if not chosen:
+        raise ValueError(f"{key} selects no report format; use any of {', '.join(REPORT_FORMATS)}")
+    return [f for f in REPORT_FORMATS if f in chosen]
+
+
+def load_profiles(raw: dict[str, Any]) -> list[ModelProfile]:
+    models_cfg = config_section(raw, "models")
+    if not models_cfg:
+        raise ValueError("config.yaml must define at least one entry under `models`")
+
+    profiles = []
+    for raw_name, cfg in models_cfg.items():
+        # PyYAML turns unquoted scalars into Python objects, so `1:` arrives as an
+        # int, `01:` as the int 1 and `true:` as a bool - none of which match the
+        # raw text C++ reads from the same file. Require a quoted (string) key so
+        # both entrypoints see exactly the same profile name.
+        if not isinstance(raw_name, str):
+            raise ValueError(
+                f"models: profile name {yaml_text(raw_name)} is not a string; quote it in config.yaml"
+            )
+        # A duplicate key cannot reach here: PyYAML keeps the last of two
+        # identical keys, and only string keys are accepted, so no two distinct
+        # keys can render as the same name.
+        name = raw_name
+        if not isinstance(cfg, dict):
+            raise ValueError(f"models.{name} must be a mapping")
+        profile = ModelProfile(
+            name=name,
+            path=config_str(cfg.get("path"), f"models.{name}.path", "") or "",
+            input_width=config_int(cfg.get("input_width"), f"models.{name}.input_width", 224),
+            input_height=config_int(cfg.get("input_height"), f"models.{name}.input_height", 224),
+            preprocess=config_str(cfg.get("preprocess"), f"models.{name}.preprocess", "imagenet"),
+            output=config_str(cfg.get("output"), f"models.{name}.output", "softmax"),
+            num_classes=config_int(cfg.get("num_classes"), f"models.{name}.num_classes", 1000),
+            label_map=config_str(cfg.get("label_map"), f"models.{name}.label_map", None),
+            top_k=config_int(cfg.get("top_k"), f"models.{name}.top_k", 5),
+        )
+        if not PROFILE_NAME_RE.fullmatch(name):
+            raise ValueError(
+                f"models.{name}: profile names may only contain letters, digits, "
+                "'_' and '-'"
+            )
+        if not profile.path:
+            raise ValueError(f"models.{name}.path is required")
+        if profile.preprocess != "imagenet":
+            raise ValueError(
+                f"models.{name}.preprocess={yaml_text(profile.preprocess)} is not supported; "
+                "only 'imagenet' is implemented"
+            )
+        if profile.output != "softmax":
+            raise ValueError(
+                f"models.{name}.output={yaml_text(profile.output)} is not supported; "
+                "only 'softmax' is implemented (raw per-class scores, softmax applied, "
+                "index i maps to label_map[i])"
+            )
+        if profile.top_k <= 0:
+            raise ValueError(f"models.{name}.top_k must be positive, got {profile.top_k}")
+        if profile.num_classes <= 0:
+            raise ValueError(
+                f"models.{name}.num_classes must be positive, got {profile.num_classes}"
+            )
+        if profile.input_width <= 0 or profile.input_height <= 0:
+            raise ValueError(
+                f"models.{name}.input_width/input_height must be positive, got "
+                f"{profile.input_width}x{profile.input_height}"
+            )
+        if profile.input_width > MAX_INPUT_DIMENSION or profile.input_height > MAX_INPUT_DIMENSION:
+            raise ValueError(
+                f"models.{name}.input_width/input_height exceeds the supported maximum of "
+                f"{MAX_INPUT_DIMENSION}, got {profile.input_width}x{profile.input_height}; "
+                f"check the value against the model's documented input size"
+            )
+        profiles.append(profile)
+    return profiles
+
+
+# Numeric labels are materialised eagerly, so num_classes bounds an allocation.
+# INT32_MAX alone let a typo exhaust memory before the model was even loaded.
+# No classification model has more classes than this by orders of magnitude.
+MAX_NUMERIC_LABELS = 100_000
+# Each input is resized to input_width x input_height before inference, so these
+# bound an allocation per image: 100000x100000 would ask OpenCV for ~30 GB.
+# Classification models are two orders of magnitude below this.
+MAX_INPUT_DIMENSION = 8192
+
+
+def load_label_map(path: str | None, num_classes: int) -> list[str]:
+    if not path:
+        if num_classes > MAX_NUMERIC_LABELS:
+            raise ValueError(
+                f"num_classes={num_classes} exceeds the supported maximum of "
+                f"{MAX_NUMERIC_LABELS} for generated numeric labels; supply a "
+                f"label_map, or check the value"
+            )
+        return [str(i) for i in range(num_classes)]
+    label_path = Path(path)
+    if not label_path.exists() and Path(path).as_posix() == BUNDLED_LABEL_MAP_REF:
+        # Resolve the shipped reference next to this script, regardless of the
+        # caller's cwd (model.path stays cwd-relative: it points at a file the
+        # customer downloaded). A missing custom path is NOT redirected here.
+        for bundled in bundled_candidates(Path(BUNDLED_LABEL_MAP_REF).name):
+            if bundled.exists():
+                label_path = bundled
+                break
+    try:
+        raw = label_path.read_bytes()
+    except OSError as exc:
+        # Worded and detailed as the C++ entrypoint words it: strerror alone,
+        # because str(exc) would repeat the path that already precedes it.
+        raise ValueError(
+            f"failed to open label map {label_path}: {exc.strerror or exc}"
+        ) from exc
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        # Decoded from bytes rather than through an encoding= handle so the
+        # reported offset is absolute in the file and not into whatever chunk
+        # the text reader happened to buffer. The message replaces the raw codec
+        # one ("'utf-8' codec can't decode byte ... in position ..."), which the
+        # C++ entrypoint cannot reproduce and which does not name the file.
+        raise ValueError(
+            f"label map {label_path} is not valid UTF-8 "
+            f"(byte 0x{raw[exc.start]:02x} at offset {exc.start}); save the file as UTF-8"
+        ) from exc
+    # Positional: physical line index == class id, so blank lines are never
+    # dropped (that would silently shift every later label).
+    labels = [line.strip() for line in text.splitlines()]
+    if len(labels) < num_classes:
+        raise ValueError(
+            f"label map {label_path} has {len(labels)} entries, expected at least {num_classes}"
+        )
+    for class_id, label in enumerate(labels[:num_classes]):
+        if not label:
+            raise ValueError(
+                f"label map {label_path} line {class_id + 1} is blank; every class id "
+                f"0..{num_classes - 1} needs a label"
+            )
+    return labels
+
+
+def is_utf8_path(path: Path) -> bool:
+    """Whether the whole path round-trips as UTF-8.
+
+    `os.fsencode` recovers the bytes the filesystem actually holds, including
+    the ones Python represents as surrogate escapes; a strict decode then says
+    whether they are text both entrypoints can agree on.
+    """
+    try:
+        os.fsencode(path).decode("utf-8")
+    except (UnicodeDecodeError, UnicodeEncodeError, ValueError):
+        return False
+    return True
+
+
+def _printable_path(path: Path) -> str:
+    """The path as text safe to put in a report that declares itself UTF-8."""
+    return os.fsencode(path).decode("utf-8", "replace")
+
+
+def discover_images(input_path: str | None, extensions: tuple[str, ...],
+                     fallback_url: str, fallback_dest: Path) -> tuple[list[Path], list[str]]:
+    """Return (images, skipped_descriptions) in deterministic order."""
+    if not input_path:
+        return [download_image(fallback_url, fallback_dest)], []
+
+    path = Path(input_path)
+    if path.is_file():
+        if path.suffix.lower() not in extensions:
+            return [], [f"{path}: unsupported extension {path.suffix or '(none)'}"]
+        return [path], []
+
+    if not path.is_dir():
+        raise FileNotFoundError(f"input path does not exist: {path}")
+
+    images: list[Path] = []
+    skipped: list[str] = []
+    for entry in sorted(path.iterdir(), key=lambda p: p.name):
+        if not entry.is_file():
+            continue
+        if not is_utf8_path(entry):
+            # A name the filesystem holds as bytes that are not UTF-8. Python
+            # carries those through surrogate escapes, and handing such a str to
+            # the native decoder segfaulted the interpreter mid-run; C++ streamed
+            # the raw bytes into a document declared UTF-8 and exited 0 with a
+            # mangled name. Skipping is what both can agree on, and it is how
+            # every other unusable entry in the directory is already treated.
+            skipped.append(f"{_printable_path(entry)}: file name is not valid UTF-8")
+            continue
+        if entry.suffix.lower() not in extensions:
+            skipped.append(f"{entry}: unsupported extension {entry.suffix or '(none)'}")
+            continue
+        images.append(entry)
+
+    if not images and not skipped:
+        raise FileNotFoundError(f"no image files found under {path}")
+    return images, skipped
+
+
+# --- Neat inference: preprocessing, model construction and execution -------------
+
+
+def load_rgb_resized(path: str, width: int, height: int):
+    """Load an image with OpenCV and return an RGB uint8 HWC array."""
+    import cv2
+
+    bgr = cv2.imread(path, cv2.IMREAD_COLOR)
+    if bgr is None:
+        # Capitalised to match sima_examples::load_rgb_resized, whose message
+        # the C++ entrypoint records in the same report field.
+        raise ValueError(f"Failed to read image: {path}")
+    # INTER_AREA matches sima_examples::load_rgb_resized (support/runtime/example_utils.cpp)
+    # used by the C++ implementation, so both languages preprocess images identically.
+    bgr = cv2.resize(bgr, (width, height), interpolation=cv2.INTER_AREA)
+    return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+
+
+def softmax(scores):
+    """Softmax computed exactly as sima_examples::topk_with_softmax does.
+
+    The C++ helper subtracts the float32 maximum, evaluates exp in double and
+    accumulates the denominator sequentially. NumPy would use pairwise
+    summation and, with float32 exps, drift from C++ by around 1e-7 - small,
+    but enough to change a reported value at the sixth decimal for some inputs.
+    Mirroring the arithmetic makes the two reports agree because they computed
+    the same thing, not because a rounding step happened to hide the gap."""
+    import numpy as np
+
+    shifted = (scores - np.max(scores)).astype(np.float64)
+    exponentials = np.exp(shifted)
+    total = 0.0
+    for value in exponentials:  # sequential, matching the C++ accumulation order
+        total += float(value)
+    # ScoredIndex::prob is a float, so C++ narrows each probability to float32
+    # before reporting it. Narrowing here too is what makes the sixth decimal
+    # agree; without it the two differ for roughly one value in 130.
+    return (exponentials / total).astype(np.float32)
+
+
+def tensor_to_numpy_dense(tensor) -> Any:
+    """Convert a dense pyneat tensor to a NumPy array without DLPack."""
+    import numpy as np
+    import pyneat
+
+    dtype_map = {
+        pyneat.TensorDType.UInt8: np.uint8,
+        pyneat.TensorDType.Int8: np.int8,
+        pyneat.TensorDType.UInt16: np.uint16,
+        pyneat.TensorDType.Int16: np.int16,
+        pyneat.TensorDType.Int32: np.int32,
+        pyneat.TensorDType.Float32: np.float32,
+        pyneat.TensorDType.Float64: np.float64,
+    }
+    np_dtype = dtype_map.get(tensor.dtype)
+    if np_dtype is None:
+        raise TypeError(f"Unsupported tensor dtype for NumPy conversion: {tensor.dtype}")
+
+    shape = tuple(int(x) for x in tensor.shape)
+    arr = np.frombuffer(tensor.copy_dense_bytes_tight(), dtype=np_dtype)
+    if shape:
+        arr = arr.reshape(shape)
+    return arr
+
+
+def build_model(profile: ModelProfile):
+    import pyneat
+
+    # preprocess is validated in load_profiles, before any input is read.
+    opt = pyneat.ModelOptions()
+    opt.preprocess.kind = pyneat.InputKind.Image
+    opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.RGB
+    opt.preprocess.input_max_width = profile.input_width
+    opt.preprocess.input_max_height = profile.input_height
+    opt.preprocess.input_max_depth = 3
+    opt.preprocess.preset = pyneat.NormalizePreset.ImageNet
+    return pyneat.Model(profile.path, opt)
+
+
+def classify(model, profile: ModelProfile, image_path: Path, timeout_ms: int) -> Prediction:
+    import numpy as np
+    import pyneat
+
+    rgb = load_rgb_resized(str(image_path), profile.input_width, profile.input_height)
+    tensor = pyneat.Tensor.from_numpy(rgb, copy=True, image_format=pyneat.PixelFormat.RGB)
+
+    start = time.monotonic()
+    outputs = model.run([tensor], timeout_ms=timeout_ms)
+    inference_ms = (time.monotonic() - start) * 1000.0
+
+    if not outputs:
+        raise RuntimeError("model run returned empty output")
+    scores = tensor_to_numpy_dense(outputs[0]).flatten().astype(np.float32)
+    if scores.size < profile.num_classes:
+        raise RuntimeError(f"expected at least {profile.num_classes} scores, got {scores.size}")
+    scores = scores[: profile.num_classes]
+    if not np.isfinite(scores).all():
+        # NaN/inf would propagate into softmax and then into report.json, where
+        # json.dumps emits a bare NaN that is not valid JSON.
+        raise RuntimeError("model produced non-finite scores")
+
+    probs = softmax(scores)
+    # Tie-break by ascending class id so equal scores resolve deterministically
+    # and identically to the C++ implementation's topk_with_softmax.
+    top_indices = np.lexsort((np.arange(scores.size), -scores))[: profile.top_k]
+    top_k = [
+        (int(i), profile.labels[int(i)], float(probs[int(i)]))
+        for i in top_indices
+    ]
+    return Prediction(top_k=top_k, inference_ms=inference_ms)
+
+
+def warm_up(model, profile: ModelProfile, timeout_ms: int) -> None:
+    """One untimed inference, so the first measured image does not pay the
+    one-time setup cost on behalf of every later one.
+
+    Measured on a Modalix DevKit over 21 COCO images before this existed: the
+    first timed call was 939.2 ms for resnet_50, 757.3 ms for densenet_121,
+    351.0 ms for resnet_18 and 328.8 ms for efficientnet_b0, against medians of
+    3.0, 3.2, 2.7 and 2.7 ms for the other twenty. The report therefore showed a
+    threefold spread between models on its first row that does not exist in
+    steady state - actively misleading in an application whose purpose is
+    comparing models.
+
+    A blank tensor rather than the first real image: the result is discarded, and
+    warming up on a customer image would make the warm-up fail whenever that
+    image does, turning a measurement detail into a second failure path.
+    """
+    import numpy as np
+    import pyneat
+
+    blank = np.zeros((profile.input_height, profile.input_width, 3), dtype=np.uint8)
+    tensor = pyneat.Tensor.from_numpy(blank, copy=True, image_format=pyneat.PixelFormat.RGB)
+    try:
+        model.run([tensor], timeout_ms=timeout_ms)
+    except Exception as exc:  # noqa: BLE001 - never fatal; see below
+        # A failed warm-up costs accuracy of the first measurement, nothing more.
+        # The real inferences below report their own per-image, per-model errors,
+        # so failing the run here would turn a timing refinement into an outage.
+        print(f"  warm-up for {profile.name} did not run ({exc}); "
+              f"first measurement may include setup cost", file=sys.stderr)
+
+
+def run_all(profiles: list[ModelProfile], images: list[Path], timeout_ms: int) -> list[ImageResult]:
+    # Fingerprint every input up front: models are loaded one at a time, so each
+    # image is re-read per model, and agreement is only meaningful if those reads
+    # saw the same bytes.
+    results = []
+    for image in images:
+        try:
+            results.append(ImageResult(image_path=image, fingerprint=file_fingerprint(image)))
+        except OSError:
+            results.append(ImageResult(image_path=image))
+
+    for profile in profiles:
+        print(f"Loading model '{profile.name}': {profile.path}")
+        model = build_model(profile)
+        warm_up(model, profile, timeout_ms)
+        try:
+            for result in results:
+                try:
+                    check_unchanged(result.image_path, result.fingerprint)
+                    prediction = classify(model, profile, result.image_path, timeout_ms)
+                    # Only keep the prediction once the bytes behind it are proven
+                    # unchanged, so a swapped input leaves an error and no result.
+                    check_unchanged(result.image_path, result.fingerprint)
+                    result.predictions[profile.name] = prediction
+                except Exception as exc:  # noqa: BLE001 - per-image, per-model failures must not abort the run
+                    print(f"  {result.image_path}: {profile.name} failed: {exc}", file=sys.stderr)
+                    result.errors[profile.name] = str(exc)
+        finally:
+            # Release this model's accelerator resources before the next profile is
+            # loaded, so only one model is ever resident at a time (as in C++, where
+            # `model` is scoped to the loop body).
+            del model
+
+    return results
+
+
+# --- Reporting: agreement, per-class counts and the JSON/CSV/HTML writers --------
+
+
+def agreement(result: ImageResult, profile_names: list[str]) -> bool | None:
+    """True/False only when every named model has a top-1 result; otherwise
+    indeterminate (None) rather than silently agreeing/disagreeing over a
+    partial subset. Identity is the class id, not the label: ImageNet has
+    distinct classes that share a display label (e.g. 134/517 "crane")."""
+    if len(profile_names) < 2:
+        return None
+    class_ids = []
+    for name in profile_names:
+        pred = result.predictions.get(name)
+        if pred is None or not pred.top_k:
+            return None
+        class_ids.append(pred.top_k[0][0])
+    return len(set(class_ids)) == 1
+
+
+def build_class_summary(results: list[ImageResult], profiles: list[ModelProfile]) -> ClassSummary:
+    """Count top-1 predictions, keyed by predicted class.
+
+    Keyed by class id, not by label, so two distinct classes that happen to
+    share a label are never merged - the id is the identity.
+
+    Profiles may carry different label maps, so one class id can have different
+    spellings. The label recorded here is the one used by the first profile, in
+    declaration order, that predicted the class; the id disambiguates.
+    """
+    order = {p.name: i for i, p in enumerate(profiles)}
+    unranked = len(order)
+    summary: ClassSummary = {}
+    label_rank: dict[str, int] = {}
+    for result in results:
+        for name, pred in result.predictions.items():
+            if not pred.top_k:
+                continue
+            class_id, label, _ = pred.top_k[0]
+            key = str(class_id)
+            entry = summary.setdefault(key, {"label": label, "models": {}, "total": 0})
+            entry["models"][name] = entry["models"].get(name, 0) + 1
+            entry["total"] += 1
+            # Lowest profile index wins the spelling, so the label does not
+            # depend on which image happened to be classified first.
+            rank = order.get(name, unranked)
+            if rank < label_rank.get(key, unranked + 1):
+                entry["label"] = label
+                label_rank[key] = rank
+    return summary
+
+
+def write_json_report(path: Path, results: list[ImageResult], profiles: list[ModelProfile],
+                       skipped: list[str], class_summary: ClassSummary,
+                       timing: dict[str, Any]) -> None:
+    payload = {
+        "models": [p.name for p in profiles],
+        "images": [],
+        "skipped": skipped,
+        "class_summary": class_summary,
+        "timing": timing,
+    }
+    for result in results:
+        entry: dict[str, Any] = {"path": str(result.image_path)}
+        if result.predictions:
+            entry["predictions"] = {
+                name: {
+                    "top_k": [
+                        {"class_id": c, "label": lbl,
+                         "probability": round(p, PROBABILITY_DECIMALS)}
+                        for c, lbl, p in pred.top_k
+                    ],
+                    "inference_ms": pred.inference_ms,
+                }
+                for name, pred in result.predictions.items()
+            }
+            entry["agreement"] = agreement(result, [p.name for p in profiles])
+        if result.errors:
+            entry["errors"] = result.errors
+        payload["images"].append(entry)
+
+    # sort_keys and ensure_ascii=False match nlohmann::json::dump(), which
+    # stores keys ordered and writes UTF-8 unescaped.
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False),
+                    encoding="utf-8")
+
+
+def write_csv_report(path: Path, results: list[ImageResult], profiles: list[ModelProfile]) -> None:
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        # csv.writer defaults to CRLF; the C++ writer emits LF, and the two
+        # reports must be byte-identical for the same run.
+        writer = csv.writer(handle, lineterminator="\n")
+        writer.writerow(["image", "model", "status", "top1_class_id", "top1_label",
+                          "top1_probability", "inference_ms", "top_k"])
+        for result in results:
+            for profile in profiles:
+                pred = result.predictions.get(profile.name)
+                if pred is not None and pred.top_k:
+                    top1 = pred.top_k[0]
+                    top_k_str = ";".join(f"{lbl}:{p:.4f}" for _, lbl, p in pred.top_k)
+                    writer.writerow([
+                        result.image_path, profile.name, "ok", top1[0], top1[1],
+                        f"{top1[2]:.4f}", f"{pred.inference_ms:.2f}", top_k_str,
+                    ])
+                elif profile.name in result.errors:
+                    writer.writerow([
+                        result.image_path, profile.name, "error", "", "", "", "",
+                        result.errors[profile.name],
+                    ])
+                else:
+                    writer.writerow([result.image_path, profile.name, "no_result", "", "", "", "", ""])
+
+
+def make_thumbnail(image_path: Path, thumb_dir: Path, max_side: int = 160,
+                   fingerprint: tuple[int, int] | None = None) -> str | None:
+    import cv2
+
+    # The thumbnail must show the bytes the predictions were made from.
+    try:
+        check_unchanged(image_path, fingerprint)
+    except (OSError, ValueError):
+        return None
+    try:
+        img = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+    except cv2.error:
+        # Some builds raise instead of returning None, which is why
+        # is_decodable_image catches this too. Unguarded here, a corrupt file
+        # turned a per-image error into a traceback and no report at all.
+        return None
+    if img is None:
+        return None
+    try:
+        # Re-check after the read, as inference does: a file replaced between
+        # the check above and this read would otherwise put a thumbnail of the
+        # new bytes next to predictions made from the old ones.
+        check_unchanged(image_path, fingerprint)
+    except (OSError, ValueError):
+        return None
+    h, w = img.shape[:2]
+    scale = min(1.0, max_side / max(h, w))  # shrink only; never upscale a small image
+    resized = cv2.resize(img, (max(1, int(w * scale)), max(1, int(h * scale))))
+    thumb_dir.mkdir(parents=True, exist_ok=True)
+    thumb_name = f"{stable_digest(str(image_path))}.jpg"
+    thumb_path = thumb_dir / thumb_name
+    try:
+        written = cv2.imwrite(str(thumb_path), resized)
+    except cv2.error as exc:
+        raise OSError(f"failed to write thumbnail {thumb_path}: {exc}") from exc
+    if not written:
+        raise OSError(f"failed to write thumbnail {thumb_path}")
+    return f"thumbnails/{thumb_name}"
+
+
+def bundled_candidates(name: str) -> list[Path]:
+    """Where a file shipped under src/common may be found.
+
+    Beside this script covers every layout Python runs in. The directory of the
+    configuration in use is listed too, because config.yaml ships in src/common
+    beside these files: it is what lets the C++ binary find them from any
+    working directory, and both implementations searching the same places keeps
+    them aligned."""
+    candidates = []
+    if CONFIG_DIRECTORY is not None:
+        candidates.append(CONFIG_DIRECTORY / name)
+    candidates.append(Path(__file__).resolve().parents[1] / "common" / name)
+    return candidates
+
+
+def bundled_asset(name: str) -> str:
+    """Read a file shipped under src/common, wherever it is found."""
+    for path in bundled_candidates(name):
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+    tried = "\n  ".join(str(p) for p in bundled_candidates(name))
+    raise OSError(f"failed to read bundled report asset {name!r}; looked in:\n  {tried}")
+
+
+def html_escape(value: str) -> str:
+    return (
+        value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+    )
+
+
+def write_html_report(path: Path, results: list[ImageResult], profiles: list[ModelProfile],
+                       skipped: list[str], class_summary: ClassSummary,
+                       output_dir: Path) -> None:
+    profile_names = [p.name for p in profiles]
+    rows = []
+    for idx, result in enumerate(results):
+        thumb = make_thumbnail(result.image_path, output_dir / "thumbnails",
+                               fingerprint=result.fingerprint)
+
+        top1_by_model = {
+            name: {"class_id": pred.top_k[0][0], "label": pred.top_k[0][1],
+                   "prob": round(pred.top_k[0][2], PROBABILITY_DECIMALS)}
+            for name, pred in result.predictions.items() if pred.top_k
+        }
+        # Compact separators and sorted keys match nlohmann::json::dump(), which
+        # stores objects sorted, so both implementations emit the same attribute
+        # text. The browser looks these up by name, so order is presentational.
+        top1_json = html_escape(
+            json.dumps(top1_by_model, separators=(",", ":"), sort_keys=True,
+                       ensure_ascii=False)
+        )
+        cells = []
+        for name in profile_names:
+            pred = result.predictions.get(name)
+            if pred is not None and pred.top_k:
+                # The top-1 is the prediction; the rest is context. Rendering all
+                # five identically made every cell a five-line block in which the
+                # reader had to know that the first line was the answer.
+                _, top_label, top_prob = pred.top_k[0]
+                runners = "".join(
+                    f"<br>{html_escape(lbl)} ({p:.2%})" for _, lbl, p in pred.top_k[1:]
+                )
+                rest = (
+                    f'<details class="runners"><summary>top {len(pred.top_k)}</summary>'
+                    f'<span class="runner-list">{runners}</span></details>'
+                    if runners else ""
+                )
+                cells.append(
+                    f'<td data-model-col="{html_escape(name)}">'
+                    f'<span class="top1">{html_escape(top_label)} ({top_prob:.2%})</span>'
+                    f'{rest}'
+                    f'<br><span class="timing">inference {pred.inference_ms:.1f} ms</span></td>'
+                )
+            elif name in result.errors:
+                cells.append(
+                    f'<td data-model-col="{html_escape(name)}" class="error">'
+                    f'error: {html_escape(result.errors[name])}</td>'
+                )
+            else:
+                cells.append(f'<td data-model-col="{html_escape(name)}">no result</td>')
+
+        has_error = "1" if result.errors else "0"
+        # alt="" marks the thumbnail decorative: the path is in the next cell,
+        # so a screen reader should not announce it twice.
+        img_cell = f'<img src="{thumb}" alt="">' if thumb else ""
+        rows.append(
+            f'<tr class="row" data-has-error="{has_error}" data-idx="{idx}" '
+            f'data-top1="{top1_json}"><td>{img_cell}</td>'
+            f'<td>{html_escape(str(result.image_path))}</td>{"".join(cells)}'
+            f'<td class="agree-cell">&mdash;</td></tr>\n'
+        )
+
+    header_cols = "".join(
+        f'<th data-model-col="{html_escape(name)}">{html_escape(name)}</th>' for name in profile_names
+    )
+    model_checkboxes = "".join(
+        f'<label><input type="checkbox" class="model-checkbox" value="{html_escape(name)}" checked> '
+        f'{html_escape(name)}</label>'
+        for name in profile_names
+    )
+    # Most frequent first, then by class id: counts tie often, and ordering by
+    # insertion would differ from the C++ map, which is ordered by class id.
+    # One row per predicted class, naming the models that predicted it. Most
+    # frequent first, then by class id: counts tie often, and insertion order
+    # would differ from the C++ map, which is ordered by class id.
+    def _summary_row(class_id: str, entry: dict[str, Any]) -> str:
+        agreed = ", ".join(
+            f"{html_escape(n)} ({entry['models'][n]})"
+            for n in profile_names if n in entry["models"]
+        )
+        return (
+            f"<tr><td>{html_escape(class_id)}</td>"
+            f"<td>{html_escape(entry['label'])}</td>"
+            f"<td>{len(entry['models'])} of {len(profile_names)}</td>"
+            f"<td>{agreed}</td><td>{entry['total']}</td></tr>"
+        )
+
+    summary_rows = "".join(
+        _summary_row(class_id, entry)
+        for class_id, entry in sorted(
+            class_summary.items(), key=lambda kv: (-kv[1]["total"], int(kv[0]))
+        )
+    )
+    skipped_rows = "".join(f"<li>{html_escape(s)}</li>" for s in skipped)
+
+    report_css = bundled_asset("report.css")
+    report_js = bundled_asset("report.js")
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Image Classification Explorer Report</title>
+<style>
+{report_css}</style>
+</head>
+<body>
+<h1>Image Classification Explorer Report</h1>
+<p>Models: {html_escape(', '.join(profile_names))} &middot; Images: {len(results)} &middot; Skipped: {len(skipped)}</p>
+<div id="controls">
+  <div class="dropdown" id="modelDropdown">
+    <button type="button" class="dropdown-btn" id="modelDropdownBtn">All models &#9662;</button>
+    <div class="dropdown-panel" id="modelDropdownPanel">
+      {model_checkboxes}
+      <div class="dropdown-actions">
+        <button type="button" id="modelSelectAll">All</button>
+        <button type="button" id="modelSelectNone">None</button>
+      </div>
+    </div>
+  </div>
+  <select id="filterResult">
+    <option value="">All results</option>
+    <option value="agree">Agreement</option>
+    <option value="disagree">Disagreement</option>
+    <option value="error">Errors</option>
+  </select>
+  <input id="filterClass" placeholder="Filter by predicted class...">
+  <input id="minConfidence" type="number" min="0" max="100" step="1" placeholder="Min confidence %">
+  <select id="sortBy">
+    <option value="">Sort: default order</option>
+    <option value="confidence">Sort: confidence (high to low)</option>
+    <option value="class">Sort: predicted class (A-Z)</option>
+    <option value="result">Sort: result</option>
+  </select>
+</div>
+<table id="reportTable">
+<thead><tr><th>Image</th><th>Path</th>{header_cols}<th>Models Agree?</th></tr></thead>
+<tbody>
+{''.join(rows)}</tbody>
+</table>
+<h2>Per-class summary</h2>
+<table><thead><tr><th>Class id</th><th>Predicted class</th><th>Models</th><th>Which models (top-1 count)</th><th>Total</th></tr></thead><tbody>{summary_rows}</tbody></table>
+<h2>Skipped files</h2>
+<ul>{skipped_rows if skipped_rows else '<li>None</li>'}</ul>
+<script>
+{report_js}</script>
+</body>
+</html>
+"""
+    path.write_text(html, encoding="utf-8")
+
+
+# --- Publication: swapping the report directory into place safely ----------------
+
+
+def inspect_report_dir(path: Path) -> tuple[list[str], list[str]]:
+    """Every entry name in `path`, and those that are not part of a report.
+
+    A whitelisted *name* is not enough, because the caller is about to replace
+    or delete this directory: a `report.json` that is really a directory, or a
+    note left inside `thumbnails/`, would be destroyed while the top-level
+    listing still looked like a previous report - the opposite of what the
+    README promises.
+
+    Checking the types, plus every name under `thumbnails/`, is exhaustive
+    rather than a sample: the writers only ever produce regular files at the top
+    level and `<digest>.jpg` inside `thumbnails/`, so afterwards no directory is
+    left for foreign data to hide in, and no recursion is needed.
+    """
+    entries = sorted(p.name for p in path.iterdir())
+    foreign = [name for name in entries if name not in REPORT_ENTRIES]
+    for name in entries:
+        if name in foreign:
+            continue
+        entry = path / name
+        if name == "thumbnails":
+            if not entry.is_dir():
+                foreign.append(name)
+                continue
+            for thumb in entry.iterdir():
+                if not is_real_file(thumb) or not THUMBNAIL_NAME.match(thumb.name):
+                    foreign.append(f"thumbnails/{thumb.name}")
+        elif not is_real_file(entry):
+            foreign.append(name)
+    # Sorted so the names a message lists are the same ones, in the same order,
+    # as the C++ entrypoint lists.
+    foreign.sort()
+    return entries, foreign
+
+
+def publish_report(output_dir: Path, results: list[ImageResult], profiles: list[ModelProfile],
+                   skipped: list[str], class_summary: ClassSummary,
+                   timing: dict[str, Any], formats: list[str]) -> None:
+    """Write the complete report into a sibling staging directory, then swap the
+    whole `output_dir` for it. Readers never see a mixture of old and new files,
+    and a failure at any point leaves the previous report in place.
+
+    `output_dir` is owned by this application: an existing directory is only
+    replaced if it is empty or carries the REPORT_MARKER written by a previous
+    run and holds nothing else, so a customer directory (even one that happens
+    to contain a `report.html`) can never be swapped away.
+
+    One run at a time per output directory, which the README states. There is no
+    cross-process locking or recovery protocol: the two scratch names below are
+    fixed, are the only paths outside `output_dir` this function touches, and are
+    cleared on entry, so a run interrupted mid-swap costs the previous report and
+    nothing else."""
+    output_dir = output_dir.resolve()
+    parent = output_dir.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    if output_dir.exists():
+        if not output_dir.is_dir():
+            raise OSError(f"output_dir {output_dir} exists and is not a directory")
+        entries, foreign = inspect_report_dir(output_dir)
+        # The marker has to be a regular file, not merely a name in the listing.
+        # A *directory* called REPORT_MARKER would otherwise make a customer
+        # directory look application-owned, and the swap below deletes what it
+        # replaces, including anything nested under that fake marker.
+        if entries and not is_real_file(output_dir / REPORT_MARKER):
+            raise OSError(
+                f"output_dir {output_dir} was not created by this application "
+                f"(missing {REPORT_MARKER}); use an empty or dedicated directory"
+            )
+        if foreign:
+            raise OSError(
+                f"output_dir {output_dir} contains entries that are not part of a previous "
+                f"report ({', '.join(foreign[:3])}); use a dedicated directory"
+            )
+
+    staging = parent / f".{output_dir.name}.staging"
+    previous = parent / f".{output_dir.name}.previous"
+    # Exact names, and even then only removed once they prove they are ours. A
+    # name collision with another workflow is possible however the name is
+    # chosen, so the marker decides: anything here without it is someone else's
+    # and the run stops rather than deleting it.
+    for scratch in (staging, previous):
+        if not scratch.exists():
+            continue
+        if not is_real_dir(scratch) or not is_real_file(scratch / REPORT_MARKER):
+            raise OSError(
+                f"{scratch} exists and was not created by this application; "
+                f"move or remove it, or choose a different io.output_dir"
+            )
+        # The marker alone was enough to authorise rmtree here, which is the
+        # same mistake the output_dir check used to make: an interrupted publish
+        # leaves a marked directory behind, and anything added to it afterwards
+        # was deleted by the next run. The contents get the same scrutiny as a
+        # completed report before anything is removed.
+        _, scratch_foreign = inspect_report_dir(scratch)
+        if scratch_foreign:
+            raise OSError(
+                f"{scratch} contains entries that are not part of a previous "
+                f"report ({', '.join(scratch_foreign[:3])}); move or remove it, or choose a "
+                f"different io.output_dir"
+            )
+        shutil.rmtree(scratch, ignore_errors=True)
+        # Checked by asking whether it is gone, not by letting rmtree raise: a
+        # partial delete removes what it can and ignore_errors hides the rest.
+        # Continuing meant the run published whatever survived - stale
+        # thumbnails from an interrupted run, say, beside a report that did not
+        # ask for any.
+        if scratch.exists():
+            raise OSError(
+                f"{scratch} could not be removed; move or remove it, or choose a different "
+                f"io.output_dir"
+            )
+    staging.mkdir()
+    # Written first, so a run interrupted before the report is complete still
+    # leaves a directory the next run can recognise as its own.
+    (staging / REPORT_MARKER).write_text("generated by image-classification-explorer\n",
+                                         encoding="utf-8")
+    try:
+        # Only what io.output_format asked for. The thumbnails follow html
+        # rather than being skipped separately: they are referenced only by
+        # report.html, and make_thumbnail is called from the html writer, so
+        # not writing html writes no thumbnails. They were 288 KB of the
+        # roughly 420 KB this application produced for 21 images.
+        if "json" in formats:
+            write_json_report(staging / "report.json", results, profiles, skipped,
+                              class_summary, timing)
+        if "csv" in formats:
+            write_csv_report(staging / "report.csv", results, profiles)
+        if "html" in formats:
+            write_html_report(staging / "report.html", results, profiles, skipped,
+                              class_summary, staging)
+        (staging / REPORT_MARKER).write_text("generated by image-classification-explorer\n",
+                                             encoding="utf-8")
+
+        had_previous = output_dir.exists()
+        if had_previous:
+            output_dir.rename(previous)
+        try:
+            staging.rename(output_dir)
+        except BaseException:
+            # Includes KeyboardInterrupt: roll back to the previous report.
+            if had_previous and not output_dir.exists():
+                previous.rename(output_dir)
+            raise
+        if had_previous:
+            shutil.rmtree(previous, ignore_errors=True)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+
+# --- Entrypoint ------------------------------------------------------------------
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Image classification explorer")
+    default_config = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
+    parser.add_argument("--config", type=Path, default=default_config, help="Path to YAML configuration")
+    args = parser.parse_args()
+
+    global CONFIG_DIRECTORY
+    CONFIG_DIRECTORY = args.config.expanduser().resolve().parent
+
+    # Reading and interpreting the config all happens in one controlled error path,
+    # so an unreadable file, invalid YAML, or a bad value reports `Invalid
+    # configuration: ...` and exit 2 rather than a traceback (matching C++).
+    #
+    # Relative paths in config.yaml (model artifacts, label maps, output dir) resolve
+    # against the current working directory, matching every other example in this repo:
+    # customers run commands from the installed `prebuilt-apps/` root, not from here.
+    try:
+        try:
+            raw = load_config(args.config)
+        except OSError as exc:
+            # Worded as the C++ entrypoint words it; the bare OSError would add
+            # an errno prefix and re-quote the path.
+            raise ValueError(f"failed to open config file: {args.config}") from exc
+        if not isinstance(raw, dict):
+            raise ValueError(f"{args.config} must contain a YAML mapping at the top level")
+        io_cfg = config_section(raw, "io")
+        runtime = config_section(raw, "runtime")
+        timeout_ms = config_int(runtime.get("timeout_ms"), "runtime.timeout_ms", 20000)
+        if timeout_ms <= 0:
+            raise ValueError(f"runtime.timeout_ms must be positive, got {timeout_ms}")
+        # `extensions:` left null in YAML arrives as None; str(None) would turn the
+        # accepted list into ("none",) and reject every real image.
+        raw_extensions = config_str(io_cfg.get("extensions"), "io.extensions",
+                                    ",".join(DEFAULT_EXTENSIONS))
+        extensions = tuple(
+            normalize_extension(e) for e in raw_extensions.split(",") if e.strip()
+        ) or DEFAULT_EXTENSIONS
+        fallback_url = config_str(
+            io_cfg.get("fallback_image_url"), "io.fallback_image_url",
+            "https://raw.githubusercontent.com/EliSchwartz/imagenet-sample-images/master/"
+            "n01443537_goldfish.JPEG",
+        )
+        input_path = config_str(io_cfg.get("input"), "io.input", None)
+        # sandbox/ rather than ./report: the value resolves against the working
+        # directory and the README says to run from the bundle root, so a bare
+        # `report` left the report and its thumbnails in whatever directory the
+        # customer ran from. `sandbox/` is already in .gitignore.
+        output_dir = Path(config_str(io_cfg.get("output_dir"), "io.output_dir", "sandbox/report"))
+        formats = config_formats(io_cfg.get("output_format"))
+        # P8: fail on a malformed validation block now, not after a successful run.
+        validation = config_section(raw, "validation")
+        expected_class_id = validation.get("expected_class_id")
+        if expected_class_id is not None:
+            expected_class_id = config_int(expected_class_id, "validation.expected_class_id", 0)
+        min_probability = config_float(
+            validation.get("min_probability"), "validation.min_probability", 0.0
+        )
+        profiles = load_profiles(raw)
+        for profile in profiles:
+            profile.labels = load_label_map(profile.label_map, profile.num_classes)
+    except (OSError, yaml.YAMLError, TypeError, ValueError) as exc:
+        print(f"Invalid configuration: {exc}", file=sys.stderr)
+        return 2
+
+    try:
+        images, skipped = discover_images(
+            input_path, extensions, fallback_url,
+            # Honour TMPDIR, as the C++ side does via fs::temp_directory_path().
+            # Same name the C++ side derives from sima_examples::default_goldfish_path(),
+            # so one download serves both implementations.
+            Path(tempfile.gettempdir()) / "sima_imagenet_goldfish.jpg",
+        )
+    except OSError as exc:  # missing path, unreadable directory, failed download
+        print(str(exc), file=sys.stderr)
+        return 3
+
+    for entry in skipped:
+        print(f"Skipping {entry}")
+
+    results: list[ImageResult] = []
+    total_ms = 0.0
+    if not images:
+        print("No images to classify.", file=sys.stderr)
+    else:
+        print(f"Classifying {len(images)} image(s) with {len(profiles)} model(s): "
+              f"{', '.join(p.name for p in profiles)}")
+
+        start = time.monotonic()
+        try:
+            results = run_all(profiles, images, timeout_ms)
+        except Exception as exc:  # noqa: BLE001 - a whole-model failure (e.g. bad path) is fatal
+            print(f"Error: {exc}", file=sys.stderr)
+            return 6
+        total_ms = (time.monotonic() - start) * 1000.0
+
+    class_summary = build_class_summary(results, profiles)
+    timing = {
+        "total_ms": total_ms,
+        "image_count": len(images),
+        "model_count": len(profiles),
+    }
+
+    try:
+        publish_report(output_dir, results, profiles, skipped, class_summary, timing, formats)
+    except (OSError, UnicodeError) as exc:
+        # UnicodeEncodeError is a ValueError, not an OSError, so a path holding
+        # non-UTF-8 bytes used to escape here as a traceback rather than the
+        # documented runtime error.
+        print(f"Error: failed to write report to {output_dir}: {exc}", file=sys.stderr)
+        return 6
+
+    images_with_errors = sum(1 for r in results if r.errors)
+    print(f"Done in {total_ms:.1f} ms. Report written to {output_dir}")
+    # Name what was actually written. A hardcoded list advertised report.json
+    # and report.csv after io.output_format stopped writing them by default,
+    # so a successful run pointed the customer at files that do not exist.
+    written = [f"report.{f}" for f in formats]
+    if "html" in formats:
+        written.append("thumbnails/")
+    print(f"  {', '.join(written)}")
+    if images_with_errors:
+        # Every selected format carries the failures, so name one that exists.
+        # A two-way json/html choice sent a csv-only run to "the per-model
+        # error cells" in an HTML report that was never written.
+        if "json" in formats:
+            where = "report.json"
+        elif "html" in formats:
+            where = "the per-model error cells in report.html"
+        else:
+            where = "the error column in report.csv"
+        print(f"  {images_with_errors} image(s) had at least one model failure (see {where})")
+
+    used_fallback_sample = not input_path
+    if expected_class_id is not None and used_fallback_sample and len(images) == 1 and profiles:
+        # Every profile, not just the first: the README states class 1 should win
+        # for each model, and the e2e suites assert it for each, so a regression
+        # in any model but the first produced no note at all.
+        first = results[0]
+        for profile in profiles:
+            pred = first.predictions.get(profile.name)
+            if not pred or not pred.top_k:
+                continue
+            top1_id = pred.top_k[0][0]
+            top1_prob = pred.top_k[0][2]
+            if top1_id != expected_class_id or top1_prob < min_probability:
+                print(
+                    f"Note: {profile.name} top1={top1_id} ({top1_prob:.4f}) did not match "
+                    f"expected_class_id={expected_class_id} (min_probability={min_probability}); "
+                    "see report for details.",
+                    file=sys.stderr,
+                )
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
