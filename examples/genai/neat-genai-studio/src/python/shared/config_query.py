@@ -29,6 +29,7 @@ FIELDS = {
     "web.cors_origins": lambda c: c.web.cors_origins,
     "supertonic.models_root": lambda c: c.supertonic.models_root,
     "supertonic.venv": lambda c: c.supertonic.venv,
+    "rag.enabled": lambda c: c.rag.enabled,
 }
 
 

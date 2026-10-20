@@ -80,8 +80,10 @@ from audio_api_suite import (  # noqa: E402,F401
 from shell_config_suite import (  # noqa: E402,F401
     ServerConfigWithoutPyyamlTests,
     ShellConfigValueTests,
+    ShellRagConfigTests,
     ShellWebConfigTests,
 )
+from setup_rag_suite import SetupRagSwitchTests  # noqa: E402,F401
 from backend_mode_suite import (  # noqa: E402,F401
     BackendPathTests,
     CorsPolicyTests as BackendCorsPolicyTests,
@@ -108,6 +110,7 @@ from voice_catalog_suite import (  # noqa: E402,F401
     test_korean_has_no_server_install_plan,
     test_only_cc_by_nc_sa_voices_are_excluded,
     test_optional_voices_require_explicit_selection,
+    test_repair_completes_only_partly_installed_voices,
 )
 
 # Applies to every TestCase collected from this module.

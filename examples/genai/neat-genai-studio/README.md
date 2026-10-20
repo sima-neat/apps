@@ -9,7 +9,7 @@
 | Languages | Python |
 | Status | stable |
 | Binary Name | neat-genai-studio |
-| Model | Loaded on demand (e.g. Qwen3-VL-4B-Instruct-GPTQ-a16w4) + whisper-small-a16w8-layered-encoder |
+| Model | Loaded on demand (e.g. Qwen3-VL-4B-Instruct-Autoround-a16w4) + whisper-small-a16w8-layered-encoder |
 
 ## Concept
 Runs language, vision-language, and speech models on a Modalix device as the board-side backend for the GenAI tab in Neat Insight, with an OpenAI-compatible API.
@@ -24,7 +24,7 @@ through the API, you can:
 - chat with text and pictures, transcribe or translate speech with Whisper, and synthesize speech with the installed voices
 - answer from local Markdown documents with RAG
 
-Internet access is needed only to search for or download a model from Hugging Face.
+Once set up, the Studio runs without internet access. The first `setup.sh` run and searching for or downloading a model from Hugging Face need it (see [Prerequisites](#prerequisites)).
 
 ## Preview
 ![Neat GenAI Studio preview](../../../portal/assets/examples/genai/neat-genai-studio/image.png)
@@ -33,7 +33,7 @@ Internet access is needed only to search for or download a model from Hugging Fa
 - A Modalix DevKit with `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)), the Neat Development Environment, and the Neat Library installed.
 - The Neat Library's Python environment at `~/pyneat/bin/python`. If it is somewhere else, set `PYNEAT_PYTHON=/path/to/python-with-pyneat` before running the commands below.
 - Neat Insight, to use the GenAI tab.
-- Internet access on the board for the first `setup.sh` run and for Hugging Face downloads.
+- Internet access on the board for the first `setup.sh` run and for Hugging Face downloads. Behind a firewall or proxy, allow `pypi.org` and `files.pythonhosted.org` (Python packages), `download.pytorch.org` (PyTorch for document search), `huggingface.co` and its download hosts (models and voices), `raw.githubusercontent.com` (English text-to-speech data for Piper, fetched with NLTK), and `docs.sima.ai` (Supertonic's compiled model, through `sima-cli`).
 
 Run every command below in a shell on the board.
 
@@ -73,7 +73,7 @@ Insight's GenAI tab (or the `/models` API) after startup. To download one during
 setup instead:
 
 ```bash
-CATALOG_MODEL_REPOS="simaai/Qwen3-VL-4B-Instruct-GPTQ-a16w4" ${APP_DIR}/setup.sh
+CATALOG_MODEL_REPOS="simaai/Qwen3-VL-4B-Instruct-Autoround-a16w4" ${APP_DIR}/setup.sh
 ```
 
 On a board without NVMe storage, choose another directory for the models:
@@ -106,10 +106,15 @@ lists them all):
   `./.venv-supertonic`).
 - `WEB_HOST`, `WEB_PORT`, `WEB_HTTPS`, `WEB_CORS_ORIGINS`: the backend's address
   and CORS allowlist written to `app.web`.
+- `SETUP_RAG`: install document search ([RAG](#rag)), default `1`. On a board
+  short on disk space or memory, `SETUP_RAG=0` skips CPU PyTorch, the RAG
+  packages, the embedding model and the default database, and writes
+  `app.rag.enabled: false`; everything else works as usual.
 
 Re-running `setup.sh` (for example to add a model or voice) regenerates
-`config.local.yaml` but keeps your `app.web` settings and the Supertonic paths;
-the previous file is saved as `config.local.yaml.bak`.
+`config.local.yaml` but keeps your `app.web` settings, the Supertonic paths and
+whether RAG is installed (`app.rag.enabled`); the previous file is saved as
+`config.local.yaml.bak`.
 
 ## Configure
 Most users change nothing. `setup.sh` writes `config.local.yaml` from the
@@ -122,7 +127,9 @@ only to change:
 - `server.models.asr`: the speech-to-text model active at startup. Models from Hugging Face accounts other than `simaai` are named `<org>@<name>`, for example `florianvoss@whisper-small-a16w8-layered-encoder`.
 - `server.hub.allow_download`: whether models may be downloaded from Hugging Face.
 - `app.request.max_tokens`: the default response length for chat requests that do not set `max_tokens`.
-- `app.rag.enabled`: retrieval-augmented search.
+- `app.rag.enabled`: retrieval-augmented search. Turning it on after a
+  `SETUP_RAG=0` install needs the RAG packages: run
+  `SETUP_RAG=1 ${APP_DIR}/setup.sh` instead.
 - `app.web`: the backend's host, port (default `5000`), HTTPS setting, and
   `cors_origins` (see [CORS](#cors-for-other-browser-front-ends)).
 
@@ -178,7 +185,8 @@ The output lists the speech-to-text model and any chat model you loaded.
 - **The model server does not start:** confirm `pyneat` imports in the environment at `PYNEAT_PYTHON` (default `~/pyneat/bin/python`).
 - **Insight cannot reach the backend:** check `${APP_DIR}/run.sh status`, then `curl -sk https://<board-ip>:5000/health` from the machine running Insight. The backend uses a self-signed certificate generated on first start; `NEAT_TLS_CERT` and `NEAT_TLS_KEY` select your own.
 - **`setup.sh` says the runtime refuses the speech-to-text model:** your Neat runtime needs a speech model with a different encoder layout. Install the older build instead with `ASR_MODEL_REPO=simaai/whisper-small-a16w8 ${APP_DIR}/setup.sh`.
-- **A model download fails with an access error:** set `HF_TOKEN` for gated Hugging Face repositories.
+- **`setup.sh` stops on a download (connection refused, timeout, `429`):** check that the board reaches the hosts listed in [Prerequisites](#prerequisites); behind a proxy, export `HTTPS_PROXY` first. Run `${APP_DIR}/setup.sh` again: files already downloaded and verified are kept.
+- **A model download fails:** the message says why. For a model that needs approval, request access on Hugging Face and set `HF_TOKEN`; for a model Hugging Face renamed, download the new id it names.
 - **A model fails to load with an accelerator error:** restart the Studio (`${APP_DIR}/run.sh stop`, then `${APP_DIR}/run.sh`) to free the accelerator, then load the model again. The Studio does not reset or recover board services itself.
 - **`/health` reports a voice engine with `"loaded": false`:** the engine failed to load (for example Supertonic while the accelerator was unavailable); the reason is `accelerator-unavailable` or `load-failed` and the details are in the Studio log. A speech request, or choosing the engine, retries it at most every 30 s.
 - **Another instance is running:** `run.sh` refuses to start a second one; `${APP_DIR}/run.sh stop` stops it.
@@ -333,7 +341,8 @@ environment of `run.sh`.
 RAG is enabled by default after `setup.sh`, which builds
 `src/python/ui/milvus.db` (and `milvus.meta.json`) from the bundled
 `src/common/rag/neat.md`. The backend starts the search service when the
-database exists.
+database exists. A `SETUP_RAG=0` install leaves RAG off and the RAG requests
+below answer 409; `SETUP_RAG=1 ${APP_DIR}/setup.sh` adds it later.
 
 `POST /v1/chat/completions` answers from the documents when the request adds
 `"neat_rag": true`, or `{"k": 5}` for the number of passages (1 to 10, default
