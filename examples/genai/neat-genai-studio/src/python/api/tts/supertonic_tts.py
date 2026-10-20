@@ -36,7 +36,7 @@ from worker_ipc import read_frame, send_request
 _WORKER_LABEL = "Supertonic worker"
 
 DEFAULT_MODELS_ROOT = "/media/nvme/supertonic-tts/models"
-# EXAMPLE_DIR/.venv-supertonic: this file is src/python/ui/tts/supertonic_tts.py.
+# EXAMPLE_DIR/.venv-supertonic: this file is src/python/api/tts/supertonic_tts.py.
 DEFAULT_VENV = Path(__file__).resolve().parents[4] / ".venv-supertonic"
 DEFAULT_VOICE = "M1"
 VOICES = tuple(f"F{i}" for i in range(1, 6)) + tuple(f"M{i}" for i in range(1, 6))
@@ -85,7 +85,7 @@ def models_root():
 def _supertonic_python():
     """Interpreter of the Supertonic runtime venv, or None when not installed:
     ``SUPERTONIC_PYTHON``, else ``SUPERTONIC_VENV`` (the path setup.sh persisted
-    in the config, exported by run.sh / run_ui), else the default venv."""
+    in the config, exported by run.sh / run_api), else the default venv."""
     p = os.environ.get("SUPERTONIC_PYTHON")
     if p:
         return p if Path(p).exists() else None

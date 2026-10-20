@@ -11,8 +11,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-UI_DIR = Path(__file__).resolve().parents[2] / "src" / "python" / "ui"
-sys.path.insert(0, str(UI_DIR))
+API_DIR = Path(__file__).resolve().parents[2] / "src" / "python" / "api"
+sys.path.insert(0, str(API_DIR))
 
 import talk_controller  # noqa: E402
 

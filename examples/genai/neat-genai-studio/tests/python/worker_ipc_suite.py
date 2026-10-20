@@ -1,4 +1,4 @@
-"""Shared TTS worker framing (ui/tts/worker_ipc.py).
+"""Shared TTS worker framing (api/tts/worker_ipc.py).
 
 Pure stdlib; drives the framing against fake in-memory streams, no worker
 subprocess and no hardware. Collected through test_unit.py.
@@ -13,9 +13,9 @@ import sys
 import unittest
 from pathlib import Path
 
-UI_PYTHON = Path(__file__).resolve().parents[2] / "src" / "python" / "ui" / "tts"
-if str(UI_PYTHON) not in sys.path:
-    sys.path.insert(0, str(UI_PYTHON))
+TTS_PYTHON = Path(__file__).resolve().parents[2] / "src" / "python" / "api" / "tts"
+if str(TTS_PYTHON) not in sys.path:
+    sys.path.insert(0, str(TTS_PYTHON))
 
 import worker_ipc as wi  # noqa: E402
 

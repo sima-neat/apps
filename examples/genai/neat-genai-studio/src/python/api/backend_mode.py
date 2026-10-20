@@ -3,7 +3,7 @@ serves, and the opt-in CORS policy for browser front ends on other origins
 (for example Insight).
 
 Pure Python on purpose (no Flask import) so the unit suite covers every
-decision; ``flask_app`` applies these in ``before_request`` / ``after_request``.
+decision; ``studio_api`` applies these in ``before_request`` / ``after_request``.
 """
 
 from __future__ import annotations
