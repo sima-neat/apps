@@ -20,8 +20,6 @@ results.
 
 ## Preview
 
-The pipeline classifies this goldfish image by default:
-
 ![Image classification explorer goldfish input](../../../portal/assets/examples/classification/image-classification-explorer/image.jpeg)
 
 ## Prerequisites

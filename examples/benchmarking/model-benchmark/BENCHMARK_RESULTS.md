@@ -27,21 +27,21 @@ These results measure the compiled model package only. They do not include camer
 | `depth_anything_v2_vits` | `depth_anything_v2_vits_mpk.tar.gz` | depth-estimator | `detessdequant` | 1 | 20.841 / 55.01 |
 | `retinaface_mobilenet25` | `retinaface_mobilenet25_mod_0_mpk.tar.gz` | face-detector | `detessdequant` | 9 | 4.540 / 637.29 |
 | `detr_resnet50_modified_class_embed_bbox_embed` | `detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz` | detr-object-detector | `detessdequant` | 2 | 23.426 / 68.86 |
-| `yolo_v8n_seg` | `yolo_v8n_seg_mpk.tar.gz` | yolov8-instance-segmenter | `detessdequant` | 10 | 6.749 / 385.41 |
+| `yolo_v8n_seg` | `yolo_v8n_seg_mpk.tar.gz` | single-stream-instance-segmenter | `detessdequant` | 10 | 6.749 / 385.41 |
 
 ## YOLO26 Detection
 
 | Model ID | Package | Used By | Postprocess | Outputs | Latency / FPS |
 | --- | --- | --- | --- | ---: | ---: |
-| `yolo26n-det-bf16-mla_tess-b1` | `yolo26n-det-bf16-mla_tess-b1.tar.gz` | single-stream-object-detector, multi-stream-object-detector, multi-stream-people-tracker | `cast` | 6 | 6.757 / 377.67 |
-| `yolo26s-det-bf16-mla_tess-b1` | `yolo26s-det-bf16-mla_tess-b1.tar.gz` | single-stream-object-detector, multi-stream-object-detector, multi-stream-people-tracker | `cast` | 6 | 9.321 / 188.20 |
-| `yolo26m-det-bf16-mla_tess-b1` | `yolo26m-det-bf16-mla_tess-b1.tar.gz` | single-stream-object-detector, multi-stream-object-detector, yolo26-object-detector, detection-to-vlm-assistant, multi-stream-people-tracker | `cast` | 6 | 17.024 / 77.33 |
-| `yolo26l-det-bf16-mla_tess-b1` | `yolo26l-det-bf16-mla_tess-b1.tar.gz` | single-stream-object-detector, multi-stream-object-detector, multi-stream-people-tracker | `cast` | 6 | 20.331 / 61.34 |
-| `yolo26x-det-bf16-mla_tess-b1` | `yolo26x-det-bf16-mla_tess-b1.tar.gz` | single-stream-object-detector, multi-stream-object-detector, multi-stream-people-tracker | `cast` | 6 | 39.772 / 27.98 |
-| `yolo26m-det-bf16-b1` | `yolo26m-det-bf16-b1.tar.gz` | single-stream-object-detector, multi-stream-object-detector, detection-to-vlm-assistant, multi-stream-people-tracker | `unknown` | 6 | 18.143 / 78.15 |
+| `yolo26n-det-bf16-mla_tess-b1` | `yolo26n-det-bf16-mla_tess-b1.tar.gz` | single-stream-object-detector, multi-stream-object-detector, multi-stream-tracker | `cast` | 6 | 6.757 / 377.67 |
+| `yolo26s-det-bf16-mla_tess-b1` | `yolo26s-det-bf16-mla_tess-b1.tar.gz` | single-stream-object-detector, multi-stream-object-detector, multi-stream-tracker | `cast` | 6 | 9.321 / 188.20 |
+| `yolo26m-det-bf16-mla_tess-b1` | `yolo26m-det-bf16-mla_tess-b1.tar.gz` | single-stream-object-detector, multi-stream-object-detector, yolo26-object-detector, detection-to-vlm-assistant, multi-stream-tracker | `cast` | 6 | 17.024 / 77.33 |
+| `yolo26l-det-bf16-mla_tess-b1` | `yolo26l-det-bf16-mla_tess-b1.tar.gz` | single-stream-object-detector, multi-stream-object-detector, multi-stream-tracker | `cast` | 6 | 20.331 / 61.34 |
+| `yolo26x-det-bf16-mla_tess-b1` | `yolo26x-det-bf16-mla_tess-b1.tar.gz` | single-stream-object-detector, multi-stream-object-detector, multi-stream-tracker | `cast` | 6 | 39.772 / 27.98 |
+| `yolo26m-det-bf16-b1` | `yolo26m-det-bf16-b1.tar.gz` | single-stream-object-detector, multi-stream-object-detector, detection-to-vlm-assistant, multi-stream-tracker | `unknown` | 6 | 18.143 / 78.15 |
 | `yolo26n-det-int8-b1` | `yolo26n-det-int8-b1.tar.gz` | high-density-multi-stream-object-detector | `dequantize` | 6 | 4.392 / 869.39 |
-| `yolo26m-det-int8-b1` | `yolo26m-det-int8-b1.tar.gz` | single-stream-object-detector, multi-stream-object-detector, detection-to-vlm-assistant, multi-stream-people-tracker | `detessdequant` | 6 | 7.076 / 300.09 |
-| `yolo26m-det-int8-b1-boxdecode` | `yolo26m-det-int8-b1.tar.gz` | single-stream-object-detector, multi-stream-object-detector, detection-to-vlm-assistant, multi-stream-people-tracker | `boxdecode` | 1 | 6.841 / 305.82 |
+| `yolo26m-det-int8-b1` | `yolo26m-det-int8-b1.tar.gz` | single-stream-object-detector, multi-stream-object-detector, detection-to-vlm-assistant, multi-stream-tracker | `detessdequant` | 6 | 7.076 / 300.09 |
+| `yolo26m-det-int8-b1-boxdecode` | `yolo26m-det-int8-b1.tar.gz` | single-stream-object-detector, multi-stream-object-detector, detection-to-vlm-assistant, multi-stream-tracker | `boxdecode` | 1 | 6.841 / 305.82 |
 
 ## YOLO26 Segmentation
 

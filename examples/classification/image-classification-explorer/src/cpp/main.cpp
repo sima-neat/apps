@@ -2458,6 +2458,16 @@ void publish_report(const fs::path& output_dir_arg, const std::vector<ImageResul
                                "); move or remove it, or choose a different io.output_dir");
     }
     fs::remove_all(scratch, ignored);
+    // Checked by asking whether it is gone, not by reading the error code: a
+    // partial delete reports success for what it managed to remove. Continuing
+    // meant create_directories accepted the surviving directory and the run
+    // published whatever was left in it - stale thumbnails from an interrupted
+    // run, say, beside a report that did not ask for any.
+    if (path_exists(scratch)) {
+      throw std::runtime_error(scratch.string() +
+                               " could not be removed; move or remove it, or choose a different "
+                               "io.output_dir");
+    }
   }
   fs::create_directories(staging);
   {

@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # LLiMa backend API smoke test (direct inference backend port).
-# Defaults match direct backend runtime on 9998, not web UI port 5000.
+# Defaults match direct backend runtime on 9998, not the Studio backend port 5000.
 HOST="${LLIMA_HOST:-127.0.0.1}"
 PORT="${LLIMA_PORT:-9998}"
 SCHEME="${LLIMA_SCHEME:-http}"
@@ -180,7 +180,7 @@ if ! wait_for_backend 30; then
   add_result "Readiness" "FAIL" "Backend not reachable at ${BASE_URL}"
   echo "❌ Backend is not reachable at ${BASE_URL}"
   echo "   Debug: try 'curl -v ${BASE_URL}/' and verify routing/firewall from this host."
-  echo "   Start backend first, for example: ./run.sh --backend-only"
+  echo "   Start backend first, for example: ./run.sh"
   exit 1
 fi
 

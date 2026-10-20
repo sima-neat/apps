@@ -1550,6 +1550,42 @@ models:
         assert (out_dir / "notes.txt").read_text() == "customer data"
 
     @pytest.mark.parametrize("where", ["staging", "previous"])
+    def test_undeletable_scratch_dir_stops_the_run(self, tmp_path, monkeypatch, capsys, where):
+        """A marked scratch tree that cannot be fully removed must stop the run,
+        not be published. rmtree(ignore_errors=True) removed what it could and
+        hid the rest, and the surviving directory was then written into."""
+        monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
+        img = tmp_path / "a.jpg"
+        _make_image(img)
+        out_dir = tmp_path / "out"
+        scratch = out_dir.parent / f".{out_dir.name}.{where}"
+        (scratch / "thumbnails").mkdir(parents=True)
+        (scratch / main.REPORT_MARKER).write_text("generated\n", encoding="utf-8")
+        (scratch / "thumbnails" / "0123456789abcdef.jpg").write_bytes(b"\xff\xd8stale")
+
+        real_rmtree = shutil.rmtree
+
+        def _partial_rmtree(path, *args, **kwargs):
+            # Mimic a tree that cannot be fully removed: the marker goes, the
+            # thumbnails survive. That is the shape the report describes.
+            if Path(path) == scratch:
+                (scratch / main.REPORT_MARKER).unlink()
+                return
+            return real_rmtree(path, *args, **kwargs)
+
+        monkeypatch.setattr(main.shutil, "rmtree", _partial_rmtree)
+        config_path = tmp_path / "config.yaml"
+        _write_config(config_path, img, out_dir)
+        monkeypatch.setattr(sys, "argv", ["main.py", "--config", str(config_path)])
+
+        rc = main.main()
+
+        assert rc == 6
+        assert "could not be removed" in capsys.readouterr().err
+        assert (scratch / "thumbnails" / "0123456789abcdef.jpg").exists()
+        assert not (out_dir / "report.json").exists()
+
+    @pytest.mark.parametrize("where", ["staging", "previous"])
     def test_symlinked_scratch_dir_is_refused(self, tmp_path, monkeypatch, capsys, where):
         """A scratch path that is itself a symlink to a marked report directory
         must be refused, not followed. Both entrypoints used to accept it and

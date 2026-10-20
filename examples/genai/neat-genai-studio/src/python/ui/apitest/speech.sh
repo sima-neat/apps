@@ -1,7 +1,7 @@
 #!/bin/bash
 set -u
 # Synthesize text through the Studio's OpenAI-compatible endpoint
-# (POST /v1/audio/speech on the web UI port) and save the WAV.
+# (POST /v1/audio/speech on the backend port) and save the WAV.
 #
 # Usage:
 #   ./speech.sh [host:port | base URL] "text to synthesize" [output_file] [model] [voice] [language] [speed]

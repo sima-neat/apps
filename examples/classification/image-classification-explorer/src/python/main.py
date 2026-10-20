@@ -1460,6 +1460,16 @@ def publish_report(output_dir: Path, results: list[ImageResult], profiles: list[
                 f"different io.output_dir"
             )
         shutil.rmtree(scratch, ignore_errors=True)
+        # Checked by asking whether it is gone, not by letting rmtree raise: a
+        # partial delete removes what it can and ignore_errors hides the rest.
+        # Continuing meant the run published whatever survived - stale
+        # thumbnails from an interrupted run, say, beside a report that did not
+        # ask for any.
+        if scratch.exists():
+            raise OSError(
+                f"{scratch} could not be removed; move or remove it, or choose a different "
+                f"io.output_dir"
+            )
     staging.mkdir()
     # Written first, so a run interrupted before the report is complete still
     # leaves a directory the next run can recognise as its own.
