@@ -631,37 +631,28 @@ class AppContext:
         def _control_url(path):
             return f"{self.control_base_url.rstrip('/')}{path}"
 
-        def _proxy_control(method, path, timeout, json_body=None):
-            try:
-                resp = requests.request(
-                    method, _control_url(path), json=json_body, timeout=timeout
-                )
-                return Response(
-                    resp.content, status=resp.status_code, mimetype='application/json'
-                )
-            except requests.RequestException as exc:
-                logging.warning("Control API request failed: %s", exc)
-                return jsonify({'error': 'control API unreachable'}), 502
+        # The routes in backend_mode.CONTROL_ROUTES relay to the control API as they are.
+        def _relay_to_control(method, route):
+            target, timeout = backend_mode.CONTROL_ROUTES[(method, route)]
 
-        @self.app.route('/models/status', methods=['GET'])
-        def models_status():
-            return _proxy_control('GET', '/control/status', 10)
-
-        @self.app.route('/models/catalog', methods=['GET'])
-        def models_catalog():
-            return _proxy_control('GET', '/control/catalog', 30)
-
-        @self.app.route('/models/logs', methods=['GET'])
-        def models_logs():
-            after = request.args.get('after', '0')
-            try:
-                resp = requests.get(
-                    _control_url('/control/logs'), params={'after': after}, timeout=10
-                )
+            def relay():
+                try:
+                    params, body = backend_mode.control_payload(
+                        method, request.args.items(multi=True), request.get_json(silent=True))
+                except ValueError:
+                    return jsonify({'error': backend_mode.NOT_A_JSON_OBJECT}), 400
+                try:
+                    resp = requests.request(method, _control_url(target), params=params,
+                                            json=body, timeout=timeout)
+                except requests.RequestException as exc:
+                    logging.warning("Control API %s %s failed: %s", method, target, exc)
+                    return jsonify({'error': 'control API unreachable'}), 502
                 return Response(resp.content, status=resp.status_code, mimetype='application/json')
-            except requests.RequestException as exc:
-                logging.warning("Control API logs request failed: %s", exc)
-                return jsonify({'error': 'control API unreachable'}), 502
+            return relay
+
+        for method, route in backend_mode.CONTROL_ROUTES:
+            self.app.add_url_rule(route, endpoint=f"control {method} {route}",
+                                  view_func=_relay_to_control(method, route), methods=[method])
 
         @self.app.route('/models/logs/stream', methods=['GET'])
         def models_logs_stream():
@@ -725,14 +716,9 @@ class AppContext:
                 },
             )
 
-        @self.app.route('/models/load', methods=['POST'])
-        def models_load():
-            name = (request.get_json(silent=True) or {}).get('name', '')
-            return _proxy_control('POST', '/control/load', 600, {'name': name})
-
         @self.app.route('/models/asr', methods=['POST'])
         def models_asr():
-            # Not _proxy_control: the response body carries the name the server
+            # Not a plain relay: the response body carries the name the server
             # actually served the model under, and transcription must follow it.
             name = (request.get_json(silent=True) or {}).get('name', '')
             try:
@@ -751,34 +737,6 @@ class AppContext:
                 logging.info("Active ASR model is now %r", active)
             return Response(resp.content, status=resp.status_code,
                             mimetype='application/json')
-
-        @self.app.route('/models/unload', methods=['POST'])
-        def models_unload():
-            name = (request.get_json(silent=True) or {}).get('name', '')
-            return _proxy_control('POST', '/control/unload', 60, {'name': name})
-
-        @self.app.route('/models/delete', methods=['POST'])
-        def models_delete():
-            name = (request.get_json(silent=True) or {}).get('name', '')
-            return _proxy_control('POST', '/control/delete', 120, {'name': name})
-
-        @self.app.route('/benchmark/run', methods=['POST'])
-        def benchmark_run():
-            body = request.get_json(silent=True) or {}
-            return _proxy_control('POST', '/control/benchmark', 30, {
-                'num_samples': body.get('num_samples', 5),
-                'max_new_tokens': body.get('max_new_tokens', 128),
-                'prompt': body.get('prompt', ''),
-                'model': body.get('model', ''),
-            })
-
-        @self.app.route('/benchmark/status', methods=['GET'])
-        def benchmark_status():
-            return _proxy_control('GET', '/control/benchmark/status', 10)
-
-        @self.app.route('/benchmark/stop', methods=['POST'])
-        def benchmark_stop():
-            return _proxy_control('POST', '/control/benchmark/stop', 10)
 
         @self.app.route('/shutdown', methods=['POST'])
         def shutdown_studio():
@@ -802,18 +760,6 @@ class AppContext:
                     os._exit(0)
             threading.Thread(target=_shutdown, name="gui-shutdown", daemon=True).start()
             return jsonify({'status': 'shutting-down'})
-
-        @self.app.route('/models/card', methods=['GET'])
-        def models_card():
-            name = request.args.get('name', '')
-            try:
-                resp = requests.get(
-                    _control_url('/control/card'), params={'name': name}, timeout=15
-                )
-                return Response(resp.content, status=resp.status_code, mimetype='application/json')
-            except requests.RequestException as exc:
-                logging.warning("Control API model-card request failed: %s", exc)
-                return jsonify({'error': 'control API unreachable'}), 502
 
         @self.app.route('/models/hub/search', methods=['GET'])
         def models_hub_search():

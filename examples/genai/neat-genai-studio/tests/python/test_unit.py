@@ -88,6 +88,7 @@ from backend_mode_suite import (  # noqa: E402,F401
     BackendPathTests,
     CorsPolicyTests as BackendCorsPolicyTests,
     HealthPayloadTests as BackendHealthPayloadTests,
+    ControlRelayTests as BackendControlRelayTests,
 )
 from supertonic_tts_suite import (  # noqa: E402,F401
     ClientConfigurationTests as SupertonicClientConfigurationTests,
