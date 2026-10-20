@@ -1,11 +1,17 @@
 """Backend-only mode policy (backend_mode.py): served paths, CORS allowlist,
-headers and the /health payload. Pure Python: no Flask."""
+headers, the /health payload and the routes relayed to the control API. Pure
+Python: no Flask."""
 
 from __future__ import annotations
 
+import json
 import unittest
+import urllib.parse
+import urllib.request
 
 from backend_mode import (
+    CONTROL_ROUTES,
+    control_payload,
     cors_headers,
     cors_path,
     effective_cors_setting,
@@ -130,3 +136,71 @@ class HealthPayloadTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class _RecordingManager:
+    """The control API's manager, recording what each request asked for."""
+
+    def __init__(self):
+        self.calls = []
+
+    def __getattr__(self, name):
+        def call(*args, **kwargs):
+            self.calls.append((name, args, kwargs))
+            return {"ok": name}
+        return call
+
+
+class ControlRelayTests(unittest.TestCase):
+    # A request to each relayed route, and the control API call it must reach.
+    CASES = {
+        ("GET", "/models/status"): ({}, ("status", (), {})),
+        ("GET", "/models/catalog"): ({}, ("scan_catalog", (), {})),
+        ("GET", "/models/logs"): ({"after": "7"}, ("load_logs", (7,), {})),
+        ("GET", "/models/card"): ({"name": "m"}, ("model_card", ("m",), {})),
+        ("POST", "/models/load"): ({"name": "m"}, ("load", ("m",), {})),
+        ("POST", "/models/unload"): ({"name": "m"}, ("unload", ("m",), {})),
+        ("POST", "/models/delete"): ({"name": "m"}, ("delete", ("m",), {})),
+        ("POST", "/benchmark/run"): (
+            {"num_samples": 2, "prompt": "p"},
+            ("benchmark_start", (), {"num_samples": 2, "max_new_tokens": 128, "prompt": "p", "model": ""})),
+        ("GET", "/benchmark/status"): ({}, ("benchmark_status", (), {})),
+        ("POST", "/benchmark/stop"): (None, ("benchmark_stop", (), {})),
+    }
+
+    def test_every_relayed_route_is_served_and_open_to_cors(self):
+        self.assertEqual(set(CONTROL_ROUTES), set(self.CASES))
+        for method, route in CONTROL_ROUTES:
+            self.assertIn(method, ("GET", "POST"))
+            self.assertTrue(path_allowed(route), route)
+            self.assertTrue(cors_path(route), route)
+
+    def test_get_relays_the_query_and_post_the_json_object(self):
+        self.assertEqual(control_payload("GET", [("after", "3"), ("x", "y")], None),
+                         ([("after", "3"), ("x", "y")], None))
+        self.assertEqual(control_payload("POST", [("q", "1")], {"name": "m"}), (None, {"name": "m"}))
+        self.assertEqual(control_payload("POST", [], None), (None, {}))
+        for body in (["m"], "m", 3):
+            with self.assertRaises(ValueError):
+                control_payload("POST", [], body)
+
+    def test_each_route_reaches_its_control_api_handler(self):
+        from server.control_api import serve_control_api
+
+        manager = _RecordingManager()
+        server = serve_control_api(manager, "127.0.0.1", 0)
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+        for (method, route), (target, _timeout) in CONTROL_ROUTES.items():
+            with self.subTest(route=route):
+                sent, expected = self.CASES[(method, route)]
+                query = list(sent.items()) if method == "GET" else []
+                params, body = control_payload(method, query, None if method == "GET" else sent)
+                url = base + target + ("?" + urllib.parse.urlencode(params) if params else "")
+                data = json.dumps(body).encode() if body is not None else None
+                req = urllib.request.Request(url, data=data, method=method,
+                                             headers={"Content-Type": "application/json"})
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    self.assertEqual(resp.status, 200)
+                self.assertEqual(manager.calls[-1], expected)

@@ -129,6 +129,38 @@ def cors_headers(origin: str, request_headers: str | None = None) -> dict:
     }
 
 
+# Routes the backend relays to the model server's control API as they are: the
+# query (GET) or JSON object (POST) goes through, the reply comes back unchanged,
+# and the control API applies the defaults. The control API is plain HTTP on
+# loopback while Insight is an HTTPS origin, hence the relay.
+# (method, backend path) -> (control API path, timeout in seconds)
+CONTROL_ROUTES = {
+    ("GET", "/models/status"): ("/control/status", 10),
+    ("GET", "/models/catalog"): ("/control/catalog", 30),
+    ("GET", "/models/logs"): ("/control/logs", 10),
+    ("GET", "/models/card"): ("/control/card", 15),
+    ("POST", "/models/load"): ("/control/load", 600),
+    ("POST", "/models/unload"): ("/control/unload", 60),
+    ("POST", "/models/delete"): ("/control/delete", 120),
+    ("POST", "/benchmark/run"): ("/control/benchmark", 30),
+    ("GET", "/benchmark/status"): ("/control/benchmark/status", 10),
+    ("POST", "/benchmark/stop"): ("/control/benchmark/stop", 10),
+}
+
+
+def control_payload(method: str, query: Iterable, body) -> tuple:
+    """(params, json) for relaying a request to the control API: the query
+    pairs for GET; for POST the JSON object, or {} without a body. Raises
+    ValueError for a POST body that is not a JSON object."""
+    if method == "GET":
+        return list(query), None
+    if body is None:
+        return None, {}
+    if not isinstance(body, dict):
+        raise ValueError("Request body must be a JSON object")
+    return None, body
+
+
 # Version of the backend API that integrating front ends (Insight) build on.
 # Bump it on a breaking change to a route or payload they use.
 API_VERSION = 1
