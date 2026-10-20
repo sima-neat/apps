@@ -106,10 +106,15 @@ lists them all):
   `./.venv-supertonic`).
 - `WEB_HOST`, `WEB_PORT`, `WEB_HTTPS`, `WEB_CORS_ORIGINS`: the backend's address
   and CORS allowlist written to `app.web`.
+- `SETUP_RAG`: install document search ([RAG](#rag)), default `1`. On a board
+  short on disk space or memory, `SETUP_RAG=0` skips CPU PyTorch, the RAG
+  packages, the embedding model and the default database, and writes
+  `app.rag.enabled: false`; everything else works as usual.
 
 Re-running `setup.sh` (for example to add a model or voice) regenerates
-`config.local.yaml` but keeps your `app.web` settings and the Supertonic paths;
-the previous file is saved as `config.local.yaml.bak`.
+`config.local.yaml` but keeps your `app.web` settings, the Supertonic paths and
+whether RAG is installed (`app.rag.enabled`); the previous file is saved as
+`config.local.yaml.bak`.
 
 ## Configure
 Most users change nothing. `setup.sh` writes `config.local.yaml` from the
@@ -122,7 +127,9 @@ only to change:
 - `server.models.asr`: the speech-to-text model active at startup. Models from Hugging Face accounts other than `simaai` are named `<org>@<name>`, for example `florianvoss@whisper-small-a16w8-layered-encoder`.
 - `server.hub.allow_download`: whether models may be downloaded from Hugging Face.
 - `app.request.max_tokens`: the default response length for chat requests that do not set `max_tokens`.
-- `app.rag.enabled`: retrieval-augmented search.
+- `app.rag.enabled`: retrieval-augmented search. Turning it on after a
+  `SETUP_RAG=0` install needs the RAG packages: run
+  `SETUP_RAG=1 ${APP_DIR}/setup.sh` instead.
 - `app.web`: the backend's host, port (default `5000`), HTTPS setting, and
   `cors_origins` (see [CORS](#cors-for-other-browser-front-ends)).
 
@@ -334,7 +341,8 @@ environment of `run.sh`.
 RAG is enabled by default after `setup.sh`, which builds
 `src/python/ui/milvus.db` (and `milvus.meta.json`) from the bundled
 `src/common/rag/neat.md`. The backend starts the search service when the
-database exists.
+database exists. A `SETUP_RAG=0` install leaves RAG off and the RAG requests
+below answer 409; `SETUP_RAG=1 ${APP_DIR}/setup.sh` adds it later.
 
 `POST /v1/chat/completions` answers from the documents when the request adds
 `"neat_rag": true`, or `{"k": 5}` for the number of passages (1 to 10, default
