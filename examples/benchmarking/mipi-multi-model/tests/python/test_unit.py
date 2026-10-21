@@ -533,3 +533,106 @@ def test_insight_labels_ship_with_the_example() -> None:
     module = load_module()
     assert module.DEFAULT_LABELS.parent == EXAMPLE_DIR / "src" / "common"
     assert module.load_labels()[0] == "person"
+
+
+def fake_tensor(values):
+    import numpy as np
+
+    array = np.asarray(values)
+    return SimpleNamespace(shape=array.shape, to_numpy=lambda copy=True: array)
+
+
+class RecordingSender:
+    def __init__(self) -> None:
+        self.sent = []
+
+    def send_metadata(self, metadata_type, data_json, timestamp_ms, frame_id) -> None:
+        self.sent.append((metadata_type, json.loads(data_json), timestamp_ms, frame_id))
+
+
+def insight_sample():
+    return SimpleNamespace(
+        tensor=None, tensors=["raw"], fields=[], pts_ns=2_500_000_000, frame_id=7
+    )
+
+
+@pytest.mark.unit
+def test_detection_metadata_is_sent_as_clamped_insight_objects() -> None:
+    module = load_module()
+    rows = [[-10.0, 20.0, 2000.0, 300.0, 0.9, 0.0], [100.0, 100.0, 200.0, 250.0, 0.6, 999.0]]
+    fake = SimpleNamespace(decode_bbox=lambda tensors: [fake_tensor(rows)])
+    sender = RecordingSender()
+
+    count = module.send_insight_metadata(
+        sender, fake, module.profile_named("detect"), insight_sample(), ["person"]
+    )
+
+    assert count == 2
+    assert sender.sent == [
+        (
+            "object-detection",
+            {
+                "objects": [
+                    {"id": "obj_1", "label": "person", "confidence": pytest.approx(0.9),
+                     "bbox": [0.0, 20.0, 1920.0, 280.0]},
+                    {"id": "obj_2", "label": "unknown", "confidence": pytest.approx(0.6),
+                     "bbox": [100.0, 100.0, 100.0, 150.0]},
+                ]
+            },
+            2500,
+            "7",
+        )
+    ]
+
+
+@pytest.mark.unit
+def test_segmentation_metadata_sends_mask_polygons_in_frame_coordinates() -> None:
+    import numpy as np
+
+    module = load_module()
+    # A 640x640 letterboxed model with stride-4 masks: frame (480, 270)-(1440, 810)
+    # maps to mask columns 40-120 and rows 57.5-102.5.
+    mask = np.zeros((1, 160, 160), dtype=np.uint8)
+    mask[0, 58:102, 40:120] = 255
+    decoded = SimpleNamespace(
+        boxes=fake_tensor([[480.0, 270.0, 1440.0, 810.0, 0.8, 0.0]]),
+        masks=fake_tensor(mask),
+    )
+    fake = SimpleNamespace(decode_segmentation=lambda tensors, **kwargs: [decoded])
+    sender = RecordingSender()
+
+    count = module.send_insight_metadata(
+        sender, fake, module.profile_named("segment"), insight_sample(), ["person"]
+    )
+
+    assert count == 1
+    metadata_type, data, timestamp_ms, frame_id = sender.sent[0]
+    assert (metadata_type, timestamp_ms, frame_id) == ("segmentation", 2500, "7")
+    segment = data["segments"][0]
+    assert segment["label"] == "person"
+    assert segment["bbox"] == [480, 270, 960, 540]
+    assert segment["mask_format"] == "polygon"
+    polygon = np.asarray(segment["mask"])
+    assert len(polygon) >= 4
+    assert polygon[:, 0].min() >= 480 and polygon[:, 0].max() <= 1440
+    assert polygon[:, 1].min() >= 270 and polygon[:, 1].max() <= 810
+    assert polygon[:, 0].max() - polygon[:, 0].min() > 900
+    assert polygon[:, 1].max() - polygon[:, 1].min() > 500
+
+
+@pytest.mark.unit
+def test_segment_encoding_keeps_strongest_masks_within_udp_budget() -> None:
+    module = load_module()
+    polygon = [[index, index] for index in range(400)]
+    segments = [
+        {"id": f"seg_{index}", "label": "person", "confidence": index / 100,
+         "bbox": [0, 0, 1, 1], "mask_format": "polygon", "mask": polygon}
+        for index in range(20)
+    ]
+
+    data_json, count = module.encode_segments(segments)
+
+    assert 0 < count < len(segments)
+    assert len(data_json) <= module.METADATA_BYTE_BUDGET
+    kept = json.loads(data_json)["segments"]
+    assert [item["id"] for item in kept] == [f"seg_{index}" for index in range(19, 19 - count, -1)]
