@@ -39,6 +39,11 @@ class AppConfig:
     model_path: Path
     frames: int
     timeout_ms: int
+    insight_host: str
+    insight_video_port: int
+    insight_metadata_port: int
+    insight_channel: int
+    insight_bitrate_kbps: int
 
 
 def _mapping(value, name: str) -> dict:
@@ -64,12 +69,16 @@ def load_config(path: Path) -> AppConfig:
 
     model = _mapping(root.get("model"), "model")
     runtime = _mapping(root.get("runtime"), "runtime")
+    insight = _mapping(root.get("insight"), "insight")
     profile_value = model.get("profile", "detect")
     path_value = model.get("path", "")
     if not isinstance(profile_value, str):
         raise TypeError("model.profile must be a string")
     if not isinstance(path_value, str):
         raise TypeError("model.path must be a string")
+    insight_host = insight.get("host", "")
+    if not isinstance(insight_host, str):
+        raise TypeError("insight.host must be a string")
 
     profile = profile_named(profile_value)
     model_path = Path(path_value) if path_value.strip() else DEFAULT_MODELS_DIR / profile.archive
@@ -78,6 +87,11 @@ def load_config(path: Path) -> AppConfig:
         model_path=model_path,
         frames=_positive_integer(runtime.get("frames", 5), "runtime.frames"),
         timeout_ms=_positive_integer(runtime.get("timeout_ms", 30_000), "runtime.timeout_ms"),
+        insight_host=insight_host,
+        insight_video_port=insight.get("video_port", 9000),
+        insight_metadata_port=insight.get("metadata_port", 9100),
+        insight_channel=insight.get("channel", 0),
+        insight_bitrate_kbps=insight.get("bitrate_kbps", 2500),
     )
 
 
@@ -460,6 +474,10 @@ def require_strict_zero_copy(backend: str) -> None:
         raise RuntimeError("camera bridge permits a CPU copy")
 
 
+def _override(value, fallback):
+    return fallback if value is None else value
+
+
 def _apply_overrides(config: AppConfig, args) -> AppConfig:
     profile = profile_named(args.profile) if args.profile else config.profile
     model_path = args.model or (
@@ -471,8 +489,13 @@ def _apply_overrides(config: AppConfig, args) -> AppConfig:
         config,
         profile=profile,
         model_path=model_path,
-        frames=args.frames if args.frames is not None else config.frames,
-        timeout_ms=args.timeout_ms if args.timeout_ms is not None else config.timeout_ms,
+        frames=_override(args.frames, config.frames),
+        timeout_ms=_override(args.timeout_ms, config.timeout_ms),
+        insight_host=_override(args.insight_host, config.insight_host),
+        insight_video_port=_override(args.insight_video_port, config.insight_video_port),
+        insight_metadata_port=_override(args.insight_metadata_port, config.insight_metadata_port),
+        insight_channel=_override(args.insight_channel, config.insight_channel),
+        insight_bitrate_kbps=_override(args.insight_bitrate_kbps, config.insight_bitrate_kbps),
     )
 
 
@@ -485,11 +508,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--continuous", action="store_true")
     parser.add_argument("--timeout-ms", type=int)
     parser.add_argument("--describe", action="store_true", help="print the negotiated backend")
-    parser.add_argument("--insight-host", default="")
-    parser.add_argument("--insight-video-port", type=int, default=9000)
-    parser.add_argument("--insight-metadata-port", type=int, default=9100)
-    parser.add_argument("--insight-channel", type=int, default=0)
-    parser.add_argument("--insight-bitrate-kbps", type=int, default=2500)
+    parser.add_argument("--insight-host")
+    parser.add_argument("--insight-video-port", type=int)
+    parser.add_argument("--insight-metadata-port", type=int)
+    parser.add_argument("--insight-channel", type=int)
+    parser.add_argument("--insight-bitrate-kbps", type=int)
     parser.add_argument("--list-profiles", action="store_true")
     parser.add_argument("--validate-config-only", action="store_true")
     parser.add_argument("--validate-model-only", action="store_true")
@@ -505,13 +528,14 @@ def main(argv: list[str] | None = None) -> int:
         _positive_integer(config.frames, "frames")
         _positive_integer(config.timeout_ms, "timeout-ms")
         for name, value in (
-            ("insight-video-port", args.insight_video_port),
-            ("insight-metadata-port", args.insight_metadata_port),
-            ("insight-bitrate-kbps", args.insight_bitrate_kbps),
+            ("insight-video-port", config.insight_video_port),
+            ("insight-metadata-port", config.insight_metadata_port),
+            ("insight-bitrate-kbps", config.insight_bitrate_kbps),
         ):
             _positive_integer(value, name)
-        if args.insight_channel < 0:
-            raise ValueError("insight-channel must not be negative")
+        channel = config.insight_channel
+        if isinstance(channel, bool) or not isinstance(channel, int) or channel < 0:
+            raise ValueError("insight-channel must be a non-negative integer")
         if args.validate_config_only:
             print(f"config valid: {args.config}")
             return 0
@@ -532,10 +556,10 @@ def main(argv: list[str] | None = None) -> int:
             pyneat,
             config.profile,
             package,
-            insight_host=args.insight_host,
-            insight_video_port=args.insight_video_port,
-            insight_channel=args.insight_channel,
-            insight_bitrate_kbps=args.insight_bitrate_kbps,
+            insight_host=config.insight_host,
+            insight_video_port=config.insight_video_port,
+            insight_channel=config.insight_channel,
+            insight_bitrate_kbps=config.insight_bitrate_kbps,
         )
         if args.describe:
             print(graph.describe_backend(False))
@@ -548,18 +572,18 @@ def main(argv: list[str] | None = None) -> int:
         run_options.advanced.copy_input = False
         metadata_sender = None
         labels = []
-        if args.insight_host:
+        if config.insight_host:
             labels = load_labels()
             metadata_sender = make_metadata_sender(
                 pyneat,
-                args.insight_host,
-                args.insight_metadata_port,
-                args.insight_channel,
+                config.insight_host,
+                config.insight_metadata_port,
+                config.insight_channel,
             )
             print(
-                f"insight={args.insight_host} channel={args.insight_channel} "
-                f"video={args.insight_video_port + args.insight_channel} "
-                f"metadata={args.insight_metadata_port + args.insight_channel}"
+                f"insight={config.insight_host} channel={config.insight_channel} "
+                f"video={config.insight_video_port + config.insight_channel} "
+                f"metadata={config.insight_metadata_port + config.insight_channel}"
             )
         run = graph.build(run_options)
         try:
@@ -595,7 +619,7 @@ def main(argv: list[str] | None = None) -> int:
         finally:
             run.close()
 
-        destination = " + Insight" if args.insight_host else ""
+        destination = " + Insight" if config.insight_host else ""
         print(
             f"PASS strict-zero-copy MIPI -> {config.profile.title} -> "
             f"{OUTPUT_NAME}{destination}"

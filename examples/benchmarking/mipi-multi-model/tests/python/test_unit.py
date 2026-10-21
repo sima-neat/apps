@@ -85,9 +85,74 @@ def test_help_and_profile_listing_do_not_import_pyneat() -> None:
 def test_default_config_is_minimal_and_valid() -> None:
     module = load_module()
     raw = yaml.safe_load(DEFAULT_CONFIG.read_text(encoding="utf-8"))
-    assert set(raw) == {"model", "runtime"}
+    assert set(raw) == {"model", "runtime", "insight"}
     assert set(raw["model"]) == {"profile", "path"}
+    assert raw["insight"]["host"] == ""
     assert module.main(["--config", str(DEFAULT_CONFIG), "--validate-config-only"]) == 0
+
+
+@pytest.mark.unit
+def test_insight_settings_come_from_config_with_cli_overrides(tmp_path: Path) -> None:
+    module = load_module()
+    raw = yaml.safe_load(DEFAULT_CONFIG.read_text(encoding="utf-8"))
+    raw["insight"] = {
+        "host": "192.168.1.127",
+        "video_port": 9200,
+        "metadata_port": 9300,
+        "channel": 2,
+        "bitrate_kbps": 4000,
+    }
+    config = tmp_path / "config.yaml"
+    config.write_text(yaml.safe_dump(raw), encoding="utf-8")
+
+    loaded = module.load_config(config)
+    assert (
+        loaded.insight_host,
+        loaded.insight_video_port,
+        loaded.insight_metadata_port,
+        loaded.insight_channel,
+        loaded.insight_bitrate_kbps,
+    ) == ("192.168.1.127", 9200, 9300, 2, 4000)
+
+    args = SimpleNamespace(
+        profile=None,
+        model=None,
+        frames=None,
+        timeout_ms=None,
+        insight_host="10.0.0.5",
+        insight_video_port=None,
+        insight_metadata_port=None,
+        insight_channel=0,
+        insight_bitrate_kbps=None,
+    )
+    merged = module._apply_overrides(loaded, args)
+    assert (merged.insight_host, merged.insight_video_port, merged.insight_channel) == (
+        "10.0.0.5",
+        9200,
+        0,
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("insight", "message"),
+    [
+        ({"host": 5}, "insight.host must be a string"),
+        ({"video_port": 0}, "insight-video-port must be a positive integer"),
+        ({"channel": -1}, "insight-channel must be a non-negative integer"),
+    ],
+)
+def test_invalid_insight_config_is_rejected(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], insight: dict, message: str
+) -> None:
+    module = load_module()
+    raw = yaml.safe_load(DEFAULT_CONFIG.read_text(encoding="utf-8"))
+    raw["insight"].update(insight)
+    config = tmp_path / "config.yaml"
+    config.write_text(yaml.safe_dump(raw), encoding="utf-8")
+
+    assert module.main(["--config", str(config), "--validate-config-only"]) == 2
+    assert message in capsys.readouterr().err
 
 
 @pytest.mark.unit

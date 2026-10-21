@@ -81,7 +81,7 @@ Each profile reads `models/<model package>` by default.
 
 ## Configure
 
-Open `${APP_DIR}/src/common/config.yaml`. Change only `model.profile`; set `model.path` only when using a package outside `models/`. `runtime.frames` controls how many results are pulled.
+Open `${APP_DIR}/src/common/config.yaml`. Change only `model.profile`; set `model.path` only when using a package outside `models/`. `runtime.frames` controls how many results are pulled. Set `insight.host` to stream detection or segmentation to Insight; `insight.video_port`, `insight.metadata_port`, `insight.channel`, and `insight.bitrate_kbps` select the destination. Each setting has a command-line override, such as `--insight-host`.
 
 The camera path captures 1920x1080 NV12 at 30 FPS. Neat owns MPK parsing, model compatibility, decoding, and the EV74 preprocessing/postprocessing stages.
 
@@ -115,7 +115,7 @@ python3 ${APP_DIR}/src/python/main.py \
   --profile pose
 ```
 
-Stream YOLO26 detection or segmentation to Insight:
+Stream YOLO26 detection or segmentation to Insight, using the `insight` settings from the configuration or these overrides:
 
 ```bash
 python3 ${APP_DIR}/src/python/main.py \

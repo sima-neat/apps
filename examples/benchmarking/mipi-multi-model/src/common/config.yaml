@@ -7,3 +7,11 @@ model:
 runtime:
   frames: 5
   timeout_ms: 30000
+
+insight:
+  # Leave empty to run without Insight; detect and segment can stream to it.
+  host: ""
+  video_port: 9000
+  metadata_port: 9100
+  channel: 0
+  bitrate_kbps: 2500

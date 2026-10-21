@@ -22,6 +22,7 @@ def require_strict_zero_copy(backend: str) -> None:
     spec = importlib.util.spec_from_file_location("mipi_multi_model_e2e", MAIN_PY)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     module.require_strict_zero_copy(backend)
 
