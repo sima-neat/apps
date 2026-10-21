@@ -4,7 +4,7 @@ The suites live beside this module as ``*_suite.py`` (deliberately not
 ``test_*.py``, so an ad-hoc ``pytest`` over the tree does not collect them a
 second time). The installed bundle packages ``src/python`` wholesale, so tests
 must not live there. This module is what the repository harness collects: it
-puts ``src/python`` and ``src/python/ui`` on the path, re-exports the TestCase
+puts ``src/python`` and ``src/python/api`` on the path, re-exports the TestCase
 classes, and marks them as unit coverage so ``./tests/test.sh --unit`` runs
 them. Run one suite in place with ``python -m unittest asr_switching_suite``
 from this directory (with the same two paths on PYTHONPATH).
@@ -27,13 +27,13 @@ SRC_PYTHON = EXAMPLE_DIR / "src" / "python"
 if str(SRC_PYTHON) not in sys.path:
     sys.path.insert(0, str(SRC_PYTHON))
 
-UI_PYTHON = SRC_PYTHON / "ui"
-if str(UI_PYTHON) not in sys.path:
-    sys.path.insert(0, str(UI_PYTHON))   # the ui suites import their modules bare
+API_PYTHON = SRC_PYTHON / "api"
+if str(API_PYTHON) not in sys.path:
+    sys.path.insert(0, str(API_PYTHON))   # the api suites import their modules bare
 
-TTS_PYTHON = UI_PYTHON / "tts"
+TTS_PYTHON = API_PYTHON / "tts"
 if str(TTS_PYTHON) not in sys.path:
-    sys.path.insert(0, str(TTS_PYTHON))  # TTS engines/workers/catalog live in ui/tts
+    sys.path.insert(0, str(TTS_PYTHON))  # TTS engines/workers/catalog live in api/tts
 
 TESTS_DIR = Path(__file__).resolve().parent
 if str(TESTS_DIR) not in sys.path:
@@ -47,18 +47,25 @@ from asr_switching_suite import (  # noqa: E402
     MlaFailureClassificationTests,
 )
 from hub_security_suite import HubPathSecurityTests  # noqa: E402,F401
-from cli_think_suite import (  # noqa: E402,F401
-    NoThinkRewriteTests as CliNoThinkRewriteTests,
-    StreamTokenCountTests as CliStreamTokenCountTests,
-    ThinkSplitterTests as CliThinkSplitterTests,
-)
 from asr_metadata_suite import AsrMetadataTests  # noqa: E402,F401
+from board_camera_suite import ResolveCameraNodeTests  # noqa: E402,F401
 from talk_controller_suite import SupertonicRetryTests  # noqa: E402,F401
+from rag_chat_suite import (  # noqa: E402,F401
+    ChatRequestShapeTests,
+    RagEventLoopTests,
+    RagContextBudgetTests,
+    RagOptionTests,
+    RagPassageTests,
+    RagQuestionTests,
+    RagSearchFailedTests,
+    RagServedDatabaseTests,
+    RagServiceIdentityTests,
+    RagServiceWaitTests,
+)
 from readme_package_suite import (  # noqa: E402,F401
     LauncherPackagePathsTests,
     ReadmePackagePathsTests,
 )
-from studio_client_suite import NoThinkTransformTests  # noqa: E402,F401
 from worker_ipc_suite import (  # noqa: E402,F401
     ReadExactTests,
     ReadFrameTests,
@@ -71,14 +78,18 @@ from audio_api_suite import (  # noqa: E402,F401
     VoicesListingTests as AudioApiVoicesListingTests,
 )
 from shell_config_suite import (  # noqa: E402,F401
+    LegacyUiDirMigrationTests,
     ServerConfigWithoutPyyamlTests,
     ShellConfigValueTests,
+    ShellRagConfigTests,
     ShellWebConfigTests,
 )
+from setup_rag_suite import SetupRagSwitchTests  # noqa: E402,F401
 from backend_mode_suite import (  # noqa: E402,F401
     BackendPathTests,
     CorsPolicyTests as BackendCorsPolicyTests,
     HealthPayloadTests as BackendHealthPayloadTests,
+    ControlRelayTests as BackendControlRelayTests,
 )
 from supertonic_tts_suite import (  # noqa: E402,F401
     ClientConfigurationTests as SupertonicClientConfigurationTests,
@@ -87,6 +98,12 @@ from supertonic_tts_suite import (  # noqa: E402,F401
     SegmentTextTests as SupertonicSegmentTextTests,
     VendoredRuntimeTests as SupertonicVendoredRuntimeTests,
 )
+from supertonic_platform3_suite import (  # noqa: E402,F401
+    BatchAxisTests as SupertonicBatchAxisTests,
+    NumpyPinTests as SupertonicNumpyPinTests,
+    PyneatLinkTests as SupertonicPyneatLinkTests,
+    VectorEstimatorTests as SupertonicVectorEstimatorTests,
+)
 from voice_catalog_suite import (  # noqa: E402,F401
     test_catalog_has_simple_licenses_and_pinned_sources,
     test_catalog_rejects_blocked_license,
@@ -94,6 +111,7 @@ from voice_catalog_suite import (  # noqa: E402,F401
     test_korean_has_no_server_install_plan,
     test_only_cc_by_nc_sa_voices_are_excluded,
     test_optional_voices_require_explicit_selection,
+    test_repair_completes_only_partly_installed_voices,
 )
 
 # Applies to every TestCase collected from this module.
@@ -102,19 +120,19 @@ pytestmark = pytest.mark.unit
 
 @pytest.mark.unit
 def test_ui_config_reads_backend_settings(tmp_path) -> None:
-    """app.web.headless and the persisted backend CORS allowlist (string or list)."""
+    """The persisted backend CORS allowlist (string or list)."""
     from shared.config import load_ui_config
 
     plain = tmp_path / "plain.yaml"
     plain.write_text("app:\n  web:\n    port: 5000\n", encoding="utf-8")
     cfg = load_ui_config(plain, tmp_path)
-    assert (cfg.web.headless, cfg.web.cors_origins) == (False, "")
+    assert cfg.web.cors_origins == ""
 
     text = tmp_path / "text.yaml"
-    text.write_text('app:\n  web:\n    port: 5000\n    headless: true\n'
+    text.write_text('app:\n  web:\n    port: 5000\n'
                     '    cors_origins: "http://a:3000, https://b"\n', encoding="utf-8")
     cfg = load_ui_config(text, tmp_path)
-    assert (cfg.web.headless, cfg.web.cors_origins) == (True, "http://a:3000, https://b")
+    assert cfg.web.cors_origins == "http://a:3000, https://b"
 
     listed = tmp_path / "list.yaml"
     listed.write_text("app:\n  web:\n    port: 5000\n    cors_origins:\n      - http://a:3000\n      - '*'\n",
@@ -185,14 +203,10 @@ __all__ = [
     "EncoderLayoutIsNotJudgedLocallyTests",
     "MlaFailureClassificationTests",
     "HubPathSecurityTests",
-    "CliNoThinkRewriteTests",
-    "CliStreamTokenCountTests",
-    "CliThinkSplitterTests",
     "AsrMetadataTests",
     "LauncherPackagePathsTests",
     "ReadmePackagePathsTests",
     "SupertonicRetryTests",
-    "NoThinkTransformTests",
     "ReadExactTests",
     "ReadFrameTests",
     "SendRequestTests",

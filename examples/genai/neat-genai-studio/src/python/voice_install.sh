@@ -2,8 +2,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CATALOG_TOOL="${SCRIPT_DIR}/ui/tts/voice_catalog.py"
-ASSETS_DIR="${SCRIPT_DIR}/ui/assets"
+CATALOG_TOOL="${SCRIPT_DIR}/api/tts/voice_catalog.py"
+ASSETS_DIR="${SCRIPT_DIR}/api/assets"
 
 # Comma- or space-separated ISO 639-1 codes. Korean intentionally has no
 # catalogued server-side voice and will remain browser/text-only.
@@ -24,4 +24,4 @@ if ! "${PYTHON}" -c "import onnx" >/dev/null 2>&1; then
   exit 1
 fi
 printf "\n🔪 Splitting Piper voices for streaming synthesis\n"
-"${PYTHON}" "${SCRIPT_DIR}/ui/tts/split_voices.py" "${ASSETS_DIR}"
+"${PYTHON}" "${SCRIPT_DIR}/api/tts/split_voices.py" "${ASSETS_DIR}"

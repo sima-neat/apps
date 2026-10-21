@@ -5,11 +5,11 @@ models:
     file: yolo26n-det-int8-b1.tar.gz
 unit:
   python: false
-  cpp: false
+  cpp: true
 e2e:
   python:
     enabled: false
     reason: This application is C++ only.
   cpp:
     enabled: false
-    reason: Requires a PCIe host/card pair, 16, 24, or 48 live RTSP sources, and Insight.
+    reason: Requires a PCIe host/card pair, 20, 30, or 60 live RTSP sources, and Insight.

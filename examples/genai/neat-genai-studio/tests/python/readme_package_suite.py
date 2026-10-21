@@ -35,7 +35,7 @@ PACKAGED_TOP = {
 
 # Paths the README legitimately names that setup.sh / run.sh create at install
 # or runtime, so they are absent from the packaged tree by design. Matched
-# against every path segment, so ``src/python/ui/milvus.db`` is covered too.
+# against every path segment, so ``src/python/api/milvus.db`` is covered too.
 GENERATED_TOP = {
     ".venv",
     ".venv-pipertts",

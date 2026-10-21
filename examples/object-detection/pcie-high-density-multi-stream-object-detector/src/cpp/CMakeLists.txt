@@ -12,6 +12,7 @@ include("${CMAKE_CURRENT_LIST_DIR}/../../../../../cmake/ExampleModule.cmake")
 
 sima_neat_apps_module(
   "pcie-high-density-multi-stream-object-detector"
+  UNIT_TEST
   OUTPUT_TARGET_VAR PCIE_HIGH_DENSITY_TARGET
 )
 

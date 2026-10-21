@@ -28,21 +28,18 @@ YOLOv5s-Face returns raw box and landmark outputs. The C++ and Python applicatio
 ## Preview
 ![Thermal face detector reference preview](../../../portal/assets/examples/face-detection/single-stream-thermal-face-detector/image.png)
 
-The reference visualization pairs a thermal stream with its visible-light
-source and shows face, eye, and mouth regions. The application publishes
-the five facial landmarks to Insight as labeled dots; it does not publish the
-reference visualization's boxes.
-
 ## Prerequisites
 
 - `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/))
-  on a supported Modalix or DevKit target.
+  on the Modalix DevKit, or in a Neat SDK container paired with it.
 - A running [Neat Insight](https://developer.sima.ai/software/tools/insight/)
   instance reachable from the target, with an RTSP source containing faces.
 - The model expects an 800x800 compiled canvas; its on-device preprocess accepts
   NV12, BGR, RGB, I420, or grayscale input up to 4096x4096.
 
 ## Install Apps
+
+Install on the Modalix DevKit, or under `/workspace` in a Neat SDK container paired with it. Only the example itself must run on the DevKit. If the Core and Insight selected by Apps are already installed, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps` to skip reinstalling them. See [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
 
 Install the latest Neat Apps runtime and enter the installed bundle:
 
@@ -160,6 +157,10 @@ Left at `0`, the live Insight stream is the success signal instead.
 Either way, `processed` reports frames pushed through the pipeline, not faces
 found, so a healthy count does not by itself confirm detections. Confirm those
 in Insight, which draws the five landmarks as labeled dots on the stream.
+
+The preview image is a reference visualization: it pairs the thermal stream
+with its visible-light source and draws face, eye, and mouth boxes. The
+application publishes only the five landmarks, not those boxes.
 
 ## Debugging Notes
 

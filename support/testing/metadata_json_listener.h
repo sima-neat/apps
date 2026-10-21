@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -31,6 +32,7 @@ struct MetadataJsonMessage {
 
 struct MetadataJsonListenerResult {
   bool success = false;
+  bool timed_out = false;
   std::vector<int> ports_with_valid_json;
   std::vector<MetadataJsonMessage> messages;
   std::string error;
@@ -57,6 +59,10 @@ public:
   // application itself calls it from the readiness callback of spawn_until() instead,
   // and reads `result.success` and `result.error` afterwards.
   bool poll_messages(MetadataJsonListenerResult& result, int poll_ms);
+
+  // Drain and validate datagrams already queued on the sockets. Incomplete
+  // chunk assemblies are discarded at the end of the drain.
+  MetadataJsonListenerResult drain_pending();
 
 private:
   struct SocketState;
