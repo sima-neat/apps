@@ -336,6 +336,56 @@ class TestE2E:
             f"{MAX_DEFECT_HIGHLIGHT:.0%} of pixels highlighted): {defect_bad}"
         )
 
+    def test_mixed_image_sizes_calibrate_and_score(
+        self,
+        e2e_model_path,
+        tmp_output_dir,
+        test_timeout_ms,
+        skip_unless_e2e_ready,
+        e2e_config_writer,
+    ):
+        """A folder whose images differ in size must calibrate and score every
+        image, with each overlay at its input image's size."""
+        import cv2
+
+        nominal = sorted(NOMINAL_DIR.glob("*.png"))[:4]
+        skip_unless_e2e_ready(len(nominal) == 4, f"need 4 nominal images under {NOMINAL_DIR}")
+        mixed_dir = tmp_output_dir.parent / "mixed"
+        mixed_dir.mkdir(parents=True, exist_ok=True)
+        sizes = [None, (448, 448), (320, 240), None]  # None keeps the original 224x224
+        for path, size in zip(nominal, sizes):
+            image = cv2.imread(str(path), cv2.IMREAD_COLOR)
+            if size is not None:
+                image = cv2.resize(image, size, interpolation=cv2.INTER_CUBIC)
+            cv2.imwrite(str(mixed_dir / path.name), image)
+
+        bank_path = tmp_output_dir.parent / "memory_bank.npy"
+        meta_path = tmp_output_dir.parent / "bank_meta.json"
+        config_path = e2e_config_writer(
+            {
+                "source": {"type": "image_dir", "image_dir": str(mixed_dir)},
+                "calibration": {"nominal_images_dir": str(mixed_dir), "threshold_images_dir": str(mixed_dir)},
+                "memory_bank": {"path": str(bank_path), "meta_path": str(meta_path)},
+                "output": {"dir": str(tmp_output_dir)},
+            }
+        )
+        timeout_s = test_timeout_ms / 1000
+        for args in (["--calibrate", "--config", str(config_path)], ["--config", str(config_path)]):
+            result = subprocess.run(
+                [sys.executable, str(MAIN_PY), *args],
+                capture_output=True, text=True, timeout=timeout_s, cwd=str(EXAMPLE_DIR),
+            )
+            assert result.returncode == 0, (
+                f"{args[0]} exited with code {result.returncode}\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
+
+        for path in sorted(mixed_dir.iterdir()):
+            src = cv2.imread(str(path), cv2.IMREAD_COLOR)
+            out = cv2.imread(str(tmp_output_dir / path.name), cv2.IMREAD_COLOR)
+            assert out is not None, f"no overlay for {path.name}"
+            assert out.shape == src.shape, f"{path.name}: overlay {out.shape} != input {src.shape}"
+
     def test_cpp_built_bank_scores_correctly_in_python(
         self,
         e2e_model_path,

@@ -46,6 +46,7 @@ BACKBONE = "wide_resnet50_2"
 TORCHVISION_WEIGHTS = "IMAGENET1K_V1"
 OVERLAY_LUT_LOW = 191  # COLORMAP_JET index where highlights start (yellow); 255 is red.
 PATCH_GRID = (28, 28)  # 224x224 input -> 28x28 patch grid, see the model's compile config
+MODEL_INPUT_SIZE = (224, 224)  # (width, height) of the compiled model input
 
 
 def time_ms() -> float:
@@ -235,6 +236,15 @@ def make_image_model(model_path: str) -> "pyneat.Model":
     return pyneat.Model(model_path, opt)
 
 
+def model_input_tensor(bgr) -> "pyneat.Tensor":
+    """Resizes a host-decoded frame to the model input before the model runs.
+    The model fixes its input size on the first frame it sees, so frames of
+    another size would otherwise time out."""
+    if (bgr.shape[1], bgr.shape[0]) != MODEL_INPUT_SIZE:
+        bgr = cv2.resize(bgr, MODEL_INPUT_SIZE, interpolation=cv2.INTER_AREA)
+    return rgb_tensor(bgr)
+
+
 def rgb_tensor(bgr) -> "pyneat.Tensor":
     rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
     return pyneat.Tensor.from_numpy(rgb, copy=True, image_format=pyneat.PixelFormat.RGB)
@@ -242,9 +252,8 @@ def rgb_tensor(bgr) -> "pyneat.Tensor":
 
 def extract_from_bgr(model: "pyneat.Model", bgr, timeout_ms: int = 5000) -> "np.ndarray":
     """Runs one host-decoded BGR image through the model and returns its (H, W, C)
-    patch embedding. Resize is whatever the compiled model's preprocess negotiates;
-    this only handles the BGR->RGB color swap `Model.run` needs."""
-    outputs = model.run([rgb_tensor(bgr)], timeout_ms=timeout_ms)
+    patch embedding."""
+    outputs = model.run([model_input_tensor(bgr)], timeout_ms=timeout_ms)
     if not outputs:
         raise RuntimeError("model returned no output tensors")
     return extract_hwc(np.asarray(outputs[0].to_numpy(copy=True)))
@@ -463,7 +472,7 @@ def cmd_score_video_file(cfg: AppConfig, bank: MemoryBank, threshold: float, num
 
     model = make_image_model(cfg.model_path)
     runner = model.build(
-        [rgb_tensor(frame)], route_options=pyneat.ModelRouteOptions(), run_options=pyneat.RunOptions()
+        [model_input_tensor(frame)], route_options=pyneat.ModelRouteOptions(), run_options=pyneat.RunOptions()
     )
     video_graph, video_run, video_port = build_video_sender(cfg, fps, width, height)
     print(f"streaming to Insight: {cfg.output.insight_host}:{video_port}")
@@ -477,7 +486,7 @@ def cmd_score_video_file(cfg: AppConfig, bank: MemoryBank, threshold: float, num
     try:
         while cfg.frames <= 0 or processed < cfg.frames:
             mla_start = time_ms()
-            outputs = runner.run([rgb_tensor(frame)], timeout_ms=cfg.timeout_ms)
+            outputs = runner.run([model_input_tensor(frame)], timeout_ms=cfg.timeout_ms)
             if not outputs:
                 raise RuntimeError("model returned no output tensors")
             embedding = extract_hwc(np.asarray(outputs[0].to_numpy(copy=True)))

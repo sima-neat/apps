@@ -35,6 +35,7 @@ constexpr int kEmbedDim = 1536;
 constexpr double kOverlayLutLow = 191.0; // COLORMAP_JET index where highlights start (yellow); 255 is red.
 constexpr int kPatchGridH = 28;
 constexpr int kPatchGridW = 28;
+const cv::Size kModelInputSize(224, 224); // compiled model input (width, height)
 constexpr const char* kBackbone = "wide_resnet50_2";
 constexpr const char* kTorchvisionWeights = "IMAGENET1K_V1";
 
@@ -279,9 +280,21 @@ simaai::neat::Tensor rgb_tensor(const cv::Mat& bgr) {
                                            simaai::neat::TensorMemory::EV74);
 }
 
+/// Resizes a host-decoded frame to the model input before the model runs. The
+/// model fixes its input size on the first frame it sees, so frames of another
+/// size would otherwise time out.
+simaai::neat::Tensor model_input_tensor(const cv::Mat& bgr) {
+  if (bgr.size() == kModelInputSize) {
+    return rgb_tensor(bgr);
+  }
+  cv::Mat resized;
+  cv::resize(bgr, resized, kModelInputSize, 0, 0, cv::INTER_AREA);
+  return rgb_tensor(resized);
+}
+
 patchcore::PatchEmbeddings extract_from_bgr(simaai::neat::Model& model, const cv::Mat& bgr,
                                             int timeout_ms) {
-  auto tensors = model.run(simaai::neat::TensorList{rgb_tensor(bgr)}, timeout_ms);
+  auto tensors = model.run(simaai::neat::TensorList{model_input_tensor(bgr)}, timeout_ms);
   if (tensors.empty()) {
     throw std::runtime_error("model returned no output tensors");
   }
@@ -516,7 +529,7 @@ int cmd_score_video_file(const Config& cfg, const patchcore::MemoryBank& bank, f
   const double fps = std::isfinite(input_fps) && input_fps > 0.0 ? input_fps : 30.0;
 
   simaai::neat::Model model(cfg.model_path, image_model_options());
-  auto runner = model.build(simaai::neat::TensorList{rgb_tensor(frame)});
+  auto runner = model.build(simaai::neat::TensorList{model_input_tensor(frame)});
   auto video_sender = build_video_sender(cfg, fps, width, height);
   std::cout << "streaming to Insight: " << cfg.insight_host << ":" << video_sender.port << "\n";
 
@@ -528,7 +541,7 @@ int cmd_score_video_file(const Config& cfg, const patchcore::MemoryBank& bank, f
   int write_failures = 0;
   while (cfg.frames <= 0 || processed < cfg.frames) {
     const double mla_start = time_ms();
-    auto tensors = runner.run(simaai::neat::TensorList{rgb_tensor(frame)}, cfg.timeout_ms);
+    auto tensors = runner.run(simaai::neat::TensorList{model_input_tensor(frame)}, cfg.timeout_ms);
     if (tensors.empty()) {
       throw std::runtime_error("model returned no output tensors");
     }

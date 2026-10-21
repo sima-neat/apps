@@ -102,7 +102,7 @@ python3 ${APP_DIR}/src/python/main.py \
   --config ${APP_DIR}/src/common/config.yaml
 ```
 
-Every processed image/frame prints its score, the configured threshold, and the pass/fail verdict. `image_dir` writes overlays to `output.dir` in which only regions scoring above the calibrated patch threshold are highlighted (yellow to red); normal regions are left unchanged; `video_file`/`rtsp` additionally stream the live overlay to Insight (`output.insight.host`/`video_port`) and, if `output.save_every > 0`, also save periodic snapshots to `output.dir`.
+Every processed image/frame prints its score, the configured threshold, and the pass/fail verdict. `image_dir` writes overlays to `output.dir` in which only regions scoring above the calibrated patch threshold are highlighted (yellow to red); normal regions are left unchanged; `video_file`/`rtsp` additionally stream the live overlay to Insight (`output.insight.host`/`video_port`) and, if you set `output.save_every` above 0 (off by default), also save every Nth overlay frame to `output.dir`. Saving has no limit, so on a long live run pick a large N or keep it off.
 
 ```
 assets/datasets/patchcore/images/plain_0.png: score=16.4049 threshold=18.7885 verdict=normal (mla=324.3ms host=20.0ms)

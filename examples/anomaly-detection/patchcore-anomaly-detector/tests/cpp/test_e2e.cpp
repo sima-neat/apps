@@ -7,6 +7,7 @@
 
 #include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
 #include <algorithm>
 #include <cstdlib>
 #include <filesystem>
@@ -554,6 +555,81 @@ int run_python_built_bank_scores_correctly_in_cpp(const std::string& binary,
   return 0;
 }
 
+// A folder whose images differ in size must calibrate and score every image,
+// with each overlay at its input image's size.
+int run_mixed_image_sizes_calibrate_and_score(const std::string& binary,
+                                              const std::string& model_path) {
+  const fs::path nominal_dir = "assets/datasets/patchcore/nominal";
+  std::vector<fs::path> nominal;
+  if (fs::exists(nominal_dir)) {
+    for (const auto& entry : fs::directory_iterator(nominal_dir)) {
+      if (entry.is_regular_file() && entry.path().extension() == ".png") {
+        nominal.push_back(entry.path());
+      }
+    }
+  }
+  std::sort(nominal.begin(), nominal.end());
+  if (nominal.size() < 4) {
+    return skip_or_fail("need 4 nominal images under " + nominal_dir.string());
+  }
+
+  auto out_dir =
+      create_test_output_dir("patchcore-anomaly-detector", "test_mixed_image_sizes_calibrate_and_score");
+  if (out_dir.empty())
+    return 1;
+  const fs::path run_dir = fs::path(out_dir).parent_path();
+  const fs::path mixed_dir = run_dir / "mixed";
+  fs::create_directories(mixed_dir);
+  const std::vector<cv::Size> sizes = {{0, 0}, {448, 448}, {320, 240}, {0, 0}};  // 0 keeps 224x224
+  for (std::size_t i = 0; i < sizes.size(); ++i) {
+    cv::Mat image = cv::imread(nominal[i].string(), cv::IMREAD_COLOR);
+    if (sizes[i].width > 0) {
+      cv::resize(image, image, sizes[i], 0, 0, cv::INTER_CUBIC);
+    }
+    cv::imwrite((mixed_dir / nominal[i].filename()).string(), image);
+  }
+
+  const fs::path config_path = run_dir / "config.yaml";
+  write_e2e_config("patchcore-anomaly-detector", config_path,
+                   {
+                       {"model.path", model_path},
+                       {"source.type", "image_dir"},
+                       {"source.image_dir", mixed_dir.string()},
+                       {"calibration.nominal_images_dir", mixed_dir.string()},
+                       {"calibration.threshold_images_dir", mixed_dir.string()},
+                       {"memory_bank.path", (run_dir / "memory_bank.npy").string()},
+                       {"memory_bank.meta_path", (run_dir / "bank_meta.json").string()},
+                       {"output.dir", out_dir},
+                   });
+  const int timeout = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
+
+  int rc = 0;
+  for (const auto& args : std::vector<std::vector<std::string>>{
+           {"--calibrate", "--config", config_path.string()}, {"--config", config_path.string()}}) {
+    auto result = spawn_and_wait(binary, args, timeout);
+    if (result.exit_code != 0) {
+      std::cerr << "[FAIL] mixed sizes: " << args[0] << " exited with code " << result.exit_code
+                << "\nstderr:\n" << result.stderr_text << "\n";
+      rc = 1;
+      break;
+    }
+  }
+  for (std::size_t i = 0; rc == 0 && i < sizes.size(); ++i) {
+    const auto name = nominal[i].filename();
+    const cv::Mat src = cv::imread((mixed_dir / name).string(), cv::IMREAD_COLOR);
+    const cv::Mat out = cv::imread((fs::path(out_dir) / name).string(), cv::IMREAD_COLOR);
+    if (out.empty() || out.size() != src.size()) {
+      std::cerr << "[FAIL] mixed sizes: overlay for " << name << " missing or not at input size\n";
+      rc = 1;
+    }
+  }
+  if (rc == 0) {
+    std::cout << "[OK] mixed-size folder calibrates and scores with overlays at input size\n";
+  }
+  remove_dir(out_dir);
+  return rc;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -576,6 +652,7 @@ int main(int argc, char** argv) {
   failures += run_bank_model_mismatch_fails_at_load(binary) != 0;
   failures += run_held_out_normal_passes_and_defect_fails(binary, model_path) != 0;
   failures += run_python_built_bank_scores_correctly_in_cpp(binary, model_path) != 0;
+  failures += run_mixed_image_sizes_calibrate_and_score(binary, model_path) != 0;
 
   return failures > 0 ? 1 : 0;
 }

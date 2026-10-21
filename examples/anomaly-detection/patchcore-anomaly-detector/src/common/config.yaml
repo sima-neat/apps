@@ -35,7 +35,7 @@ scoring:
 
 output:
   dir: sandbox/patchcore-anomaly-detector        # Folder for annotated overlay images.
-  save_every: 60
+  save_every: 0                                 # video_file/rtsp: save every Nth overlay frame to dir; 0 = off.
   overlay_alpha: 0.45                           # Blend weight of highlighted (above patch threshold) regions.
   insight:                                      # video_file/rtsp only: live view.
     host: <insight-host-ip>              # Host running the Insight receiver/viewer.
