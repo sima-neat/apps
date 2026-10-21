@@ -47,6 +47,10 @@ from asr_switching_suite import (  # noqa: E402
     MlaFailureClassificationTests,
 )
 from hub_security_suite import HubPathSecurityTests  # noqa: E402,F401
+from resident_models_suite import (  # noqa: E402,F401
+    ResidentChatModelTests,
+    ResidentLimitControlApiTests,
+)
 from asr_metadata_suite import AsrMetadataTests  # noqa: E402,F401
 from board_camera_suite import ResolveCameraNodeTests  # noqa: E402,F401
 from talk_controller_suite import SupertonicRetryTests  # noqa: E402,F401
@@ -65,6 +69,12 @@ from rag_chat_suite import (  # noqa: E402,F401
 from readme_package_suite import (  # noqa: E402,F401
     LauncherPackagePathsTests,
     ReadmePackagePathsTests,
+)
+from edge_cases_suite import (  # noqa: E402,F401
+    BusyAcceleratorTests,
+    ContextWindowTests,
+    MemoryFullTests,
+    StorageFullTests,
 )
 from worker_ipc_suite import (  # noqa: E402,F401
     ReadExactTests,
