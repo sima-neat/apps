@@ -431,7 +431,7 @@ class TestMetadata:
         payload = json.loads(data_json)
         assert len(payload["poses"]) == 1
         pose = payload["poses"][0]
-        assert pose["id"] == "pose_1"
+        assert "id" not in pose
         assert pose["label"] == "person"
         assert pose["confidence"] == 0.75
         assert pose["bbox"] == [10, 20, 30, 40]

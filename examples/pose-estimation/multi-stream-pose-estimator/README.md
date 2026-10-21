@@ -116,7 +116,6 @@ Each stream publishes `pose-estimation` metadata. Every pose carries the person 
 {
   "poses": [
     {
-      "id": "pose_1",
       "label": "person",
       "confidence": 0.77,
       "bbox": [163, 403, 130, 315],
