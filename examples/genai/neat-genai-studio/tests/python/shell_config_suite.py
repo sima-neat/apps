@@ -254,6 +254,85 @@ class LegacyUiDirMigrationTests(unittest.TestCase):
             self.assertEqual((out.stdout, out.stderr), ("", ""))
 
 
+class HfDownloadRetryTests(unittest.TestCase):
+    """setup.sh's hf_download retries what the Hub may answer differently a
+    moment later (#599) and stops at once on anything else."""
+
+    EXAMPLE = Path(__file__).resolve().parents[2]
+    # A fake `hf`: each call answers with the next line of the plan, either
+    # "ok" (prints the path) or an error message on stderr with exit 1.
+    FAKE_HF = (
+        '#!/bin/bash\n'
+        'n=$(( $(cat "$STATE/calls" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$STATE/calls"\n'
+        'line=$(sed -n "${n}p" "$STATE/plan")\n'
+        'if [[ "$line" == ok ]]; then echo "/models/$2"; exit 0; fi\n'
+        'printf "%b\\n" "$line" >&2; exit 1\n'
+    )
+
+    def _download(self, plan):
+        setup = (self.EXAMPLE / "setup.sh").read_text(encoding="utf-8")
+        start = setup.index("hf_download() {")
+        end = setup.index("\n}\n", start) + 3
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            (state / "plan").write_text("\n".join(plan) + "\n")
+            hf = state / "hf"
+            hf.write_text(self.FAKE_HF)
+            hf.chmod(0o755)
+            script = ('set -euo pipefail\n'
+                      'warn() { echo "WARN $*" >&2; }\n'
+                      'sleep() { echo "$1" >> "$STATE/sleeps"; }\n'
+                      f'{setup[start:end]}\n'
+                      'if hf_download "$STATE/hf" simaai/m --local-dir /x; then echo RC=0; else echo RC=1; fi\n')
+            out = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
+                                 env=dict(os.environ, STATE=str(state)))
+            calls = int((state / "calls").read_text())
+            sleeps = (state / "sleeps").read_text().split() if (state / "sleeps").exists() else []
+            return out, calls, [int(x) for x in sleeps]
+
+    def test_a_rate_limit_is_retried_until_the_download_succeeds(self):
+        out, calls, sleeps = self._download(
+            ["429 Client Error: Too Many Requests for url: https://huggingface.co/x", "ok"])
+        self.assertIn("RC=0", out.stdout)
+        self.assertIn("/models/simaai/m", out.stdout)       # hf's output still reaches stdout
+        self.assertIn("429 Client Error", out.stderr)       # and its messages the terminal
+        self.assertEqual((calls, sleeps), (2, [15]))
+
+    def test_server_errors_and_dropped_connections_are_retried(self):
+        out, calls, sleeps = self._download(
+            ["503 Server Error: Service Unavailable", "ConnectionError: Connection reset by peer", "ok"])
+        self.assertIn("RC=0", out.stdout)
+        self.assertEqual((calls, sleeps), (3, [15, 30]))
+
+    def test_a_wrong_repo_fails_at_once(self):
+        out, calls, sleeps = self._download(["Repository Not Found for url: https://huggingface.co/x"])
+        self.assertIn("RC=1", out.stdout)
+        self.assertEqual((calls, sleeps), (1, []))
+
+    def test_hf_tracebacks_are_classified_by_their_error_lines(self):
+        # A real hf failure prints a traceback whose indented source lines
+        # mention timeouts and ConnectionError even for a missing repo.
+        trace = r"Traceback (most recent call last):\n    url=url, timeout=etag_timeout\n    except ConnectionError:\n"
+        out, calls, _ = self._download([trace + "huggingface_hub.errors.RepositoryNotFoundError: 404 Client Error"])
+        self.assertEqual((out.stdout.split()[-1], calls), ("RC=1", 1))
+        out, calls, sleeps = self._download(
+            [trace + "huggingface_hub.errors.LocalEntryNotFoundError: An error happened", "ok"])
+        self.assertEqual((out.stdout.split()[-1], calls, sleeps), ("RC=0", 2, [15]))
+
+    def test_it_gives_up_after_the_last_attempt(self):
+        out, calls, sleeps = self._download(["429 Client Error: Too Many Requests"] * 6)
+        self.assertIn("RC=1", out.stdout)
+        self.assertEqual((calls, sleeps), (4, [15, 30, 60]))
+        self.assertIn("attempt 3 of 4", out.stderr)
+
+    def test_every_hugging_face_download_in_setup_goes_through_it(self):
+        setup = (self.EXAMPLE / "setup.sh").read_text(encoding="utf-8")
+        body = setup.replace(setup[setup.index("hf_download() {"):setup.index("write_repo_marker() {")], "")
+        self.assertNotIn("/bin/hf\" download", body)
+        self.assertNotIn('"${hf}" download', body)
+        self.assertEqual(body.count("hf_download "), 7)
+
+
 class ShellConfigValueTests(unittest.TestCase):
     def test_quoted_and_plain_values(self):
         self.assertEqual(_read(CONFIG, "models_root"), "/data/st # models")
