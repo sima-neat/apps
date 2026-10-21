@@ -62,8 +62,9 @@ class _ControlHandler(BaseHTTPRequestHandler):
             return {}
 
     def _catalog_payload(self) -> dict:
-        # The resident order (most recently used first) and the limit let the
-        # UI pick the active chat model and predict which load evicts what.
+        # The resident order (most recently loaded first) and the limit let a
+        # client pick the chat model that answers and see when a load needs a
+        # model unloaded first.
         return {
             "catalog": self.manager.scan_catalog(),
             "resident": self.manager.resident(),

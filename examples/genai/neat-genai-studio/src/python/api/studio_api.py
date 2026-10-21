@@ -32,7 +32,7 @@ import socket
 import subprocess
 
 from shared.config import HubConfig
-from shared.chat_limits import accelerator_busy, fit_to_window, tokenizer_counter, too_long_alone
+from shared.chat_limits import accelerator_busy, fit_to_window, tokenizer_counter, too_long_alone, whole_reply
 from server import hub as hub_helpers
 from asr_metadata import (
     DEFAULT_LOGPROB_THRESHOLD,
@@ -892,6 +892,16 @@ class AppContext:
                 logging.error(f"Chat proxy: model server unreachable: {exc}")
                 return jsonify({'error': 'model server unreachable'}), 502
             streaming = bool(payload.get('stream'))
+            if not streaming:
+                # A whole reply, retried once if the accelerator was busy.
+                try:
+                    status, content_type, body = whole_reply(upstream, open_upstream)
+                except requests.RequestException as exc:
+                    logging.error(f"Chat proxy: model server unreachable: {exc}")
+                    return jsonify({'error': 'model server unreachable'}), 502
+                return Response(body, status=status, content_type=content_type,
+                                headers={**rag_headers, 'X-Context-Dropped': str(dropped),
+                                         'X-Context-Window': str(window or '')})
 
             def first_event(resp):
                 """Read up to the first event that carries text or an error,

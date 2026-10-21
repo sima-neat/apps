@@ -83,6 +83,9 @@ class CorsPolicyTests(unittest.TestCase):
         self.assertEqual(h["Vary"], "Origin")
         self.assertEqual(h["Access-Control-Allow-Headers"], "content-type, x-custom")
         self.assertIn("X-Engine", h["Access-Control-Expose-Headers"])
+        # Browser callers read how much of a long chat was left out.
+        self.assertIn("X-Context-Dropped", h["Access-Control-Expose-Headers"])
+        self.assertIn("X-Context-Window", h["Access-Control-Expose-Headers"])
         self.assertEqual(cors_headers("http://a:3000")["Access-Control-Allow-Headers"], "Content-Type")
 
 

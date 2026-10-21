@@ -81,8 +81,8 @@ class ResidentChatModelTests(ResidentFixture):
         manager, server = self.manager(limit=2)
         manager.load(llama)
         manager.load(qwen)
-        # Re-selecting a resident model registers nothing and makes it the
-        # most recently used.
+        # Re-selecting a resident model registers nothing and moves it to the
+        # front, as the most recently loaded.
         again = manager.load(llama)
         self.assertEqual(again["load_seconds"], 0.0)
         self.assertEqual(len(server.added), 2)

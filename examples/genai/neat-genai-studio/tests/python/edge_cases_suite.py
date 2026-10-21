@@ -22,7 +22,8 @@ from server import hub as hub_module
 from server import model_manager as mm
 from server.model_manager import ModelDoesNotFit, ModelManager
 from shared.chat_limits import (accelerator_busy, context_window_from_elfs, fit_to_window,
-                                request_tokens, text_tokens, tokenizer_counter, too_long_alone)
+                                request_tokens, text_tokens, tokenizer_counter, too_long_alone,
+                                whole_reply)
 from shared.config import HubConfig
 
 Usage = namedtuple("Usage", "total used free")
@@ -133,6 +134,31 @@ class BusyAcceleratorTests(unittest.TestCase):
         self.assertTrue(accelerator_busy("dispatch: no free bank for model"))
         self.assertFalse(accelerator_busy("HTTP 404"))
         self.assertFalse(accelerator_busy(None))
+
+    def test_a_whole_reply_refused_by_a_busy_accelerator_is_sent_once_more(self):
+        class Reply:
+            def __init__(self, status, body):
+                self.status_code, self.content = status, body.encode()
+                self.headers = {"Content-Type": "application/json"}
+                self.closed = False
+
+            def close(self):
+                self.closed = True
+
+        busy = Reply(500, '{"error": {"message": "MLA-RT queued wait failed: rc=-11"}}')
+        good = Reply(200, '{"choices": [{"message": {"content": "hi"}}]}')
+        sent = []
+        status, ctype, body = whole_reply(busy, lambda: sent.append(1) or good, pause=0)
+        self.assertEqual((status, body), (200, good.content))
+        self.assertEqual(len(sent), 1, "sent once more")
+        self.assertTrue(busy.closed and good.closed)
+        # Busy twice: the second answer is passed on, with no third try.
+        again = Reply(500, '{"error": "dispatch: no free bank"}')
+        status, _, body = whole_reply(busy, lambda: again, pause=0)
+        self.assertEqual((status, body), (500, again.content))
+        # Any other answer goes straight back.
+        other = Reply(400, '{"error": "bad request"}')
+        self.assertEqual(whole_reply(other, lambda: self.fail("not retried"), pause=0)[0], 400)
 
 
 class MemoryFullTests(unittest.TestCase):

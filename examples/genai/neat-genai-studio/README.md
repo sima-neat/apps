@@ -265,8 +265,8 @@ curl -sk -X POST $B/models/load -H 'Content-Type: application/json' \
   -d '{"name":"<catalog-model-name>","unload":["<loaded-model-name>"]}'
 ```
 
-`GET /models/status` lists the loaded models (`resident`, most recently used
-first) and the limit (`maxResident`). Each catalog entry reports the
+`GET /models/status` lists the loaded models (`resident`, most recently loaded
+first; loading a model that is loaded already moves it to the front) and the limit (`maxResident`). Each catalog entry reports the
 accelerator memory the model takes (`acceleratorBytes`), the tokens it reads at
 once (`contextTokens`), and its tokenizer (`tokenizerPath`).
 
@@ -282,7 +282,7 @@ do something it can't, and answers with a reason instead of failing silently.
 | **Storage full**: a download bigger than the free space | Refused before it starts, keeping 1 GB free for the board. A disk that fills during a download is reported as such. |
 | **Context full**: a conversation longer than the model reads at once | The oldest turns are left out so the model still answers, and `X-Context-Dropped` says how many (`X-Context-Window` gives the window). Tokens are counted with the model's own tokenizer when the Studio runs on the same board as the model server, and estimated otherwise. |
 | **One message longer than the window** | Refused with the reason instead of an empty reply (`413`, `"code": "context_full"`). |
-| **Accelerator busy** (Platform 3.0: `rc=-11`, kernel log `no free bank`, when several models run at once) | Retried once automatically when no text had come back yet; otherwise the error is passed on. |
+| **Accelerator busy** (Platform 3.0: `rc=-11`, kernel log `no free bank`, when several models run at once) | Retried once automatically, for streamed and whole replies, when no text had come back yet; otherwise the error is passed on. |
 
 Speech-to-text has its own slot. `POST /models/asr` makes another ASR model
 active (evicting the previous one) without touching the chat model. The switch

@@ -23,6 +23,7 @@ from __future__ import annotations
 import functools
 import logging
 import re
+import time
 from typing import Callable
 
 CHARS_PER_TOKEN = 4
@@ -128,6 +129,27 @@ def too_long_alone(messages: list, window: int | None,
 def accelerator_busy(text) -> bool:
     """Whether an error is the 3.0 driver refusing a job that never started."""
     return bool(_BUSY.search(str(text or "")))
+
+
+def whole_reply(first, reopen, pause: float = 0.4):
+    """Read a non-streamed reply from the model server, retrying once when the
+    accelerator was busy. ``first`` is the response already opened; ``reopen()``
+    sends the request again. A busy accelerator refused the job before it
+    started, so the retry is safe. Returns ``(status, content_type, body)``.
+    ``reopen`` may raise; the caller reports the model server as unreachable."""
+    resp = first
+    for attempt in range(2):
+        try:
+            body = resp.content
+            status = resp.status_code
+            content_type = resp.headers.get("Content-Type", "application/json")
+        finally:
+            resp.close()
+        if attempt or not accelerator_busy(body.decode("utf-8", "replace")):
+            return status, content_type, body
+        time.sleep(pause)
+        resp = reopen()
+    return status, content_type, body
 
 
 def context_window_from_elfs(names) -> int | None:

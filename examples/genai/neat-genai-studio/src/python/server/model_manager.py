@@ -200,7 +200,8 @@ class ModelManager:
         # held for microseconds, so status/catalog reads — which the UI polls
         # every ~0.9s during a load — never block behind a switch.
         self._op_lock = threading.Lock()
-        # Chat/VLM models currently resident, ordered most-recently-used first.
+        # Chat/VLM models currently resident, most recently loaded first (a
+        # chat doesn't reorder them, so a client's default doesn't jump).
         self._resident: list[str] = []
         # Catalog by served name -> classification dict (name, path, type, ...).
         self._catalog: dict[str, dict] = {}
@@ -402,7 +403,7 @@ class ModelManager:
                     self._resident.append(name)
 
     def resident(self) -> list[str]:
-        """Resident chat/VLM models, most recently used first."""
+        """Resident chat/VLM models, most recently loaded first."""
         with self._lock:
             return list(self._resident)
 
@@ -411,7 +412,7 @@ class ModelManager:
         return self._max_resident
 
     def touch(self, name: str) -> None:
-        """Mark a resident model most-recently-used."""
+        """Move a resident model to the front, as if loaded just now."""
         with self._lock:
             if name in self._resident:
                 self._resident.remove(name)
