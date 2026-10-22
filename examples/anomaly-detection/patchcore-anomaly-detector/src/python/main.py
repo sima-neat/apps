@@ -47,6 +47,7 @@ TORCHVISION_WEIGHTS = "IMAGENET1K_V1"
 OVERLAY_LUT_LOW = 191  # COLORMAP_JET index where highlights start (yellow); 255 is red.
 PATCH_GRID = (28, 28)  # 224x224 input -> 28x28 patch grid, see the model's compile config
 MODEL_INPUT_SIZE = (224, 224)  # (width, height) of the compiled model input
+JOINED_BUFFERS = 4  # RTSP joined-output queue; bounds lag to ~4 frames when scoring is slow
 LETTERBOX_PAD = 114  # gray fill of Neat's letterbox resize, matched by the host letterbox
 THRESHOLD_EVERY = 5  # --calibrate sets aside every 5th nominal image to measure the threshold
 
@@ -751,7 +752,19 @@ def build_rtsp_graph(cfg: AppConfig, model: "pyneat.Model", width: int, height: 
     embedding_graph.add(pyneat.nodes.output("embedding", pyneat.OutputOptions.every_frame(4)))
     frame_graph = pyneat.Graph("frame")
     frame_graph.add(pyneat.nodes.output("frame", pyneat.OutputOptions.every_frame(4)))
-    joined = pyneat.graphs.combine(["frame", "embedding"], "patchcore_output", pyneat.CombinePolicy.ByFrame)
+    # Join frame and embedding per frame and keep the newest JOINED_BUFFERS pairs: when
+    # host scoring is slower than the camera, older pairs are dropped here instead of the
+    # whole pipeline waiting (graphs.combine's output never drops, so lag would grow).
+    # A few buffers absorb the bursts the graph delivers frames in.
+    joined = pyneat.Graph("patchcore_output")
+    joined.add(pyneat.nodes.input("frame"))
+    joined.add(pyneat.nodes.input("embedding"))
+    newest = pyneat.OutputOptions.latest()
+    newest.max_buffers = JOINED_BUFFERS
+    newest.combine_policy = pyneat.CombinePolicy.ByFrame
+    joined.add(pyneat.nodes.output("patchcore_output", newest))
+    joined.connect("frame", "patchcore_output")
+    joined.connect("embedding", "patchcore_output")
 
     graph = pyneat.Graph("patchcore")
     graph.connect(source, branch)

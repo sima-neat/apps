@@ -38,6 +38,8 @@ constexpr double kOverlayLutLow = 191.0; // COLORMAP_JET index where highlights 
 constexpr int kPatchGridH = 28;
 constexpr int kPatchGridW = 28;
 const cv::Size kModelInputSize(224, 224); // compiled model input (width, height)
+// RTSP joined-output queue; bounds lag to ~4 frames when scoring is slow.
+constexpr int kJoinedBuffers = 4;
 constexpr int kLetterboxPad = 114; // gray fill of Neat's letterbox resize, matched on the host
 // --calibrate sets aside every 5th nominal image to measure the threshold.
 constexpr std::size_t kThresholdEvery = 5;
@@ -762,8 +764,19 @@ RtspRuntime build_rtsp_runtime(const Config& cfg, const SourceGeometry& geometry
       simaai::neat::nodes::Output("embedding", simaai::neat::OutputOptions::EveryFrame(4)));
   simaai::neat::Graph frame_graph("frame");
   frame_graph.add(simaai::neat::nodes::Output("frame", simaai::neat::OutputOptions::EveryFrame(4)));
-  auto joined = simaai::neat::graphs::Combine({"frame", "embedding"}, "patchcore_output",
-                                              simaai::neat::CombinePolicy::ByFrame);
+  // Join frame and embedding per frame and keep the newest kJoinedBuffers pairs: when host
+  // scoring is slower than the camera, older pairs are dropped here instead of the whole
+  // pipeline waiting (graphs::Combine's output never drops, so lag would grow). A few
+  // buffers absorb the bursts the graph delivers frames in.
+  simaai::neat::Graph joined("patchcore_output");
+  joined.add(simaai::neat::nodes::Input("frame"));
+  joined.add(simaai::neat::nodes::Input("embedding"));
+  auto newest = simaai::neat::OutputOptions::Latest();
+  newest.max_buffers = kJoinedBuffers;
+  newest.combine_policy = simaai::neat::CombinePolicy::ByFrame;
+  joined.add(simaai::neat::nodes::Output("patchcore_output", newest));
+  joined.connect("frame", "patchcore_output");
+  joined.connect("embedding", "patchcore_output");
 
   rt.graph = simaai::neat::Graph("patchcore");
   rt.graph.connect(source, branch);
