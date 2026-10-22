@@ -38,6 +38,7 @@ constexpr double kOverlayLutLow = 191.0; // COLORMAP_JET index where highlights 
 constexpr int kPatchGridH = 28;
 constexpr int kPatchGridW = 28;
 const cv::Size kModelInputSize(224, 224); // compiled model input (width, height)
+constexpr int kLetterboxPad = 114; // gray fill of Neat's letterbox resize, matched on the host
 // --calibrate sets aside every 5th nominal image to measure the threshold.
 constexpr std::size_t kThresholdEvery = 5;
 constexpr const char* kBackbone = "wide_resnet50_2";
@@ -232,25 +233,29 @@ std::vector<fs::path> find_images(const fs::path& dir) {
   return images;
 }
 
-/// The centered square the model inspects. Every source is center-cropped to it,
-/// so calibration and live frames see the same view.
-cv::Rect center_square(const cv::Size& size) {
-  const int side = std::min(size.width, size.height);
-  return {(size.width - side) / 2, (size.height - side) / 2, side, side};
+/// Where a frame of `size` lands inside the model input after a letterbox resize:
+/// scaled to fit, keeping its aspect ratio, and centered.
+cv::Rect letterbox_rect(const cv::Size& size) {
+  const double scale = std::min(static_cast<double>(kModelInputSize.width) / size.width,
+                                static_cast<double>(kModelInputSize.height) / size.height);
+  const int w = static_cast<int>(std::lround(size.width * scale));
+  const int h = static_cast<int>(std::lround(size.height * scale));
+  return {(kModelInputSize.width - w) / 2, (kModelInputSize.height - h) / 2, w, h};
 }
 
 /// Highlights only pixels whose smoothed patch score exceeds the calibrated
 /// patch threshold (patch_scale_max in bank_meta.json); all other pixels are
 /// left unchanged. Highlight color runs yellow -> red over a fixed calibrated
-/// span: threshold .. threshold + (threshold - nominal median). The score map covers
-/// the centered square the model inspected (see center_square).
+/// span: threshold .. threshold + (threshold - nominal median). The score map covers the
+/// letterboxed model input; only the frame's own area is mapped back.
 cv::Mat draw_overlay(const cv::Mat& bgr, const patchcore::AnomalyResult& result, int map_h,
                      int map_w, double sigma, double alpha, double patch_scale_min,
                      double patch_scale_max) {
   cv::Mat score_mat(map_h, map_w, CV_32FC1, const_cast<float*>(result.score_map.data()));
-  const cv::Rect square = center_square(bgr.size());
+  cv::Mat canvas;
+  cv::resize(score_mat, canvas, kModelInputSize, 0, 0, cv::INTER_LINEAR);
   cv::Mat heat;
-  cv::resize(score_mat, heat, square.size(), 0, 0, cv::INTER_LINEAR);
+  cv::resize(canvas(letterbox_rect(bgr.size())), heat, bgr.size(), 0, 0, cv::INTER_LINEAR);
   if (sigma > 0.0) {
     cv::GaussianBlur(heat, heat, cv::Size(0, 0), sigma);
   }
@@ -271,10 +276,9 @@ cv::Mat draw_overlay(const cv::Mat& bgr, const patchcore::AnomalyResult& result,
   cv::Mat heat_color;
   cv::applyColorMap(heat_u8, heat_color, cv::COLORMAP_JET);
 
-  cv::Mat roi = out(square);
   cv::Mat blended;
-  cv::addWeighted(roi, 1.0 - alpha, heat_color, alpha, 0.0, blended);
-  blended.copyTo(roi, mask);
+  cv::addWeighted(bgr, 1.0 - alpha, heat_color, alpha, 0.0, blended);
+  blended.copyTo(out, mask);
   return out;
 }
 
@@ -294,17 +298,18 @@ simaai::neat::Tensor rgb_tensor(const cv::Mat& bgr) {
                                            simaai::neat::TensorMemory::EV74);
 }
 
-/// Center-crops a host-decoded frame to a square and resizes it to the model input, so
-/// every image and video frame is seen the same way. A fixed input size also keeps the
-/// model from timing out when image sizes change.
+/// Letterboxes a host-decoded frame into the model input the same way the RTSP graph's
+/// preprocess does (centered, gray kLetterboxPad bars), so calibration images and every
+/// source match for any frame shape. A fixed input size also keeps the model from timing
+/// out when image sizes change.
 simaai::neat::Tensor model_input_tensor(const cv::Mat& bgr) {
-  const cv::Mat square = bgr(center_square(bgr.size()));
-  if (square.size() == kModelInputSize) {
-    return rgb_tensor(square);
+  if (bgr.size() == kModelInputSize) {
+    return rgb_tensor(bgr);
   }
-  cv::Mat resized;
-  cv::resize(square, resized, kModelInputSize, 0, 0, cv::INTER_AREA);
-  return rgb_tensor(resized);
+  const cv::Rect rect = letterbox_rect(bgr.size());
+  cv::Mat canvas(kModelInputSize, CV_8UC3, cv::Scalar::all(kLetterboxPad));
+  cv::resize(bgr, canvas(rect), rect.size(), 0, 0, cv::INTER_LINEAR);
+  return rgb_tensor(canvas);
 }
 
 /// Splits the nominal images into (bank images, threshold images). Every
@@ -730,6 +735,13 @@ simaai::neat::Model::Options rtsp_graph_model_options(const SourceGeometry& geom
   opt.preprocess.color_convert.input_format = simaai::neat::PreprocessColorFormat::NV12;
   opt.preprocess.input_max_width = geometry.width;
   opt.preprocess.input_max_height = geometry.height;
+  // Letterbox exactly like model_input_tensor. Resize must be switched on explicitly:
+  // on Auto the planner leaves it off for frames that aren't the model input size.
+  opt.preprocess.resize.enable = simaai::neat::AutoFlag::On;
+  opt.preprocess.resize.mode = simaai::neat::ResizeMode::Letterbox;
+  opt.preprocess.resize.width = kModelInputSize.width;
+  opt.preprocess.resize.height = kModelInputSize.height;
+  opt.preprocess.resize.pad_value = kLetterboxPad;
   opt.preprocess.preset = simaai::neat::NormalizePreset::ImageNet;
   return opt;
 }
@@ -789,13 +801,6 @@ int cmd_score_rtsp(const Config& cfg, const patchcore::MemoryBank& bank, float t
   const auto geometry = probe_rtsp_geometry(cfg);
   if (geometry.width <= 0 || geometry.height <= 0 || geometry.fps <= 0) {
     std::cerr << "[FATAL] failed to resolve source geometry for " << cfg.rtsp_url << "\n";
-    return 2;
-  }
-  if (geometry.width != geometry.height) {
-    // The in-graph preprocess can't center-crop yet, so a non-square stream would not
-    // match the center-cropped calibration images.
-    std::cerr << "[FATAL] the RTSP stream is " << geometry.width << "x" << geometry.height
-              << "; this example needs a square stream (for example 720x720)\n";
     return 2;
   }
 

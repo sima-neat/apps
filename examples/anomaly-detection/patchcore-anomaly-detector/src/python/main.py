@@ -47,6 +47,7 @@ TORCHVISION_WEIGHTS = "IMAGENET1K_V1"
 OVERLAY_LUT_LOW = 191  # COLORMAP_JET index where highlights start (yellow); 255 is red.
 PATCH_GRID = (28, 28)  # 224x224 input -> 28x28 patch grid, see the model's compile config
 MODEL_INPUT_SIZE = (224, 224)  # (width, height) of the compiled model input
+LETTERBOX_PAD = 114  # gray fill of Neat's letterbox resize, matched by the host letterbox
 THRESHOLD_EVERY = 5  # --calibrate sets aside every 5th nominal image to measure the threshold
 
 
@@ -237,22 +238,26 @@ def make_image_model(model_path: str) -> "pyneat.Model":
     return pyneat.Model(model_path, opt)
 
 
-def center_square(width: int, height: int) -> tuple[int, int, int]:
-    """(x, y, side) of the centered square the model inspects. Every source is
-    center-cropped to it, so calibration and live frames see the same view."""
-    side = min(width, height)
-    return (width - side) // 2, (height - side) // 2, side
+def letterbox_rect(width: int, height: int) -> tuple[int, int, int, int]:
+    """(x, y, w, h) of a width x height frame inside the model input after a
+    letterbox resize: scaled to fit, keeping its aspect ratio, and centered."""
+    in_w, in_h = MODEL_INPUT_SIZE
+    scale = min(in_w / width, in_h / height)
+    w, h = round(width * scale), round(height * scale)
+    return (in_w - w) // 2, (in_h - h) // 2, w, h
 
 
 def model_input_tensor(bgr) -> "pyneat.Tensor":
-    """Center-crops a host-decoded frame to a square and resizes it to the model
-    input, so every image and video frame is seen the same way. A fixed input size
-    also keeps the model from timing out when image sizes change."""
-    x, y, side = center_square(bgr.shape[1], bgr.shape[0])
-    square = bgr[y:y + side, x:x + side]
-    if (side, side) != MODEL_INPUT_SIZE:
-        square = cv2.resize(square, MODEL_INPUT_SIZE, interpolation=cv2.INTER_AREA)
-    return rgb_tensor(square)
+    """Letterboxes a host-decoded frame into the model input the same way the RTSP
+    graph's preprocess does (centered, gray LETTERBOX_PAD bars), so calibration
+    images and every source match for any frame shape. A fixed input size also keeps
+    the model from timing out when image sizes change."""
+    if (bgr.shape[1], bgr.shape[0]) == MODEL_INPUT_SIZE:
+        return rgb_tensor(bgr)
+    x, y, w, h = letterbox_rect(bgr.shape[1], bgr.shape[0])
+    canvas = np.full((MODEL_INPUT_SIZE[1], MODEL_INPUT_SIZE[0], 3), LETTERBOX_PAD, np.uint8)
+    canvas[y:y + h, x:x + w] = cv2.resize(bgr, (w, h), interpolation=cv2.INTER_LINEAR)
+    return rgb_tensor(canvas)
 
 
 def rgb_tensor(bgr) -> "pyneat.Tensor":
@@ -275,21 +280,22 @@ def draw_overlay(bgr, score_map, sigma: float, alpha: float, patch_scale_min: fl
     patch threshold (patch_scale_max in bank_meta.json); all other pixels are
     left unchanged. Highlight color runs yellow -> red over a fixed calibrated
     span: threshold .. threshold + (threshold - nominal median). The score map
-    covers the centered square the model inspected (see center_square)."""
-    x, y, side = center_square(bgr.shape[1], bgr.shape[0])
-    heat = upsample_and_smooth(score_map, (side, side), sigma)
+    covers the letterboxed model input; only the frame's own area is mapped back."""
+    height, width = bgr.shape[:2]
+    x, y, w, h = letterbox_rect(width, height)
+    canvas = cv2.resize(score_map, MODEL_INPUT_SIZE, interpolation=cv2.INTER_LINEAR)
+    heat = upsample_and_smooth(canvas[y:y + h, x:x + w], (width, height), sigma)
     _, mask = cv2.threshold(heat, patch_scale_max, 255, cv2.THRESH_BINARY)
     mask = mask.astype(np.uint8)
     out = bgr.copy()
     if not cv2.countNonZero(mask):
         return out
-    roi = out[y:y + side, x:x + side]
     span = max(patch_scale_max - patch_scale_min, 1e-6)
     heat_u8 = cv2.convertScaleAbs(heat - patch_scale_max, alpha=(255 - OVERLAY_LUT_LOW) / span)
     heat_u8 = cv2.add(heat_u8, OVERLAY_LUT_LOW)  # saturates at 255 (red)
     heat_color = cv2.applyColorMap(heat_u8, cv2.COLORMAP_JET)
-    blended = cv2.addWeighted(roi, 1 - alpha, heat_color, alpha, 0)
-    cv2.copyTo(blended, mask, roi)
+    blended = cv2.addWeighted(bgr, 1 - alpha, heat_color, alpha, 0)
+    cv2.copyTo(blended, mask, out)
     return out
 
 
@@ -723,6 +729,12 @@ def make_rtsp_graph_model(cfg: AppConfig, width: int, height: int) -> "pyneat.Mo
     opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.NV12
     opt.preprocess.input_max_width = width
     opt.preprocess.input_max_height = height
+    # Letterbox exactly like model_input_tensor. Resize must be switched on explicitly:
+    # on Auto the planner leaves it off for frames that aren't the model input size.
+    opt.preprocess.resize.enable = pyneat.AutoFlag.On
+    opt.preprocess.resize.mode = pyneat.ResizeMode.Letterbox
+    opt.preprocess.resize.width, opt.preprocess.resize.height = MODEL_INPUT_SIZE
+    opt.preprocess.resize.pad_value = LETTERBOX_PAD
     opt.preprocess.preset = pyneat.NormalizePreset.ImageNet
     return pyneat.Model(cfg.model_path, opt)
 
@@ -771,12 +783,6 @@ def cmd_score_rtsp(cfg: AppConfig, bank: MemoryBank, threshold: float, num_neigh
     width, height, fps = resolve_rtsp_geometry(cfg)
     if width <= 0 or height <= 0 or fps <= 0:
         print(f"[FATAL] failed to resolve source geometry for {cfg.rtsp.url}", file=sys.stderr)
-        return 2
-    if width != height:
-        # The in-graph preprocess can't center-crop yet, so a non-square stream would not
-        # match the center-cropped calibration images.
-        print(f"[FATAL] the RTSP stream is {width}x{height}; this example needs a square stream "
-              "(for example 720x720)", file=sys.stderr)
         return 2
 
     model = make_rtsp_graph_model(cfg, width, height)

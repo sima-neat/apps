@@ -690,8 +690,7 @@ std::map<int, std::string> frame_verdicts(const std::string& text) {
 
 // Empty when out_dir holds `expected` decodable frame_*.jpg snapshots of one size
 // (`size` if non-empty); otherwise the problem.
-std::string snapshots_problem(const std::string& out_dir, int expected, cv::Size size,
-                              bool require_square) {
+std::string snapshots_problem(const std::string& out_dir, int expected, cv::Size size) {
   std::vector<fs::path> snapshots;
   for (const auto& entry : fs::directory_iterator(out_dir)) {
     const auto name = entry.path().filename().string();
@@ -711,7 +710,7 @@ std::string snapshots_problem(const std::string& out_dir, int expected, cv::Size
     if (size.empty()) {
       size = image.size();
     }
-    if (image.size() != size || (require_square && image.cols != image.rows)) {
+    if (image.size() != size) {
       return path.filename().string() + " has an unexpected size";
     }
   }
@@ -748,7 +747,7 @@ int run_video_file_live_run(const std::string& binary, const std::string& model_
     }
   }
   if (problem.empty()) {
-    problem = snapshots_problem(out_dir, 3, cv::Size(224, 224), false);
+    problem = snapshots_problem(out_dir, 3, cv::Size(224, 224));
   }
   remove_dir(out_dir);
   if (!problem.empty()) {
@@ -779,14 +778,14 @@ int run_rtsp_live_run(const std::string& binary, const std::string& model_path) 
     problem = "expected verdicts for frames 1-60, got " + std::to_string(verdicts.size());
   }
   if (problem.empty()) {
-    problem = snapshots_problem(out_dir, 3, cv::Size(), true);
+    problem = snapshots_problem(out_dir, 3, cv::Size());
   }
   remove_dir(out_dir);
   if (!problem.empty()) {
     std::cerr << "[FAIL] rtsp live run: " << problem << "\n";
     return 1;
   }
-  std::cout << "[OK] rtsp: 60 frames scored in the graph, 3 square snapshots\n";
+  std::cout << "[OK] rtsp: 60 frames scored in the graph, 3 snapshots\n";
   return 0;
 }
 

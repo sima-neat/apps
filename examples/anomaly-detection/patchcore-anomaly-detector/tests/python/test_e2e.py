@@ -487,7 +487,7 @@ class TestE2E:
         snapshots = sorted(tmp_output_dir.glob("frame_*.jpg"))
         assert len(snapshots) == 3, f"expected 3 snapshots, found {[p.name for p in snapshots]}"
         first = cv2.imread(str(snapshots[0]), cv2.IMREAD_COLOR)
-        assert first is not None and first.shape[0] == first.shape[1], "RTSP snapshot missing or not square"
+        assert first is not None, f"snapshot {snapshots[0].name} does not decode"
         _assert_snapshots(tmp_output_dir, 3, (first.shape[1], first.shape[0]))
 
     def test_cpp_built_bank_scores_correctly_in_python(

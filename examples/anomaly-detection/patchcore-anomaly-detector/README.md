@@ -23,7 +23,7 @@ Detects visual anomalies in industrial images or video using a compiled WideResN
 ## Prerequisites
 
 - `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
-- For `source.type: rtsp`, a square RTSP H.264, H.265, or MJPEG source (for example 720x720) reachable from the target.
+- For `source.type: rtsp`, an RTSP H.264, H.265, or MJPEG source reachable from the target.
 - For `source.type: video_file` or `rtsp`, [Insight](https://developer.sima.ai/software/tools/insight/) (or another RTP receiver) to view the live annotated stream.
 
 ## Install Apps
@@ -67,7 +67,7 @@ Before scoring anything, build a memory bank from a directory of known-good ("no
 
 To calibrate against your own inspection target instead, point `calibration.nominal_images_dir` at a directory of your own known-good images (a few dozen is a reasonable starting point) before running `--calibrate`. Capture them with the same camera, framing, and lighting you will run with.
 
-The model inspects a square. Images and video frames of any size are center-cropped to their centered square (for example the middle 720x720 of a 1280x720 frame), so the left and right edges of a wide frame are not inspected; center the part. Calibration images are cropped the same way. An RTSP stream must itself be square (for example 720x720): the app exits with an error on a non-square stream, because the in-graph preprocess cannot crop it yet.
+The model input is 224x224. Every image, video frame, and RTSP frame is letterboxed into it the same way: scaled to fit with its aspect ratio kept, and centered between gray bars. The whole frame is inspected, but a wide frame gets fewer model pixels than a square one (a 16:9 frame fills 224x126), so keep the part large in the frame. Calibrate with images from the same camera and resolution you will run with.
 
 `--calibrate` keeps every 5th nominal image out of the bank and measures the threshold on those, so the threshold reflects images the bank has not memorized. Set `calibration.threshold_images_dir` to use a separate set instead.
 
