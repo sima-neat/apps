@@ -201,6 +201,30 @@ bool test_metadata_message() {
   return ok;
 }
 
+bool test_ten_pose_metadata_fits_sender_limit() {
+  // MetadataSender rejects a logical message above 65507 bytes; ten poses is the configured
+  // maximum.
+  std::vector<blazepose_app::Pose> poses(10);
+  for (int index = 0; index < 10; ++index) {
+    blazepose_app::Pose& pose = poses[index];
+    pose.roi_index = index;
+    pose.presence = 0.987654F;
+    pose.box = {3456.7F, 2109.8F, 3839.4F, 2159.9F, 0.876543F, 0};
+    for (std::size_t point = 0; point < pose.keypoints.size(); ++point) {
+      pose.keypoints[point] = {3800.6F - point, 2100.4F + point, 0.123456F + 0.01F * point};
+      pose.world_keypoints[point] = {-0.123456789F - 0.01F * point, -0.98765432F, -0.55555555F,
+                                     0.654321F};
+    }
+  }
+  nlohmann::json overlay = blazepose_app::poses_data_json(poses, "camera_stream_identifier");
+  const std::string message = blazepose_app::metadata_message("pose-estimation", overlay,
+                                                              1761160000000, "frame-000000123456");
+  bool ok = expect(message.size() <= 65507, "a ten-pose overlay fits MetadataSender's size limit");
+  ok &= expect(overlay["poses"][0]["world_keypoints"][0]["x"].dump() == "-0.123457",
+               "rounded world coordinates serialize without float widening digits");
+  return ok;
+}
+
 bool test_non_finite_landmarks_discard_only_that_pose() {
   const blazepose_app::Box box{0.0F, 0.0F, 100.0F, 100.0F, 0.9F, 0};
   const blazepose_app::Affine affine{1.0, 0.0, 0.0, 0.0, 1.0, 0.0};
@@ -492,6 +516,7 @@ int main(int argc, char** argv) {
   bool ok = test_math_and_metadata_contract();
   ok &= test_roi_tracking();
   ok &= test_metadata_message();
+  ok &= test_ten_pose_metadata_fits_sender_limit();
   ok &= test_non_finite_landmarks_discard_only_that_pose();
   ok &= test_non_finite_detector_scores_are_discarded();
   ok &= test_pose_smoother();

@@ -299,6 +299,11 @@ private:
   std::vector<Pose> previous_;
 };
 
+// Rounds in double so JSON keeps the short decimal; a rounded float widens to a long one.
+inline double round_to(double value, double scale) {
+  return std::round(value * scale) / scale;
+}
+
 inline int round_half_away_from_zero(double value) {
   return value >= 0.0 ? static_cast<int>(std::floor(value + 0.5))
                       : static_cast<int>(std::ceil(value - 0.5));
@@ -394,19 +399,19 @@ inline nlohmann::json poses_data_json(std::vector<Pose> poses, const std::string
       keypoints.push_back({{"name", kLandmarkNames[index]},
                            {"x", round_half_away_from_zero(point.x)},
                            {"y", round_half_away_from_zero(point.y)},
-                           {"confidence", std::round(point.confidence * 1000.0F) / 1000.0F}});
+                           {"confidence", round_to(point.confidence, 1000.0)}});
       const WorldKeypoint& world = pose.world_keypoints[index];
       world_keypoints.push_back({{"name", kLandmarkNames[index]},
-                                 {"x", std::round(world.x * 1'000'000.0F) / 1'000'000.0F},
-                                 {"y", std::round(world.y * 1'000'000.0F) / 1'000'000.0F},
-                                 {"z", std::round(world.z * 1'000'000.0F) / 1'000'000.0F},
-                                 {"confidence", std::round(world.confidence * 1000.0F) / 1000.0F}});
+                                 {"x", round_to(world.x, 1'000'000.0)},
+                                 {"y", round_to(world.y, 1'000'000.0)},
+                                 {"z", round_to(world.z, 1'000'000.0)},
+                                 {"confidence", round_to(world.confidence, 1000.0)}});
     }
     data["poses"].push_back(
         {{"id", "pose_" + std::to_string(pose.roi_index + 1)},
          {"label", "person"},
-         {"presence", std::round(pose.presence * 1000.0F) / 1000.0F},
-         {"confidence", std::round(pose.box.score * 1000.0F) / 1000.0F},
+         {"presence", round_to(pose.presence, 1000.0)},
+         {"confidence", round_to(pose.box.score, 1000.0)},
          {"bbox",
           {round_half_away_from_zero(pose.box.x1), round_half_away_from_zero(pose.box.y1),
            round_half_away_from_zero(std::max(0.0F, pose.box.x2 - pose.box.x1)),
