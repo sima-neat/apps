@@ -28,6 +28,12 @@ VOCAB_SIZE = 49408
 PIPELINE_DEPTH = 3
 # MetadataSender rejects a message above 65507 bytes; half of it leaves room for the envelope.
 METADATA_BYTE_BUDGET = 32768
+# The model sometimes returns one object twice, e.g. a whole person and their upper body. An instance whose box
+# overlaps a higher-scoring one by more than this intersection-over-union is dropped as a duplicate.
+DUPLICATE_IOU = 0.6
+CODECS = {"h264": "h264", "avc": "h264", "h265": "h265", "hevc": "h265"}
+# FFmpeg's codec tags for the stream, as OpenCV reports them.
+STREAM_CODECS = {"h264": "h264", "avc1": "h264", "hevc": "h265", "hev1": "h265", "hvc1": "h265", "h265": "h265"}
 
 
 @dataclass(frozen=True)
@@ -36,6 +42,7 @@ class Config:
     text_encoder: str
     prompt: str
     rtsp_url: str
+    codec: str
     tcp: bool
     latency_ms: int
     frames: int
@@ -63,11 +70,15 @@ def load_config(path: Path) -> Config:
         raise ValueError("inference.mask_threshold must be in [0, 1]")
     if runtime["profile_interval"] <= 0:
         raise ValueError("runtime.profile_interval must be > 0")
+    codec = CODECS.get(str(source.get("codec", "h264")).lower())
+    if codec is None:
+        raise ValueError("source.codec must be h264 or h265")
     return Config(
         model_path=raw["model"]["path"],
         text_encoder=raw["model"]["text_encoder"],
         prompt=raw["prompt"]["text"],
         rtsp_url=source["rtsp_url"],
+        codec=codec,
         tcp=source["tcp"],
         latency_ms=source["latency_ms"],
         frames=inference["frames"],
@@ -84,8 +95,19 @@ def load_config(path: Path) -> Config:
     )
 
 
-def encode_prompt(cfg: Config):
-    tokens = ClipTokenizer().encode(cfg.prompt, TEXT_TOKENS)
+def prompt_tokens(prompt) -> np.ndarray:
+    """Tokenizes the prompt, rejecting one that the text encoder would not see whole."""
+    tokenizer = ClipTokenizer()
+    count = len(tokenizer.tokens(prompt)) if isinstance(prompt, str) else 0
+    if count == 0:
+        raise ValueError("prompt.text must name what to segment")
+    if count > TEXT_TOKENS - 2:
+        raise ValueError(f"prompt.text is {count} tokens; the text encoder reads at most {TEXT_TOKENS - 2}, "
+                         "so shorten it")
+    return tokenizer.encode(prompt, TEXT_TOKENS)
+
+
+def encode_prompt(cfg: Config, tokens):
     # The MLA cannot look up token ids, so the text encoder takes them one-hot.
     one_hot = np.zeros((1, TEXT_TOKENS, VOCAB_SIZE), np.float32)
     one_hot[0, np.arange(TEXT_TOKENS), tokens] = 1.0
@@ -96,19 +118,29 @@ def encode_prompt(cfg: Config):
     text = np.zeros((1, TEXT_TOKENS + 1, TEXT_DIM), np.float32)
     text[0, :TEXT_TOKENS] = features.reshape(TEXT_TOKENS, TEXT_DIM)
     text[0, TEXT_TOKENS, :TEXT_TOKENS] = tokens != 0
-    return text, int((tokens != 0).sum())
+    return text
 
 
-def probe_stream(url: str, tcp: bool) -> tuple[int, int, int]:
+def fourcc_codec(fourcc: float):
+    """The codec of an OpenCV FOURCC value, or None when it is not one this application decodes."""
+    tag = "".join(chr((int(fourcc) >> 8 * i) & 0xFF) for i in range(4)).lower()
+    return STREAM_CODECS.get(tag)
+
+
+def probe_stream(url: str, tcp: bool, codec: str) -> tuple[int, int, int]:
     if tcp:
         os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
     capture = cv2.VideoCapture(url)
     width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fps = int(round(capture.get(cv2.CAP_PROP_FPS)))
+    stream_codec = fourcc_codec(capture.get(cv2.CAP_PROP_FOURCC))
     capture.release()
     if width <= 0 or height <= 0 or fps <= 0:
         raise RuntimeError(f"could not read the frame size and rate of {url}")
+    # The decoder accepts only the configured codec; another codec would fail only after the models load.
+    if stream_codec is not None and stream_codec != codec:
+        raise RuntimeError(f"{url} is {stream_codec}, but source.codec is {codec}")
     return width, height, fps
 
 
@@ -117,9 +149,16 @@ def build_source(cfg: Config, width: int, height: int, fps: int):
     source.url = cfg.rtsp_url
     source.tcp = cfg.tcp
     source.latency_ms = cfg.latency_ms
-    source.fallback_h264_width = width
-    source.fallback_h264_height = height
-    source.fallback_h264_fps = fps
+    if cfg.codec == "h264":
+        source.fallback_h264_width = width
+        source.fallback_h264_height = height
+        source.fallback_h264_fps = fps
+    else:
+        source.codec = pyneat.RtspCodec.H265
+        source.auto_caps_from_stream = True
+        source.dec_width = width
+        source.dec_height = height
+        source.source_fps = fps
 
     video = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(width, height, fps)
     video.host = cfg.insight_host
@@ -183,20 +222,30 @@ def mask_outline(mask_logits, box, width: int, height: int, logit_threshold: flo
     return [[int(x) + out_x0, int(y) + out_y0] for [[x, y]] in polygon]
 
 
+def box_iou(a, b) -> float:
+    """Intersection over union of two (x0, y0, x1, y1) boxes."""
+    inter = max(0, min(a[2], b[2]) - max(a[0], b[0])) * max(0, min(a[3], b[3]) - max(a[1], b[1]))
+    union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+    return inter / union
+
+
 def segments_of(detections, masks, cfg: Config, width: int, height: int) -> list[dict]:
     detections = detections.reshape(-1, detections.shape[-1])
     masks = masks.reshape(masks.shape[-3:])
     logit_threshold = np.log(np.float64(cfg.mask_threshold) / (1.0 - cfg.mask_threshold))
     best = np.argsort(-detections[:, 4], kind="stable")[:cfg.max_detections]
     sx, sy = width / MODEL_SIZE, height / MODEL_SIZE
-    segments = []
+    segments, kept_boxes = [], []
     for n, query in enumerate((q for q in best if detections[q, 4] > cfg.min_score), start=1):
         x1, y1, x2, y2, score = (float(v) for v in detections[query, :5])
         x0 = max(0, min(width - 1, math.floor(x1 * sx)))
         y0 = max(0, min(height - 1, math.floor(y1 * sy)))
         box = (x0, y0, max(x0 + 1, min(width, math.ceil(x2 * sx))), max(y0 + 1, min(height, math.ceil(y2 * sy))))
+        if any(box_iou(box, kept) > DUPLICATE_IOU for kept in kept_boxes):
+            continue
         outline = mask_outline(masks[:, :, query], box, width, height, logit_threshold)
         if outline:
+            kept_boxes.append(box)
             segments.append({"id": f"seg_{n}", "label": cfg.prompt, "confidence": round(score, 4),
                              "bbox": [box[0], box[1], box[2] - box[0], box[3] - box[1]],
                              "mask_format": "polygon", "mask": outline})
@@ -259,20 +308,22 @@ def save_frame(path: Path, frame, segments: list[dict]) -> None:
 
 
 def run(cfg: Config) -> None:
-    text, tokens = encode_prompt(cfg)
-    text_tensor = ev74_tensor(text)
+    # Check the prompt and the stream first: loading the two models takes about a minute.
+    tokens = prompt_tokens(cfg.prompt)
+    width, height, fps = probe_stream(cfg.rtsp_url, cfg.tcp, cfg.codec)
+    text_tensor = ev74_tensor(encode_prompt(cfg, tokens))
     model_options = pyneat.RunOptions()
     model_options.queue_depth = PIPELINE_DEPTH
     image = np.zeros((MODEL_SIZE, MODEL_SIZE, 3), np.float32)
     runner = pyneat.Model(cfg.model_path).build([ev74_tensor(image), text_tensor], run_options=model_options)
-    width, height, fps = probe_stream(cfg.rtsp_url, cfg.tcp)
     graph_run = build_source(cfg, width, height, fps)
     metadata_options = pyneat.MetadataSenderOptions()
     metadata_options.host = cfg.insight_host
     metadata_options.metadata_port_base = cfg.metadata_port
     metadata = pyneat.MetadataSender(metadata_options)
-    print(f"rtsp={cfg.rtsp_url} stream={width}x{height}@{fps} prompt={cfg.prompt!r} tokens={tokens} "
-          f"insight={cfg.insight_host} video={cfg.video_port} metadata={cfg.metadata_port} channel=0", flush=True)
+    print(f"rtsp={cfg.rtsp_url} stream={width}x{height}@{fps} codec={cfg.codec} prompt={cfg.prompt!r} "
+          f"tokens={int((tokens != 0).sum())} insight={cfg.insight_host} video={cfg.video_port} "
+          f"metadata={cfg.metadata_port} channel=0", flush=True)
 
     images = [np.empty((MODEL_SIZE, MODEL_SIZE, 3), np.float32) for _ in range(PIPELINE_DEPTH + 1)]
     overlay = OverlayClock()

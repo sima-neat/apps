@@ -46,9 +46,13 @@ class ClipTokenizer:
             parts = merged
         return parts
 
-    def encode(self, text: str, length: int) -> np.ndarray:
-        ids = [self.ids["<start_of_text>"]]
+    def tokens(self, text: str) -> list[int]:
+        """The token ids of the text, without the start and end tokens."""
+        tokens = []
         for word in WORDS.findall(" ".join(text.lower().split())):
-            ids += [self.ids[piece] for piece in self.pieces("".join(self.byte_chars[b] for b in word.encode()))]
-        ids = ids[:length - 1] + [self.ids["<end_of_text>"]]
+            tokens += [self.ids[piece] for piece in self.pieces("".join(self.byte_chars[b] for b in word.encode()))]
+        return tokens
+
+    def encode(self, text: str, length: int) -> np.ndarray:
+        ids = [self.ids["<start_of_text>"], *self.tokens(text)][:length - 1] + [self.ids["<end_of_text>"]]
         return np.pad(np.array(ids, np.int64), (0, length - len(ids)))

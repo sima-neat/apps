@@ -4,9 +4,11 @@ model:
 
 prompt:
   text: "person"             # What to segment: any short noun phrase, e.g. "red car", "dog", "traffic sign".
+                             # At most 14 tokens (about 10 words); a longer prompt is rejected at startup.
 
 source:
-  rtsp_url: <rtsp-url>       # H.264 RTSP stream, e.g. rtsp://<insight-host-ip>:8554/src1.
+  rtsp_url: <rtsp-url>       # RTSP stream, e.g. rtsp://<insight-host-ip>:8554/src1.
+  codec: h264                # Stream codec: h264 or h265.
   tcp: true                  # Use TCP for RTSP transport.
   latency_ms: 100            # RTSP receive latency in milliseconds.
 

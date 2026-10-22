@@ -14,9 +14,9 @@
 
 ## Concept
 
-Segments whatever a text prompt names, such as a person or a red car, in one RTSP H.264 stream with EfficientSAM3 and sends H.264 video and mask outlines to Insight.
+Segments whatever a text prompt names, such as a person or a red car, in one RTSP H.264 or H.265 stream with EfficientSAM3 and sends H.264 video and mask outlines to Insight.
 
-The prompt is any short noun phrase. At startup the application splits it into CLIP tokens and the EfficientSAM3 text encoder turns them into text features, once, on the MLA. The segmentation model then runs on the MLA for every frame it takes, on a 1008x1008 copy of the frame, with the same text features each time.
+The prompt is any short noun phrase of at most 14 tokens, about ten words. At startup the application splits it into CLIP tokens and the EfficientSAM3 text encoder turns them into text features, once, on the MLA. The segmentation model then runs on the MLA for every frame it takes, on a 1008x1008 copy of the frame, with the same text features each time.
 
 ```
 prompt --> CLIP tokens --> text encoder (MLA, once) --> text features --+
@@ -37,7 +37,7 @@ Metadata is sent as `type: "segmentation"` with one `data.segments[]` entry per 
 ## Prerequisites
 
 - `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
-- An RTSP H.264 source and an [Insight](https://developer.sima.ai/software/tools/insight/) URL reachable from the target.
+- An RTSP H.264 or H.265 source and an [Insight](https://developer.sima.ai/software/tools/insight/) URL reachable from the target.
 
 ## Install Apps
 
@@ -84,7 +84,8 @@ In the Insight Web UI, start a stream on `src1`; its source URL is `rtsp://<insi
 Open `${APP_DIR}/src/common/config.yaml`. Set:
 
 - `model.path` and `model.text_encoder` to the two model packages.
-- `prompt.text` to what you want to segment, for example `"person"`, `"red car"`, or `"traffic sign"`.
+- `prompt.text` to what you want to segment, for example `"person"`, `"red car"`, or `"traffic sign"`. The application rejects an empty prompt and one longer than the text encoder reads (14 tokens).
+- `source.codec` to `h265` if the stream is H.265.
 - `source.rtsp_url` to the stream, for example the Insight `src1` stream.
 - `output.insight.host`, and the video and metadata ports if Insight uses other ports.
 
@@ -113,7 +114,7 @@ python3 ${APP_DIR}/src/python/main.py \
 On startup both applications print the stream and the encoded prompt:
 
 ```text
-rtsp=rtsp://<insight-host-ip>:8554/src1 stream=<width>x<height>@<fps> prompt='person' tokens=<n> insight=<insight-host-ip> video=9000 metadata=9100 channel=0
+rtsp=rtsp://<insight-host-ip>:8554/src1 stream=<width>x<height>@<fps> codec=h264 prompt='person' tokens=<n> insight=<insight-host-ip> video=9000 metadata=9100 channel=0
 ```
 
 Open the Insight Video Viewer for channel 0. Instances that match the prompt are outlined and labelled with it. The application runs until Ctrl-C, or until it has segmented `inference.frames` frames when that is positive, and then prints a summary:
@@ -131,7 +132,7 @@ With `runtime.profile` set, it also prints the segmentation rate every `runtime.
 ## Troubleshooting
 
 - Verify `model.path` and `model.text_encoder` if startup fails.
-- Verify stream reachability if the first frame times out. From a board, use the published host port instead of the container port.
+- Verify stream reachability if startup reports that it could not read the frame size and rate, or if the first frame times out. If startup reports that the stream is in another codec, set `source.codec` to match. From a board, use the published host port instead of the container port.
 - Verify the Insight host and UDP ports if no output arrives.
 - Lower `inference.min_score` or use a more specific prompt if nothing is outlined.
 

@@ -65,7 +65,7 @@ def config(**overrides):
 def test_packaged_config_loads():
     cfg = main.load_config(CONFIG)
     assert cfg.prompt == "person"
-    assert (cfg.tcp, cfg.latency_ms, cfg.frames) == (True, 100, 0)
+    assert (cfg.codec, cfg.tcp, cfg.latency_ms, cfg.frames) == ("h264", True, 100, 0)
     assert (cfg.min_score, cfg.max_detections, cfg.mask_threshold) == (0.3, 20, 0.5)
     assert (cfg.video_port, cfg.metadata_port) == (9000, 9100)
     assert (cfg.save_dir, cfg.save_every) == ("", 0)
@@ -79,6 +79,7 @@ def test_packaged_config_loads():
         ("inference", "max_detections", -1, "inference.max_detections must be > 0"),
         ("inference", "mask_threshold", -0.1, r"inference.mask_threshold must be in \[0, 1\]"),
         ("runtime", "profile_interval", 0, "runtime.profile_interval must be > 0"),
+        ("source", "codec", "vp9", "source.codec must be h264 or h265"),
     ],
 )
 def test_config_rejects_invalid_values(tmp_path, section, key, value, message):
@@ -101,6 +102,31 @@ def test_tokenizer_matches_clip(prompt):
 def test_tokenizer_truncates_and_keeps_the_end_token():
     tokens = ClipTokenizer().encode(" ".join(["car"] * 20), 16)
     assert tokens[0] == 49406 and tokens[15] == 49407 and len(tokens) == 16
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("prompt", ["", "   ", None])
+def test_prompt_must_name_something(prompt):
+    with pytest.raises(ValueError, match="prompt.text must name what to segment"):
+        main.prompt_tokens(prompt)
+
+
+@pytest.mark.unit
+def test_prompt_longer_than_the_text_encoder_is_rejected():
+    fits = " ".join(["car"] * 14)
+    assert main.prompt_tokens(fits).tolist()[15] == 49407
+    with pytest.raises(ValueError, match="prompt.text is 15 tokens; the text encoder reads at most 14"):
+        main.prompt_tokens(fits + " bus")
+
+
+@pytest.mark.unit
+def test_stream_codec_comes_from_the_fourcc():
+    def fourcc(tag):
+        return float(sum(ord(c) << 8 * i for i, c in enumerate(tag)))
+
+    assert [main.fourcc_codec(fourcc(tag)) for tag in ("h264", "avc1", "hevc", "hvc1", "MJPG")] == [
+        "h264", "h264", "h265", "h265", None]
+    assert main.fourcc_codec(0.0) is None
 
 
 @pytest.mark.unit
@@ -131,6 +157,15 @@ def test_max_detections_keeps_the_best_scores():
     detections, masks = frame_result()
     segments = main.segments_of(detections, masks, config(max_detections=1), 1920, 1080)
     assert [s["id"] for s in segments] == ["seg_1"]
+
+
+@pytest.mark.unit
+def test_duplicate_instances_are_dropped():
+    detections, masks = frame_result()
+    detections[40] = [210.0, 262.0, 420.0, 400.0, 0.45, 0]  # most of instance 7's box, scored lower
+    masks[50:75, 40:80, 40] = 10.0
+    segments = main.segments_of(detections, masks, config(), 1920, 1080)
+    assert [s["id"] for s in segments] == ["seg_1", "seg_4"]
 
 
 @pytest.mark.unit

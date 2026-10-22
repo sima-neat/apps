@@ -16,12 +16,15 @@
 #include <nlohmann/json.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
+#include <opencv2/videoio.hpp>
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <csignal>
 #include <cstdint>
+#include <cstdlib>
 #include <deque>
 #include <filesystem>
 #include <iostream>
@@ -47,6 +50,10 @@ constexpr int kVocabSize = 49408;
 constexpr int kPipelineDepth = 3;
 // MetadataSender rejects a message above 65507 bytes; half of it leaves room for the envelope.
 constexpr std::size_t kMetadataByteBudget = 32'768;
+// The model sometimes returns one object twice, e.g. a whole person and their upper body. An
+// instance whose box overlaps a higher-scoring one by more than this intersection-over-union is
+// dropped as a duplicate.
+constexpr double kDuplicateIou = 0.6;
 
 volatile std::sig_atomic_t g_stop_requested = 0;
 
@@ -59,6 +66,7 @@ struct Config {
   std::string text_encoder;
   std::string prompt;
   std::string rtsp_url;
+  std::string codec = "h264";
   bool tcp = true;
   int latency_ms = 100;
   int frames = 0;
@@ -74,6 +82,12 @@ struct Config {
   int save_every = 0;
 };
 
+std::string lowercase(std::string text) {
+  std::transform(text.begin(), text.end(), text.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  return text;
+}
+
 Config load_config(const fs::path& path) {
   const auto raw = sima_examples::ScalarConfig::load(path);
   Config cfg;
@@ -81,6 +95,8 @@ Config load_config(const fs::path& path) {
   cfg.text_encoder = raw.string_or("model.text_encoder", "");
   cfg.prompt = raw.string_or("prompt.text", "");
   cfg.rtsp_url = raw.string_or("source.rtsp_url", "");
+  const std::string codec = lowercase(raw.string_or("source.codec", "h264"));
+  cfg.codec = codec == "avc" ? "h264" : codec == "hevc" ? "h265" : codec;
   cfg.tcp = raw.bool_or("source.tcp", true);
   cfg.latency_ms = raw.int_or("source.latency_ms", 100);
   cfg.frames = raw.int_or("inference.frames", 0);
@@ -100,6 +116,8 @@ Config load_config(const fs::path& path) {
   sima_examples::require(cfg.mask_threshold >= 0.0 && cfg.mask_threshold <= 1.0,
                          "inference.mask_threshold must be in [0, 1]");
   sima_examples::require(cfg.profile_interval > 0, "runtime.profile_interval must be > 0");
+  sima_examples::require(cfg.codec == "h264" || cfg.codec == "h265",
+                         "source.codec must be h264 or h265");
   return cfg;
 }
 
@@ -112,11 +130,21 @@ neat::Tensor ev74_tensor(const std::vector<float>& values, std::vector<int64_t> 
   return tensor;
 }
 
-std::pair<std::vector<float>, int> encode_prompt(const Config& cfg) {
-  const fs::path vocab =
+// Tokenizes the prompt, rejecting one that the text encoder would not see whole.
+std::vector<int64_t> prompt_tokens(const std::string& prompt) {
+  const ClipTokenizer tokenizer(
       sima_examples::default_config_path(SIMANEAT_APPS_EXAMPLE_SOURCE_DIR).parent_path() /
-      "bpe_simple_vocab_16e6.txt.gz";
-  const std::vector<int64_t> tokens = ClipTokenizer(vocab).encode(cfg.prompt, kTextTokens);
+      "bpe_simple_vocab_16e6.txt.gz");
+  const std::size_t count = tokenizer.tokens(prompt).size();
+  sima_examples::require(count > 0, "prompt.text must name what to segment");
+  sima_examples::require(count <= static_cast<std::size_t>(kTextTokens - 2),
+                         "prompt.text is " + std::to_string(count) +
+                             " tokens; the text encoder reads at most " +
+                             std::to_string(kTextTokens - 2) + ", so shorten it");
+  return tokenizer.encode(prompt, kTextTokens);
+}
+
+std::vector<float> encode_prompt(const Config& cfg, const std::vector<int64_t>& tokens) {
   // The MLA cannot look up token ids, so the text encoder takes them one-hot.
   std::vector<float> one_hot(static_cast<std::size_t>(kTextTokens) * kVocabSize, 0.0F);
   for (int i = 0; i < kTextTokens; ++i) {
@@ -131,12 +159,26 @@ std::pair<std::vector<float>, int> encode_prompt(const Config& cfg) {
   encoder.close();
   std::vector<float> text(static_cast<std::size_t>(kTextTokens + 1) * kTextDim, 0.0F);
   std::copy_n(features.begin(), kTextTokens * kTextDim, text.begin());
-  int count = 0;
   for (int i = 0; i < kTextTokens; ++i) {
     text[kTextTokens * kTextDim + i] = tokens[i] != 0 ? 1.0F : 0.0F;
-    count += tokens[i] != 0 ? 1 : 0;
   }
-  return {text, count};
+  return text;
+}
+
+// The codec of an OpenCV FOURCC value, or "" when it is not one this application decodes.
+std::string fourcc_codec(double fourcc) {
+  std::string tag;
+  for (int i = 0; i < 4; ++i) {
+    tag += static_cast<char>((static_cast<int>(fourcc) >> (8 * i)) & 0xFF);
+  }
+  tag = lowercase(tag);
+  if (tag == "h264" || tag == "avc1") {
+    return "h264";
+  }
+  if (tag == "hevc" || tag == "hev1" || tag == "hvc1" || tag == "h265") {
+    return "h265";
+  }
+  return "";
 }
 
 sima_examples::RtspStreamInfo probe_stream(const Config& cfg) {
@@ -147,6 +189,17 @@ sima_examples::RtspStreamInfo probe_stream(const Config& cfg) {
   sima_examples::require(sima_examples::probe_rtsp_stream_info(cfg.rtsp_url, options, stream) &&
                              stream.width > 0 && stream.height > 0 && stream.fps > 0,
                          "could not read the frame size and rate of " + cfg.rtsp_url);
+  // The decoder accepts only the configured codec; another codec would fail only after the models
+  // load.
+  if (cfg.tcp) {
+    setenv("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp", 1);
+  }
+  cv::VideoCapture capture(cfg.rtsp_url, cv::CAP_FFMPEG);
+  const std::string stream_codec = fourcc_codec(capture.get(cv::CAP_PROP_FOURCC));
+  capture.release();
+  sima_examples::require(stream_codec.empty() || stream_codec == cfg.codec,
+                         cfg.rtsp_url + " is " + stream_codec + ", but source.codec is " +
+                             cfg.codec);
   return stream;
 }
 
@@ -160,9 +213,17 @@ Source build_source(const Config& cfg, int width, int height, int fps) {
   source.url = cfg.rtsp_url;
   source.tcp = cfg.tcp;
   source.latency_ms = cfg.latency_ms;
-  source.fallback_h264_width = width;
-  source.fallback_h264_height = height;
-  source.fallback_h264_fps = fps;
+  if (cfg.codec == "h264") {
+    source.fallback_h264_width = width;
+    source.fallback_h264_height = height;
+    source.fallback_h264_fps = fps;
+  } else {
+    source.codec = neat::nodes::groups::RtspCodec::H265;
+    source.auto_caps_from_stream = true;
+    source.dec_width = width;
+    source.dec_height = height;
+    source.source_fps = fps;
+  }
 
   auto video = neat::nodes::groups::VideoSenderOptions::H264RtpUdpFromRaw(width, height, fps);
   video.host = cfg.insight_host;
@@ -260,6 +321,15 @@ struct Segment {
   std::vector<cv::Point> mask;
 };
 
+double box_iou(const Box& a, const Box& b) {
+  const double inter =
+      static_cast<double>(std::max(0, std::min(a[2], b[2]) - std::max(a[0], b[0]))) *
+      std::max(0, std::min(a[3], b[3]) - std::max(a[1], b[1]));
+  const double area_a = static_cast<double>(a[2] - a[0]) * (a[3] - a[1]);
+  const double area_b = static_cast<double>(b[2] - b[0]) * (b[3] - b[1]);
+  return inter / (area_a + area_b - inter);
+}
+
 // detections: queries x 6 (x1, y1, x2, y2, score, -) in model pixels; masks: mask_h x mask_w x
 // queries logits.
 std::vector<Segment> segments_of(const cv::Mat& detections, const cv::Mat& masks, const Config& cfg,
@@ -287,6 +357,10 @@ std::vector<Segment> segments_of(const cv::Mat& detections, const cv::Mat& masks
     const Box box{x0, y0,
                   std::max(x0 + 1, std::min(width, static_cast<int>(std::ceil(row[2] * sx)))),
                   std::max(y0 + 1, std::min(height, static_cast<int>(std::ceil(row[3] * sy))))};
+    if (std::any_of(segments.begin(), segments.end(),
+                    [&](const Segment& kept) { return box_iou(box, kept.box) > kDuplicateIou; })) {
+      continue;
+    }
     cv::Mat mask_logits;
     cv::extractChannel(masks, mask_logits, query);
     std::vector<cv::Point> outline = mask_outline(mask_logits, box, width, height, logit_threshold);
@@ -392,8 +466,11 @@ void save_frame(const fs::path& path, const cv::Mat& frame, const std::vector<Se
 // ------------------------------------------------------------------------------------- run
 
 void run(const Config& cfg) {
-  const auto [text, tokens] = encode_prompt(cfg);
-  const neat::Tensor text_tensor = ev74_tensor(text, {1, kTextTokens + 1, kTextDim});
+  // Check the prompt and the stream first: loading the two models takes about a minute.
+  const std::vector<int64_t> tokens = prompt_tokens(cfg.prompt);
+  const sima_examples::RtspStreamInfo stream = probe_stream(cfg);
+  const neat::Tensor text_tensor =
+      ev74_tensor(encode_prompt(cfg, tokens), {1, kTextTokens + 1, kTextDim});
   neat::RunOptions model_options;
   model_options.queue_depth = kPipelineDepth;
   std::vector<neat::Tensor> images;
@@ -404,7 +481,6 @@ void run(const Config& cfg) {
   neat::Model model(cfg.model_path);
   neat::Model::Runner runner = model.build(neat::TensorList{images[0], text_tensor},
                                            neat::Model::RouteOptions{}, model_options);
-  const sima_examples::RtspStreamInfo stream = probe_stream(cfg);
   const int width = stream.width;
   const int height = stream.height;
   Source source = build_source(cfg, width, height, stream.fps);
@@ -413,9 +489,10 @@ void run(const Config& cfg) {
   metadata_options.metadata_port_base = cfg.metadata_port;
   const neat::MetadataSender metadata(metadata_options);
   std::cout << "rtsp=" << cfg.rtsp_url << " stream=" << width << "x" << height << "@" << stream.fps
-            << " prompt='" << cfg.prompt << "' tokens=" << tokens << " insight=" << cfg.insight_host
-            << " video=" << cfg.video_port << " metadata=" << cfg.metadata_port << " channel=0"
-            << std::endl;
+            << " codec=" << cfg.codec << " prompt='" << cfg.prompt << "' tokens="
+            << std::count_if(tokens.begin(), tokens.end(), [](int64_t id) { return id != 0; })
+            << " insight=" << cfg.insight_host << " video=" << cfg.video_port
+            << " metadata=" << cfg.metadata_port << " channel=0" << std::endl;
 
   OverlayClock overlay;
   std::deque<std::pair<int64_t, std::optional<cv::Mat>>> in_flight;

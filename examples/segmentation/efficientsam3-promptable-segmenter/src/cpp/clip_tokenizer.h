@@ -50,8 +50,9 @@ public:
     }
   }
 
-  std::vector<int64_t> encode(const std::string& text, int length) const {
-    std::vector<int64_t> ids{ids_.at("<start_of_text>")};
+  // The token ids of the text, without the start and end tokens.
+  std::vector<int64_t> tokens(const std::string& text) const {
+    std::vector<int64_t> ids;
     for (const std::u32string& word : words(text)) {
       std::string symbols;
       for (const char byte : utf8_of(word)) {
@@ -61,6 +62,13 @@ public:
         ids.push_back(ids_.at(piece));
       }
     }
+    return ids;
+  }
+
+  std::vector<int64_t> encode(const std::string& text, int length) const {
+    std::vector<int64_t> ids{ids_.at("<start_of_text>")};
+    const std::vector<int64_t> text_ids = tokens(text);
+    ids.insert(ids.end(), text_ids.begin(), text_ids.end());
     ids.resize(std::min<std::size_t>(ids.size(), length - 1));
     ids.push_back(ids_.at("<end_of_text>"));
     ids.resize(length, 0);

@@ -109,8 +109,9 @@ int main(int argc, char** argv) {
   const fs::path config_path = sima_examples::default_config_path(SIMANEAT_APPS_EXAMPLE_SOURCE_DIR);
 
   const Config packaged = load_config(config_path);
-  check(packaged.prompt == "person" && packaged.min_score == 0.3 && packaged.max_detections == 20 &&
-            packaged.mask_threshold == 0.5 && packaged.metadata_port == 9100,
+  check(packaged.prompt == "person" && packaged.codec == "h264" && packaged.min_score == 0.3 &&
+            packaged.max_detections == 20 && packaged.mask_threshold == 0.5 &&
+            packaged.metadata_port == 9100,
         "packaged config loads");
   const std::string scratch =
       create_test_scratch_dir("efficientsam3-promptable-segmenter", "invalid-config");
@@ -119,7 +120,8 @@ int main(int argc, char** argv) {
            {"inference.min_score", "1.5", "inference.min_score must be in [0, 1]"},
            {"inference.max_detections", "-1", "inference.max_detections must be > 0"},
            {"inference.mask_threshold", "-0.1", "inference.mask_threshold must be in [0, 1]"},
-           {"runtime.profile_interval", "0", "runtime.profile_interval must be > 0"}}) {
+           {"runtime.profile_interval", "0", "runtime.profile_interval must be > 0"},
+           {"source.codec", "vp9", "source.codec must be h264 or h265"}}) {
     write_e2e_config("efficientsam3-promptable-segmenter", invalid_config, {{key, value}});
     try {
       (void)load_config(invalid_config);
@@ -151,6 +153,38 @@ int main(int argc, char** argv) {
             long_prompt.back() == 49407,
         "long prompts are truncated and keep the end token");
 
+  const auto rejects = [](const std::string& prompt, const std::string& message) {
+    try {
+      (void)prompt_tokens(prompt);
+      return false;
+    } catch (const std::exception& error) {
+      return std::string(error.what()).find(message) != std::string::npos;
+    }
+  };
+  check(rejects("", "prompt.text must name what to segment") &&
+            rejects("   ", "prompt.text must name what to segment"),
+        "an empty prompt is rejected");
+  std::string fourteen_cars;
+  for (int i = 0; i < 14; ++i) {
+    fourteen_cars += "car ";
+  }
+  check(prompt_tokens(fourteen_cars).at(15) == 49407 &&
+            rejects(fourteen_cars + "bus",
+                    "prompt.text is 15 tokens; the text encoder reads at most 14"),
+        "a prompt longer than the text encoder is rejected");
+
+  const auto fourcc = [](const std::string& tag) {
+    int value = 0;
+    for (std::size_t i = 0; i < tag.size(); ++i) {
+      value |= static_cast<unsigned char>(tag[i]) << (8 * i);
+    }
+    return static_cast<double>(value);
+  };
+  check(fourcc_codec(fourcc("h264")) == "h264" && fourcc_codec(fourcc("avc1")) == "h264" &&
+            fourcc_codec(fourcc("hevc")) == "h265" && fourcc_codec(fourcc("hvc1")) == "h265" &&
+            fourcc_codec(fourcc("MJPG")).empty() && fourcc_codec(0.0).empty(),
+        "the stream codec comes from the FOURCC");
+
   Config cfg = packaged;
   cfg.prompt = "red car";
   FrameResult result;
@@ -165,6 +199,14 @@ int main(int argc, char** argv) {
   check(budgeted.size() <= kMetadataByteBudget && kept.size() == 1 &&
             kept.at(0).at("id") == "seg_1",
         "metadata keeps the best segments within the byte budget");
+  cfg.prompt = "red car";
+  FrameResult duplicated;
+  duplicated.detect(40, {210.0F, 262.0F, 420.0F, 400.0F, 0.45F}); // most of instance 7's box
+  duplicated.fill(40, 50, 75, 40, 80);
+  const std::vector<Segment> deduplicated = duplicated.segments(cfg);
+  check(deduplicated.size() == 2 && deduplicated.at(0).id == "seg_1" &&
+            deduplicated.at(1).id == "seg_4",
+        "duplicate instances are dropped");
 
   const cv::Mat empty(kMaskSide, kMaskSide, CV_32F, cv::Scalar(-10.0F));
   check(mask_outline(empty, {100, 100, 300, 300}, 1920, 1080, 0.0F).empty(),
