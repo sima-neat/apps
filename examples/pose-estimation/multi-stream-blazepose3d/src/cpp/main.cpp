@@ -1284,11 +1284,8 @@ std::optional<blazepose_app::Pose> parse_pose_output(const neat::Sample& sample,
     throw std::runtime_error("BlazePose output must contain three tensors");
   }
   const std::vector<float> presence = tensor_floats(tensors[1], 1);
-  if (!std::isfinite(presence[0])) {
-    return std::nullopt;
-  }
-  const float presence_probability = blazepose_app::sigmoid(presence[0]);
-  if (presence_probability < cfg.pose_presence_threshold) {
+  const float presence_probability = presence[0];
+  if (!blazepose_app::pose_is_present(presence_probability, cfg.pose_presence_threshold)) {
     return std::nullopt;
   }
   const std::vector<float> landmarks = tensor_floats(tensors[0], 195);

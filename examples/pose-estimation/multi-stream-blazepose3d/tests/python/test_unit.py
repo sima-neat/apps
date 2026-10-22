@@ -442,8 +442,8 @@ class FakeTensor:
         return self.values.copy() if copy else self.values
 
 
-def parse_pose(monkeypatch, presence_logit: float, poison=None):
-    tensors = [FakeTensor(np.zeros(195)), FakeTensor([presence_logit]), FakeTensor(np.zeros(117))]
+def parse_pose(monkeypatch, presence: float, poison=None):
+    tensors = [FakeTensor(np.zeros(195)), FakeTensor([presence]), FakeTensor(np.zeros(117))]
     if poison is not None:
         tensor_index, position, value = poison
         tensors[tensor_index].values[position] = value
@@ -452,9 +452,11 @@ def parse_pose(monkeypatch, presence_logit: float, poison=None):
     return main.parse_pose_output(object(), context, SimpleNamespace(pose_presence_threshold=0.5))
 
 
-def test_pose_presence_logit_is_activated_before_thresholding(monkeypatch):
-    assert parse_pose(monkeypatch, 0.0)["presence"] == pytest.approx(0.5)
-    assert parse_pose(monkeypatch, -0.01) is None
+def test_pose_presence_probability_is_thresholded_without_another_sigmoid(monkeypatch):
+    assert parse_pose(monkeypatch, 0.5)["presence"] == pytest.approx(0.5)
+    assert parse_pose(monkeypatch, 0.49) is None
+    # A second sigmoid would map an absent person (0.0) to 0.5 and keep the crop.
+    assert parse_pose(monkeypatch, 0.0) is None
 
 
 @pytest.mark.parametrize(
@@ -463,8 +465,8 @@ def test_pose_presence_logit_is_activated_before_thresholding(monkeypatch):
     ids=["screen-nan", "screen-inf", "world-nan", "world-negative-inf"],
 )
 def test_non_finite_landmarks_discard_only_that_pose(monkeypatch, poison):
-    assert parse_pose(monkeypatch, 4.0) is not None
-    assert parse_pose(monkeypatch, 4.0, poison) is None
+    assert parse_pose(monkeypatch, 0.9) is not None
+    assert parse_pose(monkeypatch, 0.9, poison) is None
 
 
 def pose_sample(x: float, world_x: float, box_x: float = 0.0) -> dict:

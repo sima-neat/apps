@@ -77,9 +77,12 @@ bool test_math_and_metadata_contract() {
   raw_world[2] = 0.3F;
   const blazepose_app::Affine affine{2.0, 0.0, 10.0, 0.0, 3.0, 20.0};
   const auto pose = blazepose_app::decode_pose(raw, raw_world, affine, box, 0.93F, 2);
-  ok &= expect(near(pose.presence, 0.93F) && near(blazepose_app::sigmoid(0.0F), 0.5F) &&
-                   blazepose_app::sigmoid(-0.01F) < 0.5F,
-               "global pose presence is retained and its logit activates before thresholding");
+  ok &=
+      expect(near(pose.presence, 0.93F) && blazepose_app::pose_is_present(0.5F, 0.5) &&
+                 !blazepose_app::pose_is_present(0.49F, 0.5) &&
+                 !blazepose_app::pose_is_present(0.0F, 0.5) &&
+                 !blazepose_app::pose_is_present(std::nanf(""), 0.0),
+             "global pose presence is retained and thresholded as a probability, without sigmoid");
   ok &= expect(near(pose.keypoints[0].x, 18.0F) && near(pose.keypoints[0].y, 44.0F) &&
                    near(pose.keypoints[0].confidence, blazepose_app::sigmoid(-2.0F)) &&
                    near(pose.world_keypoints[0].x, 0.1F) &&

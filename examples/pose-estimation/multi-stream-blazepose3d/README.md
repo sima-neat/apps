@@ -121,7 +121,7 @@ review. Use `--branch develop` after that dependency merges.
 
 The public YOLO26 route accepts dynamic-size images; this application configures it for NV12, so model preprocessing converts color, resizes and normalizes the decoded frame for the internal 640×640 tensor; its six raw detection heads are decoded by `YoloV26` BoxDecode into one BBOX output consumed by the application.
 
-The public BlazePose route accepts HWC RGB images. The application crops each square person ROI from the NV12 frame straight to a 256×256 RGB image, so BlazePose preprocessing only normalizes it. The existing artifact returns screen landmarks `[1,195]` (39 records of x, y, z, visibility logit, and presence logit), global pose presence `[1,1]`, and world landmarks `[1,117]` (39 x/y/z records). This application publishes the first 33 screen and world records in `pose-estimation`, as required by the application contract, and repeats the world records in a generic `auxiliary-visualization` view for Insight's 3D renderer.
+The public BlazePose route accepts HWC RGB images. The application crops each square person ROI from the NV12 frame straight to a 256×256 RGB image, so BlazePose preprocessing only normalizes it. The existing artifact returns screen landmarks `[1,195]` (39 records of x, y, z, visibility logit, and presence logit), global pose presence `[1,1]` (already a probability), and world landmarks `[1,117]` (39 x/y/z records). This application publishes the first 33 screen and world records in `pose-estimation`, as required by the application contract, and repeats the world records in a generic `auxiliary-visualization` view for Insight's 3D renderer.
 
 ## Prepare Insight
 
@@ -220,7 +220,7 @@ about BlazePose fields. This example's world-pose helper supplies the
 `blazepose-3d` payload, while point clouds, meshes, trajectories, or other 3D
 data can reuse the same envelope with a separately registered Insight renderer.
 
-The keypoint confidence is the minimum of BlazePose landmark visibility and presence after sigmoid activation. The global pose-presence logit is also sigmoid-activated before it gates each ROI and is published as a probability.
+The keypoint confidence is the minimum of BlazePose landmark visibility and presence after sigmoid activation. The global pose presence is already a probability, so it gates each ROI and is published without another sigmoid.
 
 Each frame's stream ID, frame ID and PTS stay with its queued work, so a result is always published on its own stream's channel with its source timestamp. The C++ and Python hardware E2E tests each run up to four H.264 and four H.265 streams. On every configured video port they require both codec configuration and a complete VCL-bearing access unit. Every metadata message must carry the configured stream identity and the advertised bbox, presence, confidence, landmark names, and finite coordinates. Each metadata port must also publish a 2D/3D pair with one `(port, timestamp, frame_id)` identity whose pose IDs, presence values, and world landmarks match exactly, and at least one pair must be non-empty.
 

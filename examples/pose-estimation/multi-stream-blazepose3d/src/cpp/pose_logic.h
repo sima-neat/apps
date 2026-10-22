@@ -322,6 +322,12 @@ inline Affine roi_input_affine(const Roi& roi, int input_size) {
   return {scale_x, 0.0, static_cast<double>(roi.x), 0.0, scale_y, static_cast<double>(roi.y)};
 }
 
+// The model's final Sigmoid already makes global pose presence a probability; MediaPipe thresholds
+// it without another activation.
+inline bool pose_is_present(float presence_probability, double threshold) {
+  return std::isfinite(presence_probability) && presence_probability >= threshold;
+}
+
 inline float sigmoid(float value) {
   if (value >= 0.0F) {
     const float z = std::exp(-value);

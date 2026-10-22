@@ -1616,7 +1616,8 @@ def parse_pose_output(sample, context: PoseInputContext, cfg: AppConfig):
         raise RuntimeError("BlazePose presence output must contain one float")
     if not math.isfinite(float(presence[0])):
         return None
-    presence_probability = sigmoid(float(presence[0]))
+    # The model's final Sigmoid already makes global pose presence a probability.
+    presence_probability = float(presence[0])
     if presence_probability < cfg.pose_presence_threshold:
         return None
     landmarks = np.asarray(tensors[0].to_numpy(copy=False), dtype=np.float32).reshape(-1)
