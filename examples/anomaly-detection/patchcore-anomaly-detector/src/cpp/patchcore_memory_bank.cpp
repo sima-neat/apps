@@ -1,6 +1,7 @@
 #include "patchcore_memory_bank.h"
 
 #include <nlohmann/json.hpp>
+#include <opencv2/core.hpp>
 #include <openssl/evp.h>
 
 #include <algorithm>
@@ -13,7 +14,6 @@
 #include <random>
 #include <sstream>
 #include <stdexcept>
-#include <thread>
 
 namespace patchcore {
 
@@ -353,67 +353,26 @@ AnomalyResult MemoryBank::score(const PatchEmbeddings& embeddings, int num_neigh
     return static_cast<float>(std::sqrt(squared_diff_sum(q, bank_row(b), embed_dim_)));
   };
 
-  // Brute-force nearest-neighbor search, parallel over patches; the thread count
-  // stays below hardware_concurrency() to leave headroom for the pipeline.
-  auto scan_patch_range = [&](std::size_t start, std::size_t stop, float& best_score,
-                              std::size_t& best_patch) {
-    best_score = -std::numeric_limits<float>::infinity();
-    best_patch = start;
-    for (std::size_t p = start; p < stop; ++p) {
-      const float* q = embeddings.values.data() + p * embed_dim_;
-      float best = std::numeric_limits<float>::infinity();
-      std::size_t best_idx = 0;
-      for (std::size_t b = 0; b < num_vectors_; ++b) {
-        const float d = dist_to_bank_row(q, b);
-        if (d < best) {
-          best = d;
-          best_idx = b;
-        }
-      }
-      result.score_map[p] = best;
-      locations[p] = best_idx;
-      if (best > best_score) {
-        best_score = best;
-        best_patch = p;
-      }
-    }
-  };
-
-  const unsigned int hw_threads = std::thread::hardware_concurrency();
-  const std::size_t num_threads =
-      std::max<std::size_t>(1, std::min<std::size_t>(hw_threads > 0 ? hw_threads / 2 : 4, 8));
+  // Nearest bank vector per patch. OpenCV's batchDistance sums squared differences
+  // directly and runs in parallel, the same computation as the Python implementation.
+  const cv::Mat query(static_cast<int>(num_patches), static_cast<int>(embed_dim_), CV_32F,
+                      const_cast<float*>(embeddings.values.data()));
+  const cv::Mat bank(static_cast<int>(num_vectors_), static_cast<int>(embed_dim_), CV_32F,
+                     const_cast<float*>(vectors_.data()));
+  cv::Mat nearest_dist;
+  cv::Mat nearest_idx;
+  cv::batchDistance(query, bank, nearest_dist, CV_32F, nearest_idx, cv::NORM_L2, 1);
 
   std::size_t max_patch = 0;
   float max_patch_score = -std::numeric_limits<float>::infinity();
-
-  if (num_threads > 1 && num_patches >= num_threads) {
-    std::vector<std::size_t> local_max_patch(num_threads, 0);
-    std::vector<float> local_max_score(num_threads, -std::numeric_limits<float>::infinity());
-    std::vector<std::thread> workers;
-    workers.reserve(num_threads);
-    const std::size_t chunk = (num_patches + num_threads - 1) / num_threads;
-
-    for (std::size_t t = 0; t < num_threads; ++t) {
-      const std::size_t start = t * chunk;
-      const std::size_t stop = std::min(start + chunk, num_patches);
-      if (start >= stop) {
-        continue;
-      }
-      workers.emplace_back([&, t, start, stop]() {
-        scan_patch_range(start, stop, local_max_score[t], local_max_patch[t]);
-      });
+  for (std::size_t p = 0; p < num_patches; ++p) {
+    const float best = nearest_dist.at<float>(static_cast<int>(p), 0);
+    result.score_map[p] = best;
+    locations[p] = static_cast<std::size_t>(nearest_idx.at<int>(static_cast<int>(p), 0));
+    if (best > max_patch_score) {
+      max_patch_score = best;
+      max_patch = p;
     }
-    for (auto& w : workers) {
-      w.join();
-    }
-    for (std::size_t t = 0; t < num_threads; ++t) {
-      if (local_max_score[t] > max_patch_score) {
-        max_patch_score = local_max_score[t];
-        max_patch = local_max_patch[t];
-      }
-    }
-  } else {
-    scan_patch_range(0, num_patches, max_patch_score, max_patch);
   }
 
   const int k = std::min<int>(num_neighbors, static_cast<int>(num_vectors_));

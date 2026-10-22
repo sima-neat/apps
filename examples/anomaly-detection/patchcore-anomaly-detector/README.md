@@ -71,7 +71,7 @@ The model inspects a square. Images and video frames of any size are center-crop
 
 `--calibrate` keeps every 5th nominal image out of the bank and measures the threshold on those, so the threshold reflects images the bank has not memorized. Set `calibration.threshold_images_dir` to use a separate set instead.
 
-`calibration.coreset_ratio` sets how many nominal patches the bank keeps. The default 0.0004 keeps 4 of the 10,192 patches from the demo's 13 bank images, which is enough for its uniform texture and keeps scoring fast. On a busy or varied scene a bank this small matches normal clutter poorly, which raises the threshold until real defects can go unflagged; raise the ratio (the PatchCore paper keeps 1-10%) and check that a known defect is caught. Scoring cost grows with the bank: measured on a Modalix DevKit (Platform 3.0), the C++ host scoring takes about 9 ms, 87 ms, and 850 ms per frame for 5, 125, and 1,254 vectors.
+`calibration.coreset_ratio` sets how many nominal patches the bank keeps. The default 0.0004 keeps 4 of the 10,192 patches from the demo's 13 bank images, which is enough for its uniform texture and keeps scoring fast. On a busy or varied scene a bank this small matches normal clutter poorly, which raises the threshold until real defects can go unflagged; raise the ratio (the PatchCore paper keeps 1-10%) and check that a known defect is caught. Scoring cost grows with the bank: measured on a Modalix DevKit (Platform 3.0), host scoring takes about 1-2 ms, 30 ms, and 400 ms per frame for 5, 125, and 1,254 vectors (C++ and Python are similar).
 
 ```bash
 ./${APP_DIR}/src/cpp/pre-built/patchcore-anomaly-detector --calibrate --config ${APP_DIR}/src/common/config.yaml

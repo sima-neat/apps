@@ -51,15 +51,12 @@ def extract_hwc(embedding: np.ndarray, embed_dim: int = EMBED_DIM) -> np.ndarray
     raise ValueError(f"could not find the {embed_dim}-channel axis in output shape {arr.shape}")
 
 
-def _pairwise_l2(query: np.ndarray, bank64: np.ndarray, bank_sq: np.ndarray) -> np.ndarray:
-    """query: (N, C), bank: (M, C) -> (N, M) L2 distances, computed in float64
-    so scores match the C++ implementation. `bank64`/`bank_sq` are
-    `MemoryBank`'s precomputed float64 bank and squared norms."""
-    query64 = query.astype(np.float64)
-    q_sq = np.einsum("ij,ij->i", query64, query64)[:, None]  # (N, 1)
-    cross = query64 @ bank64.T  # (N, M), float64 BLAS matmul
-    sq_dist = np.clip(q_sq + bank_sq[None, :] - 2.0 * cross, a_min=0.0, a_max=None)
-    return np.sqrt(sq_dist)
+def nearest_neighbors(query: np.ndarray, bank: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """query: (N, C), bank: (M, C), both float32 -> (distance, bank index) of each
+    query row's nearest bank row. OpenCV's batchDistance sums squared differences
+    directly (no BLAS matmul), the same computation as the C++ implementation."""
+    dist, idx = cv2.batchDistance(query, bank, cv2.CV_32F, normType=cv2.NORM_L2, K=1)
+    return dist[:, 0], idx[:, 0]
 
 
 def greedy_coreset_indices(vectors: np.ndarray, ratio: float, seed: int) -> np.ndarray:
@@ -87,7 +84,7 @@ def greedy_coreset_indices(vectors: np.ndarray, ratio: float, seed: int) -> np.n
 
 @dataclass
 class ScoredImage:
-    score_map: np.ndarray  # (H, W) float64, patch-grid resolution nearest-neighbor distances
+    score_map: np.ndarray  # (H, W) float32, patch-grid resolution nearest-neighbor distances
     image_score: float  # PatchCore-reweighted image-level anomaly score
 
 
@@ -98,9 +95,6 @@ class MemoryBank:
         if vectors.ndim != 2:
             raise ValueError(f"memory bank must be a 2D (N, embed_dim) array, got shape {vectors.shape}")
         self.vectors = np.ascontiguousarray(vectors, dtype=np.float32)
-        # Precomputed once for _pairwise_l2.
-        self._bank64 = self.vectors.astype(np.float64)
-        self._bank_sq = np.einsum("ij,ij->i", self._bank64, self._bank64)
 
     @property
     def size(self) -> int:
@@ -141,11 +135,10 @@ class MemoryBank:
         h, w, c = patch_embeddings.shape
         if c != self.embed_dim:
             raise ValueError(f"patch embedding dim {c} does not match memory bank dim {self.embed_dim}")
-        flat = patch_embeddings.reshape(-1, c)
+        flat = np.ascontiguousarray(patch_embeddings.reshape(-1, c), dtype=np.float32)
 
-        dists = _pairwise_l2(flat, self._bank64, self._bank_sq)  # (num_patches, bank_size)
-        locations = np.argmin(dists, axis=1)  # nearest bank index per patch, m^* index
-        patch_scores = dists[np.arange(dists.shape[0]), locations]  # s per patch
+        # s per patch, and the index of its nearest bank vector (m^* for each patch).
+        patch_scores, locations = nearest_neighbors(flat, self.vectors)
         score_map = patch_scores.reshape(h, w)
 
         k = min(num_neighbors, self.size)
@@ -160,7 +153,7 @@ class MemoryBank:
 
         # N_b(m^*): the k nearest bank neighbors of m^* itself (support_idx[0] == nn_index,
         # since m^* is trivially its own closest neighbor at distance 0).
-        dist_to_m_star = _pairwise_l2(m_star[None, :], self._bank64, self._bank_sq)[0]
+        dist_to_m_star = np.linalg.norm(self.vectors - m_star[None, :], axis=1)
         support_idx = np.argpartition(dist_to_m_star, k - 1)[:k]
         support_idx = support_idx[np.argsort(dist_to_m_star[support_idx])]
 
