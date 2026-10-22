@@ -246,8 +246,8 @@ def center_square(width: int, height: int) -> tuple[int, int, int]:
 
 def model_input_tensor(bgr) -> "pyneat.Tensor":
     """Center-crops a host-decoded frame to a square and resizes it to the model
-    input, matching the RTSP graph's Crop preprocess. A fixed input size also keeps
-    the model from timing out when image sizes change."""
+    input, so every image and video frame is seen the same way. A fixed input size
+    also keeps the model from timing out when image sizes change."""
     x, y, side = center_square(bgr.shape[1], bgr.shape[0])
     square = bgr[y:y + side, x:x + side]
     if (side, side) != MODEL_INPUT_SIZE:

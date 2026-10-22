@@ -294,8 +294,8 @@ simaai::neat::Tensor rgb_tensor(const cv::Mat& bgr) {
                                            simaai::neat::TensorMemory::EV74);
 }
 
-/// Center-crops a host-decoded frame to a square and resizes it to the model input,
-/// matching the RTSP graph's Crop preprocess. A fixed input size also keeps the
+/// Center-crops a host-decoded frame to a square and resizes it to the model input, so
+/// every image and video frame is seen the same way. A fixed input size also keeps the
 /// model from timing out when image sizes change.
 simaai::neat::Tensor model_input_tensor(const cv::Mat& bgr) {
   const cv::Mat square = bgr(center_square(bgr.size()));
@@ -311,8 +311,8 @@ simaai::neat::Tensor model_input_tensor(const cv::Mat& bgr) {
 /// kThresholdEvery-th image measures the threshold and is kept out of the bank, so the
 /// threshold isn't measured on images that match their own bank entries. With fewer
 /// images, all are reused for both.
-std::pair<std::vector<fs::path>, std::vector<fs::path>> split_nominal(
-    const std::vector<fs::path>& paths) {
+std::pair<std::vector<fs::path>, std::vector<fs::path>>
+split_nominal(const std::vector<fs::path>& paths) {
   if (paths.size() < kThresholdEvery) {
     return {paths, paths};
   }

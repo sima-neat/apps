@@ -19,8 +19,8 @@ memory_bank:                                    # Host-side kNN reference set (n
 
 calibration:                                    # Used only by --calibrate.
   nominal_images_dir: assets/datasets/patchcore/nominal   # Demo set (16 known-good images); use your own.
-  coreset_ratio: 0.0004                         # Fraction of nominal patches kept in the bank (0.0004 = 5 of
-                                                 # the demo's 12,544). Raise it for busy or varied scenes; per-
+  coreset_ratio: 0.0004                         # Fraction of nominal patches kept in the bank (0.0004 = 4 of
+                                                 # the demo's 10,192). Raise it for busy or varied scenes; per-
                                                  # frame scoring cost grows with it (see README).
   seed: 0
   threshold_percentile: 99.0                    # Image verdict threshold = this percentile of nominal image

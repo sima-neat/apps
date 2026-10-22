@@ -61,7 +61,7 @@ Set `model.path` in the example config to the downloaded package.
 
 Before scoring anything, build a memory bank from a directory of known-good ("nominal") images of your own inspection target. The bundled `assets/datasets/patchcore/` set exists only to make this demo reproducible without your own images, and is not a substitute for your own target's data:
 
-- `nominal/` -- 16 real known-good reference images. `calibration.nominal_images_dir` points here by default; this is what `--calibrate` below builds the shipped memory bank from.
+- `nominal/` -- 16 real known-good reference images. `calibration.nominal_images_dir` points here by default; `--calibrate` below builds the memory bank from 13 of them and measures the threshold on the other 3.
 - `held_out_normal/` -- 4 further real known-good images, deliberately excluded from calibration, used only by this example's own test suite to check that genuinely normal images the bank never saw still score below the threshold.
 - `images/` -- an image-directory scoring input: one normal-looking image (`plain_0.png`) and four images with synthetic scratch defects (`scratch_0.png`-`scratch_3.png`), for exercising `source.type: image_dir` end to end.
 
@@ -71,7 +71,7 @@ The model inspects a square. Images and video frames of any size are center-crop
 
 `--calibrate` keeps every 5th nominal image out of the bank and measures the threshold on those, so the threshold reflects images the bank has not memorized. Set `calibration.threshold_images_dir` to use a separate set instead.
 
-`calibration.coreset_ratio` sets how many nominal patches the bank keeps. The default 0.0004 keeps 5 of the demo's 12,544, which is enough for its uniform texture and keeps scoring fast. On a busy or varied scene a bank this small matches normal clutter poorly, which raises the threshold until real defects can go unflagged; raise the ratio (the PatchCore paper keeps 1-10%) and check that a known defect is caught. Scoring cost grows with the bank: measured on a Modalix DevKit (Platform 3.0), the C++ host scoring takes about 9 ms, 87 ms, and 850 ms per frame for 5, 125, and 1,254 vectors.
+`calibration.coreset_ratio` sets how many nominal patches the bank keeps. The default 0.0004 keeps 4 of the 10,192 patches from the demo's 13 bank images, which is enough for its uniform texture and keeps scoring fast. On a busy or varied scene a bank this small matches normal clutter poorly, which raises the threshold until real defects can go unflagged; raise the ratio (the PatchCore paper keeps 1-10%) and check that a known defect is caught. Scoring cost grows with the bank: measured on a Modalix DevKit (Platform 3.0), the C++ host scoring takes about 9 ms, 87 ms, and 850 ms per frame for 5, 125, and 1,254 vectors.
 
 ```bash
 ./${APP_DIR}/src/cpp/pre-built/patchcore-anomaly-detector --calibrate --config ${APP_DIR}/src/common/config.yaml

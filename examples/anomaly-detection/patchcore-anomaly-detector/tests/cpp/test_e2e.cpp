@@ -574,14 +574,14 @@ int run_mixed_image_sizes_calibrate_and_score(const std::string& binary,
     return skip_or_fail("need 4 nominal images under " + nominal_dir.string());
   }
 
-  auto out_dir =
-      create_test_output_dir("patchcore-anomaly-detector", "test_mixed_image_sizes_calibrate_and_score");
+  auto out_dir = create_test_output_dir("patchcore-anomaly-detector",
+                                        "test_mixed_image_sizes_calibrate_and_score");
   if (out_dir.empty())
     return 1;
   const fs::path run_dir = fs::path(out_dir).parent_path();
   const fs::path mixed_dir = run_dir / "mixed";
   fs::create_directories(mixed_dir);
-  const std::vector<cv::Size> sizes = {{0, 0}, {448, 448}, {320, 240}, {0, 0}};  // 0 keeps 224x224
+  const std::vector<cv::Size> sizes = {{0, 0}, {448, 448}, {320, 240}, {0, 0}}; // 0 keeps 224x224
   for (std::size_t i = 0; i < sizes.size(); ++i) {
     cv::Mat image = cv::imread(nominal[i].string(), cv::IMREAD_COLOR);
     if (sizes[i].width > 0) {
@@ -610,7 +610,8 @@ int run_mixed_image_sizes_calibrate_and_score(const std::string& binary,
     auto result = spawn_and_wait(binary, args, timeout);
     if (result.exit_code != 0) {
       std::cerr << "[FAIL] mixed sizes: " << args[0] << " exited with code " << result.exit_code
-                << "\nstderr:\n" << result.stderr_text << "\n";
+                << "\nstderr:\n"
+                << result.stderr_text << "\n";
       rc = 1;
       break;
     }
@@ -633,10 +634,11 @@ int run_mixed_image_sizes_calibrate_and_score(const std::string& binary,
 
 // Runs --calibrate on the bundled nominal set, then one live run with the given source
 // settings. Returns the live run's stdout, or nullopt after printing a failure.
-std::optional<std::string> calibrate_and_run_live(
-    const std::string& binary, const std::string& model_path, const std::string& test_name,
-    const std::vector<std::pair<std::string, std::string>>& source, int frames, int save_every,
-    std::string& out_dir) {
+std::optional<std::string>
+calibrate_and_run_live(const std::string& binary, const std::string& model_path,
+                       const std::string& test_name,
+                       const std::vector<std::pair<std::string, std::string>>& source, int frames,
+                       int save_every, std::string& out_dir) {
   out_dir = create_test_output_dir("patchcore-anomaly-detector", test_name);
   if (out_dir.empty()) {
     return std::nullopt;
@@ -666,7 +668,8 @@ std::optional<std::string> calibrate_and_run_live(
     auto result = spawn_and_wait(binary, args, timeout);
     if (result.exit_code != 0) {
       std::cerr << "[FAIL] " << test_name << ": " << args[0] << " exited with code "
-                << result.exit_code << "\nstderr:\n" << result.stderr_text << "\n";
+                << result.exit_code << "\nstderr:\n"
+                << result.stderr_text << "\n";
       remove_dir(out_dir);
       return std::nullopt;
     }
