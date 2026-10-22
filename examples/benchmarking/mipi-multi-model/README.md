@@ -26,14 +26,12 @@ The application loads one profile per process, keeping MLA memory use predictabl
 
 - `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
 - A MIPI camera supported by the installed kernel, libcamera pipeline, and IPA configuration.
-- A Neat Library and libcamera release that supports downstream-owned camera capture buffers.
+- A Neat Library release whose camera bridge forwards the camera's own DMA-BUFs (Platform 3.0).
 
-Confirm that libcamera sees the camera and that `libcamerasrc` provides the
-`external-buffer-mode` property that strict zero-copy capture requires:
+Confirm that libcamera sees the camera:
 
 ```bash
 cam -l
-gst-inspect-1.0 libcamerasrc | grep external-buffer-mode
 ```
 
 ## Install Apps
@@ -130,8 +128,9 @@ python3 ${APP_DIR}/src/python/main.py \
 
 The Insight graph uses `RealtimeLatestByStream` independently for the model and video branches, preventing either consumer from building a stale camera-frame backlog. Segmentation metadata includes per-instance polygons, class labels, confidence, and bounding boxes.
 
-The application rejects the graph before execution, with or without Insight, unless the camera
-captures into downstream-owned DMA-BUFs and Neat's camera bridge refuses CPU copies.
+The application rejects the graph before execution, with or without Insight, unless Neat's camera
+bridge refuses CPU copies. At run time the bridge forwards each camera frame's DMA-BUF to the
+model without copying and stops the pipeline on any frame that would need a copy.
 
 ## Expected Result
 
@@ -146,7 +145,7 @@ PASS strict-zero-copy MIPI -> YOLO26n object detection -> results
 
 - If camera discovery fails, confirm that `cam -l` reports a camera and that the correct overlay is installed.
 - If model loading fails, confirm the file is a compiled `.tar.gz` model package compatible with the installed Neat runtime. Neat owns package parsing and compatibility validation.
-- If the application reports that strict zero-copy requires `external-buffer-mode`, the installed `libcamerasrc` cannot capture into downstream-owned buffers. Install a platform release whose libcamera provides that property.
+- If the pipeline stops with `Camera buffer is not one forwardable DMA-BUF and copying is disabled`, the camera delivered a frame that is not one DMA-BUF. Use the platform `libcamera` package, which delivers each frame as one DMA-BUF.
 - Run with `--validate-model-only` to inspect the package without loading Neat or opening the camera.
 
 ## Source Files

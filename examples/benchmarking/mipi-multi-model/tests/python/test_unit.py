@@ -22,7 +22,7 @@ sys.path.insert(0, str(PYTHON_DIR))
 
 
 STRICT_BACKEND = (
-    "libcamerasrc name=camera_src0 external-buffer-mode=required ! "
+    "libcamerasrc name=camera_src0 ! "
     "capsfilter name=camera_caps0 ! "
     "neatcamerabridge name=camera_bridge0 buffer-name=camera0 copy-allowed=false ! output"
 )
@@ -461,12 +461,10 @@ def test_insight_graph_keeps_model_and_video_branches_realtime(tmp_path: Path) -
 def test_strict_zero_copy_contract() -> None:
     module = load_module()
     module.require_strict_zero_copy(STRICT_BACKEND)
-    with pytest.raises(RuntimeError, match="does not require"):
-        module.require_strict_zero_copy(
-            STRICT_BACKEND.replace("external-buffer-mode=required", "external-buffer-mode=preferred")
-        )
-    with pytest.raises(RuntimeError, match="does not require"):
-        module.require_strict_zero_copy("libcamerasrc ! neatcamerabridge copy-allowed=false")
+    with pytest.raises(RuntimeError, match="no Neat camera bridge"):
+        module.require_strict_zero_copy("libcamerasrc name=camera_src0 ! output")
+    with pytest.raises(RuntimeError, match="permits a CPU copy"):
+        module.require_strict_zero_copy("libcamerasrc ! neatcamerabridge ! output")
     with pytest.raises(RuntimeError, match="permits a CPU copy"):
         module.require_strict_zero_copy(
             STRICT_BACKEND.replace("copy-allowed=false", "copy-allowed=true")

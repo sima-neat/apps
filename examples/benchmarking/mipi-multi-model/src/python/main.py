@@ -465,11 +465,11 @@ def send_insight_metadata(sender, pyneat, profile: Profile, sample, labels: list
 def require_strict_zero_copy(backend: str) -> None:
     """Reject a negotiated camera backend that can copy frames on the CPU.
 
-    Strict CameraInput makes libcamerasrc capture into downstream DMA-BUFs and
-    configures Neat's camera bridge to refuse copies.
+    Strict CameraInput forwards libcamerasrc's own DMA-BUFs through Neat's
+    camera bridge and configures the bridge to refuse copies.
     """
-    if "external-buffer-mode=required" not in backend:
-        raise RuntimeError("camera backend does not require zero-copy capture")
+    if "neatcamerabridge" not in backend:
+        raise RuntimeError("camera backend has no Neat camera bridge")
     if "copy-allowed=false" not in backend or "copy-allowed=true" in backend:
         raise RuntimeError("camera bridge permits a CPU copy")
 
