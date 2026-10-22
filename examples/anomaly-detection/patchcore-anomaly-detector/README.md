@@ -23,7 +23,7 @@ Detects visual anomalies in industrial images or video using a compiled WideResN
 ## Prerequisites
 
 - `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
-- For `source.type: rtsp`, an RTSP H.264, H.265, or MJPEG source reachable from the target.
+- For `source.type: rtsp`, a square RTSP H.264, H.265, or MJPEG source (for example 720x720) reachable from the target.
 - For `source.type: video_file` or `rtsp`, [Insight](https://developer.sima.ai/software/tools/insight/) (or another RTP receiver) to view the live annotated stream.
 
 ## Install Apps
@@ -38,12 +38,11 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Set Up Python
 
-Skip this section if you only run the C++ variant. The Python variant runs in the `pyneat` Python environment that the Apps installer sets up with Neat Core (`~/pyneat` by default). Activate it (in every new shell), confirm `pyneat` imports, and install this app's requirements:
+Skip this section if you only run the C++ variant. The Python variant runs in the `pyneat` Python environment that the Apps installer sets up with Neat Core (`~/pyneat` by default); it already provides NumPy, OpenCV, and PyYAML. Activate it in every new shell and confirm `pyneat` imports:
 
 ```bash
 source ~/pyneat/bin/activate
 python3 -c "import pyneat"
-pip install -r ${APP_DIR}/src/python/requirements.txt
 ```
 
 ## Prepare the Model
@@ -66,7 +65,13 @@ Before scoring anything, build a memory bank from a directory of known-good ("no
 - `held_out_normal/` -- 4 further real known-good images, deliberately excluded from calibration, used only by this example's own test suite to check that genuinely normal images the bank never saw still score below the threshold.
 - `images/` -- an image-directory scoring input: one normal-looking image (`plain_0.png`) and four images with synthetic scratch defects (`scratch_0.png`-`scratch_3.png`), for exercising `source.type: image_dir` end to end.
 
-To calibrate against your own inspection target instead, point `calibration.nominal_images_dir` at a directory of your own known-good images (a few dozen is a reasonable starting point) before running `--calibrate`.
+To calibrate against your own inspection target instead, point `calibration.nominal_images_dir` at a directory of your own known-good images (a few dozen is a reasonable starting point) before running `--calibrate`. Capture them with the same camera, framing, and lighting you will run with.
+
+The model inspects a square. Images and video frames of any size are center-cropped to their centered square (for example the middle 720x720 of a 1280x720 frame), so the left and right edges of a wide frame are not inspected; center the part. Calibration images are cropped the same way. An RTSP stream must itself be square (for example 720x720): the app exits with an error on a non-square stream, because the in-graph preprocess cannot crop it yet.
+
+`--calibrate` keeps every 5th nominal image out of the bank and measures the threshold on those, so the threshold reflects images the bank has not memorized. Set `calibration.threshold_images_dir` to use a separate set instead.
+
+`calibration.coreset_ratio` sets how many nominal patches the bank keeps. The default 0.0004 keeps 5 of the demo's 12,544, which is enough for its uniform texture and keeps scoring fast. On a busy or varied scene a bank this small matches normal clutter poorly, which raises the threshold until real defects can go unflagged; raise the ratio (the PatchCore paper keeps 1-10%) and check that a known defect is caught. Scoring cost grows with the bank: measured on a Modalix DevKit (Platform 3.0), the C++ host scoring takes about 9 ms, 87 ms, and 850 ms per frame for 5, 125, and 1,254 vectors.
 
 ```bash
 ./${APP_DIR}/src/cpp/pre-built/patchcore-anomaly-detector --calibrate --config ${APP_DIR}/src/common/config.yaml
@@ -78,7 +83,7 @@ or, with the Python variant (after [Set Up Python](#set-up-python)):
 python3 ${APP_DIR}/src/python/main.py --calibrate --config ${APP_DIR}/src/common/config.yaml
 ```
 
-Both write `memory_bank.path` / `memory_bank.meta_path` from `calibration.nominal_images_dir`, and share the same on-disk format -- a bank built with one binary loads and scores in the other. Re-run `--calibrate` whenever `model.path` changes, the inspection target changes, or you change `calibration.threshold_percentile`.
+Both write `memory_bank.path` / `memory_bank.meta_path` from `calibration.nominal_images_dir`, and share the same on-disk format -- a bank built with one binary loads and scores in the other. Re-run `--calibrate` whenever `model.path` changes, the inspection target or camera changes, or you change any `calibration` setting.
 
 ## Configure
 
@@ -105,8 +110,8 @@ python3 ${APP_DIR}/src/python/main.py \
 Every processed image/frame prints its score, the configured threshold, and the pass/fail verdict. `image_dir` writes overlays to `output.dir` in which only regions scoring above the calibrated patch threshold are highlighted (yellow to red); normal regions are left unchanged; `video_file`/`rtsp` additionally stream the live overlay to Insight (`output.insight.host`/`video_port`) and, if you set `output.save_every` above 0 (off by default), also save every Nth overlay frame to `output.dir`. Saving has no limit, so on a long live run pick a large N or keep it off.
 
 ```
-assets/datasets/patchcore/images/plain_0.png: score=16.4049 threshold=18.7885 verdict=normal (mla=324.3ms host=20.0ms)
-assets/datasets/patchcore/images/scratch_0.png: score=31.1989 threshold=18.7885 verdict=ANOMALOUS (mla=13.9ms host=9.7ms)
+assets/datasets/patchcore/images/plain_0.png: score=16.1795 threshold=19.1899 verdict=normal (mla=2022.1ms host=7.9ms)
+assets/datasets/patchcore/images/scratch_0.png: score=32.6038 threshold=19.1899 verdict=ANOMALOUS (mla=32.3ms host=18.1ms)
 ...
 Done: 5 images processed -- overlays written to sandbox/patchcore-anomaly-detector
 ```

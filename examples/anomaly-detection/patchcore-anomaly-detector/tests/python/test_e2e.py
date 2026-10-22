@@ -20,6 +20,10 @@ MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
 REAL_IMAGES_DIR = APPS_ROOT / "assets" / "datasets" / "patchcore" / "images"
 NOMINAL_DIR = APPS_ROOT / "assets" / "datasets" / "patchcore" / "nominal"
 HELD_OUT_NORMAL_DIR = APPS_ROOT / "assets" / "datasets" / "patchcore" / "held_out_normal"
+DEMO_VIDEO = APPS_ROOT / "assets" / "datasets" / "patchcore" / "video" / "test.mp4"
+E2E_INSIGHT_HOST = "127.0.0.1"
+FRAME_RE = re.compile(r"^frame=(?P<frame>\d+): score=(?P<score>[-\d.]+) threshold=(?P<threshold>[-\d.]+) "
+                      r"verdict=(?P<verdict>\w+)", re.MULTILINE)
 NOMINAL_IMAGE = "plain_0.png"
 DEFECT_IMAGE = "scratch_0.png"
 
@@ -58,6 +62,52 @@ def _find_cpp_binary() -> Path | None:
         / "patchcore-anomaly-detector",
     )
     return next((c for c in candidates if c.is_file()), None)
+
+
+def _live_config(e2e_config_writer, tmp_output_dir, source: dict, frames: int, save_every: int) -> Path:
+    """Config for a live run against a bank calibrated on the bundled nominal set."""
+    return e2e_config_writer(
+        {
+            "source": source,
+            "calibration": {"nominal_images_dir": str(NOMINAL_DIR), "threshold_images_dir": ""},
+            "memory_bank": {
+                "path": str(tmp_output_dir.parent / "memory_bank.npy"),
+                "meta_path": str(tmp_output_dir.parent / "bank_meta.json"),
+            },
+            "output": {
+                "dir": str(tmp_output_dir),
+                "save_every": save_every,
+                "insight": {
+                    "host": E2E_INSIGHT_HOST,
+                    "video_port": int(os.environ.get("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", "") or 9000),
+                },
+            },
+            "runtime": {"frames": frames},
+        }
+    )
+
+
+def _run_main(args: list[str], timeout_s: float) -> subprocess.CompletedProcess:
+    result = subprocess.run(
+        [sys.executable, str(MAIN_PY), *args],
+        capture_output=True, text=True, timeout=timeout_s, cwd=str(EXAMPLE_DIR),
+    )
+    assert result.returncode == 0, (
+        f"main.py {' '.join(args)} exited with code {result.returncode}\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    return result
+
+
+def _assert_snapshots(output_dir: Path, expected: int, size: tuple[int, int]) -> None:
+    import cv2
+
+    snapshots = sorted(output_dir.glob("frame_*.jpg"))
+    assert len(snapshots) == expected, f"expected {expected} snapshots, found {[p.name for p in snapshots]}"
+    for path in snapshots:
+        image = cv2.imread(str(path), cv2.IMREAD_COLOR)
+        assert image is not None, f"snapshot {path.name} does not decode"
+        assert image.shape[1::-1] == size, f"snapshot {path.name} is {image.shape[1::-1]}, expected {size}"
 
 
 @pytest.mark.e2e
@@ -385,6 +435,60 @@ class TestE2E:
             out = cv2.imread(str(tmp_output_dir / path.name), cv2.IMREAD_COLOR)
             assert out is not None, f"no overlay for {path.name}"
             assert out.shape == src.shape, f"{path.name}: overlay {out.shape} != input {src.shape}"
+
+    def test_video_file_live_run(
+        self,
+        e2e_model_path,
+        tmp_output_dir,
+        test_timeout_ms,
+        skip_unless_e2e_ready,
+        e2e_config_writer,
+    ):
+        """video_file streams to Insight and saves snapshots, with the verdicts the
+        bundled clip should get: its first 60 frames are plain texture, the rest carry
+        defects."""
+        skip_unless_e2e_ready(DEMO_VIDEO.is_file(), f"demo video missing: {DEMO_VIDEO}")
+        config_path = _live_config(e2e_config_writer, tmp_output_dir,
+                                   {"type": "video_file", "video_path": str(DEMO_VIDEO)},
+                                   frames=120, save_every=40)
+        timeout_s = test_timeout_ms / 1000
+        _run_main(["--calibrate", "--config", str(config_path)], timeout_s)
+        result = _run_main(["--config", str(config_path)], timeout_s)
+
+        verdicts = {int(m["frame"]): m["verdict"] for m in FRAME_RE.finditer(result.stdout)}
+        assert sorted(verdicts) == list(range(1, 121)), f"expected frames 1-120, got {len(verdicts)}"
+        normal_frames = [f for f in range(1, 51) if verdicts[f] != "normal"]
+        defect_frames = [f for f in range(71, 121) if verdicts[f] != "ANOMALOUS"]
+        assert not normal_frames, f"plain frames flagged ANOMALOUS: {normal_frames}"
+        assert not defect_frames, f"defect frames not flagged: {defect_frames}"
+        _assert_snapshots(tmp_output_dir, 3, (224, 224))
+
+    def test_rtsp_live_run(
+        self,
+        rtsp_h264_url,
+        e2e_model_path,
+        tmp_output_dir,
+        test_timeout_ms,
+        e2e_config_writer,
+    ):
+        """rtsp runs the model inside the graph, scores every joined frame, streams to
+        Insight, and saves snapshots at the stream's size."""
+        config_path = _live_config(e2e_config_writer, tmp_output_dir,
+                                   {"type": "rtsp", "rtsp": {"url": rtsp_h264_url}},
+                                   frames=60, save_every=20)
+        timeout_s = test_timeout_ms / 1000
+        _run_main(["--calibrate", "--config", str(config_path)], timeout_s)
+        result = _run_main(["--config", str(config_path)], timeout_s)
+
+        frames = [int(m["frame"]) for m in FRAME_RE.finditer(result.stdout)]
+        assert frames == list(range(1, 61)), f"expected frames 1-60 with a verdict, got {frames[:5]}..."
+        import cv2
+
+        snapshots = sorted(tmp_output_dir.glob("frame_*.jpg"))
+        assert len(snapshots) == 3, f"expected 3 snapshots, found {[p.name for p in snapshots]}"
+        first = cv2.imread(str(snapshots[0]), cv2.IMREAD_COLOR)
+        assert first is not None and first.shape[0] == first.shape[1], "RTSP snapshot missing or not square"
+        _assert_snapshots(tmp_output_dir, 3, (first.shape[1], first.shape[0]))
 
     def test_cpp_built_bank_scores_correctly_in_python(
         self,

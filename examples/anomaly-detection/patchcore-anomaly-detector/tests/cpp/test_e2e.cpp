@@ -14,6 +14,7 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <optional>
 #include <regex>
 #include <sstream>
 #include <string>
@@ -630,6 +631,162 @@ int run_mixed_image_sizes_calibrate_and_score(const std::string& binary,
   return rc;
 }
 
+// Runs --calibrate on the bundled nominal set, then one live run with the given source
+// settings. Returns the live run's stdout, or nullopt after printing a failure.
+std::optional<std::string> calibrate_and_run_live(
+    const std::string& binary, const std::string& model_path, const std::string& test_name,
+    const std::vector<std::pair<std::string, std::string>>& source, int frames, int save_every,
+    std::string& out_dir) {
+  out_dir = create_test_output_dir("patchcore-anomaly-detector", test_name);
+  if (out_dir.empty()) {
+    return std::nullopt;
+  }
+  const fs::path run_dir = fs::path(out_dir).parent_path();
+  const fs::path config_path = run_dir / "config.yaml";
+  const char* port = env_or_null("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT");
+  ConfigScalars values = {
+      {"model.path", model_path},
+      {"calibration.nominal_images_dir", "assets/datasets/patchcore/nominal"},
+      {"calibration.threshold_images_dir", ""},
+      {"memory_bank.path", (run_dir / "memory_bank.npy").string()},
+      {"memory_bank.meta_path", (run_dir / "bank_meta.json").string()},
+      {"output.dir", out_dir},
+      {"output.save_every", std::to_string(save_every)},
+      {"output.insight.host", "127.0.0.1"},
+      {"output.insight.video_port", port && *port ? port : "9000"},
+      {"runtime.frames", std::to_string(frames)},
+  };
+  values.insert(source.begin(), source.end());
+  write_e2e_config("patchcore-anomaly-detector", config_path, values);
+
+  const int timeout = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
+  std::string live_stdout;
+  for (const auto& args : std::vector<std::vector<std::string>>{
+           {"--calibrate", "--config", config_path.string()}, {"--config", config_path.string()}}) {
+    auto result = spawn_and_wait(binary, args, timeout);
+    if (result.exit_code != 0) {
+      std::cerr << "[FAIL] " << test_name << ": " << args[0] << " exited with code "
+                << result.exit_code << "\nstderr:\n" << result.stderr_text << "\n";
+      remove_dir(out_dir);
+      return std::nullopt;
+    }
+    live_stdout = result.stdout_text;
+  }
+  return live_stdout;
+}
+
+// Frame number -> verdict for every "frame=N: score=... verdict=..." line.
+std::map<int, std::string> frame_verdicts(const std::string& text) {
+  static const std::regex kFrameRe(R"(frame=(\d+): score=[-\d.]+ threshold=[-\d.]+ verdict=(\w+))");
+  std::map<int, std::string> verdicts;
+  for (std::sregex_iterator it(text.begin(), text.end(), kFrameRe), end; it != end; ++it) {
+    verdicts[std::stoi((*it)[1].str())] = (*it)[2].str();
+  }
+  return verdicts;
+}
+
+// Empty when out_dir holds `expected` decodable frame_*.jpg snapshots of one size
+// (`size` if non-empty); otherwise the problem.
+std::string snapshots_problem(const std::string& out_dir, int expected, cv::Size size,
+                              bool require_square) {
+  std::vector<fs::path> snapshots;
+  for (const auto& entry : fs::directory_iterator(out_dir)) {
+    const auto name = entry.path().filename().string();
+    if (name.rfind("frame_", 0) == 0 && entry.path().extension() == ".jpg") {
+      snapshots.push_back(entry.path());
+    }
+  }
+  if (static_cast<int>(snapshots.size()) != expected) {
+    return "expected " + std::to_string(expected) + " snapshots, found " +
+           std::to_string(snapshots.size());
+  }
+  for (const auto& path : snapshots) {
+    const cv::Mat image = cv::imread(path.string(), cv::IMREAD_COLOR);
+    if (image.empty()) {
+      return path.filename().string() + " does not decode";
+    }
+    if (size.empty()) {
+      size = image.size();
+    }
+    if (image.size() != size || (require_square && image.cols != image.rows)) {
+      return path.filename().string() + " has an unexpected size";
+    }
+  }
+  return "";
+}
+
+// video_file streams to Insight and saves snapshots, with the verdicts the bundled clip
+// should get: its first 60 frames are plain texture, the rest carry defects.
+int run_video_file_live_run(const std::string& binary, const std::string& model_path) {
+  const fs::path video = "assets/datasets/patchcore/video/test.mp4";
+  if (!fs::exists(video)) {
+    return skip_or_fail("demo video missing: " + video.string());
+  }
+  std::string out_dir;
+  const auto stdout_text = calibrate_and_run_live(
+      binary, model_path, "test_video_file_live_run",
+      {{"source.type", "video_file"}, {"source.video_path", video.string()}}, 120, 40, out_dir);
+  if (!stdout_text) {
+    return 1;
+  }
+  const auto verdicts = frame_verdicts(*stdout_text);
+  std::string problem;
+  if (verdicts.size() != 120 || verdicts.begin()->first != 1 || verdicts.rbegin()->first != 120) {
+    problem = "expected verdicts for frames 1-120, got " + std::to_string(verdicts.size());
+  }
+  for (int f = 1; problem.empty() && f <= 50; ++f) {
+    if (verdicts.at(f) != "normal") {
+      problem = "plain frame " + std::to_string(f) + " flagged ANOMALOUS";
+    }
+  }
+  for (int f = 71; problem.empty() && f <= 120; ++f) {
+    if (verdicts.at(f) != "ANOMALOUS") {
+      problem = "defect frame " + std::to_string(f) + " not flagged";
+    }
+  }
+  if (problem.empty()) {
+    problem = snapshots_problem(out_dir, 3, cv::Size(224, 224), false);
+  }
+  remove_dir(out_dir);
+  if (!problem.empty()) {
+    std::cerr << "[FAIL] video_file live run: " << problem << "\n";
+    return 1;
+  }
+  std::cout << "[OK] video_file: plain frames normal, defect frames ANOMALOUS, 3 snapshots\n";
+  return 0;
+}
+
+// rtsp runs the model inside the graph, scores every joined frame, streams to Insight,
+// and saves snapshots at the stream's size.
+int run_rtsp_live_run(const std::string& binary, const std::string& model_path) {
+  const auto urls = rtsp_h264_urls_from_env();
+  if (urls.empty()) {
+    return skip_or_fail("SIMANEAT_TEST_RTSP_H264_URL is not set");
+  }
+  std::string out_dir;
+  const auto stdout_text = calibrate_and_run_live(
+      binary, model_path, "test_rtsp_live_run",
+      {{"source.type", "rtsp"}, {"source.rtsp.url", urls.front()}}, 60, 20, out_dir);
+  if (!stdout_text) {
+    return 1;
+  }
+  const auto verdicts = frame_verdicts(*stdout_text);
+  std::string problem;
+  if (verdicts.size() != 60 || verdicts.begin()->first != 1 || verdicts.rbegin()->first != 60) {
+    problem = "expected verdicts for frames 1-60, got " + std::to_string(verdicts.size());
+  }
+  if (problem.empty()) {
+    problem = snapshots_problem(out_dir, 3, cv::Size(), true);
+  }
+  remove_dir(out_dir);
+  if (!problem.empty()) {
+    std::cerr << "[FAIL] rtsp live run: " << problem << "\n";
+    return 1;
+  }
+  std::cout << "[OK] rtsp: 60 frames scored in the graph, 3 square snapshots\n";
+  return 0;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -653,6 +810,8 @@ int main(int argc, char** argv) {
   failures += run_held_out_normal_passes_and_defect_fails(binary, model_path) != 0;
   failures += run_python_built_bank_scores_correctly_in_cpp(binary, model_path) != 0;
   failures += run_mixed_image_sizes_calibrate_and_score(binary, model_path) != 0;
+  failures += run_video_file_live_run(binary, model_path) != 0;
+  failures += run_rtsp_live_run(binary, model_path) != 0;
 
   return failures > 0 ? 1 : 0;
 }

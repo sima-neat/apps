@@ -19,13 +19,15 @@ memory_bank:                                    # Host-side kNN reference set (n
 
 calibration:                                    # Used only by --calibrate.
   nominal_images_dir: assets/datasets/patchcore/nominal   # Demo set (16 known-good images); use your own.
-  coreset_ratio: 0.0004                         # Fraction of nominal patches kept in the bank. Smaller is
-                                                 # faster but coarser; bank size grows with the nominal set.
+  coreset_ratio: 0.0004                         # Fraction of nominal patches kept in the bank (0.0004 = 5 of
+                                                 # the demo's 12,544). Raise it for busy or varied scenes; per-
+                                                 # frame scoring cost grows with it (see README).
   seed: 0
   threshold_percentile: 99.0                    # Image verdict threshold = this percentile of nominal image
                                                  # scores; the same percentile of nominal patch scores sets
                                                  # the overlay highlight threshold.
-  threshold_images_dir: ""                      # Optional held-out nominal set; "" reuses nominal_images_dir.
+  threshold_images_dir: ""                      # Optional separate nominal set for the threshold. "" sets aside
+                                                 # every 5th nominal image (kept out of the bank) instead.
   threshold_margin: 1.2                         # Multiplier on both percentile thresholds, for headroom on
                                                  # video/rtsp input. 1.0 = no margin.
 

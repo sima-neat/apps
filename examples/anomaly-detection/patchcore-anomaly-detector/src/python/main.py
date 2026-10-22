@@ -47,6 +47,7 @@ TORCHVISION_WEIGHTS = "IMAGENET1K_V1"
 OVERLAY_LUT_LOW = 191  # COLORMAP_JET index where highlights start (yellow); 255 is red.
 PATCH_GRID = (28, 28)  # 224x224 input -> 28x28 patch grid, see the model's compile config
 MODEL_INPUT_SIZE = (224, 224)  # (width, height) of the compiled model input
+THRESHOLD_EVERY = 5  # --calibrate sets aside every 5th nominal image to measure the threshold
 
 
 def time_ms() -> float:
@@ -66,7 +67,7 @@ class RtspConfig:
 @dataclass(frozen=True)
 class CalibrationConfig:
     nominal_images_dir: str = "assets/datasets/patchcore/nominal"
-    coreset_ratio: float = 0.01
+    coreset_ratio: float = 0.0004
     seed: int = 0
     threshold_percentile: float = 99.0
     threshold_images_dir: str = ""  # empty = reuse nominal_images_dir
@@ -143,7 +144,7 @@ def load_config(path: Path) -> AppConfig:
         bank_meta_path=memory_bank.get("meta_path", ""),
         calibration=CalibrationConfig(
             nominal_images_dir=calibration.get("nominal_images_dir", ""),
-            coreset_ratio=float(calibration.get("coreset_ratio", 0.01)),
+            coreset_ratio=float(calibration.get("coreset_ratio", 0.0004)),
             seed=int(calibration.get("seed", 0)),
             threshold_percentile=float(calibration.get("threshold_percentile", 99.0)),
             threshold_images_dir=calibration.get("threshold_images_dir", ""),
@@ -236,13 +237,22 @@ def make_image_model(model_path: str) -> "pyneat.Model":
     return pyneat.Model(model_path, opt)
 
 
+def center_square(width: int, height: int) -> tuple[int, int, int]:
+    """(x, y, side) of the centered square the model inspects. Every source is
+    center-cropped to it, so calibration and live frames see the same view."""
+    side = min(width, height)
+    return (width - side) // 2, (height - side) // 2, side
+
+
 def model_input_tensor(bgr) -> "pyneat.Tensor":
-    """Resizes a host-decoded frame to the model input before the model runs.
-    The model fixes its input size on the first frame it sees, so frames of
-    another size would otherwise time out."""
-    if (bgr.shape[1], bgr.shape[0]) != MODEL_INPUT_SIZE:
-        bgr = cv2.resize(bgr, MODEL_INPUT_SIZE, interpolation=cv2.INTER_AREA)
-    return rgb_tensor(bgr)
+    """Center-crops a host-decoded frame to a square and resizes it to the model
+    input, matching the RTSP graph's Crop preprocess. A fixed input size also keeps
+    the model from timing out when image sizes change."""
+    x, y, side = center_square(bgr.shape[1], bgr.shape[0])
+    square = bgr[y:y + side, x:x + side]
+    if (side, side) != MODEL_INPUT_SIZE:
+        square = cv2.resize(square, MODEL_INPUT_SIZE, interpolation=cv2.INTER_AREA)
+    return rgb_tensor(square)
 
 
 def rgb_tensor(bgr) -> "pyneat.Tensor":
@@ -264,29 +274,54 @@ def draw_overlay(bgr, score_map, sigma: float, alpha: float, patch_scale_min: fl
     """Highlights only pixels whose smoothed patch score exceeds the calibrated
     patch threshold (patch_scale_max in bank_meta.json); all other pixels are
     left unchanged. Highlight color runs yellow -> red over a fixed calibrated
-    span: threshold .. threshold + (threshold - nominal median)."""
-    h, w = bgr.shape[:2]
-    heat = upsample_and_smooth(score_map, (w, h), sigma)
+    span: threshold .. threshold + (threshold - nominal median). The score map
+    covers the centered square the model inspected (see center_square)."""
+    x, y, side = center_square(bgr.shape[1], bgr.shape[0])
+    heat = upsample_and_smooth(score_map, (side, side), sigma)
     _, mask = cv2.threshold(heat, patch_scale_max, 255, cv2.THRESH_BINARY)
     mask = mask.astype(np.uint8)
     out = bgr.copy()
     if not cv2.countNonZero(mask):
         return out
+    roi = out[y:y + side, x:x + side]
     span = max(patch_scale_max - patch_scale_min, 1e-6)
     heat_u8 = cv2.convertScaleAbs(heat - patch_scale_max, alpha=(255 - OVERLAY_LUT_LOW) / span)
     heat_u8 = cv2.add(heat_u8, OVERLAY_LUT_LOW)  # saturates at 255 (red)
     heat_color = cv2.applyColorMap(heat_u8, cv2.COLORMAP_JET)
-    blended = cv2.addWeighted(bgr, 1 - alpha, heat_color, alpha, 0)
-    cv2.copyTo(blended, mask, out)
+    blended = cv2.addWeighted(roi, 1 - alpha, heat_color, alpha, 0)
+    cv2.copyTo(blended, mask, roi)
     return out
+
+
+def split_nominal(paths: list[Path]) -> tuple[list[Path], list[Path]]:
+    """(bank images, threshold images). Every THRESHOLD_EVERY-th image measures the
+    threshold and is kept out of the bank, so the threshold isn't measured on
+    images that match their own bank entries. With fewer images, all are reused."""
+    if len(paths) < THRESHOLD_EVERY:
+        return paths, paths
+    held = {i for i in range(len(paths)) if i % THRESHOLD_EVERY == THRESHOLD_EVERY - 1}
+    return ([p for i, p in enumerate(paths) if i not in held],
+            [p for i, p in enumerate(paths) if i in held])
 
 
 def cmd_calibrate(cfg: AppConfig) -> int:
     nominal_dir = Path(cfg.calibration.nominal_images_dir)
-    paths = find_images(nominal_dir)
-    if not paths:
+    nominal_paths = find_images(nominal_dir)
+    if not nominal_paths:
         print(f"[FATAL] no images found in {nominal_dir}", file=sys.stderr)
         return 3
+    if cfg.calibration.threshold_images_dir:
+        threshold_dir = Path(cfg.calibration.threshold_images_dir)
+        paths, threshold_paths = nominal_paths, find_images(threshold_dir)
+        threshold_source = str(threshold_dir)
+    else:
+        paths, threshold_paths = split_nominal(nominal_paths)
+        if threshold_paths is paths:
+            print(f"[WARN] fewer than {THRESHOLD_EVERY} nominal images: the threshold is measured "
+                  "on the bank's own images and will be too low", file=sys.stderr)
+            threshold_source = f"{nominal_dir} (same images as the bank)"
+        else:
+            threshold_source = f"{nominal_dir} (every {THRESHOLD_EVERY}th image, kept out of the bank)"
 
     model = make_image_model(cfg.model_path)
     print(f"Extracting patch embeddings from {len(paths)} nominal images ...")
@@ -306,8 +341,6 @@ def cmd_calibrate(cfg: AppConfig) -> int:
         f"(ratio={cfg.calibration.coreset_ratio})"
     )
 
-    threshold_dir = Path(cfg.calibration.threshold_images_dir or cfg.calibration.nominal_images_dir)
-    threshold_paths = find_images(threshold_dir)
     scores = []
     patch_scores: list[float] = []
     for path in threshold_paths:
@@ -321,7 +354,7 @@ def cmd_calibrate(cfg: AppConfig) -> int:
     threshold = percentile_threshold(scores, cfg.calibration.threshold_percentile) * cfg.calibration.threshold_margin
     print(
         f"Threshold: {threshold:.4f} (p{cfg.calibration.threshold_percentile} over "
-        f"{len(scores)} nominal images from {threshold_dir}, x{cfg.calibration.threshold_margin} margin)"
+        f"{len(scores)} nominal images from {threshold_source}, x{cfg.calibration.threshold_margin} margin)"
     )
 
     # Patch-level threshold for the overlay highlight, separate from the image-level threshold.
@@ -738,6 +771,12 @@ def cmd_score_rtsp(cfg: AppConfig, bank: MemoryBank, threshold: float, num_neigh
     width, height, fps = resolve_rtsp_geometry(cfg)
     if width <= 0 or height <= 0 or fps <= 0:
         print(f"[FATAL] failed to resolve source geometry for {cfg.rtsp.url}", file=sys.stderr)
+        return 2
+    if width != height:
+        # The in-graph preprocess can't center-crop yet, so a non-square stream would not
+        # match the center-cropped calibration images.
+        print(f"[FATAL] the RTSP stream is {width}x{height}; this example needs a square stream "
+              "(for example 720x720)", file=sys.stderr)
         return 2
 
     model = make_rtsp_graph_model(cfg, width, height)

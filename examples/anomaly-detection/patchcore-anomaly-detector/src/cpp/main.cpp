@@ -24,6 +24,8 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <tuple>
+#include <utility>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -36,6 +38,8 @@ constexpr double kOverlayLutLow = 191.0; // COLORMAP_JET index where highlights 
 constexpr int kPatchGridH = 28;
 constexpr int kPatchGridW = 28;
 const cv::Size kModelInputSize(224, 224); // compiled model input (width, height)
+// --calibrate sets aside every 5th nominal image to measure the threshold.
+constexpr std::size_t kThresholdEvery = 5;
 constexpr const char* kBackbone = "wide_resnet50_2";
 constexpr const char* kTorchvisionWeights = "IMAGENET1K_V1";
 
@@ -59,7 +63,7 @@ struct Config {
   fs::path bank_meta_path;
 
   fs::path calibration_nominal_dir;
-  double coreset_ratio = 0.01;
+  double coreset_ratio = 0.0004;
   std::uint64_t seed = 0;
   double threshold_percentile = 99.0;
   fs::path calibration_threshold_dir; // empty = reuse calibration_nominal_dir
@@ -151,7 +155,7 @@ Config load_config(const fs::path& path) {
   cfg.bank_meta_path = raw.string_or("memory_bank.meta_path", "");
 
   cfg.calibration_nominal_dir = raw.string_or("calibration.nominal_images_dir", "");
-  cfg.coreset_ratio = raw.double_or("calibration.coreset_ratio", 0.01);
+  cfg.coreset_ratio = raw.double_or("calibration.coreset_ratio", 0.0004);
   cfg.seed = static_cast<std::uint64_t>(raw.int_or("calibration.seed", 0));
   cfg.threshold_percentile = raw.double_or("calibration.threshold_percentile", 99.0);
   cfg.calibration_threshold_dir = raw.string_or("calibration.threshold_images_dir", "");
@@ -228,16 +232,25 @@ std::vector<fs::path> find_images(const fs::path& dir) {
   return images;
 }
 
+/// The centered square the model inspects. Every source is center-cropped to it,
+/// so calibration and live frames see the same view.
+cv::Rect center_square(const cv::Size& size) {
+  const int side = std::min(size.width, size.height);
+  return {(size.width - side) / 2, (size.height - side) / 2, side, side};
+}
+
 /// Highlights only pixels whose smoothed patch score exceeds the calibrated
 /// patch threshold (patch_scale_max in bank_meta.json); all other pixels are
 /// left unchanged. Highlight color runs yellow -> red over a fixed calibrated
-/// span: threshold .. threshold + (threshold - nominal median).
+/// span: threshold .. threshold + (threshold - nominal median). The score map covers
+/// the centered square the model inspected (see center_square).
 cv::Mat draw_overlay(const cv::Mat& bgr, const patchcore::AnomalyResult& result, int map_h,
                      int map_w, double sigma, double alpha, double patch_scale_min,
                      double patch_scale_max) {
   cv::Mat score_mat(map_h, map_w, CV_32FC1, const_cast<float*>(result.score_map.data()));
+  const cv::Rect square = center_square(bgr.size());
   cv::Mat heat;
-  cv::resize(score_mat, heat, bgr.size(), 0, 0, cv::INTER_LINEAR);
+  cv::resize(score_mat, heat, square.size(), 0, 0, cv::INTER_LINEAR);
   if (sigma > 0.0) {
     cv::GaussianBlur(heat, heat, cv::Size(0, 0), sigma);
   }
@@ -258,9 +271,10 @@ cv::Mat draw_overlay(const cv::Mat& bgr, const patchcore::AnomalyResult& result,
   cv::Mat heat_color;
   cv::applyColorMap(heat_u8, heat_color, cv::COLORMAP_JET);
 
+  cv::Mat roi = out(square);
   cv::Mat blended;
-  cv::addWeighted(bgr, 1.0 - alpha, heat_color, alpha, 0.0, blended);
-  blended.copyTo(out, mask);
+  cv::addWeighted(roi, 1.0 - alpha, heat_color, alpha, 0.0, blended);
+  blended.copyTo(roi, mask);
   return out;
 }
 
@@ -280,16 +294,34 @@ simaai::neat::Tensor rgb_tensor(const cv::Mat& bgr) {
                                            simaai::neat::TensorMemory::EV74);
 }
 
-/// Resizes a host-decoded frame to the model input before the model runs. The
-/// model fixes its input size on the first frame it sees, so frames of another
-/// size would otherwise time out.
+/// Center-crops a host-decoded frame to a square and resizes it to the model input,
+/// matching the RTSP graph's Crop preprocess. A fixed input size also keeps the
+/// model from timing out when image sizes change.
 simaai::neat::Tensor model_input_tensor(const cv::Mat& bgr) {
-  if (bgr.size() == kModelInputSize) {
-    return rgb_tensor(bgr);
+  const cv::Mat square = bgr(center_square(bgr.size()));
+  if (square.size() == kModelInputSize) {
+    return rgb_tensor(square);
   }
   cv::Mat resized;
-  cv::resize(bgr, resized, kModelInputSize, 0, 0, cv::INTER_AREA);
+  cv::resize(square, resized, kModelInputSize, 0, 0, cv::INTER_AREA);
   return rgb_tensor(resized);
+}
+
+/// Splits the nominal images into (bank images, threshold images). Every
+/// kThresholdEvery-th image measures the threshold and is kept out of the bank, so the
+/// threshold isn't measured on images that match their own bank entries. With fewer
+/// images, all are reused for both.
+std::pair<std::vector<fs::path>, std::vector<fs::path>> split_nominal(
+    const std::vector<fs::path>& paths) {
+  if (paths.size() < kThresholdEvery) {
+    return {paths, paths};
+  }
+  std::vector<fs::path> bank_paths;
+  std::vector<fs::path> threshold_paths;
+  for (std::size_t i = 0; i < paths.size(); ++i) {
+    (i % kThresholdEvery == kThresholdEvery - 1 ? threshold_paths : bank_paths).push_back(paths[i]);
+  }
+  return {bank_paths, threshold_paths};
 }
 
 patchcore::PatchEmbeddings extract_from_bgr(simaai::neat::Model& model, const cv::Mat& bgr,
@@ -304,10 +336,29 @@ patchcore::PatchEmbeddings extract_from_bgr(simaai::neat::Model& model, const cv
 }
 
 int cmd_calibrate(const Config& cfg) {
-  const auto paths = find_images(cfg.calibration_nominal_dir);
-  if (paths.empty()) {
+  const auto nominal_paths = find_images(cfg.calibration_nominal_dir);
+  if (nominal_paths.empty()) {
     std::cerr << "[FATAL] no images found in " << cfg.calibration_nominal_dir << "\n";
     return 3;
+  }
+  std::vector<fs::path> paths;
+  std::vector<fs::path> threshold_paths;
+  std::string threshold_source;
+  if (!cfg.calibration_threshold_dir.empty()) {
+    paths = nominal_paths;
+    threshold_paths = find_images(cfg.calibration_threshold_dir);
+    threshold_source = cfg.calibration_threshold_dir.string();
+  } else {
+    std::tie(paths, threshold_paths) = split_nominal(nominal_paths);
+    if (nominal_paths.size() < kThresholdEvery) {
+      std::cerr << "[WARN] fewer than " << kThresholdEvery
+                << " nominal images: the threshold is measured on the bank's own images and "
+                   "will be too low\n";
+      threshold_source = cfg.calibration_nominal_dir.string() + " (same images as the bank)";
+    } else {
+      threshold_source = cfg.calibration_nominal_dir.string() + " (every " +
+                         std::to_string(kThresholdEvery) + "th image, kept out of the bank)";
+    }
   }
 
   simaai::neat::Model model(cfg.model_path, image_model_options());
@@ -336,10 +387,6 @@ int cmd_calibrate(const Config& cfg) {
   std::cout << "Coreset: " << bank.size() << " / " << total_patches
             << " patches (ratio=" << cfg.coreset_ratio << ")\n";
 
-  const fs::path threshold_dir =
-      cfg.calibration_threshold_dir.empty() ? cfg.calibration_nominal_dir
-                                            : cfg.calibration_threshold_dir;
-  const auto threshold_paths = find_images(threshold_dir);
   std::vector<float> scores;
   std::vector<float> patch_scores;
   scores.reserve(threshold_paths.size());
@@ -357,7 +404,7 @@ int cmd_calibrate(const Config& cfg) {
   const float threshold = patchcore::percentile_threshold(scores, cfg.threshold_percentile) *
                           static_cast<float>(cfg.threshold_margin);
   std::cout << "Threshold: " << threshold << " (p" << cfg.threshold_percentile << " over "
-            << threshold_num_images << " nominal images from " << threshold_dir << ", x"
+            << threshold_num_images << " nominal images from " << threshold_source << ", x"
             << cfg.threshold_margin << " margin)\n";
 
   // Patch-level threshold for the overlay highlight, separate from the image-level threshold.
@@ -742,6 +789,13 @@ int cmd_score_rtsp(const Config& cfg, const patchcore::MemoryBank& bank, float t
   const auto geometry = probe_rtsp_geometry(cfg);
   if (geometry.width <= 0 || geometry.height <= 0 || geometry.fps <= 0) {
     std::cerr << "[FATAL] failed to resolve source geometry for " << cfg.rtsp_url << "\n";
+    return 2;
+  }
+  if (geometry.width != geometry.height) {
+    // The in-graph preprocess can't center-crop yet, so a non-square stream would not
+    // match the center-cropped calibration images.
+    std::cerr << "[FATAL] the RTSP stream is " << geometry.width << "x" << geometry.height
+              << "; this example needs a square stream (for example 720x720)\n";
     return 2;
   }
 
