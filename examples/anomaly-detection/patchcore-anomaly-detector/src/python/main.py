@@ -15,6 +15,7 @@ os.environ.setdefault("OPENBLAS_NUM_THREADS", "6")
 for _blas_env_var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
     os.environ.setdefault(_blas_env_var, "1")
 import argparse
+import json
 import subprocess
 import sys
 import time
@@ -91,6 +92,7 @@ class OutputConfig:
     insight_video_port: int = 9000
     insight_channel: int = 0
     insight_bitrate_kbps: int = 1000
+    insight_metadata_port: int = 9100
 
 
 @dataclass(frozen=True)
@@ -164,6 +166,7 @@ def load_config(path: Path) -> AppConfig:
             insight_video_port=int(insight.get("video_port", 9000)),
             insight_channel=int(insight.get("channel", 0)),
             insight_bitrate_kbps=int(insight.get("bitrate_kbps", 1000)),
+            insight_metadata_port=int(insight.get("metadata_port", 9100)),
         ),
         timeout_ms=int(runtime.get("timeout_ms", 5000)),
         frames=int(runtime.get("frames", 0)),
@@ -229,6 +232,8 @@ def validate_config(cfg: AppConfig) -> None:
             raise ValueError("output.insight.channel must be >= 0")
         if cfg.output.insight_bitrate_kbps <= 0:
             raise ValueError("output.insight.bitrate_kbps must be > 0")
+        if not 0 < cfg.output.insight_metadata_port <= 65535:
+            raise ValueError("output.insight.metadata_port must be in [1, 65535]")
 
 
 def is_image(path: Path) -> bool:
@@ -507,6 +512,27 @@ def build_video_sender(cfg: AppConfig, fps: float, width: int, height: int):
     return graph, graph.build([seed]), sender_options.video_port
 
 
+def make_metadata_sender(cfg: AppConfig) -> "pyneat.MetadataSender":
+    """Sends each frame's verdict to Insight as metadata, next to the video."""
+    options = pyneat.MetadataSenderOptions()
+    options.host = cfg.output.insight_host
+    options.channel = cfg.output.insight_channel
+    options.metadata_port_base = cfg.output.insight_metadata_port
+    return pyneat.MetadataSender(options)
+
+
+def send_verdict(sender, score: float, threshold: float, verdict: str, timestamp_ms: int,
+                 frame_id: int) -> None:
+    """Insight draws `top_classes` as a label on the video; `anomaly` carries the raw
+    values for other consumers."""
+    data = {
+        "top_classes": [{"label": f"{verdict} score={score:.1f} thr={threshold:.1f}", "confidence": 1.0}],
+        "anomaly": {"verdict": verdict, "score": round(score, 4), "threshold": round(threshold, 4)},
+    }
+    sender.send_metadata("classification", json.dumps(data, separators=(",", ":")), timestamp_ms,
+                         str(frame_id))
+
+
 def stream_frame(run, frame_bgr) -> None:
     if not run.push([rgb_tensor(frame_bgr)]):
         raise RuntimeError("Insight video push failed")
@@ -529,7 +555,9 @@ def cmd_score_video_file(cfg: AppConfig, bank: MemoryBank, threshold: float, num
         [model_input_tensor(frame)], route_options=pyneat.ModelRouteOptions(), run_options=pyneat.RunOptions()
     )
     video_graph, video_run, video_port = build_video_sender(cfg, fps, width, height)
-    print(f"streaming to Insight: {cfg.output.insight_host}:{video_port}")
+    metadata_sender = make_metadata_sender(cfg)
+    print(f"streaming to Insight: {cfg.output.insight_host}:{video_port} "
+          f"metadata={metadata_sender.metadata_port()}")
 
     save_dir = Path(cfg.output.dir)
     if cfg.output.save_every > 0:
@@ -560,6 +588,8 @@ def cmd_score_video_file(cfg: AppConfig, bank: MemoryBank, threshold: float, num
             )
 
             stream_frame(video_run, overlay)
+            send_verdict(metadata_sender, scored.image_score, threshold, verdict,
+                         int((processed - 1) * 1000 / fps), processed)
             if cfg.output.save_every > 0 and processed % cfg.output.save_every == 0:
                 snapshot_path = save_dir / f"frame_{processed}.jpg"
                 if not cv2.imwrite(str(snapshot_path), overlay):
@@ -824,7 +854,9 @@ def cmd_score_rtsp(cfg: AppConfig, bank: MemoryBank, threshold: float, num_neigh
     model = make_rtsp_graph_model(cfg, width, height)
     _graph, run = build_rtsp_graph(cfg, model, width, height, fps)
     _video_graph, video_run, video_port = build_video_sender(cfg, fps, width, height)
-    print(f"streaming to Insight: {cfg.output.insight_host}:{video_port}")
+    metadata_sender = make_metadata_sender(cfg)
+    print(f"streaming to Insight: {cfg.output.insight_host}:{video_port} "
+          f"metadata={metadata_sender.metadata_port()}")
 
     save_frames = cfg.output.save_every > 0
     save_dir = Path(cfg.output.dir)
@@ -849,6 +881,7 @@ def cmd_score_rtsp(cfg: AppConfig, bank: MemoryBank, threshold: float, num_neigh
             # Copy both fields out, then drop the sample so its buffers return to the pools.
             embedding = embedding_from_sample(sample)
             bgr = frame_bgr_from_sample(sample)
+            timestamp_ms = int(sample.pts_ns // 1_000_000) if sample.pts_ns >= 0 else -1
             del sample
 
             host_start = time_ms()
@@ -863,6 +896,7 @@ def cmd_score_rtsp(cfg: AppConfig, bank: MemoryBank, threshold: float, num_neigh
             )
 
             stream_frame(video_run, overlay)
+            send_verdict(metadata_sender, scored.image_score, threshold, verdict, timestamp_ms, processed)
             if save_frames and processed % cfg.output.save_every == 0:
                 snapshot_path = save_dir / f"frame_{processed}.jpg"
                 if not cv2.imwrite(str(snapshot_path), overlay):

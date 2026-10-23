@@ -44,6 +44,7 @@ output:
     video_port: 9000
     channel: 0                                  # Insight channel index.
     bitrate_kbps: 4000                          # H.264 encoder bitrate for the pushed video stream.
+    metadata_port: 9100                         # UDP port for per-frame verdict metadata (score, threshold).
 
 runtime:
   timeout_ms: 15000                             # Per-image/frame model timeout for --calibrate, image_dir,

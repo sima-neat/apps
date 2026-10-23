@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from tests.utils.metadata_json_listener import MetadataJsonListener
 from tests.utils.output_assertions import assert_saved_frames_are_usable, supported_image_files
 
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -22,6 +23,7 @@ NOMINAL_DIR = APPS_ROOT / "assets" / "datasets" / "patchcore" / "nominal"
 HELD_OUT_NORMAL_DIR = APPS_ROOT / "assets" / "datasets" / "patchcore" / "held_out_normal"
 DEMO_VIDEO = APPS_ROOT / "assets" / "datasets" / "patchcore" / "video" / "test.mp4"
 E2E_INSIGHT_HOST = "127.0.0.1"
+METADATA_PORT = int(os.environ.get("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", "") or 9100)
 FRAME_RE = re.compile(r"^frame=(?P<frame>\d+): score=(?P<score>[-\d.]+) threshold=(?P<threshold>[-\d.]+) "
                       r"verdict=(?P<verdict>\w+)", re.MULTILINE)
 NOMINAL_IMAGE = "plain_0.png"
@@ -80,6 +82,7 @@ def _live_config(e2e_config_writer, tmp_output_dir, source: dict, frames: int, s
                 "insight": {
                     "host": E2E_INSIGHT_HOST,
                     "video_port": int(os.environ.get("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", "") or 9000),
+                    "metadata_port": METADATA_PORT,
                 },
             },
             "runtime": {"frames": frames},
@@ -453,10 +456,18 @@ class TestE2E:
                                    frames=120, save_every=40)
         timeout_s = test_timeout_ms / 1000
         _run_main(["--calibrate", "--config", str(config_path)], timeout_s)
-        result = _run_main(["--config", str(config_path)], timeout_s)
+        with MetadataJsonListener(E2E_INSIGHT_HOST, METADATA_PORT, num_ports=1,
+                                  metadata_type="classification", data_array_key="top_classes") as listener:
+            result = _run_main(["--config", str(config_path)], timeout_s)
+            metadata = listener.drain_pending()
 
         verdicts = {int(m["frame"]): m["verdict"] for m in FRAME_RE.finditer(result.stdout)}
         assert sorted(verdicts) == list(range(1, 121)), f"expected frames 1-120, got {len(verdicts)}"
+        # Insight receives each frame's verdict as metadata, matching the printed verdict.
+        sent = {int(m.frame_id): json.loads(m.payload)["data"]["anomaly"]["verdict"] for m in metadata.messages}
+        assert len(sent) >= 100, f"expected verdict metadata for ~120 frames, got {len(sent)}: {metadata.error}"
+        mismatched = [f for f, v in sent.items() if v != verdicts.get(f)]
+        assert not mismatched, f"metadata verdicts differ from printed verdicts for frames {mismatched[:10]}"
         normal_frames = [f for f in range(1, 51) if verdicts[f] != "normal"]
         defect_frames = [f for f in range(71, 121) if verdicts[f] != "ANOMALOUS"]
         assert not normal_frames, f"plain frames flagged ANOMALOUS: {normal_frames}"

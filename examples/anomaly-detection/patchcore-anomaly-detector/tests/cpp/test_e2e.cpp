@@ -2,9 +2,11 @@
 // nominal set, then scores the images in SIMANEAT_APPS_TEST_INPUT_DIR and
 // verifies the overlay output; the held-out test checks verdicts and overlays
 // on the bundled held-out normal and defect images.
+#include "support/testing/metadata_json_listener.h"
 #include "support/testing/test_config.h"
 #include "support/testing/test_process.h"
 
+#include <nlohmann/json.hpp>
 #include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -632,6 +634,10 @@ int run_mixed_image_sizes_calibrate_and_score(const std::string& binary,
   return rc;
 }
 
+int metadata_port() {
+  return env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100);
+}
+
 // Runs --calibrate on the bundled nominal set, then one live run with the given source
 // settings. Returns the live run's stdout, or nullopt after printing a failure.
 std::optional<std::string>
@@ -656,6 +662,7 @@ calibrate_and_run_live(const std::string& binary, const std::string& model_path,
       {"output.save_every", std::to_string(save_every)},
       {"output.insight.host", "127.0.0.1"},
       {"output.insight.video_port", port && *port ? port : "9000"},
+      {"output.insight.metadata_port", std::to_string(metadata_port())},
       {"runtime.frames", std::to_string(frames)},
   };
   values.insert(source.begin(), source.end());
@@ -724,6 +731,15 @@ int run_video_file_live_run(const std::string& binary, const std::string& model_
   if (!fs::exists(video)) {
     return skip_or_fail("demo video missing: " + video.string());
   }
+  sima_examples::testing::MetadataJsonListenerOptions listener_options;
+  listener_options.base_port = metadata_port();
+  listener_options.metadata_type = "classification";
+  listener_options.data_array_key = "top_classes";
+  sima_examples::testing::MetadataJsonListener listener(listener_options);
+  if (!listener.ok()) {
+    std::cerr << "[FAIL] video_file live run: metadata listener: " << listener.error() << "\n";
+    return 1;
+  }
   std::string out_dir;
   const auto stdout_text = calibrate_and_run_live(
       binary, model_path, "test_video_file_live_run",
@@ -749,12 +765,34 @@ int run_video_file_live_run(const std::string& binary, const std::string& model_
   if (problem.empty()) {
     problem = snapshots_problem(out_dir, 3, cv::Size(224, 224));
   }
+  // Insight receives each frame's verdict as metadata, matching the printed verdict.
+  if (problem.empty()) {
+    const auto metadata = listener.drain_pending();
+    int matched = 0;
+    for (const auto& message : metadata.messages) {
+      const auto json = nlohmann::json::parse(message.payload, nullptr, false);
+      const int frame = std::stoi(message.frame_id);
+      const auto it = verdicts.find(frame);
+      if (json.is_discarded() || it == verdicts.end() ||
+          json["data"]["anomaly"]["verdict"] != it->second) {
+        problem =
+            "metadata verdict for frame " + message.frame_id + " differs from the printed one";
+        break;
+      }
+      ++matched;
+    }
+    if (problem.empty() && matched < 100) {
+      problem = "expected verdict metadata for ~120 frames, got " + std::to_string(matched) + " " +
+                metadata.error;
+    }
+  }
   remove_dir(out_dir);
   if (!problem.empty()) {
     std::cerr << "[FAIL] video_file live run: " << problem << "\n";
     return 1;
   }
-  std::cout << "[OK] video_file: plain frames normal, defect frames ANOMALOUS, 3 snapshots\n";
+  std::cout << "[OK] video_file: plain frames normal, defect frames ANOMALOUS, verdict metadata "
+               "sent, 3 snapshots\n";
   return 0;
 }
 

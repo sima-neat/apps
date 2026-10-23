@@ -153,6 +153,8 @@ assets/datasets/patchcore/images/scratch_0.png: score=34.6679 threshold=20.5151 
 Done: 5 images processed -- overlays written to sandbox/patchcore-anomaly-detector
 ```
 
+For `video_file` and `rtsp`, each frame's verdict is also sent to Insight as `classification` metadata on `output.insight.metadata_port` (default 9100): Insight draws it as a label on the video (for example `ANOMALOUS score=34.7 thr=20.5`), and `data.anomaly` carries the raw `score`, `threshold`, and `verdict` for other consumers.
+
 `mla` is the model time per image (the first one includes setup); `host` is the nearest-neighbor scoring and overlay drawing. In `rtsp` mode the model runs inside the graph, so `mla` there is the wait for the next frame. `video_file` and `rtsp` save every Nth overlay frame to `output.dir` only when `output.save_every` is above 0 (off by default; saving has no limit, so keep N large on long runs).
 
 Measured on a Modalix DevKit (Platform 3.0, build 2121), RTSP at 30 fps with the default bank:

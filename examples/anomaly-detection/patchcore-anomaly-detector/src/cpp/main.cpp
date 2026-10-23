@@ -10,18 +10,22 @@
 #include "neat.h"
 #include "neat/node_groups.h"
 #include "neat/nodes.h"
+#include <nodes/io/MetadataSender.h>
 #include "patchcore_memory_bank.h"
 #include "support/runtime/config_utils.h"
 #include "support/runtime/example_utils.h"
+#include <nlohmann/json.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/videoio.hpp>
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <tuple>
@@ -83,6 +87,7 @@ struct Config {
   int insight_video_port = 9000;
   int insight_channel = 0;
   int insight_bitrate_kbps = 1000;
+  int insight_metadata_port = 9100;
 
   int timeout_ms = 5000;
   int frames = 0;
@@ -143,6 +148,8 @@ void validate_config(const Config& cfg) {
                            "output.insight.video_port must be in [1, 65535]");
     sima_examples::require(cfg.insight_channel >= 0, "output.insight.channel must be >= 0");
     sima_examples::require(cfg.insight_bitrate_kbps > 0, "output.insight.bitrate_kbps must be > 0");
+    sima_examples::require(cfg.insight_metadata_port > 0 && cfg.insight_metadata_port <= 65535,
+                           "output.insight.metadata_port must be in [1, 65535]");
   }
   // --calibrate writes both bank files; neither may overwrite the model or each other.
   const fs::path model = fs::weakly_canonical(cfg.model_path);
@@ -189,6 +196,7 @@ Config load_config(const fs::path& path) {
   cfg.insight_video_port = raw.int_or("output.insight.video_port", 9000);
   cfg.insight_channel = raw.int_or("output.insight.channel", 0);
   cfg.insight_bitrate_kbps = raw.int_or("output.insight.bitrate_kbps", 1000);
+  cfg.insight_metadata_port = raw.int_or("output.insight.metadata_port", 9100);
 
   cfg.timeout_ms = raw.int_or("runtime.timeout_ms", 5000);
   cfg.frames = raw.int_or("runtime.frames", 0);
@@ -577,6 +585,39 @@ VideoSender build_video_sender(const Config& cfg, double fps, int width, int hei
   return sender;
 }
 
+/// Sends each frame's verdict to Insight as metadata, next to the video.
+std::unique_ptr<simaai::neat::MetadataSender> make_metadata_sender(const Config& cfg) {
+  simaai::neat::MetadataSenderOptions options;
+  options.host = cfg.insight_host;
+  options.channel = cfg.insight_channel;
+  options.metadata_port_base = cfg.insight_metadata_port;
+  std::string err;
+  auto sender = std::make_unique<simaai::neat::MetadataSender>(options, &err);
+  sima_examples::require(sender->ok(), "Insight metadata sender: " + err);
+  return sender;
+}
+
+/// Insight draws `top_classes` as a label on the video; `anomaly` carries the raw values
+/// for other consumers.
+void send_verdict(simaai::neat::MetadataSender& sender, float score, float threshold,
+                  bool anomalous, int64_t timestamp_ms, int frame_id) {
+  const std::string verdict = anomalous ? "ANOMALOUS" : "normal";
+  char label[96];
+  std::snprintf(label, sizeof(label), "%s score=%.1f thr=%.1f", verdict.c_str(), score, threshold);
+  const nlohmann::json data = {
+      {"top_classes", nlohmann::json::array({{{"label", label}, {"confidence", 1.0}}})},
+      {"anomaly",
+       {{"verdict", verdict},
+        {"score", std::round(score * 1e4) / 1e4},
+        {"threshold", std::round(threshold * 1e4) / 1e4}}},
+  };
+  std::string err;
+  if (!sender.send_metadata("classification", data.dump(), timestamp_ms, std::to_string(frame_id),
+                            &err)) {
+    std::cerr << "[WARN] Insight metadata send failed: " << err << "\n";
+  }
+}
+
 void stream_frame(simaai::neat::Run& run, const cv::Mat& frame_bgr) {
   if (!run.push(simaai::neat::TensorList{rgb_tensor(frame_bgr)})) {
     throw std::runtime_error("Insight video push failed");
@@ -600,7 +641,9 @@ int cmd_score_video_file(const Config& cfg, const patchcore::MemoryBank& bank, f
   simaai::neat::Model model(cfg.model_path, image_model_options());
   auto runner = model.build(simaai::neat::TensorList{model_input_tensor(frame)});
   auto video_sender = build_video_sender(cfg, fps, width, height);
-  std::cout << "streaming to Insight: " << cfg.insight_host << ":" << video_sender.port << "\n";
+  auto metadata_sender = make_metadata_sender(cfg);
+  std::cout << "streaming to Insight: " << cfg.insight_host << ":" << video_sender.port
+            << " metadata=" << metadata_sender->metadata_port() << "\n";
 
   if (cfg.save_every > 0) {
     fs::create_directories(cfg.output_dir);
@@ -632,6 +675,8 @@ int cmd_score_video_file(const Config& cfg, const patchcore::MemoryBank& bank, f
               << " (mla=" << mla_ms << "ms host=" << host_ms << "ms)\n";
 
     stream_frame(video_sender.run, overlay);
+    send_verdict(*metadata_sender, scored.image_score, threshold, anomalous,
+                 static_cast<int64_t>(std::lround((processed - 1) * 1000.0 / fps)), processed);
     if (cfg.save_every > 0 && processed % cfg.save_every == 0) {
       const fs::path snapshot_path = cfg.output_dir / ("frame_" + std::to_string(processed) + ".jpg");
       if (!cv::imwrite(snapshot_path.string(), overlay)) {
@@ -835,7 +880,9 @@ int cmd_score_rtsp(const Config& cfg, const patchcore::MemoryBank& bank, float t
   simaai::neat::Model model(cfg.model_path, rtsp_graph_model_options(geometry));
   auto rt = build_rtsp_runtime(cfg, geometry, model);
   auto video_sender = build_video_sender(cfg, geometry.fps, geometry.width, geometry.height);
-  std::cout << "streaming to Insight: " << cfg.insight_host << ":" << video_sender.port << "\n";
+  auto metadata_sender = make_metadata_sender(cfg);
+  std::cout << "streaming to Insight: " << cfg.insight_host << ":" << video_sender.port
+            << " metadata=" << metadata_sender->metadata_port() << "\n";
 
   const bool save_frames = cfg.save_every > 0;
   if (save_frames) {
@@ -848,6 +895,7 @@ int cmd_score_rtsp(const Config& cfg, const patchcore::MemoryBank& bank, float t
     cv::Mat bgr;
     patchcore::PatchEmbeddings embedding;
     double mla_ms = 0.0;
+    int64_t timestamp_ms = -1;
     {
       simaai::neat::Sample sample;
       simaai::neat::PullError pull_error;
@@ -865,6 +913,7 @@ int cmd_score_rtsp(const Config& cfg, const patchcore::MemoryBank& bank, float t
       // Copy both fields out; the sample (and its pooled buffers) is released at scope end.
       embedding = embedding_from_sample(sample);
       bgr = frame_bgr_from_sample(sample);
+      timestamp_ms = sample.pts_ns >= 0 ? sample.pts_ns / 1'000'000 : -1;
     }
 
     const double host_start = time_ms();
@@ -879,6 +928,8 @@ int cmd_score_rtsp(const Config& cfg, const patchcore::MemoryBank& bank, float t
               << " (mla=" << mla_ms << "ms host=" << (time_ms() - host_start) << "ms)\n";
 
     stream_frame(video_sender.run, overlay);
+    send_verdict(*metadata_sender, scored.image_score, threshold, anomalous, timestamp_ms,
+                 processed);
     if (save_frames && processed % cfg.save_every == 0) {
       const fs::path snapshot_path = cfg.output_dir / ("frame_" + std::to_string(processed) + ".jpg");
       if (!cv::imwrite(snapshot_path.string(), overlay)) {
