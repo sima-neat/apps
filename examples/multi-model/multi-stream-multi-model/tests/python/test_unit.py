@@ -670,7 +670,7 @@ def test_debug_frames_stay_paired_with_results(monkeypatch, tmp_path):
                                        pull=lambda *args: next(outputs),
                                        last_error=lambda: "", running=lambda: True)
     monkeypatch.setattr(main, "first_tensor_from_sample", lambda sample: sample.tensor)
-    monkeypatch.setattr(main, "copy_nv12_for_model", lambda tensor: tensor)
+    monkeypatch.setattr(main, "frame_for_model", lambda tensor: tensor)
     monkeypatch.setattr(main, "tensor_bgr_from_decoded", lambda tensor: tensor.copy())
     monkeypatch.setattr(main, "decode_results", lambda *args: [])
     monkeypatch.setattr(main, "draw_boxes", lambda *args: None)
@@ -726,6 +726,37 @@ def test_workers_stop_when_their_run_stops_cleanly():
     stream.in_flight = 2
     main.run_stream_consumer(_config(), stream)
     assert stream.closed
+
+
+def test_frame_for_model_passes_decoder_frame_through():
+    import main
+
+    nv12 = SimpleNamespace(is_nv12=lambda: True, width=1920, height=1080)
+    assert main.frame_for_model(nv12) is nv12
+    with pytest.raises(ValueError, match="NV12"):
+        main.frame_for_model(SimpleNamespace(is_nv12=lambda: False, width=1920, height=1080))
+
+
+def test_feeder_fails_after_consecutive_unusable_frames(monkeypatch):
+    import main
+
+    stream = make_stream("detection", FakeMetadataSender())
+    pulls = []
+
+    def source_pull(*args):
+        pulls.append(True)
+        return SimpleNamespace(pts_ns=len(pulls), frame_id=len(pulls), tensor=object())
+
+    def unusable(tensor):
+        raise ValueError("expected an NV12 frame with valid dimensions")
+
+    monkeypatch.setattr(main, "first_tensor_from_sample", lambda sample: sample.tensor)
+    monkeypatch.setattr(main, "frame_for_model", unusable)
+    with pytest.raises(RuntimeError, match="consecutive decoded frames were unusable"):
+        main.run_stream_feeder(SimpleNamespace(source_run=SimpleNamespace(pull=source_pull)),
+                               _config(), stream)
+    assert len(pulls) == main.MAX_CONSECUTIVE_FRAME_FAILURES
+    assert stream.feed_done
 
 
 @pytest.mark.parametrize("helper", ["int_or", "float_or"])

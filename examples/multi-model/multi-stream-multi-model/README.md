@@ -145,21 +145,16 @@ With `runtime.profile: true` each stream reports its own throughput:
 [profile stream=1 task=segmentation] frames=100 output_fps=... avg_result_pull_ms=... avg_instances=...
 ```
 
-Measured on a Modalix DevKit against four 1280x720@60 RTSP sources, over ten-minute runs:
+Measured on a Modalix DevKit against four 1920x1080@30 H.264 RTSP sources with the default
+models and debug saving disabled:
 
 | Implementation | detection | segmentation | pose | detection | aggregate |
 | --- | --- | --- | --- | --- | --- |
-| C++ | 57.4 fps | 57.3 fps | 57.5 fps | 57.5 fps | ~230 fps |
-| Python | 57.1 fps | 50.8 fps | 57.0 fps | 57.4 fps | ~222 fps |
+| C++ | 30.3 fps | 30.2 fps | 29.6 fps | 30.3 fps | ~120 fps |
+| Python | 30.3 fps | 30.3 fps | 30.3 fps | 30.3 fps | ~120 fps |
 
-Steady-state rates; the ceiling is 240 fps. Both implementations hold this flat for the full ten
-minutes with no stream falling behind. Python matches C++ on three streams; only segmentation
-trails, because tracing mask contours per frame is host work and the GIL serialises it.
-
-Against the same four cameras at 30 fps the two implementations are indistinguishable, both
-tracking the source rate at ~28 fps per stream and ~111 fps aggregate. Halving the frame rate
-doubles the host budget per frame, which is enough for Python's segmentation overlay work to keep
-up: the gap above is a host-throughput limit, not a difference in what the two produce.
+Every stream tracks its source rate. Enabling `output.debug_dir` adds a host color conversion for
+each saved frame.
 
 ## Troubleshooting
 
@@ -180,8 +175,10 @@ up: the gap above is a host-throughput limit, not a difference in what the two p
   Lower `inference.max_detections` or raise `inference.min_score`.
 - Throughput is roughly halved and one stream is far behind: check that each model was given its
   own `Run`. Sharing one `Run` across the four model graphs is what makes a single stream stall.
+- The application exits with `consecutive decoded frames were unusable`: the decoder is not
+  producing NV12 frames for that stream. Check that `input.codec` matches the camera.
 - One stream falls far behind the others while the rest hold the source rate: the MLA is
-  oversubscribed. Four 1280x720@60 streams fit the small INT8 defaults; heavier packages do not,
+  oversubscribed. Four 1920x1080@30 streams fit the small INT8 defaults; heavier packages do not,
   and the shortfall concentrates on a single stream instead of spreading. Drop stream entries or
   return to the default packages.
 

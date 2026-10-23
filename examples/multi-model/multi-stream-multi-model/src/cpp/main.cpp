@@ -1362,20 +1362,19 @@ simaai::neat::GraphLinkOptions realtime_link(int stream_index, int queue_depth) 
   return link;
 }
 
-/// Wrap one stream's model in its own graph. Every stream owns a distinct model archive.
-/// Copy a decoded frame out of the zero-copy decoder pool into a tensor the model input accepts.
+/// Hand a decoded frame to the model as the decoder produced it.
 ///
-/// The frame has to leave the pool: it outlives the pulled sample, and holding pool buffers
-/// starves the decoder. It also has to be EV74-placed, because the model's input route is
-/// device-visible and rejects CPU-backed tensors rather than silently copying them.
-simaai::neat::Tensor copy_nv12_for_model(const simaai::neat::Tensor& input) {
+/// The model input accepts the decoder's padded NV12 buffer directly. Repacking it with
+/// `contiguous().cvu()` allocated a new frame from the default CMA heap for every frame, which
+/// exhausts that heap with three or more 1080p streams. Holding the decoder buffer while the
+/// frame is in flight is bounded by `max_inflight_per_stream`.
+simaai::neat::Tensor frame_for_model(const simaai::neat::Tensor& input) {
   int width = 0;
   int height = 0;
   if (!input.is_nv12() || !sima_examples::infer_dims(input, width, height)) {
     throw std::runtime_error("expected an NV12 frame with valid dimensions");
   }
-  // Preserve the native NV12 plane metadata and CVU device placement.
-  return input.contiguous().cvu();
+  return input;
 }
 
 /// The host pushes decoded frames in here, so the input is a plain NV12 image endpoint.
@@ -1631,8 +1630,10 @@ void process_output_sample(const AppConfig& cfg, StreamRuntime& stream,
 /// Frames that arrive while the gate is closed are dropped, which is what a live camera wants.
 void run_stream_feeder(AppRuntime& app, const AppConfig& cfg, StreamRuntime& stream) {
   constexpr int kPullTimeoutMs = 50;
+  constexpr int kMaxConsecutiveFrameFailures = 30;
   const std::string frame_name = source_frame_name(stream.index);
   const int depth = std::max(1, cfg.max_inflight_per_stream);
+  int frame_failures = 0;
 
   while (g_stop_requested == 0 && !stream.closed) {
     simaai::neat::Sample frame_sample;
@@ -1668,9 +1669,18 @@ void run_stream_feeder(AppRuntime& app, const AppConfig& cfg, StreamRuntime& str
     }
     simaai::neat::Tensor frame;
     try {
-      frame = copy_nv12_for_model(tensors.front());
+      frame = frame_for_model(tensors.front());
+      frame_failures = 0;
     } catch (const std::exception& e) {
-      std::cerr << "[warn] stream " << stream.index << " frame copy: " << e.what() << "\n";
+      // An unusable frame is tolerable; a stream that produces nothing else is not, and warning
+      // forever would leave a finite run waiting for frames that never come.
+      if (++frame_failures >= kMaxConsecutiveFrameFailures) {
+        throw std::runtime_error("stream " + std::to_string(stream.index) + ": " +
+                                 std::to_string(frame_failures) +
+                                 " consecutive decoded frames were unusable: " +
+                                 e.what());
+      }
+      std::cerr << "[warn] stream " << stream.index << " frame: " << e.what() << "\n";
       continue;
     }
     cv::Mat bgr;
@@ -1816,6 +1826,8 @@ void run_app(const AppConfig& cfg) {
     }
     std::cout << "\n";
   }
+  // Redirected stdout is block-buffered, and process teardown may end without flushing it.
+  std::cout.flush();
   std::signal(SIGINT, previous_sigint);
   if (failure) std::rethrow_exception(failure);
 }

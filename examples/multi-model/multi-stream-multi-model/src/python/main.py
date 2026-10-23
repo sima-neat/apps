@@ -1096,6 +1096,7 @@ def source_frame_name(stream_index: int) -> str:
 # Every model graph uses the same endpoint names; they live in separate Runs.
 MODEL_INPUT = "image"
 MODEL_OUTPUT = "results"
+MAX_CONSECUTIVE_FRAME_FAILURES = 30
 
 
 def realtime_link(stream_index: int, queue_depth: int):
@@ -1140,16 +1141,17 @@ def build_model_graph(cfg: AppConfig, stream: StreamRuntime) -> pyneat.Graph:
     return graph
 
 
-def copy_nv12_for_model(tensor):
-    """Move a decoded frame out of the zero-copy pool into a tensor the model input accepts.
+def frame_for_model(tensor):
+    """Hand a decoded frame to the model as the decoder produced it.
 
-    The frame has to leave the pool: it outlives the pulled sample, and holding pool buffers
-    starves the decoder. It also has to be EV74-placed, because the model's input route is
-    device-visible and rejects host-backed tensors rather than silently copying them. ``cvu()``
-    does both and keeps the NV12 plane layout, which rebuilding the tensor from a NumPy array
-    would lose.
+    The model input accepts the decoder's padded NV12 buffer directly. Repacking it with
+    ``contiguous().cvu()`` allocated a new frame from the default CMA heap for every frame, which
+    exhausts that heap with three or more 1080p streams. Holding the decoder buffer while the
+    frame is in flight is bounded by ``max_inflight_per_stream``.
     """
-    return tensor.contiguous().cvu()
+    if not tensor.is_nv12() or min(tensor_dim(tensor, "width"), tensor_dim(tensor, "height")) <= 0:
+        raise ValueError("expected an NV12 frame with valid dimensions")
+    return tensor
 
 
 def make_video_options(cfg: AppConfig, stream_index: int):
@@ -1420,6 +1422,7 @@ def run_stream_feeder(app: AppRuntime, cfg: AppConfig, stream: StreamRuntime) ->
     """
     frame_name = source_frame_name(stream.index)
     depth = max(1, cfg.max_inflight_per_stream)
+    frame_failures = 0
     try:
         while not stream.closed:
             sample = app.source_run.pull(frame_name, 50)
@@ -1442,9 +1445,18 @@ def run_stream_feeder(app: AppRuntime, cfg: AppConfig, stream: StreamRuntime) ->
             if tensor is None:
                 continue
             try:
-                frame = copy_nv12_for_model(tensor)
+                frame = frame_for_model(tensor)
+                frame_failures = 0
             except Exception as exc:
-                print(f"[warn] stream {stream.index} frame copy: {exc}", file=sys.stderr)
+                # An unusable frame is tolerable; a stream that produces nothing else is not, and
+                # warning forever would leave a finite run waiting for frames that never come.
+                frame_failures += 1
+                if frame_failures >= MAX_CONSECUTIVE_FRAME_FAILURES:
+                    raise RuntimeError(
+                        f"stream {stream.index}: {frame_failures} consecutive decoded frames were "
+                        f"unusable: {exc}"
+                    ) from exc
+                print(f"[warn] stream {stream.index} frame: {exc}", file=sys.stderr)
                 continue
             debug_frame = tensor_bgr_from_decoded(tensor) if save_frames_enabled(cfg) else None
             # Recorded before the push: under Block the result can come back the instant push
