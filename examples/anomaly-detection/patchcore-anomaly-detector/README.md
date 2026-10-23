@@ -16,6 +16,17 @@
 
 Detects visual anomalies in industrial images or video using a compiled WideResNet-50 patch-feature extractor and a host-side coreset memory bank calibrated from your own known-good images.
 
+PatchCore learns only what normal looks like. The MLA turns every frame into a 28x28 grid of patch descriptions (1,536 values each, from `wide_resnet50_2` with torchvision `IMAGENET1K_V1` weights). `--calibrate` keeps a small, diverse set of descriptions from your known-good images as the memory bank. At run time each patch is compared with its nearest bank entry on the host: patches far from everything normal are highlighted, and the worst patch decides the frame's `normal` / `ANOMALOUS` verdict.
+
+```
+image_dir / video_file:  decode on host --> letterbox to 224x224 --> model (MLA) --> patch descriptions
+rtsp:                    RTSP decode --> branch --> model (CVU preprocess + MLA) --> "embedding" --+
+                                               \--> "frame" ----------------------------------------+--> joined per frame
+patch descriptions + frame --> nearest bank entry per patch (host) --> verdict + heatmap --> Insight / saved overlays
+```
+
+The bank is built from the compiled model's own descriptions, not from a float PyTorch model: the compiled model's values differ slightly, and a bank from another model shifts every distance and weakens the separation between normal and defective. `bank_meta.json` records the model package's hash, so a bank built for a different package is rejected at load.
+
 ## Preview
 
 ![Demo screenshot](../../../portal/assets/examples/anomaly-detection/patchcore-anomaly-detector/image.png)
@@ -24,7 +35,7 @@ Detects visual anomalies in industrial images or video using a compiled WideResN
 
 - `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
 - For `source.type: rtsp`, an RTSP H.264, H.265, or MJPEG source reachable from the target.
-- For `source.type: video_file` or `rtsp`, [Insight](https://developer.sima.ai/software/tools/insight/) (or another RTP receiver) to view the live annotated stream.
+- For `source.type: video_file` or `rtsp`, [Insight](https://developer.sima.ai/software/tools/insight/) (or another RTP receiver) to view the live annotated stream. Insight can also serve a video file or a webcam as the RTSP source; see [Prepare Insight](#prepare-insight).
 
 ## Install Apps
 
@@ -85,9 +96,21 @@ python3 ${APP_DIR}/src/python/main.py --calibrate --config ${APP_DIR}/src/common
 
 Both write `memory_bank.path` / `memory_bank.meta_path` from `calibration.nominal_images_dir`, and share the same on-disk format -- a bank built with one binary loads and scores in the other. Re-run `--calibrate` whenever `model.path` changes, the inspection target or camera changes, or you change any `calibration` setting.
 
+## Prepare Insight
+
+`video_file` and `rtsp` send the annotated video to Insight. Insight installs with the Apps runtime; start it on the board and leave it running:
+
+```bash
+source ~/.simaai/neat-insight/venv/bin/activate && neat-insight
+```
+
+Open `https://<board-ip>:9900` in a browser and accept the self-signed certificate. When Insight runs on the board, set `output.insight.host` to `127.0.0.1`.
+
+For `rtsp`, Insight can also provide the stream: under *RTSP Source*, upload a clip (for example `assets/datasets/patchcore/video/test.mp4`) or select a webcam, start it, and copy its URL (for example `rtsp://<board-ip>:8554/src1`) into `source.rtsp.url`.
+
 ## Configure
 
-Open `${APP_DIR}/src/common/config.yaml`. Set `model.path`, `source.type` and its matching source fields, `memory_bank.path` / `memory_bank.meta_path`, and `calibration.nominal_images_dir` before the first `--calibrate` run. For `source.type: video_file` or `rtsp`, also set `output.insight.host` to the machine running Insight. For `source.type: rtsp` with `codec: h265` or `mjpeg`, also set `source.rtsp.width`/`height` (see Troubleshooting).
+Open `${APP_DIR}/src/common/config.yaml`. Set `model.path`, `source.type` and its matching source fields, `memory_bank.path` / `memory_bank.meta_path`, and `calibration.nominal_images_dir` before the first `--calibrate` run. The shipped config uses `source.type: video_file` with the bundled clip. For `source.type: video_file` or `rtsp`, also set `output.insight.host` to the machine running Insight. For `source.type: rtsp` with `codec: h265` or `mjpeg`, also set `source.rtsp.width`/`height` (see Troubleshooting).
 
 ## Run
 
@@ -107,7 +130,21 @@ python3 ${APP_DIR}/src/python/main.py \
   --config ${APP_DIR}/src/common/config.yaml
 ```
 
-Every processed image/frame prints its score, the configured threshold, and the pass/fail verdict. `image_dir` writes overlays to `output.dir` in which only regions scoring above the calibrated patch threshold are highlighted (yellow to red); normal regions are left unchanged; `video_file`/`rtsp` additionally stream the live overlay to Insight (`output.insight.host`/`video_port`) and, if you set `output.save_every` above 0 (off by default), also save every Nth overlay frame to `output.dir`. Saving has no limit, so on a long live run pick a large N or keep it off.
+## Expected Result
+
+Every processed image or frame prints its score, the calibrated threshold, and the verdict. Only regions scoring above the calibrated patch threshold are highlighted (yellow to red); normal regions are left unchanged.
+
+With the shipped config (`video_file`, the bundled clip), the app plays the clip once and streams it to Insight. In the Insight video viewer (channel 0), the first 60 frames show plain texture with no highlight and `verdict=normal`; from frame 61 the scratches and colored dots are highlighted and every frame is `ANOMALOUS`:
+
+```
+frame=1: score=16.4380 threshold=19.1899 verdict=normal (mla=...ms host=...ms)
+...
+frame=61: score=34.0625 threshold=19.1899 verdict=ANOMALOUS (mla=...ms host=...ms)
+...
+Done: 450 frames processed  video_sender=127.0.0.1:9000
+```
+
+With `source.type: image_dir` and the bundled `images/`, overlays are written to `output.dir`:
 
 ```
 assets/datasets/patchcore/images/plain_0.png: score=16.1795 threshold=19.1899 verdict=normal (mla=2022.1ms host=7.9ms)
@@ -115,6 +152,17 @@ assets/datasets/patchcore/images/scratch_0.png: score=32.6038 threshold=19.1899 
 ...
 Done: 5 images processed -- overlays written to sandbox/patchcore-anomaly-detector
 ```
+
+`mla` is the model time per image (the first one includes setup); `host` is the nearest-neighbor scoring and overlay drawing. In `rtsp` mode the model runs inside the graph, so `mla` there is the wait for the next frame. `video_file` and `rtsp` save every Nth overlay frame to `output.dir` only when `output.save_every` is above 0 (off by default; saving has no limit, so keep N large on long runs).
+
+Measured on a Modalix DevKit (Platform 3.0, build 2121), RTSP at 30 fps with the default bank:
+
+| Stream | C++ | Python |
+| --- | --- | --- |
+| 224x224 | about 26 fps | about 25 fps |
+| 720x720 | about 15 fps | about 18 fps |
+
+At larger frames, drawing the full-size heatmap takes most of the host time. When scoring is slower than the stream, the app drops older frames instead of queueing them, so the Insight view stays within about a second of the camera. A larger `calibration.coreset_ratio` lowers the frame rate only slightly (about 3 fps less at a bank of about 100 vectors).
 
 ## Troubleshooting
 
@@ -124,7 +172,8 @@ Done: 5 images processed -- overlays written to sandbox/patchcore-anomaly-detect
 - `bank_meta.json is missing patch_threshold`: rerun `--calibrate` to regenerate the bank.
 - Confirm `source.image_dir` / `source.video_path` / `source.rtsp.url` matches the configured `source.type`.
 - `rtsp`: `failed to resolve source geometry` -- the stream wasn't reachable, or (for `codec: h265`/`mjpeg`) didn't expose probeable width/height; set `source.rtsp.width`/`height` explicitly.
-- Nothing appears in Insight: confirm `output.insight.host` is reachable and Insight is listening on the configured `video_port`/`channel`.
+- Nothing appears in Insight: confirm Insight is running (see [Prepare Insight](#prepare-insight)), `output.insight.host` is reachable, and Insight is listening on the configured `video_port`/`channel`.
+- Every frame of a new camera is `ANOMALOUS`: calibrate on known-good images from that camera, at the resolution and framing you run with.
 - `--calibrate` looks stalled on a large nominal set: it prints progress every 10 images; lowering `calibration.coreset_ratio` reduces both build time and per-frame scoring cost.
 
 ## Source Files
@@ -142,4 +191,5 @@ To modify, compile, or test this example, use the [Apps contributor workflow](ht
 ## Known limitations
 
 - MVTec AD is not vendored into this repo or used for the shipped memory bank (its license is non-commercial research use); build your own bank from a nominal set captured on your own target.
-- A live camera input is out of scope for this example; `source.type` covers image directories, video files, and RTSP/encoded streams only.
+- There is no direct MIPI or USB camera source; stream a camera over RTSP instead (Insight can publish a webcam).
+- PatchCore expects a fixed camera and a consistent scene: camera motion, lighting changes, or a scene that differs from the calibration images all raise scores.
