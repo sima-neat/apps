@@ -318,6 +318,14 @@ def _write_fake_curl(tmp_path: Path) -> tuple[Path, Path]:
             )
 
             bodies = json.loads(os.environ.get("NEAT_APPS_TEST_URL_BODIES", "{}"))
+            files = json.loads(os.environ.get("NEAT_APPS_TEST_URL_FILES", "{}"))
+            if url in files:
+                payload = Path(files[url]).read_bytes()
+                if output:
+                    Path(output).write_bytes(payload)
+                else:
+                    sys.stdout.buffer.write(payload)
+                sys.exit(0)
             parts = [part for part in urlparse(url).path.split("/") if part]
             body = bodies.get(url)
             if body is None and len(parts) >= 2 and parts[-1] == "latest.tag":
@@ -690,26 +698,56 @@ def _write_fake_sysroot(tmp_path: Path) -> dict[str, str]:
     }
 
 
+def _write_scheduler_policy_package(tmp_path: Path, policy_text: str | None) -> Path:
+    root = tmp_path / "scheduler-package"
+    control = root / "DEBIAN/control"
+    control.parent.mkdir(parents=True)
+    control.write_text(
+        "Package: simaai-scheduler\n"
+        "Version: 0.2.0\n"
+        "Architecture: arm64\n"
+        "Maintainer: Test <test@example.com>\n"
+        "Description: SDK policy fixture\n",
+        encoding="utf-8",
+    )
+    if policy_text is not None:
+        policy = root / "usr/share/SimaScheduler/dependency-policy.json"
+        policy.parent.mkdir(parents=True)
+        policy.write_text(policy_text, encoding="utf-8")
+    package = tmp_path / "simaai-scheduler.deb"
+    subprocess.run(
+        ["dpkg-deb", "--build", "--root-owner-group", str(root), str(package)],
+        check=True,
+        capture_output=True,
+    )
+    return package
+
+
 def _sysroot_sync_env(
     tmp_path: Path,
     *,
     manifest_text: str = '{"sysroot-version":"2.0.0~pre9999"}\n',
     metadata: dict[str, object] | None = None,
     resolve: dict[str, object] | None = None,
+    scheduler_package: Path | None = None,
 ) -> dict[str, str]:
     branch = "scratch-core-for-test"
     version = "scratchsha1"
     metadata_url = (
         f"https://vulcan.test/core/{branch}/{version}/metadata-minimal.json"
     )
-    manifest_url = (
-        f"https://vulcan.test/core/{branch}/{version}/internals-manifest.json"
+    resource = (
+        "simaai-scheduler.deb" if scheduler_package else "internals-manifest.json"
     )
-    checksum = hashlib.sha256(manifest_text.encode()).hexdigest()
+    resource_url = f"https://vulcan.test/core/{branch}/{version}/{resource}"
+    payload = (
+        scheduler_package.read_bytes() if scheduler_package else manifest_text.encode()
+    )
+    checksum = hashlib.sha256(payload).hexdigest()
     if metadata is None:
         metadata = {
-            "resources": ["internals-manifest.json"],
-            "resources-checksum": {"internals-manifest.json": checksum},
+            "resources": [resource],
+            "resources-checksum": {resource: checksum},
         }
     if resolve is None:
         resolve = {
@@ -732,8 +770,11 @@ def _sysroot_sync_env(
             {
                 **json.loads(_core_metadata_env()["NEAT_APPS_TEST_URL_BODIES"]),
                 metadata_url: json.dumps(metadata),
-                manifest_url: manifest_text,
+                resource_url: manifest_text,
             }
+        ),
+        "NEAT_APPS_TEST_URL_FILES": json.dumps(
+            {resource_url: str(scheduler_package)} if scheduler_package else {}
         ),
         "SIMA_CLI_BIN": str(bin_dir / "sima-cli"),
     }
@@ -1208,6 +1249,125 @@ def test_vulcan_sysroot_sync_precedes_core_install(tmp_path, receipt):
     ]
 
 
+@pytest.mark.parametrize("include_legacy", [False, True])
+def test_vulcan_sysroot_sync_uses_bundled_scheduler_policy(tmp_path, include_legacy):
+    receipt = "3.0.0~git202610140145.e5ece50-2121"
+    package = _write_scheduler_policy_package(
+        tmp_path,
+        json.dumps({"schema_version": 1, "sysroot-version": receipt}),
+    )
+    # Current Core publishes these resources, not an Internals manifest. Also
+    # verify Scheduler wins if an older manifest is present alongside it.
+    metadata = {
+        "resources": [
+            "manifest.json",
+            "resolved-deps-manifest.json",
+            "scheduler_platform_admission.py",
+            "simaai-scheduler.deb",
+        ],
+        "resources-checksum": {
+            "simaai-scheduler.deb": hashlib.sha256(package.read_bytes()).hexdigest()
+        },
+    }
+    if include_legacy:
+        metadata["resources"].append("internals-manifest.json")
+    env = _sysroot_sync_env(tmp_path, metadata=metadata, scheduler_package=package)
+
+    proc = _run_build(
+        tmp_path,
+        platform_version="3.0.0",
+        args=["--only-install-neat-core"],
+        env=env,
+    )
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert (tmp_path / "events.log").read_text().splitlines() == [
+        "sima-cli:neat install --env production -t minimal --json "
+        "core@scratch-core-for-test:scratchsha1",
+        f"sysroot:update {receipt}",
+        "sysroot:status",
+        "sima-cli:neat install --env production -d . -t minimal "
+        "core@scratch-core-for-test:scratchsha1",
+    ]
+    assert json.loads((tmp_path / "deps/neat-core.json").read_text()) == {
+        "neat-core": {"ref": "scratch-core-for-test", "spec": "scratchsha1"}
+    }
+    assert not any("internals-manifest.json" in url for url in _curl_log(tmp_path))
+    assert f"to {receipt} (simaai-scheduler.deb)" in proc.stdout
+
+
+@pytest.mark.parametrize(
+    "policy_text",
+    [
+        None,  # Package lacks the policy.
+        "{",
+        "{}",
+        '{"schema_version":2,"sysroot-version":"2.0.0~pre9999"}',
+        '{"schema_version":1,"sysroot-version":""}',
+        '{"schema_version":1,"sysroot-version":"latest"}',
+        '{"schema_version":1,"sysroot-version":"3.0.0~pre9999"}',
+        '{"schema_version":1,"sysroot-version":"2.0.0~pre9999; touch /tmp/nope"}',
+    ],
+)
+def test_vulcan_sysroot_sync_rejects_invalid_scheduler_policy(tmp_path, policy_text):
+    package = _write_scheduler_policy_package(tmp_path, policy_text)
+    env = _sysroot_sync_env(tmp_path, scheduler_package=package)
+
+    proc = _run_build(tmp_path, args=["--only-install-neat-core"], env=env)
+
+    assert proc.returncode != 0
+    assert "Cannot verify the Core SDK policy" in proc.stderr
+    assert not (tmp_path / "sysroot.log").exists()
+    assert (tmp_path / "events.log").read_text().splitlines() == [
+        "sima-cli:neat install --env production -t minimal --json "
+        "core@scratch-core-for-test:scratchsha1"
+    ]
+
+
+@pytest.mark.parametrize(
+    "fault", ["missing-checksum", "duplicate", "checksum-mismatch", "corrupt-package"]
+)
+def test_vulcan_sysroot_sync_does_not_fall_back_from_scheduler(tmp_path, fault):
+    package = _write_scheduler_policy_package(
+        tmp_path, '{"schema_version":1,"sysroot-version":"2.0.0~pre9999"}'
+    )
+    if fault == "corrupt-package":
+        package.write_bytes(b"not a Debian archive")
+    metadata = {
+        "resources": ["simaai-scheduler.deb", "internals-manifest.json"],
+        "resources-checksum": {
+            "simaai-scheduler.deb": hashlib.sha256(package.read_bytes()).hexdigest()
+        },
+    }
+    if fault == "missing-checksum":
+        metadata["resources-checksum"].clear()
+    elif fault == "duplicate":
+        metadata["resources"].append("simaai-scheduler.deb")
+    elif fault == "checksum-mismatch":
+        metadata["resources-checksum"]["simaai-scheduler.deb"] = "0" * 64
+    env = _sysroot_sync_env(tmp_path, metadata=metadata, scheduler_package=package)
+    # Make the legacy resource valid so falling back would incorrectly succeed.
+    bodies = json.loads(env["NEAT_APPS_TEST_URL_BODIES"])
+    metadata_url = json.loads(env["NEAT_APPS_TEST_SIMA_CLI_JSON"])["metadata_url"]
+    legacy_url = metadata_url.replace("metadata-minimal.json", "internals-manifest.json")
+    bodies[legacy_url] = '{"sysroot-version":"2.0.0~pre9999"}'
+    metadata["resources-checksum"]["internals-manifest.json"] = hashlib.sha256(
+        bodies[legacy_url].encode()
+    ).hexdigest()
+    bodies[metadata_url] = json.dumps(metadata)
+    env["NEAT_APPS_TEST_URL_BODIES"] = json.dumps(bodies)
+
+    proc = _run_build(tmp_path, args=["--only-install-neat-core"], env=env)
+
+    assert proc.returncode != 0
+    assert not (tmp_path / "sysroot.log").exists()
+    assert legacy_url not in _curl_log(tmp_path)
+    assert (tmp_path / "events.log").read_text().splitlines() == [
+        "sima-cli:neat install --env production -t minimal --json "
+        "core@scratch-core-for-test:scratchsha1"
+    ]
+
+
 def test_vulcan_sysroot_sync_accepts_empty_receipt(tmp_path):
     proc = _run_build(
         tmp_path,
@@ -1329,7 +1489,7 @@ def test_vulcan_sysroot_sync_rejects_invalid_receipts(tmp_path, manifest_text):
     )
 
     assert proc.returncode != 0
-    assert "Cannot verify the Core Internals build receipt" in proc.stderr
+    assert "Cannot verify the Core SDK policy" in proc.stderr
     assert not (tmp_path / "sysroot.log").exists()
 
 

@@ -953,17 +953,16 @@ PY
     return 1
   fi
 
-  local tmp_dir metadata_file manifest_file
+  local tmp_dir metadata_file resource_file
   tmp_dir="$(mktemp -d /tmp/neat-apps-sysroot.XXXXXX)"
   trap 'rm -rf "${tmp_dir}"' EXIT
   metadata_file="${tmp_dir}/metadata-minimal.json"
-  manifest_file="${tmp_dir}/internals-manifest.json"
   if ! download_file "${metadata_url}" "${metadata_file}"; then
     echo "ERROR: Failed to download selected Core metadata." >&2
     return 1
   fi
 
-  local resource_info manifest_url expected_checksum
+  local resource_info resource resource_url expected_checksum
   if ! resource_info="$(python3 - "${metadata_file}" "${metadata_url}" <<'PY'
 import json
 import re
@@ -972,37 +971,62 @@ from urllib.parse import urljoin
 
 with open(sys.argv[1], encoding="utf-8") as handle:
     metadata = json.load(handle)
-resource = "internals-manifest.json"
-if metadata.get("resources", []).count(resource) != 1:
-    raise SystemExit("Core metadata must contain exactly one Internals manifest")
+resources = metadata.get("resources", [])
+# Split Core ships its SDK policy inside Scheduler. Older Core releases ship
+# an Internals manifest instead. Never fall back after a Scheduler failure.
+resource = (
+    "simaai-scheduler.deb" if "simaai-scheduler.deb" in resources
+    else "internals-manifest.json"
+)
+if resources.count(resource) != 1:
+    raise SystemExit(f"Core metadata must contain exactly one SDK policy resource: {resource}")
 checksum = metadata.get("resources-checksum", {}).get(resource)
 if not isinstance(checksum, str) or not re.fullmatch(r"[0-9a-f]{64}", checksum):
-    raise SystemExit("Core metadata has no valid Internals manifest checksum")
-print(urljoin(sys.argv[2], resource) + "\t" + checksum)
+    raise SystemExit(f"Core metadata has no valid checksum for {resource}")
+print("\t".join((resource, urljoin(sys.argv[2], resource), checksum)))
 PY
   )"; then
-    echo "ERROR: Cannot verify the Core Internals manifest resource." >&2
+    echo "ERROR: Cannot verify the Core SDK policy resource." >&2
     return 1
   fi
-  manifest_url="${resource_info%%$'\t'*}"
-  expected_checksum="${resource_info#*$'\t'}"
-  if ! download_file "${manifest_url}" "${manifest_file}"; then
-    echo "ERROR: Failed to download the Core Internals manifest." >&2
+  IFS=$'\t' read -r resource resource_url expected_checksum <<< "${resource_info}"
+  resource_file="${tmp_dir}/${resource}"
+  if ! download_file "${resource_url}" "${resource_file}"; then
+    echo "ERROR: Failed to download the Core SDK policy resource ${resource}." >&2
     return 1
   fi
 
   local receipt
-  if ! receipt="$(python3 - "${manifest_file}" "${APPS_MANIFEST}" "${expected_checksum}" <<'PY'
+  if ! receipt="$(python3 - "${resource_file}" "${APPS_MANIFEST}" "${expected_checksum}" <<'PY'
 import hashlib
+import io
 import json
 import re
+import subprocess
 import sys
+import tarfile
 from pathlib import Path
 
-manifest_path = Path(sys.argv[1])
-if hashlib.sha256(manifest_path.read_bytes()).hexdigest() != sys.argv[3]:
-    raise SystemExit("Internals manifest checksum mismatch")
-artifact = json.loads(manifest_path.read_text(encoding="utf-8"))
+resource_path = Path(sys.argv[1])
+payload = resource_path.read_bytes()
+if hashlib.sha256(payload).hexdigest() != sys.argv[3]:
+    raise SystemExit("Core SDK policy resource checksum mismatch")
+if resource_path.name == "simaai-scheduler.deb":
+    # Read only the policy; do not install the package or extract its files.
+    payload = subprocess.check_output(["dpkg-deb", "--fsys-tarfile", str(resource_path)])
+    with tarfile.open(fileobj=io.BytesIO(payload)) as archive:
+        policy_path = "usr/share/SimaScheduler/dependency-policy.json"
+        members = [
+            m for m in archive.getmembers()
+            if m.name in (policy_path, "./" + policy_path)
+        ]
+        if len(members) != 1 or not members[0].isfile():
+            raise SystemExit("Scheduler package must contain one regular SDK policy file")
+        artifact = json.load(archive.extractfile(members[0]))
+    if artifact.get("schema_version") != 1 or not artifact.get("sysroot-version"):
+        raise SystemExit("Scheduler package has no valid SDK policy")
+else:
+    artifact = json.loads(payload)
 consumer = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
 receipt = artifact["sysroot-version"]
 consumer_base = consumer["platform-version"]
@@ -1012,11 +1036,11 @@ if not isinstance(receipt, str) or (
 ):
     raise SystemExit("invalid sysroot-version")
 if receipt and consumer_base != receipt.split("~", 1)[0]:
-    raise SystemExit("platform-version does not match the Internals receipt")
+    raise SystemExit("platform-version does not match the Core SDK policy")
 print(receipt)
 PY
   )"; then
-    echo "ERROR: Cannot verify the Core Internals build receipt." >&2
+    echo "ERROR: Cannot verify the Core SDK policy." >&2
     return 1
   fi
   if [[ -z "${receipt}" ]]; then
@@ -1025,7 +1049,7 @@ PY
   fi
 
   if [[ "${receipt}" == *"~"* ]]; then
-    echo "Updating SDK sysroot to Core's Internals receipt ${receipt}"
+    echo "Updating SDK sysroot for core@${branch}:${version} to ${receipt} (${resource})"
     if ! run_privileged sysroot update "${receipt}"; then
       echo "ERROR: Failed to update SDK sysroot to ${receipt}." >&2
       return 1
