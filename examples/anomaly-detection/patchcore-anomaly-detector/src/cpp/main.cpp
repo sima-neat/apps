@@ -121,6 +121,13 @@ void validate_config(const Config& cfg) {
   sima_examples::require(!cfg.calibration_nominal_dir.empty(),
                          "calibration.nominal_images_dir must be set");
   sima_examples::require(!cfg.output_dir.empty(), "output.dir must be set");
+  // Overlays written among the known-good references would be calibrated on next time.
+  const fs::path output_dir = fs::weakly_canonical(cfg.output_dir);
+  sima_examples::require(output_dir != fs::weakly_canonical(cfg.calibration_nominal_dir) &&
+                             (cfg.calibration_threshold_dir.empty() ||
+                              output_dir != fs::weakly_canonical(cfg.calibration_threshold_dir)),
+                         "output.dir must not be calibration.nominal_images_dir or "
+                         "calibration.threshold_images_dir");
   sima_examples::require(cfg.coreset_ratio > 0.0 && cfg.coreset_ratio <= 1.0,
                          "calibration.coreset_ratio must be in (0, 1]");
   sima_examples::require(cfg.threshold_percentile >= 0.0 && cfg.threshold_percentile <= 100.0,

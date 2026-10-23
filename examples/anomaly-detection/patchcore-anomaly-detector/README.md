@@ -137,9 +137,9 @@ Every processed image or frame prints its score, the calibrated threshold, and t
 With the shipped config (`video_file`, the bundled clip), the app plays the clip once and streams it to Insight. In the Insight video viewer (channel 0), the first 60 frames show plain texture with no highlight and `verdict=normal`; from frame 61 the scratches and colored dots are highlighted and every frame is `ANOMALOUS`:
 
 ```
-frame=1: score=16.4380 threshold=19.1899 verdict=normal (mla=...ms host=...ms)
+frame=1: score=17.0073 threshold=20.5151 verdict=normal (mla=...ms host=...ms)
 ...
-frame=61: score=34.0625 threshold=19.1899 verdict=ANOMALOUS (mla=...ms host=...ms)
+frame=61: score=35.3749 threshold=20.5151 verdict=ANOMALOUS (mla=...ms host=...ms)
 ...
 Done: 450 frames processed  video_sender=127.0.0.1:9000
 ```
@@ -147,8 +147,8 @@ Done: 450 frames processed  video_sender=127.0.0.1:9000
 With `source.type: image_dir` and the bundled `images/`, overlays are written to `output.dir`:
 
 ```
-assets/datasets/patchcore/images/plain_0.png: score=16.1795 threshold=19.1899 verdict=normal (mla=2022.1ms host=7.9ms)
-assets/datasets/patchcore/images/scratch_0.png: score=32.6038 threshold=19.1899 verdict=ANOMALOUS (mla=32.3ms host=18.1ms)
+assets/datasets/patchcore/images/plain_0.png: score=16.8013 threshold=20.5151 verdict=normal (mla=2022.1ms host=7.9ms)
+assets/datasets/patchcore/images/scratch_0.png: score=34.6679 threshold=20.5151 verdict=ANOMALOUS (mla=32.3ms host=18.1ms)
 ...
 Done: 5 images processed -- overlays written to sandbox/patchcore-anomaly-detector
 ```

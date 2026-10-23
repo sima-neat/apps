@@ -490,6 +490,45 @@ class TestE2E:
         assert first is not None, f"snapshot {snapshots[0].name} does not decode"
         _assert_snapshots(tmp_output_dir, 3, (first.shape[1], first.shape[0]))
 
+    def test_both_languages_build_the_same_bank(
+        self,
+        e2e_model_path,
+        tmp_output_dir,
+        test_timeout_ms,
+        skip_unless_e2e_ready,
+        e2e_config_writer,
+    ):
+        """C++ and Python --calibrate on the same images and seed give the same
+        bank and thresholds, so switching languages never changes verdicts."""
+        cpp_binary = _find_cpp_binary()
+        skip_unless_e2e_ready(cpp_binary is not None, "C++ patchcore binary not found")
+        results = {}
+        for lang in ("cpp", "py"):
+            bank_path = tmp_output_dir.parent / f"bank_{lang}.npy"
+            meta_path = tmp_output_dir.parent / f"bank_{lang}.json"
+            config_path = e2e_config_writer(
+                {
+                    "source": {"type": "image_dir", "image_dir": str(REAL_IMAGES_DIR)},
+                    "calibration": {"nominal_images_dir": str(NOMINAL_DIR), "threshold_images_dir": ""},
+                    "memory_bank": {"path": str(bank_path), "meta_path": str(meta_path)},
+                    "output": {"dir": str(tmp_output_dir)},
+                }
+            )
+            cmd = [str(cpp_binary)] if lang == "cpp" else [sys.executable, str(MAIN_PY)]
+            result = subprocess.run(
+                [*cmd, "--calibrate", "--config", str(config_path)],
+                capture_output=True, text=True, timeout=test_timeout_ms / 1000, cwd=str(EXAMPLE_DIR),
+            )
+            assert result.returncode == 0, f"{lang} --calibrate failed:\n{result.stderr}"
+            results[lang] = (np.load(bank_path), json.loads(meta_path.read_text(encoding="utf-8")))
+        (cpp_bank, cpp_meta), (py_bank, py_meta) = results["cpp"], results["py"]
+        assert cpp_bank.shape == py_bank.shape, f"bank shapes differ: {cpp_bank.shape} vs {py_bank.shape}"
+        np.testing.assert_allclose(cpp_bank, py_bank, atol=1e-4)
+        for key in ("threshold", "patch_threshold"):
+            assert abs(cpp_meta[key]["value"] - py_meta[key]["value"]) < 1e-3, (
+                f"{key} differs: C++ {cpp_meta[key]['value']} vs Python {py_meta[key]['value']}"
+            )
+
     def test_cpp_built_bank_scores_correctly_in_python(
         self,
         e2e_model_path,

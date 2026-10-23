@@ -39,6 +39,24 @@ class TestArgParsing:
         )
         assert r.returncode == 2
 
+    @pytest.mark.parametrize("key", ["nominal_images_dir", "threshold_images_dir"])
+    def test_output_dir_in_calibration_dir_rejected(self, tmp_path, key):
+        """Overlays must never land among the known-good calibration images."""
+        import yaml
+
+        cfg = yaml.safe_load((EXAMPLE_DIR / "src" / "common" / "config.yaml").read_text())
+        cfg["model"]["path"] = str(tmp_path / "model.tar.gz")
+        cfg["calibration"][key] = str(tmp_path / "refs")
+        cfg["output"]["dir"] = str(tmp_path / "refs")
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(yaml.safe_dump(cfg))
+        r = subprocess.run(
+            [sys.executable, str(MAIN_PY), "--validate-config-only", "--config", str(config_path)],
+            capture_output=True, text=True, timeout=20,
+        )
+        assert r.returncode != 0
+        assert "must not be calibration.nominal_images_dir" in r.stderr
+
     @pytest.mark.parametrize("key", ["path", "meta_path"])
     def test_bank_file_aliasing_model_rejected(self, tmp_path, key):
         """--calibrate must never overwrite the model package with a bank file."""
@@ -103,6 +121,12 @@ class TestGreedyCoreset:
         idx_a = pcs.greedy_coreset_indices(vectors, ratio=0.2, seed=42)
         idx_b = pcs.greedy_coreset_indices(vectors, ratio=0.2, seed=42)
         np.testing.assert_array_equal(idx_a, idx_b)
+
+    def test_first_pick_is_seed_mod_n(self):
+        """The shared start rule both languages use, so they build the same bank."""
+        vectors = np.random.default_rng(5).random((50, 5)).astype(np.float32)
+        for seed in (0, 7, 123):
+            assert pcs.greedy_coreset_indices(vectors, ratio=0.2, seed=seed)[0] == seed % 50
 
 
 @pytest.mark.unit

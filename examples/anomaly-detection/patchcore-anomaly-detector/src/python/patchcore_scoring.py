@@ -70,9 +70,10 @@ def greedy_coreset_indices(vectors: np.ndarray, ratio: float, seed: int) -> np.n
     if k >= n:
         return np.arange(n)
 
-    rng = np.random.default_rng(seed)
     selected = np.empty(k, dtype=np.int64)
-    selected[0] = int(rng.integers(0, n))
+    # Start at patch `seed % n`, the same rule as the C++ implementation, so both
+    # languages build the same bank from the same images and seed.
+    selected[0] = seed % n
     min_dist = np.linalg.norm(vectors - vectors[selected[0]], axis=1)
     for i in range(1, k):
         next_idx = int(np.argmax(min_dist))

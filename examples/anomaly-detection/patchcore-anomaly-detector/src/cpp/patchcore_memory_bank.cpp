@@ -11,7 +11,6 @@
 #include <fstream>
 #include <limits>
 #include <memory>
-#include <random>
 #include <sstream>
 #include <stdexcept>
 
@@ -264,9 +263,9 @@ std::vector<std::size_t> greedy_coreset_indices(const std::vector<float>& vector
     return acc;
   };
 
-  std::mt19937_64 rng(seed);
-  std::uniform_int_distribution<std::size_t> start_dist(0, n - 1);
-  const std::size_t start = start_dist(rng);
+  // Start at patch `seed % n`, the same rule as the Python implementation, so both
+  // languages build the same bank from the same images and seed.
+  const std::size_t start = static_cast<std::size_t>(seed % n);
   selected.push_back(start);
 
   std::vector<float> min_sq_dist(n);

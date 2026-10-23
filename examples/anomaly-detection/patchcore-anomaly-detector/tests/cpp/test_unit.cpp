@@ -153,5 +153,40 @@ int main(int argc, char** argv) {
     }
   }
 
+  // Test 8: output.dir inside the calibration images is rejected, so overlays never
+  // end up among the known-good references.
+  {
+    const std::string out_dir = sima_examples::testing::create_test_output_dir(
+        "patchcore-anomaly-detector", "test_output_in_calibration_dir_rejected");
+    if (out_dir.empty()) {
+      ++failures;
+    } else {
+      const std::filesystem::path run_dir = std::filesystem::path(out_dir).parent_path();
+      const std::filesystem::path config_path = run_dir / "config.yaml";
+      const std::string refs = (run_dir / "refs").string();
+      sima_examples::testing::write_e2e_config(
+          "patchcore-anomaly-detector", config_path,
+          {
+              {"model.path", (run_dir / "model.tar.gz").string()},
+              {"calibration.nominal_images_dir", refs},
+              {"output.dir", refs},
+          });
+
+      auto r = spawn_and_wait(binary, {"--validate-config-only", "--config", config_path.string()},
+                              20000);
+      if (r.exit_code == 0) {
+        std::cerr << "[FAIL] output in calibration dir: expected a nonzero exit\n";
+        ++failures;
+      } else if (r.stderr_text.find("must not be calibration.nominal_images_dir") ==
+                 std::string::npos) {
+        std::cerr << "[FAIL] output in calibration dir: stderr does not explain the failure\n";
+        ++failures;
+      } else {
+        std::cout << "[OK] output.dir inside the calibration images correctly rejected\n";
+      }
+      sima_examples::testing::remove_dir(out_dir);
+    }
+  }
+
   return failures > 0 ? 1 : 0;
 }

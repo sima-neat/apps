@@ -192,6 +192,12 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("calibration.nominal_images_dir must be set")
     if not cfg.output.dir:
         raise ValueError("output.dir must be set")
+    # Overlays written among the known-good references would be calibrated on next time.
+    output_dir = Path(cfg.output.dir).resolve()
+    calibration_dirs = [cfg.calibration.nominal_images_dir, cfg.calibration.threshold_images_dir]
+    if any(d and output_dir == Path(d).resolve() for d in calibration_dirs):
+        raise ValueError("output.dir must not be calibration.nominal_images_dir or "
+                         "calibration.threshold_images_dir")
     if cfg.source_type == "rtsp" and cfg.rtsp.codec not in {"h264", "h265", "mjpeg"}:
         raise ValueError("source.rtsp.codec must be h264, h265, or mjpeg")
     if not 0.0 < cfg.calibration.coreset_ratio <= 1.0:
