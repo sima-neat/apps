@@ -3,6 +3,7 @@ Supertonic paths (src/common/config_value.sh), exercised through bash."""
 
 from __future__ import annotations
 
+import re
 import subprocess
 import tempfile
 import unittest
@@ -129,6 +130,128 @@ class ShellWebConfigTests(unittest.TestCase):
             self.assertEqual(_run('config_true "$1" && echo y || echo n', value), "y", value)
         for value in ("0", "false", "", "no", "off", "'true'"):
             self.assertEqual(_run('config_true "$1" && echo y || echo n', value), "n", value)
+
+
+class ShellRagConfigTests(unittest.TestCase):
+    """rag_config_enabled, which setup.sh reads to keep a SETUP_RAG choice."""
+
+    def _enabled(self, text):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / "c.yaml"
+            config.write_text(text, encoding="utf-8")
+            return _run('rag_config_enabled "$1"', str(config))
+
+    def test_values_read_like_the_loader(self):
+        self.assertEqual(self._enabled("app:\n  rag:\n    enabled: true\n"), "true")
+        self.assertEqual(self._enabled("app:\n  rag:\n    enabled: false   # SETUP_RAG=1\n"), "false")
+        self.assertEqual(self._enabled("app:\n  rag: {enabled: 'yes'}\n"), "true")
+        self.assertEqual(self._enabled("rag:\n  enabled: on\n"), "true")             # no app: root
+        self.assertEqual(self._enabled("app:\n  web:\n    port: 5000\n"), "false")   # loader default
+
+    def test_fallback_reader_without_a_yaml_python(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            c = Path(tmp) / "c.yaml"
+            c.write_text("app:\n  rag:\n    enabled: false   # SETUP_RAG=1\n", encoding="utf-8")
+            script = 'source "$1"; _studio_config_python() { return 1; }; rag_config_enabled "$2"'
+            out = subprocess.run(["bash", "-c", script, "_", str(HELPER), str(c)],
+                                 check=True, capture_output=True, text=True)
+            self.assertEqual(out.stdout.strip(), "false")
+
+
+class LegacyUiDirMigrationTests(unittest.TestCase):
+    """run.sh moves an updated install's own files from src/python/ui/ (the
+    backend folder before it became api/) into api/ on the next start."""
+
+    EXAMPLE = Path(__file__).resolve().parents[2]
+
+    def _migrate(self, python_dir: Path) -> subprocess.CompletedProcess:
+        run_sh = (self.EXAMPLE / "run.sh").read_text(encoding="utf-8")
+        start = run_sh.index("migrate_legacy_ui_dir() {")
+        end = run_sh.index("\n}\n", start) + 3
+        script = ('ok() { echo "OK $*"; }; warn() { echo "WARN $*" >&2; }\n'
+                  f'PYTHON_DIR="$1"\n{run_sh[start:end]}\nmigrate_legacy_ui_dir\n')
+        return subprocess.run(["bash", "-c", script, "_", str(python_dir)],
+                              check=True, capture_output=True, text=True)
+
+    def test_install_files_move_and_regenerated_ones_are_dropped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            py = Path(tmp)
+            files = {"assets/en_US-x.onnx": "voice", "assets/piper-plus/ja/m.onnx": "ja",
+                     "milvus.db": "db", "milvus.meta.json": "{}", "uploads/doc.md": "# doc",
+                     "server.log": "log", ".milvus.db.lock": "", "__pycache__/x.pyc": "c"}
+            for rel, text in files.items():
+                (py / "ui" / rel).parent.mkdir(parents=True, exist_ok=True)
+                (py / "ui" / rel).write_text(text)
+            (py / "api" / "assets").mkdir(parents=True)
+
+            out = self._migrate(py)
+
+            self.assertFalse((py / "ui").exists())
+            for rel in ("assets/en_US-x.onnx", "assets/piper-plus/ja/m.onnx", "milvus.db",
+                        "milvus.meta.json", "uploads/doc.md", "server.log"):
+                self.assertEqual((py / "api" / rel).read_text(), files[rel], rel)
+            self.assertFalse((py / "api" / ".milvus.db.lock").exists())
+            self.assertFalse((py / "api" / "__pycache__").exists())
+            self.assertIn("OK Moved 6 file(s)", out.stdout)
+
+    def test_existing_api_files_are_never_overwritten(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            py = Path(tmp)
+            for side, db, voice in (("ui", "old documents", "same"), ("api", "new default", "same")):
+                (py / side / "assets").mkdir(parents=True)
+                (py / side / "milvus.db").write_text(db)
+                (py / side / "assets" / "v.onnx").write_text(voice)
+
+            out = self._migrate(py)
+
+            self.assertEqual((py / "api" / "milvus.db").read_text(), "new default")
+            self.assertEqual((py / "ui" / "milvus.db").read_text(), "old documents")
+            self.assertFalse((py / "ui" / "assets").exists())          # identical copy dropped
+            self.assertIn("ui/milvus.db", out.stderr)
+
+    def test_the_split_voices_shim_in_ui_tts_stays(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            py = Path(tmp)
+            (py / "ui" / "tts").mkdir(parents=True)
+            (py / "ui" / "tts" / "split_voices.py").write_text("shim")
+            (py / "ui" / "milvus.db").write_text("db")
+            (py / "api").mkdir()
+
+            out = self._migrate(py)
+
+            self.assertEqual((py / "ui" / "tts" / "split_voices.py").read_text(), "shim")
+            self.assertFalse((py / "api" / "tts").exists())
+            self.assertEqual((py / "api" / "milvus.db").read_text(), "db")
+            self.assertEqual(out.stderr, "")
+
+    def test_update_keeps_install_files_in_ui_until_they_move(self):
+        # Every install-owned api/ path the update mirror protects is also
+        # protected under ui/, so a second update before the first start
+        # cannot delete files that have not moved yet.
+        run_sh = (self.EXAMPLE / "run.sh").read_text(encoding="utf-8")
+        api = re.findall(r"--exclude='/src/python/api/([^']+)'", run_sh)
+        ui = re.findall(r"--exclude='/src/python/ui/([^']+)'", run_sh)
+        self.assertTrue(api)
+        self.assertEqual(sorted(api), sorted(ui))
+
+    def test_the_old_updater_path_forwards_to_the_splitter(self):
+        shim = self.EXAMPLE / "src" / "python" / "ui" / "tts" / "split_voices.py"
+        with tempfile.TemporaryDirectory() as tmp:
+            py = Path(tmp)
+            (py / "ui" / "tts").mkdir(parents=True)
+            (py / "api" / "tts").mkdir(parents=True)
+            (py / "ui" / "tts" / "split_voices.py").write_text(shim.read_text(encoding="utf-8"))
+            (py / "api" / "tts" / "split_voices.py").write_text(
+                "import sys\nprint('split', sys.argv[1:])\n")
+            out = subprocess.run([sys.executable, str(py / "ui" / "tts" / "split_voices.py"), "/assets"],
+                                 check=True, capture_output=True, text=True)
+            self.assertEqual(out.stdout.strip(), "split ['/assets']")
+
+    def test_nothing_happens_without_a_ui_folder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "api").mkdir()
+            out = self._migrate(Path(tmp))
+            self.assertEqual((out.stdout, out.stderr), ("", ""))
 
 
 class ShellConfigValueTests(unittest.TestCase):

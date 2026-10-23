@@ -18,7 +18,7 @@ from pathlib import Path
 
 
 CATALOG_PATH = Path(__file__).with_name("voice_catalog.json")
-ASSETS_PATH = Path(__file__).resolve().parent.parent / "assets"  # voice assets stay in ui/assets
+ASSETS_PATH = Path(__file__).resolve().parent.parent / "assets"  # voice assets stay in api/assets
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
 
@@ -154,6 +154,22 @@ def install_voices(languages, optional_ids=(), *, assets_path=ASSETS_PATH, catal
     return plan
 
 
+def repair_voices(*, assets_path=ASSETS_PATH, catalog=None):
+    """Complete every installed voice that is missing a file, e.g. a config a
+    git update removed, and verify its files. A voice counts as installed when
+    its model files (everything but the .json configs) are there; a config on
+    its own, as older packages shipped, does not install the voice. Returns
+    the ids of the voices completed."""
+    repaired = []
+    for voice in catalog_voices(catalog or load_catalog()):
+        paths = asset_paths(voice, assets_path)
+        models = [path for path in paths if not path.name.endswith(".json")]
+        if models and all(path.is_file() for path in models) and not all(path.is_file() for path in paths):
+            install_voice(voice, assets_path=assets_path)
+            repaired.append(voice["id"])
+    return repaired
+
+
 def install_voice(voice, *, assets_path=ASSETS_PATH):
     """Install one already-validated catalog entry."""
     base_url = (
@@ -179,6 +195,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("validate")
+    repair = subparsers.add_parser("repair")
+    repair.add_argument("--assets", type=Path, default=ASSETS_PATH)
     install = subparsers.add_parser("install")
     install.add_argument("--languages", required=True)
     install.add_argument("--optional", default="")
@@ -186,6 +204,10 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     catalog = load_catalog()
+    if args.command == "repair":
+        repaired = repair_voices(assets_path=args.assets, catalog=catalog)
+        print(f"Restored missing files for: {', '.join(repaired)}" if repaired else "Installed voices are complete.")
+        return 0
     if args.command == "validate":
         print(f"voice catalog valid: {len(catalog['voices'])} reviewed voices")
         return 0

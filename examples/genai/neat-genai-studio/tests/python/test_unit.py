@@ -4,7 +4,7 @@ The suites live beside this module as ``*_suite.py`` (deliberately not
 ``test_*.py``, so an ad-hoc ``pytest`` over the tree does not collect them a
 second time). The installed bundle packages ``src/python`` wholesale, so tests
 must not live there. This module is what the repository harness collects: it
-puts ``src/python`` and ``src/python/ui`` on the path, re-exports the TestCase
+puts ``src/python`` and ``src/python/api`` on the path, re-exports the TestCase
 classes, and marks them as unit coverage so ``./tests/test.sh --unit`` runs
 them. Run one suite in place with ``python -m unittest asr_switching_suite``
 from this directory (with the same two paths on PYTHONPATH).
@@ -27,13 +27,13 @@ SRC_PYTHON = EXAMPLE_DIR / "src" / "python"
 if str(SRC_PYTHON) not in sys.path:
     sys.path.insert(0, str(SRC_PYTHON))
 
-UI_PYTHON = SRC_PYTHON / "ui"
-if str(UI_PYTHON) not in sys.path:
-    sys.path.insert(0, str(UI_PYTHON))   # the ui suites import their modules bare
+API_PYTHON = SRC_PYTHON / "api"
+if str(API_PYTHON) not in sys.path:
+    sys.path.insert(0, str(API_PYTHON))   # the api suites import their modules bare
 
-TTS_PYTHON = UI_PYTHON / "tts"
+TTS_PYTHON = API_PYTHON / "tts"
 if str(TTS_PYTHON) not in sys.path:
-    sys.path.insert(0, str(TTS_PYTHON))  # TTS engines/workers/catalog live in ui/tts
+    sys.path.insert(0, str(TTS_PYTHON))  # TTS engines/workers/catalog live in api/tts
 
 TESTS_DIR = Path(__file__).resolve().parent
 if str(TESTS_DIR) not in sys.path:
@@ -47,6 +47,10 @@ from asr_switching_suite import (  # noqa: E402
     MlaFailureClassificationTests,
 )
 from hub_security_suite import HubPathSecurityTests  # noqa: E402,F401
+from resident_models_suite import (  # noqa: E402,F401
+    ResidentChatModelTests,
+    ResidentLimitControlApiTests,
+)
 from asr_metadata_suite import AsrMetadataTests  # noqa: E402,F401
 from board_camera_suite import ResolveCameraNodeTests  # noqa: E402,F401
 from talk_controller_suite import SupertonicRetryTests  # noqa: E402,F401
@@ -66,6 +70,12 @@ from readme_package_suite import (  # noqa: E402,F401
     LauncherPackagePathsTests,
     ReadmePackagePathsTests,
 )
+from edge_cases_suite import (  # noqa: E402,F401
+    BusyAcceleratorTests,
+    ContextWindowTests,
+    MemoryFullTests,
+    StorageFullTests,
+)
 from worker_ipc_suite import (  # noqa: E402,F401
     ReadExactTests,
     ReadFrameTests,
@@ -78,14 +88,18 @@ from audio_api_suite import (  # noqa: E402,F401
     VoicesListingTests as AudioApiVoicesListingTests,
 )
 from shell_config_suite import (  # noqa: E402,F401
+    LegacyUiDirMigrationTests,
     ServerConfigWithoutPyyamlTests,
     ShellConfigValueTests,
+    ShellRagConfigTests,
     ShellWebConfigTests,
 )
+from setup_rag_suite import SetupRagSwitchTests  # noqa: E402,F401
 from backend_mode_suite import (  # noqa: E402,F401
     BackendPathTests,
     CorsPolicyTests as BackendCorsPolicyTests,
     HealthPayloadTests as BackendHealthPayloadTests,
+    ControlRelayTests as BackendControlRelayTests,
 )
 from supertonic_tts_suite import (  # noqa: E402,F401
     ClientConfigurationTests as SupertonicClientConfigurationTests,
@@ -107,6 +121,7 @@ from voice_catalog_suite import (  # noqa: E402,F401
     test_korean_has_no_server_install_plan,
     test_only_cc_by_nc_sa_voices_are_excluded,
     test_optional_voices_require_explicit_selection,
+    test_repair_completes_only_partly_installed_voices,
 )
 
 # Applies to every TestCase collected from this module.

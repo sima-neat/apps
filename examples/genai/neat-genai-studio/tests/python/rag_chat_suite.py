@@ -206,7 +206,7 @@ class RagServedDatabaseTests(unittest.TestCase):
         self.assertEqual(rag_chat.other_database("", "/opt/studio/milvus.db"), rag_chat.UNNAMED_DATABASE)
 
     def test_every_studio_rag_call_checks_the_served_database(self):
-        source = (Path(__file__).resolve().parents[2] / "src/python/ui/flask_app.py").read_text(encoding="utf-8")
+        source = (Path(__file__).resolve().parents[2] / "src/python/api/studio_api.py").read_text(encoding="utf-8")
         for target in ("ensure_rag_modules_loaded()", "rag_db_client"):
             for call in (".search(", ".is_server_up(", ".list_documents("):
                 self.assertNotIn(target + call, source)

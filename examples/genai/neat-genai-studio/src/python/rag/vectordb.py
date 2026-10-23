@@ -30,7 +30,7 @@ PYTHON = os.sys.executable
 SCRIPT = Path(__file__).resolve()
 WORKER_SCRIPT = SCRIPT.parent / "vectordb_worker.py"
 PYTHON_DIR = SCRIPT.parent.parent
-UI_DIR = PYTHON_DIR / "ui"
+API_DIR = PYTHON_DIR / "api"
 STARTUP_DELAY = 2
 K_RETRIEVED_DOCS = 1
 DEFAULT_MIN_SCORE = float(os.environ.get("VDB_MIN_SCORE", "0.0"))
@@ -41,7 +41,7 @@ DEFAULT_VDB_PORT = 9100
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("VectorDB")
 
-RAG_DB_PATH = str((UI_DIR / "milvus.db").resolve())
+RAG_DB_PATH = str((API_DIR / "milvus.db").resolve())
 
 # --- VectorDB definition ---
 class VectorDB:

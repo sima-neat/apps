@@ -3,7 +3,7 @@ serves, and the opt-in CORS policy for browser front ends on other origins
 (for example Insight).
 
 Pure Python on purpose (no Flask import) so the unit suite covers every
-decision; ``flask_app`` applies these in ``before_request`` / ``after_request``.
+decision; ``studio_api`` applies these in ``before_request`` / ``after_request``.
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ CORS_MAX_AGE = "600"
 # Response headers a cross-origin page may read (timings, engine, model).
 EXPOSE_HEADERS = ("X-ASR-Model", "X-Task", "X-Elapsed-Time", "X-Engine", "X-Voice",
                   "X-Language", "X-Speed", "X-RTF", "X-Audio-Duration",
-                  "X-RAG-Hits", "X-RAG-Sources")
+                  "X-RAG-Hits", "X-RAG-Sources", "X-Context-Dropped", "X-Context-Window")
 
 
 def _matches(path: str, prefixes: Iterable[str], exact: Iterable[str]) -> bool:
@@ -127,6 +127,41 @@ def cors_headers(origin: str, request_headers: str | None = None) -> dict:
         "Access-Control-Max-Age": CORS_MAX_AGE,
         "Access-Control-Expose-Headers": ", ".join(EXPOSE_HEADERS),
     }
+
+
+# Routes the backend relays to the model server's control API as they are: the
+# query (GET) or JSON object (POST) goes through, the reply comes back unchanged,
+# and the control API applies the defaults. The control API is plain HTTP on
+# loopback while Insight is an HTTPS origin, hence the relay.
+# (method, backend path) -> (control API path, timeout in seconds)
+CONTROL_ROUTES = {
+    ("GET", "/models/status"): ("/control/status", 10),
+    ("GET", "/models/catalog"): ("/control/catalog", 30),
+    ("GET", "/models/logs"): ("/control/logs", 10),
+    ("GET", "/models/card"): ("/control/card", 15),
+    ("POST", "/models/load"): ("/control/load", 600),
+    ("POST", "/models/unload"): ("/control/unload", 60),
+    ("POST", "/models/delete"): ("/control/delete", 120),
+    ("POST", "/benchmark/run"): ("/control/benchmark", 30),
+    ("GET", "/benchmark/status"): ("/control/benchmark/status", 10),
+    ("POST", "/benchmark/stop"): ("/control/benchmark/stop", 10),
+}
+
+
+NOT_A_JSON_OBJECT = "Request body must be a JSON object"
+
+
+def control_payload(method: str, query: Iterable, body) -> tuple:
+    """(params, json) for relaying a request to the control API: the query
+    pairs for GET; for POST the JSON object, or {} without a body. Raises
+    ValueError for a POST body that is not a JSON object."""
+    if method == "GET":
+        return list(query), None
+    if body is None:
+        return None, {}
+    if not isinstance(body, dict):
+        raise ValueError(NOT_A_JSON_OBJECT)
+    return None, body
 
 
 # Version of the backend API that integrating front ends (Insight) build on.

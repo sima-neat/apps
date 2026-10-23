@@ -16,7 +16,7 @@ from shared.config import DEFAULT_UI_CONFIG, load_ui_config
 
 
 def _request_shutdown(signum, frame):
-    """SIGTERM -> KeyboardInterrupt so run_ui()'s finally (which stops the RAG
+    """SIGTERM -> KeyboardInterrupt so run_api()'s finally (which stops the RAG
     worker) runs on a clean shutdown, matching Ctrl+C behavior."""
     raise KeyboardInterrupt()
 
@@ -44,9 +44,9 @@ def main() -> int:
     os.chdir(app_dir)
 
     try:
-        from flask_app import run_ui
+        from studio_api import run_api
 
-        run_ui(cfg)
+        run_api(cfg)
     except KeyboardInterrupt:
         print("\nstopping the backend...", flush=True)
     except Exception as exc:

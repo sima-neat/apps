@@ -51,7 +51,10 @@ SUPERTONIC_VENV="${SUPERTONIC_VENV:-${EXAMPLE_DIR}/.venv-supertonic}"
 SHUTDOWN_GRACE_SECONDS="${SHUTDOWN_GRACE_SECONDS:-10}"
 RAG_WORKER_PATTERN="${PYTHON_DIR}/rag/vectordb_worker.py"
 SERVER_PATTERN="${PYTHON_DIR}/server/main.py"
-UI_PATTERN="${PYTHON_DIR}/ui/main.py"
+API_PATTERN="${PYTHON_DIR}/api/main.py"
+# The backend before src/python/ui/ became api/; still stopped for one release
+# so `./run.sh stop` after an update reaches a backend started before it.
+LEGACY_UI_PATTERN="${PYTHON_DIR}/ui/main.py"
 # PID file for the running instance (enables `./run.sh stop`).
 PID_FILE="${RUN_PID_FILE:-${EXAMPLE_DIR}/.neat-genai-studio.pid}"
 # The running instance records the URL it is actually serving, so `status`
@@ -311,11 +314,13 @@ do_stop() {
   info "No running instance recorded; cleaning up any stray processes…"
   if command -v pkill >/dev/null 2>&1; then
     pkill -TERM -f "${SERVER_PATTERN}" 2>/dev/null || true
-    pkill -TERM -f "${UI_PATTERN}" 2>/dev/null || true
+    pkill -TERM -f "${API_PATTERN}" 2>/dev/null || true
+    pkill -TERM -f "${LEGACY_UI_PATTERN}" 2>/dev/null || true
     pkill -TERM -f "${RAG_WORKER_PATTERN}" 2>/dev/null || true
     sleep 2
     pkill -KILL -f "${SERVER_PATTERN}" 2>/dev/null || true
-    pkill -KILL -f "${UI_PATTERN}" 2>/dev/null || true
+    pkill -KILL -f "${API_PATTERN}" 2>/dev/null || true
+    pkill -KILL -f "${LEGACY_UI_PATTERN}" 2>/dev/null || true
     pkill -KILL -f "${RAG_WORKER_PATTERN}" 2>/dev/null || true
   fi
   ok "Done."
@@ -415,10 +420,13 @@ do_clean() {
     "${DEFAULT_LOCAL_CONFIG}" \
     "${DEFAULT_LOCAL_CONFIG}.bak" \
     "${PID_FILE}" \
+    "${PYTHON_DIR}/api/milvus.db" \
+    "${PYTHON_DIR}/api/milvus.meta.json" \
+    "${PYTHON_DIR}/api/assets/piper-plus" \
+    "${PYTHON_DIR}/api/assets/mms-tts-kor" \
     "${PYTHON_DIR}/ui/milvus.db" \
     "${PYTHON_DIR}/ui/milvus.meta.json" \
-    "${PYTHON_DIR}/ui/assets/piper-plus" \
-    "${PYTHON_DIR}/ui/assets/mms-tts-kor"; do
+    "${PYTHON_DIR}/ui/assets"; do
     [[ -e "$t" ]] && targets+=("$t")
   done
   # A desktop icon / menu entry an earlier setup.sh installed for this checkout.
@@ -426,7 +434,7 @@ do_clean() {
   # Downloaded rhasspy .onnx voices (committed .onnx.json configs are kept),
   # __pycache__ dirs, and any *.log files the app produced.
   while IFS= read -r -d '' t; do targets+=("$t"); done \
-    < <(find "${PYTHON_DIR}/ui/assets" -maxdepth 1 -name '*.onnx' -print0 2>/dev/null)
+    < <(find "${PYTHON_DIR}/api/assets" -maxdepth 1 -name '*.onnx' -print0 2>/dev/null)
   while IFS= read -r -d '' t; do targets+=("$t"); done \
     < <(find "${PYTHON_DIR}" -type d -name '__pycache__' -print0 2>/dev/null)
   while IFS= read -r -d '' t; do targets+=("$t"); done \
@@ -470,8 +478,49 @@ do_clean() {
 # get-example.sh) it re-fetches the release archive and mirrors the source. Set
 # NEAT_APPS_BRANCH chooses a branch (default main); UPDATE_DEPS=1 refreshes only
 # the Python dependencies.
+# src/python/ui/ became src/python/api/. An update keeps the install's own files
+# (voices, RAG database, uploads, logs) where they were, so the first start
+# after it moves them into api/. A file api/ already has is dropped from ui/
+# when identical, otherwise left there and reported. ui/tts/ holds the
+# split_voices.py shim the previous run.sh calls during the update, so it stays.
+# Remove after one release, with that shim.
+migrate_legacy_ui_dir() {
+  local old="${PYTHON_DIR}/ui" new="${PYTHON_DIR}/api" src rel moved=0
+  [[ -d "${old}" ]] || return 0
+  # Regenerated on start, never the install's own data.
+  find "${old}" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true
+  rm -f "${old}/.milvus.db.lock"
+  while IFS= read -r -d '' src; do
+    rel="${src#"${old}"/}"
+    if [[ -e "${new}/${rel}" ]]; then
+      cmp -s "${src}" "${new}/${rel}" && rm -f "${src}"
+      continue
+    fi
+    mkdir -p "$(dirname "${new}/${rel}")" && mv "${src}" "${new}/${rel}" && moved=$((moved + 1))
+  done < <(find "${old}" -path "${old}/tts" -prune -o \( -type f -o -type l \) -print0)
+  find "${old}" -depth -type d -empty -delete 2>/dev/null || true
+  if [[ -n "$(find "${old}" -path "${old}/tts" -prune -o \( -type f -o -type l \) -print 2>/dev/null)" ]]; then
+    warn "src/python/ui/ is now src/python/api/; these files were left in ui/ because api/ has a different copy:"
+    find "${old}" -path "${old}/tts" -prune -o \( -type f -o -type l \) -print | sed "s|^${PYTHON_DIR}/|    |" >&2
+    warn "Remove src/python/ui/ once you have kept anything you need from it."
+  elif [[ "${moved}" -gt 0 ]]; then
+    ok "Moved ${moved} file(s) from src/python/ui/ to src/python/api/ (the folder was renamed)."
+  fi
+}
+
+# Where the installed voices are: an update from before the ui/ -> api/ rename
+# leaves them in ui/assets until the next start moves them (migrate_legacy_ui_dir).
+voice_assets_dir() {
+  if [[ -d "${PYTHON_DIR}/ui/assets" ]]; then
+    printf '%s\n' "${PYTHON_DIR}/ui/assets"
+  else
+    printf '%s\n' "${PYTHON_DIR}/api/assets"
+  fi
+}
+
 migrate_piper_voices() {
-  local assets="${PYTHON_DIR}/ui/assets" py voice encoder decoder needs_split=0
+  local assets py voice encoder decoder needs_split=0
+  assets="$(voice_assets_dir)"
   py="${PIPERTTS_PYTHON:-${EXAMPLE_DIR}/.venv-pipertts/bin/python}"
   for voice in "${assets}"/*.onnx; do
     [[ -e "${voice}" ]] || continue
@@ -494,7 +543,7 @@ migrate_piper_voices() {
   if ! "${py}" -c "import onnx" >/dev/null 2>&1; then
     "${py}" -m pip install "onnx>=1.17,<2" || return 1
   fi
-  "${py}" "${PYTHON_DIR}/ui/tts/split_voices.py" "${assets}"
+  "${py}" "${PYTHON_DIR}/api/tts/split_voices.py" "${assets}"
 }
 
 do_update() {
@@ -584,7 +633,8 @@ do_update() {
       esac
     done
     # Mirror tracked source so files deleted by a release disappear locally.
-    # Explicitly exclude every install-owned path from transfer and deletion.
+    # Explicitly exclude every install-owned path from transfer and deletion,
+    # in ui/ too until an install's first start moves its files to api/.
     rsync -a --delete-delay --delay-updates \
       ${keep[@]+"${keep[@]}"} \
       --exclude='/.venv/' \
@@ -597,6 +647,14 @@ do_update() {
       --exclude='/.neat-genai-studio.mode' \
       --exclude='/.neat-genai-studio.url' \
       --exclude='*.log' \
+      --exclude='/src/python/api/uploads/' \
+      --exclude='/src/python/api/.milvus.db.lock' \
+      --exclude='/src/python/api/milvus.db' \
+      --exclude='/src/python/api/milvus.meta.json' \
+      --exclude='/src/python/api/assets/*.onnx' \
+      --exclude='/src/python/api/assets/*.onnx.json' \
+      --exclude='/src/python/api/assets/piper-plus/' \
+      --exclude='/src/python/api/assets/mms-tts-kor/' \
       --exclude='/src/python/ui/uploads/' \
       --exclude='/src/python/ui/.milvus.db.lock' \
       --exclude='/src/python/ui/milvus.db' \
@@ -632,6 +690,12 @@ do_update() {
       return 1
     fi
   fi
+  # A git update removes files that are no longer tracked, such as the voice
+  # configs now downloaded by setup.sh: fetch any missing file of a voice that
+  # is still installed, so it keeps showing up.
+  step "Checking the installed voices…"
+  python3 "${PYTHON_DIR}/api/tts/voice_catalog.py" repair --assets "$(voice_assets_dir)" \
+    || warn "Some voice files could not be restored; run ./setup.sh to reinstall the voices."
   migrate_piper_voices || { errln "Piper voice migration failed."; return 1; }
   ok "Update complete."
 }
@@ -650,6 +714,14 @@ banner
 
 # An icon from an earlier setup.sh would start the removed web UI: remove it.
 while IFS= read -r t; do rm -f "$t" && info "Removed an old desktop icon: $t"; done < <(old_desktop_entries)
+
+# Move an updated install's files out of the old ui/ folder before setup and
+# the Piper voice preparation use them, but never under a running Studio (the
+# call after the stale-process cleanup below covers that case).
+if ! do_status >/dev/null 2>&1 \
+     && ! { command -v pgrep >/dev/null 2>&1 && pgrep -f "${API_PATTERN}|${LEGACY_UI_PATTERN}" >/dev/null 2>&1; }; then
+  migrate_legacy_ui_dir
+fi
 
 # First launch: if setup.sh hasn't created the app venv (and local config) yet,
 # run it now so `./run.sh` works out of the box. AUTO_SETUP=0 opts out.
@@ -731,10 +803,12 @@ prepare_clean_start() {
   step "Clearing stale Neat GenAI Studio processes…"
   if command -v pkill >/dev/null 2>&1; then
     pkill -TERM -f "${SERVER_PATTERN}" 2>/dev/null || true
-    pkill -TERM -f "${UI_PATTERN}" 2>/dev/null || true
+    pkill -TERM -f "${API_PATTERN}" 2>/dev/null || true
+    pkill -TERM -f "${LEGACY_UI_PATTERN}" 2>/dev/null || true
     sleep 1
     pkill -KILL -f "${SERVER_PATTERN}" 2>/dev/null || true
-    pkill -KILL -f "${UI_PATTERN}" 2>/dev/null || true
+    pkill -KILL -f "${API_PATTERN}" 2>/dev/null || true
+    pkill -KILL -f "${LEGACY_UI_PATTERN}" 2>/dev/null || true
   fi
   stop_stale_rag_worker
 
@@ -871,6 +945,7 @@ launch_server() {
 }
 
 prepare_clean_start
+migrate_legacy_ui_dir
 
 section "Model Server"
 launch_server
@@ -887,10 +962,10 @@ fi
 
 section "Backend"
 step "Starting the Neat GenAI Studio backend (API endpoints)…"
-setsid "${APP_PYTHON}" "${PYTHON_DIR}/ui/main.py" --config "${CONFIG_PATH}" &
+setsid "${APP_PYTHON}" "${PYTHON_DIR}/api/main.py" --config "${CONFIG_PATH}" &
 pids[1]="$!"
-ui_pid="${pids[1]}"
-remember_process_group "${ui_pid}"
+api_pid="${pids[1]}"
+remember_process_group "${api_pid}"
 
 printf '\n'
 ok "Neat GenAI Studio is starting up."
@@ -917,9 +992,9 @@ while true; do
     fi
     break
   fi
-  if ! child_running "${ui_pid}"; then
+  if ! child_running "${api_pid}"; then
     set +e
-    wait "${ui_pid}"
+    wait "${api_pid}"
     status=$?
     set -e
     break

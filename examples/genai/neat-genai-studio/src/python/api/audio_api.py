@@ -4,7 +4,7 @@ audio API (``/v1/audio/speech``, ``/v1/audio/transcriptions``,
 
 Pure Python on purpose: no Flask, no requests, no engine imports, so the unit
 suite can exercise every contract decision here without the web app or the
-board. The routes in ``flask_app.py`` are thin adapters over these helpers.
+board. The routes in ``studio_api.py`` are thin adapters over these helpers.
 """
 
 from __future__ import annotations

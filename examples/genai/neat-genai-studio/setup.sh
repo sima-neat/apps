@@ -34,8 +34,9 @@ ASR_MODEL_REPO="${ASR_MODEL_REPO-florianvoss/whisper-small-a16w8-layered-encoder
 ASR_CATALOG_MODEL_REPOS="${ASR_CATALOG_MODEL_REPOS:-}"
 RAG_EMBEDDING_REPO="thenlper/gte-small"
 CHAT_MODEL_NAME="${CHAT_MODEL_NAME:-${CHAT_MODEL_REPO##*/}}"
-# Only one chat/VLM model is resident at a time — loading a new one clears all
-# other chat/VLM models (ASR is always kept). Kept configurable for advanced use.
+# Chat/VLM models kept loaded at once (ASR is always kept). With 1, loading a new
+# model replaces the loaded one; above 1, a load past the limit is refused until
+# the request names a loaded model to unload.
 MAX_RESIDENT_CHAT_MODELS="${MAX_RESIDENT_CHAT_MODELS:-1}"
 ALLOW_HUB_DOWNLOAD="${ALLOW_HUB_DOWNLOAD:-true}"
 # Hugging Face accounts searched for compatible models (space-separated):
@@ -46,7 +47,7 @@ DEFAULT_TTS_LANGUAGES="en,de,es,fr,it,ja,pt,vi,zh"
 TTS_LANGUAGES="${TTS_LANGUAGES:-}"
 TTS_OPTIONAL_VOICES="${TTS_OPTIONAL_VOICES:-}"
 # Supertonic 3 (MLA-accelerated multilingual TTS). The runtime is vendored under
-# src/python/ui/tts/supertonic_sima/ and runs in its own venv (pyneat + onnxruntime +
+# src/python/api/tts/supertonic_sima/ and runs in its own venv (pyneat + onnxruntime +
 # the numpy that PyNeat is built against); the model files come from Hugging
 # Face at pinned revisions and are checksum-verified. INSTALL_SUPERTONIC=0 skips it.
 INSTALL_SUPERTONIC="${INSTALL_SUPERTONIC:-1}"
@@ -88,6 +89,12 @@ SUPERTONIC_SIMA_HF_REPO="florianvoss/supertonic-3-sima"
 SUPERTONIC_SIMA_HF_REVISION="${SUPERTONIC_SIMA_HF_REVISION:-9229108c974ef57810abce0889ac713a59e341a1}"
 SKIP_MODEL_DOWNLOAD="${SKIP_MODEL_DOWNLOAD:-0}"
 CPU_TORCH_VERSION="${CPU_TORCH_VERSION:-2.8.0+cpu}"
+# Document search (RAG): CPU-only PyTorch, the LangChain/Milvus packages, the
+# gte-small embedding model and the default database. SETUP_RAG=0 skips all of
+# them and writes app.rag.enabled: false, so a board short on disk or memory
+# still finishes setup. Unset, a re-run keeps what CONFIG_PATH already says
+# (resolve_setup_rag), so a dependency refresh does not bring RAG back.
+SETUP_RAG="${SETUP_RAG:-}"
 DEPENDENCIES_ONLY=0
 
 # ---------------------------------------------------------------------------
@@ -188,7 +195,8 @@ Environment:
                                 chat/VLM model. default: empty (none)
   CATALOG_MODEL_REPOS           Extra compatible HF repos to seed the catalog
                                 (space-separated). default: empty
-  MAX_RESIDENT_CHAT_MODELS      Chat/VLM models kept resident in RAM at once
+  MAX_RESIDENT_CHAT_MODELS      Chat/VLM models kept loaded at once; past the
+                                limit a load must name one to unload.
                                 default: 1
   WEB_HOST, WEB_PORT, WEB_HTTPS, WEB_CORS_ORIGINS
                                 app.web settings written to the config. Default:
@@ -210,6 +218,11 @@ Environment:
   SUPERTONIC_MODELS_ROOT        Where the Supertonic model files are stored
                                 default: /media/nvme/supertonic-tts/models
   SUPERTONIC_VENV               Runtime venv path. default: ./.venv-supertonic
+  SETUP_RAG                     Install document search (RAG): CPU PyTorch,
+                                the RAG packages, the embedding model and the
+                                default database, 1 or 0. 0 writes
+                                app.rag.enabled: false. default: the existing
+                                config's app.rag.enabled, else 1
   CPU_TORCH_VERSION             CPU-only PyTorch version for RAG installs
                                 default: 2.8.0+cpu
   SKIP_MODEL_DOWNLOAD           Write config without downloading models, 1 or 0
@@ -254,6 +267,19 @@ then
 fi
 ok "pyneat available (${C_DIM}${PYNEAT_PYTHON}${C_RESET})"
 
+# SETUP_RAG: environment > the existing config's app.rag.enabled > 1.
+resolve_setup_rag() {
+  if [[ -z "${SETUP_RAG}" ]]; then
+    if [[ -f "${CONFIG_PATH}" ]]; then
+      [[ -x "${APP_VENV}/bin/python" ]] && export STUDIO_CONFIG_PYTHON="${APP_VENV}/bin/python"
+      SETUP_RAG="$(rag_config_enabled "${CONFIG_PATH}")"
+    else
+      SETUP_RAG=1
+    fi
+  fi
+  if config_true "${SETUP_RAG}"; then SETUP_RAG=1; else SETUP_RAG=0; fi
+}
+
 install_cpu_torch_if_needed() {
   case "$(uname -m)" in
     x86_64|amd64|aarch64|arm64)
@@ -266,19 +292,26 @@ install_cpu_torch_if_needed() {
 }
 
 section "Python environment"
+resolve_setup_rag
 step "Creating backend virtual environment: ${C_DIM}${APP_VENV}${C_RESET}"
 python3 -m venv "${APP_VENV}"
 "${APP_VENV}/bin/python" -m pip install --upgrade pip
-install_cpu_torch_if_needed
-info "Installing backend + RAG requirements (incl. piper-plus)…"
-"${APP_VENV}/bin/python" -m pip install \
-  -r "${EXAMPLE_DIR}/src/python/requirements.txt" \
-  -r "${EXAMPLE_DIR}/src/python/requirements-rag.txt"
+if [[ "${SETUP_RAG}" == "1" ]]; then
+  install_cpu_torch_if_needed
+  info "Installing backend + RAG requirements (incl. piper-plus)…"
+  "${APP_VENV}/bin/python" -m pip install \
+    -r "${EXAMPLE_DIR}/src/python/requirements.txt" \
+    -r "${EXAMPLE_DIR}/src/python/requirements-rag.txt"
+else
+  info "Installing backend requirements (incl. piper-plus); document search (RAG) skipped (SETUP_RAG=0)…"
+  "${APP_VENV}/bin/python" -m pip install \
+    -r "${EXAMPLE_DIR}/src/python/requirements.txt"
+fi
 ok "Backend virtual environment ready."
 resolve_supertonic_paths
 
 # Supertonic 3: hybrid TTS whose vector field and vocoder run on the MLA through
-# PyNeat. The runtime package is vendored in src/python/ui/tts/supertonic_sima/; its
+# PyNeat. The runtime package is vendored in src/python/api/tts/supertonic_sima/; its
 # dependencies (pyneat, onnxruntime, PyNeat's numpy) cannot share the backend venv, so an
 # isolated venv is built here and the model files are downloaded from Hugging
 # Face at pinned revisions and verified by checksum. The backend talks to it through
@@ -328,7 +361,7 @@ _supertonic_bad_files() {
 _supertonic_runtime_ok() {
   local py="${SUPERTONIC_VENV}/bin/python"
   [[ -x "${py}" ]] || return 1
-  PYTHONPATH="${EXAMPLE_DIR}/src/python/ui/tts" "${py}" - <<'PY' >/dev/null 2>&1
+  PYTHONPATH="${EXAMPLE_DIR}/src/python/api/tts" "${py}" - <<'PY' >/dev/null 2>&1
 import numpy, onnxruntime, pyneat
 import supertonic_sima
 PY
@@ -483,7 +516,7 @@ _supertonic_venv() {
 # The URL and checksum are in vector_estimator.json, which the engine also reads.
 # sima-cli downloads it, signing in to the model zoo if needed.
 _supertonic_vector_estimator() {
-  local pin="${EXAMPLE_DIR}/src/python/ui/tts/supertonic_sima/vector_estimator.json"
+  local pin="${EXAMPLE_DIR}/src/python/api/tts/supertonic_sima/vector_estimator.json"
   local target="${SUPERTONIC_MODELS_ROOT}/supertonic-3-sima/supertonic_vector_field_sima_mpk.tar.gz"
   local dir="${target%/*}" url sum name tmp
   url="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["url"])' "${pin}")" || return 1
@@ -681,8 +714,10 @@ if [[ "${SKIP_MODEL_DOWNLOAD}" != "1" ]]; then
     write_repo_marker "${repo}" "${MODELS_DIR}/${name}"
   done
 
-  step "Downloading RAG embedding model: ${RAG_EMBEDDING_REPO}"
-  "${APP_VENV}/bin/hf" download "${RAG_EMBEDDING_REPO}" --local-dir "${RAG_EMBEDDING_DIR}"
+  if [[ "${SETUP_RAG}" == "1" ]]; then
+    step "Downloading RAG embedding model: ${RAG_EMBEDDING_REPO}"
+    "${APP_VENV}/bin/hf" download "${RAG_EMBEDDING_REPO}" --local-dir "${RAG_EMBEDDING_DIR}"
+  fi
 
   for repo in ${CATALOG_MODEL_REPOS}; do
     name="$(catalog_dir_name "${repo}")"
@@ -783,6 +818,11 @@ if [[ -f "${CONFIG_PATH}" ]]; then
   cp -p "${CONFIG_PATH}" "${CONFIG_PATH}.bak"
   info "Previous config kept as ${C_DIM}${CONFIG_PATH}.bak${C_RESET} (web settings carried over: host ${WEB_HOST}, port ${WEB_PORT}, https ${WEB_HTTPS}${WEB_CORS_ORIGINS:+, cors_origins ${WEB_CORS_ORIGINS}})."
 fi
+if [[ "${SETUP_RAG}" == "1" ]]; then
+  RAG_ENABLED_YAML="true"
+else
+  RAG_ENABLED_YAML="false   # SETUP_RAG=1 ${EXAMPLE_DIR}/setup.sh installs document search"
+fi
 cat > "${CONFIG_PATH}" <<YAML
 server:
   openai:
@@ -831,20 +871,20 @@ app:
       venv: "$([[ "${SUPERTONIC_VENV}" == "${SUPERTONIC_DEFAULT_VENV}" ]] || printf '%s' "${SUPERTONIC_VENV}")"
 
   rag:
-    enabled: true
+    enabled: ${RAG_ENABLED_YAML}
     embedding_model_dir: ${RAG_EMBEDDING_DIR}
 
 YAML
 ok "Config written."
 
-if [[ "${SKIP_MODEL_DOWNLOAD}" != "1" ]]; then
+if [[ "${SKIP_MODEL_DOWNLOAD}" != "1" && "${SETUP_RAG}" == "1" ]]; then
   section "RAG database"
   step "Creating default RAG database…"
   (
     cd "${EXAMPLE_DIR}/src/python"
     "${APP_VENV}/bin/python" rag/create_db.py \
       --input "${EXAMPLE_DIR}/src/common/rag/neat.md" \
-      --output ui/milvus.db \
+      --output api/milvus.db \
       --embedding-model "${RAG_EMBEDDING_DIR}"
   )
   ok "RAG database ready."

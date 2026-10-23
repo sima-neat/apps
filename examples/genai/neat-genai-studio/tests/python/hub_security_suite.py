@@ -1,4 +1,5 @@
 import tempfile
+import json
 import sys
 import types
 import unittest
@@ -109,10 +110,56 @@ class HubPathSecurityTests(unittest.TestCase):
         ), patch("server.hub.repair_chat_template_files", return_value=[]):
             events = list(hub_download_stream(Path(catalog), self.hub, "simaai/model"))
 
-        self.assertEqual(Path(captured["local_dir"]), Path(catalog, "model"))
+        # Resolved: on macOS the temporary folder is /var/..., a link to /private/var/...
+        self.assertEqual(Path(captured["local_dir"]).resolve(), Path(catalog, "model").resolve())
         self.assertEqual(captured["repo_id"], "simaai/model")
         self.assertIn('"state": "done"', events[-1])
 
+
+    def download_events(self, model_info):
+        class FakeApi:
+            def __init__(self, token=None):
+                pass
+
+            def model_info(self, repo_id, files_metadata=False):
+                return model_info(repo_id)
+
+        def fake_download(**kwargs):
+            raise AssertionError("must not download")
+
+        fake_hub = types.SimpleNamespace(HfApi=FakeApi, snapshot_download=fake_download)
+        with tempfile.TemporaryDirectory() as catalog, patch.dict(
+            sys.modules, {"huggingface_hub": fake_hub}
+        ), patch("server.hub.hub_enabled", return_value=True):
+            return [json.loads(e) for e in hub_download_stream(Path(catalog), self.hub, "simaai/model")]
+
+    def test_a_renamed_repository_is_named_not_downloaded(self):
+        events = self.download_events(lambda _: types.SimpleNamespace(id="simaai/model-renamed", siblings=[]))
+        self.assertEqual(events[-1]["state"], "error")
+        self.assertEqual(events[-1]["renamedTo"], "simaai/model-renamed")
+        self.assertIn("now publishes this model as simaai/model-renamed", events[-1]["message"])
+
+    def test_a_move_to_a_disallowed_account_is_said_without_the_id(self):
+        events = self.download_events(lambda _: types.SimpleNamespace(id="someone-else/model", siblings=[]))
+        self.assertNotIn("renamedTo", events[-1])
+        self.assertIn("does not download from", events[-1]["message"])
+
+    def test_each_kind_of_lookup_failure_reads_differently(self):
+        def raising(name, base=Exception):
+            error = type(name, (base,), {})
+
+            def model_info(_):
+                raise error("secret detail https://x?token=abc")
+            return model_info
+
+        messages = {name: self.download_events(raising(name))[-1]["message"]
+                    for name in ("GatedRepoError", "RepositoryNotFoundError", "ConnectionError", "Whatever")}
+        self.assertIn("needs approval", messages["GatedRepoError"])
+        self.assertIn("no model with this id", messages["RepositoryNotFoundError"])
+        self.assertIn("Could not reach Hugging Face", messages["ConnectionError"])
+        self.assertIn("Could not resolve model repository", messages["Whatever"])
+        self.assertTrue(all("secret detail" not in m for m in messages.values()), "error text never reaches the client")
+        self.assertEqual(len(set(messages.values())), 4)
 
 if __name__ == "__main__":
     unittest.main()

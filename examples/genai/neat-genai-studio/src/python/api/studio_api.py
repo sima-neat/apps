@@ -32,6 +32,7 @@ import socket
 import subprocess
 
 from shared.config import HubConfig
+from shared.chat_limits import accelerator_busy, fit_to_window, tokenizer_counter, too_long_alone, whole_reply
 from server import hub as hub_helpers
 from asr_metadata import (
     DEFAULT_LOGPROB_THRESHOLD,
@@ -420,6 +421,34 @@ class AppContext:
         self.app.config['SIMAAI_IP_ADDR'] = self.model_server_ip
         self.app.config['ASR_MODEL_NAME'] = self.asr_model_name
 
+    def _context_info(self, model):
+        """``(window, tokenizer path)`` of ``model`` from the model server's
+        catalog; cached, with None for what is unknown."""
+        cache = getattr(self, '_context_windows', None)
+        now = time.monotonic()
+        if cache is None or now - cache[0] > 60 or (model and model not in cache[1]):
+            windows = {}
+            try:
+                resp = requests.get(f"{self.control_base_url.rstrip('/')}/control/catalog", timeout=5)
+                for entry in (resp.json() or {}).get('catalog', []):
+                    if entry.get('name'):
+                        windows[entry['name']] = (entry.get('contextTokens'), entry.get('tokenizerPath'))
+            except Exception:  # noqa: BLE001 - unknown window: send as is
+                windows = cache[1] if cache else {}
+            cache = (now, windows)
+            self._context_windows = cache
+        return cache[1].get(model) or (None, None)
+
+    def context_window(self, model):
+        """The tokens ``model`` can read at once (its compiled context window),
+        or None when unknown."""
+        return self._context_info(model)[0]
+
+    def token_counter(self, model):
+        """Counts text in ``model``'s tokens with its own tokenizer, or None
+        (estimate) when the tokenizer can't be read on this machine."""
+        return tokenizer_counter(self._context_info(model)[1])
+
     def get_config(self):
         return self.app.config
         
@@ -631,37 +660,28 @@ class AppContext:
         def _control_url(path):
             return f"{self.control_base_url.rstrip('/')}{path}"
 
-        def _proxy_control(method, path, timeout, json_body=None):
-            try:
-                resp = requests.request(
-                    method, _control_url(path), json=json_body, timeout=timeout
-                )
-                return Response(
-                    resp.content, status=resp.status_code, mimetype='application/json'
-                )
-            except requests.RequestException as exc:
-                logging.warning("Control API request failed: %s", exc)
-                return jsonify({'error': 'control API unreachable'}), 502
+        # The routes in backend_mode.CONTROL_ROUTES relay to the control API as they are.
+        def _relay_to_control(method, route):
+            target, timeout = backend_mode.CONTROL_ROUTES[(method, route)]
 
-        @self.app.route('/models/status', methods=['GET'])
-        def models_status():
-            return _proxy_control('GET', '/control/status', 10)
-
-        @self.app.route('/models/catalog', methods=['GET'])
-        def models_catalog():
-            return _proxy_control('GET', '/control/catalog', 30)
-
-        @self.app.route('/models/logs', methods=['GET'])
-        def models_logs():
-            after = request.args.get('after', '0')
-            try:
-                resp = requests.get(
-                    _control_url('/control/logs'), params={'after': after}, timeout=10
-                )
+            def relay():
+                try:
+                    params, body = backend_mode.control_payload(
+                        method, request.args.items(multi=True), request.get_json(silent=True))
+                except ValueError:
+                    return jsonify({'error': backend_mode.NOT_A_JSON_OBJECT}), 400
+                try:
+                    resp = requests.request(method, _control_url(target), params=params,
+                                            json=body, timeout=timeout)
+                except requests.RequestException as exc:
+                    logging.warning("Control API %s %s failed: %s", method, target, exc)
+                    return jsonify({'error': 'control API unreachable'}), 502
                 return Response(resp.content, status=resp.status_code, mimetype='application/json')
-            except requests.RequestException as exc:
-                logging.warning("Control API logs request failed: %s", exc)
-                return jsonify({'error': 'control API unreachable'}), 502
+            return relay
+
+        for method, route in backend_mode.CONTROL_ROUTES:
+            self.app.add_url_rule(route, endpoint=f"control {method} {route}",
+                                  view_func=_relay_to_control(method, route), methods=[method])
 
         @self.app.route('/models/logs/stream', methods=['GET'])
         def models_logs_stream():
@@ -725,14 +745,9 @@ class AppContext:
                 },
             )
 
-        @self.app.route('/models/load', methods=['POST'])
-        def models_load():
-            name = (request.get_json(silent=True) or {}).get('name', '')
-            return _proxy_control('POST', '/control/load', 600, {'name': name})
-
         @self.app.route('/models/asr', methods=['POST'])
         def models_asr():
-            # Not _proxy_control: the response body carries the name the server
+            # Not a plain relay: the response body carries the name the server
             # actually served the model under, and transcription must follow it.
             name = (request.get_json(silent=True) or {}).get('name', '')
             try:
@@ -751,34 +766,6 @@ class AppContext:
                 logging.info("Active ASR model is now %r", active)
             return Response(resp.content, status=resp.status_code,
                             mimetype='application/json')
-
-        @self.app.route('/models/unload', methods=['POST'])
-        def models_unload():
-            name = (request.get_json(silent=True) or {}).get('name', '')
-            return _proxy_control('POST', '/control/unload', 60, {'name': name})
-
-        @self.app.route('/models/delete', methods=['POST'])
-        def models_delete():
-            name = (request.get_json(silent=True) or {}).get('name', '')
-            return _proxy_control('POST', '/control/delete', 120, {'name': name})
-
-        @self.app.route('/benchmark/run', methods=['POST'])
-        def benchmark_run():
-            body = request.get_json(silent=True) or {}
-            return _proxy_control('POST', '/control/benchmark', 30, {
-                'num_samples': body.get('num_samples', 5),
-                'max_new_tokens': body.get('max_new_tokens', 128),
-                'prompt': body.get('prompt', ''),
-                'model': body.get('model', ''),
-            })
-
-        @self.app.route('/benchmark/status', methods=['GET'])
-        def benchmark_status():
-            return _proxy_control('GET', '/control/benchmark/status', 10)
-
-        @self.app.route('/benchmark/stop', methods=['POST'])
-        def benchmark_stop():
-            return _proxy_control('POST', '/control/benchmark/stop', 10)
 
         @self.app.route('/shutdown', methods=['POST'])
         def shutdown_studio():
@@ -802,18 +789,6 @@ class AppContext:
                     os._exit(0)
             threading.Thread(target=_shutdown, name="gui-shutdown", daemon=True).start()
             return jsonify({'status': 'shutting-down'})
-
-        @self.app.route('/models/card', methods=['GET'])
-        def models_card():
-            name = request.args.get('name', '')
-            try:
-                resp = requests.get(
-                    _control_url('/control/card'), params={'name': name}, timeout=15
-                )
-                return Response(resp.content, status=resp.status_code, mimetype='application/json')
-            except requests.RequestException as exc:
-                logging.warning("Control API model-card request failed: %s", exc)
-                return jsonify({'error': 'control API unreachable'}), 502
 
         @self.app.route('/models/hub/search', methods=['GET'])
         def models_hub_search():
@@ -874,7 +849,7 @@ class AppContext:
             if rag is not None:
                 if not self.rag_enabled:
                     return jsonify({'error': {'message': 'Document search (RAG) is disabled on this board. '
-                                                         'Set app.rag.enabled in config.local.yaml.'}}), 409
+                                                         'Run the Studio\'s setup.sh with SETUP_RAG=1 to install it.'}}), 409
                 question = rag_chat.last_user_text(payload['messages'])
                 if not question:
                     # Nothing to search with (no user text, e.g. only a picture).
@@ -896,15 +871,91 @@ class AppContext:
                 payload['messages'] = rag_chat.with_passages(payload['messages'], hits)
                 rag_headers = {'X-RAG-Hits': str(len(hits)),
                                'X-RAG-Sources': rag_chat.sources_header(hits, rag_document_name())}
+            # Context full: leave out the oldest turns so the request fits the
+            # model's window, and say how many in X-Context-Dropped; a message
+            # too long on its own is refused with a reason.
+            model = payload.get('model')
+            window, count = self.context_window(model), self.token_counter(model)
+            payload['messages'], dropped = fit_to_window(payload.get('messages', []), window, count)
+            if too_long_alone(payload['messages'], window, count):
+                return jsonify({'error': {'message': (
+                    f"The message is longer than {model} can read at once (about {window} tokens). "
+                    "Shorten it, or use a model with a longer window."), 'code': 'context_full'}}), 413
             url = f"http://{self.app.config['SIMAAI_IP_ADDR']}/v1/chat/completions"
+
+            def open_upstream():
+                return requests.post(url, json=payload, stream=True, timeout=(10, 600))
+
             try:
-                upstream = requests.post(url, json=payload, stream=True, timeout=(10, 600))
+                upstream = open_upstream()
             except requests.RequestException as exc:
                 logging.error(f"Chat proxy: model server unreachable: {exc}")
                 return jsonify({'error': 'model server unreachable'}), 502
+            streaming = bool(payload.get('stream'))
+            if not streaming:
+                # A whole reply, retried once if the accelerator was busy.
+                try:
+                    status, content_type, body = whole_reply(upstream, open_upstream)
+                except requests.RequestException as exc:
+                    logging.error(f"Chat proxy: model server unreachable: {exc}")
+                    return jsonify({'error': 'model server unreachable'}), 502
+                return Response(body, status=status, content_type=content_type,
+                                headers={**rag_headers, 'X-Context-Dropped': str(dropped),
+                                         'X-Context-Window': str(window or '')})
+
+            def first_event(resp):
+                """Read up to the first event that carries text or an error,
+                holding the lines read so far; returns (held_lines, error)."""
+                held = []
+                lines = resp.iter_lines(chunk_size=None)   # pass tokens on as they arrive
+                for line in lines:
+                    held.append(line)
+                    text = line.decode('utf-8', 'replace').strip()
+                    if not text.startswith('data:'):
+                        continue
+                    data = text[5:].strip()
+                    if data == '[DONE]':
+                        return held, lines, None
+                    try:
+                        obj = json.loads(data)
+                    except ValueError:
+                        continue
+                    if obj.get('error'):
+                        err = obj['error']
+                        return held, lines, str(err.get('message') if isinstance(err, dict) else err)
+                    delta = ((obj.get('choices') or [{}])[0].get('delta') or {}).get('content')
+                    if delta:
+                        return held, lines, None
+                return held, lines, None
 
             def relay():
+                nonlocal upstream
                 try:
+                    if streaming and upstream.ok:
+                        # Busy accelerator: the 3.0 driver now and then refuses a
+                        # job while several models run ("no free bank", rc=-11).
+                        # If that comes before any text, one more try is safe.
+                        held, lines, error = first_event(upstream)
+                        if error and accelerator_busy(error):
+                            logging.warning("Chat proxy: accelerator busy for %s; retrying once", model)
+                            upstream.close()
+                            time.sleep(0.4)
+                            # The client already has a 200 stream: a retry that
+                            # fails is reported in it as an error event.
+                            try:
+                                upstream = open_upstream()
+                            except requests.RequestException as exc:
+                                yield _sse_error(f"The model server could not be reached: {exc}")
+                                return
+                            if not upstream.ok:
+                                yield _sse_error((upstream.text or '').strip()[:300] or f"HTTP {upstream.status_code}")
+                                return
+                            held, lines, error = first_event(upstream)
+                        for line in held:
+                            yield line + b"\n"
+                        for line in lines:
+                            yield line + b"\n"
+                        return
                     for chunk in upstream.iter_content(chunk_size=None):
                         if chunk:
                             yield chunk
@@ -924,7 +975,9 @@ class AppContext:
                 stream_with_context(relay()),
                 status=upstream.status_code,
                 content_type=upstream.headers.get('Content-Type', 'text/event-stream'),
-                headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no', **rag_headers},
+                headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no', **rag_headers,
+                         'X-Context-Dropped': str(dropped),
+                         'X-Context-Window': str(window or '')},
             )
 
         @self.app.route('/rag/status', methods=['GET'])
@@ -1602,7 +1655,7 @@ def configure_logging(log_filename='server.log'):
         ]
     )
 
-def run_ui(app_cfg):
+def run_api(app_cfg):
     global genai_app
     global vectodb_proc
 
@@ -1625,7 +1678,15 @@ def run_ui(app_cfg):
     genai_app.setup_router()
 
     if genai_app.rag_enabled:
-        ensure_rag_modules_loaded()
+        try:
+            ensure_rag_modules_loaded()
+        except ImportError as exc:
+            # A SETUP_RAG=0 install has no RAG packages; app.rag.enabled was
+            # turned on by hand afterwards.
+            raise SystemExit(
+                f"app.rag.enabled is true but the RAG packages are not installed ({exc.name}). "
+                f"Run SETUP_RAG=1 {Path(__file__).resolve().parents[3] / 'setup.sh'}, "
+                "or set app.rag.enabled: false.") from exc
         # Without a database (cleared, or never built) the service stays off,
         # so /rag/status keeps reporting "no-database" and chat with neat_rag
         # answers 409 until a document is uploaded or reset.

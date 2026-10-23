@@ -35,7 +35,7 @@ def _pipertts_python():
     if p and Path(p).exists():
         return p
     here = Path(__file__).resolve()
-    # .../src/python/ui/tts/pipertts.py -> example dir is parents[4]
+    # .../src/python/api/tts/pipertts.py -> example dir is parents[4]
     candidates = []
     if len(here.parents) > 3:
         candidates.append(here.parents[4] / ".venv-pipertts" / "bin" / "python")
