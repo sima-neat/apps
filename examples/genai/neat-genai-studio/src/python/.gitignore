@@ -1,22 +1,13 @@
-ui/assets/*.onnx
-ui/assets/*.onnx.json
-!ui/assets/de_DE-thorsten-medium.onnx.json
-!ui/assets/en_US-hfc_female-medium.onnx.json
-!ui/assets/en_US-hfc_male-medium.onnx.json
-!ui/assets/es_ES-davefx-medium.onnx.json
-!ui/assets/fr_FR-siwis-medium.onnx.json
-!ui/assets/it_IT-paola-medium.onnx.json
-!ui/assets/no_NO-talesyntese-medium.onnx.json
-!ui/assets/zh_CN-huayan-medium.onnx.json
+# Voices setup.sh downloads from the reviewed catalog (api/tts/voice_catalog.json)
+api/assets/
 ffmpeg-build
-ui/server.log
+api/server.log
 **/__pycache__/
 .venv/
-ui/uploads/
 *.wav
-ui/.milvus*
-ui/milvus.db*
-ui/milvus.meta.json
+api/.milvus*
+api/milvus.db*
+api/milvus.meta.json
 .cache/*
 .venv-*/*
 *.tar.gz
@@ -26,8 +17,6 @@ app.log
 mla-rt
 sima_lmm
 gte-small-local
-# Default image path for CLI mode
-images/*
 .vscode/
 .codex/
 .claude/
