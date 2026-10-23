@@ -1,6 +1,7 @@
 {
   "neat-core": {
-    "policy": "snap"
+    "branch": "develop",
+    "spec": "latest"
   },
   "sdk": {
     "channel": "develop"
