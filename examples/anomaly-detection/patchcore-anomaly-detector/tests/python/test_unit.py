@@ -39,6 +39,25 @@ class TestArgParsing:
         )
         assert r.returncode == 2
 
+    @pytest.mark.parametrize("key", ["path", "meta_path"])
+    def test_bank_file_aliasing_model_rejected(self, tmp_path, key):
+        """--calibrate must never overwrite the model package with a bank file."""
+        import yaml
+
+        cfg = yaml.safe_load((EXAMPLE_DIR / "src" / "common" / "config.yaml").read_text())
+        cfg["model"]["path"] = str(tmp_path / "model.tar.gz")
+        cfg["memory_bank"] = {"path": str(tmp_path / "memory_bank.npy"),
+                              "meta_path": str(tmp_path / "bank_meta.json")}
+        cfg["memory_bank"][key] = str(tmp_path / "model.tar.gz")
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(yaml.safe_dump(cfg))
+        r = subprocess.run(
+            [sys.executable, str(MAIN_PY), "--validate-config-only", "--config", str(config_path)],
+            capture_output=True, text=True, timeout=20,
+        )
+        assert r.returncode != 0
+        assert "must not point at model.path" in r.stderr
+
 
 @pytest.mark.unit
 class TestExtractHwc:

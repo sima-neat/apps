@@ -137,6 +137,14 @@ void validate_config(const Config& cfg) {
     sima_examples::require(cfg.insight_channel >= 0, "output.insight.channel must be >= 0");
     sima_examples::require(cfg.insight_bitrate_kbps > 0, "output.insight.bitrate_kbps must be > 0");
   }
+  // --calibrate writes both bank files; neither may overwrite the model or each other.
+  const fs::path model = fs::weakly_canonical(cfg.model_path);
+  const fs::path bank = fs::weakly_canonical(cfg.memory_bank_path);
+  const fs::path meta = fs::weakly_canonical(cfg.bank_meta_path);
+  sima_examples::require(model != bank && model != meta,
+                         "memory_bank.path and memory_bank.meta_path must not point at model.path");
+  sima_examples::require(bank != meta,
+                         "memory_bank.path and memory_bank.meta_path must be different files");
 }
 
 Config load_config(const fs::path& path) {

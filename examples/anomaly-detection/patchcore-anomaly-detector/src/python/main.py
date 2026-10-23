@@ -206,6 +206,14 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("runtime.timeout_ms must be > 0")
     if cfg.frames < 0:
         raise ValueError("runtime.frames must be >= 0")
+    # --calibrate writes both bank files; neither may overwrite the model or each other.
+    model = Path(cfg.model_path).resolve()
+    bank = Path(cfg.memory_bank_path).resolve()
+    meta = Path(cfg.bank_meta_path).resolve()
+    if model in (bank, meta):
+        raise ValueError("memory_bank.path and memory_bank.meta_path must not point at model.path")
+    if bank == meta:
+        raise ValueError("memory_bank.path and memory_bank.meta_path must be different files")
     if cfg.source_type in {"video_file", "rtsp"}:
         if not cfg.output.insight_host:
             raise ValueError("output.insight.host must be set for source.type=video_file/rtsp")
@@ -615,11 +623,20 @@ def probe_ffprobe(cfg: AppConfig) -> tuple[int, int, int]:
     return to_int(values.get("width")), to_int(values.get("height")), fps
 
 
-def probe_rtsp_capture(url: str) -> tuple[int, int, int]:
-    """Best-effort OpenCV probe. Returns zeros (never raises) on failure --
-    resolve_rtsp_geometry applies the configured source.rtsp.width/height
-    hints and reports one clear failure to the caller instead."""
-    cap = cv2.VideoCapture(url)
+def probe_rtsp_capture(url: str, tcp: bool) -> tuple[int, int, int]:
+    """Best-effort OpenCV probe over the configured RTSP transport. Returns zeros
+    (never raises) on failure -- resolve_rtsp_geometry applies the configured
+    source.rtsp.width/height hints and reports one clear failure to the caller instead."""
+    key = "OPENCV_FFMPEG_CAPTURE_OPTIONS"
+    previous = os.environ.get(key)
+    os.environ[key] = f"rtsp_transport;{'tcp' if tcp else 'udp'}"
+    try:
+        cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
+    finally:
+        if previous is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = previous
     if not cap.isOpened():
         return 0, 0, 0
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
@@ -635,7 +652,7 @@ def resolve_rtsp_geometry(cfg: AppConfig) -> tuple[int, int, int]:
     width = cfg.rtsp.width if cfg.rtsp.width > 0 else width
     height = cfg.rtsp.height if cfg.rtsp.height > 0 else height
     if width <= 0 or height <= 0 or fps <= 0:
-        probed_w, probed_h, probed_fps = probe_rtsp_capture(cfg.rtsp.url)
+        probed_w, probed_h, probed_fps = probe_rtsp_capture(cfg.rtsp.url, cfg.rtsp.tcp)
         width = width if width > 0 else probed_w
         height = height if height > 0 else probed_h
         fps = fps if fps > 0 else probed_fps
