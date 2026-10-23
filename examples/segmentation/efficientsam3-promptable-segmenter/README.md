@@ -26,7 +26,7 @@ RTSP decode (NV12) --> frame --> 1008x1008 RGB --> EfficientSAM3 (MLA) --> outli
          +--> video_sender (H264 RTP/UDP -> Insight)
 ```
 
-The decoded stream feeds the H.264 sender and the application inside one graph, so the video and the metadata carry timestamps from the same frame. Three frames are on the model at once, which keeps the MLA busy while the CPU prepares the next frame and reads the last result. The model segments about every second or third video frame, so every video frame is sent the nearest finished result: the overlay shows at the video rate while the masks refresh at the model rate.
+The decoded stream feeds the H.264 sender and the application inside one graph, so the video and the metadata carry timestamps from the same frame. Three frames are on the model at once, which keeps the MLA busy while the CPU prepares the next frame and reads the last result. The model segments about every fourth or fifth frame of a 30 FPS stream, so every video frame is sent the nearest finished result: the overlay shows at the video rate while the masks refresh at the model rate.
 
 Metadata is sent as `type: "segmentation"` with one `data.segments[]` entry per instance, labelled with the prompt and outlined by its largest region. Each mask is sent as `mask_format: "polygon"` in frame pixels.
 
@@ -123,7 +123,7 @@ Open the Insight Video Viewer for channel 0. Instances that match the prompt are
 processed=<n> video_sender=<insight-host-ip>:9000
 ```
 
-With `runtime.profile` set, it also prints the segmentation rate every `runtime.profile_interval` segmented frames, about 13 FPS on Modalix:
+With `runtime.profile` set, it also prints the segmentation rate every `runtime.profile_interval` segmented frames, about 6.5 FPS for a 1080p stream on Modalix with Platform 3.0:
 
 ```text
 [profile] frames=100 segmentation_fps=<fps> avg_instances=<n>
