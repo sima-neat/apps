@@ -1,23 +1,27 @@
-# Image of one installed Apps example. The build context is prebuilt-apps/.
+# Image of one Apps example, built by parallel-apps.sh from the Apps checkout.
 #
-# The image holds only the example's binary and runtime files. The board's
-# installed Neat and system libraries are mounted read-only when the container
-# starts (see compose.yaml), so the container always uses the same Neat as a
-# normal run on the board.
+# The image holds the example's binary, its src/common files and config, and its
+# model. The DevKit's installed Neat and system libraries are mounted read-only
+# when the container starts, so the container uses the same Neat as a normal run
+# on the DevKit.
 FROM scratch
 
 ARG EXAMPLE
 ARG BINARY
+ARG CONTAINER
 
 # GStreamer keeps its plugin cache under HOME; /tmp is the container's
 # writable tmpfs.
 ENV PATH=/usr/bin:/bin HOME=/tmp
 
-# The working directory mirrors prebuilt-apps/, so the relative model and label
-# paths in the example's config resolve as they do on the board.
+# The working directory mirrors the Apps checkout, so the relative model and
+# label paths in the example's config resolve as they do in the checkout.
 WORKDIR /apps
+COPY build/examples/${EXAMPLE}/${BINARY} /app
 COPY examples/${EXAMPLE}/src/common/ examples/${EXAMPLE}/src/common/
-COPY examples/${EXAMPLE}/src/cpp/pre-built/${BINARY} /app
+COPY models/${CONTAINER}/ models/
 
-# compose.yaml mounts the example's own config.yaml here.
-ENTRYPOINT ["/app", "--config", "/apps/config.yaml"]
+# ENTRYPOINT cannot expand build arguments, so the config also goes to a
+# fixed path.
+COPY examples/${EXAMPLE}/src/common/config.yaml config.yaml
+ENTRYPOINT ["/app", "--config", "config.yaml"]

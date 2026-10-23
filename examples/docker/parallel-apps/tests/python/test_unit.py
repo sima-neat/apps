@@ -1,69 +1,51 @@
 """Unit tests for the Docker parallel-apps example.
 
-compose.yaml names other examples by path. These tests check that every path
-resolves to the example, binary, config, and models it is meant to, both in the
-repository and in the installed prebuilt-apps/ bundle.
+parallel-apps.sh names other examples in its app table. These tests check that
+every row resolves to an existing C++ example and its config, so a renamed or
+removed example fails here instead of during an image build in the SDK.
 """
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
-import yaml
 
 EXAMPLE_DIR = Path(__file__).resolve().parents[2]
-COMPOSE_DIR = EXAMPLE_DIR / "src" / "common"
+COMMON_DIR = EXAMPLE_DIR / "src" / "common"
 APPS_ROOT = EXAMPLE_DIR.parents[2]
-
-COMPOSE = yaml.safe_load((COMPOSE_DIR / "compose.yaml").read_text(encoding="utf-8"))
-SERVICES = COMPOSE["services"]
+SCRIPT = COMMON_DIR / "parallel-apps.sh"
 
 pytestmark = pytest.mark.unit
 
 
-def compose_path(path: str) -> Path:
-    """Resolve a path the way Compose does: from the compose file's directory."""
-    return (COMPOSE_DIR / path).resolve()
+def read_app_table() -> dict[str, str]:
+    """Return {container name: example path} from the script's APPS heredoc."""
+    table = re.search(r"<<'APPS'\n(.*?)\nAPPS\n", SCRIPT.read_text(encoding="utf-8"), re.S)
+    assert table, "parallel-apps.sh has no APPS table"
+    return dict(line.split() for line in table.group(1).splitlines())
 
 
-def example_dir(service: dict) -> Path:
-    return APPS_ROOT / "examples" / service["build"]["args"]["EXAMPLE"]
+APPS = read_app_table()
 
 
-@pytest.mark.parametrize("name", sorted(SERVICES))
-def test_service_builds_from_the_apps_root(name: str) -> None:
-    build = SERVICES[name]["build"]
-
-    assert compose_path(build["context"]) == APPS_ROOT
-    assert (APPS_ROOT / build["dockerfile"]).is_file()
+def test_app_table_lists_four_distinct_examples() -> None:
+    assert len(APPS) == 4
+    assert len(set(APPS.values())) == 4
 
 
-@pytest.mark.parametrize("name", sorted(SERVICES))
-def test_service_runs_an_existing_example_binary(name: str) -> None:
-    service = SERVICES[name]
+@pytest.mark.parametrize("name", sorted(APPS))
+def test_app_is_an_existing_cpp_example(name: str) -> None:
+    example = APPS_ROOT / "examples" / APPS[name]
+    cmake = (example / "src" / "cpp" / "CMakeLists.txt").read_text(encoding="utf-8")
 
-    # The bundle installs a C++ example's binary as src/cpp/pre-built/<example>.
-    assert (example_dir(service) / "src" / "cpp").is_dir()
-    assert service["build"]["args"]["BINARY"] == example_dir(service).name
-
-
-@pytest.mark.parametrize("name", sorted(SERVICES))
-def test_service_reads_its_example_config(name: str) -> None:
-    service = SERVICES[name]
-    (mount,) = service["configs"]
-    config = compose_path(COMPOSE["configs"][mount["source"]]["file"])
-
-    assert config == example_dir(service) / "src" / "common" / "config.yaml"
-    assert config.is_file()
-    assert mount["target"] == "/apps/config.yaml"
+    # parallel-apps.sh copies build/examples/<example>/<directory name>, so the
+    # example's executable must carry its directory name.
+    module = re.search(r'sima_neat_apps_module\(\s*"([^"]+)"', cmake)
+    assert module and module.group(1) == example.name
+    assert (example / "src" / "common" / "config.yaml").is_file()
 
 
-@pytest.mark.parametrize("name", sorted(SERVICES))
-def test_service_mounts_the_bundle_models(name: str) -> None:
-    host_paths = {
-        container: host
-        for host, container, *_ in (v.split(":") for v in SERVICES[name]["volumes"])
-    }
-
-    assert compose_path(host_paths["/apps/models"]) == APPS_ROOT / "models"
+def test_dockerfile_exists() -> None:
+    assert (COMMON_DIR / "Dockerfile").is_file()
