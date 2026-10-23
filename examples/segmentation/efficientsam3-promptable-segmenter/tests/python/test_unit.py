@@ -166,6 +166,9 @@ def test_duplicate_instances_are_dropped():
     masks[50:75, 40:80, 40] = 10.0
     segments = main.segments_of(detections, masks, config(), 1920, 1080)
     assert [s["id"] for s in segments] == ["seg_1", "seg_4"]
+    # The empty and duplicate instances do not use up max_detections.
+    segments = main.segments_of(detections, masks, config(max_detections=2), 1920, 1080)
+    assert [s["id"] for s in segments] == ["seg_1", "seg_4"]
 
 
 @pytest.mark.unit

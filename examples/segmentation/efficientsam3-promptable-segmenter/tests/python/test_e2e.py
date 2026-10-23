@@ -1,4 +1,4 @@
-"""End-to-end test: an RTSP H.264 stream in, H.264 video and person segments out to Insight."""
+"""End-to-end test: an RTSP H.264 or H.265 stream in, H.264 video and person segments out to Insight."""
 
 from __future__ import annotations
 
@@ -18,6 +18,10 @@ MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
 MODEL = "efficientsam3_mpk.tar.gz"
 TEXT_ENCODER = "efficientsam3_text_encoder_mpk.tar.gz"
 FRAMES = 40
+SOURCE_CASES = [
+    pytest.param({"codec": "h264", "url_fixture": "rtsp_h264_url"}, id="rtsp-h264"),
+    pytest.param({"codec": "h265", "url_fixture": "rtsp_h265_url"}, id="rtsp-h265"),
+]
 
 
 def _env_int(name: str, default: int) -> int:
@@ -26,9 +30,11 @@ def _env_int(name: str, default: int) -> int:
 
 
 @pytest.mark.e2e
+@pytest.mark.parametrize("source", SOURCE_CASES)
 def test_publishes_insight_video_and_segments(
-    rtsp_h264_url, models_dir, test_timeout_ms, skip_unless_e2e_ready, e2e_config_writer
+    request, source, models_dir, test_timeout_ms, skip_unless_e2e_ready, e2e_config_writer
 ):
+    source_url = request.getfixturevalue(source["url_fixture"])
     model, text_encoder = models_dir / MODEL, models_dir / TEXT_ENCODER
     for path in (model, text_encoder):
         skip_unless_e2e_ready(path.exists(), f"missing EfficientSAM3 artifact: {path}")
@@ -38,7 +44,7 @@ def test_publishes_insight_video_and_segments(
         {
             "model": {"path": str(model), "text_encoder": str(text_encoder)},
             "prompt": {"text": "person"},
-            "source": {"rtsp_url": rtsp_h264_url},
+            "source": {"rtsp_url": source_url, "codec": source["codec"]},
             "inference": {"frames": FRAMES},
             "output": {
                 "insight": {"host": "127.0.0.1", "video_port": video_port, "metadata_port": metadata_port}
@@ -73,6 +79,7 @@ def test_publishes_insight_video_and_segments(
     assert metadata.success, metadata.error
     assert following.success, following.error
     assert f"processed={FRAMES} " in result.stdout
+    assert f" codec={source['codec']} " in result.stdout
     assert len(video_packet) > 12 and video_packet[0] >> 6 == 2 and video_packet[1] & 0x7F == 96
     first, last = metadata.messages[-1], following.messages[-1]
     assert int(last.frame_id) > int(first.frame_id)

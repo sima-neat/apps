@@ -1,6 +1,7 @@
-// E2E test for efficientsam3-promptable-segmenter: an RTSP H.264 stream in, H.264 video and
-// person segments out to Insight.
+// E2E test for efficientsam3-promptable-segmenter: an RTSP H.264 or H.265 stream in, H.264 video
+// and person segments out to Insight.
 #include "support/testing/metadata_json_listener.h"
+#include "support/testing/source_cases.h"
 #include "support/testing/test_config.h"
 #include "support/testing/test_process.h"
 
@@ -14,6 +15,7 @@
 #include <filesystem>
 #include <iostream>
 #include <string>
+#include <vector>
 
 namespace fs = std::filesystem;
 using namespace sima_examples::testing;
@@ -52,26 +54,14 @@ bool valid_segments(const MetadataJsonListenerResult& result) {
   return true;
 }
 
-} // namespace
-
-int main(int argc, char** argv) {
-  if (argc < 2) {
-    std::cerr << "[ERR] usage: " << argv[0] << " <example-binary>\n";
-    return 2;
-  }
-  const char* models_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
-  const fs::path models_dir = models_raw != nullptr ? models_raw : "models";
-  const fs::path model = models_dir / "efficientsam3_mpk.tar.gz";
-  const fs::path text_encoder = models_dir / "efficientsam3_text_encoder_mpk.tar.gz";
-  if (!fs::exists(model) || !fs::exists(text_encoder)) {
-    return skip_or_fail("missing EfficientSAM3 artifacts under SIMANEAT_APPS_TEST_MODELS_DIR");
-  }
-  const char* rtsp_url = env_or_skip("SIMANEAT_TEST_RTSP_H264_URL", "RTSP H.264 stream URL");
+int run_case(const std::string& binary, const fs::path& model, const fs::path& text_encoder,
+             const StreamSourceCase& source_case, const std::string& rtsp_url) {
   const int video_port = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000);
   const int metadata_port = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100);
   const int timeout_ms = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
 
-  const std::string output_dir = create_test_output_dir(kExampleName, "test_rtsp_h264_to_insight");
+  const std::string output_dir =
+      create_test_output_dir(kExampleName, "test_" + source_case.name + "_to_insight");
   if (output_dir.empty()) {
     return 1;
   }
@@ -81,6 +71,7 @@ int main(int argc, char** argv) {
                     {"model.text_encoder", fs::absolute(text_encoder).string()},
                     {"prompt.text", "person"},
                     {"source.rtsp_url", rtsp_url},
+                    {"source.codec", source_case.codec},
                     {"inference.frames", std::to_string(kFrames)},
                     {"output.insight.host", "127.0.0.1"},
                     {"output.insight.video_port", std::to_string(video_port)},
@@ -115,13 +106,14 @@ int main(int argc, char** argv) {
   }
 
   const ProcessResult process =
-      spawn_and_wait(argv[1], {"--config", config_path.string()}, timeout_ms);
+      spawn_and_wait(binary, {"--config", config_path.string()}, timeout_ms);
   std::array<unsigned char, 65536> video_packet{};
   const auto video_bytes =
       ::recv(video_socket, video_packet.data(), video_packet.size(), MSG_DONTWAIT);
   ::close(video_socket);
   if (process.exit_code != 0) {
-    std::cerr << "[FAIL] exited with " << process.exit_code << "\nstdout:\n"
+    std::cerr << "[FAIL] " << source_case.name << " exited with " << process.exit_code
+              << "\nstdout:\n"
               << process.stdout_text << "\nstderr:\n"
               << process.stderr_text << "\n";
     return 1;
@@ -130,23 +122,51 @@ int main(int argc, char** argv) {
   const auto following = listener.wait_for_messages();
   if (!metadata.success || !following.success || !valid_segments(metadata) ||
       !valid_segments(following)) {
-    std::cerr << "[FAIL] invalid segmentation metadata: " << metadata.error << following.error
-              << "\n";
+    std::cerr << "[FAIL] " << source_case.name
+              << " invalid segmentation metadata: " << metadata.error << following.error << "\n";
     return 1;
   }
   const auto& first = metadata.messages.back();
   const auto& last = following.messages.back();
   if (std::stoll(last.frame_id) <= std::stoll(first.frame_id) ||
       last.timestamp_ms <= first.timestamp_ms ||
-      process.stdout_text.find("processed=" + std::to_string(kFrames) + " ") == std::string::npos) {
-    std::cerr << "[FAIL] did not complete with progressing frame identities\n";
+      process.stdout_text.find("processed=" + std::to_string(kFrames) + " ") == std::string::npos ||
+      process.stdout_text.find(" codec=" + source_case.codec + " ") == std::string::npos) {
+    std::cerr << "[FAIL] " << source_case.name
+              << " did not complete with progressing frame identities\n";
     return 1;
   }
   if (video_bytes <= 12 || (video_packet[0] >> 6) != 2 || (video_packet[1] & 0x7f) != 96) {
-    std::cerr << "[FAIL] did not publish H.264 RTP video\n";
+    std::cerr << "[FAIL] " << source_case.name << " did not publish H.264 RTP video\n";
     return 1;
   }
   remove_dir(output_dir);
-  std::cout << "[OK] published H.264 video and person segments\n";
+  std::cout << "[OK] " << source_case.name << " published H.264 video and person segments\n";
   return 0;
+}
+
+} // namespace
+
+int main(int argc, char** argv) {
+  if (argc < 2) {
+    std::cerr << "[ERR] usage: " << argv[0] << " <example-binary>\n";
+    return 2;
+  }
+  const char* models_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
+  const fs::path models_dir = models_raw != nullptr ? models_raw : "models";
+  const fs::path model = models_dir / "efficientsam3_mpk.tar.gz";
+  const fs::path text_encoder = models_dir / "efficientsam3_text_encoder_mpk.tar.gz";
+  if (!fs::exists(model) || !fs::exists(text_encoder)) {
+    return skip_or_fail("missing EfficientSAM3 artifacts under SIMANEAT_APPS_TEST_MODELS_DIR");
+  }
+  const std::vector<StreamSourceCase> source_cases = {
+      {"rtsp_h264", "SIMANEAT_TEST_RTSP_H264_URL", "rtsp", "h264"},
+      {"rtsp_h265", "SIMANEAT_TEST_RTSP_H265_URL", "rtsp", "h265"},
+  };
+  const std::string binary = argv[1];
+  return run_single_stream_source_cases(
+      "EfficientSAM3", source_cases,
+      [&](const StreamSourceCase& source_case, const std::string& rtsp_url) {
+        return run_case(binary, model, text_encoder, source_case, rtsp_url);
+      });
 }

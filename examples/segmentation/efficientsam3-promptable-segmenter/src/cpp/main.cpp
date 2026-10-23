@@ -341,12 +341,15 @@ std::vector<Segment> segments_of(const cv::Mat& detections, const cv::Mat& masks
   std::stable_sort(best.begin(), best.end(), [&](int a, int b) {
     return detections.at<float>(a, 4) > detections.at<float>(b, 4);
   });
-  best.resize(std::min<std::size_t>(best.size(), cfg.max_detections));
   const double sx = static_cast<double>(width) / kModelSize;
   const double sy = static_cast<double>(height) / kModelSize;
   std::vector<Segment> segments;
   int n = 0;
   for (const int query : best) {
+    // Duplicates and empty masks are skipped, so the limit counts the instances sent.
+    if (segments.size() == static_cast<std::size_t>(cfg.max_detections)) {
+      break;
+    }
     const float* row = detections.ptr<float>(query);
     if (!(row[4] > static_cast<float>(cfg.min_score))) {
       continue;

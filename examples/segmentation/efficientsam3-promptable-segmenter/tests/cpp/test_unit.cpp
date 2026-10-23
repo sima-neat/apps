@@ -207,6 +207,11 @@ int main(int argc, char** argv) {
   check(deduplicated.size() == 2 && deduplicated.at(0).id == "seg_1" &&
             deduplicated.at(1).id == "seg_4",
         "duplicate instances are dropped");
+  cfg.max_detections = 2;
+  const std::vector<Segment> limited = duplicated.segments(cfg);
+  check(limited.size() == 2 && limited.at(1).id == "seg_4",
+        "empty and duplicate instances do not use up max_detections");
+  cfg.max_detections = packaged.max_detections;
 
   const cv::Mat empty(kMaskSide, kMaskSide, CV_32F, cv::Scalar(-10.0F));
   check(mask_outline(empty, {100, 100, 300, 300}, 1920, 1080, 0.0F).empty(),

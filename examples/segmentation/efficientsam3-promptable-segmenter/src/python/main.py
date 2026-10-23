@@ -233,10 +233,13 @@ def segments_of(detections, masks, cfg: Config, width: int, height: int) -> list
     detections = detections.reshape(-1, detections.shape[-1])
     masks = masks.reshape(masks.shape[-3:])
     logit_threshold = np.log(np.float64(cfg.mask_threshold) / (1.0 - cfg.mask_threshold))
-    best = np.argsort(-detections[:, 4], kind="stable")[:cfg.max_detections]
+    best = np.argsort(-detections[:, 4], kind="stable")
     sx, sy = width / MODEL_SIZE, height / MODEL_SIZE
     segments, kept_boxes = [], []
     for n, query in enumerate((q for q in best if detections[q, 4] > cfg.min_score), start=1):
+        # Duplicates and empty masks are skipped, so the limit counts the instances sent.
+        if len(segments) == cfg.max_detections:
+            break
         x1, y1, x2, y2, score = (float(v) for v in detections[query, :5])
         x0 = max(0, min(width - 1, math.floor(x1 * sx)))
         y0 = max(0, min(height - 1, math.floor(y1 * sy)))
