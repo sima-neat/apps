@@ -24,6 +24,7 @@ VALID_CATEGORIES = {
     "feature-extraction",
     "genai",
     "throughput",
+    "docker",
 }
 
 VALID_DIFFICULTIES = {"Beginner", "Intermediate", "Advanced"}
@@ -299,7 +300,18 @@ def validate_install_workflow(
         for item in metadata.get("Languages", "").split(",")
         if item.strip()
     }
-    if "C++" in languages:
+    # Docker examples run other examples' packaged binaries through Compose.
+    is_docker = metadata.get("Category") == "docker"
+    if is_docker:
+        compose_paths = (
+            "${APP_DIR}/src/common/compose.yaml",
+            "$APP_DIR/src/common/compose.yaml",
+        )
+        if not any(path in run for path in compose_paths):
+            errors.append(
+                f"Run must start the packaged Compose file '{compose_paths[0]}'"
+            )
+    if "C++" in languages and not is_docker:
         binary = metadata.get("Binary Name", "").strip()
         expected_paths = (
             (
@@ -315,7 +327,7 @@ def validate_install_workflow(
                 if uses_bundle
                 else f"Run must reference packaged C++ binary '{expected_paths[0]}'"
             )
-    if "Python" in languages:
+    if "Python" in languages and not is_docker:
         expected_python_paths = (
             ("${APP_DIR}/src/python/", "$APP_DIR/src/python/")
             if uses_bundle
