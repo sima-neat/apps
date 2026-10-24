@@ -1,6 +1,6 @@
 name: Vulcan CI
 
-run-name: ${{ github.event.head_commit.message || github.ref_name || 'Vulcan CI' }} (${{ vars.VULCAN_ENV || 'production' }})
+run-name: ${{ inputs.nightly && format('Apps Nightly Integration {0} ({1})', github.ref_name, inputs.nightly_request) || format('{0} ({1})', github.event.head_commit.message || github.ref_name || 'Vulcan CI', vars.VULCAN_ENV || 'production') }}
 
 on:
   push:
@@ -8,7 +8,18 @@ on:
       - "**"
     tags:
       - "*"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      nightly:
+        description: Rebuild and test all model variants without publishing.
+        required: false
+        default: false
+        type: boolean
+      nightly_request:
+        description: Caller run identifier used to track a nightly integration run.
+        required: false
+        default: ""
+        type: string
 
 permissions:
   actions: write
@@ -17,7 +28,7 @@ permissions:
   packages: read
 
 concurrency:
-  group: ${{ github.repository }}-${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.repository }}-${{ github.workflow }}-${{ inputs.nightly && 'nightly' || 'publish' }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref_type == 'branch' }}
 
 env:
@@ -172,6 +183,7 @@ jobs:
 
   publish-vulcan-artifacts:
     name: Publish to Vulcan
+    if: ${{ !inputs.nightly }}
     needs:
       - resolve-vulcan-config
       - test-runtime
@@ -192,7 +204,7 @@ jobs:
   resolve-portal-publish-config:
     name: Resolve Portal Publish Config
     needs: resolve-vulcan-config
-    if: ${{ github.ref_type == 'branch' }}
+    if: ${{ !inputs.nightly && github.ref_type == 'branch' }}
     uses: sima-neat/.github/.github/workflows/vulcan-resolve-config.yml@main
     with:
       vulcan_env: ${{ needs.resolve-vulcan-config.outputs.vulcan_env == 'prod' && github.ref_name != 'main' && 'staging' || needs.resolve-vulcan-config.outputs.vulcan_env }}
@@ -311,6 +323,7 @@ jobs:
       - name: Run all activated Apps tests
         env:
           NEAT_APPS_SKIP_MODEL_DOWNLOAD: "0"
+          SIMANEAT_APPS_TEST_MODEL_VARIANTS: ${{ inputs.nightly && '1' || '0' }}
           SIMANEAT_TEST_RTSP_H264_URL: ${{ vars.SIMANEAT_TEST_RTSP_H264_URL }}
           SIMANEAT_TEST_RTSP_H264_URLS: ${{ vars.SIMANEAT_TEST_RTSP_H264_URLS }}
           SIMANEAT_TEST_RTSP_H265_URL: ${{ vars.SIMANEAT_TEST_RTSP_H265_URL }}
@@ -326,6 +339,7 @@ jobs:
           ./tests/test.sh --all --strict
 
       - name: Package tested runtime for release
+        if: ${{ !inputs.nightly }}
         run: |
           rm -rf dist
           mkdir -p dist
@@ -359,12 +373,25 @@ jobs:
           ls -lh dist
 
       - name: Upload tested Apps release
+        if: ${{ !inputs.nightly }}
         uses: actions/upload-artifact@v7
         with:
           name: neat-apps-dist
           path: dist/*
           if-no-files-found: error
           retention-days: 3
+
+      - name: Upload nightly test logs
+        if: ${{ always() && inputs.nightly }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: neat-apps-nightly-test-logs
+          path: |
+            _vulcan-test/install/prebuilt-apps/sandbox-test/**/*.log
+            _vulcan-test/install/prebuilt-apps/deps/neat-core.json
+            _vulcan-test/install/prebuilt-apps/deps/neat-apps.json
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Cleanup test workspace tmp artifacts
         if: ${{ always() }}
@@ -373,7 +400,7 @@ jobs:
 
   promote-latest-tag:
     name: Promote Vulcan latest tag
-    if: ${{ always() && (github.ref_type == 'branch' || github.ref_type == 'tag') && needs.publish-vulcan-artifacts.result == 'success' }}
+    if: ${{ always() && !inputs.nightly && (github.ref_type == 'branch' || github.ref_type == 'tag') && needs.publish-vulcan-artifacts.result == 'success' }}
     needs:
       - resolve-vulcan-config
       - publish-vulcan-artifacts
@@ -388,7 +415,7 @@ jobs:
 
   build-sysdoc-examples:
     name: Build SysDoc Examples Route
-    if: ${{ github.ref_type == 'branch' }}
+    if: ${{ !inputs.nightly && github.ref_type == 'branch' }}
     needs:
       - resolve-portal-publish-config
       - test-runtime
@@ -463,7 +490,7 @@ jobs:
 
   publish-sysdoc-examples:
     name: Publish SysDoc Examples Route
-    if: ${{ github.ref_type == 'branch' }}
+    if: ${{ !inputs.nightly && github.ref_type == 'branch' }}
     needs:
       - resolve-portal-publish-config
       - build-sysdoc-examples
@@ -482,7 +509,7 @@ jobs:
 
   publish-apps-algolia:
     name: Publish Apps Algolia Index
-    if: ${{ github.ref_type == 'branch' }}
+    if: ${{ !inputs.nightly && github.ref_type == 'branch' }}
     needs:
       - resolve-portal-publish-config
       - publish-sysdoc-examples
