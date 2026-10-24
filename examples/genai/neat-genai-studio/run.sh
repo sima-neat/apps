@@ -32,9 +32,9 @@ if [[ -z "${APP_PYTHON:-}" ]]; then
   fi
 fi
 
-# Interpreter of the isolated piper-tts venv — the UI's subprocess TTS worker
+# Interpreter of the isolated piper-tts venv — the backend's subprocess TTS worker
 # uses it for the de/it/no/vi rhasspy voices (piper-tts and piper-plus can't
-# share a venv). Exported so the UI child process inherits it.
+# share a venv). Exported so the backend process inherits it.
 if [[ -z "${PIPERTTS_PYTHON:-}" && -x "${EXAMPLE_DIR}/.venv-pipertts/bin/python" ]]; then
   PIPERTTS_PYTHON="${EXAMPLE_DIR}/.venv-pipertts/bin/python"
 fi
@@ -42,82 +42,26 @@ export PIPERTTS_PYTHON="${PIPERTTS_PYTHON:-}"
 # Supertonic 3 (MLA TTS): the vendored runtime runs from ./.venv-supertonic (see
 # setup.sh); its model files' location is persisted under app.tts.supertonic in
 # the local config, with SUPERTONIC_MODELS_ROOT in the environment overriding.
-# Resolved by resolve_supertonic_env once the config path is final. The UI
+# Resolved by resolve_supertonic_env once the config path is final. The backend
 # spawns supertonic_worker.py with the resolved interpreter; when it is absent
 # the engine is simply not offered.
 SUPERTONIC_PYTHON="${SUPERTONIC_PYTHON:-}"
 SUPERTONIC_VENV_EXPLICIT="${SUPERTONIC_VENV:-}"
 SUPERTONIC_VENV="${SUPERTONIC_VENV:-${EXAMPLE_DIR}/.venv-supertonic}"
 SHUTDOWN_GRACE_SECONDS="${SHUTDOWN_GRACE_SECONDS:-10}"
-# Explicit accelerator reset (the UI's "Reset MLA" button and the CLI's /reset).
-# Never runs on its own: normal startup and load failures leave the board runtime
-# alone. MLA_RESET=0 refuses the request outright; MLA_RESET_CMD overrides how the
-# reset is performed.
-MLA_RESET="${MLA_RESET:-1}"
-export MLA_RESET          # the model server refuses a reset request when this is 0
-MLA_RESET_CMD="${MLA_RESET_CMD:-}"
-# The MLA shared-memory dispatcher service that holds loaded models across client
-# processes; restarting it releases every model on the MLA.
-MLA_DISPATCHER_SERVICE="${MLA_DISPATCHER_SERVICE:-simaai-appcomplex.service}"
-# Sentinel exit code the model server uses to ask for a reset + relaunch.
-MLA_RESET_EXIT_CODE="${MLA_RESET_EXIT_CODE:-75}"
-# Bounded relaunches so a server that dies immediately cannot respawn forever:
-# the budget counts consecutive relaunches that fail within
-# RELAUNCH_STABLE_SECONDS; one that stays up that long clears it.
-MLA_MAX_RESTART_RETRIES="${MLA_MAX_RESTART_RETRIES:-4}"
-RELAUNCH_STABLE_SECONDS="${RELAUNCH_STABLE_SECONDS:-60}"
-# Where the CLI-mode server records its exit status (see launch_server).
-SERVER_STATUS_FILE="${SERVER_STATUS_FILE:-${EXAMPLE_DIR}/.neat-genai-server.status}"
-# Out-of-band reset request. A model server wedged inside a native model load
-# cannot answer its own control API, so the UI and the CLI fall back to writing
-# this file; the supervisor polls it, stops the server, resets the dispatcher
-# and relaunches. Exported so both front ends know where to write.
-RESET_REQUEST_FILE="${RESET_REQUEST_FILE:-${EXAMPLE_DIR}/.neat-genai-reset.request}"
-export NEAT_RESET_REQUEST_FILE="${RESET_REQUEST_FILE}"
-# The reset is board-wide (it restarts the MLA dispatcher), and the web UI is
-# reachable from the network without login, so the web route requires a
-# token from any client that is not on the board itself. run.sh generates it
-# once (kept in a 0600 file) and prints it at startup; the browser asks for it
-# the first time Reset MLA is pressed. STUDIO_RESET_AUTH=0 disables the check
-# for a trusted network; STUDIO_RESET_TOKEN sets a fixed value.
-STUDIO_RESET_AUTH="${STUDIO_RESET_AUTH:-1}"
-export STUDIO_RESET_AUTH
-RESET_TOKEN_FILE="${RESET_TOKEN_FILE:-${EXAMPLE_DIR}/.neat-genai-reset.token}"
-ensure_reset_token() {
-  [[ "${STUDIO_RESET_AUTH}" == "1" ]] || return 0
-  if [[ -z "${STUDIO_RESET_TOKEN:-}" && -s "${RESET_TOKEN_FILE}" ]]; then
-    STUDIO_RESET_TOKEN="$(head -n1 "${RESET_TOKEN_FILE}" | tr -d '[:space:]')"
-  fi
-  if [[ -z "${STUDIO_RESET_TOKEN:-}" ]]; then
-    STUDIO_RESET_TOKEN="$(head -c 24 /dev/urandom | base64 | tr -d '/+=\n' | head -c 24)"
-    ( umask 077; printf '%s\n' "${STUDIO_RESET_TOKEN}" > "${RESET_TOKEN_FILE}" )
-  fi
-  export STUDIO_RESET_TOKEN
-}
 RAG_WORKER_PATTERN="${PYTHON_DIR}/rag/vectordb_worker.py"
 SERVER_PATTERN="${PYTHON_DIR}/server/main.py"
-UI_PATTERN="${PYTHON_DIR}/ui/main.py"
+API_PATTERN="${PYTHON_DIR}/api/main.py"
+# The backend before src/python/ui/ became api/; still stopped for one release
+# so `./run.sh stop` after an update reaches a backend started before it.
+LEGACY_UI_PATTERN="${PYTHON_DIR}/ui/main.py"
 # PID file for the running instance (enables `./run.sh stop`).
 PID_FILE="${RUN_PID_FILE:-${EXAMPLE_DIR}/.neat-genai-studio.pid}"
-# Which mode the running instance was started in (web / backend-only / cli),
-# written beside the pid file so `status` can say so.
-MODE_FILE="${PID_FILE%.pid}.mode"
-# The running instance records the URL it is actually serving: a later
-# --open-browser must open that, not a URL recomputed from the launcher's own
-# (possibly different) CONFIG_PATH.
+# The running instance records the URL it is actually serving, so `status`
+# reports that, not a URL recomputed from its own (possibly different)
+# CONFIG_PATH.
 URL_FILE="${PID_FILE%.pid}.url"
-# --backend-only: model server + the Studio's API endpoints, no web UI.
-BACKEND_ONLY="${BACKEND_ONLY:-0}"
-# --open-browser: open the web UI in the desktop browser once it answers (the
-# desktop icon uses this). With a running instance it just opens the browser.
-OPEN_BROWSER="${OPEN_BROWSER:-0}"
-BROWSER_WAITER_PID=""
 STOP_TIMEOUT="${STOP_TIMEOUT:-20}"
-# Terminal chat instead of the web UI (set by `./run.sh --cli`).
-CLI_MODE="${CLI_MODE:-0}"
-CLI_EXTRA_ARGS=()   # flags forwarded to cli/main.py (e.g. --chat, --download, --benchmark)
-# In CLI mode the model server's logs go here (kept off the chat terminal).
-SERVER_LOG="${SERVER_LOG:-${EXAMPLE_DIR}/.neat-genai-server.log}"
 
 # ---------------------------------------------------------------------------
 # Pretty output: the Neat sparkle banner + colourised status lines. Everything
@@ -198,7 +142,7 @@ url_host() {
 # True for the "listen on every interface" hosts (or none configured).
 wildcard_host() { [[ -z "$1" || "$1" == "0.0.0.0" || "$1" == "::" || "$1" == "[::]" ]]; }
 
-# _web_url_for <host-or-empty>: the UI URL with that host (scheme and port from
+# _web_url_for <host-or-empty>: the backend URL with that host (scheme and port from
 # the config). Returns 1 when the config has no port.
 _web_url_for() {
   local port https scheme
@@ -210,8 +154,8 @@ _web_url_for() {
   printf '%s://%s:%s' "${scheme}" "$(url_host "$1")" "${port}"
 }
 
-# The UI URL to give other machines: the configured host, or this board's first
-# LAN address (IPv4 preferred) when the UI listens on every interface.
+# The backend URL to give other machines (Insight): the configured host, or this
+# board's first LAN address (IPv4 preferred) when it listens on every interface.
 web_url() {
   local host ip
   host="$(web_config_value host)"
@@ -223,45 +167,13 @@ web_url() {
   _web_url_for "${host}"
 }
 
-# The UI URL for a browser on this board: localhost when the UI listens on every
-# interface (it keeps working if the IP changes), else the configured host.
+# The backend URL on this board: localhost when it listens on every interface
+# (it keeps working if the IP changes), else the configured host.
 local_web_url() {
   local host
   host="$(web_config_value host)"
   wildcard_host "${host}" && host="localhost"
   _web_url_for "${host}"
-}
-
-# Wait until the web UI answers (its /health route), up to UI_READY_TIMEOUT s.
-wait_for_ui() {
-  local url="$1" deadline=$((SECONDS + ${UI_READY_TIMEOUT:-300}))
-  command -v curl >/dev/null 2>&1 || { sleep 20; return 0; }
-  while [[ "${SECONDS}" -lt "${deadline}" ]]; do
-    curl -k -s -o /dev/null --max-time 2 "${url}/health" && return 0
-    sleep 1
-  done
-  return 1
-}
-
-# Open `url` in the desktop's default browser, detached from this terminal so
-# closing it does not take the browser along.
-open_url() {
-  local url="$1"
-  if [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
-    warn "No graphical display in this session; open ${url} in a browser yourself."
-    return 1
-  fi
-  local opener
-  for opener in xdg-open x-www-browser sensible-browser; do
-    if command -v "${opener}" >/dev/null 2>&1; then
-      setsid "${opener}" "${url}" >/dev/null 2>&1 < /dev/null &
-      ok "Opened ${C_ACCENT}${url}${C_RESET} in the browser."
-      info "First visit: the browser warns about the Studio's self-signed certificate; choose Advanced → proceed (it is this board)."
-      return 0
-    fi
-  done
-  warn "No browser opener (xdg-open) found; open ${url} yourself."
-  return 1
 }
 
 # Aligned "label   value" line for the System section.
@@ -336,20 +248,10 @@ usage() {
   banner
   cat <<'USAGE'
 Usage:
-  ./run.sh            Start the model server and web UI (Ctrl+C to stop).
+  ./run.sh            Start the model server and the Studio backend: the API
+                      Insight's GenAI tab calls (chat, speech, transcription,
+                      translation, voices, models, RAG, /health). Ctrl+C stops.
                       Runs ./setup.sh automatically on the first launch.
-  ./run.sh --cli      Start the model server and a terminal chat (no web UI).
-  ./run.sh --backend-only
-                      Start the model server and the Studio's API endpoints
-                      (chat, speech, transcription, translation, voices, models,
-                      /health) without the web UI, for other front ends such as
-                      Insight. BACKEND_CORS_ORIGINS enables browser CORS.
-  ./run.sh --chat [MODEL]      Terminal chat; load MODEL and chat (skips the menu).
-  ./run.sh --download [REPO]   Terminal chat; download REPO (or prompt) first.
-  ./run.sh --benchmark [MODEL] Terminal chat; benchmark MODEL (or prompt). --bench.
-  ./run.sh --open-browser
-                      Start (if not running) and open the web UI in the
-                      desktop browser once it answers; used by the desktop icon.
   ./run.sh stop       Cleanly stop a running instance.
   ./run.sh status     Report whether the studio is running.
   ./run.sh update     Update to the latest version (preserves models, config,
@@ -362,8 +264,8 @@ Environment:
   NEAT_APPS_BRANCH    Branch to pull for `update` (default: main).
   UPDATE_DEPS=1       Run full setup.sh dependency refresh during `update`.
   BACKEND_CORS_ORIGINS
-                      With --backend-only: origins (comma-separated, or *) whose
-                      browser pages may call the API (CORS). Default: none.
+                      Origins (comma-separated, or *) whose browser pages may
+                      call the API (CORS). Default: app.web.cors_origins.
 USAGE
 }
 
@@ -371,22 +273,14 @@ do_status() {
   if [[ -f "${PID_FILE}" ]]; then
     local pid; pid="$(cat "${PID_FILE}" 2>/dev/null || true)"
     if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
-      local mode; mode="$(cat "${MODE_FILE}" 2>/dev/null || echo web)"
       # Report the URL the RUNNING instance recorded: recomputing it here would
       # describe this invocation's config, which a CONFIG_PATH override makes a
       # different (possibly unreachable) endpoint. Fall back for an instance
       # started before the url file existed.
       local url; url="$(cat "${URL_FILE}" 2>/dev/null || true)"
       [[ -n "${url}" ]] || url="$(web_url || true)"
-      if [[ "${mode}" == "backend-only" ]]; then
-        ok "Neat GenAI Studio is running (pid ${pid}, backend-only: API endpoints, no web UI)."
-        [[ -n "${url}" ]] && info "API: ${C_ACCENT}${url}${C_RESET}  health: ${C_ACCENT}${url}/health${C_RESET}"
-      elif [[ "${mode}" == "cli" ]]; then
-        ok "Neat GenAI Studio is running (pid ${pid}, cli: terminal chat, no web UI)."
-      else
-        ok "Neat GenAI Studio is running (pid ${pid}${mode:+, ${mode}})."
-        [[ -n "${url}" ]] && info "Web UI: ${C_ACCENT}${url}${C_RESET}"
-      fi
+      ok "Neat GenAI Studio is running (pid ${pid})."
+      [[ -n "${url}" ]] && info "API: ${C_ACCENT}${url}${C_RESET}  health: ${C_ACCENT}${url}/health${C_RESET}"
       return 0
     fi
   fi
@@ -410,28 +304,30 @@ do_stop() {
         warn "Not responding after ${STOP_TIMEOUT}s; sending KILL…"
         kill -KILL "${pid}" 2>/dev/null || true
       fi
-      rm -f "${PID_FILE}" "${MODE_FILE}" "${URL_FILE}" "${SERVER_STATUS_FILE}"
+      rm -f "${PID_FILE}" "${URL_FILE}"
       ok "Stopped."
       return 0
     fi
-    rm -f "${PID_FILE}" "${MODE_FILE}" "${URL_FILE}" "${SERVER_STATUS_FILE}"
+    rm -f "${PID_FILE}" "${URL_FILE}"
   fi
   # No recorded instance — best-effort cleanup of any stray studio processes.
   info "No running instance recorded; cleaning up any stray processes…"
   if command -v pkill >/dev/null 2>&1; then
     pkill -TERM -f "${SERVER_PATTERN}" 2>/dev/null || true
-    pkill -TERM -f "${UI_PATTERN}" 2>/dev/null || true
+    pkill -TERM -f "${API_PATTERN}" 2>/dev/null || true
+    pkill -TERM -f "${LEGACY_UI_PATTERN}" 2>/dev/null || true
     pkill -TERM -f "${RAG_WORKER_PATTERN}" 2>/dev/null || true
     sleep 2
     pkill -KILL -f "${SERVER_PATTERN}" 2>/dev/null || true
-    pkill -KILL -f "${UI_PATTERN}" 2>/dev/null || true
+    pkill -KILL -f "${API_PATTERN}" 2>/dev/null || true
+    pkill -KILL -f "${LEGACY_UI_PATTERN}" 2>/dev/null || true
     pkill -KILL -f "${RAG_WORKER_PATTERN}" 2>/dev/null || true
   fi
   ok "Done."
 }
 
 # Supertonic paths: environment > app.tts.supertonic in the config > defaults.
-# Only values that are set are exported, so the UI applies the same precedence.
+# Only values that are set are exported, so the backend applies the same precedence.
 _supertonic_config_value() { supertonic_config_value "${CONFIG_PATH}" "$1"; }
 resolve_supertonic_env() {
   local models legacy
@@ -478,6 +374,18 @@ supertonic_fingerprint() {
     grep -E '^SUPERTONIC_(UPSTREAM|SIMA)_HF_REVISION=|^[0-9a-f]{64}  supertonic-3' "${EXAMPLE_DIR}/setup.sh" 2>/dev/null
   } | sha256sum | cut -d' ' -f1
 }
+# Desktop icons and menu entries an earlier setup.sh installed for this
+# checkout. They started the removed web UI through src/common/desktop-launch.sh,
+# so they no longer work.
+old_desktop_entries() {
+  local t
+  for t in "${XDG_DATA_HOME:-${HOME}/.local/share}/applications/neat-genai-studio.desktop" \
+           "${XDG_DESKTOP_DIR:-${HOME}/Desktop}/neat-genai-studio.desktop"; do
+    [[ -f "$t" ]] && grep -qF "${EXAMPLE_DIR}/" "$t" && printf '%s\n' "$t"
+  done
+  return 0
+}
+
 # Remove app-generated data (venvs, generated config, RAG db, downloaded TTS
 # voices, pid, caches, logs). Confirms first unless -y/--yes or CLEAN_YES=1.
 # Downloaded chat/VLM/ASR models under catalog_dir are left intact.
@@ -511,24 +419,22 @@ do_clean() {
     "${EXAMPLE_DIR}/.venv-pipertts" \
     "${DEFAULT_LOCAL_CONFIG}" \
     "${DEFAULT_LOCAL_CONFIG}.bak" \
-    "${RESET_TOKEN_FILE}" \
     "${PID_FILE}" \
-    "${MODE_FILE}" \
+    "${PYTHON_DIR}/api/milvus.db" \
+    "${PYTHON_DIR}/api/milvus.meta.json" \
+    "${PYTHON_DIR}/api/assets/piper-plus" \
+    "${PYTHON_DIR}/api/assets/mms-tts-kor" \
     "${PYTHON_DIR}/ui/milvus.db" \
     "${PYTHON_DIR}/ui/milvus.meta.json" \
-    "${PYTHON_DIR}/ui/assets/piper-plus" \
-    "${PYTHON_DIR}/ui/assets/mms-tts-kor"; do
+    "${PYTHON_DIR}/ui/assets"; do
     [[ -e "$t" ]] && targets+=("$t")
   done
-  # The desktop icon / menu entry setup.sh installed for this checkout.
-  for t in "${XDG_DATA_HOME:-${HOME}/.local/share}/applications/neat-genai-studio.desktop" \
-           "${XDG_DESKTOP_DIR:-${HOME}/Desktop}/neat-genai-studio.desktop"; do
-    [[ -f "$t" ]] && grep -qF "${EXAMPLE_DIR}/" "$t" && targets+=("$t")
-  done
+  # A desktop icon / menu entry an earlier setup.sh installed for this checkout.
+  while IFS= read -r t; do targets+=("$t"); done < <(old_desktop_entries)
   # Downloaded rhasspy .onnx voices (committed .onnx.json configs are kept),
   # __pycache__ dirs, and any *.log files the app produced.
   while IFS= read -r -d '' t; do targets+=("$t"); done \
-    < <(find "${PYTHON_DIR}/ui/assets" -maxdepth 1 -name '*.onnx' -print0 2>/dev/null)
+    < <(find "${PYTHON_DIR}/api/assets" -maxdepth 1 -name '*.onnx' -print0 2>/dev/null)
   while IFS= read -r -d '' t; do targets+=("$t"); done \
     < <(find "${PYTHON_DIR}" -type d -name '__pycache__' -print0 2>/dev/null)
   while IFS= read -r -d '' t; do targets+=("$t"); done \
@@ -572,8 +478,49 @@ do_clean() {
 # get-example.sh) it re-fetches the release archive and mirrors the source. Set
 # NEAT_APPS_BRANCH chooses a branch (default main); UPDATE_DEPS=1 refreshes only
 # the Python dependencies.
+# src/python/ui/ became src/python/api/. An update keeps the install's own files
+# (voices, RAG database, uploads, logs) where they were, so the first start
+# after it moves them into api/. A file api/ already has is dropped from ui/
+# when identical, otherwise left there and reported. ui/tts/ holds the
+# split_voices.py shim the previous run.sh calls during the update, so it stays.
+# Remove after one release, with that shim.
+migrate_legacy_ui_dir() {
+  local old="${PYTHON_DIR}/ui" new="${PYTHON_DIR}/api" src rel moved=0
+  [[ -d "${old}" ]] || return 0
+  # Regenerated on start, never the install's own data.
+  find "${old}" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true
+  rm -f "${old}/.milvus.db.lock"
+  while IFS= read -r -d '' src; do
+    rel="${src#"${old}"/}"
+    if [[ -e "${new}/${rel}" ]]; then
+      cmp -s "${src}" "${new}/${rel}" && rm -f "${src}"
+      continue
+    fi
+    mkdir -p "$(dirname "${new}/${rel}")" && mv "${src}" "${new}/${rel}" && moved=$((moved + 1))
+  done < <(find "${old}" -path "${old}/tts" -prune -o \( -type f -o -type l \) -print0)
+  find "${old}" -depth -type d -empty -delete 2>/dev/null || true
+  if [[ -n "$(find "${old}" -path "${old}/tts" -prune -o \( -type f -o -type l \) -print 2>/dev/null)" ]]; then
+    warn "src/python/ui/ is now src/python/api/; these files were left in ui/ because api/ has a different copy:"
+    find "${old}" -path "${old}/tts" -prune -o \( -type f -o -type l \) -print | sed "s|^${PYTHON_DIR}/|    |" >&2
+    warn "Remove src/python/ui/ once you have kept anything you need from it."
+  elif [[ "${moved}" -gt 0 ]]; then
+    ok "Moved ${moved} file(s) from src/python/ui/ to src/python/api/ (the folder was renamed)."
+  fi
+}
+
+# Where the installed voices are: an update from before the ui/ -> api/ rename
+# leaves them in ui/assets until the next start moves them (migrate_legacy_ui_dir).
+voice_assets_dir() {
+  if [[ -d "${PYTHON_DIR}/ui/assets" ]]; then
+    printf '%s\n' "${PYTHON_DIR}/ui/assets"
+  else
+    printf '%s\n' "${PYTHON_DIR}/api/assets"
+  fi
+}
+
 migrate_piper_voices() {
-  local assets="${PYTHON_DIR}/ui/assets" py voice encoder decoder needs_split=0
+  local assets py voice encoder decoder needs_split=0
+  assets="$(voice_assets_dir)"
   py="${PIPERTTS_PYTHON:-${EXAMPLE_DIR}/.venv-pipertts/bin/python}"
   for voice in "${assets}"/*.onnx; do
     [[ -e "${voice}" ]] || continue
@@ -596,7 +543,7 @@ migrate_piper_voices() {
   if ! "${py}" -c "import onnx" >/dev/null 2>&1; then
     "${py}" -m pip install "onnx>=1.17,<2" || return 1
   fi
-  "${py}" "${PYTHON_DIR}/split_voices.py" "${assets}"
+  "${py}" "${PYTHON_DIR}/api/tts/split_voices.py" "${assets}"
 }
 
 do_update() {
@@ -640,9 +587,11 @@ do_update() {
     else
       errln "curl or wget is required to update."; rm -rf "${tmp}"; return 1
     fi
-    root="$(tar -tzf "${tmp}/src.tar.gz" 2>/dev/null | head -1 | cut -d/ -f1)"
+    # Read the whole listing (awk, not head/grep -q): under pipefail, a reader
+    # that exits early kills tar with SIGPIPE and the update aborts with 141.
+    root="$(tar -tzf "${tmp}/src.tar.gz" 2>/dev/null | awk -F/ 'NR == 1 { print $1 }')"
     ex_path="${root}/examples/genai/neat-genai-studio"
-    if ! tar -tzf "${tmp}/src.tar.gz" 2>/dev/null | grep -qxF "${ex_path}/"; then
+    if ! tar -tzf "${tmp}/src.tar.gz" 2>/dev/null | grep -xF "${ex_path}/" >/dev/null; then
       errln "neat-genai-studio not found in the archive (branch ${branch})."
       rm -rf "${tmp}"; return 1
     fi
@@ -684,7 +633,8 @@ do_update() {
       esac
     done
     # Mirror tracked source so files deleted by a release disappear locally.
-    # Explicitly exclude every install-owned path from transfer and deletion.
+    # Explicitly exclude every install-owned path from transfer and deletion,
+    # in ui/ too until an install's first start moves its files to api/.
     rsync -a --delete-delay --delay-updates \
       ${keep[@]+"${keep[@]}"} \
       --exclude='/.venv/' \
@@ -697,6 +647,14 @@ do_update() {
       --exclude='/.neat-genai-studio.mode' \
       --exclude='/.neat-genai-studio.url' \
       --exclude='*.log' \
+      --exclude='/src/python/api/uploads/' \
+      --exclude='/src/python/api/.milvus.db.lock' \
+      --exclude='/src/python/api/milvus.db' \
+      --exclude='/src/python/api/milvus.meta.json' \
+      --exclude='/src/python/api/assets/*.onnx' \
+      --exclude='/src/python/api/assets/*.onnx.json' \
+      --exclude='/src/python/api/assets/piper-plus/' \
+      --exclude='/src/python/api/assets/mms-tts-kor/' \
       --exclude='/src/python/ui/uploads/' \
       --exclude='/src/python/ui/.milvus.db.lock' \
       --exclude='/src/python/ui/milvus.db' \
@@ -732,6 +690,12 @@ do_update() {
       return 1
     fi
   fi
+  # A git update removes files that are no longer tracked, such as the voice
+  # configs now downloaded by setup.sh: fetch any missing file of a voice that
+  # is still installed, so it keeps showing up.
+  step "Checking the installed voices…"
+  python3 "${PYTHON_DIR}/api/tts/voice_catalog.py" repair --assets "$(voice_assets_dir)" \
+    || warn "Some voice files could not be restored; run ./setup.sh to reinstall the voices."
   migrate_piper_voices || { errln "Piper voice migration failed."; return 1; }
   ok "Update complete."
 }
@@ -742,25 +706,22 @@ case "${1:-run}" in
   --clean|clean) do_clean "${2:-}"; exit 0 ;;
   update|--update|upgrade) do_update; exit 0 ;;
   -h|--help|help) usage; exit 0 ;;
-  --cli|cli) CLI_MODE=1 ;;   # fall through to launch, then run the terminal chat
-  --backend-only|backend-only|backend) BACKEND_ONLY=1 ;;   # fall through to launch, headless
-  --open-browser|open) OPEN_BROWSER=1 ;;   # fall through to launch, then open the UI
-  # CLI shortcuts: launch the terminal chat straight into a mode. An optional
-  # second argument (a model name, or HF repo for download) is forwarded too.
-  --chat|chat)
-    CLI_MODE=1; CLI_EXTRA_ARGS+=(--chat)
-    if [[ -n "${2:-}" ]]; then CLI_EXTRA_ARGS+=("$2"); fi ;;
-  --download|download|dl)
-    CLI_MODE=1; CLI_EXTRA_ARGS+=(--download)
-    if [[ -n "${2:-}" ]]; then CLI_EXTRA_ARGS+=("$2"); fi ;;
-  --benchmark|--bench|benchmark|bench)
-    CLI_MODE=1; CLI_EXTRA_ARGS+=(--benchmark)
-    if [[ -n "${2:-}" ]]; then CLI_EXTRA_ARGS+=("$2"); fi ;;
   run|start) ;;  # fall through to launch
   *) errln "unknown command: $1"; usage; exit 2 ;;
 esac
 
 banner
+
+# An icon from an earlier setup.sh would start the removed web UI: remove it.
+while IFS= read -r t; do rm -f "$t" && info "Removed an old desktop icon: $t"; done < <(old_desktop_entries)
+
+# Move an updated install's files out of the old ui/ folder before setup and
+# the Piper voice preparation use them, but never under a running Studio (the
+# call after the stale-process cleanup below covers that case).
+if ! do_status >/dev/null 2>&1 \
+     && ! { command -v pgrep >/dev/null 2>&1 && pgrep -f "${API_PATTERN}|${LEGACY_UI_PATTERN}" >/dev/null 2>&1; }; then
+  migrate_legacy_ui_dir
+fi
 
 # First launch: if setup.sh hasn't created the app venv (and local config) yet,
 # run it now so `./run.sh` works out of the box. AUTO_SETUP=0 opts out.
@@ -835,77 +796,19 @@ finally:
 ' "$1" 2>/dev/null
 }
 
-# Run a privileged command best-effort. As root, run it directly; otherwise defer
-# to sudo, which prompts or succeeds passwordlessly according to the board's own
-# policy. Deliberately carries no password of its own — callers tolerate failure
-# and report it, rather than the studio shipping a credential.
-mla_sudo() {
-  if [[ "$(id -u)" == "0" ]]; then
-    "$@"
-  elif command -v sudo >/dev/null 2>&1; then
-    # -n: never prompt. The supervisor may be running detached with no terminal,
-    # where a password prompt would block the relaunch indefinitely instead of
-    # failing fast; callers warn and carry on.
-    sudo -n "$@"
-  else
-    return 1
-  fi
-}
-
-# Clear models held by the MLA shared-memory dispatcher. Models live in the
-# dispatcher daemon, which outlives our client processes, so killing the model
-# server is not enough — a wedged dispatcher keeps models resident and every
-# subsequent load fails with MLA_LOAD_FAILED. Only ever called for an EXPLICIT
-# user request (the UI button or the CLI's /reset); needs privileges, and says so
-# instead of failing silently when it does not have them.
-reset_mla_dispatcher() {
-  if [[ "${MLA_RESET}" != "1" ]]; then
-    warn "Accelerator reset requested but MLA_RESET=0; leaving the runtime alone."
-    return 0
-  fi
-
-  # 1) Explicit override wins.
-  if [[ -n "${MLA_RESET_CMD}" ]]; then
-    info "Resetting MLA via MLA_RESET_CMD: ${C_DIM}${MLA_RESET_CMD}${C_RESET}"
-    bash -c "${MLA_RESET_CMD}" || warn "MLA_RESET_CMD failed (continuing)"
-    return 0
-  fi
-
-  # 2) The board's own runtime-recovery script, when it is exposed on PATH.
-  #    Its install location is not part of the public runtime contract, so it
-  #    is looked up rather than hard-coded (the release bundle validator
-  #    rejects a literal path to it).
-  local fixer
-  fixer="$(command -v fix_devkit_runtime.sh 2>/dev/null || true)"
-  if [[ -n "${fixer}" && -x "${fixer}" ]]; then
-    info "Resetting MLA runtime via ${C_DIM}${fixer}${C_RESET}…"
-    mla_sudo "${fixer}" || warn "MLA runtime reset failed (continuing)"
-    return 0
-  fi
-
-  # 3) Fallback: restart the dispatcher service and re-init MLA memory.
-  if command -v systemctl >/dev/null 2>&1; then
-    info "Restarting MLA dispatcher (${MLA_DISPATCHER_SERVICE})…"
-    mla_sudo systemctl restart "${MLA_DISPATCHER_SERVICE}" 2>/dev/null \
-      || warn "could not restart ${MLA_DISPATCHER_SERVICE} — needs passwordless privileges; grant NOPASSWD for it, set MLA_RESET_CMD, or run the board's recovery script yourself"
-  fi
-  if [[ -x /usr/bin/init_mla_memory.sh ]]; then
-    mla_sudo /usr/bin/init_mla_memory.sh 2>/dev/null || true
-  fi
-}
-
 # Stop stale Studio processes from a previous (e.g. crashed) run and wait for
-# the OpenAI port to become available. Do not touch the board runtime or restart
-# the MLA dispatcher during normal application startup.
+# the OpenAI port to become available. Do not touch the board runtime during
+# normal application startup.
 prepare_clean_start() {
   step "Clearing stale Neat GenAI Studio processes…"
-  rm -f "${RESET_REQUEST_FILE}"
   if command -v pkill >/dev/null 2>&1; then
     pkill -TERM -f "${SERVER_PATTERN}" 2>/dev/null || true
-    pkill -TERM -f "${UI_PATTERN}" 2>/dev/null || true
+    pkill -TERM -f "${API_PATTERN}" 2>/dev/null || true
+    pkill -TERM -f "${LEGACY_UI_PATTERN}" 2>/dev/null || true
     sleep 1
     pkill -KILL -f "${SERVER_PATTERN}" 2>/dev/null || true
-    pkill -KILL -f "${UI_PATTERN}" 2>/dev/null || true
+    pkill -KILL -f "${API_PATTERN}" 2>/dev/null || true
+    pkill -KILL -f "${LEGACY_UI_PATTERN}" 2>/dev/null || true
   fi
   stop_stale_rag_worker
 
@@ -959,10 +862,9 @@ cleanup() {
   trap '' INT TERM
 
   step "Shutting down Neat GenAI Studio…"
-  if [[ -n "${BROWSER_WAITER_PID}" ]]; then kill "${BROWSER_WAITER_PID}" 2>/dev/null || true; fi
 
   # Graceful: both Python entrypoints handle SIGTERM — the model server releases
-  # its models on the MLA and the UI stops the RAG worker before exiting.
+  # its models on the MLA and the backend stops the RAG worker before exiting.
   signal_process_groups TERM
 
   local deadline=$((SECONDS + SHUTDOWN_GRACE_SECONDS))
@@ -979,20 +881,8 @@ cleanup() {
   for pid in "${pids[@]}"; do
     wait "${pid}" 2>/dev/null || true
   done
-  # In --cli mode the watchdog may have relaunched the model server under a new
-  # process group (not in our remembered groups, since the watchdog runs in a
-  # subshell). Sweep it with the same grace the supervised server gets, so a
-  # loaded server can still release its MLA models in server.stop().
-  if [[ "${CLI_MODE}" == "1" ]] && command -v pkill >/dev/null 2>&1; then
-    pkill -TERM -f "${SERVER_PATTERN}" 2>/dev/null || true
-    local sweep_deadline=$((SECONDS + SHUTDOWN_GRACE_SECONDS))
-    while pgrep -f "${SERVER_PATTERN}" >/dev/null 2>&1 && [[ "${SECONDS}" -lt "${sweep_deadline}" ]]; do
-      sleep 1
-    done
-    pkill -KILL -f "${SERVER_PATTERN}" 2>/dev/null || true
-  fi
   stop_stale_rag_worker
-  rm -f "${PID_FILE}" "${MODE_FILE}" "${URL_FILE}" "${SERVER_STATUS_FILE}" "${RESET_REQUEST_FILE}"
+  rm -f "${PID_FILE}" "${URL_FILE}"
   ok "Neat GenAI Studio stopped."
 }
 
@@ -1001,177 +891,61 @@ cleanup() {
 if [[ -f "${PID_FILE}" ]]; then
   existing="$(cat "${PID_FILE}" 2>/dev/null || true)"
   if [[ -n "${existing}" ]] && kill -0 "${existing}" 2>/dev/null; then
-    if [[ "${OPEN_BROWSER}" == "1" ]]; then
-      ok "Neat GenAI Studio is already running (pid ${existing})."
-      _mode="$(cat "${MODE_FILE}" 2>/dev/null || echo web)"
-      if [[ "${_mode}" != "web" ]]; then
-        warn "It runs in ${_mode} mode (no web UI); stop it (./run.sh stop) and start ./run.sh to use the UI."
-        exit 1
-      fi
-      # Prefer the URL the running instance recorded; fall back to resolving it
-      # locally for an instance started before this was written.
-      _url="$(cat "${URL_FILE}" 2>/dev/null || true)"
-      [[ -n "${_url}" ]] || _url="$(local_web_url || true)"
-      [[ -n "${_url}" ]] && open_url "${_url}"
-      exit 0
-    fi
     errln "Neat GenAI Studio is already running (pid ${existing})."
     info "Run './run.sh stop' first, or './run.sh status' to check."
     exit 1
   fi
-  rm -f "${PID_FILE}" "${MODE_FILE}" "${URL_FILE}" "${SERVER_STATUS_FILE}"
+  rm -f "${PID_FILE}" "${URL_FILE}"
 fi
 
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-# Closing the terminal window (the desktop icon runs us in one) stops the Studio
-# cleanly instead of leaving the setsid'd processes behind.
+# Closing the terminal window stops the Studio cleanly instead of leaving the
+# setsid'd processes behind.
 trap 'exit 129' HUP
-
-# app.web.headless: true in the config is the same as --backend-only (the UI
-# process reads it too); resolve it before the mode is recorded and branched on.
-if [[ "${BACKEND_ONLY}" != "1" && "${CLI_MODE}" != "1" ]]; then
-  config_true "$(web_config_value headless)" && BACKEND_ONLY=1
-fi
 
 # Record this instance so `./run.sh stop` can find it (removed by cleanup).
 echo "$$" > "${PID_FILE}"
-if [[ "${CLI_MODE}" == "1" ]]; then echo cli; elif [[ "${BACKEND_ONLY}" == "1" ]]; then echo backend-only; else echo web; fi > "${MODE_FILE}"
-# Backend-only serves its API on the same host/port, and `status` reports that
-# URL too, so record it in both modes. Only --cli has no HTTP surface.
-if [[ "${CLI_MODE}" != "1" ]]; then
-  _self_url="$(local_web_url || true)"
-  [[ -n "${_self_url}" ]] && printf '%s\n' "${_self_url}" > "${URL_FILE}"
-fi
-# Expose the supervisor PID + PID file to the UI so it can offer a GUI "Shut down"
-# button (it SIGTERMs this process, which runs cleanup — same as `./run.sh stop`).
+_self_url="$(local_web_url || true)"
+[[ -n "${_self_url}" ]] && printf '%s\n' "${_self_url}" > "${URL_FILE}"
+# Expose the supervisor PID + PID file to the backend for POST /shutdown (it
+# SIGTERMs this process, which runs cleanup — same as `./run.sh stop`).
 export NEAT_RUN_PID="$$"
 export RUN_PID_FILE="${PID_FILE}"
 
+# The model server runs in the Neat environment (PYNEAT_PYTHON), which may not
+# carry PyYAML (Platform 3.0's ~/pyneat does not). The app's own Python converts
+# the YAML config to JSON for it, so the Neat environment is never modified.
+SERVER_CONFIG_JSON="${EXAMPLE_DIR}/.neat-genai-server-config.json"
+write_server_config() {
+  "${APP_PYTHON}" - "${CONFIG_PATH}" "${SERVER_CONFIG_JSON}" <<'YAML_TO_JSON'
+import json
+import sys
+
+import yaml
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    config = yaml.safe_load(source) or {}
+with open(sys.argv[2], "w", encoding="utf-8") as target:
+    json.dump(config, target)
+YAML_TO_JSON
+}
+
 launch_server() {
   step "Starting the Neat model server (OpenAI-compatible)…"
-  # In CLI mode the model server shares the terminal with the interactive chat,
-  # so its logs would land on the "you ▸" prompt. Send them to a log file
-  # instead; the CLI drives the server over HTTP and doesn't need its stdout.
-  if [[ "${CLI_MODE}" == "1" ]]; then
-    # Wrap the server so its exit status lands in a file: the CLI watchdog polls
-    # a sibling PID and so cannot `wait` for it, and without the status it could
-    # not tell an explicit reset request from an ordinary crash.
-    rm -f "${SERVER_STATUS_FILE}"
-    setsid bash -c \
-      '"$1" "$2" --config "$3" >"$4" 2>&1; s=$?; echo "$s" >"$5"; exit "$s"' _ \
-      "${PYNEAT_PYTHON}" "${PYTHON_DIR}/server/main.py" "${CONFIG_PATH}" \
-      "${SERVER_LOG}" "${SERVER_STATUS_FILE}" &
-  else
-    setsid "${PYNEAT_PYTHON}" "${PYTHON_DIR}/server/main.py" --config "${CONFIG_PATH}" &
+  if ! write_server_config; then
+    errln "Could not read ${CONFIG_PATH} with ${APP_PYTHON}; run ./setup.sh first."
+    return 1
   fi
+  setsid "${PYNEAT_PYTHON}" "${PYTHON_DIR}/server/main.py" --config "${SERVER_CONFIG_JSON}" &
   server_pid="$!"
   pids[0]="${server_pid}"
   remember_process_group "${server_pid}"
 }
 
-# Stop the model server's own process group when it cannot exit by itself (a
-# wedged native load ignores SIGTERM because the interpreter never regains
-# control). TERM first with the normal grace, then KILL.
-force_stop_server() {
-  local pgid
-  pgid="$(ps -o pgid= -p "${server_pid}" 2>/dev/null | tr -d ' ' || true)"
-  if [[ -n "${pgid}" ]]; then
-    kill -TERM "-${pgid}" 2>/dev/null || true
-  else
-    kill -TERM "${server_pid}" 2>/dev/null || true
-  fi
-  local deadline=$((SECONDS + SHUTDOWN_GRACE_SECONDS))
-  while kill -0 "${server_pid}" 2>/dev/null && [[ "${SECONDS}" -lt "${deadline}" ]]; do
-    sleep 1
-  done
-  if kill -0 "${server_pid}" 2>/dev/null; then
-    warn "Model server did not stop within ${SHUTDOWN_GRACE_SECONDS}s — killing it."
-    if [[ -n "${pgid}" ]]; then kill -KILL "-${pgid}" 2>/dev/null || true; fi
-    kill -KILL "${server_pid}" 2>/dev/null || true
-  fi
-  wait "${server_pid}" 2>/dev/null || true
-}
-
-# True (and the request consumed) when a front end asked the supervisor for a
-# reset because the server could not answer. Refuses it when MLA_RESET=0.
-consume_reset_request() {
-  [[ -f "${RESET_REQUEST_FILE}" ]] || return 1
-  rm -f "${RESET_REQUEST_FILE}"
-  if [[ "${MLA_RESET}" != "1" ]]; then
-    warn "Supervisor reset requested but MLA_RESET=0; ignoring it."
-    return 1
-  fi
-  return 0
-}
-
-# Background watchdog for --cli mode, which has no supervisor loop: if the model
-# server exits to service an explicit reset (the CLI's /reset) — or crashes —
-# reset the dispatcher and relaunch so the CLI can reconnect. Poll-based, since a
-# backgrounded subshell cannot `wait` a sibling PID; bounded so a broken server
-# cannot respawn forever. Strays are swept by cleanup().
-cli_supervise() {
-  # `tries` counts consecutive relaunches that did not survive: a relaunched
-  # server that stays up for RELAUNCH_STABLE_SECONDS clears it, so explicit
-  # user resets never exhaust the budget, while a crash/reset cycle still cannot
-  # continue indefinitely.
-  local tries=0 status launched_at=0
-  while true; do
-    sleep 2
-    if kill -0 "${server_pid}" 2>/dev/null; then
-      if [[ "${tries}" -gt 0 && $((SECONDS - launched_at)) -ge "${RELAUNCH_STABLE_SECONDS}" ]]; then
-        tries=0
-      fi
-      if consume_reset_request; then
-        if [[ "${tries}" -ge "${MLA_MAX_RESTART_RETRIES}" ]]; then
-          errln "Model server kept needing an accelerator reset; not resetting again."
-          continue
-        fi
-        tries=$((tries + 1))
-        warn "Model server is unresponsive; resetting the accelerator on request."
-        force_stop_server
-        rm -f "${SERVER_STATUS_FILE}"
-        reset_mla_dispatcher
-        launch_server
-        launched_at="${SECONDS}"
-        sleep "${MODEL_SERVER_START_DELAY:-2}"
-      fi
-      continue
-    fi
-
-    # Reset the accelerator ONLY when the server asked for it. An ordinary crash
-    # must not restart the board-wide dispatcher — the studio touches the board
-    # runtime on explicit request and at no other time.
-    status=""
-    for _ in 1 2 3 4 5; do
-      [[ -s "${SERVER_STATUS_FILE}" ]] && { status="$(cat "${SERVER_STATUS_FILE}" 2>/dev/null)"; break; }
-      sleep 0.4
-    done
-    if [[ "${status}" == "0" ]]; then
-      return 0    # clean exit: nothing to recover
-    fi
-    if [[ "${tries}" -ge "${MLA_MAX_RESTART_RETRIES}" ]]; then
-      errln "Model server keeps exiting (last status ${status:-?}); not relaunching again — /quit and restart the Studio."
-      return 0
-    fi
-    tries=$((tries + 1))
-    if [[ "${status}" == "${MLA_RESET_EXIT_CODE}" ]]; then
-      reset_mla_dispatcher
-    else
-      # An ordinary crash: relaunch so the prompt is not left talking to a dead
-      # server, but never touch the board-wide dispatcher for it.
-      warn "Model server exited with status ${status:-?}; relaunching it (models must be loaded again with /load)."
-    fi
-    launch_server
-    launched_at="${SECONDS}"
-    sleep "${MODEL_SERVER_START_DELAY:-2}"
-  done
-}
-
 prepare_clean_start
-
-ensure_reset_token
+migrate_legacy_ui_dir
 
 section "Model Server"
 launch_server
@@ -1183,136 +957,44 @@ if ! child_running "${server_pid}"; then
   wait "${server_pid}"
   status=$?
   set -e
-  if [[ "${status}" -eq "${MLA_RESET_EXIT_CODE}" ]]; then
-    section "Accelerator"
-    reset_mla_dispatcher
-    section "Model Server"
-    launch_server
-    sleep "${MODEL_SERVER_START_DELAY:-2}"
-  else
-    exit "${status}"
-  fi
+  exit "${status}"
 fi
 
-# CLI mode: skip the web UI and run an interactive terminal chat in the
-# foreground against the model server we just started. When it exits, the EXIT
-# trap tears the model server down.
-if [[ "${CLI_MODE}" == "1" ]]; then
-  section "Terminal chat"
-  step "Launching the CLI — type ${C_BOLD}/help${C_RESET} for commands, ${C_BOLD}/quit${C_RESET} to exit."
-  info "Model server logs → ${C_DIM}${SERVER_LOG}${C_RESET}"
-  printf '\n'
-  trap - INT            # let the Python CLI own Ctrl+C (abort a reply, not exit)
-  cli_supervise &
-  cli_watchdog_pid="$!"
-  "${APP_PYTHON}" "${PYTHON_DIR}/cli/main.py" --config "${CONFIG_PATH}" \
-    ${CLI_EXTRA_ARGS[@]+"${CLI_EXTRA_ARGS[@]}"} || true
-  kill "${cli_watchdog_pid}" 2>/dev/null || true
-  exit 0                # -> EXIT trap stops the model server
-fi
-
-ui_args=(--config "${CONFIG_PATH}")
-if [[ "${BACKEND_ONLY}" == "1" ]]; then
-  section "Backend (headless)"
-  step "Starting the Neat GenAI Studio API endpoints (no web UI)…"
-  ui_args+=(--backend-only)
-else
-  section "Web UI"
-  step "Starting the Neat GenAI Studio web UI…"
-fi
-setsid "${APP_PYTHON}" "${PYTHON_DIR}/ui/main.py" "${ui_args[@]}" &
+section "Backend"
+step "Starting the Neat GenAI Studio backend (API endpoints)…"
+setsid "${APP_PYTHON}" "${PYTHON_DIR}/api/main.py" --config "${CONFIG_PATH}" &
 pids[1]="$!"
-ui_pid="${pids[1]}"
-remember_process_group "${ui_pid}"
+api_pid="${pids[1]}"
+remember_process_group "${api_pid}"
 
 printf '\n'
 ok "Neat GenAI Studio is starting up."
-if [[ "${STUDIO_RESET_AUTH}" == "1" ]]; then
-  info "Reset MLA from a browser needs this token (also in ${C_DIM}${RESET_TOKEN_FILE}${C_RESET}): ${C_BOLD}${STUDIO_RESET_TOKEN}${C_RESET}"
-fi
 _url="$(web_url || true)"
-if [[ -n "${_url}" && "${BACKEND_ONLY}" == "1" ]]; then
-  info "Backend-only: API on ${C_ACCENT}${C_BOLD}${_url}${C_RESET} (no web UI); readiness at ${C_ACCENT}${_url}/health${C_RESET}."
-  # Set at all (even empty) wins over the config, as in the UI process.
+if [[ -n "${_url}" ]]; then
+  info "API on ${C_ACCENT}${C_BOLD}${_url}${C_RESET}; readiness at ${C_ACCENT}${_url}/health${C_RESET}. Point Insight's GenAI tab at it."
+  # Set at all (even empty) wins over the config, as in the backend process.
   if [[ -n "${BACKEND_CORS_ORIGINS+set}" ]]; then _cors="${BACKEND_CORS_ORIGINS}"; else _cors="$(web_config_value cors_origins)"; fi
   info "CORS for browser front ends: ${_cors:-off (app.web.cors_origins or BACKEND_CORS_ORIGINS allows origins)}."
-elif [[ -n "${_url}" ]]; then
-  info "Open ${C_ACCENT}${C_BOLD}${_url}${C_RESET} in your browser once it finishes loading."
-fi
-if [[ "${OPEN_BROWSER}" == "1" ]]; then
-  if [[ "${BACKEND_ONLY}" == "1" ]]; then
-    warn "--open-browser is ignored in backend-only mode (there is no web UI)."
-  else
-    _local_url="$(local_web_url || true)"
-    if [[ -n "${_local_url}" ]]; then
-      info "The browser opens on ${C_ACCENT}${_local_url}${C_RESET} as soon as the UI answers."
-      ( if wait_for_ui "${_local_url}"; then open_url "${_local_url}"; else warn "The web UI did not answer in time; open ${_local_url} yourself."; fi ) &
-      BROWSER_WAITER_PID="$!"
-    fi
-  fi
 fi
 info "Press ${C_BOLD}Ctrl+C${C_RESET} to stop, or run ${C_BOLD}./run.sh stop${C_RESET} from another shell."
 printf '\n'
 
-# Supervisor: keep both processes alive. A child failure stops the Studio, except
-# for the sentinel exit code, which is the model server asking for the explicit
-# accelerator reset the user requested. Nothing else touches the board runtime.
+# Supervisor: watch both processes; when either exits, the Studio stops.
 status=0
-# Consecutive relaunches that did not survive RELAUNCH_STABLE_SECONDS. A
-# relaunch that stays up clears it, so a user can reset the accelerator as often
-# as needed; only a tight reset/exit loop exhausts the budget.
-reset_tries=0
-reset_launched_at=0
 while true; do
-  if [[ "${reset_tries}" -gt 0 && $((SECONDS - reset_launched_at)) -ge "${RELAUNCH_STABLE_SECONDS}" ]] \
-      && child_running "${server_pid}"; then
-    reset_tries=0
-  fi
-  # A front end asked for a reset the server itself could not service (wedged
-  # native load): stop it from here, then follow the normal reset + relaunch.
-  if child_running "${server_pid}" && consume_reset_request; then
-    if [[ "${reset_tries}" -ge "${MLA_MAX_RESTART_RETRIES}" ]]; then
-      errln "Model server kept needing an accelerator reset; giving up."
-      break
-    fi
-    reset_tries=$((reset_tries + 1))
-    section "Accelerator"
-    warn "Model server is unresponsive; resetting the accelerator on request."
-    force_stop_server
-    reset_mla_dispatcher
-    section "Model Server"
-    launch_server
-    reset_launched_at="${SECONDS}"
-    sleep "${MODEL_SERVER_START_DELAY:-2}"
-    continue
-  fi
   if ! child_running "${server_pid}"; then
     set +e
     wait "${server_pid}"
     status=$?
     set -e
-    if [[ "${status}" -eq "${MLA_RESET_EXIT_CODE}" ]]; then
-      if [[ "${reset_tries}" -ge "${MLA_MAX_RESTART_RETRIES}" ]]; then
-        errln "Model server kept asking for an accelerator reset; giving up."
-        break
-      fi
-      reset_tries=$((reset_tries + 1))
-      section "Accelerator"
-      reset_mla_dispatcher
-      section "Model Server"
-      launch_server
-      reset_launched_at="${SECONDS}"
-      sleep "${MODEL_SERVER_START_DELAY:-2}"
-      continue
-    fi
     if [[ "${status}" -ne 0 ]]; then
       errln "Model server exited with status ${status}; shutting down."
     fi
     break
   fi
-  if ! child_running "${ui_pid}"; then
+  if ! child_running "${api_pid}"; then
     set +e
-    wait "${ui_pid}"
+    wait "${api_pid}"
     status=$?
     set -e
     break

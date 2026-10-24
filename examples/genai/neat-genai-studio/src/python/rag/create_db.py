@@ -8,6 +8,11 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_milvus import Milvus
 from langchain_text_splitters import MarkdownHeaderTextSplitter
 
+try:
+    from rag.event_loop import ensure_thread_event_loop
+except ImportError:                      # run as a script from this directory
+    from event_loop import ensure_thread_event_loop
+
 
 DEFAULT_COLLECTION = "demo_collection"
 
@@ -47,6 +52,7 @@ def create_markdown_vectordb(
         model_name=str(model_path),
         model_kwargs={"device": "cpu"},
     )
+    ensure_thread_event_loop()
     Milvus.from_documents(
         documents=documents,
         embedding=embedding,

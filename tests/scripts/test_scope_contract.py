@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -90,11 +91,12 @@ def _require_modern_bash() -> None:
 
 
 def _write_registry_scope_query(
-    path: Path, rows: list[tuple[str, str]], ref: str = "main"
+    path: Path, rows: list[tuple[str, str]], ref: str = "main", variant: str = ""
 ) -> Path:
     query = path / "fake_scope_python"
     output = "".join(
-        f"{model_id}\\tmodel-registry\\tdemo-models\\t\\t{file_name}\\t\\t\\t{ref}\\tlatest\\n"
+        f"{model_id}\\tmodel-registry\\tdemo-models\\t\\t{file_name}\\t\\t\\t{ref}\\tlatest"
+        f"\\t{variant}\\n"
         for model_id, file_name in rows
     )
     query.write_text(
@@ -116,6 +118,31 @@ def _write_registry_cli(path: Path, installed_files: list[str]) -> tuple[Path, P
         'printf \'%s\\n\' "$*" >> "$NEAT_APPS_TEST_SIMA_CLI_CALLS"\n'
         'install_dir="${!#:?missing install directory}"\n'
         'mkdir -p "$install_dir"\n'
+        f"{touch_commands}",
+        encoding="utf-8",
+    )
+    cli.chmod(0o755)
+    return cli, calls
+
+
+def _write_registry_variant_cli(path: Path, downloaded_files: list[str]) -> tuple[Path, Path]:
+    calls = path / "sima-cli-calls.txt"
+    cli = path / "sima-cli"
+    touch_commands = "".join(
+        f'touch "$output/$model_id/$variant/{file_name}"\n' for file_name in downloaded_files
+    )
+    cli.write_text(
+        "#!/usr/bin/env bash\n"
+        'printf \'%s\\n\' "$*" >> "$NEAT_APPS_TEST_SIMA_CLI_CALLS"\n'
+        "while [[ $# -gt 0 ]]; do\n"
+        '  case "$1" in\n'
+        '    --id) model_id="$2"; shift 2 ;;\n'
+        '    --variant) variant="$2"; shift 2 ;;\n'
+        '    --output) output="$2"; shift 2 ;;\n'
+        "    *) shift ;;\n"
+        "  esac\n"
+        "done\n"
+        'mkdir -p "$output/$model_id/$variant"\n'
         f"{touch_commands}",
         encoding="utf-8",
     )
@@ -327,6 +354,23 @@ def test_validate_scope_rejects_registry_destination_conflicts(tmp_path):
     ) in errors
 
 
+def test_validate_scope_requires_latest_spec_for_registry_variant(tmp_path):
+    example_key = _write_example(tmp_path)
+    _write_cpp_tests(tmp_path, example_key)
+    scope = _registry_scope(example_key)
+    model = scope["examples"][example_key]["models"]["demo-model"]
+    model["variant"] = "modalix_bf16"
+
+    assert validate_scope(scope, tmp_path) == []
+
+    model["spec"] = "0123abcd"
+
+    assert (
+        f"{example_key}: model-registry model demo-model with a variant downloads the "
+        "latest artifact; set spec: latest"
+    ) in validate_scope(scope, tmp_path)
+
+
 def test_validate_scope_allows_shared_destination_for_same_registry_resource(tmp_path):
     example_key = _write_example(tmp_path)
     _write_cpp_tests(tmp_path, example_key)
@@ -360,6 +404,7 @@ def test_models_command_exports_model_registry_ref_and_spec(monkeypatch, capsys)
         "",
         "main",
         "latest",
+        "",
     ]
 
 
@@ -561,6 +606,151 @@ def test_download_models_uses_staging_registry_for_non_main_ref(tmp_path):
         "models/demo-models@codex/model-branch:latest",
         "--install-dir",
     ]
+
+
+def test_download_models_fetches_one_registry_variant(tmp_path):
+    _require_modern_bash()
+    query = _write_registry_scope_query(
+        tmp_path,
+        [("demo", "demo_modalix_bf16_mpk.tar.gz")],
+        ref="feat/model-branch",
+        variant="modalix_bf16",
+    )
+    cli, calls = _write_registry_variant_cli(tmp_path, ["demo_modalix_bf16_mpk.tar.gz"])
+    models_dir = tmp_path / "models"
+
+    result = _run_registry_download(models_dir, query, cli, calls)
+
+    assert result.returncode == 0, result.stderr
+    command = calls.read_text(encoding="utf-8").split()
+    assert command[:10] == [
+        "models",
+        "download",
+        "--stg",
+        "--id",
+        "demo-models",
+        "--variant",
+        "modalix_bf16",
+        "--branch",
+        "feat/model-branch",
+        "--output",
+    ]
+    assert command[11:] == ["--json"]
+    assert (models_dir / "demo_modalix_bf16_mpk.tar.gz").is_file()
+    assert list(models_dir.glob("*.tmp.*")) == []
+
+    repeated = _run_registry_download(models_dir, query, cli, calls)
+
+    assert repeated.returncode == 0, repeated.stderr
+    assert "[skip] demo already exists" in repeated.stdout
+    assert len(calls.read_text(encoding="utf-8").splitlines()) == 1
+
+
+def test_download_models_unwraps_a_registry_model_package(tmp_path):
+    _require_modern_bash()
+    query = _write_registry_scope_query(
+        tmp_path,
+        [("demo", "demo_modalix_bf16_mpk.tar.gz")],
+        ref="feat/model-branch",
+        variant="modalix_bf16",
+    )
+    package = tmp_path / "demo_modalix_bf16_default.zip"
+    with zipfile.ZipFile(package, "w") as archive:
+        archive.writestr("demo-models/manifest.json", "{}")
+        archive.writestr("demo-models/components/model/demo_modalix_bf16_mpk.tar.gz", b"mpk")
+    cli, calls = _write_registry_variant_cli(tmp_path, [])
+    cli.write_text(
+        cli.read_text(encoding="utf-8")
+        + f'cp "{package}" "$output/$model_id/$variant/"\n',
+        encoding="utf-8",
+    )
+    models_dir = tmp_path / "models"
+
+    result = _run_registry_download(models_dir, query, cli, calls)
+
+    assert result.returncode == 0, result.stderr
+    assert (models_dir / "demo_modalix_bf16_mpk.tar.gz").read_bytes() == b"mpk"
+    assert list(models_dir.glob("*.tmp.*")) == []
+
+
+def test_download_models_rejects_a_corrupt_registry_model_package(tmp_path):
+    _require_modern_bash()
+    query = _write_registry_scope_query(
+        tmp_path,
+        [("demo", "demo_modalix_bf16_mpk.tar.gz")],
+        ref="feat/model-branch",
+        variant="modalix_bf16",
+    )
+    package = tmp_path / "demo_modalix_bf16_default.zip"
+    payload = b"unique model payload"
+    with zipfile.ZipFile(package, "w") as archive:
+        archive.writestr("demo-models/components/model/demo_modalix_bf16_mpk.tar.gz", payload)
+    damaged = bytearray(package.read_bytes())
+    payload_offset = damaged.index(payload)
+    damaged[payload_offset] ^= 0xFF
+    package.write_bytes(damaged)
+    cli, calls = _write_registry_variant_cli(tmp_path, [])
+    cli.write_text(
+        cli.read_text(encoding="utf-8")
+        + f'cp "{package}" "$output/$model_id/$variant/"\n',
+        encoding="utf-8",
+    )
+    models_dir = tmp_path / "models"
+
+    result = _run_registry_download(models_dir, query, cli, calls)
+
+    assert result.returncode != 0
+    assert "requested file demo_modalix_bf16_mpk.tar.gz was not downloaded" in result.stderr
+    assert not (models_dir / "demo_modalix_bf16_mpk.tar.gz").exists()
+    assert list(models_dir.glob("*.tmp.*")) == []
+
+
+@pytest.mark.parametrize("matching_members", [0, 2], ids=["missing", "ambiguous"])
+def test_download_models_rejects_an_invalid_registry_model_package_layout(
+    tmp_path, matching_members
+):
+    _require_modern_bash()
+    expected = "demo_modalix_bf16_mpk.tar.gz"
+    query = _write_registry_scope_query(
+        tmp_path,
+        [("demo", expected)],
+        ref="feat/model-branch",
+        variant="modalix_bf16",
+    )
+    package = tmp_path / "demo_modalix_bf16_default.zip"
+    with zipfile.ZipFile(package, "w") as archive:
+        archive.writestr("manifest.json", "{}")
+        for index in range(matching_members):
+            archive.writestr(f"component-{index}/{expected}", b"mpk")
+    cli, calls = _write_registry_variant_cli(tmp_path, [])
+    cli.write_text(
+        cli.read_text(encoding="utf-8")
+        + f'cp "{package}" "$output/$model_id/$variant/"\n',
+        encoding="utf-8",
+    )
+    models_dir = tmp_path / "models"
+
+    result = _run_registry_download(models_dir, query, cli, calls)
+
+    assert result.returncode != 0
+    assert f"expected one {expected}" in result.stderr
+    assert not (models_dir / expected).exists()
+    assert list(models_dir.glob("*.tmp.*")) == []
+
+
+def test_download_models_reports_missing_registry_variant_file(tmp_path):
+    _require_modern_bash()
+    query = _write_registry_scope_query(
+        tmp_path, [("demo", "demo.tar.gz")], variant="modalix_bf16"
+    )
+    cli, calls = _write_registry_variant_cli(tmp_path, ["other.tar.gz"])
+    models_dir = tmp_path / "models"
+
+    result = _run_registry_download(models_dir, query, cli, calls)
+
+    assert result.returncode != 0
+    assert "demo: requested file demo.tar.gz was not downloaded" in result.stderr
+    assert not (models_dir / "demo.tar.gz").exists()
 
 
 def test_download_models_skips_complete_registry_resource(tmp_path):

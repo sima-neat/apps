@@ -309,12 +309,6 @@ class AsrSwitchingTests(unittest.TestCase):
         self.assertNotEqual(alias, manager.resolved_model_path("whisper-medium-a16w8"))
         self.assertIsNone(manager.resolved_model_path("not-in-catalog"))
 
-    def test_reset_is_refused_when_disabled(self):
-        manager, _ = self.manager()
-        manager._mla_reset_enabled = False
-        with self.assertRaisesRegex(ValueError, "disabled"):
-            manager.reset_mla()
-
     def test_configured_alias_survives_a_normalized_served_name(self):
         # The runtime serves the configured alias under another name. The
         # configured alias must still be what a restart re-selects, and its
@@ -533,13 +527,11 @@ class MlaFailureClassificationTests(unittest.TestCase):
 
     Misclassifying one costs the user the remedy: the load is not rolled back
     and the error arrives as a raw runtime string instead of the message that
-    names Reset MLA.
+    names the remedy.
     """
 
-    def test_dispatcher_and_allocation_failures_are_recognised(self):
+    def test_load_and_allocation_failures_are_recognised(self):
         for detail in (
-            'Failed to bulk load model through MLASHM dispatcher: "...stage1_mla.elf" '
-            "(code=8 job_type=loadMany component=rpcmlashm name=MLA_LOAD_FAILED op_name=MLA_LOAD)",
             "Failed to allocate buffer (per_layer_embeddings_s1): Cannot allocate memory",
             "GenAIServer warmup failed for model 'x': Failed to open shm memory handle",
         ):

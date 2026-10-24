@@ -9,18 +9,23 @@ server:                      # Local OpenAI-compatible model server.
 
   models:                    # Models served by the local server.
     catalog_dir: <path-to-models-catalog-dir> # Directory scanned for loadable models.
-    # Only one chat/VLM model is resident at a time: loading a new one clears all
-    # other chat/VLM models. Speech-to-text has its own slot and is unaffected.
+    # Chat/VLM models kept loaded side by side. Past the limit a load is refused
+    # until the request names a loaded model to unload; with 1, loading a new
+    # model replaces the loaded one. How many fit depends on sizes.
+    # Speech-to-text has its own slot and is unaffected.
     max_resident_chat_models: 1
+    # Accelerator memory the loaded models share, in GiB (16 on a Modalix
+    # DevKit). A load that won't fit beside the loaded models is refused.
+    accelerator_memory_gib: 16
     chat:                    # Chat/VLM models loaded at startup (OPTIONAL).
       # Optional: use an empty list (chat: []) to start with no model resident and
-      # load any compatible catalog model on demand from the UI. When present, these
-      # are a subset of the catalog and the first is selected by default in the UI.
+      # load any compatible catalog model on demand (Insight's GenAI tab or the
+      # /models API). When present, these are a subset of the catalog.
       - name: <primary-chat-model-name>
         path: <path-to-primary-chat-model-dir>
     asr:                     # Speech-to-text model (OPTIONAL; omit to start without ASR).
       # Active at startup. Any other ASR model under catalog_dir can be made
-      # active at runtime from Settings -> Models; this is what a restart
+      # active at runtime (POST /models/asr); this is what a restart
       # re-selects, so change it here to make a different choice permanent.
       name: <asr-model-name>        # Model name shown to the app.
       path: <path-to-asr-model-dir> # Local model directory.
@@ -32,7 +37,7 @@ server:                      # Local OpenAI-compatible model server.
                              # (simaai official; TDoSiMa and florianvoss community).
                              # Non-simaai repos land on disk as "<org>@<name>".
 
-app:                         # Assistant web app settings.
+app:                         # Studio backend settings.
   openai:                    # OpenAI-compatible client endpoint.
     client_host: 127.0.0.1   # Host used by the app client.
     port: 9998               # Port used by the app client.
@@ -43,20 +48,12 @@ app:                         # Assistant web app settings.
 
   request:                   # Default generation settings.
     max_tokens: 512          # Max generated tokens per response.
-    system_prompt: >-
-      Answer clearly and concisely. Use Markdown formatting when it helps.
-      Answer the question in the language it was asked in.
 
-  web:                       # Browser UI settings.
+  web:                       # Backend API settings (Insight connects here).
     host: 0.0.0.0            # Host interface to bind.
-    port: 5000               # Web UI port.
-    https: true              # Serve the UI over HTTPS.
-    headless: false          # true: API endpoints only, no web UI (./run.sh --backend-only).
-    cors_origins: ""         # Backend-only CORS allowlist: "https://a:8443,http://b:3000" or "*"; env BACKEND_CORS_ORIGINS overrides.
-
-  ui:                        # Appearance defaults (users can override in the browser).
-    font_family: Inter       # Default UI font family.
-    font_size: 15            # Default UI font size in px.
+    port: 5000               # Backend API port.
+    https: true              # Serve the API over HTTPS.
+    cors_origins: ""         # CORS allowlist: "https://a:8443,http://b:3000" or "*"; env BACKEND_CORS_ORIGINS overrides.
 
   tts:                       # Server-side text-to-speech settings.
     supertonic:              # Supertonic 3, the MLA engine installed by setup.sh (optional).

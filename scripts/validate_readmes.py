@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 
 VALID_CATEGORIES = {
+    "anomaly-detection",
     "benchmarking",
     "classification",
     "object-detection",

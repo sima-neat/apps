@@ -9,6 +9,7 @@ add_library(SimaNeatApps::support_runtime ALIAS sima_neat_apps_support_runtime)
 target_link_libraries(sima_neat_apps_support_runtime
   PUBLIC
     SimaNeatApps::sima_neat
+    opencv_videoio
 )
 
 target_link_libraries(sima_neat_apps_support_runtime PUBLIC nlohmann_json::nlohmann_json)

@@ -75,6 +75,14 @@ that advertise several model variants list the ones worth exercising under
 model, named after it. Pull request runs leave the variable unset and stay at one
 model per suite.
 
+A `source: model-registry` model names the registry model (`name`), the Models
+repository branch (`ref`) and the catalog spec (`spec`), and is installed with
+`sima-cli neat install models/<name>@<ref>:<spec>`. Adding `variant` instead
+downloads only that build variant's latest artifact with `sima-cli models download
+--id <name> --variant <variant> --branch <ref>`; such a model must use
+`spec: latest`. Either way, `file` is the flat filename the E2E tests read from
+the models directory.
+
 The README `Model` row remains customer-facing metadata. Test selection and
 test model downloads are controlled by `examples/*/*/tests/test-scope.yaml`, so large
 or blocked examples can stay documented without blocking CI. If a test is
@@ -182,7 +190,7 @@ installed. NumPy and OpenCV are what the e2e output assertions and the harness
 self-tests decode saved frames with; this is the same set CI installs:
 
 ```bash
-${PYTHON_TEST_BIN:-python3} -m pip install pytest PyYAML "numpy<2" "opencv-python-headless<4.12"
+${PYTHON_TEST_BIN:-python3} -m pip install pytest PyYAML "opencv-python-headless<4.12"
 ```
 
 Without NumPy or OpenCV the harness self-tests under `tests/harness` skip with
@@ -252,6 +260,8 @@ python3 -m pytest \
 - `SIMANEAT_TEST_HTTP_MJPEG_URL` (single HTTP MJPEG stream URL)
 - `SIMANEAT_TEST_HTTP_MJPEG_URLS` (comma-separated HTTP MJPEG URLs)
 - `SIMANEAT_APPS_TEST_TIMEOUT_MS` (default: `180000`)
+- `SIMANEAT_APPS_HIGH_DENSITY_INITIAL_PROGRESS_TIMEOUT_MS` (high-density receiver warmup progress timeout, default: `90000`)
+- `SIMANEAT_APPS_HIGH_DENSITY_STREAM_PROGRESS_TIMEOUT_MS` (high-density receiver measurement progress timeout, default: `30000`)
 - `SIMANEAT_APPS_TEST_REQUIRE_E2E` (backward-compatible strict e2e env flag; prefer `--strict`)
 - `SIMANEAT_APPS_TEST_LABELS_FILE` (optional labels file override)
 - `SIMANEAT_APPS_TEST_INSIGHT_HOST` (default: `127.0.0.1`)
@@ -267,7 +277,7 @@ Streaming e2e tests require live reachable sources at test time:
 - `single-stream-object-detector` (C++/Python)
 - `single-stream-instance-segmenter` (C++/Python)
 - `multi-stream-object-detector` (C++/Python)
-- `multi-stream-people-tracker` (C++/Python)
+- `multi-stream-tracker` (C++/Python)
 
 Use [Insight](https://developer.sima.ai/software/tools/insight/) to install
 videos directly from its catalog or through YouTube support. Start the required
