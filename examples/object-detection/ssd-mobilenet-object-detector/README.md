@@ -47,7 +47,7 @@ Run the remaining commands from `prebuilt-apps/`.
 The tested model is SSD-MobileNetV2 INT8 with tessellation inside the MLA. Download it:
 
 ```bash
-export MODELZOO_VERSION="2.1.3"
+export MODELZOO_VERSION="3.0.0"
 mkdir -p models
 cd models
 sima-cli download \
