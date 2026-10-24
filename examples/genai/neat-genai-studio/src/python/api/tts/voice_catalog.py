@@ -13,6 +13,7 @@ import http.client
 import json
 import os
 import re
+import ssl
 import tempfile
 import time
 import urllib.error
@@ -33,8 +34,9 @@ _DOWNLOAD_ATTEMPTS = 4
 _RETRY_STATUSES = {429, 500, 502, 503, 504}
 _MAX_RETRY_WAIT_S = 30
 _sleep = time.sleep
+# ssl.SSLError: an HTTPS connection dropped mid-transfer (it is not a ConnectionError).
 _TRANSIENT_ERRORS = (
-    urllib.error.URLError, http.client.HTTPException, TimeoutError, ConnectionError,
+    urllib.error.URLError, http.client.HTTPException, TimeoutError, ConnectionError, ssl.SSLError,
 )
 
 

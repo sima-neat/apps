@@ -151,8 +151,9 @@ hf_download() {   # hf_download <hf executable> <arguments of `hf download`...>
     fi
     # Only unindented lines: hf prints a traceback whose indented source lines
     # (timeout=..., ConnectionError handlers) would match on any failure.
-    # LocalEntryNotFoundError is how hf reports a 429, a 5xx or no connection.
-    if (( attempt >= attempts )) || ! awk '/^[^ \t]/ && /(LocalEntryNotFoundError|429 Client Error|Too Many Requests|[0-9][0-9][0-9] Server Error|ConnectionError|ConnectTimeout|ReadTimeout|Connection reset|IncompleteRead|ChunkedEncodingError)/ { found = 1 } END { exit !found }' "${log}"; then
+    # LocalEntryNotFoundError is how hf reports a 429, a 5xx or no connection;
+    # SSLError, an HTTPS connection dropped mid-transfer.
+    if (( attempt >= attempts )) || ! awk '/^[^ \t]/ && /(LocalEntryNotFoundError|429 Client Error|Too Many Requests|[0-9][0-9][0-9] Server Error|ConnectionError|SSLError|ConnectTimeout|ReadTimeout|Connection reset|IncompleteRead|ChunkedEncodingError)/ { found = 1 } END { exit !found }' "${log}"; then
       rm -f "${log}"
       return 1
     fi

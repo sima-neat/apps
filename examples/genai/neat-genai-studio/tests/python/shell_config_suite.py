@@ -304,6 +304,11 @@ class HfDownloadRetryTests(unittest.TestCase):
         self.assertIn("RC=0", out.stdout)
         self.assertEqual((calls, sleeps), (3, [15, 30]))
 
+    def test_a_dropped_tls_connection_is_retried(self):
+        out, calls, sleeps = self._download(
+            ["requests.exceptions.SSLError: EOF occurred in violation of protocol (_ssl.c:2427)", "ok"])
+        self.assertEqual((out.stdout.split()[-1], calls, sleeps), ("RC=0", 2, [15]))
+
     def test_a_wrong_repo_fails_at_once(self):
         out, calls, sleeps = self._download(["Repository Not Found for url: https://huggingface.co/x"])
         self.assertIn("RC=1", out.stdout)

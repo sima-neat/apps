@@ -2,6 +2,7 @@ import hashlib
 import http.client
 import io
 import json
+import ssl
 import urllib.error
 from email.message import Message
 from pathlib import Path
@@ -139,6 +140,22 @@ def test_download_retries_a_rate_limit_and_honours_retry_after(monkeypatch, tmp_
     assert target.read_bytes() == body
     assert sleeps == [7]
     assert calls == [voice_catalog._DOWNLOAD_TIMEOUT_S] * 2
+
+
+def test_download_retries_a_tls_connection_dropped_mid_transfer(monkeypatch, tmp_path):
+    body = b"voice config"
+
+    class Dropped(io.BytesIO):
+        def read(self, *args):
+            raise ssl.SSLError("UNEXPECTED_EOF_WHILE_READING")
+
+    replies, sleeps = [Dropped(b""), io.BytesIO(body)], []
+    monkeypatch.setattr(voice_catalog.urllib.request, "urlopen", lambda url, timeout=None: replies.pop(0))
+    monkeypatch.setattr(voice_catalog, "_sleep", sleeps.append)
+    target = tmp_path / "config.json"
+    voice_catalog._download("https://hf.test/config.json", target, hashlib.sha256(body).hexdigest())
+    assert target.read_bytes() == body
+    assert sleeps == [2]
 
 
 def test_download_does_not_retry_a_missing_file(monkeypatch, tmp_path):

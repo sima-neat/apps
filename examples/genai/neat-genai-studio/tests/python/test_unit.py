@@ -122,6 +122,7 @@ from voice_catalog_suite import (  # noqa: E402,F401
     test_download_does_not_retry_a_missing_file,
     test_download_gives_up_after_the_last_attempt_and_says_how_to_resume,
     test_download_retries_a_rate_limit_and_honours_retry_after,
+    test_download_retries_a_tls_connection_dropped_mid_transfer,
     test_install_reports_a_failed_download_without_a_traceback,
     test_korean_has_no_server_install_plan,
     test_only_cc_by_nc_sa_voices_are_excluded,
