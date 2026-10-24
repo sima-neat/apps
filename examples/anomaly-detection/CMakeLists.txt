@@ -1,1 +1,8 @@
-add_subdirectory(fastflow-anomaly-detector/src/cpp fastflow-anomaly-detector)
+foreach(example IN ITEMS
+    fastflow-anomaly-detector
+    patchcore-anomaly-detector
+)
+  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${example}/src/cpp/CMakeLists.txt")
+    add_subdirectory(${example}/src/cpp ${example})
+  endif()
+endforeach()
