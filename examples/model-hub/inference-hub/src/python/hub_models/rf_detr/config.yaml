@@ -1,0 +1,10 @@
+labels: coco91.txt                  # File under src/common/labels.
+build: modalix_int8_bf16            # Model Registry build profile.
+components: [backbone, transformer] # Model Registry components this model loads.
+variants:                           # model.variant -> Model Registry model ID.
+  nano: rf_detr_nano
+  small: rf_detr_small
+  medium: rf_detr_medium
+  large: rf_detr_large
+min_score: 0.5                      # Minimum detection confidence.
+max_detections: 100                 # Maximum boxes per frame.
