@@ -154,6 +154,8 @@ class StreamRuntime:
     processed: int = 0
     # Segments or poses the metadata byte budget dropped.
     dropped_entries: int = 0
+    # Next frame ID for decoded frames that arrive without one; see source_frame_id().
+    next_frame_id: int = 0
     closed: bool = False
     # This stream's model, in a Run of its own. Four model graphs in one Run couple to each
     # other: one stream stalls for good while its neighbours keep running at the source rate.
@@ -1221,6 +1223,20 @@ def connect_source_stream(app: AppRuntime, cfg: AppConfig, stream: StreamRuntime
     app.source_graph.connect(decoder, frames)
 
 
+def source_frame_id(stream: StreamRuntime, sample) -> int:
+    """The decoded frame's frame ID, or the next per-stream number when it carries none.
+
+    Core carries a source frame ID only when the source assigns one, and decoded RTSP frames
+    arrive with the PTS but no frame ID. Numbering them per stream, as Core's ``StampFrameId``
+    does, keeps every metadata message identifiable.
+    """
+    if sample.frame_id >= 0:
+        return int(sample.frame_id)
+    frame_id = stream.next_frame_id
+    stream.next_frame_id += 1
+    return frame_id
+
+
 def send_metadata(cfg: AppConfig, stream: StreamRuntime, stamp, results: list[dict]) -> int:
     """Publish one message on this stream's Insight channel, typed by the stream's task."""
     dropped = 0
@@ -1405,7 +1421,9 @@ def run_stream_feeder(app: AppRuntime, cfg: AppConfig, stream: StreamRuntime) ->
             # returns, and a consumer that found the queue empty would have nothing to pair it
             # with.
             with stream.pending_lock:
-                stream.pending.append(((sample.pts_ns, sample.frame_id), debug_frame))
+                stream.pending.append(
+                    ((sample.pts_ns, source_frame_id(stream, sample)), debug_frame)
+                )
             stream.in_flight += 1
             if not stream.model_run.push(MODEL_INPUT, [frame]):
                 stream.in_flight -= 1

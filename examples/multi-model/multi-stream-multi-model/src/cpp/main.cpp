@@ -306,6 +306,8 @@ struct StreamRuntime {
   int processed = 0;
   // Segments or poses the metadata byte budget dropped.
   int dropped_entries = 0;
+  // Next frame ID for decoded frames that arrive without one; see source_frame_id().
+  int64_t next_frame_id = 0;
   std::atomic<bool> closed{false};
 
   /// This stream's model, in a Run of its own. Four model graphs in one Run couple to each
@@ -1488,6 +1490,18 @@ FrameResults decode_results(const AppConfig& cfg, const StreamRuntime& stream,
   return results;
 }
 
+/// The decoded frame's frame ID, or the next per-stream number when it carries none.
+///
+/// Core carries a source frame ID only when the source assigns one, and decoded RTSP frames
+/// arrive with the PTS but no frame ID. Numbering them per stream, as Core's `StampFrameId` does,
+/// keeps every metadata message identifiable. Only the stream's feeder thread calls this.
+int64_t source_frame_id(StreamRuntime& stream, const simaai::neat::Sample& sample) {
+  if (sample.frame_id >= 0) {
+    return sample.frame_id;
+  }
+  return stream.next_frame_id++;
+}
+
 /// Publish one message on this stream's Insight channel, typed by the stream's task. Returns how
 /// many segments or poses the byte budget dropped, which is always zero for detection.
 int send_metadata(const AppConfig& cfg, StreamRuntime& stream, const FrameStamp& stamp,
@@ -1639,9 +1653,10 @@ void run_stream_feeder(AppRuntime& app, const AppConfig& cfg, StreamRuntime& str
 
     // Recorded before the push: under Block the result can come back the instant push()
     // returns, and a consumer that found the queue empty would have nothing to pair it with.
+    const int64_t frame_id = source_frame_id(stream, frame_sample);
     {
       std::lock_guard<std::mutex> lock(stream.pending_mutex);
-      stream.pending.push_back(FrameStamp{frame_sample.pts_ns, frame_sample.frame_id, std::move(bgr)});
+      stream.pending.push_back(FrameStamp{frame_sample.pts_ns, frame_id, std::move(bgr)});
     }
     stream.in_flight.fetch_add(1);
     if (!stream.model_run.push(kModelInput, simaai::neat::TensorList{frame})) {

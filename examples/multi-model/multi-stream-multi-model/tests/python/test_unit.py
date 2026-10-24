@@ -400,6 +400,18 @@ def make_stream(task: str, sender: FakeMetadataSender):
     )
 
 
+def test_source_frame_id_numbers_frames_the_decoder_left_unnumbered():
+    """Decoded RTSP frames can arrive with a PTS but no frame ID; metadata still needs one."""
+    import main
+
+    stream = make_stream("detection", FakeMetadataSender())
+    unnumbered = SimpleNamespace(frame_id=-1, pts_ns=1_000)
+
+    assert main.source_frame_id(stream, FakeSample()) == 42
+    assert [main.source_frame_id(stream, unnumbered) for _ in range(3)] == [0, 1, 2]
+    assert main.source_frame_id(stream, FakeSample()) == 42
+
+
 class TestMetadata:
     """Every task publishes on its own Insight contract, from one shared send path."""
 
