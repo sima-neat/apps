@@ -1,0 +1,24 @@
+<svg width="640" height="360" viewBox="0 0 640 360" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="640" height="360" fill="url(#bg)"/>
+  <rect x="120" y="248" width="400" height="28" rx="4" stroke="#EEF5FF" stroke-width="2"/>
+  <rect x="132" y="150" width="80" height="80" rx="4" stroke="#EEF5FF" stroke-width="2"/>
+  <rect x="228" y="150" width="80" height="80" rx="4" stroke="#EEF5FF" stroke-width="2" stroke-opacity="0.9"/>
+  <rect x="332" y="150" width="80" height="80" rx="4" stroke="#EEF5FF" stroke-width="2" stroke-opacity="0.8"/>
+  <rect x="428" y="150" width="80" height="80" rx="4" stroke="#EEF5FF" stroke-width="2" stroke-opacity="0.7"/>
+  <path d="M152 170V210M172 170V210M192 170V210" stroke="#EEF5FF" stroke-width="2" stroke-linecap="round"/>
+  <path d="M248 170V210M268 170V210M288 170V210" stroke="#EEF5FF" stroke-width="2" stroke-linecap="round" stroke-opacity="0.9"/>
+  <path d="M352 170V210M372 170V210M392 170V210" stroke="#EEF5FF" stroke-width="2" stroke-linecap="round" stroke-opacity="0.8"/>
+  <path d="M448 170V210M468 170V210M488 170V210" stroke="#EEF5FF" stroke-width="2" stroke-linecap="round" stroke-opacity="0.7"/>
+  <path d="M172 230V248M268 230V248M372 230V248M468 230V248" stroke="#EEF5FF" stroke-width="2" stroke-opacity="0.5"/>
+  <path d="M172 150V110M268 150V96M372 150V96M468 150V110" stroke="#EEF5FF" stroke-width="2" stroke-linecap="round" stroke-opacity="0.4"/>
+  <circle cx="172" cy="104" r="6" fill="#EEF5FF"/>
+  <circle cx="268" cy="90" r="6" fill="#EEF5FF" fill-opacity="0.9"/>
+  <circle cx="372" cy="90" r="6" fill="#EEF5FF" fill-opacity="0.8"/>
+  <circle cx="468" cy="104" r="6" fill="#EEF5FF" fill-opacity="0.7"/>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="640" y2="360" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0F2A55"/>
+      <stop offset="1" stop-color="#2F8FE6"/>
+    </linearGradient>
+  </defs>
+</svg>

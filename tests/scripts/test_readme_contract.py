@@ -24,8 +24,10 @@ def write_readme(
     ),
     preview: str = "![Sample preview](../../../portal/assets/examples/classification/sample/image.png)",
     status: str = "stable",
+    category: str = "classification",
+    install_section: str = "Install Apps",
 ) -> Path:
-    readme = tmp_path / "examples" / "classification" / "sample" / "README.md"
+    readme = tmp_path / "examples" / category / "sample" / "README.md"
     readme.parent.mkdir(parents=True)
     configure_section = (
         f"## Configure\n{configure}\n\n" if configure is not None else ""
@@ -36,7 +38,7 @@ def write_readme(
 ## Metadata
 | Field | Value |
 | --- | --- |
-| Category | classification |
+| Category | {category} |
 | Difficulty | Beginner |
 | Tags | sample |
 | Languages | C++, Python |
@@ -53,7 +55,7 @@ def write_readme(
 ## Prerequisites
 - A supported target.
 
-## Install Apps
+## {install_section}
 {install}
 
 ## Prepare the Model
@@ -75,7 +77,7 @@ See [CONTRIBUTING.md](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.m
         / "portal"
         / "assets"
         / "examples"
-        / "classification"
+        / category
         / "sample"
         / "image.png"
     )
@@ -304,3 +306,72 @@ runtime:
     )
 
     assert validate_readme(readme) == []
+
+
+
+VALID_DOCKER_BUILD = """Build Apps in the Neat SDK shell.
+
+```bash
+./build.sh
+APP_DIR=examples/docker/sample
+```"""
+
+VALID_DOCKER_RUN = """```bash
+${APP_DIR}/src/common/parallel-apps.sh build
+${APP_DIR}/src/common/parallel-apps.sh deploy
+```"""
+
+
+def write_docker_readme(
+    tmp_path: Path,
+    *,
+    build: str = VALID_DOCKER_BUILD,
+    run: str = VALID_DOCKER_RUN,
+    install_section: str = "Build Apps",
+) -> Path:
+    return write_readme(
+        tmp_path,
+        category="docker",
+        install_section=install_section,
+        install=build,
+        run=run,
+        preview="![Sample preview](../../../portal/assets/examples/docker/sample/image.png)",
+    )
+
+
+def test_docker_readme_contract_accepts_source_build(tmp_path: Path) -> None:
+    assert validate_readme(write_docker_readme(tmp_path)) == []
+
+
+def test_docker_readme_contract_requires_build_apps_section(tmp_path: Path) -> None:
+    readme = write_docker_readme(tmp_path, install_section="Install Apps")
+
+    assert "Missing required section: ## Build Apps" in validate_readme(readme)
+
+
+def test_docker_readme_contract_requires_source_build(tmp_path: Path) -> None:
+    readme = write_docker_readme(tmp_path, build=VALID_INSTALL)
+
+    assert validate_readme(readme) == [
+        "Build Apps must build Apps with './build.sh'",
+        "Build Apps must define 'APP_DIR=examples/docker/sample'",
+    ]
+
+
+def test_docker_readme_contract_requires_run_script(tmp_path: Path) -> None:
+    readme = write_docker_readme(tmp_path, run=VALID_RUN)
+
+    assert validate_readme(readme) == [
+        "Run must use '${APP_DIR}/src/common/parallel-apps.sh'"
+    ]
+
+
+def test_build_apps_section_is_not_accepted_outside_docker(tmp_path: Path) -> None:
+    readme = write_readme(
+        tmp_path,
+        install_section="Build Apps",
+        install=VALID_DOCKER_BUILD,
+        run=VALID_RUN,
+    )
+
+    assert "Missing required section: ## Install Apps" in validate_readme(readme)
