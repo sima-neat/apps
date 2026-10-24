@@ -1,7 +1,7 @@
 {
   "neat-core": {
     "branch": "develop",
-    "spec": "500943a8e8b2"
+    "spec": "latest"
   },
   "sdk": {
     "channel": "develop"
