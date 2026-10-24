@@ -1,7 +1,7 @@
 {
   "neat-core": {
-    "branch": "codex/apps-regressions-20261023",
-    "spec": "6f9092394cd5"
+    "branch": "develop",
+    "spec": "500943a8e8b2"
   },
   "sdk": {
     "channel": "develop"
