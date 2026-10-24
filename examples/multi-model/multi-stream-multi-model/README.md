@@ -163,8 +163,10 @@ up: the gap above is a host-throughput limit, not a difference in what the two p
 
 ## Troubleshooting
 
-- Boxes lag or lead the objects they describe: the metadata carries no timestamp, so Insight
-  cannot correlate it to a frame. Check `matched_video_first` in
+- Boxes lag or lead the objects they describe: Insight is not matching metadata to video frames.
+  Each message carries its source frame's timestamp and frame ID; when the decoded camera frame
+  has no PTS, the message is sent with timestamp `-1` and an empty frame ID and cannot be matched.
+  Check `matched_video_first` in
   `curl -k https://<insight-host>:9900/api/ingest/stats` — it should track `messages_received`
   one-for-one. It also reads zero when two copies of the application publish to the same channel,
   so confirm only one is running.
