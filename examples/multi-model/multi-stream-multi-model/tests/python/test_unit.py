@@ -576,6 +576,32 @@ def test_pose_budget_drops_lowest_confidence_first():
     assert lowest_kept == pytest.approx(0.3 + 0.005 * dropped, abs=1e-3)
 
 
+def test_detection_budget_drops_lowest_confidence_first():
+    """A crowd of 1,000 person boxes overruns one message."""
+    import main
+
+    boxes = [
+        {
+            "x1": 100.0 + index % 900,
+            "y1": 200.0,
+            "x2": 180.0 + index % 900,
+            "y2": 400.0,
+            "score": 0.2 + 0.0005 * index,
+            "class_id": 0,
+        }
+        for index in range(1000)
+    ]
+
+    data, dropped = main.detection_metadata_data(boxes, ["person"], 1920, 1080)
+    payload = json.dumps(data, separators=(",", ":"))
+
+    assert len(payload) <= main.METADATA_BYTE_BUDGET
+    assert dropped > 0
+    assert len(data["objects"]) + dropped == len(boxes)
+    lowest_kept = min(obj["confidence"] for obj in data["objects"])
+    assert lowest_kept == pytest.approx(0.2 + 0.0005 * dropped, abs=1e-3)
+
+
 def _config():
     """Config with defaults only, for the metadata paths that read thresholds off it."""
     import main

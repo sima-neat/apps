@@ -188,7 +188,7 @@ struct MetadataSegment {
   std::vector<cv::Point> polygon;
 };
 
-/// A metadata `data` object and how many segments or poses its byte budget dropped.
+/// A metadata `data` object and how many boxes, segments or poses its byte budget dropped.
 struct EncodedMetadata {
   std::string data_json;
   int dropped = 0;
@@ -304,7 +304,7 @@ struct StreamRuntime {
   int output_fps = 0;
   int video_port = 0;
   int processed = 0;
-  // Segments or poses the metadata byte budget dropped.
+  // Boxes, segments or poses the metadata byte budget dropped.
   int dropped_entries = 0;
   // Next frame ID for decoded frames that arrive without one; see source_frame_id().
   int64_t next_frame_id = 0;
@@ -1032,6 +1032,34 @@ std::vector<sima_examples::MetadataBox> build_metadata_boxes(const std::vector<o
   return metadata_boxes;
 }
 
+/// `data` object of an `object-detection` metadata message. A raised `inference.max_detections`
+/// can overrun one message, so boxes beyond the byte budget are dropped lowest-confidence first
+/// and counted, as segmentation and pose do. Each box is measured with the shared serializer.
+EncodedMetadata encode_boxes(std::vector<sima_examples::MetadataBox> boxes) {
+  // Stable, so boxes tying on confidence are dropped in the same order the Python
+  // implementation drops them.
+  std::stable_sort(boxes.begin(), boxes.end(), [](const auto& a, const auto& b) {
+    return a.confidence > b.confidence;
+  });
+
+  const std::size_t empty_bytes = sima_examples::metadata_boxes_data_json("objects", {}).size();
+  std::size_t bytes = empty_bytes;
+  std::size_t kept = 0;
+  for (const auto& box : boxes) {
+    const std::size_t entry_bytes =
+        sima_examples::metadata_boxes_data_json("objects", {box}).size() - empty_bytes + 1;
+    if (bytes + entry_bytes > kMetadataByteBudget) {
+      break;
+    }
+    bytes += entry_bytes;
+    ++kept;
+  }
+
+  const int dropped = static_cast<int>(boxes.size() - kept);
+  boxes.resize(kept);
+  return {sima_examples::metadata_boxes_data_json("objects", boxes), dropped};
+}
+
 void draw_boxes(cv::Mat& frame, const std::vector<objdet::Box>& boxes,
                 const std::vector<std::string>& labels, double min_score) {
   for (const auto& box : boxes) {
@@ -1503,7 +1531,7 @@ int64_t source_frame_id(StreamRuntime& stream, const simaai::neat::Sample& sampl
 }
 
 /// Publish one message on this stream's Insight channel, typed by the stream's task. Returns how
-/// many segments or poses the byte budget dropped, which is always zero for detection.
+/// many boxes, segments or poses the byte budget dropped.
 int send_metadata(const AppConfig& cfg, StreamRuntime& stream, const FrameStamp& stamp,
                   const FrameResults& results) {
   std::string data_json;
@@ -1524,11 +1552,13 @@ int send_metadata(const AppConfig& cfg, StreamRuntime& stream, const FrameStamp&
     break;
   }
   case Task::Detection:
-  default:
-    data_json = sima_examples::metadata_boxes_data_json(
-        "objects",
+  default: {
+    auto encoded = encode_boxes(
         build_metadata_boxes(results.boxes, stream.labels, stream.frame_w, stream.frame_h));
+    data_json = std::move(encoded.data_json);
+    dropped = encoded.dropped;
     break;
+  }
   }
 
   const int64_t timestamp_ms = stamp.pts_ns >= 0 ? stamp.pts_ns / 1'000'000 : -1;
@@ -1781,6 +1811,8 @@ void run_app(const AppConfig& cfg) {
       std::cout << " dropped_segments=" << stream->dropped_entries;
     } else if (stream->task == Task::Pose) {
       std::cout << " dropped_poses=" << stream->dropped_entries;
+    } else {
+      std::cout << " dropped_objects=" << stream->dropped_entries;
     }
     std::cout << "\n";
   }

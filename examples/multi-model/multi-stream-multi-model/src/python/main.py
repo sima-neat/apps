@@ -152,7 +152,7 @@ class StreamRuntime:
     output_fps: int
     video_port: int
     processed: int = 0
-    # Segments or poses the metadata byte budget dropped.
+    # Boxes, segments or poses the metadata byte budget dropped.
     dropped_entries: int = 0
     # Next frame ID for decoded frames that arrive without one; see source_frame_id().
     next_frame_id: int = 0
@@ -753,8 +753,12 @@ def mask_polygon(
 
 def detection_metadata_data(
     boxes: list[dict], labels: list[str], frame_w: int, frame_h: int
-) -> dict:
-    """Build the ``data`` object Insight's ``object-detection`` overlay consumes."""
+) -> tuple[dict, int]:
+    """``data`` object of an ``object-detection`` message, and how many boxes the budget dropped.
+
+    A raised ``inference.max_detections`` can overrun one message, so boxes beyond the byte
+    budget are dropped lowest-confidence first, as segmentation and pose do.
+    """
     objects = []
     for index, box in enumerate(boxes, start=1):
         x = max(0, int(box["x1"]))
@@ -773,7 +777,17 @@ def detection_metadata_data(
                 "bbox": [float(x), float(y), float(max(0, w)), float(max(0, h))],
             }
         )
-    return {"objects": objects}
+
+    ordered = sorted(objects, key=lambda obj: obj["confidence"], reverse=True)
+    kept = []
+    total = len('{"objects":[]}')
+    for obj in ordered:
+        entry_bytes = len(json.dumps(obj, separators=(",", ":"))) + 1
+        if total + entry_bytes > METADATA_BYTE_BUDGET:
+            break
+        total += entry_bytes
+        kept.append(obj)
+    return {"objects": kept}, len(ordered) - len(kept)
 
 
 def segmentation_metadata_data(
@@ -1241,7 +1255,9 @@ def send_metadata(cfg: AppConfig, stream: StreamRuntime, stamp, results: list[di
     """Publish one message on this stream's Insight channel, typed by the stream's task."""
     dropped = 0
     if stream.task == TASK_DETECTION:
-        data = detection_metadata_data(results, stream.labels, stream.frame_w, stream.frame_h)
+        data, dropped = detection_metadata_data(
+            results, stream.labels, stream.frame_w, stream.frame_h
+        )
     elif stream.task == TASK_SEGMENTATION:
         data, dropped = segmentation_metadata_data(
             results, stream.labels, (stream.frame_h, stream.frame_w), cfg.mask_threshold
@@ -1526,11 +1542,12 @@ def run_app(cfg: AppConfig) -> None:
             app.source_run.close()
         for stream in app.streams:
             stream.profile.flush()
-            dropped = ""
             if stream.task == TASK_SEGMENTATION:
                 dropped = f" dropped_segments={stream.dropped_entries}"
             elif stream.task == TASK_POSE:
                 dropped = f" dropped_poses={stream.dropped_entries}"
+            else:
+                dropped = f" dropped_objects={stream.dropped_entries}"
             print(
                 f"[stream {stream.index}] task={stream.task} "
                 f"processed={stream.processed}{dropped}"
