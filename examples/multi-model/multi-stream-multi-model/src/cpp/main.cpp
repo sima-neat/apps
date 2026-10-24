@@ -102,6 +102,12 @@ const char* metadata_type(Task task) {
 /// datagram count low enough for Insight to reassemble within its 250 ms window.
 constexpr std::size_t kMetadataByteBudget = 32768;
 
+/// Three-decimal confidence, rounded in double: a float result serializes as its widened value
+/// (0.987f -> 0.9869999885559082), which costs bytes against the budget above.
+double round_confidence(float value) {
+  return std::round(static_cast<double>(value) * 1000.0) / 1000.0;
+}
+
 /// BoxDecode emits segmentation masks on a 160x160 grid covering the model's 640x640 letterboxed
 /// input, so one mask cell spans four input pixels.
 constexpr int kMaskStride = 4;
@@ -182,7 +188,8 @@ struct MetadataSegment {
   std::vector<cv::Point> polygon;
 };
 
-struct EncodedSegments {
+/// A metadata `data` object and how many segments or poses its byte budget dropped.
+struct EncodedMetadata {
   std::string data_json;
   int dropped = 0;
 };
@@ -297,7 +304,8 @@ struct StreamRuntime {
   int output_fps = 0;
   int video_port = 0;
   int processed = 0;
-  int dropped_segments = 0;
+  // Segments or poses the metadata byte budget dropped.
+  int dropped_entries = 0;
   std::atomic<bool> closed{false};
 
   /// This stream's model, in a Run of its own. Four model graphs in one Run couple to each
@@ -908,7 +916,7 @@ build_metadata_segments(const std::vector<SegmentationDetection>& detections,
 
 /// `data` object of a `segmentation` metadata message. Segments that do not fit the byte budget
 /// are dropped lowest-confidence first and counted.
-EncodedSegments encode_segments(std::vector<MetadataSegment> segments) {
+EncodedMetadata encode_segments(std::vector<MetadataSegment> segments) {
   // Stable, so segments tying on confidence are dropped in the same order the Python
   // implementation drops them.
   std::stable_sort(segments.begin(), segments.end(),
@@ -926,7 +934,7 @@ EncodedSegments encode_segments(std::vector<MetadataSegment> segments) {
     nlohmann::json entry = {
         {"id", segment.id},
         {"label", segment.label},
-        {"confidence", std::round(segment.confidence * 1000.0f) / 1000.0f},
+        {"confidence", round_confidence(segment.confidence)},
         {"bbox", {segment.bbox.x, segment.bbox.y, segment.bbox.width, segment.bbox.height}},
         {"mask_format", "polygon"},
         {"mask", std::move(points)},
@@ -943,13 +951,13 @@ EncodedSegments encode_segments(std::vector<MetadataSegment> segments) {
   return {nlohmann::json{{"segments", std::move(entries)}}.dump(), dropped};
 }
 
-/// Serialize poses into the `data` object Insight's `pose-estimation` overlay consumes.
+/// `data` object of a `pose-estimation` metadata message.
 ///
-/// Pixel rounding and three-decimal confidence preserve overlay precision while keeping the
-/// configured pose maximum within Core's logical metadata-message limit.
-std::string pose_metadata_data_json(const std::vector<Pose>& poses) {
-  nlohmann::json data;
-  data["poses"] = nlohmann::json::array();
+/// Pixel rounding and three-decimal confidence preserve overlay precision. A raised
+/// `inference.max_detections` can still overrun one message, so poses beyond the byte budget are
+/// dropped lowest-confidence first and counted, as segmentation does.
+EncodedMetadata encode_poses(const std::vector<Pose>& poses) {
+  nlohmann::json published = nlohmann::json::array();
   int pose_index = 1;
   for (const auto& pose : poses) {
     nlohmann::json keypoints = nlohmann::json::array();
@@ -958,18 +966,39 @@ std::string pose_metadata_data_json(const std::vector<Pose>& poses) {
       keypoints.push_back({{"name", kCocoKeypointNames[k]},
                            {"x", std::lround(point.x)},
                            {"y", std::lround(point.y)},
-                           {"confidence", std::round(point.visibility * 1000.0f) / 1000.0f}});
+                           {"confidence", round_confidence(point.visibility)}});
     }
-    data["poses"].push_back({{"id", "pose_" + std::to_string(pose_index++)},
-                             {"label", "person"},
-                             {"confidence", std::round(pose.score * 1000.0f) / 1000.0f},
-                             {"bbox",
-                              {std::lround(pose.x1), std::lround(pose.y1),
-                               std::lround(std::max(0.0f, pose.x2 - pose.x1)),
-                               std::lround(std::max(0.0f, pose.y2 - pose.y1))}},
-                             {"keypoints", std::move(keypoints)}});
+    published.push_back({{"id", "pose_" + std::to_string(pose_index++)},
+                         {"label", "person"},
+                         {"confidence", round_confidence(pose.score)},
+                         {"bbox",
+                          {std::lround(pose.x1), std::lround(pose.y1),
+                           std::lround(std::max(0.0f, pose.x2 - pose.x1)),
+                           std::lround(std::max(0.0f, pose.y2 - pose.y1))}},
+                         {"keypoints", std::move(keypoints)}});
   }
-  return data.dump();
+
+  // Stable, so poses tying on confidence are dropped in the same order the Python
+  // implementation drops them.
+  std::vector<nlohmann::json> ordered(published.begin(), published.end());
+  std::stable_sort(ordered.begin(), ordered.end(),
+                   [](const nlohmann::json& a, const nlohmann::json& b) {
+                     return a["confidence"].get<double>() > b["confidence"].get<double>();
+                   });
+
+  nlohmann::json entries = nlohmann::json::array();
+  std::size_t bytes = sizeof(R"({"poses":[]})") - 1;
+  for (auto& pose : ordered) {
+    const std::size_t entry_bytes = pose.dump().size() + 1;
+    if (bytes + entry_bytes > kMetadataByteBudget) {
+      break;
+    }
+    bytes += entry_bytes;
+    entries.push_back(std::move(pose));
+  }
+
+  const int dropped = static_cast<int>(ordered.size() - entries.size());
+  return {nlohmann::json{{"poses", std::move(entries)}}.dump(), dropped};
 }
 
 std::vector<sima_examples::MetadataBox> build_metadata_boxes(const std::vector<objdet::Box>& boxes,
@@ -1460,7 +1489,7 @@ FrameResults decode_results(const AppConfig& cfg, const StreamRuntime& stream,
 }
 
 /// Publish one message on this stream's Insight channel, typed by the stream's task. Returns how
-/// many segments the byte budget dropped, which is always zero outside segmentation.
+/// many segments or poses the byte budget dropped, which is always zero for detection.
 int send_metadata(const AppConfig& cfg, StreamRuntime& stream, const FrameStamp& stamp,
                   const FrameResults& results) {
   std::string data_json;
@@ -1474,9 +1503,12 @@ int send_metadata(const AppConfig& cfg, StreamRuntime& stream, const FrameStamp&
     dropped = encoded.dropped;
     break;
   }
-  case Task::Pose:
-    data_json = pose_metadata_data_json(results.poses);
+  case Task::Pose: {
+    auto encoded = encode_poses(results.poses);
+    data_json = std::move(encoded.data_json);
+    dropped = encoded.dropped;
     break;
+  }
   case Task::Detection:
   default:
     data_json = sima_examples::metadata_boxes_data_json(
@@ -1539,7 +1571,7 @@ void process_output_sample(const AppConfig& cfg, StreamRuntime& stream,
   }
 
   const double metadata_start = sima_examples::time_ms();
-  stream.dropped_segments += send_metadata(cfg, stream, stamp, results);
+  stream.dropped_entries += send_metadata(cfg, stream, stamp, results);
   const double metadata_end = sima_examples::time_ms();
   maybe_save_debug_frame(cfg, stream, results, stamp.debug_frame);
   stream.profile.add(result_pull_ms, metadata_end - metadata_start,
@@ -1731,7 +1763,9 @@ void run_app(const AppConfig& cfg) {
     std::cout << "[stream " << stream->index << "] task=" << task_name(stream->task)
               << " processed=" << stream->processed;
     if (stream->task == Task::Segmentation) {
-      std::cout << " dropped_segments=" << stream->dropped_segments;
+      std::cout << " dropped_segments=" << stream->dropped_entries;
+    } else if (stream->task == Task::Pose) {
+      std::cout << " dropped_poses=" << stream->dropped_entries;
     }
     std::cout << "\n";
   }

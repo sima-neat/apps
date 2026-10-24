@@ -152,7 +152,8 @@ class StreamRuntime:
     output_fps: int
     video_port: int
     processed: int = 0
-    dropped_segments: int = 0
+    # Segments or poses the metadata byte budget dropped.
+    dropped_entries: int = 0
     closed: bool = False
     # This stream's model, in a Run of its own. Four model graphs in one Run couple to each
     # other: one stream stalls for good while its neighbours keep running at the source rate.
@@ -817,11 +818,12 @@ def segmentation_metadata_data(
     return {"segments": kept}, len(ordered) - len(kept)
 
 
-def pose_metadata_data(poses: list[dict]) -> dict:
-    """Build the ``data`` object Insight's ``pose-estimation`` overlay consumes.
+def pose_metadata_data(poses: list[dict]) -> tuple[dict, int]:
+    """``data`` object of a ``pose-estimation`` message, and how many poses the budget dropped.
 
-    Pixel rounding and three-decimal confidence preserve overlay precision while keeping the
-    configured pose maximum within Core's logical metadata-message limit.
+    Pixel rounding and three-decimal confidence preserve overlay precision. A raised
+    ``inference.max_detections`` can still overrun one message, so poses beyond the byte budget
+    are dropped lowest-confidence first, as segmentation does.
     """
     published = []
     for index, pose in enumerate(poses, start=1):
@@ -848,7 +850,17 @@ def pose_metadata_data(poses: list[dict]) -> dict:
                 "keypoints": keypoints,
             }
         )
-    return {"poses": published}
+
+    ordered = sorted(published, key=lambda pose: pose["confidence"], reverse=True)
+    kept = []
+    total = len('{"poses":[]}')
+    for pose in ordered:
+        entry_bytes = len(json.dumps(pose, separators=(",", ":"))) + 1
+        if total + entry_bytes > METADATA_BYTE_BUDGET:
+            break
+        total += entry_bytes
+        kept.append(pose)
+    return {"poses": kept}, len(ordered) - len(kept)
 
 
 def rtsp_codec(codec: str):
@@ -1219,7 +1231,7 @@ def send_metadata(cfg: AppConfig, stream: StreamRuntime, stamp, results: list[di
             results, stream.labels, (stream.frame_h, stream.frame_w), cfg.mask_threshold
         )
     else:
-        data = pose_metadata_data(results)
+        data, dropped = pose_metadata_data(results)
 
     pts_ns, source_frame_id = stamp
     timestamp_ms = int(pts_ns // 1_000_000) if pts_ns >= 0 else -1
@@ -1348,7 +1360,7 @@ def process_output_sample(
         return
 
     metadata_start = time_ms()
-    stream.dropped_segments += send_metadata(cfg, stream, stamp, results)
+    stream.dropped_entries += send_metadata(cfg, stream, stamp, results)
     metadata_end = time_ms()
     maybe_save_debug_frame(cfg, stream, results, debug_frame)
     stream.profile.add(result_pull_ms, metadata_end - metadata_start, len(results))
@@ -1496,11 +1508,11 @@ def run_app(cfg: AppConfig) -> None:
             app.source_run.close()
         for stream in app.streams:
             stream.profile.flush()
-            dropped = (
-                f" dropped_segments={stream.dropped_segments}"
-                if stream.task == TASK_SEGMENTATION
-                else ""
-            )
+            dropped = ""
+            if stream.task == TASK_SEGMENTATION:
+                dropped = f" dropped_segments={stream.dropped_entries}"
+            elif stream.task == TASK_POSE:
+                dropped = f" dropped_poses={stream.dropped_entries}"
             print(
                 f"[stream {stream.index}] task={stream.task} "
                 f"processed={stream.processed}{dropped}"

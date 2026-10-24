@@ -174,8 +174,9 @@ up: the gap above is a host-throughput limit, not a difference in what the two p
   the package's head layout. Check it against the table above.
 - One stream is silent while the others work: confirm its `model` path is readable and that its
   Insight metadata port is not taken by another application.
-- Segmentation reports `dropped_segments` at exit: a frame's polygons did not fit one metadata
-  message. Lower `inference.max_detections` or raise `inference.min_score`.
+- Segmentation reports `dropped_segments`, or pose reports `dropped_poses`, at exit: a frame's
+  results did not fit one metadata message, so the lowest-confidence ones were left out. Lower
+  `inference.max_detections` or raise `inference.min_score`.
 - Throughput is roughly halved and one stream is far behind: check that each model was given its
   own `Run`. Sharing one `Run` across the four model graphs is what makes a single stream stall.
 - One stream falls far behind the others while the rest hold the source rate: the MLA is

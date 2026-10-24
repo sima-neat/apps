@@ -535,6 +535,35 @@ class TestSegmentationBudget:
         assert lowest_kept == pytest.approx(0.5 + 0.005 * dropped, abs=1e-3)
 
 
+def test_pose_budget_drops_lowest_confidence_first():
+    """A crowd of 100 poses with three-digit coordinates overruns one message."""
+    import main
+
+    poses = [
+        {
+            "x1": 100.0 + index,
+            "y1": 200.0,
+            "x2": 400.0 + index,
+            "y2": 900.0,
+            "score": 0.3 + 0.005 * index,
+            "keypoints": [
+                {"x": 123.4 + k, "y": 567.8 + k, "visibility": 0.987}
+                for k in range(len(main.COCO_KEYPOINT_NAMES))
+            ],
+        }
+        for index in range(100)
+    ]
+
+    data, dropped = main.pose_metadata_data(poses)
+    payload = json.dumps(data, separators=(",", ":"))
+
+    assert len(payload) <= main.METADATA_BYTE_BUDGET
+    assert dropped > 0
+    assert len(data["poses"]) + dropped == len(poses)
+    lowest_kept = min(pose["confidence"] for pose in data["poses"])
+    assert lowest_kept == pytest.approx(0.3 + 0.005 * dropped, abs=1e-3)
+
+
 def _config():
     """Config with defaults only, for the metadata paths that read thresholds off it."""
     import main
