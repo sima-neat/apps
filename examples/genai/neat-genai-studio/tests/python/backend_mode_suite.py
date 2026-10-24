@@ -83,6 +83,9 @@ class CorsPolicyTests(unittest.TestCase):
         self.assertEqual(h["Vary"], "Origin")
         self.assertEqual(h["Access-Control-Allow-Headers"], "content-type, x-custom")
         self.assertIn("X-Engine", h["Access-Control-Expose-Headers"])
+        # Browser callers read how much of a long chat was left out.
+        self.assertIn("X-Context-Dropped", h["Access-Control-Expose-Headers"])
+        self.assertIn("X-Context-Window", h["Access-Control-Expose-Headers"])
         self.assertEqual(cors_headers("http://a:3000")["Access-Control-Allow-Headers"], "Content-Type")
 
 
@@ -141,6 +144,8 @@ if __name__ == "__main__":
 class _RecordingManager:
     """The control API's manager, recording what each request asked for."""
 
+    max_resident = 1   # reported with the catalog
+
     def __init__(self):
         self.calls = []
 
@@ -158,7 +163,7 @@ class ControlRelayTests(unittest.TestCase):
         ("GET", "/models/catalog"): ({}, ("scan_catalog", (), {})),
         ("GET", "/models/logs"): ({"after": "7"}, ("load_logs", (7,), {})),
         ("GET", "/models/card"): ({"name": "m"}, ("model_card", ("m",), {})),
-        ("POST", "/models/load"): ({"name": "m"}, ("load", ("m",), {})),
+        ("POST", "/models/load"): ({"name": "m", "unload": ["x"]}, ("load", ("m", ["x"]), {})),
         ("POST", "/models/unload"): ({"name": "m"}, ("unload", ("m",), {})),
         ("POST", "/models/delete"): ({"name": "m"}, ("delete", ("m",), {})),
         ("POST", "/benchmark/run"): (
@@ -201,6 +206,9 @@ class ControlRelayTests(unittest.TestCase):
                 data = json.dumps(body).encode() if body is not None else None
                 req = urllib.request.Request(url, data=data, method=method,
                                              headers={"Content-Type": "application/json"})
+                before = len(manager.calls)
                 with urllib.request.urlopen(req, timeout=5) as resp:
                     self.assertEqual(resp.status, 200)
-                self.assertEqual(manager.calls[-1], expected)
+                # The handler may read more than one thing (the catalog also
+                # reports the resident models); the expected call is among them.
+                self.assertIn(expected, manager.calls[before:])

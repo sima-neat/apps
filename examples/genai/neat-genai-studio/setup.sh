@@ -34,8 +34,9 @@ ASR_MODEL_REPO="${ASR_MODEL_REPO-florianvoss/whisper-small-a16w8-layered-encoder
 ASR_CATALOG_MODEL_REPOS="${ASR_CATALOG_MODEL_REPOS:-}"
 RAG_EMBEDDING_REPO="thenlper/gte-small"
 CHAT_MODEL_NAME="${CHAT_MODEL_NAME:-${CHAT_MODEL_REPO##*/}}"
-# Only one chat/VLM model is resident at a time — loading a new one clears all
-# other chat/VLM models (ASR is always kept). Kept configurable for advanced use.
+# Chat/VLM models kept loaded at once (ASR is always kept). With 1, loading a new
+# model replaces the loaded one; above 1, a load past the limit is refused until
+# the request names a loaded model to unload.
 MAX_RESIDENT_CHAT_MODELS="${MAX_RESIDENT_CHAT_MODELS:-1}"
 ALLOW_HUB_DOWNLOAD="${ALLOW_HUB_DOWNLOAD:-true}"
 # Hugging Face accounts searched for compatible models (space-separated):
@@ -223,7 +224,8 @@ Environment:
                                 chat/VLM model. default: empty (none)
   CATALOG_MODEL_REPOS           Extra compatible HF repos to seed the catalog
                                 (space-separated). default: empty
-  MAX_RESIDENT_CHAT_MODELS      Chat/VLM models kept resident in RAM at once
+  MAX_RESIDENT_CHAT_MODELS      Chat/VLM models kept loaded at once; past the
+                                limit a load must name one to unload.
                                 default: 1
   WEB_HOST, WEB_PORT, WEB_HTTPS, WEB_CORS_ORIGINS
                                 app.web settings written to the config. Default:
