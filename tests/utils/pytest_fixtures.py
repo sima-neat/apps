@@ -215,6 +215,11 @@ def e2e_subprocess_artifacts(request, monkeypatch):
     example_name = test_file.parents[2].name
     test_name = request.node.name.replace("/", "_")
     run_dir = base_root / "python" / example_name / test_name
+    if os.environ.get("SIMANEAT_APPS_CI_DIAGNOSTICS_DIR"):
+        from tests.utils.ci_diagnostics import PYTHON_CASES, trace_environment
+        if (example_name, request.node.name) in PYTHON_CASES:
+            for key, value in trace_environment(run_dir).items():
+                monkeypatch.setenv(key, value)
     real_run = subprocess.run
 
     def _format_command(args: Any) -> str:
@@ -238,9 +243,10 @@ def e2e_subprocess_artifacts(request, monkeypatch):
             result = real_run(*args, **kwargs)
         except Exception as exc:
             if write_logs:
-                (run_dir / "stdout.log").write_text("", encoding="utf-8")
+                (run_dir / "stdout.log").write_text(_text(getattr(exc, "stdout", None)), encoding="utf-8")
                 (run_dir / "stderr.log").write_text(
-                    f"[test harness] subprocess.run raised {type(exc).__name__}: {exc}\n",
+                    _text(getattr(exc, "stderr", None))
+                    + f"\n[test harness] subprocess.run raised {type(exc).__name__}: {exc}\n",
                     encoding="utf-8",
                 )
             raise

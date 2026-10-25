@@ -734,7 +734,13 @@ run_packaged_cpp_tests() {
     fi
 
     set +e
-    "${test_bin}" "${example_bin}" 2>&1 | tee -a "${summary_file}"
+    local command=("${test_bin}" "${example_bin}")
+    if [[ -n "${SIMANEAT_APPS_CI_DIAGNOSTICS_DIR:-}" && "${label}" == e2e &&
+          "${example_name}" == high-density-multi-stream-object-detector ]]; then
+      command=("${SCOPE_PYTHON_BIN}" "${ROOT_DIR}/tests/utils/ci_diagnostics.py" cpp
+               "${test_bin}" "${example_bin}")
+    fi
+    "${command[@]}" 2>&1 | tee -a "${summary_file}"
     rc=${PIPESTATUS[0]}
     set -e
 

@@ -296,3 +296,24 @@ MJPEG URLs.
   `tests/scripts` against the source checkout, because they read `build.sh`, the
   workflows and the portal sources, which the test bundle does not carry.
   Publishing waits for it too.
+
+
+### Core #1139 full-suite qualification branch
+
+This branch pins Core to the immutable `develop:d533885fe12d` publication (the
+merge of Core #1139, including #1140), builds all applications, and runs the
+unchanged `./tests/test.sh --all --strict` scope. Release and portal publication
+are disabled for this qualification branch; it is not intended to merge as-is.
+
+CI sets `SIMANEAT_APPS_CI_DIAGNOSTICS_DIR` to retain runner/package identity and
+read-only memory, CMA, DMA-BUF descriptor and process-wait observations. Core's
+existing tracing is enabled only for high-density C++ detection, EfficientSAM3
+Python H264, and YOLOv8 Python segmentation H265/HTTP-MJPEG. Native high-density
+logs go directly to separate per-process files rather than undrained harness
+pipes. Python subprocess failures preserve partial stdout/stderr and the
+original exception. No application API, test scope, threshold or deadline changes.
+
+The `apps-core1139-diagnostics` CI artifact retains this evidence and existing
+test summaries/configs/process logs even when a test fails. Traced throughput is
+diagnostic evidence, not a replacement for a quiet matched performance result.
+Process exit is not proof of device/DMA retirement.

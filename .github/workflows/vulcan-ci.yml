@@ -65,6 +65,8 @@ jobs:
           exit 1
         fi
 
+        docker exec --user root -e DEBIAN_FRONTEND=noninteractive "${sdk_container}" dpkg --configure -a
+
         docker exec \
           -e SIMA_CLI_CHECK_FOR_UPDATE=0 \
           -e GITHUB_REF_NAME="${{ github.ref_name }}" \
@@ -171,6 +173,7 @@ jobs:
         run: python3 -m pytest -c tests/pytest.ini --rootdir=. -v tests/scripts
 
   publish-vulcan-artifacts:
+    if: ${{ false }}
     name: Publish to Vulcan
     needs:
       - resolve-vulcan-config
@@ -192,14 +195,21 @@ jobs:
   resolve-portal-publish-config:
     name: Resolve Portal Publish Config
     needs: resolve-vulcan-config
-    if: ${{ github.ref_type == 'branch' }}
+    if: ${{ false }}
     uses: sima-neat/.github/.github/workflows/vulcan-resolve-config.yml@main
     with:
       vulcan_env: ${{ needs.resolve-vulcan-config.outputs.vulcan_env == 'prod' && github.ref_name != 'main' && 'staging' || needs.resolve-vulcan-config.outputs.vulcan_env }}
 
   resolve-test-runner:
     name: Resolve Test Runner
+    needs: resolve-vulcan-config
     uses: sima-neat/.github/.github/workflows/vulcan-resolve-modalix-runner.yml@main
+    with:
+      runner-labels: >-
+        ["self-hosted", "Linux", "ARM64", "modalix", "rtsp", "vulcan-${{ needs.resolve-vulcan-config.outputs.vulcan_env }}"]
+    secrets:
+      app_id: ${{ secrets.NEAT_RELEASES_APP_ID }}
+      app_private_key: ${{ secrets.NEAT_RELEASES_APP_PRIVATE_KEY }}
 
   test-runtime:
     name: Test Apps Runtime
@@ -209,7 +219,7 @@ jobs:
       - resolve-test-runner
     runs-on:
       group: ${{ needs.resolve-test-runner.outputs.modalix_runner_group }}
-      labels: [self-hosted, Linux, ARM64, modalix, rtsp, "vulcan-${{ needs.resolve-vulcan-config.outputs.vulcan_env }}"]
+      labels: ${{ fromJSON(needs.resolve-test-runner.outputs.runner_labels) }}
 
     steps:
       - name: Checkout code
@@ -308,9 +318,39 @@ jobs:
           "${PYTHON_TEST_BIN}" -m pip install pytest "opencv-python-headless<4.12" PyYAML
           "${PYTHON_TEST_BIN}" -c "import pyneat; print('Using pyneat:', pyneat.__file__)"
 
+      - name: Provision missing native inspection tool
+        env:
+          DEVKIT_PASSWORD: ${{ secrets.DEVKIT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          command -v file >/dev/null && exit 0
+          # Use the already-installed Scheduler transaction guard, not an
+          # unbounded APT install that could upgrade unrelated runtime providers.
+          transaction=/usr/share/SimaScheduler/tools/ci/package_transaction.py
+          test -f "$transaction"
+          privileged() {
+            if [[ "${EUID}" == 0 ]]; then
+              "$@"
+            elif sudo -n true 2>/dev/null; then
+              sudo -n "$@"
+            else
+              printf '%s\n' "${DEVKIT_PASSWORD:?DevKit provisioning needs sudo credentials}" | sudo -S -p '' "$@"
+            fi
+          }
+          privileged apt-get update
+          work="$(mktemp -d /tmp/apps-ci-file.XXXXXX)"
+          trap 'rm -rf "$work"' EXIT
+          (cd "$work" && apt-get download file)
+          archives=("$work"/*.deb)
+          [[ "${#archives[@]}" == 1 ]]
+          [[ "$(dpkg-deb --field "${archives[0]}" Package)" == file ]]
+          privileged python3 "$transaction" install "${archives[0]}"
+          command -v file
+
       - name: Run all activated Apps tests
         env:
           NEAT_APPS_SKIP_MODEL_DOWNLOAD: "0"
+          SIMANEAT_APPS_CI_DIAGNOSTICS_DIR: ${{ github.workspace }}/_vulcan-test/diagnostics
           SIMANEAT_TEST_RTSP_H264_URL: ${{ vars.SIMANEAT_TEST_RTSP_H264_URL }}
           SIMANEAT_TEST_RTSP_H264_URLS: ${{ vars.SIMANEAT_TEST_RTSP_H264_URLS }}
           SIMANEAT_TEST_RTSP_H265_URL: ${{ vars.SIMANEAT_TEST_RTSP_H265_URL }}
@@ -323,9 +363,10 @@ jobs:
           RUNTIME_DIR="$(cat _vulcan-test/apps_runtime_dir.txt)"
           cd "${RUNTIME_DIR}"
           source "${PYNEAT_ACTIVATE}"
-          ./tests/test.sh --all --strict
+          "${PYTHON_TEST_BIN}" tests/utils/ci_diagnostics.py suite ./tests/test.sh --all --strict
 
       - name: Package tested runtime for release
+        if: ${{ false }}
         run: |
           rm -rf dist
           mkdir -p dist
@@ -359,12 +400,27 @@ jobs:
           ls -lh dist
 
       - name: Upload tested Apps release
+        if: ${{ false }}
         uses: actions/upload-artifact@v7
         with:
           name: neat-apps-dist
           path: dist/*
           if-no-files-found: error
           retention-days: 3
+
+      - name: Upload full-suite diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: apps-core1139-diagnostics
+          path: |
+            _vulcan-test/diagnostics/
+            _vulcan-test/install/prebuilt-apps/sandbox-test/**/*.log
+            _vulcan-test/install/prebuilt-apps/sandbox-test/**/command.txt
+            _vulcan-test/install/prebuilt-apps/sandbox-test/**/config.yaml
+            _vulcan-test/install/prebuilt-apps/deps/
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Cleanup test workspace tmp artifacts
         if: ${{ always() }}
@@ -388,7 +444,7 @@ jobs:
 
   build-sysdoc-examples:
     name: Build SysDoc Examples Route
-    if: ${{ github.ref_type == 'branch' }}
+    if: ${{ false }}
     needs:
       - resolve-portal-publish-config
       - test-runtime
@@ -463,7 +519,7 @@ jobs:
 
   publish-sysdoc-examples:
     name: Publish SysDoc Examples Route
-    if: ${{ github.ref_type == 'branch' }}
+    if: ${{ false }}
     needs:
       - resolve-portal-publish-config
       - build-sysdoc-examples
@@ -482,7 +538,7 @@ jobs:
 
   publish-apps-algolia:
     name: Publish Apps Algolia Index
-    if: ${{ github.ref_type == 'branch' }}
+    if: ${{ false }}
     needs:
       - resolve-portal-publish-config
       - publish-sysdoc-examples
