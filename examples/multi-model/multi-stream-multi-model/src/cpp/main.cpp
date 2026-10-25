@@ -1796,6 +1796,27 @@ void run_stream_consumer(const AppConfig& cfg, StreamRuntime& stream) {
   stream.closed = true;
 }
 
+/// Describes streams that stopped short of `inference.frames`, or returns "" if none did. A
+/// source that ends cleanly, such as an RTSP server reaching end of stream, stops its stream
+/// without an error; a finite run must still not report success with fewer frames than asked.
+std::string finite_run_shortfall(const AppConfig& cfg,
+                                 const std::vector<std::unique_ptr<StreamRuntime>>& streams) {
+  if (cfg.frames <= 0) {
+    return {};
+  }
+  std::string shortfall;
+  for (const auto& stream : streams) {
+    if (stream->processed < cfg.frames) {
+      shortfall += (shortfall.empty() ? "" : "; ") + std::string("stream ") +
+                   std::to_string(stream->index) + " stopped after " +
+                   std::to_string(stream->processed) + " of " + std::to_string(cfg.frames) +
+                   " frames";
+    }
+  }
+  return shortfall.empty() ? shortfall
+                           : shortfall + ": its source ended before inference.frames was reached";
+}
+
 void run_app(const AppConfig& cfg) {
   g_stop_requested = 0;
   auto previous_sigint = std::signal(SIGINT, request_stop);
@@ -1871,8 +1892,15 @@ void run_app(const AppConfig& cfg) {
   }
   // Redirected stdout is block-buffered, and process teardown may end without flushing it.
   std::cout.flush();
+  const bool interrupted = g_stop_requested != 0;
   std::signal(SIGINT, previous_sigint);
   if (failure) std::rethrow_exception(failure);
+  if (!interrupted) {
+    const std::string shortfall = finite_run_shortfall(cfg, app.streams);
+    if (!shortfall.empty()) {
+      throw std::runtime_error(shortfall);
+    }
+  }
 }
 
 } // namespace

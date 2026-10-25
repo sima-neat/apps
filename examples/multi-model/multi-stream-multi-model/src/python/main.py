@@ -1528,6 +1528,24 @@ def run_stream_consumer(cfg: AppConfig, stream: StreamRuntime) -> None:
         stream.closed = True
 
 
+def finite_run_shortfall(cfg: AppConfig, streams: list[StreamRuntime]) -> str:
+    """Describe streams that stopped short of ``inference.frames``, or return "" if none did.
+
+    A source that ends cleanly, such as an RTSP server reaching end of stream, stops its stream
+    without an error; a finite run must still not report success with fewer frames than asked.
+    """
+    if cfg.frames <= 0:
+        return ""
+    short = [
+        f"stream {stream.index} stopped after {stream.processed} of {cfg.frames} frames"
+        for stream in streams
+        if stream.processed < cfg.frames
+    ]
+    if not short:
+        return ""
+    return "; ".join(short) + ": its source ended before inference.frames was reached"
+
+
 def run_app(cfg: AppConfig) -> None:
     if cfg.profile:
         os.environ.setdefault("SIMA_GST_ELEMENT_TIMINGS", "1")
@@ -1581,6 +1599,9 @@ def run_app(cfg: AppConfig) -> None:
             thread.join()
         if failures:
             raise RuntimeError(f"stream worker failed: {failures[0]}") from failures[0]
+        shortfall = finite_run_shortfall(cfg, app.streams)
+        if shortfall:
+            raise RuntimeError(shortfall)
     except KeyboardInterrupt:
         raise
     finally:

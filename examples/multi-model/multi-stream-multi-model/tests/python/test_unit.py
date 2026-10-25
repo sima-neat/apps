@@ -768,6 +768,29 @@ def test_frame_for_model_passes_decoder_frame_through():
         main.frame_for_model(SimpleNamespace(is_nv12=lambda: False, width=1920, height=1080))
 
 
+@pytest.mark.parametrize(
+    "frames, processed, expected",
+    [
+        (0, [5, 0], ""),
+        (600, [600, 600], ""),
+        (600, [600, 278], "stream 1 stopped after 278 of 600 frames"),
+    ],
+)
+def test_finite_run_shortfall_names_streams_that_ended_early(frames, processed, expected):
+    """A source that ends cleanly before inference.frames must not pass as a complete run."""
+    import main
+    from dataclasses import replace
+
+    cfg = replace(_config(), frames=frames)
+    streams = [SimpleNamespace(index=i, processed=n) for i, n in enumerate(processed)]
+    message = main.finite_run_shortfall(cfg, streams)
+    if expected:
+        assert message.startswith(expected)
+        assert "before inference.frames was reached" in message
+    else:
+        assert message == ""
+
+
 def test_feeder_reports_a_rejected_model_push(monkeypatch):
     """A push the model refuses outside shutdown ends the run instead of stopping one stream."""
     import main
