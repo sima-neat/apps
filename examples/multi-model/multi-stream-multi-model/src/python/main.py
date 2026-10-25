@@ -1398,6 +1398,18 @@ def process_output_sample(
     stream.profile.add(result_pull_ms, metadata_end - metadata_start, len(results))
 
 
+def run_stopped(run, what: str) -> bool:
+    """After an empty pull: raise if the Run failed, or report whether it stopped cleanly.
+
+    ``pull`` returns None both on a timeout and once the Run has stopped, so an empty pull alone
+    cannot tell a quiet camera from a failed decoder. Matches the C++ Timeout/Closed/error split.
+    """
+    error = run.last_error()
+    if error:
+        raise RuntimeError(f"{what}: {error}")
+    return not run.running()
+
+
 def run_stream_feeder(app: AppRuntime, cfg: AppConfig, stream: StreamRuntime) -> None:
     """Pull this stream's decoded frames from the shared source Run and hand them to its model.
 
@@ -1412,6 +1424,8 @@ def run_stream_feeder(app: AppRuntime, cfg: AppConfig, stream: StreamRuntime) ->
         while not stream.closed:
             sample = app.source_run.pull(frame_name, 50)
             if sample is None:
+                if run_stopped(app.source_run, f"stream {stream.index} source pull"):
+                    break
                 continue
             # Wait for a slot rather than discarding the frame: every frame dropped here is a
             # frame Insight renders with no overlay. Bounded, so a wedged model cannot hang the
@@ -1463,6 +1477,8 @@ def run_stream_consumer(cfg: AppConfig, stream: StreamRuntime) -> None:
             sample = stream.model_run.pull(MODEL_OUTPUT, 50)
             pull_end = time_ms()
             if sample is None:
+                if run_stopped(stream.model_run, f"stream {stream.index} model pull"):
+                    break
                 # Nothing in flight and the feeder has stopped: nothing left to wait for.
                 if stream.feed_done and stream.in_flight <= 0:
                     break

@@ -667,7 +667,8 @@ def test_debug_frames_stay_paired_with_results(monkeypatch, tmp_path):
 
     outputs = iter([object(), object()])
     stream.model_run = SimpleNamespace(push=lambda *args: True,
-                                       pull=lambda *args: next(outputs))
+                                       pull=lambda *args: next(outputs),
+                                       last_error=lambda: "", running=lambda: True)
     monkeypatch.setattr(main, "first_tensor_from_sample", lambda sample: sample.tensor)
     monkeypatch.setattr(main, "copy_nv12_for_model", lambda tensor: tensor)
     monkeypatch.setattr(main, "tensor_bgr_from_decoded", lambda tensor: tensor.copy())
@@ -676,7 +677,8 @@ def test_debug_frames_stay_paired_with_results(monkeypatch, tmp_path):
     saved = []
     monkeypatch.setattr(main, "cv2", SimpleNamespace(
         imwrite=lambda path, frame: saved.append(frame.copy()) or True))
-    main.run_stream_feeder(SimpleNamespace(source_run=SimpleNamespace(pull=source_pull)), cfg, stream)
+    source_run = SimpleNamespace(pull=source_pull, last_error=lambda: "", running=lambda: True)
+    main.run_stream_feeder(SimpleNamespace(source_run=source_run), cfg, stream)
     assert len(stream.pending) == 2
     stream.closed = False
     main.run_stream_consumer(cfg, stream)
@@ -684,6 +686,46 @@ def test_debug_frames_stay_paired_with_results(monkeypatch, tmp_path):
     assert [call[3] for call in stream.metadata_sender.calls] == ["1", "2"]
     assert not stream.pending
     assert stream.in_flight == 0
+
+
+def _stopped_run(error: str):
+    """A Run whose pulls come back empty because it stopped, with or without an error."""
+    return SimpleNamespace(pull=lambda *args: None, push=lambda *args: True,
+                           last_error=lambda: error, running=lambda: False)
+
+
+def test_feeder_reports_a_failed_source_run():
+    """A decoder or RTSP failure surfaces instead of being retried as a timeout forever."""
+    import main
+
+    stream = make_stream("detection", FakeMetadataSender())
+    app = SimpleNamespace(source_run=_stopped_run("decoder failed"))
+    with pytest.raises(RuntimeError, match="stream 0 source pull: decoder failed"):
+        main.run_stream_feeder(app, _config(), stream)
+    assert stream.feed_done
+
+
+def test_consumer_reports_a_failed_model_run():
+    import main
+
+    stream = make_stream("detection", FakeMetadataSender())
+    stream.model_run = _stopped_run("preprocess failed")
+    stream.in_flight = 2
+    with pytest.raises(RuntimeError, match="stream 0 model pull: preprocess failed"):
+        main.run_stream_consumer(_config(), stream)
+    assert stream.closed
+
+
+def test_workers_stop_when_their_run_stops_cleanly():
+    import main
+
+    stream = make_stream("detection", FakeMetadataSender())
+    main.run_stream_feeder(SimpleNamespace(source_run=_stopped_run("")), _config(), stream)
+    assert stream.feed_done
+    stream.model_run = _stopped_run("")
+    stream.in_flight = 2
+    main.run_stream_consumer(_config(), stream)
+    assert stream.closed
 
 
 @pytest.mark.parametrize("helper", ["int_or", "float_or"])
