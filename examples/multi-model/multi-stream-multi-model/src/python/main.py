@@ -364,7 +364,8 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("streams must be set")
     if len(cfg.streams) > 4:
         raise ValueError("this example supports up to four streams")
-    if not str(cfg.labels_path):
+    # Path("") normalizes to ".", so an empty value would otherwise pass as the current folder.
+    if str(cfg.labels_path) in ("", "."):
         raise ValueError("model.labels must be set")
     if not cfg.insight_host:
         raise ValueError("output.insight.host must be set")

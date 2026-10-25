@@ -196,6 +196,24 @@ class TestConfigLoading:
         with pytest.raises(ValueError, match="max_inflight_per_stream must be between 1 and 16"):
             load_app_config(config_path)
 
+    @pytest.mark.parametrize("labels", ['""', "."])
+    def test_empty_labels_path_is_rejected(self, tmp_path: Path, labels):
+        """An empty labels value must fail validation, as it does in C++, not pass as '.'."""
+        from main import load_app_config
+
+        config_path = write_config(tmp_path, DEFAULT_STREAMS[:1])
+        text = config_path.read_text(encoding="utf-8")
+        config_path.write_text(
+            "\n".join(
+                f"  labels: {labels}" if line.startswith("  labels:") else line
+                for line in text.splitlines()
+            ),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match="model.labels must be set"):
+            load_app_config(config_path)
+
     @pytest.mark.parametrize("frames, valid", [(0, True), (30, False), (31, True)])
     def test_frame_limit_must_exceed_warmup(self, frames, valid):
         """Warmup frames publish nothing, so a limit within them would succeed with no output."""
