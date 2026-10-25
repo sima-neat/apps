@@ -953,16 +953,20 @@ PY
     return 1
   fi
 
-  local tmp_dir metadata_file resource_file
+  local tmp_dir metadata_file package_file policy_file
   tmp_dir="$(mktemp -d /tmp/neat-apps-sysroot.XXXXXX)"
   trap 'rm -rf "${tmp_dir}"' EXIT
   metadata_file="${tmp_dir}/metadata-minimal.json"
+  package_file="${tmp_dir}/simaai-scheduler.deb"
+  policy_file="${tmp_dir}/scheduler/usr/share/SimaScheduler/dependency-policy.json"
   if ! download_file "${metadata_url}" "${metadata_file}"; then
     echo "ERROR: Failed to download selected Core metadata." >&2
     return 1
   fi
 
-  local resource_info resource resource_url expected_checksum
+  # Core ships the Scheduler package it was built against. That package's
+  # dependency policy names the exact SDK sysroot it was built for.
+  local resource_info package_url expected_checksum
   if ! resource_info="$(python3 - "${metadata_file}" "${metadata_url}" <<'PY'
 import json
 import re
@@ -971,122 +975,66 @@ from urllib.parse import urljoin
 
 with open(sys.argv[1], encoding="utf-8") as handle:
     metadata = json.load(handle)
-resources = metadata.get("resources", [])
-# Split Core ships its SDK policy inside Scheduler. Older Core releases ship
-# an Internals manifest instead. Never fall back after a Scheduler failure.
-resource = (
-    "simaai-scheduler.deb" if "simaai-scheduler.deb" in resources
-    else "internals-manifest.json"
-)
-if resources.count(resource) != 1:
-    raise SystemExit(f"Core metadata must contain exactly one SDK policy resource: {resource}")
+resource = "simaai-scheduler.deb"
+if metadata.get("resources", []).count(resource) != 1:
+    raise SystemExit("Core metadata must contain exactly one Scheduler package")
 checksum = metadata.get("resources-checksum", {}).get(resource)
 if not isinstance(checksum, str) or not re.fullmatch(r"[0-9a-f]{64}", checksum):
-    raise SystemExit(f"Core metadata has no valid checksum for {resource}")
-print("\t".join((resource, urljoin(sys.argv[2], resource), checksum)))
+    raise SystemExit("Core metadata has no valid Scheduler package checksum")
+print(urljoin(sys.argv[2], resource) + "\t" + checksum)
 PY
   )"; then
-    echo "ERROR: Cannot verify the Core SDK policy resource." >&2
+    echo "ERROR: Cannot verify the Core Scheduler package resource." >&2
     return 1
   fi
-  IFS=$'\t' read -r resource resource_url expected_checksum <<< "${resource_info}"
-  resource_file="${tmp_dir}/${resource}"
-  if ! download_file "${resource_url}" "${resource_file}"; then
-    echo "ERROR: Failed to download the Core SDK policy resource ${resource}." >&2
+  package_url="${resource_info%%$'\t'*}"
+  expected_checksum="${resource_info#*$'\t'}"
+  if ! download_file "${package_url}" "${package_file}"; then
+    echo "ERROR: Failed to download the Core Scheduler package." >&2
+    return 1
+  fi
+  local package_checksum
+  package_checksum="$(sha256sum "${package_file}")"
+  if [[ "${package_checksum%% *}" != "${expected_checksum}" ]]; then
+    echo "ERROR: Core Scheduler package checksum mismatch." >&2
+    return 1
+  fi
+  if ! dpkg-deb -x "${package_file}" "${tmp_dir}/scheduler"; then
+    echo "ERROR: Failed to extract the Core Scheduler package." >&2
     return 1
   fi
 
-  local receipt
-  if ! receipt="$(python3 - "${resource_file}" "${APPS_MANIFEST}" "${expected_checksum}" <<'PY'
-import hashlib
-import io
+  local sysroot_version
+  if ! sysroot_version="$(python3 - "${policy_file}" "${APPS_MANIFEST}" <<'PY'
 import json
 import re
-import subprocess
 import sys
-import tarfile
 from pathlib import Path
 
-resource_path = Path(sys.argv[1])
-payload = resource_path.read_bytes()
-if hashlib.sha256(payload).hexdigest() != sys.argv[3]:
-    raise SystemExit("Core SDK policy resource checksum mismatch")
-if resource_path.name == "simaai-scheduler.deb":
-    # Read only the policy; do not install the package or extract its files.
-    payload = subprocess.check_output(["dpkg-deb", "--fsys-tarfile", str(resource_path)])
-    with tarfile.open(fileobj=io.BytesIO(payload)) as archive:
-        policy_path = "usr/share/SimaScheduler/dependency-policy.json"
-        members = [
-            m for m in archive.getmembers()
-            if m.name in (policy_path, "./" + policy_path)
-        ]
-        if len(members) != 1 or not members[0].isfile():
-            raise SystemExit("Scheduler package must contain one regular SDK policy file")
-        artifact = json.load(archive.extractfile(members[0]))
-    if artifact.get("schema_version") != 1 or not artifact.get("sysroot-version"):
-        raise SystemExit("Scheduler package has no valid SDK policy")
-else:
-    artifact = json.loads(payload)
-consumer = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
-receipt = artifact["sysroot-version"]
-consumer_base = consumer["platform-version"]
-if not isinstance(receipt, str) or (
-    receipt
-    and not re.fullmatch(r"[0-9]+(?:[.][0-9]+){2}(?:~(?:pre[0-9]+|git[0-9]{12}[.][0-9a-f]{7,40}-[0-9]+))?", receipt)
+sysroot_version = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))["sysroot-version"]
+consumer_base = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))["platform-version"]
+if not isinstance(sysroot_version, str) or not re.fullmatch(
+    r"[0-9]+(?:[.][0-9]+){2}~(?:pre[0-9]+|git[0-9]{12}[.][0-9a-f]{7,40}-[0-9]+)", sysroot_version
 ):
     raise SystemExit("invalid sysroot-version")
-if receipt and consumer_base != receipt.split("~", 1)[0]:
-    raise SystemExit("platform-version does not match the Core SDK policy")
-print(receipt)
+if consumer_base != sysroot_version.split("~", 1)[0]:
+    raise SystemExit("platform-version does not match the Scheduler sysroot-version")
+print(sysroot_version)
 PY
   )"; then
-    echo "ERROR: Cannot verify the Core SDK policy." >&2
+    echo "ERROR: Cannot verify the Core Scheduler sysroot-version." >&2
     return 1
   fi
-  if [[ -z "${receipt}" ]]; then
-    echo "Apps is using the existing SDK sysroot."
-    return 0
-  fi
 
-  if [[ "${receipt}" == *"~"* ]]; then
-    echo "Updating SDK sysroot for core@${branch}:${version} to ${receipt} (${resource})"
-    if ! run_privileged sysroot update "${receipt}"; then
-      echo "ERROR: Failed to update SDK sysroot to ${receipt}." >&2
-      return 1
-    fi
-    if ! sysroot status; then
-      echo "ERROR: Failed to read SDK sysroot status." >&2
-      return 1
-    fi
-    return 0
+  echo "Updating SDK sysroot to Core's Scheduler sysroot-version ${sysroot_version}"
+  if ! run_privileged sysroot update "${sysroot_version}"; then
+    echo "ERROR: Failed to update SDK sysroot to ${sysroot_version}." >&2
+    return 1
   fi
-
-  local status_output image_platform overlay_state overlay_revision
-  if ! status_output="$(sysroot status)"; then
+  if ! sysroot status; then
     echo "ERROR: Failed to read SDK sysroot status." >&2
     return 1
   fi
-  printf '%s\n' "${status_output}"
-  image_platform="$(sed -nE \
-    's/^SDK image platform:[[:space:]]*([^[:space:]]+).*$/\1/p' \
-    <<< "${status_output}" | head -n1)"
-  overlay_state="$(sed -nE \
-    's/^Sysroot overlay state:[[:space:]]*([^[:space:]]+).*$/\1/p' \
-    <<< "${status_output}" | head -n1)"
-  overlay_revision="$(sed -nE \
-    's/^Sysroot overlay revision:[[:space:]]*([^[:space:]]+).*$/\1/p' \
-    <<< "${status_output}" | head -n1)"
-
-  if [[ "${image_platform}" != "${receipt}" ]]; then
-    echo "ERROR: SDK image platform ${image_platform:-unknown} does not match required stable platform ${receipt}." >&2
-    return 1
-  fi
-  if [[ "${overlay_state}" != "inactive" || "${overlay_revision}" != "none" ]]; then
-    echo "ERROR: Stable platform ${receipt} requires the image-default sysroot, but overlay ${overlay_revision:-unknown} is ${overlay_state:-unknown}." >&2
-    echo "ERROR: Recreate the SDK container to remove the prerelease sysroot overlay." >&2
-    return 1
-  fi
-  echo "Using stable SDK sysroot ${image_platform} with no active overlay."
 )
 
 ensure_neat_core() {
