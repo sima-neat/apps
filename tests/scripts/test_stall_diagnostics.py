@@ -76,3 +76,52 @@ def test_cpp_model_projection_matches_canonical_scope(tmp_path):
     assert projected.strip() == 'object-detection/high-density-multi-stream-object-detector\tyolo26n-det-int8-b1.tar.gz'
     source = (ROOT / 'scripts/ci/run_stall_diagnostic.py').read_text()
     assert "env['SIMANEAT_APPS_TEST_MODEL_FILES'] = subprocess.check_output(" in source
+
+
+@pytest.mark.parametrize(('present', 'guard_exit'), [(True, 0), (False, 0), (False, 43)])
+def test_native_inspection_tool_uses_installed_transaction_guard(tmp_path, present, guard_exit):
+    import os
+    workflow = yaml.safe_load((ROOT / '.github/workflows/vulcan-ci.yml').read_text())
+    step = next(s for s in workflow['jobs']['test-runtime']['steps']
+                if s['name'] == 'Provision missing native inspection tool')
+    assert step['if'] == "${{ matrix.case == 'hd-h264' }}"
+    if present:
+        (tmp_path / 'installed').touch()
+    # Run the actual shell block with package-command doubles. No host packages
+    # or installed helpers are changed; rejection must propagate unchanged.
+    fixture = r'''
+command() {
+  if [[ "$*" == '-v file' ]]; then [[ -f "$FIXTURE/installed" ]]; else builtin command "$@"; fi
+}
+test() {
+  if [[ "$*" == '-f /usr/share/SimaScheduler/tools/ci/package_transaction.py' ]]; then return 0; fi
+  builtin test "$@"
+}
+apt-get() {
+  printf 'apt-get %s\n' "$*" >> "$FIXTURE/calls"
+  if [[ "$*" == 'download file' ]]; then touch file.deb; fi
+}
+dpkg-deb() { printf 'file\n'; }
+python3() {
+  printf 'python3 %s\n' "$*" >> "$FIXTURE/calls"
+  [[ "$1" == /usr/share/SimaScheduler/tools/ci/package_transaction.py && "$2" == install ]] || return 99
+  [[ "$GUARD_EXIT" == 0 ]] || return "$GUARD_EXIT"
+  touch "$FIXTURE/installed"
+}
+sudo() {
+  [[ "$1 $2" == '-n true' ]] && return 0
+  shift
+  "$@"
+}
+'''
+    result = subprocess.run(['/bin/bash', '-c', fixture + step['run']],
+                            env={**os.environ, 'FIXTURE': str(tmp_path), 'GUARD_EXIT': str(guard_exit)},
+                            capture_output=True, text=True)
+    assert result.returncode == guard_exit, result.stderr
+    if present:
+        assert not (tmp_path / 'calls').exists()
+    else:
+        calls = (tmp_path / 'calls').read_text().splitlines()
+        assert calls[:2] == ['apt-get update', 'apt-get download file']
+        assert calls[2].startswith('python3 /usr/share/SimaScheduler/tools/ci/package_transaction.py install ')
+        assert len(calls) == 3

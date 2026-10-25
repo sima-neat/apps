@@ -324,6 +324,36 @@ jobs:
           "${PYTHON_TEST_BIN}" -m pip install pytest "opencv-python-headless<4.12" PyYAML
           "${PYTHON_TEST_BIN}" -c "import pyneat; print('Using pyneat:', pyneat.__file__)"
 
+      - name: Provision missing native inspection tool
+        if: ${{ matrix.case == 'hd-h264' }}
+        env:
+          DEVKIT_PASSWORD: ${{ secrets.DEVKIT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          command -v file >/dev/null && exit 0
+          # Use the already-installed Scheduler transaction guard, not an
+          # unbounded APT install that could upgrade unrelated runtime providers.
+          transaction=/usr/share/SimaScheduler/tools/ci/package_transaction.py
+          test -f "$transaction"
+          privileged() {
+            if [[ "${EUID}" == 0 ]]; then
+              "$@"
+            elif sudo -n true 2>/dev/null; then
+              sudo -n "$@"
+            else
+              printf '%s\n' "${DEVKIT_PASSWORD:?DevKit provisioning needs sudo credentials}" | sudo -S -p '' "$@"
+            fi
+          }
+          privileged apt-get update
+          work="$(mktemp -d /tmp/apps-ci-file.XXXXXX)"
+          trap 'rm -rf "$work"' EXIT
+          (cd "$work" && apt-get download file)
+          archives=("$work"/*.deb)
+          [[ "${#archives[@]}" == 1 ]]
+          [[ "$(dpkg-deb --field "${archives[0]}" Package)" == file ]]
+          privileged python3 "$transaction" install "${archives[0]}"
+          command -v file
+
       - name: Run the selected unresolved case
         env:
           NEAT_APPS_SKIP_MODEL_DOWNLOAD: "0"
