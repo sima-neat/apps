@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import importlib.util
+import json
 import os
 from pathlib import Path
 import sys
@@ -21,12 +22,16 @@ MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
 E2E_INSIGHT_HOST = "127.0.0.1"
 
 # One slot per stream: the task, the head layout of its package, the package file the scope
-# downloads, and the Insight contract that stream must publish on.
+# downloads, the Insight contract that stream must publish on, and how many results at least one
+# of its messages must carry. Detection and segmentation cover all COCO classes, so the CI
+# footage yields results. Pose stays at 0: it needs people, and the CI H.264 fixture published
+# 140 frames without a tracked person (see multi-stream-tracker's E2E); poses that are published
+# are still checked below.
 STREAM_SLOTS = [
-    ("detection", "yolov8", "yolo_11s_mpk.tar.gz", "object-detection", "objects"),
-    ("segmentation", "yolov8", "yolo_11s_seg_mpk.tar.gz", "segmentation", "segments"),
-    ("pose", "yolo26", "yolo26m-pose-int8-b1.tar.gz", "pose-estimation", "poses"),
-    ("detection", "yolo26", "yolo26m-det-int8-b1.tar.gz", "object-detection", "objects"),
+    ("detection", "yolov8", "yolo_11s_mpk.tar.gz", "object-detection", "objects", 1),
+    ("segmentation", "yolov8", "yolo_11s_seg_mpk.tar.gz", "segmentation", "segments", 1),
+    ("pose", "yolo26", "yolo26m-pose-int8-b1.tar.gz", "pose-estimation", "poses", 0),
+    ("detection", "yolo26", "yolo26m-det-int8-b1.tar.gz", "object-detection", "objects", 1),
 ]
 
 
@@ -83,7 +88,7 @@ class TestE2E:
                 "decode": decode,
                 "model": str(model_paths[index]),
             }
-            for index, (task, decode, _, _, _) in enumerate(STREAM_SLOTS)
+            for index, (task, decode, _, _, _, _) in enumerate(STREAM_SLOTS)
         ]
 
         config_path = e2e_config_writer(
@@ -130,10 +135,13 @@ class TestE2E:
                             metadata_type=metadata_type,
                             data_array_key=data_array_key,
                             require_all_ports=True,
+                            min_object_count=min_objects,
                         )
                     ),
                 )
-                for index, (_, _, _, metadata_type, data_array_key) in enumerate(STREAM_SLOTS)
+                for index, (_, _, _, metadata_type, data_array_key, min_objects) in enumerate(
+                    STREAM_SLOTS
+                )
             ]
             result = subprocess.run(
                 cmd, capture_output=True, text=True,
@@ -166,6 +174,13 @@ class TestE2E:
                 message.timestamp_ms >= 0 and message.frame_id
                 for message in metadata.messages
             ), f"stream {index} metadata is missing a usable source timestamp or frame ID"
+
+            if metadata_type == "pose-estimation":
+                for message in metadata.messages:
+                    poses = json.loads(message.payload)["data"]["poses"]
+                    assert all(len(pose.get("keypoints", [])) == 17 for pose in poses), (
+                        f"stream {index} published a pose without 17 keypoints"
+                    )
 
         saved = assert_streamed_frames_are_usable(
             tmp_output_dir, total_saved_frames, streams=len(STREAM_SLOTS)

@@ -5,6 +5,8 @@
 #include "support/testing/test_config.h"
 #include "support/testing/test_process.h"
 
+#include <nlohmann/json.hpp>
+
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -25,13 +27,17 @@ constexpr const char* kExampleName = "multi-stream-multi-model";
 constexpr const char* kE2eInsightHost = "127.0.0.1";
 
 /// One slot per stream: the task, the head layout of its package, the package file the scope
-/// downloads, and the Insight contract that stream must publish on.
+/// downloads, the Insight contract that stream must publish on, and how many results at least one
+/// of its messages must carry. Detection and segmentation cover all COCO classes, so the CI footage
+/// yields results. Pose stays at 0: it needs people, and the CI H.264 fixture published 140 frames
+/// without a tracked person (see multi-stream-tracker's E2E); published poses are still checked.
 struct StreamSlot {
   const char* task;
   const char* decode;
   const char* model_file;
   const char* metadata_type;
   const char* data_array_key;
+  int min_objects;
 };
 
 class VideoListeners {
@@ -67,10 +73,10 @@ public:
 
 const std::vector<StreamSlot>& stream_slots() {
   static const std::vector<StreamSlot> slots = {
-      {"detection", "yolov8", "yolo_11s_mpk.tar.gz", "object-detection", "objects"},
-      {"segmentation", "yolov8", "yolo_11s_seg_mpk.tar.gz", "segmentation", "segments"},
-      {"pose", "yolo26", "yolo26m-pose-int8-b1.tar.gz", "pose-estimation", "poses"},
-      {"detection", "yolo26", "yolo26m-det-int8-b1.tar.gz", "object-detection", "objects"},
+      {"detection", "yolov8", "yolo_11s_mpk.tar.gz", "object-detection", "objects", 1},
+      {"segmentation", "yolov8", "yolo_11s_seg_mpk.tar.gz", "segmentation", "segments", 1},
+      {"pose", "yolo26", "yolo26m-pose-int8-b1.tar.gz", "pose-estimation", "poses", 0},
+      {"detection", "yolo26", "yolo26m-det-int8-b1.tar.gz", "object-detection", "objects", 1},
   };
   return slots;
 }
@@ -125,6 +131,7 @@ MetadataListeners bind_metadata_listeners(const std::string& codec, int metadata
     options.metadata_type = stream_slots()[index].metadata_type;
     options.data_array_key = stream_slots()[index].data_array_key;
     options.require_all_ports = true;
+    options.min_object_count = stream_slots()[index].min_objects;
     listeners.push_back(std::make_unique<MetadataJsonListener>(options));
     if (!listeners.back()->ok()) {
       std::cerr << "[FAIL] " << codec << " metadata listener for stream " << index
@@ -143,6 +150,15 @@ bool check_metadata(const std::string& codec, int metadata_port_base,
     bool valid_stamps = !result.messages.empty();
     for (const auto& message : result.messages) {
       valid_stamps = valid_stamps && message.timestamp_ms >= 0 && !message.frame_id.empty();
+      if (std::string(stream_slots()[index].metadata_type) == "pose-estimation") {
+        for (const auto& pose : nlohmann::json::parse(message.payload)["data"]["poses"]) {
+          if (!pose.contains("keypoints") || pose["keypoints"].size() != 17) {
+            std::cerr << "[FAIL] " << codec << " stream " << index
+                      << " published a pose without 17 keypoints\n";
+            ok = false;
+          }
+        }
+      }
     }
     if (!result.success || !valid_stamps) {
       std::cerr << "[FAIL] " << codec << " stream " << index << " did not publish "
