@@ -43,6 +43,13 @@ METADATA_TYPES = {
 # budgeted rather than truncated mid-frame.
 METADATA_BYTE_BUDGET = 32768
 
+# Decoded frames each stream's frame output keeps queued for its feeder.
+SOURCE_FRAME_QUEUE_DEPTH = 4
+# Decoder buffers beyond what a stream holds, so decoding continues while those are in use.
+DECODER_HEADROOM_BUFFERS = 4
+# Upper bound on frames a stream may keep inside its model; each holds a decoder buffer.
+MAX_INFLIGHT_PER_STREAM = 16
+
 # BoxDecode emits segmentation masks on a 160x160 grid covering the model's 640x640
 # letterboxed input, so one mask cell spans four input pixels.
 MASK_STRIDE = 4
@@ -367,8 +374,12 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("inference.frames must be >= 0")
     if cfg.fps != 0:
         raise ValueError("inference.fps must be 0; configure frame rate at the RTSP source")
-    if cfg.max_inflight_per_stream <= 0:
-        raise ValueError("inference.max_inflight_per_stream must be > 0")
+    if not 0 < cfg.max_inflight_per_stream <= MAX_INFLIGHT_PER_STREAM:
+        raise ValueError(
+            f"inference.max_inflight_per_stream must be between 1 and {MAX_INFLIGHT_PER_STREAM}"
+        )
+    if cfg.frames != 0 and cfg.frames <= cfg.warmup_frames:
+        raise ValueError("inference.frames must be 0 or greater than runtime.warmup_frames")
     if not 0.0 <= cfg.min_score <= 1.0:
         raise ValueError("inference.min_score must be between 0 and 1")
     if not 0.0 <= cfg.nms_iou <= 1.0:
@@ -921,6 +932,11 @@ def build_source_options(cfg: AppConfig, url: str, fps: int, width: int, height:
     opt.insert_queue = True
     opt.decoder_name = "decoder"
     opt.decoder_raw_output = True
+    # Decoded frames go to the model without a copy, so the decoder pool must cover every frame a
+    # stream holds at once: the frame output queue, the frames in flight, and headroom to decode.
+    opt.num_buffers = (
+        SOURCE_FRAME_QUEUE_DEPTH + cfg.max_inflight_per_stream + DECODER_HEADROOM_BUFFERS
+    )
     opt.auto_caps_from_stream = True
     opt.codec = rtsp_codec(cfg.codec)
     opt.dec_width = width
@@ -1218,14 +1234,16 @@ def connect_source_stream(app: AppRuntime, cfg: AppConfig, stream: StreamRuntime
     # A few buffers, and dropping: Insight can only draw an overlay on a frame it has metadata
     # for, so a frame skipped here shows up as a blink in the viewer. Depth absorbs a brief
     # feeder hiccup; dropping still sheds load if the model genuinely cannot keep up.
-    frame_output = pyneat.OutputOptions.every_frame(4)
+    frame_output = pyneat.OutputOptions.every_frame(SOURCE_FRAME_QUEUE_DEPTH)
     frame_output.drop = True
     frames.add(pyneat.nodes.output(source_frame_name(stream.index), frame_output))
 
+    # The decoder takes a plain link: a dropping link would discard encoded frames, and every frame
+    # after a dropped one decodes corrupted until the next keyframe.
     if cfg.video_enabled:
         encoded_branch = pyneat.graphs.branch("encoded", ["decode_h264", "video_h264"])
         app.source_graph.connect(source, encoded_branch)
-        app.source_graph.connect(encoded_branch, decoder, realtime_link(stream.index, 3))
+        app.source_graph.connect(encoded_branch, decoder)
 
         video_options = make_video_options(cfg, stream.index)
         app.source_graph.connect(
@@ -1234,7 +1252,7 @@ def connect_source_stream(app: AppRuntime, cfg: AppConfig, stream: StreamRuntime
             realtime_link(stream.index, 3),
         )
     else:
-        app.source_graph.connect(source, decoder, realtime_link(stream.index, 3))
+        app.source_graph.connect(source, decoder)
 
     app.source_graph.connect(decoder, frames)
 
@@ -1472,7 +1490,13 @@ def run_stream_feeder(app: AppRuntime, cfg: AppConfig, stream: StreamRuntime) ->
                 with stream.pending_lock:
                     if stream.pending:
                         stream.pending.pop()
-                break
+                if stream.closed:
+                    break
+                # A rejected frame outside shutdown means this stream can no longer run its model.
+                error = stream.model_run.last_error()
+                raise RuntimeError(
+                    f"stream {stream.index} model push failed" + (f": {error}" if error else "")
+                )
     finally:
         stream.feed_done = True
 

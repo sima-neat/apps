@@ -102,6 +102,13 @@ const char* metadata_type(Task task) {
 /// datagram count low enough for Insight to reassemble within its 250 ms window.
 constexpr std::size_t kMetadataByteBudget = 32768;
 
+/// Decoded frames each stream's frame output keeps queued for its feeder.
+constexpr int kSourceFrameQueueDepth = 4;
+/// Decoder buffers beyond what a stream holds, so decoding continues while those are in use.
+constexpr int kDecoderHeadroomBuffers = 4;
+/// Upper bound on frames a stream may keep inside its model; each holds a decoder buffer.
+constexpr int kMaxInflightPerStream = 16;
+
 /// Three-decimal confidence, rounded in double: a float result serializes as its widened value
 /// (0.987f -> 0.9869999885559082), which costs bytes against the budget above.
 double round_confidence(float value) {
@@ -561,8 +568,12 @@ void validate_config(const AppConfig& cfg) {
   sima_examples::require(cfg.frames >= 0, "inference.frames must be >= 0");
   sima_examples::require(cfg.fps == 0,
       "inference.fps must be 0; configure frame rate at the RTSP source");
-  sima_examples::require(cfg.max_inflight_per_stream > 0,
-                         "inference.max_inflight_per_stream must be > 0");
+  sima_examples::require(cfg.max_inflight_per_stream > 0 &&
+                             cfg.max_inflight_per_stream <= kMaxInflightPerStream,
+                         "inference.max_inflight_per_stream must be between 1 and " +
+                             std::to_string(kMaxInflightPerStream));
+  sima_examples::require(cfg.frames == 0 || cfg.frames > cfg.warmup_frames,
+                         "inference.frames must be 0 or greater than runtime.warmup_frames");
   sima_examples::require(cfg.min_score >= 0.0 && cfg.min_score <= 1.0,
                          "inference.min_score must be between 0 and 1");
   sima_examples::require(cfg.nms_iou >= 0.0 && cfg.nms_iou <= 1.0,
@@ -630,6 +641,8 @@ std::vector<std::string> load_labels(const fs::path& labels_path) {
   std::vector<std::string> labels;
   std::string line;
   while (std::getline(in, line)) {
+    // Trimmed like the Python loader, so CRLF files and blank lines give the same class names.
+    line = sima_examples::trim_copy(line);
     if (!line.empty()) {
       labels.push_back(line);
     }
@@ -1152,6 +1165,9 @@ build_source_options(const AppConfig& cfg, const std::string& url, int& fps_out,
   opt.out_format = "NV12";
   opt.decoder_name = "decoder";
   opt.decoder_raw_output = true;
+  // Decoded frames go to the model without a copy, so the decoder pool must cover every frame a
+  // stream holds at once: the frame output queue, the frames in flight, and headroom to decode.
+  opt.num_buffers = kSourceFrameQueueDepth + cfg.max_inflight_per_stream + kDecoderHeadroomBuffers;
   opt.auto_caps_from_stream = true;
   opt.codec = cfg.codec;
   if (probe.width > 0 && probe.height > 0) {
@@ -1472,21 +1488,23 @@ void connect_source_stream(AppRuntime& app, const AppConfig& cfg, StreamRuntime&
   // A few buffers, and dropping: Insight can only draw an overlay on a frame it has metadata
   // for, so a frame skipped here shows up as a blink in the viewer. Depth absorbs a brief
   // feeder hiccup; dropping still sheds load if the model genuinely cannot keep up.
-  auto frame_output = simaai::neat::OutputOptions::EveryFrame(4);
+  auto frame_output = simaai::neat::OutputOptions::EveryFrame(kSourceFrameQueueDepth);
   frame_output.drop = true;
   frames.add(simaai::neat::nodes::Output(source_frame_name(stream.index), frame_output));
 
+  // The decoder takes a plain link: a dropping link would discard encoded frames, and every frame
+  // after a dropped one decodes corrupted until the next keyframe.
   if (cfg.video_enabled) {
     auto encoded_branch = simaai::neat::graphs::Branch("encoded", {"decode_h264", "video_h264"});
     app.source_graph.connect(source, encoded_branch);
-    app.source_graph.connect(encoded_branch, decoder, realtime_link(stream.index, 3));
+    app.source_graph.connect(encoded_branch, decoder);
 
     const auto video_options = make_video_options(cfg, stream.index);
     app.source_graph.connect(encoded_branch,
                              build_video_sender_graph("video_h264", cfg.codec, video_options),
                              realtime_link(stream.index, 3));
   } else {
-    app.source_graph.connect(source, decoder, realtime_link(stream.index, 3));
+    app.source_graph.connect(source, decoder);
   }
   app.source_graph.connect(decoder, frames);
 }
@@ -1628,6 +1646,19 @@ void process_output_sample(const AppConfig& cfg, StreamRuntime& stream,
 /// push() returns as soon as the frame lands in the graph's internal edge queue, so a model
 /// slower than its camera accumulates seconds of latency while still reporting the source rate.
 /// Frames that arrive while the gate is closed are dropped, which is what a live camera wants.
+/// A Run that closed with a recorded error failed; one that closed without one stopped cleanly.
+/// Matches the Python `run_stopped` split, so a failed decoder or model ends the process nonzero
+/// instead of quietly ending one stream.
+void throw_if_run_failed(simaai::neat::Run& run, const std::string& what) {
+  if (g_stop_requested != 0) {
+    return;
+  }
+  const std::string error = run.last_error();
+  if (!error.empty()) {
+    throw std::runtime_error(what + ": " + error);
+  }
+}
+
 void run_stream_feeder(AppRuntime& app, const AppConfig& cfg, StreamRuntime& stream) {
   constexpr int kPullTimeoutMs = 50;
   constexpr int kMaxConsecutiveFrameFailures = 30;
@@ -1643,6 +1674,8 @@ void run_stream_feeder(AppRuntime& app, const AppConfig& cfg, StreamRuntime& str
       continue;
     }
     if (status == simaai::neat::PullStatus::Closed) {
+      throw_if_run_failed(app.source_run,
+                          "stream " + std::to_string(stream.index) + " source pull");
       break;
     }
     if (status != simaai::neat::PullStatus::Ok) {
@@ -1701,11 +1734,19 @@ void run_stream_feeder(AppRuntime& app, const AppConfig& cfg, StreamRuntime& str
     stream.in_flight.fetch_add(1);
     if (!stream.model_run.push(kModelInput, simaai::neat::TensorList{frame})) {
       stream.in_flight.fetch_sub(1);
-      std::lock_guard<std::mutex> lock(stream.pending_mutex);
-      if (!stream.pending.empty()) {
-        stream.pending.pop_back();
+      {
+        std::lock_guard<std::mutex> lock(stream.pending_mutex);
+        if (!stream.pending.empty()) {
+          stream.pending.pop_back();
+        }
       }
-      break;
+      if (g_stop_requested != 0 || stream.closed.load()) {
+        break;
+      }
+      // A rejected frame outside shutdown means this stream can no longer run its model.
+      const std::string error = stream.model_run.last_error();
+      throw std::runtime_error("stream " + std::to_string(stream.index) + " model push failed" +
+                               (error.empty() ? std::string{} : ": " + error));
     }
   }
   stream.feed_done.store(true);
@@ -1733,6 +1774,8 @@ void run_stream_consumer(const AppConfig& cfg, StreamRuntime& stream) {
       continue;
     }
     if (status == simaai::neat::PullStatus::Closed) {
+      throw_if_run_failed(stream.model_run,
+                          "stream " + std::to_string(stream.index) + " model pull");
       break;
     }
     if (status != simaai::neat::PullStatus::Ok) {

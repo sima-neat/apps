@@ -187,14 +187,27 @@ class TestConfigLoading:
 
         assert cfg.max_inflight_per_stream == 3
 
-    @pytest.mark.parametrize("limit", [0, -1])
+    @pytest.mark.parametrize("limit", [0, -1, 17])
     def test_invalid_inflight_limit_is_rejected(self, tmp_path: Path, limit):
         from main import load_app_config
 
         config_path = write_config(tmp_path, DEFAULT_STREAMS[:1], max_inflight_per_stream=limit)
 
-        with pytest.raises(ValueError, match="max_inflight_per_stream must be > 0"):
+        with pytest.raises(ValueError, match="max_inflight_per_stream must be between 1 and 16"):
             load_app_config(config_path)
+
+    @pytest.mark.parametrize("frames, valid", [(0, True), (30, False), (31, True)])
+    def test_frame_limit_must_exceed_warmup(self, frames, valid):
+        """Warmup frames publish nothing, so a limit within them would succeed with no output."""
+        import main
+        from dataclasses import replace
+
+        cfg = replace(_config(), streams=[object()], frames=frames, warmup_frames=30)
+        if valid:
+            main.validate_config(cfg)
+        else:
+            with pytest.raises(ValueError, match="frames must be 0 or greater than"):
+                main.validate_config(cfg)
 
     def test_unknown_task_is_rejected(self, tmp_path: Path):
         from main import load_app_config
@@ -735,6 +748,23 @@ def test_frame_for_model_passes_decoder_frame_through():
     assert main.frame_for_model(nv12) is nv12
     with pytest.raises(ValueError, match="NV12"):
         main.frame_for_model(SimpleNamespace(is_nv12=lambda: False, width=1920, height=1080))
+
+
+def test_feeder_reports_a_rejected_model_push(monkeypatch):
+    """A push the model refuses outside shutdown ends the run instead of stopping one stream."""
+    import main
+
+    stream = make_stream("detection", FakeMetadataSender())
+    stream.model_run = SimpleNamespace(push=lambda *args: False, last_error=lambda: "bad input")
+    app = SimpleNamespace(source_run=SimpleNamespace(
+        pull=lambda *args: SimpleNamespace(pts_ns=1, frame_id=1, tensor=object())))
+    monkeypatch.setattr(main, "first_tensor_from_sample", lambda sample: sample.tensor)
+    monkeypatch.setattr(main, "frame_for_model", lambda tensor: tensor)
+    with pytest.raises(RuntimeError, match="stream 0 model push failed: bad input"):
+        main.run_stream_feeder(app, _config(), stream)
+    assert stream.in_flight == 0
+    assert not stream.pending
+    assert stream.feed_done
 
 
 def test_feeder_fails_after_consecutive_unusable_frames(monkeypatch):

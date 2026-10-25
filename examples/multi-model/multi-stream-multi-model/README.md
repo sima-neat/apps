@@ -10,11 +10,11 @@
 | Languages | C++, Python |
 | Status | experimental |
 | Binary Name | multi-stream-multi-model |
-| Model | yolo_11s |
+| Model | yolo_11s, yolo_11s_seg, yolo26m-pose-int8-b1, yolo26m-det-int8-b1 |
 
 ## Concept
 
-Runs a different model on each of four RTSP cameras in one process, and sends every camera's video and its own detection, segmentation, or pose metadata to Insight.
+Runs a different model on each of up to four RTSP cameras in one process, and sends every camera's video and its own detection, segmentation, or pose metadata to Insight.
 
 Each stream uses its own model and Insight channel. The default configuration runs
 object detection, instance segmentation, pose estimation, and object detection on
@@ -26,11 +26,8 @@ streams 0–3. Source timestamps keep each overlay paired with its camera frame.
 
 ## Prerequisites
 
-This application is experimental. The exact branch-package installation and
-installed README workflow still need validation before it is marked stable.
-
 - `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
-- Up to four RTSP H.264 or H.265 sources, and an [Insight](https://developer.sima.ai/software/tools/insight/) host reachable from the target. Pointing several streams at the same camera is fine; each one still builds its own decode and its own model.
+- Up to four RTSP sources, all H.264 or all H.265, and an [Insight](https://developer.sima.ai/software/tools/insight/) host reachable from the target. Pointing several streams at the same camera is fine; each one still builds its own decode and its own model.
 
 ## Install Apps
 
@@ -76,8 +73,7 @@ cd ..
 ```
 
 The download release is 2.1.3, matching `modelzoo-version` in `deps/manifest.json`.
-Use the listed direct YOLO26 artifacts; the Model Zoo YOLO26 packages are not
-validated for this workflow. The `decode` setting selects the package's head
+These four packages are the tested set. The `decode` setting selects the package's head
 layout: use `yolov8` for these YOLO11 packages and `yolo26` for these YOLO26 packages.
 
 ## Configure
@@ -88,7 +84,12 @@ Open `${APP_DIR}/src/common/config.yaml` and set:
 - `streams[].task` — `detection`, `segmentation`, or `pose`.
 - `streams[].decode` — `yolov8` or `yolo26`, matching the package's head layout.
 - `streams[].model` — the downloaded package for that stream.
+- `input.codec` — `h264` or `h265`. All streams share this one setting, so every camera must use
+  the same codec.
+- `input.tcp` — `true` to receive RTSP over TCP, `false` for UDP.
 - `output.insight.host` — the host running Insight.
+- `output.insight.video_port_base` and `output.insight.metadata_port_base` — the first Insight
+  port for each kind of output (defaults `9000` and `9100`).
 
 `inference.fps` must remain `0`: this application uses each camera's source frame
 rate. Configure a lower rate at the camera or RTSP streamer when needed.
@@ -120,13 +121,22 @@ touching the cameras.
 
 ## Expected Result
 
-Each stream prints its resolved task, model, and Insight ports at startup:
+Each stream prints its resolved task, model, camera, and Insight ports at startup:
 
 ```text
-[stream 0] task=detection decode=yolov8 model=yolo_11s_mpk.tar.gz rtsp=... video=9000 metadata=9100
-[stream 1] task=segmentation decode=yolov8 model=yolo_11s_seg_mpk.tar.gz rtsp=... video=9001 metadata=9101
-[stream 2] task=pose decode=yolo26 model=yolo26m-pose-int8-b1.tar.gz rtsp=... video=9002 metadata=9102
-[stream 3] task=detection decode=yolo26 model=yolo26m-det-int8-b1.tar.gz rtsp=... video=9003 metadata=9103
+[stream 0] task=detection decode=yolov8 model=yolo_11s_mpk.tar.gz rtsp=<url> stream=1920x1080@30 insight=<host> video=9000 metadata=9100
+[stream 1] task=segmentation decode=yolov8 model=yolo_11s_seg_mpk.tar.gz rtsp=<url> stream=1920x1080@30 insight=<host> video=9001 metadata=9101
+[stream 2] task=pose decode=yolo26 model=yolo26m-pose-int8-b1.tar.gz rtsp=<url> stream=1920x1080@30 insight=<host> video=9002 metadata=9102
+[stream 3] task=detection decode=yolo26 model=yolo26m-det-int8-b1.tar.gz rtsp=<url> stream=1920x1080@30 insight=<host> video=9003 metadata=9103
+```
+
+When the run ends (Ctrl-C, or `inference.frames` reached), each stream reports what it published:
+
+```text
+[stream 0] task=detection processed=1229 dropped_objects=0
+[stream 1] task=segmentation processed=1210 dropped_segments=0
+[stream 2] task=pose processed=1203 dropped_poses=0
+[stream 3] task=detection processed=1205 dropped_objects=0
 ```
 
 Open the Insight Video Viewer and select the four channels. Open a viewer tab for **every**
@@ -139,11 +149,15 @@ untouched camera stream.
 Setting `output.debug_dir` and `output.save_every` also writes annotated JPEGs named
 `stream_<i>_frame_<n>.jpg`, which is the quickest way to confirm a stream's model without a browser.
 
-With `runtime.profile: true` each stream reports its own throughput:
+With `runtime.profile: true`, the packaged default, the application also prints each pipeline and
+its element counters (`Pipeline:`, `ElementFlow:`, `Backend:`), and each stream reports its
+throughput every 100 frames:
 
 ```text
-[profile stream=1 task=segmentation] frames=100 output_fps=... avg_result_pull_ms=... avg_instances=...
+[profile stream=1 task=segmentation] frames=100 output_fps=30.3 avg_result_pull_ms=24.3 avg_metadata_send_ms=4.1 avg_instances=3.7
 ```
+
+Set `runtime.profile: false` for a quiet run.
 
 Measured on a Modalix DevKit against four 1920x1080@30 H.264 RTSP sources with the default
 models and debug saving disabled:
@@ -168,15 +182,16 @@ each saved frame.
   so confirm only one is running.
 - Boxes appear in roughly the right places but at the wrong sizes: `streams[].decode` does not match
   the package's head layout. Check it against the table above.
-- One stream is silent while the others work: confirm its `model` path is readable and that its
+- One stream is silent while the others work: confirm that its camera URL plays and that its
   Insight metadata port is not taken by another application.
 - A stream reports a nonzero `dropped_objects`, `dropped_segments` or `dropped_poses` at exit: a
   frame's results did not fit one metadata message, so the lowest-confidence ones were left out.
   Lower `inference.max_detections` or raise `inference.min_score`.
-- Throughput is roughly halved and one stream is far behind: check that each model was given its
-  own `Run`. Sharing one `Run` across the four model graphs is what makes a single stream stall.
 - The application exits with `consecutive decoded frames were unusable`: the decoder is not
   producing NV12 frames for that stream. Check that `input.codec` matches the camera.
+- The application exits with a `source pull`, `model pull` or `model push failed` error: a camera,
+  decoder or model stopped with the reason shown. Check that camera's URL and that model's package,
+  then start the application again.
 - One stream falls far behind the others while the rest hold the source rate: the MLA is
   oversubscribed. Four 1920x1080@30 streams fit the small INT8 defaults; heavier packages do not,
   and the shortfall concentrates on a single stream instead of spreading. Drop stream entries or

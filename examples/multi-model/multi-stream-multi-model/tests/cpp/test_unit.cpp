@@ -198,10 +198,45 @@ bool test_validate_config_only_rejects_invalid_inflight_limit(const std::string&
 
   const auto result = validate(binary, config_path);
   const bool ok = expect_true(result.exit_code == 1, "invalid inflight limit is rejected") &&
-                  expect_contains(result.stderr_text, "max_inflight_per_stream must be > 0",
+                  expect_contains(result.stderr_text, "max_inflight_per_stream must be between 1 and 16",
                                   "invalid inflight error names the setting");
   remove_dir(config_path.parent_path().string());
   return ok;
+}
+
+bool test_validate_config_only_rejects_inflight_above_decoder_cap(const std::string& binary) {
+  const fs::path config_path =
+      write_config("test_validate_config_only_rejects_inflight_above_decoder_cap",
+                   std::string(kOneStream) + "inference:\n  max_inflight_per_stream: 17\n" +
+                       kInsightOutput);
+  const auto result = validate(binary, config_path);
+  const bool ok = expect_true(result.exit_code == 1, "inflight above the decoder cap is rejected") &&
+                  expect_contains(result.stderr_text, "max_inflight_per_stream must be between 1 and 16",
+                                  "inflight cap error names the limit");
+  remove_dir(config_path.parent_path().string());
+  return ok;
+}
+
+bool test_validate_config_only_rejects_frames_within_warmup(const std::string& binary) {
+  const fs::path rejected_path =
+      write_config("test_validate_config_only_rejects_frames_within_warmup",
+                   std::string(kOneStream) +
+                       "runtime:\n  warmup_frames: 30\ninference:\n  frames: 30\n" +
+                       kInsightOutput);
+  const auto rejected = validate(binary, rejected_path);
+  remove_dir(rejected_path.parent_path().string());
+  const fs::path accepted_path =
+      write_config("test_validate_config_only_accepts_frames_past_warmup",
+                   std::string(kOneStream) +
+                       "runtime:\n  warmup_frames: 30\ninference:\n  frames: 31\n" +
+                       kInsightOutput);
+  const auto accepted = validate(binary, accepted_path);
+  remove_dir(accepted_path.parent_path().string());
+  return expect_true(rejected.exit_code == 1, "frames within warmup are rejected") &&
+         expect_contains(rejected.stderr_text,
+                         "inference.frames must be 0 or greater than runtime.warmup_frames",
+                         "frames-within-warmup error names both settings") &&
+         expect_true(accepted.exit_code == 0, "frames past warmup are accepted");
 }
 
 bool test_validate_config_only_rejects_invalid_mask_threshold(const std::string& binary) {
@@ -311,6 +346,8 @@ int main(int argc, char** argv) {
   ok &= test_validate_config_only_rejects_unknown_decode_family(binary);
   ok &= test_validate_config_only_rejects_stream_without_model(binary);
   ok &= test_validate_config_only_rejects_invalid_inflight_limit(binary);
+  ok &= test_validate_config_only_rejects_inflight_above_decoder_cap(binary);
+  ok &= test_validate_config_only_rejects_frames_within_warmup(binary);
   ok &= test_validate_config_only_rejects_invalid_mask_threshold(binary);
   return ok ? 0 : 1;
 }
