@@ -526,17 +526,18 @@ def build_pipeline(cfg: AppConfig, camera=None) -> PipelineRuntime:
         ingress.caps_override = camera.caps
         ingress.memory_policy = pyneat.InputMemoryPolicy.SystemMemory
         ingress.do_timestamp = False
-        decode = pyneat.SimaDecodeOptions()
-        decode.type = pyneat.SimaDecodeType.MJPEG
-        decode.raw_output = True
-        decode.out_format = pyneat.Format.NV12
-        decode.dec_width, decode.dec_height = cfg.width, cfg.height
-        decode.dec_fps = cfg.fps
         source_graph.add(pyneat.nodes.input("jpeg", ingress))
-        source_graph.add(pyneat.nodes.jpeg_parse())
-        source_graph.add(pyneat.nodes.sima_decode(decode))
         seed = pyneat.make_encoded_sample(camera.read(), camera.caps, pts_ns=0,
                                           duration_ns=1_000_000_000 // cfg.fps)
+    # The override fragment supplies MJPEG too, so both sources share the hardware decode.
+    decode = pyneat.SimaDecodeOptions()
+    decode.type = pyneat.SimaDecodeType.MJPEG
+    decode.raw_output = True
+    decode.out_format = pyneat.Format.NV12
+    decode.dec_width, decode.dec_height = cfg.width, cfg.height
+    decode.dec_fps = cfg.fps
+    source_graph.add(pyneat.nodes.jpeg_parse())
+    source_graph.add(pyneat.nodes.sima_decode(decode))
     if cfg.flip != "none":
         source_graph.add(pyneat.nodes.custom(f"videoflip method={FLIP_METHODS[cfg.flip]}"))
 

@@ -532,21 +532,22 @@ int main(int argc, char** argv) {
       ingress.caps_override = camera->caps;
       ingress.memory_policy = neat::InputMemoryPolicy::SystemMemory;
       ingress.do_timestamp = false;
-      neat::SimaDecodeOptions decode;
-      decode.type = neat::SimaDecodeType::MJPEG;
-      decode.raw_output = true;
-      decode.out_format = "NV12";
-      decode.dec_width = cfg.width;
-      decode.dec_height = cfg.height;
-      decode.dec_fps = cfg.fps;
       source_graph.add(neat::nodes::Input("jpeg", ingress));
-      source_graph.add(neat::nodes::JpegParse());
-      source_graph.add(neat::nodes::SimaDecode(decode));
       auto first_frame = camera->read();
       if (g_stop.load()) return 130;
       seed = neat::make_encoded_sample(std::move(first_frame), camera->caps, 0, -1,
                                        1000000000LL / cfg.fps);
     }
+    // The override fragment supplies MJPEG too, so both sources share the hardware decode.
+    neat::SimaDecodeOptions decode;
+    decode.type = neat::SimaDecodeType::MJPEG;
+    decode.raw_output = true;
+    decode.out_format = "NV12";
+    decode.dec_width = cfg.width;
+    decode.dec_height = cfg.height;
+    decode.dec_fps = cfg.fps;
+    source_graph.add(neat::nodes::JpegParse());
+    source_graph.add(neat::nodes::SimaDecode(decode));
     if (cfg.flip != "none") {
       source_graph.add(neat::nodes::Custom("videoflip method=" + flip_methods().at(cfg.flip)));
     }

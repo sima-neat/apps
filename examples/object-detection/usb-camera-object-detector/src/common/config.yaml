@@ -8,7 +8,7 @@ source:                      # USB (UVC) camera capture.
   height: 1080               # Choose the matching height for that MJPG mode.
   fps: 30                    # Choose an FPS listed for that MJPG resolution.
   flip: none                 # none, rotate-180, horizontal-flip, or vertical-flip.
-  override_fragment: ""      # Diagnostic: replace the camera with any NV12 GStreamer fragment.
+  override_fragment: ""      # Diagnostic: replace the camera with a GStreamer fragment producing MJPEG.
 
 inference:                   # Detection settings.
   frames: 0                  # Frame limit. 0 means run until interrupted.
@@ -29,11 +29,11 @@ output:                      # Insight receiver.
     bitrate_kbps: 4000       # H.264 encoder bitrate.
 
 # Test harness settings only. Normal example runs ignore this section.
-# The e2e tests have no camera, so they drive the same graph from a fixed COCO image repeated as an
-# NV12 source through source.override_fragment.
+# The e2e tests have no camera, so source.override_fragment re-encodes a fixed COCO image as
+# 4:2:2 MJPEG, the sampling most USB cameras send, through the same JpegParse/SimaDecode route.
 testing:
   e2e:
     source:
-      override_fragment: "filesrc location=assets/datasets-test/coco/000000265108.jpg ! jpegdec ! imagefreeze is-live=true ! videoscale ! videoconvert ! video/x-raw,format=NV12,width=1920,height=1080,framerate=30/1 ! queue leaky=downstream max-size-buffers=2"
+      override_fragment: "filesrc location=assets/datasets-test/coco/000000265108.jpg ! jpegdec ! imagefreeze is-live=true ! videoscale ! videoconvert ! video/x-raw,format=Y42B,width=1920,height=1080,framerate=30/1 ! jpegenc ! queue leaky=downstream max-size-buffers=2"
     inference:
       frames: 30

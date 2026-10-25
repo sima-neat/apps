@@ -1,8 +1,8 @@
 // E2E test for usb-camera-object-detector.
 // There is no USB camera on the test target, so this drives the same graph from
-// the fixed-image NV12 source declared under `testing.e2e` in config.yaml. That
-// exercises the NV12 branch, video sender, model, box decode, and metadata send.
-// USB capture and Input/JpegParse/SimaDecode require camera validation separately.
+// the fixed-image MJPEG source declared under `testing.e2e` in config.yaml. That
+// exercises JpegParse/SimaDecode for 4:2:2 and 4:2:0 MJPEG, the NV12 branch, video
+// sender, model, box decode, and metadata send. USB capture requires camera validation.
 #include "support/testing/test_config.h"
 #include "support/testing/metadata_json_listener.h"
 #include <nlohmann/json.hpp>
@@ -166,62 +166,84 @@ int main(int argc, char** argv) try {
                         "SIMANEAT_APPS_TEST_LABELS_FILE");
   }
 
-  const auto out_dir = create_test_output_dir(kExample, "test_full_pipeline");
-  if (out_dir.empty()) {
-    return 1;
+  const std::string shipped_fragment =
+      example_common_config(kExample).string_or("testing.e2e.source.override_fragment", "");
+  const auto format_pos = shipped_fragment.find("format=Y42B");
+  if (format_pos == std::string::npos) {
+    throw std::runtime_error("testing.e2e.source.override_fragment must encode format=Y42B");
   }
 
-  const int video_port = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 19200);
-  const int metadata_port = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 19300);
-  VideoReceiver video(fs::path(out_dir) / "received.h264", video_port);
-  MetadataJsonListenerOptions options;
-  options.base_port = metadata_port;
-  options.num_ports = 1;
-  options.min_object_count = 1;
-  options.timeout_ms = 5000;
-  MetadataJsonListener listener(options);
-  if (!listener.ok()) throw std::runtime_error(listener.error());
+  // Y42B encodes 4:2:2 MJPEG, the sampling most USB cameras send; I420 encodes 4:2:0.
+  auto run_case = [&](const std::string& raw_format) -> int {
+    std::string fragment = shipped_fragment;
+    fragment.replace(format_pos, std::string("format=Y42B").size(), "format=" + raw_format);
+    std::cout << "[RUN] MJPEG source from " << raw_format << "\n";
 
-  // write_e2e_config folds `testing.e2e.*` into the runtime keys, so the
-  // fixed-image source override in config.yaml is applied here automatically.
-  const fs::path config_path = fs::path(out_dir).parent_path() / "config.yaml";
-  write_e2e_config(kExample, config_path,
-                   {{"model.path", model_path},
-                    {"model.labels", labels_file},
-                    {"inference.frames", std::to_string(kFrames)},
-                    {"output.insight.host", "127.0.0.1"},
-                    {"output.insight.video_port", std::to_string(video_port)},
-                    {"output.insight.metadata_port", std::to_string(metadata_port)}});
+    const auto out_dir = create_test_output_dir(kExample, "test_full_pipeline_" + raw_format);
+    if (out_dir.empty()) {
+      return 1;
+    }
 
-  const int timeout = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
-  const auto result = spawn_and_wait(binary, {"--config", config_path.string()}, timeout);
+    const int video_port = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 19200);
+    const int metadata_port = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 19300);
+    VideoReceiver video(fs::path(out_dir) / "received.h264", video_port);
+    MetadataJsonListenerOptions options;
+    options.base_port = metadata_port;
+    options.num_ports = 1;
+    options.min_object_count = 1;
+    options.timeout_ms = 5000;
+    MetadataJsonListener listener(options);
+    if (!listener.ok()) throw std::runtime_error(listener.error());
+
+    // write_e2e_config folds `testing.e2e.*` into the runtime keys; the source
+    // override is set explicitly so each case selects its MJPEG sampling.
+    const fs::path config_path = fs::path(out_dir).parent_path() / "config.yaml";
+    write_e2e_config(kExample, config_path,
+                     {{"model.path", model_path},
+                      {"model.labels", labels_file},
+                      {"source.override_fragment", fragment},
+                      {"inference.frames", std::to_string(kFrames)},
+                      {"output.insight.host", "127.0.0.1"},
+                      {"output.insight.video_port", std::to_string(video_port)},
+                      {"output.insight.metadata_port", std::to_string(metadata_port)}});
+
+    const int timeout = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
+    const auto result = spawn_and_wait(binary, {"--config", config_path.string()}, timeout);
+
+    int rc = 0;
+    if (result.exit_code != 0) {
+      std::cerr << "[FAIL] exit code " << result.exit_code << "\n";
+      std::cerr << "stderr:\n" << result.stderr_text << "\n";
+      rc = 1;
+    } else if (result.stdout_text.find("source=override") == std::string::npos) {
+      std::cerr << "[FAIL] run did not report the overridden source\n";
+      std::cerr << "stdout:\n" << result.stdout_text << "\n";
+      rc = 1;
+    } else if (result.stdout_text.find("processed=" + std::to_string(kFrames)) ==
+               std::string::npos) {
+      std::cerr << "[FAIL] run did not publish " << kFrames << " frames\n";
+      std::cerr << "stdout:\n" << result.stdout_text << "\n";
+      rc = 1;
+    } else {
+      video.verify();
+      const auto received = listener.wait_for_messages();
+      const auto following = listener.wait_for_messages();
+      verify_metadata(received);
+      verify_metadata(following);
+      if (following.messages.back().timestamp_ms <= received.messages.back().timestamp_ms)
+        throw std::runtime_error("metadata timestamps did not advance");
+      std::cout << "[OK] received decodable H.264 and nonempty valid detection metadata\n";
+      std::cout << "[OK] published " << kFrames << " frames from the fixed-image source\n";
+    }
+
+    remove_dir(out_dir);
+    return rc;
+  };
 
   int rc = 0;
-  if (result.exit_code != 0) {
-    std::cerr << "[FAIL] exit code " << result.exit_code << "\n";
-    std::cerr << "stderr:\n" << result.stderr_text << "\n";
-    rc = 1;
-  } else if (result.stdout_text.find("source=override") == std::string::npos) {
-    std::cerr << "[FAIL] run did not report the overridden source\n";
-    std::cerr << "stdout:\n" << result.stdout_text << "\n";
-    rc = 1;
-  } else if (result.stdout_text.find("processed=" + std::to_string(kFrames)) == std::string::npos) {
-    std::cerr << "[FAIL] run did not publish " << kFrames << " frames\n";
-    std::cerr << "stdout:\n" << result.stdout_text << "\n";
-    rc = 1;
-  } else {
-    video.verify();
-    const auto received = listener.wait_for_messages();
-    const auto following = listener.wait_for_messages();
-    verify_metadata(received);
-    verify_metadata(following);
-    if (following.messages.back().timestamp_ms <= received.messages.back().timestamp_ms)
-      throw std::runtime_error("metadata timestamps did not advance");
-    std::cout << "[OK] received decodable H.264 and nonempty valid detection metadata\n";
-    std::cout << "[OK] published " << kFrames << " frames from the fixed-image source\n";
+  for (const std::string raw_format : {"Y42B", "I420"}) {
+    rc |= run_case(raw_format);
   }
-
-  remove_dir(out_dir);
   return rc;
 }
  catch (const std::exception& error) {

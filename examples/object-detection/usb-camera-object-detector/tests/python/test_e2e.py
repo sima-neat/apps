@@ -1,9 +1,9 @@
 """E2E tests for usb-camera-object-detector (Python).
 
 There is no USB camera on the test target, so these drive the same graph from
-the fixed-image NV12 source declared under `testing.e2e` in config.yaml. That
-covers the NV12 branch, video sender, model, box decode, and metadata send.
-USB capture and the encoded Input/JpegParse/SimaDecode route require camera
+the fixed-image MJPEG source declared under `testing.e2e` in config.yaml. That
+covers JpegParse/SimaDecode for 4:2:2 and 4:2:0 MJPEG, the NV12 branch, video
+sender, model, box decode, and metadata send. USB capture requires camera
 validation separately.
 """
 
@@ -112,8 +112,11 @@ class TestE2E:
             cwd=str(EXAMPLE_DIR.parents[2]),
         )
 
+    # Y42B encodes 4:2:2 MJPEG, the sampling most USB cameras send; I420 encodes 4:2:0.
+    @pytest.mark.parametrize("raw_format", ["Y42B", "I420"], ids=["mjpeg422", "mjpeg420"])
     def test_full_pipeline(
         self,
+        raw_format,
         e2e_model_path,
         tmp_output_dir,
         test_timeout_ms,
@@ -125,6 +128,9 @@ class TestE2E:
             bool(shipped_test_override()),
             "config.yaml declares no testing.e2e source override",
         )
+        fragment = shipped_test_override()
+        assert "format=Y42B" in fragment
+        fragment = fragment.replace("format=Y42B", f"format={raw_format}")
 
         metadata_port = int(os.environ.get("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 19300))
         with MetadataJsonListener("127.0.0.1", metadata_port, num_ports=1,
@@ -132,6 +138,7 @@ class TestE2E:
                                   min_object_count=1) as listener, VideoReceiver(
                                       tmp_output_dir / "received.h264") as video:
             config_path = e2e_config_writer({
+                "source": {"override_fragment": fragment},
                 "inference": {"frames": FRAMES},
                 "output": {"insight": {"host": "127.0.0.1", "video_port": video.port,
                                         "metadata_port": metadata_port}},

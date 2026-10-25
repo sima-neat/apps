@@ -172,5 +172,7 @@ To modify, compile, or test this example, use the [Apps contributor workflow](ht
 
 Both implementations use Neat `Input`, `JpegParse`, and `SimaDecode` nodes for
 hardware MJPEG decoding. `source.override_fragment` is an optional diagnostic
-NV12 source; leave it empty for USB capture. End-to-end tests use a fixed image
-and require `ffprobe` to validate received video alongside detection metadata.
+GStreamer source that must produce MJPEG at the configured width, height, and
+FPS; it replaces only the camera, and the same decoder route follows it. Leave it
+empty for USB capture. End-to-end tests encode a fixed image as 4:2:2 and 4:2:0
+MJPEG and require `ffprobe` to validate received video alongside detection metadata.
