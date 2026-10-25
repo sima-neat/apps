@@ -426,7 +426,9 @@ std::string strip_inline_comment(const std::string& line) {
       in_single = !in_single;
     } else if (c == '"' && !in_single) {
       in_double = !in_double;
-    } else if (c == '#' && !in_single && !in_double) {
+    } else if (c == '#' && !in_single && !in_double &&
+               (out.empty() || std::isspace(static_cast<unsigned char>(out.back())))) {
+      // As in YAML, `#` starts a comment only after whitespace, so `pa#ss` in a URL survives.
       break;
     }
     out.push_back(c);

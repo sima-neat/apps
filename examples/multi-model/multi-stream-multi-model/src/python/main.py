@@ -1480,15 +1480,16 @@ def run_stream_feeder(app: AppRuntime, cfg: AppConfig, stream: StreamRuntime) ->
             debug_frame = tensor_bgr_from_decoded(tensor) if save_frames_enabled(cfg) else None
             # Recorded before the push: under Block the result can come back the instant push
             # returns, and a consumer that found the queue empty would have nothing to pair it
-            # with.
+            # with. ``in_flight`` changes only under ``pending_lock``: ``+=`` on an attribute is a
+            # read-modify-write that two threads can interleave, even with the GIL.
             with stream.pending_lock:
                 stream.pending.append(
                     ((sample.pts_ns, source_frame_id(stream, sample)), debug_frame)
                 )
-            stream.in_flight += 1
+                stream.in_flight += 1
             if not stream.model_run.push(MODEL_INPUT, [frame]):
-                stream.in_flight -= 1
                 with stream.pending_lock:
+                    stream.in_flight -= 1
                     if stream.pending:
                         stream.pending.pop()
                 if stream.closed:
@@ -1520,8 +1521,8 @@ def run_stream_consumer(cfg: AppConfig, stream: StreamRuntime) -> None:
                 if stream.feed_done and stream.in_flight <= 0:
                     break
                 continue
-            stream.in_flight -= 1
             with stream.pending_lock:
+                stream.in_flight -= 1
                 stamp, debug_frame = stream.pending.popleft() if stream.pending else ((-1, -1), None)
             process_output_sample(cfg, stream, sample, stamp, debug_frame, pull_end - pull_start)
     finally:
