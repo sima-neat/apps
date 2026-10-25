@@ -8,7 +8,16 @@ on:
       - "**"
     tags:
       - "*"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      diagnostic_mode:
+        type: choice
+        default: trace
+        options: [trace, quiet]
+      diagnostic_case:
+        type: choice
+        default: all
+        options: [all, hd-h264, sam-h264, yolov8-h265, yolov8-http]
 
 permissions:
   actions: write
@@ -171,6 +180,8 @@ jobs:
         run: python3 -m pytest -c tests/pytest.ini --rootdir=. -v tests/scripts
 
   publish-vulcan-artifacts:
+    # Diagnostic-only test selection must never publish a release.
+    if: ${{ false }}
     name: Publish to Vulcan
     needs:
       - resolve-vulcan-config
@@ -192,7 +203,7 @@ jobs:
   resolve-portal-publish-config:
     name: Resolve Portal Publish Config
     needs: resolve-vulcan-config
-    if: ${{ github.ref_type == 'branch' }}
+    if: ${{ false }}
     uses: sima-neat/.github/.github/workflows/vulcan-resolve-config.yml@main
     with:
       vulcan_env: ${{ needs.resolve-vulcan-config.outputs.vulcan_env == 'prod' && github.ref_name != 'main' && 'staging' || needs.resolve-vulcan-config.outputs.vulcan_env }}
@@ -202,7 +213,12 @@ jobs:
     uses: sima-neat/.github/.github/workflows/vulcan-resolve-modalix-runner.yml@main
 
   test-runtime:
-    name: Test Apps Runtime
+    name: "Diagnostic ${{ matrix.case }} (${{ inputs.diagnostic_mode || 'trace' }})"
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        case: ${{ fromJSON(inputs.diagnostic_case != '' && inputs.diagnostic_case != 'all' && format('["{0}"]', inputs.diagnostic_case) || '["hd-h264","sam-h264","yolov8-h265","yolov8-http"]') }}
     needs:
       - build
       - resolve-vulcan-config
@@ -308,7 +324,7 @@ jobs:
           "${PYTHON_TEST_BIN}" -m pip install pytest "opencv-python-headless<4.12" PyYAML
           "${PYTHON_TEST_BIN}" -c "import pyneat; print('Using pyneat:', pyneat.__file__)"
 
-      - name: Run all activated Apps tests
+      - name: Run the selected unresolved case
         env:
           NEAT_APPS_SKIP_MODEL_DOWNLOAD: "0"
           SIMANEAT_TEST_RTSP_H264_URL: ${{ vars.SIMANEAT_TEST_RTSP_H264_URL }}
@@ -321,11 +337,22 @@ jobs:
           SIMANEAT_TEST_HTTP_MJPEG_URLS: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URLS }}
         run: |
           RUNTIME_DIR="$(cat _vulcan-test/apps_runtime_dir.txt)"
-          cd "${RUNTIME_DIR}"
           source "${PYNEAT_ACTIVATE}"
-          ./tests/test.sh --all --strict
+          "${PYTHON_TEST_BIN}" scripts/ci/run_stall_diagnostic.py \
+            --case "${{ matrix.case }}" --mode "${{ inputs.diagnostic_mode || 'trace' }}" \
+            --runtime "${RUNTIME_DIR}" --output "${GITHUB_WORKSPACE}/_vulcan-test/diagnostics"
+
+      - name: Upload diagnostic evidence even after failure
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: apps-diagnostic-${{ matrix.case }}-${{ inputs.diagnostic_mode || 'trace' }}
+          path: _vulcan-test/diagnostics/
+          if-no-files-found: error
+          retention-days: 3
 
       - name: Package tested runtime for release
+        if: ${{ false }}
         run: |
           rm -rf dist
           mkdir -p dist
@@ -359,6 +386,7 @@ jobs:
           ls -lh dist
 
       - name: Upload tested Apps release
+        if: ${{ false }}
         uses: actions/upload-artifact@v7
         with:
           name: neat-apps-dist
@@ -388,7 +416,7 @@ jobs:
 
   build-sysdoc-examples:
     name: Build SysDoc Examples Route
-    if: ${{ github.ref_type == 'branch' }}
+    if: ${{ false }}
     needs:
       - resolve-portal-publish-config
       - test-runtime
@@ -463,7 +491,7 @@ jobs:
 
   publish-sysdoc-examples:
     name: Publish SysDoc Examples Route
-    if: ${{ github.ref_type == 'branch' }}
+    if: ${{ false }}
     needs:
       - resolve-portal-publish-config
       - build-sysdoc-examples
@@ -482,7 +510,7 @@ jobs:
 
   publish-apps-algolia:
     name: Publish Apps Algolia Index
-    if: ${{ github.ref_type == 'branch' }}
+    if: ${{ false }}
     needs:
       - resolve-portal-publish-config
       - publish-sysdoc-examples

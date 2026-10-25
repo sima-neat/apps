@@ -233,7 +233,8 @@ int main(int argc, char** argv) {
     return skip_or_fail("configured high-density model is unavailable");
   int rc = 0;
   int cases_run = 0;
-  for (const std::string codec : {"h264", "h265"}) {
+  // Diagnostic branch selects the unresolved H264 case; assertions are unchanged.
+  for (const std::string codec : {"h264"}) {
     const auto urls = codec == "h264" ? rtsp_h264_urls_from_env() : rtsp_h265_urls_from_env();
     if (urls.empty()) {
       if (skip_or_fail("no RTSP " + codec + " URLs configured") != kSkipCode)

@@ -1,6 +1,7 @@
 {
   "neat-core": {
-    "policy": "snap"
+    "ref": "codex/apps-stall-diagnostics-20261025",
+    "spec": "aea171214613"
   },
   "sdk": {
     "channel": "develop"
