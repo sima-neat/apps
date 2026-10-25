@@ -408,17 +408,33 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
+      - name: Archive full-suite diagnostics without following symlinks
+        if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          archive="${GITHUB_WORKSPACE}/apps-core1139-diagnostics.tar.gz"
+          rm -f "$archive"
+          [[ -d _vulcan-test ]] || exit 0
+          cd _vulcan-test
+          roots=()
+          for root in diagnostics install/prebuilt-apps/deps install/prebuilt-apps/sandbox-test; do
+            [[ ! -d "$root" || -L "$root" ]] || roots+=("$root")
+          done
+          [[ "${#roots[@]}" -gt 0 ]] || exit 0
+          # Negative-path tests deliberately leave cyclic/broken symlinks.
+          # Only regular files enter the archive; never traverse those links.
+          find -P "${roots[@]}" -type f \
+            \( -path 'diagnostics/*' -o -path 'install/prebuilt-apps/deps/*' \
+               -o -name '*.log' -o -name command.txt -o -name config.yaml \) \
+            -print0 > diagnostic-files.list
+          tar --null --verbatim-files-from -T diagnostic-files.list -czf "$archive"
+
       - name: Upload full-suite diagnostics
         if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
           name: apps-core1139-diagnostics
-          path: |
-            _vulcan-test/diagnostics/
-            _vulcan-test/install/prebuilt-apps/sandbox-test/**/*.log
-            _vulcan-test/install/prebuilt-apps/sandbox-test/**/command.txt
-            _vulcan-test/install/prebuilt-apps/sandbox-test/**/config.yaml
-            _vulcan-test/install/prebuilt-apps/deps/
+          path: apps-core1139-diagnostics.tar.gz
           if-no-files-found: warn
           retention-days: 7
 

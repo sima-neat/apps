@@ -121,3 +121,47 @@ def test_fdinfo_keeps_aliases_without_opening_device_buffers(tmp_path):
     (directory / '8').write_text('ino:\t99\n')
     assert diag.dma_buf_descriptors(tmp_path) == {
         fd: {'ino': '42', 'size': '4096', 'exp_name': 'linux,cma'} for fd in ('7', '9')}
+
+
+@pytest.mark.parametrize('populated', [True, False])
+def test_archive_keeps_regular_evidence_and_never_follows_test_symlinks(tmp_path, populated):
+    import tarfile
+    workflow = yaml.safe_load((ROOT / '.github/workflows/vulcan-ci.yml').read_text())
+    steps = workflow['jobs']['test-runtime']['steps']
+    step = next(s for s in steps if s['name'].startswith('Archive full-suite diagnostics'))
+    upload = next(s for s in steps if s['name'] == 'Upload full-suite diagnostics')
+    assert upload['with']['path'] == 'apps-core1139-diagnostics.tar.gz'
+    assert step['if'] == '${{ always() }}'
+    archive = tmp_path / 'apps-core1139-diagnostics.tar.gz'
+    archive.write_bytes(b'stale archive must not survive a setup failure')
+    if populated:
+        root = tmp_path / '_vulcan-test'
+        logs = root / 'install/prebuilt-apps/sandbox-test/example'
+        logs.mkdir(parents=True)
+        (logs / 'self-symlink').symlink_to('self-symlink')
+        (logs / 'broken.log').symlink_to('missing')
+        (logs / 'external').symlink_to(tmp_path, target_is_directory=True)
+        (logs / 'stderr.log').write_text('original error')
+        (logs / 'config.yaml').write_text('config')
+        (logs / 'command.txt').write_text('command')
+        (logs / 'frame.jpg').write_bytes(b'not evidence')
+        diagnostics = root / 'diagnostics'; diagnostics.mkdir()
+        (diagnostics / 'observations.jsonl').write_text('memory sample')
+        (diagnostics / '-name with spaces.log').write_text('quoted filename')
+        deps = root / 'install/prebuilt-apps/deps'; deps.mkdir()
+        (deps / 'neat-core.json').write_text('immutable selection')
+    proc = subprocess.run(['/bin/bash', '-c', step['run']], cwd=tmp_path,
+                          env={**os.environ, 'GITHUB_WORKSPACE': str(tmp_path)},
+                          capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    if not populated:
+        assert not archive.exists()
+        return
+    with tarfile.open(archive) as evidence:
+        members = evidence.getmembers()
+        assert len(members) == 6
+        assert all(member.isfile() for member in members)
+        names = [member.name for member in members]
+        assert not any('symlink' in name or 'external' in name or 'broken' in name for name in names)
+        assert evidence.extractfile('diagnostics/observations.jsonl').read() == b'memory sample'
+        assert evidence.extractfile('install/prebuilt-apps/sandbox-test/example/stderr.log').read() == b'original error'
