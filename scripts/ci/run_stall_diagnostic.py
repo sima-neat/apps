@@ -27,6 +27,18 @@ def read(path):
         return f"unavailable: {error}"
 
 
+def dma_buf_descriptors(proc):
+    # Read fdinfo, never open/duplicate a DMA-BUF or change its ownership.
+    result = {}
+    for path in (proc / 'fdinfo').glob('*'):
+        fields = dict(line.split(':', 1) for line in read(path).splitlines() if ':' in line)
+        if 'exp_name' not in fields:
+            continue
+        result[path.name] = {key: fields[key].strip() for key in ('ino', 'size', 'exp_name')
+                             if key in fields}
+    return result
+
+
 def snapshot(root_pid):
     # Read-only; no ptrace, signals, device access, recovery or inferred retirement.
     table = {}
@@ -47,12 +59,17 @@ def snapshot(root_pid):
         "processes": {str(pid): {
             "stat": table[pid][1], "wchan": read(f'/proc/{pid}/wchan'),
             "io": read(f'/proc/{pid}/io'),
+            "smaps_rollup": read(f'/proc/{pid}/smaps_rollup'),
+            "dma_buf_fds": dma_buf_descriptors(Path(f'/proc/{pid}')),
             "threads": {p.name: read(p / 'wchan') for p in Path(f'/proc/{pid}/task').glob('*')},
         } for pid in owners if pid in table},
         "meminfo": read('/proc/meminfo'),
         "memory_pressure": read('/proc/pressure/memory'),
         "io_pressure": read('/proc/pressure/io'),
         "net_snmp": read('/proc/net/snmp'),
+        "vmstat": read('/proc/vmstat'),
+        "buddyinfo": read('/proc/buddyinfo'),
+        "pagetypeinfo": read('/proc/pagetypeinfo'),
     }
 
 
@@ -126,6 +143,8 @@ def main():
         'models_sha256': model_hashes,
         'sdk': read('/etc/sdk-release'), 'os_release': read('/etc/os-release'),
         'boot_id': read('/proc/sys/kernel/random/boot_id'),
+        'cmdline': read('/proc/cmdline'),
+        'runner_name': os.environ.get('RUNNER_NAME'),
     }, indent=2))
     with (output / 'packages.txt').open('w') as log:
         subprocess.run(['dpkg-query', '-W'], stdout=log, stderr=subprocess.STDOUT, check=True)

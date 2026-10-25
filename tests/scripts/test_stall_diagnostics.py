@@ -125,3 +125,20 @@ sudo() {
         assert calls[:2] == ['apt-get update', 'apt-get download file']
         assert calls[2].startswith('python3 /usr/share/SimaScheduler/tools/ci/package_transaction.py install ')
         assert len(calls) == 3
+
+
+def test_memory_observation_records_only_dma_buf_fdinfo(tmp_path):
+    spec = importlib.util.spec_from_file_location('diagnostic', ROOT / 'scripts/ci/run_stall_diagnostic.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    directory = tmp_path / 'fdinfo'
+    directory.mkdir()
+    (directory / '7').write_text('pos:\t0\nino:\t42\nsize:\t4096\nexp_name:\tlinux,cma\nname:\tprivate-label\n')
+    (directory / '8').write_text('pos:\t0\nino:\t99\n')
+    (directory / '9').write_text('pos:\t0\nino:\t42\nsize:\t4096\nexp_name:\tlinux,cma\n')
+    result = module.dma_buf_descriptors(tmp_path)
+    assert result == {'7': {'ino': '42', 'size': '4096', 'exp_name': 'linux,cma'},
+                      '9': {'ino': '42', 'size': '4096', 'exp_name': 'linux,cma'}}
+    # Preserve descriptor aliases so analysis can deduplicate by inode, not count
+    # each descriptor as a separate physical allocation.
+    assert module.dma_buf_descriptors(tmp_path / 'gone') == {}
