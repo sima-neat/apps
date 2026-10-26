@@ -412,7 +412,7 @@ jobs:
         if: ${{ always() }}
         run: |
           set -euo pipefail
-          archive="${GITHUB_WORKSPACE}/apps-core1139-diagnostics.tar.gz"
+          archive="${GITHUB_WORKSPACE}/apps-core1162-diagnostics.tar.gz"
           rm -f "$archive"
           [[ -d _vulcan-test ]] || exit 0
           cd _vulcan-test
@@ -433,8 +433,8 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
-          name: apps-core1139-diagnostics
-          path: apps-core1139-diagnostics.tar.gz
+          name: apps-core1162-diagnostics
+          path: apps-core1162-diagnostics.tar.gz
           if-no-files-found: warn
           retention-days: 7
 

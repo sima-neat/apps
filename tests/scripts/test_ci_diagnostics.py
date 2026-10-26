@@ -16,7 +16,8 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def test_immutable_core_and_exact_runner_are_shared():
     manifest = json.loads((ROOT / 'deps/manifest.json').read_text())
-    assert manifest['neat-core'] == {'ref': 'develop', 'spec': 'd533885fe12d'}
+    assert manifest['neat-core'] == {
+        'ref': 'fix/realtime-source-queue-parity', 'spec': '5f9a81dc29c4'}
     assert manifest['elxr_version'] == '3.0.0_master_B2372'
     workflow = yaml.safe_load((ROOT / '.github/workflows/vulcan-ci.yml').read_text())
     job = workflow['jobs']['test-runtime']
@@ -130,9 +131,9 @@ def test_archive_keeps_regular_evidence_and_never_follows_test_symlinks(tmp_path
     steps = workflow['jobs']['test-runtime']['steps']
     step = next(s for s in steps if s['name'].startswith('Archive full-suite diagnostics'))
     upload = next(s for s in steps if s['name'] == 'Upload full-suite diagnostics')
-    assert upload['with']['path'] == 'apps-core1139-diagnostics.tar.gz'
+    assert upload['with']['path'] == 'apps-core1162-diagnostics.tar.gz'
     assert step['if'] == '${{ always() }}'
-    archive = tmp_path / 'apps-core1139-diagnostics.tar.gz'
+    archive = tmp_path / 'apps-core1162-diagnostics.tar.gz'
     archive.write_bytes(b'stale archive must not survive a setup failure')
     if populated:
         root = tmp_path / '_vulcan-test'

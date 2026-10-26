@@ -298,10 +298,11 @@ MJPEG URLs.
   Publishing waits for it too.
 
 
-### Core #1139 full-suite qualification branch
+### Core #1162 full-suite qualification branch
 
-This branch pins Core to the immutable `develop:d533885fe12d` publication (the
-merge of Core #1139, including #1140), builds all applications, and runs the
+This branch pins Core to the immutable
+`fix/realtime-source-queue-parity:5f9a81dc29c4` publication from Core #1162,
+builds all applications, and runs the
 unchanged `./tests/test.sh --all --strict` scope. Release and portal publication
 are disabled for this qualification branch; it is not intended to merge as-is.
 
@@ -313,7 +314,7 @@ logs go directly to separate per-process files rather than undrained harness
 pipes. Python subprocess failures preserve partial stdout/stderr and the
 original exception. No application API, test scope, threshold or deadline changes.
 
-The `apps-core1139-diagnostics` CI artifact retains this evidence and existing
+The `apps-core1162-diagnostics` CI artifact retains this evidence and existing
 test summaries/configs/process logs even when a test fails. Traced throughput is
 diagnostic evidence, not a replacement for a quiet matched performance result.
 Process exit is not proof of device/DMA retirement.

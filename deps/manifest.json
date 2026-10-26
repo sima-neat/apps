@@ -1,7 +1,7 @@
 {
   "neat-core": {
-    "ref": "develop",
-    "spec": "d533885fe12d"
+    "ref": "fix/realtime-source-queue-parity",
+    "spec": "5f9a81dc29c4"
   },
   "sdk": {
     "channel": "develop"
