@@ -69,6 +69,7 @@ class AppConfig:
     video_port: int
     metadata_port: int
     bitrate_kbps: int
+    override_format: str = "NV12"  # Decoded format of the override's MJPEG frames.
 
 
 @dataclass
@@ -222,6 +223,8 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("model.labels must point to a labels file")
     if not cfg.device and not cfg.override_fragment:
         raise ValueError("source.device must be set")
+    if cfg.override_format not in ("NV12", "NV16"):
+        raise ValueError("source.override_format must be NV12 or NV16")
     if cfg.width <= 0:
         raise ValueError(f"source.width must be > 0, got {cfg.width}")
     if cfg.height <= 0:
@@ -285,6 +288,7 @@ def build_app_config(raw: dict) -> AppConfig:
         video_port=int_or(insight, "video_port", 9000),
         metadata_port=int_or(insight, "metadata_port", 9100),
         bitrate_kbps=int_or(insight, "bitrate_kbps", 4000),
+        override_format=string_or(source, "override_format", "NV12"),
     )
 
 
@@ -314,7 +318,16 @@ def source_description(cfg: AppConfig) -> str:
     if cfg.override_fragment:
         return cfg.override_fragment
     return (f"V4L2 device={cfg.device} caps={camera_caps(cfg)} "
-            f"-> Input -> JpegParse -> SimaDecode(MJPEG,NV12) flip={cfg.flip}")
+            f"-> Input -> JpegParse -> SimaDecode(MJPEG,NV12|NV16) flip={cfg.flip}")
+
+
+def jpeg_end(data: bytes) -> int:
+    """Bytes up to the end-of-image marker; UVC cameras may pad after it. 0 if absent."""
+    pos = 2  # Skip marker segments to the scan, then find EOI in entropy-coded data.
+    while pos + 4 <= len(data) and data[pos] == 0xFF and data[pos + 1] != 0xDA:
+        pos += 2 + ((data[pos + 2] << 8) | data[pos + 3])
+    end = data.find(b"\xff\xd9", pos)
+    return end + 2 if end >= 0 else 0
 
 
 class UsbCamera:
@@ -366,8 +379,9 @@ class UsbCamera:
             data = frame.tobytes()
             if not data.startswith(b"\xff\xd8"):
                 raise RuntimeError("USB camera returned invalid MJPEG data")
-            if data.endswith(b"\xff\xd9"):
-                return data
+            end = jpeg_end(data)
+            if end:
+                return data[:end]
             self.dropped_frames += 1
             print(f"[warn] discarded incomplete MJPEG frame; total={self.dropped_frames}",
                   file=sys.stderr, flush=True)
@@ -471,11 +485,13 @@ def build_metadata_boxes(
     return metadata_boxes
 
 
-def make_model(cfg: AppConfig):
+def make_model(cfg: AppConfig, fmt):
     opt = pyneat.ModelOptions()
     opt.preprocess.kind = pyneat.InputKind.Image
     opt.preprocess.enable = pyneat.AutoFlag.On
-    opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.NV12
+    opt.preprocess.color_convert.input_format = (
+        pyneat.PreprocessColorFormat.NV16 if fmt == pyneat.Format.NV16
+        else pyneat.PreprocessColorFormat.NV12)
     opt.preprocess.input_max_width = cfg.width
     opt.preprocess.input_max_height = cfg.height
     opt.preprocess.preset = pyneat.NormalizePreset.COCO_YOLO
@@ -501,8 +517,14 @@ def build_video_graph(cfg: AppConfig):
 
 
 def build_pipeline(cfg: AppConfig, camera=None) -> PipelineRuntime:
+    # The decoder writes each camera's native format: NV12 for 4:2:0 JPEGs, NV16 for 4:2:2.
+    first_frame = camera.read() if camera is not None else None
+    fmt = (pyneat.jpeg_output_format(first_frame) if first_frame is not None
+           else getattr(pyneat.Format, cfg.override_format))
+    if fmt == pyneat.Format.NV16 and cfg.flip != "none":
+        raise ValueError("source.flip is not supported for 4:2:2 (NV16) cameras yet")
     labels = load_labels(cfg.labels_path)
-    model = make_model(cfg)
+    model = make_model(cfg, fmt)
     video_graph, video_port = build_video_graph(cfg)
 
     model_graph = pyneat.Graph("model")
@@ -527,13 +549,13 @@ def build_pipeline(cfg: AppConfig, camera=None) -> PipelineRuntime:
         ingress.memory_policy = pyneat.InputMemoryPolicy.SystemMemory
         ingress.do_timestamp = False
         source_graph.add(pyneat.nodes.input("jpeg", ingress))
-        seed = pyneat.make_encoded_sample(camera.read(), camera.caps, pts_ns=0,
+        seed = pyneat.make_encoded_sample(first_frame, camera.caps, pts_ns=0,
                                           duration_ns=1_000_000_000 // cfg.fps)
     # The override fragment supplies MJPEG too, so both sources share the hardware decode.
     decode = pyneat.SimaDecodeOptions()
     decode.type = pyneat.SimaDecodeType.MJPEG
     decode.raw_output = True
-    decode.out_format = pyneat.Format.NV12
+    decode.out_format = fmt
     decode.dec_width, decode.dec_height = cfg.width, cfg.height
     decode.dec_fps = cfg.fps
     source_graph.add(pyneat.nodes.jpeg_parse())

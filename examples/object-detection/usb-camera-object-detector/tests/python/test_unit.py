@@ -318,6 +318,15 @@ class TestUsbCapture:
         assert camera.read() == jpeg
         assert camera.dropped_frames == 1
 
+    def test_trims_padding_after_end_of_image(self):
+        # UVC cameras (e.g. C920) pad buffers after EOI; header and padding bytes may hold FF D9.
+        jpeg = (b"\xff\xd8" + b"\xff\xe1\x00\x06\xff\xd9\x00\x00"
+                + b"\xff\xda\x00\x02scan" + b"\xff\xd9")
+        capture = FakeCapture([jpeg + b"\x12\xff\xd9\x34"])
+        camera = main.UsbCamera(main.build_app_config(valid_config()), fake_cv2(capture))
+        assert camera.read() == jpeg
+        assert camera.dropped_frames == 0
+
     @pytest.mark.parametrize("frames,message", [
         ([], "stopped delivering"),
         ([b"not a JPEG"], "invalid MJPEG"),
@@ -386,6 +395,11 @@ class TestUsbCapture:
         with pytest.raises(RuntimeError, match="timed out"):
             camera.read()
         camera.close()
+
+    def test_override_format_must_be_nv12_or_nv16(self):
+        cfg = main.build_app_config(config_with(source={"override_format": "RGB"}))
+        with pytest.raises(ValueError, match="override_format must be NV12 or NV16"):
+            main.validate_config(cfg)
 
     def test_override_description_is_preserved(self):
         override = "videotestsrc ! video/x-raw,format=NV12 ! queue"
@@ -668,7 +682,8 @@ class TestTwinParity:
     @pytest.mark.parametrize(
         "key",
         ["model.path", "model.labels", "source.device", "source.width", "source.height",
-         "source.fps", "source.flip", "source.override_fragment", "inference.frames",
+         "source.fps", "source.flip", "source.override_fragment", "source.override_format",
+         "inference.frames",
          "inference.min_score", "inference.nms_iou", "inference.max_detections",
          "runtime.profile", "runtime.profile_interval", "runtime.queue_depth",
          "output.insight.host", "output.insight.video_port", "output.insight.metadata_port",

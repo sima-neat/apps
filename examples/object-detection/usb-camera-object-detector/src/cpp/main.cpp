@@ -74,6 +74,7 @@ struct Config {
   int fps = kDefaultFps;
   std::string flip = "none";
   std::string override_fragment;
+  std::string override_format = "NV12"; // Decoded format of the override's MJPEG frames.
   int frames = 0;
   float min_score = kDefaultMinScore;
   float nms_iou = kDefaultNmsIou;
@@ -131,6 +132,7 @@ Config load_config(const fs::path& config_path) {
   cfg.fps = raw.int_or("source.fps", kDefaultFps);
   cfg.flip = parse_flip(raw.string_or("source.flip", "none"));
   cfg.override_fragment = raw.string_or("source.override_fragment", "");
+  cfg.override_format = raw.string_or("source.override_format", "NV12");
   cfg.frames = raw.int_or("inference.frames", 0);
   cfg.min_score = static_cast<float>(raw.double_or("inference.min_score", kDefaultMinScore));
   cfg.nms_iou = static_cast<float>(raw.double_or("inference.nms_iou", kDefaultNmsIou));
@@ -151,6 +153,9 @@ Config load_config(const fs::path& config_path) {
   }
   if (cfg.device.empty() && cfg.override_fragment.empty()) {
     throw std::runtime_error("source.device must be set");
+  }
+  if (cfg.override_format != "NV12" && cfg.override_format != "NV16") {
+    throw std::runtime_error("source.override_format must be NV12 or NV16");
   }
   if (cfg.width <= 0) {
     throw std::runtime_error("source.width must be > 0");
@@ -225,7 +230,19 @@ std::string camera_caps(const Config& cfg) {
 std::string source_description(const Config& cfg) {
   if (!cfg.override_fragment.empty()) return cfg.override_fragment;
   return "V4L2 device=" + cfg.device + " caps=" + camera_caps(cfg) +
-         " -> Input -> JpegParse -> SimaDecode(MJPEG,NV12) flip=" + cfg.flip;
+         " -> Input -> JpegParse -> SimaDecode(MJPEG,NV12|NV16) flip=" + cfg.flip;
+}
+
+// Bytes up to the end-of-image marker. UVC cameras may pad a buffer after it; 0 if absent.
+std::size_t jpeg_end(const std::uint8_t* data, std::size_t size) {
+  std::size_t pos = 2; // Skip marker segments to the scan, then find EOI in entropy-coded data.
+  while (pos + 4 <= size && data[pos] == 0xff && data[pos + 1] != 0xda) {
+    pos += 2 + ((std::size_t{data[pos + 2]} << 8) | data[pos + 3]);
+  }
+  for (; pos + 1 < size; ++pos) {
+    if (data[pos] == 0xff && data[pos + 1] == 0xd9) return pos + 2;
+  }
+  return 0;
 }
 
 // Owns capture only. Neat graph construction remains in the application entrypoint.
@@ -281,8 +298,8 @@ public:
       if (!frame.isContinuous() || size < 2 || frame.data[0] != 0xff || frame.data[1] != 0xd8) {
         throw std::runtime_error("USB camera returned invalid MJPEG data");
       }
-      if (frame.data[size - 2] == 0xff && frame.data[size - 1] == 0xd9) {
-        return {frame.data, frame.data + size};
+      if (const std::size_t end = jpeg_end(frame.data, size)) {
+        return {frame.data, frame.data + end};
       }
       std::cerr << "USB: discarded incomplete MJPEG frame (" << size
                 << " bytes; dropped_total=" << ++dropped_frames_ << ")\n";
@@ -393,11 +410,13 @@ std::string build_metadata_json(const std::vector<Box>& boxes,
   return out.str();
 }
 
-std::unique_ptr<neat::Model> make_model(const Config& cfg) {
+std::unique_ptr<neat::Model> make_model(const Config& cfg, neat::FormatTag format) {
   neat::Model::Options opt;
   opt.preprocess.kind = neat::InputKind::Image;
   opt.preprocess.enable = neat::AutoFlag::On;
-  opt.preprocess.color_convert.input_format = neat::PreprocessColorFormat::NV12;
+  opt.preprocess.color_convert.input_format = format == neat::FormatTag::NV16
+                                                  ? neat::PreprocessColorFormat::NV16
+                                                  : neat::PreprocessColorFormat::NV12;
   opt.preprocess.input_max_width = cfg.width;
   opt.preprocess.input_max_height = cfg.height;
   opt.preprocess.preset = neat::NormalizePreset::COCO_YOLO;
@@ -504,7 +523,21 @@ int main(int argc, char** argv) {
   std::signal(SIGHUP, handle_signal);
 
   try {
-    auto model = make_model(cfg);
+    // The decoder writes each camera's native format: NV12 for 4:2:0 JPEGs, NV16 for 4:2:2.
+    std::unique_ptr<UsbCamera> camera;
+    std::vector<std::uint8_t> first_frame;
+    neat::FormatTag format =
+        cfg.override_format == "NV16" ? neat::FormatTag::NV16 : neat::FormatTag::NV12;
+    if (cfg.override_fragment.empty()) {
+      camera = std::make_unique<UsbCamera>(cfg);
+      first_frame = camera->read();
+      if (g_stop.load()) return 130;
+      format = neat::jpeg_output_format(first_frame);
+    }
+    if (format == neat::FormatTag::NV16 && cfg.flip != "none") {
+      throw std::runtime_error("source.flip is not supported for 4:2:2 (NV16) cameras yet");
+    }
+    auto model = make_model(cfg, format);
 
     neat::Graph video_graph("video");
     video_graph.connect(neat::nodes::Input("video"), groups::VideoSender(make_video_options(cfg)));
@@ -520,21 +553,17 @@ int main(int argc, char** argv) {
     neat::GraphLinkOptions live;
     live.policy = neat::GraphLinkPolicy::RealtimeLatestByStream;
 
-    std::unique_ptr<UsbCamera> camera;
     neat::Sample seed;
     neat::Graph source_graph("capture_decode");
     if (!cfg.override_fragment.empty()) {
       source_graph.add(neat::nodes::Custom(cfg.override_fragment, neat::InputRole::Source));
     } else {
-      camera = std::make_unique<UsbCamera>(cfg);
       neat::InputOptions ingress;
       ingress.payload_type = neat::PayloadType::Encoded;
       ingress.caps_override = camera->caps;
       ingress.memory_policy = neat::InputMemoryPolicy::SystemMemory;
       ingress.do_timestamp = false;
       source_graph.add(neat::nodes::Input("jpeg", ingress));
-      auto first_frame = camera->read();
-      if (g_stop.load()) return 130;
       seed = neat::make_encoded_sample(std::move(first_frame), camera->caps, 0, -1,
                                        1000000000LL / cfg.fps);
     }
@@ -542,7 +571,7 @@ int main(int argc, char** argv) {
     neat::SimaDecodeOptions decode;
     decode.type = neat::SimaDecodeType::MJPEG;
     decode.raw_output = true;
-    decode.out_format = "NV12";
+    decode.out_format = format;
     decode.dec_width = cfg.width;
     decode.dec_height = cfg.height;
     decode.dec_fps = cfg.fps;

@@ -171,8 +171,11 @@ The packaged C++ source is an implementation reference. Run the executable under
 To modify, compile, or test this example, use the [Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).
 
 Both implementations use Neat `Input`, `JpegParse`, and `SimaDecode` nodes for
-hardware MJPEG decoding. `source.override_fragment` is an optional diagnostic
-GStreamer source that must produce MJPEG at the configured width, height, and
-FPS; it replaces only the camera, and the same decoder route follows it. Leave it
-empty for USB capture. End-to-end tests encode a fixed image as 4:2:2 and 4:2:0
-MJPEG and require `ffprobe` to validate received video alongside detection metadata.
+hardware MJPEG decoding. The app reads the camera's first frame and decodes 4:2:0
+cameras to NV12 and 4:2:2 cameras to NV16, so no camera-specific setting is needed.
+`source.flip` is not yet supported with 4:2:2 cameras. `source.override_fragment`
+is an optional diagnostic GStreamer source that must produce MJPEG at the configured
+width, height, and FPS; set `source.override_format` to its decoded format (NV12 or
+NV16). Leave the override empty for USB capture. End-to-end tests encode a fixed
+image as 4:2:2 and 4:2:0 MJPEG and require `ffprobe` to validate received video
+alongside detection metadata.

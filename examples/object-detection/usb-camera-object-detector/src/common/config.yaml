@@ -9,6 +9,7 @@ source:                      # USB (UVC) camera capture.
   fps: 30                    # Choose an FPS listed for that MJPG resolution.
   flip: none                 # none, rotate-180, horizontal-flip, or vertical-flip.
   override_fragment: ""      # Diagnostic: replace the camera with a GStreamer fragment producing MJPEG.
+  override_format: NV12      # Override only: NV12 for 4:2:0 MJPEG, NV16 for 4:2:2. Cameras are detected.
 
 inference:                   # Detection settings.
   frames: 0                  # Frame limit. 0 means run until interrupted.
@@ -35,5 +36,6 @@ testing:
   e2e:
     source:
       override_fragment: "filesrc location=assets/datasets-test/coco/000000265108.jpg ! jpegdec ! imagefreeze is-live=true ! videoscale ! videoconvert ! video/x-raw,format=Y42B,width=1920,height=1080,framerate=30/1 ! jpegenc ! queue leaky=downstream max-size-buffers=2"
+      override_format: NV16
     inference:
       frames: 30

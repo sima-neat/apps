@@ -138,7 +138,8 @@ class TestE2E:
                                   min_object_count=1) as listener, VideoReceiver(
                                       tmp_output_dir / "received.h264") as video:
             config_path = e2e_config_writer({
-                "source": {"override_fragment": fragment},
+                "source": {"override_fragment": fragment,
+                           "override_format": "NV16" if raw_format == "Y42B" else "NV12"},
                 "inference": {"frames": FRAMES},
                 "output": {"insight": {"host": "127.0.0.1", "video_port": video.port,
                                         "metadata_port": metadata_port}},

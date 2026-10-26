@@ -191,7 +191,8 @@ bool test_source_reports_mjpeg_capture(const std::string& binary) {
   const auto description = source_description_for(binary, "test_source_reports_mjpeg_capture", config_body(), &ok);
   return ok && expect_contains(description, "V4L2 device=/dev/video16", "configured camera") &&
          expect_contains(description, "image/jpeg,width=1920,height=1080,framerate=30/1", "encoded caps") &&
-         expect_contains(description, "Input -> JpegParse -> SimaDecode(MJPEG,NV12)", "public decoder route");
+         expect_contains(description, "Input -> JpegParse -> SimaDecode(MJPEG,NV12|NV16)",
+                         "public decoder route");
 }
 
 bool test_source_omits_flip_by_default(const std::string& binary) {

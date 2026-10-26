@@ -202,6 +202,7 @@ int main(int argc, char** argv) try {
                      {{"model.path", model_path},
                       {"model.labels", labels_file},
                       {"source.override_fragment", fragment},
+                      {"source.override_format", raw_format == "Y42B" ? "NV16" : "NV12"},
                       {"inference.frames", std::to_string(kFrames)},
                       {"output.insight.host", "127.0.0.1"},
                       {"output.insight.video_port", std::to_string(video_port)},
