@@ -3,8 +3,8 @@
 OpenCV captures compressed MJPEG through V4L2. Public Neat input and decoder
 nodes turn each encoded sample into NV12 before branching:
 
-    Input -> JpegParse -> MjpegDecode -> NV12 -> branch -+-> video_sender -> Insight
-                                                        `-> model -> detections
+    Input -> JpegParse -> SimaDecode [-> ColorConvert for 4:2:2] -> NV12 -> branch -+-> video_sender
+                                                                                  `-> model
 
 Both branches stay inside one Run so the encoder and the detections share a
 GStreamer timeline; Insight correlates the RTP timestamp with the metadata
@@ -318,7 +318,7 @@ def source_description(cfg: AppConfig) -> str:
     if cfg.override_fragment:
         return cfg.override_fragment
     return (f"V4L2 device={cfg.device} caps={camera_caps(cfg)} "
-            f"-> Input -> JpegParse -> MjpegDecode(NV12) flip={cfg.flip}")
+            f"-> Input -> JpegParse -> SimaDecode(MJPEG) -> NV12 flip={cfg.flip}")
 
 
 def jpeg_end(data: bytes) -> int:
@@ -515,7 +515,7 @@ def build_video_graph(cfg: AppConfig):
 
 
 def build_pipeline(cfg: AppConfig, camera=None) -> PipelineRuntime:
-    # The first frame tells mjpeg_decode whether the camera is 4:2:0 (NV12) or 4:2:2 (NV16).
+    # The first frame tells the decoder whether the camera is 4:2:0 (NV12) or 4:2:2 (NV16).
     first_frame = camera.read() if camera is not None else None
     fmt = (pyneat.jpeg_output_format(first_frame) if first_frame is not None
            else getattr(pyneat.Format, cfg.override_format))
@@ -548,14 +548,21 @@ def build_pipeline(cfg: AppConfig, camera=None) -> PipelineRuntime:
         seed = pyneat.make_encoded_sample(first_frame, camera.caps, pts_ns=0,
                                           duration_ns=1_000_000_000 // cfg.fps)
     # The override fragment supplies MJPEG too, so both sources share the hardware decode.
-    # mjpeg_decode always outputs NV12; for 4:2:2 it converts on the EV74.
+    # The decoder writes the camera's own sampling; a 4:2:2 camera's NV16 is converted to
+    # NV12 on the EV74, in the encoder's surface so the video sender takes it without a copy.
     decode = pyneat.SimaDecodeOptions()
     decode.type = pyneat.SimaDecodeType.MJPEG
     decode.raw_output = True
+    decode.out_format = fmt
     decode.dec_width, decode.dec_height = cfg.width, cfg.height
     decode.dec_fps = cfg.fps
     source_graph.add(pyneat.nodes.jpeg_parse())
-    source_graph.add(pyneat.groups.mjpeg_decode(decode, fmt))
+    source_graph.add(pyneat.nodes.sima_decode(decode))
+    if fmt == pyneat.Format.NV16:
+        color = pyneat.ColorConvertOptions()
+        color.output_format = pyneat.ImageFormat.NV12
+        color.surface = pyneat.ImageSurfaceLayout.EncoderNv12
+        source_graph.add(pyneat.nodes.color_convert(color))
     if cfg.flip != "none":
         source_graph.add(pyneat.nodes.custom(f"videoflip method={FLIP_METHODS[cfg.flip]}"))
 
