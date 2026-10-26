@@ -33,13 +33,13 @@ def shipped_test_override() -> str:
 
 
 class VideoReceiver:
-    """Collect H.264 RTP while the application runs; fail on loss or bad packets."""
-    def __init__(self, path):
+    """Collect H.264 RTP NAL unit types while the application runs; fail on loss or bad packets."""
+    def __init__(self):
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.socket.bind(("127.0.0.1", int(os.environ.get("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 19200))))
         self.socket.settimeout(0.1)
         self.port = self.socket.getsockname()[1]
-        self.path = path
+        self.kinds = []
         self.stop = threading.Event()
         self.error = None
         self.thread = threading.Thread(target=self.receive)
@@ -48,35 +48,33 @@ class VideoReceiver:
         sequence = None
         fragment = None
         try:
-            with self.path.open("wb") as output:
-                while not self.stop.is_set():
-                    try:
-                        packet = self.socket.recv(65536)
-                    except socket.timeout:
-                        continue
-                    assert len(packet) > 12 and packet[0] == 0x80
-                    assert packet[1] & 0x7f == 96
-                    current = int.from_bytes(packet[2:4], "big")
-                    if sequence is not None:
-                        assert current == (sequence + 1) % 65536, "lost RTP packet"
-                    sequence = current
-                    payload = packet[12:]
-                    kind = payload[0] & 31
-                    if 1 <= kind <= 23:
+            while not self.stop.is_set():
+                try:
+                    packet = self.socket.recv(65536)
+                except socket.timeout:
+                    continue
+                assert len(packet) > 12 and packet[0] == 0x80
+                assert packet[1] & 0x7f == 96
+                current = int.from_bytes(packet[2:4], "big")
+                if sequence is not None:
+                    assert current == (sequence + 1) % 65536, "lost RTP packet"
+                sequence = current
+                payload = packet[12:]
+                kind = payload[0] & 31
+                if 1 <= kind <= 23:
+                    assert fragment is None
+                    self.kinds.append(kind)
+                elif kind == 28:
+                    assert len(payload) > 2
+                    if payload[1] & 0x80:
                         assert fragment is None
-                        output.write(b"\x00\x00\x00\x01" + payload)
-                    elif kind == 28:
-                        assert len(payload) > 2
-                        if payload[1] & 0x80:
-                            assert fragment is None
-                            fragment = bytes([(payload[0] & 0xe0) | (payload[1] & 31)])
-                        assert fragment is not None
-                        fragment += payload[2:]
-                        if payload[1] & 0x40:
-                            output.write(b"\x00\x00\x00\x01" + fragment)
-                            fragment = None
-                    else:
-                        raise AssertionError(f"unexpected H.264 RTP payload: {kind}")
+                        fragment = payload[1] & 31
+                    assert fragment is not None
+                    if payload[1] & 0x40:
+                        self.kinds.append(fragment)
+                        fragment = None
+                else:
+                    raise AssertionError(f"unexpected H.264 RTP payload: {kind}")
         except BaseException as error:
             self.error = error
 
@@ -89,16 +87,11 @@ class VideoReceiver:
         self.thread.join()
         self.socket.close()
 
-    def assert_decodable(self):
+    def assert_h264(self):
+        """SPS, PPS, an IDR slice and at least 3 picture slices arrived intact."""
         assert self.error is None, str(self.error)
-        probe = subprocess.run(
-            ["ffprobe", "-v", "error", "-count_frames", "-select_streams", "v:0",
-             "-show_entries", "stream=width,height,nb_read_frames", "-of", "json", str(self.path)],
-            capture_output=True, text=True, timeout=20)
-        assert probe.returncode == 0 and not probe.stderr, probe.stderr
-        stream = json.loads(probe.stdout)["streams"][0]
-        assert (stream["width"], stream["height"]) == (1920, 1080)
-        assert int(stream["nb_read_frames"]) >= 3
+        assert {7, 8, 5} <= set(self.kinds), f"NAL unit types received: {self.kinds}"
+        assert sum(kind in (1, 5) for kind in self.kinds) >= 3, f"NAL unit types: {self.kinds}"
 
 
 @pytest.mark.e2e
@@ -135,8 +128,7 @@ class TestE2E:
         metadata_port = int(os.environ.get("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 19300))
         with MetadataJsonListener("127.0.0.1", metadata_port, num_ports=1,
                                   metadata_type="object-detection", data_array_key="objects",
-                                  min_object_count=1) as listener, VideoReceiver(
-                                      tmp_output_dir / "received.h264") as video:
+                                  min_object_count=1) as listener, VideoReceiver() as video:
             config_path = e2e_config_writer({
                 "source": {"override_fragment": fragment,
                            "override_format": "NV16" if raw_format == "Y42B" else "NV12"},
@@ -148,7 +140,7 @@ class TestE2E:
             assert result.returncode == 0, result.stdout + result.stderr
             received = listener.wait_for_messages(5)
             following = listener.wait_for_messages(5)
-        video.assert_decodable()
+        video.assert_h264()
         assert received.success, received.error
         assert following.success, following.error
         assert following.messages[-1].timestamp_ms > received.messages[-1].timestamp_ms

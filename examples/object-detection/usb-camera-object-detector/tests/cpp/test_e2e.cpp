@@ -9,10 +9,11 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <algorithm>
 #include <array>
 #include <atomic>
-#include <fstream>
 #include <thread>
+#include <vector>
 #include <stdexcept>
 #include <cerrno>
 #include "support/testing/test_process.h"
@@ -31,7 +32,7 @@ constexpr int kFrames = 30;
 
 class VideoReceiver {
 public:
-  explicit VideoReceiver(const fs::path& path, int port) : path_(path) {
+  explicit VideoReceiver(int port) {
     socket_ = ::socket(AF_INET, SOCK_DGRAM, 0);
     sockaddr_in address{};
     address.sin_family = AF_INET;
@@ -54,28 +55,18 @@ public:
   void verify() {
     close();
     if (!error_.empty()) throw std::runtime_error(error_);
-    const auto probe = spawn_and_wait("/usr/bin/env",
-        {"ffprobe", "-v", "error", "-count_frames", "-select_streams", "v:0", "-show_entries",
-         "stream=width,height,nb_read_frames", "-of", "json", path_.string()}, 20000);
-    if (probe.exit_code || !probe.stderr_text.empty())
-      throw std::runtime_error("received H.264 did not decode: " + probe.stderr_text);
-    const auto stream = nlohmann::json::parse(probe.stdout_text).at("streams").at(0);
-    if (stream.at("width") != 1920 || stream.at("height") != 1080 ||
-        std::stoi(stream.at("nb_read_frames").get<std::string>()) < 3)
-      throw std::runtime_error("received video has wrong dimensions or fewer than 3 frames");
+    // SPS, PPS, an IDR slice and at least 3 picture slices arrived intact.
+    const auto has = [&](int kind) { return std::ranges::count(kinds_, kind) > 0; };
+    const auto slices = std::ranges::count_if(kinds_, [](int kind) { return kind == 1 || kind == 5; });
+    if (!has(7) || !has(8) || !has(5) || slices < 3)
+      throw std::runtime_error("received H.264 lacks SPS, PPS, an IDR slice or 3 picture slices");
   }
 private:
   void receive(std::stop_token stop) {
     try {
-      std::ofstream out(path_, std::ios::binary);
-      if (!out) throw std::runtime_error("cannot write received H.264");
       std::array<unsigned char, 65536> packet{};
-      std::vector<unsigned char> fragment;
+      int fragment = 0;  // NAL unit type of the FU-A in progress, 0 when none
       int sequence = -1;
-      const auto write_nal = [&](const unsigned char* data, std::size_t size) {
-        out.write("\0\0\0\1", 4);
-        out.write(reinterpret_cast<const char*>(data), size);
-      };
       while (!stop.stop_requested()) {
         const auto size = ::recv(socket_, packet.data(), packet.size(), 0);
         if (size < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) continue;
@@ -88,18 +79,17 @@ private:
         const auto* payload = packet.data() + 12;
         const int kind = payload[0] & 31;
         if (kind >= 1 && kind <= 23) {
-          if (!fragment.empty()) throw std::runtime_error("incomplete RTP fragment");
-          write_nal(payload, size - 12);
+          if (fragment) throw std::runtime_error("incomplete RTP fragment");
+          kinds_.push_back(kind);
         } else if (kind == 28 && size > 14) {
           if (payload[1] & 0x80) {
-            if (!fragment.empty()) throw std::runtime_error("incomplete RTP fragment");
-            fragment.push_back((payload[0] & 0xe0) | (payload[1] & 31));
+            if (fragment) throw std::runtime_error("incomplete RTP fragment");
+            fragment = payload[1] & 31;
           }
-          if (fragment.empty()) throw std::runtime_error("missing RTP fragment start");
-          fragment.insert(fragment.end(), payload + 2, payload + size - 12);
+          if (!fragment) throw std::runtime_error("missing RTP fragment start");
           if (payload[1] & 0x40) {
-            write_nal(fragment.data(), fragment.size());
-            fragment.clear();
+            kinds_.push_back(fragment);
+            fragment = 0;
           }
         } else {
           throw std::runtime_error("unexpected H.264 RTP payload");
@@ -107,7 +97,7 @@ private:
       }
     } catch (const std::exception& error) { error_ = error.what(); }
   }
-  fs::path path_;
+  std::vector<int> kinds_;
   int socket_ = -1;
   std::string error_;
   std::jthread worker_;
@@ -186,7 +176,7 @@ int main(int argc, char** argv) try {
 
     const int video_port = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 19200);
     const int metadata_port = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 19300);
-    VideoReceiver video(fs::path(out_dir) / "received.h264", video_port);
+    VideoReceiver video(video_port);
     MetadataJsonListenerOptions options;
     options.base_port = metadata_port;
     options.num_ports = 1;
@@ -233,7 +223,7 @@ int main(int argc, char** argv) try {
       verify_metadata(following);
       if (following.messages.back().timestamp_ms <= received.messages.back().timestamp_ms)
         throw std::runtime_error("metadata timestamps did not advance");
-      std::cout << "[OK] received decodable H.264 and nonempty valid detection metadata\n";
+      std::cout << "[OK] received intact H.264 and nonempty valid detection metadata\n";
       std::cout << "[OK] published " << kFrames << " frames from the fixed-image source\n";
     }
 

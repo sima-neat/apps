@@ -177,5 +177,6 @@ cameras to NV12 and 4:2:2 cameras to NV16, so no camera-specific setting is need
 is an optional diagnostic GStreamer source that must produce MJPEG at the configured
 width, height, and FPS; set `source.override_format` to its decoded format (NV12 or
 NV16). Leave the override empty for USB capture. End-to-end tests encode a fixed
-image as 4:2:2 and 4:2:0 MJPEG and require `ffprobe` to validate received video
-alongside detection metadata.
+image as 4:2:2 and 4:2:0 MJPEG and check that the received H.264 stream carries its
+parameter sets, a keyframe, and picture slices without packet loss, alongside
+detection metadata.
