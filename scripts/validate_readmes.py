@@ -60,11 +60,10 @@ REQUIRED_SECTION_ORDER = (
     "Development From Source",
 )
 
-# Docker examples build Apps from source in the Neat SDK and run the result in
-# containers on the DevKit, so a Build Apps section replaces Install Apps.
+# Docker examples install the Apps bundle in the Neat SDK, pack its examples
+# into images, and run them in containers on the DevKit through a script
+# instead of an example binary.
 DOCKER_CATEGORY = "docker"
-DOCKER_BUILD_SECTION = "Build Apps"
-DOCKER_BUILD_COMMAND = "./build.sh"
 DOCKER_RUN_SCRIPT = "src/common/parallel-apps.sh"
 
 INSTALL_COMMAND = "sima-cli neat install apps"
@@ -244,29 +243,30 @@ def validate_portal_content(
 
 def required_section_order(category: str) -> tuple[str, ...]:
     """Return the required sections, in order, for an example category."""
-    if category != DOCKER_CATEGORY:
-        return REQUIRED_SECTION_ORDER
-    return tuple(
-        DOCKER_BUILD_SECTION if section == "Install Apps" else section
-        for section in REQUIRED_SECTION_ORDER
-    )
+    return REQUIRED_SECTION_ORDER
 
 
 def validate_docker_workflow(
     *, sections: dict[str, str], category: str, example: str
 ) -> list[str]:
-    """Validate the build-from-source workflow of a Docker example."""
+    """Validate the install-and-script workflow of a Docker example."""
     errors: list[str] = []
-    build = sections.get(DOCKER_BUILD_SECTION, "")
+    install = sections.get("Install Apps", "")
     run = sections.get("Run", "")
 
-    if DOCKER_BUILD_COMMAND not in build:
-        errors.append(
-            f"{DOCKER_BUILD_SECTION} must build Apps with '{DOCKER_BUILD_COMMAND}'"
-        )
+    if INSTALL_COMMAND not in {line.strip() for line in install.splitlines()}:
+        errors.append(f"Install Apps must use '{INSTALL_COMMAND}'")
+    if "cd prebuilt-apps" not in install:
+        errors.append("Bundle installation must enter the prebuilt-apps directory")
     expected_app_dir = f"APP_DIR=examples/{category}/{example}"
-    if expected_app_dir not in build:
-        errors.append(f"{DOCKER_BUILD_SECTION} must define '{expected_app_dir}'")
+    if expected_app_dir not in install:
+        errors.append(f"Bundle installation must define '{expected_app_dir}'")
+    for command in SOURCE_ONLY_COMMANDS:
+        if command in install or command in run:
+            errors.append(
+                f"Source-only command '{command.strip()}' must not appear in "
+                "Install Apps or Run"
+            )
     script_paths = (
         f"${{APP_DIR}}/{DOCKER_RUN_SCRIPT}",
         f"$APP_DIR/{DOCKER_RUN_SCRIPT}",

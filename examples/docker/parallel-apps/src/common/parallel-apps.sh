@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run in the Neat SDK shell, from the Apps checkout.
+# Run in the Neat SDK shell, from the installed Apps bundle or an Apps checkout.
 #
 #   parallel-apps.sh build             build one ARM64 image per app and push it
 #                                      to the SDK's container registry
@@ -17,6 +17,8 @@ neat-segmentation segmentation/single-stream-instance-segmenter
 neat-detection object-detection/rfdetr-detection-segmentation
 neat-tracking tracking/multi-stream-tracker
 neat-pose pose-estimation/multi-stream-pose-estimator
+neat-drone tracking/yolo26-tiny-drone-tracker
+neat-blazepose pose-estimation/multi-stream-blazepose3d
 APPS
 }
 
@@ -28,11 +30,13 @@ fail() {
 build() {
   : "${SIMA_CONTAINER_REGISTRY:?run this in the Neat SDK shell}"
   while read -r name example; do
-    binary="${example##*/}"
-    [[ -f "build/examples/$example/$binary" ]] ||
-      fail "build/examples/$example/$binary not found; build Apps with ./build.sh first"
-    file "build/examples/$example/$binary" | grep -q aarch64 ||
-      fail "build/examples/$example/$binary is not an ARM64 binary"
+    # The installed bundle ships each binary under src/cpp/pre-built; a source
+    # checkout keeps it in the build tree.
+    binary="examples/$example/src/cpp/pre-built/${example##*/}"
+    [[ -f "$binary" ]] || binary="build/examples/$example/${example##*/}"
+    [[ -f "$binary" ]] ||
+      fail "no ${example##*/} binary; install Apps with sima-cli neat install apps, or build it with ./build.sh"
+    file "$binary" | grep -q aarch64 || fail "$binary is not an ARM64 binary"
     [[ -n "$(ls -A "models/$name" 2>/dev/null)" ]] ||
       fail "models/$name is empty; download the model for $name first"
 

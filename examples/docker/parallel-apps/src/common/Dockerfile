@@ -1,4 +1,6 @@
-# Image of one Apps example, built by parallel-apps.sh from the Apps checkout.
+# Image of one Apps example, built by parallel-apps.sh from the installed Apps
+# bundle or an Apps checkout. BINARY is the example's executable, relative to
+# that root.
 #
 # The image holds the example's binary, its src/common files and config, and its
 # model. The DevKit's installed Neat and system libraries are mounted read-only
@@ -14,10 +16,10 @@ ARG CONTAINER
 # writable tmpfs.
 ENV PATH=/usr/bin:/bin HOME=/tmp
 
-# The working directory mirrors the Apps checkout, so the relative model and
-# label paths in the example's config resolve as they do in the checkout.
+# The working directory mirrors the Apps root, so the relative model and label
+# paths in the example's config resolve as they do there.
 WORKDIR /apps
-COPY build/examples/${EXAMPLE}/${BINARY} /app
+COPY ${BINARY} /app
 COPY examples/${EXAMPLE}/src/common/ examples/${EXAMPLE}/src/common/
 COPY models/${CONTAINER}/ models/
 
