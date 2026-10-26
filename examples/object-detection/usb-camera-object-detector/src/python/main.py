@@ -3,8 +3,8 @@
 OpenCV captures compressed MJPEG through V4L2. Public Neat input and decoder
 nodes turn each encoded sample into NV12 before branching:
 
-    Input -> JpegParse -> SimaDecode(MJPEG) -> NV12 -> branch -+-> video_sender -> Insight
-                                                  `-> model -> detections
+    Input -> JpegParse -> MjpegDecode -> NV12 -> branch -+-> video_sender -> Insight
+                                                        `-> model -> detections
 
 Both branches stay inside one Run so the encoder and the detections share a
 GStreamer timeline; Insight correlates the RTP timestamp with the metadata
@@ -318,7 +318,7 @@ def source_description(cfg: AppConfig) -> str:
     if cfg.override_fragment:
         return cfg.override_fragment
     return (f"V4L2 device={cfg.device} caps={camera_caps(cfg)} "
-            f"-> Input -> JpegParse -> SimaDecode(MJPEG,NV12|NV16) flip={cfg.flip}")
+            f"-> Input -> JpegParse -> MjpegDecode(NV12) flip={cfg.flip}")
 
 
 def jpeg_end(data: bytes) -> int:
@@ -485,13 +485,11 @@ def build_metadata_boxes(
     return metadata_boxes
 
 
-def make_model(cfg: AppConfig, fmt):
+def make_model(cfg: AppConfig):
     opt = pyneat.ModelOptions()
     opt.preprocess.kind = pyneat.InputKind.Image
     opt.preprocess.enable = pyneat.AutoFlag.On
-    opt.preprocess.color_convert.input_format = (
-        pyneat.PreprocessColorFormat.NV16 if fmt == pyneat.Format.NV16
-        else pyneat.PreprocessColorFormat.NV12)
+    opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.NV12
     opt.preprocess.input_max_width = cfg.width
     opt.preprocess.input_max_height = cfg.height
     opt.preprocess.preset = pyneat.NormalizePreset.COCO_YOLO
@@ -517,14 +515,12 @@ def build_video_graph(cfg: AppConfig):
 
 
 def build_pipeline(cfg: AppConfig, camera=None) -> PipelineRuntime:
-    # The decoder writes each camera's native format: NV12 for 4:2:0 JPEGs, NV16 for 4:2:2.
+    # The first frame tells mjpeg_decode whether the camera is 4:2:0 (NV12) or 4:2:2 (NV16).
     first_frame = camera.read() if camera is not None else None
     fmt = (pyneat.jpeg_output_format(first_frame) if first_frame is not None
            else getattr(pyneat.Format, cfg.override_format))
-    if fmt == pyneat.Format.NV16 and cfg.flip != "none":
-        raise ValueError("source.flip is not supported for 4:2:2 (NV16) cameras yet")
     labels = load_labels(cfg.labels_path)
-    model = make_model(cfg, fmt)
+    model = make_model(cfg)
     video_graph, video_port = build_video_graph(cfg)
 
     model_graph = pyneat.Graph("model")
@@ -552,14 +548,14 @@ def build_pipeline(cfg: AppConfig, camera=None) -> PipelineRuntime:
         seed = pyneat.make_encoded_sample(first_frame, camera.caps, pts_ns=0,
                                           duration_ns=1_000_000_000 // cfg.fps)
     # The override fragment supplies MJPEG too, so both sources share the hardware decode.
+    # mjpeg_decode always outputs NV12; for 4:2:2 it converts on the EV74.
     decode = pyneat.SimaDecodeOptions()
     decode.type = pyneat.SimaDecodeType.MJPEG
     decode.raw_output = True
-    decode.out_format = fmt
     decode.dec_width, decode.dec_height = cfg.width, cfg.height
     decode.dec_fps = cfg.fps
     source_graph.add(pyneat.nodes.jpeg_parse())
-    source_graph.add(pyneat.nodes.sima_decode(decode))
+    source_graph.add(pyneat.groups.mjpeg_decode(decode, fmt))
     if cfg.flip != "none":
         source_graph.add(pyneat.nodes.custom(f"videoflip method={FLIP_METHODS[cfg.flip]}"))
 

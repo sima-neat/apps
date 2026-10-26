@@ -5,8 +5,8 @@
  * OpenCV captures compressed MJPEG through V4L2. Neat input and decoder nodes
  * turn each encoded sample into NV12 before branching:
  *
- *     Input -> JpegParse -> SimaDecode(MJPEG) -> branch -+-> video_sender -> Insight
- *                                                   `-> model -> detections
+ *     Input -> JpegParse -> MjpegDecode -> branch -+-> video_sender -> Insight
+ *                                                 `-> model -> detections
  *
  * Both branches stay inside one Run so the encoder and the detections share a
  * GStreamer timeline; Insight correlates the RTP timestamp with the metadata
@@ -230,7 +230,7 @@ std::string camera_caps(const Config& cfg) {
 std::string source_description(const Config& cfg) {
   if (!cfg.override_fragment.empty()) return cfg.override_fragment;
   return "V4L2 device=" + cfg.device + " caps=" + camera_caps(cfg) +
-         " -> Input -> JpegParse -> SimaDecode(MJPEG,NV12|NV16) flip=" + cfg.flip;
+         " -> Input -> JpegParse -> MjpegDecode(NV12) flip=" + cfg.flip;
 }
 
 // Bytes up to the end-of-image marker. UVC cameras may pad a buffer after it; 0 if absent.
@@ -410,13 +410,11 @@ std::string build_metadata_json(const std::vector<Box>& boxes,
   return out.str();
 }
 
-std::unique_ptr<neat::Model> make_model(const Config& cfg, neat::FormatTag format) {
+std::unique_ptr<neat::Model> make_model(const Config& cfg) {
   neat::Model::Options opt;
   opt.preprocess.kind = neat::InputKind::Image;
   opt.preprocess.enable = neat::AutoFlag::On;
-  opt.preprocess.color_convert.input_format = format == neat::FormatTag::NV16
-                                                  ? neat::PreprocessColorFormat::NV16
-                                                  : neat::PreprocessColorFormat::NV12;
+  opt.preprocess.color_convert.input_format = neat::PreprocessColorFormat::NV12;
   opt.preprocess.input_max_width = cfg.width;
   opt.preprocess.input_max_height = cfg.height;
   opt.preprocess.preset = neat::NormalizePreset::COCO_YOLO;
@@ -523,7 +521,7 @@ int main(int argc, char** argv) {
   std::signal(SIGHUP, handle_signal);
 
   try {
-    // The decoder writes each camera's native format: NV12 for 4:2:0 JPEGs, NV16 for 4:2:2.
+    // The first frame tells MjpegDecode whether the camera is 4:2:0 (NV12) or 4:2:2 (NV16).
     std::unique_ptr<UsbCamera> camera;
     std::vector<std::uint8_t> first_frame;
     neat::FormatTag format =
@@ -534,10 +532,7 @@ int main(int argc, char** argv) {
       if (g_stop.load()) return 130;
       format = neat::jpeg_output_format(first_frame);
     }
-    if (format == neat::FormatTag::NV16 && cfg.flip != "none") {
-      throw std::runtime_error("source.flip is not supported for 4:2:2 (NV16) cameras yet");
-    }
-    auto model = make_model(cfg, format);
+    auto model = make_model(cfg);
 
     neat::Graph video_graph("video");
     video_graph.connect(neat::nodes::Input("video"), groups::VideoSender(make_video_options(cfg)));
@@ -568,15 +563,15 @@ int main(int argc, char** argv) {
                                        1000000000LL / cfg.fps);
     }
     // The override fragment supplies MJPEG too, so both sources share the hardware decode.
+    // MjpegDecode always outputs NV12; for 4:2:2 it converts on the EV74.
     neat::SimaDecodeOptions decode;
     decode.type = neat::SimaDecodeType::MJPEG;
     decode.raw_output = true;
-    decode.out_format = format;
     decode.dec_width = cfg.width;
     decode.dec_height = cfg.height;
     decode.dec_fps = cfg.fps;
     source_graph.add(neat::nodes::JpegParse());
-    source_graph.add(neat::nodes::SimaDecode(decode));
+    source_graph.add(groups::MjpegDecode(decode, format));
     if (cfg.flip != "none") {
       source_graph.add(neat::nodes::Custom("videoflip method=" + flip_methods().at(cfg.flip)));
     }
