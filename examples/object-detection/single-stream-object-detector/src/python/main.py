@@ -534,8 +534,6 @@ def make_usb_camera_options(cfg: AppConfig):
     opt.width = cfg.source_width
     opt.height = cfg.source_height
     opt.framerate_num = cfg.source_fps
-    # The camera's own JPEG: forwarded to Insight as is and decoded only for the model.
-    opt.output = pyneat.UsbCameraOutput.Jpeg
     return opt
 
 

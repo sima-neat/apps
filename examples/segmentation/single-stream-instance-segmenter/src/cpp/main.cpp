@@ -1073,8 +1073,6 @@ simaai::neat::UsbCameraInputOptions make_usb_camera_options(const AppConfig& cfg
   opt.width = static_cast<std::uint32_t>(cfg.source_width);
   opt.height = static_cast<std::uint32_t>(cfg.source_height);
   opt.framerate_num = static_cast<std::uint32_t>(cfg.source_fps);
-  // The camera's own JPEG: forwarded to Insight as is and decoded only for the model.
-  opt.output = simaai::neat::UsbCameraOutput::Jpeg;
   return opt;
 }
 
