@@ -63,7 +63,7 @@ The application needs two model packages:
 Model packages come from the Model Zoo release below, which can differ from the installed platform version.
 
 ```bash
-export MODELZOO_VERSION="2.1.3"
+export MODELZOO_VERSION="3.0.0"
 mkdir -p models
 cd models
 sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/efficientsam3_mpk.tar.gz"

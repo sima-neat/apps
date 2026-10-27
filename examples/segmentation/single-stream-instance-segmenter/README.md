@@ -50,7 +50,7 @@ Run the remaining commands from `prebuilt-apps/`.
 Model packages come from the Model Zoo release below, which can differ from the installed platform version.
 
 ```bash
-export MODELZOO_VERSION="2.1.3"
+export MODELZOO_VERSION="3.0.0"
 mkdir -p models
 cd models
 ```
@@ -76,17 +76,17 @@ sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/mod
 
 ### YOLOv8 (`model.family: yolov8`)
 
-| Model package | Role | Model Zoo name |
-| --- | --- | --- |
-| `yolo_v8n_seg_mpk.tar.gz` | Default for this family | `yolo_v8n_seg` |
-| `yolo_v8s_seg_mpk.tar.gz` | Supported | `yolo_v8s_seg` |
-| `yolo_v8m_seg_mpk.tar.gz` | Supported | `yolo_v8m_seg` |
-| `yolo_v8l_seg_mpk.tar.gz` | Supported | `yolo_v8l_seg` |
+| Model file | Role |
+| --- | --- |
+| `yolo_v8n_seg_mpk.tar.gz` | Default for this family |
+| `yolo_v8s_seg_mpk.tar.gz` | Supported |
+| `yolo_v8m_seg_mpk.tar.gz` | Supported |
+| `yolo_v8l_seg_mpk.tar.gz` | Supported |
 
-These packages come from the Model Zoo. Replace `<model-name>` with a model from the table.
+These packages are direct artifacts. Replace `<model-file>` with a file from the table.
 
 ```bash
-sima-cli modelzoo -v "${MODELZOO_VERSION}" get <model-name>
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/<model-file>"
 ```
 
 Return to the bundle root once the package is downloaded:

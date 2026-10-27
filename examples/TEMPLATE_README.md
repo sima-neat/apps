@@ -47,29 +47,18 @@ Run the remaining commands from `prebuilt-apps/`.
 
 The default model is `<default-model>`.
 
-| Model | Role | Source |
-| --- | --- | --- |
-| `<default-model>` | Default | <Model Zoo / direct artifact> |
-| `<supported-model>` | Supported | <Model Zoo / direct artifact> |
+| Model file | Role |
+| --- | --- |
+| `<default-model>` | Default |
+| `<supported-model>` | Supported |
 
-Model packages come from the Model Zoo release below, which can differ from the installed platform version. Use the command that matches the model source and delete the other command.
-
-Model Zoo:
+Model packages come from the Model Zoo release below, which can differ from the installed platform version. Replace `<model-file>` with a file from the table.
 
 ```bash
-export MODELZOO_VERSION="2.1.3"
+export MODELZOO_VERSION="3.0.0"
 mkdir -p models
 cd models
-sima-cli modelzoo -v "${MODELZOO_VERSION}" get <model-name>
-cd ..
-```
-
-Direct artifact:
-
-```bash
-mkdir -p models
-cd models
-sima-cli download <model-url>
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/<model-file>"
 cd ..
 ```
 

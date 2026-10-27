@@ -71,7 +71,7 @@ Model Zoo release, which can differ from the installed platform version.
 Before downloading a model, set the Model Zoo version:
 
 ```bash
-export MODELZOO_VERSION="2.1.3"
+export MODELZOO_VERSION="3.0.0"
 ```
 
 Runtime sample data is included under `assets/datasets/`.
