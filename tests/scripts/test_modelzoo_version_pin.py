@@ -19,7 +19,14 @@ PLATFORM_BADGE_RE = re.compile(r"Neat%20Development%20Environment-([^-]+)-")
 # would still download successfully, so only a static check catches it.
 SCOPE_VERSION_LITERAL_RE = re.compile(r"SDK\d")
 # The SDK2.1.3 tiny-drone artifact returns 403, so its scope pins 3.0.0 until #585.
-SCOPE_VERSION_LITERAL_EXEMPT = {"examples/tracking/yolo26-tiny-drone-tracker/tests/test-scope.yaml"}
+# The RF-DETR w8a8_w16a16 detection pairs are published only under SDK3.0.0.
+SCOPE_VERSION_LITERAL_EXEMPT = {
+    "examples/tracking/yolo26-tiny-drone-tracker/tests/test-scope.yaml",
+    "examples/object-detection/rfdetr-detection-segmentation/tests/test-scope.yaml",
+}
+DOCUMENTED_VERSION_OVERRIDES = {
+    "examples/object-detection/rfdetr-detection-segmentation/README.md": "3.0.0",
+}
 
 
 def _manifest() -> dict:
@@ -54,9 +61,10 @@ def test_documented_modelzoo_version_matches_manifest():
     for path in _documented_surfaces():
         for version in DOCUMENTED_VERSION_RE.findall(path.read_text(encoding="utf-8")):
             documented += 1
-            if version != expected:
-                name = path.relative_to(APPS_ROOT)
-                offenders.append(f"{name}: {version} != {expected}")
+            name = str(path.relative_to(APPS_ROOT))
+            pinned = DOCUMENTED_VERSION_OVERRIDES.get(name, expected)
+            if version != pinned:
+                offenders.append(f"{name}: {version} != {pinned}")
 
     assert offenders == []
     # Examples that install models from Hugging Face document no version, but the

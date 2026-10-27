@@ -10,7 +10,7 @@
 | Languages | C++, Python |
 | Status | stable |
 | Binary Name | rfdetr-detection-segmentation |
-| Model | RF-DETR Small, Medium, or Segmentation Medium |
+| Model | RF-DETR Nano, Small, Medium, Large, or Segmentation Medium |
 
 ## Concept
 
@@ -52,23 +52,17 @@ Run the remaining commands from `prebuilt-apps/`.
 Prepare the model directory, then download the pair for your selected task:
 
 ```bash
-export MODELZOO_VERSION="2.1.3"
+export MODELZOO_VERSION="3.0.0"
 mkdir -p models
 cd models
 ```
 
-Small detection is selected by default:
+For detection, set `VARIANT` to `nano`, `small`, `medium`, or `large`. Small is selected by default:
 
 ```bash
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/rfdetr-small-backbone.tar.gz"
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/rfdetr-small-transformer.tar.gz"
-```
-
-For Medium detection:
-
-```bash
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/rfdetr-medium-backbone.tar.gz"
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/rfdetr-medium-transformer.tar.gz"
+VARIANT=small
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/rf_detr_${VARIANT}_w8a8_w16a16_backbone_mpk.tar.gz"
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/rf_detr_${VARIANT}_w8a8_w16a16_decoder_mpk.tar.gz"
 ```
 
 For segmentation, download the RF-DETR Segmentation Medium model pair:
@@ -95,7 +89,7 @@ cd ..
 Edit `$APP_DIR/src/common/config.yaml`:
 
 - Set `model.task` to `detection` or `segmentation`.
-- For detection, set `model.detection.variant` to `small` or `medium`.
+- For detection, set `model.detection.variant` to `nano`, `small`, `medium`, or `large`.
 - Set `source.rtsp_url` and select `source.codec` as `h264`, `h265`, or `mjpeg`.
 - Leave `source.width`, `height`, and `fps` at `0` to probe the stream. Width and height are fallbacks; a positive FPS overrides the detected value.
 - Set `output.insight.host`, `video_port`, and `metadata_port` to the values reported by Insight.
@@ -169,8 +163,8 @@ as `RF-DETR detection configuration is valid`.
 - `model.task must be detection or segmentation` means `model.task` is not one
   of the supported tasks.
 - A `model.detection.variant` with no model pair under `model.detection`, for
-  example `large`, fails with `large must be a mapping` in Python and
-  `model.detection.large.backbone and transformer must be set` in C++.
+  example `xlarge`, fails with `xlarge must be a mapping` in Python and
+  `model.detection.xlarge.backbone and transformer must be set` in C++.
 - `model archive must use .tar.gz: None` means one half of the model pair was
   left blank in the config. Both `backbone` and `transformer` must name a
   downloaded archive for the selected task and variant. This is specific to the
