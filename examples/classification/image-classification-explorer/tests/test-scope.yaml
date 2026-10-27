@@ -1,19 +1,19 @@
 models:
   resnet_50:
-    source: modelzoo
-    name: resnet_50
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/resnet_50_mpk.tar.gz
     file: resnet_50_mpk.tar.gz
   resnet_18:
-    source: modelzoo
-    name: resnet_18
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/resnet_18_mpk.tar.gz
     file: resnet_18_mpk.tar.gz
   efficientnet_b0:
-    source: modelzoo
-    name: efficientnet_b0
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/efficientnet_b0_mpk.tar.gz
     file: efficientnet_b0_mpk.tar.gz
   densenet_121:
-    source: modelzoo
-    name: densenet_121
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/densenet_121_mpk.tar.gz
     file: densenet_121_mpk.tar.gz
 unit:
   python: true

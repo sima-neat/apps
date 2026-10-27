@@ -52,7 +52,7 @@ Run the remaining commands from `prebuilt-apps/`.
 Prepare the model directory, then download the pair for your selected task:
 
 ```bash
-export MODELZOO_VERSION="2.1.3"
+export MODELZOO_VERSION="3.0.0"
 mkdir -p models
 cd models
 ```

@@ -52,9 +52,9 @@ The default profile uses YOLO26n detection. Every profile consumes a compiled `.
 
 | Profile | Task | Model package |
 | --- | --- | --- |
-| `detect` | YOLO26n detection | `yolo_26n_mpk.tar.gz` |
-| `pose` | YOLO26n pose | `yolo_26n_pose_mpk.tar.gz` |
-| `segment` | YOLO26n instance segmentation | `yolo_26n_seg_mpk.tar.gz` |
+| `detect` | YOLO26n detection | `yolo26n-det-int8-b1.tar.gz` |
+| `pose` | YOLO26n pose | `yolo26n-pose-bf16-mla_tess-b1.tar.gz` |
+| `segment` | YOLO26n instance segmentation | `yolo26n-seg-bf16-mla_tess.tar.gz` |
 | `ssd` | SSD-MobileNet V2 detection | `ssd_mobilenet_v2_modalix_int8_tess_mla_mpk.tar.gz` |
 | `classify` | ResNet-50 classification | `resnet_50_mpk.tar.gz` |
 | `depth` | MiDaS v2.1 Small depth | `midas_v21_small_256_mpk.tar.gz` |
@@ -62,14 +62,14 @@ The default profile uses YOLO26n detection. Every profile consumes a compiled `.
 Model packages come from the Model Zoo release below, which can differ from the installed platform version. Download the packages for the profiles you plan to run into `models/`:
 
 ```bash
-export MODELZOO_VERSION="2.1.3"
+export MODELZOO_VERSION="3.0.0"
 mkdir -p models
 cd models
-sima-cli modelzoo -v "${MODELZOO_VERSION}" --boardtype modalix get yolo_26n
-sima-cli modelzoo -v "${MODELZOO_VERSION}" --boardtype modalix get yolo_26n_pose
-sima-cli modelzoo -v "${MODELZOO_VERSION}" --boardtype modalix get yolo_26n_seg
-sima-cli modelzoo -v "${MODELZOO_VERSION}" --boardtype modalix get resnet_50
-sima-cli modelzoo -v "${MODELZOO_VERSION}" --boardtype modalix get midas_v21_small_256
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26-detection/yolo26n-det-int8-b1.tar.gz"
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26-pose/yolo26n-pose-bf16-mla_tess-b1.tar.gz"
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26-segmentation/yolo26n-seg-bf16-mla_tess.tar.gz"
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/resnet_50_mpk.tar.gz"
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/midas_v21_small_256_mpk.tar.gz"
 sima-cli download \
   "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/ssd_mobilenet_v2_modalix_int8_tess_mla_mpk.tar.gz"
 cd ..
@@ -118,7 +118,7 @@ Stream YOLO26 detection or segmentation to Insight, using the `insight` settings
 ```bash
 python3 ${APP_DIR}/src/python/main.py \
   --profile segment \
-  --model models/yolo_26n_seg_mpk.tar.gz \
+  --model models/yolo26n-seg-bf16-mla_tess.tar.gz \
   --continuous \
   --insight-host 192.168.1.127 \
   --insight-video-port 9000 \

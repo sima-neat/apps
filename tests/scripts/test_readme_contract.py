@@ -126,7 +126,7 @@ def test_readme_contract_accepts_single_example_install(tmp_path: Path) -> None:
     assert validate_readme(readme) == []
 
 
-def test_readme_contract_rejects_experimental_status(tmp_path: Path) -> None:
+def test_readme_contract_accepts_experimental_status(tmp_path: Path) -> None:
     readme = write_readme(
         tmp_path,
         install=VALID_INSTALL,
@@ -134,7 +134,18 @@ def test_readme_contract_rejects_experimental_status(tmp_path: Path) -> None:
         status="experimental",
     )
 
-    assert "Invalid Status 'experimental'. Must be one of: stable" in validate_readme(
+    assert validate_readme(readme) == []
+
+
+def test_readme_contract_rejects_unknown_status(tmp_path: Path) -> None:
+    readme = write_readme(
+        tmp_path,
+        install=VALID_INSTALL,
+        run=VALID_RUN,
+        status="beta",
+    )
+
+    assert "Invalid Status 'beta'. Must be one of: experimental, stable" in validate_readme(
         readme
     )
 
