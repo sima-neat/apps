@@ -65,11 +65,11 @@ Model packages come from the Model Zoo release below, which can differ from the 
 export MODELZOO_VERSION="3.0.0"
 mkdir -p models
 cd models
-sima-cli modelzoo -v "${MODELZOO_VERSION}" --boardtype modalix get yolo_26n
-sima-cli modelzoo -v "${MODELZOO_VERSION}" --boardtype modalix get yolo_26n_pose
-sima-cli modelzoo -v "${MODELZOO_VERSION}" --boardtype modalix get yolo_26n_seg
-sima-cli modelzoo -v "${MODELZOO_VERSION}" --boardtype modalix get resnet_50
-sima-cli modelzoo -v "${MODELZOO_VERSION}" --boardtype modalix get midas_v21_small_256
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo_26n_mpk.tar.gz"
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo_26n_pose_mpk.tar.gz"
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo_26n_seg_mpk.tar.gz"
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/resnet_50_mpk.tar.gz"
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/midas_v21_small_256_mpk.tar.gz"
 sima-cli download \
   "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/ssd_mobilenet_v2_modalix_int8_tess_mla_mpk.tar.gz"
 cd ..

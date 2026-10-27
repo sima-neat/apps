@@ -42,12 +42,12 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-| Model package | Model Zoo name |
-| --- | --- |
-| `resnet_50_mpk.tar.gz` | `resnet_50` |
-| `resnet_18_mpk.tar.gz` | `resnet_18` |
-| `efficientnet_b0_mpk.tar.gz` | `efficientnet_b0` |
-| `densenet_121_mpk.tar.gz` | `densenet_121` |
+| Model package |
+| --- |
+| `resnet_50_mpk.tar.gz` |
+| `resnet_18_mpk.tar.gz` |
+| `efficientnet_b0_mpk.tar.gz` |
+| `densenet_121_mpk.tar.gz` |
 
 Model packages come from the Model Zoo release below, which can differ from the installed platform version.
 
@@ -55,10 +55,10 @@ Model packages come from the Model Zoo release below, which can differ from the 
 export MODELZOO_VERSION="3.0.0"
 mkdir -p models
 cd models
-sima-cli modelzoo -v "${MODELZOO_VERSION}" get resnet_50
-sima-cli modelzoo -v "${MODELZOO_VERSION}" get resnet_18
-sima-cli modelzoo -v "${MODELZOO_VERSION}" get efficientnet_b0
-sima-cli modelzoo -v "${MODELZOO_VERSION}" get densenet_121
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/resnet_50_mpk.tar.gz"
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/resnet_18_mpk.tar.gz"
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/efficientnet_b0_mpk.tar.gz"
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/densenet_121_mpk.tar.gz"
 cd ..
 ```
 

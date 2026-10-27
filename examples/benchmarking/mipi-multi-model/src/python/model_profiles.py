@@ -19,13 +19,10 @@ class Profile:
     task: str
     archive: str
     decode_type: str | None = None
-    modelzoo_id: str | None = None
     preprocessing: str | None = None
 
     @property
     def source(self) -> str:
-        if self.modelzoo_id:
-            return f"Model Zoo {MODEL_ZOO_VERSION}: {self.modelzoo_id}"
         return f"SDK {MODEL_ZOO_VERSION} download: {self.archive}"
 
 
@@ -43,7 +40,6 @@ PROFILES = {
             "detection",
             "yolo_26n_mpk.tar.gz",
             decode_type="YoloV26",
-            modelzoo_id="yolo_26n",
         ),
         Profile(
             "pose",
@@ -51,7 +47,6 @@ PROFILES = {
             "pose",
             "yolo_26n_pose_mpk.tar.gz",
             decode_type="YoloV26Pose",
-            modelzoo_id="yolo_26n_pose",
         ),
         Profile(
             "segment",
@@ -59,7 +54,6 @@ PROFILES = {
             "segmentation",
             "yolo_26n_seg_mpk.tar.gz",
             decode_type="YoloV26Seg",
-            modelzoo_id="yolo_26n_seg",
         ),
         Profile(
             "ssd",
@@ -74,14 +68,12 @@ PROFILES = {
             "ResNet-50 image classification",
             "classification",
             "resnet_50_mpk.tar.gz",
-            modelzoo_id="resnet_50",
         ),
         Profile(
             "depth",
             "MiDaS v2.1 Small depth estimation",
             "depth",
             "midas_v21_small_256_mpk.tar.gz",
-            modelzoo_id="midas_v21_small_256",
         ),
     )
 }

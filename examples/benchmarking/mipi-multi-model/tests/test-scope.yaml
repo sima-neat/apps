@@ -1,27 +1,27 @@
 models:
   yolo_26n:
-    source: modelzoo
-    name: yolo_26n
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo_26n_mpk.tar.gz
     file: yolo_26n_mpk.tar.gz
   yolo_26n_pose:
-    source: modelzoo
-    name: yolo_26n_pose
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo_26n_pose_mpk.tar.gz
     file: yolo_26n_pose_mpk.tar.gz
   yolo_26n_seg:
-    source: modelzoo
-    name: yolo_26n_seg
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo_26n_seg_mpk.tar.gz
     file: yolo_26n_seg_mpk.tar.gz
   ssd_mobilenet_v2:
     source: url
     url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/ssd_mobilenet_v2_modalix_int8_tess_mla_mpk.tar.gz
     file: ssd_mobilenet_v2_modalix_int8_tess_mla_mpk.tar.gz
   resnet_50:
-    source: modelzoo
-    name: resnet_50
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/resnet_50_mpk.tar.gz
     file: resnet_50_mpk.tar.gz
   midas_v21_small_256:
-    source: modelzoo
-    name: midas_v21_small_256
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/midas_v21_small_256_mpk.tar.gz
     file: midas_v21_small_256_mpk.tar.gz
 unit:
   python: true

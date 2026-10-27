@@ -45,22 +45,13 @@ Run the remaining commands from `prebuilt-apps/`.
 
 Use any compatible compiled MPK. Apps CI exercises the benchmark with `yolo26m-det-int8-b1.tar.gz`; it is not a required default.
 
-Model packages come from the Model Zoo release below, which can differ from the installed platform version. Download a Model Zoo package:
+Model packages come from the Model Zoo release below, which can differ from the installed platform version. Replace `<model-file>` with the package to benchmark:
 
 ```bash
 export MODELZOO_VERSION="3.0.0"
 mkdir -p models
 cd models
-sima-cli modelzoo -v "${MODELZOO_VERSION}" get <model-name>
-cd ..
-```
-
-For a model published as a direct artifact:
-
-```bash
-mkdir -p models
-cd models
-sima-cli download <model-url>
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/<model-file>"
 cd ..
 ```
 
