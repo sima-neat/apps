@@ -149,7 +149,7 @@ class StreamRuntime:
     task: str
     url: str
     model_path: str
-    source_options: object
+    fmt: SourceFormat
     model: object
     metadata_sender: object
     labels: list[str]
@@ -224,10 +224,10 @@ class ProfileWindow:
         output_fps = self.frames * 1000.0 / elapsed if elapsed > 0.0 else 0.0
         print(
             f"[profile stream={self.stream_index} task={self.task}] frames={self.frames} "
-            f"output_fps={output_fps} "
-            f"avg_result_pull_ms={self.result_pull_ms / self.frames} "
-            f"avg_metadata_send_ms={self.metadata_send_ms / self.frames} "
-            f"avg_instances={self.instances / self.frames}",
+            f"output_fps={output_fps:.1f} "
+            f"avg_result_pull_ms={self.result_pull_ms / self.frames:.1f} "
+            f"avg_metadata_send_ms={self.metadata_send_ms / self.frames:.1f} "
+            f"avg_instances={self.instances / self.frames:.1f}",
             flush=True,
         )
         self.frames = 0
@@ -528,24 +528,20 @@ def first_tensor_from_sample(sample):
 
 
 def tensor_bgr_from_decoded(tensor):
-    if tensor.is_nv12():
-        width = tensor_dim(tensor, "width")
-        height = tensor_dim(tensor, "height")
-        payload = np.frombuffer(tensor.contiguous().copy_payload_bytes(), dtype=np.uint8)
-        expected = width * height * 3 // 2
-        if payload.size < expected:
-            raise RuntimeError(f"NV12 payload too small: {payload.size} < {expected}")
-        nv12 = payload[:expected].reshape((height * 3 // 2, width))
-        return np.ascontiguousarray(cv2.cvtColor(nv12, cv2.COLOR_YUV2BGR_NV12))
+    """BGR copy of a decoded NV12 frame, for the debug overlay only.
 
-    frame = np.asarray(tensor.to_numpy(copy=True))
-    if frame.ndim == 4 and frame.shape[0] == 1:
-        frame = frame[0]
-    if frame.ndim != 3:
-        raise RuntimeError(f"unexpected decoded tensor shape {frame.shape}")
-    if frame.dtype != np.uint8:
-        frame = np.clip(frame, 0, 255).astype(np.uint8)
-    return np.ascontiguousarray(frame)
+    Callers hand this a frame ``require_nv12_frame`` has already accepted.
+    """
+    if not tensor.is_nv12():
+        raise RuntimeError("expected an NV12 frame")
+    width = tensor_dim(tensor, "width")
+    height = tensor_dim(tensor, "height")
+    payload = np.frombuffer(tensor.contiguous().copy_payload_bytes(), dtype=np.uint8)
+    expected = width * height * 3 // 2
+    if payload.size < expected:
+        raise RuntimeError(f"NV12 payload too small: {payload.size} < {expected}")
+    nv12 = payload[:expected].reshape((height * 3 // 2, width))
+    return np.ascontiguousarray(cv2.cvtColor(nv12, cv2.COLOR_YUV2BGR_NV12))
 
 
 def extract_tensor_bbox_payload(sample, tensor=None) -> bytes:
@@ -923,129 +919,82 @@ def probe_rtsp(url: str, cfg: AppConfig) -> tuple[int, int, int]:
     return width, height, fps
 
 
-def build_source_options(cfg: AppConfig, url: str, fps: int, width: int, height: int):
-    opt = pyneat.RtspDecodedInputOptions()
-    opt.url = url
-    opt.latency_ms = cfg.latency_ms
-    opt.tcp = cfg.tcp
-    # Let RTSP negotiate dynamic RTP payload numbers from the source SDP.
-    opt.payload_type = 0
-    opt.insert_queue = True
-    opt.decoder_name = "decoder"
-    opt.decoder_raw_output = True
-    # Decoded frames go to the model without a copy, so the decoder pool must cover every frame a
-    # stream holds at once: the frame output queue, the frames in flight, and headroom to decode.
-    opt.num_buffers = (
-        SOURCE_FRAME_QUEUE_DEPTH + cfg.max_inflight_per_stream + DECODER_HEADROOM_BUFFERS
-    )
-    opt.auto_caps_from_stream = True
-    opt.codec = rtsp_codec(cfg.codec)
-    opt.dec_width = width
-    opt.dec_height = height
-    if cfg.codec == "h264":
-        opt.fallback_h264_width = width
-        opt.fallback_h264_height = height
-    opt.source_fps = fps
-    opt.output_caps.enable = True
-    opt.output_caps.format = pyneat.Format.NV12
-    opt.output_caps.width = width
-    opt.output_caps.height = height
-    # The integer probe is a decoder hint, not an exact H.265 caps constraint.
-    opt.output_caps.fps = 0 if cfg.codec == "h265" else fps
-    opt.output_caps.memory = pyneat.CapsMemory.Any
-    return opt
+@dataclass(frozen=True)
+class SourceFormat:
+    """The frame size and rate the camera reports.
 
+    Probed once, before any graph is built, because the decoder pool, the decoder output caps and
+    the model input are all sized from it.
+    """
 
-def output_caps_enabled(caps) -> bool:
-    return caps.enable or caps.width > 0 or caps.height > 0 or caps.fps > 0
-
-
-def build_encoded_source_graph(opt) -> pyneat.Graph:
-    source = pyneat.Graph("rtsp_encoded_source")
-
-    encoded_opt = pyneat.RtspEncodedInputOptions()
-    encoded_opt.url = opt.url
-    encoded_opt.codec = opt.codec
-    encoded_opt.payload_type = opt.payload_type
-    encoded_opt.latency_ms = opt.latency_ms
-    encoded_opt.tcp = opt.tcp
-    encoded_opt.source_fps = 0 if opt.codec == pyneat.RtspCodec.H265 else opt.source_fps
-    if opt.codec == pyneat.RtspCodec.H264:
-        encoded_opt.fallback_h264_width = opt.fallback_h264_width
-        encoded_opt.fallback_h264_height = opt.fallback_h264_height
-    source.add(pyneat.groups.rtsp_encoded_input(encoded_opt))
-    return source
+    width: int
+    height: int
+    fps: int
 
 
 def encoded_format_tag(codec):
     return pyneat.Format.H265 if codec == pyneat.RtspCodec.H265 else pyneat.Format.H264
 
 
-def encoded_decode_input_options(codec):
-    opt = pyneat.InputOptions()
-    opt.payload_type = pyneat.PayloadType.Encoded
-    opt.format = encoded_format_tag(codec)
-    if hasattr(pyneat, "InputMemoryPolicy") and hasattr(opt, "memory_policy"):
-        opt.memory_policy = pyneat.InputMemoryPolicy.Ev74
+def rtsp_input_options(cfg: AppConfig, url: str, fmt: SourceFormat):
+    """Receive the camera's encoded stream without decoding it."""
+    opt = pyneat.RtspEncodedInputOptions()
+    opt.url = url
+    opt.codec = rtsp_codec(cfg.codec)
+    opt.latency_ms = cfg.latency_ms
+    opt.tcp = cfg.tcp
+    # RTP dynamic payload numbers are advertised by the RTSP source, so filter on none.
+    opt.payload_type = 0
+    # H.265 timing may be fractional, so leave the parser its native rate instead of a rounded
+    # probe value. H.264 takes the probe, which repairs a source that advertises no caps.
+    opt.source_fps = 0 if cfg.codec == "h265" else fmt.fps
+    if cfg.codec == "h264":
+        opt.fallback_h264_width = fmt.width
+        opt.fallback_h264_height = fmt.height
     return opt
 
 
-def encoded_video_input_options(codec):
-    opt = pyneat.InputOptions()
-    opt.payload_type = pyneat.PayloadType.Encoded
-    opt.format = encoded_format_tag(codec)
-    if hasattr(pyneat, "InputMemoryPolicy") and hasattr(opt, "memory_policy"):
-        opt.memory_policy = pyneat.InputMemoryPolicy.SystemMemory
-    elif hasattr(opt, "use_simaai_pool"):
-        opt.use_simaai_pool = False
+def decoder_options(cfg: AppConfig, fmt: SourceFormat):
+    opt = pyneat.SimaDecodeOptions()
+    opt.type = pyneat.SimaDecodeType.H265 if cfg.codec == "h265" else pyneat.SimaDecodeType.H264
+    # NV12 straight out of the decoder, so the model takes the frame with no repack.
+    opt.out_format = pyneat.Format.NV12
+    opt.raw_output = True
+    opt.decoder_name = "decoder"
+    opt.dec_width = fmt.width
+    opt.dec_height = fmt.height
+    opt.dec_fps = fmt.fps
+    # Decoded frames reach the model without a copy, so the pool must cover every frame a stream
+    # holds at once: the frame output queue, the frames in flight, and headroom to decode.
+    opt.num_buffers = (
+        SOURCE_FRAME_QUEUE_DEPTH + cfg.max_inflight_per_stream + DECODER_HEADROOM_BUFFERS
+    )
     return opt
 
 
-def build_decode_graph(input_name: str, opt) -> pyneat.Graph:
-    decode = pyneat.Graph("decode")
-    use_h265 = opt.codec == pyneat.RtspCodec.H265
+def decoded_frame_caps(cfg: AppConfig, fmt: SourceFormat):
+    """Pin the decoder's output format, so the frame output and the model input agree.
 
-    dec = pyneat.SimaDecodeOptions()
-    dec.type = pyneat.SimaDecodeType.H265 if use_h265 else pyneat.SimaDecodeType.H264
-    dec.sima_allocator_type = opt.sima_allocator_type
-    dec.out_format = pyneat.Format.NV12
-    dec.decoder_name = opt.decoder_name
-    dec.raw_output = opt.decoder_raw_output
-    dec.next_element = opt.decoder_next_element
-    dec.dec_width = opt.dec_width
-    dec.dec_height = opt.dec_height
-    dec.dec_fps = opt.source_fps
-    dec.num_buffers = opt.num_buffers
-    decode.connect(
-        pyneat.nodes.input(input_name, encoded_decode_input_options(opt.codec)),
-        pyneat.nodes.sima_decode(dec),
-    )
-    if opt.use_videoconvert:
-        decode.add(pyneat.nodes.video_convert())
-    if opt.use_videoscale:
-        decode.add(pyneat.nodes.video_scale())
-    if output_caps_enabled(opt.output_caps):
-        decode.add(
-            pyneat.nodes.caps_raw(
-                "NV12",
-                opt.output_caps.width,
-                opt.output_caps.height,
-                opt.output_caps.fps,
-                opt.output_caps.memory,
-            )
-        )
-    if opt.extra_fragment:
-        decode.add(pyneat.nodes.custom(opt.extra_fragment))
-    return decode
+    One layout for both: NV12 at the camera's own size.
+    """
+    # H.265 timing may be fractional or absent, so constrain the rate only for H.264.
+    fps = 0 if cfg.codec == "h265" else fmt.fps
+    return pyneat.nodes.caps_raw("NV12", fmt.width, fmt.height, fps, pyneat.CapsMemory.Any)
 
 
-def build_video_sender_graph(input_name: str, codec, video_options) -> pyneat.Graph:
-    video = pyneat.Graph("video_sender")
-    video.connect(
-        pyneat.nodes.input(input_name, encoded_video_input_options(codec)),
-        pyneat.groups.video_sender(video_options),
-    )
-    return video
+# Endpoint names the branch routes the one encoded stream to.
+ENCODED_TO_DECODER = "encoded_to_decoder"
+ENCODED_TO_VIDEO = "encoded_to_video"
+
+
+def encoded_input_options(codec, memory_policy):
+    opt = pyneat.InputOptions()
+    opt.payload_type = pyneat.PayloadType.Encoded
+    opt.format = encoded_format_tag(codec)
+    # The decoder reads the encoded stream from the EV74's own memory; the sender reads it from
+    # system memory.
+    opt.memory_policy = memory_policy
+    return opt
 
 
 def decode_type_for(task: str, decode: str):
@@ -1158,13 +1107,13 @@ def build_model_graph(cfg: AppConfig, stream: StreamRuntime) -> pyneat.Graph:
     return graph
 
 
-def frame_for_model(tensor):
-    """Hand a decoded frame to the model as the decoder produced it.
+def require_nv12_frame(tensor):
+    """Check that a decoded frame is one the model input accepts, and return it unchanged.
 
-    The model input accepts the decoder's padded NV12 buffer directly. Repacking it with
-    ``contiguous().cvu()`` allocated a new frame from the default CMA heap for every frame, which
-    exhausts that heap with three or more 1080p streams. Holding the decoder buffer while the
-    frame is in flight is bounded by ``max_inflight_per_stream``.
+    The model input takes the decoder's padded NV12 buffer as it is, so the frame is never
+    repacked: a repack would allocate from the default CMA heap per frame and exhaust it with
+    three or more 1080p streams. The frame holds its decoder buffer until the model returns it,
+    bounded by ``max_inflight_per_stream``.
     """
     if not tensor.is_nv12() or min(tensor_dim(tensor, "width"), tensor_dim(tensor, "height")) <= 0:
         raise ValueError("expected an NV12 frame with valid dimensions")
@@ -1184,7 +1133,7 @@ def build_stream_runtime(cfg: AppConfig, stream_cfg: StreamConfig, labels: list[
     frame_w, frame_h, fps = probe_rtsp(stream_cfg.url, cfg)
     output_fps = fps
 
-    source_options = build_source_options(cfg, stream_cfg.url, fps, frame_w, frame_h)
+    fmt = SourceFormat(width=frame_w, height=frame_h, fps=fps)
     model = build_model(cfg, stream_cfg, frame_w, frame_h)
 
     video_port = 0
@@ -1209,7 +1158,7 @@ def build_stream_runtime(cfg: AppConfig, stream_cfg: StreamConfig, labels: list[
         task=stream_cfg.task,
         url=stream_cfg.url,
         model_path=stream_cfg.model_path,
-        source_options=source_options,
+        fmt=fmt,
         model=model,
         metadata_sender=metadata_sender,
         labels=labels,
@@ -1222,14 +1171,29 @@ def build_stream_runtime(cfg: AppConfig, stream_cfg: StreamConfig, labels: list[
 
 
 def connect_source_stream(app: AppRuntime, cfg: AppConfig, stream: StreamRuntime) -> None:
-    """Add one stream's ``rtsp -> decode -> output`` chain, plus its video passthrough, to the
-    shared source graph.
+    """Add one camera to the shared source graph::
 
-    Video stays in-graph as an encoded passthrough: Insight correlates the RTP timestamp with the
-    metadata timestamp, and re-encoding on the host would cost a copy this example does not need.
+        RtspEncodedInput --+-- SimaDecode -- CapsRaw -- Output(frame_i)  -> this stream's model
+                           |
+                           +-- VideoSender                              -> Insight video channel
+
+    One encoded stream, two consumers. Video stays encoded all the way to Insight: Insight
+    correlates the RTP timestamp with the metadata timestamp, so re-encoding on the host would
+    cost a copy this example does not need.
     """
-    source = build_encoded_source_graph(stream.source_options)
-    decoder = build_decode_graph("decode_h264", stream.source_options)
+    codec = rtsp_codec(cfg.codec)
+
+    camera = pyneat.Graph("camera")
+    camera.add(pyneat.groups.rtsp_encoded_input(rtsp_input_options(cfg, stream.url, stream.fmt)))
+
+    decoder = pyneat.Graph("decoder")
+    decoder.connect(
+        pyneat.nodes.input(
+            ENCODED_TO_DECODER, encoded_input_options(codec, pyneat.InputMemoryPolicy.Ev74)
+        ),
+        pyneat.nodes.sima_decode(decoder_options(cfg, stream.fmt)),
+    )
+    decoder.add(decoded_frame_caps(cfg, stream.fmt))
 
     frames = pyneat.Graph(f"frames_{stream.index}")
     # A few buffers, and dropping: Insight can only draw an overlay on a frame it has metadata
@@ -1239,21 +1203,24 @@ def connect_source_stream(app: AppRuntime, cfg: AppConfig, stream: StreamRuntime
     frame_output.drop = True
     frames.add(pyneat.nodes.output(source_frame_name(stream.index), frame_output))
 
-    # The decoder takes a plain link: a dropping link would discard encoded frames, and every frame
-    # after a dropped one decodes corrupted until the next keyframe.
     if cfg.video_enabled:
-        encoded_branch = pyneat.graphs.branch("encoded", ["decode_h264", "video_h264"])
-        app.source_graph.connect(source, encoded_branch)
-        app.source_graph.connect(encoded_branch, decoder)
-
-        video_options = make_video_options(cfg, stream.index)
-        app.source_graph.connect(
-            encoded_branch,
-            build_video_sender_graph("video_h264", rtsp_codec(cfg.codec), video_options),
-            realtime_link(stream.index, 3),
+        video = pyneat.Graph("video")
+        video.connect(
+            pyneat.nodes.input(
+                ENCODED_TO_VIDEO,
+                encoded_input_options(codec, pyneat.InputMemoryPolicy.SystemMemory),
+            ),
+            pyneat.groups.video_sender(make_video_options(cfg, stream.index)),
         )
+
+        encoded = pyneat.graphs.branch("encoded", [ENCODED_TO_DECODER, ENCODED_TO_VIDEO])
+        app.source_graph.connect(camera, encoded)
+        # The decoder takes a plain link: a dropping link would discard encoded frames, and every
+        # frame after a dropped one decodes corrupted until the next keyframe.
+        app.source_graph.connect(encoded, decoder)
+        app.source_graph.connect(encoded, video, realtime_link(stream.index, 3))
     else:
-        app.source_graph.connect(source, decoder)
+        app.source_graph.connect(camera, decoder)
 
     app.source_graph.connect(decoder, frames)
 
@@ -1332,12 +1299,15 @@ def draw_boxes(frame, boxes: list[dict], labels: list[str], min_score: float) ->
 def draw_segments(
     frame, detections: list[dict], labels: list[str], cfg: AppConfig
 ) -> None:
+    # Only detections that carry a mask are drawn, boxes included, as the C++ overlay does.
+    segmented = []
     for det in detections:
         if float(det["score"]) < cfg.min_score:
             continue
         mask = det.get("mask")
         if mask is None:
             continue
+        segmented.append(det)
         mask = np.asarray(mask, dtype=np.uint8)
         x0, y0, x1, y1 = frame_rect_for_detection(det, frame.shape)
         roi_mask = project_letterbox_mask_roi(mask, frame.shape, (x0, y0, x1, y1))
@@ -1348,14 +1318,20 @@ def draw_segments(
             mask_color = np.full(roi.shape, color, dtype=np.uint8)
             blended = cv2.addWeighted(roi, 1.0 - cfg.mask_alpha, mask_color, cfg.mask_alpha, 0.0)
             cv2.copyTo(blended, binary_mask, roi)
-    draw_boxes(frame, detections, labels, cfg.min_score)
+    draw_boxes(frame, segmented, labels, cfg.min_score)
 
 
 def draw_poses(frame, poses: list[dict], min_visibility: float) -> None:
     color = (10, 249, 72)
+    height, width = frame.shape[:2]
 
     def visible(point: dict) -> bool:
-        return float(point["visibility"]) >= min_visibility
+        """Confident, and inside the frame, so an off-frame joint is hidden as in C++."""
+        x = float(point["x"])
+        y = float(point["y"])
+        if float(point["visibility"]) < min_visibility:
+            return False
+        return 0.0 <= x < width and 0.0 <= y < height
 
     for pose in poses:
         x0, y0, x1, y1 = frame_rect_for_detection(pose, frame.shape)
@@ -1464,7 +1440,7 @@ def run_stream_feeder(app: AppRuntime, cfg: AppConfig, stream: StreamRuntime) ->
             if tensor is None:
                 continue
             try:
-                frame = frame_for_model(tensor)
+                frame = require_nv12_frame(tensor)
                 frame_failures = 0
             except Exception as exc:
                 # An unusable frame is tolerable; a stream that produces nothing else is not, and

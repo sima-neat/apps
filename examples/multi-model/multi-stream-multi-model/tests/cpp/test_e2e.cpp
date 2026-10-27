@@ -7,6 +7,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -142,6 +143,23 @@ MetadataListeners bind_metadata_listeners(const std::string& codec, int metadata
   return listeners;
 }
 
+/// Every `confidence` this message publishes, wherever the task's payload keeps it.
+void collect_confidences(const nlohmann::json& node, std::vector<double>& out) {
+  if (node.is_object()) {
+    for (const auto& [key, value] : node.items()) {
+      if (key == "confidence" && value.is_number()) {
+        out.push_back(value.get<double>());
+      } else {
+        collect_confidences(value, out);
+      }
+    }
+  } else if (node.is_array()) {
+    for (const auto& value : node) {
+      collect_confidences(value, out);
+    }
+  }
+}
+
 bool check_metadata(const std::string& codec, int metadata_port_base,
                     const MetadataListeners& listeners) {
   bool ok = true;
@@ -150,6 +168,17 @@ bool check_metadata(const std::string& codec, int metadata_port_base,
     bool valid_stamps = !result.messages.empty();
     for (const auto& message : result.messages) {
       valid_stamps = valid_stamps && message.timestamp_ms >= 0 && !message.frame_id.empty();
+      // Three decimals, so C++ and Python publish the same bytes for the same result and the
+      // byte budget keeps the same number of entries in both.
+      std::vector<double> confidences;
+      collect_confidences(nlohmann::json::parse(message.payload)["data"], confidences);
+      for (const double confidence : confidences) {
+        if (std::abs(confidence * 1000.0 - std::round(confidence * 1000.0)) > 1e-6) {
+          std::cerr << "[FAIL] " << codec << " stream " << index
+                    << " published an unrounded confidence " << confidence << "\n";
+          ok = false;
+        }
+      }
       if (std::string(stream_slots()[index].metadata_type) == "pose-estimation") {
         for (const auto& pose : nlohmann::json::parse(message.payload)["data"]["poses"]) {
           if (!pose.contains("keypoints") || pose["keypoints"].size() != 17) {

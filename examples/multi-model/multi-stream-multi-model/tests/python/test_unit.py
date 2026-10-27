@@ -324,10 +324,13 @@ class TestRuntimeOptions:
         )
         monkeypatch.setattr(main, "pyneat", fake_pyneat)
 
-        assert main.encoded_decode_input_options(fake_pyneat.RtspCodec.H265).format == "h265"
-        assert main.encoded_video_input_options(fake_pyneat.RtspCodec.H265).format == "h265"
-        assert main.encoded_decode_input_options(fake_pyneat.RtspCodec.H264).format == "h264"
-        assert main.encoded_video_input_options(fake_pyneat.RtspCodec.H264).format == "h264"
+        policies = fake_pyneat.InputMemoryPolicy
+        for policy in (policies.Ev74, policies.SystemMemory):
+            assert main.encoded_input_options(fake_pyneat.RtspCodec.H265, policy).format == "h265"
+            assert main.encoded_input_options(fake_pyneat.RtspCodec.H264, policy).format == "h264"
+            assert main.encoded_input_options(
+                fake_pyneat.RtspCodec.H264, policy
+            ).memory_policy == policy
 
     def test_realtime_link_tags_its_stream(self, monkeypatch):
         import main
@@ -419,7 +422,7 @@ def make_stream(task: str, sender: FakeMetadataSender):
         task=task,
         url="rtsp://127.0.0.1:8554/src1",
         model_path="models/model.tar.gz",
-        source_options=None,
+        fmt=main.SourceFormat(width=1920, height=1080, fps=30),
         model=None,
         metadata_sender=sender,
         labels=["person"],
@@ -631,6 +634,10 @@ def test_detection_budget_drops_lowest_confidence_first():
     assert len(data["objects"]) + dropped == len(boxes)
     lowest_kept = min(obj["confidence"] for obj in data["objects"])
     assert lowest_kept == pytest.approx(0.2 + 0.0005 * dropped, abs=1e-3)
+    # Three decimals, so the C++ implementation measures and publishes the same bytes. An
+    # unrounded float costs ~16 bytes per box and keeps fewer boxes under the same budget.
+    for obj in data["objects"]:
+        assert obj["confidence"] == round(obj["confidence"], 3)
 
 
 def _config():
@@ -701,7 +708,7 @@ def test_debug_frames_stay_paired_with_results(monkeypatch, tmp_path):
                                        pull=lambda *args: next(outputs),
                                        last_error=lambda: "", running=lambda: True)
     monkeypatch.setattr(main, "first_tensor_from_sample", lambda sample: sample.tensor)
-    monkeypatch.setattr(main, "frame_for_model", lambda tensor: tensor)
+    monkeypatch.setattr(main, "require_nv12_frame", lambda tensor: tensor)
     monkeypatch.setattr(main, "tensor_bgr_from_decoded", lambda tensor: tensor.copy())
     monkeypatch.setattr(main, "decode_results", lambda *args: [])
     monkeypatch.setattr(main, "draw_boxes", lambda *args: None)
@@ -759,13 +766,13 @@ def test_workers_stop_when_their_run_stops_cleanly():
     assert stream.closed
 
 
-def test_frame_for_model_passes_decoder_frame_through():
+def test_require_nv12_frame_passes_decoder_frame_through():
     import main
 
     nv12 = SimpleNamespace(is_nv12=lambda: True, width=1920, height=1080)
-    assert main.frame_for_model(nv12) is nv12
+    assert main.require_nv12_frame(nv12) is nv12
     with pytest.raises(ValueError, match="NV12"):
-        main.frame_for_model(SimpleNamespace(is_nv12=lambda: False, width=1920, height=1080))
+        main.require_nv12_frame(SimpleNamespace(is_nv12=lambda: False, width=1920, height=1080))
 
 
 @pytest.mark.parametrize(
@@ -800,7 +807,7 @@ def test_feeder_reports_a_rejected_model_push(monkeypatch):
     app = SimpleNamespace(source_run=SimpleNamespace(
         pull=lambda *args: SimpleNamespace(pts_ns=1, frame_id=1, tensor=object())))
     monkeypatch.setattr(main, "first_tensor_from_sample", lambda sample: sample.tensor)
-    monkeypatch.setattr(main, "frame_for_model", lambda tensor: tensor)
+    monkeypatch.setattr(main, "require_nv12_frame", lambda tensor: tensor)
     with pytest.raises(RuntimeError, match="stream 0 model push failed: bad input"):
         main.run_stream_feeder(app, _config(), stream)
     assert stream.in_flight == 0
@@ -822,7 +829,7 @@ def test_feeder_fails_after_consecutive_unusable_frames(monkeypatch):
         raise ValueError("expected an NV12 frame with valid dimensions")
 
     monkeypatch.setattr(main, "first_tensor_from_sample", lambda sample: sample.tensor)
-    monkeypatch.setattr(main, "frame_for_model", unusable)
+    monkeypatch.setattr(main, "require_nv12_frame", unusable)
     with pytest.raises(RuntimeError, match="consecutive decoded frames were unusable"):
         main.run_stream_feeder(SimpleNamespace(source_run=SimpleNamespace(pull=source_pull)),
                                _config(), stream)
@@ -907,20 +914,20 @@ def test_application_fps_cap_is_rejected(tmp_path, fps):
 def test_rtsp_source_negotiates_dynamic_payload(monkeypatch, codec):
     import main
     from dataclasses import replace
-    captured = []
-    graph = SimpleNamespace(add=captured.append)
+    caps = []
     codecs = SimpleNamespace(H264="h264", H265="h265")
     monkeypatch.setattr(main, "pyneat", SimpleNamespace(
-        RtspDecodedInputOptions=lambda: SimpleNamespace(output_caps=SimpleNamespace()),
         RtspEncodedInputOptions=SimpleNamespace,
         RtspCodec=codecs, Format=SimpleNamespace(NV12="NV12"),
-        CapsMemory=SimpleNamespace(Any="Any"), Graph=lambda name: graph,
-        groups=SimpleNamespace(rtsp_encoded_input=lambda opt: opt)))
-    opt = main.build_source_options(replace(_config(), codec=codec), "rtsp://camera", 30, 1280, 720)
+        CapsMemory=SimpleNamespace(Any="Any"),
+        nodes=SimpleNamespace(caps_raw=lambda *args: caps.append(args))))
+    cfg = replace(_config(), codec=codec)
+    fmt = main.SourceFormat(width=1280, height=720, fps=30)
+
+    opt = main.rtsp_input_options(cfg, "rtsp://camera", fmt)
     assert opt.payload_type == 0
-    main.build_encoded_source_graph(opt)
-    assert captured[0].payload_type == 0
-    assert captured[0].codec == codec
-    assert captured[0].source_fps == (0 if codec == "h265" else 30)
-    assert opt.output_caps.fps == (0 if codec == "h265" else 30)
-    assert opt.source_fps == 30
+    assert opt.codec == codec
+    assert opt.source_fps == (0 if codec == "h265" else 30)
+
+    main.decoded_frame_caps(cfg, fmt)
+    assert caps[0] == ("NV12", 1280, 720, 0 if codec == "h265" else 30, "Any")

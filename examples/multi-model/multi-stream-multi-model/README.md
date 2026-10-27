@@ -20,6 +20,21 @@ Each stream uses its own model and Insight channel. The default configuration ru
 object detection, instance segmentation, pose estimation, and object detection on
 streams 0–3. Source timestamps keep each overlay paired with its camera frame.
 
+```text
+Per stream: RTSP encoded ─┬─> codec passthrough ──────────────> Insight video
+                          └─> decode NV12 ─> NV12 frame output ─┐
+                                                                │
+Application, per stream:  NV12 frame ───────────────────────────┘
+                          └─> model graph (Preproc ─> inference ─> BoxDecode)
+                              ─> boxes, masks or keypoints ────> Insight metadata
+```
+
+Every camera's receive-and-decode chain shares one graph and one run, because Neat
+grants a decoder-admission lease only when a single graph holds more than one decoder.
+Each model gets a graph and run of its own, so a stalled model cannot stop its
+neighbours. The video the viewer sees is the camera's own encoded stream, passed
+through untouched; Insight draws every overlay from the metadata.
+
 ## Preview
 
 ![Multi stream multi model preview](../../../portal/assets/examples/multi-model/multi-stream-multi-model/image.png)
@@ -28,6 +43,7 @@ streams 0–3. Source timestamps keep each overlay paired with its camera frame.
 
 - `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
 - Up to four RTSP sources, all H.264 or all H.265, and an [Insight](https://developer.sima.ai/software/tools/insight/) host reachable from the target. Pointing several streams at the same camera is fine; each one still builds its own decode and its own model.
+- Source frame rates that fit the decoder. Four 1920x1080@30 streams fit a DevKit; four 1920x1080@60 H.265 streams exceed decoder admission. Reduce the camera's frame rate or use fewer streams — the application does not resample, so `inference.fps` cannot work around this.
 
 ## Install Apps
 
@@ -66,6 +82,17 @@ cd ..
 
 These four packages are the tested set. The `decode` setting selects the package's head layout:
 use `yolov8` for these YOLO11 packages and `yolo26` for these YOLO26 packages.
+
+## Prepare Insight
+
+[Insight](https://developer.sima.ai/software/tools/insight/) can host the input streams and render
+each output channel. Install videos directly from the Insight catalog or through Insight's YouTube
+support.
+
+In the Insight Web UI, start the four required streams and copy their RTSP URLs into `streams`. Use
+a host and published port that the target can reach, not `localhost` and not an address only
+Insight's own machine can resolve. Verify each URL from the target before running; the application
+prints the resolved source and its dimensions for every stream on startup.
 
 ## Configure
 
@@ -150,16 +177,14 @@ throughput every 100 frames:
 
 Set `runtime.profile: false` for a quiet run.
 
-Measured on a Modalix DevKit against four 1920x1080@30 H.264 RTSP sources with the default
-models and debug saving disabled:
+With the four default packages and debug saving disabled, every stream tracks its source rate on a
+Modalix DevKit: four 1920x1080@30 H.264 cameras each report close to 30 fps in `output_fps`, in both
+implementations. This is the source rate, not a capacity measurement; the device has headroom these
+packages do not use.
 
-| Implementation | detection | segmentation | pose | detection | aggregate |
-| --- | --- | --- | --- | --- | --- |
-| C++ | 30.3 fps | 30.2 fps | 29.6 fps | 30.3 fps | ~120 fps |
-| Python | 30.3 fps | 30.3 fps | 30.3 fps | 30.3 fps | ~120 fps |
-
-Every stream tracks its source rate. Enabling `output.debug_dir` adds a host color conversion for
-each saved frame.
+Setting `output.debug_dir` adds a host NV12-to-BGR conversion for every frame the application
+pulls, not only for the frames `output.save_every` writes. Leave `debug_dir` unset for a
+performance run.
 
 ## Troubleshooting
 
@@ -187,6 +212,10 @@ each saved frame.
   oversubscribed. Four 1920x1080@30 streams fit the small INT8 defaults; heavier packages do not,
   and the shortfall concentrates on a single stream instead of spreading. Drop stream entries or
   return to the default packages.
+- Every stream is slow, or a decoder fails to start: the source frame rates exceed decoder
+  admission. Four 1920x1080@60 H.265 streams do not fit a DevKit. Lower the rate at the cameras or
+  run fewer streams; the application cannot resample, so `inference.fps` is rejected rather than
+  silently dropping frames.
 
 ## Source Files
 

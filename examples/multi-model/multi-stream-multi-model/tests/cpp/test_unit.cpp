@@ -255,21 +255,28 @@ bool test_validate_config_only_rejects_invalid_mask_threshold(const std::string&
   return ok;
 }
 
+/// One stream entry carrying `value` for `key` and a valid value for the other field, so each
+/// field appears exactly once and the test does not depend on duplicate-key precedence.
+std::string stream_entry(const std::string& key, const std::string& value) {
+  const std::string url = key == "url" ? value : "rtsp://127.0.0.1:8554/src1";
+  const std::string model = key == "model" ? value : "models/model.tar.gz";
+  return "streams:\n  - url: " + url + "\n    model: " + model + "\n    task: detection\n" +
+         "    decode: yolov8\n";
+}
+
 bool test_stream_scalar_types(const std::string& binary) {
   bool ok = true;
   for (const std::string key : {"url", "model"}) {
-    for (const std::string value : {"null", "Null", "NULL", "~", "true", "false", "42",
-                                   "1.5", "[value]", "{path: value}", "", "\"  \""}) {
-      const auto path = write_config("test_stream_scalar_types",
-          "streams:\n  - url: rtsp://127.0.0.1:8554/src1\n    model: models/model.tar.gz\n    " +
-          key + ": " + value + "\n" + kInsightOutput);
+    for (const std::string value : {"null", "Null", "NULL", "~", "true", "false", "42", "1.5",
+                                    "[value]", "{path: value}", "", "\"  \""}) {
+      const auto path =
+          write_config("test_stream_scalar_types", stream_entry(key, value) + kInsightOutput);
       const auto result = validate(binary, path);
       ok &= expect_true(result.exit_code == 1, key + " rejects non-string or empty YAML value");
       remove_dir(path.parent_path().string());
     }
-    const auto path = write_config("test_quoted_stream_scalar",
-        "streams:\n  - url: rtsp://127.0.0.1:8554/src1\n    model: models/model.tar.gz\n    " +
-        key + ": \"null\"\n" + kInsightOutput);
+    const auto path =
+        write_config("test_quoted_stream_scalar", stream_entry(key, "\"null\"") + kInsightOutput);
     ok &= expect_true(validate(binary, path).exit_code == 0, key + " accepts quoted string null");
     remove_dir(path.parent_path().string());
   }

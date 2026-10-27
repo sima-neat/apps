@@ -42,7 +42,9 @@
 #include <filesystem>
 #include <fstream>
 #include <regex>
+#include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -213,6 +215,16 @@ struct FrameResults {
   }
 };
 
+/// The frame size and rate the camera reports.
+///
+/// Probed once, before any graph is built, because the decoder pool, the decoder output caps and
+/// the model input are all sized from it.
+struct SourceFormat {
+  int width = 0;
+  int height = 0;
+  int fps = 0;
+};
+
 struct StreamConfig {
   int index = 0;
   std::string url;
@@ -282,12 +294,15 @@ struct ProfileWindow {
     const double elapsed = sima_examples::time_ms() - start_ms;
     const double output_fps = elapsed > 0.0 ? static_cast<double>(frames) * 1000.0 / elapsed : 0.0;
     const auto avg = [this](double value) { return value / static_cast<double>(frames); };
-    std::cout << "[profile stream=" << stream_index << " task=" << task_name(task)
-              << "] frames=" << frames << " output_fps=" << output_fps
-              << " avg_result_pull_ms=" << avg(result_pull_ms)
-              << " avg_metadata_send_ms=" << avg(metadata_send_ms)
-              << " avg_instances=" << static_cast<double>(instances) / static_cast<double>(frames)
-              << "\n";
+    // One decimal in its own stream, as the Python implementation prints and the README shows,
+    // so std::cout keeps its default formatting.
+    std::ostringstream line;
+    line << std::fixed << std::setprecision(1) << "[profile stream=" << stream_index
+         << " task=" << task_name(task) << "] frames=" << frames << " output_fps=" << output_fps
+         << " avg_result_pull_ms=" << avg(result_pull_ms)
+         << " avg_metadata_send_ms=" << avg(metadata_send_ms)
+         << " avg_instances=" << static_cast<double>(instances) / static_cast<double>(frames);
+    std::cout << line.str() << "\n";
     frames = 0;
     instances = 0;
     start_ms = 0.0;
@@ -301,7 +316,7 @@ struct StreamRuntime {
   Task task = Task::Detection;
   std::string url;
   std::string model_path;
-  simaai::neat::nodes::groups::RtspDecodedInputOptions source_options;
+  SourceFormat format;
   std::unique_ptr<simaai::neat::Model> model;
   std::unique_ptr<simaai::neat::MetadataSender> metadata_sender;
   std::vector<std::string> labels;
@@ -1047,9 +1062,29 @@ std::vector<sima_examples::MetadataBox> build_metadata_boxes(const std::vector<o
   return metadata_boxes;
 }
 
+/// One `objects` entry. The shared `metadata_boxes_data_json` stores confidence as a `float` and
+/// serializes its widened value, so this example builds the entry itself to keep the three-decimal
+/// confidence segmentation and pose already publish.
+nlohmann::json object_entry(const sima_examples::MetadataBox& box) {
+  return {
+      {"id", box.id},
+      {"label", box.label},
+      {"confidence", round_confidence(box.confidence)},
+      {"bbox", {box.x, box.y, box.w, box.h}},
+  };
+}
+
+std::string metadata_objects_data_json(const std::vector<sima_examples::MetadataBox>& boxes) {
+  nlohmann::json entries = nlohmann::json::array();
+  for (const auto& box : boxes) {
+    entries.push_back(object_entry(box));
+  }
+  return nlohmann::json{{"objects", std::move(entries)}}.dump();
+}
+
 /// `data` object of an `object-detection` metadata message. A raised `inference.max_detections`
 /// can overrun one message, so boxes beyond the byte budget are dropped lowest-confidence first
-/// and counted, as segmentation and pose do. Each box is measured with the shared serializer.
+/// and counted, as segmentation and pose do. Each box is measured as it serializes.
 EncodedMetadata encode_boxes(std::vector<sima_examples::MetadataBox> boxes) {
   // Stable, so boxes tying on confidence are dropped in the same order the Python
   // implementation drops them.
@@ -1057,12 +1092,10 @@ EncodedMetadata encode_boxes(std::vector<sima_examples::MetadataBox> boxes) {
     return a.confidence > b.confidence;
   });
 
-  const std::size_t empty_bytes = sima_examples::metadata_boxes_data_json("objects", {}).size();
-  std::size_t bytes = empty_bytes;
+  std::size_t bytes = metadata_objects_data_json({}).size();
   std::size_t kept = 0;
   for (const auto& box : boxes) {
-    const std::size_t entry_bytes =
-        sima_examples::metadata_boxes_data_json("objects", {box}).size() - empty_bytes + 1;
+    const std::size_t entry_bytes = object_entry(box).dump().size() + 1;
     if (bytes + entry_bytes > kMetadataByteBudget) {
       break;
     }
@@ -1072,7 +1105,7 @@ EncodedMetadata encode_boxes(std::vector<sima_examples::MetadataBox> boxes) {
 
   const int dropped = static_cast<int>(boxes.size() - kept);
   boxes.resize(kept);
-  return {sima_examples::metadata_boxes_data_json("objects", boxes), dropped};
+  return {metadata_objects_data_json(boxes), dropped};
 }
 
 void draw_boxes(cv::Mat& frame, const std::vector<objdet::Box>& boxes,
@@ -1146,61 +1179,17 @@ void draw_poses(cv::Mat& frame, const std::vector<Pose>& poses, double min_visib
   }
 }
 
-simaai::neat::nodes::groups::RtspDecodedInputOptions
-build_source_options(const AppConfig& cfg, const std::string& url, int& fps_out, int& width_out,
-                     int& height_out) {
+SourceFormat probe_source_format(const AppConfig& cfg, const std::string& url) {
   sima_examples::RtspStreamInfo probe;
   sima_examples::RtspProbeOptions probe_options;
-  probe_options.payload_type = 0;
-  probe_options.latency_ms = cfg.latency_ms;
   probe_options.rtsp_tcp = cfg.tcp;
-  probe_options.debug = cfg.profile;
   (void)sima_examples::probe_rtsp_stream_info(url, probe_options, probe);
 
-  simaai::neat::nodes::groups::RtspDecodedInputOptions opt;
-  opt.url = url;
-  opt.latency_ms = cfg.latency_ms;
-  opt.tcp = cfg.tcp;
-  // RTP dynamic payload numbers are advertised by the RTSP source.
-  opt.payload_type = 0;
-  opt.insert_queue = true;
-  opt.out_format = "NV12";
-  opt.decoder_name = "decoder";
-  opt.decoder_raw_output = true;
-  // Decoded frames go to the model without a copy, so the decoder pool must cover every frame a
-  // stream holds at once: the frame output queue, the frames in flight, and headroom to decode.
-  opt.num_buffers = kSourceFrameQueueDepth + cfg.max_inflight_per_stream + kDecoderHeadroomBuffers;
-  opt.auto_caps_from_stream = true;
-  opt.codec = cfg.codec;
-  if (probe.width > 0 && probe.height > 0) {
-    opt.dec_width = probe.width;
-    opt.dec_height = probe.height;
-    if (cfg.codec == simaai::neat::nodes::groups::RtspCodec::H264) {
-      opt.fallback_h264_width = probe.width;
-      opt.fallback_h264_height = probe.height;
-    }
-    width_out = probe.width;
-    height_out = probe.height;
-  }
-  if (probe.fps > 0) {
-    opt.source_fps = probe.fps;
-    fps_out = probe.fps;
-  }
-  if (width_out > 0 && height_out > 0 && fps_out > 0) {
-    opt.output_caps.enable = true;
-    opt.output_caps.format = "NV12";
-    opt.output_caps.width = width_out;
-    opt.output_caps.height = height_out;
-    // H.265 timing may be fractional or absent; the integer probe is only a hint.
-    opt.output_caps.fps = cfg.codec == simaai::neat::nodes::groups::RtspCodec::H265 ? 0 : fps_out;
-    opt.output_caps.memory = simaai::neat::CapsMemory::Any;
-  }
-  return opt;
-}
-
-bool output_caps_enabled(
-    const simaai::neat::nodes::groups::RtspDecodedInputOptions::OutputCaps& caps) {
-  return caps.enable || caps.width > 0 || caps.height > 0 || caps.fps > 0;
+  SourceFormat format;
+  format.width = probe.width;
+  format.height = probe.height;
+  format.fps = probe.fps;
+  return format;
 }
 
 simaai::neat::FormatTag encoded_format_tag(simaai::neat::nodes::groups::RtspCodec codec) {
@@ -1208,93 +1197,66 @@ simaai::neat::FormatTag encoded_format_tag(simaai::neat::nodes::groups::RtspCode
                                                                : simaai::neat::FormatTag::H264;
 }
 
-simaai::neat::InputOptions
-encoded_decode_input_options(simaai::neat::nodes::groups::RtspCodec codec) {
-  simaai::neat::InputOptions opt;
-  opt.payload_type = simaai::neat::PayloadType::Encoded;
-  opt.format = encoded_format_tag(codec);
-  opt.memory_policy = simaai::neat::InputMemoryPolicy::Ev74;
+/// Receive the camera's encoded stream without decoding it.
+simaai::neat::nodes::groups::RtspEncodedInputOptions
+rtsp_input_options(const AppConfig& cfg, const std::string& url, const SourceFormat& format) {
+  simaai::neat::nodes::groups::RtspEncodedInputOptions opt;
+  opt.url = url;
+  opt.codec = cfg.codec;
+  opt.latency_ms = cfg.latency_ms;
+  opt.tcp = cfg.tcp;
+  // RTP dynamic payload numbers are advertised by the RTSP source, so filter on none.
+  opt.payload_type = 0;
+  // H.265 timing may be fractional, so leave the parser its native rate instead of a rounded
+  // probe value. H.264 takes the probe, which repairs a source that advertises no caps.
+  opt.source_fps = cfg.codec == simaai::neat::nodes::groups::RtspCodec::H265 ? 0 : format.fps;
+  if (cfg.codec == simaai::neat::nodes::groups::RtspCodec::H264) {
+    opt.fallback_h264_width = format.width;
+    opt.fallback_h264_height = format.height;
+  }
   return opt;
 }
 
-simaai::neat::InputOptions
-encoded_video_input_options(simaai::neat::nodes::groups::RtspCodec codec) {
-  simaai::neat::InputOptions opt;
-  opt.payload_type = simaai::neat::PayloadType::Encoded;
-  opt.format = encoded_format_tag(codec);
-  opt.memory_policy = simaai::neat::InputMemoryPolicy::SystemMemory;
+simaai::neat::SimaDecodeOptions decoder_options(const AppConfig& cfg, const SourceFormat& format) {
+  simaai::neat::SimaDecodeOptions opt;
+  opt.type = cfg.codec == simaai::neat::nodes::groups::RtspCodec::H265
+                 ? simaai::neat::SimaDecodeType::H265
+                 : simaai::neat::SimaDecodeType::H264;
+  // NV12 straight out of the decoder, so the model takes the frame with no repack.
+  opt.out_format = simaai::neat::FormatTag::NV12;
+  opt.raw_output = true;
+  opt.decoder_name = "decoder";
+  opt.dec_width = format.width;
+  opt.dec_height = format.height;
+  opt.dec_fps = format.fps;
+  // Decoded frames reach the model without a copy, so the pool must cover every frame a stream
+  // holds at once: the frame output queue, the frames in flight, and headroom to decode.
+  opt.num_buffers = kSourceFrameQueueDepth + cfg.max_inflight_per_stream + kDecoderHeadroomBuffers;
   return opt;
 }
 
-simaai::neat::Graph
-build_encoded_source_graph(const simaai::neat::nodes::groups::RtspDecodedInputOptions& opt) {
-  simaai::neat::Graph source("rtsp_encoded_source");
-
-  simaai::neat::nodes::groups::RtspEncodedInputOptions encoded_opt;
-  encoded_opt.url = opt.url;
-  encoded_opt.codec = opt.codec;
-  encoded_opt.payload_type = opt.payload_type;
-  encoded_opt.latency_ms = opt.latency_ms;
-  encoded_opt.tcp = opt.tcp;
-  // Preserve the parser's native H.265 rate instead of enforcing a rounded probe value.
-  encoded_opt.source_fps = opt.codec == simaai::neat::nodes::groups::RtspCodec::H265
-                               ? 0 : opt.source_fps;
-  if (opt.codec == simaai::neat::nodes::groups::RtspCodec::H264) {
-    encoded_opt.fallback_h264_width = opt.fallback_h264_width;
-    encoded_opt.fallback_h264_height = opt.fallback_h264_height;
-  }
-  source.add(simaai::neat::nodes::groups::RtspEncodedInput(encoded_opt));
-  return source;
+/// Pin the decoder's output format, so the frame Output and the model input agree on one layout.
+std::shared_ptr<simaai::neat::Node> decoded_frame_caps(const AppConfig& cfg,
+                                                       const SourceFormat& format) {
+  // H.265 timing may be fractional or absent, so constrain the rate only for H.264.
+  const int fps = cfg.codec == simaai::neat::nodes::groups::RtspCodec::H265 ? 0 : format.fps;
+  return simaai::neat::nodes::CapsRaw("NV12", format.width, format.height, fps,
+                                      simaai::neat::CapsMemory::Any);
 }
 
-simaai::neat::Graph
-build_decode_graph(const std::string& input_name,
-                   const simaai::neat::nodes::groups::RtspDecodedInputOptions& opt) {
-  simaai::neat::Graph decode("decode");
-  const bool use_h265 = opt.codec == simaai::neat::nodes::groups::RtspCodec::H265;
+/// Endpoint names the branch routes the one encoded stream to.
+constexpr const char* kEncodedToDecoder = "encoded_to_decoder";
+constexpr const char* kEncodedToVideo = "encoded_to_video";
 
-  simaai::neat::SimaDecodeOptions dec;
-  dec.type = use_h265 ? simaai::neat::SimaDecodeType::H265 : simaai::neat::SimaDecodeType::H264;
-  dec.sima_allocator_type = opt.sima_allocator_type;
-  dec.out_format = opt.out_format;
-  dec.decoder_name = opt.decoder_name;
-  dec.raw_output = opt.decoder_raw_output;
-  dec.next_element = opt.decoder_next_element;
-  dec.dec_width = opt.dec_width;
-  dec.dec_height = opt.dec_height;
-  dec.dec_fps = opt.source_fps;
-  dec.num_buffers = opt.num_buffers;
-  dec.input_buffers = opt.decoder_input_buffers;
-  dec.decoder_tuning = opt.decoder_tuning;
-  dec.memory_opt = opt.decoder_memory_opt;
-
-  decode.connect(simaai::neat::nodes::Input(input_name, encoded_decode_input_options(opt.codec)),
-                 simaai::neat::nodes::SimaDecode(dec));
-  if (opt.use_videoconvert) {
-    decode.add(simaai::neat::nodes::VideoConvert());
-  }
-  if (opt.use_videoscale) {
-    decode.add(simaai::neat::nodes::VideoScale());
-  }
-  if (output_caps_enabled(opt.output_caps)) {
-    const auto& caps = opt.output_caps;
-    decode.add(
-        simaai::neat::nodes::CapsRaw(caps.format, caps.width, caps.height, caps.fps, caps.memory));
-  }
-  if (!opt.extra_fragment.empty()) {
-    decode.add(simaai::neat::nodes::Custom(opt.extra_fragment));
-  }
-  return decode;
-}
-
-simaai::neat::Graph
-build_video_sender_graph(const std::string& input_name,
-                         simaai::neat::nodes::groups::RtspCodec codec,
-                         const simaai::neat::nodes::groups::VideoSenderOptions& video_options) {
-  simaai::neat::Graph video("video_sender");
-  video.connect(simaai::neat::nodes::Input(input_name, encoded_video_input_options(codec)),
-                simaai::neat::nodes::groups::VideoSender(video_options));
-  return video;
+simaai::neat::InputOptions encoded_input_options(simaai::neat::nodes::groups::RtspCodec codec,
+                                                 simaai::neat::InputMemoryPolicy memory) {
+  simaai::neat::InputOptions opt;
+  opt.payload_type = simaai::neat::PayloadType::Encoded;
+  opt.format = encoded_format_tag(codec);
+  // The decoder reads the encoded stream from the EV74's own memory; the sender reads it from
+  // system memory.
+  opt.memory_policy = memory;
+  return opt;
 }
 
 /// Map a stream's task and declared head layout onto an on-device BoxDecode family.
@@ -1380,13 +1342,13 @@ simaai::neat::GraphLinkOptions realtime_link(int stream_index, int queue_depth) 
   return link;
 }
 
-/// Hand a decoded frame to the model as the decoder produced it.
+/// Check that a decoded frame is one the model input accepts, and return it unchanged.
 ///
-/// The model input accepts the decoder's padded NV12 buffer directly. Repacking it with
-/// `contiguous().cvu()` allocated a new frame from the default CMA heap for every frame, which
-/// exhausts that heap with three or more 1080p streams. Holding the decoder buffer while the
-/// frame is in flight is bounded by `max_inflight_per_stream`.
-simaai::neat::Tensor frame_for_model(const simaai::neat::Tensor& input) {
+/// The model input takes the decoder's padded NV12 buffer as it is, so the frame is never
+/// repacked: a repack would allocate from the default CMA heap per frame and exhaust it with
+/// three or more 1080p streams. The frame holds its decoder buffer until the model returns it,
+/// bounded by `max_inflight_per_stream`.
+simaai::neat::Tensor require_nv12_frame(const simaai::neat::Tensor& input) {
   int width = 0;
   int height = 0;
   if (!input.is_nv12() || !sima_examples::infer_dims(input, width, height)) {
@@ -1440,11 +1402,13 @@ void build_stream_runtime(const AppConfig& cfg, const StreamConfig& stream_cfg,
   runtime.task = stream_cfg.task;
   runtime.url = stream_cfg.url;
   runtime.model_path = stream_cfg.model_path;
-  runtime.source_options = build_source_options(cfg, stream_cfg.url, runtime.output_fps,
-                                                runtime.frame_w, runtime.frame_h);
-  sima_examples::require(runtime.frame_w > 0 && runtime.frame_h > 0,
+  runtime.format = probe_source_format(cfg, stream_cfg.url);
+  sima_examples::require(runtime.format.width > 0 && runtime.format.height > 0,
                          "failed to probe RTSP frame dimensions");
-  sima_examples::require(runtime.output_fps > 0, "failed to probe RTSP frame rate");
+  sima_examples::require(runtime.format.fps > 0, "failed to probe RTSP frame rate");
+  runtime.frame_w = runtime.format.width;
+  runtime.frame_h = runtime.format.height;
+  runtime.output_fps = runtime.format.fps;
 
   runtime.model = build_model(cfg, stream_cfg, runtime.frame_w, runtime.frame_h);
   runtime.labels = labels;
@@ -1477,14 +1441,26 @@ void build_stream_runtime(const AppConfig& cfg, const StreamConfig& stream_cfg,
   std::cout << " metadata=" << runtime.metadata_sender->metadata_port() << "\n";
 }
 
-/// Add one stream's `rtsp -> decode -> Output` chain, plus its video passthrough, to the shared
-/// source graph.
+/// Add one camera to the shared source graph:
 ///
-/// Video stays in-graph as an encoded passthrough: Insight correlates the RTP timestamp with the
-/// metadata timestamp, and re-encoding on the host would cost a copy this example does not need.
+///     RtspEncodedInput --+-- SimaDecode -- CapsRaw -- Output(frame_i)  -> this stream's model
+///                        |
+///                        +-- VideoSender                              -> Insight video channel
+///
+/// One encoded stream, two consumers. Video stays encoded all the way to Insight: Insight
+/// correlates the RTP timestamp with the metadata timestamp, so re-encoding on the host would
+/// cost a copy this example does not need.
 void connect_source_stream(AppRuntime& app, const AppConfig& cfg, StreamRuntime& stream) {
-  auto source = build_encoded_source_graph(stream.source_options);
-  auto decoder = build_decode_graph("decode_h264", stream.source_options);
+  simaai::neat::Graph camera("camera");
+  camera.add(simaai::neat::nodes::groups::RtspEncodedInput(
+      rtsp_input_options(cfg, stream.url, stream.format)));
+
+  simaai::neat::Graph decoder("decoder");
+  decoder.connect(simaai::neat::nodes::Input(
+                      kEncodedToDecoder,
+                      encoded_input_options(cfg.codec, simaai::neat::InputMemoryPolicy::Ev74)),
+                  simaai::neat::nodes::SimaDecode(decoder_options(cfg, stream.format)));
+  decoder.add(decoded_frame_caps(cfg, stream.format));
 
   simaai::neat::Graph frames("frames_" + std::to_string(stream.index));
   // A few buffers, and dropping: Insight can only draw an overlay on a frame it has metadata
@@ -1494,19 +1470,22 @@ void connect_source_stream(AppRuntime& app, const AppConfig& cfg, StreamRuntime&
   frame_output.drop = true;
   frames.add(simaai::neat::nodes::Output(source_frame_name(stream.index), frame_output));
 
-  // The decoder takes a plain link: a dropping link would discard encoded frames, and every frame
-  // after a dropped one decodes corrupted until the next keyframe.
   if (cfg.video_enabled) {
-    auto encoded_branch = simaai::neat::graphs::Branch("encoded", {"decode_h264", "video_h264"});
-    app.source_graph.connect(source, encoded_branch);
-    app.source_graph.connect(encoded_branch, decoder);
+    simaai::neat::Graph video("video");
+    video.connect(
+        simaai::neat::nodes::Input(
+            kEncodedToVideo,
+            encoded_input_options(cfg.codec, simaai::neat::InputMemoryPolicy::SystemMemory)),
+        simaai::neat::nodes::groups::VideoSender(make_video_options(cfg, stream.index)));
 
-    const auto video_options = make_video_options(cfg, stream.index);
-    app.source_graph.connect(encoded_branch,
-                             build_video_sender_graph("video_h264", cfg.codec, video_options),
-                             realtime_link(stream.index, 3));
+    auto encoded = simaai::neat::graphs::Branch("encoded", {kEncodedToDecoder, kEncodedToVideo});
+    app.source_graph.connect(camera, encoded);
+    // The decoder takes a plain link: a dropping link would discard encoded frames, and every
+    // frame after a dropped one decodes corrupted until the next keyframe.
+    app.source_graph.connect(encoded, decoder);
+    app.source_graph.connect(encoded, video, realtime_link(stream.index, 3));
   } else {
-    app.source_graph.connect(source, decoder);
+    app.source_graph.connect(camera, decoder);
   }
   app.source_graph.connect(decoder, frames);
 }
@@ -1641,13 +1620,6 @@ void process_output_sample(const AppConfig& cfg, StreamRuntime& stream,
                      static_cast<int>(results.size()));
 }
 
-/// Feeder: pull this stream's decoded frames from the shared source Run and hand them to its
-/// model, never letting more than `max_inflight_per_stream` frames sit inside the model graph.
-///
-/// The gate is the real backpressure. `OverflowPolicy::Block` does not bound in-graph buffering:
-/// push() returns as soon as the frame lands in the graph's internal edge queue, so a model
-/// slower than its camera accumulates seconds of latency while still reporting the source rate.
-/// Frames that arrive while the gate is closed are dropped, which is what a live camera wants.
 /// A Run that closed with a recorded error failed; one that closed without one stopped cleanly.
 /// Matches the Python `run_stopped` split, so a failed decoder or model ends the process nonzero
 /// instead of quietly ending one stream.
@@ -1661,6 +1633,12 @@ void throw_if_run_failed(simaai::neat::Run& run, const std::string& what) {
   }
 }
 
+/// Feeder: pull this stream's decoded frames from the shared source Run and hand them to its
+/// model, never letting more than `max_inflight_per_stream` frames sit inside the model graph.
+///
+/// The gate is the real backpressure. `OverflowPolicy::Block` does not bound in-graph buffering:
+/// push() returns as soon as the frame lands in the graph's internal edge queue, so a model
+/// slower than its camera accumulates seconds of latency while still reporting the source rate.
 void run_stream_feeder(AppRuntime& app, const AppConfig& cfg, StreamRuntime& stream) {
   constexpr int kPullTimeoutMs = 50;
   constexpr int kMaxConsecutiveFrameFailures = 30;
@@ -1684,8 +1662,8 @@ void run_stream_feeder(AppRuntime& app, const AppConfig& cfg, StreamRuntime& str
       throw std::runtime_error("stream " + std::to_string(stream.index) +
                                " source pull: " + pull_error.message);
     }
-    // Wait for a slot rather than discarding the frame: every frame dropped here is a frame
-    // Insight renders with no overlay. Bounded, so a wedged model cannot hang the feeder.
+    // Wait briefly for a slot, because every frame dropped here is a frame Insight renders with
+    // no overlay; then drop it, so a wedged model cannot hang the feeder.
     for (int waited = 0; stream.in_flight.load() >= depth && waited < 50 &&
          g_stop_requested == 0 && !stream.closed.load();
          ++waited) {
@@ -1704,7 +1682,7 @@ void run_stream_feeder(AppRuntime& app, const AppConfig& cfg, StreamRuntime& str
     }
     simaai::neat::Tensor frame;
     try {
-      frame = frame_for_model(tensors.front());
+      frame = require_nv12_frame(tensors.front());
       frame_failures = 0;
     } catch (const std::exception& e) {
       // An unusable frame is tolerable; a stream that produces nothing else is not, and warning
