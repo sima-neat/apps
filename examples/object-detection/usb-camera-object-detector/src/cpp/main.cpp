@@ -197,12 +197,13 @@ std::vector<std::string> load_labels(const fs::path& labels_path) {
 }
 
 std::string camera_caps(const Config& cfg) {
-  return "image/jpeg,width=" + std::to_string(cfg.width) + ",height=" +
-         std::to_string(cfg.height) + ",framerate=" + std::to_string(cfg.fps) + "/1";
+  return "image/jpeg,width=" + std::to_string(cfg.width) + ",height=" + std::to_string(cfg.height) +
+         ",framerate=" + std::to_string(cfg.fps) + "/1";
 }
 
 std::string source_description(const Config& cfg) {
-  if (!cfg.override_fragment.empty()) return cfg.override_fragment;
+  if (!cfg.override_fragment.empty())
+    return cfg.override_fragment;
   return "V4L2 device=" + cfg.device + " caps=" + camera_caps(cfg) +
          " -> Input -> {VideoSender(MJPEG passthrough), JpegParse -> SimaDecode(MJPEG) -> model}";
 }
@@ -214,7 +215,8 @@ std::size_t jpeg_end(const std::uint8_t* data, std::size_t size) {
     pos += 2 + ((std::size_t{data[pos + 2]} << 8) | data[pos + 3]);
   }
   for (; pos + 1 < size; ++pos) {
-    if (data[pos] == 0xff && data[pos + 1] == 0xd9) return pos + 2;
+    if (data[pos] == 0xff && data[pos + 1] == 0xd9)
+      return pos + 2;
   }
   return 0;
 }
@@ -246,7 +248,9 @@ public:
            ",height=" + std::to_string(opt.height) + ",framerate=" + std::to_string(opt.fps) + "/1";
   }
 
-  void close() { capture_.release(); }
+  void close() {
+    capture_.release();
+  }
 
   std::vector<std::uint8_t> read(std::stop_token stop = {}) {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
@@ -259,11 +263,13 @@ public:
       // startup in an unbounded read before the producer thread exists.
       std::vector<int> ready;
       while (!stop.stop_requested() && !g_stop.load()) {
-        if (cv::VideoCapture::waitAny({capture_}, ready, 100000000) && !ready.empty()) break;
+        if (cv::VideoCapture::waitAny({capture_}, ready, 100000000) && !ready.empty())
+          break;
         if (std::chrono::steady_clock::now() >= deadline)
           throw std::runtime_error("USB camera timed out waiting for a frame");
       }
-      if (stop.stop_requested() || g_stop.load()) return {};
+      if (stop.stop_requested() || g_stop.load())
+        return {};
       ok = capture_.retrieve(frame);
       if (!ok || frame.empty()) {
         throw std::runtime_error("USB camera stopped delivering frames");
@@ -330,8 +336,9 @@ std::vector<Box> parse_bbox_payload(const std::vector<uint8_t>& payload, int img
     box.y2 = clamp(static_cast<float>(static_cast<int64_t>(y) + h), img_h);
     box.score = score;
     box.class_id = static_cast<int>(class_id);
-    if (!(score >= min_score && score <= 1.0f) || class_id < 0 ||
-        box.x2 <= box.x1 || box.y2 <= box.y1) continue;
+    if (!(score >= min_score && score <= 1.0f) || class_id < 0 || box.x2 <= box.x1 ||
+        box.y2 <= box.y1)
+      continue;
     boxes.push_back(box);
   }
   return boxes;
@@ -504,7 +511,8 @@ int main(int argc, char** argv) {
     if (cfg.override_fragment.empty()) {
       camera = std::make_unique<UsbCamera>(cfg);
       first_frame = camera->read();
-      if (g_stop.load()) return 130;
+      if (g_stop.load())
+        return 130;
       format = neat::jpeg_output_format(first_frame);
     }
     auto model = make_model(cfg, format);
@@ -606,16 +614,20 @@ int main(int argc, char** argv) {
               encoded = seed;
             } else {
               auto bytes = camera->read(stop);
-              if (bytes.empty()) break;
+              if (bytes.empty())
+                break;
               const auto pts = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                  std::chrono::steady_clock::now() - capture_start).count();
+                                   std::chrono::steady_clock::now() - capture_start)
+                                   .count();
               encoded = neat::make_encoded_sample(std::move(bytes), camera->caps, pts, -1,
                                                   1000000000LL / cfg.fps);
             }
             encoded.frame_id = frame_id++;
             encoded.stream_id = "camera";
-            if (stop.stop_requested()) break;
-            if (!run.push(encoded)) throw std::runtime_error("USB decoder rejected JPEG input");
+            if (stop.stop_requested())
+              break;
+            if (!run.push(encoded))
+              throw std::runtime_error("USB decoder rejected JPEG input");
           }
         } catch (...) {
           if (!stop.stop_requested()) {
@@ -628,12 +640,14 @@ int main(int argc, char** argv) {
     }
     auto check_capture_error = [&] {
       std::lock_guard lock(capture_error_mutex);
-      if (capture_error) std::rethrow_exception(capture_error);
+      if (capture_error)
+        std::rethrow_exception(capture_error);
     };
     auto stop_capture = [&] {
       producer.request_stop();
       run.close();
-      if (producer.joinable()) producer.join();
+      if (producer.joinable())
+        producer.join();
     };
     auto last_output = std::chrono::steady_clock::now();
     try {
@@ -659,13 +673,13 @@ int main(int argc, char** argv) {
           throw std::runtime_error("pull failed: " + err.message);
         }
 
-        const auto boxes = parse_bbox_payload(bbox_payload_from_sample(sample), cfg.width, cfg.height,
-                                              cfg.max_detections, cfg.min_score);
+        const auto boxes = parse_bbox_payload(bbox_payload_from_sample(sample), cfg.width,
+                                              cfg.height, cfg.max_detections, cfg.min_score);
         if (!metadata_sender.send_metadata(
-            "object-detection", build_metadata_json(boxes, labels, cfg.width, cfg.height),
-            sample.pts_ns >= 0 ? static_cast<int64_t>(sample.pts_ns / 1000000) : -1,
-            sample.frame_id >= 0 ? std::to_string(sample.frame_id) : std::string(),
-            &metadata_error)) {
+                "object-detection", build_metadata_json(boxes, labels, cfg.width, cfg.height),
+                sample.pts_ns >= 0 ? static_cast<int64_t>(sample.pts_ns / 1000000) : -1,
+                sample.frame_id >= 0 ? std::to_string(sample.frame_id) : std::string(),
+                &metadata_error)) {
           throw std::runtime_error("metadata send failed: " + metadata_error);
         }
 

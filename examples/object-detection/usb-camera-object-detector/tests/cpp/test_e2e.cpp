@@ -42,47 +42,58 @@ public:
     timeval timeout{0, 100000};
     if (socket_ < 0 || ::bind(socket_, reinterpret_cast<sockaddr*>(&address), sizeof(address)) ||
         ::setsockopt(socket_, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout))) {
-      if (socket_ >= 0) ::close(socket_);
+      if (socket_ >= 0)
+        ::close(socket_);
       throw std::runtime_error("could not bind video receiver");
     }
     worker_ = std::jthread([this](std::stop_token stop) { receive(stop); });
   }
-  ~VideoReceiver() { close(); }
+  ~VideoReceiver() {
+    close();
+  }
   void close() {
     worker_.request_stop();
-    if (worker_.joinable()) worker_.join();
-    if (socket_ >= 0) { ::close(socket_); socket_ = -1; }
+    if (worker_.joinable())
+      worker_.join();
+    if (socket_ >= 0) {
+      ::close(socket_);
+      socket_ = -1;
+    }
   }
   // At least 3 complete 1920x1080 JPEG frames of the source's RFC 2435 type arrived intact
   // (type 0 is 4:2:2, 1 is 4:2:0; +64 with restart markers), so the camera JPEG was forwarded.
   void verify(int expected_type) {
     close();
-    if (!error_.empty()) throw std::runtime_error(error_);
+    if (!error_.empty())
+      throw std::runtime_error(error_);
     if (frame_types_.size() < 3)
       throw std::runtime_error("received fewer than 3 complete RTP/JPEG frames");
     for (const int type : frame_types_)
       if (type % 64 != expected_type)
         throw std::runtime_error("RTP/JPEG type does not match source");
   }
+
 private:
   void receive(std::stop_token stop) {
     try {
       std::array<unsigned char, 65536> packet{};
-      std::size_t assembled = 0;  // JPEG bytes of the frame in progress
+      std::size_t assembled = 0; // JPEG bytes of the frame in progress
       int sequence = -1;
       while (!stop.stop_requested()) {
         const auto size = ::recv(socket_, packet.data(), packet.size(), 0);
-        if (size < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) continue;
+        if (size < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR))
+          continue;
         if (size <= 20 || packet[0] != 0x80 || (packet[1] & 0x7f) != 26)
           throw std::runtime_error("invalid RTP/JPEG packet");
         const int current = (packet[2] << 8) | packet[3];
         if (sequence >= 0 && current != ((sequence + 1) & 65535))
           throw std::runtime_error("lost RTP packet");
         sequence = current;
-        const auto* jpeg = packet.data() + 12;  // RFC 2435 main header
+        const auto* jpeg = packet.data() + 12; // RFC 2435 main header
         const std::size_t offset = (jpeg[1] << 16) | (jpeg[2] << 8) | jpeg[3];
         const int type = jpeg[4];
-        if (offset != assembled) throw std::runtime_error("incomplete RTP/JPEG frame");
+        if (offset != assembled)
+          throw std::runtime_error("incomplete RTP/JPEG frame");
         if (jpeg[6] * 8 != 1920 || jpeg[7] * 8 != 1080)
           throw std::runtime_error("RTP/JPEG frame is not 1920x1080");
         std::size_t header = 8 + (type >= 64 ? 4 : 0);
@@ -91,12 +102,14 @@ private:
         if (static_cast<std::size_t>(size) < 12 + header)
           throw std::runtime_error("truncated RTP/JPEG header");
         assembled += static_cast<std::size_t>(size) - 12 - header;
-        if (packet[1] & 0x80) {  // marker: last packet of the frame
+        if (packet[1] & 0x80) { // marker: last packet of the frame
           frame_types_.push_back(type);
           assembled = 0;
         }
       }
-    } catch (const std::exception& error) { error_ = error.what(); }
+    } catch (const std::exception& error) {
+      error_ = error.what();
+    }
   }
   std::vector<int> frame_types_;
   int socket_ = -1;
@@ -105,17 +118,21 @@ private:
 };
 
 void verify_metadata(const MetadataJsonListenerResult& result) {
-  if (!result.success) throw std::runtime_error(result.error);
+  if (!result.success)
+    throw std::runtime_error(result.error);
   for (const auto& message : result.messages) {
-    if (message.timestamp_ms < 0) throw std::runtime_error("negative metadata timestamp");
+    if (message.timestamp_ms < 0)
+      throw std::runtime_error("negative metadata timestamp");
     const auto objects = nlohmann::json::parse(message.payload).at("data").at("objects");
-    if (objects.empty()) throw std::runtime_error("no objects detected in fixture");
+    if (objects.empty())
+      throw std::runtime_error("no objects detected in fixture");
     for (const auto& object : objects) {
       const auto box = object.at("bbox").get<std::vector<double>>();
       const auto confidence = object.at("confidence").get<double>();
-      if (object.at("label").get<std::string>().empty() || !(confidence >= 0.3 && confidence <= 1) ||
-          box.size() != 4 || !(box[0] >= 0 && box[1] >= 0 && box[2] > 0 && box[3] > 0 &&
-                              box[0] + box[2] <= 1920 && box[1] + box[3] <= 1080))
+      if (object.at("label").get<std::string>().empty() ||
+          !(confidence >= 0.3 && confidence <= 1) || box.size() != 4 ||
+          !(box[0] >= 0 && box[1] >= 0 && box[2] > 0 && box[3] > 0 && box[0] + box[2] <= 1920 &&
+            box[1] + box[3] <= 1080))
         throw std::runtime_error("invalid detection metadata");
     }
   }
@@ -184,7 +201,8 @@ int main(int argc, char** argv) try {
     options.min_object_count = 1;
     options.timeout_ms = 5000;
     MetadataJsonListener listener(options);
-    if (!listener.ok()) throw std::runtime_error(listener.error());
+    if (!listener.ok())
+      throw std::runtime_error(listener.error());
 
     // write_e2e_config folds `testing.e2e.*` into the runtime keys; the source
     // override is set explicitly so each case selects its MJPEG sampling.
@@ -237,8 +255,7 @@ int main(int argc, char** argv) try {
     rc |= run_case(raw_format);
   }
   return rc;
-}
- catch (const std::exception& error) {
+} catch (const std::exception& error) {
   std::cerr << "[FAIL] " << error.what() << "\n";
   return 1;
 }

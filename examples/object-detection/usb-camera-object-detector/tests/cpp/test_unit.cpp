@@ -100,7 +100,7 @@ bool validate_rejects(const std::string& binary, const std::string& test_name,
 
 // Returns the `[validate] source_pipeline=` line for a config body.
 std::string source_description_for(const std::string& binary, const std::string& test_name,
-                         const std::string& body, bool* ok) {
+                                   const std::string& body, bool* ok) {
   const fs::path config_path = write_config(test_name, body);
   const auto result =
       spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
@@ -186,19 +186,22 @@ bool test_shipped_config_validates(const std::string& binary) {
 
 bool test_source_reports_mjpeg_capture(const std::string& binary) {
   bool ok = true;
-  const auto description = source_description_for(binary, "test_source_reports_mjpeg_capture", config_body(), &ok);
+  const auto description =
+      source_description_for(binary, "test_source_reports_mjpeg_capture", config_body(), &ok);
   return ok && expect_contains(description, "V4L2 device=/dev/video16", "configured camera") &&
-         expect_contains(description, "image/jpeg,width=1920,height=1080,framerate=30/1", "encoded caps") &&
-         expect_contains(description,
-                         "Input -> {VideoSender(MJPEG passthrough), JpegParse -> SimaDecode(MJPEG) -> model}",
-                         "passthrough video and decoded model routes");
+         expect_contains(description, "image/jpeg,width=1920,height=1080,framerate=30/1",
+                         "encoded caps") &&
+         expect_contains(
+             description,
+             "Input -> {VideoSender(MJPEG passthrough), JpegParse -> SimaDecode(MJPEG) -> model}",
+             "passthrough video and decoded model routes");
 }
 
 bool test_source_honours_capture_mode(const std::string& binary) {
   bool ok = true;
   const std::string frag =
       source_description_for(binary, "test_source_honours_capture_mode",
-                   config_body("  width: 1280\n  height: 720\n  fps: 25\n"), &ok);
+                             config_body("  width: 1280\n  height: 720\n  fps: 25\n"), &ok);
   if (!ok) {
     return false;
   }
@@ -212,7 +215,7 @@ bool test_override_replaces_the_camera(const std::string& binary) {
   bool ok = true;
   const std::string frag =
       source_description_for(binary, "test_override_replaces_the_camera",
-                   config_body("  override_fragment: \"videotestsrc ! queue\"\n"), &ok);
+                             config_body("  override_fragment: \"videotestsrc ! queue\"\n"), &ok);
   if (!ok) {
     return false;
   }
@@ -234,79 +237,76 @@ bool test_wrapped_override_fragment_is_folded(const std::string& binary) {
   if (!ok) {
     return false;
   }
-  return expect_true(frag ==
-                         "videotestsrc pattern=smpte is-live=true "
-                         "! video/x-raw,format=NV12,width=1920,height=1080 "
-                         "! queue leaky=downstream max-size-buffers=2",
+  return expect_true(frag == "videotestsrc pattern=smpte is-live=true "
+                             "! video/x-raw,format=NV12,width=1920,height=1080 "
+                             "! queue leaky=downstream max-size-buffers=2",
                      "wrapped override fragment folds into one value");
 }
 
 bool test_block_scalar_override_matches_python(const std::string& binary) {
   bool ok = true;
-  const std::string frag = source_description_for(
-      binary, "test_block_scalar_override_matches_python",
-      config_body("  override_fragment: >-\n"
-                  "    videotestsrc pattern=smpte is-live=true\n"
-                  "    ! video/x-raw,format=NV12,width=1920,height=1080\n"
-                  "    ! queue leaky=downstream max-size-buffers=2\n"),
-      &ok);
-  if (!ok) return false;
-  return expect_true(frag ==
-                         "videotestsrc pattern=smpte is-live=true "
-                         "! video/x-raw,format=NV12,width=1920,height=1080 "
-                         "! queue leaky=downstream max-size-buffers=2",
+  const std::string frag =
+      source_description_for(binary, "test_block_scalar_override_matches_python",
+                             config_body("  override_fragment: >-\n"
+                                         "    videotestsrc pattern=smpte is-live=true\n"
+                                         "    ! video/x-raw,format=NV12,width=1920,height=1080\n"
+                                         "    ! queue leaky=downstream max-size-buffers=2\n"),
+                             &ok);
+  if (!ok)
+    return false;
+  return expect_true(frag == "videotestsrc pattern=smpte is-live=true "
+                             "! video/x-raw,format=NV12,width=1920,height=1080 "
+                             "! queue leaky=downstream max-size-buffers=2",
                      "folded YAML block matches Python's override fragment");
 }
 
 bool test_literal_block_scalar_keeps_lines() {
-  const fs::path path = write_config(
-      "test_literal_block_scalar_keeps_lines",
-      config_body("  override_fragment: |-\n"
-                  "    videotestsrc pattern=ball # retained inside the scalar\n"
-                  "    ! video/x-raw,format=NV12\n"));
-  const std::string fragment = sima_examples::ScalarConfig::load(path).string_or(
-      "source.override_fragment", "");
+  const fs::path path =
+      write_config("test_literal_block_scalar_keeps_lines",
+                   config_body("  override_fragment: |-\n"
+                               "    videotestsrc pattern=ball # retained inside the scalar\n"
+                               "    ! video/x-raw,format=NV12\n"));
+  const std::string fragment =
+      sima_examples::ScalarConfig::load(path).string_or("source.override_fragment", "");
   remove_dir(path.parent_path().string());
-  return expect_true(fragment ==
-                         "videotestsrc pattern=ball # retained inside the scalar\n"
-                         "! video/x-raw,format=NV12",
+  return expect_true(fragment == "videotestsrc pattern=ball # retained inside the scalar\n"
+                                 "! video/x-raw,format=NV12",
                      "literal YAML block preserves line breaks and # text");
 }
 
 bool test_explicit_block_indentation(const std::string& binary) {
   bool ok = true;
   for (const std::string header : {">2-", ">-2"}) {
-    const std::string frag = source_description_for(
-        binary, "test_explicit_folded_" + header,
-        config_body("  override_fragment: " + header + "\n"
-                    "    videotestsrc pattern=smpte is-live=true\n"
-                    "    ! video/x-raw,format=NV12\n"),
-        &ok);
-    ok &= expect_true(frag ==
-                          "videotestsrc pattern=smpte is-live=true "
-                          "! video/x-raw,format=NV12",
+    const std::string frag =
+        source_description_for(binary, "test_explicit_folded_" + header,
+                               config_body("  override_fragment: " + header +
+                                           "\n"
+                                           "    videotestsrc pattern=smpte is-live=true\n"
+                                           "    ! video/x-raw,format=NV12\n"),
+                               &ok);
+    ok &= expect_true(frag == "videotestsrc pattern=smpte is-live=true "
+                              "! video/x-raw,format=NV12",
                       header + " folds at the declared indentation");
   }
   for (const std::string header : {"|2-", "|-2"}) {
-    const fs::path path = write_config(
-        "test_explicit_literal_" + header,
-        config_body("  override_fragment: " + header + "\n"
-                    "    videotestsrc pattern=ball\n"
-                    "    ! video/x-raw,format=NV12\n"));
-    const std::string fragment = sima_examples::ScalarConfig::load(path).string_or(
-        "source.override_fragment", "");
+    const fs::path path = write_config("test_explicit_literal_" + header,
+                                       config_body("  override_fragment: " + header +
+                                                   "\n"
+                                                   "    videotestsrc pattern=ball\n"
+                                                   "    ! video/x-raw,format=NV12\n"));
+    const std::string fragment =
+        sima_examples::ScalarConfig::load(path).string_or("source.override_fragment", "");
     remove_dir(path.parent_path().string());
     ok &= expect_true(fragment == "videotestsrc pattern=ball\n! video/x-raw,format=NV12",
                       header + " preserves literal lines at the declared indentation");
   }
-  const fs::path nested = write_config(
-      "test_explicit_folded_nested_indent",
-      config_body("  override_fragment: >2-\n"
-                  "    first line\n"
-                  "      indented line\n"
-                  "    last line\n"));
-  const std::string nested_value = sima_examples::ScalarConfig::load(nested).string_or(
-      "source.override_fragment", "");
+  const fs::path nested =
+      write_config("test_explicit_folded_nested_indent", config_body("  override_fragment: >2-\n"
+                                                                     "    first line\n"
+                                                                     "      indented line\n"
+                                                                     "    last line\n"));
+  const std::string nested_value =
+      sima_examples::ScalarConfig::load(nested).string_or("source.override_fragment", "");
   remove_dir(nested.parent_path().string());
   ok &= expect_true(nested_value == "first line\n  indented line\nlast line",
                     "folded block preserves line breaks around extra indentation");
@@ -446,21 +446,19 @@ int main(int argc, char** argv) {
   ok &= validate_rejects(binary, "test_rejects_out_of_range_min_score",
                          config_body("", "  min_score: 1.50\n"), "inference.min_score",
                          "out-of-range inference.min_score");
-  ok &= validate_rejects(binary, "test_rejects_nan_min_score",
-                         config_body("", "  min_score: nan\n"), "inference.min_score",
-                         "non-finite inference.min_score");
+  ok &=
+      validate_rejects(binary, "test_rejects_nan_min_score", config_body("", "  min_score: nan\n"),
+                       "inference.min_score", "non-finite inference.min_score");
   ok &= validate_rejects(binary, "test_rejects_infinite_min_score",
                          config_body("", "  min_score: inf\n"), "inference.min_score",
                          "infinite inference.min_score");
   ok &= validate_rejects(binary, "test_rejects_out_of_range_nms",
                          config_body("", "  nms_iou: 1.20\n"), "inference.nms_iou",
                          "out-of-range inference.nms_iou");
-  ok &= validate_rejects(binary, "test_rejects_nan_nms",
-                         config_body("", "  nms_iou: nan\n"), "inference.nms_iou",
-                         "non-finite inference.nms_iou");
-  ok &= validate_rejects(binary, "test_rejects_infinite_nms",
-                         config_body("", "  nms_iou: inf\n"), "inference.nms_iou",
-                         "infinite inference.nms_iou");
+  ok &= validate_rejects(binary, "test_rejects_nan_nms", config_body("", "  nms_iou: nan\n"),
+                         "inference.nms_iou", "non-finite inference.nms_iou");
+  ok &= validate_rejects(binary, "test_rejects_infinite_nms", config_body("", "  nms_iou: inf\n"),
+                         "inference.nms_iou", "infinite inference.nms_iou");
   ok &= validate_rejects(binary, "test_rejects_zero_max_detections",
                          config_body("", "  max_detections: 0\n"), "inference.max_detections",
                          "zero inference.max_detections");
