@@ -182,17 +182,18 @@ bool nv16_to_bgr(const simaai::neat::Tensor& t, cv::Mat& out, std::string& err) 
     err = "NV16 payload smaller than its planes";
     return false;
   }
-  // Keep every other chroma row: 4:2:2 becomes the 4:2:0 layout OpenCV converts.
-  cv::Mat nv12(h + h / 2, w, CV_8UC1);
+  // Each row keeps its own chroma: Y and UV bytes interleave into packed 4:2:2 (Y0 U0 Y1 V0).
+  cv::Mat yuy2(h, w, CV_8UC2);
   for (int row = 0; row < h; ++row) {
-    std::memcpy(nv12.ptr(row), payload.data() + y->byte_offset + row * y_stride,
-                static_cast<std::size_t>(w));
+    const uint8_t* y_row = payload.data() + y->byte_offset + row * y_stride;
+    const uint8_t* uv_row = payload.data() + uv->byte_offset + row * uv_stride;
+    uint8_t* dst = yuy2.ptr(row);
+    for (int x = 0; x < w; ++x) {
+      dst[2 * x] = y_row[x];
+      dst[2 * x + 1] = uv_row[x];
+    }
   }
-  for (int row = 0; row < h / 2; ++row) {
-    std::memcpy(nv12.ptr(h + row), payload.data() + uv->byte_offset + 2U * row * uv_stride,
-                static_cast<std::size_t>(w));
-  }
-  cv::cvtColor(nv12, out, cv::COLOR_YUV2BGR_NV12);
+  cv::cvtColor(yuy2, out, cv::COLOR_YUV2BGR_YUY2);
   return true;
 }
 

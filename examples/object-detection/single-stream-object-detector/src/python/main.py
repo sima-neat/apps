@@ -781,8 +781,8 @@ def first_tensor_from_sample(sample):
 def tensor_bgr_from_decoded(tensor):
     if tensor.image_format() == pyneat.PixelFormat.NV16:
         # A 4:2:2 USB camera frame. The payload is the whole mapped buffer, so the Y and UV
-        # planes are read at their own offsets and strides; every other chroma row gives the
-        # 4:2:0 layout OpenCV converts.
+        # planes are read at their own offsets and strides; each row keeps its own chroma by
+        # interleaving Y and UV into packed 4:2:2 (Y0 U0 Y1 V0).
         width = tensor_dim(tensor, "width")
         height = tensor_dim(tensor, "height")
         payload = np.frombuffer(tensor.copy_payload_bytes(), dtype=np.uint8)
@@ -797,8 +797,8 @@ def tensor_bgr_from_decoded(tensor):
             return payload[plane.byte_offset:end].reshape((rows, stride))[:, :width]
 
         y = plane_rows(pyneat.PlaneRole.Y, height)
-        uv = plane_rows(pyneat.PlaneRole.UV, height)[::2]
-        return np.ascontiguousarray(cv2.cvtColor(np.vstack([y, uv]), cv2.COLOR_YUV2BGR_NV12))
+        uv = plane_rows(pyneat.PlaneRole.UV, height)
+        return np.ascontiguousarray(cv2.cvtColor(np.dstack([y, uv]), cv2.COLOR_YUV2BGR_YUY2))
 
     if tensor.is_nv12():
         width = tensor_dim(tensor, "width")

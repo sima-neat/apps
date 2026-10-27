@@ -467,7 +467,8 @@ class TestPullOutcomes:
 @pytest.mark.unit
 class TestUsbCameraFrames:
     def test_nv16_frame_converts_to_bgr_through_its_padded_planes(self, monkeypatch):
-        """A 4:2:2 USB camera frame is saved through its Y and UV planes, padding skipped."""
+        """A 4:2:2 USB camera frame is saved through its Y and UV planes, padding skipped,
+        and every row keeps its own chroma."""
         import cv2
         import numpy as np
 
@@ -484,9 +485,10 @@ class TestUsbCameraFrames:
         width, height, stride = 64, 32, 96
         y = np.zeros((height, stride), np.uint8)
         y[:, :width] = 81
+        # Chroma changes on every row, which a 4:2:0 conversion would average or drop.
         uv = np.zeros((height, stride), np.uint8)
-        uv[:, 0:width:2] = 90
-        uv[:, 1:width:2] = 240
+        uv[0::2, 0:width:2], uv[0::2, 1:width:2] = 90, 240
+        uv[1::2, 0:width:2], uv[1::2, 1:width:2] = 240, 90
         payload = np.concatenate([y.ravel(), uv.ravel()]).tobytes()
         tensor = SimpleNamespace(
             width=width,
@@ -501,7 +503,10 @@ class TestUsbCameraFrames:
 
         bgr = main.tensor_bgr_from_decoded(tensor)
 
-        expected = cv2.cvtColor(np.array([[81, 81], [81, 81], [90, 240]], np.uint8),
-                                cv2.COLOR_YUV2BGR_NV12)[0, 0]
+        def expected(u, v):
+            return cv2.cvtColor(np.array([[[81, u], [81, v]]], np.uint8), cv2.COLOR_YUV2BGR_YUY2)[0, 0]
+
         assert bgr.shape == (height, width, 3)
-        assert (bgr == expected).all()
+        assert (bgr[0::2] == expected(90, 240)).all()
+        assert (bgr[1::2] == expected(240, 90)).all()
+        assert (expected(90, 240) != expected(240, 90)).any()

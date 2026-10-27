@@ -1,18 +1,24 @@
 // Unit test for single-stream-object-detector: CLI handling, the ffprobe
-// command builder, and the configuration rules --validate-config-only can
-// reach without a model or a stream.
+// command builder, the configuration rules --validate-config-only can
+// reach without a model or a stream, and the NV16 saved-frame conversion.
+#include "support/runtime/example_utils.h"
 #include "support/runtime/ffprobe_command.h"
 #include "support/runtime/pull_status.h"
 #include "support/testing/test_checks.h"
 #include "support/testing/test_process.h"
 
+#include <opencv2/imgproc.hpp>
+
+#include <cstdint>
 #include <filesystem>
 #include <iostream>
 #include <string>
+#include <vector>
 
 namespace fs = std::filesystem;
 
 using sima_examples::build_ffprobe_rtsp_stream_info_command;
+using sima_examples::nv16_to_bgr;
 using sima_examples::pull_status_has_sample;
 using sima_examples::testing::expect_contains;
 using sima_examples::testing::expect_not_contains;
@@ -198,6 +204,50 @@ bool test_closed_output_is_terminal() {
                      "successful pull is a sample");
 }
 
+// A 4:2:2 frame whose chroma changes on every row, in padded planes: each row must keep its own
+// chroma, which a 4:2:0 conversion would drop.
+bool test_nv16_frame_keeps_each_rows_chroma() {
+  constexpr int kWidth = 8;
+  constexpr int kHeight = 4;
+  constexpr int kStride = 16;
+  std::vector<uint8_t> bytes(2 * kHeight * kStride, 0);
+  for (int row = 0; row < kHeight; ++row) {
+    const uint8_t u = row % 2 ? 240 : 90;
+    const uint8_t v = row % 2 ? 90 : 240;
+    for (int x = 0; x < kWidth; ++x) {
+      bytes[row * kStride + x] = 81;
+      bytes[(kHeight + row) * kStride + x] = x % 2 ? v : u;
+    }
+  }
+  simaai::neat::Tensor tensor = simaai::neat::Tensor::from_vector(
+      bytes, {static_cast<int64_t>(bytes.size())}, simaai::neat::TensorMemory::CPU);
+  tensor.semantic.image = simaai::neat::ImageSpec{simaai::neat::ImageSpec::PixelFormat::NV16, ""};
+  tensor.planes = {
+      {simaai::neat::PlaneRole::Y, {kHeight, kWidth}, {kStride, 1}, 0},
+      {simaai::neat::PlaneRole::UV, {kHeight, kWidth}, {kStride, 1}, kHeight * kStride},
+  };
+  cv::Mat bgr;
+  std::string err;
+  if (!expect_true(nv16_to_bgr(tensor, bgr, err), "NV16 converts: " + err))
+    return false;
+  auto expected = [](uint8_t u, uint8_t v) {
+    cv::Mat pair(1, 2, CV_8UC2);
+    pair.at<cv::Vec2b>(0, 0) = cv::Vec2b(81, u);
+    pair.at<cv::Vec2b>(0, 1) = cv::Vec2b(81, v);
+    cv::Mat out;
+    cv::cvtColor(pair, out, cv::COLOR_YUV2BGR_YUY2);
+    return out.at<cv::Vec3b>(0, 0);
+  };
+  bool ok = expect_true(bgr.rows == kHeight && bgr.cols == kWidth, "NV16 keeps its size");
+  for (int row = 0; row < kHeight && ok; ++row) {
+    const cv::Vec3b want = row % 2 ? expected(240, 90) : expected(90, 240);
+    for (int x = 0; x < kWidth; ++x)
+      ok &= bgr.at<cv::Vec3b>(row, x) == want;
+  }
+  return expect_true(ok, "every NV16 row keeps its own chroma") &&
+         expect_true(expected(90, 240) != expected(240, 90), "the two rows differ in colour");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -222,5 +272,6 @@ int main(int argc, char** argv) {
   ok &= test_usb_source_requires_camera_and_fps(binary);
   ok &= test_usb_source_rejects_sizes_rtp_jpeg_cannot_carry(binary);
   ok &= test_closed_output_is_terminal();
+  ok &= test_nv16_frame_keeps_each_rows_chroma();
   return ok ? 0 : 1;
 }
