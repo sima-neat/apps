@@ -24,6 +24,7 @@ VALID_CATEGORIES = {
     "face-detection",
     "feature-extraction",
     "genai",
+    "model-hub",
     "throughput",
 }
 
