@@ -24,6 +24,7 @@ VALID_CATEGORIES = {
     "face-detection",
     "feature-extraction",
     "genai",
+    "multi-model",
     "throughput",
 }
 
@@ -31,7 +32,7 @@ VALID_DIFFICULTIES = {"Beginner", "Intermediate", "Advanced"}
 
 VALID_LANGUAGES = {"C++", "Python"}
 
-VALID_STATUSES = {"stable"}
+VALID_STATUSES = {"stable", "experimental"}
 
 REQUIRED_METADATA_FIELDS = {
     "Category",
