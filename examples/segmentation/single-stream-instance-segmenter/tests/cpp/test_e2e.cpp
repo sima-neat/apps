@@ -107,7 +107,8 @@ int run_case(const std::string& binary, const ModelCase& model,
                           {"model.path", model.model_path},
                           {"source.type", source_case.type},
                           {"source.codec", source_case.codec},
-                          {"source.url", source_url},
+                          // A USB case's "URL" is the camera's stable ID.
+                          {source_case.type == "usb" ? "source.camera" : "source.url", source_url},
                           {"source.ssl_strict", source_case.ssl_strict ? "true" : "false"},
                           {"output.save_dir", output_dir},
                           // This test is the Insight receiver, so it publishes to loopback.
@@ -252,5 +253,28 @@ int main(int argc, char** argv) {
         }
         return case_rc;
       });
-  return rc != 0 ? rc : cases_rc;
+
+  // USB capture needs a camera on the DevKit, which CI runners do not have, so this case runs
+  // only when SIMANEAT_TEST_USB_CAMERA names one (see usb_camera_ids()), even under --strict.
+  int usb_rc = 0;
+  bool usb_ran = false;
+  const StreamSourceCase usb_case{"usb_camera", "SIMANEAT_TEST_USB_CAMERA", "usb", "mjpeg", 30,
+                                  true};
+  if (const char* camera = env_or_null(usb_case.env_key.c_str())) {
+    usb_ran = true;
+    for (const ModelCase& model : models) {
+      const std::string case_name =
+          model_case_label(model.family + "_" + usb_case.name, model.model_path, 2);
+      if (run_case(binary, model, usb_case, camera, case_name) != 0) {
+        usb_rc = 1;
+      }
+    }
+  } else {
+    std::cerr << "[SKIP] set SIMANEAT_TEST_USB_CAMERA to a USB camera ID to run usb_camera e2e\n";
+  }
+  if (rc != 0 || usb_rc != 0) {
+    return 1;
+  }
+  // A camera-only run on a DevKit is a pass, not "no stream URLs configured".
+  return usb_ran && cases_rc == 77 ? 0 : cases_rc;
 }

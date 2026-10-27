@@ -349,7 +349,7 @@ REJECTED = [
     pytest.param(
         ("output", "insight", "host"), "", "output.insight.host must be set", id="insight-host-empty"
     ),
-    pytest.param(("source", "type"), "webrtc", "source.type must be rtsp or http", id="source-type-unsupported"),
+    pytest.param(("source", "type"), "webrtc", "source.type must be rtsp, http, or usb", id="source-type-unsupported"),
     pytest.param(
         ("source", "codec"), "vp9", "source.codec must be h264/avc, h265/hevc, or mjpeg", id="codec-unsupported"
     ),
@@ -458,6 +458,42 @@ class TestSourceCombinations:
         cfg = main.load_app_config(write_full_config(tmp_path, [(("source", "codec"), alias)]))
 
         assert cfg.source_codec == codec
+
+    def test_usb_source_needs_no_url(self, tmp_path):
+        cfg = main.load_app_config(
+            write_full_config(
+                tmp_path,
+                [
+                    (("source", "type"), "usb"),
+                    (("source", "url"), ""),
+                    (("source", "camera"), "/base/pci@7000000000-3.1:1.0-046d:08e5"),
+                    (("source", "width"), 1280),
+                    (("source", "height"), 720),
+                    (("source", "fps"), 30),
+                ],
+            )
+        )
+
+        assert cfg.source_type == "usb"
+        assert cfg.source_key == "source.camera"
+        assert (cfg.source_width, cfg.source_height, cfg.source_fps) == (1280, 720, 30)
+
+    @pytest.mark.parametrize(
+        "overrides,message",
+        [
+            ([(("source", "fps"), 30)], "source.camera must be set for source.type=usb"),
+            ([(("source", "camera"), "cam0")], "source.fps must be > 0 for source.type=usb"),
+            (
+                [(("source", "camera"), "cam0"), (("source", "fps"), 30), (("source", "width"), 0)],
+                "source.width and source.height must be > 0 for source.type=usb",
+            ),
+        ],
+    )
+    def test_usb_source_rejects_a_missing_camera_or_mode(self, tmp_path, overrides, message):
+        with pytest.raises(ValueError, match=message):
+            main.load_app_config(
+                write_full_config(tmp_path, [(("source", "type"), "usb"), *overrides])
+            )
 
 
 @pytest.mark.unit
@@ -989,3 +1025,46 @@ class TestPullOutcomes:
         assert captured.err.count("[warn] timed out waiting for segmentation output") == 1
         assert "processed=" not in captured.out
         assert run.pulls == [("segments", 20000)] * 2
+
+
+@pytest.mark.unit
+class TestUsbCameraFrames:
+    def test_nv16_frame_converts_to_bgr_through_its_padded_planes(self, monkeypatch):
+        """A 4:2:2 USB camera frame is saved through its Y and UV planes, padding skipped."""
+        import cv2
+        import numpy as np
+
+        monkeypatch.setattr(main, "cv2", cv2)
+        monkeypatch.setattr(main, "np", np)
+        monkeypatch.setattr(
+            main,
+            "pyneat",
+            SimpleNamespace(
+                PixelFormat=SimpleNamespace(NV16="NV16"),
+                PlaneRole=SimpleNamespace(Y="Y", UV="UV"),
+            ),
+        )
+        width, height, stride = 64, 32, 96
+        y = np.zeros((height, stride), np.uint8)
+        y[:, :width] = 81
+        uv = np.zeros((height, stride), np.uint8)
+        uv[:, 0:width:2] = 90
+        uv[:, 1:width:2] = 240
+        payload = np.concatenate([y.ravel(), uv.ravel()]).tobytes()
+        tensor = SimpleNamespace(
+            width=width,
+            height=height,
+            image_format=lambda: "NV16",
+            copy_payload_bytes=lambda: payload,
+            planes=[
+                SimpleNamespace(role="Y", strides_bytes=[stride, 1], byte_offset=0),
+                SimpleNamespace(role="UV", strides_bytes=[stride, 1], byte_offset=height * stride),
+            ],
+        )
+
+        bgr = main.tensor_bgr_from_decoded(tensor)
+
+        expected = cv2.cvtColor(np.array([[81, 81], [81, 81], [90, 240]], np.uint8),
+                                cv2.COLOR_YUV2BGR_NV12)[0, 0]
+        assert bgr.shape == (height, width, 3)
+        assert (bgr == expected).all()

@@ -148,6 +148,16 @@ def rtsp_mjpeg_urls() -> list[str]:
 
 
 @pytest.fixture
+def usb_camera_id() -> str:
+    """Resolve SIMANEAT_TEST_USB_CAMERA. USB capture needs a camera on the DevKit, which CI
+    runners do not have, so an unset value skips even under strict e2e mode."""
+    value = os.environ.get("SIMANEAT_TEST_USB_CAMERA", "").strip()
+    if not value:
+        pytest.skip("set SIMANEAT_TEST_USB_CAMERA to a USB camera ID to run this test")
+    return value
+
+
+@pytest.fixture
 def http_mjpeg_url() -> str:
     """Resolve SIMANEAT_TEST_HTTP_MJPEG_URL; skip if unset."""
     return _require_env("SIMANEAT_TEST_HTTP_MJPEG_URL", "single HTTP MJPEG stream URL")

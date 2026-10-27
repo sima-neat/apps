@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstring>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -151,6 +152,48 @@ bool infer_dims(const simaai::neat::Tensor& t, int& w, int& h) {
     w = static_cast<int>(t.shape[1]);
   }
   return (w > 0 && h > 0);
+}
+
+bool nv16_to_bgr(const simaai::neat::Tensor& t, cv::Mat& out, std::string& err) {
+  if (t.image_format() != simaai::neat::ImageSpec::PixelFormat::NV16) {
+    err = "expected NV16 tensor";
+    return false;
+  }
+  const simaai::neat::Plane* y = nullptr;
+  const simaai::neat::Plane* uv = nullptr;
+  for (const auto& plane : t.planes) {
+    if (plane.role == simaai::neat::PlaneRole::Y)
+      y = &plane;
+    if (plane.role == simaai::neat::PlaneRole::UV)
+      uv = &plane;
+  }
+  int w = 0;
+  int h = 0;
+  if (!y || !uv || y->strides_bytes.empty() || uv->strides_bytes.empty() || !infer_dims(t, w, h)) {
+    err = "NV16 tensor without Y/UV planes";
+    return false;
+  }
+  // The payload is the whole mapped buffer, so plane offsets index into it.
+  const std::vector<uint8_t> payload = t.copy_payload_bytes();
+  const auto y_stride = static_cast<std::size_t>(y->strides_bytes[0]);
+  const auto uv_stride = static_cast<std::size_t>(uv->strides_bytes[0]);
+  if (static_cast<std::size_t>(uv->byte_offset) + uv_stride * static_cast<std::size_t>(h) >
+      payload.size()) {
+    err = "NV16 payload smaller than its planes";
+    return false;
+  }
+  // Keep every other chroma row: 4:2:2 becomes the 4:2:0 layout OpenCV converts.
+  cv::Mat nv12(h + h / 2, w, CV_8UC1);
+  for (int row = 0; row < h; ++row) {
+    std::memcpy(nv12.ptr(row), payload.data() + y->byte_offset + row * y_stride,
+                static_cast<std::size_t>(w));
+  }
+  for (int row = 0; row < h / 2; ++row) {
+    std::memcpy(nv12.ptr(h + row), payload.data() + uv->byte_offset + 2U * row * uv_stride,
+                static_cast<std::size_t>(w));
+  }
+  cv::cvtColor(nv12, out, cv::COLOR_YUV2BGR_NV12);
+  return true;
 }
 
 bool nv12_to_bgr(const simaai::neat::Tensor& t, cv::Mat& out, std::string& err) {

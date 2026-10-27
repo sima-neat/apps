@@ -216,7 +216,7 @@ EncodedSegments encode_segments(std::vector<MetadataSegment> segments) {
   return {nlohmann::json{{"segments", std::move(entries)}}.dump(), dropped};
 }
 
-enum class SourceType { Rtsp, Http };
+enum class SourceType { Rtsp, Http, Usb };
 enum class SourceCodec { H264, H265, Mjpeg };
 
 struct AppConfig {
@@ -228,6 +228,10 @@ struct AppConfig {
   // Which key supplied source_url: "source.url" or the legacy "source.rtsp_url".
   std::string source_key = "source.url";
   SourceType source_type = SourceType::Rtsp;
+  // source.type=usb: the camera's stable ID (usb_camera_ids()) and one of its MJPEG modes.
+  std::string camera;
+  int source_width = 1920;
+  int source_height = 1080;
   SourceCodec source_codec = SourceCodec::H264;
   int latency_ms = 200;
   bool tcp = true;
@@ -368,7 +372,10 @@ SourceType parse_source_type(const std::string& value) {
   if (lowered == "http" || lowered == "https") {
     return SourceType::Http;
   }
-  throw std::runtime_error("source.type must be rtsp or http");
+  if (lowered == "usb") {
+    return SourceType::Usb;
+  }
+  throw std::runtime_error("source.type must be rtsp, http, or usb");
 }
 
 SourceCodec parse_source_codec(const std::string& value) {
@@ -386,6 +393,8 @@ SourceCodec parse_source_codec(const std::string& value) {
 }
 
 const char* source_type_name(SourceType value) {
+  if (value == SourceType::Usb)
+    return "usb";
   return value == SourceType::Rtsp ? "rtsp" : "http";
 }
 
@@ -418,7 +427,14 @@ CliOptions parse_args(int argc, char** argv) {
 }
 
 void validate_config(const AppConfig& cfg) {
-  sima_examples::require(!cfg.source_url.empty(), "source.url or source.rtsp_url must be set");
+  if (cfg.source_type == SourceType::Usb) {
+    sima_examples::require(!cfg.camera.empty(), "source.camera must be set for source.type=usb");
+    sima_examples::require(cfg.source_width > 0 && cfg.source_height > 0,
+                           "source.width and source.height must be > 0 for source.type=usb");
+    sima_examples::require(cfg.source_fps > 0, "source.fps must be > 0 for source.type=usb");
+  } else {
+    sima_examples::require(!cfg.source_url.empty(), "source.url or source.rtsp_url must be set");
+  }
   sima_examples::require(!cfg.model_path.empty(), "model.path must be set");
   sima_examples::require(cfg.input_size > 0 &&
                              cfg.input_size % (kMaskStride * kYolov8Strides.back()) == 0,
@@ -468,6 +484,12 @@ AppConfig load_app_config(const fs::path& config_path) {
     cfg.source_key = "source.rtsp_url";
   }
   cfg.source_type = parse_source_type(raw.string_or("source.type", "rtsp"));
+  cfg.camera = raw.string_or("source.camera", "");
+  cfg.source_width = raw.int_or("source.width", 1920);
+  cfg.source_height = raw.int_or("source.height", 1080);
+  if (cfg.source_type == SourceType::Usb) {
+    cfg.source_key = "source.camera";
+  }
   cfg.source_codec = parse_source_codec(raw.string_or("source.codec", "h264"));
   cfg.latency_ms = raw.int_or("source.latency_ms", 200);
   cfg.tcp = raw.bool_or("source.tcp", true);
@@ -1037,7 +1059,22 @@ make_http_mjpeg_source_options(const AppConfig& cfg, const SourceGeometry& geome
   return opt;
 }
 
+simaai::neat::UsbCameraInputOptions make_usb_camera_options(const AppConfig& cfg) {
+  simaai::neat::UsbCameraInputOptions opt;
+  opt.camera_name = cfg.camera;
+  opt.width = static_cast<std::uint32_t>(cfg.source_width);
+  opt.height = static_cast<std::uint32_t>(cfg.source_height);
+  opt.framerate_num = static_cast<std::uint32_t>(cfg.source_fps);
+  return opt;
+}
+
 simaai::neat::Graph make_source_graph(const AppConfig& cfg, const SourceGeometry& geometry) {
+  if (cfg.source_type == SourceType::Usb) {
+    // Frames decode in place on the hardware decoder, in the camera's own sampling.
+    simaai::neat::Graph camera("usb_camera");
+    camera.add(simaai::neat::nodes::UsbCameraInput(make_usb_camera_options(cfg)));
+    return camera;
+  }
   if (cfg.source_type == SourceType::Rtsp) {
     return simaai::neat::nodes::groups::RtspDecodedInput(make_rtsp_source_options(cfg, geometry));
   }
@@ -1100,6 +1137,9 @@ SourceGeometry probe_decoded_source_geometry(const AppConfig& cfg, int fps) {
 }
 
 SourceGeometry resolve_source_geometry(const AppConfig& cfg) {
+  if (cfg.source_type == SourceType::Usb) {
+    return {cfg.source_width, cfg.source_height, cfg.source_fps};
+  }
   if (cfg.source_type == SourceType::Rtsp) {
     return probe_rtsp_geometry(cfg);
   }
@@ -1116,11 +1156,14 @@ SourceGeometry resolve_source_geometry(const AppConfig& cfg) {
 
 /// Loads the segmentation package. Only the postprocess contract differs per family.
 std::unique_ptr<simaai::neat::Model> make_model(const AppConfig& cfg,
-                                                const SourceGeometry& geometry) {
+                                                const SourceGeometry& geometry, bool nv16_frames) {
   simaai::neat::Model::Options opt;
   opt.preprocess.kind = simaai::neat::InputKind::Image;
-  // The decoder emits NV12; the model preprocess letterboxes it onto the model input.
-  opt.preprocess.color_convert.input_format = simaai::neat::PreprocessColorFormat::NV12;
+  // The decoder emits NV12 (NV16 for a 4:2:2 USB camera); the model preprocess letterboxes it
+  // onto the model input.
+  opt.preprocess.color_convert.input_format = nv16_frames
+                                                  ? simaai::neat::PreprocessColorFormat::NV16
+                                                  : simaai::neat::PreprocessColorFormat::NV12;
   if (geometry.width > 0 && geometry.height > 0) {
     opt.preprocess.input_max_width = geometry.width;
     opt.preprocess.input_max_height = geometry.height;
@@ -1149,6 +1192,9 @@ cv::Mat tensor_bgr_from_decoded(const simaai::neat::Tensor& tensor) {
   cv::Mat bgr;
   std::string err;
   if (sima_examples::nv12_to_bgr(tensor, bgr, err)) {
+    return bgr;
+  }
+  if (sima_examples::nv16_to_bgr(tensor, bgr, err)) {
     return bgr;
   }
   return tensor.to_cv_mat_copy(simaai::neat::ImageSpec::PixelFormat::BGR);
@@ -1358,6 +1404,20 @@ build_metadata_segments(const std::vector<SegmentationDetection>& detections,
   return segments;
 }
 
+// The video branch input: the H.264 encoder takes NV12, so NV16 frames go through an EV74
+// ColorConvert into the encoder's NV12 surface first.
+simaai::neat::Graph video_input(bool nv16_frames) {
+  simaai::neat::Graph input("video_input");
+  input.add(simaai::neat::nodes::Input("video"));
+  if (nv16_frames) {
+    simaai::neat::ColorConvertOptions color;
+    color.output_format = simaai::neat::ImageFormat::NV12;
+    color.surface = simaai::neat::ImageSurfaceLayout::EncoderNv12;
+    input.add(simaai::neat::nodes::ColorConvert(color));
+  }
+  return input;
+}
+
 PipelineRuntime build_pipeline(const AppConfig& cfg) {
   PipelineRuntime runtime;
   const SourceGeometry geometry = resolve_source_geometry(cfg);
@@ -1368,7 +1428,13 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
                          "failed to probe source frame dimensions");
   sima_examples::require(runtime.output_fps > 0, "failed to resolve source frame rate");
 
-  runtime.model = make_model(cfg, geometry);
+  // Most USB webcams send 4:2:2 MJPEG, which decodes to NV16. The model reads NV16 directly;
+  // the H.264 encoder needs NV12, so only the video branch converts it.
+  const bool nv16_frames =
+      cfg.source_type == SourceType::Usb &&
+      simaai::neat::usb_camera_info(make_usb_camera_options(cfg)).decoded_format ==
+          simaai::neat::FormatTag::NV16;
+  runtime.model = make_model(cfg, geometry, nv16_frames);
   runtime.labels = load_labels(cfg.labels_path);
 
   auto video_options = simaai::neat::nodes::groups::VideoSenderOptions::H264RtpUdpFromRaw(
@@ -1387,7 +1453,7 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
                             : simaai::neat::graphs::Branch("source", {"video", "model"});
 
   simaai::neat::Graph video_graph("video");
-  video_graph.connect(simaai::neat::nodes::Input("video"),
+  video_graph.connect(video_input(nv16_frames),
                       simaai::neat::nodes::groups::VideoSender(video_options));
 
   simaai::neat::Graph model_graph("model");
@@ -1451,7 +1517,8 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
       std::make_unique<simaai::neat::MetadataSender>(metadata_options, &metadata_err);
   sima_examples::require(runtime.metadata_sender->ok(), metadata_err);
 
-  std::cout << "source=" << cfg.source_url << " type=" << source_type_name(cfg.source_type)
+  std::cout << "source=" << (cfg.source_type == SourceType::Usb ? cfg.camera : cfg.source_url)
+            << " type=" << source_type_name(cfg.source_type)
             << " codec=" << source_codec_name(cfg.source_codec)
             << " model=" << model_family_name(cfg.model_family) << " stream=" << runtime.frame_w
             << "x" << runtime.frame_h << "@" << runtime.output_fps

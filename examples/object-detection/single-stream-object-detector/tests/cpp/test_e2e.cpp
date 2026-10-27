@@ -30,9 +30,11 @@ int run_source_case(const std::string& binary, const std::string& model_path,
   const int video_port = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000);
   const int metadata_port = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100);
   const int total_saved_frames = e2e_int(kExampleName, "testing.e2e.output", "total_saved_frames");
+  // A USB case's "URL" is the camera's stable ID.
+  const bool usb = source_case.type == "usb";
   ConfigScalars overrides{{"source.type", source_case.type},
                           {"source.codec", source_case.codec},
-                          {"source.url", source_url},
+                          {usb ? "source.camera" : "source.url", source_url},
                           {"source.ssl_strict", source_case.ssl_strict ? "true" : "false"},
                           {"model.path", model_path},
                           {"output.save_dir", output_dir},
@@ -110,5 +112,26 @@ int main(int argc, char** argv) {
         }
         return case_rc;
       });
-  return rc != 0 ? rc : cases_rc;
+  // USB capture needs a camera on the DevKit, which CI runners do not have, so this case runs
+  // only when SIMANEAT_TEST_USB_CAMERA names one (see usb_camera_ids()), even under --strict.
+  int usb_rc = 0;
+  bool usb_ran = false;
+  const StreamSourceCase usb_case{"usb_camera", "SIMANEAT_TEST_USB_CAMERA", "usb", "mjpeg", 30,
+                                  true};
+  if (const char* camera = env_or_null(usb_case.env_key.c_str())) {
+    usb_ran = true;
+    for (const std::string& model_path : model_paths) {
+      const std::string label = model_case_label(usb_case.name, model_path, model_paths.size());
+      if (run_source_case(binary, model_path, usb_case, camera, label) != 0) {
+        usb_rc = 1;
+      }
+    }
+  } else {
+    std::cerr << "[SKIP] set SIMANEAT_TEST_USB_CAMERA to a USB camera ID to run usb_camera e2e\n";
+  }
+  if (rc != 0 || usb_rc != 0) {
+    return 1;
+  }
+  // A camera-only run on a DevKit is a pass, not "no stream URLs configured".
+  return usb_ran && cases_rc == 77 ? 0 : cases_rc;
 }

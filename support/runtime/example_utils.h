@@ -44,6 +44,9 @@ cv::Mat load_rgb_resized(const std::string& image_path, int w, int h);
 bool infer_dims(const simaai::neat::Tensor& t, int& w, int& h);
 
 bool nv12_to_bgr(const simaai::neat::Tensor& t, cv::Mat& out, std::string& err);
+// A decoded 4:2:2 frame (NV16, as most USB webcams decode) to BGR on the CPU, for occasional
+// saved frames. Reads the Y and UV planes at their own offsets and strides.
+bool nv16_to_bgr(const simaai::neat::Tensor& t, cv::Mat& out, std::string& err);
 
 struct ScoredIndex {
   int index = -1;

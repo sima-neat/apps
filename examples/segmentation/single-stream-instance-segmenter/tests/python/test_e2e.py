@@ -67,6 +67,16 @@ SOURCE_CASES = [
         },
         id="http-mjpeg",
     ),
+    pytest.param(
+        {
+            "name": "usb_camera",
+            "type": "usb",
+            "codec": "mjpeg",
+            "url_fixture": "usb_camera_id",
+            "fps": 30,
+        },
+        id="usb-camera",
+    ),
 ]
 
 
@@ -93,10 +103,11 @@ def _run_and_check(
     insight_host = "127.0.0.1"
     video_port = _env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000)
     metadata_port = _env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100)
+    # A USB case's "URL" is the camera's stable ID.
     source_config = {
         "type": source["type"],
         "codec": source["codec"],
-        "url": source_url,
+        "camera" if source["type"] == "usb" else "url": source_url,
         "ssl_strict": source.get("ssl_strict", True),
     }
     if source.get("fps", 0) > 0:

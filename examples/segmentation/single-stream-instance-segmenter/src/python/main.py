@@ -87,6 +87,10 @@ class AppConfig:
     output: OutputConfig = OutputConfig("", 0, MASK_ALPHA, MASK_THRESHOLD, True)
     # Which key supplied source_url: "source.url" or the legacy "source.rtsp_url".
     source_key: str = "source.url"
+    # source.type=usb: the camera's stable ID (usb_camera_ids()) and one of its MJPEG modes.
+    camera: str = ""
+    source_width: int = 1920
+    source_height: int = 1080
 
 
 @dataclass
@@ -259,9 +263,9 @@ def parse_model_family(value: str) -> str:
 
 def parse_source_type(value: str) -> str:
     lowered = value.lower()
-    if lowered in {"rtsp", "http", "https"}:
+    if lowered in {"rtsp", "http", "https", "usb"}:
         return "http" if lowered == "https" else lowered
-    raise ValueError("source.type must be rtsp or http")
+    raise ValueError("source.type must be rtsp, http, or usb")
 
 
 def parse_source_codec(value: str) -> str:
@@ -276,7 +280,14 @@ def parse_source_codec(value: str) -> str:
 
 
 def validate_config(cfg: AppConfig) -> None:
-    if not cfg.source_url:
+    if cfg.source_type == "usb":
+        if not cfg.camera:
+            raise ValueError("source.camera must be set for source.type=usb")
+        if cfg.source_width <= 0 or cfg.source_height <= 0:
+            raise ValueError("source.width and source.height must be > 0 for source.type=usb")
+        if cfg.source_fps <= 0:
+            raise ValueError("source.fps must be > 0 for source.type=usb")
+    elif not cfg.source_url:
         raise ValueError("source.url or source.rtsp_url must be set")
     if not cfg.model_path:
         raise ValueError("model.path must be set")
@@ -338,6 +349,9 @@ def load_app_config(config_path: Path) -> AppConfig:
     source_url = string_or(source, "url")
     source_key = "source.url" if source_url else "source.rtsp_url"
     source_url = source_url or string_or(source, "rtsp_url")
+    source_type = parse_source_type(string_or(source, "type", "rtsp"))
+    if source_type == "usb":
+        source_key = "source.camera"
 
     cfg = AppConfig(
         model_path=string_or(model, "path"),
@@ -346,7 +360,10 @@ def load_app_config(config_path: Path) -> AppConfig:
         source_key=source_key,
         model_family=parse_model_family(string_or(model, "family", YOLO26)),
         input_size=int_or(model, "input_size", DEFAULT_INPUT_SIZE),
-        source_type=parse_source_type(string_or(source, "type", "rtsp")),
+        source_type=source_type,
+        camera=string_or(source, "camera"),
+        source_width=int_or(source, "width", 1920),
+        source_height=int_or(source, "height", 1080),
         source_codec=parse_source_codec(string_or(source, "codec", "h264")),
         latency_ms=int_or(source, "latency_ms", 200),
         tcp=bool_or(source, "tcp", True),
@@ -423,6 +440,27 @@ def tensor_dim(tensor, name: str) -> int:
 
 
 def tensor_bgr_from_decoded(tensor):
+    if tensor.image_format() == pyneat.PixelFormat.NV16:
+        # A 4:2:2 USB camera frame. The payload is the whole mapped buffer, so the Y and UV
+        # planes are read at their own offsets and strides; every other chroma row gives the
+        # 4:2:0 layout OpenCV converts.
+        width = tensor_dim(tensor, "width")
+        height = tensor_dim(tensor, "height")
+        payload = np.frombuffer(tensor.copy_payload_bytes(), dtype=np.uint8)
+        planes = {plane.role: plane for plane in tensor.planes}
+
+        def plane_rows(role, rows):
+            plane = planes[role]
+            stride = plane.strides_bytes[0]
+            end = plane.byte_offset + stride * rows
+            if end > payload.size:
+                raise RuntimeError(f"NV16 payload smaller than its {role} plane")
+            return payload[plane.byte_offset:end].reshape((rows, stride))[:, :width]
+
+        y = plane_rows(pyneat.PlaneRole.Y, height)
+        uv = plane_rows(pyneat.PlaneRole.UV, height)[::2]
+        return np.ascontiguousarray(cv2.cvtColor(np.vstack([y, uv]), cv2.COLOR_YUV2BGR_NV12))
+
     if tensor.is_nv12():
         width = tensor_dim(tensor, "width")
         height = tensor_dim(tensor, "height")
@@ -932,7 +970,21 @@ def make_http_mjpeg_source_options(cfg: AppConfig, fps: int, width: int, height:
     return opt
 
 
+def make_usb_camera_options(cfg: AppConfig):
+    opt = pyneat.UsbCameraInputOptions()
+    opt.camera_name = cfg.camera
+    opt.width = cfg.source_width
+    opt.height = cfg.source_height
+    opt.framerate_num = cfg.source_fps
+    return opt
+
+
 def make_source_graph(cfg: AppConfig, fps: int, width: int, height: int):
+    if cfg.source_type == "usb":
+        # Frames decode in place on the hardware decoder, in the camera's own sampling.
+        camera = pyneat.Graph("usb_camera")
+        camera.add(pyneat.nodes.usb_camera_input(make_usb_camera_options(cfg)))
+        return camera
     if cfg.source_type == "rtsp":
         return pyneat.groups.rtsp_decoded_input(make_rtsp_source_options(cfg, fps, width, height))
     return pyneat.groups.http_mjpeg_decoded_input(
@@ -972,6 +1024,8 @@ def probe_decoded_source(cfg: AppConfig, fps: int) -> tuple[int, int, int]:
 
 
 def resolve_source_geometry(cfg: AppConfig) -> tuple[int, int, int]:
+    if cfg.source_type == "usb":
+        return cfg.source_width, cfg.source_height, cfg.source_fps
     probed_w, probed_h, probed_fps = probe_ffprobe(cfg)
     fps = cfg.source_fps if cfg.source_fps > 0 else probed_fps
     if cfg.source_type == "rtsp":
@@ -991,12 +1045,15 @@ def resolve_source_geometry(cfg: AppConfig) -> tuple[int, int, int]:
     return width, height, fps
 
 
-def make_model(cfg: AppConfig, frame_w: int, frame_h: int):
+def make_model(cfg: AppConfig, frame_w: int, frame_h: int, nv16_frames: bool = False):
     """Load the segmentation package. Only the postprocess contract differs per family."""
     opt = pyneat.ModelOptions()
     opt.preprocess.kind = pyneat.InputKind.Image
-    # The decoder emits NV12; the model preprocess letterboxes it onto the model input.
-    opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.NV12
+    # The decoder emits NV12 (NV16 for a 4:2:2 USB camera); the model preprocess letterboxes it
+    # onto the model input.
+    opt.preprocess.color_convert.input_format = (
+        pyneat.PreprocessColorFormat.NV16 if nv16_frames else pyneat.PreprocessColorFormat.NV12
+    )
     if frame_w > 0 and frame_h > 0:
         opt.preprocess.input_max_width = frame_w
         opt.preprocess.input_max_height = frame_h
@@ -1029,7 +1086,20 @@ def build_metadata_sender(cfg: AppConfig):
     return pyneat.MetadataSender(options)
 
 
-def build_video_graph(cfg: AppConfig, width: int, height: int, fps: int):
+def video_input(nv16_frames: bool):
+    """The video branch input: the H.264 encoder takes NV12, so NV16 frames go through an EV74
+    ColorConvert into the encoder's NV12 surface first."""
+    graph = pyneat.Graph("video_input")
+    graph.add(pyneat.nodes.input("video"))
+    if nv16_frames:
+        color = pyneat.ColorConvertOptions()
+        color.output_format = pyneat.ImageFormat.NV12
+        color.surface = pyneat.ImageSurfaceLayout.EncoderNv12
+        graph.add(pyneat.nodes.color_convert(color))
+    return graph
+
+
+def build_video_graph(cfg: AppConfig, width: int, height: int, fps: int, nv16_frames: bool):
     sender_opt = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(width, height, fps)
     sender_opt.host = cfg.insight_host
     sender_opt.channel = 0
@@ -1037,7 +1107,7 @@ def build_video_graph(cfg: AppConfig, width: int, height: int, fps: int):
     sender_opt.encoder.bitrate_kbps = 1000
 
     graph = pyneat.Graph("video")
-    graph.connect(pyneat.nodes.input("video"), pyneat.groups.video_sender(sender_opt))
+    graph.connect(video_input(nv16_frames), pyneat.groups.video_sender(sender_opt))
     return graph, sender_opt.video_port
 
 
@@ -1048,10 +1118,17 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
             "failed to resolve source frame rate; set source.fps or use a source with "
             "probeable FPS metadata"
         )
-    model = make_model(cfg, frame_w, frame_h)
+    # Most USB webcams send 4:2:2 MJPEG, which decodes to NV16. The model reads NV16 directly;
+    # the H.264 encoder needs NV12, so only the video branch converts it.
+    nv16_frames = (
+        cfg.source_type == "usb"
+        and pyneat.usb_camera_info(make_usb_camera_options(cfg)).decoded_format
+        == pyneat.Format.NV16
+    )
+    model = make_model(cfg, frame_w, frame_h, nv16_frames)
     labels = load_labels(cfg.labels_path)
 
-    video_graph, video_port = build_video_graph(cfg, frame_w, frame_h, fps)
+    video_graph, video_port = build_video_graph(cfg, frame_w, frame_h, fps, nv16_frames)
 
     # Insight correlates the RTP timestamp with the metadata timestamp, so the encoder and the
     # segments must stay in one Run and therefore on one GStreamer timeline.
@@ -1115,7 +1192,8 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
 
     metadata_sender = build_metadata_sender(cfg)
     print(
-        f"source={cfg.source_url} type={cfg.source_type} codec={cfg.source_codec} "
+        f"source={cfg.camera if cfg.source_type == 'usb' else cfg.source_url} "
+        f"type={cfg.source_type} codec={cfg.source_codec} "
         f"model={cfg.model_family} stream={frame_w}x{frame_h}@{fps} "
         f"insight={cfg.insight_host} video={video_port} "
         f"metadata={metadata_sender.metadata_port()} channel=0"

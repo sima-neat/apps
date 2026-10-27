@@ -3,13 +3,16 @@ model:
   labels: examples/object-detection/single-stream-object-detector/src/common/coco_label.txt
 
 source:
-  type: rtsp                 # rtsp or http.
+  type: rtsp                 # rtsp, http, or usb.
   codec: h264                # h264/avc, h265/hevc, or mjpeg.
   url: <rtsp-url-1>          # Example: rtsp://<rtsp-source-ip>:<port>/<stream-name>
   rtsp_url: ""               # Legacy H.264 RTSP key. Used when source.url is empty.
   tcp: true                  # Use TCP for RTSP transport.
   latency_ms: 100            # RTSP receive latency in milliseconds.
   fps: 0                     # 0 probes FPS. MJPEG requires config FPS or probeable FPS metadata.
+  camera: ""                 # source.type=usb: stable USB camera ID, e.g. /base/pci@7000000000-3.1:1.0-046d:08e5.
+  width: 1920                # source.type=usb: an MJPEG mode the camera lists, with height and fps (> 0).
+  height: 1080
   ssl_strict: true           # Set false for HTTPS MJPEG streams with self-signed certs.
 
 inference:

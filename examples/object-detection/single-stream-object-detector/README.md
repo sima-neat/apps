@@ -25,7 +25,7 @@ The decoded frame branches inside a single graph to the detector and to the H.26
 ## Prerequisites
 
 - `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on the Modalix DevKit, or in a Neat SDK container paired with it.
-- An RTSP H.264, RTSP H.265, RTSP MJPEG, or HTTP MJPEG source and an [Insight](https://developer.sima.ai/software/tools/insight/) URL reachable from the target.
+- An RTSP H.264, RTSP H.265, RTSP MJPEG, or HTTP MJPEG source, or a USB (UVC) MJPEG camera plugged into the DevKit, and an [Insight](https://developer.sima.ai/software/tools/insight/) URL reachable from the target.
 
 ## Install Apps
 
@@ -77,6 +77,15 @@ Open `${APP_DIR}/src/common/config.yaml`. Set `model.path`, the source type, cod
 
 The source supports RTSP H.264, H.265, and MJPEG, plus HTTP MJPEG. Keep `inference.frames` at `0` to run until you stop the application.
 
+To use a USB camera, set `source.type: usb`, `source.camera` to its stable ID, and `source.width`, `source.height`, and `source.fps` to an MJPEG mode the camera lists; `source.url` and `source.codec` are not used. List the connected camera IDs and modes on the DevKit:
+
+```bash
+python3 -c "import pyneat; print(pyneat.usb_camera_ids())"
+v4l2-ctl --list-devices && v4l2-ctl -d /dev/video<N> --list-formats-ext
+```
+
+The camera's frames decode in place on the hardware decoder in its own sampling. Most webcams send 4:2:2 MJPEG, which decodes to NV16: the model reads it directly, and only the H.264 output converts it to NV12 on the EV74 (saved frames convert on the CPU).
+
 ## Run
 
 ### C++
@@ -122,6 +131,7 @@ writes annotated frames there as it runs.
 ## Troubleshooting
 
 - Verify stream reachability if the first frame times out.
+- For a USB camera, an unknown ID or an unsupported mode fails at startup with the connected IDs or the camera's MJPEG modes; close other programs that hold the camera.
 - Verify the Insight host and UDP ports if video and detections are absent.
 - Check model loading and score thresholds when video arrives without boxes.
 - The startup probe adapts the decode path when source resolution changes.

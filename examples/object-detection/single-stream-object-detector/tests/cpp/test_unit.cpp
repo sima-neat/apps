@@ -121,6 +121,35 @@ bool test_empty_labels_is_rejected(const std::string& binary) {
                          "empty labels error names the key");
 }
 
+// source.type=usb names a camera instead of a URL; the validated line reports the key, not the ID.
+bool test_usb_source_validates_without_a_url(const std::string& binary) {
+  const auto r =
+      validate_config_body(kExampleName, binary, "usb_source",
+                           minimal_config("  type: usb\n"
+                                          "  camera: /base/pci@7000000000-3.1:1.0-046d:08e5\n"
+                                          "  width: 1280\n"
+                                          "  height: 720\n"
+                                          "  fps: 30\n"));
+  return expect_true(r.exit_code == 0, "usb source with a camera validates") &&
+         expect_contains(r.stdout_text, "source=source.camera", "usb source reports source.camera");
+}
+
+bool test_usb_source_requires_camera_and_fps(const std::string& binary) {
+  const auto no_camera = validate_config_body(kExampleName, binary, "usb_no_camera",
+                                              minimal_config("  type: usb\n"
+                                                             "  fps: 30\n"));
+  const auto no_fps = validate_config_body(kExampleName, binary, "usb_no_fps",
+                                           minimal_config("  type: usb\n"
+                                                          "  camera: cam0\n"
+                                                          "  fps: 0\n"));
+  return expect_true(no_camera.exit_code != 0, "usb source without a camera is rejected") &&
+         expect_contains(no_camera.stderr_text, "source.camera must be set",
+                         "missing camera names source.camera") &&
+         expect_true(no_fps.exit_code != 0, "usb source without a frame rate is rejected") &&
+         expect_contains(no_fps.stderr_text, "source.fps must be > 0 for source.type=usb",
+                         "missing fps names source.fps");
+}
+
 bool test_closed_output_is_terminal() {
   using simaai::neat::PullStatus;
   simaai::neat::PullError pull_error;
@@ -172,6 +201,8 @@ int main(int argc, char** argv) {
   ok &= test_present_url_wins_over_the_legacy_key(binary);
   ok &= test_both_urls_empty_is_rejected(binary);
   ok &= test_empty_labels_is_rejected(binary);
+  ok &= test_usb_source_validates_without_a_url(binary);
+  ok &= test_usb_source_requires_camera_and_fps(binary);
   ok &= test_closed_output_is_terminal();
   return ok ? 0 : 1;
 }
