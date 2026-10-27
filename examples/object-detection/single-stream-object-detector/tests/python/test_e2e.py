@@ -1,6 +1,7 @@
 """E2E tests for single-stream-object-detector (Python)."""
 
 import os
+import socket
 import sys
 from pathlib import Path
 
@@ -67,10 +68,6 @@ def _env_int_or_default(name: str, default: int) -> int:
     return int(raw) if raw else default
 
 
-def _env_str_or_default(name: str, default: str) -> str:
-    return os.environ.get(name, "").strip() or default
-
-
 @pytest.mark.e2e
 class TestE2E:
     @pytest.mark.parametrize("source", SOURCE_CASES)
@@ -97,18 +94,17 @@ class TestE2E:
         if source.get("fps", 0) > 0:
             source_config["fps"] = source["fps"]
 
+        # This test is the Insight video receiver, so it publishes to its own loopback address.
+        insight_host = "127.0.0.1"
+        video_port = _env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000)
         config_path = e2e_config_writer(
             {
                 "source": source_config,
                 "output": {
                     "save_dir": str(tmp_output_dir),
                     "insight": {
-                        "host": _env_str_or_default(
-                            "SIMANEAT_APPS_TEST_INSIGHT_HOST", "127.0.0.1"
-                        ),
-                        "video_port": _env_int_or_default(
-                            "SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000
-                        ),
+                        "host": insight_host,
+                        "video_port": video_port,
                         "metadata_port": _env_int_or_default(
                             "SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100
                         ),
@@ -121,15 +117,23 @@ class TestE2E:
             "--config", str(config_path),
         ]
 
-        result = run_until_output_files(
-            cmd,
-            tmp_output_dir,
-            int(output_cfg["total_saved_frames"]),
-            test_timeout_ms / 1000,
-            cwd=str(EXAMPLE_DIR),
-        )
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as video:
+            video.bind((insight_host, video_port))
+            video.settimeout(5.0)
+            result = run_until_output_files(
+                cmd,
+                tmp_output_dir,
+                int(output_cfg["total_saved_frames"]),
+                test_timeout_ms / 1000,
+                cwd=str(EXAMPLE_DIR),
+            )
+            video_packet = video.recv(65536)
 
         assert_exited_cleanly(result)
         assert_streamed_frames_are_usable(
             tmp_output_dir, int(output_cfg["total_saved_frames"])
         )
+        # Streams are re-encoded to RTP H.264 (payload type 96); a USB camera's own JPEG is
+        # forwarded as RTP/JPEG (payload type 26).
+        assert len(video_packet) > 12 and video_packet[0] >> 6 == 2
+        assert video_packet[1] & 0x7F == (26 if source["type"] == "usb" else 96)
