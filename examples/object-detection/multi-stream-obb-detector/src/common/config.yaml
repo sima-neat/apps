@@ -1,6 +1,6 @@
 model:                       # Oriented-box detector model selection.
   path: <model-path>         # Example: models/yolo26n_obb_w8a8_mpk.tar.gz
-  labels: examples/object-detection/multi-stream-obb-detector/src/common/dota_label.txt
+  labels: examples/object-detection/multi-stream-obb-detector/src/common/dota_label.txt # Class names, one per line.
 
 streams:                     # RTSP inputs, one entry per camera. Up to four.
   - <rtsp-url-1>             # Example: rtsp://<rtsp-source-ip>:<port>/<stream-name>

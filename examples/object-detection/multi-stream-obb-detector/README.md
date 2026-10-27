@@ -29,7 +29,8 @@ mostly background. The model detects the 15 DOTA classes listed in
 
 - `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on the Modalix DevKit, or in a Neat SDK container paired with it.
 - H.264 or H.265 RTSP sources of top-down aerial video, such as drone or satellite footage, matching `input.codec`. The model was trained on overhead imagery and finds little in street-level video.
-- An [Insight](https://developer.sima.ai/software/tools/insight/) version that draws `oriented_bbox`, reachable from the target. Older versions draw each object's upright `bbox` instead.
+- An [Insight](https://developer.sima.ai/software/tools/insight/) version that draws `oriented_bbox`, reachable from the target.
+- For H.265, the computer running the Insight viewer must support hardware HEVC decoding; Chromium does not provide a software decoder fallback for WebRTC H.265.
 
 ## Install Apps
 
@@ -71,10 +72,6 @@ In the Insight Web UI, upload your aerial videos, start one stream per video, an
 ## Configure
 
 Open `${APP_DIR}/src/common/config.yaml`. Set `model.path`, add each RTSP URL under `streams`, and set the Insight host and starting video and metadata ports. Set `input.codec` to match the streams.
-
-`inference.min_score` keeps detections at or above that confidence. Raise it if the overlay shows boxes on background, and lower it if objects are missed.
-
-`inference.max_detections` caps the boxes kept per frame for each stream. Aerial scenes such as parking lots can hold hundreds of vehicles, so the default is 300. Every box adds to the metadata sent to Insight: with four 30 fps streams of dense scenes, the C++ application keeps about 28 fps per stream, while the Python application drops to about 20 to 27 fps. Lower the value if Python must keep up with the stream rate.
 
 ## Run
 
@@ -120,14 +117,14 @@ The packaged config sets `inference.frames: 0`, which runs until Ctrl-C. Set a p
 [stream 1] processed=300
 ```
 
-To save annotated frames without Insight, set `output.save_every` to a positive interval. Every that-many frames per stream, the application writes a JPEG with the rotated boxes under `output.debug_dir`.
+To also save annotated frames, set `output.save_every` to a positive interval. Every that-many frames, each stream writes `stream_<N>_frame_<count>.jpg` with the rotated boxes under `output.debug_dir`, which the packaged config sets to `sandbox/multi-stream-obb-detector`.
 
 ## Troubleshooting
 
 - Replace all placeholder stream URLs and the Insight host before running.
-- The application supports up to four streams.
 - `oriented boxes require equal authoritative affine scales`: Neat could not scale the stream's frames to the model input by the same factor on both axes. 1280x720 and 1920x1080 streams work; a 640x512 stream fails. Re-encode the stream to 1280x720.
-- Few or no detections: check that the video looks straight down at the ground. Lower `inference.min_score` if objects are present but missed.
+- Few or no detections: check that the video looks straight down at the ground. Lower `inference.min_score` if objects are present but missed, and raise it if the overlay shows boxes on background.
+- Python output falls below the stream rate on dense scenes: lower `inference.max_detections`. Each box adds to the metadata sent to Insight; at the default 300 with four dense 30 fps streams, C++ keeps about 28 fps per stream and Python about 20 to 27 fps.
 - Insight shows upright boxes: the installed Insight does not draw `oriented_bbox`. Update Insight.
 - Verify host and UDP port ranges if Insight receives no output.
 

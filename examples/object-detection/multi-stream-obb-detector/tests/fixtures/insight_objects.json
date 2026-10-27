@@ -1,5 +1,5 @@
 {
-  "description": "Oriented boxes and the Insight objects both implementations must publish for them. bbox is the upright extent of the rotated box; pixel values are rounded to 0.1, angles to 4 decimals, and confidences to 3; a class id outside the labels is published as unknown.",
+  "description": "Oriented boxes and the Insight objects both implementations must publish for them. bbox is the upright extent of the rotated box; pixel values are rounded to 0.1, angles to 4 decimals, and confidences to 3, with exact halves rounded to even; a class id outside the labels is published as unknown.",
   "labels": [
     "plane",
     "ship"
@@ -31,6 +31,15 @@
       "angle_radians": -0.523598775598,
       "score": 0.5,
       "class_id": 7
+    },
+    {
+      "cx": 100.25,
+      "cy": 50.0,
+      "width": 40.0,
+      "height": 20.0,
+      "angle_radians": 0.0,
+      "score": 0.8125,
+      "class_id": 0
     }
   ],
   "objects": [
@@ -86,6 +95,24 @@
         40.0,
         20.0,
         -0.5236
+      ]
+    },
+    {
+      "id": "obj_4",
+      "label": "plane",
+      "confidence": 0.812,
+      "bbox": [
+        80.2,
+        40.0,
+        40.0,
+        20.0
+      ],
+      "oriented_bbox": [
+        100.2,
+        50.0,
+        40.0,
+        20.0,
+        0.0
       ]
     }
   ]

@@ -142,7 +142,7 @@ class TestConfig:
             (("input", "tcp"), "yes", "input.tcp must be true or false"),
             (("input", "latency_ms"), -1, "input.latency_ms must be >= 0"),
             (("inference", "frames"), -1, "inference.frames must be >= 0"),
-            (("inference", "frames"), 1.5, "inference.frames must be int"),
+            (("inference", "frames"), 1.5, "inference.frames must be an integer"),
             (("inference", "max_inflight_per_stream"), 0, "must be -1 or > 0"),
             (("inference", "max_inflight_total"), -2, "must be -1 or > 0"),
             (("inference", "min_score"), 1.01, "inference.min_score must be between 0 and 1"),
@@ -257,6 +257,21 @@ class TestInsightMetadata:
         assert json.loads(data_json) == {"objects": []}
         assert timestamp_ms == -1
         assert frame_id == ""
+
+    def test_a_failed_send_warns_and_keeps_running(self, capsys):
+        """Like C++, one lost message must not end the run."""
+
+        class FailingSender:
+            def send_metadata(self, *args):
+                raise RuntimeError("MetadataSender payload exceeds 65507 bytes")
+
+        stream = main_module.Stream(1, "rtsp://host/a", 1280, 720, 30, FailingSender())
+
+        main_module.send_metadata(stream, SimpleNamespace(frame_id=1, pts_ns=0), detections([]), [])
+
+        assert "stream 1 metadata send failed: MetadataSender payload exceeds 65507 bytes" in (
+            capsys.readouterr().err
+        )
 
 
 class TestRunLoop:

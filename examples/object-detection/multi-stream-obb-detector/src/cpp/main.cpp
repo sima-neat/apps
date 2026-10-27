@@ -34,14 +34,11 @@
 #include <csignal>
 #include <cstdint>
 #include <cstdlib>
-#include <cstring>
 #include <exception>
 #include <filesystem>
 #include <fstream>
-#include <functional>
 #include <iostream>
 #include <memory>
-#include <numeric>
 #include <string>
 #include <vector>
 
@@ -255,11 +252,10 @@ Stream open_stream(const AppConfig& cfg, int index, const std::string& url) {
   stream.url = url;
 
   sima_examples::RtspProbeOptions probe_options;
-  probe_options.latency_ms = cfg.latency_ms;
   probe_options.rtsp_tcp = cfg.tcp;
   sima_examples::RtspStreamInfo probe;
-  (void)sima_examples::probe_rtsp_stream_info(url, probe_options, probe);
-  sima_examples::require(probe.width > 0 && probe.height > 0 && probe.fps > 0,
+  sima_examples::require(sima_examples::probe_rtsp_stream_info(url, probe_options, probe) &&
+                             probe.fps > 0,
                          "failed to probe RTSP frame size and rate: " + url);
   stream.width = probe.width;
   stream.height = probe.height;
@@ -332,23 +328,14 @@ std::string stream_id(int index) {
 simaai::neat::GraphLinkOptions detector_link(const AppConfig& cfg, int index) {
   simaai::neat::GraphLinkOptions link;
   link.policy = simaai::neat::GraphLinkPolicy::RealtimeLatestByStream;
-  link.queue_depth = 4;
   link.max_inflight_per_stream = cfg.max_inflight_per_stream;
   link.max_inflight_total = cfg.max_inflight_total;
   link.stream_id = stream_id(index);
   return link;
 }
 
-simaai::neat::GraphLinkOptions debug_frame_link(int index) {
-  simaai::neat::GraphLinkOptions link;
-  link.policy = simaai::neat::GraphLinkPolicy::RealtimeLatestByStream;
-  link.queue_depth = 4;
-  link.stream_id = stream_id(index);
-  return link;
-}
-
-// Drops the oldest encoded frame instead of slowing the source when Insight lags.
-simaai::neat::GraphLinkOptions video_link() {
+// Keeps only the newest frame, so a slow consumer drops frames instead of slowing the stream.
+simaai::neat::GraphLinkOptions latest_frame_link() {
   simaai::neat::GraphLinkOptions link;
   link.policy = simaai::neat::GraphLinkPolicy::RealtimeLatestByStream;
   return link;
@@ -384,13 +371,13 @@ simaai::neat::Graph build_graph(const AppConfig& cfg, const std::vector<Stream>&
     // A plain source link lets Core tee the encoded stream to the decoder and the sender.
     graph.connect(source, decoder);
     graph.connect(decoder, detector, detector_link(cfg, stream.index));
-    graph.connect(source, video, video_link());
+    graph.connect(source, video, latest_frame_link());
     if (save_frames_enabled(cfg)) {
       simaai::neat::Graph frames("debug_frame");
       frames.connect(simaai::neat::nodes::Input("debug_frame"),
                      simaai::neat::nodes::Output(debug_frame_output(stream.index),
                                                  simaai::neat::OutputOptions::EveryFrame(4)));
-      graph.connect(decoder, frames, debug_frame_link(stream.index));
+      graph.connect(decoder, frames, latest_frame_link());
     }
   }
 
@@ -410,19 +397,6 @@ simaai::neat::RunOptions run_options() {
   return opt;
 }
 
-template <typename T> std::vector<T> tensor_values(const simaai::neat::Tensor& tensor) {
-  // A frame without detections decodes to zero-row tensors, which have no payload to copy.
-  const int64_t elements = std::accumulate(tensor.shape.begin(), tensor.shape.end(), int64_t{1},
-                                           std::multiplies<int64_t>());
-  if (tensor.shape.empty() || elements == 0) {
-    return {};
-  }
-  const auto bytes = tensor.contiguous().copy_payload_bytes();
-  std::vector<T> values(bytes.size() / sizeof(T));
-  std::memcpy(values.data(), bytes.data(), values.size() * sizeof(T));
-  return values;
-}
-
 // Reads the decoder's oriented boxes, already mapped to source-frame pixels.
 std::vector<OrientedBox> decode_boxes(const simaai::neat::Sample& sample) {
   const auto tensors = simaai::neat::tensors_from_sample(sample, false);
@@ -430,13 +404,17 @@ std::vector<OrientedBox> decode_boxes(const simaai::neat::Sample& sample) {
     throw std::runtime_error("detection sample carried no tensors");
   }
   const auto result = simaai::neat::decode_obb(tensors).front();
-  const auto geometry = tensor_values<float>(result.geometry);
-  const auto scores = tensor_values<float>(result.scores);
-  const auto class_ids = tensor_values<int32_t>(result.class_ids);
-
-  std::vector<OrientedBox> boxes(scores.size());
+  std::vector<OrientedBox> boxes(static_cast<std::size_t>(result.scores.shape.at(0)));
+  // A frame without detections decodes to empty tensors, which have no data to read.
+  if (boxes.empty()) {
+    return boxes;
+  }
+  // decode_obb returns dense CPU tensors: geometry is [N, 5], scores and class ids are [N].
+  const float* geometry = result.geometry.data_ptr<float>();
+  const float* scores = result.scores.data_ptr<float>();
+  const int32_t* class_ids = result.class_ids.data_ptr<int32_t>();
   for (std::size_t i = 0; i < boxes.size(); ++i) {
-    const float* row = geometry.data() + i * 5;
+    const float* row = geometry + i * 5;
     boxes[i] = {row[0], row[1], row[2], row[3], row[4], scores[i], class_ids[i]};
   }
   return boxes;
@@ -456,15 +434,19 @@ nlohmann::json insight_object(int index, const OrientedBox& box,
   const double sin = std::abs(std::sin(box.angle_radians));
   const double extent_w = box.width * cos + box.height * sin;
   const double extent_h = box.width * sin + box.height * cos;
-  const auto px = [](double value) { return std::round(value * 10.0) / 10.0; };
+  // Rounds halves to even, like the Python implementation, so both publish the same values.
+  const auto round_to = [](double value, double scale) {
+    return std::nearbyint(value * scale) / scale;
+  };
+  const auto px = [&](double value) { return round_to(value, 10.0); };
   return {
       {"id", "obj_" + std::to_string(index)},
       {"label", label_for(labels, box.class_id)},
-      {"confidence", std::round(box.score * 1000.0) / 1000.0},
+      {"confidence", round_to(box.score, 1000.0)},
       {"bbox", {px(box.cx - extent_w / 2), px(box.cy - extent_h / 2), px(extent_w), px(extent_h)}},
       {"oriented_bbox",
        {px(box.cx), px(box.cy), px(box.width), px(box.height),
-        std::round(box.angle_radians * 10000.0) / 10000.0}}};
+        round_to(box.angle_radians, 10000.0)}}};
 }
 
 void send_metadata(Stream& stream, const simaai::neat::Sample& sample,
@@ -497,9 +479,8 @@ void draw_boxes(cv::Mat& frame, const std::vector<OrientedBox>& boxes,
     }
     cv::polylines(frame, corners, true, green, 2);
     const cv::Rect extent = cv::boundingRect(corners);
-    char text[64];
-    std::snprintf(text, sizeof(text), "%s %.2f", label_for(labels, box.class_id).c_str(),
-                  box.score);
+    const std::string text =
+        cv::format("%s %.2f", label_for(labels, box.class_id).c_str(), box.score);
     cv::putText(frame, text, cv::Point(extent.x, std::max(0, extent.y - 4)),
                 cv::FONT_HERSHEY_SIMPLEX, 0.4, green, 1);
   }
@@ -571,7 +552,6 @@ void run_app(const AppConfig& cfg) {
   auto graph = build_graph(cfg, streams, *model);
 
   auto run = graph.build(run_options());
-  g_stop_requested = 0;
   const auto previous_sigint = std::signal(SIGINT, request_stop);
   while (g_stop_requested == 0 && !all_streams_done(streams, cfg.frames)) {
     if (save_frames_enabled(cfg)) {

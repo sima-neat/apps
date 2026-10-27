@@ -15,6 +15,8 @@ import yaml
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
 MAX_STREAMS = 4
 PULL_TIMEOUT_MS = 50
+# Matches the C++ config reader's error wording.
+KIND_NAMES = {bool: "true or false", int: "an integer", float: "numeric", str: "a string"}
 
 cv2 = None
 np = None
@@ -98,7 +100,7 @@ def setting(raw: dict, key: str, default, kind: type):
     if kind is float and isinstance(value, int) and not isinstance(value, bool):
         value = float(value)
     if not isinstance(value, kind) or (kind is int and isinstance(value, bool)):
-        raise ValueError(f"{key} must be {'true or false' if kind is bool else kind.__name__}")
+        raise ValueError(f"{key} must be {KIND_NAMES[kind]}")
     return value
 
 
@@ -282,23 +284,14 @@ def detector_link(cfg: AppConfig, index: int):
     """Keeps each stream's newest frames and tags them so results find their stream."""
     link = pyneat.GraphLinkOptions()
     link.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
-    link.queue_depth = 4
     link.max_inflight_per_stream = cfg.max_inflight_per_stream
     link.max_inflight_total = cfg.max_inflight_total
     link.stream_id = stream_id(index)
     return link
 
 
-def debug_frame_link(index: int):
-    link = pyneat.GraphLinkOptions()
-    link.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
-    link.queue_depth = 4
-    link.stream_id = stream_id(index)
-    return link
-
-
-def video_link():
-    """Drops the oldest encoded frame instead of slowing the source when Insight lags."""
+def latest_frame_link():
+    """Keeps only the newest frame, so a slow consumer drops frames instead of slowing the stream."""
     link = pyneat.GraphLinkOptions()
     link.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
     return link
@@ -336,7 +329,7 @@ def build_graph(cfg: AppConfig, streams: list[Stream], model):
         # A plain source link lets Core tee the encoded stream to the decoder and the sender.
         graph.connect(source, decoder)
         graph.connect(decoder, detector, detector_link(cfg, stream.index))
-        graph.connect(source, video, video_link())
+        graph.connect(source, video, latest_frame_link())
         if save_frames_enabled(cfg):
             frames = pyneat.Graph("debug_frame")
             frames.connect(
@@ -345,7 +338,7 @@ def build_graph(cfg: AppConfig, streams: list[Stream], model):
                     debug_frame_output(stream.index), pyneat.OutputOptions.every_frame(4)
                 ),
             )
-            graph.connect(decoder, frames, debug_frame_link(stream.index))
+            graph.connect(decoder, frames, latest_frame_link())
 
     detections = pyneat.Graph("detections")
     detections.add(pyneat.nodes.output("detections", pyneat.OutputOptions.every_frame(4)))
@@ -427,12 +420,17 @@ def send_metadata(stream: Stream, sample, detections: Detections, labels: list[s
     objects = insight_objects(detections, labels)
     timestamp_ms = int(sample.pts_ns // 1_000_000) if sample.pts_ns >= 0 else -1
     frame_id = str(sample.frame_id) if sample.frame_id >= 0 else ""
-    stream.metadata_sender.send_metadata(
-        "object-detection",
-        json.dumps({"objects": objects}, separators=(",", ":")),
-        timestamp_ms,
-        frame_id,
-    )
+    payload = json.dumps({"objects": objects}, separators=(",", ":"))
+    # A lost message only drops one frame's boxes, so warn and keep streaming, as C++ does.
+    error = ""
+    try:
+        sent = stream.metadata_sender.send_metadata(
+            "object-detection", payload, timestamp_ms, frame_id
+        )
+    except RuntimeError as exc:
+        sent, error = False, str(exc)
+    if not sent:
+        print(f"[warn] stream {stream.index} metadata send failed: {error}", file=sys.stderr)
 
 
 def nv12_to_bgr(tensor):
