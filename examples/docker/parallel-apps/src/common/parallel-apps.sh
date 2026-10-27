@@ -86,8 +86,19 @@ deploy() {
     args+=(--device "$device")
   done
 
+  # If one app fails to start, remove the ones already started so they do not
+  # keep holding the accelerator and codecs.
+  started=()
   for name in "$@"; do
-    dk container deploy "$name:latest" --name "$name" "${args[@]}"
+    if ! dk container deploy "$name:latest" --name "$name" "${args[@]}"; then
+      echo "error: $name failed to start; removing the apps started by this deploy" >&2
+      for app in "${started[@]}"; do
+        dk container stop "$app" || true
+        dk container remove "$app" || true
+      done
+      exit 1
+    fi
+    started+=("$name")
     sleep 8
   done
 }
