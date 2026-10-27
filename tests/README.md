@@ -296,3 +296,24 @@ MJPEG URLs.
   `tests/scripts` against the source checkout, because they read `build.sh`, the
   workflows and the portal sources, which the test bundle does not carry.
   Publishing waits for it too.
+
+## Nightly Integration
+
+At 03:00 UTC each day, `nightly-e2e.yml` dispatches Vulcan CI on the latest
+`develop` with `nightly=true`, then waits and reports its build/test result.
+The workflow can also be started manually with a source branch to rebuild;
+`develop` is the default. There is no scheduled `main` matrix entry.
+
+It runs the same clean SDK build, package validation, repository contract tests,
+and installed-runtime `./tests/test.sh --all --strict` as push CI. The `snap`
+Core policy selects the latest published Core `develop` artifact at build time;
+the Modalix tests install the exact Core version recorded in the new package.
+`SIMANEAT_APPS_TEST_MODEL_VARIANTS=1` adds each enabled suite's model variants.
+
+Nightly mode skips release packaging, Vulcan publication, latest promotion,
+and portal/search deployment. Build archives remain ephemeral GitHub Actions
+artifacts used to transfer the candidate to the Modalix job. The nightly run
+summary links to the full Vulcan build and test logs. Runtime test logs and
+resolved Apps/Core metadata are retained for seven days, including on failure.
+Nightly and publishing runs use separate concurrency groups so they do not
+cancel each other.
