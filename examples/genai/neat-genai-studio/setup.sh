@@ -134,6 +134,36 @@ catalog_dir_name() {
   fi
 }
 
+# A Hugging Face download, retried when the Hub rate-limits (429), answers with
+# a server error or drops the connection; any other failure, such as a wrong or
+# gated repo, stops at once. The hf CLI resumes a partial file, so a retry
+# continues where the last attempt stopped (#599).
+hf_download() {   # hf_download <hf executable> <arguments of `hf download`...>
+  local hf="$1" attempt=1 attempts=4 wait=15 log
+  shift
+  log="$(mktemp)"
+  while true; do
+    # The downloaded path stays on stdout; hf's messages show as they come and
+    # are kept to tell a passing failure from a lasting one.
+    if { "${hf}" download "$@" 2>&1 1>&3 | tee "${log}" >&2; } 3>&1; then
+      rm -f "${log}"
+      return 0
+    fi
+    # Only unindented lines: hf prints a traceback whose indented source lines
+    # (timeout=..., ConnectionError handlers) would match on any failure.
+    # LocalEntryNotFoundError is how hf reports a 429, a 5xx or no connection;
+    # SSLError, an HTTPS connection dropped mid-transfer.
+    if (( attempt >= attempts )) || ! awk '/^[^ \t]/ && /(LocalEntryNotFoundError|429 Client Error|Too Many Requests|[0-9][0-9][0-9] Server Error|ConnectionError|SSLError|ConnectTimeout|ReadTimeout|Connection reset|IncompleteRead|ChunkedEncodingError)/ { found = 1 } END { exit !found }' "${log}"; then
+      rm -f "${log}"
+      return 1
+    fi
+    warn "Hugging Face download of $1 failed (attempt ${attempt} of ${attempts}); retrying in ${wait}s…"
+    sleep "${wait}"
+    attempt=$((attempt + 1))
+    wait=$((wait * 2))
+  done
+}
+
 write_repo_marker() {
   printf '%s\n' "$1" > "$2/.neat-hub-repo"
 }
@@ -556,7 +586,7 @@ _supertonic_models() {
   mkdir -p "${SUPERTONIC_MODELS_ROOT}" || return 1
   export HF_HOME="${SUPERTONIC_MODELS_ROOT}/.hf-cache"   # keep the cache off the root filesystem
   step "Downloading the compiled MLA packages (${SUPERTONIC_SIMA_HF_REPO}@${SUPERTONIC_SIMA_HF_REVISION:0:12})…"
-  "${hf}" download "${SUPERTONIC_SIMA_HF_REPO}" \
+  hf_download "${hf}" "${SUPERTONIC_SIMA_HF_REPO}" \
     supertonic_vocoder_sima_bf16_mpk.tar.gz \
     supertonic_runtime_data.npz \
     artifact_manifest.json \
@@ -565,7 +595,7 @@ _supertonic_models() {
     --local-dir "${SUPERTONIC_MODELS_ROOT}/supertonic-3-sima" || return 1
   _supertonic_vector_estimator || return 1
   step "Downloading the upstream CPU models and voice styles (${SUPERTONIC_UPSTREAM_HF_REPO}@${SUPERTONIC_UPSTREAM_HF_REVISION:0:12})…"
-  "${hf}" download "${SUPERTONIC_UPSTREAM_HF_REPO}" \
+  hf_download "${hf}" "${SUPERTONIC_UPSTREAM_HF_REPO}" \
     onnx/duration_predictor.onnx onnx/text_encoder.onnx onnx/tts.json onnx/unicode_indexer.json \
     voice_styles/F1.json voice_styles/F2.json voice_styles/F3.json voice_styles/F4.json voice_styles/F5.json \
     voice_styles/M1.json voice_styles/M2.json voice_styles/M3.json voice_styles/M4.json voice_styles/M5.json \
@@ -693,7 +723,7 @@ section "Models"
 if [[ "${SKIP_MODEL_DOWNLOAD}" != "1" ]]; then
   if [[ -n "${CHAT_MODEL_REPO}" ]]; then
     step "Downloading chat/VLM model: ${CHAT_MODEL_REPO}"
-    "${APP_VENV}/bin/hf" download "${CHAT_MODEL_REPO}" --local-dir "${CHAT_MODEL_DIR}"
+    hf_download "${APP_VENV}/bin/hf" "${CHAT_MODEL_REPO}" --local-dir "${CHAT_MODEL_DIR}"
     write_repo_marker "${CHAT_MODEL_REPO}" "${CHAT_MODEL_DIR}"
   else
     info "No default chat/VLM model — download one from Insight's GenAI tab (or set CHAT_MODEL_REPO)."
@@ -701,7 +731,7 @@ if [[ "${SKIP_MODEL_DOWNLOAD}" != "1" ]]; then
 
   if [[ -n "${ASR_MODEL_REPO}" ]]; then
     step "Downloading ASR model: ${ASR_MODEL_REPO}"
-    "${APP_VENV}/bin/hf" download "${ASR_MODEL_REPO}" --local-dir "${ASR_MODEL_DIR}"
+    hf_download "${APP_VENV}/bin/hf" "${ASR_MODEL_REPO}" --local-dir "${ASR_MODEL_DIR}"
     write_repo_marker "${ASR_MODEL_REPO}" "${ASR_MODEL_DIR}"
   else
     info "No default ASR model — download one from Insight's GenAI tab (or set ASR_MODEL_REPO)."
@@ -710,19 +740,19 @@ if [[ "${SKIP_MODEL_DOWNLOAD}" != "1" ]]; then
   for repo in ${ASR_CATALOG_MODEL_REPOS}; do
     name="$(catalog_dir_name "${repo}")"
     step "Downloading ASR catalog model: ${repo}"
-    "${APP_VENV}/bin/hf" download "${repo}" --local-dir "${MODELS_DIR}/${name}"
+    hf_download "${APP_VENV}/bin/hf" "${repo}" --local-dir "${MODELS_DIR}/${name}"
     write_repo_marker "${repo}" "${MODELS_DIR}/${name}"
   done
 
   if [[ "${SETUP_RAG}" == "1" ]]; then
     step "Downloading RAG embedding model: ${RAG_EMBEDDING_REPO}"
-    "${APP_VENV}/bin/hf" download "${RAG_EMBEDDING_REPO}" --local-dir "${RAG_EMBEDDING_DIR}"
+    hf_download "${APP_VENV}/bin/hf" "${RAG_EMBEDDING_REPO}" --local-dir "${RAG_EMBEDDING_DIR}"
   fi
 
   for repo in ${CATALOG_MODEL_REPOS}; do
     name="$(catalog_dir_name "${repo}")"
     step "Downloading catalog model: ${repo}"
-    "${APP_VENV}/bin/hf" download "${repo}" --local-dir "${MODELS_DIR}/${name}"
+    hf_download "${APP_VENV}/bin/hf" "${repo}" --local-dir "${MODELS_DIR}/${name}"
     write_repo_marker "${repo}" "${MODELS_DIR}/${name}"
   done
   ok "Model downloads complete."

@@ -63,7 +63,7 @@ Run the remaining commands from `prebuilt-apps/`.
 The detector uses the `yolo26m-det-int8-b1.tar.gz` Model Zoo package, which the E2E tests run:
 
 ```bash
-export MODELZOO_VERSION="2.1.3"
+export MODELZOO_VERSION="3.0.0"
 mkdir -p models
 cd models
 sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26-detection/yolo26m-det-int8-b1.tar.gz"

@@ -61,7 +61,7 @@ python3 -c "import pyneat"
 ```bash
 mkdir -p models
 cd models
-export MODELZOO_VERSION="2.1.3"
+export MODELZOO_VERSION="3.0.0"
 sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/patchcore_wide_resnet50_2_bf16_mla.tar.gz"
 cd ..
 ```

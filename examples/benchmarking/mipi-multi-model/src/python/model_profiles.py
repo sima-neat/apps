@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-MODEL_ZOO_VERSION = "2.1.3"
+MODEL_ZOO_VERSION = "3.0.0"
 
 
 class ModelPackageError(RuntimeError):
@@ -19,13 +19,10 @@ class Profile:
     task: str
     archive: str
     decode_type: str | None = None
-    modelzoo_id: str | None = None
     preprocessing: str | None = None
 
     @property
     def source(self) -> str:
-        if self.modelzoo_id:
-            return f"Model Zoo {MODEL_ZOO_VERSION}: {self.modelzoo_id}"
         return f"SDK {MODEL_ZOO_VERSION} download: {self.archive}"
 
 
@@ -41,25 +38,22 @@ PROFILES = {
             "detect",
             "YOLO26n object detection",
             "detection",
-            "yolo_26n_mpk.tar.gz",
+            "yolo26n-det-int8-b1.tar.gz",
             decode_type="YoloV26",
-            modelzoo_id="yolo_26n",
         ),
         Profile(
             "pose",
             "YOLO26n pose estimation",
             "pose",
-            "yolo_26n_pose_mpk.tar.gz",
+            "yolo26n-pose-bf16-mla_tess-b1.tar.gz",
             decode_type="YoloV26Pose",
-            modelzoo_id="yolo_26n_pose",
         ),
         Profile(
             "segment",
             "YOLO26n instance segmentation",
             "segmentation",
-            "yolo_26n_seg_mpk.tar.gz",
+            "yolo26n-seg-bf16-mla_tess.tar.gz",
             decode_type="YoloV26Seg",
-            modelzoo_id="yolo_26n_seg",
         ),
         Profile(
             "ssd",
@@ -74,14 +68,12 @@ PROFILES = {
             "ResNet-50 image classification",
             "classification",
             "resnet_50_mpk.tar.gz",
-            modelzoo_id="resnet_50",
         ),
         Profile(
             "depth",
             "MiDaS v2.1 Small depth estimation",
             "depth",
             "midas_v21_small_256_mpk.tar.gz",
-            modelzoo_id="midas_v21_small_256",
         ),
     )
 }
