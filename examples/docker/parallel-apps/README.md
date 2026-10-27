@@ -44,13 +44,13 @@ APP_DIR=examples/docker/parallel-apps
 
 Run the remaining commands from `prebuilt-apps/`.
 
-The applications in the bundle are built against the Core recorded in `deps/neat-core.json`. Compare it with the DevKit's Core, and update the DevKit if they differ:
+The applications in the bundle are built against the Core recorded in `deps/neat-core.json` as a `ref` (channel) and a `spec`. Compare it with the DevKit's Core, and update the DevKit if they differ:
 
 ```bash
 cat deps/neat-core.json
 dk shell
 neat status
-neat update --core-only --channel develop --tag <spec from deps/neat-core.json>
+neat update --core-only --channel <ref from deps/neat-core.json> --tag <spec from deps/neat-core.json>
 exit
 ```
 
