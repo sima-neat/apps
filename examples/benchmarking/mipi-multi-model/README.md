@@ -62,7 +62,7 @@ The default profile uses YOLO26n detection. Every profile consumes a compiled `.
 Model packages come from the Model Zoo release below, which can differ from the installed platform version. Download the packages for the profiles you plan to run into `models/`:
 
 ```bash
-export MODELZOO_VERSION="2.1.3"
+export MODELZOO_VERSION="3.0.0"
 mkdir -p models
 cd models
 sima-cli modelzoo -v "${MODELZOO_VERSION}" --boardtype modalix get yolo_26n

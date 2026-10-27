@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-MODEL_ZOO_VERSION = "2.1.3"
+MODEL_ZOO_VERSION = "3.0.0"
 
 
 class ModelPackageError(RuntimeError):
