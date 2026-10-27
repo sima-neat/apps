@@ -56,9 +56,10 @@ mkdir -p models/neat-segmentation models/neat-detection models/neat-tracking mod
 (cd models/neat-detection && sima-cli download "${MODELS}/rfdetr-small-backbone.tar.gz" && sima-cli download "${MODELS}/rfdetr-small-transformer.tar.gz")
 (cd models/neat-tracking && sima-cli download "${MODELS}/yolo26-detection/yolo26m-det-int8-b1.tar.gz")
 (cd models/neat-pose && sima-cli download "${MODELS}/yolo26-pose/yolo26m-pose-int8-b1.tar.gz")
-(cd models/neat-drone && sima-cli download "https://docs.sima.ai/pkg_downloads/SDK3.0.0/models/modalix/yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz")
 cp models/neat-tracking/yolo26m-det-int8-b1.tar.gz models/neat-blazepose/
 ```
+
+Download the tiny-drone model as the [tiny-drone tracker README](../../tracking/yolo26-tiny-drone-tracker/README.md#prepare-the-model) describes and place `yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz` in `models/neat-drone/`.
 
 BlazePose 3D also needs the BlazePose GHUM Heavy package. Download it as the [BlazePose 3D README](../../pose-estimation/multi-stream-blazepose3d/README.md#prepare-the-model) describes, then copy `blazepose_ghum_heavy_w16a16_mpk.tar.gz` into `models/neat-blazepose/`.
 
