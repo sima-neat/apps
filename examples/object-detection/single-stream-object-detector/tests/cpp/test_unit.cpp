@@ -150,6 +150,23 @@ bool test_usb_source_requires_camera_and_fps(const std::string& binary) {
                          "missing fps names source.fps");
 }
 
+// The camera's JPEG is forwarded as RTP/JPEG, which carries 8-pixel blocks up to 2040 per side.
+bool test_usb_source_rejects_sizes_rtp_jpeg_cannot_carry(const std::string& binary) {
+  bool ok = true;
+  for (const std::string& size :
+       {"  width: 3840\n  height: 2160\n", "  width: 1284\n  height: 720\n"}) {
+    const auto r = validate_config_body(kExampleName, binary, "usb_rtp_jpeg_size",
+                                        minimal_config("  type: usb\n"
+                                                       "  camera: cam0\n"
+                                                       "  fps: 30\n" +
+                                                       size));
+    ok &= expect_true(r.exit_code != 0, "usb size RTP/JPEG cannot carry is rejected") &&
+          expect_contains(r.stderr_text, "multiples of 8 and at most 2040",
+                          "rejected size names the RTP/JPEG limit");
+  }
+  return ok;
+}
+
 bool test_closed_output_is_terminal() {
   using simaai::neat::PullStatus;
   simaai::neat::PullError pull_error;
@@ -203,6 +220,7 @@ int main(int argc, char** argv) {
   ok &= test_empty_labels_is_rejected(binary);
   ok &= test_usb_source_validates_without_a_url(binary);
   ok &= test_usb_source_requires_camera_and_fps(binary);
+  ok &= test_usb_source_rejects_sizes_rtp_jpeg_cannot_carry(binary);
   ok &= test_closed_output_is_terminal();
   return ok ? 0 : 1;
 }

@@ -221,6 +221,11 @@ void validate_config(const AppConfig& cfg) {
     sima_examples::require(cfg.source_width > 0 && cfg.source_height > 0,
                            "source.width and source.height must be > 0 for source.type=usb");
     sima_examples::require(cfg.source_fps > 0, "source.fps must be > 0 for source.type=usb");
+    // The camera's JPEG goes to Insight as RTP/JPEG (RFC 2435): 8-pixel blocks, 2040 at most.
+    sima_examples::require(cfg.source_width <= 2040 && cfg.source_height <= 2040 &&
+                               cfg.source_width % 8 == 0 && cfg.source_height % 8 == 0,
+                           "source.width and source.height must be multiples of 8 and at most "
+                           "2040 for source.type=usb (RTP/JPEG)");
   } else {
     sima_examples::require(!cfg.source_url.empty(), "source.url or source.rtsp_url must be set");
   }
@@ -268,6 +273,9 @@ AppConfig load_app_config(const fs::path& config_path) {
     cfg.source_key = "source.camera";
   }
   cfg.source_codec = parse_source_codec(raw.string_or("source.codec", "h264"));
+  if (cfg.source_type == SourceType::Usb) {
+    cfg.source_codec = SourceCodec::Mjpeg; // the camera's own MJPEG; source.codec is not used
+  }
   cfg.latency_ms = raw.int_or("source.latency_ms", 200);
   cfg.tcp = raw.bool_or("source.tcp", true);
   cfg.source_fps = raw.int_or("source.fps", 0);
@@ -559,12 +567,25 @@ simaai::neat::UsbCameraInputOptions make_usb_camera_options(const AppConfig& cfg
   opt.width = static_cast<std::uint32_t>(cfg.source_width);
   opt.height = static_cast<std::uint32_t>(cfg.source_height);
   opt.framerate_num = static_cast<std::uint32_t>(cfg.source_fps);
+  // The camera's own JPEG: forwarded to Insight as is and decoded only for the model.
+  opt.output = simaai::neat::UsbCameraOutput::Jpeg;
+  return opt;
+}
+
+simaai::neat::SimaDecodeOptions make_usb_decode_options(const AppConfig& cfg,
+                                                        simaai::neat::FormatTag format) {
+  simaai::neat::SimaDecodeOptions opt;
+  opt.type = simaai::neat::SimaDecodeType::MJPEG;
+  opt.raw_output = true;
+  opt.out_format = format;
+  opt.dec_width = cfg.source_width;
+  opt.dec_height = cfg.source_height;
+  opt.dec_fps = cfg.source_fps;
   return opt;
 }
 
 simaai::neat::Graph make_source_graph(const AppConfig& cfg, const SourceGeometry& geometry) {
   if (cfg.source_type == SourceType::Usb) {
-    // Frames decode in place on the hardware decoder, in the camera's own sampling.
     simaai::neat::Graph camera("usb_camera");
     camera.add(simaai::neat::nodes::UsbCameraInput(make_usb_camera_options(cfg)));
     return camera;
@@ -670,20 +691,6 @@ std::unique_ptr<simaai::neat::Model> make_model(const AppConfig& cfg,
   return std::make_unique<simaai::neat::Model>(cfg.model_path, model_opt);
 }
 
-// The video branch input: the H.264 encoder takes NV12, so NV16 frames go through an EV74
-// ColorConvert into the encoder's NV12 surface first.
-simaai::neat::Graph video_input(bool nv16_frames) {
-  simaai::neat::Graph input("video_input");
-  input.add(simaai::neat::nodes::Input("video"));
-  if (nv16_frames) {
-    simaai::neat::ColorConvertOptions color;
-    color.output_format = simaai::neat::ImageFormat::NV12;
-    color.surface = simaai::neat::ImageSurfaceLayout::EncoderNv12;
-    input.add(simaai::neat::nodes::ColorConvert(color));
-  }
-  return input;
-}
-
 PipelineRuntime build_pipeline(const AppConfig& cfg) {
   PipelineRuntime runtime;
   const SourceGeometry geometry = resolve_source_geometry(cfg);
@@ -694,32 +701,43 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
                          "failed to probe source frame dimensions");
   sima_examples::require(runtime.output_fps > 0, "failed to resolve source frame rate");
 
-  // Most USB webcams send 4:2:2 MJPEG, which decodes to NV16. The model reads NV16 directly;
-  // the H.264 encoder needs NV12, so only the video branch converts it.
-  const bool nv16_frames =
-      cfg.source_type == SourceType::Usb &&
-      simaai::neat::usb_camera_info(make_usb_camera_options(cfg)).decoded_format ==
-          simaai::neat::FormatTag::NV16;
-  runtime.model = make_model(cfg, geometry, nv16_frames);
+  // A USB camera's JPEG goes to Insight unchanged and is decoded only for the model, in the
+  // camera's own sampling: most webcams send 4:2:2 MJPEG, which decodes to NV16, and the model
+  // reads NV16 directly. Other sources are decoded once and re-encoded as H.264 for Insight.
+  const bool usb = cfg.source_type == SourceType::Usb;
+  const simaai::neat::FormatTag decoded_format =
+      usb ? simaai::neat::usb_camera_info(make_usb_camera_options(cfg)).decoded_format
+          : simaai::neat::FormatTag::NV12;
+  runtime.model = make_model(cfg, geometry, decoded_format == simaai::neat::FormatTag::NV16);
   runtime.labels = load_labels(cfg.labels_path);
 
-  auto video_options = simaai::neat::nodes::groups::VideoSenderOptions::H264RtpUdpFromRaw(
-      runtime.frame_w, runtime.frame_h, runtime.output_fps);
+  auto video_options = usb ? simaai::neat::nodes::groups::VideoSenderOptions::Passthrough(
+                                 simaai::neat::nodes::groups::RtspCodec::MJPEG)
+                           : simaai::neat::nodes::groups::VideoSenderOptions::H264RtpUdpFromRaw(
+                                 runtime.frame_w, runtime.frame_h, runtime.output_fps);
   video_options.host = cfg.insight_host;
   video_options.channel = 0;
   video_options.video_port_base = cfg.video_port;
-  video_options.encoder.bitrate_kbps = 1000;
+  if (!usb) {
+    video_options.encoder.bitrate_kbps = 1000;
+  }
   runtime.video_port = video_options.video_port();
 
-  // Insight correlates the RTP timestamp with the metadata timestamp, so the encoder and the
+  // Insight correlates the RTP timestamp with the metadata timestamp, so the video and the
   // detections must stay in one Run and therefore on one GStreamer timeline.
   const bool save_frames = !cfg.save_dir.empty();
+  std::vector<std::string> decoded_outputs{"model"};
+  if (save_frames) {
+    decoded_outputs.push_back("frame");
+  }
+  if (!usb) {
+    decoded_outputs.insert(decoded_outputs.begin(), "video");
+  }
   auto source = make_source_graph(cfg, geometry);
-  auto branch = save_frames ? simaai::neat::graphs::Branch("source", {"video", "model", "frame"})
-                            : simaai::neat::graphs::Branch("source", {"video", "model"});
+  auto branch = simaai::neat::graphs::Branch(usb ? "decoded" : "source", decoded_outputs);
 
   simaai::neat::Graph video_graph("video");
-  video_graph.connect(video_input(nv16_frames),
+  video_graph.connect(simaai::neat::nodes::Input("video"),
                       simaai::neat::nodes::groups::VideoSender(video_options));
 
   simaai::neat::Graph model_graph("model");
@@ -728,8 +746,22 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
   detections_graph.add(
       simaai::neat::nodes::Output("detections", simaai::neat::OutputOptions::EveryFrame(4)));
 
-  runtime.graph.connect(source, branch);
-  runtime.graph.connect(branch, video_graph);
+  if (usb) {
+    simaai::neat::Graph decode_graph("decode");
+    decode_graph.connect(
+        simaai::neat::nodes::Input("decode"),
+        simaai::neat::nodes::SimaDecode(make_usb_decode_options(cfg, decoded_format)));
+    simaai::neat::GraphLinkOptions video_link;
+    video_link.policy = simaai::neat::GraphLinkPolicy::RealtimeLatestByStream;
+    auto split = simaai::neat::graphs::Branch("source", {"video", "decode"});
+    runtime.graph.connect(source, split);
+    runtime.graph.connect(split, video_graph, video_link);
+    runtime.graph.connect(split, decode_graph);
+    runtime.graph.connect(decode_graph, branch);
+  } else {
+    runtime.graph.connect(source, branch);
+    runtime.graph.connect(branch, video_graph);
+  }
   runtime.graph.connect(branch, model_graph);
   runtime.graph.connect(model_graph, detections_graph);
   if (save_frames) {

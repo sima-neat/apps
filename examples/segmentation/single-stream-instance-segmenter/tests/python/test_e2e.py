@@ -171,9 +171,10 @@ def _run_and_check(
     assert len(output_files) == saved
     assert_streamed_frames_are_usable(tmp_output_dir, saved)
 
-    # VideoSender always re-encodes to RTP H.264 (payload type 96) for Insight.
+    # Streams are re-encoded to RTP H.264 (payload type 96); a USB camera's own JPEG is
+    # forwarded as RTP/JPEG (payload type 26).
     assert len(video_packet) > 12 and video_packet[0] >> 6 == 2
-    assert video_packet[1] & 0x7F == 96
+    assert video_packet[1] & 0x7F == (26 if source["type"] == "usb" else 96)
 
     assert metadata.success, metadata.error
     for message in metadata.messages:

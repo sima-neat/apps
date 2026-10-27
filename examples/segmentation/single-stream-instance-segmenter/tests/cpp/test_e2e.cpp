@@ -181,9 +181,11 @@ int run_case(const std::string& binary, const ModelCase& model,
     std::cerr << "[FAIL] " << case_name << " " << frames_problem << "\n";
     rc = 1;
   } else if (video_bytes <= 12 || (video_packet[0] >> 6) != 2 ||
-             (video_packet[1] & 0x7F) != 96) {
-    // VideoSender always re-encodes to RTP H.264 (payload type 96) for Insight.
-    std::cerr << "[FAIL] " << case_name << " did not publish RTP H.264 video to Insight\n";
+             (video_packet[1] & 0x7F) != (source_case.type == "usb" ? 26 : 96)) {
+    // Streams are re-encoded to RTP H.264 (payload type 96); a USB camera's own JPEG is
+    // forwarded as RTP/JPEG (payload type 26).
+    std::cerr << "[FAIL] " << case_name << " did not publish RTP "
+              << (source_case.type == "usb" ? "JPEG" : "H.264") << " video to Insight\n";
     rc = 1;
   } else {
     const auto metadata = listener.wait_for_messages();

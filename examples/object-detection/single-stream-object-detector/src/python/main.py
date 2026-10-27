@@ -207,6 +207,13 @@ def validate_config(cfg: AppConfig) -> None:
             raise ValueError("source.width and source.height must be > 0 for source.type=usb")
         if cfg.source_fps <= 0:
             raise ValueError("source.fps must be > 0 for source.type=usb")
+        # The camera's JPEG goes to Insight as RTP/JPEG (RFC 2435): 8-pixel blocks, 2040 at most.
+        sides = (cfg.source_width, cfg.source_height)
+        if not all(0 < side <= 2040 and side % 8 == 0 for side in sides):
+            raise ValueError(
+                "source.width and source.height must be multiples of 8 and at most 2040 for "
+                "source.type=usb (RTP/JPEG)"
+            )
     elif not cfg.source_url:
         raise ValueError("source.url or source.rtsp_url must be set")
     if not cfg.model_path:
@@ -264,6 +271,10 @@ def load_app_config(config_path: Path) -> AppConfig:
     source_type = parse_source_type(string_or(source, "type", "rtsp"))
     if source_type == "usb":
         source_key = "source.camera"
+    # A USB camera sends its own MJPEG; source.codec is not used for it.
+    source_codec = (
+        "mjpeg" if source_type == "usb" else parse_source_codec(string_or(source, "codec", "h264"))
+    )
 
     cfg = AppConfig(
         model_path=string_or(model, "path"),
@@ -274,7 +285,7 @@ def load_app_config(config_path: Path) -> AppConfig:
         camera=string_or(source, "camera"),
         source_width=int_or(source, "width", 1920),
         source_height=int_or(source, "height", 1080),
-        source_codec=parse_source_codec(string_or(source, "codec", "h264")),
+        source_codec=source_codec,
         latency_ms=int_or(source, "latency_ms", 200),
         tcp=bool_or(source, "tcp", True),
         source_fps=int_or(source, "fps", 0),
@@ -523,12 +534,24 @@ def make_usb_camera_options(cfg: AppConfig):
     opt.width = cfg.source_width
     opt.height = cfg.source_height
     opt.framerate_num = cfg.source_fps
+    # The camera's own JPEG: forwarded to Insight as is and decoded only for the model.
+    opt.output = pyneat.UsbCameraOutput.Jpeg
+    return opt
+
+
+def make_usb_decode_options(cfg: AppConfig, decoded_format):
+    opt = pyneat.SimaDecodeOptions()
+    opt.type = pyneat.SimaDecodeType.MJPEG
+    opt.raw_output = True
+    opt.out_format = decoded_format
+    opt.dec_width = cfg.source_width
+    opt.dec_height = cfg.source_height
+    opt.dec_fps = cfg.source_fps
     return opt
 
 
 def make_source_graph(cfg: AppConfig, fps: int, width: int, height: int):
     if cfg.source_type == "usb":
-        # Frames decode in place on the hardware decoder, in the camera's own sampling.
         camera = pyneat.Graph("usb_camera")
         camera.add(pyneat.nodes.usb_camera_input(make_usb_camera_options(cfg)))
         return camera
@@ -610,28 +633,18 @@ def make_model(cfg: AppConfig, frame_w: int, frame_h: int, nv16_frames: bool = F
     return pyneat.Model(cfg.model_path, opt)
 
 
-def video_input(nv16_frames: bool):
-    """The video branch input: the H.264 encoder takes NV12, so NV16 frames go through an EV74
-    ColorConvert into the encoder's NV12 surface first."""
-    graph = pyneat.Graph("video_input")
-    graph.add(pyneat.nodes.input("video"))
-    if nv16_frames:
-        color = pyneat.ColorConvertOptions()
-        color.output_format = pyneat.ImageFormat.NV12
-        color.surface = pyneat.ImageSurfaceLayout.EncoderNv12
-        graph.add(pyneat.nodes.color_convert(color))
-    return graph
-
-
-def build_video_graph(cfg: AppConfig, width: int, height: int, fps: int, nv16_frames: bool):
-    sender_options = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(width, height, fps)
+def build_video_graph(cfg: AppConfig, width: int, height: int, fps: int):
+    if cfg.source_type == "usb":
+        sender_options = pyneat.VideoSenderOptions.passthrough(pyneat.RtspCodec.MJPEG)
+    else:
+        sender_options = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(width, height, fps)
+        sender_options.encoder.bitrate_kbps = 1000
     sender_options.host = cfg.insight_host
     sender_options.channel = 0
     sender_options.video_port_base = cfg.video_port
-    sender_options.encoder.bitrate_kbps = 1000
 
     graph = pyneat.Graph("video")
-    graph.connect(video_input(nv16_frames), pyneat.groups.video_sender(sender_options))
+    graph.connect(pyneat.nodes.input("video"), pyneat.groups.video_sender(sender_options))
     return graph, sender_options.video_port
 
 
@@ -642,24 +655,27 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
             "failed to resolve source frame rate; set source.fps or use a source with "
             "probeable FPS metadata"
         )
-    # Most USB webcams send 4:2:2 MJPEG, which decodes to NV16. The model reads NV16 directly;
-    # the H.264 encoder needs NV12, so only the video branch converts it.
-    nv16_frames = (
-        cfg.source_type == "usb"
-        and pyneat.usb_camera_info(make_usb_camera_options(cfg)).decoded_format
-        == pyneat.Format.NV16
+    # A USB camera's JPEG goes to Insight unchanged and is decoded only for the model, in the
+    # camera's own sampling: most webcams send 4:2:2 MJPEG, which decodes to NV16, and the model
+    # reads NV16 directly. Other sources are decoded once and re-encoded as H.264 for Insight.
+    usb = cfg.source_type == "usb"
+    decoded_format = (
+        pyneat.usb_camera_info(make_usb_camera_options(cfg)).decoded_format
+        if usb
+        else pyneat.Format.NV12
     )
-    model = make_model(cfg, frame_w, frame_h, nv16_frames)
+    model = make_model(cfg, frame_w, frame_h, decoded_format == pyneat.Format.NV16)
     labels = load_labels(cfg.labels_path)
 
-    video_graph, video_port = build_video_graph(cfg, frame_w, frame_h, fps, nv16_frames)
+    video_graph, video_port = build_video_graph(cfg, frame_w, frame_h, fps)
 
-    # Insight correlates the RTP timestamp with the metadata timestamp, so the encoder and the
+    # Insight correlates the RTP timestamp with the metadata timestamp, so the video and the
     # detections must stay in one Run and therefore on one GStreamer timeline.
     save_frames = bool(cfg.save_dir)
     source = make_source_graph(cfg, fps, frame_w, frame_h)
+    decoded_outputs = ["model", "frame"] if save_frames else ["model"]
     branch = pyneat.graphs.branch(
-        "source", ["video", "model", "frame"] if save_frames else ["video", "model"]
+        "decoded" if usb else "source", decoded_outputs if usb else ["video", *decoded_outputs]
     )
 
     model_graph = pyneat.Graph("model")
@@ -669,8 +685,22 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
     detections_graph.add(pyneat.nodes.output("detections", pyneat.OutputOptions.every_frame(4)))
 
     graph = pyneat.Graph()
-    graph.connect(source, branch)
-    graph.connect(branch, video_graph)
+    if usb:
+        decode_graph = pyneat.Graph("decode")
+        decode_graph.connect(
+            pyneat.nodes.input("decode"),
+            pyneat.nodes.sima_decode(make_usb_decode_options(cfg, decoded_format)),
+        )
+        video_link = pyneat.GraphLinkOptions()
+        video_link.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
+        split = pyneat.graphs.branch("source", ["video", "decode"])
+        graph.connect(source, split)
+        graph.connect(split, video_graph, video_link)
+        graph.connect(split, decode_graph)
+        graph.connect(decode_graph, branch)
+    else:
+        graph.connect(source, branch)
+        graph.connect(branch, video_graph)
     graph.connect(branch, model_graph)
     graph.connect(model_graph, detections_graph)
     if save_frames:

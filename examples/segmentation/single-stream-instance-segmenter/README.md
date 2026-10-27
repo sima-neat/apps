@@ -116,7 +116,7 @@ python3 -c "import pyneat; print(pyneat.usb_camera_ids())"
 v4l2-ctl --list-devices && v4l2-ctl -d /dev/video<N> --list-formats-ext
 ```
 
-The camera's frames decode in place on the hardware decoder in its own sampling. Most webcams send 4:2:2 MJPEG, which decodes to NV16: the model reads it directly, and only the H.264 output converts it to NV12 on the EV74 (saved frames convert on the CPU).
+The camera's own JPEG goes to Insight unchanged as RTP/JPEG, with no re-encoding, so view it with an Insight version that shows JPEG channels. The same JPEG is decoded on the hardware decoder only for the model, in the camera's own sampling: most webcams send 4:2:2 MJPEG, which decodes to NV16, and the model reads it directly. RTP/JPEG carries sizes up to 2040 pixels per side in multiples of 8, so 4K modes are rejected at startup. A 1080p webcam's MJPEG is about 66-90 Mbit/s on the network.
 
 ## Run
 

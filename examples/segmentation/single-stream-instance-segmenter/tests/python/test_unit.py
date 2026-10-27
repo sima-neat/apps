@@ -487,6 +487,22 @@ class TestSourceCombinations:
                 [(("source", "camera"), "cam0"), (("source", "fps"), 30), (("source", "width"), 0)],
                 "source.width and source.height must be > 0 for source.type=usb",
             ),
+            (
+                [
+                    (("source", "camera"), "cam0"),
+                    (("source", "fps"), 30),
+                    (("source", "width"), 3840),
+                ],
+                "multiples of 8 and at most 2040",
+            ),
+            (
+                [
+                    (("source", "camera"), "cam0"),
+                    (("source", "fps"), 30),
+                    (("source", "width"), 1284),
+                ],
+                "multiples of 8 and at most 2040",
+            ),
         ],
     )
     def test_usb_source_rejects_a_missing_camera_or_mode(self, tmp_path, overrides, message):
