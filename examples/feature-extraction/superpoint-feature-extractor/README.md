@@ -49,7 +49,7 @@ Run the remaining commands from `prebuilt-apps/`.
 | `superpoint_mpk.tar.gz` | Default | Direct artifact |
 
 ```bash
-export MODELZOO_VERSION="2.1.3"
+export MODELZOO_VERSION="3.0.0"
 mkdir -p models
 cd models
 sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/superpoint_mpk.tar.gz"
