@@ -181,13 +181,19 @@ as `RF-DETR detection configuration is valid`.
 
 ## Performance
 
-End-to-end throughput measured on Modalix under sustained load, using input streams with frame rates exceeding the application's processing capacity. Figures represent the maximum observed inference output rate at each resolution. Segmentation figures use `mask_grid_size: 108`.
+End-to-end throughput measured on Modalix with the Python application and no other workload on the board. Each figure is the average inference output rate, in FPS, over at least 20 seconds of continuous processing. The input streams run at 360 FPS for 720p H.264 and H.265, 60 FPS for 720p MJPEG, 120 FPS for 1080p, and 60 FPS for 4K. Segmentation figures use `mask_grid_size: 108`.
 
-| Input resolution | Codec | Small detector | Medium detector | Medium segmenter |
-| --- | --- | ---: | ---: | ---: |
-| 720p | H.264, H.265, MJPEG | Up to 70 FPS | Up to 50 FPS | Up to 40 FPS |
-| 1080p | H.264, H.265, MJPEG | Up to 70 FPS | Up to 50 FPS | Up to 40 FPS |
-| 4K | H.264 | Up to 60 FPS | Up to 50 FPS | Up to 40 FPS |
+| Input resolution | Codec | Nano detector | Small detector | Medium detector | Large detector | Medium segmenter |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| 720p | H.264 | 60 | 120 | 82 | 43 | 31 |
+| 720p | H.265 | 61 | 121 | 82 | 41 | 31 |
+| 720p | MJPEG | 62\* | 62\* | 62\* | 43 | 31 |
+| 1080p | H.264 | 113 | 114 | 82 | 43 | 32 |
+| 1080p | H.265 | 113 | 121 | 81 | 43 | 31 |
+| 1080p | MJPEG | 79 | 77 | 75 | 43 | 30 |
+| 4K | H.264 | 51 | 53 | 47 | 41 | 23 |
+
+\* Limited by the 60 FPS input stream.
 
 ## Source Files
 
