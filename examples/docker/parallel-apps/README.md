@@ -25,11 +25,11 @@ Each container runs one Apps example with its own config: instance segmentation,
 ## Prerequisites
 
 - The Neat SDK set up with your Modalix DevKit (`sima-cli sdk setup --devkit`). This starts the SDK's container registry and the `dk` DevKit commands. Run every command below in the Neat SDK shell.
-- The same Neat version in the SDK and on the DevKit. The containers run the DevKit's installed Neat with binaries built against the SDK's.
+- The same Neat Core on the DevKit as in the installed Apps bundle. The containers run the DevKit's Neat with binaries built against the bundle's Core; Install Apps shows how to check and match them.
 - A Neat Core that admits Modalix in containers (Core develop `e1eddd4` or newer). Older Cores identify the board from `/proc/device-tree`, which Docker hides, and every application exits with `closed owned platform capability unavailable`.
 - Docker on the DevKit. If it is missing, `dk container setup` installs it.
-- Six H.264 RTSP sources (people for segmentation and both pose examples, traffic for detection and tracking, drones in the sky for the drone tracker) and an [Insight](https://developer.sima.ai/software/tools/insight/) host reachable from the DevKit.
-- Insight with at least six channels. The SDK's Insight publishes four by default; set up the SDK with `sima-cli sdk setup --devkit <ip> --insight-video-channels 8`, or run Insight on the DevKit.
+- Six H.264 RTSP sources: people for segmentation and both pose examples, traffic for detection and tracking, and drones for the drone tracker. [Insight](https://developer.sima.ai/software/tools/insight/) can host them under RTSP Source from its video catalog, and the Apps bundle ships a drone clip at `assets/datasets/yolo26-tiny-drone-tracker/anti_uav_multi_uav_source_demo.mp4`.
+- Insight with at least six channels, reachable from the DevKit. Running Insight on the DevKit itself is the most reliable choice: the applications then send to `127.0.0.1`. Insight inside the SDK publishes four channels by default (set up the SDK with `--insight-video-channels 8` for six), and on macOS Docker Desktop can fail to forward some of its UDP ports.
 
 ## Install Apps
 
@@ -43,6 +43,16 @@ APP_DIR=examples/docker/parallel-apps
 ```
 
 Run the remaining commands from `prebuilt-apps/`.
+
+The applications in the bundle are built against the Core recorded in `deps/neat-core.json`. Compare it with the DevKit's Core, and update the DevKit if they differ:
+
+```bash
+cat deps/neat-core.json
+dk shell
+neat status
+neat update --core-only --channel develop --tag <spec from deps/neat-core.json>
+exit
+```
 
 ## Prepare the Model
 
@@ -59,9 +69,17 @@ mkdir -p models/neat-segmentation models/neat-detection models/neat-tracking mod
 cp models/neat-tracking/yolo26m-det-int8-b1.tar.gz models/neat-blazepose/
 ```
 
-Download the tiny-drone model as the [tiny-drone tracker README](../../tracking/yolo26-tiny-drone-tracker/README.md#prepare-the-model) describes and place `yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz` in `models/neat-drone/`.
+The tiny-drone and BlazePose GHUM Heavy packages come from the staging Model Registry. Newer `sima-cli` releases wrap a package in a zip, which the `unzip` step opens:
 
-BlazePose 3D also needs the BlazePose GHUM Heavy package. Download it as the [BlazePose 3D README](../../pose-estimation/multi-stream-blazepose3d/README.md#prepare-the-model) describes, then copy `blazepose_ghum_heavy_w16a16_mpk.tar.gz` into `models/neat-blazepose/`.
+```bash
+sima-cli models download --stg --id yolo26_tiny_drone --variant modalix_int8_tessellation_mla --branch main --output /tmp/registry
+sima-cli models download --stg --id blazepose_ghum_heavy --variant w16a16 --branch feat/blazepose-ghum-heavy --output /tmp/registry
+find /tmp/registry -name '*.zip' -execdir unzip -o -q {} \;
+find /tmp/registry -name yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz -exec cp {} models/neat-drone/ \;
+find /tmp/registry -name blazepose_ghum_heavy_w16a16_mpk.tar.gz -exec cp {} models/neat-blazepose/ \;
+```
+
+The BlazePose branch is temporary while [`sima-neat/models#136`](https://github.com/sima-neat/models/pull/136) is under review, as in the [BlazePose 3D README](../../pose-estimation/multi-stream-blazepose3d/README.md#prepare-the-model).
 
 Six applications share one MLA, so this example uses the INT8 segmentation package instead of the BF16 one its own README defaults to.
 
@@ -80,7 +98,7 @@ Each image holds its example's own `src/common/config.yaml`. Edit the six config
 | `neat-drone` | `examples/tracking/yolo26-tiny-drone-tracker` | `model.path: models/yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz` | one URL under `streams` | `output.insight.video_port_base: 9004`, `metadata_port_base: 9104` |
 | `neat-blazepose` | `examples/pose-estimation/multi-stream-blazepose3d` | `models.detector_path: models/yolo26m-det-int8-b1.tar.gz`, `models.pose_path: models/blazepose_ghum_heavy_w16a16_mpk.tar.gz` | one entry under `streams` with `url`, `width`, `height`, and `insight_channel: 5` | `output.insight.video_port_base: 9000`, `metadata_port_base: 9100` |
 
-Set `output.insight.host` in all six. The config is copied into the image, so after a config change run `build` and `deploy` again.
+Set `output.insight.host` in all six: `127.0.0.1` when Insight runs on the DevKit, otherwise the Insight host's address. The config is copied into the image, so after a config change run `build` and `deploy` again.
 
 ## Run
 
@@ -137,8 +155,8 @@ The MLA runs one model at a time, so each application's frame rate depends on th
 - If a container exits at startup, read its log with `dk container logs <container>`. The application reports configuration and model errors the same way as a normal run.
 - If every application exits with `closed owned platform capability unavailable`, the installed Core predates container support; update Core on the DevKit and in the SDK.
 - If an application runs on the DevKit but fails to open the MLA in a container, update the DevKit with `sima-cli update`.
-- If Insight runs inside the SDK on macOS and some channels stay blank, Docker Desktop is not forwarding all of Insight's UDP ports. Run Insight on the DevKit and set `output.insight.host: 127.0.0.1`, or use a Linux SDK host.
-- If an application fails to load a Neat library, install the SDK's Neat version on the DevKit.
+- If Insight runs inside the SDK on macOS and some channels stay blank, Docker Desktop is not forwarding all of Insight's UDP ports. Run Insight on the DevKit and set `output.insight.host: 127.0.0.1`.
+- If an application fails to load a Neat library or reports a version mismatch, the DevKit's Core differs from `deps/neat-core.json`; match them as Install Apps shows.
 - If two applications appear on one Insight channel, check that their configs use different Insight ports.
 
 ## Source Files
