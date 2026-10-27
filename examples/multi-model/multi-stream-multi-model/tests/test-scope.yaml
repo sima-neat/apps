@@ -1,11 +1,11 @@
 models:
   yolo_11s:
     source: url
-    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/model_zoo/gen2/object_detection/yolo_11s/yolo_11s_mpk.tar.gz
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo_11s_mpk.tar.gz
     file: yolo_11s_mpk.tar.gz
   yolo_11s_seg:
     source: url
-    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/model_zoo/gen2/instance_segmentation/yolo_11s_seg/yolo_11s_seg_mpk.tar.gz
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo_11s_seg_mpk.tar.gz
     file: yolo_11s_seg_mpk.tar.gz
   yolo26m-pose-int8-b1:
     source: url

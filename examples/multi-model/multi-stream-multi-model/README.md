@@ -43,38 +43,29 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-Download these four packages from `prebuilt-apps/`. The commands put them in
-`models/`. Set each `streams[].model` to the matching path below and keep the
-archives compressed.
+Model packages come from the Model Zoo release below, which can differ from the installed platform
+version. Set each `streams[].model` to the matching package and keep the archives compressed.
 
 | Stream | Task | Model package | Source | `decode` |
 | --- | --- | --- | --- | --- |
-| 0 | Detection | `models/yolo_11s_mpk.tar.gz` | Model Zoo | `yolov8` |
-| 1 | Segmentation | `models/yolo_11s_seg_mpk.tar.gz` | Model Zoo | `yolov8` |
+| 0 | Detection | `models/yolo_11s_mpk.tar.gz` | Direct artifact (Model Zoo `yolo_11s`) | `yolov8` |
+| 1 | Segmentation | `models/yolo_11s_seg_mpk.tar.gz` | Direct artifact (Model Zoo `yolo_11s_seg`) | `yolov8` |
 | 2 | Pose | `models/yolo26m-pose-int8-b1.tar.gz` | Direct artifact | `yolo26` |
 | 3 | Detection | `models/yolo26m-det-int8-b1.tar.gz` | Direct artifact | `yolo26` |
 
 ```bash
-MODELZOO_VERSION="2.1.3"
-MODEL_BASE="https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}"
+export MODELZOO_VERSION="3.0.0"
 mkdir -p models
 cd models
-
-# Stream 0: YOLO11s detection
-sima-cli download "${MODEL_BASE}/model_zoo/gen2/object_detection/yolo_11s/yolo_11s_mpk.tar.gz"
-# Stream 1: YOLO11s segmentation
-sima-cli download "${MODEL_BASE}/model_zoo/gen2/instance_segmentation/yolo_11s_seg/yolo_11s_seg_mpk.tar.gz"
-# Stream 2: YOLO26m pose
-sima-cli download "${MODEL_BASE}/models/modalix/yolo26-pose/yolo26m-pose-int8-b1.tar.gz"
-# Stream 3: YOLO26m detection
-sima-cli download "${MODEL_BASE}/models/modalix/yolo26-detection/yolo26m-det-int8-b1.tar.gz"
-
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo_11s_mpk.tar.gz"
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo_11s_seg_mpk.tar.gz"
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26-pose/yolo26m-pose-int8-b1.tar.gz"
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26-detection/yolo26m-det-int8-b1.tar.gz"
 cd ..
 ```
 
-The download release is 2.1.3, matching `modelzoo-version` in `deps/manifest.json`.
-These four packages are the tested set. The `decode` setting selects the package's head
-layout: use `yolov8` for these YOLO11 packages and `yolo26` for these YOLO26 packages.
+These four packages are the tested set. The `decode` setting selects the package's head layout:
+use `yolov8` for these YOLO11 packages and `yolo26` for these YOLO26 packages.
 
 ## Configure
 
