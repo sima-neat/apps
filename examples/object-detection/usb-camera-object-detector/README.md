@@ -14,7 +14,7 @@
 
 ## Concept
 
-Captures video from a USB camera, detects objects with YOLO26, and streams video with detection overlays to Insight.
+Captures video from a USB camera, detects objects with YOLO26, and streams the camera's own MJPEG with detection overlays to Insight.
 
 ## Preview
 
@@ -24,7 +24,7 @@ Captures video from a USB camera, detects objects with YOLO26, and streams video
 
 - A supported Modalix or DevKit target with [sima-cli](https://developer.sima.ai/software/tools/sima-cli/).
 - A USB camera that supports MJPEG (`MJPG`) and `v4l2-ctl` for checking its modes.
-- A reachable [Insight](https://developer.sima.ai/software/tools/insight/) receiver.
+- A reachable [Insight](https://developer.sima.ai/software/tools/insight/) receiver whose viewer shows MJPEG (RTP/JPEG) streams.
 
 ## Install Apps
 
@@ -105,7 +105,8 @@ v4l2-ctl --device "<camera-device>" --list-formats-ext
 
 Use a node whose output includes `MJPG` (MJPEG). If it lists no image formats,
 try the next node under the same camera. Choose a **width, height, and FPS listed
-under `MJPG`**. Device numbers can change after reconnecting the camera.
+under `MJPG`** whose width and height are multiples of 8 and at most 2040 (RTP/JPEG
+cannot carry 4K). Device numbers can change after reconnecting the camera.
 
 **2. Edit `${APP_DIR}/src/common/config.yaml`.** Set these values:
 
@@ -115,15 +116,15 @@ under `MJPG`**. Device numbers can change after reconnecting the camera.
 | `source.device` | The camera device you found above |
 | `source.width`, `source.height`, `source.fps` | One MJPEG mode supported by your camera |
 | `output.insight.host` | IP address of your Insight receiver |
-| `output.insight.video_port` | Insight's video UDP port (default `9000`) |
+| `output.insight.video_port` | Insight's video UDP port (default `9000`); it receives the camera's MJPEG |
 | `output.insight.metadata_port` | Insight's metadata UDP port (default `9100`) |
 
 The shipped `1920 × 1080 @ 30` values are only defaults. Change all three camera
 settings to match your device; 1080p and 90 FPS are not requirements. The app
 checks the requested mode at startup and reports an error if it is unsupported.
 
-Keep the other settings unchanged to start. For an upside-down camera, set
-`source.flip: rotate-180`.
+Keep the other settings unchanged to start. For an upside-down or mirrored camera,
+set **Orientation** in the Insight viewer settings; it turns the video and the overlays together.
 
 ## Run
 
@@ -170,14 +171,14 @@ The packaged C++ source is an implementation reference. Run the executable under
 
 To modify, compile, or test this example, use the [Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).
 
-Both implementations use Neat `Input`, `JpegParse`, and `SimaDecode` nodes for
-hardware MJPEG decoding. The app reads the camera's first frame to choose the decoder
-format; 4:2:2 frames are then converted to NV12 on the EV74 with a `ColorConvert` node, so
-the model and video sender receive NV12 from any camera and no camera-specific setting is
-needed. `source.override_fragment`
-is an optional diagnostic GStreamer source that must produce MJPEG at the configured
-width, height, and FPS; set `source.override_format` to its decoded format (NV12 or
-NV16). Leave the override empty for USB capture. End-to-end tests encode a fixed
-image as 4:2:2 and 4:2:0 MJPEG and check that the received H.264 stream carries its
-parameter sets, a keyframe, and picture slices without packet loss, alongside
-detection metadata.
+Both implementations branch each camera JPEG: `VideoSender` forwards it unchanged to
+Insight as RTP/JPEG, and `JpegParse` and `SimaDecode` decode it once on the hardware for
+the model. The app reads the camera's first frame to choose the decoder format, NV12 for
+4:2:0 or NV16 for 4:2:2, and the model preprocessing reads that format directly, so no
+conversion stage or encoder runs and no camera-specific setting is needed.
+`source.override_fragment` is an optional diagnostic GStreamer source that must produce
+MJPEG at the configured width, height, and FPS; set `source.override_format` to its
+decoded format (NV12 or NV16). Leave the override empty for USB capture. End-to-end tests
+encode a fixed image as 4:2:2 and 4:2:0 MJPEG and check that the received RTP/JPEG
+stream reassembles into complete frames of the configured size without packet loss,
+alongside detection metadata.

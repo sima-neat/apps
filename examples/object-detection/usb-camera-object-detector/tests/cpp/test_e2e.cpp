@@ -1,8 +1,9 @@
 // E2E test for usb-camera-object-detector.
 // There is no USB camera on the test target, so this drives the same graph from
 // the fixed-image MJPEG source declared under `testing.e2e` in config.yaml. That
-// exercises JpegParse/SimaDecode for 4:2:2 and 4:2:0 MJPEG, the NV12 branch, video
-// sender, model, box decode, and metadata send. USB capture requires camera validation.
+// exercises the MJPEG passthrough video sender, JpegParse/SimaDecode for 4:2:2 and 4:2:0
+// MJPEG straight into the model, box decode, and metadata send. USB capture requires
+// camera validation.
 #include "support/testing/test_config.h"
 #include "support/testing/metadata_json_listener.h"
 #include <nlohmann/json.hpp>
@@ -52,52 +53,52 @@ public:
     if (worker_.joinable()) worker_.join();
     if (socket_ >= 0) { ::close(socket_); socket_ = -1; }
   }
-  void verify() {
+  // At least 3 complete 1920x1080 JPEG frames of the source's RFC 2435 type arrived intact
+  // (type 0 is 4:2:2, 1 is 4:2:0; +64 with restart markers), so the camera JPEG was forwarded.
+  void verify(int expected_type) {
     close();
     if (!error_.empty()) throw std::runtime_error(error_);
-    // SPS, PPS, an IDR slice and at least 3 picture slices arrived intact.
-    const auto has = [&](int kind) { return std::ranges::count(kinds_, kind) > 0; };
-    const auto slices = std::ranges::count_if(kinds_, [](int kind) { return kind == 1 || kind == 5; });
-    if (!has(7) || !has(8) || !has(5) || slices < 3)
-      throw std::runtime_error("received H.264 lacks SPS, PPS, an IDR slice or 3 picture slices");
+    if (frame_types_.size() < 3)
+      throw std::runtime_error("received fewer than 3 complete RTP/JPEG frames");
+    for (const int type : frame_types_)
+      if (type % 64 != expected_type)
+        throw std::runtime_error("RTP/JPEG type does not match source");
   }
 private:
   void receive(std::stop_token stop) {
     try {
       std::array<unsigned char, 65536> packet{};
-      int fragment = 0;  // NAL unit type of the FU-A in progress, 0 when none
+      std::size_t assembled = 0;  // JPEG bytes of the frame in progress
       int sequence = -1;
       while (!stop.stop_requested()) {
         const auto size = ::recv(socket_, packet.data(), packet.size(), 0);
         if (size < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) continue;
-        if (size <= 12 || packet[0] != 0x80 || (packet[1] & 0x7f) != 96)
-          throw std::runtime_error("invalid H.264 RTP packet");
+        if (size <= 20 || packet[0] != 0x80 || (packet[1] & 0x7f) != 26)
+          throw std::runtime_error("invalid RTP/JPEG packet");
         const int current = (packet[2] << 8) | packet[3];
         if (sequence >= 0 && current != ((sequence + 1) & 65535))
           throw std::runtime_error("lost RTP packet");
         sequence = current;
-        const auto* payload = packet.data() + 12;
-        const int kind = payload[0] & 31;
-        if (kind >= 1 && kind <= 23) {
-          if (fragment) throw std::runtime_error("incomplete RTP fragment");
-          kinds_.push_back(kind);
-        } else if (kind == 28 && size > 14) {
-          if (payload[1] & 0x80) {
-            if (fragment) throw std::runtime_error("incomplete RTP fragment");
-            fragment = payload[1] & 31;
-          }
-          if (!fragment) throw std::runtime_error("missing RTP fragment start");
-          if (payload[1] & 0x40) {
-            kinds_.push_back(fragment);
-            fragment = 0;
-          }
-        } else {
-          throw std::runtime_error("unexpected H.264 RTP payload");
+        const auto* jpeg = packet.data() + 12;  // RFC 2435 main header
+        const std::size_t offset = (jpeg[1] << 16) | (jpeg[2] << 8) | jpeg[3];
+        const int type = jpeg[4];
+        if (offset != assembled) throw std::runtime_error("incomplete RTP/JPEG frame");
+        if (jpeg[6] * 8 != 1920 || jpeg[7] * 8 != 1080)
+          throw std::runtime_error("RTP/JPEG frame is not 1920x1080");
+        std::size_t header = 8 + (type >= 64 ? 4 : 0);
+        if (offset == 0 && jpeg[5] >= 128)
+          header += 4 + ((jpeg[header + 2] << 8) | jpeg[header + 3]);
+        if (static_cast<std::size_t>(size) < 12 + header)
+          throw std::runtime_error("truncated RTP/JPEG header");
+        assembled += static_cast<std::size_t>(size) - 12 - header;
+        if (packet[1] & 0x80) {  // marker: last packet of the frame
+          frame_types_.push_back(type);
+          assembled = 0;
         }
       }
     } catch (const std::exception& error) { error_ = error.what(); }
   }
-  std::vector<int> kinds_;
+  std::vector<int> frame_types_;
   int socket_ = -1;
   std::string error_;
   std::jthread worker_;
@@ -216,14 +217,14 @@ int main(int argc, char** argv) try {
       std::cerr << "stdout:\n" << result.stdout_text << "\n";
       rc = 1;
     } else {
-      video.verify();
+      video.verify(raw_format == "Y42B" ? 0 : 1);
       const auto received = listener.wait_for_messages();
       const auto following = listener.wait_for_messages();
       verify_metadata(received);
       verify_metadata(following);
       if (following.messages.back().timestamp_ms <= received.messages.back().timestamp_ms)
         throw std::runtime_error("metadata timestamps did not advance");
-      std::cout << "[OK] received intact H.264 and nonempty valid detection metadata\n";
+      std::cout << "[OK] received intact RTP/JPEG and nonempty valid detection metadata\n";
       std::cout << "[OK] published " << kFrames << " frames from the fixed-image source\n";
     }
 

@@ -66,7 +66,6 @@ std::string config_body(const std::string& extra_source = "",
       .append("  width: 1920\n")
       .append("  height: 1080\n")
       .append("  fps: 30\n")
-      .append("  flip: none\n")
       .append(extra_source)
       .append("inference:\n")
       .append("  frames: 0\n")
@@ -83,8 +82,7 @@ std::string config_body(const std::string& extra_source = "",
       .append("  insight:\n")
       .append("    host: 127.0.0.1\n")
       .append("    video_port: 9000\n")
-      .append("    metadata_port: 9100\n")
-      .append("    bitrate_kbps: 4000\n");
+      .append("    metadata_port: 9100\n");
 }
 
 bool validate_rejects(const std::string& binary, const std::string& test_name,
@@ -191,28 +189,9 @@ bool test_source_reports_mjpeg_capture(const std::string& binary) {
   const auto description = source_description_for(binary, "test_source_reports_mjpeg_capture", config_body(), &ok);
   return ok && expect_contains(description, "V4L2 device=/dev/video16", "configured camera") &&
          expect_contains(description, "image/jpeg,width=1920,height=1080,framerate=30/1", "encoded caps") &&
-         expect_contains(description, "Input -> JpegParse -> SimaDecode(MJPEG) -> NV12",
-                         "public decoder route");
-}
-
-bool test_source_omits_flip_by_default(const std::string& binary) {
-  bool ok = true;
-  const std::string frag =
-      source_description_for(binary, "test_source_omits_flip_by_default", config_body(), &ok);
-  if (!ok) {
-    return false;
-  }
-  return expect_absent(frag, "videoflip", "no videoflip when source.flip is none");
-}
-
-bool test_source_inserts_flip(const std::string& binary) {
-  bool ok = true;
-  const std::string frag =
-      source_description_for(binary, "test_source_inserts_flip", config_body("  flip: rotate-180\n"), &ok);
-  if (!ok) {
-    return false;
-  }
-  return expect_contains(frag, "flip=rotate-180", "configured flip is reported");
+         expect_contains(description,
+                         "Input -> {VideoSender(MJPEG passthrough), JpegParse -> SimaDecode(MJPEG) -> model}",
+                         "passthrough video and decoded model routes");
 }
 
 bool test_source_honours_capture_mode(const std::string& binary) {
@@ -443,8 +422,6 @@ int main(int argc, char** argv) {
   ok &= test_missing_config_file_fails_cleanly(binary);
   ok &= test_shipped_config_validates(binary);
   ok &= test_source_reports_mjpeg_capture(binary);
-  ok &= test_source_omits_flip_by_default(binary);
-  ok &= test_source_inserts_flip(binary);
   ok &= test_source_honours_capture_mode(binary);
   ok &= test_override_replaces_the_camera(binary);
   ok &= test_wrapped_override_fragment_is_folded(binary);
@@ -464,8 +441,6 @@ int main(int argc, char** argv) {
                          "source.height", "zero source.height");
   ok &= validate_rejects(binary, "test_rejects_zero_fps", config_body("  fps: 0\n"), "source.fps",
                          "zero source.fps");
-  ok &= validate_rejects(binary, "test_rejects_bad_flip", config_body("  flip: rotate-90\n"),
-                         "source.flip", "unsupported source.flip");
   ok &= validate_rejects(binary, "test_rejects_negative_frames", config_body("", "  frames: -1\n"),
                          "inference.frames", "negative inference.frames");
   ok &= validate_rejects(binary, "test_rejects_out_of_range_min_score",
@@ -496,10 +471,13 @@ int main(int argc, char** argv) {
                          config_body("", "", "  queue_depth: 0\n"), "runtime.queue_depth",
                          "zero runtime.queue_depth");
 
-  ok &= validate_rejects(binary, "test_odd_width", config_body("  width: 1279\n"),
-                         "source.width", "odd NV12 width");
-  ok &= validate_rejects(binary, "test_odd_height", config_body("  height: 719\n"),
-                         "source.height", "odd NV12 height");
+  // RTP/JPEG carries each side / 8 in one byte.
+  ok &= validate_rejects(binary, "test_width_not_multiple_of_8", config_body("  width: 1284\n"),
+                         "source.width", "width that RTP/JPEG cannot carry");
+  ok &= validate_rejects(binary, "test_height_not_multiple_of_8", config_body("  height: 722\n"),
+                         "source.height", "height that RTP/JPEG cannot carry");
+  ok &= validate_rejects(binary, "test_width_above_2040", config_body("  width: 3840\n"),
+                         "at most 2040", "4K width");
 
   for (const std::string key : {"video_port", "metadata_port"}) {
     const std::string original = key + (key == "video_port" ? ": 9000" : ": 9100");

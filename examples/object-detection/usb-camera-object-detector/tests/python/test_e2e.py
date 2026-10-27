@@ -2,8 +2,8 @@
 
 There is no USB camera on the test target, so these drive the same graph from
 the fixed-image MJPEG source declared under `testing.e2e` in config.yaml. That
-covers JpegParse/SimaDecode for 4:2:2 and 4:2:0 MJPEG, the NV12 branch, video
-sender, model, box decode, and metadata send. USB capture requires camera
+covers the MJPEG passthrough video sender, JpegParse/SimaDecode for 4:2:2 and
+4:2:0 MJPEG straight into the model, box decode, and metadata send. USB capture requires camera
 validation separately.
 """
 
@@ -33,48 +33,44 @@ def shipped_test_override() -> str:
 
 
 class VideoReceiver:
-    """Collect H.264 RTP NAL unit types while the application runs; fail on loss or bad packets."""
+    """Collect complete RTP/JPEG frames while the application runs; fail on loss or bad packets."""
     def __init__(self):
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.socket.bind(("127.0.0.1", int(os.environ.get("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 19200))))
         self.socket.settimeout(0.1)
         self.port = self.socket.getsockname()[1]
-        self.kinds = []
+        self.frame_types = []
         self.stop = threading.Event()
         self.error = None
         self.thread = threading.Thread(target=self.receive)
 
     def receive(self):
         sequence = None
-        fragment = None
+        assembled = 0  # JPEG bytes of the frame in progress
         try:
             while not self.stop.is_set():
                 try:
                     packet = self.socket.recv(65536)
                 except socket.timeout:
                     continue
-                assert len(packet) > 12 and packet[0] == 0x80
-                assert packet[1] & 0x7f == 96
+                assert len(packet) > 20 and packet[0] == 0x80
+                assert packet[1] & 0x7f == 26, "not an RTP/JPEG packet"
                 current = int.from_bytes(packet[2:4], "big")
                 if sequence is not None:
                     assert current == (sequence + 1) % 65536, "lost RTP packet"
                 sequence = current
-                payload = packet[12:]
-                kind = payload[0] & 31
-                if 1 <= kind <= 23:
-                    assert fragment is None
-                    self.kinds.append(kind)
-                elif kind == 28:
-                    assert len(payload) > 2
-                    if payload[1] & 0x80:
-                        assert fragment is None
-                        fragment = payload[1] & 31
-                    assert fragment is not None
-                    if payload[1] & 0x40:
-                        self.kinds.append(fragment)
-                        fragment = None
-                else:
-                    raise AssertionError(f"unexpected H.264 RTP payload: {kind}")
+                jpeg = packet[12:]  # RFC 2435 main header
+                offset, jpeg_type, q = int.from_bytes(jpeg[1:4], "big"), jpeg[4], jpeg[5]
+                assert offset == assembled, "incomplete RTP/JPEG frame"
+                assert (jpeg[6] * 8, jpeg[7] * 8) == (1920, 1080), "RTP/JPEG frame is not 1920x1080"
+                header = 8 + (4 if jpeg_type >= 64 else 0)
+                if offset == 0 and q >= 128:
+                    header += 4 + int.from_bytes(jpeg[header + 2:header + 4], "big")
+                assert len(jpeg) >= header, "truncated RTP/JPEG header"
+                assembled += len(jpeg) - header
+                if packet[1] & 0x80:  # marker: last packet of the frame
+                    self.frame_types.append(jpeg_type)
+                    assembled = 0
         except BaseException as error:
             self.error = error
 
@@ -87,11 +83,12 @@ class VideoReceiver:
         self.thread.join()
         self.socket.close()
 
-    def assert_h264(self):
-        """SPS, PPS, an IDR slice and at least 3 picture slices arrived intact."""
+    def assert_jpeg(self, expected_type):
+        """At least 3 complete 1920x1080 frames of the source's RFC 2435 type arrived intact
+        (0 is 4:2:2, 1 is 4:2:0; +64 with restart markers), so the camera JPEG was forwarded."""
         assert self.error is None, str(self.error)
-        assert {7, 8, 5} <= set(self.kinds), f"NAL unit types received: {self.kinds}"
-        assert sum(kind in (1, 5) for kind in self.kinds) >= 3, f"NAL unit types: {self.kinds}"
+        assert len(self.frame_types) >= 3, f"complete RTP/JPEG frames: {len(self.frame_types)}"
+        assert {t % 64 for t in self.frame_types} == {expected_type}, f"types: {self.frame_types}"
 
 
 @pytest.mark.e2e
@@ -140,7 +137,7 @@ class TestE2E:
             assert result.returncode == 0, result.stdout + result.stderr
             received = listener.wait_for_messages(5)
             following = listener.wait_for_messages(5)
-        video.assert_h264()
+        video.assert_jpeg(0 if raw_format == "Y42B" else 1)
         assert received.success, received.error
         assert following.success, following.error
         assert following.messages[-1].timestamp_ms > received.messages[-1].timestamp_ms

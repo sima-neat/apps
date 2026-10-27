@@ -1,12 +1,13 @@
 """USB (UVC) camera YOLO26 object detection with Insight output, using pyneat.
 
-OpenCV captures compressed MJPEG through V4L2. Public Neat input and decoder
-nodes turn each encoded sample into NV12 before branching:
+OpenCV captures compressed MJPEG through V4L2. Each JPEG is sent to Insight
+unchanged and decoded once for the model, in the camera's own sampling (NV12 for
+4:2:0, NV16 for 4:2:2), which the model preprocessing reads directly:
 
-    Input -> JpegParse -> SimaDecode [-> ColorConvert for 4:2:2] -> NV12 -> branch -+-> video_sender
-                                                                                  `-> model
+    Input -> branch -+-> video_sender (MJPEG passthrough, RTP/JPEG)
+                     `-> JpegParse -> SimaDecode -> model
 
-Both branches stay inside one Run so the encoder and the detections share a
+Both branches stay inside one Run so the video and the detections share a
 GStreamer timeline; Insight correlates the RTP timestamp with the metadata
 timestamp and cannot render overlays if they drift apart.
 
@@ -34,13 +35,8 @@ DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
 BBOX_RECORD_FORMAT = "<iiiifi"
 BBOX_RECORD_SIZE = struct.calcsize(BBOX_RECORD_FORMAT)
 
-#: `videoflip` methods, keyed by the config spelling.
-FLIP_METHODS = {
-    "none": "",
-    "rotate-180": "rotate-180",
-    "horizontal-flip": "horizontal-flip",
-    "vertical-flip": "vertical-flip",
-}
+#: RTP/JPEG (RFC 2435) stores each side / 8 in one byte.
+MAX_RTP_JPEG_SIDE = 2040
 
 np = None
 pyneat = None
@@ -56,7 +52,6 @@ class AppConfig:
     width: int
     height: int
     fps: int
-    flip: str
     override_fragment: str
     frames: int
     min_score: float
@@ -68,7 +63,6 @@ class AppConfig:
     insight_host: str
     video_port: int
     metadata_port: int
-    bitrate_kbps: int
     override_format: str = "NV12"  # Decoded format of the override's MJPEG frames.
 
 
@@ -208,13 +202,6 @@ def bool_or(raw: dict, key: str, default: bool) -> bool:
     return value
 
 
-def parse_flip(value: str) -> str:
-    lowered = value.strip().lower()
-    if lowered in FLIP_METHODS:
-        return lowered
-    raise ValueError(f"source.flip must be one of {', '.join(sorted(FLIP_METHODS))}")
-
-
 def validate_config(cfg: AppConfig) -> None:
     """Raise ValueError when a resolved configuration cannot be run."""
     if not cfg.model_path:
@@ -229,8 +216,10 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError(f"source.width must be > 0, got {cfg.width}")
     if cfg.height <= 0:
         raise ValueError(f"source.height must be > 0, got {cfg.height}")
-    if cfg.width % 2 or cfg.height % 2:
-        raise ValueError("source.width and source.height must be even for NV12")
+    if (cfg.width % 8 or cfg.height % 8
+            or cfg.width > MAX_RTP_JPEG_SIDE or cfg.height > MAX_RTP_JPEG_SIDE):
+        raise ValueError(
+            "source.width and source.height must be multiples of 8 and at most 2040 for RTP/JPEG")
     if cfg.fps <= 0:
         raise ValueError(f"source.fps must be > 0, got {cfg.fps}")
     if cfg.frames < 0:
@@ -251,8 +240,6 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError(f"output.insight.video_port must be in [1, 65535], got {cfg.video_port}")
     if not 1 <= cfg.metadata_port <= 65535:
         raise ValueError(f"output.insight.metadata_port must be in [1, 65535], got {cfg.metadata_port}")
-    if cfg.bitrate_kbps <= 0:
-        raise ValueError(f"output.insight.bitrate_kbps must be > 0, got {cfg.bitrate_kbps}")
 
 
 def build_app_config(raw: dict) -> AppConfig:
@@ -275,7 +262,6 @@ def build_app_config(raw: dict) -> AppConfig:
         width=int_or(source, "width", 1920),
         height=int_or(source, "height", 1080),
         fps=int_or(source, "fps", 30),
-        flip=parse_flip(string_or(source, "flip", "none")),
         override_fragment=string_or(source, "override_fragment"),
         frames=int_or(inference, "frames", 0),
         min_score=float_or(inference, "min_score", 0.30),
@@ -287,7 +273,6 @@ def build_app_config(raw: dict) -> AppConfig:
         insight_host=string_or(insight, "host"),
         video_port=int_or(insight, "video_port", 9000),
         metadata_port=int_or(insight, "metadata_port", 9100),
-        bitrate_kbps=int_or(insight, "bitrate_kbps", 4000),
         override_format=string_or(source, "override_format", "NV12"),
     )
 
@@ -318,7 +303,7 @@ def source_description(cfg: AppConfig) -> str:
     if cfg.override_fragment:
         return cfg.override_fragment
     return (f"V4L2 device={cfg.device} caps={camera_caps(cfg)} "
-            f"-> Input -> JpegParse -> SimaDecode(MJPEG) -> NV12 flip={cfg.flip}")
+            "-> Input -> {VideoSender(MJPEG passthrough), JpegParse -> SimaDecode(MJPEG) -> model}")
 
 
 def jpeg_end(data: bytes) -> int:
@@ -485,11 +470,13 @@ def build_metadata_boxes(
     return metadata_boxes
 
 
-def make_model(cfg: AppConfig):
+def make_model(cfg: AppConfig, fmt):
     opt = pyneat.ModelOptions()
     opt.preprocess.kind = pyneat.InputKind.Image
     opt.preprocess.enable = pyneat.AutoFlag.On
-    opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.NV12
+    opt.preprocess.color_convert.input_format = (
+        pyneat.PreprocessColorFormat.NV16 if fmt == pyneat.Format.NV16
+        else pyneat.PreprocessColorFormat.NV12)
     opt.preprocess.input_max_width = cfg.width
     opt.preprocess.input_max_height = cfg.height
     opt.preprocess.preset = pyneat.NormalizePreset.COCO_YOLO
@@ -501,13 +488,10 @@ def make_model(cfg: AppConfig):
 
 
 def build_video_graph(cfg: AppConfig):
-    sender_options = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(
-        cfg.width, cfg.height, cfg.fps
-    )
+    sender_options = pyneat.VideoSenderOptions.passthrough(pyneat.RtspCodec.MJPEG)
     sender_options.host = cfg.insight_host
     sender_options.channel = 0
     sender_options.video_port_base = cfg.video_port
-    sender_options.encoder.bitrate_kbps = cfg.bitrate_kbps
 
     graph = pyneat.Graph("video")
     graph.connect(pyneat.nodes.input("video"), pyneat.groups.video_sender(sender_options))
@@ -520,11 +504,22 @@ def build_pipeline(cfg: AppConfig, camera=None) -> PipelineRuntime:
     fmt = (pyneat.jpeg_output_format(first_frame) if first_frame is not None
            else getattr(pyneat.Format, cfg.override_format))
     labels = load_labels(cfg.labels_path)
-    model = make_model(cfg)
+    model = make_model(cfg, fmt)
     video_graph, video_port = build_video_graph(cfg)
 
+    # The decoder writes the camera's own sampling and the model preprocessing reads it
+    # directly, so a 4:2:2 camera's NV16 reaches the EV74 with no conversion stage or copy.
+    decode = pyneat.SimaDecodeOptions()
+    decode.type = pyneat.SimaDecodeType.MJPEG
+    decode.raw_output = True
+    decode.out_format = fmt
+    decode.dec_width, decode.dec_height = cfg.width, cfg.height
+    decode.dec_fps = cfg.fps
     model_graph = pyneat.Graph("model")
-    model_graph.connect(pyneat.nodes.input("model"), model)
+    model_graph.add(pyneat.nodes.input("model"))
+    model_graph.add(pyneat.nodes.jpeg_parse())
+    model_graph.add(pyneat.nodes.sima_decode(decode))
+    model_graph.add(model)
 
     detections_graph = pyneat.Graph("detections")
     detections_graph.add(pyneat.nodes.output("detections", pyneat.OutputOptions.every_frame(4)))
@@ -534,7 +529,7 @@ def build_pipeline(cfg: AppConfig, camera=None) -> PipelineRuntime:
     live = pyneat.GraphLinkOptions()
     live.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
 
-    source_graph = pyneat.Graph("capture_decode")
+    source_graph = pyneat.Graph("capture")
     seed = None
     if camera is None:
         source_graph.add(pyneat.nodes.custom(cfg.override_fragment, pyneat.InputRole.Source))
@@ -547,24 +542,7 @@ def build_pipeline(cfg: AppConfig, camera=None) -> PipelineRuntime:
         source_graph.add(pyneat.nodes.input("jpeg", ingress))
         seed = pyneat.make_encoded_sample(first_frame, camera.caps, pts_ns=0,
                                           duration_ns=1_000_000_000 // cfg.fps)
-    # The override fragment supplies MJPEG too, so both sources share the hardware decode.
-    # The decoder writes the camera's own sampling; a 4:2:2 camera's NV16 is converted to
-    # NV12 on the EV74, in the encoder's surface so the video sender takes it without a copy.
-    decode = pyneat.SimaDecodeOptions()
-    decode.type = pyneat.SimaDecodeType.MJPEG
-    decode.raw_output = True
-    decode.out_format = fmt
-    decode.dec_width, decode.dec_height = cfg.width, cfg.height
-    decode.dec_fps = cfg.fps
-    source_graph.add(pyneat.nodes.jpeg_parse())
-    source_graph.add(pyneat.nodes.sima_decode(decode))
-    if fmt == pyneat.Format.NV16:
-        color = pyneat.ColorConvertOptions()
-        color.output_format = pyneat.ImageFormat.NV12
-        color.surface = pyneat.ImageSurfaceLayout.EncoderNv12
-        source_graph.add(pyneat.nodes.color_convert(color))
-    if cfg.flip != "none":
-        source_graph.add(pyneat.nodes.custom(f"videoflip method={FLIP_METHODS[cfg.flip]}"))
+    # The override fragment supplies MJPEG too, so both sources take the same branches.
 
     branch = pyneat.graphs.branch("camera", ["video", "model"])
     graph = pyneat.Graph("usb_camera_object_detector")
@@ -723,7 +701,7 @@ def main(argv: list[str] | None = None) -> int:
         print(
             f"[validate] model={cfg.model_path} classes={len(labels)} "
             f"source={source_label} stream={cfg.width}x{cfg.height}@{cfg.fps} "
-            f"flip={cfg.flip} min_score={cfg.min_score:.2f} nms_iou={cfg.nms_iou:.2f} "
+            f"min_score={cfg.min_score:.2f} nms_iou={cfg.nms_iou:.2f} "
             f"max_detections={cfg.max_detections} queue_depth={cfg.queue_depth} "
             f"insight={cfg.insight_host}:{cfg.video_port}/{cfg.metadata_port}"
         )

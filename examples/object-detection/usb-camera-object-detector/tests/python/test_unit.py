@@ -40,7 +40,6 @@ def valid_config() -> dict:
             "width": 1920,
             "height": 1080,
             "fps": 30,
-            "flip": "none",
             "override_fragment": "",
         },
         "inference": {"frames": 0, "min_score": 0.30, "nms_iou": 0.50, "max_detections": 100},
@@ -50,7 +49,6 @@ def valid_config() -> dict:
                 "host": "127.0.0.1",
                 "video_port": 9000,
                 "metadata_port": 9100,
-                "bitrate_kbps": 4000,
             }
         },
     }
@@ -123,7 +121,6 @@ class TestConfigLoading:
         assert cfg.model_path == "<model-path>"
         assert cfg.labels_path.name == "coco_label.txt"
         assert (cfg.width, cfg.height, cfg.fps) == (1920, 1080, 30)
-        assert cfg.flip == "none"
 
     def test_shipped_config_host_is_a_placeholder(self):
         """The committed config must not carry a real lab IP."""
@@ -158,8 +155,10 @@ class TestConfigLoading:
         [
             ("source", "width", 0, "source.width"),
             ("source", "width", -1, "source.width"),
-            ("source", "width", 1279, "source.width"),
-            ("source", "height", 719, "source.height"),
+            # RTP/JPEG carries each side / 8 in one byte.
+            ("source", "width", 1284, "source.width"),
+            ("source", "height", 722, "source.height"),
+            ("source", "width", 3840, "at most 2040"),
             ("source", "height", 0, "source.height"),
             ("source", "fps", 0, "source.fps"),
             ("source", "device", "", "source.device"),
@@ -180,8 +179,7 @@ class TestConfigLoading:
     @pytest.mark.parametrize(
         "key,message",
         [("host", "output.insight.host"), ("video_port", "output.insight.video_port"),
-         ("metadata_port", "output.insight.metadata_port"),
-         ("bitrate_kbps", "output.insight.bitrate_kbps")],
+         ("metadata_port", "output.insight.metadata_port")],
     )
     def test_insight_settings_are_required(self, key, message):
         raw = valid_config()
@@ -231,32 +229,6 @@ class TestConfigLoading:
     def test_non_boolean_profile_is_rejected(self):
         with pytest.raises(ValueError, match="profile must be true or false"):
             main.build_app_config(config_with(runtime={"profile": "yes"}))
-
-
-@pytest.mark.unit
-class TestFlip:
-    """Validate flip parsing, which maps onto videoflip methods."""
-
-    @pytest.mark.parametrize(
-        "value", ["none", "rotate-180", "horizontal-flip", "vertical-flip"]
-    )
-    def test_supported_methods(self, value):
-        assert main.parse_flip(value) == value
-
-    @pytest.mark.parametrize("value", ["NONE", " Rotate-180 ", "Vertical-Flip"])
-    def test_parsing_is_case_and_space_insensitive(self, value):
-        assert main.parse_flip(value) == value.strip().lower()
-
-    @pytest.mark.parametrize("value", ["rotate-90", "flip", "", "mirror"])
-    def test_unsupported_methods_are_rejected(self, value):
-        with pytest.raises(ValueError, match="source.flip"):
-            main.parse_flip(value)
-
-    def test_every_method_has_a_videoflip_mapping(self):
-        assert set(main.FLIP_METHODS) == {
-            "none", "rotate-180", "horizontal-flip", "vertical-flip"
-        }
-        assert main.FLIP_METHODS["none"] == ""
 
 
 class FakeCapture:
@@ -682,12 +654,11 @@ class TestTwinParity:
     @pytest.mark.parametrize(
         "key",
         ["model.path", "model.labels", "source.device", "source.width", "source.height",
-         "source.fps", "source.flip", "source.override_fragment", "source.override_format",
+         "source.fps", "source.override_fragment", "source.override_format",
          "inference.frames",
          "inference.min_score", "inference.nms_iou", "inference.max_detections",
          "runtime.profile", "runtime.profile_interval", "runtime.queue_depth",
-         "output.insight.host", "output.insight.video_port", "output.insight.metadata_port",
-         "output.insight.bitrate_kbps"],
+         "output.insight.host", "output.insight.video_port", "output.insight.metadata_port"],
     )
     def test_cpp_reads_every_config_key(self, key):
         assert f'"{key}"' in self.cpp_source(), f"C++ twin does not read {key}"

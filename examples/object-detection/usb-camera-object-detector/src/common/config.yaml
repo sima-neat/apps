@@ -4,10 +4,9 @@ model:                       # Detection model selection.
 
 source:                      # USB (UVC) camera capture.
   device: <video-capture-node>   # Required: find your USB camera with v4l2-ctl --list-devices.
-  width: 1920                # Example default; choose a width listed under MJPG.
-  height: 1080               # Choose the matching height for that MJPG mode.
+  width: 1920                # Example default; an MJPG width, a multiple of 8 and at most 2040.
+  height: 1080               # The matching MJPG height, a multiple of 8 and at most 2040.
   fps: 30                    # Choose an FPS listed for that MJPG resolution.
-  flip: none                 # none, rotate-180, horizontal-flip, or vertical-flip.
   override_fragment: ""      # Diagnostic: replace the camera with a GStreamer fragment producing MJPEG.
   override_format: NV12      # Override only: NV12 for 4:2:0 MJPEG, NV16 for 4:2:2. Cameras are detected.
 
@@ -25,9 +24,8 @@ runtime:                     # Runtime settings.
 output:                      # Insight receiver.
   insight:
     host: <insight-host-ip>  # Host running the Insight receiver/viewer.
-    video_port: 9000         # Destination UDP video port for channel 0 (1..65535).
+    video_port: 9000         # Destination UDP port for the camera's MJPEG (RTP/JPEG), channel 0.
     metadata_port: 9100      # Destination UDP metadata port for channel 0 (1..65535).
-    bitrate_kbps: 4000       # H.264 encoder bitrate.
 
 # Test harness settings only. Normal example runs ignore this section.
 # The e2e tests have no camera, so source.override_fragment re-encodes a fixed COCO image as

@@ -2,13 +2,14 @@
  * @example usb-camera-object-detector.cpp
  * USB (UVC) camera YOLO26 object detection with Insight output.
  *
- * OpenCV captures compressed MJPEG through V4L2. Neat input and decoder nodes
- * turn each encoded sample into NV12 before branching:
+ * OpenCV captures compressed MJPEG through V4L2. Each JPEG is sent to Insight
+ * unchanged and decoded once for the model, in the camera's own sampling
+ * (NV12 for 4:2:0, NV16 for 4:2:2), which the model preprocessing reads directly:
  *
- *     Input -> JpegParse -> SimaDecode [-> ColorConvert for 4:2:2] -> branch -+-> video_sender
- *                                                                             `-> model
+ *     Input -> branch -+-> video_sender (MJPEG passthrough, RTP/JPEG)
+ *                      `-> JpegParse -> SimaDecode -> model
  *
- * Both branches stay inside one Run so the encoder and the detections share a
+ * Both branches stay inside one Run so the video and the detections share a
  * GStreamer timeline; Insight correlates the RTP timestamp with the metadata
  * timestamp and cannot render overlays if they drift apart.
  *
@@ -32,7 +33,6 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <map>
 #include <memory>
 #include <sstream>
 #include <stdexcept>
@@ -55,7 +55,7 @@ constexpr int kDefaultProfileInterval = 100;
 constexpr int kDefaultQueueDepth = 3;
 constexpr int kDefaultVideoPort = 9000;
 constexpr int kDefaultMetadataPort = 9100;
-constexpr int kDefaultBitrateKbps = 4000;
+constexpr int kMaxRtpJpegSide = 2040; // RTP/JPEG (RFC 2435) stores each side / 8 in one byte.
 constexpr int kPullTimeoutMs = 20000;
 constexpr std::size_t kBboxRecordSize = 24;
 
@@ -72,7 +72,6 @@ struct Config {
   int width = kDefaultWidth;
   int height = kDefaultHeight;
   int fps = kDefaultFps;
-  std::string flip = "none";
   std::string override_fragment;
   std::string override_format = "NV12"; // Decoded format of the override's MJPEG frames.
   int frames = 0;
@@ -85,7 +84,6 @@ struct Config {
   std::string insight_host;
   int video_port = kDefaultVideoPort;
   int metadata_port = kDefaultMetadataPort;
-  int bitrate_kbps = kDefaultBitrateKbps;
 };
 
 struct Box {
@@ -96,27 +94,6 @@ struct Box {
   float score = 0.0f;
   int class_id = 0;
 };
-
-// `videoflip` methods, keyed by the config spelling.
-const std::map<std::string, std::string>& flip_methods() {
-  static const std::map<std::string, std::string> kMethods = {
-      {"none", ""},
-      {"rotate-180", "rotate-180"},
-      {"horizontal-flip", "horizontal-flip"},
-      {"vertical-flip", "vertical-flip"}};
-  return kMethods;
-}
-
-std::string parse_flip(const std::string& value) {
-  std::string lowered = sima_examples::trim_copy(value);
-  std::transform(lowered.begin(), lowered.end(), lowered.begin(),
-                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-  if (flip_methods().count(lowered) == 0) {
-    throw std::runtime_error(
-        "source.flip must be one of horizontal-flip, none, rotate-180, vertical-flip");
-  }
-  return lowered;
-}
 
 Config load_config(const fs::path& config_path) {
   const auto raw = sima_examples::ScalarConfig::load(config_path);
@@ -130,7 +107,6 @@ Config load_config(const fs::path& config_path) {
   cfg.width = raw.int_or("source.width", kDefaultWidth);
   cfg.height = raw.int_or("source.height", kDefaultHeight);
   cfg.fps = raw.int_or("source.fps", kDefaultFps);
-  cfg.flip = parse_flip(raw.string_or("source.flip", "none"));
   cfg.override_fragment = raw.string_or("source.override_fragment", "");
   cfg.override_format = raw.string_or("source.override_format", "NV12");
   cfg.frames = raw.int_or("inference.frames", 0);
@@ -143,7 +119,6 @@ Config load_config(const fs::path& config_path) {
   cfg.insight_host = raw.string_or("output.insight.host", "");
   cfg.video_port = raw.int_or("output.insight.video_port", kDefaultVideoPort);
   cfg.metadata_port = raw.int_or("output.insight.metadata_port", kDefaultMetadataPort);
-  cfg.bitrate_kbps = raw.int_or("output.insight.bitrate_kbps", kDefaultBitrateKbps);
 
   if (cfg.model_path.empty()) {
     throw std::runtime_error("model.path must be set to a compiled model package");
@@ -163,8 +138,10 @@ Config load_config(const fs::path& config_path) {
   if (cfg.height <= 0) {
     throw std::runtime_error("source.height must be > 0");
   }
-  if (cfg.width % 2 || cfg.height % 2) {
-    throw std::runtime_error("source.width and source.height must be even for NV12");
+  if (cfg.width % 8 || cfg.height % 8 || cfg.width > kMaxRtpJpegSide ||
+      cfg.height > kMaxRtpJpegSide) {
+    throw std::runtime_error(
+        "source.width and source.height must be multiples of 8 and at most 2040 for RTP/JPEG");
   }
   if (cfg.fps <= 0) {
     throw std::runtime_error("source.fps must be > 0");
@@ -195,9 +172,6 @@ Config load_config(const fs::path& config_path) {
   }
   if (cfg.metadata_port <= 0 || cfg.metadata_port > 65535) {
     throw std::runtime_error("output.insight.metadata_port must be in [1, 65535]");
-  }
-  if (cfg.bitrate_kbps <= 0) {
-    throw std::runtime_error("output.insight.bitrate_kbps must be > 0");
   }
   return cfg;
 }
@@ -230,7 +204,7 @@ std::string camera_caps(const Config& cfg) {
 std::string source_description(const Config& cfg) {
   if (!cfg.override_fragment.empty()) return cfg.override_fragment;
   return "V4L2 device=" + cfg.device + " caps=" + camera_caps(cfg) +
-         " -> Input -> JpegParse -> SimaDecode(MJPEG) -> NV12 flip=" + cfg.flip;
+         " -> Input -> {VideoSender(MJPEG passthrough), JpegParse -> SimaDecode(MJPEG) -> model}";
 }
 
 // Bytes up to the end-of-image marker. UVC cameras may pad a buffer after it; 0 if absent.
@@ -410,11 +384,13 @@ std::string build_metadata_json(const std::vector<Box>& boxes,
   return out.str();
 }
 
-std::unique_ptr<neat::Model> make_model(const Config& cfg) {
+std::unique_ptr<neat::Model> make_model(const Config& cfg, neat::FormatTag format) {
   neat::Model::Options opt;
   opt.preprocess.kind = neat::InputKind::Image;
   opt.preprocess.enable = neat::AutoFlag::On;
-  opt.preprocess.color_convert.input_format = neat::PreprocessColorFormat::NV12;
+  opt.preprocess.color_convert.input_format = format == neat::FormatTag::NV16
+                                                  ? neat::PreprocessColorFormat::NV16
+                                                  : neat::PreprocessColorFormat::NV12;
   opt.preprocess.input_max_width = cfg.width;
   opt.preprocess.input_max_height = cfg.height;
   opt.preprocess.preset = neat::NormalizePreset::COCO_YOLO;
@@ -426,11 +402,10 @@ std::unique_ptr<neat::Model> make_model(const Config& cfg) {
 }
 
 groups::VideoSenderOptions make_video_options(const Config& cfg) {
-  auto opt = groups::VideoSenderOptions::H264RtpUdpFromRaw(cfg.width, cfg.height, cfg.fps);
+  auto opt = groups::VideoSenderOptions::Passthrough(groups::RtspCodec::MJPEG);
   opt.host = cfg.insight_host;
   opt.channel = 0;
   opt.video_port_base = cfg.video_port;
-  opt.encoder.bitrate_kbps = cfg.bitrate_kbps;
   return opt;
 }
 
@@ -507,10 +482,10 @@ int main(int argc, char** argv) {
     const std::string source_label = cfg.override_fragment.empty() ? cfg.device : "override";
     std::cout << "[validate] model=" << cfg.model_path << " classes=" << labels.size()
               << " source=" << source_label << " stream=" << cfg.width << "x" << cfg.height << "@"
-              << cfg.fps << " flip=" << cfg.flip << " min_score=" << cfg.min_score
-              << " nms_iou=" << cfg.nms_iou << " max_detections=" << cfg.max_detections
-              << " queue_depth=" << cfg.queue_depth << " insight=" << cfg.insight_host << ":"
-              << cfg.video_port << "/" << cfg.metadata_port << "\n";
+              << cfg.fps << " min_score=" << cfg.min_score << " nms_iou=" << cfg.nms_iou
+              << " max_detections=" << cfg.max_detections << " queue_depth=" << cfg.queue_depth
+              << " insight=" << cfg.insight_host << ":" << cfg.video_port << "/"
+              << cfg.metadata_port << "\n";
     std::cout << "[validate] source_pipeline=" << source_description(cfg) << "\n";
     std::cout << "[validate] configuration OK\n";
     return 0;
@@ -532,13 +507,25 @@ int main(int argc, char** argv) {
       if (g_stop.load()) return 130;
       format = neat::jpeg_output_format(first_frame);
     }
-    auto model = make_model(cfg);
+    auto model = make_model(cfg, format);
 
     neat::Graph video_graph("video");
     video_graph.connect(neat::nodes::Input("video"), groups::VideoSender(make_video_options(cfg)));
 
+    // The decoder writes the camera's own sampling and the model preprocessing reads it
+    // directly, so a 4:2:2 camera's NV16 reaches the EV74 with no conversion stage or copy.
+    neat::SimaDecodeOptions decode;
+    decode.type = neat::SimaDecodeType::MJPEG;
+    decode.raw_output = true;
+    decode.out_format = format;
+    decode.dec_width = cfg.width;
+    decode.dec_height = cfg.height;
+    decode.dec_fps = cfg.fps;
     neat::Graph model_graph("model");
-    model_graph.connect(neat::nodes::Input("model"), *model);
+    model_graph.add(neat::nodes::Input("model"));
+    model_graph.add(neat::nodes::JpegParse());
+    model_graph.add(neat::nodes::SimaDecode(decode));
+    model_graph.add(*model);
 
     neat::Graph detections_graph("detections");
     detections_graph.add(neat::nodes::Output("detections", neat::OutputOptions::EveryFrame(4)));
@@ -549,7 +536,7 @@ int main(int argc, char** argv) {
     live.policy = neat::GraphLinkPolicy::RealtimeLatestByStream;
 
     neat::Sample seed;
-    neat::Graph source_graph("capture_decode");
+    neat::Graph source_graph("capture");
     if (!cfg.override_fragment.empty()) {
       source_graph.add(neat::nodes::Custom(cfg.override_fragment, neat::InputRole::Source));
     } else {
@@ -562,27 +549,7 @@ int main(int argc, char** argv) {
       seed = neat::make_encoded_sample(std::move(first_frame), camera->caps, 0, -1,
                                        1000000000LL / cfg.fps);
     }
-    // The override fragment supplies MJPEG too, so both sources share the hardware decode.
-    // The decoder writes the camera's own sampling; a 4:2:2 camera's NV16 is converted to
-    // NV12 on the EV74, in the encoder's surface so the video sender takes it without a copy.
-    neat::SimaDecodeOptions decode;
-    decode.type = neat::SimaDecodeType::MJPEG;
-    decode.raw_output = true;
-    decode.out_format = format;
-    decode.dec_width = cfg.width;
-    decode.dec_height = cfg.height;
-    decode.dec_fps = cfg.fps;
-    source_graph.add(neat::nodes::JpegParse());
-    source_graph.add(neat::nodes::SimaDecode(decode));
-    if (format == neat::FormatTag::NV16) {
-      neat::ColorConvertOptions color;
-      color.output_format = neat::ImageFormat::NV12;
-      color.surface = neat::ImageSurfaceLayout::EncoderNv12;
-      source_graph.add(neat::nodes::ColorConvert(color));
-    }
-    if (cfg.flip != "none") {
-      source_graph.add(neat::nodes::Custom("videoflip method=" + flip_methods().at(cfg.flip)));
-    }
+    // The override fragment supplies MJPEG too, so both sources take the same branches.
     auto branch = neat::graphs::Branch("camera", {"video", "model"});
     neat::Graph graph("usb_camera_object_detector");
     graph.connect(source_graph, branch);
