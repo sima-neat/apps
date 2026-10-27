@@ -33,6 +33,7 @@ __all__ = [
     "rtsp_mjpeg_urls",
     "http_mjpeg_url",
     "http_mjpeg_urls",
+    "usb_camera_id",
     "tmp_output_dir",
     "e2e_config_writer",
     "e2e_subprocess_artifacts",
