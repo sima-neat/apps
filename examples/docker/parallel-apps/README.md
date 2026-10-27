@@ -59,23 +59,22 @@ exit
 Each container gets its own folder under `models/`, named after the container, and its image holds only that folder. Model packages come from the Model Zoo release below, which can differ from the installed platform version.
 
 ```bash
-export MODELZOO_VERSION="2.1.3"
+export MODELZOO_VERSION="3.0.0"
 MODELS="https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix"
 mkdir -p models/neat-segmentation models/neat-detection models/neat-tracking models/neat-pose models/neat-drone models/neat-blazepose
 (cd models/neat-segmentation && sima-cli download "${MODELS}/yolo26-segmentation/yolo26m-seg-int8-b1.tar.gz")
 (cd models/neat-detection && sima-cli download "${MODELS}/rfdetr-small-backbone.tar.gz" && sima-cli download "${MODELS}/rfdetr-small-transformer.tar.gz")
 (cd models/neat-tracking && sima-cli download "${MODELS}/yolo26-detection/yolo26m-det-int8-b1.tar.gz")
 (cd models/neat-pose && sima-cli download "${MODELS}/yolo26-pose/yolo26m-pose-int8-b1.tar.gz")
+(cd models/neat-drone && sima-cli download "${MODELS}/yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz")
 cp models/neat-tracking/yolo26m-det-int8-b1.tar.gz models/neat-blazepose/
 ```
 
-The tiny-drone and BlazePose GHUM Heavy packages come from the staging Model Registry. Newer `sima-cli` releases wrap a package in a zip, which the `unzip` step opens:
+The BlazePose GHUM Heavy package comes from the staging Model Registry. Newer `sima-cli` releases wrap a package in a zip, which the `unzip` step opens:
 
 ```bash
-sima-cli models download --stg --id yolo26_tiny_drone --variant modalix_int8_tessellation_mla --branch main --output /tmp/registry
 sima-cli models download --stg --id blazepose_ghum_heavy --variant w16a16 --branch feat/blazepose-ghum-heavy --output /tmp/registry
 find /tmp/registry -name '*.zip' -execdir unzip -o -q {} \;
-find /tmp/registry -name yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz -exec cp {} models/neat-drone/ \;
 find /tmp/registry -name blazepose_ghum_heavy_w16a16_mpk.tar.gz -exec cp {} models/neat-blazepose/ \;
 ```
 
