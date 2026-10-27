@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.utils.pytest_fixtures import usb_camera_cases
 from tests.utils.metadata_json_listener import MetadataJsonListener
 from tests.utils.output_assertions import assert_streamed_frames_are_usable
 
@@ -67,17 +68,15 @@ SOURCE_CASES = [
         },
         id="http-mjpeg",
     ),
-    pytest.param(
-        {
-            "name": "usb_camera",
-            "type": "usb",
-            "codec": "mjpeg",
-            "url_fixture": "usb_camera_id",
-            "fps": 30,
-        },
-        id="usb-camera",
-    ),
-]
+] + usb_camera_cases(
+    {
+        "name": "usb_camera",
+        "type": "usb",
+        "codec": "mjpeg",
+        "url_fixture": "usb_camera_id",
+        "fps": 30,
+    }
+)
 
 
 def _env_int_or_default(name: str, default: int) -> int:

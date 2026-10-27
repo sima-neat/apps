@@ -259,7 +259,7 @@ python3 -m pytest \
 - `SIMANEAT_TEST_RTSP_MJPEG_URLS` (comma-separated RTSP MJPEG URLs)
 - `SIMANEAT_TEST_HTTP_MJPEG_URL` (single HTTP MJPEG stream URL)
 - `SIMANEAT_TEST_HTTP_MJPEG_URLS` (comma-separated HTTP MJPEG URLs)
-- `SIMANEAT_TEST_USB_CAMERA` (USB camera ID from `usb_camera_ids()`; runs the single-stream `usb_camera` e2e on a DevKit with a camera; unset skips it, also under `--strict`)
+- `SIMANEAT_TEST_USB_CAMERA` (USB camera ID from `usb_camera_ids()`; runs the single-stream `usb_camera` e2e on a DevKit with a camera; unset, the C++ case skips and the Python case is not collected, with a warning, so `--strict` passes)
 - `SIMANEAT_APPS_TEST_TIMEOUT_MS` (default: `180000`)
 - `SIMANEAT_APPS_HIGH_DENSITY_INITIAL_PROGRESS_TIMEOUT_MS` (high-density receiver warmup progress timeout, default: `90000`)
 - `SIMANEAT_APPS_HIGH_DENSITY_STREAM_PROGRESS_TIMEOUT_MS` (high-density receiver measurement progress timeout, default: `30000`)
