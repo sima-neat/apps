@@ -1,0 +1,34 @@
+model:                       # Oriented-box detector model selection.
+  path: <model-path>         # Example: models/yolo26n_obb_w8a8_mpk.tar.gz
+  labels: examples/object-detection/multi-stream-obb-detector/src/common/dota_label.txt
+
+streams:                     # RTSP inputs, one entry per camera. Up to four.
+  - <rtsp-url-1>             # Example: rtsp://<rtsp-source-ip>:<port>/<stream-name>
+  - <rtsp-url-2>
+
+input:                       # RTSP input transport settings.
+  codec: h264                # h264/avc or h265/hevc.
+  tcp: true                  # Use TCP for RTSP transport.
+  latency_ms: 100            # RTSP receive latency in milliseconds.
+
+inference:                   # Detection controls.
+  frames: 0                  # Frame limit per stream. 0 means unlimited.
+  max_inflight_per_stream: 4 # Decoded frames admitted per stream to the shared detector. -1 uses the Core default.
+  max_inflight_total: 16     # Decoded frames admitted across all streams. -1 uses the Core default.
+  min_score: 0.30            # Detection score threshold.
+  max_detections: 300        # Max oriented boxes kept per frame.
+
+output:                      # Insight output plus optional local debug saves.
+  insight:                   # Live video and metadata destination.
+    host: <insight-host-ip>  # Host running the Insight receiver/viewer.
+    video_port_base: 9000    # Base UDP port for video channels.
+    metadata_port_base: 9100 # Base UDP port for metadata channels.
+  debug_dir: sandbox/multi-stream-obb-detector # Directory for saved debug frames.
+  save_every: 0              # Save every Nth frame per stream with its boxes drawn. 0 disables saving.
+
+# Test harness settings only. Normal example runs ignore this section.
+testing:
+  e2e:
+    output:
+      save_every: 10
+      total_saved_frames: 20

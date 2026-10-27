@@ -1,0 +1,92 @@
+{
+  "description": "Oriented boxes and the Insight objects both implementations must publish for them. bbox is the upright extent of the rotated box; pixel values are rounded to 0.1, angles to 4 decimals, and confidences to 3; a class id outside the labels is published as unknown.",
+  "labels": [
+    "plane",
+    "ship"
+  ],
+  "boxes": [
+    {
+      "cx": 100.0,
+      "cy": 50.0,
+      "width": 40.0,
+      "height": 20.0,
+      "angle_radians": 0.0,
+      "score": 0.9,
+      "class_id": 1
+    },
+    {
+      "cx": 200.0,
+      "cy": 120.0,
+      "width": 40.0,
+      "height": 20.0,
+      "angle_radians": 1.570796326795,
+      "score": 0.75,
+      "class_id": 0
+    },
+    {
+      "cx": 300.0,
+      "cy": 200.0,
+      "width": 40.0,
+      "height": 20.0,
+      "angle_radians": -0.523598775598,
+      "score": 0.5,
+      "class_id": 7
+    }
+  ],
+  "objects": [
+    {
+      "id": "obj_1",
+      "label": "ship",
+      "confidence": 0.9,
+      "bbox": [
+        80.0,
+        40.0,
+        40.0,
+        20.0
+      ],
+      "oriented_bbox": [
+        100.0,
+        50.0,
+        40.0,
+        20.0,
+        0.0
+      ]
+    },
+    {
+      "id": "obj_2",
+      "label": "plane",
+      "confidence": 0.75,
+      "bbox": [
+        190.0,
+        100.0,
+        20.0,
+        40.0
+      ],
+      "oriented_bbox": [
+        200.0,
+        120.0,
+        40.0,
+        20.0,
+        1.5708
+      ]
+    },
+    {
+      "id": "obj_3",
+      "label": "unknown",
+      "confidence": 0.5,
+      "bbox": [
+        277.7,
+        181.3,
+        44.6,
+        37.3
+      ],
+      "oriented_bbox": [
+        300.0,
+        200.0,
+        40.0,
+        20.0,
+        -0.5236
+      ]
+    }
+  ]
+}
