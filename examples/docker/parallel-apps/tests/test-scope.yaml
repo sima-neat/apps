@@ -1,0 +1,13 @@
+models: {}
+unit:
+  python: true
+  cpp: false
+e2e:
+  python:
+    enabled: false
+    reason: Requires Docker on the Modalix target; the README run is the end-to-end check.
+    models: []
+  cpp:
+    enabled: false
+    reason: No C++ source; the containers run the packaged C++ binaries of other examples.
+    models: []

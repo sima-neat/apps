@@ -4,7 +4,7 @@
 
 | Field | Value |
 | --- | --- |
-| Category | <benchmarking / classification / object-detection / tracking / face-detection / segmentation / pose-estimation / depth-estimation / feature-extraction / genai / multi-model / throughput> |
+| Category | <benchmarking / classification / object-detection / tracking / face-detection / segmentation / pose-estimation / depth-estimation / feature-extraction / genai / multi-model / throughput / docker> |
 | Difficulty | <Beginner / Intermediate / Advanced> |
 | Tags | <comma-separated tags> |
 | Languages | C++, Python |
