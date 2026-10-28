@@ -63,22 +63,13 @@ export MODELZOO_VERSION="3.0.0"
 MODELS="https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix"
 mkdir -p models/neat-segmentation models/neat-detection models/neat-tracking models/neat-pose models/neat-drone models/neat-blazepose
 (cd models/neat-segmentation && sima-cli download "${MODELS}/yolo26-segmentation/yolo26m-seg-int8-b1.tar.gz")
-(cd models/neat-detection && sima-cli download "${MODELS}/rfdetr-small-backbone.tar.gz" && sima-cli download "${MODELS}/rfdetr-small-transformer.tar.gz")
+(cd models/neat-detection && sima-cli download "${MODELS}/rf_detr_small_w8a8_w16a16_backbone_mpk.tar.gz" && sima-cli download "${MODELS}/rf_detr_small_w8a8_w16a16_decoder_mpk.tar.gz")
 (cd models/neat-tracking && sima-cli download "${MODELS}/yolo26-detection/yolo26m-det-int8-b1.tar.gz")
 (cd models/neat-pose && sima-cli download "${MODELS}/yolo26-pose/yolo26m-pose-int8-b1.tar.gz")
 (cd models/neat-drone && sima-cli download "${MODELS}/yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz")
+(cd models/neat-blazepose && sima-cli download "${MODELS}/blazepose_ghum_heavy_w16a16_mpk.tar.gz")
 cp models/neat-tracking/yolo26m-det-int8-b1.tar.gz models/neat-blazepose/
 ```
-
-The BlazePose GHUM Heavy package comes from the staging Model Registry. Newer `sima-cli` releases wrap a package in a zip, which the `unzip` step opens:
-
-```bash
-sima-cli models download --stg --id blazepose_ghum_heavy --variant w16a16 --branch feat/blazepose-ghum-heavy --output /tmp/registry
-find /tmp/registry -name '*.zip' -execdir unzip -o -q {} \;
-find /tmp/registry -name blazepose_ghum_heavy_w16a16_mpk.tar.gz -exec cp {} models/neat-blazepose/ \;
-```
-
-The BlazePose branch is temporary while [`sima-neat/models#136`](https://github.com/sima-neat/models/pull/136) is under review, as in the [BlazePose 3D README](../../pose-estimation/multi-stream-blazepose3d/README.md#prepare-the-model).
 
 Six applications share one MLA, so this example uses the INT8 segmentation package instead of the BF16 one its own README defaults to.
 
