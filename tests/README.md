@@ -90,6 +90,50 @@ enabled in the scope file but the matching Python or C++ test file is missing,
 `tests/test.sh` fails before running tests. If a test is disabled, it is skipped
 even if a test file exists.
 
+### Adaptive CI fleet
+
+After the build, Vulcan CI queries the existing GitHub App's read-only runner
+inventory in the resolved Modalix runner group. It selects up to six idle RTSP
+runners and three idle regular runners matching the hardware/environment labels
+(and `elxr_version` when pinned). If a pool is entirely busy, it queues one shard
+for that pool. Offline registrations never count as available capacity. Discovery
+does not provision, reconfigure, reserve, or interrupt devices; the GitHub queue
+owns assignment, so availability can change after planning.
+
+Every enabled example/language/unit-or-e2e suite is assigned exactly once, and
+the harness self-tests run once. E2E scopes declare `requires_rtsp: true` or
+`false` under each language. Missing metadata conservatively requires RTSP.
+All unit tests use regular runners. Regular selectors include an existing label
+combination that excludes every RTSP registration in the inventory; removing
+the `rtsp` label alone would not exclude RTSP runners. Discovery fails clearly
+if no such combination exists. Use a dedicated regular label/group in that case.
+
+The planner balances suites using `tests/ci-durations.json`, seeded from the
+recorded successful baseline run. Unknown suites receive a conservative default
+duration. Nightly variants and all model selections remain in each generated
+scope. Each shard uses the existing harness with `--strict`, keeping suites
+serial within a DevKit. Strict E2E stream checks apply only to selected suites
+that require streams. `SIMANEAT_APPS_TEST_RUN_HARNESS=0` suppresses the harness
+self-tests only for CI shards that do not own them; ordinary local runs retain
+the default behavior.
+
+Each shard uploads a result receipt, timing/cache summary, and test logs, even
+on failure. `Test Apps Runtime` requires every shard to succeed and verifies
+their commit identities and complete suite coverage before packaging. Existing
+contract-test, artifact-publication, portal-publication, and nightly-no-publish
+gates remain required. Matrix fail-fast cancellation is disabled.
+
+CI caches URL-based model archives under
+`/media/nvme/neat-apps-model-cache/v1`, outside the cleaned checkout. NVMe must
+be mounted. Cache keys include the acquisition descriptor, Model Zoo version,
+and a remote ETag (or Last-Modified plus Content-Length). Every cache hit verifies
+the cached SHA-256 before copying the archive into the isolated test runtime.
+Misses use the normal scoped downloader; cache publication uses a lock and atomic
+file replacement. Registry/modelzoo acquisition and URLs without a usable remote
+validator bypass persistent reuse, so mutable registry `latest` and variant
+requests resolve on every run. Neither CI cleanup nor package installation
+removes the persistent cache.
+
 Package installation does not include the test harness or download test models.
 Vulcan overlays an ephemeral internal test bundle and lets `tests/test.sh`
 download the models selected by the test scope. Only the customer runtime is

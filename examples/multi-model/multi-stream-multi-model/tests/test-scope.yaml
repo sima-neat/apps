@@ -21,6 +21,7 @@ unit:
 e2e:
   python:
     enabled: true
+    requires_rtsp: true
     models:
     - yolo_11s
     - yolo_11s_seg
@@ -28,6 +29,7 @@ e2e:
     - yolo26m-det-int8-b1
   cpp:
     enabled: true
+    requires_rtsp: true
     models:
     - yolo_11s
     - yolo_11s_seg

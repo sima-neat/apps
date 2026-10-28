@@ -215,15 +215,60 @@ jobs:
     name: Resolve Test Runner
     uses: sima-neat/.github/.github/workflows/vulcan-resolve-modalix-runner.yml@main
 
-  test-runtime:
-    name: Test Apps Runtime
+  plan-runtime-tests:
+    name: Plan adaptive Apps test fleet
+    needs: [build, resolve-vulcan-config, resolve-test-runner]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python3 -m pip install PyYAML
+      - name: Mint runner discovery token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.NEAT_RELEASES_APP_ID }}
+          private-key: ${{ secrets.NEAT_RELEASES_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-organization-self-hosted-runners: read
+      - name: Discover fleet and balance every enabled suite
+        id: plan
+        env:
+          RUNNER_DISCOVERY_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+          RUNNER_GROUP: ${{ needs.resolve-test-runner.outputs.modalix_runner_group }}
+          REQUIRED_LABELS: '["self-hosted","Linux","ARM64","modalix","vulcan-${{ needs.resolve-vulcan-config.outputs.vulcan_env }}"]'
+        run: |
+          python3 scripts/ci/plan_runtime_shards.py \
+            --group "${RUNNER_GROUP}" --labels "${REQUIRED_LABELS}"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: neat-apps-shard-plan
+          path: runtime-shard-plan.json
+          if-no-files-found: error
+          retention-days: 7
+
+  test-runtime-shard:
+    name: Apps ${{ matrix.shard }}
     needs:
       - build
       - resolve-vulcan-config
       - resolve-test-runner
+      - plan-runtime-tests
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan-runtime-tests.outputs.matrix) }}
     runs-on:
       group: ${{ needs.resolve-test-runner.outputs.modalix_runner_group }}
-      labels: [self-hosted, Linux, ARM64, modalix, rtsp, "vulcan-${{ needs.resolve-vulcan-config.outputs.vulcan_env }}"]
+      labels: ${{ matrix.labels }}
 
     steps:
       - name: Checkout code
@@ -236,6 +281,12 @@ jobs:
         run: |
           rm -rf _vulcan-test neat-apps neat-apps-* sima-neat-*-Linux-extras
           rm -f neat-apps-*.tar.gz metadata*.json install_vulcan_apps_package.sh
+
+      - name: Download shard plan
+        uses: actions/download-artifact@v7
+        with:
+          name: neat-apps-shard-plan
+          path: _vulcan-test
 
       - name: Download Apps build artifacts
         uses: actions/download-artifact@v7
@@ -317,12 +368,13 @@ jobs:
 
       - name: Install test dependencies
         run: |
+          # shellcheck disable=SC1090
           source "${PYNEAT_ACTIVATE}"
           echo "Using Python test interpreter: ${PYTHON_TEST_BIN}"
           "${PYTHON_TEST_BIN}" -m pip install pytest "opencv-python-headless<4.12" PyYAML
           "${PYTHON_TEST_BIN}" -c "import pyneat; print('Using pyneat:', pyneat.__file__)"
 
-      - name: Run all activated Apps tests
+      - name: Run assigned Apps suites
         env:
           NEAT_APPS_SKIP_MODEL_DOWNLOAD: "0"
           SIMANEAT_APPS_TEST_MODEL_VARIANTS: ${{ inputs.nightly && '1' || '0' }}
@@ -336,9 +388,74 @@ jobs:
           SIMANEAT_TEST_HTTP_MJPEG_URLS: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URLS }}
         run: |
           RUNTIME_DIR="$(cat _vulcan-test/apps_runtime_dir.txt)"
-          cd "${RUNTIME_DIR}"
+          # shellcheck disable=SC1090
           source "${PYNEAT_ACTIVATE}"
-          ./tests/test.sh --all --strict
+          "${PYTHON_TEST_BIN}" scripts/ci/run_runtime_shard.py \
+            --plan _vulcan-test/runtime-shard-plan.json \
+            --shard "${{ matrix.shard }}" --runtime "${RUNTIME_DIR}" \
+            --result "_runtime-results/${{ matrix.shard }}.json"
+
+      - name: Upload shard result and logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: neat-apps-test-results-${{ matrix.shard }}
+          path: |
+            _runtime-results/*.json
+            _vulcan-test/install/prebuilt-apps/sandbox-test/**/*.log
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Cleanup test workspace tmp artifacts
+        if: ${{ always() }}
+        run: rm -rf _vulcan-test _runtime-results
+
+  test-runtime:
+    name: Test Apps Runtime
+    if: ${{ always() && !cancelled() }}
+    needs: [build, plan-runtime-tests, test-runtime-shard]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Require every test shard
+        env:
+          BUILD_RESULT: ${{ needs.build.result }}
+          PLAN_RESULT: ${{ needs.plan-runtime-tests.result }}
+          SHARD_RESULT: ${{ needs.test-runtime-shard.result }}
+        run: |
+          test "${BUILD_RESULT}" = success
+          test "${PLAN_RESULT}" = success
+          test "${SHARD_RESULT}" = success
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python3 -m pip install PyYAML
+      - name: Download shard plan
+        uses: actions/download-artifact@v7
+        with:
+          name: neat-apps-shard-plan
+          path: _vulcan-test
+      - name: Download every shard result
+        uses: actions/download-artifact@v7
+        with:
+          pattern: neat-apps-test-results-*
+          path: _shard-results
+          merge-multiple: true
+      - name: Verify complete suite coverage
+        run: |
+          python3 scripts/ci/run_runtime_shard.py \
+            --plan _vulcan-test/runtime-shard-plan.json --verify-results _shard-results
+      - name: Download Apps build artifacts
+        if: ${{ !inputs.nightly }}
+        uses: actions/download-artifact@v7
+        with:
+          name: neat-apps-build
+          path: _vulcan-test/artifacts
+      - name: Install packaging CLI
+        if: ${{ !inputs.nightly }}
+        run: |
+          scripts/ci/install_sima_cli_main.sh
+          echo "${HOME}/.sima-cli/.venv/bin" >> "${GITHUB_PATH}"
 
       - name: Package tested runtime for release
         if: ${{ !inputs.nightly }}
@@ -382,23 +499,6 @@ jobs:
           path: dist/*
           if-no-files-found: error
           retention-days: 3
-
-      - name: Upload nightly test logs
-        if: ${{ always() && inputs.nightly }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: neat-apps-nightly-test-logs
-          path: |
-            _vulcan-test/install/prebuilt-apps/sandbox-test/**/*.log
-            _vulcan-test/install/prebuilt-apps/deps/neat-core.json
-            _vulcan-test/install/prebuilt-apps/deps/neat-apps.json
-          if-no-files-found: warn
-          retention-days: 7
-
-      - name: Cleanup test workspace tmp artifacts
-        if: ${{ always() }}
-        run: |
-          rm -rf _vulcan-test
 
   promote-latest-tag:
     name: Promote Vulcan latest tag

@@ -13,11 +13,13 @@ unit:
 e2e:
   python:
     enabled: true
+    requires_rtsp: true
     models:
     - yolo26m-det-int8-b1
     - blazepose-ghum-heavy
   cpp:
     enabled: true
+    requires_rtsp: true
     models:
     - yolo26m-det-int8-b1
     - blazepose-ghum-heavy

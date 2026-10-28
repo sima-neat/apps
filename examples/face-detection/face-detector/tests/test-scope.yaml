@@ -9,9 +9,11 @@ unit:
 e2e:
   python:
     enabled: true
+    requires_rtsp: false
     models:
       - retinaface_mobilenet25
   cpp:
     enabled: true
+    requires_rtsp: false
     models:
       - retinaface_mobilenet25
