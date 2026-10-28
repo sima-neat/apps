@@ -8,6 +8,7 @@ import json
 import os
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -15,6 +16,8 @@ import time
 from pathlib import Path
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
+
+from model_cache_storage import CacheStorage
 
 
 def digest(path):
@@ -154,7 +157,46 @@ def authenticated_probe():
     print(json.dumps(result))
 
 
+def run_downloader(command, *, storage, **kwargs):
+    # Inherit output so long downloads cannot block on a full capture pipe.
+    with subprocess.Popen(command, start_new_session=True, **kwargs) as process:
+        try:
+            while process.poll() is None:
+                storage.ensure()
+                try:
+                    process.wait(timeout=0.2)
+                except subprocess.TimeoutExpired:
+                    pass
+            if process.returncode:
+                raise subprocess.CalledProcessError(process.returncode, command)
+            storage.ensure()
+        except BaseException:
+            if process.poll() is None:
+                os.killpg(process.pid, signal.SIGTERM)
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.wait()
+            raise
+
+
 def prepare_models(root, scope, scope_file, destination, cache_root):
+    destination.mkdir(parents=True, exist_ok=True)
+    cache_root.mkdir(parents=True, exist_ok=True)
+    if cache_root.is_symlink():
+        raise ValueError("Model cache root must not be a symlink")
+    # Serialize preparation/eviction on this device, including temporary copies.
+    with (cache_root / ".prepare.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        storage = CacheStorage(cache_root, destination)
+        storage.cleanup_staging()
+        storage.ensure()
+        print(f"Model storage before acquisition: {json.dumps(storage.summary())}", flush=True)
+        return _prepare_models(root, scope, scope_file, destination, cache_root, storage)
+
+
+def _prepare_models(root, scope, scope_file, destination, cache_root, storage):
     started = time.monotonic()
     destination.mkdir(parents=True, exist_ok=True)
     cache_root.mkdir(parents=True, exist_ok=True)
@@ -197,6 +239,9 @@ def prepare_models(root, scope, scope_file, destination, cache_root):
         key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
         identities[filename] = (key, identity)
         entry = cache_root / key
+        cached = entry / "model.tar.gz"
+        if cached.is_file() and not cached.is_symlink():
+            storage.ensure(cached.stat().st_size)
         with (cache_root / (key + ".lock")).open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             try:
@@ -207,6 +252,7 @@ def prepare_models(root, scope, scope_file, destination, cache_root):
                     and digest(cached) == metadata["sha256"]
                 ):
                     shutil.copyfile(cached, destination / filename)
+                    storage.touch(entry)
                     hits += 1
                     hit_files.add(filename)
                     print(f"[cache hit] {filename}", flush=True)
@@ -223,9 +269,9 @@ def prepare_models(root, scope, scope_file, destination, cache_root):
         ]
         for language in sorted(languages):
             command.extend(["--language", language])
-        subprocess.run(
+        run_downloader(
             command,
-            check=True,
+            storage=storage,
             cwd=root,
             env={**os.environ, "MODELS_DIR": str(destination)},
         )
@@ -247,11 +293,17 @@ def prepare_models(root, scope, scope_file, destination, cache_root):
                 flush=True,
             )
             continue
+        # Leave room for both the staged copy and metadata; oversized models
+        # still run from the workspace but never enter persistent storage.
+        incoming = source.stat().st_size + 4096
+        if not storage.ensure(incoming, persistent=True):
+            print(f"[cache bypass] {filename}: storage budget or reserve", flush=True)
+            continue
         with (cache_root / (key + ".lock")).open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             entry = cache_root / key
             entry.mkdir(exist_ok=True)
-            with tempfile.TemporaryDirectory(dir=cache_root, prefix=".stage-") as stage:
+            with tempfile.TemporaryDirectory(dir=cache_root, prefix=f".stage-{key}-") as stage:
                 staged = Path(stage)
                 shutil.copyfile(source, staged / "model.tar.gz")
                 (staged / "metadata.json").write_text(
@@ -264,15 +316,22 @@ def prepare_models(root, scope, scope_file, destination, cache_root):
                 )
                 os.replace(staged / "model.tar.gz", entry / "model.tar.gz")
                 os.replace(staged / "metadata.json", entry / "metadata.json")
+    storage.ensure()
     result = {
         "hits": hits,
         "models": len(models),
         "seconds": time.monotonic() - started,
+        **storage.summary(),
+        "model_sizes_bytes": {
+            name: (destination / name).stat().st_size
+            for name in models if (destination / name).is_file()
+        },
     }
     print(
         f"Model cache: {hits}/{len(models)} hits in {result['seconds']:.1f}s",
         flush=True,
     )
+    print(f"Model storage after acquisition: {json.dumps(result)}", flush=True)
     return result
 
 

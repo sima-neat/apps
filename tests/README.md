@@ -146,6 +146,25 @@ validator bypass persistent reuse, so mutable registry `latest` and variant
 requests resolve on every run. Neither CI cleanup nor package installation
 removes the persistent cache.
 
+The cache defaults to a **32 GiB size limit** and **20 GiB free-space reserve**.
+Override positive byte counts with `SIMANEAT_APPS_MODEL_CACHE_MAX_BYTES` and
+`SIMANEAT_APPS_MODEL_CACHE_RESERVE_BYTES` in the shard environment. The reserve
+is checked on both cache and runtime filesystems. Preparation is serialized per
+cache; hits refresh LRU age, and cleanup evicts oldest entries under nonblocking
+entry locks. Active entries, lock files, unrelated files, and symlinks are never
+removed. Abandoned staging directories created by this implementation are
+reclaimed only when their entry lock is available. Older unidentifiable staging
+directories require operator inspection.
+
+Before copying a cache hit or publishing a new entry, space checks include the
+additional copy. Oversized entries or cache publications that cannot preserve
+the reserve bypass persistent storage; the runtime copy remains usable. During
+normal downloads, storage is checked every 200 ms and the downloader process
+group is stopped if eviction cannot restore the reserve. This guards model
+acquisition; unrelated writers can still consume space between checks. Shard
+receipts/logs report filesystem capacity, free space, cache size/limit, reclaimed
+bytes/entries, and downloaded model sizes. No files outside this cache are evicted.
+
 Package installation does not include the test harness or download test models.
 Vulcan overlays an ephemeral internal test bundle and lets `tests/test.sh`
 download the models selected by the test scope. Only the customer runtime is

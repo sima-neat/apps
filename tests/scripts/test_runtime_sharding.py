@@ -256,7 +256,7 @@ def acquisition(tmp_path, monkeypatch):
             downloads.append(identity.copy())
             destination.write_bytes(b"model bytes")
 
-    monkeypatch.setattr(cache.subprocess, "run", download)
+    monkeypatch.setattr(cache, "run_downloader", download)
 
     def prepare(index):
         return cache.prepare_models(

@@ -136,6 +136,13 @@ def run(plan, shard_id, runtime, result_path, cache_root):
                         f"Model cache: {cache['hits']}/{cache['models']} hits; "
                         f"{cache['seconds']:.1f} seconds acquiring models.\n"
                     )
+                    if "cache_bytes" in cache:
+                        output.write(
+                            f"Cache bytes: {cache['cache_bytes']}/{cache['cache_limit_bytes']}; "
+                            f"free: {cache['free_bytes']}; reserve: {cache['reserve_bytes']}; "
+                            f"evicted: {cache['evicted_entries']} entries / "
+                            f"{cache['evicted_bytes']} bytes.\n"
+                        )
 
 
 def verify_results(plan, results):
