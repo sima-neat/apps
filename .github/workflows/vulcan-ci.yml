@@ -400,10 +400,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: neat-apps-test-results-${{ matrix.shard }}
-          path: |
-            _runtime-results/*.json
-            _vulcan-test/install/prebuilt-apps/sandbox-test/**/*.log
+          path: _runtime-results/
           if-no-files-found: error
+          overwrite: true
           retention-days: 7
 
       - name: Cleanup test workspace tmp artifacts

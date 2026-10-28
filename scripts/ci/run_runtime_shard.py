@@ -7,6 +7,7 @@ import argparse
 import copy
 import json
 import os
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -32,6 +33,23 @@ def scope_for_tasks(scope, tasks):
     return selected
 
 
+def collect_logs(runtime, destination):
+    """Stage regular log files without traversing intentional symlink fixtures."""
+    source = runtime / "sandbox-test"
+    for directory, directories, files in os.walk(source, followlinks=False):
+        directory = Path(directory)
+        directories[:] = [
+            name for name in directories if not (directory / name).is_symlink()
+        ]
+        for name in files:
+            path = directory / name
+            if path.suffix != ".log" or path.is_symlink() or not path.is_file():
+                continue
+            target = destination / path.relative_to(source)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(path, target)
+
+
 def run(plan, shard_id, runtime, result_path, cache_root):
     started = time.monotonic()
     full_scope = discover_scope(ROOT / "examples", ROOT)
@@ -50,6 +68,11 @@ def run(plan, shard_id, runtime, result_path, cache_root):
         "tasks": [],
         "success": False,
         "groups": [],
+        "dependencies": {
+            name: json.loads((runtime / "deps" / f"{name}.json").read_text())
+            for name in ("neat-core", "neat-apps")
+            if (runtime / "deps" / f"{name}.json").is_file()
+        },
     }
     try:
         scope_file = runtime / "tests/ci-shard-scope.yaml"
@@ -98,6 +121,7 @@ def run(plan, shard_id, runtime, result_path, cache_root):
         result["seconds"] = time.monotonic() - started
         result_path.parent.mkdir(parents=True, exist_ok=True)
         result_path.write_text(json.dumps(result, indent=2) + "\n")
+        collect_logs(runtime, result_path.parent / "logs" / shard_id)
         summary = os.environ.get("GITHUB_STEP_SUMMARY")
         if summary:
             with open(summary, "a") as output:
@@ -135,7 +159,9 @@ def main():
     parser.add_argument("--runtime", type=Path)
     parser.add_argument("--result", type=Path)
     parser.add_argument(
-        "--cache-root", type=Path, default=Path("/media/nvme/kerrigan/neat-apps-model-cache/v1")
+        "--cache-root",
+        type=Path,
+        default=Path("/media/nvme/kerrigan/neat-apps-model-cache/v1"),
     )
     parser.add_argument("--verify-results", type=Path)
     args = parser.parse_args()

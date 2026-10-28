@@ -172,6 +172,22 @@ def test_release_gate_accepts_complete_results(plan):
     execution.verify_results(plan, results)
 
 
+def test_log_staging_does_not_follow_symlink_fixtures(tmp_path):
+    runtime = tmp_path / "runtime"
+    logs = runtime / "sandbox-test/python/example"
+    logs.mkdir(parents=True)
+    (logs / "summary.log").write_text("test output")
+    (logs / "self-symlink").symlink_to("self-symlink")
+    (logs / "broken.log").symlink_to("broken.log")
+    (logs / "recursive-dir").symlink_to(logs, target_is_directory=True)
+    destination = tmp_path / "staged"
+    execution.collect_logs(runtime, destination)
+    assert [
+        str(p.relative_to(destination)) for p in destination.rglob("*") if p.is_file()
+    ] == ["python/example/summary.log"]
+    assert (destination / "python/example/summary.log").read_text() == "test output"
+
+
 def test_shard_execution_uses_strict_harness_and_records_all_tasks(
     scope, plan, tmp_path, monkeypatch
 ):
