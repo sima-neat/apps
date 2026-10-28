@@ -1,7 +1,7 @@
 // E2E test for usb-camera-object-detector.
 // There is no USB camera on the test target, so this drives the same graph from
 // the fixed-image MJPEG source declared under `testing.e2e` in config.yaml. That
-// exercises the MJPEG passthrough video sender, JpegParse/SimaDecode for 4:2:2 and 4:2:0
+// exercises the MJPEG passthrough video sender, SimaDecode for 4:2:2 and 4:2:0
 // MJPEG straight into the model, box decode, and metadata send. USB capture requires
 // camera validation.
 #include "support/testing/test_config.h"

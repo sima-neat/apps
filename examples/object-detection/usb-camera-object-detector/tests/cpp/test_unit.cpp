@@ -62,7 +62,7 @@ std::string config_body(const std::string& extra_source = "",
       .append("  path: models/yolo26m-det-bf16-mla_tess-b1.tar.gz\n")
       .append("  labels: " + labels + "\n")
       .append("source:\n")
-      .append("  device: /dev/video16\n")
+      .append("  camera: /base/pci@7000000000-3.1:1.0-046d:08e5\n")
       .append("  width: 1920\n")
       .append("  height: 1080\n")
       .append("  fps: 30\n")
@@ -188,13 +188,15 @@ bool test_source_reports_mjpeg_capture(const std::string& binary) {
   bool ok = true;
   const auto description =
       source_description_for(binary, "test_source_reports_mjpeg_capture", config_body(), &ok);
-  return ok && expect_contains(description, "V4L2 device=/dev/video16", "configured camera") &&
+  return ok &&
+         expect_contains(description,
+                         "UsbCameraInput camera=/base/pci@7000000000-3.1:1.0-046d:08e5",
+                         "configured camera") &&
          expect_contains(description, "image/jpeg,width=1920,height=1080,framerate=30/1",
                          "encoded caps") &&
-         expect_contains(
-             description,
-             "Input -> {VideoSender(MJPEG passthrough), JpegParse -> SimaDecode(MJPEG) -> model}",
-             "passthrough video and decoded model routes");
+         expect_contains(description,
+                         "{VideoSender(MJPEG passthrough), SimaDecode(MJPEG) -> model}",
+                         "passthrough video and decoded model routes");
 }
 
 bool test_source_honours_capture_mode(const std::string& binary) {
@@ -326,29 +328,29 @@ bool test_override_reported_as_source(const std::string& binary) {
   return ok;
 }
 
-bool test_omitted_device_is_rejected(const std::string& binary) {
+bool test_omitted_camera_is_rejected(const std::string& binary) {
   auto body = config_body();
-  const std::string line = "  device: /dev/video16\n";
+  const std::string line = "  camera: /base/pci@7000000000-3.1:1.0-046d:08e5\n";
   body.erase(body.find(line), line.size());
-  return validate_rejects(binary, "omitted_device", body, "source.device", "omitted camera device");
+  return validate_rejects(binary, "omitted_camera", body, "source.camera", "omitted camera ID");
 }
 
-// An override supplies its own source, so the device is not required.
-bool test_override_allows_empty_device(const std::string& binary) {
+// An override supplies its own source, so the camera is not required.
+bool test_override_allows_empty_camera(const std::string& binary) {
   const fs::path config_path =
-      write_config("test_override_allows_empty_device",
+      write_config("test_override_allows_empty_camera",
                    std::string("model:\n")
                        .append("  path: models/yolo26m-det-bf16-mla_tess-b1.tar.gz\n")
                        .append("  labels: " + std::string(kShippedLabels) + "\n")
                        .append("source:\n")
-                       .append("  device: \"\"\n")
+                       .append("  camera: \"\"\n")
                        .append("  override_fragment: \"videotestsrc ! queue\"\n")
                        .append("output:\n")
                        .append("  insight:\n")
                        .append("    host: 127.0.0.1\n"));
   const auto result =
       spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
-  const bool ok = expect_true(result.exit_code == 0, "empty device validates when overridden");
+  const bool ok = expect_true(result.exit_code == 0, "empty camera validates when overridden");
   remove_dir(config_path.parent_path().string());
   return ok;
 }
@@ -429,8 +431,8 @@ int main(int argc, char** argv) {
   ok &= test_literal_block_scalar_keeps_lines();
   ok &= test_explicit_block_indentation(binary);
   ok &= test_override_reported_as_source(binary);
-  ok &= test_override_allows_empty_device(binary);
-  ok &= test_omitted_device_is_rejected(binary);
+  ok &= test_override_allows_empty_camera(binary);
+  ok &= test_omitted_camera_is_rejected(binary);
   ok &= test_missing_model_path_is_rejected(binary);
   ok &= test_missing_labels_file_is_rejected(binary);
   ok &= test_empty_labels_file_is_rejected(binary);

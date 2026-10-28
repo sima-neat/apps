@@ -3,7 +3,7 @@ model:                       # Detection model selection.
   labels: examples/object-detection/usb-camera-object-detector/src/common/coco_label.txt
 
 source:                      # USB (UVC) camera capture.
-  device: <video-capture-node>   # Required: find your USB camera with v4l2-ctl --list-devices.
+  camera: <usb-camera-id>    # Required: a stable USB camera ID listed by usb_camera_ids().
   width: 1920                # Example default; an MJPG width, a multiple of 8 and at most 2040.
   height: 1080               # The matching MJPG height, a multiple of 8 and at most 2040.
   fps: 30                    # Choose an FPS listed for that MJPG resolution.
@@ -29,7 +29,7 @@ output:                      # Insight receiver.
 
 # Test harness settings only. Normal example runs ignore this section.
 # The e2e tests have no camera, so source.override_fragment re-encodes a fixed COCO image as
-# 4:2:2 MJPEG, the sampling most USB cameras send, through the same JpegParse/SimaDecode route.
+# 4:2:2 MJPEG, the sampling most USB cameras send, through the same SimaDecode route.
 testing:
   e2e:
     source:

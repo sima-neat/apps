@@ -1,7 +1,7 @@
 """Unit tests for usb-camera-object-detector (Python).
 
 These run with no camera, no model, and no board: everything covered here is
-configuration handling, metadata, or mocked compressed-camera capture.
+configuration handling, metadata, or the resolved capture/decode route.
 """
 
 import copy
@@ -36,7 +36,7 @@ def valid_config() -> dict:
     return {
         "model": {"path": "models/pack.tar.gz", "labels": str(LABELS_TXT)},
         "source": {
-            "device": "/dev/video16",
+            "camera": "/base/pci@7000000000-3.1:1.0-046d:08e5",
             "width": 1920,
             "height": 1080,
             "fps": 30,
@@ -128,24 +128,22 @@ class TestConfigLoading:
 
         assert raw["output"]["insight"]["host"] == "<insight-host-ip>"
         assert raw["source"]["override_fragment"] == ""
-        # The capture node is assigned at plug-in time and differs per camera,
-        # port and boot. Shipping a real number invites reusing a stale one that
-        # may name a live non-camera device on the board.
-        assert raw["source"]["device"] == "<video-capture-node>"
+        # A camera ID names one USB port on one board; the reader lists their own.
+        assert raw["source"]["camera"] == "<usb-camera-id>"
 
     def test_defaults_apply_to_missing_sections(self):
         cfg = main.build_app_config({"model": {"path": "models/pack.tar.gz", "labels": "l.txt"}})
 
         assert (cfg.width, cfg.height, cfg.fps) == (1920, 1080, 30)
-        assert cfg.device == ""
+        assert cfg.camera == ""
         assert cfg.max_detections == 100
         assert cfg.queue_depth == 3
         assert cfg.profile is False
 
-    def test_omitted_device_is_rejected_without_override(self):
+    def test_omitted_camera_is_rejected_without_override(self):
         raw = valid_config()
-        del raw["source"]["device"]
-        with pytest.raises(ValueError, match="source.device"):
+        del raw["source"]["camera"]
+        with pytest.raises(ValueError, match="source.camera must be set"):
             main.validate_config(main.build_app_config(raw))
         raw["source"]["override_fragment"] = "videotestsrc ! queue"
         main.validate_config(main.build_app_config(raw))
@@ -161,7 +159,7 @@ class TestConfigLoading:
             ("source", "width", 3840, "at most 2040"),
             ("source", "height", 0, "source.height"),
             ("source", "fps", 0, "source.fps"),
-            ("source", "device", "", "source.device"),
+            ("source", "camera", "", "source.camera"),
             ("inference", "frames", -1, "inference.frames"),
             ("inference", "min_score", 1.5, "inference.min_score"),
             ("inference", "min_score", -0.1, "inference.min_score"),
@@ -207,9 +205,9 @@ class TestConfigLoading:
         raw["output"]["insight"][key] = port
         main.validate_config(main.build_app_config(raw))
 
-    def test_device_may_be_empty_when_overridden(self):
-        """An override fragment replaces the camera, so the device is not needed."""
-        raw = config_with(source={"device": "", "override_fragment": "videotestsrc ! queue"})
+    def test_camera_may_be_empty_when_overridden(self):
+        """An override fragment replaces the camera, so the camera ID is not needed."""
+        raw = config_with(source={"camera": "", "override_fragment": "videotestsrc ! queue"})
 
         main.validate_config(main.build_app_config(raw))  # must not raise
 
@@ -231,142 +229,14 @@ class TestConfigLoading:
             main.build_app_config(config_with(runtime={"profile": "yes"}))
 
 
-class FakeCapture:
-    def __init__(self, frames=(), *, opened=True, mismatches=None, reject_raw=False):
-        self.frames = iter(frames)
-        self.opened = opened
-        self.properties = {}
-        self.mismatches = mismatches or {}
-        self.reject_raw = reject_raw
-        self.released = False
-
-    def isOpened(self):
-        return self.opened
-
-    def set(self, key, value):
-        self.properties[key] = value
-        return not (self.reject_raw and key == "CONVERT_RGB")
-
-    def get(self, key):
-        return self.mismatches.get(key, self.properties.get(key, 0))
-
-    def read(self):
-        data = next(self.frames, None)
-        return (False, None) if data is None else (True, SimpleNamespace(tobytes=lambda: data))
-
-    retrieve = read
-
-    def release(self):
-        self.released = True
-
-
-def fake_cv2(capture):
-    module = SimpleNamespace(CAP_V4L2=200, VideoCapture=lambda *args: capture,
-                             VideoWriter_fourcc=lambda *args: 1196444237)
-    module.VideoCapture.waitAny = lambda streams, timeout: (True, [0])
-    for key in ("FOURCC", "FRAME_WIDTH", "FRAME_HEIGHT", "FPS", "BUFFERSIZE", "CONVERT_RGB"):
-        setattr(module, "CAP_PROP_" + key, key)
-    return module
-
-
 @pytest.mark.unit
-class TestUsbCapture:
-    def test_preserves_encoded_jpeg_and_disables_cpu_decode(self):
-        jpeg = b"\xff\xd8compressed-camera-frame\xff\xd9"
-        capture = FakeCapture([jpeg])
-        camera = main.UsbCamera(main.build_app_config(valid_config()), fake_cv2(capture))
-        assert capture.properties["CONVERT_RGB"] == 0
-        assert capture.properties["FOURCC"] == 1196444237
-        assert capture.properties["BUFFERSIZE"] == 2
-        assert camera.caps == "image/jpeg,width=1920,height=1080,framerate=30/1"
-        assert camera.read() == jpeg
-        camera.close()
-        assert capture.released
-
-    def test_discards_truncated_jpeg_before_decode(self):
-        jpeg = b"\xff\xd8complete\xff\xd9"
-        capture = FakeCapture([b"\xff\xd8truncated", jpeg])
-        camera = main.UsbCamera(main.build_app_config(valid_config()), fake_cv2(capture))
-        assert camera.read() == jpeg
-        assert camera.dropped_frames == 1
-
-    def test_trims_padding_after_end_of_image(self):
-        # UVC cameras (e.g. C920) pad buffers after EOI; header and padding bytes may hold FF D9.
-        jpeg = (b"\xff\xd8" + b"\xff\xe1\x00\x06\xff\xd9\x00\x00"
-                + b"\xff\xda\x00\x02scan" + b"\xff\xd9")
-        capture = FakeCapture([jpeg + b"\x12\xff\xd9\x34"])
-        camera = main.UsbCamera(main.build_app_config(valid_config()), fake_cv2(capture))
-        assert camera.read() == jpeg
-        assert camera.dropped_frames == 0
-
-    @pytest.mark.parametrize("frames,message", [
-        ([], "stopped delivering"),
-        ([b"not a JPEG"], "invalid MJPEG"),
-        ([b"\xff\xd8truncated"] * 8, "8 consecutive incomplete"),
-    ])
-    def test_capture_errors_fail_clearly(self, frames, message):
-        camera = main.UsbCamera(main.build_app_config(valid_config()), fake_cv2(FakeCapture(frames)))
-        with pytest.raises(RuntimeError, match=message):
-            camera.read()
-
-    @pytest.mark.parametrize("kwargs,message", [
-        ({"opened": False}, "Cannot open"),
-        ({"reject_raw": True}, "without CPU decode"),
-        ({"mismatches": {"FOURCC": 0}}, "compressed MJPEG"),
-        ({"mismatches": {"FRAME_WIDTH": 640}}, "requested resolution/frame rate"),
-        ({"mismatches": {"FRAME_HEIGHT": 480}}, "requested resolution/frame rate"),
-        ({"mismatches": {"FPS": 15}}, "requested resolution/frame rate"),
-        ({"mismatches": {"FPS": float("nan")}}, "requested resolution/frame rate"),
-    ])
-    def test_failed_negotiation_releases_camera(self, kwargs, message):
-        capture = FakeCapture(**kwargs)
-        with pytest.raises(RuntimeError, match=message):
-            main.UsbCamera(main.build_app_config(valid_config()), fake_cv2(capture))
-        assert capture.released
-
-    def test_stalled_camera_can_be_cancelled_without_concurrent_release(self):
-        import threading
-        import time
-
-        capture = FakeCapture([b"\xff\xd8seed\xff\xd9"])
-        cv2 = fake_cv2(capture)
-        waiting = threading.Event()
-        def wait_any(streams, timeout):
-            assert timeout == 100_000_000
-            assert not capture.released
-            waiting.set()
-            time.sleep(timeout / 1e9)
-            return False, []
-        cv2.VideoCapture.waitAny = wait_any
-        camera = main.UsbCamera(main.build_app_config(valid_config()), cv2)
-        stop = threading.Event()
-        result = []
-        def capture_frame():
-            try:
-                result.append(camera.read(stop))
-            finally:
-                camera.close()
-        worker = threading.Thread(target=capture_frame)
-        worker.start()
-        try:
-            assert waiting.wait(1)
-        finally:
-            stop.set()
-            worker.join(1)
-        assert not worker.is_alive()
-        assert result == [None]
-        assert capture.released
-
-    def test_stalled_camera_times_out(self, monkeypatch):
-        capture = FakeCapture([b"\xff\xd8seed\xff\xd9"])
-        cv2 = fake_cv2(capture)
-        cv2.VideoCapture.waitAny = lambda *args: (False, [])
-        camera = main.UsbCamera(main.build_app_config(valid_config()), cv2)
-        times = iter([0, 21])
-        monkeypatch.setattr(main.time, "monotonic", lambda: next(times))
-        with pytest.raises(RuntimeError, match="timed out"):
-            camera.read()
-        camera.close()
+class TestSource:
+    def test_camera_route_uses_usb_camera_input(self):
+        cfg = main.build_app_config(valid_config())
+        assert main.source_description(cfg) == (
+            "UsbCameraInput camera=/base/pci@7000000000-3.1:1.0-046d:08e5 "
+            "caps=image/jpeg,width=1920,height=1080,framerate=30/1 "
+            "-> {VideoSender(MJPEG passthrough), SimaDecode(MJPEG) -> model}")
 
     def test_override_format_must_be_nv12_or_nv16(self):
         cfg = main.build_app_config(config_with(source={"override_format": "RGB"}))
@@ -380,67 +250,34 @@ class TestUsbCapture:
 
 
 @pytest.mark.unit
-class TestCaptureLifecycle:
+class TestRunLifecycle:
     @pytest.mark.parametrize("fail_metadata", [False, True])
-    def test_success_and_send_failure_stop_and_join_capture(self, monkeypatch, fail_metadata):
-        import threading
-
-        pushed, closed = threading.Event(), threading.Event()
-        push_calls = []
-
-        def push(samples):
-            push_calls.append(samples)
-            pushed.set()
-            return True
-
-        def read(stop=None):
-            assert closed.wait(2), "capture was not stopped"
-            return b"\xff\xd8\xff\xd9"
-
-        def pull(*args):
-            assert pushed.wait(2), "capture did not submit the seed"
-            return SimpleNamespace()
+    def test_success_and_send_failure_close_the_run(self, monkeypatch, fail_metadata):
+        closed = []
 
         def send(*args):
             if fail_metadata:
                 raise RuntimeError("metadata send failed")
 
-        monkeypatch.setattr(main, "pyneat", SimpleNamespace(
-            make_encoded_sample=lambda *args, **kwargs: SimpleNamespace()))
         monkeypatch.setattr(main, "extract_bbox_payload", lambda sample: b"")
         monkeypatch.setattr(main, "send_metadata", send)
-        runtime = SimpleNamespace(seed=SimpleNamespace(), video_port=9000,
-                                  run=SimpleNamespace(push=push, pull=pull, close=closed.set))
+        runtime = SimpleNamespace(video_port=9000, run=SimpleNamespace(
+            pull=lambda *args: SimpleNamespace(), close=lambda: closed.append(True)))
         cfg = main.build_app_config(config_with(inference={"frames": 1}))
-        camera = SimpleNamespace(read=read, caps="image/jpeg", close=lambda: None)
         if fail_metadata:
             with pytest.raises(RuntimeError, match="metadata send failed"):
-                main.run_pipeline(runtime, cfg, camera)
+                main.run_pipeline(runtime, cfg)
         else:
-            assert main.run_pipeline(runtime, cfg, camera) == 1
-        assert closed.is_set()
-        assert len(push_calls) == 1
-        assert not any(t.name == "usb-capture" for t in threading.enumerate())
+            assert main.run_pipeline(runtime, cfg) == 1
+        assert closed == [True]
 
-    def test_camera_failure_reaches_main_loop(self):
-        import threading
-
-        failed, closed = threading.Event(), threading.Event()
-
-        def read(stop=None):
-            failed.set()
-            raise RuntimeError("USB camera stopped delivering frames")
-
-        def pull(*args):
-            assert failed.wait(2)
-            return None
-
-        runtime = SimpleNamespace(seed=None, run=SimpleNamespace(pull=pull, close=closed.set))
-        with pytest.raises(RuntimeError, match="stopped delivering frames"):
-            main.run_pipeline(runtime, main.build_app_config(valid_config()),
-                              SimpleNamespace(read=read, caps="image/jpeg", close=lambda: None))
-        assert closed.is_set()
-        assert not any(t.name == "usb-capture" for t in threading.enumerate())
+    def test_missing_detections_time_out(self):
+        closed = []
+        runtime = SimpleNamespace(run=SimpleNamespace(pull=lambda *args: None,
+                                                      close=lambda: closed.append(True)))
+        with pytest.raises(RuntimeError, match="timed out waiting for detections"):
+            main.run_pipeline(runtime, main.build_app_config(valid_config()))
+        assert closed == [True]
 
 
 @pytest.mark.unit
@@ -644,7 +481,7 @@ class TestTwinParity:
 
     @pytest.mark.parametrize(
         "key",
-        ["model.path", "model.labels", "source.device", "source.width", "source.height",
+        ["model.path", "model.labels", "source.camera", "source.width", "source.height",
          "source.fps", "source.override_fragment", "source.override_format",
          "inference.frames",
          "inference.min_score", "inference.nms_iou", "inference.max_detections",

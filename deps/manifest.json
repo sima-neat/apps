@@ -1,6 +1,6 @@
 {
   "neat-core": {
-    "policy": "snap"
+    "branch": "feat/838-camerainput-uvc"
   },
   "sdk": {
     "channel": "develop"

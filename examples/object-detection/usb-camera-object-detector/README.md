@@ -90,14 +90,18 @@ Classification and segmentation models are not supported.
 
 ## Configure
 
-**1. Find your camera.** Plug it in and run:
+**1. Find your camera.** Plug it in and list the connected USB camera IDs:
 
 ```bash
-v4l2-ctl --list-devices
+source ~/pyneat/bin/activate
+python3 -c "import pyneat; print(pyneat.usb_camera_ids())"
 ```
 
-Find your USB camera by name. Copy a device path listed beneath it, then replace
-`<camera-device>` in this command:
+An ID looks like `/base/pci@7000000000-3.1:1.0-046d:08e5`. It stays the same across
+reboots and plug order, and changes when the camera moves to another USB port.
+
+To list the camera's modes, run `v4l2-ctl --list-devices`, copy a device path listed
+beneath your camera, then replace `<camera-device>` in this command:
 
 ```bash
 v4l2-ctl --device "<camera-device>" --list-formats-ext
@@ -106,14 +110,14 @@ v4l2-ctl --device "<camera-device>" --list-formats-ext
 Use a node whose output includes `MJPG` (MJPEG). If it lists no image formats,
 try the next node under the same camera. Choose a **width, height, and FPS listed
 under `MJPG`** whose width and height are multiples of 8 and at most 2040 (RTP/JPEG
-cannot carry 4K). Device numbers can change after reconnecting the camera.
+cannot carry 4K).
 
 **2. Edit `${APP_DIR}/src/common/config.yaml`.** Set these values:
 
 | Setting | Value to use |
 | --- | --- |
 | `model.path` | `models/yolo26n-det-bf16-mla_tess-b1.tar.gz` |
-| `source.device` | The camera device you found above |
+| `source.camera` | The camera ID you found above |
 | `source.width`, `source.height`, `source.fps` | One MJPEG mode supported by your camera |
 | `output.insight.host` | IP address of your Insight receiver |
 | `output.insight.video_port` | Insight's video UDP port (default `9000`); it receives the camera's MJPEG |
@@ -151,9 +155,9 @@ longer while the model is unpacked. Press **Ctrl+C** to stop.
 
 ## Troubleshooting
 
-- **Camera cannot open or mode is unsupported:** repeat camera discovery and select an `MJPG` mode shown by `--list-formats-ext`.
+- **Camera cannot open or mode is unsupported:** the error lists the connected camera IDs or the camera's MJPEG modes; set `source.camera` and the mode from it.
 - **No video or overlays in Insight:** check the receiver IP address and both UDP ports.
-- **Low frame rate or incomplete JPEG errors:** try a lower resolution or FPS supported by the camera. Set `runtime.profile: true` to see the achieved output rate.
+- **Low frame rate:** try a lower resolution or FPS supported by the camera. Set `runtime.profile: true` to see the achieved output rate.
 
 Add `--validate-config-only` to either run command to check config values without
 opening the camera or loading the model. It does not check camera capabilities.
@@ -171,11 +175,12 @@ The packaged C++ source is an implementation reference. Run the executable under
 
 To modify, compile, or test this example, use the [Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).
 
-Both implementations branch each camera JPEG: `VideoSender` forwards it unchanged to
-Insight as RTP/JPEG, and `JpegParse` and `SimaDecode` decode it once on the hardware for
-the model. The app reads the camera's first frame to choose the decoder format, NV12 for
-4:2:0 or NV16 for 4:2:2, and the model preprocessing reads that format directly, so no
-conversion stage or encoder runs and no camera-specific setting is needed.
+Both implementations capture with `UsbCameraInput` and branch each camera JPEG:
+`VideoSender` forwards it unchanged to Insight as RTP/JPEG, and `SimaDecode` decodes it
+once on the hardware for the model. `usb_camera_info` checks the camera once at startup
+and reports its decoded format, NV12 for 4:2:0 or NV16 for 4:2:2; the decoder writes that
+format and the model preprocessing reads it directly, so no conversion stage or encoder
+runs and no camera-specific setting is needed.
 `source.override_fragment` is an optional diagnostic GStreamer source that must produce
 MJPEG at the configured width, height, and FPS; set `source.override_format` to its
 decoded format (NV12 or NV16). Leave the override empty for USB capture. End-to-end tests

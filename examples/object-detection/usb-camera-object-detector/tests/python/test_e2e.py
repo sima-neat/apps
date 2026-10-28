@@ -2,7 +2,7 @@
 
 There is no USB camera on the test target, so these drive the same graph from
 the fixed-image MJPEG source declared under `testing.e2e` in config.yaml. That
-covers the MJPEG passthrough video sender, JpegParse/SimaDecode for 4:2:2 and
+covers the MJPEG passthrough video sender, SimaDecode for 4:2:2 and
 4:2:0 MJPEG straight into the model, box decode, and metadata send. USB capture requires camera
 validation separately.
 """
