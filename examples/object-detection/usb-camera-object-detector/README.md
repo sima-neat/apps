@@ -10,7 +10,7 @@
 | Languages | C++, Python |
 | Status | stable |
 | Binary Name | usb-camera-object-detector |
-| Model | yolo_26n_mpk |
+| Model | yolo26n-det-bf16-mla_tess-b1 |
 
 ## Concept
 
@@ -40,17 +40,18 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-Start with YOLO26n from Model Zoo:
+Start with YOLO26n:
 
 ```bash
+export MODELZOO_VERSION="3.0.0"
 mkdir -p models
 cd models
-sima-cli modelzoo --version 2.1.3 --boardtype modalix get yolo_26n
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26-detection/yolo26n-det-bf16-mla_tess-b1.tar.gz"
 cd ..
 ```
 
-The downloaded model is `models/yolo_26n_mpk.tar.gz`. Use this path in the config.
-Model Zoo version `2.1.3` comes from the Apps dependency manifest.
+The downloaded model is `models/yolo26n-det-bf16-mla_tess-b1.tar.gz`. Use this path in the config.
+Model Zoo version `3.0.0` comes from the Apps dependency manifest.
 
 <details>
 <summary>Other supported YOLO26 detection models</summary>
@@ -58,7 +59,6 @@ Model Zoo version `2.1.3` comes from the Apps dependency manifest.
 | Model | Role | Source |
 | --- | --- | --- |
 | `yolo26m-det-bf16-mla_tess-b1.tar.gz` | Supported | Direct artifact |
-| `yolo26n-det-bf16-mla_tess-b1.tar.gz` | Supported | Direct artifact |
 | `yolo26s-det-bf16-mla_tess-b1.tar.gz` | Supported | Direct artifact |
 | `yolo26l-det-bf16-mla_tess-b1.tar.gz` | Supported | Direct artifact |
 | `yolo26x-det-bf16-mla_tess-b1.tar.gz` | Supported | Direct artifact |
@@ -68,7 +68,7 @@ Model Zoo version `2.1.3` comes from the Apps dependency manifest.
 For these direct artifacts, replace `<model-file>` with a filename from the table:
 
 ```bash
-export MODELZOO_VERSION="2.1.3"
+export MODELZOO_VERSION="3.0.0"
 mkdir -p models
 cd models
 sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26-detection/<model-file>"
@@ -112,7 +112,7 @@ cannot carry 4K). Device numbers can change after reconnecting the camera.
 
 | Setting | Value to use |
 | --- | --- |
-| `model.path` | `models/yolo_26n_mpk.tar.gz` |
+| `model.path` | `models/yolo26n-det-bf16-mla_tess-b1.tar.gz` |
 | `source.device` | The camera device you found above |
 | `source.width`, `source.height`, `source.fps` | One MJPEG mode supported by your camera |
 | `output.insight.host` | IP address of your Insight receiver |

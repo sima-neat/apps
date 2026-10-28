@@ -603,10 +603,6 @@ class TestModelAcquisition:
 
     def test_scope_models_are_downloadable_artifacts(self):
         for model_id, model in self.scope()["models"].items():
-            if model["source"] == "modelzoo":
-                assert model["name"] == "yolo_26n"
-                assert model["file"] == "yolo_26n_mpk.tar.gz"
-                continue
             assert model["source"] == "url", f"{model_id} must be a downloadable artifact"
             assert model["url"].startswith("https://"), f"{model_id} needs an https url"
             assert model["url"].endswith(model["file"]), f"{model_id} url must end with its file"
@@ -614,8 +610,6 @@ class TestModelAcquisition:
     def test_scope_model_urls_are_modelzoo_version_agnostic(self):
         """The Model Zoo version is resolved at download time, never hardcoded."""
         for model_id, model in self.scope()["models"].items():
-            if model["source"] == "modelzoo":
-                continue
             assert "{modelzoo_version}" in model["url"], (
                 f"{model_id} url must use the {{modelzoo_version}} placeholder"
             )
@@ -636,9 +630,6 @@ class TestModelAcquisition:
     def test_documented_download_matches_the_scope_url(self):
         readme = (EXAMPLE_DIR / "README.md").read_text(encoding="utf-8")
         for model in self.scope()["models"].values():
-            if model["source"] == "modelzoo":
-                assert "get " + model["name"] in readme
-                continue
             documented = model["url"].replace("{modelzoo_version}", "${MODELZOO_VERSION}")
             assert documented in readme, f"README does not document {documented}"
 
