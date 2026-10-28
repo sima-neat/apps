@@ -702,7 +702,7 @@ def build_graph(cfg: Config, backbone, width: int, height: int, fps: int):
     inference.add(pyneat.nodes.queue(latest_queue(4)))
     inference.add(backbone.graph())
     backbone_output = pyneat.Graph("backbone_output")
-    backbone_output.add(pyneat.nodes.output("backbone", pyneat.OutputOptions.every_frame(4)))
+    backbone_output.add(pyneat.nodes.output("backbone", pyneat.OutputOptions.every_frame(8)))
     inference.add(backbone_output)
 
     graph = pyneat.Graph("rfdetr_source")
