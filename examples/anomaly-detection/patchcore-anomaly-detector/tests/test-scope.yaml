@@ -9,9 +9,11 @@ unit:
 e2e:
   python:
     enabled: true
+    requires_rtsp: true
     models:
     - patchcore_wide_resnet50_2
   cpp:
     enabled: true
+    requires_rtsp: true
     models:
     - patchcore_wide_resnet50_2

@@ -262,6 +262,11 @@ def validate_scope(scope: dict[str, Any], apps_root: Path) -> list[str]:
                     )
         selected_registry_models: set[str] = set()
         for language in sorted(VALID_LANGUAGES):
+            try:
+                if not isinstance(e2e_config(entry, language).get("requires_rtsp", True), bool):
+                    errors.append(f"{example_key}: e2e.{language}.requires_rtsp must be boolean")
+            except ValueError as exc:
+                errors.append(f"{example_key}: {exc}")
             for kind in sorted(VALID_KINDS):
                 try:
                     enabled = is_enabled(entry, language, kind)
@@ -412,6 +417,10 @@ def main() -> int:
 
     sub.add_parser("generate")
 
+    stream_requirement = sub.add_parser("requires-rtsp")
+    stream_requirement.add_argument("--language", choices=sorted(VALID_LANGUAGES),
+                                    action="append", required=True)
+
     py_files = sub.add_parser("python-files")
     py_files.add_argument("--kind", choices=sorted(VALID_KINDS), required=True)
 
@@ -445,6 +454,14 @@ def main() -> int:
     if args.command == "validate":
         if not args.quiet:
             print(f"validated {args.scope_file}")
+        return 0
+    elif args.command == "requires-rtsp":
+        required = any(
+            is_enabled(entry, language, "e2e")
+            and e2e_config(entry, language).get("requires_rtsp", True)
+            for entry in scope["examples"].values() for language in args.language
+        )
+        print("true" if required else "false")
         return 0
     if args.command == "generate":
         print(yaml.safe_dump(scope, sort_keys=False), end="")

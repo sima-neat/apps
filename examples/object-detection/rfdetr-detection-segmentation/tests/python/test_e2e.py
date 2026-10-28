@@ -35,7 +35,7 @@ def _env_int(name: str, default: int) -> int:
     [
         ("detection", variant, codec, f"rtsp_{codec}_url")
         for codec in ("h264", "h265", "mjpeg")
-        for variant in ("small", "medium")
+        for variant in ("nano", "small", "medium", "large")
     ]
     + [
         ("segmentation", "medium", codec, f"rtsp_{codec}_url")
@@ -54,11 +54,16 @@ def test_publishes_insight_video_and_metadata(
     request,
 ):
     skip_unless_e2e_ready(_runtime_ready(), "numpy and pyneat are required")
-    model_name = f"rfdetr-{'seg-' if task == 'segmentation' else ''}{variant}"
-    paths = {
-        "backbone": models_dir / f"{model_name}-backbone.tar.gz",
-        "transformer": models_dir / f"{model_name}-transformer.tar.gz",
-    }
+    if task == "detection":
+        paths = {
+            "backbone": models_dir / f"rf_detr_{variant}_w8a8_w16a16_backbone_mpk.tar.gz",
+            "transformer": models_dir / f"rf_detr_{variant}_w8a8_w16a16_decoder_mpk.tar.gz",
+        }
+    else:
+        paths = {
+            "backbone": models_dir / "rfdetr-seg-medium-backbone.tar.gz",
+            "transformer": models_dir / "rfdetr-seg-medium-transformer.tar.gz",
+        }
     for path in paths.values():
         skip_unless_e2e_ready(path.exists(), f"missing RF-DETR artifact: {path}")
     rtsp_url = request.getfixturevalue(stream_fixture)

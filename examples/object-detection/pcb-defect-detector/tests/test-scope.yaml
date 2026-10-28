@@ -9,9 +9,11 @@ unit:
 e2e:
   python:
     enabled: true
+    requires_rtsp: false
     models:
     - yolo26n_plc
   cpp:
     enabled: true
+    requires_rtsp: false
     models:
     - yolo26n_plc

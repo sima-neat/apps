@@ -13,11 +13,13 @@ unit:
 e2e:
   python:
     enabled: true
+    requires_rtsp: true
     models:
     - efficientsam3
     - efficientsam3_text_encoder
   cpp:
     enabled: true
+    requires_rtsp: true
     models:
     - efficientsam3
     - efficientsam3_text_encoder
