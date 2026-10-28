@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -305,6 +306,39 @@ def test_registry_latest_bypasses_persistent_cache():
         cache.source_identity({"source": "model-registry", "spec": "latest"}, "3.0.0")
         is None
     )
+
+
+def test_unready_exclusion_is_enforced_by_labels_not_only_candidate_name():
+    unready = runner("unready")
+    indistinguishable = runner("healthy-but-same-labels")
+    ready = runner("ready", extra=("ready-pod",))
+    fleet = planner.select_fleet(
+        [unready, indistinguishable, ready],
+        ["modalix"],
+        3,
+        "regular",
+        excluded_names=["unready"],
+    )
+    assert [r["candidate"] for r in fleet] == ["ready"]
+    assert not set(fleet[0]["labels"]) <= planner.label_set(unready)
+
+
+def test_missing_portal_access_fails_without_interactive_downloader(
+    tmp_path, monkeypatch
+):
+    executable = tmp_path / "sima-cli"
+    executable.write_text(f"#!{sys.executable}\n")
+    monkeypatch.setenv("SIMA_CLI_BIN", str(executable))
+    monkeypatch.setattr(
+        cache.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 78, stdout=""),
+    )
+    models = {
+        "model.tar.gz": {"source": "url", "url": "https://docs.sima.ai/model.tar.gz"}
+    }
+    with pytest.raises(RuntimeError, match="not provisioned"):
+        cache.probe_sources(models, "3.0.0")
 
 
 def test_release_and_portal_still_depend_on_all_shards():

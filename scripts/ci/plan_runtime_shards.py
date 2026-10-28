@@ -51,8 +51,10 @@ def label_set(runner):
     return {label["name"].casefold() for label in runner["labels"]}
 
 
-def select_fleet(runners, required, maximum, pool):
+def select_fleet(runners, required, maximum, pool, excluded_names=()):
     required = {label.casefold() for label in required}
+    excluded_names = {name.casefold() for name in excluded_names}
+    excluded = [r for r in runners if r["name"].casefold() in excluded_names]
     # Consider offline registrations too when proving a selector excludes RTSP.
     rtsp = [r for r in runners if "rtsp" in label_set(r)]
     eligible = [
@@ -66,6 +68,22 @@ def select_fleet(runners, required, maximum, pool):
         raise ValueError(
             f"No online {pool} runner matches the required platform/environment"
         )
+    safe = []
+    for runner in eligible:
+        labels = required | ({"rtsp"} if pool == "rtsp" else label_set(runner))
+        # runs-on has no negative runner-name filter. Prove the complete label
+        # conjunction cannot be claimed by an unready registration either.
+        if any(labels <= label_set(r) for r in excluded):
+            continue
+        if pool == "regular" and any(labels <= label_set(r) for r in rtsp):
+            continue
+        safe.append(runner)
+    if not safe:
+        raise ValueError(
+            "No safe label selector excluding RTSP or unready runners; "
+            "configure a dedicated ready-runner label/group"
+        )
+    eligible = safe
     idle = sorted((r for r in eligible if not r["busy"]), key=lambda r: r["name"])
     # If all are busy, queue one complete shard rather than drop that pool's tests.
     selected = idle[:maximum] or [min(eligible, key=lambda r: r["name"])]
@@ -119,7 +137,16 @@ def enumerate_suites(scope, weights):
     return suites
 
 
-def make_plan(scope, runners, required, weights, sha, rtsp_limit=6, regular_limit=3):
+def make_plan(
+    scope,
+    runners,
+    required,
+    weights,
+    sha,
+    rtsp_limit=6,
+    regular_limit=3,
+    excluded_names=(),
+):
     if not 1 <= rtsp_limit <= 6 or not 1 <= regular_limit <= 3:
         raise ValueError("Fleet limits must be 1..6 RTSP and 1..3 regular")
     suites = enumerate_suites(scope, weights)
@@ -128,7 +155,9 @@ def make_plan(scope, runners, required, weights, sha, rtsp_limit=6, regular_limi
         tasks = [s for s in suites if s["pool"] == pool]
         if not tasks:
             continue
-        fleet = select_fleet(runners, required, min(maximum, len(tasks)), pool)
+        fleet = select_fleet(
+            runners, required, min(maximum, len(tasks)), pool, excluded_names
+        )
         bins = [
             {
                 "id": f"{pool}-{i + 1}",
@@ -211,7 +240,19 @@ def main():
     weights = json.loads((ROOT / "tests/ci-durations.json").read_text())[
         "suite_seconds"
     ]
-    plan = make_plan(scope, runners, labels, weights, os.environ["GITHUB_SHA"])
+    excluded = json.loads(os.environ.get("APPS_UNREADY_RUNNERS") or "[]")
+    if not isinstance(excluded, list) or any(
+        not isinstance(name, str) for name in excluded
+    ):
+        raise ValueError("APPS_UNREADY_RUNNERS must be a JSON array of runner names")
+    plan = make_plan(
+        scope,
+        runners,
+        labels,
+        weights,
+        os.environ["GITHUB_SHA"],
+        excluded_names=excluded,
+    )
     args.output.write_text(json.dumps(plan, indent=2) + "\n")
     matrix = {
         "include": [{"shard": s["id"], "labels": s["labels"]} for s in plan["shards"]]

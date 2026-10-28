@@ -81,8 +81,14 @@ def probe_sources(models, modelzoo_version):
                 text=True,
                 capture_output=True,
                 timeout=30 + 15 * len(urls),
-                check=True,
+                check=False,
             )
+            if response.returncode == 78:
+                raise RuntimeError(
+                    "Developer Portal model access is not provisioned on this runner; "
+                    "configure it through Kerrigan before admitting model tests"
+                )
+            response.check_returncode()
             heads = json.loads(response.stdout)
         except (OSError, ValueError, TypeError, subprocess.SubprocessError):
             print(
@@ -106,12 +112,21 @@ def authenticated_probe():
     import contextlib
     import io
 
-    from sima_cli.auth.login import login
+    from sima_cli.auth.auth0 import get_auth_config, load_tokens, refresh_access_token
+    from sima_cli.auth.devportal import validate_session
 
     urls = json.load(sys.stdin)
     result = {}
     with contextlib.redirect_stdout(io.StringIO()):
-        session = login("external")
+        session, valid = validate_session()
+        if not valid:
+            tokens = load_tokens() or {}
+            if tokens.get("refresh_token"):
+                refresh_access_token(get_auth_config(), tokens["refresh_token"])
+                session, valid = validate_session()
+        if not valid:
+            # Hardware CI must never wait for an interactive device-login flow.
+            raise SystemExit(78)
         if session is not None:
             for url in urls:
                 try:

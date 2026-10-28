@@ -108,6 +108,15 @@ combination that excludes every RTSP registration in the inventory; removing
 the `rtsp` label alone would not exclude RTSP runners. Discovery fails clearly
 if no such combination exists. Use a dedicated regular label/group in that case.
 
+The optional repository variable `APPS_UNREADY_RUNNERS` is a JSON array of runner
+names temporarily excluded from Apps admission (for example, while model access
+is being provisioned). The planner also rejects any selector that could match an
+excluded registration, even when the proposed candidate has a different name.
+GitHub cannot express negative runner-name filters. Clear exclusions only after
+the affected devices have the required runtime and Developer Portal model access.
+Missing protected-model access fails explicitly instead of starting an interactive
+device-login flow in CI. Existing cached sessions and refresh tokens are reused.
+
 The planner balances suites using `tests/ci-durations.json`, seeded from the
 recorded successful baseline run. Unknown suites receive a conservative default
 duration. Nightly variants and all model selections remain in each generated

@@ -243,6 +243,7 @@ jobs:
         env:
           RUNNER_DISCOVERY_TOKEN: ${{ steps.app-token.outputs.token }}
           REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+          APPS_UNREADY_RUNNERS: ${{ vars.APPS_UNREADY_RUNNERS || '[]' }}
           RUNNER_GROUP: ${{ needs.resolve-test-runner.outputs.modalix_runner_group }}
           REQUIRED_LABELS: '["self-hosted","Linux","ARM64","modalix","vulcan-${{ needs.resolve-vulcan-config.outputs.vulcan_env }}"]'
         run: |
