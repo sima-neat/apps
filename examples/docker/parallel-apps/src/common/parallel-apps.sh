@@ -81,7 +81,7 @@ deploy() {
   done
 
   # Kernel driver devices: MLA, CVU, video decoder and encoder, and their memory heaps.
-  for device in /dev/mla /dev/cvu /dev/simaai-mem /dev/dma_heap/linux,cma \
+  for device in /dev/mla /dev/cvu /dev/dma_heap/linux,cma \
     /dev/dma_heap/simaai,dms /dev/allegroDecodeIP /dev/allegroIP; do
     args+=(--device "$device")
   done
