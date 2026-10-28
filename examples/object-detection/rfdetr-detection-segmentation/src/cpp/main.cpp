@@ -844,7 +844,7 @@ neat::Graph build_graph(const Config& cfg, neat::Model& backbone, const SourceGe
   inference.add(neat::nodes::Queue(latest_queue(4)));
   inference.add(backbone.graph());
   neat::Graph backbone_output("backbone_output");
-  backbone_output.add(neat::nodes::Output("backbone", neat::OutputOptions::EveryFrame(4)));
+  backbone_output.add(neat::nodes::Output("backbone", neat::OutputOptions::EveryFrame(8)));
   inference.add(backbone_output);
 
   neat::Graph graph("rfdetr_source");

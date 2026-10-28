@@ -9,9 +9,11 @@ unit:
 e2e:
   python:
     enabled: true
+    requires_rtsp: true
     models:
     - fastflow_demo
   cpp:
     enabled: true
+    requires_rtsp: true
     models:
     - fastflow_demo

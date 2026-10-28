@@ -70,7 +70,7 @@ streams:
 input:
   codec: h264                # h264/avc or h265/hevc.
   tcp: true
-  latency_ms: 100
+  latency_ms: 110
   drop_on_latency: true
   skip_rtsp_probe: true
   width: 1280

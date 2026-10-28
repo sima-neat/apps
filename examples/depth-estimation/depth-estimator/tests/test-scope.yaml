@@ -9,9 +9,11 @@ unit:
 e2e:
   python:
     enabled: true
+    requires_rtsp: false
     models:
     - depth_anything_v2_vits
   cpp:
     enabled: true
+    requires_rtsp: false
     models:
     - depth_anything_v2_vits

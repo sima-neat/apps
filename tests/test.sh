@@ -43,6 +43,7 @@ CONFIG_ENV_VARS=(
   SIMANEAT_APPS_HIGH_DENSITY_STREAM_PROGRESS_TIMEOUT_MS
   NEAT_APPS_SKIP_MODEL_DOWNLOAD
   SIMANEAT_APPS_TEST_MODEL_VARIANTS
+  SIMANEAT_APPS_TEST_RUN_HARNESS
 )
 
 PROCESS_ENV_WAS_SET=()
@@ -407,6 +408,11 @@ preflight_e2e_env() {
   local scope_file="${scope_file_raw:-${ROOT_DIR}/examples}"
   local output_dir="${output_dir_raw:-/tmp}"
   local class_image="${class_image_raw:-${ROOT_DIR}/assets/datasets-test/imagenet/goldfish.jpeg}"
+  local stream_languages=()
+  [[ "${RUN_CPP}" -eq 0 ]] || stream_languages+=(--language cpp)
+  [[ "${RUN_PYTHON}" -eq 0 ]] || stream_languages+=(--language python)
+  local requires_streams
+  requires_streams="$(scope_tool requires-rtsp "${stream_languages[@]}")" || return 1
 
   local model_count=0
   if [[ -d "${models_dir}" ]]; then
@@ -512,7 +518,9 @@ preflight_e2e_env() {
       preflight_fail=1
     fi
   fi
-  if [[ -z "${rtsp_h264_url}" && -z "${rtsp_h264_urls}" && -z "${rtsp_h265_url}" && \
+  if [[ "${requires_streams}" == "false" ]]; then
+    echo "  Selected e2e suites do not require live streams."
+  elif [[ -z "${rtsp_h264_url}" && -z "${rtsp_h264_urls}" && -z "${rtsp_h265_url}" && \
         -z "${rtsp_h265_urls}" && -z "${rtsp_mjpeg_url}" && \
         -z "${rtsp_mjpeg_urls}" && -z "${http_mjpeg_url}" && -z "${http_mjpeg_urls}" ]]; then
     echo "  [WARN] no codec stream env configured; stream e2e tests will skip."
@@ -964,7 +972,9 @@ if [[ "${RUN_PYTHON}" -eq 1 && "${PYTHON_READY}" -eq 1 ]]; then
   echo ""
   echo "  Python test interpreter: ${PYTHON_TEST_BIN}"
   if [[ "${RUN_UNIT}" -eq 1 ]]; then
-    run_harness_pytest
+    if [[ "${SIMANEAT_APPS_TEST_RUN_HARNESS:-1}" == "1" ]]; then
+      run_harness_pytest
+    fi
     run_pytest "unit"
   fi
   if [[ "${RUN_E2E}" -eq 1 ]]; then
