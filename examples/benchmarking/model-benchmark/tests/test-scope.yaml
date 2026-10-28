@@ -1,7 +1,7 @@
 models:
   resnet_50:
-    source: modelzoo
-    name: resnet_50
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/resnet_50_mpk.tar.gz
     file: resnet_50_mpk.tar.gz
   depth_anything_v2_vits:
     source: url
@@ -16,8 +16,8 @@ models:
     url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz
     file: detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz
   yolo_v8n_seg:
-    source: modelzoo
-    name: yolo_v8n_seg
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo_v8n_seg_mpk.tar.gz
     file: yolo_v8n_seg_mpk.tar.gz
   yolo26n-det-bf16-mla_tess-b1:
     source: url

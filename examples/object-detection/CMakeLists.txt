@@ -13,3 +13,4 @@ foreach(example IN ITEMS
   endif()
 endforeach()
 add_subdirectory(multi-stream-object-detector/src/cpp multi-stream-object-detector)
+add_subdirectory(multi-stream-obb-detector/src/cpp multi-stream-obb-detector)
