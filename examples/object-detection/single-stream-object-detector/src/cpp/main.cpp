@@ -39,6 +39,7 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -582,10 +583,13 @@ simaai::neat::SimaDecodeOptions make_usb_decode_options(const AppConfig& cfg,
   return opt;
 }
 
-simaai::neat::Graph make_source_graph(const AppConfig& cfg, const SourceGeometry& geometry) {
+simaai::neat::Graph
+make_source_graph(const AppConfig& cfg, const SourceGeometry& geometry,
+                  const std::optional<simaai::neat::UsbCameraInfo>& usb_camera = std::nullopt) {
   if (cfg.source_type == SourceType::Usb) {
     simaai::neat::Graph camera("usb_camera");
-    camera.add(simaai::neat::nodes::UsbCameraInput(make_usb_camera_options(cfg)));
+    camera.add(
+        simaai::neat::nodes::UsbCameraInput(make_usb_camera_options(cfg), usb_camera.value()));
     return camera;
   }
   if (cfg.source_type == SourceType::Rtsp) {
@@ -703,9 +707,12 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
   // camera's own sampling: most webcams send 4:2:2 MJPEG, which decodes to NV16, and the model
   // reads NV16 directly. Other sources are decoded once and re-encoded as H.264 for Insight.
   const bool usb = cfg.source_type == SourceType::Usb;
+  // The camera is checked once; the same info gives the decoded layout and builds the node.
+  const std::optional<simaai::neat::UsbCameraInfo> usb_camera =
+      usb ? std::optional(simaai::neat::usb_camera_info(make_usb_camera_options(cfg)))
+          : std::nullopt;
   const simaai::neat::FormatTag decoded_format =
-      usb ? simaai::neat::usb_camera_info(make_usb_camera_options(cfg)).decoded_format
-          : simaai::neat::FormatTag::NV12;
+      usb ? usb_camera->decoded_format : simaai::neat::FormatTag::NV12;
   runtime.model = make_model(cfg, geometry, decoded_format == simaai::neat::FormatTag::NV16);
   runtime.labels = load_labels(cfg.labels_path);
 
@@ -731,7 +738,7 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
   if (!usb) {
     decoded_outputs.insert(decoded_outputs.begin(), "video");
   }
-  auto source = make_source_graph(cfg, geometry);
+  auto source = make_source_graph(cfg, geometry, usb_camera);
   auto branch = simaai::neat::graphs::Branch(usb ? "decoded" : "source", decoded_outputs);
 
   simaai::neat::Graph video_graph("video");

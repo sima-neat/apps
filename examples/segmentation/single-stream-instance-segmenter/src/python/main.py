@@ -1001,10 +1001,10 @@ def make_usb_decode_options(cfg: AppConfig, decoded_format):
     return opt
 
 
-def make_source_graph(cfg: AppConfig, fps: int, width: int, height: int):
+def make_source_graph(cfg: AppConfig, fps: int, width: int, height: int, usb_camera=None):
     if cfg.source_type == "usb":
         camera = pyneat.Graph("usb_camera")
-        camera.add(pyneat.nodes.usb_camera_input(make_usb_camera_options(cfg)))
+        camera.add(pyneat.nodes.usb_camera_input(make_usb_camera_options(cfg), usb_camera))
         return camera
     if cfg.source_type == "rtsp":
         return pyneat.groups.rtsp_decoded_input(make_rtsp_source_options(cfg, fps, width, height))
@@ -1133,11 +1133,9 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
     # camera's own sampling: most webcams send 4:2:2 MJPEG, which decodes to NV16, and the model
     # reads NV16 directly. Other sources are decoded once and re-encoded as H.264 for Insight.
     usb = cfg.source_type == "usb"
-    decoded_format = (
-        pyneat.usb_camera_info(make_usb_camera_options(cfg)).decoded_format
-        if usb
-        else pyneat.Format.NV12
-    )
+    # The camera is checked once; the same info gives the decoded layout and builds the node.
+    usb_camera = pyneat.usb_camera_info(make_usb_camera_options(cfg)) if usb else None
+    decoded_format = usb_camera.decoded_format if usb else pyneat.Format.NV12
     model = make_model(cfg, frame_w, frame_h, decoded_format == pyneat.Format.NV16)
     labels = load_labels(cfg.labels_path)
 
@@ -1146,7 +1144,7 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
     # Insight correlates the RTP timestamp with the metadata timestamp, so the video and the
     # segments must stay in one Run and therefore on one GStreamer timeline.
     save_frames = bool(cfg.output.save_dir)
-    source = make_source_graph(cfg, fps, frame_w, frame_h)
+    source = make_source_graph(cfg, fps, frame_w, frame_h, usb_camera)
     decoded_outputs = ["model", "frame"] if save_frames else ["model"]
     branch = pyneat.graphs.branch(
         "decoded" if usb else "source", decoded_outputs if usb else ["video", *decoded_outputs]
