@@ -112,8 +112,11 @@ The optional repository variable `APPS_UNREADY_RUNNERS` is a JSON array of runne
 names temporarily excluded from Apps admission (for example, while model access
 is being provisioned). The planner also rejects any selector that could match an
 excluded registration, even when the proposed candidate has a different name.
-GitHub cannot express negative runner-name filters. Clear exclusions only after
-the affected devices have the required runtime and Developer Portal model access.
+Both pools preserve candidate labels in the safety check and emitted selector,
+so a dedicated ready-runner label can distinguish healthy devices from excluded
+registrations. GitHub cannot express negative runner-name filters. Clear exclusions
+only after the affected devices have the required runtime and Developer Portal
+model access.
 Missing protected-model access fails explicitly instead of starting an interactive
 device-login flow in CI. Existing cached sessions and refresh tokens are reused.
 

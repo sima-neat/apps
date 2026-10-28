@@ -70,7 +70,7 @@ def select_fleet(runners, required, maximum, pool, excluded_names=()):
         )
     safe = []
     for runner in eligible:
-        labels = required | ({"rtsp"} if pool == "rtsp" else label_set(runner))
+        labels = required | label_set(runner)
         # runs-on has no negative runner-name filter. Prove the complete label
         # conjunction cannot be claimed by an unready registration either.
         if any(labels <= label_set(r) for r in excluded):
@@ -89,7 +89,7 @@ def select_fleet(runners, required, maximum, pool, excluded_names=()):
     selected = idle[:maximum] or [min(eligible, key=lambda r: r["name"])]
     fleet = []
     for runner in selected:
-        labels = required | ({"rtsp"} if pool == "rtsp" else label_set(runner))
+        labels = required | label_set(runner)
         if pool == "regular" and any(labels <= label_set(r) for r in rtsp):
             raise ValueError(
                 "Regular runners need a label combination excluding RTSP runners; "

@@ -308,19 +308,40 @@ def test_registry_latest_bypasses_persistent_cache():
     )
 
 
-def test_unready_exclusion_is_enforced_by_labels_not_only_candidate_name():
-    unready = runner("unready")
-    indistinguishable = runner("healthy-but-same-labels")
-    ready = runner("ready", extra=("ready-pod",))
+@pytest.mark.parametrize("pool", ["regular", "rtsp"])
+@pytest.mark.parametrize("excluded_status", ["online", "offline"])
+@pytest.mark.parametrize("busy", [False, True])
+def test_unready_exclusion_is_enforced_by_labels_not_only_candidate_name(
+    pool, excluded_status, busy
+):
+    rtsp = pool == "rtsp"
+    unready = runner("unready", rtsp=rtsp, status=excluded_status)
+    indistinguishable = runner("healthy-but-same-labels", rtsp=rtsp)
+    ready = runner("ready", rtsp=rtsp, busy=busy, extra=("ready-pod",))
     fleet = planner.select_fleet(
         [unready, indistinguishable, ready],
         ["modalix"],
         3,
-        "regular",
+        pool,
         excluded_names=["unready"],
     )
     assert [r["candidate"] for r in fleet] == ["ready"]
+    assert "ready-pod" in fleet[0]["labels"]
+    assert fleet[0]["idle_at_planning"] == (not busy)
     assert not set(fleet[0]["labels"]) <= planner.label_set(unready)
+
+
+@pytest.mark.parametrize("pool", ["regular", "rtsp"])
+def test_unready_exclusion_fails_closed_without_distinguishing_labels(pool):
+    rtsp = pool == "rtsp"
+    with pytest.raises(ValueError, match="No safe label selector"):
+        planner.select_fleet(
+            [runner("unready", rtsp=rtsp), runner("healthy", rtsp=rtsp)],
+            ["modalix"],
+            3,
+            pool,
+            excluded_names=["unready"],
+        )
 
 
 def test_missing_portal_access_fails_without_interactive_downloader(
