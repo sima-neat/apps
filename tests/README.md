@@ -124,7 +124,7 @@ contract-test, artifact-publication, portal-publication, and nightly-no-publish
 gates remain required. Matrix fail-fast cancellation is disabled.
 
 CI caches URL-based model archives under
-`/media/nvme/neat-apps-model-cache/v1`, outside the cleaned checkout. NVMe must
+`/media/nvme/kerrigan/neat-apps-model-cache/v1`, outside the cleaned checkout. NVMe must
 be mounted. Cache keys include the acquisition descriptor, Model Zoo version,
 and a remote ETag (or Last-Modified plus Content-Length). Every cache hit verifies
 the cached SHA-256 before copying the archive into the isolated test runtime.

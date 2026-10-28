@@ -135,7 +135,7 @@ def main():
     parser.add_argument("--runtime", type=Path)
     parser.add_argument("--result", type=Path)
     parser.add_argument(
-        "--cache-root", type=Path, default=Path("/media/nvme/neat-apps-model-cache/v1")
+        "--cache-root", type=Path, default=Path("/media/nvme/kerrigan/neat-apps-model-cache/v1")
     )
     parser.add_argument("--verify-results", type=Path)
     args = parser.parse_args()
