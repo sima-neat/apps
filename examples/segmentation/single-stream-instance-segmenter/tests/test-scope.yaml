@@ -42,6 +42,7 @@ e2e:
   # The first model is the harness default; both families are downloaded and exercised.
   python:
     enabled: true
+    requires_rtsp: true
     models:
     - yolo26m-seg-bf16-b1
     - yolo_v8n_seg
@@ -50,6 +51,7 @@ e2e:
     - yolo26m-seg-int8-b1
   cpp:
     enabled: true
+    requires_rtsp: true
     models:
     - yolo26m-seg-bf16-b1
     - yolo_v8n_seg

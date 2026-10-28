@@ -33,6 +33,7 @@ unit:
 e2e:
   python:
     enabled: true
+    requires_rtsp: true
     models:
     - yolo26m-det-int8-b1
     variants:
@@ -40,6 +41,7 @@ e2e:
     - yolo26m-det-bf16-b1
   cpp:
     enabled: true
+    requires_rtsp: true
     models:
     - yolo26m-det-int8-b1
     variants:

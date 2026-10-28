@@ -21,6 +21,7 @@ unit:
 e2e:
   python:
     enabled: true
+    requires_rtsp: false
     models:
     - resnet_50
     - resnet_18
@@ -28,6 +29,7 @@ e2e:
     - densenet_121
   cpp:
     enabled: true
+    requires_rtsp: false
     models:
     - resnet_50
     - resnet_18
