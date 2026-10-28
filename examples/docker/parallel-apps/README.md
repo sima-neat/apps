@@ -44,16 +44,6 @@ APP_DIR=examples/docker/parallel-apps
 
 Run the remaining commands from `prebuilt-apps/`.
 
-The applications in the bundle are built against the Core recorded in `deps/neat-core.json` as a `ref` (channel) and a `spec`. Compare it with the DevKit's Core, and update the DevKit if they differ:
-
-```bash
-cat deps/neat-core.json
-dk shell
-neat status
-neat update --core-only --channel <ref from deps/neat-core.json> --tag <spec from deps/neat-core.json>
-exit
-```
-
 ## Prepare the Model
 
 Each container gets its own folder under `models/`, named after the container, and its image holds only that folder. Model packages come from the Model Zoo release below, which can differ from the installed platform version.
@@ -146,7 +136,7 @@ The MLA runs one model at a time, so each application's frame rate depends on th
 - If every application exits with `closed owned platform capability unavailable`, the installed Core predates container support; update Core on the DevKit and in the SDK.
 - If an application runs on the DevKit but fails to open the MLA in a container, update the DevKit with `sima-cli update`.
 - If Insight runs inside the SDK on macOS and some channels stay blank, Docker Desktop is not forwarding all of Insight's UDP ports. Run Insight on the DevKit and set `output.insight.host: 127.0.0.1`.
-- If an application fails to load a Neat library or reports a version mismatch, the DevKit's Core differs from `deps/neat-core.json`; match them as Install Apps shows.
+- If an application fails to load a Neat library or reports a version mismatch, the DevKit's Core differs from the one the bundle was built against. Run `sima-cli neat install apps` again without `NEAT_APPS_SKIP_DEPENDENCIES`.
 - If two applications appear on one Insight channel, check that their configs use different Insight ports.
 
 ## Source Files
