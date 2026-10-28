@@ -154,7 +154,7 @@ bool infer_dims(const simaai::neat::Tensor& t, int& w, int& h) {
   return (w > 0 && h > 0);
 }
 
-bool nv16_to_bgr(const simaai::neat::Tensor& t, cv::Mat& out, std::string& err) {
+bool nv16_to_yuy2(const simaai::neat::Tensor& t, cv::Mat& out, std::string& err) {
   if (t.image_format() != simaai::neat::ImageSpec::PixelFormat::NV16) {
     err = "expected NV16 tensor";
     return false;
@@ -183,16 +183,23 @@ bool nv16_to_bgr(const simaai::neat::Tensor& t, cv::Mat& out, std::string& err) 
     return false;
   }
   // Each row keeps its own chroma: Y and UV bytes interleave into packed 4:2:2 (Y0 U0 Y1 V0).
-  cv::Mat yuy2(h, w, CV_8UC2);
+  out.create(h, w, CV_8UC2);
   for (int row = 0; row < h; ++row) {
     const uint8_t* y_row = payload.data() + y->byte_offset + row * y_stride;
     const uint8_t* uv_row = payload.data() + uv->byte_offset + row * uv_stride;
-    uint8_t* dst = yuy2.ptr(row);
+    uint8_t* dst = out.ptr(row);
     for (int x = 0; x < w; ++x) {
       dst[2 * x] = y_row[x];
       dst[2 * x + 1] = uv_row[x];
     }
   }
+  return true;
+}
+
+bool nv16_to_bgr(const simaai::neat::Tensor& t, cv::Mat& out, std::string& err) {
+  cv::Mat yuy2;
+  if (!nv16_to_yuy2(t, yuy2, err))
+    return false;
   cv::cvtColor(yuy2, out, cv::COLOR_YUV2BGR_YUY2);
   return true;
 }

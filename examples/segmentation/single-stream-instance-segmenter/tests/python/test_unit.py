@@ -927,6 +927,21 @@ class TestFramePairing:
 
         assert bgr.shape == (4, 4, 3)
 
+    def test_retained_nv16_converts_to_bgr_when_saved(self, monkeypatch):
+        """A retained 4:2:2 frame stays packed 4:2:2 and is converted only when saved."""
+        import cv2
+
+        monkeypatch.setattr(main, "cv2", cv2)
+        monkeypatch.setattr(main, "np", np)
+        frame = np.zeros((4, 4, 2), dtype=np.uint8)
+        frame[..., 0] = 81
+        frame[:, 0::2, 1], frame[:, 1::2, 1] = 90, 240
+
+        bgr = main.bgr_from_host_frame(frame)
+
+        assert bgr.shape == (4, 4, 3)
+        assert (bgr == cv2.cvtColor(frame, cv2.COLOR_YUV2BGR_YUY2)).all()
+
     def test_retained_bgr_is_used_as_it_is(self):
         frame = np.zeros((4, 4, 3), dtype=np.uint8)
 

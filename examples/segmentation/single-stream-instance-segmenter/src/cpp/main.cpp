@@ -1266,7 +1266,8 @@ constexpr std::size_t kFrameRingCapacity = 64;
 ///
 /// A pulled sample keeps a loan on the decoder buffer behind it even when output memory is
 /// owned, and the decoder stalls once its few in-flight frames are all on loan. The ring
-/// therefore keeps pixels, never samples. NV12 stays NV12 until a frame is actually saved.
+/// therefore keeps pixels, never samples. NV12 stays NV12, and NV16 stays packed 4:2:2, until a
+/// frame is actually saved.
 cv::Mat host_frame_copy(const simaai::neat::Sample& sample) {
   const simaai::neat::Tensor tensor = frame_tensor_from_sample(sample);
   const int width = tensor.width();
@@ -1277,16 +1278,23 @@ cv::Mat host_frame_copy(const simaai::neat::Sample& sample) {
       return nv12;
     }
   }
+  if (tensor.image_format() == simaai::neat::ImageSpec::PixelFormat::NV16) {
+    cv::Mat yuy2;
+    std::string err;
+    sima_examples::require(sima_examples::nv16_to_yuy2(tensor, yuy2, err), err);
+    return yuy2;
+  }
   return tensor_bgr_from_decoded(tensor);
 }
 
 /// The BGR picture for a host_frame_copy() result.
 cv::Mat bgr_from_host_frame(const cv::Mat& frame) {
-  if (frame.type() != CV_8UC1) {
+  if (frame.type() != CV_8UC1 && frame.type() != CV_8UC2) {
     return frame;
   }
   cv::Mat bgr;
-  cv::cvtColor(frame, bgr, cv::COLOR_YUV2BGR_NV12);
+  cv::cvtColor(frame, bgr,
+               frame.type() == CV_8UC2 ? cv::COLOR_YUV2BGR_YUY2 : cv::COLOR_YUV2BGR_NV12);
   return bgr;
 }
 

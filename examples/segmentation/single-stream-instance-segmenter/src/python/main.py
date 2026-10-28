@@ -450,27 +450,33 @@ def tensor_dim(tensor, name: str) -> int:
     return int(value() if callable(value) else value)
 
 
+def nv16_yuy2(tensor):
+    """A 4:2:2 USB camera frame as packed 4:2:2 (Y0 U0 Y1 V0), every row keeping its own chroma.
+
+    The payload is the whole mapped buffer, so the Y and UV planes are read at their own offsets
+    and strides.
+    """
+    width = tensor_dim(tensor, "width")
+    height = tensor_dim(tensor, "height")
+    payload = np.frombuffer(tensor.copy_payload_bytes(), dtype=np.uint8)
+    planes = {plane.role: plane for plane in tensor.planes}
+
+    def plane_rows(role, rows):
+        plane = planes[role]
+        stride = plane.strides_bytes[0]
+        end = plane.byte_offset + stride * rows
+        if end > payload.size:
+            raise RuntimeError(f"NV16 payload smaller than its {role} plane")
+        return payload[plane.byte_offset:end].reshape((rows, stride))[:, :width]
+
+    return np.ascontiguousarray(
+        np.dstack([plane_rows(pyneat.PlaneRole.Y, height), plane_rows(pyneat.PlaneRole.UV, height)])
+    )
+
+
 def tensor_bgr_from_decoded(tensor):
     if tensor.image_format() == pyneat.PixelFormat.NV16:
-        # A 4:2:2 USB camera frame. The payload is the whole mapped buffer, so the Y and UV
-        # planes are read at their own offsets and strides; each row keeps its own chroma by
-        # interleaving Y and UV into packed 4:2:2 (Y0 U0 Y1 V0).
-        width = tensor_dim(tensor, "width")
-        height = tensor_dim(tensor, "height")
-        payload = np.frombuffer(tensor.copy_payload_bytes(), dtype=np.uint8)
-        planes = {plane.role: plane for plane in tensor.planes}
-
-        def plane_rows(role, rows):
-            plane = planes[role]
-            stride = plane.strides_bytes[0]
-            end = plane.byte_offset + stride * rows
-            if end > payload.size:
-                raise RuntimeError(f"NV16 payload smaller than its {role} plane")
-            return payload[plane.byte_offset:end].reshape((rows, stride))[:, :width]
-
-        y = plane_rows(pyneat.PlaneRole.Y, height)
-        uv = plane_rows(pyneat.PlaneRole.UV, height)
-        return np.ascontiguousarray(cv2.cvtColor(np.dstack([y, uv]), cv2.COLOR_YUV2BGR_YUY2))
+        return np.ascontiguousarray(cv2.cvtColor(nv16_yuy2(tensor), cv2.COLOR_YUV2BGR_YUY2))
 
     if tensor.is_nv12():
         width = tensor_dim(tensor, "width")
@@ -552,9 +558,12 @@ def host_frame_copy(sample):
 
     A pulled sample keeps a loan on the decoder buffer behind it even when output memory is
     owned, and the decoder stalls once its few in-flight frames are all on loan. The ring
-    therefore keeps pixels, never samples. NV12 stays NV12 until a frame is actually saved.
+    therefore keeps pixels, never samples. NV12 stays NV12, and NV16 stays packed 4:2:2, until a
+    frame is actually saved.
     """
     tensor = frame_tensor_from_sample(sample)
+    if tensor.image_format() == pyneat.PixelFormat.NV16:
+        return nv16_yuy2(tensor)
     if not tensor.is_nv12():
         return tensor_bgr_from_decoded(tensor)
     width = tensor_dim(tensor, "width")
@@ -570,6 +579,8 @@ def bgr_from_host_frame(frame):
     """The BGR picture for a host_frame_copy() result."""
     if frame.ndim == 2:
         return np.ascontiguousarray(cv2.cvtColor(frame, cv2.COLOR_YUV2BGR_NV12))
+    if frame.shape[2] == 2:
+        return np.ascontiguousarray(cv2.cvtColor(frame, cv2.COLOR_YUV2BGR_YUY2))
     return frame
 
 
