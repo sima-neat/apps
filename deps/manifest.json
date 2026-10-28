@@ -1,6 +1,7 @@
 {
   "neat-core": {
-    "policy": "snap"
+    "ref": "feature/bevfusion-kernel-nodes",
+    "spec": "09f7aa687652"
   },
   "sdk": {
     "channel": "develop"
