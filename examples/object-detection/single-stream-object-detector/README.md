@@ -80,6 +80,7 @@ The source supports RTSP H.264, H.265, and MJPEG, plus HTTP MJPEG. Keep `inferen
 To use a USB camera, set `source.type: usb`, `source.camera` to its stable ID, and `source.width`, `source.height`, and `source.fps` to an MJPEG mode the camera lists; `source.url` and `source.codec` are not used. List the connected camera IDs and modes on the DevKit:
 
 ```bash
+source ~/pyneat/bin/activate
 python3 -c "import pyneat; print(pyneat.usb_camera_ids())"
 v4l2-ctl --list-devices && v4l2-ctl -d /dev/video<N> --list-formats-ext
 ```
