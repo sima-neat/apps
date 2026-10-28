@@ -137,16 +137,20 @@ def test_nightly_disables_all_publication_and_keeps_build_and_test_stages():
         "build-sysdoc-examples", "publish-sysdoc-examples", "publish-apps-algolia",
     ):
         assert "!inputs.nightly" in jobs[name]["if"], name
-    runtime_steps = {step["name"]: step for step in jobs["test-runtime"]["steps"]}
+    runtime_steps = {step.get("name"): step for step in jobs["test-runtime"]["steps"]}
     for name in ("Package tested runtime for release", "Upload tested Apps release"):
         assert "!inputs.nightly" in runtime_steps[name]["if"]
-    tests = runtime_steps["Run all activated Apps tests"]
-    assert "./tests/test.sh --all --strict" in tests["run"]
+    shard_steps = {step.get("name"): step for step in jobs["test-runtime-shard"]["steps"]}
+    tests = shard_steps["Run assigned Apps suites"]
+    assert "scripts/ci/run_runtime_shard.py" in tests["run"]
     assert tests["env"]["SIMANEAT_APPS_TEST_MODEL_VARIANTS"] == "${{ inputs.nightly && '1' || '0' }}"
-    for name in ("build", "contract-tests", "test-runtime"):
+    for name in ("build", "contract-tests", "test-runtime-shard"):
         assert "if" not in jobs[name]
+    assert "always()" in jobs["test-runtime"]["if"]
+    assert jobs["test-runtime-shard"]["strategy"]["fail-fast"] == "false"
+    assert "test-runtime-shard" in jobs["test-runtime"]["needs"]
     assert "./build.sh --all --clean" in jobs["build"]["with"]["build_command"]
     assert VULCAN["on"]["workflow_dispatch"]["inputs"]["nightly"]["default"] == "false"
     assert NIGHTLY["on"]["workflow_dispatch"]["inputs"]["branch"]["default"] == "develop"
     assert "inputs.nightly" in VULCAN["concurrency"]["group"]
-    assert "always()" in runtime_steps["Upload nightly test logs"]["if"]
+    assert "always()" in shard_steps["Upload shard result and logs"]["if"]

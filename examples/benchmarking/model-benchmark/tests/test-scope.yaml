@@ -85,6 +85,7 @@ unit:
 e2e:
   python:
     enabled: true
+    requires_rtsp: false
     models:
       - yolo26m-det-int8-b1
   cpp:

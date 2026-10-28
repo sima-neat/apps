@@ -9,9 +9,11 @@ unit:
 e2e:
   python:
     enabled: true
+    requires_rtsp: false
     models:
       - ssd_v2_int8_tess_mla
   cpp:
     enabled: true
+    requires_rtsp: false
     models:
       - ssd_v2_int8_tess_mla

@@ -9,9 +9,11 @@ unit:
 e2e:
   python:
     enabled: true
+    requires_rtsp: true
     models:
       - yolo26-tiny-drone-int8-qat-mla-tess
   cpp:
     enabled: true
+    requires_rtsp: true
     models:
       - yolo26-tiny-drone-int8-qat-mla-tess

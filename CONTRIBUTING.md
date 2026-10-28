@@ -149,12 +149,14 @@ unit:
 e2e:
   python:
     enabled: true
+    requires_rtsp: false # true for live-stream suites; omission defaults to true
     models:
       - model_id
     variants:          # optional: also run the suite with these models when
       - other_model_id # SIMANEAT_APPS_TEST_MODEL_VARIANTS=1, as the nightly run does
   cpp:
     enabled: true
+    requires_rtsp: false
     models:
       - model_id
 ```
