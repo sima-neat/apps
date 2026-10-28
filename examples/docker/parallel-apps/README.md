@@ -25,7 +25,7 @@ Each container runs one Apps example with its own config: instance segmentation,
 ## Prerequisites
 
 - The Neat SDK set up with your Modalix DevKit (`sima-cli sdk setup --devkit`). This starts the SDK's container registry and the `dk` DevKit commands. Run every command below in the Neat SDK shell.
-- The same Neat Core on the DevKit as in the installed Apps bundle. The containers run the DevKit's Neat with binaries built against the bundle's Core; Install Apps shows how to check and match them.
+- The same Neat Core on the DevKit as in the installed Apps bundle. The containers run the DevKit's Neat with binaries built against the bundle's Core; the Install Apps step installs that Core on the DevKit.
 - A Neat Core that admits Modalix in containers (Core develop `e1eddd4` or newer). Older Cores identify the board from `/proc/device-tree`, which Docker hides, and every application exits with `closed owned platform capability unavailable`.
 - Docker on the DevKit. If it is missing, `dk container setup` installs it.
 - Six H.264 RTSP sources: people for segmentation and both pose examples, traffic for detection and tracking, and drones for the drone tracker. [Insight](https://developer.sima.ai/software/tools/insight/) can host them under RTSP Source from its video catalog, and the Apps bundle ships a drone clip at `assets/datasets/yolo26-tiny-drone-tracker/anti_uav_multi_uav_source_demo.mp4`.
@@ -42,7 +42,7 @@ cd prebuilt-apps
 APP_DIR=examples/docker/parallel-apps
 ```
 
-Run the remaining commands from `prebuilt-apps/`.
+Run the remaining commands in the Neat SDK container, from `prebuilt-apps/`.
 
 ## Prepare the Model
 
@@ -81,6 +81,8 @@ Each image holds its example's own `src/common/config.yaml`. Edit the six config
 Set `output.insight.host` in all six: `127.0.0.1` when Insight runs on the DevKit, otherwise the Insight host's address. The config is copied into the image, so after a config change run `build` and `deploy` again.
 
 ## Run
+
+Run these commands in the Neat SDK container, from `prebuilt-apps/`, not on the DevKit. `build` uses the SDK's Docker and container registry, and `deploy`, `dk container logs`, and `stop` reach the DevKit through `dk`.
 
 Build the six ARM64 images and push them to the SDK's container registry:
 
