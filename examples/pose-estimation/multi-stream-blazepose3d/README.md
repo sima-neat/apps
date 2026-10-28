@@ -41,42 +41,28 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-| Model file | Role | Source |
-| --- | --- | --- |
-| `yolo26m-det-int8-b1.tar.gz` | Person detector (`models.detector_path`) | Model Zoo |
-| `blazepose_ghum_heavy_w16a16_mpk.tar.gz` | 2D and 3D landmarks (`models.pose_path`) | Model Registry |
+| Model file | Role |
+| --- | --- |
+| `yolo26m-det-int8-b1.tar.gz` | Person detector (`models.detector_path`) |
+| `blazepose_ghum_heavy_w16a16_mpk.tar.gz` | 2D and 3D landmarks (`models.pose_path`) |
 
-Download the detector from the Model Zoo release below, which can differ from the installed platform version:
+Both packages come from the Model Zoo release below, which can differ from the installed platform version:
 
 ```bash
 export MODELZOO_VERSION="3.0.0"
 mkdir -p models
 cd models
 sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26-detection/yolo26m-det-int8-b1.tar.gz"
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/blazepose_ghum_heavy_w16a16_mpk.tar.gz"
 cd ..
 ```
-
-Download BlazePose from the Model Registry. Some `sima-cli` releases wrap the package in a zip; the second command extracts it only in that case:
-
-```bash
-sima-cli models download --stg \
-  --id blazepose_ghum_heavy \
-  --variant w16a16 \
-  --branch feat/blazepose-ghum-heavy \
-  --output models
-POSE_DIR=models/blazepose_ghum_heavy/w16a16
-[ -f "$POSE_DIR/blazepose_ghum_heavy_w16a16_mpk.tar.gz" ] ||
-  unzip -j -d "$POSE_DIR" "$POSE_DIR"/*.zip '*blazepose_ghum_heavy_w16a16_mpk.tar.gz'
-```
-
-The `--stg` and `--branch` options are temporary while [`sima-neat/models#136`](https://github.com/sima-neat/models/pull/136) is under review.
 
 ## Configure
 
 Open `${APP_DIR}/src/common/config.yaml` and set:
 
 - `models.detector_path`: `models/yolo26m-det-int8-b1.tar.gz`
-- `models.pose_path`: `models/blazepose_ghum_heavy/w16a16/blazepose_ghum_heavy_w16a16_mpk.tar.gz`
+- `models.pose_path`: `models/blazepose_ghum_heavy_w16a16_mpk.tar.gz`
 - one `streams` entry per camera, one to four in total. Copy each RTSP URL from the Insight Web UI or your camera. Give each stream a unique `id` and `insight_channel`, its `codec`, and its actual `width`, `height`, and `fps`.
 - `output.insight.host`: the host running Insight.
 
