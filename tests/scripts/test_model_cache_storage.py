@@ -136,3 +136,31 @@ def test_downloader_stops_under_space_pressure(tmp_path):
 def test_downloader_propagates_download_failure(budget):
     with pytest.raises(subprocess.CalledProcessError):
         cache.run_downloader([sys.executable, "-c", "raise SystemExit(7)"], storage=budget)
+
+
+def test_unknown_legacy_staging_counts_toward_budget_without_unsafe_deletion(budget):
+    legacy = budget.root / ".stage-legacy"
+    legacy.mkdir()
+    (legacy / "partial").write_bytes(b"x" * 101)
+    budget.cleanup_staging()
+    with pytest.raises(RuntimeError, match="limit=100"):
+        budget.ensure()
+    assert legacy.exists()
+
+
+def test_preparation_holds_cache_wide_lock(tmp_path, monkeypatch):
+    def prepare(*args):
+        lock_path = args[4] / ".prepare.lock"
+        code = (
+            "import fcntl,sys; "
+            "f=open(sys.argv[1], 'a'); "
+            "fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)"
+        )
+        result = subprocess.run([sys.executable, "-c", code, str(lock_path)], capture_output=True, check=False)
+        assert result.returncode != 0
+        assert b"BlockingIOError" in result.stderr
+        return {"success": True}
+
+    monkeypatch.setenv("SIMANEAT_APPS_MODEL_CACHE_RESERVE_BYTES", "1")
+    monkeypatch.setattr(cache, "_prepare_models", prepare)
+    assert cache.prepare_models(tmp_path, {}, tmp_path / "scope", tmp_path / "runtime", tmp_path / "cache") == {"success": True}

@@ -146,7 +146,13 @@ validator bypass persistent reuse, so mutable registry `latest` and variant
 requests resolve on every run. Neither CI cleanup nor package installation
 removes the persistent cache.
 
-The cache defaults to a **32 GiB size limit** and **20 GiB free-space reserve**.
+The cache defaults to a **8 GiB size limit** and **20 GiB free-space reserve**.
+Read-only checks on five DevKits found 457.4 GiB NVMe filesystems with
+390–431 GiB available; sampled populated caches used 116–207 MiB. A complete
+passing hardware run logged about 1.7 GB of downloads, with the largest model
+archive at 533 MB. An 8 GiB cache allows several generations of that model set,
+while the 20 GiB reserve leaves headroom for temporary runtime copies and tests.
+
 Override positive byte counts with `SIMANEAT_APPS_MODEL_CACHE_MAX_BYTES` and
 `SIMANEAT_APPS_MODEL_CACHE_RESERVE_BYTES` in the shard environment. The reserve
 is checked on both cache and runtime filesystems. Preparation is serialized per

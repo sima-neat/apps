@@ -295,7 +295,8 @@ def _prepare_models(root, scope, scope_file, destination, cache_root, storage):
             continue
         # Leave room for both the staged copy and metadata; oversized models
         # still run from the workspace but never enter persistent storage.
-        incoming = source.stat().st_size + 4096
+        metadata_text = json.dumps({"identity": identity, "sha256": digest(source)})
+        incoming = source.stat().st_size + len(metadata_text.encode())
         if not storage.ensure(incoming, persistent=True):
             print(f"[cache bypass] {filename}: storage budget or reserve", flush=True)
             continue
@@ -306,14 +307,9 @@ def _prepare_models(root, scope, scope_file, destination, cache_root, storage):
             with tempfile.TemporaryDirectory(dir=cache_root, prefix=f".stage-{key}-") as stage:
                 staged = Path(stage)
                 shutil.copyfile(source, staged / "model.tar.gz")
-                (staged / "metadata.json").write_text(
-                    json.dumps(
-                        {
-                            "identity": identity,
-                            "sha256": digest(staged / "model.tar.gz"),
-                        }
-                    )
-                )
+                if digest(staged / "model.tar.gz") != json.loads(metadata_text)["sha256"]:
+                    raise RuntimeError("Model changed during cache publication")
+                (staged / "metadata.json").write_text(metadata_text)
                 os.replace(staged / "model.tar.gz", entry / "model.tar.gz")
                 os.replace(staged / "metadata.json", entry / "metadata.json")
     storage.ensure()

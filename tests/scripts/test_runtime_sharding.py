@@ -377,3 +377,14 @@ def test_release_and_portal_still_depend_on_all_shards():
         < gate.index("Verify complete suite coverage")
         < gate.index("Package tested runtime for release")
     )
+
+
+def test_oversized_model_runs_without_persistent_publication(acquisition, monkeypatch, tmp_path):
+    monkeypatch.setenv("SIMANEAT_APPS_MODEL_CACHE_MAX_BYTES", "1")
+    prepare, downloads, _, _ = acquisition
+    result = prepare(1)
+    assert result["hits"] == 0 and result["cache_bytes"] == 0
+    assert result["model_sizes_bytes"]["model.tar.gz"] == len(b"model bytes")
+    assert (tmp_path / "models-1/model.tar.gz").is_file()
+    prepare(2)
+    assert len(downloads) == 2

@@ -20,7 +20,7 @@ class CacheStorage:
     def __init__(self, root, destination):
         self.root = root
         self.destination = destination
-        self.maximum = limit("SIMANEAT_APPS_MODEL_CACHE_MAX_BYTES", 32 * GIB)
+        self.maximum = limit("SIMANEAT_APPS_MODEL_CACHE_MAX_BYTES", 8 * GIB)
         self.reserve = limit("SIMANEAT_APPS_MODEL_CACHE_RESERVE_BYTES", 20 * GIB)
         self.evicted_bytes = 0
         self.evicted_entries = 0
@@ -58,12 +58,23 @@ class CacheStorage:
                 self.evicted_bytes += sum(p.stat().st_size for p in stage.iterdir())
                 shutil.rmtree(stage)
 
+    def staging_bytes(self):
+        total = 0
+        for stage in self.root.glob(".stage-*"):
+            if not stat.S_ISDIR(stage.lstat().st_mode):
+                raise ValueError("Unsafe cache staging directory")
+            for path in stage.iterdir():
+                if not stat.S_ISREG(path.lstat().st_mode):
+                    raise ValueError("Unsafe cache staging files")
+                total += path.stat().st_size
+        return total
+
     def free(self):
         return min(shutil.disk_usage(p).free for p in (self.root, self.destination))
 
     def ensure(self, incoming=0, *, persistent=False):
         entries = self.entries()
-        total = sum(size for _, _, size in entries)
+        total = sum(size for _, _, size in entries) + self.staging_bytes()
         if persistent and incoming > self.maximum:
             return False
         for _, entry, size in entries:
@@ -94,7 +105,7 @@ class CacheStorage:
 
     def summary(self):
         return {
-            "cache_bytes": sum(s for _, _, s in self.entries()),
+            "cache_bytes": sum(s for _, _, s in self.entries()) + self.staging_bytes(),
             "cache_limit_bytes": self.maximum,
             "free_bytes": self.free(),
             "filesystem_bytes": shutil.disk_usage(self.root).total,
