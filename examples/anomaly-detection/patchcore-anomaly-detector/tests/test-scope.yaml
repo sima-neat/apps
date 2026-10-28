@@ -1,0 +1,19 @@
+models:
+  patchcore_wide_resnet50_2:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/patchcore_wide_resnet50_2_bf16_mla.tar.gz
+    file: patchcore_wide_resnet50_2_bf16_mla.tar.gz
+unit:
+  python: true
+  cpp: true
+e2e:
+  python:
+    enabled: true
+    requires_rtsp: true
+    models:
+    - patchcore_wide_resnet50_2
+  cpp:
+    enabled: true
+    requires_rtsp: true
+    models:
+    - patchcore_wide_resnet50_2

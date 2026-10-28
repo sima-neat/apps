@@ -30,8 +30,8 @@ _SKIP_META = {"vector", "embedding", "sparse", "text", "page_content"}
 
 
 def default_db_path():
-    """The bundled RAG DB location (src/python/ui/milvus.db)."""
-    return str((Path(__file__).resolve().parent.parent / "ui" / "milvus.db").resolve())
+    """The bundled RAG DB location (src/python/api/milvus.db)."""
+    return str((Path(__file__).resolve().parent.parent / "api" / "milvus.db").resolve())
 
 
 def read_rag_meta(db_path=None):

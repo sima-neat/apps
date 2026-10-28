@@ -2,6 +2,7 @@ foreach(example IN ITEMS
     high-density-multi-stream-object-detector
     pcie-high-density-multi-stream-object-detector
     detr-object-detector
+    pcb-defect-detector
     rfdetr-detection-segmentation
     single-stream-object-detector
     ssd-mobilenet-object-detector
@@ -12,3 +13,4 @@ foreach(example IN ITEMS
   endif()
 endforeach()
 add_subdirectory(multi-stream-object-detector/src/cpp multi-stream-object-detector)
+add_subdirectory(multi-stream-obb-detector/src/cpp multi-stream-obb-detector)

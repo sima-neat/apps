@@ -75,12 +75,101 @@ that advertise several model variants list the ones worth exercising under
 model, named after it. Pull request runs leave the variable unset and stay at one
 model per suite.
 
+A `source: model-registry` model names the registry model (`name`), the Models
+repository branch (`ref`) and the catalog spec (`spec`), and is installed with
+`sima-cli neat install models/<name>@<ref>:<spec>`. Adding `variant` instead
+downloads only that build variant's latest artifact with `sima-cli models download
+--id <name> --variant <variant> --branch <ref>`; such a model must use
+`spec: latest`. Either way, `file` is the flat filename the E2E tests read from
+the models directory.
+
 The README `Model` row remains customer-facing metadata. Test selection and
 test model downloads are controlled by `examples/*/*/tests/test-scope.yaml`, so large
 or blocked examples can stay documented without blocking CI. If a test is
 enabled in the scope file but the matching Python or C++ test file is missing,
 `tests/test.sh` fails before running tests. If a test is disabled, it is skipped
 even if a test file exists.
+
+### Adaptive CI fleet
+
+After the build, Vulcan CI queries the existing GitHub App's read-only runner
+inventory in the resolved Modalix runner group. It selects up to six idle RTSP
+runners and three idle regular runners matching the hardware/environment labels
+(and `elxr_version` when pinned). If a pool is entirely busy, it queues one shard
+for that pool. Offline registrations never count as available capacity. Discovery
+does not provision, reconfigure, reserve, or interrupt devices; the GitHub queue
+owns assignment, so availability can change after planning.
+
+Every enabled example/language/unit-or-e2e suite is assigned exactly once, and
+the harness self-tests run once. E2E scopes declare `requires_rtsp: true` or
+`false` under each language. Missing metadata conservatively requires RTSP.
+All unit tests use regular runners. Regular selectors include an existing label
+combination that excludes every RTSP registration in the inventory; removing
+the `rtsp` label alone would not exclude RTSP runners. Discovery fails clearly
+if no such combination exists. Use a dedicated regular label/group in that case.
+
+The optional repository variable `APPS_UNREADY_RUNNERS` is a JSON array of runner
+names temporarily excluded from Apps admission (for example, while model access
+is being provisioned). The planner also rejects any selector that could match an
+excluded registration, even when the proposed candidate has a different name.
+Both pools preserve candidate labels in the safety check and emitted selector,
+so a dedicated ready-runner label can distinguish healthy devices from excluded
+registrations. GitHub cannot express negative runner-name filters. Clear exclusions
+only after the affected devices have the required runtime and Developer Portal
+model access.
+Missing protected-model access fails explicitly instead of starting an interactive
+device-login flow in CI. Existing cached sessions and refresh tokens are reused.
+
+The planner balances suites using `tests/ci-durations.json`, seeded from the
+recorded successful baseline run. Unknown suites receive a conservative default
+duration. Nightly variants and all model selections remain in each generated
+scope. Each shard uses the existing harness with `--strict`, keeping suites
+serial within a DevKit. Strict E2E stream checks apply only to selected suites
+that require streams. `SIMANEAT_APPS_TEST_RUN_HARNESS=0` suppresses the harness
+self-tests only for CI shards that do not own them; ordinary local runs retain
+the default behavior.
+
+Each shard uploads a result receipt, timing/cache summary, and test logs, even
+on failure. `Test Apps Runtime` requires every shard to succeed and verifies
+their commit identities and complete suite coverage before packaging. Existing
+contract-test, artifact-publication, portal-publication, and nightly-no-publish
+gates remain required. Matrix fail-fast cancellation is disabled.
+
+CI caches URL-based model archives under
+`/media/nvme/kerrigan/neat-apps-model-cache/v1`, outside the cleaned checkout. NVMe must
+be mounted. Cache keys include the acquisition descriptor, Model Zoo version,
+and a remote ETag (or Last-Modified plus Content-Length). Every cache hit verifies
+the cached SHA-256 before copying the archive into the isolated test runtime.
+Misses use the normal scoped downloader; cache publication uses a lock and atomic
+file replacement. Registry/modelzoo acquisition and URLs without a usable remote
+validator bypass persistent reuse, so mutable registry `latest` and variant
+requests resolve on every run. Neither CI cleanup nor package installation
+removes the persistent cache.
+
+The cache defaults to a **8 GiB size limit** and **20 GiB free-space reserve**.
+Read-only checks on five DevKits found 457.4 GiB NVMe filesystems with
+390–431 GiB available; sampled populated caches used 116–207 MiB. A complete
+passing hardware run logged about 1.7 GB of downloads, with the largest model
+archive at 533 MB. An 8 GiB cache allows several generations of that model set,
+while the 20 GiB reserve leaves headroom for temporary runtime copies and tests.
+
+Override positive byte counts with `SIMANEAT_APPS_MODEL_CACHE_MAX_BYTES` and
+`SIMANEAT_APPS_MODEL_CACHE_RESERVE_BYTES` in the shard environment. The reserve
+is checked on both cache and runtime filesystems. Preparation is serialized per
+cache; hits refresh LRU age, and cleanup evicts oldest entries under nonblocking
+entry locks. Active entries, lock files, unrelated files, and symlinks are never
+removed. Abandoned staging directories created by this implementation are
+reclaimed only when their entry lock is available. Older unidentifiable staging
+directories require operator inspection.
+
+Before copying a cache hit or publishing a new entry, space checks include the
+additional copy. Oversized entries or cache publications that cannot preserve
+the reserve bypass persistent storage; the runtime copy remains usable. During
+normal downloads, storage is checked every 200 ms and the downloader process
+group is stopped if eviction cannot restore the reserve. This guards model
+acquisition; unrelated writers can still consume space between checks. Shard
+receipts/logs report filesystem capacity, free space, cache size/limit, reclaimed
+bytes/entries, and downloaded model sizes. No files outside this cache are evicted.
 
 Package installation does not include the test harness or download test models.
 Vulcan overlays an ephemeral internal test bundle and lets `tests/test.sh`
@@ -252,6 +341,8 @@ python3 -m pytest \
 - `SIMANEAT_TEST_HTTP_MJPEG_URL` (single HTTP MJPEG stream URL)
 - `SIMANEAT_TEST_HTTP_MJPEG_URLS` (comma-separated HTTP MJPEG URLs)
 - `SIMANEAT_APPS_TEST_TIMEOUT_MS` (default: `180000`)
+- `SIMANEAT_APPS_HIGH_DENSITY_INITIAL_PROGRESS_TIMEOUT_MS` (high-density receiver warmup progress timeout, default: `90000`)
+- `SIMANEAT_APPS_HIGH_DENSITY_STREAM_PROGRESS_TIMEOUT_MS` (high-density receiver measurement progress timeout, default: `30000`)
 - `SIMANEAT_APPS_TEST_REQUIRE_E2E` (backward-compatible strict e2e env flag; prefer `--strict`)
 - `SIMANEAT_APPS_TEST_LABELS_FILE` (optional labels file override)
 - `SIMANEAT_APPS_TEST_INSIGHT_HOST` (default: `127.0.0.1`)
@@ -267,7 +358,7 @@ Streaming e2e tests require live reachable sources at test time:
 - `single-stream-object-detector` (C++/Python)
 - `single-stream-instance-segmenter` (C++/Python)
 - `multi-stream-object-detector` (C++/Python)
-- `multi-stream-people-tracker` (C++/Python)
+- `multi-stream-tracker` (C++/Python)
 
 Use [Insight](https://developer.sima.ai/software/tools/insight/) to install
 videos directly from its catalog or through YouTube support. Start the required
@@ -286,3 +377,24 @@ MJPEG URLs.
   `tests/scripts` against the source checkout, because they read `build.sh`, the
   workflows and the portal sources, which the test bundle does not carry.
   Publishing waits for it too.
+
+## Nightly Integration
+
+At 03:00 UTC each day, `nightly-e2e.yml` dispatches Vulcan CI on the latest
+`develop` with `nightly=true`, then waits and reports its build/test result.
+The workflow can also be started manually with a source branch to rebuild;
+`develop` is the default. There is no scheduled `main` matrix entry.
+
+It runs the same clean SDK build, package validation, repository contract tests,
+and installed-runtime `./tests/test.sh --all --strict` as push CI. The `snap`
+Core policy selects the latest published Core `develop` artifact at build time;
+the Modalix tests install the exact Core version recorded in the new package.
+`SIMANEAT_APPS_TEST_MODEL_VARIANTS=1` adds each enabled suite's model variants.
+
+Nightly mode skips release packaging, Vulcan publication, latest promotion,
+and portal/search deployment. Build archives remain ephemeral GitHub Actions
+artifacts used to transfer the candidate to the Modalix job. The nightly run
+summary links to the full Vulcan build and test logs. Runtime test logs and
+resolved Apps/Core metadata are retained for seven days, including on failure.
+Nightly and publishing runs use separate concurrency groups so they do not
+cancel each other.

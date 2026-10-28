@@ -1,4 +1,4 @@
-name: Apps Nightly E2E
+name: Apps Nightly Integration
 
 on:
   schedule:
@@ -6,195 +6,67 @@ on:
   workflow_dispatch:
     inputs:
       branch:
-        description: "Branch artifact to install. Runner selection uses the workflow run ref."
+        description: Source branch to rebuild and test without publishing.
         required: true
-        default: main
+        default: develop
         type: string
 
 permissions:
+  actions: write
   contents: read
 
+concurrency:
+  group: ${{ github.repository }}-${{ github.workflow }}-${{ inputs.branch || 'develop' }}
+  cancel-in-progress: false
+
 jobs:
-  resolve-test-runner:
-    name: Resolve Test Runner
-    uses: sima-neat/.github/.github/workflows/vulcan-resolve-modalix-runner.yml@main
-
-  modalix-nightly-e2e:
-    if: github.event_name == 'schedule'
-    needs: resolve-test-runner
-    runs-on:
-      group: ${{ needs.resolve-test-runner.outputs.modalix_runner_group }}
-      labels: [self-hosted, Linux, ARM64, modalix]
-    strategy:
-      fail-fast: false
-      matrix:
-        branch:
-          - main
-          - develop
-
+  integration:
+    name: Rebuild and test Apps
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      APPS_BRANCH: ${{ inputs.branch || 'develop' }}
+      NIGHTLY_REQUEST: ${{ github.run_id }}-${{ github.run_attempt }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v5
-        with:
-          clean: true
-
-      - name: Install apps runtime for latest branch build
-        run: |
-          runtime_dir="$(scripts/ci/install_apps_runtime_from_vulcan.sh \
-            --env production \
-            --target "apps@${{ matrix.branch }}" \
-            --install-dir _nightly-test/install \
-            --force)"
-          echo "APPS_RUNTIME_DIR=${runtime_dir}" >> "${GITHUB_ENV}"
-
-      - name: Locate pyneat
+      # Dispatch on develop so the shared Vulcan workflows read its source,
+      # SDK manifest and Modalix runner requirements, rather than main's.
+      - name: Start nightly Vulcan build and tests
+        id: dispatch
         shell: bash
         run: |
-          if [[ -f /media/nvme/pyneat/bin/activate && -x /media/nvme/pyneat/bin/python3 ]]; then
-            echo "PYNEAT_ACTIVATE=/media/nvme/pyneat/bin/activate" >> "${GITHUB_ENV}"
-            echo "PYTHON_TEST_BIN=/media/nvme/pyneat/bin/python3" >> "${GITHUB_ENV}"
-          elif [[ -f "${HOME}/pyneat/bin/activate" && -x "${HOME}/pyneat/bin/python3" ]]; then
-            echo "PYNEAT_ACTIVATE=${HOME}/pyneat/bin/activate" >> "${GITHUB_ENV}"
-            echo "PYTHON_TEST_BIN=${HOME}/pyneat/bin/python3" >> "${GITHUB_ENV}"
-          else
-            echo "pyneat virtual environment not found under /media/nvme/pyneat or ${HOME}/pyneat" >&2
-            exit 1
-          fi
+          set -euo pipefail
+          gh workflow run vulcan-ci.yml --ref "${APPS_BRANCH}" \
+            -f nightly=true -f nightly_request="${NIGHTLY_REQUEST}"
 
-      - name: Install Python test dependencies
-        shell: bash
-        run: |
-          source "${PYNEAT_ACTIVATE}"
-          echo "Using Python test interpreter: ${PYTHON_TEST_BIN}"
-          "${PYTHON_TEST_BIN}" -m pip install pytest "numpy<2" "opencv-python-headless<4.12" PyYAML
+          expected_title="Apps Nightly Integration ${APPS_BRANCH} (${NIGHTLY_REQUEST})"
+          for attempt in {1..30}; do
+            run_id="$(gh run list --workflow vulcan-ci.yml \
+              --branch "${APPS_BRANCH}" --event workflow_dispatch --limit 100 \
+              --json databaseId,displayTitle \
+              | jq -r --arg title "${expected_title}" \
+                '[.[] | select(.displayTitle == $title)][0].databaseId // empty')"
+            if [[ -n "${run_id}" ]]; then
+              echo "run_id=${run_id}" >> "${GITHUB_OUTPUT}"
+              run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+              echo "Vulcan nightly integration: ${run_url}"
+              echo "[Vulcan nightly integration](${run_url})" >> "${GITHUB_STEP_SUMMARY}"
+              exit 0
+            fi
+            echo "Waiting for the dispatched run to appear (${attempt}/30)."
+            sleep 5
+          done
+          echo "Could not find the dispatched nightly integration run." >&2
+          exit 1
 
-      - name: Run nightly Python e2e tests from installed apps runtime
-        shell: bash
+      - name: Wait for build and test result
         env:
-          SIMANEAT_TEST_RTSP_H264_URL: ${{ vars.SIMANEAT_TEST_RTSP_H264_URL }}
-          SIMANEAT_TEST_RTSP_H264_URLS: ${{ vars.SIMANEAT_TEST_RTSP_H264_URLS }}
-          SIMANEAT_TEST_RTSP_H265_URL: ${{ vars.SIMANEAT_TEST_RTSP_H265_URL }}
-          SIMANEAT_TEST_RTSP_H265_URLS: ${{ vars.SIMANEAT_TEST_RTSP_H265_URLS }}
-          SIMANEAT_TEST_RTSP_MJPEG_URL: ${{ vars.SIMANEAT_TEST_RTSP_MJPEG_URL }}
-          SIMANEAT_TEST_RTSP_MJPEG_URLS: ${{ vars.SIMANEAT_TEST_RTSP_MJPEG_URLS }}
-          SIMANEAT_TEST_HTTP_MJPEG_URL: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URL }}
-          SIMANEAT_TEST_HTTP_MJPEG_URLS: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URLS }}
-          SIMANEAT_APPS_TEST_MODEL_VARIANTS: "1"
-        run: |
-          if [[ -x /usr/bin/fix_devkit_runtime.sh ]]; then
-            /usr/bin/fix_devkit_runtime.sh || echo "/usr/bin/fix_devkit_runtime.sh failed; continuing with existing devkit runtime state."
-          else
-            echo "/usr/bin/fix_devkit_runtime.sh not found; continuing with existing devkit runtime state."
-          fi
-          cd "${APPS_RUNTIME_DIR}"
-          source "${PYNEAT_ACTIVATE}"
-          ./tests/test.sh --e2e --python --strict
+          NIGHTLY_RUN_ID: ${{ steps.dispatch.outputs.run_id }}
+        run: gh run watch "${NIGHTLY_RUN_ID}" --interval 30 --exit-status
 
-      - name: Run nightly C++ e2e tests from installed apps runtime
-        shell: bash
+      - name: Cancel dispatched run when nightly is cancelled
+        if: ${{ cancelled() && steps.dispatch.outputs.run_id != '' }}
         env:
-          SIMANEAT_TEST_RTSP_H264_URL: ${{ vars.SIMANEAT_TEST_RTSP_H264_URL }}
-          SIMANEAT_TEST_RTSP_H264_URLS: ${{ vars.SIMANEAT_TEST_RTSP_H264_URLS }}
-          SIMANEAT_TEST_RTSP_H265_URL: ${{ vars.SIMANEAT_TEST_RTSP_H265_URL }}
-          SIMANEAT_TEST_RTSP_H265_URLS: ${{ vars.SIMANEAT_TEST_RTSP_H265_URLS }}
-          SIMANEAT_TEST_RTSP_MJPEG_URL: ${{ vars.SIMANEAT_TEST_RTSP_MJPEG_URL }}
-          SIMANEAT_TEST_RTSP_MJPEG_URLS: ${{ vars.SIMANEAT_TEST_RTSP_MJPEG_URLS }}
-          SIMANEAT_TEST_HTTP_MJPEG_URL: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URL }}
-          SIMANEAT_TEST_HTTP_MJPEG_URLS: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URLS }}
-          SIMANEAT_APPS_TEST_MODEL_VARIANTS: "1"
-        run: |
-          if [[ -x /usr/bin/fix_devkit_runtime.sh ]]; then
-            /usr/bin/fix_devkit_runtime.sh || echo "/usr/bin/fix_devkit_runtime.sh failed; continuing with existing devkit runtime state."
-          else
-            echo "/usr/bin/fix_devkit_runtime.sh not found; continuing with existing devkit runtime state."
-          fi
-          cd "${APPS_RUNTIME_DIR}"
-          source "${PYNEAT_ACTIVATE}"
-          ./tests/test.sh --e2e --cpp --strict
-
-  modalix-manual-e2e:
-    if: github.event_name == 'workflow_dispatch'
-    needs: resolve-test-runner
-    runs-on:
-      group: ${{ needs.resolve-test-runner.outputs.modalix_runner_group }}
-      labels: [self-hosted, Linux, ARM64, modalix]
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v5
-        with:
-          clean: true
-
-      - name: Install apps runtime for latest branch build
-        run: |
-          runtime_dir="$(scripts/ci/install_apps_runtime_from_vulcan.sh \
-            --env production \
-            --target "apps@${{ inputs.branch }}" \
-            --install-dir _nightly-test/install \
-            --force)"
-          echo "APPS_RUNTIME_DIR=${runtime_dir}" >> "${GITHUB_ENV}"
-
-      - name: Locate pyneat
-        shell: bash
-        run: |
-          if [[ -f /media/nvme/pyneat/bin/activate && -x /media/nvme/pyneat/bin/python3 ]]; then
-            echo "PYNEAT_ACTIVATE=/media/nvme/pyneat/bin/activate" >> "${GITHUB_ENV}"
-            echo "PYTHON_TEST_BIN=/media/nvme/pyneat/bin/python3" >> "${GITHUB_ENV}"
-          elif [[ -f "${HOME}/pyneat/bin/activate" && -x "${HOME}/pyneat/bin/python3" ]]; then
-            echo "PYNEAT_ACTIVATE=${HOME}/pyneat/bin/activate" >> "${GITHUB_ENV}"
-            echo "PYTHON_TEST_BIN=${HOME}/pyneat/bin/python3" >> "${GITHUB_ENV}"
-          else
-            echo "pyneat virtual environment not found under /media/nvme/pyneat or ${HOME}/pyneat" >&2
-            exit 1
-          fi
-
-      - name: Install Python test dependencies
-        shell: bash
-        run: |
-          source "${PYNEAT_ACTIVATE}"
-          echo "Using Python test interpreter: ${PYTHON_TEST_BIN}"
-          "${PYTHON_TEST_BIN}" -m pip install pytest "numpy<2" "opencv-python-headless<4.12" PyYAML
-
-      - name: Run manual Python e2e tests from installed apps runtime
-        shell: bash
-        env:
-          SIMANEAT_TEST_RTSP_H264_URL: ${{ vars.SIMANEAT_TEST_RTSP_H264_URL }}
-          SIMANEAT_TEST_RTSP_H264_URLS: ${{ vars.SIMANEAT_TEST_RTSP_H264_URLS }}
-          SIMANEAT_TEST_RTSP_H265_URL: ${{ vars.SIMANEAT_TEST_RTSP_H265_URL }}
-          SIMANEAT_TEST_RTSP_H265_URLS: ${{ vars.SIMANEAT_TEST_RTSP_H265_URLS }}
-          SIMANEAT_TEST_RTSP_MJPEG_URL: ${{ vars.SIMANEAT_TEST_RTSP_MJPEG_URL }}
-          SIMANEAT_TEST_RTSP_MJPEG_URLS: ${{ vars.SIMANEAT_TEST_RTSP_MJPEG_URLS }}
-          SIMANEAT_TEST_HTTP_MJPEG_URL: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URL }}
-          SIMANEAT_TEST_HTTP_MJPEG_URLS: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URLS }}
-          SIMANEAT_APPS_TEST_MODEL_VARIANTS: "1"
-        run: |
-          if [[ -x /usr/bin/fix_devkit_runtime.sh ]]; then
-            /usr/bin/fix_devkit_runtime.sh || echo "/usr/bin/fix_devkit_runtime.sh failed; continuing with existing devkit runtime state."
-          else
-            echo "/usr/bin/fix_devkit_runtime.sh not found; continuing with existing devkit runtime state."
-          fi
-          cd "${APPS_RUNTIME_DIR}"
-          source "${PYNEAT_ACTIVATE}"
-          ./tests/test.sh --e2e --python --strict
-
-      - name: Run manual C++ e2e tests from installed apps runtime
-        shell: bash
-        env:
-          SIMANEAT_TEST_RTSP_H264_URL: ${{ vars.SIMANEAT_TEST_RTSP_H264_URL }}
-          SIMANEAT_TEST_RTSP_H264_URLS: ${{ vars.SIMANEAT_TEST_RTSP_H264_URLS }}
-          SIMANEAT_TEST_RTSP_H265_URL: ${{ vars.SIMANEAT_TEST_RTSP_H265_URL }}
-          SIMANEAT_TEST_RTSP_H265_URLS: ${{ vars.SIMANEAT_TEST_RTSP_H265_URLS }}
-          SIMANEAT_TEST_RTSP_MJPEG_URL: ${{ vars.SIMANEAT_TEST_RTSP_MJPEG_URL }}
-          SIMANEAT_TEST_RTSP_MJPEG_URLS: ${{ vars.SIMANEAT_TEST_RTSP_MJPEG_URLS }}
-          SIMANEAT_TEST_HTTP_MJPEG_URL: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URL }}
-          SIMANEAT_TEST_HTTP_MJPEG_URLS: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URLS }}
-          SIMANEAT_APPS_TEST_MODEL_VARIANTS: "1"
-        run: |
-          if [[ -x /usr/bin/fix_devkit_runtime.sh ]]; then
-            /usr/bin/fix_devkit_runtime.sh || echo "/usr/bin/fix_devkit_runtime.sh failed; continuing with existing devkit runtime state."
-          else
-            echo "/usr/bin/fix_devkit_runtime.sh not found; continuing with existing devkit runtime state."
-          fi
-          cd "${APPS_RUNTIME_DIR}"
-          source "${PYNEAT_ACTIVATE}"
-          ./tests/test.sh --e2e --cpp --strict
+          NIGHTLY_RUN_ID: ${{ steps.dispatch.outputs.run_id }}
+        run: gh run cancel "${NIGHTLY_RUN_ID}"

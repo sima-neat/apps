@@ -1,7 +1,7 @@
 models:
   fastflow_demo:
     source: url
-    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/model_zoo/gen2/anomaly_detection/fastflow_demo/fastflow_demo_mpk.tar.gz
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/fastflow_demo_mpk.tar.gz
     file: fastflow_demo_mpk.tar.gz
 unit:
   python: true
@@ -9,9 +9,11 @@ unit:
 e2e:
   python:
     enabled: true
+    requires_rtsp: true
     models:
     - fastflow_demo
   cpp:
     enabled: true
+    requires_rtsp: true
     models:
     - fastflow_demo

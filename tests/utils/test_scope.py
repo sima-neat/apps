@@ -18,7 +18,7 @@ APPS_ROOT = Path(__file__).resolve().parents[2]
 VALID_SOURCES = {"modelzoo", "url", "huggingface", "model-registry"}
 VALID_LANGUAGES = {"python", "cpp"}
 VALID_KINDS = {"unit", "e2e"}
-MODEL_FIELDS = ("source", "name", "url", "file", "repo", "path", "ref", "spec")
+MODEL_FIELDS = ("source", "name", "url", "file", "repo", "path", "ref", "spec", "variant")
 SCOPE_FILE_NAME = "test-scope.yaml"
 SCOPE_FILE_SUBPATH = Path("tests") / SCOPE_FILE_NAME
 MODEL_VARIANTS_ENV = "SIMANEAT_APPS_TEST_MODEL_VARIANTS"
@@ -244,6 +244,12 @@ def validate_scope(scope: dict[str, Any], apps_root: Path) -> list[str]:
                         errors.append(
                             f"{example_key}: model-registry model {model_id} needs {field}"
                         )
+                variant = str(model.get("variant", "") or "").strip()
+                if variant and str(model.get("spec", "") or "").strip() != "latest":
+                    errors.append(
+                        f"{example_key}: model-registry model {model_id} with a variant "
+                        "downloads the latest artifact; set spec: latest"
+                    )
                 file_name = str(model.get("file", "") or "")
                 if file_name and (
                     file_name in {".", ".."}
@@ -256,6 +262,11 @@ def validate_scope(scope: dict[str, Any], apps_root: Path) -> list[str]:
                     )
         selected_registry_models: set[str] = set()
         for language in sorted(VALID_LANGUAGES):
+            try:
+                if not isinstance(e2e_config(entry, language).get("requires_rtsp", True), bool):
+                    errors.append(f"{example_key}: e2e.{language}.requires_rtsp must be boolean")
+            except ValueError as exc:
+                errors.append(f"{example_key}: {exc}")
             for kind in sorted(VALID_KINDS):
                 try:
                     enabled = is_enabled(entry, language, kind)
@@ -310,7 +321,8 @@ def validate_scope(scope: dict[str, Any], apps_root: Path) -> list[str]:
             if not file_name:
                 continue
             identity = tuple(
-                str(model.get(field, "") or "") for field in ("name", "ref", "spec")
+                str(model.get(field, "") or "")
+                for field in ("name", "ref", "spec", "variant")
             )
             owner = f"{example_key}: model {model_id}"
             previous = registry_destinations.setdefault(file_name, (identity, owner))
@@ -405,6 +417,10 @@ def main() -> int:
 
     sub.add_parser("generate")
 
+    stream_requirement = sub.add_parser("requires-rtsp")
+    stream_requirement.add_argument("--language", choices=sorted(VALID_LANGUAGES),
+                                    action="append", required=True)
+
     py_files = sub.add_parser("python-files")
     py_files.add_argument("--kind", choices=sorted(VALID_KINDS), required=True)
 
@@ -438,6 +454,14 @@ def main() -> int:
     if args.command == "validate":
         if not args.quiet:
             print(f"validated {args.scope_file}")
+        return 0
+    elif args.command == "requires-rtsp":
+        required = any(
+            is_enabled(entry, language, "e2e")
+            and e2e_config(entry, language).get("requires_rtsp", True)
+            for entry in scope["examples"].values() for language in args.language
+        )
+        print("true" if required else "false")
         return 0
     if args.command == "generate":
         print(yaml.safe_dump(scope, sort_keys=False), end="")

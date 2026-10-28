@@ -24,10 +24,12 @@ This synthetic model benchmark does not measure input decoding, Insight output, 
 
 ## Prerequisites
 
-- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
+- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on the Modalix DevKit, or in a Neat SDK container paired with it.
 - A compiled model package supported by `pyneat.Model`.
 
 ## Install Apps
+
+Install on the Modalix DevKit, or under `/workspace` in a Neat SDK container paired with it. Only the example itself must run on the DevKit. If the Core and Insight selected by Apps are already installed, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps` to skip reinstalling them. See [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
 
 Install the latest Neat Apps runtime and enter the installed bundle:
 
@@ -43,22 +45,13 @@ Run the remaining commands from `prebuilt-apps/`.
 
 Use any compatible compiled MPK. Apps CI exercises the benchmark with `yolo26m-det-int8-b1.tar.gz`; it is not a required default.
 
-Model packages come from the Model Zoo release below, which can differ from the installed platform version. Download a Model Zoo package:
+Model packages come from the Model Zoo release below, which can differ from the installed platform version. Replace `<model-file>` with the package to benchmark:
 
 ```bash
-export MODELZOO_VERSION="2.1.3"
+export MODELZOO_VERSION="3.0.0"
 mkdir -p models
 cd models
-sima-cli modelzoo -v "${MODELZOO_VERSION}" get <model-name>
-cd ..
-```
-
-For a model published as a direct artifact:
-
-```bash
-mkdir -p models
-cd models
-sima-cli download <model-url>
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/<model-file>"
 cd ..
 ```
 

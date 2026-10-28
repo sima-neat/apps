@@ -14,7 +14,7 @@
 
 ## Concept
 
-Runs one YOLO26 detector across 16, 24, or 48 RTSP streams and sends synchronized video and detection metadata to Insight.
+Runs one YOLO26 detector across 20, 30, or 60 RTSP streams and sends synchronized video and detection metadata to Insight.
 
 Unlike the general multi-stream detector, this application tunes the pipeline for high stream counts.
 
@@ -32,17 +32,15 @@ Detection metadata includes the source `rtp_timestamp` and is sent with nonblock
 
 The three checked-in profiles use the same application and model:
 
-| Config | Streams | Source resolution and FPS | Expected FPS per channel |
+| Config | Streams | Source resolution and FPS | Target FPS per channel |
 | --- | ---: | --- | ---: |
-| `config.yaml` | 16 | 1280×720 at 30 or 29.97 FPS, detected from the source | Source rate |
-| `config-24x720p20fps.yaml` | 24 | 1280×720 at 20 FPS | 20 FPS |
-| `config-48x720p10fps.yaml` | 48 | 1280×720 at 10 FPS | 10 FPS |
+| `config.yaml` | 20 | 1280×720 at 30 or 29.97 FPS, detected from the source | Source rate |
+| `config-30x720p20fps.yaml` | 30 | 1280×720 at 20 FPS | 20 FPS |
+| `config-60x720p10fps.yaml` | 60 | 1280×720 at 10 FPS | 10 FPS |
 
-The expected rate applies to both Insight video and detection metadata after startup and model warmup.
+The target rate applies to both Insight video and detection metadata after startup. Each profile needs about 600 aggregate FPS, and none is yet validated to sustain its target: a C++ run of the 30-stream profile measured 18.6 to 20.2 FPS per channel.
 
 ## Preview
-
-The 48-stream profile running in Insight:
 
 ![High-density multi-stream object detector in Insight](../../../portal/assets/examples/object-detection/high-density-multi-stream-object-detector/image.png)
 
@@ -50,7 +48,7 @@ The 48-stream profile running in Insight:
 
 - A Modalix DevKit compatible with the selected Apps release, with the decoder service running.
 - An [Insight](https://developer.sima.ai/software/tools/insight/) URL reachable from the DevKit.
-- 16, 24, or 48 H.264 or H.265 RTSP sources matching `input.codec` and the selected profile.
+- 20, 30, or 60 H.264 or H.265 RTSP sources matching `input.codec` and the selected profile.
 - For H.265, the computer running the Insight viewer must support hardware HEVC decoding; Chromium does not provide a software decoder fallback for WebRTC H.265.
 - H.265 playback in Chrome on macOS renders, but is not stable. Chrome's WebRTC HEVC decoder can stop producing frames mid-stream and fall back to a null decoder that discards what follows, at which point the tile stalls until the viewer reconnects it.
 - Constant source frame rate, 1280×720 resolution, no B-frames in the selected codec, and a short, regular IDR interval. The validated sources use one IDR per second.
@@ -59,6 +57,8 @@ The 48-stream profile running in Insight:
 The application starts all source graphs together. Start every RTSP publisher before starting the application.
 
 ## Install Apps
+
+Install on the Modalix DevKit, or under `/workspace` in a Neat SDK container paired with it. Only the example itself must run on the DevKit. If the Core and Insight selected by Apps are already installed, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps` to skip reinstalling them. See [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
 
 Install the latest Neat Apps runtime and enter the installed bundle:
 
@@ -79,7 +79,7 @@ Run the remaining commands from `prebuilt-apps/`.
 Model packages come from the Model Zoo release below, which can differ from the installed platform version.
 
 ```bash
-export MODELZOO_VERSION="2.1.3"
+export MODELZOO_VERSION="3.0.0"
 mkdir -p models
 cd models
 sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26-detection/yolo26n-det-int8-b1.tar.gz"
@@ -141,11 +141,11 @@ Choose one config under `${APP_DIR}/src/common/` and edit:
 
 Set `input.codec` to `h264`/`avc` or `h265`/`hevc`. H.264 is the default in all checked-in density profiles and remains the validated high-density configuration.
 
-`inference.max_inflight_per_stream` and `inference.max_inflight_total` bound raw decoder-backed frames admitted to the shared detector. The 16- and 48-stream profiles use a total limit of eight; the 24-stream profile uses 24 so one aggregate frame interval can be admitted without an unbounded queue. The realtime mux retains only the latest pending frame for each stream.
+`inference.max_inflight_per_stream` and `inference.max_inflight_total` bound raw decoder-backed frames admitted to the shared detector. The 20- and 60-stream profiles use a total limit of eight; the 30-stream profile uses 30 so one aggregate frame interval can be admitted without an unbounded queue. The realtime mux retains only the latest pending frame for each stream.
 
-Do not add the removed `inference.fan_in_policy` setting. Ordinary `connect()` and `build()` select the eligible realtime fan-in lowering automatically. Video/metadata synchronization is performed by Insight from each payload's source RTP timestamp; there is no application-side video-delay setting.
+Do not add the removed `inference.fan_in_policy` setting. Ordinary `connect()` and `build()` select the eligible realtime fan-in lowering automatically. The `runtime` settings (`profile`, `warmup_frames`, and the `*_detection_timeout_ms` deadlines) are still validated so existing configs keep loading, but they have no effect and the application prints a warning when they are present. The application publishes metadata from the first valid detection result and runs continuously until interrupted; warmup, throughput measurement, and progress deadlines belong to the E2E receiver. Video/metadata synchronization is performed by Insight from each payload's source RTP timestamp; there is no application-side video-delay setting.
 
-The default 16-stream config uses `input.fps: 0` and enables probing, so the source determines its frame rate. Keep `input.width` and `input.height` matched to the source. The 24- and 48-stream profiles keep explicit FPS values and skip probing; their configured dimensions and frame rates must match the sources.
+The default 20-stream config uses `input.fps: 0` and enables probing, so the source determines its frame rate. Keep `input.width` and `input.height` matched to the source. The 30- and 60-stream profiles keep explicit FPS values and skip probing; their configured dimensions and frame rates must match the sources.
 
 Insight channel and port mapping is deterministic:
 
@@ -168,8 +168,8 @@ CONFIG="$APP_DIR/src/common/config.yaml"
 Use one of the named configs for the larger profiles:
 
 ```bash
-CONFIG="$APP_DIR/src/common/config-24x720p20fps.yaml"
-CONFIG="$APP_DIR/src/common/config-48x720p10fps.yaml"
+CONFIG="$APP_DIR/src/common/config-30x720p20fps.yaml"
+CONFIG="$APP_DIR/src/common/config-60x720p10fps.yaml"
 ```
 
 Validate the selected config without starting RTSP or Insight:
@@ -200,9 +200,9 @@ Use one active Insight viewer while validating metadata. Insight currently has a
 
 - Every configured Insight channel receives live video.
 - Detection boxes appear on the matching channel.
-- Video and metadata follow the source cadence for 16 streams, 20 FPS for 24 streams, or 10 FPS for 48 streams.
-- Final per-stream counters show every stream advancing; the application fails with the missing channel IDs if a stream never starts or later stops.
-- No detection timeout or stalled channel is reported. Metadata sender counters expose any nonblocking UDP drops without stalling inference.
+- Video and metadata approach the source cadence for 20 streams, 20 FPS for 30 streams, or 10 FPS for 60 streams. See the profile table for the measured rate.
+- Nonblocking metadata-send failures are reported as rate-limited warnings without stalling inference.
+- `Ctrl-C` closes the graph and exits cleanly.
 
 If channels do not start, confirm that every publisher was already reachable and that the configured source caps match the selected profile. Restart the application after restarting the publishers.
 
@@ -235,27 +235,17 @@ without opening a stream or touching Insight:
 - Either way, verify the URL from the board itself rather than from the machine
   running Insight; the URL Insight displays is not always reachable from the
   target.
-- `timed out waiting for two initial detections from streams: …` names the
-  streams that produced fewer than two inference results before the timeout. The
-  count is per result pulled from the pipeline, not per object found, so footage
-  containing nothing the model reports still primes normally. A named stream is
-  one that is not delivering frames, and the sources are the place to look rather
-  than the model or the board. In reproducing this example, publishing all sixteen
-  streams from the same board that consumed them starved most of them; publishing
-  from a separate machine on the network ran the documented profile cleanly.
-
 ## Source Files
 
 - C++ reference source: `src/cpp/main.cpp`
 - Python implementation: `src/python/main.py`
-- Python throughput measurement: `src/python/metadata_measurement.py`
-- Default 16-stream profile: `src/common/config.yaml`
-- 24-stream profile: `src/common/config-24x720p20fps.yaml`
-- 48-stream profile: `src/common/config-48x720p10fps.yaml`
+- Default 20-stream profile: `src/common/config.yaml`
+- 30-stream profile: `src/common/config-30x720p20fps.yaml`
+- 60-stream profile: `src/common/config-60x720p10fps.yaml`
 - COCO labels: `src/common/coco_label.txt`
 
 The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
 
 ## Development From Source
 
-To modify, compile, or test this example, use the [Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md). The 16-, 24-, and 48-stream profiles still require Modalix, live RTSP publishers, and Insight for runtime validation.
+To modify, compile, or test this example, use the [Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md). The 20-, 30-, and 60-stream profiles still require Modalix, live RTSP publishers, and Insight for runtime validation.

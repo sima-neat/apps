@@ -2,9 +2,10 @@ PyYAML
 # 3.1: per-request max_content_length (the transcription upload limit relies on it)
 Flask>=3.1,<4
 Werkzeug>=3.1,<4
-Flask-SocketIO>=5,<6
 requests>=2,<3
 huggingface_hub[cli]>=0.34.0,<1.0
+# Counts chat tokens with each model's own tokenizer.json (shared/chat_limits.py).
+tokenizers>=0.21,<1
 # --- Text-to-speech (main venv) -----------------------------------------
 # piper-plus: MIT Piper fork with custom G2P; owns the top-level `piper`
 # package and adds Japanese (ja) plus en/zh/es/fr/pt. Runs on onnxruntime; it

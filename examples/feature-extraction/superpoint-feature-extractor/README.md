@@ -18,19 +18,19 @@ Finds SuperPoint feature points in a video and streams the annotated video to In
 
 ## Preview
 
-Frame from the included TUM RGB-D `freiburg1_desk` sequence:
-
 ![SuperPoint feature overlay](../../../portal/assets/examples/feature-extraction/superpoint-feature-extractor/image.png)
 
 ## Prerequisites
 
-- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported
-  Modalix or DevKit target.
+- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on the Modalix
+  DevKit, or in a Neat SDK container paired with it.
 - Neat Library with SuperPoint BoxDecode support.
 - Insight or another RTP receiver for the annotated output stream.
 - The SuperPoint model package installed below.
 
 ## Install Apps
+
+Install on the Modalix DevKit, or under `/workspace` in a Neat SDK container paired with it. Only the example itself must run on the DevKit. If the Core and Insight selected by Apps are already installed, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps` to skip reinstalling them. See [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
 
 Install the latest Neat Apps runtime and enter the installed bundle:
 
@@ -49,7 +49,7 @@ Run the remaining commands from `prebuilt-apps/`.
 | `superpoint_mpk.tar.gz` | Default | Direct artifact |
 
 ```bash
-export MODELZOO_VERSION="2.1.3"
+export MODELZOO_VERSION="3.0.0"
 mkdir -p models
 cd models
 sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/superpoint_mpk.tar.gz"

@@ -34,6 +34,19 @@ RUNTIME_COCO_IMAGES = {
     "000000566758.jpg",
     "000000570756.jpg",
 }
+RUNTIME_PCB_IMAGES = {
+    "pcb_01_missing_hole.jpg",
+    "pcb_02_open_circuit.jpg",
+    "pcb_03_spur.jpg",
+    "pcb_04_spurious_copper.jpg",
+    "pcb_05_spurious_copper_rotated.jpg",
+}
+TEST_PCB_IMAGES = {
+    "pcb_01_missing_hole.jpg",
+    "pcb_02_open_circuit.jpg",
+    "pcb_03_spur.jpg",
+    "pcb_04_spurious_copper.jpg",
+}
 TEST_COCO_IMAGES = {
     "000000081061.jpg",
     "000000116439.jpg",
@@ -55,6 +68,11 @@ def _image_names(relative_dir: str) -> set[str]:
 def test_runtime_and_test_coco_datasets_have_expected_images():
     assert _image_names("assets/datasets/coco") == RUNTIME_COCO_IMAGES
     assert _image_names("assets/datasets-test/coco") == TEST_COCO_IMAGES
+
+
+def test_runtime_and_test_pcb_datasets_have_expected_images():
+    assert _image_names("assets/datasets/pcb") == RUNTIME_PCB_IMAGES
+    assert _image_names("assets/datasets-test/pcb") == TEST_PCB_IMAGES
 
 
 def test_classification_image_is_test_only():
@@ -87,7 +105,8 @@ def test_direct_pytest_defaults_to_test_assets(monkeypatch):
 
 def test_direct_classification_pytest_uses_test_fixture():
     e2e_path = (
-        APPS_ROOT / "examples/classification/image-classifier/tests/python/test_e2e.py"
+        APPS_ROOT
+        / "examples/classification/image-classification-explorer/tests/python/test_e2e.py"
     )
     source = e2e_path.read_text(encoding="utf-8")
 

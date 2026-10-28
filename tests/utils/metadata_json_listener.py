@@ -13,6 +13,7 @@ import time
 @dataclass(frozen=True)
 class MetadataJsonMessage:
     port: int
+    metadata_type: str
     payload: str
     frame_id: str
     timestamp_ms: int
@@ -25,6 +26,7 @@ class MetadataJsonResult:
     ports_with_valid_json: set[int] = field(default_factory=set)
     messages: list[MetadataJsonMessage] = field(default_factory=list)
     error: str = ""
+    timed_out: bool = False
 
 
 _CHUNK_MAGIC = 0x4E
@@ -125,6 +127,7 @@ class MetadataJsonListener:
         data_array_key: str = "objects",
         require_all_ports: bool = False,
         min_object_count: int = 0,
+        metadata_contracts: dict[str, str] | None = None,
     ) -> None:
         if num_ports <= 0:
             raise ValueError("num_ports must be > 0")
@@ -133,10 +136,14 @@ class MetadataJsonListener:
         if min_object_count < 0:
             raise ValueError("min_object_count must be >= 0")
 
-        self._metadata_type = metadata_type
-        self._data_array_key = data_array_key
-        self._require_all_ports = require_all_ports
+        self._metadata_contracts = metadata_contracts or {metadata_type: data_array_key}
         self._min_object_count = min_object_count
+        if not self._metadata_contracts or any(
+            not contract_type or not array_path
+            for contract_type, array_path in self._metadata_contracts.items()
+        ):
+            raise ValueError("metadata contracts require a type and data array path")
+        self._require_all_ports = require_all_ports
         self._sockets: dict[socket.socket, int] = {}
         self._reassemblers: dict[socket.socket, _MetadataReassembler] = {}
         try:
@@ -164,8 +171,47 @@ class MetadataJsonListener:
     def __exit__(self, exc_type, exc, tb) -> None:
         self.close()
 
+    def drain_pending(self) -> MetadataJsonResult:
+        """Drain and validate queued datagrams without waiting for new input."""
+        ports_with_valid_json: set[int] = set()
+        messages: list[MetadataJsonMessage] = []
+        last_error = ""
+        for sock in self._sockets:
+            while True:
+                try:
+                    datagram, _ = sock.recvfrom(65536)
+                except BlockingIOError:
+                    break
+                except InterruptedError:
+                    continue
+                payload, error = self._reassemblers[sock].accept(datagram)
+                if payload is None:
+                    if error:
+                        last_error = error
+                    continue
+                message, error = self._parse_message(self._sockets[sock], payload)
+                if message is None:
+                    last_error = error
+                    continue
+                messages.append(message)
+                if message.object_count < self._min_object_count:
+                    last_error = (
+                        f"data.{self._data_array_key} contains {message.object_count} objects; "
+                        f"expected at least {self._min_object_count}"
+                    )
+                    continue
+                ports_with_valid_json.add(message.port)
+            self._reassemblers[sock] = _MetadataReassembler()
+        return MetadataJsonResult(
+            success=not last_error,
+            ports_with_valid_json=ports_with_valid_json,
+            messages=messages,
+            error=last_error,
+        )
+
     def wait_for_messages(self, timeout_s: float) -> MetadataJsonResult:
         ports_with_valid_json: set[int] = set()
+        valid_types_by_frame: dict[tuple[int, int, str], set[str]] = {}
         messages: list[MetadataJsonMessage] = []
         last_error = "metadata timeout"
         deadline = time.monotonic() + timeout_s
@@ -188,18 +234,34 @@ class MetadataJsonListener:
                 messages.append(message)
                 if message.object_count < self._min_object_count:
                     last_error = (
-                        f"data.{self._data_array_key} contains {message.object_count} objects; "
-                        f"expected at least {self._min_object_count}"
+                        f"data.{self._metadata_contracts[message.metadata_type]} contains "
+                        f"{message.object_count} objects; expected at least {self._min_object_count}"
                     )
                     continue
-                ports_with_valid_json.add(port)
+                frame = (message.port, message.timestamp_ms, message.frame_id)
+                valid_types_by_frame.setdefault(frame, set()).add(message.metadata_type)
+                if len(valid_types_by_frame[frame]) == len(self._metadata_contracts):
+                    ports_with_valid_json.add(port)
                 if self._success_reached(ports_with_valid_json):
-                    return MetadataJsonResult(True, ports_with_valid_json, messages)
+                    error = "" if last_error == "metadata timeout" else last_error
+                    return MetadataJsonResult(
+                        success=True,
+                        ports_with_valid_json=ports_with_valid_json,
+                        messages=messages,
+                        error=error,
+                    )
 
         missing = sorted(set(self._sockets.values()) - ports_with_valid_json)
+        timed_out = last_error == "metadata timeout"
         if missing:
             last_error = f"missing metadata on ports {missing}; last_error={last_error}"
-        return MetadataJsonResult(False, ports_with_valid_json, messages, last_error)
+        return MetadataJsonResult(
+            success=False,
+            ports_with_valid_json=ports_with_valid_json,
+            messages=messages,
+            error=last_error,
+            timed_out=timed_out,
+        )
 
     def _success_reached(self, ports_with_valid_json: set[int]) -> bool:
         if self._require_all_ports:
@@ -216,7 +278,8 @@ class MetadataJsonListener:
 
         if not isinstance(parsed, dict):
             return None, "json root is not an object"
-        if parsed.get("type") != self._metadata_type:
+        metadata_type = parsed.get("type")
+        if not isinstance(metadata_type, str) or metadata_type not in self._metadata_contracts:
             return None, "missing or invalid type"
         timestamp = parsed.get("timestamp")
         if not isinstance(timestamp, int):
@@ -227,13 +290,19 @@ class MetadataJsonListener:
         data = parsed.get("data")
         if not isinstance(data, dict):
             return None, "missing or invalid data"
-        objects = data.get(self._data_array_key)
+        objects = data
+        data_array_path = self._metadata_contracts[metadata_type]
+        for key in data_array_path.split("."):
+            if not isinstance(objects, dict) or key not in objects:
+                return None, f"missing or invalid data.{data_array_path}"
+            objects = objects[key]
         if not isinstance(objects, list):
-            return None, f"missing or invalid data.{self._data_array_key}"
+            return None, f"missing or invalid data.{data_array_path}"
 
         return (
             MetadataJsonMessage(
                 port=port,
+                metadata_type=metadata_type,
                 payload=payload.decode("utf-8", errors="replace"),
                 frame_id=frame_id,
                 timestamp_ms=timestamp,

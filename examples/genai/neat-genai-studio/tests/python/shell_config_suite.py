@@ -3,6 +3,7 @@ Supertonic paths (src/common/config_value.sh), exercised through bash."""
 
 from __future__ import annotations
 
+import re
 import subprocess
 import tempfile
 import unittest
@@ -49,9 +50,8 @@ def _run(script: str, *args: str, python: str | None = None) -> str:
 WEB = """app:
   web:
     host: "0.0.0.0"
-    port: 5000   # the UI
-    https: 'false'
-    headless: "True"
+    port: 5000   # the backend API
+    https: "True"
     cors_origins: "http://a:3000, https://b"   # allowlist
   tts:
     supertonic:
@@ -69,8 +69,7 @@ class ShellWebConfigTests(unittest.TestCase):
     def test_quoted_and_commented_scalars(self):
         self.assertEqual(self._web("host"), "0.0.0.0")
         self.assertEqual(self._web("port"), "5000")
-        self.assertEqual(self._web("https"), "false")
-        self.assertEqual(self._web("headless"), "true")       # normalized by the loader
+        self.assertEqual(self._web("https"), "true")          # normalized by the loader
         self.assertEqual(self._web("cors_origins"), "http://a:3000, https://b")
         self.assertEqual(self._web("models_root"), "")      # other section
 
@@ -85,16 +84,15 @@ class ShellWebConfigTests(unittest.TestCase):
             self.assertEqual(_run('web_config_list "$1" https', str(config)), "true")   # loader value
 
     def test_any_indentation_and_no_app_root_like_the_loader(self):
-        four = ("app:\n    web:\n        headless: true\n        https: false\n"
+        four = ("app:\n    web:\n        https: false\n"
                 "    tts:\n        supertonic:\n            models_root: /m4\n")
-        top = "web:\n  headless: yes\ntts:\n  supertonic:\n    venv: /v\n"
+        top = "web:\n  https: yes\ntts:\n  supertonic:\n    venv: /v\n"
         with tempfile.TemporaryDirectory() as tmp:
             a = Path(tmp) / "four.yaml"; a.write_text(four, encoding="utf-8")
             b = Path(tmp) / "top.yaml"; b.write_text(top, encoding="utf-8")
-            self.assertEqual(_run('web_config_scalar "$1" headless', str(a)), "true")
             self.assertEqual(_run('web_config_scalar "$1" https', str(a)), "false")
             self.assertEqual(_run('supertonic_config_value "$1" models_root', str(a)), "/m4")
-            self.assertEqual(_run('web_config_scalar "$1" headless', str(b)), "true")
+            self.assertEqual(_run('web_config_scalar "$1" https', str(b)), "true")
             self.assertEqual(_run('supertonic_config_value "$1" venv', str(b)), "/v")
         # the Python loader agrees on the same files
         import sys
@@ -103,15 +101,14 @@ class ShellWebConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             a = Path(tmp) / "four.yaml"; a.write_text(four, encoding="utf-8")
             cfg = load_ui_config(a, Path(tmp))
-            self.assertEqual((cfg.web.headless, cfg.web.https, cfg.supertonic.models_root), (True, False, "/m4"))
+            self.assertEqual((cfg.web.https, cfg.supertonic.models_root), (False, "/m4"))
 
     def test_flow_style_mapping_reads_like_the_loader(self):
-        text = ('app:\n  web: {host: 0.0.0.0, port: 5000, headless: true, https: "false",'
+        text = ('app:\n  web: {host: 0.0.0.0, port: 5000, https: "false",'
                 ' cors_origins: [http://a:3000, "https://b"]}\n'
                 '  tts: {supertonic: {models_root: /flow, venv: /fv}}\n')
         with tempfile.TemporaryDirectory() as tmp:
             c = Path(tmp) / "flow.yaml"; c.write_text(text, encoding="utf-8")
-            self.assertEqual(_run('web_config_scalar "$1" headless', str(c)), "true")
             self.assertEqual(_run('web_config_scalar "$1" https', str(c)), "false")
             self.assertEqual(_run('web_config_scalar "$1" port', str(c)), "5000")
             self.assertEqual(_run('web_config_list "$1" cors_origins', str(c)), "http://a:3000,https://b")
@@ -123,7 +120,7 @@ class ShellWebConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             c = Path(tmp) / "c.yaml"; c.write_text(WEB, encoding="utf-8")
             env = dict(os.environ, STUDIO_CONFIG_PYTHON="/nonexistent/python", PATH="/usr/bin:/bin")
-            script = 'source "$1"; _studio_config_python() { return 1; }; web_config_scalar "$2" headless'
+            script = 'source "$1"; _studio_config_python() { return 1; }; web_config_scalar "$2" https'
             out = subprocess.run(["bash", "-c", script, "_", str(HELPER), str(c)],
                                  check=True, capture_output=True, text=True, env=env)
             self.assertEqual(out.stdout.strip(), "True")
@@ -133,6 +130,212 @@ class ShellWebConfigTests(unittest.TestCase):
             self.assertEqual(_run('config_true "$1" && echo y || echo n', value), "y", value)
         for value in ("0", "false", "", "no", "off", "'true'"):
             self.assertEqual(_run('config_true "$1" && echo y || echo n', value), "n", value)
+
+
+class ShellRagConfigTests(unittest.TestCase):
+    """rag_config_enabled, which setup.sh reads to keep a SETUP_RAG choice."""
+
+    def _enabled(self, text):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / "c.yaml"
+            config.write_text(text, encoding="utf-8")
+            return _run('rag_config_enabled "$1"', str(config))
+
+    def test_values_read_like_the_loader(self):
+        self.assertEqual(self._enabled("app:\n  rag:\n    enabled: true\n"), "true")
+        self.assertEqual(self._enabled("app:\n  rag:\n    enabled: false   # SETUP_RAG=1\n"), "false")
+        self.assertEqual(self._enabled("app:\n  rag: {enabled: 'yes'}\n"), "true")
+        self.assertEqual(self._enabled("rag:\n  enabled: on\n"), "true")             # no app: root
+        self.assertEqual(self._enabled("app:\n  web:\n    port: 5000\n"), "false")   # loader default
+
+    def test_fallback_reader_without_a_yaml_python(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            c = Path(tmp) / "c.yaml"
+            c.write_text("app:\n  rag:\n    enabled: false   # SETUP_RAG=1\n", encoding="utf-8")
+            script = 'source "$1"; _studio_config_python() { return 1; }; rag_config_enabled "$2"'
+            out = subprocess.run(["bash", "-c", script, "_", str(HELPER), str(c)],
+                                 check=True, capture_output=True, text=True)
+            self.assertEqual(out.stdout.strip(), "false")
+
+
+class LegacyUiDirMigrationTests(unittest.TestCase):
+    """run.sh moves an updated install's own files from src/python/ui/ (the
+    backend folder before it became api/) into api/ on the next start."""
+
+    EXAMPLE = Path(__file__).resolve().parents[2]
+
+    def _migrate(self, python_dir: Path) -> subprocess.CompletedProcess:
+        run_sh = (self.EXAMPLE / "run.sh").read_text(encoding="utf-8")
+        start = run_sh.index("migrate_legacy_ui_dir() {")
+        end = run_sh.index("\n}\n", start) + 3
+        script = ('ok() { echo "OK $*"; }; warn() { echo "WARN $*" >&2; }\n'
+                  f'PYTHON_DIR="$1"\n{run_sh[start:end]}\nmigrate_legacy_ui_dir\n')
+        return subprocess.run(["bash", "-c", script, "_", str(python_dir)],
+                              check=True, capture_output=True, text=True)
+
+    def test_install_files_move_and_regenerated_ones_are_dropped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            py = Path(tmp)
+            files = {"assets/en_US-x.onnx": "voice", "assets/piper-plus/ja/m.onnx": "ja",
+                     "milvus.db": "db", "milvus.meta.json": "{}", "uploads/doc.md": "# doc",
+                     "server.log": "log", ".milvus.db.lock": "", "__pycache__/x.pyc": "c"}
+            for rel, text in files.items():
+                (py / "ui" / rel).parent.mkdir(parents=True, exist_ok=True)
+                (py / "ui" / rel).write_text(text)
+            (py / "api" / "assets").mkdir(parents=True)
+
+            out = self._migrate(py)
+
+            self.assertFalse((py / "ui").exists())
+            for rel in ("assets/en_US-x.onnx", "assets/piper-plus/ja/m.onnx", "milvus.db",
+                        "milvus.meta.json", "uploads/doc.md", "server.log"):
+                self.assertEqual((py / "api" / rel).read_text(), files[rel], rel)
+            self.assertFalse((py / "api" / ".milvus.db.lock").exists())
+            self.assertFalse((py / "api" / "__pycache__").exists())
+            self.assertIn("OK Moved 6 file(s)", out.stdout)
+
+    def test_existing_api_files_are_never_overwritten(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            py = Path(tmp)
+            for side, db, voice in (("ui", "old documents", "same"), ("api", "new default", "same")):
+                (py / side / "assets").mkdir(parents=True)
+                (py / side / "milvus.db").write_text(db)
+                (py / side / "assets" / "v.onnx").write_text(voice)
+
+            out = self._migrate(py)
+
+            self.assertEqual((py / "api" / "milvus.db").read_text(), "new default")
+            self.assertEqual((py / "ui" / "milvus.db").read_text(), "old documents")
+            self.assertFalse((py / "ui" / "assets").exists())          # identical copy dropped
+            self.assertIn("ui/milvus.db", out.stderr)
+
+    def test_the_split_voices_shim_in_ui_tts_stays(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            py = Path(tmp)
+            (py / "ui" / "tts").mkdir(parents=True)
+            (py / "ui" / "tts" / "split_voices.py").write_text("shim")
+            (py / "ui" / "milvus.db").write_text("db")
+            (py / "api").mkdir()
+
+            out = self._migrate(py)
+
+            self.assertEqual((py / "ui" / "tts" / "split_voices.py").read_text(), "shim")
+            self.assertFalse((py / "api" / "tts").exists())
+            self.assertEqual((py / "api" / "milvus.db").read_text(), "db")
+            self.assertEqual(out.stderr, "")
+
+    def test_update_keeps_install_files_in_ui_until_they_move(self):
+        # Every install-owned api/ path the update mirror protects is also
+        # protected under ui/, so a second update before the first start
+        # cannot delete files that have not moved yet.
+        run_sh = (self.EXAMPLE / "run.sh").read_text(encoding="utf-8")
+        api = re.findall(r"--exclude='/src/python/api/([^']+)'", run_sh)
+        ui = re.findall(r"--exclude='/src/python/ui/([^']+)'", run_sh)
+        self.assertTrue(api)
+        self.assertEqual(sorted(api), sorted(ui))
+
+    def test_the_old_updater_path_forwards_to_the_splitter(self):
+        shim = self.EXAMPLE / "src" / "python" / "ui" / "tts" / "split_voices.py"
+        with tempfile.TemporaryDirectory() as tmp:
+            py = Path(tmp)
+            (py / "ui" / "tts").mkdir(parents=True)
+            (py / "api" / "tts").mkdir(parents=True)
+            (py / "ui" / "tts" / "split_voices.py").write_text(shim.read_text(encoding="utf-8"))
+            (py / "api" / "tts" / "split_voices.py").write_text(
+                "import sys\nprint('split', sys.argv[1:])\n")
+            out = subprocess.run([sys.executable, str(py / "ui" / "tts" / "split_voices.py"), "/assets"],
+                                 check=True, capture_output=True, text=True)
+            self.assertEqual(out.stdout.strip(), "split ['/assets']")
+
+    def test_nothing_happens_without_a_ui_folder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "api").mkdir()
+            out = self._migrate(Path(tmp))
+            self.assertEqual((out.stdout, out.stderr), ("", ""))
+
+
+class HfDownloadRetryTests(unittest.TestCase):
+    """setup.sh's hf_download retries what the Hub may answer differently a
+    moment later (#599) and stops at once on anything else."""
+
+    EXAMPLE = Path(__file__).resolve().parents[2]
+    # A fake `hf`: each call answers with the next line of the plan, either
+    # "ok" (prints the path) or an error message on stderr with exit 1.
+    FAKE_HF = (
+        '#!/bin/bash\n'
+        'n=$(( $(cat "$STATE/calls" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$STATE/calls"\n'
+        'line=$(sed -n "${n}p" "$STATE/plan")\n'
+        'if [[ "$line" == ok ]]; then echo "/models/$2"; exit 0; fi\n'
+        'printf "%b\\n" "$line" >&2; exit 1\n'
+    )
+
+    def _download(self, plan):
+        setup = (self.EXAMPLE / "setup.sh").read_text(encoding="utf-8")
+        start = setup.index("hf_download() {")
+        end = setup.index("\n}\n", start) + 3
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            (state / "plan").write_text("\n".join(plan) + "\n")
+            hf = state / "hf"
+            hf.write_text(self.FAKE_HF)
+            hf.chmod(0o755)
+            script = ('set -euo pipefail\n'
+                      'warn() { echo "WARN $*" >&2; }\n'
+                      'sleep() { echo "$1" >> "$STATE/sleeps"; }\n'
+                      f'{setup[start:end]}\n'
+                      'if hf_download "$STATE/hf" simaai/m --local-dir /x; then echo RC=0; else echo RC=1; fi\n')
+            out = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
+                                 env=dict(os.environ, STATE=str(state)))
+            calls = int((state / "calls").read_text())
+            sleeps = (state / "sleeps").read_text().split() if (state / "sleeps").exists() else []
+            return out, calls, [int(x) for x in sleeps]
+
+    def test_a_rate_limit_is_retried_until_the_download_succeeds(self):
+        out, calls, sleeps = self._download(
+            ["429 Client Error: Too Many Requests for url: https://huggingface.co/x", "ok"])
+        self.assertIn("RC=0", out.stdout)
+        self.assertIn("/models/simaai/m", out.stdout)       # hf's output still reaches stdout
+        self.assertIn("429 Client Error", out.stderr)       # and its messages the terminal
+        self.assertEqual((calls, sleeps), (2, [15]))
+
+    def test_server_errors_and_dropped_connections_are_retried(self):
+        out, calls, sleeps = self._download(
+            ["503 Server Error: Service Unavailable", "ConnectionError: Connection reset by peer", "ok"])
+        self.assertIn("RC=0", out.stdout)
+        self.assertEqual((calls, sleeps), (3, [15, 30]))
+
+    def test_a_dropped_tls_connection_is_retried(self):
+        out, calls, sleeps = self._download(
+            ["requests.exceptions.SSLError: EOF occurred in violation of protocol (_ssl.c:2427)", "ok"])
+        self.assertEqual((out.stdout.split()[-1], calls, sleeps), ("RC=0", 2, [15]))
+
+    def test_a_wrong_repo_fails_at_once(self):
+        out, calls, sleeps = self._download(["Repository Not Found for url: https://huggingface.co/x"])
+        self.assertIn("RC=1", out.stdout)
+        self.assertEqual((calls, sleeps), (1, []))
+
+    def test_hf_tracebacks_are_classified_by_their_error_lines(self):
+        # A real hf failure prints a traceback whose indented source lines
+        # mention timeouts and ConnectionError even for a missing repo.
+        trace = r"Traceback (most recent call last):\n    url=url, timeout=etag_timeout\n    except ConnectionError:\n"
+        out, calls, _ = self._download([trace + "huggingface_hub.errors.RepositoryNotFoundError: 404 Client Error"])
+        self.assertEqual((out.stdout.split()[-1], calls), ("RC=1", 1))
+        out, calls, sleeps = self._download(
+            [trace + "huggingface_hub.errors.LocalEntryNotFoundError: An error happened", "ok"])
+        self.assertEqual((out.stdout.split()[-1], calls, sleeps), ("RC=0", 2, [15]))
+
+    def test_it_gives_up_after_the_last_attempt(self):
+        out, calls, sleeps = self._download(["429 Client Error: Too Many Requests"] * 6)
+        self.assertIn("RC=1", out.stdout)
+        self.assertEqual((calls, sleeps), (4, [15, 30, 60]))
+        self.assertIn("attempt 3 of 4", out.stderr)
+
+    def test_every_hugging_face_download_in_setup_goes_through_it(self):
+        setup = (self.EXAMPLE / "setup.sh").read_text(encoding="utf-8")
+        body = setup.replace(setup[setup.index("hf_download() {"):setup.index("write_repo_marker() {")], "")
+        self.assertNotIn("/bin/hf\" download", body)
+        self.assertNotIn('"${hf}" download', body)
+        self.assertEqual(body.count("hf_download "), 7)
 
 
 class ShellConfigValueTests(unittest.TestCase):
@@ -156,3 +359,49 @@ class ShellConfigValueTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+
+class ServerConfigWithoutPyyamlTests(unittest.TestCase):
+    """The model server runs in the Neat environment, which may lack PyYAML
+    (Platform 3.0's ~/pyneat). run.sh converts the YAML config to JSON with the
+    app's own Python, and the server reads that JSON without importing yaml."""
+
+    EXAMPLE = Path(__file__).resolve().parents[2]
+
+    def _convert(self, config: Path, target: Path) -> None:
+        run_sh = (self.EXAMPLE / "run.sh").read_text(encoding="utf-8")
+        start = run_sh.index("write_server_config() {")
+        end = run_sh.index("\n}\n", start) + 3
+        script = (f'APP_PYTHON="{sys.executable}"; CONFIG_PATH="$1"; SERVER_CONFIG_JSON="$2"\n'
+                  + run_sh[start:end] + "\nwrite_server_config\n")
+        subprocess.run(["bash", "-c", script, "_", str(config), str(target)], check=True)
+
+    def test_server_config_loads_from_json_without_pyyaml(self):
+        config = self.EXAMPLE / "src" / "common" / "config.yaml"
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "server-config.json"
+            self._convert(config, target)
+            probe = (
+                "import sys; sys.modules['yaml'] = None\n"
+                "from pathlib import Path\n"
+                "from shared.config import load_server_config\n"
+                f"cfg = load_server_config(Path({str(target)!r}))\n"
+                "print(repr(cfg))\n"
+            )
+            out = subprocess.run([sys.executable, "-c", probe], check=True, capture_output=True, text=True,
+                                 cwd=self.EXAMPLE / "src" / "python")
+            from shared.config import load_server_config
+            expected = load_server_config(config)
+            # The whole parsed configuration, not only that it loads.
+            self.assertEqual(out.stdout.strip(), repr(expected))
+
+    def test_run_sh_starts_the_server_with_the_json_copy(self):
+        run_sh = (self.EXAMPLE / "run.sh").read_text(encoding="utf-8")
+        self.assertIn('server/main.py" --config "${SERVER_CONFIG_JSON}"', run_sh)
+        self.assertNotIn('server/main.py" --config "${CONFIG_PATH}"', run_sh)
+
+    def test_setup_does_not_modify_the_neat_environment(self):
+        setup = (self.EXAMPLE / "setup.sh").read_text(encoding="utf-8")
+        self.assertNotIn("import yaml'", setup)
+        self.assertNotIn('pip install "PyYAML', setup)

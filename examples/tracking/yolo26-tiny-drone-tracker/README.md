@@ -28,8 +28,8 @@ per-stream IDs.
 ## Prerequisites
 
 - `sima-cli` 2.1.15 or newer
-  ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a
-  supported Modalix or DevKit target.
+  ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on the
+  Modalix DevKit, or in a Neat SDK container paired with it.
 - One or more H.264 or H.265 RTSP sources and an
   [Insight](https://developer.sima.ai/software/tools/insight/) endpoint
   reachable from the target.
@@ -38,6 +38,8 @@ per-stream IDs.
   WebRTC H.265.
 
 ## Install Apps
+
+Install on the Modalix DevKit, or under `/workspace` in a Neat SDK container paired with it. Only the example itself must run on the DevKit. If the Core and Insight selected by Apps are already installed, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps` to skip reinstalling them. See [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
 
 Install the latest Neat Apps runtime and enter the installed bundle:
 
@@ -51,10 +53,10 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-Download the tested SDK 2.1.3 model artifact:
+Download the tested SDK 3.0.0 model artifact:
 
 ```bash
-export MODELZOO_VERSION="2.1.3"
+export MODELZOO_VERSION="3.0.0"
 mkdir -p models
 cd models
 sima-cli download \
