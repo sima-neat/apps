@@ -14,5 +14,4 @@ sima_neat_apps_module(
   "adaptive-resolution-object-detector"
   UNIT_TEST
   E2E_TEST
-  OUTPUT_TARGET_VAR ADAPTIVE_RESOLUTION_OBJECT_DETECTION_INSIGHT_TARGET
 )

@@ -1,340 +1,932 @@
-"""Unit tests for the adaptive-resolution-object-detector example."""
+"""Unit tests for adaptive-resolution-object-detector (Python)."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-import dataclasses
-import importlib.util
-import io
-import os
-import signal
+import struct
 import subprocess
-import threading
 import sys
-import textwrap
-import time
 from types import SimpleNamespace
 
 import pytest
 
-EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
-PYTHON_DIR = EXAMPLE_DIR / "src" / "python"
-MAIN_PY = PYTHON_DIR / "main.py"          # entry point: --mode dispatcher
-ADAPTIVE_PY = PYTHON_DIR / "adaptive_app.py"
-FUSED_PY = PYTHON_DIR / "fused_app.py"
+from tests.utils.config_cases import config_writer, load_example_main
+from tests.utils.fake_run import FakeRun
 
-if str(PYTHON_DIR) not in sys.path:
-    sys.path.insert(0, str(PYTHON_DIR))
+
+EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
+MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
 
 pytestmark = pytest.mark.unit
 
 
-def write_config(tmp_path: Path, streams_block: str) -> Path:
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text(
-        "\n".join(
-            [
-                "model:",
-                "  path: assets/models/yolo26m-det-int8-b1.tar.gz",
-                streams_block,
-                "output:",
-                "  insight:",
-                "    host: 127.0.0.1",
-            ]
-        ),
-        encoding="utf-8",
+main_module = load_example_main(EXAMPLE_DIR, "adaptive_resolution_object_detector_main")
+
+
+VALID_CONFIG = {
+    "mode": "live",
+    "model": {"path": "model.tar.gz", "labels": "coco_label.txt"},
+    "source": {"type": "rtsp", "codec": "h264", "tcp": True, "latency_ms": 100, "fps": 0},
+    "streams": {
+        "max_streams": 16,
+        "sources": [
+            {"id": "cam-1", "url": "rtsp://127.0.0.1:8554/src1"},
+            {"id": "cam-2", "url": "rtsp://127.0.0.1:8554/src2"},
+        ],
+    },
+    "group": {"size": 4},
+    "inference": {"frames": 0, "fps": 0, "min_score": 0.30, "nms_iou": 0.60, "max_detections": 50},
+    "runtime": {"profile": False, "warmup_frames": 30, "config_watch_seconds": 1.0},
+    "output": {
+        "save_dir": "",
+        "save_every": 0,
+        "video_enabled": True,
+        "insight": {"host": "127.0.0.1", "video_port": 9000, "metadata_port": 9100},
+    },
+}
+
+write_full_config = config_writer(VALID_CONFIG)
+
+
+def sources(count: int) -> list[dict]:
+    return [{"id": f"cam-{i + 1}", "url": f"rtsp://127.0.0.1:8554/src{i + 1}"} for i in range(count)]
+
+
+def run_main(*args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(MAIN_PY), *args],
+        capture_output=True,
+        text=True,
+        cwd=str(EXAMPLE_DIR),
+        timeout=20,
     )
-    return config_path
-
-
-RICH_TWO = textwrap.dedent(
-    """\
-    streams:
-      max_streams: 8
-      sources:
-        - id: cam-1
-          rtsp_url: rtsp://127.0.0.1:8554/src1
-        - id: cam-2
-          rtsp_url: rtsp://127.0.0.1:8554/src2"""
-)
-
-BARE_THREE = textwrap.dedent(
-    """\
-    streams:
-      - rtsp://127.0.0.1:8554/src1
-      - rtsp://127.0.0.1:8554/src2
-      - rtsp://127.0.0.1:8554/src3"""
-)
 
 
 class TestMainEntrypoint:
-    def test_help_runs(self):
-        result = subprocess.run(
-            [sys.executable, str(MAIN_PY), "--help"],
-            capture_output=True,
-            text=True,
-            cwd=str(EXAMPLE_DIR),
-            timeout=20,
-        )
+    def test_help_lists_config_options_and_no_mode_flag(self):
+        result = run_main("--help")
+
         assert result.returncode == 0
         assert "--config" in result.stdout
         assert "--validate-config-only" in result.stdout
+        assert "--mode" not in result.stdout
 
-    def test_missing_config_file_fails_cleanly(self):
-        result = subprocess.run(
-            [sys.executable, str(MAIN_PY), "--config", "does-not-exist.yaml"],
-            capture_output=True,
-            text=True,
-            cwd=str(EXAMPLE_DIR),
-            timeout=20,
-        )
+    def test_mode_flag_is_rejected(self, tmp_path):
+        result = run_main("--mode", "scale", "--config", str(write_full_config(tmp_path)))
+
+        assert result.returncode != 0
+        assert "--mode" in result.stderr
+
+    def test_missing_config_file_fails_cleanly(self, tmp_path):
+        result = run_main("--config", str(tmp_path / "missing.yaml"))
+
         assert result.returncode == 2
         assert "config file not found" in result.stderr
 
-    def test_validate_config_only_reports_stream_count(self, tmp_path: Path):
-        config_path = write_config(tmp_path, RICH_TWO)
-        result = subprocess.run(
-            [sys.executable, str(MAIN_PY), "--config", str(config_path), "--validate-config-only"],
-            capture_output=True,
-            text=True,
-            cwd=str(EXAMPLE_DIR),
-            timeout=20,
-        )
-        assert result.returncode == 0
+    @pytest.mark.parametrize("mode", ["live", "scale", "group"])
+    def test_validate_config_only_reports_the_selected_mode(self, tmp_path, mode):
+        config_path = write_full_config(tmp_path, [(("mode",), mode)])
+
+        result = run_main("--config", str(config_path), "--validate-config-only")
+
+        assert result.returncode == 0, result.stderr
+        assert f"mode={mode}" in result.stdout
         assert "streams=2" in result.stdout
 
+    def test_invalid_config_exits_with_an_error_line(self, tmp_path):
+        config_path = write_full_config(tmp_path, [(("mode",), "fused")])
 
-class TestConfigLoading:
-    def test_rich_sources(self, tmp_path: Path):
-        from adaptive_app import load_app_config
+        result = run_main("--config", str(config_path), "--validate-config-only")
 
-        cfg = load_app_config(write_config(tmp_path, RICH_TWO))
-        assert cfg.model_path == "assets/models/yolo26m-det-int8-b1.tar.gz"
+        assert result.returncode == 1
+        assert "[ERR] mode must be one of: live, scale, group" in result.stderr
+
+    def test_packaged_config_validates(self):
+        result = run_main("--config", str(EXAMPLE_DIR / "src" / "common" / "config.yaml"), "--validate-config-only")
+
+        assert result.returncode == 0, result.stderr
+        assert "mode=live" in result.stdout
+
+
+class TestValidBaseline:
+    def test_the_baseline_config_loads(self, tmp_path):
+        cfg = main_module.load_app_config(write_full_config(tmp_path))
+
+        assert cfg.mode == "live"
         assert [s.id for s in cfg.sources] == ["cam-1", "cam-2"]
-        assert cfg.max_streams == 8
+        assert cfg.sources[0].url == "rtsp://127.0.0.1:8554/src1"
+        assert cfg.channel_base == 0
 
-    def test_bare_list_autonames(self, tmp_path: Path):
-        from adaptive_app import load_app_config
+    def test_omitted_optional_values_fall_back_to_documented_defaults(self, tmp_path):
+        minimal = {
+            "mode": "scale",
+            "model": {"path": "model.tar.gz"},
+            "streams": {"sources": sources(1)},
+            "output": {"insight": {"host": "127.0.0.1"}},
+        }
+        cfg = main_module.load_app_config(write_full_config(tmp_path, root=minimal))
 
-        cfg = load_app_config(write_config(tmp_path, BARE_THREE))
-        assert [s.id for s in cfg.sources] == ["cam-1", "cam-2", "cam-3"]
-        assert [s.rtsp_url for s in cfg.sources][0] == "rtsp://127.0.0.1:8554/src1"
+        assert cfg.max_streams == 16
+        assert cfg.group_size == 4
+        assert (cfg.source_type, cfg.source_codec) == ("rtsp", "h264")
+        assert (cfg.tcp, cfg.latency_ms, cfg.source_fps) == (True, 100, 0)
+        assert (cfg.frames, cfg.fps) == (0, 0)
+        assert (cfg.min_score, cfg.nms_iou, cfg.max_detections) == (0.30, 0.60, 50)
+        assert (cfg.profile, cfg.warmup_frames, cfg.config_watch_seconds) == (False, 30, 1.0)
+        assert (cfg.video_port, cfg.metadata_port, cfg.video_enabled) == (9000, 9100, True)
+        assert (cfg.save_dir, cfg.save_every) == ("", 0)
+        assert cfg.labels_path.name == "coco_label.txt"
 
-    def test_rejects_over_max_streams(self, tmp_path: Path):
-        from adaptive_app import load_app_config
+    @pytest.mark.parametrize("codec", ["h264", "H264", "avc", "h.264"])
+    def test_h264_aliases_are_accepted(self, tmp_path, codec):
+        cfg = main_module.load_app_config(write_full_config(tmp_path, [(("source", "codec"), codec)]))
 
-        block = RICH_TWO.replace("max_streams: 8", "max_streams: 1")
-        with pytest.raises(ValueError, match="max_streams"):
-            load_app_config(write_config(tmp_path, block))
+        assert cfg.source_codec == "h264"
 
-    def test_rejects_empty_streams(self, tmp_path: Path):
-        from adaptive_app import load_app_config
+    @pytest.mark.parametrize("mode", ["LIVE", " scale ", "Group"])
+    def test_mode_is_case_and_space_insensitive(self, tmp_path, mode):
+        cfg = main_module.load_app_config(write_full_config(tmp_path, [(("mode",), mode)]))
 
-        with pytest.raises(ValueError, match="streams"):
-            load_app_config(write_config(tmp_path, "streams: []"))
-
-    def test_reload_sources_matches_load(self, tmp_path: Path):
-        from adaptive_app import load_app_config, reload_sources
-
-        config_path = write_config(tmp_path, RICH_TWO)
-        cfg = load_app_config(config_path)
-        reloaded = reload_sources(config_path)
-        assert [s.id for s in reloaded] == [s.id for s in cfg.sources]
-
-
-
-class TestOutputPolicy:
-    HEIGHTS = [2160, 1080, 720, 480]
-
-
+        assert cfg.mode == mode.strip().lower()
 
 
+class TestRejectedValues:
+    @pytest.mark.parametrize(
+        ("path", "value", "message"),
+        [
+            (("mode",), "", "mode must be set"),
+            (("mode",), "adaptive", "mode must be one of"),
+            (("mode",), 3, "mode must be a string"),
+            (("model", "path"), "", "model.path must be set"),
+            (("model", "labels"), "", "model.labels must be set"),
+            (("source", "type"), "http", "source.type must be rtsp"),
+            (("source", "codec"), "h265", "source.codec must be h264"),
+            (("source", "codec"), "mjpeg", "source.codec must be h264"),
+            (("source", "latency_ms"), -1, "source.latency_ms must be >= 0"),
+            (("source", "fps"), -1, "source.fps must be >= 0"),
+            (("source", "tcp"), "yes", "tcp must be true or false"),
+            (("streams", "max_streams"), 0, "streams.max_streams must be >= 1"),
+            (("streams", "max_streams"), 1, "more than streams.max_streams"),
+            (("group", "size"), 0, "group.size must be >= 1"),
+            (("inference", "frames"), -1, "inference.frames must be >= 0"),
+            (("inference", "fps"), -1, "inference.fps must be >= 0"),
+            (("inference", "min_score"), 1.5, "inference.min_score must be between 0 and 1"),
+            (("inference", "nms_iou"), -0.1, "inference.nms_iou must be between 0 and 1"),
+            (("inference", "max_detections"), 0, "inference.max_detections must be > 0"),
+            (("runtime", "warmup_frames"), -1, "runtime.warmup_frames must be >= 0"),
+            (("runtime", "config_watch_seconds"), 0, "runtime.config_watch_seconds must be > 0"),
+            (("output", "save_every"), -1, "output.save_every must be >= 0"),
+            (("output", "insight", "host"), "", "output.insight.host must be set"),
+            (("output", "insight", "video_port"), 0, "output.insight.video_port must be > 0"),
+            (("output", "insight", "metadata_port"), 0, "output.insight.metadata_port must be > 0"),
+        ],
+    )
+    def test_invalid_value_is_rejected_with_an_actionable_message(self, tmp_path, path, value, message):
+        with pytest.raises(ValueError, match=message):
+            main_module.load_app_config(write_full_config(tmp_path, [(path, value)]))
+
+    def test_missing_mode_is_rejected(self, tmp_path):
+        raw = {key: value for key, value in VALID_CONFIG.items() if key != "mode"}
+
+        with pytest.raises(ValueError, match="mode must be set to one of: live, scale, group"):
+            main_module.load_app_config(write_full_config(tmp_path, root=raw))
+
+    def test_a_non_mapping_root_is_rejected(self, tmp_path):
+        with pytest.raises(ValueError, match="config root must be a mapping"):
+            main_module.load_app_config(write_full_config(tmp_path, root=["mode", "live"]))
+
+    def test_an_empty_file_is_reported_as_missing_settings_not_a_crash(self, tmp_path):
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text("", encoding="utf-8")
+
+        with pytest.raises(ValueError, match="mode must be set"):
+            main_module.load_app_config(config_path)
+
+
+class TestStreamList:
+    def test_bare_url_list_is_rejected(self, tmp_path):
+        config_path = write_full_config(tmp_path, [(("streams",), ["rtsp://127.0.0.1:8554/src1"])])
+
+        with pytest.raises(ValueError, match="streams must be a mapping"):
+            main_module.load_app_config(config_path)
+
+    def test_sources_must_be_a_list(self, tmp_path):
+        config_path = write_full_config(tmp_path, [(("streams", "sources"), "rtsp://127.0.0.1/a")])
+
+        with pytest.raises(ValueError, match="streams.sources must be a list"):
+            main_module.load_app_config(config_path)
+
+    @pytest.mark.parametrize(
+        ("entry", "message"),
+        [
+            ("rtsp://127.0.0.1:8554/src1", r"streams.sources\[1\] must be a mapping"),
+            ({"url": "rtsp://127.0.0.1:8554/src1"}, r"streams.sources\[1\].id must be set"),
+            ({"id": "cam-9", "url": "  "}, r"streams.sources\[1\].url must be set"),
+            ({"id": "cam-9", "rtsp_url": "rtsp://a/b"}, r"streams.sources\[1\].url must be set"),
+        ],
+    )
+    def test_a_bad_entry_names_its_index(self, tmp_path, entry, message):
+        config_path = write_full_config(tmp_path, [(("streams", "sources"), [sources(1)[0], entry])])
+
+        with pytest.raises(ValueError, match=message):
+            main_module.load_app_config(config_path)
+
+    def test_duplicate_ids_are_rejected(self, tmp_path):
+        duplicate = [sources(1)[0], {"id": "cam-1", "url": "rtsp://127.0.0.1:8554/other"}]
+        config_path = write_full_config(tmp_path, [(("streams", "sources"), duplicate)])
+
+        with pytest.raises(ValueError, match="ids must be unique"):
+            main_module.load_app_config(config_path)
+
+    def test_live_mode_may_start_with_no_streams(self, tmp_path):
+        cfg = main_module.load_app_config(write_full_config(tmp_path, [(("streams", "sources"), [])]))
+
+        assert cfg.sources == []
+
+    @pytest.mark.parametrize("mode", ["scale", "group"])
+    def test_scale_and_group_need_at_least_one_stream(self, tmp_path, mode):
+        config_path = write_full_config(tmp_path, [(("mode",), mode), (("streams", "sources"), [])])
+
+        with pytest.raises(ValueError, match=f"must not be empty in {mode} mode"):
+            main_module.load_app_config(config_path)
+
+    def test_stream_order_is_preserved(self, tmp_path):
+        config_path = write_full_config(tmp_path, [(("streams", "sources"), list(reversed(sources(3))))])
+
+        cfg = main_module.load_app_config(config_path)
+
+        assert [s.id for s in cfg.sources] == ["cam-3", "cam-2", "cam-1"]
+
+
+class TestLiveReload:
+    def test_a_valid_edit_returns_the_new_sources(self, tmp_path):
+        config_path = write_full_config(tmp_path, [(("streams", "sources"), sources(3))])
+
+        reloaded = main_module.reload_sources(config_path, capacity=16)
+
+        assert [s.id for s in reloaded] == ["cam-1", "cam-2", "cam-3"]
+
+    def test_an_edit_past_the_startup_capacity_is_rejected_whole(self, tmp_path):
+        config_path = write_full_config(
+            tmp_path, [(("streams", "max_streams"), 32), (("streams", "sources"), sources(5))]
+        )
+
+        with pytest.raises(ValueError, match="more than the 4 channels this run started with"):
+            main_module.reload_sources(config_path, capacity=4)
+
+    def test_an_invalid_edit_raises_instead_of_applying_part_of_it(self, tmp_path):
+        duplicate = [sources(1)[0], sources(1)[0]]
+        config_path = write_full_config(tmp_path, [(("streams", "sources"), duplicate)])
+
+        with pytest.raises(ValueError, match="ids must be unique"):
+            main_module.reload_sources(config_path, capacity=16)
+
+
+class RecordingManager(main_module.StreamManager):
+    """A StreamManager whose add/remove record calls instead of starting threads."""
+
+    def __init__(self, cfg, running: dict[str, str]):
+        super().__init__(cfg, labels=["person"])
+        self.added: list[str] = []
+        self.removed: list[str] = []
+        for channel, (stream_id, url) in enumerate(running.items()):
+            self.streams[stream_id] = main_module.ManagedStream(stream_id, url, channel, None)
+            self.free_channels.remove(channel)
+
+    def add(self, source):
+        self.added.append(source.id)
+        self.streams[source.id] = main_module.ManagedStream(source.id, source.url, 0, None)
+        return True
+
+    def remove(self, stream_id, join_timeout=15.0):
+        self.removed.append(stream_id)
+        self.streams.pop(stream_id, None)
+
+
+class TestLiveStreamDiff:
+    @staticmethod
+    def _cfg(tmp_path):
+        return main_module.load_app_config(write_full_config(tmp_path))
+
+    def test_only_new_and_removed_ids_change(self, tmp_path):
+        manager = RecordingManager(
+            self._cfg(tmp_path), {"cam-1": "rtsp://a/1", "cam-2": "rtsp://a/2"}
+        )
+
+        manager.apply_sources(
+            [main_module.StreamSource("cam-2", "rtsp://a/2"), main_module.StreamSource("cam-3", "rtsp://a/3")]
+        )
+
+        assert manager.removed == ["cam-1"]
+        assert manager.added == ["cam-3"]
+
+    def test_a_changed_url_restarts_that_stream(self, tmp_path):
+        manager = RecordingManager(self._cfg(tmp_path), {"cam-1": "rtsp://a/1"})
+
+        manager.apply_sources([main_module.StreamSource("cam-1", "rtsp://a/new")])
+
+        assert manager.removed == ["cam-1"]
+        assert manager.added == ["cam-1"]
+
+    def test_an_unchanged_config_touches_nothing(self, tmp_path):
+        manager = RecordingManager(self._cfg(tmp_path), {"cam-1": "rtsp://a/1"})
+
+        manager.apply_sources([main_module.StreamSource("cam-1", "rtsp://a/1")])
+
+        assert manager.removed == []
+        assert manager.added == []
+
+    def test_a_dropped_source_stops_counting_as_failed(self, tmp_path):
+        manager = RecordingManager(self._cfg(tmp_path), {})
+        manager.failed["cam-9"] = "source closed"
+
+        manager.apply_sources([])
+
+        assert manager.failed == {}
+
+
+class TestGroupSplit:
+    def _cfg(self, tmp_path, count: int, size: int):
+        return main_module.load_app_config(
+            write_full_config(
+                tmp_path,
+                [(("mode",), "group"), (("group", "size"), size), (("streams", "sources"), sources(count))],
+            )
+        )
+
+    def test_streams_are_chunked_in_order_with_their_channel_range(self, tmp_path):
+        groups = main_module.split_groups(self._cfg(tmp_path, count=10, size=4))
+
+        assert [[s.id for s in g.sources] for g in groups] == [
+            ["cam-1", "cam-2", "cam-3", "cam-4"],
+            ["cam-5", "cam-6", "cam-7", "cam-8"],
+            ["cam-9", "cam-10"],
+        ]
+        assert [g.channel_base for g in groups] == [0, 4, 8]
+
+    def test_fewer_streams_than_a_group_make_one_group(self, tmp_path):
+        groups = main_module.split_groups(self._cfg(tmp_path, count=3, size=4))
+
+        assert len(groups) == 1
+        assert groups[0].channel_base == 0
+        assert len(groups[0].sources) == 3
+
+    def test_groups_keep_every_other_setting(self, tmp_path):
+        cfg = self._cfg(tmp_path, count=5, size=2)
+
+        for group in main_module.split_groups(cfg):
+            assert group.insight_host == cfg.insight_host
+            assert group.model_path == cfg.model_path
+            assert group.mode == "group"
+
+
+class FakeProcess:
+    def __init__(self, target, args, name, outcome, log):
+        self.target = target
+        self.args = args
+        self.name = name
+        self.pid = 1000 + len(log)
+        self.exitcode = None
+        self.terminated = False
+        self._outcome = outcome
+        self._log = log
+
+    @property
+    def group_index(self):
+        return self.args[1]
+
+    @property
+    def stream_ids(self):
+        return [s.id for s in self.args[0].sources]
+
+    def start(self):
+        self._log.append(("start", self.group_index, self.stream_ids))
+        _, _, ready = self.args
+        if self._outcome == "ready":
+            ready.set()
+        else:
+            self.exitcode = 1
+
+    def is_alive(self):
+        return self.exitcode is None
+
+    def terminate(self):
+        self._log.append(("stop", self.group_index, self.stream_ids))
+        self.terminated = True
+        self.exitcode = 0
+
+    def kill(self):
+        self.exitcode = -9
+
+    def join(self, timeout=None):
+        pass
+
+
+class FakeEvent:
+    def __init__(self):
+        self._set = False
+
+    def set(self):
+        self._set = True
+
+    def wait(self, timeout=None):
+        return self._set
+
+
+class FakeContext:
+    """Starts fake group processes; each takes the next outcome, default "ready"."""
+
+    def __init__(self, outcomes=()):
+        self.outcomes = list(outcomes)
+        self.processes: list[FakeProcess] = []
+        self.log: list[tuple] = []
+
+    def Event(self):
+        return FakeEvent()
+
+    def Process(self, target, args, name):
+        outcome = self.outcomes.pop(0) if self.outcomes else "ready"
+        process = FakeProcess(target, args, name, outcome, self.log)
+        self.processes.append(process)
+        return process
+
+
+class TestChangedGroups:
+    @staticmethod
+    def _groups(tmp_path, count, size=4):
+        cfg = main_module.load_app_config(
+            write_full_config(
+                tmp_path,
+                [(("mode",), "group"), (("group", "size"), size), (("streams", "sources"), sources(count))],
+            )
+        )
+        return main_module.split_groups(cfg)
+
+    def test_adding_a_stream_to_the_last_group_changes_only_that_group(self, tmp_path):
+        running = dict(enumerate(self._groups(tmp_path, 5)))
+
+        assert main_module.changed_groups(running, self._groups(tmp_path, 6)) == [1]
+
+    def test_a_stream_that_needs_a_new_group_changes_only_the_new_group(self, tmp_path):
+        running = dict(enumerate(self._groups(tmp_path, 4)))
+
+        assert main_module.changed_groups(running, self._groups(tmp_path, 5)) == [1]
+
+    def test_emptying_the_last_group_removes_it(self, tmp_path):
+        running = dict(enumerate(self._groups(tmp_path, 5)))
+
+        assert main_module.changed_groups(running, self._groups(tmp_path, 4)) == [1]
+
+    def test_an_unchanged_config_changes_nothing(self, tmp_path):
+        running = dict(enumerate(self._groups(tmp_path, 6)))
+
+        assert main_module.changed_groups(running, self._groups(tmp_path, 6)) == []
+
+    def test_removing_an_early_stream_shifts_every_later_group(self, tmp_path):
+        running = dict(enumerate(self._groups(tmp_path, 9, size=2)))
+        wanted = self._groups(tmp_path, 9, size=2)
+        # Drop cam-2: every stream after it moves up one slot.
+        trimmed = [s for s in wanted[0].sources + wanted[1].sources + wanted[2].sources
+                   + wanted[3].sources + wanted[4].sources if s.id != "cam-2"]
+        cfg = main_module.replace(wanted[0], sources=trimmed, channel_base=0)
+
+        assert main_module.changed_groups(running, main_module.split_groups(cfg)) == [0, 1, 2, 3, 4]
+
+
+class TestGroupSupervisor:
+    @staticmethod
+    def _cfg(tmp_path, count: int, size: int = 4, frames: int = 0):
+        return main_module.load_app_config(
+            write_full_config(
+                tmp_path,
+                [
+                    (("mode",), "group"),
+                    (("group", "size"), size),
+                    (("inference", "frames"), frames),
+                    (("streams", "sources"), sources(count)),
+                ],
+            )
+        )
+
+    @staticmethod
+    def _edit(cfg, count: int) -> None:
+        """Rewrite the watched config with `count` streams and a newer mtime."""
+        raw = main_module.load_raw_config(cfg.config_path)
+        raw["streams"]["sources"] = sources(count)
+        cfg.config_path.write_text(main_module.yaml.safe_dump(raw), encoding="utf-8")
+        stamp = cfg.config_path.stat().st_mtime + 10
+        main_module.os.utime(cfg.config_path, (stamp, stamp))
+
+    @staticmethod
+    def _script_sleeps(monkeypatch, *steps):
+        """Run one step per supervisor poll, then stop it as Ctrl-C would."""
+        pending = list(steps)
+
+        def sleep(_seconds):
+            if not pending:
+                raise KeyboardInterrupt()
+            pending.pop(0)()
+
+        monkeypatch.setattr(main_module.time, "sleep", sleep)
+
+    def _context(self, monkeypatch, outcomes=()):
+        context = FakeContext(outcomes)
+        monkeypatch.setattr(main_module.multiprocessing, "get_context", lambda method: context)
+        return context
+
+    def test_every_group_starts_in_its_own_process_with_its_channel_range(self, tmp_path, monkeypatch):
+        context = self._context(monkeypatch)
+        self._script_sleeps(monkeypatch)
+
+        main_module.run_group(self._cfg(tmp_path, count=6))
+
+        assert [(p.group_index, p.stream_ids) for p in context.processes] == [
+            (0, ["cam-1", "cam-2", "cam-3", "cam-4"]),
+            (1, ["cam-5", "cam-6"]),
+        ]
+        assert [p.args[0].channel_base for p in context.processes] == [0, 4]
+        assert all(p.target is main_module._group_worker for p in context.processes)
+        # Stopping the supervisor stops every group through its normal shutdown.
+        assert all(p.terminated for p in context.processes)
+
+    def test_adding_a_stream_restarts_only_its_group(self, tmp_path, monkeypatch):
+        context = self._context(monkeypatch)
+        cfg = self._cfg(tmp_path, count=5)
+        self._script_sleeps(monkeypatch, lambda: self._edit(cfg, 6), lambda: None)
+
+        main_module.run_group(cfg)
+
+        assert context.log[:4] == [
+            ("start", 0, ["cam-1", "cam-2", "cam-3", "cam-4"]),
+            ("start", 1, ["cam-5"]),
+            ("stop", 1, ["cam-5"]),
+            ("start", 1, ["cam-5", "cam-6"]),
+        ]
+        # Group 0 kept running through the edit and stopped only at shutdown.
+        assert context.log.index(("stop", 0, ["cam-1", "cam-2", "cam-3", "cam-4"])) > 3
+        assert context.processes[-1].args[0].channel_base == 4
+
+    def test_a_stream_beyond_the_last_group_starts_a_new_group_only(self, tmp_path, monkeypatch):
+        context = self._context(monkeypatch)
+        cfg = self._cfg(tmp_path, count=4)
+        self._script_sleeps(monkeypatch, lambda: self._edit(cfg, 5), lambda: None)
+
+        main_module.run_group(cfg)
+
+        assert context.log[:2] == [
+            ("start", 0, ["cam-1", "cam-2", "cam-3", "cam-4"]),
+            ("start", 1, ["cam-5"]),
+        ]
+        assert context.processes[0].terminated  # only at shutdown
+        assert context.log.index(("stop", 0, ["cam-1", "cam-2", "cam-3", "cam-4"])) > 1
+
+    def test_removing_the_last_groups_streams_stops_that_group(self, tmp_path, monkeypatch):
+        context = self._context(monkeypatch)
+        cfg = self._cfg(tmp_path, count=5)
+        self._script_sleeps(monkeypatch, lambda: self._edit(cfg, 4), lambda: None)
+
+        main_module.run_group(cfg)
+
+        assert context.log[:3] == [
+            ("start", 0, ["cam-1", "cam-2", "cam-3", "cam-4"]),
+            ("start", 1, ["cam-5"]),
+            ("stop", 1, ["cam-5"]),
+        ]
+        assert len(context.processes) == 2
+
+    def test_an_invalid_edit_is_ignored(self, tmp_path, monkeypatch, capsys):
+        context = self._context(monkeypatch)
+        cfg = self._cfg(tmp_path, count=5)
+
+        def bad_edit():
+            raw = main_module.load_raw_config(cfg.config_path)
+            raw["streams"]["sources"] = [sources(1)[0], sources(1)[0]]
+            cfg.config_path.write_text(main_module.yaml.safe_dump(raw), encoding="utf-8")
+            stamp = cfg.config_path.stat().st_mtime + 10
+            main_module.os.utime(cfg.config_path, (stamp, stamp))
+
+        self._script_sleeps(monkeypatch, bad_edit, lambda: None)
+
+        main_module.run_group(cfg)
+
+        assert len(context.processes) == 2
+        assert "ignoring invalid config reload" in capsys.readouterr().err
+
+    def test_a_failed_group_does_not_block_the_next_and_fails_a_finite_run(self, tmp_path, monkeypatch):
+        context = self._context(monkeypatch, ["fail", "ready"])
+
+        def finish():
+            context.processes[1].exitcode = 0
+
+        self._script_sleeps(monkeypatch, finish)
+
+        with pytest.raises(RuntimeError, match=r"group\(s\) 0 \(exit 1\) failed"):
+            main_module.run_group(self._cfg(tmp_path, count=8, frames=10))
+
+        assert len(context.processes) == 2
+
+    def test_a_finite_run_ends_when_every_group_finishes(self, tmp_path, monkeypatch):
+        context = self._context(monkeypatch)
+
+        def finish():
+            for process in context.processes:
+                process.exitcode = 0
+
+        self._script_sleeps(monkeypatch, finish)
+
+        main_module.run_group(self._cfg(tmp_path, count=2, frames=10))
+
+        assert context.processes[0].terminated is False
+
+    def test_an_edit_restarts_a_group_that_had_failed(self, tmp_path, monkeypatch):
+        context = self._context(monkeypatch, ["ready", "fail"])
+        cfg = self._cfg(tmp_path, count=5)
+        self._script_sleeps(monkeypatch, lambda: self._edit(cfg, 6), lambda: None)
+
+        main_module.run_group(cfg)
+
+        assert ("start", 1, ["cam-5", "cam-6"]) in context.log
+        assert context.processes[-1].is_alive() is False  # stopped at shutdown
+
+
+class TestDetectorGeometry:
+    @pytest.mark.parametrize(
+        ("probes", "expected"),
+        [
+            # Same size everywhere: nothing is scaled.
+            ([(1920, 1080, 30), (1920, 1080, 30)], (1920, 1080)),
+            # Mixed 720p and 4K: the largest size, clamped to 2x the smallest.
+            ([(1280, 720, 30), (3840, 2160, 30)], (2560, 1440)),
+            # A lone small source stays native and skips the scaler.
+            ([(640, 480, 30)], (640, 480)),
+            # Never below the model input unless every source is smaller.
+            ([(320, 180, 30), (1920, 1080, 30)], (640, 640)),
+            # NV12 needs even dimensions.
+            ([(1281, 721, 30)], (1280, 720)),
+        ],
+    )
+    def test_shared_detector_geometry(self, probes, expected):
+        assert main_module.detector_geometry(probes) == expected
+
+
+def bbox_payload(boxes: list[tuple[int, int, int, int, float, int]], declared: int | None = None) -> bytes:
+    payload = struct.pack("<I", len(boxes) if declared is None else declared)
+    for box in boxes:
+        payload += struct.pack("<iiiifi", *box)
+    return payload
+
+
+class TestBoxesAndMetadata:
+    def test_boxes_are_clamped_to_the_frame(self):
+        boxes = main_module.parse_boxes_strict(bbox_payload([(-5, 10, 50, 2000, 0.9, 0)]), 100, 100, 50)
+
+        assert boxes == [{"x1": 0.0, "y1": 10.0, "x2": 45.0, "y2": 100.0, "score": pytest.approx(0.9), "class_id": 0}]
+
+    def test_a_header_beyond_the_payload_is_rejected(self):
+        with pytest.raises(RuntimeError, match="bbox header exceeds payload count"):
+            main_module.parse_boxes_strict(bbox_payload([(0, 0, 1, 1, 0.5, 0)], declared=3), 100, 100, 50)
+
+    def test_a_header_beyond_top_k_is_rejected(self):
+        payload = bbox_payload([(0, 0, 1, 1, 0.5, 0)] * 3)
+
+        with pytest.raises(RuntimeError, match="bbox header exceeds expected topk"):
+            main_module.parse_boxes_strict(payload, 100, 100, 2)
+
+    def test_metadata_objects_are_compact(self):
+        boxes = [
+            {"x1": 10.6, "y1": 20.2, "x2": 40.9, "y2": 60.4, "score": 0.756, "class_id": 0},
+            {"x1": 90.0, "y1": 90.0, "x2": 120.0, "y2": 120.0, "score": 0.5, "class_id": 99},
+        ]
+
+        objects = main_module.metadata_objects(boxes, ["person"], 100, 100)
+
+        assert objects == [
+            {"label": "person", "confidence": 0.76, "bbox": [10, 20, 30, 40]},
+            {"label": "unknown", "confidence": 0.5, "bbox": [90, 90, 10, 10]},
+        ]
+        assert "id" not in objects[0]
+
+    @pytest.mark.parametrize(
+        ("pts_ns", "expected"),
+        [(-1, 0), (0, 0), (1_000_000_000, 90_000), (2**63 - 1, ((2**63 - 1) * 90_000 // 10**9) & 0xFFFFFFFF)],
+    )
+    def test_rtp_timestamp_is_the_32_bit_90khz_clock(self, pts_ns, expected):
+        assert main_module.rtp_timestamp_from_pts_ns(pts_ns) == expected
 
 
 class FakeMetadataSender:
     def __init__(self):
-        self.calls = []
-        self.raw = []
+        self.metadata_calls = []
+        self.raw_calls = []
 
     def send_metadata(self, metadata_type, data_json, timestamp_ms, frame_id):
-        self.calls.append((metadata_type, data_json, timestamp_ms, frame_id))
+        self.metadata_calls.append((metadata_type, data_json, timestamp_ms, frame_id))
         return True
 
-    # The adaptive app publishes here, not through send_metadata: Insight matches
-    # a held frame by an exact rtp_timestamp key that the convenience API cannot
-    # carry. send_metadata() swallows exceptions so a dropped datagram never
-    # stalls detection - which also means a fake missing this method would make
-    # the test silently assert nothing.
-    def send_raw_json(self, payload_json):
-        self.raw.append(payload_json)
+    def send_raw_json(self, payload):
+        self.raw_calls.append(payload)
         return True
 
 
 class FakeSample:
     frame_id = 42
     pts_ns = 1_234_000_000
+    dts_ns = -1
+    duration_ns = 40_000_000
+    input_seq = 7
+    stream_id = "stream1"
 
 
-class TestMetadata:
+BOX = {"x1": 10.0, "y1": 20.0, "x2": 40.0, "y2": 60.0, "score": 0.75, "class_id": 0}
 
-    def test_send_metadata_uses_object_detection_contract(self):
-        from adaptive_app import ProfileWindow, StreamRuntime, send_metadata
 
+class TestLiveMetadata:
+    def test_live_metadata_carries_the_rtp_timestamp_insight_matches_on(self):
         sender = FakeMetadataSender()
-        runtime = StreamRuntime(
-            channel=0,
-            id="cam-1",
-            url="rtsp://127.0.0.1:8554/src1",
-            labels=["person"],
-            frame_w=100,
-            frame_h=100,
+        stream = main_module.LiveStream(
+            channel=3, id="cam-4", url="rtsp://a/4", labels=["person"], width=100, height=100,
             metadata_sender=sender,
-            profile=ProfileWindow(False, "cam-1"),
         )
-        boxes = [{"x1": 10.0, "y1": 20.0, "x2": 40.0, "y2": 60.0, "score": 0.75, "class_id": 0}]
 
-        send_metadata(runtime, FakeSample(), boxes, stream_count=2)
+        main_module.send_live_metadata(stream, FakeSample(), [dict(BOX)], stream_count=5)
 
-        assert len(sender.raw) == 1, "detections must be published via send_raw_json"
-        envelope = json.loads(sender.raw[0])
-        assert envelope["type"] == "object-detection"
-        assert envelope["stream_id"] == "cam-1"
-        assert envelope["stream_index"] == 0
-        assert envelope["frame_id"] == "42"
-        assert envelope["pts_ns"] == FakeSample.pts_ns
-        assert envelope["timestamp"] == 1234
-        # `data` is already an object in the envelope, not a JSON string.
-        data = envelope["data"]
-        assert data["stream_count"] == 2
-        assert data["objects"][0]["label"] == "person"
+        assert len(sender.raw_calls) == 1
+        payload = json.loads(sender.raw_calls[0])
+        assert payload["type"] == "object-detection"
+        assert payload["rtp_timestamp"] == main_module.rtp_timestamp_from_pts_ns(FakeSample.pts_ns)
+        assert payload["timestamp"] == 1234
+        assert payload["frame_id"] == "42"
+        assert (payload["stream_id"], payload["stream_index"]) == ("cam-4", 3)
+        assert payload["data"] == {
+            "objects": [{"label": "person", "confidence": 0.75, "bbox": [10, 20, 30, 40]}],
+            "stream_count": 5,
+            "stream_id": "cam-4",
+        }
 
+    def test_a_failed_send_does_not_stop_detection(self):
+        class FailingSender:
+            def send_raw_json(self, payload):
+                raise OSError("network unreachable")
 
-class TestModeDispatch:
-    """`main.py` is an entry point, not an implementation.
-
-    It selects a topology with --mode and forwards everything else unchanged.
-    The C++ entry point (src/cpp/main.cpp) takes the same flag, which is what
-    lets the pipelines chooser switch language without changing anything else.
-    """
-
-    def test_help_lists_both_modes(self):
-        result = subprocess.run(
-            [sys.executable, str(MAIN_PY), "--help"],
-            capture_output=True, text=True, timeout=60,
+        stream = main_module.LiveStream(
+            channel=0, id="cam-1", url="rtsp://a/1", labels=["person"], width=100, height=100,
+            metadata_sender=FailingSender(),
         )
-        assert result.returncode == 0
-        assert "--mode" in result.stdout
-        assert "adaptive" in result.stdout and "fused" in result.stdout
 
-    def test_rejects_unknown_mode(self):
-        result = subprocess.run(
-            [sys.executable, str(MAIN_PY), "--mode", "nonsense",
-             "--config", str(EXAMPLE_DIR / "src" / "common" / "config.yaml"),
-             "--validate-config-only"],
-            capture_output=True, text=True, timeout=60,
-        )
-        assert result.returncode != 0
-
-    def test_both_implementations_are_importable(self):
-        """Each mode's module must load on its own - main.py only dispatches."""
-        import importlib
-
-        for module_name, entry in (("adaptive_app", "load_app_config"),
-                                   ("fused_app", "load_app_config")):
-            module = importlib.import_module(module_name)
-            assert hasattr(module, entry), f"{module_name}.{entry} missing"
-            assert callable(module.main)
-
-    def test_modes_do_not_share_a_config_schema(self, tmp_path):
-        """Handing a mode the other's config must fail, not half-run.
-
-        `adaptive` reads streams.sources plus the adaptive: policy sections;
-        `fused` reads a bare streams: list. Silently accepting the wrong shape
-        would start a pipeline with settings the user never asked for.
-        """
-        import adaptive_app
-        import fused_app
-
-        adaptive_cfg = tmp_path / "adaptive.yaml"
-        adaptive_cfg.write_text(textwrap.dedent("""
-            model:
-              path: /tmp/model.tar.gz
-              labels: /tmp/labels.txt
-            adaptive:
-              resolutions: [640]
-            streams:
-              max_streams: 4
-              sources:
-                - id: cam-1
-                  rtsp_url: rtsp://127.0.0.1:8554/src1
-            output:
-              insight:
-                host: 127.0.0.1
-        """).strip() + "\n", encoding="utf-8")
-
-        # The adaptive schema is not a valid fused config.
-        with pytest.raises(Exception):
-            fused_app.load_app_config(adaptive_cfg)
-
-        fused_cfg = tmp_path / "fused.yaml"
-        fused_cfg.write_text(textwrap.dedent("""
-            model:
-              path: /tmp/model.tar.gz
-              labels: /tmp/labels.txt
-            streams:
-              - rtsp://127.0.0.1:8554/src1
-            output:
-              insight:
-                host: 127.0.0.1
-        """).strip() + "\n", encoding="utf-8")
-
-        # The reverse is NOT symmetric, and that is deliberate: the adaptive
-        # loader also accepts a bare list and auto-names the streams (see
-        # TestConfigLoading::test_bare_list_autonames). So a fused config loads
-        # under adaptive - what it will not do is silently pick up fused-only
-        # settings, since there are none in that shape.
-        adaptive_cfg_from_fused = adaptive_app.load_app_config(fused_cfg)
-        assert len(adaptive_cfg_from_fused.sources) == 1
-        assert adaptive_cfg_from_fused.sources[0].rtsp_url.endswith("/src1")
-
-    def test_fused_accepts_more_than_four_streams(self, tmp_path):
-        """The old "up to four streams" guard was a development-phase limit.
-
-        This topology is the one the high-density example uses for 16/24/48
-        streams, so the ceiling is measured capacity, not a placeholder. The C++
-        side carries the same limit.
-        """
-        import fused_app
-
-        urls = "\n".join(f"  - rtsp://127.0.0.1:8554/src{i}" for i in range(1, 9))
-        cfg_path = tmp_path / "fused8.yaml"
-        cfg_path.write_text(
-            "model:\n  path: /tmp/model.tar.gz\n  labels: /tmp/labels.txt\n"
-            f"streams:\n{urls}\n"
-            "output:\n  insight:\n    host: 127.0.0.1\n",
-            encoding="utf-8",
-        )
-        cfg = fused_app.load_app_config(cfg_path)
-        assert len(cfg.rtsp_urls) == 8
+        main_module.send_live_metadata(stream, FakeSample(), [dict(BOX)], stream_count=1)
 
 
-def _wait_for(predicate, timeout: float = 10.0) -> bool:
-    """Poll a manager predicate; stream workers settle on their own threads."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if predicate():
-            return True
-        time.sleep(0.02)
-    return predicate()
+def fused_stream(sender, index=0, frame=(100, 100), det=(100, 100)) -> object:
+    return main_module.FusedStream(
+        index=index,
+        channel=4 + index,
+        id=f"cam-{index + 1}",
+        url=f"rtsp://a/{index + 1}",
+        metadata_sender=sender,
+        labels=["person"],
+        profile=main_module.ProfileWindow(False, f"cam-{index + 1}"),
+        frame_w=frame[0],
+        frame_h=frame[1],
+        det_w=det[0],
+        det_h=det[1],
+        source_fps=30,
+        video_port=9004 + index,
+    )
 
 
-class _IdleRun:
-    """A runtime that stays up and never yields a sample."""
+def fused_cfg(**overrides):
+    values = {"frames": 0, "fps": 0, "warmup_frames": 0, "max_detections": 50, "save_dir": "", "save_every": 0}
+    values.update(overrides)
+    return SimpleNamespace(**values)
 
-    def pull(self, output_name, timeout_ms):
-        time.sleep(0.01)
-        return None
+
+class TestFusedMetadata:
+    def test_scale_metadata_is_arrival_order_without_rtp_timestamp(self):
+        sender = FakeMetadataSender()
+
+        main_module.send_fused_metadata(fused_stream(sender), FakeSample(), [dict(BOX)])
+
+        assert sender.raw_calls == []
+        metadata_type, data_json, timestamp_ms, frame_id = sender.metadata_calls[0]
+        assert metadata_type == "object-detection"
+        assert (timestamp_ms, frame_id) == (1234, "42")
+        assert json.loads(data_json) == {
+            "objects": [{"label": "person", "confidence": 0.75, "bbox": [10, 20, 30, 40]}]
+        }
+
+    def test_boxes_are_scaled_from_the_detector_geometry_to_the_native_frame(self, monkeypatch):
+        sender = FakeMetadataSender()
+        stream = fused_stream(sender, frame=(1280, 720), det=(2560, 1440))
+        payload = bbox_payload([(200, 100, 400, 200, 0.8, 0)])
+        monkeypatch.setattr(main_module, "extract_bbox_payload", lambda sample: payload)
+
+        main_module.process_fused_sample(stream, fused_cfg(), FakeSample(), 1.0)
+
+        objects = json.loads(sender.metadata_calls[0][1])["objects"]
+        assert objects[0]["bbox"] == [100, 50, 200, 100]
+
+    def test_warmup_detections_are_not_published(self, monkeypatch):
+        sender = FakeMetadataSender()
+        stream = fused_stream(sender)
+        monkeypatch.setattr(main_module, "extract_bbox_payload", lambda sample: bbox_payload([]))
+
+        for _ in range(3):
+            main_module.process_fused_sample(stream, fused_cfg(warmup_frames=2), FakeSample(), 1.0)
+
+        assert stream.processed == 3
+        assert len(sender.metadata_calls) == 1
+
+    def test_inference_fps_caps_how_often_a_stream_publishes(self, monkeypatch):
+        sender = FakeMetadataSender()
+        stream = fused_stream(sender)
+        monkeypatch.setattr(main_module, "extract_bbox_payload", lambda sample: bbox_payload([]))
+        clock = iter([1000.0, 1050.0, 1100.0])
+        monkeypatch.setattr(main_module, "time_ms", lambda: next(clock))
+
+        # Warmup covers every frame, so the clock is read only by the fps check.
+        for _ in range(3):
+            main_module.process_fused_sample(stream, fused_cfg(fps=10, warmup_frames=10), FakeSample(), 1.0)
+
+        # 10 fps allows one publish per 100 ms: t=1000 and t=1100, not t=1050.
+        assert stream.processed == 2
+
+    def test_a_stream_stops_at_its_frame_limit(self, monkeypatch):
+        sender = FakeMetadataSender()
+        stream = fused_stream(sender)
+        monkeypatch.setattr(main_module, "extract_bbox_payload", lambda sample: bbox_payload([]))
+
+        for _ in range(4):
+            main_module.process_fused_sample(stream, fused_cfg(frames=2), FakeSample(), 1.0)
+
+        assert stream.processed == 2
+        assert main_module.all_streams_done([stream], 2)
+
+
+class TestFusedPullOutcomes:
+    """The scale pull loop, driven by a scripted run."""
+
+    def test_a_sample_is_routed_to_its_stream_by_stream_id(self, monkeypatch):
+        senders = [FakeMetadataSender(), FakeMetadataSender()]
+        streams = [fused_stream(senders[0], 0), fused_stream(senders[1], 1)]
+        monkeypatch.setattr(main_module, "extract_bbox_payload", lambda sample: bbox_payload([]))
+        run = FakeRun(("sample", FakeSample()))
+
+        assert main_module.process_fused_run_once(run, fused_cfg(), streams) is True
+
+        assert (streams[0].processed, streams[1].processed) == (0, 1)
+        assert run.pulls == [("detections", 50)]
+
+    def test_timeout_keeps_the_run_going(self):
+        streams = [fused_stream(FakeMetadataSender())]
+
+        assert main_module.process_fused_run_once(FakeRun("timeout"), fused_cfg(), streams) is True
+        assert streams[0].closed is False
+
+    def test_runtime_error_ends_the_run(self):
+        streams = [fused_stream(FakeMetadataSender())]
+
+        with pytest.raises(RuntimeError, match="queue torn down"):
+            main_module.process_fused_run_once(FakeRun(("error", "queue torn down")), fused_cfg(), streams)
+
+    def test_a_stopped_run_closes_every_stream(self):
+        class StoppedRun(FakeRun):
+            def running(self):
+                return False
+
+        streams = [fused_stream(FakeMetadataSender(), 0), fused_stream(FakeMetadataSender(), 1)]
+
+        assert main_module.process_fused_run_once(StoppedRun("closed"), fused_cfg(), streams) is False
+        assert all(s.closed for s in streams)
+        assert main_module.all_streams_done(streams, 0)
+
+    @pytest.mark.parametrize("stream_id", ["camera0", "stream9", "streamx"])
+    def test_an_unknown_stream_id_is_an_error(self, stream_id):
+        sample = SimpleNamespace(stream_id=stream_id)
+
+        with pytest.raises(RuntimeError, match="stream id"):
+            main_module.stream_index_from_sample(sample, 2)
+
+
+class NeatError(Exception):
+    """Stands in for pyneat.NeatError, which is not a RuntimeError."""
+
+
+class ScriptedRun:
+    """A run whose pulls raise or return per a script; `on_pull` runs before each."""
+
+    def __init__(self, *outcomes, on_pull=None):
+        self._outcomes = list(outcomes)
+        self._on_pull = on_pull
+        self.closed = False
+
+    def pull(self, output_name, timeout_ms=0):
+        if self._on_pull is not None:
+            self._on_pull()
+        outcome = self._outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
 
     def running(self):
         return True
@@ -343,1570 +935,72 @@ class _IdleRun:
         return ""
 
     def close(self):
-        pass
+        self.closed = True
 
 
-def _fake_init_stream_runtime(cfg, channel, source, labels):
-    """Builds for any stream except the ones named "bad-*"."""
-    if source.id.startswith("bad"):
-        raise RuntimeError(f"cannot build {source.id}")
-    return SimpleNamespace(
-        channel=channel,
-        processed=0,
-        run=_IdleRun(),
-        profile=None,
-        output_name="out",
-        frame_w=640,
-        frame_h=640,
-    )
-
-
-class TestStreamFailureIsolation:
-    """A stream that fails must not take the healthy streams with it.
-
-    The live panel adds streams into a running app, so an unreachable camera or a
-    typo'd URL is an ordinary event, not a reason to stop the world. These tests
-    pin that: a failing worker retires its own slot and leaves stop_event alone.
-    """
-
-    @staticmethod
-    def _manager(tmp_path, monkeypatch):
-        import adaptive_app
-
-        monkeypatch.setattr(adaptive_app, "init_stream_runtime", _fake_init_stream_runtime)
-        cfg = adaptive_app.load_app_config(write_config(tmp_path, RICH_TWO))
-        return adaptive_app, adaptive_app.StreamManager(cfg, ["person"])
-
-    def test_failed_add_leaves_healthy_streams_running(self, tmp_path, monkeypatch):
-        adaptive_app, manager = self._manager(tmp_path, monkeypatch)
-        try:
-            manager.add(adaptive_app.StreamSource("good-1", "rtsp://127.0.0.1:8554/src1"))
-            assert _wait_for(lambda: manager.active_count() == 1)
-
-            manager.add(adaptive_app.StreamSource("bad-1", "rtsp://127.0.0.1:8554/nope"))
-            assert _wait_for(lambda: "bad-1" in manager.failed)
-
-            assert not manager.stop_event.is_set(), "a stream failure set the app-wide stop event"
-            assert manager.active_count() == 1, "the healthy stream was torn down"
-            assert not manager.all_failed()
-        finally:
-            manager.shutdown()
-
-    def test_failed_stream_releases_its_channel(self, tmp_path, monkeypatch):
-        adaptive_app, manager = self._manager(tmp_path, monkeypatch)
-        try:
-            manager.add(adaptive_app.StreamSource("good-1", "rtsp://127.0.0.1:8554/src1"))
-            assert _wait_for(lambda: manager.active_count() == 1)
-            manager.add(adaptive_app.StreamSource("bad-1", "rtsp://127.0.0.1:8554/nope"))
-            assert _wait_for(lambda: "bad-1" in manager.failed)
-
-            # Channel 0 belongs to good-1; bad-1 took 1 and must have given it back,
-            # or repeated bad adds would exhaust max_streams.
-            assert _wait_for(lambda: 1 in manager.free_channels)
-            assert sorted(manager.free_channels) == [1, 2, 3, 4, 5, 6, 7]
-        finally:
-            manager.shutdown()
-
-    def test_dropping_a_bad_source_clears_its_failed_state(self, tmp_path, monkeypatch):
-        adaptive_app, manager = self._manager(tmp_path, monkeypatch)
-        try:
-            good = adaptive_app.StreamSource("good-1", "rtsp://127.0.0.1:8554/src1")
-            manager.add(good)
-            manager.add(adaptive_app.StreamSource("bad-1", "rtsp://127.0.0.1:8554/nope"))
-            assert _wait_for(lambda: "bad-1" in manager.failed)
-
-            manager.apply_sources([good])
-            assert "bad-1" not in manager.failed
-        finally:
-            manager.shutdown()
-
-    def test_all_failed_reports_a_total_failure(self, tmp_path, monkeypatch):
-        adaptive_app, manager = self._manager(tmp_path, monkeypatch)
-        try:
-            manager.add(adaptive_app.StreamSource("bad-1", "rtsp://127.0.0.1:8554/nope"))
-            assert _wait_for(manager.all_failed)
-            # all_failed() is what ends a batch run; it still is not stop_event.
-            assert not manager.stop_event.is_set()
-        finally:
-            manager.shutdown()
-
-
-PIPELINES_DIR = EXAMPLE_DIR / "pipelines"
-TOOLS_DIR = EXAMPLE_DIR / "tools"
-
-# pipelines/ and tools/ are development and demonstration tooling. The CI "Test
-# Apps Runtime" job runs this suite against the INSTALLED tree, which does not
-# carry them, so tests that read those sources are meaningful from a source
-# checkout and skip elsewhere.
-#
-# Probe the FILES, not the directories. The install tree turned out to contain a
-# pipelines/ directory without the panel sources in it, so an is_dir() guard
-# passed and every one of these tests still failed with FileNotFoundError.
-def _all_present(*paths: Path) -> bool:
-    return all(path.is_file() for path in paths)
-
-
-_PIPELINE_SOURCES = (
-    PIPELINES_DIR / "launcher.py",
-    *(PIPELINES_DIR / f"pipeline-{name}" / part
-      for name in ("scale", "live", "group")
-      for part in ("ui_server.py", "pipeline.py")),
-)
-
-requires_pipelines = pytest.mark.skipif(
-    not _all_present(*_PIPELINE_SOURCES),
-    reason="pipelines/ panel sources are dev tooling and are not in the packaged runtime",
-)
-requires_tools = pytest.mark.skipif(
-    not _all_present(TOOLS_DIR / "gen_test_config.sh"),
-    reason="tools/ is dev tooling and is not in the packaged runtime",
+ACCELERATOR_ERROR = NeatError(
+    "[infra.accelerator_execution_failed] The accelerator could not execute this model stage."
 )
 
 
-class TestFusedRunTermination:
-    """A fused run must end when its shared output closes.
-
-    all_streams_done() used to return False outright for frame_limit <= 0, so a
-    continuous run could never satisfy it. Once the detection output closed, the
-    loop spun on a dead output at full CPU - a process reported as running that
-    could never emit another detection.
-    """
+class TestLivePullRecovery:
+    """A live stream rebuilt by its own worker, driven by scripted runs."""
 
     @staticmethod
-    def _streams(*specs):
-        return [SimpleNamespace(processed=p, closed=c) for p, c in specs]
-
-    def test_closed_streams_end_a_continuous_run(self):
-        import fused_app
-
-        streams = self._streams((123, True), (98, True))
-        assert fused_app.all_streams_done(streams, 0) is True
-
-    def test_open_streams_keep_a_continuous_run_going(self):
-        import fused_app
-
-        streams = self._streams((123, False), (98, True))
-        assert fused_app.all_streams_done(streams, 0) is False
-
-    def test_frame_limit_still_ends_a_batch_run(self):
-        import fused_app
-
-        assert fused_app.all_streams_done(self._streams((10, False), (10, False)), 10) is True
-        assert fused_app.all_streams_done(self._streams((10, False), (9, False)), 10) is False
-        # A stream that closed early does not hold up the rest.
-        assert fused_app.all_streams_done(self._streams((10, False), (2, True)), 10) is True
-
-
-def _load_ui_server(name: str):
-    """Import one pipeline's ui_server.py under its own module name."""
-    directory = PIPELINES_DIR / f"pipeline-{name}"
-    # Every pipeline directory has its own pipeline.py. Leaving one cached under
-    # the bare name would silently bind the next panel server to the wrong one,
-    # making these tests order-dependent.
-    cached = sys.modules.pop("pipeline", None)
-    sys.path.insert(0, str(directory))
-    try:
-        spec = importlib.util.spec_from_file_location(
-            f"ui_server_{name}", directory / "ui_server.py"
+    def _manager(tmp_path, monkeypatch, runs: list, builds: list):
+        cfg = main_module.load_app_config(
+            write_full_config(
+                tmp_path, [(("inference", "frames"), 1), (("runtime", "warmup_frames"), 0)]
+            )
         )
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
-    finally:
-        sys.path.remove(str(directory))
-        sys.modules.pop("pipeline", None)
-        if cached is not None:
-            sys.modules["pipeline"] = cached
-
-
-def _multipart(payload: bytes, filename: str = "clip.mp4", boundary: str = "----bnd42",
-               quote_boundary: bool = False):
-    raw = boundary.encode()
-    body = (
-        b"--" + raw + b"\r\n"
-        b'Content-Disposition: form-data; name="file"; filename="' + filename.encode() + b'"\r\n'
-        b"Content-Type: video/mp4\r\n\r\n" + payload + b"\r\n"
-        b"--" + raw + b"--\r\n"
-    )
-    declared = f'"{boundary}"' if quote_boundary else boundary
-    return body, f"multipart/form-data; boundary={declared}"
-
-
-@requires_pipelines
-class TestUploadBounds:
-    """/api/upload is unauthenticated on 0.0.0.0 and runs on a memory-tight board.
-
-    Reading the whole declared body into memory - and splitting it, which copied
-    it again - meant one large or concurrent upload could OOM the DevKit before a
-    byte reached disk. The body now streams to the tempfile a chunk at a time
-    behind a declared-size ceiling.
-    """
-
-    def test_upload_streams_to_disk_without_buffering_the_body(self):
-        ui = _load_ui_server("live")
-        payload = os.urandom(4 * 1024 * 1024)
-        body, ctype = _multipart(payload)
-        dest = io.BytesIO()
-        name = ui.stream_multipart_file(io.BytesIO(body), len(body), ctype, dest)
-        assert name == "clip.mp4"
-        assert dest.getvalue() == payload
-
-    def test_payload_containing_boundary_like_bytes_survives(self):
-        ui = _load_ui_server("live")
-        payload = b"--not-the-boundary--\r\n" * 500
-        body, ctype = _multipart(payload)
-        dest = io.BytesIO()
-        assert ui.stream_multipart_file(io.BytesIO(body), len(body), ctype, dest) == "clip.mp4"
-        assert dest.getvalue() == payload
-
-    def test_boundary_split_across_reads_is_still_found(self):
-        ui = _load_ui_server("live")
-
-        class Trickle(io.RawIOBase):
-            """Hands back 7 bytes at a time, straddling every marker."""
-
-            def __init__(self, data):
-                self.data, self.pos = data, 0
-
-            def read(self, size=-1):
-                take = 7 if size < 0 else min(7, size)
-                chunk = self.data[self.pos:self.pos + take]
-                self.pos += len(chunk)
-                return chunk
-
-        payload = os.urandom(60_000)
-        body, ctype = _multipart(payload)
-        dest = io.BytesIO()
-        assert ui.stream_multipart_file(Trickle(body), len(body), ctype, dest) == "clip.mp4"
-        assert dest.getvalue() == payload
-
-    def test_quoted_boundary_parameter_is_understood(self):
-        """RFC 2045 allows boundary="...". Keeping the quotes means the closing
-        marker is never matched, which used to read as a successful upload."""
-        ui = _load_ui_server("live")
-        payload = os.urandom(50_000)
-        body, ctype = _multipart(payload, quote_boundary=True)
-        dest = io.BytesIO()
-        assert ui.stream_multipart_file(io.BytesIO(body), len(body), ctype, dest) == "clip.mp4"
-        assert dest.getvalue() == payload
-
-    def test_upload_without_a_closing_boundary_is_refused(self):
-        """A partial file, or one carrying the multipart trailer, must not be
-        forwarded to Insight and reported complete."""
-        ui = _load_ui_server("live")
-        body, ctype = _multipart(os.urandom(20_000))
-        truncated = body[: len(body) - 40]
-        assert ui.stream_multipart_file(
-            io.BytesIO(truncated), len(truncated), ctype, io.BytesIO()
-        ) is None
-
-        # A boundary that does not match the body is the same failure: nothing
-        # ever terminates the part.
-        assert ui.stream_multipart_file(
-            io.BytesIO(body), len(body), "multipart/form-data; boundary=wrong", io.BytesIO()
-        ) is None
-
-    def test_malformed_uploads_are_refused(self):
-        ui = _load_ui_server("live")
-        assert ui.stream_multipart_file(io.BytesIO(b"x"), 1, "application/json", io.BytesIO()) is None
-
-        body, ctype = _multipart(b"data", filename="")
-        assert ui.stream_multipart_file(io.BytesIO(body), len(body), ctype, io.BytesIO()) is None
-
-        # Part headers that never terminate must not be buffered without limit.
-        runaway = b"--B\r\n" + b"X" * (ui.MAX_PART_HEADER_BYTES + 1024)
-        assert ui.stream_multipart_file(
-            io.BytesIO(runaway), len(runaway), "multipart/form-data; boundary=B", io.BytesIO()
-        ) is None
-
-    @pytest.mark.parametrize("name", ["live", "scale", "group"])
-    def test_every_panel_server_carries_the_ceilings(self, name):
-        """All three copies are maintained together; none may drift back."""
-        source = (PIPELINES_DIR / f"pipeline-{name}" / "ui_server.py").read_text(encoding="utf-8")
-        assert "MAX_UPLOAD_BYTES" in source
-        assert "MAX_JSON_BYTES" in source
-        assert "def stream_multipart_file" in source
-        assert "def parse_multipart_file" not in source, "the unbounded parser came back"
-
-
-@requires_pipelines
-class TestGroupStaging:
-    """Grouped mode owns a fixed slot range per group and must leave it clean."""
-
-    def test_compaction_stops_every_position_in_the_range(self, monkeypatch):
-        """An external stream holds a position without staging a slot.
-
-        Stopping only positions past the new stream count therefore left a
-        dropped Insight source playing: [pinned, external] losing the pinned
-        stream leaves one stream, so position 0 - now backed by the external -
-        was never stopped even though its media source was still running.
-        """
-        ui = _load_ui_server("group")
-        stopped = []
-        monkeypatch.setattr(ui, "_stop_slot", stopped.append)
-
-        streams = [{"kind": "external", "url": "rtsp://cam/1"}]
-        urls, staging = ui.plan_group(0, streams)
-        assert staging == [], "an external stream must not claim an Insight slot"
-
-        ui.stage_group(0, staging)
-        assert stopped == [ui.insight_slot(0, pos) for pos in range(ui.GROUP_SIZE)]
-
-    def test_staging_stays_inside_the_group_range(self, monkeypatch):
-        """Whatever it stops, it must never touch a sibling group's slots."""
-        ui = _load_ui_server("group")
-        stopped = []
-        monkeypatch.setattr(ui, "_stop_slot", stopped.append)
-        monkeypatch.setattr(ui.pipeline, "api", lambda *args, **kwargs: None)
-        # Staging a slot waits for the RTSP mount; nothing here is really coming up.
-        monkeypatch.setattr(ui.time, "sleep", lambda _s: None)
-
-        _urls, staging = ui.plan_group(1, [{"kind": "pinned", "video": "clip.mp4"}])
-        ui.stage_group(1, staging)
-
-        own = {ui.insight_slot(1, pos) for pos in range(ui.GROUP_SIZE)}
-        assert set(stopped) <= own
-
-    def test_activity_panel_reads_the_per_group_logs(self):
-        """pipeline.LOG is the single-instance path and is never written here."""
-        source = (PIPELINES_DIR / "pipeline-group" / "ui_server.py").read_text(encoding="utf-8")
-        assert "pipeline.log_path(g)" in source
-        assert "tail -n 40 {pipeline.LOG}" not in source
-
-
-class TestFusedDebugFramePairing:
-    """Saved debug images must show the frame their boxes came from.
-
-    The decoded and detector branches are queued independently, so keeping only
-    the newest decoded frame paired every image with whatever had arrived by
-    then. Geometry was right, the moment was not - which reads as drift on
-    anything moving.
-    """
-
-    @staticmethod
-    def _stream(frames):
-        return SimpleNamespace(index=0, debug_frames=dict(frames), debug_pairing_warned=False)
-
-    def test_detection_gets_its_own_frame_not_the_newest(self):
-        import fused_app
-
-        stream = self._stream({10: "frame-10", 11: "frame-11", 12: "frame-12"})
-        assert fused_app.take_debug_frame(stream, 11) == "frame-11"
-
-    def test_matching_clears_the_frames_behind_it(self):
-        import fused_app
-
-        stream = self._stream({10: "frame-10", 11: "frame-11", 12: "frame-12"})
-        fused_app.take_debug_frame(stream, 11)
-        # 10's detection has already gone past; only 12 can still be claimed.
-        assert list(stream.debug_frames) == [12]
-
-    def test_no_frames_held_yields_nothing(self):
-        import fused_app
-
-        assert fused_app.take_debug_frame(self._stream({}), 7) is None
-
-    def test_unmatched_id_falls_back_to_newest_and_warns_once(self, capsys):
-        """Saving must keep working even if ids never line up - but say so."""
-        import fused_app
-
-        stream = self._stream({10: "frame-10", 12: "frame-12"})
-        assert fused_app.take_debug_frame(stream, 99) == "frame-12"
-        assert stream.debug_pairing_warned is True
-        assert "no id matching" in capsys.readouterr().err
-
-        stream.debug_frames = {13: "frame-13"}
-        fused_app.take_debug_frame(stream, 99)
-        assert capsys.readouterr().err == "", "the warning must not repeat every frame"
-
-
-@requires_pipelines
-class TestLauncherBounds:
-    """The chooser on :8080 is the fourth unauthenticated 0.0.0.0 server."""
-
-    def test_launcher_bounds_request_bodies(self):
-        source = (PIPELINES_DIR / "launcher.py").read_text(encoding="utf-8")
-        assert "MAX_BODY_BYTES" in source
-        # The read must be gated, not reached with a client-declared length.
-        gate = source.index("MAX_BODY_BYTES:")
-        read = source.index("self.rfile.read(n)")
-        assert gate < read, "the ceiling must be checked before the body is read"
-
-
-class TestMetadataRtpTimestampParity:
-    """The panel writes metadata_rtp_timestamp into the config both languages read.
-
-    It is a SIBLING of `insight:` under `output:`, not nested inside it - the
-    C++ parser first read it from output.insight.metadata_rtp_timestamp, a key
-    the generated config never has, so it silently kept the "auto" default
-    every time regardless of what the panel actually requested.
-    """
-
-    def test_python_and_cpp_read_the_same_key_path(self):
-        py = (EXAMPLE_DIR / "src" / "python" / "adaptive_app.py").read_text(encoding="utf-8")
-        cpp = (EXAMPLE_DIR / "src" / "cpp" / "adaptive_app.h").read_text(encoding="utf-8")
-        assert 'string_or(output, "metadata_rtp_timestamp"' in py
-        assert 'raw.string_or("output.metadata_rtp_timestamp"' in cpp
-        assert "output.insight.metadata_rtp_timestamp" not in cpp, (
-            "regression: reads a key the generated config never sets"
-        )
-        assert "send_raw_json" in cpp, "the convenience API cannot carry rtp_timestamp"
-        assert "do-timestamp=true" in cpp, "auto must read what Core actually lowered"
-
-    @requires_pipelines
-    def test_live_config_places_it_as_a_sibling_of_insight(self):
-        live = (PIPELINES_DIR / "pipeline-live" / "pipeline.py").read_text(encoding="utf-8")
-        assert 'metadata_rtp_timestamp: "on"\n  insight:' in live
-
-
-@requires_pipelines
-class TestScaleAddRebuildsInstead(object):
-    """The fused app has no config watch, so scale mode has no live add.
-
-    config_streams() used to search for "- id:" lines, a key that only exists
-    in the adaptive pipeline's rich schema - _config_scale() writes a bare list
-    with no id at all. It always read back zero streams, so cmd_add() always
-    reused slot 1 and appended a rich {id, rtsp_url} entry into a bare-list
-    config the fused loader cannot parse next run.
-    """
-
-    @staticmethod
-    def _pipeline():
-        return _load_ui_server("scale").pipeline
-
-    def test_config_streams_reads_the_bare_list_schema(self, tmp_path, monkeypatch):
-        mod = self._pipeline()
-        config = tmp_path / "scale-run.yaml"
-        config.write_text(
-            "model:\n  path: /tmp/model.tar.gz\n\n"
-            "streams:\n  - rtsp://127.0.0.1:8554/src1\n  - rtsp://127.0.0.1:8554/src2\n\n"
-            "input:\n  tcp: true\n",
-            encoding="utf-8",
-        )
-        monkeypatch.setattr(mod, "CONFIG", config)
-        assert mod.config_streams() == [
-            "rtsp://127.0.0.1:8554/src1",
-            "rtsp://127.0.0.1:8554/src2",
-        ]
-
-    def test_config_streams_empty_when_no_config_yet(self, tmp_path, monkeypatch):
-        mod = self._pipeline()
-        monkeypatch.setattr(mod, "CONFIG", tmp_path / "missing.yaml")
-        assert mod.config_streams() == []
-
-    def test_add_counts_the_real_total_and_rebuilds(self, monkeypatch):
-        """cmd_add() must see 2 existing streams as 2, not 0, and must go
-        through a full rebuild - there is no live-append path any more."""
-        mod = self._pipeline()
-        monkeypatch.setattr(mod, "config_streams", lambda: ["u1", "u2"])
-        calls = []
-        monkeypatch.setattr(mod, "cmd_up", calls.append)
-        mod.cmd_add()
-        assert calls == [3]
-
-
-@requires_pipelines
-class TestGroupPlan:
-    """Grouped mode's CLI must actually partition streams into groups.
-
-    cmd_up()/cmd_add() previously called the single-instance write_config()/
-    start_app(), which wrote group-run.yaml (explicitly unused in grouped mode)
-    and ran ONE fused process for every stream - the plain `scale` topology,
-    silently losing per-group failure and rebuild isolation.
-    """
-
-    @staticmethod
-    def _pipeline():
-        return _load_ui_server("group").pipeline
-
-    def test_plan_fills_groups_in_order(self):
-        mod = self._pipeline()
-        assert mod.group_plan(0) == [0, 0, 0, 0]
-        assert mod.group_plan(1) == [1, 0, 0, 0]
-        assert mod.group_plan(4) == [4, 0, 0, 0]
-        assert mod.group_plan(10) == [4, 4, 2, 0]
-        assert mod.group_plan(16) == [4, 4, 4, 4]
-
-    def test_plan_caps_at_the_group_ceiling(self):
-        """group_plan() lays out at most GROUP_SIZE * MAX_GROUPS. It stays a
-        pure layout function; refusing an impossible request is cmd_up()'s job
-        (see test_up_rejects_counts_above_the_ceiling)."""
-        mod = self._pipeline()
-        ceiling = mod.GROUP_SIZE * mod.MAX_GROUPS
-        assert sum(mod.group_plan(ceiling + 5)) == ceiling
-
-    def test_up_rejects_counts_above_the_ceiling(self, monkeypatch):
-        """Asking for more than fits must fail, not quietly run a smaller
-        experiment and report that as success."""
-        mod = self._pipeline()
-        touched = []
-        monkeypatch.setattr(mod, "stop_group", lambda g: touched.append(g))
-        monkeypatch.setattr(mod, "start_group", lambda g: touched.append(g))
-        monkeypatch.setattr(mod, "stage_group_sources", lambda *a: touched.append(a))
-
-        ceiling = mod.GROUP_SIZE * mod.MAX_GROUPS
-        with pytest.raises(SystemExit) as excinfo:
-            mod.cmd_up(ceiling + 1)
-        assert str(ceiling) in str(excinfo.value)
-        assert touched == [], "nothing may be started or stopped on a refused request"
-
-        # The ceiling itself is still accepted.
-        assert sum(mod.group_plan(ceiling)) == ceiling
-
-    def test_total_streams_counts_only_running_groups(self, tmp_path, monkeypatch):
-        mod = self._pipeline()
-        monkeypatch.setattr(mod, "HERE", tmp_path)
-        monkeypatch.setattr(mod, "running_groups", lambda: [0, 2])
-
-        (tmp_path / "group0-run.yaml").write_text(
-            "streams:\n  - rtsp://a\n  - rtsp://b\n\ninput:\n  tcp: true\n",
-            encoding="utf-8",
-        )
-        # group 1 has a leftover config from a previous, now-stopped run - it
-        # must not be counted since running_groups() excludes it.
-        (tmp_path / "group1-run.yaml").write_text(
-            "streams:\n  - rtsp://stale\n\ninput:\n  tcp: true\n", encoding="utf-8"
-        )
-        (tmp_path / "group2-run.yaml").write_text(
-            "streams:\n  - rtsp://c\n\ninput:\n  tcp: true\n", encoding="utf-8"
-        )
-
-        assert mod.total_streams() == 3
-
-    def test_add_counts_the_real_total_and_rebuilds(self, monkeypatch):
-        mod = self._pipeline()
-        monkeypatch.setattr(mod, "total_streams", lambda: 5)
-        calls = []
-        monkeypatch.setattr(mod, "cmd_up", calls.append)
-        mod.cmd_add()
-        assert calls == [6]
-
-    def test_stage_group_sources_uses_this_groups_own_channel_range(self, monkeypatch):
-        """Slots must be channel_for(group, pos) + 1 - the group's own fixed
-        range - never the group-unaware 1..count slots the old stage_sources()
-        used, which collided with every other group's sources."""
-        mod = self._pipeline()
-        monkeypatch.setattr(mod, "media_files", lambda prefix: ["a.mp4", "b.mp4"])
-        calls = []
-        monkeypatch.setattr(mod, "api", lambda path, payload=None, **kw: calls.append((path, payload)))
-        monkeypatch.setattr(mod.time, "sleep", lambda _s: None)
-
-        tier = mod.Tier("720p", 1280, 720, "video", 8)
-        mod.stage_group_sources(2, tier, 3)
-
-        expected_slots = [mod.channel_for(2, pos) + 1 for pos in range(3)]
-        assigned = [p["index"] for path, p in calls if path == "/api/mediasrc/assign"]
-        assert assigned == expected_slots
-        assert not any(path == "/api/mediasrc/stop-all" for path, _p in calls), (
-            "grouped staging must never touch every other group's sources"
-        )
-
-    def test_shrinking_a_group_releases_the_positions_it_no_longer_uses(self, monkeypatch):
-        """4 streams -> 2 must stop positions 2 and 3, not just leave them be.
-
-        stage_group_sources() used to stop only range(count) - the NEW, smaller
-        count - so the vacated higher positions kept playing in Insight with no
-        detector referencing them: a resource leak on every shrink, not just the
-        drop-to-zero case cmd_up() handles separately.
-        """
-        mod = self._pipeline()
-        monkeypatch.setattr(mod, "media_files", lambda prefix: ["a.mp4"])
-        stopped = []
-        monkeypatch.setattr(mod, "_stop_insight_slot", stopped.append)
-        monkeypatch.setattr(mod, "api", lambda *a, **kw: None)
-        monkeypatch.setattr(mod.time, "sleep", lambda _s: None)
-
-        tier = mod.Tier("720p", 1280, 720, "video", 8)
-        mod.stage_group_sources(1, tier, 2)  # group 1 shrinking to 2 streams
-
-        expected = {mod.channel_for(1, pos) + 1 for pos in range(mod.GROUP_SIZE)}
-        assert set(stopped) == expected
-
-    def test_dropping_a_group_to_zero_also_releases_its_slots(self, monkeypatch):
-        """count == 0 skips stage_group_sources() entirely in cmd_up() - it must
-        release the group's slots on that path too, not only stop the process."""
-        mod = self._pipeline()
-        monkeypatch.setattr(mod, "media_files", lambda prefix: sys.exit("must not be called"))
-        monkeypatch.setattr(mod, "stop_group", lambda _g: True)
-        monkeypatch.setattr(mod, "start_group", lambda _g: None)
-        monkeypatch.setattr(mod, "wait_for_group", lambda _g, _n: True)
-        monkeypatch.setattr(mod, "delivered_group", lambda _g: {})
-        monkeypatch.setattr(mod, "api", lambda *a, **kw: None)
-        stopped = []
-        monkeypatch.setattr(mod, "_stop_insight_slot", stopped.append)
-
-        mod.cmd_up(0)  # every group's count is 0
-
-        for group in range(mod.MAX_GROUPS):
-            expected = {mod.channel_for(group, pos) + 1 for pos in range(mod.GROUP_SIZE)}
-            got = {s for s in stopped if s in expected}
-            assert got == expected, f"group {group} slots not fully released"
-
-    def test_up_never_calls_the_removed_single_instance_path(self):
-        """The scale-topology leftovers this bug traced back to must be gone,
-        not just unreachable - so nothing can wire the CLI back to them."""
-        source = (PIPELINES_DIR / "pipeline-group" / "pipeline.py").read_text(encoding="utf-8")
-        for name in ("def stage_sources", "def write_config(", "def start_app",
-                     "def stop_app", "def app_running", "def config_streams",
-                     "def append_stream", "def append_source"):
-            assert name not in source, f"{name} should have been removed, not left dead"
-        assert "def write_config_group" in source
-        assert "def stage_group_sources" in source
-
-
-class TestFusedFpsCap:
-    """inference.fps must actually pace processing, not just label the banner.
-
-    output_fps was set from cfg.fps at build time and never consulted again, so
-    a configured cap changed nothing about the rate detection actually ran at -
-    experiments relying on it measured the uncapped workload.
-    """
-
-    @staticmethod
-    def _cfg(fps):
-        return SimpleNamespace(fps=fps)
-
-    @staticmethod
-    def _stream(last_process_ms):
-        return SimpleNamespace(last_process_ms=last_process_ms)
-
-    def test_uncapped_never_throttles(self):
-        import fused_app
-
-        cfg = self._cfg(0)
-        stream = self._stream(fused_app.time_ms())
-        assert fused_app.should_throttle_fps(cfg, stream, fused_app.time_ms()) is False
-
-    def test_throttles_before_the_target_interval_elapses(self):
-        import fused_app
-
-        cfg = self._cfg(10)  # 100 ms between frames
-        now = fused_app.time_ms()
-        stream = self._stream(now)
-        assert fused_app.should_throttle_fps(cfg, stream, now + 50.0) is True
-
-    def test_admits_once_the_target_interval_has_elapsed(self):
-        import fused_app
-
-        cfg = self._cfg(10)
-        now = fused_app.time_ms()
-        stream = self._stream(now)
-        assert fused_app.should_throttle_fps(cfg, stream, now + 150.0) is False
-
-    def test_a_throttled_sample_never_reaches_bbox_extraction(self, monkeypatch):
-        """The whole point is skipping the parse/send work, not just the send."""
-        import fused_app
-
-        def boom(*_a, **_kw):
-            raise AssertionError("extract_bbox_payload must not run while throttled")
-
-        monkeypatch.setattr(fused_app, "extract_bbox_payload", boom)
-        cfg = SimpleNamespace(fps=10, frames=0)
-        stream = SimpleNamespace(last_process_ms=fused_app.time_ms(), processed=0)
-        fused_app.process_output_sample(stream, cfg, sample=object(), detection_pull_ms=0.0)
-        assert stream.processed == 0
-
-
-class TestFusedDecoderFpsCap:
-    """A high-fps source must not be declared to decoder admission at its literal
-    rate - that gets the whole graph rejected before it starts. See
-    src/python/fused_app.py's decoder_fps_cap for the mechanism this mirrors in
-    C++ (src/cpp/fused_app.h), which previously had no equivalent at all."""
-
-    def test_cpp_gates_admission_the_same_way_python_does(self):
-        cpp = (EXAMPLE_DIR / "src" / "cpp" / "fused_app.h").read_text(encoding="utf-8")
-        assert "decoder_fps_cap" in cpp
-        assert "dec.dec_fps = capped ? -1 : opt.source_fps;" in cpp
-        assert "opt.output_caps.fps = capped ? 0 : fps_out;" in cpp
-
-
-class TestFusedDecoderRateIsNeverPinnedBelowTheSource:
-    """inference.fps must NOT reach dec_fps / output_caps.fps.
-
-    Pinning a decoded rate below the real stream fails caps negotiation
-    ("framerate mismatch") - the modules say so themselves. A previous attempt
-    to throttle pre-inference fed the requested rate into both fields, which
-    would have made a 30-fps source with inference.fps=10 fail to negotiate
-    instead of rate-limiting: worse than the original bug, where the setting
-    merely did nothing. Only the source's true rate or an unpinned value are
-    safe, so the throttle lives after the pull (see should_throttle_fps).
-    """
-
-    @pytest.mark.parametrize(
-        "path", ["src/python/fused_app.py", "src/cpp/fused_app.h"]
-    )
-    def test_only_the_admission_cap_chooses_the_decoder_rate(self, path):
-        source = (EXAMPLE_DIR / path).read_text(encoding="utf-8")
-        assert "effective_decode_fps" not in source, (
-            "regression: inference.fps is feeding a pinned decoder rate again"
-        )
-        # The admission cap may still swap in an UNPINNED value; that is safe.
-        assert "decoder_fps_cap" in source
-
-    def test_python_decoder_rate_comes_from_the_probed_source_rate(self):
-        source = (EXAMPLE_DIR / "src" / "python" / "fused_app.py").read_text(encoding="utf-8")
-        assert "dec.dec_fps = -1 if (cap > 0 and opt.source_fps > cap) else opt.source_fps" in source
-        assert "opt.output_caps.fps = 0 if capped else fps" in source
-
-    def test_cpp_decoder_rate_comes_from_the_probed_source_rate(self):
-        source = (EXAMPLE_DIR / "src" / "cpp" / "fused_app.h").read_text(encoding="utf-8")
-        assert "dec.dec_fps = capped ? -1 : opt.source_fps;" in source
-        assert "opt.output_caps.fps = capped ? 0 : fps_out;" in source
-
-
-class TestE2eCodecFixtures:
-    """The adaptive e2e tests must not silently mix H.264 and H.265 sources.
-
-    adaptive_app.py/adaptive_app.h hardcode H.264 decode. Concatenating
-    rtsp_h264_urls with rtsp_h265_urls to reach the "at least two" threshold
-    meant an environment with, say, one URL of each would feed an H.265 stream
-    into an H.264-only decoder and fail on a fixture mismatch, not a real defect.
-    """
-
-    def test_python_e2e_requires_h264_only(self):
-        source = (EXAMPLE_DIR / "tests" / "python" / "test_e2e.py").read_text(encoding="utf-8")
-        assert "rtsp_h265_urls" not in source
-        assert "rtsp_urls = rtsp_h264_urls" in source
-
-    def test_cpp_e2e_requires_h264_only(self):
-        source = (EXAMPLE_DIR / "tests" / "cpp" / "test_e2e.cpp").read_text(encoding="utf-8")
-        assert "rtsp_h265_urls_from_env" not in source
-        assert "rtsp_h264_urls_from_env()" in source
-
-
-@requires_pipelines
-class TestMemoryEstimateMatchesConfiguredBuffers:
-    """The panel's decoder-memory estimate must charge the pool size the
-    pipeline actually configures, not an unrelated guess.
-
-    All three panels hardcoded n_visible=18 with a comment claiming "scale app
-    runs decoder num_buffers=18" - but _config_scale() writes decoder_buffers: 8
-    for scale/group, and the live pipeline never sets the key at all, so it
-    runs on adaptive_app.py's own default of 4. The estimate overcharged scale/
-    group by 10 buffers per stream and live by 14, and would have made
-    ENFORCE_LIMITS (an intentional, switchable safety guard) reject
-    configurations the app can actually run, had anyone flipped it on.
-    """
-
-    @pytest.mark.parametrize(
-        "name,expected", [("scale", 8), ("group", 8), ("live", 4)]
-    )
-    def test_ui_server_uses_the_pipeline_s_own_decoder_buffers(self, name, expected):
-        ui = _load_ui_server(name)
-        assert ui.pipeline.DECODER_BUFFERS == expected
-
-        # Recompute stream_pool_bytes' "visible" term independently, using the
-        # EXPECTED buffer count, and confirm it is exactly what got charged -
-        # not just that the constant has the right value in isolation.
-        w, h = 1280, 720
-        n_hidden = 24 if h <= 720 else 20
-        hidden = n_hidden * (ui._align(w, 64) * ui._align(h, 64) * 3 // 2)
-        visible = expected * (ui._align(w, 256) * ui._align(h, 64) * 3 // 2)
-        inp = 2 * (w * h * 3 // 4)
-        assert ui.stream_pool_bytes(w, h) == inp + hidden + visible
-
-    @pytest.mark.parametrize("name", ["scale", "group", "live"])
-    def test_no_pipeline_still_hardcodes_the_stale_estimate(self, name):
-        source = (PIPELINES_DIR / f"pipeline-{name}" / "ui_server.py").read_text(encoding="utf-8")
-        assert "n_visible = 18" not in source
-        assert "pipeline.DECODER_BUFFERS" in source
-
-    def test_scale_and_group_configs_still_render_the_same_value(self):
-        """The constant must be read by the YAML template too, not just named
-        for the estimate - otherwise the two could still drift independently."""
-        for name in ("scale", "group"):
-            mod = _load_ui_server(name).pipeline
-            rendered = mod._config_scale(["rtsp://x/1"], "test")
-            assert f"decoder_buffers: {mod.DECODER_BUFFERS}" in rendered
-
-
-@requires_tools
-class TestGenTestConfigModelDir:
-    """A fresh install has no assets/models/ at all - models/ is where
-    download_models.sh and the README put packs (see pipeline-scale/pipeline.py's
-    _MODEL_DIRS). Every TESTING.md command invokes this generator without
-    MODEL_DIR set, so defaulting to the old path produced a config pointing at
-    a model that does not exist on a clean checkout.
-    """
-
-    @staticmethod
-    def _run_resolution(tmp_path, apps_root_has, model_dir_env=None):
-        """Extract gen_test_config.sh's own MODEL_DIR-resolution block and run
-        it for real in a subprocess, against a fake APPS_ROOT - not a
-        hand-copied duplicate of the logic, so a future edit that breaks it
-        here fails this test.
-        """
-        source = (EXAMPLE_DIR / "tools" / "gen_test_config.sh").read_text(encoding="utf-8")
-        start = source.index('APPS_ROOT="$(cd "$(dirname "$0")')
-        end = source.index("\n\n{", start)
-        block = source[start:end]
-        assert "MODEL_DIR" in block
-
-        apps_root = tmp_path / "apps"
-        for name in apps_root_has:
-            (apps_root / name).mkdir(parents=True)
-
-        script = f'APPS_ROOT="{apps_root}"\n' + block.split("\n", 1)[1] + "\necho \"$MODEL_DIR\"\n"
-        env = {"PATH": "/usr/bin:/bin"}
-        if model_dir_env is not None:
-            env["MODEL_DIR"] = model_dir_env
-        result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env)
-        assert result.returncode == 0, result.stderr
-        return result.stdout.strip()
-
-    def test_fresh_install_uses_models(self, tmp_path):
-        resolved = self._run_resolution(tmp_path, apps_root_has=["models"])
-        assert resolved == str(tmp_path / "apps" / "models")
-
-    def test_old_checkout_falls_back_to_assets_models(self, tmp_path):
-        resolved = self._run_resolution(tmp_path, apps_root_has=["assets/models"])
-        assert resolved == str(tmp_path / "apps" / "assets" / "models")
-
-    def test_neither_present_still_falls_back_without_erroring(self, tmp_path):
-        resolved = self._run_resolution(tmp_path, apps_root_has=[])
-        assert resolved == str(tmp_path / "apps" / "assets" / "models")
-
-    def test_explicit_model_dir_overrides_both(self, tmp_path):
-        resolved = self._run_resolution(
-            tmp_path, apps_root_has=["models"], model_dir_env="/custom/path"
-        )
-        assert resolved == "/custom/path"
-
-
-class TestGracefulSigterm:
-    """SIGTERM is the normal stop signal from every panel and CLI `down`.
-
-    Unhandled, it terminates the process outright: manager.shutdown() /
-    run.close() never run, the decoder and CVU pools they would have released
-    stay allocated in the reserved region, and the caller sees the PID vanish
-    and reports a clean stop - the exact failure stop_app()'s own docstring
-    warns about.
-    """
-
-    def test_a_real_sigterm_reaches_the_handler_instead_of_killing(self, tmp_path):
-        """Spawns a process, signals it for real, and checks it exits 0 through
-        the handler rather than 143 (killed). Nothing about this is mocked."""
-        probe = tmp_path / "probe.py"
-        probe.write_text(
-            "import signal, sys, time\n"
-            f"sys.path.insert(0, {str(PYTHON_DIR)!r})\n"
-            "import fused_app\n"
-            "fused_app._stop_requested = False\n"
-            "signal.signal(signal.SIGTERM, fused_app._request_stop)\n"
-            "print('READY', flush=True)\n"
-            "for _ in range(200):\n"
-            "    if fused_app._stop_requested:\n"
-            "        print('GRACEFUL', flush=True); sys.exit(0)\n"
-            "    time.sleep(0.05)\n"
-            "sys.exit(1)\n",
-            encoding="utf-8",
-        )
-        proc = subprocess.Popen(
-            [sys.executable, str(probe)], stdout=subprocess.PIPE, text=True
-        )
-        try:
-            assert proc.stdout.readline().strip() == "READY"
-            proc.send_signal(signal.SIGTERM)
-            out = proc.stdout.read()
-            rc = proc.wait(timeout=20)
-        finally:
-            if proc.poll() is None:
-                proc.kill()
-        assert rc == 0, f"exited {rc} (143 means SIGTERM killed it outright)"
-        assert "GRACEFUL" in out
-
-    @pytest.mark.parametrize("module", ["adaptive_app.py", "fused_app.py"])
-    def test_python_run_app_installs_a_sigterm_handler(self, module):
-        source = (PYTHON_DIR / module).read_text(encoding="utf-8")
-        assert "signal.signal(signal.SIGTERM" in source
-
-    @pytest.mark.parametrize("header", ["adaptive_app.h", "fused_app.h"])
-    def test_cpp_run_app_installs_a_sigterm_handler(self, header):
-        source = (EXAMPLE_DIR / "src" / "cpp" / header).read_text(encoding="utf-8")
-        assert "std::signal(SIGTERM, request_stop)" in source
-        assert "std::signal(SIGTERM, previous_sigterm)" in source, "must be restored"
-
-
-@requires_pipelines
-class TestForeignDetectorStopWaits:
-    """Killing a detector before its SIGTERM teardown finishes strands the pools
-    it was releasing. Now that SIGTERM is actually handled, a fixed two-second
-    sleep is no longer long enough - these paths must poll like stop_app() does.
-    """
-
-    @pytest.mark.parametrize("name", ["scale", "live", "group"])
-    def test_pipelines_wait_rather_than_sleeping_two_seconds(self, name):
-        source = (PIPELINES_DIR / f"pipeline-{name}" / "pipeline.py").read_text(encoding="utf-8")
-        assert "true; sleep 2; " not in source, "unconditional SIGKILL after 2s"
-        assert "_term_then_kill" in source
-
-    def test_launcher_waits_rather_than_sleeping_two_seconds(self):
-        source = (PIPELINES_DIR / "launcher.py").read_text(encoding="utf-8")
-        assert "true; sleep 2; " not in source, "unconditional SIGKILL after 2s"
-        assert "def stop_detector" in source
-
-    def test_the_wait_polls_for_the_full_grace_period(self):
-        """A helper that polls but only once would pass a substring check."""
-        source = (PIPELINES_DIR / "pipeline-scale" / "pipeline.py").read_text(encoding="utf-8")
-        helper = source[source.index("def _term_then_kill"):]
-        helper = helper[: helper.index("\ndef ")]
-        assert "for _ in range(grace_s)" in helper
-        assert "time.sleep(1)" in helper
-        assert "kill -9" in helper, "must still force-kill a genuinely hung process"
-
-
-@requires_pipelines
-class TestShellPathsAreQuoted:
-    """Paths all derive from __file__, so a clone path containing whitespace or
-    a shell metacharacter would split these commands into the wrong tokens."""
-
-    @pytest.mark.parametrize("name", ["scale", "live", "group"])
-    def test_start_commands_quote_interpolated_paths(self, name):
-        source = (PIPELINES_DIR / f"pipeline-{name}" / "pipeline.py").read_text(encoding="utf-8")
-        assert "import shlex" in source
-        assert "shlex.quote(PYTHON)" in source
-        assert "setsid nohup {app_command()}" in source
-        # The bare, unquoted forms must not come back.
-        assert "rm -f {LOG};" not in source
-        assert "rm -f {log};" not in source
-        assert "--config {CONFIG}" not in source
-
-    def test_launcher_quotes_the_ui_script_path(self):
-        source = (PIPELINES_DIR / "launcher.py").read_text(encoding="utf-8")
-        assert "import shlex" in source
-        assert 'bash "{ui}" start' not in source
-        assert "shlex.quote(str(ui))" in source
-
-
-@requires_pipelines
-class TestStopRacesInFlightOperation:
-    """Stop deliberately bypasses the job queue so it stays responsive during a
-    long rebuild - but that let it race the very operation it interrupted.
-
-    Sequence: the operator hits Add, its worker stages sources and is about to
-    start the detector; the operator hits Stop, which stops everything and
-    clears the saved list; the worker then resumes, starts the detector and
-    re-saves its stale list. The panel shows "pipeline stopped" over a pipeline
-    that is back up with the pre-Stop streams.
-    """
-
-    @pytest.mark.parametrize("name", ["scale", "live", "group"])
-    def test_a_stop_mid_operation_wins(self, name, monkeypatch):
-        ui = _load_ui_server(name)
-        started = threading.Event()
-        release = threading.Event()
-        state = {"running": False, "streams": ["cam-1", "cam-2"]}
-
-        def slow_add():
-            started.set()
-            release.wait(timeout=10)      # Stop happens during this window
-            state["running"] = True       # the worker brings the pipeline back up
-            state["streams"] = ["cam-1", "cam-2", "cam-3"]
-
-        def fake_stop():
-            state["running"] = False
-
-        # Route both the worker's undo and Stop's own teardown at our fake state.
-        if name == "group":
-            monkeypatch.setattr(ui.pipeline, "stop_all_groups", fake_stop)
-            monkeypatch.setattr(ui, "save_groups", lambda v: state.update(streams=list(v)))
-        else:
-            monkeypatch.setattr(ui.pipeline, "stop_app", fake_stop)
-            monkeypatch.setattr(ui, "save_streams", lambda v: state.update(streams=list(v)))
-
-        assert ui.submit(slow_add, "add cam-3") is True
-        assert started.wait(timeout=10)
-
-        ui.begin_stop()               # what POST /api/down does first
-        fake_stop()
-        state["streams"] = []
-
-        release.set()
-        for _ in range(200):          # let the worker finish and reconcile
-            if not ui.STATUS["busy"]:
-                break
-            time.sleep(0.05)
-
-        assert ui.STATUS["busy"] is False
-        assert state["running"] is False, "the interrupted worker restarted the pipeline"
-        assert state["streams"] == [], "the interrupted worker restored its stale stream list"
-        assert ui.STATUS["message"] == "pipeline stopped"
-
-    @pytest.mark.parametrize("name", ["scale", "live", "group"])
-    def test_an_uninterrupted_operation_still_reports_done(self, name, monkeypatch):
-        """The guard must not fire when no Stop happened."""
-        ui = _load_ui_server(name)
-        if name == "group":
-            monkeypatch.setattr(ui.pipeline, "stop_all_groups", lambda: None)
-            monkeypatch.setattr(ui, "save_groups", lambda v: None)
-        else:
-            monkeypatch.setattr(ui.pipeline, "stop_app", lambda: None)
-            monkeypatch.setattr(ui, "save_streams", lambda v: None)
-
-        done = threading.Event()
-        assert ui.submit(done.set, "add cam-3") is True
-        assert done.wait(timeout=10)
-        for _ in range(200):
-            if not ui.STATUS["busy"]:
-                break
-            time.sleep(0.05)
-        assert ui.STATUS["message"] == "done: add cam-3"
-
-    @pytest.mark.parametrize("name", ["scale", "live", "group"])
-    def test_down_invalidates_before_doing_any_work(self, name):
-        """begin_stop() must run before the teardown thread starts, or a worker
-        finishing in between would still see a fresh token."""
-        source = (PIPELINES_DIR / f"pipeline-{name}" / "ui_server.py").read_text(encoding="utf-8")
-        down = source.index('if path == "/api/down":')
-        assert source.index("begin_stop()", down) < source.index("def do_down():", down)
-
-
-class TestFusedDecoderDefaults:
-    """The declared default and the loader fallback must be the same profile.
-
-    fused_app declared 18/auto with a comment defending it, while
-    load_app_config() hardcoded 4/throughput-low-latency - and since the loader
-    always passes explicit values, the declared default was dead code and
-    everyone got the 4-buffer, memory_opt-ON profile the comment blames for
-    stutter and freezes under jitter. Both now resolve to 8/auto, matching what
-    pipelines/pipeline-{scale,group} generate and run at 16 streams.
-    """
-
-    def test_declared_default_is_what_an_omitted_key_actually_gets(self, tmp_path):
-        import fused_app
-
-        cfg_path = tmp_path / "fused.yaml"
-        cfg_path.write_text(
-            "model:\n  path: /tmp/m.tar.gz\n  labels: /tmp/l.txt\n"
-            "streams:\n  - rtsp://127.0.0.1:8554/src1\n"
-            "output:\n  insight:\n    host: 127.0.0.1\n",
-            encoding="utf-8",
-        )
-        cfg = fused_app.load_app_config(cfg_path)
-        assert cfg.decoder_buffers == fused_app.DEFAULT_DECODER_BUFFERS == 8
-        assert cfg.decoder_tuning == fused_app.DEFAULT_DECODER_TUNING == "auto"
-
-    def test_the_unstable_profile_is_gone_from_both_languages(self):
-        py = (EXAMPLE_DIR / "src" / "python" / "fused_app.py").read_text(encoding="utf-8")
-        cpp = (EXAMPLE_DIR / "src" / "cpp" / "fused_app.h").read_text(encoding="utf-8")
-        assert '"decoder_tuning", "throughput-low-latency"' not in py
-        assert '"input.decoder_tuning", "throughput-low-latency"' not in cpp
-        assert "kDefaultDecoderBuffers = 8" in cpp
-        assert 'kDefaultDecoderTuning = "auto"' in cpp
-
-    def test_an_explicit_config_value_still_wins(self, tmp_path):
-        """pipelines/ sets these keys explicitly; that must be unaffected."""
-        import fused_app
-
-        cfg_path = tmp_path / "fused.yaml"
-        cfg_path.write_text(
-            "model:\n  path: /tmp/m.tar.gz\n  labels: /tmp/l.txt\n"
-            "streams:\n  - rtsp://127.0.0.1:8554/src1\n"
-            "input:\n  decoder_buffers: 18\n  decoder_tuning: low-memory\n"
-            "output:\n  insight:\n    host: 127.0.0.1\n",
-            encoding="utf-8",
-        )
-        cfg = fused_app.load_app_config(cfg_path)
-        assert cfg.decoder_buffers == 18
-        assert cfg.decoder_tuning == "low-memory"
-
-
-class TestReloadHonoursMaxStreams:
-    """Startup rejects an over-limit file; a live reload used to accept it
-    partially - starting what fitted and warning per stream about the rest."""
-
-    @staticmethod
-    def _config(tmp_path, count, max_streams):
-        sources = "\n".join(
-            f"    - id: cam-{i + 1}\n      rtsp_url: rtsp://127.0.0.1:8554/src{i + 1}"
-            for i in range(count)
-        )
-        path = tmp_path / "live.yaml"
-        path.write_text(
-            "model:\n  path: /tmp/m.tar.gz\n"
-            f"streams:\n  max_streams: {max_streams}\n  sources:\n{sources}\n"
-            "output:\n  insight:\n    host: 127.0.0.1\n",
-            encoding="utf-8",
-        )
-        return path
-
-    def test_a_reload_within_the_limit_is_accepted(self, tmp_path):
-        import adaptive_app
-
-        path = self._config(tmp_path, count=3, max_streams=8)
-        assert len(adaptive_app.reload_sources(path, 8)) == 3
-
-    def test_a_reload_over_the_files_own_maximum_is_rejected(self, tmp_path):
-        import adaptive_app
-
-        path = self._config(tmp_path, count=9, max_streams=8)
-        with pytest.raises(ValueError, match="max_streams"):
-            adaptive_app.reload_sources(path, 8)
-
-    def test_max_streams_cannot_be_raised_by_a_live_edit(self, tmp_path):
-        """Channels are allocated once at startup, so a raised ceiling in the
-        edited file cannot conjure more of them."""
-        import adaptive_app
-
-        path = self._config(tmp_path, count=12, max_streams=16)
-        with pytest.raises(ValueError, match="channels this run started with"):
-            adaptive_app.reload_sources(path, 8)
-
-    def test_cpp_reload_applies_the_same_check(self):
-        cpp = (EXAMPLE_DIR / "src" / "cpp" / "adaptive_app.h").read_text(encoding="utf-8")
-        reload_site = cpp[cpp.index("[config] reload:") - 900:]
-        assert "channels this run started with" in reload_site
-
-
-class TestPassthroughDisablesExactTimestamps:
-    """Encoded passthrough and an exact rtp_timestamp cannot both work.
-
-    Passthrough forwards the source's own H.264 through a payloader whose RTP
-    base is random (VideoSenderOptions.rtp exposes no timestamp-offset in
-    pyneat - see send_metadata in fused_app.py, which declines the key for
-    exactly this reason). A PTS-derived key then matches nothing, and Insight
-    stops falling back to arrival order the moment the field is present, so it
-    renders NO boxes. That is the shipped default's combination:
-    encoded_passthrough true + metadata_rtp_timestamp auto.
-    """
-
-    def test_shipped_defaults_are_the_affected_combination(self):
-        """If either default changes, this test should be revisited."""
-        import adaptive_app
-
-        cfg_path = EXAMPLE_DIR / "src" / "common" / "config.yaml"
-        text = cfg_path.read_text(encoding="utf-8")
-        assert "encoded_passthrough" not in text
-        assert "metadata_rtp_timestamp" not in text
-        fields = {f.name: f for f in dataclasses.fields(adaptive_app.AppConfig)}
-        assert fields["encoded_passthrough"].default is True
-        assert fields["metadata_rtp_timestamp"].default == "auto"
-
-    def test_auto_declines_the_key_under_passthrough(self):
-        source = (EXAMPLE_DIR / "src" / "python" / "adaptive_app.py").read_text(encoding="utf-8")
-        assert "not restamped and not passthrough" in source, (
-            "auto must decline the exact key when passthrough is on"
-        )
-
-    def test_explicit_on_still_wins_but_warns(self):
-        source = (EXAMPLE_DIR / "src" / "python" / "adaptive_app.py").read_text(encoding="utf-8")
-        block = source[source.index('if cfg.metadata_rtp_timestamp == "on":'):]
-        block = block[: block.index("elif ")]
-        assert "runtime.emit_rtp_timestamp = True" in block
-        assert "random" in block, "an explicit 'on' under passthrough must warn"
-
-
-class TestRemovedStreamHoldsItsChannel:
-    """A worker mid-build does not see stop_event until the build returns, and a
-    build takes 30-90s. Releasing its channel on the 15s join timeout let the
-    next add bind the same Insight video/metadata ports as a worker that was
-    still running."""
-
-    @staticmethod
-    def _manager(tmp_path, monkeypatch, init):
-        import adaptive_app
-
-        monkeypatch.setattr(adaptive_app, "init_stream_runtime", init)
-        cfg = adaptive_app.load_app_config(write_config(tmp_path, RICH_TWO))
-        return adaptive_app, adaptive_app.StreamManager(cfg, ["person"])
-
-    def test_channel_is_not_reused_while_the_worker_is_still_building(self, tmp_path, monkeypatch):
-        building = threading.Event()
-        finish = threading.Event()
-
-        def slow_init(cfg, channel, source, labels):
-            building.set()
-            finish.wait(timeout=30)       # simulates a 30-90s build
-            raise RuntimeError("aborted after the build")
-
-        adaptive_app, manager = self._manager(tmp_path, monkeypatch, slow_init)
-        try:
-            manager.add(adaptive_app.StreamSource("cam-1", "rtsp://127.0.0.1:8554/src1"))
-            assert building.wait(timeout=10)
-            taken = manager.streams["cam-1"].channel
-
-            # Short timeout: the point is the TIMEOUT path, not waiting out 15s.
-            manager.remove("cam-1", join_timeout=0.2)
-            assert taken not in manager.free_channels, (
-                "channel reused while its worker was still building"
+        manager = main_module.StreamManager(cfg, ["person"])
+
+        def init_live_stream(cfg, channel, source, labels):
+            return main_module.LiveStream(
+                channel=channel, id=source.id, url=source.url, labels=labels, width=100,
+                height=100, run=runs.pop(0), profile=main_module.ProfileWindow(False, source.id),
             )
 
-            finish.set()
-            assert _wait_for(lambda: taken in manager.free_channels), (
-                "channel never came back after the worker exited"
-            )
-        finally:
-            finish.set()
-            manager.shutdown()
-
-    def test_a_worker_that_has_already_exited_releases_immediately(self, tmp_path, monkeypatch):
-        adaptive_app, manager = self._manager(tmp_path, monkeypatch, _fake_init_stream_runtime)
-        try:
-            manager.add(adaptive_app.StreamSource("cam-1", "rtsp://127.0.0.1:8554/src1"))
-            assert _wait_for(lambda: manager.active_count() == 1)
-            taken = manager.streams["cam-1"].channel
-            manager.remove("cam-1")
-            assert taken in manager.free_channels
-        finally:
-            manager.shutdown()
-
-
-class TestFusedRunMarker:
-    """wait_for_streams() counted per-stream banners that the fused app prints
-    BEFORE building the shared graph, so a build failure reported success."""
-
-    @pytest.mark.parametrize("path", ["src/python/fused_app.py", "src/cpp/fused_app.h"])
-    def test_marker_is_emitted_after_the_build(self, path):
-        source = (EXAMPLE_DIR / path).read_text(encoding="utf-8")
-        build = source.index("graph.build(build_run_options(")
-        marker = source.index("[app] graph running", build)
-        assert marker > build, "the marker must follow the build, not precede it"
-
-    @requires_pipelines
-    @pytest.mark.parametrize("name", ["scale", "live", "group"])
-    def test_wait_requires_the_marker_for_fused(self, name):
-        source = (PIPELINES_DIR / f"pipeline-{name}" / "pipeline.py").read_text(encoding="utf-8")
-        assert '"[app] graph running" in text' in source
-        # The bare banner-only check must be gone.
-        assert 'if text.count("] rtsp=") >= n:\n            return True' not in source
-
-
-class TestCppRejectsUnsupportedPassthrough:
-    """C++ adaptive has no passthrough topology - it re-encodes every stream.
-    Silently doing the opposite of what the config asks is the defect; it now
-    refuses an explicit `true` instead."""
-
-    def test_cpp_reads_and_rejects_the_key(self):
-        cpp = (EXAMPLE_DIR / "src" / "cpp" / "adaptive_app.h").read_text(encoding="utf-8")
-        assert 'raw.bool_or("output.encoded_passthrough", false)' in cpp
-        assert "not supported by the C++ implementation" in cpp
-
-    def test_cpp_defaults_to_false_so_existing_configs_are_unaffected(self):
-        cpp = (EXAMPLE_DIR / "src" / "cpp" / "adaptive_app.h").read_text(encoding="utf-8")
-        assert "bool encoded_passthrough = false;" in cpp
-
-    @requires_pipelines
-    @pytest.mark.parametrize("name", ["scale", "live"])
-    def test_the_shipped_pipelines_set_it_false(self, name):
-        source = (PIPELINES_DIR / f"pipeline-{name}" / "pipeline.py").read_text(encoding="utf-8")
-        assert "encoded_passthrough: false" in source
-
-
-class TestDeferredAddIsRetried:
-    """Holding a removed stream's channel must not silently drop the add.
-
-    At capacity, a reload that replaces one stream removes the old one - whose
-    channel is now held until its worker exits - and immediately adds the new
-    one. That add finds no free channel. Without a retry the requested source is
-    dropped for good, leaving the run one stream short of the config on disk.
-    """
-
-    def test_a_blocked_add_starts_once_the_channel_comes_back(self, tmp_path, monkeypatch):
-        import adaptive_app
-
-        building = threading.Event()
-        finish = threading.Event()
-        started: list[str] = []
-
-        def init(cfg, channel, source, labels):
-            started.append(source.id)
-            if source.id == "cam-old":
-                building.set()
-                finish.wait(timeout=30)
-                raise RuntimeError("aborted after the build")
-            return _fake_init_stream_runtime(cfg, channel, source, labels)
-
-        monkeypatch.setattr(adaptive_app, "init_stream_runtime", init)
-        cfg = adaptive_app.load_app_config(write_config(tmp_path, RICH_TWO))
-        object.__setattr__(cfg, "max_streams", 1)          # capacity of exactly one
-        manager = adaptive_app.StreamManager(cfg, ["person"])
-        try:
-            manager.add(adaptive_app.StreamSource("cam-old", "rtsp://127.0.0.1:8554/old"))
-            assert building.wait(timeout=10)
-
-            # The reload swaps cam-old for cam-new at full capacity.
-            manager.remove("cam-old", join_timeout=0.2)
-            manager.apply_sources([adaptive_app.StreamSource("cam-new", "rtsp://127.0.0.1:8554/new")])
-            assert "cam-new" not in started, "no channel was free; it cannot have started yet"
-            assert any(p.id == "cam-new" for p in manager.pending_adds)
-
-            finish.set()                                    # old worker exits, channel frees
-            assert _wait_for(lambda: "cam-new" in started), (
-                "the deferred add was never retried"
-            )
-            assert _wait_for(lambda: manager.active_count() == 1)
-        finally:
-            finish.set()
-            manager.shutdown()
-
-    def test_a_source_dropped_from_the_config_is_not_retried(self, tmp_path, monkeypatch):
-        """A queued add must not resurrect after the config stops asking for it."""
-        import adaptive_app
-
-        monkeypatch.setattr(adaptive_app, "init_stream_runtime", _fake_init_stream_runtime)
-        cfg = adaptive_app.load_app_config(write_config(tmp_path, RICH_TWO))
-        manager = adaptive_app.StreamManager(cfg, ["person"])
-        try:
-            queued = adaptive_app.StreamSource("cam-x", "rtsp://127.0.0.1:8554/x")
-            manager.pending_adds.append(queued)
-            manager.apply_sources([])                        # config no longer names cam-x
-            assert manager.pending_adds == []
-        finally:
-            manager.shutdown()
-
-
-@requires_pipelines
-class TestPanelSurfacesReadinessFailure:
-    """wait_for_streams()/wait_for_group() became a trustworthy signal only once
-    the post-build marker was required - and every caller was discarding it, so
-    the panel still reported "done" over a detector that never came up."""
-
-    @pytest.mark.parametrize("name", ["scale", "live"])
-    def test_rebuild_raises_when_the_detector_is_not_ready(self, name, monkeypatch):
-        ui = _load_ui_server(name)
-        monkeypatch.setattr(ui, "plan", lambda s: (["rtsp://x/1"], [], ui.pipeline.TIERS[0]))
-        monkeypatch.setattr(ui, "stage_insight", lambda staging: None)
-        monkeypatch.setattr(ui, "save_streams", lambda v: None)
-        monkeypatch.setattr(ui.pipeline, "write_config_urls", lambda *a, **k: None)
-        monkeypatch.setattr(ui.pipeline, "start_app", lambda: None)
-        monkeypatch.setattr(ui.pipeline, "wait_for_streams", lambda *a, **k: False)
-        with pytest.raises(RuntimeError, match="ready"):
-            ui.rebuild([{"kind": "external", "url": "rtsp://x/1"}])
-
-    @pytest.mark.parametrize("name", ["scale", "live"])
-    def test_rebuild_succeeds_when_it_is_ready(self, name, monkeypatch):
-        ui = _load_ui_server(name)
-        monkeypatch.setattr(ui, "plan", lambda s: (["rtsp://x/1"], [], ui.pipeline.TIERS[0]))
-        monkeypatch.setattr(ui, "stage_insight", lambda staging: None)
-        monkeypatch.setattr(ui, "save_streams", lambda v: None)
-        monkeypatch.setattr(ui.pipeline, "write_config_urls", lambda *a, **k: None)
-        monkeypatch.setattr(ui.pipeline, "start_app", lambda: None)
-        monkeypatch.setattr(ui.pipeline, "wait_for_streams", lambda *a, **k: True)
-        ui.rebuild([{"kind": "external", "url": "rtsp://x/1"}])
-
-
-@requires_pipelines
-class TestForeignKillForcesRuntimeReclaim:
-    """A foreign detector killed after its grace period strands pools exactly as
-    ours does, and once it is gone nothing can discover that later - so its
-    result has to reach the reset_runtime() decision, not just a warning."""
-
-    @pytest.mark.parametrize("name", ["scale", "live"])
-    def test_start_app_resets_when_a_foreign_detector_was_killed(self, name, monkeypatch):
-        mod = _load_ui_server(name).pipeline
-        reset = []
-        monkeypatch.setattr(mod, "stop_app", lambda: True)          # OUR stop was clean
-        monkeypatch.setattr(mod, "stop_any_detector", lambda: False)  # a foreign one was killed
-        monkeypatch.setattr(mod, "reset_runtime", lambda: reset.append(True))
-        monkeypatch.setattr(mod, "exec_devkit", lambda *a, **k: None)
-        mod.start_app()
-        assert reset == [True], "a killed foreign detector must force a reclaim"
-
-    @pytest.mark.parametrize("name", ["scale", "live"])
-    def test_no_reset_when_everything_stopped_cleanly(self, name, monkeypatch):
-        mod = _load_ui_server(name).pipeline
-        reset = []
-        monkeypatch.setattr(mod, "stop_app", lambda: True)
-        monkeypatch.setattr(mod, "stop_any_detector", lambda: True)
-        monkeypatch.setattr(mod, "runtime_dirty", lambda: False)
-        monkeypatch.setattr(mod, "reset_runtime", lambda: reset.append(True))
-        monkeypatch.setattr(mod, "exec_devkit", lambda *a, **k: None)
-        mod.start_app()
-        assert reset == [], "a clean stop must not pay the ~60s reclaim"
-
-
-class TestUnexpectedFusedClosureFails:
-    """A continuous fused run that loses its shared output produces no further
-    metadata; exiting 0 would tell a supervisor the experiment succeeded."""
-
-    @pytest.mark.parametrize("path", ["src/python/fused_app.py", "src/cpp/fused_app.h"])
-    def test_closure_is_reported_as_a_failure(self, path):
-        source = (EXAMPLE_DIR / path).read_text(encoding="utf-8")
-        assert "closed unexpectedly" in source
-        # ...but only for a continuous run that nobody asked to stop.
-        assert "frames <= 0" in source
-
-    def test_a_requested_stop_is_still_a_clean_exit(self):
-        source = (EXAMPLE_DIR / "src" / "python" / "fused_app.py").read_text(encoding="utf-8")
-        block = source[source.index("if _output_closed_unexpectedly"):]
-        assert "not _stop_requested" in block[: block.index("raise")]
-
-
-class TestFiniteRunFailsWhenClosedShort:
-    """A batch run whose output dies early is incomplete, not successful.
-
-    The first version of this guard only fired for frames == 0, so a finite run
-    that lost its output before every stream reached the budget still exited 0.
-    """
-
-    def test_guard_covers_both_run_kinds(self):
-        source = (EXAMPLE_DIR / "src" / "python" / "fused_app.py").read_text(encoding="utf-8")
-        block = source[source.index("if _output_closed_unexpectedly"):]
-        block = block[: block.index("\n    except")] if "\n    except" in block else block
-        assert "if cfg.frames <= 0:" in block, "continuous runs must still fail"
-        assert "s.processed < cfg.frames" in block, "finite runs must fail when short"
-
-    def test_a_completed_batch_is_not_failed(self):
-        """A run that met its budget is complete whatever the output did after."""
-        source = (EXAMPLE_DIR / "src" / "python" / "fused_app.py").read_text(encoding="utf-8")
-        block = source[source.index("short = [s for s in app.streams"):]
-        assert "if short:" in block[:200], "only a SHORT batch may fail"
-
-
-class TestUncleanStopSurvivesTheProcess:
-    """`down` killed the detector and printed that the next `up` would reclaim
-    the pools - then exited. The next `up` saw no PID, judged the stop clean and
-    skipped the reclaim, so the promise was never kept."""
-
-    @requires_pipelines
-    @pytest.mark.parametrize("name", ["scale", "live", "group"])
-    def test_a_forced_kill_records_a_marker(self, name):
-        source = (PIPELINES_DIR / f"pipeline-{name}" / "pipeline.py").read_text(encoding="utf-8")
-        assert "RUNTIME_DIRTY_MARKER" in source
-        # Every kill -9 path must record it.
-        for chunk in source.split("kill -9 {pids}")[1:]:
-            assert "mark_runtime_dirty" in chunk[:200], f"{name}: a kill site records nothing"
-
-    @requires_pipelines
-    @pytest.mark.parametrize("name", ["scale", "live"])
-    def test_start_app_reclaims_on_a_stale_marker(self, name, monkeypatch):
-        mod = _load_ui_server(name).pipeline
-        reset = []
-        monkeypatch.setattr(mod, "stop_app", lambda: True)            # nothing running now
-        monkeypatch.setattr(mod, "stop_any_detector", lambda: True)
-        monkeypatch.setattr(mod, "runtime_dirty", lambda: True)       # ...but `down` killed one
-        monkeypatch.setattr(mod, "reset_runtime", lambda: reset.append(True))
-        monkeypatch.setattr(mod, "exec_devkit", lambda *a, **k: None)
-        mod.start_app()
-        assert reset == [True], "a kill from a previous invocation must still be reclaimed"
-
-    @requires_pipelines
-    def test_reset_runtime_clears_the_marker(self):
-        source = (PIPELINES_DIR / "pipeline-scale" / "pipeline.py").read_text(encoding="utf-8")
-        body = source[source.index("def reset_runtime"):]
-        body = body[: body.index("\ndef ")]
-        assert "rm -f {RUNTIME_DIRTY_MARKER}" in body
-
-    @requires_pipelines
-    def test_group_says_so_when_it_cannot_reclaim(self):
-        """Deferring the reset to protect siblings is deliberate, but the group
-        still starts against unreclaimed pools - that must not be silent."""
-        source = (PIPELINES_DIR / "pipeline-group" / "pipeline.py").read_text(encoding="utf-8")
-        assert "pools were not reclaimed because sibling groups" in source
-        assert "may fail to" in source
-
-
-class TestOverUpscaleIsReported:
-    """Raising the detector clamp to the model input can re-cross the scaler's
-    2x limit; past it the scaler emits nothing, silently."""
-
-    @pytest.mark.parametrize("path", ["src/python/fused_app.py", "src/cpp/fused_app.h"])
-    def test_both_languages_warn(self, path):
-        source = (EXAMPLE_DIR / path).read_text(encoding="utf-8")
-        assert "no detections" in source and "upscale from the smallest source" in source
-
-    def test_the_ratio_is_the_worst_across_streams_and_axes(self):
-        """A per-tuple max() would compare lexicographically, not by ratio."""
-        source = (EXAMPLE_DIR / "src" / "python" / "fused_app.py").read_text(encoding="utf-8")
-        assert "worst = max(max(det_w / p[0], det_h / p[1]) for p in probes)" in source
-
-
-class TestCppRunQueueScales:
-    """Python sizes the run queue to the stream count; a fixed 4 in C++ meant
-    switching the panel language changed throughput at high stream counts."""
-
-    def test_cpp_uses_the_same_bounded_sizing(self):
-        cpp = (EXAMPLE_DIR / "src" / "cpp" / "fused_app.h").read_text(encoding="utf-8")
-        assert "std::max(4, std::min(32, stream_count))" in cpp
-        assert "build_run_options(static_cast<int>(app.streams.size()))" in cpp
-
-    def test_python_formula_is_unchanged(self):
-        py = (EXAMPLE_DIR / "src" / "python" / "fused_app.py").read_text(encoding="utf-8")
-        assert "max(4, min(32, stream_count))" in py
-
-
-class TestCppFiniteRunFailsWhenClosedShort:
-    """The Python guard was widened to cover finite runs; C++ still excluded
-    them, so a batch whose output closed early exited 0 from the binary."""
-
-    def test_cpp_checks_each_stream_against_the_budget(self):
-        cpp = (EXAMPLE_DIR / "src" / "cpp" / "fused_app.h").read_text(encoding="utf-8")
-        assert "stream.processed < cfg.frames" in cpp
-        assert "closed_detail" in cpp
-        # The old blanket exclusion of finite runs must be gone.
-        assert "g_stop_requested == 0 && cfg.frames <= 0" not in cpp
-
-    @pytest.mark.parametrize("path", ["src/python/fused_app.py", "src/cpp/fused_app.h"])
-    def test_both_languages_agree(self, path):
-        source = (EXAMPLE_DIR / path).read_text(encoding="utf-8")
-        assert "closed unexpectedly" in source
-        assert "frames <= 0" in source, "continuous runs still fail unconditionally"
-
-
-@requires_pipelines
-class TestLauncherRecordsForcedKills:
-    """The launcher force-kills detectors when switching pipeline or language.
-    Without the shared marker, the next Start saw no PID and no marker and
-    skipped the reclaim, launching against pools this path had just stranded."""
-
-    def test_launcher_writes_the_same_marker_the_pipelines_read(self):
-        launcher = (PIPELINES_DIR / "launcher.py").read_text(encoding="utf-8")
-        pipeline = (PIPELINES_DIR / "pipeline-scale" / "pipeline.py").read_text(encoding="utf-8")
-        marker = '"/tmp/sima-detector-unclean-stop"'
-        assert marker in launcher and marker in pipeline, (
-            "launcher and pipelines must agree on the marker path"
-        )
-        block = launcher[launcher.index("def stop_detector"):]
-        block = block[: block.index("\ndef ")]
-        assert "kill -9" in block and "RUNTIME_DIRTY_MARKER" in block
-
-
-class TestFusedMetadataIsCompact:
-    """Insight DROPS metadata datagrams past the ~1500-byte MTU rather than
-    reassembling them - adaptive_app.metadata_payload() says so and compacts
-    accordingly. Fused sent the full form: an "id" Insight never reads, full
-    precision confidence and float bboxes, ~95 bytes a box, so a crowded frame
-    lost its whole overlay at ~15 detections with max_detections defaulting to 50.
-    """
-
-    def test_python_payload_drops_the_id_and_rounds(self):
-        import fused_app
-
-        boxes = [
-            {"x1": 10.0, "y1": 20.0, "x2": 60.0, "y2": 100.0,
-             "class_id": 0, "score": 0.9234567284584045}
-        ]
-        built = fused_app.build_metadata_boxes(boxes, ["person"], 640, 480)
-        assert "id" in built[0], "the shared builder still emits it"
-
-        source = (EXAMPLE_DIR / "src" / "python" / "fused_app.py").read_text(encoding="utf-8")
-        sender = source[source.index("def send_metadata(stream"):]
-        sender = sender[: sender.index("\ndef ")]
-        # Strip comments: the explanation of the bug naturally mentions "id".
-        code = "\n".join(
-            ln for ln in sender.splitlines() if not ln.lstrip().startswith("#")
-        )
-        assert '"id"' not in code, "send_metadata must not serialise the id"
-        assert 'round(float(b["confidence"]), 2)' in code
-        assert '[int(v) for v in b["bbox"]]' in code
-
-    def test_compaction_roughly_doubles_what_fits_in_a_datagram(self):
-        """Guards the size claim itself, not just the field list."""
-        full = json.dumps(
-            {"id": "obj_12", "label": "person", "confidence": 0.9234567284584045,
-             "bbox": [100.0, 200.0, 50.0, 80.0]}, separators=(",", ":"))
-        compact = json.dumps(
-            {"label": "person", "confidence": 0.92, "bbox": [100, 200, 50, 80]},
-            separators=(",", ":"))
-        assert len(compact) < len(full)
-        assert 1500 // len(compact) >= (1500 // len(full)) + 8
-
-    def test_cpp_emits_the_same_compact_shape(self):
-        cpp = (EXAMPLE_DIR / "src" / "cpp" / "fused_app.h").read_text(encoding="utf-8")
-        sender = cpp[cpp.index("void send_metadata(StreamRuntime& stream"):]
-        sender = sender[: sender.index("\nvoid maybe_save_debug_frame")]
-        assert '\\"label\\"' in sender and '\\"confidence\\"' in sender
-        assert '\\"id\\"' not in sender, "the id must not be serialised"
-        assert "metadata_boxes_data_json" not in sender, (
-            "the generic helper emits the full form"
-        )
+        def build_live_pipeline(cfg, stream):
+            builds.append(stream.id)
+            stream.run = runs.pop(0)
+
+        monkeypatch.setattr(main_module, "init_live_stream", init_live_stream)
+        monkeypatch.setattr(main_module, "build_live_pipeline", build_live_pipeline)
+        monkeypatch.setattr(main_module, "extract_bbox_payload", lambda sample: bbox_payload([]))
+        monkeypatch.setattr(main_module, "send_live_metadata", lambda *args: None)
+        monkeypatch.setattr(main_module.time, "sleep", lambda _s: None)
+        return manager
+
+    def test_an_accelerator_failure_rebuilds_the_stream_instead_of_failing_it(self, tmp_path, monkeypatch):
+        builds: list[str] = []
+        runs = [ScriptedRun(*[ACCELERATOR_ERROR] * 8), ScriptedRun(FakeSample())]
+        manager = self._manager(tmp_path, monkeypatch, runs, builds)
+        managed = main_module.ManagedStream("cam-1", "rtsp://a/1", 0, main_module.threading.Event())
+
+        manager._consume(managed)
+
+        assert builds == ["cam-1"]
+        assert manager.failed == {}
+        assert manager.errors == []
+
+    def test_a_pull_error_while_stopping_is_not_a_stream_failure(self, tmp_path, monkeypatch):
+        manager_ref = {}
+        runs = [ScriptedRun(ACCELERATOR_ERROR, on_pull=lambda: manager_ref["m"].stop_event.set())]
+        manager = self._manager(tmp_path, monkeypatch, runs, [])
+        manager_ref["m"] = manager
+        managed = main_module.ManagedStream("cam-1", "rtsp://a/1", 0, main_module.threading.Event())
+
+        manager._consume(managed)
+
+        assert manager.failed == {}
+
+    def test_a_persistent_non_accelerator_error_fails_only_that_stream(self, tmp_path, monkeypatch):
+        runs = [ScriptedRun(NeatError("queue torn down"))]
+        manager = self._manager(tmp_path, monkeypatch, runs, [])
+        managed = main_module.ManagedStream("cam-1", "rtsp://a/1", 0, main_module.threading.Event())
+
+        manager._consume(managed)
+
+        assert "queue torn down" in manager.failed["cam-1"]
+        assert manager.stop_event.is_set() is False

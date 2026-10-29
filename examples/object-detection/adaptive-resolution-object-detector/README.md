@@ -1,6 +1,7 @@
 # Adaptive Resolution Object Detector
 
 ## Metadata
+
 | Field | Value |
 | --- | --- |
 | Category | object-detection |
@@ -13,27 +14,21 @@
 
 ## Concept
 
-Runs YOLO26 object detection across multiple RTSP streams and sends each stream's video and detection metadata to Insight, with a choice of two graph topologies.
+Runs YOLO26 object detection across many RTSP streams of mixed resolution and frame rate, and sends each stream's video and detection metadata to Insight.
 
-One entry point per language carries both topologies, chosen with `--mode`:
+Every stream is detected at its own resolution, so 720p, 1080p, and 4K sources
+can run together. The `mode` setting in the config picks how the streams share
+the hardware:
 
-**`--mode adaptive`** (default) builds **one graph per stream**. Streams can be
-added or removed while the others keep running: the app polls its config file
-and diffs `streams.sources`, and only the affected stream is built or torn down.
-Every stream is decoded, detected and delivered at its source's native size.
+| Mode | Topology | Changing the stream list | Use it for |
+| --- | --- | --- | --- |
+| `live` | One graph per stream; video is re-encoded for Insight | Edit the config while running; only the changed streams start or stop | Adding and removing streams without downtime |
+| `scale` | One graph for all streams with one shared detector; each source's H.264 goes to Insight untouched | Restart the application | The highest stream count |
+| `group` | The `scale` topology run as several processes of `group.size` streams each | Edit the config while running; only the groups whose streams changed restart | Keeping a failure or a change inside one group of streams |
 
-**`--mode fused`** builds **one graph for all streams**, fanning into a single
-shared detector. Adding a stream rebuilds the whole graph, so it is not live —
-in exchange, there are no per-stream bridges, which is what keeps detections
-correct at higher stream counts.
-
-Both forward the source H.264 to Insight without re-encoding it. The two take
-**different config schemas** (see Configure); handing one the other's config
-fails validation rather than running with settings you did not ask for.
-
-The C++ and Python entry points take identical flags. That is what lets
-[`pipelines/`](pipelines/README.md) switch implementation language from a
-browser without changing anything else.
+Measured on one DevKit: `live` rendered every box in Insight up to 6 streams,
+and `scale` forwarded 99% of detections at 16 streams of 25 fps. Re-measure with
+your own sources before relying on a stream count.
 
 ## Preview
 
@@ -41,11 +36,12 @@ browser without changing anything else.
 
 ## Prerequisites
 
-- Installed Neat Development Environment and Neat Library.
-- RTSP sources in Insight, or your own cameras.
-- A YOLO26n model pack (below). Model artifacts are user-managed under `models/`.
+- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
+- H.264 RTSP sources, and an [Insight](https://developer.sima.ai/software/tools/insight/) host reachable from the target.
 
 ## Install Apps
+
+Install the latest Neat Apps runtime and enter the installed bundle:
 
 ```bash
 sima-cli neat install apps
@@ -57,89 +53,75 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
+| Model file | Role |
+| --- | --- |
+| `yolo26n-det-int8-b1.tar.gz` | Default |
+| `yolo26n-det-bf16-mla_tess-b1.tar.gz` | Supported |
+
+Model packages come from the Model Zoo release below, which can differ from the installed platform version. Replace `<model-file>` with a file from the table.
+
 ```bash
+export MODELZOO_VERSION="3.0.0"
 mkdir -p models
 cd models
-sima-cli download https://docs.sima.ai/pkg_downloads/SDK<modelzoo-version>/models/modalix/yolo26-detection/yolo26n-det-int8-b1.tar.gz
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26-detection/<model-file>"
 cd ..
 ```
 
-`<modelzoo-version>` is the `modelzoo-version` field in `deps/manifest.json`.
-
-int8 is the default in `config.yaml` and in [`pipelines/`](pipelines/README.md)
-because it is the build the published throughput numbers were measured on. bf16
-is a drop-in alternative — download
-`yolo26n-det-bf16-mla_tess-b1.tar.gz` the same way and point `model.path` at it.
-
+Set `model.path` in the config to the downloaded package.
 
 ## Prepare Insight
 
-[Insight](https://developer.sima.ai/software/tools/insight/) can host the input
-streams and render each output channel. Start the streams in the Insight Web UI,
-copy their RTSP URLs into the config, and use the host and UDP ports reported by
-`neat` for the output settings. Stream N publishes to `video_port + N` and
-`metadata_port + N`.
+[Insight](https://developer.sima.ai/software/tools/insight/) hosts the input streams and renders each output channel.
 
-Use sources at ~25–30 fps. A much faster clip (for example 150 fps) starts
-normally and delivers video, but produces no detections: Insight evicts pending
-metadata before the matching frame arrives.
+1. In the Insight Web UI, open **Media Sources** and add a video for each stream, from the catalog or your own file.
+2. Start each stream and copy its RTSP URL.
+3. Note the host and the UDP video and metadata port ranges reported by `neat`.
+
+Use a host and published port that the target can reach, not `localhost`. Use
+sources at about 25–30 fps: a much faster clip starts and delivers video but
+can show no boxes, because Insight evicts pending metadata before the matching
+frame arrives.
 
 ## Configure
 
-The two modes read different files.
+Open `${APP_DIR}/src/common/config.yaml` and set:
 
-**`--mode adaptive`** — `src/common/config.yaml`:
+- `mode` to `live`, `scale`, or `group`.
+- `model.path` to the downloaded package.
+- One entry per stream under `streams.sources`, each with a unique `id` and the `url` copied from Insight.
+- `output.insight.host`, `video_port`, and `metadata_port`. The stream on channel N publishes to `video_port + N` and `metadata_port + N`, and channels follow the order of `streams.sources`.
+- `group.size` in `group` mode: the number of streams each process runs.
 
-```yaml
-model:
-  path: models/yolo26n-det-int8-b1.tar.gz
-  labels: examples/object-detection/adaptive-resolution-object-detector/src/common/coco_label.txt
+In `live` and `group` mode the application checks the config every
+`runtime.config_watch_seconds`. Add, remove, or change an entry under
+`streams.sources` and save the file:
 
-streams:
-  max_streams: 16              # default 8 if omitted
-  sources:                     # edit while running to add/remove streams
-    - id: cam-1
-      rtsp_url: <first-rtsp-url>
+- `live` starts or stops only the affected streams.
+- `group` restarts only the groups whose streams changed, for about 10–30 s;
+  the other groups keep running. Streams are assigned to groups in config
+  order, so adding a stream at the end restarts only the last group, while
+  removing an early stream moves every later stream to a new group and
+  channel.
 
-output:
-  insight:
-    host: <insight-host-ip>
-    video_port: 9000
-    metadata_port: 9100
-```
-
-**`--mode fused`** — a bare `streams:` list, up to 64, and `*_port_base` keys:
-
-```yaml
-model:
-  path: models/yolo26n-det-int8-b1.tar.gz
-  labels: examples/object-detection/adaptive-resolution-object-detector/src/common/coco_label.txt
-
-streams:
-  - <first-rtsp-url>
-  - <second-rtsp-url>
-
-inference:
-  max_inflight_per_stream: 1
-  max_inflight_total: 8
-
-output:
-  insight:
-    host: <insight-host-ip>
-    video_port_base: 9000
-    metadata_port_base: 9100
-```
+An invalid edit is reported and ignored. `streams.max_streams` is the number of
+Insight channels reserved at startup, so raising it needs a restart. Other
+settings are read only at startup.
 
 ## Run
 
-Both languages take the same flags; `--validate-config-only` checks a config
-without opening any stream.
+Validate the config without opening streams:
+
+```bash
+./${APP_DIR}/src/cpp/pre-built/adaptive-resolution-object-detector \
+  --config ${APP_DIR}/src/common/config.yaml \
+  --validate-config-only
+```
 
 ### C++
 
 ```bash
-SIMA_GST_RUN_INPUT_TIMEOUT_MS=120000 ./${APP_DIR}/src/cpp/pre-built/adaptive-resolution-object-detector \
-  --mode adaptive \
+./${APP_DIR}/src/cpp/pre-built/adaptive-resolution-object-detector \
   --config ${APP_DIR}/src/common/config.yaml
 ```
 
@@ -148,62 +130,47 @@ SIMA_GST_RUN_INPUT_TIMEOUT_MS=120000 ./${APP_DIR}/src/cpp/pre-built/adaptive-res
 ```bash
 source ~/pyneat/bin/activate
 pip install -r ${APP_DIR}/src/python/requirements.txt
-SIMA_GST_RUN_INPUT_TIMEOUT_MS=120000 python3 ${APP_DIR}/src/python/main.py \
-  --mode adaptive \
+python3 ${APP_DIR}/src/python/main.py \
   --config ${APP_DIR}/src/common/config.yaml
 ```
 
-## Pipelines UI
+Stop with Ctrl-C. The application closes every graph before it exits, which
+releases the decoder memory for the next run.
 
-[`pipelines/`](pipelines/README.md) drives both modes from a browser and
-switches implementation language without editing anything:
+## Expected Result
 
-```bash
-cd examples/object-detection/adaptive-resolution-object-detector/pipelines
-./setup-adaptive-pipeline.sh <host-ip> <board-ip>     # one-time: rewrites both addresses
+The application prints one line per stream with its channel, source size, and
+Insight ports:
+
+```text
+[stream cam-1] channel=0 rtsp=rtsp://<rtsp-source-ip>:8554/src1 size=1920x1080@30 video=9000 metadata=9100
+[stream cam-2] channel=1 rtsp=rtsp://<rtsp-source-ip>:8554/src2 size=1280x720@25 video=9001 metadata=9101
 ```
 
-Open `http://<board-ip>:8080/`.
+`scale` and `group` also print `[app] graph running: N stream(s)` once their
+graph starts, and report the shared detector input when source sizes differ.
+`group` prints one `[group N]` line per process with its streams and channels.
 
-| Pipeline | Runs | Port |
-| --- | --- | --- |
-| scale | `--mode fused`, one process | 8090 |
-| live | `--mode adaptive` | 8091 |
-| group | `--mode fused`, several processes, each owning a subset | 8092 |
-
-The Python/C++ toggle on that page applies to all three. They share one MLA and
-one set of Insight channels, so selecting one stops the others. C++ appears only
-once a binary exists — a fresh clone has none until `./build.sh --clean`.
+Each Insight channel shows its stream's video with detection boxes. Set
+`runtime.profile: true` to print per-stream output rate and detection counts.
+With `inference.frames` set to a positive number, each stream stops after that
+many frames and prints `[stream <id>] processed=<count>`.
 
 ## Troubleshooting
 
-- Replace the placeholder RTSP URLs and Insight host before running.
-- Stop with SIGTERM, not SIGKILL. A killed process leaves decoder and CVU pools
-  allocated, and the next run can then fail to allocate at a count that worked.
-- Adding a stream in `adaptive` takes 30–90 s to rebuild; it is not instant.
-- Video arriving with no boxes: check the source frame rate (see Prepare
-  Insight), and that the Insight host and UDP ports match the config.
-- Stream ceilings are per-board. Watch the per-channel rate and back off when it
-  drops below the source rate.
-- `output.debug_dir`, `output.save_every` and `runtime.profile` produce
-  diagnostics.
+- Replace every placeholder URL and the Insight host before running.
+- `scale` mixes source sizes by scaling every stream to one detector input. Keep sources within 2x of each other: the hardware scaler does not upscale further, and a stream past that limit shows video with no boxes. The application warns when this happens.
+- In `live` mode, a stream that fails is reported and its channel is released; the other streams keep running.
+- In `group` mode, a group that fails is reported and the other groups keep running; editing that group's streams restarts it. A run with a positive `inference.frames` exits with an error naming the failed groups.
+- To inspect results without Insight, set `output.save_dir` to a directory and `output.save_every` to a positive interval. Annotated frames are saved as `stream_<channel>_frame_<n>.jpg`.
 
 ## Source Files
 
-- C++ source: `src/cpp/main.cpp` (entry point), `src/cpp/adaptive_app.h`,
-  `src/cpp/fused_app.h`
-- Python source: `src/python/main.py` (entry point), `src/python/adaptive_app.py`,
-  `src/python/fused_app.py`
+- C++ reference source: `src/cpp/main.cpp`
+- Python source: `src/python/main.py`
 - Shared runtime files: `src/common/`
-- Browser UI for both modes: `pipelines/`
-- Manual test guide: [TESTING.md](TESTING.md)
 
-Each language keeps both topologies behind one entry point because the Apps
-build compiles a single `main.cpp` per example; the C++ implementations are
-headers in named namespaces so their helpers do not collide.
-
-The packaged C++ source is an implementation reference. Run the executable under
-`src/cpp/pre-built/`; the installed bundle does not include CMake files.
+The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
 
 ## Development From Source
 
