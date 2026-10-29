@@ -329,6 +329,29 @@ def split_groups(cfg: AppConfig) -> list[AppConfig]:
     return groups
 
 
+def regroup(cfg: AppConfig, groups: list[AppConfig], sources: list[StreamSource]) -> list[AppConfig]:
+    """Apply a config edit to the current groups without moving any stream.
+
+    A stream stays in the group it was placed in, so removing one changes only
+    its own group. A new stream fills the first group with a free slot, or
+    starts a new group when every group is full. A group left empty keeps its
+    index, so the groups after it keep their channels.
+    """
+    wanted = {s.id: s for s in sources}
+    members = [[wanted[s.id] for s in g.sources if s.id in wanted] for g in groups]
+    placed = {s.id for m in members for s in m}
+    for source in sources:
+        if source.id in placed:
+            continue
+        index = next((i for i, m in enumerate(members) if len(m) < cfg.group_size), len(members))
+        if index == len(members):
+            members.append([])
+        members[index].append(source)
+    while members and not members[-1]:
+        members.pop()
+    return [replace(cfg, sources=m, channel_base=i * cfg.group_size) for i, m in enumerate(members)]
+
+
 # ── shared detection helpers ──────────────────────────────────────────────────
 
 
@@ -1724,13 +1747,14 @@ def group_streams(cfg: AppConfig) -> tuple:
 
 def changed_groups(running: dict[int, AppConfig], wanted: list[AppConfig]) -> list[int]:
     """Indexes of groups to stop, start, or restart to go from `running` to `wanted`."""
-    indexes = set(running) | set(range(len(wanted)))
+    wanted_streams = {i: group_streams(g) for i, g in enumerate(wanted) if g.sources}
+    indexes = set(running) | set(wanted_streams)
     return sorted(
         index
         for index in indexes
         if index not in running
-        or index >= len(wanted)
-        or group_streams(running[index]) != group_streams(wanted[index])
+        or index not in wanted_streams
+        or group_streams(running[index]) != wanted_streams[index]
     )
 
 
@@ -1807,13 +1831,14 @@ class GroupSupervisor:
     def apply(self, groups: list[AppConfig]) -> None:
         running = {index: worker.cfg for index, worker in self.workers.items()}
         changed = changed_groups(running, groups)
-        for index in changed:
+        wanted = [index < len(groups) and bool(groups[index].sources) for index in changed]
+        for index, keep in zip(changed, wanted):
             if index in self.workers:
-                verb = "streams changed; restarting" if index < len(groups) else "removed"
+                verb = "streams changed; restarting" if keep else "removed"
                 print(f"[group {index}] {verb}", flush=True)
                 self.stop(index)
-        for index in changed:
-            if index < len(groups) and not self.stop_requested.is_set():
+        for index, keep in zip(changed, wanted):
+            if keep and not self.stop_requested.is_set():
                 self.start(index, groups[index])
 
     def shutdown(self) -> None:
@@ -1856,7 +1881,8 @@ def run_group(cfg: AppConfig) -> None:
                 print(f"[warn] ignoring invalid config reload: {exc}", file=sys.stderr)
                 continue
             print(f"[config] reload: {[s.id for s in sources]}", flush=True)
-            supervisor.apply(split_groups(replace(cfg, sources=sources)))
+            groups = regroup(cfg, groups, sources)
+            supervisor.apply(groups)
     except KeyboardInterrupt:
         supervisor.stop_requested.set()
     finally:

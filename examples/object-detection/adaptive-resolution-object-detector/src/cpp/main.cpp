@@ -443,6 +443,57 @@ std::vector<AppConfig> split_groups(const AppConfig& cfg) {
   return groups;
 }
 
+// Apply a config edit to the current groups without moving any stream. A stream
+// stays in the group it was placed in, so removing one changes only its own
+// group. A new stream fills the first group with a free slot, or starts a new
+// group when every group is full. A group left empty keeps its index, so the
+// groups after it keep their channels.
+std::vector<AppConfig> regroup(const AppConfig& cfg, const std::vector<AppConfig>& groups,
+                               const std::vector<StreamSource>& sources) {
+  std::map<std::string, StreamSource> wanted;
+  for (const auto& source : sources) {
+    wanted[source.id] = source;
+  }
+  std::vector<std::vector<StreamSource>> members;
+  std::set<std::string> placed;
+  for (const auto& group : groups) {
+    std::vector<StreamSource> kept;
+    for (const auto& source : group.sources) {
+      const auto it = wanted.find(source.id);
+      if (it != wanted.end()) {
+        kept.push_back(it->second);
+        placed.insert(source.id);
+      }
+    }
+    members.push_back(std::move(kept));
+  }
+  const auto size = static_cast<std::size_t>(cfg.group_size);
+  for (const auto& source : sources) {
+    if (placed.count(source.id) != 0) {
+      continue;
+    }
+    std::size_t index = 0;
+    while (index < members.size() && members[index].size() >= size) {
+      ++index;
+    }
+    if (index == members.size()) {
+      members.emplace_back();
+    }
+    members[index].push_back(source);
+  }
+  while (!members.empty() && members.back().empty()) {
+    members.pop_back();
+  }
+  std::vector<AppConfig> result;
+  for (std::size_t index = 0; index < members.size(); ++index) {
+    AppConfig group = cfg;
+    group.sources = std::move(members[index]);
+    group.channel_base = static_cast<int>(index * size);
+    result.push_back(std::move(group));
+  }
+  return result;
+}
+
 // ── shared detection helpers ──────────────────────────────────────────────────
 
 void enable_profile_env(const AppConfig& cfg) {
@@ -1904,35 +1955,79 @@ void run_scale(const AppConfig& cfg, const FusedProfile& profile,
 
 // ── group mode: several independent scale processes ───────────────────────────
 
-// Set by the group supervisor on each worker it starts, as "<group>:<ready fd>".
+// Set by the group supervisor on each worker it starts, as
+// "<group>:<ready fd>:<channel base>:" followed by each stream's id and url.
 // Internal to this application, not a user setting.
 constexpr const char* kGroupWorkerEnv = "ADAPTIVE_DETECTOR_GROUP_WORKER";
 
 struct GroupWorkerRole {
   int index = -1;
   int ready_fd = -1;
+  int channel_base = -1;
+  std::vector<StreamSource> sources;
 };
+
+// Each id and url is written as "<length>:<text>", so they may hold any character.
+void append_role_field(std::string& role, const std::string& text) {
+  role += std::to_string(text.size()) + ":" + text;
+}
+
+std::string read_role_field(const std::string& role, std::size_t& pos) {
+  const std::size_t colon = role.find(':', pos);
+  sima_examples::require(colon != std::string::npos && colon > pos, "missing field length");
+  const std::size_t length = std::stoul(role.substr(pos, colon - pos));
+  sima_examples::require(colon + 1 + length <= role.size(), "truncated field");
+  pos = colon + 1 + length;
+  return role.substr(colon + 1, length);
+}
+
+std::string group_worker_role_value(int index, int ready_fd, const AppConfig& group) {
+  std::string role = std::to_string(index) + ":" + std::to_string(ready_fd) + ":" +
+                     std::to_string(group.channel_base) + ":";
+  for (const auto& source : group.sources) {
+    append_role_field(role, source.id);
+    append_role_field(role, source.url);
+  }
+  return role;
+}
 
 std::optional<GroupWorkerRole> group_worker_role() {
   const char* raw = std::getenv(kGroupWorkerEnv);
   if (raw == nullptr || *raw == '\0') {
     return std::nullopt;
   }
+  const std::string text(raw);
   GroupWorkerRole role;
-  if (std::sscanf(raw, "%d:%d", &role.index, &role.ready_fd) != 2 || role.index < 0 ||
-      role.ready_fd < 0) {
-    throw std::runtime_error(std::string("invalid ") + kGroupWorkerEnv + ": " + raw);
+  int consumed = 0;
+  try {
+    sima_examples::require(std::sscanf(raw, "%d:%d:%d:%n", &role.index, &role.ready_fd,
+                                       &role.channel_base, &consumed) == 3 &&
+                               consumed > 0 && role.index >= 0 && role.ready_fd >= 0 &&
+                               role.channel_base >= 0,
+                           "bad header");
+    std::size_t pos = static_cast<std::size_t>(consumed);
+    while (pos < text.size()) {
+      StreamSource source;
+      source.id = read_role_field(text, pos);
+      source.url = read_role_field(text, pos);
+      role.sources.push_back(std::move(source));
+    }
+    sima_examples::require(!role.sources.empty(), "no streams");
+  } catch (const std::exception& e) {
+    throw std::runtime_error(std::string("invalid ") + kGroupWorkerEnv + " (" + e.what() +
+                             "): " + raw);
   }
   return role;
 }
 
-// One group's process: a scale run over its own slice of the config's streams.
+// One group's process: a scale run over the streams its supervisor assigned it.
 int run_group_worker(const AppConfig& cfg, const GroupWorkerRole& role) {
-  const auto groups = split_groups(cfg);
+  AppConfig group = cfg;
+  group.sources = role.sources;
+  group.channel_base = role.channel_base;
   try {
-    sima_examples::require(cfg.mode == "group" && role.index < static_cast<int>(groups.size()),
-                           "config no longer has group " + std::to_string(role.index));
-    run_scale(groups[static_cast<std::size_t>(role.index)], kGroupProfile, [&role]() {
+    sima_examples::require(cfg.mode == "group", "config is no longer in group mode");
+    run_scale(group, kGroupProfile, [&role]() {
       const char ready = 1;
       (void)!write(role.ready_fd, &ready, 1);
     });
@@ -1977,7 +2072,8 @@ void poll_worker(GroupWorker& worker) {
 // A forked copy of this process cannot be used directly: the Neat runtime sets
 // up process-wide state when it loads, and a forked child inherits that state
 // without the threads behind it, so its output and teardown break.
-GroupWorker start_group_worker(const fs::path& config_path, int index, int& ready_read_fd) {
+GroupWorker start_group_worker(const fs::path& config_path, int index, const AppConfig& group,
+                               int& ready_read_fd) {
   char exe[4096] = {0};
   const ssize_t exe_len = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
   sima_examples::require(exe_len > 0, "failed to locate this executable");
@@ -1988,7 +2084,7 @@ GroupWorker start_group_worker(const fs::path& config_path, int index, int& read
   // calls are allowed between fork() and execve().
   const std::string config = config_path.string();
   const std::string role =
-      std::string(kGroupWorkerEnv) + "=" + std::to_string(index) + ":" + std::to_string(fds[1]);
+      std::string(kGroupWorkerEnv) + "=" + group_worker_role_value(index, fds[1], group);
   std::vector<char*> argv = {exe, const_cast<char*>("--config"), const_cast<char*>(config.c_str()),
                              nullptr};
   std::vector<char*> envp;
@@ -2049,18 +2145,24 @@ GroupStreams group_streams(const AppConfig& group) {
 // Indexes of groups to stop, start, or restart to go from `running` to `wanted`.
 std::vector<int> changed_groups(const std::map<int, GroupStreams>& running,
                                 const std::vector<AppConfig>& wanted) {
+  std::map<int, GroupStreams> wanted_streams;
+  for (std::size_t index = 0; index < wanted.size(); ++index) {
+    if (!wanted[index].sources.empty()) {
+      wanted_streams[static_cast<int>(index)] = group_streams(wanted[index]);
+    }
+  }
   std::set<int> indexes;
   for (const auto& [index, streams] : running) {
     indexes.insert(index);
   }
-  for (std::size_t index = 0; index < wanted.size(); ++index) {
-    indexes.insert(static_cast<int>(index));
+  for (const auto& [index, streams] : wanted_streams) {
+    indexes.insert(index);
   }
   std::vector<int> changed;
   for (const int index : indexes) {
-    const auto it = running.find(index);
-    if (it == running.end() || index >= static_cast<int>(wanted.size()) ||
-        it->second != group_streams(wanted[static_cast<std::size_t>(index)])) {
+    const auto have = running.find(index);
+    const auto want = wanted_streams.find(index);
+    if (have == running.end() || want == wanted_streams.end() || have->second != want->second) {
       changed.push_back(index);
     }
   }
@@ -2082,18 +2184,20 @@ public:
       running[index] = worker.streams;
     }
     const auto changed = changed_groups(running, groups);
+    const auto keep = [&groups](int index) {
+      return index < static_cast<int>(groups.size()) &&
+             !groups[static_cast<std::size_t>(index)].sources.empty();
+    };
     for (const int index : changed) {
       if (workers_.count(index) != 0) {
         std::cout << "[group " << index << "] "
-                  << (index < static_cast<int>(groups.size()) ? "streams changed; restarting"
-                                                              : "removed")
-                  << "\n"
+                  << (keep(index) ? "streams changed; restarting" : "removed") << "\n"
                   << std::flush;
         stop(index);
       }
     }
     for (const int index : changed) {
-      if (index < static_cast<int>(groups.size()) && !stop_requested()) {
+      if (keep(index) && !stop_requested()) {
         start(index, groups[static_cast<std::size_t>(index)]);
       }
     }
@@ -2129,7 +2233,7 @@ public:
 private:
   void start(int index, const AppConfig& group) {
     int ready_fd = -1;
-    GroupWorker worker = start_group_worker(cfg_.config_path, index, ready_fd);
+    GroupWorker worker = start_group_worker(cfg_.config_path, index, group, ready_fd);
     worker.streams = group_streams(group);
     failed_.erase(index);
     std::cout << "[group " << index << "] pid=" << worker.pid << " streams=";
@@ -2173,7 +2277,7 @@ private:
 };
 
 void run_group(const AppConfig& cfg) {
-  const auto groups = split_groups(cfg);
+  auto groups = split_groups(cfg);
   std::cout << "[app] group mode: " << cfg.sources.size() << " stream(s) in " << groups.size()
             << " group(s) of up to " << cfg.group_size << "; watching " << cfg.config_path.string()
             << "\n"
@@ -2202,10 +2306,10 @@ void run_group(const AppConfig& cfg) {
     }
     last_write = now;
     try {
-      AppConfig edited = cfg;
-      edited.sources = reload_sources(cfg.config_path, cfg.max_streams);
-      std::cout << "[config] reload: " << edited.sources.size() << " stream(s)\n" << std::flush;
-      supervisor.apply(split_groups(edited));
+      const auto sources = reload_sources(cfg.config_path, cfg.max_streams);
+      std::cout << "[config] reload: " << sources.size() << " stream(s)\n" << std::flush;
+      groups = regroup(cfg, groups, sources);
+      supervisor.apply(groups);
     } catch (const std::exception& e) {
       std::cerr << "[warn] ignoring invalid config reload: " << e.what() << "\n";
     }

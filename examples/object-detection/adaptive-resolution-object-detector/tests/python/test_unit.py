@@ -483,15 +483,107 @@ class TestChangedGroups:
 
         assert main_module.changed_groups(running, self._groups(tmp_path, 6)) == []
 
-    def test_removing_an_early_stream_shifts_every_later_group(self, tmp_path):
-        running = dict(enumerate(self._groups(tmp_path, 9, size=2)))
-        wanted = self._groups(tmp_path, 9, size=2)
-        # Drop cam-2: every stream after it moves up one slot.
-        trimmed = [s for s in wanted[0].sources + wanted[1].sources + wanted[2].sources
-                   + wanted[3].sources + wanted[4].sources if s.id != "cam-2"]
-        cfg = main_module.replace(wanted[0], sources=trimmed, channel_base=0)
+    def test_an_emptied_group_is_stopped_and_not_restarted(self, tmp_path):
+        groups = self._groups(tmp_path, 6, size=2)
+        emptied = [groups[0], main_module.replace(groups[1], sources=[]), groups[2]]
 
-        assert main_module.changed_groups(running, main_module.split_groups(cfg)) == [0, 1, 2, 3, 4]
+        assert main_module.changed_groups(dict(enumerate(groups)), emptied) == [1]
+        assert main_module.changed_groups({0: groups[0], 2: groups[2]}, emptied) == []
+
+
+class TestRegroup:
+    @staticmethod
+    def _cfg(tmp_path, count: int, size: int = 2):
+        return main_module.load_app_config(
+            write_full_config(
+                tmp_path,
+                [(("mode",), "group"), (("group", "size"), size), (("streams", "sources"), sources(count))],
+            )
+        )
+
+    @staticmethod
+    def _ids(groups):
+        return [[s.id for s in g.sources] for g in groups]
+
+    @staticmethod
+    def _without(cfg, *ids):
+        return [s for s in cfg.sources if s.id not in ids]
+
+    @staticmethod
+    def _source(number: int):
+        return main_module.StreamSource(f"cam-{number}", f"rtsp://127.0.0.1:8554/src{number}")
+
+    def test_removing_an_early_stream_changes_only_its_group(self, tmp_path):
+        cfg = self._cfg(tmp_path, 6)
+        groups = main_module.split_groups(cfg)
+
+        regrouped = main_module.regroup(cfg, groups, self._without(cfg, "cam-2"))
+
+        assert self._ids(regrouped) == [["cam-1"], ["cam-3", "cam-4"], ["cam-5", "cam-6"]]
+        assert [g.channel_base for g in regrouped] == [0, 2, 4]
+        assert main_module.changed_groups(dict(enumerate(groups)), regrouped) == [0]
+
+    def test_a_new_stream_fills_the_first_group_with_a_free_slot(self, tmp_path):
+        cfg = self._cfg(tmp_path, 6)
+        remaining = self._without(cfg, "cam-2")
+        groups = main_module.regroup(cfg, main_module.split_groups(cfg), remaining)
+
+        regrouped = main_module.regroup(cfg, groups, [*remaining, self._source(7)])
+
+        assert self._ids(regrouped) == [["cam-1", "cam-7"], ["cam-3", "cam-4"], ["cam-5", "cam-6"]]
+        assert main_module.changed_groups(dict(enumerate(groups)), regrouped) == [0]
+
+    def test_a_new_stream_starts_a_new_group_when_every_group_is_full(self, tmp_path):
+        cfg = self._cfg(tmp_path, 4)
+        groups = main_module.split_groups(cfg)
+
+        regrouped = main_module.regroup(cfg, groups, [*cfg.sources, self._source(5)])
+
+        assert self._ids(regrouped) == [["cam-1", "cam-2"], ["cam-3", "cam-4"], ["cam-5"]]
+        assert regrouped[2].channel_base == 4
+        assert main_module.changed_groups(dict(enumerate(groups)), regrouped) == [2]
+
+    def test_an_emptied_middle_group_leaves_later_groups_on_their_channels(self, tmp_path):
+        cfg = self._cfg(tmp_path, 6)
+        groups = main_module.split_groups(cfg)
+
+        regrouped = main_module.regroup(cfg, groups, self._without(cfg, "cam-3", "cam-4"))
+
+        assert self._ids(regrouped) == [["cam-1", "cam-2"], [], ["cam-5", "cam-6"]]
+        assert [g.channel_base for g in regrouped] == [0, 2, 4]
+        assert main_module.changed_groups(dict(enumerate(groups)), regrouped) == [1]
+
+    def test_emptied_trailing_groups_are_dropped(self, tmp_path):
+        cfg = self._cfg(tmp_path, 6)
+        groups = main_module.split_groups(cfg)
+
+        regrouped = main_module.regroup(cfg, groups, self._without(cfg, "cam-5", "cam-6"))
+
+        assert self._ids(regrouped) == [["cam-1", "cam-2"], ["cam-3", "cam-4"]]
+        assert main_module.changed_groups(dict(enumerate(groups)), regrouped) == [2]
+
+    def test_reordering_the_config_moves_nothing(self, tmp_path):
+        cfg = self._cfg(tmp_path, 6)
+        groups = main_module.split_groups(cfg)
+
+        regrouped = main_module.regroup(cfg, groups, list(reversed(cfg.sources)))
+
+        assert self._ids(regrouped) == self._ids(groups)
+        assert main_module.changed_groups(dict(enumerate(groups)), regrouped) == []
+
+    def test_a_changed_url_restarts_only_its_group_in_place(self, tmp_path):
+        cfg = self._cfg(tmp_path, 6)
+        groups = main_module.split_groups(cfg)
+        edited = [
+            main_module.replace(s, url="rtsp://127.0.0.1:8554/other") if s.id == "cam-3" else s
+            for s in cfg.sources
+        ]
+
+        regrouped = main_module.regroup(cfg, groups, edited)
+
+        assert self._ids(regrouped) == self._ids(groups)
+        assert regrouped[1].sources[0].url == "rtsp://127.0.0.1:8554/other"
+        assert main_module.changed_groups(dict(enumerate(groups)), regrouped) == [1]
 
 
 class TestGroupSupervisor:
@@ -510,10 +602,10 @@ class TestGroupSupervisor:
         )
 
     @staticmethod
-    def _edit(cfg, count: int) -> None:
-        """Rewrite the watched config with `count` streams and a newer mtime."""
+    def _edit(cfg, count: int, drop: tuple[str, ...] = ()) -> None:
+        """Rewrite the watched config with `count` streams, less `drop`, and a newer mtime."""
         raw = main_module.load_raw_config(cfg.config_path)
-        raw["streams"]["sources"] = sources(count)
+        raw["streams"]["sources"] = [s for s in sources(count) if s["id"] not in drop]
         cfg.config_path.write_text(main_module.yaml.safe_dump(raw), encoding="utf-8")
         stamp = cfg.config_path.stat().st_mtime + 10
         main_module.os.utime(cfg.config_path, (stamp, stamp))
@@ -594,6 +686,33 @@ class TestGroupSupervisor:
             ("stop", 1, ["cam-5"]),
         ]
         assert len(context.processes) == 2
+
+    def test_removing_an_early_stream_restarts_only_its_group(self, tmp_path, monkeypatch):
+        context = self._context(monkeypatch)
+        cfg = self._cfg(tmp_path, count=6, size=2)
+        self._script_sleeps(
+            monkeypatch,
+            lambda: self._edit(cfg, 6, drop=("cam-2",)),
+            lambda: self._edit(cfg, 7, drop=("cam-2",)),
+            lambda: None,
+        )
+
+        main_module.run_group(cfg)
+
+        assert context.log[:9] == [
+            ("start", 0, ["cam-1", "cam-2"]),
+            ("start", 1, ["cam-3", "cam-4"]),
+            ("start", 2, ["cam-5", "cam-6"]),
+            # Removing cam-2 restarts group 0 alone; groups 1 and 2 keep running.
+            ("stop", 0, ["cam-1", "cam-2"]),
+            ("start", 0, ["cam-1"]),
+            # The next new stream takes the slot cam-2 left, again in group 0 only.
+            ("stop", 0, ["cam-1"]),
+            ("start", 0, ["cam-1", "cam-7"]),
+            ("stop", 1, ["cam-3", "cam-4"]),
+            ("stop", 2, ["cam-5", "cam-6"]),
+        ]
+        assert [p.args[0].channel_base for p in context.processes] == [0, 2, 4, 0, 0]
 
     def test_an_invalid_edit_is_ignored(self, tmp_path, monkeypatch, capsys):
         context = self._context(monkeypatch)

@@ -253,6 +253,32 @@ bool test_invalid_values_are_rejected(const std::string& binary) {
 
 } // namespace
 
+// A group worker is told its streams by the supervisor, not by config order. A
+// malformed assignment must stop that worker with a clear error before it opens
+// anything.
+bool test_malformed_group_worker_assignment_is_rejected(const std::string& binary) {
+  bool ok = true;
+  const std::vector<std::pair<std::string, std::string>> cases = {
+      {"no_streams", "0:3:0:"},
+      {"missing_url", "0:3:0:5:cam-1"},
+      {"truncated_url", "0:3:4:5:cam-140:rtsp://127.0.0.1:8554/src1"},
+      {"bad_header", "group-0"},
+  };
+  for (const auto& [name, role] : cases) {
+    ConfigParts parts;
+    parts.mode = "group";
+    const fs::path config_path = write_config("group_worker_" + name, config_text(parts));
+    setenv("ADAPTIVE_DETECTOR_GROUP_WORKER", role.c_str(), 1);
+    const auto result = spawn_and_wait(binary, {"--config", config_path.string()}, 20000);
+    unsetenv("ADAPTIVE_DETECTOR_GROUP_WORKER");
+    remove_dir(config_path.parent_path().string());
+    ok &= expect_true(result.exit_code == 1, "group worker " + name + " exits with code 1") &&
+          expect_contains(result.stderr_text, "invalid ADAPTIVE_DETECTOR_GROUP_WORKER",
+                          "group worker " + name + " names the problem");
+  }
+  return ok;
+}
+
 int main(int argc, char** argv) {
   if (argc < 2) {
     std::cerr << "[ERR] usage: " << argv[0] << " <example-binary>\n";
@@ -271,5 +297,6 @@ int main(int argc, char** argv) {
   ok &= test_stream_list_rules(binary);
   ok &= test_empty_stream_list_depends_on_mode(binary);
   ok &= test_invalid_values_are_rejected(binary);
+  ok &= test_malformed_group_worker_assignment_is_rejected(binary);
   return ok ? 0 : 1;
 }

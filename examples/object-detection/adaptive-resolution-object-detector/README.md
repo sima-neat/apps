@@ -90,19 +90,20 @@ Open `${APP_DIR}/src/common/config.yaml` and set:
 - `mode` to `live`, `scale`, or `group`.
 - `model.path` to the downloaded package.
 - One entry per stream under `streams.sources`, each with a unique `id` and the `url` copied from Insight.
-- `output.insight.host`, `video_port`, and `metadata_port`. The stream on channel N publishes to `video_port + N` and `metadata_port + N`, and channels follow the order of `streams.sources`.
+- `output.insight.host`, `video_port`, and `metadata_port`. The stream on channel N publishes to `video_port + N` and `metadata_port + N`. At startup, channels follow the order of `streams.sources`.
 - `group.size` in `group` mode: the number of streams each process runs.
 
 In `live` and `group` mode the application checks the config every
 `runtime.config_watch_seconds`. Add, remove, or change an entry under
 `streams.sources` and save the file:
 
-- `live` starts or stops only the affected streams.
+- `live` starts or stops only the affected streams. The other streams keep
+  their channels, and a new stream takes the lowest free channel.
 - `group` restarts only the groups whose streams changed, for about 10–30 s;
-  the other groups keep running. Streams are assigned to groups in config
-  order, so adding a stream at the end restarts only the last group, while
-  removing an early stream moves every later stream to a new group and
-  channel.
+  the other groups keep running and keep their channels. A stream stays in the
+  group it started in: removing a stream restarts only its own group, and a new
+  stream joins the first group with a free slot, or starts a new group when
+  every group is full. Group N uses the channels from N × `group.size`.
 
 An invalid edit is reported and ignored. `streams.max_streams` is the number of
 Insight channels reserved at startup, so raising it needs a restart. Other
