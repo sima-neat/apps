@@ -69,15 +69,15 @@ Set `model.path` in the config to the downloaded package.
 
 [Insight](https://developer.sima.ai/software/tools/insight/) can host the input stream and render the video and detection metadata. Install videos directly from the Insight catalog or through Insight's YouTube support.
 
-In the Insight Web UI, start the required stream and copy its source URL. Use RTSP for H.264 or H.265; for MJPEG, Insight supports both RTSP and HTTP URLs. Set `source.codec` to `h264`/`avc`, `h265`/`hevc`, or `mjpeg`. Decoded frames are encoded as H.264 for Insight output. Use a host and published port that the target can reach, not `localhost` and not an address only Insight's own machine can resolve. Verify the URL from the target before running; the application prints the resolved source and its dimensions on startup.
+In the Insight Web UI, start the required stream and copy its source URL. Use RTSP for H.264 or H.265; for MJPEG, Insight supports both RTSP and HTTP URLs. For RTSP, set `source.rtsp.codec` to `h264`, `h265`, or `mjpeg`. Decoded frames are encoded as H.264 for Insight output. Use a host and published port that the target can reach, not `localhost` and not an address only Insight's own machine can resolve. Verify the URL from the target before running; the application prints the resolved source and its dimensions on startup.
 
 ## Configure
 
-Open `${APP_DIR}/src/common/config.yaml`. Set `model.path`, the source type, codec, and URL, and the Insight host and video and metadata ports.
+Open `${APP_DIR}/src/common/config.yaml`. Set `model.path`, `source.type` and the matching `source.rtsp`, `source.http`, or `source.usb` section (only that section is read), and the Insight host and video and metadata ports.
 
 The source supports RTSP H.264, H.265, and MJPEG, plus HTTP MJPEG. Keep `inference.frames` at `0` to run until you stop the application.
 
-To use a USB camera, set `source.type: usb`, `source.camera` to its stable ID, and `source.width`, `source.height`, and `source.fps` to an MJPEG mode the camera lists; `source.url` and `source.codec` are not used. List the connected camera IDs and modes on the DevKit:
+To use a USB camera, set `source.type: usb`, `source.usb.camera` to its stable ID, and `source.usb.width`, `source.usb.height`, and `source.usb.fps` to an MJPEG mode the camera lists. List the connected camera IDs and modes on the DevKit:
 
 ```bash
 source ~/pyneat/bin/activate

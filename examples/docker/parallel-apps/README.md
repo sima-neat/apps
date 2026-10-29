@@ -71,7 +71,7 @@ Each image holds its example's own `src/common/config.yaml`. Edit the six config
 
 | Container | Example config | Model | RTSP source | Insight ports |
 | --- | --- | --- | --- | --- |
-| `neat-segmentation` | `examples/segmentation/single-stream-instance-segmenter` | `model.path: models/yolo26m-seg-int8-b1.tar.gz` | `source.url` | `output.insight.video_port: 9000`, `metadata_port: 9100` |
+| `neat-segmentation` | `examples/segmentation/single-stream-instance-segmenter` | `model.path: models/yolo26m-seg-int8-b1.tar.gz` | `source.rtsp.url` | `output.insight.video_port: 9000`, `metadata_port: 9100` |
 | `neat-detection` | `examples/object-detection/rfdetr-detection-segmentation` | Ready for RF-DETR small | `source.rtsp_url` | `output.insight.video_port: 9001`, `metadata_port: 9101` |
 | `neat-tracking` | `examples/tracking/multi-stream-tracker` | `model.path: models/yolo26m-det-int8-b1.tar.gz`; set `inference.fps: 15` to leave MLA time for the others | one URL under `streams` | `output.insight.video_port_base: 9002`, `metadata_port_base: 9102` |
 | `neat-pose` | `examples/pose-estimation/multi-stream-pose-estimator` | `model.path: models/yolo26m-pose-int8-b1.tar.gz` | one URL under `streams` | `output.insight.video_port_base: 9003`, `metadata_port_base: 9103` |

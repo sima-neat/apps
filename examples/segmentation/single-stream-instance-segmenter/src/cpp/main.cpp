@@ -226,8 +226,8 @@ struct AppConfig {
   fs::path labels_path;
   int input_size = 640;
   std::string source_url;
-  // Which key supplied source_url: "source.url" or the legacy "source.rtsp_url".
-  std::string source_key = "source.url";
+  // The key that names the source: source.<type>.url, or source.usb.camera.
+  std::string source_key = "source.rtsp.url";
   SourceType source_type = SourceType::Rtsp;
   // source.type=usb: the camera's stable ID (usb_camera_ids()) and one of its MJPEG modes.
   std::string camera;
@@ -390,7 +390,7 @@ SourceCodec parse_source_codec(const std::string& value) {
   if (lowered == "mjpeg" || lowered == "jpeg") {
     return SourceCodec::Mjpeg;
   }
-  throw std::runtime_error("source.codec must be h264/avc, h265/hevc, or mjpeg");
+  throw std::runtime_error("source.rtsp.codec must be h264, h265, or mjpeg");
 }
 
 const char* source_type_name(SourceType value) {
@@ -429,17 +429,17 @@ CliOptions parse_args(int argc, char** argv) {
 
 void validate_config(const AppConfig& cfg) {
   if (cfg.source_type == SourceType::Usb) {
-    sima_examples::require(!cfg.camera.empty(), "source.camera must be set for source.type=usb");
+    sima_examples::require(!cfg.camera.empty(), "source.usb.camera must be set");
     sima_examples::require(cfg.source_width > 0 && cfg.source_height > 0,
-                           "source.width and source.height must be > 0 for source.type=usb");
-    sima_examples::require(cfg.source_fps > 0, "source.fps must be > 0 for source.type=usb");
+                           "source.usb.width and source.usb.height must be > 0");
+    sima_examples::require(cfg.source_fps > 0, "source.usb.fps must be > 0");
     // The camera's JPEG goes to Insight as RTP/JPEG (RFC 2435): 8-pixel blocks, 2040 at most.
     sima_examples::require(cfg.source_width <= 2040 && cfg.source_height <= 2040 &&
                                cfg.source_width % 8 == 0 && cfg.source_height % 8 == 0,
-                           "source.width and source.height must be multiples of 8 and at most "
-                           "2040 for source.type=usb (RTP/JPEG)");
+                           "source.usb.width and source.usb.height must be multiples of 8 and at "
+                           "most 2040 (RTP/JPEG)");
   } else {
-    sima_examples::require(!cfg.source_url.empty(), "source.url or source.rtsp_url must be set");
+    sima_examples::require(!cfg.source_url.empty(), cfg.source_key + " must be set");
   }
   sima_examples::require(!cfg.model_path.empty(), "model.path must be set");
   sima_examples::require(cfg.input_size > 0 &&
@@ -448,12 +448,9 @@ void validate_config(const AppConfig& cfg) {
                              std::to_string(kMaskStride * kYolov8Strides.back()));
   sima_examples::require(!cfg.labels_path.empty(), "model.labels must be set");
   sima_examples::require(!cfg.insight_host.empty(), "output.insight.host must be set");
-  sima_examples::require(cfg.latency_ms >= 0, "source.latency_ms must be >= 0");
-  sima_examples::require(cfg.source_fps >= 0, "source.fps must be >= 0");
-  if (cfg.source_type == SourceType::Http) {
-    sima_examples::require(cfg.source_codec == SourceCodec::Mjpeg,
-                           "source.codec must be mjpeg for source.type=http");
-  }
+  const std::string src = std::string("source.") + source_type_name(cfg.source_type) + ".";
+  sima_examples::require(cfg.latency_ms >= 0, src + "latency_ms must be >= 0");
+  sima_examples::require(cfg.source_fps >= 0, src + "fps must be >= 0");
   sima_examples::require(cfg.frames >= 0, "inference.frames must be >= 0");
   sima_examples::require(cfg.min_score >= 0.0 && cfg.min_score <= 1.0,
                          "inference.min_score must be between 0 and 1");
@@ -481,29 +478,22 @@ AppConfig load_app_config(const fs::path& config_path) {
   cfg.model_path = raw.string_or("model.path", "");
   cfg.input_size = raw.int_or("model.input_size", 640);
   cfg.labels_path = raw.string_or("model.labels", default_labels.string());
-  // config.yaml documents source.rtsp_url as the fallback "when source.url is
-  // empty", so an empty value must fall through, not just an absent key.
-  const std::string legacy_rtsp_url = raw.string_or("source.rtsp_url", "");
-  cfg.source_url = raw.string_or("source.url", "");
-  if (cfg.source_url.empty()) {
-    cfg.source_url = legacy_rtsp_url;
-    cfg.source_key = "source.rtsp_url";
-  }
+  // Only the section source.type names is read; the others may hold placeholders.
   cfg.source_type = parse_source_type(raw.string_or("source.type", "rtsp"));
-  cfg.camera = raw.string_or("source.camera", "");
-  cfg.source_width = raw.int_or("source.width", 1920);
-  cfg.source_height = raw.int_or("source.height", 1080);
-  if (cfg.source_type == SourceType::Usb) {
-    cfg.source_key = "source.camera";
-  }
-  cfg.source_codec = parse_source_codec(raw.string_or("source.codec", "h264"));
-  if (cfg.source_type == SourceType::Usb) {
-    cfg.source_codec = SourceCodec::Mjpeg; // the camera's own MJPEG; source.codec is not used
-  }
-  cfg.latency_ms = raw.int_or("source.latency_ms", 200);
-  cfg.tcp = raw.bool_or("source.tcp", true);
-  cfg.source_fps = raw.int_or("source.fps", 0);
-  cfg.ssl_strict = raw.bool_or("source.ssl_strict", true);
+  const std::string src = std::string("source.") + source_type_name(cfg.source_type) + ".";
+  cfg.source_key = src + (cfg.source_type == SourceType::Usb ? "camera" : "url");
+  cfg.source_url = raw.string_or(src + "url", "");
+  cfg.camera = raw.string_or(src + "camera", "");
+  cfg.source_width = raw.int_or(src + "width", 1920);
+  cfg.source_height = raw.int_or(src + "height", 1080);
+  // HTTP streams and USB cameras are MJPEG; only RTSP names a codec.
+  cfg.source_codec = cfg.source_type == SourceType::Rtsp
+                         ? parse_source_codec(raw.string_or(src + "codec", "h264"))
+                         : SourceCodec::Mjpeg;
+  cfg.latency_ms = raw.int_or(src + "latency_ms", 200);
+  cfg.tcp = raw.bool_or(src + "tcp", true);
+  cfg.source_fps = raw.int_or(src + "fps", 0);
+  cfg.ssl_strict = raw.bool_or(src + "ssl_strict", true);
   cfg.frames = raw.int_or("inference.frames", 0);
   cfg.min_score = raw.double_or("inference.min_score", 0.55);
   cfg.nms_iou = raw.double_or("inference.nms_iou", 0.60);
@@ -1006,8 +996,8 @@ void fill_missing_geometry(SourceGeometry& dst, const SourceGeometry& src) {
 void require_mjpeg_fps(const AppConfig& cfg, const SourceGeometry& geometry) {
   if (cfg.source_codec == SourceCodec::Mjpeg && geometry.fps <= 0) {
     throw std::runtime_error(
-        "MJPEG source did not provide a valid frame rate; set source.fps or use a source with "
-        "probeable FPS metadata");
+        std::string("MJPEG source did not provide a valid frame rate; set source.") +
+        source_type_name(cfg.source_type) + ".fps or use a source with probeable FPS metadata");
   }
 }
 

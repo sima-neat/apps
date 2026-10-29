@@ -84,15 +84,15 @@ class TestE2E:
     ):
         source_url = request.getfixturevalue(source["url_fixture"])
         output_cfg = e2e_config_section("single-stream-object-detector", "testing.e2e.output")
-        # A USB case's "URL" is the camera's stable ID.
-        source_config = {
-            "type": source["type"],
-            "codec": source["codec"],
-            "camera" if source["type"] == "usb" else "url": source_url,
-            "ssl_strict": source.get("ssl_strict", True),
-        }
+        # The case fills its source type's section; a USB case's "URL" is the camera's stable ID.
+        section = {"camera" if source["type"] == "usb" else "url": source_url}
+        if source["type"] == "rtsp":
+            section["codec"] = source["codec"]
+        if source["type"] == "http":
+            section["ssl_strict"] = source.get("ssl_strict", True)
         if source.get("fps", 0) > 0:
-            source_config["fps"] = source["fps"]
+            section["fps"] = source["fps"]
+        source_config = {"type": source["type"], source["type"]: section}
 
         # This test is the Insight video receiver, so it publishes to its own loopback address.
         insight_host = "127.0.0.1"

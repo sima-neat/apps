@@ -103,20 +103,25 @@ int run_case(const std::string& binary, const ModelCase& model,
     return 1;
   }
   const fs::path config_path = fs::path(output_dir).parent_path() / "config.yaml";
+  // The case fills its source type's section; a USB case's "URL" is the camera's stable ID.
+  const std::string src = "source." + source_case.type + ".";
   ConfigScalars overrides{{"model.family", model.family},
                           {"model.path", model.model_path},
                           {"source.type", source_case.type},
-                          {"source.codec", source_case.codec},
-                          // A USB case's "URL" is the camera's stable ID.
-                          {source_case.type == "usb" ? "source.camera" : "source.url", source_url},
-                          {"source.ssl_strict", source_case.ssl_strict ? "true" : "false"},
+                          {src + (source_case.type == "usb" ? "camera" : "url"), source_url},
                           {"output.save_dir", output_dir},
                           // This test is the Insight receiver, so it publishes to loopback.
                           {"output.insight.host", "127.0.0.1"},
                           {"output.insight.video_port", std::to_string(video_port)},
                           {"output.insight.metadata_port", std::to_string(metadata_port)}};
+  if (source_case.type == "rtsp") {
+    overrides[src + "codec"] = source_case.codec;
+  }
+  if (source_case.type == "http") {
+    overrides[src + "ssl_strict"] = source_case.ssl_strict ? "true" : "false";
+  }
   if (source_case.fps > 0) {
-    overrides["source.fps"] = std::to_string(source_case.fps);
+    overrides[src + "fps"] = std::to_string(source_case.fps);
   }
   write_e2e_config(kExample, config_path, overrides);
 

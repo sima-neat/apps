@@ -34,19 +34,24 @@ int run_source_case(const std::string& binary, const std::string& model_path,
   const int video_port = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000);
   const int metadata_port = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100);
   const int total_saved_frames = e2e_int(kExampleName, "testing.e2e.output", "total_saved_frames");
-  // A USB case's "URL" is the camera's stable ID.
+  // The case fills its source type's section; a USB case's "URL" is the camera's stable ID.
   const bool usb = source_case.type == "usb";
+  const std::string src = "source." + source_case.type + ".";
   ConfigScalars overrides{{"source.type", source_case.type},
-                          {"source.codec", source_case.codec},
-                          {usb ? "source.camera" : "source.url", source_url},
-                          {"source.ssl_strict", source_case.ssl_strict ? "true" : "false"},
+                          {src + (usb ? "camera" : "url"), source_url},
                           {"model.path", model_path},
                           {"output.save_dir", output_dir},
                           {"output.insight.host", insight_host},
                           {"output.insight.video_port", std::to_string(video_port)},
                           {"output.insight.metadata_port", std::to_string(metadata_port)}};
+  if (source_case.type == "rtsp") {
+    overrides[src + "codec"] = source_case.codec;
+  }
+  if (source_case.type == "http") {
+    overrides[src + "ssl_strict"] = source_case.ssl_strict ? "true" : "false";
+  }
   if (source_case.fps > 0) {
-    overrides["source.fps"] = std::to_string(source_case.fps);
+    overrides[src + "fps"] = std::to_string(source_case.fps);
   }
   write_e2e_config(kExampleName, config_path, overrides);
 

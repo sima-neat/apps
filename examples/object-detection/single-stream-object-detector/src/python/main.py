@@ -45,8 +45,8 @@ class AppConfig:
     metadata_port: int = 9100
     save_dir: str = ""
     save_every: int = 0
-    # Which key supplied source_url: "source.url" or the legacy "source.rtsp_url".
-    source_key: str = "source.url"
+    # The key that names the source: source.<type>.url, or source.usb.camera.
+    source_key: str = "source.rtsp.url"
     # source.type=usb: the camera's stable ID (usb_camera_ids()) and one of its MJPEG modes.
     camera: str = ""
     source_width: int = 1920
@@ -196,26 +196,26 @@ def parse_source_codec(value: str) -> str:
         return "h265"
     if lowered in {"mjpeg", "jpeg"}:
         return "mjpeg"
-    raise ValueError("source.codec must be h264/avc, h265/hevc, or mjpeg")
+    raise ValueError("source.rtsp.codec must be h264, h265, or mjpeg")
 
 
 def validate_config(cfg: AppConfig) -> None:
     if cfg.source_type == "usb":
         if not cfg.camera:
-            raise ValueError("source.camera must be set for source.type=usb")
+            raise ValueError("source.usb.camera must be set")
         if cfg.source_width <= 0 or cfg.source_height <= 0:
-            raise ValueError("source.width and source.height must be > 0 for source.type=usb")
+            raise ValueError("source.usb.width and source.usb.height must be > 0")
         if cfg.source_fps <= 0:
-            raise ValueError("source.fps must be > 0 for source.type=usb")
+            raise ValueError("source.usb.fps must be > 0")
         # The camera's JPEG goes to Insight as RTP/JPEG (RFC 2435): 8-pixel blocks, 2040 at most.
         sides = (cfg.source_width, cfg.source_height)
         if not all(0 < side <= 2040 and side % 8 == 0 for side in sides):
             raise ValueError(
-                "source.width and source.height must be multiples of 8 and at most 2040 for "
-                "source.type=usb (RTP/JPEG)"
+                "source.usb.width and source.usb.height must be multiples of 8 and at most 2040 "
+                "(RTP/JPEG)"
             )
     elif not cfg.source_url:
-        raise ValueError("source.url or source.rtsp_url must be set")
+        raise ValueError(f"{cfg.source_key} must be set")
     if not cfg.model_path:
         raise ValueError("model.path must be set")
     # Path("") is ".", so an empty value in the file arrives here as ".".
@@ -224,11 +224,9 @@ def validate_config(cfg: AppConfig) -> None:
     if not cfg.insight_host:
         raise ValueError("output.insight.host must be set")
     if cfg.latency_ms < 0:
-        raise ValueError("source.latency_ms must be >= 0")
+        raise ValueError(f"source.{cfg.source_type}.latency_ms must be >= 0")
     if cfg.source_fps < 0:
-        raise ValueError("source.fps must be >= 0")
-    if cfg.source_type == "http" and cfg.source_codec != "mjpeg":
-        raise ValueError("source.codec must be mjpeg for source.type=http")
+        raise ValueError(f"source.{cfg.source_type}.fps must be >= 0")
     if cfg.frames < 0:
         raise ValueError("inference.frames must be >= 0")
     if not 0.0 <= cfg.min_score <= 1.0:
@@ -261,25 +259,21 @@ def load_app_config(config_path: Path) -> AppConfig:
     default_labels = Path(__file__).resolve().parents[1] / "common" / "coco_label.txt"
 
     labels_path = string_or(model, "labels", str(default_labels))
-    # config.yaml documents source.rtsp_url as the fallback "when source.url
-    # is empty", so an empty value must fall through, not just an absent key.
-    # The key that supplied the URL is kept so --validate-config-only can report
-    # the choice without echoing the URL, which can carry credentials.
-    source_url = string_or(source, "url")
-    source_key = "source.url" if source_url else "source.rtsp_url"
-    source_url = source_url or string_or(source, "rtsp_url")
+    # Only the section source.type names is read; the others may hold placeholders.
+    # The key that names the source is kept so --validate-config-only can report
+    # it without echoing the URL, which can carry credentials.
     source_type = parse_source_type(string_or(source, "type", "rtsp"))
-    if source_type == "usb":
-        source_key = "source.camera"
-    # A USB camera sends its own MJPEG; source.codec is not used for it.
+    source_key = f"source.{source_type}.{'camera' if source_type == 'usb' else 'url'}"
+    source = section(source, source_type)
+    # HTTP streams and USB cameras are MJPEG; only RTSP names a codec.
     source_codec = (
-        "mjpeg" if source_type == "usb" else parse_source_codec(string_or(source, "codec", "h264"))
+        parse_source_codec(string_or(source, "codec", "h264")) if source_type == "rtsp" else "mjpeg"
     )
 
     cfg = AppConfig(
         model_path=string_or(model, "path"),
         labels_path=Path(labels_path),
-        source_url=source_url,
+        source_url=string_or(source, "url"),
         source_key=source_key,
         source_type=source_type,
         camera=string_or(source, "camera"),
@@ -563,8 +557,8 @@ def make_source_graph(cfg: AppConfig, fps: int, width: int, height: int, usb_cam
 def require_mjpeg_fps(cfg: AppConfig, fps: int) -> None:
     if cfg.source_codec == "mjpeg" and fps <= 0:
         raise RuntimeError(
-            "MJPEG source did not provide a valid frame rate; set source.fps or use a source "
-            "with probeable FPS metadata"
+            f"MJPEG source did not provide a valid frame rate; set source.{cfg.source_type}.fps "
+            "or use a source with probeable FPS metadata"
         )
 
 
@@ -650,8 +644,8 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
     frame_w, frame_h, fps = resolve_source_geometry(cfg)
     if fps <= 0:
         raise RuntimeError(
-            "failed to resolve source frame rate; set source.fps or use a source with "
-            "probeable FPS metadata"
+            f"failed to resolve source frame rate; set source.{cfg.source_type}.fps or use a "
+            "source with probeable FPS metadata"
         )
     # A USB camera's JPEG goes to Insight unchanged and is decoded only for the model, in the
     # camera's own sampling: most webcams send 4:2:2 MJPEG, which decodes to NV16, and the model
