@@ -29,7 +29,7 @@ Metadata is sent as `type: "segmentation"` with one `data.segments[]` entry per 
 ## Prerequisites
 
 - `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on the Modalix DevKit, or in a Neat SDK container paired with it.
-- An RTSP H.264, RTSP H.265, RTSP MJPEG, or HTTP MJPEG source and an [Insight](https://developer.sima.ai/software/tools/insight/) URL reachable from the target.
+- An RTSP H.264, RTSP H.265, RTSP MJPEG, or HTTP MJPEG source, or a USB (UVC) MJPEG camera plugged into the DevKit, and an [Insight](https://developer.sima.ai/software/tools/insight/) URL reachable from the target.
 
 ## Install Apps
 
@@ -101,13 +101,23 @@ Set `model.path` to the downloaded package and `model.family` to the family it b
 
 [Insight](https://developer.sima.ai/software/tools/insight/) can host the input stream and render segmentation metadata. Install videos directly from the Insight catalog or through Insight's YouTube support.
 
-In the Insight Web UI, start the required stream and copy its source URL. Use RTSP for H.264 or H.265; for MJPEG, Insight supports both RTSP and HTTP URLs. Set `source.codec` to `h264`/`avc`, `h265`/`hevc`, or `mjpeg`. Decoded frames are encoded as H.264 for Insight output. Use a host and published port that the target can reach, not `localhost` and not an address only Insight's own machine can resolve. Verify the URL from the target before running; the application prints the resolved source and its dimensions on startup.
+In the Insight Web UI, start the required stream and copy its source URL. Use RTSP for H.264 or H.265; for MJPEG, Insight supports both RTSP and HTTP URLs. For RTSP, set `source.rtsp.codec` to `h264`, `h265`, or `mjpeg`. Decoded frames are encoded as H.264 for Insight output. Use a host and published port that the target can reach, not `localhost` and not an address only Insight's own machine can resolve. Verify the URL from the target before running; the application prints the resolved source and its dimensions on startup.
 
 ## Configure
 
-Open `${APP_DIR}/src/common/config.yaml`. Set `model.family`, `model.path`, the source type, codec, and URL, and the Insight host and video and metadata ports.
+Open `${APP_DIR}/src/common/config.yaml`. Set `model.family`, `model.path`, `source.type` and the matching `source.rtsp`, `source.http`, or `source.usb` section (only that section is read), and the Insight host and video and metadata ports.
 
 The source, inference thresholds, and output settings are shared by both families, so switching model family changes only the `model` section. The source supports RTSP H.264, H.265, and MJPEG, plus HTTP MJPEG. Set `output.save_dir` only if you also want sampled annotated images.
+
+To use a USB camera, set `source.type: usb`, `source.usb.camera` to its stable ID, and `source.usb.width`, `source.usb.height`, and `source.usb.fps` to an MJPEG mode the camera lists. List the connected camera IDs and modes on the DevKit:
+
+```bash
+source ~/pyneat/bin/activate
+python3 -c "import pyneat; print(pyneat.usb_camera_ids())"
+v4l2-ctl --list-devices && v4l2-ctl -d /dev/video<N> --list-formats-ext
+```
+
+The camera's own JPEG goes to Insight unchanged as RTP/JPEG, with no re-encoding, so view it with an Insight version that shows JPEG channels. The same JPEG is decoded on the hardware decoder only for the model, in the camera's own sampling: most webcams send 4:2:2 MJPEG, which decodes to NV16, and the model reads it directly. RTP/JPEG carries sizes up to 2040 pixels per side in multiples of 8, so 4K modes are rejected at startup. A 1080p webcam's MJPEG is about 66-90 Mbit/s on the network.
 
 ## Run
 
@@ -164,6 +174,7 @@ writes annotated frames there as it runs, and `saved` counts them.
 - Verify `model.path` and the source URL if startup fails.
 - Verify that `model.family` matches the downloaded package if decoding fails or reports unexpected head shapes.
 - Verify stream reachability if the first frame times out.
+- For a USB camera, an unknown ID or an unsupported mode fails at startup with the connected IDs or the camera's MJPEG modes; close other programs that hold the camera.
 - Verify the Insight host and UDP ports if no output arrives.
 - Set `output.save_dir` and `output.save_every` to save sampled frames.
 

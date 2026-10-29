@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstring>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -151,6 +152,56 @@ bool infer_dims(const simaai::neat::Tensor& t, int& w, int& h) {
     w = static_cast<int>(t.shape[1]);
   }
   return (w > 0 && h > 0);
+}
+
+bool nv16_to_yuy2(const simaai::neat::Tensor& t, cv::Mat& out, std::string& err) {
+  if (t.image_format() != simaai::neat::ImageSpec::PixelFormat::NV16) {
+    err = "expected NV16 tensor";
+    return false;
+  }
+  const simaai::neat::Plane* y = nullptr;
+  const simaai::neat::Plane* uv = nullptr;
+  for (const auto& plane : t.planes) {
+    if (plane.role == simaai::neat::PlaneRole::Y)
+      y = &plane;
+    if (plane.role == simaai::neat::PlaneRole::UV)
+      uv = &plane;
+  }
+  int w = 0;
+  int h = 0;
+  if (!y || !uv || y->strides_bytes.empty() || uv->strides_bytes.empty() || !infer_dims(t, w, h)) {
+    err = "NV16 tensor without Y/UV planes";
+    return false;
+  }
+  // The payload is the whole mapped buffer, so plane offsets index into it.
+  const std::vector<uint8_t> payload = t.copy_payload_bytes();
+  const auto y_stride = static_cast<std::size_t>(y->strides_bytes[0]);
+  const auto uv_stride = static_cast<std::size_t>(uv->strides_bytes[0]);
+  if (static_cast<std::size_t>(uv->byte_offset) + uv_stride * static_cast<std::size_t>(h) >
+      payload.size()) {
+    err = "NV16 payload smaller than its planes";
+    return false;
+  }
+  // Each row keeps its own chroma: Y and UV bytes interleave into packed 4:2:2 (Y0 U0 Y1 V0).
+  out.create(h, w, CV_8UC2);
+  for (int row = 0; row < h; ++row) {
+    const uint8_t* y_row = payload.data() + y->byte_offset + row * y_stride;
+    const uint8_t* uv_row = payload.data() + uv->byte_offset + row * uv_stride;
+    uint8_t* dst = out.ptr(row);
+    for (int x = 0; x < w; ++x) {
+      dst[2 * x] = y_row[x];
+      dst[2 * x + 1] = uv_row[x];
+    }
+  }
+  return true;
+}
+
+bool nv16_to_bgr(const simaai::neat::Tensor& t, cv::Mat& out, std::string& err) {
+  cv::Mat yuy2;
+  if (!nv16_to_yuy2(t, yuy2, err))
+    return false;
+  cv::cvtColor(yuy2, out, cv::COLOR_YUV2BGR_YUY2);
+  return true;
 }
 
 bool nv12_to_bgr(const simaai::neat::Tensor& t, cv::Mat& out, std::string& err) {
