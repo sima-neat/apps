@@ -9,7 +9,7 @@
 namespace face_recog {
 
 struct OverlayConfig {
-    bool  draw_landmarks  = true;
+    bool  draw_landmarks  = false;
     bool  draw_score      = true;
     int   font_scale_x10  = 6;  // cv::FONT_HERSHEY_SIMPLEX scale × 10
     int   bbox_thickness  = 2;
@@ -23,7 +23,7 @@ void draw_overlay(
     const std::vector<MatchResult>&  matches,
     const OverlayConfig&             cfg = {});
 
-// NV12 variant: draws boxes, keypoints, and text labels directly on the NV12 buffer,
+// NV12 variant: draws boxes, text labels, and (if enabled) keypoints directly on the NV12 buffer,
 // avoiding any full-frame color-space conversion. `nv12` is W×H×3/2 bytes, contiguous.
 void draw_overlay_nv12(
     uint8_t*                         nv12, int W, int H,

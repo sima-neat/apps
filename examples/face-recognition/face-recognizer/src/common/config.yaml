@@ -48,7 +48,7 @@ match:
 
 # ── Overlay ───────────────────────────────────────────────────────────────────
 overlay:
-  draw_landmarks:   true
+  draw_landmarks:   false     # C++ only: draw the 5 SCRFD keypoints on each face
   draw_score:       true
 
 # ── Runtime ───────────────────────────────────────────────────────────────────

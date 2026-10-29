@@ -174,6 +174,7 @@ All optional overrides accepted by the C++ binary (`--input`, `--gallery`, `--sc
 | `match.margin` | `0.12` | Raise to 0.15–0.20 when multiple people are enrolled to reduce cross-ID errors |
 | `scrfd.conf_threshold` | `0.65` | Lower to detect smaller or partially-occluded faces |
 | `runtime.recog_interval` | `8` | Frames between re-embeddings (lower = more responsive identity updates) |
+| `overlay.draw_landmarks` | `false` | C++ only: set `true` to draw the 5 SCRFD facial keypoints in the burned-in overlay |
 
 ## Testing
 
