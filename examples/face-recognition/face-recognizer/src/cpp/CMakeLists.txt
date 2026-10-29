@@ -5,7 +5,7 @@ cmake_minimum_required(VERSION 3.16)
 # targets and support libraries using the ExampleModule.cmake helpers.
 if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   project(face-recognizer LANGUAGES CXX)
-  set(CMAKE_CXX_STANDARD 17)
+  set(CMAKE_CXX_STANDARD 20)
   set(CMAKE_CXX_STANDARD_REQUIRED ON)
   set(CMAKE_CXX_EXTENSIONS OFF)
   include(CTest)
@@ -62,8 +62,9 @@ target_link_libraries(face-recognizer
 target_include_directories(face-recognizer
     PRIVATE "${_SELF_DIR}" "${_APPS_ROOT}"
 )
+file(RELATIVE_PATH _SELF_RELATIVE_DIR "${_APPS_ROOT}" "${_SELF_DIR}")
 target_compile_definitions(face-recognizer
-    PRIVATE SIMANEAT_APPS_EXAMPLE_SOURCE_DIR="${_SELF_DIR}"
+    PRIVATE SIMANEAT_APPS_EXAMPLE_SOURCE_DIR="${_SELF_RELATIVE_DIR}"
 )
 
 # ── Tests ─────────────────────────────────────────────────────────────────────

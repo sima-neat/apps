@@ -43,7 +43,7 @@ Run the remaining commands from `prebuilt-apps/`.
 Download the pre-compiled model packages from the Model Zoo:
 
 ```bash
-export MODELZOO_VERSION="2.1.3"
+export MODELZOO_VERSION="3.0.0"
 mkdir -p ${APP_DIR}/models
 sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/scrfd_2.5g_bnkps.mla_mpk.tar.gz" -o ${APP_DIR}/models/
 sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/w600k_r50.surgery_mpk.tar.gz" -o ${APP_DIR}/models/
@@ -183,7 +183,6 @@ Tests require a source build — see [Development From Source](#development-from
 
 - C++ recognition source: `src/cpp/main.cpp`
 - Python recognition source: `src/python/main.py`
-- Enrollment source (C++): `tools/enroll.cpp`
 - Shared runtime files: `src/common/`
 
 The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`; the installed bundle does not include CMake files.

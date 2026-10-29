@@ -161,7 +161,7 @@ int main(int argc, char** argv) {
                 while (ls >> tok) { if (col++ == 3) { zero_face_frames = std::stoi(tok); break; } }
             }
         }
-        if (total_frames <= 0) {
+        if (total_frames != 60) {
             std::cerr << "[FAIL] Detection quality summary not found in output.\n"
                       << "stdout:\n" << r.stdout_text << "\n";
             return 1;
