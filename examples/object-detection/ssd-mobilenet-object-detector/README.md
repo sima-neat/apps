@@ -26,9 +26,11 @@ the recipe-specific priors, class scoring, and non-maximum suppression through
 
 ## Prerequisites
 
-- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
+- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on the Modalix DevKit, or in a Neat SDK container paired with it.
 
 ## Install Apps
+
+Install on the Modalix DevKit, or under `/workspace` in a Neat SDK container paired with it. Only the example itself must run on the DevKit. If the Core and Insight selected by Apps are already installed, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps` to skip reinstalling them. See [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
 
 Install the latest Neat Apps runtime and enter the installed bundle:
 
@@ -42,11 +44,10 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-The tested model is SSD-MobileNetV2 INT8 with tessellation inside the MLA. Download its SDK
-2.1.3 artifact:
+The tested model is SSD-MobileNetV2 INT8 with tessellation inside the MLA. Download it:
 
 ```bash
-export MODELZOO_VERSION="2.1.3"
+export MODELZOO_VERSION="3.0.0"
 mkdir -p models
 cd models
 sima-cli download \
@@ -82,6 +83,24 @@ pip install -r ${APP_DIR}/src/python/requirements.txt
 python3 ${APP_DIR}/src/python/main.py \
   --config ${APP_DIR}/src/common/config.yaml
 ```
+
+## Expected Result
+
+The application prints one line per image with the file it wrote and the number
+of objects found:
+
+```text
+[1/21] 000000081061.jpg -> 000000081061_jpg.png (3 detections)
+[2/21] 000000116439.jpg -> 000000116439_jpg.png (2 detections)
+[3/21] 000000129492.jpg -> 000000129492_jpg.png (3 detections)
+```
+
+`io.output_dir` then holds one annotated PNG per input image; with the packaged
+`assets/datasets/coco` folder that is 21 files. Both implementations print this
+format.
+
+Set `io.detections_json` to also write the class, score and box for every
+detection, which is easier to check than reading the images.
 
 ## Troubleshooting
 

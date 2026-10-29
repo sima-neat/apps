@@ -20,6 +20,12 @@ Runs YOLO26 object detection across many RTSP streams using a host and Modalix P
 
 ![PCIe high-density detector preview](../../../portal/assets/examples/object-detection/pcie-high-density-multi-stream-object-detector/image.png)
 
+## How It Works
+
+The host receives each RTSP stream and sends the encoded video to both Insight and the card. The
+card decodes the video, runs the shared model, and returns detections, which the host publishes to
+Insight as metadata.
+
 ```text
 Host machine                         Modalix PCIe Card
 ============                         ==================
@@ -29,9 +35,6 @@ N x RTSP/H.264  -- encoded video --> N decoders
 Insight metadata <-- BBOX results -- neatpciesink
 ```
 
-The precompiled Apps package provides the card application. Build the host application from this
-repository, then use `run.sh` to start and stop both sides.
-
 ## Prerequisites
 
 - An x86-64 Ubuntu host with the
@@ -39,7 +42,7 @@ repository, then use `run.sh` to start and stop both sides.
   and matching Neat PCIe host development package.
 - A Modalix PCIe Card with matching Neat Core and Internals packages.
 - Passwordless SSH access to the card using `~/.ssh/sima_neat_pcie_ed25519`.
-- 16, 24, or 48 H.264 RTSP sources and an Insight instance reachable from the host.
+- 20, 30, or 60 H.264 RTSP sources and an Insight instance reachable from the host.
 - A source checkout of this Apps repository on the host.
 
 ## Install Apps
@@ -64,7 +67,7 @@ To build the card application yourself, see
 Download the model on the Modalix PCIe Card:
 
 ```bash
-export MODELZOO_VERSION="2.1.3"
+export MODELZOO_VERSION="3.0.0"
 mkdir -p /workspace/models
 cd /workspace/models
 sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26-detection/yolo26n-det-int8-b1.tar.gz"
@@ -82,19 +85,19 @@ On the host, copy the profile closest to the intended workload:
 
 | Profile | Streams | Input |
 | --- | ---: | --- |
-| `config.yaml` | 16 | 1280x720 at 30 FPS |
-| `config-24x720p20fps.yaml` | 24 | 1280x720 at 20 FPS |
-| `config-48x720p10fps.yaml` | 48 | 1280x720 at 10 FPS |
+| `config.yaml` | 20 | 1280x720 at 30 FPS |
+| `config-30x720p20fps.yaml` | 30 | 1280x720 at 20 FPS |
+| `config-60x720p10fps.yaml` | 60 | 1280x720 at 10 FPS |
 
 ```bash
 APP_DIR=examples/object-detection/pcie-high-density-multi-stream-object-detector
-cp "$APP_DIR/src/common/config-48x720p10fps.yaml" "$APP_DIR/src/common/config.local.yaml"
+cp "$APP_DIR/src/common/config-60x720p10fps.yaml" "$APP_DIR/src/common/config.local.yaml"
 ```
 
 Edit `config.local.yaml` and set:
 
 - `model.path` to the absolute model path on the card.
-- `streams` to exactly 16, 24, or 48 RTSP URLs.
+- `streams` to exactly 20, 30, or 60 RTSP URLs.
 - `output.insight.host` to the Insight address.
 - `card.card_id` and `card.queue` if their defaults are not appropriate.
 
@@ -109,10 +112,10 @@ The host application is not precompiled. Install the PCIe host package for the h
 
 ```bash
 # Ubuntu 22.04
-sima-cli neat install core/pciehost/ubuntu22/amd64@v0.4.0
+sima-cli neat install core/pciehost/ubuntu22/amd64@v0.6.0
 
 # Ubuntu 24.04
-sima-cli neat install core/pciehost/ubuntu24/amd64@v0.4.0
+sima-cli neat install core/pciehost/ubuntu24/amd64@v0.6.0
 ```
 
 Build the host application from the Apps repository root:
@@ -143,7 +146,7 @@ SSH, binary, timeout, or runtime-directory options.
 
 - Every active stream continues producing results.
 - Insight shows video and matching detections on the corresponding channels.
-- The 48-stream, 10 FPS profile reaches approximately 480 aggregate FPS after startup.
+- The 60-stream, 10 FPS profile targets approximately 600 aggregate FPS after startup. This rate has not been measured on a PCIe card.
 
 ## Troubleshooting
 
@@ -155,6 +158,45 @@ ssh -i ~/.ssh/sima_neat_pcie_ed25519 sima@10.0.0.2 \
 ```
 
 Do not restart only the host against an old card graph. Stop the launcher and start a new session.
+
+### Stalls and unclean stops
+
+The host application exits with an error when frames are still admitted but no result has
+come back for `runtime.stall_timeout_ms` (default: twice `pcie.result_timeout_ms`). A stalled
+card does not recover on its own: stop the launcher, then reboot the card before starting
+another session. If the host's own teardown exceeds `runtime.teardown_timeout_ms`, it stops
+waiting for the card and exits. Avoid pressing `Ctrl-C` a second time during shutdown: the host
+runs in its own session and the launcher drops its signal handlers while waiting for it, so a
+second interrupt terminates the launcher before it finishes stopping and cleaning up the card,
+leaving the card in the unclean state described below (reboot required).
+
+A card application that does not stop on `SIGINT` is killed. That can leave PCIe endpoint queue
+state behind (`si_pep_get_rqe: No context created for Data work queue`,
+`Ran out of output buffers` in the card `dmesg`), and later sessions may stall or crash the
+card. The launcher records such a stop in `card.dirty` under the card runtime directory and
+refuses to start until the card has been rebooted. Use `--allow-dirty-card` only for debugging.
+
+If the card's kernel crashes, the host driver logs `SoC Kernel Crashed` and the
+`veth-simaai` interface disappears; power-cycle the host to recover the card. The card keeps a
+persistent journal, so the previous boot's kernel log is available afterwards:
+
+```bash
+ssh sima@<card-ethernet-address> journalctl -b -1 -k
+```
+
+### Card memory per profile
+
+Each profile allocates decoder pools and PCIe receive pools from the card's CMA region
+(`CmaTotal` in `/proc/meminfo`, 1.8 GB on the Modalix PCIe Card). Approximate steady-state
+usage measured with `yolo26n-det-int8-b1`:
+
+| Profile | CMA in use |
+| --- | ---: |
+| 20 x 720p30 | Not measured |
+| 30 x 720p20 | Not measured |
+| 60 x 720p10 | Not measured |
+
+Lower `input.decoder_buffers` or `pcie.pool_size` if `CmaFree` on the card approaches zero.
 
 ## Source Files
 

@@ -10,7 +10,7 @@
 | Languages | C++, Python |
 | Status | stable |
 | Binary Name | superpoint-feature-extractor |
-| Model | superpoint / modalix_int8_tessellation_mla |
+| Model | superpoint |
 
 ## Concept
 
@@ -18,19 +18,19 @@ Finds SuperPoint feature points in a video and streams the annotated video to In
 
 ## Preview
 
-Frame from the included TUM RGB-D `freiburg1_desk` sequence:
-
 ![SuperPoint feature overlay](../../../portal/assets/examples/feature-extraction/superpoint-feature-extractor/image.png)
 
 ## Prerequisites
 
-- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported
-  Modalix or DevKit target.
+- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on the Modalix
+  DevKit, or in a Neat SDK container paired with it.
 - Neat Library with SuperPoint BoxDecode support.
 - Insight or another RTP receiver for the annotated output stream.
 - The SuperPoint model package installed below.
 
 ## Install Apps
+
+Install on the Modalix DevKit, or under `/workspace` in a Neat SDK container paired with it. Only the example itself must run on the DevKit. If the Core and Insight selected by Apps are already installed, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps` to skip reinstalling them. See [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
 
 Install the latest Neat Apps runtime and enter the installed bundle:
 
@@ -44,19 +44,17 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-Install the SuperPoint model package from the staging [Neat Model Registry](https://github.com/sima-neat/models/issues/24):
+| Model | Role | Source |
+| --- | --- | --- |
+| `superpoint_mpk.tar.gz` | Default | Direct artifact |
 
 ```bash
-mkdir -p models/superpoint
-sima-cli neat install --stg \
-  models/superpoint@codex/superpoint-model-matrix:latest \
-  --install-dir models/superpoint
-
-cp models/superpoint/superpoint_modalix_int8_tessellation_mla_mpk.tar.gz \
-  models/superpoint_mpk.tar.gz
+export MODELZOO_VERSION="3.0.0"
+mkdir -p models
+cd models
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/superpoint_mpk.tar.gz"
+cd ..
 ```
-
-The commands copy the INT8 MLA model to the path used by the packaged config. The model expects 640x480 grayscale input.
 
 ## Configure
 
@@ -88,6 +86,21 @@ python3 ${APP_DIR}/src/python/main.py \
 
 Both implementations stream the overlay to Insight and print the number of processed frames,
 average feature count, descriptor dimension, and selected video endpoint.
+
+## Expected Result
+
+This application writes nothing to disk; its output is the Insight stream plus a
+single summary line printed when the frame limit is reached:
+
+```text
+frames=200 average_points=331.6 descriptor_dim=256 video_sender=<insight-host>:9000
+```
+
+`frames` should match `runtime.frames`, or the video length when it is `0`.
+`descriptor_dim` should be `256`. For the packaged TUM RGB-D sequence
+`average_points` runs in the low hundreds. An `average_points` near zero means
+the pipeline ran but the model returned almost no features, which is worth
+investigating even though the run exits successfully.
 
 ## Troubleshooting
 

@@ -5,6 +5,8 @@ EXAMPLE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON_DIR="${EXAMPLE_DIR}/src/python"
 DEFAULT_APP_VENV="${EXAMPLE_DIR}/.venv"
 DEFAULT_LOCAL_CONFIG="${EXAMPLE_DIR}/config.local.yaml"
+# shellcheck source=src/common/config_value.sh
+source "${EXAMPLE_DIR}/src/common/config_value.sh"
 
 if [[ -z "${CONFIG_PATH:-}" ]]; then
   if [[ -f "${DEFAULT_LOCAL_CONFIG}" ]]; then
@@ -30,25 +32,36 @@ if [[ -z "${APP_PYTHON:-}" ]]; then
   fi
 fi
 
-# Interpreter of the isolated piper-tts venv — the UI's subprocess TTS worker
+# Interpreter of the isolated piper-tts venv — the backend's subprocess TTS worker
 # uses it for the de/it/no/vi rhasspy voices (piper-tts and piper-plus can't
-# share a venv). Exported so the UI child process inherits it.
+# share a venv). Exported so the backend process inherits it.
 if [[ -z "${PIPERTTS_PYTHON:-}" && -x "${EXAMPLE_DIR}/.venv-pipertts/bin/python" ]]; then
   PIPERTTS_PYTHON="${EXAMPLE_DIR}/.venv-pipertts/bin/python"
 fi
 export PIPERTTS_PYTHON="${PIPERTTS_PYTHON:-}"
+# Supertonic 3 (MLA TTS): the vendored runtime runs from ./.venv-supertonic (see
+# setup.sh); its model files' location is persisted under app.tts.supertonic in
+# the local config, with SUPERTONIC_MODELS_ROOT in the environment overriding.
+# Resolved by resolve_supertonic_env once the config path is final. The backend
+# spawns supertonic_worker.py with the resolved interpreter; when it is absent
+# the engine is simply not offered.
+SUPERTONIC_PYTHON="${SUPERTONIC_PYTHON:-}"
+SUPERTONIC_VENV_EXPLICIT="${SUPERTONIC_VENV:-}"
+SUPERTONIC_VENV="${SUPERTONIC_VENV:-${EXAMPLE_DIR}/.venv-supertonic}"
 SHUTDOWN_GRACE_SECONDS="${SHUTDOWN_GRACE_SECONDS:-10}"
 RAG_WORKER_PATTERN="${PYTHON_DIR}/rag/vectordb_worker.py"
 SERVER_PATTERN="${PYTHON_DIR}/server/main.py"
-UI_PATTERN="${PYTHON_DIR}/ui/main.py"
+API_PATTERN="${PYTHON_DIR}/api/main.py"
+# The backend before src/python/ui/ became api/; still stopped for one release
+# so `./run.sh stop` after an update reaches a backend started before it.
+LEGACY_UI_PATTERN="${PYTHON_DIR}/ui/main.py"
 # PID file for the running instance (enables `./run.sh stop`).
 PID_FILE="${RUN_PID_FILE:-${EXAMPLE_DIR}/.neat-genai-studio.pid}"
+# The running instance records the URL it is actually serving, so `status`
+# reports that, not a URL recomputed from its own (possibly different)
+# CONFIG_PATH.
+URL_FILE="${PID_FILE%.pid}.url"
 STOP_TIMEOUT="${STOP_TIMEOUT:-20}"
-# Terminal chat instead of the web UI (set by `./run.sh --cli`).
-CLI_MODE="${CLI_MODE:-0}"
-CLI_EXTRA_ARGS=()   # flags forwarded to cli/main.py (e.g. --chat, --download, --benchmark)
-# In CLI mode the model server's logs go here (kept off the chat terminal).
-SERVER_LOG="${SERVER_LOG:-${EXAMPLE_DIR}/.neat-genai-server.log}"
 
 # ---------------------------------------------------------------------------
 # Pretty output: the Neat sparkle banner + colourised status lines. Everything
@@ -119,18 +132,48 @@ section() {
 }
 
 # Best-effort browser URL from the app.web block of the config (scheme/host/port).
-web_url() {
-  local host port https scheme ip
-  host="$(awk '/^  web:/{f=1;next} f&&/^  [a-z]/{f=0} f&&/host:/{print $2;exit}' "${CONFIG_PATH}" 2>/dev/null || true)"
-  port="$(awk '/^  web:/{f=1;next} f&&/^  [a-z]/{f=0} f&&/port:/{print $2;exit}' "${CONFIG_PATH}" 2>/dev/null || true)"
-  https="$(awk '/^  web:/{f=1;next} f&&/^  [a-z]/{f=0} f&&/https:/{print $2;exit}' "${CONFIG_PATH}" 2>/dev/null || true)"
+web_config_value() { web_config_scalar "${CONFIG_PATH}" "$1"; }
+
+# A host as it must appear in a URL: IPv6 literals in brackets.
+url_host() {
+  local h="$1"
+  if [[ "${h}" == *:* && "${h}" != \[*\] ]]; then printf '[%s]' "${h}"; else printf '%s' "${h}"; fi
+}
+# True for the "listen on every interface" hosts (or none configured).
+wildcard_host() { [[ -z "$1" || "$1" == "0.0.0.0" || "$1" == "::" || "$1" == "[::]" ]]; }
+
+# _web_url_for <host-or-empty>: the backend URL with that host (scheme and port from
+# the config). Returns 1 when the config has no port.
+_web_url_for() {
+  local port https scheme
+  port="$(web_config_value port)"
+  https="$(web_config_value https)"
   [[ -n "${port}" ]] || return 1
-  scheme="http"; [[ "${https}" == "true" ]] && scheme="https"
-  if [[ -z "${host}" || "${host}" == "0.0.0.0" || "${host}" == "::" ]]; then
-    ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  # https defaults to true in shared.config when the key is absent.
+  scheme="https"; [[ -n "${https}" ]] && ! config_true "${https}" && scheme="http"
+  printf '%s://%s:%s' "${scheme}" "$(url_host "$1")" "${port}"
+}
+
+# The backend URL to give other machines (Insight): the configured host, or this
+# board's first LAN address (IPv4 preferred) when it listens on every interface.
+web_url() {
+  local host ip
+  host="$(web_config_value host)"
+  if wildcard_host "${host}"; then
+    ip="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -v ':' | grep -m1 . || true)"
+    [[ -n "${ip}" ]] || ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
     host="${ip:-localhost}"
   fi
-  printf '%s://%s:%s' "${scheme}" "${host}" "${port}"
+  _web_url_for "${host}"
+}
+
+# The backend URL on this board: localhost when it listens on every interface
+# (it keeps working if the IP changes), else the configured host.
+local_web_url() {
+  local host
+  host="$(web_config_value host)"
+  wildcard_host "${host}" && host="localhost"
+  _web_url_for "${host}"
 }
 
 # Aligned "label   value" line for the System section.
@@ -197,6 +240,7 @@ system_info() {
   _kv "neat-llima" "${llima_ver:-unknown}"
   [[ -n "${runtime_ver}" ]] && _kv "neat-runtime" "${runtime_ver}"
   _kv "python" "${py_ver:-unknown}"
+  _kv "supertonic" "$(supertonic_installed && echo "models ${SUPERTONIC_MODELS_ROOT_RESOLVED:-}" || echo "not installed (./setup.sh installs it)")"
   _kv "host" "$(uname -sm 2>/dev/null || echo unknown)"
 }
 
@@ -204,12 +248,10 @@ usage() {
   banner
   cat <<'USAGE'
 Usage:
-  ./run.sh            Start the model server and web UI (Ctrl+C to stop).
+  ./run.sh            Start the model server and the Studio backend: the API
+                      Insight's GenAI tab calls (chat, speech, transcription,
+                      translation, voices, models, RAG, /health). Ctrl+C stops.
                       Runs ./setup.sh automatically on the first launch.
-  ./run.sh --cli      Start the model server and a terminal chat (no web UI).
-  ./run.sh --chat [MODEL]      Terminal chat; load MODEL and chat (skips the menu).
-  ./run.sh --download [REPO]   Terminal chat; download REPO (or prompt) first.
-  ./run.sh --benchmark [MODEL] Terminal chat; benchmark MODEL (or prompt). --bench.
   ./run.sh stop       Cleanly stop a running instance.
   ./run.sh status     Report whether the studio is running.
   ./run.sh update     Update to the latest version (preserves models, config,
@@ -221,6 +263,9 @@ Environment:
   AUTO_SETUP=0        Do not auto-run ./setup.sh on first launch (error instead).
   NEAT_APPS_BRANCH    Branch to pull for `update` (default: main).
   UPDATE_DEPS=1       Run full setup.sh dependency refresh during `update`.
+  BACKEND_CORS_ORIGINS
+                      Origins (comma-separated, or *) whose browser pages may
+                      call the API (CORS). Default: app.web.cors_origins.
 USAGE
 }
 
@@ -228,9 +273,14 @@ do_status() {
   if [[ -f "${PID_FILE}" ]]; then
     local pid; pid="$(cat "${PID_FILE}" 2>/dev/null || true)"
     if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
+      # Report the URL the RUNNING instance recorded: recomputing it here would
+      # describe this invocation's config, which a CONFIG_PATH override makes a
+      # different (possibly unreachable) endpoint. Fall back for an instance
+      # started before the url file existed.
+      local url; url="$(cat "${URL_FILE}" 2>/dev/null || true)"
+      [[ -n "${url}" ]] || url="$(web_url || true)"
       ok "Neat GenAI Studio is running (pid ${pid})."
-      local url; url="$(web_url || true)"
-      [[ -n "${url}" ]] && info "Web UI: ${C_ACCENT}${url}${C_RESET}"
+      [[ -n "${url}" ]] && info "API: ${C_ACCENT}${url}${C_RESET}  health: ${C_ACCENT}${url}/health${C_RESET}"
       return 0
     fi
   fi
@@ -254,24 +304,86 @@ do_stop() {
         warn "Not responding after ${STOP_TIMEOUT}s; sending KILL…"
         kill -KILL "${pid}" 2>/dev/null || true
       fi
-      rm -f "${PID_FILE}"
+      rm -f "${PID_FILE}" "${URL_FILE}"
       ok "Stopped."
       return 0
     fi
-    rm -f "${PID_FILE}"
+    rm -f "${PID_FILE}" "${URL_FILE}"
   fi
   # No recorded instance — best-effort cleanup of any stray studio processes.
   info "No running instance recorded; cleaning up any stray processes…"
   if command -v pkill >/dev/null 2>&1; then
     pkill -TERM -f "${SERVER_PATTERN}" 2>/dev/null || true
-    pkill -TERM -f "${UI_PATTERN}" 2>/dev/null || true
+    pkill -TERM -f "${API_PATTERN}" 2>/dev/null || true
+    pkill -TERM -f "${LEGACY_UI_PATTERN}" 2>/dev/null || true
     pkill -TERM -f "${RAG_WORKER_PATTERN}" 2>/dev/null || true
     sleep 2
     pkill -KILL -f "${SERVER_PATTERN}" 2>/dev/null || true
-    pkill -KILL -f "${UI_PATTERN}" 2>/dev/null || true
+    pkill -KILL -f "${API_PATTERN}" 2>/dev/null || true
+    pkill -KILL -f "${LEGACY_UI_PATTERN}" 2>/dev/null || true
     pkill -KILL -f "${RAG_WORKER_PATTERN}" 2>/dev/null || true
   fi
   ok "Done."
+}
+
+# Supertonic paths: environment > app.tts.supertonic in the config > defaults.
+# Only values that are set are exported, so the backend applies the same precedence.
+_supertonic_config_value() { supertonic_config_value "${CONFIG_PATH}" "$1"; }
+resolve_supertonic_env() {
+  local models legacy
+  # Pre-vendoring config/env: everything lived under app_root (<app_root>/models
+  # and the runtime venv <app_root>/.venv), until setup.sh migrates the install.
+  legacy="${SUPERTONIC_APP_ROOT:-$(_supertonic_config_value app_root)}"
+  models="${SUPERTONIC_MODELS_ROOT:-$(_supertonic_config_value models_root)}"
+  if [[ -z "${models}" && -n "${legacy}" ]]; then
+    models="${legacy}/models"
+  fi
+  [[ -n "${models}" ]] && export SUPERTONIC_MODELS_ROOT="${models}"
+  # The venv setup.sh built (persisted as app.tts.supertonic.venv when it was
+  # not the default); SUPERTONIC_VENV / SUPERTONIC_PYTHON in the environment win.
+  if [[ -z "${SUPERTONIC_VENV_EXPLICIT}" ]]; then
+    local venv
+    venv="$(_supertonic_config_value venv)"
+    [[ -n "${venv}" ]] && SUPERTONIC_VENV="${venv}"
+  fi
+  if [[ -z "${SUPERTONIC_PYTHON}" && -x "${SUPERTONIC_VENV}/bin/python" ]]; then
+    SUPERTONIC_PYTHON="${SUPERTONIC_VENV}/bin/python"
+  fi
+  # An install from before the runtime was vendored has no new venv yet: keep
+  # using its <app_root>/.venv (it has numpy/onnxruntime/pyneat; the worker
+  # imports the vendored package) so updating never drops the default engine.
+  if [[ -z "${SUPERTONIC_PYTHON}" && -n "${legacy}" && -x "${legacy}/.venv/bin/python" ]]; then
+    SUPERTONIC_PYTHON="${legacy}/.venv/bin/python"
+  fi
+  export SUPERTONIC_PYTHON SUPERTONIC_VENV
+  # Effective path (default applied) for run.sh's own use: the banner and --clean.
+  SUPERTONIC_MODELS_ROOT_RESOLVED="${models:-/media/nvme/supertonic-tts/models}"
+}
+# Same test as supertonic_tts.available(): runtime interpreter plus the two
+# marker model files (setup.sh verifies every file's checksum).
+supertonic_installed() {
+  [[ -n "${SUPERTONIC_PYTHON}" \
+     && -f "${SUPERTONIC_MODELS_ROOT_RESOLVED}/supertonic-3/onnx/tts.json" \
+     && -f "${SUPERTONIC_MODELS_ROOT_RESOLVED}/supertonic-3-sima/supertonic_vector_field_sima_mpk.tar.gz" ]]
+}
+# What a dependency refresh would change for Supertonic: its pinned requirements
+# and the reviewed model revisions/checksums in setup.sh.
+supertonic_fingerprint() {
+  {
+    cat "${PYTHON_DIR}/requirements-supertonic.txt" 2>/dev/null
+    grep -E '^SUPERTONIC_(UPSTREAM|SIMA)_HF_REVISION=|^[0-9a-f]{64}  supertonic-3' "${EXAMPLE_DIR}/setup.sh" 2>/dev/null
+  } | sha256sum | cut -d' ' -f1
+}
+# Desktop icons and menu entries an earlier setup.sh installed for this
+# checkout. They started the removed web UI through src/common/desktop-launch.sh,
+# so they no longer work.
+old_desktop_entries() {
+  local t
+  for t in "${XDG_DATA_HOME:-${HOME}/.local/share}/applications/neat-genai-studio.desktop" \
+           "${XDG_DESKTOP_DIR:-${HOME}/Desktop}/neat-genai-studio.desktop"; do
+    [[ -f "$t" ]] && grep -qF "${EXAMPLE_DIR}/" "$t" && printf '%s\n' "$t"
+  done
+  return 0
 }
 
 # Remove app-generated data (venvs, generated config, RAG db, downloaded TTS
@@ -285,22 +397,44 @@ do_clean() {
     do_stop >/dev/null 2>&1 || true
   fi
 
+  resolve_supertonic_env
   local -a targets=() t
+  # The Supertonic venv under the example directory is app-generated and always
+  # removed. One configured elsewhere (SUPERTONIC_VENV / app.tts.supertonic.venv)
+  # and the downloaded model files are kept unless CLEAN_SUPERTONIC=1.
+  case "${SUPERTONIC_VENV}/" in
+    "${EXAMPLE_DIR}"/*) [[ -e "${SUPERTONIC_VENV}" ]] && targets+=("${SUPERTONIC_VENV}") ;;
+    *)
+      if [[ "${CLEAN_SUPERTONIC:-0}" == "1" ]]; then
+        [[ -e "${SUPERTONIC_VENV}" ]] && targets+=("${SUPERTONIC_VENV}")
+      elif [[ -e "${SUPERTONIC_VENV}" ]]; then
+        info "Keeping the Supertonic venv outside this directory: ${SUPERTONIC_VENV} (CLEAN_SUPERTONIC=1 removes it)."
+      fi ;;
+  esac
+  if [[ "${CLEAN_SUPERTONIC:-0}" == "1" && -e "${SUPERTONIC_MODELS_ROOT_RESOLVED}" ]]; then
+    targets+=("${SUPERTONIC_MODELS_ROOT_RESOLVED}")
+  fi
   for t in \
     "${DEFAULT_APP_VENV}" \
     "${EXAMPLE_DIR}/.venv-pipertts" \
     "${DEFAULT_LOCAL_CONFIG}" \
+    "${DEFAULT_LOCAL_CONFIG}.bak" \
     "${PID_FILE}" \
+    "${PYTHON_DIR}/api/milvus.db" \
+    "${PYTHON_DIR}/api/milvus.meta.json" \
+    "${PYTHON_DIR}/api/assets/piper-plus" \
+    "${PYTHON_DIR}/api/assets/mms-tts-kor" \
     "${PYTHON_DIR}/ui/milvus.db" \
     "${PYTHON_DIR}/ui/milvus.meta.json" \
-    "${PYTHON_DIR}/ui/assets/piper-plus" \
-    "${PYTHON_DIR}/ui/assets/mms-tts-kor"; do
+    "${PYTHON_DIR}/ui/assets"; do
     [[ -e "$t" ]] && targets+=("$t")
   done
+  # A desktop icon / menu entry an earlier setup.sh installed for this checkout.
+  while IFS= read -r t; do targets+=("$t"); done < <(old_desktop_entries)
   # Downloaded rhasspy .onnx voices (committed .onnx.json configs are kept),
   # __pycache__ dirs, and any *.log files the app produced.
   while IFS= read -r -d '' t; do targets+=("$t"); done \
-    < <(find "${PYTHON_DIR}/ui/assets" -maxdepth 1 -name '*.onnx' -print0 2>/dev/null)
+    < <(find "${PYTHON_DIR}/api/assets" -maxdepth 1 -name '*.onnx' -print0 2>/dev/null)
   while IFS= read -r -d '' t; do targets+=("$t"); done \
     < <(find "${PYTHON_DIR}" -type d -name '__pycache__' -print0 2>/dev/null)
   while IFS= read -r -d '' t; do targets+=("$t"); done \
@@ -321,6 +455,9 @@ do_clean() {
   local catalog; catalog="$(sed -n 's/^[[:space:]]*catalog_dir:[[:space:]]*\(.*\)/\1/p' \
     "${CONFIG_PATH}" 2>/dev/null | head -n1)"
   [[ -n "${catalog}" ]] && info "Downloaded models under ${C_DIM}${catalog}${C_RESET} are kept."
+  if [[ "${CLEAN_SUPERTONIC:-0}" != "1" && -e "${SUPERTONIC_MODELS_ROOT_RESOLVED}" ]]; then
+    info "Supertonic models under ${C_DIM}${SUPERTONIC_MODELS_ROOT_RESOLVED}${C_RESET} are kept (CLEAN_SUPERTONIC=1 removes them)."
+  fi
 
   if [[ "${yes}" != "-y" && "${yes}" != "--yes" && "${CLEAN_YES:-0}" != "1" ]]; then
     printf '   Remove these? [y/N] '
@@ -341,8 +478,49 @@ do_clean() {
 # get-example.sh) it re-fetches the release archive and mirrors the source. Set
 # NEAT_APPS_BRANCH chooses a branch (default main); UPDATE_DEPS=1 refreshes only
 # the Python dependencies.
+# src/python/ui/ became src/python/api/. An update keeps the install's own files
+# (voices, RAG database, uploads, logs) where they were, so the first start
+# after it moves them into api/. A file api/ already has is dropped from ui/
+# when identical, otherwise left there and reported. ui/tts/ holds the
+# split_voices.py shim the previous run.sh calls during the update, so it stays.
+# Remove after one release, with that shim.
+migrate_legacy_ui_dir() {
+  local old="${PYTHON_DIR}/ui" new="${PYTHON_DIR}/api" src rel moved=0
+  [[ -d "${old}" ]] || return 0
+  # Regenerated on start, never the install's own data.
+  find "${old}" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true
+  rm -f "${old}/.milvus.db.lock"
+  while IFS= read -r -d '' src; do
+    rel="${src#"${old}"/}"
+    if [[ -e "${new}/${rel}" ]]; then
+      cmp -s "${src}" "${new}/${rel}" && rm -f "${src}"
+      continue
+    fi
+    mkdir -p "$(dirname "${new}/${rel}")" && mv "${src}" "${new}/${rel}" && moved=$((moved + 1))
+  done < <(find "${old}" -path "${old}/tts" -prune -o \( -type f -o -type l \) -print0)
+  find "${old}" -depth -type d -empty -delete 2>/dev/null || true
+  if [[ -n "$(find "${old}" -path "${old}/tts" -prune -o \( -type f -o -type l \) -print 2>/dev/null)" ]]; then
+    warn "src/python/ui/ is now src/python/api/; these files were left in ui/ because api/ has a different copy:"
+    find "${old}" -path "${old}/tts" -prune -o \( -type f -o -type l \) -print | sed "s|^${PYTHON_DIR}/|    |" >&2
+    warn "Remove src/python/ui/ once you have kept anything you need from it."
+  elif [[ "${moved}" -gt 0 ]]; then
+    ok "Moved ${moved} file(s) from src/python/ui/ to src/python/api/ (the folder was renamed)."
+  fi
+}
+
+# Where the installed voices are: an update from before the ui/ -> api/ rename
+# leaves them in ui/assets until the next start moves them (migrate_legacy_ui_dir).
+voice_assets_dir() {
+  if [[ -d "${PYTHON_DIR}/ui/assets" ]]; then
+    printf '%s\n' "${PYTHON_DIR}/ui/assets"
+  else
+    printf '%s\n' "${PYTHON_DIR}/api/assets"
+  fi
+}
+
 migrate_piper_voices() {
-  local assets="${PYTHON_DIR}/ui/assets" py voice encoder decoder needs_split=0
+  local assets py voice encoder decoder needs_split=0
+  assets="$(voice_assets_dir)"
   py="${PIPERTTS_PYTHON:-${EXAMPLE_DIR}/.venv-pipertts/bin/python}"
   for voice in "${assets}"/*.onnx; do
     [[ -e "${voice}" ]] || continue
@@ -365,11 +543,13 @@ migrate_piper_voices() {
   if ! "${py}" -c "import onnx" >/dev/null 2>&1; then
     "${py}" -m pip install "onnx>=1.17,<2" || return 1
   fi
-  "${py}" "${PYTHON_DIR}/split_voices.py" "${assets}"
+  "${py}" "${PYTHON_DIR}/api/tts/split_voices.py" "${assets}"
 }
 
 do_update() {
   local branch="${NEAT_APPS_BRANCH:-main}"
+  local supertonic_before
+  supertonic_before="$(supertonic_fingerprint)"
   if do_status >/dev/null 2>&1; then
     warn "The studio is running — restart it (./run.sh stop, then start) after updating."
   fi
@@ -407,24 +587,74 @@ do_update() {
     else
       errln "curl or wget is required to update."; rm -rf "${tmp}"; return 1
     fi
-    root="$(tar -tzf "${tmp}/src.tar.gz" 2>/dev/null | head -1 | cut -d/ -f1)"
+    # Read the whole listing (awk, not head/grep -q): under pipefail, a reader
+    # that exits early kills tar with SIGPIPE and the update aborts with 141.
+    root="$(tar -tzf "${tmp}/src.tar.gz" 2>/dev/null | awk -F/ 'NR == 1 { print $1 }')"
     ex_path="${root}/examples/genai/neat-genai-studio"
-    if ! tar -tzf "${tmp}/src.tar.gz" 2>/dev/null | grep -qxF "${ex_path}/"; then
+    if ! tar -tzf "${tmp}/src.tar.gz" 2>/dev/null | grep -xF "${ex_path}/" >/dev/null; then
       errln "neat-genai-studio not found in the archive (branch ${branch})."
       rm -rf "${tmp}"; return 1
     fi
     tar -xzf "${tmp}/src.tar.gz" -C "${tmp}" "${ex_path}" \
       || { errln "Extract failed."; rm -rf "${tmp}"; return 1; }
     step "Applying update (keeping your models, venvs, config and RAG db)…"
+    # The Supertonic venv and models root are configurable and may be pointed at
+    # a non-default directory INSIDE the example, where --delete-delay would
+    # erase them — a custom runtime and potentially gigabytes of models — while
+    # this step claims to keep them. Resolve the configured paths and exclude any
+    # that fall under EXAMPLE_DIR, on top of the default locations below.
+    # Resolve the persisted paths FIRST: they are only populated by
+    # resolve_supertonic_env, and reading them unset aborts under `set -u` —
+    # which would break the documented update rather than protect anything. It
+    # also picks up a custom venv recorded only in config.local.yaml.
+    resolve_supertonic_env
+    local -a keep=()
+    local cfg_path abs rel
+    for cfg_path in "${SUPERTONIC_VENV:-}" "${SUPERTONIC_MODELS_ROOT:-}"; do
+      [[ -n "${cfg_path}" ]] || continue
+      # Resolve without requiring the directory to exist yet; `local x=$(...)`
+      # always returns 0, so the status is checked separately.
+      abs=""
+      if [[ -d "${cfg_path}" ]]; then
+        abs="$(cd "${cfg_path}" 2>/dev/null && pwd -P)" || abs=""
+      elif [[ -d "$(dirname "${cfg_path}")" ]]; then
+        abs="$(cd "$(dirname "${cfg_path}")" 2>/dev/null && pwd -P)" || abs=""
+        [[ -n "${abs}" ]] && abs="${abs}/$(basename "${cfg_path}")"
+      else
+        abs="${cfg_path}"
+      fi
+      [[ -n "${abs}" ]] || continue
+      case "${abs}" in
+        "${EXAMPLE_DIR}"/*)
+          rel="${abs#"${EXAMPLE_DIR}"/}"
+          keep+=( "--exclude=/${rel}/" )
+          info "Keeping configured path: ${C_DIM}${rel}${C_RESET}"
+          ;;
+      esac
+    done
     # Mirror tracked source so files deleted by a release disappear locally.
-    # Explicitly exclude every install-owned path from transfer and deletion.
+    # Explicitly exclude every install-owned path from transfer and deletion,
+    # in ui/ too until an install's first start moves its files to api/.
     rsync -a --delete-delay --delay-updates \
+      ${keep[@]+"${keep[@]}"} \
       --exclude='/.venv/' \
       --exclude='/.venv-pipertts/' \
+      --exclude='/.venv-supertonic/' \
       --exclude='/config.local.yaml' \
+      --exclude='/config.local.yaml.bak' \
       --exclude='/.local-certs/' \
       --exclude='/.neat-genai-studio.pid' \
+      --exclude='/.neat-genai-studio.mode' \
+      --exclude='/.neat-genai-studio.url' \
       --exclude='*.log' \
+      --exclude='/src/python/api/uploads/' \
+      --exclude='/src/python/api/.milvus.db.lock' \
+      --exclude='/src/python/api/milvus.db' \
+      --exclude='/src/python/api/milvus.meta.json' \
+      --exclude='/src/python/api/assets/*.onnx' \
+      --exclude='/src/python/api/assets/*.onnx.json' \
+      --exclude='/src/python/api/assets/piper-plus/' \
+      --exclude='/src/python/api/assets/mms-tts-kor/' \
       --exclude='/src/python/ui/uploads/' \
       --exclude='/src/python/ui/.milvus.db.lock' \
       --exclude='/src/python/ui/milvus.db' \
@@ -444,8 +674,15 @@ do_update() {
   # model, voice, config and RAG stages.
   if [[ "${UPDATE_DEPS:-0}" == "0" ]]; then
     info "Python dependency refresh skipped (set UPDATE_DEPS=1 to enable it)."
+    if [[ "$(supertonic_fingerprint)" != "${supertonic_before}" ]]; then
+      warn "This update changes the Supertonic requirements or model revisions; run UPDATE_DEPS=1 ./run.sh update (or ./setup.sh) to apply them."
+    fi
   else
     step "Refreshing Python dependencies…"
+    # setup.sh must refresh the Supertonic runtime this installation actually
+    # uses: hand it the persisted venv and models root (config.local.yaml),
+    # not its defaults, unless the environment already names them.
+    resolve_supertonic_env
     if "${EXAMPLE_DIR}/setup.sh" --dependencies-only; then
       ok "Python dependencies refreshed."
     else
@@ -453,6 +690,12 @@ do_update() {
       return 1
     fi
   fi
+  # A git update removes files that are no longer tracked, such as the voice
+  # configs now downloaded by setup.sh: fetch any missing file of a voice that
+  # is still installed, so it keeps showing up.
+  step "Checking the installed voices…"
+  python3 "${PYTHON_DIR}/api/tts/voice_catalog.py" repair --assets "$(voice_assets_dir)" \
+    || warn "Some voice files could not be restored; run ./setup.sh to reinstall the voices."
   migrate_piper_voices || { errln "Piper voice migration failed."; return 1; }
   ok "Update complete."
 }
@@ -463,23 +706,22 @@ case "${1:-run}" in
   --clean|clean) do_clean "${2:-}"; exit 0 ;;
   update|--update|upgrade) do_update; exit 0 ;;
   -h|--help|help) usage; exit 0 ;;
-  --cli|cli) CLI_MODE=1 ;;   # fall through to launch, then run the terminal chat
-  # CLI shortcuts: launch the terminal chat straight into a mode. An optional
-  # second argument (a model name, or HF repo for download) is forwarded too.
-  --chat|chat)
-    CLI_MODE=1; CLI_EXTRA_ARGS+=(--chat)
-    if [[ -n "${2:-}" ]]; then CLI_EXTRA_ARGS+=("$2"); fi ;;
-  --download|download|dl)
-    CLI_MODE=1; CLI_EXTRA_ARGS+=(--download)
-    if [[ -n "${2:-}" ]]; then CLI_EXTRA_ARGS+=("$2"); fi ;;
-  --benchmark|--bench|benchmark|bench)
-    CLI_MODE=1; CLI_EXTRA_ARGS+=(--benchmark)
-    if [[ -n "${2:-}" ]]; then CLI_EXTRA_ARGS+=("$2"); fi ;;
   run|start) ;;  # fall through to launch
   *) errln "unknown command: $1"; usage; exit 2 ;;
 esac
 
 banner
+
+# An icon from an earlier setup.sh would start the removed web UI: remove it.
+while IFS= read -r t; do rm -f "$t" && info "Removed an old desktop icon: $t"; done < <(old_desktop_entries)
+
+# Move an updated install's files out of the old ui/ folder before setup and
+# the Piper voice preparation use them, but never under a running Studio (the
+# call after the stale-process cleanup below covers that case).
+if ! do_status >/dev/null 2>&1 \
+     && ! { command -v pgrep >/dev/null 2>&1 && pgrep -f "${API_PATTERN}|${LEGACY_UI_PATTERN}" >/dev/null 2>&1; }; then
+  migrate_legacy_ui_dir
+fi
 
 # First launch: if setup.sh hasn't created the app venv (and local config) yet,
 # run it now so `./run.sh` works out of the box. AUTO_SETUP=0 opts out.
@@ -518,6 +760,8 @@ if [[ ! -f "${CONFIG_PATH}" ]]; then
 fi
 info "Config: ${C_DIM}${CONFIG_PATH}${C_RESET}"
 
+resolve_supertonic_env
+
 # `neat` runs an online update check, so allow skipping this with SHOW_SYSTEM_INFO=0.
 if [[ "${SHOW_SYSTEM_INFO:-1}" != "0" ]]; then
   section "System"
@@ -553,16 +797,18 @@ finally:
 }
 
 # Stop stale Studio processes from a previous (e.g. crashed) run and wait for
-# the OpenAI port to become available. Do not touch the board runtime or restart
-# the MLA dispatcher during normal application startup.
+# the OpenAI port to become available. Do not touch the board runtime during
+# normal application startup.
 prepare_clean_start() {
   step "Clearing stale Neat GenAI Studio processes…"
   if command -v pkill >/dev/null 2>&1; then
     pkill -TERM -f "${SERVER_PATTERN}" 2>/dev/null || true
-    pkill -TERM -f "${UI_PATTERN}" 2>/dev/null || true
+    pkill -TERM -f "${API_PATTERN}" 2>/dev/null || true
+    pkill -TERM -f "${LEGACY_UI_PATTERN}" 2>/dev/null || true
     sleep 1
     pkill -KILL -f "${SERVER_PATTERN}" 2>/dev/null || true
-    pkill -KILL -f "${UI_PATTERN}" 2>/dev/null || true
+    pkill -KILL -f "${API_PATTERN}" 2>/dev/null || true
+    pkill -KILL -f "${LEGACY_UI_PATTERN}" 2>/dev/null || true
   fi
   stop_stale_rag_worker
 
@@ -618,7 +864,7 @@ cleanup() {
   step "Shutting down Neat GenAI Studio…"
 
   # Graceful: both Python entrypoints handle SIGTERM — the model server releases
-  # its models on the MLA and the UI stops the RAG worker before exiting.
+  # its models on the MLA and the backend stops the RAG worker before exiting.
   signal_process_groups TERM
 
   local deadline=$((SECONDS + SHUTDOWN_GRACE_SECONDS))
@@ -635,15 +881,8 @@ cleanup() {
   for pid in "${pids[@]}"; do
     wait "${pid}" 2>/dev/null || true
   done
-  # In --cli mode the watchdog may have relaunched the model server under a new
-  # process group (not in our remembered groups) — sweep any stray one.
-  if [[ "${CLI_MODE}" == "1" ]] && command -v pkill >/dev/null 2>&1; then
-    pkill -TERM -f "${SERVER_PATTERN}" 2>/dev/null || true
-    sleep 1
-    pkill -KILL -f "${SERVER_PATTERN}" 2>/dev/null || true
-  fi
   stop_stale_rag_worker
-  rm -f "${PID_FILE}"
+  rm -f "${PID_FILE}" "${URL_FILE}"
   ok "Neat GenAI Studio stopped."
 }
 
@@ -656,37 +895,57 @@ if [[ -f "${PID_FILE}" ]]; then
     info "Run './run.sh stop' first, or './run.sh status' to check."
     exit 1
   fi
-  rm -f "${PID_FILE}"
+  rm -f "${PID_FILE}" "${URL_FILE}"
 fi
 
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+# Closing the terminal window stops the Studio cleanly instead of leaving the
+# setsid'd processes behind.
+trap 'exit 129' HUP
 
 # Record this instance so `./run.sh stop` can find it (removed by cleanup).
 echo "$$" > "${PID_FILE}"
-# Expose the supervisor PID + PID file to the UI so it can offer a GUI "Shut down"
-# button (it SIGTERMs this process, which runs cleanup — same as `./run.sh stop`).
+_self_url="$(local_web_url || true)"
+[[ -n "${_self_url}" ]] && printf '%s\n' "${_self_url}" > "${URL_FILE}"
+# Expose the supervisor PID + PID file to the backend for POST /shutdown (it
+# SIGTERMs this process, which runs cleanup — same as `./run.sh stop`).
 export NEAT_RUN_PID="$$"
 export RUN_PID_FILE="${PID_FILE}"
 
+# The model server runs in the Neat environment (PYNEAT_PYTHON), which may not
+# carry PyYAML (Platform 3.0's ~/pyneat does not). The app's own Python converts
+# the YAML config to JSON for it, so the Neat environment is never modified.
+SERVER_CONFIG_JSON="${EXAMPLE_DIR}/.neat-genai-server-config.json"
+write_server_config() {
+  "${APP_PYTHON}" - "${CONFIG_PATH}" "${SERVER_CONFIG_JSON}" <<'YAML_TO_JSON'
+import json
+import sys
+
+import yaml
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    config = yaml.safe_load(source) or {}
+with open(sys.argv[2], "w", encoding="utf-8") as target:
+    json.dump(config, target)
+YAML_TO_JSON
+}
+
 launch_server() {
   step "Starting the Neat model server (OpenAI-compatible)…"
-  # In CLI mode the model server shares the terminal with the interactive chat,
-  # so its logs would land on the "you ▸" prompt. Send them to a log file
-  # instead; the CLI drives the server over HTTP and doesn't need its stdout.
-  if [[ "${CLI_MODE}" == "1" ]]; then
-    setsid "${PYNEAT_PYTHON}" "${PYTHON_DIR}/server/main.py" --config "${CONFIG_PATH}" \
-      >"${SERVER_LOG}" 2>&1 &
-  else
-    setsid "${PYNEAT_PYTHON}" "${PYTHON_DIR}/server/main.py" --config "${CONFIG_PATH}" &
+  if ! write_server_config; then
+    errln "Could not read ${CONFIG_PATH} with ${APP_PYTHON}; run ./setup.sh first."
+    return 1
   fi
+  setsid "${PYNEAT_PYTHON}" "${PYTHON_DIR}/server/main.py" --config "${SERVER_CONFIG_JSON}" &
   server_pid="$!"
   pids[0]="${server_pid}"
   remember_process_group "${server_pid}"
 }
 
 prepare_clean_start
+migrate_legacy_ui_dir
 
 section "Model Server"
 launch_server
@@ -701,38 +960,26 @@ if ! child_running "${server_pid}"; then
   exit "${status}"
 fi
 
-# CLI mode: skip the web UI and run an interactive terminal chat in the
-# foreground against the model server we just started. When it exits, the EXIT
-# trap tears the model server down.
-if [[ "${CLI_MODE}" == "1" ]]; then
-  section "Terminal chat"
-  step "Launching the CLI — type ${C_BOLD}/help${C_RESET} for commands, ${C_BOLD}/quit${C_RESET} to exit."
-  info "Model server logs → ${C_DIM}${SERVER_LOG}${C_RESET}"
-  printf '\n'
-  trap - INT            # let the Python CLI own Ctrl+C (abort a reply, not exit)
-  "${APP_PYTHON}" "${PYTHON_DIR}/cli/main.py" --config "${CONFIG_PATH}" \
-    ${CLI_EXTRA_ARGS[@]+"${CLI_EXTRA_ARGS[@]}"} || true
-  exit 0                # -> EXIT trap stops the model server
-fi
-
-section "Web UI"
-step "Starting the Neat GenAI Studio web UI…"
-setsid "${APP_PYTHON}" "${PYTHON_DIR}/ui/main.py" --config "${CONFIG_PATH}" &
+section "Backend"
+step "Starting the Neat GenAI Studio backend (API endpoints)…"
+setsid "${APP_PYTHON}" "${PYTHON_DIR}/api/main.py" --config "${CONFIG_PATH}" &
 pids[1]="$!"
-ui_pid="${pids[1]}"
-remember_process_group "${ui_pid}"
+api_pid="${pids[1]}"
+remember_process_group "${api_pid}"
 
 printf '\n'
 ok "Neat GenAI Studio is starting up."
 _url="$(web_url || true)"
 if [[ -n "${_url}" ]]; then
-  info "Open ${C_ACCENT}${C_BOLD}${_url}${C_RESET} in your browser once it finishes loading."
+  info "API on ${C_ACCENT}${C_BOLD}${_url}${C_RESET}; readiness at ${C_ACCENT}${_url}/health${C_RESET}. Point Insight's GenAI tab at it."
+  # Set at all (even empty) wins over the config, as in the backend process.
+  if [[ -n "${BACKEND_CORS_ORIGINS+set}" ]]; then _cors="${BACKEND_CORS_ORIGINS}"; else _cors="$(web_config_value cors_origins)"; fi
+  info "CORS for browser front ends: ${_cors:-off (app.web.cors_origins or BACKEND_CORS_ORIGINS allows origins)}."
 fi
 info "Press ${C_BOLD}Ctrl+C${C_RESET} to stop, or run ${C_BOLD}./run.sh stop${C_RESET} from another shell."
 printf '\n'
 
-# Supervisor: keep both processes alive. A child failure stops the Studio; board
-# runtime recovery remains outside this application.
+# Supervisor: watch both processes; when either exits, the Studio stops.
 status=0
 while true; do
   if ! child_running "${server_pid}"; then
@@ -745,9 +992,9 @@ while true; do
     fi
     break
   fi
-  if ! child_running "${ui_pid}"; then
+  if ! child_running "${api_pid}"; then
     set +e
-    wait "${ui_pid}"
+    wait "${api_pid}"
     status=$?
     set -e
     break

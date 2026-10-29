@@ -1,0 +1,73 @@
+models:
+  rf_detr_nano_w8a8_w16a16_backbone_mpk:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/rf_detr_nano_w8a8_w16a16_backbone_mpk.tar.gz
+    file: rf_detr_nano_w8a8_w16a16_backbone_mpk.tar.gz
+  rf_detr_nano_w8a8_w16a16_decoder_mpk:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/rf_detr_nano_w8a8_w16a16_decoder_mpk.tar.gz
+    file: rf_detr_nano_w8a8_w16a16_decoder_mpk.tar.gz
+  rf_detr_small_w8a8_w16a16_backbone_mpk:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/rf_detr_small_w8a8_w16a16_backbone_mpk.tar.gz
+    file: rf_detr_small_w8a8_w16a16_backbone_mpk.tar.gz
+  rf_detr_small_w8a8_w16a16_decoder_mpk:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/rf_detr_small_w8a8_w16a16_decoder_mpk.tar.gz
+    file: rf_detr_small_w8a8_w16a16_decoder_mpk.tar.gz
+  rf_detr_medium_w8a8_w16a16_backbone_mpk:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/rf_detr_medium_w8a8_w16a16_backbone_mpk.tar.gz
+    file: rf_detr_medium_w8a8_w16a16_backbone_mpk.tar.gz
+  rf_detr_medium_w8a8_w16a16_decoder_mpk:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/rf_detr_medium_w8a8_w16a16_decoder_mpk.tar.gz
+    file: rf_detr_medium_w8a8_w16a16_decoder_mpk.tar.gz
+  rf_detr_large_w8a8_w16a16_backbone_mpk:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/rf_detr_large_w8a8_w16a16_backbone_mpk.tar.gz
+    file: rf_detr_large_w8a8_w16a16_backbone_mpk.tar.gz
+  rf_detr_large_w8a8_w16a16_decoder_mpk:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/rf_detr_large_w8a8_w16a16_decoder_mpk.tar.gz
+    file: rf_detr_large_w8a8_w16a16_decoder_mpk.tar.gz
+  rfdetr-seg-medium-backbone:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/rfdetr-seg-medium-backbone.tar.gz
+    file: rfdetr-seg-medium-backbone.tar.gz
+  rfdetr-seg-medium-transformer:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/rfdetr-seg-medium-transformer.tar.gz
+    file: rfdetr-seg-medium-transformer.tar.gz
+unit:
+  python: true
+  cpp: true
+e2e:
+  python:
+    enabled: true
+    requires_rtsp: true
+    models:
+      - rf_detr_nano_w8a8_w16a16_backbone_mpk
+      - rf_detr_nano_w8a8_w16a16_decoder_mpk
+      - rf_detr_small_w8a8_w16a16_backbone_mpk
+      - rf_detr_small_w8a8_w16a16_decoder_mpk
+      - rf_detr_medium_w8a8_w16a16_backbone_mpk
+      - rf_detr_medium_w8a8_w16a16_decoder_mpk
+      - rf_detr_large_w8a8_w16a16_backbone_mpk
+      - rf_detr_large_w8a8_w16a16_decoder_mpk
+      - rfdetr-seg-medium-backbone
+      - rfdetr-seg-medium-transformer
+  cpp:
+    enabled: true
+    requires_rtsp: true
+    models:
+      - rf_detr_nano_w8a8_w16a16_backbone_mpk
+      - rf_detr_nano_w8a8_w16a16_decoder_mpk
+      - rf_detr_small_w8a8_w16a16_backbone_mpk
+      - rf_detr_small_w8a8_w16a16_decoder_mpk
+      - rf_detr_medium_w8a8_w16a16_backbone_mpk
+      - rf_detr_medium_w8a8_w16a16_decoder_mpk
+      - rf_detr_large_w8a8_w16a16_backbone_mpk
+      - rf_detr_large_w8a8_w16a16_decoder_mpk
+      - rfdetr-seg-medium-backbone
+      - rfdetr-seg-medium-transformer

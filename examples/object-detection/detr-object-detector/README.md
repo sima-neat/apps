@@ -24,9 +24,11 @@ The model returns class scores and normalized boxes for a fixed set of queries. 
 
 ## Prerequisites
 
-- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
+- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on the Modalix DevKit, or in a Neat SDK container paired with it.
 
 ## Install Apps
+
+Install on the Modalix DevKit, or under `/workspace` in a Neat SDK container paired with it. Only the example itself must run on the DevKit. If the Core and Insight selected by Apps are already installed, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps` to skip reinstalling them. See [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
 
 Install the latest Neat Apps runtime and enter the installed bundle:
 
@@ -47,7 +49,7 @@ Run the remaining commands from `prebuilt-apps/`.
 Model packages come from the Model Zoo release below, which can differ from the installed platform version.
 
 ```bash
-export MODELZOO_VERSION="2.1.3"
+export MODELZOO_VERSION="3.0.0"
 mkdir -p models
 cd models
 sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz"
@@ -77,6 +79,22 @@ pip install -r ${APP_DIR}/src/python/requirements.txt
 python3 ${APP_DIR}/src/python/main.py \
   --config ${APP_DIR}/src/common/config.yaml
 ```
+
+## Expected Result
+
+The application prints one line per image with its detection count and output
+file:
+
+```text
+[1/21] 000000081061.jpg: 3 detections -> 000000081061_detr.png
+[2/21] 000000116439.jpg: 9 detections -> 000000116439_detr.png
+```
+
+`io.output_dir` (default `sandbox/detr-object-detector`) then holds one
+annotated PNG per input image; with the packaged `assets/datasets/coco` folder
+that is 21 files. Detection counts vary by image. A run that writes every file
+with `0 detections` usually means `decode.confidence_threshold` is too high for
+the content.
 
 ## Troubleshooting
 

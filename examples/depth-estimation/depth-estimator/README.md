@@ -22,9 +22,11 @@ Creates visual depth maps for a folder of images with Depth Anything V2.
 
 ## Prerequisites
 
-- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
+- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on the Modalix DevKit, or in a Neat SDK container paired with it.
 
 ## Install Apps
+
+Install on the Modalix DevKit, or under `/workspace` in a Neat SDK container paired with it. Only the example itself must run on the DevKit. If the Core and Insight selected by Apps are already installed, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps` to skip reinstalling them. See [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
 
 Install the latest Neat Apps runtime and enter the installed bundle:
 
@@ -45,7 +47,7 @@ Run the remaining commands from `prebuilt-apps/`.
 Model packages come from the Model Zoo release below, which can differ from the installed platform version.
 
 ```bash
-export MODELZOO_VERSION="2.1.3"
+export MODELZOO_VERSION="3.0.0"
 mkdir -p models
 cd models
 sima-cli download \
@@ -76,6 +78,24 @@ pip install -r ${APP_DIR}/src/python/requirements.txt
 python3 ${APP_DIR}/src/python/main.py \
   --config ${APP_DIR}/src/common/config.yaml
 ```
+
+## Expected Result
+
+The application prints one line per image and a final count. The C++ binary also
+prints `[INFER]` and `[DEPTH]` diagnostic lines between them and quotes the
+filenames; both are normal.
+
+```text
+[1/21] 000000081061.jpg -> 000000081061.png
+...
+Done: 21 images processed
+```
+
+`io.output_dir` (default `sandbox/depth-estimator`) then holds one PNG depth
+visualization per input image. With the packaged `assets/datasets/coco` folder
+that is 21 files. Each is a side-by-side image: the resized input on the left,
+its depth colormap on the right. The colormap is normalized per image, so
+brightness is relative within one image and not comparable between images.
 
 ## Troubleshooting
 

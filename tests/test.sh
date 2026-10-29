@@ -38,7 +38,11 @@ CONFIG_ENV_VARS=(
   SIMANEAT_APPS_TEST_INSIGHT_HOST
   SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT
   SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT
+  SIMANEAT_APPS_HIGH_DENSITY_INITIAL_PROGRESS_TIMEOUT_MS
+  SIMANEAT_APPS_HIGH_DENSITY_STREAM_PROGRESS_TIMEOUT_MS
   NEAT_APPS_SKIP_MODEL_DOWNLOAD
+  SIMANEAT_APPS_TEST_MODEL_VARIANTS
+  SIMANEAT_APPS_TEST_RUN_HARNESS
 )
 
 PROCESS_ENV_WAS_SET=()
@@ -112,9 +116,13 @@ Environment:
   SIMANEAT_TEST_HTTP_MJPEG_URL      Single HTTP MJPEG stream URL
   SIMANEAT_TEST_HTTP_MJPEG_URLS     Comma-separated HTTP MJPEG URLs
   SIMANEAT_APPS_TEST_TIMEOUT_MS     Timeout in ms (default: 180000)
+  SIMANEAT_APPS_HIGH_DENSITY_INITIAL_PROGRESS_TIMEOUT_MS  Receiver warmup progress timeout (default: 90000)
+  SIMANEAT_APPS_HIGH_DENSITY_STREAM_PROGRESS_TIMEOUT_MS   Receiver measurement progress timeout (default: 30000)
   SIMANEAT_APPS_TEST_REQUIRE_E2E    Backward-compatible strict e2e env flag
   SIMANEAT_APPS_TEST_SCOPE_FILE     Test scope source (default: examples)
   NEAT_APPS_SKIP_MODEL_DOWNLOAD     Skip e2e model download (1=yes, default: 0)
+  SIMANEAT_APPS_TEST_MODEL_VARIANTS  Also run each e2e suite with the model variants its
+                                    test-scope.yaml lists (1=yes, default: 0; nightly sets it)
 EOF
 }
 
@@ -215,6 +223,8 @@ resolve_test_runtime_env() {
   export SIMANEAT_APPS_TEST_WRITE_SUMMARY_LOGS="${SIMANEAT_APPS_TEST_WRITE_SUMMARY_LOGS:-1}"
   export SIMANEAT_APPS_TEST_WRITE_PROCESS_LOGS="${SIMANEAT_APPS_TEST_WRITE_PROCESS_LOGS:-1}"
   export SIMANEAT_APPS_TEST_TIMEOUT_MS="${SIMANEAT_APPS_TEST_TIMEOUT_MS:-180000}"
+  export SIMANEAT_APPS_HIGH_DENSITY_INITIAL_PROGRESS_TIMEOUT_MS="${SIMANEAT_APPS_HIGH_DENSITY_INITIAL_PROGRESS_TIMEOUT_MS:-90000}"
+  export SIMANEAT_APPS_HIGH_DENSITY_STREAM_PROGRESS_TIMEOUT_MS="${SIMANEAT_APPS_HIGH_DENSITY_STREAM_PROGRESS_TIMEOUT_MS:-30000}"
   export SIMANEAT_TEST_RTSP_H264_URL="${SIMANEAT_TEST_RTSP_H264_URL:-}"
   export SIMANEAT_TEST_RTSP_H264_URLS="${SIMANEAT_TEST_RTSP_H264_URLS:-}"
   export SIMANEAT_TEST_RTSP_H265_URL="${SIMANEAT_TEST_RTSP_H265_URL:-}"
@@ -396,6 +406,11 @@ preflight_e2e_env() {
   local scope_file="${scope_file_raw:-${ROOT_DIR}/examples}"
   local output_dir="${output_dir_raw:-/tmp}"
   local class_image="${class_image_raw:-${ROOT_DIR}/assets/datasets-test/imagenet/goldfish.jpeg}"
+  local stream_languages=()
+  [[ "${RUN_CPP}" -eq 0 ]] || stream_languages+=(--language cpp)
+  [[ "${RUN_PYTHON}" -eq 0 ]] || stream_languages+=(--language python)
+  local requires_streams
+  requires_streams="$(scope_tool requires-rtsp "${stream_languages[@]}")" || return 1
 
   local model_count=0
   if [[ -d "${models_dir}" ]]; then
@@ -501,12 +516,14 @@ preflight_e2e_env() {
       preflight_fail=1
     fi
   fi
-  if [[ -z "${rtsp_h264_url}" && -z "${rtsp_h264_urls}" && -z "${rtsp_h265_url}" && \
+  if [[ "${requires_streams}" == "false" ]]; then
+    echo "  Selected e2e suites do not require live streams."
+  elif [[ -z "${rtsp_h264_url}" && -z "${rtsp_h264_urls}" && -z "${rtsp_h265_url}" && \
         -z "${rtsp_h265_urls}" && -z "${rtsp_mjpeg_url}" && \
         -z "${rtsp_mjpeg_urls}" && -z "${http_mjpeg_url}" && -z "${http_mjpeg_urls}" ]]; then
     echo "  [WARN] no codec stream env configured; stream e2e tests will skip."
     echo "  [WARN] stream e2e tests: single-stream-object-detector, single-stream-instance-segmenter,"
-    echo "         multi-stream-object-detector, multi-stream-people-tracker."
+    echo "         multi-stream-object-detector, multi-stream-tracker."
     echo "  [WARN] start the required streams in Insight before e2e:"
     echo "         https://developer.sima.ai/software/tools/insight/"
     echo "         export SIMANEAT_TEST_RTSP_H264_URL=<rtsp-h264-url>"
@@ -871,6 +888,64 @@ run_pytest() {
   done
 }
 
+# ---------------------------------------------------------------------------
+# Harness self-tests. The shared fixtures and output assertions under
+# tests/utils are what every example test relies on, so they have tests of
+# their own under tests/harness, marked `unit` because they need no hardware
+# and no model. They run once, before the per-example suites, so a helper that
+# can no longer fail is caught here rather than passing silently everywhere.
+# They live apart from tests/scripts on purpose: the repository contract tests
+# there read build.sh, the workflows and the portal sources, and one of them
+# loads a script at import time, so collecting that directory needs a source
+# checkout, which the runtime CI overlays the tests onto does not have.
+#
+# The self-tests need NumPy and OpenCV (see tests/README.md). Without them
+# they skip with the package named; under --strict that skip is a failure,
+# the same rule the e2e suites apply to a missing prerequisite.
+# ---------------------------------------------------------------------------
+run_harness_pytest() {
+  local harness_dir="${ROOT_DIR}/tests/harness"
+  echo ""
+  echo "  Python harness self-tests (tests/harness)"
+  echo "  $(printf '%.0s-' {1..50})"
+  if [[ ! -d "${harness_dir}" ]]; then
+    echo "  [FAIL] Harness self-tests are missing: ${harness_dir#${ROOT_DIR}/}"
+    OVERALL_RC=1
+    return
+  fi
+  local summary_file log_file rc
+  summary_file="$(start_summary_log "python" "harness")"
+  log_file="$(mktemp)"
+
+  echo "  [RUN] ${harness_dir#${ROOT_DIR}/} (-m unit)"
+  echo "[RUN] ${harness_dir#${ROOT_DIR}/} (-m unit)" >>"${summary_file}"
+  set +e
+  "${PYTHON_TEST_BIN}" -m pytest -c "${ROOT_DIR}/tests/pytest.ini" -m unit \
+    --rootdir="${ROOT_DIR}" -v -rs "${harness_dir}" | tee "${log_file}" | tee -a "${summary_file}"
+  rc=${PIPESTATUS[0]}
+  set -e
+
+  # pytest exits 5 when it collected nothing. With a skip reported that is the
+  # suite declining to run because a prerequisite is missing (its importorskip
+  # for NumPy or OpenCV), which non-strict runs tolerate. Without a skip it
+  # means the self-tests are gone, which is exactly what this step exists to
+  # catch, so that stays a failure. Any other non-zero code is a real failure.
+  local skipped=0
+  if grep -Eq '[0-9]+ skipped' "${log_file}"; then
+    skipped=1
+  fi
+  if [[ "${rc}" -eq 5 && "${skipped}" -eq 1 ]]; then
+    echo "  [SKIP] Harness self-tests were skipped: a prerequisite is missing (see tests/README.md)."
+  elif [[ "${rc}" -ne 0 ]]; then
+    OVERALL_RC=1
+  fi
+  if [[ "${STRICT_MODE}" == "1" && "${skipped}" -eq 1 ]]; then
+    echo "  [FAIL] Strict mode is enabled but harness self-tests were skipped."
+    OVERALL_RC=1
+  fi
+  rm -f "${log_file}"
+}
+
 if [[ "${RUN_PYTHON}" -eq 1 ]]; then
   if ! resolve_pytest_python; then
     echo ""
@@ -895,6 +970,9 @@ if [[ "${RUN_PYTHON}" -eq 1 && "${PYTHON_READY}" -eq 1 ]]; then
   echo ""
   echo "  Python test interpreter: ${PYTHON_TEST_BIN}"
   if [[ "${RUN_UNIT}" -eq 1 ]]; then
+    if [[ "${SIMANEAT_APPS_TEST_RUN_HARNESS:-1}" == "1" ]]; then
+      run_harness_pytest
+    fi
     run_pytest "unit"
   fi
   if [[ "${RUN_E2E}" -eq 1 ]]; then

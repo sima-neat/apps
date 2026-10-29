@@ -5,8 +5,9 @@ packaged for Neat as compiled archives, commonly `.tar.gz` MPK artifacts.
 
 ## Model
 
-`Model` loads and validates a compiled model archive. Use it only when the API
-decision map identifies caller-owned input.
+`Model` loads and validates a compiled model archive. Use its direct execution
+methods for caller-owned input, or embed its model route in a larger `Graph`
+when the graph owns the source or surrounding stages.
 
 Common application steps:
 

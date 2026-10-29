@@ -22,9 +22,11 @@ Detects objects in a folder of images with YOLO26 and saves copies annotated wit
 
 ## Prerequisites
 
-- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
+- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on the Modalix DevKit, or in a Neat SDK container paired with it.
 
 ## Install Apps
+
+Install on the Modalix DevKit, or under `/workspace` in a Neat SDK container paired with it. Only the example itself must run on the DevKit. If the Core and Insight selected by Apps are already installed, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps` to skip reinstalling them. See [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
 
 Install the latest Neat Apps runtime and enter the installed bundle:
 
@@ -51,7 +53,7 @@ Run the remaining commands from `prebuilt-apps/`.
 Model packages come from the Model Zoo release below, which can differ from the installed platform version. Replace `<model-file>` with a file from the table.
 
 ```bash
-export MODELZOO_VERSION="2.1.3"
+export MODELZOO_VERSION="3.0.0"
 mkdir -p models
 cd models
 sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26-detection/<model-file>"
@@ -82,12 +84,33 @@ python3 ${APP_DIR}/src/python/main.py \
   --config ${APP_DIR}/src/common/config.yaml
 ```
 
+## Expected Result
+
+The application prints the image count, one line per image, and a final total:
+
+```text
+Found 21 images
+[1/21] 000000081061.jpg -> 000000081061.png (3 detections)
+Done: 21 images processed
+```
+
+`io.output_dir` then holds one annotated PNG per input image; with the packaged
+`assets/datasets/coco` folder that is 21 files. The C++ binary prints the same
+lines with the input filename in quotes.
+
+Running a second time adds a `Cleared N stale output images` line before the
+rest, in both implementations, where `N` is however many image files the previous
+run left in `io.output_dir`. Setting `io.output_dir` to the same folder as
+`io.input_dir` skips that cleanup and reports
+`Skipping output cleanup because output_dir matches input_dir` on stderr; keep
+them separate.
+
 ## Troubleshooting
 
 - Verify `model.path` and the labels file if detections are missing.
 - Confirm the input folder contains `.jpg`, `.jpeg`, `.png`, or `.bmp` files.
 - Adjust `decode.score_threshold` and `decode.nms_iou` when tuning detections.
-- Use `--profile` to inspect pipeline timing.
+- Set `runtime.profile: true` in the config to print pipeline timing summaries.
 
 ## Source Files
 

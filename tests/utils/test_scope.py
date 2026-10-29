@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 from pathlib import Path
@@ -17,9 +18,10 @@ APPS_ROOT = Path(__file__).resolve().parents[2]
 VALID_SOURCES = {"modelzoo", "url", "huggingface", "model-registry"}
 VALID_LANGUAGES = {"python", "cpp"}
 VALID_KINDS = {"unit", "e2e"}
-MODEL_FIELDS = ("source", "name", "url", "file", "repo", "path", "ref", "spec")
+MODEL_FIELDS = ("source", "name", "url", "file", "repo", "path", "ref", "spec", "variant")
 SCOPE_FILE_NAME = "test-scope.yaml"
 SCOPE_FILE_SUBPATH = Path("tests") / SCOPE_FILE_NAME
+MODEL_VARIANTS_ENV = "SIMANEAT_APPS_TEST_MODEL_VARIANTS"
 
 
 def load_yaml_mapping(path: Path) -> dict[str, Any]:
@@ -171,6 +173,39 @@ def enabled_models(entry: dict[str, Any], language: str) -> list[str]:
     return raw
 
 
+def enabled_variants(entry: dict[str, Any], language: str) -> list[str]:
+    """Models the e2e suite is also run with when the run asks for variants."""
+    raw = e2e_config(entry, language).get("variants", [])
+    if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
+        raise ValueError("e2e model variants must be a list of strings")
+    return raw
+
+
+def model_variants_enabled() -> bool:
+    return os.environ.get(MODEL_VARIANTS_ENV, "").strip() == "1"
+
+
+def suite_models(entry: dict[str, Any], language: str) -> list[str]:
+    """The models a suite is run with, in order: its first selected model, then the
+    variants when SIMANEAT_APPS_TEST_MODEL_VARIANTS=1."""
+    selected = enabled_models(entry, language)
+    if not selected:
+        return []
+    models = [selected[0]]
+    if model_variants_enabled():
+        models.extend(v for v in enabled_variants(entry, language) if v not in models)
+    return models
+
+
+def downloadable_models(entry: dict[str, Any], language: str) -> list[str]:
+    """Every model the suite may need: its selection, plus the variants when
+    SIMANEAT_APPS_TEST_MODEL_VARIANTS=1."""
+    models = list(enabled_models(entry, language))
+    if model_variants_enabled():
+        models.extend(v for v in enabled_variants(entry, language) if v not in models)
+    return models
+
+
 def validate_scope(scope: dict[str, Any], apps_root: Path) -> list[str]:
     errors: list[str] = []
     scoped_examples = set(scope["examples"])
@@ -209,6 +244,12 @@ def validate_scope(scope: dict[str, Any], apps_root: Path) -> list[str]:
                         errors.append(
                             f"{example_key}: model-registry model {model_id} needs {field}"
                         )
+                variant = str(model.get("variant", "") or "").strip()
+                if variant and str(model.get("spec", "") or "").strip() != "latest":
+                    errors.append(
+                        f"{example_key}: model-registry model {model_id} with a variant "
+                        "downloads the latest artifact; set spec: latest"
+                    )
                 file_name = str(model.get("file", "") or "")
                 if file_name and (
                     file_name in {".", ".."}
@@ -221,6 +262,11 @@ def validate_scope(scope: dict[str, Any], apps_root: Path) -> list[str]:
                     )
         selected_registry_models: set[str] = set()
         for language in sorted(VALID_LANGUAGES):
+            try:
+                if not isinstance(e2e_config(entry, language).get("requires_rtsp", True), bool):
+                    errors.append(f"{example_key}: e2e.{language}.requires_rtsp must be boolean")
+            except ValueError as exc:
+                errors.append(f"{example_key}: {exc}")
             for kind in sorted(VALID_KINDS):
                 try:
                     enabled = is_enabled(entry, language, kind)
@@ -247,8 +293,20 @@ def validate_scope(scope: dict[str, Any], apps_root: Path) -> list[str]:
                     errors.append(
                         f"{example_key}: e2e.{language} is enabled but models is empty"
                     )
+                variants = enabled_variants(entry, language)
+                for model_id in variants:
+                    if model_id not in models:
+                        errors.append(
+                            f"{example_key}: e2e.{language} variants reference undefined "
+                            f"model {model_id}"
+                        )
+                    elif model_id in selected_models:
+                        errors.append(
+                            f"{example_key}: e2e.{language} variant {model_id} is already "
+                            "in models"
+                        )
                 if is_enabled(entry, language, "e2e"):
-                    for model_id in selected_models:
+                    for model_id in [*selected_models, *variants]:
                         model = models.get(model_id)
                         if (
                             isinstance(model, dict)
@@ -263,7 +321,8 @@ def validate_scope(scope: dict[str, Any], apps_root: Path) -> list[str]:
             if not file_name:
                 continue
             identity = tuple(
-                str(model.get(field, "") or "") for field in ("name", "ref", "spec")
+                str(model.get(field, "") or "")
+                for field in ("name", "ref", "spec", "variant")
             )
             owner = f"{example_key}: model {model_id}"
             previous = registry_destinations.setdefault(file_name, (identity, owner))
@@ -315,7 +374,7 @@ def scoped_models(
         for language in languages:
             if not is_enabled(entry, language, "e2e"):
                 continue
-            for model_id in enabled_models(entry, language):
+            for model_id in downloadable_models(entry, language):
                 model = models[model_id]
                 identity = (model_id, *model_fields(model))
                 result.setdefault(identity, (model_id, model))
@@ -333,13 +392,10 @@ def scoped_model_files(
         if not is_enabled(entry, language, "e2e"):
             continue
         models = entry.get("models", {})
-        selected = enabled_models(entry, language)
-        if not selected:
-            continue
-        model = models[selected[0]]
-        file_name = model_field(model, "file")
-        if file_name:
-            result.append((example_key, file_name))
+        for model_id in suite_models(entry, language):
+            file_name = model_field(models[model_id], "file")
+            if file_name:
+                result.append((example_key, file_name))
     return result
 
 
@@ -360,6 +416,10 @@ def main() -> int:
     validate.add_argument("--quiet", action="store_true")
 
     sub.add_parser("generate")
+
+    stream_requirement = sub.add_parser("requires-rtsp")
+    stream_requirement.add_argument("--language", choices=sorted(VALID_LANGUAGES),
+                                    action="append", required=True)
 
     py_files = sub.add_parser("python-files")
     py_files.add_argument("--kind", choices=sorted(VALID_KINDS), required=True)
@@ -394,6 +454,14 @@ def main() -> int:
     if args.command == "validate":
         if not args.quiet:
             print(f"validated {args.scope_file}")
+        return 0
+    elif args.command == "requires-rtsp":
+        required = any(
+            is_enabled(entry, language, "e2e")
+            and e2e_config(entry, language).get("requires_rtsp", True)
+            for entry in scope["examples"].values() for language in args.language
+        )
+        print("true" if required else "false")
         return 0
     if args.command == "generate":
         print(yaml.safe_dump(scope, sort_keys=False), end="")

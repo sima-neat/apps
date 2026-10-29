@@ -24,11 +24,13 @@ The decoded frame branches inside a single graph to the detector, to the H.264 s
 
 ## Prerequisites
 
-- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
+- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on the Modalix DevKit, or in a Neat SDK container paired with it.
 - An RTSP source and an [Insight](https://developer.sima.ai/software/tools/insight/) URL reachable from the target.
 - The [LLiMa model manager](https://developer.sima.ai/software/genai-llima/runtime) available on the target when GenAI is enabled.
 
 ## Install Apps
+
+Install on the Modalix DevKit, or under `/workspace` in a Neat SDK container paired with it. Run the `llima` commands and the example itself on the DevKit. If the Core and Insight selected by Apps are already installed, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps` to skip reinstalling them. See [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
 
 Install the latest Neat Apps runtime and enter the installed bundle:
 
@@ -57,7 +59,7 @@ Supported detector packages:
 Model packages come from the Model Zoo release below, which can differ from the installed platform version. Replace `<model-file>` with a file from the table.
 
 ```bash
-export MODELZOO_VERSION="2.1.3"
+export MODELZOO_VERSION="3.0.0"
 mkdir -p models
 cd models
 sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26-detection/<model-file>"
@@ -66,7 +68,7 @@ cd ..
 
 Set `model.path` to the downloaded detector package.
 
-The default VLM is `Qwen3-VL-4B-Instruct-GPTQ-a16w4`.
+The default VLM is `Qwen3-VL-4B-Instruct-Autoround-a16w4`.
 
 Search the supported models:
 
@@ -77,7 +79,7 @@ llima search
 Install the default model:
 
 ```bash
-llima pull Qwen3-VL-4B-Instruct-GPTQ-a16w4
+llima pull Qwen3-VL-4B-Instruct-Autoround-a16w4
 ```
 
 LLiMa stores models under `/media/nvme/llima/models/` by default. Set `LLIMA_MODELS_PATH` before `llima pull` to use another model directory, then update `genai_server.model.path` accordingly.
@@ -86,7 +88,7 @@ LLiMa stores models under `/media/nvme/llima/models/` by default. Set `LLIMA_MOD
 
 [Insight](https://developer.sima.ai/software/tools/insight/) can host the input stream and render the video and detection metadata. Install videos directly from the Insight catalog or through Insight's YouTube support.
 
-In the Insight Web UI, start the required stream and copy its RTSP URL. Use the host and UDP port ranges reported by `neat` for the output settings.
+In the Insight Web UI, start the required stream and copy its RTSP URL. Use the host and UDP port ranges reported by `neat` for the output settings. Use a host and published port that the target can reach, not `localhost` and not an address only Insight's own machine can resolve. Verify the URL from the target before running; the application prints the resolved source and its dimensions on startup.
 
 ## Configure
 
@@ -122,6 +124,26 @@ python3 ${APP_DIR}/src/python/detector_app.py \
 ```
 
 The GenAI path checks `/v1/models`, waits at least `genai.interval_seconds` between requests, and bounds queued and in-flight work with `genai.max_pending_requests`.
+
+## Expected Result
+
+Both lines below come from the **detector** terminal, not the server's. The
+detector's startup banner reports the GenAI endpoint it will call, and it prints
+each vision-language response as that response arrives:
+
+```text
+[genai-server] enabled model=Qwen3-VL-4B-Instruct-Autoround-a16w4 url=http://127.0.0.1:9998 interval=5s
+[response #001] The person is seated and holding an object with both hands, appearing to rest or interact with it.
+```
+
+The server terminal prints its own lines instead, `added model: ...` followed by
+`serving GenAI API on http://0.0.0.0:9998`; check there if the detector reports
+the endpoint as unreachable.
+
+Responses are deliberately infrequent. `genai.interval_seconds` sets the minimum
+gap between requests, so at the default of `5` a short run produces only a
+handful, and a response appears only when the detector has a person to crop. Few
+responses is not a fault; none at all, on a source containing people, is.
 
 ## Troubleshooting
 

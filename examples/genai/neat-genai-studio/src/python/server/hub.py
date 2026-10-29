@@ -10,6 +10,7 @@ library, so they are also safe to call from the model-server process.
 
 from __future__ import annotations
 
+import errno
 import json
 import logging
 import os
@@ -21,7 +22,8 @@ from pathlib import Path
 from typing import Iterator
 
 from shared.chat_template import repair_chat_template_files
-from shared.config import HubConfig, classify_model_dir, model_dir_complete
+from shared.config import (HubConfig, classify_model_dir, layered_encoder_reason,
+                           model_dir_complete)
 
 
 _internet_cache: dict = {"ok": None, "at": 0.0, "refreshing": False}
@@ -163,6 +165,24 @@ _VLM_NAME_HINTS = ("vlm", "-vl", "vl-", "_vl", "vision", "multimodal", "llava",
                    "idefics", "siglip")
 
 
+def _hub_unsupported_reason(siblings) -> str:
+    """Why a repo's weights cannot be loaded here, from its Hub file list.
+
+    Uses the same rule as the on-disk check, so a build is described
+    identically before and after downloading. Silent when the Hub did not
+    return a file list — a missing listing is not evidence of a problem.
+    """
+    if os.environ.get("STUDIO_ALLOW_LAYERED_ASR") == "1" or not siblings:
+        return ""
+    try:
+        names = [(getattr(s, "rfilename", "") or "").rsplit("/", 1)[-1] for s in siblings]
+    except Exception:  # noqa: BLE001 - a listing we cannot read blocks nothing
+        return ""
+    if not any(n == "whisper_config.json" for n in names):
+        return ""
+    return layered_encoder_reason(names)
+
+
 def classify_hub_repo(repo_id: str, pipeline_tag=None, tags=None) -> str:
     """Best-effort repo modality: ``"llm"`` | ``"vlm"`` | ``"asr"``."""
     tag = (pipeline_tag or "").strip().lower()
@@ -258,6 +278,10 @@ def hub_search(catalog_dir: Path | None, hub: HubConfig, query: str, limit: int 
                     "sizeBytes": getattr(m, "used_storage", None) or getattr(m, "usedStorage", None),
                     "alreadyInCatalog": in_catalog,
                     "catalogComplete": (model_dir_complete(local)[0] if in_catalog else None),
+                    # Judged from the repo's own file list, so an encoder layout
+                    # this runtime cannot load is reported BEFORE the download
+                    # rather than after gigabytes have been fetched.
+                    "unsupportedReason": _hub_unsupported_reason(siblings) or None,
                 })
         except Exception:  # noqa: BLE001 - one organization must not hide the others
             logging.exception("Hugging Face search failed for organization %s", author)
@@ -324,6 +348,53 @@ def hub_card(hub: HubConfig, repo_id: str) -> dict:
     }
 
 
+def hub_lookup_failure(exc: BaseException) -> str:
+    """What to tell the user when the Hub could not describe a repository.
+    The message is chosen from the error's kind, never its text, so a typo,
+    a gated model and a missing network don't all read the same."""
+    kinds = {cls.__name__ for cls in type(exc).__mro__}
+    if "GatedRepoError" in kinds:
+        return "This model needs approval on Hugging Face: request access, then set HF_TOKEN on the board"
+    if "RepositoryNotFoundError" in kinds:
+        return "Hugging Face has no model with this id (check the name; a private model needs HF_TOKEN)"
+    if kinds & {"ConnectionError", "Timeout", "ConnectTimeout", "ReadTimeout", "OfflineModeIsEnabled"}:
+        return "Could not reach Hugging Face: check the board's internet connection"
+    return "Could not resolve model repository (see the Studio's log)"
+
+# Space the board keeps free when downloading a model.
+DISK_HEADROOM_BYTES = 1_000_000_000
+
+
+def disk_room(target: Path, total: int | None) -> str | None:
+    """Why a download of ``total`` bytes into ``target`` won't fit, or None.
+    Files already in ``target`` (an earlier, interrupted download) count as
+    done. Unknown sizes or free space let the download go ahead."""
+    if not total:
+        return None
+    probe = Path(target)
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+    try:
+        free = shutil.disk_usage(str(probe)).free
+    except OSError:
+        return None
+    need = max(0, total - (_dir_size(target) if Path(target).exists() else 0))
+    if need <= free - DISK_HEADROOM_BYTES:
+        return None
+    return (f"Not enough storage on the board: the model needs {need / 1e9:.1f} GB and "
+            f"{free / 1e9:.1f} GB is free (1 GB is kept free for the board). Delete a model first.")
+
+
+def _out_of_space(exc: BaseException) -> bool:
+    seen = 0
+    while exc is not None and seen < 5:
+        if isinstance(exc, OSError) and exc.errno == errno.ENOSPC:
+            return True
+        exc = exc.__cause__ or exc.__context__
+        seen += 1
+    return False
+
+
 def hub_download_stream(catalog_dir: Path | None, hub: HubConfig, repo_id: str) -> Iterator[str]:
     """Download a repo into the catalog, yielding JSON progress lines."""
     def event(**payload) -> str:
@@ -356,9 +427,28 @@ def hub_download_stream(catalog_dir: Path | None, hub: HubConfig, repo_id: str) 
     # is then confined to the configured catalog root by _catalog_target().
     try:
         info = HfApi(token=token).model_info(repo_id, files_metadata=True)
-        canonical_repo_id = validated_repo_id(str(getattr(info, "id", "")), hub)
-        if canonical_repo_id.casefold() != repo_id.casefold():
-            raise ValueError("Hub returned a different repository id")
+    except Exception as exc:  # noqa: BLE001 - details stay in server logs
+        logging.exception("Could not resolve Hugging Face repository %s", repo_id)
+        yield event(state="error", repoId=repo_id, message=hub_lookup_failure(exc))
+        return
+    hub_repo_id = str(getattr(info, "id", ""))
+    if hub_repo_id.casefold() != repo_id.casefold():
+        # The Hub redirects a renamed or moved repository: say where it went
+        # instead of downloading something other than what was asked for.
+        try:
+            renamed = validated_repo_id(hub_repo_id, hub)
+        except ValueError:
+            renamed = None
+        logging.warning("Hugging Face returned %r for %r", hub_repo_id, repo_id)
+        if renamed:
+            yield event(state="error", repoId=repo_id, renamedTo=renamed,
+                        message=f"Hugging Face now publishes this model as {renamed}; download that id instead")
+        else:
+            yield event(state="error", repoId=repo_id,
+                        message="Hugging Face moved this model to an account the Studio does not download from")
+        return
+    try:
+        canonical_repo_id = validated_repo_id(hub_repo_id, hub)
         target = _existing_catalog_target(Path(catalog_dir), canonical_repo_id)
         target_existed = target.exists()
         total = sum(int(getattr(s, "size", 0) or 0) for s in (info.siblings or []))
@@ -367,15 +457,26 @@ def hub_download_stream(catalog_dir: Path | None, hub: HubConfig, repo_id: str) 
         yield event(state="error", repoId=repo_id, message="Could not resolve model repository")
         return
 
+    # Storage full: refuse a download that won't fit, keeping some space for
+    # the board itself, instead of filling the disk part way through.
+    room = disk_room(target, total)
+    if room is not None:
+        yield event(state="error", repoId=repo_id, message=room)
+        return
+
     error: dict = {}
 
     def _download() -> None:
         try:
             target.mkdir(parents=True, exist_ok=True)
             snapshot_download(repo_id=canonical_repo_id, local_dir=str(target), token=token)
-        except Exception:  # noqa: BLE001 - reported generically; details stay in logs
+        except Exception as exc:  # noqa: BLE001 - reported generically; details stay in logs
             logging.exception("Hugging Face model download failed for %s", repo_id)
-            error["message"] = "Model download failed"
+            if _out_of_space(exc):
+                error["message"] = ("The board ran out of storage during the download. Delete a model "
+                                    "and download again; the files already downloaded are reused.")
+            else:
+                error["message"] = "Model download failed"
 
     worker = threading.Thread(target=_download, daemon=True)
     worker.start()

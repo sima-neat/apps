@@ -12,24 +12,28 @@ import sys
 from pathlib import Path
 
 VALID_CATEGORIES = {
+    "anomaly-detection",
     "benchmarking",
     "classification",
     "object-detection",
     "tracking",
     "segmentation",
+    "anomaly-detection",
     "pose-estimation",
     "depth-estimation",
     "face-detection",
     "feature-extraction",
     "genai",
+    "multi-model",
     "throughput",
+    "docker",
 }
 
 VALID_DIFFICULTIES = {"Beginner", "Intermediate", "Advanced"}
 
 VALID_LANGUAGES = {"C++", "Python"}
 
-VALID_STATUSES = {"stable"}
+VALID_STATUSES = {"stable", "experimental"}
 
 REQUIRED_METADATA_FIELDS = {
     "Category",
@@ -44,19 +48,6 @@ MODEL_REFERENCE_RE = re.compile(
     r"^(?P<label>[^\[]+?)(?:\s*\[(?P<url>https?://[^\]]+)\])?$"
 )
 
-REQUIRED_SECTIONS = {
-    "Metadata",
-    "Concept",
-    "Preview",
-    "Prerequisites",
-    "Install Apps",
-    "Prepare the Model",
-    "Configure",
-    "Run",
-    "Source Files",
-    "Development From Source",
-}
-
 REQUIRED_SECTION_ORDER = (
     "Metadata",
     "Concept",
@@ -69,6 +60,12 @@ REQUIRED_SECTION_ORDER = (
     "Source Files",
     "Development From Source",
 )
+
+# Docker examples install the Apps bundle in the Neat SDK, pack its examples
+# into images, and run them in containers on the DevKit through a script
+# instead of an example binary.
+DOCKER_CATEGORY = "docker"
+DOCKER_RUN_SCRIPT = "src/common/parallel-apps.sh"
 
 INSTALL_COMMAND = "sima-cli neat install apps"
 STANDALONE_INSTALL_SCRIPT = "scripts/get-example.sh"
@@ -245,6 +242,43 @@ def validate_portal_content(
     return errors
 
 
+def required_section_order(category: str) -> tuple[str, ...]:
+    """Return the required sections, in order, for an example category."""
+    return REQUIRED_SECTION_ORDER
+
+
+def validate_docker_workflow(
+    *, sections: dict[str, str], category: str, example: str
+) -> list[str]:
+    """Validate the install-and-script workflow of a Docker example."""
+    errors: list[str] = []
+    install = sections.get("Install Apps", "")
+    run = sections.get("Run", "")
+
+    if INSTALL_COMMAND not in {line.strip() for line in install.splitlines()}:
+        errors.append(f"Install Apps must use '{INSTALL_COMMAND}'")
+    if "cd prebuilt-apps" not in install:
+        errors.append("Bundle installation must enter the prebuilt-apps directory")
+    expected_app_dir = f"APP_DIR=examples/{category}/{example}"
+    if expected_app_dir not in install:
+        errors.append(f"Bundle installation must define '{expected_app_dir}'")
+    for command in SOURCE_ONLY_COMMANDS:
+        if command in install or command in run:
+            errors.append(
+                f"Source-only command '{command.strip()}' must not appear in "
+                "Install Apps or Run"
+            )
+    script_paths = (
+        f"${{APP_DIR}}/{DOCKER_RUN_SCRIPT}",
+        f"$APP_DIR/{DOCKER_RUN_SCRIPT}",
+    )
+    if not any(path in run for path in script_paths):
+        errors.append(f"Run must use '{script_paths[0]}'")
+    if CONTRIBUTING_URL not in sections.get("Development From Source", ""):
+        errors.append("Development From Source must link to CONTRIBUTING.md")
+    return errors
+
+
 def validate_install_workflow(
     *,
     sections: dict[str, str],
@@ -264,6 +298,11 @@ def validate_install_workflow(
         example = parts[examples_idx + 2]
     except (ValueError, IndexError):
         return errors
+
+    if metadata.get("Category") == DOCKER_CATEGORY:
+        return validate_docker_workflow(
+            sections=sections, category=category, example=example
+        )
 
     install_lines = {line.strip() for line in install.splitlines()}
     uses_bundle = INSTALL_COMMAND in install_lines
@@ -346,27 +385,26 @@ def validate_readme(readme_path: Path) -> list[str]:
 
     # Check required sections
     sections, section_order = parse_sections(content)
-    for section in REQUIRED_SECTIONS:
+    metadata = parse_metadata_table(content)
+    required_order = required_section_order((metadata or {}).get("Category", ""))
+    for section in required_order:
         if section not in sections:
             errors.append(f"Missing required section: ## {section}")
 
     present_required_sections = [
-        section for section in section_order if section in REQUIRED_SECTIONS
+        section for section in section_order if section in required_order
     ]
-    expected_order = [
-        section for section in REQUIRED_SECTION_ORDER if section in sections
-    ]
+    expected_order = [section for section in required_order if section in sections]
     if present_required_sections != expected_order:
         errors.append(
             "Required sections are out of order. Expected: "
-            + ", ".join(REQUIRED_SECTION_ORDER)
+            + ", ".join(required_order)
         )
 
     if "Get The Apps Repo" in sections:
         errors.append("Obsolete section: ## Get The Apps Repo")
 
-    # Parse and validate metadata
-    metadata = parse_metadata_table(content)
+    # Validate metadata
     if metadata is None:
         errors.append("Metadata table not found or empty")
         return errors

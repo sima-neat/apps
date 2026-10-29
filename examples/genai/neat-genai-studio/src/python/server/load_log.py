@@ -3,10 +3,9 @@
 progress and a live loading log in the UI.
 
 pyneat/llima expose no load-progress API, but the accelerator runtime prints one
-triple per ELF stage it loads (a model is dozens–hundreds of stages):
+pair per ELF stage it loads (a model is dozens–hundreds of stages):
 
     Loading model <ABS/..._stage1_mla.elf>
-    [mlatiming] mlashm_load_model <ABS/...> took <N> ms ok=1
     Done loading <ABS/..._stage1_mla.elf>
 
 Counting the ``Done loading …_mla.elf`` lines against the number of ELFs on disk
@@ -34,7 +33,8 @@ from collections import deque
 # The board prints absolute .elf paths; match the stage-load lifecycle lines.
 _LOADING_RE = re.compile(r"^Loading model\s+(?P<path>.+\.elf)\s*$")
 _DONE_RE = re.compile(r"^Done loading\s+(?P<path>.+\.elf)\s*$")
-_TIMING_RE = re.compile(r"\[mlatiming\]\s+mlashm_load_model\s+(?P<path>.+?)\s+took\s+(?P<ms>\d+)\s+ms\s+ok=(?P<ok>\d)")
+# Runtime errors are the most useful thing the log can carry; never drop them.
+_ERROR_RE = re.compile(r"\[error\]|MLA_LOAD_FAILED", re.I)
 
 
 class LoadLogTap:
@@ -134,9 +134,21 @@ class LoadLogTap:
             except Exception:
                 buf = b""  # a parse error must never stop the drain loop
 
+    def note(self, text: str) -> None:
+        """Record a studio-side line (load lifecycle) in the same stream.
+
+        The runtime's own output during a load is sparse, so without these the
+        log panel would sit empty for the whole load and tell the user nothing.
+        """
+        if not text:
+            return
+        with self._lock:
+            self._seq += 1
+            self._lines.append((self._seq, round(time.monotonic(), 2), text))
+
     def _note_line(self, line: str) -> None:
         done = _DONE_RE.match(line)
-        if not (done or _LOADING_RE.match(line) or _TIMING_RE.search(line)):
+        if not (done or _LOADING_RE.match(line) or _ERROR_RE.search(line)):
             return
         with self._lock:
             self._seq += 1

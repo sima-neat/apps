@@ -32,7 +32,9 @@
 #include "neat.h"
 #include "support/runtime/config_utils.h"
 #include "support/runtime/example_utils.h"
+#include "support/runtime/pull_status.h"
 
+#include <csignal>
 #include <nodes/groups/VideoSender.h>
 #include <nodes/io/MetadataSender.h>
 
@@ -57,6 +59,15 @@
 namespace fs = std::filesystem;
 
 namespace {
+
+// SIGINT ends the pull loop so the run is closed and the counters printed, the
+// way the multistream applications already stop. The e2e harness stops the
+// application this way and checks that it exits cleanly.
+volatile std::sig_atomic_t g_stop_requested = 0;
+
+void request_stop(int) {
+  g_stop_requested = 1;
+}
 
 // The model was compiled for an 800x800 canvas (pyramid levels 100/50/25).
 constexpr int kInferSize = 800;
@@ -668,22 +679,19 @@ void run_pipeline(PipelineRuntime& runtime, const AppConfig& cfg) {
   profile.interval = cfg.profile_interval;
 
   int processed = 0;
-  while (cfg.frames <= 0 || processed < cfg.frames) {
+  g_stop_requested = 0;
+  std::signal(SIGINT, request_stop);
+  while (g_stop_requested == 0 && (cfg.frames <= 0 || processed < cfg.frames)) {
     profile.start_frame();
     simaai::neat::Sample sample;
     simaai::neat::PullError pull_error;
     const double pull_start = sima_examples::time_ms();
     const auto status = runtime.run.pull("detections", 20000, sample, &pull_error);
     const double pull_end = sima_examples::time_ms();
-    if (status == simaai::neat::PullStatus::Timeout) {
+    if (!sima_examples::pull_status_has_sample(status, "detections", pull_error,
+                                               runtime.run.last_error())) {
       std::cerr << "[warn] timed out waiting for detections\n";
       continue;
-    }
-    if (status == simaai::neat::PullStatus::Closed) {
-      break;
-    }
-    if (status != simaai::neat::PullStatus::Ok) {
-      throw std::runtime_error("failed to pull detections: " + pull_error.message);
     }
 
     const auto tensors = simaai::neat::tensors_from_sample(sample, false);

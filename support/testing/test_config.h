@@ -21,15 +21,21 @@ const ScalarConfig& example_common_config(const std::string& example_name);
 // Resolve the configured model filename under the active test model directory.
 std::string configured_model_path(const std::string& example_name, const std::string& models_dir);
 
+// Every model the scope runs this example's e2e suite with, in scope order: the suite's
+// model first, then the variants when SIMANEAT_APPS_TEST_MODEL_VARIANTS=1 added them to
+// SIMANEAT_APPS_TEST_MODEL_FILES. Falls back to the single configured model.
+std::vector<std::string> configured_model_paths(const std::string& example_name,
+                                                const std::string& models_dir);
+
+// The name an e2e case runs under: `case_name` alone when the suite has one model, or
+// `case_name_<model id>` when it runs the same case with several, so output directories
+// and [OK]/[FAIL] lines tell the runs apart.
+std::string model_case_label(const std::string& case_name, const std::string& model_path,
+                             std::size_t model_count);
+
 // Read a required scalar from an example src/common/config.yaml under:
 // <section>.<key>
-double e2e_double(const std::string& example_name, const std::string& section,
-                  const std::string& key);
-
 int e2e_int(const std::string& example_name, const std::string& section, const std::string& key);
-
-bool e2e_bool(const std::string& example_name, const std::string& section, const std::string& key,
-              bool default_value);
 
 // Write an e2e runtime config by starting from src/common/config.yaml and applying
 // only test-harness overrides. The generated config omits testing.* keys.

@@ -31,15 +31,30 @@ models:
     source: url
     url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26-segmentation/yolo26m-seg-int8-b1.tar.gz
     file: yolo26m-seg-int8-b1.tar.gz
+  yolo_v8n_seg:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo_v8n_seg_mpk.tar.gz
+    file: yolo_v8n_seg_mpk.tar.gz
 unit:
   python: true
   cpp: true
 e2e:
+  # The first model is the harness default; both families are downloaded and exercised.
   python:
     enabled: true
+    requires_rtsp: true
     models:
     - yolo26m-seg-bf16-b1
+    - yolo_v8n_seg
+    variants:
+    - yolo26n-seg-bf16-mla_tess
+    - yolo26m-seg-int8-b1
   cpp:
     enabled: true
+    requires_rtsp: true
     models:
     - yolo26m-seg-bf16-b1
+    - yolo_v8n_seg
+    variants:
+    - yolo26n-seg-bf16-mla_tess
+    - yolo26m-seg-int8-b1

@@ -24,11 +24,13 @@ Every stream feeds one shared pose model. Each decoded branch is admitted throug
 
 ## Prerequisites
 
-- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
+- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on the Modalix DevKit, or in a Neat SDK container paired with it.
 - H.264 or H.265 RTSP sources matching `input.codec`, and an [Insight](https://developer.sima.ai/software/tools/insight/) URL reachable from the target.
 - For H.265, the computer running the Insight viewer must support hardware HEVC decoding; Chromium does not provide a software decoder fallback for WebRTC H.265.
 
 ## Install Apps
+
+Install on the Modalix DevKit, or under `/workspace` in a Neat SDK container paired with it. Only the example itself must run on the DevKit. If the Core and Insight selected by Apps are already installed, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps` to skip reinstalling them. See [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
 
 Install the latest Neat Apps runtime and enter the installed bundle:
 
@@ -55,7 +57,7 @@ Run the remaining commands from `prebuilt-apps/`.
 Model packages come from the Model Zoo release below, which can differ from the installed platform version. Replace `<model-file>` with a file from the table.
 
 ```bash
-export MODELZOO_VERSION="2.1.3"
+export MODELZOO_VERSION="3.0.0"
 mkdir -p models
 cd models
 sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26-pose/<model-file>"
@@ -70,7 +72,7 @@ These pose packages are published as direct download artifacts and are not index
 
 [Insight](https://developer.sima.ai/software/tools/insight/) can host the input streams and render each output channel. Install videos directly from the Insight catalog or through Insight's YouTube support.
 
-In the Insight Web UI, start the required streams and copy their RTSP URLs into `streams`. Use the host and UDP port ranges reported by `neat` for the output settings.
+In the Insight Web UI, start the required streams and copy their RTSP URLs into `streams`. Use the host and UDP port ranges reported by `neat` for the output settings. Use a host and published port that the target can reach, not `localhost` and not an address only Insight's own machine can resolve. Verify the URL from the target before running; the application prints the resolved source and its dimensions on startup.
 
 Insight renders the skeleton from the published `pose-estimation` metadata and hides any joint at or below `0.3` confidence. Published metadata always carries all 17 keypoints; `output.min_keypoint_visibility` only controls saved debug overlays.
 
@@ -114,7 +116,6 @@ Each stream publishes `pose-estimation` metadata. Every pose carries the person 
 {
   "poses": [
     {
-      "id": "pose_1",
       "label": "person",
       "confidence": 0.77,
       "bbox": [163, 403, 130, 315],
@@ -132,6 +133,23 @@ Each stream publishes `pose-estimation` metadata. Every pose carries the person 
 ```
 
 Keypoint coordinates are in source-frame pixels, matching the box.
+
+## Expected Result
+
+Each stream reports its own progress while the run is in flight, once
+`runtime.warmup_frames` has passed:
+
+```text
+[profile stream=0] frames=100 output_fps=27.2924 avg_detection_pull_ms=1.94374 avg_metadata_send_ms=0.197574 avg_poses=0.01
+```
+
+Every configured stream should appear. The two implementations format these numbers differently: Python prints the full
+float, the C++ binary prints at the default stream precision of six significant
+digits. Compare the magnitudes rather than the digits.
+
+`avg_poses` is the mean number of poses per processed frame. It is low on footage
+where people are distant or sparse, so a small value is not itself a problem. A
+stream that never reports frames at all is the signal worth investigating.
 
 ## Troubleshooting
 

@@ -60,10 +60,3 @@ Use `GenAIServer` when:
 
 Use GenAI graph fragments only when GenAI is one stage inside a larger Neat
 `Graph`.
-
-## Reference Examples
-
-After choosing the API family, inspect the closest current Apps example under
-`/neat-resources/apps-src/examples` before writing code. Use it as the
-implementation starting point. The installed Neat Library remains the API
-contract.

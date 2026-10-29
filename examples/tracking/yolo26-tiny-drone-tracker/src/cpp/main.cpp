@@ -21,6 +21,7 @@
 #include "support/object_detection/obj_detection_utils.h"
 #include "support/runtime/config_utils.h"
 #include "support/runtime/example_utils.h"
+#include "support/runtime/pull_status.h"
 
 #include <nodes/groups/VideoSender.h>
 #include <nodes/io/MetadataSender.h>
@@ -44,11 +45,11 @@
 #include <vector>
 
 namespace fs = std::filesystem;
+using sima_examples::pull_status_has_sample;
 using yolo26_tiny_drone_tracker::append_decode_output_nodes;
 using yolo26_tiny_drone_tracker::configure_output_fps;
 using yolo26_tiny_drone_tracker::Detection;
 using yolo26_tiny_drone_tracker::ObjectTracker;
-using yolo26_tiny_drone_tracker::pull_status_has_sample;
 using yolo26_tiny_drone_tracker::sample_identities_correlate;
 using yolo26_tiny_drone_tracker::TrackedDetection;
 using yolo26_tiny_drone_tracker::TrackerConfig;

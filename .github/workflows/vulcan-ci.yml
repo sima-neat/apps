@@ -1,6 +1,6 @@
 name: Vulcan CI
 
-run-name: ${{ github.event.head_commit.message || github.ref_name || 'Vulcan CI' }} (${{ vars.VULCAN_ENV || 'production' }})
+run-name: ${{ inputs.nightly && format('Apps Nightly Integration {0} ({1})', github.ref_name, inputs.nightly_request) || format('{0} ({1})', github.event.head_commit.message || github.ref_name || 'Vulcan CI', vars.VULCAN_ENV || 'production') }}
 
 on:
   push:
@@ -8,7 +8,18 @@ on:
       - "**"
     tags:
       - "*"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      nightly:
+        description: Rebuild and test all model variants without publishing.
+        required: false
+        default: false
+        type: boolean
+      nightly_request:
+        description: Caller run identifier used to track a nightly integration run.
+        required: false
+        default: ""
+        type: string
 
 permissions:
   actions: write
@@ -17,7 +28,7 @@ permissions:
   packages: read
 
 concurrency:
-  group: ${{ github.repository }}-${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.repository }}-${{ github.workflow }}-${{ inputs.nightly && 'nightly' || 'publish' }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref_type == 'branch' }}
 
 env:
@@ -65,6 +76,10 @@ jobs:
           exit 1
         fi
 
+        # Complete cached SDK package configuration before the installer invokes APT.
+        docker exec --user root -e DEBIAN_FRONTEND=noninteractive \
+          "${sdk_container}" dpkg --configure -a
+
         docker exec \
           -e SIMA_CLI_CHECK_FOR_UPDATE=0 \
           -e GITHUB_REF_NAME="${{ github.ref_name }}" \
@@ -79,9 +94,7 @@ jobs:
           bash -lc '
             set -euo pipefail
             export SIMA_CLI_CHECK_FOR_UPDATE=0
-            curl -fsSL https://artifacts.sima-neat.com/tools/sima-cli-install.py -o sima-cli-install.py
-            python3 sima-cli-install.py main latest --noninteractive
-            rm -f sima-cli-install.py
+            /workspace/scripts/ci/install_sima_cli_main.sh
             export PATH="${HOME}/.sima-cli/.venv/bin:${PATH}"
             sima-cli neat install --help >/dev/null
             sima-cli packages build --help >/dev/null
@@ -145,11 +158,38 @@ jobs:
         tar -tzf neat-apps-tests.tar.gz neat-apps-tests/tests/test.sh >/dev/null
         ls -lh "${runtime_archives[0]}" neat-apps-tests.tar.gz
 
+  contract-tests:
+    name: Repository Contract Tests
+    # tests/scripts holds the repository contract tests: README layout, the
+    # runtime manifest, the Model Zoo pin, portal assets and the test scope.
+    # They read build.sh, the workflows and the portal sources, so they need a
+    # source checkout, which the runtime the Modalix job overlays the tests
+    # onto does not carry. They run here, on the host, against the checkout.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          clean: true
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install test dependencies
+        run: python3 -m pip install pytest PyYAML
+
+      - name: Run repository contract tests
+        run: python3 -m pytest -c tests/pytest.ini --rootdir=. -v tests/scripts
+
   publish-vulcan-artifacts:
     name: Publish to Vulcan
+    if: ${{ !inputs.nightly }}
     needs:
       - resolve-vulcan-config
       - test-runtime
+      - contract-tests
     uses: sima-neat/.github/.github/workflows/vulcan-publish-artifacts.yml@main
     with:
       aws_region: ${{ needs.resolve-vulcan-config.outputs.aws_region }}
@@ -166,7 +206,7 @@ jobs:
   resolve-portal-publish-config:
     name: Resolve Portal Publish Config
     needs: resolve-vulcan-config
-    if: ${{ github.ref_type == 'branch' }}
+    if: ${{ !inputs.nightly && github.ref_type == 'branch' }}
     uses: sima-neat/.github/.github/workflows/vulcan-resolve-config.yml@main
     with:
       vulcan_env: ${{ needs.resolve-vulcan-config.outputs.vulcan_env == 'prod' && github.ref_name != 'main' && 'staging' || needs.resolve-vulcan-config.outputs.vulcan_env }}
@@ -175,15 +215,61 @@ jobs:
     name: Resolve Test Runner
     uses: sima-neat/.github/.github/workflows/vulcan-resolve-modalix-runner.yml@main
 
-  test-runtime:
-    name: Test Apps Runtime
+  plan-runtime-tests:
+    name: Plan adaptive Apps test fleet
+    needs: [build, resolve-vulcan-config, resolve-test-runner]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python3 -m pip install PyYAML
+      - name: Mint runner discovery token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.NEAT_RELEASES_APP_ID }}
+          private-key: ${{ secrets.NEAT_RELEASES_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-organization-self-hosted-runners: read
+      - name: Discover fleet and balance every enabled suite
+        id: plan
+        env:
+          RUNNER_DISCOVERY_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+          APPS_UNREADY_RUNNERS: ${{ vars.APPS_UNREADY_RUNNERS || '[]' }}
+          RUNNER_GROUP: ${{ needs.resolve-test-runner.outputs.modalix_runner_group }}
+          REQUIRED_LABELS: '["self-hosted","Linux","ARM64","modalix","vulcan-${{ needs.resolve-vulcan-config.outputs.vulcan_env }}"]'
+        run: |
+          python3 scripts/ci/plan_runtime_shards.py \
+            --group "${RUNNER_GROUP}" --labels "${REQUIRED_LABELS}"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: neat-apps-shard-plan
+          path: runtime-shard-plan.json
+          if-no-files-found: error
+          retention-days: 7
+
+  test-runtime-shard:
+    name: Apps ${{ matrix.shard }}
     needs:
       - build
       - resolve-vulcan-config
       - resolve-test-runner
+      - plan-runtime-tests
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan-runtime-tests.outputs.matrix) }}
     runs-on:
       group: ${{ needs.resolve-test-runner.outputs.modalix_runner_group }}
-      labels: [self-hosted, Linux, ARM64, modalix, "vulcan-${{ needs.resolve-vulcan-config.outputs.vulcan_env }}"]
+      labels: ${{ matrix.labels }}
 
     steps:
       - name: Checkout code
@@ -196,6 +282,12 @@ jobs:
         run: |
           rm -rf _vulcan-test neat-apps neat-apps-* sima-neat-*-Linux-extras
           rm -f neat-apps-*.tar.gz metadata*.json install_vulcan_apps_package.sh
+
+      - name: Download shard plan
+        uses: actions/download-artifact@v7
+        with:
+          name: neat-apps-shard-plan
+          path: _vulcan-test
 
       - name: Download Apps build artifacts
         uses: actions/download-artifact@v7
@@ -275,16 +367,18 @@ jobs:
             exit 1
           fi
 
-      - name: Install Python test dependencies
+      - name: Install test dependencies
         run: |
+          # shellcheck disable=SC1090
           source "${PYNEAT_ACTIVATE}"
           echo "Using Python test interpreter: ${PYTHON_TEST_BIN}"
-          "${PYTHON_TEST_BIN}" -m pip install pytest "numpy<2" "opencv-python-headless<4.12" PyYAML
+          "${PYTHON_TEST_BIN}" -m pip install pytest "opencv-python-headless<4.12" PyYAML
           "${PYTHON_TEST_BIN}" -c "import pyneat; print('Using pyneat:', pyneat.__file__)"
 
-      - name: Run all activated Apps tests
+      - name: Run assigned Apps suites
         env:
           NEAT_APPS_SKIP_MODEL_DOWNLOAD: "0"
+          SIMANEAT_APPS_TEST_MODEL_VARIANTS: ${{ inputs.nightly && '1' || '0' }}
           SIMANEAT_TEST_RTSP_H264_URL: ${{ vars.SIMANEAT_TEST_RTSP_H264_URL }}
           SIMANEAT_TEST_RTSP_H264_URLS: ${{ vars.SIMANEAT_TEST_RTSP_H264_URLS }}
           SIMANEAT_TEST_RTSP_H265_URL: ${{ vars.SIMANEAT_TEST_RTSP_H265_URL }}
@@ -295,11 +389,76 @@ jobs:
           SIMANEAT_TEST_HTTP_MJPEG_URLS: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URLS }}
         run: |
           RUNTIME_DIR="$(cat _vulcan-test/apps_runtime_dir.txt)"
-          cd "${RUNTIME_DIR}"
+          # shellcheck disable=SC1090
           source "${PYNEAT_ACTIVATE}"
-          ./tests/test.sh --all --strict
+          "${PYTHON_TEST_BIN}" scripts/ci/run_runtime_shard.py \
+            --plan _vulcan-test/runtime-shard-plan.json \
+            --shard "${{ matrix.shard }}" --runtime "${RUNTIME_DIR}" \
+            --result "_runtime-results/${{ matrix.shard }}.json"
+
+      - name: Upload shard result and logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: neat-apps-test-results-${{ matrix.shard }}
+          path: _runtime-results/
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
+
+      - name: Cleanup test workspace tmp artifacts
+        if: ${{ always() }}
+        run: rm -rf _vulcan-test _runtime-results
+
+  test-runtime:
+    name: Test Apps Runtime
+    if: ${{ always() && !cancelled() }}
+    needs: [build, plan-runtime-tests, test-runtime-shard]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Require every test shard
+        env:
+          BUILD_RESULT: ${{ needs.build.result }}
+          PLAN_RESULT: ${{ needs.plan-runtime-tests.result }}
+          SHARD_RESULT: ${{ needs.test-runtime-shard.result }}
+        run: |
+          test "${BUILD_RESULT}" = success
+          test "${PLAN_RESULT}" = success
+          test "${SHARD_RESULT}" = success
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python3 -m pip install PyYAML
+      - name: Download shard plan
+        uses: actions/download-artifact@v7
+        with:
+          name: neat-apps-shard-plan
+          path: _vulcan-test
+      - name: Download every shard result
+        uses: actions/download-artifact@v7
+        with:
+          pattern: neat-apps-test-results-*
+          path: _shard-results
+          merge-multiple: true
+      - name: Verify complete suite coverage
+        run: |
+          python3 scripts/ci/run_runtime_shard.py \
+            --plan _vulcan-test/runtime-shard-plan.json --verify-results _shard-results
+      - name: Download Apps build artifacts
+        if: ${{ !inputs.nightly }}
+        uses: actions/download-artifact@v7
+        with:
+          name: neat-apps-build
+          path: _vulcan-test/artifacts
+      - name: Install packaging CLI
+        if: ${{ !inputs.nightly }}
+        run: |
+          scripts/ci/install_sima_cli_main.sh
+          echo "${HOME}/.sima-cli/.venv/bin" >> "${GITHUB_PATH}"
 
       - name: Package tested runtime for release
+        if: ${{ !inputs.nightly }}
         run: |
           rm -rf dist
           mkdir -p dist
@@ -333,6 +492,7 @@ jobs:
           ls -lh dist
 
       - name: Upload tested Apps release
+        if: ${{ !inputs.nightly }}
         uses: actions/upload-artifact@v7
         with:
           name: neat-apps-dist
@@ -340,14 +500,9 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
-      - name: Cleanup test workspace tmp artifacts
-        if: ${{ always() }}
-        run: |
-          rm -rf _vulcan-test
-
   promote-latest-tag:
     name: Promote Vulcan latest tag
-    if: ${{ always() && (github.ref_type == 'branch' || github.ref_type == 'tag') && needs.publish-vulcan-artifacts.result == 'success' }}
+    if: ${{ always() && !inputs.nightly && (github.ref_type == 'branch' || github.ref_type == 'tag') && needs.publish-vulcan-artifacts.result == 'success' }}
     needs:
       - resolve-vulcan-config
       - publish-vulcan-artifacts
@@ -362,7 +517,7 @@ jobs:
 
   build-sysdoc-examples:
     name: Build SysDoc Examples Route
-    if: ${{ github.ref_type == 'branch' }}
+    if: ${{ !inputs.nightly && github.ref_type == 'branch' }}
     needs:
       - resolve-portal-publish-config
       - test-runtime
@@ -437,7 +592,7 @@ jobs:
 
   publish-sysdoc-examples:
     name: Publish SysDoc Examples Route
-    if: ${{ github.ref_type == 'branch' }}
+    if: ${{ !inputs.nightly && github.ref_type == 'branch' }}
     needs:
       - resolve-portal-publish-config
       - build-sysdoc-examples
@@ -456,7 +611,7 @@ jobs:
 
   publish-apps-algolia:
     name: Publish Apps Algolia Index
-    if: ${{ github.ref_type == 'branch' }}
+    if: ${{ !inputs.nightly && github.ref_type == 'branch' }}
     needs:
       - resolve-portal-publish-config
       - publish-sysdoc-examples

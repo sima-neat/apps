@@ -24,10 +24,12 @@ This synthetic model benchmark does not measure input decoding, Insight output, 
 
 ## Prerequisites
 
-- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
+- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on the Modalix DevKit, or in a Neat SDK container paired with it.
 - A compiled model package supported by `pyneat.Model`.
 
 ## Install Apps
+
+Install on the Modalix DevKit, or under `/workspace` in a Neat SDK container paired with it. Only the example itself must run on the DevKit. If the Core and Insight selected by Apps are already installed, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps` to skip reinstalling them. See [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
 
 Install the latest Neat Apps runtime and enter the installed bundle:
 
@@ -43,22 +45,13 @@ Run the remaining commands from `prebuilt-apps/`.
 
 Use any compatible compiled MPK. Apps CI exercises the benchmark with `yolo26m-det-int8-b1.tar.gz`; it is not a required default.
 
-Model packages come from the Model Zoo release below, which can differ from the installed platform version. Download a Model Zoo package:
+Model packages come from the Model Zoo release below, which can differ from the installed platform version. Replace `<model-file>` with the package to benchmark:
 
 ```bash
-export MODELZOO_VERSION="2.1.3"
+export MODELZOO_VERSION="3.0.0"
 mkdir -p models
 cd models
-sima-cli modelzoo -v "${MODELZOO_VERSION}" get <model-name>
-cd ..
-```
-
-For a model published as a direct artifact:
-
-```bash
-mkdir -p models
-cd models
-sima-cli download <model-url>
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/<model-file>"
 cd ..
 ```
 
@@ -84,6 +77,26 @@ Without `--decode-type`, the model runs through the route its package declares. 
 ## Benchmark Results
 
 See the maintained [benchmark results](https://github.com/sima-neat/apps/blob/main/examples/benchmarking/model-benchmark/BENCHMARK_RESULTS.md) for measurements from Apps-supported packages.
+
+## Expected Result
+
+The application prints headline metrics and the path it wrote the full report to:
+
+```text
+latency_ms=7.153341385999992
+fps=300.716959903217
+avg_power_watts=14.03314393939394
+energy_joules=46.6746557159697
+report_json=sandbox/model-benchmark/report.json
+```
+
+The `report_json=` line names where the full report was written; trust it rather
+than either setting, because `--output-json` takes precedence over
+`output.report_json` and the documented run above passes that flag.
+
+These numbers depend on the model package and the board, so treat them as an
+example of the shape rather than a target; compare your own against the
+maintained benchmark results linked in the `Benchmark Results` section above.
 
 ## Troubleshooting
 

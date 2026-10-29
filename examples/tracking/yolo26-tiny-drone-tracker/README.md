@@ -28,8 +28,8 @@ per-stream IDs.
 ## Prerequisites
 
 - `sima-cli` 2.1.15 or newer
-  ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a
-  supported Modalix or DevKit target.
+  ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on the
+  Modalix DevKit, or in a Neat SDK container paired with it.
 - One or more H.264 or H.265 RTSP sources and an
   [Insight](https://developer.sima.ai/software/tools/insight/) endpoint
   reachable from the target.
@@ -38,6 +38,8 @@ per-stream IDs.
   WebRTC H.265.
 
 ## Install Apps
+
+Install on the Modalix DevKit, or under `/workspace` in a Neat SDK container paired with it. Only the example itself must run on the DevKit. If the Core and Insight selected by Apps are already installed, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps` to skip reinstalling them. See [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
 
 Install the latest Neat Apps runtime and enter the installed bundle:
 
@@ -51,10 +53,10 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-Download the tested SDK 2.1.3 model artifact:
+Download the tested SDK 3.0.0 model artifact:
 
 ```bash
-export MODELZOO_VERSION="2.1.3"
+export MODELZOO_VERSION="3.0.0"
 mkdir -p models
 cd models
 sima-cli download \
@@ -73,7 +75,10 @@ Use the source video packaged with Apps:
 
 In the Insight Web UI, open `RTSP Source`, upload this video, start its stream,
 and copy the RTSP URL into `streams`. Use the host and UDP port ranges reported
-by `neat` for the output settings.
+by `neat` for the output settings. Use a host and published port that the target
+can reach, not `localhost` and not an address only Insight's own machine can
+resolve. Verify the URL from the target before running; the application prints
+the resolved source and its dimensions on startup.
 
 ## Configure
 
@@ -118,6 +123,23 @@ pip install -r "$APP_DIR/src/python/requirements.txt"
 python3 "$APP_DIR/src/python/main.py" \
   --config "$APP_DIR/src/common/config.yaml"
 ```
+
+## Expected Result
+
+Each stream reports its own progress while the run is in flight:
+
+```text
+[profile stream=0] frames=100 output_fps=27.0271 avg_detection_pull_ms=27.4154 avg_tracker_ms=0.50715 avg_metadata_send_ms=1.45828 avg_tracks=46.76
+```
+
+`avg_tracks` is the mean number of active tracks per processed frame. On the
+packaged anti-UAV source it runs to several dozen, because the model is tuned for
+small objects and that footage is dense with them; values between roughly 35 and
+50 are ordinary there. Expect a much lower figure on other material.
+
+The two implementations format these numbers differently: Python prints the full
+float, the C++ binary prints at the default stream precision of six significant
+digits. Compare the magnitudes rather than the digits.
 
 ## Troubleshooting
 

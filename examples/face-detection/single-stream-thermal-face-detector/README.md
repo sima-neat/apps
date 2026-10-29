@@ -28,21 +28,18 @@ YOLOv5s-Face returns raw box and landmark outputs. The C++ and Python applicatio
 ## Preview
 ![Thermal face detector reference preview](../../../portal/assets/examples/face-detection/single-stream-thermal-face-detector/image.png)
 
-The reference visualization pairs a thermal stream with its visible-light
-source and shows face, eye, and mouth regions. The application publishes
-the five facial landmarks to Insight as labeled dots; it does not publish the
-reference visualization's boxes.
-
 ## Prerequisites
 
 - `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/))
-  on a supported Modalix or DevKit target.
+  on the Modalix DevKit, or in a Neat SDK container paired with it.
 - A running [Neat Insight](https://developer.sima.ai/software/tools/insight/)
   instance reachable from the target, with an RTSP source containing faces.
 - The model expects an 800x800 compiled canvas; its on-device preprocess accepts
   NV12, BGR, RGB, I420, or grayscale input up to 4096x4096.
 
 ## Install Apps
+
+Install on the Modalix DevKit, or under `/workspace` in a Neat SDK container paired with it. Only the example itself must run on the DevKit. If the Core and Insight selected by Apps are already installed, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps` to skip reinstalling them. See [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
 
 Install the latest Neat Apps runtime and enter the installed bundle:
 
@@ -62,7 +59,7 @@ Model packages come from the Model Zoo release below, which can differ from the
 installed platform version.
 
 ```bash
-export MODELZOO_VERSION="2.1.3"
+export MODELZOO_VERSION="3.0.0"
 mkdir -p models
 cd models
 sima-cli download \
@@ -134,7 +131,60 @@ python3 ${APP_DIR}/src/python/main.py \
 Open the Insight video viewer for the channel (e.g. `/api/viewer-url?src=0`) to
 watch the annotated stream.
 
+## Expected Result
+
+This application writes nothing to disk; its output is the Insight video channel
+plus the landmark metadata channel. It prints the resolved source on startup and
+a count when the frame limit is reached:
+
+```text
+rtsp=rtsp://<host>:<port>/<stream> stream=1280x720@30 insight=<insight-host> video=9000 metadata=9100 channel=0
+processed=200 video_sender=<insight-host>:9000
+```
+
+The packaged config ships `inference.frames: 0`, which runs continuously. The
+closing `processed=` line prints only when a finite limit is reached, and
+interrupting the run with Ctrl-C skips it in both implementations. For a bounded
+check that ends by itself and prints the count, set a positive limit first:
+
+```yaml
+inference:
+  frames: 200
+```
+
+Left at `0`, the live Insight stream is the success signal instead.
+
+Either way, `processed` reports frames pushed through the pipeline, not faces
+found, so a healthy count does not by itself confirm detections. Confirm those
+in Insight, which draws the five landmarks as labeled dots on the stream.
+
+The preview image is a reference visualization: it pairs the thermal stream
+with its visible-light source and draws face, eye, and mouth boxes. The
+application publishes only the five landmarks, not those boxes.
+
 ## Debugging Notes
+
+Check the configuration before involving hardware. This validates and exits
+without opening a stream:
+
+```bash
+python3 ${APP_DIR}/src/python/main.py \
+  --config ${APP_DIR}/src/common/config.yaml --validate-config-only
+```
+
+- `source.rtsp_url must be set`, `model.path must be set` and
+  `output.insight.host must be set` mean the value is empty or missing. Note that
+  validation does not detect an unedited placeholder: the packaged
+  `<rtsp-url>` and `<insight-host-ip>` are non-empty strings and pass, so a config
+  you have not filled in still validates cleanly.
+- `method SETUP failed: 461 Unsupported Transport` was observed once at startup
+  against an Insight-hosted source, after which the pipeline built and the run
+  completed normally. Treat a single occurrence as noise unless the pipeline also
+  fails to start.
+- If the run reports no frames at all, verify the RTSP URL from the board itself
+  rather than from the machine running Insight. The URL Insight displays is not
+  always reachable from the target, and the ports table above explains why.
+
 - If the viewer shows video but no overlays, confirm `output.insight.host` and the
   metadata port are reachable and match the viewer's channel. Use Insight's
   `/api/ingest/stats` to check `metadata.messages_received`.
