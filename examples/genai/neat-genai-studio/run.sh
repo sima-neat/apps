@@ -359,18 +359,19 @@ resolve_supertonic_env() {
   # Effective path (default applied) for run.sh's own use: the banner and --clean.
   SUPERTONIC_MODELS_ROOT_RESOLVED="${models:-/media/nvme/supertonic-tts/models}"
 }
-# Same test as supertonic_tts.available(): runtime interpreter plus the two
-# marker model files (setup.sh verifies every file's checksum).
+# Share the backend's model-asset check; setup.sh verifies the checksums.
 supertonic_installed() {
-  [[ -n "${SUPERTONIC_PYTHON}" \
-     && -f "${SUPERTONIC_MODELS_ROOT_RESOLVED}/supertonic-3/onnx/tts.json" \
-     && -f "${SUPERTONIC_MODELS_ROOT_RESOLVED}/supertonic-3-sima/supertonic_vector_field_sima_mpk.tar.gz" ]]
+  PYTHONPATH="${PYTHON_DIR}/api/tts" \
+    SUPERTONIC_PYTHON="${SUPERTONIC_PYTHON}" \
+    SUPERTONIC_MODELS_ROOT="${SUPERTONIC_MODELS_ROOT_RESOLVED}" \
+    python3 -c 'from supertonic_tts import available; raise SystemExit(not available())'
 }
 # What a dependency refresh would change for Supertonic: its pinned requirements
 # and the reviewed model revisions/checksums in setup.sh.
 supertonic_fingerprint() {
   {
-    cat "${PYTHON_DIR}/requirements-supertonic.txt" 2>/dev/null
+    cat "${PYTHON_DIR}/requirements-supertonic.txt" \
+      "${PYTHON_DIR}/api/tts/supertonic_sima/model_assets.json" 2>/dev/null
     grep -E '^SUPERTONIC_(UPSTREAM|SIMA)_HF_REVISION=|^[0-9a-f]{64}  supertonic-3' "${EXAMPLE_DIR}/setup.sh" 2>/dev/null
   } | sha256sum | cut -d' ' -f1
 }

@@ -22,10 +22,10 @@ ENGINE = EXAMPLE / "src" / "python" / "api" / "tts" / "supertonic_sima" / "engin
 REQUIREMENTS = EXAMPLE / "src" / "python" / "requirements-supertonic.txt"
 
 
-def _setup_function(name: str) -> str:
-    """The body of one shell function from setup.sh, from its header to the
+def _setup_function(name: str, script: Path = SETUP) -> str:
+    """The body of one shell function, from its header to the
     first line that is a lone closing brace."""
-    lines = SETUP.read_text(encoding="utf-8").splitlines()
+    lines = script.read_text(encoding="utf-8").splitlines()
     start = lines.index(f"{name}() {{")
     end = next(i for i in range(start + 1, len(lines)) if lines[i] == "}")
     return "\n".join(lines[start:end + 1])
@@ -266,6 +266,22 @@ class ModelAssetsTests(unittest.TestCase):
             self.assertIn("checksum mismatch", rejected.stderr)
             self.assertFalse(target.exists())
             self.assertEqual(list((root / "models").glob(".supertonic-model.*")), [])
+
+    def test_update_fingerprint_includes_model_pins(self):
+        import json
+        with tempfile.TemporaryDirectory() as tmp:
+            python_dir = Path(tmp)
+            pin = python_dir / "api/tts/supertonic_sima/model_assets.json"
+            pin.parent.mkdir(parents=True)
+            assets = json.loads((EXAMPLE / "src/python/api/tts/supertonic_sima/model_assets.json").read_text())
+            pin.write_text(json.dumps(assets))
+            (python_dir / "requirements-supertonic.txt").write_text("")
+            script = _setup_function("supertonic_fingerprint", EXAMPLE / "run.sh") + "\nsupertonic_fingerprint"
+            env = {**os.environ, "EXAMPLE_DIR": str(EXAMPLE), "PYTHON_DIR": str(python_dir)}
+            before = subprocess.check_output(["bash", "-c", script], env=env)
+            assets["vector_estimator"]["sha256"] = "0" * 64
+            pin.write_text(json.dumps(assets))
+            self.assertNotEqual(before, subprocess.check_output(["bash", "-c", script], env=env))
 
     def test_setup_finds_sima_cli_outside_a_login_shell(self):
         # The DevKit puts sima-cli on PATH only for login shells; both sima-cli
