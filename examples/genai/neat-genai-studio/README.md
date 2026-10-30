@@ -33,7 +33,7 @@ Once set up, the Studio runs without internet access. The first `setup.sh` run a
 - A Modalix DevKit with `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)), the Neat Development Environment, and the Neat Library installed.
 - The Neat Library's Python environment at `~/pyneat/bin/python`. If it is somewhere else, set `PYNEAT_PYTHON=/path/to/python-with-pyneat` before running the commands below.
 - Neat Insight, to use the GenAI tab.
-- Internet access on the board for the first `setup.sh` run and for Hugging Face downloads. Behind a firewall or proxy, allow `pypi.org` and `files.pythonhosted.org` (Python packages), `download.pytorch.org` (PyTorch for document search), `huggingface.co` and its download hosts (models and voices), `raw.githubusercontent.com` (English text-to-speech data for Piper, fetched with NLTK), and `docs.sima.ai` (Supertonic's compiled model, through `sima-cli`).
+- Internet access on the board for the first `setup.sh` run and for Hugging Face downloads. Behind a firewall or proxy, allow `pypi.org` and `files.pythonhosted.org` (Python packages), `download.pytorch.org` (PyTorch for document search), `huggingface.co` and its download hosts (models and voices), `raw.githubusercontent.com` (English text-to-speech data for Piper, fetched with NLTK), and `docs.sima.ai` (Supertonic's compiled models, through `sima-cli`).
 
 Run every command below in a shell on the board.
 
@@ -344,17 +344,19 @@ environment of `run.sh`.
   `POST /tts/engine` changes the preference for languages more than one engine
   can speak.
 - **Supertonic 3** runtime is vendored under `src/python/api/tts/supertonic_sima/`
-  (see its README for provenance). It synthesizes at a real-time factor of about
-  0.07 on a Modalix DevKit and offers ten speakers (F1-F5, M1-M5).
+  (see its README for provenance). It offers ten speakers (F1-F5, M1-M5).
+  Each denoising step evaluates conditional and unconditional guidance together
+  in one batch-two vector-estimator call; the vocoder remains batch one.
   `SUPERTONIC_VOICE` picks the startup speaker; `SUPERTONIC_STEPS` (5-12,
   default 8) trades quality for latency. It runs in its own venv
   (`./.venv-supertonic`, requirements in `src/python/requirements-supertonic.txt`
   plus the installed PyNeat) and worker process. `setup.sh` downloads its model
   files from [Supertone/supertonic-3](https://huggingface.co/Supertone/supertonic-3)
-  and [florianvoss/supertonic-3-sima](https://huggingface.co/florianvoss/supertonic-3-sima)
-  at pinned revisions, and the Platform 3.0 vector estimator from the SiMa model
-  zoo with `sima-cli download` (address and checksum in
-  `src/python/api/tts/supertonic_sima/vector_estimator.json`). Every file is
+  and its runtime constants from
+  [florianvoss/supertonic-3-sima](https://huggingface.co/florianvoss/supertonic-3-sima)
+  at pinned revisions. Both compiled models come from the SiMa model zoo with
+  `sima-cli download`; `src/python/api/tts/supertonic_sima/model_assets.json`
+  records their addresses and checksums. Every file is
   verified by SHA-256, and each `setup.sh` run repairs missing or changed files.
   Supertonic needs Platform 3.0 or newer; when the runtime is missing the engine
   is not offered. The models root and venv are persisted under

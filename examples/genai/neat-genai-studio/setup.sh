@@ -81,8 +81,8 @@ resolve_supertonic_paths() {
   SUPERTONIC_MODELS_ROOT="${SUPERTONIC_MODELS_ROOT:-${SUPERTONIC_DEFAULT_MODELS_ROOT}}"
 }
 # Reviewed Hugging Face revisions: the upstream CPU models and voice styles, and
-# the compiled MLA packages. Bump deliberately, with review, together with the
-# checksums in _supertonic_checksums (a bump without them fails verification).
+# the host-side runtime constants. Bump deliberately, with review, together with the
+# checksums in _supertonic_checksums and model_assets.json.
 SUPERTONIC_UPSTREAM_HF_REPO="Supertone/supertonic-3"
 SUPERTONIC_UPSTREAM_HF_REVISION="${SUPERTONIC_UPSTREAM_HF_REVISION:-724fb5abbf5502583fb520898d45929e62f02c0b}"
 SUPERTONIC_SIMA_HF_REPO="florianvoss/supertonic-3-sima"
@@ -366,12 +366,12 @@ b76cbf62bac707c710cf0ae5aba5e31eea1a6339a9734bfae33ab98499534a50  supertonic-3/v
 ea1ac35ccb91b0d7ecad533a2fbd0eec10c91513d8951e3b25fbba99954e159b  supertonic-3/voice_styles/M3.json
 ca8eefad4fcd989c9379032ff3e50738adc547eeb5e221b82593a6d7b3bac303  supertonic-3/voice_styles/M4.json
 dd22b92740314321f8ae11c5e87f8dd60d060f15dd3a632b5adf77f471f77af2  supertonic-3/voice_styles/M5.json
-48e851eaec6dce94f8d830cbc00d4a007fd5f42adba3b1a5a10b8f2a76d431f6  supertonic-3-sima/supertonic_vector_field_sima_mpk.tar.gz
-90b2d6a089c8527826dd1d0cb5b557316ac703045f422d6e1332deeabd84e0cb  supertonic-3-sima/supertonic_vocoder_sima_bf16_mpk.tar.gz
-4e9a4d85592f720c9a497cf94164290ccdddd0c5d104577fb810c936d2abf9f9  supertonic-3-sima/supertonic_runtime_data.npz
-31285c6d2ed7c1bca84a78c6b3477edc0ac9f0442a8062adc2627574555a4e3e  supertonic-3-sima/artifact_manifest.json
-1659e891f4da0cc80c6dd7a5fbb3ca87f3a12ad7f0f2bce0bfb0963433709628  supertonic-3-sima/vocoder_bf16_manifest.json
 SUMS
+  python3 - "${EXAMPLE_DIR}/src/python/api/tts/supertonic_sima/model_assets.json" <<'PYASSETS'
+import json, sys
+for asset in json.load(open(sys.argv[1])).values():
+    print(f"{asset['sha256']}  supertonic-3-sima/{asset['file']}")
+PYASSETS
 }
 
 # Files that are missing or do not match their pinned checksum (one per line,
@@ -541,40 +541,45 @@ _supertonic_venv() {
   ok "Supertonic venv ready."
 }
 
-# The vector estimator compiled for Platform 3.0 comes from the SiMa model zoo,
-# not from the Hugging Face repo (its 2.1.3 compile does not load on Core 0.6).
-# The URL and checksum are in vector_estimator.json, which the engine also reads.
-# sima-cli downloads it, signing in to the model zoo if needed.
-_supertonic_vector_estimator() {
-  local pin="${EXAMPLE_DIR}/src/python/api/tts/supertonic_sima/vector_estimator.json"
-  local target="${SUPERTONIC_MODELS_ROOT}/supertonic-3-sima/supertonic_vector_field_sima_mpk.tar.gz"
-  local dir="${target%/*}" url sum name tmp
-  url="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["url"])' "${pin}")" || return 1
-  sum="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha256"])' "${pin}")" || return 1
-  name="$(basename "${url}")"
+# Both compiled MLA models come from the SiMa model zoo. The worker and
+# installer share their filenames and checksums in model_assets.json.
+_supertonic_mla_models() {
+  local pin="${EXAMPLE_DIR}/src/python/api/tts/supertonic_sima/model_assets.json"
+  local dir="${SUPERTONIC_MODELS_ROOT}/supertonic-3-sima" entries component url sum file target tmp
+  entries="$(python3 - "${pin}" <<'PYASSETS'
+import json, sys
+assets = json.load(open(sys.argv[1]))
+for name in ("vector_estimator", "vocoder"):
+    asset = assets[name]
+    print("\t".join((name, asset["url"], asset["sha256"], asset["file"])))
+PYASSETS
+)" || return 1
   mkdir -p "${dir}" || return 1
-  # Downloaded by hand into the same folder: take it under the name the engine uses.
-  if [[ ! -f "${target}" && -f "${dir}/${name}" && "$(sha256sum "${dir}/${name}" | cut -d' ' -f1)" == "${sum}" ]]; then
-    mv -f "${dir}/${name}" "${target}"
-  fi
-  if [[ -f "${target}" && "$(sha256sum "${target}" | cut -d' ' -f1)" == "${sum}" ]]; then
-    ok "Platform 3.0 vector estimator already downloaded."
-    return 0
-  fi
-  if ! _find_sima_cli; then
-    warn "sima-cli is needed to download the Platform 3.0 vector estimator from the SiMa model zoo."
-    warn "Install sima-cli, or run: sima-cli download ${url} -d ${dir}  (then run setup.sh again)"
-    return 1
-  fi
-  step "Downloading the Platform 3.0 vector estimator from the SiMa model zoo…"
-  tmp="$(mktemp -d "${SUPERTONIC_MODELS_ROOT}/.vector-estimator.XXXXXX")" || return 1
-  if ! sima-cli download "${url}" -d "${tmp}"; then
+  while IFS=$'\t' read -r component url sum file; do
+    target="${dir}/${file}"
+    if [[ -f "${target}" && "$(sha256sum "${target}" | cut -d' ' -f1)" == "${sum}" ]]; then
+      ok "Supertonic ${component} already downloaded."
+      continue
+    fi
+    if ! _find_sima_cli; then
+      warn "sima-cli is needed to download Supertonic's compiled models."
+      return 1
+    fi
+    step "Downloading Supertonic ${component} from the SiMa model zoo…"
+    tmp="$(mktemp -d "${SUPERTONIC_MODELS_ROOT}/.supertonic-model.XXXXXX")" || return 1
+    if ! sima-cli download "${url}" -d "${tmp}"; then
+      rm -rf "${tmp}"
+      warn "The model zoo download failed; rerun setup.sh to retry."
+      return 1
+    fi
+    if [[ "$(sha256sum "${tmp}/${url##*/}" | cut -d' ' -f1)" != "${sum}" ]]; then
+      rm -rf "${tmp}"
+      warn "Supertonic ${component} checksum mismatch."
+      return 1
+    fi
+    mv -f "${tmp}/${url##*/}" "${target}" || { rm -rf "${tmp}"; return 1; }
     rm -rf "${tmp}"
-    warn "The model zoo download failed. Retry, or run: sima-cli download ${url} -d ${dir}  (then run setup.sh again)"
-    return 1
-  fi
-  mv -f "${tmp}/${name}" "${target}"
-  rm -rf "${tmp}"
+  done <<< "${entries}"
 }
 
 _supertonic_models() {
@@ -585,15 +590,12 @@ _supertonic_models() {
   fi
   mkdir -p "${SUPERTONIC_MODELS_ROOT}" || return 1
   export HF_HOME="${SUPERTONIC_MODELS_ROOT}/.hf-cache"   # keep the cache off the root filesystem
-  step "Downloading the compiled MLA packages (${SUPERTONIC_SIMA_HF_REPO}@${SUPERTONIC_SIMA_HF_REVISION:0:12})…"
+  step "Downloading the runtime constants (${SUPERTONIC_SIMA_HF_REPO}@${SUPERTONIC_SIMA_HF_REVISION:0:12})…"
   hf_download "${hf}" "${SUPERTONIC_SIMA_HF_REPO}" \
-    supertonic_vocoder_sima_bf16_mpk.tar.gz \
     supertonic_runtime_data.npz \
-    artifact_manifest.json \
-    vocoder_bf16_manifest.json \
     --revision "${SUPERTONIC_SIMA_HF_REVISION}" \
     --local-dir "${SUPERTONIC_MODELS_ROOT}/supertonic-3-sima" || return 1
-  _supertonic_vector_estimator || return 1
+  _supertonic_mla_models || return 1
   step "Downloading the upstream CPU models and voice styles (${SUPERTONIC_UPSTREAM_HF_REPO}@${SUPERTONIC_UPSTREAM_HF_REVISION:0:12})…"
   hf_download "${hf}" "${SUPERTONIC_UPSTREAM_HF_REPO}" \
     onnx/duration_predictor.onnx onnx/text_encoder.onnx onnx/tts.json onnx/unicode_indexer.json \

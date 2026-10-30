@@ -2,8 +2,8 @@
 # (app/supertonic_sima/engine.py) at commit 3b837b3e1b6a378ab8c24c3c04b079429b67e237,
 # included in Neat GenAI Studio at the upstream author's request. See README.md
 # in this directory for how to refresh it and THIRD_PARTY_TTS_MODELS.md for
-# attribution. Local changes: DEFAULT_ASSET_ROOT / DEFAULT_OUTPUT_ROOT removed (unused; the worker passes every path explicitly);
-# _drop_batch_axes accepts the leading batch axis of one that PyNeat 0.6 (Platform 3.0) reports on tensor specs and outputs.
+# attribution. Local changes: explicit paths and shared model-asset checksums;
+# batched NHWC bindings; paired conditional/unconditional vector estimation.
 #!/usr/bin/env python3
 """Persistent hybrid Supertonic 3 engine for a SiMa Modalix DevKit.
 
@@ -30,6 +30,7 @@ from .inputs import (
     MAX_SEQUENCE_LENGTH,
     ROPE_TABLE_KEY,
     RUNTIME_CONSTANT_KEYS,
+    TIME_INPUT_SHAPE,
     TIME_TABLE_KEY,
     UNCONDITIONAL_STYLE_KEY,
     UNCONDITIONAL_STYLE_VALUE,
@@ -42,17 +43,18 @@ from .text import MAX_SPEED, MIN_SPEED, preprocess_text
 
 
 UPSTREAM_REVISION = "724fb5abbf5502583fb520898d45929e62f02c0b"
-BASE_PHYSICAL_INPUTS = (
-    ("noisy_latent", (1, 144, 1, 192)),
-    ("text_emb", (1, 256, 1, 192)),
-    ("style_ttl", (1, 256, 1, 50)),
-    ("style_key", (1, 256, 1, 50)),
-    ("latent_mask", (1, 1, 1, 192)),
-    ("text_mask", (1, 192, 1, 1)),
-    ("time_sinusoidal", (1, 64, 1, 1)),
-    ("rope_tables", (1, 128, 1, 192)),
+GUIDANCE_BATCH_SIZE = 2
+VECTOR_PHYSICAL_INPUTS = (
+    ("noisy_latent", (GUIDANCE_BATCH_SIZE, 144, 1, 192)),
+    ("text_emb", (GUIDANCE_BATCH_SIZE, 256, 1, 192)),
+    ("style_ttl", (GUIDANCE_BATCH_SIZE, 256, 1, 50)),
+    ("style_key", (GUIDANCE_BATCH_SIZE, 256, 1, 50)),
+    ("latent_mask", (GUIDANCE_BATCH_SIZE, 1, 1, 192)),
+    ("text_mask", (GUIDANCE_BATCH_SIZE, 192, 1, 1)),
+    ("time_sinusoidal", (GUIDANCE_BATCH_SIZE, 64, 1, 1)),
+    ("rope_tables", (GUIDANCE_BATCH_SIZE, 128, 1, 192)),
 )
-BASE_PHYSICAL_OUTPUT = ("velocity", (1, 144, 1, 192))
+VECTOR_PHYSICAL_OUTPUT = ("velocity", (GUIDANCE_BATCH_SIZE, 144, 1, 192))
 VOCODER_PHYSICAL_INPUT = ("latent", (1, 144, 1, 192))
 VOCODER_PHYSICAL_OUTPUT = ("wav_frames", (1, 512, 1, 1152))
 
@@ -100,30 +102,10 @@ def _style_nchw(value: np.ndarray) -> np.ndarray:
     return np.ascontiguousarray(value.transpose(0, 2, 1)[:, :, None, :])
 
 
-def _drop_batch_axes(shape: tuple[int, ...], rank: int) -> tuple[int, ...]:
-    """Drop leading axes of size one beyond ``rank``. PyNeat 0.6 reports some
-    batch-one tensors with a leading batch axis, e.g. (1, 1, 192, 144) for the
-    public (1, 192, 144); the data is the same."""
-    shape = tuple(shape)
-    while len(shape) > rank and shape[0] == 1:
-        shape = shape[1:]
-    return shape
-
-
-def _shape_from_spec(spec: Any) -> tuple[int, ...] | None:
-    shape = getattr(spec, "shape", None)
-    if shape is None:
-        return None
-    try:
-        return _drop_batch_axes(tuple(int(value) for value in shape), 3)
-    except (TypeError, ValueError):
-        return None
-
-
 def _public_shape(physical_shape: tuple[int, ...]) -> tuple[int, ...]:
-    """Convert the batch-one compiler NCHW contract to public HWC."""
-    _, channels, height, width = physical_shape
-    return (height, width, channels)
+    """Convert compiler NCHW to PyNeat NHWC, preserving the batch axis."""
+    batch, channels, height, width = physical_shape
+    return (batch, height, width, channels)
 
 
 def _tensor_from_public(value: np.ndarray) -> Any:
@@ -154,7 +136,6 @@ def _first_public_output_array(
     if not tensors:
         raise RuntimeError("MLA runner returned no output tensor")
     value = np.asarray(tensors[0].to_numpy(copy=False), dtype=np.float32)
-    value = value.reshape(_drop_batch_axes(value.shape, len(expected_public_shape)))
     if value.shape != expected_public_shape:
         raise RuntimeError(
             f"MLA output shape {value.shape} != expected {expected_public_shape}"
@@ -172,7 +153,7 @@ def _first_output_array(
     value = _first_public_output_array(
         output, expected_public_shape=expected_public_shape
     )
-    return np.ascontiguousarray(value.transpose(2, 0, 1)[None, ...])
+    return np.ascontiguousarray(value.transpose(0, 3, 1, 2))
 
 
 def _build_model_runner(model: Any, seed_values: list[np.ndarray]) -> Any:
@@ -262,26 +243,20 @@ class SupertonicModalix:
         model_dir: Path,
         mpk_path: Path,
         runtime_data_path: Path,
-        artifact_manifest_path: Path,
         vocoder_backend: str,
         vocoder_mpk_path: Path,
-        vocoder_manifest_path: Path,
         threads: int,
         timeout_ms: int,
         verify_hashes: bool,
+        artifact_sha256: dict[str, str],
         steps: int = DEFAULT_STEPS,
-        expected_mpk_sha256: str | None = None,
     ) -> None:
         self.model_dir = model_dir.resolve()
         self.mpk_path = mpk_path.resolve()
         self.runtime_data_path = runtime_data_path.resolve()
-        self.artifact_manifest_path = artifact_manifest_path.resolve()
-        # The vector estimator's checksum when it does not come from the
-        # manifest's release (Platform 3.0's compile; see vector_estimator.json).
-        self.expected_mpk_sha256 = expected_mpk_sha256
+        self.artifact_sha256 = artifact_sha256
         self.vocoder_backend = vocoder_backend
         self.vocoder_mpk_path = vocoder_mpk_path.resolve()
-        self.vocoder_manifest_path = vocoder_manifest_path.resolve()
         if steps < 1:
             raise ValueError("steps must be positive")
         self.steps = steps
@@ -308,7 +283,7 @@ class SupertonicModalix:
         self.compress = int(self.config["ttl"]["chunk_compress_factor"])
         self.latent_dim = int(self.config["ttl"]["latent_dim"]) * self.compress
         self.chunk_size = base_chunk_size * self.compress
-        if self.latent_dim != BASE_PHYSICAL_INPUTS[0][1][1]:
+        if self.latent_dim != VECTOR_PHYSICAL_INPUTS[0][1][1]:
             raise RuntimeError(
                 f"configured latent dimension {self.latent_dim} does not match MPK contract"
             )
@@ -327,7 +302,7 @@ class SupertonicModalix:
         if archived_time_table is not None:
             if (
                 archived_time_table.ndim != 5
-                or archived_time_table.shape[1:] != BASE_PHYSICAL_INPUTS[6][1]
+                or archived_time_table.shape[1:] != TIME_INPUT_SHAPE
             ):
                 raise ValueError(
                     f"time table shape {archived_time_table.shape} has an invalid contract"
@@ -366,19 +341,20 @@ class SupertonicModalix:
 
         self.model = pyneat.Model(str(self.mpk_path))
         compiled_batch_size = int(self.model.compiled_batch_size())
-        if compiled_batch_size != 1:
+        if compiled_batch_size != GUIDANCE_BATCH_SIZE:
             raise RuntimeError(
-                f"compiled vector estimator has batch size {compiled_batch_size}; expected 1"
+                f"compiled vector estimator has batch size {compiled_batch_size}; "
+                f"expected {GUIDANCE_BATCH_SIZE} for paired guidance"
             )
-        self.physical_inputs = BASE_PHYSICAL_INPUTS
-        self.physical_output = BASE_PHYSICAL_OUTPUT
+        self.physical_inputs = VECTOR_PHYSICAL_INPUTS
+        self.physical_output = VECTOR_PHYSICAL_OUTPUT
         self.public_inputs = tuple(
             (name, _public_shape(shape))
-            for name, shape in BASE_PHYSICAL_INPUTS
+            for name, shape in VECTOR_PHYSICAL_INPUTS
         )
         self.public_output = (
-            BASE_PHYSICAL_OUTPUT[0],
-            _public_shape(BASE_PHYSICAL_OUTPUT[1]),
+            VECTOR_PHYSICAL_OUTPUT[0],
+            _public_shape(VECTOR_PHYSICAL_OUTPUT[1]),
         )
         self._validate_model_contract()
         self._input_buffers = [
@@ -403,14 +379,13 @@ class SupertonicModalix:
         required = [
             self.mpk_path,
             self.runtime_data_path,
-            self.artifact_manifest_path,
             self.model_dir / "onnx" / "duration_predictor.onnx",
             self.model_dir / "onnx" / "text_encoder.onnx",
             self.model_dir / "onnx" / "tts.json",
             self.model_dir / "onnx" / "unicode_indexer.json",
         ]
         if self.vocoder_backend == "mla":
-            required.extend((self.vocoder_mpk_path, self.vocoder_manifest_path))
+            required.append(self.vocoder_mpk_path)
         else:
             required.append(self.model_dir / "onnx" / "vocoder.onnx")
         missing = [str(path) for path in required if not path.is_file()]
@@ -418,31 +393,18 @@ class SupertonicModalix:
             raise FileNotFoundError("missing required assets:\n  " + "\n  ".join(missing))
 
     def _verify_artifacts(self) -> None:
-        manifest = json.loads(self.artifact_manifest_path.read_text())
-        try:
-            expected_mpk = self.expected_mpk_sha256 or manifest["compiled"]["archive"]["sha256"]
-            expected_runtime = manifest["graph_surgery"]["runtime_data"]["sha256"]
-        except KeyError as error:
-            raise ValueError(
-                "artifact manifest does not describe the supported batch-one release"
-            ) from error
-        for label, path, expected in (
-            ("MPK", self.mpk_path, expected_mpk),
-            ("runtime data", self.runtime_data_path, expected_runtime),
-        ):
+        artifacts = [
+            ("MPK", self.mpk_path, "vector_estimator"),
+            ("runtime data", self.runtime_data_path, "runtime_data"),
+        ]
+        if self.vocoder_backend == "mla":
+            artifacts.append(("vocoder MPK", self.vocoder_mpk_path, "vocoder"))
+        for label, path, name in artifacts:
+            expected = self.artifact_sha256[name]
             actual = _sha256(path)
             if actual != expected:
                 raise ValueError(
                     f"{label} SHA-256 mismatch: expected {expected}, got {actual}"
-                )
-        if self.vocoder_backend == "mla":
-            vocoder_manifest = json.loads(self.vocoder_manifest_path.read_text())
-            expected_vocoder = vocoder_manifest["compiled"]["archive"]["sha256"]
-            actual_vocoder = _sha256(self.vocoder_mpk_path)
-            if actual_vocoder != expected_vocoder:
-                raise ValueError(
-                    "vocoder MPK SHA-256 mismatch: "
-                    f"expected {expected_vocoder}, got {actual_vocoder}"
                 )
 
     def _validate_model_contract(self) -> None:
@@ -457,13 +419,13 @@ class SupertonicModalix:
         for index, (spec, (name, expected_shape)) in enumerate(
             zip(input_specs, self.public_inputs, strict=True)
         ):
-            actual_shape = _shape_from_spec(spec)
-            if actual_shape is not None and actual_shape != expected_shape:
+            actual_shape = tuple(spec.shape)
+            if actual_shape != expected_shape:
                 raise RuntimeError(
                     f"MPK input {index} ({name}) shape {actual_shape} != {expected_shape}"
                 )
-        output_shape = _shape_from_spec(output_specs[0])
-        if output_shape is not None and output_shape != self.public_output[1]:
+        output_shape = tuple(output_specs[0].shape)
+        if output_shape != self.public_output[1]:
             raise RuntimeError(
                 f"MPK output shape {output_shape} != {self.public_output[1]}"
             )
@@ -479,13 +441,14 @@ class SupertonicModalix:
             raise RuntimeError(
                 "compiled vocoder must report exactly one input and one output"
             )
-        input_shape = _shape_from_spec(input_specs[0])
-        output_shape = _shape_from_spec(output_specs[0])
-        if input_shape is not None and input_shape != self.vocoder_public_input:
+        input_shape = tuple(input_specs[0].shape)
+        output_shape = tuple(output_specs[0].shape)
+        expected_input_shape = self.vocoder_public_input
+        if input_shape != expected_input_shape:
             raise RuntimeError(
-                f"vocoder input shape {input_shape} != {self.vocoder_public_input}"
+                f"vocoder input shape {input_shape} != {expected_input_shape}"
             )
-        if output_shape is not None and output_shape != self.vocoder_public_output:
+        if output_shape != self.vocoder_public_output:
             raise RuntimeError(
                 f"vocoder output shape {output_shape} != {self.vocoder_public_output}"
             )
@@ -493,11 +456,13 @@ class SupertonicModalix:
     def _set_input(self, index: int, physical_nchw: np.ndarray) -> None:
         expected = self.physical_inputs[index][1]
         value = np.asarray(physical_nchw, dtype=np.float32)
-        if value.shape != expected:
+        # Latent, masks, time and RoPE are shared by the two guidance slots.
+        # np.copyto broadcasts their batch-one values into both slots.
+        if value.shape not in (expected, (1, *expected[1:])):
             raise RuntimeError(
                 f"{self.physical_inputs[index][0]} physical shape {value.shape} != {expected}"
             )
-        public_value = value[0].transpose(1, 2, 0)
+        public_value = value.transpose(0, 2, 3, 1)
         np.copyto(self._input_buffers[index], public_value)
 
     def _encode_text(self, text: str, language: str) -> tuple[np.ndarray, np.ndarray, str]:
@@ -574,7 +539,7 @@ class SupertonicModalix:
             raise RuntimeError("MLA vocoder runner is closed")
         np.copyto(
             self._vocoder_input_buffer,
-            padded_latent.transpose(0, 2, 1),
+            padded_latent.transpose(0, 2, 1)[:, None, :, :],
         )
         output = self.vocoder_runner.run(
             [_tensor_from_public(self._vocoder_input_buffer)],
@@ -655,29 +620,30 @@ class SupertonicModalix:
         self._set_input(4, padded_mask[:, :, None, :])
         self._set_input(5, padded_text_mask.transpose(0, 2, 1)[:, :, :, None])
         self._set_input(7, rope_input)
+        # Guidance order is fixed: conditional in slot 0, unconditional in slot 1.
+        unconditional_text = np.broadcast_to(
+            self.constants[UNCONDITIONAL_TEXT], padded_text.shape
+        )
+        paired_text = np.concatenate((padded_text, unconditional_text), axis=0)
+        paired_style = np.concatenate(
+            (style_ttl, self.constants[UNCONDITIONAL_STYLE_VALUE]), axis=0
+        )
+        paired_style_key = np.concatenate(
+            (self.constants[CONDITIONAL_STYLE_KEY], self.constants[UNCONDITIONAL_STYLE_KEY]),
+            axis=0,
+        )
+        self._set_input(1, paired_text[:, :, None, :])
+        self._set_input(2, _style_nchw(paired_style))
+        self._set_input(3, _style_nchw(paired_style_key))
         timings["host_preparation_seconds"] = perf_counter() - started
 
         started = perf_counter()
         for step in range(self.steps):
-            branch_outputs: list[np.ndarray] = []
-            for conditional in (True, False):
-                if conditional:
-                    branch_text = padded_text
-                    style_key = self.constants[CONDITIONAL_STYLE_KEY]
-                    style_value = style_ttl
-                else:
-                    branch_text = np.broadcast_to(
-                        self.constants[UNCONDITIONAL_TEXT], padded_text.shape
-                    )
-                    style_key = self.constants[UNCONDITIONAL_STYLE_KEY]
-                    style_value = self.constants[UNCONDITIONAL_STYLE_VALUE]
-                self._set_input(0, padded_latent[:, :, None, :])
-                self._set_input(1, branch_text[:, :, None, :])
-                self._set_input(2, _style_nchw(style_value))
-                self._set_input(3, _style_nchw(style_key))
-                self._set_input(6, self.time_table[step])
-                branch_outputs.append(self._run_vector_field()[:, :, 0, :])
-            conditional_output, unconditional_output = branch_outputs
+            self._set_input(0, padded_latent[:, :, None, :])
+            self._set_input(6, self.time_table[step])
+            velocities = self._run_vector_field()[:, :, 0, :]
+            conditional_output = velocities[0:1]
+            unconditional_output = velocities[1:2]
             padded_latent = (
                 (
                     padded_latent
