@@ -607,7 +607,7 @@ def require_model_contract(cfg: Config, backbone, transformer, side: int) -> Non
         transformer_outputs.append([1, MASK_SIZE, MASK_SIZE, cfg.top_k])
     expected_shapes = (
         [[1, side, side, 256], [1, side * side], [1, side * side, 4]],
-        [[side, side, 256], [1, cfg.top_k, 4]],
+        [[1, side, side, 256], [1, cfg.top_k, 4]],
         transformer_outputs,
     )
     actual_specs = (
