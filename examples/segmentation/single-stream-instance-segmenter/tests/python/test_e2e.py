@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.utils.pytest_fixtures import usb_camera_cases
 from tests.utils.metadata_json_listener import MetadataJsonListener
 from tests.utils.output_assertions import assert_streamed_frames_are_usable
 
@@ -67,7 +68,15 @@ SOURCE_CASES = [
         },
         id="http-mjpeg",
     ),
-]
+] + usb_camera_cases(
+    {
+        "name": "usb_camera",
+        "type": "usb",
+        "codec": "mjpeg",
+        "url_fixture": "usb_camera_id",
+        "fps": 30,
+    }
+)
 
 
 def _env_int_or_default(name: str, default: int) -> int:
@@ -93,14 +102,15 @@ def _run_and_check(
     insight_host = "127.0.0.1"
     video_port = _env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000)
     metadata_port = _env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100)
-    source_config = {
-        "type": source["type"],
-        "codec": source["codec"],
-        "url": source_url,
-        "ssl_strict": source.get("ssl_strict", True),
-    }
+    # The case fills its source type's section; a USB case's "URL" is the camera's stable ID.
+    section = {"camera" if source["type"] == "usb" else "url": source_url}
+    if source["type"] == "rtsp":
+        section["codec"] = source["codec"]
+    if source["type"] == "http":
+        section["ssl_strict"] = source.get("ssl_strict", True)
     if source.get("fps", 0) > 0:
-        source_config["fps"] = source["fps"]
+        section["fps"] = source["fps"]
+    source_config = {"type": source["type"], source["type"]: section}
     config_path = e2e_config_writer(
         {
             "model": {"family": family, "path": str(model_path)},
@@ -160,9 +170,10 @@ def _run_and_check(
     assert len(output_files) == saved
     assert_streamed_frames_are_usable(tmp_output_dir, saved)
 
-    # VideoSender always re-encodes to RTP H.264 (payload type 96) for Insight.
+    # Streams are re-encoded to RTP H.264 (payload type 96); a USB camera's own JPEG is
+    # forwarded as RTP/JPEG (payload type 26).
     assert len(video_packet) > 12 and video_packet[0] >> 6 == 2
-    assert video_packet[1] & 0x7F == 96
+    assert video_packet[1] & 0x7F == (26 if source["type"] == "usb" else 96)
 
     assert metadata.success, metadata.error
     for message in metadata.messages:
