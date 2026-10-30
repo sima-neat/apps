@@ -30,7 +30,7 @@ class HubPathSecurityTests(unittest.TestCase):
         values = (
             "simaai/Qwen2.5-VL-7B-Instruct-GPTQ-a16w4",
             "TDoSiMa/gemma-4-E4B-it_GPTQ_INT4-emb-int8-8k",
-            "florianvoss/whisper-large-v3-turbo-a16w8-layered-encoder",
+            "simaai/whisper-large-v3-turbo-a16w8",
         )
         for value in values:
             with self.subTest(value=value):
@@ -48,17 +48,15 @@ class HubPathSecurityTests(unittest.TestCase):
         self.assertEqual(_load_hub_config({}).orgs,
                          ("simaai", "TDoSiMa", "florianvoss"))
 
-    def test_community_whisper_repos_are_typed_as_asr(self):
-        for name in ("whisper-small-a16w8-layered-encoder",
-                     "whisper-medium-a16w8-layered-encoder",
-                     "whisper-large-v3-turbo-a16w8-layered-encoder"):
-            repo = f"florianvoss/{name}"
+    def test_official_whisper_repos_are_typed_as_asr(self):
+        for name in ("whisper-small-a16w8",
+                     "whisper-medium-a16w8",
+                     "whisper-large-v3-turbo-a16w8"):
+            repo = f"simaai/{name}"
             with self.subTest(repo=repo):
                 self.assertEqual(
                     classify_hub_repo(repo, "automatic-speech-recognition"), "asr")
-                # Non-simaai repos are stored under "<org>@<name>" so two orgs
-                # publishing the same model name cannot collide on disk.
-                self.assertEqual(safe_name(repo), f"florianvoss@{name}")
+                self.assertEqual(safe_name(repo), name)
 
     def test_rejects_traversal_and_unconfigured_organizations(self):
         values = (

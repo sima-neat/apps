@@ -18,19 +18,14 @@ CHAT_MODEL_REPO="${CHAT_MODEL_REPO:-}"
 CATALOG_MODEL_REPOS="${CATALOG_MODEL_REPOS:-}"
 # Speech-to-text model downloaded and made active at startup.
 #
-# A LAYERED-encoder build: current LLiMa splits the Whisper encoder into one ELF
-# per layer and rejects the older monolithic builds as "Unsupported legacy
-# Whisper model". Move this to the simaai layered build once published; on an
-# older runtime that needs a monolithic encoder, pass
-# ASR_MODEL_REPO=simaai/whisper-small-a16w8 instead. Setup checks the model
-# actually loads and will not configure it at startup if the runtime refuses it.
+# Official Whisper builds: https://huggingface.co/collections/simaai/speech-and-audio-models
 #
 # Set ASR_MODEL_REPO="" to install none (note the `-`, not `:-`, so an
 # explicitly empty value is honoured rather than falling back to the default).
-ASR_MODEL_REPO="${ASR_MODEL_REPO-florianvoss/whisper-small-a16w8-layered-encoder}"
+ASR_MODEL_REPO="${ASR_MODEL_REPO-simaai/whisper-small-a16w8}"
 # Extra ASR models to seed the catalog (space-separated HF repos); switch
 # between them at runtime in Settings -> Models. Example:
-#   ASR_CATALOG_MODEL_REPOS="florianvoss/whisper-medium-a16w8-layered-encoder"
+#   ASR_CATALOG_MODEL_REPOS="simaai/whisper-medium-a16w8 simaai/whisper-large-v3-turbo-a16w8"
 ASR_CATALOG_MODEL_REPOS="${ASR_CATALOG_MODEL_REPOS:-}"
 RAG_EMBEDDING_REPO="thenlper/gte-small"
 CHAT_MODEL_NAME="${CHAT_MODEL_NAME:-${CHAT_MODEL_REPO##*/}}"
@@ -808,8 +803,7 @@ if [[ -n "${ASR_MODEL_REPO}" && "${SKIP_MODEL_DOWNLOAD}" != "1" ]]; then
        warn "This runtime refuses ${ASR_MODEL_NAME}:"
        printf '%s\n' "${probe_out}" | sed 's/^/    /' >&2
        warn "Leaving it in the catalog but NOT configuring it at startup."
-       warn "Install one this runtime accepts, e.g. ASR_MODEL_REPO=simaai/whisper-small-a16w8 ./setup.sh,"
-       warn "or pick a model in Settings -> Models once the Studio is running." ;;
+       warn "Check model/runtime compatibility, or pick a model in Settings -> Models once the Studio is running." ;;
     *) warn "Could not verify ${ASR_MODEL_NAME} (accelerator busy or no runtime); configuring it anyway." ;;
   esac
 fi

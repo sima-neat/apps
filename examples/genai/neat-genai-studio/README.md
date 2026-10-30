@@ -9,7 +9,7 @@
 | Languages | Python |
 | Status | stable |
 | Binary Name | neat-genai-studio |
-| Model | Loaded on demand (e.g. Qwen3-VL-4B-Instruct-Autoround-a16w4) + whisper-small-a16w8-layered-encoder |
+| Model | Loaded on demand (e.g. Qwen3-VL-4B-Instruct-Autoround-a16w4) + whisper-small-a16w8 |
 
 ## Concept
 Runs language, vision-language, and speech models on a Modalix device as the board-side backend for the GenAI tab in Neat Insight, with an OpenAI-compatible API.
@@ -62,7 +62,7 @@ ${APP_DIR}/setup.sh
 ```
 
 `setup.sh` downloads the default speech-to-text model
-(`florianvoss/whisper-small-a16w8-layered-encoder`) and the RAG embedding model
+(`simaai/whisper-small-a16w8`) from SiMa's [Speech & Audio collection](https://huggingface.co/collections/simaai/speech-and-audio-models), and the RAG embedding model
 (`thenlper/gte-small`) into `/media/nvme/llima/models`, installs the
 text-to-speech voices and the Supertonic engine, builds the default RAG
 database, and writes `config.local.yaml`. When asked, pick the voice languages
@@ -89,9 +89,7 @@ lists them all):
 
 - `CHAT_MODEL_REPO`: also download **and preload** one chat/VLM model at startup.
 - `ASR_MODEL_REPO`: the speech-to-text model installed and made active at
-  startup (set to `""` to install none). Current LLiMa needs a layered-encoder
-  Whisper build; on a runtime that needs a monolithic encoder pass
-  `ASR_MODEL_REPO=simaai/whisper-small-a16w8`. Setup checks the model loads and
+  startup (set to `""` to install none). Setup checks the model loads and
   leaves it out of the startup configuration if the runtime refuses it.
 - `ASR_CATALOG_MODEL_REPOS`: extra speech-to-text repos to switch between at runtime.
 - `ALLOW_HUB_DOWNLOAD`, `HUB_ORGS`: allow Hugging Face downloads through the API
@@ -125,7 +123,7 @@ only to change:
 - `server.models.catalog_dir`: the directory scanned for models (default `/media/nvme/llima/models`).
 - `server.models.chat`: chat or vision-language models to load at startup (none by default).
 - `server.models.max_resident_chat_models`: how many chat or vision-language models stay loaded at once (default `1`; see [Keep several models loaded](#keep-several-models-loaded)).
-- `server.models.asr`: the speech-to-text model active at startup. Models from Hugging Face accounts other than `simaai` are named `<org>@<name>`, for example `florianvoss@whisper-small-a16w8-layered-encoder`.
+- `server.models.asr`: the speech-to-text model active at startup (default `whisper-small-a16w8`).
 - `server.hub.allow_download`: whether models may be downloaded from Hugging Face.
 - `app.request.max_tokens`: the default response length for chat requests that do not set `max_tokens`.
 - `app.rag.enabled`: retrieval-augmented search. Turning it on after a
@@ -185,7 +183,7 @@ The output lists the speech-to-text model and any chat model you loaded.
 ## Troubleshooting
 - **The model server does not start:** confirm `pyneat` imports in the environment at `PYNEAT_PYTHON` (default `~/pyneat/bin/python`).
 - **Insight cannot reach the backend:** check `${APP_DIR}/run.sh status`, then `curl -sk https://<board-ip>:5000/health` from the machine running Insight. The backend uses a self-signed certificate generated on first start; `NEAT_TLS_CERT` and `NEAT_TLS_KEY` select your own.
-- **`setup.sh` says the runtime refuses the speech-to-text model:** your Neat runtime needs a speech model with a different encoder layout. Install the older build instead with `ASR_MODEL_REPO=simaai/whisper-small-a16w8 ${APP_DIR}/setup.sh`.
+- **`setup.sh` says the runtime refuses the speech-to-text model:** check the model card's runtime requirements and update Neat or choose a compatible model from SiMa's Speech & Audio collection.
 - **`setup.sh` stops on a download (connection refused, timeout, `429`):** `setup.sh` already retries Hugging Face rate limits, server errors and dropped connections a few times, so this is a lasting problem. Check that the board reaches the hosts listed in [Prerequisites](#prerequisites); behind a proxy, export `HTTPS_PROXY` first. Run `${APP_DIR}/setup.sh` again: files already downloaded and verified are kept.
 - **A model download fails:** the message says why. For a model that needs approval, request access on Hugging Face and set `HF_TOKEN`; for a model Hugging Face renamed, download the new id it names.
 - **A model fails to load with an accelerator error:** restart the Studio (`${APP_DIR}/run.sh stop`, then `${APP_DIR}/run.sh`) to free the accelerator, then load the model again. The Studio does not reset or recover board services itself.
