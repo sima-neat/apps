@@ -172,7 +172,7 @@ At larger frames, drawing the full-size heatmap takes most of the host time. Whe
 ## Troubleshooting
 
 - `ModuleNotFoundError: No module named 'pyneat'`: activate the `pyneat` environment (see [Set Up Python](#set-up-python)).
-- `ModuleNotFoundError: No module named 'yaml'` (or `cv2`): install the example's dependencies with `pip install -r ${APP_DIR}/src/python/requirements.txt` (see [Set Up Python](#set-up-python)).
+- `ModuleNotFoundError: No module named 'yaml'`: install the example's dependencies with `pip install -r ${APP_DIR}/src/python/requirements.txt` (see [Set Up Python](#set-up-python)).
 - `memory bank not found`: run `--calibrate` first.
 - `memory bank was built against a different model package`: `model.path` changed since the last `--calibrate`; rebuild the bank.
 - `bank_meta.json is missing patch_threshold`: rerun `--calibrate` to regenerate the bank.
