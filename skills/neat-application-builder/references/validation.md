@@ -24,7 +24,10 @@ target_link_libraries(neat_app PRIVATE SimaNeat::sima_neat)
 
 Build in the Neat Development Environment or target-appropriate environment. A
 laptop host compile is not proof of Modalix runtime behavior unless it uses the
-correct Neat Development Environment toolchain and runtime target.
+correct Neat Development Environment toolchain and runtime target. Build against
+the Core the target runs: the `libsima_neat.so.<abi>` that
+`readelf -d <app> | grep NEEDED` shows must match the target's installed
+library.
 
 ## Python Import Check
 
@@ -33,12 +36,13 @@ Use the installed Python binding:
 ```bash
 python3 - <<'PY'
 import pyneat
-print(pyneat.__name__)
+print(pyneat.build_info())
 PY
 ```
 
-On a DevKit or Neat Development Environment image, activate the packaged
-environment if the installation requires it.
+On a DevKit, PyNeat runs from its virtual environment:
+`source ~/pyneat/bin/activate`. `build_info()` reports the Core version,
+platform version, and ABI version.
 
 ## Artifact Checks
 
@@ -46,11 +50,11 @@ Before running, check the prerequisites used by the application:
 
 - Confirm classic `Model` inputs point at a compiled model archive.
 - Confirm GenAI inputs point at a deployed LLiMa model directory.
-- Confirm coupled Core, Internals, and LLiMa packages belong to a compatible release set when the application uses their shared runtime contracts.
+- Confirm the installed Neat release set with `neat`: Core, PyNeat, Scheduler, Runner, and LLiMa come from one installation, and the platform version matches the DevKit software. Reinstall Neat as a set rather than mixing packages.
 - Confirm image, video, audio, config, and output paths exist or are created by the app.
 - Confirm the app uses public endpoint names that exist in the built graph.
 - For encoded media, confirm the selected source, decoder, and passthrough sender use the same codec.
-- For camera capture, make strict zero-copy versus CPU fallback an explicit application choice and validate the requested capture depth on the target.
+- For camera capture, confirm the zero-copy versus `allow_cpu_fallback` choice and validate any changed capture buffer count on the target.
 
 ## Runtime Checks
 
