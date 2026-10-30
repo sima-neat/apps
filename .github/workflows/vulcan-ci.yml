@@ -55,9 +55,7 @@ jobs:
       ensure_sdk_container: true
       sdk_setup_args: "-y -n --minimal --workspace /mnt/vulcan/workspace --no-model-sdk --no-insight"
       artifact_name: neat-apps-build
-      artifact_path: |
-        neat-apps-*.tar.gz
-        deps/scheduler-sdk-policy.json
+      artifact_path: _vulcan-build-artifacts
       artifact_retention_days: 3
       build_command: |
         set -euo pipefail
@@ -150,6 +148,12 @@ jobs:
         scripts/ci/validate_apps_runtime_archive.sh "${runtime_archives[0]}"
         tar -tzf neat-apps-tests.tar.gz neat-apps-tests/tests/test.sh >/dev/null
         ls -lh "${runtime_archives[0]}" neat-apps-tests.tar.gz
+
+        # One upload root preserves paths when the shared workflow prefixes it.
+        rm -rf _vulcan-build-artifacts
+        mkdir -p _vulcan-build-artifacts/deps
+        cp "${runtime_archives[0]}" neat-apps-tests.tar.gz _vulcan-build-artifacts/
+        cp deps/scheduler-sdk-policy.json _vulcan-build-artifacts/deps/
 
   contract-tests:
     name: Repository Contract Tests

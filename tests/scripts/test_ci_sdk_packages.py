@@ -1,10 +1,13 @@
 """Exercise SDK package preparation without Docker or package mutations."""
 
 import json
+import io
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -90,3 +93,44 @@ def test_sdk_package_operations_precede_build(
         assert calls[2] == ["install", "-y", "--no-install-recommends", *packages]
     if status:
         assert "fixture package failure" in result.stderr
+
+
+@pytest.mark.parametrize("missing_policy", [False, True])
+def test_build_artifact_has_one_root_and_resolver_policy(tmp_path, missing_policy):
+    workflow = yaml.safe_load(
+        (APPS_ROOT / ".github/workflows/vulcan-ci.yml").read_text()
+    )
+    build = workflow["jobs"]["build"]["with"]
+    # The shared uploader prefixes artifact_path once, so it must be one root.
+    assert build["artifact_path"] == "_vulcan-build-artifacts"
+    runtime_name = "neat-apps-fixture.tar.gz"
+    (tmp_path / runtime_name).write_bytes(b"runtime fixture")
+    with tarfile.open(tmp_path / "neat-apps-tests.tar.gz", "w:gz") as archive:
+        member = tarfile.TarInfo("neat-apps-tests/tests/test.sh")
+        member.size = 4
+        archive.addfile(member, io.BytesIO(b"test"))
+    policy = tmp_path / "deps/scheduler-sdk-policy.json"
+    policy.parent.mkdir()
+    if not missing_policy:
+        policy.write_text('{"elxr_version":"3.0.0_master_B2499"}\n')
+    # Archive-content validation has its own tests; exercise staging here.
+    validator = tmp_path / "scripts/ci/validate_apps_runtime_archive.sh"
+    validator.parent.mkdir(parents=True)
+    validator.write_text("#!/bin/sh\nexit 0\n")
+    validator.chmod(0o755)
+    result = subprocess.run(
+        [shutil.which("bash"), "-c", build["post_build_command"]],
+        cwd=tmp_path, text=True, capture_output=True,
+    )
+    staged = tmp_path / build["artifact_path"]
+    if missing_policy:
+        assert result.returncode != 0
+        assert not staged.exists()
+        return
+    assert result.returncode == 0, result.stderr
+    resolver_path = workflow["jobs"]["resolve-test-runner"]["with"]["manifest_path"]
+    assert (staged / resolver_path).read_bytes() == policy.read_bytes()
+    assert sorted(str(p.relative_to(staged)) for p in staged.rglob("*") if p.is_file()) == [
+        "deps/scheduler-sdk-policy.json", runtime_name, "neat-apps-tests.tar.gz"
+    ]
+    assert (staged / runtime_name).read_bytes() == (tmp_path / runtime_name).read_bytes()

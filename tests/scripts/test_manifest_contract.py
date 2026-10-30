@@ -1710,7 +1710,7 @@ def test_vulcan_runtime_gate_uses_packaged_core_without_customer_dependencies():
     workflow = VULCAN_WORKFLOW.read_text(encoding="utf-8")
 
     artifacts = yaml.safe_load(workflow)["jobs"]["build"]["with"]["artifact_path"]
-    assert "neat-apps-*.tar.gz" in artifacts.splitlines()
+    assert artifacts == "_vulcan-build-artifacts"
     assert "tar -xOzf" in workflow
     assert "prebuilt-apps/deps/neat-core.json" in workflow
     assert "--neat-core-version" in workflow

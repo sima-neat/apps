@@ -114,9 +114,12 @@ def test_hardware_guard_checks_resolved_firmware(tmp_path, monkeypatch, actual, 
     monkeypatch.setenv("VERSION_FALLBACK", fallback)
     monkeypatch.setenv("RUNNER_NAME", "test")
 
+    # Python 3.11 Path construction consults the module-level Path factory.
+    concrete_path = type(tmp_path)
+
     def check():
         with monkeypatch.context() as context:
-            context.setattr("pathlib.Path", lambda filename: tmp_path / Path(filename).name)
+            context.setattr("pathlib.Path", lambda filename: tmp_path / concrete_path(filename).name)
             exec(compile(code, "workflow-firmware-guard", "exec"), {})
 
     if accepted:
@@ -422,7 +425,7 @@ def test_release_and_portal_still_depend_on_all_shards():
     resolver = jobs["resolve-test-runner"]
     assert "build" in resolver["needs"]
     assert resolver["with"]["manifest_artifact"] == jobs["build"]["with"]["artifact_name"]
-    assert resolver["with"]["manifest_path"] in jobs["build"]["with"]["artifact_path"].splitlines()
+    assert resolver["with"]["manifest_path"] == "deps/scheduler-sdk-policy.json"
     assert resolver["with"]["allow-version-fallback"] == "false"
     discovery = next(s for s in jobs["plan-runtime-tests"]["steps"] if s.get("id") == "plan")
     assert discovery["env"]["REQUIRED_LABELS"] == "${{ needs.resolve-test-runner.outputs.runner_labels }}"
