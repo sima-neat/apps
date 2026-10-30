@@ -44,6 +44,11 @@ On a DevKit, PyNeat runs from its virtual environment:
 `source ~/pyneat/bin/activate`. `build_info()` reports the Core version,
 platform version, and ABI version.
 
+The environment provides PyNeat, not every dependency an application imports,
+such as PyYAML. List them in the app's `requirements.txt` and run
+`pip install -r requirements.txt` after activating it; a passing
+`import pyneat` does not show that the app's imports resolve.
+
 ## Artifact Checks
 
 Before running, check the prerequisites used by the application:
