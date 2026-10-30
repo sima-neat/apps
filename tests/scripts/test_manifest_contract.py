@@ -1280,6 +1280,65 @@ def test_vulcan_sysroot_sync_rejects_invalid_receipts(tmp_path, manifest_text):
     assert not (tmp_path / "sysroot.log").exists()
 
 
+@pytest.mark.parametrize("bad", [None, "receipt", "duplicate-receipt", "inventory",
+                                 "duplicate-inventory", "firmware", "overlay",
+                                 "inventory-symlink", "headers", "policy-pin"])
+def test_vulcan_release_sysroot_requires_matching_cached_sdk(tmp_path, bad):
+    policy = {"sysroot-version": "3.0.0", "sdk": {"sysroot-version": "3.0.0"},
+              "elxr_version": "3.0.0_master_B2499"}
+    if bad == "policy-pin":
+        policy["sdk"]["sysroot-version"] = "3.0.1"
+    env = _sysroot_sync_env(tmp_path, manifest_text=json.dumps(policy))
+    receipt = Path(env["ELXR_SDK_RELEASE_FILE"])
+    receipt.write_text("SDK Version = 3.0.0\neLXr Version = 3.0.0\n"
+                       "Platform Version = 3.0.0\nPlatform Base = 3.0.0\n"
+                       "Platform Channel = release\n")
+    sysroot = tmp_path / "sysroot"
+    env["SYSROOT"] = str(sysroot)
+    inventory = sysroot / "var/lib/sima-sdk/sysroot-packages.tsv"
+    inventory.parent.mkdir(parents=True)
+    inventory.write_text("simaai-palette-modalix\tarm64\t3.0.0\t/usr\n"
+                         "simaai-base-files-modalix\tall\t3.0.0\t/etc\n")
+    headers = sysroot / "usr/include"
+    headers.mkdir(parents=True)
+    firmware = sysroot / "etc/packageinfo"
+    firmware.parent.mkdir()
+    firmware.write_text("SIMA_PACKAGE_VERSION = 3.0.0_master_B2499\n")
+    (sysroot / "etc/buildinfo").write_text("SIMA_BUILD_VERSION = 3.0.0_master_B2501\n")
+    if bad == "receipt":
+        receipt.write_text(receipt.read_text().replace("release", "daily"))
+    if bad == "duplicate-receipt":
+        receipt.write_text(receipt.read_text() + "Platform Base = 3.0.0\n")
+    if bad == "inventory":
+        inventory.write_text(inventory.read_text().replace("3.0.0", "3.0.1"))
+    if bad == "duplicate-inventory":
+        inventory.write_text(inventory.read_text() * 2)
+    if bad == "firmware":
+        firmware.write_text("SIMA_PACKAGE_VERSION = 3.0.0_master_B2501\n")
+    if bad == "overlay":
+        (inventory.parent / "sysroot-overlay").symlink_to(tmp_path / "absent-overlay")
+    if bad == "inventory-symlink":
+        inventory.rename(tmp_path / "inventory.tsv")
+        inventory.symlink_to(tmp_path / "inventory.tsv")
+    if bad == "headers":
+        headers.rmdir()
+
+    proc = _run_build(tmp_path, platform_version="3.0.0",
+                      args=["--only-install-neat-core"], env=env)
+
+    if bad:
+        assert proc.returncode != 0
+        assert "Cannot verify the Core Scheduler sysroot-version" in proc.stderr
+        assert not (tmp_path / "sysroot.log").exists()
+        assert "SKIP sysroot installation" not in proc.stdout
+    else:
+        assert proc.returncode == 0, proc.stderr + proc.stdout
+        assert "SKIP sysroot installation" in proc.stdout
+        assert (tmp_path / "sysroot.log").read_text().splitlines() == ["status"]
+    calls = (tmp_path / "sima-cli-args.txt").read_text().splitlines()
+    assert len(calls) == (1 if bad else 2)
+
+
 @pytest.mark.parametrize(
     "metadata",
     [
