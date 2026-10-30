@@ -80,7 +80,7 @@ In the Insight Web UI, start the stream and copy its source URL. From a board, r
 
 ## Configure
 
-Open `${APP_DIR}/src/common/config.yaml`. Set `model.path`, `source.rtsp_url` and `output.insight.host`. If Insight uses a nondefault video port, set `output.insight.video_port` to the port reported by `neat --json`. Insight shows the stream on channel `video_port - 9000`, so `9000` is channel 0 and `9001` is channel 1; pick a free channel when another application already sends to channel 0.
+Open `${APP_DIR}/src/common/config.yaml`. Set `model.path`, `source.rtsp_url` and `output.insight.host`. If Insight uses a nondefault video port, set `output.insight.video_port` to the port reported by `neat --json`.
 
 `output.heat_max` and `output.alpha` control the overlay: the first is the probability drawn at full colour, the second the opacity over the frame.
 
@@ -112,7 +112,7 @@ Both applications print one line when the pipeline is up, then run silently:
 rtsp=rtsp://<insight-host-ip>:8554/src1 stream=720x720@30 map=256x256 threshold=0.5 min_region_px=300 insight=<insight-host-ip> video=9000 channel=0
 ```
 
-Open the Insight Video Viewer for the channel that matches `output.insight.video_port` (channel 0 for the default `9000`). The sample clip alternates defective and good discs, so the heatmap and the red `ANOMALY` banner appear and disappear every few discs. Stop with Ctrl-C; the application prints a summary:
+Open the Insight Video Viewer for channel 0. The sample clip alternates defective and good discs, so the heatmap and the red `ANOMALY` banner appear and disappear every few discs. Stop with Ctrl-C; the application prints a summary:
 
 ```
 processed=1080 flagged=590 video_sender=<insight-host-ip>:9000
