@@ -13,6 +13,7 @@ Latency is per sample from the latency pass. FPS comes from the separate through
 | --- | --- |
 | Target | Modalix (`aarch64`) |
 | SDK | 3.0.0_master_B2501 (neat core 0.6.0+develop.ece040d9a962), Model Zoo 3.0.0 |
+| MLA Clock | 1000 MHz |
 | Date | 2026-10-30 |
 | Minimum Frames per Pass | 100 |
 | Minimum Duration per Pass | 30000 ms |
@@ -26,90 +27,90 @@ Latency is per sample from the latency pass. FPS comes from the separate through
 
 | Model ID | Package | Used By | Postprocess | Outputs | Latency ms (mean / p50 / p99) | FPS |
 | --- | --- | --- | --- | ---: | ---: | ---: |
-| `resnet_50` | `resnet_50_mpk.tar.gz` | image-classification-explorer, mipi-multi-model | `detessdequant` | 1 | 2.29 / 2.29 / 2.40 | 889.4 |
-| `resnet_18` | `resnet_18_mpk.tar.gz` | image-classification-explorer | `detessdequant` | 1 | 1.70 / 1.70 / 1.78 | 1838.8 |
-| `efficientnet_b0` | `efficientnet_b0_mpk.tar.gz` | image-classification-explorer | `detessdequant` | 1 | 1.84 / 1.84 / 1.91 | 1528.0 |
-| `densenet_121` | `densenet_121_mpk.tar.gz` | image-classification-explorer | `detessdequant` | 1 | 2.55 / 2.51 / 2.59 | 726.4 |
+| `resnet_50` | `resnet_50_mpk.tar.gz` | image-classification-explorer, mipi-multi-model | `detessdequant` | 1 | 1.82 / 1.82 / 1.87 | 1440.4 |
+| `resnet_18` | `resnet_18_mpk.tar.gz` | image-classification-explorer | `detessdequant` | 1 | 1.48 / 1.47 / 1.54 | 2983.2 |
+| `efficientnet_b0` | `efficientnet_b0_mpk.tar.gz` | image-classification-explorer | `detessdequant` | 1 | 1.59 / 1.59 / 1.67 | 2516.0 |
+| `densenet_121` | `densenet_121_mpk.tar.gz` | image-classification-explorer | `detessdequant` | 1 | 1.97 / 1.97 / 2.05 | 1220.6 |
 
 ## Detection
 
 | Model ID | Package | Used By | Postprocess | Outputs | Latency ms (mean / p50 / p99) | FPS |
 | --- | --- | --- | --- | ---: | ---: | ---: |
-| `detr_resnet50_modified_class_embed_bbox_embed` | `detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz` | detr-object-detector | `detessdequant` | 2 | 29.52 / 29.51 / 29.89 | 42.8 |
-| `ssd_mobilenet_v2_modalix_int8_tess_mla` | `ssd_mobilenet_v2_modalix_int8_tess_mla_mpk.tar.gz` | ssd-mobilenet-object-detector, mipi-multi-model | `dequantize` | 12 | 3.23 / 3.20 / 3.83 | 1035.6 |
-| `yolo_11s` | `yolo_11s_mpk.tar.gz` | multi-stream-multi-model | `detessdequant` | 6 | 6.34 / 6.25 / 6.86 | 440.7 |
-| `yolo26n_plc` | `yolo26n_plc_mpk.tar.gz` | pcb-defect-detector | `cast` | 6 | 6.15 / 6.15 / 6.76 | 267.0 |
-| `yolo26n_p2_tiny_drone_int8_qat_b1` | `yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz` | yolo26-tiny-drone-tracker, parallel-apps | `dequantize` | 8 | 20.21 / 20.19 / 20.96 | 81.9 |
-| `yolo26n_obb_w8a8` | `yolo26n_obb_w8a8_mpk.tar.gz` | multi-stream-obb-detector | `dequantize` | 9 | 8.24 / 8.23 / 8.86 | 344.3 |
-| `yolo26n_obb_w16a16` | `yolo26n_obb_w16a16_mpk.tar.gz` | multi-stream-obb-detector | `cast` | 9 | 14.96 / 14.93 / 15.80 | 99.1 |
+| `detr_resnet50_modified_class_embed_bbox_embed` | `detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz` | detr-object-detector | `detessdequant` | 2 | 20.45 / 20.20 / 20.58 | 70.5 |
+| `ssd_mobilenet_v2_modalix_int8_tess_mla` | `ssd_mobilenet_v2_modalix_int8_tess_mla_mpk.tar.gz` | ssd-mobilenet-object-detector, mipi-multi-model | `dequantize` | 12 | 2.85 / 2.80 / 3.44 | 1697.6 |
+| `yolo_11s` | `yolo_11s_mpk.tar.gz` | multi-stream-multi-model | `detessdequant` | 6 | 5.51 / 5.43 / 6.03 | 714.7 |
+| `yolo26n_plc` | `yolo26n_plc_mpk.tar.gz` | pcb-defect-detector | `cast` | 6 | 4.58 / 4.56 / 5.21 | 440.4 |
+| `yolo26n_p2_tiny_drone_int8_qat_b1` | `yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz` | yolo26-tiny-drone-tracker, parallel-apps | `dequantize` | 8 | 15.24 / 15.21 / 15.93 | 135.4 |
+| `yolo26n_obb_w8a8` | `yolo26n_obb_w8a8_mpk.tar.gz` | multi-stream-obb-detector | `dequantize` | 9 | 7.11 / 7.09 / 7.74 | 560.9 |
+| `yolo26n_obb_w16a16` | `yolo26n_obb_w16a16_mpk.tar.gz` | multi-stream-obb-detector | `cast` | 9 | 10.82 / 10.81 / 11.50 | 164.7 |
 
 ## Face Detection
 
 | Model ID | Package | Used By | Postprocess | Outputs | Latency ms (mean / p50 / p99) | FPS |
 | --- | --- | --- | --- | ---: | ---: | ---: |
-| `retinaface_mobilenet25` | `retinaface_mobilenet25_mod_0_mpk.tar.gz` | face-detector | `detessdequant` | 9 | 3.51 / 3.50 / 4.14 | 983.0 |
-| `yolov5s_face_raw_split` | `yolov5s_face_raw_split_mpk.tar.gz` | single-stream-thermal-face-detector | `detessdequant` | 6 | 7.28 / 7.27 / 7.89 | 466.3 |
+| `retinaface_mobilenet25` | `retinaface_mobilenet25_mod_0_mpk.tar.gz` | face-detector | `detessdequant` | 9 | 3.27 / 3.25 / 3.88 | 993.2 |
+| `yolov5s_face_raw_split` | `yolov5s_face_raw_split_mpk.tar.gz` | single-stream-thermal-face-detector | `detessdequant` | 6 | 6.41 / 6.41 / 7.03 | 523.4 |
 
 ## YOLO26 Detection
 
 | Model ID | Package | Used By | Postprocess | Outputs | Latency ms (mean / p50 / p99) | FPS |
 | --- | --- | --- | --- | ---: | ---: | ---: |
-| `yolo26n-det-bf16-mla_tess-b1` | `yolo26n-det-bf16-mla_tess-b1.tar.gz` | single-stream-object-detector, multi-stream-object-detector, multi-stream-tracker, yolo26-object-detector, detection-to-vlm-assistant, mipi-multi-model | `cast` | 6 | 6.89 / 6.88 / 7.54 | 268.7 |
-| `yolo26s-det-bf16-mla_tess-b1` | `yolo26s-det-bf16-mla_tess-b1.tar.gz` | single-stream-object-detector, multi-stream-object-detector, multi-stream-tracker, yolo26-object-detector, detection-to-vlm-assistant | `cast` | 6 | 11.41 / 11.39 / 12.03 | 121.6 |
-| `yolo26m-det-bf16-mla_tess-b1` | `yolo26m-det-bf16-mla_tess-b1.tar.gz` | single-stream-object-detector, multi-stream-object-detector, multi-stream-tracker, yolo26-object-detector, detection-to-vlm-assistant | `cast` | 6 | 24.27 / 24.16 / 24.84 | 47.7 |
-| `yolo26l-det-bf16-mla_tess-b1` | `yolo26l-det-bf16-mla_tess-b1.tar.gz` | single-stream-object-detector, multi-stream-object-detector, multi-stream-tracker, yolo26-object-detector, detection-to-vlm-assistant | `cast` | 6 | 29.96 / 29.84 / 30.44 | 37.7 |
-| `yolo26x-det-bf16-mla_tess-b1` | `yolo26x-det-bf16-mla_tess-b1.tar.gz` | single-stream-object-detector, multi-stream-object-detector, multi-stream-tracker, yolo26-object-detector, detection-to-vlm-assistant | `cast` | 6 | 62.08 / 62.05 / 62.67 | 17.0 |
-| `yolo26m-det-bf16-b1` | `yolo26m-det-bf16-b1.tar.gz` | single-stream-object-detector, multi-stream-object-detector, multi-stream-tracker, yolo26-object-detector, detection-to-vlm-assistant | `unknown` | 6 | 25.82 / 25.81 / 26.50 | 48.6 |
-| `yolo26n-det-int8-b1` | `yolo26n-det-int8-b1.tar.gz` | high-density-multi-stream-object-detector, pcie-high-density-multi-stream-object-detector, mipi-multi-model | `dequantize` | 6 | 4.45 / 4.44 / 5.02 | 792.9 |
-| `yolo26m-det-int8-b1` | `yolo26m-det-int8-b1.tar.gz` | single-stream-object-detector, multi-stream-object-detector, multi-stream-tracker, yolo26-object-detector, detection-to-vlm-assistant, multi-stream-blazepose3d, multi-stream-multi-model, parallel-apps | `detessdequant` | 6 | 8.51 / 8.50 / 9.11 | 203.5 |
-| `yolo26m-det-int8-b1-boxdecode` | `yolo26m-det-int8-b1.tar.gz` | single-stream-object-detector, multi-stream-object-detector, multi-stream-tracker, yolo26-object-detector, detection-to-vlm-assistant, multi-stream-blazepose3d, multi-stream-multi-model, parallel-apps | `boxdecode` | 1 | 9.07 / 9.06 / 9.41 | 203.4 |
+| `yolo26n-det-bf16-mla_tess-b1` | `yolo26n-det-bf16-mla_tess-b1.tar.gz` | single-stream-object-detector, multi-stream-object-detector, multi-stream-tracker, yolo26-object-detector, detection-to-vlm-assistant, mipi-multi-model | `cast` | 6 | 5.36 / 5.34 / 5.98 | 444.5 |
+| `yolo26s-det-bf16-mla_tess-b1` | `yolo26s-det-bf16-mla_tess-b1.tar.gz` | single-stream-object-detector, multi-stream-object-detector, multi-stream-tracker, yolo26-object-detector, detection-to-vlm-assistant | `cast` | 6 | 8.22 / 8.23 / 8.85 | 202.1 |
+| `yolo26m-det-bf16-mla_tess-b1` | `yolo26m-det-bf16-mla_tess-b1.tar.gz` | single-stream-object-detector, multi-stream-object-detector, multi-stream-tracker, yolo26-object-detector, detection-to-vlm-assistant | `cast` | 6 | 15.77 / 15.75 / 16.39 | 79.3 |
+| `yolo26l-det-bf16-mla_tess-b1` | `yolo26l-det-bf16-mla_tess-b1.tar.gz` | single-stream-object-detector, multi-stream-object-detector, multi-stream-tracker, yolo26-object-detector, detection-to-vlm-assistant | `cast` | 6 | 19.23 / 19.08 / 19.72 | 62.7 |
+| `yolo26x-det-bf16-mla_tess-b1` | `yolo26x-det-bf16-mla_tess-b1.tar.gz` | single-stream-object-detector, multi-stream-object-detector, multi-stream-tracker, yolo26-object-detector, detection-to-vlm-assistant | `cast` | 6 | 38.60 / 38.57 / 39.26 | 28.3 |
+| `yolo26m-det-bf16-b1` | `yolo26m-det-bf16-b1.tar.gz` | single-stream-object-detector, multi-stream-object-detector, multi-stream-tracker, yolo26-object-detector, detection-to-vlm-assistant | `unknown` | 6 | 17.71 / 17.71 / 18.31 | 80.9 |
+| `yolo26n-det-int8-b1` | `yolo26n-det-int8-b1.tar.gz` | high-density-multi-stream-object-detector, pcie-high-density-multi-stream-object-detector, mipi-multi-model | `dequantize` | 6 | 3.90 / 3.83 / 4.43 | 1201.6 |
+| `yolo26m-det-int8-b1` | `yolo26m-det-int8-b1.tar.gz` | single-stream-object-detector, multi-stream-object-detector, multi-stream-tracker, yolo26-object-detector, detection-to-vlm-assistant, multi-stream-blazepose3d, multi-stream-multi-model, parallel-apps | `detessdequant` | 6 | 6.52 / 6.51 / 7.12 | 334.7 |
+| `yolo26m-det-int8-b1-boxdecode` | `yolo26m-det-int8-b1.tar.gz` | single-stream-object-detector, multi-stream-object-detector, multi-stream-tracker, yolo26-object-detector, detection-to-vlm-assistant, multi-stream-blazepose3d, multi-stream-multi-model, parallel-apps | `boxdecode` | 1 | 7.07 / 7.05 / 7.39 | 334.8 |
 
 ## YOLO26 Segmentation
 
 | Model ID | Package | Used By | Postprocess | Outputs | Latency ms (mean / p50 / p99) | FPS |
 | --- | --- | --- | --- | ---: | ---: | ---: |
-| `yolo26n-seg-bf16-mla_tess` | `yolo26n-seg-bf16-mla_tess.tar.gz` | single-stream-instance-segmenter, mipi-multi-model | `cast` | 10 | 9.90 / 9.89 / 10.63 | 204.2 |
-| `yolo26s-seg-bf16-mla_tess` | `yolo26s-seg-bf16-mla_tess.tar.gz` | single-stream-instance-segmenter | `cast` | 10 | 16.43 / 16.41 / 17.08 | 87.4 |
-| `yolo26m-seg-bf16-mla_tess` | `yolo26m-seg-bf16-mla_tess.tar.gz` | single-stream-instance-segmenter | `cast` | 10 | 37.32 / 37.30 / 37.99 | 31.0 |
-| `yolo26l-seg-bf16-mla_tess` | `yolo26l-seg-bf16-mla_tess.tar.gz` | single-stream-instance-segmenter | `cast` | 10 | 42.88 / 42.85 / 43.54 | 26.4 |
-| `yolo26x-seg-bf16-mla_tess` | `yolo26x-seg-bf16-mla_tess.tar.gz` | single-stream-instance-segmenter | `cast` | 10 | 88.39 / 88.01 / 88.71 | 12.1 |
-| `yolo26m-seg-bf16-b1` | `yolo26m-seg-bf16-b1.tar.gz` | single-stream-instance-segmenter | `unknown` | 10 | 40.05 / 39.89 / 40.63 | 31.4 |
-| `yolo26m-seg-bf16-mla_tess-b1` | `yolo26m-seg-bf16-mla_tess-b1.tar.gz` | single-stream-instance-segmenter | `cast` | 10 | 36.95 / 36.94 / 37.70 | 31.4 |
-| `yolo26m-seg-int8-b1` | `yolo26m-seg-int8-b1.tar.gz` | single-stream-instance-segmenter, parallel-apps | `detessdequant` | 10 | 13.24 / 13.22 / 13.89 | 134.0 |
-| `yolo26m-seg-int8-b1-boxdecode` | `yolo26m-seg-int8-b1.tar.gz` | single-stream-instance-segmenter, parallel-apps | `boxdecode` | 1 | 36.45 / 36.44 / 37.67 | 73.8 |
+| `yolo26n-seg-bf16-mla_tess` | `yolo26n-seg-bf16-mla_tess.tar.gz` | single-stream-instance-segmenter, mipi-multi-model | `cast` | 10 | 7.90 / 7.88 / 8.57 | 338.6 |
+| `yolo26s-seg-bf16-mla_tess` | `yolo26s-seg-bf16-mla_tess.tar.gz` | single-stream-instance-segmenter | `cast` | 10 | 11.93 / 11.87 / 12.56 | 144.5 |
+| `yolo26m-seg-bf16-mla_tess` | `yolo26m-seg-bf16-mla_tess.tar.gz` | single-stream-instance-segmenter | `cast` | 10 | 24.41 / 24.39 / 25.11 | 51.6 |
+| `yolo26l-seg-bf16-mla_tess` | `yolo26l-seg-bf16-mla_tess.tar.gz` | single-stream-instance-segmenter | `cast` | 10 | 27.80 / 27.77 / 28.53 | 44.0 |
+| `yolo26x-seg-bf16-mla_tess` | `yolo26x-seg-bf16-mla_tess.tar.gz` | single-stream-instance-segmenter | `cast` | 10 | 54.78 / 54.76 / 55.46 | 20.1 |
+| `yolo26m-seg-bf16-b1` | `yolo26m-seg-bf16-b1.tar.gz` | single-stream-instance-segmenter | `unknown` | 10 | 27.28 / 27.16 / 27.87 | 52.3 |
+| `yolo26m-seg-bf16-mla_tess-b1` | `yolo26m-seg-bf16-mla_tess-b1.tar.gz` | single-stream-instance-segmenter | `cast` | 10 | 24.08 / 24.07 / 24.77 | 52.2 |
+| `yolo26m-seg-int8-b1` | `yolo26m-seg-int8-b1.tar.gz` | single-stream-instance-segmenter, parallel-apps | `detessdequant` | 10 | 10.33 / 10.31 / 10.97 | 220.6 |
+| `yolo26m-seg-int8-b1-boxdecode` | `yolo26m-seg-int8-b1.tar.gz` | single-stream-instance-segmenter, parallel-apps | `boxdecode` | 1 | 33.44 / 33.42 / 33.79 | 73.9 |
 
 ## YOLO26 Pose
 
 | Model ID | Package | Used By | Postprocess | Outputs | Latency ms (mean / p50 / p99) | FPS |
 | --- | --- | --- | --- | ---: | ---: | ---: |
-| `yolo26n-pose-bf16-mla_tess-b1` | `yolo26n-pose-bf16-mla_tess-b1.tar.gz` | multi-stream-pose-estimator, mipi-multi-model | `cast` | 9 | 7.83 / 7.82 / 8.49 | 235.6 |
-| `yolo26s-pose-bf16-mla_tess-b1` | `yolo26s-pose-bf16-mla_tess-b1.tar.gz` | multi-stream-pose-estimator | `cast` | 9 | 12.64 / 12.57 / 13.24 | 110.8 |
-| `yolo26m-pose-bf16-mla_tess-b1` | `yolo26m-pose-bf16-mla_tess-b1.tar.gz` | multi-stream-pose-estimator | `cast` | 9 | 25.73 / 25.69 / 26.45 | 45.2 |
-| `yolo26l-pose-bf16-mla_tess-b1` | `yolo26l-pose-bf16-mla_tess-b1.tar.gz` | multi-stream-pose-estimator | `cast` | 9 | 31.27 / 31.25 / 31.92 | 36.1 |
-| `yolo26x-pose-bf16-mla_tess-b1` | `yolo26x-pose-bf16-mla_tess-b1.tar.gz` | multi-stream-pose-estimator | `cast` | 9 | 64.08 / 64.05 / 64.67 | 16.6 |
-| `yolo26m-pose-bf16-b1` | `yolo26m-pose-bf16-b1.tar.gz` | multi-stream-pose-estimator | `unknown` | 9 | 27.13 / 27.10 / 27.78 | 46.4 |
-| `yolo26m-pose-int8-b1` | `yolo26m-pose-int8-b1.tar.gz` | multi-stream-pose-estimator, multi-stream-multi-model, parallel-apps | `detessdequant` | 9 | 9.57 / 9.43 / 10.07 | 189.9 |
+| `yolo26n-pose-bf16-mla_tess-b1` | `yolo26n-pose-bf16-mla_tess-b1.tar.gz` | multi-stream-pose-estimator, mipi-multi-model | `cast` | 9 | 6.04 / 6.03 / 6.68 | 391.0 |
+| `yolo26s-pose-bf16-mla_tess-b1` | `yolo26s-pose-bf16-mla_tess-b1.tar.gz` | multi-stream-pose-estimator | `cast` | 9 | 8.94 / 8.89 / 9.57 | 183.8 |
+| `yolo26m-pose-bf16-mla_tess-b1` | `yolo26m-pose-bf16-mla_tess-b1.tar.gz` | multi-stream-pose-estimator | `cast` | 9 | 16.86 / 16.84 / 17.54 | 75.2 |
+| `yolo26l-pose-bf16-mla_tess-b1` | `yolo26l-pose-bf16-mla_tess-b1.tar.gz` | multi-stream-pose-estimator | `cast` | 9 | 20.15 / 20.13 / 20.79 | 60.1 |
+| `yolo26x-pose-bf16-mla_tess-b1` | `yolo26x-pose-bf16-mla_tess-b1.tar.gz` | multi-stream-pose-estimator | `cast` | 9 | 39.88 / 39.87 / 40.55 | 27.6 |
+| `yolo26m-pose-bf16-b1` | `yolo26m-pose-bf16-b1.tar.gz` | multi-stream-pose-estimator | `unknown` | 9 | 18.55 / 18.39 / 19.04 | 77.2 |
+| `yolo26m-pose-int8-b1` | `yolo26m-pose-int8-b1.tar.gz` | multi-stream-pose-estimator, multi-stream-multi-model, parallel-apps | `detessdequant` | 9 | 7.56 / 7.52 / 8.15 | 311.6 |
 
 ## Other Segmentation
 
 | Model ID | Package | Used By | Postprocess | Outputs | Latency ms (mean / p50 / p99) | FPS |
 | --- | --- | --- | --- | ---: | ---: | ---: |
-| `yolo_v8n_seg` | `yolo_v8n_seg_mpk.tar.gz` | single-stream-instance-segmenter | `detessdequant` | 10 | 7.73 / 7.62 / 8.30 | 368.1 |
-| `yolo_v8s_seg` | `yolo_v8s_seg_mpk.tar.gz` | single-stream-instance-segmenter | `detessdequant` | 10 | 8.96 / 8.95 / 9.60 | 374.4 |
-| `yolo_v8m_seg` | `yolo_v8m_seg_mpk.tar.gz` | single-stream-instance-segmenter | `detessdequant` | 10 | 12.12 / 12.11 / 12.79 | 174.2 |
-| `yolo_v8l_seg` | `yolo_v8l_seg_mpk.tar.gz` | single-stream-instance-segmenter | `detessdequant` | 10 | 16.29 / 16.28 / 16.97 | 100.3 |
-| `yolo_11s_seg` | `yolo_11s_seg_mpk.tar.gz` | multi-stream-multi-model | `detessdequant` | 10 | 9.43 / 9.40 / 10.09 | 315.7 |
+| `yolo_v8n_seg` | `yolo_v8n_seg_mpk.tar.gz` | single-stream-instance-segmenter | `detessdequant` | 10 | 7.16 / 7.15 / 7.82 | 369.4 |
+| `yolo_v8s_seg` | `yolo_v8s_seg_mpk.tar.gz` | single-stream-instance-segmenter | `detessdequant` | 10 | 7.97 / 7.92 / 8.58 | 361.2 |
+| `yolo_v8m_seg` | `yolo_v8m_seg_mpk.tar.gz` | single-stream-instance-segmenter | `detessdequant` | 10 | 9.81 / 9.79 / 10.50 | 288.2 |
+| `yolo_v8l_seg` | `yolo_v8l_seg_mpk.tar.gz` | single-stream-instance-segmenter | `detessdequant` | 10 | 12.48 / 12.30 / 12.97 | 165.6 |
+| `yolo_11s_seg` | `yolo_11s_seg_mpk.tar.gz` | multi-stream-multi-model | `detessdequant` | 10 | 8.07 / 8.06 / 8.70 | 353.3 |
 
 ## Depth, Keypoints, Pose, And Anomaly
 
 | Model ID | Package | Used By | Postprocess | Outputs | Latency ms (mean / p50 / p99) | FPS |
 | --- | --- | --- | --- | ---: | ---: | ---: |
-| `depth_anything_v2_vits` | `depth_anything_v2_vits_mpk.tar.gz` | depth-estimator | `detessdequant` | 1 | 32.80 / 32.58 / 33.36 | 33.5 |
-| `midas_v21_small_256` | `midas_v21_small_256_mpk.tar.gz` | mipi-multi-model | `detessdequant` | 1 | 3.34 / 3.34 / 3.49 | 816.1 |
-| `superpoint` | `superpoint_mpk.tar.gz` | superpoint-feature-extractor | `detessdequant` | 2 | 8.58 / 8.49 / 8.65 | 360.4 |
-| `blazepose_ghum_heavy_w16a16` | `blazepose_ghum_heavy_w16a16_mpk.tar.gz` | multi-stream-blazepose3d, parallel-apps | `cast` | 3 | 5.30 / 5.24 / 5.50 | 249.9 |
-| `fastflow_demo` | `fastflow_demo_mpk.tar.gz` | fastflow-anomaly-detector | `detessdequant` | 1 | 5.04 / 4.97 / 5.13 | 346.0 |
-| `patchcore_wide_resnet50_2_bf16_mla` | `patchcore_wide_resnet50_2_bf16_mla.tar.gz` | patchcore-anomaly-detector | `unknown` | 1 | 10.54 / 10.49 / 10.81 | 220.7 |
+| `depth_anything_v2_vits` | `depth_anything_v2_vits_mpk.tar.gz` | depth-estimator | `detessdequant` | 1 | 20.80 / 20.61 / 20.84 | 55.8 |
+| `midas_v21_small_256` | `midas_v21_small_256_mpk.tar.gz` | mipi-multi-model | `detessdequant` | 1 | 2.85 / 2.85 / 2.95 | 1340.8 |
+| `superpoint` | `superpoint_mpk.tar.gz` | superpoint-feature-extractor | `detessdequant` | 2 | 7.38 / 7.36 / 8.13 | 494.0 |
+| `blazepose_ghum_heavy_w16a16` | `blazepose_ghum_heavy_w16a16_mpk.tar.gz` | multi-stream-blazepose3d, parallel-apps | `cast` | 3 | 3.66 / 3.66 / 3.86 | 415.9 |
+| `fastflow_demo` | `fastflow_demo_mpk.tar.gz` | fastflow-anomaly-detector | `detessdequant` | 1 | 3.82 / 3.82 / 3.94 | 574.7 |
+| `patchcore_wide_resnet50_2_bf16_mla` | `patchcore_wide_resnet50_2_bf16_mla.tar.gz` | patchcore-anomaly-detector | `unknown` | 1 | 8.66 / 8.65 / 8.81 | 366.3 |
 
 ## Multi-Package Model Parts
 
@@ -117,15 +118,15 @@ Each of these models runs as two packages. Every part is measured alone, so no r
 
 | Model ID | Package | Used By | Postprocess | Outputs | Latency ms (mean / p50 / p99) | FPS |
 | --- | --- | --- | --- | ---: | ---: | ---: |
-| `rf_detr_nano_w8a8_w16a16_backbone` | `rf_detr_nano_w8a8_w16a16_backbone_mpk.tar.gz` | rfdetr-detection-segmentation | `dequantize` | 3 | 7.20 / 7.19 / 7.41 | 181.3 |
-| `rf_detr_nano_w8a8_w16a16_decoder` | `rf_detr_nano_w8a8_w16a16_decoder_mpk.tar.gz` | rfdetr-detection-segmentation | `cast` | 2 | 3.12 / 3.12 / 3.29 | 579.4 |
-| `rf_detr_small_w8a8_w16a16_backbone` | `rf_detr_small_w8a8_w16a16_backbone_mpk.tar.gz` | rfdetr-detection-segmentation, parallel-apps | `dequantize` | 3 | 12.71 / 12.59 / 12.93 | 94.8 |
-| `rf_detr_small_w8a8_w16a16_decoder` | `rf_detr_small_w8a8_w16a16_decoder_mpk.tar.gz` | rfdetr-detection-segmentation, parallel-apps | `cast` | 2 | 4.46 / 4.45 / 4.69 | 334.7 |
-| `rf_detr_medium_w8a8_w16a16_backbone` | `rf_detr_medium_w8a8_w16a16_backbone_mpk.tar.gz` | rfdetr-detection-segmentation | `dequantize` | 3 | 18.31 / 18.29 / 18.72 | 62.5 |
-| `rf_detr_medium_w8a8_w16a16_decoder` | `rf_detr_medium_w8a8_w16a16_decoder_mpk.tar.gz` | rfdetr-detection-segmentation | `cast` | 2 | 5.54 / 5.52 / 5.85 | 250.9 |
-| `rf_detr_large_w8a8_w16a16_backbone` | `rf_detr_large_w8a8_w16a16_backbone_mpk.tar.gz` | rfdetr-detection-segmentation | `dequantize` | 3 | 36.71 / 36.68 / 37.28 | 29.5 |
-| `rf_detr_large_w8a8_w16a16_decoder` | `rf_detr_large_w8a8_w16a16_decoder_mpk.tar.gz` | rfdetr-detection-segmentation | `cast` | 2 | 6.24 / 6.24 / 6.44 | 216.1 |
-| `rfdetr-seg-medium-backbone` | `rfdetr-seg-medium-backbone.tar.gz` | rfdetr-detection-segmentation | `detessdequant` | 3 | 19.32 / 19.31 / 19.69 | 60.6 |
-| `rfdetr-seg-medium-transformer` | `rfdetr-seg-medium-transformer.tar.gz` | rfdetr-detection-segmentation | `unknown` | 3 | 31.94 / 31.90 / 32.90 | 43.0 |
-| `efficientsam3` | `efficientsam3_mpk.tar.gz` | efficientsam3-promptable-segmenter | `cast` | 2 | 136.04 / 135.96 / 138.93 | 8.1 |
-| `efficientsam3_text_encoder` | `efficientsam3_text_encoder_mpk.tar.gz` | efficientsam3-promptable-segmenter | `cast` | 1 | 26.73 / 26.72 / 26.98 | 40.0 |
+| `rf_detr_nano_w8a8_w16a16_backbone` | `rf_detr_nano_w8a8_w16a16_backbone_mpk.tar.gz` | rfdetr-detection-segmentation | `dequantize` | 3 | 5.06 / 5.04 / 5.16 | 294.3 |
+| `rf_detr_nano_w8a8_w16a16_decoder` | `rf_detr_nano_w8a8_w16a16_decoder_mpk.tar.gz` | rfdetr-detection-segmentation | `cast` | 2 | 2.43 / 2.42 / 2.52 | 955.0 |
+| `rf_detr_small_w8a8_w16a16_backbone` | `rf_detr_small_w8a8_w16a16_backbone_mpk.tar.gz` | rfdetr-detection-segmentation, parallel-apps | `dequantize` | 3 | 8.40 / 8.39 / 8.84 | 156.4 |
+| `rf_detr_small_w8a8_w16a16_decoder` | `rf_detr_small_w8a8_w16a16_decoder_mpk.tar.gz` | rfdetr-detection-segmentation, parallel-apps | `cast` | 2 | 3.26 / 3.25 / 3.36 | 547.4 |
+| `rf_detr_medium_w8a8_w16a16_backbone` | `rf_detr_medium_w8a8_w16a16_backbone_mpk.tar.gz` | rfdetr-detection-segmentation | `dequantize` | 3 | 11.90 / 11.88 / 12.25 | 103.2 |
+| `rf_detr_medium_w8a8_w16a16_decoder` | `rf_detr_medium_w8a8_w16a16_decoder_mpk.tar.gz` | rfdetr-detection-segmentation | `cast` | 2 | 3.94 / 3.94 / 4.06 | 411.3 |
+| `rf_detr_large_w8a8_w16a16_backbone` | `rf_detr_large_w8a8_w16a16_backbone_mpk.tar.gz` | rfdetr-detection-segmentation | `dequantize` | 3 | 23.23 / 23.21 / 23.61 | 48.9 |
+| `rf_detr_large_w8a8_w16a16_decoder` | `rf_detr_large_w8a8_w16a16_decoder_mpk.tar.gz` | rfdetr-detection-segmentation | `cast` | 2 | 4.44 / 4.43 / 4.60 | 352.5 |
+| `rfdetr-seg-medium-backbone` | `rfdetr-seg-medium-backbone.tar.gz` | rfdetr-detection-segmentation | `detessdequant` | 3 | 12.76 / 12.74 / 13.11 | 100.5 |
+| `rfdetr-seg-medium-transformer` | `rfdetr-seg-medium-transformer.tar.gz` | rfdetr-detection-segmentation | `unknown` | 3 | 23.28 / 23.25 / 23.91 | 67.3 |
+| `efficientsam3` | `efficientsam3_mpk.tar.gz` | efficientsam3-promptable-segmenter | `cast` | 2 | 86.89 / 86.73 / 87.42 | 13.4 |
+| `efficientsam3_text_encoder` | `efficientsam3_text_encoder_mpk.tar.gz` | efficientsam3-promptable-segmenter | `cast` | 1 | 17.77 / 17.75 / 18.36 | 62.2 |

@@ -86,11 +86,11 @@ See the maintained [benchmark results](https://github.com/sima-neat/apps/blob/ma
 The application prints headline metrics and the path it wrote the full report to:
 
 ```text
-latency_ms=8.511609336633647
-latency_p99_ms=9.109009
-fps=203.45642913165662
-avg_power_watts=11.647916666666667
-energy_joules=5.725017742805907
+latency_ms=6.520167780941697
+latency_p99_ms=7.116750399999998
+fps=334.74326851174976
+avg_power_watts=14.64375
+energy_joules=4.374621203020843
 report_json=sandbox/model-benchmark/report.json
 ```
 
@@ -107,6 +107,7 @@ maintained benchmark results linked in the `Benchmark Results` section above.
 - Activate `~/pyneat` if the `pyneat` module is unavailable.
 - Confirm the model path points to a compiled `.tar.gz` package.
 - A zero power result means board power telemetry was unavailable; the model benchmark still completed.
+- If results fall well below the maintained table, check the MLA clock with `cat /sys/class/devfreq/5000000.mla/cur_freq`. The table was measured at 1000 MHz; a board that boots at 600 MHz measures about 40% lower FPS.
 
 ## Source Files
 

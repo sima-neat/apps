@@ -19,6 +19,8 @@ MAIN_PY = EXAMPLE_ROOT / "src" / "python" / "main.py"
 RESULTS_MD = EXAMPLE_ROOT / "BENCHMARK_RESULTS.md"
 REPORTS_DIR = APPS_ROOT / "sandbox" / "model-benchmark" / "runs"
 MODELS_DIR = APPS_ROOT / "models"
+# Modalix can boot with the MLA capped below its 1 GHz maximum, which lowers every result.
+MLA_FREQ = Path("/sys/class/devfreq/5000000.mla/cur_freq")
 
 
 @dataclass(frozen=True)
@@ -317,6 +319,14 @@ def detect_sdk() -> str:
     return match.group(1).strip() if match else existing_context_value("SDK", "unknown")
 
 
+def detect_mla_clock() -> str:
+    try:
+        hz = int(MLA_FREQ.read_text())
+    except (OSError, ValueError):
+        return existing_context_value("MLA Clock", "unknown")
+    return f"{hz // 1_000_000} MHz"
+
+
 def resolve_model_path(row: ModelRow, models_dir: Path) -> Path:
     preferred = models_dir / row.package
     if preferred.exists():
@@ -408,7 +418,7 @@ def result_row(reports_dir: Path, row: ModelRow) -> str:
             f"{float(metrics['fps']):.1f} |")
 
 
-def render_markdown(frames: int, min_duration_ms: int, sdk: str, run_date: str,
+def render_markdown(frames: int, min_duration_ms: int, sdk: str, mla_clock: str, run_date: str,
                     reports_dir: Path) -> str:
     lines = [
         "# Model Benchmark Results",
@@ -431,6 +441,7 @@ def render_markdown(frames: int, min_duration_ms: int, sdk: str, run_date: str,
         "| --- | --- |",
         "| Target | Modalix (`aarch64`) |",
         f"| SDK | {sdk} |",
+        f"| MLA Clock | {mla_clock} |",
         f"| Date | {run_date} |",
         f"| Minimum Frames per Pass | {frames} |",
         f"| Minimum Duration per Pass | {min_duration_ms} ms |",
@@ -474,6 +485,8 @@ def main() -> int:
     parser.add_argument("--models-dir", type=Path, default=MODELS_DIR,
                         help="directory holding the downloaded model packages")
     parser.add_argument("--sdk", default=None)
+    parser.add_argument("--mla-clock", default=None,
+                        help="MLA clock of the measured board, such as '1000 MHz'")
     parser.add_argument("--date", default=None)
     parser.add_argument("--models", nargs="*", help="optional model IDs to rerun")
     parser.add_argument("--allow-partial-update", action="store_true",
@@ -504,9 +517,10 @@ def main() -> int:
         return 1
 
     sdk = args.sdk or detect_sdk()
+    mla_clock = args.mla_clock or detect_mla_clock()
     run_date = args.date or (date.today().isoformat() if args.run else report_date(args.reports_dir))
-    RESULTS_MD.write_text(render_markdown(args.frames, args.min_duration_ms, sdk, run_date,
-                                          args.reports_dir),
+    RESULTS_MD.write_text(render_markdown(args.frames, args.min_duration_ms, sdk, mla_clock,
+                                          run_date, args.reports_dir),
                           encoding="utf-8")
     print(f"updated {RESULTS_MD}")
     return 0

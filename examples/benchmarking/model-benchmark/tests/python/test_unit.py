@@ -282,13 +282,15 @@ def test_render_markdown_reports_each_route(tmp_path: Path) -> None:
             encoding="utf-8",
         )
 
-    markdown = refresh_results.render_markdown(7, 30000, "3.0.0", "2026-10-30", tmp_path)
+    markdown = refresh_results.render_markdown(7, 30000, "3.0.0", "1000 MHz", "2026-10-30",
+                                               tmp_path)
 
     assert (
         "| Model ID | Package | Used By | Postprocess | Outputs | "
         "Latency ms (mean / p50 / p99) | FPS |"
     ) in markdown
     assert "| Minimum Duration per Pass | 30000 ms |" in markdown
+    assert "| MLA Clock | 1000 MHz |" in markdown
     assert "| 1.00 / 0.90 / 1.50 | 2.0 |" in markdown
     for model_id in ("yolo26m-det-int8-b1-boxdecode", "yolo26m-seg-int8-b1-boxdecode"):
         assert f"| `{model_id}` |" in markdown
@@ -317,7 +319,8 @@ def test_render_markdown_reports_recorded_failure(tmp_path: Path) -> None:
         )
     refresh_results.failure_path(tmp_path, rows[0]).write_text("exit 4: no route\n")
 
-    markdown = refresh_results.render_markdown(7, 30000, "3.0.0", "2026-10-30", tmp_path)
+    markdown = refresh_results.render_markdown(7, 30000, "3.0.0", "1000 MHz", "2026-10-30",
+                                               tmp_path)
 
     assert f"| `{rows[0].model_id}` |" in markdown
     assert "Not measured: exit 4: no route" in markdown
