@@ -55,7 +55,9 @@ jobs:
       ensure_sdk_container: true
       sdk_setup_args: "-y -n --minimal --workspace /mnt/vulcan/workspace --no-model-sdk --no-insight"
       artifact_name: neat-apps-build
-      artifact_path: neat-apps-*.tar.gz
+      artifact_path: |
+        neat-apps-*.tar.gz
+        deps/scheduler-sdk-policy.json
       artifact_retention_days: 3
       build_command: |
         set -euo pipefail
@@ -154,6 +156,7 @@ jobs:
           exit 1
         fi
         test -f neat-apps-tests.tar.gz
+        test -f deps/scheduler-sdk-policy.json
         scripts/ci/validate_apps_runtime_archive.sh "${runtime_archives[0]}"
         tar -tzf neat-apps-tests.tar.gz neat-apps-tests/tests/test.sh >/dev/null
         ls -lh "${runtime_archives[0]}" neat-apps-tests.tar.gz
@@ -213,7 +216,17 @@ jobs:
 
   resolve-test-runner:
     name: Resolve Test Runner
+    needs: [build, resolve-vulcan-config]
     uses: sima-neat/.github/.github/workflows/vulcan-resolve-modalix-runner.yml@main
+    with:
+      manifest_artifact: neat-apps-build
+      manifest_path: deps/scheduler-sdk-policy.json
+      allow-version-fallback: false
+      runner-labels: >-
+        ["self-hosted", "Linux", "ARM64", "modalix", "vulcan-${{ needs.resolve-vulcan-config.outputs.vulcan_env == 'prod' && 'production' || needs.resolve-vulcan-config.outputs.vulcan_env }}"]
+    secrets:
+      app_id: ${{ secrets.NEAT_RELEASES_APP_ID }}
+      app_private_key: ${{ secrets.NEAT_RELEASES_APP_PRIVATE_KEY }}
 
   plan-runtime-tests:
     name: Plan adaptive Apps test fleet
@@ -245,7 +258,7 @@ jobs:
           REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
           APPS_UNREADY_RUNNERS: ${{ vars.APPS_UNREADY_RUNNERS || '[]' }}
           RUNNER_GROUP: ${{ needs.resolve-test-runner.outputs.modalix_runner_group }}
-          REQUIRED_LABELS: '["self-hosted","Linux","ARM64","modalix","vulcan-${{ needs.resolve-vulcan-config.outputs.vulcan_env }}"]'
+          REQUIRED_LABELS: ${{ needs.resolve-test-runner.outputs.runner_labels }}
         run: |
           python3 scripts/ci/plan_runtime_shards.py \
             --group "${RUNNER_GROUP}" --labels "${REQUIRED_LABELS}"
@@ -272,6 +285,29 @@ jobs:
       labels: ${{ matrix.labels }}
 
     steps:
+      - name: Verify selected DevKit firmware
+        env:
+          EXPECTED_ELXR_VERSION: ${{ needs.resolve-test-runner.outputs.devkit_firmware }}
+          VERSION_FALLBACK: ${{ needs.resolve-test-runner.outputs.version_fallback }}
+        shell: bash
+        run: |
+          python3 - <<'PYFIRMWARE'
+          import os
+          import re
+          from pathlib import Path
+
+          actual_versions = set()
+          for path in (Path('/etc/build'), Path('/etc/buildinfo')):
+              if path.is_file():
+                  actual_versions.update(re.findall(
+                      r'^SIMA_BUILD_VERSION\s*=\s*([\w.\-+]+)\s*$',
+                      path.read_text(), re.MULTILINE))
+          expected = os.environ['EXPECTED_ELXR_VERSION']
+          print(f"Runner: {os.environ['RUNNER_NAME']}; requested firmware: {expected}; actual firmware: {sorted(actual_versions)}")
+          if (not expected or os.environ['VERSION_FALLBACK'] != 'false'
+                  or actual_versions != {expected}):
+              raise SystemExit('Cannot verify exact DevKit firmware; refusing to run')
+          PYFIRMWARE
       - name: Checkout code
         uses: actions/checkout@v5
         with:

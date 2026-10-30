@@ -1021,6 +1021,10 @@ if not isinstance(sysroot_version, str) or not re.fullmatch(
     raise SystemExit("invalid sysroot-version")
 if consumer_base != sysroot_version.split("~", 1)[0]:
     raise SystemExit("platform-version does not match the Scheduler sysroot-version")
+if (policy.get("platform-version") != consumer_base
+        or not isinstance(policy.get("elxr_version"), str)
+        or not re.fullmatch(re.escape(consumer_base) + r"_(?:master|develop)_B[1-9][0-9]*", policy["elxr_version"])):
+    raise SystemExit("Scheduler firmware does not match the Apps platform")
 if "~" not in sysroot_version:
     # Match Core's official-release admission; never patch a release SDK in place.
     if policy.get("sdk", {}).get("sysroot-version") != sysroot_version:
@@ -1075,6 +1079,7 @@ PY
     echo "ERROR: Failed to read SDK sysroot status." >&2
     return 1
   fi
+  cp "${policy_file}" "${DEPS_DIR}/scheduler-sdk-policy.json"
 )
 
 ensure_neat_core() {

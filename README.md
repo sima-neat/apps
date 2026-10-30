@@ -138,7 +138,7 @@ curl -fsSL https://raw.githubusercontent.com/sima-neat/apps/main/scripts/get-exa
 
 `deps/manifest.json` selects Core and records the SDK channel, the platform version, and the Model Zoo version used for model downloads. Development uses the `snap` policy, while a release-preparation branch can select an exact Core artifact. Vulcan records the resolved Core target under package metadata and the Apps installer uses that same target. Insight is not pinned in the Apps manifest.
 
-Builds inherit the sysroot requirement from Core's bundled Scheduler. Official releases require a matching cached SDK receipt, package inventory and package identity, without overlays; they never run `sysroot update`. Development pins retain the update path. Compatible DevKit image selection remains separate from the SDK package baseline.
+Builds inherit the sysroot requirement from Core's bundled Scheduler. Official releases require a matching cached SDK receipt, package inventory and package identity, without overlays; they never run `sysroot update`. Development pins retain the update path. CI uses the same Scheduler policy with the shared compatibility resolver to select and verify DevKit firmware before installation, then shards tests using its resolved labels.
 
 ## Support
 
