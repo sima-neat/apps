@@ -7,6 +7,7 @@ from pathlib import Path
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_milvus import Milvus
 from langchain_text_splitters import MarkdownHeaderTextSplitter
+from milvus_lite.server_manager import server_manager_instance
 
 try:
     from rag.event_loop import ensure_thread_event_loop
@@ -52,15 +53,22 @@ def create_markdown_vectordb(
         model_name=str(model_path),
         model_kwargs={"device": "cpu"},
     )
-    ensure_thread_event_loop()
-    Milvus.from_documents(
-        documents=documents,
-        embedding=embedding,
+    loop = ensure_thread_event_loop()
+    store = Milvus(
+        embedding_function=embedding,
         collection_name=collection,
         connection_args={"uri": str(db_path)},
         index_params={"index_type": "FLAT", "metric_type": "IP"},
         drop_old=True,
+        auto_id=True,
     )
+    try:
+        store.add_documents(documents)
+    finally:
+        try:
+            loop.run_until_complete(store.aclient.close())
+        finally:
+            store.client.close()
 
     metadata_path = db_path.with_suffix(".meta.json")
     metadata_path.write_text(
@@ -89,12 +97,16 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    create_markdown_vectordb(
-        input_path=args.input,
-        output_db=args.output,
-        embedding_model=args.embedding_model,
-        collection=args.collection,
-    )
+    try:
+        create_markdown_vectordb(
+            input_path=args.input,
+            output_db=args.output,
+            embedding_model=args.embedding_model,
+            collection=args.collection,
+        )
+    finally:
+        # Stop this command's local servers before Python dismantles imports.
+        server_manager_instance.release_all()
     return 0
 
 

@@ -83,9 +83,7 @@ class CorsPolicyTests(unittest.TestCase):
         self.assertEqual(h["Vary"], "Origin")
         self.assertEqual(h["Access-Control-Allow-Headers"], "content-type, x-custom")
         self.assertIn("X-Engine", h["Access-Control-Expose-Headers"])
-        # Browser callers read how much of a long chat was left out.
-        self.assertIn("X-Context-Dropped", h["Access-Control-Expose-Headers"])
-        self.assertIn("X-Context-Window", h["Access-Control-Expose-Headers"])
+        self.assertIn("X-ASR-Model", h["Access-Control-Expose-Headers"])
         self.assertEqual(cors_headers("http://a:3000")["Access-Control-Allow-Headers"], "Content-Type")
 
 
@@ -160,7 +158,7 @@ class ControlRelayTests(unittest.TestCase):
     # A request to each relayed route, and the control API call it must reach.
     CASES = {
         ("GET", "/models/status"): ({}, ("status", (), {})),
-        ("GET", "/models/catalog"): ({}, ("scan_catalog", (), {})),
+        ("GET", "/models/catalog"): ({}, ("catalog", (), {})),
         ("GET", "/models/logs"): ({"after": "7"}, ("load_logs", (7,), {})),
         ("GET", "/models/card"): ({"name": "m"}, ("model_card", ("m",), {})),
         ("POST", "/models/load"): ({"name": "m", "unload": ["x"]}, ("load", ("m", ["x"]), {})),

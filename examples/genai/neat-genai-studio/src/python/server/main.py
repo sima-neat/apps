@@ -279,7 +279,11 @@ def main() -> int:
         )
 
         while True:
-            time.sleep(1)
+            time.sleep(60)
+            try:
+                manager.scan_catalog()
+            except OSError as exc:
+                print(f"catalog refresh failed: {exc}", file=sys.stderr, flush=True)
     except KeyboardInterrupt:
         print("\nstopping OpenAI-compatible API server...", flush=True)
         return 0
