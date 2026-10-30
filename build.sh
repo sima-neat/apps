@@ -1005,20 +1005,60 @@ PY
   fi
 
   local sysroot_version
-  if ! sysroot_version="$(python3 - "${policy_file}" "${APPS_MANIFEST}" <<'PY'
+  if ! sysroot_version="$(python3 - "${policy_file}" "${APPS_MANIFEST}" \
+      "${ELXR_SDK_RELEASE_FILE}" "${SYSROOT:-/opt/toolchain/aarch64/modalix}" <<'PY'
 import json
 import re
 import sys
 from pathlib import Path
 
-sysroot_version = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))["sysroot-version"]
+policy = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+sysroot_version = policy["sysroot-version"]
 consumer_base = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))["platform-version"]
 if not isinstance(sysroot_version, str) or not re.fullmatch(
-    r"[0-9]+(?:[.][0-9]+){2}~(?:pre[0-9]+|git[0-9]{12}[.][0-9a-f]{7,40}-[0-9]+)", sysroot_version
+    r"[0-9]+(?:[.][0-9]+){2}(?:~(?:pre[0-9]+|git[0-9]{12}[.][0-9a-f]{7,40}-[0-9]+))?", sysroot_version
 ):
     raise SystemExit("invalid sysroot-version")
 if consumer_base != sysroot_version.split("~", 1)[0]:
     raise SystemExit("platform-version does not match the Scheduler sysroot-version")
+if (policy.get("platform-version") != consumer_base
+        or not isinstance(policy.get("elxr_version"), str)
+        or not re.fullmatch(re.escape(consumer_base) + r"_(?:master|develop)_B[1-9][0-9]*", policy["elxr_version"])):
+    raise SystemExit("Scheduler firmware does not match the Apps platform")
+if "~" not in sysroot_version:
+    # Match Core's official-release admission; never patch a release SDK in place.
+    if policy.get("sdk", {}).get("sysroot-version") != sysroot_version:
+        raise SystemExit("Scheduler SDK pin differs from its sysroot-version")
+    fields = {}
+    for line in Path(sys.argv[3]).read_text().splitlines():
+        if " = " in line:
+            key, value = line.split(" = ", 1)
+            if key in fields:
+                raise SystemExit(f"Duplicate SDK receipt field: {key}")
+            fields[key] = value
+    if (fields.get("Platform Version") != sysroot_version
+            or fields.get("Platform Base") != sysroot_version
+            or fields.get("Platform Channel") != "release"):
+        raise SystemExit("Cached SDK does not contain the requested release; refresh its snapshot")
+    sysroot = Path(sys.argv[4])
+    overlay = sysroot / "var/lib/sima-sdk/sysroot-overlay"
+    if overlay.exists() or overlay.is_symlink():
+        raise SystemExit("Release SDK contains an overlay; use a fresh release snapshot")
+    inventory = sysroot / "var/lib/sima-sdk/sysroot-packages.tsv"
+    if inventory.is_symlink():
+        raise SystemExit("SDK inventory must be a regular file")
+    records = [line.split("\t") for line in inventory.read_text().splitlines()]
+    for package in ("simaai-palette-modalix", "simaai-base-files-modalix"):
+        versions = [row[2] for row in records if len(row) >= 3 and row[0] == package
+                    and row[1] in {"all", "arm64"}]
+        if versions != [sysroot_version]:
+            raise SystemExit(f"Cached SDK {package} inventory differs: {versions}")
+    if not (sysroot / "usr/include").is_dir():
+        raise SystemExit("Cached SDK sysroot headers are missing")
+    identities = re.findall(r"^SIMA_PACKAGE_VERSION\s*=\s*(\S+)\s*$",
+                            (sysroot / "etc/packageinfo").read_text(), re.M)
+    if identities != [policy.get("elxr_version")]:
+        raise SystemExit(f"Cached SDK firmware identity differs: {identities}")
 print(sysroot_version)
 PY
   )"; then
@@ -1026,15 +1066,20 @@ PY
     return 1
   fi
 
-  echo "Updating SDK sysroot to Core's Scheduler sysroot-version ${sysroot_version}"
-  if ! run_privileged sysroot update "${sysroot_version}"; then
-    echo "ERROR: Failed to update SDK sysroot to ${sysroot_version}." >&2
-    return 1
+  if [[ "${sysroot_version}" == *~* ]]; then
+    echo "Updating SDK sysroot to Core's Scheduler sysroot-version ${sysroot_version}"
+    if ! run_privileged sysroot update "${sysroot_version}"; then
+      echo "ERROR: Failed to update SDK sysroot to ${sysroot_version}." >&2
+      return 1
+    fi
+  else
+    echo "SKIP sysroot installation: SDK receipt, inventory and package identity match official release ${sysroot_version}."
   fi
   if ! sysroot status; then
     echo "ERROR: Failed to read SDK sysroot status." >&2
     return 1
   fi
+  cp "${policy_file}" "${DEPS_DIR}/scheduler-sdk-policy.json"
 )
 
 ensure_neat_core() {
