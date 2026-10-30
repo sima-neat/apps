@@ -38,7 +38,7 @@ CORS_MAX_AGE = "600"
 # Response headers a cross-origin page may read (timings, engine, model).
 EXPOSE_HEADERS = ("X-ASR-Model", "X-Task", "X-Elapsed-Time", "X-Engine", "X-Voice",
                   "X-Language", "X-Speed", "X-RTF", "X-Audio-Duration",
-                  "X-RAG-Hits", "X-RAG-Sources", "X-Context-Dropped", "X-Context-Window")
+                  "X-RAG-Hits", "X-RAG-Sources")
 
 
 def _matches(path: str, prefixes: Iterable[str], exact: Iterable[str]) -> bool:

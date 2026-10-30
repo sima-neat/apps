@@ -90,6 +90,40 @@ class AsrSwitchingTests(unittest.TestCase):
     def entry(self, manager, name):
         return next(e for e in manager.catalog() if e["name"] == name)
 
+    def test_status_uses_cached_metadata_and_current_asr(self):
+        manager, _ = self.manager()
+        manager.set_active_asr("whisper-medium-a16w8")
+        with patch("server.model_manager.model_dir_supported", side_effect=AssertionError("disk scan")), \
+                patch.object(manager, "_size_of", side_effect=AssertionError("disk walk")):
+            status = manager.status()
+        self.assertEqual(status["asrModel"], "whisper-medium-a16w8")
+        active = [entry["name"] for entry in status["catalog"] if entry["activeAsr"]]
+        self.assertEqual(active, ["whisper-medium-a16w8"])
+
+    def test_background_scan_does_not_block_status(self):
+        manager, _ = self.manager()
+        scanning, release, answered = threading.Event(), threading.Event(), threading.Event()
+
+        def slow_metadata(path):
+            scanning.set()
+            release.wait(5)
+            return True, ""
+
+        with patch("server.model_manager.model_dir_supported", side_effect=slow_metadata):
+            scanner = threading.Thread(target=manager.scan_catalog)
+            reader = None
+            scanner.start()
+            try:
+                self.assertTrue(scanning.wait(2))
+                reader = threading.Thread(target=lambda: (manager.status(), answered.set()))
+                reader.start()
+                self.assertTrue(answered.wait(1), "status waited for the catalog scan")
+            finally:
+                release.set()
+                scanner.join(5)
+                if reader is not None:
+                    reader.join(5)
+
     def test_switching_asr_evicts_the_previous_asr_and_keeps_the_chat_model(self):
         manager, server = self.manager()
         manager.load("Llama-3.2-3B-Instruct")

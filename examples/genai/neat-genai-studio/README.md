@@ -143,7 +143,8 @@ ${APP_DIR}/run.sh
 
 `run.sh` starts the model server (`${APP_DIR}/src/python/server/main.py`) and
 the Studio backend (`${APP_DIR}/src/python/api/main.py`). When startup finishes
-it prints the backend address, `https://<board-ip>:5000`, and keeps running
+it highlights **Open Neat Insight → GenAI**, prints the backend API address
+(`https://<board-ip>:5000`), and keeps running
 until you press `Ctrl+C`. If `setup.sh` has not been run yet, `run.sh` runs it
 first.
 
@@ -267,6 +268,7 @@ curl -sk -X POST $B/models/load -H 'Content-Type: application/json' \
 first; loading a model that is loaded already moves it to the front) and the limit (`maxResident`). Each catalog entry reports the
 accelerator memory the model takes (`acceleratorBytes`), the tokens it reads at
 once (`contextTokens`), and its tokenizer (`tokenizerPath`).
+Target/draft packages appear as one model, with accelerator memory counted for both components.
 
 #### Limits and what the Studio does at them
 The board has fixed limits. The Studio checks them before it asks the board to
@@ -278,8 +280,8 @@ do something it can't, and answers with a reason instead of failing silently.
 | **Accelerator memory full**: a model that won't fit beside the loaded ones | Refused before anything is loaded or unloaded (`409`, `"code": "no_room"`, with `needBytes`, `freeBytes` and the loaded models). The budget is `server.models.accelerator_memory_gib` (16 on a Modalix DevKit). |
 | **A load fails anyway** (memory not handed back by earlier unloads) | Only the new model is rolled back; the others stay loaded. Restart the Studio to free the accelerator. |
 | **Storage full**: a download bigger than the free space | Refused before it starts, keeping 1 GB free for the board. A disk that fills during a download is reported as such. |
-| **Context full**: a conversation longer than the model reads at once | The oldest turns are left out so the model still answers, and `X-Context-Dropped` says how many (`X-Context-Window` gives the window). Tokens are counted with the model's own tokenizer when the Studio runs on the same board as the model server, and estimated otherwise. |
-| **One message longer than the window** | Refused with the reason instead of an empty reply (`413`, `"code": "context_full"`). |
+| **Prompt exceeds the context** | Core's `context_length_exceeded` error is passed through (HTTP 400, or an SSE error). Studio preserves the full history without token counting or automatic trimming. |
+| **Generation reaches the context or output-token limit** | Core's `finish_reason: "length"` is passed through with the generated text. |
 | **Accelerator busy** (Platform 3.0: `rc=-11`, kernel log `no free bank`, when several models run at once) | Retried once automatically, for streamed and whole replies, when no text had come back yet; otherwise the error is passed on. |
 
 Speech-to-text has its own slot. `POST /models/asr` makes another ASR model

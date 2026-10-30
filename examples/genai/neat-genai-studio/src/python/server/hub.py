@@ -257,7 +257,7 @@ def hub_search(catalog_dir: Path | None, hub: HubConfig, query: str, limit: int 
                 # to the naming convention when file lists weren't returned.
                 siblings = getattr(m, "siblings", None)
                 if siblings:
-                    if not any((getattr(s, "rfilename", "") or "").startswith("devkit/")
+                    if not any("devkit" in Path(getattr(s, "rfilename", "") or "").parts
                                for s in siblings):
                         continue
                 elif "safetensors" in repo_id.rsplit("/", 1)[-1].lower():

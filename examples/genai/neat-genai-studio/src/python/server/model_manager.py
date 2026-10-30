@@ -33,7 +33,7 @@ from pathlib import Path
 from shared.chat_template import repair_chat_template_files
 from shared.chat_limits import context_window_from_elfs
 from shared.config import (HubConfig, classify_model_dir, model_dir_complete,
-                           model_dir_supported)
+                           model_dir_supported, model_runtime_dirs)
 
 
 def parse_param_count(name: str) -> str | None:
@@ -199,7 +199,7 @@ class ModelManager:
         # free, the /stop call, the settle sleep, rmtree). _lock is then only ever
         # held for microseconds, so status/catalog reads — which the UI polls
         # every ~0.9s during a load — never block behind a switch.
-        self._op_lock = threading.Lock()
+        self._op_lock = threading.RLock()
         # Chat/VLM models currently resident, most recently loaded first (a
         # chat doesn't reorder them, so a client's default doesn't jump).
         self._resident: list[str] = []
@@ -240,12 +240,18 @@ class ModelManager:
 
     def scan_catalog(self) -> list[dict]:
         """Rescan ``catalog_dir`` for compatible models and refresh the index."""
+        # Serialize scans with model changes, never with status or inference.
+        with self._op_lock:
+            return self._scan_catalog()
+
+    def _scan_catalog(self) -> list[dict]:
         self._complete_cache = {}   # re-check completeness on an explicit rescan
         catalog: dict[str, dict] = {}
         if self._catalog_dir and self._catalog_dir.is_dir():
             for child in sorted(self._catalog_dir.iterdir()):
                 info = classify_model_dir(child)
                 if info is not None:
+                    info["metadata"] = self._catalog_metadata(info)
                     catalog[info["name"]] = info
         with self._lock:
             # Preserve entries for already-loaded models even if not under
@@ -259,14 +265,13 @@ class ModelManager:
     def register_startup_model(self, name: str, path: Path | None, model_type: str,
                                supports_vision: bool, image_size: dict | None) -> None:
         """Record a model loaded at startup so it appears in the catalog."""
+        info = {
+            "name": name, "path": path, "type": model_type,
+            "supports_vision": supports_vision, "image_size": image_size,
+        }
+        info["metadata"] = self._catalog_metadata(info)
         with self._lock:
-            self._catalog[name] = {
-                "name": name,
-                "path": path,
-                "type": model_type,
-                "supports_vision": supports_vision,
-                "image_size": image_size,
-            }
+            self._catalog[name] = info
 
     def _size_of(self, path) -> int | None:
         """On-disk size (bytes) of a model directory, cached by path."""
@@ -299,51 +304,44 @@ class ModelManager:
         self._complete_cache[key] = result
         return result
 
+    def _catalog_metadata(self, info: dict) -> dict:
+        """Read disk metadata during discovery, outside the request path."""
+        path = Path(info["path"]).resolve() if info.get("path") else None
+        info["path"] = path
+        complete, reason = self._is_model_complete(path)
+        supported, unsupported_reason = model_dir_supported(path)
+        return {
+            "name": info["name"],
+            "type": info.get("type", "chat"),
+            "supportsVision": bool(info.get("supports_vision")),
+            "imageSize": info.get("image_size"),
+            "sizeBytes": self._size_of(path),
+            "acceleratorBytes": self._elf_bytes(path),
+            "contextTokens": self._context_tokens(path),
+            "tokenizerPath": self._tokenizer_path(path),
+            "stagesTotal": self._count_elf_stages(path),
+            "complete": complete,
+            "incompleteReason": reason or None,
+            "supported": supported,
+            "unsupportedReason": unsupported_reason or None,
+        }
+
     def catalog(self) -> list[dict]:
         loaded = set(self._server_model_names())
-        active_asr = self._active_asr
         with self._lock:
-            infos = list(self._catalog.values())   # snapshot; then walk the FS
-        entries = []                                # outside the lock (walks are slow)
+            active_asr = self._active_asr
+            infos = list(self._catalog.values())
+        entries = []
         for info in infos:
-            complete, reason = self._is_model_complete(info.get("path"))
-            supported, unsupported_reason = model_dir_supported(info.get("path"))
-            path = info.get("path")
+            metadata = info["metadata"]
             entries.append({
+                **metadata,
                 "name": info["name"],
-                "type": info.get("type", "chat"),
-                "supportsVision": bool(info.get("supports_vision")),
-                "imageSize": info.get("image_size"),
                 "loaded": info["name"] in loaded,
-                # "pinned" = the ASR model config re-selects on restart;
-                # "activeAsr" = the one serving transcriptions right now.
                 "pinned": self._is_configured_asr(info["name"]),
-                "activeAsr": (info.get("type") == "asr"
-                              and info["name"] == active_asr),
-                "sizeBytes": self._size_of(path),
-                # Accelerator memory it takes (its ELF stages) and the tokens it
-                # can read at once, fixed when it was compiled; past that window
-                # the runtime answers with an empty reply.
-                "acceleratorBytes": self._elf_bytes(path),
-                "contextTokens": self._context_tokens(path),
-                # The model's tokenizer, so the Studio can count a request's
-                # tokens exactly when it runs on this machine.
-                "tokenizerPath": self._tokenizer_path(path),
-                # How long this model is expected to take to load, so the client
-                # can run its own countdown. add_model() does the bulk MLA load
-                # in native code without releasing the GIL, which freezes this
-                # whole process — control API included — for the duration, so
-                # nothing can be polled while a load is actually in flight.
+                "activeAsr": info.get("type") == "asr" and info["name"] == active_asr,
                 "estimatedLoadS": self._estimate_load_seconds(
-                    info["name"], self._elf_bytes(path) or self._size_of(path)),
-                "stagesTotal": self._count_elf_stages(path),
-                "complete": complete,
-                "incompleteReason": reason or None,
-                # Distinct from "complete": an unsupported build downloaded
-                # perfectly. Conflating them tells the user to re-download
-                # gigabytes that will fail the same way.
-                "supported": supported,
-                "unsupportedReason": unsupported_reason or None,
+                    info["name"], metadata["acceleratorBytes"] or metadata["sizeBytes"]),
             })
         entries.sort(key=lambda e: (e["type"] == "asr", e["name"].lower()))
         return entries
@@ -752,13 +750,17 @@ class ModelManager:
         if not path:
             return None
         try:
-            return context_window_from_elfs(f.name for f in Path(path).glob("elf_files/*.elf"))
+            components = model_runtime_dirs(Path(path))
+            if not components:
+                return None
+            return context_window_from_elfs(f.name for f in components[0].glob("elf_files/*.elf"))
         except OSError:
             return None
 
     @staticmethod
     def _tokenizer_path(path) -> str | None:
-        tokenizer = Path(path) / "devkit" / "tokenizer.json" if path else None
+        components = model_runtime_dirs(Path(path)) if path else []
+        tokenizer = components[0] / "devkit" / "tokenizer.json" if components else None
         return str(tokenizer) if tokenizer and tokenizer.is_file() else None
 
     def _check_fits(self, name: str, path, victims: list) -> None:
@@ -788,7 +790,8 @@ class ModelManager:
             return None
         try:
             total = sum(f.stat().st_size
-                        for f in Path(path).glob("elf_files/*_mla.elf"))
+                        for root in model_runtime_dirs(Path(path))
+                        for f in root.glob("elf_files/*_mla.elf"))
         except Exception:
             return None
         return total or None
@@ -876,10 +879,8 @@ class ModelManager:
     def _count_elf_stages(self, path) -> int | None:
         """Number of ELF stages on disk for a model (the load-progress total)."""
         try:
-            elf_dir = Path(path) / "elf_files"
-            if not elf_dir.is_dir():
-                return None
-            n = sum(1 for f in elf_dir.iterdir() if f.name.endswith("_mla.elf"))
+            n = sum(1 for root in model_runtime_dirs(Path(path))
+                    for f in root.glob("elf_files/*_mla.elf"))
             return n or None
         except Exception:
             return None
@@ -1151,10 +1152,7 @@ class ModelManager:
         raw = (info or {}).get("path")
         if not raw:
             return None
-        try:
-            return Path(raw).resolve()
-        except Exception:
-            return None
+        return Path(raw)
 
     def unload(self, name: str) -> dict:
         name = (name or "").strip()
@@ -1262,7 +1260,9 @@ class ModelManager:
                         break
                     except OSError:
                         continue
-            vlm_cfg = p / "devkit" / "vlm_config.json"
+            components = model_runtime_dirs(p)
+            target = components[0] if components else p
+            vlm_cfg = target / "devkit" / "vlm_config.json"
             if vlm_cfg.is_file():
                 try:
                     raw = json.loads(vlm_cfg.read_text(encoding="utf-8"))

@@ -324,14 +324,30 @@ def _load_model_entry_name(entry: object) -> str:
     return str(entry).strip()
 
 
-def classify_model_dir(model_dir: Path) -> dict | None:
-    """Classify a directory as a servable model, or return None if incompatible.
+def model_runtime_dirs(model_dir: Path) -> list[Path]:
+    """Runtime components of a model package, with the target before its draft."""
+    if not model_dir.is_dir():
+        return []
+    for root in (model_dir, model_dir / "sima_files"):
+        if any((root / name).is_file() for name in
+               ("devkit/vlm_config.json", "devkit/whisper_config.json", "whisper_config.json")):
+            return [root]
+    components = []
+    for config in sorted(model_dir.glob("*/devkit/vlm_config.json")):
+        try:
+            cfg = json.loads(config.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        spec = cfg.get("lm_cfg", {}).get("speculative_decoding_cfg") or {}
+        components.append((bool(spec.get("is_draft")), config.parent.parent))
+    components.sort(key=lambda component: component[0])
+    return [root for _, root in components]
 
-    A compatible precompiled model directory contains a ``devkit/`` folder. Chat
-    and vision-language models expose ``devkit/vlm_config.json``; ASR (Whisper)
-    models expose a ``whisper_config.json``. The returned dict mirrors the fields
-    used by the UI catalog: ``name``, ``path``, ``type`` (``chat`` | ``vlm`` |
-    ``asr``), ``supports_vision``, and ``image_size``.
+
+def classify_model_dir(model_dir: Path) -> dict | None:
+    """Classify a flat or target/draft package, or return None if incompatible.
+
+    Metadata comes from the target; the load path stays at the package root.
     """
     try:
         if not model_dir.is_dir():
@@ -339,21 +355,25 @@ def classify_model_dir(model_dir: Path) -> dict | None:
     except OSError:
         return None
 
-    devkit = model_dir / "devkit"
+    components = model_runtime_dirs(model_dir)
+    if not components:
+        return None
+    target = components[0]
+    devkit = target / "devkit"
     vlm_cfg = devkit / "vlm_config.json"
     whisper_cfg_candidates = (
         devkit / "whisper_config.json",
-        model_dir / "whisper_config.json",
+        target / "whisper_config.json",
     )
 
     if vlm_cfg.is_file():
-        supports_vision = _load_supports_vision({}, model_dir)
+        supports_vision = _load_supports_vision({}, target)
         return {
             "name": model_dir.name,
             "path": model_dir,
             "type": "vlm" if supports_vision else "chat",
             "supports_vision": supports_vision,
-            "image_size": _load_vision_image_size({}, model_dir) if supports_vision else None,
+            "image_size": _load_vision_image_size({}, target) if supports_vision else None,
         }
 
     if any(candidate.is_file() for candidate in whisper_cfg_candidates):
@@ -428,8 +448,10 @@ def model_dir_complete(path) -> tuple[bool, str]:
     except OSError:
         pass
     # A compiled model needs its ELF weight files, none of them zero-byte.
-    elf_dir = p / "elf_files"
-    if elf_dir.is_dir():
+    for root in model_runtime_dirs(p):
+        elf_dir = root / "elf_files"
+        if not elf_dir.is_dir():
+            continue
         elfs = list(elf_dir.glob("*.elf"))
         if not elfs:
             return False, "no weight (.elf) files were found"
@@ -449,7 +471,9 @@ def _load_supports_vision(raw: dict, model_path: Path | None) -> bool:
     if model_path is None:
         return True
 
-    config_path = model_path / "devkit" / "vlm_config.json"
+    components = model_runtime_dirs(model_path)
+    target = components[0] if components else model_path
+    config_path = target / "devkit" / "vlm_config.json"
     if not config_path.is_file():
         return True
 
@@ -465,7 +489,9 @@ def _load_vision_image_size(raw: dict, model_path: Path | None) -> dict[str, int
     raw_size = raw.get("vision_image_size") or raw.get("image_size")
 
     if raw_size is None and model_path is not None:
-        config_path = model_path / "devkit" / "vlm_config.json"
+        components = model_runtime_dirs(model_path)
+        target = components[0] if components else model_path
+        config_path = target / "devkit" / "vlm_config.json"
         if config_path.is_file():
             try:
                 cfg = json.loads(config_path.read_text(encoding="utf-8"))

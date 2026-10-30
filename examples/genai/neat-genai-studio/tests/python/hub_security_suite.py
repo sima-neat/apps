@@ -15,7 +15,7 @@ except ModuleNotFoundError as exc:  # pragma: no cover - environment check
         "PyYAML is required to run the Studio unit tests (pip install PyYAML)"
     ) from exc
 
-from server.hub import (_catalog_target, classify_hub_repo, hub_download_stream,
+from server.hub import (_catalog_target, classify_hub_repo, hub_download_stream, hub_search,
                         safe_name, validated_repo_id)
 from server.model_manager import parse_param_count
 from shared.config import HubConfig
@@ -57,6 +57,22 @@ class HubPathSecurityTests(unittest.TestCase):
                 self.assertEqual(
                     classify_hub_repo(repo, "automatic-speech-recognition"), "asr")
                 self.assertEqual(safe_name(repo), name)
+
+    def test_search_includes_nested_runtime_packages_and_excludes_compile_sources(self):
+        def model(name, filename):
+            return types.SimpleNamespace(id=f"simaai/{name}", siblings=[
+                types.SimpleNamespace(rfilename=filename)])
+
+        models = [model("flat", "devkit/vlm_config.json"),
+                  model("paired", "target/devkit/vlm_config.json"),
+                  model("weights-Safetensors", "model.safetensors")]
+        api = types.SimpleNamespace(list_models=lambda **kwargs: models)
+        fake_hub = types.SimpleNamespace(HfApi=lambda **kwargs: api)
+        with patch.dict(sys.modules, {"huggingface_hub": fake_hub}), \
+                patch("server.hub.hub_enabled", return_value=True):
+            result = hub_search(None, self.hub, "")
+        self.assertEqual([row["repoId"] for row in result["results"]],
+                         ["simaai/flat", "simaai/paired"])
 
     def test_rejects_traversal_and_unconfigured_organizations(self):
         values = (
