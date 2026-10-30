@@ -17,10 +17,6 @@ Start with `GenAIModel` unless the application has a narrower known task.
 
 Use `GenAIModel` for direct in-process application logic.
 
-Pass a speculative package's parent directory so Core loads its target and
-draft together. Catalogue capabilities come from the target; memory estimates
-include both components. See [GenAI Studio](../../../examples/genai/neat-genai-studio).
-
 Relevant public methods:
 
 - `task()`
@@ -74,10 +70,6 @@ Common steps:
 
 `stop()` also removes the registered models. Add them again before restarting the
 same server object.
-
-HTTP proxies can forward Core's `context_length_exceeded` errors (HTTP 400 or
-an SSE error) and `finish_reason: "length"` without loading a second tokenizer
-or trimming conversation history. An empty response alone does not prove overflow.
 
 `GenAIServer` does not provide authentication or TLS termination and allows CORS
 requests from any origin. Bind it only to a trusted interface or put it behind a
