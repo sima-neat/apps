@@ -37,7 +37,27 @@ Use `Graph` when:
 
 With encoded RTSP input, decide whether to decode for inference, forward the
 encoded stream to `VideoSender`, or branch to both. Use the same codec across
-`RtspEncodedInput`, `SimaDecode`, and `VideoSenderOptions::Passthrough`.
+`RtspEncodedInput`, `SimaDecode`, and `VideoSenderOptions::Passthrough`. RTSP
+inputs drop late packets by default (`drop_on_latency`); disable it only when
+every frame matters more than freshness.
+
+## Camera source
+
+- MIPI/CSI camera: `nodes::CameraInput` / `pyneat.nodes.camera_input`. Capture
+  is strict zero-copy; set `allow_cpu_fallback` only as a deliberate
+  compatibility choice. Read Core's `mipi-camera-input.md` before changing
+  capture buffer counts.
+- USB (UVC) webcam: `nodes::UsbCameraInput` /
+  `pyneat.nodes.usb_camera_input`, opened by a stable ID from
+  `usb_camera_ids()` at an exact MJPEG mode the camera lists. Call
+  `usb_camera_info(options)` once and pass the result to `UsbCameraInput`. Its
+  `decoded_format` (NV12, or NV16 for 4:2:2 webcams) is the `SimaDecode`
+  output format and the model's preprocess input format. Forward the JPEG
+  frames to Insight with `Passthrough(RtspCodec::MJPEG)` rather than decoding
+  and re-encoding. Core's `usb-camera-input.md` states which cameras and modes Neat supports.
+
+Both camera docs live in `docs/develop-apps/advanced-concepts/application-design/` in Core
+source.
 
 ## GenAI
 

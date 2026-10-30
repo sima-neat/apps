@@ -20,6 +20,20 @@ Common application steps:
 Do not manually recreate the model route unless the public API requires it. Let
 `Model` assemble the model-owned preprocess, inference, and postprocess stages.
 
+Read outputs by the contract `output_specs()` reports:
+
+- Outputs carry the model package's logical shape (for example `[1, 1000]` for
+  a classifier), and a Float32 output's format tag may be `EVXX_FLOAT32`
+  instead of `FP32`. Decode by dtype and shape rather than by format tag.
+- A default `nodes::Input` wired straight to one model image input inherits
+  that input's image format. Give explicit options when one input feeds
+  several models.
+- Detection routes take `score_threshold`, `nms_iou_threshold`, and `top_k`
+  from `Model::Options`. Set model-appropriate values (for example `0.25`,
+  `0.45`, `100`): a zero score threshold keeps zero-score boxes, and a zero
+  `top_k` builds only when the model package supplies a cap. Core's
+  `docs/reference/boxdecode_decode_types.md` defines each value.
+
 ## Graph
 
 `Graph` is the application assembly boundary.
@@ -72,3 +86,7 @@ public input or output. If more than one endpoint exists, use the names.
 
 Use `Sample` when the application needs frame IDs, timestamps, bundled values,
 or other metadata. Use `TensorList` when raw tensor payloads are enough.
+
+Outputs pulled with the default output memory share runtime buffers. When the
+application keeps outputs after the next pull, choose output memory as
+[inspect, measure, and tune](inspect-measure-tune.md) describes.
