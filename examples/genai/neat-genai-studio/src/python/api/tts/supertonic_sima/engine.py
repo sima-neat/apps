@@ -122,20 +122,9 @@ def _first_public_output_array(
     *,
     expected_public_shape: tuple[int, ...],
 ) -> np.ndarray:
-    tensors: list[Any] = []
-    if isinstance(output, (list, tuple)):
-        tensors = list(output)
-    elif getattr(output, "tensor", None) is not None:
-        tensors = [output.tensor]
-    elif getattr(output, "tensors", None):
-        tensors = list(output.tensors)
-    elif getattr(output, "fields", None):
-        tensors = [field.tensor for field in output.fields if field.tensor is not None]
-    elif hasattr(output, "to_numpy"):
-        tensors = [output]
-    if not tensors:
+    if not output:
         raise RuntimeError("MLA runner returned no output tensor")
-    value = np.asarray(tensors[0].to_numpy(copy=False), dtype=np.float32)
+    value = np.asarray(output[0].to_numpy(copy=False), dtype=np.float32)
     if value.shape != expected_public_shape:
         raise RuntimeError(
             f"MLA output shape {value.shape} != expected {expected_public_shape}"

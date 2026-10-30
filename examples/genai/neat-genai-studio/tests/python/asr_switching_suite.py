@@ -21,7 +21,7 @@ except ModuleNotFoundError as exc:  # pragma: no cover - environment check
     ) from exc
 
 from server.model_manager import ModelManager, _is_mla_failure
-from shared.config import HubConfig, model_dir_complete, model_dir_supported
+from shared.config import HubConfig
 
 
 class FakeServer:
@@ -93,7 +93,7 @@ class AsrSwitchingTests(unittest.TestCase):
     def test_status_uses_cached_metadata_and_current_asr(self):
         manager, _ = self.manager()
         manager.set_active_asr("whisper-medium-a16w8")
-        with patch("server.model_manager.model_dir_supported", side_effect=AssertionError("disk scan")), \
+        with patch.object(manager, "_is_model_complete", side_effect=AssertionError("disk scan")), \
                 patch.object(manager, "_size_of", side_effect=AssertionError("disk walk")):
             status = manager.status()
         self.assertEqual(status["asrModel"], "whisper-medium-a16w8")
@@ -109,7 +109,7 @@ class AsrSwitchingTests(unittest.TestCase):
             release.wait(5)
             return True, ""
 
-        with patch("server.model_manager.model_dir_supported", side_effect=slow_metadata):
+        with patch.object(manager, "_is_model_complete", side_effect=slow_metadata):
             scanner = threading.Thread(target=manager.scan_catalog)
             reader = None
             scanner.start()
@@ -133,6 +133,16 @@ class AsrSwitchingTests(unittest.TestCase):
         self.assertEqual(manager.active_asr(), "whisper-medium-a16w8")
         self.assertIn("Llama-3.2-3B-Instruct", server.model_names())
         self.assertNotIn("whisper-small-a16w8", server.model_names())
+
+    def test_incomplete_weights_are_rejected_before_evicting_active_asr(self):
+        model = self.tmp / "whisper-medium-a16w8"
+        (model / ".neat-complete").unlink()
+        (model / "elf_files/stage0_mla.elf").write_bytes(b"")
+        manager, server = self.manager()
+        with self.assertRaisesRegex(ValueError, "incomplete weight file"):
+            manager.set_active_asr("whisper-medium-a16w8")
+        self.assertEqual(server.model_names(), ["whisper-small-a16w8"])
+        self.assertEqual(server.removed, [])
 
     def test_loading_a_chat_model_never_evicts_the_active_asr(self):
         manager, server = self.manager()
@@ -508,52 +518,6 @@ class AsrWarmupBehaviourTests(AsrSwitchingTests):
 
         self.assertIsNone(manager.active_asr())
         self.assertNotIn("whisper-medium-a16w8", server.model_names())
-
-
-class EncoderLayoutIsNotJudgedLocallyTests(unittest.TestCase):
-    """Neither encoder layout may be refused from the files alone.
-
-    Which layout the runtime accepts inverted inside one version: 0.4.0 needs a
-    combined encoder stage, 0.4.0+develop.7d003ef needs per-layer ELFs and calls
-    the combined one "Unsupported legacy Whisper model". A model directory does
-    not record which runtime compiled it, so a local guess blocks whichever
-    builds happen to be the working ones. These pin that the studio offers both
-    and lets the runtime report any mismatch itself.
-    """
-
-    def _build(self, root, name, encoder_elfs, config="whisper_config.json"):
-        d = Path(root) / name
-        (d / "devkit").mkdir(parents=True)
-        (d / "elf_files").mkdir()
-        (d / "devkit" / config).write_text("{}")
-        (d / ".neat-complete").write_text("ok\n")
-        for e in encoder_elfs:
-            (d / "elf_files" / e).write_bytes(b"x")
-        (d / "elf_files" / "m_decoder_init_layer0_stage1_mla.elf").write_bytes(b"x")
-        return d
-
-    def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, self.tmp, True)
-
-    def test_a_combined_encoder_build_is_offered(self):
-        d = self._build(self.tmp, "combined", ["m_encoder_stage1_mla.elf"])
-        self.assertEqual(model_dir_supported(d), (True, ""))
-        self.assertEqual(model_dir_complete(d), (True, ""))
-
-    def test_a_layered_encoder_build_is_offered(self):
-        d = self._build(self.tmp, "layered",
-                        [f"m_encoder_layer{i}_stage1_mla.elf" for i in range(12)])
-        self.assertEqual(model_dir_supported(d), (True, ""))
-        self.assertEqual(model_dir_complete(d), (True, ""))
-
-    def test_a_genuinely_broken_download_is_still_caught(self):
-        d = self._build(self.tmp, "broken", ["m_encoder_stage1_mla.elf"])
-        (d / ".neat-complete").unlink()
-        (d / "elf_files" / "m_encoder_stage1_mla.elf").write_bytes(b"")
-        ok, why = model_dir_complete(d)
-        self.assertFalse(ok)
-        self.assertIn("incomplete weight file", why)
 
 
 class MlaFailureClassificationTests(unittest.TestCase):

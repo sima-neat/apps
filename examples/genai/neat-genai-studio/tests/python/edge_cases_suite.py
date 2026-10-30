@@ -61,6 +61,8 @@ class BusyAcceleratorTests(unittest.TestCase):
             "MLA-RT queued wait failed for /x_mla.elf: rc=-11 (Resource temporarily unavailable)"))
         self.assertTrue(accelerator_busy("dispatch: no free bank for model"))
         self.assertFalse(accelerator_busy("HTTP 404"))
+        self.assertFalse(accelerator_busy("MLA-RT queued wait failed: rc=-5 (Input/output error)"))
+        self.assertFalse(accelerator_busy("MLA-RT queued wait failed: rc=-110 (Connection timed out)"))
         self.assertFalse(accelerator_busy(None))
 
     def test_a_whole_reply_refused_by_a_busy_accelerator_is_sent_once_more(self):

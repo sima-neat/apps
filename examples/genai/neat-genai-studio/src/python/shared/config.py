@@ -388,29 +388,6 @@ def classify_model_dir(model_dir: Path) -> dict | None:
     return None
 
 
-def layered_encoder_reason(elf_names) -> str:
-    """Deprecated: always "". Kept so older callers keep working.
-
-    This used to refuse Whisper builds whose encoder is split into per-layer ELF
-    files, because the runtime loaded the encoder as one combined stage. That
-    requirement then INVERTED inside a single version: 0.4.0 needs a combined
-    stage, 0.4.0+develop.7d003ef needs 12 layered files and calls the combined
-    one "Unsupported legacy Whisper model". Neither layout is right in general,
-    the model directory does not say which runtime compiled it, and guessing
-    wrong blocks the only models that work. The runtime now reports the mismatch
-    precisely — naming the layout it found, the one it needs and the remedy — so
-    let it decide and surface its message.
-    """
-    return ""
-
-
-def model_dir_supported(path) -> tuple[bool, str]:
-    """Always (True, ""). See layered_encoder_reason for why nothing is refused
-    here: encoder layout is a runtime-version question the files cannot answer.
-    Kept so the catalog's `supported` field stays populated for clients."""
-    return True, ""
-
-
 def model_dir_complete(path) -> tuple[bool, str]:
     """Best-effort check that a model directory holds a COMPLETE set of weights
     (not a partial or interrupted download). Returns (complete, reason).

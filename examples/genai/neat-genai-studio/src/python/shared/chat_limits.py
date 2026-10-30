@@ -5,7 +5,7 @@ import json
 import re
 import time
 
-_BUSY = re.compile(r"rc=-11|resource temporarily unavailable|no free bank|queued wait failed", re.I)
+_BUSY = re.compile(r"\brc=-11\b|resource temporarily unavailable|no free bank", re.I)
 
 
 def chat_choice_has_output(choice: dict) -> bool:

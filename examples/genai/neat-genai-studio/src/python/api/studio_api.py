@@ -342,29 +342,16 @@ class AppContext:
         self.catalog_dir = None
         self.hub_config = HubConfig(allow_download=True,
                                     orgs=("simaai", "TDoSiMa", "florianvoss"))
-        self._asr_name_cache = (0.0, "")
 
     def set_asr_model_name(self, name):
         """Point transcription at a new ASR model after a successful switch."""
         self.asr_model_name = (name or "").strip()
-        self._asr_name_cache = (time.monotonic(), self.asr_model_name)
         if self.app is not None:
             self.app.config['ASR_MODEL_NAME'] = self.asr_model_name
         return self.asr_model_name
 
     def resolve_asr_model(self):
-        """The ASR model serving transcriptions, read fresh from the server.
-
-        Nothing this process knows is authoritative: the active model can change
-        without passing through here — an operator calling /control/asr directly,
-        as the README documents — and sending an evicted name just fails the
-        transcription. Any cache window is a window in which we get it wrong, so
-        ask every time. This runs once per recording, against a localhost
-        endpoint, next to an MLA transcription that costs orders of magnitude
-        more; if it cannot be reached we keep the last known name rather than
-        caching the failure.
-        """
-        _, cached = self._asr_name_cache
+        """Read the active ASR model; keep the last known name if control is unreachable."""
         try:
             resp = requests.get(
                 f"{self.control_base_url.rstrip('/')}/control/status", timeout=5
@@ -373,13 +360,8 @@ class AppContext:
             # transient 500 must not read as "no model active".
             resp.raise_for_status()
             name = str((resp.json() or {}).get("asrModel") or "")
-            reachable = True
         except Exception:
-            name, reachable = "", False
-        if not reachable:
-            # Say nothing new: keep using the last known name rather than
-            # caching a failure that says nothing about what is loaded.
-            return cached or self.asr_model_name
+            return self.asr_model_name
         if not name:
             # A successful status with no active model is real — a switch that
             # failed after eviction leaves exactly this. Forget the stale name
@@ -390,7 +372,6 @@ class AppContext:
         if name != self.asr_model_name:
             logging.info("Active ASR model changed out from under the UI: %r", name)
             return self.set_asr_model_name(name)
-        self._asr_name_cache = (time.monotonic(), name)
         return name
 
     def update_settings(self, model_server_ip, httponly):

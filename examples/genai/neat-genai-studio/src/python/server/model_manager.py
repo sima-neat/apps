@@ -32,8 +32,7 @@ from pathlib import Path
 
 from shared.chat_template import repair_chat_template_files
 from shared.chat_limits import context_window_from_elfs
-from shared.config import (HubConfig, classify_model_dir, model_dir_complete,
-                           model_dir_supported, model_runtime_dirs)
+from shared.config import HubConfig, classify_model_dir, model_dir_complete, model_runtime_dirs
 
 
 def parse_param_count(name: str) -> str | None:
@@ -254,20 +253,21 @@ class ModelManager:
                     info["metadata"] = self._catalog_metadata(info)
                     catalog[info["name"]] = info
         with self._lock:
-            # Preserve entries for already-loaded models even if not under
-            # catalog_dir (e.g. startup models configured with absolute paths).
-            for name in self._server_model_names():
-                if name not in catalog and name in self._catalog:
-                    catalog[name] = self._catalog[name]
+            loaded = set(self._server_model_names())
+            for name, info in self._catalog.items():
+                if info.get("configured"):
+                    catalog.setdefault(name, info)["configured"] = True
+                elif name in loaded:
+                    catalog.setdefault(name, info)
             self._catalog = catalog
         return self.catalog()
 
     def register_startup_model(self, name: str, path: Path | None, model_type: str,
                                supports_vision: bool, image_size: dict | None) -> None:
-        """Record a model loaded at startup so it appears in the catalog."""
+        """Keep a configured model in the catalog even while it is unloaded."""
         info = {
             "name": name, "path": path, "type": model_type,
-            "supports_vision": supports_vision, "image_size": image_size,
+            "supports_vision": supports_vision, "image_size": image_size, "configured": True,
         }
         info["metadata"] = self._catalog_metadata(info)
         with self._lock:
@@ -309,7 +309,6 @@ class ModelManager:
         path = Path(info["path"]).resolve() if info.get("path") else None
         info["path"] = path
         complete, reason = self._is_model_complete(path)
-        supported, unsupported_reason = model_dir_supported(path)
         return {
             "name": info["name"],
             "type": info.get("type", "chat"),
@@ -322,8 +321,8 @@ class ModelManager:
             "stagesTotal": self._count_elf_stages(path),
             "complete": complete,
             "incompleteReason": reason or None,
-            "supported": supported,
-            "unsupportedReason": unsupported_reason or None,
+            "supported": True,
+            "unsupportedReason": None,
         }
 
     def catalog(self) -> list[dict]:
@@ -499,9 +498,6 @@ class ModelManager:
             # Refuse to load a model whose weights are missing/partial — otherwise
             # it fails deep in the MLA with a confusing error.
             complete, reason = self._is_model_complete(path)
-            ok_supported, why_unsupported = model_dir_supported(path)
-            if not ok_supported:
-                raise ValueError(f"'{name}' cannot be loaded — {why_unsupported}")
             if not complete:
                 raise ValueError(
                     f"'{name}' cannot be loaded — {reason}. Re-download it from Add Model."
@@ -963,11 +959,10 @@ class ModelManager:
                 self._bench["summary"] = self._benchmark_summary(self._bench["runs"])
 
     def _bench_run_once(self, index, model, prompt, max_new_tokens) -> dict:
-        """One streamed generation. Prefers the runtime's own TTFT/TPS metrics
-        (streamed by the server as `ttft`/`tps` fields — the same numbers the
-        chat shows and the datasheet quotes, free of serving/client overhead) and
-        falls back to client-side timing only if the server doesn't provide them.
-        Updates the shared `current` state live for the UI."""
+        """Benchmark Core's token count and TTFT/TPS, updating live progress.
+
+        Client timing fills missing timing metrics; streamed errors fail the sample.
+        """
         payload = json.dumps({
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
@@ -995,9 +990,12 @@ class ModelManager:
                     break
                 try:
                     obj = json.loads(data)
-                except Exception:
+                except ValueError:
                     continue
+                if obj.get("error"):
+                    raise RuntimeError(obj["error"]["message"])
                 # Runtime metrics streamed by the server (authoritative).
+                tokens = obj.get("generated_tokens", tokens)
                 if "ttft" in obj:
                     try: srv_ttft = float(obj["ttft"])
                     except (TypeError, ValueError): pass
@@ -1005,14 +1003,14 @@ class ModelManager:
                     try: srv_tps = float(obj["tps"])
                     except (TypeError, ValueError): pass
                 choices = obj.get("choices") or []
-                delta = choices[0].get("delta", {}).get("content") if choices else None
+                chunk = choices[0].get("delta", {}) if choices else {}
+                delta = chunk.get("content") or chunk.get("reasoning_content") or chunk.get("reasoning")
                 if not delta:
                     continue
                 now = time.monotonic()
                 if t_first is None:
                     t_first = now
                 t_last = now
-                tokens += 1
                 parts.append(delta)
                 # Throttle the live update so it never perturbs the timing.
                 if now - last_live > 0.12:
@@ -1026,6 +1024,8 @@ class ModelManager:
                             cur["ttftMs"] = ttft_ms
                             cur["tps"] = round(srv_tps, 2) if srv_tps is not None else None
                             cur["text"] = text
+        if not tokens:
+            raise RuntimeError("Model server returned no generated-token count")
         # Prefer runtime metrics; else derive from client-side arrival times.
         if srv_ttft is not None:
             ttft = srv_ttft
@@ -1232,7 +1232,8 @@ class ModelManager:
             shutil.rmtree(path, ignore_errors=True)
             with self._lock:
                 self._size_cache.pop(str(raw_path), None)
-                self._catalog.pop(name, None)
+                self._catalog = {key: info for key, info in self._catalog.items()
+                                 if info.get("path") != path}
 
         self.scan_catalog()
         return {"name": name, "state": "deleted"}

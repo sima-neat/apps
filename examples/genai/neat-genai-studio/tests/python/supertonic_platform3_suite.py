@@ -67,7 +67,7 @@ class BatchAxisTests(unittest.TestCase):
         physical = np.arange(2 * 144 * 192, dtype=np.float32).reshape(2, 144, 1, 192)
         shape = runtime._public_shape(physical.shape)
         self.assertEqual(shape, (2, 1, 192, 144))
-        output = runtime._tensor_from_public(physical.transpose(0, 2, 3, 1))
+        output = [runtime._tensor_from_public(physical.transpose(0, 2, 3, 1))]
         np.testing.assert_array_equal(
             runtime._first_output_array(output, expected_public_shape=shape), physical)
 
