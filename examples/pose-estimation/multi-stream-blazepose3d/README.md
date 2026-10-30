@@ -157,15 +157,18 @@ For every frame, each stream sends two metadata messages with the same timestamp
 
 ## Performance
 
-Measured on a Modalix DevKit (Platform 3.0) with four 720p H.264 streams, one person each. Values are published frames per second per stream.
+Measured on a Modalix DevKit with Platform 3.0.0, the C++ application from the `apps@develop` package, and no other workload on the board. The configuration is the default, including `pose.max_people_per_frame: 1`, except for the detector and the input streams. Each run uses four streams of people in public spaces, at 120 FPS for 720p H.264, 180 FPS for 720p H.265, 60 FPS for 1080p H.264, and 90 FPS for 1080p H.265. Each figure is the per-stream rate, in FPS, of frames whose two metadata messages Insight received, averaged over 20 seconds after a 5-second warm-up.
 
-| Source FPS | C++ | Python |
-| --- | --- | --- |
-| 30 | 30 | about 27 |
-| 60 | 60 | not measured |
-| 120 | about 97 | about 25 |
+| Input resolution | Codec | Default `yolo26m-det-int8-b1` | `yolo26n-det-int8-b1` |
+| --- | --- | ---: | ---: |
+| 720p | H.264 | 55 | 60 |
+| 720p | H.265 | 55 | 60 |
+| 1080p | H.264 | 56 | 59\* |
+| 1080p | H.265 | 55 | 60 |
 
-At 120 fps, C++ is limited by BlazePose on the MLA, which runs about 400 inferences per second across all streams. Python is limited by per-frame work under the Python GIL.
+The Nano detector raises the rate by only about 5 FPS per stream. The Python application measured 16 FPS per stream with the default detector at 1080p H.264, using about seven CPU cores.
+
+\* Limited by the 60 FPS input.
 
 ## Troubleshooting
 

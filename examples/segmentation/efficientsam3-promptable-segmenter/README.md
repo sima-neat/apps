@@ -123,11 +123,24 @@ Open the Insight Video Viewer for channel 0. Instances that match the prompt are
 processed=<n> video_sender=<insight-host-ip>:9000
 ```
 
-With `runtime.profile` set, it also prints the segmentation rate every `runtime.profile_interval` segmented frames, about 6.5 FPS for a 1080p stream on Modalix with Platform 3.0:
+With `runtime.profile` set, it also prints the segmentation rate every `runtime.profile_interval` segmented frames, about 8 FPS for a 1080p stream on Modalix with Platform 3.0:
 
 ```text
 [profile] frames=100 segmentation_fps=<fps> avg_instances=<n>
 ```
+
+## Performance
+
+Measured on a Modalix DevKit with Platform 3.0.0, the C++ application from the `apps@develop` package, and no other workload on the board. The configuration is the default with the prompt `person`, on a 30 FPS stream of people in a public space. Each figure is the median segmentation rate the application prints with `runtime.profile` set. Insight receives metadata on every video frame, because each frame is sent the nearest finished result, so its received rate is the 30 FPS video rate.
+
+| Input resolution | Codec | Segmentation FPS | Instances per frame |
+| --- | --- | ---: | ---: |
+| 720p | H.264 | 8.1 | 14 |
+| 720p | H.265 | 8.1 | 14 |
+| 1080p | H.264 | 8.1 | 14 |
+| 1080p | H.265 | 8.1 | 13 |
+
+The Python application measured 8.1 segmentation FPS at 1080p H.264.
 
 ## Troubleshooting
 
