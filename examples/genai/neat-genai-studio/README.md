@@ -166,12 +166,15 @@ ${APP_DIR}/run.sh --clean  # remove generated venvs, config, RAG db, voices and 
 ```
 
 ## Expected Result
-- `run.sh` prints `Neat GenAI Studio is starting up.` and the backend address.
+- Once the backend is ready, `run.sh` prints `Neat GenAI Studio is ready.` and
+  **Open Neat Insight → GenAI**, with the backend API address.
 - `curl -sk https://127.0.0.1:5000/health` answers JSON with `"ok": true` once
   the model server is reachable, and lists the active speech-to-text model and
   the loaded text-to-speech engines.
-- In Insight's GenAI tab, after you load a model, a chat message returns a
-  streamed reply, recorded speech is transcribed, and replies can be read aloud.
+- Insight's catalogue lists installed models, including one entry per DFlash
+  or Gemma MTP target/draft package.
+- After you load a model in Insight's GenAI tab, chat replies stream, Whisper
+  transcribes recorded speech, and the selected TTS engine can read replies aloud.
 
 To confirm the model server from a second shell on the board:
 
