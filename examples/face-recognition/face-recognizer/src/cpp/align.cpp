@@ -104,13 +104,14 @@ cv::Mat align_face_nv12(const uint8_t* nv12, int W, int H, const Landmarks& lm) 
     const float margin = std::max(max_x - min_x, max_y - min_y) * 0.60f;
 
     // Round ROI to even boundaries (NV12 chroma is 2×2 subsampled).
-    int rx1 = std::max(0,   static_cast<int>(min_x - margin) & ~1);
-    int ry1 = std::max(0,   static_cast<int>(min_y - margin) & ~1);
-    int rx2 = std::min(W,  (static_cast<int>(max_x + margin) + 2) & ~1);
-    int ry2 = std::min(H,  (static_cast<int>(max_y + margin) + 2) & ~1);
+    // Clamp both corners so an off-screen detection can never produce a negative size.
+    int rx1 = std::max(0, std::min(W, static_cast<int>(min_x - margin) & ~1));
+    int ry1 = std::max(0, std::min(H, static_cast<int>(min_y - margin) & ~1));
+    int rx2 = std::min(W, (static_cast<int>(max_x + margin) + 2) & ~1);
+    int ry2 = std::min(H, (static_cast<int>(max_y + margin) + 2) & ~1);
     const int rW = rx2 - rx1;
     const int rH = ry2 - ry1;
-    if (rW <= 0 || rH <= 0) throw std::runtime_error("align_face_nv12: degenerate ROI");
+    if (rW <= 0 || rH <= 0) return cv::Mat();  // detection entirely off-frame; skip
 
     // Extract the NV12 sub-region into a contiguous buffer.
     std::vector<uint8_t> roi_buf(static_cast<size_t>(rW) * rH * 3 / 2);

@@ -982,6 +982,10 @@ int main(int argc, char** argv) {
                                                   det.landmarks)
                     : face_recog::align_face(frame, det.landmarks);
                 const auto ta1i = Clock::now();
+                if (crop.empty()) {
+                    cached_matches.push_back({"Unknown", -1.f, -1});
+                    continue;
+                }
                 const auto emb  = run_arcface(arcface_run, crop, cfg.timeout_ms);
                 const auto ta2i = Clock::now();
                 const auto res  = face_recog::match_embedding(emb, gallery, cfg.match);
