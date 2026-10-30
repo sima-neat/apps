@@ -44,11 +44,22 @@ class ModelOptions:
     top_k = 0
 
 
+class BenchmarkOptions:
+    num_samples = 100
+    min_duration_ms = 10000
+
+
 class Report:
     latency_ms = 1.25
+    latency_p50_ms = 1.2
+    latency_p95_ms = 1.4
+    latency_p99_ms = 1.5
     fps = 800.0
+    throughput_samples = 24000
+    throughput_duration_ms = 30000.0
     avg_power_watts = 2.5
     energy_joules = 0.75
+    telemetry = SimpleNamespace(status="ok")
 
 
 class Model:
@@ -72,8 +83,11 @@ class Model:
     def output_specs(self):
         return [f"out{i}:float32[1,80,80]" for i in range(self.outputs)]
 
-    def benchmark(self, frames):
-        assert frames == 7
+    def benchmark(self, options):
+        assert options.num_samples == 7
+        Path(os.environ["FAKE_PYNEAT_TRACE"] + ".duration").write_text(
+            str(options.min_duration_ms), encoding="utf-8"
+        )
         return Report()
 '''
 
@@ -162,16 +176,35 @@ def test_writes_json_report_with_benchmark_metrics(tmp_path: Path) -> None:
     data = json.loads(report.read_text(encoding="utf-8"))
     assert data["benchmark"]["type"] == "model.synthetic"
     assert data["benchmark"]["frames"] == 7
+    assert data["benchmark"]["min_duration_ms"] == 30000
+    assert Path(f"{trace}.duration").read_text(encoding="utf-8") == "30000"
     assert data["model"]["file"] == "model.tar.gz"
     assert data["model"]["requested_decode_type"] is None
     assert data["model"]["resolved_postprocess"] == "detessdequant"
     assert len(data["model"]["output_specs"]) == 6
     assert data["metrics"] == {
         "latency_ms": 1.25,
+        "latency_p50_ms": 1.2,
+        "latency_p95_ms": 1.4,
+        "latency_p99_ms": 1.5,
         "fps": 800.0,
+        "throughput_samples": 24000,
+        "throughput_duration_ms": 30000.0,
         "avg_power_watts": 2.5,
         "energy_joules": 0.75,
+        "telemetry_status": "ok",
     }
+
+
+@pytest.mark.unit
+def test_min_duration_flag_reaches_benchmark_options(tmp_path: Path) -> None:
+    report = tmp_path / "report.json"
+    result, trace = run_main(tmp_path, report, "--min-duration-ms", "0")
+
+    assert result.returncode == 0, result.stderr
+    assert Path(f"{trace}.duration").read_text(encoding="utf-8") == "0"
+    data = json.loads(report.read_text(encoding="utf-8"))
+    assert data["benchmark"]["min_duration_ms"] == 0
 
 
 @pytest.mark.unit
@@ -210,12 +243,12 @@ def test_boxdecode_row_shares_package_with_its_default(
     assert default_row.package == boxdecode_row.package
     assert default_row.decode_type is None
 
-    model = tmp_path / boxdecode_row.package
+    model = tmp_path / boxdecode_row.file
     default_command = refresh_results.benchmark_command(
-        default_row, model, 5, tmp_path / f"{default_id}.json"
+        default_row, model, 5, 30000, tmp_path / f"{default_id}.json"
     )
     boxdecode_command = refresh_results.benchmark_command(
-        boxdecode_row, model, 5, tmp_path / f"{boxdecode_id}.json"
+        boxdecode_row, model, 5, 30000, tmp_path / f"{boxdecode_id}.json"
     )
     assert "--decode-type" not in default_command
     assert boxdecode_command == default_command[:-1] + [
@@ -238,16 +271,53 @@ def test_render_markdown_reports_each_route(tmp_path: Path) -> None:
                         "resolved_postprocess": "boxdecode" if boxdecode else "detessdequant",
                         "output_specs": ["o"] if boxdecode else ["o"] * 6,
                     },
-                    "metrics": {"latency_ms": 1.0, "fps": 2.0},
+                    "metrics": {
+                        "latency_ms": 1.0,
+                        "latency_p50_ms": 0.9,
+                        "latency_p99_ms": 1.5,
+                        "fps": 2.0,
+                    },
                 }
             ),
             encoding="utf-8",
         )
 
-    markdown = refresh_results.render_markdown(7, "2.1.3", "2026-07-31", tmp_path)
+    markdown = refresh_results.render_markdown(7, 30000, "3.0.0", "2026-10-30", tmp_path)
 
-    assert "| Model ID | Package | Used By | Postprocess | Outputs | Latency / FPS |" in markdown
+    assert (
+        "| Model ID | Package | Used By | Postprocess | Outputs | "
+        "Latency ms (mean / p50 / p99) | FPS |"
+    ) in markdown
+    assert "| Minimum Duration per Pass | 30000 ms |" in markdown
+    assert "| 1.00 / 0.90 / 1.50 | 2.0 |" in markdown
     for model_id in ("yolo26m-det-int8-b1-boxdecode", "yolo26m-seg-int8-b1-boxdecode"):
         assert f"| `{model_id}` |" in markdown
     assert markdown.count("`boxdecode`") == 2
     assert markdown.count("`detessdequant`") == len(refresh_results.all_rows()) - 2
+
+
+@pytest.mark.unit
+def test_render_markdown_reports_recorded_failure(tmp_path: Path) -> None:
+    refresh_results = load_refresh_results()
+    rows = refresh_results.all_rows()
+    for row in rows[1:]:
+        (tmp_path / f"{row.model_id}.json").write_text(
+            json.dumps(
+                {
+                    "model": {"resolved_postprocess": "detessdequant", "output_specs": ["o"]},
+                    "metrics": {
+                        "latency_ms": 1.0,
+                        "latency_p50_ms": 1.0,
+                        "latency_p99_ms": 1.0,
+                        "fps": 1.0,
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+    refresh_results.failure_path(tmp_path, rows[0]).write_text("exit 4: no route\n")
+
+    markdown = refresh_results.render_markdown(7, 30000, "3.0.0", "2026-10-30", tmp_path)
+
+    assert f"| `{rows[0].model_id}` |" in markdown
+    assert "Not measured: exit 4: no route" in markdown
