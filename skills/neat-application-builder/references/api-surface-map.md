@@ -1,8 +1,9 @@
 # API Surface Map
 
-Use the relevant section to locate a public API in matching packaged Core
-source. Paths below are relative to that source root; installed headers provide
-the callable contract. Read only the headers and docs needed for the task.
+Use the relevant section to locate a public API in matching Core source. Paths
+below are relative to that source root; installed headers provide the callable
+contract and mark deprecated APIs. Read only the headers and docs needed for the
+task.
 
 ## Contents
 
@@ -24,12 +25,12 @@ the callable contract. Read only the headers and docs needed for the task.
 - `Model`, `Model::Options`, `Model::RouteOptions`, and `Model::Runner`
   - Inspect `include/model/Model.h`
   - Read `docs/develop-apps/development-workflow/model.mdx`
-- `Graph`, `GraphOptions`, validation, save/load, describe helpers, and RTSP serving
+- `Graph`, `GraphOptions`, graph link policies, validation, save/load, describe helpers, and RTSP serving
   - Inspect `include/pipeline/Graph.h`
   - Inspect `include/pipeline/GraphOptions.h`
   - Read `docs/develop-apps/development-workflow/graph.mdx`
   - Read `docs/develop-apps/advanced-concepts/application-design/graphs.md` for graph composition details
-- `Run`, `RunOptions`, push/pull, endpoint names, measurement, and close/drain behavior
+- `Run`, `RunOptions`, `OutputMemory`, push/pull, endpoint names, measurement, and close/drain behavior
   - Inspect `include/pipeline/Run.h`
   - Read `docs/develop-apps/development-workflow/overview.mdx`
   - Read `docs/develop-apps/development-workflow/pipeline.mdx` for the built pipeline and runtime view
@@ -37,15 +38,17 @@ the callable contract. Read only the headers and docs needed for the task.
 ## Data And Boundary Types
 
 - `Tensor`, `TensorList`, `TensorSpec`, dtype/layout/pixel-format helpers, and OpenCV/NumPy adapters
-  - Inspect `include/pipeline/Tensor.h`, `include/pipeline/TensorCore.h`, and `include/pipeline/TensorTypes.h`
+  - Inspect `include/pipeline/Tensor.h` (`TensorList`), `include/pipeline/TensorCore.h`, `include/pipeline/TensorSpec.h`, and `include/pipeline/TensorTypes.h`
   - Read `docs/develop-apps/development-workflow/core_types.mdx`
   - Read `docs/develop-apps/advanced-concepts/data-model-contracts/data_formats.md` for data and media format contracts
 - `Sample`, bundles, frame IDs, timestamps, and metadata-carrying payloads
-  - Inspect `include/pipeline/Tensor.h`
+  - Inspect `Sample` in `include/pipeline/GraphOptions.h`
   - Read `docs/develop-apps/development-workflow/core_types.mdx`
 - Per-frame string attributes that must stay attached through decode and graph branches
-  - Inspect `Sample::attributes` in `include/pipeline/Tensor.h`
+  - Inspect `Sample::attributes` in `include/pipeline/GraphOptions.h`
   - Read `docs/develop-apps/advanced-concepts/data-model-contracts/frame_attributes.md`
+- Memory placement between stages
+  - Read `docs/develop-apps/advanced-concepts/data-model-contracts/memory_model.md`
 - Encoded media helpers and payload types
   - Inspect `include/pipeline/EncodedSampleUtil.h`
   - Inspect `include/pipeline/PayloadType.h`
@@ -58,21 +61,14 @@ the callable contract. Read only the headers and docs needed for the task.
   - Inspect `include/neat/node_groups.h`
   - Read `docs/develop-apps/development-workflow/node.mdx` for public nodes and node groups
 - Boundary nodes and common graph nodes
-  - Inspect `include/nodes/io/Input.h`
-  - Inspect `include/nodes/common/Output.h`
-  - Inspect `include/nodes/common/Queue.h`
-  - Inspect `include/nodes/common/Caps.h`
-- Image, video, RTSP, UDP, and metadata I/O
-  - Inspect `include/nodes/io/CameraInput.h`
-  - Inspect `include/nodes/io/RTSPInput.h`
-  - Inspect `include/nodes/io/StillImageInput.h`
-  - Inspect `include/nodes/io/UdpOutput.h`
-  - Inspect `include/nodes/io/MetadataSender.h`
-  - Read `docs/develop-apps/advanced-concepts/application-design/metadata_sender.md` for metadata output patterns
+  - Inspect `include/nodes/io/Input.h` (including `InputMemoryPolicy`) and `include/nodes/common/`
+- Camera, image, video, RTSP, HTTP, UDP, and metadata I/O
+  - Inspect `include/nodes/io/` (`CameraInput.h`, `UsbCameraInput.h`, `RTSPInput.h`, `HttpSource.h`, `StillImageInput.h`, `UdpOutput.h`, `MetadataSender.h`)
+  - Read `docs/develop-apps/advanced-concepts/application-design/` for `mipi-camera-input.md`, `usb-camera-input.md`, `video_sender.md`, and `metadata_sender.md`
+  - Read `docs/reference/nodes/camera-input.mdx` for camera options and errors
 - Pre-built node groups for common application plumbing
   - Inspect `include/nodes/groups/*.h`
-  - Start with `RtspEncodedInput.h`, `RtspDecodedInput.h`, `VideoSender.h`, `ImageInputGroup.h`, and `ModelGroups.h`
-  - Read `docs/develop-apps/advanced-concepts/application-design/video_sender.md` for video output patterns
+  - Start with `RtspEncodedInput.h`, `RtspDecodedInput.h`, `RtspCodec.h`, `VideoSender.h`, `ImageInputGroup.h`, and `ModelGroups.h`
 
 ## Model Pre/Post And Decode Helpers
 
@@ -88,24 +84,18 @@ the callable contract. Read only the headers and docs needed for the task.
   - Read `docs/reference/boxdecode_decode_types.md`
   - Treat `BoxDecodeType::Ssd` as a selector for the supported prepared SSD recipes, not as a generic shape-inferred SSD decoder
   - Inspect the SuperPoint profile and output format instead of decoding its result layout from tensor shape alone
-- Native H.264, H.265/HEVC, JPEG, and MJPEG decoding
-  - Inspect `include/nodes/sima/SimaDecode.h`
-  - Prefer codec-neutral `payload_type` and `VideoSenderOptions::Passthrough(codec)` in new encoded-media code
+- Native H.264, H.265/HEVC, JPEG, and MJPEG decoding and encoding
+  - Inspect `include/nodes/sima/SimaDecode.h` and `include/nodes/sima/SimaEncode.h`
+  - Prefer codec-neutral `payload_type`, `VideoSenderOptions::FromRaw(...)`, and `VideoSenderOptions::Passthrough(codec)` in new encoded-media code
+- LiDAR voxelization and bird's-eye-view nodes
+  - Read `docs/reference/lidar_bev_kernel_nodes.md`
 - Fixed-function Sima nodes when composing lower-level graph routes
   - Inspect `include/nodes/sima/*.h`
 
 ## GenAI Surface
 
-- GenAI umbrella include and task model APIs
-  - Inspect `include/neat/genai.h`
-  - Inspect `include/genai/GenAIModel.h`
-  - Inspect `include/genai/VisionLanguageModel.h`
-  - Inspect `include/genai/ASRModel.h`
-  - Inspect `include/genai/GenAITypes.h`
-- GenAI serving and graph fragments
-  - Inspect `include/genai/GenAIServer.h`
-  - Inspect `include/genai/GraphFragments.h`
-  - Inspect `include/genai/GenAIOptions.h`
+- GenAI umbrella include, task model APIs, serving, and graph fragments
+  - Inspect `include/neat/genai.h` and `include/genai/`
   - Read `docs/develop-apps/development-workflow/genai-model/index.mdx`
   - Read `docs/develop-apps/development-workflow/genai-model/direct-api.mdx`
   - Read `docs/develop-apps/development-workflow/genai-model/genai-server.mdx`
@@ -116,14 +106,18 @@ the callable contract. Read only the headers and docs needed for the task.
   - Inspect `include/pipeline/NeatError.h`
   - Inspect `include/pipeline/GraphReport.h`
   - Inspect `include/pipeline/ErrorCodes.h`
+  - Read `docs/reference/error-codes.md`
 - Graph inspection helpers
   - Inspect `Graph::validate`, `Graph::describe`, `Graph::describe_backend`, `Graph::save`, and `Graph::load` in `include/pipeline/Graph.h`
-- Measurement and runtime reports
+- Model execution plan and benchmark
+  - Inspect `Model::execution_plan`, `BenchmarkOptions`, and `BenchmarkReport` in `include/model/Model.h`, and `include/pipeline/ExecutionPlan.h`
+- Application measurement and board telemetry
   - Inspect `MeasureScope`, `MeasureReport`, and `Run::start_measurement` in `include/pipeline/Run.h`
+  - Inspect `include/pipeline/TelemetryMonitor.h`
 
 ## Python Surface
 
 - Python bindings mirror the public C++ application concepts but names and helper methods can differ.
-- Inspect `python/src/module.cpp` in packaged core source for binding truth.
+- Inspect `python/src/module.cpp` in Core source for binding truth.
 - Read `docs/reference/pythonapi/` when present in the installed docs.
 - For NumPy/image interop, inspect binding definitions for `Tensor`, `ModelOptions`, `RunOptions`, `GenAIModel`, and `GenAIServer`.
