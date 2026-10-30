@@ -79,8 +79,19 @@ jobs:
         fi
 
         # Complete cached SDK package configuration before the installer invokes APT.
-        docker exec --user root -e DEBIAN_FRONTEND=noninteractive \
-          "${sdk_container}" dpkg --configure -a
+        "${SDK_PACKAGE_HELPER:?Shared SDK package helper required}" "${sdk_container}" configure
+
+        packages=()
+        if ! docker exec "${sdk_container}" bash -lc 'command -v npm >/dev/null 2>&1'; then
+          packages+=(nodejs npm)
+        fi
+        if ! docker exec "${sdk_container}" bash -lc 'command -v rg >/dev/null 2>&1'; then
+          packages+=(ripgrep)
+        fi
+        if [[ "${#packages[@]}" -gt 0 ]]; then
+          "${SDK_PACKAGE_HELPER}" "${sdk_container}" update
+          "${SDK_PACKAGE_HELPER}" "${sdk_container}" install -y --no-install-recommends "${packages[@]}"
+        fi
 
         docker exec \
           -e SIMA_CLI_CHECK_FOR_UPDATE=0 \
@@ -100,27 +111,6 @@ jobs:
             export PATH="${HOME}/.sima-cli/.venv/bin:${PATH}"
             sima-cli neat install --help >/dev/null
             sima-cli packages build --help >/dev/null
-
-            packages=()
-            if ! command -v npm >/dev/null 2>&1; then
-              packages+=(nodejs npm)
-            fi
-            if ! command -v rg >/dev/null 2>&1; then
-              packages+=(ripgrep)
-            fi
-            if [[ "${#packages[@]}" -gt 0 ]]; then
-              export DEBIAN_FRONTEND=noninteractive
-              if command -v apt-get >/dev/null 2>&1; then
-                apt-get update
-                apt-get install -y --no-install-recommends "${packages[@]}"
-              elif command -v sudo >/dev/null 2>&1; then
-                sudo apt-get update
-                sudo apt-get install -y --no-install-recommends "${packages[@]}"
-              else
-                echo "Required build tools are missing, but apt-get is unavailable: ${packages[*]}" >&2
-                exit 1
-              fi
-            fi
 
             cd /workspace
             echo "SDK release:"
