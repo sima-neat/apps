@@ -683,8 +683,7 @@ neat::SimaDecodeOptions decoder_options(const Config& cfg, const SourceGeometry&
 neat::nodes::groups::VideoSenderOptions video_options(const Config& cfg,
                                                       const SourceGeometry& geometry) {
   auto opt = cfg.codec == SourceCodec::Mjpeg
-                 ? neat::nodes::groups::VideoSenderOptions::H264RtpUdpFromRaw(
-                       geometry.width, geometry.height, geometry.fps)
+                 ? neat::nodes::groups::VideoSenderOptions::FromRaw({.fps = geometry.fps})
                  : neat::nodes::groups::VideoSenderOptions::Passthrough(rtsp_codec(cfg.codec));
   opt.host = cfg.insight_host;
   opt.video_port_base = cfg.video_port;

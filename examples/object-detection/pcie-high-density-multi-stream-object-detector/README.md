@@ -40,7 +40,7 @@ Insight metadata <-- BBOX results -- neatpciesink
 - An x86-64 Ubuntu host with the
   [SiMa.ai PCIe driver](https://developer.sima.ai/hardware/getting-started/pcie-mode/driver-installation)
   and matching Neat PCIe host development package.
-- A Modalix PCIe Card with matching Neat Core and Internals packages.
+- A Modalix PCIe Card with a matching Neat Core installation.
 - Passwordless SSH access to the card using `~/.ssh/sima_neat_pcie_ed25519`.
 - 20, 30, or 60 H.264 RTSP sources and an Insight instance reachable from the host.
 - A source checkout of this Apps repository on the host.

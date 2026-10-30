@@ -433,8 +433,9 @@ def test_insight_graph_keeps_model_and_video_branches_realtime(tmp_path: Path) -
     fake.Format = SimpleNamespace(NV12="nv12")
     fake.GraphLinkOptions = lambda: SimpleNamespace(policy=None)
     fake.GraphLinkPolicy = SimpleNamespace(RealtimeLatestByStream="latest")
+    fake.SimaEncodeOptions = lambda: SimpleNamespace(fps=0)
     fake.VideoSenderOptions = SimpleNamespace(
-        h264_rtp_udp_from_raw=lambda *_args: SimpleNamespace(
+        from_raw=lambda _encode: SimpleNamespace(
             host="",
             channel=0,
             video_port_base=0,
