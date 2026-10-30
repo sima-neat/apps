@@ -59,6 +59,8 @@ python3 -c "import pyneat"
 
 ## Prepare the Model
 
+Model Zoo downloads need your SiMa Developer Portal login: run `sima-cli login` once, or follow the device-login prompt the first download prints.
+
 ```bash
 mkdir -p models
 cd models

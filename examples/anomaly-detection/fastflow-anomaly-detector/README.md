@@ -60,7 +60,7 @@ Run the remaining commands from `prebuilt-apps/`.
 | `fastflow_demo_mpk.tar.gz` | Default | Direct artifact (Model Zoo `fastflow_demo`) |
 | `<your-model>_mpk.tar.gz` | Supported | Compiled from an anomalib FastFlow export, see [Use Your Own Model](#use-your-own-model) |
 
-Model packages come from the Model Zoo release below, which can differ from the installed platform version.
+Model packages come from the Model Zoo release below, which can differ from the installed platform version. Model Zoo downloads need your SiMa Developer Portal login: run `sima-cli login` once, or follow the device-login prompt the first download prints.
 
 ```bash
 export MODELZOO_VERSION="3.0.0"
