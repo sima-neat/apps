@@ -76,6 +76,12 @@ class BatchAxisTests(unittest.TestCase):
         engine.vocoder_public_input = runtime._public_shape(runtime.VOCODER_PHYSICAL_INPUT[1])
         engine.vocoder_public_output = runtime._public_shape(runtime.VOCODER_PHYSICAL_OUTPUT[1])
         engine._vocoder_input_buffer = np.zeros(engine.vocoder_public_input, dtype=np.float32)
+        for shape in (engine.vocoder_public_input, engine.vocoder_public_input[1:]):
+            engine.vocoder_model = SimpleNamespace(
+                compiled_batch_size=lambda: 1,
+                input_specs=lambda: [SimpleNamespace(shape=shape)],
+                output_specs=lambda: [SimpleNamespace(shape=engine.vocoder_public_output)])
+            engine._validate_vocoder_contract()
         frames = np.arange(512 * 1152, dtype=np.float32).reshape(engine.vocoder_public_output)
         latent = physical[0, :, 0, :][None, ...]
 

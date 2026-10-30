@@ -444,7 +444,8 @@ class SupertonicModalix:
         input_shape = tuple(input_specs[0].shape)
         output_shape = tuple(output_specs[0].shape)
         expected_input_shape = self.vocoder_public_input
-        if input_shape != expected_input_shape:
+        # Core may describe batch-one ingress with or without its singleton N axis.
+        if input_shape not in (expected_input_shape, expected_input_shape[1:]):
             raise RuntimeError(
                 f"vocoder input shape {input_shape} != {expected_input_shape}"
             )
