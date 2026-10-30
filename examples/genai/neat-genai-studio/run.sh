@@ -244,6 +244,13 @@ system_info() {
   _kv "host" "$(uname -sm 2>/dev/null || echo unknown)"
 }
 
+studio_ui_hint() {
+  local backend_url="$1"
+  section "OPEN NEAT INSIGHT ON YOUR HOST → GENAI"
+  info "In Insight's GenAI settings, use the backend address below."
+  [[ -z "${backend_url}" ]] || info "GenAI backend address: ${C_ACCENT}${backend_url}${C_RESET} (API)."
+}
+
 usage() {
   banner
   cat <<'USAGE'
@@ -359,18 +366,19 @@ resolve_supertonic_env() {
   # Effective path (default applied) for run.sh's own use: the banner and --clean.
   SUPERTONIC_MODELS_ROOT_RESOLVED="${models:-/media/nvme/supertonic-tts/models}"
 }
-# Same test as supertonic_tts.available(): runtime interpreter plus the two
-# marker model files (setup.sh verifies every file's checksum).
+# Share the backend's model-asset check; setup.sh verifies the checksums.
 supertonic_installed() {
-  [[ -n "${SUPERTONIC_PYTHON}" \
-     && -f "${SUPERTONIC_MODELS_ROOT_RESOLVED}/supertonic-3/onnx/tts.json" \
-     && -f "${SUPERTONIC_MODELS_ROOT_RESOLVED}/supertonic-3-sima/supertonic_vector_field_sima_mpk.tar.gz" ]]
+  PYTHONPATH="${PYTHON_DIR}/api/tts" \
+    SUPERTONIC_PYTHON="${SUPERTONIC_PYTHON}" \
+    SUPERTONIC_MODELS_ROOT="${SUPERTONIC_MODELS_ROOT_RESOLVED}" \
+    python3 -c 'from supertonic_tts import available; raise SystemExit(not available())'
 }
 # What a dependency refresh would change for Supertonic: its pinned requirements
 # and the reviewed model revisions/checksums in setup.sh.
 supertonic_fingerprint() {
   {
-    cat "${PYTHON_DIR}/requirements-supertonic.txt" 2>/dev/null
+    cat "${PYTHON_DIR}/requirements-supertonic.txt" \
+      "${PYTHON_DIR}/api/tts/supertonic_sima/model_assets.json" 2>/dev/null
     grep -E '^SUPERTONIC_(UPSTREAM|SIMA)_HF_REVISION=|^[0-9a-f]{64}  supertonic-3' "${EXAMPLE_DIR}/setup.sh" 2>/dev/null
   } | sha256sum | cut -d' ' -f1
 }
@@ -968,10 +976,10 @@ api_pid="${pids[1]}"
 remember_process_group "${api_pid}"
 
 printf '\n'
-ok "Neat GenAI Studio is starting up."
+info "Waiting for the backend to be ready…"
 _url="$(web_url || true)"
 if [[ -n "${_url}" ]]; then
-  info "API on ${C_ACCENT}${C_BOLD}${_url}${C_RESET}; readiness at ${C_ACCENT}${_url}/health${C_RESET}. Point Insight's GenAI tab at it."
+  info "Backend health: ${C_ACCENT}${_url}/health${C_RESET}."
   # Set at all (even empty) wins over the config, as in the backend process.
   if [[ -n "${BACKEND_CORS_ORIGINS+set}" ]]; then _cors="${BACKEND_CORS_ORIGINS}"; else _cors="$(web_config_value cors_origins)"; fi
   info "CORS for browser front ends: ${_cors:-off (app.web.cors_origins or BACKEND_CORS_ORIGINS allows origins)}."
@@ -981,6 +989,7 @@ printf '\n'
 
 # Supervisor: watch both processes; when either exits, the Studio stops.
 status=0
+ready=0
 while true; do
   if ! child_running "${server_pid}"; then
     set +e
@@ -998,6 +1007,21 @@ while true; do
     status=$?
     set -e
     break
+  fi
+  if [[ "${ready}" == 0 ]] && "${APP_PYTHON}" - "${_self_url}/health" >/dev/null 2>&1 <<'HEALTH'
+import sys
+import requests
+
+try:
+    response = requests.get(sys.argv[1], timeout=1, verify=False)
+    sys.exit(0 if response.ok and response.json().get('ok') else 1)
+except (requests.RequestException, ValueError):
+    sys.exit(1)
+HEALTH
+  then
+    ready=1
+    ok "Neat GenAI Studio is ready."
+    studio_ui_hint "${_url}"
   fi
   sleep 1
 done
