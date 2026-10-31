@@ -46,19 +46,19 @@ test registration, and validation commands.
 ## Application builder skill
 
 `skills/neat-application-builder/` is the skill that sima-cli installs for
-customers' agents to build Neat applications. Every Apps contribution keeps it
-current:
+customers' agents to build Neat applications. Update it in the same pull
+request only when:
 
-- While working, collect each lesson an application developer's agent would
-  need: a public Neat API the change starts using or uses differently, a new
-  application pattern, a default or pitfall the work uncovered, or a skill
-  statement the change proves stale or wrong.
-- Apply those lessons to the skill in the same pull request. Keep routing in
-  `SKILL.md` and details in the matching `references/` file, point to Core
-  docs, installed headers, and examples instead of copying them, and bump
-  `version` in `playbook.yml`.
-- In the pull request description, list the skill changes under
-  `Skill updates`, or write `Skill updates: none` with the reason.
+- a skill statement is wrong or stale, or
+- the work uncovered a finding an application developer's agent would clearly
+  need: a public Neat API used differently, a new application pattern, or a
+  default or pitfall.
+
+Keep routing in `SKILL.md` and details in the matching `references/` file, and
+point to Core docs, installed headers, and examples instead of copying them.
+Do not bump `version` in `playbook.yml`. In the pull request description, list
+the skill changes under `Skill updates`, or write `Skill updates: none` with
+the reason.
 
 ## Tests and documentation
 
@@ -109,9 +109,9 @@ current:
   `sima-cli neat install apps@<branch>` and that its installed README produced
   the advertised result. The pull request description must record this
   evidence.
-- Check the `Skill updates` section against the change. Report a new or changed
-  public API use, pattern, or pitfall that the application builder skill does
-  not reflect.
+- Check the `Skill updates` section against the change. Report a skill
+  statement the change makes wrong, or a missing finding an application
+  developer's agent would clearly need. Do not request a `version` bump.
 - Separate correctness, structure, packaging, and customer-workflow blockers
   from optional performance follow-ups.
 - Review the complete affected application, including its tests, configuration,
