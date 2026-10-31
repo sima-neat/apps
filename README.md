@@ -68,6 +68,7 @@ cat /etc/buildinfo
 
 Model packages are versioned separately from the platform. They come from the
 Model Zoo release, which can differ from the installed platform version.
+Model Zoo downloads need your SiMa Developer Portal login: run `sima-cli login` once, or follow the device-login prompt the first download prints.
 Before downloading a model, set the Model Zoo version:
 
 ```bash
