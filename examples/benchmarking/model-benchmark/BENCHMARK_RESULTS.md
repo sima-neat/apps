@@ -79,6 +79,8 @@ Latency is per sample from the latency pass. FPS comes from the separate through
 | `yolo26m-seg-int8-b1` | `yolo26m-seg-int8-b1.tar.gz` | single-stream-instance-segmenter, parallel-apps | `detessdequant` | 10 | 10.33 / 10.31 / 10.97 | 220.6 |
 | `yolo26m-seg-int8-b1-boxdecode` | `yolo26m-seg-int8-b1.tar.gz` | single-stream-instance-segmenter, parallel-apps | `boxdecode` | 1 | 33.44 / 33.42 / 33.79 | 73.9 |
 
+The BoxDecode row builds a 160x160 mask on the A65 for every detection it keeps, and synthetic input fills all `top_k=100` slots, so it is a worst case. With `top_k=10`, the same package measured 163.6 FPS (19.41 ms) on the same board at 1000 MHz.
+
 ## YOLO26 Pose
 
 | Model ID | Package | Used By | Postprocess | Outputs | Latency ms (mean / p50 / p99) | FPS |

@@ -473,6 +473,14 @@ def render_markdown(frames: int, min_duration_ms: int, sdk: str, mla_clock: str,
         ])
         lines.extend(result_row(reports_dir, row) for row in rows)
         lines.append("")
+        if title == "YOLO26 Segmentation":
+            lines.extend([
+                "The BoxDecode row builds a 160x160 mask on the A65 for every detection it keeps, "
+                "and synthetic input fills all `top_k=100` slots, so it is a worst case. With "
+                "`top_k=10`, the same package measured 163.6 FPS (19.41 ms) on the same board "
+                "at 1000 MHz.",
+                "",
+            ])
     return "\n".join(lines)
 
 
