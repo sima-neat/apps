@@ -1,6 +1,6 @@
 {
   "neat-core": {
-    "policy": "snap"
+    "ref": "v0.6.0"
   },
   "sdk": {
     "channel": "develop"
