@@ -8,6 +8,7 @@ the model that failed.
 
 import io
 import json
+import threading
 import shutil
 import tempfile
 import unittest
@@ -18,7 +19,7 @@ from unittest.mock import patch
 
 from asr_switching_suite import FakeServer, make_model_dir
 from server.control_api import serve_control_api
-from server.model_manager import ModelDoesNotFit, ModelManager, ResidentLimitReached
+from server.model_manager import ModelLoadFailed, ModelManager, ResidentLimitReached
 from shared.config import HubConfig
 
 CHAT_MODELS = ("Llama-3.2-3B-Instruct", "Qwen2.5-1.5B-Instruct", "gemma-3-4b-it")
@@ -218,7 +219,7 @@ class ResidentChatModelTests(ResidentFixture):
             manager.load(llama)
         with patch.object(ModelManager, "_warm_check",
                           lambda self, name: (False, "Cannot allocate memory")):
-            with self.assertRaisesRegex(RuntimeError, f"beside the other loaded models \\({llama}\\)"):
+            with self.assertRaisesRegex(RuntimeError, "Out of memory"):
                 manager.load(qwen)
 
         self.assertEqual(manager.resident(), [llama])
@@ -286,18 +287,33 @@ class ResidentLimitControlApiTests(ResidentFixture):
         status, body = self.post(port, {"name": qwen, "unload": 5})
         self.assertEqual(status, 400)
 
-    def test_a_load_that_wont_fit_answers_409_no_room(self):
-        llama, qwen, _ = CHAT_MODELS
-        manager, _ = self.manager(limit=3)
-        manager.load(llama)
-        api = serve_control_api(manager, "127.0.0.1", 0)
+    def test_out_of_memory_returns_error_before_requesting_restart(self):
+        manager, server = self.manager(limit=1)
+        restarted = threading.Event()
+        api = serve_control_api(manager, "127.0.0.1", 0, request_restart=restarted.set)
         self.addCleanup(api.server_close)
         self.addCleanup(api.shutdown)
-        with patch.object(ModelManager, "_check_fits", side_effect=ModelDoesNotFit(qwen, 60, 10, [llama])):
-            status, body = self.post(api.server_address[1], {"name": qwen})
-        self.assertEqual(status, 409)
-        self.assertEqual(body["code"], "no_room")
-        self.assertIn(llama, json.dumps(body))
+        with patch.object(server, "add_model", side_effect=RuntimeError("Cannot allocate memory")):
+            status, body = self.post(api.server_address[1], {"name": CHAT_MODELS[0]})
+        self.assertEqual(status, 503)
+        self.assertEqual(body["code"], "out_of_memory")
+        self.assertTrue(body["restarting"])
+        self.assertIn("Restarting GenAI Studio", body["error"])
+        self.assertTrue(restarted.wait(3))
+
+    def test_non_memory_accelerator_failure_does_not_claim_out_of_memory(self):
+        manager, server = self.manager(limit=1)
+        restarted = threading.Event()
+        api = serve_control_api(manager, "127.0.0.1", 0, request_restart=restarted.set)
+        self.addCleanup(api.server_close)
+        self.addCleanup(api.shutdown)
+        with patch.object(server, "add_model", side_effect=RuntimeError("MLA-RT bulk load failed")):
+            status, body = self.post(api.server_address[1], {"name": CHAT_MODELS[0]})
+        self.assertEqual(status, 503)
+        self.assertEqual(body["code"], "model_load_failed")
+        self.assertFalse(body["restarting"])
+        self.assertIn("Restart GenAI Studio", body["error"])
+        self.assertFalse(restarted.wait(0.8))
 
 
 if __name__ == "__main__":
