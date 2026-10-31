@@ -1,7 +1,6 @@
 {
   "neat-core": {
-    "ref": "v0.6.0",
-    "spec": "4404f3fd5a91"
+    "ref": "v0.6.0"
   },
   "sdk": {
     "channel": "develop"
