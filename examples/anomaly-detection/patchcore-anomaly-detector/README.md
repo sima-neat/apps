@@ -49,14 +49,17 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Set Up Python
 
-Skip this section if you only run the C++ variant. The Python variant runs in the `pyneat` Python environment that the Apps installer sets up with Neat Core (`~/pyneat` by default); it already provides NumPy, OpenCV, and PyYAML. Activate it in every new shell and confirm `pyneat` imports:
+Skip this section if you only run the C++ variant. The Python variant runs in the `pyneat` Python environment that the Apps installer sets up with Neat Core (`~/pyneat` by default). Activate it in every new shell, install the example's Python dependencies once, and confirm `pyneat` imports:
 
 ```bash
 source ~/pyneat/bin/activate
+pip install -r ${APP_DIR}/src/python/requirements.txt
 python3 -c "import pyneat"
 ```
 
 ## Prepare the Model
+
+Model Zoo downloads need your SiMa Developer Portal login: run `sima-cli login` once, or follow the device-login prompt the first download prints.
 
 ```bash
 mkdir -p models
@@ -104,7 +107,7 @@ Both write `memory_bank.path` / `memory_bank.meta_path` from `calibration.nomina
 source ~/.simaai/neat-insight/venv/bin/activate && neat-insight
 ```
 
-Open `https://<board-ip>:9900` in a browser and accept the self-signed certificate. When Insight runs on the board, set `output.insight.host` to `127.0.0.1`.
+The first start installs `mkcert` with `sudo apt-get`, so run it from an interactive shell and enter the board password when asked. Open `https://<board-ip>:9900` in a browser and accept the self-signed certificate. When Insight runs on the board, set `output.insight.host` to `127.0.0.1`.
 
 For `rtsp`, Insight can also provide the stream: under *RTSP Source*, upload a clip (for example `assets/datasets/patchcore/video/test.mp4`) or select a webcam, start it, and copy its URL (for example `rtsp://<board-ip>:8554/src1`) into `source.rtsp.url`.
 
@@ -169,6 +172,7 @@ At larger frames, drawing the full-size heatmap takes most of the host time. Whe
 ## Troubleshooting
 
 - `ModuleNotFoundError: No module named 'pyneat'`: activate the `pyneat` environment (see [Set Up Python](#set-up-python)).
+- `ModuleNotFoundError: No module named 'yaml'`: install the example's dependencies with `pip install -r ${APP_DIR}/src/python/requirements.txt` (see [Set Up Python](#set-up-python)).
 - `memory bank not found`: run `--calibrate` first.
 - `memory bank was built against a different model package`: `model.path` changed since the last `--calibrate`; rebuild the bank.
 - `bank_meta.json is missing patch_threshold`: rerun `--calibrate` to regenerate the bank.

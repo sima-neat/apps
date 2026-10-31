@@ -226,7 +226,9 @@ class InsightVideo:
         source.fps_n = fps
         source.fps_d = 1
         source.memory_policy = pyneat.InputMemoryPolicy.Ev74
-        options = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(width, height, fps)
+        encode = pyneat.SimaEncodeOptions()
+        encode.fps = fps
+        options = pyneat.VideoSenderOptions.from_raw(encode)
         options.host = cfg.insight_host
         options.channel = 0
         options.video_port_base = cfg.video_port

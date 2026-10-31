@@ -495,7 +495,9 @@ def build_video_sender(cfg: AppConfig, fps: float, width: int, height: int):
     input_options.fps_d = 1
     input_options.memory_policy = pyneat.InputMemoryPolicy.Ev74
 
-    sender_options = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(width, height, output_fps)
+    encode = pyneat.SimaEncodeOptions()
+    encode.fps = output_fps
+    sender_options = pyneat.VideoSenderOptions.from_raw(encode)
     sender_options.host = cfg.output.insight_host
     sender_options.channel = cfg.output.insight_channel
     sender_options.video_port_base = cfg.output.insight_video_port
