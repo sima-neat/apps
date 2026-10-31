@@ -25,6 +25,7 @@ from shared.config import AppConfig, DEFAULT_SERVER_CONFIG, load_server_config
 from server.control_api import serve_control_api
 from server.load_log import LoadLogTap
 from server.model_manager import ModelManager
+from shared.recovery import restart_callback
 
 # How many catalogued speech models to try when the configured one fails.
 _ASR_FALLBACK_LIMIT = 3
@@ -182,7 +183,6 @@ def main() -> int:
             server,
             catalog_dir=cfg.catalog_dir,
             max_resident_chat_models=cfg.max_resident_chat_models,
-            accelerator_bytes=int(cfg.accelerator_memory_gib * 2**30),
             # The runtime may serve the model under a different name than the
             # configured one; the manager must track what is actually loaded, or
             # it reports no active ASR and a later switch fails to evict it.
@@ -271,7 +271,8 @@ def main() -> int:
                 print("starting without speech-to-text — download one from "
                       "Settings -> Add Model", file=sys.stderr, flush=True)
 
-        control_httpd = serve_control_api(manager, cfg.control.host, cfg.control.port)
+        control_httpd = serve_control_api(
+            manager, cfg.control.host, cfg.control.port, request_restart=restart_callback())
         print(
             f"serving model-management control API on "
             f"http://{cfg.control.host}:{cfg.control.port}",
