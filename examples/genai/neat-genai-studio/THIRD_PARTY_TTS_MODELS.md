@@ -1,7 +1,7 @@
 # Third-party TTS models
 
 Neat GenAI Studio installs and loads server-side voices only from
-[`voice_catalog.json`](src/python/ui/voice_catalog.json). Each entry records a
+[`voice_catalog.json`](src/python/api/tts/voice_catalog.json). Each entry records a
 short licence label, pinned upstream repository revision, and SHA-256 checksum
 for every downloaded file. A model that is merely present in `assets/` is not
 eligible to load. Models under `CC-BY-NC-SA-4.0` are excluded.
@@ -17,16 +17,19 @@ entry.
 - Model source: <https://huggingface.co/Supertone/supertonic-3>
 - Published model licence: OpenRAIL (use-based restrictions apply; review the
   licence text on the model card before redistribution)
-- Compiled MLA packages: `florianvoss/supertonic-3-sima`
-  (<https://huggingface.co/florianvoss/supertonic-3-sima>), derived from the
-  pinned upstream model by graph surgery and SiMa model-compiler quantization
-  (BF16 activations, INT8 vector-field weights, BF16 vocoder); same licence as
-  the base model
-- Compiled-package repository revision pinned in `setup.sh`:
-  `9229108c974ef57810abce0889ac713a59e341a1` (that repository also carries a
-  `LICENSE` file; review it together with the model card)
+- Compiled models: the batch-two vector estimator (INT8 weights, BF16
+  activations) and batch-one BF16 vocoder come from the SiMa model zoo.
+  They use the preparation recipes in `sima-neat/models`, branch
+  `exp/supertonic-batch2` at `8edab9eb9d5a91fe7e6a64d98208ecbc78fe1e1b`,
+  with Model Compiler 3.0.0 (`sima-mlc` 3.0.0.dev0+master.190).
+  Addresses and checksums are in `src/python/api/tts/supertonic_sima/model_assets.json`;
+  both are derived from the pinned upstream model and retain its licence.
+- Runtime constants: `florianvoss/supertonic-3-sima`
+  (<https://huggingface.co/florianvoss/supertonic-3-sima>), pinned to revision
+  `9229108c974ef57810abce0889ac713a59e341a1`. The generated constants are
+  unchanged by batch-two compilation and retain the base model's licence.
 - Integration software: the runtime package under
-  `src/python/ui/supertonic_sima/` is vendored from
+  `src/python/api/tts/supertonic_sima/` is vendored from
   <https://github.com/florianvoss-commit/supertonic-sima> at commit
   `3b837b3e1b6a378ab8c24c3c04b079429b67e237`, at the upstream author's request.
   That repository publishes no licence file; a licence statement for the
@@ -35,8 +38,8 @@ entry.
 - Attribution: Supertone Inc. (Supertonic 3); the Modalix port's upstream author
 
 Supertonic is not part of `voice_catalog.json`: `setup.sh` downloads its assets
-from Hugging Face at the pinned revisions above and verifies every compiled
-artifact against SHA-256 checksums recorded in the script. Set
+from Hugging Face at the pinned revisions above and both compiled models from
+the SiMa model zoo. The installer and runtime verify their shared checksum pins. Set
 `INSTALL_SUPERTONIC=0` to leave it out.
 
 ## Piper Plus CSS10 (default multilingual/Japanese voice)
@@ -61,8 +64,8 @@ this notice file.
 - Base-model credit: ayousanz, Piper Plus multilingual base model (CC BY 4.0)
 - Apache License 2.0 text: <https://www.apache.org/licenses/LICENSE-2.0>
 
-MERA is never part of the default download. Select it in the Studio voice
-picker or set `TTS_OPTIONAL_VOICES=mera` to download it from its pinned commit.
+MERA is never part of the default download. Select it as the Piper Plus voice
+(Insight's GenAI voice settings, or `POST /piperplus/select`) or set `TTS_OPTIONAL_VOICES=mera` to download it from its pinned commit.
 The Apache 2.0 and CC BY 4.0 notices above must remain with redistributed model
 copies.
 

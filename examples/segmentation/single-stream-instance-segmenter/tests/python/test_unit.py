@@ -14,6 +14,7 @@ from tests.utils.fake_run import FakeRun
 
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
+PARITY_FIXTURE = EXAMPLE_DIR / "tests" / "fixtures" / "decode_parity.json"
 
 main = load_example_main(EXAMPLE_DIR, "instance_seg_main")
 
@@ -35,8 +36,14 @@ def test_ffprobe_transport_matches_source(monkeypatch, source_type, url, tcp, ex
         return SimpleNamespace(returncode=0, stdout="width=1920\nheight=1080\navg_frame_rate=30/1\n")
 
     monkeypatch.setattr(main.subprocess, "run", fake_run)
-    cfg = main.AppConfig("model", Path("labels"), url, source_type, tcp=tcp,
-                         ssl_strict=False)
+    cfg = main.AppConfig(
+        model_path="model",
+        labels_path=Path("labels"),
+        source_url=url,
+        source_type=source_type,
+        tcp=tcp,
+        ssl_strict=False,
+    )
 
     assert main.probe_ffprobe(cfg) == (1920, 1080, 30)
     assert captured[0].count("-rtsp_transport") == int(expected_tcp)
@@ -92,6 +99,68 @@ class TestConfig:
         )
         assert r.returncode == 0, r.stderr
 
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            ("yolo26", "yolo26"),
+            ("YOLO26", "yolo26"),
+            ("yolov8", "yolov8"),
+            ("yolo_v8", "yolov8"),
+        ],
+    )
+    def test_model_family_is_selected_explicitly(self, value, expected):
+        assert main.parse_model_family(value) == expected
+
+    def test_unknown_model_family_is_rejected(self):
+        # The family is configuration, never inferred from the package file name.
+        with pytest.raises(ValueError, match="model.family"):
+            main.parse_model_family("yolo_v8n_seg_mpk.tar.gz")
+
+    def test_config_carries_family_and_input_size(self, tmp_path):
+        config = tmp_path / "config.yaml"
+        config.write_text(
+            """
+model:
+  family: yolov8
+  path: model.tar.gz
+  input_size: 640
+source:
+  rtsp:
+    url: rtsp://127.0.0.1:8554/src1
+output:
+  insight:
+    host: 127.0.0.1
+""",
+            encoding="utf-8",
+        )
+
+        cfg = main.load_app_config(config)
+
+        assert cfg.model_family == main.YOLOV8
+        assert cfg.input_size == 640
+        # Source and output settings stay independent of the selected family.
+        assert cfg.source_url == "rtsp://127.0.0.1:8554/src1"
+        assert cfg.insight_host == "127.0.0.1"
+
+    def test_invalid_input_size_is_rejected(self, tmp_path):
+        config = tmp_path / "config.yaml"
+        config.write_text(
+            """
+model:
+  path: model.tar.gz
+  input_size: 600
+source:
+  rtsp:
+    url: rtsp://127.0.0.1:8554/src1
+output:
+  insight:
+    host: 127.0.0.1
+""",
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="input_size"):
+            main.load_app_config(config)
+
     def test_invalid_mask_alpha_is_rejected(self, tmp_path):
         config = tmp_path / "config.yaml"
         config.write_text(
@@ -99,7 +168,8 @@ class TestConfig:
 model:
   path: model.tar.gz
 source:
-  rtsp_url: rtsp://127.0.0.1:8554/src1
+  rtsp:
+    url: rtsp://127.0.0.1:8554/src1
 output:
   mask_alpha: 2
   insight:
@@ -119,7 +189,8 @@ model:
   path: model.tar.gz
   labels: ""
 source:
-  url: rtsp://127.0.0.1:8554/src1
+  rtsp:
+    url: rtsp://127.0.0.1:8554/src1
 output:
   insight:
     host: 127.0.0.1
@@ -130,15 +201,14 @@ output:
             main.load_app_config(config)
 
     @staticmethod
-    def _source_config(tmp_path, url_line, legacy_line):
+    def _source_config(tmp_path, source_lines):
         config = tmp_path / "config.yaml"
         config.write_text(
             f"""
 model:
   path: model.tar.gz
 source:
-{url_line}
-{legacy_line}
+{source_lines}
 output:
   insight:
     host: 127.0.0.1
@@ -147,45 +217,33 @@ output:
         )
         return config
 
-    def test_an_empty_url_falls_back_to_the_legacy_key(self, tmp_path):
-        """config.yaml ships source.url present and says rtsp_url is "used when
-        source.url is empty", so the empty value must fall through."""
-        config = self._source_config(
-            tmp_path, '  url: ""', "  rtsp_url: rtsp://127.0.0.1:8554/legacy"
-        )
-
-        cfg = main.load_app_config(config)
-        assert cfg.source_url == "rtsp://127.0.0.1:8554/legacy"
-        assert cfg.source_key == "source.rtsp_url"
-
-    def test_an_absent_url_falls_back_to_the_legacy_key(self, tmp_path):
-        config = self._source_config(tmp_path, "", "  rtsp_url: rtsp://127.0.0.1:8554/legacy")
-
-        assert main.load_app_config(config).source_url == "rtsp://127.0.0.1:8554/legacy"
-
-    def test_a_present_url_wins_over_the_legacy_key(self, tmp_path):
+    def test_only_the_section_source_type_names_is_read(self, tmp_path):
+        """The other sections may hold placeholders; a flat source.url is not read."""
         config = self._source_config(
             tmp_path,
-            "  url: rtsp://127.0.0.1:8554/src1",
-            "  rtsp_url: rtsp://127.0.0.1:8554/legacy",
+            "  type: usb\n  url: rtsp://127.0.0.1:8554/flat\n"
+            "  rtsp:\n    url: <rtsp-url-1>\n    codec: vp9\n"
+            "  usb:\n    camera: cam0\n    width: 1280\n    height: 720\n    fps: 30",
         )
 
         cfg = main.load_app_config(config)
-        assert cfg.source_url == "rtsp://127.0.0.1:8554/src1"
-        assert cfg.source_key == "source.url"
+        assert cfg.source_type == "usb"
+        assert cfg.source_key == "source.usb.camera"
+        assert cfg.camera == "cam0"
+        assert cfg.source_url == ""
 
-    def test_both_empty_is_still_rejected(self, tmp_path):
-        config = self._source_config(tmp_path, '  url: ""', '  rtsp_url: ""')
+    def test_flat_source_keys_are_not_read(self, tmp_path):
+        config = self._source_config(tmp_path, "  url: rtsp://127.0.0.1:8554/src1")
 
-        with pytest.raises(ValueError, match="source.url or source.rtsp_url must be set"):
+        with pytest.raises(ValueError, match="source.rtsp.url must be set"):
             main.load_app_config(config)
 
     def test_validate_config_only_names_the_key_and_not_the_url(self, tmp_path):
         """The URL can carry credentials and this line ends up in logs, so the
-        validated line reports the key that supplied the source. The C++ binary
+        validated line reports the key that names the source. The C++ binary
         prints the same line and its unit suite asserts the same."""
         config = self._source_config(
-            tmp_path, '  url: ""', "  rtsp_url: rtsp://user:secret@127.0.0.1:8554/legacy"
+            tmp_path, "  rtsp:\n    url: rtsp://user:secret@127.0.0.1:8554/src1"
         )
         r = subprocess.run(
             [sys.executable, str(MAIN_PY), "--config", str(config), "--validate-config-only"],
@@ -196,7 +254,7 @@ output:
         )
 
         assert r.returncode == 0, r.stderr
-        assert "(source=source.rtsp_url)" in r.stdout
+        assert "(source=source.rtsp.url)" in r.stdout
         assert "secret" not in r.stdout
         assert "rtsp://" not in r.stdout
 
@@ -204,21 +262,23 @@ output:
 # ---------------------------------------------------------------------------
 # Configuration handling and option validation (Refs #526).
 # Each test starts from VALID_CONFIG and breaks exactly one thing, so a failure
-# names the rule that fired rather than "config rejected". The legacy-URL
-# fallback, the empty labels value and mask_alpha are owned by TestConfig above.
+# names the rule that fired rather than "config rejected". The per-type source
+# sections, the empty labels value and mask_alpha are owned by TestConfig above.
 # ---------------------------------------------------------------------------
 
 VALID_CONFIG = {
     "model": {"path": "model.tar.gz", "labels": "coco_label.txt"},
     "source": {
         "type": "rtsp",
-        "codec": "h264",
-        "url": "rtsp://127.0.0.1:8554/src1",
-        "rtsp_url": "",
-        "tcp": True,
-        "latency_ms": 100,
-        "fps": 0,
-        "ssl_strict": True,
+        "rtsp": {
+            "url": "rtsp://127.0.0.1:8554/src1",
+            "codec": "h264",
+            "tcp": True,
+            "latency_ms": 100,
+            "fps": 0,
+        },
+        "http": {"url": "https://127.0.0.1/stream", "ssl_strict": True, "fps": 0},
+        "usb": {},
     },
     "inference": {"frames": 0, "min_score": 0.55, "nms_iou": 0.6, "max_detections": 50},
     "runtime": {"profile": False, "profile_interval": 100},
@@ -252,7 +312,7 @@ class TestValidBaseline:
     def test_omitted_optional_values_fall_back_to_documented_defaults(self, tmp_path):
         raw = {
             "model": {"path": "model.tar.gz"},
-            "source": {"url": "rtsp://127.0.0.1:8554/src1"},
+            "source": {"rtsp": {"url": "rtsp://127.0.0.1:8554/src1"}},
             "output": {"insight": {"host": "127.0.0.1"}},
         }
 
@@ -282,12 +342,14 @@ REJECTED = [
     pytest.param(
         ("output", "insight", "host"), "", "output.insight.host must be set", id="insight-host-empty"
     ),
-    pytest.param(("source", "type"), "webrtc", "source.type must be rtsp or http", id="source-type-unsupported"),
+    pytest.param(("source", "type"), "webrtc", "source.type must be rtsp, http, or usb", id="source-type-unsupported"),
     pytest.param(
-        ("source", "codec"), "vp9", "source.codec must be h264/avc, h265/hevc, or mjpeg", id="codec-unsupported"
+        ("source", "rtsp", "codec"), "vp9", "source.rtsp.codec must be h264, h265, or mjpeg", id="codec-unsupported"
     ),
-    pytest.param(("source", "latency_ms"), -1, "source.latency_ms must be >= 0", id="latency-negative"),
-    pytest.param(("source", "fps"), -1, "source.fps must be >= 0", id="fps-negative"),
+    pytest.param(
+        ("source", "rtsp", "latency_ms"), -1, "source.rtsp.latency_ms must be >= 0", id="latency-negative"
+    ),
+    pytest.param(("source", "rtsp", "fps"), -1, "source.rtsp.fps must be >= 0", id="fps-negative"),
     pytest.param(("inference", "frames"), -1, "inference.frames must be >= 0", id="frames-negative"),
     pytest.param(
         ("inference", "min_score"), -0.01, "inference.min_score must be between 0 and 1", id="min-score-below"
@@ -353,8 +415,8 @@ class TestBoundariesAreAccepted:
             (("output", "mask_alpha"), 1.0),
             (("output", "mask_threshold"), 0.0),
             (("output", "mask_threshold"), 1.0),
-            (("source", "latency_ms"), 0),
-            (("source", "fps"), 0),
+            (("source", "rtsp", "latency_ms"), 0),
+            (("source", "rtsp", "fps"), 0),
             (("inference", "frames"), 0),
             (("output", "save_every"), 0),
             (("inference", "max_detections"), 1),
@@ -367,30 +429,90 @@ class TestBoundariesAreAccepted:
 
 @pytest.mark.unit
 class TestSourceCombinations:
-    def test_http_source_requires_mjpeg(self, tmp_path):
-        config_path = write_full_config(
-            tmp_path, [(("source", "type"), "http"), (("source", "codec"), "h264")]
-        )
-
-        with pytest.raises(ValueError, match="source.codec must be mjpeg for source.type=http"):
-            main.load_app_config(config_path)
-
-    def test_http_source_with_mjpeg_is_accepted(self, tmp_path):
+    def test_http_source_reads_its_own_section_and_is_mjpeg(self, tmp_path):
         cfg = main.load_app_config(
-            write_full_config(tmp_path, [(("source", "type"), "http"), (("source", "codec"), "mjpeg")])
+            write_full_config(
+                tmp_path, [(("source", "type"), "http"), (("source", "http", "ssl_strict"), False)]
+            )
         )
 
         assert cfg.source_type == "http"
         assert cfg.source_codec == "mjpeg"
+        assert cfg.source_url == "https://127.0.0.1/stream"
+        assert cfg.source_key == "source.http.url"
+        assert cfg.ssl_strict is False
+
+    def test_http_source_without_its_url_is_rejected(self, tmp_path):
+        """The rtsp section's URL is not read for source.type=http."""
+        with pytest.raises(ValueError, match="source.http.url must be set"):
+            main.load_app_config(
+                write_full_config(tmp_path, [(("source", "type"), "http"), (("source", "http"), {})])
+            )
 
     @pytest.mark.parametrize(
         ("alias", "codec"),
         [("h264", "h264"), ("avc", "h264"), ("h265", "h265"), ("hevc", "h265"), ("mjpeg", "mjpeg")],
     )
     def test_every_documented_rtsp_codec_is_accepted(self, tmp_path, alias, codec):
-        cfg = main.load_app_config(write_full_config(tmp_path, [(("source", "codec"), alias)]))
+        cfg = main.load_app_config(write_full_config(tmp_path, [(("source", "rtsp", "codec"), alias)]))
 
         assert cfg.source_codec == codec
+
+    def test_usb_source_needs_no_url(self, tmp_path):
+        cfg = main.load_app_config(
+            write_full_config(
+                tmp_path,
+                [
+                    (("source", "type"), "usb"),
+                    (("source", "rtsp", "url"), ""),
+                    (("source", "usb", "camera"), "/base/pci@7000000000-3.1:1.0-046d:08e5"),
+                    (("source", "usb", "width"), 1280),
+                    (("source", "usb", "height"), 720),
+                    (("source", "usb", "fps"), 30),
+                ],
+            )
+        )
+
+        assert cfg.source_type == "usb"
+        assert cfg.source_key == "source.usb.camera"
+        assert (cfg.source_width, cfg.source_height, cfg.source_fps) == (1280, 720, 30)
+
+    @pytest.mark.parametrize(
+        "overrides,message",
+        [
+            ([(("source", "usb", "fps"), 30)], "source.usb.camera must be set"),
+            ([(("source", "usb", "camera"), "cam0")], "source.usb.fps must be > 0"),
+            (
+                [
+                    (("source", "usb", "camera"), "cam0"),
+                    (("source", "usb", "fps"), 30),
+                    (("source", "usb", "width"), 0),
+                ],
+                "source.usb.width and source.usb.height must be > 0",
+            ),
+            (
+                [
+                    (("source", "usb", "camera"), "cam0"),
+                    (("source", "usb", "fps"), 30),
+                    (("source", "usb", "width"), 3840),
+                ],
+                "multiples of 8 and at most 2040",
+            ),
+            (
+                [
+                    (("source", "usb", "camera"), "cam0"),
+                    (("source", "usb", "fps"), 30),
+                    (("source", "usb", "width"), 1284),
+                ],
+                "multiples of 8 and at most 2040",
+            ),
+        ],
+    )
+    def test_usb_source_rejects_a_missing_camera_or_mode(self, tmp_path, overrides, message):
+        with pytest.raises(ValueError, match=message):
+            main.load_app_config(
+                write_full_config(tmp_path, [(("source", "type"), "usb"), *overrides])
+            )
 
 
 @pytest.mark.unit
@@ -566,6 +688,350 @@ class TestSampleAccess:
         assert main.segment_tensors_from_sample(bundle) == ["boxes"]
 
 
+def load_parity_fixture() -> dict:
+    """The decode contract both implementations are held to."""
+    with PARITY_FIXTURE.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def build_yolov8_heads(spec: dict) -> list:
+    """Synthetic YOLOv8 head tensors described by the shared fixture."""
+    input_size = int(spec["input_size"])
+    grids = [input_size // stride for stride in main.YOLOV8_STRIDES]
+    boxes = [np.zeros((grid, grid, 4 * main.DFL_BINS), np.float32) for grid in grids]
+    scores = [
+        np.zeros((grid, grid, int(spec["class_count"])), np.float32) for grid in grids
+    ]
+    coefficients = [
+        np.zeros((grid, grid, main.MASK_COEFFICIENTS), np.float32) for grid in grids
+    ]
+    proto_grid = input_size // main.MASK_STRIDE
+    proto = np.zeros((proto_grid, proto_grid, main.MASK_COEFFICIENTS), np.float32)
+
+    for channel in spec["prototype"]:
+        index = int(channel["channel"])
+        proto[:, :, index] = channel["background"]
+        x0, y0, x1, y1 = channel["rect"]
+        proto[y0:y1, x0:x1, index] = channel["foreground"]
+
+    for cell in spec["cells"]:
+        level, row, column = int(cell["level"]), int(cell["row"]), int(cell["column"])
+        sides = np.full((4 * main.DFL_BINS,), -8.0, np.float32)
+        for side in range(4):
+            sides[side * main.DFL_BINS + int(cell["dfl_bin"])] = 8.0
+        boxes[level][row, column, :] = sides
+        scores[level][row, column, int(cell["class_id"])] = cell["score"]
+        coefficients[level][row, column, int(cell["coefficient"])] = 1.0
+
+    return boxes + scores + coefficients + [proto]
+
+
+def decode_fixture(spec: dict) -> list:
+    return main.decode_yolov8_segments(
+        build_yolov8_heads(spec),
+        int(spec["frame"]["width"]),
+        int(spec["frame"]["height"]),
+        int(spec["input_size"]),
+        float(spec["min_score"]),
+        float(spec["nms_iou"]),
+        int(spec["max_detections"]),
+    )
+
+
+@pytest.mark.unit
+class TestYolov8Decode:
+    """The YOLOv8 side of the model-specific decoding boundary."""
+
+    def setup_method(self):
+        main.load_runtime_dependencies()
+
+    def test_decode_matches_shared_parity_fixture(self):
+        fixture = load_parity_fixture()
+        spec = fixture["input"]
+
+        detections = decode_fixture(spec)
+
+        expected = fixture["expected"]["detections"]
+        assert len(detections) == len(expected)
+        for det, want in zip(detections, expected):
+            assert det["class_id"] == want["class_id"]
+            assert det["score"] == pytest.approx(want["score"], abs=1e-6)
+            box = [det["x1"], det["y1"], det["x2"], det["y2"]]
+            assert box == pytest.approx(want["box"], abs=1e-3)
+            assert det["mask"].shape == (want["mask_grid"], want["mask_grid"])
+            assert det["mask"].dtype == np.uint8
+            assert int((det["mask"] > 127).sum()) == want["mask_above_threshold"]
+
+    def test_metadata_matches_shared_parity_fixture(self):
+        fixture = load_parity_fixture()
+        spec = fixture["input"]
+        frame_shape = (int(spec["frame"]["height"]), int(spec["frame"]["width"]), 3)
+        labels = [f"class_{index}" for index in range(int(spec["class_count"]))]
+
+        segments = main.metadata_segments(
+            decode_fixture(spec), labels, frame_shape, float(spec["mask_threshold"])
+        )
+
+        expected = fixture["expected"]["segments"]
+        assert len(segments) == len(expected)
+        for segment, want in zip(segments, expected):
+            assert segment["id"] == want["id"]
+            assert segment["label"] == want["label"]
+            assert segment["confidence"] == pytest.approx(want["confidence"], abs=1e-6)
+            assert segment["bbox"] == want["bbox"]
+            assert segment["mask_format"] == want["mask_format"]
+            assert len(segment["mask"]) >= want["min_polygon_points"]
+
+    def test_confidence_is_the_packaged_class_probability(self):
+        spec = load_parity_fixture()["input"]
+
+        detections = decode_fixture(spec)
+
+        # The packaged class head emits probabilities, so no activation is applied here.
+        assert [round(det["score"], 6) for det in detections] == [0.9, 0.74]
+
+    def test_scores_below_the_threshold_are_dropped(self):
+        spec = dict(load_parity_fixture()["input"], min_score=0.95)
+
+        assert decode_fixture(spec) == []
+
+    def test_letterboxed_boxes_land_in_frame_pixels(self):
+        spec = load_parity_fixture()["input"]
+        frame_w, frame_h = int(spec["frame"]["width"]), int(spec["frame"]["height"])
+
+        detections = decode_fixture(spec)
+
+        assert detections
+        for det in detections:
+            assert 0.0 <= det["x1"] < det["x2"] <= frame_w
+            assert 0.0 <= det["y1"] < det["y2"] <= frame_h
+
+    def test_head_shapes_are_checked_against_input_size(self):
+        spec = load_parity_fixture()["input"]
+        heads = build_yolov8_heads(spec)
+
+        with pytest.raises(RuntimeError, match="model.input_size"):
+            main.split_yolov8_heads(heads, 320)
+
+    def test_missing_head_tensors_fail_clearly(self):
+        spec = load_parity_fixture()["input"]
+
+        with pytest.raises(RuntimeError, match="head tensors"):
+            main.split_yolov8_heads(build_yolov8_heads(spec)[:-1], int(spec["input_size"]))
+
+
+@pytest.mark.unit
+class TestDecodeBoundary:
+    """Family selection is the only thing that changes between the two decode paths."""
+
+    def setup_method(self):
+        main.load_runtime_dependencies()
+
+    def _config(self, family: str) -> object:
+        return main.AppConfig(
+            model_path="model.tar.gz",
+            labels_path=Path("labels.txt"),
+            source_url="rtsp://127.0.0.1:8554/src1",
+            model_family=family,
+            insight_host="127.0.0.1",
+        )
+
+    def test_family_selects_the_decoder(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(
+            main, "decode_yolo26_segments", lambda *args: calls.append("yolo26") or []
+        )
+        monkeypatch.setattr(
+            main, "decode_yolov8_segments", lambda *args: calls.append("yolov8") or []
+        )
+        monkeypatch.setattr(main, "tensor_to_hwc_f32", lambda tensor: tensor)
+
+        main.decode_segments(self._config(main.YOLO26), ["payload"], 1920, 1080)
+        main.decode_segments(self._config(main.YOLOV8), ["payload"] * 10, 1920, 1080)
+
+        assert calls == ["yolo26", "yolov8"]
+
+    def test_both_families_produce_the_same_record(self):
+        spec = load_parity_fixture()["input"]
+        mask = np.full((160, 160), 255, dtype=np.uint8)
+        # decode_yolo26_segments() builds its records through detection() as well, so one
+        # record from each path is compared field by field.
+        yolo26_record = main.detection(8.0, 8.0, 56.0, 56.0, 0.9, 0, mask)
+        yolov8_record = decode_fixture(spec)[0]
+
+        assert sorted(yolov8_record) == sorted(yolo26_record)
+        for key, value in yolo26_record.items():
+            assert type(yolov8_record[key]) is type(value)
+
+
+@pytest.mark.unit
+class TestFramePairing:
+    """YOLOv8 pairs frames with segments here, so a saved frame is the one it was decoded from."""
+
+    def _runtime(self, frame_ids):
+        return SimpleNamespace(
+            frames=[(frame_id, f"frame_{frame_id}") for frame_id in frame_ids],
+            frame_output_name="frame",
+        )
+
+    def test_returns_the_frame_the_segments_came_from(self):
+        runtime = self._runtime([7, 8, 9])
+
+        assert main.frame_for(runtime, 8) == "frame_8"
+
+    def test_returns_none_once_the_frame_has_aged_out(self):
+        runtime = self._runtime([7, 8, 9])
+
+        assert main.frame_for(runtime, 3) is None
+
+    def test_unidentified_samples_are_never_paired(self):
+        # A sample without a frame identity cannot be matched to a frame; saving is skipped
+        # rather than pairing an overlay onto the wrong picture.
+        runtime = self._runtime([7, 8, 9])
+
+        assert main.frame_for(runtime, -1) is None
+
+    def test_ring_keeps_the_newest_frames(self, monkeypatch):
+        monkeypatch.setattr(main, "host_frame_copy", lambda sample: f"copy_{sample.frame_id}")
+        pulled = [SimpleNamespace(frame_id=index) for index in range(main.FRAME_RING_CAPACITY + 4)]
+        runtime = SimpleNamespace(frames=[], frame_output_name="frame",
+                                  run=SimpleNamespace(pull=lambda name, timeout: (
+                                      pulled.pop(0) if pulled else None)))
+
+        main.drain_frames(runtime)
+
+        assert len(runtime.frames) == main.FRAME_RING_CAPACITY
+        newest = main.FRAME_RING_CAPACITY + 3
+        assert runtime.frames[-1] == (newest, f"copy_{newest}")
+
+    def test_ring_holds_host_copies_not_pulled_samples(self, monkeypatch):
+        # A retained sample holds a decoder-buffer loan, and the decoder stalls once its
+        # in-flight frames are all on loan, so only the copied pixels may outlive the drain.
+        pulled = [SimpleNamespace(frame_id=1)]
+        copied = []
+
+        def copy(sample):
+            copied.append(sample)
+            return np.zeros((6, 4), dtype=np.uint8)
+
+        monkeypatch.setattr(main, "host_frame_copy", copy)
+        runtime = SimpleNamespace(frames=[], frame_output_name="frame",
+                                  run=SimpleNamespace(pull=lambda name, timeout: (
+                                      pulled.pop(0) if pulled else None)))
+
+        main.drain_frames(runtime)
+
+        assert len(copied) == 1
+        assert all(retained is not copied[0] for _, retained in runtime.frames)
+
+    def test_retained_nv12_converts_to_bgr_when_saved(self):
+        main.load_runtime_dependencies()
+        bgr =main.bgr_from_host_frame(np.full((6, 4), 128, dtype=np.uint8))
+
+        assert bgr.shape == (4, 4, 3)
+
+    def test_retained_nv16_converts_to_bgr_when_saved(self, monkeypatch):
+        """A retained 4:2:2 frame stays packed 4:2:2 and is converted only when saved."""
+        import cv2
+
+        monkeypatch.setattr(main, "cv2", cv2)
+        monkeypatch.setattr(main, "np", np)
+        frame = np.zeros((4, 4, 2), dtype=np.uint8)
+        frame[..., 0] = 81
+        frame[:, 0::2, 1], frame[:, 1::2, 1] = 90, 240
+
+        bgr = main.bgr_from_host_frame(frame)
+
+        assert bgr.shape == (4, 4, 3)
+        assert (bgr == cv2.cvtColor(frame, cv2.COLOR_YUV2BGR_YUY2)).all()
+
+    def test_retained_bgr_is_used_as_it_is(self):
+        frame = np.zeros((4, 4, 3), dtype=np.uint8)
+
+        assert main.bgr_from_host_frame(frame) is frame
+
+
+@pytest.mark.unit
+class TestModelPreprocess:
+    """Both families must request the same input preparation.
+
+    A YOLOv8 package whose normalization is left to chance sees unnormalized pixels and its
+    class scores collapse to a fraction of their range, which looks like a decode bug but is
+    not one. This pins the request for both families.
+    """
+
+    class _Preprocess:
+        def __init__(self):
+            self.kind = None
+            self.enable = None
+            self.preset = None
+            self.input_max_width = 0
+            self.input_max_height = 0
+            self.color_convert = SimpleNamespace(input_format=None)
+            self.resize = SimpleNamespace(enable=None, mode=None)
+
+    class _Options:
+        def __init__(self):
+            self.preprocess = TestModelPreprocess._Preprocess()
+            self.decode_type = None
+            self.score_threshold = 0.0
+            self.nms_iou_threshold = 0.0
+            self.top_k = 0
+
+    @pytest.fixture
+    def stub(self, monkeypatch):
+        captured = {}
+
+        def model(path, opt):
+            captured["path"] = path
+            captured["opt"] = opt
+            return object()
+
+        monkeypatch.setattr(
+            main,
+            "pyneat",
+            SimpleNamespace(
+                ModelOptions=TestModelPreprocess._Options,
+                Model=model,
+                InputKind=SimpleNamespace(Image="image"),
+                AutoFlag=SimpleNamespace(On="on", Auto="auto"),
+                NormalizePreset=SimpleNamespace(COCO_YOLO="coco_yolo"),
+                PreprocessColorFormat=SimpleNamespace(NV12="nv12"),
+                ResizeMode=SimpleNamespace(Letterbox="letterbox"),
+                BoxDecodeType=SimpleNamespace(YoloV26Seg="yolo26seg"),
+            ),
+        )
+        return captured
+
+    def _config(self, family):
+        return main.AppConfig(
+            model_path="model.tar.gz",
+            labels_path=Path("labels.txt"),
+            source_url="rtsp://127.0.0.1:8554/src1",
+            model_family=family,
+            insight_host="127.0.0.1",
+        )
+
+    @pytest.mark.parametrize("family", [main.YOLO26, main.YOLOV8])
+    def test_normalization_is_requested_for_both_families(self, stub, family):
+        main.make_model(self._config(family), 1920, 1080)
+
+        preprocess = stub["opt"].preprocess
+        assert preprocess.enable == "on"
+        assert preprocess.preset == "coco_yolo"
+        assert preprocess.color_convert.input_format == "nv12"
+        assert (preprocess.input_max_width, preprocess.input_max_height) == (1920, 1080)
+
+    def test_only_yolo26_decodes_on_device(self, stub):
+        main.make_model(self._config(main.YOLO26), 1920, 1080)
+        assert stub["opt"].decode_type == "yolo26seg"
+
+        main.make_model(self._config(main.YOLOV8), 1920, 1080)
+        # YOLOv8 heads are decoded on the host, and that decode inverts a letterbox.
+        assert stub["opt"].decode_type is None
+        assert stub["opt"].preprocess.resize.mode == "letterbox"
+
+
 @pytest.mark.unit
 class TestPullOutcomes:
     """The pull loop, driven by a run that yields no sample.
@@ -583,7 +1049,7 @@ class TestPullOutcomes:
 
     def test_run_pipeline_warns_on_timeout_and_stops_on_runtime_error(self, capsys):
         run = FakeRun("timeout", ("error", "queue torn down"))
-        runtime = SimpleNamespace(run=run, output_name="segments")
+        runtime = SimpleNamespace(run=run, output_name="segments", frame_output_name="")
         cfg = SimpleNamespace(frames=0, profile=False, profile_interval=1)
 
         with pytest.raises(RuntimeError, match="queue torn down"):
@@ -593,3 +1059,51 @@ class TestPullOutcomes:
         assert captured.err.count("[warn] timed out waiting for segmentation output") == 1
         assert "processed=" not in captured.out
         assert run.pulls == [("segments", 20000)] * 2
+
+
+@pytest.mark.unit
+class TestUsbCameraFrames:
+    def test_nv16_frame_converts_to_bgr_through_its_padded_planes(self, monkeypatch):
+        """A 4:2:2 USB camera frame is saved through its Y and UV planes, padding skipped,
+        and every row keeps its own chroma."""
+        import cv2
+        import numpy as np
+
+        monkeypatch.setattr(main, "cv2", cv2)
+        monkeypatch.setattr(main, "np", np)
+        monkeypatch.setattr(
+            main,
+            "pyneat",
+            SimpleNamespace(
+                PixelFormat=SimpleNamespace(NV16="NV16"),
+                PlaneRole=SimpleNamespace(Y="Y", UV="UV"),
+            ),
+        )
+        width, height, stride = 64, 32, 96
+        y = np.zeros((height, stride), np.uint8)
+        y[:, :width] = 81
+        # Chroma changes on every row, which a 4:2:0 conversion would average or drop.
+        uv = np.zeros((height, stride), np.uint8)
+        uv[0::2, 0:width:2], uv[0::2, 1:width:2] = 90, 240
+        uv[1::2, 0:width:2], uv[1::2, 1:width:2] = 240, 90
+        payload = np.concatenate([y.ravel(), uv.ravel()]).tobytes()
+        tensor = SimpleNamespace(
+            width=width,
+            height=height,
+            image_format=lambda: "NV16",
+            copy_payload_bytes=lambda: payload,
+            planes=[
+                SimpleNamespace(role="Y", strides_bytes=[stride, 1], byte_offset=0),
+                SimpleNamespace(role="UV", strides_bytes=[stride, 1], byte_offset=height * stride),
+            ],
+        )
+
+        bgr = main.tensor_bgr_from_decoded(tensor)
+
+        def expected(u, v):
+            return cv2.cvtColor(np.array([[[81, u], [81, v]]], np.uint8), cv2.COLOR_YUV2BGR_YUY2)[0, 0]
+
+        assert bgr.shape == (height, width, 3)
+        assert (bgr[0::2] == expected(90, 240)).all()
+        assert (bgr[1::2] == expected(240, 90)).all()
+        assert (expected(90, 240) != expected(240, 90)).any()

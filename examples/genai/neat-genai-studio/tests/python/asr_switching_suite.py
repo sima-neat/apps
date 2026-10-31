@@ -21,7 +21,7 @@ except ModuleNotFoundError as exc:  # pragma: no cover - environment check
     ) from exc
 
 from server.model_manager import ModelManager, _is_mla_failure
-from shared.config import HubConfig, model_dir_complete, model_dir_supported
+from shared.config import HubConfig
 
 
 class FakeServer:
@@ -90,6 +90,40 @@ class AsrSwitchingTests(unittest.TestCase):
     def entry(self, manager, name):
         return next(e for e in manager.catalog() if e["name"] == name)
 
+    def test_status_uses_cached_metadata_and_current_asr(self):
+        manager, _ = self.manager()
+        manager.set_active_asr("whisper-medium-a16w8")
+        with patch.object(manager, "_is_model_complete", side_effect=AssertionError("disk scan")), \
+                patch.object(manager, "_size_of", side_effect=AssertionError("disk walk")):
+            status = manager.status()
+        self.assertEqual(status["asrModel"], "whisper-medium-a16w8")
+        active = [entry["name"] for entry in status["catalog"] if entry["activeAsr"]]
+        self.assertEqual(active, ["whisper-medium-a16w8"])
+
+    def test_background_scan_does_not_block_status(self):
+        manager, _ = self.manager()
+        scanning, release, answered = threading.Event(), threading.Event(), threading.Event()
+
+        def slow_metadata(path):
+            scanning.set()
+            release.wait(5)
+            return True, ""
+
+        with patch.object(manager, "_is_model_complete", side_effect=slow_metadata):
+            scanner = threading.Thread(target=manager.scan_catalog)
+            reader = None
+            scanner.start()
+            try:
+                self.assertTrue(scanning.wait(2))
+                reader = threading.Thread(target=lambda: (manager.status(), answered.set()))
+                reader.start()
+                self.assertTrue(answered.wait(1), "status waited for the catalog scan")
+            finally:
+                release.set()
+                scanner.join(5)
+                if reader is not None:
+                    reader.join(5)
+
     def test_switching_asr_evicts_the_previous_asr_and_keeps_the_chat_model(self):
         manager, server = self.manager()
         manager.load("Llama-3.2-3B-Instruct")
@@ -99,6 +133,16 @@ class AsrSwitchingTests(unittest.TestCase):
         self.assertEqual(manager.active_asr(), "whisper-medium-a16w8")
         self.assertIn("Llama-3.2-3B-Instruct", server.model_names())
         self.assertNotIn("whisper-small-a16w8", server.model_names())
+
+    def test_incomplete_weights_are_rejected_before_evicting_active_asr(self):
+        model = self.tmp / "whisper-medium-a16w8"
+        (model / ".neat-complete").unlink()
+        (model / "elf_files/stage0_mla.elf").write_bytes(b"")
+        manager, server = self.manager()
+        with self.assertRaisesRegex(ValueError, "incomplete weight file"):
+            manager.set_active_asr("whisper-medium-a16w8")
+        self.assertEqual(server.model_names(), ["whisper-small-a16w8"])
+        self.assertEqual(server.removed, [])
 
     def test_loading_a_chat_model_never_evicts_the_active_asr(self):
         manager, server = self.manager()
@@ -309,12 +353,6 @@ class AsrSwitchingTests(unittest.TestCase):
         self.assertNotEqual(alias, manager.resolved_model_path("whisper-medium-a16w8"))
         self.assertIsNone(manager.resolved_model_path("not-in-catalog"))
 
-    def test_reset_is_refused_when_disabled(self):
-        manager, _ = self.manager()
-        manager._mla_reset_enabled = False
-        with self.assertRaisesRegex(ValueError, "disabled"):
-            manager.reset_mla()
-
     def test_configured_alias_survives_a_normalized_served_name(self):
         # The runtime serves the configured alias under another name. The
         # configured alias must still be what a restart re-selects, and its
@@ -482,64 +520,16 @@ class AsrWarmupBehaviourTests(AsrSwitchingTests):
         self.assertNotIn("whisper-medium-a16w8", server.model_names())
 
 
-class EncoderLayoutIsNotJudgedLocallyTests(unittest.TestCase):
-    """Neither encoder layout may be refused from the files alone.
-
-    Which layout the runtime accepts inverted inside one version: 0.4.0 needs a
-    combined encoder stage, 0.4.0+develop.7d003ef needs per-layer ELFs and calls
-    the combined one "Unsupported legacy Whisper model". A model directory does
-    not record which runtime compiled it, so a local guess blocks whichever
-    builds happen to be the working ones. These pin that the studio offers both
-    and lets the runtime report any mismatch itself.
-    """
-
-    def _build(self, root, name, encoder_elfs, config="whisper_config.json"):
-        d = Path(root) / name
-        (d / "devkit").mkdir(parents=True)
-        (d / "elf_files").mkdir()
-        (d / "devkit" / config).write_text("{}")
-        (d / ".neat-complete").write_text("ok\n")
-        for e in encoder_elfs:
-            (d / "elf_files" / e).write_bytes(b"x")
-        (d / "elf_files" / "m_decoder_init_layer0_stage1_mla.elf").write_bytes(b"x")
-        return d
-
-    def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, self.tmp, True)
-
-    def test_a_combined_encoder_build_is_offered(self):
-        d = self._build(self.tmp, "combined", ["m_encoder_stage1_mla.elf"])
-        self.assertEqual(model_dir_supported(d), (True, ""))
-        self.assertEqual(model_dir_complete(d), (True, ""))
-
-    def test_a_layered_encoder_build_is_offered(self):
-        d = self._build(self.tmp, "layered",
-                        [f"m_encoder_layer{i}_stage1_mla.elf" for i in range(12)])
-        self.assertEqual(model_dir_supported(d), (True, ""))
-        self.assertEqual(model_dir_complete(d), (True, ""))
-
-    def test_a_genuinely_broken_download_is_still_caught(self):
-        d = self._build(self.tmp, "broken", ["m_encoder_stage1_mla.elf"])
-        (d / ".neat-complete").unlink()
-        (d / "elf_files" / "m_encoder_stage1_mla.elf").write_bytes(b"")
-        ok, why = model_dir_complete(d)
-        self.assertFalse(ok)
-        self.assertIn("incomplete weight file", why)
-
-
 class MlaFailureClassificationTests(unittest.TestCase):
     """Real accelerator failures seen on a Modalix DevKit.
 
     Misclassifying one costs the user the remedy: the load is not rolled back
     and the error arrives as a raw runtime string instead of the message that
-    names Reset MLA.
+    names the remedy.
     """
 
-    def test_dispatcher_and_allocation_failures_are_recognised(self):
+    def test_load_and_allocation_failures_are_recognised(self):
         for detail in (
-            'Failed to bulk load model through MLASHM dispatcher: "...stage1_mla.elf" '
-            "(code=8 job_type=loadMany component=rpcmlashm name=MLA_LOAD_FAILED op_name=MLA_LOAD)",
             "Failed to allocate buffer (per_layer_embeddings_s1): Cannot allocate memory",
             "GenAIServer warmup failed for model 'x': Failed to open shm memory handle",
         ):

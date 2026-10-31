@@ -11,6 +11,7 @@ client. Nothing here spawns the worker or needs pyneat.
 from __future__ import annotations
 
 import io
+import json
 import os
 import unittest
 from pathlib import Path
@@ -186,9 +187,12 @@ class EnvironmentDiscoveryTests(unittest.TestCase):
                 self.assertFalse(supertonic_tts.available())   # no models yet
                 (models / "supertonic-3" / "onnx").mkdir(parents=True)
                 (models / "supertonic-3" / "onnx" / "tts.json").write_text("{}")
-                (models / "supertonic-3-sima").mkdir(parents=True)
-                (models / "supertonic-3-sima"
-                 / "supertonic_vector_field_sima_mpk.tar.gz").write_bytes(b"")
+                compiled = models / "supertonic-3-sima"
+                compiled.mkdir()
+                manifest = Path(supertonic_tts.__file__).with_name("supertonic_sima") / "model_assets.json"
+                for asset in json.loads(manifest.read_text()).values():
+                    self.assertFalse(supertonic_tts.available())
+                    (compiled / asset["file"]).write_bytes(b"")
                 self.assertTrue(supertonic_tts.available())
 
     def test_supertonic_venv_env_names_the_interpreter(self):
@@ -216,7 +220,7 @@ class EnvironmentDiscoveryTests(unittest.TestCase):
                 self.assertEqual(supertonic_tts._supertonic_python(), str(legacy / ".venv" / "bin" / "python"))
 
     def test_default_venv_is_beside_the_example(self):
-        # src/python/ui/supertonic_tts.py -> <example>/.venv-supertonic
+        # src/python/api/tts/supertonic_tts.py -> <example>/.venv-supertonic
         self.assertEqual(supertonic_tts.DEFAULT_VENV.name, ".venv-supertonic")
         self.assertTrue((supertonic_tts.DEFAULT_VENV.parent / "setup.sh").is_file())
 

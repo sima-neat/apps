@@ -158,6 +158,30 @@ int main(int argc, char** argv) {
     ++failures;
   }
 
+  auto shared_output = neat::Tensor::from_vector(
+      std::vector<float>{99.0F, 1.0F, 2.0F, 3.0F, 4.0F, 88.0F}, {6}, neat::TensorMemory::CPU);
+  shared_output.shape = {2};
+  shared_output.byte_offset = sizeof(float);
+  if (read_floats(shared_output) != std::vector<float>{1.0F, 2.0F}) {
+    std::cerr << "[FAIL] tensor reads must exclude adjacent output storage\n";
+    ++failures;
+  }
+  auto padded_output = neat::Tensor::from_vector(
+      std::vector<float>{1.0F, 2.0F, 99.0F, 3.0F, 4.0F, 88.0F}, {6}, neat::TensorMemory::CPU);
+  padded_output.shape = {2, 2};
+  padded_output.strides_bytes = {3 * sizeof(float), sizeof(float)};
+  if (read_floats(padded_output) != std::vector<float>{1.0F, 2.0F, 3.0F, 4.0F}) {
+    std::cerr << "[FAIL] tensor reads must respect padded row strides\n";
+    ++failures;
+  }
+  shared_output.shape = {8};
+  try {
+    (void)read_floats(shared_output);
+    std::cerr << "[FAIL] tensor reads must reject insufficient storage\n";
+    ++failures;
+  } catch (const std::exception&) {
+  }
+
   std::vector<float> scores(305, 0.0F);
   scores[3] = 2.0F;
   scores[4] = 2.0F;
@@ -214,7 +238,7 @@ int main(int argc, char** argv) {
   TransformerOutputs segmentation_output{
       neat::Tensor::from_vector(segmentation_boxes, {1, 200, 4}, neat::TensorMemory::CPU),
       neat::Tensor::from_vector(segmentation_logits, {1, 200, 91}, neat::TensorMemory::CPU),
-      neat::Tensor::from_vector(masks, {108, 108, 200}, neat::TensorMemory::CPU),
+      neat::Tensor::from_vector(masks, {1, 108, 108, 200}, neat::TensorMemory::CPU),
   };
   for (const int grid_size : {108, 432, 640}) {
     segmentation_config.mask_grid_size = grid_size;
@@ -238,7 +262,7 @@ int main(int argc, char** argv) {
   }
 
   const std::string temp_dir =
-      create_test_scratch_dir("rfdetr-detection-segmentation", "unknown-model-variant");
+      create_test_scratch_dir("rfdetr-detection-segmentation", "model-variant");
   if (temp_dir.empty()) {
     std::cerr << "[FAIL] could not create config test directory\n";
     ++failures;
@@ -250,11 +274,11 @@ int main(int argc, char** argv) {
     config.close();
     try {
       (void)load_config(config_path);
-      std::cerr << "[FAIL] config must reject model variants other than small and medium\n";
+      std::cerr << "[FAIL] config must reject a variant without a model pair\n";
       ++failures;
     } catch (const std::exception& error) {
-      if (std::string(error.what()).find("small or medium") == std::string::npos) {
-        std::cerr << "[FAIL] invalid model variant error must name the supported variants\n";
+      if (std::string(error.what()).find("model.detection.large") == std::string::npos) {
+        std::cerr << "[FAIL] missing model pair error must name the selected variant\n";
         ++failures;
       }
     }
@@ -269,9 +293,9 @@ int main(int argc, char** argv) {
     config.close();
     try {
       const auto selected = load_config(config_path);
-      if (selected.task != Task::Segmentation || selected.input_size != 432 ||
-          selected.feature_size != 36 || selected.top_k != 200 || selected.mask_grid_size != 640 ||
-          selected.backbone != "segmentation-b.tar.gz" || selected.min_score != 0.3F) {
+      if (selected.task != Task::Segmentation || selected.top_k != 200 ||
+          selected.mask_grid_size != 640 || selected.backbone != "segmentation-b.tar.gz" ||
+          selected.min_score != 0.3F) {
         std::cerr << "[FAIL] config must select the fixed segmentation model contract\n";
         ++failures;
       }
@@ -282,15 +306,15 @@ int main(int argc, char** argv) {
 
     config.open(config_path, std::ios::trunc);
     config << "model:\n  task: detection\n  labels: labels.txt\n  detection:\n"
-              "    variant: small\n    small:\n      backbone: small-b.tar.gz\n"
-              "      transformer: small-t.tar.gz\n"
+              "    variant: large\n    large:\n      backbone: large-b.tar.gz\n"
+              "      transformer: large-t.tar.gz\n"
               "source:\n  rtsp_url: rtsp://camera/live\n"
               "inference:\n  segmentation:\n    mask_threshold: 2.0\n"
               "output:\n  insight:\n    host: 127.0.0.1\n";
     config.close();
     try {
       const auto selected = load_config(config_path);
-      if (selected.task != Task::Detection || selected.input_size != 512) {
+      if (selected.task != Task::Detection || selected.backbone != "large-b.tar.gz") {
         std::cerr << "[FAIL] inactive segmentation settings must not affect detection\n";
         ++failures;
       }

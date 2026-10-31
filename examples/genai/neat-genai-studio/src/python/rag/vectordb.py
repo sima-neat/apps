@@ -14,7 +14,7 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_milvus import Milvus
 import threading
 import requests
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 # milvus-lite emits a pkg_resources deprecation warning on import.
 # We suppress this known third-party warning to keep service logs clean.
@@ -30,7 +30,7 @@ PYTHON = os.sys.executable
 SCRIPT = Path(__file__).resolve()
 WORKER_SCRIPT = SCRIPT.parent / "vectordb_worker.py"
 PYTHON_DIR = SCRIPT.parent.parent
-UI_DIR = PYTHON_DIR / "ui"
+API_DIR = PYTHON_DIR / "api"
 STARTUP_DELAY = 2
 K_RETRIEVED_DOCS = 1
 DEFAULT_MIN_SCORE = float(os.environ.get("VDB_MIN_SCORE", "0.0"))
@@ -41,7 +41,7 @@ DEFAULT_VDB_PORT = 9100
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("VectorDB")
 
-RAG_DB_PATH = str((UI_DIR / "milvus.db").resolve())
+RAG_DB_PATH = str((API_DIR / "milvus.db").resolve())
 
 # --- VectorDB definition ---
 class VectorDB:
@@ -171,6 +171,19 @@ class VectorDB:
 
 
 
+def served_database(info: Any) -> Optional[str]:
+    """The database a RAG service's ``/`` page (``info``, None when it did not
+    answer with JSON) says it serves. None while this service is still loading
+    (``db_path: null``); "" when the reply does not name a database, which
+    callers treat as another database."""
+    if not isinstance(info, dict) or info.get("service") != "rag-vectordb" or "db_path" not in info:
+        return ""
+    path = info["db_path"]
+    if path is None:
+        return None
+    return path if isinstance(path, str) and path else ""
+
+
 class RagDbClient:
     def __init__(self, host: str = "127.0.0.1", port: int = 9100, timeout: int = 10):
         self.base_url = f"http://{host}:{port}"
@@ -198,6 +211,18 @@ class RagDbClient:
         except ValueError as json_err:
             log.error(f"Invalid JSON response: {json_err}")
             raise
+
+    def served_db_path(self) -> Optional[str]:
+        """The database the service on this port serves; see served_database()."""
+        try:
+            resp = requests.get(f"{self.base_url}/", timeout=self.timeout)
+        except requests.RequestException:
+            return None
+        try:
+            info = resp.json() if resp.ok else None
+        except ValueError:
+            info = None
+        return served_database(info)
 
     def list_documents(self, limit: int = 16383) -> Dict[str, Any]:
         """Fetch every ingested chunk from the running VectorDB service."""
@@ -229,6 +254,9 @@ def index_endpoint():
         "message": "This is the RAG VectorDB API, not the Multimodal Assistant UI.",
         "search": "/search?query=<text>&k=3&min_score=-1",
         "db_path": ragdb.db_path if ragdb else None,
+        # Which worker answered: a Studio waiting for the worker it started
+        # compares this with that process.
+        "pid": os.getpid(),
     })
 
 
@@ -338,8 +366,15 @@ def validate_database(db_path: Union[str, Path], timeout: int = 120) -> None:
         raise ValueError("Uploaded file is not a valid RAG database")
 
 
-def wait_for_service(proc: subprocess.Popen, timeout: int = 35) -> None:
-    """Wait until the worker has initialized its database and serves HTTP."""
+def wait_for_service(proc: subprocess.Popen, timeout: int = 35, db_path: Optional[str] = None) -> None:
+    """Wait until this worker (``proc``) serves ``db_path`` (default: the
+    database the worker opens) over HTTP. Another service answering on the
+    port does not count, even one serving the same file (the CLI's `/rag db`,
+    or a worker left over from an earlier Studio): the answer must come from
+    ``proc`` itself (its ``pid``). The wait goes on until this worker serves,
+    exits (it could not take the port), or the time runs out, so a document
+    update is never committed on a service that isn't the one just started."""
+    expected = Path(db_path or os.environ.get("VECTOR_DB_PATH", RAG_DB_PATH)).resolve()
     deadline = time.monotonic() + timeout
     port = int(os.environ.get("PORT", DEFAULT_VDB_PORT))
     url = f"http://127.0.0.1:{port}/"
@@ -349,10 +384,16 @@ def wait_for_service(proc: subprocess.Popen, timeout: int = 35) -> None:
         try:
             response = requests.get(url, timeout=1)
             response.raise_for_status()
+            info = response.json()
+            served = served_database(info)
+        except (requests.RequestException, ValueError):
+            info, served = None, None
+        answered_by_proc = isinstance(info, dict) and info.get("pid") == proc.pid
+        if answered_by_proc and served and Path(served).resolve() == expected and proc.poll() is None:
             return
-        except requests.RequestException:
-            time.sleep(0.5)
-    raise TimeoutError("RAG database service did not become ready")
+        time.sleep(0.5)
+    raise TimeoutError("RAG database service did not become ready "
+                       "(is another document service using its port?)")
 
 if __name__ == "__main__":
     import argparse

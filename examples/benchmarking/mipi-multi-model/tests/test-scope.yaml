@@ -1,0 +1,37 @@
+models:
+  yolo26n-det-int8-b1:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26-detection/yolo26n-det-int8-b1.tar.gz
+    file: yolo26n-det-int8-b1.tar.gz
+  yolo26n-pose-bf16-mla_tess-b1:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26-pose/yolo26n-pose-bf16-mla_tess-b1.tar.gz
+    file: yolo26n-pose-bf16-mla_tess-b1.tar.gz
+  yolo26n-seg-bf16-mla_tess:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26-segmentation/yolo26n-seg-bf16-mla_tess.tar.gz
+    file: yolo26n-seg-bf16-mla_tess.tar.gz
+  ssd_mobilenet_v2:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/ssd_mobilenet_v2_modalix_int8_tess_mla_mpk.tar.gz
+    file: ssd_mobilenet_v2_modalix_int8_tess_mla_mpk.tar.gz
+  resnet_50:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/resnet_50_mpk.tar.gz
+    file: resnet_50_mpk.tar.gz
+  midas_v21_small_256:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/midas_v21_small_256_mpk.tar.gz
+    file: midas_v21_small_256_mpk.tar.gz
+unit:
+  python: true
+  cpp: false
+e2e:
+  python:
+    enabled: false
+    reason: Requires a Modalix target with a configured MIPI camera and matching libcamera stack.
+    models: []
+  cpp:
+    enabled: false
+    reason: Python-only MIPI inference example.
+    models: []

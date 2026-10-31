@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 
 import pytest
+import yaml
 
 APPS_ROOT = Path(__file__).resolve().parents[2]
 BUILD_SH = APPS_ROOT / "build.sh"
@@ -574,11 +575,14 @@ def _write_fake_neat_json(
     tag: str,
     env: str,
     runtime_channel: str | None = None,
+    runtime_version: str | None = None,
+    gst_plugins_version: str | None = None,
 ) -> Path:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     neat_path = bin_dir / "neat"
     component_channel = (runtime_channel or channel).replace("/", "-")
+    runtime_version = runtime_version or f"0.4.0+{component_channel}.123456789abc"
     payload = {
         "components": {
             "core": {
@@ -586,8 +590,8 @@ def _write_fake_neat_json(
                 "tag": tag,
                 "provenance": {"vulcanEnvironment": env},
             },
-            "runtime": {"version": f"0.4.0+{component_channel}.123456789abc"},
-            "gstPlugins": {"version": f"0.4.0+{component_channel}.123456789abc"},
+            "runtime": {"version": runtime_version},
+            "gstPlugins": {"version": gst_plugins_version or runtime_version},
         }
     }
     neat_path.write_text(
@@ -607,6 +611,30 @@ def _write_fake_neat_json(
     )
     neat_path.chmod(0o755)
     return bin_dir
+
+
+def _core_metadata_env(
+    version: str = "0.4.0+scratch-core-for-test.123456789abc",
+    *,
+    branch: str = "scratch-core-for-test",
+    tag: str = "scratchsha1",
+) -> dict[str, str]:
+    metadata = {
+        "resources": [
+            f"neat-runtime_{version}_arm64.deb",
+            f"neat-gst-plugins_{version}_arm64.deb",
+        ]
+    }
+    branch_key = branch.replace("/", "%252F")
+    return {
+        "NEAT_APPS_TEST_URL_BODIES": json.dumps(
+            {
+                f"https://core.test/{branch_key}/{tag}/metadata.json": json.dumps(
+                    metadata
+                )
+            }
+        )
+    }
 
 
 def _write_fake_sysroot(tmp_path: Path) -> dict[str, str]:
@@ -643,13 +671,7 @@ def _write_fake_sysroot(tmp_path: Path) -> dict[str, str]:
             fi
             case "${1:-}" in
               update) exit "${NEAT_APPS_TEST_SYSROOT_UPDATE_STATUS:-0}" ;;
-              status)
-                printf 'SDK image platform:       %s\n' "${NEAT_APPS_TEST_SYSROOT_IMAGE_PLATFORM:-2.0.0}"
-                printf 'Platform Base:            %s\n' "${NEAT_APPS_TEST_SYSROOT_PLATFORM_BASE:-2.0.0}"
-                printf 'Sysroot overlay state:    %s\n' "${NEAT_APPS_TEST_SYSROOT_OVERLAY_STATE:-inactive}"
-                printf 'Sysroot overlay revision: %s\n' "${NEAT_APPS_TEST_SYSROOT_OVERLAY_REVISION:-none}"
-                exit "${NEAT_APPS_TEST_SYSROOT_STATUS_STATUS:-0}"
-                ;;
+              status) exit "${NEAT_APPS_TEST_SYSROOT_STATUS_STATUS:-0}" ;;
             esac
             """
         ),
@@ -672,17 +694,25 @@ def _sysroot_sync_env(
 ) -> dict[str, str]:
     branch = "scratch-core-for-test"
     version = "scratchsha1"
+    try:
+        policy = json.loads(manifest_text)
+        if isinstance(policy, dict) and isinstance(policy.get("sysroot-version"), str):
+            base = policy["sysroot-version"].split("~", 1)[0]
+            policy.setdefault("platform-version", base)
+            policy.setdefault("elxr_version", f"{base}_master_B9999")
+            manifest_text = json.dumps(policy)
+    except json.JSONDecodeError:
+        pass
     metadata_url = (
         f"https://vulcan.test/core/{branch}/{version}/metadata-minimal.json"
     )
-    manifest_url = (
-        f"https://vulcan.test/core/{branch}/{version}/internals-manifest.json"
-    )
-    checksum = hashlib.sha256(manifest_text.encode()).hexdigest()
+    package_url = f"https://vulcan.test/core/{branch}/{version}/simaai-scheduler.deb"
+    package_body = "scheduler package for test\n"
+    checksum = hashlib.sha256(package_body.encode()).hexdigest()
     if metadata is None:
         metadata = {
-            "resources": ["internals-manifest.json"],
-            "resources-checksum": {"internals-manifest.json": checksum},
+            "resources": ["simaai-scheduler.deb"],
+            "resources-checksum": {"simaai-scheduler.deb": checksum},
         }
     if resolve is None:
         resolve = {
@@ -692,8 +722,26 @@ def _sysroot_sync_env(
             "metadata_url": metadata_url,
         }
     bin_dir = _write_fake_sima_cli(tmp_path)
+    dpkg_deb_path = bin_dir / "dpkg-deb"
+    dpkg_deb_path.write_text(
+        textwrap.dedent(
+            """\
+            #!/usr/bin/env bash
+            set -euo pipefail
+            [[ "$1" == "-x" ]]
+            exit_status="${NEAT_APPS_TEST_DPKG_DEB_STATUS:-0}"
+            [[ "${exit_status}" == "0" ]] || exit "${exit_status}"
+            mkdir -p "$3/usr/share/SimaScheduler"
+            printf '%s' "${NEAT_APPS_TEST_SCHEDULER_POLICY}" \\
+                > "$3/usr/share/SimaScheduler/dependency-policy.json"
+            """
+        ),
+        encoding="utf-8",
+    )
+    dpkg_deb_path.chmod(0o755)
     return {
         **_write_fake_sysroot(tmp_path),
+        "NEAT_APPS_TEST_SCHEDULER_POLICY": manifest_text,
         "NEAT_APPS_DEPENDENCY_BRANCH": branch,
         "NEAT_CORE_INSTALL_MODE": "vulcan",
         "NEAT_SYNC_SYSROOT": "ON",
@@ -703,8 +751,9 @@ def _sysroot_sync_env(
         "NEAT_APPS_TEST_SIMA_CLI_JSON": json.dumps(resolve),
         "NEAT_APPS_TEST_URL_BODIES": json.dumps(
             {
+                **json.loads(_core_metadata_env()["NEAT_APPS_TEST_URL_BODIES"]),
                 metadata_url: json.dumps(metadata),
-                manifest_url: manifest_text,
+                package_url: package_body,
             }
         ),
         "SIMA_CLI_BIN": str(bin_dir / "sima-cli"),
@@ -737,6 +786,77 @@ def test_snap_manifest_resolves_from_dependency_branch(tmp_path):
     assert json.loads(
         (tmp_path / "deps" / "neat-core.json").read_text(encoding="utf-8")
     ) == {"neat-core": {"ref": "develop", "spec": "devsha1"}}
+
+
+
+@pytest.mark.parametrize("policy", [{"policy": "snap"}, ""])
+def test_snap_tag_selects_matching_core_release_and_records_revision(tmp_path, policy):
+    proc = _run_build(
+        tmp_path,
+        neat_core=policy,
+        args=["--only-install-neat-core"],
+        env={
+            **_installer_env(tmp_path),
+            "GITHUB_REF_TYPE": "tag",
+            "GITHUB_REF_NAME": "v0.6.0",
+            "NEAT_APPS_DEPENDENCY_BRANCH": "develop",
+            "NEAT_APPS_TEST_LATEST_TAGS": "v0.6.0=release-sha\ndevelop=devsha1",
+        },
+    )
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert _installer_args(tmp_path) == "--minimum v0.6.0 release-sha"
+    assert "https://core.test/develop/latest.tag" not in _curl_log(tmp_path)
+    assert json.loads((tmp_path / "deps/neat-core.json").read_text()) == {
+        "neat-core": {"ref": "v0.6.0", "spec": "release-sha"}}
+
+
+def test_snap_tag_missing_core_release_fails_without_develop_fallback(tmp_path):
+    proc = _run_build(
+        tmp_path,
+        neat_core={"policy": "snap"},
+        args=["--only-install-neat-core"],
+        env={**_installer_env(tmp_path), "GITHUB_REF_TYPE": "tag", "GITHUB_REF_NAME": "v0.6.0"},
+    )
+    assert proc.returncode != 0
+    assert "v0.6.0/latest.tag" in proc.stderr
+    assert "https://core.test/develop/latest.tag" not in _curl_log(tmp_path)
+    assert not (tmp_path / "installer-args.txt").exists()
+
+
+@pytest.mark.parametrize("selection", ["manifest", "override"])
+def test_explicit_core_selection_stays_authoritative_on_apps_tag(tmp_path, selection):
+    proc = _run_build(
+        tmp_path,
+        neat_core={"ref": "main", "spec": "mainsha1"} if selection == "manifest" else {"policy": "snap"},
+        args=["--only-install-neat-core"] + (
+            ["--neat-core-version", "main-mainsha1"] if selection == "override" else []),
+        env={**_installer_env(tmp_path), "GITHUB_REF_TYPE": "tag", "GITHUB_REF_NAME": "v0.6.0"},
+    )
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert _installer_args(tmp_path) == "--minimum main mainsha1"
+    assert not any("/v0.6.0/" in url for url in _curl_log(tmp_path))
+
+
+def test_snap_local_exact_tag_selects_matching_core_release(tmp_path):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    git = bin_dir / "git"
+    git.write_text("""#!/usr/bin/env bash
+case " $* " in
+  *" rev-parse --is-inside-work-tree "*) echo true ;;
+  *" describe --tags --exact-match HEAD "*) echo v0.6.0 ;;
+  *) exec /usr/bin/git "$@" ;;
+esac
+""")
+    git.chmod(0o755)
+    proc = _run_build(
+        tmp_path,
+        neat_core={"policy": "snap"},
+        args=["--only-install-neat-core"],
+        env={**_installer_env(tmp_path), "NEAT_APPS_TEST_LATEST_TAGS": "v0.6.0=release-sha"},
+    )
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert _installer_args(tmp_path) == "--minimum v0.6.0 release-sha"
 
 
 def test_empty_manifest_custom_branch_uses_matching_core_artifact_once(tmp_path):
@@ -961,149 +1081,232 @@ def test_vulcan_core_install_uses_minimal_temp_dir(tmp_path):
     assert not install_dir.exists()
 
 
-def test_vulcan_core_install_skips_when_neat_json_matches(tmp_path):
+@pytest.mark.parametrize(
+    ("branch", "tag", "runtime_version"),
+    [
+        (
+            "scratch-core-for-test",
+            "scratchsha1",
+            "0.4.0+scratch-core-for-test.123456789abc",
+        ),
+        ("v0.5.0", "release-sha", "0.5.0"),
+        ("feature/core-artifact", "pinnedsha2", "0.5.0+internals-branch.abc123"),
+    ],
+)
+@pytest.mark.parametrize("artifact_env", ["production", "staging"])
+def test_vulcan_core_install_skips_when_neat_json_matches(
+    tmp_path, branch, tag, runtime_version, artifact_env
+):
     _write_fake_neat_json(
         tmp_path,
-        channel="scratch-core-for-test",
-        tag="scratchsha1",
-        env="prod",
+        channel=branch,
+        tag=tag,
+        env=artifact_env,
+        runtime_version=runtime_version,
     )
 
     proc = _run_build(
         tmp_path,
+        neat_core={"ref": branch, "spec": tag},
         args=["--only-install-neat-core"],
         env={
-            "NEAT_APPS_DEPENDENCY_BRANCH": "scratch-core-for-test",
+            **_core_metadata_env(runtime_version, branch=branch, tag=tag),
             "NEAT_CORE_INSTALL_MODE": "vulcan",
-            "NEAT_VULCAN_ENV": "production",
+            "NEAT_VULCAN_ENV": artifact_env,
         },
     )
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
-    assert (
-        "NEAT core already installed (scratch-core-for-test/scratchsha1)" in proc.stdout
+    assert f"NEAT core already installed ({branch}/{tag})" in proc.stdout
+
+
+@pytest.mark.parametrize("artifact_env", ["staging", "development"])
+def test_vulcan_core_install_does_not_check_production_metadata_for_other_envs(
+    tmp_path, artifact_env
+):
+    _write_fake_sima_cli(tmp_path)
+    _write_fake_neat_json(
+        tmp_path,
+        channel="scratch-core-for-test",
+        tag="scratchsha1",
+        env=artifact_env,
+    )
+    metadata = next(
+        iter(json.loads(_core_metadata_env()["NEAT_APPS_TEST_URL_BODIES"]).values())
+    )
+    metadata_url = (
+        "https://artifacts.neat.sima.ai/core/"
+        "scratch-core-for-test/scratchsha1/metadata.json"
+    )
+    proc = _run_build(
+        tmp_path,
+        args=["--only-install-neat-core"],
+        env={
+            "NEAT_ARTIFACTS_BASE_URL": "",
+            "NEAT_APPS_TEST_URL_BODIES": json.dumps({metadata_url: metadata}),
+            "NEAT_APPS_DEPENDENCY_BRANCH": "scratch-core-for-test",
+            "NEAT_CORE_INSTALL_MODE": "vulcan",
+            "NEAT_VULCAN_ENV": artifact_env,
+            "NEAT_APPS_TEST_SIMA_CLI_CWD": str(tmp_path / "sima-cli-cwd.txt"),
+            "NEAT_APPS_TEST_SIMA_CLI_ARGS": str(tmp_path / "sima-cli-args.txt"),
+        },
+    )
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert "NEAT core already installed" not in proc.stdout
+    assert metadata_url not in _curl_log(tmp_path)
+    assert (tmp_path / "sima-cli-args.txt").read_text().strip() == (
+        f"neat install --env {artifact_env} -d . -t minimal "
+        "core@scratch-core-for-test:scratchsha1"
     )
 
 
-def test_vulcan_core_install_repairs_mixed_runtime_branch(tmp_path):
-    sima_cli_cwd = tmp_path / "sima-cli-cwd.txt"
-    sima_cli_args = tmp_path / "sima-cli-args.txt"
+@pytest.mark.parametrize(
+    ("runtime_version", "gst_version"),
+    [
+        ("0.5.0+different-runtime-branch.new", "0.5.0+scratch-core-for-test.new"),
+        ("0.5.0+scratch-core-for-test.old", "0.5.0+scratch-core-for-test.new"),
+        ("0.5.0+scratch-core-for-test.new", "0.5.0+scratch-core-for-test.old"),
+    ],
+)
+def test_vulcan_core_install_refreshes_republished_dependencies(
+    tmp_path, runtime_version, gst_version
+):
     _write_fake_sima_cli(tmp_path)
     _write_fake_neat_json(
         tmp_path,
         channel="scratch-core-for-test",
         tag="scratchsha1",
         env="prod",
-        runtime_channel="different-runtime-branch",
+        runtime_version=runtime_version,
+        gst_plugins_version=gst_version,
     )
-
     proc = _run_build(
         tmp_path,
         args=["--only-install-neat-core"],
         env={
+            **_core_metadata_env("0.5.0+scratch-core-for-test.new"),
             "NEAT_APPS_DEPENDENCY_BRANCH": "scratch-core-for-test",
             "NEAT_CORE_INSTALL_MODE": "vulcan",
             "NEAT_VULCAN_ENV": "production",
-            "NEAT_APPS_TEST_SIMA_CLI_CWD": str(sima_cli_cwd),
-            "NEAT_APPS_TEST_SIMA_CLI_ARGS": str(sima_cli_args),
+            "NEAT_APPS_TEST_SIMA_CLI_CWD": str(tmp_path / "sima-cli-cwd.txt"),
+            "NEAT_APPS_TEST_SIMA_CLI_ARGS": str(tmp_path / "sima-cli-args.txt"),
         },
     )
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
     assert "NEAT core already installed" not in proc.stdout
-    assert (
-        sima_cli_args.read_text(encoding="utf-8")
-        .strip()
-        .endswith("core@scratch-core-for-test:scratchsha1")
+    assert (tmp_path / "sima-cli-args.txt").read_text().strip().endswith(
+        "core@scratch-core-for-test:scratchsha1"
     )
 
 
-def test_vulcan_sysroot_sync_precedes_core_install(tmp_path):
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        None,
+        "{",
+        "[]",
+        "{}",
+        '{"resources":null}',
+        '{"resources":[null]}',
+        '{"resources":["neat-runtime_0.5.0_arm64.deb"]}',
+        json.dumps(
+            {
+                "resources": [
+                    "neat-runtime__arm64.deb",
+                    "neat-gst-plugins_0.5.0_arm64.deb",
+                ]
+            }
+        ),
+        json.dumps(
+            {
+                "resources": [
+                    "neat-runtime_0.5.0_arm64.deb",
+                    "neat-runtime_0.5.0_arm64.deb",
+                    "neat-gst-plugins_0.5.0_arm64.deb",
+                ]
+            }
+        ),
+        json.dumps(
+            {
+                "resources": [
+                    "neat-runtime_0.5.0_arm64.deb",
+                    "neat-runtime_0.5.1_arm64.deb",
+                    "neat-gst-plugins_0.5.0_arm64.deb",
+                ]
+            }
+        ),
+    ],
+)
+def test_vulcan_core_install_refreshes_when_metadata_is_unverifiable(
+    tmp_path, metadata
+):
+    _write_fake_sima_cli(tmp_path)
+    _write_fake_neat_json(
+        tmp_path,
+        channel="scratch-core-for-test",
+        tag="scratchsha1",
+        env="prod",
+        runtime_version="0.5.0",
+    )
+    bodies = {}
+    if metadata is not None:
+        bodies["https://core.test/scratch-core-for-test/scratchsha1/metadata.json"] = (
+            metadata
+        )
     proc = _run_build(
         tmp_path,
         args=["--only-install-neat-core"],
-        env=_sysroot_sync_env(tmp_path),
+        env={
+            "NEAT_APPS_TEST_URL_BODIES": json.dumps(bodies),
+            "NEAT_APPS_DEPENDENCY_BRANCH": "scratch-core-for-test",
+            "NEAT_CORE_INSTALL_MODE": "vulcan",
+            "NEAT_VULCAN_ENV": "production",
+            "NEAT_APPS_TEST_SIMA_CLI_CWD": str(tmp_path / "sima-cli-cwd.txt"),
+            "NEAT_APPS_TEST_SIMA_CLI_ARGS": str(tmp_path / "sima-cli-args.txt"),
+        },
+    )
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert "NEAT core already installed" not in proc.stdout
+    assert "Traceback" not in proc.stderr
+    assert (tmp_path / "sima-cli-args.txt").read_text().strip().endswith(
+        "core@scratch-core-for-test:scratchsha1"
+    )
+
+
+@pytest.mark.parametrize(
+    "receipt", ["2.0.0~pre9999", "3.0.0~git202609150138.174a5ae-1416"]
+)
+def test_vulcan_sysroot_sync_precedes_core_install(tmp_path, receipt):
+    proc = _run_build(
+        tmp_path,
+        platform_version=receipt.split("~", 1)[0],
+        args=["--only-install-neat-core"],
+        env=_sysroot_sync_env(
+            tmp_path, manifest_text=json.dumps({"sysroot-version": receipt})
+        ),
     )
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
     assert (tmp_path / "events.log").read_text(encoding="utf-8").splitlines() == [
         "sima-cli:neat install --env production -t minimal --json "
         "core@scratch-core-for-test:scratchsha1",
-        "sysroot:update 2.0.0~pre9999",
+        f"sysroot:update {receipt}",
         "sysroot:status",
         "sima-cli:neat install --env production -d . -t minimal "
         "core@scratch-core-for-test:scratchsha1",
     ]
 
 
-def test_vulcan_sysroot_sync_accepts_empty_receipt(tmp_path):
-    proc = _run_build(
-        tmp_path,
-        args=["--only-install-neat-core"],
-        env=_sysroot_sync_env(
-            tmp_path, manifest_text='{"sysroot-version":""}\n'
-        ),
-    )
-
-    assert proc.returncode == 0, proc.stderr + proc.stdout
-    assert not (tmp_path / "sysroot.log").exists()
-    assert "Apps is using the existing SDK sysroot." in proc.stdout
-
-
-def test_vulcan_sysroot_sync_accepts_stable_receipt_without_overlay(tmp_path):
-    proc = _run_build(
-        tmp_path,
-        args=["--only-install-neat-core"],
-        env=_sysroot_sync_env(
-            tmp_path, manifest_text='{"sysroot-version":"2.0.0"}\n'
-        ),
-    )
-
-    assert proc.returncode == 0, proc.stderr + proc.stdout
-    assert (tmp_path / "events.log").read_text(encoding="utf-8").splitlines() == [
-        "sima-cli:neat install --env production -t minimal --json "
-        "core@scratch-core-for-test:scratchsha1",
-        "sysroot:status",
-        "sima-cli:neat install --env production -d . -t minimal "
-        "core@scratch-core-for-test:scratchsha1",
-    ]
-    assert "Using stable SDK sysroot 2.0.0 with no active overlay." in proc.stdout
-
-
-def test_vulcan_sysroot_sync_rejects_stable_receipt_on_wrong_image(tmp_path):
+@pytest.mark.parametrize(
+    "receipt", ["2.0.0~pre9999", "3.0.0~git202609150138.174a5ae-1416"]
+)
+def test_vulcan_sysroot_sync_runs_before_installed_core_shortcut(tmp_path, receipt):
     env = _sysroot_sync_env(
-        tmp_path, manifest_text='{"sysroot-version":"2.0.0"}\n'
+        tmp_path, manifest_text=json.dumps({"sysroot-version": receipt})
     )
-    env["NEAT_APPS_TEST_SYSROOT_IMAGE_PLATFORM"] = "2.0.0~pre9999"
-
-    proc = _run_build(tmp_path, args=["--only-install-neat-core"], env=env)
-
-    assert proc.returncode != 0
-    assert "does not match required stable platform 2.0.0" in proc.stderr
-    assert (tmp_path / "sysroot.log").read_text(encoding="utf-8").splitlines() == [
-        "status"
-    ]
-
-
-def test_vulcan_sysroot_sync_rejects_active_overlay_for_stable_receipt(tmp_path):
-    env = _sysroot_sync_env(
-        tmp_path, manifest_text='{"sysroot-version":"2.0.0"}\n'
-    )
-    env["NEAT_APPS_TEST_SYSROOT_OVERLAY_STATE"] = "active"
-    env["NEAT_APPS_TEST_SYSROOT_OVERLAY_REVISION"] = "2.0.0~pre9999"
-
-    proc = _run_build(tmp_path, args=["--only-install-neat-core"], env=env)
-
-    assert proc.returncode != 0
-    assert "overlay 2.0.0~pre9999 is active" in proc.stderr
-    assert "Recreate the SDK container" in proc.stderr
-    assert (tmp_path / "sysroot.log").read_text(encoding="utf-8").splitlines() == [
-        "status"
-    ]
-
-
-def test_vulcan_sysroot_sync_runs_before_installed_core_shortcut(tmp_path):
-    env = _sysroot_sync_env(tmp_path)
     _write_fake_neat_json(
         tmp_path,
         channel="scratch-core-for-test",
@@ -1111,16 +1314,24 @@ def test_vulcan_sysroot_sync_runs_before_installed_core_shortcut(tmp_path):
         env="prod",
     )
 
-    proc = _run_build(tmp_path, args=["--only-install-neat-core"], env=env)
+    proc = _run_build(
+        tmp_path,
+        platform_version=receipt.split("~", 1)[0],
+        args=["--only-install-neat-core"],
+        env=env,
+    )
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
     assert (tmp_path / "events.log").read_text(encoding="utf-8").splitlines() == [
         "sima-cli:neat install --env production -t minimal --json "
         "core@scratch-core-for-test:scratchsha1",
-        "sysroot:update 2.0.0~pre9999",
+        f"sysroot:update {receipt}",
         "sysroot:status",
     ]
     assert "NEAT core already installed" in proc.stdout
+    policy = json.loads((tmp_path / "deps/scheduler-sdk-policy.json").read_text())
+    assert policy["sysroot-version"] == receipt
+    assert policy["elxr_version"] == f"{receipt.split('~', 1)[0]}_master_B9999"
 
 
 @pytest.mark.parametrize(
@@ -1128,11 +1339,17 @@ def test_vulcan_sysroot_sync_runs_before_installed_core_shortcut(tmp_path):
     [
         "{",
         "{}",
+        '{"sysroot-version":""}',
+        '{"sysroot-version":"2.0.0"}',
         '{"sysroot-version":"latest"}',
         '{"sysroot-version":"2.0.0~pre9999; touch /tmp/nope"}',
         '{"sysroot-version":"2.0.0~pre9999\\nstatus"}',
         '{"sysroot-version":"2.0.1"}',
         '{"sysroot-version":"2.0.1~pre9999"}',
+        '{"sysroot-version":"2.0.1~git202609150138.174a5ae-1416"}',
+        '{"sysroot-version":"2.0.0~git20260915.174a5ae-1416"}',
+        '{"sysroot-version":"2.0.0~git202609150138.bad-1416"}',
+        '{"sysroot-version":"2.0.0~git202609150138.174a5ae-1416; touch /tmp/nope"}',
     ],
 )
 def test_vulcan_sysroot_sync_rejects_invalid_receipts(tmp_path, manifest_text):
@@ -1143,8 +1360,78 @@ def test_vulcan_sysroot_sync_rejects_invalid_receipts(tmp_path, manifest_text):
     )
 
     assert proc.returncode != 0
-    assert "Cannot verify the Core Internals build receipt" in proc.stderr
+    assert "Cannot verify the Core Scheduler sysroot-version" in proc.stderr
     assert not (tmp_path / "sysroot.log").exists()
+
+
+@pytest.mark.parametrize("bad", [None, "receipt", "duplicate-receipt", "inventory",
+                                 "duplicate-inventory", "firmware", "overlay",
+                                 "inventory-symlink", "headers", "policy-pin",
+                                 "missing-firmware", "wrong-platform"])
+def test_vulcan_release_sysroot_requires_matching_cached_sdk(tmp_path, bad):
+    policy = {"sysroot-version": "3.0.0", "sdk": {"sysroot-version": "3.0.0"},
+              "elxr_version": "3.0.0_master_B2499"}
+    if bad == "policy-pin":
+        policy["sdk"]["sysroot-version"] = "3.0.1"
+    env = _sysroot_sync_env(tmp_path, manifest_text=json.dumps(policy))
+    if bad in ("missing-firmware", "wrong-platform"):
+        selected = json.loads(env["NEAT_APPS_TEST_SCHEDULER_POLICY"])
+        if bad == "missing-firmware":
+            selected.pop("elxr_version")
+        else:
+            selected["elxr_version"] = "2.0.0_master_B2499"
+        env["NEAT_APPS_TEST_SCHEDULER_POLICY"] = json.dumps(selected)
+    receipt = Path(env["ELXR_SDK_RELEASE_FILE"])
+    receipt.write_text("SDK Version = 3.0.0\neLXr Version = 3.0.0\n"
+                       "Platform Version = 3.0.0\nPlatform Base = 3.0.0\n"
+                       "Platform Channel = release\n")
+    sysroot = tmp_path / "sysroot"
+    env["SYSROOT"] = str(sysroot)
+    inventory = sysroot / "var/lib/sima-sdk/sysroot-packages.tsv"
+    inventory.parent.mkdir(parents=True)
+    inventory.write_text("simaai-palette-modalix\tarm64\t3.0.0\t/usr\n"
+                         "simaai-base-files-modalix\tall\t3.0.0\t/etc\n")
+    headers = sysroot / "usr/include"
+    headers.mkdir(parents=True)
+    firmware = sysroot / "etc/packageinfo"
+    firmware.parent.mkdir()
+    firmware.write_text("SIMA_PACKAGE_VERSION = 3.0.0_master_B2499\n")
+    (sysroot / "etc/buildinfo").write_text("SIMA_BUILD_VERSION = 3.0.0_master_B2501\n")
+    if bad == "receipt":
+        receipt.write_text(receipt.read_text().replace("release", "daily"))
+    if bad == "duplicate-receipt":
+        receipt.write_text(receipt.read_text() + "Platform Base = 3.0.0\n")
+    if bad == "inventory":
+        inventory.write_text(inventory.read_text().replace("3.0.0", "3.0.1"))
+    if bad == "duplicate-inventory":
+        inventory.write_text(inventory.read_text() * 2)
+    if bad == "firmware":
+        firmware.write_text("SIMA_PACKAGE_VERSION = 3.0.0_master_B2501\n")
+    if bad == "overlay":
+        (inventory.parent / "sysroot-overlay").symlink_to(tmp_path / "absent-overlay")
+    if bad == "inventory-symlink":
+        inventory.rename(tmp_path / "inventory.tsv")
+        inventory.symlink_to(tmp_path / "inventory.tsv")
+    if bad == "headers":
+        headers.rmdir()
+
+    proc = _run_build(tmp_path, platform_version="3.0.0",
+                      args=["--only-install-neat-core"], env=env)
+
+    if bad:
+        assert proc.returncode != 0
+        assert "Cannot verify the Core Scheduler sysroot-version" in proc.stderr
+        assert not (tmp_path / "sysroot.log").exists()
+        assert "SKIP sysroot installation" not in proc.stdout
+    else:
+        assert proc.returncode == 0, proc.stderr + proc.stdout
+        assert "SKIP sysroot installation" in proc.stdout
+        assert (tmp_path / "sysroot.log").read_text().splitlines() == ["status"]
+        assert json.loads((tmp_path / "deps/scheduler-sdk-policy.json").read_text()) == json.loads(
+            env["NEAT_APPS_TEST_SCHEDULER_POLICY"]
+        )
+    calls = (tmp_path / "sima-cli-args.txt").read_text().splitlines()
+    assert len(calls) == (1 if bad else 2)
 
 
 @pytest.mark.parametrize(
@@ -1152,16 +1439,16 @@ def test_vulcan_sysroot_sync_rejects_invalid_receipts(tmp_path, manifest_text):
     [
         {"resources": [], "resources-checksum": {}},
         {
-            "resources": ["internals-manifest.json", "internals-manifest.json"],
-            "resources-checksum": {"internals-manifest.json": "0" * 64},
+            "resources": ["simaai-scheduler.deb", "simaai-scheduler.deb"],
+            "resources-checksum": {"simaai-scheduler.deb": "0" * 64},
         },
         {
-            "resources": ["internals-manifest.json"],
+            "resources": ["simaai-scheduler.deb"],
             "resources-checksum": {},
         },
         {
-            "resources": ["internals-manifest.json"],
-            "resources-checksum": {"internals-manifest.json": "0" * 64},
+            "resources": ["simaai-scheduler.deb"],
+            "resources-checksum": {"simaai-scheduler.deb": "0" * 64},
         },
     ],
 )
@@ -1173,6 +1460,17 @@ def test_vulcan_sysroot_sync_rejects_untrusted_resource(tmp_path, metadata):
     )
 
     assert proc.returncode != 0
+    assert not (tmp_path / "sysroot.log").exists()
+
+
+def test_vulcan_sysroot_sync_propagates_package_extraction_failure(tmp_path):
+    env = _sysroot_sync_env(tmp_path)
+    env["NEAT_APPS_TEST_DPKG_DEB_STATUS"] = "2"
+
+    proc = _run_build(tmp_path, args=["--only-install-neat-core"], env=env)
+
+    assert proc.returncode != 0
+    assert "Failed to extract the Core Scheduler package" in proc.stderr
     assert not (tmp_path / "sysroot.log").exists()
 
 
@@ -1199,25 +1497,39 @@ def test_vulcan_sysroot_sync_rejects_wrong_core_identity(tmp_path):
 @pytest.mark.parametrize(
     ("status_env", "expected_calls"),
     [
-        ("NEAT_APPS_TEST_SYSROOT_UPDATE_STATUS", ["update 2.0.0~pre9999"]),
+        ("NEAT_APPS_TEST_SYSROOT_UPDATE_STATUS", ["update {receipt}"]),
         (
             "NEAT_APPS_TEST_SYSROOT_STATUS_STATUS",
-            ["update 2.0.0~pre9999", "status"],
+            ["update {receipt}", "status"],
         ),
     ],
 )
+@pytest.mark.parametrize(
+    "receipt", ["2.0.0~pre9999", "3.0.0~git202609150138.174a5ae-1416"]
+)
 def test_vulcan_sysroot_sync_propagates_command_failure(
-    tmp_path, status_env, expected_calls
+    tmp_path, status_env, expected_calls, receipt
 ):
-    env = _sysroot_sync_env(tmp_path)
+    env = _sysroot_sync_env(
+        tmp_path, manifest_text=json.dumps({"sysroot-version": receipt})
+    )
     env[status_env] = "23"
 
-    proc = _run_build(tmp_path, args=["--only-install-neat-core"], env=env)
+    proc = _run_build(
+        tmp_path,
+        platform_version=receipt.split("~", 1)[0],
+        args=["--only-install-neat-core"],
+        env=env,
+    )
 
     assert proc.returncode != 0
     assert (tmp_path / "sysroot.log").read_text(encoding="utf-8").splitlines() == (
-        expected_calls
+        [call.format(receipt=receipt) for call in expected_calls]
     )
+    assert (tmp_path / "sima-cli-args.txt").read_text().splitlines() == [
+        "neat install --env production -t minimal --json "
+        "core@scratch-core-for-test:scratchsha1"
+    ]
 
 
 def test_vulcan_sysroot_sync_requires_sysroot_tool(tmp_path):
@@ -1468,7 +1780,8 @@ def test_vulcan_installer_can_skip_dependency_installation(tmp_path):
 def test_vulcan_runtime_gate_uses_packaged_core_without_customer_dependencies():
     workflow = VULCAN_WORKFLOW.read_text(encoding="utf-8")
 
-    assert "artifact_path: neat-apps-*.tar.gz" in workflow
+    artifacts = yaml.safe_load(workflow)["jobs"]["build"]["with"]["artifact_path"]
+    assert artifacts == "_vulcan-build-artifacts"
     assert "tar -xOzf" in workflow
     assert "prebuilt-apps/deps/neat-core.json" in workflow
     assert "--neat-core-version" in workflow

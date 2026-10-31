@@ -32,14 +32,18 @@ CONFIG_ENV_VARS=(
   SIMANEAT_TEST_RTSP_MJPEG_URLS
   SIMANEAT_TEST_HTTP_MJPEG_URL
   SIMANEAT_TEST_HTTP_MJPEG_URLS
+  SIMANEAT_TEST_USB_CAMERA
   SIMANEAT_APPS_TEST_TIMEOUT_MS
   SIMANEAT_APPS_TEST_REQUIRE_E2E
   SIMANEAT_APPS_TEST_LABELS_FILE
   SIMANEAT_APPS_TEST_INSIGHT_HOST
   SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT
   SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT
+  SIMANEAT_APPS_HIGH_DENSITY_INITIAL_PROGRESS_TIMEOUT_MS
+  SIMANEAT_APPS_HIGH_DENSITY_STREAM_PROGRESS_TIMEOUT_MS
   NEAT_APPS_SKIP_MODEL_DOWNLOAD
   SIMANEAT_APPS_TEST_MODEL_VARIANTS
+  SIMANEAT_APPS_TEST_RUN_HARNESS
 )
 
 PROCESS_ENV_WAS_SET=()
@@ -112,7 +116,10 @@ Environment:
   SIMANEAT_TEST_RTSP_MJPEG_URLS     Comma-separated RTSP MJPEG URLs
   SIMANEAT_TEST_HTTP_MJPEG_URL      Single HTTP MJPEG stream URL
   SIMANEAT_TEST_HTTP_MJPEG_URLS     Comma-separated HTTP MJPEG URLs
+  SIMANEAT_TEST_USB_CAMERA          USB camera ID for the single-stream usb_camera e2e (DevKit only)
   SIMANEAT_APPS_TEST_TIMEOUT_MS     Timeout in ms (default: 180000)
+  SIMANEAT_APPS_HIGH_DENSITY_INITIAL_PROGRESS_TIMEOUT_MS  Receiver warmup progress timeout (default: 90000)
+  SIMANEAT_APPS_HIGH_DENSITY_STREAM_PROGRESS_TIMEOUT_MS   Receiver measurement progress timeout (default: 30000)
   SIMANEAT_APPS_TEST_REQUIRE_E2E    Backward-compatible strict e2e env flag
   SIMANEAT_APPS_TEST_SCOPE_FILE     Test scope source (default: examples)
   NEAT_APPS_SKIP_MODEL_DOWNLOAD     Skip e2e model download (1=yes, default: 0)
@@ -218,6 +225,8 @@ resolve_test_runtime_env() {
   export SIMANEAT_APPS_TEST_WRITE_SUMMARY_LOGS="${SIMANEAT_APPS_TEST_WRITE_SUMMARY_LOGS:-1}"
   export SIMANEAT_APPS_TEST_WRITE_PROCESS_LOGS="${SIMANEAT_APPS_TEST_WRITE_PROCESS_LOGS:-1}"
   export SIMANEAT_APPS_TEST_TIMEOUT_MS="${SIMANEAT_APPS_TEST_TIMEOUT_MS:-180000}"
+  export SIMANEAT_APPS_HIGH_DENSITY_INITIAL_PROGRESS_TIMEOUT_MS="${SIMANEAT_APPS_HIGH_DENSITY_INITIAL_PROGRESS_TIMEOUT_MS:-90000}"
+  export SIMANEAT_APPS_HIGH_DENSITY_STREAM_PROGRESS_TIMEOUT_MS="${SIMANEAT_APPS_HIGH_DENSITY_STREAM_PROGRESS_TIMEOUT_MS:-30000}"
   export SIMANEAT_TEST_RTSP_H264_URL="${SIMANEAT_TEST_RTSP_H264_URL:-}"
   export SIMANEAT_TEST_RTSP_H264_URLS="${SIMANEAT_TEST_RTSP_H264_URLS:-}"
   export SIMANEAT_TEST_RTSP_H265_URL="${SIMANEAT_TEST_RTSP_H265_URL:-}"
@@ -399,6 +408,11 @@ preflight_e2e_env() {
   local scope_file="${scope_file_raw:-${ROOT_DIR}/examples}"
   local output_dir="${output_dir_raw:-/tmp}"
   local class_image="${class_image_raw:-${ROOT_DIR}/assets/datasets-test/imagenet/goldfish.jpeg}"
+  local stream_languages=()
+  [[ "${RUN_CPP}" -eq 0 ]] || stream_languages+=(--language cpp)
+  [[ "${RUN_PYTHON}" -eq 0 ]] || stream_languages+=(--language python)
+  local requires_streams
+  requires_streams="$(scope_tool requires-rtsp "${stream_languages[@]}")" || return 1
 
   local model_count=0
   if [[ -d "${models_dir}" ]]; then
@@ -504,12 +518,14 @@ preflight_e2e_env() {
       preflight_fail=1
     fi
   fi
-  if [[ -z "${rtsp_h264_url}" && -z "${rtsp_h264_urls}" && -z "${rtsp_h265_url}" && \
+  if [[ "${requires_streams}" == "false" ]]; then
+    echo "  Selected e2e suites do not require live streams."
+  elif [[ -z "${rtsp_h264_url}" && -z "${rtsp_h264_urls}" && -z "${rtsp_h265_url}" && \
         -z "${rtsp_h265_urls}" && -z "${rtsp_mjpeg_url}" && \
         -z "${rtsp_mjpeg_urls}" && -z "${http_mjpeg_url}" && -z "${http_mjpeg_urls}" ]]; then
     echo "  [WARN] no codec stream env configured; stream e2e tests will skip."
     echo "  [WARN] stream e2e tests: single-stream-object-detector, single-stream-instance-segmenter,"
-    echo "         multi-stream-object-detector, multi-stream-people-tracker."
+    echo "         multi-stream-object-detector, multi-stream-tracker."
     echo "  [WARN] start the required streams in Insight before e2e:"
     echo "         https://developer.sima.ai/software/tools/insight/"
     echo "         export SIMANEAT_TEST_RTSP_H264_URL=<rtsp-h264-url>"
@@ -956,7 +972,9 @@ if [[ "${RUN_PYTHON}" -eq 1 && "${PYTHON_READY}" -eq 1 ]]; then
   echo ""
   echo "  Python test interpreter: ${PYTHON_TEST_BIN}"
   if [[ "${RUN_UNIT}" -eq 1 ]]; then
-    run_harness_pytest
+    if [[ "${SIMANEAT_APPS_TEST_RUN_HARNESS:-1}" == "1" ]]; then
+      run_harness_pytest
+    fi
     run_pytest "unit"
   fi
   if [[ "${RUN_E2E}" -eq 1 ]]; then

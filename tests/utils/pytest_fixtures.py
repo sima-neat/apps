@@ -6,6 +6,7 @@ import signal
 import shlex
 import subprocess
 import time
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,7 @@ __all__ = [
     "rtsp_mjpeg_urls",
     "http_mjpeg_url",
     "http_mjpeg_urls",
+    "usb_camera_id",
     "tmp_output_dir",
     "e2e_config_writer",
     "e2e_subprocess_artifacts",
@@ -145,6 +147,30 @@ def rtsp_mjpeg_urls() -> list[str]:
     return _csv_env(
         "SIMANEAT_TEST_RTSP_MJPEG_URLS", "comma-separated RTSP MJPEG URLs"
     )
+
+
+def usb_camera_cases(source: dict[str, Any]) -> list[Any]:
+    """The USB camera e2e case, collected only when SIMANEAT_TEST_USB_CAMERA names a camera.
+
+    CI runners have no USB camera, and strict e2e fails on any skip, so without the variable
+    the case is not collected and a warning names the variable instead.
+    """
+    if os.environ.get("SIMANEAT_TEST_USB_CAMERA", "").strip():
+        return [pytest.param(source, id="usb-camera")]
+    warnings.warn(
+        "usb-camera e2e not collected: set SIMANEAT_TEST_USB_CAMERA to a USB camera ID",
+        stacklevel=2,
+    )
+    return []
+
+
+@pytest.fixture
+def usb_camera_id() -> str:
+    """Resolve SIMANEAT_TEST_USB_CAMERA; usb_camera_cases() collects USB cases only when set."""
+    value = os.environ.get("SIMANEAT_TEST_USB_CAMERA", "").strip()
+    if not value:
+        pytest.skip("set SIMANEAT_TEST_USB_CAMERA to a USB camera ID to run this test")
+    return value
 
 
 @pytest.fixture

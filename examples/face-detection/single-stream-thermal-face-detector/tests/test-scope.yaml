@@ -9,9 +9,11 @@ unit:
 e2e:
   python:
     enabled: true
+    requires_rtsp: true
     models:
     - yolov5s_face_raw_split
   cpp:
     enabled: true
+    requires_rtsp: true
     models:
     - yolov5s_face_raw_split

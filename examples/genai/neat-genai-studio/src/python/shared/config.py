@@ -8,8 +8,6 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-import yaml
-
 
 EXAMPLE_ROOT = Path(__file__).resolve().parents[3]
 COMMON_DIR = Path(__file__).resolve().parents[2] / "common"
@@ -51,7 +49,6 @@ class OpenAIConfig:
 @dataclass(frozen=True)
 class RequestConfig:
     max_tokens: int
-    system_prompt: str
 
 
 @dataclass(frozen=True)
@@ -59,8 +56,7 @@ class WebConfig:
     host: str
     port: int
     https: bool
-    headless: bool = False   # backend-only: serve the API endpoints, not the web UI
-    cors_origins: str = ""   # backend-only CORS allowlist (comma list or *); env BACKEND_CORS_ORIGINS overrides
+    cors_origins: str = ""   # CORS allowlist (comma list or *); env BACKEND_CORS_ORIGINS overrides
 
 
 @dataclass(frozen=True)
@@ -102,12 +98,6 @@ class HubConfig:
 
 
 @dataclass(frozen=True)
-class UIConfig:
-    font_family: str
-    font_size: int
-
-
-@dataclass(frozen=True)
 class AppConfig:
     openai: OpenAIConfig
     # chat/VLM and ASR models are optional: the server can start with none resident
@@ -121,10 +111,22 @@ class AppConfig:
     control: ControlConfig = ControlConfig(host="127.0.0.1", client_host="127.0.0.1", port=9997)
     catalog_dir: Path | None = None
     max_resident_chat_models: int = 1
+    accelerator_memory_gib: float = 16.0
     hub: HubConfig = HubConfig(allow_download=True,
                               orgs=("simaai", "TDoSiMa", "florianvoss"))
-    ui: UIConfig = UIConfig(font_family="Inter", font_size=15)
     supertonic: SupertonicConfig = SupertonicConfig()
+
+
+def read_config_file(path: Path) -> dict:
+    """The parsed configuration. The model server runs in the Neat environment,
+    which may not carry PyYAML (Platform 3.0's ~/pyneat does not), so run.sh
+    hands it a JSON copy and PyYAML is imported only for a YAML file."""
+    text = path.read_text(encoding="utf-8")
+    if path.suffix == ".json":
+        return json.loads(text) or {}
+    import yaml
+
+    return yaml.safe_load(text) or {}
 
 
 def load_config(path: Path = DEFAULT_CONFIG, apps_root: Path = PATH_ROOT) -> AppConfig:
@@ -132,7 +134,7 @@ def load_config(path: Path = DEFAULT_CONFIG, apps_root: Path = PATH_ROOT) -> App
 
 
 def load_server_config(path: Path = DEFAULT_SERVER_CONFIG, apps_root: Path = PATH_ROOT) -> AppConfig:
-    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    raw = read_config_file(path)
     raw = raw.get("server", raw)
 
     openai = raw.get("openai", {})
@@ -142,7 +144,6 @@ def load_server_config(path: Path = DEFAULT_SERVER_CONFIG, apps_root: Path = PAT
     rag = raw.get("rag", {})
     control = raw.get("control", {})
     hub = raw.get("hub", {})
-    ui = raw.get("ui", {})
     chat_models = _load_startup_chat_models(models, apps_root)
 
     return AppConfig(
@@ -156,21 +157,19 @@ def load_server_config(path: Path = DEFAULT_SERVER_CONFIG, apps_root: Path = PAT
         asr_model=_load_optional_model(models, "asr", apps_root),
         request=RequestConfig(
             max_tokens=int(request.get("max_tokens", 512)),
-            system_prompt=str(request.get("system_prompt", "") or ""),
         ),
         web=WebConfig(
             host=str(web.get("host", "0.0.0.0") or "0.0.0.0"),
             port=int(web.get("port", 5000)),
             https=_load_bool(web.get("https", True)),
-            headless=_load_bool(web.get("headless", False)),
             cors_origins=_load_cors_origins(web.get("cors_origins")),
         ),
         rag=_load_rag_config(rag, apps_root),
         control=_load_control_config(control),
         catalog_dir=_load_optional_dir(models.get("catalog_dir"), apps_root),
         max_resident_chat_models=max(1, int(models.get("max_resident_chat_models", 1) or 1)),
+        accelerator_memory_gib=_load_positive_number(models, "accelerator_memory_gib", 16.0),
         hub=_load_hub_config(hub),
-        ui=_load_ui_section(ui),
     )
 
 
@@ -200,7 +199,7 @@ def _load_supertonic_config(raw: dict) -> SupertonicConfig:
 
 
 def load_ui_config(path: Path = DEFAULT_UI_CONFIG, apps_root: Path = PATH_ROOT) -> AppConfig:
-    config = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    config = read_config_file(path)
     raw = config.get("app", config)
     server = config.get("server", {})
 
@@ -211,7 +210,6 @@ def load_ui_config(path: Path = DEFAULT_UI_CONFIG, apps_root: Path = PATH_ROOT) 
     rag = raw.get("rag", {})
     control = raw.get("control", {})
     hub = server.get("hub", {})
-    ui = raw.get("ui", {})
     supertonic = (raw.get("tts", {}) or {}).get("supertonic", {}) or {}
     chat_models = _load_chat_model_names(server_models, apps_root)
 
@@ -226,13 +224,11 @@ def load_ui_config(path: Path = DEFAULT_UI_CONFIG, apps_root: Path = PATH_ROOT) 
         asr_model=_load_optional_model_name(server_models, "asr"),
         request=RequestConfig(
             max_tokens=int(request.get("max_tokens", 512)),
-            system_prompt=str(request.get("system_prompt", "") or ""),
         ),
         web=WebConfig(
             host=str(web.get("host", "0.0.0.0") or "0.0.0.0"),
             port=int(web.get("port", 5000)),
             https=_load_bool(web.get("https", True)),
-            headless=_load_bool(web.get("headless", False)),
             cors_origins=_load_cors_origins(web.get("cors_origins")),
         ),
         rag=_load_rag_config(rag, apps_root),
@@ -240,7 +236,6 @@ def load_ui_config(path: Path = DEFAULT_UI_CONFIG, apps_root: Path = PATH_ROOT) 
         catalog_dir=_load_optional_dir(server_models.get("catalog_dir"), apps_root),
         max_resident_chat_models=max(1, int(server_models.get("max_resident_chat_models", 1) or 1)),
         hub=_load_hub_config(hub),
-        ui=_load_ui_section(ui),
         supertonic=_load_supertonic_config(supertonic),
     )
 
@@ -329,14 +324,30 @@ def _load_model_entry_name(entry: object) -> str:
     return str(entry).strip()
 
 
-def classify_model_dir(model_dir: Path) -> dict | None:
-    """Classify a directory as a servable model, or return None if incompatible.
+def model_runtime_dirs(model_dir: Path) -> list[Path]:
+    """Runtime components of a model package, with the target before its draft."""
+    if not model_dir.is_dir():
+        return []
+    for root in (model_dir, model_dir / "sima_files"):
+        if any((root / name).is_file() for name in
+               ("devkit/vlm_config.json", "devkit/whisper_config.json", "whisper_config.json")):
+            return [root]
+    components = []
+    for config in sorted(model_dir.glob("*/devkit/vlm_config.json")):
+        try:
+            cfg = json.loads(config.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        spec = cfg.get("lm_cfg", {}).get("speculative_decoding_cfg") or {}
+        components.append((bool(spec.get("is_draft")), config.parent.parent))
+    components.sort(key=lambda component: component[0])
+    return [root for _, root in components]
 
-    A compatible precompiled model directory contains a ``devkit/`` folder. Chat
-    and vision-language models expose ``devkit/vlm_config.json``; ASR (Whisper)
-    models expose a ``whisper_config.json``. The returned dict mirrors the fields
-    used by the UI catalog: ``name``, ``path``, ``type`` (``chat`` | ``vlm`` |
-    ``asr``), ``supports_vision``, and ``image_size``.
+
+def classify_model_dir(model_dir: Path) -> dict | None:
+    """Classify a flat or target/draft package, or return None if incompatible.
+
+    Metadata comes from the target; the load path stays at the package root.
     """
     try:
         if not model_dir.is_dir():
@@ -344,21 +355,25 @@ def classify_model_dir(model_dir: Path) -> dict | None:
     except OSError:
         return None
 
-    devkit = model_dir / "devkit"
+    components = model_runtime_dirs(model_dir)
+    if not components:
+        return None
+    target = components[0]
+    devkit = target / "devkit"
     vlm_cfg = devkit / "vlm_config.json"
     whisper_cfg_candidates = (
         devkit / "whisper_config.json",
-        model_dir / "whisper_config.json",
+        target / "whisper_config.json",
     )
 
     if vlm_cfg.is_file():
-        supports_vision = _load_supports_vision({}, model_dir)
+        supports_vision = _load_supports_vision({}, target)
         return {
             "name": model_dir.name,
             "path": model_dir,
             "type": "vlm" if supports_vision else "chat",
             "supports_vision": supports_vision,
-            "image_size": _load_vision_image_size({}, model_dir) if supports_vision else None,
+            "image_size": _load_vision_image_size({}, target) if supports_vision else None,
         }
 
     if any(candidate.is_file() for candidate in whisper_cfg_candidates):
@@ -371,29 +386,6 @@ def classify_model_dir(model_dir: Path) -> dict | None:
         }
 
     return None
-
-
-def layered_encoder_reason(elf_names) -> str:
-    """Deprecated: always "". Kept so older callers keep working.
-
-    This used to refuse Whisper builds whose encoder is split into per-layer ELF
-    files, because the runtime loaded the encoder as one combined stage. That
-    requirement then INVERTED inside a single version: 0.4.0 needs a combined
-    stage, 0.4.0+develop.7d003ef needs 12 layered files and calls the combined
-    one "Unsupported legacy Whisper model". Neither layout is right in general,
-    the model directory does not say which runtime compiled it, and guessing
-    wrong blocks the only models that work. The runtime now reports the mismatch
-    precisely — naming the layout it found, the one it needs and the remedy — so
-    let it decide and surface its message.
-    """
-    return ""
-
-
-def model_dir_supported(path) -> tuple[bool, str]:
-    """Always (True, ""). See layered_encoder_reason for why nothing is refused
-    here: encoder layout is a runtime-version question the files cannot answer.
-    Kept so the catalog's `supported` field stays populated for clients."""
-    return True, ""
 
 
 def model_dir_complete(path) -> tuple[bool, str]:
@@ -433,8 +425,10 @@ def model_dir_complete(path) -> tuple[bool, str]:
     except OSError:
         pass
     # A compiled model needs its ELF weight files, none of them zero-byte.
-    elf_dir = p / "elf_files"
-    if elf_dir.is_dir():
+    for root in model_runtime_dirs(p):
+        elf_dir = root / "elf_files"
+        if not elf_dir.is_dir():
+            continue
         elfs = list(elf_dir.glob("*.elf"))
         if not elfs:
             return False, "no weight (.elf) files were found"
@@ -454,7 +448,9 @@ def _load_supports_vision(raw: dict, model_path: Path | None) -> bool:
     if model_path is None:
         return True
 
-    config_path = model_path / "devkit" / "vlm_config.json"
+    components = model_runtime_dirs(model_path)
+    target = components[0] if components else model_path
+    config_path = target / "devkit" / "vlm_config.json"
     if not config_path.is_file():
         return True
 
@@ -470,7 +466,9 @@ def _load_vision_image_size(raw: dict, model_path: Path | None) -> dict[str, int
     raw_size = raw.get("vision_image_size") or raw.get("image_size")
 
     if raw_size is None and model_path is not None:
-        config_path = model_path / "devkit" / "vlm_config.json"
+        components = model_runtime_dirs(model_path)
+        target = components[0] if components else model_path
+        config_path = target / "devkit" / "vlm_config.json"
         if config_path.is_file():
             try:
                 cfg = json.loads(config_path.read_text(encoding="utf-8"))
@@ -560,13 +558,6 @@ def _load_hub_config(raw: object) -> HubConfig:
     )
 
 
-def _load_ui_section(raw: object) -> UIConfig:
-    ui = raw if isinstance(raw, dict) else {}
-    return UIConfig(
-        font_family=str(ui.get("font_family", "Inter") or "Inter").strip(),
-        font_size=int(ui.get("font_size", 15) or 15),
-    )
-
 
 def _load_optional_dir(value: object, apps_root: Path) -> Path | None:
     path_text = str(value or "").strip()
@@ -598,6 +589,19 @@ def _resolve_relative_path(path: Path, apps_root: Path) -> Path:
             return candidate
 
     return apps_root / path
+
+
+def _load_positive_number(section: dict, key: str, default: float) -> float:
+    value = section.get(key)
+    if value is None:
+        return default
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = 0.0
+    if not 0 < number < float("inf"):
+        raise ValueError(f"server.models.{key} must be a positive number, got {value!r}")
+    return number
 
 
 def _load_bool(value: object) -> bool:

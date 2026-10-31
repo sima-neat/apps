@@ -2,13 +2,19 @@ model:                          # Select one RF-DETR task and its model pair.
   task: detection               # detection or segmentation.
   labels: examples/object-detection/rfdetr-detection-segmentation/src/common/coco-labels.txt
   detection:
-    variant: small              # small or medium.
+    variant: small              # nano, small, medium, or large.
+    nano:
+      backbone: models/rf_detr_nano_w8a8_w16a16_backbone_mpk.tar.gz
+      transformer: models/rf_detr_nano_w8a8_w16a16_decoder_mpk.tar.gz
     small:
-      backbone: models/rfdetr-small-backbone.tar.gz
-      transformer: models/rfdetr-small-transformer.tar.gz
+      backbone: models/rf_detr_small_w8a8_w16a16_backbone_mpk.tar.gz
+      transformer: models/rf_detr_small_w8a8_w16a16_decoder_mpk.tar.gz
     medium:
-      backbone: models/rfdetr-medium-backbone.tar.gz
-      transformer: models/rfdetr-medium-transformer.tar.gz
+      backbone: models/rf_detr_medium_w8a8_w16a16_backbone_mpk.tar.gz
+      transformer: models/rf_detr_medium_w8a8_w16a16_decoder_mpk.tar.gz
+    large:
+      backbone: models/rf_detr_large_w8a8_w16a16_backbone_mpk.tar.gz
+      transformer: models/rf_detr_large_w8a8_w16a16_decoder_mpk.tar.gz
   segmentation:
     backbone: models/rfdetr-seg-medium-backbone.tar.gz
     transformer: models/rfdetr-seg-medium-transformer.tar.gz
@@ -17,7 +23,7 @@ source:                         # H.264, H.265, or MJPEG RTSP source properties.
   rtsp_url: rtsp://<rtsp-source-ip>:<port>/<stream-name>
   codec: h264                   # h264/avc, h265/hevc, or mjpeg/jpeg.
   tcp: true                     # Use RTSP over TCP.
-  latency_ms: 100               # RTSP receive latency.
+  latency_ms: 10                # RTSP receive latency.
   width: 0                      # Optional width fallback. 0 uses the probe.
   height: 0                     # Optional height fallback. 0 uses the probe.
   fps: 0                        # Optional FPS override. 0 uses the probe.

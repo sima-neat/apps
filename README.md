@@ -1,7 +1,7 @@
 # SiMa Neat Apps
 
 ![Vulcan CI](https://github.com/sima-neat/apps/actions/workflows/vulcan-ci.yml/badge.svg)
-![Neat Development Environment](https://img.shields.io/badge/Neat%20Development%20Environment-2.1.3-green)
+![Neat Development Environment](https://img.shields.io/badge/Neat%20Development%20Environment-3.0.0-green)
 ![Language](https://img.shields.io/badge/C%2B%2B-20-informational)
 
 SiMa Neat Apps provides runnable C++ and Python examples for detection,
@@ -11,14 +11,18 @@ only when modifying or building their source.
 
 ## Install Apps
 
-On a supported Modalix or DevKit target, install the latest Apps runtime from main and enter the installed bundle:
+Run the installation on the Modalix DevKit. If the DevKit has no internet access, run it under `/workspace` in a Neat SDK container paired with the DevKit. Pairing normally shares `/workspace` with the DevKit over NFS, so the bundle appears at the same path there. Run the examples on the DevKit.
+
+The Apps installer also installs the Core selected for the Apps package and the latest Insight through `sima-cli`. From a paired SDK container, Core is installed on the DevKit as well. After pairing, the DevKit already has the SDK's Core and Insight runs in the SDK container. If that Core matches the one selected for this Apps package, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps` to skip both. The installer does not check this, so a mismatch appears only when an example runs. See [Dependency Selection](#dependency-selection).
+
+Install the latest Apps runtime from main and enter the installed bundle:
 
 ```bash
 sima-cli neat install apps
 cd prebuilt-apps
 ```
 
-Use `-d <install-root>` to install `prebuilt-apps/` under another directory. The Apps installer installs the Core selected for the Apps package and installs Insight through `sima-cli`. Run the remaining commands from the installed `prebuilt-apps/` directory.
+Use `-d <install-root>` to install `prebuilt-apps/` under another directory. Run the remaining commands from the installed `prebuilt-apps/` directory.
 
 Run the same command with the same installation root to upgrade Apps. Before replacing an existing installation, the installer asks for confirmation, carries `models/` into the new bundle, and retains the remaining previous files under `.prebuilt-apps-backup/`. If that backup already exists, the installer warns before replacing it.
 
@@ -64,10 +68,11 @@ cat /etc/buildinfo
 
 Model packages are versioned separately from the platform. They come from the
 Model Zoo release, which can differ from the installed platform version.
+Model Zoo downloads need your SiMa Developer Portal login: run `sima-cli login` once, or follow the device-login prompt the first download prints.
 Before downloading a model, set the Model Zoo version:
 
 ```bash
-export MODELZOO_VERSION="2.1.3"
+export MODELZOO_VERSION="3.0.0"
 ```
 
 Runtime sample data is included under `assets/datasets/`.
@@ -133,6 +138,15 @@ curl -fsSL https://raw.githubusercontent.com/sima-neat/apps/main/scripts/get-exa
 ## Dependency Selection
 
 `deps/manifest.json` selects Core and records the SDK channel, the platform version, and the Model Zoo version used for model downloads. Development uses the `snap` policy, while a release-preparation branch can select an exact Core artifact. Vulcan records the resolved Core target under package metadata and the Apps installer uses that same target. Insight is not pinned in the Apps manifest.
+
+With `snap`, an Apps tag build selects the same Core tag: Apps `v0.6.0` uses
+Core `v0.6.0:latest`, resolved to its published revision and recorded in the
+package. Local checkouts exactly at a tag use the same rule. Missing tagged
+Core publications fail the build without falling back to `develop`. Untagged
+branch builds retain their existing branch selection and fallback behavior;
+explicit manifest pins and `--neat-core-version` overrides remain authoritative.
+
+Builds inherit the sysroot requirement from Core's bundled Scheduler. Official releases require a matching cached SDK receipt, package inventory and package identity, without overlays; they never run `sysroot update`. Development pins retain the update path. CI uses the same Scheduler policy with the shared compatibility resolver to select and verify DevKit firmware before installation, then shards tests using its resolved labels.
 
 ## Support
 

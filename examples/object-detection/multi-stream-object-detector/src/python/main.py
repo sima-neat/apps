@@ -52,7 +52,7 @@ class AppConfig:
 class StreamRuntime:
     index: int
     url: str
-    source_options: object
+    source_fps: int
     metadata_sender: object
     labels: list[str]
     profile: "ProfileWindow"
@@ -399,121 +399,29 @@ def probe_rtsp(url: str) -> tuple[int, int, int]:
     return width, height, fps
 
 
-def build_source_options(cfg: AppConfig, url: str, fps: int, width: int, height: int):
-    opt = pyneat.RtspDecodedInputOptions()
-    opt.url = url
+def source_options(cfg: AppConfig, stream: StreamRuntime):
+    opt = pyneat.RtspEncodedInputOptions()
+    opt.url = stream.url
+    opt.codec = rtsp_codec(cfg.codec)
     opt.latency_ms = cfg.latency_ms
     opt.tcp = cfg.tcp
-    opt.payload_type = 96
-    opt.insert_queue = True
-    opt.decoder_name = "decoder"
-    opt.decoder_raw_output = True
-    opt.auto_caps_from_stream = True
-    opt.codec = rtsp_codec(cfg.codec)
-    opt.dec_width = width
-    opt.dec_height = height
+    opt.source_fps = stream.source_fps
     if cfg.codec == "h264":
-        opt.fallback_h264_width = width
-        opt.fallback_h264_height = height
-    opt.source_fps = fps
-    opt.output_caps.enable = True
-    opt.output_caps.format = pyneat.Format.NV12
-    opt.output_caps.width = width
-    opt.output_caps.height = height
-    opt.output_caps.fps = fps
-    opt.output_caps.memory = pyneat.CapsMemory.Any
+        opt.fallback_h264_width = stream.frame_w
+        opt.fallback_h264_height = stream.frame_h
     return opt
 
 
-def output_caps_enabled(caps) -> bool:
-    return caps.enable or caps.width > 0 or caps.height > 0 or caps.fps > 0
-
-
-def build_encoded_source_graph(opt) -> pyneat.Graph:
-    source = pyneat.Graph("rtsp_encoded_source")
-
-    encoded_opt = pyneat.RtspEncodedInputOptions()
-    encoded_opt.url = opt.url
-    encoded_opt.codec = opt.codec
-    encoded_opt.latency_ms = opt.latency_ms
-    encoded_opt.tcp = opt.tcp
-    encoded_opt.source_fps = opt.source_fps
-    if opt.codec == pyneat.RtspCodec.H264:
-        encoded_opt.fallback_h264_width = opt.fallback_h264_width
-        encoded_opt.fallback_h264_height = opt.fallback_h264_height
-    source.add(pyneat.groups.rtsp_encoded_input(encoded_opt))
-    return source
-
-
-def encoded_format_tag(codec):
-    return pyneat.Format.H265 if codec == pyneat.RtspCodec.H265 else pyneat.Format.H264
-
-
-def encoded_decode_input_options(codec):
-    opt = pyneat.InputOptions()
-    opt.payload_type = pyneat.PayloadType.Encoded
-    opt.format = encoded_format_tag(codec)
-    if hasattr(pyneat, "InputMemoryPolicy") and hasattr(opt, "memory_policy"):
-        opt.memory_policy = pyneat.InputMemoryPolicy.Ev74
+def decoder_options(cfg: AppConfig, stream: StreamRuntime):
+    opt = pyneat.SimaDecodeOptions()
+    opt.type = pyneat.SimaDecodeType.H265 if cfg.codec == "h265" else pyneat.SimaDecodeType.H264
+    opt.out_format = pyneat.Format.NV12
+    opt.decoder_name = "decoder"
+    opt.raw_output = True
+    opt.dec_width = stream.frame_w
+    opt.dec_height = stream.frame_h
+    opt.dec_fps = stream.source_fps
     return opt
-
-
-def encoded_video_input_options(codec):
-    opt = pyneat.InputOptions()
-    opt.payload_type = pyneat.PayloadType.Encoded
-    opt.format = encoded_format_tag(codec)
-    if hasattr(pyneat, "InputMemoryPolicy") and hasattr(opt, "memory_policy"):
-        opt.memory_policy = pyneat.InputMemoryPolicy.SystemMemory
-    elif hasattr(opt, "use_simaai_pool"):
-        opt.use_simaai_pool = False
-    return opt
-
-
-def build_decode_graph(input_name: str, opt) -> pyneat.Graph:
-    decode = pyneat.Graph("decode")
-    use_h265 = opt.codec == pyneat.RtspCodec.H265
-
-    dec = pyneat.SimaDecodeOptions()
-    dec.type = pyneat.SimaDecodeType.H265 if use_h265 else pyneat.SimaDecodeType.H264
-    dec.sima_allocator_type = opt.sima_allocator_type
-    dec.out_format = pyneat.Format.NV12
-    dec.decoder_name = opt.decoder_name
-    dec.raw_output = opt.decoder_raw_output
-    dec.next_element = opt.decoder_next_element
-    dec.dec_width = opt.dec_width
-    dec.dec_height = opt.dec_height
-    dec.dec_fps = opt.source_fps
-    dec.num_buffers = opt.num_buffers
-    decode.connect(
-        pyneat.nodes.input(input_name, encoded_decode_input_options(opt.codec)),
-        pyneat.nodes.sima_decode(dec),
-    )
-    if opt.use_videoconvert:
-        decode.add(pyneat.nodes.video_convert())
-    if opt.use_videoscale:
-        decode.add(pyneat.nodes.video_scale())
-    if output_caps_enabled(opt.output_caps):
-        decode.add(
-            pyneat.nodes.caps_raw(
-                "NV12",
-                opt.output_caps.width,
-                opt.output_caps.height,
-                opt.output_caps.fps,
-                opt.output_caps.memory,
-            )
-        )
-    if opt.extra_fragment:
-        decode.add(pyneat.nodes.custom(opt.extra_fragment))
-    return decode
-
-
-def build_video_sender_graph(input_name: str, codec, video_options) -> pyneat.Graph:
-    video = pyneat.Graph("video_sender")
-    video.connect(
-        pyneat.nodes.input(input_name, encoded_video_input_options(codec)),
-        pyneat.groups.video_sender(video_options),
-    )
-    return video
 
 
 def build_model(cfg: AppConfig):
@@ -577,29 +485,11 @@ def realtime_link(
     return link
 
 
-def build_detector_graph(cfg: AppConfig):
-    model = build_model(cfg)
-    input_options = model.input_appsrc_options(False)
-    input_options.block = True
-
-    detector = pyneat.Graph("detector")
-    detector.connect(pyneat.nodes.input("detector_frame", input_options), model)
-    return model, detector
-
-
-def build_detections_graph() -> pyneat.Graph:
-    detections = pyneat.Graph("detections")
-    detections.add(pyneat.nodes.output("detections", pyneat.OutputOptions.every_frame(4)))
-    return detections
-
-
-def build_debug_frame_graph(stream_index: int) -> pyneat.Graph:
-    frames = pyneat.Graph("debug_frame")
-    frames.connect(
-        pyneat.nodes.input("debug_frame"),
-        pyneat.nodes.output(f"debug_frame_{stream_index}", pyneat.OutputOptions.every_frame(4)),
-    )
-    return frames
+def latest_link():
+    """Drops the oldest encoded frame instead of slowing the source when Insight lags."""
+    link = pyneat.GraphLinkOptions()
+    link.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
+    return link
 
 
 def make_video_options(cfg: AppConfig, stream_index: int):
@@ -607,7 +497,7 @@ def make_video_options(cfg: AppConfig, stream_index: int):
     video_options.host = cfg.insight_host
     video_options.channel = stream_index
     video_options.video_port_base = cfg.video_port_base
-    video_options.async_ = True
+    video_options.async_ = False
     return video_options
 
 
@@ -616,8 +506,6 @@ def build_stream_runtime(
 ) -> StreamRuntime:
     frame_w, frame_h, fps = probe_rtsp(url)
     output_fps = cfg.fps if cfg.fps > 0 else fps
-
-    source_options = build_source_options(cfg, url, fps, frame_w, frame_h)
 
     video_port = 0
     if cfg.video_enabled:
@@ -638,7 +526,7 @@ def build_stream_runtime(
     return StreamRuntime(
         index=stream_index,
         url=url,
-        source_options=source_options,
+        source_fps=fps,
         metadata_sender=metadata_sender,
         labels=labels,
         profile=ProfileWindow(cfg.profile, stream_index),
@@ -648,46 +536,6 @@ def build_stream_runtime(
         output_fps=output_fps,
         video_port=video_port,
     )
-
-
-def connect_stream_graph(
-    app: AppRuntime, cfg: AppConfig, stream: StreamRuntime, detector_graph
-) -> None:
-    source = build_encoded_source_graph(stream.source_options)
-    decoder = build_decode_graph("decode_h264", stream.source_options)
-
-    if cfg.video_enabled:
-        encoded_branch = pyneat.graphs.branch("encoded", ["decode_h264", "video_h264"])
-        app.graph.connect(source, encoded_branch)
-        app.graph.connect(encoded_branch, decoder, realtime_link(stream.index, 3))
-
-        video_options = make_video_options(cfg, stream.index)
-        app.graph.connect(
-            encoded_branch,
-            build_video_sender_graph("video_h264", rtsp_codec(cfg.codec), video_options),
-            realtime_link(stream.index, 3),
-        )
-    else:
-        app.graph.connect(source, decoder, realtime_link(stream.index, 3))
-
-    save_debug_frames = save_frames_enabled(cfg)
-    decoded_outputs = ["detector_frame", "debug_frame"] if save_debug_frames else ["detector_frame"]
-    decoded_branch = pyneat.graphs.branch("decoded", decoded_outputs)
-    app.graph.connect(decoder, decoded_branch)
-    app.graph.connect(
-        decoded_branch,
-        detector_graph,
-        realtime_link(
-            stream.index,
-            4,
-            cfg.max_inflight_per_stream,
-            cfg.max_inflight_total,
-        ),
-    )
-    if save_debug_frames:
-        app.graph.connect(
-            decoded_branch, build_debug_frame_graph(stream.index), realtime_link(stream.index, 4)
-        )
 
 
 def send_metadata(stream: StreamRuntime, sample, boxes: list[dict]) -> None:
@@ -853,6 +701,55 @@ def process_run_once(app: AppRuntime, cfg: AppConfig, output_name: str) -> bool:
     return True
 
 
+def build_graph(cfg: AppConfig, streams: list[StreamRuntime], model):
+    """Feed every stream into one shared detector; Core renders a single pipeline."""
+    detector_input = model.input_appsrc_options(False)
+    detector_input.block = True
+    detector = pyneat.Graph("detector")
+    detector.connect(pyneat.nodes.input("detector_frame", detector_input), model)
+
+    graph = pyneat.Graph()
+    for stream in streams:
+        source = pyneat.Graph("rtsp_encoded_source")
+        source.add(pyneat.groups.rtsp_encoded_input(source_options(cfg, stream)))
+
+        decoder = pyneat.Graph("decode")
+        decoder.add(pyneat.nodes.sima_decode(decoder_options(cfg, stream)))
+        decoder.add(
+            pyneat.nodes.caps_raw(
+                "NV12", stream.frame_w, stream.frame_h, stream.source_fps, pyneat.CapsMemory.Any
+            )
+        )
+        # Named so connect() can match the shared model's "detector_frame" input.
+        decoder.add(pyneat.nodes.output("detector_frame"))
+
+        # A plain source link lets Core tee the encoded stream to the decoder and the sender.
+        graph.connect(source, decoder)
+        graph.connect(
+            decoder,
+            detector,
+            realtime_link(stream.index, 4, cfg.max_inflight_per_stream, cfg.max_inflight_total),
+        )
+        if cfg.video_enabled:
+            video = pyneat.Graph("video_sender")
+            video.add(pyneat.groups.video_sender(make_video_options(cfg, stream.index)))
+            graph.connect(source, video, latest_link())
+        if save_frames_enabled(cfg):
+            frames = pyneat.Graph("debug_frame")
+            frames.connect(
+                pyneat.nodes.input("debug_frame"),
+                pyneat.nodes.output(
+                    debug_frame_output_name(stream.index), pyneat.OutputOptions.every_frame(4)
+                ),
+            )
+            graph.connect(decoder, frames, realtime_link(stream.index, 4))
+
+    detections = pyneat.Graph("detections")
+    detections.add(pyneat.nodes.output("detections", pyneat.OutputOptions.every_frame(4)))
+    graph.connect(detector, detections)
+    return graph
+
+
 def run_app(cfg: AppConfig) -> None:
     if cfg.profile:
         os.environ.setdefault("SIMA_GST_ELEMENT_TIMINGS", "1")
@@ -862,14 +759,9 @@ def run_app(cfg: AppConfig) -> None:
         Path(cfg.save_dir).mkdir(parents=True, exist_ok=True)
 
     labels = load_labels(cfg.labels_path)
-    model, detector_graph = build_detector_graph(cfg)
-    detections_graph = build_detections_graph()
-    app = AppRuntime(graph=pyneat.Graph(), run=None, model=model, streams=[])
-    for index, url in enumerate(cfg.rtsp_urls):
-        stream = build_stream_runtime(cfg, index, url, labels)
-        app.streams.append(stream)
-        connect_stream_graph(app, cfg, stream, detector_graph)
-    app.graph.connect(detector_graph, detections_graph)
+    model = build_model(cfg)
+    streams = [build_stream_runtime(cfg, i, url, labels) for i, url in enumerate(cfg.rtsp_urls)]
+    app = AppRuntime(graph=build_graph(cfg, streams, model), run=None, model=model, streams=streams)
 
     try:
         if cfg.profile:

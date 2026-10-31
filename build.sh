@@ -7,6 +7,7 @@ APPS_MANIFEST="${DEPS_DIR}/manifest.json"
 NEAT_CORE_METADATA="${DEPS_DIR}/neat-core.json"
 NEAT_DEBS_DIR="${DEPS_DIR}/debs"
 NEAT_INSTALLER_URL="${NEAT_INSTALLER_URL:-https://tools.sima-neat.com/install-neat.sh}"
+NEAT_ARTIFACTS_BASE_URL_EXPLICIT="${NEAT_ARTIFACTS_BASE_URL:+1}"
 NEAT_ARTIFACTS_BASE_URL="${NEAT_ARTIFACTS_BASE_URL:-https://artifacts.neat.sima.ai/core}"
 ELXR_SDK_RELEASE_FILE="${ELXR_SDK_RELEASE_FILE:-/etc/sdk-release}"
 NEAT_CORE_INSTALL_DIR=""
@@ -521,7 +522,7 @@ neat_core_installed_matches() {
   local expected_branch="$1"
   local expected_version="$2"
   local expected_env="${3:-}"
-  local expected_branch_key expected_env_key status_json
+  local expected_branch_key expected_env_key artifact_branch_key status_json metadata_json
 
   if ! command -v neat >/dev/null 2>&1; then
     return 1
@@ -532,11 +533,20 @@ neat_core_installed_matches() {
 
   expected_branch_key="$(sanitize_branch_key "${expected_branch}")"
   expected_env_key="$(normalize_vulcan_env "${expected_env}")"
+  # The default artifact index is production; other environments need their own
+  # explicit index before its metadata can justify skipping an installation.
+  if [[ -n "${expected_env_key}" && "${expected_env_key}" != "prod" &&
+        -z "${NEAT_ARTIFACTS_BASE_URL_EXPLICIT}" ]]; then
+    return 1
+  fi
   status_json="$(neat --json 2>/dev/null)" || return 1
+  artifact_branch_key="$(core_artifact_branch_key "${expected_branch}")"
+  metadata_json="$(download_text "${NEAT_ARTIFACTS_BASE_URL}/${artifact_branch_key}/${expected_version}/metadata.json" 2>/dev/null)" || return 1
 
-  if ! NEAT_STATUS_JSON="${status_json}" python3 - "${expected_branch}" "${expected_branch_key}" "${expected_version}" "${expected_env_key}" <<'PY'
+  if ! NEAT_STATUS_JSON="${status_json}" NEAT_CORE_METADATA_JSON="${metadata_json}" python3 - "${expected_branch}" "${expected_branch_key}" "${expected_version}" "${expected_env_key}" <<'PY'
 import json
 import os
+import re
 import sys
 
 expected_branch = sys.argv[1]
@@ -546,17 +556,22 @@ expected_env = sys.argv[4]
 
 try:
     data = json.loads(os.environ["NEAT_STATUS_JSON"])
-except json.JSONDecodeError:
+    metadata = json.loads(os.environ["NEAT_CORE_METADATA_JSON"])
+    resources = metadata["resources"]
+    core = data["components"]["core"]
+    runtime_version = data["components"]["runtime"]["version"]
+    gst_plugins_version = data["components"]["gstPlugins"]["version"]
+except (ValueError, KeyError, TypeError):
     raise SystemExit(1)
 
-core = data.get("components", {}).get("core", {})
+if not isinstance(core, dict) or not isinstance(resources, list) or not all(
+    isinstance(resource, str) for resource in resources
+):
+    raise SystemExit(1)
+
 channel = str(core.get("channel", "")).strip()
 tag = str(core.get("tag", "")).strip()
 actual_env = str(core.get("provenance", {}).get("vulcanEnvironment", "")).strip()
-runtime_version = str(data.get("components", {}).get("runtime", {}).get("version", "")).strip()
-gst_plugins_version = str(
-    data.get("components", {}).get("gstPlugins", {}).get("version", "")
-).strip()
 
 def normalize_env(value: str) -> str:
     if value in {"production", "prod", "prd"}:
@@ -574,15 +589,23 @@ if tag != expected_version:
 if expected_env and normalize_env(actual_env) != expected_env:
     raise SystemExit(1)
 
-# The Core provenance marker is not sufficient on a persistent runner: an
-# interrupted installation can leave the requested Core package beside runtime
-# and GStreamer packages from another branch. Those mixed packages made
-# `neat --json` report the requested Core tag while BoxDecode still loaded an
-# older plugin. Require the installed board-side components to come from the
-# same branch before skipping installation.
-expected_component_prefix = f"+{expected_branch_key}."
-for version in (runtime_version, gst_plugins_version):
-    if expected_component_prefix not in version:
+# A Core source revision can be rebuilt with newer snap dependencies. Compare
+# the selected package versions, including releases without a branch suffix.
+for package, installed_version in (
+    ("neat-runtime", runtime_version),
+    ("neat-gst-plugins", gst_plugins_version),
+):
+    candidates = [
+        resource.rsplit("/", 1)[-1] for resource in resources
+        if resource.rsplit("/", 1)[-1].startswith(package + "_")
+    ]
+    if len(candidates) != 1:
+        raise SystemExit(1)
+    match = re.fullmatch(
+        re.escape(package) + r"_([0-9][A-Za-z0-9.+:~\-]*)_[a-z0-9-]+\.deb",
+        candidates[0],
+    )
+    if not match or installed_version != match.group(1):
         raise SystemExit(1)
 PY
   then
@@ -736,7 +759,13 @@ validate_explicit_core_ref() {
 }
 
 resolve_empty_neat_core_branch() {
-  local branch
+  local branch tag
+  # Match Core's Scheduler snap policy: exact tags are strict release selectors.
+  tag="$(current_dependency_tag)"
+  if [[ -n "${tag}" ]]; then
+    printf '%s\n' "${tag}"
+    return 0
+  fi
   branch="$(current_dependency_branch)"
 
   if [[ "${branch}" == "main" || "${branch}" == "develop" ]]; then
@@ -930,17 +959,20 @@ PY
     return 1
   fi
 
-  local tmp_dir metadata_file manifest_file
+  local tmp_dir metadata_file package_file policy_file
   tmp_dir="$(mktemp -d /tmp/neat-apps-sysroot.XXXXXX)"
   trap 'rm -rf "${tmp_dir}"' EXIT
   metadata_file="${tmp_dir}/metadata-minimal.json"
-  manifest_file="${tmp_dir}/internals-manifest.json"
+  package_file="${tmp_dir}/simaai-scheduler.deb"
+  policy_file="${tmp_dir}/scheduler/usr/share/SimaScheduler/dependency-policy.json"
   if ! download_file "${metadata_url}" "${metadata_file}"; then
     echo "ERROR: Failed to download selected Core metadata." >&2
     return 1
   fi
 
-  local resource_info manifest_url expected_checksum
+  # Core ships the Scheduler package it was built against. That package's
+  # dependency policy names the exact SDK sysroot it was built for.
+  local resource_info package_url expected_checksum
   if ! resource_info="$(python3 - "${metadata_file}" "${metadata_url}" <<'PY'
 import json
 import re
@@ -949,97 +981,111 @@ from urllib.parse import urljoin
 
 with open(sys.argv[1], encoding="utf-8") as handle:
     metadata = json.load(handle)
-resource = "internals-manifest.json"
+resource = "simaai-scheduler.deb"
 if metadata.get("resources", []).count(resource) != 1:
-    raise SystemExit("Core metadata must contain exactly one Internals manifest")
+    raise SystemExit("Core metadata must contain exactly one Scheduler package")
 checksum = metadata.get("resources-checksum", {}).get(resource)
 if not isinstance(checksum, str) or not re.fullmatch(r"[0-9a-f]{64}", checksum):
-    raise SystemExit("Core metadata has no valid Internals manifest checksum")
+    raise SystemExit("Core metadata has no valid Scheduler package checksum")
 print(urljoin(sys.argv[2], resource) + "\t" + checksum)
 PY
   )"; then
-    echo "ERROR: Cannot verify the Core Internals manifest resource." >&2
+    echo "ERROR: Cannot verify the Core Scheduler package resource." >&2
     return 1
   fi
-  manifest_url="${resource_info%%$'\t'*}"
+  package_url="${resource_info%%$'\t'*}"
   expected_checksum="${resource_info#*$'\t'}"
-  if ! download_file "${manifest_url}" "${manifest_file}"; then
-    echo "ERROR: Failed to download the Core Internals manifest." >&2
+  if ! download_file "${package_url}" "${package_file}"; then
+    echo "ERROR: Failed to download the Core Scheduler package." >&2
+    return 1
+  fi
+  local package_checksum
+  package_checksum="$(sha256sum "${package_file}")"
+  if [[ "${package_checksum%% *}" != "${expected_checksum}" ]]; then
+    echo "ERROR: Core Scheduler package checksum mismatch." >&2
+    return 1
+  fi
+  if ! dpkg-deb -x "${package_file}" "${tmp_dir}/scheduler"; then
+    echo "ERROR: Failed to extract the Core Scheduler package." >&2
     return 1
   fi
 
-  local receipt
-  if ! receipt="$(python3 - "${manifest_file}" "${APPS_MANIFEST}" "${expected_checksum}" <<'PY'
-import hashlib
+  local sysroot_version
+  if ! sysroot_version="$(python3 - "${policy_file}" "${APPS_MANIFEST}" \
+      "${ELXR_SDK_RELEASE_FILE}" "${SYSROOT:-/opt/toolchain/aarch64/modalix}" <<'PY'
 import json
 import re
 import sys
 from pathlib import Path
 
-manifest_path = Path(sys.argv[1])
-if hashlib.sha256(manifest_path.read_bytes()).hexdigest() != sys.argv[3]:
-    raise SystemExit("Internals manifest checksum mismatch")
-artifact = json.loads(manifest_path.read_text(encoding="utf-8"))
-consumer = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
-receipt = artifact["sysroot-version"]
-consumer_base = consumer["platform-version"]
-if not isinstance(receipt, str) or (
-    receipt
-    and not re.fullmatch(r"[0-9]+(?:[.][0-9]+){2}(?:~pre[0-9]+)?", receipt)
+policy = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+sysroot_version = policy["sysroot-version"]
+consumer_base = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))["platform-version"]
+if not isinstance(sysroot_version, str) or not re.fullmatch(
+    r"[0-9]+(?:[.][0-9]+){2}(?:~(?:pre[0-9]+|git[0-9]{12}[.][0-9a-f]{7,40}-[0-9]+))?", sysroot_version
 ):
     raise SystemExit("invalid sysroot-version")
-if receipt and consumer_base != receipt.split("~pre", 1)[0]:
-    raise SystemExit("platform-version does not match the Internals receipt")
-print(receipt)
+if consumer_base != sysroot_version.split("~", 1)[0]:
+    raise SystemExit("platform-version does not match the Scheduler sysroot-version")
+if (policy.get("platform-version") != consumer_base
+        or not isinstance(policy.get("elxr_version"), str)
+        or not re.fullmatch(re.escape(consumer_base) + r"_(?:master|develop)_B[1-9][0-9]*", policy["elxr_version"])):
+    raise SystemExit("Scheduler firmware does not match the Apps platform")
+if "~" not in sysroot_version:
+    # Match Core's official-release admission; never patch a release SDK in place.
+    if policy.get("sdk", {}).get("sysroot-version") != sysroot_version:
+        raise SystemExit("Scheduler SDK pin differs from its sysroot-version")
+    fields = {}
+    for line in Path(sys.argv[3]).read_text().splitlines():
+        if " = " in line:
+            key, value = line.split(" = ", 1)
+            if key in fields:
+                raise SystemExit(f"Duplicate SDK receipt field: {key}")
+            fields[key] = value
+    if (fields.get("Platform Version") != sysroot_version
+            or fields.get("Platform Base") != sysroot_version
+            or fields.get("Platform Channel") != "release"):
+        raise SystemExit("Cached SDK does not contain the requested release; refresh its snapshot")
+    sysroot = Path(sys.argv[4])
+    overlay = sysroot / "var/lib/sima-sdk/sysroot-overlay"
+    if overlay.exists() or overlay.is_symlink():
+        raise SystemExit("Release SDK contains an overlay; use a fresh release snapshot")
+    inventory = sysroot / "var/lib/sima-sdk/sysroot-packages.tsv"
+    if inventory.is_symlink():
+        raise SystemExit("SDK inventory must be a regular file")
+    records = [line.split("\t") for line in inventory.read_text().splitlines()]
+    for package in ("simaai-palette-modalix", "simaai-base-files-modalix"):
+        versions = [row[2] for row in records if len(row) >= 3 and row[0] == package
+                    and row[1] in {"all", "arm64"}]
+        if versions != [sysroot_version]:
+            raise SystemExit(f"Cached SDK {package} inventory differs: {versions}")
+    if not (sysroot / "usr/include").is_dir():
+        raise SystemExit("Cached SDK sysroot headers are missing")
+    identities = re.findall(r"^SIMA_PACKAGE_VERSION\s*=\s*(\S+)\s*$",
+                            (sysroot / "etc/packageinfo").read_text(), re.M)
+    if identities != [policy.get("elxr_version")]:
+        raise SystemExit(f"Cached SDK firmware identity differs: {identities}")
+print(sysroot_version)
 PY
   )"; then
-    echo "ERROR: Cannot verify the Core Internals build receipt." >&2
+    echo "ERROR: Cannot verify the Core Scheduler sysroot-version." >&2
     return 1
   fi
-  if [[ -z "${receipt}" ]]; then
-    echo "Apps is using the existing SDK sysroot."
-    return 0
-  fi
 
-  if [[ "${receipt}" == *"~pre"* ]]; then
-    echo "Updating SDK sysroot to Core's Internals receipt ${receipt}"
-    if ! run_privileged sysroot update "${receipt}"; then
-      echo "ERROR: Failed to update SDK sysroot to ${receipt}." >&2
+  if [[ "${sysroot_version}" == *~* ]]; then
+    echo "Updating SDK sysroot to Core's Scheduler sysroot-version ${sysroot_version}"
+    if ! run_privileged sysroot update "${sysroot_version}"; then
+      echo "ERROR: Failed to update SDK sysroot to ${sysroot_version}." >&2
       return 1
     fi
-    if ! sysroot status; then
-      echo "ERROR: Failed to read SDK sysroot status." >&2
-      return 1
-    fi
-    return 0
+  else
+    echo "SKIP sysroot installation: SDK receipt, inventory and package identity match official release ${sysroot_version}."
   fi
-
-  local status_output image_platform overlay_state overlay_revision
-  if ! status_output="$(sysroot status)"; then
+  if ! sysroot status; then
     echo "ERROR: Failed to read SDK sysroot status." >&2
     return 1
   fi
-  printf '%s\n' "${status_output}"
-  image_platform="$(sed -nE \
-    's/^SDK image platform:[[:space:]]*([^[:space:]]+).*$/\1/p' \
-    <<< "${status_output}" | head -n1)"
-  overlay_state="$(sed -nE \
-    's/^Sysroot overlay state:[[:space:]]*([^[:space:]]+).*$/\1/p' \
-    <<< "${status_output}" | head -n1)"
-  overlay_revision="$(sed -nE \
-    's/^Sysroot overlay revision:[[:space:]]*([^[:space:]]+).*$/\1/p' \
-    <<< "${status_output}" | head -n1)"
-
-  if [[ "${image_platform}" != "${receipt}" ]]; then
-    echo "ERROR: SDK image platform ${image_platform:-unknown} does not match required stable platform ${receipt}." >&2
-    return 1
-  fi
-  if [[ "${overlay_state}" != "inactive" || "${overlay_revision}" != "none" ]]; then
-    echo "ERROR: Stable platform ${receipt} requires the image-default sysroot, but overlay ${overlay_revision:-unknown} is ${overlay_state:-unknown}." >&2
-    echo "ERROR: Recreate the SDK container to remove the prerelease sysroot overlay." >&2
-    return 1
-  fi
-  echo "Using stable SDK sysroot ${image_platform} with no active overlay."
+  cp "${policy_file}" "${DEPS_DIR}/scheduler-sdk-policy.json"
 )
 
 ensure_neat_core() {

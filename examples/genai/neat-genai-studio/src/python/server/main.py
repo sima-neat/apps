@@ -182,6 +182,7 @@ def main() -> int:
             server,
             catalog_dir=cfg.catalog_dir,
             max_resident_chat_models=cfg.max_resident_chat_models,
+            accelerator_bytes=int(cfg.accelerator_memory_gib * 2**30),
             # The runtime may serve the model under a different name than the
             # configured one; the manager must track what is actually loaded, or
             # it reports no active ASR and a later switch fails to evict it.
@@ -192,10 +193,6 @@ def main() -> int:
             # Switching ASR models warms the new one (a short silent clip) so a
             # bad load surfaces during the switch, not on the next transcription.
             asr_warmup=os.environ.get("STUDIO_ASR_WARMUP", "1") != "0",
-            mla_reset_exit_code=int(os.environ.get("MLA_RESET_EXIT_CODE", "75")),
-            # run.sh exports MLA_RESET; refuse the reset here so a disabled
-            # board is never torn down for a reset that will not happen.
-            mla_reset_enabled=os.environ.get("MLA_RESET", "1") != "0",
             hub=cfg.hub,
             openai_base_url=cfg.openai.base_url,
             log_tap=log_tap,
@@ -282,7 +279,11 @@ def main() -> int:
         )
 
         while True:
-            time.sleep(1)
+            time.sleep(60)
+            try:
+                manager.scan_catalog()
+            except OSError as exc:
+                print(f"catalog refresh failed: {exc}", file=sys.stderr, flush=True)
     except KeyboardInterrupt:
         print("\nstopping OpenAI-compatible API server...", flush=True)
         return 0

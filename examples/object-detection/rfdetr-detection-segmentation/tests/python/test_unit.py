@@ -31,24 +31,58 @@ def test_config_argument_is_required():
 def test_transformer_inputs_copy_only_cpu_features(monkeypatch, storage_kind):
     kinds = SimpleNamespace(CpuOwned="CpuOwned", CpuExternal="CpuExternal")
     monkeypatch.setattr(main, "pyneat", SimpleNamespace(StorageKind=kinds), raising=False)
-    device_feature = SimpleNamespace(shape=[1, 4, 256])
+    device_feature = SimpleNamespace(shape=[1, 2, 2, 256])
     feature = SimpleNamespace(
-        shape=[1, 4, 256],
+        shape=[1, 2, 2, 256],
         storage=SimpleNamespace(kind=storage_kind),
         cvu=Mock(return_value=device_feature),
     )
     gathered = SimpleNamespace(shape=[1, 2, 4])
-    model = SimpleNamespace(input_specs=lambda: [gathered, device_feature])
+    input_shapes = (tuple(gathered.shape), tuple(device_feature.shape))
 
-    inputs = main.transformer_inputs(model, feature, gathered, 2)
+    inputs = main.transformer_inputs(input_shapes, feature, gathered, 2)
 
     assert inputs[0] is gathered
+    assert list(inputs[1].shape) == [1, 2, 2, 256]
     if storage_kind == "GstSample":
         assert inputs[1] is feature
         feature.cvu.assert_not_called()
     else:
         assert inputs[1] is device_feature
         feature.cvu.assert_called_once_with()
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("task", ["detection", "segmentation"])
+@pytest.mark.parametrize("batch", [1, 2])
+def test_model_contract_preserves_authored_feature_batch(monkeypatch, task, batch):
+    dtypes = SimpleNamespace(Float32="fp32", UInt8="uint8")
+    monkeypatch.setattr(main, "pyneat", SimpleNamespace(TensorDType=dtypes), raising=False)
+    side = 36
+    top_k = 300 if task == "detection" else 200
+
+    def specs(shapes, dtype=dtypes.Float32):
+        return [SimpleNamespace(shape=shape, dtypes=[dtype]) for shape in shapes]
+
+    backbone = SimpleNamespace(
+        input_specs=lambda: specs([[-1, -1, 3]], dtypes.UInt8),
+        output_specs=lambda: specs(
+            [[1, side, side, 256], [1, side * side], [1, side * side, 4]]
+        ),
+    )
+    outputs = [[1, top_k, 4], [1, top_k, 91]]
+    if task == "segmentation":
+        outputs.append([1, 108, 108, top_k])
+    transformer = SimpleNamespace(
+        input_specs=lambda: specs([[batch, side, side, 256], [1, top_k, 4]]),
+        output_specs=lambda: specs(outputs),
+    )
+    cfg = SimpleNamespace(task=task, top_k=top_k)
+    if batch == 1:
+        main.require_model_contract(cfg, backbone, transformer, side)
+    else:
+        with pytest.raises(RuntimeError, match="unexpected I/O contract"):
+            main.require_model_contract(cfg, backbone, transformer, side)
 
 
 @pytest.mark.unit
@@ -81,8 +115,8 @@ def test_postprocess_uses_sparse_coco_ids_and_source_geometry():
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize(("variant", "size"), [("small", 512), ("medium", 576)])
-def test_config_selects_one_model_pair(tmp_path, variant, size):
+@pytest.mark.parametrize("variant", ["nano", "small", "medium", "large"])
+def test_config_selects_one_model_pair(tmp_path, variant):
     labels = tmp_path / "labels.txt"
     labels.write_text("\n".join(f"label-{index}" for index in range(91)) + "\n")
     config = {
@@ -91,8 +125,10 @@ def test_config_selects_one_model_pair(tmp_path, variant, size):
             "labels": str(labels),
             "detection": {
                 "variant": variant,
-                "small": {"backbone": "small-b.tar.gz", "transformer": "small-t.tar.gz"},
-                "medium": {"backbone": "medium-b.tar.gz", "transformer": "medium-t.tar.gz"},
+                **{
+                    name: {"backbone": f"{name}-b.tar.gz", "transformer": f"{name}-t.tar.gz"}
+                    for name in ("nano", "small", "medium", "large")
+                },
             },
         },
         "source": {"rtsp_url": "rtsp://camera/live", "codec": "h265"},
@@ -109,7 +145,6 @@ def test_config_selects_one_model_pair(tmp_path, variant, size):
     selected = main.load_config(path)
 
     assert selected.variant == variant
-    assert selected.input_size == size
     assert selected.backbone.startswith(variant)
     assert selected.codec == "h265"
     assert (selected.width, selected.height, selected.fps) == (0, 0, 0)
@@ -147,7 +182,6 @@ def test_config_selects_segmentation_model_pair(tmp_path, mask_grid_size):
     assert selected.mask_grid_size == (mask_grid_size or 640)
     assert selected.task == "segmentation"
     assert selected.backbone == "segmentation-b.tar.gz"
-    assert selected.input_size == 432
     assert selected.top_k == 200
 
 
@@ -175,7 +209,7 @@ def test_probed_geometry_uses_configured_fallbacks_and_fps_override():
 
 
 @pytest.mark.unit
-def test_config_rejects_unknown_model_variant(tmp_path):
+def test_config_rejects_variant_without_model_pair(tmp_path):
     config = {
         "model": {"task": "detection", "detection": {"variant": "large"}},
         "source": {},
@@ -185,7 +219,7 @@ def test_config_rejects_unknown_model_variant(tmp_path):
     path = tmp_path / "config.yaml"
     path.write_text(yaml.safe_dump(config))
 
-    with pytest.raises(ValueError, match="small or medium"):
+    with pytest.raises(ValueError, match="large"):
         main.load_config(path)
 
 
@@ -201,8 +235,8 @@ def test_segmentation_metadata_contains_polygons(mask_grid_size):
     logits[0, 0, 0] = 12.0
     logits[0, 0, 1] = 11.0
     logits[0, 1, 1] = 10.0
-    masks = np.full((108, 108, 200), -20.0, dtype=np.float32)
-    masks[40:68, 40:68, 0] = 10.0
+    masks = np.full((1, 108, 108, 200), -20.0, dtype=np.float32)
+    masks[0, 40:68, 40:68, 0] = 10.0
 
     payload = main.segmentation_metadata(
         boxes, logits, masks, 1280, 720, labels, 0.3, 1, 0.08, mask_grid_size
@@ -285,8 +319,6 @@ class TestValidBaseline:
 
         assert cfg.task == "detection"
         assert cfg.variant == "small"
-        assert cfg.input_size == 512
-        assert cfg.feature_size == 32
         assert cfg.top_k == 300
         assert cfg.codec == "h264"
         assert cfg.tcp == True
@@ -368,7 +400,6 @@ class TestSegmentationTask:
 
         assert cfg.task == "segmentation"
         assert cfg.backbone == "seg-b.tar.gz"
-        assert cfg.input_size == 432
         assert cfg.top_k == 200
         assert cfg.max_results == 24
         assert cfg.min_score == pytest.approx(0.3)
