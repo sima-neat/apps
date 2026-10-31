@@ -128,6 +128,98 @@ confirm_runtime_replacement() {
   fi
 }
 
+# Prints core=skip|install|replace, insight=keep|install, and the installed
+# versions they refer to. An unreadable status installs both, as before.
+decide_dependency_installs() {
+  local status_json=""
+  if command -v neat >/dev/null 2>&1; then
+    if command -v timeout >/dev/null 2>&1; then
+      status_json="$(timeout 20 neat --json --offline 2>/dev/null)" || status_json=""
+    else
+      status_json="$(neat --json --offline 2>/dev/null)" || status_json=""
+    fi
+  fi
+  NEAT_STATUS_JSON="${status_json}" python3 - "${CORE_REF}" "${CORE_SPEC}" <<'PY'
+import json
+import os
+import re
+import sys
+
+ref, spec = sys.argv[1:3]
+core_action, core_installed = "install", ""
+insight_action, insight_installed = "install", ""
+
+
+def commit_of(core):
+    tag = core.get("tag") or ""
+    if re.fullmatch(r"[0-9a-f]{7,40}", tag):
+        return tag
+    # Tag builds carry no commit in their version; their buildinfo records it.
+    buildinfo_path = (core.get("provenance") or {}).get("buildinfoFile")
+    if not buildinfo_path:
+        return ""
+    try:
+        with open(buildinfo_path, encoding="utf-8") as handle:
+            commit = json.load(handle).get("build", {}).get("ci_requested_git_sha") or ""
+    except (OSError, ValueError, AttributeError):
+        return ""
+    return commit if re.fullmatch(r"[0-9a-f]{7,40}", commit) else ""
+
+
+try:
+    status = json.loads(os.environ["NEAT_STATUS_JSON"])
+    components = status["components"]
+    core = components.get("core") or {}
+    provenance = core.get("provenance") or {}
+    core_version = core.get("version")
+    # From an SDK container the Core install also updates the paired DevKit,
+    # which this status does not describe, so only a board can skip it.
+    if status.get("environment", {}).get("mode") == "modalix-board" and core_version:
+        installed_ref = provenance.get("vulcanRef") or ""
+        commit = commit_of(core)
+        core_installed = f"{installed_ref}:{commit[:12]}" if installed_ref and commit else core_version
+        same_core = (
+            installed_ref == ref
+            and provenance.get("vulcanEnvironment") == "prod"
+            and bool(commit)
+            and (commit.startswith(spec) or spec.startswith(commit))
+        )
+        if not same_core:
+            core_action = "replace"
+        # The same Core with a different PyNeat is reinstalled without asking.
+        elif (components.get("pyneat") or {}).get("version") == core_version:
+            core_action = "skip"
+    insight_version = (components.get("insight") or {}).get("version")
+    if insight_version and insight_version != "unknown":
+        insight_action, insight_installed = "keep", insight_version
+except (KeyError, TypeError, ValueError, AttributeError):
+    pass
+
+print(f"core={core_action}")
+print(f"core_installed={core_installed}")
+print(f"insight={insight_action}")
+print(f"insight_installed={insight_installed}")
+PY
+}
+
+confirm_core_replacement() {
+  local installed_core="$1"
+  local response=""
+
+  echo
+  echo "These Apps were built for Core ${CORE_REF}:${CORE_SPEC}."
+  echo "  Installed Core: ${installed_core}"
+  if [[ "${NEAT_APPS_OVERWRITE:-0}" == "1" ]]; then
+    return 0
+  fi
+  printf 'Replace the installed Core? [Y/n] '
+  if ! IFS= read -r response; then
+    echo
+    return 0
+  fi
+  [[ ! "${response}" =~ ^[Nn] ]]
+}
+
 locate_package_staging() {
   local runtime_parent runtime_parent_abs archive_candidate
 
@@ -269,24 +361,43 @@ else
     exit 1
   }
 
-  echo
-  echo "Installing the Core selected by Apps:"
-  echo "  Ref        : ${CORE_REF}"
-  echo "  Spec       : ${CORE_SPEC}"
+  DEPENDENCY_PLAN="$(decide_dependency_installs || true)"
+  CORE_ACTION="$(printf '%s\n' "${DEPENDENCY_PLAN}" | sed -n 's/^core=//p')"
+  INSTALLED_CORE="$(printf '%s\n' "${DEPENDENCY_PLAN}" | sed -n 's/^core_installed=//p')"
+  INSIGHT_ACTION="$(printf '%s\n' "${DEPENDENCY_PLAN}" | sed -n 's/^insight=//p')"
+  INSTALLED_INSIGHT="$(printf '%s\n' "${DEPENDENCY_PLAN}" | sed -n 's/^insight_installed=//p')"
+  if [[ "${CORE_ACTION}" == "replace" ]] && ! confirm_core_replacement "${INSTALLED_CORE}"; then
+    echo "WARNING: Keeping Core ${INSTALLED_CORE}; examples built for Core ${CORE_REF}:${CORE_SPEC} may fail with it."
+    CORE_ACTION="keep"
+  fi
   cleanup_dependency_workspace
-  mkdir -p "${CORE_INSTALL_DIR}" "${INSIGHT_INSTALL_DIR}"
-  echo "  Scratch dir: ${CORE_INSTALL_DIR}"
-  run_sima_cli_install "${CORE_INSTALL_DIR}" "${SIMA_CLI_RESOLVED}" \
-    -d . \
-    -t minimal \
-    "core@${CORE_REF}:${CORE_SPEC}"
 
   echo
-  echo "Installing Insight through sima-cli:"
-  echo "  Scratch dir: ${INSIGHT_INSTALL_DIR}"
-  run_sima_cli_install "${INSIGHT_INSTALL_DIR}" "${SIMA_CLI_RESOLVED}" \
-    -d . \
-    insight
+  if [[ "${CORE_ACTION}" == "skip" ]]; then
+    echo "Core ${CORE_REF}:${CORE_SPEC} is already installed; skipping it."
+    echo "  To reinstall it: sima-cli neat install -t minimal core@${CORE_REF}:${CORE_SPEC}"
+  elif [[ "${CORE_ACTION}" != "keep" ]]; then
+    echo "Installing the Core selected by Apps:"
+    echo "  Ref        : ${CORE_REF}"
+    echo "  Spec       : ${CORE_SPEC}"
+    echo "  Scratch dir: ${CORE_INSTALL_DIR}"
+    run_sima_cli_install "${CORE_INSTALL_DIR}" "${SIMA_CLI_RESOLVED}" \
+      -d . \
+      -t minimal \
+      "core@${CORE_REF}:${CORE_SPEC}"
+  fi
+
+  echo
+  if [[ "${INSIGHT_ACTION}" == "keep" ]]; then
+    echo "Insight ${INSTALLED_INSIGHT} is already installed; keeping it."
+    echo "  To update it: sima-cli neat install insight"
+  else
+    echo "Installing Insight through sima-cli:"
+    echo "  Scratch dir: ${INSIGHT_INSTALL_DIR}"
+    run_sima_cli_install "${INSIGHT_INSTALL_DIR}" "${SIMA_CLI_RESOLVED}" \
+      -d . \
+      insight
+  fi
 
   cleanup_dependency_workspace
 fi

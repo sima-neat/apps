@@ -30,7 +30,7 @@ The decoded frame branches inside a single graph to the detector, to the H.264 s
 
 ## Install Apps
 
-Install on the Modalix DevKit, or under `/workspace` in a Neat SDK container paired with it. Run the `llima` commands and the example itself on the DevKit. If the Core and Insight selected by Apps are already installed, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps` to skip reinstalling them. See [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
+Install on the Modalix DevKit, or under `/workspace` in a Neat SDK container paired with it. Run the `llima` commands and the example itself on the DevKit. To leave the installed Core and Insight unchanged, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps`. See [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
 
 Install the latest Neat Apps runtime and enter the installed bundle:
 

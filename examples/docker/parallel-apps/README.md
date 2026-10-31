@@ -33,7 +33,7 @@ Each container runs one Apps example with its own config: instance segmentation,
 
 ## Install Apps
 
-Install under `/workspace` in the Neat SDK container paired with your DevKit; the images are built there and the containers run on the DevKit. If the Core and Insight selected by Apps are already installed, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps` to skip reinstalling them. See [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
+Install under `/workspace` in the Neat SDK container paired with your DevKit; the images are built there and the containers run on the DevKit. To leave the installed Core and Insight unchanged, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps`. See [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
 
 ```bash
 cd /workspace
