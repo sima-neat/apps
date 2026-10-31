@@ -32,7 +32,7 @@ import socket
 import subprocess
 
 from shared.config import HubConfig
-from shared.chat_limits import accelerator_busy, fit_to_window, tokenizer_counter, too_long_alone, whole_reply
+from shared.chat_limits import accelerator_busy, first_chat_event, sse_error, whole_reply
 from server import hub as hub_helpers
 from asr_metadata import (
     DEFAULT_LOGPROB_THRESHOLD,
@@ -342,29 +342,16 @@ class AppContext:
         self.catalog_dir = None
         self.hub_config = HubConfig(allow_download=True,
                                     orgs=("simaai", "TDoSiMa", "florianvoss"))
-        self._asr_name_cache = (0.0, "")
 
     def set_asr_model_name(self, name):
         """Point transcription at a new ASR model after a successful switch."""
         self.asr_model_name = (name or "").strip()
-        self._asr_name_cache = (time.monotonic(), self.asr_model_name)
         if self.app is not None:
             self.app.config['ASR_MODEL_NAME'] = self.asr_model_name
         return self.asr_model_name
 
     def resolve_asr_model(self):
-        """The ASR model serving transcriptions, read fresh from the server.
-
-        Nothing this process knows is authoritative: the active model can change
-        without passing through here — an operator calling /control/asr directly,
-        as the README documents — and sending an evicted name just fails the
-        transcription. Any cache window is a window in which we get it wrong, so
-        ask every time. This runs once per recording, against a localhost
-        endpoint, next to an MLA transcription that costs orders of magnitude
-        more; if it cannot be reached we keep the last known name rather than
-        caching the failure.
-        """
-        _, cached = self._asr_name_cache
+        """Read the active ASR model; keep the last known name if control is unreachable."""
         try:
             resp = requests.get(
                 f"{self.control_base_url.rstrip('/')}/control/status", timeout=5
@@ -373,13 +360,8 @@ class AppContext:
             # transient 500 must not read as "no model active".
             resp.raise_for_status()
             name = str((resp.json() or {}).get("asrModel") or "")
-            reachable = True
         except Exception:
-            name, reachable = "", False
-        if not reachable:
-            # Say nothing new: keep using the last known name rather than
-            # caching a failure that says nothing about what is loaded.
-            return cached or self.asr_model_name
+            return self.asr_model_name
         if not name:
             # A successful status with no active model is real — a switch that
             # failed after eviction leaves exactly this. Forget the stale name
@@ -390,7 +372,6 @@ class AppContext:
         if name != self.asr_model_name:
             logging.info("Active ASR model changed out from under the UI: %r", name)
             return self.set_asr_model_name(name)
-        self._asr_name_cache = (time.monotonic(), name)
         return name
 
     def update_settings(self, model_server_ip, httponly):
@@ -420,34 +401,6 @@ class AppContext:
     def update_config(self):
         self.app.config['SIMAAI_IP_ADDR'] = self.model_server_ip
         self.app.config['ASR_MODEL_NAME'] = self.asr_model_name
-
-    def _context_info(self, model):
-        """``(window, tokenizer path)`` of ``model`` from the model server's
-        catalog; cached, with None for what is unknown."""
-        cache = getattr(self, '_context_windows', None)
-        now = time.monotonic()
-        if cache is None or now - cache[0] > 60 or (model and model not in cache[1]):
-            windows = {}
-            try:
-                resp = requests.get(f"{self.control_base_url.rstrip('/')}/control/catalog", timeout=5)
-                for entry in (resp.json() or {}).get('catalog', []):
-                    if entry.get('name'):
-                        windows[entry['name']] = (entry.get('contextTokens'), entry.get('tokenizerPath'))
-            except Exception:  # noqa: BLE001 - unknown window: send as is
-                windows = cache[1] if cache else {}
-            cache = (now, windows)
-            self._context_windows = cache
-        return cache[1].get(model) or (None, None)
-
-    def context_window(self, model):
-        """The tokens ``model`` can read at once (its compiled context window),
-        or None when unknown."""
-        return self._context_info(model)[0]
-
-    def token_counter(self, model):
-        """Counts text in ``model``'s tokens with its own tokenizer, or None
-        (estimate) when the tokenizer can't be read on this machine."""
-        return tokenizer_counter(self._context_info(model)[1])
 
     def get_config(self):
         return self.app.config
@@ -871,16 +824,7 @@ class AppContext:
                 payload['messages'] = rag_chat.with_passages(payload['messages'], hits)
                 rag_headers = {'X-RAG-Hits': str(len(hits)),
                                'X-RAG-Sources': rag_chat.sources_header(hits, rag_document_name())}
-            # Context full: leave out the oldest turns so the request fits the
-            # model's window, and say how many in X-Context-Dropped; a message
-            # too long on its own is refused with a reason.
             model = payload.get('model')
-            window, count = self.context_window(model), self.token_counter(model)
-            payload['messages'], dropped = fit_to_window(payload.get('messages', []), window, count)
-            if too_long_alone(payload['messages'], window, count):
-                return jsonify({'error': {'message': (
-                    f"The message is longer than {model} can read at once (about {window} tokens). "
-                    "Shorten it, or use a model with a longer window."), 'code': 'context_full'}}), 413
             url = f"http://{self.app.config['SIMAAI_IP_ADDR']}/v1/chat/completions"
 
             def open_upstream():
@@ -900,33 +844,7 @@ class AppContext:
                     logging.error(f"Chat proxy: model server unreachable: {exc}")
                     return jsonify({'error': 'model server unreachable'}), 502
                 return Response(body, status=status, content_type=content_type,
-                                headers={**rag_headers, 'X-Context-Dropped': str(dropped),
-                                         'X-Context-Window': str(window or '')})
-
-            def first_event(resp):
-                """Read up to the first event that carries text or an error,
-                holding the lines read so far; returns (held_lines, error)."""
-                held = []
-                lines = resp.iter_lines(chunk_size=None)   # pass tokens on as they arrive
-                for line in lines:
-                    held.append(line)
-                    text = line.decode('utf-8', 'replace').strip()
-                    if not text.startswith('data:'):
-                        continue
-                    data = text[5:].strip()
-                    if data == '[DONE]':
-                        return held, lines, None
-                    try:
-                        obj = json.loads(data)
-                    except ValueError:
-                        continue
-                    if obj.get('error'):
-                        err = obj['error']
-                        return held, lines, str(err.get('message') if isinstance(err, dict) else err)
-                    delta = ((obj.get('choices') or [{}])[0].get('delta') or {}).get('content')
-                    if delta:
-                        return held, lines, None
-                return held, lines, None
+                                headers=rag_headers)
 
             def relay():
                 nonlocal upstream
@@ -935,7 +853,7 @@ class AppContext:
                         # Busy accelerator: the 3.0 driver now and then refuses a
                         # job while several models run ("no free bank", rc=-11).
                         # If that comes before any text, one more try is safe.
-                        held, lines, error = first_event(upstream)
+                        held, lines, error = first_chat_event(upstream)
                         if error and accelerator_busy(error):
                             logging.warning("Chat proxy: accelerator busy for %s; retrying once", model)
                             upstream.close()
@@ -945,12 +863,12 @@ class AppContext:
                             try:
                                 upstream = open_upstream()
                             except requests.RequestException as exc:
-                                yield _sse_error(f"The model server could not be reached: {exc}")
+                                yield sse_error(f"The model server could not be reached: {exc}")
                                 return
                             if not upstream.ok:
-                                yield _sse_error((upstream.text or '').strip()[:300] or f"HTTP {upstream.status_code}")
+                                yield b"data: " + upstream.content + b"\n\ndata: [DONE]\n\n"
                                 return
-                            held, lines, error = first_event(upstream)
+                            held, lines, error = first_chat_event(upstream)
                         for line in held:
                             yield line + b"\n"
                         for line in lines:
@@ -975,9 +893,7 @@ class AppContext:
                 stream_with_context(relay()),
                 status=upstream.status_code,
                 content_type=upstream.headers.get('Content-Type', 'text/event-stream'),
-                headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no', **rag_headers,
-                         'X-Context-Dropped': str(dropped),
-                         'X-Context-Window': str(window or '')},
+                headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no', **rag_headers},
             )
 
         @self.app.route('/rag/status', methods=['GET'])

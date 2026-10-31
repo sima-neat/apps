@@ -31,9 +31,9 @@ def test_config_argument_is_required():
 def test_transformer_inputs_copy_only_cpu_features(monkeypatch, storage_kind):
     kinds = SimpleNamespace(CpuOwned="CpuOwned", CpuExternal="CpuExternal")
     monkeypatch.setattr(main, "pyneat", SimpleNamespace(StorageKind=kinds), raising=False)
-    device_feature = SimpleNamespace(shape=[1, 4, 256])
+    device_feature = SimpleNamespace(shape=[1, 2, 2, 256])
     feature = SimpleNamespace(
-        shape=[1, 4, 256],
+        shape=[1, 2, 2, 256],
         storage=SimpleNamespace(kind=storage_kind),
         cvu=Mock(return_value=device_feature),
     )
@@ -43,12 +43,46 @@ def test_transformer_inputs_copy_only_cpu_features(monkeypatch, storage_kind):
     inputs = main.transformer_inputs(input_shapes, feature, gathered, 2)
 
     assert inputs[0] is gathered
+    assert list(inputs[1].shape) == [1, 2, 2, 256]
     if storage_kind == "GstSample":
         assert inputs[1] is feature
         feature.cvu.assert_not_called()
     else:
         assert inputs[1] is device_feature
         feature.cvu.assert_called_once_with()
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("task", ["detection", "segmentation"])
+@pytest.mark.parametrize("batch", [1, 2])
+def test_model_contract_preserves_authored_feature_batch(monkeypatch, task, batch):
+    dtypes = SimpleNamespace(Float32="fp32", UInt8="uint8")
+    monkeypatch.setattr(main, "pyneat", SimpleNamespace(TensorDType=dtypes), raising=False)
+    side = 36
+    top_k = 300 if task == "detection" else 200
+
+    def specs(shapes, dtype=dtypes.Float32):
+        return [SimpleNamespace(shape=shape, dtypes=[dtype]) for shape in shapes]
+
+    backbone = SimpleNamespace(
+        input_specs=lambda: specs([[-1, -1, 3]], dtypes.UInt8),
+        output_specs=lambda: specs(
+            [[1, side, side, 256], [1, side * side], [1, side * side, 4]]
+        ),
+    )
+    outputs = [[1, top_k, 4], [1, top_k, 91]]
+    if task == "segmentation":
+        outputs.append([1, 108, 108, top_k])
+    transformer = SimpleNamespace(
+        input_specs=lambda: specs([[batch, side, side, 256], [1, top_k, 4]]),
+        output_specs=lambda: specs(outputs),
+    )
+    cfg = SimpleNamespace(task=task, top_k=top_k)
+    if batch == 1:
+        main.require_model_contract(cfg, backbone, transformer, side)
+    else:
+        with pytest.raises(RuntimeError, match="unexpected I/O contract"):
+            main.require_model_contract(cfg, backbone, transformer, side)
 
 
 @pytest.mark.unit

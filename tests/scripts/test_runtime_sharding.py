@@ -19,14 +19,15 @@ import run_runtime_shard as execution
 from tests.utils.test_scope import discover_scope, validate_scope
 
 
-def runner(name, *, rtsp=False, busy=False, status="online", extra=()):
+def runner(name, *, rtsp=False, busy=False, status="online", extra=(),
+           firmware="3.0.0_master_B2372"):
     labels = [
         "self-hosted",
         "Linux",
         "ARM64",
         "modalix",
         "vulcan-production",
-        "3.0.0_master_B2372",
+        firmware,
     ]
     labels += ["rtsp"] if rtsp else ["model-registry"]
     return {
@@ -72,6 +73,60 @@ def test_does_not_count_offline_or_wrong_firmware():
     runners = [runner("offline", rtsp=True, status="offline"), runner("old", rtsp=True)]
     with pytest.raises(ValueError, match="No online"):
         planner.select_fleet(runners, ["3.0.0_master_B9999"], 6, "rtsp")
+
+
+def test_planner_keeps_resolver_firmware_for_both_pools(tmp_path, monkeypatch):
+    fleet = [runner(f"{version}-{pool}", rtsp=pool == "rtsp", firmware=version)
+             for version in ("3.0.0_master_B2499", "3.0.0_master_B2501")
+             for pool in ("rtsp", "regular")]
+    monkeypatch.setattr(planner, "discover_runners", lambda *args: fleet)
+    for key, value in {"RUNNER_DISCOVERY_TOKEN": "test", "GITHUB_REPOSITORY": "sima-neat/apps",
+                       "GITHUB_SHA": "abc", "GITHUB_OUTPUT": str(tmp_path / "outputs"),
+                       "GITHUB_STEP_SUMMARY": str(tmp_path / "summary"),
+                       "APPS_UNREADY_RUNNERS": "[]"}.items():
+        monkeypatch.setenv(key, value)
+    output = tmp_path / "plan.json"
+    monkeypatch.setattr(sys, "argv", ["planner", "--group", "modalix-devkit-3.0.0",
+                                      "--labels", '["modalix", "3.0.0_master_B2501"]',
+                                      "--output", str(output)])
+    planner.main()
+    plan = json.loads(output.read_text())
+    assert {s["pool"] for s in plan["shards"]} == {"rtsp", "regular"}
+    assert all("3.0.0_master_b2501" in s["labels"] for s in plan["shards"])
+    assert all("3.0.0_master_b2499" not in s["labels"] for s in plan["shards"])
+
+
+@pytest.mark.parametrize(("actual", "expected", "fallback", "accepted"), [
+    ("3.0.0_master_B2501", "3.0.0_master_B2501", "false", True),
+    ("3.0.0_master_B2499", "3.0.0_master_B2501", "false", False),
+    (None, "3.0.0_master_B2501", "false", False),
+    ("3.0.0_master_B2501", "3.0.0_master_B2501", "true", False),
+    ("3.0.0_master_B2501", "", "false", False),
+])
+def test_hardware_guard_checks_resolved_firmware(tmp_path, monkeypatch, actual, expected, fallback, accepted):
+    workflow = yaml.safe_load((ROOT / ".github/workflows/vulcan-ci.yml").read_text())
+    guard = workflow["jobs"]["test-runtime-shard"]["steps"][0]
+    assert guard["name"] == "Verify selected DevKit firmware"
+    code = guard["run"].split("<<'PYFIRMWARE'\n", 1)[1].rsplit("\nPYFIRMWARE", 1)[0]
+    if actual:
+        (tmp_path / "buildinfo").write_text(f"SIMA_BUILD_VERSION = {actual}\n")
+    monkeypatch.setenv("EXPECTED_ELXR_VERSION", expected)
+    monkeypatch.setenv("VERSION_FALLBACK", fallback)
+    monkeypatch.setenv("RUNNER_NAME", "test")
+
+    # Python 3.11 Path construction consults the module-level Path factory.
+    concrete_path = type(tmp_path)
+
+    def check():
+        with monkeypatch.context() as context:
+            context.setattr("pathlib.Path", lambda filename: tmp_path / concrete_path(filename).name)
+            exec(compile(code, "workflow-firmware-guard", "exec"), {})
+
+    if accepted:
+        check()
+    else:
+        with pytest.raises(SystemExit, match="Cannot verify exact DevKit firmware"):
+            check()
 
 
 def test_regular_selector_cannot_match_rtsp_even_when_offline():
@@ -367,6 +422,15 @@ def test_release_and_portal_still_depend_on_all_shards():
         (ROOT / ".github/workflows/vulcan-ci.yml").read_text(), Loader=yaml.BaseLoader
     )
     jobs = workflow["jobs"]
+    resolver = jobs["resolve-test-runner"]
+    assert "build" in resolver["needs"]
+    assert resolver["with"]["manifest_artifact"] == jobs["build"]["with"]["artifact_name"]
+    assert resolver["with"]["manifest_path"] == "deps/scheduler-sdk-policy.json"
+    assert resolver["with"]["allow-version-fallback"] == "false"
+    discovery = next(s for s in jobs["plan-runtime-tests"]["steps"] if s.get("id") == "plan")
+    assert discovery["env"]["REQUIRED_LABELS"] == "${{ needs.resolve-test-runner.outputs.runner_labels }}"
+    guard = jobs["test-runtime-shard"]["steps"][0]
+    assert guard["env"]["EXPECTED_ELXR_VERSION"] == "${{ needs.resolve-test-runner.outputs.devkit_firmware }}"
     assert "test-runtime-shard" in jobs["test-runtime"]["needs"]
     assert "test-runtime" in jobs["publish-vulcan-artifacts"]["needs"]
     assert "contract-tests" in jobs["publish-vulcan-artifacts"]["needs"]

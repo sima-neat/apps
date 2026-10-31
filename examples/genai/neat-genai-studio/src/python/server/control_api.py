@@ -61,12 +61,12 @@ class _ControlHandler(BaseHTTPRequestHandler):
         except Exception:
             return {}
 
-    def _catalog_payload(self) -> dict:
+    def _catalog_payload(self, *, rescan: bool = False) -> dict:
         # The resident order (most recently loaded first) and the limit let a
         # client pick the chat model that answers and see when a load needs a
         # model unloaded first.
         return {
-            "catalog": self.manager.scan_catalog(),
+            "catalog": self.manager.scan_catalog() if rescan else self.manager.catalog(),
             "resident": self.manager.resident(),
             "maxResident": self.manager.max_resident,
         }
@@ -111,7 +111,7 @@ class _ControlHandler(BaseHTTPRequestHandler):
             elif path == "/control/delete":
                 self._send_json(self.manager.delete(str(body.get("name", ""))))
             elif path == "/control/rescan":
-                self._send_json(self._catalog_payload())
+                self._send_json(self._catalog_payload(rescan=True))
             elif path == "/control/benchmark":
                 self._send_json(self.manager.benchmark_start(
                     num_samples=body.get("num_samples", 5),
