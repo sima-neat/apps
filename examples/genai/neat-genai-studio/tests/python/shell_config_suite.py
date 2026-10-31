@@ -405,3 +405,55 @@ class ServerConfigWithoutPyyamlTests(unittest.TestCase):
         setup = (self.EXAMPLE / "setup.sh").read_text(encoding="utf-8")
         self.assertNotIn("import yaml'", setup)
         self.assertNotIn('pip install "PyYAML', setup)
+
+
+class StudioSupervisorTests(unittest.TestCase):
+    def test_failure_requests_service_restart_but_explicit_stop_does_not(self):
+        import signal
+        import time
+
+        service = Path(__file__).resolve().parents[2] / 'src/common/studio_service.sh'
+        for target, sent_signal, expected in (
+                ('supervisor', signal.SIGUSR1, 75),
+                ('model', signal.SIGKILL, 75),
+                ('api', signal.SIGKILL, 75),
+                ('supervisor', signal.SIGTERM, 143)):
+            with self.subTest(target=target, signal=sent_signal), tempfile.TemporaryDirectory() as folder:
+                ready = Path(folder) / 'ready'
+                children = Path(folder) / 'children'
+                script = """set -euo pipefail
+source "$2"
+pids=(); process_groups=(); restart_requested=0
+SHUTDOWN_GRACE_SECONDS=2
+APP_PYTHON=/bin/true
+_self_url=unused; _url=unused
+warn() { :; }; errln() { :; }; stop_stale_rag_worker() { :; }
+ok() { touch "$READY_FILE"; }; studio_ui_hint() { :; }
+setsid sleep 60 & server_pid=$!; pids[0]=$server_pid
+setsid sleep 60 & api_pid=$!; pids[1]=$api_pid
+remember_process_group "$server_pid"
+remember_process_group "$api_pid"
+printf '%s %s\\n' "$server_pid" "$api_pid" > "$1"
+trap 'stop_children' EXIT
+trap 'exit 143' TERM
+trap 'restart_requested=1' USR1
+supervise_children
+"""
+                proc = subprocess.Popen(['bash', '-c', script, '_', str(children), str(service)],
+                                        env=dict(os.environ, READY_FILE=str(ready)))
+                try:
+                    deadline = time.monotonic() + 10
+                    while not ready.exists() and time.monotonic() < deadline:
+                        time.sleep(0.05)
+                    self.assertTrue(ready.exists(), 'supervisor did not become ready')
+                    model_pid, api_pid = map(int, children.read_text().split())
+                    pid = {'supervisor': proc.pid, 'model': model_pid, 'api': api_pid}[target]
+                    os.kill(pid, sent_signal)
+                    self.assertEqual(proc.wait(timeout=10), expected)
+                    for pid in (model_pid, api_pid):
+                        with self.assertRaises(ProcessLookupError):
+                            os.kill(pid, 0)
+                finally:
+                    if proc.poll() is None:
+                        proc.terminate()
+                        proc.wait(timeout=10)

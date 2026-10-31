@@ -111,7 +111,6 @@ class AppConfig:
     control: ControlConfig = ControlConfig(host="127.0.0.1", client_host="127.0.0.1", port=9997)
     catalog_dir: Path | None = None
     max_resident_chat_models: int = 1
-    accelerator_memory_gib: float = 16.0
     hub: HubConfig = HubConfig(allow_download=True,
                               orgs=("simaai", "TDoSiMa", "florianvoss"))
     supertonic: SupertonicConfig = SupertonicConfig()
@@ -168,7 +167,6 @@ def load_server_config(path: Path = DEFAULT_SERVER_CONFIG, apps_root: Path = PAT
         control=_load_control_config(control),
         catalog_dir=_load_optional_dir(models.get("catalog_dir"), apps_root),
         max_resident_chat_models=max(1, int(models.get("max_resident_chat_models", 1) or 1)),
-        accelerator_memory_gib=_load_positive_number(models, "accelerator_memory_gib", 16.0),
         hub=_load_hub_config(hub),
     )
 
@@ -589,19 +587,6 @@ def _resolve_relative_path(path: Path, apps_root: Path) -> Path:
             return candidate
 
     return apps_root / path
-
-
-def _load_positive_number(section: dict, key: str, default: float) -> float:
-    value = section.get(key)
-    if value is None:
-        return default
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        number = 0.0
-    if not 0 < number < float("inf"):
-        raise ValueError(f"server.models.{key} must be a positive number, got {value!r}")
-    return number
 
 
 def _load_bool(value: object) -> bool:

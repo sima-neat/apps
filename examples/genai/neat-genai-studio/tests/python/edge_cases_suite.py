@@ -8,6 +8,7 @@ the ASR switching suite.
 
 import errno
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -20,9 +21,10 @@ from unittest.mock import patch
 from asr_switching_suite import FakeServer, make_model_dir
 from server import hub as hub_module
 from server import model_manager as mm
-from server.model_manager import ModelDoesNotFit, ModelManager
+from server.model_manager import ModelLoadFailed, ModelManager
 from shared.chat_limits import accelerator_busy, context_window_from_elfs, first_chat_event, whole_reply
 from shared.config import HubConfig, model_dir_complete
+from shared import recovery
 
 Usage = namedtuple("Usage", "total used free")
 
@@ -119,10 +121,9 @@ class MemoryFullTests(unittest.TestCase):
         self.manager = ModelManager(self.server, catalog_dir=self.tmp, max_resident_chat_models=3, asr_name=None,
                                     hub=HubConfig(allow_download=False),
                                     openai_base_url="http://127.0.0.1:9998",
-                                    warmup=False, asr_warmup=False, switch_settle_s=0.0,
-                                    accelerator_bytes=100)
+                                    warmup=False, asr_warmup=False, switch_settle_s=0.0)
 
-    def test_the_catalog_reports_memory_and_window(self):
+    def test_the_catalog_reports_elf_bytes_and_window(self):
         (self.tmp / "small-a" / "devkit").mkdir(exist_ok=True)
         (self.tmp / "small-a" / "devkit" / "tokenizer.json").write_text("{}")
         self.manager.scan_catalog()
@@ -135,7 +136,7 @@ class MemoryFullTests(unittest.TestCase):
         self.assertEqual(entries["big-c"]["contextTokens"], 8192)
         self.assertIsNone(entries["small-b"]["contextTokens"])
 
-    def test_paired_packages_use_target_metadata_and_budget_both_components(self):
+    def test_paired_packages_use_target_metadata_and_elf_bytes(self):
         for method in ("dflash", "gemma4_mtp"):
             with self.subTest(method=method):
                 package = self.tmp / method
@@ -162,38 +163,98 @@ class MemoryFullTests(unittest.TestCase):
                 self.assertTrue(entry["complete"])
                 self.manager.load("small-a")
                 self.manager.load("small-b")
-                with self.assertRaises(ModelDoesNotFit):
-                    self.manager.load(method)
                 self.manager.load(method, unload=["small-a", "small-b"])
                 self.assertEqual(self.server.added[-1], (str(package), method))
                 self.manager.unload(method)
                 next((package / "a-draft/elf_files").glob("*.elf")).write_bytes(b"")
                 self.assertFalse(model_dir_complete(package)[0])
 
-    def test_a_load_that_wont_fit_is_refused_before_it_starts(self):
-        self.manager.load("small-a")
-        self.manager.load("small-b")
-        with self.assertRaises(ModelDoesNotFit) as caught:
-            self.manager.load("big-c")
-        self.assertEqual(sorted(caught.exception.resident), ["small-a", "small-b"])
-        self.assertEqual(caught.exception.need, 60)
-        self.assertNotIn("big-c", self.server.model_names(), "nothing was sent to the accelerator")
-        self.assertEqual(sorted(self.manager.resident()), ["small-a", "small-b"], "the loaded models stay")
-
-    def test_the_budget_comes_from_the_config(self):
-        roomy = ModelManager(FakeServer(()), catalog_dir=self.tmp, max_resident_chat_models=3, asr_name=None,
-                             hub=HubConfig(allow_download=False), openai_base_url="http://127.0.0.1:9998",
-                             warmup=False, asr_warmup=False, switch_settle_s=0.0, accelerator_bytes=200)
+    def test_elf_sizes_do_not_reject_a_load(self):
         for name in ("small-a", "small-b", "big-c"):
-            roomy.load(name)
-        self.assertEqual(sorted(roomy.resident()), ["big-c", "small-a", "small-b"])
+            self.manager.load(name)
+        self.assertEqual(sorted(self.manager.resident()), ["big-c", "small-a", "small-b"])
 
-    def test_unloading_one_makes_room(self):
-        self.manager.load("small-a")
-        self.manager.load("small-b")
-        result = self.manager.load("big-c", unload=["small-a"])
-        self.assertEqual(result["evicted"], ["small-a"])
-        self.assertIn("big-c", self.server.model_names())
+    def test_native_allocation_failure_is_reported_as_out_of_memory(self):
+        for detail in ("Cannot allocate memory", "Out of memory", "std::bad_alloc"):
+            with self.subTest(detail=detail), \
+                 patch.object(self.server, "add_model", side_effect=RuntimeError(detail)):
+                with self.assertRaises(ModelLoadFailed) as caught:
+                    self.manager.load("big-c")
+                self.assertTrue(caught.exception.out_of_memory)
+                self.assertIn("did not fit", str(caught.exception))
+                self.assertIsNone(self.manager.status()["loading"])
+
+    def test_native_stderr_identifies_memory_failure_without_reusing_old_errors(self):
+        def fail_load(*args):
+            os.write(2, b"ERROR: SECTION_ALLOC failed: Cannot allocate memory\n")
+            raise RuntimeError("MLA-RT bulk load failed for model: stage_mla.elf")
+
+        with patch.object(self.server, "add_model", side_effect=fail_load):
+            with self.assertRaises(ModelLoadFailed) as first:
+                self.manager.load("big-c")
+        self.assertTrue(first.exception.out_of_memory)
+        with patch.object(self.server, "add_model", side_effect=RuntimeError("MLA-RT bulk load failed")):
+            with self.assertRaises(ModelLoadFailed) as second:
+                self.manager.load("big-c")
+        self.assertFalse(second.exception.out_of_memory)
+
+    def test_stdout_log_reader_drains_allocation_errors_before_classifying(self):
+        import subprocess
+        from server.load_log import __file__ as log_source
+
+        code = """import os
+from server.load_log import LoadLogTap
+tap = LoadLogTap()
+assert tap.install()
+try:
+    baseline = tap.memory_errors
+    os.write(1, b'ERROR: SECTION_ALLOC failed: Cannot allocate memory\\n')
+    assert tap.memory_failed_since(baseline)
+    baseline = tap.memory_errors
+    os.write(1, b'MLA-RT bulk load failed\\n')
+    assert not tap.memory_failed_since(baseline)
+finally:
+    tap.uninstall()
+"""
+        env = dict(os.environ, PYTHONPATH=str(Path(log_source).parents[1]))
+        out = subprocess.run([sys.executable, '-c', code], env=env,
+                             capture_output=True, text=True, timeout=10)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn('Cannot allocate memory', out.stdout)
+
+    def test_interrupted_load_uses_oom_evidence_and_requests_restart(self):
+        import signal
+        import threading
+
+        restarted = threading.Event()
+        with patch.dict(os.environ, NEAT_RUN_PID='12345'), \
+             patch.object(recovery, 'oom_kills', return_value=4), \
+             patch.object(recovery.os, 'kill', side_effect=lambda *_: restarted.set()) as kill:
+            failure = recovery.interrupted_load('large-model', 3)
+            self.assertEqual(failure['code'], 'out_of_memory')
+            self.assertTrue(failure['restarting'])
+            self.assertIn('large-model', failure['error'])
+            self.assertFalse(restarted.is_set())
+            self.assertTrue(restarted.wait(3))
+            kill.assert_called_once_with(12345, signal.SIGUSR1)
+
+    def test_connection_loss_alone_does_not_claim_an_oom_kill(self):
+        with patch.dict(os.environ, NEAT_RUN_PID=''), \
+             patch.object(recovery, 'oom_kills', return_value=4):
+            for before in (4, None):
+                failure = recovery.interrupted_load('model', before)
+                self.assertEqual(failure['code'], 'model_server_lost')
+                self.assertFalse(failure['restarting'])
+                self.assertIn('may have run out of memory', failure['error'])
+
+    def test_reads_oom_kills_from_the_studio_cgroup(self):
+        with patch.object(Path, 'read_text', side_effect=[
+                '0::/system.slice/neat-genai-studio-1000.service\n',
+                'low 0\nhigh 0\nmax 0\noom 0\noom_kill 2\n']):
+            self.assertEqual(recovery.oom_kills(), 2)
+        with patch.object(Path, 'read_text', side_effect=OSError):
+            self.assertIsNone(recovery.oom_kills())
+
 
 
 class StorageFullTests(unittest.TestCase):

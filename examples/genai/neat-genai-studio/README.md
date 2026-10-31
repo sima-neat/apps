@@ -142,7 +142,9 @@ ${APP_DIR}/run.sh
 ```
 
 `run.sh` starts the model server (`${APP_DIR}/src/python/server/main.py`) and
-the Studio backend (`${APP_DIR}/src/python/api/main.py`). When startup finishes
+the Studio backend (`${APP_DIR}/src/python/api/main.py`) in a transient systemd
+service, using passwordless `sudo` on the DevKit. The processes run as your user;
+systemd cleans them up and restarts Studio if its launcher is killed. When startup finishes
 it highlights **Open Neat Insight → GenAI**, prints the backend API address
 (`https://<board-ip>:5000`), and keeps running
 until you press `Ctrl+C`. If `setup.sh` has not been run yet, `run.sh` runs it
@@ -190,7 +192,7 @@ The output lists the speech-to-text model and any chat model you loaded.
 - **`setup.sh` says the runtime refuses the speech-to-text model:** check the model card's runtime requirements and update Neat or choose a compatible model from SiMa's Speech & Audio collection.
 - **`setup.sh` stops on a download (connection refused, timeout, `429`):** `setup.sh` already retries Hugging Face rate limits, server errors and dropped connections a few times, so this is a lasting problem. Check that the board reaches the hosts listed in [Prerequisites](#prerequisites); behind a proxy, export `HTTPS_PROXY` first. Run `${APP_DIR}/setup.sh` again: files already downloaded and verified are kept.
 - **A model download fails:** the message says why. For a model that needs approval, request access on Hugging Face and set `HF_TOKEN`; for a model Hugging Face renamed, download the new id it names.
-- **A model fails to load with an accelerator error:** restart the Studio (`${APP_DIR}/run.sh stop`, then `${APP_DIR}/run.sh`) to free the accelerator, then load the model again. The Studio does not reset or recover board services itself.
+- **A model runs out of memory while loading:** Studio restarts to release model memory. The surviving API reports the failure; if it is killed too, Insight may report a lost connection instead. Choose a smaller model once Studio is ready; an on-demand load is not retried. Details remain in `sudo journalctl -u neat-genai-studio-$(id -u)`.
 - **`/health` reports a voice engine with `"loaded": false`:** the engine failed to load (for example Supertonic while the accelerator was unavailable); the reason is `accelerator-unavailable` or `load-failed` and the details are in the Studio log. A speech request, or choosing the engine, retries it at most every 30 s.
 - **Another instance is running:** `run.sh` refuses to start a second one; `${APP_DIR}/run.sh stop` stops it.
 - **Start over:** `${APP_DIR}/run.sh --clean`, then `${APP_DIR}/setup.sh`. Downloaded models are kept; add `CLEAN_SUPERTONIC=1` to also remove the Supertonic model files.
@@ -246,8 +248,8 @@ full base URL (`http://…` when `app.web.https` is false) or `STUDIO_URL`.
 ### Models
 `POST /models/load` loads a catalog model and warms it. `GET /models/logs/stream`
 streams the load progress as server-sent events. If a load hits an accelerator
-error, only the new model's registration is rolled back; the loaded models stay,
-and the error is reported.
+out-of-memory error, Studio returns HTTP 503 and restarts its backend to release
+memory. Only configured startup models reload; the failed selection is not retried.
 
 #### Keep several models loaded
 By default one chat/VLM model is loaded at a time, and loading another replaces
@@ -269,19 +271,17 @@ curl -sk -X POST $B/models/load -H 'Content-Type: application/json' \
 
 `GET /models/status` lists the loaded models (`resident`, most recently loaded
 first; loading a model that is loaded already moves it to the front) and the limit (`maxResident`). Each catalog entry reports the
-accelerator memory the model takes (`acceleratorBytes`), the tokens it reads at
-once (`contextTokens`), and its tokenizer (`tokenizerPath`).
-Target/draft packages appear as one model, with accelerator memory counted for both components.
+ELF file bytes used to estimate load time (`acceleratorBytes`), the tokens it reads
+at once (`contextTokens`), and its tokenizer (`tokenizerPath`). ELF size is not
+resident memory usage. Target/draft packages appear as one model.
 
 #### Limits and what the Studio does at them
-The board has fixed limits. The Studio checks them before it asks the board to
-do something it can't, and answers with a reason instead of failing silently.
+Studio reports capacity and runtime failures through the model API.
 
 | Situation | What the Studio does |
 | --- | --- |
 | **More models than the limit** | Refused before anything changes (`409`, `"code": "resident_limit"`, with `resident` and how many to unload in `needed`). |
-| **Accelerator memory full**: a model that won't fit beside the loaded ones | Refused before anything is loaded or unloaded (`409`, `"code": "no_room"`, with `needBytes`, `freeBytes` and the loaded models). The budget is `server.models.accelerator_memory_gib` (16 on a Modalix DevKit). |
-| **A load fails anyway** (memory not handed back by earlier unloads) | Only the new model is rolled back; the others stay loaded. Restart the Studio to free the accelerator. |
+| **Accelerator memory full**: a model that won't fit beside the loaded ones | HTTP 503, `"code": "out_of_memory"`, followed by a backend restart. Other accelerator load failures use `"code": "model_load_failed"` and require a manual restart. Running without `run.sh` also requires a manual restart. |
 | **Storage full**: a download bigger than the free space | Refused before it starts, keeping 1 GB free for the board. A disk that fills during a download is reported as such. |
 | **Prompt exceeds the context** | Core's `context_length_exceeded` error is passed through (HTTP 400, or an SSE error). Studio preserves the full history without token counting or automatic trimming. |
 | **Generation reaches the context or output-token limit** | Core's `finish_reason: "length"` is passed through with the generated text. |
