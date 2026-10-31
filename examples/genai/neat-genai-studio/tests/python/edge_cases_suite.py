@@ -1,13 +1,13 @@
 """Edge cases the Studio handles instead of failing on the board.
 
 Memory full (a load that won't fit beside the loaded models), storage full (a
-download bigger than the free space), context full (a conversation longer than
-the model's compiled window) and a busy accelerator (Platform 3.0's "no free
-bank" refusal). No hardware: ModelManager runs against the fake server from
+download bigger than the free space), Core's context errors and a busy accelerator
+(Platform 3.0's "no free bank" refusal). No hardware: ModelManager runs against the fake server from
 the ASR switching suite.
 """
 
 import errno
+import json
 import shutil
 import sys
 import tempfile
@@ -21,10 +21,8 @@ from asr_switching_suite import FakeServer, make_model_dir
 from server import hub as hub_module
 from server import model_manager as mm
 from server.model_manager import ModelDoesNotFit, ModelManager
-from shared.chat_limits import (accelerator_busy, context_window_from_elfs, fit_to_window,
-                                request_tokens, text_tokens, tokenizer_counter, too_long_alone,
-                                whole_reply)
-from shared.config import HubConfig
+from shared.chat_limits import accelerator_busy, context_window_from_elfs, first_chat_event, whole_reply
+from shared.config import HubConfig, model_dir_complete
 
 Usage = namedtuple("Usage", "total used free")
 
@@ -44,88 +42,18 @@ class ContextWindowTests(unittest.TestCase):
             ["x_language_n128_cache_token0_stage1_mla.elf", "x_language_n1_cache_token2047_stage1_mla.elf"]), 2048)
         self.assertIsNone(context_window_from_elfs(["stage0_mla.elf"]))
 
-    def test_estimates_run_high_for_english_and_count_cjk_per_character(self):
-        # The board's LFM2.5-230M (2048 tokens) answered 202 of these sentences.
-        fits = " ".join(["The quick brown fox jumps over the lazy dog."] * 202)
-        self.assertGreaterEqual(text_tokens(fits), 2048)
-        self.assertEqual(text_tokens("你好世界"), 4)
-
-    def test_the_oldest_turns_go_first_and_the_question_always_stays(self):
-        system = {"role": "system", "content": "Be brief."}
-        turn = "a" * 400   # about 100 tokens
-        messages = [system]
-        for i in range(10):
-            messages += [{"role": "user", "content": f"{i} {turn}"}, {"role": "assistant", "content": turn}]
-        messages.append({"role": "user", "content": "Last question?"})
-        sent, dropped = fit_to_window(messages, 1024)
-        self.assertGreater(dropped, 0)
-        self.assertEqual(sent[0], system)
-        self.assertEqual(sent[-1]["content"], "Last question?")
-        self.assertEqual(sent[1]["role"], "user", "no answer is left without its question")
-        self.assertLessEqual(request_tokens(sent), 1024)
-        self.assertEqual(fit_to_window(messages, None), (messages, 0), "unknown window: unchanged")
-
-    def test_a_message_too_long_on_its_own_is_reported(self):
-        long = [{"role": "user", "content": "word " * 3000}]
-        sent, dropped = fit_to_window(long, 2048)
-        self.assertEqual(dropped, 0)
-        self.assertTrue(too_long_alone(sent, 2048))
-        self.assertFalse(too_long_alone([{"role": "user", "content": "Hi"}], 2048))
-
-    def test_malformed_messages_are_left_for_the_model_server_not_a_crash(self):
-        # A 500 from the trimming would hide the model server's own 4xx.
-        for messages in ([{"role": "user", "content": 5}], [{"role": "user", "content": True}]):
-            kept, dropped = fit_to_window(messages, 2048)
-            self.assertEqual((kept, dropped), (messages, 0))
-            self.assertFalse(too_long_alone(messages, 2048))
-        self.assertEqual(fit_to_window("not a list", 2048), ("not a list", 0))
-        self.assertFalse(too_long_alone("not a list", 2048))
-
-    def test_the_models_own_token_count_trims_text_the_estimate_undercounts(self):
-        # On the board, "lorem " filler costs more tokens than 4 characters
-        # each: trimmed by the estimate, LFM2.5-230M answered with no text.
-        lorem = lambda text: 3 * len(str(text).split())   # noqa: E731 - a stand-in tokenizer
-        messages = []
-        for i in range(14):
-            messages += [{"role": "user", "content": f"note {i} " + "lorem " * 120},
-                         {"role": "assistant", "content": "ok"}]
-        messages.append({"role": "user", "content": "Say hi."})
-        estimated, estimate_dropped = fit_to_window(messages, 2048)
-        self.assertGreater(request_tokens(estimated, lorem), 2048 - 64, "the estimate leaves it too long")
-        sent, dropped = fit_to_window(messages, 2048, lorem)
-        self.assertGreater(dropped, estimate_dropped)
-        self.assertLessEqual(request_tokens(sent, lorem), 2048 - 64)
-        self.assertEqual(sent[-1]["content"], "Say hi.")
-        self.assertTrue(too_long_alone([{"role": "user", "content": "lorem " * 700}], 2048, lorem))
-        self.assertFalse(too_long_alone([{"role": "user", "content": "lorem " * 700}], 2048))
-
-    def test_the_tokenizer_file_is_read_once_and_missing_ones_fall_back(self):
-        tokenizer_counter.cache_clear()
-        self.addCleanup(tokenizer_counter.cache_clear)
-        opened = []
-
-        class Tokenizer:
-            @staticmethod
-            def from_file(path):
-                if "missing" in path:
-                    raise OSError("no such file")
-                opened.append(path)
-                return types.SimpleNamespace(encode=lambda text, add_special_tokens: types.SimpleNamespace(
-                    ids=text.split()))
-
-        with patch.dict(sys.modules, {"tokenizers": types.SimpleNamespace(Tokenizer=Tokenizer)}):
-            count = tokenizer_counter("/m/devkit/tokenizer.json")
-            self.assertEqual(count("one two three"), 3)
-            self.assertIs(tokenizer_counter("/m/devkit/tokenizer.json"), count)
-            self.assertEqual(opened, ["/m/devkit/tokenizer.json"])
-            self.assertIsNone(tokenizer_counter("/missing/tokenizer.json"))
-        self.assertIsNone(tokenizer_counter(None))
-
-    def test_pictures_count_toward_the_window(self):
-        with_image = [{"role": "user", "content": [{"type": "text", "text": "What is it?"},
-                                                   {"type": "image", "image": "data:..."}]}]
-        self.assertGreater(request_tokens(with_image), 300)
-
+    def test_streamed_context_errors_and_completions_pass_through(self):
+        error = {"error": {"code": "context_length_exceeded", "message": "Prompt uses 4096 tokens"}}
+        for chunk in (error,
+                      {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+                      {"choices": [{"delta": {}, "finish_reason": "length"}]},
+                      {"choices": [{"delta": {"content": "hello"}}]}):
+            with self.subTest(chunk=chunk):
+                lines = [b"data: " + json.dumps(chunk).encode(), b"", b"data: [DONE]", b""]
+                reply = types.SimpleNamespace(iter_lines=lambda **kwargs: iter(lines))
+                held, remaining, message = first_chat_event(reply)
+                self.assertEqual(held + list(remaining), lines)
+                self.assertEqual(message, (chunk.get("error") or {}).get("message"))
 
 class BusyAcceleratorTests(unittest.TestCase):
     def test_only_the_driver_refusal_counts_as_busy(self):
@@ -133,6 +61,8 @@ class BusyAcceleratorTests(unittest.TestCase):
             "MLA-RT queued wait failed for /x_mla.elf: rc=-11 (Resource temporarily unavailable)"))
         self.assertTrue(accelerator_busy("dispatch: no free bank for model"))
         self.assertFalse(accelerator_busy("HTTP 404"))
+        self.assertFalse(accelerator_busy("MLA-RT queued wait failed: rc=-5 (Input/output error)"))
+        self.assertFalse(accelerator_busy("MLA-RT queued wait failed: rc=-110 (Connection timed out)"))
         self.assertFalse(accelerator_busy(None))
 
     def test_a_whole_reply_refused_by_a_busy_accelerator_is_sent_once_more(self):
@@ -160,6 +90,19 @@ class BusyAcceleratorTests(unittest.TestCase):
         other = Reply(400, '{"error": "bad request"}')
         self.assertEqual(whole_reply(other, lambda: self.fail("not retried"), pause=0)[0], 400)
 
+    def test_context_errors_and_completions_keep_the_core_status_and_body(self):
+        for status, body in (
+            (400, b'{"error":{"code":"context_length_exceeded","message":"Prompt too long"}}'),
+            (200, b'{"choices":[{"message":{"content":""},"finish_reason":"stop"}]}'),
+            (200, b'{"choices":[{"message":{"content":"hello"},"finish_reason":"length"}]}'),
+        ):
+            with self.subTest(status=status, body=body):
+                reply = types.SimpleNamespace(
+                    status_code=status, headers={"Content-Type": "application/json"},
+                    close=lambda: None, content=body)
+                self.assertEqual(whole_reply(reply, lambda: self.fail("not retried")),
+                                 (status, "application/json", body))
+
 
 class MemoryFullTests(unittest.TestCase):
     def setUp(self):
@@ -182,6 +125,7 @@ class MemoryFullTests(unittest.TestCase):
     def test_the_catalog_reports_memory_and_window(self):
         (self.tmp / "small-a" / "devkit").mkdir(exist_ok=True)
         (self.tmp / "small-a" / "devkit" / "tokenizer.json").write_text("{}")
+        self.manager.scan_catalog()
         entries = {e["name"]: e for e in self.manager.catalog()}
         self.assertEqual(entries["small-a"]["tokenizerPath"],
                          str(self.tmp / "small-a" / "devkit" / "tokenizer.json"))
@@ -190,6 +134,41 @@ class MemoryFullTests(unittest.TestCase):
         self.assertEqual(entries["small-a"]["contextTokens"], 2048)
         self.assertEqual(entries["big-c"]["contextTokens"], 8192)
         self.assertIsNone(entries["small-b"]["contextTokens"])
+
+    def test_paired_packages_use_target_metadata_and_budget_both_components(self):
+        for method in ("dflash", "gemma4_mtp"):
+            with self.subTest(method=method):
+                package = self.tmp / method
+                for name, draft, size, window in (("a-draft", True, 20, 8192),
+                                                  ("z-target", False, 40, 4096)):
+                    component = make_model_dir(package, name, "chat")
+                    (component / "elf_files" / "stage0_mla.elf").rename(
+                        component / "elf_files" / f"language_n1_cache_token{window-1}_stage1_mla.elf")
+                    next((component / "elf_files").glob("*.elf")).write_bytes(b"x" * size)
+                    config = {"lm_cfg": {"speculative_decoding_cfg": {
+                        "method": method, "is_draft": draft}}}
+                    if method == "gemma4_mtp" and not draft:
+                        config.update(vision_model_name="vision", vm_cfg={"image_size": [480, 480]})
+                    (component / "devkit" / "vlm_config.json").write_text(json.dumps(config))
+                tokenizer = package / "z-target/devkit/tokenizer.json"
+                tokenizer.write_text("{}")
+                self.manager.scan_catalog()
+                entry = next(e for e in self.manager.catalog() if e["name"] == method)
+                self.assertEqual(entry["acceleratorBytes"], 60)
+                self.assertEqual(entry["stagesTotal"], 2)
+                self.assertEqual(entry["contextTokens"], 4096)
+                self.assertEqual(entry["tokenizerPath"], str(tokenizer))
+                self.assertEqual(entry["supportsVision"], method == "gemma4_mtp")
+                self.assertTrue(entry["complete"])
+                self.manager.load("small-a")
+                self.manager.load("small-b")
+                with self.assertRaises(ModelDoesNotFit):
+                    self.manager.load(method)
+                self.manager.load(method, unload=["small-a", "small-b"])
+                self.assertEqual(self.server.added[-1], (str(package), method))
+                self.manager.unload(method)
+                next((package / "a-draft/elf_files").glob("*.elf")).write_bytes(b"")
+                self.assertFalse(model_dir_complete(package)[0])
 
     def test_a_load_that_wont_fit_is_refused_before_it_starts(self):
         self.manager.load("small-a")

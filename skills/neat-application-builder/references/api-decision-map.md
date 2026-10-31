@@ -45,8 +45,10 @@ every frame matters more than freshness.
 
 - MIPI/CSI camera: `nodes::CameraInput` / `pyneat.nodes.camera_input`. Capture
   is strict zero-copy; set `allow_cpu_fallback` only as a deliberate
-  compatibility choice. Read Core's `mipi-camera-input.md` before changing
-  capture buffer counts.
+  compatibility choice. Leave `capture_buffer_count` at `0` (camera default):
+  Platform 3.0's libcamerasrc has no `buffer-count` property, and Core rejects
+  any non-zero value at graph build. Read Core's `mipi-camera-input.md` before
+  changing it.
 - USB (UVC) webcam: `nodes::UsbCameraInput` /
   `pyneat.nodes.usb_camera_input`, opened by a stable ID from
   `usb_camera_ids()` at an exact MJPEG mode the camera lists. Call

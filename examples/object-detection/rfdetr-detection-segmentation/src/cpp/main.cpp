@@ -782,7 +782,7 @@ void require_model_contract(const Config& cfg, neat::Model& backbone, neat::Mode
       backbone_inputs.front().dtypes == std::vector<neat::TensorDType>{neat::TensorDType::UInt8} &&
       has_specs(backbone.output_specs(),
                 {{1, side, side, 256}, {1, side * side}, {1, side * side, 4}}) &&
-      has_specs(transformer.input_specs(), {{side, side, 256}, {1, cfg.top_k, 4}}) &&
+      has_specs(transformer.input_specs(), {{1, side, side, 256}, {1, cfg.top_k, 4}}) &&
       has_specs(transformer.output_specs(), transformer_outputs);
   sima_examples::require(valid_contract,
                          "selected RF-DETR model pair has an unexpected I/O contract");

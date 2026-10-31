@@ -9,7 +9,7 @@
 | Languages | Python |
 | Status | stable |
 | Binary Name | neat-genai-studio |
-| Model | Loaded on demand (e.g. Qwen3-VL-4B-Instruct-Autoround-a16w4) + whisper-small-a16w8-layered-encoder |
+| Model | Loaded on demand (e.g. Qwen3-VL-4B-Instruct-Autoround-a16w4) + whisper-small-a16w8 |
 
 ## Concept
 Runs language, vision-language, and speech models on a Modalix device as the board-side backend for the GenAI tab in Neat Insight, with an OpenAI-compatible API.
@@ -33,7 +33,7 @@ Once set up, the Studio runs without internet access. The first `setup.sh` run a
 - A Modalix DevKit with `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)), the Neat Development Environment, and the Neat Library installed.
 - The Neat Library's Python environment at `~/pyneat/bin/python`. If it is somewhere else, set `PYNEAT_PYTHON=/path/to/python-with-pyneat` before running the commands below.
 - Neat Insight, to use the GenAI tab.
-- Internet access on the board for the first `setup.sh` run and for Hugging Face downloads. Behind a firewall or proxy, allow `pypi.org` and `files.pythonhosted.org` (Python packages), `download.pytorch.org` (PyTorch for document search), `huggingface.co` and its download hosts (models and voices), `raw.githubusercontent.com` (English text-to-speech data for Piper, fetched with NLTK), and `docs.sima.ai` (Supertonic's compiled model, through `sima-cli`).
+- Internet access on the board for the first `setup.sh` run and for Hugging Face downloads. Behind a firewall or proxy, allow `pypi.org` and `files.pythonhosted.org` (Python packages), `download.pytorch.org` (PyTorch for document search), `huggingface.co` and its download hosts (models and voices), `raw.githubusercontent.com` (English text-to-speech data for Piper, fetched with NLTK), and `docs.sima.ai` (Supertonic's compiled models, through `sima-cli`).
 
 Run every command below in a shell on the board.
 
@@ -62,7 +62,7 @@ ${APP_DIR}/setup.sh
 ```
 
 `setup.sh` downloads the default speech-to-text model
-(`florianvoss/whisper-small-a16w8-layered-encoder`) and the RAG embedding model
+(`simaai/whisper-small-a16w8`) from SiMa's [Speech & Audio collection](https://huggingface.co/collections/simaai/speech-and-audio-models), and the RAG embedding model
 (`thenlper/gte-small`) into `/media/nvme/llima/models`, installs the
 text-to-speech voices and the Supertonic engine, builds the default RAG
 database, and writes `config.local.yaml`. When asked, pick the voice languages
@@ -89,9 +89,7 @@ lists them all):
 
 - `CHAT_MODEL_REPO`: also download **and preload** one chat/VLM model at startup.
 - `ASR_MODEL_REPO`: the speech-to-text model installed and made active at
-  startup (set to `""` to install none). Current LLiMa needs a layered-encoder
-  Whisper build; on a runtime that needs a monolithic encoder pass
-  `ASR_MODEL_REPO=simaai/whisper-small-a16w8`. Setup checks the model loads and
+  startup (set to `""` to install none). Setup checks the model loads and
   leaves it out of the startup configuration if the runtime refuses it.
 - `ASR_CATALOG_MODEL_REPOS`: extra speech-to-text repos to switch between at runtime.
 - `ALLOW_HUB_DOWNLOAD`, `HUB_ORGS`: allow Hugging Face downloads through the API
@@ -125,7 +123,7 @@ only to change:
 - `server.models.catalog_dir`: the directory scanned for models (default `/media/nvme/llima/models`).
 - `server.models.chat`: chat or vision-language models to load at startup (none by default).
 - `server.models.max_resident_chat_models`: how many chat or vision-language models stay loaded at once (default `1`; see [Keep several models loaded](#keep-several-models-loaded)).
-- `server.models.asr`: the speech-to-text model active at startup. Models from Hugging Face accounts other than `simaai` are named `<org>@<name>`, for example `florianvoss@whisper-small-a16w8-layered-encoder`.
+- `server.models.asr`: the speech-to-text model active at startup (default `whisper-small-a16w8`).
 - `server.hub.allow_download`: whether models may be downloaded from Hugging Face.
 - `app.request.max_tokens`: the default response length for chat requests that do not set `max_tokens`.
 - `app.rag.enabled`: retrieval-augmented search. Turning it on after a
@@ -145,7 +143,8 @@ ${APP_DIR}/run.sh
 
 `run.sh` starts the model server (`${APP_DIR}/src/python/server/main.py`) and
 the Studio backend (`${APP_DIR}/src/python/api/main.py`). When startup finishes
-it prints the backend address, `https://<board-ip>:5000`, and keeps running
+it highlights **Open Neat Insight → GenAI**, prints the backend API address
+(`https://<board-ip>:5000`), and keeps running
 until you press `Ctrl+C`. If `setup.sh` has not been run yet, `run.sh` runs it
 first.
 
@@ -167,12 +166,15 @@ ${APP_DIR}/run.sh --clean  # remove generated venvs, config, RAG db, voices and 
 ```
 
 ## Expected Result
-- `run.sh` prints `Neat GenAI Studio is starting up.` and the backend address.
+- Once the backend is ready, `run.sh` prints `Neat GenAI Studio is ready.` and
+  **Open Neat Insight → GenAI**, with the backend API address.
 - `curl -sk https://127.0.0.1:5000/health` answers JSON with `"ok": true` once
   the model server is reachable, and lists the active speech-to-text model and
   the loaded text-to-speech engines.
-- In Insight's GenAI tab, after you load a model, a chat message returns a
-  streamed reply, recorded speech is transcribed, and replies can be read aloud.
+- Insight's catalogue lists installed models, including one entry per DFlash
+  or Gemma MTP target/draft package.
+- After you load a model in Insight's GenAI tab, chat replies stream, Whisper
+  transcribes recorded speech, and the selected TTS engine can read replies aloud.
 
 To confirm the model server from a second shell on the board:
 
@@ -185,7 +187,7 @@ The output lists the speech-to-text model and any chat model you loaded.
 ## Troubleshooting
 - **The model server does not start:** confirm `pyneat` imports in the environment at `PYNEAT_PYTHON` (default `~/pyneat/bin/python`).
 - **Insight cannot reach the backend:** check `${APP_DIR}/run.sh status`, then `curl -sk https://<board-ip>:5000/health` from the machine running Insight. The backend uses a self-signed certificate generated on first start; `NEAT_TLS_CERT` and `NEAT_TLS_KEY` select your own.
-- **`setup.sh` says the runtime refuses the speech-to-text model:** your Neat runtime needs a speech model with a different encoder layout. Install the older build instead with `ASR_MODEL_REPO=simaai/whisper-small-a16w8 ${APP_DIR}/setup.sh`.
+- **`setup.sh` says the runtime refuses the speech-to-text model:** check the model card's runtime requirements and update Neat or choose a compatible model from SiMa's Speech & Audio collection.
 - **`setup.sh` stops on a download (connection refused, timeout, `429`):** `setup.sh` already retries Hugging Face rate limits, server errors and dropped connections a few times, so this is a lasting problem. Check that the board reaches the hosts listed in [Prerequisites](#prerequisites); behind a proxy, export `HTTPS_PROXY` first. Run `${APP_DIR}/setup.sh` again: files already downloaded and verified are kept.
 - **A model download fails:** the message says why. For a model that needs approval, request access on Hugging Face and set `HF_TOKEN`; for a model Hugging Face renamed, download the new id it names.
 - **A model fails to load with an accelerator error:** restart the Studio (`${APP_DIR}/run.sh stop`, then `${APP_DIR}/run.sh`) to free the accelerator, then load the model again. The Studio does not reset or recover board services itself.
@@ -269,6 +271,7 @@ curl -sk -X POST $B/models/load -H 'Content-Type: application/json' \
 first; loading a model that is loaded already moves it to the front) and the limit (`maxResident`). Each catalog entry reports the
 accelerator memory the model takes (`acceleratorBytes`), the tokens it reads at
 once (`contextTokens`), and its tokenizer (`tokenizerPath`).
+Target/draft packages appear as one model, with accelerator memory counted for both components.
 
 #### Limits and what the Studio does at them
 The board has fixed limits. The Studio checks them before it asks the board to
@@ -280,8 +283,8 @@ do something it can't, and answers with a reason instead of failing silently.
 | **Accelerator memory full**: a model that won't fit beside the loaded ones | Refused before anything is loaded or unloaded (`409`, `"code": "no_room"`, with `needBytes`, `freeBytes` and the loaded models). The budget is `server.models.accelerator_memory_gib` (16 on a Modalix DevKit). |
 | **A load fails anyway** (memory not handed back by earlier unloads) | Only the new model is rolled back; the others stay loaded. Restart the Studio to free the accelerator. |
 | **Storage full**: a download bigger than the free space | Refused before it starts, keeping 1 GB free for the board. A disk that fills during a download is reported as such. |
-| **Context full**: a conversation longer than the model reads at once | The oldest turns are left out so the model still answers, and `X-Context-Dropped` says how many (`X-Context-Window` gives the window). Tokens are counted with the model's own tokenizer when the Studio runs on the same board as the model server, and estimated otherwise. |
-| **One message longer than the window** | Refused with the reason instead of an empty reply (`413`, `"code": "context_full"`). |
+| **Prompt exceeds the context** | Core's `context_length_exceeded` error is passed through (HTTP 400, or an SSE error). Studio preserves the full history without token counting or automatic trimming. |
+| **Generation reaches the context or output-token limit** | Core's `finish_reason: "length"` is passed through with the generated text. |
 | **Accelerator busy** (Platform 3.0: `rc=-11`, kernel log `no free bank`, when several models run at once) | Retried once automatically, for streamed and whole replies, when no text had come back yet; otherwise the error is passed on. |
 
 Speech-to-text has its own slot. `POST /models/asr` makes another ASR model
@@ -344,17 +347,19 @@ environment of `run.sh`.
   `POST /tts/engine` changes the preference for languages more than one engine
   can speak.
 - **Supertonic 3** runtime is vendored under `src/python/api/tts/supertonic_sima/`
-  (see its README for provenance). It synthesizes at a real-time factor of about
-  0.07 on a Modalix DevKit and offers ten speakers (F1-F5, M1-M5).
+  (see its README for provenance). It offers ten speakers (F1-F5, M1-M5).
+  Each denoising step evaluates conditional and unconditional guidance together
+  in one batch-two vector-estimator call; the vocoder remains batch one.
   `SUPERTONIC_VOICE` picks the startup speaker; `SUPERTONIC_STEPS` (5-12,
   default 8) trades quality for latency. It runs in its own venv
   (`./.venv-supertonic`, requirements in `src/python/requirements-supertonic.txt`
   plus the installed PyNeat) and worker process. `setup.sh` downloads its model
   files from [Supertone/supertonic-3](https://huggingface.co/Supertone/supertonic-3)
-  and [florianvoss/supertonic-3-sima](https://huggingface.co/florianvoss/supertonic-3-sima)
-  at pinned revisions, and the Platform 3.0 vector estimator from the SiMa model
-  zoo with `sima-cli download` (address and checksum in
-  `src/python/api/tts/supertonic_sima/vector_estimator.json`). Every file is
+  and its runtime constants from
+  [florianvoss/supertonic-3-sima](https://huggingface.co/florianvoss/supertonic-3-sima)
+  at pinned revisions. Both compiled models come from the SiMa model zoo with
+  `sima-cli download`; `src/python/api/tts/supertonic_sima/model_assets.json`
+  records their addresses and checksums. Every file is
   verified by SHA-256, and each `setup.sh` run repairs missing or changed files.
   Supertonic needs Platform 3.0 or newer; when the runtime is missing the engine
   is not offered. The models root and venv are persisted under

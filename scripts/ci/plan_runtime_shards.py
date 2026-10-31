@@ -233,10 +233,7 @@ def main():
         args.group,
         os.environ.get("REPOSITORY_PRIVATE", "true") == "true",
     )
-    manifest = json.loads((ROOT / "deps/manifest.json").read_text())
     labels = json.loads(args.labels)
-    if manifest.get("elxr_version"):
-        labels.append(manifest["elxr_version"])
     weights = json.loads((ROOT / "tests/ci-durations.json").read_text())[
         "suite_seconds"
     ]

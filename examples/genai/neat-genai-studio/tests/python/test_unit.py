@@ -43,7 +43,6 @@ from asr_switching_suite import (  # noqa: E402
     AsrSwitchingTests,
     AsrWarmupBehaviourTests,
     AsrWarmupPayloadTests,
-    EncoderLayoutIsNotJudgedLocallyTests,
     MlaFailureClassificationTests,
 )
 from hub_security_suite import HubPathSecurityTests  # noqa: E402,F401
@@ -95,7 +94,7 @@ from shell_config_suite import (  # noqa: E402,F401
     ShellRagConfigTests,
     ShellWebConfigTests,
 )
-from setup_rag_suite import SetupRagSwitchTests  # noqa: E402,F401
+from setup_rag_suite import RagDatabaseCleanupTests, SetupRagSwitchTests  # noqa: E402,F401
 from backend_mode_suite import (  # noqa: E402,F401
     BackendPathTests,
     CorsPolicyTests as BackendCorsPolicyTests,
@@ -113,7 +112,7 @@ from supertonic_platform3_suite import (  # noqa: E402,F401
     BatchAxisTests as SupertonicBatchAxisTests,
     NumpyPinTests as SupertonicNumpyPinTests,
     PyneatLinkTests as SupertonicPyneatLinkTests,
-    VectorEstimatorTests as SupertonicVectorEstimatorTests,
+    ModelAssetsTests as SupertonicModelAssetsTests,
 )
 from voice_catalog_suite import (  # noqa: E402,F401
     test_catalog_has_simple_licenses_and_pinned_sources,
@@ -216,7 +215,6 @@ __all__ = [
     "AsrSwitchingTests",
     "AsrWarmupBehaviourTests",
     "AsrWarmupPayloadTests",
-    "EncoderLayoutIsNotJudgedLocallyTests",
     "MlaFailureClassificationTests",
     "HubPathSecurityTests",
     "AsrMetadataTests",

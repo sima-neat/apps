@@ -11,8 +11,9 @@ camera:
   fps_den: 1
   # Camera pixel format. This example supports NV12 only.
   format: NV12
-  # Number of application-owned DMA-BUFs requested for camera capture.
-  capture_buffers: 32
+  # Minimum camera capture buffers. Keep 0 (camera default): Platform 3.0's
+  # libcamerasrc has no buffer-count property and Core rejects any other value.
+  capture_buffers: 0
   # Fail instead of copying when strict DMA-BUF negotiation is unavailable.
   strict_zero_copy: true
   # Depth used for the camera's live queue and the terminal output queue.
