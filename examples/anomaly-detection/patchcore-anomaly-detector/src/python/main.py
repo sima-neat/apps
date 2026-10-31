@@ -494,6 +494,8 @@ def build_video_sender(cfg: AppConfig, fps: float, width: int, height: int):
     input_options.fps_n = output_fps
     input_options.fps_d = 1
     input_options.memory_policy = pyneat.InputMemoryPolicy.Ev74
+    # Keep each pushed frame's source timestamp; Insight pairs it with the verdict by timestamp.
+    input_options.do_timestamp = False
 
     encode = pyneat.SimaEncodeOptions()
     encode.fps = output_fps

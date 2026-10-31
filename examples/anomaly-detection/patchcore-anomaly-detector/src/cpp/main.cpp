@@ -566,6 +566,8 @@ VideoSender build_video_sender(const Config& cfg, double fps, int width, int hei
   input_options.fps_n = output_fps;
   input_options.fps_d = 1;
   input_options.memory_policy = simaai::neat::InputMemoryPolicy::Ev74;
+  // Keep each pushed frame's source timestamp; Insight pairs it with the verdict by timestamp.
+  input_options.do_timestamp = false;
 
   auto sender_options =
       simaai::neat::nodes::groups::VideoSenderOptions::FromRaw({.fps = output_fps});
