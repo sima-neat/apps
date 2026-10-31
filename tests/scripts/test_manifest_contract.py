@@ -497,6 +497,19 @@ def _run_build(
     _write_manifest(manifest_path, neat_core, platform_version)
 
     bin_dir, log_path = _write_fake_curl(tmp_path)
+    git_path = bin_dir / "git"
+    if not git_path.exists():
+        # Branch fixtures must not inherit an exact tag from the real checkout.
+        # Local-tag cases provide their own git fixture before calling this helper.
+        git_path.write_text(
+            '#!/usr/bin/env bash\n'
+            'case " $* " in\n'
+            '  *" describe --tags --exact-match HEAD "*) exit 1 ;;\n'
+            '  *) exec /usr/bin/git "$@" ;;\n'
+            'esac\n',
+            encoding="utf-8",
+        )
+        git_path.chmod(0o755)
     build_dir = tmp_path / "build"
     run_env = os.environ.copy()
     for name in (
@@ -786,6 +799,77 @@ def test_snap_manifest_resolves_from_dependency_branch(tmp_path):
     assert json.loads(
         (tmp_path / "deps" / "neat-core.json").read_text(encoding="utf-8")
     ) == {"neat-core": {"ref": "develop", "spec": "devsha1"}}
+
+
+
+@pytest.mark.parametrize("policy", [{"policy": "snap"}, ""])
+def test_snap_tag_selects_matching_core_release_and_records_revision(tmp_path, policy):
+    proc = _run_build(
+        tmp_path,
+        neat_core=policy,
+        args=["--only-install-neat-core"],
+        env={
+            **_installer_env(tmp_path),
+            "GITHUB_REF_TYPE": "tag",
+            "GITHUB_REF_NAME": "v0.6.0",
+            "NEAT_APPS_DEPENDENCY_BRANCH": "develop",
+            "NEAT_APPS_TEST_LATEST_TAGS": "v0.6.0=release-sha\ndevelop=devsha1",
+        },
+    )
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert _installer_args(tmp_path) == "--minimum v0.6.0 release-sha"
+    assert "https://core.test/develop/latest.tag" not in _curl_log(tmp_path)
+    assert json.loads((tmp_path / "deps/neat-core.json").read_text()) == {
+        "neat-core": {"ref": "v0.6.0", "spec": "release-sha"}}
+
+
+def test_snap_tag_missing_core_release_fails_without_develop_fallback(tmp_path):
+    proc = _run_build(
+        tmp_path,
+        neat_core={"policy": "snap"},
+        args=["--only-install-neat-core"],
+        env={**_installer_env(tmp_path), "GITHUB_REF_TYPE": "tag", "GITHUB_REF_NAME": "v0.6.0"},
+    )
+    assert proc.returncode != 0
+    assert "v0.6.0/latest.tag" in proc.stderr
+    assert "https://core.test/develop/latest.tag" not in _curl_log(tmp_path)
+    assert not (tmp_path / "installer-args.txt").exists()
+
+
+@pytest.mark.parametrize("selection", ["manifest", "override"])
+def test_explicit_core_selection_stays_authoritative_on_apps_tag(tmp_path, selection):
+    proc = _run_build(
+        tmp_path,
+        neat_core={"ref": "main", "spec": "mainsha1"} if selection == "manifest" else {"policy": "snap"},
+        args=["--only-install-neat-core"] + (
+            ["--neat-core-version", "main-mainsha1"] if selection == "override" else []),
+        env={**_installer_env(tmp_path), "GITHUB_REF_TYPE": "tag", "GITHUB_REF_NAME": "v0.6.0"},
+    )
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert _installer_args(tmp_path) == "--minimum main mainsha1"
+    assert not any("/v0.6.0/" in url for url in _curl_log(tmp_path))
+
+
+def test_snap_local_exact_tag_selects_matching_core_release(tmp_path):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    git = bin_dir / "git"
+    git.write_text("""#!/usr/bin/env bash
+case " $* " in
+  *" rev-parse --is-inside-work-tree "*) echo true ;;
+  *" describe --tags --exact-match HEAD "*) echo v0.6.0 ;;
+  *) exec /usr/bin/git "$@" ;;
+esac
+""")
+    git.chmod(0o755)
+    proc = _run_build(
+        tmp_path,
+        neat_core={"policy": "snap"},
+        args=["--only-install-neat-core"],
+        env={**_installer_env(tmp_path), "NEAT_APPS_TEST_LATEST_TAGS": "v0.6.0=release-sha"},
+    )
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert _installer_args(tmp_path) == "--minimum v0.6.0 release-sha"
 
 
 def test_empty_manifest_custom_branch_uses_matching_core_artifact_once(tmp_path):

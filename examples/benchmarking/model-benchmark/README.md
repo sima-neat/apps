@@ -57,7 +57,7 @@ cd ..
 
 ## Configure
 
-Open `${APP_DIR}/src/common/config.yaml` and set `model.path`. You can also change the number of benchmark frames and the JSON report path, or pass those values on the command line.
+Open `${APP_DIR}/src/common/config.yaml` and set `model.path`. You can also change the minimum frames and duration of each benchmark pass and the JSON report path, or pass those values on the command line.
 
 ## Run
 
@@ -66,11 +66,14 @@ source ~/pyneat/bin/activate
 pip install -r ${APP_DIR}/src/python/requirements.txt
 python3 ${APP_DIR}/src/python/main.py \
   --model models/<model-file>.tar.gz \
-  --frames 1000 \
+  --frames 100 \
+  --min-duration-ms 30000 \
   --output-json sandbox/model-benchmark/report.json
 ```
 
 The command prints headline metrics and writes the complete report to the selected JSON path.
+
+The benchmark runs a latency pass and a throughput pass. Each pass continues until it has measured at least `--frames` samples and run for at least `--min-duration-ms` milliseconds (30000 by default, `benchmark.min_duration_ms` in the config). Pass `--min-duration-ms 0` for a quick check that stops after `--frames` samples.
 
 Without `--decode-type`, the model runs through the route its package declares. Add `--decode-type yolo26-det` or `--decode-type yolo26-seg` to benchmark a YOLO26 package through its BoxDecode route instead. Every report records the requested decode type and the postprocess Core resolved, so the two routes stay distinguishable.
 
@@ -83,10 +86,11 @@ See the maintained [benchmark results](https://github.com/sima-neat/apps/blob/ma
 The application prints headline metrics and the path it wrote the full report to:
 
 ```text
-latency_ms=7.153341385999992
-fps=300.716959903217
-avg_power_watts=14.03314393939394
-energy_joules=46.6746557159697
+latency_ms=6.520167780941697
+latency_p99_ms=7.116750399999998
+fps=334.74326851174976
+avg_power_watts=14.64375
+energy_joules=4.374621203020843
 report_json=sandbox/model-benchmark/report.json
 ```
 
@@ -103,6 +107,7 @@ maintained benchmark results linked in the `Benchmark Results` section above.
 - Activate `~/pyneat` if the `pyneat` module is unavailable.
 - Confirm the model path points to a compiled `.tar.gz` package.
 - A zero power result means board power telemetry was unavailable; the model benchmark still completed.
+- If results fall well below the maintained table, check the MLA clock with `cat /sys/class/devfreq/5000000.mla/cur_freq`. The table was measured at 1000 MHz; a board that boots at 600 MHz measures about 40% lower FPS.
 
 ## Source Files
 
