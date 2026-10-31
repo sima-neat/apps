@@ -24,7 +24,7 @@ CAMERA_WIDTH = 1920
 CAMERA_HEIGHT = 1080
 INSIGHT_FRAMES = 60
 INSIGHT_DEADLINE_S = 120.0
-# VideoSenderOptions.h264_rtp_udp_from_raw sends RTP payload type 96.
+# VideoSenderOptions.from_raw with H.264 sends RTP payload type 96.
 H264_PAYLOAD_TYPE = 96
 H264_IDR = 5
 H264_SPS = 7

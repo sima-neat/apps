@@ -567,8 +567,8 @@ VideoSender build_video_sender(const Config& cfg, double fps, int width, int hei
   input_options.fps_d = 1;
   input_options.memory_policy = simaai::neat::InputMemoryPolicy::Ev74;
 
-  auto sender_options = simaai::neat::nodes::groups::VideoSenderOptions::H264RtpUdpFromRaw(
-      width, height, output_fps);
+  auto sender_options =
+      simaai::neat::nodes::groups::VideoSenderOptions::FromRaw({.fps = output_fps});
   sender_options.host = cfg.insight_host;
   sender_options.channel = cfg.insight_channel;
   sender_options.video_port_base = cfg.insight_video_port;
