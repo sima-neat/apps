@@ -142,9 +142,9 @@ ${APP_DIR}/run.sh
 ```
 
 `run.sh` starts the model server (`${APP_DIR}/src/python/server/main.py`) and
-the Studio backend (`${APP_DIR}/src/python/api/main.py`) in a transient systemd
-service, using passwordless `sudo` on the DevKit. The processes run as your user;
-systemd cleans them up and restarts Studio if its launcher is killed. When startup finishes
+the Studio backend (`${APP_DIR}/src/python/api/main.py`) as your user, without
+sudo. The launcher restarts its workers after a model-load memory failure.
+When startup finishes
 it highlights **Open Neat Insight → GenAI**, prints the backend API address
 (`https://<board-ip>:5000`), and keeps running
 until you press `Ctrl+C`. If `setup.sh` has not been run yet, `run.sh` runs it
@@ -192,7 +192,8 @@ The output lists the speech-to-text model and any chat model you loaded.
 - **`setup.sh` says the runtime refuses the speech-to-text model:** check the model card's runtime requirements and update Neat or choose a compatible model from SiMa's Speech & Audio collection.
 - **`setup.sh` stops on a download (connection refused, timeout, `429`):** `setup.sh` already retries Hugging Face rate limits, server errors and dropped connections a few times, so this is a lasting problem. Check that the board reaches the hosts listed in [Prerequisites](#prerequisites); behind a proxy, export `HTTPS_PROXY` first. Run `${APP_DIR}/setup.sh` again: files already downloaded and verified are kept.
 - **A model download fails:** the message says why. For a model that needs approval, request access on Hugging Face and set `HF_TOKEN`; for a model Hugging Face renamed, download the new id it names.
-- **A model runs out of memory while loading:** Studio restarts to release model memory. The surviving API reports the failure; if it is killed too, Insight may report a lost connection instead. Choose a smaller model once Studio is ready; an on-demand load is not retried. Details remain in `sudo journalctl -u neat-genai-studio-$(id -u)`.
+- **A model runs out of memory while loading:** the launcher restarts Studio's workers to release model memory. The surviving API reports the failure; if it is killed too, Insight may report a lost connection instead. Choose a smaller model once Studio is ready; an on-demand load is not retried. Details are in the launcher output.
+- **The launcher itself is killed:** start Studio again. Automatic recovery of the launcher requires external supervision configured by your administrator.
 - **`/health` reports a voice engine with `"loaded": false`:** the engine failed to load (for example Supertonic while the accelerator was unavailable); the reason is `accelerator-unavailable` or `load-failed` and the details are in the Studio log. A speech request, or choosing the engine, retries it at most every 30 s.
 - **Another instance is running:** `run.sh` refuses to start a second one; `${APP_DIR}/run.sh stop` stops it.
 - **Start over:** `${APP_DIR}/run.sh --clean`, then `${APP_DIR}/setup.sh`. Downloaded models are kept; add `CLEAN_SUPERTONIC=1` to also remove the Supertonic model files.

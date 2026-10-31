@@ -222,39 +222,28 @@ finally:
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertIn('Cannot allocate memory', out.stdout)
 
-    def test_interrupted_load_uses_oom_evidence_and_requests_restart(self):
+    def test_interrupted_load_reports_connection_loss_and_requests_restart(self):
         import signal
         import threading
 
         restarted = threading.Event()
         with patch.dict(os.environ, NEAT_RUN_PID='12345'), \
-             patch.object(recovery, 'oom_kills', return_value=4), \
              patch.object(recovery.os, 'kill', side_effect=lambda *_: restarted.set()) as kill:
-            failure = recovery.interrupted_load('large-model', 3)
-            self.assertEqual(failure['code'], 'out_of_memory')
+            failure = recovery.interrupted_load('large-model')
+            self.assertEqual(failure['code'], 'model_server_lost')
             self.assertTrue(failure['restarting'])
             self.assertIn('large-model', failure['error'])
             self.assertFalse(restarted.is_set())
             self.assertTrue(restarted.wait(3))
             kill.assert_called_once_with(12345, signal.SIGUSR1)
 
-    def test_connection_loss_alone_does_not_claim_an_oom_kill(self):
-        with patch.dict(os.environ, NEAT_RUN_PID=''), \
-             patch.object(recovery, 'oom_kills', return_value=4):
-            for before in (4, None):
-                failure = recovery.interrupted_load('model', before)
-                self.assertEqual(failure['code'], 'model_server_lost')
-                self.assertFalse(failure['restarting'])
-                self.assertIn('may have run out of memory', failure['error'])
-
-    def test_reads_oom_kills_from_the_studio_cgroup(self):
-        with patch.object(Path, 'read_text', side_effect=[
-                '0::/system.slice/neat-genai-studio-1000.service\n',
-                'low 0\nhigh 0\nmax 0\noom 0\noom_kill 2\n']):
-            self.assertEqual(recovery.oom_kills(), 2)
-        with patch.object(Path, 'read_text', side_effect=OSError):
-            self.assertIsNone(recovery.oom_kills())
-
+    def test_connection_loss_without_launcher_requires_manual_restart(self):
+        with patch.dict(os.environ, NEAT_RUN_PID=''):
+            failure = recovery.interrupted_load('model')
+            self.assertEqual(failure['code'], 'model_server_lost')
+            self.assertFalse(failure['restarting'])
+            self.assertIn('may have run out of memory', failure['error'])
+            self.assertIn('Restart GenAI Studio', failure['error'])
 
 
 class StorageFullTests(unittest.TestCase):

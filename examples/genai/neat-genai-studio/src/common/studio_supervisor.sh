@@ -1,47 +1,9 @@
-# Sourced by run.sh. PID 1 owns the Studio so a killed launcher cannot orphan
-# its workers. The service runs as the invoking user, not as root.
-STUDIO_UNIT="neat-genai-studio-$(id -u).service"
+# Sourced by run.sh to supervise and restart Studio's own processes.
 
-run_supervised() {
-  local name status waiter journal
-  local names=() environment=()
-  # Keep runtime/config overrides without putting their values on the command line.
-  while IFS= read -r name; do
-    case "${name}" in
-      INVOCATION_ID|JOURNAL_STREAM|NOTIFY_SOCKET|NEAT_RUN_PID|STUDIO_SUPERVISED|SUDO_*|SSH_*|DBUS_*|XDG_RUNTIME_DIR) continue ;;
-    esac
-    names+=("${name}")
-    environment+=("--setenv=${name}")
-  done < <(compgen -e)
-  local preserve; preserve="$(IFS=,; echo "${names[*]}")"
-
-  sudo -n --preserve-env="${preserve}" systemd-run --quiet --wait --collect \
-    --unit="${STUDIO_UNIT}" --uid="$(id -u)" --gid="$(id -g)" \
-    --working-directory="${PWD}" --expand-environment=no \
-    --property=Type=exec --property=Restart=on-abnormal --property=RestartSec=3 \
-    --property=RestartForceExitStatus=75 --property=StartLimitIntervalSec=60 --property=StartLimitBurst=3 \
-    --property=OOMPolicy=continue --property=OOMScoreAdjust=-500 --property=MemoryAccounting=yes \
-    --property=KillMode=control-group --property=TimeoutStopSec=20 \
-    --property='SuccessExitStatus=129 130 143' \
-    --property=StandardOutput=journal --property=StandardError=journal \
-    "${environment[@]}" --setenv="TMPDIR=${TMPDIR:-}" \
-    --setenv="LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}" --setenv=STUDIO_SUPERVISED=1 \
-    /bin/bash "${EXAMPLE_DIR}/run.sh" run &
-  waiter=$!
-  sudo -n journalctl --follow --output=cat --no-pager --since=now --unit="${STUDIO_UNIT}" &
-  journal=$!
-  trap 'sudo -n systemctl stop "${STUDIO_UNIT}"; kill "${journal}" 2>/dev/null || true' INT TERM HUP
-  status=0
-  wait "${waiter}" || status=$?
-  kill "${journal}" 2>/dev/null || true
-  wait "${journal}" 2>/dev/null || true
-  trap - INT TERM HUP
-  return "${status}"
-}
-
-any_child_running() {
-  for pid in "${pids[@]}"; do
-    if kill -0 "${pid}" 2>/dev/null; then
+any_process_group_running() {
+  local pgid
+  for pgid in "${process_groups[@]}"; do
+    if kill -0 -- "-${pgid}" 2>/dev/null; then
       return 0
     fi
   done
@@ -70,16 +32,22 @@ signal_process_groups() {
 }
 
 stop_children() {
+  # RAG starts a separate session; include it even if the API parent was killed.
+  local pid
+  while read -r pid; do
+    remember_process_group "${pid}"
+  done < <(pgrep -u "$(id -u)" -f "${RAG_WORKER_PATTERN}" || true)
+
   # Graceful: both Python entrypoints handle SIGTERM — the model server releases
   # its models on the MLA and the backend stops the RAG worker before exiting.
   signal_process_groups TERM
 
   local deadline=$((SECONDS + SHUTDOWN_GRACE_SECONDS))
-  while any_child_running && [[ "${SECONDS}" -lt "${deadline}" ]]; do
+  while any_process_group_running && [[ "${SECONDS}" -lt "${deadline}" ]]; do
     sleep 1
   done
 
-  if any_child_running; then
+  if any_process_group_running; then
     warn "Processes still running after ${SHUTDOWN_GRACE_SECONDS}s — forcing stop…"
     signal_process_groups KILL
     sleep 1
@@ -88,7 +56,8 @@ stop_children() {
   for pid in "${pids[@]}"; do
     wait "${pid}" 2>/dev/null || true
   done
-  stop_stale_rag_worker
+  pids=()
+  process_groups=()
 }
 
 supervise_children() {
@@ -98,8 +67,11 @@ supervise_children() {
   while true; do
     if [[ "${restart_requested}" -eq 1 ]]; then
       warn "Restarting GenAI Studio after a model-load failure…"
-      # PID 1 cleans up the whole service, including workers whose parent died.
-      exit 75
+      restart_requested=0
+      ready=0
+      stop_children
+      start_children
+      continue
     fi
     if ! child_running "${server_pid}"; then
       set +e

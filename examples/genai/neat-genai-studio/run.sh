@@ -7,8 +7,8 @@ DEFAULT_APP_VENV="${EXAMPLE_DIR}/.venv"
 DEFAULT_LOCAL_CONFIG="${EXAMPLE_DIR}/config.local.yaml"
 # shellcheck source=src/common/config_value.sh
 source "${EXAMPLE_DIR}/src/common/config_value.sh"
-# shellcheck source=src/common/studio_service.sh
-source "${EXAMPLE_DIR}/src/common/studio_service.sh"
+# shellcheck source=src/common/studio_supervisor.sh
+source "${EXAMPLE_DIR}/src/common/studio_supervisor.sh"
 
 if [[ -z "${CONFIG_PATH:-}" ]]; then
   if [[ -f "${DEFAULT_LOCAL_CONFIG}" ]]; then
@@ -298,11 +298,6 @@ do_status() {
 }
 
 do_stop() {
-  if systemctl is-active --quiet "${STUDIO_UNIT}"; then
-    sudo -n systemctl stop "${STUDIO_UNIT}"
-    ok "Stopped."
-    return 0
-  fi
   if [[ -f "${PID_FILE}" ]]; then
     local pid; pid="$(cat "${PID_FILE}" 2>/dev/null || true)"
     if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
@@ -762,13 +757,6 @@ if [[ ! -x "${DEFAULT_APP_VENV}/bin/python" || ! -f "${DEFAULT_LOCAL_CONFIG}" ]]
   fi
 fi
 
-# Keep the existing foreground entrypoint while PID 1 owns recovery.
-if [[ "${STUDIO_SUPERVISED:-0}" != 1 ]]; then
-  export CONFIG_PATH PYNEAT_PYTHON APP_PYTHON
-  run_supervised
-  exit $?
-fi
-
 # Also prepare voices on the first launch after updating.
 if ! migrate_piper_voices; then
   errln "Installed Piper voices could not be prepared; fix the error above and retry."
@@ -925,27 +913,29 @@ launch_server() {
 prepare_clean_start
 migrate_legacy_ui_dir
 
-section "Model Server"
-launch_server
+start_children() {
+  section "Model Server"
+  launch_server
 
-sleep "${MODEL_SERVER_START_DELAY:-2}"
+  sleep "${MODEL_SERVER_START_DELAY:-2}"
 
-if ! child_running "${server_pid}"; then
-  set +e
-  wait "${server_pid}"
-  status=$?
-  set -e
-  exit "${status}"
-fi
+  if ! child_running "${server_pid}"; then
+    set +e
+    wait "${server_pid}"
+    status=$?
+    set -e
+    return "${status}"
+  fi
 
-section "Backend"
-step "Starting the Neat GenAI Studio backend (API endpoints)…"
-# Only the small supervisor keeps the service's reduced OOM score.
-setsid bash -c 'echo 0 > /proc/self/oom_score_adj; exec "$@"' _ \
-  "${APP_PYTHON}" "${PYTHON_DIR}/api/main.py" --config "${CONFIG_PATH}" &
-pids[1]="$!"
-api_pid="${pids[1]}"
-remember_process_group "${api_pid}"
+  section "Backend"
+  step "Starting the Neat GenAI Studio backend (API endpoints)…"
+  setsid "${APP_PYTHON}" "${PYTHON_DIR}/api/main.py" --config "${CONFIG_PATH}" &
+  pids[1]="$!"
+  api_pid="${pids[1]}"
+  remember_process_group "${api_pid}"
+}
+
+start_children
 
 printf '\n'
 info "Waiting for the backend to be ready…"

@@ -408,52 +408,118 @@ class ServerConfigWithoutPyyamlTests(unittest.TestCase):
 
 
 class StudioSupervisorTests(unittest.TestCase):
-    def test_failure_requests_service_restart_but_explicit_stop_does_not(self):
+    SUPERVISOR = Path(__file__).resolve().parents[2] / 'src/common/studio_supervisor.sh'
+
+    def test_worker_failure_restarts_children_and_explicit_stop_stays_stopped(self):
         import signal
         import time
 
-        service = Path(__file__).resolve().parents[2] / 'src/common/studio_service.sh'
-        for target, sent_signal, expected in (
-                ('supervisor', signal.SIGUSR1, 75),
-                ('model', signal.SIGKILL, 75),
-                ('api', signal.SIGKILL, 75),
-                ('supervisor', signal.SIGTERM, 143)):
+        for target, sent_signal in (('supervisor', signal.SIGUSR1),
+                                    ('model', signal.SIGKILL),
+                                    ('api', signal.SIGKILL),
+                                    ('supervisor', signal.SIGTERM)):
             with self.subTest(target=target, signal=sent_signal), tempfile.TemporaryDirectory() as folder:
                 ready = Path(folder) / 'ready'
                 children = Path(folder) / 'children'
                 script = """set -euo pipefail
 source "$2"
 pids=(); process_groups=(); restart_requested=0
-SHUTDOWN_GRACE_SECONDS=2
+SHUTDOWN_GRACE_SECONDS=1
 APP_PYTHON=/bin/true
 _self_url=unused; _url=unused
-warn() { :; }; errln() { :; }; stop_stale_rag_worker() { :; }
-ok() { touch "$READY_FILE"; }; studio_ui_hint() { :; }
-setsid sleep 60 & server_pid=$!; pids[0]=$server_pid
-setsid sleep 60 & api_pid=$!; pids[1]=$api_pid
-remember_process_group "$server_pid"
-remember_process_group "$api_pid"
-printf '%s %s\\n' "$server_pid" "$api_pid" > "$1"
+RAG_WORKER_PATTERN="$3/rag-worker"
+warn() { :; }; errln() { :; }
+ok() { echo ready >> "$READY_FILE"; }; studio_ui_hint() { :; }
+start_children() {
+  setsid sleep 60 & server_pid=$!; pids[0]=$server_pid
+  setsid sleep 60 & api_pid=$!; pids[1]=$api_pid
+  setsid "$TEST_PYTHON" -c 'import time; time.sleep(60)' "$RAG_WORKER_PATTERN" &
+  rag_pid=$!
+  remember_process_group "$server_pid"
+  remember_process_group "$api_pid"
+  printf '%s %s %s\\n' "$server_pid" "$api_pid" "$rag_pid" >> "$CHILD_FILE"
+}
 trap 'stop_children' EXIT
 trap 'exit 143' TERM
 trap 'restart_requested=1' USR1
+start_children
 supervise_children
 """
-                proc = subprocess.Popen(['bash', '-c', script, '_', str(children), str(service)],
-                                        env=dict(os.environ, READY_FILE=str(ready)))
+                proc = subprocess.Popen(['bash', '-c', script, '_', str(children),
+                                         str(self.SUPERVISOR), folder],
+                                        env=dict(os.environ, READY_FILE=str(ready),
+                                                 CHILD_FILE=str(children), TEST_PYTHON=sys.executable))
                 try:
-                    deadline = time.monotonic() + 10
-                    while not ready.exists() and time.monotonic() < deadline:
-                        time.sleep(0.05)
-                    self.assertTrue(ready.exists(), 'supervisor did not become ready')
-                    model_pid, api_pid = map(int, children.read_text().split())
-                    pid = {'supervisor': proc.pid, 'model': model_pid, 'api': api_pid}[target]
+                    def generation(count):
+                        deadline = time.monotonic() + 10
+                        while time.monotonic() < deadline:
+                            lines = ready.read_text().splitlines() if ready.exists() else []
+                            if len(lines) >= count:
+                                return list(map(int, children.read_text().splitlines()[count - 1].split()))
+                            time.sleep(0.05)
+                        self.fail('supervisor did not become ready')
+
+                    old = generation(1)
+                    pid = {'supervisor': proc.pid, 'model': old[0], 'api': old[1]}[target]
                     os.kill(pid, sent_signal)
-                    self.assertEqual(proc.wait(timeout=10), expected)
-                    for pid in (model_pid, api_pid):
+                    generations = 1
+                    if sent_signal != signal.SIGTERM:
+                        new = generation(2)
+                        generations = 2
+                        self.assertNotEqual(old, new)
+                        for pid in old:
+                            with self.assertRaises(ProcessLookupError):
+                                os.kill(pid, 0)
+                        for pid in new:
+                            os.kill(pid, 0)
+                        old = new
+                        proc.terminate()
+                    self.assertEqual(proc.wait(timeout=10), 143)
+                    self.assertEqual(len(children.read_text().splitlines()), generations)
+                    for pid in old:
                         with self.assertRaises(ProcessLookupError):
                             os.kill(pid, 0)
                 finally:
                     if proc.poll() is None:
                         proc.terminate()
                         proc.wait(timeout=10)
+
+    def test_cleanup_kills_remaining_worker_after_group_leader_dies(self):
+        import signal
+        import time
+
+        with tempfile.TemporaryDirectory() as folder:
+            ready = Path(folder) / 'ready'
+            leader = subprocess.Popen(['sleep', '60'], preexec_fn=os.setpgrp)
+            self.addCleanup(lambda: leader.poll() is None and leader.kill())
+            worker = subprocess.Popen(
+                [sys.executable, '-c',
+                 'import signal,time,sys; from pathlib import Path; '
+                 'signal.signal(signal.SIGTERM, signal.SIG_IGN); '
+                 'Path(sys.argv[1]).touch(); time.sleep(60)', str(ready)],
+                preexec_fn=lambda: os.setpgid(0, leader.pid))
+            try:
+                deadline = time.monotonic() + 5
+                while not ready.exists() and time.monotonic() < deadline:
+                    time.sleep(0.05)
+                self.assertTrue(ready.exists())
+                leader.kill()
+                leader.wait(timeout=5)
+                script = """set -euo pipefail
+source "$1"
+pids=(); process_groups=("$2")
+RAG_WORKER_PATTERN="$3/unused-rag-worker"
+SHUTDOWN_GRACE_SECONDS=0
+warn() { :; }
+stop_children
+"""
+                subprocess.run(['bash', '-c', script, '_', str(self.SUPERVISOR),
+                                str(leader.pid), folder], check=True, timeout=5)
+                self.assertEqual(worker.wait(timeout=5), -signal.SIGKILL)
+            finally:
+                if worker.poll() is None:
+                    worker.kill()
+                worker.wait(timeout=5)
+                if leader.poll() is None:
+                    leader.kill()
+                leader.wait(timeout=5)

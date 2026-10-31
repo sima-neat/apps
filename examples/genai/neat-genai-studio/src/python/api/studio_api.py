@@ -32,7 +32,7 @@ import socket
 import subprocess
 
 from shared.config import HubConfig
-from shared.recovery import interrupted_load, oom_kills
+from shared.recovery import interrupted_load
 from shared.chat_limits import accelerator_busy, first_chat_event, sse_error, whole_reply
 from server import hub as hub_helpers
 from asr_metadata import (
@@ -625,14 +625,13 @@ class AppContext:
                 except ValueError:
                     return jsonify({'error': backend_mode.NOT_A_JSON_OBJECT}), 400
                 loading = method == 'POST' and route == '/models/load'
-                memory_errors = oom_kills() if loading else None
                 try:
                     resp = requests.request(method, _control_url(target), params=params,
                                             json=body, timeout=timeout)
                 except requests.RequestException as exc:
                     logging.warning("Control API %s %s failed: %s", method, target, exc)
                     if loading:
-                        failure = interrupted_load(body.get('name', ''), memory_errors)
+                        failure = interrupted_load(body.get('name', ''))
                         logging.error(failure['error'])
                         return jsonify(failure), 503
                     return jsonify({'error': 'control API unreachable'}), 502
