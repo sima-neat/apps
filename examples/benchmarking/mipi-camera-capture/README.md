@@ -26,7 +26,6 @@ The camera-to-Neat path remains zero-copy. Copying occurs only for the explicitl
 
 - `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on the Modalix DevKit, or in a Neat SDK container paired with it.
 - A MIPI camera supported by the installed kernel, libcamera pipeline, and IPA configuration.
-- A Neat Library and libcamera release that supports downstream-owned camera capture buffers.
 
 List the camera names visible to libcamera:
 

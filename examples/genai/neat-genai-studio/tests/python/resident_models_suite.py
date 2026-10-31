@@ -6,6 +6,7 @@ caller names which loaded model to unload, and a failed load rolls back only
 the model that failed.
 """
 
+import io
 import json
 import shutil
 import tempfile
@@ -54,6 +55,58 @@ class ResidentFixture(unittest.TestCase):
 
 
 class ResidentChatModelTests(ResidentFixture):
+    def test_configured_external_model_can_be_reloaded_after_rescan(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = make_model_dir(Path(folder), "external", "chat")
+            manager, server = self.manager(limit=1)
+            manager.register_startup_model("configured", path, "chat", False, None)
+            manager.load("configured")
+            manager.unload("configured")
+            manager.scan_catalog()
+            manager.scan_catalog()
+            manager.load("configured")
+            self.assertEqual(server.added[-1], (str(path.resolve()), "configured"))
+
+    def test_deleting_configured_model_also_removes_its_alias(self):
+        manager, _ = self.manager(limit=1)
+        name = CHAT_MODELS[0]
+        manager.register_startup_model("alias", self.tmp / name, "chat", False, None)
+        manager.scan_catalog()
+        manager.delete(name)
+        names = [entry["name"] for entry in manager.catalog()]
+        self.assertNotIn(name, names)
+        self.assertNotIn("alias", names)
+        self.assertIn(CHAT_MODELS[1], names)
+
+    def test_benchmark_uses_runtime_tokens_including_reasoning(self):
+        manager, _ = self.manager(limit=1)
+        manager._bench = {"current": {"index": 0}}
+        events = [
+            {"choices": [{"delta": {"reasoning_content": "Thinking"}}]},
+            {"choices": [{"delta": {"content": "Answer"}}]},
+            {"choices": [{"delta": {}, "finish_reason": "length"}],
+             "generated_tokens": 7, "ttft": 0.05, "tps": 20},
+        ]
+        body = b"".join(b"data: " + json.dumps(event).encode() + b"\n\n" for event in events)
+        with patch("server.model_manager.urllib.request.urlopen",
+                   return_value=io.BytesIO(body + b"data: [DONE]\n\n")):
+            result = manager._bench_run_once(0, "model", "prompt", 8)
+        self.assertEqual(result["tokens"], 7)
+        self.assertEqual(manager._bench["current"]["tokens"], 7)
+        self.assertEqual(result["ttftMs"], 50)
+        self.assertEqual(result["text"], "ThinkingAnswer")
+        self.assertEqual(manager._benchmark_summary([result])["totalTokens"], 7)
+
+    def test_benchmark_reports_streamed_errors_even_after_partial_output(self):
+        manager, _ = self.manager(limit=1)
+        error = {"error": {"code": "context_length_exceeded", "message": "Prompt too long"}}
+        for events in ([error], [{"choices": [{"delta": {"content": "partial"}}]}, error]):
+            with self.subTest(events=events):
+                body = b"".join(b"data: " + json.dumps(event).encode() + b"\n\n" for event in events)
+                with patch("server.model_manager.urllib.request.urlopen", return_value=io.BytesIO(body)):
+                    with self.assertRaisesRegex(RuntimeError, "Prompt too long"):
+                        manager._bench_run_once(0, "model", "prompt", 8)
+
     def test_a_limit_of_one_still_replaces_the_loaded_model(self):
         llama, qwen, _ = CHAT_MODELS
         manager, server = self.manager(limit=1)

@@ -1,13 +1,11 @@
 """Supertonic on Platform 3.0 (Python 3.13, PyNeat 0.6 in ~/pyneat): the numpy
-pin, the PyNeat link into .venv-supertonic, and the engine's tolerance of
-PyNeat 0.6's leading batch axis.
+pin, the PyNeat link into .venv-supertonic, and batched guidance bindings.
 
 The setup.sh pieces run through bash against throwaway venvs; nothing here
-needs pyneat, a board or a network."""
+needs pyneat, a board or a network. Numerical adapter checks use numpy."""
 
 from __future__ import annotations
 
-import ast
 import os
 import re
 import stat
@@ -22,27 +20,15 @@ EXAMPLE = Path(__file__).resolve().parents[2]
 SETUP = EXAMPLE / "setup.sh"
 ENGINE = EXAMPLE / "src" / "python" / "api" / "tts" / "supertonic_sima" / "engine.py"
 REQUIREMENTS = EXAMPLE / "src" / "python" / "requirements-supertonic.txt"
-VECTOR_PIN = EXAMPLE / "src" / "python" / "api" / "tts" / "supertonic_sima" / "vector_estimator.json"
-WORKER = EXAMPLE / "src" / "python" / "api" / "tts" / "supertonic_worker.py"
 
 
-def _setup_function(name: str) -> str:
-    """The body of one shell function from setup.sh, from its header to the
+def _setup_function(name: str, script: Path = SETUP) -> str:
+    """The body of one shell function, from its header to the
     first line that is a lone closing brace."""
-    lines = SETUP.read_text(encoding="utf-8").splitlines()
+    lines = script.read_text(encoding="utf-8").splitlines()
     start = lines.index(f"{name}() {{")
     end = next(i for i in range(start + 1, len(lines)) if lines[i] == "}")
     return "\n".join(lines[start:end + 1])
-
-
-def _engine_function(name: str):
-    """One pure helper from the vendored engine, without importing the engine
-    (which needs numpy, onnxruntime and pyneat)."""
-    tree = ast.parse(ENGINE.read_text(encoding="utf-8"))
-    node = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == name)
-    namespace: dict = {}
-    exec(compile(ast.Module(body=[node], type_ignores=[]), str(ENGINE), "exec"), namespace)
-    return namespace[name]
 
 
 def _executable(path: Path, text: str) -> Path:
@@ -52,25 +38,107 @@ def _executable(path: Path, text: str) -> Path:
 
 
 class BatchAxisTests(unittest.TestCase):
-    def setUp(self):
-        self.drop = _engine_function("_drop_batch_axes")
+    @classmethod
+    def setUpClass(cls):
+        import importlib.util
+        from types import ModuleType, SimpleNamespace
+        from unittest import mock
+        import numpy as np
 
-    def test_leading_batch_axis_of_one_is_dropped(self):
-        self.assertEqual(self.drop((1, 1, 192, 144), 3), (1, 192, 144))
+        cls.np = np
+        cls.tensor = staticmethod(lambda value: SimpleNamespace(to_numpy=lambda **_: value))
+        package = ModuleType("studio_supertonic_test")
+        package.__path__ = [str(ENGINE.parent)]
+        spec = importlib.util.spec_from_file_location("studio_supertonic_test.engine", ENGINE)
+        cls.engine = importlib.util.module_from_spec(spec)
+        with mock.patch.dict(sys.modules, {
+            "studio_supertonic_test": package,
+            "studio_supertonic_test.engine": cls.engine,
+            "pyneat": SimpleNamespace(
+                Tensor=SimpleNamespace(from_numpy=lambda value, **_: cls.tensor(value)),
+                TensorLayout=SimpleNamespace(HWC="HWC")),
+            "onnxruntime": ModuleType("onnxruntime"),
+        }):
+            spec.loader.exec_module(cls.engine)
 
-    def test_public_shapes_are_unchanged(self):
-        self.assertEqual(self.drop((1, 192, 144), 3), (1, 192, 144))
-        self.assertEqual(self.drop((1, 50, 256), 3), (1, 50, 256))
+    def test_batched_layout_and_vocoder_waveform_order(self):
+        from types import SimpleNamespace
+        np, runtime = self.np, self.engine
+        physical = np.arange(2 * 144 * 192, dtype=np.float32).reshape(2, 144, 1, 192)
+        shape = runtime._public_shape(physical.shape)
+        self.assertEqual(shape, (2, 1, 192, 144))
+        output = [runtime._tensor_from_public(physical.transpose(0, 2, 3, 1))]
+        np.testing.assert_array_equal(
+            runtime._first_output_array(output, expected_public_shape=shape), physical)
 
-    def test_a_real_batch_is_kept(self):
-        # A batch other than one is a different contract and must still fail
-        # the engine's shape check.
-        self.assertEqual(self.drop((2, 1, 192, 144), 3), (2, 1, 192, 144))
+        engine = runtime.SupertonicModalix.__new__(runtime.SupertonicModalix)
+        engine.vocoder_backend, engine.timeout_ms, engine.chunk_size = "mla", 1000, 3072
+        engine.vocoder_public_input = runtime._public_shape(runtime.VOCODER_PHYSICAL_INPUT[1])
+        engine.vocoder_public_output = runtime._public_shape(runtime.VOCODER_PHYSICAL_OUTPUT[1])
+        engine._vocoder_input_buffer = np.zeros(engine.vocoder_public_input, dtype=np.float32)
+        for shape in (engine.vocoder_public_input, engine.vocoder_public_input[1:]):
+            engine.vocoder_model = SimpleNamespace(
+                compiled_batch_size=lambda: 1,
+                input_specs=lambda: [SimpleNamespace(shape=shape)],
+                output_specs=lambda: [SimpleNamespace(shape=engine.vocoder_public_output)])
+            engine._validate_vocoder_contract()
+        frames = np.arange(512 * 1152, dtype=np.float32).reshape(engine.vocoder_public_output)
+        latent = physical[0, :, 0, :][None, ...]
 
-    def test_engine_uses_it_for_specs_and_outputs(self):
-        source = ENGINE.read_text(encoding="utf-8")
-        self.assertIn("return _drop_batch_axes(tuple(int(value) for value in shape), 3)", source)
-        self.assertIn("value.reshape(_drop_batch_axes(value.shape, len(expected_public_shape)))", source)
+        def run(tensors, **kwargs):
+            np.testing.assert_array_equal(
+                tensors[0].to_numpy(), latent.transpose(0, 2, 1)[:, None, :, :])
+            return [self.tensor(frames)]
+
+        engine.vocoder_runner = SimpleNamespace(run=run)
+        actual = engine._run_vocoder(latent, 2)
+        np.testing.assert_array_equal(actual, np.arange(6144, dtype=np.float32))
+        self.assertFalse(np.shares_memory(actual, frames))
+
+    def test_batched_guidance_uses_one_call_per_step(self):
+        from types import SimpleNamespace
+        np, runtime = self.np, self.engine
+        engine = runtime.SupertonicModalix.__new__(runtime.SupertonicModalix)
+        engine.steps, engine.timeout_ms = 8, 1000
+        engine.sample_rate, engine.chunk_size, engine.latent_dim = 8, 2, 144
+        engine.time_table = runtime.build_time_table(engine.steps)
+        engine.physical_inputs = runtime.VECTOR_PHYSICAL_INPUTS
+        engine.public_output = ("velocity", runtime._public_shape(runtime.VECTOR_PHYSICAL_OUTPUT[1]))
+        engine._input_buffers = [np.zeros(runtime._public_shape(shape), dtype=np.float32)
+                                 for _, shape in engine.physical_inputs]
+        engine.constants = {
+            runtime.CONDITIONAL_STYLE_KEY: np.full((1, 50, 256), 3, dtype=np.float32),
+            runtime.UNCONDITIONAL_STYLE_KEY: np.full((1, 50, 256), -2, dtype=np.float32),
+            runtime.UNCONDITIONAL_STYLE_VALUE: np.full((1, 50, 256), -3, dtype=np.float32),
+            runtime.UNCONDITIONAL_TEXT: np.full((1, 256, 1), -1, dtype=np.float32),
+        }
+        engine.rope_table = np.zeros((192, 1, 64, 1, 192), dtype=np.float32)
+        engine._encode_text = lambda *_: (np.array([[1, 2, 3]]), np.ones((1, 1, 3)), "hello")
+        engine._load_style = lambda *_: (np.full((1, 50, 256), 2), np.zeros((1, 8, 16)))
+        engine.duration_session = SimpleNamespace(run=lambda *_: [np.array([1.0])])
+        engine.text_session = SimpleNamespace(run=lambda *_: [np.full((1, 256, 3), .5)])
+        engine._run_vocoder = lambda latent, length: np.repeat(latent[0, 0, :length], 2)
+        calls = 0
+
+        def run(tensors, **kwargs):
+            nonlocal calls
+            calls += 1
+            values = [tensor.to_numpy() for tensor in tensors]
+            for index in (0, 4, 5, 6, 7):
+                np.testing.assert_array_equal(values[index][0], values[index][1])
+            velocity = (values[1].mean(axis=-1, keepdims=True)
+                        + 2 * values[2].mean(axis=(1, 2, 3), keepdims=True)
+                        + 3 * values[3].mean(axis=(1, 2, 3), keepdims=True))
+            return [self.tensor(np.broadcast_to(velocity, engine.public_output[1]))]
+
+        engine.runner = SimpleNamespace(run=run)
+        result = engine.synthesize("hello", voice="F3", language="en", speed=1, seed=17)
+        # Conditional velocity is 13.5 for text and 13 for padding; unconditional is -13.
+        # Eight Euler updates total 4 * conditional - 3 * unconditional.
+        initial = np.random.RandomState(17).randn(1, 144, 4).astype(np.float32)
+        expected = initial[0, 0] + np.array([93, 93, 93, 91], dtype=np.float32)
+        np.testing.assert_allclose(result.waveform, np.repeat(expected, 2), rtol=1e-6)
+        self.assertEqual(calls, engine.steps)
 
 
 class NumpyPinTests(unittest.TestCase):
@@ -151,31 +219,73 @@ class PyneatLinkTests(unittest.TestCase):
         self.assertFalse((self.purelib / "pyneat").exists())
 
 
-class VectorEstimatorTests(unittest.TestCase):
-    """Platform 3.0's vector estimator comes from the SiMa model zoo; the URL and
-    checksum in vector_estimator.json are what setup.sh downloads and checks
-    and what the engine accepts."""
+class ModelAssetsTests(unittest.TestCase):
+    """The installer and worker consume one set of compiled-model pins."""
 
-    def setUp(self):
+    def test_setup_downloads_both_archives_reuses_them_and_rejects_bad_bytes(self):
+        import hashlib
         import json
-        self.pin = json.loads(VECTOR_PIN.read_text(encoding="utf-8"))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pin = root / "app/src/python/api/tts/supertonic_sima/model_assets.json"
+            pin.parent.mkdir(parents=True)
+            sources = root / "sources"
+            sources.mkdir()
+            assets = {}
+            for name in ("vector_estimator", "vocoder"):
+                filename = name + ".tar.gz"
+                data = name.encode()
+                (sources / filename).write_bytes(data)
+                assets[name] = {"file": filename, "url": "https://example.test/" + filename,
+                                "sha256": hashlib.sha256(data).hexdigest()}
+            pin.write_text(json.dumps(assets))
+            script = "\n".join([
+                "ok() { :; }; step() { :; }; warn() { echo \"$*\" >&2; }",
+                "_find_sima_cli() { return 0; }",
+                'sima-cli() { echo "$2" >> "$CALLS"; cp "$SOURCES/${2##*/}" "$4/${2##*/}"; }',
+                _setup_function("_supertonic_mla_models"), "_supertonic_mla_models",
+            ])
+            env = {**os.environ, "EXAMPLE_DIR": str(root / "app"), "SOURCES": str(sources),
+                   "SUPERTONIC_MODELS_ROOT": str(root / "models"), "CALLS": str(root / "calls")}
+            def run():
+                return subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
+            first = run()
+            self.assertEqual(first.returncode, 0, first.stderr)
+            self.assertEqual(len((root / "calls").read_text().splitlines()), 2)
+            self.assertEqual(run().returncode, 0)
+            self.assertEqual(len((root / "calls").read_text().splitlines()), 2)
+            target = root / "models/supertonic-3-sima/vector_estimator.tar.gz"
+            target.write_bytes(b"truncated")
+            self.assertEqual(run().returncode, 0)
+            self.assertEqual(target.read_bytes(), b"vector_estimator")
+            self.assertEqual(len((root / "calls").read_text().splitlines()), 3)
+            target.unlink()
+            (sources / "vector_estimator.tar.gz").write_bytes(b"wrong model")
+            rejected = run()
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn("checksum mismatch", rejected.stderr)
+            self.assertFalse(target.exists())
+            self.assertEqual(list((root / "models").glob(".supertonic-model.*")), [])
 
-    def test_the_pin_points_at_the_model_zoo(self):
-        self.assertTrue(self.pin["url"].startswith("https://docs.sima.ai/pkg_downloads/"))
-        self.assertRegex(self.pin["sha256"], r"^[0-9a-f]{64}$")
-
-    def test_setup_checks_the_same_checksum_and_no_longer_fetches_it_from_hugging_face(self):
-        sums = _setup_function("_supertonic_checksums")
-        self.assertIn(f"{self.pin['sha256']}  supertonic-3-sima/supertonic_vector_field_sima_mpk.tar.gz", sums)
-        models = _setup_function("_supertonic_models")
-        self.assertNotIn("supertonic_vector_field_sima_mpk.tar.gz", models)
-        self.assertIn("_supertonic_vector_estimator", models)
-        self.assertIn('sima-cli download "${url}"', _setup_function("_supertonic_vector_estimator"))
+    def test_update_fingerprint_includes_model_pins(self):
+        import json
+        with tempfile.TemporaryDirectory() as tmp:
+            python_dir = Path(tmp)
+            pin = python_dir / "api/tts/supertonic_sima/model_assets.json"
+            pin.parent.mkdir(parents=True)
+            assets = json.loads((EXAMPLE / "src/python/api/tts/supertonic_sima/model_assets.json").read_text())
+            pin.write_text(json.dumps(assets))
+            (python_dir / "requirements-supertonic.txt").write_text("")
+            script = _setup_function("supertonic_fingerprint", EXAMPLE / "run.sh") + "\nsupertonic_fingerprint"
+            env = {**os.environ, "EXAMPLE_DIR": str(EXAMPLE), "PYTHON_DIR": str(python_dir)}
+            before = subprocess.check_output(["bash", "-c", script], env=env)
+            assets["vector_estimator"]["sha256"] = "0" * 64
+            pin.write_text(json.dumps(assets))
+            self.assertNotEqual(before, subprocess.check_output(["bash", "-c", script], env=env))
 
     def test_setup_finds_sima_cli_outside_a_login_shell(self):
         # The DevKit puts sima-cli on PATH only for login shells; both sima-cli
         # steps must find it when setup.sh runs over ssh.
-        self.assertIn("if ! _find_sima_cli; then", _setup_function("_supertonic_vector_estimator"))
         self.assertIn("_find_sima_cli", _setup_function("_supertonic_venv"))
         helper = _setup_function("_find_sima_cli")
         with tempfile.TemporaryDirectory() as tmp:
@@ -217,38 +327,6 @@ class VectorEstimatorTests(unittest.TestCase):
             self.assertNotIn("REACHED", older)
             self.assertIn("REACHED", run("3.0.0"))
             self.assertIn("REACHED", run(None))                 # unknown platform: try the install
-
-    def test_the_worker_passes_the_pinned_checksum_to_the_engine(self):
-        source = WORKER.read_text(encoding="utf-8")
-        self.assertIn('expected_mpk_sha256=json.loads(VECTOR_ESTIMATOR.read_text())["sha256"]', source)
-
-    def test_the_engine_checks_the_pinned_checksum_instead_of_the_manifest(self):
-        import hashlib
-        import json
-        import types
-        tree = ast.parse(ENGINE.read_text(encoding="utf-8"))
-        cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "SupertonicModalix")
-        method = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == "_verify_artifacts")
-        namespace = {"json": json, "_sha256": lambda path: hashlib.sha256(Path(path).read_bytes()).hexdigest()}
-        exec(compile(ast.Module(body=[method], type_ignores=[]), str(ENGINE), "exec"), namespace)
-        verify = namespace["_verify_artifacts"]
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            mpk, runtime, manifest = root / "mpk", root / "runtime", root / "manifest.json"
-            mpk.write_bytes(b"platform 3.0 compile")
-            runtime.write_bytes(b"runtime")
-            sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
-            manifest.write_text(json.dumps({"compiled": {"archive": {"sha256": "0" * 64}},
-                                            "graph_surgery": {"runtime_data": {"sha256": sha(runtime)}}}))
-            engine = types.SimpleNamespace(artifact_manifest_path=manifest, mpk_path=mpk, runtime_data_path=runtime,
-                                           vocoder_backend="cpu", expected_mpk_sha256=sha(mpk))
-            verify(engine)                                  # the pin wins over the manifest's old checksum
-            engine.expected_mpk_sha256 = None
-            with self.assertRaisesRegex(ValueError, "MPK SHA-256 mismatch"):
-                verify(engine)                              # without a pin, the manifest still decides
-            engine.expected_mpk_sha256 = "1" * 64
-            with self.assertRaisesRegex(ValueError, "MPK SHA-256 mismatch"):
-                verify(engine)                              # a wrong file is still refused
 
 
 if __name__ == "__main__":
