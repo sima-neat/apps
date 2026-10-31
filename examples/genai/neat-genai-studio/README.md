@@ -38,9 +38,8 @@ Once set up, the Studio runs without internet access. The first `setup.sh` run a
 Run every command below in a shell on the board.
 
 ## Install Apps
-If the Core and Insight selected by Apps are already installed, run the
-install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps` to
-skip reinstalling them. See
+To leave the installed Core and Insight unchanged, run the install as
+`NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps`. See
 [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
 
 Install the Apps bundle, enter it, and name the Studio's directory:
