@@ -136,7 +136,7 @@ confirm_default_yes() {
   if [[ "${NEAT_APPS_OVERWRITE:-0}" == "1" ]]; then
     return 0
   fi
-  printf '%s [Y/n] ' "${question}"
+  printf '❓ %s [Y/n] ' "${question}"
   if ! IFS= read -r response; then
     echo
     return 0
@@ -159,7 +159,7 @@ run_with_timeout() {
 resolve_compatible_core_version() {
   local resolve_output
   resolve_output="$(SIMA_CLI_CHECK_FOR_UPDATE=0 run_with_timeout 60 "${SIMA_CLI_RESOLVED}" \
-    neat install --json -t minimal "core@${CORE_REF}:${CORE_SPEC}" </dev/null 2>/dev/null)" \
+    neat install --json -t minimal "${CORE_PACKAGE}" </dev/null 2>/dev/null)" \
     || return 0
   RESOLVE_OUTPUT="${resolve_output}" python3 - 2>/dev/null <<'PY' || true
 import json
@@ -176,8 +176,18 @@ if isinstance(version, str):
 PY
 }
 
-# Prints mode=, core=matches|differs|missing, core_version= and
-# insight_version= from one `neat --json --offline` status.
+# Core's neat marks the SDK with the same file, and neat itself is missing
+# until Core is installed.
+detect_install_place() {
+  if [[ -f "${ELXR_SDK_RELEASE_FILE:-/etc/sdk-release}" ]]; then
+    echo "SDK"
+  else
+    echo "DevKit"
+  fi
+}
+
+# Prints core=matches|differs|missing, core_version= and insight_version= from
+# one `neat --json --offline` status.
 summarize_neat_status() {
   NEAT_STATUS_JSON="$1" python3 - "${COMPATIBLE_CORE_VERSION}" "${CORE_REF}" <<'PY'
 import json
@@ -186,7 +196,7 @@ import re
 import sys
 
 compatible_version, core_ref = sys.argv[1:]
-mode = core_version = insight_version = ""
+core_version = insight_version = ""
 core_state = "missing"
 
 
@@ -196,9 +206,7 @@ def normalize(version):
 
 
 try:
-    status = json.loads(os.environ["NEAT_STATUS_JSON"])
-    mode = status["environment"]["mode"] or ""
-    components = status["components"]
+    components = json.loads(os.environ["NEAT_STATUS_JSON"])["components"]
     core = components.get("core") or {}
     core_version = core.get("version") or ""
     pyneat_version = (components.get("pyneat") or {}).get("version")
@@ -214,7 +222,6 @@ try:
 except (ValueError, KeyError, TypeError, AttributeError):
     pass
 
-print(f"mode={mode}")
 print(f"core={core_state}")
 print(f"core_version={core_version}")
 print(f"insight_version={'' if insight_version == 'unknown' else insight_version}")
@@ -241,7 +248,7 @@ check_paired_devkit() {
   DEVKIT_STATUS=""
   if [[ -z "${DEVKIT_SYNC_DEVKIT_IP:-}" ]]; then
     DEVKIT_LINK="not-sdk"
-    if [[ "$(summary_field "${LOCAL_STATUS}" mode)" == "elxr-sdk" ]]; then
+    if [[ "${INSTALL_PLACE}" == "SDK" ]]; then
       DEVKIT_LINK="unpaired"
     fi
     return 0
@@ -258,104 +265,140 @@ check_paired_devkit() {
   DEVKIT_STATUS="$(summarize_neat_status "${status_json}")"
 }
 
-describe_core() {
-  local summary="$1"
-  if [[ "$(summary_field "${summary}" core)" == "missing" ]]; then
-    echo "not installed"
-  else
-    echo "$(summary_field "${summary}" core_version), $(summary_field "${summary}" core)"
-  fi
+# Pads only the label: printf counts an emoji's bytes, not its width.
+print_status_row() {
+  printf '   %s %-8s %s\n' "$1" "$2" "$3"
 }
 
-print_core_versions() {
-  local place="Local"
+print_core_row() {
+  local label="$1"
+  local summary="$2"
+  local version
 
-  case "$(summary_field "${LOCAL_STATUS}" mode)" in
-    elxr-sdk) place="SDK" ;;
-    modalix-board) place="DevKit" ;;
+  version="$(summary_field "${summary}" core_version)"
+  case "$(summary_field "${summary}" core)" in
+    matches) print_status_row "✅" "${label}" "${version}" ;;
+    differs)
+      # A local build or a mismatched PyNeat keeps the compatible version number.
+      if [[ "${version}" == "${COMPATIBLE_CORE_VERSION}" ]]; then
+        version+=" (different build)"
+      fi
+      print_status_row "🔄" "${label}" "${version}"
+      ;;
+    *) print_status_row "❌" "${label}" "not installed" ;;
   esac
+}
+
+print_dependency_status() {
+  local insight_version
+  insight_version="$(summary_field "${LOCAL_STATUS}" insight_version)"
+
   echo
-  if [[ -n "${COMPATIBLE_CORE_VERSION}" ]]; then
-    echo "Core for these Apps: ${COMPATIBLE_CORE_VERSION} (core@${CORE_REF}:${CORE_SPEC})"
-  else
-    echo "Core for these Apps: core@${CORE_REF}:${CORE_SPEC} (version unavailable)"
-  fi
-  printf '  %-6s: %s\n' "${place}" "$(describe_core "${LOCAL_STATUS}")"
+  echo "🔍 Compatible Neat Library: ${COMPATIBLE_CORE_VERSION:-unknown (${CORE_PACKAGE})}"
+  print_core_row "${INSTALL_PLACE}" "${LOCAL_STATUS}"
   case "${DEVKIT_LINK}" in
-    unpaired) printf '  %-6s: %s\n' DevKit "not paired" ;;
-    unreachable) printf '  %-6s: %s\n' DevKit "${DEVKIT_TARGET} is unreachable over SSH" ;;
-    paired) printf '  %-6s: %s\n' DevKit "$(describe_core "${DEVKIT_STATUS}")" ;;
+    unpaired) print_status_row "🔌" "DevKit" "not paired" ;;
+    unreachable) print_status_row "🔌" "DevKit" "unreachable (${DEVKIT_TARGET})" ;;
+    paired) print_core_row "DevKit" "${DEVKIT_STATUS}" ;;
   esac
+  if [[ -n "${insight_version}" ]]; then
+    print_status_row "✅" "Insight" "${insight_version}"
+  else
+    print_status_row "❌" "Insight" "not installed"
+  fi
 }
 
-# Sets CORE_INSTALL to skip, all or sdk. "all" lets Core's installer also
-# install on the paired DevKit; "sdk" installs in the SDK only.
+# Sets CORE_INSTALL to current, declined, sdk or all. "all" lets Core's
+# installer also install on the paired DevKit; "sdk" installs in the SDK only.
 decide_core_install() {
-  local local_core devkit_core=""
+  local local_core devkit_core="" question=""
 
   local_core="$(summary_field "${LOCAL_STATUS}" core)"
   if [[ "${DEVKIT_LINK}" == "paired" ]]; then
     devkit_core="$(summary_field "${DEVKIT_STATUS}" core)"
   fi
-  CORE_INSTALL="skip"
-
   # Only a paired DevKit's Core can make a matching SDK Core worth installing.
   if [[ "${local_core}" == "matches" && "${devkit_core:-matches}" == "matches" ]]; then
-    echo "Core ${CORE_LABEL} is installed; skipping it."
+    CORE_INSTALL="current"
     return 0
   fi
+
+  CORE_INSTALL="sdk"
   case "${DEVKIT_LINK}" in
     not-sdk)
-      confirm_default_yes "Install Core ${CORE_LABEL}?" && CORE_INSTALL="all"
+      CORE_INSTALL="all"
+      question="Install Neat Library ${CORE_LABEL}?"
       ;;
     paired)
       if [[ "${devkit_core}" == "matches" ]]; then
-        confirm_default_yes "Install Core ${CORE_LABEL} in the SDK?" && CORE_INSTALL="sdk"
+        question="Install Neat Library ${CORE_LABEL} in the SDK?"
       else
-        confirm_default_yes "Install Core ${CORE_LABEL} in the SDK and on the DevKit?" \
-          && CORE_INSTALL="all"
+        CORE_INSTALL="all"
+        question="Install Neat Library ${CORE_LABEL} in the SDK and on the DevKit?"
       fi
       ;;
     unpaired)
-      echo "WARNING: This SDK is not paired with a DevKit, so no DevKit will get Core ${CORE_LABEL}."
-      echo "  To pair, run on the host: sima-cli sdk setup --devkit <devkit-ip>"
-      echo "  Setup recreates this container; then run this install again in the new SDK shell."
-      confirm_default_yes "Install Core ${CORE_LABEL} in the SDK only?" && CORE_INSTALL="sdk"
+      echo "⚠️  This SDK is not paired with a DevKit, so the DevKit will not get" \
+        "Neat Library ${CORE_LABEL}. To pair, run on the host:" \
+        "sima-cli sdk setup --devkit <devkit-ip>"
+      question="Install Neat Library ${CORE_LABEL} in the SDK only?"
       ;;
     unreachable)
-      echo "WARNING: The DevKit is unreachable, so it will not get Core ${CORE_LABEL}."
-      echo "  Check that it is on and connected, or run on the host: sima-cli sdk doctor network"
-      confirm_default_yes "Install Core ${CORE_LABEL} in the SDK only?" && CORE_INSTALL="sdk"
+      echo "⚠️  The DevKit is unreachable, so it will not get Neat Library ${CORE_LABEL}." \
+        "Check that it is on and connected, or run on the host: sima-cli sdk doctor network"
+      question="Install Neat Library ${CORE_LABEL} in the SDK only?"
       ;;
   esac
-  if [[ "${CORE_INSTALL}" == "skip" ]]; then
-    echo "WARNING: Keeping the installed Core; examples built for Core ${CORE_LABEL} may fail with it."
+  if ! confirm_default_yes "${question}"; then
+    CORE_INSTALL="declined"
+    echo "⚠️  Keeping the installed Neat Library." \
+      "Examples built for Neat Library ${CORE_LABEL} may fail."
   fi
+}
+
+# Sets INSIGHT_INSTALL to current, declined or install.
+decide_insight_install() {
+  INSIGHT_INSTALL="current"
+  if [[ -n "$(summary_field "${LOCAL_STATUS}" insight_version)" ]]; then
+    return 0
+  fi
+  INSIGHT_INSTALL="declined"
+  if confirm_default_yes "Install Insight?"; then
+    INSIGHT_INSTALL="install"
+  fi
+}
+
+report_installed_dependencies() {
+  local where=""
+
+  if [[ "${CORE_INSTALL}" != "current" || "${INSIGHT_INSTALL}" != "current" ]]; then
+    return 0
+  fi
+  # The DevKit's version is unknown when it is unpaired or unreachable.
+  if [[ "${DEVKIT_LINK}" == "unpaired" || "${DEVKIT_LINK}" == "unreachable" ]]; then
+    where=" in the SDK"
+  fi
+  echo "✅ Neat Library and Insight are already installed${where}."
 }
 
 install_core() {
-  if [[ "${CORE_INSTALL}" == "skip" ]]; then
-    return 0
-  fi
-  if [[ "${CORE_INSTALL}" == "sdk" ]]; then
-    local -x NEAT_INSTALLER_SKIP_DEVKIT_SYNC=ON
-  fi
+  case "${CORE_INSTALL}" in
+    current | declined) return 0 ;;
+    sdk) local -x NEAT_INSTALLER_SKIP_DEVKIT_SYNC=ON ;;
+  esac
   echo
-  echo "Installing Core ${CORE_LABEL}:"
+  echo "Installing Neat Library ${CORE_LABEL}:"
   run_sima_cli_install "${CORE_INSTALL_DIR}" "${SIMA_CLI_RESOLVED}" \
-    -d . -t minimal "core@${CORE_REF}:${CORE_SPEC}"
+    -d . -t minimal "${CORE_PACKAGE}"
 }
 
-install_insight_if_missing() {
-  local insight_version
-  insight_version="$(summary_field "${LOCAL_STATUS}" insight_version)"
-
-  echo
-  if [[ -n "${insight_version}" ]]; then
-    echo "Insight ${insight_version} is installed; keeping it."
-  elif confirm_default_yes "Insight is not installed. Install it?"; then
-    run_sima_cli_install "${INSIGHT_INSTALL_DIR}" "${SIMA_CLI_RESOLVED}" -d . insight
+install_insight() {
+  if [[ "${INSIGHT_INSTALL}" != "install" ]]; then
+    return 0
   fi
+  echo
+  echo "Installing Insight:"
+  run_sima_cli_install "${INSIGHT_INSTALL_DIR}" "${SIMA_CLI_RESOLVED}" -d . insight
 }
 
 locate_package_staging() {
@@ -492,22 +535,26 @@ confirm_runtime_replacement || exit 1
 
 if [[ "${NEAT_APPS_SKIP_DEPENDENCIES:-0}" == "1" ]]; then
   echo
-  echo "WARNING: Skipping Core and Insight dependency installation."
+  echo "⚠️  Skipping the Neat Library and Insight installation."
 else
   SIMA_CLI_RESOLVED="$(resolve_sima_cli_bin)" || {
-    echo "ERROR: sima-cli is required to install Core and Insight." >&2
+    echo "ERROR: sima-cli is required to install Neat Library and Insight." >&2
     exit 1
   }
 
   cleanup_dependency_workspace
+  CORE_PACKAGE="core@${CORE_REF}:${CORE_SPEC}"
   COMPATIBLE_CORE_VERSION="$(resolve_compatible_core_version)"
-  CORE_LABEL="${COMPATIBLE_CORE_VERSION:-core@${CORE_REF}:${CORE_SPEC}}"
+  CORE_LABEL="${COMPATIBLE_CORE_VERSION:-${CORE_PACKAGE}}"
+  INSTALL_PLACE="$(detect_install_place)"
   LOCAL_STATUS="$(summarize_neat_status "$(read_local_neat_status)")"
   check_paired_devkit
-  print_core_versions
+  print_dependency_status
   decide_core_install
+  decide_insight_install
+  report_installed_dependencies
   install_core
-  install_insight_if_missing
+  install_insight
   cleanup_dependency_workspace
 fi
 

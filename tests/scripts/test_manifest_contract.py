@@ -487,6 +487,8 @@ def _run_vulcan_installer(
             "NEAT_APPS_TEST_SIMA_CLI_STATUS": str(sima_cli_status),
             "PATH": f"{bin_dir}:{no_neat_dir}:{env['PATH']}",
             "SIMA_CLI_BIN": str(bin_dir / "sima-cli"),
+            # Ignore the SDK marker of a host that runs the tests in the SDK.
+            "ELXR_SDK_RELEASE_FILE": str(tmp_path / "no-sdk-release"),
         }
     )
     for name in ("DEVKIT_SYNC_DEVKIT_IP", "DEVKIT_DEPLOY_USER", "NEAT_INSTALLER_SKIP_DEVKIT_SYNC"):
@@ -1803,53 +1805,55 @@ def test_vulcan_installer_can_skip_dependency_installation(tmp_path):
     runtime_dir = _write_vulcan_runtime(package_dir)
     (runtime_dir / "runtime-marker").write_text("new\n", encoding="utf-8")
     install_dir = package_dir / "prebuilt-apps"
+    _write_fake_neat_status(tmp_path, _neat_status())
+    _write_fake_devkit(tmp_path, _neat_status())
 
     proc = _run_vulcan_installer(
         tmp_path,
         package_dir,
         sima_cli_status=1,
-        extra_env={"NEAT_APPS_SKIP_DEPENDENCIES": "1"},
+        extra_env={"NEAT_APPS_SKIP_DEPENDENCIES": "1", "DEVKIT_SYNC_DEVKIT_IP": DEVKIT_IP},
     )
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
     assert (install_dir / "runtime-marker").read_text(encoding="utf-8") == "new\n"
     assert (install_dir / "deps/neat-core.json").is_file()
     assert not (tmp_path / "sima-cli-args.txt").exists()
+    assert not (tmp_path / "neat-args.txt").exists()
+    assert _ssh_calls(tmp_path) == []
     assert not (package_dir / "deps").exists()
-    assert "Skipping Core and Insight dependency installation" in proc.stdout
+    assert "⚠️  Skipping the Neat Library and Insight installation." in proc.stdout
+
+
+COMPATIBLE = "0.6.0+develop.5326276ff765"
 
 
 def _neat_status(
     *,
-    mode: str = "modalix-board",
-    core_version: str | None = "0.6.0+develop.5326276ff765",
+    core_version: str | None = COMPATIBLE,
     vulcan_ref: str | None = "develop",
     pyneat_version: str | None = None,
     insight_version: str | None = "0.0.0+main.bedca8f",
 ) -> dict[str, object]:
     """Return the `neat --json --offline` fields the installer reads, as Core reports them."""
     return {
-        "schema": "sima.neat.status.v1",
-        "environment": {"mode": mode},
-        "updateCheck": {"offline": True, "status": "skipped"},
         "components": {
             "core": {
                 "version": core_version,
                 "provenance": {"vulcanRef": vulcan_ref},
             },
-            "pyneat": {"name": "PyNeat", "version": pyneat_version or core_version},
-            "insight": {"version": insight_version, "updateAvailable": None},
+            "pyneat": {"version": pyneat_version or core_version},
+            "insight": {"version": insight_version},
         },
     }
 
 
-SDK_STATUS = _neat_status(mode="elxr-sdk")
 # A Core installed from main, as `sima-cli neat install core` selects by default.
 MAIN_CORE_STATUS = _neat_status(core_version="0.6.0+main.b2001ee23b8c", vulcan_ref="main")
 DEVKIT_IP = "192.0.2.10"
 
 
-def _write_fake_neat_status(tmp_path: Path, status: object) -> Path:
+def _write_fake_neat_status(tmp_path: Path, status: object) -> None:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     neat_path = bin_dir / "neat"
@@ -1871,7 +1875,6 @@ def _write_fake_neat_status(tmp_path: Path, status: object) -> Path:
         encoding="utf-8",
     )
     neat_path.chmod(0o755)
-    return neat_path
 
 
 def _write_fake_devkit(tmp_path: Path, status: object | None, exit_code: int = 0) -> None:
@@ -1910,18 +1913,25 @@ def _ssh_calls(tmp_path: Path) -> list[str]:
 
 def _run_installer_with_neat_status(
     tmp_path: Path,
-    status: object,
+    status: object | None,
     *,
     input_text: str = "",
     core: dict[str, str] | None = None,
-    compatible_core_version: str | None = "0.6.0+develop.5326276ff765",
+    compatible_core_version: str | None = COMPATIBLE,
+    sdk: bool = False,
     paired: bool = False,
     extra_env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
+    """Run the installer against a fake `neat` reporting `status`; None means no Core."""
     package_dir = tmp_path / "package"
     _write_vulcan_runtime(package_dir, core or {"ref": "develop", "spec": "5326276ff765"})
-    _write_fake_neat_status(tmp_path, status)
+    if status is not None:
+        _write_fake_neat_status(tmp_path, status)
     env = dict(extra_env or {})
+    if sdk:
+        sdk_release = tmp_path / "sdk-release"
+        sdk_release.write_text("SDK_VERSION=3.0.0\n", encoding="utf-8")
+        env["ELXR_SDK_RELEASE_FILE"] = str(sdk_release)
     if paired:
         env["DEVKIT_SYNC_DEVKIT_IP"] = DEVKIT_IP
     return _run_vulcan_installer(
@@ -1935,11 +1945,25 @@ def _run_installer_with_neat_status(
     )
 
 
+def _row(icon: str, label: str, value: str) -> str:
+    return f"   {icon} {label:<8} {value}\n"
+
+
+HEADER = f"🔍 Compatible Neat Library: {COMPATIBLE}\n"
+INSIGHT_ROW = _row("✅", "Insight", "0.0.0+main.bedca8f")
+ALREADY_INSTALLED = "✅ Neat Library and Insight are already installed.\n"
+ALREADY_INSTALLED_IN_SDK = "✅ Neat Library and Insight are already installed in the SDK.\n"
+CORE_QUESTION = f"❓ Install Neat Library {COMPATIBLE}"
+KEPT_CORE = (
+    f"⚠️  Keeping the installed Neat Library. Examples built for Neat Library {COMPATIBLE} may fail."
+)
 CORE_INSTALL_CALL = "neat install -d . -t minimal core@develop:5326276ff765"
 SDK_CORE_INSTALL_CALL = f"NEAT_INSTALLER_SKIP_DEVKIT_SYNC=ON {CORE_INSTALL_CALL}"
 INSIGHT_INSTALL_CALL = "neat install -d . insight"
-CORE_FOR_APPS = "Core for these Apps: 0.6.0+develop.5326276ff765 (core@develop:5326276ff765)"
-SKIPPED_CORE = "Core 0.6.0+develop.5326276ff765 is installed; skipping it."
+
+
+def _apps_installed(tmp_path: Path) -> bool:
+    return (tmp_path / "installed/deps/neat-core.json").is_file()
 
 
 def test_vulcan_installer_skips_matching_core_and_keeps_insight(tmp_path):
@@ -1947,11 +1971,10 @@ def test_vulcan_installer_skips_matching_core_and_keeps_insight(tmp_path):
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
     assert _sima_cli_calls(tmp_path) == []
-    devkit_line = "  DevKit: 0.6.0+develop.5326276ff765, matches"
-    assert f"{CORE_FOR_APPS}\n{devkit_line}\n{SKIPPED_CORE}\n" in proc.stdout
-    assert "Insight 0.0.0+main.bedca8f is installed; keeping it." in proc.stdout
+    devkit_row = _row("✅", "DevKit", COMPATIBLE)
+    assert f"\n{HEADER}{devkit_row}{INSIGHT_ROW}{ALREADY_INSTALLED}" in proc.stdout
     assert "[Y/n]" not in proc.stdout
-    assert (tmp_path / "installed/deps/neat-core.json").is_file()
+    assert _apps_installed(tmp_path)
 
 
 def test_vulcan_installer_compares_the_version_a_tag_installs(tmp_path):
@@ -1962,8 +1985,8 @@ def test_vulcan_installer_compares_the_version_a_tag_installs(tmp_path):
         compatible_core_version="0.6.0",
     )
     assert proc.returncode == 0, proc.stderr + proc.stdout
-    assert "Core for these Apps: 0.6.0 (core@v0.6.0:4404f3fd5a91)" in proc.stdout
-    assert "Core 0.6.0 is installed; skipping it." in proc.stdout
+    assert f"🔍 Compatible Neat Library: 0.6.0\n{_row('✅', 'DevKit', '0.6.0')}" in proc.stdout
+    assert ALREADY_INSTALLED in proc.stdout
     assert _sima_cli_calls(tmp_path) == []
 
 
@@ -1980,27 +2003,28 @@ def test_vulcan_installer_matches_pyneat_wheel_spelling_of_a_branch(tmp_path):
     )
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
-    assert "Core 0.6.0+feat-x.5326276ff765 is installed; skipping it." in proc.stdout
+    assert ALREADY_INSTALLED in proc.stdout
     assert _sima_cli_calls(tmp_path) == []
 
 
 @pytest.mark.parametrize(
-    "status",
+    ("status", "devkit_value"),
     [
-        MAIN_CORE_STATUS,
-        _neat_status(core_version="0.6.0+develop.aaaaaaaaaaaa"),
+        (MAIN_CORE_STATUS, "0.6.0+main.b2001ee23b8c"),
+        (_neat_status(core_version="0.6.0+develop.aaaaaaaaaaaa"), "0.6.0+develop.aaaaaaaaaaaa"),
         # A local Core build keeps the version of the commit it started from.
-        _neat_status(vulcan_ref=None),
-        _neat_status(pyneat_version="0.5.0"),
+        (_neat_status(vulcan_ref=None), f"{COMPATIBLE} (different build)"),
+        (_neat_status(pyneat_version="0.5.0"), f"{COMPATIBLE} (different build)"),
     ],
     ids=["other-ref", "other-commit", "local-build", "pyneat-mismatch"],
 )
-def test_vulcan_installer_installs_different_core_by_default(tmp_path, status):
+def test_vulcan_installer_installs_different_core_by_default(tmp_path, status, devkit_value):
     # No answer on stdin, as from a script or CI job, installs the compatible Core.
     proc = _run_installer_with_neat_status(tmp_path, status)
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
-    assert "Install Core 0.6.0+develop.5326276ff765? [Y/n]" in proc.stdout
+    assert _row("🔄", "DevKit", devkit_value) in proc.stdout
+    assert f"{CORE_QUESTION}? [Y/n]" in proc.stdout
     assert _sima_cli_calls(tmp_path) == [CORE_INSTALL_CALL]
 
 
@@ -2011,10 +2035,9 @@ def test_vulcan_installer_asks_before_installing_core(tmp_path, answer, calls):
     proc = _run_installer_with_neat_status(tmp_path, MAIN_CORE_STATUS, input_text=answer)
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
-    assert "  DevKit: 0.6.0+main.b2001ee23b8c, differs" in proc.stdout
     assert _sima_cli_calls(tmp_path) == calls
-    kept = "WARNING: Keeping the installed Core; examples built for Core 0.6.0+develop."
-    assert (kept in proc.stdout) == (not calls)
+    assert (KEPT_CORE in proc.stdout) == (not calls)
+    assert _apps_installed(tmp_path)
 
 
 def test_vulcan_installer_overwrite_installs_core_without_asking(tmp_path):
@@ -2036,77 +2059,106 @@ def test_vulcan_installer_installs_core_and_insight_when_none_is_reported(tmp_pa
     proc = _run_installer_with_neat_status(tmp_path, status)
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
-    assert ": not installed\n" in proc.stdout
-    assert "Insight is not installed. Install it? [Y/n]" in proc.stdout
+    rows = _row("❌", "DevKit", "not installed") + _row("❌", "Insight", "not installed")
+    assert f"{HEADER}{rows}" in proc.stdout
+    # Every question comes before the first install, which could read the answers.
+    assert proc.stdout.index("❓ Install Insight? [Y/n]") < proc.stdout.index("Installing")
     assert _sima_cli_calls(tmp_path) == [CORE_INSTALL_CALL, INSIGHT_INSTALL_CALL]
 
 
-def test_vulcan_installer_keeps_missing_insight_when_declined(tmp_path):
-    proc = _run_installer_with_neat_status(
-        tmp_path, _neat_status(insight_version=None), input_text="n\n"
-    )
+@pytest.mark.parametrize(
+    ("status", "answers"),
+    [
+        (_neat_status(insight_version=None), "n\n"),
+        (
+            _neat_status(
+                core_version="0.6.0+main.b2001ee23b8c", vulcan_ref="main", insight_version=None
+            ),
+            "n\nn\n",
+        ),
+    ],
+    ids=["insight", "both"],
+)
+def test_vulcan_installer_installs_apps_when_dependencies_are_declined(tmp_path, status, answers):
+    proc = _run_installer_with_neat_status(tmp_path, status, input_text=answers)
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
-    assert SKIPPED_CORE in proc.stdout
+    assert "already installed" not in proc.stdout
     assert _sima_cli_calls(tmp_path) == []
+    assert _apps_installed(tmp_path)
 
 
 def test_vulcan_installer_asks_when_the_compatible_version_is_unavailable(tmp_path):
     proc = _run_installer_with_neat_status(tmp_path, _neat_status(), compatible_core_version=None)
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
-    assert "Core for these Apps: core@develop:5326276ff765 (version unavailable)" in proc.stdout
-    assert "Install Core core@develop:5326276ff765? [Y/n]" in proc.stdout
+    assert "🔍 Compatible Neat Library: unknown (core@develop:5326276ff765)\n" in proc.stdout
+    assert "❓ Install Neat Library core@develop:5326276ff765? [Y/n]" in proc.stdout
     assert _sima_cli_calls(tmp_path) == [CORE_INSTALL_CALL]
 
 
 def test_vulcan_installer_skips_matching_sdk_core_when_unpaired(tmp_path):
-    proc = _run_installer_with_neat_status(tmp_path, SDK_STATUS)
+    proc = _run_installer_with_neat_status(tmp_path, _neat_status(), sdk=True)
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
-    assert (
-        f"{CORE_FOR_APPS}\n  SDK   : 0.6.0+develop.5326276ff765, matches\n"
-        f"  DevKit: not paired\n{SKIPPED_CORE}\n"
-    ) in proc.stdout
-    assert "WARNING" not in proc.stdout
+    rows = _row("✅", "SDK", COMPATIBLE) + _row("🔌", "DevKit", "not paired") + INSIGHT_ROW
+    assert f"{HEADER}{rows}{ALREADY_INSTALLED_IN_SDK}" in proc.stdout
+    assert "⚠️" not in proc.stdout
     assert _sima_cli_calls(tmp_path) == []
+
+
+UNPAIRED_WARNING = (
+    "⚠️  This SDK is not paired with a DevKit, so the DevKit will not get Neat Library"
+    f" {COMPATIBLE}. To pair, run on the host: sima-cli sdk setup --devkit <devkit-ip>\n"
+)
 
 
 @pytest.mark.parametrize(("answer", "calls"), [("", [SDK_CORE_INSTALL_CALL]), ("n\n", [])])
 def test_vulcan_installer_warns_that_an_unpaired_devkit_gets_no_core(tmp_path, answer, calls):
     proc = _run_installer_with_neat_status(
-        tmp_path, _neat_status(mode="elxr-sdk", vulcan_ref="main"), input_text=answer
+        tmp_path, _neat_status(vulcan_ref="main"), sdk=True, input_text=answer
     )
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
-    assert "WARNING: This SDK is not paired with a DevKit" in proc.stdout
-    assert "sima-cli sdk setup --devkit <devkit-ip>" in proc.stdout
-    assert "Install Core 0.6.0+develop.5326276ff765 in the SDK only? [Y/n]" in proc.stdout
+    assert f"{UNPAIRED_WARNING}{CORE_QUESTION} in the SDK only? [Y/n]" in proc.stdout
     assert _sima_cli_calls(tmp_path) == calls
 
 
+def test_vulcan_installer_recognizes_an_sdk_without_neat(tmp_path):
+    proc = _run_installer_with_neat_status(tmp_path, None, sdk=True)
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    rows = (
+        _row("❌", "SDK", "not installed")
+        + _row("🔌", "DevKit", "not paired")
+        + _row("❌", "Insight", "not installed")
+    )
+    assert f"{HEADER}{rows}{UNPAIRED_WARNING}" in proc.stdout
+    assert _sima_cli_calls(tmp_path) == [SDK_CORE_INSTALL_CALL, INSIGHT_INSTALL_CALL]
+
+
 @pytest.mark.parametrize(
-    ("local", "devkit", "devkit_line", "question", "calls"),
+    ("local", "devkit", "devkit_row", "question", "calls"),
     [
-        (SDK_STATUS, _neat_status(), "0.6.0+develop.5326276ff765, matches", None, []),
+        (_neat_status(), _neat_status(), _row("✅", "DevKit", COMPATIBLE), None, []),
         (
-            SDK_STATUS,
+            _neat_status(),
             MAIN_CORE_STATUS,
-            "0.6.0+main.b2001ee23b8c, differs",
+            _row("🔄", "DevKit", "0.6.0+main.b2001ee23b8c"),
             "in the SDK and on the DevKit?",
             [CORE_INSTALL_CALL],
         ),
         (
-            _neat_status(mode="elxr-sdk", vulcan_ref="main"),
+            _neat_status(vulcan_ref="main"),
             _neat_status(),
-            "0.6.0+develop.5326276ff765, matches",
+            _row("✅", "DevKit", COMPATIBLE),
             "in the SDK?",
             [SDK_CORE_INSTALL_CALL],
         ),
         (
-            _neat_status(mode="elxr-sdk", vulcan_ref="main"),
+            _neat_status(vulcan_ref="main"),
             MAIN_CORE_STATUS,
-            "0.6.0+main.b2001ee23b8c, differs",
+            _row("🔄", "DevKit", "0.6.0+main.b2001ee23b8c"),
             "in the SDK and on the DevKit?",
             [CORE_INSTALL_CALL],
         ),
@@ -2114,38 +2166,40 @@ def test_vulcan_installer_warns_that_an_unpaired_devkit_gets_no_core(tmp_path, a
     ids=["both-match", "devkit-differs", "sdk-differs", "both-differ"],
 )
 def test_vulcan_installer_checks_the_paired_devkit_core(
-    tmp_path, local, devkit, devkit_line, question, calls
+    tmp_path, local, devkit, devkit_row, question, calls
 ):
     _write_fake_devkit(tmp_path, devkit)
 
-    proc = _run_installer_with_neat_status(tmp_path, local, paired=True)
+    proc = _run_installer_with_neat_status(tmp_path, local, sdk=True, paired=True)
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
-    assert f"  DevKit: {devkit_line}\n" in proc.stdout
+    assert devkit_row in proc.stdout
     assert _ssh_calls(tmp_path) == [
         f"-n -T -o BatchMode=yes -o ConnectTimeout=5 sima@{DEVKIT_IP} neat --json --offline"
     ]
     if question:
-        assert f"Install Core 0.6.0+develop.5326276ff765 {question} [Y/n]" in proc.stdout
+        assert f"{CORE_QUESTION} {question} [Y/n]" in proc.stdout
     else:
-        assert SKIPPED_CORE in proc.stdout
+        assert ALREADY_INSTALLED in proc.stdout
     assert _sima_cli_calls(tmp_path) == calls
 
 
 def test_vulcan_installer_installs_core_on_a_devkit_without_neat(tmp_path):
     _write_fake_devkit(tmp_path, None, exit_code=127)
 
-    proc = _run_installer_with_neat_status(tmp_path, SDK_STATUS, paired=True)
+    proc = _run_installer_with_neat_status(tmp_path, _neat_status(), sdk=True, paired=True)
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
-    assert "  DevKit: not installed\n" in proc.stdout
+    assert _row("❌", "DevKit", "not installed") in proc.stdout
     assert _sima_cli_calls(tmp_path) == [CORE_INSTALL_CALL]
 
 
 def test_vulcan_installer_keeps_prompt_answers_from_the_devkit_query(tmp_path):
     _write_fake_devkit(tmp_path, MAIN_CORE_STATUS)
 
-    proc = _run_installer_with_neat_status(tmp_path, SDK_STATUS, paired=True, input_text="n\n")
+    proc = _run_installer_with_neat_status(
+        tmp_path, _neat_status(), sdk=True, paired=True, input_text="n\n"
+    )
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
     assert _sima_cli_calls(tmp_path) == []
@@ -2153,33 +2207,21 @@ def test_vulcan_installer_keeps_prompt_answers_from_the_devkit_query(tmp_path):
 
 @pytest.mark.parametrize(
     ("local", "calls"),
-    [(SDK_STATUS, []), (_neat_status(mode="elxr-sdk", vulcan_ref="main"), [SDK_CORE_INSTALL_CALL])],
+    [(_neat_status(), []), (_neat_status(vulcan_ref="main"), [SDK_CORE_INSTALL_CALL])],
     ids=["sdk-matches", "sdk-differs"],
 )
 def test_vulcan_installer_installs_sdk_only_when_the_devkit_is_unreachable(tmp_path, local, calls):
     _write_fake_devkit(tmp_path, None, exit_code=255)
 
     proc = _run_installer_with_neat_status(
-        tmp_path, local, paired=True, extra_env={"DEVKIT_DEPLOY_USER": "admin"}
+        tmp_path, local, sdk=True, paired=True, extra_env={"DEVKIT_DEPLOY_USER": "admin"}
     )
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
-    assert f"  DevKit: admin@{DEVKIT_IP} is unreachable over SSH\n" in proc.stdout
-    assert ("WARNING: The DevKit is unreachable" in proc.stdout) == bool(calls)
+    assert _row("🔌", "DevKit", f"unreachable (admin@{DEVKIT_IP})") in proc.stdout
+    assert ("⚠️  The DevKit is unreachable" in proc.stdout) == bool(calls)
+    assert (ALREADY_INSTALLED_IN_SDK in proc.stdout) == (not calls)
     assert _sima_cli_calls(tmp_path) == calls
-
-
-def test_vulcan_installer_skip_dependencies_does_not_query_neat(tmp_path):
-    _write_fake_devkit(tmp_path, _neat_status())
-
-    proc = _run_installer_with_neat_status(
-        tmp_path, _neat_status(), paired=True, extra_env={"NEAT_APPS_SKIP_DEPENDENCIES": "1"}
-    )
-
-    assert proc.returncode == 0, proc.stderr + proc.stdout
-    assert not (tmp_path / "neat-args.txt").exists()
-    assert _ssh_calls(tmp_path) == []
-    assert not (tmp_path / "sima-cli-args.txt").exists()
 
 
 def test_vulcan_runtime_gate_uses_packaged_core_without_customer_dependencies():

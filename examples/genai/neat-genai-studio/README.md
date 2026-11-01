@@ -38,9 +38,9 @@ Once set up, the Studio runs without internet access. The first `setup.sh` run a
 Run every command below in a shell on the board.
 
 ## Install Apps
-`sima-cli neat install apps` also offers to install the compatible Core and
-Insight, and skips them when they are already installed. To keep the Core and
-Insight you have without being asked, run the install as
+`sima-cli neat install apps` also offers to install the compatible Neat Library
+and Insight, and skips them when they are already installed. To keep the Neat
+Library and Insight you have without being asked, run the install as
 `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps`. See
 [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
 
