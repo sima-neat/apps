@@ -141,6 +141,23 @@ The two implementations format these numbers differently: Python prints the full
 float, the C++ binary prints at the default stream precision of six significant
 digits. Compare the magnitudes rather than the digits.
 
+## Performance
+
+Measured on a Modalix DevKit with Platform 3.0.0, the C++ application from the `apps@develop` package, and no other workload on the board. The configuration is the default except for the input stream: one stream of the anti-UAV footage, encoded at 30 or 60 FPS. Each figure is the rate, in FPS, at which Insight received tracking metadata, averaged over 20 seconds after a 5-second warm-up.
+
+| Input resolution | Codec | 30 FPS input | 60 FPS input |
+| --- | --- | ---: | ---: |
+| 720p | H.264 | 30\* | 50\*\* |
+| 720p | H.265 | 30\* | 44 |
+| 1080p | H.264 | 30\* | 51\*\* |
+| 1080p | H.265 | 30\* | 40 |
+
+With a 30 FPS input the application processes every frame and keeps 43 to 44 tracks per frame. The Python application measured 30 FPS with a 30 FPS input and 50 FPS with a 60 FPS input, at 1080p H.264, with the same H.264 corruption at 60 FPS.
+
+\* Limited by the 30 FPS input.
+
+\*\* When the input runs faster than the application, it drops encoded frames before decoding them. With H.264, the dropped frames corrupt the decoded picture until the next keyframe, and the track count fell to 29 to 35 per frame. Keep H.264 inputs at or below 30 FPS.
+
 ## Troubleshooting
 
 - Start with one stream before adding more inputs.
