@@ -13,13 +13,13 @@ only when modifying or building their source.
 
 Run the installation on the Modalix DevKit. If the DevKit has no internet access, run it under `/workspace` in a Neat SDK container paired with the DevKit. Pairing normally shares `/workspace` with the DevKit over NFS, so the bundle appears at the same path there. Run the examples on the DevKit.
 
-`sima-cli neat install apps` also installs the compatible Core and Insight, and skips them when they are already installed. It reads what is installed from `neat --json`:
+`sima-cli neat install apps` also offers to install the compatible Core and Insight. It reads what is installed from `neat --json --offline` and prints the installed Core next to the compatible version:
 
-- On the DevKit, it skips a Core that matches the one selected for the package. Before replacing a different Core, it asks; press Enter to replace it, or answer `n` to keep it.
-- From a paired SDK container, it always installs Core, because that also installs Core on the DevKit.
-- It keeps an installed Insight and installs Insight only when none is installed. To update it, run `sima-cli neat install insight`.
+- It skips a Core that matches the compatible version. Otherwise it asks before installing Core; press Enter, or give no answer as in a script, to install it, or answer `n` to keep the installed Core.
+- From an SDK container paired with a DevKit, it also checks the DevKit's Core over SSH, and installing Core covers both. If the SDK is not paired or the DevKit is unreachable, it warns that the DevKit will not get Core and asks whether to install Core in the SDK only. To pair, run `sima-cli sdk setup --devkit <devkit-ip>` on the host.
+- It keeps an installed Insight, and asks before installing Insight when none is installed. To update it, run `sima-cli neat install insight`.
 
-To keep the installed Core and Insight instead of the compatible versions, for example from an SDK container or in a script that cannot answer the question, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps`. Examples built for a different Core may fail with it. See [Dependency Selection](#dependency-selection).
+To keep the installed Core and Insight without being asked, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps`. Examples built for a different Core may fail with it. See [Dependency Selection](#dependency-selection).
 
 Install the latest Apps runtime from main and enter the installed bundle:
 
