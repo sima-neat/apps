@@ -566,6 +566,8 @@ VideoSender build_video_sender(const Config& cfg, double fps, int width, int hei
   input_options.fps_n = output_fps;
   input_options.fps_d = 1;
   input_options.memory_policy = simaai::neat::InputMemoryPolicy::Ev74;
+  // Keep each pushed frame's source timestamp; Insight pairs it with the verdict by timestamp.
+  input_options.do_timestamp = false;
 
   auto sender_options =
       simaai::neat::nodes::groups::VideoSenderOptions::FromRaw({.fps = output_fps});
@@ -600,7 +602,7 @@ std::unique_ptr<simaai::neat::MetadataSender> make_metadata_sender(const Config&
 /// Insight draws `top_classes` as a label on the video; `anomaly` carries the raw values
 /// for other consumers.
 void send_verdict(simaai::neat::MetadataSender& sender, float score, float threshold,
-                  bool anomalous, int64_t timestamp_ms, int frame_id) {
+                  bool anomalous, int64_t timestamp_ms, int64_t frame_id) {
   const std::string verdict = anomalous ? "ANOMALOUS" : "normal";
   char label[96];
   std::snprintf(label, sizeof(label), "%s score=%.1f thr=%.1f", verdict.c_str(), score, threshold);
@@ -618,8 +620,23 @@ void send_verdict(simaai::neat::MetadataSender& sender, float score, float thres
   }
 }
 
-void stream_frame(simaai::neat::Run& run, const cv::Mat& frame_bgr) {
-  if (!run.push(simaai::neat::TensorList{rgb_tensor(frame_bgr)})) {
+/// Stamps the annotated frame with its source frame's timestamp and ID, so Insight pairs it
+/// with the verdict sent for that frame.
+simaai::neat::Sample annotated_frame_sample(const cv::Mat& frame_bgr, int64_t pts_ns,
+                                            int64_t frame_id) {
+  simaai::neat::Sample sample = simaai::neat::make_tensor_sample("", rgb_tensor(frame_bgr));
+  sample.payload_type = simaai::neat::PayloadType::Image;
+  sample.media_type = "video/x-raw";
+  sample.format = "RGB";
+  sample.payload_tag = sample.format;
+  sample.pts_ns = pts_ns;
+  sample.frame_id = frame_id;
+  return sample;
+}
+
+void stream_frame(simaai::neat::Run& run, const cv::Mat& frame_bgr, int64_t pts_ns,
+                  int64_t frame_id) {
+  if (!run.push(annotated_frame_sample(frame_bgr, pts_ns, frame_id))) {
     throw std::runtime_error("Insight video push failed");
   }
 }
@@ -674,9 +691,10 @@ int cmd_score_video_file(const Config& cfg, const patchcore::MemoryBank& bank, f
               << " threshold=" << threshold << " verdict=" << (anomalous ? "ANOMALOUS" : "normal")
               << " (mla=" << mla_ms << "ms host=" << host_ms << "ms)\n";
 
-    stream_frame(video_sender.run, overlay);
-    send_verdict(*metadata_sender, scored.image_score, threshold, anomalous,
-                 static_cast<int64_t>(std::lround((processed - 1) * 1000.0 / fps)), processed);
+    const auto pts_ns = static_cast<int64_t>(std::llround((processed - 1) * 1e9 / fps));
+    stream_frame(video_sender.run, overlay, pts_ns, processed);
+    send_verdict(*metadata_sender, scored.image_score, threshold, anomalous, pts_ns / 1'000'000,
+                 processed);
     if (cfg.save_every > 0 && processed % cfg.save_every == 0) {
       const fs::path snapshot_path = cfg.output_dir / ("frame_" + std::to_string(processed) + ".jpg");
       if (!cv::imwrite(snapshot_path.string(), overlay)) {
@@ -895,7 +913,8 @@ int cmd_score_rtsp(const Config& cfg, const patchcore::MemoryBank& bank, float t
     cv::Mat bgr;
     patchcore::PatchEmbeddings embedding;
     double mla_ms = 0.0;
-    int64_t timestamp_ms = -1;
+    int64_t pts_ns = -1;
+    int64_t source_frame_id = -1;
     {
       simaai::neat::Sample sample;
       simaai::neat::PullError pull_error;
@@ -913,7 +932,8 @@ int cmd_score_rtsp(const Config& cfg, const patchcore::MemoryBank& bank, float t
       // Copy both fields out; the sample (and its pooled buffers) is released at scope end.
       embedding = embedding_from_sample(sample);
       bgr = frame_bgr_from_sample(sample);
-      timestamp_ms = sample.pts_ns >= 0 ? sample.pts_ns / 1'000'000 : -1;
+      pts_ns = sample.pts_ns;
+      source_frame_id = sample.frame_id;
     }
 
     const double host_start = time_ms();
@@ -927,9 +947,12 @@ int cmd_score_rtsp(const Config& cfg, const patchcore::MemoryBank& bank, float t
               << " threshold=" << threshold << " verdict=" << (anomalous ? "ANOMALOUS" : "normal")
               << " (mla=" << mla_ms << "ms host=" << (time_ms() - host_start) << "ms)\n";
 
-    stream_frame(video_sender.run, overlay);
+    // The video frame and its verdict carry the same source identity.
+    const int64_t frame_id = source_frame_id >= 0 ? source_frame_id : processed;
+    stream_frame(video_sender.run, overlay, pts_ns, frame_id);
+    const int64_t timestamp_ms = pts_ns >= 0 ? pts_ns / 1'000'000 : -1;
     send_verdict(*metadata_sender, scored.image_score, threshold, anomalous, timestamp_ms,
-                 processed);
+                 frame_id);
     if (save_frames && processed % cfg.save_every == 0) {
       const fs::path snapshot_path = cfg.output_dir / ("frame_" + std::to_string(processed) + ".jpg");
       if (!cv::imwrite(snapshot_path.string(), overlay)) {
