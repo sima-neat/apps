@@ -526,6 +526,19 @@ def _run_build(
     _write_manifest(manifest_path, neat_core, platform_version)
 
     bin_dir, log_path = _write_fake_curl(tmp_path)
+    git_path = bin_dir / "git"
+    if not git_path.exists():
+        # Branch fixtures must not inherit an exact tag from the real checkout.
+        # Local-tag cases provide their own git fixture before calling this helper.
+        git_path.write_text(
+            '#!/usr/bin/env bash\n'
+            'case " $* " in\n'
+            '  *" describe --tags --exact-match HEAD "*) exit 1 ;;\n'
+            '  *) exec /usr/bin/git "$@" ;;\n'
+            'esac\n',
+            encoding="utf-8",
+        )
+        git_path.chmod(0o755)
     build_dir = tmp_path / "build"
     run_env = os.environ.copy()
     for name in (

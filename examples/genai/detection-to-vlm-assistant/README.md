@@ -105,7 +105,11 @@ source ~/pyneat/bin/activate
 pip install -r ${APP_DIR}/src/python/requirements.txt
 ```
 
-When GenAI is enabled, start the server in one terminal:
+When GenAI is enabled, start the server in one terminal. The server uses port
+`9998` and loads the VLM on the accelerator, as GenAI Studio does. If GenAI
+Studio is running, for example after you set it up from Insight's GenAI tab,
+stop it first with `run.sh stop` in its folder
+(`~/prebuilt-apps/examples/genai/neat-genai-studio` when Insight installed it).
 
 ```bash
 APP_DIR=examples/genai/detection-to-vlm-assistant
@@ -150,6 +154,8 @@ responses is not a fault; none at all, on a source containing people, is.
 - Verify the RTSP URL and Insight ports before investigating inference.
 - Verify `model.path` points to the detector package.
 - Verify the VLM server lists `genai_server.model.name` under `/v1/models`.
+- If the GenAI server cannot start on port `9998`, another server already uses
+  it, usually GenAI Studio. Stop GenAI Studio as described in [Run](#run).
 - Disable GenAI to isolate the detector and Insight path.
 
 ## Source Files

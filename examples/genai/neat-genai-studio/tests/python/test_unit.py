@@ -92,6 +92,7 @@ from shell_config_suite import (  # noqa: E402,F401
     ServerConfigWithoutPyyamlTests,
     ShellConfigValueTests,
     ShellRagConfigTests,
+    StudioSupervisorTests,
     ShellWebConfigTests,
 )
 from setup_rag_suite import RagDatabaseCleanupTests, SetupRagSwitchTests  # noqa: E402,F401
