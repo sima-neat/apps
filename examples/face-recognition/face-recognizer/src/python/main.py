@@ -4,7 +4,7 @@ Real-time SCRFD 2.5G face detection + ArcFace W600K R50 recognition on SiMa.ai M
 Publishes H.264 video + object-detection metadata to an Insight viewer.
 
 Pipeline:
-  RTSP decode (NV12) --> branch --> video_sender (H264 RTP/UDP -> Insight)
+  RTSP or H.264 file decode (NV12) --> branch --> video_sender (H264 RTP/UDP -> Insight)
                                \\--> SCRFD model --> [detect, align, ArcFace, match] --> metadata
 
 Gallery:
@@ -442,7 +442,8 @@ def _tensor_to_bgr(t) -> "np.ndarray":
         code = cv2.COLOR_YUV2BGR_I420
     else:
         raise RuntimeError("decoded frame tensor is neither NV12 nor I420")
-    payload = np.frombuffer(t.copy_payload_bytes(), dtype=np.uint8)
+    # The decoder may pad planes (e.g. Y padded to 768 rows for 720p); repack tightly.
+    payload = np.frombuffer(t.contiguous().copy_payload_bytes(), dtype=np.uint8)
     if payload.size < need:
         raise RuntimeError(f"frame payload too small: {payload.size} < {need}")
     return np.ascontiguousarray(cv2.cvtColor(payload[:need].reshape((h * 3 // 2, w)), code))
@@ -487,7 +488,7 @@ def _load_config(config_path: Path) -> AppConfig:
     cfg.scrfd_model   = resolve(raw.get("scrfd", {}).get("model", ""))
     cfg.arcface_model = resolve(raw.get("arcface", {}).get("model", ""))
     cfg.gallery_path  = resolve(raw.get("gallery", {}).get("path", "gallery.bin"))
-    cfg.input_uri     = raw.get("input", {}).get("uri", "")
+    cfg.input_uri     = resolve(raw.get("input", {}).get("uri", ""))
     insight           = raw.get("output", {}).get("insight", {})
     cfg.insight_host          = insight.get("host", "")
     cfg.insight_video_port    = int(insight.get("video_port", 9000))
@@ -510,8 +511,14 @@ def _load_config(config_path: Path) -> AppConfig:
 
 # ── SCRFD pyneat pipeline build ────────────────────────────────────────────────
 
-def _probe_rtsp(url: str) -> Tuple[int, int, int]:
-    """Read width/height/fps from the stream caps before the graph is built."""
+def _is_rtsp(uri: str) -> bool:
+    return uri.startswith(("rtsp://", "rtsps://"))
+
+
+def _probe_input(uri: str) -> Tuple[int, int, int]:
+    """Read width/height/fps from the stream or file before the graph is built."""
+    if not _is_rtsp(uri) and not Path(uri).is_file():
+        raise RuntimeError(f"input video not found: {uri}")
     # This short-lived probe joins the stream mid-GOP, so FFmpeg emits
     # "Missing reference picture" chatter while it waits for a keyframe.  Only
     # caps are read here, never pixels, so silence it; genuine failures still
@@ -520,9 +527,9 @@ def _probe_rtsp(url: str) -> Tuple[int, int, int]:
     prev = os.environ.get(key)
     os.environ[key] = (prev + "|" if prev else "") + "loglevel;quiet"
     try:
-        cap = cv2.VideoCapture(url)
+        cap = cv2.VideoCapture(uri)
         if not cap.isOpened():
-            raise RuntimeError(f"Cannot open RTSP source for probing: {url}")
+            raise RuntimeError(f"Cannot open input for probing: {uri}")
         w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
         h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
         fps = round(cap.get(cv2.CAP_PROP_FPS) or 0)
@@ -533,14 +540,14 @@ def _probe_rtsp(url: str) -> Tuple[int, int, int]:
         else:
             os.environ[key] = prev
     if w <= 0 or h <= 0:
-        raise RuntimeError("RTSP probe: could not read frame dimensions")
+        raise RuntimeError(f"could not read the input frame size from {uri}")
     if fps <= 0:
-        raise RuntimeError("RTSP probe: could not read FPS")
+        raise RuntimeError(f"could not read the input frame rate from {uri}")
     return w, h, fps
 
 
 def _build_scrfd_run(cfg: AppConfig, frame_w: int, frame_h: int, fps: int):
-    """Build SCRFD pipeline: RTSP → branch → [VideoSender, SCRFD → output]."""
+    """Build SCRFD pipeline: RTSP/file → branch → [VideoSender, SCRFD, frame] → join."""
     opt = pyneat.ModelOptions()
     opt.preprocess.kind = pyneat.InputKind.Image
     opt.preprocess.enable = pyneat.AutoFlag.On
@@ -556,26 +563,32 @@ def _build_scrfd_run(cfg: AppConfig, frame_w: int, frame_h: int, fps: int):
     opt.preprocess.normalize.stddev = (1.0, 1.0, 1.0)
     scrfd_model = pyneat.Model(cfg.scrfd_model, opt)
 
-    rtsp_opt = pyneat.RtspDecodedInputOptions()
-    rtsp_opt.url              = cfg.input_uri
-    rtsp_opt.latency_ms       = 200
-    rtsp_opt.tcp              = True
-    rtsp_opt.payload_type     = 96
-    rtsp_opt.insert_queue     = True
-    rtsp_opt.decoder_name     = "decoder"
-    rtsp_opt.decoder_raw_output = True
-    rtsp_opt.auto_caps_from_stream = True
-    rtsp_opt.fallback_h264_width   = frame_w
-    rtsp_opt.fallback_h264_height  = frame_h
-    rtsp_opt.fallback_h264_fps     = fps
-    rtsp_opt.output_caps.enable    = True
-    rtsp_opt.output_caps.format    = pyneat.Format.NV12
-    rtsp_opt.output_caps.width     = frame_w
-    rtsp_opt.output_caps.height    = frame_h
-    rtsp_opt.output_caps.fps       = fps
-    rtsp_opt.output_caps.memory    = pyneat.CapsMemory.Any
+    is_rtsp = _is_rtsp(cfg.input_uri)
+    if is_rtsp:
+        rtsp_opt = pyneat.RtspDecodedInputOptions()
+        rtsp_opt.url              = cfg.input_uri
+        rtsp_opt.latency_ms       = 200
+        rtsp_opt.tcp              = True
+        rtsp_opt.payload_type     = 96
+        rtsp_opt.insert_queue     = True
+        rtsp_opt.decoder_name     = "decoder"
+        rtsp_opt.decoder_raw_output = True
+        rtsp_opt.auto_caps_from_stream = True
+        rtsp_opt.fallback_h264_width   = frame_w
+        rtsp_opt.fallback_h264_height  = frame_h
+        rtsp_opt.fallback_h264_fps     = fps
+        rtsp_opt.output_caps.enable    = True
+        rtsp_opt.output_caps.format    = pyneat.Format.NV12
+        rtsp_opt.output_caps.width     = frame_w
+        rtsp_opt.output_caps.height    = frame_h
+        rtsp_opt.output_caps.fps       = fps
+        rtsp_opt.output_caps.memory    = pyneat.CapsMemory.Any
 
-    source = pyneat.groups.rtsp_decoded_input(rtsp_opt)
+        source = pyneat.groups.rtsp_decoded_input(rtsp_opt)
+    else:
+        file_opt = pyneat.VideoInputGroupOptions()
+        file_opt.path = cfg.input_uri
+        source = pyneat.groups.video_input(file_opt)
 
     model_graph = pyneat.Graph("model")
     model_graph.connect(pyneat.nodes.input("model"), scrfd_model)
@@ -618,10 +631,13 @@ def _build_scrfd_run(cfg: AppConfig, frame_w: int, frame_h: int, fps: int):
     graph.connect(frame_graph, joined)
     graph.connect(det_graph, joined)
 
+    # Live streams keep the newest frame; files are processed frame by frame.
     run_opts = pyneat.RunOptions()
-    run_opts.preset          = pyneat.RunPreset.Realtime
+    if is_rtsp:
+        run_opts.preset      = pyneat.RunPreset.Realtime
     run_opts.queue_depth     = 3
-    run_opts.overflow_policy = pyneat.OverflowPolicy.KeepLatest
+    run_opts.overflow_policy = (pyneat.OverflowPolicy.KeepLatest if is_rtsp
+                                else pyneat.OverflowPolicy.Block)
     run_opts.output_memory   = pyneat.OutputMemory.ZeroCopy
     run = graph.build(run_opts)
 
@@ -777,8 +793,8 @@ def _letterbox_params(orig_w: int, orig_h: int, infer_w: int, infer_h: int):
 
 def run_recognition(cfg: AppConfig, gallery: List[GalleryEntry], max_frames: int,
                     test_mode: bool = False) -> int:
-    """Main recognition loop: RTSP → SCRFD → ArcFace → MetadataSender → Insight."""
-    frame_w, frame_h, fps = _probe_rtsp(cfg.input_uri)
+    """Main recognition loop: RTSP/file → SCRFD → ArcFace → MetadataSender → Insight."""
+    frame_w, frame_h, fps = _probe_input(cfg.input_uri)
     scale, pad_l, pad_t = _letterbox_params(frame_w, frame_h, cfg.infer_w, cfg.infer_h)
 
     # Build pipelines
@@ -797,12 +813,12 @@ def run_recognition(cfg: AppConfig, gallery: List[GalleryEntry], max_frames: int
 
     if cfg.insight_host:
         print(
-            f"rtsp={cfg.input_uri} stream={frame_w}x{frame_h}@{fps} "
+            f"input={cfg.input_uri} stream={frame_w}x{frame_h}@{fps} "
             f"insight={cfg.insight_host} video={video_opt.video_port} "
             f"metadata={metadata_sender.metadata_port()} channel=0"
         )
     else:
-        print(f"rtsp={cfg.input_uri} stream={frame_w}x{frame_h}@{fps} headless")
+        print(f"input={cfg.input_uri} stream={frame_w}x{frame_h}@{fps} headless")
 
     cached_labels:    List[str]              = []
     cached_sims:      List[float]            = []
@@ -1002,6 +1018,10 @@ def main(argv=None) -> int:
     # Recognition mode
     if not cfg.input_uri:
         print("[ERR] input.uri not set — provide in config.yaml or via --input", file=sys.stderr)
+        return 1
+    if cfg.insight_host and not _is_rtsp(cfg.input_uri):
+        print("[ERR] Insight output needs an RTSP input; video files run offline "
+              "(clear output.insight.host)", file=sys.stderr)
         return 1
     if not cfg.scrfd_model:
         print("[ERR] scrfd.model not set", file=sys.stderr)

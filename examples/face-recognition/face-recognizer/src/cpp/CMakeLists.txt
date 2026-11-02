@@ -46,12 +46,11 @@ target_include_directories(face_recog_nodes
 )
 
 # ── face-recognizer (includes enrollment mode via --enroll flag) ──────────────
-# Enrollment logic lives in tools/enroll.cpp and is dispatched from main() when
-# --enroll is the first argument, so the single installed binary covers both
-# recognition and gallery enrollment without a separate tool.
+# main() dispatches to enroll.cpp when --enroll is the first argument, so the
+# single installed binary covers both recognition and gallery enrollment.
 add_executable(face-recognizer
     "${_SELF_DIR}/main.cpp"
-    "${_MOD_ROOT}/tools/enroll.cpp"
+    "${_SELF_DIR}/enroll.cpp"
 )
 target_link_libraries(face-recognizer
     PRIVATE

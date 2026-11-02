@@ -52,15 +52,6 @@ struct ScrfdConfig {
 std::pair<simaai::neat::Tensor, PadMeta>
 preprocess_scrfd(const cv::Mat& bgr_u8, int infer_w = 640, int infer_h = 640);
 
-// Fused NV12 → letterbox-resize → RGB FP32 preprocessing for RTSP sources.
-// Skips the NV12→BGR intermediate frame entirely; on the common 2:1 downscale
-// (e.g. 1280×720 → 640×360 content in 640×640 output) a NEON 2×2 box filter
-// is used — same quality as bilinear for an exact power-of-2 scale.
-// Falls back to cvtColor + preprocess_scrfd on non-NEON or non-2× sources.
-std::pair<simaai::neat::Tensor, PadMeta>
-preprocess_scrfd_nv12(const uint8_t* nv12, int src_w, int src_h,
-                      int infer_w = 640, int infer_h = 640);
-
 // Compute letterbox padding metadata from source frame dimensions only — no
 // actual resize or normalize.  Used when EV74 CVU Preproc handles preprocessing
 // so the CPU only needs the pad offsets for coordinate un-mapping.

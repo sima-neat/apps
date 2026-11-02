@@ -1,24 +1,20 @@
 // E2E test for face-recognizer.
 //
-// Launches face-recognizer with real SCRFD + ArcFace models and checks the
-// pipeline exits cleanly.  Recognition accuracy is verified when a test gallery
-// is present.
+// Runs the binary with real SCRFD + ArcFace models:
+//   1. Bundled face clip (tests/assets/face_clip.mp4) with the bundled gallery: every
+//      frame must contain a detected face and every frame must be recognized as the
+//      enrolled identity.
+//   2. RTSP stream: the live-stream graph must process 60 frames and exit 0. The shared
+//      CI stream content is not controlled, so detections are not asserted here.
+//   3. --output recording of the bundled clip must produce a non-empty video.
+//   4. Enrollment from the bundled image folder and from the bundled clip must write
+//      a gallery.
 //
-// Required env vars (any missing → hard fail):
-//   SIMANEAT_APPS_TEST_MODELS_DIR    directory holding model tar.gz files
-//   SIMANEAT_TEST_RTSP_H264_URL      RTSP stream  OR
-//   SIMANEAT_APPS_TEST_INPUT_VIDEO   path to a face-containing MP4/H.264 file
-//
+// Required env vars (missing → fail):
+//   SIMANEAT_APPS_TEST_MODELS_DIR    directory holding the model tar.gz files
+//   SIMANEAT_TEST_RTSP_H264_URL      live H.264 RTSP stream
 // Optional:
-//   SIMANEAT_APPS_TEST_GALLERY_BIN   path to a pre-enrolled gallery.bin;
-//                                    when set, at least one recognised identity
-//                                    must appear in stdout (non-Unknown match).
 //   SIMANEAT_APPS_TEST_TIMEOUT_MS    per-run timeout (default 60 000 ms)
-//
-// Face detection assertion:
-//   Asserted only when SIMANEAT_APPS_TEST_INPUT_VIDEO is set, because a generic
-//   shared RTSP stream may not contain detectable faces in any 60-frame window.
-//   When only RTSP is available the test verifies exit 0 and prints a warning.
 #include "support/testing/test_process.h"
 #include "support/testing/test_config.h"
 
@@ -32,6 +28,10 @@ using namespace sima_examples::testing;
 
 static const char* kScrfdFile   = "scrfd_2.5g_bnkps.mla_mpk.tar.gz";
 static const char* kArcFaceFile = "w600k_r50.surgery_mpk.tar.gz";
+// Tests run from the apps root (CMake WORKING_DIRECTORY).
+static const fs::path kAssets = "examples/face-recognition/face-recognizer/tests/assets";
+static const char* kEnrolledName = "Paresh";
+static constexpr int kFrames = 60;
 
 static std::string find_in_dir(const std::string& dir, const char* filename) {
     const fs::path direct = fs::path(dir) / filename;
@@ -42,6 +42,53 @@ static std::string find_in_dir(const std::string& dir, const char* filename) {
     return {};
 }
 
+struct Summary {
+    int frames = -1;      // "═══ Detection quality (N frames) ═══"
+    int zero_faces = -1;  // "  0 faces :     N (...)"
+    int recognized = -1;  // "  recognized/unknown: R / U"
+};
+
+static Summary parse_summary(const std::string& out) {
+    Summary s;
+    std::istringstream in(out);
+    std::string line;
+    while (std::getline(in, line)) {
+        if (line.find("Detection quality") != std::string::npos) {
+            const auto lp = line.find('(');
+            if (lp != std::string::npos) s.frames = std::stoi(line.substr(lp + 1));
+        } else if (line.find("0 faces :") != std::string::npos) {
+            s.zero_faces = std::stoi(line.substr(line.find(':') + 1));
+        } else if (line.find("recognized/unknown:") != std::string::npos) {
+            s.recognized = std::stoi(line.substr(line.find(':') + 1));
+        }
+    }
+    return s;
+}
+
+// Every "  face[N] → <name>  similarity=X" line must name the enrolled identity.
+static int count_face_lines(const std::string& out, const std::string& name, int& others) {
+    int matches = 0;
+    others = 0;
+    std::istringstream in(out);
+    std::string line;
+    while (std::getline(in, line)) {
+        const auto arrow = line.find("\xe2\x86\x92");  // UTF-8 →
+        if (line.find("face[") == std::string::npos || arrow == std::string::npos) continue;
+        std::istringstream rest(line.substr(arrow + 3));
+        std::string got;
+        rest >> got;
+        if (got == name) ++matches; else ++others;
+    }
+    return matches;
+}
+
+static bool run_ok(const std::string& what, const ProcessResult& r) {
+    if (r.exit_code == 0) return true;
+    std::cerr << "[FAIL] " << what << " exit code " << r.exit_code << "\n"
+              << "stdout:\n" << r.stdout_text << "\nstderr:\n" << r.stderr_text << "\n";
+    return false;
+}
+
 int main(int argc, char** argv) {
     if (argc < 2) {
         std::cerr << "[ERR] usage: " << argv[0] << " <face-recognizer-binary>\n";
@@ -49,260 +96,121 @@ int main(int argc, char** argv) {
     }
     const std::string binary = argv[1];
 
-    // ── Models ────────────────────────────────────────────────────────────────
     const char* models_dir_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
     if (!models_dir_raw) {
         std::cerr << "[FAIL] SIMANEAT_APPS_TEST_MODELS_DIR not set\n";
         return 1;
     }
-    const std::string models_dir = models_dir_raw;
-
-    const std::string scrfd_path   = find_in_dir(models_dir, kScrfdFile);
-    const std::string arcface_path = find_in_dir(models_dir, kArcFaceFile);
+    const std::string scrfd_path   = find_in_dir(models_dir_raw, kScrfdFile);
+    const std::string arcface_path = find_in_dir(models_dir_raw, kArcFaceFile);
     if (scrfd_path.empty() || arcface_path.empty()) {
         std::cerr << "[FAIL] SCRFD or ArcFace model not found under SIMANEAT_APPS_TEST_MODELS_DIR\n";
         return 1;
     }
-
-    // ── Input source ──────────────────────────────────────────────────────────
-    // Track whether the input is a known face-containing video so the detection
-    // assertion can be gated appropriately (a shared generic RTSP stream may not
-    // contain detectable faces in a 60-frame window).
-    bool input_is_face_video = false;
-    std::string input;
-    if (const char* v = env_or_null("SIMANEAT_APPS_TEST_INPUT_VIDEO")) {
-        input = v;
-        input_is_face_video = true;
-        if (!fs::exists(input)) {
-            std::cerr << "[FAIL] SIMANEAT_APPS_TEST_INPUT_VIDEO file not found: " << input << "\n";
-            return 1;
-        }
-    } else {
-        const auto rtsp_urls = rtsp_h264_urls_from_env();
-        if (rtsp_urls.empty()) {
-            std::cerr << "[FAIL] No input source: set SIMANEAT_APPS_TEST_INPUT_VIDEO (video file)"
-                         " or SIMANEAT_TEST_RTSP_H264_URL (RTSP stream)\n";
-            return 1;
-        }
-        input = rtsp_urls.front();
-    }
-
-    // ── Gallery (optional — recognition check only when present) ──────────────
-    std::string gallery_path;
-    if (const char* g = env_or_null("SIMANEAT_APPS_TEST_GALLERY_BIN")) {
-        gallery_path = g;
-        if (!fs::exists(gallery_path)) {
-            throw std::runtime_error(
-                "SIMANEAT_APPS_TEST_GALLERY_BIN set but not found: " + gallery_path);
-        }
-    }
-
-    // ── Write test config ─────────────────────────────────────────────────────
-    const fs::path config_dir = fs::temp_directory_path() / "face_recognizer_e2e";
-    fs::create_directories(config_dir);
-    const fs::path config_path = config_dir / "config.yaml";
-
-    ConfigScalars overrides = {
-        {"scrfd.model",          scrfd_path},
-        {"arcface.model",        arcface_path},
-        {"input.uri",            input},
-        {"output.sink",          ""},            // headless
-        {"output.insight.host",  "127.0.0.1"},  // exercise encoder + MetadataSender;
-                                                 // UDP drops silently with no listener
-    };
-    if (!gallery_path.empty()) {
-        overrides["gallery.path"] = gallery_path;
-    }
-    write_e2e_config("face-recognizer", config_path, overrides);
-
-    // ── Run ───────────────────────────────────────────────────────────────────
-    const int timeout = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 60000);
-    const std::vector<std::string> args = {
-        "--config", config_path.string(),
-        "--test", "--max-frames", "60",
-    };
-
-    std::cout << "[RUN] " << binary << " --config " << config_path
-              << " --test --max-frames 60\n";
-    const ProcessResult r = spawn_and_wait(binary, args, timeout);
-    fs::remove_all(config_dir);
-
-    if (r.exit_code != 0) {
-        std::cerr << "[FAIL] exit code " << r.exit_code << "\n"
-                  << "stderr:\n" << r.stderr_text << "\n";
+    const auto rtsp_urls = rtsp_h264_urls_from_env();
+    if (rtsp_urls.empty()) {
+        std::cerr << "[FAIL] SIMANEAT_TEST_RTSP_H264_URL not set\n";
         return 1;
     }
-
-    // ── Mandatory detection check (gallery-independent) ───────────────────────
-    // Parse the shutdown "Detection quality" summary that main.cpp always prints.
-    // "0 faces : <N>" tells us how many frames had zero detections; if ALL frames
-    // had zero detections SCRFD is broken regardless of gallery presence.
-    // The progress block that prints "det[0]=" only fires at frame 100, so it is
-    // never visible in a 60-frame run — parse the summary instead.
-    {
-        // Find the "0 faces :" line and extract the count.
-        int zero_face_frames = -1;  // -1 = summary block not found
-        int total_frames     = -1;
-        std::istringstream ds(r.stdout_text);
-        std::string dl;
-        while (std::getline(ds, dl)) {
-            // "═══ Detection quality (N frames) ═══"
-            if (dl.find("Detection quality") != std::string::npos) {
-                const auto lp = dl.find('(');
-                const auto rp = dl.find(' ', lp + 1);
-                if (lp != std::string::npos && rp != std::string::npos)
-                    total_frames = std::stoi(dl.substr(lp + 1, rp - lp - 1));
-            }
-            // "  0 faces :     N (X.X%)   <- misses"
-            if (dl.find("0 faces :") != std::string::npos) {
-                std::istringstream ls(dl);
-                std::string tok;
-                int col = 0;
-                while (ls >> tok) { if (col++ == 3) { zero_face_frames = std::stoi(tok); break; } }
-            }
+    const fs::path clip    = fs::absolute(kAssets / "face_clip.mp4");
+    const fs::path gallery = fs::absolute(kAssets / "gallery.bin");
+    const fs::path images  = fs::absolute(kAssets / "gallery_images");
+    for (const auto& p : {clip, gallery, images}) {
+        if (!fs::exists(p)) {
+            std::cerr << "[FAIL] bundled test asset missing: " << p << "\n";
+            return 1;
         }
-        if (total_frames != 60) {
-            std::cerr << "[FAIL] Detection quality summary not found in output.\n"
+    }
+
+    const int timeout = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 60000);
+    const fs::path work = fs::temp_directory_path() / "face_recognizer_e2e";
+    fs::remove_all(work);
+    fs::create_directories(work);
+    const fs::path config_path = work / "config.yaml";
+    write_e2e_config("face-recognizer", config_path, {
+        {"scrfd.model",         scrfd_path},
+        {"arcface.model",       arcface_path},
+        {"gallery.path",        gallery.string()},
+        {"input.uri",           clip.string()},
+        {"output.sink",         ""},
+        {"output.insight.host", ""},
+    });
+    const std::vector<std::string> test_args = {
+        "--config", config_path.string(), "--test", "--max-frames", std::to_string(kFrames)};
+
+    // ── 1. Bundled clip: detection + recognition ──────────────────────────────
+    {
+        std::cout << "[RUN] " << binary << " --input " << clip << " --test\n";
+        auto args = test_args;
+        args.insert(args.end(), {"--input", clip.string()});
+        const ProcessResult r = spawn_and_wait(binary, args, timeout);
+        if (!run_ok("bundled clip run", r)) return 1;
+        const Summary s = parse_summary(r.stdout_text);
+        int others = 0;
+        const int named = count_face_lines(r.stdout_text, kEnrolledName, others);
+        if (s.frames != kFrames || s.zero_faces != 0 || s.recognized != kFrames ||
+            named < kFrames || others != 0) {
+            std::cerr << "[FAIL] bundled clip: expected " << kFrames << " frames, each with a face "
+                      << "recognized as " << kEnrolledName << "; got frames=" << s.frames
+                      << " zero_face_frames=" << s.zero_faces << " recognized=" << s.recognized
+                      << " " << kEnrolledName << "_lines=" << named << " other_lines=" << others
+                      << "\nstdout:\n" << r.stdout_text << "\n";
+            return 1;
+        }
+        std::cout << "[OK] bundled clip: " << kFrames << "/" << kFrames << " frames recognized as "
+                  << kEnrolledName << "\n";
+    }
+
+    // ── 2. RTSP: live-stream graph runs ───────────────────────────────────────
+    {
+        std::cout << "[RUN] " << binary << " --input <rtsp> --test\n";
+        auto args = test_args;
+        args.insert(args.end(), {"--input", rtsp_urls.front()});
+        const ProcessResult r = spawn_and_wait(binary, args, timeout);
+        if (!run_ok("RTSP run", r)) return 1;
+        if (parse_summary(r.stdout_text).frames != kFrames) {
+            std::cerr << "[FAIL] RTSP run did not process " << kFrames << " frames\n"
                       << "stdout:\n" << r.stdout_text << "\n";
             return 1;
         }
-        if (zero_face_frames == total_frames) {
-            if (input_is_face_video) {
-                std::cerr << "[FAIL] SCRFD detected zero faces in all " << total_frames << " frames — "
-                             "ensure SIMANEAT_APPS_TEST_INPUT_VIDEO contains at least one visible face.\n";
-                return 1;
-            }
-            std::cout << "[WARN] SCRFD detected zero faces in " << total_frames << " frames using a "
-                         "generic RTSP stream; face detection not verified.\n"
-                         "       Set SIMANEAT_APPS_TEST_INPUT_VIDEO to a face-containing video "
-                         "to enable this check.\n";
-        }
+        std::cout << "[OK] RTSP: processed " << kFrames << " frames\n";
     }
 
-    // ── Optional recognition check ────────────────────────────────────────────
-    if (!gallery_path.empty()) {
-        // test mode prints: "  face[N] → <name>  similarity=X.XXXX"
-        // A non-Unknown match means the arrow line exists and its name is not "Unknown".
-        bool has_known_match = false;
-        std::istringstream ss(r.stdout_text);
-        std::string line;
-        while (std::getline(ss, line)) {
-            const auto arrow = line.find("\xe2\x86\x92");  // UTF-8 for →
-            if (arrow == std::string::npos) continue;
-            const std::string after = line.substr(arrow + 3);  // skip → (3 bytes)
-            const auto name_start = after.find_first_not_of(' ');
-            if (name_start == std::string::npos) continue;
-            const std::string name = after.substr(name_start,
-                after.find_first_of(' ', name_start) - name_start);
-            if (name != "Unknown" && !name.empty()) { has_known_match = true; break; }
-        }
-        if (!has_known_match) {
-            std::cerr << "[FAIL] SIMANEAT_APPS_TEST_GALLERY_BIN is set but no "
-                         "non-Unknown match found in 60 frames.\n"
-                         "  Ensure the test clip contains enrolled faces, or "
-                         "unset SIMANEAT_APPS_TEST_GALLERY_BIN to skip this check.\n";
-            return 1;
-        }
-        std::cout << "[OK] recognition match confirmed\n";
-    }
-
-    std::cout << "[OK] face-recognizer processed 60 frames (exit 0)\n";
-
-    // ── Enrollment E2E via --images (bundled test asset, no extra env vars) ─────
-    // Uses tests/assets/gallery_images/ which ships with the repo.
-    // The working directory is the apps root (set in CMakeLists WORKING_DIRECTORY).
+    // ── 3. --output recording ─────────────────────────────────────────────────
     {
-        const fs::path bundled_images =
-            "examples/face-recognition/face-recognizer/tests/assets/gallery_images";
-
-        if (fs::is_directory(bundled_images)) {
-            const fs::path img_enroll_dir     = fs::temp_directory_path() / "fr_img_enroll_e2e";
-            const fs::path img_enroll_gallery = img_enroll_dir / "gallery.bin";
-            const fs::path img_enroll_config  = img_enroll_dir / "config.yaml";
-            fs::create_directories(img_enroll_dir);
-
-            ConfigScalars img_enroll_overrides = {
-                {"scrfd.model",   scrfd_path},
-                {"arcface.model", arcface_path},
-                {"input.uri",     ""},
-                {"output.sink",   ""},
-            };
-            write_e2e_config("face-recognizer", img_enroll_config, img_enroll_overrides);
-
-            const std::vector<std::string> img_enroll_args = {
-                "--enroll",
-                "--config",  img_enroll_config.string(),
-                "--images",  bundled_images.string(),
-                "--gallery", img_enroll_gallery.string(),
-            };
-
-            std::cout << "[RUN] " << binary << " --enroll --images "
-                      << bundled_images << " --gallery " << img_enroll_gallery << "\n";
-
-            const ProcessResult ir = spawn_and_wait(binary, img_enroll_args, timeout);
-            const bool img_gallery_written =
-                fs::exists(img_enroll_gallery) && fs::file_size(img_enroll_gallery) > 0;
-            fs::remove_all(img_enroll_dir);
-
-            if (ir.exit_code != 0) {
-                std::cerr << "[FAIL] --enroll --images exit code " << ir.exit_code << "\n"
-                          << "stderr:\n" << ir.stderr_text << "\n";
-                return 1;
-            }
-            if (!img_gallery_written) {
-                std::cerr << "[FAIL] --enroll --images exited 0 but gallery.bin was not written\n";
-                return 1;
-            }
-            std::cout << "[OK] --images enrollment completed and gallery.bin written\n";
-        }
-    }
-
-    // ── Enrollment E2E (when face video is available) ─────────────────────────
-    // Run --enroll mode using the same video input.  This exercises the enrollment
-    // path (SCRFD → ArcFace → GalleryBuilder → gallery.bin write) without needing
-    // a separate binary or a second test executable that would confuse the CI
-    // runner's binary-name derivation heuristic.
-    if (input_is_face_video) {
-        const fs::path enroll_dir     = fs::temp_directory_path() / "face_recognizer_enroll_e2e";
-        const fs::path enroll_gallery = enroll_dir / "gallery.bin";
-        const fs::path enroll_config  = enroll_dir / "config.yaml";
-        fs::create_directories(enroll_dir);
-
-        ConfigScalars enroll_overrides = {
-            {"scrfd.model",   scrfd_path},
-            {"arcface.model", arcface_path},
-            {"input.uri",     ""},
-            {"output.sink",   ""},
-        };
-        write_e2e_config("face-recognizer", enroll_config, enroll_overrides);
-
-        const std::vector<std::string> enroll_args = {
-            "--enroll",
-            "--config",       enroll_config.string(),
-            "--video",        input,
-            "--name",         "TestIdentity",
-            "--gallery",      enroll_gallery.string(),
-            "--sample-every", "10",
-        };
-
-        std::cout << "[RUN] " << binary << " --enroll --video " << input
-                  << " --name TestIdentity --gallery " << enroll_gallery << "\n";
-
-        const ProcessResult er = spawn_and_wait(binary, enroll_args, timeout);
-        const bool gallery_written = fs::exists(enroll_gallery) && fs::file_size(enroll_gallery) > 0;
-        fs::remove_all(enroll_dir);
-
-        if (er.exit_code != 0) {
-            std::cerr << "[FAIL] --enroll exit code " << er.exit_code << "\n"
-                      << "stderr:\n" << er.stderr_text << "\n";
+        const fs::path recording = work / "recording.mp4";
+        std::cout << "[RUN] " << binary << " --input " << clip << " --output " << recording << "\n";
+        const ProcessResult r = spawn_and_wait(binary, {
+            "--config", config_path.string(), "--input", clip.string(),
+            "--output", recording.string()}, timeout);
+        if (!run_ok("--output run", r)) return 1;
+        if (!fs::exists(recording) || fs::file_size(recording) == 0) {
+            std::cerr << "[FAIL] --output exited 0 but " << recording << " is missing or empty\n";
             return 1;
         }
-        if (!gallery_written) {
-            std::cerr << "[FAIL] --enroll exited 0 but gallery.bin was not written\n";
-            return 1;
-        }
-        std::cout << "[OK] enrollment completed and gallery.bin written\n";
+        std::cout << "[OK] --output wrote " << fs::file_size(recording) << " bytes\n";
     }
 
+    // ── 4. Enrollment from images and from video ──────────────────────────────
+    const std::vector<std::pair<std::string, std::vector<std::string>>> enrollments = {
+        {"--images", {"--images", images.string()}},
+        {"--video",  {"--video", clip.string(), "--name", "TestIdentity", "--sample-every", "10"}},
+    };
+    for (const auto& [mode, extra] : enrollments) {
+        const fs::path out = work / ("gallery" + mode + ".bin");
+        std::vector<std::string> args = {"--enroll", "--config", config_path.string(),
+                                         "--gallery", out.string()};
+        args.insert(args.end(), extra.begin(), extra.end());
+        std::cout << "[RUN] " << binary << " --enroll " << mode << "\n";
+        const ProcessResult r = spawn_and_wait(binary, args, timeout);
+        if (!run_ok("--enroll " + mode, r)) return 1;
+        if (!fs::exists(out) || fs::file_size(out) == 0) {
+            std::cerr << "[FAIL] --enroll " << mode << " exited 0 but gallery.bin was not written\n";
+            return 1;
+        }
+        std::cout << "[OK] --enroll " << mode << " wrote gallery.bin\n";
+    }
+
+    fs::remove_all(work);
     return 0;
 }
