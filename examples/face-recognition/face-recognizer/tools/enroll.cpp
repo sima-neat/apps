@@ -193,16 +193,31 @@ int run_enrollment_mode(int argc, char** argv) {
         else if (a == "--help" || a == "-h") {
             std::cout <<
                 "Usage:\n"
-                "  face-enroll --images <dir> --gallery <out.bin>\n"
+                "  face-recognizer --enroll --images <dir> --gallery <out.bin>\n"
                 "              [--config <path>] [--max-per-person <N>]\n"
                 "\n"
-                "  face-enroll --video <file.mp4> --name <person> --gallery <out.bin>\n"
+                "  face-recognizer --enroll --video <file.mp4> --name <person> --gallery <out.bin>\n"
                 "              [--sample-every <N>]   (default 5 — every 5th frame)\n"
                 "              [--min-score <0-1>]    (default 0.75 — SCRFD confidence)\n"
                 "              [--config <path>]\n"
                 "\n"
                 "Modes can be combined: --images + --video both contribute to the same gallery.\n";
             return 0;
+        }
+        else if (a == "--enroll") {
+            // dispatch token forwarded from main(); no-op here
+        }
+        else {
+            // Catch missing-value case: option recognized but i+1 >= argc
+            bool known_opt = (a == "--images" || a == "--video" || a == "--name" ||
+                              a == "--gallery" || a == "--config" ||
+                              a == "--max-per-person" || a == "--sample-every" ||
+                              a == "--min-score");
+            if (known_opt)
+                std::cerr << "Error: option " << a << " requires a value\n";
+            else
+                std::cerr << "Error: unknown option: " << a << "\n";
+            return 1;
         }
     }
 
