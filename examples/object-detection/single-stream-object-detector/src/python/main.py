@@ -49,6 +49,7 @@ class AppConfig:
     source_key: str = "source.rtsp.url"
     # source.type=usb: the camera's stable ID (usb_camera_ids()) and one of its MJPEG modes.
     camera: str = ""
+    usb_format: str = "mjpeg"
     source_width: int = 1920
     source_height: int = 1080
 
@@ -207,13 +208,20 @@ def validate_config(cfg: AppConfig) -> None:
             raise ValueError("source.usb.width and source.usb.height must be > 0")
         if cfg.source_fps <= 0:
             raise ValueError("source.usb.fps must be > 0")
-        # The camera's JPEG goes to Insight as RTP/JPEG (RFC 2435): 8-pixel blocks, 2040 at most.
-        sides = (cfg.source_width, cfg.source_height)
-        if not all(0 < side <= 2040 and side % 8 == 0 for side in sides):
-            raise ValueError(
-                "source.usb.width and source.usb.height must be multiples of 8 and at most 2040 "
-                "(RTP/JPEG)"
-            )
+        if cfg.usb_format not in {"mjpeg", "yuyv"}:
+            raise ValueError("source.usb.format must be mjpeg or yuyv")
+        if cfg.usb_format == "yuyv":
+            if cfg.source_width > 3840 or cfg.source_height > 2160 or cfg.source_width % 2 or cfg.source_height % 2:
+                raise ValueError("YUYV viewing requires even dimensions within 3840x2160")
+        else:
+            # The camera's JPEG goes to Insight as RTP/JPEG (RFC 2435): 8-pixel blocks, 2040 at most.
+            sides = (cfg.source_width, cfg.source_height)
+            if not all(0 < side <= 2040 and side % 8 == 0 for side in sides):
+                raise ValueError(
+                    "source.usb.width and source.usb.height must be multiples of 8 and at most 2040 "
+                    "(RTP/JPEG)"
+                )
+
     elif not cfg.source_url:
         raise ValueError(f"{cfg.source_key} must be set")
     if not cfg.model_path:
@@ -277,6 +285,7 @@ def load_app_config(config_path: Path) -> AppConfig:
         source_key=source_key,
         source_type=source_type,
         camera=string_or(source, "camera"),
+        usb_format=string_or(source, "format", "mjpeg").lower(),
         source_width=int_or(source, "width", 1920),
         source_height=int_or(source, "height", 1080),
         source_codec=source_codec,
@@ -612,6 +621,7 @@ def make_model(cfg: AppConfig, frame_w: int, frame_h: int, nv16_frames: bool = F
     opt.preprocess.kind = pyneat.InputKind.Image
     opt.preprocess.enable = pyneat.AutoFlag.On
     opt.preprocess.color_convert.input_format = (
+        pyneat.PreprocessColorFormat.YUYV if cfg.source_type == "usb" and cfg.usb_format == "yuyv" else
         pyneat.PreprocessColorFormat.NV16 if nv16_frames else pyneat.PreprocessColorFormat.NV12
     )
     if frame_w > 0 and frame_h > 0:
@@ -625,20 +635,33 @@ def make_model(cfg: AppConfig, frame_w: int, frame_h: int, nv16_frames: bool = F
     return pyneat.Model(cfg.model_path, opt)
 
 
-def build_video_graph(cfg: AppConfig, width: int, height: int, fps: int):
-    if cfg.source_type == "usb":
+def build_video_graph(cfg: AppConfig, width: int, height: int, fps: int, usb_camera=None):
+    raw_usb = cfg.source_type == "usb" and cfg.usb_format == "yuyv"
+    if cfg.source_type == "usb" and not raw_usb:
         sender_options = pyneat.VideoSenderOptions.passthrough(pyneat.RtspCodec.MJPEG)
     else:
         encode = pyneat.SimaEncodeOptions()
         encode.fps = fps
         sender_options = pyneat.VideoSenderOptions.from_raw(encode)
         sender_options.encoder.bitrate_kbps = 1000
+        if raw_usb and (width > 1920 or height > 1080 or fps > 30):
+            sender_options.encoder.level = "5.2"
     sender_options.host = cfg.insight_host
     sender_options.channel = 0
     sender_options.video_port_base = cfg.video_port
 
     graph = pyneat.Graph("video")
-    graph.connect(pyneat.nodes.input("video"), pyneat.groups.video_sender(sender_options))
+    graph.add(pyneat.nodes.input("video"))
+    if raw_usb:
+        convert = pyneat.ColorConvertOptions()
+        convert.output_format = pyneat.ImageFormat.NV12
+        convert.surface = pyneat.ImageSurfaceLayout.EncoderNv12
+        convert.color = usb_camera.color
+        convert.color.output_siting = [pyneat.ImageChromaSiting.Cosited, pyneat.ImageChromaSiting.Centered]
+        graph.add(pyneat.nodes.color_convert(convert, usb_camera.colorimetry))
+        graph.add(pyneat.groups.video_sender(sender_options, pyneat.EncoderInputPolicy.RequireDirect))
+    else:
+        graph.add(pyneat.groups.video_sender(sender_options))
     return graph, sender_options.video_port
 
 
@@ -653,13 +676,15 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
     # camera's own sampling: most webcams send 4:2:2 MJPEG, which decodes to NV16, and the model
     # reads NV16 directly. Other sources are decoded once and re-encoded as H.264 for Insight.
     usb = cfg.source_type == "usb"
+    raw_usb = usb and cfg.usb_format == "yuyv"
+    mjpeg_usb = usb and not raw_usb
     # The camera is checked once; the same info gives the decoded layout and builds the node.
-    usb_camera = pyneat.usb_camera_info(make_usb_camera_options(cfg)) if usb else None
-    decoded_format = usb_camera.decoded_format if usb else pyneat.Format.NV12
+    usb_camera = pyneat.usb_camera_info(make_usb_camera_options(cfg), pyneat.UsbCameraFormat.YUYV if raw_usb else pyneat.UsbCameraFormat.MJPEG) if usb else None
+    decoded_format = usb_camera.camera.decoded_format if usb else pyneat.Format.NV12
     model = make_model(cfg, frame_w, frame_h, decoded_format == pyneat.Format.NV16)
     labels = load_labels(cfg.labels_path)
 
-    video_graph, video_port = build_video_graph(cfg, frame_w, frame_h, fps)
+    video_graph, video_port = build_video_graph(cfg, frame_w, frame_h, fps, usb_camera)
 
     # Insight correlates the RTP timestamp with the metadata timestamp, so the video and the
     # detections must stay in one Run and therefore on one GStreamer timeline.
@@ -667,17 +692,23 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
     source = make_source_graph(cfg, fps, frame_w, frame_h, usb_camera)
     decoded_outputs = ["model", "frame"] if save_frames else ["model"]
     branch = pyneat.graphs.branch(
-        "decoded" if usb else "source", decoded_outputs if usb else ["video", *decoded_outputs]
+        "decoded" if mjpeg_usb else "source", decoded_outputs if mjpeg_usb else ["video", *decoded_outputs]
     )
 
     model_graph = pyneat.Graph("model")
-    model_graph.connect(pyneat.nodes.input("model"), model)
+    if raw_usb:
+        model_graph.add(pyneat.nodes.input("model"))
+        model_graph.add(pyneat.nodes.preproc(pyneat.PreprocOptions(model), usb_camera.color))
+        model_graph.add(model.inference())
+        model_graph.add(model.postprocess())
+    else:
+        model_graph.connect(pyneat.nodes.input("model"), model)
 
     detections_graph = pyneat.Graph("detections")
     detections_graph.add(pyneat.nodes.output("detections", pyneat.OutputOptions.every_frame(4)))
 
     graph = pyneat.Graph()
-    if usb:
+    if mjpeg_usb:
         decode_graph = pyneat.Graph("decode")
         decode_graph.connect(
             pyneat.nodes.input("decode"),
@@ -692,11 +723,21 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
         graph.connect(decode_graph, branch)
     else:
         graph.connect(source, branch)
-        graph.connect(branch, video_graph)
+        if raw_usb:
+            latest = pyneat.GraphLinkOptions()
+            latest.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
+            graph.connect(branch, video_graph, latest)
+        else:
+            graph.connect(branch, video_graph)
     graph.connect(branch, model_graph)
     graph.connect(model_graph, detections_graph)
     if save_frames:
         frame_graph = pyneat.Graph("frame")
+        if raw_usb:
+            snapshot = pyneat.ColorConvertOptions()
+            snapshot.output_format = pyneat.ImageFormat.RGB
+            snapshot.color = usb_camera.color
+            frame_graph.add(pyneat.nodes.color_convert(snapshot, usb_camera.colorimetry))
         frame_graph.add(pyneat.nodes.output("frame", pyneat.OutputOptions.every_frame(4)))
         joined = pyneat.graphs.combine(
             ["frame", "detections"], "detector_output", pyneat.CombinePolicy.ByFrame
