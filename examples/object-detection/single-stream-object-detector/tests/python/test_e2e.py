@@ -60,6 +60,18 @@ SOURCE_CASES = [
         "url_fixture": "usb_camera_id",
         "fps": 30,
     }
+) + usb_camera_cases(
+    # UVC cameras commonly list YUYV at 640x480 and 30 fps.
+    {
+        "name": "usb_camera_yuyv",
+        "type": "usb",
+        "codec": "yuyv",
+        "url_fixture": "usb_camera_id",
+        "fps": 30,
+        "width": 640,
+        "height": 480,
+    },
+    "usb-camera-yuyv",
 )
 
 
@@ -90,8 +102,11 @@ class TestE2E:
             section["codec"] = source["codec"]
         if source["type"] == "http":
             section["ssl_strict"] = source.get("ssl_strict", True)
-        if source.get("fps", 0) > 0:
-            section["fps"] = source["fps"]
+        if source["type"] == "usb":
+            section["format"] = source["codec"]
+        for key in ("fps", "width", "height"):
+            if source.get(key, 0) > 0:
+                section[key] = source[key]
         source_config = {"type": source["type"], source["type"]: section}
 
         # This test is the Insight video receiver, so it publishes to its own loopback address.
@@ -133,7 +148,8 @@ class TestE2E:
         assert_streamed_frames_are_usable(
             tmp_output_dir, int(output_cfg["total_saved_frames"])
         )
-        # Streams are re-encoded to RTP H.264 (payload type 96); a USB camera's own JPEG is
-        # forwarded as RTP/JPEG (payload type 26).
+        # Streams and YUYV cameras are encoded to RTP H.264 (payload type 96); an MJPEG camera's
+        # own JPEG is forwarded as RTP/JPEG (payload type 26).
+        usb_jpeg = source["type"] == "usb" and source["codec"] == "mjpeg"
         assert len(video_packet) > 12 and video_packet[0] >> 6 == 2
-        assert video_packet[1] & 0x7F == (26 if source["type"] == "usb" else 96)
+        assert video_packet[1] & 0x7F == (26 if usb_jpeg else 96)
