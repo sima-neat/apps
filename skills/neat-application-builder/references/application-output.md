@@ -9,10 +9,17 @@ prefer Insight for remote browser viewing.
 ## Insight video and metadata
 
 - Add the public `VideoSender` graph fragment for video. Use
-  `VideoSenderOptions::H264RtpUdpFromRaw(...)` for raw frames or
-  `VideoSenderOptions::Passthrough(codec)` for encoded H.264 or H.265.
+  `VideoSenderOptions::FromRaw(SimaEncodeOptions{...})` /
+  `pyneat.VideoSenderOptions.from_raw(...)` to encode raw frames as H.264,
+  H.265, or MJPEG at their input resolution. Use
+  `VideoSenderOptions::Passthrough(codec)` to forward encoded H.264, H.265, or
+  MJPEG with the source's codec. Prefer these over the deprecated
+  `H264RtpUdpFromRaw` factory.
 - Pair it with `MetadataSender` when Insight needs JSON detections or other
-  structured overlays.
+  structured overlays. `MetadataSender` splits JSON larger than 1200 bytes
+  into chunks that the receiving Insight version must reassemble.
+- Oriented-box decoders emit `BBOX_OBB_V1`, which the axis-aligned `SimaRender`
+  rejects. Draw oriented boxes in application code or send them as metadata.
 - Inspect `include/nodes/groups/VideoSender.h` and
   `include/nodes/io/MetadataSender.h`. Read the matching Core docs under
   `docs/develop-apps/advanced-concepts/application-design/`, specifically

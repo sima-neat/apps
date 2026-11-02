@@ -41,7 +41,7 @@ A FastFlow package knows one product. The packaged model knows the blue discs of
 
 ## Install Apps
 
-Install on the Modalix DevKit, or under `/workspace` in a Neat SDK container paired with it. Only the example itself must run on the DevKit. If the Core and Insight selected by Apps are already installed, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps` to skip reinstalling them. See [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
+Install on the Modalix DevKit, or under `/workspace` in a Neat SDK container paired with it. Only the example itself must run on the DevKit. `sima-cli neat install apps` also offers to install the compatible Neat Library and Insight, and skips them when they are already installed. To keep the Neat Library and Insight you have without being asked, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps`. See [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
 
 Install the latest Neat Apps runtime and enter the installed bundle:
 
@@ -60,7 +60,7 @@ Run the remaining commands from `prebuilt-apps/`.
 | `fastflow_demo_mpk.tar.gz` | Default | Direct artifact (Model Zoo `fastflow_demo`) |
 | `<your-model>_mpk.tar.gz` | Supported | Compiled from an anomalib FastFlow export, see [Use Your Own Model](#use-your-own-model) |
 
-Model packages come from the Model Zoo release below, which can differ from the installed platform version.
+Model packages come from the Model Zoo release below, which can differ from the installed platform version. Model Zoo downloads need your SiMa Developer Portal login: run `sima-cli login` once, or follow the device-login prompt the first download prints.
 
 ```bash
 export MODELZOO_VERSION="3.0.0"
@@ -99,6 +99,7 @@ The stream must carry a square picture: the model input is square and its prepro
 
 ```bash
 source ~/pyneat/bin/activate
+pip install -r ${APP_DIR}/src/python/requirements.txt
 python3 ${APP_DIR}/src/python/main.py \
   --config ${APP_DIR}/src/common/config.yaml
 ```

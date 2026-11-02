@@ -706,10 +706,10 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
   runtime.model = make_model(cfg, geometry, decoded_format == simaai::neat::FormatTag::NV16);
   runtime.labels = load_labels(cfg.labels_path);
 
-  auto video_options = usb ? simaai::neat::nodes::groups::VideoSenderOptions::Passthrough(
-                                 simaai::neat::nodes::groups::RtspCodec::MJPEG)
-                           : simaai::neat::nodes::groups::VideoSenderOptions::H264RtpUdpFromRaw(
-                                 runtime.frame_w, runtime.frame_h, runtime.output_fps);
+  auto video_options =
+      usb ? simaai::neat::nodes::groups::VideoSenderOptions::Passthrough(
+                simaai::neat::nodes::groups::RtspCodec::MJPEG)
+          : simaai::neat::nodes::groups::VideoSenderOptions::FromRaw({.fps = runtime.output_fps});
   video_options.host = cfg.insight_host;
   video_options.channel = 0;
   video_options.video_port_base = cfg.video_port;

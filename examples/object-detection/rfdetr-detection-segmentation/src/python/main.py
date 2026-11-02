@@ -526,11 +526,12 @@ def decoder_options(cfg: Config, width: int, height: int, fps: int):
 
 
 def video_options(cfg: Config, width: int, height: int, fps: int):
-    opt = (
-        pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(width, height, fps)
-        if cfg.codec == "mjpeg"
-        else pyneat.VideoSenderOptions.passthrough(rtsp_codec(cfg))
-    )
+    if cfg.codec == "mjpeg":
+        encode = pyneat.SimaEncodeOptions()
+        encode.fps = fps
+        opt = pyneat.VideoSenderOptions.from_raw(encode)
+    else:
+        opt = pyneat.VideoSenderOptions.passthrough(rtsp_codec(cfg))
     opt.host = cfg.insight_host
     opt.video_port_base = cfg.video_port
     opt.channel = 0
@@ -607,7 +608,7 @@ def require_model_contract(cfg: Config, backbone, transformer, side: int) -> Non
         transformer_outputs.append([1, MASK_SIZE, MASK_SIZE, cfg.top_k])
     expected_shapes = (
         [[1, side, side, 256], [1, side * side], [1, side * side, 4]],
-        [[side, side, 256], [1, cfg.top_k, 4]],
+        [[1, side, side, 256], [1, cfg.top_k, 4]],
         transformer_outputs,
     )
     actual_specs = (

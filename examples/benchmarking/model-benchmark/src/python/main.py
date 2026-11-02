@@ -18,6 +18,9 @@ DECODE_TYPES = {"yolo26-det": "YoloV26", "yolo26-seg": "YoloV26Seg"}
 # The same value is used for every decode type to keep the measurements comparable.
 BOXDECODE_TOP_K = 100
 
+# Each benchmark pass, latency and throughput, runs at least this long.
+DEFAULT_MIN_DURATION_MS = 30000
+
 
 def load_config(path: Path) -> dict:
     with path.open("r", encoding="utf-8") as handle:
@@ -50,11 +53,20 @@ def route_fields(model) -> dict:
     }
 
 
-def write_report(path: Path, model_path: Path, frames: int, decode_type, model, report) -> None:
+def telemetry_status(report) -> str | None:
+    try:
+        return str(report.telemetry.status)
+    except Exception:
+        return None
+
+
+def write_report(path: Path, model_path: Path, frames: int, min_duration_ms: int, decode_type,
+                 model, report) -> None:
     data = {
         "benchmark": {
             "type": "model.synthetic",
             "frames": frames,
+            "min_duration_ms": min_duration_ms,
             "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         },
         "model": {
@@ -68,9 +80,15 @@ def write_report(path: Path, model_path: Path, frames: int, decode_type, model, 
         },
         "metrics": {
             "latency_ms": report.latency_ms,
+            "latency_p50_ms": report.latency_p50_ms,
+            "latency_p95_ms": report.latency_p95_ms,
+            "latency_p99_ms": report.latency_p99_ms,
             "fps": report.fps,
+            "throughput_samples": report.throughput_samples,
+            "throughput_duration_ms": report.throughput_duration_ms,
             "avg_power_watts": report.avg_power_watts,
             "energy_joules": report.energy_joules,
+            "telemetry_status": telemetry_status(report),
         },
     }
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -82,7 +100,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=default_config)
     parser.add_argument("--model", type=Path, help="compiled model package to benchmark")
-    parser.add_argument("--frames", type=int, help="measured synthetic frames")
+    parser.add_argument("--frames", type=int, help="minimum measured synthetic frames per pass")
+    parser.add_argument("--min-duration-ms", type=int,
+                        help="minimum length of each benchmark pass, in milliseconds")
     parser.add_argument("--output-json", type=Path, help="benchmark report JSON path")
     parser.add_argument(
         "--decode-type",
@@ -103,6 +123,11 @@ def main() -> int:
             if args.frames is not None
             else int(config.get("benchmark", {}).get("frames", 1000))
         )
+        min_duration_ms = (
+            args.min_duration_ms
+            if args.min_duration_ms is not None
+            else int(config.get("benchmark", {}).get("min_duration_ms", DEFAULT_MIN_DURATION_MS))
+        )
         report_path = args.output_json if args.output_json is not None else Path(
             str(config.get("output", {}).get("report_json", "sandbox/model-benchmark/report.json"))
         )
@@ -112,6 +137,9 @@ def main() -> int:
 
     if frames <= 0:
         print("benchmark.frames must be > 0", file=sys.stderr)
+        return 2
+    if min_duration_ms < 0:
+        print("benchmark.min_duration_ms must be >= 0", file=sys.stderr)
         return 2
     if not model_path.is_file():
         print(f"model file does not exist: {model_path}", file=sys.stderr)
@@ -131,13 +159,18 @@ def main() -> int:
             options.decode_type = getattr(pyneat.BoxDecodeType, DECODE_TYPES[args.decode_type])
             options.top_k = BOXDECODE_TOP_K
             model = pyneat.Model(str(model_path), options)
-        report = model.benchmark(frames)
-        write_report(report_path, model_path, frames, args.decode_type, model, report)
+        benchmark_options = pyneat.BenchmarkOptions()
+        benchmark_options.num_samples = frames
+        benchmark_options.min_duration_ms = min_duration_ms
+        report = model.benchmark(benchmark_options)
+        write_report(report_path, model_path, frames, min_duration_ms, args.decode_type, model,
+                     report)
     except Exception as exc:
         print(f"benchmark failed: {exc}", file=sys.stderr)
         return 4
 
     print(f"latency_ms={report.latency_ms}")
+    print(f"latency_p99_ms={report.latency_p99_ms}")
     print(f"fps={report.fps}")
     print(f"avg_power_watts={report.avg_power_watts}")
     print(f"energy_joules={report.energy_joules}")

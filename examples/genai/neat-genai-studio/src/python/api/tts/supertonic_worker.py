@@ -80,30 +80,29 @@ def _import_runtime():
     return supertonic_sima
 
 
-# The Platform 3.0 vector estimator (the SiMa model zoo's compile), shared with setup.sh.
-VECTOR_ESTIMATOR = Path(__file__).resolve().parent / "supertonic_sima" / "vector_estimator.json"
+# Model Zoo archives and runtime-data checksums, shared with setup.sh.
+MODEL_ASSETS = Path(__file__).resolve().parent / "supertonic_sima" / "model_assets.json"
 
 
 def _build_engine(runtime):
     model_root = Path(os.environ["SUPERTONIC_MODELS_ROOT"])
     compiled = model_root / "supertonic-3-sima"
+    assets = json.loads(MODEL_ASSETS.read_text())
     steps = int(os.environ.get("SUPERTONIC_STEPS") or 8)
     if not 5 <= steps <= 12:
         raise RuntimeError("SUPERTONIC_STEPS must be between 5 and 12")
     threads = int(os.environ.get("SUPERTONIC_THREADS") or min(8, os.cpu_count() or 1))
     return runtime.SupertonicModalix(
         model_dir=model_root / "supertonic-3",
-        mpk_path=compiled / "supertonic_vector_field_sima_mpk.tar.gz",
-        runtime_data_path=compiled / "supertonic_runtime_data.npz",
-        artifact_manifest_path=compiled / "artifact_manifest.json",
+        mpk_path=compiled / assets["vector_estimator"]["file"],
+        runtime_data_path=compiled / assets["runtime_data"]["file"],
         vocoder_backend="mla",
-        vocoder_mpk_path=compiled / "supertonic_vocoder_sima_bf16_mpk.tar.gz",
-        vocoder_manifest_path=compiled / "vocoder_bf16_manifest.json",
+        vocoder_mpk_path=compiled / assets["vocoder"]["file"],
         threads=max(1, threads),
         timeout_ms=120_000,
         verify_hashes=True,
         steps=steps,
-        expected_mpk_sha256=json.loads(VECTOR_ESTIMATOR.read_text())["sha256"],
+        artifact_sha256={name: asset["sha256"] for name, asset in assets.items()},
     )
 
 

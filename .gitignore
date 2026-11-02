@@ -17,6 +17,7 @@ tests/configs/.env.local
 .neat-core-installed
 deps/debs/
 deps/neat-core.json
+deps/scheduler-sdk-policy.json
 portal/node_modules/
 portal/.vite/
 portal/dist/

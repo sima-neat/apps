@@ -1116,7 +1116,9 @@ def build_video_graph(cfg: AppConfig, width: int, height: int, fps: int):
     if cfg.source_type == "usb":
         sender_opt = pyneat.VideoSenderOptions.passthrough(pyneat.RtspCodec.MJPEG)
     else:
-        sender_opt = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(width, height, fps)
+        encode = pyneat.SimaEncodeOptions()
+        encode.fps = fps
+        sender_opt = pyneat.VideoSenderOptions.from_raw(encode)
         sender_opt.encoder.bitrate_kbps = 1000
     sender_opt.host = cfg.insight_host
     sender_opt.channel = 0

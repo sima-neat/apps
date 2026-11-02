@@ -1,6 +1,6 @@
 ---
 name: neat-application-builder
-description: Build or adapt Neat applications using public C++ or Python APIs. Use for camera, file, or RTSP pipelines and application logic consuming compiled model archives or deployed GenAI model directories.
+description: Build or adapt Neat applications using public C++ or Python APIs. Use for camera, file, or RTSP pipelines, measuring or tuning model execution, packaging apps in Docker, and application logic consuming compiled model archives or deployed GenAI model directories.
 ---
 
 # Neat Application Builder
@@ -25,6 +25,11 @@ behavior. Verify the APIs affected by the task against that installation.
   or binding. Inspect only the areas needed by the task.
 - When adding or changing visualization, read
   [application output](references/application-output.md).
+- When inspecting where model stages run, measuring latency or power, or
+  tuning memory and buffering, read
+  [inspect, measure, and tune](references/inspect-measure-tune.md).
+- When packaging or running the application in Docker, read
+  [containers](references/containers.md).
 
 For a new application or execution approach, inspect the closest compatible Apps
 example for structure, configuration, and runtime patterns. For a focused edit,
@@ -51,8 +56,10 @@ observed results, and explicit gaps when required evidence is unavailable.
 
 Model preparation belongs to the public Model Compiler or LLiMa documentation.
 Viewer and device operations belong to Insight and Neat Development Environment
-documentation. Use the corresponding installed skill when available. This skill
-owns application code and application-side APIs.
+documentation. Applications on a PCIe host use the `simaai::neat::pcie` and
+`pyneatpcie` APIs and the `neat-pcie-application-builder` skill. Use the
+corresponding installed skill when available. This skill owns application code
+and application-side APIs.
 
 For Apps contributions, follow the repository's `AGENTS.md` and
 `CONTRIBUTING.md` for packaging, build/test, and publication workflows. Standalone

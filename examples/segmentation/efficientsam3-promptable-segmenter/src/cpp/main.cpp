@@ -225,7 +225,7 @@ Source build_source(const Config& cfg, int width, int height, int fps) {
     source.source_fps = fps;
   }
 
-  auto video = neat::nodes::groups::VideoSenderOptions::H264RtpUdpFromRaw(width, height, fps);
+  auto video = neat::nodes::groups::VideoSenderOptions::FromRaw({.fps = fps});
   video.host = cfg.insight_host;
   video.video_port_base = cfg.video_port;
 

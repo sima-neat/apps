@@ -1,7 +1,0 @@
-{
-  "about": "The Supertonic vector estimator compiled for Platform 3.0. The compile in florianvoss/supertonic-3-sima (Model Compiler 2.1.3) does not load on Core 0.6; this one, from the SiMa model zoo, does. setup.sh downloads it with sima-cli and checks it; the engine checks it again before loading. Moving to the Model Registry is planned.",
-  "url": "https://docs.sima.ai/pkg_downloads/SDK3.0.0/models/modalix/supertonic_vector_estimator_mpk_develop1132.tar.gz",
-  "sha256": "48e851eaec6dce94f8d830cbc00d4a007fd5f42adba3b1a5a10b8f2a76d431f6",
-  "size": 63929558,
-  "compiler": "Model Compiler develop, sima-mlc 3.0.0.dev0+develop.1132"
-}

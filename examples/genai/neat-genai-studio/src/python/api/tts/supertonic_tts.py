@@ -107,9 +107,10 @@ def available():
     if _supertonic_python() is None:
         return False
     models = models_root()
-    return (models / "supertonic-3" / "onnx" / "tts.json").is_file() and (
-        models / "supertonic-3-sima" / "supertonic_vector_field_sima_mpk.tar.gz"
-    ).is_file()
+    assets = json.loads((Path(__file__).with_name("supertonic_sima") / "model_assets.json").read_text())
+    return (models / "supertonic-3" / "onnx" / "tts.json").is_file() and all(
+        (models / "supertonic-3-sima" / asset["file"]).is_file() for asset in assets.values()
+    )
 
 
 def _worker_script():

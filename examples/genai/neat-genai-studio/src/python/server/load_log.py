@@ -27,14 +27,18 @@ from __future__ import annotations
 import os
 import re
 import threading
+import tempfile
 import time
 from collections import deque
+
+from shared.recovery import is_out_of_memory
 
 # The board prints absolute .elf paths; match the stage-load lifecycle lines.
 _LOADING_RE = re.compile(r"^Loading model\s+(?P<path>.+\.elf)\s*$")
 _DONE_RE = re.compile(r"^Done loading\s+(?P<path>.+\.elf)\s*$")
 # Runtime errors are the most useful thing the log can carry; never drop them.
 _ERROR_RE = re.compile(r"\[error\]|MLA_LOAD_FAILED", re.I)
+_LOAD_FAILED_LINE = "[studio] Model load failed."
 
 
 class LoadLogTap:
@@ -42,6 +46,8 @@ class LoadLogTap:
 
     def __init__(self, max_lines: int = 600) -> None:
         self._lock = threading.Lock()
+        self._memory_errors = 0
+        self._drained = threading.Event()
         self._loaded_count = 0                       # monotonic completed ELF loads
         self._lines: deque = deque(maxlen=max_lines)  # (seq, ts, text)
         self._seq = 0                                 # monotonic line cursor for the UI
@@ -63,6 +69,20 @@ class LoadLogTap:
                 if s > after_seq
             ]
             return {"loadedCount": self._loaded_count, "seq": self._seq, "lines": lines}
+
+    @property
+    def memory_errors(self) -> int:
+        with self._lock:
+            return self._memory_errors
+
+    def memory_failed_since(self, baseline: int) -> bool:
+        if self._installed:
+            # A native exception can return before the reader parses its last
+            # lines. Drain through this log line before classifying the failure.
+            self._drained.clear()
+            os.write(1, ("\n" + _LOAD_FAILED_LINE + "\n").encode())
+            self._drained.wait(5)
+        return self.memory_errors > baseline
 
     # -- install / uninstall ----------------------------------------------
     def install(self) -> bool:
@@ -147,11 +167,61 @@ class LoadLogTap:
             self._lines.append((self._seq, round(time.monotonic(), 2), text))
 
     def _note_line(self, line: str) -> None:
+        if line == _LOAD_FAILED_LINE:
+            self._drained.set()
+            return
         done = _DONE_RE.match(line)
-        if not (done or _LOADING_RE.match(line) or _ERROR_RE.search(line)):
+        out_of_memory = is_out_of_memory(line)
+        if not (done or _LOADING_RE.match(line) or _ERROR_RE.search(line) or out_of_memory):
             return
         with self._lock:
             self._seq += 1
             self._lines.append((self._seq, round(time.monotonic(), 2), line))
+            if out_of_memory:
+                self._memory_errors += 1
             if done:
                 self._loaded_count += 1
+
+
+class ModelLoadErrors:
+    """Capture native stderr during a load, then replay it and classify ENOMEM.
+
+    Use a file: a pipe can deadlock when native loading holds Python's GIL.
+    """
+
+    def __init__(self, *, capture_stdout=False):
+        self.out_of_memory = False
+        self._capture_stdout = capture_stdout
+
+    def __enter__(self):
+        self._file = tempfile.TemporaryFile()
+        self._stderr = os.dup(2)
+        os.dup2(self._file.fileno(), 2)
+        self._stdout = os.dup(1) if self._capture_stdout else None
+        if self._stdout is not None:
+            os.dup2(self._file.fileno(), 1)
+        return self
+
+    def __exit__(self, *exc):
+        self.finish()
+
+    def finish(self):
+        if self._file is None:
+            return
+        os.dup2(self._stderr, 2)
+        if self._stdout is not None:
+            os.dup2(self._stdout, 1)
+            os.close(self._stdout)
+        try:
+            self._file.seek(0)
+            for line in self._file:
+                if is_out_of_memory(line.decode('utf-8', 'replace')):
+                    self.out_of_memory = True
+                try:
+                    os.write(self._stderr, line)
+                except OSError:
+                    pass
+        finally:
+            os.close(self._stderr)
+            self._file.close()
+            self._file = None

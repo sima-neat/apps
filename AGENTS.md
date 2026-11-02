@@ -43,6 +43,23 @@ test registration, and validation commands.
 - Keep agent plans, scratch notes, generated reports, and work records outside
   this repository.
 
+## Application builder skill
+
+`skills/neat-application-builder/` is the skill that sima-cli installs for
+customers' agents to build Neat applications. Update it in the same pull
+request only when:
+
+- a skill statement is wrong or stale, or
+- the work uncovered a finding an application developer's agent would clearly
+  need: a public Neat API used differently, a new application pattern, or a
+  default or pitfall.
+
+Keep routing in `SKILL.md` and details in the matching `references/` file, and
+point to Core docs, installed headers, and examples instead of copying them.
+Do not bump `version` in `playbook.yml`. In the pull request description, list
+the skill changes under `Skill updates`, or write `Skill updates: none` with
+the reason.
+
 ## Tests and documentation
 
 - Use `tests/test-scope.yaml` as the source of truth for enabled tests and test
@@ -92,6 +109,9 @@ test registration, and validation commands.
   `sima-cli neat install apps@<branch>` and that its installed README produced
   the advertised result. The pull request description must record this
   evidence.
+- Check the `Skill updates` section against the change. Report a skill
+  statement the change makes wrong, or a missing finding an application
+  developer's agent would clearly need. Do not request a `version` bump.
 - Separate correctness, structure, packaging, and customer-workflow blockers
   from optional performance follow-ups.
 - Review the complete affected application, including its tests, configuration,
