@@ -432,9 +432,26 @@ def _tensor_dim(t, name: str) -> int:
 
 
 def _tensor_to_bgr(t) -> "np.ndarray":
-    """Convert a decoded frame tensor (NV12/I420) from the graph to BGR."""
+    """Convert a decoded frame tensor (NV12/I420, or NV16 from a USB camera) to BGR."""
     w = _tensor_dim(t, "width")
     h = _tensor_dim(t, "height")
+    if t.image_format() == pyneat.PixelFormat.NV16:
+        # A 4:2:2 USB camera frame. The payload is the whole mapped buffer, so the Y and UV
+        # planes are read at their own offsets and strides; each row keeps its own chroma by
+        # interleaving Y and UV into packed 4:2:2 (Y0 U0 Y1 V0).
+        payload = np.frombuffer(t.copy_payload_bytes(), dtype=np.uint8)
+        planes = {plane.role: plane for plane in t.planes}
+
+        def plane_rows(role):
+            plane = planes[role]
+            stride = plane.strides_bytes[0]
+            end = plane.byte_offset + stride * h
+            if end > payload.size:
+                raise RuntimeError(f"NV16 payload smaller than its {role} plane")
+            return payload[plane.byte_offset:end].reshape((h, stride))[:, :w]
+
+        yuy2 = np.dstack([plane_rows(pyneat.PlaneRole.Y), plane_rows(pyneat.PlaneRole.UV)])
+        return np.ascontiguousarray(cv2.cvtColor(yuy2, cv2.COLOR_YUV2BGR_YUY2))
     need = w * h * 3 // 2
     if t.is_nv12():
         code = cv2.COLOR_YUV2BGR_NV12
@@ -457,6 +474,12 @@ class AppConfig:
     arcface_model: str = ""
     gallery_path:  str = "gallery.bin"
     input_uri:     str = ""
+    # input.usb: a USB (UVC) MJPEG camera by its usb_camera_ids() ID, at one of its exact
+    # MJPEG modes. Used instead of input.uri when usb_camera is set.
+    usb_camera:    str = ""
+    usb_width:     int = 1280
+    usb_height:    int = 720
+    usb_fps:       int = 30
     insight_host:  str = ""
     insight_video_port:    int   = 9000
     insight_metadata_port: int   = 9100
@@ -489,6 +512,11 @@ def _load_config(config_path: Path) -> AppConfig:
     cfg.arcface_model = resolve(raw.get("arcface", {}).get("model", ""))
     cfg.gallery_path  = resolve(raw.get("gallery", {}).get("path", "gallery.bin"))
     cfg.input_uri     = resolve(raw.get("input", {}).get("uri", ""))
+    usb               = raw.get("input", {}).get("usb", {}) or {}
+    cfg.usb_camera    = str(usb.get("camera", "") or "")
+    cfg.usb_width     = int(usb.get("width", cfg.usb_width))
+    cfg.usb_height    = int(usb.get("height", cfg.usb_height))
+    cfg.usb_fps       = int(usb.get("fps", cfg.usb_fps))
     insight           = raw.get("output", {}).get("insight", {})
     cfg.insight_host          = insight.get("host", "")
     cfg.insight_video_port    = int(insight.get("video_port", 9000))
@@ -546,12 +574,41 @@ def _probe_input(uri: str) -> Tuple[int, int, int]:
     return w, h, fps
 
 
-def _build_scrfd_run(cfg: AppConfig, frame_w: int, frame_h: int, fps: int):
-    """Build SCRFD pipeline: RTSP/file → branch → [VideoSender, SCRFD, frame] → join."""
+def _usb_camera_options(cfg: AppConfig):
+    opt = pyneat.UsbCameraInputOptions()
+    opt.camera_name   = cfg.usb_camera
+    opt.width         = cfg.usb_width
+    opt.height        = cfg.usb_height
+    opt.framerate_num = cfg.usb_fps
+    return opt
+
+
+def _usb_decode_options(cfg: AppConfig, decoded_format):
+    opt = pyneat.SimaDecodeOptions()
+    opt.type       = pyneat.SimaDecodeType.MJPEG
+    opt.raw_output = True
+    opt.out_format = decoded_format
+    opt.dec_width  = cfg.usb_width
+    opt.dec_height = cfg.usb_height
+    opt.dec_fps    = cfg.usb_fps
+    return opt
+
+
+def _build_scrfd_run(cfg: AppConfig, frame_w: int, frame_h: int, fps: int, usb_info=None):
+    """Build SCRFD pipeline: RTSP/file → branch → [VideoSender, SCRFD, frame] → join.
+
+    A USB camera sends JPEG frames. They go to Insight unchanged (RTP/JPEG, no re-encode)
+    and are decoded on the hardware decoder only for SCRFD and the frame tap, in the
+    camera's own sampling: most webcams send 4:2:2 MJPEG, which decodes to NV16.
+    """
+    is_usb = usb_info is not None
+    nv16_frames = is_usb and usb_info.decoded_format == pyneat.Format.NV16
     opt = pyneat.ModelOptions()
     opt.preprocess.kind = pyneat.InputKind.Image
     opt.preprocess.enable = pyneat.AutoFlag.On
-    opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.NV12
+    opt.preprocess.color_convert.input_format = (
+        pyneat.PreprocessColorFormat.NV16 if nv16_frames else pyneat.PreprocessColorFormat.NV12
+    )
     opt.preprocess.input_max_width  = frame_w
     opt.preprocess.input_max_height = frame_h
     opt.preprocess.input_max_depth  = 3
@@ -563,8 +620,18 @@ def _build_scrfd_run(cfg: AppConfig, frame_w: int, frame_h: int, fps: int):
     opt.preprocess.normalize.stddev = (1.0, 1.0, 1.0)
     scrfd_model = pyneat.Model(cfg.scrfd_model, opt)
 
-    is_rtsp = _is_rtsp(cfg.input_uri)
-    if is_rtsp:
+    is_rtsp = not is_usb and _is_rtsp(cfg.input_uri)
+    is_live = is_usb or is_rtsp
+    # RTSP and file frames feed Insight from the decoded branch; a USB camera's JPEG is
+    # split off before decode instead.
+    usb_split = is_usb and bool(cfg.insight_host)
+    if is_usb:
+        source = pyneat.Graph("source")
+        source.add(pyneat.nodes.usb_camera_input(_usb_camera_options(cfg), usb_info))
+        # Without Insight nothing needs the JPEG, so the decoder follows the camera directly.
+        if not usb_split:
+            source.add(pyneat.nodes.sima_decode(_usb_decode_options(cfg, usb_info.decoded_format)))
+    elif is_rtsp:
         rtsp_opt = pyneat.RtspDecodedInputOptions()
         rtsp_opt.url              = cfg.input_uri
         rtsp_opt.latency_ms       = 200
@@ -610,20 +677,39 @@ def _build_scrfd_run(cfg: AppConfig, frame_w: int, frame_h: int, fps: int):
     graph = pyneat.Graph(g_opts)
 
     video_opt = None
-    branch_names = ["video", "model", "frame"] if cfg.insight_host else ["model", "frame"]
-    branch = pyneat.graphs.branch("source", branch_names)
-    graph.connect(source, branch)
+    branch_names = (["video", "model", "frame"] if cfg.insight_host and not is_usb
+                    else ["model", "frame"])
+    branch = pyneat.graphs.branch("decoded" if usb_split else "source", branch_names)
 
+    video_graph = pyneat.Graph("video")
     if cfg.insight_host:
-        _vopt = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(frame_w, frame_h, fps)
-        _vopt.host            = cfg.insight_host
-        _vopt.channel         = 0
-        _vopt.video_port_base = cfg.insight_video_port
-        _vopt.encoder.bitrate_kbps = 4000
-        video_graph = pyneat.Graph("video")
-        video_graph.connect(pyneat.nodes.input("video"), pyneat.groups.video_sender(_vopt))
-        graph.connect(branch, video_graph)
-        video_opt = _vopt
+        if is_usb:
+            video_opt = pyneat.VideoSenderOptions.passthrough(pyneat.RtspCodec.MJPEG)
+        else:
+            video_opt = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(frame_w, frame_h, fps)
+            video_opt.encoder.bitrate_kbps = 4000
+        video_opt.host            = cfg.insight_host
+        video_opt.channel         = 0
+        video_opt.video_port_base = cfg.insight_video_port
+        video_graph.connect(pyneat.nodes.input("video"), pyneat.groups.video_sender(video_opt))
+
+    if usb_split:
+        decode_graph = pyneat.Graph("decode")
+        decode_graph.connect(
+            pyneat.nodes.input("decode"),
+            pyneat.nodes.sima_decode(_usb_decode_options(cfg, usb_info.decoded_format)),
+        )
+        video_link = pyneat.GraphLinkOptions()
+        video_link.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
+        split = pyneat.graphs.branch("source", ["video", "decode"])
+        graph.connect(source, split)
+        graph.connect(split, video_graph, video_link)
+        graph.connect(split, decode_graph)
+        graph.connect(decode_graph, branch)
+    else:
+        graph.connect(source, branch)
+        if cfg.insight_host:
+            graph.connect(branch, video_graph)
 
     graph.connect(branch, model_graph)
     graph.connect(branch, frame_graph)
@@ -631,12 +717,12 @@ def _build_scrfd_run(cfg: AppConfig, frame_w: int, frame_h: int, fps: int):
     graph.connect(frame_graph, joined)
     graph.connect(det_graph, joined)
 
-    # Live streams keep the newest frame; files are processed frame by frame.
+    # Live sources keep the newest frame; files are processed frame by frame.
     run_opts = pyneat.RunOptions()
-    if is_rtsp:
+    if is_live:
         run_opts.preset      = pyneat.RunPreset.Realtime
     run_opts.queue_depth     = 3
-    run_opts.overflow_policy = (pyneat.OverflowPolicy.KeepLatest if is_rtsp
+    run_opts.overflow_policy = (pyneat.OverflowPolicy.KeepLatest if is_live
                                 else pyneat.OverflowPolicy.Block)
     run_opts.output_memory   = pyneat.OutputMemory.ZeroCopy
     run = graph.build(run_opts)
@@ -793,12 +879,22 @@ def _letterbox_params(orig_w: int, orig_h: int, infer_w: int, infer_h: int):
 
 def run_recognition(cfg: AppConfig, gallery: List[GalleryEntry], max_frames: int,
                     test_mode: bool = False) -> int:
-    """Main recognition loop: RTSP/file → SCRFD → ArcFace → MetadataSender → Insight."""
-    frame_w, frame_h, fps = _probe_input(cfg.input_uri)
+    """Main recognition loop: RTSP/file/USB camera → SCRFD → ArcFace → MetadataSender → Insight."""
+    usb_info = None
+    if cfg.usb_camera:
+        # The camera is checked once (connected, free, mode supported, one frame decodes);
+        # the same info gives the decoded layout and builds the camera node.
+        usb_info = pyneat.usb_camera_info(_usb_camera_options(cfg))
+        frame_w, frame_h, fps = cfg.usb_width, cfg.usb_height, cfg.usb_fps
+        decoded = "NV16" if usb_info.decoded_format == pyneat.Format.NV16 else "NV12"
+        input_name = f"usb:{cfg.usb_camera} ({usb_info.device}, MJPEG decoded to {decoded})"
+    else:
+        frame_w, frame_h, fps = _probe_input(cfg.input_uri)
+        input_name = cfg.input_uri
     scale, pad_l, pad_t = _letterbox_params(frame_w, frame_h, cfg.infer_w, cfg.infer_h)
 
     # Build pipelines
-    scrfd_run, video_opt = _build_scrfd_run(cfg, frame_w, frame_h, fps)
+    scrfd_run, video_opt = _build_scrfd_run(cfg, frame_w, frame_h, fps, usb_info)
 
     dummy_crop = np.zeros((_ARCFACE_H, _ARCFACE_W, 3), dtype=np.float32)
     arc_run = _build_arcface_run(cfg, dummy_crop)
@@ -813,12 +909,12 @@ def run_recognition(cfg: AppConfig, gallery: List[GalleryEntry], max_frames: int
 
     if cfg.insight_host:
         print(
-            f"input={cfg.input_uri} stream={frame_w}x{frame_h}@{fps} "
+            f"input={input_name} stream={frame_w}x{frame_h}@{fps} "
             f"insight={cfg.insight_host} video={video_opt.video_port} "
             f"metadata={metadata_sender.metadata_port()} channel=0"
         )
     else:
-        print(f"input={cfg.input_uri} stream={frame_w}x{frame_h}@{fps} headless")
+        print(f"input={input_name} stream={frame_w}x{frame_h}@{fps} headless")
 
     cached_labels:    List[str]              = []
     cached_sims:      List[float]            = []
@@ -985,7 +1081,9 @@ def main(argv=None) -> int:
         return 1
 
     # CLI overrides
-    if args.input:        cfg.input_uri     = args.input
+    if args.input:
+        cfg.input_uri  = args.input
+        cfg.usb_camera = ""  # --input replaces both input sources
     if args.gallery:      cfg.gallery_path  = args.gallery
     if args.scrfd_model:  cfg.scrfd_model   = args.scrfd_model
     if args.arcface_model:cfg.arcface_model = args.arcface_model
@@ -1016,12 +1114,27 @@ def main(argv=None) -> int:
             return 2
 
     # Recognition mode
-    if not cfg.input_uri:
-        print("[ERR] input.uri not set — provide in config.yaml or via --input", file=sys.stderr)
+    if not cfg.input_uri and not cfg.usb_camera:
+        print("[ERR] no input: set input.uri or input.usb.camera in config.yaml, "
+              "or pass --input", file=sys.stderr)
         return 1
-    if cfg.insight_host and not _is_rtsp(cfg.input_uri):
-        print("[ERR] Insight output needs an RTSP input; video files run offline "
-              "(clear output.insight.host)", file=sys.stderr)
+    if cfg.input_uri and cfg.usb_camera:
+        print("[ERR] set only one input: input.uri or input.usb.camera", file=sys.stderr)
+        return 1
+    if cfg.usb_camera:
+        if cfg.usb_width <= 0 or cfg.usb_height <= 0 or cfg.usb_fps <= 0:
+            print("[ERR] input.usb.width, input.usb.height and input.usb.fps must be > 0",
+                  file=sys.stderr)
+            return 1
+        # Insight receives the camera's JPEG as RTP/JPEG (RFC 2435): 8-pixel blocks, 2040 at most.
+        sides = (cfg.usb_width, cfg.usb_height)
+        if cfg.insight_host and not all(side % 8 == 0 and side <= 2040 for side in sides):
+            print("[ERR] input.usb.width and input.usb.height must be multiples of 8 and at "
+                  "most 2040 to send the camera's JPEG to Insight", file=sys.stderr)
+            return 1
+    elif cfg.insight_host and not _is_rtsp(cfg.input_uri):
+        print("[ERR] Insight output needs an RTSP or USB camera input; video files run "
+              "offline (clear output.insight.host)", file=sys.stderr)
         return 1
     if not cfg.scrfd_model:
         print("[ERR] scrfd.model not set", file=sys.stderr)

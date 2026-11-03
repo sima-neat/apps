@@ -6,7 +6,7 @@
 | --- | --- |
 | Category | face-recognition |
 | Difficulty | Advanced |
-| Tags | face-detection, face-recognition, scrfd, arcface, rtsp, enrollment, bf16, mla-tessellation |
+| Tags | face-detection, face-recognition, scrfd, arcface, rtsp, usb-camera, enrollment, bf16, mla-tessellation |
 | Languages | C++, Python |
 | Status | stable |
 | Binary Name | face-recognizer |
@@ -23,7 +23,7 @@ Real-time face detection and recognition on Modalix with SCRFD and ArcFace, both
 ## Prerequisites
 
 - `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
-- An H.264 RTSP stream or H.264 video file as input.
+- An H.264 RTSP stream, an H.264 video file, or a USB (UVC) MJPEG camera plugged into the target as input.
 - An [Insight](https://developer.sima.ai/software/tools/insight/) host reachable from the target for viewing the live video with face boxes and names (optional).
 
 ## Install Apps
@@ -72,9 +72,19 @@ ${APP_DIR}/src/cpp/pre-built/face-recognizer --enroll \
 
 Open `${APP_DIR}/src/common/config.yaml` and set:
 
-- `input.uri` — an H.264 RTSP stream (`rtsp://<HOST>:<PORT>/<STREAM>`) or an H.264 video file.
+- `input.uri` — an H.264 RTSP stream (`rtsp://<HOST>:<PORT>/<STREAM>`) or an H.264 video file. For a USB camera, leave it empty and set `input.usb` instead (see below).
 - `gallery.path` — the gallery built in [Enroll Faces](#enroll-faces) (default `gallery.bin`).
 - `output.insight.host` — the Insight host IP to view live results from an RTSP input; leave empty to run headless.
+
+To use a USB camera, set `input.usb.camera` to its stable ID, and `input.usb.width`, `input.usb.height`, and `input.usb.fps` to an MJPEG mode the camera lists. List the connected camera IDs and modes on the target:
+
+```bash
+source ~/pyneat/bin/activate
+python3 -c "import pyneat; print(pyneat.usb_camera_ids())"
+v4l2-ctl --list-devices && v4l2-ctl -d /dev/video<N> --list-formats-ext
+```
+
+The camera's own JPEG goes to Insight unchanged as RTP/JPEG, with no re-encoding; RTP/JPEG carries sizes up to 2040 pixels per side in multiples of 8. The same JPEG is decoded on the hardware decoder for face detection, in the camera's own sampling (most webcams send 4:2:2 MJPEG, which decodes to NV16). An unknown ID or an unsupported mode fails at startup with the connected IDs or the camera's MJPEG modes; close other programs that hold the camera.
 
 The remaining settings are optional; see [Tuning](#tuning).
 
@@ -96,13 +106,13 @@ python3 ${APP_DIR}/src/python/main.py \
 
 Python enrollment uses the same flags as C++: `python3 ${APP_DIR}/src/python/main.py --enroll --video <clip> --name <name> --gallery <gallery.bin>`.
 
-With an RTSP input and `output.insight.host` set, both implementations send the decoded video and each face's box, name, and similarity to Insight on channel 0, and Insight draws the boxes. Video files run offline: the recognized names are printed, and the C++ binary can record annotated frames with `--output`. `--test` adds per-frame results and an FPS report.
+With an RTSP or USB camera input and `output.insight.host` set, both implementations send the video and each face's box, name, and similarity to Insight on channel 0, and Insight draws the boxes. Video files run offline: the recognized names are printed, and the C++ binary can record annotated frames with `--output`. `--test` adds per-frame results and an FPS report.
 
 **Optional overrides:**
 
 | Flag | Description |
 |---|---|
-| `--input <uri>` | Override `input.uri` in config |
+| `--input <uri>` | Use this RTSP URL or video file instead of `input.uri` or `input.usb.camera` |
 | `--gallery <path>` | Override `gallery.path` in config |
 | `--scrfd-model <path>` | Override `scrfd.model` in config |
 | `--arcface-model <path>` | Override `arcface.model` in config |

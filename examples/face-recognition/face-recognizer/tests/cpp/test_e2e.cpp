@@ -2,26 +2,39 @@
 //
 // Runs the binary with real SCRFD + ArcFace models:
 //   1. Bundled face clip (tests/assets/face_clip.mp4) with the bundled gallery: every
-//      frame must contain a detected face and every frame must be recognized as the
-//      enrolled identity.
+//      frame must contain both enrolled identities, PersonA and PersonB, and no other
+//      name.
 //   2. RTSP stream: the live-stream graph must process 60 frames and exit 0. The shared
 //      CI stream content is not controlled, so detections are not asserted here.
 //   3. --output recording of the bundled clip must produce a non-empty video.
-//   4. Enrollment from the bundled image folder and from the bundled clip must write
-//      a gallery.
+//   4. Enrollment from a PersonA/PersonB folder of the shared COCO images and from the
+//      bundled clip must write a gallery.
+//   5. USB camera (only when SIMANEAT_TEST_USB_CAMERA names one; CI has no camera): the
+//      headless graph must process 60 frames, and with Insight on loopback it must also
+//      forward the camera's JPEG as RTP/JPEG (payload type 26).
 //
 // Required env vars (missing → fail):
 //   SIMANEAT_APPS_TEST_MODELS_DIR    directory holding the model tar.gz files
 //   SIMANEAT_TEST_RTSP_H264_URL      live H.264 RTSP stream
 // Optional:
 //   SIMANEAT_APPS_TEST_TIMEOUT_MS    per-run timeout (default 60 000 ms)
+//   SIMANEAT_TEST_USB_CAMERA         USB camera ID from usb_camera_ids()
+//   SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT / _METADATA_PORT  loopback Insight ports
 #include "support/testing/test_process.h"
 #include "support/testing/test_config.h"
 
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+#include <algorithm>
+#include <array>
 #include <filesystem>
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace fs = std::filesystem;
 using namespace sima_examples::testing;
@@ -30,7 +43,12 @@ static const char* kScrfdFile   = "scrfd_2.5g_bnkps.mla_mpk.tar.gz";
 static const char* kArcFaceFile = "w600k_r50.surgery_mpk.tar.gz";
 // Tests run from the apps root (CMake WORKING_DIRECTORY).
 static const fs::path kAssets = "examples/face-recognition/face-recognizer/tests/assets";
-static const char* kEnrolledName = "Paresh";
+static const fs::path kCoco   = "assets/datasets/coco";
+// The bundled gallery's identities and the shared COCO image each was enrolled from.
+static const std::vector<std::pair<std::string, std::string>> kIdentities = {
+    {"PersonA", "000000493864.jpg"},
+    {"PersonB", "000000116439.jpg"},
+};
 static constexpr int kFrames = 60;
 
 static std::string find_in_dir(const std::string& dir, const char* filename) {
@@ -65,7 +83,8 @@ static Summary parse_summary(const std::string& out) {
     return s;
 }
 
-// Every "  face[N] → <name>  similarity=X" line must name the enrolled identity.
+// Counts "  face[N] → <name>  similarity=X" lines that name `name`; `others` gets the
+// lines that name anyone outside kIdentities.
 static int count_face_lines(const std::string& out, const std::string& name, int& others) {
     int matches = 0;
     others = 0;
@@ -77,7 +96,12 @@ static int count_face_lines(const std::string& out, const std::string& name, int
         std::istringstream rest(line.substr(arrow + 3));
         std::string got;
         rest >> got;
-        if (got == name) ++matches; else ++others;
+        if (got == name) {
+            ++matches;
+        } else if (std::none_of(kIdentities.begin(), kIdentities.end(),
+                                [&](const auto& id) { return id.first == got; })) {
+            ++others;
+        }
     }
     return matches;
 }
@@ -114,8 +138,7 @@ int main(int argc, char** argv) {
     }
     const fs::path clip    = fs::absolute(kAssets / "face_clip.mp4");
     const fs::path gallery = fs::absolute(kAssets / "gallery.bin");
-    const fs::path images  = fs::absolute(kAssets / "gallery_images");
-    for (const auto& p : {clip, gallery, images}) {
+    for (const auto& p : {clip, gallery}) {
         if (!fs::exists(p)) {
             std::cerr << "[FAIL] bundled test asset missing: " << p << "\n";
             return 1;
@@ -126,6 +149,17 @@ int main(int argc, char** argv) {
     const fs::path work = fs::temp_directory_path() / "face_recognizer_e2e";
     fs::remove_all(work);
     fs::create_directories(work);
+    // --enroll --images reads one subdirectory per identity.
+    const fs::path images = work / "gallery_images";
+    for (const auto& [name, file] : kIdentities) {
+        const fs::path src = fs::absolute(kCoco / file);
+        if (!fs::exists(src)) {
+            std::cerr << "[FAIL] shared test image missing: " << src << "\n";
+            return 1;
+        }
+        fs::create_directories(images / name);
+        fs::copy_file(src, images / name / file);
+    }
     const fs::path config_path = work / "config.yaml";
     write_e2e_config("face-recognizer", config_path, {
         {"scrfd.model",         scrfd_path},
@@ -146,19 +180,24 @@ int main(int argc, char** argv) {
         const ProcessResult r = spawn_and_wait(binary, args, timeout);
         if (!run_ok("bundled clip run", r)) return 1;
         const Summary s = parse_summary(r.stdout_text);
-        int others = 0;
-        const int named = count_face_lines(r.stdout_text, kEnrolledName, others);
-        if (s.frames != kFrames || s.zero_faces != 0 || s.recognized != kFrames ||
-            named < kFrames || others != 0) {
-            std::cerr << "[FAIL] bundled clip: expected " << kFrames << " frames, each with a face "
-                      << "recognized as " << kEnrolledName << "; got frames=" << s.frames
-                      << " zero_face_frames=" << s.zero_faces << " recognized=" << s.recognized
-                      << " " << kEnrolledName << "_lines=" << named << " other_lines=" << others
+        bool ok = s.frames == kFrames && s.zero_faces == 0 && s.recognized == kFrames;
+        std::ostringstream got;
+        got << "frames=" << s.frames << " zero_face_frames=" << s.zero_faces
+            << " recognized=" << s.recognized;
+        for (const auto& [name, file] : kIdentities) {
+            int others = 0;
+            const int named = count_face_lines(r.stdout_text, name, others);
+            ok = ok && named == kFrames && others == 0;
+            got << " " << name << "_lines=" << named << " other_lines=" << others;
+        }
+        if (!ok) {
+            std::cerr << "[FAIL] bundled clip: expected " << kFrames << " frames, each with "
+                      << "PersonA and PersonB recognized; got " << got.str()
                       << "\nstdout:\n" << r.stdout_text << "\n";
             return 1;
         }
-        std::cout << "[OK] bundled clip: " << kFrames << "/" << kFrames << " frames recognized as "
-                  << kEnrolledName << "\n";
+        std::cout << "[OK] bundled clip: PersonA and PersonB recognized in " << kFrames << "/"
+                  << kFrames << " frames\n";
     }
 
     // ── 2. RTSP: live-stream graph runs ───────────────────────────────────────
@@ -209,6 +248,77 @@ int main(int argc, char** argv) {
             return 1;
         }
         std::cout << "[OK] --enroll " << mode << " wrote gallery.bin\n";
+    }
+
+    // ── 5. USB camera ─────────────────────────────────────────────────────────
+    if (const char* camera = env_or_null("SIMANEAT_TEST_USB_CAMERA")) {
+        const fs::path usb_config = work / "config_usb.yaml";
+        const int video_port    = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000);
+        const int metadata_port = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100);
+        write_e2e_config("face-recognizer", usb_config, {
+            {"scrfd.model",                  scrfd_path},
+            {"arcface.model",                arcface_path},
+            {"gallery.path",                 gallery.string()},
+            {"input.uri",                    ""},
+            {"input.usb.camera",             camera},
+            {"output.sink",                  ""},
+            // This test is the Insight video receiver, so it publishes to its own loopback.
+            {"output.insight.host",          "127.0.0.1"},
+            {"output.insight.video_port",    std::to_string(video_port)},
+            {"output.insight.metadata_port", std::to_string(metadata_port)},
+        });
+        const std::vector<std::string> usb_args = {
+            "--config", usb_config.string(), "--max-frames", std::to_string(kFrames)};
+
+        // Headless: --test clears the Insight host, so the decoder follows the camera.
+        {
+            std::cout << "[RUN] " << binary << " input.usb.camera=" << camera << " --test\n";
+            auto args = usb_args;
+            args.push_back("--test");
+            const ProcessResult r = spawn_and_wait(binary, args, timeout);
+            if (!run_ok("USB camera run", r)) return 1;
+            if (parse_summary(r.stdout_text).frames != kFrames) {
+                std::cerr << "[FAIL] USB camera run did not process " << kFrames << " frames\n"
+                          << "stdout:\n" << r.stdout_text << "\n";
+                return 1;
+            }
+            std::cout << "[OK] USB camera: processed " << kFrames << " frames\n";
+        }
+
+        // Insight: the camera's JPEG is split off before decode and sent unchanged.
+        {
+            const int sock = ::socket(AF_INET, SOCK_DGRAM, 0);
+            sockaddr_in addr{};
+            addr.sin_family      = AF_INET;
+            addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            addr.sin_port        = htons(static_cast<uint16_t>(video_port));
+            if (sock < 0 || ::bind(sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
+                if (sock >= 0) ::close(sock);
+                std::cerr << "[FAIL] could not bind the Insight video port " << video_port << "\n";
+                return 1;
+            }
+            std::cout << "[RUN] " << binary << " input.usb.camera=" << camera
+                      << " output.insight.host=127.0.0.1\n";
+            const ProcessResult r = spawn_and_wait(binary, usb_args, timeout);
+            std::array<unsigned char, 65536> packet{};
+            const auto bytes = ::recv(sock, packet.data(), packet.size(), MSG_DONTWAIT);
+            ::close(sock);
+            if (!run_ok("USB camera Insight run", r)) return 1;
+            if (parse_summary(r.stdout_text).frames != kFrames) {
+                std::cerr << "[FAIL] USB camera Insight run did not process " << kFrames
+                          << " frames\nstdout:\n" << r.stdout_text << "\n";
+                return 1;
+            }
+            if (bytes <= 12 || (packet[0] >> 6) != 2 || (packet[1] & 0x7F) != 26) {
+                std::cerr << "[FAIL] USB camera Insight run did not publish RTP/JPEG video\n";
+                return 1;
+            }
+            std::cout << "[OK] USB camera: processed " << kFrames
+                      << " frames and sent RTP/JPEG to Insight\n";
+        }
+    } else {
+        std::cerr << "[SKIP] set SIMANEAT_TEST_USB_CAMERA to a USB camera ID to run the USB "
+                     "camera checks\n";
     }
 
     fs::remove_all(work);

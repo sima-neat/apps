@@ -27,11 +27,13 @@ int run_enrollment_mode(int argc, char** argv);
 #include <cctype>
 #include <csignal>
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <filesystem>
 #include <iostream>
 #include <memory>
 #include <numeric>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -50,6 +52,12 @@ struct AppConfig {
     bool        gallery_path_set = false;  // true when --gallery was explicitly passed
     std::string input_uri;          // RTSP URL or H.264 video file path
     bool        input_uri_set    = false;  // true when --input was explicitly passed
+    // input.usb: a USB (UVC) MJPEG camera by its usb_camera_ids() ID, at one of its exact
+    // MJPEG modes. Used instead of input.uri when camera is set.
+    std::string usb_camera;
+    int         usb_width  = 1280;
+    int         usb_height = 720;
+    int         usb_fps    = 30;
     std::string output_sink;        // annotated recording (.mp4/.avi or .jpg/.png), or empty
     std::string insight_host;             // Insight host IP; read from output.insight.host
     int  insight_video_port    = 9000;   // Insight video UDP port; read from output.insight.video_port
@@ -100,6 +108,10 @@ static AppConfig load_config(const fs::path& path) {
         return (pkg_root / p).lexically_normal().string();
     };
     cfg.input_uri          = resolve_media(raw.string_or("input.uri",   ""));
+    cfg.usb_camera         = raw.string_or("input.usb.camera", "");
+    cfg.usb_width          = raw.int_or("input.usb.width",  cfg.usb_width);
+    cfg.usb_height         = raw.int_or("input.usb.height", cfg.usb_height);
+    cfg.usb_fps            = raw.int_or("input.usb.fps",    cfg.usb_fps);
     cfg.output_sink        = resolve_media(raw.string_or("output.sink",  ""));
     cfg.insight_host          = raw.string_or("output.insight.host",            "");
     cfg.insight_video_port    = raw.int_or   ("output.insight.video_port",       9000);
@@ -147,8 +159,12 @@ static AppConfig parse_args(int argc, char** argv) {
                       << "       [--gallery <path>] [--scrfd-model <path>] [--arcface-model <path>]\n"
                       << "       [--output <sink>] [--test]\n"
                       << "\n"
+                      << "  input.uri / input.usb.camera (config.yaml):\n"
+                      << "                      An RTSP URL or H.264 video file, or a USB camera ID\n"
+                      << "                      from usb_camera_ids(). --input replaces both.\n"
+                      << "\n"
                       << "  output.insight.host / output.insight.video_port (config.yaml):\n"
-                      << "                      Send H.264 video and face metadata to Insight.\n"
+                      << "                      Send the video and face metadata to Insight.\n"
                       << "                      Set output.insight.host to the Insight host IP and\n"
                       << "                      open the Insight Web UI to view the faces.\n"
                       << "\n"
@@ -161,7 +177,13 @@ static AppConfig parse_args(int argc, char** argv) {
     }
 
     auto yaml_cfg = load_config(config_path);
-    if (!cfg.input_uri_set)       cfg.input_uri    = yaml_cfg.input_uri;
+    if (!cfg.input_uri_set) {
+        cfg.input_uri  = yaml_cfg.input_uri;
+        cfg.usb_camera = yaml_cfg.usb_camera;  // --input replaces both input sources
+    }
+    cfg.usb_width  = yaml_cfg.usb_width;
+    cfg.usb_height = yaml_cfg.usb_height;
+    cfg.usb_fps    = yaml_cfg.usb_fps;
     if (!cfg.gallery_path_set)
         cfg.gallery_path = yaml_cfg.gallery_path;
     if (!cfg.output_sink_explicit && cfg.output_sink.empty()) cfg.output_sink = yaml_cfg.output_sink;
@@ -219,13 +241,15 @@ static void print_timings(const Timings& t, int frames, double total_s) {
 
 // ── build inference pipelines ─────────────────────────────────────────────────
 
-// SCRFD with EV74 CVU preproc: decoded NV12 frames in; resize + colorconvert +
-// normalize + quantize + tessellate run on EV74 hardware.
-static simaai::neat::Model::Options scrfd_image_options(int max_w, int max_h) {
+// SCRFD with EV74 CVU preproc: decoded NV12 frames in (NV16 from a 4:2:2 USB camera);
+// resize + colorconvert + normalize + quantize + tessellate run on EV74 hardware.
+static simaai::neat::Model::Options scrfd_image_options(int max_w, int max_h, bool nv16_frames) {
     simaai::neat::Model::Options opt;
     opt.preprocess.kind   = simaai::neat::InputKind::Image;
     opt.preprocess.enable = simaai::neat::AutoFlag::On;
-    opt.preprocess.color_convert.input_format = simaai::neat::PreprocessColorFormat::NV12;
+    opt.preprocess.color_convert.input_format = nv16_frames
+                                                    ? simaai::neat::PreprocessColorFormat::NV16
+                                                    : simaai::neat::PreprocessColorFormat::NV12;
     opt.preprocess.input_max_width  = max_w;
     opt.preprocess.input_max_height = max_h;
     opt.preprocess.input_max_depth  = 3;
@@ -417,19 +441,65 @@ static std::unique_ptr<simaai::neat::MetadataSender> make_metadata_sender(const 
 // inside the graph; the app pulls joined {frame, detections} samples and copies a
 // frame to the CPU only when ArcFace runs or --output records it. Insight draws the
 // boxes and labels from the per-frame metadata.
+//
+// A USB camera sends JPEG frames. They go to Insight unchanged (RTP/JPEG, no re-encode)
+// and are decoded on the hardware decoder only for SCRFD and the frame tap, in the
+// camera's own sampling: most webcams send 4:2:2 MJPEG, which decodes to NV16.
+//
+//   camera ─┬─ video ─→ VideoSender (MJPEG passthrough → Insight)
+//           └─ decode ─→ SimaDecode ─┬─ model ─→ SCRFD ─→ detections ─┐
+//                                    └─ frame ────────────────────────┴─ ByFrame join → app
 static constexpr const char* kJoinedOutput = "face_output";
 
+static simaai::neat::UsbCameraInputOptions usb_camera_options(const AppConfig& cfg) {
+    simaai::neat::UsbCameraInputOptions opt;
+    opt.camera_name   = cfg.usb_camera;
+    opt.width         = static_cast<std::uint32_t>(cfg.usb_width);
+    opt.height        = static_cast<std::uint32_t>(cfg.usb_height);
+    opt.framerate_num = static_cast<std::uint32_t>(cfg.usb_fps);
+    return opt;
+}
+
+static simaai::neat::SimaDecodeOptions usb_decode_options(const AppConfig& cfg,
+                                                          simaai::neat::FormatTag format) {
+    simaai::neat::SimaDecodeOptions opt;
+    opt.type       = simaai::neat::SimaDecodeType::MJPEG;
+    opt.raw_output = true;
+    opt.out_format = format;
+    opt.dec_width  = cfg.usb_width;
+    opt.dec_height = cfg.usb_height;
+    opt.dec_fps    = cfg.usb_fps;
+    return opt;
+}
+
 static int run_pipeline(const AppConfig& cfg, const face_recog::Gallery& gallery) {
-    const bool is_rtsp     = is_rtsp_uri(cfg.input_uri);
+    const bool is_usb      = !cfg.usb_camera.empty();
+    const bool is_rtsp     = !is_usb && is_rtsp_uri(cfg.input_uri);
+    const bool is_live     = is_usb || is_rtsp;
     const bool use_insight = !cfg.insight_host.empty();
-    if (use_insight && !is_rtsp)
-        throw std::runtime_error("Insight output needs an RTSP input; video files run offline "
-                                 "(clear output.insight.host, or record with --output)");
+    if (use_insight && !is_live)
+        throw std::runtime_error("Insight output needs an RTSP or USB camera input; video files "
+                                 "run offline (clear output.insight.host, or record with --output)");
 
     // Frame size and rate are needed before the graph is built (model input bounds,
     // VideoSender caps, recording writer).
     int frame_w = 0, frame_h = 0, fps = 0;
-    if (is_rtsp) {
+    // The camera is checked once (connected, free, mode supported, one frame decodes); the
+    // same info gives the decoded layout and builds the camera node.
+    std::optional<simaai::neat::UsbCameraInfo> usb_info;
+    if (is_usb) {
+        if (cfg.usb_width <= 0 || cfg.usb_height <= 0 || cfg.usb_fps <= 0)
+            throw std::runtime_error("input.usb.width, input.usb.height and input.usb.fps must be > 0");
+        // Insight receives the camera's JPEG as RTP/JPEG (RFC 2435): 8-pixel blocks, 2040 at most.
+        if (use_insight && (cfg.usb_width % 8 != 0 || cfg.usb_height % 8 != 0 ||
+                            cfg.usb_width > 2040 || cfg.usb_height > 2040))
+            throw std::runtime_error("input.usb.width and input.usb.height must be multiples of 8 "
+                                     "and at most 2040 to send the camera's JPEG to Insight");
+        usb_info = simaai::neat::usb_camera_info(usb_camera_options(cfg));
+        frame_w = cfg.usb_width;
+        frame_h = cfg.usb_height;
+        fps     = cfg.usb_fps;
+    } else if (is_rtsp) {
         sima_examples::RtspStreamInfo info;
         (void)sima_examples::probe_rtsp_stream_info(cfg.input_uri,
                                                     sima_examples::RtspProbeOptions{}, info);
@@ -450,9 +520,15 @@ static int run_pipeline(const AppConfig& cfg, const face_recog::Gallery& gallery
         throw std::runtime_error("could not read the input frame size from " + cfg.input_uri);
     if (fps <= 0)
         throw std::runtime_error("could not read the input frame rate; pass --rtsp-fps <n>");
-    std::printf("[INPUT] %s %dx%d @ %d FPS\n", is_rtsp ? "RTSP" : "video file",
-                frame_w, frame_h, fps);
-    if (is_rtsp && fps > cfg.supported_fps)
+    const bool nv16_frames = is_usb && usb_info->decoded_format == simaai::neat::FormatTag::NV16;
+    if (is_usb)
+        std::printf("[INPUT] USB camera %s (%s) %dx%d @ %d FPS MJPEG, decoded to %s\n",
+                    cfg.usb_camera.c_str(), usb_info->device.c_str(), frame_w, frame_h, fps,
+                    nv16_frames ? "NV16" : "NV12");
+    else
+        std::printf("[INPUT] %s %dx%d @ %d FPS\n", is_rtsp ? "RTSP" : "video file",
+                    frame_w, frame_h, fps);
+    if (is_live && fps > cfg.supported_fps)
         std::fprintf(stderr, "[WARN] Input %d FPS exceeds runtime.supported_fps (%d); the "
                              "newest frames are kept and older ones dropped.\n",
                      fps, cfg.supported_fps);
@@ -461,14 +537,21 @@ static int run_pipeline(const AppConfig& cfg, const face_recog::Gallery& gallery
     std::cout << "[BUILD] Building ArcFace pipeline...\n";
     auto arcface_run = build_arcface_run(cfg);
 
-    simaai::neat::Model scrfd_model(cfg.scrfd_model, scrfd_image_options(frame_w, frame_h));
+    simaai::neat::Model scrfd_model(cfg.scrfd_model,
+                                    scrfd_image_options(frame_w, frame_h, nv16_frames));
 
     simaai::neat::GraphOptions graph_opt;
     graph_opt.advanced_execution.postprocess_target = "EV74";
     simaai::neat::Graph graph(graph_opt);
 
-    simaai::neat::Graph source;
-    if (is_rtsp) {
+    simaai::neat::Graph source("source");
+    if (is_usb) {
+        source.add(simaai::neat::nodes::UsbCameraInput(usb_camera_options(cfg), *usb_info));
+        // Without Insight nothing needs the JPEG, so the decoder follows the camera directly.
+        if (!use_insight)
+            source.add(simaai::neat::nodes::SimaDecode(
+                usb_decode_options(cfg, usb_info->decoded_format)));
+    } else if (is_rtsp) {
         simaai::neat::nodes::groups::RtspDecodedInputOptions src_opt;
         src_opt.url                   = cfg.input_uri;
         src_opt.latency_ms            = 50;
@@ -490,17 +573,40 @@ static int run_pipeline(const AppConfig& cfg, const face_recog::Gallery& gallery
         source = simaai::neat::nodes::groups::VideoInputGroup(src_opt);
     }
 
+    // RTSP and file frames feed Insight from the decoded branch; a USB camera's JPEG is
+    // split off before decode instead.
+    const bool usb_split = is_usb && use_insight;
     std::vector<std::string> branch_outputs{"model", "frame"};
-    if (use_insight) branch_outputs.insert(branch_outputs.begin(), "video");
-    auto branch = simaai::neat::graphs::Branch("source", branch_outputs);
-    graph.connect(source, branch);
+    if (use_insight && !is_usb) branch_outputs.insert(branch_outputs.begin(), "video");
+    auto branch = simaai::neat::graphs::Branch(usb_split ? "decoded" : "source", branch_outputs);
 
+    simaai::neat::Graph video_graph("video");
     if (use_insight) {
-        simaai::neat::Graph video_graph("video");
+        auto vsopt = is_usb ? simaai::neat::nodes::groups::VideoSenderOptions::Passthrough(
+                                  simaai::neat::nodes::groups::RtspCodec::MJPEG)
+                            : insight_video_options(cfg, frame_w, frame_h, fps);
+        vsopt.host            = cfg.insight_host;
+        vsopt.video_port_base = cfg.insight_video_port;
+        vsopt.channel         = 0;
         video_graph.connect(simaai::neat::nodes::Input("video"),
-                            simaai::neat::nodes::groups::VideoSender(
-                                insight_video_options(cfg, frame_w, frame_h, fps)));
-        graph.connect(branch, video_graph);
+                            simaai::neat::nodes::groups::VideoSender(vsopt));
+    }
+
+    if (usb_split) {
+        simaai::neat::Graph decode_graph("decode");
+        decode_graph.connect(simaai::neat::nodes::Input("decode"),
+                             simaai::neat::nodes::SimaDecode(
+                                 usb_decode_options(cfg, usb_info->decoded_format)));
+        simaai::neat::GraphLinkOptions video_link;
+        video_link.policy = simaai::neat::GraphLinkPolicy::RealtimeLatestByStream;
+        auto split = simaai::neat::graphs::Branch("source", {"video", "decode"});
+        graph.connect(source, split);
+        graph.connect(split, video_graph, video_link);
+        graph.connect(split, decode_graph);
+        graph.connect(decode_graph, branch);
+    } else {
+        graph.connect(source, branch);
+        if (use_insight) graph.connect(branch, video_graph);
     }
 
     simaai::neat::Graph model_graph("model");
@@ -519,20 +625,21 @@ static int run_pipeline(const AppConfig& cfg, const face_recog::Gallery& gallery
     graph.connect(frame_graph, joined);
     graph.connect(det_graph, joined);
 
-    // Live streams keep the newest frame; files are processed frame by frame.
+    // Live sources keep the newest frame; files are processed frame by frame.
     simaai::neat::RunOptions run_opt;
-    if (is_rtsp) run_opt.preset = simaai::neat::RunPreset::Realtime;
+    if (is_live) run_opt.preset = simaai::neat::RunPreset::Realtime;
     run_opt.queue_depth     = 3;
-    run_opt.overflow_policy = is_rtsp ? simaai::neat::OverflowPolicy::KeepLatest
+    run_opt.overflow_policy = is_live ? simaai::neat::OverflowPolicy::KeepLatest
                                       : simaai::neat::OverflowPolicy::Block;
     run_opt.output_memory   = simaai::neat::OutputMemory::ZeroCopy;
-    std::cout << "[BUILD] Building " << (is_rtsp ? "RTSP" : "video-file")
+    std::cout << "[BUILD] Building " << (is_usb ? "USB camera" : is_rtsp ? "RTSP" : "video-file")
               << " → SCRFD graph (EV74 CVU preproc)...\n";
     auto run = graph.build(run_opt);
 
     auto metadata_sender = make_metadata_sender(cfg);
     if (use_insight)
-        std::cout << "[stream] H.264 -> udp://" << cfg.insight_host << ":"
+        std::cout << "[stream] " << (is_usb ? "MJPEG" : "H.264") << " -> udp://"
+                  << cfg.insight_host << ":"
                   << cfg.insight_video_port << ", metadata -> udp://" << cfg.insight_host
                   << ":" << metadata_sender->metadata_port() << " channel=0  [Insight]\n";
 
@@ -594,15 +701,24 @@ static int run_pipeline(const AppConfig& cfg, const face_recog::Gallery& gallery
                                                frame_count - last_recog_frame,
                                                cfg.recog_interval);
         // The decoded frame reaches the CPU only when ArcFace or the recorder needs it.
+        // NV12 stays NV12 so alignment converts only the face region; an NV16 frame (4:2:2
+        // USB camera) converts to BGR once.
         std::vector<uint8_t> nv12;
         int nv12_w = 0, nv12_h = 0;
+        cv::Mat frame_bgr;
         if ((recog_due && !detections.empty()) || !cfg.output_sink.empty()) {
             const auto frames = simaai::neat::tensors_from_sample(
                 joined_field(sample, "frame", 0), true);
             if (frames.empty()) throw std::runtime_error("joined frame field has no tensor");
-            nv12   = frames.front().copy_nv12_contiguous();
-            nv12_w = frames.front().width();
-            nv12_h = frames.front().height();
+            if (frames.front().image_format() == simaai::neat::ImageSpec::PixelFormat::NV16) {
+                std::string err;
+                if (!sima_examples::nv16_to_bgr(frames.front(), frame_bgr, err))
+                    throw std::runtime_error("NV16 frame: " + err);
+            } else {
+                nv12   = frames.front().copy_nv12_contiguous();
+                nv12_w = frames.front().width();
+                nv12_h = frames.front().height();
+            }
         }
 
         if (recog_due) {
@@ -610,8 +726,9 @@ static int run_pipeline(const AppConfig& cfg, const face_recog::Gallery& gallery
             cached_detections = detections;
             for (const auto& det : detections) {
                 const auto ta = Clock::now();
-                const cv::Mat crop = face_recog::align_face_nv12(nv12.data(), nv12_w, nv12_h,
-                                                                 det.landmarks);
+                const cv::Mat crop = frame_bgr.empty()
+                    ? face_recog::align_face_nv12(nv12.data(), nv12_w, nv12_h, det.landmarks)
+                    : face_recog::align_face(frame_bgr, det.landmarks);
                 const auto tb = Clock::now();
                 if (crop.empty()) {
                     cached_matches.push_back({cfg.match.unknown_label, -1.f, -1});
@@ -659,9 +776,10 @@ static int run_pipeline(const AppConfig& cfg, const face_recog::Gallery& gallery
 
         if (!cfg.output_sink.empty()) {
             const auto tr = Clock::now();
-            cv::Mat bgr;
-            cv::cvtColor(cv::Mat(nv12_h * 3 / 2, nv12_w, CV_8UC1, nv12.data()), bgr,
-                         cv::COLOR_YUV2BGR_NV12);
+            cv::Mat bgr = frame_bgr;
+            if (bgr.empty())
+                cv::cvtColor(cv::Mat(nv12_h * 3 / 2, nv12_w, CV_8UC1, nv12.data()), bgr,
+                             cv::COLOR_YUV2BGR_NV12);
             face_recog::draw_overlay(bgr, detections, cached_matches, cfg.overlay);
             if (write_video) writer.write(bgr);
             else if (frame_count == 0 && !cv::imwrite(cfg.output_sink, bgr))
@@ -724,9 +842,11 @@ int main(int argc, char** argv) {
 
     try {
         const AppConfig cfg = parse_args(argc, argv);
-        if (cfg.input_uri.empty())
-            throw std::runtime_error("no input: set input.uri in config.yaml or pass "
-                                     "--input <rtsp-url|video.mp4>");
+        if (cfg.input_uri.empty() && cfg.usb_camera.empty())
+            throw std::runtime_error("no input: set input.uri or input.usb.camera in config.yaml, "
+                                     "or pass --input <rtsp-url|video.mp4>");
+        if (!cfg.input_uri.empty() && !cfg.usb_camera.empty())
+            throw std::runtime_error("set only one input: input.uri or input.usb.camera");
         if (!fs::exists(cfg.scrfd_model))
             throw std::runtime_error("SCRFD model not found: " + cfg.scrfd_model);
         if (!fs::exists(cfg.arcface_model))

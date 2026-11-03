@@ -24,19 +24,29 @@ e2e:
       bundled:
         - path: tests/assets/face_clip.mp4
           description: >
-            3 s H.264 clip (1280x720, 30 FPS) made from paresh_0012.jpg. Every frame
-            must contain a face recognized as Paresh.
+            3 s H.264 clip (1280x720, 30 FPS) of the shared COCO images
+            assets/datasets/coco/000000493864.jpg (left) and 000000116439.jpg (right),
+            made with:
+              ffmpeg -loop 1 -t 3 -i assets/datasets/coco/000000493864.jpg
+                     -loop 1 -t 3 -i assets/datasets/coco/000000116439.jpg
+                     -filter_complex "[0:v][1:v]hstack,pad=1280:720:0:40,fps=30,format=yuv420p"
+                     -an -c:v libx264 -profile:v high -crf 23 -g 30 face_clip.mp4
+            Every frame must contain PersonA and PersonB.
         - path: tests/assets/gallery.bin
           description: >
-            Gallery with the Paresh identity, enrolled from paresh_0012.jpg with:
-              face-recognizer --enroll --config src/common/config.yaml
-                              --images tests/assets/gallery_images/
-                              --gallery tests/assets/gallery.bin
+            Gallery with PersonA (000000493864.jpg) and PersonB (000000116439.jpg),
+            enrolled with face-recognizer --enroll --config src/common/config.yaml
+            --images <dir> --gallery tests/assets/gallery.bin, where <dir> holds
+            PersonA/000000493864.jpg and PersonB/000000116439.jpg.
     notes:
       - >
         The RTSP test checks that the live-stream graph processes 60 frames and exits 0;
         the shared CI stream content is not controlled, so detections are asserted on
         the bundled clip instead.
+      - >
+        The USB camera case is collected only when SIMANEAT_TEST_USB_CAMERA names a camera
+        (CI runners have none): it runs the graph headless for 60 frames, then with Insight
+        on loopback and checks that the camera's JPEG arrives as RTP/JPEG (payload type 26).
   cpp:
     enabled: true
     models:
@@ -46,13 +56,19 @@ e2e:
       bundled:
         - path: tests/assets/face_clip.mp4
           description: >
-            Every frame must contain a face recognized as Paresh; also used for the
-            --output recording and --enroll --video checks.
+            Every frame must contain PersonA and PersonB; also used for the --output
+            recording and --enroll --video checks.
         - path: tests/assets/gallery.bin
-          description: Gallery with the Paresh identity (see the python entry).
-        - path: tests/assets/gallery_images/Paresh/paresh_0012.jpg
-          description: Enrollment source for the --enroll --images check.
+          description: Gallery with PersonA and PersonB (see the python entry).
+      shared:
+        - path: assets/datasets/coco/000000493864.jpg
+          description: PersonA; copied into a PersonA/ folder for the --enroll --images check.
+        - path: assets/datasets/coco/000000116439.jpg
+          description: PersonB; copied into a PersonB/ folder for the --enroll --images check.
     notes:
       - >
         The RTSP run checks that the live-stream graph processes 60 frames and exits 0;
         detections are asserted on the bundled clip.
+      - >
+        The USB camera checks run only when SIMANEAT_TEST_USB_CAMERA names a camera, as
+        in the python entry; otherwise the binary prints [SKIP] and still passes.

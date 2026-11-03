@@ -25,6 +25,12 @@ input:
   #   uri: rtsp://<RTSP_HOST>:<RTSP_PORT>/<STREAM_NAME>
   #   uri: /path/to/video.mp4          (H.264 video file)
   uri:              ""                  # set to rtsp://<HOST>:<PORT>/<STREAM> or an H.264 video file
+  # USB (UVC) MJPEG camera plugged into the DevKit; set camera and leave uri empty.
+  usb:
+    camera:         ""                  # a camera ID from pyneat.usb_camera_ids()
+    width:          1280                # one of the camera's MJPEG modes, exactly: width,
+    height:         720                 # height and fps (multiples of 8, at most 2040,
+    fps:            30                  # when sending to Insight)
 
 # ── Output ────────────────────────────────────────────────────────────────────
 output:
@@ -32,11 +38,11 @@ output:
   # image (.jpg/.png); "" → no recording
   sink:             ""
 
-  # Insight viewer (RTSP input only): set host to the Insight host IP to stream H.264
+  # Insight viewer (RTSP or USB camera input): set host to the Insight host IP to stream H.264
   # video and face metadata to the Insight Web UI.
   insight:
     host:           ""                  # set to Insight host IP to enable streaming
-    video_port:     9000    # UDP port Insight listens on for H.264 video input
+    video_port:     9000    # UDP port Insight listens on for video (H.264, or the USB camera's JPEG)
     metadata_port:  9100    # UDP port Insight listens on for metadata input
 
 # ── Matching ──────────────────────────────────────────────────────────────────
