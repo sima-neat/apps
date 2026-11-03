@@ -49,6 +49,7 @@ from hub_security_suite import HubPathSecurityTests  # noqa: E402,F401
 from resident_models_suite import (  # noqa: E402,F401
     ResidentChatModelTests,
     ResidentLimitControlApiTests,
+    ResidentLimitDefaultTests,
 )
 from asr_metadata_suite import AsrMetadataTests  # noqa: E402,F401
 from board_camera_suite import ResolveCameraNodeTests  # noqa: E402,F401
