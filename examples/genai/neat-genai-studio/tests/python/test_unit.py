@@ -93,10 +93,15 @@ from shell_config_suite import (  # noqa: E402,F401
     ServerConfigWithoutPyyamlTests,
     ShellConfigValueTests,
     ShellRagConfigTests,
+    ShellResidentLimitConfigTests,
     StudioSupervisorTests,
     ShellWebConfigTests,
 )
-from setup_rag_suite import RagDatabaseCleanupTests, SetupRagSwitchTests  # noqa: E402,F401
+from setup_rag_suite import (  # noqa: E402,F401
+    RagDatabaseCleanupTests,
+    SetupRagSwitchTests,
+    SetupResidentLimitTests,
+)
 from backend_mode_suite import (  # noqa: E402,F401
     BackendPathTests,
     CorsPolicyTests as BackendCorsPolicyTests,

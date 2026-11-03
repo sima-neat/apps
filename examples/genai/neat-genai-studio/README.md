@@ -111,8 +111,9 @@ lists them all):
   `app.rag.enabled: false`; everything else works as usual.
 
 Re-running `setup.sh` (for example to add a model or voice) regenerates
-`config.local.yaml` but keeps your `app.web` settings, the Supertonic paths and
-whether RAG is installed (`app.rag.enabled`); the previous file is saved as
+`config.local.yaml` but keeps your `app.web` settings, the chat model limit
+(`server.models.max_resident_chat_models`), the Supertonic paths and whether RAG
+is installed (`app.rag.enabled`); the previous file is saved as
 `config.local.yaml.bak`.
 
 ## Configure
@@ -258,8 +259,8 @@ By default up to two chat/VLM models stay loaded side by side, for example to
 compare them. Each loaded model answers on `/v1/chat/completions` under its own
 name, and clients can use them at the same time. To change the limit, set
 `server.models.max_resident_chat_models` in `config.local.yaml` (or set
-`MAX_RESIDENT_CHAT_MODELS` before `setup.sh`), then restart the Studio. With
-`1`, loading a model replaces the loaded one. How many fit depends on the
+`MAX_RESIDENT_CHAT_MODELS` before `setup.sh`), then restart the Studio. A re-run
+of `setup.sh` keeps the value. With `1`, loading a model replaces the loaded one. How many fit depends on the
 models' sizes. A model that does not fit beside the loaded ones fails with
 `503` (`"code": "out_of_memory"`), and the Studio restarts its backend, which
 reloads only the configured startup models. For two large models, unload one

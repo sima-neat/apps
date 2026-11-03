@@ -8,9 +8,7 @@ the model that failed.
 
 import io
 import json
-import os
 import re
-import subprocess
 import threading
 import shutil
 import tempfile
@@ -320,9 +318,9 @@ class ResidentLimitControlApiTests(ResidentFixture):
 
 
 class ResidentLimitDefaultTests(unittest.TestCase):
-    """Two chat/VLM models stay loaded by default, wherever the limit comes
-    from: the packaged config, a config without the key, setup.sh and the
-    README all agree."""
+    """Two chat/VLM models stay loaded by default: the packaged config, a
+    config without the key and the README agree (setup.sh's default is in
+    setup_rag_suite.SetupResidentLimitTests)."""
 
     EXAMPLE = Path(__file__).resolve().parents[2]
     DEFAULT = 2
@@ -338,14 +336,6 @@ class ResidentLimitDefaultTests(unittest.TestCase):
             config.write_text(json.dumps({"server": {"models": {}}, "app": {}}), encoding="utf-8")
             self.assertEqual(load_server_config(config).max_resident_chat_models, self.DEFAULT)
             self.assertEqual(load_ui_config(config).max_resident_chat_models, self.DEFAULT)
-
-    def test_setup_writes_two_when_the_variable_is_unset(self):
-        setup = (self.EXAMPLE / "setup.sh").read_text(encoding="utf-8")
-        line = next(l for l in setup.splitlines() if l.startswith("MAX_RESIDENT_CHAT_MODELS="))
-        env = {k: v for k, v in os.environ.items() if k != "MAX_RESIDENT_CHAT_MODELS"}
-        out = subprocess.run(["bash", "-c", line + '\nprintf %s "$MAX_RESIDENT_CHAT_MODELS"'],
-                             env=env, check=True, capture_output=True, text=True)
-        self.assertEqual(out.stdout, str(self.DEFAULT))
 
     def test_the_readme_states_the_same_default(self):
         readme = (self.EXAMPLE / "README.md").read_text(encoding="utf-8")
