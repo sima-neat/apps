@@ -337,9 +337,19 @@ class ResidentLimitDefaultTests(unittest.TestCase):
             self.assertEqual(load_server_config(config).max_resident_chat_models, self.DEFAULT)
             self.assertEqual(load_ui_config(config).max_resident_chat_models, self.DEFAULT)
 
+    def test_a_higher_limit_is_held_at_the_maximum(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / "config.json"
+            for value, expected in ((4, 4), (5, 4), (15, 4), (1, 1)):
+                with self.subTest(value=value):
+                    models = {"max_resident_chat_models": value}
+                    config.write_text(json.dumps({"server": {"models": models}, "app": {}}), encoding="utf-8")
+                    self.assertEqual(load_server_config(config).max_resident_chat_models, expected)
+                    self.assertEqual(load_ui_config(config).max_resident_chat_models, expected)
+
     def test_the_readme_states_the_same_default(self):
         readme = (self.EXAMPLE / "README.md").read_text(encoding="utf-8")
-        match = re.search(r"`server\.models\.max_resident_chat_models`:[^\n]*\(default `(\d+)`", readme)
+        match = re.search(r"`server\.models\.max_resident_chat_models`:[^\n]*default `(\d+)`", readme)
         self.assertIsNotNone(match)
         self.assertEqual(int(match.group(1)), self.DEFAULT)
 

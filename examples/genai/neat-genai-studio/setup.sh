@@ -222,7 +222,7 @@ Environment:
   CATALOG_MODEL_REPOS           Extra compatible HF repos to seed the catalog
                                 (space-separated). default: empty
   MAX_RESIDENT_CHAT_MODELS      Chat/VLM models kept loaded at once; past the
-                                limit a load must name one to unload.
+                                limit a load must name one to unload. 1 to 4.
                                 default: the value in an existing config (kept
                                 on re-run), else 2
   WEB_HOST, WEB_PORT, WEB_HTTPS, WEB_CORS_ORIGINS
@@ -315,8 +315,8 @@ resolve_max_resident() {
     MAX_RESIDENT_CHAT_MODELS="$(resident_config_limit "${CONFIG_PATH}")"
   fi
   MAX_RESIDENT_CHAT_MODELS="${MAX_RESIDENT_CHAT_MODELS:-2}"
-  if [[ ! "${MAX_RESIDENT_CHAT_MODELS}" =~ ^[1-9][0-9]*$ ]]; then
-    errln "The chat model limit must be a whole number of 1 or more, not '${MAX_RESIDENT_CHAT_MODELS}'."
+  if [[ ! "${MAX_RESIDENT_CHAT_MODELS}" =~ ^[1-4]$ ]]; then
+    errln "The chat model limit must be a whole number from 1 to 4, not '${MAX_RESIDENT_CHAT_MODELS}'."
     info "Set MAX_RESIDENT_CHAT_MODELS, or fix server.models.max_resident_chat_models in ${CONFIG_PATH}."
     exit 1
   fi

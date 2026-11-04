@@ -178,8 +178,16 @@ class SetupResidentLimitTests(SetupFixture):
         self._setup(SETUP_RAG="0")
         self.assertEqual(self._limit(), 1)
 
-    def test_a_limit_that_is_not_a_whole_number_stops_before_anything_is_written(self):
-        for value in ("0", "two", "-1"):
+    def test_a_hand_edited_limit_above_the_maximum_becomes_the_maximum_on_a_rerun(self):
+        self._setup(SETUP_RAG="0")
+        text = self.config.read_text(encoding="utf-8")
+        self.config.write_text(text.replace("max_resident_chat_models: 2", "max_resident_chat_models: 10"),
+                               encoding="utf-8")
+        self._setup(SETUP_RAG="0")
+        self.assertIn("max_resident_chat_models: 4", self.config.read_text(encoding="utf-8"))
+
+    def test_a_limit_outside_1_to_4_stops_before_anything_is_written(self):
+        for value in ("0", "two", "-1", "5"):
             with self.subTest(value=value):
                 result = self._run(SETUP_RAG="0", MAX_RESIDENT_CHAT_MODELS=value)
                 self.assertNotEqual(result.returncode, 0)

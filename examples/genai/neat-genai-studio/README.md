@@ -124,7 +124,7 @@ only to change:
 
 - `server.models.catalog_dir`: the directory scanned for models (default `/media/nvme/llima/models`).
 - `server.models.chat`: chat or vision-language models to load at startup (none by default).
-- `server.models.max_resident_chat_models`: how many chat or vision-language models stay loaded at once (default `2`; see [Keep several models loaded](#keep-several-models-loaded)).
+- `server.models.max_resident_chat_models`: how many chat or vision-language models stay loaded at once (`1` to `4`, default `2`; see [Keep several models loaded](#keep-several-models-loaded)).
 - `server.models.asr`: the speech-to-text model active at startup (default `whisper-small-a16w8`).
 - `server.hub.allow_download`: whether models may be downloaded from Hugging Face.
 - `app.request.max_tokens`: the default response length for chat requests that do not set `max_tokens`.
@@ -257,10 +257,11 @@ memory. Only configured startup models reload; the failed selection is not retri
 #### Keep several models loaded
 By default up to two chat/VLM models stay loaded side by side, for example to
 compare them. Each loaded model answers on `/v1/chat/completions` under its own
-name, and clients can use them at the same time. To change the limit, set
-`server.models.max_resident_chat_models` in `config.local.yaml` (or set
+name, and clients can use them at the same time. To change the limit, from `1`
+to `4`, set `server.models.max_resident_chat_models` in `config.local.yaml` (or set
 `MAX_RESIDENT_CHAT_MODELS` before `setup.sh`), then restart the Studio. A re-run
-of `setup.sh` keeps the value. With `1`, loading a model replaces the loaded one. How many fit depends on the
+of `setup.sh` keeps the value. A higher value in the config is treated as `4`,
+because the models share one accelerator. With `1`, loading a model replaces the loaded one. How many fit depends on the
 models' sizes. A model that does not fit beside the loaded ones fails with
 `503` (`"code": "out_of_memory"`), and the Studio restarts its backend, which
 reloads only the configured startup models. For two large models, unload one
