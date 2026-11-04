@@ -130,16 +130,9 @@ def test_benchmark_refresh_finds_top_level_model(tmp_path, monkeypatch):
     assert spec.loader is not None
     monkeypatch.setitem(sys.modules, module_name, module)
     spec.loader.exec_module(module)
-    monkeypatch.setattr(module, "APPS_ROOT", tmp_path)
+    row = module.ModelRow("example", f"nested/{package}", "example-app")
 
-    row = module.ModelRow(
-        "example",
-        package,
-        "example-app",
-        f"models/nested/{package}",
-    )
-
-    assert module.resolve_model_path(row) == model_path
+    assert module.resolve_model_path(row, tmp_path / "models") == model_path
 
 
 def test_obsolete_asset_directories_are_absent():

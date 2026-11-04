@@ -17,19 +17,17 @@ entry.
 - Model source: <https://huggingface.co/Supertone/supertonic-3>
 - Published model licence: OpenRAIL (use-based restrictions apply; review the
   licence text on the model card before redistribution)
-- Compiled vector estimator for Platform 3.0: the SiMa model zoo
-  (`supertonic_vector_estimator_mpk_develop1132.tar.gz`, Model Compiler develop,
-  `sima-mlc` 3.0.0.dev0+develop.1132; address and checksum in
-  `src/python/api/tts/supertonic_sima/vector_estimator.json`), compiled from the
-  same pinned upstream model and graph surgery; same licence as the base model
-- Compiled vocoder and runtime data: `florianvoss/supertonic-3-sima`
-  (<https://huggingface.co/florianvoss/supertonic-3-sima>), derived from the
-  pinned upstream model by graph surgery and SiMa model-compiler quantization
-  (BF16 activations, INT8 vector-field weights, BF16 vocoder); same licence as
-  the base model
-- Compiled-package repository revision pinned in `setup.sh`:
-  `9229108c974ef57810abce0889ac713a59e341a1` (that repository also carries a
-  `LICENSE` file; review it together with the model card)
+- Compiled models: the batch-two vector estimator (INT8 weights, BF16
+  activations) and batch-one BF16 vocoder come from the SiMa model zoo.
+  They use the preparation recipes in `sima-neat/models`, branch
+  `exp/supertonic-batch2` at `8edab9eb9d5a91fe7e6a64d98208ecbc78fe1e1b`,
+  with Model Compiler 3.0.0 (`sima-mlc` 3.0.0.dev0+master.190).
+  Addresses and checksums are in `src/python/api/tts/supertonic_sima/model_assets.json`;
+  both are derived from the pinned upstream model and retain its licence.
+- Runtime constants: `florianvoss/supertonic-3-sima`
+  (<https://huggingface.co/florianvoss/supertonic-3-sima>), pinned to revision
+  `9229108c974ef57810abce0889ac713a59e341a1`. The generated constants are
+  unchanged by batch-two compilation and retain the base model's licence.
 - Integration software: the runtime package under
   `src/python/api/tts/supertonic_sima/` is vendored from
   <https://github.com/florianvoss-commit/supertonic-sima> at commit
@@ -40,8 +38,8 @@ entry.
 - Attribution: Supertone Inc. (Supertonic 3); the Modalix port's upstream author
 
 Supertonic is not part of `voice_catalog.json`: `setup.sh` downloads its assets
-from Hugging Face at the pinned revisions above and verifies every compiled
-artifact against SHA-256 checksums recorded in the script. Set
+from Hugging Face at the pinned revisions above and both compiled models from
+the SiMa model zoo. The installer and runtime verify their shared checksum pins. Set
 `INSTALL_SUPERTONIC=0` to leave it out.
 
 ## Piper Plus CSS10 (default multilingual/Japanese voice)

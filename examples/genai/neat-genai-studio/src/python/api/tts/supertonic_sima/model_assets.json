@@ -1,0 +1,16 @@
+{
+  "vector_estimator": {
+    "file": "supertonic_vector_estimator_batch2_mpk.tar.gz",
+    "url": "https://docs.sima.ai/pkg_downloads/SDK3.0.0/models/modalix/supertonic_vector_estimator_batch2_mpk.tar.gz",
+    "sha256": "79e85e92d39c3c05e8b868aa51f2056b9101033a7823b123b9fba9717d50e501"
+  },
+  "vocoder": {
+    "file": "supertonic_vocoder_bf16_mpk.tar.gz",
+    "url": "https://docs.sima.ai/pkg_downloads/SDK3.0.0/models/modalix/supertonic_vocoder_bf16_mpk.tar.gz",
+    "sha256": "bb96002d8475480549a42a8c851e60e03aa3853adc411c3a77ef745b5035b56b"
+  },
+  "runtime_data": {
+    "file": "supertonic_runtime_data.npz",
+    "sha256": "4e9a4d85592f720c9a497cf94164290ccdddd0c5d104577fb810c936d2abf9f9"
+  }
+}

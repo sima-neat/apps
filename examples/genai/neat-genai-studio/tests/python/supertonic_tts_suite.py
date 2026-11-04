@@ -11,6 +11,7 @@ client. Nothing here spawns the worker or needs pyneat.
 from __future__ import annotations
 
 import io
+import json
 import os
 import unittest
 from pathlib import Path
@@ -186,9 +187,12 @@ class EnvironmentDiscoveryTests(unittest.TestCase):
                 self.assertFalse(supertonic_tts.available())   # no models yet
                 (models / "supertonic-3" / "onnx").mkdir(parents=True)
                 (models / "supertonic-3" / "onnx" / "tts.json").write_text("{}")
-                (models / "supertonic-3-sima").mkdir(parents=True)
-                (models / "supertonic-3-sima"
-                 / "supertonic_vector_field_sima_mpk.tar.gz").write_bytes(b"")
+                compiled = models / "supertonic-3-sima"
+                compiled.mkdir()
+                manifest = Path(supertonic_tts.__file__).with_name("supertonic_sima") / "model_assets.json"
+                for asset in json.loads(manifest.read_text()).values():
+                    self.assertFalse(supertonic_tts.available())
+                    (compiled / asset["file"]).write_bytes(b"")
                 self.assertTrue(supertonic_tts.available())
 
     def test_supertonic_venv_env_names_the_interpreter(self):

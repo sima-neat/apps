@@ -5,14 +5,25 @@ model:
   input_size: 640            # Square model input the package was compiled for.
 
 source:
-  type: rtsp                 # rtsp or http.
-  codec: h264                # h264/avc, h265/hevc, or mjpeg.
-  url: <rtsp-url-1>          # Example: rtsp://<rtsp-source-ip>:<port>/<stream-name>
-  rtsp_url: ""               # Legacy H.264 RTSP key. Used when source.url is empty.
-  tcp: true                  # Use TCP for RTSP transport.
-  latency_ms: 100            # RTSP receive latency in milliseconds.
-  fps: 0                     # 0 probes FPS. MJPEG requires config FPS or probeable FPS metadata.
-  ssl_strict: true           # Set false for HTTPS MJPEG streams with self-signed certs.
+  type: rtsp                 # rtsp, http or usb. Only the matching section below is read.
+
+  rtsp:
+    url: <rtsp-url-1>        # rtsp://<rtsp-source-ip>:<port>/<stream-name>
+    codec: h264              # h264, h265 or mjpeg.
+    tcp: true                # RTSP over TCP.
+    latency_ms: 100          # Receive latency.
+    fps: 0                   # 0 detects it from the stream. Set it for MJPEG streams that don't report one.
+
+  http:
+    url: <http-mjpeg-url>    # http(s)://... MJPEG streams only.
+    ssl_strict: true         # false accepts self-signed HTTPS certificates.
+    fps: 0                   # 0 detects it from the stream.
+
+  usb:
+    camera: ""               # A camera ID from pyneat.usb_camera_ids().
+    width: 1280              # One of the camera's MJPEG modes, exactly: width, height and fps.
+    height: 720              # Multiples of 8, at most 2040 (RTP/JPEG limit).
+    fps: 30
 
 inference:
   frames: 0                  # Frame limit. 0 means run continuously.

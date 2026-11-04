@@ -683,8 +683,7 @@ neat::SimaDecodeOptions decoder_options(const Config& cfg, const SourceGeometry&
 neat::nodes::groups::VideoSenderOptions video_options(const Config& cfg,
                                                       const SourceGeometry& geometry) {
   auto opt = cfg.codec == SourceCodec::Mjpeg
-                 ? neat::nodes::groups::VideoSenderOptions::H264RtpUdpFromRaw(
-                       geometry.width, geometry.height, geometry.fps)
+                 ? neat::nodes::groups::VideoSenderOptions::FromRaw({.fps = geometry.fps})
                  : neat::nodes::groups::VideoSenderOptions::Passthrough(rtsp_codec(cfg.codec));
   opt.host = cfg.insight_host;
   opt.video_port_base = cfg.video_port;
@@ -783,7 +782,7 @@ void require_model_contract(const Config& cfg, neat::Model& backbone, neat::Mode
       backbone_inputs.front().dtypes == std::vector<neat::TensorDType>{neat::TensorDType::UInt8} &&
       has_specs(backbone.output_specs(),
                 {{1, side, side, 256}, {1, side * side}, {1, side * side, 4}}) &&
-      has_specs(transformer.input_specs(), {{side, side, 256}, {1, cfg.top_k, 4}}) &&
+      has_specs(transformer.input_specs(), {{1, side, side, 256}, {1, cfg.top_k, 4}}) &&
       has_specs(transformer.output_specs(), transformer_outputs);
   sima_examples::require(valid_contract,
                          "selected RF-DETR model pair has an unexpected I/O contract");

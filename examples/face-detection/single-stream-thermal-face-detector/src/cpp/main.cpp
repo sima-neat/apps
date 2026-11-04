@@ -584,8 +584,8 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
   auto source = simaai::neat::nodes::groups::RtspDecodedInput(source_options);
   auto branch = simaai::neat::graphs::Branch("source", {"video", "model"});
 
-  auto video_options = simaai::neat::nodes::groups::VideoSenderOptions::H264RtpUdpFromRaw(
-      runtime.frame_w, runtime.frame_h, runtime.output_fps);
+  auto video_options =
+      simaai::neat::nodes::groups::VideoSenderOptions::FromRaw({.fps = runtime.output_fps});
   video_options.host = cfg.insight_host;
   video_options.channel = 0;
   video_options.video_port_base = cfg.video_port;

@@ -61,42 +61,35 @@ bool test_missing_config_file_fails(const std::string& binary) {
   return expect_true(r.exit_code != 0, "missing config exits non-zero");
 }
 
-// config.yaml ships source.url present and documents source.rtsp_url as
-// "used when source.url is empty", so the empty value has to fall through.
-bool test_empty_url_falls_back_to_the_legacy_key(const std::string& binary) {
-  const auto r = validate_config_body(kExampleName, binary, "empty_url_falls_back",
-                                      minimal_config("  url: \"\"\n"
-                                                     "  rtsp_url: rtsp://127.0.0.1:8554/legacy\n"));
-  return expect_true(r.exit_code == 0, "empty url with a legacy rtsp_url validates") &&
-         expect_contains(r.stdout_text, "source=source.rtsp_url",
-                         "empty url selects the legacy rtsp_url");
-}
-
-bool test_absent_url_falls_back_to_the_legacy_key(const std::string& binary) {
-  const auto r = validate_config_body(kExampleName, binary, "absent_url_falls_back",
-                                      minimal_config("  rtsp_url: rtsp://127.0.0.1:8554/legacy\n"));
-  return expect_true(r.exit_code == 0, "absent url with a legacy rtsp_url validates") &&
-         expect_contains(r.stdout_text, "source=source.rtsp_url",
-                         "absent url selects the legacy rtsp_url");
-}
-
-bool test_present_url_wins_over_the_legacy_key(const std::string& binary) {
-  const auto r = validate_config_body(kExampleName, binary, "present_url_wins",
-                                      minimal_config("  url: rtsp://127.0.0.1:8554/src1\n"
-                                                     "  rtsp_url: rtsp://127.0.0.1:8554/legacy\n"));
-  return expect_true(r.exit_code == 0, "url beside a legacy rtsp_url validates") &&
-         expect_contains(r.stdout_text, "source=source.url", "present url is selected") &&
-         expect_not_contains(r.stdout_text, "source.rtsp_url", "legacy rtsp_url is not selected") &&
+// Only the section source.type names is read. The validated line reports its key, never the URL,
+// which can carry credentials.
+bool test_rtsp_section_supplies_the_url(const std::string& binary) {
+  const auto r =
+      validate_config_body(kExampleName, binary, "rtsp_section_url",
+                           minimal_config("  rtsp:\n"
+                                          "    url: rtsp://user:secret@127.0.0.1:8554/src1\n"));
+  return expect_true(r.exit_code == 0, "source.rtsp.url validates") &&
+         expect_contains(r.stdout_text, "source=source.rtsp.url",
+                         "rtsp source reports source.rtsp.url") &&
          expect_not_contains(r.stdout_text, "rtsp://", "validated line does not echo the URL");
 }
 
-bool test_both_urls_empty_is_rejected(const std::string& binary) {
-  const auto r = validate_config_body(kExampleName, binary, "both_urls_empty",
-                                      minimal_config("  url: \"\"\n"
-                                                     "  rtsp_url: \"\"\n"));
-  return expect_true(r.exit_code != 0, "empty url and empty rtsp_url is rejected") &&
-         expect_contains(r.stderr_text, "source.url or source.rtsp_url must be set",
-                         "both-empty error names both keys");
+bool test_flat_source_url_is_not_read(const std::string& binary) {
+  const auto r = validate_config_body(kExampleName, binary, "flat_source_url",
+                                      minimal_config("  url: rtsp://127.0.0.1:8554/src1\n"));
+  return expect_true(r.exit_code != 0, "a flat source.url is not read") &&
+         expect_contains(r.stderr_text, "source.rtsp.url must be set",
+                         "missing url names source.rtsp.url");
+}
+
+bool test_http_source_reads_its_own_section(const std::string& binary) {
+  const auto r = validate_config_body(kExampleName, binary, "http_section",
+                                      minimal_config("  type: http\n"
+                                                     "  rtsp:\n"
+                                                     "    url: rtsp://127.0.0.1:8554/src1\n"));
+  return expect_true(r.exit_code != 0, "http source does not read the rtsp section") &&
+         expect_contains(r.stderr_text, "source.http.url must be set",
+                         "missing url names source.http.url");
 }
 
 // The Python loader once accepted this because Path("") is "."; the C++ side
@@ -104,7 +97,7 @@ bool test_both_urls_empty_is_rejected(const std::string& binary) {
 bool test_empty_labels_is_rejected(const std::string& binary) {
   const auto r = validate_config_body(
       kExampleName, binary, "empty_labels",
-      minimal_config("  url: rtsp://127.0.0.1:8554/src1\n", "  labels: \"\"\n"));
+      minimal_config("  rtsp:\n    url: rtsp://127.0.0.1:8554/src1\n", "  labels: \"\"\n"));
   return expect_true(r.exit_code != 0, "empty model.labels is rejected") &&
          expect_contains(r.stderr_text, "model.labels must be set",
                          "empty labels error names the key");
@@ -134,7 +127,7 @@ std::string config_body(const ConfigParts& parts) {
   return "model:\n  path: '" + parts.model_path + "'\n" +
          (parts.sections.rfind("source:", 0) == 0
               ? std::string()
-              : std::string("source:\n  url: rtsp://127.0.0.1:8554/src1\n")) +
+              : std::string("source:\n  rtsp:\n    url: rtsp://127.0.0.1:8554/src1\n")) +
          parts.sections + "output:\n" + parts.output_extra + "  insight:\n    host: '" +
          parts.host + "'\n" + parts.insight_extra;
 }
@@ -146,14 +139,15 @@ bool test_configuration_rules_are_enforced(const std::string& binary) {
        {"", "", "", "models/model.tar.gz", ""},
        "output.insight.host must be set"},
       {"latency-negative",
-       {"source:\n  url: rtsp://127.0.0.1:8554/src1\n  latency_ms: -1\n", "", ""},
-       "source.latency_ms must be >= 0"},
+       {"source:\n  rtsp:\n    url: rtsp://127.0.0.1:8554/src1\n    latency_ms: -1\n", "", ""},
+       "source.rtsp.latency_ms must be >= 0"},
       {"fps-negative",
-       {"source:\n  url: rtsp://127.0.0.1:8554/src1\n  fps: -1\n", "", ""},
-       "source.fps must be >= 0"},
-      {"http-needs-mjpeg",
-       {"source:\n  url: http://127.0.0.1:8080/stream\n  type: http\n  codec: h264\n", "", ""},
-       "source.codec must be mjpeg for source.type=http"},
+       {"source:\n  rtsp:\n    url: rtsp://127.0.0.1:8554/src1\n    fps: -1\n", "", ""},
+       "source.rtsp.fps must be >= 0"},
+      {"http-fps-negative",
+       {"source:\n  type: http\n  http:\n    url: http://127.0.0.1:8080/stream\n    fps: -1\n", "",
+        ""},
+       "source.http.fps must be >= 0"},
       {"frames-negative", {"inference:\n  frames: -1\n", "", ""}, "inference.frames must be >= 0"},
       {"min-score-above",
        {"inference:\n  min_score: 1.5\n", "", ""},
@@ -194,6 +188,57 @@ bool test_configuration_rules_are_enforced(const std::string& binary) {
       validate_config_body(kExampleName, binary, "rule_baseline", config_body(ConfigParts{}));
   ok &= expect_true(result.exit_code == 0, "minimal config validates") &&
         expect_contains(result.stdout_text, "Config validated", "validated line is printed");
+  return ok;
+}
+
+// source.type=usb names a camera instead of a URL; the validated line reports the key, not the ID.
+bool test_usb_source_validates_without_a_url(const std::string& binary) {
+  const auto r =
+      validate_config_body(kExampleName, binary, "usb_source",
+                           minimal_config("  type: usb\n"
+                                          "  usb:\n"
+                                          "    camera: /base/pci@7000000000-3.1:1.0-046d:08e5\n"
+                                          "    width: 1280\n"
+                                          "    height: 720\n"
+                                          "    fps: 30\n"));
+  return expect_true(r.exit_code == 0, "usb source with a camera validates") &&
+         expect_contains(r.stdout_text, "source=source.usb.camera",
+                         "usb source reports source.usb.camera");
+}
+
+bool test_usb_source_requires_camera_and_fps(const std::string& binary) {
+  const auto no_camera = validate_config_body(kExampleName, binary, "usb_no_camera",
+                                              minimal_config("  type: usb\n"
+                                                             "  usb:\n"
+                                                             "    fps: 30\n"));
+  const auto no_fps = validate_config_body(kExampleName, binary, "usb_no_fps",
+                                           minimal_config("  type: usb\n"
+                                                          "  usb:\n"
+                                                          "    camera: cam0\n"
+                                                          "    fps: 0\n"));
+  return expect_true(no_camera.exit_code != 0, "usb source without a camera is rejected") &&
+         expect_contains(no_camera.stderr_text, "source.usb.camera must be set",
+                         "missing camera names source.usb.camera") &&
+         expect_true(no_fps.exit_code != 0, "usb source without a frame rate is rejected") &&
+         expect_contains(no_fps.stderr_text, "source.usb.fps must be > 0",
+                         "missing fps names source.usb.fps");
+}
+
+// The camera's JPEG is forwarded as RTP/JPEG, which carries 8-pixel blocks up to 2040 per side.
+bool test_usb_source_rejects_sizes_rtp_jpeg_cannot_carry(const std::string& binary) {
+  bool ok = true;
+  for (const std::string& size :
+       {"    width: 3840\n    height: 2160\n", "    width: 1284\n    height: 720\n"}) {
+    const auto r = validate_config_body(kExampleName, binary, "usb_rtp_jpeg_size",
+                                        minimal_config("  type: usb\n"
+                                                       "  usb:\n"
+                                                       "    camera: cam0\n"
+                                                       "    fps: 30\n" +
+                                                       size));
+    ok &= expect_true(r.exit_code != 0, "usb size RTP/JPEG cannot carry is rejected") &&
+          expect_contains(r.stderr_text, "multiples of 8 and at most 2040",
+                          "rejected size names the RTP/JPEG limit");
+  }
   return ok;
 }
 
@@ -529,12 +574,14 @@ int main(int argc, char** argv) {
   ok &= test_help_runs(binary);
   ok &= test_unknown_flag_fails(binary);
   ok &= test_missing_config_file_fails(binary);
-  ok &= test_empty_url_falls_back_to_the_legacy_key(binary);
-  ok &= test_absent_url_falls_back_to_the_legacy_key(binary);
-  ok &= test_present_url_wins_over_the_legacy_key(binary);
-  ok &= test_both_urls_empty_is_rejected(binary);
+  ok &= test_rtsp_section_supplies_the_url(binary);
+  ok &= test_flat_source_url_is_not_read(binary);
+  ok &= test_http_source_reads_its_own_section(binary);
   ok &= test_empty_labels_is_rejected(binary);
   ok &= test_configuration_rules_are_enforced(binary);
+  ok &= test_usb_source_validates_without_a_url(binary);
+  ok &= test_usb_source_requires_camera_and_fps(binary);
+  ok &= test_usb_source_rejects_sizes_rtp_jpeg_cannot_carry(binary);
   ok &= test_closed_output_is_terminal();
   return ok ? 0 : 1;
 }

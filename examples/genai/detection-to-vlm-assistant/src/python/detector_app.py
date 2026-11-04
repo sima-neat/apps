@@ -489,7 +489,9 @@ def build_source_graph(cfg: Config, width: int, height: int, fps: int):
 
 
 def build_video_graph(cfg: Config, width: int, height: int, fps: int):
-    sender_opt = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(width, height, max(1, fps))
+    encode = pyneat.SimaEncodeOptions()
+    encode.fps = max(1, fps)
+    sender_opt = pyneat.VideoSenderOptions.from_raw(encode)
     sender_opt.host = cfg.insight_host
     sender_opt.channel = cfg.channel
     sender_opt.video_port_base = cfg.video_port

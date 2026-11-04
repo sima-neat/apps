@@ -524,9 +524,9 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
     )
     branch = pyneat.graphs.branch("source", ["video", "model"])
 
-    video_options = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(
-        frame_w, frame_h, fps
-    )
+    encode = pyneat.SimaEncodeOptions()
+    encode.fps = fps
+    video_options = pyneat.VideoSenderOptions.from_raw(encode)
     video_options.host = cfg.insight_host
     video_options.channel = 0
     video_options.video_port_base = cfg.video_port

@@ -44,7 +44,7 @@ def test_strict_camera_capture(tmp_path: Path) -> None:
     summary = json.loads((tmp_path / "output" / "summary.json").read_text(encoding="utf-8"))
     assert summary["error"] is None
     assert summary["strict_zero_copy"] is True
-    assert summary["capture_buffers"] == 32
+    assert summary["capture_buffers"] == 0
     assert summary["frames_pulled"] > 0
     assert summary["timeouts"] == 0
     assert len(summary["captures"]) == 1

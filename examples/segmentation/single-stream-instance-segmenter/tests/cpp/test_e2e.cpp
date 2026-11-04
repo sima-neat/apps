@@ -103,19 +103,25 @@ int run_case(const std::string& binary, const ModelCase& model,
     return 1;
   }
   const fs::path config_path = fs::path(output_dir).parent_path() / "config.yaml";
+  // The case fills its source type's section; a USB case's "URL" is the camera's stable ID.
+  const std::string src = "source." + source_case.type + ".";
   ConfigScalars overrides{{"model.family", model.family},
                           {"model.path", model.model_path},
                           {"source.type", source_case.type},
-                          {"source.codec", source_case.codec},
-                          {"source.url", source_url},
-                          {"source.ssl_strict", source_case.ssl_strict ? "true" : "false"},
+                          {src + (source_case.type == "usb" ? "camera" : "url"), source_url},
                           {"output.save_dir", output_dir},
                           // This test is the Insight receiver, so it publishes to loopback.
                           {"output.insight.host", "127.0.0.1"},
                           {"output.insight.video_port", std::to_string(video_port)},
                           {"output.insight.metadata_port", std::to_string(metadata_port)}};
+  if (source_case.type == "rtsp") {
+    overrides[src + "codec"] = source_case.codec;
+  }
+  if (source_case.type == "http") {
+    overrides[src + "ssl_strict"] = source_case.ssl_strict ? "true" : "false";
+  }
   if (source_case.fps > 0) {
-    overrides["source.fps"] = std::to_string(source_case.fps);
+    overrides[src + "fps"] = std::to_string(source_case.fps);
   }
   write_e2e_config(kExample, config_path, overrides);
 
@@ -180,9 +186,11 @@ int run_case(const std::string& binary, const ModelCase& model,
     std::cerr << "[FAIL] " << case_name << " " << frames_problem << "\n";
     rc = 1;
   } else if (video_bytes <= 12 || (video_packet[0] >> 6) != 2 ||
-             (video_packet[1] & 0x7F) != 96) {
-    // VideoSender always re-encodes to RTP H.264 (payload type 96) for Insight.
-    std::cerr << "[FAIL] " << case_name << " did not publish RTP H.264 video to Insight\n";
+             (video_packet[1] & 0x7F) != (source_case.type == "usb" ? 26 : 96)) {
+    // Streams are re-encoded to RTP H.264 (payload type 96); a USB camera's own JPEG is
+    // forwarded as RTP/JPEG (payload type 26).
+    std::cerr << "[FAIL] " << case_name << " did not publish RTP "
+              << (source_case.type == "usb" ? "JPEG" : "H.264") << " video to Insight\n";
     rc = 1;
   } else {
     const auto metadata = listener.wait_for_messages();
@@ -252,5 +260,28 @@ int main(int argc, char** argv) {
         }
         return case_rc;
       });
-  return rc != 0 ? rc : cases_rc;
+
+  // USB capture needs a camera on the DevKit, which CI runners do not have, so this case runs
+  // only when SIMANEAT_TEST_USB_CAMERA names one (see usb_camera_ids()), even under --strict.
+  int usb_rc = 0;
+  bool usb_ran = false;
+  const StreamSourceCase usb_case{"usb_camera", "SIMANEAT_TEST_USB_CAMERA", "usb", "mjpeg", 30,
+                                  true};
+  if (const char* camera = env_or_null(usb_case.env_key.c_str())) {
+    usb_ran = true;
+    for (const ModelCase& model : models) {
+      const std::string case_name =
+          model_case_label(model.family + "_" + usb_case.name, model.model_path, 2);
+      if (run_case(binary, model, usb_case, camera, case_name) != 0) {
+        usb_rc = 1;
+      }
+    }
+  } else {
+    std::cerr << "[SKIP] set SIMANEAT_TEST_USB_CAMERA to a USB camera ID to run usb_camera e2e\n";
+  }
+  if (rc != 0 || usb_rc != 0) {
+    return 1;
+  }
+  // A camera-only run on a DevKit is a pass, not "no stream URLs configured".
+  return usb_ran && cases_rc == 77 ? 0 : cases_rc;
 }

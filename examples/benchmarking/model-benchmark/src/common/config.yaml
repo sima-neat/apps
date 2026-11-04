@@ -2,7 +2,8 @@ model:                       # Model package selection.
   path: <model-path>         # Example: models/<model-pack>.tar.gz
 
 benchmark:                   # Synthetic benchmark settings.
-  frames: 1000               # Number of synthetic frames to run.
+  frames: 100                # Minimum synthetic frames per pass.
+  min_duration_ms: 30000     # Minimum length of each pass, in milliseconds.
 
 output:                      # Benchmark report output.
   report_json: sandbox/model-benchmark/report.json # JSON report path.

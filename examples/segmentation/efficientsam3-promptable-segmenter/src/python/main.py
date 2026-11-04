@@ -160,7 +160,9 @@ def build_source(cfg: Config, width: int, height: int, fps: int):
         source.dec_height = height
         source.source_fps = fps
 
-    video = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(width, height, fps)
+    encode = pyneat.SimaEncodeOptions()
+    encode.fps = fps
+    video = pyneat.VideoSenderOptions.from_raw(encode)
     video.host = cfg.insight_host
     video.video_port_base = cfg.video_port
 

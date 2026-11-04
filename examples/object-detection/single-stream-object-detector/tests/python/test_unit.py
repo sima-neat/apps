@@ -78,10 +78,9 @@ VALID_CONFIG = {
     "model": {"path": "model.tar.gz", "labels": "coco_label.txt"},
     "source": {
         "type": "rtsp",
-        "codec": "h264",
-        "url": "rtsp://127.0.0.1:8554/src1",
-        "latency_ms": 200,
-        "fps": 0,
+        "rtsp": {"url": "rtsp://127.0.0.1:8554/src1", "codec": "h264", "latency_ms": 200, "fps": 0},
+        "http": {},
+        "usb": {},
     },
     "inference": {"frames": 0, "min_score": 0.55, "nms_iou": 0.6, "max_detections": 50},
     "runtime": {"profile": False, "profile_interval": 100},
@@ -111,7 +110,7 @@ class TestValidBaseline:
     def test_omitted_optional_values_fall_back_to_documented_defaults(self, tmp_path):
         raw = {
             "model": {"path": "model.tar.gz"},
-            "source": {"url": "rtsp://127.0.0.1:8554/src1"},
+            "source": {"rtsp": {"url": "rtsp://127.0.0.1:8554/src1"}},
             "output": {"insight": {"host": "127.0.0.1"}},
         }
 
@@ -134,8 +133,10 @@ REJECTED = [
     pytest.param(
         ("output", "insight", "host"), "", "output.insight.host must be set", id="insight-host-empty"
     ),
-    pytest.param(("source", "latency_ms"), -1, "source.latency_ms must be >= 0", id="latency-negative"),
-    pytest.param(("source", "fps"), -1, "source.fps must be >= 0", id="fps-negative"),
+    pytest.param(
+        ("source", "rtsp", "latency_ms"), -1, "source.rtsp.latency_ms must be >= 0", id="latency-negative"
+    ),
+    pytest.param(("source", "rtsp", "fps"), -1, "source.rtsp.fps must be >= 0", id="fps-negative"),
     pytest.param(("inference", "frames"), -1, "inference.frames must be >= 0", id="frames-negative"),
     pytest.param(
         ("inference", "min_score"), -0.01, "inference.min_score must be between 0 and 1", id="min-score-below"
@@ -193,8 +194,8 @@ class TestBoundariesAreAccepted:
             (("inference", "min_score"), 1.0),
             (("inference", "nms_iou"), 0.0),
             (("inference", "nms_iou"), 1.0),
-            (("source", "latency_ms"), 0),
-            (("source", "fps"), 0),
+            (("source", "rtsp", "latency_ms"), 0),
+            (("source", "rtsp", "fps"), 0),
             (("inference", "frames"), 0),
             (("output", "save_every"), 0),
             (("inference", "max_detections"), 1),
@@ -207,77 +208,112 @@ class TestBoundariesAreAccepted:
 
 @pytest.mark.unit
 class TestSourceCombinations:
-    def test_http_source_requires_mjpeg(self, tmp_path):
-        config_path = write_config(
-            tmp_path, [(("source", "type"), "http"), (("source", "codec"), "h264")]
-        )
-
-        with pytest.raises(ValueError, match="source.codec must be mjpeg for source.type=http"):
-            main.load_app_config(config_path)
-
-    def test_http_source_with_mjpeg_is_accepted(self, tmp_path):
+    def test_http_source_reads_its_own_section_and_is_mjpeg(self, tmp_path):
         cfg = main.load_app_config(
-            write_config(tmp_path, [(("source", "type"), "http"), (("source", "codec"), "mjpeg")])
+            write_config(
+                tmp_path,
+                [
+                    (("source", "type"), "http"),
+                    (("source", "http"), {"url": "https://127.0.0.1/stream", "ssl_strict": False}),
+                ],
+            )
         )
 
         assert cfg.source_type == "http"
         assert cfg.source_codec == "mjpeg"
+        assert cfg.source_url == "https://127.0.0.1/stream"
+        assert cfg.source_key == "source.http.url"
+        assert cfg.ssl_strict is False
 
-    @pytest.mark.parametrize("codec", ["h264", "h265", "mjpeg"])
-    def test_every_documented_rtsp_codec_is_accepted(self, tmp_path, codec):
-        cfg = main.load_app_config(write_config(tmp_path, [(("source", "codec"), codec)]))
+    def test_http_source_without_its_url_is_rejected(self, tmp_path):
+        """The rtsp section's URL is not read for source.type=http."""
+        with pytest.raises(ValueError, match="source.http.url must be set"):
+            main.load_app_config(write_config(tmp_path, [(("source", "type"), "http")]))
+
+    @pytest.mark.parametrize(
+        ("alias", "codec"), [("h264", "h264"), ("h265", "h265"), ("mjpeg", "mjpeg"), ("hevc", "h265")]
+    )
+    def test_every_documented_rtsp_codec_is_accepted(self, tmp_path, alias, codec):
+        cfg = main.load_app_config(write_config(tmp_path, [(("source", "rtsp", "codec"), alias)]))
 
         assert cfg.source_codec == codec
 
+    def test_usb_source_needs_no_url(self, tmp_path):
+        cfg = main.load_app_config(
+            write_config(
+                tmp_path,
+                [
+                    (("source", "type"), "usb"),
+                    (("source", "rtsp", "url"), ""),
+                    (("source", "usb", "camera"), "/base/pci@7000000000-3.1:1.0-046d:08e5"),
+                    (("source", "usb", "width"), 1280),
+                    (("source", "usb", "height"), 720),
+                    (("source", "usb", "fps"), 30),
+                ],
+            )
+        )
+
+        assert cfg.source_type == "usb"
+        assert cfg.source_key == "source.usb.camera"
+        assert (cfg.source_width, cfg.source_height, cfg.source_fps) == (1280, 720, 30)
+
+    @pytest.mark.parametrize(
+        "overrides,message",
+        [
+            ([(("source", "usb", "fps"), 30)], "source.usb.camera must be set"),
+            ([(("source", "usb", "camera"), "cam0")], "source.usb.fps must be > 0"),
+            (
+                [
+                    (("source", "usb", "camera"), "cam0"),
+                    (("source", "usb", "fps"), 30),
+                    (("source", "usb", "width"), 0),
+                ],
+                "source.usb.width and source.usb.height must be > 0",
+            ),
+            (
+                [
+                    (("source", "usb", "camera"), "cam0"),
+                    (("source", "usb", "fps"), 30),
+                    (("source", "usb", "width"), 3840),
+                ],
+                "multiples of 8 and at most 2040",
+            ),
+            (
+                [
+                    (("source", "usb", "camera"), "cam0"),
+                    (("source", "usb", "fps"), 30),
+                    (("source", "usb", "width"), 1284),
+                ],
+                "multiples of 8 and at most 2040",
+            ),
+        ],
+    )
+    def test_usb_source_rejects_a_missing_camera_or_mode(self, tmp_path, overrides, message):
+        with pytest.raises(ValueError, match=message):
+            main.load_app_config(
+                write_config(tmp_path, [(("source", "type"), "usb"), *overrides])
+            )
+
     def test_an_unsupported_codec_is_rejected(self, tmp_path):
         with pytest.raises(ValueError):
-            main.load_app_config(write_config(tmp_path, [(("source", "codec"), "vp9")]))
+            main.load_app_config(write_config(tmp_path, [(("source", "rtsp", "codec"), "vp9")]))
 
     def test_an_unsupported_source_type_is_rejected(self, tmp_path):
         with pytest.raises(ValueError):
             main.load_app_config(write_config(tmp_path, [(("source", "type"), "webrtc")]))
 
-    def test_an_empty_url_falls_back_to_the_legacy_key(self, tmp_path):
-        """config.yaml keeps source.url present and documents rtsp_url as
-        "used when source.url is empty", so an empty value must fall through."""
-        cfg = main.load_app_config(
-            write_config(
-                tmp_path,
-                [(("source", "url"), ""), (("source", "rtsp_url"), "rtsp://127.0.0.1:8554/legacy")],
-            )
-        )
-
-        assert cfg.source_url == "rtsp://127.0.0.1:8554/legacy"
-        assert cfg.source_key == "source.rtsp_url"
-
-    def test_an_absent_url_falls_back_to_the_legacy_key(self, tmp_path):
+    def test_flat_source_keys_are_not_read(self, tmp_path):
+        """The settings live under source.<type>; a flat source.url is ignored."""
         raw = copy.deepcopy(VALID_CONFIG)
-        del raw["source"]["url"]
-        raw["source"]["rtsp_url"] = "rtsp://127.0.0.1:8554/legacy"
+        raw["source"] = {"type": "rtsp", "url": "rtsp://127.0.0.1:8554/src1"}
 
-        cfg = main.load_app_config(write_config(tmp_path, root=raw))
-
-        assert cfg.source_url == "rtsp://127.0.0.1:8554/legacy"
-        assert cfg.source_key == "source.rtsp_url"
-
-    def test_a_present_url_wins_over_the_legacy_key(self, tmp_path):
-        cfg = main.load_app_config(
-            write_config(tmp_path, [(("source", "rtsp_url"), "rtsp://127.0.0.1:8554/legacy")])
-        )
-
-        assert cfg.source_url == "rtsp://127.0.0.1:8554/src1"
-        assert cfg.source_key == "source.url"
-
-    def test_both_empty_is_still_rejected(self, tmp_path):
-        with pytest.raises(ValueError, match="source.url or source.rtsp_url must be set"):
-            main.load_app_config(
-                write_config(tmp_path, [(("source", "url"), ""), (("source", "rtsp_url"), "")])
-            )
+        with pytest.raises(ValueError, match="source.rtsp.url must be set"):
+            main.load_app_config(write_config(tmp_path, root=raw))
 
 
 @pytest.mark.unit
 class TestValidateConfigOnlyOutput:
-    """`--validate-config-only` names the key that supplied the source, never the URL.
+    """`--validate-config-only` names the key that names the source, never the URL.
 
     The URL can carry credentials and this line ends up in terminal and CI logs,
     so the C++ binary prints the same line and its unit suite asserts the same.
@@ -293,29 +329,16 @@ class TestValidateConfigOnlyOutput:
             cwd=str(EXAMPLE_DIR),
         )
 
-    def test_the_legacy_key_is_reported_without_the_url(self, tmp_path):
+    def test_the_url_key_is_reported_without_the_url(self, tmp_path):
         result = self._validate(
             write_config(
-                tmp_path,
-                [
-                    (("source", "url"), ""),
-                    (("source", "rtsp_url"), "rtsp://user:secret@127.0.0.1:8554/legacy"),
-                ],
+                tmp_path, [(("source", "rtsp", "url"), "rtsp://user:secret@127.0.0.1:8554/src1")]
             )
         )
 
         assert result.returncode == 0, result.stderr
-        assert "(source=source.rtsp_url)" in result.stdout
+        assert "(source=source.rtsp.url)" in result.stdout
         assert "secret" not in result.stdout
-        assert "rtsp://" not in result.stdout
-
-    def test_a_present_url_is_reported_as_source_url(self, tmp_path):
-        result = self._validate(
-            write_config(tmp_path, [(("source", "rtsp_url"), "rtsp://127.0.0.1:8554/legacy")])
-        )
-
-        assert result.returncode == 0, result.stderr
-        assert "(source=source.url)" in result.stdout
         assert "rtsp://" not in result.stdout
 
 
@@ -332,14 +355,14 @@ class TestMalformedConfigFiles:
         config_path = tmp_path / "config.yaml"
         config_path.write_text("", encoding="utf-8")
 
-        with pytest.raises(ValueError, match="source.url or source.rtsp_url must be set"):
+        with pytest.raises(ValueError, match="source.rtsp.url must be set"):
             main.load_app_config(config_path)
 
     def test_a_missing_source_url_is_rejected(self, tmp_path):
         raw = copy.deepcopy(VALID_CONFIG)
-        del raw["source"]["url"]
+        del raw["source"]["rtsp"]["url"]
 
-        with pytest.raises(ValueError, match="source.url or source.rtsp_url must be set"):
+        with pytest.raises(ValueError, match="source.rtsp.url must be set"):
             main.load_app_config(write_config(tmp_path, root=raw))
 
     @pytest.mark.parametrize("key", ["path", "labels"])
@@ -362,7 +385,7 @@ class TestLabelsRule:
     def test_an_omitted_labels_key_uses_the_shipped_coco_list(self, tmp_path):
         raw = {
             "model": {"path": "model.tar.gz"},
-            "source": {"url": "rtsp://127.0.0.1:8554/src1"},
+            "source": {"rtsp": {"url": "rtsp://127.0.0.1:8554/src1"}},
             "output": {"insight": {"host": "127.0.0.1"}},
         }
 
@@ -410,3 +433,51 @@ class TestPullOutcomes:
         assert captured.err.count("[warn] timed out waiting for detections") == 1
         assert "processed=" not in captured.out
         assert run.pulls == [("detections", 20000)] * 2
+
+
+@pytest.mark.unit
+class TestUsbCameraFrames:
+    def test_nv16_frame_converts_to_bgr_through_its_padded_planes(self, monkeypatch):
+        """A 4:2:2 USB camera frame is saved through its Y and UV planes, padding skipped,
+        and every row keeps its own chroma."""
+        import cv2
+        import numpy as np
+
+        monkeypatch.setattr(main, "cv2", cv2)
+        monkeypatch.setattr(main, "np", np)
+        monkeypatch.setattr(
+            main,
+            "pyneat",
+            SimpleNamespace(
+                PixelFormat=SimpleNamespace(NV16="NV16"),
+                PlaneRole=SimpleNamespace(Y="Y", UV="UV"),
+            ),
+        )
+        width, height, stride = 64, 32, 96
+        y = np.zeros((height, stride), np.uint8)
+        y[:, :width] = 81
+        # Chroma changes on every row, which a 4:2:0 conversion would average or drop.
+        uv = np.zeros((height, stride), np.uint8)
+        uv[0::2, 0:width:2], uv[0::2, 1:width:2] = 90, 240
+        uv[1::2, 0:width:2], uv[1::2, 1:width:2] = 240, 90
+        payload = np.concatenate([y.ravel(), uv.ravel()]).tobytes()
+        tensor = SimpleNamespace(
+            width=width,
+            height=height,
+            image_format=lambda: "NV16",
+            copy_payload_bytes=lambda: payload,
+            planes=[
+                SimpleNamespace(role="Y", strides_bytes=[stride, 1], byte_offset=0),
+                SimpleNamespace(role="UV", strides_bytes=[stride, 1], byte_offset=height * stride),
+            ],
+        )
+
+        bgr = main.tensor_bgr_from_decoded(tensor)
+
+        def expected(u, v):
+            return cv2.cvtColor(np.array([[[81, u], [81, v]]], np.uint8), cv2.COLOR_YUV2BGR_YUY2)[0, 0]
+
+        assert bgr.shape == (height, width, 3)
+        assert (bgr[0::2] == expected(90, 240)).all()
+        assert (bgr[1::2] == expected(240, 90)).all()
+        assert (expected(90, 240) != expected(240, 90)).any()

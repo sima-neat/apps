@@ -119,7 +119,7 @@ def load_config(path: Path) -> AppConfig:
             fps_num=integer(camera_raw, "fps_num", 30),
             fps_den=integer(camera_raw, "fps_den", 1),
             pixel_format=string(camera_raw, "format", "NV12").upper(),
-            capture_buffers=integer(camera_raw, "capture_buffers", 32),
+            capture_buffers=integer(camera_raw, "capture_buffers", 0),
             strict_zero_copy=boolean(camera_raw, "strict_zero_copy", True),
             queue_depth=integer(camera_raw, "queue_depth", 2),
         ),
@@ -145,8 +145,8 @@ def validate_config(config: AppConfig) -> None:
         raise ValueError("camera frame-rate numerator and denominator must be positive")
     if camera.pixel_format != "NV12":
         raise ValueError("camera.format must be NV12")
-    if not 1 <= camera.capture_buffers <= 128:
-        raise ValueError("camera.capture_buffers must be between 1 and 128")
+    if not 0 <= camera.capture_buffers <= 128:
+        raise ValueError("camera.capture_buffers must be between 0 and 128")
     if camera.queue_depth <= 0:
         raise ValueError("camera.queue_depth must be positive")
     if not math.isfinite(capture.duration_seconds) or capture.duration_seconds <= 0:

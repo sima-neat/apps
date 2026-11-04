@@ -6,11 +6,14 @@ installed or fetched."""
 from __future__ import annotations
 
 import os
+import importlib.util
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 EXAMPLE = Path(__file__).resolve().parents[2]
 SETUP = EXAMPLE / "setup.sh"
@@ -36,6 +39,35 @@ exec "${REAL_PYTHON}" "$@"
 
 RAG_STEPS = ("download.pytorch.org", "requirements-rag.txt", "hf download thenlper/gte-small",
              "rag/create_db.py")
+
+
+class RagDatabaseCleanupTests(unittest.TestCase):
+    def test_command_releases_local_servers_on_success_and_failure(self):
+        for error in (None, RuntimeError("database write failed")):
+            with self.subTest(error=error):
+                manager = Mock()
+                dependencies = {
+                    "langchain_huggingface": SimpleNamespace(HuggingFaceEmbeddings=Mock()),
+                    "langchain_milvus": SimpleNamespace(Milvus=Mock()),
+                    "langchain_text_splitters": SimpleNamespace(MarkdownHeaderTextSplitter=Mock()),
+                    "milvus_lite.server_manager": SimpleNamespace(server_manager_instance=manager),
+                }
+                spec = importlib.util.spec_from_file_location(
+                    "rag_create_db_test", EXAMPLE / "src/python/rag/create_db.py"
+                )
+                module = importlib.util.module_from_spec(spec)
+                with patch.dict(sys.modules, dependencies):
+                    spec.loader.exec_module(module)
+                args = SimpleNamespace(input="doc.md", output="db", embedding_model="model", collection="docs")
+                with patch.object(module, "parse_args", return_value=args), patch.object(
+                    module, "create_markdown_vectordb", side_effect=error
+                ):
+                    if error:
+                        with self.assertRaisesRegex(RuntimeError, "database write failed"):
+                            module.main()
+                    else:
+                        self.assertEqual(module.main(), 0)
+                manager.release_all.assert_called_once_with()
 
 
 class SetupRagSwitchTests(unittest.TestCase):

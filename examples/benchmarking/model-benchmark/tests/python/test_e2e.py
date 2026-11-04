@@ -23,7 +23,7 @@ def test_generates_benchmark_report(
     report_path = tmp_output_dir / "report.json"
     config_path = e2e_config_writer(
         {
-            "benchmark": {"frames": 3},
+            "benchmark": {"frames": 3, "min_duration_ms": 0},
             "output": {"report_json": str(report_path)},
         }
     )
@@ -42,6 +42,7 @@ def test_generates_benchmark_report(
     )
     data = json.loads(report_path.read_text(encoding="utf-8"))
     assert data["benchmark"]["frames"] == 3
+    assert data["benchmark"]["min_duration_ms"] == 0
     assert data["model"]["file"] == e2e_model_path.name
     assert data["metrics"]["latency_ms"] > 0
     assert data["metrics"]["fps"] > 0
