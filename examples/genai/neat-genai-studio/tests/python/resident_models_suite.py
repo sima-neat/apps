@@ -350,7 +350,7 @@ class ResidentLimitDefaultTests(unittest.TestCase):
     def test_a_limit_that_is_not_a_whole_number_is_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
             config = Path(tmp) / "config.json"
-            for value in (2.5, 2.0, "two", True):
+            for value in (2.5, 2.0, "two", True, False, 0, -1):
                 with self.subTest(value=value):
                     models = {"max_resident_chat_models": value}
                     config.write_text(json.dumps({"server": {"models": models}, "app": {}}), encoding="utf-8")

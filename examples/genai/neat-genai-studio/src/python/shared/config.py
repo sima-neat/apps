@@ -122,11 +122,13 @@ class AppConfig:
 
 def _load_resident_limit(models: dict) -> int:
     """server.models.max_resident_chat_models, from 1 to MAX_RESIDENT_CHAT_MODELS."""
-    value = models.get("max_resident_chat_models", 2) or 2
-    if isinstance(value, bool) or not isinstance(value, (int, str)) or not str(value).strip().lstrip("-").isdigit():
+    value = models.get("max_resident_chat_models")
+    if value is None:
+        return 2
+    if isinstance(value, bool) or not isinstance(value, (int, str)) or not str(value).strip().isdigit() or int(value) < 1:
         raise ValueError(f"max_resident_chat_models must be a whole number from 1 to "
                          f"{MAX_RESIDENT_CHAT_MODELS}, not {value!r}")
-    limit = max(1, int(value))
+    limit = int(value)
     if limit > MAX_RESIDENT_CHAT_MODELS:
         logging.warning("max_resident_chat_models is %d; using the maximum of %d",
                         limit, MAX_RESIDENT_CHAT_MODELS)
