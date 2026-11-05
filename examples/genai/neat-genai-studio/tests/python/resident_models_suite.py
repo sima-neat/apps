@@ -347,6 +347,16 @@ class ResidentLimitDefaultTests(unittest.TestCase):
                     self.assertEqual(load_server_config(config).max_resident_chat_models, expected)
                     self.assertEqual(load_ui_config(config).max_resident_chat_models, expected)
 
+    def test_a_limit_that_is_not_a_whole_number_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / "config.json"
+            for value in (2.5, 2.0, "two", True):
+                with self.subTest(value=value):
+                    models = {"max_resident_chat_models": value}
+                    config.write_text(json.dumps({"server": {"models": models}, "app": {}}), encoding="utf-8")
+                    with self.assertRaisesRegex(ValueError, "whole number"):
+                        load_server_config(config)
+
     def test_the_readme_states_the_same_default(self):
         readme = (self.EXAMPLE / "README.md").read_text(encoding="utf-8")
         match = re.search(r"`server\.models\.max_resident_chat_models`:[^\n]*default `(\d+)`", readme)

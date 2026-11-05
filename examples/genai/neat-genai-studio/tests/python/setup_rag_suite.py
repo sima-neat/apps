@@ -186,6 +186,15 @@ class SetupResidentLimitTests(SetupFixture):
         self._setup(SETUP_RAG="0")
         self.assertIn("max_resident_chat_models: 4", self.config.read_text(encoding="utf-8"))
 
+    def test_a_hand_edited_fraction_stops_a_rerun_and_is_left_in_place(self):
+        self._setup(SETUP_RAG="0")
+        text = self.config.read_text(encoding="utf-8").replace("max_resident_chat_models: 2", "max_resident_chat_models: 2.5")
+        self.config.write_text(text, encoding="utf-8")
+        result = self._run(SETUP_RAG="0")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not '2.5'", result.stderr)
+        self.assertEqual(self.config.read_text(encoding="utf-8"), text)
+
     def test_a_limit_outside_1_to_4_stops_before_anything_is_written(self):
         for value in ("0", "two", "-1", "5"):
             with self.subTest(value=value):
