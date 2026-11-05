@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 from dataclasses import dataclass
@@ -14,6 +15,9 @@ COMMON_DIR = Path(__file__).resolve().parents[2] / "common"
 DEFAULT_CONFIG = COMMON_DIR / "config.yaml"
 DEFAULT_SERVER_CONFIG = DEFAULT_CONFIG
 DEFAULT_UI_CONFIG = DEFAULT_CONFIG
+# Loaded chat/VLM models share one accelerator: above this, answers get too slow
+# and nothing checks that they fit in memory.
+MAX_RESIDENT_CHAT_MODELS = 4
 
 
 def _detect_apps_root() -> Path | None:
@@ -110,10 +114,25 @@ class AppConfig:
     rag: RagConfig
     control: ControlConfig = ControlConfig(host="127.0.0.1", client_host="127.0.0.1", port=9997)
     catalog_dir: Path | None = None
-    max_resident_chat_models: int = 1
+    max_resident_chat_models: int = 2
     hub: HubConfig = HubConfig(allow_download=True,
                               orgs=("simaai", "TDoSiMa", "florianvoss"))
     supertonic: SupertonicConfig = SupertonicConfig()
+
+
+def _load_resident_limit(models: dict) -> int:
+    """server.models.max_resident_chat_models, from 1 to MAX_RESIDENT_CHAT_MODELS."""
+    value = models.get("max_resident_chat_models")
+    if value is None:
+        return 2
+    if isinstance(value, bool) or not isinstance(value, (int, str)) or not str(value).strip().isdigit() or int(value) < 1:
+        raise ValueError(f"max_resident_chat_models must be a whole number from 1 to "
+                         f"{MAX_RESIDENT_CHAT_MODELS}, not {value!r}")
+    limit = int(value)
+    if limit > MAX_RESIDENT_CHAT_MODELS:
+        logging.warning("max_resident_chat_models is %d; using the maximum of %d",
+                        limit, MAX_RESIDENT_CHAT_MODELS)
+    return min(limit, MAX_RESIDENT_CHAT_MODELS)
 
 
 def read_config_file(path: Path) -> dict:
@@ -166,7 +185,7 @@ def load_server_config(path: Path = DEFAULT_SERVER_CONFIG, apps_root: Path = PAT
         rag=_load_rag_config(rag, apps_root),
         control=_load_control_config(control),
         catalog_dir=_load_optional_dir(models.get("catalog_dir"), apps_root),
-        max_resident_chat_models=max(1, int(models.get("max_resident_chat_models", 1) or 1)),
+        max_resident_chat_models=_load_resident_limit(models),
         hub=_load_hub_config(hub),
     )
 
@@ -232,7 +251,7 @@ def load_ui_config(path: Path = DEFAULT_UI_CONFIG, apps_root: Path = PATH_ROOT) 
         rag=_load_rag_config(rag, apps_root),
         control=_load_control_config(control),
         catalog_dir=_load_optional_dir(server_models.get("catalog_dir"), apps_root),
-        max_resident_chat_models=max(1, int(server_models.get("max_resident_chat_models", 1) or 1)),
+        max_resident_chat_models=_load_resident_limit(server_models),
         hub=_load_hub_config(hub),
         supertonic=_load_supertonic_config(supertonic),
     )
