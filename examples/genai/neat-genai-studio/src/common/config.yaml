@@ -11,9 +11,9 @@ server:                      # Local OpenAI-compatible model server.
     catalog_dir: <path-to-models-catalog-dir> # Directory scanned for loadable models.
     # Chat/VLM models kept loaded side by side. Past the limit a load is refused
     # until the request names a loaded model to unload; with 1, loading a new
-    # model replaces the loaded one. How many fit depends on sizes.
+    # model replaces the loaded one. From 1 to 4; how many fit depends on sizes.
     # Speech-to-text has its own slot and is unaffected.
-    max_resident_chat_models: 1
+    max_resident_chat_models: 2
     chat:                    # Chat/VLM models loaded at startup (OPTIONAL).
       # Optional: use an empty list (chat: []) to start with no model resident and
       # load any compatible catalog model on demand (Insight's GenAI tab or the

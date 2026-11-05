@@ -30,6 +30,7 @@ FIELDS = {
     "supertonic.models_root": lambda c: c.supertonic.models_root,
     "supertonic.venv": lambda c: c.supertonic.venv,
     "rag.enabled": lambda c: c.rag.enabled,
+    "models.max_resident_chat_models": lambda c: c.max_resident_chat_models,
 }
 
 
