@@ -20,6 +20,11 @@ Common application steps:
 Do not manually recreate the model route unless the public API requires it. Let
 `Model` assemble the model-owned preprocess, inference, and postprocess stages.
 
+For tensors matching `model.input_specs()`, leave preprocessing options unset.
+Required MPK Cast/Quant/Tess adapters remain automatic; `preprocess.enable = Off`
+does not select MLA-only execution. See Core's
+[Model guide](https://github.com/sima-neat/core/blob/develop/docs/develop-apps/development-workflow/model.mdx#raw-tensor-input).
+
 Read outputs by the contract `output_specs()` reports:
 
 - Outputs carry the model package's logical shape (for example `[1, 1000]` for
