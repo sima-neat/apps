@@ -125,7 +125,7 @@ void validate(const AppConfig& config) {
   require(config.decode_type == "yolo26" || config.decode_type == "yolov8",
           "model.decode_type must be yolo26 or yolov8");
   require(config.queue >= 0 && config.queue <= 5, "card.queue must be in [0, 5]");
-  require(config.card_id >= 0, "card.card_id must be >= 0");
+  require(config.card_id >= 0 && config.card_id <= 7, "card.card_id must be in [0, 7]");
   require(config.input_width > 0 && config.input_height > 0 && config.input_fps > 0,
           "input width, height, and fps must be > 0");
   require(config.startup_stagger_ms >= 0, "input.startup_stagger_ms must be >= 0");
@@ -133,17 +133,22 @@ void validate(const AppConfig& config) {
           "input.decoder_buffers must be in [1, 64]");
   require(config.decoder_input_buffers > 0, "input.decoder_input_buffers must be > 0");
   require(config.max_inflight_per_stream > 0, "pcie.max_inflight_per_stream must be > 0");
-  require(config.max_inflight_total > 0, "pcie.max_inflight_total must be > 0");
+  require(config.max_inflight_total > 0 && config.max_inflight_total <= 256,
+          "pcie.max_inflight_total must be in [1, 256]");
   require(config.max_inflight_per_stream <= config.max_inflight_total,
           "pcie.max_inflight_per_stream must be <= pcie.max_inflight_total");
+  require(config.pcie_queue_size >= 2 && config.pcie_queue_size <= 512,
+          "pcie.queue_size must be in [2, 512]");
   require(config.pcie_queue_size >= config.max_inflight_total,
           "pcie.queue_size must be >= pcie.max_inflight_total");
-  require(config.pcie_buffer_size > 0, "pcie.buffer_size must be > 0");
+  require(config.pcie_buffer_size >= 524288 && config.pcie_buffer_size <= 134217728,
+          "pcie.buffer_size must be in [524288, 134217728]");
   require(config.pcie_pool_size >= 2 && config.pcie_pool_size <= 120,
           "pcie.pool_size must be in [2, 120]");
   require(config.decoder_input_buffers >= config.pcie_pool_size,
           "input.decoder_input_buffers must be >= pcie.pool_size");
-  require(config.result_timeout_ms > 0, "pcie.result_timeout_ms must be > 0");
+  require(config.result_timeout_ms > 0 && config.result_timeout_ms <= 600000,
+          "pcie.result_timeout_ms must be in [1, 600000]");
   require(config.correlation_cache_size > 0, "pcie.correlation_cache_size must be > 0");
   require(config.min_score >= 0.0 && config.min_score <= 1.0,
           "inference.min_score must be between 0 and 1");
