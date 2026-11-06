@@ -238,7 +238,7 @@ read_local_neat_status() {
   fi
 }
 
-# Prints the version `neat update` would give an installed Insight, or nothing
+# Prints the newer version `neat --json` reports for an installed Insight, or nothing
 # when Insight is current or the update check fails. `neat` compares against
 # Insight's installed channel and knows which virtual environment it runs from.
 read_insight_update() {
@@ -428,13 +428,22 @@ install_insight() {
   esac
   echo
   echo "Installing Insight:"
-  if [[ "${INSIGHT_INSTALL}" == "install" ]]; then
-    run_sima_cli_install "${INSIGHT_INSTALL_DIR}" "${SIMA_CLI_RESOLVED}" -d . insight
-    return 0
+  if run_sima_cli_install "${INSIGHT_INSTALL_DIR}" "${SIMA_CLI_RESOLVED}" -d . insight; then
+    restart_insight
+  elif [[ "${INSIGHT_INSTALL}" == "install" ]]; then
+    return 1
+  else
+    # The installed Insight still works, so a failed update does not stop Apps.
+    echo "⚠️  Insight was not updated. To retry, run: sima-cli neat install insight"
   fi
-  # The installed Insight still works, so a failed update does not stop Apps.
-  neat update --yes --insight-only \
-    || echo "⚠️  Insight was not updated. To retry, run: neat update --insight-only"
+}
+
+# The SDK runs Insight as a service, which keeps the old version until restarted.
+restart_insight() {
+  if command -v insight-admin >/dev/null 2>&1; then
+    insight-admin restart \
+      || echo "⚠️  Insight was not restarted. To retry, run: insight-admin restart"
+  fi
 }
 
 locate_package_staging() {

@@ -1857,7 +1857,6 @@ def _write_fake_neat_status(
     tmp_path: Path,
     status: object,
     online_status: object | None = None,
-    update_exit_code: int = 0,
 ) -> None:
     """Write a fake `neat`; without `online_status`, its update check fails."""
     bin_dir = tmp_path / "bin"
@@ -1879,9 +1878,6 @@ def _write_fake_neat_status(
             if [[ "$*" == "--json" && -n '{online_payload}' ]]; then
               printf '%s\\n' '{online_payload}'
               exit 0
-            fi
-            if [[ "$*" == "update --yes --insight-only" ]]; then
-              exit {update_exit_code}
             fi
             exit 1
             """
@@ -1933,7 +1929,6 @@ def _run_installer_with_neat_status(
     core: dict[str, str] | None = None,
     compatible_core_version: str | None = COMPATIBLE,
     online_status: object | None = None,
-    update_exit_code: int = 0,
     sdk: bool = False,
     paired: bool = False,
     extra_env: dict[str, str] | None = None,
@@ -1942,7 +1937,7 @@ def _run_installer_with_neat_status(
     package_dir = tmp_path / "package"
     _write_vulcan_runtime(package_dir, core or {"ref": "develop", "spec": "5326276ff765"})
     if status is not None:
-        _write_fake_neat_status(tmp_path, status, online_status, update_exit_code)
+        _write_fake_neat_status(tmp_path, status, online_status)
     env = dict(extra_env or {})
     if sdk:
         sdk_release = tmp_path / "sdk-release"
@@ -1975,7 +1970,6 @@ KEPT_CORE = (
 )
 CORE_INSTALL_CALL = "neat install -d . -t minimal core@develop:5326276ff765"
 LATEST_INSIGHT = "0.0.0+main.bb45295"
-INSIGHT_UPDATE_CALL = "update --yes --insight-only"
 SDK_CORE_INSTALL_CALL = f"NEAT_INSTALLER_SKIP_DEVKIT_SYNC=ON {CORE_INSTALL_CALL}"
 INSIGHT_INSTALL_CALL = "neat install -d . insight"
 
@@ -2016,8 +2010,7 @@ def test_vulcan_installer_updates_insight_when_neat_reports_a_newer_version(tmp_
     assert proc.returncode == 0, proc.stderr + proc.stdout
     assert _row("🔄", "Insight", f"0.0.0+main.bedca8f → {LATEST_INSIGHT}") in proc.stdout
     assert f"❓ Install Insight {LATEST_INSIGHT}? [Y/n]" in proc.stdout
-    assert INSIGHT_UPDATE_CALL in _neat_calls(tmp_path)
-    assert _sima_cli_calls(tmp_path) == []
+    assert _sima_cli_calls(tmp_path) == [INSIGHT_INSTALL_CALL]
     assert "already installed" not in proc.stdout
     assert _apps_installed(tmp_path)
 
@@ -2029,7 +2022,7 @@ def test_vulcan_installer_keeps_insight_when_the_update_is_declined(tmp_path):
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
     assert f"❓ Install Insight {LATEST_INSIGHT}? [Y/n]" in proc.stdout
-    assert INSIGHT_UPDATE_CALL not in _neat_calls(tmp_path)
+    assert _sima_cli_calls(tmp_path) == []
     assert _apps_installed(tmp_path)
 
 
@@ -2044,7 +2037,7 @@ def test_vulcan_installer_does_not_ask_when_no_insight_update_is_reported(
     assert proc.returncode == 0, proc.stderr + proc.stdout
     assert INSIGHT_ROW in proc.stdout
     assert "[Y/n]" not in proc.stdout
-    assert INSIGHT_UPDATE_CALL not in _neat_calls(tmp_path)
+    assert _sima_cli_calls(tmp_path) == []
 
 
 def test_vulcan_installer_keeps_insight_when_the_update_check_fails(tmp_path):
@@ -2053,7 +2046,7 @@ def test_vulcan_installer_keeps_insight_when_the_update_check_fails(tmp_path):
     assert proc.returncode == 0, proc.stderr + proc.stdout
     assert "--json" in _neat_calls(tmp_path)
     assert "[Y/n]" not in proc.stdout
-    assert INSIGHT_UPDATE_CALL not in _neat_calls(tmp_path)
+    assert _sima_cli_calls(tmp_path) == []
     assert _apps_installed(tmp_path)
 
 
@@ -2062,11 +2055,61 @@ def test_vulcan_installer_finishes_apps_when_the_insight_update_fails(tmp_path):
         tmp_path,
         _neat_status(),
         online_status=_insight_update_status(True),
-        update_exit_code=1,
+        extra_env={"NEAT_APPS_TEST_SIMA_CLI_FAIL_TARGET": "insight"},
     )
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
     assert "⚠️  Insight was not updated." in proc.stdout
+    assert _apps_installed(tmp_path)
+
+
+def _write_fake_insight_admin(tmp_path: Path, exit_code: int = 0) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    admin_path = bin_dir / "insight-admin"
+    admin_path.write_text(
+        f"""#!/usr/bin/env bash\necho "$*" >> "{tmp_path / "admin-args.txt"}"\nexit {exit_code}\n""",
+        encoding="utf-8",
+    )
+    admin_path.chmod(0o755)
+
+
+def _insight_admin_calls(tmp_path: Path) -> list[str]:
+    path = tmp_path / "admin-args.txt"
+    return path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+
+
+def test_vulcan_installer_restarts_the_insight_service_after_an_update(tmp_path):
+    _write_fake_insight_admin(tmp_path)
+    proc = _run_installer_with_neat_status(
+        tmp_path, _neat_status(), online_status=_insight_update_status(True)
+    )
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert _insight_admin_calls(tmp_path) == ["restart"]
+
+
+def test_vulcan_installer_does_not_restart_insight_when_the_update_fails(tmp_path):
+    _write_fake_insight_admin(tmp_path)
+    proc = _run_installer_with_neat_status(
+        tmp_path,
+        _neat_status(),
+        online_status=_insight_update_status(True),
+        extra_env={"NEAT_APPS_TEST_SIMA_CLI_FAIL_TARGET": "insight"},
+    )
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert _insight_admin_calls(tmp_path) == []
+
+
+def test_vulcan_installer_finishes_apps_when_the_insight_restart_fails(tmp_path):
+    _write_fake_insight_admin(tmp_path, exit_code=1)
+    proc = _run_installer_with_neat_status(
+        tmp_path, _neat_status(), online_status=_insight_update_status(True)
+    )
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert "⚠️  Insight was not restarted." in proc.stdout
     assert _apps_installed(tmp_path)
 
 
