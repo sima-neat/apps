@@ -238,9 +238,8 @@ read_local_neat_status() {
   fi
 }
 
-# Prints the newer version `neat --json` reports for an installed Insight, or nothing
-# when Insight is current or the update check fails. `neat` compares against
-# Insight's installed channel and knows which virtual environment it runs from.
+# Prints the `main` version to offer for an installed Insight, or nothing when
+# Insight is current or the update check fails. `main` is what sima-cli installs.
 read_insight_update() {
   local status_json
 
@@ -248,7 +247,7 @@ read_insight_update() {
     return 0
   fi
   # The check can take 8 seconds per request, so it stays out of the offline status.
-  status_json="$(run_with_timeout 40 neat --json 2>/dev/null)" || return 0
+  status_json="$(run_with_timeout 40 neat --json --channel main 2>/dev/null)" || return 0
   NEAT_STATUS_JSON="${status_json}" python3 - 2>/dev/null <<'PY' || true
 import json
 import os

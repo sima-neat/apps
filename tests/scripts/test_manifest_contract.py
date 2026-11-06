@@ -478,6 +478,9 @@ def _run_vulcan_installer(
     no_neat_dir.mkdir(exist_ok=True)
     (no_neat_dir / "neat").write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
     (no_neat_dir / "neat").chmod(0o755)
+    # Likewise, a successful Insight install never restarts a host's real service.
+    (no_neat_dir / "insight-admin").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    (no_neat_dir / "insight-admin").chmod(0o755)
     env = os.environ.copy()
     env.update(
         {
@@ -1875,7 +1878,7 @@ def _write_fake_neat_status(
             EOF
               exit 0
             fi
-            if [[ "$*" == "--json" && -n '{online_payload}' ]]; then
+            if [[ "$*" == "--json --channel main" && -n '{online_payload}' ]]; then
               printf '%s\\n' '{online_payload}'
               exit 0
             fi
@@ -2015,6 +2018,20 @@ def test_vulcan_installer_updates_insight_when_neat_reports_a_newer_version(tmp_
     assert _apps_installed(tmp_path)
 
 
+def test_vulcan_installer_offers_main_to_insight_from_another_channel(tmp_path):
+    develop_version = "0.0.0+develop.abc1234"
+    status = _neat_status()
+    status["components"]["insight"]["version"] = develop_version
+    proc = _run_installer_with_neat_status(
+        tmp_path, status, online_status=_insight_update_status(True)
+    )
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert _row("🔄", "Insight", f"{develop_version} → {LATEST_INSIGHT}") in proc.stdout
+    assert f"❓ Install Insight {LATEST_INSIGHT}? [Y/n]" in proc.stdout
+    assert _sima_cli_calls(tmp_path) == [INSIGHT_INSTALL_CALL]
+
+
 def test_vulcan_installer_keeps_insight_when_the_update_is_declined(tmp_path):
     proc = _run_installer_with_neat_status(
         tmp_path, _neat_status(), input_text="n\n", online_status=_insight_update_status(True)
@@ -2044,7 +2061,7 @@ def test_vulcan_installer_keeps_insight_when_the_update_check_fails(tmp_path):
     proc = _run_installer_with_neat_status(tmp_path, _neat_status())
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
-    assert "--json" in _neat_calls(tmp_path)
+    assert "--json --channel main" in _neat_calls(tmp_path)
     assert "[Y/n]" not in proc.stdout
     assert _sima_cli_calls(tmp_path) == []
     assert _apps_installed(tmp_path)
