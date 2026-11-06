@@ -129,6 +129,41 @@ to confirm detections without watching Insight, set `output.save_dir` to a
 directory and `output.save_every` to a non-zero interval; the application then
 writes annotated frames there as it runs.
 
+## Performance
+
+Measured on a Modalix DevKit with Platform 3.0.0, the C++ application from the `apps@develop` package, and no other workload on the board. The configuration is the default except for the model and the input stream. Each figure is the rate, in FPS, at which Insight received detection metadata, averaged over 20 seconds after a 5-second warm-up. Input streams are traffic footage at 300 FPS for 720p and at 120 FPS for 1080p.
+
+Model size at 720p H.264:
+
+| Model file | FPS | Objects per frame |
+| --- | ---: | ---: |
+| `yolo26n-det-bf16-mla_tess-b1.tar.gz` | 214 | 7 |
+| `yolo26s-det-bf16-mla_tess-b1.tar.gz` | 114 | 10 |
+| `yolo26m-det-bf16-mla_tess-b1.tar.gz` (default) | 48 | 10 |
+| `yolo26l-det-bf16-mla_tess-b1.tar.gz` | 38 | not recorded |
+| `yolo26x-det-bf16-mla_tess-b1.tar.gz` | stops\*\* | |
+| `yolo26m-det-int8-b1.tar.gz` | 201 | 10 |
+
+Resolution and codec:
+
+| Input resolution | Codec | Default Medium bf16 | Medium INT8 | Nano INT8\*\*\* |
+| --- | --- | ---: | ---: | ---: |
+| 720p | H.264 | 48 | 201 | 217 |
+| 720p | H.265 | 48 | stops\* | 210 |
+| 720p | MJPEG | 48 | 202 | 205 |
+| 1080p | H.264 | 48 | 106 | 108 |
+| 1080p | H.265 | 48 | 97 | 101 |
+
+The 1080p figures use 120 FPS inputs. With 240 FPS 1080p inputs, the INT8 models stopped with `timed out waiting for detections` in every run, after processing up to 169 FPS, so these 1080p figures are below what the models can process. Keep the input rate at or below the figures in the table. INT8 Medium finds about as many objects per frame as the bf16 default and runs about four times faster.
+
+The Python application measured the same rates at 1080p H.264: 48 FPS with the default model and 107 FPS with Medium INT8.
+
+\* Stopped publishing in both 20-second runs with a 300 FPS input, after processing about 205 FPS.
+
+\*\* Stopped within seconds with `stage inbox backpressure timeout (node=3 FanOut, push_timeout_ms=5000)`, also with a 30 FPS input.
+
+\*\*\* `yolo26n-det-int8-b1.tar.gz`, downloaded from the same Model Zoo directory as the packages in [Prepare the Model](#prepare-the-model).
+
 ## Troubleshooting
 
 - Verify stream reachability if the first frame times out.
