@@ -417,8 +417,7 @@ void run(const Config& cfg) {
       sima_examples::require(sima_examples::nv12_to_bgr(frame_tensor(sample), frame, err), err);
       sample = simaai::neat::Sample{};
       const cv::Mat anomaly_map =
-          map_of(detector.model->run(std::vector<cv::Mat>{frame}, kPullTimeoutMs).front(),
-                 detector.map_side);
+          map_of(detector.model->run(std::vector<cv::Mat>{frame}).front(), detector.map_side);
       cv::Mat region_mask;
       const std::vector<Region> regions =
           regions_from_map(anomaly_map, cfg.threshold, cfg.min_region_px, region_mask);

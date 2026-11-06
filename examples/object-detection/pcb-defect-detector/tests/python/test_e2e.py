@@ -407,45 +407,6 @@ class TestE2E:
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
 
-    def test_timeout_aborts_the_batch(
-        self, e2e_model_path, apps_root, tmp_output_dir, test_timeout_ms,
-        skip_unless_e2e_ready, e2e_config_writer,
-    ):
-        """A timeout stops the run instead of being attributed to another image.
-
-        A frame that times out is still in the pipeline, so continuing would hand
-        its result to the next image's pull. A 1 ms timeout is far below the
-        ~200 ms inference, so nothing can complete and the run must abort with no
-        image reported as processed.
-        """
-        input_dir = apps_root / "assets" / "datasets-test" / "pcb"
-        skip_unless_e2e_ready(
-            input_dir.is_dir() and any(input_dir.iterdir()),
-            f"PCB test images are missing or empty: {input_dir}",
-        )
-
-        config_path = e2e_config_writer({
-            "io": {"input_dir": str(input_dir), "output_dir": str(tmp_output_dir)},
-            "runtime": {"timeout_ms": 1},
-        })
-        result = subprocess.run(
-            [sys.executable, str(MAIN_PY), "--config", str(config_path)],
-            capture_output=True, text=True, timeout=test_timeout_ms / 1000,
-            cwd=str(EXAMPLE_DIR),
-        )
-
-        assert result.returncode != 0, (
-            f"a run where inference timed out must not exit 0\nstdout:\n{result.stdout}"
-        )
-        assert "timeout" in result.stderr.lower(), (
-            f"the timeout must be named on stderr\nstderr:\n{result.stderr}"
-        )
-        progressed = re.search(r"Aborted after (\d+)/", result.stderr)
-        assert progressed and int(progressed.group(1)) == 0, (
-            f"no image can complete under a 1 ms timeout, so none may be reported as "
-            f"processed\nstderr:\n{result.stderr}"
-        )
-
     def test_shared_input_and_output_directory_is_rejected(
         self, apps_root, tmp_output_dir, test_timeout_ms, e2e_config_writer,
     ):

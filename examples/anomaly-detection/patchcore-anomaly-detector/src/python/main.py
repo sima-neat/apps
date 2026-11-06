@@ -107,7 +107,6 @@ class AppConfig:
     calibration: CalibrationConfig = field(default_factory=CalibrationConfig)
     scoring: ScoringConfig = field(default_factory=ScoringConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
-    timeout_ms: int = 5000
     frames: int = 0  # video_file/rtsp frame limit; 0 = run until the source ends
     profile: bool = False
 
@@ -168,7 +167,6 @@ def load_config(path: Path) -> AppConfig:
             insight_bitrate_kbps=int(insight.get("bitrate_kbps", 1000)),
             insight_metadata_port=int(insight.get("metadata_port", 9100)),
         ),
-        timeout_ms=int(runtime.get("timeout_ms", 5000)),
         frames=int(runtime.get("frames", 0)),
         profile=bool(runtime.get("profile", False)),
     )
@@ -211,8 +209,6 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("calibration.threshold_margin must be >= 1.0")
     if cfg.scoring.num_neighbors < 1:
         raise ValueError("scoring.num_neighbors must be >= 1")
-    if cfg.timeout_ms <= 0:
-        raise ValueError("runtime.timeout_ms must be > 0")
     if cfg.frames < 0:
         raise ValueError("runtime.frames must be >= 0")
     # --calibrate writes both bank files; neither may overwrite the model or each other.
@@ -285,10 +281,10 @@ def rgb_tensor(bgr) -> "pyneat.Tensor":
     return pyneat.Tensor.from_numpy(rgb, copy=True, image_format=pyneat.PixelFormat.RGB)
 
 
-def extract_from_bgr(model: "pyneat.Model", bgr, timeout_ms: int = 5000) -> "np.ndarray":
+def extract_from_bgr(model: "pyneat.Model", bgr) -> "np.ndarray":
     """Runs one host-decoded BGR image through the model and returns its (H, W, C)
     patch embedding."""
-    outputs = model.run([model_input_tensor(bgr)], timeout_ms=timeout_ms)
+    outputs = model.run([model_input_tensor(bgr)])
     if not outputs:
         raise RuntimeError("model returned no output tensors")
     return extract_hwc(np.asarray(outputs[0].to_numpy(copy=True)))
@@ -357,7 +353,7 @@ def cmd_calibrate(cfg: AppConfig) -> int:
         if bgr is None:
             print(f"[WARN] could not read image: {path}", file=sys.stderr)
             continue
-        per_image.append(extract_from_bgr(model, bgr, cfg.timeout_ms))
+        per_image.append(extract_from_bgr(model, bgr))
         if i % 10 == 0 or i == len(paths):
             print(f"  [{i}/{len(paths)}] {path.name}")
 
@@ -373,7 +369,7 @@ def cmd_calibrate(cfg: AppConfig) -> int:
         bgr = cv2.imread(str(path), cv2.IMREAD_COLOR)
         if bgr is None:
             continue
-        embedding = extract_from_bgr(model, bgr, cfg.timeout_ms)
+        embedding = extract_from_bgr(model, bgr)
         scored = bank.score(embedding, cfg.scoring.num_neighbors)
         scores.append(scored.image_score)
         patch_scores.extend(scored.score_map.ravel().tolist())
@@ -452,7 +448,7 @@ def cmd_score_image_dir(cfg: AppConfig, bank: MemoryBank, threshold: float, num_
             continue
 
         mla_start = time_ms()
-        embedding = extract_from_bgr(model, bgr, cfg.timeout_ms)
+        embedding = extract_from_bgr(model, bgr)
         mla_ms = time_ms() - mla_start
 
         host_start = time_ms()
@@ -570,7 +566,7 @@ def cmd_score_video_file(cfg: AppConfig, bank: MemoryBank, threshold: float, num
     try:
         while cfg.frames <= 0 or processed < cfg.frames:
             mla_start = time_ms()
-            outputs = runner.run([model_input_tensor(frame)], timeout_ms=cfg.timeout_ms)
+            outputs = runner.run([model_input_tensor(frame)])
             if not outputs:
                 raise RuntimeError("model returned no output tensors")
             embedding = extract_hwc(np.asarray(outputs[0].to_numpy(copy=True)))

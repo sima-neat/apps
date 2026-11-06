@@ -74,7 +74,6 @@ def main() -> int:
     input_dir = Path(io_cfg.get("input_dir", "assets/datasets/coco"))
     output_dir = Path(io_cfg.get("output_dir", "sandbox/depth-estimator"))
     infer_size = int(runtime.get("infer_size", 518))
-    timeout_ms = int(runtime.get("timeout_ms", 20000))
     queue_depth = int(runtime.get("queue_depth", 4))
     if not input_dir.is_dir():
         print(f"Input directory does not exist: {input_dir}", file=sys.stderr)
@@ -119,7 +118,7 @@ def main() -> int:
             rgb = np.ascontiguousarray(rgb, dtype=np.uint8)
             t_in = pyneat.Tensor.from_numpy(rgb, copy=True, image_format=pyneat.PixelFormat.RGB)
 
-            outputs = runner.run([t_in], timeout_ms=timeout_ms)
+            outputs = runner.run([t_in])
             if not outputs:
                 print(f"No output tensors for {img_path.name}", file=sys.stderr)
                 continue
