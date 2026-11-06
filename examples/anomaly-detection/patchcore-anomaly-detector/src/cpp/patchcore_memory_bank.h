@@ -1,5 +1,7 @@
 #pragma once
 
+#include <opencv2/core/mat.hpp>
+
 /// PatchCore memory-bank storage, coreset construction, and nearest-neighbor
 /// anomaly scoring -- non-parametric, so it runs host-side rather than in
 /// the compiled graph. On-disk pair: `memory_bank.npy` (float32 (N,
@@ -35,7 +37,7 @@ struct PatchEmbeddings {
 /// Normalizes a raw model output buffer to (H, W, C); `shape` is the
 /// tensor's shape (channel axis detected at runtime, not assumed), `flat`
 /// its row-major float32 payload.
-PatchEmbeddings extract_hwc(const std::vector<int64_t>& shape, const std::vector<float>& flat,
+PatchEmbeddings extract_hwc(const std::vector<int64_t>& shape, std::vector<float> flat,
                             int embed_dim);
 
 /// Nearest-neighbor distance from every patch in an image to the memory bank.
@@ -69,6 +71,7 @@ public:
   /// reweighting term (Eq. 7-8, Roth et al., CVPR 2022). `num_neighbors` <=
   /// 1 falls back to the plain max-of-score-map image score.
   [[nodiscard]] AnomalyResult score(const PatchEmbeddings& embeddings, int num_neighbors) const;
+  [[nodiscard]] AnomalyResult score(const cv::Mat& patches, int num_neighbors) const;
 
   [[nodiscard]] std::size_t size() const { return num_vectors_; }
   [[nodiscard]] std::size_t embed_dim() const { return embed_dim_; }

@@ -251,3 +251,35 @@ class TestThresholdAndMeta:
 
     def test_verify_bank_hash_skips_when_absent(self):
         pcs.verify_bank_hash({}, "/nonexistent/path.npy")  # should not raise
+
+
+@pytest.mark.unit
+class TestNv12Overlay:
+    @pytest.mark.parametrize("size", [(224, 224), (720, 720), (1280, 720)])
+    @pytest.mark.parametrize("sigma", [0, 4])
+    def test_normal_and_zero_opacity_leave_frame_unchanged(self, size, sigma):
+        width, height = size
+        frame = np.full((height * 3 // 2, width), 128, np.uint8)
+        frame[:height] = 100
+        for score, alpha in ((10, 0.45), (40, 0)):
+            original = frame.copy()
+            pcs.draw_nv12_overlay(frame, np.full((28, 28), score, np.float32),
+                                  sigma, alpha, 10, 20)
+            np.testing.assert_array_equal(frame, original)
+
+    def test_localized_highlight_updates_luma_and_its_chroma_block(self):
+        import cv2
+
+        frame = np.full((336, 224), 128, np.uint8)
+        frame[:224] = 100
+        scores = np.full((224, 224), 10, np.float32)
+        scores[:2, :2] = 40
+        pcs.draw_nv12_overlay(frame, scores, 0, 0.45, 10, 20)
+        # JET's last color is BGR (0, 0, 128), converted by OpenCV to limited-range YUV.
+        color = cv2.cvtColor(np.full((2, 2, 3), (0, 0, 128), np.uint8),
+                             cv2.COLOR_BGR2YUV_I420).reshape(-1)
+        expected = np.full((336, 224), 128, np.uint8)
+        expected[:224] = 100
+        expected[:2, :2] = round(0.55 * 100 + 0.45 * int(color[0]))
+        expected[224, :2] = [round(0.55 * 128 + 0.45 * int(c)) for c in color[4:6]]
+        np.testing.assert_array_equal(frame, expected)

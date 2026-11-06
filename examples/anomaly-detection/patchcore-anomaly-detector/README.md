@@ -160,14 +160,13 @@ For `video_file` and `rtsp`, each frame's verdict is also sent to Insight as `cl
 
 `mla` is the model time per image (the first one includes setup); `host` is the nearest-neighbor scoring and overlay drawing. In `rtsp` mode the model runs inside the graph, so `mla` there is the wait for the next frame. `video_file` and `rtsp` save every Nth overlay frame to `output.dir` only when `output.save_every` is above 0 (off by default; saving has no limit, so keep N large on long runs).
 
-Measured on a Modalix DevKit (Platform 3.0, build 2121), RTSP at 30 fps with the default bank:
+Measured on a Modalix DevKit (Platform 3.0, build B2499), RTSP at 30 fps with the default bank:
 
 | Stream | C++ | Python |
 | --- | --- | --- |
-| 224x224 | about 26 fps | about 25 fps |
-| 720x720 | about 15 fps | about 18 fps |
+| 720x720 | about 30 fps | about 30 fps |
 
-At larger frames, drawing the full-size heatmap takes most of the host time. When scoring is slower than the stream, the app drops older frames instead of queueing them, so the Insight view stays within about a second of the camera. A larger `calibration.coreset_ratio` lowers the frame rate only slightly (about 3 fps less at a bank of about 100 vectors).
+`rtsp` renders directly into NV12; `image_dir` and `video_file` use OpenCV’s BGR frames. Heatmaps are smoothed at model resolution. The bounded output queue drops older frames if processing falls behind. Larger memory banks increase host scoring time.
 
 ## Troubleshooting
 
@@ -184,7 +183,7 @@ At larger frames, drawing the full-size heatmap takes most of the host time. Whe
 
 ## Source Files
 
-- C++ reference source: `src/cpp/main.cpp`, `src/cpp/patchcore_memory_bank.h`/`.cpp`
+- C++ reference source: `src/cpp/main.cpp`, `src/cpp/patchcore_memory_bank.h`/`.cpp`, `src/cpp/patchcore_overlay.h`
 - Python source: `src/python/main.py`, `src/python/patchcore_scoring.py`
 - Shared config: `src/common/config.yaml`
 
