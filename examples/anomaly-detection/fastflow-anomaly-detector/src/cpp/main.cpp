@@ -242,7 +242,6 @@ struct InsightVideo {
     source.depth = 3;
     source.fps_n = fps;
     source.fps_d = 1;
-    source.memory_policy = simaai::neat::InputMemoryPolicy::Ev74;
     auto options = simaai::neat::nodes::groups::VideoSenderOptions::FromRaw({.fps = fps});
     options.host = cfg.insight_host;
     options.channel = 0;

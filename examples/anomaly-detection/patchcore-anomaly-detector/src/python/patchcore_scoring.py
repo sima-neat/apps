@@ -22,6 +22,8 @@ import numpy as np
 
 # WideResNet-50 layer2 (512ch) + upsampled layer3 (1024ch) concatenated patch embedding.
 EMBED_DIM = 1536
+MODEL_INPUT_SIZE = (224, 224)
+OVERLAY_LUT_LOW = 191
 
 
 def sha256_file(path: str | Path) -> str:
@@ -167,13 +169,77 @@ class MemoryBank:
         return ScoredImage(score_map=score_map, image_score=weight * s_star)
 
 
-def upsample_and_smooth(score_map: np.ndarray, out_size: tuple[int, int], sigma: float) -> np.ndarray:
-    """Upsamples a patch-grid score map to `out_size` (width, height) pixels and
-    applies Gaussian smoothing, matching the PatchCore anomaly-map post-process."""
-    upsampled = cv2.resize(score_map, out_size, interpolation=cv2.INTER_LINEAR)
-    if sigma <= 0:
-        return upsampled
-    return cv2.GaussianBlur(upsampled, ksize=(0, 0), sigmaX=sigma)
+def letterbox_rect(width: int, height: int) -> tuple[int, int, int, int]:
+    """(x, y, w, h) of a width x height frame inside the model input after a
+    letterbox resize: scaled to fit, keeping its aspect ratio, and centered."""
+    in_w, in_h = MODEL_INPUT_SIZE
+    scale = min(in_w / width, in_h / height)
+    w, h = round(width * scale), round(height * scale)
+    return (in_w - w) // 2, (in_h - h) // 2, w, h
+
+
+def _overlay_maps(score_map, size, sigma: float, lower: float, upper: float):
+    width, height = size
+    x, y, w, h = letterbox_rect(width, height)
+    canvas = cv2.resize(score_map, MODEL_INPUT_SIZE, interpolation=cv2.INTER_LINEAR)
+    heat = canvas[y:y + h, x:x + w]
+    if sigma > 0:
+        heat = cv2.GaussianBlur(heat, (0, 0), sigmaX=sigma * w / width, sigmaY=sigma * h / height)
+    heat = cv2.resize(heat, size, interpolation=cv2.INTER_LINEAR)
+    mask = cv2.compare(heat, upper, cv2.CMP_GT)
+    if not cv2.countNonZero(mask):
+        return None
+    scale = (255 - OVERLAY_LUT_LOW) / max(upper - lower, 1e-6)
+    return cv2.convertScaleAbs(heat, alpha=scale, beta=OVERLAY_LUT_LOW - upper * scale), mask
+
+
+def draw_overlay(bgr, score_map, sigma: float, alpha: float, patch_scale_min: float,
+                 patch_scale_max: float):
+    """Draw calibrated highlights, leaving all other pixels unchanged."""
+    maps = _overlay_maps(score_map, bgr.shape[1::-1], sigma, patch_scale_min, patch_scale_max)
+    out = bgr.copy()
+    if maps is not None:
+        levels, mask = maps
+        color = cv2.applyColorMap(levels, cv2.COLORMAP_JET)
+        cv2.copyTo(cv2.addWeighted(bgr, 1 - alpha, color, alpha, 0), mask, out)
+    return out
+
+
+def _nv12_colormap():
+    colors = cv2.applyColorMap(np.arange(256, dtype=np.uint8).reshape(1, 256), cv2.COLORMAP_JET)
+    # Each swatch occupies a complete 2x2 chroma block.
+    swatches = cv2.resize(colors, (512, 2), interpolation=cv2.INTER_NEAREST)
+    i420 = cv2.cvtColor(swatches, cv2.COLOR_BGR2YUV_I420).reshape(-1)
+    y_end = swatches.shape[0] * swatches.shape[1]
+    u_end = y_end + 256
+    table = np.empty((256, 1, 3), dtype=np.uint8)
+    table[:, 0, 0] = i420[:swatches.shape[1]:2]
+    table[:, 0, 1] = i420[y_end:u_end]
+    table[:, 0, 2] = i420[u_end:]
+    return table
+
+
+_NV12_COLORMAP = _nv12_colormap()
+
+
+def draw_nv12_overlay(nv12, score_map, sigma: float, alpha: float, patch_scale_min: float,
+                      patch_scale_max: float) -> None:
+    """Blend calibrated highlights into an owned NV12 frame in place."""
+    height, width = nv12.shape[0] * 2 // 3, nv12.shape[1]
+    maps = _overlay_maps(score_map, (width, height), sigma, patch_scale_min, patch_scale_max)
+    if maps is None:
+        return
+    levels, mask = maps
+    y_plane = nv12[:height]
+    y_colors = cv2.LUT(levels, np.ascontiguousarray(_NV12_COLORMAP[:, :, 0]))
+    cv2.copyTo(cv2.addWeighted(y_plane, 1 - alpha, y_colors, alpha, 0), mask, y_plane)
+    uv_plane = nv12[height:].reshape(height // 2, width // 2, 2)
+    # One color sample per 2x2 NV12 chroma block.
+    uv_levels = cv2.resize(levels, (width // 2, height // 2), interpolation=cv2.INTER_NEAREST)
+    uv_colors = np.empty_like(uv_plane)
+    cv2.mixChannels([cv2.applyColorMap(uv_levels, _NV12_COLORMAP)], [uv_colors], [1, 0, 2, 1])
+    uv_mask = cv2.resize(mask, (width // 2, height // 2), interpolation=cv2.INTER_NEAREST)
+    cv2.copyTo(cv2.addWeighted(uv_plane, 1 - alpha, uv_colors, alpha, 0), uv_mask, uv_plane)
 
 
 def percentile_threshold(scores: list[float], percentile: float) -> float:

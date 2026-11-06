@@ -1,8 +1,10 @@
-"""Run SuperPoint on a video and stream the feature-point overlay to Insight."""
+"""Run SuperPoint on an RTSP stream and send the feature-point overlay to Insight."""
 
 from __future__ import annotations
 
 import argparse
+import os
+import signal
 import sys
 from pathlib import Path
 
@@ -25,12 +27,14 @@ def load_config(path: Path) -> argparse.Namespace:
     with path.open("r", encoding="utf-8") as handle:
         raw = yaml.safe_load(handle) or {}
     model = raw.get("model", {})
-    io = raw.get("io", {})
+    source = raw.get("source", {})
     insight = raw.get("output", {}).get("insight", {})
     runtime = raw.get("runtime", {})
     config = argparse.Namespace(
         model=Path(model.get("path", "models/superpoint_mpk.tar.gz")),
-        input=Path(io.get("input", "assets/datasets/tum-rgbd/freiburg1-desk.mp4")),
+        rtsp_url=str(source.get("rtsp_url", "")),
+        tcp=bool(source.get("tcp", True)),
+        latency_ms=int(source.get("latency_ms", 100)),
         insight_host=str(insight.get("host", "127.0.0.1")),
         video_port=int(insight.get("video_port", 9000)),
         channel=int(insight.get("channel", 0)),
@@ -39,6 +43,8 @@ def load_config(path: Path) -> argparse.Namespace:
     )
     if config.frames < 0:
         raise ValueError("runtime.frames must be >= 0")
+    if not config.rtsp_url or config.latency_ms < 0:
+        raise ValueError("set source.rtsp_url and a non-negative source.latency_ms")
     if not config.insight_host:
         raise ValueError("output.insight.host must be set")
     if not 0 < config.video_port <= 65535:
@@ -119,6 +125,68 @@ def input_tensor(frame, np, pyneat):
     )
 
 
+def probe_stream(config, cv2):
+    key = "OPENCV_FFMPEG_CAPTURE_OPTIONS"
+    previous = os.environ.get(key)
+    os.environ[key] = f"rtsp_transport;{'tcp' if config.tcp else 'udp'}"
+    try:
+        video = cv2.VideoCapture(config.rtsp_url)
+    finally:
+        if previous is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = previous
+    width = int(video.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(video.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fps = round(video.get(cv2.CAP_PROP_FPS))
+    video.release()
+    if width <= 0 or height <= 0 or fps <= 0:
+        raise RuntimeError(f"could not read the frame size and rate of {config.rtsp_url}")
+    return width, height, fps
+
+
+def build_source(config, width, height, fps, pyneat):
+    options = pyneat.RtspDecodedInputOptions()
+    options.url = config.rtsp_url
+    options.tcp = config.tcp
+    options.latency_ms = config.latency_ms
+    options.fallback_h264_width = width
+    options.fallback_h264_height = height
+    options.fallback_h264_fps = fps
+    output = pyneat.OutputOptions.latest()
+    output.max_buffers = 4
+    graph = pyneat.Graph("rtsp")
+    graph.connect(pyneat.groups.rtsp_decoded_input(options), pyneat.nodes.output("frame", output))
+    run_options = pyneat.RunOptions()
+    run_options.preset = pyneat.RunPreset.Realtime
+    run_options.queue_depth = 4
+    run_options.overflow_policy = pyneat.OverflowPolicy.KeepLatest
+    run_options.output_memory = pyneat.OutputMemory.ZeroCopy
+    return graph, graph.build(run_options)
+
+
+def pull_frame(run, np, cv2, pyneat):
+    sample = run.pull("frame", 20000)
+    if sample is None:
+        raise RuntimeError("timed out waiting for an RTSP frame")
+    field = sample
+    if sample.fields:
+        field = next(part for part in sample.fields if part.stream_label == "frame")
+    tensor = field.tensor if field.kind == pyneat.SampleKind.Tensor else field.tensors[0]
+    width, height = tensor.width(), tensor.height()
+    payload = tensor.copy_payload_bytes()
+    planes = {plane.role: plane for plane in tensor.planes}
+    packed = np.empty((height * 3 // 2, width), np.uint8)
+    for role, rows, row0 in ((pyneat.PlaneRole.Y, height, 0),
+                            (pyneat.PlaneRole.UV, height // 2, height)):
+        plane = planes[role]
+        stride = plane.strides_bytes[0] if plane.strides_bytes else width
+        packed[row0:row0 + rows] = np.ndarray((rows, width), np.uint8, buffer=payload,
+                                            offset=plane.byte_offset, strides=(stride, 1))
+    # Return owned pixels so the decoder loan is released before model execution.
+    return cv2.cvtColor(packed, cv2.COLOR_YUV2BGR_NV12)
+
+
 def draw_points(frame, points, cv2) -> None:
     for x, y in points:
         cv2.circle(
@@ -145,13 +213,12 @@ def build_video_sender(config, fps, width, height, np, pyneat):
     output_fps = max(1, round(fps))
     input_options = pyneat.InputOptions()
     input_options.payload_type = pyneat.PayloadType.Image
-    input_options.format = pyneat.Format.RGB
+    input_options.format = pyneat.Format.BGR
     input_options.width = width
     input_options.height = height
     input_options.depth = 3
     input_options.fps_n = output_fps
     input_options.fps_d = 1
-    input_options.memory_policy = pyneat.InputMemoryPolicy.Ev74
 
     encode = pyneat.SimaEncodeOptions()
     encode.fps = output_fps
@@ -167,19 +234,18 @@ def build_video_sender(config, fps, width, height, np, pyneat):
     seed = pyneat.Tensor.from_numpy(
         np.zeros((height, width, 3), dtype=np.uint8),
         copy=True,
-        image_format=pyneat.PixelFormat.RGB,
-        memory=pyneat.TensorMemory.EV74,
+        image_format=pyneat.PixelFormat.BGR,
+        memory=pyneat.TensorMemory.CPU,
     )
     return graph, graph.build([seed]), sender_options.video_port
 
 
-def stream_frame(run, frame, cv2, pyneat) -> None:
-    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+def stream_frame(run, frame, pyneat) -> None:
     tensor = pyneat.Tensor.from_numpy(
-        rgb,
+        frame,
         copy=True,
-        image_format=pyneat.PixelFormat.RGB,
-        memory=pyneat.TensorMemory.EV74,
+        image_format=pyneat.PixelFormat.BGR,
+        memory=pyneat.TensorMemory.CPU,
     )
     if not run.push([tensor]):
         raise RuntimeError("Insight video push failed")
@@ -212,45 +278,40 @@ def main() -> int:
     if not config.model.is_file():
         print(f"Error: model does not exist: {config.model}", file=sys.stderr)
         return 2
-    if not config.input.is_file():
-        print(f"Error: input video does not exist: {config.input}", file=sys.stderr)
-        return 2
 
     import cv2
     import numpy as np
     import pyneat
 
-    video = cv2.VideoCapture(str(config.input))
-    ok, frame = video.read()
-    if not video.isOpened() or not ok:
-        print(f"Error: failed to read input video: {config.input}", file=sys.stderr)
-        return 2
-
-    fps = video.get(cv2.CAP_PROP_FPS)
-    fps = fps if np.isfinite(fps) and fps > 0 else 30.0
-
     runner = None
     video_run = None
+    source_run = None
+    stop_requested = False
+
+    def request_stop(_signum, _frame):
+        nonlocal stop_requested
+        stop_requested = True
+
+    for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, request_stop)
     try:
-        validate_frame(frame, np)
+        input_width, input_height, fps = probe_stream(config, cv2)
+        _source_graph, source_run = build_source(config, input_width, input_height, fps, pyneat)
+        frame = pull_frame(source_run, np, cv2, pyneat)
+        validate_frame(frame, np, (input_height, input_width, 3))
         input_shape = frame.shape
-        input_height, input_width = input_shape[:2]
         model = pyneat.Model(
             str(config.model), model_options(pyneat, input_width, input_height)
         )
         model_input = input_tensor(frame, np, pyneat)
-        runner = model.build(
-            [model_input],
-            route_options=pyneat.ModelRouteOptions(),
-            run_options=pyneat.RunOptions(),
-        )
+        runner = model.build([model_input])
         _video_graph, video_run, video_port = build_video_sender(
             config, fps, input_width, input_height, np, pyneat
         )
 
         processed = 0
         total_points = 0
-        while True:
+        while not stop_requested and (config.frames <= 0 or processed < config.frames):
             output = runner.run([model_input])
             points = feature_points(
                 output,
@@ -261,18 +322,16 @@ def main() -> int:
             )
             total_points += len(points)
             draw_points(frame, points, cv2)
-            stream_frame(video_run, frame, cv2, pyneat)
+            stream_frame(video_run, frame, pyneat)
             processed += 1
 
-            if config.frames > 0 and processed >= config.frames:
+            if stop_requested or (config.frames > 0 and processed >= config.frames):
                 break
-            ok, frame = video.read()
-            if not ok:
-                break
+            frame = pull_frame(source_run, np, cv2, pyneat)
             validate_frame(frame, np, input_shape)
             model_input = input_tensor(frame, np, pyneat)
 
-        average = total_points / processed
+        average = total_points / processed if processed else 0.0
         print(
             f"frames={processed} average_points={average:.1f} "
             f"descriptor_dim={DESCRIPTOR_DIM} "
@@ -287,7 +346,8 @@ def main() -> int:
             runner.close()
         if video_run is not None:
             video_run.close()
-        video.release()
+        if source_run is not None:
+            source_run.close()
 
 
 if __name__ == "__main__":

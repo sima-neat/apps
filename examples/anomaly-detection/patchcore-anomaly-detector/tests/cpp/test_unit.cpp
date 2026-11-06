@@ -1,7 +1,5 @@
-// Unit test for patchcore (C++): validates CLI arg handling. The scoring
-// math itself is covered against fixed embeddings in
-// tests/python/test_unit.py (same algorithm, see src/cpp/patchcore_memory_bank.h) --
-// this target only links support_testing, not support_runtime.
+// PatchCore CLI validation and direct NV12 overlay checks.
+#include "../../src/cpp/patchcore_overlay.h"
 #include "support/testing/test_config.h"
 #include "support/testing/test_process.h"
 
@@ -12,13 +10,43 @@
 using sima_examples::testing::ProcessResult;
 using sima_examples::testing::spawn_and_wait;
 
+namespace {
+int check_nv12_overlays() {
+  cv::Mat frame(336, 224, CV_8U, cv::Scalar(128));
+  frame.rowRange(0, 224).setTo(100);
+  patchcore::AnomalyResult result;
+  result.score_map.assign(224 * 224, 10);
+  const cv::Mat original = frame.clone();
+  patchcore::draw_nv12_overlay(frame, result, 224, 224, 4, 0.45, 10, 20);
+  if (cv::norm(frame, original, cv::NORM_INF) != 0) {
+    std::cerr << "[FAIL] normal NV12 frame was changed\n";
+    return 1;
+  }
+  result.score_map[0] = result.score_map[1] = result.score_map[224] = result.score_map[225] = 40;
+  patchcore::draw_nv12_overlay(frame, result, 224, 224, 0, 0.45, 10, 20);
+  cv::Mat color_bgr(2, 2, CV_8UC3, cv::Scalar(0, 0, 128)), color_yuv;
+  cv::cvtColor(color_bgr, color_yuv, cv::COLOR_BGR2YUV_I420);
+  const auto* color = color_yuv.ptr<uint8_t>();
+  cv::Mat expected = original.clone();
+  expected(cv::Rect(0, 0, 2, 2)).setTo(cv::saturate_cast<uint8_t>(0.55 * 100 + 0.45 * color[0]));
+  expected.at<uint8_t>(224, 0) = cv::saturate_cast<uint8_t>(0.55 * 128 + 0.45 * color[4]);
+  expected.at<uint8_t>(224, 1) = cv::saturate_cast<uint8_t>(0.55 * 128 + 0.45 * color[5]);
+  if (cv::norm(frame, expected, cv::NORM_INF) != 0) {
+    std::cerr << "[FAIL] NV12 highlight changed the wrong pixels or colors\n";
+    return 1;
+  }
+  std::cout << "[OK] NV12 heatmap preserves normal pixels and blends luma/chroma\n";
+  return 0;
+}
+} // namespace
+
 int main(int argc, char** argv) {
   if (argc < 2) {
     std::cerr << "[ERR] usage: " << argv[0] << " <example-binary>\n";
     return 2;
   }
   const std::string binary = argv[1];
-  int failures = 0;
+  int failures = check_nv12_overlays();
 
   // Test 1: help exits successfully and prints usage.
   {

@@ -1,8 +1,10 @@
 model:
   path: models/superpoint_mpk.tar.gz
 
-io:
-  input: assets/datasets/tum-rgbd/freiburg1-desk.mp4
+source:
+  rtsp_url: <rtsp-url>  # e.g. rtsp://<insight-host-ip>:8554/src1
+  tcp: true
+  latency_ms: 100
 
 output:
   insight:
