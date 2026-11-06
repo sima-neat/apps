@@ -487,7 +487,6 @@ struct Config {
   bool landmarks = true;
   bool profile = false;
   int num_runs = 100;
-  int timeout_ms = 20000;
 };
 
 static bool is_image_file(const fs::path& path) {
@@ -522,7 +521,6 @@ static Config load_config(const fs::path& path) {
   cfg.landmarks = raw.bool_or("decode.landmarks", true);
   cfg.profile = raw.bool_or("runtime.profile", false);
   cfg.num_runs = raw.int_or("runtime.num_runs", 100);
-  cfg.timeout_ms = raw.int_or("runtime.timeout_ms", 20000);
   if (cfg.conf < 0.0f || cfg.conf > 1.0f) {
     throw std::runtime_error("decode.confidence_threshold must be in [0.0, 1.0]");
   }
@@ -534,9 +532,6 @@ static Config load_config(const fs::path& path) {
   }
   if (cfg.num_runs < 1) {
     throw std::runtime_error("runtime.num_runs must be >= 1");
-  }
-  if (cfg.timeout_ms <= 0) {
-    throw std::runtime_error("runtime.timeout_ms must be > 0");
   }
   return cfg;
 }
@@ -626,7 +621,7 @@ int main(int argc, char** argv) {
         if (!run.push(simaai::neat::TensorList{input_t})) {
           throw std::runtime_error("run.push failed during profiling");
         }
-        auto out_sample = run.pull(args.timeout_ms);
+        auto out_sample = run.pull();
         const auto t1 = std::chrono::steady_clock::now();
         if (!out_sample.has_value()) {
           throw std::runtime_error("run.pull returned no sample during profiling");
@@ -710,7 +705,7 @@ int main(int argc, char** argv) {
           throw std::runtime_error("run.push failed");
         }
 
-        auto out_sample = run.pull(args.timeout_ms);
+        auto out_sample = run.pull();
         if (!out_sample.has_value()) {
           throw std::runtime_error("run.pull returned no sample");
         }

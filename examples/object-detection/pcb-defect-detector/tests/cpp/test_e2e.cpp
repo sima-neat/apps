@@ -464,48 +464,6 @@ int main(int argc, char** argv) {
     remove_dir(broken_out.string());
   }
 
-  // A timeout stops the run instead of being attributed to another image.
-  //
-  // A frame that times out is still in the pipeline, so continuing would hand its
-  // result to the next image's pull. A 1 ms timeout is far below the ~200 ms
-  // inference, so nothing can complete and the run must abort with no image
-  // reported as processed.
-  if (rc == 0) {
-    const auto timeout_out = fs::path(out_dir).parent_path() / "timeout-output";
-    fs::create_directories(timeout_out);
-    const fs::path timeout_config = fs::path(out_dir).parent_path() / "config_timeout.yaml";
-    write_e2e_config(kExample, timeout_config,
-                     {{"model.path", model_path},
-                      {"model.labels", labels_file},
-                      {"io.input_dir", input_dir},
-                      {"io.output_dir", timeout_out.string()},
-                      {"runtime.timeout_ms", "1"}});
-
-    const auto timed = spawn_and_wait(binary, {"--config", timeout_config.string()}, timeout);
-    const std::string aborted = extract_line(timed.stderr_text, "Aborted after ");
-    const int processed = summary_field(aborted, "Aborted after ");
-
-    if (timed.exit_code == 0) {
-      std::cerr << "[FAIL] a run where inference timed out must not exit 0\n";
-      std::cerr << "stdout:\n" << timed.stdout_text << "\n";
-      rc = 1;
-    } else if (timed.stderr_text.find("timeout") == std::string::npos &&
-               timed.stderr_text.find("Timeout") == std::string::npos) {
-      std::cerr << "[FAIL] the timeout must be named on stderr\n";
-      std::cerr << "stderr:\n" << timed.stderr_text << "\n";
-      rc = 1;
-    } else if (processed != 0) {
-      std::cerr << "[FAIL] no image can complete under a 1 ms timeout, so none may be "
-                   "reported as processed; got "
-                << processed << "\n";
-      std::cerr << "stderr:\n" << timed.stderr_text << "\n";
-      rc = 1;
-    } else {
-      std::cout << "[OK] a timeout aborts the run with no image reported as processed\n";
-    }
-    remove_dir(timeout_out.string());
-  }
-
   // One directory for both input and output would make outputs become inputs.
   //
   // An annotated image written for one board would be re-read as a source for a

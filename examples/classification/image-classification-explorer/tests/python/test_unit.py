@@ -106,7 +106,7 @@ def _make_fake_pyneat(num_classes=5, fail_message=None, fail_run_for_paths=None)
         def __del__(self):
             mod.live_models -= 1
 
-        def run(self, tensors, timeout_ms=0):
+        def run(self, tensors):
             if self.path in fail_run_for_paths:
                 raise RuntimeError(f"simulated inference failure for {self.path}")
             # hashlib (not the builtin hash()) so results are reproducible across
@@ -1307,8 +1307,8 @@ models:
         real_classify = main.classify
         swapped = {"done": False}
 
-        def classify_then_swap(model, profile, image_path, timeout_ms):
-            result = real_classify(model, profile, image_path, timeout_ms)
+        def classify_then_swap(model, profile, image_path):
+            result = real_classify(model, profile, image_path)
             if not swapped["done"]:
                 # Replace the file after the first model has read it.
                 swapped["done"] = True
@@ -1339,8 +1339,8 @@ models:
 
         real_classify = main.classify
 
-        def classify_then_swap(model, profile, image_path, timeout_ms):
-            result = real_classify(model, profile, image_path, timeout_ms)
+        def classify_then_swap(model, profile, image_path):
+            result = real_classify(model, profile, image_path)
             _make_image(image_path, color=(0, 255, 0), size=64)
             return result
 
@@ -1903,20 +1903,6 @@ class TestArgParsing:
         assert r.returncode == 2
         assert "Invalid configuration" in r.stderr
         assert "Traceback" not in r.stderr
-
-    @pytest.mark.parametrize("timeout", [0, -1])
-    def test_rejects_nonpositive_timeout(self, tmp_path, timeout):
-        """A zero or negative per-image timeout is not a usable bound."""
-        config_path = tmp_path / "config.yaml"
-        config_path.write_text(
-            f"runtime:\n  timeout_ms: {timeout}\nmodels:\n  m:\n    path: m.tar.gz\n"
-        )
-        r = subprocess.run(
-            [sys.executable, str(MAIN_PY), "--config", str(config_path)],
-            capture_output=True, text=True, timeout=20,
-        )
-        assert r.returncode == 2
-        assert "runtime.timeout_ms must be positive" in r.stderr
 
     @pytest.mark.parametrize(
         ("block", "expected"),

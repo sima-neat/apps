@@ -36,12 +36,9 @@ def load_config(path: Path) -> argparse.Namespace:
         channel=int(insight.get("channel", 0)),
         bitrate_kbps=int(insight.get("bitrate_kbps", 1000)),
         frames=int(runtime.get("frames", 0)),
-        timeout_ms=int(runtime.get("timeout_ms", 20000)),
     )
     if config.frames < 0:
         raise ValueError("runtime.frames must be >= 0")
-    if config.timeout_ms <= 0:
-        raise ValueError("runtime.timeout_ms must be > 0")
     if not config.insight_host:
         raise ValueError("output.insight.host must be set")
     if not 0 < config.video_port <= 65535:
@@ -254,7 +251,7 @@ def main() -> int:
         processed = 0
         total_points = 0
         while True:
-            output = runner.run([model_input], timeout_ms=config.timeout_ms)
+            output = runner.run([model_input])
             points = feature_points(
                 output,
                 input_width,

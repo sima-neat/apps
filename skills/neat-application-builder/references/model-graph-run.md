@@ -13,7 +13,7 @@ Common application steps:
 
 1. Construct `simaai::neat::Model` or `pyneat.Model` from the model path.
 2. Inspect `input_specs()`, `output_specs()`, `metadata()`, and `info()` when the input/output contract is not obvious.
-3. Use `model.run(inputs, timeout_ms)` for the shortest synchronous path.
+3. Use `model.run(inputs)` for the shortest synchronous path.
 4. Use `model.build(...)` for repeated push/pull workloads that still need only the model route.
 5. Use `model.graph()` when the model is one fragment inside a larger `Graph`.
 

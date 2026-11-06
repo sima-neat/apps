@@ -11,7 +11,6 @@ decode:                      # DETR decode settings.
   person_only: false         # Keep only COCO person detections when true.
 
 runtime:                     # Runtime settings.
-  timeout_ms: 20000          # Inference timeout in milliseconds.
   profile: false             # Print profiling summaries.
   num_runs: 100              # Number of repeated runs for profiling.
   verbose: false             # Print verbose runtime output.
