@@ -67,9 +67,7 @@ def test_insight_pipeline(
 
 
 @pytest.mark.e2e
-def test_non_model_resolution_runs_through_core_preproc(
-    apps_root, e2e_model_path, test_timeout_ms
-):
+def test_non_model_resolution_runs_through_core_preproc(apps_root, e2e_model_path):
     import cv2
     import numpy as np
     import pyneat
@@ -97,7 +95,7 @@ def test_non_model_resolution_runs_through_core_preproc(
         run_options=pyneat.RunOptions(),
     )
     try:
-        output = runner.run([model_input], timeout_ms=test_timeout_ms)
+        output = runner.run([model_input])
         points = example.feature_points(
             output,
             frame.shape[1],

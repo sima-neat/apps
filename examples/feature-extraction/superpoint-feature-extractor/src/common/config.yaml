@@ -13,4 +13,3 @@ output:
 
 runtime:
   frames: 0
-  timeout_ms: 20000

@@ -12,6 +12,3 @@ decode:                      # Model-managed SSD BoxDecode settings.
   score_threshold: 0.55      # Filters weak SSD-MobileNet false positives in rendered output.
   nms_iou: 0.60              # Overlap threshold for on-device NMS.
   max_detections: 100        # Top-K detections to keep per image.
-
-runtime:                     # Runtime settings.
-  timeout_ms: 20000          # Inference timeout in milliseconds.

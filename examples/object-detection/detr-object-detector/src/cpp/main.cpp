@@ -34,7 +34,6 @@ namespace {
 
 constexpr int kModelW = 1333;
 constexpr int kModelH = 800;
-constexpr int kDefaultTimeoutMs = 20000;
 constexpr int kPersonClassId = 1;
 
 constexpr std::array<std::string_view, 91> kDetrCocoLabels = {
@@ -100,7 +99,6 @@ struct Config {
   bool person_only = false;
   bool profile = false;
   int num_runs = 100;
-  int timeout_ms = kDefaultTimeoutMs;
 };
 
 struct Tensor2D {
@@ -162,15 +160,11 @@ Config load_config(const fs::path& path) {
   cfg.person_only = raw.bool_or("decode.person_only", false);
   cfg.profile = raw.bool_or("runtime.profile", false);
   cfg.num_runs = raw.int_or("runtime.num_runs", 100);
-  cfg.timeout_ms = raw.int_or("runtime.timeout_ms", kDefaultTimeoutMs);
   if (cfg.conf < 0.0f || cfg.conf > 1.0f) {
     throw std::runtime_error("decode.confidence_threshold must be in [0.0, 1.0]");
   }
   if (cfg.num_runs < 1) {
     throw std::runtime_error("runtime.num_runs must be >= 1");
-  }
-  if (cfg.timeout_ms <= 0) {
-    throw std::runtime_error("runtime.timeout_ms must be > 0");
   }
   return cfg;
 }
@@ -536,7 +530,7 @@ int main(int argc, char** argv) {
         if (!run.push(simaai::neat::TensorList{input_t})) {
           throw std::runtime_error("run.push failed during profiling");
         }
-        auto out_sample = run.pull(args.timeout_ms);
+        auto out_sample = run.pull();
         const auto t1 = std::chrono::steady_clock::now();
         if (!out_sample.has_value()) {
           throw std::runtime_error("run.pull returned no sample during profiling");
@@ -593,7 +587,7 @@ int main(int argc, char** argv) {
         throw std::runtime_error("run.push failed");
       }
 
-      auto out_sample = run.pull(args.timeout_ms);
+      auto out_sample = run.pull();
       if (!out_sample.has_value()) {
         throw std::runtime_error("run.pull returned no sample");
       }

@@ -99,7 +99,6 @@ def _build_engine(runtime):
         vocoder_backend="mla",
         vocoder_mpk_path=compiled / assets["vocoder"]["file"],
         threads=max(1, threads),
-        timeout_ms=120_000,
         verify_hashes=True,
         steps=steps,
         artifact_sha256={name: asset["sha256"] for name, asset in assets.items()},

@@ -36,7 +36,6 @@ struct Config {
   int channel = 0;
   int bitrate_kbps = 1000;
   int frames = 0;
-  int timeout_ms = 20000;
 };
 
 Config load_config(const fs::path& path) {
@@ -49,12 +48,8 @@ Config load_config(const fs::path& path) {
   cfg.channel = raw.int_or("output.insight.channel", 0);
   cfg.bitrate_kbps = raw.int_or("output.insight.bitrate_kbps", 1000);
   cfg.frames = raw.int_or("runtime.frames", 0);
-  cfg.timeout_ms = raw.int_or("runtime.timeout_ms", 20000);
   if (cfg.frames < 0) {
     throw std::runtime_error("runtime.frames must be >= 0");
-  }
-  if (cfg.timeout_ms <= 0) {
-    throw std::runtime_error("runtime.timeout_ms must be > 0");
   }
   if (cfg.insight_host.empty()) {
     throw std::runtime_error("output.insight.host must be set");
@@ -273,8 +268,7 @@ int main(int argc, char** argv) {
     std::size_t total_points = 0;
     int processed = 0;
     while (true) {
-      const auto decoded =
-          neat::decode_superpoint(runner.run(neat::TensorList{input}, cfg.timeout_ms));
+      const auto decoded = neat::decode_superpoint(runner.run(neat::TensorList{input}));
       if (decoded.size() != 1) {
         throw std::runtime_error("SuperPoint must return one feature set per frame");
       }

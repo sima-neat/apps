@@ -1038,7 +1038,7 @@ def probe_decoded_source(cfg: AppConfig, fps: int) -> tuple[int, int, int]:
     run_options.output_memory = pyneat.OutputMemory.ZeroCopy
     run = graph.build(run_options)
     try:
-        sample = run.pull("frame", 20000)
+        sample = run.pull("frame")
     finally:
         run.close()
     if sample is None:

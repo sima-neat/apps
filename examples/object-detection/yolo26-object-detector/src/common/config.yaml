@@ -12,7 +12,6 @@ decode:                      # YOLO decode settings.
   max_detections: 50         # Max detections to keep per image.
 
 runtime:                     # Runtime settings.
-  timeout_ms: 20000          # Inference timeout in milliseconds.
   num_runs: 1                # Number of repeated runs.
   profile: false             # Print profiling summaries.
 

@@ -82,7 +82,6 @@ class AppConfig:
     score_threshold: float
     nms_iou: float
     max_detections: int
-    timeout_ms: int
     num_runs: int
     queue_depth: int
     profile: bool
@@ -211,7 +210,6 @@ def build_app_config(raw: dict) -> AppConfig:
         score_threshold=_float(decode_cfg, "score_threshold", 0.25, "decode.score_threshold"),
         nms_iou=_float(decode_cfg, "nms_iou", 0.45, "decode.nms_iou"),
         max_detections=_int(decode_cfg, "max_detections", 300, "decode.max_detections"),
-        timeout_ms=_int(runtime_cfg, "timeout_ms", 8000, "runtime.timeout_ms"),
         num_runs=_int(runtime_cfg, "num_runs", 1, "runtime.num_runs"),
         queue_depth=_int(runtime_cfg, "queue_depth", 8, "runtime.queue_depth"),
         profile=_bool(runtime_cfg, "profile", False, "runtime.profile"),
@@ -235,8 +233,6 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError(f"decode.nms_iou must be in [0.0, 1.0], got {cfg.nms_iou}")
     if cfg.max_detections < 1:
         raise ValueError(f"decode.max_detections must be >= 1, got {cfg.max_detections}")
-    if cfg.timeout_ms <= 0:
-        raise ValueError(f"runtime.timeout_ms must be > 0, got {cfg.timeout_ms}")
     if cfg.num_runs < 1:
         raise ValueError(f"runtime.num_runs must be >= 1, got {cfg.num_runs}")
     if cfg.queue_depth < 1:
@@ -443,7 +439,7 @@ def main() -> int:
         print(
             f"[validate] model={cfg.model_path} classes={len(labels)} "
             f"score_threshold={cfg.score_threshold:.2f} nms_iou={cfg.nms_iou:.2f} "
-            f"max_detections={cfg.max_detections} timeout_ms={cfg.timeout_ms} "
+            f"max_detections={cfg.max_detections} "
             f"num_runs={cfg.num_runs} queue_depth={cfg.queue_depth}"
         )
         print("[validate] configuration OK")
@@ -534,7 +530,7 @@ def main() -> int:
                 continue
 
             infer_start = time.perf_counter()
-            outputs = runner.run([to_bgr_tensor(bgr)], timeout_ms=cfg.timeout_ms)
+            outputs = runner.run([to_bgr_tensor(bgr)])
             infer_end = time.perf_counter()
 
             # Raises rather than reporting a clean board if the model produced no
