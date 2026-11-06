@@ -72,7 +72,7 @@ class BatchAxisTests(unittest.TestCase):
             runtime._first_output_array(output, expected_public_shape=shape), physical)
 
         engine = runtime.SupertonicModalix.__new__(runtime.SupertonicModalix)
-        engine.vocoder_backend, engine.timeout_ms, engine.chunk_size = "mla", 1000, 3072
+        engine.vocoder_backend, engine.chunk_size = "mla", 3072
         engine.vocoder_public_input = runtime._public_shape(runtime.VOCODER_PHYSICAL_INPUT[1])
         engine.vocoder_public_output = runtime._public_shape(runtime.VOCODER_PHYSICAL_OUTPUT[1])
         engine._vocoder_input_buffer = np.zeros(engine.vocoder_public_input, dtype=np.float32)
@@ -85,7 +85,7 @@ class BatchAxisTests(unittest.TestCase):
         frames = np.arange(512 * 1152, dtype=np.float32).reshape(engine.vocoder_public_output)
         latent = physical[0, :, 0, :][None, ...]
 
-        def run(tensors, **kwargs):
+        def run(tensors):
             np.testing.assert_array_equal(
                 tensors[0].to_numpy(), latent.transpose(0, 2, 1)[:, None, :, :])
             return [self.tensor(frames)]
@@ -99,7 +99,7 @@ class BatchAxisTests(unittest.TestCase):
         from types import SimpleNamespace
         np, runtime = self.np, self.engine
         engine = runtime.SupertonicModalix.__new__(runtime.SupertonicModalix)
-        engine.steps, engine.timeout_ms = 8, 1000
+        engine.steps = 8
         engine.sample_rate, engine.chunk_size, engine.latent_dim = 8, 2, 144
         engine.time_table = runtime.build_time_table(engine.steps)
         engine.physical_inputs = runtime.VECTOR_PHYSICAL_INPUTS
@@ -120,7 +120,7 @@ class BatchAxisTests(unittest.TestCase):
         engine._run_vocoder = lambda latent, length: np.repeat(latent[0, 0, :length], 2)
         calls = 0
 
-        def run(tensors, **kwargs):
+        def run(tensors):
             nonlocal calls
             calls += 1
             values = [tensor.to_numpy() for tensor in tensors]

@@ -31,8 +31,9 @@ RAG_EMBEDDING_REPO="thenlper/gte-small"
 CHAT_MODEL_NAME="${CHAT_MODEL_NAME:-${CHAT_MODEL_REPO##*/}}"
 # Chat/VLM models kept loaded at once (ASR is always kept). With 1, loading a new
 # model replaces the loaded one; above 1, a load past the limit is refused until
-# the request names a loaded model to unload.
-MAX_RESIDENT_CHAT_MODELS="${MAX_RESIDENT_CHAT_MODELS:-1}"
+# the request names a loaded model to unload. Unset: the existing config's value,
+# else 2 (resolve_max_resident).
+MAX_RESIDENT_CHAT_MODELS="${MAX_RESIDENT_CHAT_MODELS:-}"
 ALLOW_HUB_DOWNLOAD="${ALLOW_HUB_DOWNLOAD:-true}"
 # Hugging Face accounts searched for compatible models (space-separated):
 # simaai (official precompiled) + TDoSiMa and florianvoss (community).
@@ -221,8 +222,9 @@ Environment:
   CATALOG_MODEL_REPOS           Extra compatible HF repos to seed the catalog
                                 (space-separated). default: empty
   MAX_RESIDENT_CHAT_MODELS      Chat/VLM models kept loaded at once; past the
-                                limit a load must name one to unload.
-                                default: 1
+                                limit a load must name one to unload. 1 to 4.
+                                default: the value in an existing config (kept
+                                on re-run), else 2
   WEB_HOST, WEB_PORT, WEB_HTTPS, WEB_CORS_ORIGINS
                                 app.web settings written to the config. Default:
                                 the values in an existing config (kept on re-run),
@@ -305,6 +307,21 @@ resolve_setup_rag() {
   if config_true "${SETUP_RAG}"; then SETUP_RAG=1; else SETUP_RAG=0; fi
 }
 
+# MAX_RESIDENT_CHAT_MODELS: environment > the existing config's
+# server.models.max_resident_chat_models > 2.
+resolve_max_resident() {
+  if [[ -z "${MAX_RESIDENT_CHAT_MODELS}" && -f "${CONFIG_PATH}" ]]; then
+    [[ -x "${APP_VENV}/bin/python" ]] && export STUDIO_CONFIG_PYTHON="${APP_VENV}/bin/python"
+    MAX_RESIDENT_CHAT_MODELS="$(resident_config_limit "${CONFIG_PATH}")"
+  fi
+  MAX_RESIDENT_CHAT_MODELS="${MAX_RESIDENT_CHAT_MODELS:-2}"
+  if [[ ! "${MAX_RESIDENT_CHAT_MODELS}" =~ ^[1-4]$ ]]; then
+    errln "The chat model limit must be a whole number from 1 to 4, not '${MAX_RESIDENT_CHAT_MODELS}'."
+    info "Set MAX_RESIDENT_CHAT_MODELS, or fix server.models.max_resident_chat_models in ${CONFIG_PATH}."
+    exit 1
+  fi
+}
+
 install_cpu_torch_if_needed() {
   case "$(uname -m)" in
     x86_64|amd64|aarch64|arm64)
@@ -318,6 +335,7 @@ install_cpu_torch_if_needed() {
 
 section "Python environment"
 resolve_setup_rag
+resolve_max_resident
 step "Creating backend virtual environment: ${C_DIM}${APP_VENV}${C_RESET}"
 python3 -m venv "${APP_VENV}"
 "${APP_VENV}/bin/python" -m pip install --upgrade pip
@@ -842,7 +860,7 @@ WEB_CORS_ORIGINS="${WEB_CORS_ORIGINS-$(_web_setting cors_origins '')}"
 config_true "${WEB_HTTPS}" && WEB_HTTPS=true || WEB_HTTPS=false
 if [[ -f "${CONFIG_PATH}" ]]; then
   cp -p "${CONFIG_PATH}" "${CONFIG_PATH}.bak"
-  info "Previous config kept as ${C_DIM}${CONFIG_PATH}.bak${C_RESET} (web settings carried over: host ${WEB_HOST}, port ${WEB_PORT}, https ${WEB_HTTPS}${WEB_CORS_ORIGINS:+, cors_origins ${WEB_CORS_ORIGINS}})."
+  info "Previous config kept as ${C_DIM}${CONFIG_PATH}.bak${C_RESET} (web settings carried over: host ${WEB_HOST}, port ${WEB_PORT}, https ${WEB_HTTPS}${WEB_CORS_ORIGINS:+, cors_origins ${WEB_CORS_ORIGINS}}; chat models kept loaded: ${MAX_RESIDENT_CHAT_MODELS})."
 fi
 if [[ "${SETUP_RAG}" == "1" ]]; then
   RAG_ENABLED_YAML="true"

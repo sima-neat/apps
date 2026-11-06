@@ -158,6 +158,27 @@ class ShellRagConfigTests(unittest.TestCase):
             self.assertEqual(out.stdout.strip(), "false")
 
 
+class ShellResidentLimitConfigTests(unittest.TestCase):
+    """resident_config_limit, which setup.sh reads to keep the chat model limit."""
+
+    def _limit(self, text, script='resident_config_limit "$1"', python=None):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / "c.yaml"
+            config.write_text(text, encoding="utf-8")
+            return _run(script, str(config), python=python)
+
+    def test_values_read_like_the_loader(self):
+        self.assertEqual(self._limit("server:\n  models:\n    max_resident_chat_models: 3\n"), "3")
+        self.assertEqual(self._limit("server:\n  models: {max_resident_chat_models: 4}\n"), "4")
+        self.assertEqual(self._limit("server:\n  models:\n    catalog_dir: /m\n"), "2")   # loader default
+
+    def test_fallback_reader_without_a_yaml_python(self):
+        script = '_studio_config_python() { return 1; }; resident_config_limit "$1"'
+        text = "server:\n  models:\n    max_resident_chat_models: 3   # small models\napp:\n  web:\n    port: 5000\n"
+        self.assertEqual(self._limit(text, script), "3")
+        self.assertEqual(self._limit("server:\n  models:\n    catalog_dir: /m\n", script), "")
+
+
 class LegacyUiDirMigrationTests(unittest.TestCase):
     """run.sh moves an updated install's own files from src/python/ui/ (the
     backend folder before it became api/) into api/ on the next start."""

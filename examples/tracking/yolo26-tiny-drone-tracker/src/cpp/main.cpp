@@ -510,26 +510,12 @@ build_source_options(const AppConfig& cfg, const std::string& url, int& fps_out,
   return opt;
 }
 
-simaai::neat::FormatTag encoded_format_tag(simaai::neat::nodes::groups::RtspCodec codec) {
-  return codec == simaai::neat::nodes::groups::RtspCodec::H265 ? simaai::neat::FormatTag::H265
-                                                               : simaai::neat::FormatTag::H264;
-}
-
 simaai::neat::InputOptions
-encoded_decode_input_options(simaai::neat::nodes::groups::RtspCodec codec) {
+encoded_input_options(simaai::neat::nodes::groups::RtspCodec codec) {
   simaai::neat::InputOptions opt;
   opt.payload_type = simaai::neat::PayloadType::Encoded;
-  opt.format = encoded_format_tag(codec);
-  opt.memory_policy = simaai::neat::InputMemoryPolicy::Ev74;
-  return opt;
-}
-
-simaai::neat::InputOptions
-encoded_video_input_options(simaai::neat::nodes::groups::RtspCodec codec) {
-  simaai::neat::InputOptions opt;
-  opt.payload_type = simaai::neat::PayloadType::Encoded;
-  opt.format = encoded_format_tag(codec);
-  opt.memory_policy = simaai::neat::InputMemoryPolicy::SystemMemory;
+  opt.format = codec == simaai::neat::nodes::groups::RtspCodec::H265 ? simaai::neat::FormatTag::H265
+                                                                : simaai::neat::FormatTag::H264;
   return opt;
 }
 
@@ -572,7 +558,7 @@ build_decode_graph(const std::string& input_name,
   dec.decoder_tuning = opt.decoder_tuning;
   dec.memory_opt = opt.decoder_memory_opt;
 
-  decode.connect(simaai::neat::nodes::Input(input_name, encoded_decode_input_options(opt.codec)),
+  decode.connect(simaai::neat::nodes::Input(input_name, encoded_input_options(opt.codec)),
                  simaai::neat::nodes::SimaDecode(dec));
   append_decode_output_nodes(decode, opt);
   return decode;
@@ -583,7 +569,7 @@ build_video_sender_graph(const std::string& input_name,
                          simaai::neat::nodes::groups::RtspCodec codec,
                          const simaai::neat::nodes::groups::VideoSenderOptions& video_options) {
   simaai::neat::Graph video("video_sender");
-  video.connect(simaai::neat::nodes::Input(input_name, encoded_video_input_options(codec)),
+  video.connect(simaai::neat::nodes::Input(input_name, encoded_input_options(codec)),
                 simaai::neat::nodes::groups::VideoSender(video_options));
   return video;
 }

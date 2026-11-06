@@ -97,6 +97,14 @@ rag_config_enabled() {
   yaml_lookup "$1" "$(_studio_path "$1" "rag.enabled")" scalar
 }
 
+# resident_config_limit <config.yaml>          -> server.models.max_resident_chat_models
+# (always under `server:`; the loader answers its default when the key is
+# missing, the fallback reader an empty line)
+resident_config_limit() {
+  studio_config_query "$1" models.max_resident_chat_models && return 0
+  yaml_lookup "$1" "server.models.max_resident_chat_models" scalar
+}
+
 # Truthiness as shared.config._load_bool: 1/true/yes/on in any case.
 config_true() {
   case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in

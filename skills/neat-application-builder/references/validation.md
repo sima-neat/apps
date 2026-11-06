@@ -54,6 +54,7 @@ Before running, check the prerequisites used by the application:
 - Confirm image, video, audio, config, and output paths exist or are created by the app.
 - Confirm the app uses public endpoint names that exist in the built graph.
 - For encoded media, confirm the selected source, decoder, and passthrough sender use the same codec.
+- For PCIe results, follow the installed PCIe skill and public return-layout contract. A received allocation can contain padding before or after the logical tensor; validate its negotiated region and extent before interpreting BBOX or other tensor bytes. Test nonzero offsets, malformed layouts, and truncated allocations, then verify useful output on every live stream.
 - For camera capture, confirm the zero-copy versus `allow_cpu_fallback` choice and validate any changed capture buffer count on the target.
 
 ## Runtime Checks

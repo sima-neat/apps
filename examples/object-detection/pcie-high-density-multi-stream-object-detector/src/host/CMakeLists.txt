@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.16)
 
 project(pcie-high-density-multi-stream-object-detector-host LANGUAGES CXX)
 
+include(CTest)
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -45,3 +47,21 @@ target_compile_definitions(pcie-high-density-multi-stream-object-detector-host
   PRIVATE
     PCIE_HIGH_DENSITY_SOURCE_DIR="${CMAKE_CURRENT_LIST_DIR}"
 )
+
+if(BUILD_TESTING)
+  add_executable(pcie-high-density-host-unit-test
+    "${APP_ROOT}/tests/cpp/test_host.cpp"
+  )
+  target_link_libraries(pcie-high-density-host-unit-test
+    PRIVATE
+      SimaPCIeHost::sima_neat_pcie_host
+      PkgConfig::GST
+  )
+  add_test(
+    NAME pcie-high-density-multi-stream-object-detector.host_unit
+    COMMAND pcie-high-density-host-unit-test
+  )
+  set_tests_properties(pcie-high-density-multi-stream-object-detector.host_unit
+    PROPERTIES LABELS "unit"
+  )
+endif()
