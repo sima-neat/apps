@@ -389,7 +389,7 @@ decide_insight_install() {
     if [[ -z "${INSIGHT_UPDATE_VERSION}" ]]; then
       return 0
     fi
-    question="Update Insight to ${INSIGHT_UPDATE_VERSION}?"
+    question="Install Insight ${INSIGHT_UPDATE_VERSION}?"
     accepted="update"
   fi
   INSIGHT_INSTALL="declined"
@@ -424,19 +424,17 @@ install_core() {
 
 install_insight() {
   case "${INSIGHT_INSTALL}" in
-    install)
-      echo
-      echo "Installing Insight:"
-      run_sima_cli_install "${INSIGHT_INSTALL_DIR}" "${SIMA_CLI_RESOLVED}" -d . insight
-      ;;
-    update)
-      echo
-      echo "Updating Insight:"
-      # The installed Insight still works, so a failed update does not stop Apps.
-      neat update --yes --insight-only \
-        || echo "⚠️  Insight was not updated. To retry, run: neat update --insight-only"
-      ;;
+    current | declined) return 0 ;;
   esac
+  echo
+  echo "Installing Insight:"
+  if [[ "${INSIGHT_INSTALL}" == "install" ]]; then
+    run_sima_cli_install "${INSIGHT_INSTALL_DIR}" "${SIMA_CLI_RESOLVED}" -d . insight
+    return 0
+  fi
+  # The installed Insight still works, so a failed update does not stop Apps.
+  neat update --yes --insight-only \
+    || echo "⚠️  Insight was not updated. To retry, run: neat update --insight-only"
 }
 
 locate_package_staging() {

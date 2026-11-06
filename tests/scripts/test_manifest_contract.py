@@ -2015,7 +2015,7 @@ def test_vulcan_installer_updates_insight_when_neat_reports_a_newer_version(tmp_
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
     assert _row("🔄", "Insight", f"0.0.0+main.bedca8f → {LATEST_INSIGHT}") in proc.stdout
-    assert f"❓ Update Insight to {LATEST_INSIGHT}? [Y/n]" in proc.stdout
+    assert f"❓ Install Insight {LATEST_INSIGHT}? [Y/n]" in proc.stdout
     assert INSIGHT_UPDATE_CALL in _neat_calls(tmp_path)
     assert _sima_cli_calls(tmp_path) == []
     assert "already installed" not in proc.stdout
@@ -2028,7 +2028,7 @@ def test_vulcan_installer_keeps_insight_when_the_update_is_declined(tmp_path):
     )
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
-    assert f"❓ Update Insight to {LATEST_INSIGHT}? [Y/n]" in proc.stdout
+    assert f"❓ Install Insight {LATEST_INSIGHT}? [Y/n]" in proc.stdout
     assert INSIGHT_UPDATE_CALL not in _neat_calls(tmp_path)
     assert _apps_installed(tmp_path)
 
