@@ -135,6 +135,19 @@ bool test_usb_source_validates_without_a_url(const std::string& binary) {
                          "usb source reports source.usb.camera");
 }
 
+bool test_usb_yuyv_geometry(const std::string& binary) {
+  for (const auto& format : {std::string("yuyv"), std::string("mjpeg"), std::string("uyvy")}) {
+    const auto r =
+        validate_config_body(kExampleName, binary, "usb_format_" + format,
+                             minimal_config("  type: usb\n  usb:\n    camera: fixture\n    fps: "
+                                            "30\n    width: 1284\n    height: 720\n    format: " +
+                                            format + "\n"));
+    if (!expect_true((r.exit_code == 0) == (format == "yuyv"), "format-specific geometry"))
+      return false;
+  }
+  return true;
+}
+
 bool test_usb_source_requires_camera_and_fps(const std::string& binary) {
   const auto no_camera = validate_config_body(kExampleName, binary, "usb_no_camera",
                                               minimal_config("  type: usb\n"
@@ -266,7 +279,7 @@ int main(int argc, char** argv) {
   ok &= test_http_source_reads_its_own_section(binary);
   ok &= test_empty_labels_is_rejected(binary);
   ok &= test_usb_source_validates_without_a_url(binary);
-  ok &= test_usb_source_requires_camera_and_fps(binary);
+  ok &= test_usb_yuyv_geometry(binary) && test_usb_source_requires_camera_and_fps(binary);
   ok &= test_usb_source_rejects_sizes_rtp_jpeg_cannot_carry(binary);
   ok &= test_closed_output_is_terminal();
   ok &= test_nv16_frame_keeps_each_rows_chroma();
