@@ -387,11 +387,11 @@ def build_graph_runner(model: pyneat.Model) -> pyneat.Run:
     return graph.build([dummy])
 
 
-def run_model_inference(runner: pyneat.Run, preprocessed: np.ndarray, timeout_ms: int) -> list[np.ndarray]:
+def run_model_inference(runner: pyneat.Run, preprocessed: np.ndarray) -> list[np.ndarray]:
     tensor = tensor_from_hwc_f32(preprocessed)
     if not runner.push([tensor]):
         raise RuntimeError("Run.push() failed")
-    sample = runner.pull(timeout_ms=timeout_ms)
+    sample = runner.pull()
     if sample is None:
         raise RuntimeError("Run.pull() returned no sample")
     return tensor_numpy_outputs(collect_tensors(sample))
@@ -441,7 +441,6 @@ def main() -> int:
     person_only = bool(decode_cfg.get("person_only", False))
     profile = bool(runtime_cfg.get("profile", False))
     num_runs = int(runtime_cfg.get("num_runs", 100))
-    timeout_ms = int(runtime_cfg.get("timeout_ms", 20000))
 
     global VERBOSE
     VERBOSE = bool(runtime_cfg.get("verbose", False))
@@ -479,7 +478,7 @@ def main() -> int:
                 if not runner.push([tensor]):
                     print("Profiling failed: runner.push returned False", file=sys.stderr)
                     break
-                sample = runner.pull(timeout_ms=timeout_ms)
+                sample = runner.pull()
                 t1 = time.perf_counter()
                 if sample is None:
                     print("Profiling failed: runner.pull returned no sample", file=sys.stderr)
@@ -538,7 +537,7 @@ def main() -> int:
         for image_path in image_paths:
             try:
                 orig_bgr, preprocessed, meta = prepare_input(image_path)
-                arrays = run_model_inference(runner, preprocessed, timeout_ms)
+                arrays = run_model_inference(runner, preprocessed)
             except FileNotFoundError as exc:
                 print(str(exc), file=sys.stderr)
                 return 2

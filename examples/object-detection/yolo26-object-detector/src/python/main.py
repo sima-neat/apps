@@ -132,7 +132,6 @@ def main() -> int:
     min_score = float(decode_cfg.get("score_threshold", MIN_SCORE))
     nms_iou = float(decode_cfg.get("nms_iou", NMS_IOU))
     max_detections = int(decode_cfg.get("max_detections", MAX_DET))
-    timeout_ms = int(runtime_cfg.get("timeout_ms", 20000))
     num_runs = int(runtime_cfg.get("num_runs", 1))
     profile = bool(runtime_cfg.get("profile", False))
     overlay = bool(output_cfg.get("overlay", True))
@@ -145,9 +144,6 @@ def main() -> int:
         return 2
     if max_detections < 1:
         print(f"Error: decode.max_detections must be >= 1, got {max_detections}", file=sys.stderr)
-        return 2
-    if timeout_ms <= 0:
-        print(f"Error: runtime.timeout_ms must be > 0, got {timeout_ms}", file=sys.stderr)
         return 2
     if num_runs < 1:
         print(f"Error: runtime.num_runs must be >= 1, got {num_runs}", file=sys.stderr)
@@ -203,7 +199,7 @@ def main() -> int:
             route_options=pyneat.ModelRouteOptions(),
             run_options=run_opt,
         )
-        runner.run([t_dummy], timeout_ms=timeout_ms)
+        runner.run([t_dummy])
         print("[WARMUP] done")
 
         all_images = images * num_runs
@@ -230,7 +226,7 @@ def main() -> int:
             )
 
             infer_start = time.perf_counter()
-            out = runner.run([t_in], timeout_ms=timeout_ms)
+            out = runner.run([t_in])
             infer_end = time.perf_counter()
 
             payload = extract_bbox_payload_from_tensors(out)

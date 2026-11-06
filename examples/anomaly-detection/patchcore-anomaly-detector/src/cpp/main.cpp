@@ -91,7 +91,6 @@ struct Config {
   int insight_bitrate_kbps = 1000;
   int insight_metadata_port = 9100;
 
-  int timeout_ms = 5000;
   int frames = 0;
 };
 
@@ -141,7 +140,6 @@ void validate_config(const Config& cfg) {
                          "calibration.threshold_percentile must be between 0 and 100");
   sima_examples::require(cfg.threshold_margin >= 1.0, "calibration.threshold_margin must be >= 1.0");
   sima_examples::require(cfg.num_neighbors >= 1, "scoring.num_neighbors must be >= 1");
-  sima_examples::require(cfg.timeout_ms > 0, "runtime.timeout_ms must be > 0");
   sima_examples::require(cfg.frames >= 0, "runtime.frames must be >= 0");
   if (cfg.source_type != SourceType::ImageDir) {
     sima_examples::require(!cfg.insight_host.empty(),
@@ -200,7 +198,6 @@ Config load_config(const fs::path& path) {
   cfg.insight_bitrate_kbps = raw.int_or("output.insight.bitrate_kbps", 1000);
   cfg.insight_metadata_port = raw.int_or("output.insight.metadata_port", 9100);
 
-  cfg.timeout_ms = raw.int_or("runtime.timeout_ms", 5000);
   cfg.frames = raw.int_or("runtime.frames", 0);
 
   validate_config(cfg);
@@ -318,9 +315,8 @@ patchcore::PatchEmbeddings embedding_from_tensor(const simaai::neat::Tensor& ten
   return patchcore::extract_hwc(tensor.shape, std::move(values), kEmbedDim);
 }
 
-patchcore::PatchEmbeddings extract_from_bgr(simaai::neat::Model& model, const cv::Mat& bgr,
-                                            int timeout_ms) {
-  auto tensors = model.run(simaai::neat::TensorList{model_input_tensor(bgr)}, timeout_ms);
+patchcore::PatchEmbeddings extract_from_bgr(simaai::neat::Model& model, const cv::Mat& bgr) {
+  auto tensors = model.run(simaai::neat::TensorList{model_input_tensor(bgr)});
   if (tensors.empty()) {
     throw std::runtime_error("model returned no output tensors");
   }
@@ -366,7 +362,7 @@ int cmd_calibrate(const Config& cfg) {
       std::cerr << "[WARN] could not read image: " << path << "\n";
       continue;
     }
-    auto embedding = extract_from_bgr(model, bgr, cfg.timeout_ms);
+    auto embedding = extract_from_bgr(model, bgr);
     total_patches += embedding.patch_count();
     per_image.push_back(std::move(embedding));
     if ((i + 1) % 10 == 0 || i + 1 == paths.size()) {
@@ -387,7 +383,7 @@ int cmd_calibrate(const Config& cfg) {
     if (bgr.empty()) {
       continue;
     }
-    const auto embedding = extract_from_bgr(model, bgr, cfg.timeout_ms);
+    const auto embedding = extract_from_bgr(model, bgr);
     const auto scored = bank.score(embedding, cfg.num_neighbors);
     scores.push_back(scored.image_score);
     patch_scores.insert(patch_scores.end(), scored.score_map.begin(), scored.score_map.end());
@@ -476,7 +472,7 @@ int cmd_score_image_dir(const Config& cfg, const patchcore::MemoryBank& bank, fl
     }
 
     const double mla_start = time_ms();
-    const auto embedding = extract_from_bgr(model, bgr, cfg.timeout_ms);
+    const auto embedding = extract_from_bgr(model, bgr);
     const double mla_ms = time_ms() - mla_start;
 
     const double host_start = time_ms();
@@ -639,7 +635,7 @@ int cmd_score_video_file(const Config& cfg, const patchcore::MemoryBank& bank, f
   int write_failures = 0;
   while (cfg.frames <= 0 || processed < cfg.frames) {
     const double mla_start = time_ms();
-    auto tensors = runner.run(simaai::neat::TensorList{model_input_tensor(frame)}, cfg.timeout_ms);
+    auto tensors = runner.run(simaai::neat::TensorList{model_input_tensor(frame)});
     if (tensors.empty()) {
       throw std::runtime_error("model returned no output tensors");
     }

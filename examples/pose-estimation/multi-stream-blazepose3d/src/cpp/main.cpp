@@ -1006,7 +1006,6 @@ neat::RunOptions reliable_model_run_options() {
   options.preset = neat::RunPreset::Reliable;
   options.overflow_policy = neat::OverflowPolicy::Block;
   options.output_memory = neat::OutputMemory::ZeroCopy;
-  options.input_timeout_ms = 30000;
   options.startup_preflight = false;
   return options;
 }

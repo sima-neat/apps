@@ -357,7 +357,7 @@ def run(cfg: Config) -> None:
             sample = None
             tensor = pyneat.Tensor.from_numpy(np.ascontiguousarray(frame), copy=True,
                                               image_format=pyneat.PixelFormat.BGR)
-            raw_map = model.run([tensor], PULL_TIMEOUT_MS)[0].to_numpy(copy=True)
+            raw_map = model.run([tensor])[0].to_numpy(copy=True)
             anomaly_map = np.asarray(raw_map, dtype=np.float32).reshape(map_side, map_side)
             regions, mask = regions_from_map(anomaly_map, cfg.threshold, cfg.min_region_px)
 

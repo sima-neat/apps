@@ -238,6 +238,26 @@ read_local_neat_status() {
   fi
 }
 
+# Prints the `main` version to offer for an installed Insight, or nothing when
+# Insight is current or the update check fails. `main` is what sima-cli installs.
+read_insight_update() {
+  local status_json
+
+  if [[ -z "$(summary_field "${LOCAL_STATUS}" insight_version)" ]]; then
+    return 0
+  fi
+  # The check can take 8 seconds per request, so it stays out of the offline status.
+  status_json="$(run_with_timeout 40 neat --json --channel main 2>/dev/null)" || return 0
+  NEAT_STATUS_JSON="${status_json}" python3 - 2>/dev/null <<'PY' || true
+import json
+import os
+
+insight = json.loads(os.environ["NEAT_STATUS_JSON"])["components"]["insight"]
+if insight.get("updateAvailable") is True:
+    print(insight["latestVersion"])
+PY
+}
+
 # Sets DEVKIT_LINK to not-sdk, unpaired, unreachable or paired, and DEVKIT_STATUS
 # to the paired DevKit's summary, read from the account Core's installer uses.
 check_paired_devkit() {
@@ -301,7 +321,9 @@ print_dependency_status() {
     unreachable) print_status_row "🔌" "DevKit" "unreachable (${DEVKIT_TARGET})" ;;
     paired) print_core_row "DevKit" "${DEVKIT_STATUS}" ;;
   esac
-  if [[ -n "${insight_version}" ]]; then
+  if [[ -n "${INSIGHT_UPDATE_VERSION}" ]]; then
+    print_status_row "🔄" "Insight" "${insight_version} → ${INSIGHT_UPDATE_VERSION}"
+  elif [[ -n "${insight_version}" ]]; then
     print_status_row "✅" "Insight" "${insight_version}"
   else
     print_status_row "❌" "Insight" "not installed"
@@ -356,15 +378,22 @@ decide_core_install() {
   fi
 }
 
-# Sets INSIGHT_INSTALL to current, declined or install.
+# Sets INSIGHT_INSTALL to current, declined, install or update.
 decide_insight_install() {
+  local question="Install Insight?"
+  local accepted="install"
+
   INSIGHT_INSTALL="current"
   if [[ -n "$(summary_field "${LOCAL_STATUS}" insight_version)" ]]; then
-    return 0
+    if [[ -z "${INSIGHT_UPDATE_VERSION}" ]]; then
+      return 0
+    fi
+    question="Install Insight ${INSIGHT_UPDATE_VERSION}?"
+    accepted="update"
   fi
   INSIGHT_INSTALL="declined"
-  if confirm_default_yes "Install Insight?"; then
-    INSIGHT_INSTALL="install"
+  if confirm_default_yes "${question}"; then
+    INSIGHT_INSTALL="${accepted}"
   fi
 }
 
@@ -393,12 +422,27 @@ install_core() {
 }
 
 install_insight() {
-  if [[ "${INSIGHT_INSTALL}" != "install" ]]; then
-    return 0
-  fi
+  case "${INSIGHT_INSTALL}" in
+    current | declined) return 0 ;;
+  esac
   echo
   echo "Installing Insight:"
-  run_sima_cli_install "${INSIGHT_INSTALL_DIR}" "${SIMA_CLI_RESOLVED}" -d . insight
+  if run_sima_cli_install "${INSIGHT_INSTALL_DIR}" "${SIMA_CLI_RESOLVED}" -d . insight; then
+    restart_insight
+  elif [[ "${INSIGHT_INSTALL}" == "install" ]]; then
+    return 1
+  else
+    # The installed Insight still works, so a failed update does not stop Apps.
+    echo "⚠️  Insight was not updated. To retry, run: sima-cli neat install insight"
+  fi
+}
+
+# The SDK runs Insight as a service, which keeps the old version until restarted.
+restart_insight() {
+  if command -v insight-admin >/dev/null 2>&1; then
+    insight-admin restart \
+      || echo "⚠️  Insight was not restarted. To retry, run: insight-admin restart"
+  fi
 }
 
 locate_package_staging() {
@@ -548,6 +592,7 @@ else
   CORE_LABEL="${COMPATIBLE_CORE_VERSION:-${CORE_PACKAGE}}"
   INSTALL_PLACE="$(detect_install_place)"
   LOCAL_STATUS="$(summarize_neat_status "$(read_local_neat_status)")"
+  INSIGHT_UPDATE_VERSION="$(read_insight_update)"
   check_paired_devkit
   print_dependency_status
   decide_core_install

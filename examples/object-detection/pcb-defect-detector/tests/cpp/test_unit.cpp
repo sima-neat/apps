@@ -62,7 +62,6 @@ std::string config_body(const std::string& extra_decode = "", const std::string&
       .append("  max_detections: 300\n")
       .append(extra_decode)
       .append("runtime:\n")
-      .append("  timeout_ms: 8000\n")
       .append("  num_runs: 1\n")
       .append("  queue_depth: 8\n")
       .append(extra_runtime)
@@ -295,8 +294,6 @@ int main(int argc, char** argv) {
   ok &= validate_rejects(binary, "test_rejects_zero_max_detections",
                          config_body("  max_detections: 0\n"), "decode.max_detections",
                          "zero decode.max_detections");
-  ok &= validate_rejects(binary, "test_rejects_zero_timeout", config_body("", "  timeout_ms: 0\n"),
-                         "runtime.timeout_ms", "zero runtime.timeout_ms");
   ok &= validate_rejects(binary, "test_rejects_zero_num_runs",
                          config_body("", "  num_runs: 0\n"), "runtime.num_runs",
                          "zero runtime.num_runs");
@@ -305,8 +302,8 @@ int main(int argc, char** argv) {
                          "zero runtime.queue_depth");
   // The Python twin mirrors both rules; its unit tests cover the same values.
   ok &= validate_rejects(binary, "test_rejects_trailing_space_in_quoted_integer",
-                         config_body("", "  timeout_ms: \"8000 \"\n"), "runtime.timeout_ms",
-                         "trailing whitespace in a quoted runtime.timeout_ms");
+                         config_body("", "  queue_depth: \"8 \"\n"), "runtime.queue_depth",
+                         "trailing whitespace in a quoted runtime.queue_depth");
   std::string null_model_path = config_body();
   const std::string shipped_path = "path: models/yolo26n_plc_mpk.tar.gz";
   null_model_path.replace(null_model_path.find(shipped_path), shipped_path.size(), "path: null");

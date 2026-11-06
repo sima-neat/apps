@@ -334,8 +334,6 @@ class TestE2E:
         ("missing config file", None, 2),
         ("top-level scalar", "just-a-string\n", 2),
         ("io section is a scalar", "io: /images\nmodels:\n  m:\n    path: m.tar.gz\n", 2),
-        ("runtime section is a scalar",
-         "runtime: 5000\nmodels:\n  m:\n    path: m.tar.gz\n", 2),
         ("no models", "io:\n  input: null\n", 2),
         ("model without a path", "models:\n  m: {}\n", 2),
         ("unsupported preprocess",
@@ -346,8 +344,6 @@ class TestE2E:
          "models:\n  m:\n    path: m.tar.gz\n    top_k: 1.9\n", 2),
         ("non-positive top_k",
          "models:\n  m:\n    path: m.tar.gz\n    top_k: 0\n", 2),
-        ("non-positive timeout",
-         "runtime:\n  timeout_ms: 0\nmodels:\n  m:\n    path: m.tar.gz\n", 2),
         ("unquoted non-string profile name",
          "models:\n  true:\n    path: m.tar.gz\n", 2),
         ("profile name with a dot",
@@ -385,8 +381,6 @@ class TestE2E:
         # defaults, so testing only a truthy scalar missed them entirely.
         ("io section is false", "io: false\nmodels:\n  m:\n    path: m.tar.gz\n", 2),
         ("io section is zero", "io: 0\nmodels:\n  m:\n    path: m.tar.gz\n", 2),
-        ("runtime section is false",
-         "runtime: false\nmodels:\n  m:\n    path: m.tar.gz\n", 2),
         ("validation section is false",
          "validation: false\nmodels:\n  m:\n    path: m.tar.gz\n", 2),
         ("models section is false", "models: false\n", 2),
@@ -501,13 +495,11 @@ class TestE2E:
         # std::stoll throw out of the parser (exit 6) where Python's arbitrary
         # -size int plus the int32 range check reports a config error (exit 2).
         ("sexagesimal integer overflows long long",
-         "runtime:\n  timeout_ms: 999999999999999999999:00\n"
-         "models:\n  m:\n    path: m.tar.gz\n", 2),
+         "models:\n  m:\n    path: m.tar.gz\n    top_k: 999999999999999999999:00\n", 2),
         # The accumulation itself overflowed here - signed overflow is
         # undefined, so this one was UB that happened to land on exit 2.
         ("sexagesimal accumulation overflows long long",
-         "runtime:\n  timeout_ms: 9223372036854775807:59\n"
-         "models:\n  m:\n    path: m.tar.gz\n", 2),
+         "models:\n  m:\n    path: m.tar.gz\n    top_k: 9223372036854775807:59\n", 2),
         # A duplicate profile used to configure the two entrypoints differently:
         # PyYAML dropped the first mapping whole, ScalarConfig merged the two
         # field by field, so C++ kept the invalid top_k (exit 2) while Python

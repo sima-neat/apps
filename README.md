@@ -17,7 +17,7 @@ Run the installation on the Modalix DevKit. If the DevKit has no internet access
 
 - It skips a Neat Library that matches the compatible version. Otherwise it asks before installing it. Press Enter, or give no answer as in a script, to install it. Answer `n` to keep the installed Neat Library.
 - From an SDK container paired with a DevKit, it also checks the DevKit's Neat Library over SSH and can install it on both. If the SDK is not paired or the DevKit is unreachable, it warns that the DevKit will not get Neat Library and asks whether to install it in the SDK only. To pair, run `sima-cli sdk setup --devkit <devkit-ip>` on the host.
-- It keeps an installed Insight, and asks before installing Insight when none is installed. To update it, run `sima-cli neat install insight`.
+- It asks before installing Insight when none is installed. It also asks before updating an installed Insight when `neat --json --channel main` reports a different version, because the update installs the latest `main`. Answer `n` to keep it. Without network access, it keeps the installed Insight.
 
 To keep the installed Neat Library and Insight without being asked, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps`. Examples built for a different Neat Library may fail with it. See [Dependency Selection](#dependency-selection).
 

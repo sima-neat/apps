@@ -1765,12 +1765,12 @@ simaai::neat::Model build_model(const ModelProfile& profile) {
 // warming up on a customer image would make the warm-up fail whenever that
 // image does, turning a measurement detail into a second failure path. Kept in
 // step with warm_up() in the Python entrypoint.
-void warm_up(simaai::neat::Model& model, const ModelProfile& profile, int timeout_ms) {
+void warm_up(simaai::neat::Model& model, const ModelProfile& profile) {
   try {
     const cv::Mat blank = cv::Mat::zeros(profile.input_height, profile.input_width, CV_8UC3);
     const auto input =
         simaai::neat::Tensor::from_cv_mat(blank, simaai::neat::ImageSpec::PixelFormat::RGB);
-    (void)model.run(simaai::neat::TensorList{input}, timeout_ms);
+    (void)model.run(simaai::neat::TensorList{input});
   } catch (const std::exception& e) {
     // A failed warm-up costs accuracy of the first measurement, nothing more.
     // The real inferences report their own per-image, per-model errors, so
@@ -1781,14 +1781,14 @@ void warm_up(simaai::neat::Model& model, const ModelProfile& profile, int timeou
 }
 
 Prediction classify(simaai::neat::Model& model, const ModelProfile& profile,
-                    const fs::path& image_path, int timeout_ms) {
+                    const fs::path& image_path) {
   const cv::Mat rgb = sima_examples::load_rgb_resized(image_path.string(), profile.input_width,
                                                       profile.input_height);
   const auto input =
       simaai::neat::Tensor::from_cv_mat(rgb, simaai::neat::ImageSpec::PixelFormat::RGB);
 
   const auto start = std::chrono::steady_clock::now();
-  const auto outputs = model.run(simaai::neat::TensorList{input}, timeout_ms);
+  const auto outputs = model.run(simaai::neat::TensorList{input});
   const double inference_ms =
       std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 
@@ -1813,7 +1813,7 @@ Prediction classify(simaai::neat::Model& model, const ModelProfile& profile,
 }
 
 std::vector<ImageResult> run_all(std::vector<ModelProfile>& profiles,
-                                 const std::vector<fs::path>& images, int timeout_ms) {
+                                 const std::vector<fs::path>& images) {
   std::vector<ImageResult> results;
   results.reserve(images.size());
   // Fingerprint every input up front: models are loaded one at a time, so each
@@ -1829,11 +1829,11 @@ std::vector<ImageResult> run_all(std::vector<ModelProfile>& profiles,
   for (auto& profile : profiles) {
     std::cout << "Loading model '" << profile.name << "': " << profile.path << "\n";
     simaai::neat::Model model = build_model(profile);
-    warm_up(model, profile, timeout_ms);
+    warm_up(model, profile);
     for (auto& result : results) {
       try {
         check_unchanged(result.image_path, result.fingerprint);
-        Prediction prediction = classify(model, profile, result.image_path, timeout_ms);
+        Prediction prediction = classify(model, profile, result.image_path);
         // Only keep the prediction once the bytes behind it are proven unchanged,
         // so a swapped input leaves an error and no result.
         check_unchanged(result.image_path, result.fingerprint);
@@ -2576,13 +2576,13 @@ int main(int argc, char** argv) {
       }
     }
 
-    // `io: /images` or `runtime: 5000` leaves ScalarConfig holding a scalar at
+    // `io: /images` or `validation: 5` leaves ScalarConfig holding a scalar at
     // the section name, and every nested lookup below would quietly fall back to
     // its default. Python rejects these, so reject them here too.
     // Through config_scalar, not string_value: a section whose value decodes to
     // null - `io: "\\x6eull"` - is absent to Python and must be absent here too,
     // and the message quotes the decoded text the customer effectively wrote.
-    for (const char* section : {"io", "runtime", "validation", "models"}) {
+    for (const char* section : {"io", "validation", "models"}) {
       if (const auto value = config_scalar(raw, section)) {
         throw ConfigError(std::string("`") + section + "` must be a mapping, got " + *value);
       }
@@ -2642,11 +2642,6 @@ int main(int argc, char** argv) {
       throw ConfigError("validation.min_probability must be a number, got " + *text);
     }();
 
-    const int timeout_ms = config_int(raw, "runtime.timeout_ms", 20000);
-    if (timeout_ms <= 0) {
-      throw ConfigError("runtime.timeout_ms must be positive, got " + std::to_string(timeout_ms));
-    }
-
     auto profiles = load_profiles(raw, args.config_path);
     for (auto& profile : profiles) {
       profile.labels = load_label_map(profile.label_map, profile.num_classes);
@@ -2673,7 +2668,7 @@ int main(int argc, char** argv) {
                 << " model(s): " << joined << "\n";
 
       const auto start = std::chrono::steady_clock::now();
-      results = run_all(profiles, images, timeout_ms);
+      results = run_all(profiles, images);
       total_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
                      .count();
     }

@@ -43,7 +43,6 @@ struct Config {
   int channel = 0;
   int bitrate_kbps = 1000;
   int frames = 0;
-  int timeout_ms = 20000;
 };
 
 Config load_config(const fs::path& path) {
@@ -58,12 +57,8 @@ Config load_config(const fs::path& path) {
   cfg.channel = raw.int_or("output.insight.channel", 0);
   cfg.bitrate_kbps = raw.int_or("output.insight.bitrate_kbps", 1000);
   cfg.frames = raw.int_or("runtime.frames", 0);
-  cfg.timeout_ms = raw.int_or("runtime.timeout_ms", 20000);
   if (cfg.frames < 0) {
     throw std::runtime_error("runtime.frames must be >= 0");
-  }
-  if (cfg.timeout_ms <= 0) {
-    throw std::runtime_error("runtime.timeout_ms must be > 0");
   }
   if (cfg.rtsp_url.empty() || cfg.latency_ms < 0) {
     throw std::runtime_error("set source.rtsp_url and a non-negative source.latency_ms");
@@ -201,10 +196,10 @@ Source build_source(const Config& cfg, const sima_examples::RtspStreamInfo& stre
   return source;
 }
 
-cv::Mat pull_frame(neat::Run& run, int timeout_ms) {
+cv::Mat pull_frame(neat::Run& run) {
   neat::Sample sample;
   neat::PullError error;
-  const auto status = run.pull("frame", timeout_ms, sample, &error);
+  const auto status = run.pull("frame", 20000, sample, &error);
   if (!sima_examples::pull_status_has_sample(status, "frame", error, run.last_error())) {
     throw std::runtime_error("timed out waiting for an RTSP frame");
   }
@@ -314,7 +309,7 @@ int main(int argc, char** argv) {
             stream.width > 0 && stream.height > 0 && stream.fps > 0,
         "could not read the frame size and rate of " + cfg.rtsp_url);
     auto source = build_source(cfg, stream);
-    cv::Mat frame = pull_frame(source.run, cfg.timeout_ms);
+    cv::Mat frame = pull_frame(source.run);
     validate_frame(frame, stream.width, stream.height);
     const int input_width = stream.width, input_height = stream.height;
 
@@ -329,8 +324,7 @@ int main(int argc, char** argv) {
     std::size_t total_points = 0;
     int processed = 0;
     while (!stop_requested && (cfg.frames <= 0 || processed < cfg.frames)) {
-      const auto decoded =
-          neat::decode_superpoint(runner.run(neat::TensorList{input}, cfg.timeout_ms));
+      const auto decoded = neat::decode_superpoint(runner.run(neat::TensorList{input}));
       if (decoded.size() != 1) {
         throw std::runtime_error("SuperPoint must return one feature set per frame");
       }
@@ -343,7 +337,7 @@ int main(int argc, char** argv) {
       if (stop_requested || (cfg.frames > 0 && processed >= cfg.frames)) {
         break;
       }
-      frame = pull_frame(source.run, cfg.timeout_ms);
+      frame = pull_frame(source.run);
       validate_frame(frame, input_width, input_height);
       input = prepare_input(frame);
     }

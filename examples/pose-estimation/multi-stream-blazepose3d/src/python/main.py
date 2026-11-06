@@ -890,7 +890,6 @@ def reliable_model_run_options():
     options.preset = pyneat.RunPreset.Reliable
     options.overflow_policy = pyneat.OverflowPolicy.Block
     options.output_memory = pyneat.OutputMemory.ZeroCopy
-    options.input_timeout_ms = 30000
     options.startup_preflight = False
     return options
 

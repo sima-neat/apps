@@ -441,7 +441,6 @@ def prepare_retinaface_frame(image_path: Path) -> tuple[pyneat.Tensor, np.ndarra
 def run_retinaface_inference(
     run: Any,
     image_path: Path,
-    timeout_ms: int,
 ) -> tuple[list[pyneat.Tensor], np.ndarray, PreprocMeta]:
     _log(f"Starting inference. image_path={image_path}")
     input_tensor, bgr, meta = prepare_retinaface_frame(image_path)
@@ -451,7 +450,7 @@ def run_retinaface_inference(
         raise RuntimeError("Failed to push frame into Graph pipeline")
 
     _log("Pulling output sample from Graph")
-    sample = run.pull(timeout_ms=timeout_ms)
+    sample = run.pull()
     if sample is None:
         raise RuntimeError("Graph.pull() returned None")
 
@@ -487,7 +486,6 @@ def main() -> int:
     max_draw = int(decode_cfg.get("max_draw", 50))
     profile = bool(runtime_cfg.get("profile", False))
     num_runs = int(runtime_cfg.get("num_runs", 100))
-    timeout_ms = int(runtime_cfg.get("timeout_ms", 20000))
 
     global VERBOSE
     VERBOSE = bool(runtime_cfg.get("verbose", False))
@@ -526,7 +524,7 @@ def main() -> int:
             if not run.push([input_tensor]):
                 print(f"Run {i}: failed to push frame into Graph pipeline", file=sys.stderr)
                 break
-            sample = run.pull(timeout_ms=timeout_ms)
+            sample = run.pull()
             t1 = time.perf_counter()
             if sample is None:
                 print(f"Run {i}: Graph.pull() returned None", file=sys.stderr)
@@ -617,7 +615,7 @@ def main() -> int:
         for image_path in image_paths:
             _log("Invoking run_retinaface_inference()")
             try:
-                tensors, orig_bgr, meta = run_retinaface_inference(run, image_path, timeout_ms)
+                tensors, orig_bgr, meta = run_retinaface_inference(run, image_path)
             except Exception as e:
                 print(f"Error during inference for {image_path}: {e}", file=sys.stderr)
                 return 3

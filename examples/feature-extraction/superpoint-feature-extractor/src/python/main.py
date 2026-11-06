@@ -40,12 +40,9 @@ def load_config(path: Path) -> argparse.Namespace:
         channel=int(insight.get("channel", 0)),
         bitrate_kbps=int(insight.get("bitrate_kbps", 1000)),
         frames=int(runtime.get("frames", 0)),
-        timeout_ms=int(runtime.get("timeout_ms", 20000)),
     )
     if config.frames < 0:
         raise ValueError("runtime.frames must be >= 0")
-    if config.timeout_ms <= 0:
-        raise ValueError("runtime.timeout_ms must be > 0")
     if not config.rtsp_url or config.latency_ms < 0:
         raise ValueError("set source.rtsp_url and a non-negative source.latency_ms")
     if not config.insight_host:
@@ -168,8 +165,8 @@ def build_source(config, width, height, fps, pyneat):
     return graph, graph.build(run_options)
 
 
-def pull_frame(run, timeout_ms, np, cv2, pyneat):
-    sample = run.pull("frame", timeout_ms)
+def pull_frame(run, np, cv2, pyneat):
+    sample = run.pull("frame", 20000)
     if sample is None:
         raise RuntimeError("timed out waiting for an RTSP frame")
     field = sample
@@ -300,7 +297,7 @@ def main() -> int:
     try:
         input_width, input_height, fps = probe_stream(config, cv2)
         _source_graph, source_run = build_source(config, input_width, input_height, fps, pyneat)
-        frame = pull_frame(source_run, config.timeout_ms, np, cv2, pyneat)
+        frame = pull_frame(source_run, np, cv2, pyneat)
         validate_frame(frame, np, (input_height, input_width, 3))
         input_shape = frame.shape
         model = pyneat.Model(
@@ -315,7 +312,7 @@ def main() -> int:
         processed = 0
         total_points = 0
         while not stop_requested and (config.frames <= 0 or processed < config.frames):
-            output = runner.run([model_input], timeout_ms=config.timeout_ms)
+            output = runner.run([model_input])
             points = feature_points(
                 output,
                 input_width,
@@ -330,7 +327,7 @@ def main() -> int:
 
             if stop_requested or (config.frames > 0 and processed >= config.frames):
                 break
-            frame = pull_frame(source_run, config.timeout_ms, np, cv2, pyneat)
+            frame = pull_frame(source_run, np, cv2, pyneat)
             validate_frame(frame, np, input_shape)
             model_input = input_tensor(frame, np, pyneat)
 
