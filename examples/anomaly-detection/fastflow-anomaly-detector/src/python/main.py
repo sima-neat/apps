@@ -225,7 +225,6 @@ class InsightVideo:
         source.depth = 3
         source.fps_n = fps
         source.fps_d = 1
-        source.memory_policy = pyneat.InputMemoryPolicy.Ev74
         encode = pyneat.SimaEncodeOptions()
         encode.fps = fps
         options = pyneat.VideoSenderOptions.from_raw(encode)
