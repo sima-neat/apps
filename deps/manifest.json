@@ -1,6 +1,7 @@
 {
   "neat-core": {
-    "policy": "snap"
+    "ref": "codex/bound-dma-transfer-cache",
+    "spec": "1797d463f8ea"
   },
   "sdk": {
     "channel": "develop"
