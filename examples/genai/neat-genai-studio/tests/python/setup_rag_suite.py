@@ -1,7 +1,7 @@
 """setup.sh's SETUP_RAG switch: what a run installs, downloads and writes with
-document search (RAG) on and off, and how a re-run keeps the choice. python3,
-the venv tools and PyNeat are stubs that record their arguments, so nothing is
-installed or fetched."""
+document search (RAG) on and off, and how a re-run keeps the choice; and how a
+re-run keeps the chat model limit. python3, the venv tools and PyNeat are stubs
+that record their arguments, so nothing is installed or fetched."""
 
 from __future__ import annotations
 
@@ -70,7 +70,9 @@ class RagDatabaseCleanupTests(unittest.TestCase):
                 manager.release_all.assert_called_once_with()
 
 
-class SetupRagSwitchTests(unittest.TestCase):
+class SetupFixture(unittest.TestCase):
+    """setup.sh against stubbed tools in a temp dir; no tests of its own."""
+
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.tmp = Path(self._tmp.name)
@@ -93,19 +95,24 @@ class SetupRagSwitchTests(unittest.TestCase):
             ASR_MODEL_REPO="", INSTALL_TTS_VOICES="0", INSTALL_SUPERTONIC="0", NO_COLOR="1",
         )
         for name in ("SETUP_RAG", "STUDIO_CONFIG_PYTHON", "CHAT_MODEL_REPO", "CATALOG_MODEL_REPOS",
-                     "ASR_CATALOG_MODEL_REPOS", "SKIP_MODEL_DOWNLOAD"):
+                     "ASR_CATALOG_MODEL_REPOS", "SKIP_MODEL_DOWNLOAD", "MAX_RESIDENT_CHAT_MODELS"):
             self.env.pop(name, None)
 
     def tearDown(self):
         self._tmp.cleanup()
 
-    def _setup(self, *args, **env):
+    def _run(self, *args, **env):
         self.log.write_text("", encoding="utf-8")
-        result = subprocess.run(["bash", str(SETUP), *args], env={**self.env, **env},
-                                stdin=subprocess.DEVNULL, capture_output=True, text=True)
+        return subprocess.run(["bash", str(SETUP), *args], env={**self.env, **env},
+                              stdin=subprocess.DEVNULL, capture_output=True, text=True)
+
+    def _setup(self, *args, **env):
+        result = self._run(*args, **env)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return self.log.read_text(encoding="utf-8")
 
+
+class SetupRagSwitchTests(SetupFixture):
     def _rag_config(self):
         sys.path.insert(0, str(EXAMPLE / "src" / "python"))
         from shared.config import load_ui_config
@@ -143,6 +150,58 @@ class SetupRagSwitchTests(unittest.TestCase):
         self._assert_rag_steps(self._setup(SETUP_RAG="1"), present=True)
         self.assertTrue(self._rag_config().enabled)
         self.assertIn("requirements-rag.txt", self._setup("--dependencies-only"))
+
+
+class SetupResidentLimitTests(SetupFixture):
+    """MAX_RESIDENT_CHAT_MODELS: environment > the existing config > 2, so a
+    limit raised in config.local.yaml survives a re-run (Insight's "Run setup
+    again" runs a plain ./setup.sh)."""
+
+    def _limit(self):
+        sys.path.insert(0, str(EXAMPLE / "src" / "python"))
+        from shared.config import load_server_config
+        return load_server_config(self.config, self.tmp).max_resident_chat_models
+
+    def test_a_first_run_keeps_two_models_loaded(self):
+        self._setup(SETUP_RAG="0")
+        self.assertEqual(self._limit(), 2)
+
+    def test_a_rerun_keeps_a_hand_edited_limit_and_the_environment_wins(self):
+        self._setup(SETUP_RAG="0")
+        text = self.config.read_text(encoding="utf-8")
+        self.config.write_text(text.replace("max_resident_chat_models: 2", "max_resident_chat_models: 4"),
+                               encoding="utf-8")
+        self._setup(SETUP_RAG="0")
+        self.assertEqual(self._limit(), 4)
+        self._setup(SETUP_RAG="0", MAX_RESIDENT_CHAT_MODELS="1")
+        self.assertEqual(self._limit(), 1)
+        self._setup(SETUP_RAG="0")
+        self.assertEqual(self._limit(), 1)
+
+    def test_a_hand_edited_limit_above_the_maximum_becomes_the_maximum_on_a_rerun(self):
+        self._setup(SETUP_RAG="0")
+        text = self.config.read_text(encoding="utf-8")
+        self.config.write_text(text.replace("max_resident_chat_models: 2", "max_resident_chat_models: 10"),
+                               encoding="utf-8")
+        self._setup(SETUP_RAG="0")
+        self.assertIn("max_resident_chat_models: 4", self.config.read_text(encoding="utf-8"))
+
+    def test_a_hand_edited_fraction_stops_a_rerun_and_is_left_in_place(self):
+        self._setup(SETUP_RAG="0")
+        text = self.config.read_text(encoding="utf-8").replace("max_resident_chat_models: 2", "max_resident_chat_models: 2.5")
+        self.config.write_text(text, encoding="utf-8")
+        result = self._run(SETUP_RAG="0")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not '2.5'", result.stderr)
+        self.assertEqual(self.config.read_text(encoding="utf-8"), text)
+
+    def test_a_limit_outside_1_to_4_stops_before_anything_is_written(self):
+        for value in ("0", "two", "-1", "5"):
+            with self.subTest(value=value):
+                result = self._run(SETUP_RAG="0", MAX_RESIDENT_CHAT_MODELS=value)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(f"not '{value}'", result.stderr)
+                self.assertFalse(self.config.exists())
 
 
 if __name__ == "__main__":

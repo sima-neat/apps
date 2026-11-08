@@ -34,7 +34,7 @@ def valid_config() -> dict:
         "model": {"path": "models/pack.tar.gz", "labels": str(LABELS_TXT)},
         "io": {"input_dir": "assets/datasets/pcb", "output_dir": "sandbox/pcb-defect-detector"},
         "decode": {"score_threshold": 0.25, "nms_iou": 0.45, "max_detections": 300},
-        "runtime": {"timeout_ms": 8000, "num_runs": 1, "queue_depth": 8},
+        "runtime": {"num_runs": 1, "queue_depth": 8},
         "output": {"overlay": True},
     }
 
@@ -128,8 +128,8 @@ class TestConfigLoading:
     def test_quoted_integers_match_the_cpp_parser(self, raw_value, expected):
         """The C++ parser unquotes before parsing, so "8000" is the same setting."""
         raw = valid_config()
-        raw["runtime"]["timeout_ms"] = raw_value
-        assert main.build_app_config(raw).timeout_ms == expected
+        raw["runtime"]["queue_depth"] = raw_value
+        assert main.build_app_config(raw).queue_depth == expected
 
     @pytest.mark.parametrize(
         "bad", [1.0, 1.5, "1.0", "8e3", "abc", "", True, "1_0", "8000 ", " 8000 "]
@@ -179,12 +179,12 @@ class TestConfigLoading:
         raw = valid_config()
         raw["model"]["labels"] = null
         raw["io"] = {"input_dir": null, "output_dir": null}
-        raw["runtime"]["timeout_ms"] = null
+        raw["runtime"]["queue_depth"] = null
         cfg = main.build_app_config(raw)
         assert cfg.labels_path.name == "pcb_label.txt"
         assert cfg.input_dir == Path("assets/datasets/pcb")
         assert cfg.output_dir == Path("sandbox/pcb-defect-detector")
-        assert cfg.timeout_ms == 8000
+        assert cfg.queue_depth == 8
 
     @pytest.mark.parametrize(
         "section,key,value",
@@ -193,7 +193,6 @@ class TestConfigLoading:
             ("decode", "score_threshold", -0.1),
             ("decode", "nms_iou", 1.2),
             ("decode", "max_detections", 0),
-            ("runtime", "timeout_ms", 0),
             ("runtime", "num_runs", 0),
             ("runtime", "queue_depth", 0),
         ],

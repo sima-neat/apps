@@ -29,13 +29,10 @@ int main(int argc, char** argv) {
   const char* models_dir_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
   const std::string models_dir = models_dir_raw ? models_dir_raw : "models";
   const fs::path model = configured_model_path("superpoint-feature-extractor", models_dir);
-  const fs::path input = "assets/datasets/tum-rgbd/freiburg1-desk.mp4";
   if (!fs::is_regular_file(model)) {
     return skip_or_fail("qualified SuperPoint model not found under SIMANEAT_APPS_TEST_MODELS_DIR");
   }
-  if (!fs::is_regular_file(input)) {
-    return skip_or_fail("TUM RGB-D SuperPoint input video is missing");
-  }
+  const char* source_url = env_or_skip("SIMANEAT_TEST_RTSP_H264_URL", "RTSP H.264 stream URL");
 
   const std::string insight_host = env_or_null("SIMANEAT_APPS_TEST_INSIGHT_HOST")
                                        ? env_or_null("SIMANEAT_APPS_TEST_INSIGHT_HOST")
@@ -45,7 +42,7 @@ int main(int argc, char** argv) {
   const fs::path config = test_dir / "config.yaml";
   write_e2e_config("superpoint-feature-extractor", config,
                    {{"model.path", fs::absolute(model).string()},
-                    {"io.input", fs::absolute(input).string()},
+                    {"source.rtsp_url", source_url},
                     {"output.insight.host", insight_host},
                     {"output.insight.video_port", std::to_string(video_port)},
                     {"output.insight.channel", "0"},

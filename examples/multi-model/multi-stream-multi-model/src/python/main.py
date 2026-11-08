@@ -987,13 +987,10 @@ ENCODED_TO_DECODER = "encoded_to_decoder"
 ENCODED_TO_VIDEO = "encoded_to_video"
 
 
-def encoded_input_options(codec, memory_policy):
+def encoded_input_options(codec):
     opt = pyneat.InputOptions()
     opt.payload_type = pyneat.PayloadType.Encoded
     opt.format = encoded_format_tag(codec)
-    # The decoder reads the encoded stream from the EV74's own memory; the sender reads it from
-    # system memory.
-    opt.memory_policy = memory_policy
     return opt
 
 
@@ -1188,9 +1185,7 @@ def connect_source_stream(app: AppRuntime, cfg: AppConfig, stream: StreamRuntime
 
     decoder = pyneat.Graph("decoder")
     decoder.connect(
-        pyneat.nodes.input(
-            ENCODED_TO_DECODER, encoded_input_options(codec, pyneat.InputMemoryPolicy.Ev74)
-        ),
+        pyneat.nodes.input(ENCODED_TO_DECODER, encoded_input_options(codec)),
         pyneat.nodes.sima_decode(decoder_options(cfg, stream.fmt)),
     )
     decoder.add(decoded_frame_caps(cfg, stream.fmt))
@@ -1206,10 +1201,7 @@ def connect_source_stream(app: AppRuntime, cfg: AppConfig, stream: StreamRuntime
     if cfg.video_enabled:
         video = pyneat.Graph("video")
         video.connect(
-            pyneat.nodes.input(
-                ENCODED_TO_VIDEO,
-                encoded_input_options(codec, pyneat.InputMemoryPolicy.SystemMemory),
-            ),
+            pyneat.nodes.input(ENCODED_TO_VIDEO, encoded_input_options(codec)),
             pyneat.groups.video_sender(make_video_options(cfg, stream.index)),
         )
 

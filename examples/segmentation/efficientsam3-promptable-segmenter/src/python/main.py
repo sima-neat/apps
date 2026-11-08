@@ -113,7 +113,7 @@ def encode_prompt(cfg: Config, tokens):
     one_hot[0, np.arange(TEXT_TOKENS), tokens] = 1.0
     encoder = pyneat.Model(cfg.text_encoder).build([ev74_tensor(one_hot)])
     encoder.push([ev74_tensor(one_hot)])
-    features = encoder.pull(PULL_TIMEOUT_MS).tensors[0].to_numpy(copy=True)
+    features = encoder.pull().tensors[0].to_numpy(copy=True)
     encoder.close()
     text = np.zeros((1, TEXT_TOKENS + 1, TEXT_DIM), np.float32)
     text[0, :TEXT_TOKENS] = features.reshape(TEXT_TOKENS, TEXT_DIM)
@@ -351,9 +351,7 @@ def run(cfg: Config) -> None:
                     in_flight.append((sample.pts_ns // 1_000_000, frame if save else None))
                     continue
 
-            result = runner.pull(PULL_TIMEOUT_MS)
-            if result is None:
-                raise RuntimeError("timed out waiting for the model")
+            result = runner.pull()
             pts_ms, saved_frame = in_flight.popleft()
             detections, masks = (tensor.to_numpy(copy=False) for tensor in result.tensors)
             segments = segments_of(detections, masks, cfg, width, height)

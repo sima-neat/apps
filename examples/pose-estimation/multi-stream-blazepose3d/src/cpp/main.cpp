@@ -847,13 +847,11 @@ fs::path parse_args(int argc, char** argv) {
   return config_path;
 }
 
-neat::InputOptions encoded_input_options(neat::nodes::groups::RtspCodec codec,
-                                         neat::InputMemoryPolicy memory) {
+neat::InputOptions encoded_input_options(neat::nodes::groups::RtspCodec codec) {
   neat::InputOptions options;
   options.payload_type = neat::PayloadType::Encoded;
   options.format =
       codec == neat::nodes::groups::RtspCodec::H265 ? neat::FormatTag::H265 : neat::FormatTag::H264;
-  options.memory_policy = memory;
   return options;
 }
 
@@ -920,8 +918,7 @@ neat::Graph make_decoder(const neat::nodes::groups::RtspDecodedInputOptions& opt
   decode.memory_opt = options.decoder_memory_opt;
 
   neat::Graph graph("decoder_" + options.decoder_name);
-  graph.connect(neat::nodes::Input(
-                    "encoded", encoded_input_options(options.codec, neat::InputMemoryPolicy::Ev74)),
+  graph.connect(neat::nodes::Input("encoded", encoded_input_options(options.codec)),
                 neat::nodes::SimaDecode(decode));
   graph.add(neat::nodes::CapsRaw("NV12", options.dec_width, options.dec_height,
                                  options.output_caps.fps, neat::CapsMemory::Any));
@@ -937,8 +934,7 @@ neat::Graph make_video_sender(const AppConfig& cfg, const StreamRuntime& stream)
   options.async = false;
   neat::Graph graph("video_" + stream.config.id);
   graph.connect(
-      neat::nodes::Input("encoded", encoded_input_options(stream.config.codec,
-                                                          neat::InputMemoryPolicy::SystemMemory)),
+      neat::nodes::Input("encoded", encoded_input_options(stream.config.codec)),
       neat::nodes::groups::VideoSender(options));
   return graph;
 }
@@ -1010,7 +1006,6 @@ neat::RunOptions reliable_model_run_options() {
   options.preset = neat::RunPreset::Reliable;
   options.overflow_policy = neat::OverflowPolicy::Block;
   options.output_memory = neat::OutputMemory::ZeroCopy;
-  options.input_timeout_ms = 30000;
   options.startup_preflight = false;
   return options;
 }

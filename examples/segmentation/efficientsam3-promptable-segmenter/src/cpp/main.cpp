@@ -154,8 +154,7 @@ std::vector<float> encode_prompt(const Config& cfg, const std::vector<int64_t>& 
   neat::Model model(cfg.text_encoder);
   neat::Model::Runner encoder = model.build(neat::TensorList{input});
   encoder.push(neat::TensorList{input});
-  const std::vector<float> features =
-      sima_examples::tensor_to_floats(encoder.pull(kPullTimeoutMs).tensors.at(0));
+  const std::vector<float> features = sima_examples::tensor_to_floats(encoder.pull().tensors.at(0));
   encoder.close();
   std::vector<float> text(static_cast<std::size_t>(kTextTokens + 1) * kTextDim, 0.0F);
   std::copy_n(features.begin(), kTextTokens * kTextDim, text.begin());
@@ -536,8 +535,8 @@ void run(const Config& cfg) {
         }
       }
 
-      const neat::Sample result = runner.pull(kPullTimeoutMs);
-      sima_examples::require(result.tensors.size() == 2, "timed out waiting for the model");
+      const neat::Sample result = runner.pull();
+      sima_examples::require(result.tensors.size() == 2, "model returned no result");
       const auto [pts_ms, saved_frame] = in_flight.front();
       in_flight.pop_front();
       const neat::Tensor& detections = result.tensors[0];

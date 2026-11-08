@@ -8,6 +8,7 @@ the model that failed.
 
 import io
 import json
+import re
 import threading
 import shutil
 import tempfile
@@ -20,7 +21,7 @@ from unittest.mock import patch
 from asr_switching_suite import FakeServer, make_model_dir
 from server.control_api import serve_control_api
 from server.model_manager import ModelLoadFailed, ModelManager, ResidentLimitReached
-from shared.config import HubConfig
+from shared.config import HubConfig, load_server_config, load_ui_config
 
 CHAT_MODELS = ("Llama-3.2-3B-Instruct", "Qwen2.5-1.5B-Instruct", "gemma-3-4b-it")
 ASR_MODEL = "whisper-small-a16w8"
@@ -314,6 +315,53 @@ class ResidentLimitControlApiTests(ResidentFixture):
         self.assertFalse(body["restarting"])
         self.assertIn("Restart GenAI Studio", body["error"])
         self.assertFalse(restarted.wait(0.8))
+
+
+class ResidentLimitDefaultTests(unittest.TestCase):
+    """Two chat/VLM models stay loaded by default: the packaged config, a
+    config without the key and the README agree (setup.sh's default is in
+    setup_rag_suite.SetupResidentLimitTests)."""
+
+    EXAMPLE = Path(__file__).resolve().parents[2]
+    DEFAULT = 2
+
+    def test_the_packaged_config_keeps_two_models_loaded(self):
+        config = self.EXAMPLE / "src" / "common" / "config.yaml"
+        self.assertEqual(load_server_config(config).max_resident_chat_models, self.DEFAULT)
+        self.assertEqual(load_ui_config(config).max_resident_chat_models, self.DEFAULT)
+
+    def test_a_config_without_the_key_keeps_two_models_loaded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / "config.json"
+            config.write_text(json.dumps({"server": {"models": {}}, "app": {}}), encoding="utf-8")
+            self.assertEqual(load_server_config(config).max_resident_chat_models, self.DEFAULT)
+            self.assertEqual(load_ui_config(config).max_resident_chat_models, self.DEFAULT)
+
+    def test_a_higher_limit_is_held_at_the_maximum(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / "config.json"
+            for value, expected in ((4, 4), (5, 4), (15, 4), (1, 1)):
+                with self.subTest(value=value):
+                    models = {"max_resident_chat_models": value}
+                    config.write_text(json.dumps({"server": {"models": models}, "app": {}}), encoding="utf-8")
+                    self.assertEqual(load_server_config(config).max_resident_chat_models, expected)
+                    self.assertEqual(load_ui_config(config).max_resident_chat_models, expected)
+
+    def test_a_limit_that_is_not_a_whole_number_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / "config.json"
+            for value in (2.5, 2.0, "two", True, False, 0, -1):
+                with self.subTest(value=value):
+                    models = {"max_resident_chat_models": value}
+                    config.write_text(json.dumps({"server": {"models": models}, "app": {}}), encoding="utf-8")
+                    with self.assertRaisesRegex(ValueError, "whole number"):
+                        load_server_config(config)
+
+    def test_the_readme_states_the_same_default(self):
+        readme = (self.EXAMPLE / "README.md").read_text(encoding="utf-8")
+        match = re.search(r"`server\.models\.max_resident_chat_models`:[^\n]*default `(\d+)`", readme)
+        self.assertIsNotNone(match)
+        self.assertEqual(int(match.group(1)), self.DEFAULT)
 
 
 if __name__ == "__main__":

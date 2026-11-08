@@ -9,9 +9,9 @@ unit:
 e2e:
   python:
     enabled: true
-    requires_rtsp: false
+    requires_rtsp: true
     models: [superpoint]
   cpp:
     enabled: true
-    requires_rtsp: false
+    requires_rtsp: true
     models: [superpoint]

@@ -13,12 +13,17 @@ Common application steps:
 
 1. Construct `simaai::neat::Model` or `pyneat.Model` from the model path.
 2. Inspect `input_specs()`, `output_specs()`, `metadata()`, and `info()` when the input/output contract is not obvious.
-3. Use `model.run(inputs, timeout_ms)` for the shortest synchronous path.
+3. Use `model.run(inputs)` for the shortest synchronous path.
 4. Use `model.build(...)` for repeated push/pull workloads that still need only the model route.
 5. Use `model.graph()` when the model is one fragment inside a larger `Graph`.
 
 Do not manually recreate the model route unless the public API requires it. Let
 `Model` assemble the model-owned preprocess, inference, and postprocess stages.
+
+For tensors matching `model.input_specs()`, leave preprocessing options unset.
+Required MPK Cast/Quant/Tess adapters remain automatic; `preprocess.enable = Off`
+does not select MLA-only execution. See Core's
+[Model guide](https://github.com/sima-neat/core/blob/develop/docs/develop-apps/development-workflow/model.mdx#raw-tensor-input).
 
 Read outputs by the contract `output_specs()` reports:
 

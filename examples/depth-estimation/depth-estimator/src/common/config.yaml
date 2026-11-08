@@ -7,5 +7,4 @@ io:                          # Input and output paths.
 
 runtime:                     # Runtime settings.
   infer_size: 518            # Square model input size.
-  timeout_ms: 20000          # Inference timeout in milliseconds.
   queue_depth: 4             # Runtime queue depth.

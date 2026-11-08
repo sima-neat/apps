@@ -320,17 +320,14 @@ class TestRuntimeOptions:
             PayloadType=SimpleNamespace(Encoded="encoded"),
             Format=SimpleNamespace(H264="h264", H265="h265"),
             RtspCodec=SimpleNamespace(H264="codec-h264", H265="codec-h265"),
-            InputMemoryPolicy=SimpleNamespace(Ev74="ev74", SystemMemory="system"),
         )
         monkeypatch.setattr(main, "pyneat", fake_pyneat)
 
-        policies = fake_pyneat.InputMemoryPolicy
-        for policy in (policies.Ev74, policies.SystemMemory):
-            assert main.encoded_input_options(fake_pyneat.RtspCodec.H265, policy).format == "h265"
-            assert main.encoded_input_options(fake_pyneat.RtspCodec.H264, policy).format == "h264"
-            assert main.encoded_input_options(
-                fake_pyneat.RtspCodec.H264, policy
-            ).memory_policy == policy
+        for codec, expected in ((fake_pyneat.RtspCodec.H265, "h265"),
+                                (fake_pyneat.RtspCodec.H264, "h264")):
+            options = main.encoded_input_options(codec)
+            assert options.format == expected
+            assert options.payload_type == "encoded"
 
     def test_realtime_link_tags_its_stream(self, monkeypatch):
         import main

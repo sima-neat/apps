@@ -1,0 +1,50 @@
+name: Build failure Slack notification
+
+on:
+  # Keep this listener on the default branch; never check out the failed revision here.
+  workflow_run:
+    workflows:
+      - Vulcan CI
+    types:
+      - completed
+    branches:
+      - main
+      - develop
+      - "v*.*.*"
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  notify-failure:
+    name: Notify actionable failure
+    if: >-
+      ${{
+        github.event.workflow_run.head_repository.full_name == github.repository &&
+        github.event.workflow_run.event != 'pull_request' &&
+        github.event.workflow_run.event != 'pull_request_target' &&
+        (
+        github.event.workflow_run.conclusion == 'failure' ||
+        github.event.workflow_run.conclusion == 'timed_out' ||
+        github.event.workflow_run.conclusion == 'action_required' ||
+        github.event.workflow_run.conclusion == 'startup_failure' ||
+        github.event.workflow_run.conclusion == 'stale'
+        )
+      }}
+    uses: sima-neat/.github/.github/workflows/vulcan-notify-slack.yml@main
+    with:
+      analyze_failure: true
+      channel_id: ${{ vars.SLACK_VULCAN_EVENT_CHANNEL_ID }}
+      run_id: ${{ github.event.workflow_run.id }}
+      repository: ${{ github.event.workflow_run.repository.full_name }}
+      workflow_name: ${{ github.event.workflow_run.name }}
+      branch: ${{ github.event.workflow_run.head_branch }}
+      head_sha: ${{ github.event.workflow_run.head_sha }}
+      conclusion: ${{ github.event.workflow_run.conclusion }}
+      run_attempt: ${{ github.event.workflow_run.run_attempt }}
+      run_url: ${{ github.event.workflow_run.html_url }}
+      actor: ${{ github.event.workflow_run.actor.login }}
+      commit_message: ${{ github.event.workflow_run.head_commit.message || '' }}
+    secrets:
+      slack_bot_token: ${{ secrets.SLACK_BOT_TOKEN }}

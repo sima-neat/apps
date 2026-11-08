@@ -776,11 +776,10 @@ def build_source_options(
     return options
 
 
-def encoded_input_options(codec, memory_policy):
+def encoded_input_options(codec):
     options = pyneat.InputOptions()
     options.payload_type = pyneat.PayloadType.Encoded
     options.format = pyneat.Format.H265 if codec == pyneat.RtspCodec.H265 else pyneat.Format.H264
-    options.memory_policy = memory_policy
     return options
 
 
@@ -820,10 +819,7 @@ def make_decoder(options):
     decode.num_buffers = options.num_buffers
     graph = pyneat.Graph(f"decoder_{options.decoder_name}")
     graph.connect(
-        pyneat.nodes.input(
-            "encoded",
-            encoded_input_options(options.codec, pyneat.InputMemoryPolicy.Ev74),
-        ),
+        pyneat.nodes.input("encoded", encoded_input_options(options.codec)),
         pyneat.nodes.sima_decode(decode),
     )
     graph.add(
@@ -847,12 +843,7 @@ def make_video_sender(cfg: AppConfig, stream: StreamRuntime):
     options.async_ = False
     graph = pyneat.Graph(f"video_{stream.config.id}")
     graph.connect(
-        pyneat.nodes.input(
-            "encoded",
-            encoded_input_options(
-                rtsp_codec(stream.config.codec), pyneat.InputMemoryPolicy.SystemMemory
-            ),
-        ),
+        pyneat.nodes.input("encoded", encoded_input_options(rtsp_codec(stream.config.codec))),
         pyneat.groups.video_sender(options),
     )
     return graph
@@ -899,7 +890,6 @@ def reliable_model_run_options():
     options.preset = pyneat.RunPreset.Reliable
     options.overflow_policy = pyneat.OverflowPolicy.Block
     options.output_memory = pyneat.OutputMemory.ZeroCopy
-    options.input_timeout_ms = 30000
     options.startup_preflight = False
     return options
 
