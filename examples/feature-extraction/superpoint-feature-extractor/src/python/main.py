@@ -6,12 +6,15 @@ import argparse
 import os
 import signal
 import sys
+from collections import namedtuple
 from pathlib import Path
 
 import yaml
 
 DESCRIPTOR_DIM = 256
 MAX_POINTS = 600
+
+FrameSize = namedtuple("FrameSize", ["width", "height"])
 
 
 def parse_args() -> argparse.Namespace:
@@ -80,7 +83,15 @@ def model_options(pyneat, input_width, input_height):
     return options
 
 
-def feature_points(output, source_width, source_height, np, pyneat):
+def model_input_size(model):
+    """Size of the tensor Preproc hands to the MLA: the frame of the decoded keypoints."""
+    contract = model.resolved_preprocess_plan().mla_contract
+    if contract.width <= 0 or contract.height <= 0:
+        raise RuntimeError("SuperPoint model input size is unresolved")
+    return FrameSize(int(contract.width), int(contract.height))
+
+
+def feature_points(output, model_size, source_size, np, pyneat):
     decoded = pyneat.decode_superpoint(list(output))
     if len(decoded) != 1:
         raise RuntimeError("SuperPoint must return one feature set per frame")
@@ -103,15 +114,24 @@ def feature_points(output, source_width, source_height, np, pyneat):
     if not points.size:
         return points
 
+    # The decoder reports model-input pixels (sima-neat/core#1328). Preproc stretched
+    # the source frame to the model input, so each axis maps back by its own ratio.
+    points = points * np.asarray(
+        [
+            source_size.width / model_size.width,
+            source_size.height / model_size.height,
+        ],
+        dtype=np.float32,
+    )
+
     # The frame edges are exclusive coordinates. Discard isolated decoder outliers
-    # instead of aborting the stream when inverse-affine rounding places a point on
-    # or beyond an edge.
+    # instead of aborting the stream when a point lands on or beyond an edge.
     drawable = (
         np.all(np.isfinite(points), axis=1)
         & (points[:, 0] >= 0)
-        & (points[:, 0] < source_width)
+        & (points[:, 0] < source_size.width)
         & (points[:, 1] >= 0)
-        & (points[:, 1] < source_height)
+        & (points[:, 1] < source_size.height)
     )
     return points[drawable]
 
@@ -296,6 +316,7 @@ def main() -> int:
         signal.signal(sig, request_stop)
     try:
         input_width, input_height, fps = probe_stream(config, cv2)
+        source_size = FrameSize(input_width, input_height)
         _source_graph, source_run = build_source(config, input_width, input_height, fps, pyneat)
         frame = pull_frame(source_run, np, cv2, pyneat)
         validate_frame(frame, np, (input_height, input_width, 3))
@@ -303,6 +324,7 @@ def main() -> int:
         model = pyneat.Model(
             str(config.model), model_options(pyneat, input_width, input_height)
         )
+        model_size = model_input_size(model)
         model_input = input_tensor(frame, np, pyneat)
         runner = model.build([model_input])
         _video_graph, video_run, video_port = build_video_sender(
@@ -313,13 +335,7 @@ def main() -> int:
         total_points = 0
         while not stop_requested and (config.frames <= 0 or processed < config.frames):
             output = runner.run([model_input])
-            points = feature_points(
-                output,
-                input_width,
-                input_height,
-                np,
-                pyneat,
-            )
+            points = feature_points(output, model_size, source_size, np, pyneat)
             total_points += len(points)
             draw_points(frame, points, cv2)
             stream_frame(video_run, frame, pyneat)
