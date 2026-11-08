@@ -38,9 +38,10 @@ Once set up, the Studio runs without internet access. The first `setup.sh` run a
 Run every command below in a shell on the board.
 
 ## Install Apps
-If the Core and Insight selected by Apps are already installed, run the
-install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps` to
-skip reinstalling them. See
+`sima-cli neat install apps` also offers to install the compatible Neat Library
+and Insight, and skips them when they are up to date. To keep the Neat
+Library and Insight you have without being asked, run the install as
+`NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps`. See
 [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
 
 Install the Apps bundle, enter it, and name the Studio's directory:
@@ -110,8 +111,9 @@ lists them all):
   `app.rag.enabled: false`; everything else works as usual.
 
 Re-running `setup.sh` (for example to add a model or voice) regenerates
-`config.local.yaml` but keeps your `app.web` settings, the Supertonic paths and
-whether RAG is installed (`app.rag.enabled`); the previous file is saved as
+`config.local.yaml` but keeps your `app.web` settings, the chat model limit
+(`server.models.max_resident_chat_models`), the Supertonic paths and whether RAG
+is installed (`app.rag.enabled`); the previous file is saved as
 `config.local.yaml.bak`.
 
 ## Configure
@@ -122,7 +124,7 @@ only to change:
 
 - `server.models.catalog_dir`: the directory scanned for models (default `/media/nvme/llima/models`).
 - `server.models.chat`: chat or vision-language models to load at startup (none by default).
-- `server.models.max_resident_chat_models`: how many chat or vision-language models stay loaded at once (default `1`; see [Keep several models loaded](#keep-several-models-loaded)).
+- `server.models.max_resident_chat_models`: how many chat or vision-language models stay loaded at once (`1` to `4`, default `2`; see [Keep several models loaded](#keep-several-models-loaded)).
 - `server.models.asr`: the speech-to-text model active at startup (default `whisper-small-a16w8`).
 - `server.hub.allow_download`: whether models may be downloaded from Hugging Face.
 - `app.request.max_tokens`: the default response length for chat requests that do not set `max_tokens`.
@@ -253,17 +255,23 @@ out-of-memory error, Studio returns HTTP 503 and restarts its backend to release
 memory. Only configured startup models reload; the failed selection is not retried.
 
 #### Keep several models loaded
-By default one chat/VLM model is loaded at a time, and loading another replaces
-it. To keep several loaded side by side, for example to compare them, raise
-`server.models.max_resident_chat_models` in `config.local.yaml` (or set
-`MAX_RESIDENT_CHAT_MODELS` before `setup.sh`), then restart the Studio. Each
-loaded model answers on `/v1/chat/completions` under its own name, and clients
-can use them at the same time. The Insight GenAI tab expects one loaded chat
-model until it supports several, so keep the default for it.
+By default up to two chat/VLM models stay loaded side by side, for example to
+compare them. Each loaded model answers on `/v1/chat/completions` under its own
+name, and clients can use them at the same time. To change the limit, from `1`
+to `4`, set `server.models.max_resident_chat_models` in `config.local.yaml` (or set
+`MAX_RESIDENT_CHAT_MODELS` before `setup.sh`), then restart the Studio. A re-run
+of `setup.sh` keeps the value. A higher value in the config is treated as `4`,
+because the models share one accelerator. With `1`, loading a model replaces the loaded one. How many fit depends on the
+models' sizes. A model that does not fit beside the loaded ones fails with
+`503` (`"code": "out_of_memory"`), and the Studio restarts its backend, which
+reloads only the configured startup models. For two large models, unload one
+first or set the limit to `1`.
 
 Past the limit, the Studio never unloads a model on its own, because another
-client may be using it. The load is refused with `409` and the loaded models,
-and it succeeds once the request names the ones to unload:
+client may be using it. The load is refused with `409`
+(`"code": "resident_limit"`) and the loaded models, and the Insight GenAI tab
+asks which loaded model to unload. Over the API, the load succeeds once the
+request names the ones to unload:
 
 ```bash
 curl -sk -X POST $B/models/load -H 'Content-Type: application/json' \

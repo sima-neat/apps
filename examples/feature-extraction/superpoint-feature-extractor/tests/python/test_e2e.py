@@ -27,15 +27,14 @@ def test_insight_pipeline(
     e2e_model_path,
     e2e_config_writer,
     test_timeout_ms,
+    rtsp_h264_url,
 ):
-    input_video = apps_root / "assets" / "datasets" / "tum-rgbd" / "freiburg1-desk.mp4"
-    assert input_video.is_file()
     insight_host = os.environ.get("SIMANEAT_APPS_TEST_INSIGHT_HOST", "127.0.0.1")
     video_port = int(os.environ.get("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", "9000"))
     config = e2e_config_writer(
         {
             "model": {"path": str(e2e_model_path)},
-            "io": {"input": str(input_video)},
+            "source": {"rtsp_url": rtsp_h264_url},
             "output": {
                 "insight": {
                     "host": insight_host,

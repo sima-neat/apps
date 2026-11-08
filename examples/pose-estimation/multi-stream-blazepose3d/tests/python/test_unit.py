@@ -342,7 +342,6 @@ def test_source_frame_rate_is_a_decoder_hint_not_a_caps_pin(monkeypatch, codec: 
             Format=SimpleNamespace(NV12="NV12", H264="H264", H265="H265"),
             CapsMemory=SimpleNamespace(Any="any"),
             PayloadType=SimpleNamespace(Encoded="encoded"),
-            InputMemoryPolicy=SimpleNamespace(Ev74="ev74"),
             groups=SimpleNamespace(rtsp_encoded_input=lambda options: ("rtsp", options)),
             nodes=SimpleNamespace(
                 input=lambda *args: ("input", args),

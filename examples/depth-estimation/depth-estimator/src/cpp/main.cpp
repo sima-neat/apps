@@ -28,7 +28,6 @@ struct Config {
   fs::path input_dir;
   fs::path output_dir;
   int infer_size = 518;
-  int timeout_ms = 20000;
   int queue_depth = 4;
 };
 
@@ -39,7 +38,6 @@ static Config load_config(const fs::path& path) {
   cfg.input_dir = raw.string_or("io.input_dir", "assets/datasets/coco");
   cfg.output_dir = raw.string_or("io.output_dir", "sandbox/depth-estimator");
   cfg.infer_size = raw.int_or("runtime.infer_size", 518);
-  cfg.timeout_ms = raw.int_or("runtime.timeout_ms", 20000);
   cfg.queue_depth = raw.int_or("runtime.queue_depth", 4);
   return cfg;
 }
@@ -245,7 +243,7 @@ int main(int argc, char** argv) {
         rgb, simaai::neat::ImageSpec::PixelFormat::RGB, simaai::neat::TensorMemory::EV74);
 
     std::cout << "[INFER] Running " << img_path.filename() << "...\n";
-    auto tensors = runner.run(simaai::neat::TensorList{input}, cfg.timeout_ms);
+    auto tensors = runner.run(simaai::neat::TensorList{input});
     std::cout << "[INFER] Got output\n";
     if (tensors.empty()) {
       std::cerr << "No output tensors for " << img_path.filename() << "\n";

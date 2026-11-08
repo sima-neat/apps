@@ -39,7 +39,6 @@ namespace {
 constexpr float kDefaultScoreThreshold = 0.25f;
 constexpr float kDefaultNmsIou = 0.45f;
 constexpr int kDefaultMaxDetections = 300;
-constexpr int kDefaultTimeoutMs = 8000;
 constexpr int kDefaultNumRuns = 1;
 constexpr int kDefaultQueueDepth = 8;
 // Appended to the stem of every annotated image.
@@ -58,7 +57,6 @@ struct Config {
   float score_threshold = kDefaultScoreThreshold;
   float nms_iou = kDefaultNmsIou;
   int max_detections = kDefaultMaxDetections;
-  int timeout_ms = kDefaultTimeoutMs;
   int num_runs = kDefaultNumRuns;
   int queue_depth = kDefaultQueueDepth;
   bool profile = false;
@@ -142,7 +140,6 @@ Config load_config(const CliOptions& cli) {
       static_cast<float>(raw.double_or("decode.score_threshold", kDefaultScoreThreshold));
   cfg.nms_iou = static_cast<float>(raw.double_or("decode.nms_iou", kDefaultNmsIou));
   cfg.max_detections = raw.int_or("decode.max_detections", kDefaultMaxDetections);
-  cfg.timeout_ms = raw.int_or("runtime.timeout_ms", kDefaultTimeoutMs);
   cfg.num_runs = raw.int_or("runtime.num_runs", kDefaultNumRuns);
   cfg.queue_depth = raw.int_or("runtime.queue_depth", kDefaultQueueDepth);
   cfg.profile = raw.bool_or("runtime.profile", false);
@@ -176,9 +173,6 @@ Config load_config(const CliOptions& cli) {
   }
   if (cfg.max_detections < 1) {
     throw std::runtime_error("decode.max_detections must be >= 1");
-  }
-  if (cfg.timeout_ms <= 0) {
-    throw std::runtime_error("runtime.timeout_ms must be > 0");
   }
   if (cfg.num_runs < 1) {
     throw std::runtime_error("runtime.num_runs must be >= 1");
@@ -402,8 +396,8 @@ int main(int argc, char** argv) {
     std::cout << "[validate] model=" << cfg.model_path << " classes=" << labels.size()
               << " score_threshold=" << cv::format("%.2f", cfg.score_threshold)
               << " nms_iou=" << cv::format("%.2f", cfg.nms_iou)
-              << " max_detections=" << cfg.max_detections << " timeout_ms=" << cfg.timeout_ms
-              << " num_runs=" << cfg.num_runs << " queue_depth=" << cfg.queue_depth << "\n";
+              << " max_detections=" << cfg.max_detections << " num_runs=" << cfg.num_runs
+              << " queue_depth=" << cfg.queue_depth << "\n";
     std::cout << "[validate] configuration OK\n";
     return 0;
   }
@@ -504,8 +498,7 @@ int main(int argc, char** argv) {
       }
 
       const auto infer_start = std::chrono::steady_clock::now();
-      const simaai::neat::TensorList out =
-          runner.run(std::vector<cv::Mat>{bgr}, cfg.timeout_ms);
+      const simaai::neat::TensorList out = runner.run(std::vector<cv::Mat>{bgr});
       const auto infer_end = std::chrono::steady_clock::now();
 
       // Throws rather than reporting a clean board when the model produced no

@@ -259,7 +259,6 @@ def main() -> int:
         model_cfg = config_mapping_or_empty(raw.get("model"), "model")
         io_cfg = config_mapping_or_empty(raw.get("io"), "io")
         decode_cfg = config_mapping_or_empty(raw.get("decode"), "decode")
-        runtime_cfg = config_mapping_or_empty(raw.get("runtime"), "runtime")
     except ValueError as exc:
         print(exc, file=sys.stderr)
         return 2
@@ -302,9 +301,6 @@ def main() -> int:
         max_detections = config_int_or(
             decode_cfg, "max_detections", 100, "decode.max_detections"
         )
-        timeout_ms = config_int_or(
-            runtime_cfg, "timeout_ms", 20000, "runtime.timeout_ms"
-        )
     except ValueError as exc:
         print(exc, file=sys.stderr)
         return 2
@@ -317,9 +313,6 @@ def main() -> int:
         return 2
     if max_detections < 1:
         print("decode.max_detections must be >= 1", file=sys.stderr)
-        return 2
-    if timeout_ms <= 0:
-        print("runtime.timeout_ms must be > 0", file=sys.stderr)
         return 2
     try:
         normalization_for_profile(preprocessing_profile)
@@ -379,7 +372,7 @@ def main() -> int:
             return 3
         seed_tensor = image_to_tensor(seed_bgr)
         runner = model.build([seed_tensor], route_options=pyneat.ModelRouteOptions())
-        runner.run([seed_tensor], timeout_ms=timeout_ms)
+        runner.run([seed_tensor])
     except Exception as exc:
         logger.debug("Model/pipeline build failure", exc_info=exc)
         # Core resolves the preprocess frame from the MPK and validates the SSD recipe.
@@ -408,7 +401,7 @@ def main() -> int:
                 return 3
 
             try:
-                out = runner.run([image_to_tensor(orig_bgr)], timeout_ms=timeout_ms)
+                out = runner.run([image_to_tensor(orig_bgr)])
             except Exception as exc:
                 logger.debug("Inference failure", exc_info=exc)
                 print(
