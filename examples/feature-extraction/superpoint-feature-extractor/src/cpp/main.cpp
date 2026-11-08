@@ -4,7 +4,6 @@
  *
  * Usage: superpoint-feature-extractor [--config <path>]
  */
-#include "feature_points.h"
 #include "neat.h"
 #include "support/runtime/config_utils.h"
 #include "support/runtime/example_utils.h"
@@ -113,7 +112,12 @@ std::vector<float> tensor_floats(const neat::Tensor& tensor) {
   return values;
 }
 
-superpoint_app::FrameSize model_input_size(const neat::Model& model) {
+struct FrameSize {
+  int width = 0;
+  int height = 0;
+};
+
+FrameSize model_input_size(const neat::Model& model) {
   const auto contract = model.resolved_preprocess_plan().mla_contract;
   if (contract.width <= 0 || contract.height <= 0) {
     throw std::runtime_error("SuperPoint model input size is unresolved");
@@ -141,6 +145,32 @@ std::vector<float> keypoints(const neat::FeaturePointTensors& features) {
   auto points = tensor_floats(features.keypoints);
   if (points.size() != static_cast<std::size_t>(count) * 2U) {
     throw std::runtime_error("SuperPoint keypoint data does not match its shape");
+  }
+  return points;
+}
+
+// Maps decoder keypoints (model-input pixels, interleaved x,y; sima-neat/core#1328) onto the
+// source frame that Preproc stretched to the model input, and drops points on or beyond a source
+// frame edge.
+std::vector<float> source_points(const std::vector<float>& model_points,
+                                 const FrameSize& model_size, const FrameSize& source_size) {
+  const float scale_x =
+      static_cast<float>(source_size.width) / static_cast<float>(model_size.width);
+  const float scale_y =
+      static_cast<float>(source_size.height) / static_cast<float>(model_size.height);
+  std::vector<float> points;
+  points.reserve(model_points.size());
+  for (std::size_t i = 0; i + 1 < model_points.size(); i += 2) {
+    const float x = model_points[i] * scale_x;
+    const float y = model_points[i + 1] * scale_y;
+    // The frame edges are exclusive coordinates. Discard isolated decoder outliers instead of
+    // aborting the stream when a point lands on or beyond an edge.
+    if (!std::isfinite(x) || !std::isfinite(y) || x < 0.0F || y < 0.0F ||
+        x >= static_cast<float>(source_size.width) || y >= static_cast<float>(source_size.height)) {
+      continue;
+    }
+    points.push_back(x);
+    points.push_back(y);
   }
   return points;
 }
@@ -302,7 +332,7 @@ int main(int argc, char** argv) {
     cv::Mat frame = pull_frame(source.run);
     validate_frame(frame, stream.width, stream.height);
     const int input_width = stream.width, input_height = stream.height;
-    const superpoint_app::FrameSize source_size{input_width, input_height};
+    const FrameSize source_size{input_width, input_height};
 
     neat::Model model(cfg.model.string(), model_options(input_width, input_height));
     const auto model_size = model_input_size(model);
@@ -320,8 +350,7 @@ int main(int argc, char** argv) {
       if (decoded.size() != 1) {
         throw std::runtime_error("SuperPoint must return one feature set per frame");
       }
-      const auto points =
-          superpoint_app::source_points(keypoints(decoded.front()), model_size, source_size);
+      const auto points = source_points(keypoints(decoded.front()), model_size, source_size);
       total_points += points.size() / 2;
       draw_points(frame, points);
       stream_frame(video_sender.run, frame);
