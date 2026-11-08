@@ -45,51 +45,71 @@ def test_draw_points_marks_the_requested_coordinate():
     assert cv2.circles == [(40, 50)]
 
 
-@pytest.mark.unit
-def test_feature_points_uses_source_coordinates_from_boxdecode_unchanged():
-    example = load_example()
-    keypoints = SimpleNamespace(
-        dtype="fp32",
-        to_numpy=lambda copy: np.asarray([[900.0, 500.0]], dtype=np.float32),
-    )
+def fake_pyneat(model_pixel_points):
+    """A pyneat whose SuperPoint decoder returns the given keypoints in model pixels."""
+    points = np.asarray(model_pixel_points, dtype=np.float32)
     features = SimpleNamespace(
-        keypoints=keypoints,
-        scores=SimpleNamespace(shape=(1,), dtype="fp32"),
-        descriptors=SimpleNamespace(shape=(1, 256), dtype="fp32"),
+        keypoints=SimpleNamespace(dtype="fp32", to_numpy=lambda copy: points.copy()),
+        scores=SimpleNamespace(shape=(len(points),), dtype="fp32"),
+        descriptors=SimpleNamespace(shape=(len(points), 256), dtype="fp32"),
     )
-    pyneat = SimpleNamespace(
+    return SimpleNamespace(
         TensorDType=SimpleNamespace(Float32="fp32"),
         decode_superpoint=lambda _output: [features],
     )
 
-    actual = example.feature_points([object()], 960, 540, np, pyneat)
 
-    np.testing.assert_array_equal(actual, [[900.0, 500.0]])
+@pytest.mark.unit
+def test_model_input_size_reads_the_resolved_mla_contract():
+    example = load_example()
+    contract = SimpleNamespace(width=640, height=480)
+    plan = SimpleNamespace(mla_contract=contract)
+    model = SimpleNamespace(resolved_preprocess_plan=lambda: plan)
+
+    assert example.model_input_size(model) == example.FrameSize(640, 480)
+
+    contract.width = 0
+    with pytest.raises(RuntimeError, match="unresolved"):
+        example.model_input_size(model)
+
+
+@pytest.mark.unit
+def test_feature_points_scale_model_pixels_onto_the_source_frame():
+    example = load_example()
+    model_size = example.FrameSize(640, 480)
+    source_size = example.FrameSize(1280, 720)
+
+    actual = example.feature_points(
+        [object()], model_size, source_size, np, fake_pyneat([[600.0, 400.0]])
+    )
+
+    np.testing.assert_array_equal(actual, [[1200.0, 600.0]])
+
+
+@pytest.mark.unit
+def test_feature_points_keep_model_sized_frames_unchanged():
+    example = load_example()
+    model_size = example.FrameSize(640, 480)
+
+    actual = example.feature_points(
+        [object()], model_size, model_size, np, fake_pyneat([[10.0, 20.0]])
+    )
+
+    np.testing.assert_array_equal(actual, [[10.0, 20.0]])
 
 
 @pytest.mark.unit
 def test_feature_points_discards_coordinates_outside_the_source_frame():
     example = load_example()
-    keypoints = SimpleNamespace(
-        dtype="fp32",
-        to_numpy=lambda copy: np.asarray(
-            [[900.0, 500.0], [960.0, 200.0], [20.0, 540.0], [np.nan, 10.0]],
-            dtype=np.float32,
-        ),
-    )
-    features = SimpleNamespace(
-        keypoints=keypoints,
-        scores=SimpleNamespace(shape=(4,), dtype="fp32"),
-        descriptors=SimpleNamespace(shape=(4, 256), dtype="fp32"),
-    )
-    pyneat = SimpleNamespace(
-        TensorDType=SimpleNamespace(Float32="fp32"),
-        decode_superpoint=lambda _output: [features],
+    model_size = example.FrameSize(640, 480)
+    source_size = example.FrameSize(1280, 720)
+    pyneat = fake_pyneat(
+        [[600.0, 400.0], [640.0, 200.0], [20.0, 480.0], [np.nan, 10.0]]
     )
 
-    actual = example.feature_points([object()], 960, 540, np, pyneat)
+    actual = example.feature_points([object()], model_size, source_size, np, pyneat)
 
-    np.testing.assert_array_equal(actual, [[900.0, 500.0]])
+    np.testing.assert_array_equal(actual, [[1200.0, 600.0]])
 
 
 @pytest.mark.unit

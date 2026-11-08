@@ -4,6 +4,7 @@
  *
  * Usage: superpoint-feature-extractor [--config <path>]
  */
+#include "feature_points.h"
 #include "neat.h"
 #include "support/runtime/config_utils.h"
 #include "support/runtime/example_utils.h"
@@ -112,13 +113,16 @@ std::vector<float> tensor_floats(const neat::Tensor& tensor) {
   return values;
 }
 
-struct FrameSize {
-  int width = 0;
-  int height = 0;
-};
+superpoint_app::FrameSize model_input_size(const neat::Model& model) {
+  const auto contract = model.resolved_preprocess_plan().mla_contract;
+  if (contract.width <= 0 || contract.height <= 0) {
+    throw std::runtime_error("SuperPoint model input size is unresolved");
+  }
+  return {contract.width, contract.height};
+}
 
-std::vector<float> keypoints(const neat::FeaturePointTensors& features,
-                             const FrameSize& source_size) {
+// Validates the decoded feature set and returns its keypoints in model-input pixels.
+std::vector<float> keypoints(const neat::FeaturePointTensors& features) {
   if (features.keypoints.shape.size() != 2 || features.keypoints.shape[1] != 2 ||
       features.scores.shape.size() != 1 || features.descriptors.shape.size() != 2) {
     throw std::runtime_error("invalid SuperPoint output ranks");
@@ -138,21 +142,7 @@ std::vector<float> keypoints(const neat::FeaturePointTensors& features,
   if (points.size() != static_cast<std::size_t>(count) * 2U) {
     throw std::runtime_error("SuperPoint keypoint data does not match its shape");
   }
-  std::vector<float> drawable_points;
-  drawable_points.reserve(points.size());
-  for (std::size_t i = 0; i < points.size(); i += 2) {
-    const float x = points[i];
-    const float y = points[i + 1];
-    // The frame edges are exclusive coordinates. Discard isolated decoder outliers instead of
-    // aborting the stream when inverse-affine rounding places a point on or beyond an edge.
-    if (!std::isfinite(x) || !std::isfinite(y) || x < 0.0F || y < 0.0F || x >= source_size.width ||
-        y >= source_size.height) {
-      continue;
-    }
-    drawable_points.push_back(x);
-    drawable_points.push_back(y);
-  }
-  return drawable_points;
+  return points;
 }
 
 void draw_points(cv::Mat& frame, const std::vector<float>& points) {
@@ -312,8 +302,10 @@ int main(int argc, char** argv) {
     cv::Mat frame = pull_frame(source.run);
     validate_frame(frame, stream.width, stream.height);
     const int input_width = stream.width, input_height = stream.height;
+    const superpoint_app::FrameSize source_size{input_width, input_height};
 
     neat::Model model(cfg.model.string(), model_options(input_width, input_height));
+    const auto model_size = model_input_size(model);
     auto input = prepare_input(frame);
     auto runner = model.build(neat::TensorList{input});
     auto video_sender = build_video_sender(cfg, stream.fps, input_width, input_height);
@@ -328,7 +320,8 @@ int main(int argc, char** argv) {
       if (decoded.size() != 1) {
         throw std::runtime_error("SuperPoint must return one feature set per frame");
       }
-      const auto points = keypoints(decoded.front(), FrameSize{input_width, input_height});
+      const auto points =
+          superpoint_app::source_points(keypoints(decoded.front()), model_size, source_size);
       total_points += points.size() / 2;
       draw_points(frame, points);
       stream_frame(video_sender.run, frame);

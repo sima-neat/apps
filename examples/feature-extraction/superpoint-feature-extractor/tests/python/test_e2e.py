@@ -89,6 +89,9 @@ def test_non_model_resolution_runs_through_core_preproc(
         str(e2e_model_path),
         options,
     )
+    model_size = example.model_input_size(model)
+    source_size = example.FrameSize(frame.shape[1], frame.shape[0])
+    assert tuple(model_size) != tuple(source_size)
     model_input = example.input_tensor(frame, np, pyneat)
     runner = model.build(
         [model_input],
@@ -97,13 +100,7 @@ def test_non_model_resolution_runs_through_core_preproc(
     )
     try:
         output = runner.run([model_input], timeout_ms=test_timeout_ms)
-        points = example.feature_points(
-            output,
-            frame.shape[1],
-            frame.shape[0],
-            np,
-            pyneat,
-        )
+        points = example.feature_points(output, model_size, source_size, np, pyneat)
     finally:
         runner.close()
 
@@ -111,3 +108,6 @@ def test_non_model_resolution_runs_through_core_preproc(
     assert len(points) > 0
     assert np.all(points[:, 0] >= 0) and np.all(points[:, 0] < frame.shape[1])
     assert np.all(points[:, 1] >= 0) and np.all(points[:, 1] < frame.shape[0])
+    # The desk scene has features across the whole frame, so source-pixel points
+    # reach past the 640x480 model frame; model-pixel points never would.
+    assert np.any(points[:, 0] >= model_size.width) or np.any(points[:, 1] >= model_size.height)
