@@ -55,6 +55,11 @@ namespace {
 constexpr int kKeypoints = 512;
 // SuperPoint's input size, which both matchers' keypoint normalization assumes.
 const cv::Size kModelInputSize(640, 480);
+// SuperPoint's keypoint score threshold. LightGlue's extractor uses 0.0005, which on camera frames
+// leaves over 16,000 candidates and a single-threaded decode of about 70 ms per frame. At 0.005 the
+// decode takes about 14 ms and returns the same best 512 keypoints; only a frame with too little
+// texture to reach 512 is skipped.
+constexpr float kScoreThreshold = 0.005F;
 constexpr int kSourceTimeoutMs = 20000;
 constexpr int kModelTimeoutMs = 10000;
 // Frames each model runner may hold, so that its stages overlap: on the board, SuperPoint
@@ -505,8 +510,8 @@ SourceRun build_source_run(const AppConfig& cfg, int fps) {
 }
 
 // SuperPoint on the frame's luma: Neat stretches it to the model input and scales it to [0, 1].
-// The LightGlueV1 decode (threshold 0.0005, NMS radius 4, 4-pixel border) is the one both
-// matchers' keypoints were extracted with, keeping the best 512 keypoints.
+// The LightGlueV1 decode (NMS radius 4, 4-pixel border) is the one both matchers' keypoints were
+// extracted with, keeping the best 512 keypoints above kScoreThreshold.
 neat::Model::Options superpoint_options(int width, int height) {
   neat::Model::Options options;
   options.preprocess.kind = neat::InputKind::Image;
@@ -535,6 +540,7 @@ neat::Model::Options matcher_options() {
   neat::Model::Options options;
   options.preprocess.kind = neat::InputKind::Tensor;
   options.preprocess.resize.enable = neat::AutoFlag::Off;
+  options.score_threshold = kScoreThreshold;
   options.preprocess.color_convert.enable = neat::AutoFlag::Off;
   options.preprocess.normalize.enable = neat::AutoFlag::Off;
   return options;

@@ -29,6 +29,11 @@ KEYPOINTS = 512
 # SuperPoint's input size, which both matchers' keypoint normalization assumes.
 MODEL_INPUT_SIZE = (640, 480)
 SOURCE_TIMEOUT_MS = 20000
+# SuperPoint's keypoint score threshold. LightGlue's extractor uses 0.0005, which on camera frames
+# leaves over 16,000 candidates and a single-threaded decode of about 70 ms per frame. At 0.005 the
+# decode takes about 14 ms and returns the same best 512 keypoints; only a frame with too little
+# texture to reach 512 is skipped.
+SCORE_THRESHOLD = 0.005
 MODEL_TIMEOUT_MS = 10000
 # Frames each model runner may hold, so that its stages overlap: on the board, SuperPoint
 # alone runs at 11.6 ms per frame one at a time and 7.4 ms with two frames in flight.
@@ -473,8 +478,8 @@ def build_source_run(cfg: AppConfig, fps: int):
 
 def superpoint_options(width: int, height: int):
     """SuperPoint on the frame's luma: Neat stretches it to the model input and scales it to
-    [0, 1]. The LightGlueV1 decode (threshold 0.0005, NMS radius 4, 4-pixel border) is the one
-    both matchers' keypoints were extracted with, keeping the best 512 keypoints."""
+    [0, 1]. The LightGlueV1 decode (NMS radius 4, 4-pixel border) is the one both matchers'
+    keypoints were extracted with, keeping the best 512 keypoints above SCORE_THRESHOLD."""
     options = pyneat.ModelOptions()
     options.preprocess.kind = pyneat.InputKind.Image
     options.preprocess.enable = pyneat.AutoFlag.On
@@ -506,6 +511,7 @@ def matcher_options():
     options.preprocess.normalize.enable = pyneat.AutoFlag.Off
     return options
 
+    options.score_threshold = SCORE_THRESHOLD
 
 def model_input_size(model) -> tuple[int, int]:
     """The SuperPoint input size, the frame its keypoints are in (sima-neat/core#1328)."""

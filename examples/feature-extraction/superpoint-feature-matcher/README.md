@@ -21,7 +21,7 @@ The first frame with 512 keypoints becomes the reference, on the left. Every lat
 The application runs two Neat graphs and two models:
 
 1. The source graph decodes RTSP, HTTP MJPEG, USB, or MIPI video into frames.
-2. SuperPoint reads each frame's luma plane and returns 512 keypoints with descriptors.
+2. SuperPoint reads each frame's luma plane and returns 512 keypoints with descriptors. It keeps keypoints that score above 0.005, not the 0.0005 LightGlue's extractor uses, so the CPU decode takes about 14 ms per frame instead of about 70 ms. The best 512 keypoints are the same; a frame with too little texture to reach 512 above 0.005 is skipped.
 3. LightGlue or SuperGlue scores every pair of reference and live keypoints.
 4. The CPU keeps mutual best pairs above the match threshold. SuperGlue first runs its Sinkhorn iterations on the CPU.
 5. The output graph converts the joined frame to NV12 and encodes it to H.264 for Insight.
