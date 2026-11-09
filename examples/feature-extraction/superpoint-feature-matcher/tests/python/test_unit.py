@@ -339,6 +339,27 @@ def test_match_stage_reports_a_superpoint_stall_while_frames_wait():
 
 
 @pytest.mark.unit
+def test_match_stage_reports_a_rejected_matcher_frame():
+    example = load_example()
+    links = stage_links(example, captured_frames=1)
+    features = example.Features(np.zeros((512, 2), np.float32), None, None)
+
+    class OneOutputRunner(EmptyRunner):
+        def pull(self, _timeout_ms):
+            return SimpleNamespace(tensors=[object()])
+
+    class RejectingRunner(EmptyRunner):
+        def push(self, _inputs):
+            return False
+
+    example.superpoint_features = lambda _outputs: features
+    matcher = example.Matcher("LightGlue", lambda _features: [], None)
+
+    with pytest.raises(RuntimeError, match="LightGlue rejected a frame"):
+        example.match_frames(OneOutputRunner(), matcher, RejectingRunner(), [], links)
+
+
+@pytest.mark.unit
 @pytest.mark.parametrize(("width", "height", "level"), [(2560, 720, "4.0"), (3840, 1080, "5.1")])
 def test_encoder_level_fits_the_composed_frame(width, height, level):
     assert load_example().encoder_level(width, height) == level

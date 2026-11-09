@@ -1029,7 +1029,7 @@ void capture_frames(Stages& stages) {
     while (!stop_requested && (cfg.frames == 0 || count < cfg.frames)) {
       DecodedFrame frame = pull_frame(stages.source_run, cfg.source_key);
       if (!stages.superpoint_runner.push(neat::TensorList{luma_tensor(frame.luma)})) {
-        break;
+        throw std::runtime_error("SuperPoint rejected a frame");
       }
       if (!stages.captured.put(std::move(frame.bgr))) {
         break;
@@ -1072,7 +1072,7 @@ void match_frames(Stages& stages) {
         const neat::TensorList live_inputs = stages.matcher.image_inputs(*features);
         inputs.insert(inputs.end(), live_inputs.begin(), live_inputs.end());
         if (!stages.matcher_runner.push(inputs)) {
-          break;
+          throw std::runtime_error(stages.matcher.name + " rejected a frame");
         }
       }
       if (!stages.matched.put(LiveFrame{std::move(*bgr), std::move(features)})) {

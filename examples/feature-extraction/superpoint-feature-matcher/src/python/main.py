@@ -828,7 +828,7 @@ def capture_frames(
         while not stop.is_set() and (cfg.frames == 0 or count < cfg.frames):
             luma, bgr = pull_frame(source_run, cfg.source_key)
             if not superpoint_runner.push([luma_tensor(luma)]):
-                break
+                raise RuntimeError("SuperPoint rejected a frame")
             if not put_unless_failed(links.captured, bgr, links.failed):
                 break
             count += 1
@@ -860,7 +860,7 @@ def match_frames(
             if features is not None and not matcher_runner.push(
                 reference_inputs + matcher.image_inputs(features)
             ):
-                break
+                raise RuntimeError(f"{matcher.name} rejected a frame")
             if not put_unless_failed(links.matched, Frame(bgr, features), links.failed):
                 break
     finally:
