@@ -15,10 +15,16 @@ prefer Insight for remote browser viewing.
   `VideoSenderOptions::Passthrough(codec)` to forward encoded H.264, H.265, or
   MJPEG with the source's codec. Prefer these over the deprecated
   `H264RtpUdpFromRaw` factory.
-- For frames the application draws on the CPU, put a `ColorConvert` to NV12
-  with `ImageSurfaceLayout::EncoderNv12` between the BGR input and the raw
-  `VideoSender`. On a DevKit, pushing a 2560x720 BGR frame took 36 ms without
-  it and 8.5 ms with it. See
+- For frames the application draws on the CPU, keep the decoder's NV12 and
+  draw on it: on the luma rows, and at half the coordinates on the interleaved
+  chroma rows. Push the frame to the raw `VideoSender` as an NV12 tensor in
+  the encoder's layout: row pitch rounded up to 64 bytes and plane rows
+  rounded up to 8. `Tensor.from_numpy` and `Tensor::from_cv_mat` do not
+  describe NV12 planes, so set `planes` (Y, then UV at `pitch * rows`),
+  `shape` and `strides_bytes` before `.cvu()`. A BGR frame instead needs a
+  `ColorConvert` to NV12 with `ImageSurfaceLayout::EncoderNv12`, which runs on
+  the EV74 beside model preprocessing: at 3840x1080 the encoder path ran at
+  50 fps with it and 62 fps with NV12 pushed directly. See `encoder_tensor` in
   `examples/feature-extraction/superpoint-feature-matcher`.
 - Pair it with `MetadataSender` when Insight needs JSON detections or other
   structured overlays. `MetadataSender` splits JSON larger than 1200 bytes
