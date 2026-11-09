@@ -845,8 +845,11 @@ def match_frames(
         while True:
             outputs = superpoint_runner.pull(MODEL_TIMEOUT_MS).tensors
             if not outputs:
-                # An empty pull is the end of input once capture has finished, and a stall before.
-                if links.captured_all.is_set() or links.failed.is_set():
+                # An empty pull ends the run only once capture has finished and every captured
+                # frame has been matched; otherwise SuperPoint stalled.
+                if links.failed.is_set() or (
+                    links.captured_all.is_set() and links.captured.empty()
+                ):
                     break
                 raise RuntimeError(f"SuperPoint returned no output for {MODEL_TIMEOUT_MS} ms")
             features = superpoint_features(outputs)

@@ -298,6 +298,46 @@ def test_match_stats_summarize_matched_and_skipped_frames(monkeypatch):
     assert stats.recent_fps() == pytest.approx(2.0)
 
 
+def stage_links(example, captured_frames: int):
+    import queue
+    import threading
+
+    links = example.StageLinks(queue.Queue(2), queue.Queue(2), threading.Event(), threading.Event())
+    for _ in range(captured_frames):
+        links.captured.put(object())
+    links.captured_all.set()
+    return links
+
+
+class EmptyRunner:
+    """A runner whose pull returns nothing, as on a timeout or after the last output."""
+
+    def pull(self, _timeout_ms):
+        return SimpleNamespace(tensors=[])
+
+    def close_input(self):
+        pass
+
+
+@pytest.mark.unit
+def test_match_stage_ends_once_every_captured_frame_is_matched():
+    example = load_example()
+    links = stage_links(example, captured_frames=0)
+
+    example.match_frames(EmptyRunner(), None, EmptyRunner(), [], links)
+
+    assert links.matched.get_nowait() is None
+
+
+@pytest.mark.unit
+def test_match_stage_reports_a_superpoint_stall_while_frames_wait():
+    example = load_example()
+    links = stage_links(example, captured_frames=1)
+
+    with pytest.raises(RuntimeError, match="SuperPoint returned no output"):
+        example.match_frames(EmptyRunner(), None, EmptyRunner(), [], links)
+
+
 @pytest.mark.unit
 @pytest.mark.parametrize(("width", "height", "level"), [(2560, 720, "4.0"), (3840, 1080, "5.1")])
 def test_encoder_level_fits_the_composed_frame(width, height, level):

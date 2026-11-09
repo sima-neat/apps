@@ -39,7 +39,6 @@
 #include <mutex>
 #include <numeric>
 #include <optional>
-#include <span>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -187,32 +186,58 @@ struct MatchLines {
 };
 
 // Frames per second over a list of send times, in seconds.
-double rate(std::span<const double> times) {
-  return times.size() > 1 ? static_cast<double>(times.size() - 1) / (times.back() - times.front())
-                          : 0.0;
-}
-
 double now_seconds() {
   return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
-// What the publisher sent, for the summary line.
+// What the publisher sent, for the summary line and the displayed rate. Holds a fixed amount of
+// state, so a continuous run does not grow it.
 struct MatchStats {
   int frames = 0;
-  int matched = 0;
-  long long matches = 0;
-  std::vector<double> inlier_ratios;
-  std::vector<double> sent_at;
+  int matched_frames = 0;
+  long long total_matches = 0;
+  double inlier_sum = 0.0;
+  int inlier_samples = 0;
+  double first_sent_s = 0.0;
+  double last_sent_s = 0.0;
+  std::deque<double> recent_sent_s;
+
+  void record(std::optional<int> match_count, std::optional<double> inlier_ratio) {
+    const double now = now_seconds();
+    if (frames == 0) {
+      first_sent_s = now;
+    }
+    ++frames;
+    last_sent_s = now;
+    recent_sent_s.push_back(now);
+    if (recent_sent_s.size() > kFpsWindow) {
+      recent_sent_s.pop_front();
+    }
+    if (match_count) {
+      ++matched_frames;
+      total_matches += *match_count;
+    }
+    if (inlier_ratio) {
+      inlier_sum += *inlier_ratio;
+      ++inlier_samples;
+    }
+  }
+
+  double recent_fps() const {
+    const std::size_t n = recent_sent_s.size();
+    return n > 1 ? static_cast<double>(n - 1) / (recent_sent_s.back() - recent_sent_s.front())
+                 : 0.0;
+  }
 
   std::string summary() const {
-    const double average = matched ? static_cast<double>(matches) / matched : 0.0;
-    const double inliers = inlier_ratios.empty()
-                               ? 0.0
-                               : std::accumulate(inlier_ratios.begin(), inlier_ratios.end(), 0.0) /
-                                     static_cast<double>(inlier_ratios.size());
+    const double average =
+        matched_frames ? static_cast<double>(total_matches) / matched_frames : 0.0;
+    const double inliers = inlier_samples ? inlier_sum / inlier_samples : 0.0;
+    const double elapsed = last_sent_s - first_sent_s;
+    const double fps = elapsed > 0.0 ? (frames - 1) / elapsed : 0.0;
     return cv::format("frames=%d matched=%d skipped=%d average_matches=%.1f inlier_ratio=%.2f "
                       "output_fps=%.1f",
-                      frames, matched, frames - matched, average, inliers, rate(sent_at));
+                      frames, matched_frames, frames - matched_frames, average, inliers, fps);
   }
 };
 
@@ -924,6 +949,11 @@ public:
     return std::nullopt;
   }
 
+  bool empty() {
+    std::lock_guard lock(mutex_);
+    return items_.empty();
+  }
+
   void close() {
     std::lock_guard lock(mutex_);
     closed_ = true;
@@ -1023,8 +1053,9 @@ void match_frames(Stages& stages) {
       {
         const neat::TensorList outputs = stages.superpoint_runner.pull(kModelTimeoutMs).tensors;
         if (outputs.empty()) {
-          // An empty pull is the end of input once capture has finished, and a stall before.
-          if (stages.captured_all || stages.failed) {
+          // An empty pull ends the run only once capture has finished and every captured frame
+          // has been matched; otherwise SuperPoint stalled.
+          if (stages.failed || (stages.captured_all && stages.captured.empty())) {
             break;
           }
           throw std::runtime_error("SuperPoint returned no output for " +
@@ -1084,15 +1115,7 @@ void send(Stages& stages, const Rendered& rendered) {
     throw std::runtime_error("Insight video push failed");
   }
   MatchStats& stats = stages.stats;
-  ++stats.frames;
-  stats.sent_at.push_back(now_seconds());
-  if (rendered.matches) {
-    ++stats.matched;
-    stats.matches += *rendered.matches;
-  }
-  if (rendered.inlier_ratio) {
-    stats.inlier_ratios.push_back(*rendered.inlier_ratio);
-  }
+  stats.record(rendered.matches, rendered.inlier_ratio);
   const AppConfig& cfg = stages.cfg;
   if (!cfg.save_dir.empty() && cfg.save_every && stats.frames % cfg.save_every == 0) {
     const fs::path path = fs::path(cfg.save_dir) / cv::format("frame_%06d.jpg", stats.frames);
@@ -1118,8 +1141,7 @@ void publish_frames(Stages& stages) {
       // A copy (about 1 MB), so that the runner reuses its output while workers draw.
       scores = sima_examples::tensor_to_floats(outputs.front());
     }
-    const auto& sent_at = stages.stats.sent_at;
-    const double fps = rate(std::span(sent_at).last(std::min(kFpsWindow, sent_at.size())));
+    const double fps = stages.stats.recent_fps();
     const bool sample_inliers = received % kInlierSampleInterval == 0;
     rendering.push_back(std::async(std::launch::async, render, std::cref(stages), std::move(*frame),
                                    std::move(scores), fps, sample_inliers));
