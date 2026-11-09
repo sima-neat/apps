@@ -73,8 +73,8 @@ def test_insight_pipeline(
     assert summary, result.stdout
     matched, skipped = int(summary.group(1)), int(summary.group(2))
     assert matched + skipped == FRAMES
-    if matched:
-        assert 0 < float(summary.group(3)) <= 512
+    assert matched > 0, result.stdout
+    assert 0 < float(summary.group(3)) <= 512
     assert float(summary.group(5)) > 0
     assert f"video_sender={insight_host}:{video_port}" in result.stdout
 

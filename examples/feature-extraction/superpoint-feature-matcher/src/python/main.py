@@ -900,7 +900,8 @@ def publish_frames(
         stats.record(rendered)
         if cfg.save_dir and cfg.save_every and stats.frames % cfg.save_every == 0:
             path = Path(cfg.save_dir) / f"frame_{stats.frames:06d}.jpg"
-            cv2.imwrite(str(path), rendered.canvas)
+            if not cv2.imwrite(str(path), rendered.canvas):
+                raise RuntimeError(f"could not save {path}")
 
     rendering: collections.deque = collections.deque()
     received = 0

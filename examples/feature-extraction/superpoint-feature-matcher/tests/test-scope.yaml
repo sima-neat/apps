@@ -25,10 +25,12 @@ unit:
   cpp: true
 e2e:
   python:
-    enabled: true
+    enabled: false
+    reason: The Model Registry has no main or staging builds of these models yet.
     requires_rtsp: true
     models: [superpoint, lightglue_superpoint, superglue_outdoor]
   cpp:
-    enabled: true
+    enabled: false
+    reason: The Model Registry has no main or staging builds of these models yet.
     requires_rtsp: true
     models: [superpoint, lightglue_superpoint, superglue_outdoor]

@@ -1095,8 +1095,10 @@ void send(Stages& stages, const Rendered& rendered) {
   }
   const AppConfig& cfg = stages.cfg;
   if (!cfg.save_dir.empty() && cfg.save_every && stats.frames % cfg.save_every == 0) {
-    cv::imwrite((fs::path(cfg.save_dir) / cv::format("frame_%06d.jpg", stats.frames)).string(),
-                rendered.canvas);
+    const fs::path path = fs::path(cfg.save_dir) / cv::format("frame_%06d.jpg", stats.frames);
+    if (!cv::imwrite(path.string(), rendered.canvas)) {
+      throw std::runtime_error("could not save " + path.string());
+    }
   }
 }
 
