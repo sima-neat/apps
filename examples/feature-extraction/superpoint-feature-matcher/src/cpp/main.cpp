@@ -67,10 +67,19 @@ constexpr int kModelTimeoutMs = 10000;
 constexpr int kRunnerQueueDepth = 2;
 // Frames waiting between two stages; a full queue holds back the stage before it.
 constexpr std::size_t kStageQueueDepth = 2;
-// Frames matched and drawn at once, each on its own worker. On the board one frame takes up to
-// about 50 ms of CPU: drawing 430 anti-aliased lines, or SuperGlue's Sinkhorn iterations plus
-// drawing, so a 30 fps stream with that many matches needs several frames in parallel.
+// Frames matched and drawn at once, each on its own worker. On the board SuperGlue's Sinkhorn
+// iterations take tens of milliseconds of CPU per frame, so a 30 fps stream needs several frames
+// in parallel.
 constexpr std::size_t kRenderWorkers = 3;
+// Line colors, from red at the match threshold to green at score 1. Each color's lines are drawn
+// in one call, without anti-aliasing: on the board this takes about 2.5 ms per 2560x720 frame
+// with 320 matches, against about 17 ms for one anti-aliased call per line.
+constexpr int kColorSteps = 16;
+// Each match also gets a dot at both ends, drawn the same way.
+constexpr int kDotDiameter = 5;
+// The encoder reads NV12 rows at a pitch rounded up to 64 bytes and planes of rows rounded up to 8.
+constexpr int kEncoderPitchAlignment = 64;
+constexpr int kEncoderRowAlignment = 8;
 // The summary's inlier ratio samples every tenth frame: RANSAC takes about 18 ms.
 constexpr int kInlierSampleInterval = 10;
 // Frames the displayed rate is measured over.
@@ -159,25 +168,25 @@ struct Matcher {
   std::function<Matches(const std::vector<float>&)> matches;
 };
 
-// A decoded frame: its luma plane, for SuperPoint, and its BGR pixels, for the view.
-struct DecodedFrame {
-  cv::Mat luma;
-  cv::Mat bgr;
-};
-
-// The reference frame and its features.
+// The reference frame, in NV12, and its features.
 struct Reference {
-  cv::Mat bgr;
+  cv::Mat nv12;
   Features features;
 };
 
-// A frame on its way to the publisher; `features` is empty when it has fewer than 512.
+// A frame, in NV12, on its way to the publisher; `features` is empty when it has fewer than 512.
 struct LiveFrame {
-  cv::Mat bgr;
+  cv::Mat nv12;
   std::optional<Features> features;
 };
 
-// One composed frame and what it adds to the summary.
+// A color's luma and its (U, V) chroma.
+struct Nv12Color {
+  uint8_t y = 0;
+  cv::Scalar uv;
+};
+
+// One composed NV12 frame and what it adds to the summary.
 struct Rendered {
   cv::Mat canvas;
   std::optional<int> matches;
@@ -531,6 +540,7 @@ neat::Model::Options superpoint_options(int width, int height) {
   options.superpoint.profile = neat::SuperPointProfile::LightGlueV1;
   options.superpoint.output_format = neat::SuperPointOutputFormat::FeaturePointsV1;
   options.superpoint.descriptor_output_dtype = neat::TensorDType::Float32;
+  options.score_threshold = kScoreThreshold;
   options.top_k = kKeypoints;
   return options;
 }
@@ -540,7 +550,6 @@ neat::Model::Options matcher_options() {
   neat::Model::Options options;
   options.preprocess.kind = neat::InputKind::Tensor;
   options.preprocess.resize.enable = neat::AutoFlag::Off;
-  options.score_threshold = kScoreThreshold;
   options.preprocess.color_convert.enable = neat::AutoFlag::Off;
   options.preprocess.normalize.enable = neat::AutoFlag::Off;
   return options;
@@ -568,34 +577,52 @@ neat::Tensor frame_tensor(const neat::Sample& sample) {
   return neat::tensors_from_sample(*field).front();
 }
 
-// A decoded frame's luma plane and BGR pixels. MJPEG with 4:2:2 chroma, as most webcams send,
-// decodes to NV16 instead of NV12; each frame is converted by the layout it actually has.
-DecodedFrame decoded_frame(const neat::Tensor& tensor) {
-  DecodedFrame frame;
-  std::string error;
-  if (tensor.image_format() == neat::ImageSpec::PixelFormat::NV16) {
-    cv::Mat yuy2;
-    sima_examples::require(sima_examples::nv16_to_yuy2(tensor, yuy2, error), error);
-    cv::cvtColor(yuy2, frame.bgr, cv::COLOR_YUV2BGR_YUY2);
-    cv::extractChannel(yuy2, frame.luma, 0);
-    return frame;
-  }
-  if (!tensor.is_nv12()) {
+// A decoded frame as one NV12 matrix: its luma rows, then its interleaved chroma rows. Decoders
+// pad rows and planes, so each plane is read at its own offset and stride. MJPEG with 4:2:2
+// chroma, as most webcams send, decodes to NV16; every other chroma row of it makes NV12.
+cv::Mat frame_nv12(const neat::Tensor& tensor) {
+  const bool nv16 = tensor.image_format() == neat::ImageSpec::PixelFormat::NV16;
+  if (!nv16 && !tensor.is_nv12()) {
     throw std::runtime_error("unsupported decoded frame format: " + tensor.debug_string());
   }
-  // Decoders pad rows and planes; the contiguous copy reads each plane at its own stride.
-  std::vector<uint8_t> nv12 = tensor.copy_nv12_contiguous();
   const int width = tensor.width();
   const int height = tensor.height();
-  sima_examples::require(!nv12.empty() && width > 0 && height > 0, "NV12 frame copy failed");
-  const cv::Mat yuv(height + height / 2, width, CV_8UC1, nv12.data());
-  cv::cvtColor(yuv, frame.bgr, cv::COLOR_YUV2BGR_NV12);
-  frame.luma = yuv.rowRange(0, height).clone();
-  return frame;
+  const neat::Plane* luma = tensor.try_plane(neat::PlaneRole::Y);
+  const neat::Plane* chroma = tensor.try_plane(neat::PlaneRole::UV);
+  sima_examples::require(luma && chroma && !luma->strides_bytes.empty() &&
+                             !chroma->strides_bytes.empty() && width > 0 && height > 0,
+                         "decoded frame without Y and UV planes: " + tensor.debug_string());
+  // The payload is the whole mapped buffer, so plane offsets index into it.
+  std::vector<uint8_t> payload = tensor.copy_payload_bytes();
+  const int chroma_rows = nv16 ? height : height / 2;
+  const auto plane = [&](const neat::Plane& layout, int rows) {
+    const auto stride = static_cast<std::size_t>(layout.strides_bytes[0]);
+    const std::size_t end = static_cast<std::size_t>(layout.byte_offset) +
+                            stride * static_cast<std::size_t>(rows - 1) +
+                            static_cast<std::size_t>(width);
+    sima_examples::require(end <= payload.size(), "decoded frame smaller than its planes");
+    return cv::Mat(rows, width, CV_8UC1, payload.data() + layout.byte_offset, stride);
+  };
+  cv::Mat nv12(height * 3 / 2, width, CV_8UC1);
+  plane(*luma, height).copyTo(nv12.rowRange(0, height));
+  const cv::Mat chroma_plane = plane(*chroma, chroma_rows);
+  for (int row = 0; row < height / 2; ++row) {
+    chroma_plane.row(nv16 ? 2 * row : row).copyTo(nv12.row(height + row));
+  }
+  return nv12;
 }
 
-// The newest decoded frame. The decoder's buffer is released on return: the frame is a CPU copy.
-DecodedFrame pull_frame(neat::Run& source_run, const std::string& source_key) {
+int nv12_height(const cv::Mat& nv12) {
+  return nv12.rows * 2 / 3;
+}
+
+cv::Mat luma_plane(const cv::Mat& nv12) {
+  return nv12.rowRange(0, nv12_height(nv12));
+}
+
+// The newest decoded frame, in NV12. The decoder's buffer is released on return: the frame is a
+// CPU copy.
+cv::Mat pull_frame(neat::Run& source_run, const std::string& source_key) {
   neat::Sample sample;
   neat::PullError error;
   const auto status = source_run.pull("frame", kSourceTimeoutMs, sample, &error);
@@ -603,7 +630,7 @@ DecodedFrame pull_frame(neat::Run& source_run, const std::string& source_key) {
     throw std::runtime_error("no frame arrived from " + source_key + " for " +
                              std::to_string(kSourceTimeoutMs) + " ms");
   }
-  return decoded_frame(frame_tensor(sample));
+  return frame_nv12(frame_tensor(sample));
 }
 
 neat::Tensor luma_tensor(const cv::Mat& luma) {
@@ -782,9 +809,43 @@ std::string encoder_level(int width, int height) {
   return macroblocks <= kLevel4MaxMacroblocks ? "4.0" : "5.1";
 }
 
-neat::Tensor bgr_tensor(const cv::Mat& bgr) {
-  return neat::Tensor::from_cv_mat(bgr, neat::ImageSpec::PixelFormat::BGR,
-                                   neat::TensorMemory::EV74);
+neat::Plane image_plane(neat::PlaneRole role, int64_t offset, int rows, int width, int pitch) {
+  neat::Plane plane;
+  plane.role = role;
+  plane.byte_offset = offset;
+  plane.shape = {rows, width};
+  plane.strides_bytes = {pitch, 1};
+  return plane;
+}
+
+int align_up(int value, int alignment) {
+  return (value + alignment - 1) / alignment * alignment;
+}
+
+// An NV12 matrix as an EV74 tensor in the encoder's layout, padded when its width or height is
+// not aligned. `Tensor::from_cv_mat` does not describe NV12 planes, so they are set here.
+neat::Tensor encoder_tensor(const cv::Mat& nv12) {
+  const int height = nv12_height(nv12);
+  const int width = nv12.cols;
+  const int pitch = align_up(width, kEncoderPitchAlignment);
+  const int rows = align_up(height, kEncoderRowAlignment);
+  cv::Mat aligned = nv12;
+  if (pitch != width || rows != height) {
+    aligned = cv::Mat::zeros(rows * 3 / 2, pitch, CV_8UC1);
+    luma_plane(nv12).copyTo(aligned(cv::Rect(0, 0, width, height)));
+    nv12.rowRange(height, nv12.rows).copyTo(aligned(cv::Rect(0, rows, width, height / 2)));
+  }
+  neat::Tensor tensor =
+      neat::Tensor::from_cv_mat_view(aligned, neat::ImageSpec::PixelFormat::GRAY8);
+  tensor.semantic.image = neat::ImageSpec{neat::ImageSpec::PixelFormat::NV12, ""};
+  tensor.shape = {height, width};
+  tensor.strides_bytes = {pitch, 1};
+  tensor.planes = {
+      image_plane(neat::PlaneRole::Y, 0, height, width, pitch),
+      image_plane(neat::PlaneRole::UV, static_cast<int64_t>(pitch) * rows, height / 2, width,
+                  pitch),
+  };
+  return tensor.cvu();
 }
 
 struct InsightRun {
@@ -793,21 +854,16 @@ struct InsightRun {
   int video_port = 0;
 };
 
-// Composed BGR frames, converted to the encoder's NV12 on the CVU, to H.264 for Insight.
+// Composed NV12 frames, encoded to H.264 for Insight.
 InsightRun build_insight_run(const AppConfig& cfg, int width, int height, int fps) {
   neat::InputOptions input_options;
   input_options.payload_type = neat::PayloadType::Image;
-  input_options.format = neat::FormatTag::BGR;
+  input_options.format = neat::FormatTag::NV12;
   input_options.width = width;
   input_options.height = height;
-  input_options.depth = 3;
   input_options.fps_n = fps;
   input_options.fps_d = 1;
   input_options.memory_policy = neat::InputMemoryPolicy::Ev74;
-
-  neat::ColorConvertOptions nv12;
-  nv12.output_format = neat::ImageFormat::NV12;
-  nv12.surface = neat::ImageSurfaceLayout::EncoderNv12;
 
   auto sender_options = groups::VideoSenderOptions::FromRaw({.fps = fps});
   sender_options.host = cfg.insight_host;
@@ -817,23 +873,43 @@ InsightRun build_insight_run(const AppConfig& cfg, int width, int height, int fp
 
   InsightRun insight;
   insight.graph.add(neat::nodes::Input(input_options));
-  insight.graph.add(neat::nodes::ColorConvert(nv12));
   insight.graph.add(groups::VideoSender(sender_options));
-  const cv::Mat seed = cv::Mat::zeros(height, width, CV_8UC3);
-  insight.run = insight.graph.build(neat::TensorList{bgr_tensor(seed)});
+  const cv::Mat seed = cv::Mat::zeros(height * 3 / 2, width, CV_8UC1);
+  insight.run = insight.graph.build(neat::TensorList{encoder_tensor(seed)});
   insight.video_port = sender_options.video_port();
   return insight;
 }
 
-// BGR line colors from red at the match threshold to green at score 1.
-std::vector<cv::Scalar> match_colors(const std::vector<float>& scores, float threshold) {
-  std::vector<cv::Scalar> colors;
-  colors.reserve(scores.size());
+// Each score's color step, 0 (red) at the match threshold to kColorSteps - 1 (green) at 1.
+std::vector<int> color_steps(const std::vector<float>& scores, float threshold) {
+  std::vector<int> steps;
+  steps.reserve(scores.size());
   for (const float score : scores) {
     const float strength = std::clamp((score - threshold) / (1.0F - threshold), 0.0F, 1.0F);
-    colors.emplace_back(0, static_cast<int>(255 * strength),
-                        static_cast<int>(255 * (1 - strength)));
+    steps.push_back(static_cast<int>(std::lrint(strength * (kColorSteps - 1))));
   }
+  return steps;
+}
+
+// A BGR color's luma and chroma, as OpenCV converts BGR to YUV 4:2:0.
+Nv12Color nv12_color(const cv::Scalar& bgr) {
+  const cv::Mat pixels(2, 2, CV_8UC3, bgr);
+  cv::Mat yuv;
+  cv::cvtColor(pixels, yuv, cv::COLOR_BGR2YUV_I420);
+  return {yuv.at<uint8_t>(0, 0), cv::Scalar(yuv.at<uint8_t>(2, 0), yuv.at<uint8_t>(2, 1))};
+}
+
+// Each color step's color, from red at step 0 to green at kColorSteps - 1.
+const std::array<Nv12Color, kColorSteps>& step_colors() {
+  static const std::array<Nv12Color, kColorSteps> colors = [] {
+    std::array<Nv12Color, kColorSteps> steps;
+    for (int step = 0; step < kColorSteps; ++step) {
+      const double strength = static_cast<double>(step) / (kColorSteps - 1);
+      steps[step] =
+          nv12_color({0, std::nearbyint(255 * strength), std::nearbyint(255 * (1 - strength))});
+    }
+    return steps;
+  }();
   return colors;
 }
 
@@ -878,8 +954,11 @@ double inlier_ratio(const std::vector<cv::Vec4i>& lines) {
              : static_cast<double>(cv::countNonZero(inliers)) / static_cast<double>(lines.size());
 }
 
-// White text on a darkened box, readable on any frame.
-void draw_label(cv::Mat& canvas, const std::string& text, cv::Point origin, double scale) {
+// White text on a darkened box, readable on any frame. The box's chroma moves toward neutral as
+// its luma darkens.
+void draw_label(cv::Mat& luma, cv::Mat& chroma, const std::string& text, cv::Point origin,
+                double scale) {
+  static const uint8_t white = nv12_color(cv::Scalar(255, 255, 255)).y;
   const int thickness = std::max(1, static_cast<int>(std::nearbyint(scale * 1.5)));
   int baseline = 0;
   const cv::Size size =
@@ -887,36 +966,65 @@ void draw_label(cv::Mat& canvas, const std::string& text, cv::Point origin, doub
   const int pad = std::max(4, size.height / 3);
   const cv::Rect box = cv::Rect(cv::Point(origin.x - pad, origin.y - size.height - pad),
                                 cv::Point(origin.x + size.width + pad, origin.y + baseline + pad)) &
-                       cv::Rect(0, 0, canvas.cols, canvas.rows);
-  cv::Mat region = canvas(box);
-  region /= 3;
-  cv::putText(canvas, text, origin, cv::FONT_HERSHEY_SIMPLEX, scale, cv::Scalar(255, 255, 255),
-              thickness, cv::LINE_AA);
+                       cv::Rect(0, 0, luma.cols, luma.rows);
+  cv::Mat luma_box = luma(box);
+  luma_box /= 3;
+  const cv::Rect chroma_rect(box.tl() / 2, box.br() / 2);
+  cv::Mat chroma_box = chroma(chroma_rect & cv::Rect(0, 0, chroma.cols, chroma.rows));
+  chroma_box.convertTo(chroma_box, -1, 1.0 / 3, 128.0 * 2 / 3);
+  cv::putText(luma, text, origin, cv::FONT_HERSHEY_SIMPLEX, scale, cv::Scalar(white), thickness,
+              cv::LINE_AA);
 }
 
-// The reference on the left and the live frame on the right, one line per match.
-cv::Mat compose_frame(const cv::Mat& reference_bgr, const cv::Mat& live_bgr,
-                      const MatchLines& lines, const std::vector<cv::Scalar>& colors,
+// The reference on the left and the live frame on the right, in NV12: one line per match with a
+// dot at each end. Each is drawn on the luma rows and, at half the
+// coordinates, on the chroma rows. The strongest color steps are drawn last, on top.
+cv::Mat compose_frame(const cv::Mat& reference_nv12, const cv::Mat& live_nv12,
+                      const MatchLines& lines, const std::vector<int>& steps,
                       const std::string& status) {
-  const int height = reference_bgr.rows;
-  const int width = reference_bgr.cols;
+  const int height = nv12_height(reference_nv12);
+  const int width = reference_nv12.cols;
   cv::Mat canvas;
-  cv::hconcat(reference_bgr, live_bgr, canvas);
+  cv::hconcat(reference_nv12, live_nv12, canvas);
+  cv::Mat luma = luma_plane(canvas);
+  cv::Mat chroma(height / 2, width, CV_8UC2, canvas.ptr(height));
+  std::vector<std::vector<std::vector<cv::Point>>> segments(kColorSteps);
   for (std::size_t i = 0; i < lines.endpoints.size(); ++i) {
-    const cv::Point start(lines.endpoints[i][0], lines.endpoints[i][1]);
-    const cv::Point end(lines.endpoints[i][2], lines.endpoints[i][3]);
-    cv::line(canvas, start, end, colors[i], 1, cv::LINE_AA);
-    cv::circle(canvas, start, 2, colors[i], cv::FILLED, cv::LINE_AA);
-    cv::circle(canvas, end, 2, colors[i], cv::FILLED, cv::LINE_AA);
+    const cv::Vec4i& line = lines.endpoints[i];
+    segments[steps[i]].push_back({{line[0], line[1]}, {line[2], line[3]}});
+  }
+  for (int step = 0; step < kColorSteps; ++step) {
+    if (segments[step].empty()) {
+      continue;
+    }
+    // A zero-length segment drawn with a thick pen is a dot.
+    std::vector<std::vector<cv::Point>> dots;
+    for (const auto& segment : segments[step]) {
+      for (const cv::Point& point : segment) {
+        dots.push_back({point, point});
+      }
+    }
+    const Nv12Color& color = step_colors()[step];
+    cv::polylines(luma, segments[step], false, cv::Scalar(color.y), 1, cv::LINE_8);
+    cv::polylines(luma, dots, false, cv::Scalar(color.y), kDotDiameter, cv::LINE_8);
+    for (auto* shapes : {&segments[step], &dots}) {
+      for (auto& shape : *shapes) {
+        for (cv::Point& point : shape) {
+          point /= 2;
+        }
+      }
+    }
+    cv::polylines(chroma, segments[step], false, color.uv, 1, cv::LINE_8);
+    cv::polylines(chroma, dots, false, color.uv, kDotDiameter / 2 + 1, cv::LINE_8);
   }
   const double scale = height / 1200.0;
   const int margin = static_cast<int>(std::nearbyint(30 * scale));
   const int line_height = static_cast<int>(std::nearbyint(56 * scale));
-  draw_label(canvas, "Reference", {margin, margin + line_height / 2}, scale);
-  draw_label(canvas, "Live", {width + margin, margin + line_height / 2}, scale);
-  draw_label(canvas, status, {width + margin, margin + line_height / 2 + line_height}, scale);
-  draw_label(canvas, "Line color: match score, red low, green high", {margin, height - margin},
-             scale);
+  draw_label(luma, chroma, "Reference", {margin, margin + line_height / 2}, scale);
+  draw_label(luma, chroma, "Live", {width + margin, margin + line_height / 2}, scale);
+  draw_label(luma, chroma, status, {width + margin, margin + line_height / 2 + line_height}, scale);
+  draw_label(luma, chroma, "Line color: match score, red low, green high",
+             {margin, height - margin}, scale);
   return canvas;
 }
 
@@ -1017,27 +1125,27 @@ struct Stages {
 std::optional<Reference> capture_reference(neat::Run& source_run, const std::string& source_key,
                                            neat::Model::Runner& superpoint_runner) {
   while (!stop_requested) {
-    DecodedFrame frame = pull_frame(source_run, source_key);
-    auto features =
-        superpoint_features(superpoint_runner.run(neat::TensorList{luma_tensor(frame.luma)}));
+    cv::Mat frame = pull_frame(source_run, source_key);
+    auto features = superpoint_features(
+        superpoint_runner.run(neat::TensorList{luma_tensor(luma_plane(frame))}));
     if (features) {
-      return Reference{std::move(frame.bgr), std::move(*features)};
+      return Reference{std::move(frame), std::move(*features)};
     }
   }
   return std::nullopt;
 }
 
-// Stage 1: each newest decoded frame's luma into SuperPoint, its BGR pixels to stage 2.
+// Stage 1: each newest decoded frame's luma into SuperPoint, the whole NV12 frame to stage 2.
 void capture_frames(Stages& stages) {
   const AppConfig& cfg = stages.cfg;
   try {
     int count = 0;
     while (!stop_requested && (cfg.frames == 0 || count < cfg.frames)) {
-      DecodedFrame frame = pull_frame(stages.source_run, cfg.source_key);
-      if (!stages.superpoint_runner.push(neat::TensorList{luma_tensor(frame.luma)})) {
+      cv::Mat frame = pull_frame(stages.source_run, cfg.source_key);
+      if (!stages.superpoint_runner.push(neat::TensorList{luma_tensor(luma_plane(frame))})) {
         throw std::runtime_error("SuperPoint rejected a frame");
       }
-      if (!stages.captured.put(std::move(frame.bgr))) {
+      if (!stages.captured.put(std::move(frame))) {
         break;
       }
       ++count;
@@ -1069,8 +1177,8 @@ void match_frames(Stages& stages) {
         }
         features = superpoint_features(outputs);
       }
-      auto bgr = stages.captured.get();
-      if (!bgr) {
+      auto frame = stages.captured.get();
+      if (!frame) {
         break;
       }
       if (features) {
@@ -1081,7 +1189,7 @@ void match_frames(Stages& stages) {
           throw std::runtime_error(stages.matcher.name + " rejected a frame");
         }
       }
-      if (!stages.matched.put(LiveFrame{std::move(*bgr), std::move(features)})) {
+      if (!stages.matched.put(LiveFrame{std::move(*frame), std::move(features)})) {
         break;
       }
     }
@@ -1098,26 +1206,26 @@ void match_frames(Stages& stages) {
 Rendered render(const Stages& stages, const LiveFrame& frame, const std::vector<float>& scores,
                 double fps, bool sample_inliers) {
   const Matcher& matcher = stages.matcher;
-  const cv::Mat& reference_bgr = stages.reference.bgr;
+  const cv::Mat& reference = stages.reference.nv12;
   if (!frame.features) {
     const std::string status =
         matcher.name + ": fewer than " + std::to_string(kKeypoints) + " keypoints, not matched";
-    return {compose_frame(reference_bgr, frame.bgr, {}, {}, status), std::nullopt, std::nullopt};
+    return {compose_frame(reference, frame.nv12, {}, {}, status), std::nullopt, std::nullopt};
   }
   const Matches matches = matcher.matches(scores);
   const MatchLines lines = match_lines(matches, stages.reference.features, *frame.features,
-                                       stages.point_scale, reference_bgr.cols);
-  const auto colors = match_colors(lines.scores, static_cast<float>(stages.cfg.match_threshold));
+                                       stages.point_scale, reference.cols);
+  const auto steps = color_steps(lines.scores, static_cast<float>(stages.cfg.match_threshold));
   const std::string status =
       cv::format("%s: %zu matches, %.1f fps", matcher.name.c_str(), lines.endpoints.size(), fps);
   const int count = static_cast<int>(lines.endpoints.size());
-  return {compose_frame(reference_bgr, frame.bgr, lines, colors, status), count,
+  return {compose_frame(reference, frame.nv12, lines, steps, status), count,
           sample_inliers ? std::optional(inlier_ratio(lines.endpoints)) : std::nullopt};
 }
 
 // Sends one composed frame to Insight and counts it.
 void send(Stages& stages, const Rendered& rendered) {
-  if (!stages.insight_run.push(neat::TensorList{bgr_tensor(rendered.canvas)})) {
+  if (!stages.insight_run.push(neat::TensorList{encoder_tensor(rendered.canvas)})) {
     throw std::runtime_error("Insight video push failed");
   }
   MatchStats& stats = stages.stats;
@@ -1125,7 +1233,9 @@ void send(Stages& stages, const Rendered& rendered) {
   const AppConfig& cfg = stages.cfg;
   if (!cfg.save_dir.empty() && cfg.save_every && stats.frames % cfg.save_every == 0) {
     const fs::path path = fs::path(cfg.save_dir) / cv::format("frame_%06d.jpg", stats.frames);
-    if (!cv::imwrite(path.string(), rendered.canvas)) {
+    cv::Mat bgr;
+    cv::cvtColor(rendered.canvas, bgr, cv::COLOR_YUV2BGR_NV12);
+    if (!cv::imwrite(path.string(), bgr)) {
       throw std::runtime_error("could not save " + path.string());
     }
   }
@@ -1168,9 +1278,9 @@ int run(const AppConfig& cfg) {
   const int fps = stream_fps(cfg);
   SourceRun source = build_source_run(cfg, fps);
 
-  const DecodedFrame first = pull_frame(source.run, cfg.source_key);
-  const int width = first.luma.cols;
-  const int height = first.luma.rows;
+  const cv::Mat first = pull_frame(source.run, cfg.source_key);
+  const int width = first.cols;
+  const int height = nv12_height(first);
   neat::Model superpoint(cfg.superpoint_path, superpoint_options(width, height));
   const cv::Size model_size = model_input_size(superpoint);
   if (model_size != kModelInputSize) {
@@ -1181,7 +1291,7 @@ int run(const AppConfig& cfg) {
   }
   const cv::Point2f point_scale(static_cast<float>(width) / static_cast<float>(model_size.width),
                                 static_cast<float>(height) / static_cast<float>(model_size.height));
-  auto superpoint_runner = superpoint.build(neat::TensorList{luma_tensor(first.luma)},
+  auto superpoint_runner = superpoint.build(neat::TensorList{luma_tensor(luma_plane(first))},
                                             neat::Model::RouteOptions{}, pipelined_run_options());
 
   const auto reference = capture_reference(source.run, cfg.source_key, superpoint_runner);

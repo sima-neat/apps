@@ -16,7 +16,7 @@
 
 Matches each live frame's SuperPoint keypoints to a reference frame with LightGlue or SuperGlue and sends both frames, joined by colored match lines, to Insight.
 
-The first frame with 512 keypoints becomes the reference, on the left. Every later frame runs SuperPoint, then the selected matcher compares its keypoints with the reference's. Insight receives the reference beside the live frame, with one line per match colored from red (weak) to green (strong). Frames where SuperPoint finds fewer than 512 keypoints are shown without lines, because both matchers take exactly 512.
+The first frame with 512 keypoints becomes the reference, on the left. Every later frame runs SuperPoint, then the selected matcher compares its keypoints with the reference's. Insight receives the reference beside the live frame, with one line per match, a dot at each end, colored from red (weak) to green (strong). Frames where SuperPoint finds fewer than 512 keypoints are shown without lines, because both matchers take exactly 512.
 
 The application runs two Neat graphs and two models:
 
@@ -24,7 +24,7 @@ The application runs two Neat graphs and two models:
 2. SuperPoint reads each frame's luma plane and returns 512 keypoints with descriptors. It keeps keypoints that score above 0.005, not the 0.0005 LightGlue's extractor uses, so the CPU decode takes about 14 ms per frame instead of about 70 ms. The best 512 keypoints are the same; a frame with too little texture to reach 512 above 0.005 is skipped.
 3. LightGlue or SuperGlue scores every pair of reference and live keypoints.
 4. The CPU keeps mutual best pairs above the match threshold. SuperGlue first runs its Sinkhorn iterations on the CPU.
-5. The output graph converts the joined frame to NV12 and encodes it to H.264 for Insight.
+5. The CPU joins the two frames and draws the matches in NV12, the encoder's own format, so the output graph only encodes it to H.264 for Insight.
 
 ## Preview
 
@@ -114,7 +114,7 @@ start, then stream the joined frames to Insight.
 When the run ends, the application prints one summary line:
 
 ```text
-frames=300 matched=300 skipped=0 average_matches=84.3 inlier_ratio=0.35 output_fps=26.3 video_sender=<insight-host>:9000
+frames=300 matched=297 skipped=3 average_matches=48.6 inlier_ratio=0.50 output_fps=31.9 video_sender=<insight-host>:9000
 ```
 
 - `matched` counts frames with 512 keypoints, and `skipped` the rest.
@@ -122,7 +122,7 @@ frames=300 matched=300 skipped=0 average_matches=84.3 inlier_ratio=0.35 output_f
 - `inlier_ratio` is the share of matches consistent with one camera motion, sampled every tenth frame. A static scene gives values near 1.
 - `output_fps` is the rate of frames sent to Insight.
 
-On a DevKit, LightGlue sends 22 to 31 frames per second from a 30 FPS 720p stream, and SuperGlue 20 to 25. Scenes with more texture take longer to decode in SuperPoint and run toward the lower end.
+On a DevKit, both implementations keep up with 30 FPS streams up to 1080p and with 60 FPS H.264 and H.265 streams at 720p when matching with LightGlue. A 1080p MJPEG stream at 60 FPS reaches about 36 to 40 frames per second in Python and 45 to 56 in C++. SuperGlue sends 24 to 32 frames per second from a 720p stream.
 
 ## Troubleshooting
 

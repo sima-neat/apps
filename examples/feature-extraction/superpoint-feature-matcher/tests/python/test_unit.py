@@ -106,6 +106,22 @@ def decoded_frame(planes: dict, payload: np.ndarray, width: int, height: int, nv
     )
 
 
+def bgr_to_nv12(bgr: np.ndarray) -> np.ndarray:
+    """One NV12 array, luma rows then interleaved chroma rows, from BGR pixels."""
+    height, width = bgr.shape[:2]
+    i420 = cv2.cvtColor(bgr, cv2.COLOR_BGR2YUV_I420).reshape(-1)
+    luma, quarter = height * width, height * width // 4
+    nv12 = np.empty((height * 3 // 2, width), np.uint8)
+    nv12[:height] = i420[:luma].reshape(height, width)
+    nv12[height:, 0::2] = i420[luma : luma + quarter].reshape(height // 2, width // 2)
+    nv12[height:, 1::2] = i420[luma + quarter :].reshape(height // 2, width // 2)
+    return nv12
+
+
+def nv12_to_bgr(nv12: np.ndarray) -> np.ndarray:
+    return cv2.cvtColor(nv12, cv2.COLOR_YUV2BGR_NV12)
+
+
 def color_blocks(width: int, height: int) -> np.ndarray:
     """Four flat BGR quadrants, so that chroma subsampling leaves them unchanged."""
     bgr = np.empty((height, width, 3), np.uint8)
@@ -134,15 +150,14 @@ def test_nv12_frames_are_read_through_padded_strides_and_planes():
         {"y": (0, stride), "uv": (stride * padded_rows, stride)}, payload, width, height, False
     )
 
-    luma, actual = example.frame_luma_and_bgr(frame)
+    nv12 = example.frame_nv12(frame)
 
-    np.testing.assert_array_equal(luma[..., 0], y)
-    assert luma.flags["C_CONTIGUOUS"]
-    assert np.abs(actual.astype(int) - bgr).max() <= 3
+    np.testing.assert_array_equal(nv12, bgr_to_nv12(bgr))
+    assert example.luma_plane(nv12).flags["C_CONTIGUOUS"]
 
 
 @pytest.mark.unit
-def test_nv16_frames_keep_full_height_chroma():
+def test_nv16_frames_keep_every_other_chroma_row():
     example = load_example()
     width, height, stride = 64, 48, 80
     bgr = color_blocks(width, height)
@@ -160,10 +175,9 @@ def test_nv16_frames_keep_full_height_chroma():
         {"y": (0, stride), "uv": (stride * height, stride)}, payload, width, height, True
     )
 
-    luma, actual = example.frame_luma_and_bgr(frame)
+    nv12 = example.frame_nv12(frame)
 
-    np.testing.assert_array_equal(luma[..., 0], y)
-    assert np.abs(actual.astype(int) - bgr).max() <= 3
+    np.testing.assert_array_equal(nv12, bgr_to_nv12(bgr))
 
 
 @pytest.mark.unit
@@ -258,27 +272,86 @@ def test_match_lines_scale_model_pixels_and_draw_the_weakest_first():
 
 
 @pytest.mark.unit
-def test_match_colors_run_from_red_at_the_threshold_to_green():
+def test_color_steps_run_from_red_at_the_threshold_to_green():
     example = load_example()
 
-    colors = example.match_colors(np.array([0.1, 1.0, 0.0]), 0.1)
+    steps = example.color_steps(np.array([0.1, 1.0, 0.0, 0.55]), 0.1)
 
-    assert colors.tolist() == [[0, 0, 255], [0, 255, 0], [0, 0, 255]]
+    assert steps.tolist() == [0, example.COLOR_STEPS - 1, 0, 8]
+    assert example.step_color(0) == (0, 0, 255)
+    assert example.step_color(example.COLOR_STEPS - 1) == (0, 255, 0)
+
+
+@pytest.mark.unit
+def test_compose_frame_draws_each_line_in_its_step_color():
+    example = load_example()
+    frame = bgr_to_nv12(np.full((120, 160, 3), 128, np.uint8))
+    lines = np.array([[10, 60, 170, 60], [10, 100, 170, 100]])
+
+    canvas = example.compose_frame(frame, frame, lines, np.array([0, example.COLOR_STEPS - 1]), "")
+
+    view = nv12_to_bgr(canvas).astype(int)
+    assert np.abs(view[60, 100] - [0, 0, 255]).max() <= 6
+    assert np.abs(view[100, 100] - [0, 255, 0]).max() <= 6
 
 
 @pytest.mark.unit
 def test_compose_frame_keeps_both_frames_side_by_side():
     example = load_example()
-    reference = np.full((120, 160, 3), 50, np.uint8)
-    live = np.full((120, 160, 3), 200, np.uint8)
+    reference = bgr_to_nv12(np.full((120, 160, 3), 50, np.uint8))
+    live = bgr_to_nv12(np.full((120, 160, 3), 200, np.uint8))
 
-    canvas = example.compose_frame(
-        reference, live, np.empty((0, 4), int), np.empty((0, 3), int), ""
+    canvas = example.compose_frame(reference, live, np.empty((0, 4), int), np.empty(0, int), "")
+
+    assert canvas.shape == (180, 320)
+    view = nv12_to_bgr(canvas).astype(int)
+    assert np.abs(view[60, 80] - 50).max() <= 2
+    assert np.abs(view[60, 240] - 200).max() <= 2
+
+
+@pytest.mark.unit
+def test_compose_frame_marks_both_ends_of_each_line_with_a_dot():
+    example = load_example()
+    frame = bgr_to_nv12(np.full((120, 160, 3), 128, np.uint8))
+    lines = np.array([[40, 60, 200, 60]])
+
+    canvas = example.compose_frame(frame, frame, lines, np.array([example.COLOR_STEPS - 1]), "")
+
+    view = nv12_to_bgr(canvas).astype(int)
+    for x in (40, 200):
+        assert np.abs(view[58, x] - [0, 255, 0]).max() <= 40
+    assert np.abs(view[58, 120] - [0, 255, 0]).max() > 40
+
+
+@pytest.mark.unit
+def test_encoder_tensor_pads_to_the_encoder_layout(monkeypatch):
+    example = load_example()
+    made = SimpleNamespace(cvu=lambda: made)
+    monkeypatch.setattr(
+        example,
+        "pyneat",
+        SimpleNamespace(
+            **vars(FAKE_PYNEAT),
+            Plane=SimpleNamespace,
+            TensorMemory=SimpleNamespace(CPU="cpu"),
+            Tensor=SimpleNamespace(
+                from_numpy=lambda array, **_: setattr(made, "array", array) or made
+            ),
+        ),
     )
+    nv12 = bgr_to_nv12(np.full((54, 100, 3), 90, np.uint8))
 
-    assert canvas.shape == (120, 320, 3)
-    assert canvas[60, 80].tolist() == [50, 50, 50]
-    assert canvas[60, 240].tolist() == [200, 200, 200]
+    tensor = example.encoder_tensor(nv12)
+
+    # 100 columns pad to a 128-byte pitch, and 54 rows to 56 storage rows.
+    assert tensor.array.shape == (84, 128)
+    np.testing.assert_array_equal(tensor.array[:54, :100], nv12[:54])
+    np.testing.assert_array_equal(tensor.array[56:83, :100], nv12[54:])
+    assert (tensor.shape, tensor.strides_bytes) == ([54, 100], [128, 1])
+    assert [(p.role, p.byte_offset, p.shape) for p in tensor.planes] == [
+        ("y", 0, [54, 100]),
+        ("uv", 128 * 56, [27, 100]),
+    ]
 
 
 @pytest.mark.unit

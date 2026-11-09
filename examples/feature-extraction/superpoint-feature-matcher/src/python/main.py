@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import functools
 import os
 import queue
 import signal
@@ -28,23 +29,30 @@ DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
 KEYPOINTS = 512
 # SuperPoint's input size, which both matchers' keypoint normalization assumes.
 MODEL_INPUT_SIZE = (640, 480)
-SOURCE_TIMEOUT_MS = 20000
 # SuperPoint's keypoint score threshold. LightGlue's extractor uses 0.0005, which on camera frames
 # leaves over 16,000 candidates and a single-threaded decode of about 70 ms per frame. At 0.005 the
 # decode takes about 14 ms and returns the same best 512 keypoints; only a frame with too little
 # texture to reach 512 is skipped.
 SCORE_THRESHOLD = 0.005
+SOURCE_TIMEOUT_MS = 20000
 MODEL_TIMEOUT_MS = 10000
 # Frames each model runner may hold, so that its stages overlap: on the board, SuperPoint
 # alone runs at 11.6 ms per frame one at a time and 7.4 ms with two frames in flight.
 RUNNER_QUEUE_DEPTH = 2
 # Frames waiting between two stages; a full queue holds back the stage before it.
 STAGE_QUEUE_DEPTH = 2
-# Frames matched and drawn at once, each on its own worker. On the board one frame takes up to
-# about 50 ms of CPU: drawing 430 anti-aliased lines, or SuperGlue's Sinkhorn iterations plus
-# drawing. OpenCV and numpy run without holding the GIL, so frames proceed in parallel: a 30 fps
-# stream with 430 matches per frame is sent at 28 fps this way, and at 13 fps one at a time.
+# Frames matched and drawn at once, each on its own worker. On the board SuperGlue's Sinkhorn
+# iterations take 40 to 70 ms of CPU per frame. OpenCV and numpy run without holding the GIL, so
+# frames proceed in parallel and a 30 fps stream keeps its rate.
 RENDER_WORKERS = 3
+# Line colors, from red at the match threshold to green at score 1. Each color's lines are drawn
+# in one call, without anti-aliasing: on the board this takes 2.5 ms per 2560x720 frame with 320
+# matches, against 21 ms for one anti-aliased call per line.
+COLOR_STEPS = 16
+# Each match also gets a dot at both ends, a disc of this radius in luma pixels. All dots are set
+# in one numpy assignment: one OpenCV call per dot holds the GIL long enough to cost frames at
+# 60 fps.
+DOT_RADIUS = 2
 # The summary's inlier ratio samples every tenth frame: RANSAC takes about 18 ms.
 INLIER_SAMPLE_INTERVAL = 10
 # Frames the displayed rate is measured over.
@@ -91,6 +99,10 @@ MATCHER_TYPES = ("lightglue", "superglue")
 RTSP_CODECS = ("h264", "h265", "mjpeg")
 # Composed frames this large or larger need H.264 level 5.1; smaller ones fit level 4.0.
 LEVEL_4_MAX_MACROBLOCKS = 8192
+# The encoder reads NV12 with a row pitch that is a multiple of 64 bytes and a row count that is a
+# multiple of 8, the layout its hardware fetches.
+ENCODER_PITCH_ALIGNMENT = 64
+ENCODER_ROW_ALIGNMENT = 8
 
 cv2 = None
 np = None
@@ -157,10 +169,10 @@ class Matcher:
 
 @dataclass(frozen=True)
 class Frame:
-    """A frame's BGR pixels and SuperPoint features; `features` is None when it has fewer than
+    """A frame's NV12 pixels and SuperPoint features; `features` is None when it has fewer than
     512 keypoints."""
 
-    bgr: object
+    nv12: object
     features: Features | None
 
 
@@ -168,14 +180,15 @@ class Frame:
 class StageLinks:
     """The queues and events the three stages share."""
 
-    captured: queue.Queue  # stage 1 to 2: each frame's BGR pixels
+    captured: queue.Queue  # stage 1 to 2: each frame's NV12 pixels
     matched: queue.Queue  # stage 2 to 3: each Frame, then None after the last
     failed: threading.Event  # a stage raised; the others stop
     captured_all: threading.Event  # stage 1 pushed its last frame
 
 
 class Rendered(NamedTuple):
-    """A composed frame, its match count (None when not matched) and its sampled inlier ratio."""
+    """A composed NV12 frame, its match count (None when not matched) and its sampled inlier
+    ratio."""
 
     canvas: object
     match_count: int | None
@@ -498,6 +511,7 @@ def superpoint_options(width: int, height: int):
     options.superpoint.profile = pyneat.SuperPointProfile.LightGlueV1
     options.superpoint.output_format = pyneat.SuperPointOutputFormat.FeaturePointsV1
     options.superpoint.descriptor_output_dtype = pyneat.TensorDType.Float32
+    options.score_threshold = SCORE_THRESHOLD
     options.top_k = KEYPOINTS
     return options
 
@@ -511,7 +525,6 @@ def matcher_options():
     options.preprocess.normalize.enable = pyneat.AutoFlag.Off
     return options
 
-    options.score_threshold = SCORE_THRESHOLD
 
 def model_input_size(model) -> tuple[int, int]:
     """The SuperPoint input size, the frame its keypoints are in (sima-neat/core#1328)."""
@@ -528,12 +541,11 @@ def frame_tensor(sample):
     return part.tensor if part.kind == pyneat.SampleKind.Tensor else part.tensors[0]
 
 
-def frame_luma_and_bgr(tensor):
-    """A decoded frame's luma plane, for SuperPoint, and its BGR pixels, for the view.
+def frame_nv12(tensor):
+    """A decoded frame as one NV12 array: its luma rows, then its interleaved chroma rows.
 
     Decoders pad rows and planes, so each plane is read at its own offset and stride. MJPEG with
-    4:2:2 chroma, as most webcams send, decodes to NV16 instead of NV12; each frame is converted by
-    the layout it actually has.
+    4:2:2 chroma, as most webcams send, decodes to NV16; every other chroma row of it makes NV12.
     """
     width, height = tensor.width(), tensor.height()
     payload = np.frombuffer(tensor.copy_payload_bytes(), np.uint8)
@@ -542,24 +554,30 @@ def frame_luma_and_bgr(tensor):
     if not nv16 and not tensor.is_nv12():
         raise RuntimeError(f"unsupported decoded frame format {tensor.image_format()}")
 
-    def plane(role, rows, channels):
+    def plane(role, rows):
         layout = planes[role]
         return np.ndarray(
-            (rows, width // channels, channels),
+            (rows, width),
             np.uint8,
             buffer=payload,
             offset=layout.byte_offset,
-            strides=(layout.strides_bytes[0], channels, 1),
+            strides=(layout.strides_bytes[0], 1),
         )
 
-    luma = plane(pyneat.PlaneRole.Y, height, 1)
-    chroma = plane(pyneat.PlaneRole.UV, height if nv16 else height // 2, 2)
-    if nv16:
-        packed = np.dstack([luma[..., 0], chroma.reshape(height, width)])
-        bgr = cv2.cvtColor(packed, cv2.COLOR_YUV2BGR_YUY2)
-    else:
-        bgr = cv2.cvtColorTwoPlane(luma, chroma, cv2.COLOR_YUV2BGR_NV12)
-    return luma.copy(), bgr
+    nv12 = np.empty((height * 3 // 2, width), np.uint8)
+    nv12[:height] = plane(pyneat.PlaneRole.Y, height)
+    nv12[height:] = (
+        plane(pyneat.PlaneRole.UV, height)[::2] if nv16 else plane(pyneat.PlaneRole.UV, height // 2)
+    )
+    return nv12
+
+
+def nv12_height(nv12) -> int:
+    return nv12.shape[0] * 2 // 3
+
+
+def luma_plane(nv12):
+    return nv12[: nv12_height(nv12), :, None]
 
 
 def luma_tensor(luma):
@@ -686,20 +704,15 @@ def encoder_level(width: int, height: int) -> str:
 
 
 def build_insight_run(cfg: AppConfig, width: int, height: int, fps: int):
-    """Composed BGR frames, converted to the encoder's NV12 on the CVU, to H.264 for Insight."""
+    """Composed NV12 frames, encoded to H.264 for Insight."""
     input_options = pyneat.InputOptions()
     input_options.payload_type = pyneat.PayloadType.Image
-    input_options.format = pyneat.Format.BGR
+    input_options.format = pyneat.Format.NV12
     input_options.width = width
     input_options.height = height
-    input_options.depth = 3
     input_options.fps_n = fps
     input_options.fps_d = 1
     input_options.memory_policy = pyneat.InputMemoryPolicy.Ev74
-
-    nv12 = pyneat.ColorConvertOptions()
-    nv12.output_format = pyneat.ImageFormat.NV12
-    nv12.surface = pyneat.ImageSurfaceLayout.EncoderNv12
 
     encode = pyneat.SimaEncodeOptions()
     encode.fps = fps
@@ -711,22 +724,59 @@ def build_insight_run(cfg: AppConfig, width: int, height: int, fps: int):
 
     graph = pyneat.Graph("insight")
     graph.add(pyneat.nodes.input(input_options))
-    graph.add(pyneat.nodes.color_convert(nv12))
     graph.add(pyneat.groups.video_sender(sender_options))
-    seed = bgr_tensor(np.zeros((height, width, 3), np.uint8))
+    seed = encoder_tensor(np.zeros((height * 3 // 2, width), np.uint8))
     return graph, graph.build([seed]), sender_options.video_port
 
 
-def bgr_tensor(bgr):
-    return pyneat.Tensor.from_numpy(
-        bgr, copy=True, image_format=pyneat.PixelFormat.BGR, memory=pyneat.TensorMemory.EV74
+def image_plane(role, offset: int, rows: int, width: int, pitch: int):
+    plane = pyneat.Plane()
+    plane.role = role
+    plane.byte_offset = offset
+    plane.shape = [rows, width]
+    plane.strides_bytes = [pitch, 1]
+    return plane
+
+
+def encoder_tensor(nv12):
+    """An NV12 array as an EV74 tensor in the encoder's layout, padded when its width or height
+    is not aligned. `Tensor.from_numpy` does not describe NV12 planes, so they are set here."""
+    height, width = nv12_height(nv12), nv12.shape[1]
+    pitch = -(-width // ENCODER_PITCH_ALIGNMENT) * ENCODER_PITCH_ALIGNMENT
+    rows = -(-height // ENCODER_ROW_ALIGNMENT) * ENCODER_ROW_ALIGNMENT
+    if (pitch, rows) != (width, height):
+        padded = np.zeros((rows * 3 // 2, pitch), np.uint8)
+        padded[:height, :width] = nv12[:height]
+        padded[rows : rows + height // 2, :width] = nv12[height:]
+        nv12 = padded
+    tensor = pyneat.Tensor.from_numpy(
+        nv12, image_format=pyneat.PixelFormat.NV12, memory=pyneat.TensorMemory.CPU
     )
+    tensor.planes = [
+        image_plane(pyneat.PlaneRole.Y, 0, height, width, pitch),
+        image_plane(pyneat.PlaneRole.UV, pitch * rows, height // 2, width, pitch),
+    ]
+    tensor.shape = [height, width]
+    tensor.strides_bytes = [pitch, 1]
+    return tensor.cvu()
 
 
-def match_colors(scores, threshold: float):
-    """BGR line colors from red at the match threshold to green at score 1."""
+def color_steps(scores, threshold: float):
+    """Each score's color step, 0 (red) at the match threshold to COLOR_STEPS - 1 (green) at 1."""
     strength = np.clip((scores - threshold) / (1.0 - threshold), 0.0, 1.0)
-    return np.stack([np.zeros_like(strength), 255 * strength, 255 * (1 - strength)], 1).astype(int)
+    return np.rint(strength * (COLOR_STEPS - 1)).astype(int)
+
+
+def step_color(step: int) -> tuple[int, int, int]:
+    strength = step / (COLOR_STEPS - 1)
+    return (0, round(255 * strength), round(255 * (1 - strength)))
+
+
+@functools.cache
+def nv12_color(bgr: tuple[int, int, int]) -> tuple[int, tuple[int, int]]:
+    """A BGR color's luma and (U, V) chroma, as OpenCV converts BGR to YUV 4:2:0."""
+    yuv = cv2.cvtColor(np.full((2, 2, 3), bgr, np.uint8), cv2.COLOR_BGR2YUV_I420)
+    return int(yuv[0, 0]), (int(yuv[2, 0]), int(yuv[2, 1]))
 
 
 def match_lines(matches: Matches, reference: Features, live: Features, scale, width: int):
@@ -750,40 +800,74 @@ def inlier_ratio(lines) -> float:
     return float(inliers.sum()) / len(lines) if inliers is not None else 0.0
 
 
-def draw_label(canvas, text: str, origin: tuple[int, int], scale: float) -> None:
+def disc(radius: int):
+    """The (row, column) offsets of a filled disc."""
+    span = np.arange(-radius, radius + 1)
+    rows, cols = np.meshgrid(span, span, indexing="ij")
+    inside = rows**2 + cols**2 <= radius**2 + 1
+    return np.stack([rows[inside], cols[inside]], axis=1)
+
+
+def draw_dots(plane, points, colors, radius: int) -> None:
+    """A disc of each color around each (x, y) point, later points on top."""
+    offsets = disc(radius)
+    rows = np.clip(points[:, 1, None] + offsets[:, 0], 0, plane.shape[0] - 1)
+    cols = np.clip(points[:, 0, None] + offsets[:, 1], 0, plane.shape[1] - 1)
+    plane[rows, cols] = colors[:, None]
+
+
+@functools.cache
+def step_palette():
+    """Each color step's luma and (U, V) chroma, indexed by step."""
+    colors = [nv12_color(step_color(step)) for step in range(COLOR_STEPS)]
+    return np.array([y for y, _ in colors], np.uint8), np.array([uv for _, uv in colors], np.uint8)
+
+
+def draw_label(luma, chroma, text: str, origin: tuple[int, int], scale: float) -> None:
     """White text on a darkened box, readable on any frame."""
     thickness = max(1, round(scale * 1.5))
     (width, height), baseline = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, thickness)
     x, y = origin
     pad = max(4, height // 3)
-    canvas[y - height - pad : y + baseline + pad, x - pad : x + width + pad] //= 3
-    cv2.putText(
-        canvas,
-        text,
-        origin,
-        cv2.FONT_HERSHEY_SIMPLEX,
-        scale,
-        (255, 255, 255),
-        thickness,
-        cv2.LINE_AA,
-    )
+    top, bottom, left, right = y - height - pad, y + baseline + pad, x - pad, x + width + pad
+    luma[top:bottom, left:right] //= 3
+    box = chroma[top // 2 : bottom // 2, left // 2 : right // 2]
+    box[:] = 128 + (box.astype(np.int16) - 128) // 3
+    white, _ = nv12_color((255, 255, 255))
+    cv2.putText(luma, text, origin, cv2.FONT_HERSHEY_SIMPLEX, scale, white, thickness, cv2.LINE_AA)
 
 
-def compose_frame(reference_bgr, live_bgr, lines, colors, status: str):
-    """The reference on the left and the live frame on the right, one line per match."""
-    height, width = reference_bgr.shape[:2]
-    canvas = cv2.hconcat([reference_bgr, live_bgr])
-    for (x0, y0, x1, y1), color in zip(lines.tolist(), colors.tolist(), strict=True):
-        cv2.line(canvas, (x0, y0), (x1, y1), color, 1, cv2.LINE_AA)
-        cv2.circle(canvas, (x0, y0), 2, color, -1, cv2.LINE_AA)
-        cv2.circle(canvas, (x1, y1), 2, color, -1, cv2.LINE_AA)
+def compose_frame(reference_nv12, live_nv12, lines, steps, status: str):
+    """The reference on the left and the live frame on the right, in NV12: one line per match
+    with a dot at each end. Each is drawn in the luma plane and, at half the
+    coordinates, in the chroma plane. The strongest color steps are drawn last, on top."""
+    height, width = nv12_height(reference_nv12), reference_nv12.shape[1]
+    canvas = cv2.hconcat([reference_nv12, live_nv12])
+    luma = canvas[:height]
+    chroma = canvas[height:].reshape(height // 2, width, 2)
+    for step in np.unique(steps):
+        segments = lines[steps == step].reshape(-1, 2, 2).astype(np.int32)
+        y, uv = nv12_color(step_color(int(step)))
+        cv2.polylines(luma, list(segments), False, y, 1, cv2.LINE_8)
+        cv2.polylines(chroma, list(segments // 2), False, uv, 1, cv2.LINE_8)
+    points = np.asarray(lines, np.int64).reshape(-1, 2)
+    point_steps = np.repeat(steps, 2)
+    luma_colors, chroma_colors = step_palette()
+    draw_dots(luma, points, luma_colors[point_steps], DOT_RADIUS)
+    draw_dots(chroma, points // 2, chroma_colors[point_steps], DOT_RADIUS // 2)
     scale = height / 1200
     margin, line_height = round(30 * scale), round(56 * scale)
-    draw_label(canvas, "Reference", (margin, margin + line_height // 2), scale)
-    draw_label(canvas, "Live", (width + margin, margin + line_height // 2), scale)
-    draw_label(canvas, status, (width + margin, margin + line_height // 2 + line_height), scale)
+    draw_label(luma, chroma, "Reference", (margin, margin + line_height // 2), scale)
+    draw_label(luma, chroma, "Live", (width + margin, margin + line_height // 2), scale)
     draw_label(
-        canvas, "Line color: match score, red low, green high", (margin, height - margin), scale
+        luma, chroma, status, (width + margin, margin + line_height // 2 + line_height), scale
+    )
+    draw_label(
+        luma,
+        chroma,
+        "Line color: match score, red low, green high",
+        (margin, height - margin),
+        scale,
     )
     return canvas
 
@@ -808,34 +892,34 @@ def get_unless_failed(items: queue.Queue, failed: threading.Event):
 
 
 def pull_frame(source_run, source_key: str):
-    """The newest decoded frame's luma plane and BGR pixels."""
+    """The newest decoded frame, in NV12."""
     sample = source_run.pull("frame", SOURCE_TIMEOUT_MS)
     if sample is None:
         raise RuntimeError(f"no frame arrived from {source_key} for {SOURCE_TIMEOUT_MS} ms")
-    return frame_luma_and_bgr(frame_tensor(sample))
+    return frame_nv12(frame_tensor(sample))
 
 
 def capture_reference(cfg, source_run, superpoint_runner, stop: threading.Event) -> Frame | None:
     """The first frame with 512 keypoints, or None when the run stops first."""
     while not stop.is_set():
-        luma, bgr = pull_frame(source_run, cfg.source_key)
-        features = superpoint_features(superpoint_runner.run([luma_tensor(luma)]))
+        nv12 = pull_frame(source_run, cfg.source_key)
+        features = superpoint_features(superpoint_runner.run([luma_tensor(luma_plane(nv12))]))
         if features is not None:
-            return Frame(bgr, features)
+            return Frame(nv12, features)
     return None
 
 
 def capture_frames(
     cfg: AppConfig, source_run, superpoint_runner, stop: threading.Event, links: StageLinks
 ) -> None:
-    """Stage 1: each newest decoded frame's luma into SuperPoint, its BGR pixels to stage 2."""
+    """Stage 1: each newest decoded frame's luma into SuperPoint, its NV12 pixels to stage 2."""
     count = 0
     try:
         while not stop.is_set() and (cfg.frames == 0 or count < cfg.frames):
-            luma, bgr = pull_frame(source_run, cfg.source_key)
-            if not superpoint_runner.push([luma_tensor(luma)]):
+            nv12 = pull_frame(source_run, cfg.source_key)
+            if not superpoint_runner.push([luma_tensor(luma_plane(nv12))]):
                 raise RuntimeError("SuperPoint rejected a frame")
-            if not put_unless_failed(links.captured, bgr, links.failed):
+            if not put_unless_failed(links.captured, nv12, links.failed):
                 break
             count += 1
     finally:
@@ -860,14 +944,14 @@ def match_frames(
                 raise RuntimeError(f"SuperPoint returned no output for {MODEL_TIMEOUT_MS} ms")
             features = superpoint_features(outputs)
             del outputs
-            bgr = get_unless_failed(links.captured, links.failed)
-            if bgr is None:
+            nv12 = get_unless_failed(links.captured, links.failed)
+            if nv12 is None:
                 break
             if features is not None and not matcher_runner.push(
                 reference_inputs + matcher.image_inputs(features)
             ):
                 raise RuntimeError(f"{matcher.name} rejected a frame")
-            if not put_unless_failed(links.matched, Frame(bgr, features), links.failed):
+            if not put_unless_failed(links.matched, Frame(nv12, features), links.failed):
                 break
     finally:
         matcher_runner.close_input()
@@ -886,30 +970,30 @@ def publish_frames(
 ) -> None:
     """Stage 3: each frame's matches drawn beside the reference and sent to Insight, in order.
     Frames are matched and drawn on worker threads; this thread pulls the matcher and sends."""
-    width = reference.bgr.shape[1]
-    no_lines, no_colors = np.empty((0, 4), int), np.empty((0, 3), int)
+    width = reference.nv12.shape[1]
+    no_lines, no_steps = np.empty((0, 4), int), np.empty(0, int)
 
     def render(frame: Frame, scores, fps: float, sample_inliers: bool) -> Rendered:
         if scores is None:
             status = f"{matcher.name}: fewer than {KEYPOINTS} keypoints, not matched"
-            canvas = compose_frame(reference.bgr, frame.bgr, no_lines, no_colors, status)
+            canvas = compose_frame(reference.nv12, frame.nv12, no_lines, no_steps, status)
             return Rendered(canvas, None, None)
         matches = matcher.match(scores)
         lines, line_scores = match_lines(
             matches, reference.features, frame.features, point_scale, width
         )
-        colors = match_colors(line_scores, cfg.match_threshold)
+        steps = color_steps(line_scores, cfg.match_threshold)
         status = f"{matcher.name}: {len(lines)} matches, {fps:.1f} fps"
-        canvas = compose_frame(reference.bgr, frame.bgr, lines, colors, status)
+        canvas = compose_frame(reference.nv12, frame.nv12, lines, steps, status)
         return Rendered(canvas, len(lines), inlier_ratio(lines) if sample_inliers else None)
 
     def send(rendered: Rendered) -> None:
-        if not insight_run.push([bgr_tensor(rendered.canvas)]):
+        if not insight_run.push([encoder_tensor(rendered.canvas)]):
             raise RuntimeError("Insight video push failed")
         stats.record(rendered)
         if cfg.save_dir and cfg.save_every and stats.frames % cfg.save_every == 0:
             path = Path(cfg.save_dir) / f"frame_{stats.frames:06d}.jpg"
-            if not cv2.imwrite(str(path), rendered.canvas):
+            if not cv2.imwrite(str(path), cv2.cvtColor(rendered.canvas, cv2.COLOR_YUV2BGR_NV12)):
                 raise RuntimeError(f"could not save {path}")
 
     rendering: collections.deque = collections.deque()
@@ -942,8 +1026,8 @@ def run(cfg: AppConfig, stop: threading.Event) -> int:
     _source_graph, source_run = build_source_run(cfg, fps)
     runners = [source_run]
     try:
-        luma, _ = pull_frame(source_run, cfg.source_key)
-        height, width = luma.shape[:2]
+        first = pull_frame(source_run, cfg.source_key)
+        height, width = nv12_height(first), first.shape[1]
         superpoint = pyneat.Model(cfg.superpoint_path, superpoint_options(width, height))
         model_width, model_height = model_input_size(superpoint)
         if (model_width, model_height) != MODEL_INPUT_SIZE:
@@ -953,7 +1037,7 @@ def run(cfg: AppConfig, stop: threading.Event) -> int:
             )
         point_scale = np.array([width / model_width, height / model_height], np.float32)
         superpoint_runner = superpoint.build(
-            [luma_tensor(luma)], run_options=pipelined_run_options()
+            [luma_tensor(luma_plane(first))], run_options=pipelined_run_options()
         )
         runners.append(superpoint_runner)
 
