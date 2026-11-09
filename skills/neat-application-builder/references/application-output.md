@@ -15,6 +15,11 @@ prefer Insight for remote browser viewing.
   `VideoSenderOptions::Passthrough(codec)` to forward encoded H.264, H.265, or
   MJPEG with the source's codec. Prefer these over the deprecated
   `H264RtpUdpFromRaw` factory.
+- For frames the application draws on the CPU, put a `ColorConvert` to NV12
+  with `ImageSurfaceLayout::EncoderNv12` between the BGR input and the raw
+  `VideoSender`. On a DevKit, pushing a 2560x720 BGR frame took 36 ms without
+  it and 8.5 ms with it. See
+  `examples/feature-extraction/superpoint-feature-matcher`.
 - Pair it with `MetadataSender` when Insight needs JSON detections or other
   structured overlays. `MetadataSender` splits JSON larger than 1200 bytes
   into chunks that the receiving Insight version must reassemble.

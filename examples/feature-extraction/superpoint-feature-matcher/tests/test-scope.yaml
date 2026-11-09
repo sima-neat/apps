@@ -1,0 +1,34 @@
+models:
+  superpoint:
+    source: model-registry
+    name: superpoint
+    ref: develop
+    variant: w8a8
+    spec: latest
+    file: superpoint_w8a8_mpk.tar.gz
+  lightglue_superpoint:
+    source: model-registry
+    name: lightglue_superpoint
+    ref: develop
+    variant: w8a8
+    spec: latest
+    file: lightglue_superpoint_w8a8_mpk.tar.gz
+  superglue_outdoor:
+    source: model-registry
+    name: superglue_outdoor
+    ref: develop
+    variant: w16a16
+    spec: latest
+    file: superglue_outdoor_w16a16_mpk.tar.gz
+unit:
+  python: true
+  cpp: true
+e2e:
+  python:
+    enabled: true
+    requires_rtsp: true
+    models: [superpoint, lightglue_superpoint, superglue_outdoor]
+  cpp:
+    enabled: true
+    requires_rtsp: true
+    models: [superpoint, lightglue_superpoint, superglue_outdoor]
