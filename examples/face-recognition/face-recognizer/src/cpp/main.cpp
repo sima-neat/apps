@@ -582,6 +582,11 @@ static int run_recognition(const AppConfig& cfg, const face_recog::Gallery& gall
             std::cerr << "[INPUT] End of stream.\n";
             break;
         }
+        if (status == neat::PullStatus::Timeout) {
+            // A live source can stall; keep waiting for it rather than ending the run.
+            std::cerr << "[warn] no frame for " << cfg.timeout_ms << " ms\n";
+            continue;
+        }
         if (status != neat::PullStatus::Ok)
             throw std::runtime_error("pull failed: " + pull_err.code + " " + pull_err.message);
         if (!first_frame) first_frame = std::chrono::steady_clock::now();
