@@ -132,7 +132,10 @@ simaai::neat::nodes::groups::RtspCodec parse_codec(std::string value) {
   if (value == "h265" || value == "hevc" || value == "h.265") {
     return simaai::neat::nodes::groups::RtspCodec::H265;
   }
-  throw std::runtime_error("input.codec must be h264/avc or h265/hevc");
+  if (value == "mjpeg" || value == "jpeg") {
+    return simaai::neat::nodes::groups::RtspCodec::MJPEG;
+  }
+  throw std::runtime_error("input.codec must be h264/avc, h265/hevc, or mjpeg");
 }
 
 // ScalarConfig reads scalars only, so the `streams:` list is read here.
@@ -306,11 +309,20 @@ simaai::neat::nodes::groups::RtspEncodedInputOptions source_options(const AppCon
   return opt;
 }
 
+simaai::neat::SimaDecodeType decode_type(simaai::neat::nodes::groups::RtspCodec codec) {
+  switch (codec) {
+  case simaai::neat::nodes::groups::RtspCodec::H265:
+    return simaai::neat::SimaDecodeType::H265;
+  case simaai::neat::nodes::groups::RtspCodec::MJPEG:
+    return simaai::neat::SimaDecodeType::MJPEG;
+  default:
+    return simaai::neat::SimaDecodeType::H264;
+  }
+}
+
 simaai::neat::SimaDecodeOptions decoder_options(const AppConfig& cfg, const Stream& stream) {
   simaai::neat::SimaDecodeOptions opt;
-  opt.type = cfg.codec == simaai::neat::nodes::groups::RtspCodec::H265
-                 ? simaai::neat::SimaDecodeType::H265
-                 : simaai::neat::SimaDecodeType::H264;
+  opt.type = decode_type(cfg.codec);
   opt.out_format = "NV12";
   opt.decoder_name = "decoder";
   opt.raw_output = true;

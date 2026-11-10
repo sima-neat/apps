@@ -110,7 +110,9 @@ def parse_codec(value: str) -> str:
         return "h264"
     if lowered in {"h265", "hevc", "h.265"}:
         return "h265"
-    raise ValueError("input.codec must be h264/avc or h265/hevc")
+    if lowered in {"mjpeg", "jpeg"}:
+        return "mjpeg"
+    raise ValueError("input.codec must be h264/avc, h265/hevc, or mjpeg")
 
 
 def parse_streams(raw: dict) -> list[str]:
@@ -194,7 +196,19 @@ def save_frames_enabled(cfg: AppConfig) -> bool:
 
 
 def rtsp_codec(cfg: AppConfig):
-    return pyneat.RtspCodec.H265 if cfg.codec == "h265" else pyneat.RtspCodec.H264
+    return {
+        "h264": pyneat.RtspCodec.H264,
+        "h265": pyneat.RtspCodec.H265,
+        "mjpeg": pyneat.RtspCodec.MJPEG,
+    }[cfg.codec]
+
+
+def decode_type(cfg: AppConfig):
+    return {
+        "h264": pyneat.SimaDecodeType.H264,
+        "h265": pyneat.SimaDecodeType.H265,
+        "mjpeg": pyneat.SimaDecodeType.MJPEG,
+    }[cfg.codec]
 
 
 def probe_stream(url: str) -> tuple[int, int, int]:
@@ -257,7 +271,7 @@ def source_options(cfg: AppConfig, stream: Stream):
 
 def decoder_options(cfg: AppConfig, stream: Stream):
     opt = pyneat.SimaDecodeOptions()
-    opt.type = pyneat.SimaDecodeType.H265 if cfg.codec == "h265" else pyneat.SimaDecodeType.H264
+    opt.type = decode_type(cfg)
     opt.out_format = pyneat.Format.NV12
     opt.decoder_name = "decoder"
     opt.raw_output = True

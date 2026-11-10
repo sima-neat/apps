@@ -80,7 +80,7 @@ bool test_configuration_rules_are_enforced(const std::string& binary) {
                    "  - rtsp://host/d\n  - rtsp://host/e\n"),
        "streams supports up to four entries"},
       {"bad_codec", config_body(kTwoStreams, "input:\n  codec: vp9\n"),
-       "input.codec must be h264/avc or h265/hevc"},
+       "input.codec must be h264/avc, h265/hevc, or mjpeg"},
       {"zero_inflight", config_body(kTwoStreams, "inference:\n  max_inflight_per_stream: 0\n"),
        "inference.max_inflight_per_stream must be -1 or > 0"},
       {"min_score_above_one", config_body(kTwoStreams, "inference:\n  min_score: 1.5\n"),

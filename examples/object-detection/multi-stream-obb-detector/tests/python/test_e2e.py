@@ -64,7 +64,11 @@ def assert_oriented_objects(metadata, labels: set[str]) -> None:
 class TestE2E:
     @pytest.mark.parametrize(
         ("codec", "urls_fixture"),
-        [("h264", "rtsp_h264_urls"), ("h265", "rtsp_h265_urls")],
+        [
+            ("h264", "rtsp_h264_urls"),
+            ("h265", "rtsp_h265_urls"),
+            ("mjpeg", "rtsp_mjpeg_urls"),
+        ],
     )
     def test_multi_stream_insight_and_save_pipeline(
         self,

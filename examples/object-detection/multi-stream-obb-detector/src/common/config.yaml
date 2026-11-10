@@ -7,7 +7,7 @@ streams:                     # RTSP inputs, one entry per camera. Up to four.
   - <rtsp-url-2>
 
 input:                       # RTSP input transport settings.
-  codec: h264                # h264/avc or h265/hevc.
+  codec: h264                # h264/avc, h265/hevc, or mjpeg.
   tcp: true                  # Use TCP for RTSP transport.
   latency_ms: 100            # RTSP receive latency in milliseconds.
 

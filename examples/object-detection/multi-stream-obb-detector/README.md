@@ -28,8 +28,8 @@ mostly background. The model detects the 15 DOTA classes listed in
 ## Prerequisites
 
 - `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on the Modalix DevKit, or in a Neat SDK container paired with it.
-- H.264 or H.265 RTSP sources of top-down aerial video, such as drone or satellite footage, matching `input.codec`. The model was trained on overhead imagery and finds little in street-level video.
-- An [Insight](https://developer.sima.ai/software/tools/insight/) version that draws `oriented_bbox`, reachable from the target.
+- H.264, H.265, or MJPEG RTSP sources of top-down aerial video, such as drone or satellite footage, matching `input.codec`. The model was trained on overhead imagery and finds little in street-level video.
+- An [Insight](https://developer.sima.ai/software/tools/insight/) version that draws `oriented_bbox`, and for MJPEG streams one that shows JPEG channels, reachable from the target.
 - For H.265, the computer running the Insight viewer must support hardware HEVC decoding; Chromium does not provide a software decoder fallback for WebRTC H.265.
 
 ## Install Apps
@@ -71,7 +71,7 @@ In the Insight Web UI, upload your aerial videos, start one stream per video, an
 
 ## Configure
 
-Open `${APP_DIR}/src/common/config.yaml`. Set `model.path`, add each RTSP URL under `streams`, and set the Insight host and starting video and metadata ports. Set `input.codec` to match the streams.
+Open `${APP_DIR}/src/common/config.yaml`. Set `model.path`, add each RTSP URL under `streams`, and set the Insight host and starting video and metadata ports. Set `input.codec` to `h264`, `h265`, or `mjpeg` to match the streams. All streams use the same codec. The video reaches Insight as the stream's own encoded frames, without re-encoding. Only the detector decodes them.
 
 ## Run
 
@@ -126,6 +126,7 @@ To also save annotated frames, set `output.save_every` to a positive interval. E
 - Few or no detections: check that the video looks straight down at the ground. Lower `inference.min_score` if objects are present but missed, and raise it if the overlay shows boxes on background.
 - Python output falls below the stream rate on dense scenes: lower `inference.max_detections`. Each box adds to the metadata sent to Insight; at the default 300 with four dense 30 fps streams, C++ keeps about 28 fps per stream and Python about 20 to 27 fps.
 - Insight shows upright boxes: the installed Insight does not draw `oriented_bbox`. Update Insight.
+- MJPEG frames reach Insight as RTP/JPEG, which carries at most 2040 pixels per side. Use MJPEG streams of 1080p or smaller.
 - Verify host and UDP port ranges if Insight receives no output.
 
 ## Source Files

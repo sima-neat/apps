@@ -191,6 +191,7 @@ int main(int argc, char** argv) {
   const std::vector<MultiStreamSourceCase> source_cases = {
       {"h264", rtsp_h264_urls_from_env()},
       {"h265", rtsp_h265_urls_from_env()},
+      {"mjpeg", rtsp_mjpeg_urls_from_env()},
   };
 
   const int cases_rc = run_multistream_source_cases(

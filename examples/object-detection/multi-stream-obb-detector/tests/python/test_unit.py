@@ -127,7 +127,7 @@ class TestConfig:
         assert cfg.debug_dir == ""
         assert cfg.save_every == 0
 
-    @pytest.mark.parametrize(("codec", "expected"), [("avc", "h264"), ("HEVC", "h265")])
+    @pytest.mark.parametrize(("codec", "expected"), [("avc", "h264"), ("HEVC", "h265"), ("MJPEG", "mjpeg")])
     def test_codec_aliases_are_accepted(self, tmp_path, codec, expected):
         cfg = main_module.load_app_config(write_config(tmp_path, [(("input", "codec"), codec)]))
 
@@ -138,7 +138,7 @@ class TestConfig:
         [
             (("model", "path"), "", "model.path must be set"),
             (("model", "labels"), "", "model.labels must be set"),
-            (("input", "codec"), "vp9", "input.codec must be h264/avc or h265/hevc"),
+            (("input", "codec"), "vp9", "input.codec must be h264/avc, h265/hevc, or mjpeg"),
             (("input", "tcp"), "yes", "input.tcp must be true or false"),
             (("input", "latency_ms"), -1, "input.latency_ms must be >= 0"),
             (("inference", "frames"), -1, "inference.frames must be >= 0"),
