@@ -14,7 +14,6 @@ decode:                      # YOLO26 on-device box decode settings.
   max_detections: 300        # Max detections to keep per image.
 
 runtime:                     # Runtime settings.
-  timeout_ms: 8000           # Inference timeout in milliseconds.
   num_runs: 1                # Number of repeated runs.
   queue_depth: 8             # Runtime queue depth.
   profile: false             # Print per-image profiling summaries.

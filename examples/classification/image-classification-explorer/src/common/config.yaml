@@ -13,9 +13,6 @@ io:                           # Input image settings.
   output_dir: sandbox/report  # Dedicated directory for report.html/json/csv and thumbnails; replaced on each run.
   output_format: [html]       # Which reports to write: any of html, json, csv. Thumbnails follow html.
 
-runtime:                      # Runtime settings.
-  timeout_ms: 20000           # Per-image, per-model inference timeout.
-
 models:
   resnet_50:
     path: models/resnet_50_mpk.tar.gz

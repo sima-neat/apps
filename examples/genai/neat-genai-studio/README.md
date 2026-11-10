@@ -16,6 +16,14 @@ Runs language, vision-language, and speech models on a Modalix device as the boa
 
 The Studio has no user interface of its own. Insight's **GenAI** tab is the UI:
 it relays every call to this backend, which listens on `https://<board-ip>:5000`.
+That address serves only the API: a browser shows a short JSON status there,
+not a page. Insight is a separate web application that
+`sima-cli neat install apps` installs on the DevKit next to the Studio; you
+start it on the board and open it from any browser on your PC. The PC needs
+nothing but that browser: not the Neat Development Environment, not Docker.
+Releases before 0.6.0 served the Studio's own web page on port `5000`; the
+GenAI tab replaces that page, and the pre-compiled models are still downloaded
+from Hugging Face on the board.
 The backend starts without a chat model loaded. Through Insight, or directly
 through the API, you can:
 
@@ -30,16 +38,17 @@ Once set up, the Studio runs without internet access. The first `setup.sh` run a
 ![Neat GenAI Studio preview](../../../portal/assets/examples/genai/neat-genai-studio/image.png)
 
 ## Prerequisites
-- A Modalix DevKit with `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)), the Neat Development Environment, and the Neat Library installed.
+- A Modalix DevKit with `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) installed. `sima-cli neat install apps` installs the Neat Library and Neat Insight on the board; the Neat Development Environment is not required.
 - The Neat Library's Python environment at `~/pyneat/bin/python`. If it is somewhere else, set `PYNEAT_PYTHON=/path/to/python-with-pyneat` before running the commands below.
-- Neat Insight, to use the GenAI tab.
+- Neat Insight, the GenAI tab's web UI: on the board (installed with Apps), or on another machine that can reach the board, such as the Neat Development Environment.
+- A PC with a web browser on the board's network, to open Insight.
 - Internet access on the board for the first `setup.sh` run and for Hugging Face downloads. Behind a firewall or proxy, allow `pypi.org` and `files.pythonhosted.org` (Python packages), `download.pytorch.org` (PyTorch for document search), `huggingface.co` and its download hosts (models and voices), `raw.githubusercontent.com` (English text-to-speech data for Piper, fetched with NLTK), and `docs.sima.ai` (Supertonic's compiled models, through `sima-cli`).
 
 Run every command below in a shell on the board.
 
 ## Install Apps
 `sima-cli neat install apps` also offers to install the compatible Neat Library
-and Insight, and skips them when they are already installed. To keep the Neat
+and Insight, and skips them when they are up to date. To keep the Neat
 Library and Insight you have without being asked, run the install as
 `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps`. See
 [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
@@ -111,8 +120,9 @@ lists them all):
   `app.rag.enabled: false`; everything else works as usual.
 
 Re-running `setup.sh` (for example to add a model or voice) regenerates
-`config.local.yaml` but keeps your `app.web` settings, the Supertonic paths and
-whether RAG is installed (`app.rag.enabled`); the previous file is saved as
+`config.local.yaml` but keeps your `app.web` settings, the chat model limit
+(`server.models.max_resident_chat_models`), the Supertonic paths and whether RAG
+is installed (`app.rag.enabled`); the previous file is saved as
 `config.local.yaml.bak`.
 
 ## Configure
@@ -123,7 +133,7 @@ only to change:
 
 - `server.models.catalog_dir`: the directory scanned for models (default `/media/nvme/llima/models`).
 - `server.models.chat`: chat or vision-language models to load at startup (none by default).
-- `server.models.max_resident_chat_models`: how many chat or vision-language models stay loaded at once (default `1`; see [Keep several models loaded](#keep-several-models-loaded)).
+- `server.models.max_resident_chat_models`: how many chat or vision-language models stay loaded at once (`1` to `4`, default `2`; see [Keep several models loaded](#keep-several-models-loaded)).
 - `server.models.asr`: the speech-to-text model active at startup (default `whisper-small-a16w8`).
 - `server.hub.allow_download`: whether models may be downloaded from Hugging Face.
 - `app.request.max_tokens`: the default response length for chat requests that do not set `max_tokens`.
@@ -151,13 +161,23 @@ it highlights **Open Neat Insight → GenAI**, prints the backend API address
 until you press `Ctrl+C`. If `setup.sh` has not been run yet, `run.sh` runs it
 first.
 
-Connect Insight:
+Open the GenAI tab in Insight:
 
-1. Open Insight and select the **GenAI** tab. On the board itself Insight finds
-   the backend at `https://127.0.0.1:5000`; from the Neat Development
-   Environment it uses the paired DevKit. Otherwise enter the board address
+1. Start Insight on the board if it is not running yet. The Apps installer put
+   it under `~/.simaai/neat-insight`; in a second shell on the board run:
+
+   ```bash
+   source ~/.simaai/neat-insight/venv/bin/activate
+   neat-insight --port 9900
+   ```
+
+2. On your PC, open `https://<board-ip>:9900` in any browser (accept the
+   certificate warning the first time) and select the **GenAI** tab. Insight
+   on the board finds the backend at `https://127.0.0.1:5000` by itself.
+   Insight running elsewhere works too: in the Neat Development Environment
+   it uses the paired DevKit, and any other Insight takes the board address
    (`https://<board-ip>:5000`) in the tab's settings.
-2. Load a model from the tab's model settings, or download one from Hugging
+3. Load a model from the tab's model settings, or download one from Hugging
    Face there, then send a chat message.
 
 Other commands:
@@ -189,6 +209,7 @@ The output lists the speech-to-text model and any chat model you loaded.
 
 ## Troubleshooting
 - **The model server does not start:** confirm `pyneat` imports in the environment at `PYNEAT_PYTHON` (default `~/pyneat/bin/python`).
+- **`https://<board-ip>:5000` shows no page:** that address is the Studio's API; a browser only gets a short JSON status there. The user interface is Insight's GenAI tab: open Insight (`https://<board-ip>:9900` when it runs on the board, see [Run](#run)).
 - **Insight cannot reach the backend:** check `${APP_DIR}/run.sh status`, then `curl -sk https://<board-ip>:5000/health` from the machine running Insight. The backend uses a self-signed certificate generated on first start; `NEAT_TLS_CERT` and `NEAT_TLS_KEY` select your own.
 - **`setup.sh` says the runtime refuses the speech-to-text model:** check the model card's runtime requirements and update Neat or choose a compatible model from SiMa's Speech & Audio collection.
 - **`setup.sh` stops on a download (connection refused, timeout, `429`):** `setup.sh` already retries Hugging Face rate limits, server errors and dropped connections a few times, so this is a lasting problem. Check that the board reaches the hosts listed in [Prerequisites](#prerequisites); behind a proxy, export `HTTPS_PROXY` first. Run `${APP_DIR}/setup.sh` again: files already downloaded and verified are kept.
@@ -254,17 +275,23 @@ out-of-memory error, Studio returns HTTP 503 and restarts its backend to release
 memory. Only configured startup models reload; the failed selection is not retried.
 
 #### Keep several models loaded
-By default one chat/VLM model is loaded at a time, and loading another replaces
-it. To keep several loaded side by side, for example to compare them, raise
-`server.models.max_resident_chat_models` in `config.local.yaml` (or set
-`MAX_RESIDENT_CHAT_MODELS` before `setup.sh`), then restart the Studio. Each
-loaded model answers on `/v1/chat/completions` under its own name, and clients
-can use them at the same time. The Insight GenAI tab expects one loaded chat
-model until it supports several, so keep the default for it.
+By default up to two chat/VLM models stay loaded side by side, for example to
+compare them. Each loaded model answers on `/v1/chat/completions` under its own
+name, and clients can use them at the same time. To change the limit, from `1`
+to `4`, set `server.models.max_resident_chat_models` in `config.local.yaml` (or set
+`MAX_RESIDENT_CHAT_MODELS` before `setup.sh`), then restart the Studio. A re-run
+of `setup.sh` keeps the value. A higher value in the config is treated as `4`,
+because the models share one accelerator. With `1`, loading a model replaces the loaded one. How many fit depends on the
+models' sizes. A model that does not fit beside the loaded ones fails with
+`503` (`"code": "out_of_memory"`), and the Studio restarts its backend, which
+reloads only the configured startup models. For two large models, unload one
+first or set the limit to `1`.
 
 Past the limit, the Studio never unloads a model on its own, because another
-client may be using it. The load is refused with `409` and the loaded models,
-and it succeeds once the request names the ones to unload:
+client may be using it. The load is refused with `409`
+(`"code": "resident_limit"`) and the loaded models, and the Insight GenAI tab
+asks which loaded model to unload. Over the API, the load succeeds once the
+request names the ones to unload:
 
 ```bash
 curl -sk -X POST $B/models/load -H 'Content-Type: application/json' \

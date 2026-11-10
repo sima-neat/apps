@@ -126,6 +126,9 @@ cmake -S "$APP_DIR/src/host" -B build-host-pcie -DCMAKE_BUILD_TYPE=Release
 cmake --build build-host-pcie --parallel
 ```
 
+Use a source checkout matching the card's Apps package revision. The installed runtime bundle
+does not include `src/host` or the repository support files needed for this build.
+
 ## Run
 
 Start both applications from the host:
@@ -161,8 +164,11 @@ Do not restart only the host against an old card graph. Stop the launcher and st
 
 ### Stalls and unclean stops
 
-The host application exits with an error when frames are still admitted but no result has
-come back for `runtime.stall_timeout_ms` (default: twice `pcie.result_timeout_ms`). A stalled
+The host application checks each stream independently and exits with an error when a stream has
+pending work or continued input but no result has come back for `runtime.stall_timeout_ms`
+(default: twice `pcie.result_timeout_ms`). Expired or dropped requests do not keep an idle stream
+marked as busy. Results received from the card count as progress even if the host later drops
+them from its dispatch queue. The error identifies the affected stream. A stalled
 card does not recover on its own: stop the launcher, then reboot the card before starting
 another session. If the host's own teardown exceeds `runtime.teardown_timeout_ms`, it stops
 waiting for the card and exits. Avoid pressing `Ctrl-C` a second time during shutdown: the host
@@ -203,9 +209,20 @@ Lower `input.decoder_buffers` or `pcie.pool_size` if `CmaFree` on the card appro
 - `run.sh`: host-side launcher.
 - `src/common/`: shared configurations and parser.
 - `src/cpp/`: card graph and result demultiplexer.
-- `src/host/`: native host application and build definition.
 
 ## Development From Source
+
+The source checkout's native host build also registers return-layout unit tests. After building
+the host application, run:
+
+```bash
+ctest --test-dir build-host-pcie --output-on-failure -L unit
+```
+
+These tests check padded BBOX regions, malformed layout caps, and truncated allocations without
+requiring a card. The card-side unit suite checks per-stream stall detection and configuration
+bounds. Full runtime validation still requires a PCIe host/card pair, matching RTSP inputs, and
+verification that every Insight channel produces video and detection metadata.
 
 To build the card application from source, run on the Modalix PCIe Card:
 

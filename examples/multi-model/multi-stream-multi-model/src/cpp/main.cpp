@@ -1248,14 +1248,10 @@ std::shared_ptr<simaai::neat::Node> decoded_frame_caps(const AppConfig& cfg,
 constexpr const char* kEncodedToDecoder = "encoded_to_decoder";
 constexpr const char* kEncodedToVideo = "encoded_to_video";
 
-simaai::neat::InputOptions encoded_input_options(simaai::neat::nodes::groups::RtspCodec codec,
-                                                 simaai::neat::InputMemoryPolicy memory) {
+simaai::neat::InputOptions encoded_input_options(simaai::neat::nodes::groups::RtspCodec codec) {
   simaai::neat::InputOptions opt;
   opt.payload_type = simaai::neat::PayloadType::Encoded;
   opt.format = encoded_format_tag(codec);
-  // The decoder reads the encoded stream from the EV74's own memory; the sender reads it from
-  // system memory.
-  opt.memory_policy = memory;
   return opt;
 }
 
@@ -1456,9 +1452,7 @@ void connect_source_stream(AppRuntime& app, const AppConfig& cfg, StreamRuntime&
       rtsp_input_options(cfg, stream.url, stream.format)));
 
   simaai::neat::Graph decoder("decoder");
-  decoder.connect(simaai::neat::nodes::Input(
-                      kEncodedToDecoder,
-                      encoded_input_options(cfg.codec, simaai::neat::InputMemoryPolicy::Ev74)),
+  decoder.connect(simaai::neat::nodes::Input(kEncodedToDecoder, encoded_input_options(cfg.codec)),
                   simaai::neat::nodes::SimaDecode(decoder_options(cfg, stream.format)));
   decoder.add(decoded_frame_caps(cfg, stream.format));
 
@@ -1473,9 +1467,7 @@ void connect_source_stream(AppRuntime& app, const AppConfig& cfg, StreamRuntime&
   if (cfg.video_enabled) {
     simaai::neat::Graph video("video");
     video.connect(
-        simaai::neat::nodes::Input(
-            kEncodedToVideo,
-            encoded_input_options(cfg.codec, simaai::neat::InputMemoryPolicy::SystemMemory)),
+        simaai::neat::nodes::Input(kEncodedToVideo, encoded_input_options(cfg.codec)),
         simaai::neat::nodes::groups::VideoSender(make_video_options(cfg, stream.index)));
 
     auto encoded = simaai::neat::graphs::Branch("encoded", {kEncodedToDecoder, kEncodedToVideo});

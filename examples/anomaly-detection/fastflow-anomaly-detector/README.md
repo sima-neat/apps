@@ -41,7 +41,7 @@ A FastFlow package knows one product. The packaged model knows the blue discs of
 
 ## Install Apps
 
-Install on the Modalix DevKit, or under `/workspace` in a Neat SDK container paired with it. Only the example itself must run on the DevKit. `sima-cli neat install apps` also offers to install the compatible Neat Library and Insight, and skips them when they are already installed. To keep the Neat Library and Insight you have without being asked, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps`. See [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
+Install on the Modalix DevKit, or under `/workspace` in a Neat SDK container paired with it. Only the example itself must run on the DevKit. `sima-cli neat install apps` also offers to install the compatible Neat Library and Insight, and skips them when they are up to date. To keep the Neat Library and Insight you have without being asked, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps`. See [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
 
 Install the latest Neat Apps runtime and enter the installed bundle:
 
@@ -112,7 +112,7 @@ Both applications print one line when the pipeline is up, then run silently:
 rtsp=rtsp://<insight-host-ip>:8554/src1 stream=720x720@30 map=256x256 threshold=0.5 min_region_px=300 insight=<insight-host-ip> video=9000 channel=0
 ```
 
-Open the Insight Video Viewer for channel 0. The sample clip alternates defective and good discs, so the heatmap and the red `ANOMALY` banner appear and disappear every few discs. Stop with Ctrl-C; the application prints a summary:
+Open the Insight Video Viewer for channel 0. The sample clip holds each disc for one second and alternates defective and good discs, so the heatmap and the red `ANOMALY` banner appear and disappear every few discs. Stop with Ctrl-C; the application prints a summary:
 
 ```
 processed=1080 flagged=590 video_sender=<insight-host-ip>:9000
