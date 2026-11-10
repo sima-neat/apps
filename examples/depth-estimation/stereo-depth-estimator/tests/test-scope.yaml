@@ -1,0 +1,22 @@
+models:
+  lightstereo_s:
+    source: model-registry
+    name: lightstereo_s
+    ref: develop
+    variant: w16a16
+    spec: latest
+    file: lightstereo_s_w16a16_mpk.tar.gz
+unit:
+  python: true
+  cpp: true
+e2e:
+  python:
+    enabled: false
+    reason: CI has no rectified stereo pair of RTSP streams, and the Model Registry has no develop build of LightStereo-S yet.
+    requires_rtsp: true
+    models: [lightstereo_s]
+  cpp:
+    enabled: false
+    reason: CI has no rectified stereo pair of RTSP streams, and the Model Registry has no develop build of LightStereo-S yet.
+    requires_rtsp: true
+    models: [lightstereo_s]
