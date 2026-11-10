@@ -32,6 +32,7 @@ import socket
 import struct
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -92,11 +93,28 @@ def _config(models_dir: Path, e2e_config_writer, skip_unless_e2e_ready, gallery:
     })
 
 
-def _main(config_path: Path, args: list[str], timeout_ms: int) -> subprocess.CompletedProcess:
-    result = subprocess.run(
-        [sys.executable, str(MAIN_PY), "--config", str(config_path), *args],
-        capture_output=True, text=True, timeout=timeout_ms / 1000, cwd=str(EXAMPLE_DIR),
-    )
+def _main(config_path: Path, args: list[str], timeout_ms: int,
+          while_running=None) -> subprocess.CompletedProcess:
+    """Run main.py to completion. `while_running` is called every 100 ms during the run."""
+    cmd = [sys.executable, str(MAIN_PY), "--config", str(config_path), *args]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                            cwd=str(EXAMPLE_DIR))
+    deadline = time.monotonic() + timeout_ms / 1000
+    while True:
+        try:
+            stdout, stderr = proc.communicate(timeout=0.1)
+            break
+        except subprocess.TimeoutExpired:
+            if while_running:
+                while_running()
+            if time.monotonic() > deadline:
+                proc.kill()
+                stdout, stderr = proc.communicate()
+                raise AssertionError(
+                    f"main.py {' '.join(args)} did not finish in {timeout_ms} ms\n"
+                    f"stdout:\n{stdout}\nstderr:\n{stderr}"
+                )
+    result = subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
     assert result.returncode == 0, (
         f"main.py {' '.join(args)} exited with code {result.returncode}\n"
         f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
@@ -104,8 +122,9 @@ def _main(config_path: Path, args: list[str], timeout_ms: int) -> subprocess.Com
     return result
 
 
-def _recognize(config_path: Path, args: list[str], timeout_ms: int) -> subprocess.CompletedProcess:
-    result = _main(config_path, [*args, "--max-frames", str(FRAMES)], timeout_ms)
+def _recognize(config_path: Path, args: list[str], timeout_ms: int,
+               while_running=None) -> subprocess.CompletedProcess:
+    result = _main(config_path, [*args, "--max-frames", str(FRAMES)], timeout_ms, while_running)
     processed = re.search(r"processed=(\d+)", result.stdout)
     assert processed and int(processed.group(1)) == FRAMES, (
         f"expected processed={FRAMES}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
@@ -210,8 +229,12 @@ class TestE2E:
                                insight_ports=ports, **source_args)
         with _video_socket(ports[0]) as video, \
                 MetadataJsonListener("127.0.0.1", ports[1], num_ports=1) as metadata_listener:
-            _recognize(with_insight, [], test_timeout_ms)
-            packets = _rtp_packets(video)
+            # Read the video while the application runs: a whole run does not fit in the
+            # socket buffer, and the frames kept must be the ones the metadata describes.
+            packets: list[bytes] = []
+            _recognize(with_insight, [], test_timeout_ms,
+                       while_running=lambda: packets.extend(_rtp_packets(video)))
+            packets.extend(_rtp_packets(video))
             metadata = metadata_listener.drain_pending()
 
         # The source's own stream: RTP/JPEG (26) from a USB camera, RTP/H.264 (96) from RTSP.
