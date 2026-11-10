@@ -13,4 +13,8 @@ huggingface_hub[cli]>=0.34.0,<1.0
 # in this venv without clobbering piper-plus. It is installed in a separate venv
 # (.venv-pipertts, see requirements-pipertts.txt) and reached via a subprocess
 # worker (pipertts_worker.py) for the German/Italian/Norwegian/Vietnamese voices.
-piper-plus>=1.13.0
+#
+# Below 2: piper-plus 2.0 renamed its package to `piper_plus` and moved
+# onnxruntime behind the [cpu] extra, so piperplus_tts.py's `from piper import
+# PiperVoice` fails and the Japanese voice cannot load (#710).
+piper-plus>=1.13.0,<2
