@@ -27,6 +27,9 @@ VIEWS = ("left", "right")
 DEPTH_CHANNEL = len(VIEWS)
 SOURCE_TIMEOUT_MS = 20000
 MODEL_TIMEOUT_MS = 10000
+# The model preprocesses, infers and converts its output on different processors. Three frames
+# in flight keep all of them busy; one frame at a time leaves two of them idle.
+MODEL_FRAMES_IN_FLIGHT = 3
 
 # Imported in main(), so the configuration loads and reports its errors without them.
 cv2 = None
@@ -332,6 +335,10 @@ def frame_bgr(tensor) -> np.ndarray:
     return cv2.cvtColor(nv12, cv2.COLOR_YUV2BGR_NV12)
 
 
+def sample_tensor(sample):
+    return sample.tensor if sample.kind == pyneat.SampleKind.Tensor else sample.tensors[0]
+
+
 def pull_pair(source_run) -> tuple[np.ndarray, np.ndarray]:
     """The newest left and right frame. The cameras share no clock, so the two can be up to about
     one frame interval apart."""
@@ -343,7 +350,7 @@ def pull_pair(source_run) -> tuple[np.ndarray, np.ndarray]:
         part = sample
         if sample.fields:
             part = next(field for field in sample.fields if field.stream_label == view)
-        tensors.append(part.tensor if part.kind == pyneat.SampleKind.Tensor else part.tensors[0])
+        tensors.append(sample_tensor(part))
     left, right = (frame_bgr(tensor) for tensor in tensors)
     if left.shape != right.shape:
         raise RuntimeError(
@@ -416,10 +423,19 @@ def heatmap_tensor(heatmap: np.ndarray):
     )
 
 
-def disparity_map(runner, left: np.ndarray, right: np.ndarray) -> np.ndarray:
-    """One disparity per pixel of the left view, in pixels of the model's view."""
-    output = runner.run([stereo_tensor(left, right)], timeout_ms=MODEL_TIMEOUT_MS)
-    return np.squeeze(output[0].to_numpy(copy=True))
+def push_pair(runner, left: np.ndarray, right: np.ndarray) -> None:
+    """Starts the model on a pair. pull_disparity returns the results in the order of the pushes."""
+    if not runner.push([stereo_tensor(left, right)]):
+        raise RuntimeError("the model did not accept a frame")
+
+
+def pull_disparity(runner) -> np.ndarray:
+    """The oldest pair's result: one disparity per pixel of the left view, in pixels of the
+    model's view."""
+    sample = runner.pull(MODEL_TIMEOUT_MS)
+    if sample is None:
+        raise RuntimeError("timed out waiting for the model")
+    return np.squeeze(sample_tensor(sample).to_numpy(copy=True))
 
 
 def run(cfg: AppConfig, stopped: Callable[[], bool]) -> int:
@@ -436,15 +452,21 @@ def run(cfg: AppConfig, stopped: Callable[[], bool]) -> int:
         runner = model.build([stereo_tensor(left, right)])
         runs.append(runner)
         # The first disparity map sets the size of the depth map Insight receives.
-        map_height, map_width = disparity_map(runner, left, right).shape
+        push_pair(runner, left, right)
+        map_height, map_width = pull_disparity(runner).shape
         _depth_graph, depth_run = build_depth_run(cfg, map_width, map_height, fps)
         runs.append(depth_run)
 
         frames = 0
+        in_flight = 0
         started = time.monotonic()
         while not stopped() and (cfg.frames == 0 or frames < cfg.frames):
-            left, right = pull_pair(source_run)
-            heatmap = disparity_heatmap(disparity_map(runner, left, right), cfg.max_disparity)
+            push_pair(runner, *pull_pair(source_run))
+            in_flight += 1
+            if in_flight < MODEL_FRAMES_IN_FLIGHT:
+                continue
+            heatmap = disparity_heatmap(pull_disparity(runner), cfg.max_disparity)
+            in_flight -= 1
             if not depth_run.push([heatmap_tensor(heatmap)]):
                 raise RuntimeError("could not send the depth map to Insight")
             if cfg.save_dir and cfg.save_every and frames % cfg.save_every == 0:

@@ -22,7 +22,7 @@ The application runs two Neat graphs and one model:
 
 1. The source graph reads a left and a right camera over RTSP, USB, or MIPI. It forwards each camera's video to its own Insight channel and decodes it.
 2. Each loop takes the newest decoded frame of both cameras and joins them side by side, the frame LightStereo-S takes.
-3. LightStereo-S returns one disparity per pixel of the left view.
+3. LightStereo-S returns one disparity per pixel of the left view. The application keeps three frames in the model at once, so the model's stages work on different frames at the same time.
 4. The CPU colors the disparity map.
 5. The depth graph encodes the colored map to H.264 and sends it to a third Insight channel.
 
@@ -130,9 +130,9 @@ Open channels 0, 1 and 2 in the Insight viewer, with four videos per page. Chann
 frames=300 depth_fps=16.0 insight=<insight-host>:9000-9002
 ```
 
-`depth_fps` is the rate of depth maps sent to Insight. The camera channels keep the cameras' own rate.
+`depth_fps` is the rate of depth maps sent to Insight. The camera channels keep the cameras' own rate, and the depth map follows them by about a tenth of a second.
 
-On a DevKit with 960×540 streams at 30 FPS, the application sends about 16 depth maps per second with the `w16a16` package and about 28 with `w8a8`.
+On a DevKit with 960×540 streams at 30 FPS, the application sends a depth map for every camera frame with both packages. With 1280×720 streams at 60 FPS it sends about 32 depth maps per second with the `w16a16` package and about 42 with `w8a8`.
 
 ## Troubleshooting
 

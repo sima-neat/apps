@@ -48,6 +48,9 @@ const std::array<std::string, 2> kViews{"left", "right"};
 constexpr int kDepthChannel = static_cast<int>(kViews.size());
 constexpr int kSourceTimeoutMs = 20000;
 constexpr int kModelTimeoutMs = 10000;
+// The model preprocesses, infers and converts its output on different processors. Three frames
+// in flight keep all of them busy; one frame at a time leaves two of them idle.
+constexpr int kModelFramesInFlight = 3;
 
 volatile std::sig_atomic_t stop_requested = 0;
 
@@ -395,10 +398,18 @@ neat::Tensor stereo_tensor(const StereoPair& pair) {
                                    neat::TensorMemory::EV74);
 }
 
-// One disparity per pixel of the left view, in pixels of the model's view.
-cv::Mat disparity_map(neat::Model::Runner& runner, const StereoPair& pair) {
-  const auto outputs = runner.run(neat::TensorList{stereo_tensor(pair)}, kModelTimeoutMs);
-  sima_examples::require(!outputs.empty() && outputs.front().dtype == neat::TensorDType::Float32,
+// Starts the model on a pair. pull_disparity returns the results in the order of the pushes.
+void push_pair(neat::Model::Runner& runner, const StereoPair& pair) {
+  sima_examples::require(runner.push(neat::TensorList{stereo_tensor(pair)}),
+                         "the model did not accept a frame");
+}
+
+// The oldest pair's result: one disparity per pixel of the left view, in pixels of the model's
+// view.
+cv::Mat pull_disparity(neat::Model::Runner& runner) {
+  const auto outputs = neat::tensors_from_sample(runner.pull(kModelTimeoutMs));
+  sima_examples::require(!outputs.empty(), "timed out waiting for the model");
+  sima_examples::require(outputs.front().dtype == neat::TensorDType::Float32,
                          "the model must return one Float32 disparity map");
   // The map arrives with batch and channel dimensions of 1.
   std::vector<int> size;
@@ -463,7 +474,7 @@ DepthRun build_depth_run(const AppConfig& cfg, int width, int height, int fps) {
 int run(const AppConfig& cfg) {
   const int fps = stream_fps(cfg);
   auto source = build_source_run(cfg, fps);
-  StereoPair pair = pull_pair(source.run);
+  const StereoPair pair = pull_pair(source.run);
   const cv::Size view = pair.left.size();
   std::cout << "source=" << cfg.source_type << " cameras=" << view.width << "x" << view.height
             << "@" << fps << std::endl;
@@ -471,14 +482,20 @@ int run(const AppConfig& cfg) {
   neat::Model model(cfg.model_path, model_options(2 * view.width, view.height));
   auto runner = model.build(neat::TensorList{stereo_tensor(pair)});
   // The first disparity map sets the size of the depth map Insight receives.
-  const cv::Size map = disparity_map(runner, pair).size();
+  push_pair(runner, pair);
+  const cv::Size map = pull_disparity(runner).size();
   auto depth = build_depth_run(cfg, map.width, map.height, fps);
 
   int frames = 0;
+  int in_flight = 0;
   const auto started = std::chrono::steady_clock::now();
   while (!stop_requested && (cfg.frames == 0 || frames < cfg.frames)) {
-    pair = pull_pair(source.run);
-    const cv::Mat heatmap = disparity_heatmap(disparity_map(runner, pair), cfg.max_disparity);
+    push_pair(runner, pull_pair(source.run));
+    if (++in_flight < kModelFramesInFlight) {
+      continue;
+    }
+    const cv::Mat heatmap = disparity_heatmap(pull_disparity(runner), cfg.max_disparity);
+    --in_flight;
     if (!depth.run.push(neat::TensorList{heatmap_tensor(heatmap)})) {
       throw std::runtime_error("could not send the depth map to Insight");
     }

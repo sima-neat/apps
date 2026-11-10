@@ -216,6 +216,33 @@ def test_pull_pair_rejects_cameras_with_different_frame_sizes():
         example.pull_pair(run)
 
 
+def model_runner(output):
+    """A model runner whose pull returns one output tensor, or None when it has no result."""
+    sample = None
+    if output is not None:
+        tensor = SimpleNamespace(to_numpy=lambda copy: output)
+        sample = SimpleNamespace(kind="tensor", tensor=tensor)
+    return SimpleNamespace(pull=lambda _timeout_ms: sample)
+
+
+@pytest.mark.unit
+def test_pull_disparity_returns_the_map_without_its_batch_and_channel_dimensions():
+    example = load_example()
+    disparity = np.arange(12, dtype=np.float32).reshape(3, 4)
+
+    pulled = example.pull_disparity(model_runner(disparity.reshape(1, 3, 4, 1)))
+
+    np.testing.assert_array_equal(pulled, disparity)
+
+
+@pytest.mark.unit
+def test_pull_disparity_reports_a_model_that_returns_no_result():
+    example = load_example()
+
+    with pytest.raises(RuntimeError, match="timed out waiting for the model"):
+        example.pull_disparity(model_runner(None))
+
+
 @pytest.mark.unit
 def test_heatmap_runs_from_the_darkest_color_at_zero_to_the_brightest_at_the_maximum():
     example = load_example()
