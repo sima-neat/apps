@@ -16,7 +16,6 @@ checks=(
   "scripts/check_conflicts.sh"
   "scripts/check_artifacts.sh"
   "python3 scripts/validate_readmes.py"
-  "python3 scripts/generate_readme_gallery.py --check"
 )
 
 total=${#checks[@]}

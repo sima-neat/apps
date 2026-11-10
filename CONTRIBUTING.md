@@ -73,29 +73,6 @@ under `Source Files`, and describe C++ source as implementation reference.
 Link `Development From Source` back to this guide instead of copying build and
 test instructions into every example.
 
-## Root README Gallery
-
-The example table in the root `README.md` is generated from the example
-READMEs: the title, the `Languages` and `Status` metadata, and the first
-`Concept` paragraph. After adding, renaming, or removing an example, or
-changing one of those fields, regenerate it and commit the result:
-
-```bash
-python3 scripts/generate_readme_gallery.py
-```
-
-Each category row shows `portal/assets/readme/thumbs/<category>.webp`, a
-320x200 crop of the first example's preview image. A new category needs its
-thumbnail, which requires Pillow:
-
-```bash
-python3 scripts/generate_readme_gallery.py --thumbs
-```
-
-Without a thumbnail the row falls back to the full-size preview image.
-`tests/scripts/test_readme_gallery.py` fails when the table is stale or an
-image it references is missing or not a valid image.
-
 ## Model Documentation
 
 Each example README must identify:
@@ -205,7 +182,6 @@ for disabled e2e paths. Enabled coverage must have the matching test file:
 ./tests/test.sh --unit
 python3 scripts/validate_readmes.py
 python3 scripts/generate_catalog.py >/tmp/apps-catalog.json
-python3 scripts/generate_readme_gallery.py --check
 ```
 
 Both Python scripts need Python 3.10 or newer. Under 3.9 they fail at import
@@ -263,7 +239,7 @@ to compile source or run the Apps test suite.
 | `tests/` | Test runner and repository test support |
 | `deps/manifest.json` | Source dependency and platform declaration |
 | `portal/` | Examples portal source |
-| `portal/assets/readme/` | Root README hero image and category thumbnails |
+| `portal/assets/readme/` | Root README hero image |
 
 ## Dependency Selection
 
@@ -291,4 +267,3 @@ installation, then shards tests using its resolved labels.
 - Portal examples include their preview asset.
 - Source changes build successfully.
 - README validation and catalog generation pass.
-- The root README gallery is current (`scripts/generate_readme_gallery.py --check`).
