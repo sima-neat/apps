@@ -1,6 +1,6 @@
 // End-to-end test for stereo-depth-estimator: on a rectified stereo pair of RTSP H.264 streams,
-// the example must save frames whose right half is a disparity heatmap and publish RTP H.264 video
-// to Insight. SIMANEAT_TEST_STEREO_RTSP_H264_URLS names the left stream, then the right.
+// the example must save disparity heatmaps and publish RTP H.264 video on three Insight channels.
+// SIMANEAT_TEST_STEREO_RTSP_H264_URLS names the left stream, then the right.
 #include "support/testing/test_config.h"
 #include "support/testing/test_process.h"
 
@@ -26,6 +26,7 @@ constexpr const char* kExampleName = "stereo-depth-estimator";
 constexpr const char* kStreamsKey = "SIMANEAT_TEST_STEREO_RTSP_H264_URLS";
 constexpr int kSaveEvery = 10;
 constexpr int kSavedFrames = 3;
+constexpr int kChannels = 3;
 
 // The first saved frame, in name order.
 cv::Mat first_saved_frame(const std::string& dir) {
@@ -38,13 +39,34 @@ cv::Mat first_saved_frame(const std::string& dir) {
   return first.empty() ? cv::Mat() : cv::imread(first.string());
 }
 
-// A stereo pair has near and far points, so its disparity heatmap, the frame's right half, is not
-// one flat color.
-bool heatmap_is_flat(const cv::Mat& canvas) {
+// A stereo pair has near and far points, so its disparity heatmap is not one flat color.
+bool heatmap_is_flat(const cv::Mat& heatmap) {
   cv::Scalar mean;
   cv::Scalar deviation;
-  cv::meanStdDev(canvas.colRange(canvas.cols / 2, canvas.cols), mean, deviation);
+  cv::meanStdDev(heatmap, mean, deviation);
   return deviation[0] + deviation[1] + deviation[2] < 15.0;
+}
+
+// A UDP socket bound to a loopback port, or -1.
+int bind_loopback_port(int port) {
+  const int receiver = ::socket(AF_INET, SOCK_DGRAM, 0);
+  sockaddr_in address{};
+  address.sin_family = AF_INET;
+  address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  address.sin_port = htons(static_cast<uint16_t>(port));
+  if (receiver >= 0 &&
+      ::bind(receiver, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
+    ::close(receiver);
+    return -1;
+  }
+  return receiver;
+}
+
+// Whether an RTP H.264 packet waits on the socket.
+bool received_h264_rtp(int receiver) {
+  std::array<unsigned char, 65536> packet{};
+  const auto bytes = ::recv(receiver, packet.data(), packet.size(), MSG_DONTWAIT);
+  return bytes > 12 && (packet[0] >> 6) == 2 && (packet[1] & 0x7F) == 96;
 }
 
 } // namespace
@@ -89,32 +111,30 @@ int main(int argc, char** argv) {
                     {"output.insight.host", insight_host},
                     {"output.insight.video_port", std::to_string(video_port)}});
 
-  const int video_socket = ::socket(AF_INET, SOCK_DGRAM, 0);
-  sockaddr_in video_address{};
-  video_address.sin_family = AF_INET;
-  video_address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-  video_address.sin_port = htons(static_cast<uint16_t>(video_port));
-  if (video_socket < 0 || ::bind(video_socket, reinterpret_cast<sockaddr*>(&video_address),
-                                 sizeof(video_address)) != 0) {
-    if (video_socket >= 0) {
-      ::close(video_socket);
+  // The left camera, the right camera and the depth map each have a channel.
+  std::array<int, kChannels> channels{};
+  for (int channel = 0; channel < kChannels; ++channel) {
+    channels[channel] = bind_loopback_port(video_port + channel);
+    if (channels[channel] < 0) {
+      std::cerr << "[FAIL] could not bind the Insight video port " << video_port + channel << "\n";
+      remove_dir(output_dir);
+      return 1;
     }
-    std::cerr << "[FAIL] could not bind the Insight video port " << video_port << "\n";
-    remove_dir(output_dir);
-    return 1;
   }
 
   const int timeout_ms = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
   const ProcessResult result = spawn_until_output_files(argv[1], {"--config", config.string()},
                                                         output_dir, kSavedFrames, timeout_ms);
-  std::array<unsigned char, 65536> video_packet{};
-  const auto video_bytes =
-      ::recv(video_socket, video_packet.data(), video_packet.size(), MSG_DONTWAIT);
-  ::close(video_socket);
+  int channels_with_video = 0;
+  for (const int channel : channels) {
+    channels_with_video += received_h264_rtp(channel) ? 1 : 0;
+    ::close(channel);
+  }
 
   const std::regex start_line(R"(source=rtsp cameras=[0-9]+x[0-9]+@[0-9]+)");
-  const std::regex summary(R"(frames=[0-9]+ output_fps=[0-9.]+ video_sender=)" + insight_host +
-                           ":" + std::to_string(video_port));
+  const std::regex summary(R"(frames=[0-9]+ depth_fps=[0-9.]+ insight=)" + insight_host + ":" +
+                           std::to_string(video_port) + "-" +
+                           std::to_string(video_port + kChannels - 1));
   const std::string frames_problem = saved_frames_problem(output_dir, kSavedFrames);
   const cv::Mat saved = first_saved_frame(output_dir);
 
@@ -127,13 +147,14 @@ int main(int argc, char** argv) {
     std::cerr << "[FAIL] missing start or summary line\n" << result.stdout_text << "\n";
   } else if (!frames_problem.empty()) {
     std::cerr << "[FAIL] " << frames_problem << "\n";
-  } else if (saved.cols % 2 != 0 || heatmap_is_flat(saved)) {
-    std::cerr << "[FAIL] the saved frames hold no disparity heatmap beside the left view\n";
-  } else if (video_bytes <= 12 || (video_packet[0] >> 6) != 2 || (video_packet[1] & 0x7F) != 96) {
-    std::cerr << "[FAIL] no RTP H.264 video reached the Insight port\n";
+  } else if (heatmap_is_flat(saved)) {
+    std::cerr << "[FAIL] the saved depth maps are one flat color\n";
+  } else if (channels_with_video != kChannels) {
+    std::cerr << "[FAIL] RTP H.264 video reached " << channels_with_video << " of " << kChannels
+              << " Insight ports\n";
   } else {
     std::cout << "[OK] saved " << saved.cols << "x" << saved.rows
-              << " frames with a disparity heatmap and sent Insight video\n";
+              << " depth maps and sent video to " << kChannels << " Insight channels\n";
     rc = 0;
   }
   remove_dir(output_dir);

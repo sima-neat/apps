@@ -63,17 +63,16 @@ def test_insight_pipeline(
 
     assert re.search(r"source=rtsp cameras=\d+x\d+@\d+", result.stdout), result.stdout
     summary = re.search(
-        rf"frames={FRAMES} output_fps=([0-9.]+) video_sender={insight_host}:{video_port}",
+        rf"frames={FRAMES} depth_fps=([0-9.]+) insight={insight_host}:{video_port}-{video_port + 2}",
         result.stdout,
     )
     assert summary, result.stdout
     assert float(summary.group(1)) > 0
 
-    saved = sorted(tmp_output_dir.glob("frame_*.jpg"))
+    saved = sorted(tmp_output_dir.glob("depth_*.jpg"))
     assert len(saved) == FRAMES // SAVE_EVERY
     for path in saved:
-        canvas = cv2.imread(str(path))
-        assert canvas is not None and canvas.shape[1] % 2 == 0
-        heatmap = canvas[:, canvas.shape[1] // 2 :]
+        heatmap = cv2.imread(str(path))
+        assert heatmap is not None
         # A stereo pair has near and far points, so its disparity is not one flat color.
         assert heatmap.std() > 5, f"{path.name}: the disparity heatmap is flat"

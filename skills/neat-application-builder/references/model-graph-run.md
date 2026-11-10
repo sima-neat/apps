@@ -98,7 +98,9 @@ camera its own named `nodes::Output` in one graph, with
 stamps its own frames and Neat exposes no capture clock they share, so do not
 pair cameras by `pts_ns` or `frame_id`, and `CombinePolicy::ByPts` and
 `ByFrame` match only exactly equal values. Newest-frame pairs can be about one
-frame interval apart. See `examples/depth-estimation/stereo-depth-estimator`.
+frame interval apart. To also show a camera in Insight, connect its encoded
+source to a passthrough `VideoSender` beside the decoder; Core tees the stream.
+See `examples/depth-estimation/stereo-depth-estimator`.
 
 Outputs pulled with the default output memory share runtime buffers. When the
 application keeps outputs after the next pull, choose output memory as

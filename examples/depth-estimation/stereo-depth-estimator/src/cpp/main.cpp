@@ -2,10 +2,10 @@
  * @example stereo-depth-estimator.cpp
  * Show how near each point of a scene is, from two cameras, with LightStereo-S.
  *
- * A left and a right camera feed one source graph. Each loop takes the newest frame of both, joins
- * them side by side for the model, and sends the left view beside the colored disparity to Insight.
- * Disparity is how far a point shifts between the two views: the larger it is, the nearer the
- * point.
+ * A left and a right camera feed one source graph, which forwards each camera's video to its own
+ * Insight channel. Each loop takes the newest frame of both, joins them side by side for the
+ * model, and sends the colored disparity to a third channel. Disparity is how far a point shifts
+ * between the two views: the larger it is, the nearer the point.
  *
  * Usage: stereo-depth-estimator [--config <path>]
  */
@@ -42,8 +42,10 @@ namespace {
 
 const std::vector<std::string> kSourceTypes{"rtsp", "usb", "mipi"};
 const std::vector<std::string> kRtspCodecs{"h264", "h265", "mjpeg"};
-// The source graph's two outputs, in the order the model takes the views.
+// The source graph's two outputs, in the order the model takes the views. Insight shows them on
+// the first two channels and the depth map on the third.
 const std::array<std::string, 2> kViews{"left", "right"};
+constexpr int kDepthChannel = static_cast<int>(kViews.size());
 constexpr int kSourceTimeoutMs = 20000;
 constexpr int kModelTimeoutMs = 10000;
 
@@ -109,8 +111,9 @@ void validate_config(const AppConfig& cfg) {
   require(cfg.max_disparity > 0.0, "output.max_disparity must be > 0");
   require(cfg.save_every >= 0, "output.save_every must be >= 0");
   require(!cfg.insight_host.empty(), "output.insight.host must be set");
-  require(cfg.video_port > 0 && cfg.video_port <= 65535,
-          "output.insight.video_port must be in [1, 65535]");
+  require(cfg.video_port > 0 && cfg.video_port <= 65535 - kDepthChannel,
+          "output.insight.video_port must be in [1, " + std::to_string(65535 - kDepthChannel) +
+              "]");
   require(cfg.bitrate_kbps > 0, "output.insight.bitrate_kbps must be > 0");
 }
 
@@ -178,17 +181,32 @@ int stream_fps(const AppConfig& cfg) {
   return fps;
 }
 
-groups::RtspDecodedInputOptions rtsp_source_options(const AppConfig& cfg, const std::string& url,
+groups::RtspCodec rtsp_codec(const AppConfig& cfg) {
+  return cfg.codec == "h264"   ? groups::RtspCodec::H264
+         : cfg.codec == "h265" ? groups::RtspCodec::H265
+                               : groups::RtspCodec::MJPEG;
+}
+
+// Receives a camera's encoded stream without decoding it.
+groups::RtspEncodedInputOptions rtsp_source_options(const AppConfig& cfg, const std::string& url,
                                                     int fps) {
-  groups::RtspDecodedInputOptions options;
+  groups::RtspEncodedInputOptions options;
   options.url = url;
   options.tcp = cfg.tcp;
   options.latency_ms = cfg.latency_ms;
   options.source_fps = fps;
-  options.codec = cfg.codec == "h264"   ? groups::RtspCodec::H264
-                  : cfg.codec == "h265" ? groups::RtspCodec::H265
-                                        : groups::RtspCodec::MJPEG;
+  options.codec = rtsp_codec(cfg);
   options.auto_caps_from_stream = cfg.codec != "mjpeg";
+  return options;
+}
+
+neat::SimaDecodeOptions rtsp_decode_options(const AppConfig& cfg, int fps) {
+  neat::SimaDecodeOptions options;
+  options.type = cfg.codec == "h264"   ? neat::SimaDecodeType::H264
+                 : cfg.codec == "h265" ? neat::SimaDecodeType::H265
+                                       : neat::SimaDecodeType::MJPEG;
+  options.raw_output = true;
+  options.dec_fps = fps;
   return options;
 }
 
@@ -222,22 +240,49 @@ neat::CameraInputOptions mipi_camera_options(const AppConfig& cfg, const std::st
   return options;
 }
 
-// One camera's decoded frames.
-neat::Graph camera_graph(const AppConfig& cfg, const std::string& view,
-                         const std::string& camera_name, int fps) {
-  neat::Graph camera(view);
+// One camera as two graphs: the camera's video as it arrives, and the decoder that turns it into
+// frames. A MIPI camera sends raw frames, so its decoder graph is empty.
+struct CameraGraphs {
+  neat::Graph camera;
+  neat::Graph decoder;
+};
+
+CameraGraphs camera_graphs(const AppConfig& cfg, const std::string& view,
+                           const std::string& camera_name, int fps) {
+  CameraGraphs graphs{neat::Graph(view + "_camera"), neat::Graph(view + "_decoder")};
   if (cfg.source_type == "rtsp") {
-    camera.add(groups::RtspDecodedInput(rtsp_source_options(cfg, camera_name, fps)));
+    graphs.camera.add(groups::RtspEncodedInput(rtsp_source_options(cfg, camera_name, fps)));
+    graphs.decoder.add(neat::nodes::SimaDecode(rtsp_decode_options(cfg, fps)));
   } else if (cfg.source_type == "usb") {
     const auto usb_camera = usb_camera_options(cfg, camera_name);
     // Checks the camera and its mode once; most webcams send 4:2:2 JPEG, which decodes to NV16.
     const auto info = neat::usb_camera_info(usb_camera);
-    camera.add(neat::nodes::UsbCameraInput(usb_camera, info));
-    camera.add(neat::nodes::SimaDecode(usb_decode_options(cfg, info.decoded_format)));
+    graphs.camera.add(neat::nodes::UsbCameraInput(usb_camera, info));
+    graphs.decoder.add(neat::nodes::SimaDecode(usb_decode_options(cfg, info.decoded_format)));
   } else {
-    camera.add(neat::nodes::CameraInput(mipi_camera_options(cfg, camera_name)));
+    graphs.camera.add(neat::nodes::CameraInput(mipi_camera_options(cfg, camera_name)));
   }
-  return camera;
+  return graphs;
+}
+
+// H.264 encoding of raw frames for Insight.
+groups::VideoSenderOptions h264_encoding_sender_options(const AppConfig& cfg, int fps) {
+  auto options = groups::VideoSenderOptions::FromRaw({.fps = fps});
+  options.encoder.bitrate_kbps = cfg.bitrate_kbps;
+  return options;
+}
+
+// Sends a camera's video to its Insight channel. RTSP and USB cameras send encoded video, which
+// is forwarded as it is; raw MIPI frames are encoded first.
+groups::VideoSenderOptions camera_sender_options(const AppConfig& cfg, int channel, int fps) {
+  auto options =
+      cfg.source_type == "rtsp"  ? groups::VideoSenderOptions::Passthrough(rtsp_codec(cfg))
+      : cfg.source_type == "usb" ? groups::VideoSenderOptions::Passthrough(groups::RtspCodec::MJPEG)
+                                 : h264_encoding_sender_options(cfg, fps);
+  options.host = cfg.insight_host;
+  options.video_port_base = cfg.video_port;
+  options.channel = channel;
+  return options;
 }
 
 struct SourceRun {
@@ -245,17 +290,26 @@ struct SourceRun {
   neat::Run run;
 };
 
-// One graph with a branch per camera, each ending in its own output:
+// One graph with two branches per camera:
 //
-//   left camera  -- decode -- Output("left")
-//   right camera -- decode -- Output("right")
+//   left camera  --+-- Insight channel 0
+//                  +-- decode -- Output("left")
+//   right camera --+-- Insight channel 1
+//                  +-- decode -- Output("right")
 //
 // Each output keeps only its newest frame, so a pull never returns a frame that waited.
 SourceRun build_source_run(const AppConfig& cfg, int fps) {
   SourceRun source;
+  // Insight's branch keeps the newest video only, so a slow network never delays the decoder.
+  neat::GraphLinkOptions newest_video;
+  newest_video.policy = neat::GraphLinkPolicy::RealtimeLatestByStream;
   for (std::size_t i = 0; i < kViews.size(); ++i) {
-    source.graph.connect(camera_graph(cfg, kViews[i], cfg.cameras[i], fps),
-                         neat::nodes::Output(kViews[i], neat::OutputOptions::Latest()));
+    auto graphs = camera_graphs(cfg, kViews[i], cfg.cameras[i], fps);
+    graphs.decoder.add(neat::nodes::Output(kViews[i], neat::OutputOptions::Latest()));
+    neat::Graph video(kViews[i] + "_video");
+    video.add(groups::VideoSender(camera_sender_options(cfg, static_cast<int>(i), fps)));
+    source.graph.connect(graphs.camera, graphs.decoder);
+    source.graph.connect(graphs.camera, video, newest_video);
   }
 
   neat::RunOptions run_options;
@@ -372,27 +426,18 @@ cv::Mat disparity_heatmap(const cv::Mat& disparity, double max_disparity) {
   return heatmap;
 }
 
-// The left view, resized to the disparity map's size, beside the heatmap.
-cv::Mat compose_canvas(const cv::Mat& left, const cv::Mat& heatmap) {
-  cv::Mat resized;
-  cv::Mat canvas;
-  cv::resize(left, resized, heatmap.size(), 0, 0, cv::INTER_AREA);
-  cv::hconcat(resized, heatmap, canvas);
-  return canvas;
-}
-
-neat::Tensor canvas_tensor(const cv::Mat& canvas) {
-  return neat::Tensor::from_cv_mat(canvas, neat::ImageSpec::PixelFormat::BGR,
+neat::Tensor heatmap_tensor(const cv::Mat& heatmap) {
+  return neat::Tensor::from_cv_mat(heatmap, neat::ImageSpec::PixelFormat::BGR,
                                    neat::TensorMemory::CPU);
 }
 
-struct InsightRun {
-  neat::Graph graph{"insight"};
+struct DepthRun {
+  neat::Graph graph{"depth"};
   neat::Run run;
 };
 
-// Encodes the composed BGR frame to H.264 and sends it to Insight.
-InsightRun build_insight_run(const AppConfig& cfg, int width, int height, int fps) {
+// Encodes the BGR depth map to H.264 and sends it to its Insight channel.
+DepthRun build_depth_run(const AppConfig& cfg, int width, int height, int fps) {
   neat::InputOptions input_options;
   input_options.payload_type = neat::PayloadType::Image;
   input_options.format = "BGR";
@@ -402,17 +447,17 @@ InsightRun build_insight_run(const AppConfig& cfg, int width, int height, int fp
   input_options.fps_n = fps;
   input_options.fps_d = 1;
 
-  auto sender_options = groups::VideoSenderOptions::FromRaw({.fps = fps});
+  auto sender_options = h264_encoding_sender_options(cfg, fps);
   sender_options.host = cfg.insight_host;
   sender_options.video_port_base = cfg.video_port;
-  sender_options.encoder.bitrate_kbps = cfg.bitrate_kbps;
+  sender_options.channel = kDepthChannel;
 
-  InsightRun insight;
-  insight.graph.add(neat::nodes::Input(input_options));
-  insight.graph.add(groups::VideoSender(sender_options));
+  DepthRun depth;
+  depth.graph.add(neat::nodes::Input(input_options));
+  depth.graph.add(groups::VideoSender(sender_options));
   const cv::Mat seed = cv::Mat::zeros(height, width, CV_8UC3);
-  insight.run = insight.graph.build(neat::TensorList{canvas_tensor(seed)});
-  return insight;
+  depth.run = depth.graph.build(neat::TensorList{heatmap_tensor(seed)});
+  return depth;
 }
 
 int run(const AppConfig& cfg) {
@@ -425,32 +470,32 @@ int run(const AppConfig& cfg) {
 
   neat::Model model(cfg.model_path, model_options(2 * view.width, view.height));
   auto runner = model.build(neat::TensorList{stereo_tensor(pair)});
-  // The first disparity map sets the size of the frame Insight receives.
+  // The first disparity map sets the size of the depth map Insight receives.
   const cv::Size map = disparity_map(runner, pair).size();
-  auto insight = build_insight_run(cfg, 2 * map.width, map.height, fps);
+  auto depth = build_depth_run(cfg, map.width, map.height, fps);
 
   int frames = 0;
   const auto started = std::chrono::steady_clock::now();
   while (!stop_requested && (cfg.frames == 0 || frames < cfg.frames)) {
     pair = pull_pair(source.run);
-    const cv::Mat disparity = disparity_map(runner, pair);
-    const cv::Mat canvas =
-        compose_canvas(pair.left, disparity_heatmap(disparity, cfg.max_disparity));
-    if (!insight.run.push(neat::TensorList{canvas_tensor(canvas)})) {
-      throw std::runtime_error("could not send the frame to Insight");
+    const cv::Mat heatmap = disparity_heatmap(disparity_map(runner, pair), cfg.max_disparity);
+    if (!depth.run.push(neat::TensorList{heatmap_tensor(heatmap)})) {
+      throw std::runtime_error("could not send the depth map to Insight");
     }
     if (!cfg.save_dir.empty() && cfg.save_every > 0 && frames % cfg.save_every == 0) {
-      const fs::path path = fs::path(cfg.save_dir) / cv::format("frame_%06d.jpg", frames);
-      sima_examples::require(cv::imwrite(path.string(), canvas), "could not save " + path.string());
+      const fs::path path = fs::path(cfg.save_dir) / cv::format("depth_%06d.jpg", frames);
+      sima_examples::require(cv::imwrite(path.string(), heatmap),
+                             "could not save " + path.string());
     }
     ++frames;
   }
 
   const std::chrono::duration<double> elapsed = std::chrono::steady_clock::now() - started;
   std::cout << "frames=" << frames
-            << cv::format(" output_fps=%.1f", frames ? frames / elapsed.count() : 0.0)
-            << " video_sender=" << cfg.insight_host << ":" << cfg.video_port << std::endl;
-  // The runs close in reverse order of construction: Insight, the model, the source.
+            << cv::format(" depth_fps=%.1f", frames ? frames / elapsed.count() : 0.0)
+            << " insight=" << cfg.insight_host << ":" << cfg.video_port << "-"
+            << cfg.video_port + kDepthChannel << std::endl;
+  // The runs close in reverse order of construction: the depth channel, the model, the source.
   return 0;
 }
 

@@ -120,8 +120,9 @@ int main(int argc, char** argv) {
        "source.rtsp.latency_ms must be >= 0"},
       {"negative_frames", config_with(kRtsp, "inference:\n  frames: -1\n"),
        "inference.frames must be >= 0"},
-      {"video_port_out_of_range", config_with(kRtsp) + "    video_port: 70000\n",
-       "output.insight.video_port must be in [1, 65535]"},
+      // The right camera and the depth map take the next two ports.
+      {"video_port_out_of_range", config_with(kRtsp) + "    video_port: 65534\n",
+       "output.insight.video_port must be in [1, 65533]"},
       {"no_disparity_range", config_with(kRtsp) + "  max_disparity: 0\n",
        "output.max_disparity must be > 0"},
   };

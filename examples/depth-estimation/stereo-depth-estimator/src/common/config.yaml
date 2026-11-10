@@ -32,9 +32,9 @@ inference:
 
 output:
   max_disparity: 96          # Disparity, in pixels of the model's view, drawn as the brightest color.
-  save_dir: ""               # Optional directory for composed frames.
-  save_every: 0              # Save every Nth frame pair. 0 disables saving.
+  save_dir: ""               # Optional directory for depth maps.
+  save_every: 0              # Save every Nth depth map. 0 disables saving.
   insight:
     host: <insight-host-ip>  # Host running the Insight receiver/viewer.
-    video_port: 9000         # UDP video port.
-    bitrate_kbps: 8000       # H.264 bitrate of the composed frame.
+    video_port: 9000         # UDP port of the left camera. The right camera and the depth map use the next two.
+    bitrate_kbps: 8000       # H.264 bitrate of the depth map, and of MIPI camera video.

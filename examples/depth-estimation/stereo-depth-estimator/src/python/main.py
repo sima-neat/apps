@@ -1,8 +1,9 @@
 """Show how near each point of a scene is, from two cameras, with LightStereo-S.
 
-A left and a right camera feed one source graph. Each loop takes the newest frame of both, joins
-them side by side for the model, and sends the left view beside the colored disparity to Insight.
-Disparity is how far a point shifts between the two views: the larger it is, the nearer the point.
+A left and a right camera feed one source graph, which forwards each camera's video to its own
+Insight channel. Each loop takes the newest frame of both, joins them side by side for the model,
+and sends the colored disparity to a third channel. Disparity is how far a point shifts between
+the two views: the larger it is, the nearer the point.
 """
 
 from __future__ import annotations
@@ -20,8 +21,10 @@ import yaml
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
 SOURCE_TYPES = ("rtsp", "usb", "mipi")
 RTSP_CODECS = ("h264", "h265", "mjpeg")
-# The source graph's two outputs, in the order the model takes the views.
+# The source graph's two outputs, in the order the model takes the views. Insight shows them on
+# the first two channels and the depth map on the third.
 VIEWS = ("left", "right")
+DEPTH_CHANNEL = len(VIEWS)
 SOURCE_TIMEOUT_MS = 20000
 MODEL_TIMEOUT_MS = 10000
 
@@ -105,8 +108,8 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("output.save_every must be >= 0")
     if not cfg.insight_host:
         raise ValueError("output.insight.host must be set")
-    if not 0 < cfg.video_port <= 65535:
-        raise ValueError("output.insight.video_port must be in [1, 65535]")
+    if not 0 < cfg.video_port <= 65535 - DEPTH_CHANNEL:
+        raise ValueError(f"output.insight.video_port must be in [1, {65535 - DEPTH_CHANNEL}]")
     if cfg.bitrate_kbps <= 0:
         raise ValueError("output.insight.bitrate_kbps must be > 0")
 
@@ -163,18 +166,35 @@ def stream_fps(cfg: AppConfig) -> int:
     return fps
 
 
-def rtsp_source_options(cfg: AppConfig, url: str, fps: int):
-    options = pyneat.RtspDecodedInputOptions()
-    options.url = url
-    options.tcp = cfg.tcp
-    options.latency_ms = cfg.latency_ms
-    options.source_fps = fps
-    options.codec = {
+def rtsp_codec(cfg: AppConfig):
+    return {
         "h264": pyneat.RtspCodec.H264,
         "h265": pyneat.RtspCodec.H265,
         "mjpeg": pyneat.RtspCodec.MJPEG,
     }[cfg.codec]
+
+
+def rtsp_source_options(cfg: AppConfig, url: str, fps: int):
+    """Receives a camera's encoded stream without decoding it."""
+    options = pyneat.RtspEncodedInputOptions()
+    options.url = url
+    options.tcp = cfg.tcp
+    options.latency_ms = cfg.latency_ms
+    options.source_fps = fps
+    options.codec = rtsp_codec(cfg)
     options.auto_caps_from_stream = cfg.codec != "mjpeg"
+    return options
+
+
+def rtsp_decode_options(cfg: AppConfig, fps: int):
+    options = pyneat.SimaDecodeOptions()
+    options.type = {
+        "h264": pyneat.SimaDecodeType.H264,
+        "h265": pyneat.SimaDecodeType.H265,
+        "mjpeg": pyneat.SimaDecodeType.MJPEG,
+    }[cfg.codec]
+    options.raw_output = True
+    options.dec_fps = fps
     return options
 
 
@@ -208,34 +228,70 @@ def mipi_camera_options(cfg: AppConfig, camera_name: str):
     return options
 
 
-def camera_graph(cfg: AppConfig, view: str, camera_name: str, fps: int):
-    """One camera's decoded frames."""
-    camera = pyneat.Graph(view)
+def camera_graphs(cfg: AppConfig, view: str, camera_name: str, fps: int):
+    """One camera as two graphs: the camera's video as it arrives, and the decoder that turns it
+    into frames. A MIPI camera sends raw frames, so its second graph is empty."""
+    camera = pyneat.Graph(f"{view}_camera")
+    decoder = pyneat.Graph(f"{view}_decoder")
     if cfg.source_type == "rtsp":
-        camera.add(pyneat.groups.rtsp_decoded_input(rtsp_source_options(cfg, camera_name, fps)))
+        camera.add(pyneat.groups.rtsp_encoded_input(rtsp_source_options(cfg, camera_name, fps)))
+        decoder.add(pyneat.nodes.sima_decode(rtsp_decode_options(cfg, fps)))
     elif cfg.source_type == "usb":
         usb_camera = usb_camera_options(cfg, camera_name)
         # Checks the camera and its mode once; most webcams send 4:2:2 JPEG, which decodes to NV16.
         info = pyneat.usb_camera_info(usb_camera)
         camera.add(pyneat.nodes.usb_camera_input(usb_camera, info))
-        camera.add(pyneat.nodes.sima_decode(usb_decode_options(cfg, info.decoded_format)))
+        decoder.add(pyneat.nodes.sima_decode(usb_decode_options(cfg, info.decoded_format)))
     else:
         camera.add(pyneat.nodes.camera_input(mipi_camera_options(cfg, camera_name)))
-    return camera
+    return camera, decoder
+
+
+def h264_encoding_sender_options(cfg: AppConfig, fps: int):
+    """H.264 encoding of raw frames for Insight."""
+    encode = pyneat.SimaEncodeOptions()
+    encode.fps = fps
+    options = pyneat.VideoSenderOptions.from_raw(encode)
+    options.encoder.bitrate_kbps = cfg.bitrate_kbps
+    return options
+
+
+def camera_sender_options(cfg: AppConfig, channel: int, fps: int):
+    """Sends a camera's video to its Insight channel. RTSP and USB cameras send encoded video,
+    which is forwarded as it is; raw MIPI frames are encoded first."""
+    if cfg.source_type == "rtsp":
+        options = pyneat.VideoSenderOptions.passthrough(rtsp_codec(cfg))
+    elif cfg.source_type == "usb":
+        options = pyneat.VideoSenderOptions.passthrough(pyneat.RtspCodec.MJPEG)
+    else:
+        options = h264_encoding_sender_options(cfg, fps)
+    options.host = cfg.insight_host
+    options.video_port_base = cfg.video_port
+    options.channel = channel
+    return options
 
 
 def build_source_run(cfg: AppConfig, fps: int):
-    """One graph with a branch per camera, each ending in its own output::
+    """One graph with two branches per camera::
 
-        left camera  -- decode -- Output("left")
-        right camera -- decode -- Output("right")
+        left camera  --+-- Insight channel 0
+                       +-- decode -- Output("left")
+        right camera --+-- Insight channel 1
+                       +-- decode -- Output("right")
 
     Each output keeps only its newest frame, so a pull never returns a frame that waited.
     """
     graph = pyneat.Graph("source")
-    for view, camera_name in zip(VIEWS, cfg.cameras):
-        newest = pyneat.OutputOptions.latest()
-        graph.connect(camera_graph(cfg, view, camera_name, fps), pyneat.nodes.output(view, newest))
+    # Insight's branch keeps the newest video only, so a slow network never delays the decoder.
+    newest_video = pyneat.GraphLinkOptions()
+    newest_video.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
+    for channel, (view, camera_name) in enumerate(zip(VIEWS, cfg.cameras)):
+        camera, decoder = camera_graphs(cfg, view, camera_name, fps)
+        decoder.add(pyneat.nodes.output(view, pyneat.OutputOptions.latest()))
+        video = pyneat.Graph(f"{view}_video")
+        video.add(pyneat.groups.video_sender(camera_sender_options(cfg, channel, fps)))
+        graph.connect(camera, decoder)
+        graph.connect(camera, video, newest_video)
 
     run_options = pyneat.RunOptions()
     run_options.preset = pyneat.RunPreset.Realtime
@@ -332,14 +388,8 @@ def disparity_heatmap(disparity: np.ndarray, max_disparity: float) -> np.ndarray
     return cv2.applyColorMap(levels, cv2.COLORMAP_INFERNO)
 
 
-def compose_canvas(left: np.ndarray, heatmap: np.ndarray) -> np.ndarray:
-    """The left view, resized to the disparity map's size, beside the heatmap."""
-    height, width = heatmap.shape[:2]
-    return np.hstack([cv2.resize(left, (width, height), interpolation=cv2.INTER_AREA), heatmap])
-
-
-def build_insight_run(cfg: AppConfig, width: int, height: int, fps: int):
-    """Encodes the composed BGR frame to H.264 and sends it to Insight."""
+def build_depth_run(cfg: AppConfig, width: int, height: int, fps: int):
+    """Encodes the BGR depth map to H.264 and sends it to its Insight channel."""
     input_options = pyneat.InputOptions()
     input_options.payload_type = pyneat.PayloadType.Image
     input_options.format = pyneat.Format.BGR
@@ -349,22 +399,20 @@ def build_insight_run(cfg: AppConfig, width: int, height: int, fps: int):
     input_options.fps_n = fps
     input_options.fps_d = 1
 
-    encode = pyneat.SimaEncodeOptions()
-    encode.fps = fps
-    sender_options = pyneat.VideoSenderOptions.from_raw(encode)
+    sender_options = h264_encoding_sender_options(cfg, fps)
     sender_options.host = cfg.insight_host
     sender_options.video_port_base = cfg.video_port
-    sender_options.encoder.bitrate_kbps = cfg.bitrate_kbps
+    sender_options.channel = DEPTH_CHANNEL
 
-    graph = pyneat.Graph("insight")
+    graph = pyneat.Graph("depth")
     graph.add(pyneat.nodes.input(input_options))
     graph.add(pyneat.groups.video_sender(sender_options))
-    return graph, graph.build([canvas_tensor(np.zeros((height, width, 3), np.uint8))])
+    return graph, graph.build([heatmap_tensor(np.zeros((height, width, 3), np.uint8))])
 
 
-def canvas_tensor(canvas: np.ndarray):
+def heatmap_tensor(heatmap: np.ndarray):
     return pyneat.Tensor.from_numpy(
-        canvas, copy=True, image_format=pyneat.PixelFormat.BGR, memory=pyneat.TensorMemory.CPU
+        heatmap, copy=True, image_format=pyneat.PixelFormat.BGR, memory=pyneat.TensorMemory.CPU
     )
 
 
@@ -387,27 +435,26 @@ def run(cfg: AppConfig, stopped: Callable[[], bool]) -> int:
         model = pyneat.Model(cfg.model_path, model_options(2 * width, height))
         runner = model.build([stereo_tensor(left, right)])
         runs.append(runner)
-        # The first disparity map sets the size of the frame Insight receives.
+        # The first disparity map sets the size of the depth map Insight receives.
         map_height, map_width = disparity_map(runner, left, right).shape
-        _insight_graph, insight_run = build_insight_run(cfg, 2 * map_width, map_height, fps)
-        runs.append(insight_run)
+        _depth_graph, depth_run = build_depth_run(cfg, map_width, map_height, fps)
+        runs.append(depth_run)
 
         frames = 0
         started = time.monotonic()
         while not stopped() and (cfg.frames == 0 or frames < cfg.frames):
             left, right = pull_pair(source_run)
-            disparity = disparity_map(runner, left, right)
-            canvas = compose_canvas(left, disparity_heatmap(disparity, cfg.max_disparity))
-            if not insight_run.push([canvas_tensor(canvas)]):
-                raise RuntimeError("could not send the frame to Insight")
+            heatmap = disparity_heatmap(disparity_map(runner, left, right), cfg.max_disparity)
+            if not depth_run.push([heatmap_tensor(heatmap)]):
+                raise RuntimeError("could not send the depth map to Insight")
             if cfg.save_dir and cfg.save_every and frames % cfg.save_every == 0:
-                cv2.imwrite(str(Path(cfg.save_dir) / f"frame_{frames:06d}.jpg"), canvas)
+                cv2.imwrite(str(Path(cfg.save_dir) / f"depth_{frames:06d}.jpg"), heatmap)
             frames += 1
 
-        output_fps = frames / (time.monotonic() - started) if frames else 0.0
+        depth_fps = frames / (time.monotonic() - started) if frames else 0.0
         print(
-            f"frames={frames} output_fps={output_fps:.1f} "
-            f"video_sender={cfg.insight_host}:{cfg.video_port}",
+            f"frames={frames} depth_fps={depth_fps:.1f} "
+            f"insight={cfg.insight_host}:{cfg.video_port}-{cfg.video_port + DEPTH_CHANNEL}",
             flush=True,
         )
         return 0

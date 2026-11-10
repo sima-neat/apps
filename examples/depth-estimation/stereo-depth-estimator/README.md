@@ -14,17 +14,26 @@
 
 ## Concept
 
-Shows how near each point of a scene is from two cameras: LightStereo-S compares the left and right view, and Insight receives the left view beside a colored depth map.
+Shows how near each point of a scene is from two cameras: LightStereo-S compares the left and right view, and Insight shows both cameras and a colored depth map on three channels.
 
 The model returns disparity: how many pixels a point shifts between the left and the right view. A near point shifts more than a far one, so the disparity map is a relative depth map. The application colors it from black (far) to bright yellow (near).
 
 The application runs two Neat graphs and one model:
 
-1. The source graph reads a left and a right camera over RTSP, USB, or MIPI and decodes both.
-2. Each loop takes the newest frame of both cameras and joins them side by side, the frame LightStereo-S takes.
+1. The source graph reads a left and a right camera over RTSP, USB, or MIPI. It forwards each camera's video to its own Insight channel and decodes it.
+2. Each loop takes the newest decoded frame of both cameras and joins them side by side, the frame LightStereo-S takes.
 3. LightStereo-S returns one disparity per pixel of the left view.
-4. The CPU colors the disparity map and joins it to the left view.
-5. The output graph encodes the joined frame to H.264 and sends it to Insight.
+4. The CPU colors the disparity map.
+5. The depth graph encodes the colored map to H.264 and sends it to a third Insight channel.
+
+```text
+left camera  ─┬─> Insight channel 0
+              └─> decode ─┐
+right camera ─┬─> Insight channel 1
+              └─> decode ─┴─> join ─> LightStereo-S ─> color ─> encode ─> Insight channel 2
+```
+
+RTSP and USB cameras send encoded video, which reaches Insight as it is. A MIPI camera sends raw frames, which are encoded to H.264 first.
 
 The cameras must be rectified: a scene point lies on the same row in both views. A stereo camera that rectifies its images, or a calibrated pair remapped before streaming, provides that. The application does not rectify.
 
@@ -32,7 +41,7 @@ Depth in meters needs the cameras' calibration: depth equals the focal length in
 
 ## Preview
 
-![Left camera view beside its colored disparity map](../../../portal/assets/examples/depth-estimation/stereo-depth-estimator/image.png)
+![Left and right camera views with the colored disparity map](../../../portal/assets/examples/depth-estimation/stereo-depth-estimator/image.png)
 
 ## Prerequisites
 
@@ -40,7 +49,7 @@ Depth in meters needs the cameras' calibration: depth equals the focal length in
   DevKit, or in a Neat SDK container paired with it.
 - Two rectified cameras of the same model and mode: two RTSP streams, two USB cameras, or two MIPI
   cameras on the DevKit.
-- Insight receiving the output stream.
+- Insight receiving the three output channels.
 - The LightStereo-S model package prepared below.
 
 ## Install Apps
@@ -82,14 +91,16 @@ cp <your-build>/lightstereo_s_w16a16_mpk.tar.gz models/lightstereo_s/w16a16/
 
 Open `${APP_DIR}/src/common/config.yaml`. Set `source.type` and the matching `source.rtsp`, `source.usb`, or `source.mipi` section, then `output.insight.host`. Only the selected source section is read.
 
+- `output.insight.video_port` is the left camera's port. The right camera uses the next port and the depth map the one after: 9000, 9001 and 9002 by default, which are Insight channels 0, 1 and 2.
+
 - Every source names a left and a right camera. Swapping them gives a wrong depth map, not an error.
 - An RTSP source takes H.264, H.265, or MJPEG, the same for both streams. Set `source.rtsp.fps` for MJPEG streams that do not report a frame rate.
 - A USB source needs both cameras' stable IDs and one MJPEG mode both have. List them on the DevKit with `python3 -c "import pyneat; print(pyneat.usb_camera_ids())"` and `v4l2-ctl -d /dev/video<N> --list-formats-ext`.
 - A MIPI source needs both cameras' libcamera names from `cam -l` and a mode both sensors support.
 - `output.max_disparity` is the disparity drawn as the brightest color. Lower it when the whole scene is far away and the map looks dark.
-- `inference.frames: 0` runs until Ctrl-C. Set `output.save_dir` and `output.save_every` to also save every Nth joined frame as a JPEG.
+- `inference.frames: 0` runs until Ctrl-C. Set `output.save_dir` and `output.save_every` to also save every Nth depth map as a JPEG.
 
-The two cameras share no clock. The application pairs the newest frame of each, so the two frames can be about one frame interval apart, and more when the streams arrive with different delays. A still scene is unaffected. For fast motion, use cameras that capture in sync.
+The two cameras share no clock. The application pairs the newest frame of each, so the two frames can be about one frame interval apart, and more when the streams arrive with different delays. Channels 0 and 1 show such a delay as two views that move out of step. A still scene is unaffected. For fast motion, use cameras that capture in sync.
 
 ## Run
 
@@ -109,19 +120,19 @@ python3 ${APP_DIR}/src/python/main.py \
   --config ${APP_DIR}/src/common/config.yaml
 ```
 
-Both implementations print the source and the camera frame size at start, then stream the joined frames to Insight.
+Both implementations print the source and the camera frame size at start, then stream to Insight.
 
 ## Expected Result
 
-Insight shows the left view on the left and its depth map on the right, 1920×540 pixels in total. Near objects are bright and far ones dark. When the run ends, the application prints one summary line:
+Open channels 0, 1 and 2 in the Insight viewer, with four videos per page. Channel 0 shows the left camera, channel 1 the right camera, and channel 2 the depth map of the left view, 960×540 pixels. Near objects are bright and far ones dark. When the run ends, the application prints one summary line:
 
 ```text
-frames=300 output_fps=15.4 video_sender=<insight-host>:9000
+frames=300 depth_fps=16.0 insight=<insight-host>:9000-9002
 ```
 
-`output_fps` is the rate of frames sent to Insight.
+`depth_fps` is the rate of depth maps sent to Insight. The camera channels keep the cameras' own rate.
 
-On a DevKit with 960×540 streams at 30 FPS, the Python implementation sends about 15 frames per second with the `w16a16` package and about 25 with `w8a8`.
+On a DevKit with 960×540 streams at 30 FPS, the application sends about 16 depth maps per second with the `w16a16` package and about 28 with `w8a8`.
 
 ## Troubleshooting
 
@@ -129,7 +140,7 @@ On a DevKit with 960×540 streams at 30 FPS, the Python implementation sends abo
 - `the cameras must send the same frame size` means the two streams or camera modes differ. Give both the same mode.
 - `could not read the frame rate` means the left stream does not report one. Set `source.rtsp.fps`.
 - Confirm the model package exists at `model.path`.
-- Confirm Insight is reachable at the configured host and UDP video port.
+- Confirm Insight is reachable at the configured host and its three UDP video ports.
 - Set `inference.frames: 30` for a short smoke run.
 
 ## Source Files

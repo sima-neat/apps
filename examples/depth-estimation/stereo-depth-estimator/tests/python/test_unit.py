@@ -84,6 +84,8 @@ class TestConfig:
             ({"inference": {"frames": -1}}, "inference.frames"),
             ({"output": {"max_disparity": 0}}, "output.max_disparity"),
             ({"output": {"insight": {"video_port": 0}}}, "video_port"),
+            # The right camera and the depth map take the next two ports.
+            ({"output": {"insight": {"video_port": 65534}}}, "video_port"),
         ],
     )
     def test_invalid_settings_are_reported(self, tmp_path, sections, message):
@@ -223,19 +225,6 @@ def test_heatmap_runs_from_the_darkest_color_at_zero_to_the_brightest_at_the_max
     heatmap = example.disparity_heatmap(disparity, 96.0)
 
     np.testing.assert_array_equal(heatmap[0], palette[[0, 128, 255, 255]])
-
-
-@pytest.mark.unit
-def test_canvas_holds_the_resized_left_view_beside_the_heatmap():
-    example = load_example()
-    left = np.full((96, 128, 3), (10, 20, 30), np.uint8)
-    heatmap = np.full((48, 64, 3), (200, 100, 50), np.uint8)
-
-    canvas = example.compose_canvas(left, heatmap)
-
-    assert canvas.shape == (48, 128, 3)
-    assert (canvas[:, :64] == (10, 20, 30)).all()
-    np.testing.assert_array_equal(canvas[:, 64:], heatmap)
 
 
 @pytest.mark.unit
