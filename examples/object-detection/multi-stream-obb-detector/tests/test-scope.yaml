@@ -1,12 +1,46 @@
 models:
   yolo26n_obb_w8a8_mpk:
-    source: url
-    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26n_obb_w8a8_mpk.tar.gz
+    source: model-registry
+    name: yolo26n_obb
+    ref: develop
+    spec: latest
+    variant: w8a8
     file: yolo26n_obb_w8a8_mpk.tar.gz
   yolo26n_obb_w16a16_mpk:
-    source: url
-    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26n_obb_w16a16_mpk.tar.gz
+    source: model-registry
+    name: yolo26n_obb
+    ref: develop
+    spec: latest
+    variant: w16a16
     file: yolo26n_obb_w16a16_mpk.tar.gz
+  yolo26s_obb_w8a8_mpk:
+    source: model-registry
+    name: yolo26s_obb
+    ref: develop
+    spec: latest
+    variant: w8a8
+    file: yolo26s_obb_w8a8_mpk.tar.gz
+  yolo26m_obb_w8a8_mpk:
+    source: model-registry
+    name: yolo26m_obb
+    ref: develop
+    spec: latest
+    variant: w8a8
+    file: yolo26m_obb_w8a8_mpk.tar.gz
+  yolo26l_obb_w8a8_mpk:
+    source: model-registry
+    name: yolo26l_obb
+    ref: develop
+    spec: latest
+    variant: w8a8
+    file: yolo26l_obb_w8a8_mpk.tar.gz
+  yolo26x_obb_w8a8_mpk:
+    source: model-registry
+    name: yolo26x_obb
+    ref: develop
+    spec: latest
+    variant: w8a8
+    file: yolo26x_obb_w8a8_mpk.tar.gz
 unit:
   python: true
   cpp: true
@@ -18,6 +52,10 @@ e2e:
     - yolo26n_obb_w8a8_mpk
     variants:
     - yolo26n_obb_w16a16_mpk
+    - yolo26s_obb_w8a8_mpk
+    - yolo26m_obb_w8a8_mpk
+    - yolo26l_obb_w8a8_mpk
+    - yolo26x_obb_w8a8_mpk
   cpp:
     enabled: true
     requires_rtsp: true
@@ -25,3 +63,7 @@ e2e:
     - yolo26n_obb_w8a8_mpk
     variants:
     - yolo26n_obb_w16a16_mpk
+    - yolo26s_obb_w8a8_mpk
+    - yolo26m_obb_w8a8_mpk
+    - yolo26l_obb_w8a8_mpk
+    - yolo26x_obb_w8a8_mpk

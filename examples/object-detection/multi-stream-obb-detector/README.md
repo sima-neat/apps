@@ -48,22 +48,23 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-| Model file | Role |
-| --- | --- |
-| `yolo26n_obb_w8a8_mpk.tar.gz` | Default |
-| `yolo26n_obb_w16a16_mpk.tar.gz` | Supported |
-
-Model packages come from the Model Zoo release below, which can differ from the installed platform version. Replace `<model-file>` with a file from the table.
+The YOLO26 OBB models come in five sizes, n (nano) through x (extra large), on the `develop` branch of the [Model Registry](https://developer.sima.ai/models/?branch=develop). Download one with its ID and variant:
 
 ```bash
-export MODELZOO_VERSION="3.0.0"
-mkdir -p models
-cd models
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/<model-file>"
-cd ..
+sima-cli models download --id yolo26n_obb --variant w8a8 --branch develop
 ```
 
-Set `model.path` in the config to the downloaded package.
+| ID | Variants | Role |
+| --- | --- | --- |
+| `yolo26n_obb` | `w8a8`, `w16a16` | Default (`w8a8`) |
+| `yolo26s_obb` | `w8a8`, `w16a16`, `w8a16` | Supported |
+| `yolo26m_obb` | `w8a8`, `w16a16` | Supported |
+| `yolo26l_obb` | `w8a8`, `w16a16`, `w8a16` | Supported |
+| `yolo26x_obb` | `w8a8`, `w16a16` | Supported |
+
+The package lands at `models/<id>/<variant>/<id>_<variant>_mpk.tar.gz`. Set `model.path` in the config to that file.
+
+Larger sizes find more objects but run slower. All streams share one detector, so its rate is divided among them. On four 720p 30 fps streams, `n` and `s` with `w8a8` detect on every frame, while `m`, `l`, and `x` detect on fewer frames per stream, and the `w16a16` and `w8a16` variants on fewer still. A slower detector also lowers the video frame rate in Insight. For smooth live video with a larger model, use fewer streams.
 
 ## Prepare Insight
 
