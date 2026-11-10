@@ -1,29 +1,25 @@
-"""Face recognizer — Python implementation using pyneat.
+"""Face recognizer: SCRFD finds the faces in a frame, ArcFace turns each face into an
+embedding, and the embedding is matched against a gallery of enrolled people.
 
-Real-time SCRFD 2.5G face detection + ArcFace W600K R50 recognition on SiMa.ai Modalix.
-Publishes H.264 video + object-detection metadata to an Insight viewer.
+Recognition reads an RTSP stream, a USB camera or an H.264 video file and reports each
+face's box and name to Insight. --enroll builds the gallery from images or a video:
 
-Pipeline:
-  RTSP or H.264 file decode (NV12) --> branch --> video_sender (H264 RTP/UDP -> Insight)
-                               \\--> SCRFD model --> [detect, align, ArcFace, match] --> metadata
+  Enroll:     python3 main.py --enroll --images gallery_images/
+              python3 main.py --enroll --video clip.mp4 --name "Alice"
+  Recognize:  python3 main.py --config path/to/config.yaml
 
-Gallery:
-  Build with:  python3 main.py --enroll --video clip.mp4 --name "Alice" [--gallery gallery.bin]
-  Recognize:   python3 main.py --config path/to/config.yaml
-
-Configuration is read from src/common/config.yaml; all CLI flags override individual keys.
+Settings come from src/common/config.yaml; command-line flags override them.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import math
 import os
 import struct
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -68,9 +64,13 @@ _GALLERY_MAGIC   = b"FRGAL1\n\x00"
 _EMBEDDING_DIM   = 512
 _ARCFACE_W       = 112
 _ARCFACE_H       = 112
+# SCRFD 2.5G: 640x640 input, two anchors per cell.
+_SCRFD_W         = 640
+_SCRFD_H         = 640
+_SCRFD_ANCHORS   = 2
 
 # Name of the combine() output carrying {frame, detections} for the same frame.
-_JOINED_OUTPUT   = "recognizer_output"
+_JOINED_OUTPUT   = "face_output"
 
 # InsightFace canonical 112×112 landmark positions (left_eye, right_eye, nose, mouth L/R).
 _ARCFACE_TEMPLATE = None  # initialized after numpy is loaded
@@ -240,16 +240,13 @@ def decode_scrfd(
     nms_iou: float,
     top_k: int,
     keep_top_k: int,
-    infer_w: int,
-    infer_h: int,
-    num_anchors: int,
     pad_left: int,
     pad_top: int,
     scale: float,
 ) -> List[dict]:
     """
     Decode 9 NHWC tensors [cls×3, box×3, kps×3] at strides 8/16/32.
-    Returns list of dicts: x1,y1,x2,y2,score,landmarks(shape 5×2).
+    Returns list of dicts: x1,y1,x2,y2,score,landmarks(shape 5×2), highest score first.
     """
     cls_t = tensors[0:3]
     box_t = tensors[3:6]
@@ -260,9 +257,9 @@ def decode_scrfd(
     all_lms:    List["np.ndarray"] = []
 
     for si, stride in enumerate(_SCRFD_STRIDES):
-        fh = math.ceil(infer_h / stride)
-        fw = math.ceil(infer_w / stride)
-        grid = _make_grid(stride, fh, fw, num_anchors)  # (N, 2)
+        fh = _SCRFD_H // stride
+        fw = _SCRFD_W // stride
+        grid = _make_grid(stride, fh, fw, _SCRFD_ANCHORS)  # (N, 2)
 
         cls_raw = np.asarray(cls_t[si]).reshape(-1)
         box_raw = np.asarray(box_t[si]).reshape(-1, 4)
@@ -473,71 +470,213 @@ class AppConfig:
     scrfd_model:   str = ""
     arcface_model: str = ""
     gallery_path:  str = "gallery.bin"
-    input_uri:     str = ""
-    # input.usb: a USB (UVC) MJPEG camera by its usb_camera_ids() ID, at one of its exact
-    # MJPEG modes. Used instead of input.uri when usb_camera is set.
-    usb_camera:    str = ""
+    input_uri:     str = ""   # RTSP URL or H.264 video file
+    usb_camera:    str = ""   # a usb_camera_ids() ID; used when input_uri is empty
     usb_width:     int = 1280
     usb_height:    int = 720
     usb_fps:       int = 30
-    insight_host:  str = ""
-    insight_video_port:    int   = 9000
-    insight_metadata_port: int   = 9100
-    conf_threshold: float = 0.50
-    nms_iou:        float = 0.40
-    top_k:          int   = 5000
-    keep_top_k:     int   = 5
-    num_anchors:    int   = 2
-    infer_w:        int   = 640
-    infer_h:        int   = 640
+    insight_host:  str = ""   # empty = no Insight output
+    insight_video_port:    int = 9000
+    insight_metadata_port: int = 9100
+    conf_threshold:  float = 0.65
+    nms_iou:         float = 0.40
+    top_k:           int   = 5000
+    keep_top_k:      int   = 100
     match_threshold: float = 0.55
     match_margin:    float = 0.12
-    unknown_label:  str = "Unknown"
-    recog_interval: int   = 8
-    timeout_ms:     int   = 20000
-    max_frames:     int   = 0
+    unknown_label:   str   = "Unknown"
+    timeout_ms:      int   = 20000
+    max_frames:      int   = 0   # 0 = unlimited
 
 
 def _load_config(config_path: Path) -> AppConfig:
     raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
-    pkg_root = config_path.resolve().parent.parent.parent  # face-recognizer/
+    # Relative paths in config.yaml are relative to the example directory.
+    example_dir = config_path.resolve().parent.parent.parent
 
     def resolve(p: str) -> str:
         if not p or Path(p).is_absolute() or "://" in p:
             return p
-        return str((pkg_root / p).resolve())
+        return str((example_dir / p).resolve())
 
     cfg = AppConfig()
-    cfg.scrfd_model   = resolve(raw.get("scrfd", {}).get("model", ""))
-    cfg.arcface_model = resolve(raw.get("arcface", {}).get("model", ""))
-    cfg.gallery_path  = resolve(raw.get("gallery", {}).get("path", "gallery.bin"))
-    cfg.input_uri     = resolve(raw.get("input", {}).get("uri", ""))
-    usb               = raw.get("input", {}).get("usb", {}) or {}
+    scrfd   = raw.get("scrfd", {}) or {}
+    usb     = (raw.get("input", {}) or {}).get("usb", {}) or {}
+    insight = (raw.get("output", {}) or {}).get("insight", {}) or {}
+    match   = raw.get("match", {}) or {}
+    cfg.scrfd_model   = resolve(scrfd.get("model", ""))
+    cfg.arcface_model = resolve((raw.get("arcface", {}) or {}).get("model", ""))
+    cfg.gallery_path  = resolve((raw.get("gallery", {}) or {}).get("path", cfg.gallery_path))
+    cfg.input_uri     = resolve((raw.get("input", {}) or {}).get("uri", "") or "")
     cfg.usb_camera    = str(usb.get("camera", "") or "")
     cfg.usb_width     = int(usb.get("width", cfg.usb_width))
     cfg.usb_height    = int(usb.get("height", cfg.usb_height))
     cfg.usb_fps       = int(usb.get("fps", cfg.usb_fps))
-    insight           = raw.get("output", {}).get("insight", {})
-    cfg.insight_host          = insight.get("host", "")
-    cfg.insight_video_port    = int(insight.get("video_port", 9000))
-    cfg.insight_metadata_port = int(insight.get("metadata_port", 9100))
-    scrfd = raw.get("scrfd", {})
-    cfg.conf_threshold = float(scrfd.get("conf_threshold", cfg.conf_threshold))
-    cfg.nms_iou        = float(scrfd.get("nms_iou", cfg.nms_iou))
-    cfg.top_k          = int(scrfd.get("top_k", cfg.top_k))
-    cfg.keep_top_k     = int(scrfd.get("keep_top_k", cfg.keep_top_k))
-    cfg.num_anchors    = int(scrfd.get("num_anchors", cfg.num_anchors))
-    match = raw.get("match", {})
+    cfg.insight_host          = insight.get("host", "") or ""
+    cfg.insight_video_port    = int(insight.get("video_port", cfg.insight_video_port))
+    cfg.insight_metadata_port = int(insight.get("metadata_port", cfg.insight_metadata_port))
+    cfg.conf_threshold  = float(scrfd.get("conf_threshold", cfg.conf_threshold))
+    cfg.nms_iou         = float(scrfd.get("nms_iou", cfg.nms_iou))
+    cfg.top_k           = int(scrfd.get("top_k", cfg.top_k))
+    cfg.keep_top_k      = int(scrfd.get("keep_top_k", cfg.keep_top_k))
     cfg.match_threshold = float(match.get("threshold", cfg.match_threshold))
     cfg.match_margin    = float(match.get("margin", cfg.match_margin))
     cfg.unknown_label   = match.get("unknown_label", cfg.unknown_label)
-    runtime = raw.get("runtime", {})
-    cfg.recog_interval = int(runtime.get("recog_interval", cfg.recog_interval))
-    cfg.timeout_ms     = int(runtime.get("timeout_ms", cfg.timeout_ms))
+    cfg.timeout_ms      = int((raw.get("runtime", {}) or {}).get("timeout_ms", cfg.timeout_ms))
     return cfg
 
 
-# ── SCRFD pyneat pipeline build ────────────────────────────────────────────────
+# ── models ─────────────────────────────────────────────────────────────────────
+
+def _build_tensor_run(model_path: str, width: int, height: int):
+    """A model fed one float tensor at a time: ArcFace (a 112x112 aligned face) and, for
+    the still images of enrollment, SCRFD (a 640x640 letterboxed image)."""
+    opt = pyneat.ModelOptions()
+    opt.preprocess.kind             = pyneat.InputKind.Tensor
+    opt.preprocess.input_max_width  = width
+    opt.preprocess.input_max_height = height
+    opt.preprocess.input_max_depth  = 3
+    model = pyneat.Model(model_path, opt)
+
+    graph = pyneat.Graph()
+    graph.add(pyneat.nodes.input(model.input_appsrc_options(True)))
+    graph.add(model)
+    graph.add(pyneat.nodes.output())
+
+    run_opts = pyneat.RunOptions()
+    run_opts.output_memory = pyneat.OutputMemory.Owned
+    seed = np.zeros((height, width, 3), dtype=np.float32)
+    return graph.build([_tensor_from_f32(seed)], run_opts)
+
+
+def _run_tensor(run, array: "np.ndarray", timeout_ms: int, what: str) -> list:
+    if not run.push([_tensor_from_f32(array)]):
+        raise RuntimeError(f"{what} push failed: {run.last_error()}")
+    sample = run.pull(timeout_ms=timeout_ms)
+    # A result still in flight would come back for the next input, so a timeout is fatal.
+    if sample is None:
+        raise RuntimeError(f"{what} timed out")
+    return [_tensor_to_np(t) for t in _collect_tensors(sample)]
+
+
+def embed_face(arcface_run, bgr: "np.ndarray", landmarks: "np.ndarray",
+               timeout_ms: int) -> "np.ndarray":
+    """The one path from a detected face to its embedding, shared by enrollment and
+    recognition: align to the ArcFace template, run ArcFace, L2-normalize."""
+    crop = align_face(bgr, landmarks)
+    out = _run_tensor(arcface_run, preprocess_arcface(crop), timeout_ms, "ArcFace")
+    return _l2_normalize(out[0].flatten().astype(np.float32))
+
+
+def _letterbox(frame_w: int, frame_h: int) -> Tuple[float, int, int]:
+    """How a frame is letterboxed into the SCRFD input: scale, left pad, top pad."""
+    scale = min(_SCRFD_W / frame_w, _SCRFD_H / frame_h)
+    pad_l = (_SCRFD_W - round(frame_w * scale)) // 2
+    pad_t = (_SCRFD_H - round(frame_h * scale)) // 2
+    return scale, pad_l, pad_t
+
+
+def preprocess_scrfd(bgr: "np.ndarray") -> "np.ndarray":
+    """Letterbox a BGR image to the SCRFD input (black bars, RGB, [0,1] float32), the same
+    preprocessing the EV74 runs for decoded video frames. Used for still images."""
+    scale, pad_l, pad_t = _letterbox(bgr.shape[1], bgr.shape[0])
+    nw, nh = round(bgr.shape[1] * scale), round(bgr.shape[0] * scale)
+    resized = cv2.resize(bgr, (nw, nh), interpolation=cv2.INTER_LINEAR)
+    canvas = np.zeros((_SCRFD_H, _SCRFD_W, 3), dtype=np.float32)
+    canvas[pad_t:pad_t + nh, pad_l:pad_l + nw] = (
+        cv2.cvtColor(resized, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+    )
+    return canvas
+
+
+# ── enrollment ─────────────────────────────────────────────────────────────────
+
+_IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".bmp")
+
+
+def run_enrollment(cfg: AppConfig, images_dir: Optional[str], video_path: Optional[str],
+                   name: Optional[str], sample_every: int, min_score: float,
+                   max_per_person: int) -> int:
+    """Add people to the gallery from a folder of images (one subfolder per person) or
+    from a video of one person."""
+    if not images_dir and not video_path:
+        raise RuntimeError("--enroll needs --images <dir> or --video <file> --name <person>")
+    if video_path and not name:
+        raise RuntimeError("--video needs --name <person>")
+    if name and not video_path:
+        raise RuntimeError("--name applies to --video; --images names people by folder")
+    if images_dir and not Path(images_dir).is_dir():
+        raise RuntimeError(f"not a directory: {images_dir}")
+    if sample_every <= 0:
+        raise RuntimeError("--sample-every must be positive")
+
+    print("[BUILD] Building SCRFD and ArcFace pipelines...")
+    scrfd_run   = _build_tensor_run(cfg.scrfd_model, _SCRFD_W, _SCRFD_H)
+    arcface_run = _build_tensor_run(cfg.arcface_model, _ARCFACE_W, _ARCFACE_H)
+
+    # New samples are added to the people already in the gallery. An existing gallery
+    # that cannot be read stops enrollment rather than being replaced.
+    builder = GalleryBuilder()
+    if Path(cfg.gallery_path).exists():
+        for entry in load_gallery(cfg.gallery_path):
+            builder.add(entry.name, entry.raw_mean, entry.sample_count)
+
+    counts = {"enrolled": 0, "skipped": 0}
+
+    def enroll_image(person: str, bgr: "np.ndarray", what: str) -> None:
+        """Enroll the highest-scoring face of one image under `person`."""
+        scale, pad_l, pad_t = _letterbox(bgr.shape[1], bgr.shape[0])
+        tensors = _run_tensor(scrfd_run, preprocess_scrfd(bgr), cfg.timeout_ms, "SCRFD")
+        faces = decode_scrfd(tensors, cfg.conf_threshold, cfg.nms_iou, cfg.top_k,
+                             cfg.keep_top_k, pad_l, pad_t, scale)
+        if not faces or faces[0]["score"] < min_score:
+            print(f"  [skip] {what}: no face scoring at least {min_score}")
+            counts["skipped"] += 1
+            return
+        builder.add(person, embed_face(arcface_run, bgr, faces[0]["landmarks"], cfg.timeout_ms))
+        counts["enrolled"] += 1
+        print(f"  [{person}] {what} (score {faces[0]['score']:.6f})")
+
+    if images_dir:
+        for person_dir in sorted(p for p in Path(images_dir).iterdir() if p.is_dir()):
+            images = sorted(p for p in person_dir.iterdir()
+                            if p.is_file() and p.suffix.lower() in _IMAGE_SUFFIXES)
+            if max_per_person > 0:
+                images = images[:max_per_person]
+            for image in images:
+                bgr = cv2.imread(str(image), cv2.IMREAD_COLOR)
+                if bgr is None:
+                    print(f"  [skip] cannot read {image.name}")
+                    counts["skipped"] += 1
+                    continue
+                enroll_image(person_dir.name, bgr, image.name)
+    if video_path:
+        video = cv2.VideoCapture(video_path)
+        if not video.isOpened():
+            raise RuntimeError(f"cannot open video: {video_path}")
+        frame = 0
+        while True:
+            ok, bgr = video.read()
+            if not ok:
+                break
+            frame += 1
+            if frame % sample_every == 0:
+                enroll_image(name, bgr, f"frame {frame}")
+        video.release()
+    scrfd_run.close()
+    arcface_run.close()
+    if counts["enrolled"] == 0:
+        raise RuntimeError("no faces were enrolled; check that the input shows clear, "
+                           "forward-facing faces")
+
+    entries = builder.finish()
+    save_gallery(entries, cfg.gallery_path)  # writes a temporary file, then renames it
+    print(f"Enrolled {counts['enrolled']} face(s), skipped {counts['skipped']}; "
+          f"{len(entries)} people in {cfg.gallery_path}")
+    return 0
+
+
+# ── recognition ────────────────────────────────────────────────────────────────
 
 def _is_rtsp(uri: str) -> bool:
     return uri.startswith(("rtsp://", "rtsps://"))
@@ -547,17 +686,15 @@ def _probe_input(uri: str) -> Tuple[int, int, int]:
     """Read width/height/fps from the stream or file before the graph is built."""
     if not _is_rtsp(uri) and not Path(uri).is_file():
         raise RuntimeError(f"input video not found: {uri}")
-    # This short-lived probe joins the stream mid-GOP, so FFmpeg emits
-    # "Missing reference picture" chatter while it waits for a keyframe.  Only
-    # caps are read here, never pixels, so silence it; genuine failures still
-    # surface as the explicit errors below.
+    # This short-lived probe joins the stream mid-GOP, so FFmpeg emits "Missing reference
+    # picture" chatter while it waits for a keyframe. Only caps are read here, so silence it.
     key  = "OPENCV_FFMPEG_CAPTURE_OPTIONS"
     prev = os.environ.get(key)
     os.environ[key] = (prev + "|" if prev else "") + "loglevel;quiet"
     try:
         cap = cv2.VideoCapture(uri)
         if not cap.isOpened():
-            raise RuntimeError(f"Cannot open input for probing: {uri}")
+            raise RuntimeError(f"cannot open input: {uri}")
         w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
         h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
         fps = round(cap.get(cv2.CAP_PROP_FPS) or 0)
@@ -583,26 +720,8 @@ def _usb_camera_options(cfg: AppConfig):
     return opt
 
 
-def _usb_decode_options(cfg: AppConfig, decoded_format):
-    opt = pyneat.SimaDecodeOptions()
-    opt.type       = pyneat.SimaDecodeType.MJPEG
-    opt.raw_output = True
-    opt.out_format = decoded_format
-    opt.dec_width  = cfg.usb_width
-    opt.dec_height = cfg.usb_height
-    opt.dec_fps    = cfg.usb_fps
-    return opt
-
-
-def _build_scrfd_run(cfg: AppConfig, frame_w: int, frame_h: int, fps: int, usb_info=None):
-    """Build SCRFD pipeline: RTSP/file → branch → [VideoSender, SCRFD, frame] → join.
-
-    A USB camera sends JPEG frames. They go to Insight unchanged (RTP/JPEG, no re-encode)
-    and are decoded on the hardware decoder only for SCRFD and the frame tap, in the
-    camera's own sampling: most webcams send 4:2:2 MJPEG, which decodes to NV16.
-    """
-    is_usb = usb_info is not None
-    nv16_frames = is_usb and usb_info.decoded_format == pyneat.Format.NV16
+def _scrfd_frame_options(frame_w: int, frame_h: int, nv16_frames: bool):
+    """SCRFD fed decoded video frames: the EV74 letterboxes, converts and normalizes."""
     opt = pyneat.ModelOptions()
     opt.preprocess.kind = pyneat.InputKind.Image
     opt.preprocess.enable = pyneat.AutoFlag.On
@@ -612,292 +731,127 @@ def _build_scrfd_run(cfg: AppConfig, frame_w: int, frame_h: int, fps: int, usb_i
     opt.preprocess.input_max_width  = frame_w
     opt.preprocess.input_max_height = frame_h
     opt.preprocess.input_max_depth  = 3
+    # Both settings must match how SCRFD was calibrated; neither is inferred from the model
+    # package. Left on Auto, normalization stays off (a 255x input-scale error) and the
+    # letterbox bars are grey (114) instead of black.
     opt.preprocess.resize.enable    = pyneat.AutoFlag.On
     opt.preprocess.resize.mode      = pyneat.ResizeMode.Letterbox
     opt.preprocess.resize.pad_value = 0
     opt.preprocess.normalize.enable = pyneat.AutoFlag.On
     opt.preprocess.normalize.mean   = (0.0, 0.0, 0.0)
     opt.preprocess.normalize.stddev = (1.0, 1.0, 1.0)
-    scrfd_model = pyneat.Model(cfg.scrfd_model, opt)
+    return opt
 
-    is_rtsp = not is_usb and _is_rtsp(cfg.input_uri)
-    is_live = is_usb or is_rtsp
-    # RTSP and file frames feed Insight from the decoded branch; a USB camera's JPEG is
-    # split off before decode instead.
-    usb_split = is_usb and bool(cfg.insight_host)
-    if is_usb:
-        source = pyneat.Graph("source")
-        source.add(pyneat.nodes.usb_camera_input(_usb_camera_options(cfg), usb_info))
-        # Without Insight nothing needs the JPEG, so the decoder follows the camera directly.
-        if not usb_split:
-            source.add(pyneat.nodes.sima_decode(_usb_decode_options(cfg, usb_info.decoded_format)))
-    elif is_rtsp:
-        rtsp_opt = pyneat.RtspDecodedInputOptions()
-        rtsp_opt.url              = cfg.input_uri
-        rtsp_opt.latency_ms       = 200
-        rtsp_opt.tcp              = True
-        rtsp_opt.payload_type     = 96
-        rtsp_opt.insert_queue     = True
-        rtsp_opt.decoder_name     = "decoder"
-        rtsp_opt.decoder_raw_output = True
-        rtsp_opt.auto_caps_from_stream = True
-        rtsp_opt.fallback_h264_width   = frame_w
-        rtsp_opt.fallback_h264_height  = frame_h
-        rtsp_opt.fallback_h264_fps     = fps
-        rtsp_opt.output_caps.enable    = True
-        rtsp_opt.output_caps.format    = pyneat.Format.NV12
-        rtsp_opt.output_caps.width     = frame_w
-        rtsp_opt.output_caps.height    = frame_h
-        rtsp_opt.output_caps.fps       = fps
-        rtsp_opt.output_caps.memory    = pyneat.CapsMemory.Any
 
-        source = pyneat.groups.rtsp_decoded_input(rtsp_opt)
-    else:
-        file_opt = pyneat.VideoInputGroupOptions()
-        file_opt.path = cfg.input_uri
-        source = pyneat.groups.video_input(file_opt)
+def _build_recognition_run(cfg: AppConfig, frame_w: int, frame_h: int, fps: int, usb_info=None):
+    """One graph for every source:
 
-    model_graph = pyneat.Graph("model")
-    model_graph.connect(pyneat.nodes.input("model"), scrfd_model)
+      RTSP / USB camera ─┬─→ VideoSender (the source's own stream → Insight)
+                         └─→ SimaDecode ─┬─ model ─→ SCRFD ─→ detections ─┐
+      video file (decodes itself) ───────┴─ frame ────────────────────────┴─ ByFrame join → app
 
-    det_graph = pyneat.Graph("detections")
-    det_graph.add(pyneat.nodes.output("detections", pyneat.OutputOptions.every_frame(4)))
-
-    # Tap the decoded frame off the same branch as the model input and join it to
-    # the detections by frame.  This gives face alignment the exact frame SCRFD
-    # saw, instead of an independently decoded one from a second RTSP client.
-    frame_graph = pyneat.Graph("frame")
-    frame_graph.add(pyneat.nodes.output("frame", pyneat.OutputOptions.every_frame(4)))
-    joined = pyneat.graphs.combine(
-        ["frame", "detections"], _JOINED_OUTPUT, pyneat.CombinePolicy.ByFrame
-    )
+    Insight receives the stream as the source sent it, with no re-encode. The join pairs
+    every frame with the detections found in it, so each face is cropped from its own frame.
+    """
+    is_usb  = usb_info is not None
+    is_live = is_usb or _is_rtsp(cfg.input_uri)
+    nv16_frames = is_usb and usb_info.decoded_format == pyneat.Format.NV16
+    scrfd_model = pyneat.Model(cfg.scrfd_model,
+                               _scrfd_frame_options(frame_w, frame_h, nv16_frames))
 
     g_opts = pyneat.GraphOptions()
     g_opts.advanced_execution.postprocess_target = "EV74"
     graph = pyneat.Graph(g_opts)
+    decoded = pyneat.graphs.branch("decoded", ["model", "frame"])
 
-    video_opt = None
-    branch_names = (["video", "model", "frame"] if cfg.insight_host and not is_usb
-                    else ["model", "frame"])
-    branch = pyneat.graphs.branch("decoded" if usb_split else "source", branch_names)
-
-    video_graph = pyneat.Graph("video")
-    if cfg.insight_host:
-        if is_usb:
-            video_opt = pyneat.VideoSenderOptions.passthrough(pyneat.RtspCodec.MJPEG)
-        else:
-            video_opt = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(frame_w, frame_h, fps)
-            video_opt.encoder.bitrate_kbps = 4000
-        video_opt.host            = cfg.insight_host
-        video_opt.channel         = 0
-        video_opt.video_port_base = cfg.insight_video_port
-        video_graph.connect(pyneat.nodes.input("video"), pyneat.groups.video_sender(video_opt))
-
-    if usb_split:
-        decode_graph = pyneat.Graph("decode")
-        decode_graph.connect(
-            pyneat.nodes.input("decode"),
-            pyneat.nodes.sima_decode(_usb_decode_options(cfg, usb_info.decoded_format)),
-        )
-        video_link = pyneat.GraphLinkOptions()
-        video_link.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
-        split = pyneat.graphs.branch("source", ["video", "decode"])
-        graph.connect(source, split)
-        graph.connect(split, video_graph, video_link)
-        graph.connect(split, decode_graph)
-        graph.connect(decode_graph, branch)
+    if not is_live:
+        file_opt = pyneat.VideoInputGroupOptions()
+        file_opt.path = cfg.input_uri
+        graph.connect(pyneat.groups.video_input(file_opt), decoded)
     else:
-        graph.connect(source, branch)
+        source = pyneat.Graph("source")
+        decode_opt = pyneat.SimaDecodeOptions()
+        decode_opt.raw_output = True
+        decode_opt.dec_width  = frame_w
+        decode_opt.dec_height = frame_h
+        decode_opt.dec_fps    = fps
+        if is_usb:
+            source.add(pyneat.nodes.usb_camera_input(_usb_camera_options(cfg), usb_info))
+            decode_opt.type       = pyneat.SimaDecodeType.MJPEG
+            decode_opt.out_format = usb_info.decoded_format
+        else:
+            rtsp_opt = pyneat.RtspEncodedInputOptions()
+            rtsp_opt.url                  = cfg.input_uri
+            rtsp_opt.latency_ms           = 50
+            rtsp_opt.source_fps           = fps
+            rtsp_opt.fallback_h264_width  = frame_w
+            rtsp_opt.fallback_h264_height = frame_h
+            source.add(pyneat.groups.rtsp_encoded_input(rtsp_opt))
+            decode_opt.type       = pyneat.SimaDecodeType.H264
+            decode_opt.out_format = pyneat.Format.NV12
+        decoder = pyneat.Graph("decoder")
+        decoder.add(pyneat.nodes.sima_decode(decode_opt))
+        graph.connect(source, decoder)
+        graph.connect(decoder, decoded)
+
         if cfg.insight_host:
-            graph.connect(branch, video_graph)
+            video_opt = pyneat.VideoSenderOptions.passthrough(
+                pyneat.RtspCodec.MJPEG if is_usb else pyneat.RtspCodec.H264
+            )
+            video_opt.host            = cfg.insight_host
+            video_opt.video_port_base = cfg.insight_video_port
+            video_opt.channel         = 0
+            video = pyneat.Graph("video")
+            video.add(pyneat.groups.video_sender(video_opt))
+            # The viewer gets the newest frame; a slow model never holds the video back.
+            latest = pyneat.GraphLinkOptions()
+            latest.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
+            graph.connect(source, video, latest)
 
-    graph.connect(branch, model_graph)
-    graph.connect(branch, frame_graph)
-    graph.connect(model_graph, det_graph)
+    model_graph = pyneat.Graph("model")
+    model_graph.connect(pyneat.nodes.input("model"), scrfd_model)
+    detections_graph = pyneat.Graph("detections")
+    detections_graph.add(pyneat.nodes.output("detections", pyneat.OutputOptions.every_frame(4)))
+    frame_graph = pyneat.Graph("frame")
+    frame_graph.add(pyneat.nodes.output("frame", pyneat.OutputOptions.every_frame(4)))
+    joined = pyneat.graphs.combine(["frame", "detections"], _JOINED_OUTPUT,
+                                   pyneat.CombinePolicy.ByFrame)
+    graph.connect(decoded, model_graph)
+    graph.connect(decoded, frame_graph)
+    graph.connect(model_graph, detections_graph)
     graph.connect(frame_graph, joined)
-    graph.connect(det_graph, joined)
+    graph.connect(detections_graph, joined)
 
-    # Live sources keep the newest frame; files are processed frame by frame.
+    # A live source keeps its newest frame; a file is processed frame by frame.
     run_opts = pyneat.RunOptions()
     if is_live:
-        run_opts.preset      = pyneat.RunPreset.Realtime
+        run_opts.preset = pyneat.RunPreset.Realtime
     run_opts.queue_depth     = 3
     run_opts.overflow_policy = (pyneat.OverflowPolicy.KeepLatest if is_live
                                 else pyneat.OverflowPolicy.Block)
     run_opts.output_memory   = pyneat.OutputMemory.ZeroCopy
-    run = graph.build(run_opts)
-
-    return run, video_opt
+    return graph.build(run_opts)
 
 
-def _build_arcface_run(cfg: AppConfig, dummy_crop: "np.ndarray"):
-    """Build ArcFace pipeline: tensor input → ArcFace → output."""
-    opt = pyneat.ModelOptions()
-    opt.preprocess.kind             = pyneat.InputKind.Tensor
-    opt.preprocess.input_max_width  = _ARCFACE_W
-    opt.preprocess.input_max_height = _ARCFACE_H
-    opt.preprocess.input_max_depth  = 3
-    model = pyneat.Model(cfg.arcface_model, opt)
-
-    graph = pyneat.Graph()
-    graph.add(pyneat.nodes.input(model.input_appsrc_options(True)))
-    graph.add(model)
-    graph.add(pyneat.nodes.output())
-
-    run_opts = pyneat.RunOptions()
-    run_opts.output_memory = pyneat.OutputMemory.Owned
-    dummy = _tensor_from_f32(dummy_crop)
-    return graph.build([dummy], run_opts)
-
-
-# ── enrollment ─────────────────────────────────────────────────────────────────
-
-def run_enrollment(
-    cfg: AppConfig,
-    video_path: str,
-    name: str,
-    gallery_out: str,
-    sample_every: int,
-    min_score: float,
-) -> int:
-    """Enroll faces from a video into gallery_out (appends to existing gallery)."""
-    builder = GalleryBuilder()
-
-    if Path(gallery_out).exists():
-        existing = load_gallery(gallery_out)
-        for e in existing:
-            builder.add(e.name, e.raw_mean, e.sample_count)
-        print(f"[GALLERY] Loaded {len(existing)} existing identity(ies) from {gallery_out}")
-
-    dummy_crop = np.zeros((_ARCFACE_H, _ARCFACE_W, 3), dtype=np.float32)
-    scrfd_opt = pyneat.ModelOptions()
-    scrfd_opt.preprocess.kind             = pyneat.InputKind.Tensor
-    scrfd_opt.preprocess.input_max_width  = cfg.infer_w
-    scrfd_opt.preprocess.input_max_height = cfg.infer_h
-    scrfd_opt.preprocess.input_max_depth  = 3
-    scrfd_model = pyneat.Model(cfg.scrfd_model, scrfd_opt)
-
-    scrfd_graph = pyneat.Graph()
-    scrfd_graph.add(pyneat.nodes.input(scrfd_model.input_appsrc_options(True)))
-    scrfd_graph.add(scrfd_model)
-    scrfd_graph.add(pyneat.nodes.output())
-    dummy_frame = np.zeros((cfg.infer_h, cfg.infer_w, 3), dtype=np.float32)
-    scrfd_run = scrfd_graph.build([_tensor_from_f32(dummy_frame)])
-    arc_run   = _build_arcface_run(cfg, dummy_crop)
-
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        raise RuntimeError(f"Cannot open video: {video_path}")
-
-    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    fps   = cap.get(cv2.CAP_PROP_FPS)
-    print(f"[VIDEO] {video_path} — {total} frames @ {fps:.1f} fps, sample_every={sample_every}")
-
-    enrolled = skipped = frame_idx = 0
-    while True:
-        ret, bgr = cap.read()
-        if not ret:
-            break
-        frame_idx += 1
-        if frame_idx % sample_every != 0:
-            continue
-
-        # Preprocess for SCRFD
-        scale = min(cfg.infer_w / bgr.shape[1], cfg.infer_h / bgr.shape[0])
-        nw = round(bgr.shape[1] * scale)
-        nh = round(bgr.shape[0] * scale)
-        pad_l = (cfg.infer_w - nw) // 2
-        pad_t = (cfg.infer_h - nh) // 2
-        resized = cv2.resize(bgr, (nw, nh), interpolation=cv2.INTER_LINEAR)
-        canvas = np.zeros((cfg.infer_h, cfg.infer_w, 3), dtype=np.float32)
-        rgb_resized = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
-        canvas[pad_t:pad_t+nh, pad_l:pad_l+nw] = rgb_resized
-
-        if not scrfd_run.push([_tensor_from_f32(canvas)]):
-            raise RuntimeError("SCRFD push failed: " + scrfd_run.last_error())
-        sample = scrfd_run.pull(timeout_ms=cfg.timeout_ms)
-        if sample is None:
-            raise RuntimeError(f"SCRFD timeout at frame {frame_idx}")
-
-        tensors = [_tensor_to_np(t) for t in _collect_tensors(sample)]
-        dets = decode_scrfd(tensors, cfg.conf_threshold, cfg.nms_iou,
-                            cfg.top_k, cfg.keep_top_k, cfg.infer_w, cfg.infer_h,
-                            cfg.num_anchors, pad_l, pad_t, scale)
-        if not dets:
-            skipped += 1
-            continue
-
-        best = max(dets, key=lambda d: d["score"])
-        if best["score"] < min_score:
-            print(f"  [skip] frame {frame_idx} score={best['score']:.3f} < {min_score}")
-            skipped += 1
-            continue
-
-        crop = align_face(bgr, best["landmarks"])
-        f32  = preprocess_arcface(crop)
-
-        if not arc_run.push([_tensor_from_f32(f32)]):
-            raise RuntimeError("ArcFace push failed: " + arc_run.last_error())
-        arc_sample = arc_run.pull(timeout_ms=cfg.timeout_ms)
-        if arc_sample is None:
-            raise RuntimeError(
-                f"ArcFace timeout at frame {frame_idx} — pipeline stalled, "
-                "cannot continue enrollment safely"
-            )
-
-        emb_np = _tensor_to_np(_collect_tensors(arc_sample)[0]).flatten().astype(np.float32)
-        emb_np = _l2_normalize(emb_np)
-        builder.add(name, emb_np)
-        enrolled += 1
-        print(f"  [{name}] frame {frame_idx} → enrolled (score={best['score']:.3f}, total={enrolled})")
-
-    cap.release()
-    scrfd_run.close()
-    arc_run.close()
-
-    if enrolled == 0:
-        print("ERROR: no faces enrolled — check video contains visible faces", file=sys.stderr)
-        return 2
-
-    entries = builder.finish()
-    save_gallery(entries, gallery_out)
-    print(f"\nEnrollment complete: {enrolled} enrolled, {skipped} skipped")
-    print(f"Gallery saved: {gallery_out} ({len(entries)} identity(ies))")
-    return 0
-
-
-# ── recognition pipeline ───────────────────────────────────────────────────────
-
-def _letterbox_params(orig_w: int, orig_h: int, infer_w: int, infer_h: int):
-    scale = min(infer_w / orig_w, infer_h / orig_h)
-    nw = round(orig_w * scale)
-    nh = round(orig_h * scale)
-    pad_l = (infer_w - nw) // 2
-    pad_t = (infer_h - nh) // 2
-    return scale, pad_l, pad_t
-
-
-def run_recognition(cfg: AppConfig, gallery: List[GalleryEntry], max_frames: int,
-                    test_mode: bool = False) -> int:
-    """Main recognition loop: RTSP/file/USB camera → SCRFD → ArcFace → MetadataSender → Insight."""
+def run_recognition(cfg: AppConfig, gallery: List[GalleryEntry], test_mode: bool = False) -> int:
+    """Detect, align, embed and match every face of every frame; report to Insight."""
     usb_info = None
     if cfg.usb_camera:
-        # The camera is checked once (connected, free, mode supported, one frame decodes);
-        # the same info gives the decoded layout and builds the camera node.
+        # Checks the camera once: connected, free, mode supported, one frame decodes.
         usb_info = pyneat.usb_camera_info(_usb_camera_options(cfg))
         frame_w, frame_h, fps = cfg.usb_width, cfg.usb_height, cfg.usb_fps
-        decoded = "NV16" if usb_info.decoded_format == pyneat.Format.NV16 else "NV12"
-        input_name = f"usb:{cfg.usb_camera} ({usb_info.device}, MJPEG decoded to {decoded})"
+        source_name = "USB camera"
     else:
         frame_w, frame_h, fps = _probe_input(cfg.input_uri)
-        input_name = cfg.input_uri
-    scale, pad_l, pad_t = _letterbox_params(frame_w, frame_h, cfg.infer_w, cfg.infer_h)
+        source_name = "RTSP" if _is_rtsp(cfg.input_uri) else "video file"
+    print(f"[INPUT] {source_name} {frame_w}x{frame_h} @ {fps} FPS")
+    scale, pad_l, pad_t = _letterbox(frame_w, frame_h)
 
-    # Build pipelines
-    scrfd_run, video_opt = _build_scrfd_run(cfg, frame_w, frame_h, fps, usb_info)
-
-    dummy_crop = np.zeros((_ARCFACE_H, _ARCFACE_W, 3), dtype=np.float32)
-    arc_run = _build_arcface_run(cfg, dummy_crop)
+    # ArcFace first, so the live graph does not queue frames while it loads.
+    print("[BUILD] Building ArcFace pipeline...")
+    arcface_run = _build_tensor_run(cfg.arcface_model, _ARCFACE_W, _ARCFACE_H)
+    print("[BUILD] Building the source and SCRFD graph...")
+    run = _build_recognition_run(cfg, frame_w, frame_h, fps, usb_info)
 
     metadata_sender = None
     if cfg.insight_host:
@@ -906,147 +860,71 @@ def run_recognition(cfg: AppConfig, gallery: List[GalleryEntry], max_frames: int
         meta_opt.channel            = 0
         meta_opt.metadata_port_base = cfg.insight_metadata_port
         metadata_sender = pyneat.MetadataSender(meta_opt)
-
-    if cfg.insight_host:
-        print(
-            f"input={input_name} stream={frame_w}x{frame_h}@{fps} "
-            f"insight={cfg.insight_host} video={video_opt.video_port} "
-            f"metadata={metadata_sender.metadata_port()} channel=0"
-        )
-    else:
-        print(f"input={input_name} stream={frame_w}x{frame_h}@{fps} headless")
-
-    cached_labels:    List[str]              = []
-    cached_sims:      List[float]            = []
-    cached_centroids: List[Tuple[float, float]] = []  # box centres from last recog
-    last_recog_frame = -cfg.recog_interval  # force recog on frame 0
+        print(f"[stream] video -> udp://{cfg.insight_host}:{cfg.insight_video_port}, "
+              f"metadata -> udp://{cfg.insight_host}:{metadata_sender.metadata_port()} "
+              "(Insight channel 0)")
 
     frame_count = 0
-    processed   = 0
-    start_ms    = _time_ms()
-
-    while max_frames <= 0 or frame_count < max_frames:
-        # Pull the joined {frame, detections} sample — both come from the same
-        # decoded frame, so landmarks always match the image they are cropped from.
-        sample = scrfd_run.pull(_JOINED_OUTPUT, cfg.timeout_ms)
+    first_frame_ms = None
+    while cfg.max_frames <= 0 or frame_count < cfg.max_frames:
+        sample = run.pull(_JOINED_OUTPUT, cfg.timeout_ms)
         if sample is None:
-            err = str(scrfd_run.last_error() or "")
+            err = str(run.last_error() or "")
             if err:
-                raise RuntimeError(f"SCRFD pull failed: {err}")
-            if not scrfd_run.running():
-                break
-            print("[warn] SCRFD pull timeout", file=sys.stderr, flush=True)
+                raise RuntimeError(f"pull failed: {err}")
+            if not run.running():
+                break  # end of stream
+            print("[warn] pull timeout", file=sys.stderr, flush=True)
             continue
+        if first_frame_ms is None:
+            first_frame_ms = _time_ms()
 
-        ts_ms    = int(sample.pts_ns // 1_000_000) if sample.pts_ns >= 0 else -1
-        frame_id = getattr(sample, "frame_id", frame_count)
+        # Detect, then align, embed and match every face of this frame.
+        tensors = [_tensor_to_np(t)
+                   for t in _collect_tensors(_joined_field(sample, "detections", 1))]
+        faces = decode_scrfd(tensors, cfg.conf_threshold, cfg.nms_iou, cfg.top_k,
+                             cfg.keep_top_k, pad_l, pad_t, scale)
+        matches: List[Tuple[str, float]] = []
+        if faces:
+            bgr = _tensor_to_bgr(_first_tensor(_joined_field(sample, "frame", 0)))
+            for face in faces:
+                embedding = embed_face(arcface_run, bgr, face["landmarks"], cfg.timeout_ms)
+                matches.append(match_embedding(embedding, gallery, cfg.match_threshold,
+                                               cfg.match_margin, cfg.unknown_label))
 
-        det_field   = _joined_field(sample, "detections", 1)
-        frame_field = _joined_field(sample, "frame", 0)
-
-        tensors = [_tensor_to_np(t) for t in _collect_tensors(det_field)]
-        dets = decode_scrfd(
-            tensors, cfg.conf_threshold, cfg.nms_iou,
-            cfg.top_k, cfg.keep_top_k, cfg.infer_w, cfg.infer_h,
-            cfg.num_anchors, pad_l, pad_t, scale,
-        )
-
-        # Run recognition at recog_interval, or immediately when detections reorder.
-        # Detection reorder: SCRFD sorts by score; if two faces' scores cross between
-        # recog runs, index 0 and 1 swap, assigning the wrong cached label to each face.
-        # Detect this by checking whether each current box centre is still closest to
-        # the same-index cached position, and force a fresh recognition if not.
-        def _reordered(cur_dets, centroids):
-            for i, d in enumerate(cur_dets):
-                cx = (d["x1"] + d["x2"]) / 2
-                cy = (d["y1"] + d["y2"]) / 2
-                d2_same = (cx - centroids[i][0]) ** 2 + (cy - centroids[i][1]) ** 2
-                # Displacement check: if the face moved more than one face-width it is
-                # almost certainly a different person, even when len(centroids) == 1
-                # (where the any() below would produce an empty sequence and miss it).
-                face_w = d["x2"] - d["x1"]
-                if d2_same > face_w * face_w:
-                    return True
-                if any((cx - centroids[j][0]) ** 2 + (cy - centroids[j][1]) ** 2 < d2_same
-                       for j in range(len(centroids)) if j != i):
-                    return True
-            return False
-
-        need_recog = bool(dets) and (
-            (frame_count - last_recog_frame) >= cfg.recog_interval
-            or len(dets) != len(cached_labels)
-            or (cached_centroids and _reordered(dets, cached_centroids))
-        )
-        if need_recog:
-            # NV12→BGR only on frames that actually re-embed (≈1 in recog_interval).
-            bgr = _tensor_to_bgr(_first_tensor(frame_field))
-            cached_labels    = []
-            cached_sims      = []
-            cached_centroids = []
-            for det in dets:
-                crop = align_face(bgr, det["landmarks"])
-                f32  = preprocess_arcface(crop)
-                if not arc_run.push([_tensor_from_f32(f32)]):
-                    raise RuntimeError("ArcFace push failed: " + arc_run.last_error())
-                arc_sample = arc_run.pull(timeout_ms=cfg.timeout_ms)
-                if arc_sample is None:
-                    raise RuntimeError("ArcFace timeout during recognition — pipeline stalled")
-                emb = _tensor_to_np(_collect_tensors(arc_sample)[0]).flatten().astype(np.float32)
-                emb = _l2_normalize(emb)
-                label, sim = match_embedding(
-                    emb, gallery,
-                    cfg.match_threshold, cfg.match_margin, cfg.unknown_label,
-                )
-                cached_labels.append(label)
-                cached_sims.append(sim)
-                cached_centroids.append(((det["x1"] + det["x2"]) / 2,
-                                         (det["y1"] + det["y2"]) / 2))
-            last_recog_frame = frame_count
-        elif not dets or len(dets) != len(cached_labels):
-            cached_labels    = []
-            cached_sims      = []
-            cached_centroids = []
-
-        # Per-frame console output in test mode (mirrors C++ --test output)
-        if test_mode and dets:
-            for i, det in enumerate(dets):
-                label = cached_labels[i] if i < len(cached_labels) else cfg.unknown_label
-                sim   = cached_sims[i]   if i < len(cached_sims)   else -1.0
-                print(f"  face[{i}] → {label}  similarity={sim:.4f}")
-
-        # Publish metadata to Insight
-        if cfg.insight_host and metadata_sender:
-            fw = float(frame_w)
-            fh = float(frame_h)
+        if metadata_sender:
             objects = []
-            for i, det in enumerate(dets):
-                label = cached_labels[i] if i < len(cached_labels) else cfg.unknown_label
-                sim   = cached_sims[i]   if i < len(cached_sims)   else -1.0
-                cx1 = max(0.0, min(det["x1"], fw))
-                cy1 = max(0.0, min(det["y1"], fh))
-                cx2 = max(cx1, min(det["x2"], fw))
-                cy2 = max(cy1, min(det["y2"], fh))
+            for i, (face, (label, similarity)) in enumerate(zip(faces, matches)):
+                x1 = max(0.0, min(face["x1"], float(frame_w)))
+                y1 = max(0.0, min(face["y1"], float(frame_h)))
+                x2 = max(x1, min(face["x2"], float(frame_w)))
+                y2 = max(y1, min(face["y2"], float(frame_h)))
                 objects.append({
                     "id":         f"face_{i + 1}",
                     "label":      label,
-                    "confidence": float(det["score"]),
-                    "similarity": float(sim),
-                    "bbox":       [cx1, cy1, cx2 - cx1, cy2 - cy1],
+                    "confidence": float(face["score"]),
+                    "similarity": float(similarity),
+                    "bbox":       [x1, y1, x2 - x1, y2 - y1],
                 })
-            data_json = json.dumps({"objects": objects}, separators=(",", ":"))
+            # Insight pairs this message with the video frame that carries the same timestamp.
+            timestamp_ms = int(sample.pts_ns // 1_000_000) if sample.pts_ns >= 0 else -1
+            frame_id = sample.frame_id if sample.frame_id >= 0 else frame_count
             metadata_sender.send_metadata(
-                "object-detection", data_json, ts_ms, str(frame_id)
+                "object-detection", json.dumps({"objects": objects}, separators=(",", ":")),
+                timestamp_ms, str(frame_id),
             )
 
         frame_count += 1
-        processed   += 1
+        if test_mode or frame_count % 100 == 0:
+            if not test_mode:
+                print(f"[{frame_count}] faces={len(matches)}")
+            for i, (label, similarity) in enumerate(matches):
+                print(f"  face[{i}] → {label}  similarity={similarity:.4f}")
 
-    elapsed_s = (_time_ms() - start_ms) / 1000.0
-    fps_out = processed / elapsed_s if elapsed_s > 0 else 0.0
-    print(f"processed={processed} fps={fps_out:.1f}")
-
-    scrfd_run.close()
-    arc_run.close()
+    elapsed_s = (_time_ms() - first_frame_ms) / 1000.0 if first_frame_ms is not None else 0.0
+    run.close()
+    arcface_run.close()
+    print(f"processed={frame_count} fps={frame_count / max(elapsed_s, 0.001):.1f}")
     return 0
 
 
@@ -1054,109 +932,76 @@ def run_recognition(cfg: AppConfig, gallery: List[GalleryEntry], max_frames: int
 
 def _parse_args(argv):
     p = argparse.ArgumentParser(
-        description="Face recognizer — Python (SCRFD + ArcFace on SiMa.ai Modalix)"
+        description="Face recognizer: SCRFD detection + ArcFace recognition on SiMa.ai Modalix"
     )
-    p.add_argument("--config",       type=Path,  default=_DEFAULT_CONFIG)
-    p.add_argument("--input",        type=str,   default=None)
-    p.add_argument("--gallery",      type=str,   default=None)
-    p.add_argument("--scrfd-model",  type=str,   default=None)
-    p.add_argument("--arcface-model",type=str,   default=None)
-    p.add_argument("--max-frames",   type=int,   default=0)
-    p.add_argument("--test",         action="store_true")
-    p.add_argument("--enroll",       action="store_true")
-    p.add_argument("--video",        type=str,   default=None)
-    p.add_argument("--name",         type=str,   default=None)
-    p.add_argument("--sample-every", type=int,   default=5)
-    p.add_argument("--min-score",    type=float, default=0.75)
+    p.add_argument("--config",        type=Path, default=_DEFAULT_CONFIG)
+    p.add_argument("--input",
+                   help="RTSP URL or H.264 video file; replaces the config input")
+    p.add_argument("--gallery")
+    p.add_argument("--scrfd-model")
+    p.add_argument("--arcface-model")
+    p.add_argument("--max-frames",    type=int, default=0,
+                   help="stop after N frames (0 = unlimited)")
+    p.add_argument("--test",          action="store_true",
+                   help="print every frame's result; disables Insight output")
+    p.add_argument("--enroll",        action="store_true", help="add people to the gallery")
+    p.add_argument("--images",        help="enrollment folder, one subfolder per person")
+    p.add_argument("--video",         help="enrollment video of one person; needs --name")
+    p.add_argument("--name",          help="the person shown in --video")
+    p.add_argument("--sample-every",  type=int, default=5)
+    p.add_argument("--min-score",     type=float, default=0.75)
+    p.add_argument("--max-per-person", type=int, default=0)
     return p.parse_args(argv)
 
 
 def main(argv=None) -> int:
     args = _parse_args(argv)
-
     try:
+        # config.yaml is loaded first; command-line flags then override it.
         cfg = _load_config(args.config)
-    except Exception as exc:
-        print(f"[ERR] Config error: {exc}", file=sys.stderr)
-        return 1
-
-    # CLI overrides
-    if args.input:
-        cfg.input_uri  = args.input
-        cfg.usb_camera = ""  # --input replaces both input sources
-    if args.gallery:      cfg.gallery_path  = args.gallery
-    if args.scrfd_model:  cfg.scrfd_model   = args.scrfd_model
-    if args.arcface_model:cfg.arcface_model = args.arcface_model
-    if args.max_frames:   cfg.max_frames    = args.max_frames
-    if args.test:         cfg.insight_host  = ""
-
-    try:
+        if args.input:
+            cfg.input_uri  = args.input
+            cfg.usb_camera = ""
+        cfg.gallery_path  = args.gallery or cfg.gallery_path
+        cfg.scrfd_model   = args.scrfd_model or cfg.scrfd_model
+        cfg.arcface_model = args.arcface_model or cfg.arcface_model
+        cfg.max_frames    = args.max_frames
+        if args.test:
+            cfg.insight_host = ""
+        for label, path in (("SCRFD", cfg.scrfd_model), ("ArcFace", cfg.arcface_model)):
+            if not Path(path).is_file():
+                raise RuntimeError(f"{label} model not found: {path}")
         _load_runtime_deps()
-    except Exception as exc:
-        print(f"[ERR] Failed to load runtime dependencies: {exc}", file=sys.stderr)
-        return 1
 
-    if args.enroll:
-        if not args.video:
-            print("[ERR] --enroll requires --video <path>", file=sys.stderr)
-            return 1
-        if not args.name:
-            print("[ERR] --enroll requires --name <identity>", file=sys.stderr)
-            return 1
-        gallery_out = args.gallery or cfg.gallery_path
-        try:
-            return run_enrollment(
-                cfg, args.video, args.name, gallery_out,
-                args.sample_every, args.min_score,
-            )
-        except Exception as exc:
-            print(f"[ERR] Enrollment failed: {exc}", file=sys.stderr)
-            return 2
+        if args.enroll:
+            return run_enrollment(cfg, args.images, args.video, args.name,
+                                  args.sample_every, args.min_score, args.max_per_person)
 
-    # Recognition mode
-    if not cfg.input_uri and not cfg.usb_camera:
-        print("[ERR] no input: set input.uri or input.usb.camera in config.yaml, "
-              "or pass --input", file=sys.stderr)
-        return 1
-    if cfg.input_uri and cfg.usb_camera:
-        print("[ERR] set only one input: input.uri or input.usb.camera", file=sys.stderr)
-        return 1
-    if cfg.usb_camera:
-        if cfg.usb_width <= 0 or cfg.usb_height <= 0 or cfg.usb_fps <= 0:
-            print("[ERR] input.usb.width, input.usb.height and input.usb.fps must be > 0",
-                  file=sys.stderr)
-            return 1
-        # Insight receives the camera's JPEG as RTP/JPEG (RFC 2435): 8-pixel blocks, 2040 at most.
-        sides = (cfg.usb_width, cfg.usb_height)
-        if cfg.insight_host and not all(side % 8 == 0 and side <= 2040 for side in sides):
-            print("[ERR] input.usb.width and input.usb.height must be multiples of 8 and at "
-                  "most 2040 to send the camera's JPEG to Insight", file=sys.stderr)
-            return 1
-    elif cfg.insight_host and not _is_rtsp(cfg.input_uri):
-        print("[ERR] Insight output needs an RTSP or USB camera input; video files run "
-              "offline (clear output.insight.host)", file=sys.stderr)
-        return 1
-    if not cfg.scrfd_model:
-        print("[ERR] scrfd.model not set", file=sys.stderr)
-        return 1
-    if not cfg.arcface_model:
-        print("[ERR] arcface.model not set", file=sys.stderr)
-        return 1
+        if not cfg.input_uri and not cfg.usb_camera:
+            raise RuntimeError("no input: set input.uri or input.usb.camera in config.yaml, "
+                               "or pass --input <rtsp-url|video.mp4>")
+        if cfg.input_uri and cfg.usb_camera:
+            raise RuntimeError("set only one input: input.uri or input.usb.camera")
+        if cfg.usb_camera:
+            if cfg.usb_width <= 0 or cfg.usb_height <= 0 or cfg.usb_fps <= 0:
+                raise RuntimeError("input.usb.width, height and fps must be positive")
+            # RTP/JPEG (RFC 2435) carries 8-pixel blocks and at most 2040 pixels per side.
+            sides = (cfg.usb_width, cfg.usb_height)
+            if cfg.insight_host and not all(s % 8 == 0 and s <= 2040 for s in sides):
+                raise RuntimeError("input.usb.width and height must be multiples of 8 and at "
+                                   "most 2040 to send the camera's JPEG to Insight")
+        elif cfg.insight_host and not _is_rtsp(cfg.input_uri):
+            raise RuntimeError("Insight output needs an RTSP or USB camera input; a video "
+                               "file runs offline (clear output.insight.host)")
 
-    gallery: List[GalleryEntry] = []
-    gallery_path = Path(cfg.gallery_path) if cfg.gallery_path else None
-    if gallery_path and gallery_path.exists():
-        try:
+        gallery: List[GalleryEntry] = []
+        if Path(cfg.gallery_path).exists():
             gallery = load_gallery(cfg.gallery_path)
-            print(f"[GALLERY] Loaded {len(gallery)} identity(ies) from {cfg.gallery_path}")
-        except Exception as exc:
-            print(f"[ERR] Gallery exists but cannot be read: {exc}", file=sys.stderr)
-            return 1
-    else:
-        print("[WARN] No gallery loaded — all faces will be labelled Unknown", file=sys.stderr)
-
-    try:
-        return run_recognition(cfg, gallery, cfg.max_frames, test_mode=args.test)
+            print(f"Gallery: {len(gallery)} people from {cfg.gallery_path}")
+        else:
+            print(f"Warning: no gallery at {cfg.gallery_path}; every face will be labelled "
+                  f"{cfg.unknown_label}", file=sys.stderr)
+        return run_recognition(cfg, gallery, test_mode=args.test)
     except KeyboardInterrupt:
         return 130
     except Exception as exc:

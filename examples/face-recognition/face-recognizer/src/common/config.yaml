@@ -8,9 +8,6 @@ scrfd:
   nms_iou:          0.40      # IoU threshold for NMS
   top_k:            5000      # Max candidates before NMS
   keep_top_k:       100       # Max detections after NMS
-  cls_per_anchor:   1         # 1 for SCRFD (sigmoid), 2 for RetinaFace-style (softmax)
-  num_anchors:      2         # Anchors per spatial location (SCRFD 2.5G = 2)
-  scale_by_stride:  true      # Multiply distance preds by stride before decode
 
 arcface:
   model:            models/w600k_r50.surgery_mpk.tar.gz
@@ -34,10 +31,6 @@ input:
 
 # ── Output ────────────────────────────────────────────────────────────────────
 output:
-  # C++ only: record annotated frames to a video (.mp4) or the first frame to an
-  # image (.jpg/.png); "" → no recording
-  sink:             ""
-
   # Insight viewer (RTSP or USB camera input): set host to the Insight host IP to stream H.264
   # video and face metadata to the Insight Web UI.
   insight:
@@ -52,17 +45,6 @@ match:
                               # Raise margin when >1 person enrolled to prevent cross-ID false positives
   unknown_label:    Unknown
 
-# ── Overlay ───────────────────────────────────────────────────────────────────
-overlay:
-  draw_landmarks:   false     # C++ only: draw the 5 SCRFD keypoints in output.sink recordings
-  draw_score:       true
-
 # ── Runtime ───────────────────────────────────────────────────────────────────
 runtime:
   timeout_ms:       20000
-  recog_interval:   8         # Run ArcFace every N frames (5=default, 8=optimized for >30 FPS)
-                              # At 30 FPS: 8 → ~3.75 re-IDs/sec; identity is stable across seconds
-  supported_fps:    85        # Max input FPS the pipeline can sustain (measured ~87-92 FPS on Modalix,
-                              # 1280x720 RTSP, three faces in view).
-                              # A warning is printed when an RTSP source is faster than this;
-                              # the newest frames are then kept and older ones dropped.

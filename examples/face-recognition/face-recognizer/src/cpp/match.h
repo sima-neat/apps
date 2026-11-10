@@ -15,8 +15,8 @@ struct MatchResult {
 };
 
 struct MatchConfig {
-    float       threshold     = 0.35f;
-    float       margin        = 0.08f;  // min gap between best and second-best score
+    float       threshold     = 0.55f;
+    float       margin        = 0.12f;  // min gap between best and second-best score
     std::string unknown_label = "Unknown";
 };
 

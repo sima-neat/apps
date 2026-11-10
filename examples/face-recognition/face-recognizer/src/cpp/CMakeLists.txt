@@ -24,15 +24,13 @@ if (NOT TARGET SimaNeatApps::sima_neat)
   _sima_neat_apps_ensure_support_runtime("${_APPS_ROOT}")
 endif()
 
-# ── Shared library of processing nodes ───────────────────────────────────────
-# All three executables link this.  Avoids duplicate compilation of the heavy
-# SCRFD decode / alignment code.
+# ── SCRFD decode, alignment, gallery and matching ─────────────────────────────
+# Linked by the application and by its unit test.
 add_library(face_recog_nodes STATIC
   "${_SELF_DIR}/scrfd_decode.cpp"
   "${_SELF_DIR}/align.cpp"
   "${_SELF_DIR}/gallery.cpp"
   "${_SELF_DIR}/match.cpp"
-  "${_SELF_DIR}/overlay.cpp"
 )
 target_link_libraries(face_recog_nodes
   PUBLIC
@@ -45,12 +43,9 @@ target_include_directories(face_recog_nodes
     "${_APPS_ROOT}"
 )
 
-# ── face-recognizer (includes enrollment mode via --enroll flag) ──────────────
-# main() dispatches to enroll.cpp when --enroll is the first argument, so the
-# single installed binary covers both recognition and gallery enrollment.
+# ── face-recognizer (recognition, and enrollment with --enroll) ───────────────
 add_executable(face-recognizer
     "${_SELF_DIR}/main.cpp"
-    "${_SELF_DIR}/enroll.cpp"
 )
 target_link_libraries(face-recognizer
     PRIVATE
@@ -85,15 +80,15 @@ if (BUILD_TESTING)
       PRIVATE face_recog_nodes
     )
     add_test(NAME face-recognizer.unit
-             COMMAND face-recognizer_unit_test
-             WORKING_DIRECTORY "${_APPS_ROOT}")
+      COMMAND face-recognizer_unit_test
+      WORKING_DIRECTORY "${_APPS_ROOT}")
     set_tests_properties(face-recognizer.unit PROPERTIES
       SKIP_RETURN_CODE 77
       LABELS           "unit")
   endif()
 
-  # E2E test: launches the binary with a real SCRFD+ArcFace model and
-  # optional gallery.bin / video input.  Skips (exit 77) when assets are absent.
+  # E2E test: launches the binary with the real SCRFD and ArcFace models, the
+  # bundled clip and an RTSP stream.
   set(_E2E_SRC "${_MOD_ROOT}/tests/cpp/test_e2e.cpp")
   if (EXISTS "${_E2E_SRC}")
     add_executable(face-recognizer_e2e_test "${_E2E_SRC}")
@@ -104,8 +99,8 @@ if (BUILD_TESTING)
       PRIVATE "${_APPS_ROOT}"
     )
     add_test(NAME face-recognizer.e2e
-             COMMAND face-recognizer_e2e_test $<TARGET_FILE:face-recognizer>
-             WORKING_DIRECTORY "${_APPS_ROOT}")
+      COMMAND face-recognizer_e2e_test $<TARGET_FILE:face-recognizer>
+      WORKING_DIRECTORY "${_APPS_ROOT}")
     set_tests_properties(face-recognizer.e2e PROPERTIES
       SKIP_RETURN_CODE 77
       LABELS           "e2e")

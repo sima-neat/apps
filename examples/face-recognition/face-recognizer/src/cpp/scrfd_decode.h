@@ -2,15 +2,16 @@
 
 #include "neat.h"
 
+#include <opencv2/core/mat.hpp>
+
 #include <array>
-#include <cstdint>
-#include <optional>
+#include <utility>
 #include <vector>
 
 namespace face_recog {
 
-// Five detected facial landmarks in original-image pixel coordinates.
-// Order: left_eye, right_eye, nose_tip, left_mouth, right_mouth.
+// Five facial landmarks in source-frame pixels:
+// left eye, right eye, nose tip, left mouth corner, right mouth corner.
 using Landmarks = std::array<float, 10>;
 
 struct Detection {
@@ -19,55 +20,40 @@ struct Detection {
     Landmarks landmarks{};
 };
 
-// Preprocessing bookkeeping so we can map 640×640 output back to original pixels.
-struct PadMeta {
-    int orig_w  = 0, orig_h  = 0;
-    int pad_w   = 0, pad_h   = 0;  // padded dimensions (before resize to 640×640)
-    int pad_top = 0, pad_left = 0;
+// How a source frame was letterboxed into the SCRFD input, to map detections back.
+struct Letterbox {
+    float scale    = 1.f;  // source pixels * scale = model-input pixels
+    int   pad_left = 0;
+    int   pad_top  = 0;
 };
 
 struct ScrfdConfig {
-    float conf_threshold  = 0.50f;
-    float nms_iou         = 0.40f;
-    int   top_k           = 5000;
-    int   keep_top_k      = 100;
-    int   infer_w         = 640;
-    int   infer_h         = 640;
-    // SCRFD 2.5G: 2 anchors/location, 1 class logit per anchor (sigmoid).
-    int   cls_per_anchor  = 1;
-    int   num_anchors     = 2;
-    // If true, multiply bbox/kps distance predictions by stride before decode.
-    // Set false if the model already pre-scales by stride.
-    bool  scale_by_stride = true;
-    // Tensor index mapping: which tensor index holds each output type at each scale.
-    // Matches scrfd_2.5g_bnkps.mla_mpk DetessDequant output (NHWC, fine→coarse):
-    //   [0,1,2]=cls  [3,4,5]=box  [6,7,8]=kps  (stride 8,16,32 within each group)
-    // Indices are for: fine(stride8)=idx[0], mid(stride16)=idx[1], coarse(stride32)=idx[2].
-    int   cls_tensor_idx[3] = {0, 1, 2};
-    int   box_tensor_idx[3] = {3, 4, 5};
-    int   kps_tensor_idx[3] = {6, 7, 8};
+    float conf_threshold = 0.65f;
+    float nms_iou        = 0.40f;
+    int   top_k          = 5000;  // candidates kept before NMS
+    int   keep_top_k     = 100;   // detections kept after NMS
 };
 
-// Pad-and-letterbox bgr_u8 to infer_w×infer_h (letterbox + normalize /255, RGB FP32).
-std::pair<simaai::neat::Tensor, PadMeta>
-preprocess_scrfd(const cv::Mat& bgr_u8, int infer_w = 640, int infer_h = 640);
+// SCRFD 2.5G input size.
+constexpr int kScrfdInputW = 640;
+constexpr int kScrfdInputH = 640;
 
-// Compute letterbox padding metadata from source frame dimensions only — no
-// actual resize or normalize.  Used when EV74 CVU Preproc handles preprocessing
-// so the CPU only needs the pad offsets for coordinate un-mapping.
-PadMeta compute_pad_meta_only(int frame_w, int frame_h, int infer_w, int infer_h);
+Letterbox letterbox_for(int frame_w, int frame_h);
 
-// Tensor layout: [cls×3, box×3, kps×3] at strides 8,16,32 — matches
-//   scrfd_2.5g_bnkps.mla_mpk DetessDequant NHWC output order.
-std::vector<Detection> decode_scrfd(
-    const std::vector<simaai::neat::Tensor>& tensors,
-    const ScrfdConfig& cfg,
-    const PadMeta& meta);
+// Letterboxes a BGR image to the SCRFD input (black bars, RGB, [0,1] float32), the same
+// preprocessing the EV74 runs for decoded video frames. Used for still images.
+std::pair<simaai::neat::Tensor, Letterbox> preprocess_scrfd(const cv::Mat& bgr);
 
-// Collect all leaf tensors from a Neat Sample (handles Tensor/TensorSet/Bundle).
+// Decodes the nine SCRFD 2.5G output tensors (scores, boxes, landmarks at strides 8, 16
+// and 32) into detections in source-frame pixels, highest score first.
+std::vector<Detection> decode_scrfd(const std::vector<simaai::neat::Tensor>& tensors,
+                                    const ScrfdConfig& cfg, const Letterbox& letterbox);
+
+// Leaf tensors of a sample (Tensor, TensorSet or Bundle).
 std::vector<simaai::neat::Tensor> collect_tensors(const simaai::neat::Sample& sample);
 
 std::vector<float> tensor_to_f32(const simaai::neat::Tensor& t);
+
 simaai::neat::Tensor tensor_from_hwc_f32(const cv::Mat& hwc_f32);
 
 } // namespace face_recog
