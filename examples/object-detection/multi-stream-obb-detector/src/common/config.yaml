@@ -16,7 +16,7 @@ inference:                   # Detection controls.
   max_inflight_per_stream: 4 # Decoded frames admitted per stream to the shared detector. -1 uses the Core default.
   max_inflight_total: 16     # Decoded frames admitted across all streams. -1 uses the Core default.
   min_score: 0.30            # Detection score threshold.
-  max_detections: 300        # Max oriented boxes kept per frame.
+  max_detections: 100        # Max oriented boxes kept per frame.
 
 output:                      # Insight output plus optional local debug saves.
   insight:                   # Live video and metadata destination.

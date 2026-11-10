@@ -125,7 +125,7 @@ To also save annotated frames, set `output.save_every` to a positive interval. E
 - Replace all placeholder stream URLs and the Insight host before running.
 - `oriented boxes require equal authoritative affine scales`: Neat could not scale the stream's frames to the model input by the same factor on both axes. 1280x720 and 1920x1080 streams work; a 640x512 stream fails. Re-encode the stream to 1280x720.
 - Few or no detections: check that the video looks straight down at the ground. Lower `inference.min_score` if objects are present but missed, and raise it if the overlay shows boxes on background.
-- Python output falls below the stream rate on dense scenes: lower `inference.max_detections`. Each box adds to the metadata sent to Insight; at the default 300 with four dense 30 fps streams, C++ keeps about 28 fps per stream and Python about 20 to 27 fps.
+- Boxes are missing on dense scenes: raise `inference.max_detections`. Each box adds to the metadata sent to Insight. At 300 with four dense 30 fps streams, C++ keeps about 28 fps per stream and Python about 20 to 27 fps.
 - Insight shows upright boxes: the installed Insight does not draw `oriented_bbox`. Update Insight.
 - MJPEG frames reach Insight as RTP/JPEG, which carries at most 2040 pixels per side. Use MJPEG streams of 1080p or smaller.
 - Verify host and UDP port ranges if Insight receives no output.

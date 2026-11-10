@@ -121,7 +121,7 @@ class TestConfig:
         assert cfg.max_inflight_per_stream == 4
         assert cfg.max_inflight_total == 16
         assert cfg.min_score == pytest.approx(0.30)
-        assert cfg.max_detections == 300
+        assert cfg.max_detections == 100
         assert cfg.video_port_base == 9000
         assert cfg.metadata_port_base == 9100
         assert cfg.debug_dir == ""

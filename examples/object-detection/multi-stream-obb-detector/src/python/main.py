@@ -169,7 +169,7 @@ def load_app_config(config_path: Path) -> AppConfig:
         max_inflight_per_stream=setting(raw, "inference.max_inflight_per_stream", 4, int),
         max_inflight_total=setting(raw, "inference.max_inflight_total", 16, int),
         min_score=setting(raw, "inference.min_score", 0.30, float),
-        max_detections=setting(raw, "inference.max_detections", 300, int),
+        max_detections=setting(raw, "inference.max_detections", 100, int),
         insight_host=setting(raw, "output.insight.host", "", str),
         video_port_base=setting(raw, "output.insight.video_port_base", 9000, int),
         metadata_port_base=setting(raw, "output.insight.metadata_port_base", 9100, int),

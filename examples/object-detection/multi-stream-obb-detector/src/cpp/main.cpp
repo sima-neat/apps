@@ -71,7 +71,7 @@ struct AppConfig {
   int max_inflight_per_stream = 4;
   int max_inflight_total = 16;
   double min_score = 0.30;
-  int max_detections = 300;
+  int max_detections = 100;
   std::string insight_host;
   int video_port_base = 9000;
   int metadata_port_base = 9100;
@@ -208,7 +208,7 @@ AppConfig load_app_config(const fs::path& config_path) {
   cfg.max_inflight_per_stream = raw.int_or("inference.max_inflight_per_stream", 4);
   cfg.max_inflight_total = raw.int_or("inference.max_inflight_total", 16);
   cfg.min_score = raw.double_or("inference.min_score", 0.30);
-  cfg.max_detections = raw.int_or("inference.max_detections", 300);
+  cfg.max_detections = raw.int_or("inference.max_detections", 100);
   cfg.insight_host = raw.string_or("output.insight.host", "");
   cfg.video_port_base = raw.int_or("output.insight.video_port_base", 9000);
   cfg.metadata_port_base = raw.int_or("output.insight.metadata_port_base", 9100);
