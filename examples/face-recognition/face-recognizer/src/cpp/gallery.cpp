@@ -3,145 +3,107 @@
 #include <cmath>
 #include <cstring>
 #include <fstream>
-#include <numeric>
 #include <stdexcept>
 
 namespace face_recog {
 
-static constexpr char kMagic[8] = {'F','R','G','A','L','1','\n','\0'};
-static constexpr uint32_t kVersion = 3;  // v3 adds float32[512] raw_mean after sample_count
+namespace {
 
-// ── l2-normalization ──────────────────────────────────────────────────────────
+constexpr char kMagic[8] = {'F', 'R', 'G', 'A', 'L', '1', '\n', '\0'};
 
-void l2_normalize(Embedding& emb) {
-    float norm2 = 0.f;
-    for (float v : emb) norm2 += v * v;
-    if (norm2 < 1e-12f) return;
-    const float inv = 1.f / std::sqrt(norm2);
-    for (float& v : emb) v *= inv;
+template <typename T> void write_value(std::ofstream& out, const T& value) {
+  out.write(reinterpret_cast<const char*>(&value), sizeof(value));
 }
 
-// ── persistence ───────────────────────────────────────────────────────────────
+template <typename T> T read_value(std::ifstream& in) {
+  T value{};
+  in.read(reinterpret_cast<char*>(&value), sizeof(value));
+  return value;
+}
 
-void save_gallery(const Gallery& g, const std::filesystem::path& path) {
-    std::ofstream f(path, std::ios::binary | std::ios::trunc);
-    if (!f)
-        throw std::runtime_error("save_gallery: cannot open for writing: " + path.string());
+} // namespace
 
-    f.write(kMagic, 8);
-    const uint32_t ver = kVersion;
-    f.write(reinterpret_cast<const char*>(&ver), 4);
-    const uint32_t n = static_cast<uint32_t>(g.entries.size());
-    f.write(reinterpret_cast<const char*>(&n), 4);
-
-    for (const auto& e : g.entries) {
-        if (e.embedding.size() != kEmbeddingDim)
-            throw std::runtime_error("save_gallery: embedding dim mismatch for '" + e.name + "'");
-        const uint16_t nl = static_cast<uint16_t>(e.name.size());
-        f.write(reinterpret_cast<const char*>(&nl), 2);
-        f.write(e.name.data(), nl);
-        f.write(reinterpret_cast<const char*>(e.embedding.data()),
-                kEmbeddingDim * sizeof(float));
-        f.write(reinterpret_cast<const char*>(&e.sample_count), 4);
-        // v3: raw_mean is the unnormalized mean (weighted_sum/count) before L2-norm,
-        // so re-enrollment can reconstruct the original weighted sum accurately.
-        const Embedding& rm = (e.raw_mean.size() == kEmbeddingDim) ? e.raw_mean : e.embedding;
-        f.write(reinterpret_cast<const char*>(rm.data()), kEmbeddingDim * sizeof(float));
+void Gallery::add(const std::string& name, const Embedding& embedding) {
+  if (embedding.size() != kEmbeddingDim) {
+    throw std::runtime_error("embedding for '" + name + "' does not have 512 values");
+  }
+  for (auto& person : people) {
+    if (person.name == name) {
+      const float count = static_cast<float>(person.samples);
+      for (std::size_t i = 0; i < embedding.size(); ++i) {
+        person.mean[i] = (person.mean[i] * count + embedding[i]) / (count + 1.0f);
+      }
+      ++person.samples;
+      return;
     }
+  }
+  people.push_back({name, embedding, 1});
+}
 
-    f.close();
-    if (!f)
-        throw std::runtime_error("save_gallery: write error: " + path.string());
+void l2_normalize(Embedding& embedding) {
+  float squared = 0.0f;
+  for (const float value : embedding) {
+    squared += value * value;
+  }
+  if (squared <= 0.0f) {
+    return;
+  }
+  const float scale = 1.0f / std::sqrt(squared);
+  for (float& value : embedding) {
+    value *= scale;
+  }
+}
+
+void save_gallery(const Gallery& gallery, const std::filesystem::path& path) {
+  for (const auto& person : gallery.people) {
+    if (person.mean.size() != kEmbeddingDim || person.name.size() > UINT16_MAX) {
+      throw std::runtime_error("gallery entry '" + person.name + "' cannot be saved");
+    }
+  }
+
+  const std::filesystem::path temporary = path.string() + ".tmp";
+  std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
+  out.write(kMagic, sizeof(kMagic));
+  write_value(out, static_cast<std::uint32_t>(gallery.people.size()));
+  for (const auto& person : gallery.people) {
+    write_value(out, static_cast<std::uint16_t>(person.name.size()));
+    out.write(person.name.data(), static_cast<std::streamsize>(person.name.size()));
+    write_value(out, person.samples);
+    out.write(reinterpret_cast<const char*>(person.mean.data()), kEmbeddingDim * sizeof(float));
+  }
+  out.close();
+  if (!out) {
+    std::filesystem::remove(temporary);
+    throw std::runtime_error("failed to write gallery: " + path.string());
+  }
+  std::filesystem::rename(temporary, path);
 }
 
 Gallery load_gallery(const std::filesystem::path& path) {
-    std::ifstream f(path, std::ios::binary);
-    if (!f)
-        throw std::runtime_error("load_gallery: cannot open: " + path.string());
+  std::ifstream in(path, std::ios::binary);
+  char magic[sizeof(kMagic)] = {};
+  in.read(magic, sizeof(magic));
+  if (!in || std::memcmp(magic, kMagic, sizeof(kMagic)) != 0) {
+    throw std::runtime_error("not a face-recognizer gallery: " + path.string());
+  }
 
-    char magic[8];
-    f.read(magic, 8);
-    if (std::memcmp(magic, kMagic, 8) != 0)
-        throw std::runtime_error("load_gallery: invalid magic in: " + path.string());
-
-    uint32_t ver = 0;
-    f.read(reinterpret_cast<char*>(&ver), 4);
-    if (ver < 1 || ver > 3)
-        throw std::runtime_error("load_gallery: unsupported version " + std::to_string(ver));
-
-    uint32_t n = 0;
-    f.read(reinterpret_cast<char*>(&n), 4);
-    if (!f)
-        throw std::runtime_error("load_gallery: truncated header: " + path.string());
-
-    Gallery g;
-    g.entries.reserve(n);
-
-    for (uint32_t i = 0; i < n; ++i) {
-        uint16_t nl = 0;
-        f.read(reinterpret_cast<char*>(&nl), 2);
-        if (!f)
-            throw std::runtime_error("load_gallery: truncated file reading name length: " + path.string());
-        std::string name(nl, '\0');
-        f.read(name.data(), nl);
-        Embedding emb(kEmbeddingDim);
-        f.read(reinterpret_cast<char*>(emb.data()), kEmbeddingDim * sizeof(float));
-        if (!f)
-            throw std::runtime_error("load_gallery: truncated file: " + path.string());
-        uint32_t sample_count = 1;
-        if (ver >= 2) {
-            f.read(reinterpret_cast<char*>(&sample_count), 4);
-            if (!f)
-                throw std::runtime_error("load_gallery: truncated file reading sample_count: " + path.string());
-        }
-        // v3: read the unnormalized mean for accurate re-enrollment weight reconstruction.
-        // For v1/v2, approximate with the normalized embedding (introduces small error on re-enroll).
-        Embedding raw_mean(kEmbeddingDim);
-        if (ver >= 3) {
-            f.read(reinterpret_cast<char*>(raw_mean.data()), kEmbeddingDim * sizeof(float));
-            if (!f)
-                throw std::runtime_error("load_gallery: truncated file reading raw_mean: " + path.string());
-        } else {
-            raw_mean = emb;
-        }
-        g.entries.push_back({std::move(name), std::move(emb), std::move(raw_mean), sample_count});
+  Gallery gallery;
+  const auto count = read_value<std::uint32_t>(in);
+  for (std::uint32_t i = 0; i < count && in; ++i) {
+    Person person;
+    person.name.resize(read_value<std::uint16_t>(in));
+    in.read(person.name.data(), static_cast<std::streamsize>(person.name.size()));
+    person.samples = read_value<std::uint32_t>(in);
+    person.mean.resize(kEmbeddingDim);
+    in.read(reinterpret_cast<char*>(person.mean.data()), kEmbeddingDim * sizeof(float));
+    if (in) {
+      gallery.people.push_back(std::move(person));
     }
-
-    return g;
-}
-
-// ── GalleryBuilder ────────────────────────────────────────────────────────────
-
-void GalleryBuilder::add(const std::string& name, const Embedding& raw_emb, uint32_t count) {
-    for (auto& acc : accum) {
-        if (acc.name == name) {
-            for (size_t j = 0; j < raw_emb.size(); ++j)
-                acc.weighted_sum[j] += raw_emb[j] * static_cast<float>(count);
-            acc.total_count += count;
-            return;
-        }
-    }
-    Embedding ws(raw_emb.size());
-    for (size_t j = 0; j < raw_emb.size(); ++j)
-        ws[j] = raw_emb[j] * static_cast<float>(count);
-    accum.push_back({name, std::move(ws), count});
-}
-
-Gallery GalleryBuilder::finish() const {
-    Gallery g;
-    g.entries.reserve(accum.size());
-    for (const auto& acc : accum) {
-        if (acc.total_count == 0) continue;
-        // raw_mean = weighted_sum / count (unnormalized); stored so re-enrollment can
-        // reconstruct the original weighted sum as raw_mean * count without magnitude loss.
-        Embedding raw_mean = acc.weighted_sum;
-        const float inv = 1.f / static_cast<float>(acc.total_count);
-        for (float& v : raw_mean) v *= inv;
-        Embedding normalized = raw_mean;
-        l2_normalize(normalized);
-        g.entries.push_back({acc.name, std::move(normalized), std::move(raw_mean), acc.total_count});
-    }
-    return g;
+  }
+  if (!in || gallery.people.size() != count) {
+    throw std::runtime_error("gallery is truncated: " + path.string());
+  }
+  return gallery;
 }
 
 } // namespace face_recog

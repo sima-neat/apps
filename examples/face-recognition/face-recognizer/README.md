@@ -6,7 +6,7 @@
 | --- | --- |
 | Category | face-recognition |
 | Difficulty | Advanced |
-| Tags | face-detection, face-recognition, scrfd, arcface, rtsp, usb-camera, enrollment, bf16, mla-tessellation |
+| Tags | face-recognition, face-detection, scrfd, arcface, rtsp, usb-camera, insight |
 | Languages | C++, Python |
 | Status | stable |
 | Binary Name | face-recognizer |
@@ -14,7 +14,11 @@
 
 ## Concept
 
-Real-time face detection and recognition on Modalix with SCRFD and ArcFace, both BF16 MLA-tessellated. Every face is recognized on every frame; a 720p video with two faces runs at about 45 FPS.
+Names the people in an RTSP stream, a USB camera or a video file with SCRFD face detection and ArcFace recognition, and sends the video with each face's box and name to Insight.
+
+SCRFD finds each face and its five landmarks, ArcFace turns the aligned face into a 512-value embedding, and the embedding is matched against a gallery of enrolled people.
+
+A live source is sent to Insight as it arrives, with no re-encoding, and decoded once for the model. Each decoded frame goes to SCRFD and is also returned to the application, joined by frame, so every face is cropped from the frame it was found in. The application then aligns, embeds and matches every face of every frame; each face adds one ArcFace run of about 10 ms. `--enroll` builds the gallery with the same detection, alignment and embedding steps.
 
 ## Preview
 
@@ -22,11 +26,13 @@ Real-time face detection and recognition on Modalix with SCRFD and ArcFace, both
 
 ## Prerequisites
 
-- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
-- An H.264 RTSP stream, an H.264 video file, or a USB (UVC) MJPEG camera plugged into the target as input.
-- An [Insight](https://developer.sima.ai/software/tools/insight/) host reachable from the target for viewing the live video with face boxes and names (optional).
+- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on the Modalix DevKit, or in a Neat SDK container paired with it.
+- An RTSP H.264 source or a USB (UVC) MJPEG camera plugged into the DevKit, and an [Insight](https://developer.sima.ai/software/tools/insight/) URL reachable from the target. An H.264 video file runs without Insight.
+- One or more images of each person to recognize.
 
 ## Install Apps
+
+Install on the Modalix DevKit, or under `/workspace` in a Neat SDK container paired with it. Only the example itself must run on the DevKit. `sima-cli neat install apps` also offers to install the compatible Neat Library and Insight, and skips them when they are up to date. To keep the Neat Library and Insight you have without being asked, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps`. See [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
 
 Install the latest Neat Apps runtime and enter the installed bundle:
 
@@ -40,43 +46,62 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-Download the pre-compiled model packages from the Model Zoo:
+| Model file | Role |
+| --- | --- |
+| `scrfd_2.5g_bnkps.mla_mpk.tar.gz` | Face detector |
+| `w600k_r50.surgery_mpk.tar.gz` | Face embedding (ArcFace) |
+
+Model packages come from the Model Zoo release below, which can differ from the installed platform version. The example needs both.
 
 ```bash
 export MODELZOO_VERSION="3.0.0"
-mkdir -p ${APP_DIR}/models
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/scrfd_2.5g_bnkps.mla_mpk.tar.gz" -d ${APP_DIR}/models/
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/w600k_r50.surgery_mpk.tar.gz" -d ${APP_DIR}/models/
+mkdir -p models
+cd models
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/scrfd_2.5g_bnkps.mla_mpk.tar.gz"
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/w600k_r50.surgery_mpk.tar.gz"
+cd ..
 ```
 
-## Enroll Faces
+`model.scrfd` and `model.arcface` in the config already point at these files.
 
-Build a gallery before running recognition. Each invocation is additive — run once per person. When re-enrolling an existing identity, sample counts from the previous enrollment are preserved so centroids stay correctly weighted.
+## Enroll People
+
+Put the images in one folder per person, named after the person. Each image should show only that person's face:
+
+```text
+people/
+  Alice/front.jpg
+  Alice/side.jpg
+  Bob/front.jpg
+```
+
+Set `enrollment.images_dir` in `${APP_DIR}/src/common/config.yaml` to that folder, then run the example with `--enroll`:
 
 ```bash
-# From a video clip:
-${APP_DIR}/src/cpp/pre-built/face-recognizer --enroll \
-    --config ${APP_DIR}/src/common/config.yaml \
-    --video  /path/to/alice.mp4 --name "Alice" \
-    --gallery ${APP_DIR}/gallery.bin
-
-# From an image folder (one subdirectory per identity):
-#   gallery_images/Alice/photo1.jpg, photo2.jpg …
-${APP_DIR}/src/cpp/pre-built/face-recognizer --enroll \
-    --config ${APP_DIR}/src/common/config.yaml \
-    --images gallery_images/ \
-    --gallery ${APP_DIR}/gallery.bin
+./${APP_DIR}/src/cpp/pre-built/face-recognizer \
+  --config ${APP_DIR}/src/common/config.yaml --enroll
 ```
+
+```text
+[enroll] Alice: front.jpg score=0.812
+[enroll] Alice: side.jpg score=0.790
+[enroll] Bob: front.jpg score=0.845
+enrolled=3 skipped=0 people=2 gallery=sandbox/face-recognizer/gallery.bin
+```
+
+An image is skipped when its best face scores below `enrollment.min_score`. To enroll one person from a video instead, set `enrollment.video_path` and `enrollment.name`. Running `--enroll` again adds to the people already in the gallery; delete the file at `gallery.path` to start over. The Python application takes the same flag and writes the same file.
+
+## Prepare Insight
+
+[Insight](https://developer.sima.ai/software/tools/insight/) can host the input stream and render the video with a box and name on each face. Install videos directly from the Insight catalog or through Insight's YouTube support.
+
+In the Insight Web UI, start the required stream and copy its RTSP source URL. The stream must be H.264. Use a host and published port that the target can reach, not `localhost` and not an address only Insight's own machine can resolve.
 
 ## Configure
 
-Open `${APP_DIR}/src/common/config.yaml` and set:
+Open `${APP_DIR}/src/common/config.yaml`. Set `source.type` and the matching `source.rtsp`, `source.usb` or `source.video_file` section (only that section is read), and the Insight host and video and metadata ports. Keep `inference.frames` at `0` to run until you stop the application.
 
-- `input.uri` — an H.264 RTSP stream (`rtsp://<HOST>:<PORT>/<STREAM>`) or an H.264 video file. For a USB camera, leave it empty and set `input.usb` instead (see below).
-- `gallery.path` — the gallery built in [Enroll Faces](#enroll-faces) (default `gallery.bin`).
-- `output.insight.host` — the Insight host IP to view live results from an RTSP input; leave empty to run headless.
-
-To use a USB camera, set `input.usb.camera` to its stable ID, and `input.usb.width`, `input.usb.height`, and `input.usb.fps` to an MJPEG mode the camera lists. List the connected camera IDs and modes on the target:
+To use a USB camera, set `source.type: usb`, `source.usb.camera` to its stable ID, and `source.usb.width`, `source.usb.height`, and `source.usb.fps` to an MJPEG mode the camera lists. List the connected camera IDs and modes on the DevKit:
 
 ```bash
 source ~/pyneat/bin/activate
@@ -84,68 +109,71 @@ python3 -c "import pyneat; print(pyneat.usb_camera_ids())"
 v4l2-ctl --list-devices && v4l2-ctl -d /dev/video<N> --list-formats-ext
 ```
 
-Insight receives the stream as the source sent it, with no re-encoding: H.264 from an RTSP stream, JPEG (as RTP/JPEG) from a USB camera. RTP/JPEG carries sizes up to 2040 pixels per side in multiples of 8. The same stream is decoded on the hardware decoder for face detection; a USB camera decodes in its own sampling (most webcams send 4:2:2 MJPEG, which decodes to NV16). An unknown ID or an unsupported mode fails at startup with the connected IDs or the camera's MJPEG modes; close other programs that hold the camera.
+The camera's own JPEG goes to Insight unchanged as RTP/JPEG, so view it with an Insight version that shows JPEG channels. RTP/JPEG carries sizes up to 2040 pixels per side in multiples of 8.
 
-The remaining settings are optional; see [Tuning](#tuning).
+With `source.type: video_file` the example prints each frame's result instead of sending it to Insight, and stops at the end of the file.
+
+| Setting | Default | Effect |
+| --- | --- | --- |
+| `match.threshold` | `0.55` | Lowest similarity that names a person. Raise it for fewer wrong names. |
+| `match.margin` | `0.12` | Lead the best match needs over the second best. Raise it when enrolled people look alike. |
+| `inference.min_score` | `0.65` | Face detection score threshold. Lower it for small or partly hidden faces. |
+| `inference.max_faces` | `100` | Most faces recognized per frame. Lower it to bound the frame time in crowded scenes. |
 
 ## Run
 
-**C++:**
+### C++
 
 ```bash
 ./${APP_DIR}/src/cpp/pre-built/face-recognizer \
-    --config ${APP_DIR}/src/common/config.yaml
+  --config ${APP_DIR}/src/common/config.yaml
 ```
 
-**Python** (requires `pyneat`, `numpy`, `opencv-python`, and `PyYAML` on the device):
+### Python
 
 ```bash
+source ~/pyneat/bin/activate
+pip install -r ${APP_DIR}/src/python/requirements.txt
 python3 ${APP_DIR}/src/python/main.py \
-    --config ${APP_DIR}/src/common/config.yaml
+  --config ${APP_DIR}/src/common/config.yaml
 ```
 
-Python enrollment uses the same flags as C++: `python3 ${APP_DIR}/src/python/main.py --enroll --images gallery_images/ --gallery ${APP_DIR}/gallery.bin`.
+## Expected Result
 
-With an RTSP or USB camera input and `output.insight.host` set, both implementations send the video and each face's box, name, and similarity to Insight on channel 0, and Insight draws the boxes. Video files run offline and print the recognized names every 100 frames; `--test` prints them for every frame.
+The application prints the source and the number of enrolled people on startup:
 
-**Optional overrides:**
+```text
+source=1280x720@30 people=2 insight=<insight-host> video=9000 metadata=9100
+```
 
-| Flag | Description |
-|---|---|
-| `--input <uri>` | Use this RTSP URL or video file instead of `input.uri` or `input.usb.camera` |
-| `--gallery <path>` | Override `gallery.path` in config |
-| `--scrfd-model <path>` | Override `scrfd.model` in config |
-| `--arcface-model <path>` | Override `arcface.model` in config |
-| `--rtsp-fps <n>` | C++ only: force the RTSP frame rate when the stream does not report one |
-| `--max-frames <n>` | Stop after N frames (0 = unlimited) |
-| `--test` | Print the result of every frame; disables Insight output |
+Insight then shows the video on channel 0 with a box on each face, labelled with the person's name, or `Unknown` for a face that matches nobody.
 
-**Enrollment flags (with `--enroll`):**
+The packaged config ships `inference.frames: 0`, which runs continuously; stop it with Ctrl-C. With a positive limit, or at the end of a video file, the run ends by itself with a count:
 
-| Flag | Description |
-|---|---|
-| `--video <path>` | Enrollment video; requires `--name` |
-| `--name <name>` | Identity label for `--video` mode |
-| `--images <dir>` | Enrollment image folder (one subdirectory per identity) |
-| `--gallery <path>` | Gallery file to write or append to |
-| `--sample-every <n>` | Sample 1 frame every N from video (default: 5) |
-| `--min-score <f>` | Minimum SCRFD confidence for enrollment (default: 0.75) |
-| `--max-per-person <n>` | Cap images per identity when using `--images` (default: unlimited) |
+```text
+processed=200 fps=30.0
+```
 
-## Tuning
+A video file prints one line per frame with each face's name and similarity:
 
-| Parameter | Default | Notes |
-|---|---|---|
-| `match.threshold` | `0.55` | Raise to 0.60–0.65 in controlled lighting for fewer false positives |
-| `match.margin` | `0.12` | Raise to 0.15–0.20 when multiple people are enrolled to reduce cross-ID errors |
-| `scrfd.conf_threshold` | `0.65` | Lower to detect smaller or partially-occluded faces |
-| `scrfd.keep_top_k` | `100` | Most faces recognized per frame. Each face adds one ArcFace run (about 10 ms), so lower it to bound the frame time in crowded scenes |
+```text
+frame 1: Alice 0.871, Unknown 0.214
+frame 2: Alice 0.868, Unknown 0.209
+```
+
+## Troubleshooting
+
+- `no gallery at ...; every face is labelled Unknown`: run [Enroll People](#enroll-people) first, with the same `gallery.path`.
+- An enrolled person shows as `Unknown`: enroll more images of them in the lighting and angle of the camera, or lower `match.threshold`.
+- Verify stream reachability if no frame arrives.
+- For a USB camera, an unknown ID or an unsupported mode fails at startup with the connected IDs or the camera's MJPEG modes; close other programs that hold the camera.
+- Verify the Insight host and UDP ports if video and names are absent.
 
 ## Source Files
 
-- C++ recognition and enrollment source: `src/cpp/main.cpp`
-- Python recognition and enrollment source: `src/python/main.py`
-- Shared runtime files: `src/common/`
+- C++ reference source: `src/cpp/main.cpp`, with SCRFD decoding, face alignment, the gallery and matching in the files beside it
+- Python source: `src/python/main.py`
+- Shared config: `src/common/config.yaml`
 
 The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
 

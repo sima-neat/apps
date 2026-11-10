@@ -6,19 +6,15 @@
 
 namespace face_recog {
 
-// Size of ArcFace-expected aligned face crop.
+// ArcFace input size.
 constexpr int kArcFaceW = 112;
 constexpr int kArcFaceH = 112;
 
-// Five canonical landmark positions in the 112×112 ArcFace coordinate frame.
-// Order: left_eye, right_eye, nose_tip, left_mouth_corner, right_mouth_corner.
-extern const float kArcFaceTemplate[5][2];
+// Rotates, scales and shifts the face so its five landmarks land on the positions ArcFace was
+// trained with, and returns the 112x112 BGR crop.
+cv::Mat align_face(const cv::Mat& bgr, const Landmarks& landmarks);
 
-// Similarity warp of `bgr_frame` to the ArcFace 112×112 canonical template. Enrollment and
-// recognition both align through this one function, so their embeddings are comparable.
-cv::Mat align_face(const cv::Mat& bgr_frame, const Landmarks& landmarks);
-
-// BGR → RGB → float32 normalized to [-1, 1] (x/127.5 - 1.0).
+// The aligned crop as the ArcFace input: RGB float32 in [-1, 1].
 cv::Mat preprocess_arcface_crop(const cv::Mat& crop_bgr);
 
 } // namespace face_recog

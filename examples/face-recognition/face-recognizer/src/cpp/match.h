@@ -6,25 +6,20 @@
 
 namespace face_recog {
 
-struct MatchResult {
-    std::string name;         // Gallery label or "Unknown"
-    float       score;        // Best cosine similarity
-    int         index;        // Index in gallery (-1 if unknown/empty)
-    std::string second_name;  // Second-best gallery label (for diagnostics)
-    float       second_score; // Second-best cosine similarity
-};
-
 struct MatchConfig {
-    float       threshold     = 0.55f;
-    float       margin        = 0.12f;  // min gap between best and second-best score
-    std::string unknown_label = "Unknown";
+  float threshold = 0.55f;
+  float margin = 0.12f;
+  std::string unknown_label = "Unknown";
 };
 
-MatchResult match_embedding(
-    const Embedding& raw_embedding,
-    const Gallery&   gallery,
-    const MatchConfig& cfg);
+struct Match {
+  std::string name;
+  float similarity = 0.0f;
+};
 
-float cosine_similarity(const Embedding& a, const Embedding& b);
+// The enrolled person most similar to `embedding`, by cosine similarity. The name is the
+// unknown label when that similarity is below the threshold, or when the runner-up is closer
+// than the margin.
+Match match_embedding(const Embedding& embedding, const Gallery& gallery, const MatchConfig& cfg);
 
 } // namespace face_recog

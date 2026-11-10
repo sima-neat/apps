@@ -1,85 +1,71 @@
 #include "align.h"
 
-#include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
 
-#include <array>
-#include <cmath>
 #include <stdexcept>
 
 namespace face_recog {
 
-// ArcFace 112×112 canonical landmark positions from InsightFace.
-const float kArcFaceTemplate[5][2] = {
-    {38.2946f, 51.6963f},  // left  eye
-    {73.5318f, 51.5014f},  // right eye
-    {56.0252f, 71.7366f},  // nose  tip
-    {41.5493f, 92.3655f},  // left  mouth corner
-    {70.7299f, 92.2041f},  // right mouth corner
+namespace {
+
+// Landmark positions in the 112x112 ArcFace input, from InsightFace: left eye, right eye,
+// nose tip, left mouth corner, right mouth corner.
+constexpr float kTemplate[5][2] = {
+    {38.2946f, 51.6963f}, {73.5318f, 51.5014f}, {56.0252f, 71.7366f},
+    {41.5493f, 92.3655f}, {70.7299f, 92.2041f},
 };
 
-// Closed-form least-squares similarity transform (4-DOF: scale, rotation, tx, ty).
-// Model: xi' = a*xi - b*yi + c,  yi' = b*xi + a*yi + d  (a=s·cosθ, b=s·sinθ)
-//
-// Normal equations for the 4-parameter system with n point pairs reduce to:
-//   [ss  0   sx  -sy] [a]   [sxdx + sydy]
-//   [0   ss  sy   sx] [b] = [sxdy - sydx]
-//   [sx  sy  n    0 ] [c]   [sdx        ]
-//   [-sy sx  0    n ] [d]   [sdy        ]
-// where ss=Σ(xi²+yi²), sx=Σxi, sy=Σyi, sdx=Σdxi, sdy=Σdyi,
-//       sxdx=Σ(xi·dxi+yi·dyi), sxdy=Σ(xi·dyi-yi·dxi).
-// This factors via Schur complement into two independent 2×2 systems.
-template <typename Pts>
-static cv::Mat similarity_transform_lsq(const Pts& src, const Pts& dst) {
-    const int n = static_cast<int>(src.size());
-    double ss = 0, sx = 0, sy = 0, sdx = 0, sdy = 0, sxdx = 0, sxdy = 0;
-    for (int i = 0; i < n; ++i) {
-        const double x  = src[i].x, y  = src[i].y;
-        const double dx = dst[i].x, dy = dst[i].y;
-        ss   += x*x + y*y;
-        sx   += x;   sy   += y;
-        sdx  += dx;  sdy  += dy;
-        sxdx += x*dx + y*dy;
-        sxdy += x*dy - y*dx;
-    }
-    // Schur complement: eliminate (c,d) to get a 2×2 system for (a,b).
-    // S = ss - (sx²+sy²)/n
-    const double inv_n = 1.0 / n;
-    const double S  = ss - (sx*sx + sy*sy) * inv_n;
-    const double Ra = sxdx - (sx*sdx + sy*sdy) * inv_n;
-    const double Rb = sxdy - (sx*sdy - sy*sdx) * inv_n;
-    const double a  = Ra / S,  b = Rb / S;
-    const double c  = (sdx - a*sx + b*sy) * inv_n;
-    const double d  = (sdy - b*sx - a*sy) * inv_n;
-
-    cv::Mat M(2, 3, CV_64F);
-    M.at<double>(0,0) =  a;  M.at<double>(0,1) = -b;  M.at<double>(0,2) = c;
-    M.at<double>(1,0) =  b;  M.at<double>(1,1) =  a;  M.at<double>(1,2) = d;
-    return M;
+// Least-squares similarity transform (rotation, uniform scale, translation) that maps the
+// landmarks onto the template:
+//   x' = a*x - b*y + c
+//   y' = b*x + a*y + d
+cv::Mat similarity_transform(const Landmarks& landmarks) {
+  constexpr int n = 5;
+  double sum_x = 0, sum_y = 0, sum_u = 0, sum_v = 0;
+  double sum_sq = 0, sum_dot = 0, sum_cross = 0;
+  for (int i = 0; i < n; ++i) {
+    const double x = landmarks[i * 2], y = landmarks[i * 2 + 1];
+    const double u = kTemplate[i][0], v = kTemplate[i][1];
+    sum_x += x;
+    sum_y += y;
+    sum_u += u;
+    sum_v += v;
+    sum_sq += x * x + y * y;
+    sum_dot += x * u + y * v;
+    sum_cross += x * v - y * u;
+  }
+  const double spread = sum_sq - (sum_x * sum_x + sum_y * sum_y) / n;
+  if (spread <= 0.0) {
+    throw std::runtime_error("face landmarks are degenerate");
+  }
+  const double a = (sum_dot - (sum_x * sum_u + sum_y * sum_v) / n) / spread;
+  const double b = (sum_cross - (sum_x * sum_v - sum_y * sum_u) / n) / spread;
+  const double c = (sum_u - a * sum_x + b * sum_y) / n;
+  const double d = (sum_v - b * sum_x - a * sum_y) / n;
+  return (cv::Mat_<double>(2, 3) << a, -b, c, b, a, d);
 }
 
-cv::Mat align_face(const cv::Mat& bgr_frame, const Landmarks& lm) {
-    if (bgr_frame.empty())
-        throw std::runtime_error("align_face: empty frame");
+} // namespace
 
-    std::array<cv::Point2f, 5> src, dst;
-    for (int i = 0; i < 5; ++i) {
-        src[i] = {lm[i * 2], lm[i * 2 + 1]};
-        dst[i] = {kArcFaceTemplate[i][0], kArcFaceTemplate[i][1]};
-    }
-    cv::Mat crop;
-    cv::warpAffine(bgr_frame, crop, similarity_transform_lsq(src, dst),
-                   cv::Size(kArcFaceW, kArcFaceH), cv::INTER_LINEAR, cv::BORDER_REFLECT);
-    return crop;
+cv::Mat align_face(const cv::Mat& bgr, const Landmarks& landmarks) {
+  if (bgr.empty()) {
+    throw std::runtime_error("cannot align a face in an empty frame");
+  }
+  cv::Mat crop;
+  cv::warpAffine(bgr, crop, similarity_transform(landmarks), cv::Size(kArcFaceW, kArcFaceH),
+                 cv::INTER_LINEAR, cv::BORDER_REFLECT);
+  return crop;
 }
 
 cv::Mat preprocess_arcface_crop(const cv::Mat& crop_bgr) {
-    if (crop_bgr.empty() || crop_bgr.cols != kArcFaceW || crop_bgr.rows != kArcFaceH)
-        throw std::runtime_error("preprocess_arcface_crop: expected 112x112 BGR");
-    cv::Mat rgb, rgb_f32;
-    cv::cvtColor(crop_bgr, rgb, cv::COLOR_BGR2RGB);
-    rgb.convertTo(rgb_f32, CV_32FC3, 1.0 / 127.5, -1.0);
-    return rgb_f32;
+  if (crop_bgr.cols != kArcFaceW || crop_bgr.rows != kArcFaceH) {
+    throw std::runtime_error("ArcFace expects a 112x112 crop");
+  }
+  cv::Mat rgb;
+  cv::cvtColor(crop_bgr, rgb, cv::COLOR_BGR2RGB);
+  cv::Mat input;
+  rgb.convertTo(input, CV_32FC3, 1.0 / 127.5, -1.0);
+  return input;
 }
 
 } // namespace face_recog

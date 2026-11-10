@@ -1,50 +1,49 @@
-# face-recognizer configuration
-# All paths relative to the face-recognizer package directory (i.e. where you run the binary from).
+model:
+  scrfd: models/scrfd_2.5g_bnkps.mla_mpk.tar.gz   # Face detector.
+  arcface: models/w600k_r50.surgery_mpk.tar.gz    # Face embedding model.
 
-# ── Models ────────────────────────────────────────────────────────────────────
-scrfd:
-  model:            models/scrfd_2.5g_bnkps.mla_mpk.tar.gz
-  conf_threshold:   0.65      # Minimum face confidence (sigmoid score)
-  nms_iou:          0.40      # IoU threshold for NMS
-  top_k:            5000      # Max candidates before NMS
-  keep_top_k:       100       # Max detections after NMS
-
-arcface:
-  model:            models/w600k_r50.surgery_mpk.tar.gz
-
-# ── Gallery ───────────────────────────────────────────────────────────────────
 gallery:
-  path:             gallery.bin
+  path: sandbox/face-recognizer/gallery.bin   # Enrolled people. Written by --enroll.
 
-# ── Input ─────────────────────────────────────────────────────────────────────
-input:
-  # Examples:
-  #   uri: rtsp://<RTSP_HOST>:<RTSP_PORT>/<STREAM_NAME>
-  #   uri: /path/to/video.mp4          (H.264 video file)
-  uri:              ""                  # set to rtsp://<HOST>:<PORT>/<STREAM> or an H.264 video file
-  # USB (UVC) MJPEG camera plugged into the DevKit; set camera and leave uri empty.
+source:
+  type: rtsp                 # rtsp, usb or video_file. Only the matching section below is read.
+
+  rtsp:
+    url: <rtsp-url-1>        # rtsp://<rtsp-source-ip>:<port>/<stream-name>. H.264 streams only.
+    tcp: true                # RTSP over TCP.
+    latency_ms: 100          # Receive latency.
+    fps: 0                   # 0 detects it from the stream.
+
   usb:
-    camera:         ""                  # a camera ID from pyneat.usb_camera_ids()
-    width:          1280                # one of the camera's MJPEG modes, exactly: width,
-    height:         720                 # height and fps (multiples of 8, at most 2040,
-    fps:            30                  # when sending to Insight)
+    camera: ""               # A camera ID from pyneat.usb_camera_ids().
+    width: 1280              # One of the camera's MJPEG modes, exactly: width, height and fps.
+    height: 720              # Multiples of 8, at most 2040 (RTP/JPEG limit).
+    fps: 30
 
-# ── Output ────────────────────────────────────────────────────────────────────
-output:
-  # Insight viewer (RTSP or USB camera input): set host to the Insight host IP to stream H.264
-  # video and face metadata to the Insight Web UI.
-  insight:
-    host:           ""                  # set to Insight host IP to enable streaming
-    video_port:     9000    # UDP port Insight listens on for video (H.264, or the USB camera's JPEG)
-    metadata_port:  9100    # UDP port Insight listens on for metadata input
+  video_file:
+    path: ""                 # An H.264 video file. Each frame's result is printed, not sent to Insight.
 
-# ── Matching ──────────────────────────────────────────────────────────────────
+inference:
+  frames: 0                  # Frame limit. 0 means run continuously, or to the end of a video file.
+  min_score: 0.65            # Face detection score threshold.
+  nms_iou: 0.40              # NMS IoU threshold.
+  max_faces: 100             # Max faces to recognize per frame.
+
 match:
-  threshold:        0.55      # Cosine similarity threshold; below → Unknown
-  margin:           0.12      # Min gap between best and 2nd-best score; below → Unknown
-                              # Raise margin when >1 person enrolled to prevent cross-ID false positives
-  unknown_label:    Unknown
+  threshold: 0.55            # Lowest similarity that names a person.
+  margin: 0.12               # Lead the best match needs over the second best.
+  unknown_label: Unknown     # Name given to a face that matches nobody.
 
-# ── Runtime ───────────────────────────────────────────────────────────────────
-runtime:
-  timeout_ms:       20000
+enrollment:                  # Used only by --enroll.
+  images_dir: ""             # One folder of images per person, named after the person.
+  video_path: ""             # A video of one person, enrolled as `name`.
+  name: ""
+  sample_every: 5            # Enroll every Nth video frame.
+  min_score: 0.75            # Skip an image whose best face scores below this.
+  max_per_person: 0          # Images used per person. 0 uses all of them.
+
+output:
+  insight:
+    host: <insight-host-ip>  # Host running the Insight receiver/viewer.
+    video_port: 9000         # UDP video port.
+    metadata_port: 9100      # UDP metadata port.

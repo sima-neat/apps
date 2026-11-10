@@ -1,226 +1,339 @@
-/**
- * @file test_unit.cpp
- * Unit tests for face-recognizer components (no hardware required).
- * Compiled with GTest when available; can also run as a standalone smoke-test.
- *
- * Tests:
- *  - Gallery save/load round-trip
- *  - L2 normalization
- *  - Cosine similarity (same → 1.0, orthogonal → 0.0, opposite → -1.0)
- *  - MatchResult: known, unknown, empty gallery
- *  - Alignment: non-empty 112×112 output for synthetic landmarks
- *  - ArcFace preprocessing: range [-1,1], shape 112×112×3
- *  - SCRFD anchor count (3 scales × 2 anchors = 16800)
- *  - NMS: removes overlapping boxes
- */
-#include "scrfd_decode.h"
-#include "align.h"
-#include "gallery.h"
-#include "match.h"
+// Unit test for face-recognizer: CLI handling, the configuration rules --validate-config-only
+// can reach without a model or a source, SCRFD decoding, face alignment, matching and the
+// gallery file. The Python unit test decodes the same tensors and reads the same
+// tests/fixtures/gallery.bin, so both implementations agree on the faces and the file.
+#define main face_recognizer_application_main
+#include "../../src/cpp/main.cpp"
+#undef main
 
-#include <opencv2/core/mat.hpp>
+#include "support/testing/test_checks.h"
+#include "support/testing/test_process.h"
 
-#include <cassert>
+#include <opencv2/imgproc.hpp>
+
 #include <cmath>
-#include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
-#include <numeric>
+#include <string>
 #include <vector>
 
-namespace fs = std::filesystem;
+using sima_examples::testing::expect_contains;
+using sima_examples::testing::expect_true;
+using sima_examples::testing::spawn_and_wait;
+using sima_examples::testing::validate_config_body;
 
-#define ASSERT_NEAR_F(a, b, tol) \
-    do { \
-        const float _a = (a), _b = (b), _t = (tol); \
-        if (std::abs(_a - _b) > _t) { \
-            fprintf(stderr, "FAIL %s:%d  |%f - %f| > %f\n", __FILE__, __LINE__, _a, _b, _t); \
-            return false; \
-        } \
-    } while(0)
+namespace {
 
-#define ASSERT_TRUE_MSG(cond, msg) \
-    do { if (!(cond)) { fprintf(stderr, "FAIL %s:%d  %s\n", __FILE__, __LINE__, msg); return false; } } while(0)
+constexpr const char* kExampleName = "face-recognizer";
+const fs::path kGalleryFixture =
+    "examples/face-recognition/face-recognizer/tests/fixtures/gallery.bin";
 
-// ── test functions ────────────────────────────────────────────────────────────
+const std::string kRtsp = "  type: rtsp\n"
+                          "  rtsp:\n"
+                          "    url: rtsp://127.0.0.1:8554/src1\n";
+const std::string kInsight = "output:\n"
+                             "  insight:\n"
+                             "    host: 127.0.0.1\n";
 
-static bool test_gallery_roundtrip() {
-    const fs::path tmp = fs::temp_directory_path() / "fr_test_gallery.bin";
-
-    // Use GalleryBuilder so entries have proper raw_mean and sample_count set
-    // (direct Gallery construction leaves raw_mean empty and sample_count=0).
-    face_recog::GalleryBuilder builder;
-    face_recog::Embedding e_alice(face_recog::kEmbeddingDim, 0.f);
-    e_alice[0] = 3.f; e_alice[1] = 4.f;  // raw; norm=5, so normalized[0]=0.6, [1]=0.8
-    builder.add("Alice", e_alice);
-
-    face_recog::Embedding e_bob(face_recog::kEmbeddingDim, 0.f);
-    e_bob[511] = -2.f;  // raw; norm=2, so normalized[511]=-1
-    builder.add("Bob", e_bob);
-
-    const auto g = builder.finish();
-    face_recog::save_gallery(g, tmp);
-    const auto loaded = face_recog::load_gallery(tmp);
-    fs::remove(tmp);
-
-    ASSERT_TRUE_MSG(loaded.entries.size() == 2, "entry count");
-    ASSERT_TRUE_MSG(loaded.entries[0].name == "Alice", "name[0]");
-    ASSERT_TRUE_MSG(loaded.entries[1].name == "Bob",   "name[1]");
-    // normalized embedding
-    ASSERT_NEAR_F(loaded.entries[0].embedding[0],   0.6f, 1e-5f);
-    ASSERT_NEAR_F(loaded.entries[0].embedding[1],   0.8f, 1e-5f);
-    ASSERT_NEAR_F(loaded.entries[1].embedding[511], -1.f, 1e-5f);
-    // raw_mean is the unnormalized mean (distinct from embedding, must round-trip exactly)
-    // GalleryBuilder stores weighted_sum / total_count before L2-norm, so for 1 sample:
-    // Alice raw_mean = e_alice / 1 = [3, 4, 0, ...];  Bob raw_mean = e_bob / 1 = [0, ..., -2]
-    ASSERT_NEAR_F(loaded.entries[0].raw_mean[0],   3.f, 1e-5f);
-    ASSERT_NEAR_F(loaded.entries[0].raw_mean[1],   4.f, 1e-5f);
-    ASSERT_NEAR_F(loaded.entries[1].raw_mean[511], -2.f, 1e-5f);
-    // sample_count persists
-    ASSERT_TRUE_MSG(loaded.entries[0].sample_count == 1, "alice sample_count");
-    ASSERT_TRUE_MSG(loaded.entries[1].sample_count == 1, "bob sample_count");
-    return true;
+std::string config_body(const std::string& source, const std::string& extra = kInsight) {
+  return "model:\n"
+         "  scrfd: models/scrfd.tar.gz\n"
+         "  arcface: models/arcface.tar.gz\n"
+         "gallery:\n"
+         "  path: gallery.bin\n"
+         "source:\n" +
+         source + extra;
 }
 
-static bool test_l2_normalize() {
-    face_recog::Embedding e = {3.f, 4.f};
-    face_recog::l2_normalize(e);
-    ASSERT_NEAR_F(e[0], 0.6f, 1e-5f);
-    ASSERT_NEAR_F(e[1], 0.8f, 1e-5f);
-
-    // Zero vector: should not crash
-    face_recog::Embedding z(512, 0.f);
-    face_recog::l2_normalize(z);
-    ASSERT_NEAR_F(z[0], 0.f, 1e-5f);
-    return true;
+bool close_to(float actual, float expected, float tolerance = 1e-3f) {
+  return std::fabs(actual - expected) <= tolerance;
 }
 
-static bool test_cosine_similarity() {
-    const int D = 512;
-    face_recog::Embedding a(D, 0.f), b(D, 0.f), c(D, 0.f);
-    a[0] = 1.f;
-    b[0] = 1.f;
-    c[0] = -1.f;
-    ASSERT_NEAR_F(face_recog::cosine_similarity(a, b),  1.0f, 1e-5f);
-    ASSERT_NEAR_F(face_recog::cosine_similarity(a, c), -1.0f, 1e-5f);
-
-    face_recog::Embedding orth(D, 0.f);
-    orth[1] = 1.f;
-    ASSERT_NEAR_F(face_recog::cosine_similarity(a, orth), 0.0f, 1e-5f);
-    return true;
+bool test_help_runs(const std::string& binary) {
+  const auto r = spawn_and_wait(binary, {"--help"}, 20000);
+  return expect_true(r.exit_code == 0, "help exits with code 0") &&
+         expect_contains(r.stdout_text, "--enroll", "help lists --enroll");
 }
 
-static bool test_match_known() {
-    face_recog::Gallery g;
-    face_recog::Embedding e(512, 0.f); e[0] = 1.f; face_recog::l2_normalize(e);
-    g.entries.push_back({"Alice", e});
-
-    face_recog::MatchConfig cfg;
-    cfg.threshold = 0.4f;
-    const auto r = face_recog::match_embedding(e, g, cfg);  // exact match → sim=1.0
-    ASSERT_TRUE_MSG(r.name == "Alice",  "known name");
-    ASSERT_NEAR_F(r.score, 1.0f, 1e-4f);
-    return true;
+bool test_unknown_flag_fails(const std::string& binary) {
+  const auto r = spawn_and_wait(binary, {"--bogus"}, 20000);
+  return expect_true(r.exit_code != 0, "unknown flag exits non-zero");
 }
 
-static bool test_match_unknown() {
-    face_recog::Gallery g;
-    face_recog::Embedding a(512, 0.f); a[0] =  1.f; face_recog::l2_normalize(a);
-    face_recog::Embedding b(512, 0.f); b[1] =  1.f;  // orthogonal → sim=0
-    g.entries.push_back({"Alice", a});
-
-    face_recog::MatchConfig cfg;
-    cfg.threshold     = 0.4f;
-    cfg.unknown_label = "Unknown";
-    const auto r = face_recog::match_embedding(b, g, cfg);
-    ASSERT_TRUE_MSG(r.name == "Unknown",  "unknown label");
-    ASSERT_NEAR_F(r.score, 0.0f, 1e-4f);
-    return true;
+bool test_missing_config_file_exits_with_code_2(const std::string& binary) {
+  const auto r = spawn_and_wait(binary, {"--config", "/nonexistent_config.yaml"}, 20000);
+  return expect_true(r.exit_code == 2, "missing config exits with code 2") &&
+         expect_contains(r.stderr_text, "config file not found", "missing config is named");
 }
 
-static bool test_match_empty_gallery() {
-    face_recog::Gallery g;
-    face_recog::Embedding e(512, 0.f); e[0] = 1.f;
-    face_recog::MatchConfig cfg;
-    const auto r = face_recog::match_embedding(e, g, cfg);
-    ASSERT_TRUE_MSG(r.score < -1.f, "empty gallery score sentinel");
-    return true;
+bool test_validate_config_only_reports_the_mode(const std::string& binary) {
+  const auto r = validate_config_body(kExampleName, binary, "rtsp", config_body(kRtsp));
+  const auto file = validate_config_body(kExampleName, binary, "video_file",
+                                         config_body("  type: video_file\n"
+                                                     "  video_file:\n"
+                                                     "    path: clip.mp4\n",
+                                                     ""));
+  return expect_true(r.exit_code == 0, "an RTSP source validates") &&
+         expect_contains(r.stdout_text, "mode=recognize", "the mode is reported") &&
+         expect_true(file.exit_code == 0, "a video file validates without an Insight host");
 }
 
-static bool test_arcface_preprocess() {
-    // Synthetic 112×112 BGR image
-    cv::Mat bgr(face_recog::kArcFaceH, face_recog::kArcFaceW, CV_8UC3, cv::Scalar(127, 63, 200));
-    const cv::Mat f32 = face_recog::preprocess_arcface_crop(bgr);
-    ASSERT_TRUE_MSG(f32.type() == CV_32FC3, "dtype");
-    ASSERT_TRUE_MSG(f32.rows == 112 && f32.cols == 112, "shape");
-
-    // All values in [-1, 1]
-    double mn, mx;
-    cv::minMaxLoc(f32, &mn, &mx);
-    ASSERT_TRUE_MSG(mn >= -1.0 - 1e-4 && mx <= 1.0 + 1e-4, "value range");
-    return true;
+bool test_configuration_rules_are_enforced(const std::string& binary) {
+  struct Case {
+    const char* name;
+    std::string body;
+    const char* message;
+  };
+  const std::vector<Case> cases = {
+      {"bad_source_type", config_body("  type: http\n"),
+       "source.type must be rtsp, usb or video_file"},
+      {"no_rtsp_url", config_body("  type: rtsp\n"),
+       "source.rtsp.url must be set when source.type=rtsp"},
+      {"no_usb_camera", config_body("  type: usb\n"),
+       "source.usb.camera must be set when source.type=usb"},
+      {"odd_usb_width", config_body("  type: usb\n  usb:\n    camera: camera\n    width: 1281\n"),
+       "source.usb.width and height must be multiples of 8 and at most 2040"},
+      {"no_video_path", config_body("  type: video_file\n"),
+       "source.video_file.path must be set when source.type=video_file"},
+      {"no_insight_host", config_body(kRtsp, ""),
+       "output.insight.host must be set for source.type=rtsp/usb"},
+      {"min_score_of_one", config_body(kRtsp, kInsight + "inference:\n  min_score: 1.0\n"),
+       "inference.min_score must be greater than 0 and less than 1"},
+      {"zero_max_faces", config_body(kRtsp, kInsight + "inference:\n  max_faces: 0\n"),
+       "inference.max_faces must be > 0"},
+      {"negative_frames", config_body(kRtsp, kInsight + "inference:\n  frames: -1\n"),
+       "inference.frames must be >= 0"},
+      {"margin_above_one", config_body(kRtsp, kInsight + "match:\n  margin: 1.5\n"),
+       "match.margin must be between 0 and 1"},
+  };
+  bool ok = true;
+  for (const auto& c : cases) {
+    const auto r =
+        validate_config_body(kExampleName, binary, std::string("rule_") + c.name, c.body);
+    ok &= expect_true(r.exit_code != 0, std::string(c.name) + " is rejected") &&
+          expect_contains(r.stderr_text, c.message, std::string(c.name) + " names its key");
+  }
+  return ok;
 }
 
-static bool test_align_face_synthetic() {
-    // Synthetic 480×640 frame and landmarks that form a tiny "face"
-    cv::Mat frame(480, 640, CV_8UC3, cv::Scalar(100, 150, 200));
-    face_recog::Landmarks lm;
-    lm[0] = 200.f; lm[1] = 150.f;  // left eye
-    lm[2] = 280.f; lm[3] = 150.f;  // right eye
-    lm[4] = 240.f; lm[5] = 200.f;  // nose
-    lm[6] = 215.f; lm[7] = 240.f;  // left mouth
-    lm[8] = 265.f; lm[9] = 240.f;  // right mouth
-
-    const cv::Mat crop = face_recog::align_face(frame, lm);
-    ASSERT_TRUE_MSG(!crop.empty(), "crop not empty");
-    ASSERT_TRUE_MSG(crop.cols == face_recog::kArcFaceW && crop.rows == face_recog::kArcFaceH,
-                    "crop size 112x112");
-    return true;
-}
-
-static bool test_gallery_builder() {
-    face_recog::GalleryBuilder builder;
-    // Two images of "Alice" → mean-pooled
-    face_recog::Embedding e1(512, 0.f); e1[0] = 1.f;
-    face_recog::Embedding e2(512, 0.f); e2[0] = 0.9f; e2[1] = 0.1f;
-    builder.add("Alice", e1);
-    builder.add("Alice", e2);
-    builder.add("Bob",   e1);
-
-    const auto g = builder.finish();
-    ASSERT_TRUE_MSG(g.entries.size() == 2, "entry count after finish");
-    ASSERT_TRUE_MSG(g.entries[0].name == "Alice" || g.entries[1].name == "Alice", "Alice present");
-
-    for (const auto& entry : g.entries) {
-        float n2 = 0.f;
-        for (float v : entry.embedding) n2 += v * v;
-        ASSERT_NEAR_F(n2, 1.0f, 1e-4f);
+// --enroll reads the enrollment section instead of the source.
+bool test_enrollment_rules_are_enforced() {
+  const auto problem = [](const AppConfig& cfg) -> std::string {
+    try {
+      validate_config(cfg, true);
+    } catch (const std::exception& e) {
+      return e.what();
     }
-    return true;
+    return "";
+  };
+  AppConfig cfg;
+  cfg.scrfd_model = "models/scrfd.tar.gz";
+  cfg.arcface_model = "models/arcface.tar.gz";
+  cfg.gallery_path = "gallery.bin";
+  bool ok =
+      expect_contains(problem(cfg), "enrollment.images_dir or enrollment.video_path must be set",
+                      "enrollment needs images or a video");
+  cfg.enroll_video_path = "person.mp4";
+  ok &= expect_contains(problem(cfg), "enrollment.name must be set with enrollment.video_path",
+                        "a video needs the person's name");
+  cfg.enroll_name = "PersonA";
+  ok &= expect_true(problem(cfg).empty(), "a named video validates without a source");
+  cfg.enroll_sample_every = 0;
+  ok &= expect_contains(problem(cfg), "enrollment.sample_every must be > 0",
+                        "sample_every is checked");
+  return ok;
 }
 
-// ── runner ────────────────────────────────────────────────────────────────────
+// SCRFD output for a 640x640 input with every anchor silent: scores, boxes and landmarks
+// at strides 8, 16 and 32, two anchors per cell.
+std::vector<std::vector<float>> silent_scrfd_output() {
+  std::vector<std::vector<float>> output(9);
+  const int strides[3] = {8, 16, 32};
+  for (int s = 0; s < 3; ++s) {
+    const std::size_t anchors = static_cast<std::size_t>(640 / strides[s]) * (640 / strides[s]) * 2;
+    output[s].assign(anchors, -20.0f);
+    output[3 + s].assign(anchors * 4, 0.0f);
+    output[6 + s].assign(anchors * 10, 0.0f);
+  }
+  return output;
+}
 
-int main() {
-    struct Test { const char* name; bool(*fn)(); };
-    const Test tests[] = {
-        {"gallery_roundtrip",     test_gallery_roundtrip},
-        {"l2_normalize",          test_l2_normalize},
-        {"cosine_similarity",     test_cosine_similarity},
-        {"match_known",           test_match_known},
-        {"match_unknown",         test_match_unknown},
-        {"match_empty_gallery",   test_match_empty_gallery},
-        {"arcface_preprocess",    test_arcface_preprocess},
-        {"align_face_synthetic",  test_align_face_synthetic},
-        {"gallery_builder",       test_gallery_builder},
-    };
+std::vector<simaai::neat::Tensor> as_tensors(const std::vector<std::vector<float>>& output) {
+  std::vector<simaai::neat::Tensor> tensors;
+  for (const auto& values : output) {
+    tensors.push_back(simaai::neat::Tensor::from_vector(
+        values, {static_cast<int64_t>(values.size())}, simaai::neat::TensorMemory::CPU));
+  }
+  return tensors;
+}
 
-    int passed = 0, failed = 0;
-    for (const auto& t : tests) {
-        const bool ok = t.fn();
-        printf("  [%s] %s\n", ok ? "PASS" : "FAIL", t.name);
-        ok ? ++passed : ++failed;
+bool test_scrfd_output_decodes_to_source_pixels() {
+  auto output = silent_scrfd_output();
+  // Stride 16, cell (column 10, row 12): both anchors fire on the same box.
+  const std::size_t strong = (12 * 40 + 10) * 2;
+  output[1][strong] = 3.0f;
+  output[1][strong + 1] = 2.0f;
+  for (const std::size_t anchor : {strong, strong + 1}) {
+    const float box[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+    std::copy(box, box + 4, output[4].begin() + anchor * 4);
+    for (int k = 0; k < 5; ++k) {
+      output[7][anchor * 10 + k * 2] = 0.5f * k;
+      output[7][anchor * 10 + k * 2 + 1] = 1.0f;
     }
-    printf("\n%d passed, %d failed\n", passed, failed);
-    return failed ? 1 : 0;
+  }
+  // Stride 32, cell (column 2, row 15): a weaker face elsewhere.
+  const std::size_t weak = (15 * 20 + 2) * 2;
+  output[2][weak] = 1.0f;
+  std::fill_n(output[5].begin() + weak * 4, 4, 1.0f);
+
+  // A 1280x720 frame is halved and padded by 140 rows above and below.
+  const auto letterbox = face_recog::letterbox_for(1280, 720);
+  face_recog::ScrfdConfig cfg;
+  const auto faces = face_recog::decode_scrfd(as_tensors(output), cfg, letterbox);
+  bool ok = expect_true(faces.size() == 2, "overlapping anchors yield one face each");
+  if (!ok) {
+    return false;
+  }
+  const auto& face = faces.front();
+  ok &= expect_true(close_to(face.score, 0.9526f), "the stronger face comes first");
+  ok &= expect_true(close_to(face.x1, 288.0f) && close_to(face.y1, 40.0f) &&
+                        close_to(face.x2, 416.0f) && close_to(face.y2, 232.0f),
+                    "the box is in source-frame pixels");
+  ok &= expect_true(close_to(face.landmarks[0], 320.0f) && close_to(face.landmarks[1], 136.0f) &&
+                        close_to(face.landmarks[8], 384.0f) && close_to(face.landmarks[9], 136.0f),
+                    "the landmarks are in source-frame pixels");
+  ok &= expect_true(close_to(faces[1].x1, 64.0f) && close_to(faces[1].y1, 616.0f),
+                    "the weaker face keeps its own box");
+
+  cfg.max_faces = 1;
+  ok &= expect_true(face_recog::decode_scrfd(as_tensors(output), cfg, letterbox).size() == 1,
+                    "max_faces limits the result");
+  cfg.max_faces = 100;
+  cfg.min_score = 0.8f;
+  ok &= expect_true(face_recog::decode_scrfd(as_tensors(output), cfg, letterbox).size() == 1,
+                    "min_score drops the weaker face");
+  return ok;
+}
+
+bool test_alignment_moves_the_landmarks_onto_the_template() {
+  // The ArcFace template doubled in size and shifted, marked with white dots.
+  const float tmpl[5][2] = {{38.2946f, 51.6963f},
+                            {73.5318f, 51.5014f},
+                            {56.0252f, 71.7366f},
+                            {41.5493f, 92.3655f},
+                            {70.7299f, 92.2041f}};
+  cv::Mat frame(360, 400, CV_8UC3, cv::Scalar(0, 0, 0));
+  face_recog::Landmarks landmarks{};
+  for (int i = 0; i < 5; ++i) {
+    landmarks[i * 2] = tmpl[i][0] * 2.0f + 50.0f;
+    landmarks[i * 2 + 1] = tmpl[i][1] * 2.0f + 30.0f;
+    cv::circle(frame, cv::Point2f(landmarks[i * 2], landmarks[i * 2 + 1]), 4,
+               cv::Scalar(255, 255, 255), cv::FILLED);
+  }
+  const cv::Mat crop = face_recog::align_face(frame, landmarks);
+  bool ok = expect_true(crop.cols == 112 && crop.rows == 112, "the crop is 112x112");
+  for (int i = 0; i < 5; ++i) {
+    const auto pixel = crop.at<cv::Vec3b>(static_cast<int>(tmpl[i][1] + 0.5f),
+                                          static_cast<int>(tmpl[i][0] + 0.5f));
+    ok &= expect_true(pixel[0] > 200, "landmark " + std::to_string(i) + " lands on the template");
+  }
+  return ok;
+}
+
+face_recog::Embedding unit_embedding(int axis, float along_next = 0.0f) {
+  face_recog::Embedding embedding(face_recog::kEmbeddingDim, 0.0f);
+  embedding[axis] = 1.0f;
+  embedding[axis + 1] = along_next;
+  face_recog::l2_normalize(embedding);
+  return embedding;
+}
+
+bool test_matching_names_only_a_clear_winner() {
+  face_recog::Gallery gallery;
+  gallery.add("PersonA", unit_embedding(0));
+  gallery.add("PersonB", unit_embedding(1));
+  const face_recog::MatchConfig cfg;
+
+  const auto known = face_recog::match_embedding(unit_embedding(0, 0.2f), gallery, cfg);
+  const auto distant = face_recog::match_embedding(unit_embedding(2), gallery, cfg);
+  const auto between = face_recog::match_embedding(unit_embedding(0, 0.9f), gallery, cfg);
+  const auto nobody = face_recog::match_embedding(unit_embedding(0), face_recog::Gallery{}, cfg);
+  return expect_true(known.name == "PersonA" && close_to(known.similarity, 0.9806f),
+                     "a close embedding is named") &&
+         expect_true(distant.name == "Unknown", "a similarity below the threshold is unknown") &&
+         expect_true(between.name == "Unknown" && between.similarity > cfg.threshold,
+                     "a lead smaller than the margin is unknown") &&
+         expect_true(nobody.name == "Unknown", "an empty gallery names nobody");
+}
+
+bool test_gallery_file_round_trips() {
+  const auto fixture = face_recog::load_gallery(kGalleryFixture);
+  bool ok = expect_true(fixture.people.size() == 2 && fixture.people[0].name == "PersonA" &&
+                            fixture.people[0].samples == 3 && fixture.people[1].name == "PersonB" &&
+                            fixture.people[1].samples == 1,
+                        "the shared fixture lists PersonA and PersonB") &&
+            expect_true(close_to(fixture.people[0].mean[256], 0.5f) &&
+                            close_to(fixture.people[1].mean[256], 0.5f) &&
+                            close_to(fixture.people[1].mean[0], 1.0f),
+                        "the shared fixture holds their embeddings");
+
+  face_recog::Gallery gallery;
+  gallery.add("PersonA", unit_embedding(0));
+  gallery.add("PersonA", unit_embedding(1));
+  ok &= expect_true(gallery.people.size() == 1 && gallery.people[0].samples == 2 &&
+                        close_to(gallery.people[0].mean[0], 0.5f) &&
+                        close_to(gallery.people[0].mean[1], 0.5f),
+                    "a second sample is averaged into the same person");
+
+  const fs::path path = fs::temp_directory_path() / "face_recognizer_unit_gallery.bin";
+  face_recog::save_gallery(gallery, path);
+  const auto saved = face_recog::load_gallery(path);
+  ok &= expect_true(saved.people.size() == 1 && saved.people[0].name == "PersonA" &&
+                        saved.people[0].samples == 2 && close_to(saved.people[0].mean[1], 0.5f),
+                    "a saved gallery loads back");
+
+  // A save that fails must leave the previous gallery in place.
+  face_recog::Gallery unsavable = gallery;
+  unsavable.add(std::string(70000, 'x'), unit_embedding(2));
+  bool failed = false;
+  try {
+    face_recog::save_gallery(unsavable, path);
+  } catch (const std::exception&) {
+    failed = true;
+  }
+  ok &= expect_true(failed && face_recog::load_gallery(path).people.size() == 1,
+                    "a failed save keeps the previous gallery");
+
+  std::ofstream(path, std::ios::binary | std::ios::trunc) << "not a gallery";
+  failed = false;
+  try {
+    face_recog::load_gallery(path);
+  } catch (const std::exception&) {
+    failed = true;
+  }
+  fs::remove(path);
+  return ok && expect_true(failed, "a file that is not a gallery is rejected");
+}
+
+} // namespace
+
+int main(int argc, char** argv) {
+  if (argc < 2) {
+    std::cerr << "[ERR] usage: " << argv[0] << " <example-binary>\n";
+    return 2;
+  }
+  const std::string binary = argv[1];
+
+  bool ok = test_scrfd_output_decodes_to_source_pixels();
+  ok &= test_alignment_moves_the_landmarks_onto_the_template();
+  ok &= test_matching_names_only_a_clear_winner();
+  ok &= test_gallery_file_round_trips();
+  ok &= test_enrollment_rules_are_enforced();
+  ok &= test_help_runs(binary);
+  ok &= test_unknown_flag_fails(binary);
+  ok &= test_missing_config_file_exits_with_code_2(binary);
+  ok &= test_validate_config_only_reports_the_mode(binary);
+  ok &= test_configuration_rules_are_enforced(binary);
+  return ok ? 0 : 1;
 }

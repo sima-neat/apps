@@ -7,70 +7,19 @@ models:
     source: url
     url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/w600k_r50.surgery_mpk.tar.gz
     file: w600k_r50.surgery_mpk.tar.gz
-
 unit:
-  # Python shares no standalone helper module with tests; its decode/match/align
-  # logic is exercised end to end by tests/python/test_e2e.py.
-  python: false
+  python: true
   cpp: true
-
 e2e:
   python:
     enabled: true
+    requires_rtsp: true
     models:
-      - scrfd
-      - arcface
-    assets:
-      bundled:
-        - path: tests/assets/face_clip.mp4
-          description: >
-            3 s H.264 clip (1280x720, 30 FPS) of the shared COCO images
-            assets/datasets/coco/000000493864.jpg (left) and 000000116439.jpg (right),
-            made with:
-              ffmpeg -loop 1 -t 3 -i assets/datasets/coco/000000493864.jpg
-                     -loop 1 -t 3 -i assets/datasets/coco/000000116439.jpg
-                     -filter_complex "[0:v][1:v]hstack,pad=1280:720:0:40,fps=30,format=yuv420p"
-                     -an -c:v libx264 -profile:v high -crf 23 -g 30 face_clip.mp4
-            Every frame must contain PersonA and PersonB.
-      shared:
-        - path: assets/datasets/coco/000000493864.jpg
-          description: PersonA; copied into a PersonA/ folder for the --enroll --images check.
-        - path: assets/datasets/coco/000000116439.jpg
-          description: PersonB; copied into a PersonB/ folder for the --enroll --images check.
-    notes:
-      - >
-        The bundled clip is recognized with a gallery the test enrolls itself from the
-        shared COCO images, so enrollment and recognition are checked together.
-      - >
-        The RTSP test runs the live-stream graph headless for 60 frames, then with Insight
-        on loopback, where it checks that the stream arrives as RTP/H.264 and that the
-        face metadata carries the timestamps of received video frames. The shared CI
-        stream content is not controlled, so identities are asserted on the bundled clip.
-      - >
-        The USB camera case is collected only when SIMANEAT_TEST_USB_CAMERA names a camera
-        (CI runners have none): it runs the graph headless for 60 frames, then with Insight
-        on loopback and checks that the camera's JPEG arrives as RTP/JPEG (payload type 26).
+    - scrfd
+    - arcface
   cpp:
     enabled: true
+    requires_rtsp: true
     models:
-      - scrfd
-      - arcface
-    assets:
-      bundled:
-        - path: tests/assets/face_clip.mp4
-          description: >
-            Every frame must contain PersonA and PersonB; also used for the
-            --enroll --video check.
-      shared:
-        - path: assets/datasets/coco/000000493864.jpg
-          description: PersonA; copied into a PersonA/ folder for the --enroll --images check.
-        - path: assets/datasets/coco/000000116439.jpg
-          description: PersonB; copied into a PersonB/ folder for the --enroll --images check.
-    notes:
-      - >
-        The bundled clip is recognized with the gallery enrolled from the shared COCO
-        images. The RTSP run checks the live-stream graph headless, then with Insight on
-        loopback, as in the python entry.
-      - >
-        The USB camera checks run only when SIMANEAT_TEST_USB_CAMERA names a camera, as
-        in the python entry; otherwise the binary prints [SKIP] and still passes.
+    - scrfd
+    - arcface
