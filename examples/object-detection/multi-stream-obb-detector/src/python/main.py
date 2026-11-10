@@ -1,4 +1,4 @@
-"""Multi-stream RTSP YOLO26 oriented-box detector that publishes to Insight, using pyneat."""
+"""Multi-stream RTSP YOLO oriented-box detector that publishes to Insight, using pyneat."""
 
 from __future__ import annotations
 
@@ -15,6 +15,8 @@ import yaml
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
 MAX_STREAMS = 4
 PULL_TIMEOUT_MS = 50
+# Ultralytics' rotated-NMS IoU for OBB predictions, used by YOLOv8 and YOLO11.
+YOLOV8_NMS_IOU = 0.7
 # Matches the C++ config reader's error wording.
 KIND_NAMES = {bool: "true or false", int: "an integer", float: "numeric", str: "a string"}
 
@@ -27,6 +29,7 @@ pyneat = None
 class AppConfig:
     model_path: str
     labels_path: str
+    family: str
     rtsp_urls: list[str]
     codec: str
     tcp: bool
@@ -84,7 +87,7 @@ def load_runtime_dependencies() -> None:
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Multi-stream YOLO26 oriented-box detector")
+    parser = argparse.ArgumentParser(description="Multi-stream YOLO oriented-box detector")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--validate-config-only", action="store_true")
     return parser.parse_args(argv)
@@ -102,6 +105,13 @@ def setting(raw: dict, key: str, default, kind: type):
     if not isinstance(value, kind) or (kind is int and isinstance(value, bool)):
         raise ValueError(f"{key} must be {KIND_NAMES[kind]}")
     return value
+
+
+def parse_family(value: str) -> str:
+    lowered = value.lower()
+    if lowered in {"yolo26", "yolov8", "yolo11"}:
+        return lowered
+    raise ValueError("model.family must be yolo26, yolov8, or yolo11")
 
 
 def parse_codec(value: str) -> str:
@@ -161,6 +171,7 @@ def load_app_config(config_path: Path) -> AppConfig:
     cfg = AppConfig(
         model_path=setting(raw, "model.path", "", str),
         labels_path=setting(raw, "model.labels", default_labels, str),
+        family=parse_family(setting(raw, "model.family", "yolo26", str)),
         rtsp_urls=parse_streams(raw),
         codec=parse_codec(setting(raw, "input.codec", "h264", str)),
         tcp=setting(raw, "input.tcp", True, bool),
@@ -248,10 +259,15 @@ def build_model(cfg: AppConfig):
     opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.NV12
     # COCO_YOLO letterboxes, which keeps one scale on both axes so rotated boxes map back.
     opt.preprocess.preset = pyneat.NormalizePreset.COCO_YOLO
-    opt.decode_type = pyneat.BoxDecodeType.YoloV26Obb
+    if cfg.family == "yolo26":
+        opt.decode_type = pyneat.BoxDecodeType.YoloV26Obb
+        # YOLO26 needs no NMS, and its oriented-box decoder requires it disabled.
+        opt.nms_iou_threshold = 0.0
+    else:
+        # YOLOv8 and YOLO11 share one decoder, which removes overlapping boxes with rotated NMS.
+        opt.decode_type = pyneat.BoxDecodeType.YoloV8Obb
+        opt.nms_iou_threshold = YOLOV8_NMS_IOU
     opt.score_threshold = cfg.min_score
-    # YOLO26 needs no NMS, and the oriented-box decoder requires it disabled.
-    opt.nms_iou_threshold = 0.0
     opt.top_k = cfg.max_detections
     return pyneat.Model(cfg.model_path, opt)
 

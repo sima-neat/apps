@@ -114,6 +114,7 @@ class TestConfig:
         cfg = main_module.load_app_config(write_config(tmp_path, root=raw))
 
         assert cfg.labels_path.endswith("src/common/dota_label.txt")
+        assert cfg.family == "yolo26"
         assert cfg.codec == "h264"
         assert cfg.tcp is True
         assert cfg.latency_ms == 100
@@ -127,6 +128,12 @@ class TestConfig:
         assert cfg.debug_dir == ""
         assert cfg.save_every == 0
 
+    @pytest.mark.parametrize("family", ["yolo26", "yolov8", "YOLO11"])
+    def test_model_families_are_accepted(self, tmp_path, family):
+        cfg = main_module.load_app_config(write_config(tmp_path, [(("model", "family"), family)]))
+
+        assert cfg.family == family.lower()
+
     @pytest.mark.parametrize(("codec", "expected"), [("avc", "h264"), ("HEVC", "h265"), ("MJPEG", "mjpeg")])
     def test_codec_aliases_are_accepted(self, tmp_path, codec, expected):
         cfg = main_module.load_app_config(write_config(tmp_path, [(("input", "codec"), codec)]))
@@ -138,6 +145,7 @@ class TestConfig:
         [
             (("model", "path"), "", "model.path must be set"),
             (("model", "labels"), "", "model.labels must be set"),
+            (("model", "family"), "yolov5", "model.family must be yolo26, yolov8, or yolo11"),
             (("input", "codec"), "vp9", "input.codec must be h264/avc, h265/hevc, or mjpeg"),
             (("input", "tcp"), "yes", "input.tcp must be true or false"),
             (("input", "latency_ms"), -1, "input.latency_ms must be >= 0"),

@@ -41,6 +41,20 @@ models:
     spec: latest
     variant: w8a8
     file: yolo26x_obb_w8a8_mpk.tar.gz
+  yolov8n_obb_w8a8_mpk:
+    source: model-registry
+    name: yolov8n_obb
+    ref: develop
+    spec: latest
+    variant: w8a8
+    file: yolov8n_obb_w8a8_mpk.tar.gz
+  yolo11n_obb_w8a8_mpk:
+    source: model-registry
+    name: yolo11n_obb
+    ref: develop
+    spec: latest
+    variant: w8a8
+    file: yolo11n_obb_w8a8_mpk.tar.gz
 unit:
   python: true
   cpp: true
@@ -56,6 +70,8 @@ e2e:
     - yolo26m_obb_w8a8_mpk
     - yolo26l_obb_w8a8_mpk
     - yolo26x_obb_w8a8_mpk
+    - yolov8n_obb_w8a8_mpk
+    - yolo11n_obb_w8a8_mpk
   cpp:
     enabled: true
     requires_rtsp: true
@@ -67,3 +83,5 @@ e2e:
     - yolo26m_obb_w8a8_mpk
     - yolo26l_obb_w8a8_mpk
     - yolo26x_obb_w8a8_mpk
+    - yolov8n_obb_w8a8_mpk
+    - yolo11n_obb_w8a8_mpk

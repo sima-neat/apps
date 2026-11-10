@@ -79,6 +79,8 @@ bool test_configuration_rules_are_enforced(const std::string& binary) {
        config_body("  - rtsp://host/a\n  - rtsp://host/b\n  - rtsp://host/c\n"
                    "  - rtsp://host/d\n  - rtsp://host/e\n"),
        "streams supports up to four entries"},
+      {"bad_family", config_body(kTwoStreams, "model:\n  family: yolov5\n"),
+       "model.family must be yolo26, yolov8, or yolo11"},
       {"bad_codec", config_body(kTwoStreams, "input:\n  codec: vp9\n"),
        "input.codec must be h264/avc, h265/hevc, or mjpeg"},
       {"zero_inflight", config_body(kTwoStreams, "inference:\n  max_inflight_per_stream: 0\n"),

@@ -48,6 +48,8 @@ namespace {
 
 constexpr std::size_t kMaxStreams = 4;
 constexpr int kPullTimeoutMs = 50;
+// Ultralytics' rotated-NMS IoU for OBB predictions, used by YOLOv8 and YOLO11.
+constexpr double kYoloV8NmsIou = 0.7;
 
 volatile std::sig_atomic_t g_stop_requested = 0;
 
@@ -63,6 +65,7 @@ struct CliOptions {
 struct AppConfig {
   std::string model_path;
   std::string labels_path;
+  simaai::neat::BoxDecodeType decode_type = simaai::neat::BoxDecodeType::YoloV26Obb;
   std::vector<std::string> rtsp_urls;
   simaai::neat::nodes::groups::RtspCodec codec = simaai::neat::nodes::groups::RtspCodec::H264;
   bool tcp = true;
@@ -121,6 +124,19 @@ CliOptions parse_args(int argc, char** argv) {
     }
   }
   return options;
+}
+
+// YOLOv8 and YOLO11 share one oriented-box decoder.
+simaai::neat::BoxDecodeType parse_family(std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  if (value == "yolo26") {
+    return simaai::neat::BoxDecodeType::YoloV26Obb;
+  }
+  if (value == "yolov8" || value == "yolo11") {
+    return simaai::neat::BoxDecodeType::YoloV8Obb;
+  }
+  throw std::runtime_error("model.family must be yolo26, yolov8, or yolo11");
 }
 
 simaai::neat::nodes::groups::RtspCodec parse_codec(std::string value) {
@@ -200,6 +216,7 @@ AppConfig load_app_config(const fs::path& config_path) {
   AppConfig cfg;
   cfg.model_path = raw.string_or("model.path", "");
   cfg.labels_path = raw.string_or("model.labels", default_labels.string());
+  cfg.decode_type = parse_family(raw.string_or("model.family", "yolo26"));
   cfg.rtsp_urls = parse_streams(config_path);
   cfg.codec = parse_codec(raw.string_or("input.codec", "h264"));
   cfg.tcp = raw.bool_or("input.tcp", true);
@@ -286,10 +303,12 @@ std::unique_ptr<simaai::neat::Model> build_model(const AppConfig& cfg) {
   opt.preprocess.color_convert.input_format = simaai::neat::PreprocessColorFormat::NV12;
   // COCO_YOLO letterboxes, which keeps one scale on both axes so rotated boxes map back.
   opt.preprocess.preset = simaai::neat::NormalizePreset::COCO_YOLO;
-  opt.decode_type = simaai::neat::BoxDecodeType::YoloV26Obb;
+  opt.decode_type = cfg.decode_type;
   opt.score_threshold = cfg.min_score;
-  // YOLO26 needs no NMS, and the oriented-box decoder requires it disabled.
-  opt.nms_iou_threshold = 0.0;
+  // YOLO26 needs no NMS, and its decoder requires it disabled. YOLOv8 and YOLO11 remove
+  // overlapping boxes with rotated NMS.
+  opt.nms_iou_threshold =
+      cfg.decode_type == simaai::neat::BoxDecodeType::YoloV26Obb ? 0.0 : kYoloV8NmsIou;
   opt.top_k = cfg.max_detections;
   return std::make_unique<simaai::neat::Model>(cfg.model_path, opt);
 }
