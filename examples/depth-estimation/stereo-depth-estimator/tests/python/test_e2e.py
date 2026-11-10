@@ -74,5 +74,6 @@ def test_insight_pipeline(
     for path in saved:
         heatmap = cv2.imread(str(path))
         assert heatmap is not None
-        # A stereo pair has near and far points, so its disparity is not one flat color.
-        assert heatmap.std() > 5, f"{path.name}: the disparity heatmap is flat"
+        # A stereo pair has near and far points, so its disparity is not one flat color. The
+        # deviation is taken over the pixels of each color channel: one color has none.
+        assert heatmap.std(axis=(0, 1)).sum() > 15, f"{path.name}: the disparity heatmap is flat"
