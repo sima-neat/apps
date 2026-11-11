@@ -16,9 +16,6 @@ import yaml
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
 PULL_TIMEOUT_MS = 50
-# pyneat does not report the end of a video file; its pulls only stop returning frames. The
-# file has ended when no frame follows the last one for this long.
-VIDEO_END_SECONDS = 2.0
 OUTPUT_NAME = "recognizer_output"
 # Matches the C++ config reader's error wording.
 KIND_NAMES = {bool: "true or false", int: "an integer", float: "numeric", str: "a string"}
@@ -857,18 +854,19 @@ def run_recognition(cfg: AppConfig) -> None:
     letterbox = letterbox_for(source.width, source.height)
     processed = 0
     first_frame = None
-    last_frame = float("inf")
     try:
         while cfg.frames <= 0 or processed < cfg.frames:
-            sample = run.pull(OUTPUT_NAME, PULL_TIMEOUT_MS)
+            # A live source is polled so Ctrl+C is noticed. A video file waits for its next
+            # frame, so that pull returns None only when the file has ended.
+            sample = run.pull(OUTPUT_NAME, PULL_TIMEOUT_MS if cfg.live else -1)
             if sample is None:
-                # pyneat reports a closed output as None, like a timeout, so check the run itself.
                 if run.last_error():
                     raise RuntimeError(f"runtime error: {run.last_error()}")
+                if not cfg.live:
+                    break
+                # pyneat reports a closed output as None, like a timeout, so check the run itself.
                 if not run.running():
                     raise RuntimeError(f"{OUTPUT_NAME} output closed unexpectedly")
-                if not cfg.live and time.perf_counter() - last_frame > VIDEO_END_SECONDS:
-                    break
                 continue
             if first_frame is None:
                 first_frame = time.perf_counter()
@@ -885,7 +883,6 @@ def run_recognition(cfg: AppConfig) -> None:
                     for face in faces
                 ]
             processed += 1
-            last_frame = time.perf_counter()
             if metadata_sender is not None:
                 send_metadata(metadata_sender, sample, faces, matches, source)
             else:
@@ -894,7 +891,7 @@ def run_recognition(cfg: AppConfig) -> None:
     finally:
         run.close()
         arcface.close()
-        seconds = last_frame - first_frame if first_frame is not None else 0.0
+        seconds = time.perf_counter() - first_frame if first_frame is not None else 0.0
         fps = processed / seconds if seconds > 0.0 else 0.0
         print(f"processed={processed} fps={fps:.1f}", flush=True)
 
