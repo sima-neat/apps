@@ -706,6 +706,9 @@ void run_recognition(const AppConfig& cfg) {
 } // namespace
 
 int main(int argc, char** argv) {
+  std::cout.setf(std::ios::unitbuf);
+  std::cerr.setf(std::ios::unitbuf);
+
   try {
     const CliOptions cli = parse_args(argc, argv);
     if (!fs::exists(cli.config_path)) {
