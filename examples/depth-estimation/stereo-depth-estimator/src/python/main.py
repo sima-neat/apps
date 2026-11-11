@@ -438,6 +438,11 @@ def pull_disparity(runner) -> np.ndarray:
     return np.squeeze(sample_tensor(sample).to_numpy(copy=True))
 
 
+def save_depth_map(path: Path, heatmap: np.ndarray) -> None:
+    if not cv2.imwrite(str(path), heatmap):
+        raise RuntimeError(f"could not save {path}")
+
+
 def run(cfg: AppConfig, stopped: Callable[[], bool]) -> int:
     runs = []
     try:
@@ -470,7 +475,7 @@ def run(cfg: AppConfig, stopped: Callable[[], bool]) -> int:
             if not depth_run.push([heatmap_tensor(heatmap)]):
                 raise RuntimeError("could not send the depth map to Insight")
             if cfg.save_dir and cfg.save_every and frames % cfg.save_every == 0:
-                cv2.imwrite(str(Path(cfg.save_dir) / f"depth_{frames:06d}.jpg"), heatmap)
+                save_depth_map(Path(cfg.save_dir) / f"depth_{frames:06d}.jpg", heatmap)
             frames += 1
 
         depth_fps = frames / (time.monotonic() - started) if frames else 0.0

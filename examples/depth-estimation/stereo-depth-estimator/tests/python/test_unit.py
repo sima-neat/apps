@@ -255,6 +255,25 @@ def test_heatmap_runs_from_the_darkest_color_at_zero_to_the_brightest_at_the_max
 
 
 @pytest.mark.unit
+def test_save_depth_map_writes_the_image(tmp_path):
+    example = load_example()
+    heatmap = color_blocks(64, 48)
+
+    example.save_depth_map(tmp_path / "depth_000000.png", heatmap)
+
+    np.testing.assert_array_equal(cv2.imread(str(tmp_path / "depth_000000.png")), heatmap)
+
+
+@pytest.mark.unit
+def test_save_depth_map_reports_a_file_it_could_not_write(tmp_path):
+    example = load_example()
+    path = tmp_path / "missing" / "depth_000000.jpg"
+
+    with pytest.raises(RuntimeError, match=f"could not save {path}"):
+        example.save_depth_map(path, color_blocks(64, 48))
+
+
+@pytest.mark.unit
 class TestCli:
     def run(self, *args: str):
         return subprocess.run(
