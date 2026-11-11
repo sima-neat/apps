@@ -66,21 +66,38 @@ cd ..
 
 ## Enroll People
 
-Put the images in one folder per person, named after the person. Each image should show only that person's face:
+The example names only the people you enroll. Enrollment reads pictures of a person and stores what their face looks like, under the name you give, in a gallery file. Recognition then labels a matching face with that name and every other face `Unknown`. You choose the names; the application does not know who is in a picture.
 
-```text
-people/
-  Alice/front.jpg
-  Alice/side.jpg
-  Bob/front.jpg
-```
+### From images
 
-Set `enrollment.images_dir` in `${APP_DIR}/src/common/config.yaml` to that folder, then run the example with `--enroll`:
+1. Make one folder per person, named after them, and put their images in it. The folder name is the label Insight draws on that person's face.
 
-```bash
-./${APP_DIR}/src/cpp/pre-built/face-recognizer \
-  --config ${APP_DIR}/src/common/config.yaml --enroll
-```
+   ```text
+   people/
+     Alice/front.jpg
+     Alice/side.jpg
+     Bob/front.jpg
+   ```
+
+   Each image should show only that person: from an image with several faces, only the most confident one is enrolled. All of a person's images are averaged into one entry.
+
+2. Point `enrollment.images_dir` in `${APP_DIR}/src/common/config.yaml` at the folder. A relative path is read from `prebuilt-apps/`.
+
+   ```yaml
+   enrollment:
+     images_dir: people
+   ```
+
+3. Run the example with `--enroll`:
+
+   ```bash
+   ./${APP_DIR}/src/cpp/pre-built/face-recognizer \
+     --config ${APP_DIR}/src/common/config.yaml --enroll
+   ```
+
+   The Python application takes the same flag: add `--enroll` to the command in [Run](#run).
+
+Each `[enroll]` line is one image stored under that name, and the last line counts the people now in the gallery:
 
 ```text
 [enroll] Alice: front.jpg score=0.812
@@ -89,7 +106,21 @@ Set `enrollment.images_dir` in `${APP_DIR}/src/common/config.yaml` to that folde
 enrolled=3 skipped=0 people=2 gallery=sandbox/face-recognizer/gallery.bin
 ```
 
-An image is skipped when its best face scores below `enrollment.min_score`. To enroll one person from a video instead, set `enrollment.video_path` and `enrollment.name`. Running `--enroll` again adds to the people already in the gallery; delete the file at `gallery.path` to start over. The Python application takes the same flag and writes the same file.
+An image that cannot be read, or whose best face scores below `enrollment.min_score`, is reported on a `[skip]` line and not enrolled.
+
+### From a video
+
+To enroll one person from a video of them alone, set the video and the name instead of `images_dir`, then run with `--enroll` as above. Every fifth frame is enrolled under that name; `enrollment.sample_every` changes the interval.
+
+```yaml
+enrollment:
+  video_path: alice.mp4
+  name: Alice
+```
+
+### Add or remove people
+
+`--enroll` adds to the gallery at `gallery.path`. Run it again to add a person, or more images of someone already enrolled; enrolling the same images twice counts them twice. To remove someone or start over, delete the gallery file and enroll again. The C++ and Python applications read and write the same file.
 
 ## Prepare Insight
 
