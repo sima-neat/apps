@@ -66,7 +66,11 @@ cd ..
 
 ## Enroll People
 
-The example names only the people you enroll. Enrollment reads pictures of a person and stores what their face looks like, under the name you give, in a gallery file. Recognition then labels a matching face with that name and every other face `Unknown`. You choose the names; the application does not know who is in a picture.
+The example names only the people you enroll. You choose the names; the application does not know who is in a picture.
+
+- **You provide** pictures of each person, labelled with their name.
+- **`--enroll` writes** one gallery file, `sandbox/face-recognizer/gallery.bin` unless you change `gallery.path`. It holds each person's name and face embedding, not the pictures.
+- **Recognition reads** only the gallery file. It labels a face that matches an enrolled person with their name, and every other face `Unknown`.
 
 ### From images
 
