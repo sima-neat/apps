@@ -127,7 +127,7 @@ Both implementations print the source and the camera frame size at start, then s
 Open channels 0, 1 and 2 in the Insight viewer, with four videos per page. Channel 0 shows the left camera, channel 1 the right camera, and channel 2 the depth map of the left view, 960×540 pixels. Near objects are bright and far ones dark. When the run ends, the application prints one summary line:
 
 ```text
-frames=300 depth_fps=16.0 insight=<insight-host>:9000-9002
+frames=300 depth_fps=30.0 insight=<insight-host>:9000-9002
 ```
 
 `depth_fps` is the rate of depth maps sent to Insight. The camera channels keep the cameras' own rate, and the depth map follows them by about a tenth of a second.
