@@ -18,7 +18,7 @@ Names the people in an RTSP stream, a USB camera or a video file with SCRFD face
 
 SCRFD finds each face and its five landmarks, ArcFace turns the aligned face into a 512-value embedding, and the embedding is matched against a gallery of enrolled people.
 
-A live source is sent to Insight as it arrives, with no re-encoding, and decoded once for the model. Each decoded frame goes to SCRFD and is also returned to the application, joined by frame, so every face is cropped from the frame it was found in. The application then aligns, embeds and matches every face of every frame; each face adds one ArcFace run of about 10 ms. `--enroll` builds the gallery with the same detection, alignment and embedding steps.
+A live source is sent to Insight as it arrives, with no re-encoding, and decoded once for the model. Each decoded frame goes to SCRFD and is also returned to the application, joined by frame, so every face is cropped from the frame it was found in. The application then aligns, embeds and matches every face of every frame. Each face adds one ArcFace run, so the frame rate falls as faces are added: a 720p video file ran at 47 FPS with two faces in view and 30 FPS with four. `--enroll` builds the gallery with the same detection, alignment and embedding steps.
 
 ## Preview
 
