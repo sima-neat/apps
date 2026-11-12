@@ -169,6 +169,42 @@ near `0`. To confirm masks without watching Insight, set `output.save_dir` to a
 directory and `output.save_every` to a non-zero interval; the application then
 writes annotated frames there as it runs, and `saved` counts them.
 
+## Performance
+
+Measured on a Modalix DevKit with Platform 3.0.0, the C++ application from the `apps@develop` package, and no other workload on the board. The configuration is the default except for the model and the input stream. Each figure is the rate, in FPS, at which Insight received segmentation metadata, averaged over 20 seconds after a 5-second warm-up. Input streams are traffic footage at 300 FPS for 720p and at 120 FPS for 1080p.
+
+Model size at 720p H.264:
+
+| Model file | FPS | Instances per frame |
+| --- | ---: | ---: |
+| `yolo26n-seg-bf16-mla_tess.tar.gz` | 200 | 4 |
+| `yolo26s-seg-bf16-mla_tess.tar.gz` | 87 | 7 |
+| `yolo26m-seg-bf16-mla_tess.tar.gz` | 31 | 8 |
+| `yolo26l-seg-bf16-mla_tess.tar.gz` | stops\*\* | |
+| `yolo26x-seg-bf16-mla_tess.tar.gz` | stops\*\* | |
+| `yolo26m-seg-bf16-b1.tar.gz` (default) | 31 | 8 |
+| `yolo26m-seg-int8-b1.tar.gz`\*\*\* | 134 | 11 |
+
+Resolution and codec:
+
+| Input resolution | Codec | Default Medium bf16 | Medium INT8\*\*\* | Nano bf16 |
+| --- | --- | ---: | ---: | ---: |
+| 720p | H.264 | 31 | 134 | 202 |
+| 720p | H.265 | 31 | 134 | 204 |
+| 720p | MJPEG | 31 | 134 | 201 |
+| 1080p | H.264 | 31 | 106 | stops\* |
+| 1080p | H.265 | 31 | 95 | 97 |
+
+The 1080p figures use 120 FPS inputs. With 240 FPS 1080p inputs, the INT8 and Nano models stopped with `timed out waiting for detections` in three of four runs. The run that completed, Medium INT8 with H.265, reached 134 FPS, so these 1080p figures are below what the models can process. Keep the input rate at or below the figures in the table.
+
+The Python application measured 31 FPS with the default model at 1080p H.264.
+
+\* Stopped publishing during the 20-second run with a 120 FPS input, after processing about 108 FPS.
+
+\*\* Stopped within seconds with `stage inbox backpressure timeout (node=3 FanOut, push_timeout_ms=5000)`.
+
+\*\*\* Measured with `inference.min_score: 0.25`. At the default 0.55, this package published no instances on the test footage.
+
 ## Troubleshooting
 
 - Verify `model.path` and the source URL if startup fails.

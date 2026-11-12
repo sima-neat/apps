@@ -139,6 +139,37 @@ The tracker follows ByteTrack:
 - There is no appearance model, so an object hidden longer than `max_missing_frames`, or one that crosses a same-class object while both are occluded, gets a new ID.
 - Scene cuts start new IDs.
 
+## Performance
+
+Measured on a Modalix DevKit with Platform 3.0.0, the C++ application from the `apps@develop` package, and no other workload on the board. The configuration is the default except for the model and the input streams. Each run uses four streams of people in public spaces, at 120 FPS for 720p H.264, 180 FPS for 720p H.265, 60 FPS for 1080p H.264, and 90 FPS for 1080p H.265. Each figure is the per-stream rate, in FPS, at which Insight received tracking metadata, averaged over 20 seconds after a 5-second warm-up. Multiply by four for the total across streams.
+
+Model size at 720p H.264:
+
+| Model file | FPS per stream | Tracks per frame |
+| --- | ---: | ---: |
+| `yolo26n-det-bf16-mla_tess-b1.tar.gz` | 67 | 10 |
+| `yolo26s-det-bf16-mla_tess-b1.tar.gz` | 30 | 11 |
+| `yolo26m-det-bf16-mla_tess-b1.tar.gz` | 12 | 11 |
+| `yolo26l-det-bf16-mla_tess-b1.tar.gz` | 9 | 11 |
+| `yolo26x-det-bf16-mla_tess-b1.tar.gz` | 4 | 11 |
+| `yolo26m-det-int8-b1.tar.gz` (default) | 51 | 12 |
+| `yolo26n-det-int8-b1.tar.gz`\*\* | 116\* | 9 |
+
+Resolution and codec, in FPS per stream:
+
+| Input resolution | Codec | Default Medium INT8 | Nano INT8\*\* |
+| --- | --- | ---: | ---: |
+| 720p | H.264 | 51 | 116\* |
+| 720p | H.265 | 51 | 177\* |
+| 1080p | H.264 | 51 | 58\* |
+| 1080p | H.265 | 51 | 89\* |
+
+With one stream and Nano INT8, the application kept up with a 300 FPS 720p H.264 input and a 240 FPS 1080p H.264 input. The Python application measured 51 FPS per stream with the default model at 1080p H.264.
+
+\* Limited by the input rate.
+
+\*\* Downloaded from the same Model Zoo directory as the packages in [Prepare the Model](#prepare-the-model).
+
 ## Troubleshooting
 
 - Start with one stream before scaling to multiple inputs.

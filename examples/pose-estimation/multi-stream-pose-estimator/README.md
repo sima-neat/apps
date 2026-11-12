@@ -151,6 +151,32 @@ digits. Compare the magnitudes rather than the digits.
 where people are distant or sparse, so a small value is not itself a problem. A
 stream that never reports frames at all is the signal worth investigating.
 
+## Performance
+
+Measured on a Modalix DevKit with Platform 3.0.0, the C++ application from the `apps@develop` package, and no other workload on the board. The configuration is the default except for the model and the input streams. Each run uses four streams of people in public spaces, at 120 FPS for 720p H.264, 180 FPS for 720p H.265, 60 FPS for 1080p H.264, and 90 FPS for 1080p H.265. Each figure is the per-stream rate, in FPS, at which Insight received pose metadata, averaged over 20 seconds after a 5-second warm-up. Multiply by four for the total across streams.
+
+Model size at 720p H.264:
+
+| Model file | FPS per stream | Poses per frame |
+| --- | ---: | ---: |
+| `yolo26n-pose-bf16-mla_tess-b1.tar.gz` | 59 | 4 |
+| `yolo26s-pose-bf16-mla_tess-b1.tar.gz` | 28 | 5 |
+| `yolo26m-pose-bf16-mla_tess-b1.tar.gz` | 11 | 6 |
+| `yolo26l-pose-bf16-mla_tess-b1.tar.gz` | 9 | 5 |
+| `yolo26x-pose-bf16-mla_tess-b1.tar.gz` | 4 | 6 |
+| `yolo26m-pose-int8-b1.tar.gz` (default) | 48 | 6 |
+
+Resolution and codec, in FPS per stream:
+
+| Input resolution | Codec | Default Medium INT8 | Nano bf16 |
+| --- | --- | ---: | ---: |
+| 720p | H.264 | 48 | 59 |
+| 720p | H.265 | 48 | 59 |
+| 1080p | H.264 | 48 | 59 |
+| 1080p | H.265 | 48 | 59 |
+
+Nano bf16 stays at 59 FPS per stream with the 120 and 180 FPS inputs, so its 1080p H.264 figure is not limited by the 60 FPS input. The Python application measured 47 FPS per stream with the default model at 1080p H.264.
+
 ## Troubleshooting
 
 - Replace all placeholder stream URLs and the Insight host before running.
