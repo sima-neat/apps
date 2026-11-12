@@ -92,6 +92,16 @@ public input or output. If more than one endpoint exists, use the names.
 Use `Sample` when the application needs frame IDs, timestamps, bundled values,
 or other metadata. Use `TensorList` when raw tensor payloads are enough.
 
+To use frames of two live cameras together, such as a stereo pair, give each
+camera its own named `nodes::Output` in one graph, with
+`OutputOptions::Latest()`, and pull the newest frame of each. Each source
+stamps its own frames and Neat exposes no capture clock they share, so do not
+pair cameras by `pts_ns` or `frame_id`, and `CombinePolicy::ByPts` and
+`ByFrame` match only exactly equal values. Newest-frame pairs can be about one
+frame interval apart. To also show a camera in Insight, connect its encoded
+source to a passthrough `VideoSender` beside the decoder; Core tees the stream.
+See `examples/depth-estimation/stereo-depth-estimator`.
+
 Outputs pulled with the default output memory share runtime buffers. When the
 application keeps outputs after the next pull, choose output memory as
 [inspect, measure, and tune](inspect-measure-tune.md) describes.
