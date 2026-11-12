@@ -114,7 +114,7 @@ def main() -> int:
                 continue
 
             rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-            rgb = cv2.resize(rgb, (infer_size, infer_size), interpolation=cv2.INTER_LINEAR)
+            rgb = cv2.resize(rgb, (infer_size, infer_size), interpolation=cv2.INTER_CUBIC)
             rgb = np.ascontiguousarray(rgb, dtype=np.uint8)
             t_in = pyneat.Tensor.from_numpy(rgb, copy=True, image_format=pyneat.PixelFormat.RGB)
 

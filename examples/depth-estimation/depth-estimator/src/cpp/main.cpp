@@ -237,7 +237,7 @@ int main(int argc, char** argv) {
 
     cv::Mat rgb;
     cv::cvtColor(bgr, rgb, cv::COLOR_BGR2RGB);
-    cv::resize(rgb, rgb, {cfg.infer_size, cfg.infer_size});
+    cv::resize(rgb, rgb, {cfg.infer_size, cfg.infer_size}, 0.0, 0.0, cv::INTER_CUBIC);
 
     simaai::neat::Tensor input = simaai::neat::Tensor::from_cv_mat(
         rgb, simaai::neat::ImageSpec::PixelFormat::RGB, simaai::neat::TensorMemory::EV74);
