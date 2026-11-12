@@ -16,7 +16,7 @@ io:                           # Input image settings.
 
 models:
   resnet_50:
-    path: models/resnet_50_mpk.tar.gz
+    path: models/resnet_50/w16a16/resnet_50_w16a16_mpk.tar.gz
     input_width: 224
     input_height: 224
     resize_shorter: 256       # Shorter image side before the centred input_width x input_height crop.
@@ -29,7 +29,7 @@ models:
     top_k: 5
 
   resnet_18:
-    path: models/resnet_18_mpk.tar.gz
+    path: models/resnet_18/w16a16/resnet_18_w16a16_mpk.tar.gz
     input_width: 224
     input_height: 224
     resize_shorter: 256
@@ -40,20 +40,8 @@ models:
     label_map: src/common/imagenet_labels.txt
     top_k: 5
 
-  efficientnet_b0:
-    path: models/efficientnet_b0_mpk.tar.gz
-    input_width: 224
-    input_height: 224
-    resize_shorter: 256
-    interpolation: bicubic
-    preprocess: imagenet
-    output: softmax
-    num_classes: 1000
-    label_map: src/common/imagenet_labels.txt
-    top_k: 5
-
   densenet_121:
-    path: models/densenet_121_mpk.tar.gz
+    path: models/densenet_121/w16a16/densenet_121_w16a16_mpk.tar.gz
     input_width: 224
     input_height: 224
     resize_shorter: 256

@@ -41,7 +41,9 @@ def _assert_goldfish(image_entry: dict, model_names) -> None:
         )
 
 
-MODEL_NAMES = ("resnet_50", "resnet_18", "efficientnet_b0", "densenet_121")
+MODEL_NAMES = ("resnet_50", "resnet_18", "densenet_121")
+# Every model is the w16a16 Model Registry build that test-scope.yaml downloads.
+MODEL_VARIANT = "w16a16"
 
 
 def _cpp_binary(apps_root: Path) -> str:
@@ -91,7 +93,7 @@ def _normalised_report(output_dir: Path) -> dict:
 
 
 def _model_paths(models_dir: Path) -> dict[str, Path]:
-    return {name: models_dir / f"{name}_mpk.tar.gz" for name in MODEL_NAMES}
+    return {name: models_dir / f"{name}_{MODEL_VARIANT}_mpk.tar.gz" for name in MODEL_NAMES}
 
 
 @pytest.mark.e2e

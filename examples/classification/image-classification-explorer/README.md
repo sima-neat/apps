@@ -10,7 +10,7 @@
 | Languages | C++, Python |
 | Status | stable |
 | Binary Name | image-classification-explorer |
-| Model | resnet_50, resnet_18, efficientnet_b0, densenet_121 |
+| Model | resnet_50, resnet_18, densenet_121 (w16a16) |
 
 ## Concept
 
@@ -42,25 +42,24 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-| Model package |
-| --- |
-| `resnet_50_mpk.tar.gz` |
-| `resnet_18_mpk.tar.gz` |
-| `efficientnet_b0_mpk.tar.gz` |
-| `densenet_121_mpk.tar.gz` |
+| Model | Variant | Source |
+| --- | --- | --- |
+| `resnet_50` | `w16a16` | Model Registry |
+| `resnet_18` | `w16a16` | Model Registry |
+| `densenet_121` | `w16a16` | Model Registry |
 
-Model packages come from the Model Zoo release below, which can differ from the installed platform version.
+Download the packages from the Model Registry:
 
 ```bash
-export MODELZOO_VERSION="3.0.0"
-mkdir -p models
-cd models
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/resnet_50_mpk.tar.gz"
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/resnet_18_mpk.tar.gz"
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/efficientnet_b0_mpk.tar.gz"
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/densenet_121_mpk.tar.gz"
-cd ..
+sima-cli models download --id resnet_50 --variant w16a16
+sima-cli models download --id resnet_18 --variant w16a16
+sima-cli models download --id densenet_121 --variant w16a16
 ```
+
+Each package lands at `models/<id>/w16a16/<id>_w16a16_mpk.tar.gz`, the path
+the shipped config already names. The `resize_shorter` and `interpolation` of
+each profile match the preprocessing the Model Registry evaluated that model
+with.
 
 Each model is its own profile in the config; add more supported classification models the same
 way by adding another entry under `models`.
@@ -205,7 +204,6 @@ needs `csv` in `io.output_format`:
 image                     model            status  top1_class_id  top1_label  top1_probability
 /tmp/sima_imagenet_...    resnet_50        ok      1              goldfish    0.9462
 /tmp/sima_imagenet_...    resnet_18        ok      1              goldfish    0.9995
-/tmp/sima_imagenet_...    efficientnet_b0  ok      1              goldfish    0.7786
 /tmp/sima_imagenet_...    densenet_121     ok      1              goldfish    0.9586
 ```
 
