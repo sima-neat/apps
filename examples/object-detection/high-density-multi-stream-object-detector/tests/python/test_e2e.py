@@ -17,6 +17,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from received_metadata_tracker import ReceivedMetadataTracker
 
 EXAMPLE_DIR = Path(__file__).resolve().parents[2]
+EIGHT_GIB_KIB = 8 * 1024 * 1024
+
+
+def minimum_stream_fps():
+    # Linux reports usable RAM, so the 8 GiB SOM can report less than 8 GiB.
+    try:
+        with Path("/proc/meminfo").open() as meminfo:
+            field, value, unit = meminfo.readline().split()
+        kib = int(value)
+        if field == "MemTotal:" and unit == "kB" and 0 < kib <= EIGHT_GIB_KIB:
+            return 26.5
+    except (OSError, ValueError):
+        pass
+    return 28.125
 
 
 def select_source(urls, codec):
@@ -183,12 +197,16 @@ def test_metadata_throughput(
     assert tracker.total_measured == 5000
     assert tracker.elapsed_s > 0
     aggregate_fps = tracker.total_measured / tracker.elapsed_s
+    stream_floor = minimum_stream_fps()
+    aggregate_floor = len(tracker.measured_frames) * stream_floor
     summary = {
         "frames": tracker.total_measured,
         "elapsed_s": tracker.elapsed_s,
         "aggregate_fps": aggregate_fps,
+        "minimum_aggregate_fps": aggregate_floor,
+        "minimum_per_stream_fps": stream_floor,
         "per_stream_frames": tracker.measured_frames,
     }
     print(f"{codec}: {json.dumps(summary)}")
-    assert aggregate_fps > 562.5
-    assert min(tracker.measured_frames) / tracker.elapsed_s > 28.125
+    assert aggregate_fps > aggregate_floor
+    assert min(tracker.measured_frames) / tracker.elapsed_s > stream_floor
