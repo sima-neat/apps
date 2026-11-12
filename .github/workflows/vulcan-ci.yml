@@ -405,18 +405,16 @@ jobs:
           "${PYTHON_TEST_BIN}" -m pip install pytest "opencv-python-headless<4.12" PyYAML
           "${PYTHON_TEST_BIN}" -c "import pyneat; print('Using pyneat:', pyneat.__file__)"
 
+      - name: Set up Colo media fixtures
+        if: ${{ matrix.needs_media_fixtures }}
+        uses: sima-neat/.github/actions/setup-colo-media-fixtures@8f11c3a93287b459aa87f6353a6428893bb0d355 # .github PR 180
+        with:
+          profile: all
+
       - name: Run assigned Apps suites
         env:
           NEAT_APPS_SKIP_MODEL_DOWNLOAD: "0"
           SIMANEAT_APPS_TEST_MODEL_VARIANTS: ${{ inputs.nightly && '1' || '0' }}
-          SIMANEAT_TEST_RTSP_H264_URL: ${{ vars.SIMANEAT_TEST_RTSP_H264_URL }}
-          SIMANEAT_TEST_RTSP_H264_URLS: ${{ vars.SIMANEAT_TEST_RTSP_H264_URLS }}
-          SIMANEAT_TEST_RTSP_H265_URL: ${{ vars.SIMANEAT_TEST_RTSP_H265_URL }}
-          SIMANEAT_TEST_RTSP_H265_URLS: ${{ vars.SIMANEAT_TEST_RTSP_H265_URLS }}
-          SIMANEAT_TEST_RTSP_MJPEG_URL: ${{ vars.SIMANEAT_TEST_RTSP_MJPEG_URL }}
-          SIMANEAT_TEST_RTSP_MJPEG_URLS: ${{ vars.SIMANEAT_TEST_RTSP_MJPEG_URLS }}
-          SIMANEAT_TEST_HTTP_MJPEG_URL: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URL }}
-          SIMANEAT_TEST_HTTP_MJPEG_URLS: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URLS }}
         run: |
           RUNTIME_DIR="$(cat _vulcan-test/apps_runtime_dir.txt)"
           # shellcheck disable=SC1090
