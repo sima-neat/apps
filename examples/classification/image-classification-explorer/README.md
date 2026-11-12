@@ -86,7 +86,7 @@ and CSV/JSON fields). Each profile is fully self-contained:
 | `path` | Compiled model package. |
 | `input_width` / `input_height` | Model input dimensions. |
 | `resize_shorter` | Shorter image side, in pixels, before the centred `input_width` x `input_height` window is cut out. The default, 256 for a 224 input, is the standard ImageNet evaluation crop. Must be at least the larger input side. |
-| `interpolation` | Resize filter: `bilinear` or `bicubic`. Use the filter the model was evaluated with. |
+| `interpolation` | Resize filter the model was evaluated with: `bilinear` or `bicubic`. It enlarges images whose shorter side is below `resize_shorter`; larger images are shrunk by area averaging, the closest OpenCV match to how the models were evaluated. |
 | `preprocess` | Preprocessing preset. Only `imagenet` (standard ImageNet normalization) is implemented. |
 | `output` | Output interpretation. Only `softmax` is implemented: the model produces raw per-class scores, softmax is applied, and index `i` maps to `label_map[i]`. |
 | `num_classes` | Number of classes the model outputs. |

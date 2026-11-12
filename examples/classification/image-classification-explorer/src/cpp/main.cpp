@@ -1790,6 +1790,17 @@ std::pair<long long, long long> resized_size(int width, int height, int shorter)
   return {static_cast<long long>(shorter) * width / height, shorter};
 }
 
+// Offset that centres a window `extra` pixels smaller than the image, rounded to
+// the nearest pixel with ties to even, as torchvision's CenterCrop does with
+// Python's round().
+long long centered_offset(long long extra) {
+  long long half = extra / 2;
+  if (extra % 2 != 0 && half % 2 != 0) {
+    ++half;
+  }
+  return half;
+}
+
 // Load an image and prepare it as the model was evaluated: scale the shorter side
 // to resize_shorter, cut out the centred input-sized window, and return it as RGB.
 //
@@ -1811,16 +1822,15 @@ cv::Mat load_rgb_center_crop(const std::string& path, const ModelProfile& profil
                              ", which would need " + std::to_string(resized_w) + "x" +
                              std::to_string(resized_h));
   }
-  // OpenCV's bilinear and bicubic filters read only the source pixels next to each
-  // sample, so shrinking more than twofold skips most of the image and aliases.
-  // Pillow, which the models were evaluated with, widens its filter instead;
-  // averaging down to twice the target first comes close to it.
-  if (resized_w * 2 < width && resized_h * 2 < height) {
-    cv::resize(bgr, bgr,
-               cv::Size(static_cast<int>(resized_w * 2), static_cast<int>(resized_h * 2)), 0, 0,
-               cv::INTER_AREA);
-  }
-  if (bgr.cols != resized_w || bgr.rows != resized_h) {
+  // The models were evaluated with Pillow, whose filters widen with the scale factor
+  // when shrinking. OpenCV's bilinear and bicubic read only the source pixels next
+  // to each sample and alias instead, so shrinking uses OpenCV's area averaging,
+  // which is closer to Pillow than either; on ImageNet it more than halves the
+  // difference. The profile's filter enlarges small images.
+  if (resized_w < width && resized_h < height) {
+    cv::resize(bgr, bgr, cv::Size(static_cast<int>(resized_w), static_cast<int>(resized_h)), 0,
+               0, cv::INTER_AREA);
+  } else if (width != resized_w || height != resized_h) {
     int flag = cv::INTER_LINEAR;
     for (const auto& f : interpolations()) {
       if (f.first == profile.interpolation) {
@@ -1830,8 +1840,8 @@ cv::Mat load_rgb_center_crop(const std::string& path, const ModelProfile& profil
     cv::resize(bgr, bgr, cv::Size(static_cast<int>(resized_w), static_cast<int>(resized_h)), 0,
                0, flag);
   }
-  const int top = static_cast<int>((resized_h - profile.input_height) / 2);
-  const int left = static_cast<int>((resized_w - profile.input_width) / 2);
+  const int top = static_cast<int>(centered_offset(resized_h - profile.input_height));
+  const int left = static_cast<int>(centered_offset(resized_w - profile.input_width));
   const cv::Mat window =
       bgr(cv::Rect(left, top, profile.input_width, profile.input_height));
   cv::Mat rgb;

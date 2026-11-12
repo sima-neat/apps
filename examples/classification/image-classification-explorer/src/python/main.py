@@ -887,6 +887,16 @@ def resized_size(width: int, height: int, shorter: int) -> tuple[int, int]:
     return shorter * width // height, shorter
 
 
+def centered_offset(extra: int) -> int:
+    """Offset that centres a window `extra` pixels smaller than the image, rounded
+    to the nearest pixel with ties to even, as torchvision's CenterCrop does with
+    Python's round()."""
+    half = extra // 2
+    if extra % 2 and half % 2:
+        half += 1
+    return half
+
+
 def load_rgb_center_crop(path: str, profile: ModelProfile):
     """Load an image and prepare it as the model was evaluated: scale the shorter
     side to resize_shorter, cut out the centred input-sized window, and return it
@@ -909,17 +919,18 @@ def load_rgb_center_crop(path: str, profile: ModelProfile):
             f"Image is too elongated to resize: {path} is {width}x{height}, which would "
             f"need {resized_w}x{resized_h}"
         )
-    # OpenCV's bilinear and bicubic filters read only the source pixels next to
-    # each sample, so shrinking more than twofold skips most of the image and
-    # aliases. Pillow, which the models were evaluated with, widens its filter
-    # instead; averaging down to twice the target first comes close to it.
-    if resized_w * 2 < width and resized_h * 2 < height:
-        bgr = cv2.resize(bgr, (resized_w * 2, resized_h * 2), interpolation=cv2.INTER_AREA)
-    if (bgr.shape[1], bgr.shape[0]) != (resized_w, resized_h):
+    # The models were evaluated with Pillow, whose filters widen with the scale
+    # factor when shrinking. OpenCV's bilinear and bicubic read only the source
+    # pixels next to each sample and alias instead, so shrinking uses OpenCV's
+    # area averaging, which is closer to Pillow than either; on ImageNet it more
+    # than halves the difference. The profile's filter enlarges small images.
+    if resized_w < width and resized_h < height:
+        bgr = cv2.resize(bgr, (resized_w, resized_h), interpolation=cv2.INTER_AREA)
+    elif (width, height) != (resized_w, resized_h):
         flag = getattr(cv2, INTERPOLATIONS[profile.interpolation])
         bgr = cv2.resize(bgr, (resized_w, resized_h), interpolation=flag)
-    top = (resized_h - profile.input_height) // 2
-    left = (resized_w - profile.input_width) // 2
+    top = centered_offset(resized_h - profile.input_height)
+    left = centered_offset(resized_w - profile.input_width)
     window = bgr[top : top + profile.input_height, left : left + profile.input_width]
     return cv2.cvtColor(window, cv2.COLOR_BGR2RGB)
 

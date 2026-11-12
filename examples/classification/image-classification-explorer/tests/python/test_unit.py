@@ -425,6 +425,12 @@ class TestCenterCrop:
     def test_resized_size_scales_the_shorter_side(self, size, expected):
         assert main.resized_size(*size, 256) == expected
 
+    @pytest.mark.parametrize("extra", [0, 1, 3, 5, 32, 117, 119])
+    def test_centered_offset_rounds_like_torchvision(self, extra):
+        """torchvision's CenterCrop rounds (extra / 2) with Python's round(),
+        which sends ties to the even neighbour: 1.5 -> 2 but 2.5 -> 2."""
+        assert main.centered_offset(extra) == int(round(extra / 2.0))
+
     @pytest.mark.parametrize("interpolation", ["bilinear", "bicubic"])
     def test_keeps_the_centre_and_drops_the_sides(self, tmp_path, interpolation):
         """A 2:1 image with red outer quarters: the centre crop sees only the
@@ -443,24 +449,45 @@ class TestCenterCrop:
         assert rgb.shape == (224, 224, 3)
         assert rgb.min() >= 250  # white only; any red would drop green and blue to 0
 
-    def test_matches_resize_then_crop(self, tmp_path):
+    @pytest.mark.parametrize(("source", "flag"), [
+        ((300, 400), "INTER_AREA"),   # shrinking averages, whatever the profile's filter
+        ((150, 200), "INTER_CUBIC"),  # enlarging uses the profile's filter
+    ])
+    def test_matches_resize_then_crop(self, tmp_path, source, flag):
         import cv2
         import numpy as np
 
         rng = np.random.default_rng(0)
-        image = rng.integers(0, 256, (300, 400, 3), dtype=np.uint8)
+        image = rng.integers(0, 256, (*source, 3), dtype=np.uint8)
         path = tmp_path / "noise.png"
         cv2.imwrite(str(path), image)
 
         rgb = main.load_rgb_center_crop(str(path), self._profile(interpolation="bicubic"))
 
-        resized = cv2.resize(image, (341, 256), interpolation=cv2.INTER_CUBIC)
+        resized = cv2.resize(image, (341, 256), interpolation=getattr(cv2, flag))
+        # 341 - 224 = 117 spare columns: 58.5 rounds to the even 58.
         expected = cv2.cvtColor(resized[16:240, 58:282], cv2.COLOR_BGR2RGB)
         assert np.array_equal(rgb, expected)
 
+    def test_odd_margin_rounds_the_offset_up_to_even(self, tmp_path):
+        """A 343-pixel-wide resize leaves 119 spare columns. torchvision crops
+        from column round(59.5) = 60; truncating would start at 59."""
+        import cv2
+        import numpy as np
+
+        rng = np.random.default_rng(1)
+        image = rng.integers(0, 256, (256, 343, 3), dtype=np.uint8)
+        path = tmp_path / "wide.png"
+        cv2.imwrite(str(path), image)
+
+        rgb = main.load_rgb_center_crop(str(path), self._profile())
+
+        expected = cv2.cvtColor(image[16:240, 60:284], cv2.COLOR_BGR2RGB)
+        assert np.array_equal(rgb, expected)
+
     def test_large_images_shrink_without_aliasing(self, tmp_path):
-        """A one-pixel checkerboard averages to mid grey. Bilinear alone samples
-        it at 4032 -> 256 and returns an arbitrary mix of black and white."""
+        """A one-pixel checkerboard averages to mid grey. Bilinear sampling of it
+        at 4032 -> 256 would return an arbitrary mix of black and white."""
         import cv2
         import numpy as np
 
