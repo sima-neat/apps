@@ -18,6 +18,26 @@ prefer Insight for remote browser viewing.
 - Pair it with `MetadataSender` when Insight needs JSON detections or other
   structured overlays. `MetadataSender` splits JSON larger than 1200 bytes
   into chunks that the receiving Insight version must reassemble.
+- For a frame-level label, send `type: "classification"` with
+  `data.top_classes` as `[{"label": ..., "confidence": <0 to 1>}, ...]`, best
+  first. Insight draws the first three as `label (NN%)` lines at the top left
+  of the video, with no box, and reads no other field.
+  `examples/classification/clip-zero-shot-classifier` sends this message.
+- Insight shows a metadata message on the video frame whose RTP timestamp is
+  within 1 ms of the message's `timestamp`. A `VideoSender` in the same `Run`
+  as the source keeps that timeline. To draw into frames on the host, join the
+  decoded frame and the model output with `CombinePolicy::ByFrame`, copy the
+  frame, and push it into a separate `Input` -> `VideoSender` graph as a
+  `Sample` that carries the source's `pts_ns` and `frame_id`. A pushed tensor
+  gets a new timeline, and Insight then matches no metadata.
+  `examples/classification/clip-zero-shot-classifier` draws a result panel
+  this way.
+- Push a new frame buffer each time. The video `Run` reads a pushed CPU frame
+  later on its own thread, so rewriting a reused buffer can change a frame
+  before it is encoded.
+- With the OpenCV 4.10 of Platform 3.0.0, C++ `cv::putText` with `LINE_AA`
+  took up to 1.8 ms per line of text on the DevKit. Render each distinct text
+  once and paste it into later frames.
 - Oriented-box decoders emit `BBOX_OBB_V1`, which the axis-aligned `SimaRender`
   rejects. Draw oriented boxes in application code or send them as metadata.
 - Inspect `include/nodes/groups/VideoSender.h` and
