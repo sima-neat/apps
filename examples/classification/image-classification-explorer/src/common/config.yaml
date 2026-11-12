@@ -1,9 +1,10 @@
 # Image classification explorer configuration.
 #
 # `models` lists one or more model profiles. Every profile is self-contained:
-# artifact path, input size, preprocessing preset, output interpretation, label
-# mapping, and top-k. Nothing is inferred from the model file name. Add a
-# profile to compare an additional model against the ones already listed.
+# artifact path, input size, resize and crop, preprocessing preset, output
+# interpretation, label mapping, and top-k. Nothing is inferred from the model
+# file name. Add a profile to compare an additional model against the ones
+# already listed.
 
 io:                           # Input image settings.
   input: null                 # Single image, or a directory read one level deep (subdirectories ignored).
@@ -18,6 +19,8 @@ models:
     path: models/resnet_50_mpk.tar.gz
     input_width: 224
     input_height: 224
+    resize_shorter: 256       # Shorter image side before the centred input_width x input_height crop.
+    interpolation: bicubic    # Resize filter the model was evaluated with: bilinear or bicubic.
     preprocess: imagenet      # Maps to pyneat/simaai NormalizePreset::ImageNet.
     output: softmax           # Output interpretation: raw per-class scores; softmax is
                                # applied and index i maps to label_map[i]. Only value implemented.
@@ -29,6 +32,8 @@ models:
     path: models/resnet_18_mpk.tar.gz
     input_width: 224
     input_height: 224
+    resize_shorter: 256
+    interpolation: bilinear
     preprocess: imagenet
     output: softmax
     num_classes: 1000
@@ -39,6 +44,8 @@ models:
     path: models/efficientnet_b0_mpk.tar.gz
     input_width: 224
     input_height: 224
+    resize_shorter: 256
+    interpolation: bicubic
     preprocess: imagenet
     output: softmax
     num_classes: 1000
@@ -49,6 +56,8 @@ models:
     path: models/densenet_121_mpk.tar.gz
     input_width: 224
     input_height: 224
+    resize_shorter: 256
+    interpolation: bicubic
     preprocess: imagenet
     output: softmax
     num_classes: 1000

@@ -20,6 +20,7 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 using sima_examples::testing::ProcessResult;
@@ -674,6 +675,42 @@ int main(int argc, char** argv) {
       }
     }
     fs::remove_all(pkg, ec);
+  }
+
+  // Test 30: resize settings are validated like Python's load_profiles: an
+  // unknown filter, or a shorter side below the input size, is a configuration
+  // error (exit 2) reported before any model loads.
+  {
+    namespace fs = std::filesystem;
+    const auto stamp = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    const std::vector<std::pair<std::string, std::string>> cases = {
+        {"    interpolation: lanczos\n", "interpolation"},
+        {"    resize_shorter: 223\n", "resize_shorter"},
+        {"    resize_shorter: 8193\n", "resize_shorter"},
+    };
+    for (std::size_t i = 0; i < cases.size(); ++i) {
+      const auto config_path = fs::temp_directory_path() /
+                               ("image-classification-explorer-resize-" + stamp + "-" +
+                                std::to_string(i) + ".yaml");
+      {
+        std::ofstream config(config_path);
+        config << "models:\n"
+               << "  m:\n"
+               << "    path: /nonexistent/m.tar.gz\n"
+               << cases[i].first;
+      }
+      auto r = spawn_and_wait(binary, {"--config", config_path.string()}, 20000);
+      fs::remove(config_path);
+      if (r.exit_code != 2 || r.stderr_text.find(cases[i].second) == std::string::npos ||
+          r.stdout_text.find("Loading model") != std::string::npos) {
+        std::cerr << "[FAIL] resize settings: expected a configuration error naming "
+                  << cases[i].second << ", got exit " << r.exit_code << "\nstderr:\n"
+                  << r.stderr_text << "\n";
+        ++failures;
+      } else {
+        std::cout << "[OK] rejected invalid " << cases[i].second << "\n";
+      }
+    }
   }
 
   return failures > 0 ? 1 : 0;

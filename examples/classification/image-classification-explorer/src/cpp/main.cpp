@@ -34,6 +34,7 @@
 #include <stdexcept>
 #include <string>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 // POSIX: the publication lock and the process-liveness check.
@@ -761,6 +762,11 @@ struct ModelProfile {
   std::string label_map;
   int top_k = 5;
   std::vector<std::string> labels;
+  // The model's evaluation preprocessing: scale the shorter image side to
+  // resize_shorter with this filter, then cut the centred input_width x
+  // input_height window out of the result.
+  int resize_shorter = 256;
+  std::string interpolation = "bilinear";
 };
 
 struct Prediction {
@@ -1132,9 +1138,22 @@ std::string bundled_asset(const std::string& name) {
 }
 
 // --- Configuration: reading config.yaml and validating every setting -----------
-// Each input is resized to input_width x input_height before inference, so these
-// bound an allocation per image: 100000x100000 would ask OpenCV for ~30 GB.
+// Each input is resized so its shorter side is resize_shorter, at least
+// input_width x input_height, so these bound an allocation per image:
+// 100000x100000 would ask OpenCV for ~30 GB.
 constexpr int kMaxInputDimension = 8192;
+
+// Supported resize filters, by config name, in the order errors list them.
+const std::vector<std::pair<std::string, int>>& interpolations() {
+  static const std::vector<std::pair<std::string, int>> kInterpolations = {
+      {"bilinear", cv::INTER_LINEAR}, {"bicubic", cv::INTER_CUBIC}};
+  return kInterpolations;
+}
+
+// The shorter side for the standard ImageNet 87.5% centre crop: 256 for 224.
+int default_resize_shorter(int width, int height) {
+  return static_cast<int>(static_cast<long long>(std::min(width, height)) * 8 / 7);
+}
 
 std::vector<ModelProfile> load_profiles(const sima_examples::ScalarConfig& raw,
                                         const fs::path& config_path) {
@@ -1213,6 +1232,12 @@ std::vector<ModelProfile> load_profiles(const sima_examples::ScalarConfig& raw,
     profile.num_classes = config_int(raw, "models." + key + ".num_classes", 1000);
     profile.label_map = config_scalar_or(raw, "models." + key + ".label_map", "");
     profile.top_k = config_int(raw, "models." + key + ".top_k", 5);
+    // Without resize_shorter the window keeps the standard ImageNet 87.5% centre
+    // crop (256 for 224), in the integer arithmetic Python uses too.
+    profile.resize_shorter =
+        config_int(raw, "models." + key + ".resize_shorter",
+                   default_resize_shorter(profile.input_width, profile.input_height));
+    profile.interpolation = config_scalar_or(raw, "models." + key + ".interpolation", "bilinear");
     if (!is_valid_profile_name(name)) {
       throw ConfigError("models." + name +
                         ": profile names may only contain letters, digits, '_' and '-'");
@@ -1251,6 +1276,24 @@ std::vector<ModelProfile> load_profiles(const sima_examples::ScalarConfig& raw,
           std::to_string(kMaxInputDimension) + ", got " + std::to_string(profile.input_width) +
           "x" + std::to_string(profile.input_height) +
           "; check the value against the model's documented input size");
+    }
+    const auto& filters = interpolations();
+    if (std::none_of(filters.begin(), filters.end(),
+                     [&](const auto& f) { return f.first == profile.interpolation; })) {
+      std::string names;
+      for (const auto& f : filters) {
+        names += (names.empty() ? "" : ", ") + f.first;
+      }
+      throw ConfigError("models." + name + ".interpolation=" + profile.interpolation +
+                        " is not supported; use one of: " + names);
+    }
+    const int larger_side = std::max(profile.input_width, profile.input_height);
+    if (profile.resize_shorter < larger_side || profile.resize_shorter > kMaxInputDimension) {
+      throw ConfigError("models." + name +
+                        ".resize_shorter must be between the larger input side (" +
+                        std::to_string(larger_side) + ") and " +
+                        std::to_string(kMaxInputDimension) + ", got " +
+                        std::to_string(profile.resize_shorter));
     }
     profiles.push_back(std::move(profile));
   }
@@ -1738,6 +1781,64 @@ std::vector<fs::path> discover_images(const std::string& input_path,
 }
 
 // --- Neat inference: preprocessing, model construction and execution -----------
+// (width, height) after scaling the shorter side to `shorter`, as torchvision's
+// Resize does: the longer side is truncated to an integer.
+std::pair<long long, long long> resized_size(int width, int height, int shorter) {
+  if (width <= height) {
+    return {shorter, static_cast<long long>(shorter) * height / width};
+  }
+  return {static_cast<long long>(shorter) * width / height, shorter};
+}
+
+// Load an image and prepare it as the model was evaluated: scale the shorter side
+// to resize_shorter, cut out the centred input-sized window, and return it as RGB.
+//
+// sima-neat/core#1320: Neat's ResizeMode::Crop cannot run on Modalix and cannot
+// resize beyond the crop, so the application prepares the window itself and hands
+// Neat an image that already has the model's input size. Kept in step with
+// load_rgb_center_crop() in the Python entrypoint.
+cv::Mat load_rgb_center_crop(const std::string& path, const ModelProfile& profile) {
+  cv::Mat bgr = cv::imread(path, cv::IMREAD_COLOR);
+  if (bgr.empty()) {
+    throw std::runtime_error("Failed to read image: " + path);
+  }
+  const int width = bgr.cols;
+  const int height = bgr.rows;
+  const auto [resized_w, resized_h] = resized_size(width, height, profile.resize_shorter);
+  if (std::max(resized_w, resized_h) > kMaxInputDimension) {
+    throw std::runtime_error("Image is too elongated to resize: " + path + " is " +
+                             std::to_string(width) + "x" + std::to_string(height) +
+                             ", which would need " + std::to_string(resized_w) + "x" +
+                             std::to_string(resized_h));
+  }
+  // OpenCV's bilinear and bicubic filters read only the source pixels next to each
+  // sample, so shrinking more than twofold skips most of the image and aliases.
+  // Pillow, which the models were evaluated with, widens its filter instead;
+  // averaging down to twice the target first comes close to it.
+  if (resized_w * 2 < width && resized_h * 2 < height) {
+    cv::resize(bgr, bgr,
+               cv::Size(static_cast<int>(resized_w * 2), static_cast<int>(resized_h * 2)), 0, 0,
+               cv::INTER_AREA);
+  }
+  if (bgr.cols != resized_w || bgr.rows != resized_h) {
+    int flag = cv::INTER_LINEAR;
+    for (const auto& f : interpolations()) {
+      if (f.first == profile.interpolation) {
+        flag = f.second;
+      }
+    }
+    cv::resize(bgr, bgr, cv::Size(static_cast<int>(resized_w), static_cast<int>(resized_h)), 0,
+               0, flag);
+  }
+  const int top = static_cast<int>((resized_h - profile.input_height) / 2);
+  const int left = static_cast<int>((resized_w - profile.input_width) / 2);
+  const cv::Mat window =
+      bgr(cv::Rect(left, top, profile.input_width, profile.input_height));
+  cv::Mat rgb;
+  cv::cvtColor(window, rgb, cv::COLOR_BGR2RGB);
+  return rgb;
+}
+
 simaai::neat::Model build_model(const ModelProfile& profile) {
   // preprocess is validated in load_profiles, before any input is read.
   simaai::neat::Model::Options opt;
@@ -1782,8 +1883,7 @@ void warm_up(simaai::neat::Model& model, const ModelProfile& profile) {
 
 Prediction classify(simaai::neat::Model& model, const ModelProfile& profile,
                     const fs::path& image_path) {
-  const cv::Mat rgb = sima_examples::load_rgb_resized(image_path.string(), profile.input_width,
-                                                      profile.input_height);
+  const cv::Mat rgb = load_rgb_center_crop(image_path.string(), profile);
   const auto input =
       simaai::neat::Tensor::from_cv_mat(rgb, simaai::neat::ImageSpec::PixelFormat::RGB);
 

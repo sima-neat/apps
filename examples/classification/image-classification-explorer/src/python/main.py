@@ -71,6 +71,11 @@ class ModelProfile:
     label_map: str | None
     top_k: int
     labels: list[str] = field(default_factory=list)
+    # The model's evaluation preprocessing: scale the shorter image side to
+    # resize_shorter with this filter, then cut the centred input_width x
+    # input_height window out of the result.
+    resize_shorter: int = 256
+    interpolation: str = "bilinear"
 
 
 @dataclass
@@ -681,6 +686,15 @@ def load_profiles(raw: dict[str, Any]) -> list[ModelProfile]:
             label_map=config_str(cfg.get("label_map"), f"models.{name}.label_map", None),
             top_k=config_int(cfg.get("top_k"), f"models.{name}.top_k", 5),
         )
+        # Without resize_shorter the window keeps the standard ImageNet 87.5%
+        # centre crop (256 for 224), in integer arithmetic C++ repeats exactly.
+        profile.resize_shorter = config_int(
+            cfg.get("resize_shorter"), f"models.{name}.resize_shorter",
+            default_resize_shorter(profile.input_width, profile.input_height),
+        )
+        profile.interpolation = config_str(
+            cfg.get("interpolation"), f"models.{name}.interpolation", "bilinear"
+        )
         if not PROFILE_NAME_RE.fullmatch(name):
             raise ValueError(
                 f"models.{name}: profile names may only contain letters, digits, "
@@ -716,6 +730,17 @@ def load_profiles(raw: dict[str, Any]) -> list[ModelProfile]:
                 f"{MAX_INPUT_DIMENSION}, got {profile.input_width}x{profile.input_height}; "
                 f"check the value against the model's documented input size"
             )
+        if profile.interpolation not in INTERPOLATIONS:
+            raise ValueError(
+                f"models.{name}.interpolation={yaml_text(profile.interpolation)} is not "
+                f"supported; use one of: {', '.join(INTERPOLATIONS)}"
+            )
+        if not max(profile.input_width, profile.input_height) <= profile.resize_shorter <= MAX_INPUT_DIMENSION:
+            raise ValueError(
+                f"models.{name}.resize_shorter must be between the larger input side "
+                f"({max(profile.input_width, profile.input_height)}) and {MAX_INPUT_DIMENSION}, "
+                f"got {profile.resize_shorter}"
+            )
         profiles.append(profile)
     return profiles
 
@@ -724,10 +749,19 @@ def load_profiles(raw: dict[str, Any]) -> list[ModelProfile]:
 # INT32_MAX alone let a typo exhaust memory before the model was even loaded.
 # No classification model has more classes than this by orders of magnitude.
 MAX_NUMERIC_LABELS = 100_000
-# Each input is resized to input_width x input_height before inference, so these
-# bound an allocation per image: 100000x100000 would ask OpenCV for ~30 GB.
-# Classification models are two orders of magnitude below this.
+# Each input is resized so its shorter side is resize_shorter, at least
+# input_width x input_height, so these bound an allocation per image:
+# 100000x100000 would ask OpenCV for ~30 GB. Classification models are two
+# orders of magnitude below this.
 MAX_INPUT_DIMENSION = 8192
+# Supported resize filters, by config name. The values are OpenCV flags, looked
+# up when an image is read so the configuration loads without OpenCV.
+INTERPOLATIONS = {"bilinear": "INTER_LINEAR", "bicubic": "INTER_CUBIC"}
+
+
+def default_resize_shorter(width: int, height: int) -> int:
+    """The shorter side for the standard ImageNet 87.5% centre crop: 256 for 224."""
+    return min(width, height) * 8 // 7
 
 
 def load_label_map(path: str | None, num_classes: int) -> list[str]:
@@ -845,19 +879,49 @@ def discover_images(input_path: str | None, extensions: tuple[str, ...],
 # --- Neat inference: preprocessing, model construction and execution -------------
 
 
-def load_rgb_resized(path: str, width: int, height: int):
-    """Load an image with OpenCV and return an RGB uint8 HWC array."""
+def resized_size(width: int, height: int, shorter: int) -> tuple[int, int]:
+    """(width, height) after scaling the shorter side to `shorter`, as torchvision's
+    Resize does: the longer side is truncated to an integer."""
+    if width <= height:
+        return shorter, shorter * height // width
+    return shorter * width // height, shorter
+
+
+def load_rgb_center_crop(path: str, profile: ModelProfile):
+    """Load an image and prepare it as the model was evaluated: scale the shorter
+    side to resize_shorter, cut out the centred input-sized window, and return it
+    as an RGB uint8 HWC array.
+
+    sima-neat/core#1320: Neat's ResizeMode.Crop cannot run on Modalix and cannot
+    resize beyond the crop, so the application prepares the window itself and
+    hands Neat an image that already has the model's input size."""
     import cv2
 
     bgr = cv2.imread(path, cv2.IMREAD_COLOR)
     if bgr is None:
-        # Capitalised to match sima_examples::load_rgb_resized, whose message
-        # the C++ entrypoint records in the same report field.
+        # Capitalised to match load_rgb_center_crop in the C++ entrypoint, whose
+        # message is recorded in the same report field.
         raise ValueError(f"Failed to read image: {path}")
-    # INTER_AREA matches sima_examples::load_rgb_resized (support/runtime/example_utils.cpp)
-    # used by the C++ implementation, so both languages preprocess images identically.
-    bgr = cv2.resize(bgr, (width, height), interpolation=cv2.INTER_AREA)
-    return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    height, width = bgr.shape[:2]
+    resized_w, resized_h = resized_size(width, height, profile.resize_shorter)
+    if max(resized_w, resized_h) > MAX_INPUT_DIMENSION:
+        raise ValueError(
+            f"Image is too elongated to resize: {path} is {width}x{height}, which would "
+            f"need {resized_w}x{resized_h}"
+        )
+    # OpenCV's bilinear and bicubic filters read only the source pixels next to
+    # each sample, so shrinking more than twofold skips most of the image and
+    # aliases. Pillow, which the models were evaluated with, widens its filter
+    # instead; averaging down to twice the target first comes close to it.
+    if resized_w * 2 < width and resized_h * 2 < height:
+        bgr = cv2.resize(bgr, (resized_w * 2, resized_h * 2), interpolation=cv2.INTER_AREA)
+    if (bgr.shape[1], bgr.shape[0]) != (resized_w, resized_h):
+        flag = getattr(cv2, INTERPOLATIONS[profile.interpolation])
+        bgr = cv2.resize(bgr, (resized_w, resized_h), interpolation=flag)
+    top = (resized_h - profile.input_height) // 2
+    left = (resized_w - profile.input_width) // 2
+    window = bgr[top : top + profile.input_height, left : left + profile.input_width]
+    return cv2.cvtColor(window, cv2.COLOR_BGR2RGB)
 
 
 def softmax(scores):
@@ -925,7 +989,7 @@ def classify(model, profile: ModelProfile, image_path: Path) -> Prediction:
     import numpy as np
     import pyneat
 
-    rgb = load_rgb_resized(str(image_path), profile.input_width, profile.input_height)
+    rgb = load_rgb_center_crop(str(image_path), profile)
     tensor = pyneat.Tensor.from_numpy(rgb, copy=True, image_format=pyneat.PixelFormat.RGB)
 
     start = time.monotonic()
