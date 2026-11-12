@@ -31,3 +31,11 @@ Core-bundled images. If absent, use an available Apps checkout or the public
 Check compatibility with the installed contract before copying an example from
 a different version. Where an example and the installed headers disagree, such
 as an example calling a deprecated factory, follow the headers.
+
+## Locate models
+
+Model Registry models download with
+`sima-cli models download --id <model-id> --variant <variant> --branch <branch>`,
+which writes `models/<model-id>/<variant>/<package>`. List what a branch
+publishes with `sima-cli models list --branch <branch> --json`. A model missing
+from `main` has not been promoted yet.

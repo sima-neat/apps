@@ -6,7 +6,7 @@
 | --- | --- |
 | Category | object-detection |
 | Difficulty | Advanced |
-| Tags | object-detection, oriented-boxes, aerial, rtsp, multistream, insight, yolo26 |
+| Tags | object-detection, oriented-boxes, aerial, rtsp, multistream, insight, yolo26, yolov8, yolo11 |
 | Languages | C++, Python |
 | Status | stable |
 | Binary Name | multi-stream-obb-detector |
@@ -14,7 +14,7 @@
 
 ## Concept
 
-Runs YOLO26 oriented-box detection on up to four RTSP streams of top-down aerial video and sends each stream's video and rotated boxes to Insight.
+Runs YOLO26, YOLOv8, or YOLO11 oriented-box detection on up to four RTSP streams of top-down aerial video and sends each stream's video and rotated boxes to Insight.
 
 An oriented bounding box (OBB) is a box that turns with the object. It fits ships,
 planes, and vehicles seen from above, which an upright box would cover with
@@ -28,8 +28,8 @@ mostly background. The model detects the 15 DOTA classes listed in
 ## Prerequisites
 
 - `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on the Modalix DevKit, or in a Neat SDK container paired with it.
-- H.264 or H.265 RTSP sources of top-down aerial video, such as drone or satellite footage, matching `input.codec`. The model was trained on overhead imagery and finds little in street-level video.
-- An [Insight](https://developer.sima.ai/software/tools/insight/) version that draws `oriented_bbox`, reachable from the target.
+- H.264, H.265, or MJPEG RTSP sources of top-down aerial video, such as drone or satellite footage, matching `input.codec`. The model was trained on overhead imagery and finds little in street-level video.
+- An [Insight](https://developer.sima.ai/software/tools/insight/) version that draws `oriented_bbox`, and for MJPEG streams one that shows JPEG channels, reachable from the target.
 - For H.265, the computer running the Insight viewer must support hardware HEVC decoding; Chromium does not provide a software decoder fallback for WebRTC H.265.
 
 ## Install Apps
@@ -48,22 +48,25 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-| Model file | Role |
-| --- | --- |
-| `yolo26n_obb_w8a8_mpk.tar.gz` | Default |
-| `yolo26n_obb_w16a16_mpk.tar.gz` | Supported |
-
-Model packages come from the Model Zoo release below, which can differ from the installed platform version. Replace `<model-file>` with a file from the table.
+The YOLO26, YOLOv8, and YOLO11 OBB models each come in five sizes, n (nano) through x (extra large), on the `develop` branch of the [Model Registry](https://developer.sima.ai/models/?branch=develop). Download one with its ID and variant:
 
 ```bash
-export MODELZOO_VERSION="3.0.0"
-mkdir -p models
-cd models
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/<model-file>"
-cd ..
+sima-cli models download --id yolo26n_obb --variant w8a8 --branch develop
 ```
 
-Set `model.path` in the config to the downloaded package.
+| ID | Variants | `model.family` | Role |
+| --- | --- | --- | --- |
+| `yolo26n_obb` | `w8a8`, `w16a16` | `yolo26` | Default (`w8a8`) |
+| `yolo26s_obb` | `w8a8`, `w16a16`, `w8a16` | `yolo26` | Supported |
+| `yolo26m_obb` | `w8a8`, `w16a16` | `yolo26` | Supported |
+| `yolo26l_obb` | `w8a8`, `w16a16`, `w8a16` | `yolo26` | Supported |
+| `yolo26x_obb` | `w8a8`, `w16a16` | `yolo26` | Supported |
+| `yolov8{n,s,m,l,x}_obb` | `w8a8`, `w16a16` | `yolov8` | Supported |
+| `yolo11{n,s,m,l,x}_obb` | `w8a8`, `w16a16` | `yolo11` | Supported |
+
+The package lands at `models/<id>/<variant>/<id>_<variant>_mpk.tar.gz`. Set `model.path` in the config to that file and `model.family` to the family in the table. YOLO26 needs no overlap removal. For YOLOv8 and YOLO11 the app removes overlapping boxes with rotated non-maximum suppression.
+
+Larger sizes find more objects but run slower. All streams share one detector, so its rate is divided among them. On four 720p 30 fps streams, `n` and `s` with `w8a8` detect on every frame, while `m`, `l`, and `x` detect on fewer frames per stream, and the `w16a16` and `w8a16` variants on fewer still. A slower detector also lowers the video frame rate in Insight. For smooth live video with a larger model, use fewer streams.
 
 ## Prepare Insight
 
@@ -71,7 +74,7 @@ In the Insight Web UI, upload your aerial videos, start one stream per video, an
 
 ## Configure
 
-Open `${APP_DIR}/src/common/config.yaml`. Set `model.path`, add each RTSP URL under `streams`, and set the Insight host and starting video and metadata ports. Set `input.codec` to match the streams.
+Open `${APP_DIR}/src/common/config.yaml`. Set `model.path` and `model.family`, add each RTSP URL under `streams`, and set the Insight host and starting video and metadata ports. Set `input.codec` to `h264`, `h265`, or `mjpeg` to match the streams. All streams use the same codec. The video reaches Insight as the stream's own encoded frames, without re-encoding. Only the detector decodes them.
 
 ## Run
 
@@ -124,8 +127,9 @@ To also save annotated frames, set `output.save_every` to a positive interval. E
 - Replace all placeholder stream URLs and the Insight host before running.
 - `oriented boxes require equal authoritative affine scales`: Neat could not scale the stream's frames to the model input by the same factor on both axes. 1280x720 and 1920x1080 streams work; a 640x512 stream fails. Re-encode the stream to 1280x720.
 - Few or no detections: check that the video looks straight down at the ground. Lower `inference.min_score` if objects are present but missed, and raise it if the overlay shows boxes on background.
-- Python output falls below the stream rate on dense scenes: lower `inference.max_detections`. Each box adds to the metadata sent to Insight; at the default 300 with four dense 30 fps streams, C++ keeps about 28 fps per stream and Python about 20 to 27 fps.
+- Boxes are missing on dense scenes: raise `inference.max_detections`. Each box adds to the metadata sent to Insight. At 300 with four dense 30 fps streams, C++ keeps about 28 fps per stream and Python about 20 to 27 fps.
 - Insight shows upright boxes: the installed Insight does not draw `oriented_bbox`. Update Insight.
+- MJPEG frames reach Insight as RTP/JPEG, which carries at most 2040 pixels per side. Use MJPEG streams of 1080p or smaller.
 - Verify host and UDP port ranges if Insight receives no output.
 
 ## Source Files

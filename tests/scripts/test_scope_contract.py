@@ -608,6 +608,32 @@ def test_download_models_uses_staging_registry_for_non_main_ref(tmp_path):
     ]
 
 
+def test_download_models_uses_production_registry_for_develop_variant(tmp_path):
+    _require_modern_bash()
+    query = _write_registry_scope_query(
+        tmp_path,
+        [("demo", "demo_w8a8_mpk.tar.gz")],
+        ref="develop",
+        variant="w8a8",
+    )
+    cli, calls = _write_registry_variant_cli(tmp_path, ["demo_w8a8_mpk.tar.gz"])
+
+    result = _run_registry_download(tmp_path / "models", query, cli, calls)
+
+    assert result.returncode == 0, result.stderr
+    assert calls.read_text(encoding="utf-8").split()[:9] == [
+        "models",
+        "download",
+        "--id",
+        "demo-models",
+        "--variant",
+        "w8a8",
+        "--branch",
+        "develop",
+        "--output",
+    ]
+
+
 def test_download_models_fetches_one_registry_variant(tmp_path):
     _require_modern_bash()
     query = _write_registry_scope_query(

@@ -1,4 +1,4 @@
-"""Multi-stream RTSP YOLO26 oriented-box detector that publishes to Insight, using pyneat."""
+"""Multi-stream RTSP YOLO oriented-box detector that publishes to Insight, using pyneat."""
 
 from __future__ import annotations
 
@@ -15,6 +15,8 @@ import yaml
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
 MAX_STREAMS = 4
 PULL_TIMEOUT_MS = 50
+# Ultralytics' rotated-NMS IoU for OBB predictions, used by YOLOv8 and YOLO11.
+YOLOV8_NMS_IOU = 0.7
 # Matches the C++ config reader's error wording.
 KIND_NAMES = {bool: "true or false", int: "an integer", float: "numeric", str: "a string"}
 
@@ -27,6 +29,7 @@ pyneat = None
 class AppConfig:
     model_path: str
     labels_path: str
+    family: str
     rtsp_urls: list[str]
     codec: str
     tcp: bool
@@ -84,7 +87,7 @@ def load_runtime_dependencies() -> None:
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Multi-stream YOLO26 oriented-box detector")
+    parser = argparse.ArgumentParser(description="Multi-stream YOLO oriented-box detector")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--validate-config-only", action="store_true")
     return parser.parse_args(argv)
@@ -104,13 +107,22 @@ def setting(raw: dict, key: str, default, kind: type):
     return value
 
 
+def parse_family(value: str) -> str:
+    lowered = value.lower()
+    if lowered in {"yolo26", "yolov8", "yolo11"}:
+        return lowered
+    raise ValueError("model.family must be yolo26, yolov8, or yolo11")
+
+
 def parse_codec(value: str) -> str:
     lowered = value.lower()
     if lowered in {"h264", "avc", "h.264"}:
         return "h264"
     if lowered in {"h265", "hevc", "h.265"}:
         return "h265"
-    raise ValueError("input.codec must be h264/avc or h265/hevc")
+    if lowered in {"mjpeg", "jpeg"}:
+        return "mjpeg"
+    raise ValueError("input.codec must be h264/avc, h265/hevc, or mjpeg")
 
 
 def parse_streams(raw: dict) -> list[str]:
@@ -159,6 +171,7 @@ def load_app_config(config_path: Path) -> AppConfig:
     cfg = AppConfig(
         model_path=setting(raw, "model.path", "", str),
         labels_path=setting(raw, "model.labels", default_labels, str),
+        family=parse_family(setting(raw, "model.family", "yolo26", str)),
         rtsp_urls=parse_streams(raw),
         codec=parse_codec(setting(raw, "input.codec", "h264", str)),
         tcp=setting(raw, "input.tcp", True, bool),
@@ -167,7 +180,7 @@ def load_app_config(config_path: Path) -> AppConfig:
         max_inflight_per_stream=setting(raw, "inference.max_inflight_per_stream", 4, int),
         max_inflight_total=setting(raw, "inference.max_inflight_total", 16, int),
         min_score=setting(raw, "inference.min_score", 0.30, float),
-        max_detections=setting(raw, "inference.max_detections", 300, int),
+        max_detections=setting(raw, "inference.max_detections", 100, int),
         insight_host=setting(raw, "output.insight.host", "", str),
         video_port_base=setting(raw, "output.insight.video_port_base", 9000, int),
         metadata_port_base=setting(raw, "output.insight.metadata_port_base", 9100, int),
@@ -194,7 +207,19 @@ def save_frames_enabled(cfg: AppConfig) -> bool:
 
 
 def rtsp_codec(cfg: AppConfig):
-    return pyneat.RtspCodec.H265 if cfg.codec == "h265" else pyneat.RtspCodec.H264
+    return {
+        "h264": pyneat.RtspCodec.H264,
+        "h265": pyneat.RtspCodec.H265,
+        "mjpeg": pyneat.RtspCodec.MJPEG,
+    }[cfg.codec]
+
+
+def decode_type(cfg: AppConfig):
+    return {
+        "h264": pyneat.SimaDecodeType.H264,
+        "h265": pyneat.SimaDecodeType.H265,
+        "mjpeg": pyneat.SimaDecodeType.MJPEG,
+    }[cfg.codec]
 
 
 def probe_stream(url: str) -> tuple[int, int, int]:
@@ -234,10 +259,15 @@ def build_model(cfg: AppConfig):
     opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.NV12
     # COCO_YOLO letterboxes, which keeps one scale on both axes so rotated boxes map back.
     opt.preprocess.preset = pyneat.NormalizePreset.COCO_YOLO
-    opt.decode_type = pyneat.BoxDecodeType.YoloV26Obb
+    if cfg.family == "yolo26":
+        opt.decode_type = pyneat.BoxDecodeType.YoloV26Obb
+        # YOLO26 needs no NMS, and its oriented-box decoder requires it disabled.
+        opt.nms_iou_threshold = 0.0
+    else:
+        # YOLOv8 and YOLO11 share one decoder, which removes overlapping boxes with rotated NMS.
+        opt.decode_type = pyneat.BoxDecodeType.YoloV8Obb
+        opt.nms_iou_threshold = YOLOV8_NMS_IOU
     opt.score_threshold = cfg.min_score
-    # YOLO26 needs no NMS, and the oriented-box decoder requires it disabled.
-    opt.nms_iou_threshold = 0.0
     opt.top_k = cfg.max_detections
     return pyneat.Model(cfg.model_path, opt)
 
@@ -257,7 +287,7 @@ def source_options(cfg: AppConfig, stream: Stream):
 
 def decoder_options(cfg: AppConfig, stream: Stream):
     opt = pyneat.SimaDecodeOptions()
-    opt.type = pyneat.SimaDecodeType.H265 if cfg.codec == "h265" else pyneat.SimaDecodeType.H264
+    opt.type = decode_type(cfg)
     opt.out_format = pyneat.Format.NV12
     opt.decoder_name = "decoder"
     opt.raw_output = True

@@ -24,6 +24,17 @@ namespace {
 constexpr const char* kExampleName = "multi-stream-obb-detector";
 constexpr const char* kE2eInsightHost = "127.0.0.1";
 
+// Registry package files start with their model ID, such as yolov8n_obb_w8a8_mpk.tar.gz.
+std::string model_family(const std::string& model_path) {
+  const std::string name = fs::path(model_path).filename().string();
+  for (const char* family : {"yolov8", "yolo11"}) {
+    if (name.rfind(family, 0) == 0) {
+      return family;
+    }
+  }
+  return "yolo26";
+}
+
 std::set<std::string> read_labels(const fs::path& labels_file) {
   std::set<std::string> labels;
   std::ifstream input(labels_file);
@@ -105,6 +116,7 @@ int run_source_case(const std::string& binary, const std::string& model_path,
   write_e2e_config(kExampleName, config_path,
                    {{"model.path", model_path},
                     {"model.labels", labels_file.string()},
+                    {"model.family", model_family(model_path)},
                     {"input.codec", source_case.codec},
                     {"output.debug_dir", output_dir},
                     {"output.insight.host", kE2eInsightHost},
@@ -191,6 +203,7 @@ int main(int argc, char** argv) {
   const std::vector<MultiStreamSourceCase> source_cases = {
       {"h264", rtsp_h264_urls_from_env()},
       {"h265", rtsp_h265_urls_from_env()},
+      {"mjpeg", rtsp_mjpeg_urls_from_env()},
   };
 
   const int cases_rc = run_multistream_source_cases(

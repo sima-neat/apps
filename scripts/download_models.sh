@@ -284,6 +284,15 @@ download_huggingface_model() {
     return 1
 }
 
+# Production serves the main and develop catalogs. Other branches publish to staging.
+# Sets environment_args, which the caller declares local.
+registry_environment_args() {
+    environment_args=()
+    if [[ "$1" != "main" && "$1" != "develop" ]]; then
+        environment_args+=(--stg)
+    fi
+}
+
 download_model_registry_group() {
     local registry_name="$1"
     local registry_ref="$2"
@@ -331,9 +340,7 @@ download_model_registry_group() {
     fi
     echo "[download] $resource (model-registry)"
     local environment_args=()
-    if [[ "$registry_ref" != "main" ]]; then
-        environment_args+=(--stg)
-    fi
+    registry_environment_args "$registry_ref"
     if ! "$SIMA_CLI_BIN" neat install "${environment_args[@]}" "$resource" --install-dir "$tmpdir"; then
         rm -rf "$tmpdir"
         echo "[error] failed to install model-registry resource $resource" >&2
@@ -413,9 +420,7 @@ download_model_registry_variant() {
         return 1
     fi
     local environment_args=()
-    if [[ "$registry_ref" != "main" ]]; then
-        environment_args+=(--stg)
-    fi
+    registry_environment_args "$registry_ref"
     echo "[download] $model_id (model-registry: $registry_name/$variant@$registry_ref)"
     if ! "$SIMA_CLI_BIN" models download "${environment_args[@]}" \
             --id "$registry_name" --variant "$variant" --branch "$registry_ref" \
