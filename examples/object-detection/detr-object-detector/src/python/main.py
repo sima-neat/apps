@@ -182,6 +182,9 @@ def build_model_options(config: Config) -> pyneat.ModelOptions:
     options.preprocess.resize.enable = pyneat.AutoFlag.On
     # Core's classic DETR decoder requires Stretch (Core docs/reference/boxdecode_decode_types.md).
     options.preprocess.resize.mode = pyneat.ResizeMode.Stretch
+    # The registry calibrates and scores DETR on Pillow bilinear resizes, which average every source
+    # pixel when shrinking; plain bilinear samples only the nearest four.
+    options.preprocess.resize.interpolation = pyneat.ResizeInterpolation.BilinearAntialiased
     options.preprocess.preset = pyneat.NormalizePreset.ImageNet
     options.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.BGR
     options.preprocess.color_convert.output_format = pyneat.PreprocessColorFormat.RGB

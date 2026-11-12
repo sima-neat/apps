@@ -168,6 +168,9 @@ neat::Model::Options build_model_options(const Config& cfg) {
   options.preprocess.resize.enable = neat::AutoFlag::On;
   // Core's classic DETR decoder requires Stretch (Core docs/reference/boxdecode_decode_types.md).
   options.preprocess.resize.mode = neat::ResizeMode::Stretch;
+  // The registry calibrates and scores DETR on Pillow bilinear resizes, which average every source
+  // pixel when shrinking; plain bilinear samples only the nearest four.
+  options.preprocess.resize.interpolation = neat::ResizeInterpolation::BilinearAntialiased;
   options.preprocess.preset = neat::NormalizePreset::ImageNet;
   options.preprocess.color_convert.input_format = neat::PreprocessColorFormat::BGR;
   options.preprocess.color_convert.output_format = neat::PreprocessColorFormat::RGB;

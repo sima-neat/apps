@@ -46,6 +46,7 @@ def fake_pyneat(decoded_boxes: list[SimpleNamespace]) -> tuple[SimpleNamespace, 
         InputKind=SimpleNamespace(Image="image"),
         AutoFlag=SimpleNamespace(On="on"),
         ResizeMode=SimpleNamespace(Stretch="stretch"),
+        ResizeInterpolation=SimpleNamespace(BilinearAntialiased="bilinear-antialiased"),
         NormalizePreset=SimpleNamespace(ImageNet="imagenet"),
         PreprocessColorFormat=SimpleNamespace(BGR="bgr", RGB="rgb"),
         BoxDecodeType=SimpleNamespace(Detr="detr"),
@@ -82,6 +83,7 @@ class TestConfig:
 
         assert options.preprocess.kind == "image"
         assert options.preprocess.resize.mode == "stretch"
+        assert options.preprocess.resize.interpolation == "bilinear-antialiased"
         assert options.preprocess.preset == "imagenet"
         assert options.preprocess.color_convert.input_format == "bgr"
         assert options.preprocess.color_convert.output_format == "rgb"

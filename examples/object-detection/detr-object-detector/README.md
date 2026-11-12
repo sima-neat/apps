@@ -18,7 +18,8 @@ Detects objects in a folder of images with DETR and saves annotated images with 
 
 The application passes each image to Neat with the model's preprocessing and
 DETR box decoder enabled. Neat stretches the image to the model's input size
-without padding, as its DETR decoder requires, and applies ImageNet
+without padding, as its DETR decoder requires, with antialiased bilinear
+resampling to match how the registry calibrated the model, and applies ImageNet
 normalization. Its DETR decoder turns the 100 query outputs into boxes
 in original-image pixels, keeps those above `decode.confidence_threshold`, and
 returns at most `decode.max_draw` of them. DETR predicts each object once, so
