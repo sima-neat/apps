@@ -1,5 +1,5 @@
 model:                       # DETR model selection.
-  path: <model-path>         # Example: models/detr_resnet_50/w8a8_mixed/detr_resnet_50_w8a8_mixed_mpk.tar.gz
+  path: <model-path>         # Example: models/detr_resnet_50/w16a16/detr_resnet_50_w16a16_mpk.tar.gz
 
 io:                          # Input and output paths.
   input_dir: assets/datasets/coco              # Folder containing input images.

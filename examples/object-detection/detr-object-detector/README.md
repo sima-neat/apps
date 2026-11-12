@@ -10,7 +10,7 @@
 | Languages | C++, Python |
 | Status | stable |
 | Binary Name | detr-object-detector |
-| Model | detr_resnet_50 (w8a8_mixed) |
+| Model | detr_resnet_50 (w16a16) |
 
 ## Concept
 
@@ -51,21 +51,19 @@ Run the remaining commands from `prebuilt-apps/`.
 
 | Model | Variant | Role | Source |
 | --- | --- | --- | --- |
-| `detr_resnet_50` | `w8a8_mixed` | Default | Model Registry |
-| `detr_resnet_50` | `w16a16` | Alternative | Model Registry |
-| `detr_resnet_101` | `w8a8_mixed` | Alternative | Model Registry |
+| `detr_resnet_50` | `w16a16` | Default | Model Registry |
 | `detr_resnet_101` | `w16a16` | Alternative | Model Registry |
 
 Download the default package from the Model Registry:
 
 ```bash
-sima-cli models download --id detr_resnet_50 --variant w8a8_mixed
+sima-cli models download --id detr_resnet_50 --variant w16a16
 ```
 
 The package lands at
-`models/detr_resnet_50/w8a8_mixed/detr_resnet_50_w8a8_mixed_mpk.tar.gz`. To use
-another row, change `--id` and `--variant`. Neat reads the input size from the
-package, so every row works with the same config.
+`models/detr_resnet_50/w16a16/detr_resnet_50_w16a16_mpk.tar.gz`. To use
+ResNet-101 instead, change `--id` to `detr_resnet_101`. Neat reads the input
+size from the package, so both rows work with the same config.
 
 ## Configure
 
@@ -96,7 +94,7 @@ file:
 
 ```text
 [1/21] 000000081061.jpg: 3 detections -> 000000081061_detr.png
-[2/21] 000000116439.jpg: 11 detections -> 000000116439_detr.png
+[2/21] 000000116439.jpg: 10 detections -> 000000116439_detr.png
 ```
 
 `io.output_dir` (default `sandbox/detr-object-detector`) then holds one

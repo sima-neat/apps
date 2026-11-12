@@ -30,7 +30,7 @@ namespace neat = simaai::neat;
 namespace {
 
 constexpr const char* kDefaultModelPath =
-    "models/detr_resnet_50/w8a8_mixed/detr_resnet_50_w8a8_mixed_mpk.tar.gz";
+    "models/detr_resnet_50/w16a16/detr_resnet_50_w16a16_mpk.tar.gz";
 constexpr int kPersonClassId = 1;
 
 constexpr std::array<std::string_view, 91> kDetrCocoLabels = {

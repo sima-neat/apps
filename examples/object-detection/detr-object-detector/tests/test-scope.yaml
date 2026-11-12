@@ -1,11 +1,4 @@
 models:
-  detr_resnet_50_w8a8_mixed:
-    source: model-registry
-    name: detr_resnet_50
-    variant: w8a8_mixed
-    ref: main
-    spec: latest
-    file: detr_resnet_50_w8a8_mixed_mpk.tar.gz
   detr_resnet_50_w16a16:
     source: model-registry
     name: detr_resnet_50
@@ -13,13 +6,13 @@ models:
     ref: main
     spec: latest
     file: detr_resnet_50_w16a16_mpk.tar.gz
-  detr_resnet_101_w8a8_mixed:
+  detr_resnet_101_w16a16:
     source: model-registry
     name: detr_resnet_101
-    variant: w8a8_mixed
+    variant: w16a16
     ref: main
     spec: latest
-    file: detr_resnet_101_w8a8_mixed_mpk.tar.gz
+    file: detr_resnet_101_w16a16_mpk.tar.gz
 unit:
   python: true
   cpp: true
@@ -28,15 +21,13 @@ e2e:
     enabled: true
     requires_rtsp: false
     models:
-    - detr_resnet_50_w8a8_mixed
-    variants:
     - detr_resnet_50_w16a16
-    - detr_resnet_101_w8a8_mixed
+    variants:
+    - detr_resnet_101_w16a16
   cpp:
     enabled: true
     requires_rtsp: false
     models:
-    - detr_resnet_50_w8a8_mixed
-    variants:
     - detr_resnet_50_w16a16
-    - detr_resnet_101_w8a8_mixed
+    variants:
+    - detr_resnet_101_w16a16

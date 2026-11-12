@@ -11,7 +11,7 @@ from pathlib import Path
 import yaml
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
-DEFAULT_MODEL_PATH = "models/detr_resnet_50/w8a8_mixed/detr_resnet_50_w8a8_mixed_mpk.tar.gz"
+DEFAULT_MODEL_PATH = "models/detr_resnet_50/w16a16/detr_resnet_50_w16a16_mpk.tar.gz"
 PERSON_CLASS_ID = 1
 DETR_COCO_LABELS = [
     "N/A",
