@@ -148,3 +148,11 @@ The packaged C++ source is an implementation reference. Run the executable under
 ## Development From Source
 
 To modify, compile, or test this example, use the [Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).
+
+### Raw USB YUYV
+
+Set `source.type: usb` and `source.usb.format: yuyv` to select an advertised raw mode. `mjpeg` remains the default. The YUYV example requires even dimensions (up to the encoder's 3840×2160 geometry limit) and integer FPS because its viewer uses H.264. Geometry admission is not a throughput guarantee. Core capture/inference also supports rational FPS and odd heights independently of this example.
+
+The model branch consumes packed YUYV through one fused EV74 Preproc invocation with the camera's negotiated color. The viewer drops stale frames before its separate EV74 ColorConvert invocation, which produces an encoder-ready NV12 surface for strict direct hardware H.264 ingestion. This path has no CPU raw conversion fallback. Optional saved frames use a separate EV74 RGB conversion. MJPEG continues to use JPEG passthrough and hardware decoding for inference.
+
+Use matching Core, Scheduler, Codecs, YUYV Kernels and EV74 firmware. The new path still needs matched-stack camera, ownership, numerical and performance qualification; it is not enabled by replacing this example alone. Insight uses its existing H.264 receiver. Existing compressed-output copies remain.

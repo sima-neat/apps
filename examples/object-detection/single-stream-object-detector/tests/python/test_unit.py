@@ -481,3 +481,22 @@ class TestUsbCameraFrames:
         assert (bgr[0::2] == expected(90, 240)).all()
         assert (bgr[1::2] == expected(240, 90)).all()
         assert (expected(90, 240) != expected(240, 90)).any()
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("format,width,height,accepted", [
+    ("yuyv", 1284, 720, True), ("YUYV", 3840, 2160, True),
+    ("yuyv", 641, 480, False), ("yuyv", 640, 481, False),
+    ("uyvy", 640, 480, False), ("mjpeg", 1284, 720, False),
+])
+def test_usb_format_selects_geometry_contract(tmp_path, format, width, height, accepted):
+    overrides = [(("source", "type"), "usb"), (("source", "usb"), {
+        "camera": "stable-camera-id", "format": format, "width": width,
+        "height": height, "fps": 30,
+    })]
+    path = write_config(tmp_path, overrides)
+    if accepted:
+        assert main.load_app_config(path).usb_format == format.lower()
+    else:
+        with pytest.raises(ValueError):
+            main.load_app_config(path)

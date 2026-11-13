@@ -18,9 +18,10 @@ source:
     fps: 0                   # 0 detects it from the stream.
 
   usb:
+    format: mjpeg            # mjpeg (compressed passthrough) or yuyv (EV74 + H.264 viewer).
     camera: ""               # A camera ID from pyneat.usb_camera_ids().
-    width: 1280              # One of the camera's MJPEG modes, exactly: width, height and fps.
-    height: 720              # Multiples of 8, at most 2040 (RTP/JPEG limit).
+    width: 1280              # One of the camera's selected-format modes, exactly: width, height and fps.
+    height: 720              # MJPEG: multiples of 8, at most 2040. YUYV: even, within 3840x2160.
     fps: 30
 
 inference:
