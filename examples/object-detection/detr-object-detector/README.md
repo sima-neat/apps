@@ -55,16 +55,19 @@ Run the remaining commands from `prebuilt-apps/`.
 | `detr_resnet_50` | `w16a16` | Default | Model Registry |
 | `detr_resnet_101` | `w16a16` | Alternative | Model Registry |
 
-Download the default package from the Model Registry:
+Download the default package from the Model Registry and extract the model
+archive from the downloaded ZIP:
 
 ```bash
 sima-cli models download --id detr_resnet_50 --variant w16a16
+unzip -o models/detr_resnet_50/w16a16/detr_resnet_50_w16a16_default.zip -d models/detr_resnet_50/w16a16
 ```
 
-The package lands at
-`models/detr_resnet_50/w16a16/detr_resnet_50_w16a16_mpk.tar.gz`. To use
-ResNet-101 instead, change `--id` to `detr_resnet_101`. Neat reads the input
-size from the package, so both rows work with the same config.
+The model archive is then at
+`models/detr_resnet_50/w16a16/detr_resnet_50_w16a16_mpk.tar.gz`; Neat cannot
+load the ZIP itself. To use ResNet-101 instead, replace `detr_resnet_50` with
+`detr_resnet_101` in both commands. Neat reads the input size from the package,
+so both rows work with the same config.
 
 ## Configure
 
