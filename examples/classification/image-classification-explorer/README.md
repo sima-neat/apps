@@ -202,9 +202,9 @@ needs `csv` in `io.output_format`:
 
 ```text
 image                     model            status  top1_class_id  top1_label  top1_probability
-/tmp/sima_imagenet_...    resnet_50        ok      1              goldfish    0.9462
-/tmp/sima_imagenet_...    resnet_18        ok      1              goldfish    0.9995
-/tmp/sima_imagenet_...    densenet_121     ok      1              goldfish    0.9586
+/tmp/sima_imagenet_...    resnet_50        ok      1              goldfish    1.0000
+/tmp/sima_imagenet_...    resnet_18        ok      1              goldfish    0.9952
+/tmp/sima_imagenet_...    densenet_121     ok      1              goldfish    0.9732
 ```
 
 Exact probabilities vary with the model package; what matters is that class `1`
