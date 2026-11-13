@@ -1,5 +1,6 @@
 """E2E tests for detr-object-detector (Python)."""
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -13,6 +14,7 @@ from tests.utils.output_assertions import (
 
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
+DETECTION_LINE = re.compile(r"^\[\d+/\d+\] (\S+): (\d+) detections -> ", re.MULTILINE)
 
 
 @pytest.mark.e2e
@@ -32,10 +34,7 @@ class TestE2E:
         )
 
         config_path = e2e_config_writer(
-            {
-                "io": {"input_dir": str(test_images_dir), "output_dir": str(tmp_output_dir)},
-                "runtime": {"num_runs": 1},
-            }
+            {"io": {"input_dir": str(test_images_dir), "output_dir": str(tmp_output_dir)}}
         )
         result = subprocess.run(
             [
@@ -54,6 +53,11 @@ class TestE2E:
             f"main.py exited with code {result.returncode}\n"
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
-        assert_saved_frames_are_usable(
-            tmp_output_dir, len(supported_image_files(test_images_dir))
-        )
+        images = supported_image_files(test_images_dir)
+        assert_saved_frames_are_usable(tmp_output_dir, len(images))
+
+        # Every packaged COCO test image shows at least one object above the threshold.
+        counts = {name: int(count) for name, count in DETECTION_LINE.findall(result.stdout)}
+        assert sorted(counts) == sorted(path.name for path in images), result.stdout
+        empty = [name for name, count in counts.items() if count == 0]
+        assert not empty, f"no detections for {empty}\nstdout:\n{result.stdout}"

@@ -1,8 +1,18 @@
 models:
-  detr_resnet50_modified_class_embed_bbox_embed:
-    source: url
-    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz
-    file: detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz
+  detr_resnet_50_w16a16:
+    source: model-registry
+    name: detr_resnet_50
+    variant: w16a16
+    ref: main
+    spec: latest
+    file: detr_resnet_50_w16a16_mpk.tar.gz
+  detr_resnet_101_w16a16:
+    source: model-registry
+    name: detr_resnet_101
+    variant: w16a16
+    ref: main
+    spec: latest
+    file: detr_resnet_101_w16a16_mpk.tar.gz
 unit:
   python: true
   cpp: true
@@ -11,9 +21,13 @@ e2e:
     enabled: true
     requires_rtsp: false
     models:
-    - detr_resnet50_modified_class_embed_bbox_embed
+    - detr_resnet_50_w16a16
+    variants:
+    - detr_resnet_101_w16a16
   cpp:
     enabled: true
     requires_rtsp: false
     models:
-    - detr_resnet50_modified_class_embed_bbox_embed
+    - detr_resnet_50_w16a16
+    variants:
+    - detr_resnet_101_w16a16

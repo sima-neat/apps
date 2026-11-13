@@ -10,13 +10,21 @@
 | Languages | C++, Python |
 | Status | stable |
 | Binary Name | detr-object-detector |
-| Model | detr_resnet50_modified_class_embed_bbox_embed |
+| Model | detr_resnet_50 (w16a16) |
 
 ## Concept
 
 Detects objects in a folder of images with DETR and saves annotated images with class labels and confidence scores.
 
-The model returns class scores and normalized boxes for a fixed set of queries. The application filters weak detections, can keep only the COCO `person` class, maps each box to the original image, and writes the annotated result.
+The application passes each image to Neat with the model's preprocessing and
+DETR box decoder enabled. Neat stretches the image to the model's input size
+without padding, as its DETR decoder requires, with antialiased bilinear
+resampling to match how the registry calibrated the model, and applies ImageNet
+normalization. Its DETR decoder turns the 100 query outputs into boxes
+in original-image pixels, keeps those above `decode.confidence_threshold`, and
+returns at most `decode.max_draw` of them. DETR predicts each object once, so
+no overlap removal is needed. The application can keep only the COCO `person`
+class and writes the annotated result.
 
 ## Preview
 
@@ -42,25 +50,28 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-| Model | Role | Source |
-| --- | --- | --- |
-| `detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz` | Default | Direct artifact |
+| Model | Variant | Role | Source |
+| --- | --- | --- | --- |
+| `detr_resnet_50` | `w16a16` | Default | Model Registry |
+| `detr_resnet_101` | `w16a16` | Alternative | Model Registry |
 
-Model packages come from the Model Zoo release below, which can differ from the installed platform version.
+Download the default package from the Model Registry and extract the model
+archive from the downloaded ZIP:
 
 ```bash
-export MODELZOO_VERSION="3.0.0"
-mkdir -p models
-cd models
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz"
-cd ..
+sima-cli models download --id detr_resnet_50 --variant w16a16
+unzip -o models/detr_resnet_50/w16a16/detr_resnet_50_w16a16_default.zip -d models/detr_resnet_50/w16a16
 ```
 
-Set `model.path` in the config to the downloaded package.
+The model archive is then at
+`models/detr_resnet_50/w16a16/detr_resnet_50_w16a16_mpk.tar.gz`; Neat cannot
+load the ZIP itself. To use ResNet-101 instead, replace `detr_resnet_50` with
+`detr_resnet_101` in both commands. Neat reads the input size from the package,
+so both rows work with the same config.
 
 ## Configure
 
-Open `${APP_DIR}/src/common/config.yaml` and set `model.path`, `io.input_dir`, and `io.output_dir`. Set `decode.person_only` to `true` if you only want person detections.
+Open `${APP_DIR}/src/common/config.yaml` and set `model.path` to the downloaded package, then set `io.input_dir` and `io.output_dir`. Set `decode.person_only` to `true` if you only want person detections. It filters the `decode.max_draw` highest-scoring detections.
 
 ## Run
 
@@ -87,7 +98,7 @@ file:
 
 ```text
 [1/21] 000000081061.jpg: 3 detections -> 000000081061_detr.png
-[2/21] 000000116439.jpg: 9 detections -> 000000116439_detr.png
+[2/21] 000000116439.jpg: 10 detections -> 000000116439_detr.png
 ```
 
 `io.output_dir` (default `sandbox/detr-object-detector`) then holds one
@@ -100,7 +111,7 @@ the content.
 
 - Verify `model.path` if model loading fails.
 - Lower `decode.confidence_threshold` if expected objects are missing.
-- Confirm the compiled package still uses the documented `1333x800` frame.
+- Use a package from the table above. Neat's DETR decoder expects a class-logit output with a final no-object channel and a four-channel box-logit output, on a stretched input.
 - Confirm `io.output_dir` can be created.
 
 ## Source Files
