@@ -383,6 +383,133 @@ class TestLoadProfiles:
             main.load_profiles(raw)
 
 
+    def test_resize_defaults_to_the_imagenet_crop(self):
+        profile = main.load_profiles({"models": {"a": {"path": "m.tar.gz"}}})[0]
+        assert profile.resize_shorter == 256
+        assert profile.interpolation == "bilinear"
+
+    def test_reads_resize_settings(self):
+        raw = {"models": {"a": {"path": "m.tar.gz", "resize_shorter": 288,
+                                "interpolation": "bicubic"}}}
+        profile = main.load_profiles(raw)[0]
+        assert (profile.resize_shorter, profile.interpolation) == (288, "bicubic")
+
+    def test_rejects_unknown_interpolation(self):
+        raw = {"models": {"a": {"path": "m.tar.gz", "interpolation": "lanczos"}}}
+        with pytest.raises(ValueError, match="interpolation"):
+            main.load_profiles(raw)
+
+    @pytest.mark.parametrize("shorter", [223, 0, -1, 8193])
+    def test_rejects_resize_shorter_out_of_range(self, shorter):
+        """Below the input size there is no window to cut; above the limit the
+        resized image would be an unbounded allocation."""
+        raw = {"models": {"a": {"path": "m.tar.gz", "resize_shorter": shorter}}}
+        with pytest.raises(ValueError, match="resize_shorter"):
+            main.load_profiles(raw)
+
+
+class TestCenterCrop:
+    @staticmethod
+    def _profile(**overrides):
+        values = {"name": "a", "path": "m.tar.gz", "input_width": 224, "input_height": 224,
+                  "preprocess": "imagenet", "output": "softmax", "num_classes": 1000,
+                  "label_map": None, "top_k": 5}
+        values.update(overrides)
+        return main.ModelProfile(**values)
+
+    @pytest.mark.parametrize(("size", "expected"), [
+        ((500, 375), (341, 256)),  # landscape: the longer side truncates
+        ((375, 500), (256, 341)),
+        ((300, 300), (256, 256)),
+    ])
+    def test_resized_size_scales_the_shorter_side(self, size, expected):
+        assert main.resized_size(*size, 256) == expected
+
+    @pytest.mark.parametrize("extra", [0, 1, 3, 5, 32, 117, 119])
+    def test_centered_offset_rounds_like_torchvision(self, extra):
+        """torchvision's CenterCrop rounds (extra / 2) with Python's round(),
+        which sends ties to the even neighbour: 1.5 -> 2 but 2.5 -> 2."""
+        assert main.centered_offset(extra) == int(round(extra / 2.0))
+
+    @pytest.mark.parametrize("interpolation", ["bilinear", "bicubic"])
+    def test_keeps_the_centre_and_drops_the_sides(self, tmp_path, interpolation):
+        """A 2:1 image with red outer quarters: the centre crop sees only the
+        white middle, where squeezing the whole image would keep the red."""
+        import cv2
+        import numpy as np
+
+        image = np.full((500, 1000, 3), 255, dtype=np.uint8)
+        image[:, :250] = (0, 0, 255)
+        image[:, 750:] = (0, 0, 255)
+        path = tmp_path / "wide.png"
+        cv2.imwrite(str(path), image)
+
+        rgb = main.load_rgb_center_crop(str(path), self._profile(interpolation=interpolation))
+
+        assert rgb.shape == (224, 224, 3)
+        assert rgb.min() >= 250  # white only; any red would drop green and blue to 0
+
+    @pytest.mark.parametrize(("source", "flag"), [
+        ((300, 400), "INTER_AREA"),   # shrinking averages, whatever the profile's filter
+        ((150, 200), "INTER_CUBIC"),  # enlarging uses the profile's filter
+    ])
+    def test_matches_resize_then_crop(self, tmp_path, source, flag):
+        import cv2
+        import numpy as np
+
+        rng = np.random.default_rng(0)
+        image = rng.integers(0, 256, (*source, 3), dtype=np.uint8)
+        path = tmp_path / "noise.png"
+        cv2.imwrite(str(path), image)
+
+        rgb = main.load_rgb_center_crop(str(path), self._profile(interpolation="bicubic"))
+
+        resized = cv2.resize(image, (341, 256), interpolation=getattr(cv2, flag))
+        # 341 - 224 = 117 spare columns: 58.5 rounds to the even 58.
+        expected = cv2.cvtColor(resized[16:240, 58:282], cv2.COLOR_BGR2RGB)
+        assert np.array_equal(rgb, expected)
+
+    def test_odd_margin_rounds_the_offset_up_to_even(self, tmp_path):
+        """A 343-pixel-wide resize leaves 119 spare columns. torchvision crops
+        from column round(59.5) = 60; truncating would start at 59."""
+        import cv2
+        import numpy as np
+
+        rng = np.random.default_rng(1)
+        image = rng.integers(0, 256, (256, 343, 3), dtype=np.uint8)
+        path = tmp_path / "wide.png"
+        cv2.imwrite(str(path), image)
+
+        rgb = main.load_rgb_center_crop(str(path), self._profile())
+
+        expected = cv2.cvtColor(image[16:240, 60:284], cv2.COLOR_BGR2RGB)
+        assert np.array_equal(rgb, expected)
+
+    def test_large_images_shrink_without_aliasing(self, tmp_path):
+        """A one-pixel checkerboard averages to mid grey. Bilinear sampling of it
+        at 4032 -> 256 would return an arbitrary mix of black and white."""
+        import cv2
+        import numpy as np
+
+        image = ((np.indices((3024, 4032)).sum(axis=0) % 2) * 255).astype(np.uint8)
+        path = tmp_path / "checker.png"
+        cv2.imwrite(str(path), cv2.cvtColor(image, cv2.COLOR_GRAY2BGR))
+
+        rgb = main.load_rgb_center_crop(str(path), self._profile())
+
+        assert rgb.shape == (224, 224, 3)
+        assert abs(float(rgb.mean()) - 127.5) < 2 and int(rgb.max()) - int(rgb.min()) < 8
+
+    def test_rejects_extremely_elongated_images(self, tmp_path):
+        import cv2
+        import numpy as np
+
+        path = tmp_path / "strip.png"
+        cv2.imwrite(str(path), np.zeros((2, 10000, 3), dtype=np.uint8))
+        with pytest.raises(ValueError, match="too elongated"):
+            main.load_rgb_center_crop(str(path), self._profile())
+
+
 class TestLoadLabelMap:
     def test_default_numeric_labels(self):
         assert main.load_label_map(None, 3) == ["0", "1", "2"]
@@ -1069,7 +1196,7 @@ class TestFakeHardwarePipeline:
         payload = json.loads((out_dir / "report.json").read_text())
         by_name = {Path(img["path"]).name: img for img in payload["images"]}
         assert "m" in by_name["broken.jpg"]["errors"]
-        # Capitalised to match sima_examples::load_rgb_resized, so the same
+        # Capitalised to match load_rgb_center_crop in main.cpp, so the same
         # undecodable input produces the same text in both reports.
         assert "Failed to read image" in by_name["broken.jpg"]["errors"]["m"]
         assert "predictions" not in by_name["broken.jpg"]
