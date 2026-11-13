@@ -10,7 +10,7 @@
 | Languages | C++, Python |
 | Status | stable |
 | Binary Name | image-classification-explorer |
-| Model | resnet_50, resnet_18, densenet_121 (w16a16) |
+| Model | resnet_50, resnet_18, densenet_121, resnext_101_64x4d (w16a16) |
 
 ## Concept
 
@@ -47,11 +47,12 @@ Run the remaining commands from `prebuilt-apps/`.
 | `resnet_50` | `w16a16` | Model Registry |
 | `resnet_18` | `w16a16` | Model Registry |
 | `densenet_121` | `w16a16` | Model Registry |
+| `resnext_101_64x4d` | `w16a16` | Model Registry |
 
 Download the packages from the Model Registry and extract each one in place:
 
 ```bash
-for id in resnet_50 resnet_18 densenet_121; do
+for id in resnet_50 resnet_18 densenet_121 resnext_101_64x4d; do
   sima-cli models download --id "$id" --variant w16a16
   unzip -o "models/$id/w16a16/${id}_w16a16_default.zip" -d "models/$id/w16a16"
 done
@@ -202,10 +203,11 @@ for each model. The same results read more compactly from `report.csv`, which
 needs `csv` in `io.output_format`:
 
 ```text
-image                     model            status  top1_class_id  top1_label  top1_probability
-/tmp/sima_imagenet_...    resnet_50        ok      1              goldfish    1.0000
-/tmp/sima_imagenet_...    resnet_18        ok      1              goldfish    0.9952
-/tmp/sima_imagenet_...    densenet_121     ok      1              goldfish    0.9732
+image                   model              status  top1_class_id  top1_label  top1_probability
+/tmp/sima_imagenet_...  resnet_50          ok      1              goldfish    1.0000
+/tmp/sima_imagenet_...  resnet_18          ok      1              goldfish    0.9952
+/tmp/sima_imagenet_...  densenet_121       ok      1              goldfish    0.9732
+/tmp/sima_imagenet_...  resnext_101_64x4d  ok      1              goldfish    0.4966
 ```
 
 Exact probabilities vary with the model package; what matters is that class `1`

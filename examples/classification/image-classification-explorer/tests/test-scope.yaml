@@ -20,6 +20,13 @@ models:
     ref: main
     spec: latest
     file: densenet_121_w16a16_mpk.tar.gz
+  resnext_101_64x4d_w16a16:
+    source: model-registry
+    name: resnext_101_64x4d
+    variant: w16a16
+    ref: main
+    spec: latest
+    file: resnext_101_64x4d_w16a16_mpk.tar.gz
 unit:
   python: true
   cpp: true
@@ -31,6 +38,7 @@ e2e:
     - resnet_50_w16a16
     - resnet_18_w16a16
     - densenet_121_w16a16
+    - resnext_101_64x4d_w16a16
   cpp:
     enabled: true
     requires_rtsp: false
@@ -38,3 +46,4 @@ e2e:
     - resnet_50_w16a16
     - resnet_18_w16a16
     - densenet_121_w16a16
+    - resnext_101_64x4d_w16a16

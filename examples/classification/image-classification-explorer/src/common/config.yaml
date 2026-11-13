@@ -52,6 +52,18 @@ models:
     label_map: src/common/imagenet_labels.txt
     top_k: 5
 
+  resnext_101_64x4d:
+    path: models/resnext_101_64x4d/w16a16/resnext_101_64x4d_w16a16_mpk.tar.gz
+    input_width: 224
+    input_height: 224
+    resize_shorter: 256
+    interpolation: bilinear
+    preprocess: imagenet
+    output: softmax
+    num_classes: 1000
+    label_map: src/common/imagenet_labels.txt
+    top_k: 5
+
 validation:                   # Used by the bundled sample-image regression test, not normal runs.
   expected_class_id: 1        # ImageNet class id for goldfish.
   min_probability: 0.20

@@ -41,7 +41,7 @@ def _assert_goldfish(image_entry: dict, model_names) -> None:
         )
 
 
-MODEL_NAMES = ("resnet_50", "resnet_18", "densenet_121")
+MODEL_NAMES = ("resnet_50", "resnet_18", "densenet_121", "resnext_101_64x4d")
 # Every model is the w16a16 Model Registry build that test-scope.yaml downloads.
 MODEL_VARIANT = "w16a16"
 
