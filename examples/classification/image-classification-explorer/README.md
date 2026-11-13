@@ -48,18 +48,19 @@ Run the remaining commands from `prebuilt-apps/`.
 | `resnet_18` | `w16a16` | Model Registry |
 | `densenet_121` | `w16a16` | Model Registry |
 
-Download the packages from the Model Registry:
+Download the packages from the Model Registry and extract each one in place:
 
 ```bash
-sima-cli models download --id resnet_50 --variant w16a16
-sima-cli models download --id resnet_18 --variant w16a16
-sima-cli models download --id densenet_121 --variant w16a16
+for id in resnet_50 resnet_18 densenet_121; do
+  sima-cli models download --id "$id" --variant w16a16
+  unzip -o "models/$id/w16a16/${id}_w16a16_default.zip" -d "models/$id/w16a16"
+done
 ```
 
-Each package lands at `models/<id>/w16a16/<id>_w16a16_mpk.tar.gz`, the path
-the shipped config already names. The `resize_shorter` and `interpolation` of
-each profile match the preprocessing the Model Registry evaluated that model
-with.
+`sima-cli` saves each package as `models/<id>/w16a16/<id>_w16a16_default.zip`.
+Extracting it gives `models/<id>/w16a16/<id>_w16a16_mpk.tar.gz`, the path the
+shipped config already names. The `resize_shorter` and `interpolation` of each
+profile match the preprocessing the Model Registry evaluated that model with.
 
 Each model is its own profile in the config; add more supported classification models the same
 way by adding another entry under `models`.
