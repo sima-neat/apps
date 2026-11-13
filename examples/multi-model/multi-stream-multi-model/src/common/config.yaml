@@ -8,8 +8,8 @@ streams:                     # One entry per camera. Each entry runs its own mod
     model: <model-path>      # Example: models/yolo_11s_mpk.tar.gz
   - url: <rtsp-url-2>
     task: segmentation
-    decode: yolov8
-    model: <model-path>      # Example: models/yolo_11s_seg_mpk.tar.gz
+    decode: yolo26
+    model: <model-path>      # Example: models/yolo26s_seg/w8a16/yolo26s_seg_w8a16_mpk.tar.gz
   - url: <rtsp-url-3>
     task: pose
     decode: yolo26

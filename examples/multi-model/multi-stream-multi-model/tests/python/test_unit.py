@@ -25,7 +25,7 @@ pytestmark = pytest.mark.unit
 
 DEFAULT_STREAMS = [
     ("rtsp://127.0.0.1:8554/src1", "detection", "yolov8", "models/yolo_11s_mpk.tar.gz"),
-    ("rtsp://127.0.0.1:8554/src2", "segmentation", "yolov8", "models/yolo_11s_seg_mpk.tar.gz"),
+    ("rtsp://127.0.0.1:8554/src2", "segmentation", "yolo26", "models/yolo26s_seg_w8a16_mpk.tar.gz"),
     ("rtsp://127.0.0.1:8554/src3", "pose", "yolo26", "models/yolo26m-pose-int8-b1.tar.gz"),
     ("rtsp://127.0.0.1:8554/src4", "detection", "yolo26", "models/yolo26m-det-int8-b1.tar.gz"),
 ]
@@ -147,7 +147,7 @@ class TestConfigLoading:
         ]
         assert [stream.decode for stream in cfg.streams] == [
             "yolov8",
-            "yolov8",
+            "yolo26",
             "yolo26",
             "yolo26",
         ]
