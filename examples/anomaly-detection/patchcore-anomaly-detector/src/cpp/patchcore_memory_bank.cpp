@@ -13,6 +13,7 @@
 #include <memory>
 #include <sstream>
 #include <stdexcept>
+#include <utility>
 
 namespace patchcore {
 
@@ -51,7 +52,7 @@ std::string sha256_file(const std::filesystem::path& path) {
 }
 
 
-PatchEmbeddings extract_hwc(const std::vector<int64_t>& shape, const std::vector<float>& flat,
+PatchEmbeddings extract_hwc(const std::vector<int64_t>& shape, std::vector<float> flat,
                             int embed_dim) {
   std::vector<int64_t> squeezed;
   for (const auto dim : shape) {
@@ -70,7 +71,7 @@ PatchEmbeddings extract_hwc(const std::vector<int64_t>& shape, const std::vector
     out.height = static_cast<int>(squeezed[0]);
     out.width = static_cast<int>(squeezed[1]);
     out.channels = embed_dim;
-    out.values = flat;
+    out.values = std::move(flat);
     return out;
   }
   if (squeezed[0] == embed_dim) {
@@ -335,27 +336,26 @@ inline double squared_diff_sum(const float* a, const float* b, std::size_t n) {
 } // namespace
 
 AnomalyResult MemoryBank::score(const PatchEmbeddings& embeddings, int num_neighbors) const {
+  const cv::Mat patches(static_cast<int>(embeddings.patch_count()), embeddings.channels, CV_32F,
+                        const_cast<float*>(embeddings.values.data()));
+  return score(patches, num_neighbors);
+}
+
+AnomalyResult MemoryBank::score(const cv::Mat& query, int num_neighbors) const {
   if (empty()) {
     throw std::runtime_error("memory bank is empty; call build() or load() first");
   }
-  if (static_cast<std::size_t>(embeddings.channels) != embed_dim_) {
+  if (query.type() != CV_32FC1 || static_cast<std::size_t>(query.cols) != embed_dim_) {
     throw std::runtime_error("patch embedding dimension does not match the memory bank");
   }
-
-  const std::size_t num_patches = embeddings.patch_count();
+  const std::size_t num_patches = query.rows;
   AnomalyResult result;
   result.score_map.resize(num_patches);
   std::vector<std::size_t> locations(num_patches);
-
   auto bank_row = [&](std::size_t idx) { return vectors_.data() + idx * embed_dim_; };
   auto dist_to_bank_row = [&](const float* q, std::size_t b) {
     return static_cast<float>(std::sqrt(squared_diff_sum(q, bank_row(b), embed_dim_)));
   };
-
-  // Nearest bank vector per patch. OpenCV's batchDistance sums squared differences
-  // directly and runs in parallel, the same computation as the Python implementation.
-  const cv::Mat query(static_cast<int>(num_patches), static_cast<int>(embed_dim_), CV_32F,
-                      const_cast<float*>(embeddings.values.data()));
   const cv::Mat bank(static_cast<int>(num_vectors_), static_cast<int>(embed_dim_), CV_32F,
                      const_cast<float*>(vectors_.data()));
   cv::Mat nearest_dist;
@@ -382,7 +382,7 @@ AnomalyResult MemoryBank::score(const PatchEmbeddings& embeddings, int num_neigh
 
   // m^test,* (the test patch with the largest nearest-neighbor distance) and its
   // own nearest bank neighbor m^*.
-  const float* q_star = embeddings.values.data() + max_patch * embed_dim_;
+  const float* q_star = query.ptr<float>(static_cast<int>(max_patch));
   const float s_star = max_patch_score;
   const std::size_t nn_index = locations[max_patch];
   const float* m_star = bank_row(nn_index);
@@ -412,7 +412,6 @@ AnomalyResult MemoryBank::score(const PatchEmbeddings& embeddings, int num_neigh
   result.image_score = weight * s_star;
   return result;
 }
-
 
 float percentile_threshold(std::vector<float> scores, double percentile) {
   if (scores.empty()) {

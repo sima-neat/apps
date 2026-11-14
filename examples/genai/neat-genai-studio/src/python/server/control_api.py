@@ -10,19 +10,22 @@ environment. Bound to localhost; the UI process proxies to it.
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from server.model_manager import ModelDoesNotFit, ModelManager, ResidentLimitReached
+from server.model_manager import ModelLoadFailed, ModelManager, ResidentLimitReached
+from shared.recovery import restart_after_response
 
 
 class _ControlServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, address, handler, manager: ModelManager):
+    def __init__(self, address, handler, manager: ModelManager, request_restart=None):
         super().__init__(address, handler)
         self.manager = manager
+        self.request_restart = request_restart
 
 
 class _ControlHandler(BaseHTTPRequestHandler):
@@ -123,11 +126,16 @@ class _ControlHandler(BaseHTTPRequestHandler):
                 self._send_json(self.manager.benchmark_stop())
             else:
                 self._send_json({"error": "not found"}, 404)
-        except ModelDoesNotFit as exc:
-            # Memory full: the client offers to unload the largest models first.
-            self._send_json({"error": str(exc), "code": "no_room",
-                             "resident": exc.resident, "needBytes": exc.need,
-                             "freeBytes": exc.free}, 409)
+        except ModelLoadFailed as exc:
+            restart = self.server.request_restart if exc.out_of_memory else None
+            message = str(exc) + (" Restarting GenAI Studio." if restart else
+                                  " Restart GenAI Studio before loading another model.")
+            logging.error(message)
+            self._send_json({"error": message,
+                             "code": "out_of_memory" if exc.out_of_memory else "model_load_failed",
+                             "restarting": restart is not None}, 503)
+            if restart is not None:
+                restart_after_response(restart)
         except ResidentLimitReached as exc:
             # Not a bad request: the client asks the user which loaded model
             # to unload and retries with {"unload": [...]}.
@@ -144,9 +152,9 @@ class _ControlHandler(BaseHTTPRequestHandler):
             self._send_json({"error": msg}, status)
 
 
-def serve_control_api(manager: ModelManager, host: str, port: int) -> ThreadingHTTPServer:
+def serve_control_api(manager: ModelManager, host: str, port: int, *, request_restart=None) -> ThreadingHTTPServer:
     """Start the control API on its own thread and return the server handle."""
-    server = _ControlServer((host, port), _ControlHandler, manager)
+    server = _ControlServer((host, port), _ControlHandler, manager, request_restart)
     thread = threading.Thread(target=server.serve_forever, name="control-api", daemon=True)
     thread.start()
     return server

@@ -7,6 +7,8 @@ DEFAULT_APP_VENV="${EXAMPLE_DIR}/.venv"
 DEFAULT_LOCAL_CONFIG="${EXAMPLE_DIR}/config.local.yaml"
 # shellcheck source=src/common/config_value.sh
 source "${EXAMPLE_DIR}/src/common/config_value.sh"
+# shellcheck source=src/common/studio_supervisor.sh
+source "${EXAMPLE_DIR}/src/common/studio_supervisor.sh"
 
 if [[ -z "${CONFIG_PATH:-}" ]]; then
   if [[ -f "${DEFAULT_LOCAL_CONFIG}" ]]; then
@@ -755,8 +757,7 @@ if [[ ! -x "${DEFAULT_APP_VENV}/bin/python" || ! -f "${DEFAULT_LOCAL_CONFIG}" ]]
   fi
 fi
 
-# Also covers the first launch after updating from a run.sh version that did
-# not yet invoke the migration itself.
+# Also prepare voices on the first launch after updating.
 if ! migrate_piper_voices; then
   errln "Installed Piper voices could not be prepared; fix the error above and retry."
   exit 1
@@ -779,6 +780,7 @@ fi
 pids=()
 process_groups=()
 cleanup_started=0
+restart_requested=0
 
 stop_stale_rag_worker() {
   if ! command -v pkill >/dev/null 2>&1; then
@@ -830,36 +832,6 @@ prepare_clean_start() {
   done
 }
 
-any_child_running() {
-  for pid in "${pids[@]}"; do
-    if kill -0 "${pid}" 2>/dev/null; then
-      return 0
-    fi
-  done
-  return 1
-}
-
-child_running() {
-  local pid="$1"
-  kill -0 "${pid}" 2>/dev/null
-}
-
-remember_process_group() {
-  local pid="$1"
-  local pgid
-  pgid="$(ps -o pgid= -p "${pid}" 2>/dev/null | tr -d ' ' || true)"
-  if [[ -n "${pgid}" ]]; then
-    process_groups+=("${pgid}")
-  fi
-}
-
-signal_process_groups() {
-  local signal_name="$1"
-  for pgid in "${process_groups[@]}"; do
-    kill -"${signal_name}" "-${pgid}" 2>/dev/null || true
-  done
-}
-
 cleanup() {
   if [[ "${cleanup_started}" -eq 1 ]]; then
     return
@@ -871,25 +843,7 @@ cleanup() {
 
   step "Shutting down Neat GenAI Studio…"
 
-  # Graceful: both Python entrypoints handle SIGTERM — the model server releases
-  # its models on the MLA and the backend stops the RAG worker before exiting.
-  signal_process_groups TERM
-
-  local deadline=$((SECONDS + SHUTDOWN_GRACE_SECONDS))
-  while any_child_running && [[ "${SECONDS}" -lt "${deadline}" ]]; do
-    sleep 1
-  done
-
-  if any_child_running; then
-    warn "Processes still running after ${SHUTDOWN_GRACE_SECONDS}s — forcing stop…"
-    signal_process_groups KILL
-    sleep 1
-  fi
-
-  for pid in "${pids[@]}"; do
-    wait "${pid}" 2>/dev/null || true
-  done
-  stop_stale_rag_worker
+  stop_children
   rm -f "${PID_FILE}" "${URL_FILE}"
   ok "Neat GenAI Studio stopped."
 }
@@ -909,6 +863,8 @@ fi
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+# Model-load failures request a restart after returning their HTTP error.
+trap 'restart_requested=1' USR1
 # Closing the terminal window stops the Studio cleanly instead of leaving the
 # setsid'd processes behind.
 trap 'exit 129' HUP
@@ -946,7 +902,9 @@ launch_server() {
     errln "Could not read ${CONFIG_PATH} with ${APP_PYTHON}; run ./setup.sh first."
     return 1
   fi
-  setsid "${PYNEAT_PYTHON}" "${PYTHON_DIR}/server/main.py" --config "${SERVER_CONFIG_JSON}" &
+  # Prefer reclaiming model allocations over killing the API or OS services.
+  setsid bash -c 'echo 1000 > /proc/self/oom_score_adj; exec "$@"' _ \
+    "${PYNEAT_PYTHON}" "${PYTHON_DIR}/server/main.py" --config "${SERVER_CONFIG_JSON}" &
   server_pid="$!"
   pids[0]="${server_pid}"
   remember_process_group "${server_pid}"
@@ -955,25 +913,29 @@ launch_server() {
 prepare_clean_start
 migrate_legacy_ui_dir
 
-section "Model Server"
-launch_server
+start_children() {
+  section "Model Server"
+  launch_server
 
-sleep "${MODEL_SERVER_START_DELAY:-2}"
+  sleep "${MODEL_SERVER_START_DELAY:-2}"
 
-if ! child_running "${server_pid}"; then
-  set +e
-  wait "${server_pid}"
-  status=$?
-  set -e
-  exit "${status}"
-fi
+  if ! child_running "${server_pid}"; then
+    set +e
+    wait "${server_pid}"
+    status=$?
+    set -e
+    return "${status}"
+  fi
 
-section "Backend"
-step "Starting the Neat GenAI Studio backend (API endpoints)…"
-setsid "${APP_PYTHON}" "${PYTHON_DIR}/api/main.py" --config "${CONFIG_PATH}" &
-pids[1]="$!"
-api_pid="${pids[1]}"
-remember_process_group "${api_pid}"
+  section "Backend"
+  step "Starting the Neat GenAI Studio backend (API endpoints)…"
+  setsid "${APP_PYTHON}" "${PYTHON_DIR}/api/main.py" --config "${CONFIG_PATH}" &
+  pids[1]="$!"
+  api_pid="${pids[1]}"
+  remember_process_group "${api_pid}"
+}
+
+start_children
 
 printf '\n'
 info "Waiting for the backend to be ready…"
@@ -987,43 +949,4 @@ fi
 info "Press ${C_BOLD}Ctrl+C${C_RESET} to stop, or run ${C_BOLD}./run.sh stop${C_RESET} from another shell."
 printf '\n'
 
-# Supervisor: watch both processes; when either exits, the Studio stops.
-status=0
-ready=0
-while true; do
-  if ! child_running "${server_pid}"; then
-    set +e
-    wait "${server_pid}"
-    status=$?
-    set -e
-    if [[ "${status}" -ne 0 ]]; then
-      errln "Model server exited with status ${status}; shutting down."
-    fi
-    break
-  fi
-  if ! child_running "${api_pid}"; then
-    set +e
-    wait "${api_pid}"
-    status=$?
-    set -e
-    break
-  fi
-  if [[ "${ready}" == 0 ]] && "${APP_PYTHON}" - "${_self_url}/health" >/dev/null 2>&1 <<'HEALTH'
-import sys
-import requests
-
-try:
-    response = requests.get(sys.argv[1], timeout=1, verify=False)
-    sys.exit(0 if response.ok and response.json().get('ok') else 1)
-except (requests.RequestException, ValueError):
-    sys.exit(1)
-HEALTH
-  then
-    ready=1
-    ok "Neat GenAI Studio is ready."
-    studio_ui_hint "${_url}"
-  fi
-  sleep 1
-done
-
-exit "${status}"
+supervise_children

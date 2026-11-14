@@ -31,8 +31,9 @@ RAG_EMBEDDING_REPO="thenlper/gte-small"
 CHAT_MODEL_NAME="${CHAT_MODEL_NAME:-${CHAT_MODEL_REPO##*/}}"
 # Chat/VLM models kept loaded at once (ASR is always kept). With 1, loading a new
 # model replaces the loaded one; above 1, a load past the limit is refused until
-# the request names a loaded model to unload.
-MAX_RESIDENT_CHAT_MODELS="${MAX_RESIDENT_CHAT_MODELS:-1}"
+# the request names a loaded model to unload. Unset: the existing config's value,
+# else 2 (resolve_max_resident).
+MAX_RESIDENT_CHAT_MODELS="${MAX_RESIDENT_CHAT_MODELS:-}"
 ALLOW_HUB_DOWNLOAD="${ALLOW_HUB_DOWNLOAD:-true}"
 # Hugging Face accounts searched for compatible models (space-separated):
 # simaai (official precompiled) + TDoSiMa and florianvoss (community).
@@ -46,6 +47,9 @@ TTS_OPTIONAL_VOICES="${TTS_OPTIONAL_VOICES:-}"
 # the numpy that PyNeat is built against); the model files come from Hugging
 # Face at pinned revisions and are checksum-verified. INSTALL_SUPERTONIC=0 skips it.
 INSTALL_SUPERTONIC="${INSTALL_SUPERTONIC:-1}"
+# Why Supertonic ended up unavailable, if it did; the final summary repeats it
+# so the warning does not get lost in the install output (#710).
+SUPERTONIC_PROBLEM=""
 # Paths: environment > what an earlier setup persisted in CONFIG_PATH
 # (app.tts.supertonic.{venv,models_root}, or the pre-vendoring app_root) > defaults,
 # so re-running setup without the variables keeps a custom install where it is.
@@ -221,8 +225,9 @@ Environment:
   CATALOG_MODEL_REPOS           Extra compatible HF repos to seed the catalog
                                 (space-separated). default: empty
   MAX_RESIDENT_CHAT_MODELS      Chat/VLM models kept loaded at once; past the
-                                limit a load must name one to unload.
-                                default: 1
+                                limit a load must name one to unload. 1 to 4.
+                                default: the value in an existing config (kept
+                                on re-run), else 2
   WEB_HOST, WEB_PORT, WEB_HTTPS, WEB_CORS_ORIGINS
                                 app.web settings written to the config. Default:
                                 the values in an existing config (kept on re-run),
@@ -305,6 +310,21 @@ resolve_setup_rag() {
   if config_true "${SETUP_RAG}"; then SETUP_RAG=1; else SETUP_RAG=0; fi
 }
 
+# MAX_RESIDENT_CHAT_MODELS: environment > the existing config's
+# server.models.max_resident_chat_models > 2.
+resolve_max_resident() {
+  if [[ -z "${MAX_RESIDENT_CHAT_MODELS}" && -f "${CONFIG_PATH}" ]]; then
+    [[ -x "${APP_VENV}/bin/python" ]] && export STUDIO_CONFIG_PYTHON="${APP_VENV}/bin/python"
+    MAX_RESIDENT_CHAT_MODELS="$(resident_config_limit "${CONFIG_PATH}")"
+  fi
+  MAX_RESIDENT_CHAT_MODELS="${MAX_RESIDENT_CHAT_MODELS:-2}"
+  if [[ ! "${MAX_RESIDENT_CHAT_MODELS}" =~ ^[1-4]$ ]]; then
+    errln "The chat model limit must be a whole number from 1 to 4, not '${MAX_RESIDENT_CHAT_MODELS}'."
+    info "Set MAX_RESIDENT_CHAT_MODELS, or fix server.models.max_resident_chat_models in ${CONFIG_PATH}."
+    exit 1
+  fi
+}
+
 install_cpu_torch_if_needed() {
   case "$(uname -m)" in
     x86_64|amd64|aarch64|arm64)
@@ -318,6 +338,7 @@ install_cpu_torch_if_needed() {
 
 section "Python environment"
 resolve_setup_rag
+resolve_max_resident
 step "Creating backend virtual environment: ${C_DIM}${APP_VENV}${C_RESET}"
 python3 -m venv "${APP_VENV}"
 "${APP_VENV}/bin/python" -m pip install --upgrade pip
@@ -392,10 +413,17 @@ import supertonic_sima
 PY
 }
 
+# Supertonic will not be available after this run: warn now and keep the
+# reason for the final summary.
+_supertonic_skipped() {
+  warn "$1"
+  SUPERTONIC_PROBLEM="$1"
+}
+
 # A venv whose build failed part-way is removed so the Studio sees the engine as
 # cleanly unavailable instead of spawning a worker that cannot import.
 _supertonic_venv_failed() {
-  warn "$1"
+  _supertonic_skipped "$1"
   rm -rf "${SUPERTONIC_VENV}"
   return 1
 }
@@ -474,6 +502,11 @@ _find_sima_cli() {
   if ! command -v sima-cli >/dev/null 2>&1 && [[ -x "${venv_bin}/sima-cli" ]]; then
     export PATH="${PATH}:${venv_bin}"
   fi
+  # sima-cli looks for a newer release before every command and asks on stdin
+  # whether to update. Inside this script that question would be answered by
+  # the script's own input (#710), so the check stays off unless the caller
+  # turns it on, and the sima-cli calls below get no input to read.
+  export SIMA_CLI_CHECK_FOR_UPDATE="${SIMA_CLI_CHECK_FOR_UPDATE:-0}"
   command -v sima-cli >/dev/null 2>&1
 }
 
@@ -513,7 +546,7 @@ _supertonic_venv() {
   wheel_dir="$(mktemp -d)"
   info "Fetching the PyNeat wheel with sima-cli…"
   local -a wheels=()
-  if sima-cli neat install core -t pyneat --install-dir "${wheel_dir}"; then
+  if sima-cli neat install core -t pyneat --install-dir "${wheel_dir}" </dev/null; then
     mapfile -t wheels < <(find "${wheel_dir}" -maxdepth 1 -type f -name 'pyneat-*.whl' -print | sort)
     if [[ "${#wheels[@]}" -ne 1 ]]; then
       status=1; warn "Expected one PyNeat wheel from sima-cli, found ${#wheels[@]}."
@@ -562,7 +595,7 @@ PYASSETS
     fi
     step "Downloading Supertonic ${component} from the SiMa model zoo…"
     tmp="$(mktemp -d "${SUPERTONIC_MODELS_ROOT}/.supertonic-model.XXXXXX")" || return 1
-    if ! sima-cli download "${url}" -d "${tmp}"; then
+    if ! sima-cli download "${url}" -d "${tmp}" </dev/null; then
       rm -rf "${tmp}"
       warn "The model zoo download failed; rerun setup.sh to retry."
       return 1
@@ -639,7 +672,7 @@ install_supertonic() {
   # rejects it. Leave an older board's Supertonic files untouched.
   platform="$(_platform_version)"
   if [[ -n "${platform}" && "${platform%%.*}" =~ ^[0-9]+$ && "${platform%%.*}" -lt 3 ]]; then
-    warn "Supertonic needs Platform 3.0 or newer (this board: ${platform}); skipped. The CPU TTS engines remain available."
+    _supertonic_skipped "Supertonic needs Platform 3.0 or newer (this board: ${platform}); skipped. The CPU TTS engines remain available."
     return 0
   fi
   if _supertonic_runtime_ok; then
@@ -657,12 +690,12 @@ install_supertonic() {
     local rel
     for rel in "${bad[@]}"; do rm -f "${SUPERTONIC_MODELS_ROOT}/${rel}"; done   # never keep a bad copy
     if ! _supertonic_models; then
-      warn "Supertonic model download or verification failed; the CPU TTS engines remain available."
+      _supertonic_skipped "Supertonic model download or verification failed; the CPU TTS engines remain available."
       return 0
     fi
   fi
   if ! _supertonic_runtime_ok; then
-    warn "The Supertonic runtime does not import; the CPU TTS engines remain available."
+    _supertonic_skipped "The Supertonic runtime does not import; the CPU TTS engines remain available."
     return 0
   fi
   ok "Supertonic 3 ${refresh:+refreshed and }ready (venv ${C_DIM}${SUPERTONIC_VENV}${C_RESET}, models ${C_DIM}${SUPERTONIC_MODELS_ROOT}${C_RESET}, all files verified)."
@@ -842,7 +875,7 @@ WEB_CORS_ORIGINS="${WEB_CORS_ORIGINS-$(_web_setting cors_origins '')}"
 config_true "${WEB_HTTPS}" && WEB_HTTPS=true || WEB_HTTPS=false
 if [[ -f "${CONFIG_PATH}" ]]; then
   cp -p "${CONFIG_PATH}" "${CONFIG_PATH}.bak"
-  info "Previous config kept as ${C_DIM}${CONFIG_PATH}.bak${C_RESET} (web settings carried over: host ${WEB_HOST}, port ${WEB_PORT}, https ${WEB_HTTPS}${WEB_CORS_ORIGINS:+, cors_origins ${WEB_CORS_ORIGINS}})."
+  info "Previous config kept as ${C_DIM}${CONFIG_PATH}.bak${C_RESET} (web settings carried over: host ${WEB_HOST}, port ${WEB_PORT}, https ${WEB_HTTPS}${WEB_CORS_ORIGINS:+, cors_origins ${WEB_CORS_ORIGINS}}; chat models kept loaded: ${MAX_RESIDENT_CHAT_MODELS})."
 fi
 if [[ "${SETUP_RAG}" == "1" ]]; then
   RAG_ENABLED_YAML="true"
@@ -959,8 +992,18 @@ else
   info "Supertonic 3 install skipped (INSTALL_SUPERTONIC=0)."
 fi
 
-section "Done"
-ok "Install complete."
-info "Config: ${C_DIM}${CONFIG_PATH}${C_RESET}"
-info "Start the studio with ${C_BOLD}./run.sh${C_RESET}"
-printf '\n'
+# The closing lines say what is not available, so a skipped Supertonic does
+# not hide behind "Install complete" (#710).
+finish_summary() {
+  section "Done"
+  if [[ -n "${SUPERTONIC_PROBLEM}" ]]; then
+    warn "Install complete, but Supertonic 3 (MLA text-to-speech) is not available: ${SUPERTONIC_PROBLEM}"
+    info "The CPU voices work meanwhile; fix the cause and run ./setup.sh again."
+  else
+    ok "Install complete."
+  fi
+  info "Config: ${C_DIM}${CONFIG_PATH}${C_RESET}"
+  info "Start the studio with ${C_BOLD}./run.sh${C_RESET}"
+  printf '\n'
+}
+finish_summary

@@ -587,8 +587,6 @@ def build_backbone(cfg: Config, width: int, height: int):
 
 def build_transformer(cfg: Config):
     opt = pyneat.ModelOptions()
-    opt.preprocess.kind = pyneat.InputKind.Tensor
-    opt.preprocess.enable = pyneat.AutoFlag.Off
     opt.processcvu.pre_run_target = "A65"
     opt.processcvu.post_run_target = "A65"
     return pyneat.Model(cfg.transformer, opt)

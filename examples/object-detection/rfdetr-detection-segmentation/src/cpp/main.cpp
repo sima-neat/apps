@@ -741,8 +741,6 @@ neat::Model build_backbone(const Config& cfg, const SourceGeometry& geometry) {
 
 neat::Model build_transformer(const Config& cfg) {
   neat::Model::Options opt;
-  opt.preprocess.kind = neat::InputKind::Tensor;
-  opt.preprocess.enable = neat::AutoFlag::Off;
   opt.processcvu.pre_run_target = "A65";
   opt.processcvu.post_run_target = "A65";
   return neat::Model(cfg.transformer, opt);

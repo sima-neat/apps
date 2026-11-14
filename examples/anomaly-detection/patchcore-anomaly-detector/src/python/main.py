@@ -28,13 +28,16 @@ import yaml
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from patchcore_scoring import (  # noqa: E402
     EMBED_DIM,
+    MODEL_INPUT_SIZE,
+    draw_overlay,
+    draw_nv12_overlay,
+    letterbox_rect,
     MemoryBank,
     build_bank_meta,
     extract_hwc,
     load_bank_meta,
     percentile_threshold,
     save_bank_meta,
-    upsample_and_smooth,
     verify_bank_hash,
     verify_bank_matches_model,
 )
@@ -45,9 +48,7 @@ IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".bmp")
 
 BACKBONE = "wide_resnet50_2"
 TORCHVISION_WEIGHTS = "IMAGENET1K_V1"
-OVERLAY_LUT_LOW = 191  # COLORMAP_JET index where highlights start (yellow); 255 is red.
 PATCH_GRID = (28, 28)  # 224x224 input -> 28x28 patch grid, see the model's compile config
-MODEL_INPUT_SIZE = (224, 224)  # (width, height) of the compiled model input
 JOINED_BUFFERS = 4  # RTSP joined-output queue; bounds lag to ~4 frames when scoring is slow
 LETTERBOX_PAD = 114  # gray fill of Neat's letterbox resize, matched by the host letterbox
 THRESHOLD_EVERY = 5  # --calibrate sets aside every 5th nominal image to measure the threshold
@@ -107,7 +108,6 @@ class AppConfig:
     calibration: CalibrationConfig = field(default_factory=CalibrationConfig)
     scoring: ScoringConfig = field(default_factory=ScoringConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
-    timeout_ms: int = 5000
     frames: int = 0  # video_file/rtsp frame limit; 0 = run until the source ends
     profile: bool = False
 
@@ -168,7 +168,6 @@ def load_config(path: Path) -> AppConfig:
             insight_bitrate_kbps=int(insight.get("bitrate_kbps", 1000)),
             insight_metadata_port=int(insight.get("metadata_port", 9100)),
         ),
-        timeout_ms=int(runtime.get("timeout_ms", 5000)),
         frames=int(runtime.get("frames", 0)),
         profile=bool(runtime.get("profile", False)),
     )
@@ -211,8 +210,6 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("calibration.threshold_margin must be >= 1.0")
     if cfg.scoring.num_neighbors < 1:
         raise ValueError("scoring.num_neighbors must be >= 1")
-    if cfg.timeout_ms <= 0:
-        raise ValueError("runtime.timeout_ms must be > 0")
     if cfg.frames < 0:
         raise ValueError("runtime.frames must be >= 0")
     # --calibrate writes both bank files; neither may overwrite the model or each other.
@@ -258,15 +255,6 @@ def make_image_model(model_path: str) -> "pyneat.Model":
     return pyneat.Model(model_path, opt)
 
 
-def letterbox_rect(width: int, height: int) -> tuple[int, int, int, int]:
-    """(x, y, w, h) of a width x height frame inside the model input after a
-    letterbox resize: scaled to fit, keeping its aspect ratio, and centered."""
-    in_w, in_h = MODEL_INPUT_SIZE
-    scale = min(in_w / width, in_h / height)
-    w, h = round(width * scale), round(height * scale)
-    return (in_w - w) // 2, (in_h - h) // 2, w, h
-
-
 def model_input_tensor(bgr) -> "pyneat.Tensor":
     """Letterboxes a host-decoded frame into the model input the same way the RTSP
     graph's preprocess does (centered, gray LETTERBOX_PAD bars), so calibration
@@ -285,38 +273,13 @@ def rgb_tensor(bgr) -> "pyneat.Tensor":
     return pyneat.Tensor.from_numpy(rgb, copy=True, image_format=pyneat.PixelFormat.RGB)
 
 
-def extract_from_bgr(model: "pyneat.Model", bgr, timeout_ms: int = 5000) -> "np.ndarray":
+def extract_from_bgr(model: "pyneat.Model", bgr) -> "np.ndarray":
     """Runs one host-decoded BGR image through the model and returns its (H, W, C)
     patch embedding."""
-    outputs = model.run([model_input_tensor(bgr)], timeout_ms=timeout_ms)
+    outputs = model.run([model_input_tensor(bgr)])
     if not outputs:
         raise RuntimeError("model returned no output tensors")
     return extract_hwc(np.asarray(outputs[0].to_numpy(copy=True)))
-
-
-def draw_overlay(bgr, score_map, sigma: float, alpha: float, patch_scale_min: float,
-                 patch_scale_max: float):
-    """Highlights only pixels whose smoothed patch score exceeds the calibrated
-    patch threshold (patch_scale_max in bank_meta.json); all other pixels are
-    left unchanged. Highlight color runs yellow -> red over a fixed calibrated
-    span: threshold .. threshold + (threshold - nominal median). The score map
-    covers the letterboxed model input; only the frame's own area is mapped back."""
-    height, width = bgr.shape[:2]
-    x, y, w, h = letterbox_rect(width, height)
-    canvas = cv2.resize(score_map, MODEL_INPUT_SIZE, interpolation=cv2.INTER_LINEAR)
-    heat = upsample_and_smooth(canvas[y:y + h, x:x + w], (width, height), sigma)
-    _, mask = cv2.threshold(heat, patch_scale_max, 255, cv2.THRESH_BINARY)
-    mask = mask.astype(np.uint8)
-    out = bgr.copy()
-    if not cv2.countNonZero(mask):
-        return out
-    span = max(patch_scale_max - patch_scale_min, 1e-6)
-    heat_u8 = cv2.convertScaleAbs(heat - patch_scale_max, alpha=(255 - OVERLAY_LUT_LOW) / span)
-    heat_u8 = cv2.add(heat_u8, OVERLAY_LUT_LOW)  # saturates at 255 (red)
-    heat_color = cv2.applyColorMap(heat_u8, cv2.COLORMAP_JET)
-    blended = cv2.addWeighted(bgr, 1 - alpha, heat_color, alpha, 0)
-    cv2.copyTo(blended, mask, out)
-    return out
 
 
 def split_nominal(paths: list[Path]) -> tuple[list[Path], list[Path]]:
@@ -357,7 +320,7 @@ def cmd_calibrate(cfg: AppConfig) -> int:
         if bgr is None:
             print(f"[WARN] could not read image: {path}", file=sys.stderr)
             continue
-        per_image.append(extract_from_bgr(model, bgr, cfg.timeout_ms))
+        per_image.append(extract_from_bgr(model, bgr))
         if i % 10 == 0 or i == len(paths):
             print(f"  [{i}/{len(paths)}] {path.name}")
 
@@ -373,7 +336,7 @@ def cmd_calibrate(cfg: AppConfig) -> int:
         bgr = cv2.imread(str(path), cv2.IMREAD_COLOR)
         if bgr is None:
             continue
-        embedding = extract_from_bgr(model, bgr, cfg.timeout_ms)
+        embedding = extract_from_bgr(model, bgr)
         scored = bank.score(embedding, cfg.scoring.num_neighbors)
         scores.append(scored.image_score)
         patch_scores.extend(scored.score_map.ravel().tolist())
@@ -452,7 +415,7 @@ def cmd_score_image_dir(cfg: AppConfig, bank: MemoryBank, threshold: float, num_
             continue
 
         mla_start = time_ms()
-        embedding = extract_from_bgr(model, bgr, cfg.timeout_ms)
+        embedding = extract_from_bgr(model, bgr)
         mla_ms = time_ms() - mla_start
 
         host_start = time_ms()
@@ -481,19 +444,36 @@ def cmd_score_image_dir(cfg: AppConfig, bank: MemoryBank, threshold: float, num_
     return 0 if processed > 0 else 3
 
 
-def build_video_sender(cfg: AppConfig, fps: float, width: int, height: int):
+def nv12_tensor(frame):
+    height, width = frame.shape[0] * 2 // 3, frame.shape[1]
+    tensor = pyneat.Tensor.from_numpy(
+        frame, copy=False, image_format=pyneat.PixelFormat.NV12, memory=pyneat.TensorMemory.CPU
+    )
+    planes = []
+    for role, rows, offset in ((pyneat.PlaneRole.Y, height, 0),
+                                (pyneat.PlaneRole.UV, height // 2, height * width)):
+        plane = pyneat.Plane()
+        plane.role, plane.shape = role, [rows, width]
+        plane.strides_bytes, plane.byte_offset = [width, 1], offset
+        planes.append(plane)
+    tensor.shape, tensor.strides_bytes = [height, width], []
+    tensor.axis_semantics = [pyneat.TensorAxisSemantic.H, pyneat.TensorAxisSemantic.W]
+    tensor.planes = planes
+    return tensor
+
+
+def build_video_sender(cfg: AppConfig, fps: float, width: int, height: int, nv12=False):
     """A small, separate Insight push-graph: the host manually pushes each
     annotated frame into it."""
     output_fps = max(1, round(fps))
     input_options = pyneat.InputOptions()
     input_options.payload_type = pyneat.PayloadType.Image
-    input_options.format = pyneat.Format.RGB
+    input_options.format = pyneat.Format.NV12 if nv12 else pyneat.Format.BGR
     input_options.width = width
     input_options.height = height
-    input_options.depth = 3
+    input_options.depth = 1 if nv12 else 3
     input_options.fps_n = output_fps
     input_options.fps_d = 1
-    input_options.memory_policy = pyneat.InputMemoryPolicy.Ev74
     # Keep each pushed frame's source timestamp; Insight pairs it with the verdict by timestamp.
     input_options.do_timestamp = False
 
@@ -508,11 +488,15 @@ def build_video_sender(cfg: AppConfig, fps: float, width: int, height: int):
     graph = pyneat.Graph("insight")
     graph.add(pyneat.nodes.input(input_options))
     graph.add(pyneat.groups.video_sender(sender_options))
-    seed = pyneat.Tensor.from_numpy(
-        np.zeros((height, width, 3), dtype=np.uint8),
-        copy=True,
-        image_format=pyneat.PixelFormat.RGB,
-    )
+    if nv12:
+        frame = np.full((height * 3 // 2, width), 128, np.uint8)
+        frame[:height] = 16
+        seed = nv12_tensor(frame)
+    else:
+        seed = pyneat.Tensor.from_numpy(
+            np.zeros((height, width, 3), dtype=np.uint8), copy=True,
+            image_format=pyneat.PixelFormat.BGR, memory=pyneat.TensorMemory.CPU
+        )
     return graph, graph.build([seed]), sender_options.video_port
 
 
@@ -537,21 +521,20 @@ def send_verdict(sender, score: float, threshold: float, verdict: str, timestamp
                          str(frame_id))
 
 
-def annotated_frame_sample(frame_bgr, pts_ns: int, frame_id: int) -> "pyneat.Sample":
+def stream_frame(run, frame, pts_ns: int, frame_id: int, nv12=False) -> None:
     """Stamps the annotated frame with its source frame's timestamp and ID, so Insight
     pairs it with the verdict sent for that frame."""
-    sample = pyneat.make_tensor_sample("", rgb_tensor(frame_bgr))
+    tensor = nv12_tensor(frame) if nv12 else pyneat.Tensor.from_numpy(
+        frame, copy=True, image_format=pyneat.PixelFormat.BGR, memory=pyneat.TensorMemory.CPU
+    )
+    sample = pyneat.make_tensor_sample("", tensor)
     sample.payload_type = pyneat.PayloadType.Image
     sample.media_type = "video/x-raw"
-    sample.format = "RGB"
+    sample.format = "NV12" if nv12 else "BGR"
     sample.payload_tag = sample.format
     sample.pts_ns = pts_ns
     sample.frame_id = frame_id
-    return sample
-
-
-def stream_frame(run, frame_bgr, pts_ns: int, frame_id: int) -> None:
-    if not run.push([annotated_frame_sample(frame_bgr, pts_ns, frame_id)]):
+    if not run.push([sample]):
         raise RuntimeError("Insight video push failed")
 
 
@@ -585,7 +568,7 @@ def cmd_score_video_file(cfg: AppConfig, bank: MemoryBank, threshold: float, num
     try:
         while cfg.frames <= 0 or processed < cfg.frames:
             mla_start = time_ms()
-            outputs = runner.run([model_input_tensor(frame)], timeout_ms=cfg.timeout_ms)
+            outputs = runner.run([model_input_tensor(frame)])
             if not outputs:
                 raise RuntimeError("model returned no output tensors")
             embedding = extract_hwc(np.asarray(outputs[0].to_numpy(copy=True)))
@@ -776,23 +759,22 @@ def tensor_dim(tensor, name: str) -> int:
     return int(value() if callable(value) else value)
 
 
-def frame_bgr_from_sample(sample):
-    # Uses the joined sample's "frame" field; falls back to the sample itself if it has none.
+def frame_nv12_from_sample(sample):
     field = find_field(sample, "frame") or sample
     tensors = extract_tensors(field)
-    if not tensors:
-        raise RuntimeError("joined output missing a frame field")
+    if not tensors or not tensors[0].is_nv12():
+        raise RuntimeError("joined frame is not NV12")
     tensor = tensors[0]
-    if tensor.is_nv12():
-        width, height = tensor_dim(tensor, "width"), tensor_dim(tensor, "height")
-        # .contiguous() drops row padding so the byte copy matches width * height.
-        payload = np.frombuffer(tensor.contiguous().copy_payload_bytes(), dtype=np.uint8)
-        expected = width * height * 3 // 2
-        if payload.size < expected:
-            raise RuntimeError(f"NV12 payload too small: {payload.size} < {expected}")
-        nv12 = payload[:expected].reshape((height * 3 // 2, width))
-        return np.ascontiguousarray(cv2.cvtColor(nv12, cv2.COLOR_YUV2BGR_NV12))
-    return np.asarray(tensor.to_numpy(copy=True))
+    width, height = tensor_dim(tensor, "width"), tensor_dim(tensor, "height")
+    payload = tensor.copy_payload_bytes()
+    planes = {plane.role: plane for plane in tensor.planes}
+    views = []
+    for role, rows in ((pyneat.PlaneRole.Y, height), (pyneat.PlaneRole.UV, height // 2)):
+        plane = planes[role]
+        stride = plane.strides_bytes[0] if plane.strides_bytes else width
+        views.append(np.ndarray((rows, width), np.uint8, buffer=payload,
+                                offset=plane.byte_offset, strides=(stride, 1)))
+    return np.vstack(views)
 
 
 def make_rtsp_graph_model(cfg: AppConfig, width: int, height: int) -> "pyneat.Model":
@@ -823,10 +805,7 @@ def build_rtsp_graph(cfg: AppConfig, model: "pyneat.Model", width: int, height: 
     embedding_graph.add(pyneat.nodes.output("embedding", pyneat.OutputOptions.every_frame(4)))
     frame_graph = pyneat.Graph("frame")
     frame_graph.add(pyneat.nodes.output("frame", pyneat.OutputOptions.every_frame(4)))
-    # Join frame and embedding per frame and keep the newest JOINED_BUFFERS pairs: when
-    # host scoring is slower than the camera, older pairs are dropped here instead of the
-    # whole pipeline waiting (graphs.combine's output never drops, so lag would grow).
-    # A few buffers absorb the bursts the graph delivers frames in.
+    # Drop older frame/embedding pairs when host scoring falls behind.
     joined = pyneat.Graph("patchcore_output")
     joined.add(pyneat.nodes.input("frame"))
     joined.add(pyneat.nodes.input("embedding"))
@@ -847,7 +826,6 @@ def build_rtsp_graph(cfg: AppConfig, model: "pyneat.Model", width: int, height: 
 
     run_options = pyneat.RunOptions()
     run_options.preset = pyneat.RunPreset.Realtime
-    # Depth 3 drops the joined output to ~26 fps on a 30 fps source; 16 keeps up.
     run_options.queue_depth = 16
     run_options.overflow_policy = pyneat.OverflowPolicy.KeepLatest
     run_options.output_memory = pyneat.OutputMemory.ZeroCopy
@@ -859,7 +837,7 @@ def embedding_from_sample(sample) -> "np.ndarray":
     tensors = extract_tensors(field) if field is not None else []
     if not tensors:
         raise RuntimeError("joined output missing an embedding field")
-    return extract_hwc(np.asarray(tensors[0].to_numpy(copy=True)))
+    return extract_hwc(np.asarray(tensors[0].to_numpy(copy=False)))
 
 
 def cmd_score_rtsp(cfg: AppConfig, bank: MemoryBank, threshold: float, num_neighbors: int,
@@ -871,7 +849,7 @@ def cmd_score_rtsp(cfg: AppConfig, bank: MemoryBank, threshold: float, num_neigh
 
     model = make_rtsp_graph_model(cfg, width, height)
     _graph, run = build_rtsp_graph(cfg, model, width, height, fps)
-    _video_graph, video_run, video_port = build_video_sender(cfg, fps, width, height)
+    _video_graph, video_run, video_port = build_video_sender(cfg, fps, width, height, nv12=True)
     metadata_sender = make_metadata_sender(cfg)
     print(f"streaming to Insight: {cfg.output.insight_host}:{video_port} "
           f"metadata={metadata_sender.metadata_port()}")
@@ -896,17 +874,18 @@ def cmd_score_rtsp(cfg: AppConfig, bank: MemoryBank, threshold: float, num_neigh
                 pull_timed_out = True
                 break
             mla_ms = time_ms() - mla_start
-            # Copy both fields out, then drop the sample so its buffers return to the pools.
+            # Own the frame; release the embedding view immediately after scoring.
             embedding = embedding_from_sample(sample)
-            bgr = frame_bgr_from_sample(sample)
+            frame = frame_nv12_from_sample(sample)
             pts_ns = int(sample.pts_ns)
             source_frame_id = int(sample.frame_id)
             del sample
 
             host_start = time_ms()
             scored = bank.score(embedding, num_neighbors)
-            overlay = draw_overlay(bgr, scored.score_map, cfg.scoring.gaussian_sigma, cfg.output.overlay_alpha,
-                               patch_scale_min, patch_scale_max)
+            del embedding
+            draw_nv12_overlay(frame, scored.score_map, cfg.scoring.gaussian_sigma,
+                              cfg.output.overlay_alpha, patch_scale_min, patch_scale_max)
             verdict = "ANOMALOUS" if scored.image_score > threshold else "normal"
             processed += 1
             print(
@@ -916,12 +895,12 @@ def cmd_score_rtsp(cfg: AppConfig, bank: MemoryBank, threshold: float, num_neigh
 
             # The video frame and its verdict carry the same source identity.
             frame_id = source_frame_id if source_frame_id >= 0 else processed
-            stream_frame(video_run, overlay, pts_ns, frame_id)
+            stream_frame(video_run, frame, pts_ns, frame_id, nv12=True)
             timestamp_ms = pts_ns // 1_000_000 if pts_ns >= 0 else -1
             send_verdict(metadata_sender, scored.image_score, threshold, verdict, timestamp_ms, frame_id)
             if save_frames and processed % cfg.output.save_every == 0:
                 snapshot_path = save_dir / f"frame_{processed}.jpg"
-                if not cv2.imwrite(str(snapshot_path), overlay):
+                if not cv2.imwrite(str(snapshot_path), cv2.cvtColor(frame, cv2.COLOR_YUV2BGR_NV12)):
                     print(f"[ERROR] failed to write snapshot: {snapshot_path}", file=sys.stderr)
                     write_failures += 1
     finally:

@@ -33,7 +33,6 @@ namespace neat = simaai::neat;
 namespace {
 
 constexpr int kNumClasses = 91; // index 0 = background, 1..90 = COCO ids.
-constexpr int kDefaultTimeoutMs = 20000;
 constexpr const char* kDefaultLabelsPath =
     "examples/object-detection/ssd-mobilenet-object-detector/src/common/"
     "coco_labels.txt";
@@ -48,7 +47,6 @@ struct Config {
   float score_threshold = 0.55f;
   float nms_iou = 0.60f;
   int max_detections = 100;
-  int timeout_ms = kDefaultTimeoutMs;
 };
 
 bool is_image_file(const fs::path& path) {
@@ -118,7 +116,6 @@ Config load_config(const fs::path& path) {
   cfg.score_threshold = static_cast<float>(raw.double_or("decode.score_threshold", 0.55));
   cfg.nms_iou = static_cast<float>(raw.double_or("decode.nms_iou", 0.60));
   cfg.max_detections = raw.int_or("decode.max_detections", 100);
-  cfg.timeout_ms = raw.int_or("runtime.timeout_ms", kDefaultTimeoutMs);
   if (sima_examples::trim_copy(cfg.model).empty()) {
     throw std::runtime_error("model.path must be a nonempty path");
   }
@@ -131,9 +128,6 @@ Config load_config(const fs::path& path) {
   }
   if (cfg.max_detections < 1) {
     throw std::runtime_error("decode.max_detections must be >= 1");
-  }
-  if (cfg.timeout_ms <= 0) {
-    throw std::runtime_error("runtime.timeout_ms must be > 0");
   }
   if (cfg.preprocessing_profile != "tensorflow_ssd" &&
       cfg.preprocessing_profile != "torchvision_ssdlite") {
@@ -340,7 +334,7 @@ int main(int argc, char** argv) {
                                  "pack whose MLA input contract contains its model frame.");
       }
     }();
-    run.run(std::vector<cv::Mat>{seed_bgr}, cfg.timeout_ms);
+    run.run(std::vector<cv::Mat>{seed_bgr});
 
     fs::create_directories(cfg.output_dir);
 
@@ -352,7 +346,7 @@ int main(int argc, char** argv) {
         throw std::runtime_error("failed to read image: " + image_path.string());
       }
 
-      neat::TensorList out = run.run(std::vector<cv::Mat>{bgr_u8}, cfg.timeout_ms);
+      neat::TensorList out = run.run(std::vector<cv::Mat>{bgr_u8});
       const std::vector<neat::Box> boxes =
           parse_detections(out, bgr_u8.cols, bgr_u8.rows, cfg.max_detections);
 

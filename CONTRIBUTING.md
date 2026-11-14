@@ -211,6 +211,52 @@ When changing layout, commands, models, or tests, inspect `build.sh`,
 `tests/test.sh`, `tests/utils/test_scope.py`, README validation, catalog
 generation, and affected CI workflows.
 
+## Installed Layout
+
+| Path | Purpose |
+| --- | --- |
+| `examples/<category>/<example>/README.md` | Example setup and run instructions |
+| `examples/<category>/<example>/src/cpp/pre-built/` | Packaged C++ executables |
+| `examples/<category>/<example>/src/cpp/` | C++ implementation reference |
+| `examples/<category>/<example>/src/python/` | Python implementation and dependencies |
+| `examples/<category>/<example>/src/common/` | Shared runtime configuration and data |
+| `assets/datasets/` | Shipped runtime sample data |
+| `models/` | User-managed model packages |
+| `deps/neat-apps.json` | Installed Apps ref and exact commit |
+| `deps/neat-core.json` | Core artifact selected for this Apps build |
+
+The installed bundle does not contain CMake files or tests. Clone the repository
+to compile source or run the Apps test suite.
+
+## Repository Layout
+
+| Path | Purpose |
+| --- | --- |
+| `examples/` | Application examples organized by category |
+| `assets/datasets/` | Runtime datasets shipped with Apps |
+| `assets/datasets-test/` | Repository-only test fixtures |
+| `models/` | Ignored user-managed model packages |
+| `tests/` | Test runner and repository test support |
+| `deps/manifest.json` | Source dependency and platform declaration |
+| `portal/` | Examples portal source |
+| `portal/assets/readme/` | Root README hero image |
+
+## Dependency Selection
+
+`deps/manifest.json` selects Core and records the SDK channel, the platform
+version, and the Model Zoo version used for model downloads. Development uses
+the `snap` policy, while a release-preparation branch can select an exact Core
+artifact. Vulcan records the resolved Core target under package metadata and
+the Apps installer uses that same target. Insight is not pinned in the Apps
+manifest.
+
+Builds inherit the sysroot requirement from Core's bundled Scheduler. Official
+releases require a matching cached SDK receipt, package inventory and package
+identity, without overlays; they never run `sysroot update`. Development pins
+retain the update path. CI uses the same Scheduler policy with the shared
+compatibility resolver to select and verify DevKit firmware before
+installation, then shards tests using its resolved labels.
+
 ## Review Checklist
 
 - Installed README commands match the packaged runtime.

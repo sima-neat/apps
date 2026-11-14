@@ -49,6 +49,7 @@ from hub_security_suite import HubPathSecurityTests  # noqa: E402,F401
 from resident_models_suite import (  # noqa: E402,F401
     ResidentChatModelTests,
     ResidentLimitControlApiTests,
+    ResidentLimitDefaultTests,
 )
 from asr_metadata_suite import AsrMetadataTests  # noqa: E402,F401
 from board_camera_suite import ResolveCameraNodeTests  # noqa: E402,F401
@@ -92,9 +93,15 @@ from shell_config_suite import (  # noqa: E402,F401
     ServerConfigWithoutPyyamlTests,
     ShellConfigValueTests,
     ShellRagConfigTests,
+    ShellResidentLimitConfigTests,
+    StudioSupervisorTests,
     ShellWebConfigTests,
 )
-from setup_rag_suite import RagDatabaseCleanupTests, SetupRagSwitchTests  # noqa: E402,F401
+from setup_rag_suite import (  # noqa: E402,F401
+    RagDatabaseCleanupTests,
+    SetupRagSwitchTests,
+    SetupResidentLimitTests,
+)
 from backend_mode_suite import (  # noqa: E402,F401
     BackendPathTests,
     CorsPolicyTests as BackendCorsPolicyTests,

@@ -6,7 +6,7 @@
 | --- | --- |
 | Category | feature-extraction |
 | Difficulty | Intermediate |
-| Tags | superpoint, feature-extraction, video, boxdecode |
+| Tags | superpoint, feature-extraction, rtsp, boxdecode |
 | Languages | C++, Python |
 | Status | stable |
 | Binary Name | superpoint-feature-extractor |
@@ -14,7 +14,7 @@
 
 ## Concept
 
-Finds SuperPoint feature points in a video and streams the annotated video to Insight.
+Finds SuperPoint feature points in an RTSP stream and sends the annotated video to Insight.
 
 ## Preview
 
@@ -25,12 +25,12 @@ Finds SuperPoint feature points in a video and streams the annotated video to In
 - `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on the Modalix
   DevKit, or in a Neat SDK container paired with it.
 - Neat Library with SuperPoint BoxDecode support.
-- Insight or another RTP receiver for the annotated output stream.
+- Insight serving an H.264 RTSP source and receiving the annotated output stream.
 - The SuperPoint model package installed below.
 
 ## Install Apps
 
-Install on the Modalix DevKit, or under `/workspace` in a Neat SDK container paired with it. Only the example itself must run on the DevKit. If the Core and Insight selected by Apps are already installed, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps` to skip reinstalling them. See [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
+Install on the Modalix DevKit, or under `/workspace` in a Neat SDK container paired with it. Only the example itself must run on the DevKit. `sima-cli neat install apps` also offers to install the compatible Neat Library and Insight, and skips them when they are up to date. To keep the Neat Library and Insight you have without being asked, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps`. See [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
 
 Install the latest Neat Apps runtime and enter the installed bundle:
 
@@ -58,12 +58,13 @@ cd ..
 
 ## Configure
 
-Open `${APP_DIR}/src/common/config.yaml`. Set `model.path`, `io.input`, and `output.insight.host`. Change the Insight port or channel only if your Insight setup uses different values.
+Upload `assets/datasets/tum-rgbd/freiburg1-desk.mp4` to Insight and start it under Media Sources. The clip loops at its native 30 FPS.
 
-Set `runtime.frames` to `0` to process the full video. The input must keep the same resolution for the whole run.
+Open `${APP_DIR}/src/common/config.yaml`. Set `model.path`, `source.rtsp_url` (for example, `rtsp://<insight-host-ip>:8554/src1`), and `output.insight.host`.
 
-The included sequence comes from the TUM RGB-D visual-SLAM benchmark. Its camera motion and office
-scene provide repeatable local features for SuperPoint to extract. The source, attribution, transformation, and CC BY 4.0 license are documented in
+Set `runtime.frames` to `0` to run until Ctrl-C. The RTSP source must keep the same resolution for the whole run.
+
+The TUM RGB-D clip's attribution and CC BY 4.0 license are in
 `assets/datasets/tum-rgbd/LICENSE.md`.
 
 ## Run
@@ -90,13 +91,13 @@ average feature count, descriptor dimension, and selected video endpoint.
 ## Expected Result
 
 This application writes nothing to disk; its output is the Insight stream plus a
-single summary line printed when the frame limit is reached:
+single summary line printed when the run ends:
 
 ```text
 frames=200 average_points=331.6 descriptor_dim=256 video_sender=<insight-host>:9000
 ```
 
-`frames` should match `runtime.frames`, or the video length when it is `0`.
+`frames` should match `runtime.frames`, or the number processed before Ctrl-C when it is `0`.
 `descriptor_dim` should be `256`. For the packaged TUM RGB-D sequence
 `average_points` runs in the low hundreds. An `average_points` near zero means
 the pipeline ran but the model returned almost no features, which is worth
@@ -106,7 +107,7 @@ investigating even though the run exits successfully.
 
 - Confirm `model.path` points to the qualified SuperPoint package.
 - A missing or incompatible typed SuperPoint contract fails during model construction.
-- Confirm the input is a stable-resolution BGR video supported by the target hardware.
+- Confirm the H.264 RTSP source is running and keeps a stable resolution.
 - Confirm Insight is reachable at the configured host and UDP video port.
 - Set `runtime.frames: 30` for a short smoke run.
 
@@ -115,8 +116,6 @@ investigating even though the run exits successfully.
 - C++ reference source: `src/cpp/main.cpp`
 - Python source: `src/python/main.py`
 - Shared config: `src/common/config.yaml`
-- C++ tests: `tests/cpp/`
-- Python tests: `tests/python/`
 
 The packaged C++ source is an implementation reference. Run the executable under
 `src/cpp/pre-built/`; the installed bundle does not include CMake files.

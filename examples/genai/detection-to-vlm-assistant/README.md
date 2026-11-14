@@ -30,7 +30,7 @@ The decoded frame branches inside a single graph to the detector, to the H.264 s
 
 ## Install Apps
 
-Install on the Modalix DevKit, or under `/workspace` in a Neat SDK container paired with it. Run the `llima` commands and the example itself on the DevKit. If the Core and Insight selected by Apps are already installed, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps` to skip reinstalling them. See [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
+Install on the Modalix DevKit, or under `/workspace` in a Neat SDK container paired with it. Run the `llima` commands and the example itself on the DevKit. `sima-cli neat install apps` also offers to install the compatible Neat Library and Insight, and skips them when they are up to date. To keep the Neat Library and Insight you have without being asked, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps`. See [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
 
 Install the latest Neat Apps runtime and enter the installed bundle:
 
@@ -105,7 +105,11 @@ source ~/pyneat/bin/activate
 pip install -r ${APP_DIR}/src/python/requirements.txt
 ```
 
-When GenAI is enabled, start the server in one terminal:
+When GenAI is enabled, start the server in one terminal. The server uses port
+`9998` and loads the VLM on the accelerator, as GenAI Studio does. If GenAI
+Studio is running, for example after you set it up from Insight's GenAI tab,
+stop it first with `run.sh stop` in its folder
+(`~/prebuilt-apps/examples/genai/neat-genai-studio` when Insight installed it).
 
 ```bash
 APP_DIR=examples/genai/detection-to-vlm-assistant
@@ -150,6 +154,8 @@ responses is not a fault; none at all, on a source containing people, is.
 - Verify the RTSP URL and Insight ports before investigating inference.
 - Verify `model.path` points to the detector package.
 - Verify the VLM server lists `genai_server.model.name` under `/v1/models`.
+- If the GenAI server cannot start on port `9998`, another server already uses
+  it, usually GenAI Studio. Stop GenAI Studio as described in [Run](#run).
 - Disable GenAI to isolate the detector and Insight path.
 
 ## Source Files

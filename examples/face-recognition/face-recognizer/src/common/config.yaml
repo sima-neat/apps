@@ -1,0 +1,49 @@
+model:
+  scrfd: models/scrfd_2.5g_bnkps.mla_mpk.tar.gz   # Face detector.
+  arcface: models/w600k_r50.surgery_mpk.tar.gz    # Face embedding model.
+
+gallery:
+  path: sandbox/face-recognizer/gallery.bin   # Enrolled people. Written by --enroll.
+
+source:
+  type: rtsp                 # rtsp, usb or video_file. Only the matching section below is read.
+
+  rtsp:
+    url: <rtsp-url-1>        # rtsp://<rtsp-source-ip>:<port>/<stream-name>. H.264 streams only.
+    tcp: true                # RTSP over TCP.
+    latency_ms: 100          # Receive latency.
+    fps: 0                   # 0 detects it from the stream.
+
+  usb:
+    camera: ""               # A camera ID from pyneat.usb_camera_ids().
+    width: 1280              # One of the camera's MJPEG modes, exactly: width, height and fps.
+    height: 720              # Multiples of 8, at most 2040 (RTP/JPEG limit).
+    fps: 30
+
+  video_file:
+    path: ""                 # An H.264 video file. Each frame's result is printed, not sent to Insight.
+
+inference:
+  frames: 0                  # Frame limit. 0 means run continuously, or to the end of a video file.
+  min_score: 0.65            # Face detection score threshold.
+  nms_iou: 0.40              # NMS IoU threshold.
+  max_faces: 100             # Max faces to recognize per frame.
+
+match:
+  threshold: 0.55            # Lowest similarity that names a person.
+  margin: 0.12               # Lead the best match needs over the second best.
+  unknown_label: Unknown     # Name given to a face that matches nobody.
+
+enrollment:                  # Used only by --enroll.
+  images_dir: ""             # One folder of images per person, named after the person.
+  video_path: ""             # A video of one person, enrolled as `name`.
+  name: ""
+  sample_every: 5            # Enroll every Nth video frame.
+  min_score: 0.75            # Skip an image whose best face scores below this.
+  max_per_person: 0          # Images used per person. 0 uses all of them.
+
+output:
+  insight:
+    host: <insight-host-ip>  # Host running the Insight receiver/viewer.
+    video_port: 9000         # UDP video port.
+    metadata_port: 9100      # UDP metadata port.

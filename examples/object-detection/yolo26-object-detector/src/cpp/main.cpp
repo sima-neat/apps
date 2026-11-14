@@ -30,7 +30,6 @@ namespace {
 constexpr float kDefaultMinScore = 0.25f;
 constexpr float kDefaultNmsIou = 0.45f;
 constexpr int kMaxDet = 100;
-constexpr int kTimeoutMs = 20000;
 
 struct Config {
   std::string model_path;
@@ -40,7 +39,6 @@ struct Config {
   float min_score = kDefaultMinScore;
   float nms_iou = kDefaultNmsIou;
   int max_detections = kMaxDet;
-  int timeout_ms = kTimeoutMs;
   bool profile = false;
   bool overlay = true;
   int num_runs = 1;
@@ -57,7 +55,6 @@ Config load_config(const fs::path& path) {
   cfg.min_score = static_cast<float>(raw.double_or("decode.score_threshold", kDefaultMinScore));
   cfg.nms_iou = static_cast<float>(raw.double_or("decode.nms_iou", kDefaultNmsIou));
   cfg.max_detections = raw.int_or("decode.max_detections", kMaxDet);
-  cfg.timeout_ms = raw.int_or("runtime.timeout_ms", kTimeoutMs);
   cfg.num_runs = raw.int_or("runtime.num_runs", 1);
   cfg.profile = raw.bool_or("runtime.profile", false);
   cfg.overlay = raw.bool_or("output.overlay", true);
@@ -69,9 +66,6 @@ Config load_config(const fs::path& path) {
   }
   if (cfg.max_detections < 1) {
     throw std::runtime_error("decode.max_detections must be >= 1");
-  }
-  if (cfg.timeout_ms <= 0) {
-    throw std::runtime_error("runtime.timeout_ms must be > 0");
   }
   if (cfg.num_runs < 1) {
     throw std::runtime_error("runtime.num_runs must be >= 1");
@@ -272,7 +266,7 @@ int main(int argc, char** argv) {
     std::cout << "[BUILD] Pipeline built\n";
 
     // Warmup inference to stabilize timing before profiling.
-    runner.run(std::vector<cv::Mat>{seed_bgr}, cfg.timeout_ms);
+    runner.run(std::vector<cv::Mat>{seed_bgr});
     std::cout << "[WARMUP] done\n";
 
     const int total_images = static_cast<int>(images.size()) * cfg.num_runs;
@@ -295,7 +289,7 @@ int main(int argc, char** argv) {
         }
 
         const auto infer_start = std::chrono::steady_clock::now();
-        simaai::neat::TensorList out = runner.run(std::vector<cv::Mat>{bgr}, cfg.timeout_ms);
+        simaai::neat::TensorList out = runner.run(std::vector<cv::Mat>{bgr});
         const auto infer_end = std::chrono::steady_clock::now();
 
         const std::vector<simaai::neat::Box> boxes =

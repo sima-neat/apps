@@ -93,30 +93,28 @@ even if a test file exists.
 ### Adaptive CI fleet
 
 After the build, Vulcan CI queries the existing GitHub App's read-only runner
-inventory in the resolved Modalix runner group. It selects up to six idle RTSP
-runners and three idle regular runners matching the hardware/environment labels
-(and `elxr_version` when pinned). If a pool is entirely busy, it queues one shard
-for that pool. Offline registrations never count as available capacity. Discovery
-does not provision, reconfigure, reserve, or interrupt devices; the GitHub queue
-owns assignment, so availability can change after planning.
+inventory in the resolved Modalix runner group. It selects up to eight idle
+DevKits that match the required hardware, environment, and firmware labels.
+If all eligible DevKits are busy, CI queues one shard. Offline registrations
+do not count as available capacity. GitHub assigns each job to a matching runner,
+so availability can change after planning.
 
 Every enabled example/language/unit-or-e2e suite is assigned exactly once, and
-the harness self-tests run once. E2E scopes declare `requires_rtsp: true` or
-`false` under each language. Missing metadata conservatively requires RTSP.
-All unit tests use regular runners. Regular selectors include an existing label
-combination that excludes every RTSP registration in the inventory; removing
-the `rtsp` label alone would not exclude RTSP runners. Discovery fails clearly
-if no such combination exists. Use a dedicated regular label/group in that case.
+the harness self-tests run once. The `requires_rtsp` setting in each E2E scope
+controls whether its shard needs live media fixtures. CI assumes live fixtures
+are required when this setting is absent. Each shard that needs them runs the
+shared Colo setup action with the `all` profile. The action reads
+`/etc/colo-services.json` on its DevKit and exports the test environment
+variables from the media catalog. Runner discovery and assignment use the same
+pool for all suites, without requiring an `rtsp` label.
 
 The optional repository variable `APPS_UNREADY_RUNNERS` is a JSON array of runner
 names temporarily excluded from Apps admission (for example, while model access
-is being provisioned). The planner also rejects any selector that could match an
+is being provisioned). The planner rejects any selector that could match an
 excluded registration, even when the proposed candidate has a different name.
-Both pools preserve candidate labels in the safety check and emitted selector,
-so a dedicated ready-runner label can distinguish healthy devices from excluded
-registrations. GitHub cannot express negative runner-name filters. Clear exclusions
-only after the affected devices have the required runtime and Developer Portal
-model access.
+A dedicated ready-runner label can distinguish eligible DevKits from excluded
+registrations. Clear exclusions after the affected devices have the required
+runtime and Developer Portal model access.
 Missing protected-model access fails explicitly instead of starting an interactive
 device-login flow in CI. Existing cached sessions and refresh tokens are reused.
 

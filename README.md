@@ -1,111 +1,176 @@
-# SiMa Neat Apps
+<p align="center">
+  <a href="https://developer.sima.ai/examples"><img src="portal/assets/readme/hero.png" width="100%" alt="Outputs of Neat Apps examples: object detection, depth estimation, promptable segmentation, 3D pose estimation, instance segmentation, PCB defect detection, and drone tracking"></a>
+</p>
 
-![Vulcan CI](https://github.com/sima-neat/apps/actions/workflows/vulcan-ci.yml/badge.svg)
-![Neat Development Environment](https://img.shields.io/badge/Neat%20Development%20Environment-3.0.0-green)
-![Language](https://img.shields.io/badge/C%2B%2B-20-informational)
+<h1 align="center">SiMa.ai Neat Apps</h1>
 
-SiMa Neat Apps provides runnable C++ and Python examples for detection,
-segmentation, pose estimation, streaming, tracking, benchmarking, and
-GenAI. Install Apps to run the packaged examples. Clone this repository
-only when modifying or building their source.
+<p align="center">
+  Ready-to-run computer vision and GenAI applications for SiMa.ai Modalix,<br>
+  written in C++ and Python on the Neat Library.
+</p>
+
+<p align="center">
+  <a href="https://github.com/sima-neat/apps/actions/workflows/vulcan-ci.yml"><img src="https://github.com/sima-neat/apps/actions/workflows/vulcan-ci.yml/badge.svg" alt="Vulcan CI"></a>
+  <img src="https://img.shields.io/badge/Neat%20Development%20Environment-3.0.0-green" alt="Neat Development Environment 3.0.0">
+  <img src="https://img.shields.io/badge/C%2B%2B-20-informational" alt="C++ 20">
+  <img src="https://img.shields.io/badge/Python-3-informational" alt="Python 3">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue" alt="License Apache 2.0"></a>
+</p>
+
+<p align="center">
+  <a href="https://developer.sima.ai/examples">Apps Portal</a> ·
+  <a href="https://developer.sima.ai/software/getting-started/">Neat Documentation</a> ·
+  <a href="https://developer.sima.ai/software/tools/sima-cli/">sima-cli</a> ·
+  <a href="https://developer.sima.ai/software/tools/insight/">Insight</a> ·
+  <a href="https://github.com/sima-neat/apps/issues">Issues</a>
+</p>
+
+One installed bundle contains every application. Most have a pre-built C++
+executable and a Python entrypoint, with all settings in one `config.yaml`.
+Each has a README with the model, the run commands, and the expected result.
+Install the bundle to run the examples. Clone this repository only to change
+or build the source.
+
+## Quick Start
+
+Run the first example on a Modalix DevKit with internet access. For a DevKit
+without internet access, see [Install Apps](#install-apps).
+
+1. Install Apps and enter the bundle. The installer also installs the matching
+   Core and Insight.
+
+   ```bash
+   sima-cli neat install apps
+   cd prebuilt-apps
+   APP_DIR=examples/object-detection/yolo26-object-detector
+   ```
+
+2. Download the YOLO26 model. Downloads need your SiMa Developer Portal
+   login. Run `sima-cli login` once, or follow the prompt the first download
+   prints.
+
+   ```bash
+   export MODELZOO_VERSION="3.0.0"
+   mkdir -p models
+   cd models
+   sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26-detection/yolo26m-det-bf16-mla_tess-b1.tar.gz"
+   cd ..
+   ```
+
+3. Point the configuration at the model. The input images and the output
+   folder are already set.
+
+   ```bash
+   sed -i 's#<model-path>#models/yolo26m-det-bf16-mla_tess-b1.tar.gz#' ${APP_DIR}/src/common/config.yaml
+   ```
+
+4. Run the detector.
+
+   ```bash
+   ./${APP_DIR}/src/cpp/pre-built/yolo26-object-detector \
+     --config ${APP_DIR}/src/common/config.yaml
+   ```
+
+   It writes 21 annotated images to `sandbox/yolo26-object-detector/`. The
+   [example README](examples/object-detection/yolo26-object-detector/README.md)
+   covers the Python entrypoint, the other supported models, and
+   troubleshooting.
+
+## Examples
+
+Browse all applications in the [Apps Portal](https://developer.sima.ai/examples),
+with previews, search, and filters by category and model. The sources are in
+the [examples directory](./examples), one folder per application.
+
+## Inside an Application
+
+Examples follow one layout:
+
+```text
+examples/<category>/<example>/
+├── README.md                model, settings, run commands, expected result
+├── src/common/config.yaml   all settings: model, paths, hosts, ports, thresholds
+├── src/common/              labels and data shared by C++ and Python
+├── src/cpp/                 C++ source, plus pre-built/<binary> in the bundle
+└── src/python/              Python source and requirements.txt
+```
+
+Each entrypoint, `src/cpp/main.cpp` or `src/python/main.py`, shows graph
+construction, model loading, execution, and teardown with the public Neat API
+and no wrappers. The C++ and Python implementations use the same models,
+thresholds, and outputs. Applications with live output send video and metadata
+to [Insight](https://developer.sima.ai/software/tools/insight/), the Neat
+visualization UI.
 
 ## Install Apps
 
-Run the installation on the Modalix DevKit. If the DevKit has no internet access, run it under `/workspace` in a Neat SDK container paired with the DevKit. Pairing normally shares `/workspace` with the DevKit over NFS, so the bundle appears at the same path there. Run the examples on the DevKit.
-
-The Apps installer also installs the Core selected for the Apps package and the latest Insight through `sima-cli`. From a paired SDK container, Core is installed on the DevKit as well. After pairing, the DevKit already has the SDK's Core and Insight runs in the SDK container. If that Core matches the one selected for this Apps package, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps` to skip both. The installer does not check this, so a mismatch appears only when an example runs. See [Dependency Selection](#dependency-selection).
-
-Install the latest Apps runtime from main and enter the installed bundle:
+Install on the Modalix DevKit. If the DevKit has no internet access, install
+under `/workspace` in a Neat SDK container paired with it. Pairing shares
+`/workspace` over NFS, so the bundle appears at the same path on the DevKit.
+The examples always run on the DevKit.
 
 ```bash
 sima-cli neat install apps
 cd prebuilt-apps
 ```
 
-Use `-d <install-root>` to install `prebuilt-apps/` under another directory. Run the remaining commands from the installed `prebuilt-apps/` directory.
+Add `-d <install-root>` to install `prebuilt-apps/` under another directory.
+Run all further commands from `prebuilt-apps/`.
 
-Run the same command with the same installation root to upgrade Apps. Before replacing an existing installation, the installer asks for confirmation, carries `models/` into the new bundle, and retains the remaining previous files under `.prebuilt-apps-backup/`. If that backup already exists, the installer warns before replacing it.
+The installer also installs the Core version this Apps package needs and the
+latest Insight. When run from a paired SDK container, it installs Core on the
+DevKit too.
 
-## Run an Example
-
-Each example README identifies its model, inputs, configuration, and exact run
-commands.
-
-C++ applications use the packaged executable:
-
-```bash
-./examples/<category>/<example>/src/cpp/pre-built/<binary> \
-  --config examples/<category>/<example>/src/common/config.yaml
-```
-
-Python applications use their packaged entrypoint:
+A paired DevKit already has the SDK's Core, and Insight runs in the SDK
+container. If that Core is the version this package needs, skip both installs:
 
 ```bash
-source ~/pyneat/bin/activate
-pip install -r examples/<category>/<example>/src/python/requirements.txt
-python3 examples/<category>/<example>/src/python/main.py \
-  --config examples/<category>/<example>/src/common/config.yaml
+NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps
 ```
 
-Some Python applications provide `setup.sh` and `run.sh` wrappers instead.
-Follow the selected example README.
+The installer does not check that the versions match. A mismatch causes errors
+when an example runs. See
+[Dependency Selection](CONTRIBUTING.md#dependency-selection).
 
-Browse the [Neat Apps Portal](https://developer.sima.ai/examples) or the
-[examples directory](./examples) to choose an example.
+To upgrade, run the same command with the same install root. The installer
+asks before replacing an installation, keeps `models/`, and moves the other
+old files to `.prebuilt-apps-backup/`. If that backup already exists, it warns
+before replacing it.
 
 ## Models and Datasets
 
-Models are user-managed and are not included in the Apps package. Store them
-under `models/`, or set `model.path` to another readable package. Each
-example README lists its default and additional supported models with the
-corresponding `sima-cli` or example-specific installation command.
+Models are not included in the Apps package. Store them under `models/`, or
+set `model.path` in the example's `config.yaml` to another location. Each
+example README lists its default and supported models with the download
+command.
 
-Check the installed platform version to confirm the target is supported:
+Check the platform version installed on the DevKit:
 
 ```bash
 cat /etc/buildinfo
 ```
 
-Model packages are versioned separately from the platform. They come from the
-Model Zoo release, which can differ from the installed platform version.
-Model Zoo downloads need your SiMa Developer Portal login: run `sima-cli login` once, or follow the device-login prompt the first download prints.
-Before downloading a model, set the Model Zoo version:
+Model packages come from the Model Zoo release, whose version can differ from
+the platform version. Downloads need your SiMa Developer Portal login. Set the
+Model Zoo version before downloading:
 
 ```bash
 export MODELZOO_VERSION="3.0.0"
 ```
 
-Runtime sample data is included under `assets/datasets/`.
-
-## Installed Layout
-
-| Path | Purpose |
-| --- | --- |
-| `examples/<category>/<example>/README.md` | Example setup and run instructions |
-| `examples/<category>/<example>/src/cpp/pre-built/` | Packaged C++ executables |
-| `examples/<category>/<example>/src/cpp/` | C++ implementation reference |
-| `examples/<category>/<example>/src/python/` | Python implementation and dependencies |
-| `examples/<category>/<example>/src/common/` | Shared runtime configuration and data |
-| `assets/datasets/` | Shipped runtime sample data |
-| `models/` | User-managed model packages |
-| `deps/neat-apps.json` | Installed Apps ref and exact commit |
-| `deps/neat-core.json` | Core artifact selected for this Apps build |
-
-The installed bundle does not contain CMake files or tests. Clone the repository
-to compile source or run the Apps test suite.
+Sample data ships under `assets/datasets/`.
 
 ## Streaming Sources
 
-[Insight](https://developer.sima.ai/software/tools/insight/) can host videos as
-streaming sources. Install videos directly from the Insight catalog or through
-YouTube support, start the required streams in the Insight Web UI, and copy
-their source URLs into the example configuration. Each example README identifies
-the required transport, including HTTP MJPEG where supported. Ensure each URL is
-reachable from the target.
+[Insight](https://developer.sima.ai/software/tools/insight/) hosts videos as
+streaming sources. Install videos from the Insight catalog or through its
+YouTube support, start the streams in the Insight Web UI, and copy their source
+URLs into the example configuration. Each example README names the transport
+it needs, such as HTTP MJPEG. The DevKit must be able to reach each URL.
 
-## Development From Source
+## Build From Source
 
-Clone and build Apps inside the Neat Development Environment:
+Build inside the Neat Development Environment:
 
 ```bash
 git clone https://github.com/sima-neat/apps.git
@@ -113,37 +178,22 @@ cd apps
 ./build.sh --clean
 ```
 
-`build.sh` builds the repository; it does not run tests. Contributor,
-scaffolding, build, and test instructions live in
-[CONTRIBUTING.md](./CONTRIBUTING.md).
-
-To fetch one standalone example without cloning the complete repository:
+`build.sh` does not run tests. To fetch one example without cloning the
+repository:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/sima-neat/apps/main/scripts/get-example.sh | bash -s -- <example>
 ```
 
-## Repository Layout
-
-| Path | Purpose |
-| --- | --- |
-| `examples/` | Application examples organized by category |
-| `assets/datasets/` | Runtime datasets shipped with Apps |
-| `assets/datasets-test/` | Repository-only test fixtures |
-| `models/` | Ignored user-managed model packages |
-| `tests/` | Test runner and repository test support |
-| `deps/manifest.json` | Source dependency and platform declaration |
-| `portal/` | Examples portal source |
-
-## Dependency Selection
-
-`deps/manifest.json` selects Core and records the SDK channel, the platform version, and the Model Zoo version used for model downloads. Development uses the `snap` policy, while a release-preparation branch can select an exact Core artifact. Vulcan records the resolved Core target under package metadata and the Apps installer uses that same target. Insight is not pinned in the Apps manifest.
-
-Builds inherit the sysroot requirement from Core's bundled Scheduler. Official releases require a matching cached SDK receipt, package inventory and package identity, without overlays; they never run `sysroot update`. Development pins retain the update path. CI uses the same Scheduler policy with the shared compatibility resolver to select and verify DevKit firmware before installation, then shards tests using its resolved labels.
+Layouts, dependency selection, the example scaffold, tests, and the review
+checklist are in [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## Support
 
-Use GitHub issues for bug reports and feature requests. Include the example,
-command, inputs, environment, and logs required to reproduce the problem.
+Report bugs and request features in GitHub issues. Include the example,
+command, inputs, environment, and logs needed to reproduce the problem. For
+direct help, contact `support@sima.ai`.
 
-For direct help, contact `support@sima.ai`.
+## License
+
+Neat Apps is released under the [Apache License 2.0](./LICENSE).

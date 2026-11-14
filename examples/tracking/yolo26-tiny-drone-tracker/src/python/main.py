@@ -565,27 +565,10 @@ def build_encoded_source_graph(opt) -> pyneat.Graph:
     return source
 
 
-def encoded_format_tag(codec):
-    return pyneat.Format.H265 if codec == pyneat.RtspCodec.H265 else pyneat.Format.H264
-
-
-def encoded_decode_input_options(codec):
+def encoded_input_options(codec):
     opt = pyneat.InputOptions()
     opt.payload_type = pyneat.PayloadType.Encoded
-    opt.format = encoded_format_tag(codec)
-    if hasattr(pyneat, "InputMemoryPolicy") and hasattr(opt, "memory_policy"):
-        opt.memory_policy = pyneat.InputMemoryPolicy.Ev74
-    return opt
-
-
-def encoded_video_input_options(codec):
-    opt = pyneat.InputOptions()
-    opt.payload_type = pyneat.PayloadType.Encoded
-    opt.format = encoded_format_tag(codec)
-    if hasattr(pyneat, "InputMemoryPolicy") and hasattr(opt, "memory_policy"):
-        opt.memory_policy = pyneat.InputMemoryPolicy.SystemMemory
-    elif hasattr(opt, "use_simaai_pool"):
-        opt.use_simaai_pool = False
+    opt.format = pyneat.Format.H265 if codec == pyneat.RtspCodec.H265 else pyneat.Format.H264
     return opt
 
 
@@ -605,7 +588,7 @@ def build_decode_graph(input_name: str, opt) -> pyneat.Graph:
     dec.dec_fps = opt.source_fps
     dec.num_buffers = opt.num_buffers
     decode.connect(
-        pyneat.nodes.input(input_name, encoded_decode_input_options(opt.codec)),
+        pyneat.nodes.input(input_name, encoded_input_options(opt.codec)),
         pyneat.nodes.sima_decode(dec),
     )
     if opt.use_videoconvert:
@@ -632,7 +615,7 @@ def build_decode_graph(input_name: str, opt) -> pyneat.Graph:
 def build_video_sender_graph(input_name: str, codec, video_options) -> pyneat.Graph:
     video = pyneat.Graph("video_sender")
     video.connect(
-        pyneat.nodes.input(input_name, encoded_video_input_options(codec)),
+        pyneat.nodes.input(input_name, encoded_input_options(codec)),
         pyneat.groups.video_sender(video_options),
     )
     return video

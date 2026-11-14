@@ -12,6 +12,7 @@
 #include "neat/nodes.h"
 #include <nodes/io/MetadataSender.h>
 #include "patchcore_memory_bank.h"
+#include "patchcore_overlay.h"
 #include "support/runtime/config_utils.h"
 #include "support/runtime/example_utils.h"
 #include <nlohmann/json.hpp>
@@ -38,11 +39,12 @@ using sima_examples::time_ms;
 namespace {
 
 constexpr int kEmbedDim = 1536;
-constexpr double kOverlayLutLow = 191.0; // COLORMAP_JET index where highlights start (yellow); 255 is red.
 constexpr int kPatchGridH = 28;
 constexpr int kPatchGridW = 28;
-const cv::Size kModelInputSize(224, 224); // compiled model input (width, height)
-// RTSP joined-output queue; bounds lag to ~4 frames when scoring is slow.
+using patchcore::kModelInputSize;
+using patchcore::draw_overlay;
+using patchcore::letterbox_rect;
+// Maximum joined frame/embedding pairs waiting for host scoring.
 constexpr int kJoinedBuffers = 4;
 constexpr int kLetterboxPad = 114; // gray fill of Neat's letterbox resize, matched on the host
 // --calibrate sets aside every 5th nominal image to measure the threshold.
@@ -89,7 +91,6 @@ struct Config {
   int insight_bitrate_kbps = 1000;
   int insight_metadata_port = 9100;
 
-  int timeout_ms = 5000;
   int frames = 0;
 };
 
@@ -139,7 +140,6 @@ void validate_config(const Config& cfg) {
                          "calibration.threshold_percentile must be between 0 and 100");
   sima_examples::require(cfg.threshold_margin >= 1.0, "calibration.threshold_margin must be >= 1.0");
   sima_examples::require(cfg.num_neighbors >= 1, "scoring.num_neighbors must be >= 1");
-  sima_examples::require(cfg.timeout_ms > 0, "runtime.timeout_ms must be > 0");
   sima_examples::require(cfg.frames >= 0, "runtime.frames must be >= 0");
   if (cfg.source_type != SourceType::ImageDir) {
     sima_examples::require(!cfg.insight_host.empty(),
@@ -198,7 +198,6 @@ Config load_config(const fs::path& path) {
   cfg.insight_bitrate_kbps = raw.int_or("output.insight.bitrate_kbps", 1000);
   cfg.insight_metadata_port = raw.int_or("output.insight.metadata_port", 9100);
 
-  cfg.timeout_ms = raw.int_or("runtime.timeout_ms", 5000);
   cfg.frames = raw.int_or("runtime.frames", 0);
 
   validate_config(cfg);
@@ -258,56 +257,6 @@ std::vector<fs::path> find_images(const fs::path& dir) {
   return images;
 }
 
-/// Where a frame of `size` lands inside the model input after a letterbox resize:
-/// scaled to fit, keeping its aspect ratio, and centered.
-cv::Rect letterbox_rect(const cv::Size& size) {
-  const double scale = std::min(static_cast<double>(kModelInputSize.width) / size.width,
-                                static_cast<double>(kModelInputSize.height) / size.height);
-  const int w = static_cast<int>(std::lround(size.width * scale));
-  const int h = static_cast<int>(std::lround(size.height * scale));
-  return {(kModelInputSize.width - w) / 2, (kModelInputSize.height - h) / 2, w, h};
-}
-
-/// Highlights only pixels whose smoothed patch score exceeds the calibrated
-/// patch threshold (patch_scale_max in bank_meta.json); all other pixels are
-/// left unchanged. Highlight color runs yellow -> red over a fixed calibrated
-/// span: threshold .. threshold + (threshold - nominal median). The score map covers the
-/// letterboxed model input; only the frame's own area is mapped back.
-cv::Mat draw_overlay(const cv::Mat& bgr, const patchcore::AnomalyResult& result, int map_h,
-                     int map_w, double sigma, double alpha, double patch_scale_min,
-                     double patch_scale_max) {
-  cv::Mat score_mat(map_h, map_w, CV_32FC1, const_cast<float*>(result.score_map.data()));
-  cv::Mat canvas;
-  cv::resize(score_mat, canvas, kModelInputSize, 0, 0, cv::INTER_LINEAR);
-  cv::Mat heat;
-  cv::resize(canvas(letterbox_rect(bgr.size())), heat, bgr.size(), 0, 0, cv::INTER_LINEAR);
-  if (sigma > 0.0) {
-    cv::GaussianBlur(heat, heat, cv::Size(0, 0), sigma);
-  }
-
-  const cv::Mat mask = heat > patch_scale_max;
-  cv::Mat out = bgr.clone();
-  if (cv::countNonZero(mask) == 0) {
-    return out;
-  }
-  const double span = std::max(patch_scale_max - patch_scale_min, 1e-6);
-  cv::Mat level;
-  heat.convertTo(level, CV_32FC1, 1.0 / span, -patch_scale_max / span);
-  cv::min(level, 1.0, level);
-  cv::max(level, 0.0, level);
-
-  cv::Mat heat_u8;
-  level.convertTo(heat_u8, CV_8U, 255.0 - kOverlayLutLow, kOverlayLutLow);
-  cv::Mat heat_color;
-  cv::applyColorMap(heat_u8, heat_color, cv::COLORMAP_JET);
-
-  cv::Mat blended;
-  cv::addWeighted(bgr, 1.0 - alpha, heat_color, alpha, 0.0, blended);
-  blended.copyTo(out, mask);
-  return out;
-}
-
-
 simaai::neat::Model::Options image_model_options() {
   simaai::neat::Model::Options opt;
   opt.preprocess.kind = simaai::neat::InputKind::Image;
@@ -354,15 +303,24 @@ split_nominal(const std::vector<fs::path>& paths) {
   return {bank_paths, threshold_paths};
 }
 
-patchcore::PatchEmbeddings extract_from_bgr(simaai::neat::Model& model, const cv::Mat& bgr,
-                                            int timeout_ms) {
-  auto tensors = model.run(simaai::neat::TensorList{model_input_tensor(bgr)}, timeout_ms);
+patchcore::PatchEmbeddings embedding_from_tensor(const simaai::neat::Tensor& tensor) {
+  sima_examples::require(tensor.dtype == simaai::neat::TensorDType::Float32,
+                         "Expected Float32 embedding");
+  const auto bytes = tensor.dense_bytes_tight();
+  sima_examples::require(bytes > 0 && bytes % sizeof(float) == 0, "Invalid embedding size");
+  std::vector<float> values(bytes / sizeof(float));
+  sima_examples::require(
+      tensor.copy_dense_bytes_tight_to(reinterpret_cast<uint8_t*>(values.data()), bytes),
+      "Cannot copy embedding");
+  return patchcore::extract_hwc(tensor.shape, std::move(values), kEmbedDim);
+}
+
+patchcore::PatchEmbeddings extract_from_bgr(simaai::neat::Model& model, const cv::Mat& bgr) {
+  auto tensors = model.run(simaai::neat::TensorList{model_input_tensor(bgr)});
   if (tensors.empty()) {
     throw std::runtime_error("model returned no output tensors");
   }
-  const auto& t = tensors.front();
-  const auto flat = sima_examples::tensor_to_floats(t);
-  return patchcore::extract_hwc(t.shape, flat, kEmbedDim);
+  return embedding_from_tensor(tensors.front());
 }
 
 int cmd_calibrate(const Config& cfg) {
@@ -404,7 +362,7 @@ int cmd_calibrate(const Config& cfg) {
       std::cerr << "[WARN] could not read image: " << path << "\n";
       continue;
     }
-    auto embedding = extract_from_bgr(model, bgr, cfg.timeout_ms);
+    auto embedding = extract_from_bgr(model, bgr);
     total_patches += embedding.patch_count();
     per_image.push_back(std::move(embedding));
     if ((i + 1) % 10 == 0 || i + 1 == paths.size()) {
@@ -425,7 +383,7 @@ int cmd_calibrate(const Config& cfg) {
     if (bgr.empty()) {
       continue;
     }
-    const auto embedding = extract_from_bgr(model, bgr, cfg.timeout_ms);
+    const auto embedding = extract_from_bgr(model, bgr);
     const auto scored = bank.score(embedding, cfg.num_neighbors);
     scores.push_back(scored.image_score);
     patch_scores.insert(patch_scores.end(), scored.score_map.begin(), scored.score_map.end());
@@ -514,7 +472,7 @@ int cmd_score_image_dir(const Config& cfg, const patchcore::MemoryBank& bank, fl
     }
 
     const double mla_start = time_ms();
-    const auto embedding = extract_from_bgr(model, bgr, cfg.timeout_ms);
+    const auto embedding = extract_from_bgr(model, bgr);
     const double mla_ms = time_ms() - mla_start;
 
     const double host_start = time_ms();
@@ -555,17 +513,31 @@ struct VideoSender {
 
 /// A small, separate Insight push-graph: the host manually pushes each
 /// annotated frame into it.
-VideoSender build_video_sender(const Config& cfg, double fps, int width, int height) {
+simaai::neat::Tensor nv12_tensor(const cv::Mat& frame) {
+  using namespace simaai::neat;
+  const int height = frame.rows * 2 / 3, width = frame.cols;
+  auto tensor = Tensor::from_cv_mat_view(frame, ImageSpec::PixelFormat::GRAY8);
+  tensor.semantic.image = ImageSpec{ImageSpec::PixelFormat::NV12, ""};
+  tensor.shape = {height, width};
+  tensor.strides_bytes.clear();
+  tensor.axis_semantics = {TensorAxisSemantic::H, TensorAxisSemantic::W};
+  tensor.planes = {
+      {PlaneRole::Y, {height, width}, {width, 1}, 0},
+      {PlaneRole::UV, {height / 2, width}, {width, 1}, static_cast<int64_t>(height) * width}};
+  return tensor;
+}
+
+VideoSender build_video_sender(const Config& cfg, double fps, int width, int height,
+                               bool nv12 = false) {
   const int output_fps = std::max(1, static_cast<int>(std::lround(fps)));
   simaai::neat::InputOptions input_options;
   input_options.payload_type = simaai::neat::PayloadType::Image;
-  input_options.format = "RGB";
+  input_options.format = nv12 ? "NV12" : "BGR";
   input_options.width = width;
   input_options.height = height;
-  input_options.depth = 3;
+  input_options.depth = nv12 ? 1 : 3;
   input_options.fps_n = output_fps;
   input_options.fps_d = 1;
-  input_options.memory_policy = simaai::neat::InputMemoryPolicy::Ev74;
   // Keep each pushed frame's source timestamp; Insight pairs it with the verdict by timestamp.
   input_options.do_timestamp = false;
 
@@ -580,9 +552,15 @@ VideoSender build_video_sender(const Config& cfg, double fps, int width, int hei
   sender.port = sender_options.video_port();
   sender.graph.add(simaai::neat::nodes::Input(input_options));
   sender.graph.add(simaai::neat::nodes::groups::VideoSender(sender_options));
-  cv::Mat seed(height, width, CV_8UC3, cv::Scalar(0, 0, 0));
-  const auto tensor = simaai::neat::Tensor::from_cv_mat(
-      seed, simaai::neat::ImageSpec::PixelFormat::RGB, simaai::neat::TensorMemory::EV74);
+  cv::Mat seed(nv12 ? height * 3 / 2 : height, width, nv12 ? CV_8UC1 : CV_8UC3, cv::Scalar::all(0));
+  if (nv12) {
+    seed.rowRange(0, height).setTo(16);
+    seed.rowRange(height, seed.rows).setTo(128);
+  }
+  const auto tensor =
+      nv12 ? nv12_tensor(seed)
+           : simaai::neat::Tensor::from_cv_mat(seed, simaai::neat::ImageSpec::PixelFormat::BGR,
+                                               simaai::neat::TensorMemory::CPU);
   sender.run = sender.graph.build(simaai::neat::TensorList{tensor});
   return sender;
 }
@@ -622,21 +600,20 @@ void send_verdict(simaai::neat::MetadataSender& sender, float score, float thres
 
 /// Stamps the annotated frame with its source frame's timestamp and ID, so Insight pairs it
 /// with the verdict sent for that frame.
-simaai::neat::Sample annotated_frame_sample(const cv::Mat& frame_bgr, int64_t pts_ns,
-                                            int64_t frame_id) {
-  simaai::neat::Sample sample = simaai::neat::make_tensor_sample("", rgb_tensor(frame_bgr));
+void stream_frame(simaai::neat::Run& run, const cv::Mat& frame, int64_t pts_ns, int64_t frame_id,
+                  bool nv12 = false) {
+  const auto tensor =
+      nv12 ? nv12_tensor(frame)
+           : simaai::neat::Tensor::from_cv_mat(frame, simaai::neat::ImageSpec::PixelFormat::BGR,
+                                               simaai::neat::TensorMemory::CPU);
+  simaai::neat::Sample sample = simaai::neat::make_tensor_sample("", tensor);
   sample.payload_type = simaai::neat::PayloadType::Image;
   sample.media_type = "video/x-raw";
-  sample.format = "RGB";
+  sample.format = nv12 ? "NV12" : "BGR";
   sample.payload_tag = sample.format;
   sample.pts_ns = pts_ns;
   sample.frame_id = frame_id;
-  return sample;
-}
-
-void stream_frame(simaai::neat::Run& run, const cv::Mat& frame_bgr, int64_t pts_ns,
-                  int64_t frame_id) {
-  if (!run.push(annotated_frame_sample(frame_bgr, pts_ns, frame_id))) {
+  if (!run.push(sample)) {
     throw std::runtime_error("Insight video push failed");
   }
 }
@@ -670,12 +647,11 @@ int cmd_score_video_file(const Config& cfg, const patchcore::MemoryBank& bank, f
   int write_failures = 0;
   while (cfg.frames <= 0 || processed < cfg.frames) {
     const double mla_start = time_ms();
-    auto tensors = runner.run(simaai::neat::TensorList{model_input_tensor(frame)}, cfg.timeout_ms);
+    auto tensors = runner.run(simaai::neat::TensorList{model_input_tensor(frame)});
     if (tensors.empty()) {
       throw std::runtime_error("model returned no output tensors");
     }
-    const auto flat = sima_examples::tensor_to_floats(tensors.front());
-    const auto embedding = patchcore::extract_hwc(tensors.front().shape, flat, kEmbedDim);
+    const auto embedding = embedding_from_tensor(tensors.front());
     const double mla_ms = time_ms() - mla_start;
 
     const double host_start = time_ms();
@@ -786,22 +762,17 @@ const simaai::neat::Sample* find_field(const simaai::neat::Sample& sample,
   return nullptr;
 }
 
-cv::Mat frame_bgr_from_sample(const simaai::neat::Sample& sample) {
-  // Uses the joined sample's "frame" field; falls back to the sample itself if it has none.
+cv::Mat frame_nv12_from_sample(const simaai::neat::Sample& sample) {
   const auto* field = find_field(sample, "frame");
-  if (field == nullptr) {
+  if (!field)
     field = &sample;
-  }
   const auto tensors = simaai::neat::tensors_from_sample(*field, true);
-  if (tensors.empty()) {
-    throw std::runtime_error("frame field has no tensor");
-  }
-  cv::Mat bgr;
-  std::string err;
-  if (sima_examples::nv12_to_bgr(tensors.front(), bgr, err)) {
-    return bgr;
-  }
-  return tensors.front().to_cv_mat_copy(simaai::neat::ImageSpec::PixelFormat::BGR);
+  sima_examples::require(!tensors.empty() && tensors.front().is_nv12(), "joined frame is not NV12");
+  const auto& tensor = tensors.front();
+  cv::Mat frame(tensor.height() * 3 / 2, tensor.width(), CV_8U);
+  sima_examples::require(tensor.copy_nv12_contiguous_to(frame.data, frame.total()),
+                         "Cannot copy NV12 frame");
+  return frame;
 }
 
 struct RtspRuntime {
@@ -842,10 +813,7 @@ RtspRuntime build_rtsp_runtime(const Config& cfg, const SourceGeometry& geometry
       simaai::neat::nodes::Output("embedding", simaai::neat::OutputOptions::EveryFrame(4)));
   simaai::neat::Graph frame_graph("frame");
   frame_graph.add(simaai::neat::nodes::Output("frame", simaai::neat::OutputOptions::EveryFrame(4)));
-  // Join frame and embedding per frame and keep the newest kJoinedBuffers pairs: when host
-  // scoring is slower than the camera, older pairs are dropped here instead of the whole
-  // pipeline waiting (graphs::Combine's output never drops, so lag would grow). A few
-  // buffers absorb the bursts the graph delivers frames in.
+  // Drop older frame/embedding pairs when host scoring falls behind.
   simaai::neat::Graph joined("patchcore_output");
   joined.add(simaai::neat::nodes::Input("frame"));
   joined.add(simaai::neat::nodes::Input("embedding"));
@@ -866,7 +834,6 @@ RtspRuntime build_rtsp_runtime(const Config& cfg, const SourceGeometry& geometry
 
   simaai::neat::RunOptions run_options;
   run_options.preset = simaai::neat::RunPreset::Realtime;
-  // Depth 3 drops the joined output to ~26 fps on a 30 fps source; 16 keeps up.
   run_options.queue_depth = 16;
   run_options.overflow_policy = simaai::neat::OverflowPolicy::KeepLatest;
   run_options.output_memory = simaai::neat::OutputMemory::ZeroCopy;
@@ -874,17 +841,36 @@ RtspRuntime build_rtsp_runtime(const Config& cfg, const SourceGeometry& geometry
   return rt;
 }
 
-patchcore::PatchEmbeddings embedding_from_sample(const simaai::neat::Sample& sample) {
+struct ScoredEmbedding {
+  patchcore::AnomalyResult result;
+  cv::Size grid;
+};
+
+ScoredEmbedding score_embedding_from_sample(const simaai::neat::Sample& sample,
+                                            const patchcore::MemoryBank& bank, int num_neighbors) {
   const auto* field = find_field(sample, "embedding");
-  if (field == nullptr) {
+  if (!field)
     throw std::runtime_error("joined output missing an embedding field");
-  }
   const auto tensors = simaai::neat::tensors_from_sample(*field, true);
-  if (tensors.empty()) {
+  if (tensors.empty())
     throw std::runtime_error("embedding field has no tensor");
+  const auto& tensor = tensors.front();
+  std::vector<int64_t> shape;
+  for (const auto dim : tensor.shape)
+    if (dim > 1)
+      shape.push_back(dim);
+  if (shape.size() == 3 && shape[2] == kEmbedDim && tensor.is_contiguous() &&
+      tensor.dtype == simaai::neat::TensorDType::Float32) {
+    const auto mapping = tensor.map_read();
+    sima_examples::require(mapping.data && mapping.size_bytes >= tensor.dense_bytes_tight(),
+                           "Cannot map embedding");
+    const cv::Mat patches(static_cast<int>(shape[0] * shape[1]), kEmbedDim, CV_32F, mapping.data);
+    // Score while this read mapping owns the producer loan, then release it before drawing.
+    return {bank.score(patches, num_neighbors),
+            {static_cast<int>(shape[1]), static_cast<int>(shape[0])}};
   }
-  const auto& t = tensors.front();
-  return patchcore::extract_hwc(t.shape, sima_examples::tensor_to_floats(t), kEmbedDim);
+  const auto embedding = embedding_from_tensor(tensor);
+  return {bank.score(embedding, num_neighbors), {embedding.width, embedding.height}};
 }
 
 int cmd_score_rtsp(const Config& cfg, const patchcore::MemoryBank& bank, float threshold,
@@ -897,7 +883,7 @@ int cmd_score_rtsp(const Config& cfg, const patchcore::MemoryBank& bank, float t
 
   simaai::neat::Model model(cfg.model_path, rtsp_graph_model_options(geometry));
   auto rt = build_rtsp_runtime(cfg, geometry, model);
-  auto video_sender = build_video_sender(cfg, geometry.fps, geometry.width, geometry.height);
+  auto video_sender = build_video_sender(cfg, geometry.fps, geometry.width, geometry.height, true);
   auto metadata_sender = make_metadata_sender(cfg);
   std::cout << "streaming to Insight: " << cfg.insight_host << ":" << video_sender.port
             << " metadata=" << metadata_sender->metadata_port() << "\n";
@@ -910,9 +896,9 @@ int cmd_score_rtsp(const Config& cfg, const patchcore::MemoryBank& bank, float t
   int processed = 0;
   int write_failures = 0;
   while (cfg.frames <= 0 || processed < cfg.frames) {
-    cv::Mat bgr;
-    patchcore::PatchEmbeddings embedding;
-    double mla_ms = 0.0;
+    cv::Mat frame;
+    ScoredEmbedding scored_embedding;
+    double mla_ms = 0.0, score_ms = 0.0;
     int64_t pts_ns = -1;
     int64_t source_frame_id = -1;
     {
@@ -929,33 +915,38 @@ int cmd_score_rtsp(const Config& cfg, const patchcore::MemoryBank& bank, float t
         throw std::runtime_error("failed to pull output: " + pull_error.message);
       }
       mla_ms = time_ms() - mla_start;
-      // Copy both fields out; the sample (and its pooled buffers) is released at scope end.
-      embedding = embedding_from_sample(sample);
-      bgr = frame_bgr_from_sample(sample);
+      // Score the embedding view and own the frame before releasing the producer loans.
+      const double score_start = time_ms();
+      scored_embedding = score_embedding_from_sample(sample, bank, num_neighbors);
+      score_ms = time_ms() - score_start;
+      frame = frame_nv12_from_sample(sample);
       pts_ns = sample.pts_ns;
       source_frame_id = sample.frame_id;
     }
 
     const double host_start = time_ms();
-    const auto scored = bank.score(embedding, num_neighbors);
-    const cv::Mat overlay = draw_overlay(bgr, scored, embedding.height, embedding.width,
-                                         cfg.gaussian_sigma, cfg.overlay_alpha, patch_scale_min,
-                                         patch_scale_max);
+    const auto& scored = scored_embedding.result;
+    patchcore::draw_nv12_overlay(frame, scored, scored_embedding.grid.height,
+                                 scored_embedding.grid.width, cfg.gaussian_sigma, cfg.overlay_alpha,
+                                 patch_scale_min, patch_scale_max);
     const bool anomalous = scored.image_score > threshold;
     ++processed;
     std::cout << "frame=" << processed << ": score=" << scored.image_score
               << " threshold=" << threshold << " verdict=" << (anomalous ? "ANOMALOUS" : "normal")
-              << " (mla=" << mla_ms << "ms host=" << (time_ms() - host_start) << "ms)\n";
+              << " (mla=" << mla_ms << "ms host=" << (score_ms + time_ms() - host_start) << "ms)\n";
 
     // The video frame and its verdict carry the same source identity.
     const int64_t frame_id = source_frame_id >= 0 ? source_frame_id : processed;
-    stream_frame(video_sender.run, overlay, pts_ns, frame_id);
+    stream_frame(video_sender.run, frame, pts_ns, frame_id, true);
     const int64_t timestamp_ms = pts_ns >= 0 ? pts_ns / 1'000'000 : -1;
     send_verdict(*metadata_sender, scored.image_score, threshold, anomalous, timestamp_ms,
                  frame_id);
     if (save_frames && processed % cfg.save_every == 0) {
-      const fs::path snapshot_path = cfg.output_dir / ("frame_" + std::to_string(processed) + ".jpg");
-      if (!cv::imwrite(snapshot_path.string(), overlay)) {
+      const fs::path snapshot_path =
+          cfg.output_dir / ("frame_" + std::to_string(processed) + ".jpg");
+      cv::Mat snapshot;
+      cv::cvtColor(frame, snapshot, cv::COLOR_YUV2BGR_NV12);
+      if (!cv::imwrite(snapshot_path.string(), snapshot)) {
         std::cerr << "[ERROR] failed to write snapshot: " << snapshot_path << "\n";
         ++write_failures;
       }

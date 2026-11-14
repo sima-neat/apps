@@ -540,7 +540,7 @@ def config_section(raw: dict[str, Any], name: str) -> dict[str, Any]:
 
     Absent or null means "use the defaults"; anything else must be a mapping.
     `raw.get(name) or {}` cannot make that distinction, because a falsy scalar
-    such as `io: false` or `runtime: 0` collapses to an empty mapping and the
+    such as `io: false` or `validation: 0` collapses to an empty mapping and the
     defaults are applied to a configuration the customer got wrong."""
     value = raw.get(name)
     if value is None:
@@ -921,7 +921,7 @@ def build_model(profile: ModelProfile):
     return pyneat.Model(profile.path, opt)
 
 
-def classify(model, profile: ModelProfile, image_path: Path, timeout_ms: int) -> Prediction:
+def classify(model, profile: ModelProfile, image_path: Path) -> Prediction:
     import numpy as np
     import pyneat
 
@@ -929,7 +929,7 @@ def classify(model, profile: ModelProfile, image_path: Path, timeout_ms: int) ->
     tensor = pyneat.Tensor.from_numpy(rgb, copy=True, image_format=pyneat.PixelFormat.RGB)
 
     start = time.monotonic()
-    outputs = model.run([tensor], timeout_ms=timeout_ms)
+    outputs = model.run([tensor])
     inference_ms = (time.monotonic() - start) * 1000.0
 
     if not outputs:
@@ -954,7 +954,7 @@ def classify(model, profile: ModelProfile, image_path: Path, timeout_ms: int) ->
     return Prediction(top_k=top_k, inference_ms=inference_ms)
 
 
-def warm_up(model, profile: ModelProfile, timeout_ms: int) -> None:
+def warm_up(model, profile: ModelProfile) -> None:
     """One untimed inference, so the first measured image does not pay the
     one-time setup cost on behalf of every later one.
 
@@ -976,7 +976,7 @@ def warm_up(model, profile: ModelProfile, timeout_ms: int) -> None:
     blank = np.zeros((profile.input_height, profile.input_width, 3), dtype=np.uint8)
     tensor = pyneat.Tensor.from_numpy(blank, copy=True, image_format=pyneat.PixelFormat.RGB)
     try:
-        model.run([tensor], timeout_ms=timeout_ms)
+        model.run([tensor])
     except Exception as exc:  # noqa: BLE001 - never fatal; see below
         # A failed warm-up costs accuracy of the first measurement, nothing more.
         # The real inferences below report their own per-image, per-model errors,
@@ -985,7 +985,7 @@ def warm_up(model, profile: ModelProfile, timeout_ms: int) -> None:
               f"first measurement may include setup cost", file=sys.stderr)
 
 
-def run_all(profiles: list[ModelProfile], images: list[Path], timeout_ms: int) -> list[ImageResult]:
+def run_all(profiles: list[ModelProfile], images: list[Path]) -> list[ImageResult]:
     # Fingerprint every input up front: models are loaded one at a time, so each
     # image is re-read per model, and agreement is only meaningful if those reads
     # saw the same bytes.
@@ -999,12 +999,12 @@ def run_all(profiles: list[ModelProfile], images: list[Path], timeout_ms: int) -
     for profile in profiles:
         print(f"Loading model '{profile.name}': {profile.path}")
         model = build_model(profile)
-        warm_up(model, profile, timeout_ms)
+        warm_up(model, profile)
         try:
             for result in results:
                 try:
                     check_unchanged(result.image_path, result.fingerprint)
-                    prediction = classify(model, profile, result.image_path, timeout_ms)
+                    prediction = classify(model, profile, result.image_path)
                     # Only keep the prediction once the bytes behind it are proven
                     # unchanged, so a swapped input leaves an error and no result.
                     check_unchanged(result.image_path, result.fingerprint)
@@ -1537,10 +1537,6 @@ def main() -> int:
         if not isinstance(raw, dict):
             raise ValueError(f"{args.config} must contain a YAML mapping at the top level")
         io_cfg = config_section(raw, "io")
-        runtime = config_section(raw, "runtime")
-        timeout_ms = config_int(runtime.get("timeout_ms"), "runtime.timeout_ms", 20000)
-        if timeout_ms <= 0:
-            raise ValueError(f"runtime.timeout_ms must be positive, got {timeout_ms}")
         # `extensions:` left null in YAML arrives as None; str(None) would turn the
         # accepted list into ("none",) and reject every real image.
         raw_extensions = config_str(io_cfg.get("extensions"), "io.extensions",
@@ -1600,7 +1596,7 @@ def main() -> int:
 
         start = time.monotonic()
         try:
-            results = run_all(profiles, images, timeout_ms)
+            results = run_all(profiles, images)
         except Exception as exc:  # noqa: BLE001 - a whole-model failure (e.g. bad path) is fatal
             print(f"Error: {exc}", file=sys.stderr)
             return 6

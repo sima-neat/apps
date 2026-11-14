@@ -759,7 +759,13 @@ validate_explicit_core_ref() {
 }
 
 resolve_empty_neat_core_branch() {
-  local branch
+  local branch tag
+  # Match Core's Scheduler snap policy: exact tags are strict release selectors.
+  tag="$(current_dependency_tag)"
+  if [[ -n "${tag}" ]]; then
+    printf '%s\n' "${tag}"
+    return 0
+  fi
   branch="$(current_dependency_branch)"
 
   if [[ "${branch}" == "main" || "${branch}" == "develop" ]]; then

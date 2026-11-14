@@ -1136,7 +1136,7 @@ SourceGeometry probe_decoded_source_geometry(const AppConfig& cfg, int fps) {
 
   simaai::neat::Sample sample;
   simaai::neat::PullError pull_error;
-  const auto status = run.pull("frame", 20000, sample, &pull_error);
+  const auto status = run.pull("frame", -1, sample, &pull_error);
   run.close();
   if (status != simaai::neat::PullStatus::Ok) {
     throw std::runtime_error("failed to probe decoded source frame: " + pull_error.message);

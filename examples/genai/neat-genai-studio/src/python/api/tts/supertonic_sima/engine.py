@@ -235,7 +235,6 @@ class SupertonicModalix:
         vocoder_backend: str,
         vocoder_mpk_path: Path,
         threads: int,
-        timeout_ms: int,
         verify_hashes: bool,
         artifact_sha256: dict[str, str],
         steps: int = DEFAULT_STEPS,
@@ -249,7 +248,6 @@ class SupertonicModalix:
         if steps < 1:
             raise ValueError("steps must be positive")
         self.steps = steps
-        self.timeout_ms = timeout_ms
         self.runner = None
         self.vocoder_runner = None
         self.vocoder_session = None
@@ -500,7 +498,7 @@ class SupertonicModalix:
         if self.runner is None:
             raise RuntimeError("MLA runner is closed")
         tensors = [_tensor_from_public(value) for value in self._input_buffers]
-        output = self.runner.run(tensors, timeout_ms=self.timeout_ms)
+        output = self.runner.run(tensors)
         return _first_output_array(
             output,
             expected_public_shape=self.public_output[1],
@@ -532,8 +530,7 @@ class SupertonicModalix:
             padded_latent.transpose(0, 2, 1)[:, None, :, :],
         )
         output = self.vocoder_runner.run(
-            [_tensor_from_public(self._vocoder_input_buffer)],
-            timeout_ms=self.timeout_ms,
+            [_tensor_from_public(self._vocoder_input_buffer)]
         )
         frames = _first_public_output_array(
             output, expected_public_shape=self.vocoder_public_output

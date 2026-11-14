@@ -6,54 +6,38 @@
 
 namespace pcie_high_density {
 
-// Detects a stalled PCIe card: frames were admitted to the card but it has
-// stopped returning results. Header-only and free of GStreamer/PCIe/Neat
-// dependencies so the decision can be exercised by host-side unit tests.
-//
-// The naive "time since the last result" check got two things wrong; both are
-// pinned by the regression tests:
-//
-//   * Idle time must NOT count toward the deadline. When every admitted frame
-//     has already been returned there is nothing to wait for, so the clock is
-//     held at `now`. A frame admitted after a long idle gap therefore starts a
-//     fresh deadline instead of instantly tripping the timeout.
-//
-//   * A freeze with work already outstanding MUST trip, even when no *new*
-//     frames are admitted afterwards. The deadline is driven by unfinished work
-//     (admitted > returned), not by fresh admissions.
-//
-// `returned` and `admitted` are cumulative, monotonically non-decreasing
-// counters. Call update() once per poll with the current time.
+// Use one tracker per stream. `results` counts transport arrivals, including results
+// later dropped by the dispatcher. Work is live pending frames or continued input,
+// not the difference between cumulative admission and completion counters.
 class StallTracker {
 public:
   using clock = std::chrono::steady_clock;
 
   // Returns true once the card has returned no result for `timeout` while work
   // is outstanding. A non-positive timeout disables detection (returns false).
-  bool update(std::uint64_t returned, std::uint64_t admitted, clock::time_point now,
+  bool update(std::uint64_t results, bool work_outstanding, clock::time_point now,
               std::chrono::milliseconds timeout) {
     if (!initialized_) {
       initialized_ = true;
       last_progress_ = now;
-      last_returned_ = returned;
+      last_returned_ = results;
     }
 
     if (timeout <= std::chrono::milliseconds::zero()) {
       // Detection disabled: keep the trackers current so it can be re-enabled
       // mid-run without a spurious immediate trip.
-      last_returned_ = returned;
+      last_returned_ = results;
       last_progress_ = now;
       return false;
     }
 
-    const bool made_progress = returned != last_returned_;
-    const bool work_outstanding = admitted > returned;
+    const bool made_progress = results != last_returned_;
 
     // Hold the clock while results are still coming back, or while nothing is
     // outstanding. In the outstanding case the previous tick left the clock at
     // ~now, so the deadline starts when work resumes -- idle time never counts.
     if (made_progress || !work_outstanding) {
-      last_returned_ = returned;
+      last_returned_ = results;
       last_progress_ = now;
       return false;
     }

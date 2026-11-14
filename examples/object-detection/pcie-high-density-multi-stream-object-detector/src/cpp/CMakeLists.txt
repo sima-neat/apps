@@ -21,3 +21,10 @@ target_sources("${PCIE_HIGH_DENSITY_TARGET}"
     "${CMAKE_CURRENT_LIST_DIR}/stream_demux.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/../common/app_config.cpp"
 )
+
+if(TARGET pcie-high-density-multi-stream-object-detector_unit_test)
+  target_sources(pcie-high-density-multi-stream-object-detector_unit_test
+    PRIVATE
+      "${CMAKE_CURRENT_LIST_DIR}/../common/app_config.cpp"
+  )
+endif()

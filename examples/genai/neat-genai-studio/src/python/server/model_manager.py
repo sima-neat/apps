@@ -30,6 +30,8 @@ import urllib.request
 import wave
 from pathlib import Path
 
+from server.load_log import ModelLoadErrors
+from shared.recovery import is_out_of_memory
 from shared.chat_template import repair_chat_template_files
 from shared.chat_limits import context_window_from_elfs
 from shared.config import HubConfig, classify_model_dir, model_dir_complete, model_runtime_dirs
@@ -114,26 +116,16 @@ def _is_mla_failure(detail: str) -> bool:
     return any(marker in text for marker in _MLA_FAILURE_MARKERS)
 
 
-# The accelerator memory the loaded models share: 16 GiB on a Modalix DevKit
-# (server.models.accelerator_memory_gib sets it for other boards).
-ACCELERATOR_BYTES = 16 * 2**30
+class ModelLoadFailed(RuntimeError):
+    """A failed accelerator load requires restarting its owning processes."""
 
-
-class ModelDoesNotFit(ValueError):
-    """A load would not fit in accelerator memory beside the models that stay
-    loaded. Carries the loaded models the caller can choose to unload, largest
-    first, so the client can offer that choice instead of attempting a load the
-    accelerator refuses (which does not always hand its memory back)."""
-
-    def __init__(self, name: str, need: int, free: int, resident: list):
+    def __init__(self, name: str, detail: str, *, out_of_memory: bool = False):
+        self.out_of_memory = out_of_memory
         self.name = name
-        self.need = need
-        self.free = max(0, free)
-        self.resident = list(resident)
+        self.detail = detail
         super().__init__(
-            f"'{name}' needs about {need / 1e9:.1f} GB of accelerator memory and about "
-            f"{self.free / 1e9:.1f} GB is free beside the loaded models. Unload one of "
-            f"them first ({', '.join(self.resident) or 'none loaded'}).")
+            f"Out of memory: '{name}' did not fit into the available memory."
+            if out_of_memory else f"Model '{name}' could not be loaded: accelerator error: {detail}")
 
 
 class ResidentLimitReached(ValueError):
@@ -169,10 +161,8 @@ class ModelManager:
         asr_warmup: bool = True,
         switch_settle_s: float = 0.6,
         log_tap=None,
-        accelerator_bytes: int | None = None,
     ) -> None:
         self._server = server
-        self._accelerator_bytes = int(accelerator_bytes or ACCELERATOR_BYTES)
         self._catalog_dir = Path(catalog_dir) if catalog_dir else None
         self._max_resident = max(1, int(max_resident_chat_models))
         # What config pins at startup (immutable) vs what serves transcriptions
@@ -443,7 +433,7 @@ class ModelManager:
         if unload is not None and not (isinstance(unload, list) and all(isinstance(v, str) for v in unload)):
             raise ValueError("unload must be a model name or a list of model names")
         unload = [v.strip() for v in (unload or []) if v.strip()]
-        with self._op_lock:
+        with self._op_lock, ModelLoadErrors(capture_stdout=self._log_tap is None) as load_errors:
             if name not in self._catalog:
                 self.scan_catalog()
             with self._lock:
@@ -535,10 +525,6 @@ class ModelManager:
                             name, [v for v in others if v not in victims],
                             self._max_resident, needed)
 
-            # Memory full: refuse up front, naming what to unload, rather than
-            # attempting a load the accelerator will refuse.
-            self._check_fits(name, path, victims)
-
             size_bytes = self._size_of(path)
             # Estimate and learn against the ELF bytes actually transferred, so
             # the rate stays comparable across models whose directories carry
@@ -555,6 +541,7 @@ class ModelManager:
                 "elfTotal": self._count_elf_stages(path),
                 "elfBase": self._log_tap.loaded_count if self._log_tap else 0,
             }
+            memory_errors = self._log_tap.memory_errors if self._log_tap else 0
             evicted: list = []
             stages = self._loading.get("elfTotal")
             self._log_note(
@@ -697,6 +684,17 @@ class ModelManager:
                         self._resident.remove(served)
                 self._record_error(name, detail, kind="load")
                 raise RuntimeError(f"Model '{name}' failed to load: {detail}")
+            except Exception as exc:
+                load_errors.finish()
+                detail = exc.detail if isinstance(exc, ModelLoadFailed) else str(exc)
+                native_memory_failure = bool(
+                    self._log_tap and self._log_tap.memory_failed_since(memory_errors))
+                out_of_memory = (load_errors.out_of_memory or native_memory_failure
+                                 or is_out_of_memory(detail))
+                if out_of_memory or isinstance(exc, ModelLoadFailed) or _is_mla_failure(detail):
+                    self._record_error(name, detail, kind="memory" if out_of_memory else "mla")
+                    raise ModelLoadFailed(name, detail, out_of_memory=out_of_memory) from exc
+                raise
             finally:
                 self._loading = None
 
@@ -759,29 +757,8 @@ class ModelManager:
         tokenizer = components[0] / "devkit" / "tokenizer.json" if components else None
         return str(tokenizer) if tokenizer and tokenizer.is_file() else None
 
-    def _check_fits(self, name: str, path, victims: list) -> None:
-        """Refuse a load the accelerator memory can't hold beside the models
-        that stay loaded. Sizes are each model's ELF stages, what the runtime
-        transfers; a model of unknown size is let through."""
-        need = self._elf_bytes(path)
-        if not need:
-            return
-        staying = [n for n in self._server_model_names() if n != name and n not in victims]
-        held = 0
-        for other in staying:
-            other_path = self.resolved_model_path(other)
-            held += (self._elf_bytes(other_path) or 0) if other_path else 0
-        if held + need <= self._accelerator_bytes:
-            return
-        with self._lock:
-            chat = [n for n in self._resident if n in staying]
-        chat.sort(key=lambda n: self._elf_bytes(self.resolved_model_path(n)) or 0, reverse=True)
-        raise ModelDoesNotFit(name, need, self._accelerator_bytes - held, chat)
-
     def _elf_bytes(self, path) -> int | None:
-        """Total size of the ELF stages — the bytes the accelerator actually
-        loads. A model directory can be twice this (safetensors, tokenizer,
-        configs), so estimating from the directory size overshoots badly."""
+        """ELF file bytes for load-time estimation, not resident memory usage."""
         if not path:
             return None
         try:
@@ -1444,21 +1421,7 @@ class ModelManager:
                 self._resident.remove(name)
             if name == self._active_asr:
                 self._active_asr = None
-            others = [v for v in self._resident if v != name]
-        # With other chat models still resident the likeliest cause is that the
-        # new one does not fit beside them, and unloading one is the cheaper fix.
-        co_resident = (
-            f"It may not fit beside the other loaded models ({', '.join(others)}); "
-            "unload one of them and try again. "
-            if others else ""
-        )
-        raise RuntimeError(
-            f"Model '{name}' could not be loaded: the accelerator (MLA) reported "
-            f"an error. {co_resident}Accelerator memory is not always reclaimed "
-            "when models are switched, so this can follow several switches even "
-            "when the model fits on its own. Restart the Studio to free the "
-            "accelerator, then load it again."
-        )
+        raise ModelLoadFailed(name, detail, out_of_memory=is_out_of_memory(detail))
 
     # -- status ----------------------------------------------------------------
 
