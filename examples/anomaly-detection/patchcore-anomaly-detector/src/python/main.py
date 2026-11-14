@@ -474,6 +474,8 @@ def build_video_sender(cfg: AppConfig, fps: float, width: int, height: int, nv12
     input_options.depth = 1 if nv12 else 3
     input_options.fps_n = output_fps
     input_options.fps_d = 1
+    # Keep each pushed frame's source timestamp; Insight pairs it with the verdict by timestamp.
+    input_options.do_timestamp = False
 
     encode = pyneat.SimaEncodeOptions()
     encode.fps = output_fps
@@ -519,11 +521,20 @@ def send_verdict(sender, score: float, threshold: float, verdict: str, timestamp
                          str(frame_id))
 
 
-def stream_frame(run, frame, nv12=False) -> None:
+def stream_frame(run, frame, pts_ns: int, frame_id: int, nv12=False) -> None:
+    """Stamps the annotated frame with its source frame's timestamp and ID, so Insight
+    pairs it with the verdict sent for that frame."""
     tensor = nv12_tensor(frame) if nv12 else pyneat.Tensor.from_numpy(
         frame, copy=True, image_format=pyneat.PixelFormat.BGR, memory=pyneat.TensorMemory.CPU
     )
-    if not run.push([tensor]):
+    sample = pyneat.make_tensor_sample("", tensor)
+    sample.payload_type = pyneat.PayloadType.Image
+    sample.media_type = "video/x-raw"
+    sample.format = "NV12" if nv12 else "BGR"
+    sample.payload_tag = sample.format
+    sample.pts_ns = pts_ns
+    sample.frame_id = frame_id
+    if not run.push([sample]):
         raise RuntimeError("Insight video push failed")
 
 
@@ -576,9 +587,10 @@ def cmd_score_video_file(cfg: AppConfig, bank: MemoryBank, threshold: float, num
                 f"verdict={verdict} (mla={mla_ms:.1f}ms host={host_ms:.1f}ms)"
             )
 
-            stream_frame(video_run, overlay)
+            pts_ns = round((processed - 1) * 1_000_000_000 / fps)
+            stream_frame(video_run, overlay, pts_ns, processed)
             send_verdict(metadata_sender, scored.image_score, threshold, verdict,
-                         int((processed - 1) * 1000 / fps), processed)
+                         pts_ns // 1_000_000, processed)
             if cfg.output.save_every > 0 and processed % cfg.output.save_every == 0:
                 snapshot_path = save_dir / f"frame_{processed}.jpg"
                 if not cv2.imwrite(str(snapshot_path), overlay):
@@ -865,7 +877,8 @@ def cmd_score_rtsp(cfg: AppConfig, bank: MemoryBank, threshold: float, num_neigh
             # Own the frame; release the embedding view immediately after scoring.
             embedding = embedding_from_sample(sample)
             frame = frame_nv12_from_sample(sample)
-            timestamp_ms = int(sample.pts_ns // 1_000_000) if sample.pts_ns >= 0 else -1
+            pts_ns = int(sample.pts_ns)
+            source_frame_id = int(sample.frame_id)
             del sample
 
             host_start = time_ms()
@@ -880,8 +893,11 @@ def cmd_score_rtsp(cfg: AppConfig, bank: MemoryBank, threshold: float, num_neigh
                 f"verdict={verdict} (mla={mla_ms:.1f}ms host={time_ms() - host_start:.1f}ms)"
             )
 
-            stream_frame(video_run, frame, nv12=True)
-            send_verdict(metadata_sender, scored.image_score, threshold, verdict, timestamp_ms, processed)
+            # The video frame and its verdict carry the same source identity.
+            frame_id = source_frame_id if source_frame_id >= 0 else processed
+            stream_frame(video_run, frame, pts_ns, frame_id, nv12=True)
+            timestamp_ms = pts_ns // 1_000_000 if pts_ns >= 0 else -1
+            send_verdict(metadata_sender, scored.image_score, threshold, verdict, timestamp_ms, frame_id)
             if save_frames and processed % cfg.output.save_every == 0:
                 snapshot_path = save_dir / f"frame_{processed}.jpg"
                 if not cv2.imwrite(str(snapshot_path), cv2.cvtColor(frame, cv2.COLOR_YUV2BGR_NV12)):
