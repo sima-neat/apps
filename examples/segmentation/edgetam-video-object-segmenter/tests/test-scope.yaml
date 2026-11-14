@@ -1,0 +1,51 @@
+models:
+  edgetam_image_encoder:
+    source: model-registry
+    name: edgetam
+    ref: main
+    variant: w16a16_w8a16_w16a16_w8a8
+    spec: latest
+    file: edgetam_w16a16_w8a16_w16a16_w8a8_image_encoder_mpk.tar.gz
+  edgetam_memory_attention:
+    source: model-registry
+    name: edgetam
+    ref: main
+    variant: w16a16_w8a16_w16a16_w8a8
+    spec: latest
+    file: edgetam_w16a16_w8a16_w16a16_w8a8_memory_attention_mpk.tar.gz
+  edgetam_mask_decoder:
+    source: model-registry
+    name: edgetam
+    ref: main
+    variant: w16a16_w8a16_w16a16_w8a8
+    spec: latest
+    file: edgetam_w16a16_w8a16_w16a16_w8a8_mask_decoder_mpk.tar.gz
+  edgetam_memory_encoder:
+    source: model-registry
+    name: edgetam
+    ref: main
+    variant: w16a16_w8a16_w16a16_w8a8
+    spec: latest
+    file: edgetam_w16a16_w8a16_w16a16_w8a8_memory_encoder_mpk.tar.gz
+unit:
+  python: true
+  cpp: true
+e2e:
+  python:
+    enabled: false
+    reason: The EdgeTAM package is not yet promoted to the main branch of the Model Registry (sima-neat/models#823). Both suites pass on a Modalix DevKit with the packages its CI built.
+    requires_rtsp: false
+    models:
+      - edgetam_image_encoder
+      - edgetam_memory_attention
+      - edgetam_mask_decoder
+      - edgetam_memory_encoder
+  cpp:
+    enabled: false
+    reason: The EdgeTAM package is not yet promoted to the main branch of the Model Registry (sima-neat/models#823). Both suites pass on a Modalix DevKit with the packages its CI built.
+    requires_rtsp: false
+    models:
+      - edgetam_image_encoder
+      - edgetam_memory_attention
+      - edgetam_mask_decoder
+      - edgetam_memory_encoder
