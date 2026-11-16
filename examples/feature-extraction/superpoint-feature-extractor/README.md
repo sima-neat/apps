@@ -10,7 +10,7 @@
 | Languages | C++, Python |
 | Status | stable |
 | Binary Name | superpoint-feature-extractor |
-| Model | superpoint |
+| Model | superpoint (w8a8) |
 
 ## Concept
 
@@ -44,23 +44,20 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-| Model | Role | Source |
-| --- | --- | --- |
-| `superpoint_mpk.tar.gz` | Default | Direct artifact |
+The application uses `superpoint` with the `w8a8` variant from the [model browser](https://developer.sima.ai/models/), which stores weights and activations as 8-bit integers. Download it with `sima-cli` 2.1.20 or newer and unpack it:
 
 ```bash
-export MODELZOO_VERSION="3.0.0"
-mkdir -p models
-cd models
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/superpoint_mpk.tar.gz"
-cd ..
+sima-cli models download --id superpoint --variant w8a8
+unzip -o models/superpoint/w8a8/superpoint_w8a8_default.zip -d models/superpoint/w8a8
 ```
+
+The download is a ZIP file with the model package and its license. `unzip` puts the model package, `models/superpoint/w8a8/superpoint_w8a8_mpk.tar.gz`, next to the ZIP file; the packaged config already points `model.path` at it.
 
 ## Configure
 
 Upload `assets/datasets/tum-rgbd/freiburg1-desk.mp4` to Insight and start it under Media Sources. The clip loops at its native 30 FPS.
 
-Open `${APP_DIR}/src/common/config.yaml`. Set `model.path`, `source.rtsp_url` (for example, `rtsp://<insight-host-ip>:8554/src1`), and `output.insight.host`.
+Open `${APP_DIR}/src/common/config.yaml`. Set `source.rtsp_url` (for example, `rtsp://<insight-host-ip>:8554/src1`) and `output.insight.host`. `model.path` already points at the model downloaded above; change it only to use another package.
 
 Set `runtime.frames` to `0` to run until Ctrl-C. The RTSP source must keep the same resolution for the whole run.
 
@@ -105,7 +102,7 @@ investigating even though the run exits successfully.
 
 ## Troubleshooting
 
-- Confirm `model.path` points to the qualified SuperPoint package.
+- Confirm `model.path` points to the unpacked `superpoint_w8a8_mpk.tar.gz`, not to the downloaded ZIP file.
 - A missing or incompatible typed SuperPoint contract fails during model construction.
 - Confirm the H.264 RTSP source is running and keeps a stable resolution.
 - Confirm Insight is reachable at the configured host and UDP video port.
