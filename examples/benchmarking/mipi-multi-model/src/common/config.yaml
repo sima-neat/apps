@@ -1,7 +1,7 @@
 model:
   # Select: detect, pose, segment, ssd, classify, or depth.
   profile: detect
-  # Leave empty to use models/<profile-package>.tar.gz.
+  # Leave empty to use the profile's package under models/ (see the README).
   path: ""
 
 runtime:
