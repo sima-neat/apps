@@ -388,6 +388,12 @@ class TestLoadProfiles:
         assert profile.resize_shorter == 256
         assert profile.interpolation == "bilinear"
 
+    def test_resize_default_fits_a_non_square_window(self):
+        """The default comes from the larger side, so it passes the window check."""
+        raw = {"models": {"a": {"path": "m.tar.gz", "input_width": 320, "input_height": 180}}}
+        profile = main.load_profiles(raw)[0]
+        assert profile.resize_shorter == 365
+
     def test_reads_resize_settings(self):
         raw = {"models": {"a": {"path": "m.tar.gz", "resize_shorter": 288,
                                 "interpolation": "bicubic"}}}

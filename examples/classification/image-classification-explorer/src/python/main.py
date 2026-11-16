@@ -760,8 +760,12 @@ INTERPOLATIONS = {"bilinear": "INTER_LINEAR", "bicubic": "INTER_CUBIC"}
 
 
 def default_resize_shorter(width: int, height: int) -> int:
-    """The shorter side for the standard ImageNet 87.5% centre crop: 256 for 224."""
-    return min(width, height) * 8 // 7
+    """The shorter side for the standard ImageNet 87.5% centre crop: 256 for 224.
+
+    Taken from the larger input side, so a non-square window fits images of
+    either orientation.
+    """
+    return max(width, height) * 8 // 7
 
 
 def load_label_map(path: str | None, num_classes: int) -> list[str]:
