@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://github.com/sima-neat/apps/actions/workflows/vulcan-ci.yml"><img src="https://github.com/sima-neat/apps/actions/workflows/vulcan-ci.yml/badge.svg" alt="Vulcan CI"></a>
-  <img src="https://img.shields.io/badge/Neat%20Development%20Environment-3.0.0-green" alt="Neat Development Environment 3.0.0">
+  <img src="https://img.shields.io/badge/Modalix%20Platform-3.0.2-green" alt="Modalix Platform 3.0.2">
   <img src="https://img.shields.io/badge/C%2B%2B-20-informational" alt="C++ 20">
   <img src="https://img.shields.io/badge/Python-3-informational" alt="Python 3">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue" alt="License Apache 2.0"></a>
@@ -108,6 +108,10 @@ Install on the Modalix DevKit. If the DevKit has no internet access, install
 under `/workspace` in a Neat SDK container paired with it. Pairing shares
 `/workspace` over NFS, so the bundle appears at the same path on the DevKit.
 The examples always run on the DevKit.
+
+Apps 0.6.2 pairs with Neat Library 0.6.2 on Modalix Platform 3.0.2.
+Use sima-cli 2.1.22 for this release. To select this Apps version explicitly
+once it is available, run `sima-cli neat install apps@v0.6.2`.
 
 ```bash
 sima-cli neat install apps

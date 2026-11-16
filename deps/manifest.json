@@ -5,6 +5,6 @@
   "sdk": {
     "channel": "develop"
   },
-  "platform-version": "3.0.0",
+  "platform-version": "3.0.2",
   "modelzoo-version": "3.0.0"
 }

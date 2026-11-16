@@ -14,7 +14,7 @@ APPS_ROOT = Path(__file__).resolve().parents[2]
 # version at run time. These tests are what keeps that literal honest.
 DOCUMENTED_VERSION_RE = re.compile(r'export MODELZOO_VERSION="([^"]+)"')
 DOCUMENTED_MODEL_URL_LITERAL_RE = re.compile(r"pkg_downloads/SDK\d")
-PLATFORM_BADGE_RE = re.compile(r"Neat%20Development%20Environment-([^-]+)-")
+PLATFORM_BADGE_RE = re.compile(r"Modalix%20Platform-([^-]+)-")
 # Scope files interpolate the version at download time. A hardcoded SDK<version>
 # would still download successfully, so only a static check catches it.
 SCOPE_VERSION_LITERAL_RE = re.compile(r"SDK\d")
