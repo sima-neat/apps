@@ -28,6 +28,7 @@ struct Config {
   fs::path input_dir;
   fs::path output_dir;
   int infer_size = 518;
+  int max_input_size = 1920;
   int queue_depth = 4;
 };
 
@@ -38,6 +39,7 @@ static Config load_config(const fs::path& path) {
   cfg.input_dir = raw.string_or("io.input_dir", "assets/datasets/coco");
   cfg.output_dir = raw.string_or("io.output_dir", "sandbox/depth-estimator");
   cfg.infer_size = raw.int_or("runtime.infer_size", 518);
+  cfg.max_input_size = raw.int_or("runtime.max_input_size", 1920);
   cfg.queue_depth = raw.int_or("runtime.queue_depth", 4);
   return cfg;
 }
@@ -207,9 +209,15 @@ int main(int argc, char** argv) {
   simaai::neat::Model::Options model_opt;
   model_opt.preprocess.kind = simaai::neat::InputKind::Image;
   model_opt.preprocess.color_convert.input_format = simaai::neat::PreprocessColorFormat::RGB;
-  model_opt.preprocess.input_max_width = cfg.infer_size;
-  model_opt.preprocess.input_max_height = cfg.infer_size;
+  model_opt.preprocess.input_max_width = cfg.max_input_size;
+  model_opt.preprocess.input_max_height = cfg.max_input_size;
   model_opt.preprocess.input_max_depth = 3;
+  // Depth Anything V2 expects bicubic resizing; EV74 resizes to the model input.
+  model_opt.preprocess.resize.enable = simaai::neat::AutoFlag::On;
+  model_opt.preprocess.resize.mode = simaai::neat::ResizeMode::Stretch;
+  model_opt.preprocess.resize.width = cfg.infer_size;
+  model_opt.preprocess.resize.height = cfg.infer_size;
+  model_opt.preprocess.resize.scaling_type = "BICUBIC";
   simaai::neat::Model model(cfg.model_path, model_opt);
   std::cout << "[BUILD] Model loaded\n";
 
@@ -235,9 +243,14 @@ int main(int argc, char** argv) {
       continue;
     }
 
+    if (std::max(bgr.cols, bgr.rows) > cfg.max_input_size) {
+      std::cerr << "Skipping larger than " << cfg.max_input_size << " px: " << img_path.filename()
+                << "\n";
+      continue;
+    }
+
     cv::Mat rgb;
     cv::cvtColor(bgr, rgb, cv::COLOR_BGR2RGB);
-    cv::resize(rgb, rgb, {cfg.infer_size, cfg.infer_size}, 0.0, 0.0, cv::INTER_CUBIC);
 
     simaai::neat::Tensor input = simaai::neat::Tensor::from_cv_mat(
         rgb, simaai::neat::ImageSpec::PixelFormat::RGB, simaai::neat::TensorMemory::EV74);
