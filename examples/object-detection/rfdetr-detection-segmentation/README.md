@@ -61,7 +61,7 @@ points every size at the build in the **Default build** column.
 | Detection | `large` | `w8a8_w16a16` | `w8a16_w16a16`, `w8a8_mixed_w16a16` | 704 | 300 | — |
 | Segmentation | `nano` | `w8a8_w16a16` | `w8a16_w16a16`, `w8a16_w8a8_mixed`, `w8a8_mixed_w16a16` | 312 | 100 | 78×78 |
 | Segmentation | `small` | `w8a8_w16a16` | `w8a16_w16a16`, `w8a16_w8a8_mixed`, `w8a8_mixed_w16a16` | 384 | 100 | 96×96 |
-| Segmentation | `medium` | `w8a16_w8a8_mixed` | — | 432 | 200 | 108×108 |
+| Segmentation | `medium` | `w8a16_w8a8_mixed` | `w8a16_w16a16`, `w8a8_mixed_w16a16`, `w8a8_w16a16` | 432 | 200 | 108×108 |
 
 The application reads the input size, query count, and mask size from the
 selected packages, so every size runs with the same code.
