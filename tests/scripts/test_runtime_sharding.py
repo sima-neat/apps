@@ -45,26 +45,22 @@ def scope():
 
 @pytest.fixture
 def plan(scope):
-    fleet = [runner(f"rtsp-{i}", rtsp=True) for i in range(8)]
-    fleet += [runner(f"regular-{i}") for i in range(7)]
+    fleet = [runner(f"devkit-{i}") for i in range(10)]
     return planner.make_plan(scope, fleet, ["modalix", "vulcan-production"], {}, "abc")
 
 
 def test_every_enabled_suite_assigned_once_with_caps(scope, plan):
     planner.validate_plan(plan, scope)
-    assert sum(s["pool"] == "rtsp" for s in plan["shards"]) == 6
-    assert sum(s["pool"] == "regular" for s in plan["shards"]) == 3
+    assert len({s["candidate"] for s in plan["shards"]}) == len(plan["shards"]) == 8
+    assert any(s["needs_media_fixtures"] for s in plan["shards"])
     assert sum(s["tasks"].count("python:unit:harness") for s in plan["shards"]) == 1
-    for shard in plan["shards"]:
-        assert ("rtsp" in shard["labels"]) == (shard["pool"] == "rtsp")
-        if shard["pool"] == "rtsp":
-            assert all(":e2e:" in t for t in shard["tasks"])
+    assert all("rtsp" not in s["labels"] for s in plan["shards"])
 
 
-@pytest.mark.parametrize("idle, expected", [(0, 1), (1, 1), (2, 2), (8, 6)])
+@pytest.mark.parametrize("idle, expected", [(0, 1), (1, 1), (2, 2), (8, 8)])
 def test_adapts_to_idle_capacity_and_queues_one_when_busy(idle, expected):
     runners = [runner(f"r-{i}", rtsp=True, busy=i >= idle) for i in range(8)]
-    fleet = planner.select_fleet(runners, ["modalix"], 6, "rtsp")
+    fleet = planner.select_fleet(runners, ["modalix"], 8)
     assert len(fleet) == expected
     assert all(r["idle_at_planning"] for r in fleet) == bool(idle)
 
@@ -72,10 +68,10 @@ def test_adapts_to_idle_capacity_and_queues_one_when_busy(idle, expected):
 def test_does_not_count_offline_or_wrong_firmware():
     runners = [runner("offline", rtsp=True, status="offline"), runner("old", rtsp=True)]
     with pytest.raises(ValueError, match="No online"):
-        planner.select_fleet(runners, ["3.0.0_master_B9999"], 6, "rtsp")
+        planner.select_fleet(runners, ["3.0.0_master_B9999"], 8)
 
 
-def test_planner_keeps_resolver_firmware_for_both_pools(tmp_path, monkeypatch):
+def test_planner_keeps_resolver_firmware(tmp_path, monkeypatch):
     fleet = [runner(f"{version}-{pool}", rtsp=pool == "rtsp", firmware=version)
              for version in ("3.0.0_master_B2499", "3.0.0_master_B2501")
              for pool in ("rtsp", "regular")]
@@ -91,7 +87,12 @@ def test_planner_keeps_resolver_firmware_for_both_pools(tmp_path, monkeypatch):
                                       "--output", str(output)])
     planner.main()
     plan = json.loads(output.read_text())
-    assert {s["pool"] for s in plan["shards"]} == {"rtsp", "regular"}
+    matrix = json.loads((tmp_path / "outputs").read_text().removeprefix("matrix="))
+    assert len(matrix["include"]) == 2
+    assert all("rtsp" not in s["labels"] for s in matrix["include"])
+    assert [s["needs_media_fixtures"] for s in matrix["include"]] == [
+        s["needs_media_fixtures"] for s in plan["shards"]
+    ]
     assert all("3.0.0_master_b2501" in s["labels"] for s in plan["shards"])
     assert all("3.0.0_master_b2499" not in s["labels"] for s in plan["shards"])
 
@@ -129,11 +130,13 @@ def test_hardware_guard_checks_resolved_firmware(tmp_path, monkeypatch, actual, 
             check()
 
 
-def test_regular_selector_cannot_match_rtsp_even_when_offline():
-    regular = runner("regular")
-    streaming = runner("stream", rtsp=True, status="offline", extra=("model-registry",))
-    with pytest.raises(ValueError, match="excluding RTSP"):
-        planner.select_fleet([regular, streaming], ["modalix"], 3, "regular")
+def test_legacy_rtsp_label_cannot_be_required_or_used_to_exclude_an_unready_runner():
+    legacy = runner("legacy", rtsp=True, extra=("model-registry",))
+    unready = runner("unready", status="offline")
+    with pytest.raises(ValueError, match="Base runner selector"):
+        planner.select_fleet([legacy], ["modalix", "rtsp"], 8)
+    with pytest.raises(ValueError, match="No safe label selector"):
+        planner.select_fleet([legacy, unready], ["modalix"], 8, excluded_names=["unready"])
 
 
 def test_read_only_group_discovery_checks_repository_access():
@@ -153,27 +156,35 @@ def test_read_only_group_discovery_checks_repository_access():
         planner.discover_runners(get, "sima-neat/apps", "devkits", False)
 
 
-@pytest.mark.parametrize("fault", ["missing", "duplicate", "wrong-pool"])
-def test_plan_rejects_coverage_gaps_duplicates_and_wrong_pool(scope, plan, fault):
+@pytest.mark.parametrize("fault", ["missing", "duplicate", "wrong-fixtures", "rtsp-selector"])
+def test_plan_rejects_incorrect_coverage_fixture_setup_and_labels(scope, plan, fault):
     if fault == "missing":
         plan["shards"][0]["tasks"].pop()
     elif fault == "duplicate":
         plan["shards"][0]["tasks"].append(plan["expected"][0])
+    elif fault == "wrong-fixtures":
+        shard = plan["shards"][0]
+        shard["needs_media_fixtures"] = not shard["needs_media_fixtures"]
     else:
-        plan["shards"][0]["pool"] = "regular"
+        plan["shards"][0]["labels"].append("rtsp")
     with pytest.raises(ValueError):
         planner.validate_plan(plan, scope)
 
 
-def test_missing_rtsp_metadata_is_conservative(scope):
+@pytest.mark.parametrize("requires_rtsp, expected", [(None, True), (False, False)])
+def test_scope_controls_media_fixture_setup(scope, requires_rtsp, expected):
     example = "classification/image-classification-explorer"
-    del scope["examples"][example]["e2e"]["python"]["requires_rtsp"]
+    e2e = scope["examples"][example]["e2e"]["python"]
+    if requires_rtsp is None:
+        del e2e["requires_rtsp"]
+    else:
+        e2e["requires_rtsp"] = requires_rtsp
     task = next(
         t
         for t in planner.enumerate_suites(scope, {})
         if t["id"] == f"python:e2e:{example}"
     )
-    assert task["pool"] == "rtsp"
+    assert task["needs_media_fixtures"] is expected
 
 
 def test_reject_non_boolean_rtsp_requirement(scope):
@@ -363,13 +374,12 @@ def test_registry_latest_bypasses_persistent_cache():
     )
 
 
-@pytest.mark.parametrize("pool", ["regular", "rtsp"])
+@pytest.mark.parametrize("rtsp", [False, True])
 @pytest.mark.parametrize("excluded_status", ["online", "offline"])
 @pytest.mark.parametrize("busy", [False, True])
 def test_unready_exclusion_is_enforced_by_labels_not_only_candidate_name(
-    pool, excluded_status, busy
+    rtsp, excluded_status, busy
 ):
-    rtsp = pool == "rtsp"
     unready = runner("unready", rtsp=rtsp, status=excluded_status)
     indistinguishable = runner("healthy-but-same-labels", rtsp=rtsp)
     ready = runner("ready", rtsp=rtsp, busy=busy, extra=("ready-pod",))
@@ -377,7 +387,6 @@ def test_unready_exclusion_is_enforced_by_labels_not_only_candidate_name(
         [unready, indistinguishable, ready],
         ["modalix"],
         3,
-        pool,
         excluded_names=["unready"],
     )
     assert [r["candidate"] for r in fleet] == ["ready"]
@@ -386,15 +395,13 @@ def test_unready_exclusion_is_enforced_by_labels_not_only_candidate_name(
     assert not set(fleet[0]["labels"]) <= planner.label_set(unready)
 
 
-@pytest.mark.parametrize("pool", ["regular", "rtsp"])
-def test_unready_exclusion_fails_closed_without_distinguishing_labels(pool):
-    rtsp = pool == "rtsp"
+@pytest.mark.parametrize("rtsp", [False, True])
+def test_unready_exclusion_fails_closed_without_distinguishing_labels(rtsp):
     with pytest.raises(ValueError, match="No safe label selector"):
         planner.select_fleet(
             [runner("unready", rtsp=rtsp), runner("healthy", rtsp=rtsp)],
             ["modalix"],
             3,
-            pool,
             excluded_names=["unready"],
         )
 
@@ -431,6 +438,18 @@ def test_release_and_portal_still_depend_on_all_shards():
     assert discovery["env"]["REQUIRED_LABELS"] == "${{ needs.resolve-test-runner.outputs.runner_labels }}"
     guard = jobs["test-runtime-shard"]["steps"][0]
     assert guard["env"]["EXPECTED_ELXR_VERSION"] == "${{ needs.resolve-test-runner.outputs.devkit_firmware }}"
+    assert "rtsp" not in json.loads(resolver["with"]["runner-labels"])
+    shard_steps = jobs["test-runtime-shard"]["steps"]
+    setup_index = next(
+        i for i, step in enumerate(shard_steps) if step.get("name") == "Set up Colo media fixtures"
+    )
+    setup = shard_steps[setup_index]
+    assert setup["if"] == "${{ matrix.needs_media_fixtures }}"
+    assert setup["uses"].startswith("sima-neat/.github/actions/setup-colo-media-fixtures@")
+    assert setup["with"]["profile"] == "all"
+    run = shard_steps[setup_index + 1]
+    assert run["name"] == "Run assigned Apps suites"
+    assert not any(key.startswith("SIMANEAT_TEST_") for key in run["env"])
     assert "test-runtime-shard" in jobs["test-runtime"]["needs"]
     assert "test-runtime" in jobs["publish-vulcan-artifacts"]["needs"]
     assert "contract-tests" in jobs["publish-vulcan-artifacts"]["needs"]

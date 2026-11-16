@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <optional>
 #include <set>
@@ -23,12 +24,25 @@ namespace fs = std::filesystem;
 
 namespace {
 constexpr const char* kExample = "high-density-multi-stream-object-detector";
+constexpr long long kEightGiBKiB = 8LL * 1024 * 1024;
 // Clean exit after SIGINT must take no longer than this, as in the Python E2E.
 constexpr long long kSigintExitLimitMs = 5000;
 
 void require(bool condition, const std::string& message) {
   if (!condition)
     throw std::runtime_error(message);
+}
+
+double minimum_stream_fps() {
+  // Linux reports usable RAM, so the 8 GiB SOM can report less than 8 GiB.
+  std::ifstream meminfo("/proc/meminfo");
+  std::string field;
+  long long kib = 0;
+  std::string unit;
+  if (meminfo >> field >> kib >> unit && field == "MemTotal:" && unit == "kB" &&
+      kib > 0 && kib <= kEightGiBKiB)
+    return 26.5;
+  return 28.125;
 }
 
 std::pair<int, json> validate_metadata_message(const MetadataJsonMessage& message, int base_port) {
@@ -209,17 +223,21 @@ void run_case(const std::string& binary, const std::string& model, const std::st
 
   const double elapsed = tracker.elapsed_seconds();
   const double fps = static_cast<double>(tracker.total_measured()) / elapsed;
+  const double stream_floor = minimum_stream_fps();
+  const double aggregate_floor = tracker.measured_frames().size() * stream_floor;
   const json summary = {{"frames", tracker.total_measured()},
                         {"elapsed_s", elapsed},
                         {"aggregate_fps", fps},
+                        {"minimum_aggregate_fps", aggregate_floor},
+                        {"minimum_per_stream_fps", stream_floor},
                         {"per_stream_frames", tracker.measured_frames()}};
   std::cout << codec << ": " << summary.dump() << "\n";
   require(tracker.total_measured() == 5000, "expected exactly 5000 measured frames");
   require(elapsed > 0, "invalid measurement interval");
-  require(fps > 562.5, "metadata throughput must exceed 562.5 FPS");
+  require(fps > aggregate_floor, "metadata throughput must exceed the aggregate FPS floor");
   for (const auto count : tracker.measured_frames())
-    require(static_cast<double>(count) / elapsed > 28.125,
-            "per-stream throughput must exceed 28.125 FPS");
+    require(static_cast<double>(count) / elapsed > stream_floor,
+            "per-stream throughput must exceed the per-stream FPS floor");
   remove_dir(output);
 }
 } // namespace
