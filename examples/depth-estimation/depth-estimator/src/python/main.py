@@ -120,9 +120,10 @@ def main() -> int:
                 print(f"Skipping unreadable: {img_path.name}", file=sys.stderr)
                 continue
 
-            if max(bgr.shape[:2]) > max_input_size:
-                print(f"Skipping larger than {max_input_size} px: {img_path.name}", file=sys.stderr)
-                continue
+            scale = max_input_size / max(bgr.shape[:2])
+            if scale < 1:
+                size = (max(1, int(bgr.shape[1] * scale)), max(1, int(bgr.shape[0] * scale)))
+                bgr = cv2.resize(bgr, size, interpolation=cv2.INTER_AREA)
 
             rgb = np.ascontiguousarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
             t_in = pyneat.Tensor.from_numpy(rgb, copy=True, image_format=pyneat.PixelFormat.RGB)

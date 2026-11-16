@@ -7,5 +7,5 @@ io:                          # Input and output paths.
 
 runtime:                     # Runtime settings.
   infer_size: 518            # Square model input size.
-  max_input_size: 1920       # Largest image side; larger images are skipped.
+  max_input_size: 1920       # Larger images are downscaled to this side first.
   queue_depth: 4             # Runtime queue depth.

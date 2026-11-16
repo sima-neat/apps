@@ -243,10 +243,11 @@ int main(int argc, char** argv) {
       continue;
     }
 
-    if (std::max(bgr.cols, bgr.rows) > cfg.max_input_size) {
-      std::cerr << "Skipping larger than " << cfg.max_input_size << " px: " << img_path.filename()
-                << "\n";
-      continue;
+    const double scale = static_cast<double>(cfg.max_input_size) / std::max(bgr.cols, bgr.rows);
+    if (scale < 1.0) {
+      const cv::Size size(std::max(1, static_cast<int>(bgr.cols * scale)),
+                          std::max(1, static_cast<int>(bgr.rows * scale)));
+      cv::resize(bgr, bgr, size, 0.0, 0.0, cv::INTER_AREA);
     }
 
     cv::Mat rgb;
