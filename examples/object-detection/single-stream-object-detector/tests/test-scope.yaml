@@ -1,32 +1,25 @@
 models:
-  yolo26m-det-bf16-mla_tess-b1:
-    source: url
-    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26-detection/yolo26m-det-bf16-mla_tess-b1.tar.gz
-    file: yolo26m-det-bf16-mla_tess-b1.tar.gz
-  yolo26n-det-bf16-mla_tess-b1:
-    source: url
-    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26-detection/yolo26n-det-bf16-mla_tess-b1.tar.gz
-    file: yolo26n-det-bf16-mla_tess-b1.tar.gz
-  yolo26s-det-bf16-mla_tess-b1:
-    source: url
-    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26-detection/yolo26s-det-bf16-mla_tess-b1.tar.gz
-    file: yolo26s-det-bf16-mla_tess-b1.tar.gz
-  yolo26l-det-bf16-mla_tess-b1:
-    source: url
-    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26-detection/yolo26l-det-bf16-mla_tess-b1.tar.gz
-    file: yolo26l-det-bf16-mla_tess-b1.tar.gz
-  yolo26x-det-bf16-mla_tess-b1:
-    source: url
-    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26-detection/yolo26x-det-bf16-mla_tess-b1.tar.gz
-    file: yolo26x-det-bf16-mla_tess-b1.tar.gz
-  yolo26m-det-bf16-b1:
-    source: url
-    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26-detection/yolo26m-det-bf16-b1.tar.gz
-    file: yolo26m-det-bf16-b1.tar.gz
-  yolo26m-det-int8-b1:
-    source: url
-    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26-detection/yolo26m-det-int8-b1.tar.gz
-    file: yolo26m-det-int8-b1.tar.gz
+  yolo26m_w16a16_mpk:
+    source: model-registry
+    name: yolo26m
+    ref: main
+    spec: latest
+    variant: w16a16
+    file: yolo26m_w16a16_mpk.tar.gz
+  yolo26n_w16a16_mpk:
+    source: model-registry
+    name: yolo26n
+    ref: main
+    spec: latest
+    variant: w16a16
+    file: yolo26n_w16a16_mpk.tar.gz
+  yolo26m_w8a8_mpk:
+    source: model-registry
+    name: yolo26m
+    ref: main
+    spec: latest
+    variant: w8a8
+    file: yolo26m_w8a8_mpk.tar.gz
 unit:
   python: true
   cpp: true
@@ -35,15 +28,15 @@ e2e:
     enabled: true
     requires_rtsp: true
     models:
-    - yolo26m-det-bf16-mla_tess-b1
+    - yolo26m_w16a16_mpk
     variants:
-    - yolo26n-det-bf16-mla_tess-b1
-    - yolo26m-det-int8-b1
+    - yolo26n_w16a16_mpk
+    - yolo26m_w8a8_mpk
   cpp:
     enabled: true
     requires_rtsp: true
     models:
-    - yolo26m-det-bf16-mla_tess-b1
+    - yolo26m_w16a16_mpk
     variants:
-    - yolo26n-det-bf16-mla_tess-b1
-    - yolo26m-det-int8-b1
+    - yolo26n_w16a16_mpk
+    - yolo26m_w8a8_mpk
