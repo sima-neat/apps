@@ -1806,10 +1806,10 @@ long long centered_offset(long long extra) {
 // Load an image and prepare it as the model was evaluated: scale the shorter side
 // to resize_shorter, cut out the centred input-sized window, and return it as RGB.
 //
-// sima-neat/core#1320: Neat's ResizeMode::Crop cannot run on Modalix and cannot
-// resize beyond the crop, so the application prepares the window itself and hands
-// Neat an image that already has the model's input size. Kept in step with
-// load_rgb_center_crop() in the Python entrypoint.
+// Neat's ResizeMode::Crop with shorter_side (sima-neat/core#1342) has no bicubic
+// filter, which ResNet-50 and DenseNet-121 were evaluated with, so the application
+// prepares the window itself and hands Neat an image that already has the model's
+// input size. Kept in step with load_rgb_center_crop() in the Python entrypoint.
 cv::Mat load_rgb_center_crop(const std::string& path, const ModelProfile& profile) {
   cv::Mat bgr = cv::imread(path, cv::IMREAD_COLOR);
   if (bgr.empty()) {
