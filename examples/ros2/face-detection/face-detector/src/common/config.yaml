@@ -1,0 +1,45 @@
+model:                       # Face detector model selection.
+  path: <model-path>         # Example: models/<model-pack>.tar.gz
+
+io:                          # Input and output paths.
+  input_dir: assets/datasets/coco      # Folder containing input images.
+  output_dir: sandbox/face-detector  # Folder for annotated images.
+
+decode:                      # RetinaFace decode settings.
+  confidence_threshold: 0.40 # Minimum face confidence.
+  nms_iou: 0.90              # Overlap threshold for NMS.
+  top_k: 5000                # Candidate boxes before NMS.
+  keep_top_k: 750            # Candidate boxes after NMS.
+  max_draw: 50               # Max faces to draw per image.
+  landmarks: true            # Draw five facial landmarks.
+
+runtime:                     # Runtime settings.
+  profile: false             # Print profiling summaries.
+  num_runs: 100              # Number of repeated runs for profiling.
+  verbose: false             # Print verbose runtime output.
+
+output:
+  overlay: true             # Save native annotated/depth PNGs; false measures inference without rendering.
+
+# ROS image-topic settings. See this example's README.md.
+ros:
+  # Optional outputs; inference/results are unchanged when both are disabled.
+  visualization:
+    max_streams: 4       # Bound the number of distinct input header.frame_id values.
+    save:
+      enabled: false
+      directory: sandbox/ros2/face-detection/face-detector/visuals  # Each run creates a new subfolder.
+      every_n_frames: 1       # Save every N completed frames per camera.
+    insight:
+      enabled: false         # Launch reads this automatically; no extra sink command.
+      host: ""               # Reachable Insight host/IP; required when enabled.
+      video_port_base: 9000   # Use the UDP base exposed by your Insight service.
+      channel_base: 0
+      max_visible_streams: 4  # Limit hardware encoders; inference still handles all inputs.
+      fps: 30                # Maximum visualization sends/second per camera.
+      bitrate_kbps: 4000
+      channels: {}           # Optional {input_frame_id: Insight_channel}; selects visible streams.
+  input_policy: complete       # complete preserves admitted frames; latest favors freshness.
+  pending_frames: 8
+  inflight_frames: 4
+  source_window: 4            # Outstanding images per source in complete mode.

@@ -1,0 +1,47 @@
+model:
+  path: models/yolov5s_face_raw_split_mpk.tar.gz   # Compiled model archive.
+  labels: examples/face-detection/single-stream-thermal-face-detector/src/common/face_label.txt
+
+source:
+  rtsp_url: <rtsp-url>       # Example: rtsp://<insight-host-ip>:<rtsp-port>/src0
+  tcp: true                  # Use TCP for RTSP transport.
+  latency_ms: 100            # RTSP receive latency in milliseconds.
+
+inference:
+  frames: 0                  # Frame limit. 0 means run continuously.
+  min_score: 0.25            # Face confidence threshold (obj * cls).
+  nms_iou: 0.45              # NMS IoU threshold.
+  max_detections: 50         # Max faces to keep per frame.
+
+runtime:
+  profile: false             # Print aggregate profiling summaries.
+  profile_interval: 100      # Rolling profile window in published frames.
+
+output:
+  insight:
+    host: <insight-host-ip>  # Host running the Insight receiver/viewer.
+    video_port: 9000         # UDP video base port (add channel).
+    metadata_port: 9100      # UDP metadata base port (add channel).
+
+# ROS image-topic settings. See this example's README.md.
+ros:
+  # Optional outputs; inference/results are unchanged when both are disabled.
+  visualization:
+    max_streams: 4       # Bound the number of distinct input header.frame_id values.
+    save:
+      enabled: false
+      directory: sandbox/ros2/face-detection/single-stream-thermal-face-detector/visuals  # Each run creates a new subfolder.
+      every_n_frames: 1       # Save every N completed frames per camera.
+    insight:
+      enabled: false         # Launch reads this automatically; no extra sink command.
+      host: ""               # Reachable Insight host/IP; required when enabled.
+      video_port_base: 9000   # Use the UDP base exposed by your Insight service.
+      channel_base: 0
+      max_visible_streams: 4  # Limit hardware encoders; inference still handles all inputs.
+      fps: 30                # Maximum visualization sends/second per camera.
+      bitrate_kbps: 4000
+      channels: {}           # Optional {input_frame_id: Insight_channel}; selects visible streams.
+  input_policy: complete       # complete preserves admitted frames; latest favors freshness.
+  pending_frames: 8
+  inflight_frames: 4
+  source_window: 4            # Outstanding images per source in complete mode.

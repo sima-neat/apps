@@ -6,7 +6,9 @@ consistent with the installed `prebuilt-apps/` bundle.
 
 ## Example Layout
 
-Every example lives under `examples/<category>/<example>/`.
+Native examples live under `examples/<category>/<example>/`. ROS adapters live
+separately under `examples/ros2/<category>/<example>/`, with their own README,
+config and Python entrypoint; see [ROS2.md](ROS2.md).
 
 Required:
 
@@ -238,6 +240,23 @@ generation, and affected CI workflows.
 
 The installed bundle does not contain CMake files or tests. Clone the repository
 to compile source or run the Apps test suite.
+
+The ROS support package is an exception: `support/ros2/CMakeLists.txt` registers
+the shared Python nodes against the target's installed ROS/Python ABI. Its
+sources and `ROS2.md` ship in the bundle; no native example build files or ROS
+test artifacts are included. Changes to ROS packaging in `build.sh` require
+code owner review.
+
+ROS entrypoints under `examples/ros2/<category>/<example>/` are Python-only
+adapters. Keep their configuration and documentation in that directory and
+leave the original examples unchanged. They reuse
+the native Python decoding and public Neat model APIs, with shared image transport
+under `support/ros2`. Validate their accuracy and throughput against the native
+Python implementation. Native C++ measurements provide additional diagnostics;
+this language exception does not waive accuracy or throughput validation.
+Shared ROS transport and layout tests live in `tests/ros2/`; these adapters do
+not add duplicate native build targets or portal entries. README validation
+checks both layouts, while the native catalog retains its existing entries.
 
 ## Repository Layout
 

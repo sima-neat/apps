@@ -1,0 +1,66 @@
+server:                      # Local OpenAI-compatible model server.
+  openai:                    # Server bind address.
+    host: 0.0.0.0            # Host interface to bind.
+    port: 9998               # Server port.
+
+  control:                   # Runtime model-management control API (local only).
+    host: 127.0.0.1          # Host interface to bind (keep local).
+    port: 9997               # Control API port.
+
+  models:                    # Models served by the local server.
+    catalog_dir: <path-to-models-catalog-dir> # Directory scanned for loadable models.
+    # Chat/VLM models kept loaded side by side. Past the limit a load is refused
+    # until the request names a loaded model to unload; with 1, loading a new
+    # model replaces the loaded one. From 1 to 4; how many fit depends on sizes.
+    # Speech-to-text has its own slot and is unaffected.
+    max_resident_chat_models: 2
+    chat:                    # Chat/VLM models loaded at startup (OPTIONAL).
+      # Optional: use an empty list (chat: []) to start with no model resident and
+      # load any compatible catalog model on demand (Insight's GenAI tab or the
+      # /models API). When present, these are a subset of the catalog.
+      - name: <primary-chat-model-name>
+        path: <path-to-primary-chat-model-dir>
+    asr:                     # Speech-to-text model (OPTIONAL; omit to start without ASR).
+      # Active at startup. Any other ASR model under catalog_dir can be made
+      # active at runtime (POST /models/asr); this is what a restart
+      # re-selects, so change it here to make a different choice permanent.
+      name: <asr-model-name>        # Model name shown to the app.
+      path: <path-to-asr-model-dir> # Local model directory.
+
+  hub:                       # Hugging Face on-demand model download.
+    allow_download: true     # Allow downloading compatible models when online.
+    orgs: [simaai, TDoSiMa, florianvoss]
+                             # Hub accounts searched for precompiled models
+                             # (simaai official; TDoSiMa and florianvoss community).
+                             # Non-simaai repos land on disk as "<org>@<name>".
+
+app:                         # Studio backend settings.
+  openai:                    # OpenAI-compatible client endpoint.
+    client_host: 127.0.0.1   # Host used by the app client.
+    port: 9998               # Port used by the app client.
+
+  control:                   # Model-management control API client endpoint.
+    client_host: 127.0.0.1   # Host used to reach the control API.
+    port: 9997               # Control API port.
+
+  request:                   # Default generation settings.
+    max_tokens: 512          # Max generated tokens per response.
+
+  web:                       # Backend API settings (Insight connects here).
+    host: 0.0.0.0            # Host interface to bind.
+    port: 5000               # Backend API port.
+    https: true              # Serve the API over HTTPS.
+    cors_origins: ""         # CORS allowlist: "https://a:8443,http://b:3000" or "*"; env BACKEND_CORS_ORIGINS overrides.
+
+  tts:                       # Server-side text-to-speech settings.
+    supertonic:              # Supertonic 3, the MLA engine installed by setup.sh (optional).
+      models_root: /media/nvme/supertonic-tts/models   # Downloaded model files.
+      venv: ""                                          # Runtime venv setup.sh built; empty = ./.venv-supertonic.
+
+  rag:                       # Retrieval-augmented generation settings.
+    enabled: false                             # Enable document retrieval.
+    embedding_model_dir: <path-to-embedding-model-dir> # Embedding model directory.
+
+# ROS image-topic settings. See this example's README.md.
+ros:
+  pending_requests: 1  # Maximum admitted requests; values above one allow concurrency.

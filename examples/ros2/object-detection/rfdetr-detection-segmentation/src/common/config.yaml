@@ -1,0 +1,69 @@
+model:                          # Select one RF-DETR task and its model pair.
+  task: detection               # detection or segmentation.
+  labels: examples/object-detection/rfdetr-detection-segmentation/src/common/coco-labels.txt
+  detection:
+    variant: small              # nano, small, medium, or large.
+    nano:
+      backbone: models/rf_detr_nano_w8a8_w16a16_backbone_mpk.tar.gz
+      transformer: models/rf_detr_nano_w8a8_w16a16_decoder_mpk.tar.gz
+    small:
+      backbone: models/rf_detr_small_w8a8_w16a16_backbone_mpk.tar.gz
+      transformer: models/rf_detr_small_w8a8_w16a16_decoder_mpk.tar.gz
+    medium:
+      backbone: models/rf_detr_medium_w8a8_w16a16_backbone_mpk.tar.gz
+      transformer: models/rf_detr_medium_w8a8_w16a16_decoder_mpk.tar.gz
+    large:
+      backbone: models/rf_detr_large_w8a8_w16a16_backbone_mpk.tar.gz
+      transformer: models/rf_detr_large_w8a8_w16a16_decoder_mpk.tar.gz
+  segmentation:
+    backbone: models/rfdetr-seg-medium-backbone.tar.gz
+    transformer: models/rfdetr-seg-medium-transformer.tar.gz
+
+source:                         # H.264, H.265, or MJPEG RTSP source properties.
+  rtsp_url: rtsp://<rtsp-source-ip>:<port>/<stream-name>
+  codec: h264                   # h264/avc, h265/hevc, or mjpeg/jpeg.
+  tcp: true                     # Use RTSP over TCP.
+  latency_ms: 10                # RTSP receive latency.
+  width: 0                      # Optional width fallback. 0 uses the probe.
+  height: 0                     # Optional height fallback. 0 uses the probe.
+  fps: 0                        # Optional FPS override. 0 uses the probe.
+
+inference:
+  frames: 0                     # 0 runs continuously.
+  detection:
+    min_score: 0.5              # Minimum confidence to publish.
+    max_detections: 100         # Maximum objects per frame.
+  segmentation:
+    min_score: 0.3              # Minimum confidence to publish.
+    max_segments: 24            # Maximum instances per frame.
+    mask_threshold: 0.08        # Foreground threshold for the compiled model.
+    mask_grid_size: 640         # Smoother contours; use 108 for less CPU work.
+
+output:
+  insight:
+    host: <insight-host-ip>     # Insight host reachable from the target.
+    video_port: 9000            # Video ingest port.
+    metadata_port: 9100         # Metadata ingest port.
+
+# ROS image-topic settings. See this example's README.md.
+ros:
+  # Optional outputs; inference/results are unchanged when both are disabled.
+  visualization:
+    max_streams: 4       # Bound the number of distinct input header.frame_id values.
+    save:
+      enabled: false
+      directory: sandbox/ros2/object-detection/rfdetr-detection-segmentation/visuals  # Each run creates a new subfolder.
+      every_n_frames: 1       # Save every N completed frames per camera.
+    insight:
+      enabled: false         # Launch reads this automatically; no extra sink command.
+      host: ""               # Reachable Insight host/IP; required when enabled.
+      video_port_base: 9000   # Use the UDP base exposed by your Insight service.
+      channel_base: 0
+      max_visible_streams: 4  # Limit hardware encoders; inference still handles all inputs.
+      fps: 30                # Maximum visualization sends/second per camera.
+      bitrate_kbps: 4000
+      channels: {}           # Optional {input_frame_id: Insight_channel}; selects visible streams.
+  input_policy: complete       # complete preserves admitted frames; latest favors freshness.
+  pending_frames: 8
+  inflight_frames: 4
+  source_window: 4            # Outstanding images per source in complete mode.

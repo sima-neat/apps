@@ -163,6 +163,17 @@ package_distribution() {
     return 1
   fi
   cp "${NEAT_CORE_METADATA}" "${stage_dir}/deps/neat-core.json"
+  # ROS Python adapters use the target's rclpy/Python ABI. Ship the small ament
+  # package so it can be registered against the installed ROS distribution.
+  mkdir -p "${stage_dir}/support/ros2"
+  while IFS= read -r ros_file; do
+    local ros_rel
+    ros_rel="${ros_file#${ROOT_DIR}/support/ros2/}"
+    mkdir -p "${stage_dir}/support/ros2/$(dirname "${ros_rel}")"
+    cp -p "${ros_file}" "${stage_dir}/support/ros2/${ros_rel}"
+  done < <(find "${ROOT_DIR}/support/ros2" -type f \
+    ! -path '*/__pycache__/*' ! -name '*.pyc' ! -name '*.pyo' | sort)
+  cp "${ROOT_DIR}/ROS2.md" "${stage_dir}/ROS2.md"
   apps_ref="${NEAT_APPS_ARTIFACT_BRANCH_KEY:-${GITHUB_HEAD_REF:-${GITHUB_REF_NAME:-}}}"
   if [[ -z "${apps_ref}" ]] && command -v git >/dev/null 2>&1; then
     apps_ref="$(git -C "${ROOT_DIR}" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"

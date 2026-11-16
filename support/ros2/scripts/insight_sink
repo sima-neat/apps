@@ -1,0 +1,4 @@
+#!/usr/bin/env python3
+from neat_apps.insight_sink import main
+
+raise SystemExit(main())

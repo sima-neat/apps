@@ -81,6 +81,10 @@ Browse all applications in the [Apps Portal](https://developer.sima.ai/examples)
 with previews, search, and filters by category and model. The sources are in
 the [examples directory](./examples), one folder per application.
 
+The separate [ROS 2 examples](examples/ros2/README.md) use shared image source,
+inference and result nodes. See the [ROS 2 integration guide](ROS2.md) for setup
+and current validation limits.
+
 ## Inside an Application
 
 Examples follow one layout:

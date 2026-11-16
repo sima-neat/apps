@@ -3,6 +3,7 @@
 
 Scans examples/*/*/README.md files and verifies metadata, portal summaries and
 previews, configuration guidance, and supported install and run commands.
+Also checks the separate ROS adapters under examples/ros2/*/*/README.md.
 
 Exit code 0 on success, 1 if any README is missing or malformed.
 """
@@ -495,6 +496,32 @@ def progress_bar(current: int, total: int, width: int = 20) -> str:
     return f"[{bar}] {pct:3d}%  ({current}/{total})"
 
 
+def validate_ros_readme(path: Path) -> list[str]:
+    """ROS adapters have their own docs/configs and reuse unchanged native apps."""
+    if not path.is_file():
+        return ["README.md is missing"]
+    text = path.read_text(encoding="utf-8")
+    errors = []
+    if "sima-cli neat install ros2@v3.0.0" not in text:
+        errors.append("Document the ROS 2 installation command")
+    if "ROS2.md" not in text:
+        errors.append("Link the shared ROS build/run guide")
+    app_dir = path.parent
+    if app_dir.parent.name == "docker":
+        required = ("src/common/ros-parallel-apps.sh", "src/common/Dockerfile.ros2")
+    else:
+        required = ("src/common/config.yaml", "src/python/ros_node.py")
+        if "ros2 launch neat_apps app.launch.py" not in text:
+            errors.append("Document the ROS launch command")
+        expected = f"APP_DIR=examples/ros2/{app_dir.parent.name}/{app_dir.name}"
+        if expected not in text:
+            errors.append(f"Define {expected} for the ROS configuration")
+    for relative in required:
+        if not (app_dir / relative).is_file():
+            errors.append(f"Missing ROS file: {relative}")
+    return errors
+
+
 def main() -> int:
     # Find the examples directory relative to this script or cwd
     script_dir = Path(__file__).resolve().parent
@@ -507,17 +534,19 @@ def main() -> int:
 
     # Find all example directories (examples/<category>/<name>/)
     example_dirs = sorted(
-        d for d in examples_dir.glob("*/*") if d.is_dir() and not d.name.startswith(".")
+        d for d in examples_dir.glob("*/*")
+        if d.is_dir() and not d.name.startswith(".") and d.parent.name != "ros2"
     )
+    ros_dirs = sorted(d for d in (examples_dir / "ros2").glob("*/*") if d.is_dir())
 
     if not example_dirs:
         print("ERROR: No example directories found", file=sys.stderr)
         return 1
 
-    total = len(example_dirs)
+    total = len(example_dirs) + len(ros_dirs)
     all_errors: list[tuple[str, str]] = []
 
-    for i, example_dir in enumerate(example_dirs, 1):
+    for i, example_dir in enumerate([*example_dirs, *ros_dirs], 1):
         readme = example_dir / "README.md"
         rel_path = readme.relative_to(repo_root)
         print(f"\r  [validate-readmes] {progress_bar(i, total)}", end="", flush=True)
@@ -526,7 +555,7 @@ def main() -> int:
             all_errors.append((str(rel_path), "README.md is missing"))
             continue
 
-        errors = validate_readme(readme)
+        errors = validate_ros_readme(readme) if example_dir in ros_dirs else validate_readme(readme)
         for error in errors:
             all_errors.append((str(rel_path), error))
     print()

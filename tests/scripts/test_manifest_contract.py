@@ -195,6 +195,26 @@ def test_runtime_archive_validator_accepts_cpp_reference_and_prebuilt_binary(tmp
     assert proc.returncode == 0, proc.stderr + proc.stdout
 
 
+def test_runtime_archive_allows_only_the_ros_registration_cmake(tmp_path):
+    archive = _write_runtime_archive(tmp_path, "support/ros2/CMakeLists.txt")
+    proc = _validate_runtime_archive(archive)
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    archive = _write_runtime_archive(tmp_path / "native", "examples/demo/model/src/cpp/CMakeLists.txt")
+    proc = _validate_runtime_archive(archive)
+    assert proc.returncode != 0
+
+
+def test_runtime_archive_accepts_separate_ros_example_layout(tmp_path):
+    archive = _write_runtime_archive(
+        tmp_path,
+        "examples/ros2/object-detection/demo/README.md",
+        "examples/ros2/object-detection/demo/src/common/config.yaml",
+        "examples/ros2/object-detection/demo/src/python/ros_node.py",
+    )
+    proc = _validate_runtime_archive(archive)
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+
+
 @pytest.mark.parametrize(
     "misplaced_binary",
     [

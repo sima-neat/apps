@@ -97,6 +97,44 @@ public input or output. If more than one endpoint exists, use the names.
 Use `Sample` when the application needs frame IDs, timestamps, bundled values,
 or other metadata. Use `TensorList` when raw tensor payloads are enough.
 
+In Python, a timed `Graph` Run pull can return `None`, while `ModelRunner.pull`
+can return an empty, false-valued `Sample`. Check for an available payload before
+decoding or validating its identity; a timeout is not a completed prediction.
+
 Outputs pulled with the default output memory share runtime buffers. When the
 application keeps outputs after the next pull, choose output memory as
 [inspect, measure, and tune](inspect-measure-tune.md) describes.
+
+## Images received from ROS
+
+Keep ROS adapters in `examples/ros2/<category>/<example>/`, with their own
+configuration and README. Import the native model helpers without modifying
+the original example's source or configuration.
+
+The Apps `support/ros2/neat_apps/images.py` adapter shows the public Python tensor
+contract for packed NV12/NV16 messages. Set the visible geometry, plane roles,
+offsets and strides on the CPU tensor before calling `tensor.cvu()`. Constructing
+an EV74 NV12 tensor before supplying its Y/UV descriptors can fail during the
+initial device copy. Check the installed Tensor API and the native BlazePose
+example's `nv12_seed` for the matching version.
+
+Keep each image's storage and ROS header until inference completes. Set explicit
+`Sample.frame_id` and `pts_ns`, and verify them on output before publishing the
+header. Arbitrary `Sample.attributes` are not preserved by every model route;
+do not use them as an unverified frame-association mechanism.
+
+The shared ROS image node can save PNGs and send rendered Insight video through
+`ros.visualization.save` and `ros.visualization.insight`. Both default to off.
+Reuse a native drawing routine through `Pipeline.render(bgr, data)` when needed;
+the output stage supplies an owned image matched to that result before publishing
+its acknowledgment. Do not mutate the numerical data or draw on a newer frame.
+The high-density `live_graph` mode keeps its separate encoded-video/metadata path.
+See `support/ros2/README.md` for channel mapping and custom-node limits, and compare
+throughput with identical visualization settings.
+
+For a multi-stage model, device-visible intermediate storage matters separately
+from lifetime. The RF-DETR example retains its `ZeroCopy` backbone output through
+transformer completion. An `Owned` CPU output is independent storage, but is not
+automatically suitable for a downstream EV74 input. Inspect the installed
+`OutputMemory` contract and the example's explicit stage bridge before changing
+the output memory policy.
