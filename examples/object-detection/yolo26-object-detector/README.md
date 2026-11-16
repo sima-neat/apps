@@ -10,7 +10,7 @@
 | Languages | C++, Python |
 | Status | stable |
 | Binary Name | yolo26-object-detector |
-| Model | yolo26m-det-bf16-mla_tess-b1 |
+| Model | yolo26m (w16a16) |
 
 ## Concept
 
@@ -40,31 +40,28 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-| Model file | Role |
-| --- | --- |
-| `yolo26m-det-bf16-mla_tess-b1.tar.gz` | Default |
-| `yolo26n-det-bf16-mla_tess-b1.tar.gz` | Supported |
-| `yolo26s-det-bf16-mla_tess-b1.tar.gz` | Supported |
-| `yolo26l-det-bf16-mla_tess-b1.tar.gz` | Supported |
-| `yolo26x-det-bf16-mla_tess-b1.tar.gz` | Supported |
-| `yolo26m-det-bf16-b1.tar.gz` | Supported |
-| `yolo26m-det-int8-b1.tar.gz` | Supported |
-
-Model packages come from the Model Zoo release below, which can differ from the installed platform version. Replace `<model-file>` with a file from the table.
+The [model browser](https://developer.sima.ai/models/) has the YOLO26 detection models in five sizes, from n (nano) to x (extra large). The default is `yolo26m` with the `w16a16` variant, the BF16 build of the model. Download it and unpack it:
 
 ```bash
-export MODELZOO_VERSION="3.0.0"
-mkdir -p models
-cd models
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26-detection/<model-file>"
-cd ..
+sima-cli models download --id yolo26m --variant w16a16
+unzip -o models/yolo26m/w16a16/yolo26m_w16a16_default.zip -d models/yolo26m/w16a16
 ```
 
-Set `model.path` in the config to the downloaded package.
+The download is a ZIP file with the model package and its license. `unzip` puts the model package, `models/yolo26m/w16a16/yolo26m_w16a16_mpk.tar.gz`, next to the ZIP file. The example reads only the `.tar.gz` file, so set `model.path` in the config to it, not to the ZIP file.
+
+| ID | Variants | Role |
+| --- | --- | --- |
+| `yolo26m` | `w8a8`, `w8a16`, `w16a16` | Default (`w16a16`) |
+| `yolo26n` | `w8a8`, `w8a16`, `w16a16` | Supported |
+| `yolo26s` | `w8a8`, `w8a16`, `w16a16` | Supported |
+| `yolo26l` | `w8a8`, `w8a16`, `w16a16` | Supported |
+| `yolo26x` | `w8a8`, `w8a16`, `w16a16` | Supported |
+
+To use another model, replace `yolo26m` and `w16a16` in both commands and in `model.path`. The variant is the number format the model was compiled with: `w8a8` stores weights and activations as 8-bit integers, `w8a16` keeps 8-bit integer weights and stores activations in BF16, a 16-bit float format, and `w16a16` uses BF16 for both. See the model browser for the measured accuracy and performance of each size and variant.
 
 ## Configure
 
-Open `${APP_DIR}/src/common/config.yaml` and set `model.path`, `io.input_dir`, and `io.output_dir`. Change the score threshold only if you want to show more or fewer detections.
+Open `${APP_DIR}/src/common/config.yaml` and set `model.path`. For the default model that is `models/yolo26m/w16a16/yolo26m_w16a16_mpk.tar.gz`. `io.input_dir` and `io.output_dir` are already set. Change the score threshold only if you want to show more or fewer detections.
 
 ## Run
 
@@ -96,7 +93,8 @@ Done: 21 images processed
 
 `io.output_dir` then holds one annotated PNG per input image; with the packaged
 `assets/datasets/coco` folder that is 21 files. The C++ binary prints the same
-lines with the input filename in quotes.
+lines with the input filename in quotes. The detection counts depend on the
+model and variant.
 
 Running a second time adds a `Cleared N stale output images` line before the
 rest, in both implementations, where `N` is however many image files the previous
@@ -108,6 +106,7 @@ them separate.
 ## Troubleshooting
 
 - Verify `model.path` and the labels file if detections are missing.
+- If the example stops with `model archive must use .tar.gz`, `model.path` points to the downloaded ZIP file. Set it to the `_mpk.tar.gz` file unpacked from it.
 - Confirm the input folder contains `.jpg`, `.jpeg`, `.png`, or `.bmp` files.
 - Adjust `decode.score_threshold` and `decode.nms_iou` when tuning detections.
 - Set `runtime.profile: true` in the config to print pipeline timing summaries.
