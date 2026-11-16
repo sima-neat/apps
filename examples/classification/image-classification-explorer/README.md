@@ -162,15 +162,16 @@ costs the previous report; the next run writes a fresh one.
 **How large a collection is practical.** The input directory is not capped, but
 the report is one HTML page and every result is held in memory until it is
 written, so the collection size that is useful is smaller than the one that
-fits. Measured on a Modalix DevKit with the four models above, at about 288 ms
-and 6 KB of report per image:
+fits. On a Modalix DevKit with the four models above, 1,000 ImageNet
+validation images took 95 s with C++ and 107 s with Python, about 0.1 s and
+5.5 KB of report per image. The larger rows scale those measurements:
 
 | Images | Run time | `report.json` | `report.html` |
 | ---: | ---: | ---: | ---: |
-| 1,000 | ~5 min | 3 MB | 3 MB |
-| 10,000 | ~48 min | 34 MB | 26 MB |
-| 50,000 | ~4 h | 170 MB | 130 MB |
-| 100,000 | ~8 h | 340 MB | 259 MB |
+| 1,000 | ~2 min | 3.4 MB | 2 MB |
+| 10,000 | ~17 min | 34 MB | 21 MB |
+| 50,000 | ~1.5 h | 170 MB | 103 MB |
+| 100,000 | ~3 h | 340 MB | 205 MB |
 
 Past roughly 10,000 images `report.html` stops being practical to open and
 browse, which is what the report is for, and a large enough collection can
@@ -189,7 +190,7 @@ you ran: the run ends with a summary naming the report directory, and every
 model agrees on the sample image.
 
 ```text
-Done in 3292.5 ms. Report written to sandbox/report
+Done in 12676.6 ms. Report written to sandbox/report
   report.html, thumbnails/
 ```
 
