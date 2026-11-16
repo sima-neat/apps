@@ -6,20 +6,31 @@
 #include "support/testing/test_config.h"
 #include "support/testing/test_process.h"
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
 #include <nlohmann/json.hpp>
 #include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <unistd.h>
 #include <algorithm>
+#include <atomic>
+#include <cerrno>
+#include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <map>
 #include <optional>
 #include <regex>
+#include <set>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -638,6 +649,102 @@ int metadata_port() {
   return env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100);
 }
 
+int video_port() {
+  return env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000);
+}
+
+// Collects the RTP timestamp of every packet the app sends to Insight's video port. A
+// thread reads while the app runs, so a burst of video packets cannot overflow the socket
+// buffer before the test looks at them.
+class VideoRtpTimestamps {
+public:
+  explicit VideoRtpTimestamps(int port) {
+    fd_ = ::socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd_ < 0) {
+      error_ = std::string("socket failed: ") + std::strerror(errno);
+      return;
+    }
+    int reuse = 1;
+    (void)::setsockopt(fd_, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+    timeval poll_interval{0, 200000};
+    (void)::setsockopt(fd_, SOL_SOCKET, SO_RCVTIMEO, &poll_interval, sizeof(poll_interval));
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(static_cast<uint16_t>(port));
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (::bind(fd_, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) < 0) {
+      error_ = "bind failed for video port " + std::to_string(port) + ": " + std::strerror(errno);
+      return;
+    }
+    reader_ = std::thread([this] { read(); });
+  }
+  ~VideoRtpTimestamps() {
+    stop();
+    if (fd_ >= 0) {
+      ::close(fd_);
+    }
+  }
+  bool ok() const { return error_.empty(); }
+  const std::string& error() const { return error_; }
+  // Stops reading and returns every RTP timestamp received.
+  const std::set<uint32_t>& stop() {
+    stopping_ = true;
+    if (reader_.joinable()) {
+      reader_.join();
+    }
+    return timestamps_;
+  }
+
+private:
+  void read() {
+    std::vector<uint8_t> packet(65536);
+    while (!stopping_) {
+      const ssize_t n = ::recv(fd_, packet.data(), packet.size(), 0);
+      if (n >= 12 && (packet[0] >> 6) == 2) {
+        timestamps_.insert((static_cast<uint32_t>(packet[4]) << 24) |
+                           (static_cast<uint32_t>(packet[5]) << 16) |
+                           (static_cast<uint32_t>(packet[6]) << 8) | packet[7]);
+      }
+    }
+  }
+
+  int fd_ = -1;
+  std::string error_;
+  std::atomic<bool> stopping_{false};
+  std::set<uint32_t> timestamps_;
+  std::thread reader_;
+};
+
+// Empty when Insight can draw the verdicts on their video frames: it pairs a verdict with
+// the frame whose RTP timestamp is within 90 ticks (1 ms) of timestamp_ms x 90. Allows 5%
+// unpaired for a lost UDP packet.
+std::string pairing_problem(const std::vector<MetadataJsonMessage>& messages,
+                            const std::set<uint32_t>& frames) {
+  if (frames.empty()) {
+    return "no video RTP packets reached the video port";
+  }
+  if (messages.empty()) {
+    return "no verdict metadata to pair with the video";
+  }
+  std::vector<std::string> unpaired;
+  for (const auto& message : messages) {
+    const auto target = static_cast<uint32_t>(message.timestamp_ms * 90);
+    uint32_t nearest = UINT32_MAX;
+    for (const uint32_t frame : frames) {
+      nearest = std::min({nearest, frame - target, target - frame});
+    }
+    if (nearest > 90) {
+      unpaired.push_back(message.frame_id);
+    }
+  }
+  if (unpaired.size() * 20 > messages.size()) {
+    return std::to_string(unpaired.size()) + " of " + std::to_string(messages.size()) +
+           " verdicts have no video frame within 1 ms (first frame id " + unpaired.front() +
+           "), so Insight cannot draw them on their frames";
+  }
+  return "";
+}
+
 // Runs --calibrate on the bundled nominal set, then one live run with the given source
 // settings. Returns the live run's stdout, or nullopt after printing a failure.
 std::optional<std::string>
@@ -651,7 +758,6 @@ calibrate_and_run_live(const std::string& binary, const std::string& model_path,
   }
   const fs::path run_dir = fs::path(out_dir).parent_path();
   const fs::path config_path = run_dir / "config.yaml";
-  const char* port = env_or_null("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT");
   ConfigScalars values = {
       {"model.path", model_path},
       {"calibration.nominal_images_dir", "assets/datasets/patchcore/nominal"},
@@ -661,7 +767,7 @@ calibrate_and_run_live(const std::string& binary, const std::string& model_path,
       {"output.dir", out_dir},
       {"output.save_every", std::to_string(save_every)},
       {"output.insight.host", "127.0.0.1"},
-      {"output.insight.video_port", port && *port ? port : "9000"},
+      {"output.insight.video_port", std::to_string(video_port())},
       {"output.insight.metadata_port", std::to_string(metadata_port())},
       {"runtime.frames", std::to_string(frames)},
   };
@@ -740,6 +846,11 @@ int run_video_file_live_run(const std::string& binary, const std::string& model_
     std::cerr << "[FAIL] video_file live run: metadata listener: " << listener.error() << "\n";
     return 1;
   }
+  VideoRtpTimestamps video_frames(video_port());
+  if (!video_frames.ok()) {
+    std::cerr << "[FAIL] video_file live run: video listener: " << video_frames.error() << "\n";
+    return 1;
+  }
   std::string out_dir;
   const auto stdout_text = calibrate_and_run_live(
       binary, model_path, "test_video_file_live_run",
@@ -785,6 +896,9 @@ int run_video_file_live_run(const std::string& binary, const std::string& model_
       problem = "expected verdict metadata for ~120 frames, got " + std::to_string(matched) + " " +
                 metadata.error;
     }
+    if (problem.empty()) {
+      problem = pairing_problem(metadata.messages, video_frames.stop());
+    }
   }
   remove_dir(out_dir);
   if (!problem.empty()) {
@@ -792,16 +906,30 @@ int run_video_file_live_run(const std::string& binary, const std::string& model_
     return 1;
   }
   std::cout << "[OK] video_file: plain frames normal, defect frames ANOMALOUS, verdict metadata "
-               "sent, 3 snapshots\n";
+               "paired with its video frames, 3 snapshots\n";
   return 0;
 }
 
-// rtsp runs the model inside the graph, scores every joined frame, streams to Insight,
-// and saves snapshots at the stream's size.
+// rtsp runs the model inside the graph, scores every joined frame, streams to Insight with
+// each verdict paired to its video frame, and saves snapshots at the stream's size.
 int run_rtsp_live_run(const std::string& binary, const std::string& model_path) {
   const auto urls = rtsp_h264_urls_from_env();
   if (urls.empty()) {
     return skip_or_fail("SIMANEAT_TEST_RTSP_H264_URL is not set");
+  }
+  sima_examples::testing::MetadataJsonListenerOptions listener_options;
+  listener_options.base_port = metadata_port();
+  listener_options.metadata_type = "classification";
+  listener_options.data_array_key = "top_classes";
+  sima_examples::testing::MetadataJsonListener listener(listener_options);
+  if (!listener.ok()) {
+    std::cerr << "[FAIL] rtsp live run: metadata listener: " << listener.error() << "\n";
+    return 1;
+  }
+  VideoRtpTimestamps video_frames(video_port());
+  if (!video_frames.ok()) {
+    std::cerr << "[FAIL] rtsp live run: video listener: " << video_frames.error() << "\n";
+    return 1;
   }
   std::string out_dir;
   const auto stdout_text = calibrate_and_run_live(
@@ -818,12 +946,22 @@ int run_rtsp_live_run(const std::string& binary, const std::string& model_path) 
   if (problem.empty()) {
     problem = snapshots_problem(out_dir, 3, cv::Size());
   }
+  if (problem.empty()) {
+    const auto metadata = listener.drain_pending();
+    if (metadata.messages.size() < 50) {
+      problem = "expected verdict metadata for ~60 frames, got " +
+                std::to_string(metadata.messages.size()) + " " + metadata.error;
+    } else {
+      problem = pairing_problem(metadata.messages, video_frames.stop());
+    }
+  }
   remove_dir(out_dir);
   if (!problem.empty()) {
     std::cerr << "[FAIL] rtsp live run: " << problem << "\n";
     return 1;
   }
-  std::cout << "[OK] rtsp: 60 frames scored in the graph, 3 snapshots\n";
+  std::cout << "[OK] rtsp: 60 frames scored in the graph, verdict metadata paired with its "
+               "video frames, 3 snapshots\n";
   return 0;
 }
 
