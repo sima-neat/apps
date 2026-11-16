@@ -79,9 +79,11 @@ class TestConfig:
             write_config(tmp_path, "  confidence_threshold: 0.6\n  max_draw: 30\n")
         )
 
-        options = detr.build_model_options(config)
+        options = detr.build_model_options(config, 4032, 3024)
 
         assert options.preprocess.kind == "image"
+        assert options.preprocess.input_max_width == 4032
+        assert options.preprocess.input_max_height == 3024
         assert options.preprocess.resize.mode == "stretch"
         assert options.preprocess.resize.interpolation == "bilinear-antialiased"
         assert options.preprocess.preset == "imagenet"
@@ -90,6 +92,17 @@ class TestConfig:
         assert options.decode_type == "detr"
         assert options.score_threshold == 0.6
         assert options.top_k == 30
+
+    def test_input_limits_fit_the_largest_image(self) -> None:
+        # Neat rejects any image above its input limits, so they must fit the widest and the
+        # tallest image, even when those are different images.
+        detr = load_module()
+        shapes = {"landscape.jpg": (3024, 4032, 3), "portrait.jpg": (4000, 3000, 3)}
+        detr.cv2 = SimpleNamespace(
+            IMREAD_COLOR=1, imread=lambda path, _flags: np.zeros(shapes[Path(path).name], np.uint8)
+        )
+
+        assert detr.largest_image_size([Path(name) for name in shapes]) == (4032, 4000)
 
     @pytest.mark.parametrize(
         ("decode", "message"),

@@ -174,10 +174,13 @@ def class_color(class_id: int) -> tuple[int, int, int]:
     return BOX_COLORS[abs(class_id) % len(BOX_COLORS)]
 
 
-def build_model_options(config: Config) -> pyneat.ModelOptions:
+def build_model_options(config: Config, max_width: int, max_height: int) -> pyneat.ModelOptions:
     """Stretch, ImageNet-normalize, and decode DETR on the model route."""
     options = pyneat.ModelOptions()
     options.preprocess.kind = pyneat.InputKind.Image
+    # Neat rejects inputs larger than 1920x1080 unless these limits are raised.
+    options.preprocess.input_max_width = max_width
+    options.preprocess.input_max_height = max_height
     options.preprocess.enable = pyneat.AutoFlag.On
     options.preprocess.resize.enable = pyneat.AutoFlag.On
     # Core's classic DETR decoder requires Stretch (Core docs/reference/boxdecode_decode_types.md).
@@ -199,6 +202,15 @@ def read_image(image_path: Path) -> np.ndarray:
     if image_bgr is None:
         raise RuntimeError(f"Failed to read image: {image_path}")
     return image_bgr
+
+
+def largest_image_size(image_paths: list[Path]) -> tuple[int, int]:
+    """Return the largest width and height among the images, so Neat accepts every one."""
+    max_width = max_height = 0
+    for image_path in image_paths:
+        height, width = read_image(image_path).shape[:2]
+        max_width, max_height = max(max_width, width), max(max_height, height)
+    return max_width, max_height
 
 
 def image_to_tensor(image_bgr: np.ndarray) -> pyneat.Tensor:
@@ -313,8 +325,18 @@ def main() -> int:
     import numpy as np
     import pyneat
 
+    # Profiling times only the first image.
+    if config.profile:
+        image_paths = image_paths[:1]
     try:
-        model = pyneat.Model(str(config.model_path), build_model_options(config))
+        max_width, max_height = largest_image_size(image_paths)
+    except RuntimeError as exc:
+        print(exc, file=sys.stderr)
+        return 3
+    try:
+        model = pyneat.Model(
+            str(config.model_path), build_model_options(config, max_width, max_height)
+        )
         runner = model.build([image_to_tensor(read_image(image_paths[0]))])
     except Exception as exc:
         print(f"Error loading model: {exc}", file=sys.stderr)

@@ -160,10 +160,32 @@ cv::Scalar class_color(int class_id) {
   return kColors[static_cast<size_t>(std::abs(class_id)) % kColors.size()];
 }
 
+cv::Mat read_image(const fs::path& image_path) {
+  cv::Mat image_bgr = cv::imread(image_path.string(), cv::IMREAD_COLOR);
+  if (image_bgr.empty()) {
+    throw std::runtime_error("failed to read image: " + image_path.string());
+  }
+  return image_bgr;
+}
+
+// Returns the largest width and height among the images, so Neat accepts every one.
+cv::Size largest_image_size(const std::vector<fs::path>& image_paths) {
+  cv::Size largest(0, 0);
+  for (const fs::path& image_path : image_paths) {
+    const cv::Mat image_bgr = read_image(image_path);
+    largest.width = std::max(largest.width, image_bgr.cols);
+    largest.height = std::max(largest.height, image_bgr.rows);
+  }
+  return largest;
+}
+
 // Stretches, ImageNet-normalizes, and decodes DETR on the model route.
-neat::Model::Options build_model_options(const Config& cfg) {
+neat::Model::Options build_model_options(const Config& cfg, const cv::Size& max_input_size) {
   neat::Model::Options options;
   options.preprocess.kind = neat::InputKind::Image;
+  // Neat rejects inputs larger than 1920x1080 unless these limits are raised.
+  options.preprocess.input_max_width = max_input_size.width;
+  options.preprocess.input_max_height = max_input_size.height;
   options.preprocess.enable = neat::AutoFlag::On;
   options.preprocess.resize.enable = neat::AutoFlag::On;
   // Core's classic DETR decoder requires Stretch (Core docs/reference/boxdecode_decode_types.md).
@@ -178,14 +200,6 @@ neat::Model::Options build_model_options(const Config& cfg) {
   options.score_threshold = cfg.confidence_threshold;
   options.top_k = cfg.max_draw;
   return options;
-}
-
-cv::Mat read_image(const fs::path& image_path) {
-  cv::Mat image_bgr = cv::imread(image_path.string(), cv::IMREAD_COLOR);
-  if (image_bgr.empty()) {
-    throw std::runtime_error("failed to read image: " + image_path.string());
-  }
-  return image_bgr;
 }
 
 // Runs one image through the model and returns its boxes in original-image pixels.
@@ -284,12 +298,17 @@ int main(int argc, char** argv) {
     if (!fs::is_directory(cfg.input_dir)) {
       throw std::runtime_error("input_dir does not exist: " + cfg.input_dir.string());
     }
-    const std::vector<fs::path> image_paths = image_paths_in_dir(cfg.input_dir);
+    std::vector<fs::path> image_paths = image_paths_in_dir(cfg.input_dir);
     if (image_paths.empty()) {
       throw std::runtime_error("no images found in: " + cfg.input_dir.string());
     }
+    // Profiling times only the first image.
+    if (cfg.profile) {
+      image_paths.resize(1);
+    }
 
-    neat::Model model(cfg.model_path.string(), build_model_options(cfg));
+    neat::Model model(cfg.model_path.string(),
+                      build_model_options(cfg, largest_image_size(image_paths)));
     neat::Model::Runner run = model.build(std::vector<cv::Mat>{read_image(image_paths.front())});
 
     if (cfg.profile) {

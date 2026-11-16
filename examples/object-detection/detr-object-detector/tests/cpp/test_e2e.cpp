@@ -1,10 +1,16 @@
 // E2E test for detr-object-detector.
 // Runs the binary with each scoped DETR model and a local image folder, and verifies it exits
-// successfully, produces annotated output images, and detects objects in every image.
+// successfully, produces annotated output images, and detects objects in every image. A second
+// case does the same for a photo larger than Neat's default 1920x1080 input limit.
 #include "support/testing/source_cases.h"
 #include "support/testing/test_config.h"
 #include "support/testing/test_process.h"
 
+#include <opencv2/core.hpp>
+#include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
+
+#include <algorithm>
 #include <filesystem>
 #include <iostream>
 #include <regex>
@@ -75,6 +81,32 @@ int run_model_case(const std::string& binary, const std::string& model_path,
   return 0;
 }
 
+// Writes a 4032x3024 copy of the first test image into its own folder and returns the folder,
+// or an empty string when no test image can be read.
+std::string write_large_photo_dir(const std::string& input_dir) {
+  std::vector<fs::path> images;
+  for (const auto& entry : fs::directory_iterator(input_dir)) {
+    if (entry.is_regular_file()) {
+      images.push_back(entry.path());
+    }
+  }
+  std::sort(images.begin(), images.end());
+  for (const fs::path& image_path : images) {
+    cv::Mat photo = cv::imread(image_path.string(), cv::IMREAD_COLOR);
+    if (photo.empty()) {
+      continue;
+    }
+    const std::string photo_dir = create_test_output_dir(kExampleName, "large_photo_input");
+    cv::resize(photo, photo, cv::Size(4032, 3024));
+    if (photo_dir.empty() ||
+        !cv::imwrite((fs::path(photo_dir) / "photo_4032x3024.jpg").string(), photo)) {
+      return "";
+    }
+    return photo_dir;
+  }
+  return "";
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -110,5 +142,19 @@ int main(int argc, char** argv) {
       rc = 1;
     }
   }
+
+  const std::string photo_dir = write_large_photo_dir(input_dir);
+  if (photo_dir.empty()) {
+    std::cerr << "[FAIL] test_photo_larger_than_1080p: could not write the 4032x3024 photo\n";
+    return 1;
+  }
+  for (const std::string& model_path : model_paths) {
+    const std::string label =
+        model_case_label("test_photo_larger_than_1080p", model_path, model_paths.size());
+    if (run_model_case(binary, model_path, photo_dir, label) != 0) {
+      rc = 1;
+    }
+  }
+  remove_dir(photo_dir);
   return rc;
 }
