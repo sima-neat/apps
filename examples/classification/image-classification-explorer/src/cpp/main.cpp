@@ -1152,9 +1152,11 @@ const std::vector<std::pair<std::string, int>>& interpolations() {
 
 // The shorter side for the standard ImageNet 87.5% centre crop: 256 for 224.
 // Taken from the larger input side, so a non-square window fits images of
-// either orientation.
+// either orientation, and capped at kMaxInputDimension so every accepted input
+// size gets a valid default.
 int default_resize_shorter(int width, int height) {
-  return static_cast<int>(static_cast<long long>(std::max(width, height)) * 8 / 7);
+  return static_cast<int>(std::min<long long>(
+      static_cast<long long>(std::max(width, height)) * 8 / 7, kMaxInputDimension));
 }
 
 std::vector<ModelProfile> load_profiles(const sima_examples::ScalarConfig& raw,

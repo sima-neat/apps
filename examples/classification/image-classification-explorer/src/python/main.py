@@ -763,9 +763,10 @@ def default_resize_shorter(width: int, height: int) -> int:
     """The shorter side for the standard ImageNet 87.5% centre crop: 256 for 224.
 
     Taken from the larger input side, so a non-square window fits images of
-    either orientation.
+    either orientation, and capped at MAX_INPUT_DIMENSION so every accepted
+    input size gets a valid default.
     """
-    return max(width, height) * 8 // 7
+    return min(max(width, height) * 8 // 7, MAX_INPUT_DIMENSION)
 
 
 def load_label_map(path: str | None, num_classes: int) -> list[str]:

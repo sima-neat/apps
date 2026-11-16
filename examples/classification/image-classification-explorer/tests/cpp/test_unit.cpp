@@ -741,5 +741,33 @@ int main(int argc, char** argv) {
     }
   }
 
+  // Test 32: without resize_shorter, an input side above 7168 gets a default
+  // capped at the 8192 maximum, which passes validation and reaches model loading.
+  {
+    namespace fs = std::filesystem;
+    const auto config_path =
+        fs::temp_directory_path() /
+        ("image-classification-explorer-maxside-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".yaml");
+    {
+      std::ofstream config(config_path);
+      config << "models:\n"
+             << "  m:\n"
+             << "    path: /nonexistent/m.tar.gz\n"
+             << "    input_width: 8192\n"
+             << "    input_height: 8192\n";
+    }
+    auto r = spawn_and_wait(binary, {"--config", config_path.string()}, 20000);
+    fs::remove(config_path);
+    if (r.stderr_text.find("resize_shorter") != std::string::npos ||
+        r.stdout_text.find("Loading model") == std::string::npos) {
+      std::cerr << "[FAIL] maximum-side default: expected validation to pass, got exit "
+                << r.exit_code << "\nstderr:\n" << r.stderr_text << "\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] maximum input side default passes validation\n";
+    }
+  }
+
   return failures > 0 ? 1 : 0;
 }

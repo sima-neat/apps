@@ -394,6 +394,13 @@ class TestLoadProfiles:
         profile = main.load_profiles(raw)[0]
         assert profile.resize_shorter == 365
 
+    @pytest.mark.parametrize("side", [7169, 8192])
+    def test_resize_default_is_capped_at_the_maximum(self, side):
+        """Input sides above 7168 would default past MAX_INPUT_DIMENSION."""
+        raw = {"models": {"a": {"path": "m.tar.gz", "input_width": side, "input_height": side}}}
+        profile = main.load_profiles(raw)[0]
+        assert profile.resize_shorter == main.MAX_INPUT_DIMENSION
+
     def test_reads_resize_settings(self):
         raw = {"models": {"a": {"path": "m.tar.gz", "resize_shorter": 288,
                                 "interpolation": "bicubic"}}}
