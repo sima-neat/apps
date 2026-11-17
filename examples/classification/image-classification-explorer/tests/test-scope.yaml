@@ -1,20 +1,32 @@
 models:
-  resnet_50:
-    source: url
-    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/resnet_50_mpk.tar.gz
-    file: resnet_50_mpk.tar.gz
-  resnet_18:
-    source: url
-    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/resnet_18_mpk.tar.gz
-    file: resnet_18_mpk.tar.gz
-  efficientnet_b0:
-    source: url
-    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/efficientnet_b0_mpk.tar.gz
-    file: efficientnet_b0_mpk.tar.gz
-  densenet_121:
-    source: url
-    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/densenet_121_mpk.tar.gz
-    file: densenet_121_mpk.tar.gz
+  resnet_50_w16a16:
+    source: model-registry
+    name: resnet_50
+    variant: w16a16
+    ref: main
+    spec: latest
+    file: resnet_50_w16a16_mpk.tar.gz
+  resnet_18_w16a16:
+    source: model-registry
+    name: resnet_18
+    variant: w16a16
+    ref: main
+    spec: latest
+    file: resnet_18_w16a16_mpk.tar.gz
+  densenet_121_w16a16:
+    source: model-registry
+    name: densenet_121
+    variant: w16a16
+    ref: main
+    spec: latest
+    file: densenet_121_w16a16_mpk.tar.gz
+  resnext_101_64x4d_w16a16:
+    source: model-registry
+    name: resnext_101_64x4d
+    variant: w16a16
+    ref: main
+    spec: latest
+    file: resnext_101_64x4d_w16a16_mpk.tar.gz
 unit:
   python: true
   cpp: true
@@ -23,15 +35,15 @@ e2e:
     enabled: true
     requires_rtsp: false
     models:
-    - resnet_50
-    - resnet_18
-    - efficientnet_b0
-    - densenet_121
+    - resnet_50_w16a16
+    - resnet_18_w16a16
+    - densenet_121_w16a16
+    - resnext_101_64x4d_w16a16
   cpp:
     enabled: true
     requires_rtsp: false
     models:
-    - resnet_50
-    - resnet_18
-    - efficientnet_b0
-    - densenet_121
+    - resnet_50_w16a16
+    - resnet_18_w16a16
+    - densenet_121_w16a16
+    - resnext_101_64x4d_w16a16

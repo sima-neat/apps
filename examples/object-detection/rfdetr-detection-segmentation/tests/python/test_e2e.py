@@ -29,6 +29,10 @@ def _env_int(name: str, default: int) -> int:
     return int(value) if value else default
 
 
+# The registry build profile each segmentation size ships with in config.yaml.
+SEGMENTATION_PROFILES = {"nano": "w8a16_w8a8_mixed", "small": "w8a16_w8a8_mixed", "medium": "w8a16_w8a8_mixed"}
+
+
 @pytest.mark.e2e
 @pytest.mark.parametrize(
     ("task", "variant", "codec", "stream_fixture"),
@@ -38,8 +42,9 @@ def _env_int(name: str, default: int) -> int:
         for variant in ("nano", "small", "medium", "large")
     ]
     + [
-        ("segmentation", "medium", codec, f"rtsp_{codec}_url")
+        ("segmentation", variant, codec, f"rtsp_{codec}_url")
         for codec in ("h264", "h265", "mjpeg")
+        for variant in ("nano", "small", "medium")
     ],
 )
 def test_publishes_insight_video_and_metadata(
@@ -54,25 +59,21 @@ def test_publishes_insight_video_and_metadata(
     request,
 ):
     skip_unless_e2e_ready(_runtime_ready(), "numpy and pyneat are required")
-    if task == "detection":
-        paths = {
-            "backbone": models_dir / f"rf_detr_{variant}_w8a8_w16a16_backbone_mpk.tar.gz",
-            "transformer": models_dir / f"rf_detr_{variant}_w8a8_w16a16_decoder_mpk.tar.gz",
-        }
-    else:
-        paths = {
-            "backbone": models_dir / "rfdetr-seg-medium-backbone.tar.gz",
-            "transformer": models_dir / "rfdetr-seg-medium-transformer.tar.gz",
-        }
+    package = (
+        f"rf_detr_{variant}_w8a8_mixed_w16a16"
+        if task == "detection"
+        else f"rf_detr_seg_{variant}_{SEGMENTATION_PROFILES[variant]}"
+    )
+    paths = {
+        "backbone": models_dir / f"{package}_backbone_mpk.tar.gz",
+        "transformer": models_dir / f"{package}_decoder_mpk.tar.gz",
+    }
     for path in paths.values():
         skip_unless_e2e_ready(path.exists(), f"missing RF-DETR artifact: {path}")
     rtsp_url = request.getfixturevalue(stream_fixture)
 
     model_paths = {key: str(value) for key, value in paths.items()}
-    if task == "detection":
-        model_config = {"task": task, task: {"variant": variant, variant: model_paths}}
-    else:
-        model_config = {"task": task, task: model_paths}
+    model_config = {"task": task, task: {"variant": variant, variant: model_paths}}
 
     metadata_port = _env_int("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100)
     video_port = _env_int("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000)

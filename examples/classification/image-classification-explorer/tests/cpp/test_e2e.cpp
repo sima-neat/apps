@@ -20,8 +20,10 @@ using json = nlohmann::json;
 
 namespace {
 
-constexpr std::array<const char*, 4> kModelNames = {"resnet_50", "resnet_18", "efficientnet_b0",
-                                                    "densenet_121"};
+constexpr std::array<const char*, 4> kModelNames = {"resnet_50", "resnet_18", "densenet_121",
+                                                     "resnext_101_64x4d"};
+// Every model is the w16a16 Model Registry build that test-scope.yaml downloads.
+constexpr const char* kModelVariant = "w16a16";
 
 } // namespace
 
@@ -37,13 +39,13 @@ int main(int argc, char** argv) {
 
   std::vector<fs::path> model_paths;
   for (const auto* name : kModelNames) {
-    model_paths.push_back(fs::path(models_dir) / (std::string(name) + "_mpk.tar.gz"));
+    model_paths.push_back(fs::path(models_dir) / (std::string(name) + "_" + kModelVariant + "_mpk.tar.gz"));
   }
   for (const auto& p : model_paths) {
     if (!fs::exists(p)) {
       return skip_or_fail(
-          "resnet_50/resnet_18/efficientnet_b0/densenet_121 model packages (.tar.gz) not found "
-          "under SIMANEAT_APPS_TEST_MODELS_DIR");
+          "resnet_50/resnet_18/densenet_121/resnext_101_64x4d w16a16 model packages (.tar.gz) "
+          "not found under SIMANEAT_APPS_TEST_MODELS_DIR");
     }
   }
 

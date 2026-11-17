@@ -1,5 +1,5 @@
 models:                              # Model packages are supplied at runtime.
-  detector_path: <detector-model-path> # Default: yolo26m-det-int8-b1.tar.gz.
+  detector_path: <detector-model-path> # Default: yolo26m/w8a8/yolo26m_w8a8_mpk.tar.gz.
   pose_path: <blazepose-model-path>  # Default: blazepose_ghum_heavy_w16a16_mpk.tar.gz.
 
 streams:                             # Configure one to four cameras; restart after edits.
