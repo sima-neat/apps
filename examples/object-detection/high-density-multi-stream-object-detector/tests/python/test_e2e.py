@@ -27,7 +27,7 @@ def minimum_stream_fps():
             field, value, unit = meminfo.readline().split()
         kib = int(value)
         if field == "MemTotal:" and unit == "kB" and 0 < kib <= EIGHT_GIB_KIB:
-            return 26.5
+            return 25.0
     except (OSError, ValueError):
         pass
     return 28.125
