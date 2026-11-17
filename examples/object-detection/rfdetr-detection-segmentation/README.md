@@ -55,12 +55,12 @@ points every size at the build in the **Default build** column.
 
 | Task | Size | Default build | Other builds | Input | Queries | Mask |
 | --- | --- | --- | --- | ---: | ---: | ---: |
-| Detection | `nano` | `w8a8_w16a16` | `w8a16_w16a16`, `w8a8_mixed_w16a16` | 384 | 300 | — |
-| Detection | `small` | `w8a8_w16a16` | `w8a16_w16a16`, `w8a8_mixed_w16a16` | 512 | 300 | — |
-| Detection | `medium` | `w8a8_w16a16` | `w8a16_w16a16`, `w8a8_mixed_w16a16` | 576 | 300 | — |
-| Detection | `large` | `w8a8_w16a16` | `w8a16_w16a16`, `w8a8_mixed_w16a16` | 704 | 300 | — |
-| Segmentation | `nano` | `w8a8_w16a16` | `w8a16_w16a16`, `w8a16_w8a8_mixed`, `w8a8_mixed_w16a16` | 312 | 100 | 78×78 |
-| Segmentation | `small` | `w8a8_w16a16` | `w8a16_w16a16`, `w8a16_w8a8_mixed`, `w8a8_mixed_w16a16` | 384 | 100 | 96×96 |
+| Detection | `nano` | `w8a8_mixed_w16a16` | `w8a16_w16a16` | 384 | 300 | — |
+| Detection | `small` | `w8a8_mixed_w16a16` | `w8a16_w16a16` | 512 | 300 | — |
+| Detection | `medium` | `w8a8_mixed_w16a16` | `w8a16_w16a16` | 576 | 300 | — |
+| Detection | `large` | `w8a8_mixed_w16a16` | `w8a16_w16a16` | 704 | 300 | — |
+| Segmentation | `nano` | `w8a16_w8a8_mixed` | `w8a16_w16a16`, `w8a8_mixed_w16a16`, `w8a8_w16a16` | 312 | 100 | 78×78 |
+| Segmentation | `small` | `w8a16_w8a8_mixed` | `w8a16_w16a16`, `w8a8_mixed_w16a16`, `w8a8_w16a16` | 384 | 100 | 96×96 |
 | Segmentation | `medium` | `w8a16_w8a8_mixed` | `w8a16_w16a16`, `w8a8_mixed_w16a16`, `w8a8_w16a16` | 432 | 200 | 108×108 |
 
 The application reads the input size, query count, and mask size from the
@@ -71,7 +71,7 @@ model ID is `rf_detr_<size>`; small is selected by default:
 
 ```bash
 MODEL=rf_detr_small
-BUILD=w8a8_w16a16
+BUILD=w8a8_mixed_w16a16
 sima-cli models download --id ${MODEL} --variant ${BUILD}
 unzip -o models/${MODEL}/${BUILD}/${MODEL}_${BUILD}_default.zip -d models/${MODEL}/${BUILD}
 ```

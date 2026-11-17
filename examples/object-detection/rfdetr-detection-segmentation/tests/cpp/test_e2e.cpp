@@ -87,21 +87,21 @@ int main(int argc, char** argv) {
   const char* models_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
   const fs::path models_dir = models_raw != nullptr ? models_raw : "models";
   const std::vector<Variant> detection_models = {
-      {"nano", "rf_detr_nano_w8a8_w16a16_backbone_mpk.tar.gz",
-       "rf_detr_nano_w8a8_w16a16_decoder_mpk.tar.gz"},
-      {"small", "rf_detr_small_w8a8_w16a16_backbone_mpk.tar.gz",
-       "rf_detr_small_w8a8_w16a16_decoder_mpk.tar.gz"},
-      {"medium", "rf_detr_medium_w8a8_w16a16_backbone_mpk.tar.gz",
-       "rf_detr_medium_w8a8_w16a16_decoder_mpk.tar.gz"},
-      {"large", "rf_detr_large_w8a8_w16a16_backbone_mpk.tar.gz",
-       "rf_detr_large_w8a8_w16a16_decoder_mpk.tar.gz"},
+      {"nano", "rf_detr_nano_w8a8_mixed_w16a16_backbone_mpk.tar.gz",
+       "rf_detr_nano_w8a8_mixed_w16a16_decoder_mpk.tar.gz"},
+      {"small", "rf_detr_small_w8a8_mixed_w16a16_backbone_mpk.tar.gz",
+       "rf_detr_small_w8a8_mixed_w16a16_decoder_mpk.tar.gz"},
+      {"medium", "rf_detr_medium_w8a8_mixed_w16a16_backbone_mpk.tar.gz",
+       "rf_detr_medium_w8a8_mixed_w16a16_decoder_mpk.tar.gz"},
+      {"large", "rf_detr_large_w8a8_mixed_w16a16_backbone_mpk.tar.gz",
+       "rf_detr_large_w8a8_mixed_w16a16_decoder_mpk.tar.gz"},
   };
   // Each segmentation size uses the registry build profile config.yaml ships with.
   const std::vector<Variant> segmentation_models = {
-      {"nano", "rf_detr_seg_nano_w8a8_w16a16_backbone_mpk.tar.gz",
-       "rf_detr_seg_nano_w8a8_w16a16_decoder_mpk.tar.gz"},
-      {"small", "rf_detr_seg_small_w8a8_w16a16_backbone_mpk.tar.gz",
-       "rf_detr_seg_small_w8a8_w16a16_decoder_mpk.tar.gz"},
+      {"nano", "rf_detr_seg_nano_w8a16_w8a8_mixed_backbone_mpk.tar.gz",
+       "rf_detr_seg_nano_w8a16_w8a8_mixed_decoder_mpk.tar.gz"},
+      {"small", "rf_detr_seg_small_w8a16_w8a8_mixed_backbone_mpk.tar.gz",
+       "rf_detr_seg_small_w8a16_w8a8_mixed_decoder_mpk.tar.gz"},
       {"medium", "rf_detr_seg_medium_w8a16_w8a8_mixed_backbone_mpk.tar.gz",
        "rf_detr_seg_medium_w8a16_w8a8_mixed_decoder_mpk.tar.gz"},
   };

@@ -30,7 +30,7 @@ def _env_int(name: str, default: int) -> int:
 
 
 # The registry build profile each segmentation size ships with in config.yaml.
-SEGMENTATION_PROFILES = {"nano": "w8a8_w16a16", "small": "w8a8_w16a16", "medium": "w8a16_w8a8_mixed"}
+SEGMENTATION_PROFILES = {"nano": "w8a16_w8a8_mixed", "small": "w8a16_w8a8_mixed", "medium": "w8a16_w8a8_mixed"}
 
 
 @pytest.mark.e2e
@@ -60,7 +60,7 @@ def test_publishes_insight_video_and_metadata(
 ):
     skip_unless_e2e_ready(_runtime_ready(), "numpy and pyneat are required")
     package = (
-        f"rf_detr_{variant}_w8a8_w16a16"
+        f"rf_detr_{variant}_w8a8_mixed_w16a16"
         if task == "detection"
         else f"rf_detr_seg_{variant}_{SEGMENTATION_PROFILES[variant]}"
     )
