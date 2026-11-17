@@ -1,8 +1,11 @@
 models:
-  yolo26m-det-int8-b1:
-    source: url
-    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26-detection/yolo26m-det-int8-b1.tar.gz
-    file: yolo26m-det-int8-b1.tar.gz
+  yolo26m_w8a8_mpk:
+    source: model-registry
+    name: yolo26m
+    ref: main
+    spec: latest
+    variant: w8a8
+    file: yolo26m_w8a8_mpk.tar.gz
   blazepose-ghum-heavy:
     source: url
     url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/blazepose_ghum_heavy_w16a16_mpk.tar.gz
@@ -15,11 +18,11 @@ e2e:
     enabled: true
     requires_rtsp: true
     models:
-    - yolo26m-det-int8-b1
+    - yolo26m_w8a8_mpk
     - blazepose-ghum-heavy
   cpp:
     enabled: true
     requires_rtsp: true
     models:
-    - yolo26m-det-int8-b1
+    - yolo26m_w8a8_mpk
     - blazepose-ghum-heavy

@@ -52,14 +52,10 @@ def test_transformer_inputs_copy_only_cpu_features(monkeypatch, storage_kind):
         feature.cvu.assert_called_once_with()
 
 
-@pytest.mark.unit
-@pytest.mark.parametrize("task", ["detection", "segmentation"])
-@pytest.mark.parametrize("batch", [1, 2])
-def test_model_contract_preserves_authored_feature_batch(monkeypatch, task, batch):
+def fake_model_pair(monkeypatch, side, top_k, mask_size=0, batch=1):
+    """Backbone and transformer specs shaped like an RF-DETR registry model pair."""
     dtypes = SimpleNamespace(Float32="fp32", UInt8="uint8")
     monkeypatch.setattr(main, "pyneat", SimpleNamespace(TensorDType=dtypes), raising=False)
-    side = 36
-    top_k = 300 if task == "detection" else 200
 
     def specs(shapes, dtype=dtypes.Float32):
         return [SimpleNamespace(shape=shape, dtypes=[dtype]) for shape in shapes]
@@ -71,18 +67,56 @@ def test_model_contract_preserves_authored_feature_batch(monkeypatch, task, batc
         ),
     )
     outputs = [[1, top_k, 4], [1, top_k, 91]]
-    if task == "segmentation":
-        outputs.append([1, 108, 108, top_k])
+    if mask_size:
+        outputs.append([1, mask_size, mask_size, top_k])
     transformer = SimpleNamespace(
         input_specs=lambda: specs([[batch, side, side, 256], [1, top_k, 4]]),
         output_specs=lambda: specs(outputs),
     )
-    cfg = SimpleNamespace(task=task, top_k=top_k)
-    if batch == 1:
-        main.require_model_contract(cfg, backbone, transformer, side)
-    else:
-        with pytest.raises(RuntimeError, match="unexpected I/O contract"):
-            main.require_model_contract(cfg, backbone, transformer, side)
+    return backbone, transformer
+
+
+# Feature grid, query count, and mask size of the registry packages.
+MODEL_SIZES = [
+    pytest.param("detection", 24, 300, 0, id="detection-nano"),
+    pytest.param("detection", 44, 300, 0, id="detection-large"),
+    pytest.param("segmentation", 26, 100, 78, id="segmentation-nano"),
+    pytest.param("segmentation", 32, 100, 96, id="segmentation-small"),
+    pytest.param("segmentation", 36, 200, 108, id="segmentation-medium"),
+]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(("task", "side", "top_k", "mask_size"), MODEL_SIZES)
+def test_model_contract_reads_the_sizes_of_the_loaded_pair(
+    monkeypatch, task, side, top_k, mask_size
+):
+    backbone, transformer = fake_model_pair(monkeypatch, side, top_k, mask_size)
+    cfg = SimpleNamespace(task=task, mask_grid_size=640)
+
+    contract = main.model_contract(cfg, backbone, transformer)
+
+    assert contract == main.ModelContract(side=side, top_k=top_k, mask_size=mask_size)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("task", ["detection", "segmentation"])
+def test_model_contract_rejects_a_batched_feature_input(monkeypatch, task):
+    mask_size = 108 if task == "segmentation" else 0
+    backbone, transformer = fake_model_pair(monkeypatch, 36, 200, mask_size, batch=2)
+    cfg = SimpleNamespace(task=task, mask_grid_size=640)
+
+    with pytest.raises(RuntimeError, match="unexpected I/O contract"):
+        main.model_contract(cfg, backbone, transformer)
+
+
+@pytest.mark.unit
+def test_mask_grid_below_the_model_mask_size_is_rejected(monkeypatch):
+    backbone, transformer = fake_model_pair(monkeypatch, 26, 100, 78)
+    cfg = SimpleNamespace(task="segmentation", mask_grid_size=77)
+
+    with pytest.raises(ValueError, match=r"mask_grid_size must be >= the model's mask size \(78\)"):
+        main.model_contract(cfg, backbone, transformer)
 
 
 @pytest.mark.unit
@@ -151,8 +185,9 @@ def test_config_selects_one_model_pair(tmp_path, variant):
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("mask_grid_size", [None, 108, 432, 640, 107])
-def test_config_selects_segmentation_model_pair(tmp_path, mask_grid_size):
+@pytest.mark.parametrize("variant", ["nano", "small", "medium"])
+@pytest.mark.parametrize("mask_grid_size", [None, 78, 432, 640, 0])
+def test_config_selects_segmentation_model_pair(tmp_path, variant, mask_grid_size):
     labels = tmp_path / "labels.txt"
     labels.write_text("\n".join(f"label-{index}" for index in range(91)) + "\n")
     config = {
@@ -160,8 +195,11 @@ def test_config_selects_segmentation_model_pair(tmp_path, mask_grid_size):
             "task": "segmentation",
             "labels": str(labels),
             "segmentation": {
-                "backbone": "segmentation-b.tar.gz",
-                "transformer": "segmentation-t.tar.gz",
+                "variant": variant,
+                **{
+                    name: {"backbone": f"{name}-b.tar.gz", "transformer": f"{name}-t.tar.gz"}
+                    for name in ("nano", "small", "medium")
+                },
             },
         },
         "source": {"rtsp_url": "rtsp://camera/live", "codec": "h264"},
@@ -172,8 +210,8 @@ def test_config_selects_segmentation_model_pair(tmp_path, mask_grid_size):
         config["inference"]["segmentation"]["mask_grid_size"] = mask_grid_size
     path = tmp_path / "config.yaml"
     path.write_text(yaml.safe_dump(config))
-    if mask_grid_size == 107:
-        with pytest.raises(ValueError, match="mask_grid_size must be >= 108"):
+    if mask_grid_size == 0:
+        with pytest.raises(ValueError, match="mask_grid_size must be > 0"):
             main.load_config(path)
         return
 
@@ -181,8 +219,8 @@ def test_config_selects_segmentation_model_pair(tmp_path, mask_grid_size):
 
     assert selected.mask_grid_size == (mask_grid_size or 640)
     assert selected.task == "segmentation"
-    assert selected.backbone == "segmentation-b.tar.gz"
-    assert selected.top_k == 200
+    assert selected.variant == variant
+    assert selected.backbone == f"{variant}-b.tar.gz"
 
 
 @pytest.mark.unit
@@ -224,22 +262,24 @@ def test_config_rejects_variant_without_model_pair(tmp_path):
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("mask_grid_size", [108, 432, 640])
-def test_segmentation_metadata_contains_polygons(mask_grid_size):
+@pytest.mark.parametrize(("top_k", "mask_size"), [(200, 108), (100, 96), (100, 78)])
+@pytest.mark.parametrize("mask_grid_size", [None, 432, 640])
+def test_segmentation_metadata_contains_polygons(top_k, mask_size, mask_grid_size):
     labels = ["unused"] * 91
     labels[1] = "person"
-    boxes = np.zeros((1, 200, 4), dtype=np.float32)
+    boxes = np.zeros((1, top_k, 4), dtype=np.float32)
     boxes[0, 0] = [0.5, 0.5, 0.5, 0.5]
     boxes[0, 1] = [0.5, 0.5, 0.5, 0.5]
-    logits = np.full((1, 200, 91), -20.0, dtype=np.float32)
+    logits = np.full((1, top_k, 91), -20.0, dtype=np.float32)
     logits[0, 0, 0] = 12.0
     logits[0, 0, 1] = 11.0
     logits[0, 1, 1] = 10.0
-    masks = np.full((1, 108, 108, 200), -20.0, dtype=np.float32)
-    masks[0, 40:68, 40:68, 0] = 10.0
+    masks = np.full((1, mask_size, mask_size, top_k), -20.0, dtype=np.float32)
+    masks[0, mask_size * 3 // 8 : mask_size * 5 // 8, mask_size * 3 // 8 : mask_size * 5 // 8, 0] = 10.0
 
     payload = main.segmentation_metadata(
-        boxes, logits, masks, 1280, 720, labels, 0.3, 1, 0.08, mask_grid_size
+        boxes, logits, masks, 1280, 720, labels, 0.3, 1, 0.08,
+        mask_grid_size or mask_size, top_k, mask_size,
     )
 
     segments = json.loads(payload)["segments"]
@@ -268,7 +308,7 @@ VALID_CONFIG = {
             "small": {"backbone": "small-b.tar.gz", "transformer": "small-t.tar.gz"},
             "medium": {"backbone": "medium-b.tar.gz", "transformer": "medium-t.tar.gz"},
         },
-        "segmentation": {"backbone": "seg-b.tar.gz", "transformer": "seg-t.tar.gz"},
+        "segmentation": {"medium": {"backbone": "seg-b.tar.gz", "transformer": "seg-t.tar.gz"}},
     },
     "source": {
         "rtsp_url": "rtsp://127.0.0.1:8554/src1",
@@ -319,7 +359,6 @@ class TestValidBaseline:
 
         assert cfg.task == "detection"
         assert cfg.variant == "small"
-        assert cfg.top_k == 300
         assert cfg.codec == "h264"
         assert cfg.tcp == True
         assert cfg.latency_ms == 100
@@ -336,7 +375,7 @@ class TestValidBaseline:
 
 REJECTED = [
     pytest.param(('model', 'task'), 'tracking', 'model.task must be detection or segmentation', id='task-unsupported'),
-    pytest.param(('model', 'detection', 'small', 'backbone'), '', 'model.detection backbone and transformer must be set', id='backbone-empty'),
+    pytest.param(('model', 'detection', 'small', 'backbone'), '', 'model.detection.small backbone and transformer must be set', id='backbone-empty'),
     pytest.param(('model', 'labels'), '', 'model.labels must be set', id='labels-empty'),
     pytest.param(('source', 'rtsp_url'), 'http://127.0.0.1:8080/stream', 'source.rtsp_url must be an RTSP URL', id='rtsp-url-not-rtsp'),
     pytest.param(('source', 'codec'), 'vp9', 'source.codec must be h264/avc, h265/hevc, or mjpeg', id='codec-unsupported'),
@@ -399,15 +438,15 @@ class TestSegmentationTask:
         cfg = main.load_config(write_full_config(tmp_path, [(("model", "task"), "segmentation")]))
 
         assert cfg.task == "segmentation"
+        assert cfg.variant == "medium"
         assert cfg.backbone == "seg-b.tar.gz"
-        assert cfg.top_k == 200
         assert cfg.max_results == 24
         assert cfg.min_score == pytest.approx(0.3)
 
     def test_a_missing_segmentation_pair_is_rejected(self, tmp_path):
-        overrides = [(("model", "task"), "segmentation"), (("model", "segmentation", "transformer"), "")]
+        overrides = [(("model", "task"), "segmentation"), (("model", "segmentation", "medium", "transformer"), "")]
 
-        with pytest.raises(ValueError, match="model.segmentation backbone and transformer must be set"):
+        with pytest.raises(ValueError, match="model.segmentation.medium backbone and transformer must be set"):
             main.load_config(write_full_config(tmp_path, overrides))
 
     def test_mask_defaults_apply_to_the_segmentation_task(self, tmp_path):
@@ -415,7 +454,7 @@ class TestSegmentationTask:
             "model": {
                 "labels": "labels.txt",
                 "task": "segmentation",
-                "segmentation": {"backbone": "seg-b.tar.gz", "transformer": "seg-t.tar.gz"},
+                "segmentation": {"medium": {"backbone": "seg-b.tar.gz", "transformer": "seg-t.tar.gz"}},
             },
             "source": {"rtsp_url": "rtsp://127.0.0.1:8554/src1"},
             "inference": {"segmentation": {}},
