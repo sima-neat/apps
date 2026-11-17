@@ -10,7 +10,7 @@
 | Languages | C++, Python |
 | Status | stable |
 | Binary Name | high-density-multi-stream-object-detector |
-| Model | yolo26n-det-int8-b1 |
+| Model | yolo26n (w8a8) |
 
 ## Concept
 
@@ -52,7 +52,7 @@ The target rate applies to both Insight video and detection metadata after start
 - For H.265, the computer running the Insight viewer must support hardware HEVC decoding; Chromium does not provide a software decoder fallback for WebRTC H.265.
 - H.265 playback in Chrome on macOS renders, but is not stable. Chrome's WebRTC HEVC decoder can stop producing frames mid-stream and fall back to a null decoder that discards what follows, at which point the tile stalls until the viewer reconnects it.
 - Constant source frame rate, 1280×720 resolution, no B-frames in the selected codec, and a short, regular IDR interval. The validated sources use one IDR per second.
-- The `yolo26n-det-int8-b1.tar.gz` model pack.
+- The `yolo26n` model, variant `w8a8`, from the [model browser](https://developer.sima.ai/models/), and `sima-cli` 2.1.20 or newer to download it.
 
 The application starts all source graphs together. Start every RTSP publisher before starting the application.
 
@@ -72,32 +72,27 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-| Model file | Role | Source |
-| --- | --- | --- |
-| `yolo26n-det-int8-b1.tar.gz` | Default | Direct artifact |
-
-Model packages come from the Model Zoo release below, which can differ from the installed platform version.
+The application uses the YOLO26 nano detection model, `yolo26n`, with the `w8a8` variant, which stores weights and activations as 8-bit integers. Download it and unpack it:
 
 ```bash
-export MODELZOO_VERSION="3.0.0"
-mkdir -p models
-cd models
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26-detection/yolo26n-det-int8-b1.tar.gz"
-cd ..
+sima-cli models download --id yolo26n --variant w8a8
+unzip -o models/yolo26n/w8a8/yolo26n_w8a8_default.zip -d models/yolo26n/w8a8
 ```
 
-Set `model.path` in the selected config to the downloaded package.
+The download is a ZIP file with the model package and its license. `unzip` puts the model package, `models/yolo26n/w8a8/yolo26n_w8a8_mpk.tar.gz`, next to the ZIP file. The application reads only the `.tar.gz` file.
+
+Set `model.path` in the selected config to that `.tar.gz` file, not to the ZIP file.
 
 A relative `model.path` resolves from the config file, not from `prebuilt-apps/`.
-A bare `models/yolo26n-det-int8-b1.tar.gz` therefore points at
-`${APP_DIR}/src/common/models/` and fails with
+A bare `models/yolo26n/w8a8/yolo26n_w8a8_mpk.tar.gz` therefore points at
+`${APP_DIR}/src/common/models/yolo26n/w8a8/` and fails with
 `ModelPack: invalid_archive: archive path does not exist`. Use an absolute path
 to the file downloaded above.
 
 Print it from `prebuilt-apps/`:
 
 ```bash
-echo "$(pwd)/models/yolo26n-det-int8-b1.tar.gz"
+echo "$(pwd)/models/yolo26n/w8a8/yolo26n_w8a8_mpk.tar.gz"
 ```
 
 Then set that value as `model.path` in the selected config. Change only that
