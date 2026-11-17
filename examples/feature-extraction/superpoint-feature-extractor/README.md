@@ -44,7 +44,7 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-SiMa.ai cannot provide a compiled SuperPoint package. SuperPoint's [Magic Leap license](https://github.com/magicleap/SuperPointPretrainedNetwork/blob/master/LICENSE) allows noncommercial research use only and does not allow redistribution, so the model is not available for download. Compile it yourself from its recipe in the [models repository](https://github.com/sima-neat/models/tree/main/models/superpoint), on a machine with the Model Compiler, such as the Neat SDK.
+SuperPoint is licensed by Magic Leap under the [SuperPoint Software License Agreement](https://github.com/magicleap/SuperPointPretrainedNetwork/blob/master/LICENSE), which restricts the software to noncommercial research use and prohibits its distribution to third parties. Redistribution of a compiled SuperPoint model package is therefore prohibited, and the Model Registry does not offer one for download. To run this example, compile the model from its recipe in the [models repository](https://github.com/sima-neat/models/tree/main/models/superpoint) on a machine with the Model Compiler, such as the Neat SDK. Review the license terms to confirm that they permit your intended use.
 
 Follow [Getting started](https://github.com/sima-neat/models/blob/main/docs/getting-started.md) in the models repository with model ID `superpoint` and build profile `w8a8`. That guide converts the checkpoint to ONNX and compiles it into a model package. Two inputs differ from its YOLO26n walkthrough:
 
