@@ -44,11 +44,11 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-SiMa.ai cannot provide a compiled SuperPoint package. SuperPoint's [Magic Leap license](https://github.com/magicleap/SuperPointPretrainedNetwork/blob/master/LICENSE) allows noncommercial research use only and does not allow redistribution, so the model is not available for download. Compile it yourself from its recipe in the [models repository](https://github.com/sima-neat/models/tree/main/models/superpoint), on a machine with the Model Compiler, such as the Neat SDK.
+SiMa.ai cannot provide a compiled SuperPoint package. SuperPoint's [Magic Leap license](https://github.com/magicleap/SuperPointPretrainedNetwork/blob/master/LICENSE) allows noncommercial research use only and does not allow redistribution, so the model is not available for download. Build it yourself from its recipe in the Model Registry's repository, [`models/superpoint`](https://github.com/sima-neat/models/tree/d0b3f921b29be11a8ca80859f0805ba143a2e975/models/superpoint), on a machine with the Model Compiler, such as the Neat SDK.
 
-Follow [Getting started](https://github.com/sima-neat/models/blob/main/docs/getting-started.md) in the models repository with model ID `superpoint` and build profile `w8a8`. That guide converts the checkpoint to ONNX and compiles it into a model package. Two inputs differ from its YOLO26n walkthrough:
+Follow steps 1 to 5 of [Getting started](https://github.com/sima-neat/models/blob/d0b3f921b29be11a8ca80859f0805ba143a2e975/docs/getting-started.md) in that repository, replacing `yolo26n` with `superpoint` and keeping build profile `w8a8`. Steps 4 and 5 convert the checkpoint to ONNX and compile it into a model package; the later performance and accuracy steps are optional. Two things differ from the guide's YOLO26n walkthrough:
 
-- The `w8a8` build calibrates on HPatches images (`hpatches-cal` in [`model.yaml`](https://github.com/sima-neat/models/blob/main/models/superpoint/model.yaml)). The `w8a16` and `w16a16` build profiles need no calibration images.
+- The `w8a8` build calibrates on HPatches images ([`hpatches-cal` in `model.yaml`](https://github.com/sima-neat/models/blob/d0b3f921b29be11a8ca80859f0805ba143a2e975/models/superpoint/model.yaml)). With Dataset Registry access, `model-registry fetch-calibration models/superpoint --build-profile w8a8 --component model` downloads that archive. Without it, pass `--dataset` an archive of HPatches images stored as `hpatches/cal/<sequence>/<n>.ppm`. The `w16a16` build profile needs no calibration images.
 - The compile writes `build/superpoint/w8a8/model/superpoint_w8a8_mpk.tar.gz`.
 
 Copy that file to the DevKit, into `models/superpoint/w8a8/` under `prebuilt-apps/`. The packaged config already points `model.path` at `models/superpoint/w8a8/superpoint_w8a8_mpk.tar.gz`. For another build profile, set `model.path` to its package.
