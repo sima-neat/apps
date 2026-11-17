@@ -26,7 +26,7 @@ Finds SuperPoint feature points in an RTSP stream and sends the annotated video 
   DevKit, or in a Neat SDK container paired with it.
 - Neat Library with SuperPoint BoxDecode support.
 - Insight serving an H.264 RTSP source and receiving the annotated output stream.
-- The SuperPoint model package installed below.
+- A SuperPoint model package you compiled, as Prepare the Model describes.
 
 ## Install Apps
 
@@ -44,20 +44,20 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-The application uses `superpoint` with the `w8a8` variant from the [model browser](https://developer.sima.ai/models/), which stores weights and activations as 8-bit integers. Download it with `sima-cli` 2.1.20 or newer and unpack it:
+SiMa.ai cannot provide a compiled SuperPoint package. SuperPoint's [Magic Leap license](https://github.com/magicleap/SuperPointPretrainedNetwork/blob/master/LICENSE) allows noncommercial research use only and does not allow redistribution, so the model is not available for download. Compile it yourself from its recipe in the [models repository](https://github.com/sima-neat/models/tree/main/models/superpoint), on a machine with the Model Compiler, such as the Neat SDK.
 
-```bash
-sima-cli models download --id superpoint --variant w8a8
-unzip -o models/superpoint/w8a8/superpoint_w8a8_default.zip -d models/superpoint/w8a8
-```
+Follow [Getting started](https://github.com/sima-neat/models/blob/main/docs/getting-started.md) in the models repository with model ID `superpoint` and build profile `w8a8`. That guide converts the checkpoint to ONNX and compiles it into a model package. Two inputs differ from its YOLO26n walkthrough:
 
-The download is a ZIP file with the model package and its license. `unzip` puts the model package, `models/superpoint/w8a8/superpoint_w8a8_mpk.tar.gz`, next to the ZIP file; the packaged config already points `model.path` at it.
+- The `w8a8` build calibrates on HPatches images (`hpatches-cal` in [`model.yaml`](https://github.com/sima-neat/models/blob/main/models/superpoint/model.yaml)). The `w8a16` and `w16a16` build profiles need no calibration images.
+- The compile writes `build/superpoint/w8a8/model/superpoint_w8a8_mpk.tar.gz`.
+
+Copy that file to the DevKit, into `models/superpoint/w8a8/` under `prebuilt-apps/`. The packaged config already points `model.path` at `models/superpoint/w8a8/superpoint_w8a8_mpk.tar.gz`. For another build profile, set `model.path` to its package.
 
 ## Configure
 
 Upload `assets/datasets/tum-rgbd/freiburg1-desk.mp4` to Insight and start it under Media Sources. The clip loops at its native 30 FPS.
 
-Open `${APP_DIR}/src/common/config.yaml`. Set `source.rtsp_url` (for example, `rtsp://<insight-host-ip>:8554/src1`) and `output.insight.host`. `model.path` already points at the model downloaded above; change it only to use another package.
+Open `${APP_DIR}/src/common/config.yaml`. Set `source.rtsp_url` (for example, `rtsp://<insight-host-ip>:8554/src1`) and `output.insight.host`. `model.path` already points at the package you compiled; change it only if you saved it elsewhere or built another build profile.
 
 Set `runtime.frames` to `0` to run until Ctrl-C. The RTSP source must keep the same resolution for the whole run.
 
@@ -102,7 +102,7 @@ investigating even though the run exits successfully.
 
 ## Troubleshooting
 
-- Confirm `model.path` points to the unpacked `superpoint_w8a8_mpk.tar.gz`, not to the downloaded ZIP file.
+- Confirm `model.path` points to the compiled `superpoint_w8a8_mpk.tar.gz`.
 - A missing or incompatible typed SuperPoint contract fails during model construction.
 - Confirm the H.264 RTSP source is running and keeps a stable resolution.
 - Confirm Insight is reachable at the configured host and UDP video port.
