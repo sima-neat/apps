@@ -14,6 +14,37 @@ from tests.utils.output_assertions import (
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
 
+# Every depth_anything_v2_small variant in tests/test-scope.yaml predicts a 518x686 (height x width)
+# depth map, and each saved PNG puts the resized input beside the depth colormap.
+MODEL_HEIGHT, MODEL_WIDTH = 518, 686
+# A depth map changes gradually between neighbouring pixels. Reading the model output with the wrong
+# layout or stride scrambles it, which raises the mean neighbour difference to about half the spread
+# of the values or more; a real depth map stays near 0.02.
+MAX_NEIGHBOUR_DIFFERENCE_RATIO = 0.1
+MIN_DEPTH_SPREAD = 10.0
+
+
+def assert_depth_map_is_coherent(path: Path) -> None:
+    import cv2
+    import numpy as np
+
+    image = cv2.imread(str(path), cv2.IMREAD_COLOR)
+    assert image is not None, f"{path.name} does not decode"
+    assert image.shape[:2] == (MODEL_HEIGHT, 2 * MODEL_WIDTH), (
+        f"{path.name} is {image.shape[1]}x{image.shape[0]}, expected the input and a "
+        f"{MODEL_WIDTH}x{MODEL_HEIGHT} depth map side by side"
+    )
+    depth = cv2.cvtColor(image[:, MODEL_WIDTH:], cv2.COLOR_BGR2GRAY).astype(np.float32)
+    spread = float(depth.std())
+    assert spread >= MIN_DEPTH_SPREAD, f"{path.name} has a flat depth map (std {spread:.1f})"
+    across = float(np.abs(np.diff(depth, axis=1)).mean())
+    down = float(np.abs(np.diff(depth, axis=0)).mean())
+    ratio = max(across, down) / spread
+    assert ratio <= MAX_NEIGHBOUR_DIFFERENCE_RATIO, (
+        f"{path.name} depth map is not spatially coherent: neighbour difference "
+        f"{max(across, down):.1f} is {ratio:.2f} of its spread {spread:.1f}"
+    )
+
 
 @pytest.mark.e2e
 class TestE2E:
@@ -53,6 +84,8 @@ class TestE2E:
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
 
-        assert_saved_frames_are_usable(
+        saved = assert_saved_frames_are_usable(
             tmp_output_dir, len(supported_image_files(test_images_dir))
         )
+        for path in saved:
+            assert_depth_map_is_coherent(path)

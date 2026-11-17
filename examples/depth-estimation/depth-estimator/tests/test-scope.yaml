@@ -1,8 +1,25 @@
 models:
-  depth_anything_v2_vits:
-    source: url
-    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/depth_anything_v2_vits_mpk.tar.gz
-    file: depth_anything_v2_vits_mpk.tar.gz
+  depth_anything_v2_small_w8a8_mixed:
+    source: model-registry
+    name: depth_anything_v2_small
+    variant: w8a8_mixed
+    ref: main
+    spec: latest
+    file: depth_anything_v2_small_w8a8_mixed_mpk.tar.gz
+  depth_anything_v2_small_w16a16:
+    source: model-registry
+    name: depth_anything_v2_small
+    variant: w16a16
+    ref: main
+    spec: latest
+    file: depth_anything_v2_small_w16a16_mpk.tar.gz
+  depth_anything_v2_small_w8a16:
+    source: model-registry
+    name: depth_anything_v2_small
+    variant: w8a16
+    ref: main
+    spec: latest
+    file: depth_anything_v2_small_w8a16_mpk.tar.gz
 unit:
   python: true
   cpp: true
@@ -11,9 +28,15 @@ e2e:
     enabled: true
     requires_rtsp: false
     models:
-    - depth_anything_v2_vits
+    - depth_anything_v2_small_w8a8_mixed
+    variants:
+    - depth_anything_v2_small_w16a16
+    - depth_anything_v2_small_w8a16
   cpp:
     enabled: true
     requires_rtsp: false
     models:
-    - depth_anything_v2_vits
+    - depth_anything_v2_small_w8a8_mixed
+    variants:
+    - depth_anything_v2_small_w16a16
+    - depth_anything_v2_small_w8a16

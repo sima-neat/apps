@@ -27,7 +27,6 @@ struct Config {
   std::string model_path;
   fs::path input_dir;
   fs::path output_dir;
-  int infer_size = 518;
   int max_input_size = 1920;
   int queue_depth = 4;
 };
@@ -35,10 +34,11 @@ struct Config {
 static Config load_config(const fs::path& path) {
   const auto raw = sima_examples::ScalarConfig::load(path);
   Config cfg;
-  cfg.model_path = raw.string_or("model.path", "models/depth_anything_v2_vits_mpk.tar.gz");
+  cfg.model_path = raw.string_or(
+      "model.path",
+      "models/depth_anything_v2_small/w8a8_mixed/depth_anything_v2_small_w8a8_mixed_mpk.tar.gz");
   cfg.input_dir = raw.string_or("io.input_dir", "assets/datasets/coco");
   cfg.output_dir = raw.string_or("io.output_dir", "sandbox/depth-estimator");
-  cfg.infer_size = raw.int_or("runtime.infer_size", 518);
   cfg.max_input_size = raw.int_or("runtime.max_input_size", 1920);
   cfg.queue_depth = raw.int_or("runtime.queue_depth", 4);
   return cfg;
@@ -100,28 +100,20 @@ static float read_elem(const uint8_t* data, size_t idx, simaai::neat::TensorDTyp
   return 0.0f;
 }
 
+// Colors one row-major height x width depth map; larger values are closer and come out brighter.
 static bool depth_tensor_to_colormap(const simaai::neat::Tensor& t, cv::Mat& bgr_out) {
   if (!t.is_dense())
     return false;
 
-  // Determine H, W from tensor shape by collecting non-unit dimensions.
-  // Shape [1,518,1,518] → spatial dims are 518×518.
-  int w = 0, h = 0;
-  {
-    std::vector<int> spatial;
-    for (auto d : t.shape)
-      if (d > 1)
-        spatial.push_back(static_cast<int>(d));
-    if (spatial.size() >= 2) {
-      h = spatial[0];
-      w = spatial[1];
-    } else if (spatial.size() == 1) {
-      h = spatial[0];
-      w = spatial[0];
-    }
-  }
-  if (w <= 0 || h <= 0)
+  // The model returns one depth map, such as [1,518,686]: its non-unit dimensions are H, W.
+  std::vector<int> spatial;
+  for (auto d : t.shape)
+    if (d > 1)
+      spatial.push_back(static_cast<int>(d));
+  if (spatial.size() != 2)
     return false;
+  const int h = spatial[0];
+  const int w = spatial[1];
 
   const size_t total_elems = static_cast<size_t>(w) * h;
   const size_t elem_sz = dtype_bytes(t.dtype);
@@ -139,7 +131,7 @@ static bool depth_tensor_to_colormap(const simaai::neat::Tensor& t, cv::Mat& bgr
   for (int y = 0; y < h; ++y) {
     float* row = depth_f.ptr<float>(y);
     for (int x = 0; x < w; ++x) {
-      size_t idx = static_cast<size_t>(x) * h + y;
+      size_t idx = static_cast<size_t>(y) * w + x;
       float v = read_elem(raw.data(), idx, t.dtype);
       row[x] = v;
       minv = std::min(minv, v);
@@ -204,7 +196,6 @@ int main(int argc, char** argv) {
   }
   std::cout << "Found " << images.size() << " images\n";
 
-  // Configure model (518x518 input from MPK transform table)
   std::cout << "[BUILD] Loading model...\n";
   simaai::neat::Model::Options model_opt;
   model_opt.preprocess.kind = simaai::neat::InputKind::Image;
@@ -212,17 +203,22 @@ int main(int argc, char** argv) {
   model_opt.preprocess.input_max_width = cfg.max_input_size;
   model_opt.preprocess.input_max_height = cfg.max_input_size;
   model_opt.preprocess.input_max_depth = 3;
-  // Depth Anything V2 expects bicubic resizing; EV74 resizes to the model input.
+  // Depth Anything V2 expects a bicubic stretch to the model input, whose size Neat reads from
+  // the package, then ImageNet mean and std. Neat normalizes only when asked, so set the preset.
   model_opt.preprocess.resize.enable = simaai::neat::AutoFlag::On;
   model_opt.preprocess.resize.mode = simaai::neat::ResizeMode::Stretch;
-  model_opt.preprocess.resize.width = cfg.infer_size;
-  model_opt.preprocess.resize.height = cfg.infer_size;
   model_opt.preprocess.resize.scaling_type = "BICUBIC";
+  model_opt.preprocess.preset = simaai::neat::NormalizePreset::ImageNet;
   simaai::neat::Model model(cfg.model_path, model_opt);
-  std::cout << "[BUILD] Model loaded\n";
+  const simaai::neat::PreprocessContract contract = model.resolved_preprocess_plan().mla_contract;
+  if (contract.width <= 0 || contract.height <= 0) {
+    std::cerr << "Error: model input size is unresolved\n";
+    return 1;
+  }
+  std::cout << "[BUILD] Model loaded, input " << contract.width << "x" << contract.height << "\n";
 
   // Seed the runner so the Model planner can validate image shape and caps once.
-  cv::Mat dummy_rgb(cfg.infer_size, cfg.infer_size, CV_8UC3, cv::Scalar(0, 0, 0));
+  cv::Mat dummy_rgb(contract.height, contract.width, CV_8UC3, cv::Scalar(0, 0, 0));
   simaai::neat::Tensor dummy_input = simaai::neat::Tensor::from_cv_mat(
       dummy_rgb, simaai::neat::ImageSpec::PixelFormat::RGB, simaai::neat::TensorMemory::EV74);
 

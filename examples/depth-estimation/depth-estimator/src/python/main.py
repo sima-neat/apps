@@ -13,38 +13,17 @@ def is_image(path: Path) -> bool:
     return path.suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp"}
 
 
-def tensor_to_numpy(t: pyneat.Tensor) -> np.ndarray:
-    return np.asarray(t.to_numpy(copy=True))
-
-
-def _read_elem(raw: np.ndarray, idx: int, dtype) -> float:
-    return float(raw[idx])
-
-
 def depth_tensor_to_colormap(t: pyneat.Tensor) -> np.ndarray:
+    """Color one row-major height x width depth map; larger (closer) values come out brighter."""
     if not t.is_dense():
         raise ValueError("depth output tensor is not dense")
 
-    arr = tensor_to_numpy(t).reshape(-1)
     shape = [int(x) for x in t.shape]
     spatial = [d for d in shape if d > 1]
-    if len(spatial) >= 2:
-        h, w = spatial[0], spatial[1]
-    elif len(spatial) == 1:
-        h = w = spatial[0]
-    else:
-        raise ValueError(f"cannot infer spatial dims from shape={shape}")
-
-    total = h * w
-    if arr.size < total:
-        raise ValueError(f"tensor payload too small: {arr.size} < {total}")
-
-    # Match the C++ example's indexing (column-major unpack from model output).
-    depth = np.zeros((h, w), dtype=np.float32)
-    for y in range(h):
-        for x in range(w):
-            idx = x * h + y
-            depth[y, x] = _read_elem(arr, idx, t.dtype)
+    if len(spatial) != 2:
+        raise ValueError(f"expected one height x width depth map, got shape={shape}")
+    h, w = spatial
+    depth = np.asarray(t.to_numpy(copy=True), dtype=np.float32).reshape(h, w)
 
     minv = float(np.min(depth))
     maxv = float(np.max(depth))
@@ -68,12 +47,13 @@ def main() -> int:
 
     with args.config.open("r", encoding="utf-8") as handle:
         raw = yaml.safe_load(handle) or {}
-    model_path = raw.get("model", {}).get("path", "models/depth_anything_v2_vits_mpk.tar.gz")
+    model_path = raw.get("model", {}).get(
+        "path", "models/depth_anything_v2_small/w8a8_mixed/depth_anything_v2_small_w8a8_mixed_mpk.tar.gz"
+    )
     io_cfg = raw.get("io", {})
     runtime = raw.get("runtime", {})
     input_dir = Path(io_cfg.get("input_dir", "assets/datasets/coco"))
     output_dir = Path(io_cfg.get("output_dir", "sandbox/depth-estimator"))
-    infer_size = int(runtime.get("infer_size", 518))
     max_input_size = int(runtime.get("max_input_size", 1920))
     queue_depth = int(runtime.get("queue_depth", 4))
     if not input_dir.is_dir():
@@ -94,15 +74,19 @@ def main() -> int:
         opt.preprocess.input_max_width = max_input_size
         opt.preprocess.input_max_height = max_input_size
         opt.preprocess.input_max_depth = 3
-        # Depth Anything V2 expects bicubic resizing; EV74 resizes to the model input.
+        # Depth Anything V2 expects a bicubic stretch to the model input, whose size Neat reads from
+        # the package, then ImageNet mean and std. Neat normalizes only when asked, so set the preset.
         opt.preprocess.resize.enable = pyneat.AutoFlag.On
         opt.preprocess.resize.mode = pyneat.ResizeMode.Stretch
-        opt.preprocess.resize.width = infer_size
-        opt.preprocess.resize.height = infer_size
         opt.preprocess.resize.scaling_type = "BICUBIC"
+        opt.preprocess.preset = pyneat.NormalizePreset.ImageNet
         model = pyneat.Model(model_path, opt)
+        contract = model.resolved_preprocess_plan().mla_contract
+        model_w, model_h = int(contract.width), int(contract.height)
+        if model_w <= 0 or model_h <= 0:
+            raise RuntimeError("model input size is unresolved")
 
-        dummy = np.zeros((infer_size, infer_size, 3), dtype=np.uint8)
+        dummy = np.zeros((model_h, model_w, 3), dtype=np.uint8)
         t_dummy = pyneat.Tensor.from_numpy(dummy, copy=True, image_format=pyneat.PixelFormat.RGB)
         run_opt = pyneat.RunOptions()
         run_opt.queue_depth = queue_depth
