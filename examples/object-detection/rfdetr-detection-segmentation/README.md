@@ -201,25 +201,15 @@ as `RF-DETR detection configuration is valid`.
 
 ## Performance
 
-End-to-end throughput measured on Modalix with the Python application and no other workload on the board. Each figure is the average inference output rate, in FPS, over at least 20 seconds of continuous processing. Detector input streams run at 300 FPS for 720p and 1080p and at 60 FPS for 4K. Segmenter input streams run at 360 FPS for 720p H.264 and H.265, 60 FPS for 720p MJPEG, 120 FPS for 1080p, and 60 FPS for 4K, and segmentation uses `mask_grid_size: 108`.
+End-to-end throughput measured on Modalix with the Python application and no other workload on the board. Each figure is the average inference output rate, in FPS, over at least 20 seconds of continuous processing of a 720p input stream running at 300 FPS. Every size runs its default build, and segmentation sets `mask_grid_size` to the model's mask size.
 
-| Input resolution | Codec | Nano detector | Small detector | Medium detector | Large detector | Medium segmenter |
-| --- | --- | ---: | ---: | ---: | ---: | ---: |
-| 720p | H.264 | 208 | 121 | 82 | 43 | 31 |
-| 720p | H.265 | 212 | 121 | 82 | 43 | 31 |
-| 720p | MJPEG | 186 | 121 | 81 | 43 | 31 |
-| 1080p | H.264 | 211 | 121 | 82 | 43 | 32 |
-| 1080p | H.265 | 205 | 120 | 82 | 43 | 31 |
-| 4K | H.264 | 62\* | 61\* | 62\* | 43 | 23 |
+| Input resolution | Codec | Nano detector | Small detector | Medium detector | Large detector | Nano segmenter | Small segmenter | Medium segmenter |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 720p | H.264 | 189 | 94 | 72 | 35 | 87 | 74 | 32 |
+| 720p | H.265 | 192 | 98 | 72 | 35 | 87 | 73 | 31 |
+| 720p | MJPEG | 188 | 98 | 72 | 35 | 87 | 74 | 32 |
 
-\* Limited by the 60 FPS input stream.
-
-These figures were measured with the Model Zoo packages this example used
-before the Model Registry. With the registry packages at 1080p H.264, the medium
-detector measured 81 FPS, the large detector 43 FPS, and the medium segmenter
-32 FPS, within 2% of the table. The nano and small sizes, including the nano and
-small segmenters, have not been measured at full rate with the registry
-packages; at a 30 FPS source every size keeps up with the source.
+The MJPEG runs set `source.fps: 120`. With the probed 300 FPS, the H.264 encoder that re-encodes MJPEG for Insight stops at startup; the override changes only the rate that encoder is given, and the model still processes every frame the stream delivers.
 
 ## Source Files
 
