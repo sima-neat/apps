@@ -40,7 +40,7 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-The [model browser](https://developer.sima.ai/models/) has the YOLO26 detection models in five sizes, from n (nano) to x (extra large). The default is `yolo26m` with the `w16a16` variant, the BF16 build of the model. Download it and unpack it:
+The [model browser](https://developer.sima.ai/models/) has the YOLO26 detection models in five sizes, from n (nano) to x (extra large). The default is `yolo26m` with the `w16a16` variant, the BF16 build of the model. Download it and unpack it with `sima-cli` 2.1.20 or newer:
 
 ```bash
 sima-cli models download --id yolo26m --variant w16a16
