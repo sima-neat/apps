@@ -26,7 +26,9 @@ MLA_FREQ = Path("/sys/class/devfreq/5000000.mla/cur_freq")
 @dataclass(frozen=True)
 class ModelRow:
     model_id: str
-    package: str  # Path under the Model Zoo's models/modalix/ directory.
+    # Path under --models-dir: the Model Zoo's models/modalix/ layout, or <id>/<variant>/ for a
+    # model browser package unpacked as its README documents.
+    package: str
     used_by: str
     decode_type: str | None = None
 
@@ -223,8 +225,9 @@ GROUPS: tuple[tuple[str, tuple[ModelRow, ...]], ...] = (
     (
         "Depth, Keypoints, Pose, And Anomaly",
         (
-            ModelRow("depth_anything_v2_vits",
-                     "depth_anything_v2_vits_mpk.tar.gz",
+            ModelRow("depth_anything_v2_small_w8a8_mixed",
+                     "depth_anything_v2_small/w8a8_mixed/"
+                     "depth_anything_v2_small_w8a8_mixed_mpk.tar.gz",
                      "depth-estimator"),
             ModelRow("midas_v21_small_256",
                      "midas_v21_small_256_mpk.tar.gz",

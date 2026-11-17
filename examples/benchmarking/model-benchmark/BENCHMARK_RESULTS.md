@@ -107,7 +107,7 @@ The BoxDecode row builds a 160x160 mask on the A65 for every detection it keeps,
 
 | Model ID | Package | Used By | Postprocess | Outputs | Latency ms (mean / p50 / p99) | FPS |
 | --- | --- | --- | --- | ---: | ---: | ---: |
-| `depth_anything_v2_vits` | `depth_anything_v2_vits_mpk.tar.gz` | depth-estimator | `detessdequant` | 1 | 20.80 / 20.61 / 20.84 | 55.8 |
+| `depth_anything_v2_small_w8a8_mixed` | `depth_anything_v2_small_w8a8_mixed_mpk.tar.gz` | depth-estimator | Not measured: not yet run on a DevKit | | | |
 | `midas_v21_small_256` | `midas_v21_small_256_mpk.tar.gz` | mipi-multi-model | `detessdequant` | 1 | 2.85 / 2.85 / 2.95 | 1340.8 |
 | `superpoint` | `superpoint_mpk.tar.gz` | superpoint-feature-extractor | `detessdequant` | 2 | 7.38 / 7.36 / 8.13 | 494.0 |
 | `blazepose_ghum_heavy_w16a16` | `blazepose_ghum_heavy_w16a16_mpk.tar.gz` | multi-stream-blazepose3d, parallel-apps | `cast` | 3 | 3.66 / 3.66 / 3.86 | 415.9 |

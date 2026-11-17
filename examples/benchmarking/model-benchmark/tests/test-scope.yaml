@@ -10,10 +10,13 @@ models:
     source: url
     url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/resnet_50_mpk.tar.gz
     file: resnet_50_mpk.tar.gz
-  depth_anything_v2_vits:
-    source: url
-    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/depth_anything_v2_vits_mpk.tar.gz
-    file: depth_anything_v2_vits_mpk.tar.gz
+  depth_anything_v2_small_w8a8_mixed:
+    source: model-registry
+    name: depth_anything_v2_small
+    ref: main
+    spec: latest
+    variant: w8a8_mixed
+    file: depth_anything_v2_small_w8a8_mixed_mpk.tar.gz
   retinaface_mobilenet25:
     source: url
     url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/retinaface_mobilenet25_mod_0_mpk.tar.gz
@@ -95,6 +98,8 @@ e2e:
     requires_rtsp: false
     models:
       - yolo26m_w8a8_mpk
+    variants:
+      - depth_anything_v2_small_w8a8_mixed
   cpp:
     enabled: false
     reason: Python-only benchmark example.
