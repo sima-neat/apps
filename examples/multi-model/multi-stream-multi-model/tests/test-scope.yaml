@@ -3,10 +3,13 @@ models:
     source: url
     url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo_11s_mpk.tar.gz
     file: yolo_11s_mpk.tar.gz
-  yolo_11s_seg:
-    source: url
-    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo_11s_seg_mpk.tar.gz
-    file: yolo_11s_seg_mpk.tar.gz
+  yolo26s_seg_w8a16:
+    source: model-registry
+    name: yolo26s_seg
+    variant: w8a16
+    ref: main
+    spec: latest
+    file: yolo26s_seg_w8a16_mpk.tar.gz
   yolo26m-pose-int8-b1:
     source: url
     url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26-pose/yolo26m-pose-int8-b1.tar.gz
@@ -24,7 +27,7 @@ e2e:
     requires_rtsp: true
     models:
     - yolo_11s
-    - yolo_11s_seg
+    - yolo26s_seg_w8a16
     - yolo26m-pose-int8-b1
     - yolo26m-det-int8-b1
   cpp:
@@ -32,6 +35,6 @@ e2e:
     requires_rtsp: true
     models:
     - yolo_11s
-    - yolo_11s_seg
+    - yolo26s_seg_w8a16
     - yolo26m-pose-int8-b1
     - yolo26m-det-int8-b1

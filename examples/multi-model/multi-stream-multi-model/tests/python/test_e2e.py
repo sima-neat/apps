@@ -29,7 +29,7 @@ E2E_INSIGHT_HOST = "127.0.0.1"
 # are still checked below.
 STREAM_SLOTS = [
     ("detection", "yolov8", "yolo_11s_mpk.tar.gz", "object-detection", "objects", 1),
-    ("segmentation", "yolov8", "yolo_11s_seg_mpk.tar.gz", "segmentation", "segments", 1),
+    ("segmentation", "yolo26", "yolo26s_seg_w8a16_mpk.tar.gz", "segmentation", "segments", 1),
     ("pose", "yolo26", "yolo26m-pose-int8-b1.tar.gz", "pose-estimation", "poses", 0),
     ("detection", "yolo26", "yolo26m-det-int8-b1.tar.gz", "object-detection", "objects", 1),
 ]
