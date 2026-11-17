@@ -48,10 +48,11 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-The YOLO26, YOLOv8, and YOLO11 OBB models each come in five sizes, n (nano) through x (extra large), on the `develop` branch of the [Model Registry](https://developer.sima.ai/models/?branch=develop). Download one with its ID and variant:
+The YOLO26, YOLOv8, and YOLO11 OBB models each come in five sizes, n (nano) through x (extra large), in the [model browser](https://developer.sima.ai/models/). Download one with its ID and variant using `sima-cli` 2.1.20 or newer, and unpack it:
 
 ```bash
-sima-cli models download --id yolo26n_obb --variant w8a8 --branch develop
+sima-cli models download --id yolo26n_obb --variant w8a8
+unzip -o models/yolo26n_obb/w8a8/yolo26n_obb_w8a8_default.zip -d models/yolo26n_obb/w8a8
 ```
 
 | ID | Variants | `model.family` | Role |
@@ -64,7 +65,7 @@ sima-cli models download --id yolo26n_obb --variant w8a8 --branch develop
 | `yolov8{n,s,m,l,x}_obb` | `w8a8`, `w16a16` | `yolov8` | Supported |
 | `yolo11{n,s,m,l,x}_obb` | `w8a8`, `w16a16` | `yolo11` | Supported |
 
-The package lands at `models/<id>/<variant>/<id>_<variant>_mpk.tar.gz`. Set `model.path` in the config to that file and `model.family` to the family in the table. YOLO26 needs no overlap removal. For YOLOv8 and YOLO11 the app removes overlapping boxes with rotated non-maximum suppression.
+The download is a ZIP file with the model package and its license. `unzip` puts the model package at `models/<id>/<variant>/<id>_<variant>_mpk.tar.gz`. Set `model.path` in the config to that `.tar.gz` file, not to the ZIP file, and `model.family` to the family in the table. YOLO26 needs no overlap removal. For YOLOv8 and YOLO11 the app removes overlapping boxes with rotated non-maximum suppression.
 
 Larger sizes find more objects but run slower. All streams share one detector, so its rate is divided among them. On four 720p 30 fps streams, `n` and `s` with `w8a8` detect on every frame, while `m`, `l`, and `x` detect on fewer frames per stream, and the `w16a16` and `w8a16` variants on fewer still. A slower detector also lowers the video frame rate in Insight. For smooth live video with a larger model, use fewer streams.
 

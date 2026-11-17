@@ -2,56 +2,56 @@ models:
   yolo26n_obb_w8a8_mpk:
     source: model-registry
     name: yolo26n_obb
-    ref: develop
+    ref: main
     spec: latest
     variant: w8a8
     file: yolo26n_obb_w8a8_mpk.tar.gz
   yolo26n_obb_w16a16_mpk:
     source: model-registry
     name: yolo26n_obb
-    ref: develop
+    ref: main
     spec: latest
     variant: w16a16
     file: yolo26n_obb_w16a16_mpk.tar.gz
   yolo26s_obb_w8a8_mpk:
     source: model-registry
     name: yolo26s_obb
-    ref: develop
+    ref: main
     spec: latest
     variant: w8a8
     file: yolo26s_obb_w8a8_mpk.tar.gz
   yolo26m_obb_w8a8_mpk:
     source: model-registry
     name: yolo26m_obb
-    ref: develop
+    ref: main
     spec: latest
     variant: w8a8
     file: yolo26m_obb_w8a8_mpk.tar.gz
   yolo26l_obb_w8a8_mpk:
     source: model-registry
     name: yolo26l_obb
-    ref: develop
+    ref: main
     spec: latest
     variant: w8a8
     file: yolo26l_obb_w8a8_mpk.tar.gz
   yolo26x_obb_w8a8_mpk:
     source: model-registry
     name: yolo26x_obb
-    ref: develop
+    ref: main
     spec: latest
     variant: w8a8
     file: yolo26x_obb_w8a8_mpk.tar.gz
   yolov8n_obb_w8a8_mpk:
     source: model-registry
     name: yolov8n_obb
-    ref: develop
+    ref: main
     spec: latest
     variant: w8a8
     file: yolov8n_obb_w8a8_mpk.tar.gz
   yolo11n_obb_w8a8_mpk:
     source: model-registry
     name: yolo11n_obb
-    ref: develop
+    ref: main
     spec: latest
     variant: w8a8
     file: yolo11n_obb_w8a8_mpk.tar.gz
