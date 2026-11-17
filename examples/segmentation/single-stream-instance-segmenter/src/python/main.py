@@ -468,28 +468,32 @@ def nv16_yuy2(tensor):
     )
 
 
+def packed_yuv420(tensor, name: str):
+    """An NV12 or I420 frame as one width x (height * 3 / 2) image with its planes back to back.
+
+    The decoder pads its frames: a 1080p frame has 2048-byte rows and its UV plane starts after
+    1088 rows, and a 720p UV plane starts after 768 rows. contiguous() packs the planes, so the
+    bytes can be read as one image; slicing the raw payload instead shears or recolors it.
+    """
+    width = tensor_dim(tensor, "width")
+    height = tensor_dim(tensor, "height")
+    payload = np.frombuffer(tensor.contiguous().copy_payload_bytes(), dtype=np.uint8)
+    expected = width * height * 3 // 2
+    if payload.size < expected:
+        raise RuntimeError(f"{name} payload too small: {payload.size} < {expected}")
+    return payload[:expected].reshape((height * 3 // 2, width))
+
+
 def tensor_bgr_from_decoded(tensor):
     if tensor.image_format() == pyneat.PixelFormat.NV16:
         return np.ascontiguousarray(cv2.cvtColor(nv16_yuy2(tensor), cv2.COLOR_YUV2BGR_YUY2))
 
     if tensor.is_nv12():
-        width = tensor_dim(tensor, "width")
-        height = tensor_dim(tensor, "height")
-        payload = np.frombuffer(tensor.copy_payload_bytes(), dtype=np.uint8)
-        expected = width * height * 3 // 2
-        if payload.size < expected:
-            raise RuntimeError(f"NV12 payload too small: {payload.size} < {expected}")
-        nv12 = payload[:expected].reshape((height * 3 // 2, width))
+        nv12 = packed_yuv420(tensor, "NV12")
         return np.ascontiguousarray(cv2.cvtColor(nv12, cv2.COLOR_YUV2BGR_NV12))
 
     if tensor.is_i420():
-        width = tensor_dim(tensor, "width")
-        height = tensor_dim(tensor, "height")
-        payload = np.frombuffer(tensor.copy_payload_bytes(), dtype=np.uint8)
-        expected = width * height * 3 // 2
-        if payload.size < expected:
-            raise RuntimeError(f"I420 payload too small: {payload.size} < {expected}")
-        i420 = payload[:expected].reshape((height * 3 // 2, width))
+        i420 = packed_yuv420(tensor, "I420")
         return np.ascontiguousarray(cv2.cvtColor(i420, cv2.COLOR_YUV2BGR_I420))
 
     frame = tensor_to_numpy(tensor)
@@ -560,13 +564,7 @@ def host_frame_copy(sample):
         return nv16_yuy2(tensor)
     if not tensor.is_nv12():
         return tensor_bgr_from_decoded(tensor)
-    width = tensor_dim(tensor, "width")
-    height = tensor_dim(tensor, "height")
-    payload = np.frombuffer(tensor.copy_payload_bytes(), dtype=np.uint8)
-    expected = width * height * 3 // 2
-    if payload.size < expected:
-        raise RuntimeError(f"NV12 payload too small: {payload.size} < {expected}")
-    return payload[:expected].reshape((height * 3 // 2, width))
+    return packed_yuv420(tensor, "NV12")
 
 
 def bgr_from_host_frame(frame):

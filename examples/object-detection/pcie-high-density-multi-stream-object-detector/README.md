@@ -10,7 +10,7 @@
 | Languages | C++ |
 | Status | stable |
 | Binary Name | pcie-high-density-multi-stream-object-detector |
-| Model | yolo26n-det-int8-b1 |
+| Model | yolo26n (w8a8) |
 
 ## Concept
 
@@ -64,19 +64,18 @@ To build the card application yourself, see
 
 ## Prepare the Model
 
-Download the model on the Modalix PCIe Card:
+Download the YOLO26 nano detection model, `yolo26n`, with the `w8a8` variant from the [model browser](https://developer.sima.ai/models/) on the Modalix PCIe Card, and unpack it. The download needs `sima-cli` 2.1.20 or newer:
 
 ```bash
-export MODELZOO_VERSION="3.0.0"
 mkdir -p /workspace/models
-cd /workspace/models
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26-detection/yolo26n-det-int8-b1.tar.gz"
+sima-cli models download --id yolo26n --variant w8a8 --output /workspace/models
+unzip -o /workspace/models/yolo26n/w8a8/yolo26n_w8a8_default.zip -d /workspace/models/yolo26n/w8a8
 ```
 
-Use this absolute path for `model.path` in the configuration:
+The download is a ZIP file with the model package and its license. Use the absolute path of the unpacked package for `model.path` in the configuration, not the ZIP file:
 
 ```text
-/workspace/models/yolo26n-det-int8-b1.tar.gz
+/workspace/models/yolo26n/w8a8/yolo26n_w8a8_mpk.tar.gz
 ```
 
 ## Configure
@@ -194,7 +193,7 @@ ssh sima@<card-ethernet-address> journalctl -b -1 -k
 
 Each profile allocates decoder pools and PCIe receive pools from the card's CMA region
 (`CmaTotal` in `/proc/meminfo`, 1.8 GB on the Modalix PCIe Card). Approximate steady-state
-usage measured with `yolo26n-det-int8-b1`:
+usage with `yolo26n` (`w8a8`):
 
 | Profile | CMA in use |
 | --- | ---: |

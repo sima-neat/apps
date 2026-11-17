@@ -29,7 +29,7 @@ using sima_examples::testing::write_scratch_config;
 
 namespace {
 
-constexpr const char* kModelPath = "models/yolo26n-det-int8-b1.tar.gz";
+constexpr const char* kModelPath = "models/yolo26n/w8a8/yolo26n_w8a8_mpk.tar.gz";
 
 struct TestBox {
   float x1 = 0.0f;

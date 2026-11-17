@@ -84,6 +84,7 @@ task.
   - Read `docs/reference/boxdecode_decode_types.md`
   - Treat `BoxDecodeType::Ssd` as a selector for the supported prepared SSD recipes, not as a generic shape-inferred SSD decoder
   - Inspect the SuperPoint profile and output format instead of decoding its result layout from tensor shape alone
+  - `decode_superpoint` keypoints are model-input pixels, not source-frame pixels, until sima-neat/core#1328 is fixed; map them onto the source frame with the width and height of `Model::resolved_preprocess_plan().mla_contract` before drawing, as `examples/feature-extraction/superpoint-feature-extractor` does
 - Native H.264, H.265/HEVC, JPEG, and MJPEG decoding and encoding
   - Inspect `include/nodes/sima/SimaDecode.h` and `include/nodes/sima/SimaEncode.h`
   - Prefer codec-neutral `payload_type`, `VideoSenderOptions::FromRaw(...)`, and `VideoSenderOptions::Passthrough(codec)` in new encoded-media code
