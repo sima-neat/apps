@@ -34,7 +34,7 @@ def load_config(path: Path) -> argparse.Namespace:
     insight = raw.get("output", {}).get("insight", {})
     runtime = raw.get("runtime", {})
     config = argparse.Namespace(
-        model=Path(model.get("path", "models/superpoint_mpk.tar.gz")),
+        model=Path(model.get("path", "models/superpoint/w8a8/superpoint_w8a8_mpk.tar.gz")),
         rtsp_url=str(source.get("rtsp_url", "")),
         tcp=bool(source.get("tcp", True)),
         latency_ms=int(source.get("latency_ms", 100)),

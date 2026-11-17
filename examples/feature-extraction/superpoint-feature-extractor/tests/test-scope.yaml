@@ -1,8 +1,11 @@
 models:
-  superpoint:
-    source: url
-    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/superpoint_mpk.tar.gz
-    file: superpoint_mpk.tar.gz
+  superpoint_w8a8_mpk:
+    source: model-registry
+    name: superpoint
+    ref: main
+    spec: latest
+    variant: w8a8
+    file: superpoint_w8a8_mpk.tar.gz
 unit:
   python: true
   cpp: true
@@ -10,8 +13,8 @@ e2e:
   python:
     enabled: true
     requires_rtsp: true
-    models: [superpoint]
+    models: [superpoint_w8a8_mpk]
   cpp:
     enabled: true
     requires_rtsp: true
-    models: [superpoint]
+    models: [superpoint_w8a8_mpk]
