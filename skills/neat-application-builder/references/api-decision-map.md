@@ -43,6 +43,14 @@ holds for MJPEG too: forward RTSP MJPEG to Insight with
 inputs drop late packets by default (`drop_on_latency`); disable it only when
 every frame matters more than freshness.
 
+When application code reads a decoded frame on the host (a crop for a VLM, an
+annotated snapshot), expect decoder padding: a 1080p NV12 frame has 2048-byte
+rows and its UV plane starts after 1088 rows. Pack it with
+`tensor.contiguous().copy_payload_bytes()`, or read each plane at its
+`byte_offset` and `strides_bytes`; slicing `copy_payload_bytes()` to
+`width * height * 3 / 2` corrupts the image. Check host-side frames at 1080p,
+because 720p rows are unpadded and only the colors shift there.
+
 ## Camera source
 
 - MIPI/CSI camera: `nodes::CameraInput` / `pyneat.nodes.camera_input`. Capture
