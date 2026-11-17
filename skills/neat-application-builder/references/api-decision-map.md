@@ -37,7 +37,9 @@ Use `Graph` when:
 
 With encoded RTSP input, decide whether to decode for inference, forward the
 encoded stream to `VideoSender`, or branch to both. Use the same codec across
-`RtspEncodedInput`, `SimaDecode`, and `VideoSenderOptions::Passthrough`. RTSP
+`RtspEncodedInput`, `SimaDecode`, and `VideoSenderOptions::Passthrough`. This
+holds for MJPEG too: forward RTSP MJPEG to Insight with
+`Passthrough(RtspCodec::MJPEG)` instead of decoding and re-encoding it. RTSP
 inputs drop late packets by default (`drop_on_latency`); disable it only when
 every frame matters more than freshness.
 

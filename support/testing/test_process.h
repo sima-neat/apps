@@ -38,6 +38,9 @@ std::vector<std::string> rtsp_h264_urls_from_env();
 // Read SIMANEAT_TEST_RTSP_H265_URLS, falling back to SIMANEAT_TEST_RTSP_H265_URL.
 std::vector<std::string> rtsp_h265_urls_from_env();
 
+// Read SIMANEAT_TEST_RTSP_MJPEG_URLS, falling back to SIMANEAT_TEST_RTSP_MJPEG_URL.
+std::vector<std::string> rtsp_mjpeg_urls_from_env();
+
 // Read a required environment variable.  If unset and
 // SIMANEAT_APPS_TEST_REQUIRE_E2E=1, print an error and exit(1).
 // Otherwise print a skip message and exit(77).
