@@ -25,6 +25,13 @@ Required MPK Cast/Quant/Tess adapters remain automatic; `preprocess.enable = Off
 does not select MLA-only execution. See Core's
 [Model guide](https://github.com/sima-neat/core/blob/develop/docs/develop-apps/development-workflow/model.mdx#raw-tensor-input).
 
+For image input, leave `preprocess.resize` width and height unset to stretch to
+the package's input size. Normalization is never taken from the package: Neat
+ignores its `input_range` and a Model Zoo `0_preproc.json`, and without
+`preprocess.preset` or `preprocess.normalize` the MLA receives raw pixel values.
+Set the mean and standard deviation the model's README or registry
+preprocessing names, for example `NormalizePreset::ImageNet`.
+
 Read outputs by the contract `output_specs()` reports:
 
 - Outputs carry the model package's logical shape (for example `[1, 1000]` for
