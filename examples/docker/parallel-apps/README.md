@@ -54,8 +54,8 @@ Four of the models come from the [model browser](https://developer.sima.ai/model
 mkdir -p models/neat-segmentation models/neat-detection models/neat-tracking models/neat-pose models/neat-drone models/neat-blazepose
 sima-cli models download --id yolo26m_seg --variant w8a8 --output models/neat-segmentation
 unzip -o models/neat-segmentation/yolo26m_seg/w8a8/yolo26m_seg_w8a8_default.zip -d models/neat-segmentation/yolo26m_seg/w8a8
-sima-cli models download --id rf_detr_small --variant w8a8_w16a16 --output models/neat-detection
-unzip -o models/neat-detection/rf_detr_small/w8a8_w16a16/rf_detr_small_w8a8_w16a16_default.zip -d models/neat-detection/rf_detr_small/w8a8_w16a16
+sima-cli models download --id rf_detr_small --variant w8a8_mixed_w16a16 --output models/neat-detection
+unzip -o models/neat-detection/rf_detr_small/w8a8_mixed_w16a16/rf_detr_small_w8a8_mixed_w16a16_default.zip -d models/neat-detection/rf_detr_small/w8a8_mixed_w16a16
 sima-cli models download --id yolo26m --variant w8a8 --output models/neat-tracking
 unzip -o models/neat-tracking/yolo26m/w8a8/yolo26m_w8a8_default.zip -d models/neat-tracking/yolo26m/w8a8
 sima-cli models download --id yolo26m_pose --variant w8a8 --output models/neat-pose
