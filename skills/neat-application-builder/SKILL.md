@@ -54,7 +54,10 @@ observed results, and explicit gaps when required evidence is unavailable.
 
 ## Related work
 
-Model preparation belongs to the public Model Compiler or LLiMa documentation.
+When the user names a model, check the Model Browser (`sima-cli models
+--help`) for a compiled package that matches the variant and target, and use
+it if one exists. Otherwise prepare the model; model preparation belongs to
+the public Model Compiler or LLiMa documentation.
 Viewer and device operations belong to Insight and Neat Development Environment
 documentation. Applications on a PCIe host use the `simaai::neat::pcie` and
 `pyneatpcie` APIs and the `neat-pcie-application-builder` skill. Use the
