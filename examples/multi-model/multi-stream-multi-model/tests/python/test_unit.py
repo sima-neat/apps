@@ -24,10 +24,10 @@ if str(PYTHON_DIR) not in sys.path:
 pytestmark = pytest.mark.unit
 
 DEFAULT_STREAMS = [
-    ("rtsp://127.0.0.1:8554/src1", "detection", "yolov8", "models/yolo_11s_mpk.tar.gz"),
+    ("rtsp://127.0.0.1:8554/src1", "detection", "yolov8", "models/yolo11s_w8a8_mpk.tar.gz"),
     ("rtsp://127.0.0.1:8554/src2", "segmentation", "yolo26", "models/yolo26s_seg_w8a16_mpk.tar.gz"),
-    ("rtsp://127.0.0.1:8554/src3", "pose", "yolo26", "models/yolo26m-pose-int8-b1.tar.gz"),
-    ("rtsp://127.0.0.1:8554/src4", "detection", "yolo26", "models/yolo26m-det-int8-b1.tar.gz"),
+    ("rtsp://127.0.0.1:8554/src3", "pose", "yolo26", "models/yolo26m_pose_w8a8_mpk.tar.gz"),
+    ("rtsp://127.0.0.1:8554/src4", "detection", "yolo26", "models/yolo26m_w8a8_mpk.tar.gz"),
 ]
 
 
@@ -152,7 +152,7 @@ class TestConfigLoading:
             "yolo26",
         ]
         assert [stream.index for stream in cfg.streams] == [0, 1, 2, 3]
-        assert cfg.streams[2].model_path == "models/yolo26m-pose-int8-b1.tar.gz"
+        assert cfg.streams[2].model_path == "models/yolo26m_pose_w8a8_mpk.tar.gz"
         assert cfg.insight_host == "127.0.0.1"
         assert cfg.warmup_frames == 30
         assert cfg.max_inflight_per_stream == 4
