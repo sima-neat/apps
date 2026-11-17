@@ -48,6 +48,8 @@ namespace {
 
 constexpr std::size_t kMaxStreams = 4;
 constexpr int kPullTimeoutMs = 50;
+// Ultralytics' rotated-NMS IoU for OBB predictions, used by YOLOv8 and YOLO11.
+constexpr double kYoloV8NmsIou = 0.7;
 
 volatile std::sig_atomic_t g_stop_requested = 0;
 
@@ -63,6 +65,7 @@ struct CliOptions {
 struct AppConfig {
   std::string model_path;
   std::string labels_path;
+  simaai::neat::BoxDecodeType decode_type = simaai::neat::BoxDecodeType::YoloV26Obb;
   std::vector<std::string> rtsp_urls;
   simaai::neat::nodes::groups::RtspCodec codec = simaai::neat::nodes::groups::RtspCodec::H264;
   bool tcp = true;
@@ -71,7 +74,7 @@ struct AppConfig {
   int max_inflight_per_stream = 4;
   int max_inflight_total = 16;
   double min_score = 0.30;
-  int max_detections = 300;
+  int max_detections = 100;
   std::string insight_host;
   int video_port_base = 9000;
   int metadata_port_base = 9100;
@@ -123,6 +126,19 @@ CliOptions parse_args(int argc, char** argv) {
   return options;
 }
 
+// YOLOv8 and YOLO11 share one oriented-box decoder.
+simaai::neat::BoxDecodeType parse_family(std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  if (value == "yolo26") {
+    return simaai::neat::BoxDecodeType::YoloV26Obb;
+  }
+  if (value == "yolov8" || value == "yolo11") {
+    return simaai::neat::BoxDecodeType::YoloV8Obb;
+  }
+  throw std::runtime_error("model.family must be yolo26, yolov8, or yolo11");
+}
+
 simaai::neat::nodes::groups::RtspCodec parse_codec(std::string value) {
   std::transform(value.begin(), value.end(), value.begin(),
                  [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
@@ -132,7 +148,10 @@ simaai::neat::nodes::groups::RtspCodec parse_codec(std::string value) {
   if (value == "h265" || value == "hevc" || value == "h.265") {
     return simaai::neat::nodes::groups::RtspCodec::H265;
   }
-  throw std::runtime_error("input.codec must be h264/avc or h265/hevc");
+  if (value == "mjpeg" || value == "jpeg") {
+    return simaai::neat::nodes::groups::RtspCodec::MJPEG;
+  }
+  throw std::runtime_error("input.codec must be h264/avc, h265/hevc, or mjpeg");
 }
 
 // ScalarConfig reads scalars only, so the `streams:` list is read here.
@@ -197,6 +216,7 @@ AppConfig load_app_config(const fs::path& config_path) {
   AppConfig cfg;
   cfg.model_path = raw.string_or("model.path", "");
   cfg.labels_path = raw.string_or("model.labels", default_labels.string());
+  cfg.decode_type = parse_family(raw.string_or("model.family", "yolo26"));
   cfg.rtsp_urls = parse_streams(config_path);
   cfg.codec = parse_codec(raw.string_or("input.codec", "h264"));
   cfg.tcp = raw.bool_or("input.tcp", true);
@@ -205,7 +225,7 @@ AppConfig load_app_config(const fs::path& config_path) {
   cfg.max_inflight_per_stream = raw.int_or("inference.max_inflight_per_stream", 4);
   cfg.max_inflight_total = raw.int_or("inference.max_inflight_total", 16);
   cfg.min_score = raw.double_or("inference.min_score", 0.30);
-  cfg.max_detections = raw.int_or("inference.max_detections", 300);
+  cfg.max_detections = raw.int_or("inference.max_detections", 100);
   cfg.insight_host = raw.string_or("output.insight.host", "");
   cfg.video_port_base = raw.int_or("output.insight.video_port_base", 9000);
   cfg.metadata_port_base = raw.int_or("output.insight.metadata_port_base", 9100);
@@ -283,10 +303,12 @@ std::unique_ptr<simaai::neat::Model> build_model(const AppConfig& cfg) {
   opt.preprocess.color_convert.input_format = simaai::neat::PreprocessColorFormat::NV12;
   // COCO_YOLO letterboxes, which keeps one scale on both axes so rotated boxes map back.
   opt.preprocess.preset = simaai::neat::NormalizePreset::COCO_YOLO;
-  opt.decode_type = simaai::neat::BoxDecodeType::YoloV26Obb;
+  opt.decode_type = cfg.decode_type;
   opt.score_threshold = cfg.min_score;
-  // YOLO26 needs no NMS, and the oriented-box decoder requires it disabled.
-  opt.nms_iou_threshold = 0.0;
+  // YOLO26 needs no NMS, and its decoder requires it disabled. YOLOv8 and YOLO11 remove
+  // overlapping boxes with rotated NMS.
+  opt.nms_iou_threshold =
+      cfg.decode_type == simaai::neat::BoxDecodeType::YoloV26Obb ? 0.0 : kYoloV8NmsIou;
   opt.top_k = cfg.max_detections;
   return std::make_unique<simaai::neat::Model>(cfg.model_path, opt);
 }
@@ -306,11 +328,20 @@ simaai::neat::nodes::groups::RtspEncodedInputOptions source_options(const AppCon
   return opt;
 }
 
+simaai::neat::SimaDecodeType decode_type(simaai::neat::nodes::groups::RtspCodec codec) {
+  switch (codec) {
+  case simaai::neat::nodes::groups::RtspCodec::H265:
+    return simaai::neat::SimaDecodeType::H265;
+  case simaai::neat::nodes::groups::RtspCodec::MJPEG:
+    return simaai::neat::SimaDecodeType::MJPEG;
+  default:
+    return simaai::neat::SimaDecodeType::H264;
+  }
+}
+
 simaai::neat::SimaDecodeOptions decoder_options(const AppConfig& cfg, const Stream& stream) {
   simaai::neat::SimaDecodeOptions opt;
-  opt.type = cfg.codec == simaai::neat::nodes::groups::RtspCodec::H265
-                 ? simaai::neat::SimaDecodeType::H265
-                 : simaai::neat::SimaDecodeType::H264;
+  opt.type = decode_type(cfg.codec);
   opt.out_format = "NV12";
   opt.decoder_name = "decoder";
   opt.raw_output = true;
