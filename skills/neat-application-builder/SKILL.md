@@ -54,7 +54,7 @@ observed results, and explicit gaps when required evidence is unavailable.
 
 ## Related work
 
-When the user names a model, check the Model Registry (`sima-cli models
+When the user names a model, check the Model Browser (`sima-cli models
 --help`) for a compiled package that matches the variant and target, and use
 it if one exists. Otherwise prepare the model; model preparation belongs to
 the public Model Compiler or LLiMa documentation.
