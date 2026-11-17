@@ -50,10 +50,10 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-| Model | Variant | Role | Source |
+| Model | Variants | Role | Source |
 | --- | --- | --- | --- |
-| `detr_resnet_50` | `w16a16` | Default | Model Registry |
-| `detr_resnet_101` | `w16a16` | Alternative | Model Registry |
+| `detr_resnet_50` | `w16a16`, `w8a8_mixed` | Default (`w16a16`) | Model Registry |
+| `detr_resnet_101` | `w16a16`, `w8a8_mixed` | Alternative | Model Registry |
 
 Download the default package from the Model Registry and extract the model
 archive from the downloaded ZIP:
@@ -66,7 +66,8 @@ unzip -o models/detr_resnet_50/w16a16/detr_resnet_50_w16a16_default.zip -d model
 The model archive is then at
 `models/detr_resnet_50/w16a16/detr_resnet_50_w16a16_mpk.tar.gz`; Neat cannot
 load the ZIP itself. To use ResNet-101 instead, replace `detr_resnet_50` with
-`detr_resnet_101` in both commands. Neat reads the input size from the package,
+`detr_resnet_101` in both commands. To use the `w8a8_mixed` variant, replace
+`w16a16` in both commands and in `model.path`. Neat reads the input size from the package,
 so both rows work with the same config.
 
 ## Configure
