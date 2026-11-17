@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -267,6 +268,66 @@ class ModelAssetsTests(unittest.TestCase):
             self.assertFalse(target.exists())
             self.assertEqual(list((root / "models").glob(".supertonic-model.*")), [])
 
+    def test_setup_keeps_sima_cli_from_reading_its_own_input(self):
+        # sima-cli asks on stdin whether to update itself before it works. Run
+        # inside the download loop, that question used to read the loop's next
+        # entry and abort the download (#710): setup.sh now turns the check off
+        # and gives sima-cli no input to read.
+        import hashlib
+        import json
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pin = root / "app/src/python/api/tts/supertonic_sima/model_assets.json"
+            pin.parent.mkdir(parents=True)
+            sources = root / "sources"
+            sources.mkdir()
+            assets = {}
+            for name in ("vector_estimator", "vocoder"):
+                filename = name + ".tar.gz"
+                (sources / filename).write_bytes(name.encode())
+                assets[name] = {"file": filename, "url": "https://example.test/" + filename,
+                                "sha256": hashlib.sha256(name.encode()).hexdigest()}
+            pin.write_text(json.dumps(assets))
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            _executable(bin_dir / "sima-cli", textwrap.dedent("""\
+                #!/bin/bash
+                # Like sima-cli: with the update check on, ask on stdin before working.
+                if [[ "${SIMA_CLI_CHECK_FOR_UPDATE:-1}" == "1" ]]; then
+                  IFS= read -r answer || answer="<no input>"
+                  echo "prompt read: ${answer}" >> "$CALLS"
+                  exit 1
+                fi
+                echo "$2" >> "$CALLS"
+                cp "$SOURCES/${2##*/}" "$4/${2##*/}"
+                """))
+            script = "\n".join([
+                "ok() { :; }; step() { :; }; warn() { echo \"$*\" >&2; }",
+                _setup_function("_find_sima_cli"), _setup_function("_supertonic_mla_models"),
+                "_supertonic_mla_models",
+            ])
+            base = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}",
+                    "EXAMPLE_DIR": str(root / "app"), "SOURCES": str(sources),
+                    "SUPERTONIC_MODELS_ROOT": str(root / "models"), "CALLS": str(root / "calls")}
+            base.pop("SIMA_CLI_CHECK_FOR_UPDATE", None)
+
+            def run(**extra):
+                (root / "calls").unlink(missing_ok=True)
+                shutil.rmtree(root / "models", ignore_errors=True)   # download again
+                result = subprocess.run(["bash", "-c", script], env={**base, **extra},
+                                        capture_output=True, text=True)
+                calls = (root / "calls").read_text().splitlines() if (root / "calls").exists() else []
+                return result, calls
+            result, calls = run()
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(calls, ["https://example.test/vector_estimator.tar.gz",
+                                     "https://example.test/vocoder.tar.gz"])
+            # A caller who turns the update check on keeps it, and the question
+            # still cannot swallow a download entry.
+            result, calls = run(SIMA_CLI_CHECK_FOR_UPDATE="1")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(calls, ["prompt read: <no input>"])
+
     def test_update_fingerprint_includes_model_pins(self):
         import json
         with tempfile.TemporaryDirectory() as tmp:
@@ -310,8 +371,9 @@ class ModelAssetsTests(unittest.TestCase):
         script = "\n".join([
             "section() { :; }", "warn() { echo \"WARN $*\"; }",
             "_supertonic_runtime_ok() { echo REACHED; return 1; }", "_supertonic_venv() { return 1; }",
-            _setup_function("_platform_version"), _setup_function("install_supertonic"),
-            "install_supertonic",
+            _setup_function("_platform_version"), _setup_function("_supertonic_skipped"),
+            _setup_function("install_supertonic"),
+            "install_supertonic", 'echo "PROBLEM=${SUPERTONIC_PROBLEM}"',
         ])
         with tempfile.TemporaryDirectory() as tmp:
             def run(version):
@@ -324,9 +386,41 @@ class ModelAssetsTests(unittest.TestCase):
                                       capture_output=True, text=True).stdout
             older = run("2.1.3")
             self.assertIn("needs Platform 3.0 or newer (this board: 2.1.3)", older)
+            self.assertIn("PROBLEM=Supertonic needs Platform 3.0", older)   # kept for the summary
             self.assertNotIn("REACHED", older)
             self.assertIn("REACHED", run("3.0.0"))
             self.assertIn("REACHED", run(None))                 # unknown platform: try the install
+
+    def test_setup_says_at_the_end_when_supertonic_is_missing(self):
+        # A failed Supertonic install used to leave only a warning in the middle
+        # of the output, under a closing "Install complete." (#710).
+        script = "\n".join([
+            "section() { :; }", "info() { :; }", "ok() { echo \"OK $*\"; }", "warn() { echo \"WARN $*\"; }",
+            "CONFIG_PATH=config; SUPERTONIC_PROBLEM=''",
+            _setup_function("_supertonic_skipped"), _setup_function("finish_summary"),
+            '[[ "$1" == skip ]] && _supertonic_skipped "the model zoo download failed"',
+            "finish_summary",
+        ])
+        def run(outcome):
+            lines = subprocess.run(["bash", "-c", script, "bash", outcome], env={"PATH": "/usr/bin:/bin"},
+                                   capture_output=True, text=True).stdout.splitlines()
+            return [line for line in lines if line]
+        self.assertEqual(run("ready"), ["OK Install complete."])
+        self.assertEqual(run("skip"), [
+            "WARN the model zoo download failed",
+            "WARN Install complete, but Supertonic 3 (MLA text-to-speech) is not available: the model zoo download failed",
+        ])
+
+
+class PiperPlusPinTests(unittest.TestCase):
+    def test_piper_plus_stays_on_the_1_x_package_layout(self):
+        # piper-plus 2.0 renamed its package from `piper` to `piper_plus` and
+        # moved onnxruntime behind the [cpu] extra; piperplus_tts.py imports
+        # `piper`, so an unpinned install left the Japanese voice unloadable (#710).
+        requirements = (EXAMPLE / "src/python/requirements.txt").read_text(encoding="utf-8")
+        pins = re.findall(r"^piper-plus(\S*)$", requirements, re.M)
+        self.assertEqual(len(pins), 1, pins)
+        self.assertIn("<2", pins[0].split(","))
 
 
 if __name__ == "__main__":

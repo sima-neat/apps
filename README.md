@@ -45,23 +45,21 @@ without internet access, see [Install Apps](#install-apps).
    APP_DIR=examples/object-detection/yolo26-object-detector
    ```
 
-2. Download the YOLO26 model. Downloads need your SiMa Developer Portal
-   login. Run `sima-cli login` once, or follow the prompt the first download
-   prints.
+2. Download the YOLO26 model and unpack it. The download is a ZIP file with
+   the model package and its license; the example reads the `.tar.gz`
+   package inside it. The
+   [model browser](https://developer.sima.ai/models/) lists the model.
 
    ```bash
-   export MODELZOO_VERSION="3.0.0"
-   mkdir -p models
-   cd models
-   sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26-detection/yolo26m-det-bf16-mla_tess-b1.tar.gz"
-   cd ..
+   sima-cli models download --id yolo26m --variant w16a16
+   unzip -o models/yolo26m/w16a16/yolo26m_w16a16_default.zip -d models/yolo26m/w16a16
    ```
 
-3. Point the configuration at the model. The input images and the output
-   folder are already set.
+3. Point the configuration at the model package. The input images and the
+   output folder are already set.
 
    ```bash
-   sed -i 's#<model-path>#models/yolo26m-det-bf16-mla_tess-b1.tar.gz#' ${APP_DIR}/src/common/config.yaml
+   sed -i 's#<model-path>#models/yolo26m/w16a16/yolo26m_w16a16_mpk.tar.gz#' ${APP_DIR}/src/common/config.yaml
    ```
 
 4. Run the detector.
@@ -150,13 +148,19 @@ Check the platform version installed on the DevKit:
 cat /etc/buildinfo
 ```
 
-Model packages come from the Model Zoo release, whose version can differ from
-the platform version. Downloads need your SiMa Developer Portal login. Set the
-Model Zoo version before downloading:
+Most examples download model packages from the Model Zoo release, whose
+version can differ from the platform version. These downloads need your SiMa
+Developer Portal login: run `sima-cli login` once, or follow the prompt the
+first download prints. Set the Model Zoo version before downloading:
 
 ```bash
 export MODELZOO_VERSION="3.0.0"
 ```
+
+Examples that take their model from the
+[model browser](https://developer.sima.ai/models/), such as the YOLO26
+object detector in the quick start, download it with
+`sima-cli models download` and need neither the login nor `MODELZOO_VERSION`.
 
 Sample data ships under `assets/datasets/`.
 

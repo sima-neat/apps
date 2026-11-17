@@ -1,5 +1,5 @@
 model:                       # Detector model selection.
-  path: <model-path>         # Example: models/<model-pack>.tar.gz
+  path: <model-path>         # Example: models/yolo26m/w16a16/yolo26m_w16a16_mpk.tar.gz
   labels: examples/object-detection/yolo26-object-detector/src/common/coco_label.txt
 
 io:                          # Input and output paths.

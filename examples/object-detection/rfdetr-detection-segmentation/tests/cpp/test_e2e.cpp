@@ -87,17 +87,24 @@ int main(int argc, char** argv) {
   const char* models_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
   const fs::path models_dir = models_raw != nullptr ? models_raw : "models";
   const std::vector<Variant> detection_models = {
-      {"nano", "rf_detr_nano_w8a8_w16a16_backbone_mpk.tar.gz",
-       "rf_detr_nano_w8a8_w16a16_decoder_mpk.tar.gz"},
-      {"small", "rf_detr_small_w8a8_w16a16_backbone_mpk.tar.gz",
-       "rf_detr_small_w8a8_w16a16_decoder_mpk.tar.gz"},
-      {"medium", "rf_detr_medium_w8a8_w16a16_backbone_mpk.tar.gz",
-       "rf_detr_medium_w8a8_w16a16_decoder_mpk.tar.gz"},
-      {"large", "rf_detr_large_w8a8_w16a16_backbone_mpk.tar.gz",
-       "rf_detr_large_w8a8_w16a16_decoder_mpk.tar.gz"},
+      {"nano", "rf_detr_nano_w8a8_mixed_w16a16_backbone_mpk.tar.gz",
+       "rf_detr_nano_w8a8_mixed_w16a16_decoder_mpk.tar.gz"},
+      {"small", "rf_detr_small_w8a8_mixed_w16a16_backbone_mpk.tar.gz",
+       "rf_detr_small_w8a8_mixed_w16a16_decoder_mpk.tar.gz"},
+      {"medium", "rf_detr_medium_w8a8_mixed_w16a16_backbone_mpk.tar.gz",
+       "rf_detr_medium_w8a8_mixed_w16a16_decoder_mpk.tar.gz"},
+      {"large", "rf_detr_large_w8a8_mixed_w16a16_backbone_mpk.tar.gz",
+       "rf_detr_large_w8a8_mixed_w16a16_decoder_mpk.tar.gz"},
   };
-  const Variant segmentation_model = {"medium", "rfdetr-seg-medium-backbone.tar.gz",
-                                      "rfdetr-seg-medium-transformer.tar.gz"};
+  // Each segmentation size uses the registry build profile config.yaml ships with.
+  const std::vector<Variant> segmentation_models = {
+      {"nano", "rf_detr_seg_nano_w8a16_w8a8_mixed_backbone_mpk.tar.gz",
+       "rf_detr_seg_nano_w8a16_w8a8_mixed_decoder_mpk.tar.gz"},
+      {"small", "rf_detr_seg_small_w8a16_w8a8_mixed_backbone_mpk.tar.gz",
+       "rf_detr_seg_small_w8a16_w8a8_mixed_decoder_mpk.tar.gz"},
+      {"medium", "rf_detr_seg_medium_w8a16_w8a8_mixed_backbone_mpk.tar.gz",
+       "rf_detr_seg_medium_w8a16_w8a8_mixed_decoder_mpk.tar.gz"},
+  };
   const std::vector<SourceCase> sources = {
       {"h264", "SIMANEAT_TEST_RTSP_H264_URL"},
       {"h265", "SIMANEAT_TEST_RTSP_H265_URL"},
@@ -108,7 +115,9 @@ int main(int argc, char** argv) {
     for (const auto& model : detection_models) {
       cases.push_back({"detection", model, source});
     }
-    cases.push_back({"segmentation", segmentation_model, source});
+    for (const auto& model : segmentation_models) {
+      cases.push_back({"segmentation", model, source});
+    }
   }
   const int video_port = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000);
   const int metadata_port = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100);
@@ -144,14 +153,9 @@ int main(int argc, char** argv) {
         {"output.insight.video_port", std::to_string(video_port)},
         {"output.insight.metadata_port", std::to_string(metadata_port)},
     };
-    if (test.task == "detection") {
-      overrides["model.detection.variant"] = test.model.name;
-      overrides["model.detection." + test.model.name + ".backbone"] = backbone.string();
-      overrides["model.detection." + test.model.name + ".transformer"] = transformer.string();
-    } else {
-      overrides["model.segmentation.backbone"] = backbone.string();
-      overrides["model.segmentation.transformer"] = transformer.string();
-    }
+    overrides["model." + test.task + ".variant"] = test.model.name;
+    overrides["model." + test.task + "." + test.model.name + ".backbone"] = backbone.string();
+    overrides["model." + test.task + "." + test.model.name + ".transformer"] = transformer.string();
     write_e2e_config("rfdetr-detection-segmentation", config_path, overrides);
 
     const bool segmentation = test.task == "segmentation";
