@@ -22,6 +22,12 @@ LABELS_FILE = EXAMPLE_DIR / "src" / "common" / "dota_label.txt"
 E2E_INSIGHT_HOST = "127.0.0.1"
 
 
+def _model_family(model_path) -> str:
+    """Registry package files start with their model ID, such as yolov8n_obb_w8a8_mpk.tar.gz."""
+    name = Path(model_path).name
+    return next((family for family in ("yolov8", "yolo11") if name.startswith(family)), "yolo26")
+
+
 def _runtime_deps_ready() -> bool:
     return all(importlib.util.find_spec(name) is not None for name in ("cv2", "numpy", "pyneat"))
 
@@ -64,7 +70,11 @@ def assert_oriented_objects(metadata, labels: set[str]) -> None:
 class TestE2E:
     @pytest.mark.parametrize(
         ("codec", "urls_fixture"),
-        [("h264", "rtsp_h264_urls"), ("h265", "rtsp_h265_urls")],
+        [
+            ("h264", "rtsp_h264_urls"),
+            ("h265", "rtsp_h265_urls"),
+            ("mjpeg", "rtsp_mjpeg_urls"),
+        ],
     )
     def test_multi_stream_insight_and_save_pipeline(
         self,
@@ -93,6 +103,7 @@ class TestE2E:
 
         config_path = e2e_config_writer(
             {
+                "model": {"family": _model_family(e2e_model_path)},
                 "streams": rtsp_urls[:2],
                 "input": {"codec": codec},
                 "output": {

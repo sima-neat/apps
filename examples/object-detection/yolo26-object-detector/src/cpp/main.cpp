@@ -47,7 +47,7 @@ struct Config {
 Config load_config(const fs::path& path) {
   const auto raw = sima_examples::ScalarConfig::load(path);
   Config cfg;
-  cfg.model_path = raw.string_or("model.path", "models/yolo26m-det-bf16-mla_tess-b1.tar.gz");
+  cfg.model_path = raw.string_or("model.path", "models/yolo26m/w16a16/yolo26m_w16a16_mpk.tar.gz");
   cfg.labels_path = raw.string_or(
       "model.labels", "examples/object-detection/yolo26-object-detector/src/common/coco_label.txt");
   cfg.input_dir = raw.string_or("io.input_dir", "assets/datasets/coco");

@@ -41,7 +41,7 @@ double minimum_stream_fps() {
   std::string unit;
   if (meminfo >> field >> kib >> unit && field == "MemTotal:" && unit == "kB" &&
       kib > 0 && kib <= kEightGiBKiB)
-    return 26.5;
+    return 25.0;
   return 28.125;
 }
 

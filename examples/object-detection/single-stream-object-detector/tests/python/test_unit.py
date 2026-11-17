@@ -9,6 +9,13 @@ import pytest
 
 from tests.utils.config_cases import config_writer, load_example_main
 from tests.utils.fake_run import FakeRun
+from tests.utils.padded_frames import (
+    DECODER_LAYOUT_IDS,
+    DECODER_LAYOUTS,
+    padded_i420_tensor,
+    padded_nv12_tensor,
+    yuv420_pattern,
+)
 
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
@@ -481,3 +488,40 @@ class TestUsbCameraFrames:
         assert (bgr[0::2] == expected(90, 240)).all()
         assert (bgr[1::2] == expected(240, 90)).all()
         assert (expected(90, 240) != expected(240, 90)).any()
+
+
+@pytest.mark.unit
+class TestPaddedDecodedFrames:
+    """The decoder pads its 4:2:0 frames (see tests/utils/padded_frames.py), so a saved frame is
+    only right when the conversion packs the planes instead of slicing the raw payload."""
+
+    @pytest.fixture(autouse=True)
+    def runtime_modules(self, monkeypatch):
+        import cv2
+        import numpy as np
+        import pyneat
+
+        monkeypatch.setattr(main, "cv2", cv2)
+        monkeypatch.setattr(main, "np", np)
+        monkeypatch.setattr(main, "pyneat", pyneat)
+
+    @pytest.mark.parametrize(("width", "height", "stride", "uv_row"), DECODER_LAYOUTS,
+                             ids=DECODER_LAYOUT_IDS)
+    @pytest.mark.parametrize(
+        ("padded_tensor", "conversion"),
+        [(padded_nv12_tensor, "COLOR_YUV2BGR_NV12"), (padded_i420_tensor, "COLOR_YUV2BGR_I420")],
+        ids=["nv12", "i420"],
+    )
+    def test_padded_frame_converts_like_a_packed_one(
+        self, padded_tensor, conversion, width, height, stride, uv_row
+    ):
+        import cv2
+        import numpy as np
+
+        packed = yuv420_pattern(width, height)
+        expected = cv2.cvtColor(packed, getattr(cv2, conversion))
+
+        bgr = main.tensor_bgr_from_decoded(padded_tensor(packed, width, height, stride, uv_row))
+
+        assert bgr.shape == (height, width, 3)
+        assert np.array_equal(bgr, expected)
