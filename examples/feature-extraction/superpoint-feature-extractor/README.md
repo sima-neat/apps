@@ -44,14 +44,17 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-SuperPoint is licensed by Magic Leap under the [SuperPoint Software License Agreement](https://github.com/magicleap/SuperPointPretrainedNetwork/blob/master/LICENSE), which restricts the software to noncommercial research use and prohibits its distribution to third parties. Redistribution of a compiled SuperPoint model package is therefore prohibited, and the model browser does not offer one for download. To run this example, compile the model from its recipe in the [models repository](https://github.com/sima-neat/models/tree/main/models/superpoint) on a machine with the Model Compiler, such as the Neat SDK. Review the license terms to confirm that they permit your intended use.
+SuperPoint is licensed by Magic Leap under the [SuperPoint Software License Agreement](https://github.com/magicleap/SuperPointPretrainedNetwork/blob/master/LICENSE), which restricts the software to noncommercial research use and prohibits its distribution to third parties. Redistribution of a compiled SuperPoint model package is therefore prohibited, and the model browser does not offer one for download. To run this example, compile the model from its recipe in the [models repository](https://github.com/sima-neat/models/tree/d0b3f921b29be11a8ca80859f0805ba143a2e975/models/superpoint) on a machine with the Model Compiler, such as the Neat SDK. Review the license terms to confirm that they permit your intended use.
 
-Follow [Getting started](https://github.com/sima-neat/models/blob/main/docs/getting-started.md) in the models repository with model ID `superpoint` and build profile `w8a8`. That guide converts the checkpoint to ONNX and compiles it into a model package. Two inputs differ from its YOLO26n walkthrough:
+Follow steps 1 to 5 of [Getting started](https://github.com/sima-neat/models/blob/d0b3f921b29be11a8ca80859f0805ba143a2e975/docs/getting-started.md) in the models repository, replacing `yolo26n` with `superpoint`. Steps 4 and 5 convert the checkpoint to ONNX and compile it into a model package; the later performance and accuracy steps are optional. Choose one build profile:
 
-- The `w8a8` build calibrates on HPatches images (`hpatches-cal` in [`model.yaml`](https://github.com/sima-neat/models/blob/main/models/superpoint/model.yaml)). The `w8a16` and `w16a16` build profiles need no calibration images.
-- The compile writes `build/superpoint/w8a8/model/superpoint_w8a8_mpk.tar.gz`.
+- **`w16a16`, the simplest.** It needs no calibration images, so skip step 3, replace `w8a8` with `w16a16` in the step 5 commands, and drop `--dataset` from the compile command. The compile writes `build/superpoint/w16a16/model/superpoint_w16a16_mpk.tar.gz`. Copy that file to the DevKit, into `models/superpoint/w16a16/` under `prebuilt-apps/`, and point the config at it, because the packaged config names the `w8a8` package:
 
-Copy that file to the DevKit, into `models/superpoint/w8a8/` under `prebuilt-apps/`. The packaged config already points `model.path` at `models/superpoint/w8a8/superpoint_w8a8_mpk.tar.gz`. For another build profile, set `model.path` to its package.
+  ```bash
+  sed -i 's#models/superpoint/w8a8/superpoint_w8a8_mpk.tar.gz#models/superpoint/w16a16/superpoint_w16a16_mpk.tar.gz#' ${APP_DIR}/src/common/config.yaml
+  ```
+
+- **`w8a8`, the packaged default.** It calibrates on 50 HPatches images (`hpatches-cal` in [`model.yaml`](https://github.com/sima-neat/models/blob/d0b3f921b29be11a8ca80859f0805ba143a2e975/models/superpoint/model.yaml)). Step 3's `model-registry fetch-calibration models/superpoint --build-profile w8a8 --component model` downloads them, but only with SiMa.ai Dataset Registry (Artifactory) access, and `model-registry` installs only where the Model Compiler is installed. Without that access, pass `--dataset` a `.tar` or `.tar.gz` archive of at least 50 HPatches images stored as `hpatches/cal/<sequence>/<n>.ppm`, which is the layout the recipe's `calibration.py` reads. Other images give a different INT8 model from the published one. The compile writes `build/superpoint/w8a8/model/superpoint_w8a8_mpk.tar.gz`; copy it to `models/superpoint/w8a8/` under `prebuilt-apps/`, where the packaged config already points.
 
 ## Configure
 
