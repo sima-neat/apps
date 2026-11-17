@@ -44,12 +44,12 @@ Run the remaining commands from `prebuilt-apps/`.
 
 | Model | Variant | Source |
 | --- | --- | --- |
-| `resnet_50` | `w16a16` | Model Registry |
-| `resnet_18` | `w16a16` | Model Registry |
-| `densenet_121` | `w16a16` | Model Registry |
-| `resnext_101_64x4d` | `w16a16` | Model Registry |
+| `resnet_50` | `w16a16` | Model browser |
+| `resnet_18` | `w16a16` | Model browser |
+| `densenet_121` | `w16a16` | Model browser |
+| `resnext_101_64x4d` | `w16a16` | Model browser |
 
-Download the packages from the Model Registry with `sima-cli` 2.1.20 or newer
+Download the packages from the model browser with `sima-cli` 2.1.20 or newer
 and extract each one in place:
 
 ```bash
@@ -62,7 +62,7 @@ done
 `sima-cli` saves each package as `models/<id>/w16a16/<id>_w16a16_default.zip`.
 Extracting it gives `models/<id>/w16a16/<id>_w16a16_mpk.tar.gz`, the path the
 shipped config already names. The `resize_shorter` and `interpolation` of each
-profile match the preprocessing the Model Registry evaluated that model with.
+profile match the preprocessing the model browser evaluated that model with.
 
 Each model is its own profile in the config; add more supported classification models the same
 way by adding another entry under `models`.

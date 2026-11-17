@@ -34,7 +34,7 @@ as an example calling a deprecated factory, follow the headers.
 
 ## Locate models
 
-Model Registry models download with
+Model browser models download with
 `sima-cli models download --id <model-id> --variant <variant>` on `sima-cli`
 2.1.20 or newer, which reads the `main` branch and writes
 `models/<model-id>/<variant>/<model-id>_<variant>_default.zip`. Unpack it with

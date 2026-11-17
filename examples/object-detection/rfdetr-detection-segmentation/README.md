@@ -30,7 +30,7 @@ TCP sources use RTP timestamps directly to avoid arrival-time corrections during
 
 ## Prerequisites
 
-- [`sima-cli` 2.1.20 or newer](https://developer.sima.ai/software/tools/sima-cli/), the first release that downloads from the Model Registry by default, on the Modalix DevKit, or in a Neat SDK container paired with it.
+- [`sima-cli` 2.1.20 or newer](https://developer.sima.ai/software/tools/sima-cli/), the first release that downloads from the model browser by default, on the Modalix DevKit, or in a Neat SDK container paired with it.
 - An H.264, H.265, or MJPEG RTSP source and an [Insight endpoint](https://developer.sima.ai/software/tools/insight/) reachable from the target.
 
 ## Install Apps
@@ -49,7 +49,7 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-The model packages come from the Model Registry. Each size has a backbone and a
+The model packages come from the model browser. Each size has a backbone and a
 decoder, which the config calls `backbone` and `transformer`. The shipped config
 points every size at the build in the **Default build** column.
 
