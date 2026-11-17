@@ -440,9 +440,11 @@ def test_registry_variant_is_reused_until_its_build_changes(acquisition, monkeyp
     prepare, downloads, _, scope = acquisition
     scope["examples"]["example"]["models"]["m"] = REGISTRY_MODEL
     builds = [_build("run-1")]
-    _registry_listing(monkeypatch, builds)
+    listings = _registry_listing(monkeypatch, builds)
 
     assert prepare(1)["hits"] == 0
+    # One listing per run: the download is published without asking again.
+    assert len(listings) == 1
     assert prepare(2)["hits"] == 1
     builds[0] = _build("run-2")
     assert prepare(3)["hits"] == 0
