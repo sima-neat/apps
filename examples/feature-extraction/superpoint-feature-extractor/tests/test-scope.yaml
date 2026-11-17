@@ -11,10 +11,12 @@ unit:
   cpp: true
 e2e:
   python:
-    enabled: true
+    enabled: false
+    reason: SuperPoint's license does not permit redistribution, so no compiled model package can be downloaded for the test.
     requires_rtsp: true
     models: [superpoint_w8a8_mpk]
   cpp:
-    enabled: true
+    enabled: false
+    reason: SuperPoint's license does not permit redistribution, so no compiled model package can be downloaded for the test.
     requires_rtsp: true
     models: [superpoint_w8a8_mpk]
