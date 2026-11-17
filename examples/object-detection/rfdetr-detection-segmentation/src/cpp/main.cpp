@@ -42,8 +42,6 @@ namespace neat = simaai::neat;
 namespace {
 
 constexpr int kNumClasses = 91;
-constexpr int kMaskSize = 108;
-constexpr int kSegmentationInputSize = 432;
 constexpr int kClassificationTopK = 300;
 constexpr std::size_t kMetadataByteBudget = 32'768;
 std::atomic<bool> g_stop{false};
@@ -116,7 +114,6 @@ struct Config {
   std::string variant;
   std::string backbone;
   std::string transformer;
-  int top_k = 0;
   fs::path labels;
   std::string rtsp_url;
   SourceCodec codec = SourceCodec::H264;
@@ -133,6 +130,13 @@ struct Config {
   std::string insight_host;
   int video_port = 9000;
   int metadata_port = 9100;
+};
+
+// Sizes read from the loaded model pair; they differ between RF-DETR sizes.
+struct ModelContract {
+  int side = 0;
+  int top_k = 0;
+  int mask_size = 0;
 };
 
 struct CliOptions {
@@ -168,19 +172,11 @@ Config load_config(const fs::path& path) {
   const auto raw = sima_examples::ScalarConfig::load(path);
   Config cfg;
   cfg.task = parse_task(raw.string_or("model.task", "detection"));
-  std::string model_prefix;
-  std::string inference_prefix;
-  if (cfg.task == Task::Detection) {
-    cfg.variant = lower_copy(raw.string_or("model.detection.variant", "small"));
-    model_prefix = "model.detection." + cfg.variant + ".";
-    inference_prefix = "inference.detection.";
-    cfg.top_k = 300;
-  } else {
-    cfg.variant = "segmentation";
-    model_prefix = "model.segmentation.";
-    inference_prefix = "inference.segmentation.";
-    cfg.top_k = 200;
-  }
+  const std::string task = task_name(cfg.task);
+  cfg.variant = lower_copy(raw.string_or("model." + task + ".variant",
+                                         cfg.task == Task::Detection ? "small" : "medium"));
+  const std::string model_prefix = "model." + task + "." + cfg.variant + ".";
+  const std::string inference_prefix = "inference." + task + ".";
   cfg.backbone = raw.string_or(model_prefix + "backbone", "");
   cfg.transformer = raw.string_or(model_prefix + "transformer", "");
   cfg.labels = raw.string_or("model.labels", "");
@@ -222,8 +218,8 @@ Config load_config(const fs::path& path) {
   if (cfg.task == Task::Segmentation) {
     sima_examples::require(cfg.mask_threshold >= 0.0F && cfg.mask_threshold <= 1.0F,
                            "inference.segmentation.mask_threshold must be in [0, 1]");
-    sima_examples::require(cfg.mask_grid_size >= kMaskSize,
-                           "inference.segmentation.mask_grid_size must be >= 108");
+    sima_examples::require(cfg.mask_grid_size > 0,
+                           "inference.segmentation.mask_grid_size must be > 0");
   }
   sima_examples::require(!cfg.insight_host.empty(), "output.insight.host must be set");
   sima_examples::require(cfg.video_port > 0 && cfg.video_port <= 65535 && cfg.metadata_port > 0 &&
@@ -358,20 +354,22 @@ struct TransformerOutputs {
   std::optional<neat::Tensor> masks;
 };
 
-TransformerOutputs split_transformer(const neat::Sample& sample, const Config& cfg) {
+TransformerOutputs split_transformer(const neat::Sample& sample, const Config& cfg,
+                                     const ModelContract& contract) {
   TransformerOutputs output;
   bool have_boxes = false;
   bool have_logits = false;
+  const auto top_k = static_cast<std::size_t>(contract.top_k);
+  const auto mask_size = static_cast<std::size_t>(contract.mask_size);
   for (const auto& tensor : collect_tensors(sample)) {
     const auto elements = element_count(tensor.shape);
-    if (elements == static_cast<std::size_t>(cfg.top_k) * 4U) {
+    if (elements == top_k * 4U) {
       output.boxes = tensor;
       have_boxes = true;
-    } else if (elements == static_cast<std::size_t>(cfg.top_k) * kNumClasses) {
+    } else if (elements == top_k * kNumClasses) {
       output.logits = tensor;
       have_logits = true;
-    } else if (cfg.task == Task::Segmentation &&
-               elements == static_cast<std::size_t>(kMaskSize) * kMaskSize * cfg.top_k) {
+    } else if (cfg.task == Task::Segmentation && elements == mask_size * mask_size * top_k) {
       output.masks = tensor;
     }
   }
@@ -496,27 +494,27 @@ cv::Rect frame_rect(const std::vector<float>& boxes, int query, int width, int h
   return {x0, y0, x1 - x0, y1 - y0};
 }
 
-std::vector<cv::Point> mask_polygon(const float* masks, int query, int top_k, const cv::Rect& box,
-                                    int frame_width, int frame_height, float threshold,
-                                    int mask_grid_size) {
-  const double mask_scale_x = static_cast<double>(kMaskSize) / frame_width;
-  const double mask_scale_y = static_cast<double>(kMaskSize) / frame_height;
-  const int x0 = std::clamp(static_cast<int>(std::floor(box.x * mask_scale_x)), 0, kMaskSize - 1);
-  const int y0 = std::clamp(static_cast<int>(std::floor(box.y * mask_scale_y)), 0, kMaskSize - 1);
+std::vector<cv::Point> mask_polygon(const float* masks, int query, int top_k, int mask_size,
+                                    const cv::Rect& box, int frame_width, int frame_height,
+                                    float threshold, int mask_grid_size) {
+  const double mask_scale_x = static_cast<double>(mask_size) / frame_width;
+  const double mask_scale_y = static_cast<double>(mask_size) / frame_height;
+  const int x0 = std::clamp(static_cast<int>(std::floor(box.x * mask_scale_x)), 0, mask_size - 1);
+  const int y0 = std::clamp(static_cast<int>(std::floor(box.y * mask_scale_y)), 0, mask_size - 1);
   const int x1 = std::clamp(static_cast<int>(std::ceil((box.x + box.width) * mask_scale_x)), x0 + 1,
-                            kMaskSize);
+                            mask_size);
   const int y1 = std::clamp(static_cast<int>(std::ceil((box.y + box.height) * mask_scale_y)),
-                            y0 + 1, kMaskSize);
+                            y0 + 1, mask_size);
   cv::Mat mask(y1 - y0, x1 - x0, CV_32FC1);
   for (int y = y0; y < y1; ++y) {
     auto* row = mask.ptr<float>(y - y0);
     for (int x = x0; x < x1; ++x) {
-      row[x - x0] = sigmoid(masks[(y * kMaskSize + x) * top_k + query]);
+      row[x - x0] = sigmoid(masks[(y * mask_size + x) * top_k + query]);
     }
   }
-  if (mask_grid_size != kMaskSize) {
-    const cv::Size size((mask.cols * mask_grid_size + kMaskSize - 1) / kMaskSize,
-                        (mask.rows * mask_grid_size + kMaskSize - 1) / kMaskSize);
+  if (mask_grid_size != mask_size) {
+    const cv::Size size((mask.cols * mask_grid_size + mask_size - 1) / mask_size,
+                        (mask.rows * mask_grid_size + mask_size - 1) / mask_size);
     cv::resize(mask, mask, size, 0.0, 0.0, cv::INTER_LINEAR);
   }
   cv::Mat binary;
@@ -548,7 +546,7 @@ std::vector<cv::Point> mask_polygon(const float* masks, int query, int top_k, co
 
 std::string segmentation_metadata(const TransformerOutputs& output, int frame_width,
                                   int frame_height, const std::vector<std::string>& labels,
-                                  const Config& cfg) {
+                                  const Config& cfg, const ModelContract& contract) {
   const auto boxes = read_floats(output.boxes);
   const auto logits = read_floats(output.logits);
   const auto& masks_tensor = *output.masks;
@@ -560,8 +558,8 @@ std::string segmentation_metadata(const TransformerOutputs& output, int frame_wi
                                 : neat::Mapping{};
   std::vector<float> masks_copy;
   const float* masks = nullptr;
-  const std::size_t expected_bytes =
-      static_cast<std::size_t>(kMaskSize) * kMaskSize * cfg.top_k * sizeof(float);
+  const std::size_t expected_bytes = static_cast<std::size_t>(contract.mask_size) *
+                                     contract.mask_size * contract.top_k * sizeof(float);
   if (masks_map.data != nullptr && masks_map.size_bytes >= expected_bytes) {
     masks = static_cast<const float*>(masks_map.data);
   } else {
@@ -586,8 +584,9 @@ std::string segmentation_metadata(const TransformerOutputs& output, int frame_wi
       continue;
     }
     const cv::Rect box = frame_rect(boxes, query, frame_width, frame_height);
-    const auto polygon = mask_polygon(masks, query, cfg.top_k, box, frame_width, frame_height,
-                                      cfg.mask_threshold, cfg.mask_grid_size);
+    const auto polygon =
+        mask_polygon(masks, query, contract.top_k, contract.mask_size, box, frame_width,
+                     frame_height, cfg.mask_threshold, cfg.mask_grid_size);
     if (polygon.empty()) {
       continue;
     }
@@ -730,10 +729,6 @@ neat::Model build_backbone(const Config& cfg, const SourceGeometry& geometry) {
   opt.preprocess.color_convert.input_format = neat::PreprocessColorFormat::NV12;
   opt.preprocess.color_convert.output_format = neat::PreprocessColorFormat::RGB;
   opt.preprocess.preset = neat::NormalizePreset::ImageNet;
-  if (cfg.task == Task::Segmentation) {
-    opt.preprocess.resize.width = kSegmentationInputSize;
-    opt.preprocess.resize.height = kSegmentationInputSize;
-  }
   opt.processcvu.pre_run_target = "EV74";
   opt.processcvu.post_run_target = "A65";
   return neat::Model(cfg.backbone, opt);
@@ -746,16 +741,10 @@ neat::Model build_transformer(const Config& cfg) {
   return neat::Model(cfg.transformer, opt);
 }
 
-// The backbone's square feature grid sets the proposal count for every model size.
-int feature_side(neat::Model& backbone) {
-  const auto outputs = backbone.output_specs();
-  sima_examples::require(!outputs.empty() && outputs.front().shape.size() == 4U,
-                         "RF-DETR backbone must output a feature grid");
-  return static_cast<int>(outputs.front().shape[1]);
-}
-
 void require_model_contract(const Config& cfg, neat::Model& backbone, neat::Model& transformer,
-                            int side) {
+                            const ModelContract& contract) {
+  const int side = contract.side;
+  const int top_k = contract.top_k;
   const auto has_specs = [](const auto& specs, const std::vector<std::vector<int64_t>>& shapes) {
     if (specs.size() != shapes.size()) {
       return false;
@@ -768,22 +757,60 @@ void require_model_contract(const Config& cfg, neat::Model& backbone, neat::Mode
     }
     return true;
   };
-  std::vector<std::vector<int64_t>> transformer_outputs = {{1, cfg.top_k, 4},
-                                                           {1, cfg.top_k, kNumClasses}};
+  std::vector<std::vector<int64_t>> transformer_outputs = {{1, top_k, 4}, {1, top_k, kNumClasses}};
   if (cfg.task == Task::Segmentation) {
-    transformer_outputs.push_back({1, kMaskSize, kMaskSize, cfg.top_k});
+    transformer_outputs.push_back({1, contract.mask_size, contract.mask_size, top_k});
   }
   const auto backbone_inputs = backbone.input_specs();
   const bool valid_contract =
+      top_k > 0 && (cfg.task == Task::Detection || contract.mask_size > 0) &&
       backbone_inputs.size() == 1U &&
       backbone_inputs.front().shape == std::vector<int64_t>{-1, -1, 3} &&
       backbone_inputs.front().dtypes == std::vector<neat::TensorDType>{neat::TensorDType::UInt8} &&
       has_specs(backbone.output_specs(),
                 {{1, side, side, 256}, {1, side * side}, {1, side * side, 4}}) &&
-      has_specs(transformer.input_specs(), {{1, side, side, 256}, {1, cfg.top_k, 4}}) &&
+      has_specs(transformer.input_specs(), {{1, side, side, 256}, {1, top_k, 4}}) &&
       has_specs(transformer.output_specs(), transformer_outputs);
   sima_examples::require(valid_contract,
                          "selected RF-DETR model pair has an unexpected I/O contract");
+}
+
+// Read the feature grid, query count, and mask size that differ between model sizes.
+ModelContract model_contract(const Config& cfg, neat::Model& backbone, neat::Model& transformer) {
+  const auto outputs = backbone.output_specs();
+  sima_examples::require(!outputs.empty() && outputs.front().shape.size() == 4U,
+                         "RF-DETR backbone must output a feature grid");
+  ModelContract contract;
+  contract.side = static_cast<int>(outputs.front().shape[1]);
+  int proposal_inputs = 0;
+  for (const auto& spec : transformer.input_specs()) {
+    if (spec.shape.size() >= 2U && spec.shape.back() == 4) {
+      contract.top_k = static_cast<int>(spec.shape[spec.shape.size() - 2U]);
+      ++proposal_inputs;
+    }
+  }
+  if (proposal_inputs != 1) {
+    contract.top_k = 0;
+  }
+  if (cfg.task == Task::Segmentation) {
+    int mask_outputs = 0;
+    for (const auto& spec : transformer.output_specs()) {
+      if (spec.shape.size() == 4U) {
+        contract.mask_size = static_cast<int>(spec.shape[1]);
+        ++mask_outputs;
+      }
+    }
+    if (mask_outputs != 1) {
+      contract.mask_size = 0;
+    }
+  }
+  require_model_contract(cfg, backbone, transformer, contract);
+  if (cfg.task == Task::Segmentation) {
+    sima_examples::require(cfg.mask_grid_size >= contract.mask_size,
+                           "inference.segmentation.mask_grid_size must be >= the model's mask "
+                           "size (" + std::to_string(contract.mask_size) + ")");
+  }
+  return contract;
 }
 
 neat::TensorList transformer_seed(neat::Model& transformer) {
@@ -813,17 +840,17 @@ neat::RunOptions transformer_run_options() {
   return run_options;
 }
 
-std::string result_metadata(const Config& cfg, const neat::Sample& sample,
-                            const SourceGeometry& geometry,
+std::string result_metadata(const Config& cfg, const ModelContract& contract,
+                            const neat::Sample& sample, const SourceGeometry& geometry,
                             const std::vector<std::string>& labels) {
-  const auto output = split_transformer(sample, cfg);
+  const auto output = split_transformer(sample, cfg, contract);
   if (cfg.task == Task::Detection) {
     return sima_examples::metadata_boxes_data_json(
         "objects",
         postprocess(read_floats(output.boxes), read_floats(output.logits), geometry.width,
-                    geometry.height, labels, cfg.min_score, cfg.max_results, cfg.top_k));
+                    geometry.height, labels, cfg.min_score, cfg.max_results, contract.top_k));
   }
-  return segmentation_metadata(output, geometry.width, geometry.height, labels, cfg);
+  return segmentation_metadata(output, geometry.width, geometry.height, labels, cfg, contract);
 }
 
 // Decode once; send the preview to Insight and the newest frames to the backbone.
@@ -862,8 +889,7 @@ int run(const Config& cfg) {
   const auto labels = load_labels(cfg.labels);
   neat::Model backbone = build_backbone(cfg, geometry);
   neat::Model transformer = build_transformer(cfg);
-  const int side = feature_side(backbone);
-  require_model_contract(cfg, backbone, transformer, side);
+  const ModelContract contract = model_contract(cfg, backbone, transformer);
 
   neat::Graph graph = build_graph(cfg, backbone, geometry);
   neat::Model::Runner transformer_runner = transformer.build(
@@ -878,7 +904,7 @@ int run(const Config& cfg) {
             << " metadata=" << metadata_sender.metadata_port() << "\n";
 
   // Select the top proposals on the host and hand them to the transformer.
-  const int proposal_count = side * side;
+  const int proposal_count = contract.side * contract.side;
   std::string transformer_bridge_error;
   std::thread transformer_bridge([&] {
     try {
@@ -892,13 +918,13 @@ int run(const Config& cfg) {
         }
         const auto outputs = split_backbone(sample, proposal_count);
         auto gathered = stable_topk_gather(read_floats(outputs.scores),
-                                           read_floats(outputs.proposals), cfg.top_k);
+                                           read_floats(outputs.proposals), contract.top_k);
         neat::Tensor gathered_tensor =
-            neat::Tensor::from_vector(gathered, {1, cfg.top_k, 4}, neat::TensorMemory::EV74);
+            neat::Tensor::from_vector(gathered, {1, contract.top_k, 4}, neat::TensorMemory::EV74);
         neat::Sample transformer_sample;
         transformer_sample.kind = neat::SampleKind::TensorSet;
         transformer_sample.tensors =
-            transformer_inputs(transformer, outputs.feature, gathered_tensor, cfg.top_k);
+            transformer_inputs(transformer, outputs.feature, gathered_tensor, contract.top_k);
         copy_identity(sample, transformer_sample);
         if (!transformer_runner.push(transformer_sample)) {
           if (!g_stop.load()) {
@@ -932,7 +958,7 @@ int run(const Config& cfg) {
       if (sample.empty()) {
         continue;
       }
-      const std::string data = result_metadata(cfg, sample, geometry, labels);
+      const std::string data = result_metadata(cfg, contract, sample, geometry, labels);
       const int64_t timestamp_ms = sample.pts_ns >= 0 ? sample.pts_ns / 1'000'000 : -1;
       const std::string frame_id = sample.frame_id >= 0 ? std::to_string(sample.frame_id) : "";
       std::string error;

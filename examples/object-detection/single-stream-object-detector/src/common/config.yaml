@@ -1,5 +1,5 @@
 model:
-  path: <model-path>         # Example: models/<model-pack>.tar.gz
+  path: <model-path>         # Example: models/yolo26m/w16a16/yolo26m_w16a16_mpk.tar.gz
   labels: examples/object-detection/single-stream-object-detector/src/common/coco_label.txt
 
 source:

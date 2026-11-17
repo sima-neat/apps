@@ -1,5 +1,6 @@
 model:                       # Oriented-box detector model selection.
-  path: <model-path>         # Example: models/yolo26n_obb_w8a8_mpk.tar.gz
+  path: <model-path>         # Example: models/yolo26n_obb/w8a8/yolo26n_obb_w8a8_mpk.tar.gz
+  family: yolo26             # yolo26, yolov8, or yolo11. Must match the model package.
   labels: examples/object-detection/multi-stream-obb-detector/src/common/dota_label.txt # Class names, one per line.
 
 streams:                     # RTSP inputs, one entry per camera. Up to four.
@@ -7,7 +8,7 @@ streams:                     # RTSP inputs, one entry per camera. Up to four.
   - <rtsp-url-2>
 
 input:                       # RTSP input transport settings.
-  codec: h264                # h264/avc or h265/hevc.
+  codec: h264                # h264/avc, h265/hevc, or mjpeg.
   tcp: true                  # Use TCP for RTSP transport.
   latency_ms: 100            # RTSP receive latency in milliseconds.
 
@@ -16,7 +17,7 @@ inference:                   # Detection controls.
   max_inflight_per_stream: 4 # Decoded frames admitted per stream to the shared detector. -1 uses the Core default.
   max_inflight_total: 16     # Decoded frames admitted across all streams. -1 uses the Core default.
   min_score: 0.30            # Detection score threshold.
-  max_detections: 300        # Max oriented boxes kept per frame.
+  max_detections: 100        # Max oriented boxes kept per frame.
 
 output:                      # Insight output plus optional local debug saves.
   insight:                   # Live video and metadata destination.

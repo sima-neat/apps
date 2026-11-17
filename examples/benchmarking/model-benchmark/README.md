@@ -43,17 +43,14 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-Use any compatible compiled MPK. Apps CI exercises the benchmark with `yolo26m-det-int8-b1.tar.gz`; it is not a required default.
-
-Model packages come from the Model Zoo release below, which can differ from the installed platform version. Replace `<model-file>` with the package to benchmark:
+Use any compatible compiled model package. Apps CI runs the benchmark with `yolo26m`, variant `w8a8`, from the [model browser](https://developer.sima.ai/models/); it is not a required default. Download a model with `sima-cli` 2.1.20 or newer and unpack it. The download is a ZIP file with the model package and its license; replace `<id>` and `<variant>` with the model to benchmark:
 
 ```bash
-export MODELZOO_VERSION="3.0.0"
-mkdir -p models
-cd models
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/<model-file>"
-cd ..
+sima-cli models download --id <id> --variant <variant>
+unzip -o models/<id>/<variant>/<id>_<variant>_default.zip -d models/<id>/<variant>
 ```
+
+The model package is `models/<id>/<variant>/<id>_<variant>_mpk.tar.gz`. For example, the CI model is `models/yolo26m/w8a8/yolo26m_w8a8_mpk.tar.gz`.
 
 ## Configure
 
@@ -65,7 +62,7 @@ Open `${APP_DIR}/src/common/config.yaml` and set `model.path`. You can also chan
 source ~/pyneat/bin/activate
 pip install -r ${APP_DIR}/src/python/requirements.txt
 python3 ${APP_DIR}/src/python/main.py \
-  --model models/<model-file>.tar.gz \
+  --model models/<id>/<variant>/<id>_<variant>_mpk.tar.gz \
   --frames 100 \
   --min-duration-ms 30000 \
   --output-json sandbox/model-benchmark/report.json

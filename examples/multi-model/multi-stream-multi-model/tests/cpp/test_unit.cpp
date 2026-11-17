@@ -17,25 +17,25 @@ constexpr const char* kFourStreams = "streams:\n"
                                      "  - url: rtsp://127.0.0.1:8554/src1\n"
                                      "    task: detection\n"
                                      "    decode: yolov8\n"
-                                     "    model: models/yolo_11s_mpk.tar.gz\n"
+                                     "    model: models/yolo11s_w8a8_mpk.tar.gz\n"
                                      "  - url: rtsp://127.0.0.1:8554/src2\n"
                                      "    task: segmentation\n"
-                                     "    decode: yolov8\n"
-                                     "    model: models/yolo_11s_seg_mpk.tar.gz\n"
+                                     "    decode: yolo26\n"
+                                     "    model: models/yolo26s_seg_w8a16_mpk.tar.gz\n"
                                      "  - url: rtsp://127.0.0.1:8554/src3\n"
                                      "    task: pose\n"
                                      "    decode: yolo26\n"
-                                     "    model: models/yolo26m-pose-int8-b1.tar.gz\n"
+                                     "    model: models/yolo26m_pose_w8a8_mpk.tar.gz\n"
                                      "  - url: rtsp://127.0.0.1:8554/src4\n"
                                      "    task: detection\n"
                                      "    decode: yolo26\n"
-                                     "    model: models/yolo26m-det-int8-b1.tar.gz\n";
+                                     "    model: models/yolo26m_w8a8_mpk.tar.gz\n";
 
 constexpr const char* kOneStream = "streams:\n"
                                    "  - url: rtsp://127.0.0.1:8554/src1\n"
                                    "    task: detection\n"
                                    "    decode: yolo26\n"
-                                   "    model: models/yolo26m-det-int8-b1.tar.gz\n";
+                                   "    model: models/yolo26m_w8a8_mpk.tar.gz\n";
 
 constexpr const char* kInsightOutput = "output:\n"
                                        "  insight:\n"
@@ -114,7 +114,7 @@ bool test_validate_config_only_rejects_too_many_streams(const std::string& binar
                                                 "  - url: rtsp://127.0.0.1:8554/src5\n"
                                                 "    task: detection\n"
                                                 "    decode: yolo26\n"
-                                                "    model: models/yolo26m-det-int8-b1.tar.gz\n" +
+                                                "    model: models/yolo26m_w8a8_mpk.tar.gz\n" +
                                                 kInsightOutput);
 
   const auto result = validate(binary, config_path);
@@ -143,7 +143,7 @@ bool test_validate_config_only_rejects_unknown_task(const std::string& binary) {
                    std::string("streams:\n"
                                "  - url: rtsp://127.0.0.1:8554/src1\n"
                                "    task: tracking\n"
-                               "    model: models/yolo26m-det-int8-b1.tar.gz\n") +
+                               "    model: models/yolo26m_w8a8_mpk.tar.gz\n") +
                        kInsightOutput);
 
   const auto result = validate(binary, config_path);
@@ -161,7 +161,7 @@ bool test_validate_config_only_rejects_unknown_decode_family(const std::string& 
                                "  - url: rtsp://127.0.0.1:8554/src1\n"
                                "    task: detection\n"
                                "    decode: yolov5\n"
-                               "    model: models/yolo26m-det-int8-b1.tar.gz\n") +
+                               "    model: models/yolo26m_w8a8_mpk.tar.gz\n") +
                        kInsightOutput);
 
   const auto result = validate(binary, config_path);

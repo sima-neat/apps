@@ -1,5 +1,6 @@
 """E2E tests for detr-object-detector (Python)."""
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -13,6 +14,7 @@ from tests.utils.output_assertions import (
 
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
+DETECTION_LINE = re.compile(r"^\[\d+/\d+\] (\S+): (\d+) detections -> ", re.MULTILINE)
 
 
 @pytest.mark.e2e
@@ -32,10 +34,7 @@ class TestE2E:
         )
 
         config_path = e2e_config_writer(
-            {
-                "io": {"input_dir": str(test_images_dir), "output_dir": str(tmp_output_dir)},
-                "runtime": {"num_runs": 1},
-            }
+            {"io": {"input_dir": str(test_images_dir), "output_dir": str(tmp_output_dir)}}
         )
         result = subprocess.run(
             [
@@ -54,6 +53,50 @@ class TestE2E:
             f"main.py exited with code {result.returncode}\n"
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
-        assert_saved_frames_are_usable(
-            tmp_output_dir, len(supported_image_files(test_images_dir))
+        images = supported_image_files(test_images_dir)
+        assert_saved_frames_are_usable(tmp_output_dir, len(images))
+
+        # Every packaged COCO test image shows at least one object above the threshold.
+        counts = {name: int(count) for name, count in DETECTION_LINE.findall(result.stdout)}
+        assert sorted(counts) == sorted(path.name for path in images), result.stdout
+        empty = [name for name, count in counts.items() if count == 0]
+        assert not empty, f"no detections for {empty}\nstdout:\n{result.stdout}"
+
+    def test_photo_larger_than_1080p(
+        self,
+        e2e_model_path,
+        test_images_dir,
+        tmp_path,
+        tmp_output_dir,
+        test_timeout_ms,
+        skip_unless_e2e_ready,
+        e2e_config_writer,
+    ):
+        """Neat's default input limit is 1920x1080, so a 12-megapixel photo checks the raised one."""
+        import cv2
+
+        images = supported_image_files(test_images_dir)
+        skip_unless_e2e_ready(bool(images), f"test_images_dir has no images: {test_images_dir}")
+        input_dir = tmp_path / "large"
+        input_dir.mkdir()
+        photo = cv2.resize(cv2.imread(str(images[0])), (4032, 3024))
+        assert cv2.imwrite(str(input_dir / "photo_4032x3024.jpg"), photo)
+
+        config_path = e2e_config_writer(
+            {"io": {"input_dir": str(input_dir), "output_dir": str(tmp_output_dir)}}
         )
+        result = subprocess.run(
+            [sys.executable, str(MAIN_PY), "--config", str(config_path)],
+            capture_output=True,
+            text=True,
+            timeout=test_timeout_ms / 1000,
+            cwd=str(EXAMPLE_DIR),
+        )
+
+        assert result.returncode == 0, (
+            f"main.py exited with code {result.returncode}\n"
+            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+        assert_saved_frames_are_usable(tmp_output_dir, 1)
+        counts = [int(count) for _, count in DETECTION_LINE.findall(result.stdout)]
+        assert len(counts) == 1 and counts[0] > 0, result.stdout

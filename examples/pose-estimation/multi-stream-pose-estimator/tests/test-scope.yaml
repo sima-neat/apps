@@ -1,32 +1,25 @@
 models:
-  yolo26m-pose-int8-b1:
-    source: url
-    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26-pose/yolo26m-pose-int8-b1.tar.gz
-    file: yolo26m-pose-int8-b1.tar.gz
-  yolo26n-pose-bf16-mla_tess-b1:
-    source: url
-    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26-pose/yolo26n-pose-bf16-mla_tess-b1.tar.gz
-    file: yolo26n-pose-bf16-mla_tess-b1.tar.gz
-  yolo26s-pose-bf16-mla_tess-b1:
-    source: url
-    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26-pose/yolo26s-pose-bf16-mla_tess-b1.tar.gz
-    file: yolo26s-pose-bf16-mla_tess-b1.tar.gz
-  yolo26m-pose-bf16-mla_tess-b1:
-    source: url
-    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26-pose/yolo26m-pose-bf16-mla_tess-b1.tar.gz
-    file: yolo26m-pose-bf16-mla_tess-b1.tar.gz
-  yolo26l-pose-bf16-mla_tess-b1:
-    source: url
-    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26-pose/yolo26l-pose-bf16-mla_tess-b1.tar.gz
-    file: yolo26l-pose-bf16-mla_tess-b1.tar.gz
-  yolo26x-pose-bf16-mla_tess-b1:
-    source: url
-    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26-pose/yolo26x-pose-bf16-mla_tess-b1.tar.gz
-    file: yolo26x-pose-bf16-mla_tess-b1.tar.gz
-  yolo26m-pose-bf16-b1:
-    source: url
-    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26-pose/yolo26m-pose-bf16-b1.tar.gz
-    file: yolo26m-pose-bf16-b1.tar.gz
+  yolo26m_pose_w8a8_mpk:
+    source: model-registry
+    name: yolo26m_pose
+    ref: main
+    spec: latest
+    variant: w8a8
+    file: yolo26m_pose_w8a8_mpk.tar.gz
+  yolo26n_pose_w16a16_mpk:
+    source: model-registry
+    name: yolo26n_pose
+    ref: main
+    spec: latest
+    variant: w16a16
+    file: yolo26n_pose_w16a16_mpk.tar.gz
+  yolo26m_pose_w16a16_mpk:
+    source: model-registry
+    name: yolo26m_pose
+    ref: main
+    spec: latest
+    variant: w16a16
+    file: yolo26m_pose_w16a16_mpk.tar.gz
 unit:
   python: true
   cpp: true
@@ -35,15 +28,15 @@ e2e:
     enabled: true
     requires_rtsp: true
     models:
-    - yolo26m-pose-int8-b1
+    - yolo26m_pose_w8a8_mpk
     variants:
-    - yolo26n-pose-bf16-mla_tess-b1
-    - yolo26m-pose-bf16-b1
+    - yolo26n_pose_w16a16_mpk
+    - yolo26m_pose_w16a16_mpk
   cpp:
     enabled: true
     requires_rtsp: true
     models:
-    - yolo26m-pose-int8-b1
+    - yolo26m_pose_w8a8_mpk
     variants:
-    - yolo26n-pose-bf16-mla_tess-b1
-    - yolo26m-pose-bf16-b1
+    - yolo26n_pose_w16a16_mpk
+    - yolo26m_pose_w16a16_mpk

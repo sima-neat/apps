@@ -46,24 +46,37 @@ Run the remaining commands in the Neat SDK container, from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-Each container gets its own folder under `models/`, named after the container, and its image holds only that folder. Model packages come from the Model Zoo release below, which can differ from the installed platform version.
+Each container gets its own folder under `models/`, named after the container, and its image holds only that folder.
+
+Four of the models come from the [model browser](https://developer.sima.ai/models/). Download each into its container's folder with `sima-cli` 2.1.20 or newer, unpack the model package from the downloaded ZIP file, and then delete the ZIP files so the images do not carry each model twice:
+
+```bash
+mkdir -p models/neat-segmentation models/neat-detection models/neat-tracking models/neat-pose models/neat-drone models/neat-blazepose
+sima-cli models download --id yolo26m_seg --variant w8a8 --output models/neat-segmentation
+unzip -o models/neat-segmentation/yolo26m_seg/w8a8/yolo26m_seg_w8a8_default.zip -d models/neat-segmentation/yolo26m_seg/w8a8
+sima-cli models download --id rf_detr_small --variant w8a8_mixed_w16a16 --output models/neat-detection
+unzip -o models/neat-detection/rf_detr_small/w8a8_mixed_w16a16/rf_detr_small_w8a8_mixed_w16a16_default.zip -d models/neat-detection/rf_detr_small/w8a8_mixed_w16a16
+sima-cli models download --id yolo26m --variant w8a8 --output models/neat-tracking
+unzip -o models/neat-tracking/yolo26m/w8a8/yolo26m_w8a8_default.zip -d models/neat-tracking/yolo26m/w8a8
+sima-cli models download --id yolo26m_pose --variant w8a8 --output models/neat-pose
+unzip -o models/neat-pose/yolo26m_pose/w8a8/yolo26m_pose_w8a8_default.zip -d models/neat-pose/yolo26m_pose/w8a8
+rm models/neat-*/*/*/*_default.zip
+```
+
+The drone detector and BlazePose are not in the model browser yet. Download them from the Model Zoo release below, which can differ from the installed platform version, and give BlazePose a copy of the person detector:
 
 ```bash
 export MODELZOO_VERSION="3.0.0"
 MODELS="https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix"
-mkdir -p models/neat-segmentation models/neat-detection models/neat-tracking models/neat-pose models/neat-drone models/neat-blazepose
-(cd models/neat-segmentation && sima-cli download "${MODELS}/yolo26-segmentation/yolo26m-seg-int8-b1.tar.gz")
-(cd models/neat-detection && sima-cli download "${MODELS}/rf_detr_small_w8a8_w16a16_backbone_mpk.tar.gz" && sima-cli download "${MODELS}/rf_detr_small_w8a8_w16a16_decoder_mpk.tar.gz")
-(cd models/neat-tracking && sima-cli download "${MODELS}/yolo26-detection/yolo26m-det-int8-b1.tar.gz")
-(cd models/neat-pose && sima-cli download "${MODELS}/yolo26-pose/yolo26m-pose-int8-b1.tar.gz")
 (cd models/neat-drone && sima-cli download "${MODELS}/yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz")
 (cd models/neat-blazepose && sima-cli download "${MODELS}/blazepose_ghum_heavy_w16a16_mpk.tar.gz")
-cp models/neat-tracking/yolo26m-det-int8-b1.tar.gz models/neat-blazepose/
+mkdir -p models/neat-blazepose/yolo26m/w8a8
+cp models/neat-tracking/yolo26m/w8a8/yolo26m_w8a8_mpk.tar.gz models/neat-blazepose/yolo26m/w8a8/
 ```
 
-Six applications share one MLA, so this example uses the INT8 segmentation package instead of the BF16 one its own README defaults to.
+Six applications share one MLA, so this example uses the `w8a8` segmentation model, with 8-bit integer weights and activations, instead of the BF16 build its own README defaults to.
 
-Inside an image, the container's folder appears as `models/`, so a config names a model as `models/<file>`. To use another model, follow that example's README and place the file in the container's folder.
+Inside an image, the container's folder appears as `models/`, so a config names a model by its path under that folder, such as `models/yolo26m/w8a8/yolo26m_w8a8_mpk.tar.gz`. To use another model, follow that example's README and place the file in the container's folder.
 
 ## Configure
 
@@ -71,12 +84,12 @@ Each image holds its example's own `src/common/config.yaml`. Edit the six config
 
 | Container | Example config | Model | RTSP source | Insight ports |
 | --- | --- | --- | --- | --- |
-| `neat-segmentation` | `examples/segmentation/single-stream-instance-segmenter` | `model.path: models/yolo26m-seg-int8-b1.tar.gz` | `source.rtsp.url` | `output.insight.video_port: 9000`, `metadata_port: 9100` |
+| `neat-segmentation` | `examples/segmentation/single-stream-instance-segmenter` | `model.path: models/yolo26m_seg/w8a8/yolo26m_seg_w8a8_mpk.tar.gz` | `source.rtsp.url` | `output.insight.video_port: 9000`, `metadata_port: 9100` |
 | `neat-detection` | `examples/object-detection/rfdetr-detection-segmentation` | Ready for RF-DETR small | `source.rtsp_url` | `output.insight.video_port: 9001`, `metadata_port: 9101` |
-| `neat-tracking` | `examples/tracking/multi-stream-tracker` | `model.path: models/yolo26m-det-int8-b1.tar.gz`; set `inference.fps: 15` to leave MLA time for the others | one URL under `streams` | `output.insight.video_port_base: 9002`, `metadata_port_base: 9102` |
-| `neat-pose` | `examples/pose-estimation/multi-stream-pose-estimator` | `model.path: models/yolo26m-pose-int8-b1.tar.gz` | one URL under `streams` | `output.insight.video_port_base: 9003`, `metadata_port_base: 9103` |
+| `neat-tracking` | `examples/tracking/multi-stream-tracker` | `model.path: models/yolo26m/w8a8/yolo26m_w8a8_mpk.tar.gz`; set `inference.fps: 15` to leave MLA time for the others | one URL under `streams` | `output.insight.video_port_base: 9002`, `metadata_port_base: 9102` |
+| `neat-pose` | `examples/pose-estimation/multi-stream-pose-estimator` | `model.path: models/yolo26m_pose/w8a8/yolo26m_pose_w8a8_mpk.tar.gz` | one URL under `streams` | `output.insight.video_port_base: 9003`, `metadata_port_base: 9103` |
 | `neat-drone` | `examples/tracking/yolo26-tiny-drone-tracker` | `model.path: models/yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz` | one URL under `streams` | `output.insight.video_port_base: 9004`, `metadata_port_base: 9104` |
-| `neat-blazepose` | `examples/pose-estimation/multi-stream-blazepose3d` | `models.detector_path: models/yolo26m-det-int8-b1.tar.gz`, `models.pose_path: models/blazepose_ghum_heavy_w16a16_mpk.tar.gz` | one entry under `streams` with `url`, `width`, `height`, and `insight_channel: 5` | `output.insight.video_port_base: 9000`, `metadata_port_base: 9100` |
+| `neat-blazepose` | `examples/pose-estimation/multi-stream-blazepose3d` | `models.detector_path: models/yolo26m/w8a8/yolo26m_w8a8_mpk.tar.gz`, `models.pose_path: models/blazepose_ghum_heavy_w16a16_mpk.tar.gz` | one entry under `streams` with `url`, `width`, `height`, and `insight_channel: 5` | `output.insight.video_port_base: 9000`, `metadata_port_base: 9100` |
 
 Set `output.insight.host` in all six: `127.0.0.1` when Insight runs on the DevKit, otherwise the Insight host's address. The config is copied into the image, so after a config change run `build` and `deploy` again.
 

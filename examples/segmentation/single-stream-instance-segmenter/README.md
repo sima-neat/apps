@@ -10,7 +10,7 @@
 | Languages | C++, Python |
 | Status | stable |
 | Binary Name | single-stream-instance-segmenter |
-| Model | yolo26m-seg-bf16-b1 |
+| Model | yolo26m_seg (w16a16) |
 
 ## Concept
 
@@ -47,34 +47,30 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-Model packages come from the Model Zoo release below, which can differ from the installed platform version.
-
-```bash
-export MODELZOO_VERSION="3.0.0"
-mkdir -p models
-cd models
-```
-
 ### YOLO26 (`model.family: yolo26`)
 
-| Model file | Role |
-| --- | --- |
-| `yolo26m-seg-bf16-b1.tar.gz` | Default |
-| `yolo26n-seg-bf16-mla_tess.tar.gz` | Supported |
-| `yolo26s-seg-bf16-mla_tess.tar.gz` | Supported |
-| `yolo26m-seg-bf16-mla_tess.tar.gz` | Supported |
-| `yolo26l-seg-bf16-mla_tess.tar.gz` | Supported |
-| `yolo26x-seg-bf16-mla_tess.tar.gz` | Supported |
-| `yolo26m-seg-bf16-mla_tess-b1.tar.gz` | Supported |
-| `yolo26m-seg-int8-b1.tar.gz` | Supported |
-
-These packages are direct artifacts. Replace `<model-file>` with a file from the table.
+The [model browser](https://developer.sima.ai/models/) has the YOLO26 segmentation models in five sizes, from n (nano) to x (extra large). The default is `yolo26m_seg` with the `w16a16` variant. Download it and unpack it with `sima-cli` 2.1.20 or newer:
 
 ```bash
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26-segmentation/<model-file>"
+sima-cli models download --id yolo26m_seg --variant w16a16
+unzip -o models/yolo26m_seg/w16a16/yolo26m_seg_w16a16_default.zip -d models/yolo26m_seg/w16a16
 ```
 
+The download is a ZIP file with the model package and its license. `unzip` puts the model package, `models/yolo26m_seg/w16a16/yolo26m_seg_w16a16_mpk.tar.gz`, next to the ZIP file. Set `model.path` in the config to that `.tar.gz` file, not to the ZIP file and `model.family` to `yolo26`.
+
+| ID | Variants | Role |
+| --- | --- | --- |
+| `yolo26m_seg` | `w8a8`, `w8a16`, `w16a16` | Default (`w16a16`) |
+| `yolo26n_seg` | `w8a8`, `w8a16`, `w16a16` | Supported |
+| `yolo26s_seg` | `w8a8`, `w8a16`, `w16a16` | Supported |
+| `yolo26l_seg` | `w8a16`, `w16a16` | Supported |
+| `yolo26x_seg` | `w8a8`, `w8a16`, `w16a16` | Supported |
+
+To use another model, replace `yolo26m_seg` and `w16a16` in both commands and in `model.path`. The variant is the number format the model was compiled with: `w8a8` stores weights and activations as 8-bit integers, `w8a16` keeps 8-bit integer weights and stores activations in BF16, a 16-bit float format, and `w16a16` uses BF16 for both. The model browser lists the measured accuracy and speed of each size and variant.
+
 ### YOLOv8 (`model.family: yolov8`)
+
+The YOLOv8 segmentation models are not in the model browser. Download them from the Model Zoo release below, which can differ from the installed platform version. Replace `<model-file>` with a file from the table.
 
 | Model file | Role |
 | --- | --- |
@@ -83,19 +79,15 @@ sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/mod
 | `yolo_v8m_seg_mpk.tar.gz` | Supported |
 | `yolo_v8l_seg_mpk.tar.gz` | Supported |
 
-These packages are direct artifacts. Replace `<model-file>` with a file from the table.
-
 ```bash
+export MODELZOO_VERSION="3.0.0"
+mkdir -p models
+cd models
 sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/<model-file>"
-```
-
-Return to the bundle root once the package is downloaded:
-
-```bash
 cd ..
 ```
 
-Set `model.path` to the downloaded package and `model.family` to the family it belongs to. Every model listed above was compiled for a 640x640 input, which is what `model.input_size` expects.
+Set `model.path` to the downloaded package and `model.family` to `yolov8`. Every model listed above was compiled for a 640x640 input, which is what `model.input_size` expects.
 
 ## Prepare Insight
 

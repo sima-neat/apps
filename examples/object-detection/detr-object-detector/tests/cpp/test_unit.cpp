@@ -1,6 +1,8 @@
-// Unit test for detr-object-detector: validates CLI arg handling.
+// Unit test for detr-object-detector: validates CLI arg and config handling.
 #include "support/testing/test_process.h"
 
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 
@@ -65,6 +67,24 @@ int main(int argc, char** argv) {
       ++failures;
     } else {
       std::cout << "[OK] bad config path correctly rejected\n";
+    }
+  }
+
+  {
+    // Neat reads a zero top-k as "keep the package default", so the example rejects it.
+    const std::filesystem::path config_path =
+        std::filesystem::temp_directory_path() / "detr-object-detector-max-draw-0.yaml";
+    std::ofstream(config_path) << "decode:\n  max_draw: 0\n";
+    ProcessResult r = spawn_and_wait(binary, {"--config", config_path.string()}, 20000);
+    std::filesystem::remove(config_path);
+    if (r.exit_code != 2) {
+      std::cerr << "[FAIL] max_draw 0: expected exit 2, got " << r.exit_code << "\n";
+      ++failures;
+    } else if (r.stderr_text.find("decode.max_draw must be >= 1") == std::string::npos) {
+      std::cerr << "[FAIL] max_draw 0: stderr does not explain failure\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] max_draw 0 correctly rejected\n";
     }
   }
 

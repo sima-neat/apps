@@ -38,6 +38,11 @@ Read outputs by the contract `output_specs()` reports:
   `0.45`, `100`): a zero score threshold keeps zero-score boxes, and a zero
   `top_k` builds only when the model package supplies a cap. Core's
   `docs/reference/boxdecode_decode_types.md` defines each value.
+- NMS-free decoders such as `YoloV26Obb` require `nms_iou_threshold = 0`. Do
+  not carry that zero to a decoder that runs NMS: `YoloV8Obb`, used for YOLOv8
+  and YOLO11 oriented boxes, then treats any overlap as a duplicate and drops
+  most boxes. `examples/object-detection/multi-stream-obb-detector` switches
+  both values with its `model.family` setting.
 
 ## Graph
 
