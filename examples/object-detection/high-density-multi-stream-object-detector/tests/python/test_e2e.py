@@ -30,7 +30,8 @@ def minimum_stream_fps():
             return 25.0
     except (OSError, ValueError):
         pass
-    return 28.125
+    # Eight CI DevKits on Platform 3.0.1 held 556 to 565 FPS in total for H.264.
+    return 27.0
 
 
 def select_source(urls, codec):
