@@ -1,5 +1,5 @@
 model:
-  path: models/superpoint_mpk.tar.gz
+  path: models/superpoint/w8a8/superpoint_w8a8_mpk.tar.gz
 
 source:
   rtsp_url: <rtsp-url>  # e.g. rtsp://<insight-host-ip>:8554/src1

@@ -1,5 +1,5 @@
 model:                       # Model package selection.
-  path: <model-path>         # Example: models/<model-pack>.tar.gz
+  path: <model-path>         # Example: models/yolo26m/w8a8/yolo26m_w8a8_mpk.tar.gz
 
 benchmark:                   # Synthetic benchmark settings.
   frames: 100                # Minimum synthetic frames per pass.
