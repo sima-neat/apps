@@ -29,8 +29,9 @@ def digest(path):
 
 
 def source_identity(model, modelzoo_version):
-    # Registry latest/variants and unversioned modelzoo acquisition must resolve
-    # on every run. Never turn a mutable catalog reference into a filename hit.
+    # A file name alone never identifies a mutable source. Model browser
+    # variants get their identity from registry_identities; unversioned
+    # modelzoo acquisition must resolve on every run.
     if model.get("source") != "url":
         return None
     url = model["url"].replace("{modelzoo_version}", modelzoo_version)
@@ -56,6 +57,57 @@ def source_identity(model, modelzoo_version):
         # A failed metadata probe cannot authorize stale reuse. The normal
         # downloader below still handles the requested artifact or fails.
         return None
+
+
+def registry_identities(models):
+    """Identify model browser variants by the build their branch serves.
+
+    `spec: latest` can move to a new build, so the cache key carries the build
+    run and package hash from one catalog listing per branch. A model the
+    listing cannot identify gets no identity and is downloaded as before.
+    """
+    wanted = {
+        filename: model
+        for filename, model in models.items()
+        if model.get("source") == "model-registry"
+        and model.get("name")
+        and model.get("variant")
+        and model.get("ref")
+    }
+    executable = os.environ.get("SIMA_CLI_BIN") or shutil.which("sima-cli")
+    identities = {}
+    for ref in sorted({model["ref"] for model in wanted.values()}) if executable else []:
+        # download_models.sh reads non-main branches from staging the same way.
+        command = [executable, "models", "list", "--branch", ref, "--json"]
+        if ref != "main":
+            command.insert(3, "--stg")
+        try:
+            response = subprocess.run(
+                command, text=True, capture_output=True, timeout=120, check=True
+            )
+            # sima-cli can print notices before the JSON document.
+            start = response.stdout.index("{")
+            builds = json.JSONDecoder().raw_decode(response.stdout[start:])[0]["models"]
+        except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+            print(f"[cache bypass] model browser listing unavailable for {ref}", flush=True)
+            continue
+        for filename, model in wanted.items():
+            if model["ref"] != ref:
+                continue
+            matches = [
+                build
+                for build in builds
+                if isinstance(build, dict)
+                and (build.get("metadata") or {}).get("model_id") == model["name"]
+                and (build.get("metadata") or {}).get("variant_id") == model["variant"]
+            ]
+            if len(matches) == 1 and matches[0].get("id") and matches[0].get("sha256"):
+                identities[filename] = {
+                    "model": model,
+                    "run_id": matches[0]["id"],
+                    "package_sha256": matches[0]["sha256"],
+                }
+    return identities
 
 
 def probe_sources(models, modelzoo_version):
@@ -97,8 +149,12 @@ def probe_sources(models, modelzoo_version):
             print(
                 "[cache bypass] authenticated source metadata unavailable", flush=True
             )
+    registry = registry_identities(models)
     identities = {}
     for filename, model in models.items():
+        if filename in registry:
+            identities[filename] = registry[filename]
+            continue
         if filename not in urls:
             identities[filename] = source_identity(model, modelzoo_version)
             continue

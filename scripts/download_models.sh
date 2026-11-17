@@ -417,13 +417,22 @@ download_model_registry_variant() {
         environment_args+=(--stg)
     fi
     echo "[download] $model_id (model-registry: $registry_name/$variant@$registry_ref)"
-    if ! "$SIMA_CLI_BIN" models download "${environment_args[@]}" \
+    # The registry CDN rejects request bursts for a short time, so wait and retry.
+    local attempt=1
+    local retry_wait="${SIMANEAT_APPS_MODEL_DOWNLOAD_RETRY_WAIT:-20}"
+    until "$SIMA_CLI_BIN" models download "${environment_args[@]}" \
             --id "$registry_name" --variant "$variant" --branch "$registry_ref" \
-            --output "$tmpdir" --json; then
-        rm -rf "$tmpdir"
-        echo "[error] failed to download model $registry_name/$variant@$registry_ref" >&2
-        return 1
-    fi
+            --output "$tmpdir" --json; do
+        if [[ "$attempt" -ge 3 ]]; then
+            rm -rf "$tmpdir"
+            echo "[error] failed to download model $registry_name/$variant@$registry_ref" >&2
+            return 1
+        fi
+        echo "[retry] $registry_name/$variant@$registry_ref in $((retry_wait * attempt))s" >&2
+        sleep "$((retry_wait * attempt))"
+        rm -rf "${tmpdir:?}/${registry_name}"
+        attempt=$((attempt + 1))
+    done
 
     local downloaded_file="${tmpdir}/${registry_name}/${variant}/${expected_file}"
     local package

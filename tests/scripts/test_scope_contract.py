@@ -970,3 +970,47 @@ def test_validate_scope_checks_variants(tmp_path):
         f"{example_key}: e2e.cpp variant demo-model is already in models",
     ]
 
+
+
+def _write_failing_registry_variant_cli(path: Path, failures: int) -> tuple[Path, Path]:
+    cli, calls = _write_registry_variant_cli(path, ["demo_w8a8_mpk.tar.gz"])
+    body = cli.read_text(encoding="utf-8").splitlines(keepends=True)
+    guard = (
+        f'if [[ "$(wc -l < "$NEAT_APPS_TEST_SIMA_CLI_CALLS")" -le {failures} ]]; then exit 1; fi\n'
+    )
+    cli.write_text("".join(body[:2]) + guard + "".join(body[2:]), encoding="utf-8")
+    return cli, calls
+
+
+def test_download_models_retries_a_rejected_registry_download(tmp_path):
+    _require_modern_bash()
+    query = _write_registry_scope_query(
+        tmp_path, [("demo", "demo_w8a8_mpk.tar.gz")], ref="main", variant="w8a8"
+    )
+    cli, calls = _write_failing_registry_variant_cli(tmp_path, failures=1)
+    models_dir = tmp_path / "models"
+
+    result = _run_registry_download(
+        models_dir, query, cli, calls, {"SIMANEAT_APPS_MODEL_DOWNLOAD_RETRY_WAIT": "0"}
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "[retry]" in result.stderr
+    assert len(calls.read_text(encoding="utf-8").splitlines()) == 2
+    assert (models_dir / "demo_w8a8_mpk.tar.gz").is_file()
+
+
+def test_download_models_stops_after_three_registry_attempts(tmp_path):
+    _require_modern_bash()
+    query = _write_registry_scope_query(
+        tmp_path, [("demo", "demo_w8a8_mpk.tar.gz")], ref="main", variant="w8a8"
+    )
+    cli, calls = _write_failing_registry_variant_cli(tmp_path, failures=99)
+
+    result = _run_registry_download(
+        tmp_path / "models", query, cli, calls, {"SIMANEAT_APPS_MODEL_DOWNLOAD_RETRY_WAIT": "0"}
+    )
+
+    assert result.returncode != 0
+    assert "[error] failed to download model" in result.stderr
+    assert len(calls.read_text(encoding="utf-8").splitlines()) == 3
