@@ -10,7 +10,7 @@
 | Languages | C++, Python |
 | Status | stable |
 | Binary Name | multi-stream-object-detector |
-| Model | yolo26m-det-int8-b1 |
+| Model | yolo26m (w8a8) |
 
 ## Concept
 
@@ -42,27 +42,24 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-| Model file | Role |
-| --- | --- |
-| `yolo26m-det-int8-b1.tar.gz` | Default |
-| `yolo26n-det-bf16-mla_tess-b1.tar.gz` | Supported |
-| `yolo26s-det-bf16-mla_tess-b1.tar.gz` | Supported |
-| `yolo26m-det-bf16-mla_tess-b1.tar.gz` | Supported |
-| `yolo26l-det-bf16-mla_tess-b1.tar.gz` | Supported |
-| `yolo26x-det-bf16-mla_tess-b1.tar.gz` | Supported |
-| `yolo26m-det-bf16-b1.tar.gz` | Supported |
-
-Model packages come from the Model Zoo release below, which can differ from the installed platform version. Replace `<model-file>` with a file from the table.
+The [model browser](https://developer.sima.ai/models/) has the YOLO26 detection models in five sizes, from n (nano) to x (extra large). The default is `yolo26m` with the `w8a8` variant. Download it and unpack it with `sima-cli` 2.1.20 or newer:
 
 ```bash
-export MODELZOO_VERSION="3.0.0"
-mkdir -p models
-cd models
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26-detection/<model-file>"
-cd ..
+sima-cli models download --id yolo26m --variant w8a8
+unzip -o models/yolo26m/w8a8/yolo26m_w8a8_default.zip -d models/yolo26m/w8a8
 ```
 
-Set `model.path` in the config to the downloaded package.
+The download is a ZIP file with the model package and its license. `unzip` puts the model package, `models/yolo26m/w8a8/yolo26m_w8a8_mpk.tar.gz`, next to the ZIP file. Set `model.path` in the config to that `.tar.gz` file, not to the ZIP file.
+
+| ID | Variants | Role |
+| --- | --- | --- |
+| `yolo26m` | `w8a8`, `w8a16`, `w16a16` | Default (`w8a8`) |
+| `yolo26n` | `w8a8`, `w8a16`, `w16a16` | Supported |
+| `yolo26s` | `w8a8`, `w8a16`, `w16a16` | Supported |
+| `yolo26l` | `w8a16`, `w16a16` | Supported |
+| `yolo26x` | `w8a8`, `w8a16`, `w16a16` | Supported |
+
+To use another model, replace `yolo26m` and `w8a8` in both commands and in `model.path`. The variant is the number format the model was compiled with: `w8a8` stores weights and activations as 8-bit integers, `w8a16` keeps 8-bit integer weights and stores activations in BF16, a 16-bit float format, and `w16a16` uses BF16 for both. The model browser lists the measured accuracy and speed of each size and variant.
 
 ## Prepare Insight
 
