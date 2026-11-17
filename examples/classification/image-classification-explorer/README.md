@@ -10,7 +10,7 @@
 | Languages | C++, Python |
 | Status | stable |
 | Binary Name | image-classification-explorer |
-| Model | resnet_50, resnet_18, efficientnet_b0, densenet_121 |
+| Model | resnet_50, resnet_18, densenet_121, resnext_101_64x4d (w16a16) |
 
 ## Concept
 
@@ -42,25 +42,26 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-| Model package |
-| --- |
-| `resnet_50_mpk.tar.gz` |
-| `resnet_18_mpk.tar.gz` |
-| `efficientnet_b0_mpk.tar.gz` |
-| `densenet_121_mpk.tar.gz` |
+| Model | Variant | Source |
+| --- | --- | --- |
+| `resnet_50` | `w16a16` | Model Registry |
+| `resnet_18` | `w16a16` | Model Registry |
+| `densenet_121` | `w16a16` | Model Registry |
+| `resnext_101_64x4d` | `w16a16` | Model Registry |
 
-Model packages come from the Model Zoo release below, which can differ from the installed platform version.
+Download the packages from the Model Registry and extract each one in place:
 
 ```bash
-export MODELZOO_VERSION="3.0.0"
-mkdir -p models
-cd models
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/resnet_50_mpk.tar.gz"
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/resnet_18_mpk.tar.gz"
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/efficientnet_b0_mpk.tar.gz"
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/densenet_121_mpk.tar.gz"
-cd ..
+for id in resnet_50 resnet_18 densenet_121 resnext_101_64x4d; do
+  sima-cli models download --id "$id" --variant w16a16
+  unzip -o "models/$id/w16a16/${id}_w16a16_default.zip" -d "models/$id/w16a16"
+done
 ```
+
+`sima-cli` saves each package as `models/<id>/w16a16/<id>_w16a16_default.zip`.
+Extracting it gives `models/<id>/w16a16/<id>_w16a16_mpk.tar.gz`, the path the
+shipped config already names. The `resize_shorter` and `interpolation` of each
+profile match the preprocessing the Model Registry evaluated that model with.
 
 Each model is its own profile in the config; add more supported classification models the same
 way by adding another entry under `models`.
@@ -86,6 +87,8 @@ and CSV/JSON fields). Each profile is fully self-contained:
 | --- | --- |
 | `path` | Compiled model package. |
 | `input_width` / `input_height` | Model input dimensions. |
+| `resize_shorter` | Shorter image side, in pixels, before the centred `input_width` x `input_height` window is cut out. The default, 256 for a 224 input, is the standard ImageNet evaluation crop, taken from the larger input side. Must be at least the larger input side. |
+| `interpolation` | Resize filter the model was evaluated with: `bilinear` or `bicubic`. It enlarges images whose shorter side is below `resize_shorter`; larger images are shrunk by area averaging, the closest OpenCV match to how the models were evaluated. |
 | `preprocess` | Preprocessing preset. Only `imagenet` (standard ImageNet normalization) is implemented. |
 | `output` | Output interpretation. Only `softmax` is implemented: the model produces raw per-class scores, softmax is applied, and index `i` maps to `label_map[i]`. |
 | `num_classes` | Number of classes the model outputs. |
@@ -159,15 +162,16 @@ costs the previous report; the next run writes a fresh one.
 **How large a collection is practical.** The input directory is not capped, but
 the report is one HTML page and every result is held in memory until it is
 written, so the collection size that is useful is smaller than the one that
-fits. Measured on a Modalix DevKit with the four models above, at about 288 ms
-and 6 KB of report per image:
+fits. On a Modalix DevKit with the four models above, 1,000 ImageNet
+validation images took 95 s with C++ and 107 s with Python, about 0.1 s and
+5.5 KB of report per image. The larger rows scale those measurements:
 
 | Images | Run time | `report.json` | `report.html` |
 | ---: | ---: | ---: | ---: |
-| 1,000 | ~5 min | 3 MB | 3 MB |
-| 10,000 | ~48 min | 34 MB | 26 MB |
-| 50,000 | ~4 h | 170 MB | 130 MB |
-| 100,000 | ~8 h | 340 MB | 259 MB |
+| 1,000 | ~2 min | 3.4 MB | 2 MB |
+| 10,000 | ~17 min | 34 MB | 21 MB |
+| 50,000 | ~1.5 h | 170 MB | 103 MB |
+| 100,000 | ~3 h | 340 MB | 205 MB |
 
 Past roughly 10,000 images `report.html` stops being practical to open and
 browse, which is what the report is for, and a large enough collection can
@@ -186,7 +190,7 @@ you ran: the run ends with a summary naming the report directory, and every
 model agrees on the sample image.
 
 ```text
-Done in 3292.5 ms. Report written to sandbox/report
+Done in 12676.6 ms. Report written to sandbox/report
   report.html, thumbnails/
 ```
 
@@ -200,11 +204,11 @@ for each model. The same results read more compactly from `report.csv`, which
 needs `csv` in `io.output_format`:
 
 ```text
-image                     model            status  top1_class_id  top1_label  top1_probability
-/tmp/sima_imagenet_...    resnet_50        ok      1              goldfish    0.9462
-/tmp/sima_imagenet_...    resnet_18        ok      1              goldfish    0.9995
-/tmp/sima_imagenet_...    efficientnet_b0  ok      1              goldfish    0.7786
-/tmp/sima_imagenet_...    densenet_121     ok      1              goldfish    0.9586
+image                   model              status  top1_class_id  top1_label  top1_probability
+/tmp/sima_imagenet_...  resnet_50          ok      1              goldfish    1.0000
+/tmp/sima_imagenet_...  resnet_18          ok      1              goldfish    0.9952
+/tmp/sima_imagenet_...  densenet_121       ok      1              goldfish    0.9732
+/tmp/sima_imagenet_...  resnext_101_64x4d  ok      1              goldfish    0.4966
 ```
 
 Exact probabilities vary with the model package; what matters is that class `1`

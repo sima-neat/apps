@@ -41,18 +41,24 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-| Model file | Role |
-| --- | --- |
-| `yolo26m-det-int8-b1.tar.gz` | Person detector (`models.detector_path`) |
-| `blazepose_ghum_heavy_w16a16_mpk.tar.gz` | 2D and 3D landmarks (`models.pose_path`) |
+| Model | Source | Role |
+| --- | --- | --- |
+| `yolo26m`, variant `w8a8` | [Model browser](https://developer.sima.ai/models/) | Person detector (`models.detector_path`) |
+| `blazepose_ghum_heavy_w16a16_mpk.tar.gz` | Model Zoo | 2D and 3D landmarks (`models.pose_path`) |
 
-Both packages are direct downloads from the Model Zoo release below, which can differ from the installed platform version:
+Download the person detector with `sima-cli` 2.1.20 or newer and unpack it. The download is a ZIP file with the model package and its license:
+
+```bash
+sima-cli models download --id yolo26m --variant w8a8
+unzip -o models/yolo26m/w8a8/yolo26m_w8a8_default.zip -d models/yolo26m/w8a8
+```
+
+BlazePose is not in the model browser yet. Download it from the Model Zoo release below, which can differ from the installed platform version:
 
 ```bash
 export MODELZOO_VERSION="3.0.0"
 mkdir -p models
 cd models
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26-detection/yolo26m-det-int8-b1.tar.gz"
 sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/blazepose_ghum_heavy_w16a16_mpk.tar.gz"
 cd ..
 ```
@@ -65,7 +71,7 @@ In the Insight Web UI, install videos from the Insight catalog or through its Yo
 
 Open `${APP_DIR}/src/common/config.yaml` and set:
 
-- `models.detector_path`: `models/yolo26m-det-int8-b1.tar.gz`
+- `models.detector_path`: `models/yolo26m/w8a8/yolo26m_w8a8_mpk.tar.gz`, the unpacked package, not the ZIP file
 - `models.pose_path`: `models/blazepose_ghum_heavy_w16a16_mpk.tar.gz`
 - one `streams` entry per camera, one to four in total. Use the RTSP URLs from Insight or your cameras. Give each stream a unique `id` and `insight_channel`, its `codec`, and its actual `width`, `height`, and `fps`.
 - `output.insight.host`: the host running Insight.

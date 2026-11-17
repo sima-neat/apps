@@ -19,8 +19,6 @@ import numpy as np
 import yaml
 
 NUM_CLASSES = 91
-MASK_SIZE = 108
-SEGMENTATION_INPUT_SIZE = 432
 CLASSIFICATION_TOP_K = 300
 METADATA_BYTE_BUDGET = 32_768
 
@@ -31,7 +29,6 @@ class Config:
     variant: str
     backbone: str
     transformer: str
-    top_k: int
     labels: Path
     rtsp_url: str
     codec: str
@@ -48,6 +45,15 @@ class Config:
     insight_host: str
     video_port: int
     metadata_port: int
+
+
+@dataclass(frozen=True)
+class ModelContract:
+    """Sizes read from the loaded model pair; they differ between RF-DETR sizes."""
+
+    side: int
+    top_k: int
+    mask_size: int
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -87,20 +93,15 @@ def load_config(path: Path) -> Config:
     task = str(model.get("task", "detection")).lower()
     if task not in {"detection", "segmentation"}:
         raise ValueError("model.task must be detection or segmentation")
+    task_models = _mapping(model, task)
+    variant = str(task_models.get("variant", "small" if task == "detection" else "medium")).lower()
+    selected = _mapping(task_models, variant)
+    inference_options = _mapping(inference, task)
     if task == "detection":
-        detection = _mapping(model, "detection")
-        variant = str(detection.get("variant", "small")).lower()
-        selected = _mapping(detection, variant)
-        inference_options = _mapping(inference, "detection")
-        top_k = 300
         max_results_key = "max_detections"
         default_score = 0.5
         default_max_results = 100
     else:
-        variant = "segmentation"
-        selected = _mapping(model, "segmentation")
-        inference_options = _mapping(inference, "segmentation")
-        top_k = 200
         max_results_key = "max_segments"
         default_score = 0.3
         default_max_results = 24
@@ -110,7 +111,6 @@ def load_config(path: Path) -> Config:
         variant=variant,
         backbone=str(selected.get("backbone", "")),
         transformer=str(selected.get("transformer", "")),
-        top_k=top_k,
         labels=Path(labels_path),
         rtsp_url=str(source.get("rtsp_url", "")),
         codec=parse_source_codec(str(source.get("codec", "h264"))),
@@ -129,7 +129,7 @@ def load_config(path: Path) -> Config:
         metadata_port=int(insight.get("metadata_port", 9100)),
     )
     if not cfg.backbone or not cfg.transformer:
-        raise ValueError(f"model.{task} backbone and transformer must be set")
+        raise ValueError(f"model.{task}.{variant} backbone and transformer must be set")
     if not labels_path:
         raise ValueError("model.labels must be set")
     if not cfg.rtsp_url.startswith("rtsp://"):
@@ -144,8 +144,8 @@ def load_config(path: Path) -> Config:
         raise ValueError(f"inference.{task}.{max_results_key} must be > 0")
     if not 0.0 <= cfg.mask_threshold <= 1.0:
         raise ValueError("inference.segmentation.mask_threshold must be in [0, 1]")
-    if cfg.mask_grid_size < MASK_SIZE:
-        raise ValueError("inference.segmentation.mask_grid_size must be >= 108")
+    if cfg.mask_grid_size <= 0:
+        raise ValueError("inference.segmentation.mask_grid_size must be > 0")
     if not cfg.insight_host:
         raise ValueError("output.insight.host must be set")
     if not all(0 < port <= 65535 for port in (cfg.video_port, cfg.metadata_port)):
@@ -312,10 +312,12 @@ def segmentation_metadata(
     max_segments: int,
     mask_threshold: float,
     mask_grid_size: int = 640,
+    top_k: int = 200,
+    mask_size: int = 108,
 ) -> str:
-    boxes = np.asarray(boxes, dtype=np.float32).reshape(200, 4)
-    logits = np.asarray(logits, dtype=np.float32).reshape(200, NUM_CLASSES)
-    masks = np.asarray(masks, dtype=np.float32).reshape(MASK_SIZE, MASK_SIZE, 200)
+    boxes = np.asarray(boxes, dtype=np.float32).reshape(top_k, 4)
+    logits = np.asarray(logits, dtype=np.float32).reshape(top_k, NUM_CLASSES)
+    masks = np.asarray(masks, dtype=np.float32).reshape(mask_size, mask_size, top_k)
     probabilities = 1.0 / (1.0 + np.exp(-np.clip(logits, -80.0, 80.0)))
     flat_probabilities = probabilities.reshape(-1)
     ranked = stable_topk_indices(flat_probabilities, CLASSIFICATION_TOP_K)
@@ -335,13 +337,13 @@ def segmentation_metadata(
         x1 = max(x0 + 1, min(width, round((cx + box_width / 2.0) * width)))
         y1 = max(y0 + 1, min(height, round((cy + box_height / 2.0) * height)))
 
-        mx0 = max(0, min(MASK_SIZE - 1, int(np.floor(x0 * MASK_SIZE / width))))
-        my0 = max(0, min(MASK_SIZE - 1, int(np.floor(y0 * MASK_SIZE / height))))
-        mx1 = max(mx0 + 1, min(MASK_SIZE, int(np.ceil(x1 * MASK_SIZE / width))))
-        my1 = max(my0 + 1, min(MASK_SIZE, int(np.ceil(y1 * MASK_SIZE / height))))
+        mx0 = max(0, min(mask_size - 1, int(np.floor(x0 * mask_size / width))))
+        my0 = max(0, min(mask_size - 1, int(np.floor(y0 * mask_size / height))))
+        mx1 = max(mx0 + 1, min(mask_size, int(np.ceil(x1 * mask_size / width))))
+        my1 = max(my0 + 1, min(mask_size, int(np.ceil(y1 * mask_size / height))))
         mask = 1.0 / (1.0 + np.exp(-np.clip(masks[my0:my1, mx0:mx1, query], -80.0, 80.0)))
-        if mask_grid_size != MASK_SIZE:
-            size = tuple((n * mask_grid_size + MASK_SIZE - 1) // MASK_SIZE for n in mask.shape[::-1])
+        if mask_grid_size != mask_size:
+            size = tuple((n * mask_grid_size + mask_size - 1) // mask_size for n in mask.shape[::-1])
             mask = cv2.resize(mask, size, interpolation=cv2.INTER_LINEAR)
         binary = (mask >= mask_threshold).astype(np.uint8)
         contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -415,16 +417,17 @@ def split_backbone(sample, proposal_count: int):
     return feature, scores, proposals
 
 
-def split_transformer(sample, cfg: Config):
+def split_transformer(sample, cfg: Config, contract: ModelContract):
     boxes = logits = masks = None
+    top_k, mask_size = contract.top_k, contract.mask_size
     for tensor in collect_tensors(sample):
         shape = _shape(tensor)
         elements = math.prod(shape)
-        if elements == cfg.top_k * 4:
+        if elements == top_k * 4:
             boxes = tensor
-        elif elements == cfg.top_k * NUM_CLASSES:
+        elif elements == top_k * NUM_CLASSES:
             logits = tensor
-        elif cfg.task == "segmentation" and elements == cfg.top_k * MASK_SIZE * MASK_SIZE:
+        elif cfg.task == "segmentation" and elements == top_k * mask_size * mask_size:
             masks = tensor
     if boxes is None or logits is None or (cfg.task == "segmentation" and masks is None):
         raise RuntimeError("transformer did not produce the expected task outputs")
@@ -577,9 +580,6 @@ def build_backbone(cfg: Config, width: int, height: int):
     opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.NV12
     opt.preprocess.color_convert.output_format = pyneat.PreprocessColorFormat.RGB
     opt.preprocess.preset = pyneat.NormalizePreset.ImageNet
-    if cfg.task == "segmentation":
-        opt.preprocess.resize.width = SEGMENTATION_INPUT_SIZE
-        opt.preprocess.resize.height = SEGMENTATION_INPUT_SIZE
     opt.processcvu.pre_run_target = "EV74"
     opt.processcvu.post_run_target = "A65"
     return pyneat.Model(cfg.backbone, opt)
@@ -592,21 +592,36 @@ def build_transformer(cfg: Config):
     return pyneat.Model(cfg.transformer, opt)
 
 
-def feature_side(backbone) -> int:
-    """The backbone's square feature grid sets the proposal count for every model size."""
+def model_contract(cfg: Config, backbone, transformer) -> ModelContract:
+    """Read the feature grid, query count, and mask size that differ between model sizes."""
     outputs = backbone.output_specs()
     if not outputs or len(outputs[0].shape) != 4:
         raise RuntimeError("RF-DETR backbone must output a feature grid")
-    return int(outputs[0].shape[1])
-
-
-def require_model_contract(cfg: Config, backbone, transformer, side: int) -> None:
-    transformer_outputs = [[1, cfg.top_k, 4], [1, cfg.top_k, NUM_CLASSES]]
+    side = int(outputs[0].shape[1])
+    inputs = transformer.input_specs()
+    proposals = [list(spec.shape) for spec in inputs if list(spec.shape)[-1:] == [4]]
+    top_k = int(proposals[0][-2]) if len(proposals) == 1 and len(proposals[0]) >= 2 else 0
+    mask_size = 0
     if cfg.task == "segmentation":
-        transformer_outputs.append([1, MASK_SIZE, MASK_SIZE, cfg.top_k])
+        masks = [list(spec.shape) for spec in transformer.output_specs() if len(spec.shape) == 4]
+        mask_size = int(masks[0][1]) if len(masks) == 1 else 0
+    contract = ModelContract(side=side, top_k=top_k, mask_size=mask_size)
+    require_model_contract(cfg, backbone, transformer, contract)
+    if cfg.task == "segmentation" and cfg.mask_grid_size < mask_size:
+        raise ValueError(
+            f"inference.segmentation.mask_grid_size must be >= the model's mask size ({mask_size})"
+        )
+    return contract
+
+
+def require_model_contract(cfg: Config, backbone, transformer, contract: ModelContract) -> None:
+    side, top_k = contract.side, contract.top_k
+    transformer_outputs = [[1, top_k, 4], [1, top_k, NUM_CLASSES]]
+    if cfg.task == "segmentation":
+        transformer_outputs.append([1, contract.mask_size, contract.mask_size, top_k])
     expected_shapes = (
         [[1, side, side, 256], [1, side * side], [1, side * side, 4]],
-        [[1, side, side, 256], [1, cfg.top_k, 4]],
+        [[1, side, side, 256], [1, top_k, 4]],
         transformer_outputs,
     )
     actual_specs = (
@@ -616,7 +631,9 @@ def require_model_contract(cfg: Config, backbone, transformer, side: int) -> Non
     )
     backbone_inputs = backbone.input_specs()
     valid_contract = (
-        len(backbone_inputs) == 1
+        top_k > 0
+        and (cfg.task == "detection" or contract.mask_size > 0)
+        and len(backbone_inputs) == 1
         and list(backbone_inputs[0].shape) == [-1, -1, 3]
         and list(backbone_inputs[0].dtypes) == [pyneat.TensorDType.UInt8]
     )
@@ -658,8 +675,10 @@ def transformer_run_options():
     return run_options
 
 
-def result_metadata(cfg: Config, sample, width: int, height: int, labels: list[str]):
-    box_tensor, logit_tensor, mask_tensor = split_transformer(sample, cfg)
+def result_metadata(
+    cfg: Config, contract: ModelContract, sample, width: int, height: int, labels: list[str]
+):
+    box_tensor, logit_tensor, mask_tensor = split_transformer(sample, cfg, contract)
     if cfg.task == "detection":
         objects = postprocess(
             box_tensor.to_numpy(copy=False),
@@ -669,7 +688,7 @@ def result_metadata(cfg: Config, sample, width: int, height: int, labels: list[s
             labels,
             cfg.min_score,
             cfg.max_results,
-            cfg.top_k,
+            contract.top_k,
         )
         return "object-detection", json.dumps({"objects": objects}, separators=(",", ":"))
     return "segmentation", segmentation_metadata(
@@ -683,6 +702,8 @@ def result_metadata(cfg: Config, sample, width: int, height: int, labels: list[s
         cfg.max_results,
         cfg.mask_threshold,
         cfg.mask_grid_size,
+        contract.top_k,
+        contract.mask_size,
     )
 
 
@@ -724,8 +745,7 @@ def run(cfg: Config) -> int:
     width, height, fps = probe_source_geometry(cfg)
     backbone = build_backbone(cfg, width, height)
     transformer = build_transformer(cfg)
-    side = feature_side(backbone)
-    require_model_contract(cfg, backbone, transformer, side)
+    contract = model_contract(cfg, backbone, transformer)
 
     graph = build_graph(cfg, backbone, width, height, fps)
     transformer_runner = transformer.build(
@@ -744,7 +764,7 @@ def run(cfg: Config) -> int:
 
     stop = threading.Event()
     bridge_error: list[BaseException] = []
-    proposal_count = side**2
+    proposal_count = contract.side**2
     transformer_input_shapes = tuple(tuple(spec.shape) for spec in transformer.input_specs())
 
     def transformer_bridge() -> None:
@@ -756,7 +776,7 @@ def run(cfg: Config) -> int:
                     continue
                 feature, scores, proposals = split_backbone(sample, proposal_count)
                 gathered = stable_topk_gather(
-                    scores.to_numpy(copy=False), proposals.to_numpy(copy=False), cfg.top_k
+                    scores.to_numpy(copy=False), proposals.to_numpy(copy=False), contract.top_k
                 )
                 gathered_tensor = pyneat.Tensor.from_numpy(
                     gathered, copy=True, memory=pyneat.TensorMemory.EV74
@@ -764,7 +784,7 @@ def run(cfg: Config) -> int:
                 transformer_sample = pyneat.Sample()
                 transformer_sample.kind = pyneat.SampleKind.TensorSet
                 transformer_sample.tensors = transformer_inputs(
-                    transformer_input_shapes, feature, gathered_tensor, cfg.top_k
+                    transformer_input_shapes, feature, gathered_tensor, contract.top_k
                 )
                 copy_identity(sample, transformer_sample)
                 if not transformer_runner.push_samples(transformer_sample):
@@ -792,7 +812,7 @@ def run(cfg: Config) -> int:
             sample = transformer_runner.pull(timeout_ms=500)
             if not collect_tensors(sample):
                 continue
-            metadata_type, data = result_metadata(cfg, sample, width, height, labels)
+            metadata_type, data = result_metadata(cfg, contract, sample, width, height, labels)
             timestamp_ms = sample.pts_ns // 1_000_000 if sample.pts_ns >= 0 else -1
             frame_id = str(sample.frame_id) if sample.frame_id >= 0 else ""
             if not metadata_sender.send_metadata(metadata_type, data, timestamp_ms, frame_id):
