@@ -1000,7 +1000,7 @@ def test_download_models_retries_a_rejected_registry_download(tmp_path):
     assert (models_dir / "demo_w8a8_mpk.tar.gz").is_file()
 
 
-def test_download_models_stops_after_three_registry_attempts(tmp_path):
+def test_download_models_stops_after_four_registry_attempts(tmp_path):
     _require_modern_bash()
     query = _write_registry_scope_query(
         tmp_path, [("demo", "demo_w8a8_mpk.tar.gz")], ref="main", variant="w8a8"
@@ -1013,4 +1013,4 @@ def test_download_models_stops_after_three_registry_attempts(tmp_path):
 
     assert result.returncode != 0
     assert "[error] failed to download model" in result.stderr
-    assert len(calls.read_text(encoding="utf-8").splitlines()) == 3
+    assert len(calls.read_text(encoding="utf-8").splitlines()) == 4

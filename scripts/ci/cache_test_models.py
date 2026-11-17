@@ -331,10 +331,18 @@ def _prepare_models(root, scope, scope_file, destination, cache_root, storage):
             cwd=root,
             env={**os.environ, "MODELS_DIR": str(destination)},
         )
+    # A model browser build that moves during the download is stored under the
+    # run ID it left, which a later listing asks for only after a rollback to
+    # that build. A second listing costs a request the registry CDN can reject,
+    # which would discard every download, so only URL sources are probed again.
+    pending = {f: models[f] for f in identities if f not in hit_files}
     rechecked = probe_sources(
-        {f: models[f] for f in identities if f not in hit_files},
+        {f: m for f, m in pending.items() if m.get("source") != "model-registry"},
         str(manifest["modelzoo-version"]),
     )
+    for filename, model in pending.items():
+        if model.get("source") == "model-registry":
+            rechecked[filename] = identities[filename][1]
     for filename, (key, identity) in identities.items():
         if filename in hit_files:
             continue
