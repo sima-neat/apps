@@ -55,8 +55,8 @@ Run the remaining commands from `prebuilt-apps/`.
 | `detr_resnet_50` | `w16a16`, `w8a8_mixed` | Default (`w16a16`) | Model Registry |
 | `detr_resnet_101` | `w16a16`, `w8a8_mixed` | Alternative | Model Registry |
 
-Download the default package from the Model Registry and extract the model
-archive from the downloaded ZIP:
+Download the default package from the Model Registry with `sima-cli` 2.1.20 or
+newer and extract the model archive from the downloaded ZIP:
 
 ```bash
 sima-cli models download --id detr_resnet_50 --variant w16a16

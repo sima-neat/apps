@@ -80,13 +80,17 @@ Each example README must identify:
 - its default model
 - every additional model explicitly supported by its preprocessing and
   postprocessing path
-- whether each model comes from Model Zoo, a direct artifact, or an
-  example-specific installer
+- whether each model comes from the model browser, Model Zoo, a direct
+  artifact, or an example-specific installer
 - the corresponding `sima-cli` command when that source supports it
 - the downloaded package selected by `model.path`
 
-Use `models/` for user-managed packages. Model downloads use the Model Zoo
-version, which can differ from the installed platform version. Take it from
+Use `models/` for user-managed packages. When a model is in the
+[model browser](https://developer.sima.ai/models/), download it from there
+with `sima-cli models download --id <model-id> --variant <variant>` and list
+only the variants the browser offers. Use the Model Zoo only for a model the
+browser does not have. Model Zoo downloads use the Model Zoo version, which
+can differ from the installed platform version. Take it from
 `modelzoo-version` in `deps/manifest.json`, and keep the literal documented in
 example READMEs in sync with that field.
 
@@ -139,10 +143,17 @@ artifacts required by e2e coverage.
 
 ```yaml
 models:
-  model_id:
-    source: modelzoo
+  model_id:              # a model in the model browser
+    source: model-registry
     name: model_name
-    file: model_name_mpk.tar.gz
+    ref: main
+    spec: latest
+    variant: w8a8
+    file: model_name_w8a8_mpk.tar.gz
+  other_model_id:        # a model only the Model Zoo has
+    source: modelzoo
+    name: other_model_name
+    file: other_model_name_mpk.tar.gz
 unit:
   python: true
   cpp: true

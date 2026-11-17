@@ -49,7 +49,8 @@ Run the remaining commands from `prebuilt-apps/`.
 | `densenet_121` | `w16a16` | Model Registry |
 | `resnext_101_64x4d` | `w16a16` | Model Registry |
 
-Download the packages from the Model Registry and extract each one in place:
+Download the packages from the Model Registry with `sima-cli` 2.1.20 or newer
+and extract each one in place:
 
 ```bash
 for id in resnet_50 resnet_18 densenet_121 resnext_101_64x4d; do

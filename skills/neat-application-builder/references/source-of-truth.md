@@ -35,7 +35,11 @@ as an example calling a deprecated factory, follow the headers.
 ## Locate models
 
 Model Registry models download with
-`sima-cli models download --id <model-id> --variant <variant> --branch <branch>`,
-which writes `models/<model-id>/<variant>/<package>`. List what a branch
-publishes with `sima-cli models list --branch <branch> --json`. A model missing
-from `main` has not been promoted yet.
+`sima-cli models download --id <model-id> --variant <variant>` on `sima-cli`
+2.1.20 or newer, which reads the `main` branch and writes
+`models/<model-id>/<variant>/<model-id>_<variant>_default.zip`. Unpack it with
+`unzip -o <zip> -d models/<model-id>/<variant>` and load the
+`<model-id>_<variant>_mpk.tar.gz` inside, not the ZIP. List what `main`
+publishes with `sima-cli models list --branch main --json`, and use only the
+variants the [model browser](https://developer.sima.ai/models/) offers for a
+model. A model missing from `main` has not been promoted yet.
