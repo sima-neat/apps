@@ -20,9 +20,13 @@ class Profile:
     archive: str
     decode_type: str | None = None
     preprocessing: str | None = None
+    registry_variant: str | None = None
 
     @property
     def source(self) -> str:
+        if self.registry_variant:
+            model_id = self.archive.split("/", 1)[0]
+            return f"Model Registry {model_id} {self.registry_variant}: {self.archive}"
         return f"SDK {MODEL_ZOO_VERSION} download: {self.archive}"
 
 
@@ -38,22 +42,25 @@ PROFILES = {
             "detect",
             "YOLO26n object detection",
             "detection",
-            "yolo26n-det-int8-b1.tar.gz",
+            "yolo26n/w8a8/yolo26n_w8a8_mpk.tar.gz",
             decode_type="YoloV26",
+            registry_variant="w8a8",
         ),
         Profile(
             "pose",
             "YOLO26n pose estimation",
             "pose",
-            "yolo26n-pose-bf16-mla_tess-b1.tar.gz",
+            "yolo26n_pose/w16a16/yolo26n_pose_w16a16_mpk.tar.gz",
             decode_type="YoloV26Pose",
+            registry_variant="w16a16",
         ),
         Profile(
             "segment",
             "YOLO26n instance segmentation",
             "segmentation",
-            "yolo26n-seg-bf16-mla_tess.tar.gz",
+            "yolo26n_seg/w16a16/yolo26n_seg_w16a16_mpk.tar.gz",
             decode_type="YoloV26Seg",
+            registry_variant="w16a16",
         ),
         Profile(
             "ssd",
@@ -67,7 +74,8 @@ PROFILES = {
             "classify",
             "ResNet-50 image classification",
             "classification",
-            "resnet_50_mpk.tar.gz",
+            "resnet_50/w8a8/resnet_50_w8a8_mpk.tar.gz",
+            registry_variant="w8a8",
         ),
         Profile(
             "depth",

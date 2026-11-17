@@ -74,6 +74,7 @@ def main() -> int:
     input_dir = Path(io_cfg.get("input_dir", "assets/datasets/coco"))
     output_dir = Path(io_cfg.get("output_dir", "sandbox/depth-estimator"))
     infer_size = int(runtime.get("infer_size", 518))
+    max_input_size = int(runtime.get("max_input_size", 1920))
     queue_depth = int(runtime.get("queue_depth", 4))
     if not input_dir.is_dir():
         print(f"Input directory does not exist: {input_dir}", file=sys.stderr)
@@ -90,9 +91,15 @@ def main() -> int:
         opt = pyneat.ModelOptions()
         opt.preprocess.kind = pyneat.InputKind.Image
         opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.RGB
-        opt.preprocess.input_max_width = infer_size
-        opt.preprocess.input_max_height = infer_size
+        opt.preprocess.input_max_width = max_input_size
+        opt.preprocess.input_max_height = max_input_size
         opt.preprocess.input_max_depth = 3
+        # Depth Anything V2 expects bicubic resizing; EV74 resizes to the model input.
+        opt.preprocess.resize.enable = pyneat.AutoFlag.On
+        opt.preprocess.resize.mode = pyneat.ResizeMode.Stretch
+        opt.preprocess.resize.width = infer_size
+        opt.preprocess.resize.height = infer_size
+        opt.preprocess.resize.scaling_type = "BICUBIC"
         model = pyneat.Model(model_path, opt)
 
         dummy = np.zeros((infer_size, infer_size, 3), dtype=np.uint8)
@@ -113,9 +120,12 @@ def main() -> int:
                 print(f"Skipping unreadable: {img_path.name}", file=sys.stderr)
                 continue
 
-            rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-            rgb = cv2.resize(rgb, (infer_size, infer_size), interpolation=cv2.INTER_LINEAR)
-            rgb = np.ascontiguousarray(rgb, dtype=np.uint8)
+            scale = max_input_size / max(bgr.shape[:2])
+            if scale < 1:
+                size = (max(1, int(bgr.shape[1] * scale)), max(1, int(bgr.shape[0] * scale)))
+                bgr = cv2.resize(bgr, size, interpolation=cv2.INTER_AREA)
+
+            rgb = np.ascontiguousarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
             t_in = pyneat.Tensor.from_numpy(rgb, copy=True, image_format=pyneat.PixelFormat.RGB)
 
             outputs = runner.run([t_in])
