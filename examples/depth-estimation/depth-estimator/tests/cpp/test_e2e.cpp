@@ -1,6 +1,7 @@
 // E2E test for depth-estimator.
 // Runs the binary with each scoped model and the test images, and verifies it writes one
-// side-by-side PNG per image whose depth half is a spatially coherent depth map.
+// side-by-side PNG per image whose depth half is a spatially coherent depth map that agrees with
+// the FP32 reference depth of the same image.
 #include "support/testing/source_cases.h"
 #include "support/testing/test_config.h"
 #include "support/testing/test_process.h"
@@ -10,11 +11,15 @@
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
+#include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -27,16 +32,45 @@ constexpr const char* kExampleName = "depth-estimator";
 // width) depth map, and each saved PNG puts the resized input beside the depth colormap.
 constexpr int kModelHeight = 518;
 constexpr int kModelWidth = 686;
+
+// fixtures/reference_depth/<image>.png holds the FP32 depth of each assets/datasets-test/coco
+// image, from the upstream ONNX the Model Registry compiles (onnx-community/depth-anything-v2-small
+// at 4472b736, sha256 afb6a5c2...), fed the registry's preprocessing: RGB / 255, cv2 INTER_CUBIC
+// stretch to 686x518, ImageNet mean and std. Each map is shrunk with INTER_AREA to 172x130 and
+// stored min-max scaled as 16-bit PNG. The Python e2e test applies the same checks.
+constexpr int kReferenceWidth = 172;
+constexpr int kReferenceHeight = 130;
+// The test images are letterboxed. The model calls the black bars nearest, which would dominate
+// the correlation, so only the image content is compared: pixels brighter than this gray level.
+constexpr int kContentThreshold = 16;
+// On the host, the FP32 model through the app's 8-bit colormap correlates at 1.00 with the
+// reference, and bilinear instead of bicubic resizing or a square 518x518 input still gives 0.99
+// or more. Feeding raw 0-255 pixels without normalization peaks at 0.46, and reading a row-major
+// map column-major at 0.04, so these floors pass quantized builds and fail the wrong input or
+// layout.
+constexpr double kMinImageCorrelation = 0.8;
+constexpr double kMinMeanCorrelation = 0.9;
 // A depth map changes gradually between neighbouring pixels. Reading the model output with the
 // wrong layout or stride scrambles it, which raises the mean neighbour difference to about half
 // the spread of the values or more; a real depth map stays near 0.02.
 constexpr double kMaxNeighbourDifferenceRatio = 0.1;
 constexpr double kMinDepthSpread = 10.0;
 
-// Returns an empty string when the saved PNG holds a coherent depth map, else the problem.
-std::string depth_map_problem(const fs::path& path) {
-  const cv::Mat image = cv::imread(path.string(), cv::IMREAD_COLOR);
+fs::path reference_dir() {
+  // example_common_config_path() is <example>/src/common/config.yaml.
+  return example_common_config_path(kExampleName).parent_path().parent_path().parent_path() /
+         "tests" / "fixtures" / "reference_depth";
+}
+
+uint32_t color_key(const cv::Vec3b& bgr) {
+  return (static_cast<uint32_t>(bgr[0]) << 16) | (static_cast<uint32_t>(bgr[1]) << 8) | bgr[2];
+}
+
+// Recovers the 8-bit depth the app colored from the right half of its saved PNG, or returns the
+// problem.
+std::string colormap_depth(const fs::path& path, cv::Mat& depth) {
   const std::string name = path.filename().string();
+  const cv::Mat image = cv::imread(path.string(), cv::IMREAD_COLOR);
   if (image.empty()) {
     return name + " does not decode";
   }
@@ -47,10 +81,32 @@ std::string depth_map_problem(const fs::path& path) {
     return out.str();
   }
 
-  cv::Mat depth;
-  cv::cvtColor(image(cv::Rect(kModelWidth, 0, kModelWidth, kModelHeight)), depth,
-               cv::COLOR_BGR2GRAY);
-  depth.convertTo(depth, CV_32F);
+  cv::Mat ramp(1, 256, CV_8UC1);
+  for (int i = 0; i < 256; ++i) {
+    ramp.at<uint8_t>(0, i) = static_cast<uint8_t>(i);
+  }
+  cv::Mat lut;
+  cv::applyColorMap(ramp, lut, cv::COLORMAP_INFERNO);
+  std::unordered_map<uint32_t, float> level_of;
+  for (int i = 0; i < 256; ++i) {
+    level_of.emplace(color_key(lut.at<cv::Vec3b>(0, i)), static_cast<float>(i));
+  }
+
+  const cv::Mat colored = image(cv::Rect(kModelWidth, 0, kModelWidth, kModelHeight));
+  depth.create(kModelHeight, kModelWidth, CV_32FC1);
+  for (int y = 0; y < kModelHeight; ++y) {
+    for (int x = 0; x < kModelWidth; ++x) {
+      const auto it = level_of.find(color_key(colored.at<cv::Vec3b>(y, x)));
+      if (it == level_of.end()) {
+        return name + " depth half is not an INFERNO colormap";
+      }
+      depth.at<float>(y, x) = it->second;
+    }
+  }
+  return "";
+}
+
+std::string coherence_problem(const std::string& name, const cv::Mat& depth) {
   cv::Scalar mean;
   cv::Scalar stddev;
   cv::meanStdDev(depth, mean, stddev);
@@ -60,7 +116,6 @@ std::string depth_map_problem(const fs::path& path) {
     out << name << " has a flat depth map (std " << spread << ")";
     return out.str();
   }
-
   cv::Mat across;
   cv::Mat down;
   cv::absdiff(depth.colRange(1, depth.cols), depth.colRange(0, depth.cols - 1), across);
@@ -72,6 +127,50 @@ std::string depth_map_problem(const fs::path& path) {
         << " is " << neighbour / spread << " of its spread " << spread;
     return out.str();
   }
+  return "";
+}
+
+// Pearson correlation of the app's depth with the FP32 reference over the image content, or the
+// problem.
+std::string reference_correlation(const fs::path& image_path, const cv::Mat& depth,
+                                  double& correlation) {
+  const fs::path reference_path = reference_dir() / (image_path.stem().string() + ".png");
+  const cv::Mat reference = cv::imread(reference_path.string(), cv::IMREAD_UNCHANGED);
+  if (reference.empty() || reference.rows != kReferenceHeight ||
+      reference.cols != kReferenceWidth) {
+    std::ostringstream out;
+    out << "no " << kReferenceWidth << "x" << kReferenceHeight << " reference depth for "
+        << image_path.filename().string() << " at " << reference_path.string()
+        << "; this check needs the assets/datasets-test/coco images";
+    return out.str();
+  }
+
+  const cv::Mat gray = cv::imread(image_path.string(), cv::IMREAD_GRAYSCALE);
+  if (gray.empty()) {
+    return image_path.filename().string() + " does not decode";
+  }
+  std::vector<cv::Point> content;
+  cv::findNonZero(gray > kContentThreshold, content);
+  const cv::Rect box = cv::boundingRect(content);
+  // Shrink the content box onto the reference grid, rounding inward so no bar pixels remain.
+  const int x0 = (box.x * kReferenceWidth + gray.cols - 1) / gray.cols;
+  const int x1 = (box.x + box.width) * kReferenceWidth / gray.cols;
+  const int y0 = (box.y * kReferenceHeight + gray.rows - 1) / gray.rows;
+  const int y1 = (box.y + box.height) * kReferenceHeight / gray.rows;
+  if (x1 <= x0 || y1 <= y0) {
+    return image_path.filename().string() + " has no content to compare";
+  }
+
+  cv::Mat small;
+  cv::resize(depth, small, cv::Size(kReferenceWidth, kReferenceHeight), 0.0, 0.0, cv::INTER_AREA);
+  const cv::Rect crop(x0, y0, x1 - x0, y1 - y0);
+  cv::Mat a;
+  cv::Mat b;
+  small(crop).convertTo(a, CV_64F);
+  reference(crop).convertTo(b, CV_64F);
+  a -= cv::mean(a)[0];
+  b -= cv::mean(b)[0];
+  correlation = a.dot(b) / std::sqrt(a.dot(a) * b.dot(b));
   return "";
 }
 
@@ -104,24 +203,69 @@ int run_model_case(const std::string& binary, const std::string& model_path,
     return 1;
   }
 
-  std::vector<fs::path> outputs;
-  for (const auto& entry : fs::directory_iterator(out_dir)) {
-    if (entry.is_regular_file() && entry.path().extension() == ".png") {
-      outputs.push_back(entry.path());
+  std::vector<fs::path> images;
+  for (const auto& entry : fs::directory_iterator(input_dir)) {
+    std::string ext = entry.path().extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (entry.is_regular_file() &&
+        (ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".bmp")) {
+      images.push_back(entry.path());
     }
   }
-  std::sort(outputs.begin(), outputs.end());
-  for (const fs::path& output : outputs) {
-    const std::string problem = depth_map_problem(output);
-    if (!problem.empty()) {
-      std::cerr << "[FAIL] " << label << ": " << problem << "\n";
-      remove_dir(out_dir);
-      return 1;
+  std::sort(images.begin(), images.end());
+
+  std::ostringstream report;
+  report << std::fixed << std::setprecision(4);
+  double total = 0.0;
+  double lowest = 1.0;
+  std::string problem;
+  for (const fs::path& image_path : images) {
+    const fs::path output = fs::path(out_dir) / (image_path.stem().string() + ".png");
+    cv::Mat depth;
+    problem = colormap_depth(output, depth);
+    if (problem.empty()) {
+      problem = coherence_problem(output.filename().string(), depth);
     }
+    double correlation = 0.0;
+    if (problem.empty()) {
+      problem = reference_correlation(image_path, depth, correlation);
+    }
+    if (!problem.empty()) {
+      break;
+    }
+    report << " " << image_path.filename().string() << "=" << correlation;
+    total += correlation;
+    lowest = std::min(lowest, correlation);
+    if (correlation < kMinImageCorrelation) {
+      std::ostringstream out;
+      out << "depth map for " << image_path.filename().string()
+          << " disagrees with the FP32 reference: correlation " << correlation << " < "
+          << kMinImageCorrelation;
+      problem = out.str();
+      break;
+    }
+  }
+  remove_dir(out_dir);
+  if (problem.empty() && images.empty()) {
+    problem = "no input images to compare";
+  }
+  if (!problem.empty()) {
+    std::cerr << "[FAIL] " << label << ": " << problem << "\n";
+    return 1;
   }
 
-  remove_dir(out_dir);
-  std::cout << "[OK] " << label << ": " << outputs.size() << " coherent depth maps\n";
+  const double mean = total / static_cast<double>(images.size());
+  std::cout << "[DEPTH] " << fs::path(model_path).filename().string()
+            << ": correlation with the FP32 reference mean=" << std::fixed << std::setprecision(4)
+            << mean << " min=" << lowest << report.str() << "\n";
+  if (mean < kMinMeanCorrelation) {
+    std::cerr << "[FAIL] " << label << ": mean correlation with the FP32 reference " << mean
+              << " < " << kMinMeanCorrelation << "\n";
+    return 1;
+  }
+  std::cout << "[OK] " << label << ": " << images.size()
+            << " coherent depth maps that agree with the FP32 reference\n";
   return 0;
 }
 
