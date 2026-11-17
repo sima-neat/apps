@@ -58,7 +58,7 @@ The download is a ZIP file with the model package and its license. `unzip` puts 
 | `yolo26m` | `w8a8`, `w8a16`, `w16a16` | Default (`w16a16`) |
 | `yolo26n` | `w8a8`, `w8a16`, `w16a16` | Supported |
 | `yolo26s` | `w8a8`, `w8a16`, `w16a16` | Supported |
-| `yolo26l` | `w8a8`, `w8a16`, `w16a16` | Supported |
+| `yolo26l` | `w8a16`, `w16a16` | Supported |
 | `yolo26x` | `w8a8`, `w8a16`, `w16a16` | Supported |
 
 To use another detector, replace `yolo26m` and `w16a16` in both commands and in `model.path`. The variant is the number format the model was compiled with: `w8a8` stores weights and activations as 8-bit integers, `w8a16` keeps 8-bit integer weights and stores activations in BF16, a 16-bit float format, and `w16a16` uses BF16 for both.
