@@ -10,7 +10,7 @@
 | Languages | C++, Python |
 | Status | stable |
 | Binary Name | superpoint-feature-extractor |
-| Model | superpoint (w8a8) |
+| Model | superpoint (w16a16) |
 
 ## Concept
 
@@ -46,12 +46,102 @@ Run the remaining commands from `prebuilt-apps/`.
 
 SuperPoint is licensed by Magic Leap under the [SuperPoint Software License Agreement](https://github.com/magicleap/SuperPointPretrainedNetwork/blob/master/LICENSE), which restricts the software to noncommercial research use and prohibits its distribution to third parties. Redistribution of a compiled SuperPoint model package is therefore prohibited, and the model browser does not offer one for download. To run this example, compile the model from its recipe in the [models repository](https://github.com/sima-neat/models/tree/main/models/superpoint) on a machine with the Model Compiler, such as the Neat SDK. Review the license terms to confirm that they permit your intended use.
 
-Follow [Getting started](https://github.com/sima-neat/models/blob/main/docs/getting-started.md) in the models repository with model ID `superpoint` and build profile `w8a8`. That guide converts the checkpoint to ONNX and compiles it into a model package. Two inputs differ from its YOLO26n walkthrough:
+Follow [Getting started](https://github.com/sima-neat/models/blob/main/docs/getting-started.md) in the models repository with model ID `superpoint` and build profile `w16a16`. That guide converts the checkpoint to ONNX and compiles it into a model package. Three inputs differ from its YOLO26n walkthrough:
 
-- The `w8a8` build calibrates on HPatches images (`hpatches-cal` in [`model.yaml`](https://github.com/sima-neat/models/blob/main/models/superpoint/model.yaml)). The `w8a16` and `w16a16` build profiles need no calibration images.
-- The compile writes `build/superpoint/w8a8/model/superpoint_w8a8_mpk.tar.gz`.
+- `w16a16` calibrates on nothing, so skip the guide's dataset step and pass no `--dataset`. The whole build needs only the public Hugging Face checkpoint the recipe pins; no SiMa dataset or credential takes part in it.
+- The conversion and the compile are the guide's steps 4 and 5 with `superpoint` in place of `yolo26n`:
 
-Copy that file to the DevKit, into `models/superpoint/w8a8/` under `prebuilt-apps/`. The packaged config already points `model.path` at `models/superpoint/w8a8/superpoint_w8a8_mpk.tar.gz`. For another build profile, set `model.path` to its package.
+```bash
+scripts/run_model_conversion.sh models/superpoint default build/superpoint/onnx
+PYTHONPATH=tools python models/superpoint/scripts/compile.py \
+  --model build/superpoint/onnx/model.onnx \
+  --output-dir build/superpoint/w16a16 \
+  --build-profile w16a16 \
+  --compile-invocation w16a16
+```
+
+- The compile writes `build/superpoint/w16a16/model/superpoint_w16a16_mpk.tar.gz`.
+
+Copy that file to the DevKit, into `models/superpoint/w16a16/` under `prebuilt-apps/`. The packaged config already points `model.path` at `models/superpoint/w16a16/superpoint_w16a16_mpk.tar.gz`. For another build profile, set `model.path` to its package.
+
+### Choosing a Build Profile
+
+The recipe declares three build profiles. The accuracy and throughput columns are the values
+[`models/superpoint/tests/tests.yaml`](https://github.com/sima-neat/models/blob/main/models/superpoint/tests/tests.yaml)
+expects on the HPatches validation split and on a Modalix DevKit.
+
+| Build profile | Calibration images | Keypoint repeatability | Homography accuracy | Throughput |
+| --- | --- | --- | --- | --- |
+| `w16a16` | none | 0.6119 | 0.8057 | 103.0 FPS |
+| `w8a16` | none | 0.6042 | 0.8189 | 101.4 FPS |
+| `w8a8` | 50 HPatches images | 0.6071 | 0.8226 | 193.0 FPS |
+
+This example is packaged for `w16a16` because it is the profile anyone can build: it needs no
+calibration images. Its feature quality is within two points of the other two. `w8a8` is the faster
+model, at about 1.9 times the throughput, and needs the calibration images that
+[Compiling `w8a8` With Your Own HPatches Images](#compiling-w8a8-with-your-own-hpatches-images)
+covers. All three profiles stay ahead of a 30 FPS source such as the packaged TUM RGB-D clip.
+
+### Compiling `w8a8` With Your Own HPatches Images
+
+`w8a8` chooses its INT8 ranges from 50 HPatches images. SiMa CI takes them from the `hpatches-cal`
+archive in SiMa's Dataset Registry, whose source is on SiMa's internal Artifactory, so
+`dataset-registry` cannot download it without SiMa-internal access. `compile.py` takes the
+calibration images as a plain archive path, and the registry archive is built from the public
+HPatches sequences release with its files copied unchanged, so you can build the same calibration
+input yourself.
+
+1. Download the HPatches image sequences, about 1.3 GB, from the Hugging Face mirror the
+   [HPatches dataset repository](https://github.com/hpatches/hpatches-dataset) links, and read its
+   terms before using them:
+
+   ```bash
+   curl -L -o hpatches-sequences-release.zip \
+     https://huggingface.co/datasets/vbalnt/hpatches/resolve/main/hpatches-sequences-release.zip
+   unzip -q hpatches-sequences-release.zip
+   ```
+
+   It holds 116 sequences, named `i_<name>` for an illumination change and `v_<name>` for a
+   viewpoint change. Each sequence holds the images `1.ppm` to `6.ppm` and the homographies between
+   them.
+
+2. Build the calibration archive. `models/superpoint/scripts/calibration.py` reads a tar archive
+   and takes every `.ppm` file two levels under a directory named `cal`, then samples 50 of them
+   with a fixed seed. `hpatches-cal` holds ten of the release's sequences, copied unchanged, so the
+   same ten under `hpatches/cal/` reproduce the registry archive's calibration images:
+
+   ```bash
+   mkdir -p hpatches/cal
+   for sequence in i_kurhaus i_lionday i_table i_whitebuilding i_zion \
+                   v_apprentices v_calder v_dogman v_graffiti v_home; do
+     cp -r "hpatches-sequences-release/$sequence" hpatches/cal/
+   done
+   tar -czf hpatches-cal.tar.gz hpatches
+   ```
+
+   Other sequences also calibrate a working model, as long as the archive holds at least 50 `.ppm`
+   files under `hpatches/cal/<sequence>/`. They pick different INT8 ranges, so the package is then
+   a different model from the `w8a8` row in the table above.
+
+3. Compile `w8a8` with that archive, after the conversion step above:
+
+   ```bash
+   PYTHONPATH=tools python models/superpoint/scripts/compile.py \
+     --model build/superpoint/onnx/model.onnx \
+     --output-dir build/superpoint/w8a8 \
+     --build-profile w8a8 \
+     --compile-invocation w8a8 \
+     --dataset hpatches-cal.tar.gz
+   ```
+
+   Copy `build/superpoint/w8a8/model/superpoint_w8a8_mpk.tar.gz` into
+   `models/superpoint/w8a8/` under `prebuilt-apps/` and set `model.path` to it.
+
+The ten sequences above are the ones the registry's calibration archive holds, drawn from the
+sequences the 106-sequence HPatches validation split leaves out, so no sequence calibrates and
+scores the same model. Whatever images you calibrate with, the compile gates the result: it
+compares the quantized model's keypoints with FP32's and fails the build when keypoint recall
+falls below 0.8 or descriptor similarity below 0.9.
 
 ## Configure
 
@@ -102,7 +192,7 @@ investigating even though the run exits successfully.
 
 ## Troubleshooting
 
-- Confirm `model.path` points to the compiled `superpoint_w8a8_mpk.tar.gz`.
+- Confirm `model.path` points to the compiled `superpoint_w16a16_mpk.tar.gz`, or to the package of the build profile you compiled.
 - A missing or incompatible typed SuperPoint contract fails during model construction.
 - Confirm the H.264 RTSP source is running and keeps a stable resolution.
 - Confirm Insight is reachable at the configured host and UDP video port.
