@@ -21,6 +21,17 @@ EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
 
 main = load_example_main(EXAMPLE_DIR, "object_detector_main")
+# load_example_main put this example's src/python first on sys.path, so utils is its own.
+from utils.app_config import AppConfig, load_app_config, validate_config  # noqa: E402
+from utils.runtime import pull_result_has_sample  # noqa: E402
+
+
+@pytest.fixture
+def frames():
+    """utils.frames, which imports pyneat and OpenCV."""
+    from utils import frames as frames_module
+
+    return frames_module
 
 
 @pytest.mark.unit
@@ -33,17 +44,18 @@ main = load_example_main(EXAMPLE_DIR, "object_detector_main")
     ],
 )
 def test_ffprobe_transport_matches_source(monkeypatch, source_type, url, tcp, expected_tcp):
+    from utils import detector
+
     captured = []
 
     def fake_run(cmd, **_kwargs):
         captured.append(cmd)
         return SimpleNamespace(returncode=0, stdout="width=1920\nheight=1080\navg_frame_rate=30/1\n")
 
-    monkeypatch.setattr(main.subprocess, "run", fake_run)
-    cfg = main.AppConfig("model", Path("labels"), url, source_type, tcp=tcp,
-                         ssl_strict=False)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    cfg = AppConfig("model", Path("labels"), url, source_type, tcp=tcp, ssl_strict=False)
 
-    assert main.probe_ffprobe(cfg) == (1920, 1080, 30)
+    assert detector.resolve_source_geometry(cfg) == (1920, 1080, 30)
     assert captured[0].count("-rtsp_transport") == int(expected_tcp)
     assert captured[0][-3:] == ["-tls_verify", "0", url]
 
@@ -107,7 +119,7 @@ write_config = config_writer(VALID_CONFIG)
 class TestValidBaseline:
     def test_the_baseline_config_loads(self, tmp_path):
         """If this breaks, every rejection test below is testing the wrong thing."""
-        cfg = main.load_app_config(write_config(tmp_path))
+        cfg = load_app_config(write_config(tmp_path))
 
         assert cfg.model_path == "model.tar.gz"
         assert cfg.source_type == "rtsp"
@@ -121,7 +133,7 @@ class TestValidBaseline:
             "output": {"insight": {"host": "127.0.0.1"}},
         }
 
-        cfg = main.load_app_config(write_config(tmp_path, root=raw))
+        cfg = load_app_config(write_config(tmp_path, root=raw))
 
         assert cfg.source_type == "rtsp"
         assert cfg.source_codec == "h264"
@@ -185,7 +197,7 @@ class TestRejectedValues:
         config_path = write_config(tmp_path, [(path, value)])
 
         with pytest.raises(ValueError) as excinfo:
-            main.load_app_config(config_path)
+            load_app_config(config_path)
 
         assert message in str(excinfo.value)
 
@@ -210,13 +222,13 @@ class TestBoundariesAreAccepted:
         ],
     )
     def test_boundary_value_is_accepted(self, tmp_path, path, value):
-        main.load_app_config(write_config(tmp_path, [(path, value)]))
+        load_app_config(write_config(tmp_path, [(path, value)]))
 
 
 @pytest.mark.unit
 class TestSourceCombinations:
     def test_http_source_reads_its_own_section_and_is_mjpeg(self, tmp_path):
-        cfg = main.load_app_config(
+        cfg = load_app_config(
             write_config(
                 tmp_path,
                 [
@@ -235,18 +247,18 @@ class TestSourceCombinations:
     def test_http_source_without_its_url_is_rejected(self, tmp_path):
         """The rtsp section's URL is not read for source.type=http."""
         with pytest.raises(ValueError, match="source.http.url must be set"):
-            main.load_app_config(write_config(tmp_path, [(("source", "type"), "http")]))
+            load_app_config(write_config(tmp_path, [(("source", "type"), "http")]))
 
     @pytest.mark.parametrize(
         ("alias", "codec"), [("h264", "h264"), ("h265", "h265"), ("mjpeg", "mjpeg"), ("hevc", "h265")]
     )
     def test_every_documented_rtsp_codec_is_accepted(self, tmp_path, alias, codec):
-        cfg = main.load_app_config(write_config(tmp_path, [(("source", "rtsp", "codec"), alias)]))
+        cfg = load_app_config(write_config(tmp_path, [(("source", "rtsp", "codec"), alias)]))
 
         assert cfg.source_codec == codec
 
     def test_usb_source_needs_no_url(self, tmp_path):
-        cfg = main.load_app_config(
+        cfg = load_app_config(
             write_config(
                 tmp_path,
                 [
@@ -297,17 +309,17 @@ class TestSourceCombinations:
     )
     def test_usb_source_rejects_a_missing_camera_or_mode(self, tmp_path, overrides, message):
         with pytest.raises(ValueError, match=message):
-            main.load_app_config(
+            load_app_config(
                 write_config(tmp_path, [(("source", "type"), "usb"), *overrides])
             )
 
     def test_an_unsupported_codec_is_rejected(self, tmp_path):
         with pytest.raises(ValueError):
-            main.load_app_config(write_config(tmp_path, [(("source", "rtsp", "codec"), "vp9")]))
+            load_app_config(write_config(tmp_path, [(("source", "rtsp", "codec"), "vp9")]))
 
     def test_an_unsupported_source_type_is_rejected(self, tmp_path):
         with pytest.raises(ValueError):
-            main.load_app_config(write_config(tmp_path, [(("source", "type"), "webrtc")]))
+            load_app_config(write_config(tmp_path, [(("source", "type"), "webrtc")]))
 
     def test_flat_source_keys_are_not_read(self, tmp_path):
         """The settings live under source.<type>; a flat source.url is ignored."""
@@ -315,7 +327,7 @@ class TestSourceCombinations:
         raw["source"] = {"type": "rtsp", "url": "rtsp://127.0.0.1:8554/src1"}
 
         with pytest.raises(ValueError, match="source.rtsp.url must be set"):
-            main.load_app_config(write_config(tmp_path, root=raw))
+            load_app_config(write_config(tmp_path, root=raw))
 
 
 @pytest.mark.unit
@@ -356,26 +368,26 @@ class TestMalformedConfigFiles:
         config_path.write_text("- not\n- a mapping\n", encoding="utf-8")
 
         with pytest.raises(ValueError, match="config root must be a mapping"):
-            main.load_app_config(config_path)
+            load_app_config(config_path)
 
     def test_an_empty_file_is_reported_as_missing_settings_not_a_crash(self, tmp_path):
         config_path = tmp_path / "config.yaml"
         config_path.write_text("", encoding="utf-8")
 
         with pytest.raises(ValueError, match="source.rtsp.url must be set"):
-            main.load_app_config(config_path)
+            load_app_config(config_path)
 
     def test_a_missing_source_url_is_rejected(self, tmp_path):
         raw = copy.deepcopy(VALID_CONFIG)
         del raw["source"]["rtsp"]["url"]
 
         with pytest.raises(ValueError, match="source.rtsp.url must be set"):
-            main.load_app_config(write_config(tmp_path, root=raw))
+            load_app_config(write_config(tmp_path, root=raw))
 
     @pytest.mark.parametrize("key", ["path", "labels"])
     def test_a_non_string_where_a_string_belongs_is_rejected(self, tmp_path, key):
         with pytest.raises(ValueError, match=f"{key} must be a string"):
-            main.load_app_config(write_config(tmp_path, [(("model", key), 42)]))
+            load_app_config(write_config(tmp_path, [(("model", key), 42)]))
 
 
 @pytest.mark.unit
@@ -396,13 +408,13 @@ class TestLabelsRule:
             "output": {"insight": {"host": "127.0.0.1"}},
         }
 
-        cfg = main.load_app_config(write_config(tmp_path, root=raw))
+        cfg = load_app_config(write_config(tmp_path, root=raw))
 
         assert cfg.labels_path.name == "coco_label.txt"
         assert cfg.labels_path.is_file()
 
     def test_the_rule_still_fires_when_the_path_really_is_empty(self):
-        cfg = main.AppConfig(
+        cfg = AppConfig(
             model_path="model.tar.gz",
             labels_path=Path(""),
             source_url="rtsp://127.0.0.1:8554/src1",
@@ -410,7 +422,7 @@ class TestLabelsRule:
         )
 
         with pytest.raises(ValueError, match="model.labels must be set"):
-            main.validate_config(cfg)
+            validate_config(cfg)
 
 
 @pytest.mark.unit
@@ -426,7 +438,7 @@ class TestPullOutcomes:
         run = FakeRun("timeout")
         run.pull("detections", 20000)
 
-        assert main.pull_result_has_sample(run, None, "detections") is False
+        assert pull_result_has_sample(run, None, "detections") is False
 
     def test_run_pipeline_warns_on_timeout_and_stops_on_runtime_error(self, capsys):
         run = FakeRun("timeout", ("error", "queue torn down"))
@@ -444,16 +456,14 @@ class TestPullOutcomes:
 
 @pytest.mark.unit
 class TestUsbCameraFrames:
-    def test_nv16_frame_converts_to_bgr_through_its_padded_planes(self, monkeypatch):
+    def test_nv16_frame_converts_to_bgr_through_its_padded_planes(self, monkeypatch, frames):
         """A 4:2:2 USB camera frame is saved through its Y and UV planes, padding skipped,
         and every row keeps its own chroma."""
         import cv2
         import numpy as np
 
-        monkeypatch.setattr(main, "cv2", cv2)
-        monkeypatch.setattr(main, "np", np)
         monkeypatch.setattr(
-            main,
+            frames,
             "pyneat",
             SimpleNamespace(
                 PixelFormat=SimpleNamespace(NV16="NV16"),
@@ -479,7 +489,7 @@ class TestUsbCameraFrames:
             ],
         )
 
-        bgr = main.tensor_bgr_from_decoded(tensor)
+        bgr = frames.tensor_bgr_from_decoded(tensor)
 
         def expected(u, v):
             return cv2.cvtColor(np.array([[[81, u], [81, v]]], np.uint8), cv2.COLOR_YUV2BGR_YUY2)[0, 0]
@@ -495,16 +505,6 @@ class TestPaddedDecodedFrames:
     """The decoder pads its 4:2:0 frames (see tests/utils/padded_frames.py), so a saved frame is
     only right when the conversion packs the planes instead of slicing the raw payload."""
 
-    @pytest.fixture(autouse=True)
-    def runtime_modules(self, monkeypatch):
-        import cv2
-        import numpy as np
-        import pyneat
-
-        monkeypatch.setattr(main, "cv2", cv2)
-        monkeypatch.setattr(main, "np", np)
-        monkeypatch.setattr(main, "pyneat", pyneat)
-
     @pytest.mark.parametrize(("width", "height", "stride", "uv_row"), DECODER_LAYOUTS,
                              ids=DECODER_LAYOUT_IDS)
     @pytest.mark.parametrize(
@@ -513,7 +513,7 @@ class TestPaddedDecodedFrames:
         ids=["nv12", "i420"],
     )
     def test_padded_frame_converts_like_a_packed_one(
-        self, padded_tensor, conversion, width, height, stride, uv_row
+        self, frames, padded_tensor, conversion, width, height, stride, uv_row
     ):
         import cv2
         import numpy as np
@@ -521,7 +521,7 @@ class TestPaddedDecodedFrames:
         packed = yuv420_pattern(width, height)
         expected = cv2.cvtColor(packed, getattr(cv2, conversion))
 
-        bgr = main.tensor_bgr_from_decoded(padded_tensor(packed, width, height, stride, uv_row))
+        bgr = frames.tensor_bgr_from_decoded(padded_tensor(packed, width, height, stride, uv_row))
 
         assert bgr.shape == (height, width, 3)
         assert np.array_equal(bgr, expected)

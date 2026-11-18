@@ -1,9 +1,9 @@
 // Unit test for single-stream-object-detector: CLI handling, the ffprobe
 // command builder, the configuration rules --validate-config-only can
 // reach without a model or a stream, and the NV16 saved-frame conversion.
-#include "support/runtime/example_utils.h"
-#include "support/runtime/ffprobe_command.h"
-#include "support/runtime/pull_status.h"
+#include "examples/object-detection/single-stream-object-detector/src/cpp/utils/frames.h"
+#include "examples/object-detection/single-stream-object-detector/src/cpp/utils/runtime.h"
+#include "examples/object-detection/single-stream-object-detector/src/cpp/utils/sources.h"
 #include "support/testing/test_checks.h"
 #include "support/testing/test_process.h"
 
@@ -17,15 +17,15 @@
 
 namespace fs = std::filesystem;
 
-using sima_examples::build_ffprobe_rtsp_stream_info_command;
-using sima_examples::nv16_to_bgr;
-using sima_examples::pull_status_has_sample;
 using sima_examples::testing::expect_contains;
 using sima_examples::testing::expect_not_contains;
 using sima_examples::testing::expect_true;
 using sima_examples::testing::ProcessResult;
 using sima_examples::testing::spawn_and_wait;
 using sima_examples::testing::validate_config_body;
+using utils::build_ffprobe_command;
+using utils::nv16_to_bgr;
+using utils::pull_status_has_sample;
 
 namespace {
 
@@ -44,7 +44,7 @@ std::string minimal_config(const std::string& source_lines, const std::string& m
 }
 
 bool test_ffprobe_tcp_probe_selects_tcp_once_before_the_url() {
-  const std::string command = build_ffprobe_rtsp_stream_info_command("rtsp://camera/live", true);
+  const std::string command = build_ffprobe_command("rtsp://camera/live", true, true);
   const auto first = command.find("-rtsp_transport tcp");
   return expect_true(first != std::string::npos && first == command.rfind("-rtsp_transport tcp") &&
                          first < command.find("'rtsp://camera/live'"),
@@ -52,8 +52,7 @@ bool test_ffprobe_tcp_probe_selects_tcp_once_before_the_url() {
 }
 
 bool test_ffprobe_default_probe_omits_tcp_and_quotes_the_url() {
-  const std::string command =
-      build_ffprobe_rtsp_stream_info_command("rtsp://camera/stream's", false);
+  const std::string command = build_ffprobe_command("rtsp://camera/stream's", false, true);
   return expect_true(command.find("-rtsp_transport") == std::string::npos &&
                          command.find("'rtsp://camera/stream'\\''s'") != std::string::npos,
                      "default RTSP probe omits TCP and shell-quotes the URL");
