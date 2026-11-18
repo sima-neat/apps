@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -27,11 +29,33 @@ def load_refresh_results():
     return refresh_results
 
 # The fake traces the options reaching pyneat.Model so a test can assert the exact Core
-# enum and top-K, and resolves the postprocess the way Core does.
+# enum and top-K, and resolves the postprocess the way Core does. Its specs carry the
+# public pyneat.TensorConstraint fields; the binding's enums are Python enums.
 FAKE_PYNEAT = '''
+import enum
 import os
 from pathlib import Path
 from types import SimpleNamespace
+
+
+class TensorDType(enum.Enum):
+    UInt8 = 0
+    Float32 = 6
+
+
+class PixelFormat(enum.Enum):
+    RGB = 0
+
+
+class TensorConstraint:
+    def __init__(self, dtypes, shape, image_format=None):
+        self.dtypes = dtypes
+        self.rank = len(shape)
+        self.shape = shape
+        self.image_format = image_format
+
+    def __repr__(self):
+        return f"<pyneat._pyneat_core.TensorConstraint object at {id(self):#x}>"
 
 
 class BoxDecodeType:
@@ -78,10 +102,13 @@ class Model:
         )
 
     def input_specs(self):
-        return ["input:uint8[1,3,640,640]"]
+        return [TensorConstraint([TensorDType.UInt8], [-1, -1, 3], PixelFormat.RGB)]
 
     def output_specs(self):
-        return [f"out{i}:float32[1,80,80]" for i in range(self.outputs)]
+        if os.environ.get("FAKE_PYNEAT_SPEC_ERROR"):
+            raise RuntimeError(os.environ["FAKE_PYNEAT_SPEC_ERROR"])
+        return [TensorConstraint([TensorDType.Float32], [1, 80, 80, 84])
+                for _ in range(self.outputs)]
 
     def benchmark(self, options):
         assert options.num_samples == 7
@@ -92,7 +119,9 @@ class Model:
 '''
 
 
-def run_main(tmp_path: Path, report: Path, *extra: str) -> tuple[subprocess.CompletedProcess, Path]:
+def run_main(tmp_path: Path, report: Path, *extra: str,
+             env_overrides: dict[str, str] | None = None
+             ) -> tuple[subprocess.CompletedProcess, Path]:
     (tmp_path / "pyneat.py").write_text(FAKE_PYNEAT, encoding="utf-8")
     model = tmp_path / "model.tar.gz"
     model.write_text("fake model", encoding="utf-8")
@@ -101,6 +130,7 @@ def run_main(tmp_path: Path, report: Path, *extra: str) -> tuple[subprocess.Comp
     env = os.environ.copy()
     env["PYTHONPATH"] = f"{tmp_path}{os.pathsep}{env.get('PYTHONPATH', '')}"
     env["FAKE_PYNEAT_TRACE"] = str(trace)
+    env.update(env_overrides or {})
     result = subprocess.run(
         [sys.executable, str(MAIN_PY), "--model", str(model), "--frames", "7",
          "--output-json", str(report), *extra],
@@ -194,6 +224,45 @@ def test_writes_json_report_with_benchmark_metrics(tmp_path: Path) -> None:
         "energy_joules": 0.75,
         "telemetry_status": "ok",
     }
+
+
+@pytest.mark.unit
+def test_report_describes_tensor_specs(tmp_path: Path) -> None:
+    report = tmp_path / "report.json"
+    result, _ = run_main(tmp_path, report)
+
+    assert result.returncode == 0, result.stderr
+    data = json.loads(report.read_text(encoding="utf-8"))
+    assert data["model"]["input_specs"] == ["dtype=UInt8 shape=[-1,-1,3] image_format=RGB"]
+    assert data["model"]["output_specs"] == ["dtype=Float32 shape=[1,80,80,84]"] * 6
+
+
+@pytest.mark.unit
+def test_report_keeps_unavailable_sentinel_when_specs_fail(tmp_path: Path) -> None:
+    report = tmp_path / "report.json"
+    result, _ = run_main(
+        tmp_path, report, env_overrides={"FAKE_PYNEAT_SPEC_ERROR": "no output contract"}
+    )
+
+    assert result.returncode == 0, result.stderr
+    data = json.loads(report.read_text(encoding="utf-8"))
+    assert data["model"]["output_specs"] == ["unavailable: no output contract"]
+    assert data["metrics"]["fps"] == 800.0
+
+
+@pytest.mark.unit
+def test_describe_spec_reports_any_dtype_and_rank_only_specs() -> None:
+    spec = importlib.util.spec_from_file_location("model_benchmark_main", MAIN_PY)
+    main = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(main)
+
+    dtype = SimpleNamespace(name="Float32")
+    bfloat = SimpleNamespace(name="BFloat16")
+    rank_only = SimpleNamespace(dtypes=[dtype, bfloat], rank=4, shape=[], image_format=None)
+    unconstrained = SimpleNamespace(dtypes=[], rank=-1, shape=[], image_format=None)
+
+    assert main.describe_spec(rank_only) == "dtype=Float32|BFloat16 rank=4"
+    assert main.describe_spec(unconstrained) == "dtype=any shape=any"
 
 
 @pytest.mark.unit

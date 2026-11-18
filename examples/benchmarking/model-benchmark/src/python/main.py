@@ -30,9 +30,28 @@ def load_config(path: Path) -> dict:
     return payload
 
 
+def describe_spec(spec) -> str:
+    """Render a pyneat.TensorConstraint as text, such as "dtype=UInt8 shape=[1,640,640,3]".
+
+    The binding has no readable str(), and these are the fields Core fills for model specs.
+    An empty dtype list means any dtype, and -1 in the shape marks a dynamic axis.
+    """
+    dtypes = "|".join(dtype.name for dtype in spec.dtypes) or "any"
+    if spec.shape:
+        shape = "shape=[" + ",".join(str(dim) for dim in spec.shape) + "]"
+    elif spec.rank >= 0:
+        shape = f"rank={spec.rank}"
+    else:
+        shape = "shape=any"
+    text = f"dtype={dtypes} {shape}"
+    if spec.image_format is not None:
+        text += f" image_format={spec.image_format.name}"
+    return text
+
+
 def spec_strings(model, method_name: str) -> list[str]:
     try:
-        return [str(spec) for spec in getattr(model, method_name)()]
+        return [describe_spec(spec) for spec in getattr(model, method_name)()]
     except Exception as exc:
         return [f"unavailable: {exc}"]
 
