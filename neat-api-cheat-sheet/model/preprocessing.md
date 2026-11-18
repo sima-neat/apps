@@ -302,7 +302,12 @@ use `input_specs()` to know what to send.
   and gives no warning. Fix: for another resize mode, leave `preset` at
   `None`, set `resize.enable = On` and `resize.mode`, and set the statistics
   yourself (mean 0 and stddev 1 with `has_explicit_stats = true` is what
-  `COCO_YOLO` uses).
+  `COCO_YOLO` uses). This fix does not work together with YOLO box decoding.
+  On a DevKit with Core 0.6.2, a `Stretch` resize with `decode_type =
+  YoloV26` failed when the pipeline was built, with `contract compilation
+  failed … BoxDecode kernel recipe: resize: explicit resize does not match
+  profile geometry`, also with `boxdecode_resize_mode = Stretch`. Without a
+  `decode_type`, the same route ran and returned the raw outputs.
 - **The wrong input kind fails clearly.** On the default tensor route, a UInt8
   image fails with `[misconfig.input_shape] Run::push: tensor format does not
   match dtype`. On an image route, a float32 model tensor fails with
