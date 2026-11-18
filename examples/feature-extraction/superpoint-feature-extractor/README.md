@@ -116,8 +116,14 @@ input yourself.
                    v_apprentices v_calder v_dogman v_graffiti v_home; do
      cp -r "hpatches-sequences-release/$sequence" hpatches/cal/
    done
-   tar -czf hpatches-cal.tar.gz hpatches
+   COPYFILE_DISABLE=1 tar -czf hpatches-cal.tar.gz hpatches
    ```
+
+   `COPYFILE_DISABLE=1` matters on macOS. The downloaded files carry an extended attribute, and
+   macOS `tar` then writes a `._<name>.ppm` companion for each one. The compile reads every
+   `.ppm` member under `hpatches/cal/<sequence>/` as an image and stops at the first companion
+   with `ValueError: could not decode image`. macOS `tar -tzf` hides those members, so the
+   archive looks correct while half of it is unreadable. On Linux the variable does nothing.
 
    Other sequences also calibrate a working model, as long as the archive holds at least 50 `.ppm`
    files under `hpatches/cal/<sequence>/`. They pick different INT8 ranges, so the package is then
