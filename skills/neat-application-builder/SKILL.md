@@ -18,6 +18,10 @@ behavior. Verify the APIs affected by the task against that installation.
   input owner, and API family before committing to a topology.
 - For classic model execution or graph composition, read
   [Model, Graph, and Run](references/model-graph-run.md).
+- When choosing nodes, connecting graphs, or serving many streams with one
+  model, read [graph topologies](references/graph-topologies.md).
+- When adding or reading application settings, read
+  [application configuration](references/config.md).
 - For LLM, VLM, ASR, or HTTP model serving, read
   [GenAI APIs](references/genai.md).
 - When locating an unfamiliar API, use the
@@ -27,7 +31,9 @@ behavior. Verify the APIs affected by the task against that installation.
   [application output](references/application-output.md).
 - When inspecting where model stages run, measuring latency or power, or
   tuning memory and buffering, read
-  [inspect, measure, and tune](references/inspect-measure-tune.md).
+  [inspect, measure, and tune](references/inspect-measure-tune.md). For
+  throughput work on a running application, use the
+  `neat-application-optimizer` skill.
 - When packaging or running the application in Docker, read
   [containers](references/containers.md).
 

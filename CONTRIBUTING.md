@@ -131,6 +131,10 @@ to it and name only the settings they must change. Do not copy the full file
 into the README. A focused snippet is appropriate only for an override or
 generated configuration that the package does not provide.
 
+Config files use the key names in `examples/config-keys.yaml` and put settings
+only one example has under `app.`. Every key is required, and the application
+rejects keys it does not read.
+
 Bundle instructions run from `prebuilt-apps/`. Define
 `APP_DIR=examples/<category>/<example>` once and reuse it so commands remain
 readable without changing relative model, asset, label, or output paths.
@@ -231,6 +235,7 @@ generation, and affected CI workflows.
 | `examples/<category>/<example>/src/cpp/` | C++ implementation reference |
 | `examples/<category>/<example>/src/python/` | Python implementation and dependencies |
 | `examples/<category>/<example>/src/common/` | Shared runtime configuration and data |
+| `support/python/` | Helpers the Python examples share |
 | `assets/datasets/` | Shipped runtime sample data |
 | `models/` | User-managed model packages |
 | `deps/neat-apps.json` | Installed Apps ref and exact commit |
@@ -244,6 +249,10 @@ to compile source or run the Apps test suite.
 | Path | Purpose |
 | --- | --- |
 | `examples/` | Application examples organized by category |
+| `examples/config-keys.yaml` | Config keys the examples share, checked by `tests/scripts/test_config_keys.py` |
+| `support/` | Code without Neat API calls that two or more examples share, in C++ and Python |
+| `skills/` | Customer skills that sima-cli installs |
+| `agents/` | Rules and skills for contributors' agents and the automatic review |
 | `assets/datasets/` | Runtime datasets shipped with Apps |
 | `assets/datasets-test/` | Repository-only test fixtures |
 | `models/` | Ignored user-managed model packages |
