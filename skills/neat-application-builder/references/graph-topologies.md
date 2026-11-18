@@ -42,6 +42,8 @@ per stream:  RtspEncodedInput ──► decoder graph ──► detector graph (
   carries it, so the application knows which stream a result belongs to.
 - Bound the frames the model holds with `max_inflight_per_stream` and `max_inflight_total` on
   that link, so one stream cannot starve the others.
+- A detection model's pulled result is a `TensorSet` whose first tensor is the `BBOX` payload,
+  not a single `Tensor`. Pass that first tensor to `decode_bbox_tensor`.
 - Send each result to the stream's own Insight channel: `channel = stream index`, with video
   and metadata on `port base + channel`.
 

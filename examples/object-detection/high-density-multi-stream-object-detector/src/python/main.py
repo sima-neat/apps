@@ -243,15 +243,15 @@ def stream_fps(cfg: AppConfig) -> dict[str, int]:
 
 
 def decode_boxes(sample: pyneat.Sample, cfg: AppConfig) -> list:
-    if sample.kind != pyneat.SampleKind.Tensor or sample.payload_tag not in (
-        "",
-        "BBOX",
-    ):
-        raise RuntimeError(
-            f"expected one BBOX tensor, got {sample.kind} {sample.payload_tag!r}"
-        )
+    """The boxes in a detections sample, whose first tensor is the BBOX payload."""
+    if sample.kind == pyneat.SampleKind.TensorSet and sample.tensors:
+        bbox = sample.tensors[0]
+    elif sample.kind == pyneat.SampleKind.Tensor:
+        bbox = sample.tensor
+    else:
+        raise RuntimeError(f"expected a BBOX tensor, got {sample.kind}")
     result = pyneat.detections.decode_bbox_tensor(
-        sample.tensor, cfg.width, cfg.height, cfg.max_detections, strict=True
+        bbox, cfg.width, cfg.height, cfg.max_detections, strict=True
     )
     return result.boxes
 

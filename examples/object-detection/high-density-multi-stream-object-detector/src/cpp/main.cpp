@@ -278,13 +278,17 @@ std::map<std::string, int> stream_fps(const AppConfig& cfg) {
   return fps_by_url;
 }
 
+// The boxes in a detections sample, whose first tensor is the BBOX payload.
 std::vector<neat::Box> decode_boxes(const neat::Sample& sample, const AppConfig& cfg) {
-  if (sample.kind != neat::SampleKind::Tensor || !sample.tensor.has_value() ||
-      (!sample.payload_tag.empty() && sample.payload_tag != "BBOX")) {
-    throw std::runtime_error("expected one BBOX tensor, got payload tag '" + sample.payload_tag +
-                             "'");
+  const neat::Tensor* bbox = nullptr;
+  if (sample.kind == neat::SampleKind::TensorSet && !sample.tensors.empty()) {
+    bbox = &sample.tensors.front();
+  } else if (sample.kind == neat::SampleKind::Tensor && sample.tensor.has_value()) {
+    bbox = &*sample.tensor;
+  } else {
+    throw std::runtime_error("expected a BBOX tensor in the detections sample");
   }
-  return neat::decode_bbox_tensor(*sample.tensor, cfg.width, cfg.height, cfg.max_detections,
+  return neat::decode_bbox_tensor(*bbox, cfg.width, cfg.height, cfg.max_detections,
                                   /*strict=*/true)
       .boxes;
 }
