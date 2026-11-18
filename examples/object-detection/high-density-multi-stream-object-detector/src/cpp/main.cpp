@@ -360,6 +360,9 @@ int run_app(const CliOptions& cli) {
         std::make_unique<neat::MetadataSender>(metadata_options(cfg, index), &error));
     sima_examples::require(metadata_senders.back()->ok(), error);
   }
+  std::cout << "streams=" << cfg.sources.size() << " insight=" << cfg.insight_host
+            << " video_ports=" << cfg.video_port_base
+            << "+ metadata_ports=" << cfg.metadata_port_base << "+\n";
 
   std::signal(SIGINT, request_stop);
   neat::Run run = graph.build(run_options(cfg));
