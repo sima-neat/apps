@@ -34,7 +34,8 @@ nodes) or the model runner instead (`Model::Runner::start_measurement`, see the
 ## Minimal example
 
 No shipped example calls `benchmark` from C++; this block is built from
-`include/model/Model.h` and was not compiled.
+`include/model/Model.h`. It was compiled with the SDK and run on a DevKit with
+Core 0.6.2.
 
 C++
 
