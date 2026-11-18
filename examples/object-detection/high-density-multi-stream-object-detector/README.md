@@ -96,21 +96,11 @@ echo "$(pwd)/models/yolo26n/w8a8/yolo26n_w8a8_mpk.tar.gz"
 ```
 
 Then set that value as `model.path` in the selected config. Change only that
-line; `labels` and `decode_type` must keep their packaged values:
-
-```yaml
-model:
-  path: <paste-the-printed-path>
-  labels: examples/object-detection/high-density-multi-stream-object-detector/src/common/coco_label.txt
-  decode_type: yolo26
-```
-
-`model.labels` is the exception: it resolves from the Apps root, so the packaged
-value needs no change.
+line. `model.labels` resolves from `prebuilt-apps/`, so its packaged value needs no change.
 
 ## Prepare Insight
 
-[Insight](https://developer.sima.ai/software/tools/insight/) can host the input streams and render each output channel. Install videos directly from the Insight catalog or through YouTube support. In the Insight Web UI, start the required streams and copy their RTSP URLs into `streams`. Use the host and UDP port ranges reported by `neat` for the output settings. Use a host and published port that the target can reach, not `localhost` and not an address only Insight's own machine can resolve. Verify the URL from the target before running; the application prints the resolved source and its dimensions on startup.
+[Insight](https://developer.sima.ai/software/tools/insight/) can host the input streams and render each output channel. Install videos directly from the Insight catalog or through YouTube support. In the Insight Web UI, start the required streams and copy their RTSP URLs into `input.source`. One stream URL may repeat in every entry, so a single Insight stream can feed all 20, 30, or 60 channels. Use the host and UDP port ranges reported by `neat` for the output settings. Use a host and published port that the target can reach, not `localhost` and not an address only Insight's own machine can resolve. Verify the URL from the target before running; the application prints the resolved source and its dimensions on startup.
 
 Verify each source before starting the application. A Modalix DevKit does not
 ship `ffprobe`, so run this from the machine hosting the sources or from any
@@ -131,16 +121,18 @@ The result must report the codec selected by `input.codec`, `1280x720`, the sele
 Choose one config under `${APP_DIR}/src/common/` and edit:
 
 - `model.path`
-- every entry under `streams`
+- every entry under `input.source`
 - `output.insight.host`
 
-Set `input.codec` to `h264`/`avc` or `h265`/`hevc`. H.264 is the default in all checked-in density profiles and remains the validated high-density configuration.
+Set `input.codec` to `h264` or `h265`. H.264 is the default in all checked-in density profiles and remains the validated high-density configuration.
 
 `inference.max_inflight_per_stream` and `inference.max_inflight_total` bound raw decoder-backed frames admitted to the shared detector. The 20- and 60-stream profiles use a total limit of eight; the 30-stream profile uses 30 so one aggregate frame interval can be admitted without an unbounded queue. The realtime mux retains only the latest pending frame for each stream.
 
-Do not add the removed `inference.fan_in_policy` setting. Ordinary `connect()` and `build()` select the eligible realtime fan-in lowering automatically. The `runtime` settings (`profile`, `warmup_frames`, and the `*_detection_timeout_ms` deadlines) are still validated so existing configs keep loading, but they have no effect and the application prints a warning when they are present. The application publishes metadata from the first valid detection result and runs continuously until interrupted; warmup, throughput measurement, and progress deadlines belong to the E2E receiver. Video/metadata synchronization is performed by Insight from each payload's source RTP timestamp; there is no application-side video-delay setting.
+The application reads every key in the config and rejects any other key, so a renamed or misspelled key stops it at startup with `has unknown keys: <key>`. Settings under `app` belong to this example only; the other names are shared by the examples, as listed in the repository's `examples/config-keys.yaml`.
 
-The default 20-stream config uses `input.fps: 0` and enables probing, so the source determines its frame rate. Keep `input.width` and `input.height` matched to the source. The 30- and 60-stream profiles keep explicit FPS values and skip probing; their configured dimensions and frame rates must match the sources.
+The application publishes metadata from the first valid detection result and runs continuously until interrupted. Insight pairs video and metadata through each message's source RTP timestamp.
+
+The default 20-stream config sets `input.fps: 0`, so the application probes each source for its frame rate. The 30- and 60-stream profiles set the frame rate and start without probing. Keep `input.width`, `input.height`, and a nonzero `input.fps` matched to the sources.
 
 Insight channel and port mapping is deterministic:
 
@@ -196,7 +188,7 @@ Use one active Insight viewer while validating metadata. Insight currently has a
 - Every configured Insight channel receives live video.
 - Detection boxes appear on the matching channel.
 - Video and metadata approach the source cadence for 20 streams, 20 FPS for 30 streams, or 10 FPS for 60 streams. See the profile table for the measured rate.
-- Nonblocking metadata-send failures are reported as rate-limited warnings without stalling inference.
+- Metadata messages the nonblocking sender drops are counted per stream and reported when the application stops.
 - `Ctrl-C` closes the graph and exits cleanly.
 
 If channels do not start, confirm that every publisher was already reachable and that the configured source caps match the selected profile. Restart the application after restarting the publishers.
@@ -214,22 +206,15 @@ without opening a stream or touching Insight:
   `model.path` resolved from the config file rather than from `prebuilt-apps/`.
   Use the absolute path printed in Prepare the Model. Validation does not open
   the archive, so this appears only once the run starts.
-- `output.insight.max_visible_streams cannot exceed stream count` means the
-  profile's visible-stream count is higher than the number of entries under
-  `streams`. Reduce it, or add the missing stream URLs.
-- `failed to probe RTSP frame rate` from the C++ binary does not tell you which
-  problem you have. The shipped profiles set `input.width` and `input.height` but
-  leave `input.fps` at `0`, so the configured dimensions are used as-is and only
-  the frame rate is probed. An unreachable source and a reachable source that
-  advertises no frame rate both end at this same message. Confirm the URL is
-  reachable from the board before assuming the latter, and set `input.fps` only
-  once you have.
-- The Python entrypoint does distinguish the two: an unreachable source raises
-  `failed to open RTSP source for probing: <url>` before any dimension or rate
-  check.
-- Either way, verify the URL from the board itself rather than from the machine
-  running Insight; the URL Insight displays is not always reachable from the
-  target.
+- `has unknown keys: <key>` names a key the application does not read, such as
+  `streams` from an older config. Rename it as the packaged config shows.
+- `failed to probe RTSP frame rate: <url>` appears with `input.fps: 0`. From the
+  C++ binary it can mean an unreachable source or one that advertises no frame
+  rate. The Python entrypoint reports an unreachable source as
+  `failed to open RTSP source for probing: <url>`. Verify the URL from the board
+  itself rather than from the machine running Insight; the URL Insight displays
+  is not always reachable from the target.
+
 ## Source Files
 
 - C++ reference source: `src/cpp/main.cpp`
@@ -238,6 +223,7 @@ without opening a stream or touching Insight:
 - 30-stream profile: `src/common/config-30x720p20fps.yaml`
 - 60-stream profile: `src/common/config-60x720p10fps.yaml`
 - COCO labels: `src/common/coco_label.txt`
+- Helpers shared with other examples, with no Neat API calls: `support/python/sima_examples/` in `prebuilt-apps/`
 
 The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
 

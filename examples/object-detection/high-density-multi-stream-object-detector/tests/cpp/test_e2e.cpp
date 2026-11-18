@@ -39,8 +39,8 @@ double minimum_stream_fps() {
   std::string field;
   long long kib = 0;
   std::string unit;
-  if (meminfo >> field >> kib >> unit && field == "MemTotal:" && unit == "kB" &&
-      kib > 0 && kib <= kEightGiBKiB)
+  if (meminfo >> field >> kib >> unit && field == "MemTotal:" && unit == "kB" && kib > 0 &&
+      kib <= kEightGiBKiB)
     return 25.0;
   // Eight CI DevKits on Platform 3.0.1 held 556 to 565 FPS in total for H.264.
   return 27.0;
@@ -66,9 +66,9 @@ std::string select_source(const std::vector<std::string>& urls, const std::strin
   for (const auto& url : urls) {
     if (!seen.insert(url).second)
       continue;
-    cv::VideoCapture cap(url, cv::CAP_ANY,
-                         {cv::CAP_PROP_OPEN_TIMEOUT_MSEC, 20000,
-                          cv::CAP_PROP_READ_TIMEOUT_MSEC, 20000});
+    cv::VideoCapture cap(
+        url, cv::CAP_ANY,
+        {cv::CAP_PROP_OPEN_TIMEOUT_MSEC, 20000, cv::CAP_PROP_READ_TIMEOUT_MSEC, 20000});
     if (!cap.isOpened()) {
       std::cerr << "Cannot open source: " << url << "\n";
       continue;
@@ -83,8 +83,8 @@ std::string select_source(const std::vector<std::string>& urls, const std::strin
                 << " unique_publishers=1\n";
       return url;
     }
-    std::cerr << "Unsuitable source: width=" << width << " height=" << height
-              << " fps=" << fps << "\n";
+    std::cerr << "Unsuitable source: width=" << width << " height=" << height << " fps=" << fps
+              << "\n";
   }
   throw std::runtime_error("No 720p30 " + codec + " source");
 }
@@ -108,10 +108,9 @@ void run_case(const std::string& binary, const std::string& model, const std::st
        {"input.fps", "0"},
        {"output.video_enabled", "true"},
        {"output.insight.host", "127.0.0.1"},
-       {"output.insight.max_visible_streams", "20"},
        {"output.insight.video_port_base", std::to_string(video)},
        {"output.insight.metadata_port_base", std::to_string(port)}},
-      {{"streams", std::vector<std::string>(20, url)}});
+      {{"input.source", std::vector<std::string>(20, url)}});
   MetadataJsonListenerOptions options;
   options.base_port = port;
   options.num_ports = 20;
@@ -137,9 +136,8 @@ void run_case(const std::string& binary, const std::string& model, const std::st
               "metadata listener failed: " + metadata.error);
       for (const auto& message : metadata.messages) {
         const auto [index, payload] = validate_metadata_message(message, port);
-        tracker.observe(static_cast<std::size_t>(index),
-                        payload.at("frame_id").get<std::string>(), message.object_count > 0,
-                        Tracker::Clock::now());
+        tracker.observe(static_cast<std::size_t>(index), payload.at("frame_id").get<std::string>(),
+                        message.object_count > 0, Tracker::Clock::now());
         if (tracker.warmup_complete() && !tracker.measurement_started()) {
           // Timing includes the flush, so concurrent arrivals can only lower reported FPS.
           tracker.start_measurement(Tracker::Clock::now());
@@ -200,23 +198,22 @@ void run_case(const std::string& binary, const std::string& model, const std::st
 
   const auto result = spawn_until(binary, {"--config", config.string()}, ready, timeout_ms);
   const std::string shutdown_problem = exit_problem(result);
-  require(shutdown_problem.empty(), "application did not shut down cleanly: " +
-                                        shutdown_problem + "\n" + result.stdout_text +
-                                        result.stderr_text);
+  require(shutdown_problem.empty(), "application did not shut down cleanly: " + shutdown_problem +
+                                        "\n" + result.stdout_text + result.stderr_text);
   if (result.stopped_by_harness && stop_requested_at) {
     const auto shutdown_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                                  std::chrono::steady_clock::now() - *stop_requested_at)
                                  .count();
-    require(shutdown_ms <= kSigintExitLimitMs,
-            "application took " + std::to_string(shutdown_ms) + " ms to exit after SIGINT; " +
-                "the limit is " + std::to_string(kSigintExitLimitMs) + " ms\n" +
-                result.stdout_text + result.stderr_text);
+    require(shutdown_ms <= kSigintExitLimitMs, "application took " + std::to_string(shutdown_ms) +
+                                                   " ms to exit after SIGINT; " + "the limit is " +
+                                                   std::to_string(kSigintExitLimitMs) + " ms\n" +
+                                                   result.stdout_text + result.stderr_text);
   }
   if (receiver_failure.empty() && !result.stopped_by_harness) {
     receiver_failure = "application exited before the receiver reached its frame target";
   }
-  require(receiver_failure.empty(), receiver_failure + "\n" + result.stdout_text +
-                                        result.stderr_text);
+  require(receiver_failure.empty(),
+          receiver_failure + "\n" + result.stdout_text + result.stderr_text);
   require(tracker.complete(), "receiver did not reach 5000 unique measured metadata frames");
   require(std::all_of(tracker.useful_detection().begin(), tracker.useful_detection().end(),
                       [](bool useful) { return useful; }),

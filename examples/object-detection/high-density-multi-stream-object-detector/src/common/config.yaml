@@ -1,59 +1,53 @@
-# Default profile: 20 x 720p at the input stream cadence.
-# Relative model paths use this file; label paths use the Apps root.
+# Default profile: 20 streams of 720p at each stream's own frame rate.
 model:
-  path: <model-path>
-  labels: examples/object-detection/high-density-multi-stream-object-detector/src/common/coco_label.txt
-  decode_type: yolo26
-
-streams:
-  - <rtsp-url-1>
-  - <rtsp-url-2>
-  - <rtsp-url-3>
-  - <rtsp-url-4>
-  - <rtsp-url-5>
-  - <rtsp-url-6>
-  - <rtsp-url-7>
-  - <rtsp-url-8>
-  - <rtsp-url-9>
-  - <rtsp-url-10>
-  - <rtsp-url-11>
-  - <rtsp-url-12>
-  - <rtsp-url-13>
-  - <rtsp-url-14>
-  - <rtsp-url-15>
-  - <rtsp-url-16>
-  - <rtsp-url-17>
-  - <rtsp-url-18>
-  - <rtsp-url-19>
-  - <rtsp-url-20>
+  path: <model-path>            # Compiled model package; relative paths start at this file.
+  labels: examples/object-detection/high-density-multi-stream-object-detector/src/common/coco_label.txt  # Relative to the working directory.
 
 input:
-  codec: h264                # h264/avc or h265/hevc.
-  tcp: true
-  latency_ms: 100
-  drop_on_latency: true
-  skip_rtsp_probe: false
-  width: 1280
+  source:                       # One RTSP URL per stream; the same URL may repeat.
+    - <rtsp-url-1>
+    - <rtsp-url-2>
+    - <rtsp-url-3>
+    - <rtsp-url-4>
+    - <rtsp-url-5>
+    - <rtsp-url-6>
+    - <rtsp-url-7>
+    - <rtsp-url-8>
+    - <rtsp-url-9>
+    - <rtsp-url-10>
+    - <rtsp-url-11>
+    - <rtsp-url-12>
+    - <rtsp-url-13>
+    - <rtsp-url-14>
+    - <rtsp-url-15>
+    - <rtsp-url-16>
+    - <rtsp-url-17>
+    - <rtsp-url-18>
+    - <rtsp-url-19>
+    - <rtsp-url-20>
+  codec: h264                   # h264 or h265, for every stream.
+  width: 1280                   # Frame size of every stream, in pixels.
   height: 720
-  fps: 0                    # 0 uses the input stream cadence.
-  decoder_buffers: 8
-  decoder_input_buffers: 2
-  decoder_tuning: throughput-low-latency
+  fps: 0                        # 0 reads each stream's frame rate with a probe.
+  rtsp:
+    tcp: true                   # Receive RTSP over TCP.
+    latency_ms: 100             # RTSP jitter buffer.
 
 inference:
-  workers: 1
-  queue_depth: 16
-  internal_queue_depth: 1
-  max_inflight_per_stream: 1
-  max_inflight_total: 8
-  min_score: 0.30
-  nms_iou: 0.60
-  max_detections: 50
+  min_score: 0.30               # Lowest score a detection needs.
+  nms_iou: 0.60                 # Overlap at which NMS drops the weaker box.
+  max_detections: 50            # Boxes kept per frame.
+  max_inflight_per_stream: 1    # Frames of one stream the model holds at once.
+  max_inflight_total: 8         # Frames of all streams the model holds at once.
 
 output:
+  video_enabled: true           # Send each stream's video to Insight; false sends only boxes.
   insight:
-    host: <insight-host-ip>
-    video_port_base: 9000
-    metadata_port_base: 9100
-    max_visible_streams: 20
-  video_enabled: true
+    host: <insight-host-ip>     # Machine running Insight.
+    video_port_base: 9000       # Stream i sends video to this port + i.
+    metadata_port_base: 9100    # Stream i sends boxes to this port + i.
+
+app:
+  decoder_buffers: 8            # Decoded frames each stream's decoder keeps.
+  queue_depth: 16               # Detections waiting to be sent, and the run's queue depth.
+  internal_queue_depth: 1       # Frames queued between the model's stages.
