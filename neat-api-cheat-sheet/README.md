@@ -23,6 +23,12 @@ languages. There are no separate C++ and Python pages.
 
 Every page follows [TEMPLATE.md](TEMPLATE.md).
 
+## Pages
+
+### Inputs
+
+- [Input](inputs/input-node.md): `nodes::Input`, `InputOptions`, `InputMemoryPolicy`, `PayloadType`, pushing frames from the application
+
 ## How C++ names map to Python names
 
 The C++ API lives in the `simaai::neat` namespace. The Python API is the
