@@ -138,8 +138,17 @@ writes annotated frames there as it runs.
 ## Source Files
 
 - C++ reference source: `src/cpp/main.cpp`
+- C++ helpers: `src/cpp/utils/`
+  - this example's settings and source setup: `app_config.h`, `app_config.cpp`, `detector.h`, `detector.cpp`
+  - common helpers, the same in every example that uses them: `config.h`, `config.cpp`, `runtime.h`, `sources.h`, `sources.cpp`, `frames.h`, `frames.cpp`, `detections.h`, `detections.cpp`, `insight.h`, `insight.cpp`
 - Python source: `src/python/main.py`
+- Python helpers: `src/python/utils/`
+  - this example's settings and source setup: `__init__.py`, `app_config.py`, `detector.py`
+  - common helpers, the same in every example that uses them: `config.py`, `runtime.py`, `sources.py`, `frames.py`, `detections.py`, `insight.py`
 - Shared config: `src/common/config.yaml`
+- Class labels: `src/common/coco_label.txt`
+
+`main.cpp` and `main.py` build the whole graph; the helpers hold the configuration, source probing, frame conversion, detection parsing and Insight metadata code they call.
 
 The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
 
