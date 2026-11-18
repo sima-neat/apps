@@ -107,12 +107,14 @@ The BoxDecode row builds a 160x160 mask on the A65 for every detection it keeps,
 
 | Model ID | Package | Used By | Postprocess | Outputs | Latency ms (mean / p50 / p99) | FPS |
 | --- | --- | --- | --- | ---: | ---: | ---: |
-| `depth_anything_v2_small_w8a8_mixed` | `depth_anything_v2_small_w8a8_mixed_mpk.tar.gz` | depth-estimator | Not measured: not yet run on a DevKit | | | |
+| `depth_anything_v2_small_w8a8_mixed` | `depth_anything_v2_small_w8a8_mixed_mpk.tar.gz` | depth-estimator | `dequantize` | 1 | 65.46 / 65.44 / 65.78 | 15.9 |
 | `midas_v21_small_256` | `midas_v21_small_256_mpk.tar.gz` | mipi-multi-model | `detessdequant` | 1 | 2.85 / 2.85 / 2.95 | 1340.8 |
 | `superpoint` | `superpoint_mpk.tar.gz` | superpoint-feature-extractor | `detessdequant` | 2 | 7.38 / 7.36 / 8.13 | 494.0 |
 | `blazepose_ghum_heavy_w16a16` | `blazepose_ghum_heavy_w16a16_mpk.tar.gz` | multi-stream-blazepose3d, parallel-apps | `cast` | 3 | 3.66 / 3.66 / 3.86 | 415.9 |
 | `fastflow_demo` | `fastflow_demo_mpk.tar.gz` | fastflow-anomaly-detector | `detessdequant` | 1 | 3.82 / 3.82 / 3.94 | 574.7 |
 | `patchcore_wide_resnet50_2_bf16_mla` | `patchcore_wide_resnet50_2_bf16_mla.tar.gz` | patchcore-anomaly-detector | `unknown` | 1 | 8.66 / 8.65 / 8.81 | 366.3 |
+
+The `depth_anything_v2_small_w8a8_mixed` row was measured on 2026-11-18 on Platform 3.0.1 with Neat Library 0.6.2, MLA at 1000 MHz, with the settings above. On the same board the Model Zoo `depth_anything_v2_vits` package it replaces measured 20.85 / 20.76 / 21.08 ms and 55.8 FPS, the same as in the 2026-10-30 run.
 
 ## Multi-Package Model Parts
 
