@@ -39,6 +39,12 @@ struct FrameMetadata {
 
 inline const std::string kUnknownLabel = "unknown";
 
+// The 90 kHz RTP timestamp Insight uses to pair metadata with its video frame.
+inline std::uint32_t rtp_timestamp_from_pts_ns(std::int64_t pts_ns) {
+  const auto ticks = (static_cast<__int128>(pts_ns) * 90000) / 1000000000;
+  return static_cast<std::uint32_t>(static_cast<std::uint64_t>(ticks));
+}
+
 // Serialize the Insight object-detection envelope in one JSON DOM pass. BoxRange is intentionally
 // structural so host applications can use it without linking the NEAT target runtime.
 template <typename BoxRange>

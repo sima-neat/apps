@@ -197,6 +197,15 @@ fi
 tar -xzf "${TMP_ARCHIVE}" -C "${TMP_DIR}" "${ARCHIVE_EXAMPLE_PATH}"
 cp -a "${TMP_DIR}/${ARCHIVE_ROOT}/${EXAMPLE_PATH}" "${DEST_DIR}"
 
+# Python examples import the helpers they share from support/python, which main.py finds in
+# a folder above itself.
+ARCHIVE_SUPPORT_PATH="${ARCHIVE_ROOT}/support/python"
+if grep -qxF "${ARCHIVE_SUPPORT_PATH}/" "${TMP_DIR}/archive-list.txt"; then
+  tar -xzf "${TMP_ARCHIVE}" -C "${TMP_DIR}" "${ARCHIVE_SUPPORT_PATH}"
+  mkdir -p "${DEST_DIR}/support"
+  cp -a "${TMP_DIR}/${ARCHIVE_SUPPORT_PATH}" "${DEST_DIR}/support/"
+fi
+
 echo ""
 echo "Created:"
 echo "  ${DEST_DIR}"

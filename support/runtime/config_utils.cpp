@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstddef>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
@@ -80,6 +81,30 @@ double parse_double(const std::string& value, const std::string& key) {
   return parsed;
 }
 
+bool parse_bool(const std::string& value, const std::string& key) {
+  const std::string lowered = lower_copy(value);
+  if (lowered == "true") {
+    return true;
+  }
+  if (lowered == "false") {
+    return false;
+  }
+  throw std::runtime_error(key + " must be true or false");
+}
+
+// "url: rtsp://x" starts a mapping item; "rtsp://x" and "<rtsp-url-1>" are scalars.
+bool is_mapping_item(const std::string& item) {
+  const std::size_t colon = item.find(':');
+  if (colon == std::string::npos || colon == 0) {
+    return false;
+  }
+  if (colon + 1 < item.size() && item[colon + 1] != ' ' && item[colon + 1] != '\t') {
+    return false;
+  }
+  return std::all_of(item.begin(), item.begin() + static_cast<std::ptrdiff_t>(colon),
+                     [](unsigned char c) { return std::isalnum(c) || c == '_' || c == '-'; });
+}
+
 } // namespace
 
 std::string trim_copy(const std::string& value) {
@@ -99,6 +124,7 @@ ScalarConfig ScalarConfig::load(const std::filesystem::path& path) {
   }
 
   ScalarConfig config;
+  config.path_ = path;
   std::vector<std::pair<int, std::string>> stack;
   int list_block_indent = -1;
   std::string raw_line;
@@ -124,6 +150,10 @@ ScalarConfig ScalarConfig::load(const std::filesystem::path& path) {
     }
     if (line == "-" || line.rfind("- ", 0) == 0) {
       list_block_indent = indent;
+      const std::string item = trim_copy(line.substr(1));
+      if (!item.empty() && !is_mapping_item(item) && !stack.empty()) {
+        config.lists_[join_stack(stack)].push_back(unquote(item));
+      }
       continue;
     }
 
@@ -148,6 +178,10 @@ ScalarConfig ScalarConfig::load(const std::filesystem::path& path) {
       full_key += '.';
     }
     full_key += key;
+    if (value == "[]") {
+      config.lists_[full_key];
+      continue;
+    }
     config.scalars_[full_key] = unquote(value);
   }
 
@@ -155,6 +189,7 @@ ScalarConfig ScalarConfig::load(const std::filesystem::path& path) {
 }
 
 std::optional<std::string> ScalarConfig::string_value(const std::string& key) const {
+  read_keys_.insert(key);
   const auto it = scalars_.find(key);
   if (it == scalars_.end() || is_nullish(it->second)) {
     return std::nullopt;
@@ -180,21 +215,70 @@ double ScalarConfig::double_or(const std::string& key, double default_value) con
 
 bool ScalarConfig::bool_or(const std::string& key, bool default_value) const {
   const auto value = string_value(key);
-  if (!value.has_value()) {
-    return default_value;
-  }
-  const std::string lowered = lower_copy(*value);
-  if (lowered == "true") {
-    return true;
-  }
-  if (lowered == "false") {
-    return false;
-  }
-  throw std::runtime_error(key + " must be true or false");
+  return value.has_value() ? parse_bool(*value, key) : default_value;
 }
 
 std::map<std::string, std::string> ScalarConfig::scalars() const {
   return {scalars_.begin(), scalars_.end()};
+}
+
+std::string ScalarConfig::require_key(const std::string& key) const {
+  const auto it = scalars_.find(key);
+  if (it == scalars_.end()) {
+    throw std::runtime_error(path_.string() + " is missing " + key);
+  }
+  read_keys_.insert(key);
+  return it->second;
+}
+
+std::string ScalarConfig::string(const std::string& key) const {
+  return require_key(key);
+}
+
+int ScalarConfig::integer(const std::string& key) const {
+  return parse_int(require_key(key), key);
+}
+
+double ScalarConfig::number(const std::string& key) const {
+  return parse_double(require_key(key), key);
+}
+
+bool ScalarConfig::boolean(const std::string& key) const {
+  return parse_bool(require_key(key), key);
+}
+
+std::vector<std::string> ScalarConfig::string_list(const std::string& key) const {
+  const auto it = lists_.find(key);
+  if (it == lists_.end()) {
+    return {require_key(key)}; // One value stands for a list of one.
+  }
+  read_keys_.insert(key);
+  if (it->second.empty()) {
+    throw std::runtime_error(key + " must be a non-empty list of strings");
+  }
+  return it->second;
+}
+
+void ScalarConfig::reject_unread_keys() const {
+  std::set<std::string> unread;
+  for (const auto& [key, value] : scalars_) {
+    if (read_keys_.count(key) == 0) {
+      unread.insert(key);
+    }
+  }
+  for (const auto& [key, values] : lists_) {
+    if (read_keys_.count(key) == 0) {
+      unread.insert(key);
+    }
+  }
+  if (unread.empty()) {
+    return;
+  }
+  std::string keys;
+  for (const auto& key : unread) {
+    keys += (keys.empty() ? "" : ", ") + key;
+  }
+  throw std::runtime_error(path_.string() + " has unknown keys: " + keys);
 }
 
 std::filesystem::path default_config_path(const char* source_dir) {

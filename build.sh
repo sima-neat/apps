@@ -254,6 +254,10 @@ PY
       \) 2>/dev/null | sort
   )
 
+  # Python examples import the helpers they share from support/python.
+  mkdir -p "${stage_dir}/support"
+  cp -a "${ROOT_DIR}/support/python" "${stage_dir}/support/"
+
   while IFS= read -r tests_dir; do
     local rel target_dir
     rel="${tests_dir#${ROOT_DIR}/examples/}"
