@@ -23,8 +23,8 @@ Four types do the work:
 
 | Type | Job |
 |---|---|
-| `VisionLanguageModel` | Loads a text or image-and-text model. `run()` returns the full answer. `stream()` returns it piece by piece. |
-| `ASRModel` | Loads a Whisper model. `run()` and `stream()` take audio and return text. |
+| `VisionLanguageModel` | Runs a text or image-and-text model. `run()` returns the full answer. `stream()` returns it piece by piece. |
+| `ASRModel` | Runs a Whisper model. `run()` and `stream()` take audio and return text. |
 | `GenAIServer` | Serves one or more models over HTTP, with OpenAI-style and Ollama-style routes, so other programs can call them. |
 | `GenerationRequest` | The one request object that all models take. It holds the prompt, images, audio and limits. |
 

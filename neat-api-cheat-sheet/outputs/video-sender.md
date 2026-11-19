@@ -92,7 +92,7 @@ For `Passthrough` from RTSP cameras, see
 | Channel | `channel` | `channel` | `0` | Stream number. The UDP port is `video_port_base + channel` | Several streams go to one Insight. Give each stream its own channel; Insight shows each channel in its own tile |
 | Video port base | `video_port_base` | `video_port_base` | `9000` | UDP port of channel 0 | Insight listens on other ports, for example the mapped `videoUDP` range that `neat --json` reports when the sender runs on a DevKit |
 | Sync | `sync` | `sync` | `false` | Holds each packet until the pipeline clock reaches its timestamp | A video file should play at its recorded speed. Live sources already arrive at video speed |
-| Async | `async` | `async_` | `false` | `false` lets Core run a passthrough sender inside its source's pipeline and keeps it out of that pipeline's start-up wait. `true` keeps the sender in its own pipeline | Leave it `false` |
+| Async | `async` | `async_` | `false` | `false` lets Core run a passthrough sender inside its source's pipeline and keeps it out of that pipeline's start-up wait. `true` keeps the sender in its own pipeline | Leave it `false`. With `true`, a passthrough sender runs as a separate pipeline after the source instead of sharing the source's pipeline |
 | RTP payload type | `rtp.payload_type` | `rtp.payload_type` | `96` H.264, `98` H.265, `26` MJPEG | Number in each RTP packet that names the codec. Must be `0` to `127` | A receiver other than Insight expects another number |
 | Config interval | `rtp.config_interval` | `rtp.config_interval` | `1` | Seconds between repeats of the codec setup data (H.264 and H.265) | Rarely. With `1`, a receiver that joins late can start decoding within a second |
 | Encoder bitrate | `encoder.bitrate_kbps` | `encoder.bitrate_kbps` | `4000` | Target bitrate in kbit/s for `FromRaw` with H.264 or H.265 | Raise it when Insight shows blocky video on busy or large frames. Lower it when a slow network makes the video stutter |
@@ -121,7 +121,7 @@ marked "not set" are `std::optional` in C++ and `None` in Python.
 | GOP length | `gop_length` | `gop_length` | Not set, the encoder's default | Frames between two key frames, `0` to `1000`. `1` makes every frame a key frame | Lower it when the picture takes long to recover after lost packets. A key frame is a frame that decodes on its own, so more of them cost bitrate |
 | IDR interval | `idr_interval` | `idr_interval` | Not set, the encoder's default | Frames between two IDR frames, the key frames a decoder can start from. `0` or more | Lower it when a viewer that connects late waits too long for the first picture |
 | Quality | `quality` | `quality` | Not set, `80` | JPEG quality, `1` to `100`. MJPEG only | Raise it for sharper frames, lower it to save bandwidth |
-| Output buffers | `num_buffers` | `num_buffers` | `-1`, the encoder's default | Encoded frames the encoder can hold, `1` to `20` | Rarely |
+| Output buffers | `num_buffers` | `num_buffers` | `-1`, the encoder's default | Encoded frames the encoder can hold, `1` to `20` | Leave it at `-1`. Core passes it to the encoder only when it is set, and no shipped example sets it |
 
 `UdpOutputOptions`, for `nodes::UdpOutput`
 
@@ -130,7 +130,7 @@ marked "not set" are `std::optional` in C++ and `None` in Python.
 | Host | `host` | `host` | `"127.0.0.1"` | Destination address | The receiver is on another machine |
 | Port | `port` | `port` | `5000` | Destination UDP port | Always set it to the receiver's port |
 | Sync | `sync` | `sync` | `false` | Holds each buffer until the pipeline clock reaches its timestamp | Same as `VideoSenderOptions::sync` |
-| Async | `async` | `async_` | `false` | Same as `VideoSenderOptions::async` | Leave it `false` |
+| Async | `async` | `async_` | `false` | Same as `VideoSenderOptions::async` | Same as `VideoSenderOptions::async` |
 
 ## Language differences
 
