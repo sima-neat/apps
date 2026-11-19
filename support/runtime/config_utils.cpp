@@ -187,12 +187,22 @@ ScalarConfig ScalarConfig::load(const std::filesystem::path& path) {
       // A flow list such as [a, b]. The raw text stays readable for the older getters.
       config.scalars_[full_key] = value;
       auto& items = config.lists_[full_key];
-      std::stringstream inner(value.substr(1, value.size() - 2));
+      // Split on commas outside quotes, so a quoted URL may contain a comma.
       std::string item;
-      while (std::getline(inner, item, ',')) {
-        if (!trim_copy(item).empty()) {
-          items.push_back(unquote(trim_copy(item)));
+      char quote = '\0';
+      for (const char c : value.substr(1, value.size() - 2) + ',') {
+        if (quote != '\0') {
+          quote = c == quote ? '\0' : quote;
+        } else if (c == '"' || c == '\'') {
+          quote = c;
+        } else if (c == ',') {
+          if (!trim_copy(item).empty()) {
+            items.push_back(unquote(trim_copy(item)));
+          }
+          item.clear();
+          continue;
         }
+        item += c;
       }
       continue;
     }
