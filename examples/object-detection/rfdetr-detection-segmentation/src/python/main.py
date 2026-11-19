@@ -414,6 +414,12 @@ def main(argv: list[str] | None = None) -> int:
         raise FileNotFoundError(f"decoder package not found: {cfg.transformer_path}")
 
     labels = load_labels(cfg.labels_path)
+    # The model's class IDs index the labels directly.
+    if len(labels) != postprocess.NUM_CLASSES:
+        raise ValueError(
+            f"model.labels must list {postprocess.NUM_CLASSES} COCO class names, "
+            f"one per line: {cfg.labels_path}"
+        )
     fps = stream_fps(cfg)
     backbone = pyneat.Model(str(cfg.model_path), backbone_options(cfg))
     transformer = pyneat.Model(str(cfg.transformer_path), transformer_options())

@@ -12,6 +12,9 @@
 
 namespace rfdetr {
 
+// COCO class IDs 0 to 90, one label each. ID 0 and the "unused" labels name no object.
+constexpr int kNumClasses = 91;
+
 struct PostprocessOptions {
   int width = 0; // Frame size the boxes and polygons are scaled to, in pixels.
   int height = 0;

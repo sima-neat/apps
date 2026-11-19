@@ -188,6 +188,9 @@ from both implementations.
 - `ModelPack: invalid_archive: archive path does not exist` means `model.path`
   resolved from the config file to a missing file. Validation does not open the
   archive, so this appears only once the run starts.
+- `model.labels must list 91 COCO class names` means the label file does not
+  have one line for each of the model's 91 class IDs. Use the shipped
+  `coco-labels.txt`, whose `unused` lines fill the IDs COCO leaves empty.
 - `input.codec must be h264, h265, or mjpeg` means `input.codec` names a codec
   this example does not decode.
 - With `input.fps: 0`, `failed to probe RTSP frame rate: <url>` from C++, or

@@ -15,8 +15,6 @@
 namespace rfdetr {
 namespace {
 
-// COCO class IDs 0 to 90. ID 0 and the "unused" labels name no object.
-constexpr int kNumClasses = 91;
 // RF-DETR's reference postprocess ranks the 300 best (query, class) scores.
 constexpr std::size_t kNumSelect = 300;
 // The metadata sender rejects messages over 65,507 bytes; 32 KiB of segments keeps the whole

@@ -432,6 +432,10 @@ int run_app(const CliOptions& cli) {
                          "decoder package not found: " + cfg.transformer_path.string());
 
   const auto labels = sima_examples::load_labels(cfg.labels_path);
+  // The model's class IDs index the labels directly.
+  sima_examples::require(static_cast<int>(labels.size()) == rfdetr::kNumClasses,
+                         "model.labels must list " + std::to_string(rfdetr::kNumClasses) +
+                             " COCO class names, one per line: " + cfg.labels_path.string());
   const int fps = stream_fps(cfg);
   neat::Model backbone(cfg.model_path.string(), backbone_options(cfg));
   neat::Model transformer(cfg.transformer_path.string(), transformer_options());
