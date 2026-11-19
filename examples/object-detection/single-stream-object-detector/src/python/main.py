@@ -8,7 +8,7 @@ from __future__ import annotations
 import argparse
 import sys
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pyneat
@@ -18,7 +18,7 @@ import pyneat
 from sima_examples import detection_egress
 from sima_examples.config import Config
 from sima_examples.labels import load_labels
-from sima_examples.rtsp_probe import probe_rtsp_stream_info
+from sima_examples.rtsp_probe import RtspStreamInfo, probe_rtsp_stream_info
 from sima_examples.stop_signals import stop_on_signals
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
@@ -46,9 +46,10 @@ class AppConfig:
     input_type: str  # rtsp, http, or usb.
     source: str
     codec: str  # mjpeg for HTTP and USB, which carry only MJPEG.
+    # For RTSP, each 0 reads that value from the stream with a probe.
     width: int
     height: int
-    fps: int  # 0 reads the RTSP stream's frame rate with a probe.
+    fps: int
     rtsp_tcp: bool  # RTSP only.
     rtsp_latency_ms: int  # RTSP only.
     frames: int  # 0 runs until a stop signal.
@@ -101,8 +102,10 @@ def load_app_config(path: Path) -> AppConfig:
     config.reject_unread_keys()
     if app_config.codec not in RTSP_CODECS:
         raise ValueError("input.codec must be h264, h265, or mjpeg")
-    if not rtsp and app_config.fps <= 0:
-        raise ValueError("input.fps must be above 0 for an HTTP or USB source")
+    if not rtsp and min(app_config.width, app_config.height, app_config.fps) <= 0:
+        raise ValueError(
+            "input.width, input.height, and input.fps must be above 0 for an HTTP or USB source"
+        )
     if app_config.frames < 0:
         raise ValueError("inference.frames must be 0 or more")
     if app_config.max_detections <= 0:
@@ -257,22 +260,14 @@ def run_options() -> pyneat.RunOptions:
     return options
 
 
-def stream_fps(cfg: AppConfig) -> int:
-    """The configured frame rate, or the RTSP stream's when input.fps is 0.
-
-    The probe also reads the frame size, which must match input.width and input.height.
-    """
-    if cfg.fps > 0:
-        return cfg.fps
-    info = probe_rtsp_stream_info(cfg.source, cfg.rtsp_tcp)
-    # A probe that read no size (0x0) leaves the check to the configured size.
-    probed = (info.width, info.height)
-    if info.width > 0 and info.height > 0 and probed != (cfg.width, cfg.height):
-        raise ValueError(
-            f"the stream is {info.width}x{info.height}, but input.width and input.height "
-            f"are {cfg.width}x{cfg.height}"
-        )
-    return info.fps
+def with_stream_info(cfg: AppConfig) -> AppConfig:
+    """The config with an RTSP stream's frame size and rate for each of input.width,
+    input.height, and input.fps it leaves at 0. HTTP and USB use the configured values."""
+    if cfg.input_type != "rtsp":
+        return cfg
+    configured = RtspStreamInfo(cfg.width, cfg.height, cfg.fps)
+    info = probe_rtsp_stream_info(cfg.source, cfg.rtsp_tcp, configured)
+    return replace(cfg, width=info.width, height=info.height, fps=info.fps)
 
 
 def decode_boxes(sample: pyneat.Sample, cfg: AppConfig) -> list:
@@ -341,7 +336,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     labels = load_labels(cfg.labels_path)
-    fps = stream_fps(cfg)
+    cfg = with_stream_info(cfg)
+    fps = cfg.fps
     camera = (
         pyneat.usb_camera_info(usb_camera_options(cfg)) if cfg.input_type == "usb" else None
     )

@@ -24,8 +24,8 @@ INPUTS = {
         "type": "rtsp",
         "source": "rtsp://127.0.0.1:8554/src1",
         "codec": "h264",
-        "width": 1280,
-        "height": 720,
+        "width": 0,
+        "height": 0,
         "fps": 0,
         "rtsp": {"tcp": True, "latency_ms": 100},
     },
@@ -66,7 +66,7 @@ def config_path(tmp_path: Path, input_type: str) -> Path:
 def test_shipped_config_loads(capsys):
     code, out = validate(COMMON_DIR / "config.yaml", capsys)
     assert code == 0, "config.yaml loads"
-    assert "input=rtsp, codec=h264, 1280x720, fps=0" in out, "config.yaml reads its values"
+    assert "input=rtsp, codec=h264, 0x0, fps=0" in out, "config.yaml reads its values"
 
 
 @pytest.mark.parametrize("input_type", ["rtsp", "http", "usb"])

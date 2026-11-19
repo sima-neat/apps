@@ -123,13 +123,12 @@ Open `${APP_DIR}/src/common/config.yaml`. It sets one input type, `input.type: r
 
 - `input.source`: the RTSP URL.
 - `input.codec`: `h264`, `h265`, or `mjpeg`.
-- `input.width` and `input.height`: the stream's frame size.
-- `input.fps`: `0` reads the RTSP stream's frame rate with a probe.
+- `input.width`, `input.height`, and `input.fps`: leave each at 0 to read it from the RTSP stream, so a stream of another size needs no config change. Set a value only for a stream that does not report it.
 - `output.insight.host`, and the Insight ports `output.insight.video_port_base` and `output.insight.metadata_port_base`.
 
 Keep `inference.frames` at `0` to run until you stop the application.
 
-For an HTTP or HTTPS MJPEG stream, set `input.type: http` and `input.source` to its URL, delete `input.codec` and `input.rtsp`, set `input.fps` to the stream's frame rate, such as `30`, and add an `app:` section with `ssl_strict: true`, or `false` only for a self-signed certificate, as the comment under `input.type` shows.
+For an HTTP or HTTPS MJPEG stream, set `input.type: http` and `input.source` to its URL, delete `input.codec` and `input.rtsp`, set `input.width`, `input.height`, and `input.fps` to the stream's frame size and rate, such as `1280`, `720`, and `30`, and add an `app:` section with `ssl_strict: true`, or `false` only for a self-signed certificate, as the comment under `input.type` shows.
 
 To use a USB camera, set `input.type: usb`, `input.source` to its stable ID, and `input.width`, `input.height`, and `input.fps` to an MJPEG mode the camera lists, and delete `input.codec` and `input.rtsp`. List the connected camera IDs and modes on the DevKit:
 
@@ -187,7 +186,7 @@ Insight shows the video with a box and label on every detected object.
 - Verify the Insight host and UDP ports if video and detections are absent.
 - Check model loading and score thresholds when video arrives without boxes.
 - If the model fails to load, check that `model.path` points to the `_mpk.tar.gz` file unpacked from the download, not to the ZIP file.
-- With `input.fps: 0`, an RTSP run stops at startup when the stream's frame size differs from `input.width` and `input.height`, and the error names both sizes. With a fixed `input.fps`, or when the probe reads no size, the size is not checked: set `input.width` and `input.height` to the stream's size.
+- `failed to probe RTSP frame size: <url>` or `failed to probe RTSP frame rate: <url>` appears when a value left at 0 cannot be read: the source is unreachable from the board, or it does not report that value. Verify the URL from the board itself; for a reachable source, set the value the message names. A size set in the config is used as is, so it must match the stream's.
 
 ## Source Files
 

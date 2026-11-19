@@ -32,8 +32,8 @@ Lines input_lines(const std::string& type) {
     return {{"type", "rtsp"},
             {"source", "rtsp://127.0.0.1:8554/src1"},
             {"codec", "h264"},
-            {"width", "1280"},
-            {"height", "720"},
+            {"width", "0"},
+            {"height", "0"},
             {"fps", "0"},
             {"rtsp", "\n    tcp: true\n    latency_ms: 100"}};
   }
@@ -84,7 +84,7 @@ bool test_shipped_config_loads(const std::string& binary) {
   const std::string body{std::istreambuf_iterator<char>(shipped), {}};
   const auto result = validate(binary, "shipped_config", body);
   return expect_true(!body.empty() && result.exit_code == 0, "config.yaml loads") &&
-         expect_contains(result.stdout_text, "input=rtsp, codec=h264, 1280x720, fps=0",
+         expect_contains(result.stdout_text, "input=rtsp, codec=h264, 0x0, fps=0",
                          "config.yaml reads its values");
 }
 

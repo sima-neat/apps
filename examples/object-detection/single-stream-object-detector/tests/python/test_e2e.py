@@ -61,7 +61,8 @@ def _input_section(source: dict, value: str) -> dict:
     """The input keys of the case's input type."""
     if source["type"] == "usb":
         return {"type": "usb", "source": value, **USB_MODE}
-    width, height = _frame_size(value)
+    # An RTSP stream's size and rate come from the application's probe.
+    width, height = (0, 0) if source["type"] == "rtsp" else _frame_size(value)
     inputs = {"type": source["type"], "source": value, "width": width, "height": height}
     inputs["fps"] = source.get("fps", 0)
     if source["type"] == "rtsp":

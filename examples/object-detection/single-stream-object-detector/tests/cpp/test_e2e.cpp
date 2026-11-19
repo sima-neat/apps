@@ -75,8 +75,11 @@ int run_source_case(const std::string& binary, const std::string& model_path,
                     const StreamSourceCase& source_case, const std::string& source,
                     const std::string& label) {
   const bool usb = source_case.type == "usb";
-  const auto [width, height] = usb ? std::pair{kUsbWidth, kUsbHeight} : frame_size(source);
-  if (width <= 0 || height <= 0) {
+  // An RTSP stream's size and rate come from the application's probe.
+  const auto [width, height] = usb                          ? std::pair{kUsbWidth, kUsbHeight}
+                               : source_case.type == "rtsp" ? std::pair{0, 0}
+                                                            : frame_size(source);
+  if (source_case.type != "rtsp" && (width <= 0 || height <= 0)) {
     std::cerr << "[FAIL] " << label << " cannot read the frame size of " << source << "\n";
     return 1;
   }

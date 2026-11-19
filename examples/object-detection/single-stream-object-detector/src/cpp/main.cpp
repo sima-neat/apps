@@ -49,9 +49,9 @@ struct AppConfig {
   std::string input_type; // rtsp, http, or usb.
   std::string source;
   std::string codec; // mjpeg for HTTP and USB, which carry only MJPEG.
-  int width = 0;
+  int width = 0;     // For RTSP, each 0 reads that value from the stream with a probe.
   int height = 0;
-  int fps = 0;             // 0 reads the RTSP stream's frame rate with a probe.
+  int fps = 0;
   bool rtsp_tcp = false;   // RTSP only.
   int rtsp_latency_ms = 0; // RTSP only.
   int frames = 0;          // 0 runs until a stop signal.
@@ -128,8 +128,9 @@ AppConfig load_app_config(const fs::path& path) {
   if (cfg.codec != "h264" && cfg.codec != "h265" && cfg.codec != "mjpeg") {
     throw std::runtime_error("input.codec must be h264, h265, or mjpeg");
   }
-  if (!rtsp && cfg.fps <= 0) {
-    throw std::runtime_error("input.fps must be above 0 for an HTTP or USB source");
+  if (!rtsp && (cfg.width <= 0 || cfg.height <= 0 || cfg.fps <= 0)) {
+    throw std::runtime_error(
+        "input.width, input.height, and input.fps must be above 0 for an HTTP or USB source");
   }
   if (cfg.frames < 0) {
     throw std::runtime_error("inference.frames must be 0 or more");
@@ -292,21 +293,18 @@ neat::RunOptions run_options() {
   return options;
 }
 
-// The configured frame rate, or the RTSP stream's when input.fps is 0. The probe also reads the
-// frame size, which must match input.width and input.height.
-int stream_fps(const AppConfig& cfg) {
-  if (cfg.fps > 0) {
-    return cfg.fps;
+// The config with an RTSP stream's frame size and rate for each of input.width, input.height,
+// and input.fps it leaves at 0. HTTP and USB use the configured values.
+AppConfig with_stream_info(AppConfig cfg) {
+  if (cfg.input_type != "rtsp") {
+    return cfg;
   }
-  const auto info = sima_examples::probe_rtsp_stream_info(cfg.source, cfg.rtsp_tcp);
-  // A probe that read no size (0x0) leaves the check to the configured size.
-  if (info.width > 0 && info.height > 0 && (info.width != cfg.width || info.height != cfg.height)) {
-    throw std::runtime_error("the stream is " + std::to_string(info.width) + "x" +
-                             std::to_string(info.height) +
-                             ", but input.width and input.height are " + std::to_string(cfg.width) +
-                             "x" + std::to_string(cfg.height));
-  }
-  return info.fps;
+  const auto info = sima_examples::probe_rtsp_stream_info(
+      cfg.source, cfg.rtsp_tcp, sima_examples::RtspStreamInfo{cfg.width, cfg.height, cfg.fps});
+  cfg.width = info.width;
+  cfg.height = info.height;
+  cfg.fps = info.fps;
+  return cfg;
 }
 
 // The boxes in a detections sample, whose first tensor is the BBOX payload.
@@ -358,16 +356,18 @@ int run_app(const CliOptions& cli) {
     std::cerr << "Error: config file not found: " << cli.config_path.string() << "\n";
     return 2;
   }
-  const AppConfig cfg = load_app_config(cli.config_path);
+  const AppConfig configured = load_app_config(cli.config_path);
   if (cli.validate_config_only) {
-    std::cout << "Config validated: " << cli.config_path.string() << " (input=" << cfg.input_type
-              << ", codec=" << cfg.codec << ", " << cfg.width << "x" << cfg.height
-              << ", fps=" << cfg.fps << ")\n";
+    std::cout << "Config validated: " << cli.config_path.string()
+              << " (input=" << configured.input_type << ", codec=" << configured.codec << ", "
+              << configured.width << "x" << configured.height << ", fps=" << configured.fps
+              << ")\n";
     return 0;
   }
 
-  const auto labels = sima_examples::load_labels(cfg.labels_path);
-  const int fps = stream_fps(cfg);
+  const auto labels = sima_examples::load_labels(configured.labels_path);
+  const AppConfig cfg = with_stream_info(configured);
+  const int fps = cfg.fps;
   const auto camera = cfg.input_type == "usb"
                           ? std::optional(neat::usb_camera_info(usb_camera_options(cfg)))
                           : std::nullopt;

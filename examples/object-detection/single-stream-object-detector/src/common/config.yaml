@@ -7,15 +7,16 @@ model:
 
 input:
   # rtsp, http, or usb. For http, delete codec and rtsp, set source to the http:// or
-  # https:// MJPEG URL, and add "app:" with "ssl_strict: true" (false accepts a self-signed
-  # certificate). For usb, delete codec and rtsp and set source to a camera ID from
-  # pyneat.usb_camera_ids().
+  # https:// MJPEG URL, set width, height, and fps to the stream's, and add "app:" with
+  # "ssl_strict: true" (false accepts a self-signed certificate). For usb, delete codec and
+  # rtsp, set source to a camera ID from pyneat.usb_camera_ids(), and set width, height, and
+  # fps to one of its modes.
   type: rtsp
   source: rtsp://<rtsp-source-ip>:<port>/<stream-name>  # The RTSP URL.
   codec: h264                   # h264, h265, or mjpeg.
-  width: 1280                   # Frame width of the stream, in pixels; for usb, a camera mode.
-  height: 720                   # Frame height of the stream, in pixels.
-  fps: 0                        # 0 reads the RTSP stream's rate; http and usb need the rate.
+  width: 0                      # 0 reads the RTSP stream's frame size and rate with a probe.
+  height: 0                     # Set them only for a stream that does not report them.
+  fps: 0
   rtsp:
     tcp: true                   # Receive RTSP over TCP.
     latency_ms: 100             # RTSP jitter buffer.
