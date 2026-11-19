@@ -122,8 +122,6 @@ def model_options(cfg: AppConfig) -> pyneat.ModelOptions:
 def detector_graph(model: pyneat.Model, cfg: AppConfig) -> pyneat.Graph:
     """The model every stream shares: "detector_frame" input -> model -> "detections" output."""
     input_options = model.input_appsrc_options(False)
-    input_options.block = True
-    input_options.pool_max_buffers = max(1, input_options.pool_max_buffers)
     input_options.max_bytes = (
         cfg.width * cfg.height * 3 // 2 * input_options.pool_max_buffers
     )
@@ -150,7 +148,6 @@ def rtsp_options(cfg: AppConfig, url: str, fps: int) -> pyneat.RtspEncodedInputO
     options.codec = RTSP_CODECS[cfg.codec]
     options.tcp = cfg.rtsp_tcp
     options.latency_ms = cfg.rtsp_latency_ms
-    options.payload_type = 96
     options.auto_caps_from_stream = cfg.fps == 0
     options.source_fps = cfg.fps
     if cfg.codec == "h264":

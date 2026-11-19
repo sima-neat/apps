@@ -57,8 +57,8 @@ A graph that starts at a source group produces its own frames: build it with
 - **Many streams, one model:** build the model graph once and connect each stream's decoder to
   it, all inside one parent graph with one `Run`. Graphs built with separate `build()` calls
   cannot share a model. Give the model's `nodes::Input` the options from
-  `model.input_appsrc_options(false)` with `block = true`, so frames wait for the model and
-  the dropping happens on the links. Pass `GraphLinkOptions` on each stream's link:
+  `model.input_appsrc_options(false)`. They block by default, so frames wait for the model
+  and the dropping happens on the links. Pass `GraphLinkOptions` on each stream's link:
   - `policy = GraphLinkPolicy::RealtimeLatestByStream`, so a busy model receives each
     stream's newest frame and drops stale ones;
   - `stream_id`, such as `stream3`. The pulled `Sample` carries it, so the application knows

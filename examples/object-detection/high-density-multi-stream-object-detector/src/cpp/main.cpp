@@ -23,13 +23,11 @@
 #include "support/cpp/pull_status.h"
 #include "support/cpp/rtsp_probe.h"
 
-#include <algorithm>
 #include <csignal>
 #include <cstdint>
 #include <filesystem>
 #include <iostream>
 #include <map>
-#include <memory>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -156,8 +154,6 @@ neat::Model::Options model_options(const AppConfig& cfg) {
 // The model every stream shares: "detector_frame" input -> model -> "detections" output.
 neat::Graph detector_graph(neat::Model& model, const AppConfig& cfg) {
   auto input_options = model.input_appsrc_options(false);
-  input_options.block = true;
-  input_options.pool_max_buffers = std::max(1, input_options.pool_max_buffers);
   input_options.max_bytes = static_cast<std::uint64_t>(cfg.width) * cfg.height * 3 / 2 *
                             static_cast<std::uint64_t>(input_options.pool_max_buffers);
   neat::Graph frames;
@@ -181,7 +177,6 @@ groups::RtspEncodedInputOptions rtsp_options(const AppConfig& cfg, const std::st
   options.codec = rtsp_codec(cfg);
   options.tcp = cfg.rtsp_tcp;
   options.latency_ms = cfg.rtsp_latency_ms;
-  options.payload_type = 96;
   options.auto_caps_from_stream = cfg.fps == 0;
   options.source_fps = cfg.fps;
   if (cfg.codec == "h264") {
@@ -313,7 +308,7 @@ sima_examples::detection_egress::FrameMetadata frame_metadata(const neat::Sample
 }
 
 // Send every detections sample to its stream's Insight channel until SIGINT.
-void send_detections(neat::Run& run, std::vector<std::unique_ptr<neat::MetadataSender>>& senders,
+void send_detections(neat::Run& run, std::vector<neat::MetadataSender>& metadata_senders,
                      const std::vector<std::string>& labels, const AppConfig& cfg) {
   while (g_stop_requested == 0) {
     neat::Sample sample;
@@ -328,7 +323,7 @@ void send_detections(neat::Run& run, std::vector<std::unique_ptr<neat::MetadataS
         decode_boxes(sample, cfg), labels, cfg.width, cfg.height, frame_metadata(sample, index));
     // A nonblocking send drops the message while the socket buffer is full; the drops are
     // counted in the sender's stats and reported when the run ends.
-    (void)senders.at(static_cast<std::size_t>(index))->send_raw_json(payload);
+    (void)metadata_senders.at(static_cast<std::size_t>(index)).send_raw_json(payload);
   }
 }
 
@@ -350,7 +345,7 @@ int run_app(const CliOptions& cli) {
   const neat::Graph detector = detector_graph(model, cfg);
 
   neat::Graph graph(graph_options(cfg));
-  std::vector<std::unique_ptr<neat::MetadataSender>> metadata_senders;
+  std::vector<neat::MetadataSender> metadata_senders;
   for (int index = 0; index < static_cast<int>(cfg.sources.size()); ++index) {
     const std::string& url = cfg.sources[static_cast<std::size_t>(index)];
     auto rtsp = groups::RtspEncodedInput(rtsp_options(cfg, url, fps_by_url.at(url)));
@@ -361,26 +356,21 @@ int run_app(const CliOptions& cli) {
       graph.connect(rtsp, groups::VideoSender(video_options(cfg, index)), video_link());
     }
     std::string error;
-    metadata_senders.push_back(
-        std::make_unique<neat::MetadataSender>(metadata_options(cfg, index), &error));
-    sima_examples::require(metadata_senders.back()->ok(), error);
+    metadata_senders.emplace_back(metadata_options(cfg, index), &error);
+    sima_examples::require(metadata_senders.back().ok(), error);
   }
   std::cout << "streams=" << cfg.sources.size() << " insight=" << cfg.insight_host
             << " video_ports=" << cfg.video_port_base
             << "+ metadata_ports=" << cfg.metadata_port_base << "+\n";
 
   std::signal(SIGINT, request_stop);
+  // The Run's destructor closes it when send_detections throws.
   neat::Run run = graph.build(run_options(cfg));
-  try {
-    send_detections(run, metadata_senders, labels, cfg);
-  } catch (...) {
-    run.close();
-    throw;
-  }
+  send_detections(run, metadata_senders, labels, cfg);
   run.close();
 
   for (std::size_t index = 0; index < metadata_senders.size(); ++index) {
-    const auto failures = metadata_senders[index]->stats().send_failures;
+    const auto failures = metadata_senders[index].stats().send_failures;
     if (failures > 0) {
       std::cout << "stream " << index << ": " << failures << " metadata messages dropped\n";
     }
