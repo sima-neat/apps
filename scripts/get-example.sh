@@ -152,7 +152,8 @@ repo_archive_url() {
 EXAMPLE_PATH="$(normalize_example_path "${EXAMPLE_ARG}")"
 EXAMPLE_NAME="$(basename "${EXAMPLE_PATH}")"
 DEST_DIR="${DEST_DIR:-${EXAMPLE_NAME}}"
-TMP_DIR="$(mktemp -d /tmp/neat-apps-example.XXXXXX)"
+# The physical path, so a /tmp that is itself a link (macOS) matches what realpath returns.
+TMP_DIR="$(cd "$(mktemp -d /tmp/neat-apps-example.XXXXXX)" && pwd -P)"
 TMP_ARCHIVE="${TMP_DIR}/apps.tar.gz"
 
 cleanup() {
@@ -205,6 +206,25 @@ done
 # An example reaches support/ through relative symlinks, such as src/python/sima_examples, so
 # the copy takes the files they point to and the example folder holds no links.
 EXAMPLE_SRC="${TMP_DIR}/${ARCHIVE_ROOT}/${EXAMPLE_PATH}"
+# Each link must stay inside the archive. The example's own links are checked before anything
+# follows them, so a link to / or /etc is never walked; then the links inside the folders they
+# point to are checked the same way.
+check_links_inside_archive() {
+  local link target
+  while IFS= read -r link; do
+    # A link realpath cannot resolve is reported by the broken-link check below.
+    target="$(realpath "${link}" 2>/dev/null)" || continue
+    case "${target}" in
+      "${TMP_DIR}/${ARCHIVE_ROOT}"/*) ;;
+      *)
+        echo "The example's symlink ${link#"${TMP_DIR}/${ARCHIVE_ROOT}/"} points outside the archive." >&2
+        exit 1
+        ;;
+    esac
+  done
+}
+check_links_inside_archive < <(find "${EXAMPLE_SRC}" -type l)
+check_links_inside_archive < <(find -L "${EXAMPLE_SRC}" -xtype l 2>/dev/null)
 if ! broken_links="$(find -L "${EXAMPLE_SRC}" -type l)"; then
   echo "Cannot follow the example's symlinks (see above)." >&2
   exit 1
@@ -214,15 +234,6 @@ if [[ -n "${broken_links}" ]]; then
   sed "s#^${TMP_DIR}/${ARCHIVE_ROOT}/#  #" <<<"${broken_links}" >&2
   exit 1
 fi
-while IFS= read -r link; do
-  case "$(realpath "${link}")" in
-    "${TMP_DIR}/${ARCHIVE_ROOT}"/*) ;;
-    *)
-      echo "The example's symlink ${link#"${TMP_DIR}/${ARCHIVE_ROOT}/"} points outside the archive." >&2
-      exit 1
-      ;;
-  esac
-done < <(find "${EXAMPLE_SRC}" -type l)
 cp -a -L "${EXAMPLE_SRC}" "${DEST_DIR}"
 
 # Python examples without a sima_examples link find support/python in a folder above

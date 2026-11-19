@@ -18,9 +18,11 @@ Required:
 - matching files under `tests/cpp/` or `tests/python/` for enabled coverage
 
 A Python implementation imports the shared helpers through the
-`src/python/sima_examples` link that `agents/rules.md` "Where code goes" describes. Clone with
-`git clone -c core.symlinks=true` (on Windows, with Developer Mode on); without it git writes the
-link as a text file and `main.py` cannot import `sima_examples`.
+`src/python/sima_examples` link that `agents/rules.md` "Where code goes" describes. Linux and
+macOS clones keep it as a link. On Windows, turn on Developer Mode and clone with
+`git clone -c core.symlinks=true`; otherwise git writes the link as a text file and `main.py`
+cannot import `sima_examples`. To fix such a clone in place, run `git config core.symlinks true`
+and `git checkout -- <example>/src/python/sima_examples`.
 
 Do not add legacy root-level paths such as `main.py`, `main.cpp`, `common/`,
 `python/`, or `cpp/`.
@@ -253,7 +255,7 @@ generation, and affected CI workflows.
 | `examples/<category>/<example>/src/python/` | Python implementation and dependencies |
 | `examples/<category>/<example>/src/common/` | Shared runtime configuration and data |
 | `support/README.md` | What each shared helper does |
-| `support/python/` | Helpers the Python examples share, for the examples that find them in a folder above `main.py`. An example with the `src/python/sima_examples` link has its own copy in that folder instead |
+| `support/python/` | Helpers the Python examples share, for the examples that find them in a folder above `main.py`. An example with the `src/python/sima_examples` link has its own copy in its `src/python/sima_examples/` folder instead |
 | `support/cpp/` | Source of the helpers the C++ executables are built with, as reference |
 | `assets/datasets/` | Shipped runtime sample data |
 | `models/` | User-managed model packages |

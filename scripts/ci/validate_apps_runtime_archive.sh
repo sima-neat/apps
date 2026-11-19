@@ -8,15 +8,18 @@ if [[ -z "${archive}" || ! -f "${archive}" ]]; then
 fi
 
 runtime_root="prebuilt-apps"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# An example whose source links support/python must ship that link's files as a folder.
+linked_dirs="$(cd "${repo_root}" && find examples -path '*/src/python/sima_examples' -type l | sort)"
 
-python3 - "${archive}" "${runtime_root}" <<'PY'
+python3 - "${archive}" "${runtime_root}" "${linked_dirs}" <<'PY'
 import json
 import re
 import sys
 import tarfile
 from pathlib import PurePosixPath
 
-archive, root = sys.argv[1:]
+archive, root, linked_dirs = sys.argv[1:]
 prefix = f"{root}/"
 
 
@@ -82,6 +85,12 @@ with tarfile.open(archive, "r:gz") as bundle:
             content = source.read() if source is not None else b""
             if any(reference in content for reference in obsolete_references):
                 fail(f"runtime archive contains an obsolete path reference: {member.name}")
+
+    folders = {member.name.rstrip("/") for member in members if member.isdir()}
+    for linked in linked_dirs.split():
+        shipped_python = f"{root}/{PurePosixPath(linked).parent}"
+        if shipped_python in folders and f"{root}/{linked}" not in folders:
+            fail(f"runtime archive is missing the {root}/{linked}/ folder its source links")
 
     try:
         core_metadata = bundle.getmember(core_metadata_name)
