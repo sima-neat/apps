@@ -12,6 +12,8 @@
 #include <cstdint>
 #include <filesystem>
 #include <iostream>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -170,9 +172,12 @@ bool test_shipped_profiles_validate(const std::string& binary) {
       {"config.yaml", 20}, {"config-30x720p20fps.yaml", 30}, {"config-60x720p10fps.yaml", 60}};
   bool ok = true;
   for (const auto& [filename, streams] : profiles) {
-    const auto result = spawn_and_wait(
-        binary, {"--config", (common_dir / filename).string(), "--validate-config-only"}, 20000);
-    ok &= expect_true(result.exit_code == 0, filename + " validates") &&
+    // A scratch copy, so the process logs the harness writes next to the config stay out of
+    // src/common.
+    std::ifstream shipped(common_dir / filename);
+    const std::string body{std::istreambuf_iterator<char>(shipped), {}};
+    const auto result = validate(binary, "shipped_" + fs::path(filename).stem().string(), body);
+    ok &= expect_true(!body.empty() && result.exit_code == 0, filename + " validates") &&
           expect_contains(result.stdout_text, "streams=" + std::to_string(streams),
                           filename + " reads every stream");
   }

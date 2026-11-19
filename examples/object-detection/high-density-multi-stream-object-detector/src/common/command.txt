@@ -1,1 +1,0 @@
-'/workspace/worktrees/claude/apps-770-high-density-refactor/build/examples/object-detection/high-density-multi-stream-object-detector/high-density-multi-stream-object-detector' '--config' 'examples/object-detection/high-density-multi-stream-object-detector/src/common/config-60x720p10fps.yaml' '--validate-config-only'
