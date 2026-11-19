@@ -42,6 +42,7 @@ private:
   std::filesystem::path path_;
   std::unordered_map<std::string, std::string> scalars_;
   std::unordered_map<std::string, std::vector<std::string>> lists_;
+  std::set<std::string> lists_with_mappings_;
   // Filled by the getters, so a const reader can still report what it never read.
   mutable std::set<std::string> read_keys_;
 };

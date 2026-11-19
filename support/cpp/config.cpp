@@ -152,10 +152,13 @@ Config Config::load(const std::filesystem::path& path) {
       list_block_indent = indent;
       const std::string item = trim_copy(line.substr(1));
       if (!stack.empty()) {
-        // A list of mappings has no string items, but its key still counts as present, so
-        // reject_unread_keys() reports it when the example never reads it.
-        auto& items = config.lists_[join_stack(stack)];
-        if (!item.empty() && !is_mapping_item(item)) {
+        // A mapping item is kept out of the string items, and string_list() rejects its key.
+        // The key still counts as present, so reject_unread_keys() reports it when unread.
+        const std::string list_key = join_stack(stack);
+        auto& items = config.lists_[list_key];
+        if (is_mapping_item(item)) {
+          config.lists_with_mappings_.insert(list_key);
+        } else if (!item.empty()) {
           items.push_back(unquote(item));
         }
       }
@@ -276,7 +279,7 @@ std::vector<std::string> Config::string_list(const std::string& key) const {
     return {require_key(key)}; // One value stands for a list of one.
   }
   read_keys_.insert(key);
-  if (it->second.empty()) {
+  if (it->second.empty() || lists_with_mappings_.count(key) > 0) {
     throw std::runtime_error(key + " must be a non-empty list of strings");
   }
   return it->second;
