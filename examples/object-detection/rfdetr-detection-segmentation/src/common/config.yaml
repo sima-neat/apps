@@ -1,54 +1,30 @@
-model:                          # Select one RF-DETR task and its model pair.
-  task: detection               # detection or segmentation.
-  labels: examples/object-detection/rfdetr-detection-segmentation/src/common/coco-labels.txt
-  detection:
-    variant: small              # nano, small, medium, or large.
-    nano:
-      backbone: models/rf_detr_nano/w8a8_mixed_w16a16/rf_detr_nano_w8a8_mixed_w16a16_backbone_mpk.tar.gz
-      transformer: models/rf_detr_nano/w8a8_mixed_w16a16/rf_detr_nano_w8a8_mixed_w16a16_decoder_mpk.tar.gz
-    small:
-      backbone: models/rf_detr_small/w8a8_mixed_w16a16/rf_detr_small_w8a8_mixed_w16a16_backbone_mpk.tar.gz
-      transformer: models/rf_detr_small/w8a8_mixed_w16a16/rf_detr_small_w8a8_mixed_w16a16_decoder_mpk.tar.gz
-    medium:
-      backbone: models/rf_detr_medium/w8a8_mixed_w16a16/rf_detr_medium_w8a8_mixed_w16a16_backbone_mpk.tar.gz
-      transformer: models/rf_detr_medium/w8a8_mixed_w16a16/rf_detr_medium_w8a8_mixed_w16a16_decoder_mpk.tar.gz
-    large:
-      backbone: models/rf_detr_large/w8a8_mixed_w16a16/rf_detr_large_w8a8_mixed_w16a16_backbone_mpk.tar.gz
-      transformer: models/rf_detr_large/w8a8_mixed_w16a16/rf_detr_large_w8a8_mixed_w16a16_decoder_mpk.tar.gz
-  segmentation:
-    variant: medium             # nano, small, or medium.
-    nano:
-      backbone: models/rf_detr_seg_nano/w8a16_w8a8_mixed/rf_detr_seg_nano_w8a16_w8a8_mixed_backbone_mpk.tar.gz
-      transformer: models/rf_detr_seg_nano/w8a16_w8a8_mixed/rf_detr_seg_nano_w8a16_w8a8_mixed_decoder_mpk.tar.gz
-    small:
-      backbone: models/rf_detr_seg_small/w8a16_w8a8_mixed/rf_detr_seg_small_w8a16_w8a8_mixed_backbone_mpk.tar.gz
-      transformer: models/rf_detr_seg_small/w8a16_w8a8_mixed/rf_detr_seg_small_w8a16_w8a8_mixed_decoder_mpk.tar.gz
-    medium:
-      backbone: models/rf_detr_seg_medium/w8a16_w8a8_mixed/rf_detr_seg_medium_w8a16_w8a8_mixed_backbone_mpk.tar.gz
-      transformer: models/rf_detr_seg_medium/w8a16_w8a8_mixed/rf_detr_seg_medium_w8a16_w8a8_mixed_decoder_mpk.tar.gz
+# RF-DETR detection or instance segmentation of one RTSP stream, shown in Insight.
+model:
+  id: det-small                 # Variant in model.path: det-nano, det-small, det-medium, det-large, seg-nano, seg-small, or seg-medium.
+  path: ../../../../../models/rf_detr_small/w8a8_mixed_w16a16/rf_detr_small_w8a8_mixed_w16a16_backbone_mpk.tar.gz  # Backbone package; its *_decoder_mpk.tar.gz must sit next to it. Relative paths start at this file.
+  labels: examples/object-detection/rfdetr-detection-segmentation/src/common/coco-labels.txt  # Relative to the working directory.
 
-source:                         # H.264, H.265, or MJPEG RTSP source properties.
-  rtsp_url: rtsp://<rtsp-source-ip>:<port>/<stream-name>
-  codec: h264                   # h264/avc, h265/hevc, or mjpeg/jpeg.
-  tcp: true                     # Use RTSP over TCP.
-  latency_ms: 10                # RTSP receive latency.
-  width: 0                      # Optional width fallback. 0 uses the probe.
-  height: 0                     # Optional height fallback. 0 uses the probe.
-  fps: 0                        # Optional FPS override. 0 uses the probe.
+input:
+  source: rtsp://<rtsp-source-ip>:<port>/<stream-name>  # RTSP URL of the stream.
+  codec: h264                   # h264, h265, or mjpeg.
+  width: 1280                   # Frame width of the stream, in pixels.
+  height: 720                   # Frame height of the stream, in pixels.
+  fps: 0                        # 0 reads the stream's frame rate with a probe.
+  rtsp:
+    tcp: true                   # Receive RTSP over TCP.
+    latency_ms: 10              # RTSP jitter buffer.
 
 inference:
-  frames: 0                     # 0 runs continuously.
-  detection:
-    min_score: 0.5              # Minimum confidence to publish.
-    max_detections: 100         # Maximum objects per frame.
-  segmentation:
-    min_score: 0.3              # Minimum confidence to publish.
-    max_segments: 24            # Maximum instances per frame.
-    mask_threshold: 0.08        # Foreground threshold for the compiled model.
-    mask_grid_size: 640         # Smoother contours; the model's own mask size uses less CPU.
+  frames: 0                     # Results to send before stopping; 0 runs until Ctrl+C.
+  min_score: 0.5                # Lowest score a result needs; use 0.5 for det-* and 0.3 for seg-*.
+  max_detections: 100           # Results kept per frame; use 100 for det-* and 24 for seg-*.
 
 output:
   insight:
-    host: <insight-host-ip>     # Insight host reachable from the target.
-    video_port: 9000            # Video ingest port.
-    metadata_port: 9100         # Metadata ingest port.
+    host: <insight-host-ip>     # Machine running Insight.
+    video_port_base: 9000       # Insight video port.
+    metadata_port_base: 9100    # Insight metadata port.
+
+app:
+  mask_threshold: 0.08          # seg-* only: mask probability at which a pixel belongs to the object.
+  mask_grid_size: 640           # seg-* only: grid the mask is resized to before its outline is traced; the model's mask size (78, 96, or 108) skips the resize and uses less CPU.

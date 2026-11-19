@@ -1,36 +1,27 @@
 // Copyright 2026 SiMa Technologies, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+// Detects or segments objects in one RTSP stream with RF-DETR and shows them in Insight. The
+// backbone runs in the graph; the host picks its best proposals and hands them, with the
+// backbone's features, to the transformer. Insight receives the video and, for every result,
+// the detection boxes or the segmentation polygons.
+
 #include "neat.h"
-#include "neat/models.h"
-#include "neat/node_groups.h"
-#include "neat/nodes.h"
 #include "support/cpp/config.h"
 #include "support/cpp/example_utils.h"
-#include "support/cpp/rtsp_probe.h"
+#include "support/cpp/labels.h"
 #include "support/cpp/pull_status.h"
-
-#include <nodes/groups/VideoSender.h>
-#include <nodes/io/MetadataSender.h>
-
-#include <nlohmann/json.hpp>
-#include <opencv2/imgproc.hpp>
+#include "support/cpp/rtsp_probe.h"
+#include "utils/postprocess.h"
 
 #include <algorithm>
 #include <atomic>
-#include <chrono>
-#include <cctype>
-#include <cstddef>
-#include <cmath>
-#include <csignal>
 #include <cstdint>
-#include <cstring>
-#include <cstdlib>
+#include <csignal>
+#include <exception>
 #include <filesystem>
-#include <fstream>
+#include <functional>
 #include <iostream>
-#include <numeric>
-#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -39,105 +30,41 @@
 
 namespace fs = std::filesystem;
 namespace neat = simaai::neat;
+namespace groups = simaai::neat::nodes::groups;
 
 namespace {
 
-constexpr int kNumClasses = 91;
-constexpr int kClassificationTopK = 300;
-constexpr std::size_t kMetadataByteBudget = 32'768;
-std::atomic<bool> g_stop{false};
+constexpr int kPullTimeoutMs = 100;
+const std::vector<std::string> kModelIds = {"det-nano", "det-small", "det-medium", "det-large",
+                                            "seg-nano", "seg-small", "seg-medium"};
+
+std::atomic<bool> g_stop_requested{false};
 
 void request_stop(int) {
-  g_stop.store(true);
+  g_stop_requested = true;
 }
 
-enum class SourceCodec { H264, H265, Mjpeg };
-enum class Task { Detection, Segmentation };
-
-struct SourceGeometry {
+struct AppConfig {
+  std::string model_id;
+  bool segmentation = false;
+  fs::path model_path;
+  fs::path transformer_path;
+  fs::path labels_path;
+  std::string source;
+  std::string codec;
   int width = 0;
   int height = 0;
-  int fps = 0;
-};
-
-std::string lower_copy(std::string value) {
-  std::transform(value.begin(), value.end(), value.begin(),
-                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-  return value;
-}
-
-SourceCodec parse_source_codec(const std::string& value) {
-  const std::string codec = lower_copy(value);
-  if (codec == "h264" || codec == "avc" || codec == "h.264") {
-    return SourceCodec::H264;
-  }
-  if (codec == "h265" || codec == "hevc" || codec == "h.265") {
-    return SourceCodec::H265;
-  }
-  if (codec == "mjpeg" || codec == "jpeg") {
-    return SourceCodec::Mjpeg;
-  }
-  throw std::runtime_error("source.codec must be h264/avc, h265/hevc, or mjpeg");
-}
-
-const char* source_codec_name(SourceCodec codec) {
-  if (codec == SourceCodec::H264) {
-    return "h264";
-  }
-  return codec == SourceCodec::H265 ? "h265" : "mjpeg";
-}
-
-Task parse_task(const std::string& value) {
-  const std::string task = lower_copy(value);
-  if (task == "detection") {
-    return Task::Detection;
-  }
-  if (task == "segmentation") {
-    return Task::Segmentation;
-  }
-  throw std::runtime_error("model.task must be detection or segmentation");
-}
-
-const char* task_name(Task task) {
-  return task == Task::Detection ? "detection" : "segmentation";
-}
-
-SourceGeometry resolve_geometry(const SourceGeometry& probed, const SourceGeometry& configured) {
-  return {
-      probed.width > 0 ? probed.width : configured.width,
-      probed.height > 0 ? probed.height : configured.height,
-      configured.fps > 0 ? configured.fps : probed.fps,
-  };
-}
-
-struct Config {
-  Task task = Task::Detection;
-  std::string variant;
-  std::string backbone;
-  std::string transformer;
-  fs::path labels;
-  std::string rtsp_url;
-  SourceCodec codec = SourceCodec::H264;
-  bool tcp = true;
-  int latency_ms = 100;
-  int fallback_width = 0;
-  int fallback_height = 0;
-  int source_fps = 0;
-  int frames = 0;
-  float min_score = 0.5F;
-  int max_results = 100;
-  float mask_threshold = 0.08F;
-  int mask_grid_size = 640;
+  int fps = 0; // 0 reads the stream's frame rate with a probe.
+  bool rtsp_tcp = true;
+  int rtsp_latency_ms = 0;
+  int frames = 0; // 0 runs until Ctrl+C.
+  double min_score = 0.0;
+  int max_detections = 0;
   std::string insight_host;
-  int video_port = 9000;
-  int metadata_port = 9100;
-};
-
-// Sizes read from the loaded model pair; they differ between RF-DETR sizes.
-struct ModelContract {
-  int side = 0;
-  int top_k = 0;
-  int mask_size = 0;
+  int video_port_base = 0;
+  int metadata_port_base = 0;
+  double mask_threshold = 0.0;
+  int mask_grid_size = 0;
 };
 
 struct CliOptions {
@@ -147,569 +74,162 @@ struct CliOptions {
 
 CliOptions parse_args(int argc, char** argv) {
   CliOptions options;
-  for (int index = 1; index < argc; ++index) {
-    const std::string argument = argv[index];
-    if (argument == "--config") {
-      if (++index >= argc) {
+  const fs::path adjacent_config = fs::path(argv[0]).parent_path() / "config.yaml";
+  options.config_path = fs::exists(adjacent_config)
+                            ? adjacent_config
+                            : sima_examples::default_config_path(SIMANEAT_APPS_EXAMPLE_SOURCE_DIR);
+  for (int i = 1; i < argc; ++i) {
+    const std::string arg = argv[i];
+    if (arg == "--config") {
+      if (i + 1 >= argc) {
         throw std::runtime_error("--config requires a path");
       }
-      options.config_path = argv[index];
-    } else if (argument == "--validate-config-only") {
+      options.config_path = argv[++i];
+    } else if (arg == "--validate-config-only") {
       options.validate_config_only = true;
-    } else if (argument == "--help" || argument == "-h") {
+    } else if (arg == "--help" || arg == "-h") {
       std::cout << "Usage: " << argv[0] << " [--config <path>] [--validate-config-only]\n";
       std::exit(0);
     } else {
-      throw std::runtime_error("unknown argument: " + argument);
+      throw std::runtime_error("unknown argument: " + arg);
     }
-  }
-  if (options.config_path.empty()) {
-    throw std::runtime_error("--config is required");
   }
   return options;
 }
 
-Config load_config(const fs::path& path) {
-  const auto raw = sima_examples::Config::load(path);
-  Config cfg;
-  cfg.task = parse_task(raw.string_or("model.task", "detection"));
-  const std::string task = task_name(cfg.task);
-  cfg.variant = lower_copy(raw.string_or("model." + task + ".variant",
-                                         cfg.task == Task::Detection ? "small" : "medium"));
-  const std::string model_prefix = "model." + task + "." + cfg.variant + ".";
-  const std::string inference_prefix = "inference." + task + ".";
-  cfg.backbone = raw.string_or(model_prefix + "backbone", "");
-  cfg.transformer = raw.string_or(model_prefix + "transformer", "");
-  cfg.labels = raw.string_or("model.labels", "");
-  cfg.rtsp_url = raw.string_or("source.rtsp_url", "");
-  cfg.codec = parse_source_codec(raw.string_or("source.codec", "h264"));
-  cfg.tcp = raw.bool_or("source.tcp", true);
-  cfg.latency_ms = raw.int_or("source.latency_ms", 100);
-  cfg.fallback_width = raw.int_or("source.width", 0);
-  cfg.fallback_height = raw.int_or("source.height", 0);
-  cfg.source_fps = raw.int_or("source.fps", 0);
-  cfg.frames = raw.int_or("inference.frames", 0);
-  cfg.min_score = static_cast<float>(
-      raw.double_or(inference_prefix + "min_score", cfg.task == Task::Detection ? 0.5 : 0.3));
-  cfg.max_results = raw.int_or(
-      inference_prefix + (cfg.task == Task::Detection ? "max_detections" : "max_segments"),
-      cfg.task == Task::Detection ? 100 : 24);
-  if (cfg.task == Task::Segmentation) {
-    cfg.mask_threshold =
-        static_cast<float>(raw.double_or("inference.segmentation.mask_threshold", 0.08));
-    cfg.mask_grid_size = raw.int_or("inference.segmentation.mask_grid_size", cfg.mask_grid_size);
+// The decoder package next to the backbone: _backbone_mpk becomes _decoder_mpk.
+fs::path transformer_path(const fs::path& model_path) {
+  const std::string backbone = "_backbone_mpk";
+  std::string name = model_path.filename().string();
+  const auto at = name.find(backbone);
+  if (at == std::string::npos) {
+    throw std::runtime_error(
+        "model.path must name an RF-DETR backbone package (*_backbone_mpk.tar.gz): " +
+        model_path.string());
   }
-  cfg.insight_host = raw.string_or("output.insight.host", "");
-  cfg.video_port = raw.int_or("output.insight.video_port", 9000);
-  cfg.metadata_port = raw.int_or("output.insight.metadata_port", 9100);
+  return model_path.parent_path() / name.replace(at, backbone.size(), "_decoder_mpk");
+}
 
-  sima_examples::require(!cfg.backbone.empty() && !cfg.transformer.empty(),
-                         model_prefix + "backbone and transformer must be set");
-  sima_examples::require(!cfg.labels.empty(), "model.labels must be set");
-  sima_examples::require(cfg.rtsp_url.rfind("rtsp://", 0) == 0,
-                         "source.rtsp_url must be an RTSP URL");
-  sima_examples::require(cfg.latency_ms >= 0 && cfg.frames >= 0,
-                         "source.latency_ms and inference.frames must be >= 0");
-  sima_examples::require(cfg.fallback_width >= 0 && cfg.fallback_height >= 0 && cfg.source_fps >= 0,
-                         "source.width, source.height, and source.fps must be >= 0");
-  sima_examples::require(cfg.min_score >= 0.0F && cfg.min_score <= 1.0F,
-                         inference_prefix + "min_score must be in [0, 1]");
-  sima_examples::require(cfg.max_results > 0,
-                         inference_prefix + "max_detections/max_segments must be > 0");
-  if (cfg.task == Task::Segmentation) {
-    sima_examples::require(cfg.mask_threshold >= 0.0F && cfg.mask_threshold <= 1.0F,
-                           "inference.segmentation.mask_threshold must be in [0, 1]");
-    sima_examples::require(cfg.mask_grid_size > 0,
-                           "inference.segmentation.mask_grid_size must be > 0");
+AppConfig load_app_config(const fs::path& path) {
+  const auto config = sima_examples::Config::load(path);
+  AppConfig cfg;
+  cfg.model_id = config.string("model.id");
+  cfg.segmentation = cfg.model_id.starts_with("seg-");
+  cfg.model_path =
+      (fs::absolute(path).parent_path() / config.string("model.path")).lexically_normal();
+  cfg.transformer_path = transformer_path(cfg.model_path);
+  cfg.labels_path = config.string("model.labels");
+  cfg.source = config.string("input.source");
+  cfg.codec = config.string("input.codec");
+  cfg.width = config.integer("input.width");
+  cfg.height = config.integer("input.height");
+  cfg.fps = config.integer("input.fps");
+  cfg.rtsp_tcp = config.boolean("input.rtsp.tcp");
+  cfg.rtsp_latency_ms = config.integer("input.rtsp.latency_ms");
+  cfg.frames = config.integer("inference.frames");
+  cfg.min_score = config.number("inference.min_score");
+  cfg.max_detections = config.integer("inference.max_detections");
+  cfg.insight_host = config.string("output.insight.host");
+  cfg.video_port_base = config.integer("output.insight.video_port_base");
+  cfg.metadata_port_base = config.integer("output.insight.metadata_port_base");
+  cfg.mask_threshold = config.number("app.mask_threshold");
+  cfg.mask_grid_size = config.integer("app.mask_grid_size");
+  config.reject_unread_keys();
+  if (std::find(kModelIds.begin(), kModelIds.end(), cfg.model_id) == kModelIds.end()) {
+    throw std::runtime_error("model.id must be one of det-nano, det-small, det-medium, "
+                             "det-large, seg-nano, seg-small, seg-medium");
   }
-  sima_examples::require(!cfg.insight_host.empty(), "output.insight.host must be set");
-  sima_examples::require(cfg.video_port > 0 && cfg.video_port <= 65535 && cfg.metadata_port > 0 &&
-                             cfg.metadata_port <= 65535,
-                         "Insight ports must be in [1, 65535]");
+  if (cfg.codec != "h264" && cfg.codec != "h265" && cfg.codec != "mjpeg") {
+    throw std::runtime_error("input.codec must be h264, h265, or mjpeg");
+  }
   return cfg;
 }
 
-std::vector<std::string> load_labels(const fs::path& path) {
-  std::ifstream input(path);
-  if (!input.is_open()) {
-    throw std::runtime_error("failed to open labels: " + path.string());
+groups::RtspCodec rtsp_codec(const AppConfig& cfg) {
+  if (cfg.codec == "h265") {
+    return groups::RtspCodec::H265;
   }
-  std::vector<std::string> labels;
-  std::string line;
-  while (std::getline(input, line)) {
-    labels.push_back(sima_examples::trim_copy(line));
-  }
-  if (labels.size() != 91U ||
-      std::any_of(labels.begin(), labels.end(), [](const auto& label) { return label.empty(); })) {
-    throw std::runtime_error("model.labels must contain exactly 91 non-empty COCO labels");
-  }
-  return labels;
+  return cfg.codec == "mjpeg" ? groups::RtspCodec::MJPEG : groups::RtspCodec::H264;
 }
 
-std::size_t element_count(const std::vector<int64_t>& shape) {
-  return std::accumulate(shape.begin(), shape.end(), std::size_t{1},
-                         [](std::size_t total, int64_t dimension) {
-                           if (dimension <= 0) {
-                             throw std::runtime_error("model tensor shape must be static");
-                           }
-                           return total * static_cast<std::size_t>(dimension);
-                         });
+neat::SimaDecodeType decode_type(const AppConfig& cfg) {
+  if (cfg.codec == "h265") {
+    return neat::SimaDecodeType::H265;
+  }
+  return cfg.codec == "mjpeg" ? neat::SimaDecodeType::MJPEG : neat::SimaDecodeType::H264;
 }
 
-std::vector<neat::Tensor> collect_tensors(const neat::Sample& sample) {
-  std::vector<neat::Tensor> tensors;
-  if (sample.kind == neat::SampleKind::Tensor && sample.tensor.has_value()) {
-    tensors.push_back(*sample.tensor);
-  } else if (sample.kind == neat::SampleKind::TensorSet) {
-    tensors.insert(tensors.end(), sample.tensors.begin(), sample.tensors.end());
-  }
-  for (const auto& field : sample.fields) {
-    auto nested = collect_tensors(field);
-    tensors.insert(tensors.end(), nested.begin(), nested.end());
-  }
-  return tensors;
+// EV74 converts each NV12 frame to RGB, stretches it to the model input, and normalizes it.
+neat::Model::Options backbone_options(const AppConfig& cfg) {
+  neat::Model::Options options;
+  options.preprocess.kind = neat::InputKind::Image;
+  options.preprocess.enable = neat::AutoFlag::On;
+  options.preprocess.input_max_width = cfg.width;
+  options.preprocess.input_max_height = cfg.height;
+  options.preprocess.input_max_depth = 3;
+  options.preprocess.resize.enable = neat::AutoFlag::On;
+  options.preprocess.resize.mode = neat::ResizeMode::Stretch;
+  options.preprocess.color_convert.enable = neat::AutoFlag::On;
+  options.preprocess.color_convert.input_format = neat::PreprocessColorFormat::NV12;
+  options.preprocess.color_convert.output_format = neat::PreprocessColorFormat::RGB;
+  options.preprocess.preset = neat::NormalizePreset::ImageNet;
+  options.processcvu.pre_run_target = "EV74";
+  options.processcvu.post_run_target = "A65";
+  return options;
 }
 
-std::vector<float> read_floats(const neat::Tensor& tensor) {
-  if (tensor.dtype != neat::TensorDType::Float32 || !tensor.is_dense()) {
-    throw std::runtime_error("RF-DETR output must be a dense float32 tensor");
-  }
-  const auto bytes = tensor.dense_bytes_tight();
-  std::vector<float> values(bytes / sizeof(float));
-  if (!tensor.copy_dense_bytes_tight_to(reinterpret_cast<uint8_t*>(values.data()), bytes)) {
-    throw std::runtime_error("RF-DETR tensor is not CPU-readable");
-  }
-  return values;
+neat::Model::Options transformer_options() {
+  neat::Model::Options options;
+  options.processcvu.pre_run_target = "A65";
+  options.processcvu.post_run_target = "A65";
+  return options;
 }
 
-std::vector<int> stable_topk_indices(const std::vector<float>& values, std::size_t count) {
-  count = std::min(count, values.size());
-  std::vector<int> indices(values.size());
-  std::iota(indices.begin(), indices.end(), 0);
-  const auto higher_score = [&values](int left, int right) {
-    const float left_score = values[static_cast<std::size_t>(left)];
-    const float right_score = values[static_cast<std::size_t>(right)];
-    return left_score != right_score ? left_score > right_score : left < right;
-  };
-  std::partial_sort(indices.begin(), indices.begin() + static_cast<std::ptrdiff_t>(count),
-                    indices.end(), higher_score);
-  indices.resize(count);
-  return indices;
+groups::RtspEncodedInputOptions rtsp_options(const AppConfig& cfg, int fps) {
+  groups::RtspEncodedInputOptions options;
+  options.url = cfg.source;
+  options.codec = rtsp_codec(cfg);
+  options.tcp = cfg.rtsp_tcp;
+  options.latency_ms = cfg.rtsp_latency_ms;
+  if (cfg.rtsp_tcp) {
+    // Keep the RTP timestamps; arrival-time corrections drift during high-rate replay.
+    options.buffer_mode = "none";
+  }
+  options.source_fps = fps;
+  if (cfg.codec == "h264") {
+    options.fallback_h264_width = cfg.width;
+    options.fallback_h264_height = cfg.height;
+  }
+  return options;
 }
 
-std::vector<float> stable_topk_gather(const std::vector<float>& scores,
-                                      const std::vector<float>& proposals, int top_k) {
-  if (scores.size() < static_cast<std::size_t>(top_k) || proposals.size() != scores.size() * 4U) {
-    throw std::runtime_error("backbone score and proposal shapes do not match");
+// Hardware decode to NV12 frames at the stream's size.
+neat::Graph decoder_graph(const AppConfig& cfg, int fps) {
+  neat::SimaDecodeOptions decode;
+  decode.type = decode_type(cfg);
+  decode.dec_width = cfg.width;
+  decode.dec_height = cfg.height;
+  decode.dec_fps = fps;
+  if (cfg.codec == "mjpeg") {
+    // Leaves free decode surfaces while inference and the video sender hold frames.
+    decode.num_buffers = 32;
   }
-  if (!std::all_of(scores.begin(), scores.end(),
-                   [](float value) { return std::isfinite(value); }) ||
-      !std::all_of(proposals.begin(), proposals.end(),
-                   [](float value) { return std::isfinite(value); })) {
-    throw std::runtime_error("backbone output contains non-finite values");
-  }
-  const auto indices = stable_topk_indices(scores, static_cast<std::size_t>(top_k));
-  std::vector<float> gathered(static_cast<std::size_t>(top_k) * 4U);
-  for (int output = 0; output < top_k; ++output) {
-    const auto source = static_cast<std::size_t>(indices[static_cast<std::size_t>(output)]) * 4U;
-    std::copy_n(proposals.begin() + static_cast<std::ptrdiff_t>(source), 4,
-                gathered.begin() + static_cast<std::ptrdiff_t>(output * 4));
-  }
-  return gathered;
+  neat::Graph graph("decoder");
+  graph.add(neat::nodes::SimaDecode(std::move(decode)));
+  return graph;
 }
 
-struct BackboneOutputs {
-  neat::Tensor feature;
-  neat::Tensor scores;
-  neat::Tensor proposals;
-};
-
-BackboneOutputs split_backbone(const neat::Sample& sample, int proposal_count) {
-  BackboneOutputs output;
-  bool have_feature = false;
-  bool have_scores = false;
-  bool have_proposals = false;
-  for (const auto& tensor : collect_tensors(sample)) {
-    const auto elements = element_count(tensor.shape);
-    if (tensor.shape.size() >= 3U && tensor.shape.back() == 256) {
-      output.feature = tensor;
-      have_feature = true;
-    } else if (!tensor.shape.empty() && tensor.shape.back() == 4 &&
-               elements == static_cast<std::size_t>(proposal_count) * 4U) {
-      output.proposals = tensor;
-      have_proposals = true;
-    } else if (elements == static_cast<std::size_t>(proposal_count)) {
-      output.scores = tensor;
-      have_scores = true;
-    }
-  }
-  if (!have_feature || !have_scores || !have_proposals) {
-    throw std::runtime_error("backbone did not produce feature, score, and proposal tensors");
-  }
-  return output;
+// Send H.264 and H.265 to Insight unchanged; re-encode decoded MJPEG frames as H.264.
+groups::VideoSenderOptions video_options(const AppConfig& cfg, int fps) {
+  auto options = cfg.codec == "mjpeg" ? groups::VideoSenderOptions::FromRaw({.fps = fps})
+                                      : groups::VideoSenderOptions::Passthrough(rtsp_codec(cfg));
+  options.host = cfg.insight_host;
+  options.video_port_base = cfg.video_port_base;
+  return options;
 }
 
-struct TransformerOutputs {
-  neat::Tensor boxes;
-  neat::Tensor logits;
-  std::optional<neat::Tensor> masks;
-};
-
-TransformerOutputs split_transformer(const neat::Sample& sample, const Config& cfg,
-                                     const ModelContract& contract) {
-  TransformerOutputs output;
-  bool have_boxes = false;
-  bool have_logits = false;
-  const auto top_k = static_cast<std::size_t>(contract.top_k);
-  const auto mask_size = static_cast<std::size_t>(contract.mask_size);
-  for (const auto& tensor : collect_tensors(sample)) {
-    const auto elements = element_count(tensor.shape);
-    if (elements == top_k * 4U) {
-      output.boxes = tensor;
-      have_boxes = true;
-    } else if (elements == top_k * kNumClasses) {
-      output.logits = tensor;
-      have_logits = true;
-    } else if (cfg.task == Task::Segmentation && elements == mask_size * mask_size * top_k) {
-      output.masks = tensor;
-    }
-  }
-  if (!have_boxes || !have_logits ||
-      (cfg.task == Task::Segmentation && !output.masks.has_value())) {
-    throw std::runtime_error("transformer did not produce the expected output tensors");
-  }
-  return output;
-}
-
-void copy_identity(const neat::Sample& source, neat::Sample& target) {
-  target.frame_id = source.frame_id;
-  target.stream_id = source.stream_id;
-  target.stream_label = source.stream_label;
-  target.input_seq = source.input_seq;
-  target.orig_input_seq = source.orig_input_seq;
-  target.pts_ns = source.pts_ns;
-  target.dts_ns = source.dts_ns;
-  target.duration_ns = source.duration_ns;
-  target.attributes = source.attributes;
-}
-
-neat::TensorList transformer_inputs(const neat::Model& model, neat::Tensor feature,
-                                    const neat::Tensor& gathered, int top_k) {
-  // Keep SiMa-backed features zero-copy; Core may return a CPU-owned output.
-  if (feature.storage && (feature.storage->kind == neat::StorageKind::CpuOwned ||
-                          feature.storage->kind == neat::StorageKind::CpuExternal)) {
-    feature = feature.cvu();
-  }
-  neat::TensorList inputs;
-  for (const auto& spec : model.input_specs()) {
-    neat::Tensor tensor =
-        element_count(spec.shape) == static_cast<std::size_t>(top_k) * 4U ? gathered : feature;
-    if (tensor.shape != spec.shape) {
-      const bool has_batch_one =
-          tensor.shape.size() == spec.shape.size() + 1U && tensor.shape.front() == 1 &&
-          std::equal(spec.shape.begin(), spec.shape.end(), tensor.shape.begin() + 1);
-      if (!has_batch_one) {
-        throw std::runtime_error("transformer input shape does not match model contract");
-      }
-      tensor.shape.erase(tensor.shape.begin());
-      if (tensor.strides_bytes.size() == tensor.shape.size() + 1U) {
-        tensor.strides_bytes.erase(tensor.strides_bytes.begin());
-      }
-      if (tensor.axis_semantics.size() == tensor.shape.size() + 1U) {
-        tensor.axis_semantics.erase(tensor.axis_semantics.begin());
-      }
-    }
-    inputs.push_back(std::move(tensor));
-  }
-  if (inputs.size() != 2U) {
-    throw std::runtime_error("unexpected transformer input contract");
-  }
-  return inputs;
-}
-
-std::vector<sima_examples::MetadataBox>
-postprocess(const std::vector<float>& boxes, const std::vector<float>& logits, int frame_width,
-            int frame_height, const std::vector<std::string>& labels, float min_score,
-            int max_detections, int top_k) {
-  if (boxes.size() != static_cast<std::size_t>(top_k) * 4U ||
-      logits.size() != static_cast<std::size_t>(top_k) * kNumClasses) {
-    throw std::runtime_error("unexpected transformer output shape");
-  }
-  std::vector<float> probabilities(logits.size());
-  std::transform(logits.begin(), logits.end(), probabilities.begin(), [](float value) {
-    value = std::clamp(value, -80.0F, 80.0F);
-    return 1.0F / (1.0F + std::exp(-value));
-  });
-  const auto ranking = stable_topk_indices(probabilities, kClassificationTopK);
-
-  std::vector<sima_examples::MetadataBox> objects;
-  objects.reserve(static_cast<std::size_t>(max_detections));
-  for (const int flat_index : ranking) {
-    const float score = probabilities[static_cast<std::size_t>(flat_index)];
-    if (score < min_score || objects.size() >= static_cast<std::size_t>(max_detections)) {
-      break;
-    }
-    const int query = flat_index / kNumClasses;
-    const int class_id = flat_index % kNumClasses;
-    if (class_id == 0 || labels[static_cast<std::size_t>(class_id)] == "unused") {
-      continue;
-    }
-    const auto offset = static_cast<std::size_t>(query) * 4U;
-    const float cx = boxes[offset];
-    const float cy = boxes[offset + 1U];
-    const float box_width = boxes[offset + 2U];
-    const float box_height = boxes[offset + 3U];
-    const float x =
-        std::clamp((cx - box_width / 2.0F) * frame_width, 0.0F, static_cast<float>(frame_width));
-    const float y =
-        std::clamp((cy - box_height / 2.0F) * frame_height, 0.0F, static_cast<float>(frame_height));
-    const float x2 =
-        std::clamp((cx + box_width / 2.0F) * frame_width, x, static_cast<float>(frame_width));
-    const float y2 =
-        std::clamp((cy + box_height / 2.0F) * frame_height, y, static_cast<float>(frame_height));
-    objects.push_back({"obj_" + std::to_string(objects.size() + 1U),
-                       labels[static_cast<std::size_t>(class_id)], score, x, y, x2 - x, y2 - y});
-  }
-  return objects;
-}
-
-float sigmoid(float value) {
-  value = std::clamp(value, -80.0F, 80.0F);
-  return 1.0F / (1.0F + std::exp(-value));
-}
-
-cv::Rect frame_rect(const std::vector<float>& boxes, int query, int width, int height) {
-  const auto offset = static_cast<std::size_t>(query) * 4U;
-  const float cx = boxes[offset];
-  const float cy = boxes[offset + 1U];
-  const float box_width = boxes[offset + 2U];
-  const float box_height = boxes[offset + 3U];
-  const int x0 =
-      std::clamp(static_cast<int>(std::nearbyint((cx - box_width / 2.0F) * width)), 0, width - 1);
-  const int y0 = std::clamp(static_cast<int>(std::nearbyint((cy - box_height / 2.0F) * height)), 0,
-                            height - 1);
-  const int x1 =
-      std::clamp(static_cast<int>(std::nearbyint((cx + box_width / 2.0F) * width)), x0 + 1, width);
-  const int y1 = std::clamp(static_cast<int>(std::nearbyint((cy + box_height / 2.0F) * height)),
-                            y0 + 1, height);
-  return {x0, y0, x1 - x0, y1 - y0};
-}
-
-std::vector<cv::Point> mask_polygon(const float* masks, int query, int top_k, int mask_size,
-                                    const cv::Rect& box, int frame_width, int frame_height,
-                                    float threshold, int mask_grid_size) {
-  const double mask_scale_x = static_cast<double>(mask_size) / frame_width;
-  const double mask_scale_y = static_cast<double>(mask_size) / frame_height;
-  const int x0 = std::clamp(static_cast<int>(std::floor(box.x * mask_scale_x)), 0, mask_size - 1);
-  const int y0 = std::clamp(static_cast<int>(std::floor(box.y * mask_scale_y)), 0, mask_size - 1);
-  const int x1 = std::clamp(static_cast<int>(std::ceil((box.x + box.width) * mask_scale_x)), x0 + 1,
-                            mask_size);
-  const int y1 = std::clamp(static_cast<int>(std::ceil((box.y + box.height) * mask_scale_y)),
-                            y0 + 1, mask_size);
-  cv::Mat mask(y1 - y0, x1 - x0, CV_32FC1);
-  for (int y = y0; y < y1; ++y) {
-    auto* row = mask.ptr<float>(y - y0);
-    for (int x = x0; x < x1; ++x) {
-      row[x - x0] = sigmoid(masks[(y * mask_size + x) * top_k + query]);
-    }
-  }
-  if (mask_grid_size != mask_size) {
-    const cv::Size size((mask.cols * mask_grid_size + mask_size - 1) / mask_size,
-                        (mask.rows * mask_grid_size + mask_size - 1) / mask_size);
-    cv::resize(mask, mask, size, 0.0, 0.0, cv::INTER_LINEAR);
-  }
-  cv::Mat binary;
-  cv::compare(mask, threshold, binary, cv::CMP_GE);
-  std::vector<std::vector<cv::Point>> contours;
-  cv::findContours(binary, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
-  if (contours.empty()) {
-    return {};
-  }
-  const auto largest =
-      std::max_element(contours.begin(), contours.end(), [](const auto& left, const auto& right) {
-        return cv::contourArea(left) < cv::contourArea(right);
-      });
-  std::vector<cv::Point> polygon;
-  cv::approxPolyDP(*largest, polygon, 0.004 * cv::arcLength(*largest, true), true);
-  if (polygon.size() < 3U) {
-    return {};
-  }
-  const double scale_x = static_cast<double>(box.width - 1) / std::max(mask.cols - 1, 1);
-  const double scale_y = static_cast<double>(box.height - 1) / std::max(mask.rows - 1, 1);
-  for (auto& point : polygon) {
-    point.x = std::clamp(box.x + static_cast<int>(std::nearbyint(point.x * scale_x)), box.x,
-                         box.x + box.width - 1);
-    point.y = std::clamp(box.y + static_cast<int>(std::nearbyint(point.y * scale_y)), box.y,
-                         box.y + box.height - 1);
-  }
-  return polygon;
-}
-
-std::string segmentation_metadata(const TransformerOutputs& output, int frame_width,
-                                  int frame_height, const std::vector<std::string>& labels,
-                                  const Config& cfg, const ModelContract& contract) {
-  const auto boxes = read_floats(output.boxes);
-  const auto logits = read_floats(output.logits);
-  const auto& masks_tensor = *output.masks;
-  if (masks_tensor.dtype != neat::TensorDType::Float32) {
-    throw std::runtime_error("segmentation mask output must be float32");
-  }
-  neat::Mapping masks_map = masks_tensor.is_dense() && masks_tensor.is_contiguous()
-                                ? masks_tensor.view_read()
-                                : neat::Mapping{};
-  std::vector<float> masks_copy;
-  const float* masks = nullptr;
-  const std::size_t expected_bytes = static_cast<std::size_t>(contract.mask_size) *
-                                     contract.mask_size * contract.top_k * sizeof(float);
-  if (masks_map.data != nullptr && masks_map.size_bytes >= expected_bytes) {
-    masks = static_cast<const float*>(masks_map.data);
-  } else {
-    masks_copy = read_floats(masks_tensor);
-    masks = masks_copy.data();
-  }
-
-  std::vector<float> probabilities(logits.size());
-  std::transform(logits.begin(), logits.end(), probabilities.begin(), sigmoid);
-  const auto ranking = stable_topk_indices(probabilities, kClassificationTopK);
-
-  nlohmann::json segments = nlohmann::json::array();
-  std::size_t encoded_bytes = sizeof(R"({"segments":[]})") - 1U;
-  for (const int flat_index : ranking) {
-    const float score = probabilities[static_cast<std::size_t>(flat_index)];
-    if (score < cfg.min_score || segments.size() >= static_cast<std::size_t>(cfg.max_results)) {
-      break;
-    }
-    const int query = flat_index / kNumClasses;
-    const int class_id = flat_index % kNumClasses;
-    if (class_id == 0 || labels[static_cast<std::size_t>(class_id)] == "unused") {
-      continue;
-    }
-    const cv::Rect box = frame_rect(boxes, query, frame_width, frame_height);
-    const auto polygon =
-        mask_polygon(masks, query, contract.top_k, contract.mask_size, box, frame_width,
-                     frame_height, cfg.mask_threshold, cfg.mask_grid_size);
-    if (polygon.empty()) {
-      continue;
-    }
-    nlohmann::json points = nlohmann::json::array();
-    for (const auto& point : polygon) {
-      points.push_back({point.x, point.y});
-    }
-    nlohmann::json segment = {
-        {"id", "seg_" + std::to_string(segments.size() + 1U)},
-        {"label", labels[static_cast<std::size_t>(class_id)]},
-        {"confidence", score},
-        {"bbox", {box.x, box.y, box.width, box.height}},
-        {"mask_format", "polygon"},
-        {"mask", std::move(points)},
-    };
-    const std::size_t segment_bytes = segment.dump().size() + 1U;
-    if (encoded_bytes + segment_bytes > kMetadataByteBudget) {
-      break;
-    }
-    encoded_bytes += segment_bytes;
-    segments.push_back(std::move(segment));
-  }
-  return nlohmann::json{{"segments", std::move(segments)}}.dump();
-}
-
-SourceGeometry probe_source_geometry(const Config& cfg) {
-  sima_examples::RtspStreamInfo stream;
-  sima_examples::RtspProbeOptions options;
-  options.latency_ms = cfg.latency_ms;
-  options.rtsp_tcp = cfg.tcp;
-  (void)sima_examples::probe_rtsp_stream_info(cfg.rtsp_url, options, stream);
-
-  const SourceGeometry geometry =
-      resolve_geometry({stream.width, stream.height, stream.fps},
-                       {cfg.fallback_width, cfg.fallback_height, cfg.source_fps});
-  if (cfg.codec == SourceCodec::Mjpeg && geometry.fps <= 0) {
-    throw std::runtime_error("MJPEG source did not provide an FPS; set source.fps");
-  }
-  sima_examples::require(
-      geometry.width > 0 && geometry.height > 0 && geometry.fps > 0,
-      "failed to resolve RTSP width, height, and FPS; set source fallbacks if probing fails");
-  return geometry;
-}
-
-neat::nodes::groups::RtspCodec rtsp_codec(SourceCodec codec) {
-  if (codec == SourceCodec::H264) {
-    return neat::nodes::groups::RtspCodec::H264;
-  }
-  return codec == SourceCodec::H265 ? neat::nodes::groups::RtspCodec::H265
-                                    : neat::nodes::groups::RtspCodec::MJPEG;
-}
-
-neat::SimaDecodeType decode_type(SourceCodec codec) {
-  if (codec == SourceCodec::H264) {
-    return neat::SimaDecodeType::H264;
-  }
-  return codec == SourceCodec::H265 ? neat::SimaDecodeType::H265 : neat::SimaDecodeType::MJPEG;
-}
-
-neat::nodes::groups::RtspEncodedInputOptions source_options(const Config& cfg,
-                                                            const SourceGeometry& geometry) {
-  neat::nodes::groups::RtspEncodedInputOptions opt;
-  opt.url = cfg.rtsp_url;
-  opt.codec = rtsp_codec(cfg.codec);
-  opt.latency_ms = cfg.latency_ms;
-  opt.tcp = cfg.tcp;
-  if (cfg.tcp) {
-    opt.buffer_mode = "none";
-  }
-  opt.source_fps = geometry.fps;
-  if (cfg.codec == SourceCodec::H264) {
-    opt.fallback_h264_width = geometry.width;
-    opt.fallback_h264_height = geometry.height;
-  }
-  return opt;
-}
-
-neat::SimaDecodeOptions decoder_options(const Config& cfg, const SourceGeometry& geometry) {
-  neat::SimaDecodeOptions opt;
-  opt.type = decode_type(cfg.codec);
-  opt.out_format = neat::FormatTag::NV12;
-  opt.raw_output = true;
-  opt.dec_width = geometry.width;
-  opt.dec_height = geometry.height;
-  opt.dec_fps = geometry.fps;
-  if (cfg.codec == SourceCodec::Mjpeg) {
-    // Keep free decode surfaces while inference and preview retain frames.
-    opt.num_buffers = 32;
-  }
-  return opt;
-}
-
-neat::nodes::groups::VideoSenderOptions video_options(const Config& cfg,
-                                                      const SourceGeometry& geometry) {
-  auto opt = cfg.codec == SourceCodec::Mjpeg
-                 ? neat::nodes::groups::VideoSenderOptions::FromRaw({.fps = geometry.fps})
-                 : neat::nodes::groups::VideoSenderOptions::Passthrough(rtsp_codec(cfg.codec));
-  opt.host = cfg.insight_host;
-  opt.video_port_base = cfg.video_port;
-  opt.channel = 0;
-  opt.async = false;
-  return opt;
-}
-
-neat::MetadataSenderOptions metadata_options(const Config& cfg) {
-  neat::MetadataSenderOptions opt;
-  opt.host = cfg.insight_host;
-  opt.metadata_port_base = cfg.metadata_port;
-  opt.channel = 0;
-  return opt;
-}
-
-// Replaces the oldest decoded frame instead of slowing the decoder when inference lags.
-neat::QueueOptions latest_queue(int depth) {
-  neat::QueueOptions opt;
-  opt.max_buffers = depth;
-  opt.overflow_policy = neat::OverflowPolicy::KeepLatest;
-  return opt;
-}
-
-// Bounds raw MJPEG preview frames so encoding cannot hold decoder buffers.
-neat::GraphLinkOptions preview_link() {
+// Bound the decoded frames the MJPEG video sender holds, so it cannot starve the decoder.
+neat::GraphLinkOptions video_link() {
   neat::GraphLinkOptions link;
   link.policy = neat::GraphLinkPolicy::RealtimeLatestByStream;
   link.max_inflight_per_stream = 2;
@@ -717,276 +237,252 @@ neat::GraphLinkOptions preview_link() {
   return link;
 }
 
-neat::Model build_backbone(const Config& cfg, const SourceGeometry& geometry) {
-  neat::Model::Options opt;
-  opt.preprocess.kind = neat::InputKind::Image;
-  opt.preprocess.enable = neat::AutoFlag::On;
-  opt.preprocess.input_max_width = geometry.width;
-  opt.preprocess.input_max_height = geometry.height;
-  opt.preprocess.input_max_depth = 3;
-  opt.preprocess.resize.enable = neat::AutoFlag::On;
-  opt.preprocess.resize.mode = neat::ResizeMode::Stretch;
-  opt.preprocess.color_convert.enable = neat::AutoFlag::On;
-  opt.preprocess.color_convert.input_format = neat::PreprocessColorFormat::NV12;
-  opt.preprocess.color_convert.output_format = neat::PreprocessColorFormat::RGB;
-  opt.preprocess.preset = neat::NormalizePreset::ImageNet;
-  opt.processcvu.pre_run_target = "EV74";
-  opt.processcvu.post_run_target = "A65";
-  return neat::Model(cfg.backbone, opt);
+// Newest decoded frames -> backbone -> "backbone" output. The queue replaces its oldest frame
+// instead of slowing the decoder when inference lags.
+neat::Graph backbone_graph(neat::Model& backbone) {
+  neat::QueueOptions newest_frames;
+  newest_frames.max_buffers = 4;
+  newest_frames.overflow_policy = neat::OverflowPolicy::KeepLatest;
+  neat::Graph graph("inference");
+  graph.add(neat::nodes::Queue(newest_frames));
+  graph.add(backbone.graph());
+  graph.add(neat::nodes::Output("backbone", neat::OutputOptions::EveryFrame(8)));
+  return graph;
 }
 
-neat::Model build_transformer(const Config& cfg) {
-  neat::Model::Options opt;
-  opt.processcvu.pre_run_target = "A65";
-  opt.processcvu.post_run_target = "A65";
-  return neat::Model(cfg.transformer, opt);
+neat::MetadataSenderOptions metadata_options(const AppConfig& cfg) {
+  neat::MetadataSenderOptions options;
+  options.host = cfg.insight_host;
+  options.metadata_port_base = cfg.metadata_port_base;
+  return options;
 }
 
-void require_model_contract(const Config& cfg, neat::Model& backbone, neat::Model& transformer,
-                            const ModelContract& contract) {
-  const int side = contract.side;
-  const int top_k = contract.top_k;
-  const auto has_specs = [](const auto& specs, const std::vector<std::vector<int64_t>>& shapes) {
-    if (specs.size() != shapes.size()) {
-      return false;
-    }
-    for (std::size_t index = 0; index < specs.size(); ++index) {
-      if (specs[index].shape != shapes[index] || specs[index].dtypes.size() != 1U ||
-          specs[index].dtypes.front() != neat::TensorDType::Float32) {
-        return false;
-      }
-    }
-    return true;
-  };
-  std::vector<std::vector<int64_t>> transformer_outputs = {{1, top_k, 4}, {1, top_k, kNumClasses}};
-  if (cfg.task == Task::Segmentation) {
-    transformer_outputs.push_back({1, contract.mask_size, contract.mask_size, top_k});
-  }
-  const auto backbone_inputs = backbone.input_specs();
-  const bool valid_contract =
-      top_k > 0 && (cfg.task == Task::Detection || contract.mask_size > 0) &&
-      backbone_inputs.size() == 1U &&
-      backbone_inputs.front().shape == std::vector<int64_t>{-1, -1, 3} &&
-      backbone_inputs.front().dtypes == std::vector<neat::TensorDType>{neat::TensorDType::UInt8} &&
-      has_specs(backbone.output_specs(),
-                {{1, side, side, 256}, {1, side * side}, {1, side * side, 4}}) &&
-      has_specs(transformer.input_specs(), {{1, side, side, 256}, {1, top_k, 4}}) &&
-      has_specs(transformer.output_specs(), transformer_outputs);
-  sima_examples::require(valid_contract,
-                         "selected RF-DETR model pair has an unexpected I/O contract");
+neat::RunOptions run_options() {
+  neat::RunOptions options;
+  options.preset = neat::RunPreset::Realtime;
+  options.output_memory = neat::OutputMemory::ZeroCopy;
+  return options;
 }
 
-// Read the feature grid, query count, and mask size that differ between model sizes.
-ModelContract model_contract(const Config& cfg, neat::Model& backbone, neat::Model& transformer) {
-  const auto outputs = backbone.output_specs();
-  sima_examples::require(!outputs.empty() && outputs.front().shape.size() == 4U,
-                         "RF-DETR backbone must output a feature grid");
-  ModelContract contract;
-  contract.side = static_cast<int>(outputs.front().shape[1]);
-  int proposal_inputs = 0;
-  for (const auto& spec : transformer.input_specs()) {
-    if (spec.shape.size() >= 2U && spec.shape.back() == 4) {
-      contract.top_k = static_cast<int>(spec.shape[spec.shape.size() - 2U]);
-      ++proposal_inputs;
-    }
-  }
-  if (proposal_inputs != 1) {
-    contract.top_k = 0;
-  }
-  if (cfg.task == Task::Segmentation) {
-    int mask_outputs = 0;
-    for (const auto& spec : transformer.output_specs()) {
-      if (spec.shape.size() == 4U) {
-        contract.mask_size = static_cast<int>(spec.shape[1]);
-        ++mask_outputs;
-      }
-    }
-    if (mask_outputs != 1) {
-      contract.mask_size = 0;
-    }
-  }
-  require_model_contract(cfg, backbone, transformer, contract);
-  if (cfg.task == Task::Segmentation) {
-    sima_examples::require(cfg.mask_grid_size >= contract.mask_size,
-                           "inference.segmentation.mask_grid_size must be >= the model's mask "
-                           "size (" + std::to_string(contract.mask_size) + ")");
-  }
-  return contract;
+// Copy each result to host memory, so reading it holds none of the transformer's buffers.
+neat::RunOptions transformer_run_options() {
+  neat::RunOptions options;
+  options.output_memory = neat::OutputMemory::Owned;
+  return options;
 }
 
+// Zero tensors shaped like the transformer's inputs, which the build runs once.
 neat::TensorList transformer_seed(neat::Model& transformer) {
   neat::TensorList seed;
   for (const auto& spec : transformer.input_specs()) {
-    seed.push_back(neat::Tensor::from_vector(std::vector<float>(element_count(spec.shape)),
-                                             spec.shape, neat::TensorMemory::EV74));
+    std::size_t elements = 1;
+    for (const auto dimension : spec.shape) {
+      elements *= static_cast<std::size_t>(dimension);
+    }
+    seed.push_back(neat::Tensor::from_vector(std::vector<float>(elements), spec.shape,
+                                             neat::TensorMemory::EV74));
   }
   return seed;
 }
 
-neat::RunOptions source_run_options() {
-  neat::RunOptions run_options;
-  run_options.preset = neat::RunPreset::Realtime;
-  run_options.output_memory = neat::OutputMemory::ZeroCopy;
-  run_options.advanced.prepare_output_cpu_visible = true;
-  return run_options;
+rfdetr::PostprocessOptions postprocess_options(const AppConfig& cfg) {
+  rfdetr::PostprocessOptions options;
+  options.width = cfg.width;
+  options.height = cfg.height;
+  options.min_score = static_cast<float>(cfg.min_score);
+  options.max_detections = cfg.max_detections;
+  options.mask_threshold = static_cast<float>(cfg.mask_threshold);
+  options.mask_grid_size = cfg.mask_grid_size;
+  return options;
 }
 
-// Every completed backbone result reaches the transformer; the bridge blocks when full.
-neat::RunOptions transformer_run_options() {
-  neat::RunOptions run_options;
-  run_options.preset = neat::RunPreset::Balanced;
-  run_options.queue_depth = 4;
-  run_options.overflow_policy = neat::OverflowPolicy::Block;
-  run_options.output_memory = neat::OutputMemory::Owned;
-  return run_options;
-}
-
-std::string result_metadata(const Config& cfg, const ModelContract& contract,
-                            const neat::Sample& sample, const SourceGeometry& geometry,
-                            const std::vector<std::string>& labels) {
-  const auto output = split_transformer(sample, cfg, contract);
-  if (cfg.task == Task::Detection) {
-    return sima_examples::metadata_boxes_data_json(
-        "objects",
-        postprocess(read_floats(output.boxes), read_floats(output.logits), geometry.width,
-                    geometry.height, labels, cfg.min_score, cfg.max_results, contract.top_k));
+// The stream's frame rate: the configured one, or a probe when input.fps is 0.
+int stream_fps(const AppConfig& cfg) {
+  if (cfg.fps > 0) {
+    return cfg.fps;
   }
-  return segmentation_metadata(output, geometry.width, geometry.height, labels, cfg, contract);
+  sima_examples::RtspProbeOptions probe;
+  probe.rtsp_tcp = cfg.rtsp_tcp;
+  sima_examples::RtspStreamInfo info;
+  sima_examples::probe_rtsp_stream_info(cfg.source, probe, info);
+  sima_examples::require(info.fps > 0, "failed to probe RTSP frame rate: " + cfg.source);
+  return info.fps;
 }
 
-// Decode once; send the preview to Insight and the newest frames to the backbone.
-neat::Graph build_graph(const Config& cfg, neat::Model& backbone, const SourceGeometry& geometry) {
-  neat::Graph source("rtsp_encoded_source");
-  source.add(neat::nodes::groups::RtspEncodedInput(source_options(cfg, geometry)));
+// The values of a float32 output tensor, copied to host memory. The backbone's zero-copy
+// outputs report CPU but cannot be mapped, so data_ptr() would throw for them.
+std::vector<float> float_values(const neat::Tensor& tensor) {
+  std::vector<float> values(tensor.dense_bytes_tight() / sizeof(float));
+  sima_examples::require(tensor.copy_dense_bytes_tight_to(reinterpret_cast<uint8_t*>(values.data()),
+                                                          values.size() * sizeof(float)),
+                         "failed to read an RF-DETR output tensor");
+  return values;
+}
 
-  neat::Graph decoder("decoder");
-  decoder.add(neat::nodes::SimaDecode(decoder_options(cfg, geometry)));
+// The transformer's input for one frame: the backbone features and the best proposals.
+neat::Sample transformer_sample(const neat::Sample& backbone_result,
+                                const std::vector<int64_t>& proposals_shape) {
+  neat::Tensor feature = backbone_result.tensors.at(0);
+  if (feature.storage && (feature.storage->kind == neat::StorageKind::CpuOwned ||
+                          feature.storage->kind == neat::StorageKind::CpuExternal)) {
+    // The transformer reads its features from device memory; a device-backed feature map
+    // passes without a copy.
+    feature = feature.cvu();
+  }
+  const auto best = rfdetr::top_proposals(float_values(backbone_result.tensors.at(1)),
+                                          float_values(backbone_result.tensors.at(2)),
+                                          static_cast<int>(proposals_shape.at(1)));
+  neat::Sample sample;
+  sample.kind = neat::SampleKind::TensorSet;
+  sample.tensors = {feature,
+                    neat::Tensor::from_vector(best, proposals_shape, neat::TensorMemory::EV74)};
+  sample.frame_id = backbone_result.frame_id;
+  sample.stream_id = backbone_result.stream_id;
+  sample.stream_label = backbone_result.stream_label;
+  sample.input_seq = backbone_result.input_seq;
+  sample.orig_input_seq = backbone_result.orig_input_seq;
+  sample.pts_ns = backbone_result.pts_ns;
+  sample.dts_ns = backbone_result.dts_ns;
+  sample.duration_ns = backbone_result.duration_ns;
+  sample.attributes = backbone_result.attributes;
+  return sample;
+}
 
-  neat::Graph video("video");
-  video.add(neat::nodes::groups::VideoSender(video_options(cfg, geometry)));
+// The metadata of one transformer result: detection boxes, or segmentation polygons.
+std::string result_json(const neat::Sample& result, const std::vector<std::string>& labels,
+                        int mask_size, const rfdetr::PostprocessOptions& options) {
+  std::vector<std::vector<float>> values;
+  for (const auto& tensor : result.tensors) {
+    values.push_back(float_values(tensor));
+  }
+  if (mask_size > 0) {
+    return rfdetr::segmentation_json(values.at(0), values.at(1), values.at(2), mask_size, labels,
+                                     options);
+  }
+  return rfdetr::detection_json(values.at(0), values.at(1), labels, options);
+}
 
-  neat::Graph inference("inference");
-  inference.add(neat::nodes::Queue(latest_queue(4)));
-  inference.add(backbone.graph());
-  neat::Graph backbone_output("backbone_output");
-  backbone_output.add(neat::nodes::Output("backbone", neat::OutputOptions::EveryFrame(8)));
-  inference.add(backbone_output);
+// Hand every backbone result to the transformer until the run stops. A push waits while the
+// transformer's input queue is full, so no backbone result is lost.
+void feed_transformer(neat::Run& source_run, neat::Model::Runner& transformer_runner,
+                      const std::vector<int64_t>& proposals_shape, std::string& error) {
+  try {
+    while (!g_stop_requested) {
+      neat::Sample sample;
+      neat::PullError pull_error;
+      const auto status = source_run.pull("backbone", kPullTimeoutMs, sample, &pull_error);
+      if (!sima_examples::pull_status_has_sample(status, "backbone", pull_error,
+                                                 source_run.last_error())) {
+        continue;
+      }
+      if (!transformer_runner.push(transformer_sample(sample, proposals_shape))) {
+        throw std::runtime_error("the transformer rejected its input");
+      }
+    }
+  } catch (const std::exception& failure) {
+    if (!g_stop_requested) {
+      error = failure.what();
+    }
+  }
+  g_stop_requested = true;
+}
 
-  neat::Graph graph("rfdetr_source");
-  graph.connect(source, decoder);
-  if (cfg.codec == SourceCodec::Mjpeg) {
-    // MJPEG has no encoded passthrough: the preview re-encodes decoded frames.
-    graph.connect(decoder, video, preview_link());
+// Send every transformer result to Insight until inference.frames or a stop; return the count.
+int send_results(neat::Model::Runner& transformer_runner,
+                 const neat::MetadataSender& metadata_sender,
+                 const std::vector<std::string>& labels, int mask_size, const AppConfig& cfg) {
+  const std::string metadata_type = cfg.segmentation ? "segmentation" : "object-detection";
+  const auto options = postprocess_options(cfg);
+  int sent = 0;
+  while (!g_stop_requested && (cfg.frames == 0 || sent < cfg.frames)) {
+    const neat::Sample result = transformer_runner.pull(kPullTimeoutMs);
+    if (result.empty()) {
+      continue;
+    }
+    // A nonblocking send drops the message while the socket buffer is full; the drops are
+    // counted in the sender's stats and reported when the run ends.
+    (void)metadata_sender.send_metadata(
+        metadata_type, result_json(result, labels, mask_size, options),
+        result.pts_ns >= 0 ? result.pts_ns / 1'000'000 : -1,
+        result.frame_id >= 0 ? std::to_string(result.frame_id) : "");
+    ++sent;
+  }
+  return sent;
+}
+
+int run_app(const CliOptions& cli) {
+  if (!fs::exists(cli.config_path)) {
+    std::cerr << "Error: config file not found: " << cli.config_path.string() << "\n";
+    return 2;
+  }
+  const AppConfig cfg = load_app_config(cli.config_path);
+  if (cli.validate_config_only) {
+    std::cout << "Config validated: " << cli.config_path.string() << " (model=" << cfg.model_id
+              << ")\n";
+    return 0;
+  }
+  sima_examples::require(fs::exists(cfg.transformer_path),
+                         "decoder package not found: " + cfg.transformer_path.string());
+
+  const auto labels = sima_examples::load_labels(cfg.labels_path);
+  const int fps = stream_fps(cfg);
+  neat::Model backbone(cfg.model_path.string(), backbone_options(cfg));
+  neat::Model transformer(cfg.transformer_path.string(), transformer_options());
+  const std::vector<int64_t> proposals_shape = transformer.input_specs().at(1).shape;
+  const int mask_size =
+      cfg.segmentation ? static_cast<int>(transformer.output_specs().at(2).shape.at(1)) : 0;
+
+  auto rtsp = groups::RtspEncodedInput(rtsp_options(cfg, fps));
+  const neat::Graph decoder = decoder_graph(cfg, fps);
+  auto video = groups::VideoSender(video_options(cfg, fps));
+  neat::Graph graph;
+  graph.connect(rtsp, decoder);
+  if (cfg.codec == "mjpeg") {
+    graph.connect(decoder, video, video_link());
   } else {
-    // A plain source link lets Core tee the encoded stream to the decoder and the sender.
-    graph.connect(source, video);
+    // A plain link lets Core tee the encoded stream to the decoder and the video sender.
+    graph.connect(rtsp, video);
   }
-  graph.connect(decoder, inference);
-  return graph;
-}
+  graph.connect(decoder, backbone_graph(backbone));
 
-int run(const Config& cfg) {
-  const SourceGeometry geometry = probe_source_geometry(cfg);
-  const auto labels = load_labels(cfg.labels);
-  neat::Model backbone = build_backbone(cfg, geometry);
-  neat::Model transformer = build_transformer(cfg);
-  const ModelContract contract = model_contract(cfg, backbone, transformer);
-
-  neat::Graph graph = build_graph(cfg, backbone, geometry);
   neat::Model::Runner transformer_runner = transformer.build(
       transformer_seed(transformer), neat::Model::RouteOptions{}, transformer_run_options());
-  neat::Run source_run = graph.build(source_run_options());
+  neat::Run source_run = graph.build(run_options());
   std::string metadata_error;
   neat::MetadataSender metadata_sender(metadata_options(cfg), &metadata_error);
   sima_examples::require(metadata_sender.ok(), metadata_error);
-  std::cout << "RF-DETR " << task_name(cfg.task) << " " << cfg.variant << " "
-            << source_codec_name(cfg.codec) << ": " << cfg.rtsp_url << " (" << geometry.width << "x"
-            << geometry.height << "@" << geometry.fps << ") -> Insight video=" << cfg.video_port
-            << " metadata=" << metadata_sender.metadata_port() << "\n";
+  std::cout << "RF-DETR " << cfg.model_id << " " << cfg.codec << ": " << cfg.source << " ("
+            << cfg.width << "x" << cfg.height << "@" << fps << ") -> Insight " << cfg.insight_host
+            << " video=" << cfg.video_port_base << " metadata=" << cfg.metadata_port_base << "\n";
 
-  // Select the top proposals on the host and hand them to the transformer.
-  const int proposal_count = contract.side * contract.side;
-  std::string transformer_bridge_error;
-  std::thread transformer_bridge([&] {
-    try {
-      while (!g_stop.load()) {
-        neat::Sample sample;
-        neat::PullError pull_error;
-        const auto status = source_run.pull("backbone", 500, sample, &pull_error);
-        if (!sima_examples::pull_status_has_sample(status, "backbone", pull_error,
-                                                   source_run.last_error())) {
-          continue;
-        }
-        const auto outputs = split_backbone(sample, proposal_count);
-        auto gathered = stable_topk_gather(read_floats(outputs.scores),
-                                           read_floats(outputs.proposals), contract.top_k);
-        neat::Tensor gathered_tensor =
-            neat::Tensor::from_vector(gathered, {1, contract.top_k, 4}, neat::TensorMemory::EV74);
-        neat::Sample transformer_sample;
-        transformer_sample.kind = neat::SampleKind::TensorSet;
-        transformer_sample.tensors =
-            transformer_inputs(transformer, outputs.feature, gathered_tensor, contract.top_k);
-        copy_identity(sample, transformer_sample);
-        if (!transformer_runner.push(transformer_sample)) {
-          if (!g_stop.load()) {
-            throw std::runtime_error("Transformer rejected input");
-          }
-          break;
-        }
-      }
-    } catch (const std::exception& error) {
-      if (!g_stop.load()) {
-        transformer_bridge_error = error.what();
-      }
-      g_stop.store(true);
-    }
-  });
-
-  const auto shutdown = [&] {
-    g_stop.store(true);
-    transformer_runner.close_input();
-    transformer_bridge.join();
-    transformer_runner.close();
-    source_run.stop();
-  };
-  const char* metadata_type = cfg.task == Task::Detection ? "object-detection" : "segmentation";
-  int processed = 0;
-  std::chrono::steady_clock::time_point first_completed_at;
-  std::chrono::steady_clock::time_point last_completed_at;
+  std::signal(SIGINT, request_stop);
+  std::string feed_error;
+  std::thread feeder(feed_transformer, std::ref(source_run), std::ref(transformer_runner),
+                     std::cref(proposals_shape), std::ref(feed_error));
+  int sent = 0;
+  std::exception_ptr send_error;
   try {
-    while (!g_stop.load() && (cfg.frames == 0 || processed < cfg.frames)) {
-      const auto sample = transformer_runner.pull(500);
-      if (sample.empty()) {
-        continue;
-      }
-      const std::string data = result_metadata(cfg, contract, sample, geometry, labels);
-      const int64_t timestamp_ms = sample.pts_ns >= 0 ? sample.pts_ns / 1'000'000 : -1;
-      const std::string frame_id = sample.frame_id >= 0 ? std::to_string(sample.frame_id) : "";
-      std::string error;
-      if (!metadata_sender.send_metadata(metadata_type, data, timestamp_ms, frame_id, &error)) {
-        std::cerr << "[warn] Insight metadata send failed: " << error << "\n";
-      }
-      ++processed;
-      last_completed_at = std::chrono::steady_clock::now();
-      if (processed == 1) {
-        first_completed_at = last_completed_at;
-      }
-    }
+    sent = send_results(transformer_runner, metadata_sender, labels, mask_size, cfg);
   } catch (...) {
-    shutdown();
-    throw;
+    send_error = std::current_exception();
+  }
+  g_stop_requested = true;
+  transformer_runner.close_input(); // Ends a push the feeder may be blocked in.
+  feeder.join();
+  transformer_runner.close();
+  source_run.close();
+  if (send_error) {
+    std::rethrow_exception(send_error);
+  }
+  if (!feed_error.empty()) {
+    throw std::runtime_error(feed_error);
   }
 
-  shutdown();
-  if (!transformer_bridge_error.empty()) {
-    throw std::runtime_error(transformer_bridge_error);
+  std::cout << "RF-DETR " << cfg.model_id << ": sent " << sent << " results to Insight\n";
+  const auto failures = metadata_sender.stats().send_failures;
+  if (failures > 0) {
+    std::cout << failures << " metadata messages dropped\n";
   }
-  const double elapsed_seconds =
-      processed > 1 ? std::chrono::duration<double>(last_completed_at - first_completed_at).count()
-                    : 0.0;
-  const double output_fps = elapsed_seconds > 0.0 ? (processed - 1) / elapsed_seconds : 0.0;
-  std::cout << "RF-DETR " << task_name(cfg.task) << ": completed=" << processed
-            << " output_fps=" << output_fps << "\n";
   return 0;
 }
 
@@ -994,18 +490,9 @@ int run(const Config& cfg) {
 
 int main(int argc, char** argv) {
   try {
-    const auto cli = parse_args(argc, argv);
-    const Config cfg = load_config(cli.config_path);
-    if (cli.validate_config_only) {
-      (void)load_labels(cfg.labels);
-      std::cout << "RF-DETR " << task_name(cfg.task) << " configuration is valid\n";
-      return 0;
-    }
-    std::signal(SIGINT, request_stop);
-    std::signal(SIGTERM, request_stop);
-    return run(cfg);
+    return run_app(parse_args(argc, argv));
   } catch (const std::exception& error) {
-    std::cerr << "Error: " << error.what() << "\n";
+    std::cerr << "[ERR] " << error.what() << "\n";
     return 1;
   }
 }

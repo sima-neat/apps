@@ -3,6 +3,7 @@
 #include "support/cpp/testing/test_process.h"
 
 #include <nlohmann/json.hpp>
+#include <opencv2/videoio.hpp>
 
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -12,6 +13,7 @@
 #include <filesystem>
 #include <iostream>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -20,7 +22,7 @@ using namespace sima_examples::testing;
 namespace {
 
 struct Variant {
-  std::string name;
+  std::string id;
   std::string backbone;
   std::string transformer;
 };
@@ -35,6 +37,14 @@ struct TestCase {
   Variant model;
   SourceCase source;
 };
+
+// The test stream's frame size, which the config must state; zero when it cannot be read.
+std::pair<int, int> frame_size(const std::string& url) {
+  cv::VideoCapture capture(url);
+  const auto width = static_cast<int>(capture.get(cv::CAP_PROP_FRAME_WIDTH));
+  const auto height = static_cast<int>(capture.get(cv::CAP_PROP_FRAME_HEIGHT));
+  return {width, height};
+}
 
 bool valid_metadata(const MetadataJsonListenerResult& result, bool segmentation) {
   const char* data_key = segmentation ? "segments" : "objects";
@@ -87,22 +97,22 @@ int main(int argc, char** argv) {
   const char* models_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
   const fs::path models_dir = models_raw != nullptr ? models_raw : "models";
   const std::vector<Variant> detection_models = {
-      {"nano", "rf_detr_nano_w8a8_mixed_w16a16_backbone_mpk.tar.gz",
+      {"det-nano", "rf_detr_nano_w8a8_mixed_w16a16_backbone_mpk.tar.gz",
        "rf_detr_nano_w8a8_mixed_w16a16_decoder_mpk.tar.gz"},
-      {"small", "rf_detr_small_w8a8_mixed_w16a16_backbone_mpk.tar.gz",
+      {"det-small", "rf_detr_small_w8a8_mixed_w16a16_backbone_mpk.tar.gz",
        "rf_detr_small_w8a8_mixed_w16a16_decoder_mpk.tar.gz"},
-      {"medium", "rf_detr_medium_w8a8_mixed_w16a16_backbone_mpk.tar.gz",
+      {"det-medium", "rf_detr_medium_w8a8_mixed_w16a16_backbone_mpk.tar.gz",
        "rf_detr_medium_w8a8_mixed_w16a16_decoder_mpk.tar.gz"},
-      {"large", "rf_detr_large_w8a8_mixed_w16a16_backbone_mpk.tar.gz",
+      {"det-large", "rf_detr_large_w8a8_mixed_w16a16_backbone_mpk.tar.gz",
        "rf_detr_large_w8a8_mixed_w16a16_decoder_mpk.tar.gz"},
   };
   // Each segmentation size uses the registry build profile config.yaml ships with.
   const std::vector<Variant> segmentation_models = {
-      {"nano", "rf_detr_seg_nano_w8a16_w8a8_mixed_backbone_mpk.tar.gz",
+      {"seg-nano", "rf_detr_seg_nano_w8a16_w8a8_mixed_backbone_mpk.tar.gz",
        "rf_detr_seg_nano_w8a16_w8a8_mixed_decoder_mpk.tar.gz"},
-      {"small", "rf_detr_seg_small_w8a16_w8a8_mixed_backbone_mpk.tar.gz",
+      {"seg-small", "rf_detr_seg_small_w8a16_w8a8_mixed_backbone_mpk.tar.gz",
        "rf_detr_seg_small_w8a16_w8a8_mixed_decoder_mpk.tar.gz"},
-      {"medium", "rf_detr_seg_medium_w8a16_w8a8_mixed_backbone_mpk.tar.gz",
+      {"seg-medium", "rf_detr_seg_medium_w8a16_w8a8_mixed_backbone_mpk.tar.gz",
        "rf_detr_seg_medium_w8a16_w8a8_mixed_decoder_mpk.tar.gz"},
   };
   const std::vector<SourceCase> sources = {
@@ -135,30 +145,38 @@ int main(int argc, char** argv) {
     if (!fs::exists(backbone) || !fs::exists(transformer)) {
       return skip_or_fail("missing RF-DETR " + test.task + " artifacts");
     }
-    const std::string case_name = test.task + "_" + test.model.name + "_" + test.source.codec;
+    const auto [width, height] = frame_size(rtsp_url);
+    if (width <= 0 || height <= 0) {
+      std::cerr << "[FAIL] cannot read the frame size of " << rtsp_url << "\n";
+      return 1;
+    }
+    const std::string case_name = test.model.id + "_" + test.source.codec;
     const std::string output_dir =
         create_test_output_dir("rfdetr-detection-segmentation", "test_" + case_name);
     if (output_dir.empty()) {
       return 1;
     }
     const fs::path config_path = fs::path(output_dir).parent_path() / "config.yaml";
-    ConfigScalars overrides = {
-        {"model.task", test.task},
+    const bool segmentation = test.task == "segmentation";
+    const ConfigScalars overrides = {
+        {"model.id", test.model.id},
+        {"model.path", backbone.string()},
         {"model.labels", labels.string()},
-        {"source.rtsp_url", rtsp_url},
-        {"source.codec", test.source.codec},
+        {"input.source", rtsp_url},
+        {"input.codec", test.source.codec},
+        {"input.width", std::to_string(width)},
+        {"input.height", std::to_string(height)},
         {"inference.frames", "20"},
-        {"inference." + test.task + ".min_score", "0.2"},
+        {"inference.min_score", "0.2"},
+        // The config comments recommend 100 results per frame for detection, 24 for
+        // segmentation.
+        {"inference.max_detections", segmentation ? "24" : "100"},
         {"output.insight.host", "127.0.0.1"},
-        {"output.insight.video_port", std::to_string(video_port)},
-        {"output.insight.metadata_port", std::to_string(metadata_port)},
+        {"output.insight.video_port_base", std::to_string(video_port)},
+        {"output.insight.metadata_port_base", std::to_string(metadata_port)},
     };
-    overrides["model." + test.task + ".variant"] = test.model.name;
-    overrides["model." + test.task + "." + test.model.name + ".backbone"] = backbone.string();
-    overrides["model." + test.task + "." + test.model.name + ".transformer"] = transformer.string();
     write_e2e_config("rfdetr-detection-segmentation", config_path, overrides);
 
-    const bool segmentation = test.task == "segmentation";
     MetadataJsonListenerOptions options;
     options.host = "127.0.0.1";
     options.base_port = metadata_port;
@@ -212,7 +230,8 @@ int main(int argc, char** argv) {
     const auto& last = following.messages.back();
     if (std::stoll(last.frame_id) <= std::stoll(first.frame_id) ||
         last.timestamp_ms <= first.timestamp_ms ||
-        process.stdout_text.find("RF-DETR " + test.task + ": completed=20 ") == std::string::npos) {
+        process.stdout_text.find("RF-DETR " + test.model.id + ": sent 20 results to Insight") ==
+            std::string::npos) {
       std::cerr << "[FAIL] RF-DETR " << case_name
                 << " did not complete with progressing frame identities\n";
       return 1;

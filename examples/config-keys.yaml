@@ -10,6 +10,9 @@
 model.path:
   type: string
   meaning: Compiled model package (.tar.gz). A relative path starts at the config file.
+model.id:
+  type: string
+  meaning: Which model variant model.path holds, when an example supports several, such as det-small. The example's config lists its IDs.
 model.labels:
   type: string
   meaning: Class-label file with one label per line. A relative path starts at the working directory.
@@ -19,7 +22,7 @@ input.source:
   meaning: Input streams, one RTSP URL per stream. The same URL may repeat.
 input.codec:
   type: string
-  meaning: Encoded video format of every input stream, h264 or h265.
+  meaning: Encoded video format of every input stream, such as h264, h265, or mjpeg. The example's config lists the formats it decodes.
 input.width:
   type: integer
   meaning: Frame width of every input stream, in pixels.
@@ -36,6 +39,9 @@ input.rtsp.latency_ms:
   type: integer
   meaning: RTSP jitter buffer, in milliseconds.
 
+inference.frames:
+  type: integer
+  meaning: Frames to process before the application stops. 0 runs until interrupted.
 inference.min_score:
   type: number
   meaning: Lowest score a detection needs, from 0 to 1.

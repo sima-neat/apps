@@ -47,7 +47,6 @@ PENDING_EXAMPLES = {
     "patchcore-anomaly-detector",
     "pcb-defect-detector",
     "pcie-high-density-multi-stream-object-detector",
-    "rfdetr-detection-segmentation",
     "single-stream-instance-segmenter",
     "single-stream-object-detector",
     "single-stream-thermal-face-detector",
