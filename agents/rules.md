@@ -21,7 +21,8 @@ Where each part of an application goes, and what every change keeps true.
   `Config::load` in `config.h`, and each names the other in its header comment. A helper only one language needs, such as C++
   `pull_status.h`, exists only there.
 - A Python entrypoint finds `support/python` in a folder above itself, as the high-density
-  example does. `build.sh` and `scripts/get-example.sh` ship that folder.
+  example does. `build.sh` and `scripts/get-example.sh` ship that folder, and
+  `support/cpp/sima_examples/` without `testing/` as reference source.
 - Keep system provisioning, recovery, and setup outside the examples. Platform tooling owns
   the host, network, mounts, devices, the SDK, and unrelated processes.
 - Treat a missing runtime capability as Core work rather than an Apps workaround. A comment

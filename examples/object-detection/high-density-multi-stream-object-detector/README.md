@@ -215,7 +215,7 @@ without opening a stream or touching Insight:
 - 30-stream profile: `src/common/config-30x720p20fps.yaml`
 - 60-stream profile: `src/common/config-60x720p10fps.yaml`
 - COCO labels: `src/common/coco_label.txt`
-- Helpers shared with other examples, with no Neat API calls: `support/python/sima_examples/` in `prebuilt-apps/`
+- Helpers shared with other examples, with no Neat API calls: `support/python/sima_examples/` in `prebuilt-apps/`, and their C++ reference source in `support/cpp/sima_examples/`
 
 The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
 

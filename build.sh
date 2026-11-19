@@ -254,9 +254,13 @@ PY
       \) 2>/dev/null | sort
   )
 
-  # Python examples import the helpers they share from support/python.
-  mkdir -p "${stage_dir}/support"
+  # Python examples import the helpers they share from support/python. The C++
+  # executables are built with support/cpp, shipped as reference source without
+  # its build and test files.
+  mkdir -p "${stage_dir}/support/cpp"
   cp -a "${ROOT_DIR}/support/python" "${stage_dir}/support/"
+  cp -a "${ROOT_DIR}/support/cpp/sima_examples" "${stage_dir}/support/cpp/"
+  rm -rf "${stage_dir}/support/cpp/sima_examples/testing"
 
   while IFS= read -r tests_dir; do
     local rel target_dir

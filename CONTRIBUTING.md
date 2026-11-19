@@ -244,6 +244,7 @@ generation, and affected CI workflows.
 | `examples/<category>/<example>/src/python/` | Python implementation and dependencies |
 | `examples/<category>/<example>/src/common/` | Shared runtime configuration and data |
 | `support/python/` | Helpers the Python examples share |
+| `support/cpp/` | Source of the helpers the C++ executables are built with, as reference |
 | `assets/datasets/` | Shipped runtime sample data |
 | `models/` | User-managed model packages |
 | `deps/neat-apps.json` | Installed Apps ref and exact commit |

@@ -204,7 +204,7 @@ The MJPEG runs set `input.fps: 120`. With the probed 300 FPS, the H.264 encoder 
 - C++ reference source: `src/cpp/main.cpp`, with the postprocessing in `src/cpp/utils/postprocess.cpp`
 - Python implementation: `src/python/main.py`, with the postprocessing in `src/python/utils/postprocess.py`
 - Shared configuration and COCO labels: `src/common/`
-- Helpers shared with other examples, with no Neat API calls: `support/python/sima_examples/` in `prebuilt-apps/`
+- Helpers shared with other examples, with no Neat API calls: `support/python/sima_examples/` in `prebuilt-apps/`, and their C++ reference source in `support/cpp/sima_examples/`
 
 The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
 
