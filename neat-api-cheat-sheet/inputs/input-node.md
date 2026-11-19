@@ -9,19 +9,25 @@ starts with a source node such as an RTSP or camera input reads data by itself
 instead.
 
 `InputOptions` describes what the application pushes: the payload type (image,
-tensor, or encoded video), the format, the size, and the frame rate. It also
-sets how much data may wait at the input and in which memory Core allocates
-the input buffers. `InputMemoryPolicy` names those memory targets.
+tensor, or encoded video), the format, the size, and the frame rate. Core
+turns these fields into caps: the format, size and frame rate that the input
+announces to the next node. `InputOptions` also sets how much data may wait at
+the input and in which memory Core allocates the input buffers.
+`InputMemoryPolicy` names those memory targets: plain memory of the board's
+CPU, memory that EV74 can read, or DMS0. EV74, also called CVU, is the board's
+vision processor that runs preprocessing. The MLA (Machine Learning
+Accelerator) runs the model, and DMS0 is the memory it reads its input from.
 
-`nodes::Input("name")` also gives the graph a named input endpoint. Another
-fragment connects to it with `Graph::connect()`, see
-[links](../graph/links.md).
+`nodes::Input("name")` also gives the graph a named endpoint: an input that
+other code finds by its name. A fragment is a graph made to be joined to other
+graphs, for example the graph that `model.graph()` returns. `Graph::connect()`
+joins another fragment to the named input, see [links](../graph/links.md).
 
 ## When to use it
 
 Use `Input` when the application owns frame production: it reads images from
 a directory, draws an overlay and sends the result to Insight, or decodes
-frames on the host and feeds them to a model graph that runs on its own.
+frames on the board's CPU and feeds them to a model graph that runs on its own.
 
 Do not use it when Core can read the source by itself. For an RTSP stream use
 [RtspDecodedInput or RtspEncodedInput](rtsp.md). For a MIPI or USB camera use
@@ -104,13 +110,20 @@ policy and preprocessing metadata that the model expects. See
 | Timestamp on push | `do_timestamp` | `do_timestamp` | `true` | Stamps each pushed buffer with the current time | Set `false` when you push samples that already carry their own timestamps |
 | Block when full | `block` | `block` | `true` | `push()` waits when the input already holds `max_bytes` of data | Keep `true` so no frame is lost and push stays paired with pull. See the pitfalls before setting `false` |
 | Stream type | `stream_type` | `stream_type` | `0` (stream) | Stream type of the input: `0` stream, `1` seekable, `2` random access | Rarely. Pushed frames are a stream |
-| Max bytes | `max_bytes` | `max_bytes` | `0`. At build, Core sets 4 frames' worth when the frame size is known | How much data may wait at the input before `push()` blocks | Bound the queue to the frames you allow in flight, for example `width * height * 3 / 2 * buffers` for NV12 |
+| Max bytes | `max_bytes` | `max_bytes` | `0` | How much data may wait at the input before `push()` blocks. At build, Core replaces `0` with 4 frames' worth when the frame size is known | Bound the queue to the frames you allow in flight, for example `width * height * 3 / 2 * buffers` for NV12 |
 | SiMa pool (deprecated) | `use_simaai_pool` | `use_simaai_pool` | `true` | Old switch for SiMa memory. `false` means `SystemMemory` | Never in new code. Use `memory_policy` |
 | Pool min buffers | `pool_min_buffers` | `pool_min_buffers` | `1` | Minimum buffers in the input pool | Rarely |
-| Pool max buffers | `pool_max_buffers` | `pool_max_buffers` | `2`. In a synchronous build, when `pool_min_buffers` is still `1` and `pool_max_buffers` is still `2`, Core raises it to the largest buffer count of the pipeline. A value you set yourself is kept | Maximum buffers in the input pool | More frames must be in flight at once, for example a model input shared by several streams |
-| Memory policy | `memory_policy` | `memory_policy` | `InputMemoryPolicy::Auto` | Where Core allocates input buffers. See the `InputMemoryPolicy` table | Set it only when `Auto` picks the wrong memory for the next node |
+| Pool max buffers | `pool_max_buffers` | `pool_max_buffers` | `2` | Maximum buffers in the input pool. A synchronous build is the one-frame-in, one-result-out build that `Graph::run(inputs)` makes; `build(seed)` is not one. In a synchronous build, when both pool options keep their defaults, Core raises this to the largest buffer count of the pipeline. A value you set is kept | More frames must be in flight at once, for example a model input shared by several streams |
+| Memory policy | `memory_policy` | `memory_policy` | `InputMemoryPolicy::Auto` | Where Core allocates input buffers. See the `InputMemoryPolicy` table | Keep `Auto`. Set `SystemMemory` when the whole graph runs on the board's CPU. Set `Ev74` or `Dms0` only together with tensors created in that memory, otherwise `push()` fails with `CPU-backed Tensor pushed into a device-visible EV74/DMS route` |
 | Buffer name | `buffer_name` | `buffer_name` | `""` | Name of the input buffer in SiMa metadata. Also the stream label in Core logs | A model route expects a specific buffer name |
 | Preprocess metadata | `preprocess_meta` | `preprocess_meta` | Not set (`std::nullopt`, `None`) | Geometry of the model preprocessing (target size, letterbox, color), attached to each buffer so box decoding can map boxes back to the original frame | Do not fill it by hand. `Model::input_appsrc_options()` fills it |
+
+The comments in `Input.h` are out of date for two options. The header says
+`max_bytes = 0` means unlimited, but Core replaces `0` with 4 frames' worth at
+build when the frame size is known. The header says `block` applies when the
+buffer pool is exhausted, but Core applies it to the input queue, so `push()`
+waits when the queue holds `max_bytes`. The table above describes what Core
+does.
 
 `PayloadType`
 
@@ -125,9 +138,9 @@ policy and preprocessing metadata that the model expects. See
 
 | Value | C++ | Python | What it does | When to use it |
 |---|---|---|---|---|
-| Auto | `InputMemoryPolicy::Auto` | `pyneat.InputMemoryPolicy.Auto` | Core looks at the first node after the input: preprocessing or quantization nodes get `Ev74`, a model fragment gets `Dms0`, a node that prefers device memory gets `Ev74` | Almost always |
-| EV74 | `InputMemoryPolicy::Ev74` | `pyneat.InputMemoryPolicy.Ev74` | Memory visible to the EV74 processor | The next node runs on EV74 and `Auto` cannot see it, for example a named endpoint that feeds Insight video |
-| DMS0 | `InputMemoryPolicy::Dms0` | `pyneat.InputMemoryPolicy.Dms0` | DMS0 memory that the MLA reads | Tensors go straight to the MLA |
+| Auto | `InputMemoryPolicy::Auto` | `pyneat.InputMemoryPolicy.Auto` | Core looks at the first node after the input, skipping `Cast`. `Preproc`, `Quant`, `Tess`, `QuantTess` and `CastTess` get `Ev74`, and `push()` then requires device tensors. A model fragment gets `Dms0`, also with device tensors required. A node that prefers device memory, for example `VideoSender` fed NV12, gets `Ev74` but still accepts CPU tensors. Any other node gets system memory | Almost always |
+| EV74 | `InputMemoryPolicy::Ev74` | `pyneat.InputMemoryPolicy.Ev74` | Memory visible to the EV74 processor. `push()` rejects CPU tensors, so create them with `TensorMemory::EV74` | The next node runs on EV74 and `Auto` cannot see it, for example a named endpoint that feeds Insight video |
+| DMS0 | `InputMemoryPolicy::Dms0` | `pyneat.InputMemoryPolicy.Dms0` | DMS0 memory that the MLA reads. `push()` rejects CPU tensors, so create them with `TensorMemory::MLA` | Tensors go straight to the MLA |
 | System memory | `InputMemoryPolicy::SystemMemory` | `pyneat.InputMemoryPolicy.SystemMemory` | Plain CPU memory | The graph runs only on the CPU, or the next node copies the data anyway |
 
 ## Language differences
@@ -138,12 +151,19 @@ policy and preprocessing metadata that the model expects. See
 
 ## Pitfalls
 
-- **A CPU tensor goes into a device input.** When the next node works in EV74
-  or MLA memory, `push()` fails with
-  `CPU-backed Tensor pushed into a device-visible EV74/DMS route`. Fix: create
-  the tensor with `TensorMemory::EV74`, or `TensorMemory::MLA` for a DMS route.
-  The environment variable `SIMA_ALLOW_INPUTSTREAM_CPU_TO_EV74_COPY=1` allows a
-  slow copy instead.
+- **A CPU tensor goes into a device input.** `push()` fails with
+  `CPU-backed Tensor pushed into a device-visible EV74/DMS route` in these
+  cases only:
+  - `memory_policy` is `Auto` and the first node after the input, skipping
+    `Cast`, is `Preproc`, `Quant`, `Tess`, `QuantTess` or `CastTess`;
+  - `memory_policy` is `Auto` and the first node after the input is a model
+    fragment;
+  - `memory_policy` is set to `Ev74` or `Dms0`, for example on a named
+    endpoint that feeds Insight.
+
+  Other nodes, such as `VideoSender`, accept CPU tensors. Fix: create the
+  tensor with `TensorMemory::EV74`, or with `TensorMemory::MLA` for a `Dms0`
+  input.
 - **A larger frame is rejected.** Setting `width` and `height` also sets
   `max_width` and `max_height` to the same values. A larger frame then fails
   with `input width ... exceeds configured capacity`. Fix: set `max_width` and
@@ -160,8 +180,6 @@ policy and preprocessing metadata that the model expects. See
   copies the payload of a non-blocking encoded input instead of passing it
   without a copy. The multi-stream examples set `block = true` explicitly.
   Not verified on a device.
-- **The environment overrides `is_live`.** `SIMA_APPSRC_NOT_LIVE=1` sets
-  `is_live` and `do_timestamp` to `false` whatever the options say.
 
 ## Used in
 
