@@ -28,6 +28,7 @@ Every page follows [TEMPLATE.md](TEMPLATE.md).
 ### Inputs
 
 - [Input](inputs/input-node.md): `nodes::Input`, `InputOptions`, `InputMemoryPolicy`, `PayloadType`, pushing frames from the application
+- [RTSP inputs](inputs/rtsp.md): `RtspDecodedInput`, `RtspEncodedInput`, `RtspCodec`, reading an IP camera stream
 
 ## How C++ names map to Python names
 
