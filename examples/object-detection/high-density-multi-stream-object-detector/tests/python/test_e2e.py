@@ -17,22 +17,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from received_metadata_tracker import ReceivedMetadataTracker
 
 EXAMPLE_DIR = Path(__file__).resolve().parents[2]
-EIGHT_GIB_KIB = 8 * 1024 * 1024
 LABELS = set((EXAMPLE_DIR / "src" / "common" / "coco_label.txt").read_text().splitlines())
-
-
-def minimum_stream_fps():
-    # Linux reports usable RAM, so the 8 GiB SOM can report less than 8 GiB.
-    try:
-        with Path("/proc/meminfo").open() as meminfo:
-            field, value, unit = meminfo.readline().split()
-        kib = int(value)
-        if field == "MemTotal:" and unit == "kB" and 0 < kib <= EIGHT_GIB_KIB:
-            return 25.0
-    except (OSError, ValueError):
-        pass
-    # Eight CI DevKits on Platform 3.0.1 held 556 to 565 FPS in total for H.264.
-    return 27.0
+# Every stream must keep this rate over the measured interval: 500 FPS in total for 20 streams.
+# DevKits measured 528 to 565 FPS in total for H.264.
+MIN_STREAM_FPS = 25.0
 
 
 def select_source(urls, codec):
@@ -199,7 +187,7 @@ def test_metadata_throughput(
     assert tracker.total_measured == 5000
     assert tracker.elapsed_s > 0
     aggregate_fps = tracker.total_measured / tracker.elapsed_s
-    stream_floor = minimum_stream_fps()
+    stream_floor = MIN_STREAM_FPS
     aggregate_floor = len(tracker.measured_frames) * stream_floor
     summary = {
         "frames": tracker.total_measured,

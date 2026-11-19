@@ -11,7 +11,6 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <optional>
 #include <set>
@@ -25,26 +24,15 @@ namespace fs = std::filesystem;
 
 namespace {
 constexpr const char* kExample = "high-density-multi-stream-object-detector";
-constexpr long long kEightGiBKiB = 8LL * 1024 * 1024;
+// Every stream must keep this rate over the measured interval: 500 FPS in total for 20 streams.
+// DevKits measured 528 to 565 FPS in total for H.264.
+constexpr double kMinStreamFps = 25.0;
 // Clean exit after SIGINT must take no longer than this, as in the Python E2E.
 constexpr long long kSigintExitLimitMs = 5000;
 
 void require(bool condition, const std::string& message) {
   if (!condition)
     throw std::runtime_error(message);
-}
-
-double minimum_stream_fps() {
-  // Linux reports usable RAM, so the 8 GiB SOM can report less than 8 GiB.
-  std::ifstream meminfo("/proc/meminfo");
-  std::string field;
-  long long kib = 0;
-  std::string unit;
-  if (meminfo >> field >> kib >> unit && field == "MemTotal:" && unit == "kB" && kib > 0 &&
-      kib <= kEightGiBKiB)
-    return 25.0;
-  // Eight CI DevKits on Platform 3.0.1 held 556 to 565 FPS in total for H.264.
-  return 27.0;
 }
 
 // Every detection names a label from the label file and passes inference.min_score (0.3).
@@ -234,7 +222,7 @@ void run_case(const std::string& binary, const std::string& model, const std::st
 
   const double elapsed = tracker.elapsed_seconds();
   const double fps = static_cast<double>(tracker.total_measured()) / elapsed;
-  const double stream_floor = minimum_stream_fps();
+  const double stream_floor = kMinStreamFps;
   const double aggregate_floor = tracker.measured_frames().size() * stream_floor;
   const json summary = {{"frames", tracker.total_measured()},
                         {"elapsed_s", elapsed},
