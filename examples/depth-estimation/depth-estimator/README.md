@@ -10,7 +10,7 @@
 | Languages | C++, Python |
 | Status | stable |
 | Binary Name | depth-estimator |
-| Model | depth_anything_v2_vits |
+| Model | depth_anything_v2_small |
 
 ## Concept
 
@@ -40,26 +40,28 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-| Model package | Role | Source |
-| --- | --- | --- |
-| `depth_anything_v2_vits_mpk.tar.gz` | Default | Direct artifact |
+| Model | Variants | Role | Source |
+| --- | --- | --- | --- |
+| `depth_anything_v2_small` | `w8a8_mixed` | Default | Model browser |
+| `depth_anything_v2_small` | `w16a16`, `w8a16` | Alternatives | Model browser |
 
-Model packages come from the Model Zoo release below, which can differ from the installed platform version.
+Download the default package from the [model browser](https://developer.sima.ai/models/) with `sima-cli` 2.1.20 or
+newer and extract the model archive from the downloaded ZIP:
 
 ```bash
-export MODELZOO_VERSION="3.0.0"
-mkdir -p models
-cd models
-sima-cli download \
-  "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/depth_anything_v2_vits_mpk.tar.gz"
-cd ..
+sima-cli models download --id depth_anything_v2_small --variant w8a8_mixed --output models
+unzip -o models/depth_anything_v2_small/w8a8_mixed/depth_anything_v2_small_w8a8_mixed_default.zip \
+  -d models/depth_anything_v2_small/w8a8_mixed
 ```
 
-Set `model.path` in the config to the downloaded package.
+The model archive is then at
+`models/depth_anything_v2_small/w8a8_mixed/depth_anything_v2_small_w8a8_mixed_mpk.tar.gz`; Neat cannot load the
+ZIP itself. To use another variant, replace `w8a8_mixed` with `w16a16` or `w8a16` in both commands and in
+`model.path`. Every variant takes a 518x686 (height x width) input, and Neat reads that size from the package.
 
 ## Configure
 
-Open `${APP_DIR}/src/common/config.yaml` and set `model.path`, `io.input_dir`, and `io.output_dir`.
+Open `${APP_DIR}/src/common/config.yaml` and set `model.path` to the downloaded package, then set `io.input_dir` and `io.output_dir`.
 
 ## Run
 
@@ -93,9 +95,10 @@ Done: 21 images processed
 
 `io.output_dir` (default `sandbox/depth-estimator`) then holds one PNG depth
 visualization per input image. With the packaged `assets/datasets/coco` folder
-that is 21 files. Each is a side-by-side image: the resized input on the left,
-its depth colormap on the right. The colormap is normalized per image, so
-brightness is relative within one image and not comparable between images.
+that is 21 files. Each is a 1372x518 side-by-side image: the input resized to the
+model's 686x518 on the left, its depth colormap on the right. Brighter is closer.
+The colormap is normalized per image, so brightness is relative within one image
+and not comparable between images.
 
 ## Troubleshooting
 
