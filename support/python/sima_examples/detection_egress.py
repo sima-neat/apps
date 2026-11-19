@@ -42,6 +42,20 @@ class FrameMetadata:
     rtp_timestamp: int | None = None
 
 
+def frame_metadata(sample, stream_index: int) -> FrameMetadata:
+    """The identity of a pulled sample, such as a `pyneat.Sample`, on stream `stream_index`."""
+    return FrameMetadata(
+        stream_index=stream_index,
+        stream_id=sample.stream_id,
+        frame_id=sample.frame_id,
+        pts_ns=sample.pts_ns,
+        dts_ns=sample.dts_ns,
+        duration_ns=sample.duration_ns,
+        input_seq=sample.input_seq,
+        orig_input_seq=sample.orig_input_seq,
+    )
+
+
 def serialize(
     boxes: Iterable[Box],
     labels: list[str],
