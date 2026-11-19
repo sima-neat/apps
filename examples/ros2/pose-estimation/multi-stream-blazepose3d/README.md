@@ -1,165 +1,135 @@
 # Multi-Stream BlazePose 3D — ROS 2
 
-ROS nodes for the [Multi-Stream BlazePose 3D native example](../../../pose-estimation/multi-stream-blazepose3d/README.md).
-The native implementation remains unchanged; this entrypoint imports its model
-and decoding helpers. ROS configuration and launch instructions are local to this folder.
+This is an independent ROS 2 package, `neat_multi_stream_blazepose3d`. Build and run it from
+this directory. Nodes, launch, configuration, labels and implementation helpers
+are local; no `neat_apps` package or original example source is imported.
 
-## Prepare the model and inputs
+## Structure and node roles
 
-Follow the native [model preparation](../../../pose-estimation/multi-stream-blazepose3d/README.md#prepare-the-model)
-and [input configuration](../../../pose-estimation/multi-stream-blazepose3d/README.md#configure), then set the same
-model, labels, source and thresholds in [src/common/config.yaml](src/common/config.yaml).
-Run commands from the Apps root. Shared labels, assets and native helper modules
-are reused from their original locations.
+```text
+multi-stream-blazepose3d/
+├── package.xml
+├── CMakeLists.txt
+├── launch/app.launch.py
+└── src/
+    ├── common/config.yaml
+    └── python/
+        ├── pose_node.py
+        ├── input_node.py
+        ├── result_sink.py
+        ├── image_transport.py
+        ├── visual_output.py
+        └── model_support.py
+```
+
+[pose_node.py](src/python/pose_node.py) declares its ROS interfaces and execution flow directly.
+`BlazePoseNode.__init__()` declares the interfaces; `build_runtime()` builds the
+detector and pose runners. `start()` runs the local scheduler workers.
+`model_support.py` retains the native detector/pose mailboxes, ROI tracking and
+smoothing. Default latest-frame scheduling is unchanged.
+
+## Prepare and configure
+
+Install ROS 2 with:
+
+```bash
+sima-cli neat install ros2@v3.0.0
+```
+
+Use the matching Neat Python environment and installed colcon build tools.
+Use the [native model preparation guide](../../../pose-estimation/multi-stream-blazepose3d/README.md#prepare-the-model)
+for the same model artifacts and precision. Edit [src/common/config.yaml](src/common/config.yaml).
+Model and dataset files are user-provided; use absolute paths, or paths relative
+to this example directory. Shipped labels are under `src/common/`.
+
+| Configuration | Meaning |
+| --- | --- |
+| `input` | Camera transport, latency and decoder options used by the input node |
+| `models.detector_path`, `models.pose_path` | Detection and BlazePose model packages |
+| `detector` | Person detection confidence and NMS thresholds |
+| `pose` | Person limit, ROI scale, presence threshold and temporal filtering |
+| `streams` | Camera URLs, IDs, dimensions and frame rate |
+| `runtime` | Frame limits, warmup and runtime controls used by this app |
+| `ros.image_topic`, `ros.results_topic` | Image input and matching JSON result topics (defaults `image`, `results`) |
+| `ros.input_policy` | Must be `latest`, matching the native detector/pose scheduler |
+| `ros.source_timeout_seconds`, `result_timeout_seconds` | Source/subscriber wait bounds |
+| `ros.visualization.frame_cache` | Bounded source-frame cache for matched visualization, default 8 |
+| `ros.visualization.save.enabled`, `.directory` | Save matched overlays in a new run directory |
+| `ros.visualization.insight.enabled`, `.host` | Enable Insight video and choose its host |
+
+These are startup YAML settings, not dynamic ROS parameters. Restart after edits.
+BlazePose requires `ros.input_policy: latest`; its local scheduler owns inference
+admission. The generic `inflight_frames` setting does not change that scheduler.
 
 ## Build on Modalix
 
-Run from the Apps checkout or installed `prebuilt-apps/` root on Modalix.
-Install ROS 2 once with `sima-cli neat install ros2@v3.0.0` and use the Neat
-Python environment required by the native example. If `colcon` is installed:
+From this example directory:
 
 ```bash
 source /usr/local/ros2/setup.bash
 source ~/pyneat/bin/activate
-python -c "import rclpy, pyneat"
-
-colcon --log-base sandbox/ros2-colcon-log build \
-  --base-paths support/ros2 --packages-select neat_apps --merge-install \
-  --build-base sandbox/ros2-colcon-build \
-  --install-base sandbox/ros2-colcon-install \
-  --cmake-args -DPython3_EXECUTABLE="$(command -v python)"
-source sandbox/ros2-colcon-install/local_setup.bash
+colcon build
+source install/setup.bash
 ```
 
-This builds the shared `neat_apps` package for all ROS examples, so build it once,
-not once per application. If colcon is unavailable, use the
-[direct CMake build](../../../../ROS2.md#build-with-cmake-without-colcon).
-In each new terminal, source ROS, the Neat environment and your chosen package
-installation before running commands. Restart after editing this app's Python
-or YAML; rebuild after changing shared nodes or launch files in `support/ros2/`.
+Only this package is built. `build/`, `install/` and `log/` stay in this folder.
+Rebuild after Python or launch edits. In every new terminal source ROS, activate
+Neat and source this installation. Configuration edits only require a restart
+when using the source config below.
 
 ## Run
 
-Install ROS 2 with `sima-cli neat install ros2@v3.0.0`, then follow the shared
-[ROS setup](../../../../ROS2.md#install-and-build) once. Edit this ROS example’s `src/common/config.yaml`; its `ros` section controls
-image topics and bounded delivery.
+```bash
+ros2 launch neat_multi_stream_blazepose3d app.launch.py \
+  config:="$PWD/src/common/config.yaml"
+```
 
-The common live source publishes the native decoder’s `nv12` images. The inference
-node reuses the unchanged native BlazePose scheduler, model construction and decoding.
-Its detector, pose and publication stages each retain the newest waiting job per
-camera. Already submitted model work completes; newer images may replace older
-waiting work. Cameras share the models using the native round-robin dispatch.
-ROI tracking is updated on pose completion, and smoothing runs only on published
-frames. Stale publications are discarded using the native sequence check.
+The default `source:=live` starts this app’s configured input node.
+Use `source:=none` to start inference without an input node and wait for an
+external publisher on `/neat/image`. Use packed `nv12` images.
+`stream_index:=all` starts the configured cameras; an integer selects one.
+`namespace:=demo` changes the namespace. Ctrl+C stops the launched nodes.
+A component failure stops the launch. Omit `config` to use the installed config copy.
 
-Keep `ros.input_policy: latest`. This example intentionally does not promise one
-result per input image, just like the native live application. Generic
-`pending_frames`, `inflight_frames` and `source_window` settings do not configure
-its native scheduler. Statistics on `/neat/multi_stream_blazepose3d/statistics`
-report received, admitted, published and replaced/dropped counts per camera.
-A camera that exceeds `source_timeout_seconds` is marked closed; other cameras
-continue, as in the native app. Restart the node to reconnect a closed camera.
-If all cameras stop unexpectedly, the node exits with an error.
-
-From the Apps root after sourcing the ROS package:
+## Results and Insight
 
 ```bash
-APP_DIR=examples/ros2/pose-estimation/multi-stream-blazepose3d
-ros2 launch neat_apps app.launch.py \
-  app:=pose-estimation/multi-stream-blazepose3d apps_root:="$PWD" \
-  config:="$PWD/$APP_DIR/src/common/config.yaml" source:=live
+ros2 topic echo /neat/results
 ```
 
-Use `source:=none` with an external camera or rosbag on `/neat/image`. Publish
-`nv12` images at the configured dimensions with `header.frame_id` equal to the
-camera's `streams[].id`, and strictly increasing, nonnegative timestamps per
-camera. Every published result preserves that exact input header.
-Inspect `/neat/results`; see the [message and validation contracts](../../../../ROS2.md).
-Do not set the recording sink's expected count to the source frame count:
-replaced frames legitimately have no result. For finite source runs, leave
-`runtime.frames: 0` and set `ros.source_frames` to the input count. When that
-source finishes, the inference node drains remaining native work before closing.
+| Topic | Type / role |
+| --- | --- |
+| `image` | `sensor_msgs/msg/Image`, source pixels and timestamp |
+| `results` | `std_msgs/msg/String`, JSON numerical results and matching source header |
+| `multi_stream_blazepose3d/statistics` | `std_msgs/msg/String`, completed outputs/FPS and queue/drop accounting |
 
-Numerical comparisons should use the same admitted frame history and tracking
-state. Independent live runs can replace different frames due to timing;
-matching their scheduling policy does not guarantee identical output sequences.
+Topics are relative to `/neat` by default. Input and result QoS is reliable;
+match the offered camera QoS. JSON results retain the source `header`; the
+recorder verifies sequence/header continuity.
 
-The ROS entrypoint is `src/python/ros_node.py`. On Modalix, twelve paced positive
-pose results matched the unchanged native Python app exactly, including 2D and
-3D landmarks. A single 640x480 stream completed 600/600 inputs at approximately
-30 FPS on both paths. A paired run at the default 1920x1080 resolution also
-maintained 30 FPS, with 599 published outputs from 600 inputs on each path.
-Three longer four-camera comparisons at 640x480 measured native
-29.97–30.01 FPS per camera versus ROS 20.19–22.55, excluding startup outputs.
-The scheduler behavior is aligned, but four-camera FPS parity has not been met.
-These are replay measurements, not a full accuracy dataset or physical-camera
-validation.
+For visualization set `ros.visualization.insight.enabled: true` and configure
+its `host`. Open the video viewer in your running Insight service.
+`channel_base` selects the first channel, `max_visible_streams` bounds visible
+cameras, and `channels` can map camera frame IDs to explicit channels.
+Overlays use the matching source image. No separate sink command is needed.
+For a file result instead, enable `ros.visualization.save.enabled`.
+Insight uses an even-sized canvas based on the first frame and letterboxes
+later frames to fit. Saved PNGs use the original image dimensions.
+Disable saving/Insight when measuring inference throughput.
 
-For node responsibilities, settings, topics and extension examples, see the
-[ROS node development guide](../../../../support/ros2/README.md). Its standard
-image-node settings apply where this example uses the shared `ImageNode`;
-custom-node differences are listed separately.
+## Extend and validate
 
-## View results and Insight
+Edit [pose_node.py](src/python/pose_node.py) for model behavior and
+[launch/app.launch.py](launch/app.launch.py) for wiring. Add executable scripts
+to this folder’s `CMakeLists.txt` and dependencies to `package.xml`.
+Change the input node to support another camera while retaining the documented
+image encoding, dimensions, headers and QoS.
 
-Both outputs are configured in this app's existing `ros.visualization` mapping
-in [config.yaml](src/common/config.yaml); both default to disabled. Update the
-keys in that mapping (keep its other settings):
+The migration preserves model routes, preprocessing, decoding, queue bounds and
+worker topology. Build/import checks alone do not establish accuracy or FPS
+parity. See the [validation status](../../README.md#validation-status) for measured
+coverage and remaining runtime/hardware limitations. Physical MIPI/USB and
+Docker execution remain TODO where applicable.
 
-```yaml
-ros:
-  visualization:
-    save:
-      enabled: true
-      directory: sandbox/ros2/pose-estimation/multi-stream-blazepose3d/visuals
-      every_n_frames: 1
-    insight:
-      enabled: true
-      host: <insight-host-ip>
-      video_port_base: 9000
-      fps: 30
-```
-
-Enable either output or both. Use the reachable host and exposed UDP ports of
-your running Insight service. Rebuild the shared ROS package after updating its
-code, then use the **same launch command above**: no separate sink command is
-needed. `insight:=true` or `insight:=false` can override the YAML switch.
-
-Saved PNGs go into a new `run-*` subfolder on every invocation. `frames.jsonl`
-maps each filename to its exact input header and result sequence. Existing runs
-are preserved. Native `io.output_dir`/`output.overlay` keys do not control these
-ROS files; use the explicit ROS settings above.
-
-Open Insight's video viewer and select channel 0 by default. This output draws
-the decoded result on its matching source image and sends H.264 video through
-Neat's hardware encoder and VideoSender. Overlays are part of the video, so
-there is no separate 2D metadata channel to configure. The 3D panel uses
-the auxiliary metadata channel described below. ROS result topics retain
-the original numerical data. For multiple cameras, stable channel mappings,
-performance limits and troubleshooting, see the
-[output configuration reference](../../../../support/ros2/README.md#7-saved-images-and-insight).
-
-BlazePose retains at most `ros.visualization.frame_cache` images per camera
-(default 8). If its native latest-frame scheduler finishes a result after that
-image has been evicted, the visual output is skipped and counted in
-`visualization_missing_frames`; an unrelated newer image is never substituted.
-The video shows 2D landmarks. With `ros.visualization.insight.auxiliary: true`
-(default), native world landmarks also appear in Insight's **3D Pose** panel.
-Set `metadata_port_base` (default 9100) to the exposed metadata UDP base; the
-sender adds the same channel index used for video. Insight needs its
-`blazepose-3d` renderer. Set `auxiliary: false` for video only. The sender uses
-one local output clock for encoded video and auxiliary metadata; original
-ROS headers and world coordinates remain unchanged.
-
-Start a live source or a sufficiently long folder run before connecting the
-viewer. A short dataset can finish before the browser connects; saved PNGs are
-the reliable way to inspect every result from a finite run. Rendering, file I/O
-and encoding add work: disable both outputs for inference-only comparisons.
-The shared output path is tested on Modalix; this is not an app-specific visual
-quality or visual-mode FPS parity claim.
-
-## Source files
-
-- [ROS entrypoint](src/python/ros_node.py)
-- [ROS configuration](src/common/config.yaml)
-- [Shared source, sink and launch package](../../../../support/ros2/)
+See the [node development guide](../../NODE_DEVELOPMENT.md) for creating
+your own app, and the [ROS overview](../../../../ROS2.md) for validation limits.

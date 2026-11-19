@@ -89,8 +89,7 @@ def test_audio_routes_payloads_and_response_formats(tmp_path):
                                  lambda msg: responses.append(json.loads(msg.data)), 16)
     publisher = observer.create_publisher(String, "studio_test_requests", 8)
     environment = dict(os.environ)
-    environment["PYTHONPATH"] = str(ROOT / "support/ros2") + os.pathsep + environment.get("PYTHONPATH", "")
-    entry = ROOT / "examples/ros2/genai/neat-genai-studio/src/python/ros_node.py"
+    entry = ROOT / "examples/ros2/genai/neat-genai-studio/src/python/studio_node.py"
     process = None
 
     def wait_until(condition, timeout=15):

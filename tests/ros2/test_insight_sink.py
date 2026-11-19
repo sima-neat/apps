@@ -1,12 +1,15 @@
 """Insight metadata must preserve detection values and the source video clock."""
 from copy import deepcopy
 from pathlib import Path
-import sys
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "support/ros2"))
-from neat_apps.insight_sink import detection_metadata
+from tests.ros2.local_modules import load_node
+
+ROOT = Path(__file__).resolve().parents[2]
+detection_metadata = load_node(
+    ROOT / "examples/ros2/object-detection/high-density-multi-stream-object-detector/src/python/insight_sink.py",
+    "tested_insight_sink", resolve_share=False).detection_metadata
 
 
 def result():

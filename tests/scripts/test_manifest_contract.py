@@ -195,13 +195,18 @@ def test_runtime_archive_validator_accepts_cpp_reference_and_prebuilt_binary(tmp
     assert proc.returncode == 0, proc.stderr + proc.stdout
 
 
-def test_runtime_archive_allows_only_the_ros_registration_cmake(tmp_path):
-    archive = _write_runtime_archive(tmp_path, "support/ros2/CMakeLists.txt")
-    proc = _validate_runtime_archive(archive)
-    assert proc.returncode == 0, proc.stderr + proc.stdout
-    archive = _write_runtime_archive(tmp_path / "native", "examples/demo/model/src/cpp/CMakeLists.txt")
+@pytest.mark.parametrize("member", [
+    "support/ros2/CMakeLists.txt",
+    "examples/ros2/genai/detection-to-vlm-assistant/CMakeLists.txt",
+    "examples/ros2/face-detection/face-detector/CMakeLists.txt",
+    "examples/ros2/docker/parallel-apps/CMakeLists.txt",
+    "examples/demo/model/src/cpp/CMakeLists.txt",
+])
+def test_runtime_archive_rejects_build_files(tmp_path, member):
+    archive = _write_runtime_archive(tmp_path, member)
     proc = _validate_runtime_archive(archive)
     assert proc.returncode != 0
+    assert "Runtime archive contains non-runtime or generated files" in proc.stderr
 
 
 def test_runtime_archive_accepts_separate_ros_example_layout(tmp_path):

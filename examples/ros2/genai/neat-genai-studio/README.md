@@ -1,91 +1,119 @@
 # Neat GenAI Studio — ROS 2
 
-ROS nodes for the [Neat GenAI Studio native example](../../../genai/neat-genai-studio/README.md).
-The native implementation remains unchanged; this entrypoint sends requests to
-its backend. ROS configuration and launch instructions are local to this folder.
+This is an independent ROS 2 package, `neat_genai_studio`. Build and run it from
+this directory. Nodes, launch, configuration, labels and implementation helpers
+are local; no `neat_apps` package or original example source is imported.
 
-## Prepare the model and inputs
+## Structure and node roles
 
-Follow the native [model preparation](../../../genai/neat-genai-studio/README.md#prepare-the-model)
-and [input configuration](../../../genai/neat-genai-studio/README.md#configure), then set the same
-model, labels, source and thresholds in [src/common/config.yaml](src/common/config.yaml).
-Run commands from the Apps root. Shared labels, assets and native helper modules
-are reused from their original locations.
+```text
+neat-genai-studio/
+├── package.xml
+├── CMakeLists.txt
+├── launch/app.launch.py
+└── src/
+    ├── common/config.yaml
+    └── python/
+        ├── studio_node.py
+        └── image_transport.py
+```
+
+[studio_node.py](src/python/studio_node.py) declares its ROS interfaces and execution flow directly.
+`main()` declares image/request subscriptions and response publication.
+`receive()` admits bounded requests; `perform()` makes the HTTP inference call
+on a worker. The local `server/` and `api/` directories contain the unchanged
+model service and backend; `run.sh` starts them. No image source is started.
+
+## Prepare and configure
+
+Install ROS 2 with:
+
+```bash
+sima-cli neat install ros2@v3.0.0
+```
+
+Use the matching Neat Python environment and installed colcon build tools.
+Use the [native model preparation guide](../../../genai/neat-genai-studio/README.md#prepare-the-model)
+for the same model artifacts and precision. Edit [src/common/config.yaml](src/common/config.yaml).
+Model and dataset files are user-provided; use absolute paths, or paths relative
+to this example directory. Shipped labels are under `src/common/`.
+
+| Configuration | Meaning |
+| --- | --- |
+| `server` | Model catalog, loaded models and model-server endpoints |
+| `app` | Local backend endpoints, web service and speech engines |
+| `ros.studio_url` | Existing backend URL; defaults to the configured local web service |
+| `ros.request_timeout_seconds` | Maximum backend request time, default 120 seconds |
+| `ros.pending_requests` | Bound on pending/active requests, default 1; excess requests get an error |
+| `ros.image_topic` | Latest optional image for image-bearing chat requests, default `image` |
+
+These are startup YAML settings, not dynamic ROS parameters. Restart after edits.
 
 ## Build on Modalix
 
-Run from the Apps checkout or installed `prebuilt-apps/` root on Modalix.
-Install ROS 2 once with `sima-cli neat install ros2@v3.0.0` and use the Neat
-Python environment required by the native example. If `colcon` is installed:
+From this example directory:
 
 ```bash
 source /usr/local/ros2/setup.bash
 source ~/pyneat/bin/activate
-python -c "import rclpy, pyneat"
-
-colcon --log-base sandbox/ros2-colcon-log build \
-  --base-paths support/ros2 --packages-select neat_apps --merge-install \
-  --build-base sandbox/ros2-colcon-build \
-  --install-base sandbox/ros2-colcon-install \
-  --cmake-args -DPython3_EXECUTABLE="$(command -v python)"
-source sandbox/ros2-colcon-install/local_setup.bash
+colcon build
+source install/setup.bash
 ```
 
-This builds the shared `neat_apps` package for all ROS examples, so build it once,
-not once per application. If colcon is unavailable, use the
-[direct CMake build](../../../../ROS2.md#build-with-cmake-without-colcon).
-In each new terminal, source ROS, the Neat environment and your chosen package
-installation before running commands. Restart after editing this app's Python
-or YAML; rebuild after changing shared nodes or launch files in `support/ros2/`.
+Only this package is built. `build/`, `install/` and `log/` stay in this folder.
+Rebuild after Python or launch edits. In every new terminal source ROS, activate
+Neat and source this installation. Configuration edits only require a restart
+when using the source config below.
 
 ## Run
 
-Install ROS 2 with `sima-cli neat install ros2@v3.0.0`, then follow the shared
-[ROS setup](../../../../ROS2.md#install-and-build) once. Edit this ROS example’s `src/common/config.yaml`; its `ros` section controls
-image topics and bounded delivery.
-
-Start the native Studio backend as above. The ROS client sends chat, image-assisted chat, speech synthesis, transcription and speech-to-English translation requests to that same backend. It does not load a second model server. See the request examples in [ROS2.md](../../../../ROS2.md#studio-requests).
-
-Set `ros.studio_url` when the backend is elsewhere. HTTPS uses the system trust store; configure the backend certificate as in the native deployment.
-
-From the Apps root after sourcing the ROS package:
+Prepare the backend dependencies with this folder’s `setup.sh`, as described in
+the native preparation guide. Start the local backend in another terminal with:
 
 ```bash
-APP_DIR=examples/ros2/genai/neat-genai-studio
-ros2 launch neat_apps app.launch.py \
-  app:=genai/neat-genai-studio apps_root:="$PWD" \
-  config:="$PWD/$APP_DIR/src/common/config.yaml" source:=none
+CONFIG_PATH="$PWD/src/common/config.yaml" ./run.sh
 ```
 
-The ROS entrypoint is `src/python/ros_node.py`. Model accuracy and throughput
-validation are in progress; an available entrypoint is not a parity claim.
-Audio request checks agree with the native backend, including byte-identical
-Supertonic WAVs. Sustained speech throughput still falls below native on the
-validation board; see [validation limits](../../../../ROS2.md).
+Alternatively use an existing backend and set `ros.studio_url`. The ROS node
+uses the same model service, generation settings and speech engines.
 
-For node responsibilities, settings, topics and extension examples, see the
-[ROS node development guide](../../../../support/ros2/README.md). Its standard
-image-node settings apply where this example uses the shared `ImageNode`;
-custom-node differences are listed separately.
+```bash
+ros2 launch neat_genai_studio app.launch.py \
+  config:="$PWD/src/common/config.yaml"
+```
 
-## View results and Insight
+`namespace:=demo` changes the namespace. Ctrl+C stops the launched nodes.
+A component failure stops the launch. Omit `config` to use the installed config copy.
 
-This request/response adapter has no Insight video/overlay integration. Inspect
-replies in a second sourced terminal, then send a request using the
-[Studio request contract](../../../../ROS2.md#studio-requests):
+## Results and Insight
+
+Publish JSON requests on `/neat/requests`; responses arrive on `/neat/responses`.
+An optional `/neat/image` subscription supplies BGR/RGB images when a request
+sets `use_image: true`. Operations are `chat`, `speech`, `transcribe`, `translate`.
 
 ```bash
 ros2 topic echo /neat/responses
+# In a second sourced terminal, choose a model loaded in your backend:
+ros2 topic pub --once /neat/requests std_msgs/msg/String \
+  '{data: "{\"id\":\"demo\",\"operation\":\"chat\",\"body\":{\"model\":\"<loaded-model-name>\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}],\"stream\":false}}"}'
 ```
 
-Replies include text or audio data according to the operation. This command
-prints messages; it does not play audio or render images.
+The backend is also available in Insight’s GenAI tab. ROS responses are not
+a video stream; configure that backend URL in Insight. Audio responses include
+base64 audio and timing metadata. The original output-quality requirement
+applies; speech throughput is recorded separately.
 
-For the currently supported complete ROS + Insight example, see
-[high-density video and detections](../../object-detection/high-density-multi-stream-object-detector/README.md#view-video-and-detections-in-insight).
+## Extend and validate
 
-## Source files
+Edit [studio_node.py](src/python/studio_node.py) for model behavior and
+[launch/app.launch.py](launch/app.launch.py) for wiring. Add executable scripts
+to this folder’s `CMakeLists.txt` and dependencies to `package.xml`.
 
-- [ROS entrypoint](src/python/ros_node.py)
-- [ROS configuration](src/common/config.yaml)
-- [Shared source, sink and launch package](../../../../support/ros2/)
+The migration preserves model routes, preprocessing, decoding, queue bounds and
+worker topology. Build/import checks alone do not establish accuracy or FPS
+parity. See the [validation status](../../README.md#validation-status) for measured
+coverage and remaining runtime/hardware limitations. Physical MIPI/USB and
+Docker execution remain TODO where applicable.
+
+See the [node development guide](../../NODE_DEVELOPMENT.md) for creating
+your own app, and the [ROS overview](../../../../ROS2.md) for validation limits.

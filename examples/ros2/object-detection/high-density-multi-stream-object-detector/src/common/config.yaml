@@ -2,7 +2,7 @@
 # Relative model paths use this file; label paths use the Apps root.
 model:
   path: <model-path>
-  labels: examples/object-detection/high-density-multi-stream-object-detector/src/common/coco_label.txt
+  labels: src/common/coco_label.txt
   decode_type: yolo26
 
 streams:

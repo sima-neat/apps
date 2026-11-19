@@ -1,15 +1,18 @@
 """Host tests for image layout and result recording; no board or ROS mocks."""
 import json
 from pathlib import Path
-import sys
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "support/ros2"))
-from neat_apps.images import image_array, planar_array
-from neat_apps.runtime import json_value
+from tests.ros2.local_modules import load_node
+
+ROOT = Path(__file__).resolve().parents[2]
+SOURCE = ROOT / "examples/ros2/face-detection/face-detector/src/python"
+transport = load_node(SOURCE / "image_transport.py", "tested_transport", resolve_share=False)
+image_array, planar_array = transport.image_array, transport.planar_array
+json_value = load_node(SOURCE / "app_config.py", "tested_json", resolve_share=False).json_value
 
 
 def test_padded_bgr_rows_preserve_visible_pixels():

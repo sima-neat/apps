@@ -4,7 +4,6 @@ import importlib.util
 import json
 from pathlib import Path
 from queue import Queue, Empty
-import sys
 import threading
 import time
 from types import SimpleNamespace
@@ -16,15 +15,13 @@ from sensor_msgs.msg import Image
 
 pytestmark = pytest.mark.ros2
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "support/ros2"))
-ENTRY = ROOT / "examples/ros2/pose-estimation/multi-stream-blazepose3d/src/python/ros_node.py"
+ENTRY = ROOT / "examples/ros2/pose-estimation/multi-stream-blazepose3d/src/python/pose_node.py"
 
 
 @pytest.fixture
 def app():
-    spec = importlib.util.spec_from_file_location("blazepose_ros_test", ENTRY)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    from tests.ros2.local_modules import load_node
+    module = load_node(ENTRY, "standalone_test_blazepose")
     return module
 
 
@@ -47,7 +44,7 @@ def wait_for(predicate):
 
 def test_input_keeps_only_newest_frame_and_exact_timestamp(app, monkeypatch):
     monkeypatch.setattr(app, "image_tensor", lambda value: value.data)
-    monkeypatch.setattr(app.native, "image_input_sample", lambda name, tensor, identity: identity)
+    monkeypatch.setattr(app.helpers, "image_input_sample", lambda name, tensor, identity: identity)
     source = app.ImageInput(SimpleNamespace(id="camera0", width=8, height=4), .05)
     for stamp in (1_700_000_000_123456700, 1_700_000_000_123456701, 1_700_000_000_123456702):
         source.receive(message(stamp))
@@ -87,7 +84,7 @@ def test_blocked_source_wakes_on_close(app):
 
 
 def test_publication_uses_native_smoothing_and_stale_suppression(app):
-    native = app.native
+    native = app.helpers
     native.np = np
     result, reference = [], []
     cfg = native.StreamConfig("camera0", "unused", "h264", 0, 8, 4, 30)
@@ -155,7 +152,7 @@ class HeldDetector:
 
 
 def test_native_detector_replacement_drains_and_preserves_headers(app, monkeypatch):
-    native = app.native
+    native = app.helpers
     monkeypatch.setattr(app, "image_tensor", lambda message: message)
     monkeypatch.setattr(native, "require_nv12_tensor", lambda sample: sample.tensor)
     monkeypatch.setattr(native, "image_input_sample", lambda name, tensor, identity:
@@ -205,7 +202,7 @@ def test_native_detector_replacement_drains_and_preserves_headers(app, monkeypat
 
 
 def test_missing_camera_closes_without_stopping_other_cameras(app, monkeypatch):
-    native = app.native
+    native = app.helpers
     detector, pose = HeldDetector(), HeldDetector()
     cfg = native.AppConfig("unused", "unused", [
         native.StreamConfig(f"camera{i}", "unused", "h264", i, 8, 4, 30) for i in range(2)])
@@ -242,12 +239,12 @@ def test_result_bridge_preserves_native_json_and_rejects_unknown_envelopes(app):
     camera = 'camera_é_"frame_id"'
     output = app.ResultOutput(camera, lambda header, data: delivered.append((header, data)))
     data = {"stream_id": camera, "poses": [{"value": 0.123456789, "label": ',"frame_id":'}]}
-    payload = app.native.metadata_message("pose-estimation", data, 1234, "1234567890")
+    payload = app.helpers.metadata_message("pose-estimation", data, 1234, "1234567890")
     output.send_raw_json(payload)
     assert delivered[0][0] == {"frame_id": camera, "stamp": {"sec": 1, "nanosec": 234567890}}
     assert json.loads(delivered[0][1]) == data
     assert delivered[0][1] == json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-    output.send_raw_json(app.native.metadata_message("auxiliary-visualization", data, 1234, "1234567890"))
+    output.send_raw_json(app.helpers.metadata_message("auxiliary-visualization", data, 1234, "1234567890"))
     assert len(delivered) == 1
     with pytest.raises(ValueError, match="envelope"):
         output.send_raw_json('{"poses": []}')
@@ -257,7 +254,7 @@ def test_result_bridge_preserves_native_json_and_rejects_unknown_envelopes(app):
 
 def test_visual_frame_cache_is_bounded_and_matches_exact_timestamp(app, monkeypatch):
     monkeypatch.setattr(app, 'image_tensor', lambda value: value.data)
-    monkeypatch.setattr(app.native, 'image_input_sample', lambda name, tensor, identity: identity)
+    monkeypatch.setattr(app.helpers, 'image_input_sample', lambda name, tensor, identity: identity)
     source = app.ImageInput(SimpleNamespace(id='camera0', width=8, height=4), .05)
     source.visual_capacity = 2
     originals = {stamp: message(stamp) for stamp in (100, 101, 102)}

@@ -1,7 +1,7 @@
 model:
   family: yolo26             # yolo26 or yolov8. Selects the decode path; never inferred from the file name.
   path: <model-path>         # Example: models/YOLO26-SEGMENTATION/yolo26m-seg-bf16-b1.tar.gz
-  labels: examples/segmentation/single-stream-instance-segmenter/src/common/coco_label.txt
+  labels: src/common/coco_label.txt
   input_size: 640            # Square model input the package was compiled for.
 
 source:

@@ -2,15 +2,18 @@
 from copy import deepcopy
 import json
 from pathlib import Path
-import sys
 from types import SimpleNamespace
 
 import cv2
 import numpy as np
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'support/ros2'))
-from neat_apps.visual_output import VisualOutput, image_bgr, render_result
+from tests.ros2.local_modules import load_node
+
+ROOT = Path(__file__).resolve().parents[2]
+visual = load_node(ROOT / "examples/ros2/face-detection/face-detector/src/python/visual_output.py",
+                   "tested_visual_output", resolve_share=False)
+VisualOutput, image_bgr, render_result = visual.VisualOutput, visual.image_bgr, visual.render_result
 
 
 def message(camera='camera', sec=7):
@@ -81,7 +84,7 @@ class Video:
 
 def test_insight_selects_channels_and_throttles_without_dropping_saved_frames(tmp_path, monkeypatch):
     clock = [10.0]
-    monkeypatch.setattr('neat_apps.visual_output.time.monotonic', lambda: clock[0])
+    monkeypatch.setattr(visual.time, 'monotonic', lambda: clock[0])
     sink = VisualOutput({'save': {'enabled': True, 'directory': str(tmp_path)},
                          'insight': {'enabled': True, 'host': 'example.test', 'fps': 10,
                                      'channels': {'front': 2}}}, video_factory=Video)

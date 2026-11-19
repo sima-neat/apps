@@ -1,5 +1,5 @@
 model:                       # Settings shared by every stream.
-  labels: examples/multi-model/multi-stream-multi-model/src/common/coco_label.txt
+  labels: src/common/coco_label.txt
 
 streams:                     # One entry per camera. Each entry runs its own model.
   - url: <rtsp-url-1>        # Example: rtsp://<rtsp-source-ip>:<port>/<stream-name>

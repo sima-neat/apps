@@ -1,182 +1,166 @@
 # ROS 2 examples
 
-Each ROS example lives in `<category>/<example>/`, with its own README,
-`src/common/config.yaml` and `src/python/ros_node.py`. The Docker example contains
-its launch script instead. Original examples remain in `examples/<category>/<example>/`
-and remain independently runnable. Common source, sink and launch code lives
-in [support/ros2](../../support/ros2/).
+Every Python example is an independent ROS package. Its nodes, launch file,
+configuration, labels and implementation helpers live inside its own directory.
+Original native examples remain unchanged under `examples/<category>/<example>`.
+No example requires building or importing the legacy `neat_apps` package.
+The Docker example composes independently built apps; see its own instructions.
 
 ## Build on Modalix
 
-Run commands from the Apps checkout or installed `prebuilt-apps/` root, not from
-this `examples/ros2/` directory. Install ROS 2 once:
+Use this directory from an Apps repository checkout on Modalix. ROS examples
+build with colcon independently of `build.sh`; the native Apps runtime bundle
+does not include their complete build/launch files.
+
+Install ROS 2 with `sima-cli neat install ros2@v3.0.0` and ensure colcon and the
+matching Neat Python environment are available. Enter the example you want:
 
 ```bash
-sima-cli neat install ros2@v3.0.0
-```
-
-Use the Neat Python environment required by the native applications. Build the
-shared package on Modalix with colcon, if installed:
-
-```bash
+cd face-detection/face-detector
 source /usr/local/ros2/setup.bash
 source ~/pyneat/bin/activate
-python -c "import rclpy, pyneat"
-
-colcon --log-base sandbox/ros2-colcon-log build \
-  --base-paths support/ros2 --packages-select neat_apps --merge-install \
-  --build-base sandbox/ros2-colcon-build \
-  --install-base sandbox/ros2-colcon-install \
-  --cmake-args -DPython3_EXECUTABLE="$(command -v python)"
-source sandbox/ros2-colcon-install/local_setup.bash
+colcon build
+source install/setup.bash
 ```
 
-If colcon is unavailable, use the [direct CMake workflow](../../ROS2.md#build-with-cmake-without-colcon).
-Both workflows install the same package. Source ROS, the Python environment and
-the selected package installation in every participating terminal.
-
-| Change | Required action |
-| --- | --- |
-| Build the examples for the first time | Build `neat_apps` once for all apps. |
-| Edit an example's Python/YAML or add an example folder | Restart/launch the app; no package rebuild. |
-| Edit shared nodes, launch files or dependencies in `support/ros2/` | Rebuild the shared package and source the installation. |
-
-## Configure and run an app
-
-Choose an app below. Its README includes model preparation, a local YAML config,
-a build command and its specific launch command. Models are prepared separately
-from the ROS package build. For example, after setting DETR's `model.path` and
-`io.input_dir`:
+Edit `src/common/config.yaml` with your model/input paths, then run:
 
 ```bash
-APP_DIR=examples/ros2/object-detection/detr-object-detector
-ros2 launch neat_apps app.launch.py \
-  app:=object-detection/detr-object-detector apps_root:="$PWD" \
-  config:="$PWD/$APP_DIR/src/common/config.yaml" source:=folder
+ros2 launch neat_face_detector app.launch.py \
+  config:="$PWD/src/common/config.yaml"
 ```
 
-Use the source mode documented by the selected app; camera, request/response and
-benchmark examples have different input requirements. PCIe integration is deferred.
+These commands run from the example directory. Rebuild after Python/launch
+changes; restart after YAML edits. Source its installation in each terminal.
+Use absolute model/input paths when copying an example to a different directory.
+Build output stays in that example's ignored `build/`, `install/` and `log/`.
 
-### Choose who supplies the images
+## Choose an app
 
-The launch argument `source:=...` selects whether the launch starts a source
-node or leaves image publication to your existing ROS system:
+| Example | Package | Main node | Default source |
+| --- | --- | --- | --- |
+| [anomaly-detection/fastflow-anomaly-detector](anomaly-detection/fastflow-anomaly-detector/README.md) | `neat_fastflow_anomaly_detector` | `anomaly_node.py` | `live` |
+| [anomaly-detection/patchcore-anomaly-detector](anomaly-detection/patchcore-anomaly-detector/README.md) | `neat_patchcore_anomaly_detector` | `anomaly_node.py` | `live` |
+| [benchmarking/mipi-camera-capture](benchmarking/mipi-camera-capture/README.md) | `neat_mipi_camera_capture` | `capture_node.py` | `live` |
+| [benchmarking/mipi-multi-model](benchmarking/mipi-multi-model/README.md) | `neat_mipi_multi_model` | `inference_node.py` | `live` |
+| [benchmarking/model-benchmark](benchmarking/model-benchmark/README.md) | `neat_model_benchmark` | `benchmark_node.py` | `none` |
+| [classification/image-classification-explorer](classification/image-classification-explorer/README.md) | `neat_image_classification_explorer` | `classification_node.py` | `folder` |
+| [depth-estimation/depth-estimator](depth-estimation/depth-estimator/README.md) | `neat_depth_estimator` | `depth_node.py` | `folder` |
+| [face-detection/face-detector](face-detection/face-detector/README.md) | `neat_face_detector` | `detection_node.py` | `folder` |
+| [face-detection/single-stream-thermal-face-detector](face-detection/single-stream-thermal-face-detector/README.md) | `neat_single_stream_thermal_face_detector` | `detection_node.py` | `live` |
+| [face-recognition/face-recognizer](face-recognition/face-recognizer/README.md) | `neat_face_recognizer` | `recognition_node.py` | `live` |
+| [feature-extraction/superpoint-feature-extractor](feature-extraction/superpoint-feature-extractor/README.md) | `neat_superpoint_feature_extractor` | `feature_node.py` | `live` |
+| [genai/neat-genai-studio](genai/neat-genai-studio/README.md) | `neat_genai_studio` | `studio_node.py` | `none` |
+| [multi-model/multi-stream-multi-model](multi-model/multi-stream-multi-model/README.md) | `neat_multi_stream_multi_model` | `inference_node.py` | `live` |
+| [object-detection/detr-object-detector](object-detection/detr-object-detector/README.md) | `neat_detr_object_detector` | `detection_node.py` | `folder` |
+| [object-detection/high-density-multi-stream-object-detector](object-detection/high-density-multi-stream-object-detector/README.md) | `neat_high_density_multi_stream_object_detector` | `detection_node.py` | `live_graph` |
+| [object-detection/multi-stream-obb-detector](object-detection/multi-stream-obb-detector/README.md) | `neat_multi_stream_obb_detector` | `detection_node.py` | `live` |
+| [object-detection/multi-stream-object-detector](object-detection/multi-stream-object-detector/README.md) | `neat_multi_stream_object_detector` | `detection_node.py` | `live` |
+| [object-detection/pcb-defect-detector](object-detection/pcb-defect-detector/README.md) | `neat_pcb_defect_detector` | `detection_node.py` | `folder` |
+| [object-detection/rfdetr-detection-segmentation](object-detection/rfdetr-detection-segmentation/README.md) | `neat_rfdetr_detection_segmentation` | `detection_node.py` | `live` |
+| [object-detection/single-stream-object-detector](object-detection/single-stream-object-detector/README.md) | `neat_single_stream_object_detector` | `detection_node.py` | `live` |
+| [object-detection/ssd-mobilenet-object-detector](object-detection/ssd-mobilenet-object-detector/README.md) | `neat_ssd_mobilenet_object_detector` | `detection_node.py` | `folder` |
+| [object-detection/yolo26-object-detector](object-detection/yolo26-object-detector/README.md) | `neat_yolo26_object_detector` | `detection_node.py` | `folder` |
+| [pose-estimation/multi-stream-blazepose3d](pose-estimation/multi-stream-blazepose3d/README.md) | `neat_multi_stream_blazepose3d` | `pose_node.py` | `live` |
+| [pose-estimation/multi-stream-pose-estimator](pose-estimation/multi-stream-pose-estimator/README.md) | `neat_multi_stream_pose_estimator` | `pose_node.py` | `live` |
+| [segmentation/efficientsam3-promptable-segmenter](segmentation/efficientsam3-promptable-segmenter/README.md) | `neat_efficientsam3_promptable_segmenter` | `segmentation_node.py` | `live` |
+| [segmentation/single-stream-instance-segmenter](segmentation/single-stream-instance-segmenter/README.md) | `neat_single_stream_instance_segmenter` | `segmentation_node.py` | `live` |
+| [tracking/multi-stream-tracker](tracking/multi-stream-tracker/README.md) | `neat_multi_stream_tracker` | `tracking_node.py` | `live` |
+| [tracking/yolo26-tiny-drone-tracker](tracking/yolo26-tiny-drone-tracker/README.md) | `neat_yolo26_tiny_drone_tracker` | `tracking_node.py` | `live` |
+| [Detection-to-VLM](genai/detection-to-vlm-assistant/README.md) | `neat_detection_vlm` | `detection_node.py`, `vlm_node.py` | `live` |
+| [Docker parallel apps](docker/parallel-apps/README.md) | `neat_parallel_apps` | Container composition script | Configured apps |
 
-| Mode | Nodes started / input behavior |
+## Start a source or wait for a topic
+
+The app's local `launch/app.launch.py` declares its supported modes:
+
+| Mode | Behavior |
 | --- | --- |
-| `source:=folder` (default) | Starts the folder source and application node. The source reads configured images and publishes them on the image topic. |
-| `source:=live` | Starts the common live source and application node(s). The source reads configured RTSP/HTTP/USB/MIPI or supported video-file inputs and publishes images. |
-| `source:=none` | Starts only the application node. For image-based apps, it subscribes to the image topic and waits for your camera node, rosbag or other publisher. |
-| `source:=live_graph` | High-density detector only: decoding and inference run inside one Neat graph in the application node. No separate source node or ROS image input. |
+| `source:=folder` | Read configured images and wait for a result for every admitted image |
+| `source:=live` | Own the configured RTSP/HTTP/USB/MIPI/video source and publish images |
+| `source:=none` | Start inference only and wait for an external image topic |
+| `source:=live_graph` | High-density only: keep decoding and inference together, publish detections |
 
-For example, run the face detector against an existing ROS image publisher:
-
-```bash
-APP_DIR=examples/ros2/face-detection/face-detector
-ros2 launch neat_apps app.launch.py \
-  app:=face-detection/face-detector apps_root:="$PWD" \
-  config:="$PWD/$APP_DIR/src/common/config.yaml" source:=none
-```
-
-By default it subscribes to `/neat/image` (`namespace:=neat`, `ros.image_topic:
-image`). To use `/camera/image_raw`, add or update this key in the config's
-existing `ros:` mapping:
-
-```yaml
-ros:
-  image_topic: /camera/image_raw
-```
-
-Keep the other `ros:` settings in that mapping. The face detector requires
-`sensor_msgs/msg/Image` with `bgr8` encoding and a reliable publisher. Other
-apps can require different pixel formats; see their READMEs. An external
-publisher controls its own rate: `source:=none` does not provide source pacing.
-Choose the documented `complete` or `latest` queue policy for your input.
-
-`source` is a launch argument, not a dynamic ROS parameter. Studio and the model
-benchmark also use `source:=none`, but follow their request/benchmark workflow
-rather than waiting for a per-frame inference input. See the
-[launch and topic reference](../../support/ros2/README.md#2-configuration-and-launch-arguments)
-for the full contracts.
+For example, add `source:=none` to the face detector's launch command and set
+`ros.image_topic: /camera/image_raw`. It requires BGR8 images and reliable QoS.
+Other apps require their documented formats, often packed NV12. Studio and the
+synthetic benchmark use request/report workflows instead of a camera source.
 
 ## View results and Insight
 
-All image-based ROS examples now have optional saved visual images and Insight
-video controlled by their `ros.visualization` config. Both default to off.
-For example, update these keys in the face detector's existing YAML:
+Image apps publish JSON on `results` and dense images on additional documented
+topics where applicable. Set `ros.visualization.insight.enabled: true` and
+`host` to display matching overlays in your running Insight video viewer.
+`channel_base`, `channels`, `max_visible_streams` and `fps` control output.
+Set `ros.visualization.save.enabled: true` to save matched PNGs and headers.
+Both options default off; disable them for throughput measurements.
 
-```yaml
-ros:
-  visualization:
-    save:
-      enabled: true
-      directory: sandbox/ros2/face-detector/visuals
-      every_n_frames: 1
-    insight:
-      enabled: true
-      host: <insight-host-ip>
-      video_port_base: 9000
-      fps: 30
-```
+High-density graph mode keeps encoded-video passthrough and uses
+`output.insight` for host/ports plus `output.video_enabled: true`.
+Detection-to-VLM adds a second channel showing its actual accepted input.
+Studio is available through Insight's GenAI tab; the model benchmark publishes
+a report rather than video. The app launches do not start Insight itself.
 
-Use the same application launch command; `insight` defaults to `auto` and reads
-the config. Enable either output independently. Saved PNGs and a header/sequence
-manifest go into a unique `run-*` subfolder. The image-topic output draws the
-result on its exact source frame and sends that rendered video to Insight using
-Neat's encoder/VideoSender. Open your running Insight viewer on channel 0 by
-default. The launch does not start the Insight service itself.
+## Create an app
 
-The high-density `source:=live_graph` mode retains its efficient encoded-video
-and separate metadata path. Its YAML enable switch is the same, but host/ports
-still use `output.insight`, with `output.video_enabled: true`. To save decoded
-images for that app, use `source:=live` or `none` instead. See its
-[visual launch instructions](object-detection/high-density-multi-stream-object-detector/README.md#view-video-and-detections-in-insight).
+Start with the nearest example and follow the
+[node development guide](NODE_DEVELOPMENT.md). Model initialization,
+input preparation, inference submission/completion, decoding and ROS interfaces
+are visible in the app's node file. Helpers are ordinary local Python modules.
 
-For channel mapping, sampling, resource limits, custom-node differences and
-what has been verified, read the
-[visual output reference](../../support/ros2/README.md#7-saved-images-and-insight).
-Studio text/audio requests and synthetic benchmark reports keep their existing
-non-video output contracts. Docker uses each selected app's configuration and
-needs a writable path for saved files.
+## Validation status
 
-## Understand or extend an app
+The 29 packages migrated after the VLM example passed independent `colcon build`,
+installed-node imports and launch-description checks on Modalix, without a
+`neat_apps` installation. The VLM package retains its previously validated layout.
 
-Read the [node development guide](../../support/ros2/README.md): node roles,
-launch flow, configuration defaults, topics/QoS, a DETR walkthrough and a new-app
-skeleton.
+- **Numerical regression:** 17 standard image apps produced identical results
+  before and after the refactor, including dense maps in the focused comparisons.
+  PatchCore, the supported OBB route and all four multi-model stream configurations
+  also matched. RF-DETR small detection and medium segmentation matched the
+  current native Python implementation with identical model artifacts.
+- **Timing regression:** three alternating before/after pairs for each of the
+  17 standard apps showed no repeatable slowdown. Folder cases used 100–420
+  outputs per run; PCB was repeated with 2,000 outputs. Live cases used 360 outputs
+  at 30 FPS or 120 outputs at 5 FPS. Source-limited runs verify delivery at that
+  input rate, not maximum accelerator capacity. These are comparisons with the
+  previous ROS implementation, separate from native-Python parity.
+- **Installed workflows:** face detection processed 21 mixed-size images, saved
+  all overlays and delivered Insight video datagrams; the four-model launch
+  delivered 30 outputs per stream; BlazePose delivered 120 recorded outputs;
+  high-density delivered 3,000 recorded outputs covering 20 streams. The model
+  benchmark produced its report and accepted another run through its ROS service.
+- **Focused checks:** 58 ROS checks passed on Modalix, 83 targeted host checks
+  passed, and all 61 repository READMEs passed validation.
 
-## Examples
+**DETR retest after the board update:** Neat 0.6.2 exposes the required
+`BilinearAntialiased` resize. The registry ResNet-50 w16a16 package passed native
+and ROS execution with exact numerical matches on 21 images. Three alternating
+pairs of 903 outputs measured native Python at 35.29–35.78 FPS and asynchronous
+ROS at 70.99–77.84 FPS, with no ROS drops or header mismatches. Both workflows
+saved all 21 overlays. See the [DETR README](object-detection/detr-object-detector/README.md)
+for measurement scope. Other apps' earlier measurements were not repeated on
+this updated runtime.
 
-| Example | Documentation |
-| --- | --- |
-| `anomaly-detection/fastflow-anomaly-detector` | [Run and configure](anomaly-detection/fastflow-anomaly-detector/README.md) |
-| `anomaly-detection/patchcore-anomaly-detector` | [Run and configure](anomaly-detection/patchcore-anomaly-detector/README.md) |
-| `benchmarking/mipi-camera-capture` | [Run and configure](benchmarking/mipi-camera-capture/README.md) |
-| `benchmarking/mipi-multi-model` | [Run and configure](benchmarking/mipi-multi-model/README.md) |
-| `benchmarking/model-benchmark` | [Run and configure](benchmarking/model-benchmark/README.md) |
-| `classification/image-classification-explorer` | [Run and configure](classification/image-classification-explorer/README.md) |
-| `depth-estimation/depth-estimator` | [Run and configure](depth-estimation/depth-estimator/README.md) |
-| `docker/parallel-apps` | [Run and configure](docker/parallel-apps/README.md) |
-| `face-detection/face-detector` | [Run and configure](face-detection/face-detector/README.md) |
-| `face-detection/single-stream-thermal-face-detector` | [Run and configure](face-detection/single-stream-thermal-face-detector/README.md) |
-| `face-recognition/face-recognizer` | [Run and configure](face-recognition/face-recognizer/README.md) |
-| `feature-extraction/superpoint-feature-extractor` | [Run and configure](feature-extraction/superpoint-feature-extractor/README.md) |
-| `genai/detection-to-vlm-assistant` | [Run and configure](genai/detection-to-vlm-assistant/README.md) |
-| `genai/neat-genai-studio` | [Run and configure](genai/neat-genai-studio/README.md) |
-| `multi-model/multi-stream-multi-model` | [Run and configure](multi-model/multi-stream-multi-model/README.md) |
-| `object-detection/detr-object-detector` | [Run and configure](object-detection/detr-object-detector/README.md) |
-| `object-detection/high-density-multi-stream-object-detector` | [Run and configure](object-detection/high-density-multi-stream-object-detector/README.md) |
-| `object-detection/multi-stream-obb-detector` | [Run and configure](object-detection/multi-stream-obb-detector/README.md) |
-| `object-detection/multi-stream-object-detector` | [Run and configure](object-detection/multi-stream-object-detector/README.md) |
-| `object-detection/pcb-defect-detector` | [Run and configure](object-detection/pcb-defect-detector/README.md) |
-| `object-detection/rfdetr-detection-segmentation` | [Run and configure](object-detection/rfdetr-detection-segmentation/README.md) |
-| `object-detection/single-stream-object-detector` | [Run and configure](object-detection/single-stream-object-detector/README.md) |
-| `object-detection/ssd-mobilenet-object-detector` | [Run and configure](object-detection/ssd-mobilenet-object-detector/README.md) |
-| `object-detection/yolo26-object-detector` | [Run and configure](object-detection/yolo26-object-detector/README.md) |
-| `pose-estimation/multi-stream-blazepose3d` | [Run and configure](pose-estimation/multi-stream-blazepose3d/README.md) |
-| `pose-estimation/multi-stream-pose-estimator` | [Run and configure](pose-estimation/multi-stream-pose-estimator/README.md) |
-| `segmentation/efficientsam3-promptable-segmenter` | [Run and configure](segmentation/efficientsam3-promptable-segmenter/README.md) |
-| `segmentation/single-stream-instance-segmenter` | [Run and configure](segmentation/single-stream-instance-segmenter/README.md) |
-| `tracking/multi-stream-tracker` | [Run and configure](tracking/multi-stream-tracker/README.md) |
-| `tracking/yolo26-tiny-drone-tracker` | [Run and configure](tracking/yolo26-tiny-drone-tracker/README.md) |
+A successful build or a refactor regression check does not establish universal
+native parity. The native-Python acceptance target remains no measurable slowdown.
+
+Earlier testing established numerical parity for the tested folder/live cases,
+with these remaining limitations: high-density live-graph throughput was below
+native in paired 20-stream runs; BlazePose four-camera throughput was below native,
+and independently sampled live frames can yield different smoothed histories.
+The Core used in those earlier tests blocked the default native OBB decoder
+path; its debug-frame branch has separate validation. Studio's tested speech output matched, with lower
+request throughput accepted for equivalent output quality. See [ROS2.md](../../ROS2.md).
+
+## Pending validation
+
+- [ ] **ROS CI/CD:** add a dedicated job using `sima-cli neat install ros2@v3.0.0`
+  and a compatible Neat Python environment. Build each standalone package and
+  test its installed launch workflow. SDK CI currently packages ROS source only;
+  native runtime shards do not admit ROS tests.
+- [ ] **Physical MIPI testing:** exercise the local camera input node with a
+  connected MIPI camera; verify geometry, format, frame identity and throughput.
+- [ ] **Physical USB testing:** verify capture and sustained delivery on hardware.
+- [ ] **Docker:** validate the container composition on a board with Docker.
+- [ ] **PCIe:** add/test ROS integration when a host/device setup is available.

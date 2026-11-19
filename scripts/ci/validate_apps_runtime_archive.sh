@@ -116,10 +116,7 @@ PY
 members="$(tar -tzf "${archive}")"
 
 forbidden='(^|/)(manifest\.json|models|portal|tests|test-scope\.yaml|CMakeLists\.txt|CTestTestfile\.cmake|cmake_install\.cmake|Makefile|[^/]+_(unit|e2e)_test|sandbox[^/]*|__pycache__)(/|$)|\.(a|pyc|pyo|log|db|lock)$'
-# This one ament file registers Python nodes against the target's ROS ABI.
-# Native build systems and generated CMake files remain excluded.
-runtime_members="$(grep -Fvx "${runtime_root}/support/ros2/CMakeLists.txt" <<<"${members}" || true)"
-if grep -E "${forbidden}" <<<"${runtime_members}"; then
+if grep -E "${forbidden}" <<<"${members}"; then
   echo "Runtime archive contains non-runtime or generated files." >&2
   exit 1
 fi

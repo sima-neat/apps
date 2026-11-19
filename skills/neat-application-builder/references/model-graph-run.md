@@ -108,10 +108,11 @@ application keeps outputs after the next pull, choose output memory as
 ## Images received from ROS
 
 Keep ROS adapters in `examples/ros2/<category>/<example>/`, with their own
-configuration and README. Import the native model helpers without modifying
-the original example's source or configuration.
+configuration, README, package metadata, launch file and local implementation.
+Build with `colcon build` inside the example. Keep needed helpers local without
+modifying or importing the original example's source or configuration.
 
-The Apps `support/ros2/neat_apps/images.py` adapter shows the public Python tensor
+The face-detector's local `src/python/image_transport.py` shows the public Python tensor
 contract for packed NV12/NV16 messages. Set the visible geometry, plane roles,
 offsets and strides on the CPU tensor before calling `tensor.cvu()`. Constructing
 an EV74 NV12 tensor before supplying its Y/UV descriptors can fail during the
@@ -123,13 +124,13 @@ Keep each image's storage and ROS header until inference completes. Set explicit
 header. Arbitrary `Sample.attributes` are not preserved by every model route;
 do not use them as an unverified frame-association mechanism.
 
-The shared ROS image node can save PNGs and send rendered Insight video through
-`ros.visualization.save` and `ros.visualization.insight`. Both default to off.
-Reuse a native drawing routine through `Pipeline.render(bgr, data)` when needed;
-the output stage supplies an owned image matched to that result before publishing
-its acknowledgment. Do not mutate the numerical data or draw on a newer frame.
+The app's local `visual_output.py` can save PNGs and send rendered Insight video
+through `ros.visualization.save` and `ros.visualization.insight`. Both default to off.
+Keep any required drawing routine local; the output stage receives an owned image
+matched to that result before the node publishes its acknowledgment.
+Do not mutate the numerical data or draw on a newer frame.
 The high-density `live_graph` mode keeps its separate encoded-video/metadata path.
-See `support/ros2/README.md` for channel mapping and custom-node limits, and compare
+See `examples/ros2/NODE_DEVELOPMENT.md` for channel mapping and custom-node limits, and compare
 throughput with identical visualization settings.
 
 For a multi-stage model, device-visible intermediate storage matters separately

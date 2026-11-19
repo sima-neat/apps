@@ -1,6 +1,4 @@
-# The board supplies its installed Neat/ROS libraries through read-only mounts,
-# exactly as the native container example does. No model/server download here.
+# The board supplies its installed Neat/ROS libraries through read-only mounts.
 FROM scratch
 ENV PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp
-WORKDIR /apps
-ENTRYPOINT ["/bin/bash", "-c", "source /usr/local/ros2/setup.bash && export VIRTUAL_ENV=\"$PYNEAT_ROOT\" PATH=\"$PYNEAT_ROOT/bin:$PATH\" && source \"$ROS_PACKAGE_PREFIX/share/neat_apps/local_setup.bash\" && exec ros2 launch neat_apps app.launch.py app:=\"$NEAT_APP\" apps_root:=/apps config:=\"/apps/examples/ros2/$NEAT_APP/src/common/config.yaml\" source:=live namespace:=\"$ROS_APP_NAMESPACE\""]
+ENTRYPOINT ["/bin/bash", "-c", "source /usr/local/ros2/setup.bash && export VIRTUAL_ENV=\"$PYNEAT_ROOT\" PATH=\"$PYNEAT_ROOT/bin:$PATH\" && source install/setup.bash && exec ros2 launch \"$ROS_APP_PACKAGE\" app.launch.py config:=\"$PWD/src/common/config.yaml\" source:=live namespace:=\"$ROS_APP_NAMESPACE\""]

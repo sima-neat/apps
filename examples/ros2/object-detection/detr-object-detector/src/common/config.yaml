@@ -2,7 +2,7 @@ model:                       # DETR model selection.
   path: <model-path>         # Example: models/<model-pack>.tar.gz
 
 io:                          # Input and output paths.
-  input_dir: assets/datasets/coco              # Folder containing input images.
+  input_dir: <image-directory>              # Folder containing input images.
   output_dir: sandbox/detr-object-detector   # Native-only; ROS does not save overlays here.
 
 decode:                      # DETR decode settings.

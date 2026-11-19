@@ -1,6 +1,6 @@
 model:
   path: <model-path>         # Example: models/<model-pack>.tar.gz
-  labels: examples/object-detection/single-stream-object-detector/src/common/coco_label.txt
+  labels: src/common/coco_label.txt
 
 source:
   type: rtsp                 # rtsp, http or usb. Only the matching section below is read.

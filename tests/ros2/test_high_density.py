@@ -3,7 +3,6 @@ import importlib.util
 import json
 from pathlib import Path
 import struct
-import sys
 from types import SimpleNamespace
 
 import pyneat
@@ -13,16 +12,14 @@ import yaml
 
 pytestmark = pytest.mark.ros2
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "support/ros2"))
-ENTRY = ROOT / "examples/ros2/object-detection/high-density-multi-stream-object-detector/src/python/ros_node.py"
+ENTRY = ROOT / "examples/ros2/object-detection/high-density-multi-stream-object-detector/src/python/detection_node.py"
 
 
 @pytest.fixture
 def app():
-    spec = importlib.util.spec_from_file_location("high_density_ros_test", ENTRY)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    module.native.load_runtime_dependencies()
+    from tests.ros2.local_modules import load_node
+    module = load_node(ENTRY, "standalone_test_high_density")
+    module.helpers.load_runtime_dependencies()
     return module
 
 
@@ -55,12 +52,12 @@ def test_live_result_rejects_missing_identity(app, field):
 def test_failed_graph_setup_closes_ros(app, tmp_path, monkeypatch):
     config = tmp_path / "config.yaml"
     config.write_text(yaml.safe_dump({"ros": {}}))
-    monkeypatch.setattr(app.native, "load_app_config", lambda path:
+    monkeypatch.setattr(app.helpers, "load_app_config", lambda path:
                         SimpleNamespace(labels_path=tmp_path / "labels", rtsp_urls=["unused"]))
-    monkeypatch.setattr(app.native, "load_labels", lambda path: [])
+    monkeypatch.setattr(app.helpers, "load_labels", lambda path: [])
     def fail(config):
         raise RuntimeError("model setup failed")
-    monkeypatch.setattr(app.native, "build_detector_graph", fail)
+    monkeypatch.setattr(app.helpers, "build_detector_graph", fail)
     with pytest.raises(RuntimeError, match="model setup failed"):
         app.run_live(config, [])
     assert not rclpy.ok()
@@ -68,19 +65,25 @@ def test_failed_graph_setup_closes_ros(app, tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("pts", [0, 12_345_678_901, 100_000_345_678_901])
 def test_insight_bridge_matches_native_metadata(app, pts):
-    from neat_apps.insight_sink import detection_metadata
+    from tests.ros2.local_modules import load_node
+    detection_metadata = load_node(ENTRY.with_name("insight_sink.py"), "local_metadata_sink").detection_metadata
     payload = struct.pack("<Iiiiifi", 1, -10, 20, 70, 100, 0.75, 0)
     source = SimpleNamespace(index=3, frame_w=80, frame_h=60, labels=["person"])
     sample = detection(payload, pts_ns=pts)
     index, actual = detection_metadata(app.live_result(sample, source, SimpleNamespace(max_detections=50), 8))
-    boxes = app.native.parse_boxes_strict(payload, 80, 60, 50)
-    expected = json.loads(app.native.build_metadata_payload(source, sample, boxes))
+    boxes = app.helpers.parse_boxes_strict(payload, 80, 60, 50)
+    reference = load_node(
+        ROOT / "examples/object-detection/high-density-multi-stream-object-detector/src/python/main.py",
+        "native_high_density_reference", resolve_share=False)
+    reference.load_runtime_dependencies()
+    expected = json.loads(reference.build_metadata_payload(source, sample, boxes))
     assert index == 3
     assert actual == {key: expected[key] for key in actual}
 
 
 def test_insight_sink_exits_cleanly_when_ros_context_stops(tmp_path, monkeypatch):
-    from neat_apps.insight_sink import main
+    from tests.ros2.local_modules import load_node
+    main = load_node(ENTRY.with_name("insight_sink.py"), "local_shutdown_sink").main
     from rclpy.executors import ExternalShutdownException
     config = tmp_path / "config.yaml"
     config.write_text(yaml.safe_dump({"streams": ["unused"], "output": {
@@ -91,3 +94,11 @@ def test_insight_sink_exits_cleanly_when_ros_context_stops(tmp_path, monkeypatch
     monkeypatch.setattr(rclpy, "spin", shutdown)
     assert main(["--config", str(config)]) == 0
     assert not rclpy.ok()
+
+
+def test_image_topic_entrypoint_starts_inference(app, monkeypatch):
+    calls = []
+    monkeypatch.setattr(app, 'run_images', lambda argv: calls.append(argv) or 23)
+    argv = ['--config', '/unused/config.yaml']
+    assert app.main(argv) == 23
+    assert calls == [argv]

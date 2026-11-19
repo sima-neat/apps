@@ -1,0 +1,20 @@
+PyYAML
+# 3.1: per-request max_content_length (the transcription upload limit relies on it)
+Flask>=3.1,<4
+Werkzeug>=3.1,<4
+requests>=2,<3
+huggingface_hub[cli]>=0.34.0,<1.0
+# --- Text-to-speech (main venv) -----------------------------------------
+# piper-plus: MIT Piper fork with custom G2P; owns the top-level `piper`
+# package and adds Japanese (ja) plus en/zh/es/fr/pt. Runs on onnxruntime; it
+# pulls its own phonemizers (pyopenjtalk-plus for JA, g2p-en, pypinyin).
+#
+# NOTE: piper-tts also ships a top-level `piper` package and CANNOT be installed
+# in this venv without clobbering piper-plus. It is installed in a separate venv
+# (.venv-pipertts, see requirements-pipertts.txt) and reached via a subprocess
+# worker (pipertts_worker.py) for the German/Italian/Norwegian/Vietnamese voices.
+#
+# Below 2: piper-plus 2.0 renamed its package to `piper_plus` and moved
+# onnxruntime behind the [cpu] extra, so piperplus_tts.py's `from piper import
+# PiperVoice` fails and the Japanese voice cannot load (#710).
+piper-plus>=1.13.0,<2

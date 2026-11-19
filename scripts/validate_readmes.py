@@ -497,7 +497,7 @@ def progress_bar(current: int, total: int, width: int = 20) -> str:
 
 
 def validate_ros_readme(path: Path) -> list[str]:
-    """ROS adapters have their own docs/configs and reuse unchanged native apps."""
+    """ROS examples own their package metadata, launch files and implementations."""
     if not path.is_file():
         return ["README.md is missing"]
     text = path.read_text(encoding="utf-8")
@@ -509,13 +509,16 @@ def validate_ros_readme(path: Path) -> list[str]:
     app_dir = path.parent
     if app_dir.parent.name == "docker":
         required = ("src/common/ros-parallel-apps.sh", "src/common/Dockerfile.ros2")
+    elif (app_dir / "package.xml").exists():
+        import xml.etree.ElementTree as ET
+        package = ET.parse(app_dir / "package.xml").getroot().findtext("name")
+        required = ("CMakeLists.txt", "package.xml", "src/common/config.yaml", "launch/app.launch.py")
+        if f"ros2 launch {package} app.launch.py" not in text:
+            errors.append("Document the standalone ROS package launch command")
+        if "colcon build" not in text:
+            errors.append("Document building from the example directory with colcon build")
     else:
-        required = ("src/common/config.yaml", "src/python/ros_node.py")
-        if "ros2 launch neat_apps app.launch.py" not in text:
-            errors.append("Document the ROS launch command")
-        expected = f"APP_DIR=examples/ros2/{app_dir.parent.name}/{app_dir.name}"
-        if expected not in text:
-            errors.append(f"Define {expected} for the ROS configuration")
+        required = ("package.xml", "CMakeLists.txt", "src/common/config.yaml", "launch/app.launch.py")
     for relative in required:
         if not (app_dir / relative).is_file():
             errors.append(f"Missing ROS file: {relative}")

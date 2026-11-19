@@ -1,10 +1,10 @@
 model:                       # SSD detector selection (SSD300 or SSD-MobileNet v1/v2/v3).
   path: <model-path>         # Example: models/ssd_mobilenet_v2_modalix_int8_tess_mla_mpk.tar.gz
   preprocessing_profile: tensorflow_ssd  # tensorflow_ssd or torchvision_ssdlite (v3 matrix).
-  labels: examples/object-detection/ssd-mobilenet-object-detector/src/common/coco_labels.txt      # 91 lines: 0=background, 1..90 COCO.
+  labels: src/common/coco_labels.txt      # 91 lines: 0=background, 1..90 COCO.
 
 io:                          # Input and output paths.
-  input_dir: assets/datasets/coco                     # Folder containing input images.
+  input_dir: <image-directory>                     # Folder containing input images.
   output_dir: sandbox/ssd-mobilenet-object-detector   # Folder for annotated images.
   detections_json: ""        # Optional path for a machine-readable detections report.
 

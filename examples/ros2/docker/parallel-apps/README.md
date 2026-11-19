@@ -1,83 +1,63 @@
-# Parallel ROS 2 applications in Docker
+# Parallel apps in Docker — ROS 2
 
-The ROS variant runs the same six application choices with image source and
-inference nodes in each container. Install ROS with
-`sima-cli neat install ros2@v3.0.0` and follow the shared
-[ROS package setup](../../../../ROS2.md#install-and-build) on Modalix first.
-Configure and test each application's ROS launch individually before starting
-all six. Model paths in these configs are relative to the Apps root, including
-any `models/<container>/` subdirectory.
+This directory is the independent `neat_parallel_apps` composition package.
+It launches the configured ROS examples in separate containers, using their
+own installed packages. It contains no inference node or `neat_apps` dependency.
+Docker runtime validation remains TODO; Docker is not installed on the test board.
 
-## Build on Modalix
+## Configure
 
-Run from the Apps checkout or installed `prebuilt-apps/` root on Modalix.
-Install ROS 2 once with `sima-cli neat install ros2@v3.0.0` and use the Neat
-Python environment required by the native example. If `colcon` is installed:
+Install ROS 2 with `sima-cli neat install ros2@v3.0.0` and prepare Docker on Modalix.
+Edit [src/common/config.yaml](src/common/config.yaml): set the absolute `apps_root`
+and choose app paths/package names/container names. Each listed app keeps its
+own configuration and model/input paths. Its native accuracy/FPS contract still
+applies; running several apps simultaneously introduces resource contention.
 
-```bash
-source /usr/local/ros2/setup.bash
-source ~/pyneat/bin/activate
-python -c "import rclpy, pyneat"
+First enter each listed app directory, configure its `src/common/config.yaml`
+and run `colcon build` there. The launcher checks those local installations.
+There is no shared package to build. Model/dataset paths must be available at the
+same path inside the containers; the Apps directory and installed runtimes are
+mounted. Add explicit mounts to the script if your configured data is elsewhere.
 
-colcon --log-base sandbox/ros2-colcon-log build \
-  --base-paths support/ros2 --packages-select neat_apps --merge-install \
-  --build-base sandbox/ros2-colcon-build \
-  --install-base sandbox/ros2-colcon-install \
-  --cmake-args -DPython3_EXECUTABLE="$(command -v python)"
-source sandbox/ros2-colcon-install/local_setup.bash
-```
+## Build and run
 
-This builds the shared `neat_apps` package for all ROS examples, so build it once,
-not once per application. If colcon is unavailable, use the
-[direct CMake build](../../../../ROS2.md#build-with-cmake-without-colcon).
-In each new terminal, source ROS, the Neat environment and your chosen package
-installation before running commands. Restart after editing this app's Python
-or YAML; rebuild after changing shared nodes or launch files in `support/ros2/`.
-
-## Run
-
-Run on the Modalix board, from the Apps root:
+From this composition directory:
 
 ```bash
 source /usr/local/ros2/setup.bash
 source ~/pyneat/bin/activate
-export ROS_PACKAGE_PREFIX="$(ros2 pkg prefix neat_apps)"
-examples/ros2/docker/parallel-apps/src/common/ros-parallel-apps.sh start
-docker logs neat-ros-detection
-examples/ros2/docker/parallel-apps/src/common/ros-parallel-apps.sh stop
+colcon build
+source install/setup.bash
+ros2 launch neat_parallel_apps app.launch.py \
+  config:="$PWD/src/common/config.yaml"
 ```
 
-This builds one local image and mounts the Apps bundle, Neat Python environment,
-ROS package and system libraries read-only. Namespaces are distinct, for example
-`/neat_ros_detection/results` and `/neat_ros_pose/results`. Source and inference
-still communicate over image topics. The containers share host networking and
-IPC so Fast DDS can communicate through shared memory across containers and
-the host, as described in the [Fast DDS Docker guide](https://fast-dds.docs.eprosima.com/en/v2.14.7/docker/shm_docker.html).
-Shared-accelerator throughput must be
-compared with all six native applications active under the same source rates.
-Container execution is not yet validated; Docker is required on the board.
+Ctrl+C stops and removes only the containers started by this launch. Existing
+containers with the same names cause an error. To manage detached runs instead:
 
-For node responsibilities, settings, topics and extension examples, see the
-[ROS node development guide](../../../../support/ros2/README.md). Each container
-runs the selected application's nodes; Docker adds no inference node of its own.
-Use that application's configuration and topic contract inside its namespace.
+```bash
+bash src/common/ros-parallel-apps.sh start "$PWD/src/common/config.yaml"
+bash src/common/ros-parallel-apps.sh stop "$PWD/src/common/config.yaml"
+```
 
-## View results and Insight
+## Structure and results
 
-Enable `ros.visualization.insight.enabled` in each selected app's config and set
-its Insight host, video port base and a distinct `channel_base`. The containers
-share the host's network, so no separate visualization process is needed.
-Use non-overlapping channel ranges for multi-stream containers. Only enable as
-many encoders as the board and Insight service can sustain.
+- `launch/app.launch.py` starts the local composition script.
+- `src/common/ros-parallel-apps.sh` checks local installations and starts/stops containers.
+- `src/common/Dockerfile.ros2` sources each app's own installation and launches it.
+- `src/common/config.yaml` selects the apps.
 
-The Apps bundle is mounted read-only in these containers. Saved visual files
-therefore require `ros.visualization.save.directory` to point to a writable
-container path such as `/tmp/visuals` (temporary), or an explicitly mounted
-writable host output directory. Container execution remains unverified.
+Containers share host networking/IPC for DDS. Each app uses the container name
+(with underscores) as its ROS namespace. Inspect `ros2 topic list -t` and the
+app-specific results topics. Enable Insight in each app's YAML and assign distinct
+channels/ports to prevent collisions. Read that app's README for node roles,
+source modes, topics and visualization settings.
 
-See the [output configuration reference](../../../../support/ros2/README.md#7-saved-images-and-insight).
+## Pending validation
 
-## Source files
+- [ ] Docker build, start, result delivery and Ctrl+C cleanup on Modalix.
+- [ ] Shared-memory DDS across containers and simultaneous throughput.
+- [ ] Physical MIPI/USB camera tests where those sources are selected.
 
-- [Container lifecycle](src/common/ros-parallel-apps.sh)
-- [Container image](src/common/Dockerfile.ros2)
+See the [node development guide](../../NODE_DEVELOPMENT.md) for creating
+your own app, and the [ROS overview](../../../../ROS2.md) for validation limits.

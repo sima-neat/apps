@@ -241,22 +241,19 @@ generation, and affected CI workflows.
 The installed bundle does not contain CMake files or tests. Clone the repository
 to compile source or run the Apps test suite.
 
-The ROS support package is an exception: `support/ros2/CMakeLists.txt` registers
-the shared Python nodes against the target's installed ROS/Python ABI. Its
-sources and `ROS2.md` ship in the bundle; no native example build files or ROS
-test artifacts are included. Changes to ROS packaging in `build.sh` require
-code owner review.
+ROS examples are built from a repository checkout on Modalix, independently of
+`build.sh`. Each app under `examples/ros2/<category>/<example>/` owns its local
+`package.xml`, `CMakeLists.txt`, `launch/`, nodes, helpers, labels and config.
+Run `colcon build` inside that folder. It must not import `neat_apps` or load
+source files from another example. ROS tests exercise the local app modules.
+ROS package installation through the Apps runtime bundle is not currently supported.
 
-ROS entrypoints under `examples/ros2/<category>/<example>/` are Python-only
-adapters. Keep their configuration and documentation in that directory and
-leave the original examples unchanged. They reuse
-the native Python decoding and public Neat model APIs, with shared image transport
-under `support/ros2`. Validate their accuracy and throughput against the native
-Python implementation. Native C++ measurements provide additional diagnostics;
-this language exception does not waive accuracy or throughput validation.
-Shared ROS transport and layout tests live in `tests/ros2/`; these adapters do
-not add duplicate native build targets or portal entries. README validation
-checks both layouts, while the native catalog retains its existing entries.
+Keep inference setup, execution, subscriptions and publication visible in the
+app's node files. Preserve native Python model routes, numerical decoding and
+asynchronous bounds. Validate output and throughput against native Python;
+C++ is an additional diagnostic reference. Physical-camera/Docker and runtime
+limitations must be recorded separately from build success. ROS layout/transport
+tests live in `tests/ros2`; no duplicate native targets or portal entries are added.
 
 ## Repository Layout
 

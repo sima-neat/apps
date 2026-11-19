@@ -1,171 +1,174 @@
 # DETR Object Detector — ROS 2
 
-ROS nodes for the [DETR Object Detector native example](../../../object-detection/detr-object-detector/README.md).
-The native implementation remains unchanged; this entrypoint imports its model
-and decoding helpers. ROS configuration and launch instructions are local to this folder.
+This is an independent ROS 2 package, `neat_detr_object_detector`. Build and run it from
+this directory. Nodes, launch, configuration, labels and implementation helpers
+are local; no `neat_apps` package or original example source is imported.
 
-## Prepare the model and inputs
+## Structure and node roles
 
-Follow the native [model preparation](../../../object-detection/detr-object-detector/README.md#prepare-the-model)
-and [input configuration](../../../object-detection/detr-object-detector/README.md#configure), then set the same
-model, labels, source and thresholds in [src/common/config.yaml](src/common/config.yaml).
-Run commands from the Apps root. Shared labels, assets and native helper modules
-are reused from their original locations.
+```text
+detr-object-detector/
+├── package.xml
+├── CMakeLists.txt
+├── launch/app.launch.py
+└── src/
+    ├── common/config.yaml
+    └── python/
+        ├── detection_node.py
+        ├── input_node.py
+        ├── result_sink.py
+        ├── image_transport.py
+        ├── visual_output.py
+        └── model_support.py
+```
+
+| File / method | Responsibility |
+| --- | --- |
+| [detection_node.py](src/python/detection_node.py) — `__init__()` | Declares image subscription, results/statistics publishers and bounded inference workers |
+| `initialize_model()` and `build_runner()` | Configure models and build the Neat graph; geometry-dependent setup is in `prepare_input()` |
+| `prepare_input()` | Prepare the same pixels/tensors as the native Python app |
+| `submit_images()` / `receive_results()` | Call `runner.push()` / `runner.pull()`, retain inputs and verify result IDs/timestamps |
+| `decode_result()` | Decode numerical output; publish matching JSON and, where applicable, dense images |
+| [input_node.py](src/python/input_node.py) | Read the configured input and publish timestamped images; bound outstanding work using result headers |
+| [result_sink.py](src/python/result_sink.py) | Optional JSON/dense-image recorder; not a visualization node |
+| [visual_output.py](src/python/visual_output.py) | Render the matching source/result, optionally save it or send Insight video |
+| [model_support.py](src/python/model_support.py) | Local model configuration, numerical decoding and supporting algorithms |
+
+Inference runs outside ROS callbacks. Submission and completion overlap; pending
+and in-flight work remain bounded. There is no generic dispatcher, `Pipeline`
+factory or shared `ImageNode` base class.
+
+## Prepare and configure
+
+Install ROS 2 with:
+
+```bash
+sima-cli neat install ros2@v3.0.0
+```
+
+Use the matching Neat Python environment and installed colcon build tools.
+Use the [native model preparation guide](../../../object-detection/detr-object-detector/README.md#prepare-the-model)
+for the same model artifacts and precision. Edit [src/common/config.yaml](src/common/config.yaml).
+Model and dataset files are user-provided; use absolute paths, or paths relative
+to this example directory. Shipped labels are under `src/common/`.
+
+| Configuration | Meaning |
+| --- | --- |
+| `model` | Model package(s), labels and app-specific model options |
+| `io` | Input image directory/file and output paths |
+| `decode` | Confidence/NMS thresholds and decoding options |
+| `runtime` | Frame limits, warmup and runtime controls used by this app |
+| `ros.image_topic`, `ros.results_topic` | Image input and matching JSON result topics (defaults `image`, `results`) |
+| `ros.input_policy` | `complete`: backpressure; `latest`: discard unadmitted older images |
+| `ros.source_window`, `pending_frames`, `inflight_frames` | Bounded outstanding, queued and admitted work |
+| `ros.visualization.save.enabled`, `.directory` | Save matched overlays in a new run directory |
+| `ros.visualization.insight.enabled`, `.host` | Enable Insight video and choose its host |
+
+These are startup YAML settings, not dynamic ROS parameters. Restart after edits.
 
 ## Build on Modalix
 
-Run from the Apps checkout or installed `prebuilt-apps/` root on Modalix.
-Install ROS 2 once with `sima-cli neat install ros2@v3.0.0` and use the Neat
-Python environment required by the native example. If `colcon` is installed:
+From this example directory:
 
 ```bash
 source /usr/local/ros2/setup.bash
 source ~/pyneat/bin/activate
-python -c "import rclpy, pyneat"
-
-colcon --log-base sandbox/ros2-colcon-log build \
-  --base-paths support/ros2 --packages-select neat_apps --merge-install \
-  --build-base sandbox/ros2-colcon-build \
-  --install-base sandbox/ros2-colcon-install \
-  --cmake-args -DPython3_EXECUTABLE="$(command -v python)"
-source sandbox/ros2-colcon-install/local_setup.bash
+colcon build
+source install/setup.bash
 ```
 
-This builds the shared `neat_apps` package for all ROS examples, so build it once,
-not once per application. If colcon is unavailable, use the
-[direct CMake build](../../../../ROS2.md#build-with-cmake-without-colcon).
-In each new terminal, source ROS, the Neat environment and your chosen package
-installation before running commands. Restart after editing this app's Python
-or YAML; rebuild after changing shared nodes or launch files in `support/ros2/`.
+Only this package is built. `build/`, `install/` and `log/` stay in this folder.
+Rebuild after Python or launch edits. In every new terminal source ROS, activate
+Neat and source this installation. Configuration edits only require a restart
+when using the source config below.
 
 ## Run
 
-Install ROS 2 with `sima-cli neat install ros2@v3.0.0`, then follow the shared
-[ROS setup](../../../../ROS2.md#install-and-build) once. Edit this ROS example’s `src/common/config.yaml`; its `ros` section controls
-image topics and bounded delivery.
-
-The common folder source publishes original-size `bgr8` images. The app publishes DETR boxes and class scores.
-
-From the Apps root after sourcing the ROS package:
-
 ```bash
-APP_DIR=examples/ros2/object-detection/detr-object-detector
-ros2 launch neat_apps app.launch.py \
-  app:=object-detection/detr-object-detector apps_root:="$PWD" \
-  config:="$PWD/$APP_DIR/src/common/config.yaml" source:=folder
+ros2 launch neat_detr_object_detector app.launch.py \
+  config:="$PWD/src/common/config.yaml"
 ```
 
-Use `source:=none` with an external camera or rosbag on `/neat/image`.
-Inspect `/neat/results`, or use the shared `result_sink` to record and check
-finite runs. Input headers accompany results; see the [message, queue and
-validation contracts](../../../../ROS2.md).
+The default `source:=folder` starts the folder input node.
+Use `source:=none` to start inference without an input node and wait for an
+external publisher on `/neat/image`. The image encoding must be `bgr8`.
+`namespace:=demo` changes the namespace. Ctrl+C stops the launched nodes.
+A component failure stops the launch; finite folder input exits after every
+image has a matching result. Omit `config` to use the installed config copy.
 
-The ROS entrypoint is `src/python/ros_node.py`. Model accuracy and throughput
-validation are in progress; an available entrypoint is not a parity claim.
+## Results and Insight
 
-## Nodes, settings and results
+For a finite folder run, start the topic echo below in a second sourced terminal
+before launching the app. Enable saving or Insight in the config before launch
+to inspect the output visually. `ros.source_repeats` can repeat the image folder.
 
-This example uses the shared image-node implementation. The
-[DETR walkthrough](../../../../support/ros2/README.md#4-detr-walkthrough) follows
-one frame through the actual code; the same guide explains how to build your
-own pipeline.
+```bash
+ros2 topic echo /neat/results
+```
 
-| Node in the default namespace | Included work | ROS interface |
-| --- | --- | --- |
-| `/neat/neat_folder_source` | Discover/read images, publish original BGR pixels, wait for matching result headers before reusing window slots | Publishes `/neat/image`; subscribes to `/neat/results` |
-| `/neat/detr_object_detector` | Native preprocessing, tensor graph inference, native DETR decoding and original-image coordinate mapping; shared workers own asynchronous admission and result association | Subscribes to `/neat/image`; publishes `/neat/results` and `/neat/detr_object_detector/statistics` |
-| `/neat_result_sink` (optional, started separately with the command below) | Record JSON and verify consecutive result sequences | Subscribes to `/neat/results` |
-
-Images use `sensor_msgs/msg/Image`; results and statistics use
-`std_msgs/msg/String` containing JSON. With `source:=none`, your external BGR
-publisher replaces the folder source. It must offer reliable QoS compatible
-with the shared subscriber. The shared launch does not start a recorder.
-
-The ROS pipeline reads these application settings:
-
-| YAML setting | Role |
+| Topic | Type / role |
 | --- | --- |
-| `model.path` | Required DETR model package. Relative paths resolve from the Apps root in this ROS pipeline. |
-| `io.input_dir` | Folder source input directory (or one image file). |
-| `decode.confidence_threshold` | Detection score threshold; default `0.70`. |
-| `decode.person_only` | Retain only the native COCO person class; default `false`. |
-| `ros.*` | Topic names, admission bounds, source window and timeouts; see the [shared settings reference](../../../../support/ros2/README.md#standard-image-node-yaml-settings). |
+| `image` | `sensor_msgs/msg/Image`, source pixels and timestamp |
+| `results` | `std_msgs/msg/String`, JSON numerical results and matching source header |
+| `detr_object_detector/statistics` | `std_msgs/msg/String`, completed outputs/FPS and queue/drop accounting |
 
-`decode.max_draw` now limits the native DETR visual renderer when outputs are enabled.
-The inherited `io.output_dir`, `runtime.profile`,
-`runtime.num_runs`, `runtime.verbose` and `output.overlay` settings are not used
-by this ROS inference path. Configure saved images under `ros.visualization.save`. Use
-`ros.source_repeats` to repeat the folder dataset and `result_sink` to record
-results. These YAML values are read at startup; changing ROS parameters at
-runtime does not update the model or decoding thresholds.
+Topics are relative to `/neat` by default. Input and result QoS is reliable;
+match the offered camera QoS. JSON results retain the source `header`; the
+recorder verifies sequence/header continuity.
 
-Each result preserves the input header and adds a publication `sequence`.
-`data` contains `width`, `height`, and `objects`. Each object has `box` as
-`[x1, y1, x2, y2]` in original-image pixels, `score`, and `class_id`; an empty
-`objects` list is valid. Statistics report receipts, admissions, completions,
-drops, outstanding work and completion FPS. DETR uses the standard image-topic
-mode, with optional rendered Insight video controlled by `ros.visualization.insight`.
+For visualization set `ros.visualization.insight.enabled: true` and configure
+its `host`. Open the video viewer in your running Insight service.
+`channel_base` selects the first channel, `max_visible_streams` bounds visible
+cameras, and `channels` can map camera frame IDs to explicit channels.
+Overlays use the matching source image. No separate sink command is needed.
+For a file result instead, enable `ros.visualization.save.enabled`.
+Insight uses an even-sized canvas based on the first frame and letterboxes
+later frames to fit. Saved PNGs use the original image dimensions.
+Disable saving/Insight when measuring inference throughput.
 
-To record a finite dataset, set `ros.result_subscribers: 2`, start the recorder
-before launching inference, and use the number of dataset images multiplied by
-`ros.source_repeats` (default 1) as `N`:
+## Extend and validate
 
-```bash
-ros2 run neat_apps result_sink --topic /neat/results \
-  --count N --output sandbox/detr-results.jsonl --timeout 120
-```
+Edit [detection_node.py](src/python/detection_node.py) for model behavior and
+[launch/app.launch.py](launch/app.launch.py) for wiring. Add executable scripts
+to this folder’s `CMakeLists.txt` and dependencies to `package.xml`.
+Change the input node to support another camera while retaining the documented
+image encoding, dimensions, headers and QoS.
 
-Choose a new output filename for each run. See the
-[development guide](../../../../support/ros2/README.md#6-inspect-and-validate)
-for topic inspection, remapping and validation commands.
+The migration preserves model routes, preprocessing, decoding, queue bounds and
+worker topology. Build/import checks alone do not establish accuracy or FPS
+parity. See the [validation status](../../README.md#validation-status) for measured
+coverage and remaining runtime/hardware limitations. Physical MIPI/USB and
+Docker execution remain TODO where applicable.
 
-## View results and Insight
+DETR requires Neat's `BilinearAntialiased` resize, ImageNet preprocessing and
+built-in DETR decoder, matching the native example. Runtimes without that resize
+option fail clearly; no interpolation fallback is used.
 
-Both outputs are configured in this app's existing `ros.visualization` mapping
-in [config.yaml](src/common/config.yaml); both default to disabled. Update the
-keys in that mapping (keep its other settings):
+Retested on Modalix with Neat **0.6.2** and board image **3.0.1_master_B2796**:
+the standalone `colcon build`, installed ROS launch and native Python command
+passed with the registry `detr_resnet_50` **w16a16** package. All 21 test images
+(640×640) produced exactly matching boxes, scores and class IDs. Both native
+and ROS runs saved all 21 overlays.
 
-```yaml
-ros:
-  visualization:
-    save:
-      enabled: true
-      directory: sandbox/ros2/object-detection/detr-object-detector/visuals
-      every_n_frames: 1
-    insight:
-      enabled: true
-      host: <insight-host-ip>
-      video_port_base: 9000
-      fps: 30
-```
+Three alternating native/ROS timing pairs each processed 903 images (43 passes
+through those 21 images), excluding the first 21 outputs from timing. Saving and
+Insight were disabled during timing; model initialization was excluded.
 
-Enable either output or both. Use the reachable host and exposed UDP ports of
-your running Insight service. Rebuild the shared ROS package after updating its
-code, then use the **same launch command above**: no separate sink command is
-needed. `insight:=true` or `insight:=false` can override the YAML switch.
+| Completed-output throughput | Observed FPS range |
+| --- | --- |
+| Native Python image-read/detection loop | 35.29–35.78 |
+| ROS input node + asynchronous detection node | 70.99–77.84 |
 
-Saved PNGs go into a new `run-*` subfolder on every invocation. `frames.jsonl`
-maps each filename to its exact input header and result sequence. Existing runs
-are preserved. Native `io.output_dir`/`output.overlay` keys do not control these
-ROS files; use the explicit ROS settings above.
+ROS used the default four in-flight requests; native Python calls `detect()`
+sequentially. Every recorded result matched native output exactly, with no ROS
+drops, sequence gaps, header mismatches or pending work at shutdown. No slowdown
+was observed for this workload. This verifies equivalence to native Python,
+not a labelled mAP evaluation; other model variants and camera inputs were not
+retested in this check.
 
-Open Insight's video viewer and select channel 0 by default. This output draws
-the decoded result on its matching source image and sends H.264 video through
-Neat's hardware encoder and VideoSender. Overlays are part of the video, so
-there is no separate 2D metadata channel to configure. ROS result topics retain
-the original numerical data. For multiple cameras, stable channel mappings,
-performance limits and troubleshooting, see the
-[output configuration reference](../../../../support/ros2/README.md#7-saved-images-and-insight).
+For an external image publisher, `ros.input_max_width`/`input_max_height` set the
+maximum accepted geometry (defaults 1920×1080). Folder mode scans the configured
+images for the same maximum geometry used by the native example.
 
-Start a live source or a sufficiently long folder run before connecting the
-viewer. A short dataset can finish before the browser connects; saved PNGs are
-the reliable way to inspect every result from a finite run. Rendering, file I/O
-and encoding add work: disable both outputs for inference-only comparisons.
-The shared output path is tested on Modalix; this is not an app-specific visual
-quality or visual-mode FPS parity claim.
-
-## Source files
-
-- [ROS entrypoint](src/python/ros_node.py)
-- [ROS configuration](src/common/config.yaml)
-- [Shared source, sink and launch package](../../../../support/ros2/)
+See the [node development guide](../../NODE_DEVELOPMENT.md) for creating
+your own app, and the [ROS overview](../../../../ROS2.md) for validation limits.

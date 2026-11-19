@@ -7,7 +7,6 @@ from array import array
 import json
 from pathlib import Path
 from queue import Queue, Empty
-import sys
 import threading
 import time
 
@@ -19,9 +18,39 @@ from rclpy.node import Node
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "support/ros2"))
-from neat_apps.image_node import ImageNode
-from neat_apps.images import image_array
+from tests.ros2.local_modules import load_node
+DepthNode = load_node(Path(__file__).resolve().parents[2] /
+    "examples/ros2/depth-estimation/depth-estimator/src/python/depth_node.py",
+    "tested_standalone_depth").DepthNode
+
+
+class ImageNode(DepthNode):
+    """Use the shipped node workers with only inference replaced by a controlled runner."""
+    warmup_runs = 0
+    render = None
+
+    def __init__(self, name, pipeline, settings):
+        self.test_pipeline = pipeline
+        super().__init__({"ros": settings}, None)
+
+    def initialize_model(self, config, config_path):
+        pass
+
+    def prepare_input(self, message):
+        return self.test_pipeline.prepare(message)
+
+    def build_runner(self, tensors):
+        return self.test_pipeline.build(tensors)
+
+    def decode_result(self, sample, message):
+        return self.test_pipeline.decode(sample, message)
+
+    def receive(self, message):
+        self.on_image(message)
+
+TRANSPORT_SOURCE = Path(__file__).resolve().parents[2] / "examples/ros2/depth-estimation/depth-estimator/src/python"
+transport = load_node(TRANSPORT_SOURCE / "image_transport.py", "node_test_transport")
+image_array = transport.image_array
 
 pytestmark = pytest.mark.ros2
 
@@ -32,7 +61,7 @@ pytestmark = pytest.mark.ros2
 ])
 def test_packed_message_owns_visible_pixels(encoding, channels, dtype):
     from builtin_interfaces.msg import Time
-    from neat_apps.images import to_message
+    to_message = transport.to_message
 
     shape = (4, 6, channels) if channels > 1 else (4, 6)
     pixels = np.arange(np.prod(shape), dtype=dtype).reshape(shape)[::2, ::2]
@@ -264,8 +293,10 @@ def test_finished_source_can_disconnect_after_initial_readiness(nodes):
 @pytest.mark.parametrize("encoding", ["nv12", "nv16"])
 def test_decoder_plane_padding_is_removed_before_ros_transport(encoding):
     from builtin_interfaces.msg import Time
-    from neat_apps.images import image_tensor, planar_array
-    from neat_apps.live_source import pack_image
+    image_tensor, planar_array = transport.image_tensor, transport.planar_array
+    pack_image = load_node(Path(__file__).resolve().parents[2] /
+        "examples/ros2/face-detection/single-stream-thermal-face-detector/src/python/input_node.py",
+        "node_test_live_input").pack_image
 
     width, height = 4, 4
     uv_rows = height // 2 if encoding == "nv12" else height
@@ -328,7 +359,8 @@ def test_visual_failure_stops_node_without_acknowledging_unsaved_frame(nodes, tm
 
 def test_auxiliary_video_and_metadata_share_exact_output_clock(monkeypatch):
     from types import SimpleNamespace
-    from neat_apps.visual_output import InsightVideo
+    visual = load_node(TRANSPORT_SOURCE / "visual_output.py", "node_test_visual")
+    InsightVideo = visual.InsightVideo
     sent, metadata = [], []
     video=InsightVideo.__new__(InsightVideo)
     video.shape=(4,8,3)
@@ -338,7 +370,7 @@ def test_auxiliary_video_and_metadata_share_exact_output_clock(monkeypatch):
     video.started_ns=1_000_000
     video.run=SimpleNamespace(push=lambda inputs: sent.extend(inputs) or True)
     video.metadata=SimpleNamespace(send_raw_json=lambda payload: metadata.append(json.loads(payload)) or True)
-    monkeypatch.setattr('neat_apps.visual_output.time.monotonic_ns',lambda:1_500_000)
+    monkeypatch.setattr(visual.time, 'monotonic_ns', lambda:1_500_000)
     payload={'schema_version':1,'renderer':'blazepose-3d','payload':{'poses':[]}}
     video.send(np.zeros(video.shape,np.uint8),payload)
     assert sent[0].pts_ns==metadata[0]['pts_ns']==1_000_500_000
