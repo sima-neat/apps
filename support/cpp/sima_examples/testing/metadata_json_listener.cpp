@@ -337,6 +337,9 @@ MetadataJsonListenerResult MetadataJsonListener::drain_pending() {
     }
     sock.reassembler = MetadataReassembler{};
   }
+  if (result.error.empty()) {
+    result.error = result.ignored;
+  }
   result.success = result.error.empty();
   return result;
 }
@@ -419,9 +422,9 @@ bool MetadataJsonListener::handle_datagram(SocketState& sock, MetadataJsonListen
       });
   if (contract != opt_.contracts.end() &&
       result.messages.back().object_count < contract->min_object_count) {
-    result.error = "data." + contract->data_array_key + " contains " +
-                   std::to_string(result.messages.back().object_count) +
-                   " objects; expected at least " + std::to_string(contract->min_object_count);
+    result.ignored = "data." + contract->data_array_key + " contains " +
+                     std::to_string(result.messages.back().object_count) +
+                     " objects; expected at least " + std::to_string(contract->min_object_count);
     return true;
   }
   const auto& received = result.messages.back();
@@ -498,7 +501,9 @@ MetadataJsonListenerResult MetadataJsonListener::wait_for_messages() {
     }
   }
 
-  if (result.error.empty()) {
+  if (result.error.empty() && !result.ignored.empty()) {
+    result.error = result.ignored;
+  } else if (result.error.empty()) {
     result.timed_out = true;
     result.error = opt_.require_all_ports
                        ? "timed out waiting for valid json on all configured ports"
