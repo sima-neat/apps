@@ -73,6 +73,8 @@ and why, and every test and number in it traces to a file or a run.
 
 <The customer skill files changed and the lesson each teaches, as `agents/rules.md`
 "Customer skills" defines, or `Skill updates: none` with the reason.>
+
+Refs #<issue>, #<issue>
 ```
 
 ## Rules
@@ -94,5 +96,8 @@ and why, and every test and number in it traces to a file or a run.
   commit says which commit. Report measured numbers with the venue, the MLA clock, and the
   input that produced them, in one table.
 - Each list item and table row stays on one source line. No headings beyond the ones above.
+- The last line names every linked issue as `Refs #<issue>`, or `Closes #<issue>` for an issue
+  the merge finishes. PR sanitization fails a description without one, and a bare `(#770)`
+  does not count.
 - Omit AI attribution, internal hostnames, private links, board addresses, and customer
   information. The repository is public.
