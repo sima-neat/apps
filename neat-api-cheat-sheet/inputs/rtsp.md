@@ -128,8 +128,8 @@ board's general-purpose CPU.
 | Decoder name | `decoder_name` | `decoder_name` | `""` | Name of the decoder node | You look up the decoder by name, for example in logs or in a graph description |
 | Raw output | `decoder_raw_output` | `decoder_raw_output` | `true` | `true` keeps decoded frames in SiMa memory. `false` outputs them in system memory | Not changed in any shipped example; keep the default |
 | Decoder next element | `decoder_next_element` | `decoder_next_element` | `""` | Tells the decoder which processor reads its output: `CVU` or `APU` | Not changed in any shipped example; keep the default |
-| Videoconvert | `use_videoconvert` | `use_videoconvert` | `false` | Adds a format converter that runs on the board's CPU after the decoder | The next node accepts only a format the decoder cannot output, for example `BGR`. Costs CPU time per frame |
-| Videoscale | `use_videoscale` | `use_videoscale` | `false` | Adds a scaler that runs on the board's CPU after the decoder | The next node needs another size and nothing else scales. Costs CPU time per frame |
+| Videoconvert | `use_videoconvert` | `use_videoconvert` | `false` | Adds a format converter after the decoder | Not changed in any shipped example; keep the default |
+| Videoscale | `use_videoscale` | `use_videoscale` | `false` | Adds a scaler after the decoder | Not changed in any shipped example; keep the default |
 | Output caps | `output_caps` | `output_caps` | Off | Fixes the caps at the end of the group. See the `OutputCaps` table | The next node needs a fixed format, size and frame rate, for example a model input |
 | Extra fragment | `extra_fragment` | `extra_fragment` | `""` | A GStreamer text fragment added at the end of the group | Advanced use only. A step that no Neat node provides |
 | Decode width | `dec_width` | `dec_width` | `-1` | Width of the decoded frames. For MJPEG, `output_caps.width` is used when this is `-1` and `use_videoscale` is off | H.265 and MJPEG cameras whose size the decoder must know. The examples set it for those codecs |

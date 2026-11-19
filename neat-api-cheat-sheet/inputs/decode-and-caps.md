@@ -140,6 +140,8 @@ The `CapsRaw` header lists `SysMem` and `MlaShm` as memory examples, but
 - C++ `SimaDecodeOptions::out_format` accepts a string such as `"NV12"` or a
   `FormatTag`. Python accepts only `pyneat.Format`, for example
   `pyneat.Format.NV12`.
+- Python `caps_raw` takes the format as a string such as `"NV12"`, not as
+  `pyneat.Format`.
 - `CapsI420` is not available in Python.
 - Python also has `pyneat.nodes.format_filter(...)`, another name for
   `caps_raw`.
