@@ -191,19 +191,22 @@ with open(path, "w", encoding="utf-8") as handle:
     handle.write("\n")
 PY
 
-  # An example reaches support/ through relative symlinks, such as
-  # src/python/sima_examples. The package gets the files they point to, so it
-  # holds no links. A link that does not resolve stops the build, and so does a
-  # link loop, which find reports on stderr.
-  local broken_links
-  if ! broken_links="$(find -L "${ROOT_DIR}/examples" -type l)"; then
-    echo "ERROR: cannot follow the symlinks under examples/ (see above)." >&2
-    rm -rf "${stage_root}"
-    return 1
+  # An example reaches support/ through relative symlinks that git tracks, such
+  # as src/python/sima_examples. The package gets the files they point to, so it
+  # holds no links. A tracked link that does not resolve, or loops, stops the
+  # build; a link git does not track is a local file and is not packaged.
+  local tracked_links=() link broken_links=()
+  if git -C "${ROOT_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    mapfile -t tracked_links < <(
+      git -C "${ROOT_DIR}" ls-files -s examples | awk '$1 == "120000" {print $4}'
+    )
   fi
-  if [[ -n "${broken_links}" ]]; then
-    echo "ERROR: symlinks under examples/ do not resolve:" >&2
-    sed 's/^/  /' <<<"${broken_links}" >&2
+  for link in "${tracked_links[@]}"; do
+    [[ -e "${ROOT_DIR}/${link}" ]] || broken_links+=("${link}")
+  done
+  if [[ "${#broken_links[@]}" -gt 0 ]]; then
+    echo "ERROR: tracked symlinks under examples/ do not resolve or loop:" >&2
+    printf '  %s\n' "${broken_links[@]}" >&2
     rm -rf "${stage_root}"
     return 1
   fi
@@ -213,7 +216,7 @@ PY
     rel="${cpp_dir#"${ROOT_DIR}"/examples/}"
     target_dir="${stage_dir}/examples/$(dirname "${rel}")"
     mkdir -p "${target_dir}"
-    cp -a -L "${cpp_dir}" "${target_dir}/"
+    cp -a "${cpp_dir}" "${target_dir}/"
     rm -f "${target_dir}/cpp/CMakeLists.txt"
     rm -rf "${target_dir}/cpp/pre-built"
   done < <(
@@ -254,7 +257,7 @@ PY
     mkdir -p "${target_dir}"
     cp "${src_file}" "${target_dir}/"
   done < <(
-    find -L "${ROOT_DIR}/examples" -type f \
+    find "${ROOT_DIR}/examples" -type f \
       ! -path '*/tests/*' \
       ! -path '*/__pycache__/*' \
       ! -name '*.pyc' \
@@ -270,6 +273,16 @@ PY
          -o -path '*/setup.sh' \
       \) 2>/dev/null | sort
   )
+
+  # Each tracked link under an example's src/ becomes the files it points to,
+  # and any other link left in the stage, which git does not track, is dropped.
+  for link in "${tracked_links[@]}"; do
+    [[ "${link}" == examples/*/src/* ]] || continue
+    rm -rf "${stage_dir:?}/${link}"
+    mkdir -p "$(dirname "${stage_dir}/${link}")"
+    cp -a -L "${ROOT_DIR}/${link}" "${stage_dir}/${link}"
+  done
+  find "${stage_dir}" -type l -delete
 
   # Python examples without a sima_examples link find support/python in a
   # folder above them. The C++ executables are built with support/cpp, shipped

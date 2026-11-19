@@ -53,6 +53,9 @@ with tarfile.open(archive, "r:gz") as bundle:
             # build.sh copies the files an example's links point to, such as its
             # sima_examples/ folder, so a packaged link means that copy was skipped.
             fail(f"runtime archive contains a link: {member.name}")
+        if member.name.endswith("/src/python/sima_examples") and not member.isdir():
+            # A clone with core.symlinks=false holds the link as a text file.
+            fail(f"runtime archive holds {member.name} as a file, not a folder")
         if path.name == "neat-core.json" and member.name != core_metadata_name:
             fail(f"Core metadata is outside {core_metadata_name}: {member.name}")
         if path.name == "neat-apps.json" and member.name != apps_metadata_name:

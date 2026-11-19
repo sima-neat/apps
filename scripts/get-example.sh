@@ -214,6 +214,15 @@ if [[ -n "${broken_links}" ]]; then
   sed "s#^${TMP_DIR}/${ARCHIVE_ROOT}/#  #" <<<"${broken_links}" >&2
   exit 1
 fi
+while IFS= read -r link; do
+  case "$(realpath "${link}")" in
+    "${TMP_DIR}/${ARCHIVE_ROOT}"/*) ;;
+    *)
+      echo "The example's symlink ${link#"${TMP_DIR}/${ARCHIVE_ROOT}/"} points outside the archive." >&2
+      exit 1
+      ;;
+  esac
+done < <(find "${EXAMPLE_SRC}" -type l)
 cp -a -L "${EXAMPLE_SRC}" "${DEST_DIR}"
 
 # Python examples without a sima_examples link find support/python in a folder above

@@ -68,6 +68,10 @@ def example_problems(root: Path) -> tuple[list[str], int]:
             if PATH_CODE.search(main_text):
                 problems.append(f"{python_dir.relative_to(root)}/main.py has sys.path code; "
                                 "the link makes it unneeded")
+        elif entry.is_file():
+            problems.append(f"{relative}: git wrote the link as a text file. Clone with "
+                            "`git clone -c core.symlinks=true` (Windows: Developer Mode), or set "
+                            f"core.symlinks=true and run `git checkout -- {relative}`")
         elif entry.exists():
             problems.append(f"{relative} is a real folder, a copy of the shared helpers; "
                             f"replace it with: {command}")
@@ -148,3 +152,10 @@ def test_path_code_next_to_the_link_fails(tmp_path):
     root, python_dir = _tree(tmp_path)
     (python_dir / "main.py").write_text("import sys\nsys.path.insert(0, '/x')\n")
     assert any("sys.path code" in p for p in _all_problems(root))
+
+
+def test_a_link_written_as_a_text_file_fails(tmp_path):
+    root, python_dir = _tree(tmp_path)
+    (python_dir / "sima_examples").unlink()
+    (python_dir / "sima_examples").write_text("../../../../../support/python/sima_examples")
+    assert any("git wrote the link as a text file" in p for p in _all_problems(root))
