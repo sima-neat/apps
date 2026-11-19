@@ -28,6 +28,15 @@ moving a stage to another processor. Where buffers live between stages is descri
 - Telemetry comes from Sentinel on the DevKit and covers the whole board.
   Quote power only when `status` is `ok` and the metric reports samples.
 
+## Keep the model busy
+
+A loop that calls `run(...)` once per frame waits for that frame's whole
+latency, so its rate is one over the latency. `Model::benchmark` reports both
+numbers: when its throughput is well above one over its latency, the model's
+stages can overlap. `push(...)` a few frames ahead and `pull(...)` the results,
+which return in push order, and measure the rate for one to four frames in
+flight. `examples/depth-estimation/stereo-depth-estimator` keeps three.
+
 ## Tune memory and buffering
 
 - Feed camera and decoder buffers straight into the model so they stay

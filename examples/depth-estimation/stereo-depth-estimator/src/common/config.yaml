@@ -1,0 +1,40 @@
+model:
+  # See Prepare the Model in the README.
+  path: models/lightstereo_s/w16a16/lightstereo_s_w16a16_mpk.tar.gz
+
+source:
+  type: rtsp                 # rtsp, usb or mipi. Only the matching section below is read.
+
+  rtsp:
+    left_url: <left-rtsp-url>    # The left camera: rtsp://<rtsp-source-ip>:<port>/<stream-name>
+    right_url: <right-rtsp-url>  # The right camera, with the same size, rate and codec.
+    codec: h264              # h264, h265 or mjpeg.
+    tcp: true                # RTSP over TCP.
+    latency_ms: 100          # Receive latency.
+    fps: 0                   # 0 detects it from the left stream. Set it for MJPEG streams that don't report one.
+
+  usb:
+    left_camera: ""          # Camera IDs from pyneat.usb_camera_ids().
+    right_camera: ""
+    width: 1280              # One MJPEG mode both cameras have, exactly: width, height and fps.
+    height: 720
+    fps: 30
+
+  mipi:
+    left_camera: ""          # libcamera camera names from `cam -l`.
+    right_camera: ""
+    width: 1920              # A mode both sensors support: width, height and fps.
+    height: 1080
+    fps: 30
+
+inference:
+  frames: 0                  # Frame pair limit. 0 means run continuously.
+
+output:
+  max_disparity: 96          # Disparity, in pixels of the model's view, drawn as the brightest color.
+  save_dir: ""               # Optional directory for depth maps.
+  save_every: 0              # Save every Nth depth map. 0 disables saving.
+  insight:
+    host: <insight-host-ip>  # Host running the Insight receiver/viewer.
+    video_port: 9000         # UDP port of the left camera. The right camera and the depth map use the next two.
+    bitrate_kbps: 8000       # H.264 bitrate of the depth map, and of MIPI camera video.
