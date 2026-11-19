@@ -69,6 +69,12 @@ A graph that starts at a source group produces its own frames: build it with
   for frames that never arrive.
 - **Two models in sequence:** connect the first model's output graph to the second model's
   input. Check each model's `input_specs()` so the formats match.
+- **Two models with host work between them:** pull the first model's result from its `Run`,
+  compute on the host, and push the result to the second model's `Model::Runner`. Build that
+  runner with `model.build(seed)`, where `seed` holds tensors shaped by `input_specs()`. Copy
+  the frame fields, such as `frame_id`, `stream_id`, and `pts_ns`, from the pulled `Sample` to
+  the pushed one, so each result still names its frame. Pull from the first model and push to
+  the second in one thread, and pull the second model's results in another.
 
 ## Build and drive the run
 
