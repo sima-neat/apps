@@ -1,0 +1,19 @@
+model:                       # The four packages of the EdgeTAM model, as the model download extracts them.
+  image_encoder: models/edgetam/w16a16_w8a16_w16a16_w8a8/edgetam_w16a16_w8a16_w16a16_w8a8_image_encoder_mpk.tar.gz        # Runs on every frame.
+  memory_attention: models/edgetam/w16a16_w8a16_w16a16_w8a8/edgetam_w16a16_w8a16_w16a16_w8a8_memory_attention_mpk.tar.gz  # Recalls the earlier frames, on every frame after the first.
+  mask_decoder: models/edgetam/w16a16_w8a16_w16a16_w8a8/edgetam_w16a16_w8a16_w16a16_w8a8_mask_decoder_mpk.tar.gz          # Returns the object's mask.
+  memory_encoder: models/edgetam/w16a16_w8a16_w16a16_w8a8/edgetam_w16a16_w8a16_w16a16_w8a8_memory_encoder_mpk.tar.gz      # Remembers the frame and its mask.
+
+source:
+  video_path: assets/datasets/tum-rgbd/freiburg1-desk.mp4  # Video file to read.
+
+prompt:                      # Where the object is on the first frame. The application follows the object under this point.
+  x: 0.87                    # From the left edge, as a fraction of the frame width, 0 to 1.
+  y: 0.38                    # From the top edge, as a fraction of the frame height, 0 to 1.
+
+inference:
+  frames: 150                # Frame limit. 0 means the whole video.
+
+output:
+  dir: sandbox/edgetam-video-object-segmenter  # Folder for results.json and the overlay images.
+  save_every: 10             # Save every Nth frame with the mask drawn on it. 0 saves no images.
