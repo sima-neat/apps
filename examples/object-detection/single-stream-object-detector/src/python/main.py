@@ -12,27 +12,13 @@ from pathlib import Path
 
 import pyneat
 
-DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
-
-# The helpers the examples share live in <apps root>/support/python.
-SUPPORT_DIR = next(
-    (
-        path / "support" / "python"
-        for path in Path(__file__).resolve().parents
-        if (path / "support" / "python" / "sima_examples").is_dir()
-    ),
-    None,
-)
-if SUPPORT_DIR is None:
-    raise SystemExit(
-        "support/python not found above this example; reinstall the Apps package"
-    )
-sys.path.insert(0, str(SUPPORT_DIR))
-
+# sima_examples is a link to the helpers the examples share, in <apps root>/support/python.
 from sima_examples import detection_egress
 from sima_examples.config import Config
 from sima_examples.labels import load_labels
 from sima_examples.rtsp_probe import probe_rtsp_stream_info
+
+DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
 
 RTSP_CODECS = {
     "h264": pyneat.RtspCodec.H264,

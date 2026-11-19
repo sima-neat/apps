@@ -191,12 +191,29 @@ with open(path, "w", encoding="utf-8") as handle:
     handle.write("\n")
 PY
 
+  # An example reaches support/ through relative symlinks, such as
+  # src/python/sima_examples. The package gets the files they point to, so it
+  # holds no links. A link that does not resolve stops the build, and so does a
+  # link loop, which find reports on stderr.
+  local broken_links
+  if ! broken_links="$(find -L "${ROOT_DIR}/examples" -type l)"; then
+    echo "ERROR: cannot follow the symlinks under examples/ (see above)." >&2
+    rm -rf "${stage_root}"
+    return 1
+  fi
+  if [[ -n "${broken_links}" ]]; then
+    echo "ERROR: symlinks under examples/ do not resolve:" >&2
+    sed 's/^/  /' <<<"${broken_links}" >&2
+    rm -rf "${stage_root}"
+    return 1
+  fi
+
   while IFS= read -r cpp_dir; do
     local rel target_dir
     rel="${cpp_dir#"${ROOT_DIR}"/examples/}"
     target_dir="${stage_dir}/examples/$(dirname "${rel}")"
     mkdir -p "${target_dir}"
-    cp -a "${cpp_dir}" "${target_dir}/"
+    cp -a -L "${cpp_dir}" "${target_dir}/"
     rm -f "${target_dir}/cpp/CMakeLists.txt"
     rm -rf "${target_dir}/cpp/pre-built"
   done < <(
@@ -237,7 +254,7 @@ PY
     mkdir -p "${target_dir}"
     cp "${src_file}" "${target_dir}/"
   done < <(
-    find "${ROOT_DIR}/examples" -type f \
+    find -L "${ROOT_DIR}/examples" -type f \
       ! -path '*/tests/*' \
       ! -path '*/__pycache__/*' \
       ! -name '*.pyc' \
@@ -254,9 +271,9 @@ PY
       \) 2>/dev/null | sort
   )
 
-  # Python examples import the helpers they share from support/python. The C++
-  # executables are built with support/cpp, shipped as reference source without
-  # its build and test files.
+  # Python examples without a sima_examples link find support/python in a
+  # folder above them. The C++ executables are built with support/cpp, shipped
+  # as reference source without its build and test files.
   mkdir -p "${stage_dir}/support/cpp"
   cp -a "${ROOT_DIR}/support/README.md" "${stage_dir}/support/"
   cp -a "${ROOT_DIR}/support/python" "${stage_dir}/support/"

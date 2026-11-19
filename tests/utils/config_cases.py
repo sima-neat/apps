@@ -59,13 +59,17 @@ def _evict_shadowing_packages(python_dir: Path) -> None:
         for entry in python_dir.iterdir()
         if entry.name != "main.py" and not entry.name.startswith(("_", "."))
     }
-    root = python_dir.resolve()
+    # A symlinked package, such as sima_examples -> support/python/sima_examples, resolves
+    # outside the example, so its target counts as the example's own as well.
+    roots = [python_dir.resolve()] + [
+        entry.resolve() for entry in python_dir.iterdir() if entry.is_symlink()
+    ]
     for name, module in list(sys.modules.items()):
         if name.split(".", 1)[0] not in local_names:
             continue
         origins = [getattr(module, "__file__", None)] + list(getattr(module, "__path__", []) or [])
         origins = [Path(origin).resolve() for origin in origins if origin]
-        if origins and not any(origin.is_relative_to(root) for origin in origins):
+        if origins and not any(origin.is_relative_to(root) for origin in origins for root in roots):
             del sys.modules[name]
 
 

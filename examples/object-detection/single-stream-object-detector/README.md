@@ -146,7 +146,8 @@ Insight shows the video with a box and label on every detected object.
 - Python source: `src/python/main.py`
 - Shared config: `src/common/config.yaml`
 - Class labels: `src/common/coco_label.txt`
-- Helpers the examples share: `support/python/sima_examples/` and, as C++ reference source, `support/cpp/sima_examples/`, at the root of the installed bundle
+- Python helpers the examples share: `src/python/sima_examples/`, a copy of `support/python/sima_examples/` that `main.py` imports
+- C++ helpers the examples share, as reference source: `support/cpp/sima_examples/` at the root of the installed bundle
 
 The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
 

@@ -49,6 +49,10 @@ with tarfile.open(archive, "r:gz") as bundle:
             fail(f"runtime archive contains an unsafe path: {member.name}")
         if member.name != root and not member.name.startswith(prefix):
             fail(f"runtime archive member is outside {root}/: {member.name}")
+        if member.issym() or member.islnk():
+            # build.sh copies the files an example's links point to, such as its
+            # sima_examples/ folder, so a packaged link means that copy was skipped.
+            fail(f"runtime archive contains a link: {member.name}")
         if path.name == "neat-core.json" and member.name != core_metadata_name:
             fail(f"Core metadata is outside {core_metadata_name}: {member.name}")
         if path.name == "neat-apps.json" and member.name != apps_metadata_name:

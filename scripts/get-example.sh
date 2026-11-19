@@ -195,16 +195,36 @@ if ! grep -qxF "${ARCHIVE_EXAMPLE_PATH}/" "${TMP_DIR}/archive-list.txt"; then
 fi
 
 tar -xzf "${TMP_ARCHIVE}" -C "${TMP_DIR}" "${ARCHIVE_EXAMPLE_PATH}"
-cp -a "${TMP_DIR}/${ARCHIVE_ROOT}/${EXAMPLE_PATH}" "${DEST_DIR}"
-
-# Python examples import the helpers they share from support/python, which main.py finds in
-# a folder above itself. support/cpp is the source the C++ executables were built with.
 for support_dir in python cpp; do
   ARCHIVE_SUPPORT_PATH="${ARCHIVE_ROOT}/support/${support_dir}"
   if grep -qxF "${ARCHIVE_SUPPORT_PATH}/" "${TMP_DIR}/archive-list.txt"; then
     tar -xzf "${TMP_ARCHIVE}" -C "${TMP_DIR}" "${ARCHIVE_SUPPORT_PATH}"
+  fi
+done
+
+# An example reaches support/ through relative symlinks, such as src/python/sima_examples, so
+# the copy takes the files they point to and the example folder holds no links.
+EXAMPLE_SRC="${TMP_DIR}/${ARCHIVE_ROOT}/${EXAMPLE_PATH}"
+if ! broken_links="$(find -L "${EXAMPLE_SRC}" -type l)"; then
+  echo "Cannot follow the example's symlinks (see above)." >&2
+  exit 1
+fi
+if [[ -n "${broken_links}" ]]; then
+  echo "The example's symlinks do not resolve inside the archive:" >&2
+  sed "s#^${TMP_DIR}/${ARCHIVE_ROOT}/#  #" <<<"${broken_links}" >&2
+  exit 1
+fi
+cp -a -L "${EXAMPLE_SRC}" "${DEST_DIR}"
+
+# Python examples without a sima_examples link find support/python in a folder above
+# main.py. support/cpp is the source the C++ executables were built with.
+for support_dir in python cpp; do
+  if [[ "${support_dir}" == python && -L "${EXAMPLE_SRC}/src/python/sima_examples" ]]; then
+    continue # The example already holds its copy in src/python/sima_examples.
+  fi
+  if [[ -d "${TMP_DIR}/${ARCHIVE_ROOT}/support/${support_dir}" ]]; then
     mkdir -p "${DEST_DIR}/support"
-    cp -a "${TMP_DIR}/${ARCHIVE_SUPPORT_PATH}" "${DEST_DIR}/support/"
+    cp -a "${TMP_DIR}/${ARCHIVE_ROOT}/support/${support_dir}" "${DEST_DIR}/support/"
   fi
 done
 ARCHIVE_SUPPORT_README="${ARCHIVE_ROOT}/support/README.md"
