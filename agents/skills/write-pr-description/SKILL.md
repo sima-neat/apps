@@ -1,6 +1,6 @@
 ---
 name: apps-write-pr-description
-description: Write or update the description of a sima-neat/apps pull request. Use when opening a pull request, after pushing commits that change what an existing description says, or when asked to describe a change.
+description: Write or update a sima-neat/apps pull request description. Use when opening a pull request, and after pushing commits that change what an existing description says.
 ---
 
 # Write a Pull Request Description
@@ -70,8 +70,8 @@ and why, and every test and number in it traces to a file or a run.
 
 ## Skill updates
 
-<The customer skill files changed and the lesson each teaches, or `Skill updates: none` with
-the reason.>
+<The customer skill files changed and the lesson each teaches, as `agents/rules.md`
+"Customer skills" defines, or `Skill updates: none` with the reason.>
 ```
 
 ## Rules

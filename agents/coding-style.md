@@ -6,16 +6,17 @@ is the reference: read its `main.py` and `main.cpp` before writing or reviewing 
 
 ## Flow
 
-- `main` reads top to bottom as the application: parse the command line, load the config,
+- `main` reads top to bottom as the Neat flow: parse the command line, load the config,
   create the `Model`, build the graph, build the run, process the outputs, close the run.
 - Each step is one line or one call to a function named for what it does. A reader understands
   the application from `main` without opening the functions.
 - The C++ and Python entrypoints have the same functions, with the same names, in the same
-  order. In C++, `main` only reports errors and calls `run_app`; `run_app` is the function
+  order. In C++, `main` only reports errors and calls `run_app`. `run_app` is the function
   these rules call `main`.
 - Use the simplest implementation that meets the requirement. Each extra helper,
   abstraction, dependency, process, and compatibility path needs a reason a reader can see.
 - Python entrypoints import the Neat Library at the top: `import pyneat`.
+- Placement of code outside `main` follows `agents/rules.md` "Where code goes".
 
 ## Graph topology
 
@@ -32,7 +33,7 @@ is the reference: read its `main.py` and `main.cpp` before writing or reviewing 
 ## Names
 
 - A function name says what the function returns or does. A noun names a value or an option
-  struct (`video_options`); a verb names work that takes time or touches a device
+  struct (`video_options`). A verb names work that takes time or touches a device
   (`send_detections`, `probe_rtsp_stream_info`).
 - A variable name states its meaning and, when it has one, its unit: `latency_ms`,
   `fps_by_url`, `metadata_senders`.
@@ -41,30 +42,32 @@ is the reference: read its `main.py` and `main.cpp` before writing or reviewing 
 
 ## Configuration
 
-- `config.yaml` owns every value a customer may change. The code has no default for a config
-  value; a missing key is an error that names the key.
+- `config.yaml` owns every value a customer may change, with its key name from
+  `agents/rules.md` "Config keys". The code reads every key as required, and a missing key is
+  an error that names it.
 - Each key carries a short comment saying what it does. Values are scalars or lists of
   scalars, which the C++ and Python readers parse the same way.
 - Read the config once, at the start, into one typed `AppConfig`, and pass that object.
 - Read it with `sima_examples.config.Config` in Python and `sima_examples::Config` in
   C++, and call `reject_unread_keys()` after the last read, so an old or misspelled key fails
   at startup.
-- A value the same in every shipped profile is not a setting: write it in the code where the
-  option is set.
+- A value a customer has no reason to change, such as an internal buffer count that is the
+  same in every shipped profile, is not a setting: write it in the code where the option is
+  set.
 
 ## Functions and state
 
 - Each function does one job. A function described with "and" becomes two functions.
 - Give a behavior that a boolean parameter would switch its own function.
-- Keep state in `main` and pass it down. Use no globals except the C++ stop flag a signal
-  handler sets.
+- Keep state in `main` and pass it down. The one global is the C++ stop flag a signal handler
+  sets.
 - Delete every function, option, branch, and config key that no entry point reaches.
 
 ## Errors, output, and comments
 
 - An error is one line that names the cause and the key or value involved:
   `input.codec must be h264 or h265`. Handle the failures a customer following the README can
-  hit; leave hardening against concurrent runs or hostile file systems to platform tooling.
+  hit. Platform tooling owns hardening against concurrent runs or hostile file systems.
 - A failure the application tolerates by design, such as a nonblocking send that drops a
   message, carries a one-line comment saying so, and the application reports the count when
   it stops.

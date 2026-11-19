@@ -20,7 +20,7 @@ The graph answers one question, written as its first line: "How does a frame mov
 
 ## Characters and layout
 
-- Put the graph in a fenced code block with no language.
+- Put the graph in a fenced `text` code block.
 - Boxes use `┌ ┐ └ ┘ ─ │`, lines use `─ │`, joins use `┬ ┴ ├ ┤ ┼`, and arrowheads `► ◄ ▼ ▲`
   touch the box they point into. Use spaces only, no tabs, emoji, or ASCII `+-|` boxes.
 - Keep the graph at most 100 columns wide. Run top to bottom, inputs first.
@@ -33,7 +33,7 @@ graph's names.
 
 ## Example
 
-```
+```text
 How does a frame move through high-density-multi-stream-object-detector?
 
 ╭┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╮

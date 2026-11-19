@@ -24,7 +24,7 @@ TYPE_CHECKS = {
 }
 
 # Examples that still use their own key names. Remove an example from this list in the pull
-# request that converts it (#763).
+# request that converts it (#770).
 PENDING_EXAMPLES = {
     "depth-estimator",
     "detection-to-vlm-assistant",

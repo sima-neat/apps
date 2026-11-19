@@ -1,12 +1,12 @@
 """Repository contract: e2e suites assert usable output, not merely present output.
 
-`AGENTS.md` requires end-to-end tests to prove useful output, and
-`tests/utils/output_assertions.py` (Python) with `support/cpp/sima_examples/testing/test_process.h`
-(C++) are the helpers that do so: saved frames must decode, have plausible
-dimensions, and, for a stream, advance. A suite that only counts files and checks
-`st_size > 0` waves through a truncated frame and a pipeline frozen on its first
-frame, which is what every enabled suite used to do. This guard keeps a new or
-rewritten suite from going back to that.
+`agents/skills/write-example-tests/SKILL.md` requires end-to-end tests to prove useful
+output, and `tests/utils/output_assertions.py` (Python) with
+`support/cpp/sima_examples/testing/test_process.h` (C++) are the helpers that do so:
+saved frames must decode, have plausible dimensions, and, for a stream, advance. A suite
+that only counts files and checks `st_size > 0` waves through a truncated frame and a
+pipeline frozen on its first frame, which is what every enabled suite used to do. This
+guard keeps a new or rewritten suite from going back to that.
 
 It runs against the source checkout with the other repository contract tests.
 """
