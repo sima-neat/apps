@@ -287,7 +287,10 @@ def send_detections(
                 raise RuntimeError(f"detections output closed: {run.last_error()}")
             continue
 
-        index = int(sample.stream_id.removeprefix("stream"))
+        # With one source, Core names the sample after the decoder instead of the stream.
+        index = 0
+        if len(metadata_senders) > 1:
+            index = int(sample.stream_id.removeprefix("stream"))
         payload = detection_egress.serialize(
             decode_boxes(sample, cfg),
             labels,

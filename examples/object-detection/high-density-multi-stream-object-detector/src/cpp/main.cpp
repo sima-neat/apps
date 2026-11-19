@@ -312,7 +312,11 @@ void send_detections(neat::Run& run, std::vector<neat::MetadataSender>& metadata
       continue;
     }
 
-    const int index = std::stoi(sample.stream_id.substr(std::string("stream").size()));
+    // With one source, Core names the sample after the decoder instead of the stream.
+    int index = 0;
+    if (metadata_senders.size() > 1) {
+      index = std::stoi(sample.stream_id.substr(std::string("stream").size()));
+    }
     const std::string payload = sima_examples::detection_egress::serialize(
         decode_boxes(sample, cfg), labels, cfg.width, cfg.height, frame_metadata(sample, index));
     // A nonblocking send drops the message while the socket buffer is full; the drops are
