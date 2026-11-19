@@ -30,6 +30,7 @@ Every page follows [TEMPLATE.md](TEMPLATE.md).
 - [Input](inputs/input-node.md): `nodes::Input`, `InputOptions`, `InputMemoryPolicy`, `PayloadType`, pushing frames from the application
 - [RTSP inputs](inputs/rtsp.md): `RtspDecodedInput`, `RtspEncodedInput`, `RtspCodec`, reading an IP camera stream
 - [Cameras](inputs/cameras.md): `CameraInput`, `UsbCameraInput`, `HttpMjpegDecodedInput`, reading MIPI, USB and HTTP MJPEG cameras
+- [Decode and caps](inputs/decode-and-caps.md): `SimaDecode`, `CapsRaw`, `CapsMemory`, `VideoConvert`, `VideoScale`, `VideoRate`, decoding and fixing the frame format
 
 ## How C++ names map to Python names
 
