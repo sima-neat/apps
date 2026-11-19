@@ -5,6 +5,11 @@ description: Build or adapt Neat applications using public C++ or Python APIs. U
 
 # Neat Application Builder
 
+This skill is for anyone building an application on the Neat Library, in any
+project. It teaches the Neat APIs, not the conventions of a particular
+repository; follow the project's own rules for layout, configuration, and
+packaging.
+
 Build against the installed Neat Library's public APIs. Installed headers and
 bindings define the callable contract; matching packaged source and docs explain
 behavior. Verify the APIs affected by the task against that installation.
@@ -18,10 +23,9 @@ behavior. Verify the APIs affected by the task against that installation.
   input owner, and API family before committing to a topology.
 - For classic model execution or graph composition, read
   [Model, Graph, and Run](references/model-graph-run.md).
-- When choosing nodes, connecting graphs, or serving many streams with one
-  model, read [graph topologies](references/graph-topologies.md).
-- When adding or reading application settings, read
-  [application configuration](references/config.md).
+- When choosing inputs, combining them with models, building the graph and
+  its `Run`, or choosing the options each takes, read
+  [graph topologies](references/graph-topologies.md).
 - For LLM, VLM, ASR, or HTTP model serving, read
   [GenAI APIs](references/genai.md).
 - When locating an unfamiliar API, use the
@@ -69,7 +73,3 @@ documentation. Applications on a PCIe host use the `simaai::neat::pcie` and
 `pyneatpcie` APIs and the `neat-pcie-application-builder` skill. Use the
 corresponding installed skill when available. This skill owns application code
 and application-side APIs.
-
-For Apps contributions, follow the repository's `AGENTS.md` and
-`CONTRIBUTING.md` for packaging, build/test, and publication workflows. Standalone
-applications follow their own project's requirements.

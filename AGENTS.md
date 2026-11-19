@@ -44,7 +44,10 @@ anything not run or observed as `not verified`.
 
 `skills/` holds the skills that sima-cli installs for customers' agents.
 `neat-application-builder` covers building an application, and `neat-application-optimizer`
-covers making it fast. Update them in the pull request that teaches the lesson. Keep routing in
+covers making it fast. Customers use them in their own projects, so they teach the Neat APIs
+only: inputs, graph topologies, runs, and options. This repository's conventions, such as the
+config key names, the `support/` layout, and the test rules, stay in `agents/` and
+`CONTRIBUTING.md` and never go into `skills/`. Update them in the pull request that teaches the lesson. Keep routing in
 `SKILL.md` and details in `references/`, and point to Core docs, installed headers, and examples
 instead of copying them. Do not bump `version` in `playbook.yml`. The pull request description
 lists the changes under `Skill updates`, or writes `Skill updates: none` with the reason.

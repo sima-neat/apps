@@ -34,9 +34,6 @@ Change these only after a measurement points at them, one at a time:
 | `GraphOptions::advanced_execution.internal_queue_depth` | Frames queued between the model's stages |
 | `SimaDecodeOptions::num_buffers` | Decoded frames each stream's decoder keeps |
 
-`examples/object-detection/high-density-multi-stream-object-detector` ships measured values
-for 20, 30, and 60 streams in its three config files.
-
 ## Pitfalls
 
 - A source sending fewer frames per second than the target caps the result; check the source
