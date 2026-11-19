@@ -5,8 +5,11 @@ held-out normal and defect images."""
 import json
 import os
 import re
+import socket
+import struct
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import numpy as np
@@ -24,6 +27,7 @@ HELD_OUT_NORMAL_DIR = APPS_ROOT / "assets" / "datasets" / "patchcore" / "held_ou
 DEMO_VIDEO = APPS_ROOT / "assets" / "datasets" / "patchcore" / "video" / "test.mp4"
 E2E_INSIGHT_HOST = "127.0.0.1"
 METADATA_PORT = int(os.environ.get("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", "") or 9100)
+VIDEO_PORT = int(os.environ.get("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", "") or 9000)
 FRAME_RE = re.compile(r"^frame=(?P<frame>\d+): score=(?P<score>[-\d.]+) threshold=(?P<threshold>[-\d.]+) "
                       r"verdict=(?P<verdict>\w+)", re.MULTILINE)
 NOMINAL_IMAGE = "plain_0.png"
@@ -81,12 +85,65 @@ def _live_config(e2e_config_writer, tmp_output_dir, source: dict, frames: int, s
                 "save_every": save_every,
                 "insight": {
                     "host": E2E_INSIGHT_HOST,
-                    "video_port": int(os.environ.get("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", "") or 9000),
+                    "video_port": VIDEO_PORT,
                     "metadata_port": METADATA_PORT,
                 },
             },
             "runtime": {"frames": frames},
         }
+    )
+
+
+class _VideoRtpTimestamps:
+    """Collects the RTP timestamp of every packet the app sends to Insight's video port.
+
+    A thread reads while the app runs, so a burst of video packets cannot overflow the
+    socket buffer before the test looks at them.
+    """
+
+    def __init__(self, port: int) -> None:
+        self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._sock.bind((E2E_INSIGHT_HOST, port))
+        self._sock.settimeout(0.2)
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._read, daemon=True)
+        self.timestamps: set[int] = set()
+
+    def __enter__(self) -> "_VideoRtpTimestamps":
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self._stop.set()
+        self._thread.join()
+        self._sock.close()
+
+    def _read(self) -> None:
+        while not self._stop.is_set():
+            try:
+                packet = self._sock.recv(65536)
+            except socket.timeout:
+                continue
+            if len(packet) >= 12 and packet[0] >> 6 == 2:
+                self.timestamps.add(struct.unpack("!I", packet[4:8])[0])
+
+
+def _assert_verdicts_pair_with_video(messages, rtp_timestamps: set[int]) -> None:
+    """Insight draws a verdict on the video frame whose RTP timestamp is within 90 ticks
+    (1 ms) of the verdict's timestamp_ms x 90. Allow 5% unpaired for a lost UDP packet."""
+    frames = sorted(rtp_timestamps)
+    assert frames, "no video RTP packets reached the video port"
+    assert messages, "no verdict metadata to pair with the video"
+
+    def nearest(timestamp_ms: int) -> int:
+        target = (timestamp_ms * 90) & 0xFFFFFFFF
+        return min(min((f - target) & 0xFFFFFFFF, (target - f) & 0xFFFFFFFF) for f in frames)
+
+    unpaired = [m.frame_id for m in messages if nearest(m.timestamp_ms) > 90]
+    assert len(unpaired) * 20 <= len(messages), (
+        f"{len(unpaired)} of {len(messages)} verdicts have no video frame within 1 ms "
+        f"(frame ids {unpaired[:10]}), so Insight cannot draw them on their frames"
     )
 
 
@@ -457,7 +514,8 @@ class TestE2E:
         timeout_s = test_timeout_ms / 1000
         _run_main(["--calibrate", "--config", str(config_path)], timeout_s)
         with MetadataJsonListener(E2E_INSIGHT_HOST, METADATA_PORT, num_ports=1,
-                                  metadata_type="classification", data_array_key="top_classes") as listener:
+                                  metadata_type="classification", data_array_key="top_classes") as listener, \
+                _VideoRtpTimestamps(VIDEO_PORT) as video:
             result = _run_main(["--config", str(config_path)], timeout_s)
             metadata = listener.drain_pending()
 
@@ -468,6 +526,7 @@ class TestE2E:
         assert len(sent) >= 100, f"expected verdict metadata for ~120 frames, got {len(sent)}: {metadata.error}"
         mismatched = [f for f, v in sent.items() if v != verdicts.get(f)]
         assert not mismatched, f"metadata verdicts differ from printed verdicts for frames {mismatched[:10]}"
+        _assert_verdicts_pair_with_video(metadata.messages, video.timestamps)
         normal_frames = [f for f in range(1, 51) if verdicts[f] != "normal"]
         defect_frames = [f for f in range(71, 121) if verdicts[f] != "ANOMALOUS"]
         assert not normal_frames, f"plain frames flagged ANOMALOUS: {normal_frames}"
@@ -483,16 +542,25 @@ class TestE2E:
         e2e_config_writer,
     ):
         """rtsp runs the model inside the graph, scores every joined frame, streams to
-        Insight, and saves snapshots at the stream's size."""
+        Insight with each verdict paired to its video frame, and saves snapshots at the
+        stream's size."""
         config_path = _live_config(e2e_config_writer, tmp_output_dir,
                                    {"type": "rtsp", "rtsp": {"url": rtsp_h264_url}},
                                    frames=60, save_every=20)
         timeout_s = test_timeout_ms / 1000
         _run_main(["--calibrate", "--config", str(config_path)], timeout_s)
-        result = _run_main(["--config", str(config_path)], timeout_s)
+        with MetadataJsonListener(E2E_INSIGHT_HOST, METADATA_PORT, num_ports=1,
+                                  metadata_type="classification", data_array_key="top_classes") as listener, \
+                _VideoRtpTimestamps(VIDEO_PORT) as video:
+            result = _run_main(["--config", str(config_path)], timeout_s)
+            metadata = listener.drain_pending()
 
         frames = [int(m["frame"]) for m in FRAME_RE.finditer(result.stdout)]
         assert frames == list(range(1, 61)), f"expected frames 1-60 with a verdict, got {frames[:5]}..."
+        assert len(metadata.messages) >= 50, (
+            f"expected verdict metadata for ~60 frames, got {len(metadata.messages)}: {metadata.error}"
+        )
+        _assert_verdicts_pair_with_video(metadata.messages, video.timestamps)
         import cv2
 
         snapshots = sorted(tmp_output_dir.glob("frame_*.jpg"))
