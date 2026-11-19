@@ -27,7 +27,8 @@ then `agents/coding-style.md` and `agents/rules.md`.
    done when every option was checked against the installed Core header, located as
    `skills/neat-application-builder/SKILL.md` step 1 says, and no assignment restates a
    default.
-5. Place every other piece of code as `agents/rules.md` "Where code goes" decides. Use a public
+5. Place every other piece of code as `agents/rules.md` "Where code goes" decides. In Python,
+   add the `src/python/sima_examples` link that rule describes and delete any `sys.path` code. Use a public
    Neat API where one does the job, such as `decode_bbox_tensor` for box payloads. The step is
    done when a search of the other examples, converted and pending, finds no copy of a helper
    this example keeps to itself.

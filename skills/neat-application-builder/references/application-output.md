@@ -66,6 +66,14 @@ setup belongs to the Insight documentation or the installed Insight skill.
   within 1 ms. A negative or missing `timestamp` sends the boxes without pairing.
 - `frame_id` is the `Sample`'s `frame_id` as a string. Insight reports it in its statistics.
 
+## Printed results
+
+- In C++, end the lines printed after `run.close()`, such as a frame count, with `std::endl`
+  or flush `std::cout`. With Core 0.6.2+develop.7e5317be on a Modalix DevKit, a graph with a
+  model and a `FromRaw` `VideoSender` exited with code 0 while its stdout was a pipe or a
+  file, and the text still in the stdout buffer never arrived. A terminal or `stdbuf -oL`
+  showed it.
+
 ## Oriented boxes
 
 Oriented-box decoders emit `BBOX_OBB_V1`, which the axis-aligned `SimaRender` rejects. Draw
