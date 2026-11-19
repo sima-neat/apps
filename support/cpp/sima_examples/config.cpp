@@ -1,4 +1,4 @@
-#include "support/cpp/config.h"
+#include "sima_examples/config.h"
 
 #include <yaml-cpp/yaml.h>
 

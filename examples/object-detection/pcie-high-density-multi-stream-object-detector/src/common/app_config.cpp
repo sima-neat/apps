@@ -14,7 +14,7 @@
 
 #include "app_config.h"
 
-#include "support/cpp/config.h"
+#include "sima_examples/config.h"
 
 #include <fstream>
 #include <sstream>

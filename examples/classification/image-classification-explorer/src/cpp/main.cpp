@@ -4,8 +4,8 @@
  * and generate a browsable HTML report plus JSON/CSV results.
  */
 #include "neat.h"
-#include "support/cpp/config.h"
-#include "support/cpp/example_utils.h"
+#include "sima_examples/config.h"
+#include "sima_examples/example_utils.h"
 
 #include <nlohmann/json.hpp>
 #include <opencv2/imgcodecs.hpp>

@@ -1,5 +1,5 @@
-#include "support/cpp/testing/source_cases.h"
-#include "support/cpp/testing/test_process.h"
+#include "sima_examples/testing/source_cases.h"
+#include "sima_examples/testing/test_process.h"
 
 #include <filesystem>
 #include <iostream>

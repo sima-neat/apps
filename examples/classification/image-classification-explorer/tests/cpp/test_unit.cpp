@@ -9,7 +9,7 @@
 // publication and ownership behaviour, which needs a completed run; positive
 // cases, since the matrix holds only failures; cross-language digests; argument
 // handling that is not expressible as a config file; and the packaged layout.
-#include "support/cpp/testing/test_process.h"
+#include "sima_examples/testing/test_process.h"
 
 #include <chrono>
 #include <cstdint>

@@ -1,4 +1,4 @@
-#include "support/cpp/example_utils.h"
+#include "sima_examples/example_utils.h"
 
 #include <neat.h>
 #include <opencv2/imgcodecs.hpp>

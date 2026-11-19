@@ -17,10 +17,10 @@
 #include "neat/node_groups.h"
 #include "neat/nodes.h"
 #include "examples/tracking/multi-stream-tracker/src/cpp/utils/tracker_api.cpp"
-#include "support/cpp/obj_detection_utils.h"
-#include "support/cpp/config.h"
-#include "support/cpp/example_utils.h"
-#include "support/cpp/rtsp_probe.h"
+#include "sima_examples/obj_detection_utils.h"
+#include "sima_examples/config.h"
+#include "sima_examples/example_utils.h"
+#include "sima_examples/rtsp_probe.h"
 
 #include <nodes/groups/VideoSender.h>
 #include <nodes/io/MetadataSender.h>

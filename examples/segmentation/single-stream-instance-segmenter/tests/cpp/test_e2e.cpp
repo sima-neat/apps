@@ -2,10 +2,10 @@
 // Runs every supported model family over every supported input path and checks the three
 // outputs the application advertises: annotated frames, Insight segmentation metadata,
 // and Insight video.
-#include "support/cpp/testing/metadata_json_listener.h"
-#include "support/cpp/testing/source_cases.h"
-#include "support/cpp/testing/test_config.h"
-#include "support/cpp/testing/test_process.h"
+#include "sima_examples/testing/metadata_json_listener.h"
+#include "sima_examples/testing/source_cases.h"
+#include "sima_examples/testing/test_config.h"
+#include "sima_examples/testing/test_process.h"
 
 #include <nlohmann/json.hpp>
 

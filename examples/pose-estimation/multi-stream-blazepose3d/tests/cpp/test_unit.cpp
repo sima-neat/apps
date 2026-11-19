@@ -1,6 +1,6 @@
 #include "examples/pose-estimation/multi-stream-blazepose3d/src/cpp/pose_logic.h"
-#include "support/cpp/testing/metadata_json_listener.h"
-#include "support/cpp/testing/test_process.h"
+#include "sima_examples/testing/metadata_json_listener.h"
+#include "sima_examples/testing/test_process.h"
 
 #include <chrono>
 #include <cmath>

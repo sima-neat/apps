@@ -16,7 +16,7 @@ from sima_examples.config import Config
 def config_file(tmp_path: Path, text: str) -> Config:
     path = tmp_path / "config.yaml"
     path.write_text(text, encoding="utf-8")
-    return Config(path)
+    return Config.load(path)
 
 
 def test_reads_dotted_keys_by_type(tmp_path):

@@ -1,7 +1,7 @@
 // E2E test for depth-estimator.
 // Runs the binary with a real model and test images, verifies output files.
-#include "support/cpp/testing/test_config.h"
-#include "support/cpp/testing/test_process.h"
+#include "sima_examples/testing/test_config.h"
+#include "sima_examples/testing/test_process.h"
 
 #include <filesystem>
 #include <iostream>

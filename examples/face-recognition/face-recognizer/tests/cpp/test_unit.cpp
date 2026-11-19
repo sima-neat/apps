@@ -6,8 +6,8 @@
 #include "../../src/cpp/main.cpp"
 #undef main
 
-#include "support/cpp/testing/test_checks.h"
-#include "support/cpp/testing/test_process.h"
+#include "sima_examples/testing/test_checks.h"
+#include "sima_examples/testing/test_process.h"
 
 #include <opencv2/imgproc.hpp>
 

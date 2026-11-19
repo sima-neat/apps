@@ -29,10 +29,10 @@
  * to Insight as H.264 video. output.save_dir writes the same frames as JPEGs.
  */
 #include "neat.h"
-#include "support/cpp/config.h"
-#include "support/cpp/example_utils.h"
-#include "support/cpp/rtsp_probe.h"
-#include "support/cpp/pull_status.h"
+#include "sima_examples/config.h"
+#include "sima_examples/example_utils.h"
+#include "sima_examples/rtsp_probe.h"
+#include "sima_examples/pull_status.h"
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>

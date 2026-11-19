@@ -1,7 +1,7 @@
 """Repository contract: e2e suites assert usable output, not merely present output.
 
 `AGENTS.md` requires end-to-end tests to prove useful output, and
-`tests/utils/output_assertions.py` (Python) with `support/cpp/testing/test_process.h`
+`tests/utils/output_assertions.py` (Python) with `support/cpp/sima_examples/testing/test_process.h`
 (C++) are the helpers that do so: saved frames must decode, have plausible
 dimensions, and, for a stream, advance. A suite that only counts files and checks
 `st_size > 0` waves through a truncated frame and a pipeline frozen on its first
@@ -60,5 +60,5 @@ def test_no_cpp_e2e_suite_asserts_on_file_size_alone():
     assert not offenders, (
         "these e2e suites call all_output_files_nonempty instead of proving the output "
         "decodes; use saved_frames_problem or streamed_frames_problem from "
-        f"support/cpp/testing/test_process.h: {[str(p) for p in offenders]}"
+        f"support/cpp/sima_examples/testing/test_process.h: {[str(p) for p in offenders]}"
     )

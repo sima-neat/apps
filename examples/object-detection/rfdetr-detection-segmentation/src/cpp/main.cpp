@@ -7,11 +7,11 @@
 // the detection boxes or the segmentation polygons.
 
 #include "neat.h"
-#include "support/cpp/config.h"
-#include "support/cpp/example_utils.h"
-#include "support/cpp/labels.h"
-#include "support/cpp/pull_status.h"
-#include "support/cpp/rtsp_probe.h"
+#include "sima_examples/config.h"
+#include "sima_examples/example_utils.h"
+#include "sima_examples/labels.h"
+#include "sima_examples/pull_status.h"
+#include "sima_examples/rtsp_probe.h"
 #include "utils/postprocess.h"
 
 #include <algorithm>
@@ -301,15 +301,8 @@ rfdetr::PostprocessOptions postprocess_options(const AppConfig& cfg) {
 
 // The stream's frame rate: the configured one, or a probe when input.fps is 0.
 int stream_fps(const AppConfig& cfg) {
-  if (cfg.fps > 0) {
-    return cfg.fps;
-  }
-  sima_examples::RtspProbeOptions probe;
-  probe.rtsp_tcp = cfg.rtsp_tcp;
-  sima_examples::RtspStreamInfo info;
-  sima_examples::probe_rtsp_stream_info(cfg.source, probe, info);
-  sima_examples::require(info.fps > 0, "failed to probe RTSP frame rate: " + cfg.source);
-  return info.fps;
+  return cfg.fps > 0 ? cfg.fps
+                     : sima_examples::probe_rtsp_stream_info(cfg.source, cfg.rtsp_tcp).fps;
 }
 
 // The values of a float32 output tensor, copied to host memory. On the DevKit, data_ptr()

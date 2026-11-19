@@ -10,15 +10,15 @@ Where each part of an application goes, and what every change keeps true.
 | Model, graph, run, and every other Neat API call | The example's entrypoint, `src/python/main.py` and `src/cpp/main.cpp` |
 | Settings a customer may change | The example's `src/common/config.yaml` |
 | Files the example's C++ and Python share | The example's `src/common/` |
-| Code without a Neat API call that two or more examples need | `support/python/sima_examples/` and `support/cpp/` |
+| Code without a Neat API call that two or more examples need | `support/python/sima_examples/` and `support/cpp/sima_examples/`, included as `sima_examples/<file>.h` |
 | Code only one example needs | That example's entrypoint, or its `src/python/utils/` and `src/cpp/utils/` when the code would bury the application flow. The C++ `utils/` files join the example's target through `target_sources` |
 | Model preparation | The Model Registry when it is reusable. Temporary preparation stays in the example's `src/common` as one development-only flow, never a packaged runtime dependency |
 | A helper every example would need around a Neat API call | Core: open a Core issue with a reproducer instead of adding it to Apps |
-| Test helpers | `tests/utils/` in Python and `support/cpp/testing/` in C++ |
+| Test helpers | `tests/utils/` in Python and `support/cpp/sima_examples/testing/` in C++ |
 
 - `support/` code mirrors across languages: a helper both languages need has the same file
-  name, function names, and behavior in each, such as `config.py` and `config.h`, and each
-  names the other in its header comment. A helper only one language needs, such as C++
+  name, function names, and behavior in each, such as `Config.load` in `config.py` and
+  `Config::load` in `config.h`, and each names the other in its header comment. A helper only one language needs, such as C++
   `pull_status.h`, exists only there.
 - A Python entrypoint finds `support/python` in a folder above itself, as the high-density
   example does. `build.sh` and `scripts/get-example.sh` ship that folder.

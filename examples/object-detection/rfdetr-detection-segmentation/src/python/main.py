@@ -117,7 +117,7 @@ def transformer_path(model_path: Path) -> Path:
 
 
 def load_app_config(path: Path) -> AppConfig:
-    config = Config(path)
+    config = Config.load(path)
     model_id = config.string("model.id")
     model_path = (
         path.resolve().parent / Path(config.string("model.path")).expanduser()
@@ -292,7 +292,9 @@ def postprocess_options(cfg: AppConfig) -> postprocess.PostprocessOptions:
 
 def stream_fps(cfg: AppConfig) -> int:
     """The stream's frame rate: the configured one, or a probe when input.fps is 0."""
-    return cfg.fps if cfg.fps > 0 else probe_rtsp_stream_info(cfg.source, cfg.rtsp_tcp).fps
+    return (
+        cfg.fps if cfg.fps > 0 else probe_rtsp_stream_info(cfg.source, cfg.rtsp_tcp).fps
+    )
 
 
 def transformer_sample(

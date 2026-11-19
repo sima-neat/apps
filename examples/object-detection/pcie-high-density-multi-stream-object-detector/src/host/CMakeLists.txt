@@ -28,7 +28,7 @@ set(APP_COMMON_DIR "${APP_ROOT}/src/common")
 add_executable(pcie-high-density-multi-stream-object-detector-host
   main.cpp
   "${APP_COMMON_DIR}/app_config.cpp"
-  "${APPS_ROOT}/support/cpp/config.cpp"
+  "${APPS_ROOT}/support/cpp/sima_examples/config.cpp"
 )
 
 target_link_libraries(pcie-high-density-multi-stream-object-detector-host
@@ -43,6 +43,7 @@ target_include_directories(pcie-high-density-multi-stream-object-detector-host
   PRIVATE
     "${APP_COMMON_DIR}"
     "${APPS_ROOT}"
+    "${APPS_ROOT}/support/cpp"
 )
 
 target_compile_definitions(pcie-high-density-multi-stream-object-detector-host

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "support/cpp/config.h"
+#include "sima_examples/config.h"
 
 #include <filesystem>
 #include <map>

@@ -6,8 +6,8 @@
  * Usage: face-detector [--config <path>]
  */
 #include "neat.h"
-#include "support/cpp/example_utils.h"
-#include "support/cpp/config.h"
+#include "sima_examples/example_utils.h"
+#include "sima_examples/config.h"
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>

@@ -1,6 +1,6 @@
 // Unit test for pcb-defect-detector: CLI handling and configuration validation.
 // Runs without a model, a board, or input images.
-#include "support/cpp/testing/test_process.h"
+#include "sima_examples/testing/test_process.h"
 
 #include <filesystem>
 #include <fstream>

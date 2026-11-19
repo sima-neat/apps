@@ -17,9 +17,9 @@
 #include "neat.h"
 #include "neat/node_groups.h"
 #include "neat/nodes.h"
-#include "support/cpp/obj_detection_utils.h"
-#include "support/cpp/config.h"
-#include "support/cpp/example_utils.h"
+#include "sima_examples/obj_detection_utils.h"
+#include "sima_examples/config.h"
+#include "sima_examples/example_utils.h"
 
 #include <nodes/groups/VideoSender.h>
 #include <nodes/io/MetadataSender.h>

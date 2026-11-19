@@ -4,11 +4,11 @@ if (NOT TARGET PkgConfig::YAML_CPP)
 endif()
 
 add_library(sima_neat_apps_support_runtime STATIC
-  asset_utils.cpp
-  config.cpp
-  example_utils.cpp
-  obj_detection_utils.cpp
-  rtsp_probe.cpp
+  sima_examples/asset_utils.cpp
+  sima_examples/config.cpp
+  sima_examples/example_utils.cpp
+  sima_examples/obj_detection_utils.cpp
+  sima_examples/rtsp_probe.cpp
 )
 add_library(SimaNeatApps::support_runtime ALIAS sima_neat_apps_support_runtime)
 
@@ -26,7 +26,7 @@ target_link_libraries(sima_neat_apps_support_runtime
 
 target_include_directories(sima_neat_apps_support_runtime
   PUBLIC
-    ${PROJECT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
 if (BUILD_TESTING)
@@ -40,12 +40,12 @@ if (BUILD_TESTING)
   endif()
 
   add_library(sima_neat_apps_support_testing STATIC
-    config.cpp
-    testing/metadata_json_listener.cpp
-    testing/source_cases.cpp
-    testing/test_checks.cpp
-    testing/test_config.cpp
-    testing/test_process.cpp
+    sima_examples/config.cpp
+    sima_examples/testing/metadata_json_listener.cpp
+    sima_examples/testing/source_cases.cpp
+    sima_examples/testing/test_checks.cpp
+    sima_examples/testing/test_config.cpp
+    sima_examples/testing/test_process.cpp
   )
   add_library(SimaNeatApps::support_testing ALIAS sima_neat_apps_support_testing)
   target_link_libraries(sima_neat_apps_support_testing
@@ -56,6 +56,6 @@ if (BUILD_TESTING)
   )
   target_include_directories(sima_neat_apps_support_testing
     PUBLIC
-      ${PROJECT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}
   )
 endif()

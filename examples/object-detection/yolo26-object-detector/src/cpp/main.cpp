@@ -5,7 +5,7 @@
  * Usage: yolo26-object-detector [--config <path>]
  */
 #include "neat.h"
-#include "support/cpp/config.h"
+#include "sima_examples/config.h"
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>

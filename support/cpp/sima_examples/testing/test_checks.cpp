@@ -1,4 +1,4 @@
-#include "support/cpp/testing/test_checks.h"
+#include "sima_examples/testing/test_checks.h"
 
 #include <fstream>
 #include <iostream>

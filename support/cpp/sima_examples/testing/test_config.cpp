@@ -1,4 +1,4 @@
-#include "support/cpp/testing/test_config.h"
+#include "sima_examples/testing/test_config.h"
 
 #include <cstdlib>
 #include <fstream>

@@ -16,12 +16,12 @@
 // its detection boxes go to Insight, one channel per stream.
 
 #include "neat.h"
-#include "support/cpp/config.h"
-#include "support/cpp/detection_egress.h"
-#include "support/cpp/example_utils.h"
-#include "support/cpp/labels.h"
-#include "support/cpp/pull_status.h"
-#include "support/cpp/rtsp_probe.h"
+#include "sima_examples/config.h"
+#include "sima_examples/detection_egress.h"
+#include "sima_examples/example_utils.h"
+#include "sima_examples/labels.h"
+#include "sima_examples/pull_status.h"
+#include "sima_examples/rtsp_probe.h"
 
 #include <csignal>
 #include <cstdint>
@@ -262,14 +262,8 @@ neat::RunOptions run_options(const AppConfig& cfg) {
 std::map<std::string, int> stream_fps(const AppConfig& cfg) {
   std::map<std::string, int> fps_by_url;
   for (const auto& url : std::set<std::string>(cfg.sources.begin(), cfg.sources.end())) {
-    sima_examples::RtspStreamInfo info;
-    if (cfg.fps == 0) {
-      sima_examples::RtspProbeOptions probe;
-      probe.rtsp_tcp = cfg.rtsp_tcp;
-      sima_examples::probe_rtsp_stream_info(url, probe, info);
-      sima_examples::require(info.fps > 0, "failed to probe RTSP frame rate: " + url);
-    }
-    fps_by_url[url] = cfg.fps > 0 ? cfg.fps : info.fps;
+    fps_by_url[url] =
+        cfg.fps > 0 ? cfg.fps : sima_examples::probe_rtsp_stream_info(url, cfg.rtsp_tcp).fps;
   }
   return fps_by_url;
 }

@@ -4,9 +4,9 @@
 // UDP port, then stops it the way an operator would and checks it shut down
 // cleanly. A local UDP listener stands in for Insight, so no running viewer is
 // required -- only an RTSP H.264 source (SIMANEAT_TEST_RTSP_H264_URL) and the model.
-#include "support/cpp/testing/metadata_json_listener.h"
-#include "support/cpp/testing/test_config.h"
-#include "support/cpp/testing/test_process.h"
+#include "sima_examples/testing/metadata_json_listener.h"
+#include "sima_examples/testing/test_config.h"
+#include "sima_examples/testing/test_process.h"
 
 #include <nlohmann/json.hpp>
 

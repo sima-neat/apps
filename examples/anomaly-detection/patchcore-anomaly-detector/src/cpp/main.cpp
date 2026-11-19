@@ -13,9 +13,9 @@
 #include <nodes/io/MetadataSender.h>
 #include "patchcore_memory_bank.h"
 #include "patchcore_overlay.h"
-#include "support/cpp/config.h"
-#include "support/cpp/example_utils.h"
-#include "support/cpp/rtsp_probe.h"
+#include "sima_examples/config.h"
+#include "sima_examples/example_utils.h"
+#include "sima_examples/rtsp_probe.h"
 #include <nlohmann/json.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>

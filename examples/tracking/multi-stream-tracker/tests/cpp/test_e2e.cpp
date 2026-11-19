@@ -1,8 +1,8 @@
 // E2E test for multi-stream-tracker.
 // Runs the RTSP pipeline and verifies sampled debug frames are written.
-#include "support/cpp/testing/metadata_json_listener.h"
-#include "support/cpp/testing/test_config.h"
-#include "support/cpp/testing/test_process.h"
+#include "sima_examples/testing/metadata_json_listener.h"
+#include "sima_examples/testing/test_config.h"
+#include "sima_examples/testing/test_process.h"
 
 #include "examples/tracking/multi-stream-tracker/src/cpp/utils/tracker_api.cpp"
 

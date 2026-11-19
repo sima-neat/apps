@@ -7,8 +7,8 @@
  * Usage: ssd-mobilenet-object-detector [--config <path>]
  */
 #include "neat.h"
-#include "support/cpp/config.h"
-#include "support/cpp/example_utils.h"
+#include "sima_examples/config.h"
+#include "sima_examples/example_utils.h"
 
 #include <nlohmann/json.hpp>
 

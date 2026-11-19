@@ -74,7 +74,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
 
 
 def load_app_config(path: Path) -> AppConfig:
-    config = Config(path)
+    config = Config.load(path)
     app_config = AppConfig(
         model_path=path.resolve().parent
         / Path(config.string("model.path")).expanduser(),
@@ -236,7 +236,9 @@ def stream_fps(cfg: AppConfig) -> dict[str, int]:
     """Each source URL's frame rate: the configured one, or a probe when input.fps is 0."""
     if cfg.fps > 0:
         return {url: cfg.fps for url in cfg.sources}
-    return {url: probe_rtsp_stream_info(url, cfg.rtsp_tcp).fps for url in set(cfg.sources)}
+    return {
+        url: probe_rtsp_stream_info(url, cfg.rtsp_tcp).fps for url in set(cfg.sources)
+    }
 
 
 def decode_boxes(sample: pyneat.Sample, cfg: AppConfig) -> list:

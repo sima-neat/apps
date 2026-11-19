@@ -22,17 +22,21 @@ def _flatten(mapping: dict[str, Any], prefix: str = "") -> dict[str, Any]:
 class Config:
     """The values of one config file. Every key the example reads must be present.
 
-    Mirrors `sima_examples::Config` in support/cpp/config.h.
+    Mirrors `sima_examples::Config` in support/cpp/sima_examples/config.h.
     """
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, values: dict[str, Any]) -> None:
+        self.path = path
+        self._values = values
+        self._unread = set(values)
+
+    @classmethod
+    def load(cls, path: Path) -> Config:
         with path.open(encoding="utf-8") as handle:
             raw = yaml.safe_load(handle) or {}
         if not isinstance(raw, dict):
             raise TypeError(f"{path} must hold a mapping")
-        self.path = path
-        self._values = _flatten(raw)
-        self._unread = set(self._values)
+        return cls(path, _flatten(raw))
 
     def _value(self, key: str, kind: type, kind_name: str) -> Any:
         if key not in self._values:

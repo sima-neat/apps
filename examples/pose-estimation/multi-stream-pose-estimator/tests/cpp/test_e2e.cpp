@@ -1,9 +1,9 @@
 // E2E test for multi-stream-pose-estimator.
 // Runs the RTSP pipeline and verifies sampled debug frames plus pose metadata.
-#include "support/cpp/testing/metadata_json_listener.h"
-#include "support/cpp/testing/source_cases.h"
-#include "support/cpp/testing/test_config.h"
-#include "support/cpp/testing/test_process.h"
+#include "sima_examples/testing/metadata_json_listener.h"
+#include "sima_examples/testing/source_cases.h"
+#include "sima_examples/testing/test_config.h"
+#include "sima_examples/testing/test_process.h"
 
 #include <nlohmann/json.hpp>
 

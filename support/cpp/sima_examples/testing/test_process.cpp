@@ -1,4 +1,4 @@
-#include "support/cpp/testing/test_process.h"
+#include "sima_examples/testing/test_process.h"
 
 #include <algorithm>
 #include <array>

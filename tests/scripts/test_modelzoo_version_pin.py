@@ -96,7 +96,7 @@ def test_apps_surfaces_do_not_call_modelzoo_without_a_version():
     scanned = [
         *_documented_surfaces(),
         APPS_ROOT / "scripts" / "download_models.sh",
-        APPS_ROOT / "support" / "cpp" / "asset_utils.cpp",
+        APPS_ROOT / "support" / "cpp" / "sima_examples" / "asset_utils.cpp",
     ]
     offenders = [
         str(path.relative_to(APPS_ROOT))
