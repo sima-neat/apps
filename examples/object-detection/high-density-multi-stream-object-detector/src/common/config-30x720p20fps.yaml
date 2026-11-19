@@ -36,8 +36,8 @@ input:
     - <rtsp-url-29>
     - <rtsp-url-30>
   codec: h264                   # h264 or h265, for every stream.
-  width: 1280                   # Frame size of every stream, in pixels.
-  height: 720
+  width: 0                      # 0 reads each stream's frame size with a probe. Set a size
+  height: 0                     # only for a stream that does not report one.
   fps: 20                       # Frames per second of every stream.
   rtsp:
     tcp: true                   # Receive RTSP over TCP.

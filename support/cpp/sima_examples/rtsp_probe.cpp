@@ -2,6 +2,7 @@
 
 #include <opencv2/videoio.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <stdexcept>
@@ -24,11 +25,23 @@ RtspStreamInfo read_stream_info(const std::string& url, bool tcp) {
 
 } // namespace
 
-RtspStreamInfo probe_rtsp_stream_info(const std::string& url, bool tcp) {
-  const RtspStreamInfo info = read_stream_info(url, tcp);
-  // An unreachable source and one that reports no frame rate fail the same way, as in Python.
+RtspStreamInfo probe_rtsp_stream_info(const std::string& url, bool tcp,
+                                      const RtspStreamInfo& configured) {
+  if (std::min({configured.width, configured.height, configured.fps}) > 0) {
+    return configured;
+  }
+  const RtspStreamInfo probed = read_stream_info(url, tcp);
+  RtspStreamInfo info;
+  info.width = configured.width > 0 ? configured.width : probed.width;
+  info.height = configured.height > 0 ? configured.height : probed.height;
+  info.fps = configured.fps > 0 ? configured.fps : probed.fps;
+  // An unreachable source fails here too, as in Python.
+  if (info.width <= 0 || info.height <= 0) {
+    throw std::runtime_error("failed to probe RTSP frame size: " + url +
+                             "; set input.width and input.height");
+  }
   if (info.fps <= 0) {
-    throw std::runtime_error("failed to probe RTSP frame rate: " + url);
+    throw std::runtime_error("failed to probe RTSP frame rate: " + url + "; set input.fps");
   }
   return info;
 }

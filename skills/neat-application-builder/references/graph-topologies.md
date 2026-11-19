@@ -158,6 +158,10 @@ run = graph.build(run_options)
 ```
 
 - Each decoder subgraph ends at `Output("detector_frame")`, the name of the detector's `Input`.
+- Every stream sharing the model needs the same frame size. A stream of another size fails
+  `build()` with `input spec mismatch for port 'in' (width)`. Read each stream's size before
+  building, as the example does with its RTSP probe, and stop with an error that names the
+  streams whose sizes differ.
 - `model.input_appsrc_options(False)` has `block = true`, so frames wait at the model's input
   and the dropping happens on the links. `max_bytes` bounds the bytes queued there.
 - `detector_link(index)` is a `GraphLinkOptions` with

@@ -150,8 +150,8 @@ Edit `$APP_DIR/src/common/config.yaml`:
   package. A relative `model.path` starts at the config file, so for `seg-medium`
   it is `../../../../../models/rf_detr_seg_medium/w8a16_w8a8_mixed/rf_detr_seg_medium_w8a16_w8a8_mixed_backbone_mpk.tar.gz`.
 - Set `input.source`, and `input.codec` to `h264`, `h265`, or `mjpeg`.
-- Set `input.width` and `input.height` to the stream's frame size. Leave
-  `input.fps: 0` to read the frame rate from the stream, or set it.
+- Leave `input.width`, `input.height`, and `input.fps` at 0 to read the frame
+  size and rate from the stream, so a stream of another size needs no config change.
 - Set `output.insight.host`, `video_port_base`, and `metadata_port_base` to the
   values reported by Insight.
 - For segmentation, set `inference.min_score: 0.3` and
@@ -227,10 +227,11 @@ from both implementations.
   `coco-labels.txt`, whose `unused` lines fill the IDs COCO leaves empty.
 - `input.codec must be h264, h265, or mjpeg` means `input.codec` names a codec
   this example does not decode.
-- `failed to probe RTSP frame rate: <url>` appears with `input.fps: 0` when the
-  source is unreachable from the board or reports no frame rate. Verify the URL
-  from the board itself; the URL Insight displays is not always reachable from
-  the target. For a reachable source with no frame rate, set `input.fps`.
+- `failed to probe RTSP frame size: <url>` or `failed to probe RTSP frame rate: <url>`
+  appears when a value left at 0 cannot be read: the source is unreachable from the
+  board, or it does not report that value. Verify the URL from the board itself; the
+  URL Insight displays is not always reachable from the target. For a reachable source,
+  set the value the message names.
 
 ## Performance
 

@@ -7,8 +7,8 @@ model:
 input:
   source: rtsp://<rtsp-source-ip>:<port>/<stream-name>  # RTSP URL of the stream.
   codec: h264                   # h264, h265, or mjpeg.
-  width: 1280                   # Frame width of the stream, in pixels.
-  height: 720                   # Frame height of the stream, in pixels.
+  width: 0                      # 0 reads the stream's frame size with a probe. Set a size
+  height: 0                     # only for a stream that does not report one.
   fps: 0                        # 0 reads the stream's frame rate with a probe.
   rtsp:
     tcp: true                   # Receive RTSP over TCP.

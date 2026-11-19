@@ -88,7 +88,7 @@ def test_metadata_throughput(
     port = int(os.environ.get("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", "9100"))
     config = e2e_config_writer(
         {
-            "input": {"source": [url] * 20, "codec": codec, "width": 1280, "height": 720, "fps": 0},
+            "input": {"source": [url] * 20, "codec": codec},
             "output": {
                 "video_enabled": True,
                 "insight": {

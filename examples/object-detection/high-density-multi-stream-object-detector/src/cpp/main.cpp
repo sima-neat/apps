@@ -48,9 +48,10 @@ struct AppConfig {
   fs::path labels_path;
   std::vector<std::string> sources;
   std::string codec;
+  // Each 0 reads that value from every stream with a probe.
   int width = 0;
   int height = 0;
-  int fps = 0; // 0 reads each stream's frame rate with a probe.
+  int fps = 0;
   bool rtsp_tcp = true;
   int rtsp_latency_ms = 0;
   double min_score = 0.0;
@@ -147,9 +148,10 @@ neat::Model::Options model_options(const AppConfig& cfg) {
 }
 
 // The model every stream shares: "detector_frame" input -> model -> "detections" output.
-neat::Graph detector_graph(neat::Model& model, const AppConfig& cfg) {
+neat::Graph detector_graph(neat::Model& model, const AppConfig& cfg,
+                           const sima_examples::RtspStreamInfo& frame) {
   auto input_options = model.input_appsrc_options(false);
-  input_options.max_bytes = static_cast<std::uint64_t>(cfg.width) * cfg.height * 3 / 2 *
+  input_options.max_bytes = static_cast<std::uint64_t>(frame.width) * frame.height * 3 / 2 *
                             static_cast<std::uint64_t>(input_options.pool_max_buffers);
   neat::Graph frames;
   frames.add(neat::nodes::Input("detector_frame", input_options));
@@ -166,7 +168,7 @@ neat::Graph detector_graph(neat::Model& model, const AppConfig& cfg) {
 }
 
 groups::RtspEncodedInputOptions rtsp_options(const AppConfig& cfg, const std::string& url,
-                                             int fps) {
+                                             const sima_examples::RtspStreamInfo& stream) {
   groups::RtspEncodedInputOptions options;
   options.url = url;
   options.codec = rtsp_codec(cfg);
@@ -175,29 +177,30 @@ groups::RtspEncodedInputOptions rtsp_options(const AppConfig& cfg, const std::st
   options.auto_caps_from_stream = cfg.fps == 0;
   options.source_fps = cfg.fps;
   if (cfg.codec == "h264") {
-    options.fallback_h264_width = cfg.width;
-    options.fallback_h264_height = cfg.height;
-    options.fallback_h264_fps = fps;
+    options.fallback_h264_width = stream.width;
+    options.fallback_h264_height = stream.height;
+    options.fallback_h264_fps = stream.fps;
   }
   return options;
 }
 
 // Hardware decode to NV12 frames at the stream's size, ending at "detector_frame".
-neat::Graph decoder_graph(const AppConfig& cfg, int fps) {
+neat::Graph decoder_graph(const AppConfig& cfg, const sima_examples::RtspStreamInfo& stream) {
   neat::SimaDecodeOptions decode;
   decode.type = cfg.codec == "h265" ? neat::SimaDecodeType::H265 : neat::SimaDecodeType::H264;
   decode.decoder_name = "decoder";
   decode.next_element = "CVU";
-  decode.dec_width = cfg.width;
-  decode.dec_height = cfg.height;
-  decode.dec_fps = fps;
+  decode.dec_width = stream.width;
+  decode.dec_height = stream.height;
+  decode.dec_fps = stream.fps;
   decode.num_buffers = cfg.decoder_buffers;
   decode.input_buffers = 2;
   decode.decoder_tuning = "throughput-low-latency";
   decode.memory_opt = true;
   neat::Graph graph("decoder");
   graph.add(neat::nodes::SimaDecode(std::move(decode)));
-  graph.add(neat::nodes::CapsRaw("NV12", cfg.width, cfg.height, cfg.fps, neat::CapsMemory::Any));
+  graph.add(
+      neat::nodes::CapsRaw("NV12", stream.width, stream.height, cfg.fps, neat::CapsMemory::Any));
   graph.add(neat::nodes::Output("detector_frame"));
   return graph;
 }
@@ -253,18 +256,38 @@ neat::RunOptions run_options(const AppConfig& cfg) {
   return options;
 }
 
-// Each source URL's frame rate: the configured one, or a probe when input.fps is 0.
-std::map<std::string, int> stream_fps(const AppConfig& cfg) {
-  std::map<std::string, int> fps_by_url;
+// Each stream's frame size and rate: the configured values, and a probe's for each 0. Every
+// stream has the same size, because the streams share one model input.
+std::vector<sima_examples::RtspStreamInfo> stream_info(const AppConfig& cfg) {
+  const sima_examples::RtspStreamInfo configured{cfg.width, cfg.height, cfg.fps};
+  std::map<std::string, sima_examples::RtspStreamInfo> by_url;
   for (const auto& url : std::set<std::string>(cfg.sources.begin(), cfg.sources.end())) {
-    fps_by_url[url] =
-        cfg.fps > 0 ? cfg.fps : sima_examples::probe_rtsp_stream_info(url, cfg.rtsp_tcp).fps;
+    by_url[url] = sima_examples::probe_rtsp_stream_info(url, cfg.rtsp_tcp, configured);
   }
-  return fps_by_url;
+  // Core gap: a model shared by several streams accepts one input size, and a stream of another
+  // size fails the build with "input spec mismatch".
+  const auto& first = by_url.begin()->second;
+  for (const auto& [url, stream] : by_url) {
+    if (stream.width != first.width || stream.height != first.height) {
+      throw std::runtime_error(
+          "every input.source stream needs the same frame size, because the streams share one "
+          "model: " +
+          by_url.begin()->first + " is " + std::to_string(first.width) + "x" +
+          std::to_string(first.height) + ", " + url + " is " + std::to_string(stream.width) + "x" +
+          std::to_string(stream.height));
+    }
+  }
+  std::vector<sima_examples::RtspStreamInfo> streams;
+  for (const auto& url : cfg.sources) {
+    streams.push_back(by_url.at(url));
+  }
+  return streams;
 }
 
 // The boxes in a detections sample, whose first tensor is the BBOX payload.
-std::vector<neat::Box> decode_boxes(const neat::Sample& sample, const AppConfig& cfg) {
+std::vector<neat::Box> decode_boxes(const neat::Sample& sample,
+                                    const sima_examples::RtspStreamInfo& stream,
+                                    const AppConfig& cfg) {
   const neat::Tensor* bbox = nullptr;
   if (sample.kind == neat::SampleKind::TensorSet && !sample.tensors.empty()) {
     bbox = &sample.tensors.front();
@@ -273,7 +296,7 @@ std::vector<neat::Box> decode_boxes(const neat::Sample& sample, const AppConfig&
   } else {
     throw std::runtime_error("expected a BBOX tensor in the detections sample");
   }
-  return neat::decode_bbox_tensor(*bbox, cfg.width, cfg.height, cfg.max_detections,
+  return neat::decode_bbox_tensor(*bbox, stream.width, stream.height, cfg.max_detections,
                                   /*strict=*/true)
       .boxes;
 }
@@ -294,6 +317,7 @@ sima_examples::detection_egress::FrameMetadata frame_metadata(const neat::Sample
 
 // Send every detections sample to its stream's Insight channel until a stop signal.
 void send_detections(neat::Run& run, std::vector<neat::MetadataSender>& metadata_senders,
+                     const std::vector<sima_examples::RtspStreamInfo>& streams,
                      const std::vector<std::string>& labels, const AppConfig& cfg,
                      const std::atomic<bool>& stop) {
   while (!stop) {
@@ -309,8 +333,10 @@ void send_detections(neat::Run& run, std::vector<neat::MetadataSender>& metadata
     if (metadata_senders.size() > 1) {
       index = std::stoi(sample.stream_id.substr(std::string("stream").size()));
     }
+    const auto& stream = streams.at(static_cast<std::size_t>(index));
     const std::string payload = sima_examples::detection_egress::serialize(
-        decode_boxes(sample, cfg), labels, cfg.width, cfg.height, frame_metadata(sample, index));
+        decode_boxes(sample, stream, cfg), labels, stream.width, stream.height,
+        frame_metadata(sample, index));
     // A nonblocking send drops the message while the socket buffer is full; the drops are
     // counted in the sender's stats and reported when the run ends. Any other failure throws.
     std::string send_error;
@@ -334,16 +360,17 @@ int run_app(const CliOptions& cli) {
   }
 
   const auto labels = sima_examples::load_labels(cfg.labels_path);
-  const auto fps_by_url = stream_fps(cfg);
+  const auto streams = stream_info(cfg);
   neat::Model model(cfg.model_path.string(), model_options(cfg));
-  const neat::Graph detector = detector_graph(model, cfg);
+  const neat::Graph detector = detector_graph(model, cfg, streams.front());
 
   neat::Graph graph(graph_options(cfg));
   std::vector<neat::MetadataSender> metadata_senders;
   for (int index = 0; index < static_cast<int>(cfg.sources.size()); ++index) {
     const std::string& url = cfg.sources[static_cast<std::size_t>(index)];
-    auto rtsp = groups::RtspEncodedInput(rtsp_options(cfg, url, fps_by_url.at(url)));
-    const neat::Graph decoder = decoder_graph(cfg, fps_by_url.at(url));
+    const auto& stream = streams[static_cast<std::size_t>(index)];
+    auto rtsp = groups::RtspEncodedInput(rtsp_options(cfg, url, stream));
+    const neat::Graph decoder = decoder_graph(cfg, stream);
     graph.connect(rtsp, decoder);
     graph.connect(decoder, detector, detector_link(cfg, index));
     if (cfg.video_enabled) {
@@ -360,7 +387,7 @@ int run_app(const CliOptions& cli) {
   const std::atomic<bool>& stop = sima_examples::stop_on_signals();
   // The Run's destructor closes it when send_detections throws.
   neat::Run run = graph.build(run_options(cfg));
-  send_detections(run, metadata_senders, labels, cfg, stop);
+  send_detections(run, metadata_senders, streams, labels, cfg, stop);
   run.close();
 
   for (std::size_t index = 0; index < metadata_senders.size(); ++index) {

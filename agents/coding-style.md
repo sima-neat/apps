@@ -58,13 +58,20 @@ is the reference: read its `main.py` and `main.cpp` before writing or reviewing 
   ```yaml
   input:
     type: rtsp        # rtsp, http, or usb. For http, replace codec, tcp, and latency_ms with
-                      # ssl_strict. For usb, set source to a camera ID and add width and height.
+                      # ssl_strict. For usb, set source to a camera ID, and width, height, and
+                      # fps to one of its modes.
     source: rtsp://<host>:<port>/<stream>
     codec: h264       # h264, h265, or mjpeg.
+    width: 0          # 0 reads the stream's frame size and rate with a probe. Set them only
+    height: 0         # for a stream that does not report them.
+    fps: 0
   ```
 
   The code reads the keys of the configured type, so a key left from another type fails at
   `reject_unread_keys()`.
+- An RTSP stream's frame size and rate come from `probe_rtsp_stream_info`, which fills each
+  of `input.width`, `input.height`, and `input.fps` the config leaves at 0. A customer then
+  switches to a stream of another resolution without editing the config.
 - A value a customer has no reason to change, such as an internal buffer count that is the
   same in every shipped profile, is not a setting: write it in the code where the option is
   set.

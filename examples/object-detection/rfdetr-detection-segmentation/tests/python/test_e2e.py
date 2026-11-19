@@ -10,7 +10,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import cv2
 import pytest
 
 from tests.utils.metadata_json_listener import MetadataJsonListener
@@ -29,19 +28,6 @@ def _runtime_ready() -> bool:
 def _env_int(name: str, default: int) -> int:
     value = os.environ.get(name, "").strip()
     return int(value) if value else default
-
-
-def _frame_size(url: str) -> tuple[int, int]:
-    """The test stream's frame size, which the config must state."""
-    capture = cv2.VideoCapture(url)
-    try:
-        width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
-        height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
-    finally:
-        capture.release()
-    if width <= 0 or height <= 0:
-        pytest.fail(f"cannot read the frame size of {url}")
-    return width, height
 
 
 # The registry build profile each segmentation size ships with in config.yaml.
@@ -87,7 +73,6 @@ def test_publishes_insight_video_and_metadata(
     for path in (backbone, models_dir / f"{package}_decoder_mpk.tar.gz"):
         skip_unless_e2e_ready(path.exists(), f"missing RF-DETR artifact: {path}")
     rtsp_url = request.getfixturevalue(stream_fixture)
-    width, height = _frame_size(rtsp_url)
     model_id = f"{'det' if task == 'detection' else 'seg'}-{variant}"
 
     metadata_port = _env_int("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100)
@@ -95,12 +80,7 @@ def test_publishes_insight_video_and_metadata(
     config_path = e2e_config_writer(
         {
             "model": {"id": model_id, "path": str(backbone)},
-            "input": {
-                "source": rtsp_url,
-                "codec": codec,
-                "width": width,
-                "height": height,
-            },
+            "input": {"source": rtsp_url, "codec": codec},
             # The config comments recommend 100 results per frame for detection, 24 for
             # segmentation.
             "inference": {

@@ -13,9 +13,12 @@ struct RtspStreamInfo {
   int fps = 0;
 };
 
-// Reads the stream with OpenCV's FFmpeg backend, over TCP when `tcp` is set. Throws when the
-// frame rate is unknown, including when the source cannot be opened.
-RtspStreamInfo probe_rtsp_stream_info(const std::string& url, bool tcp);
+// The stream's frame size and rate: each value `configured` sets above 0, and the probe's for
+// the rest. The probe reads the stream with OpenCV's FFmpeg backend, over TCP when `tcp` is set,
+// and runs only when a value is 0. Throws when a value stays unknown, including when the source
+// cannot be opened.
+RtspStreamInfo probe_rtsp_stream_info(const std::string& url, bool tcp,
+                                      const RtspStreamInfo& configured = {});
 
 // The form the examples not yet converted call. Only rtsp_tcp changes the probe. Returns
 // whether the frame size is known and leaves an unknown frame rate at 0.

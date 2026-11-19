@@ -10,7 +10,7 @@ from __future__ import annotations
 import argparse
 import sys
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -35,7 +35,7 @@ sys.path.insert(0, str(SUPPORT_DIR))
 
 from sima_examples.config import Config
 from sima_examples.labels import load_labels
-from sima_examples.rtsp_probe import probe_rtsp_stream_info
+from sima_examples.rtsp_probe import RtspStreamInfo, probe_rtsp_stream_info
 from sima_examples.stop_signals import stop_on_signals
 from utils import postprocess
 
@@ -82,9 +82,10 @@ class AppConfig:
     labels_path: Path
     source: str
     codec: str
+    # Each 0 reads that value from the stream with a probe.
     width: int
     height: int
-    fps: int  # 0 reads the stream's frame rate with a probe.
+    fps: int
     rtsp_tcp: bool
     rtsp_latency_ms: int
     frames: int  # 0 runs until Ctrl+C.
@@ -179,7 +180,7 @@ def transformer_options() -> pyneat.ModelOptions:
     return options
 
 
-def rtsp_options(cfg: AppConfig, fps: int) -> pyneat.RtspEncodedInputOptions:
+def rtsp_options(cfg: AppConfig) -> pyneat.RtspEncodedInputOptions:
     options = pyneat.RtspEncodedInputOptions()
     options.url = cfg.source
     options.codec = RTSP_CODECS[cfg.codec]
@@ -188,20 +189,20 @@ def rtsp_options(cfg: AppConfig, fps: int) -> pyneat.RtspEncodedInputOptions:
     if cfg.rtsp_tcp:
         # Keep the RTP timestamps; arrival-time corrections drift during high-rate replay.
         options.buffer_mode = "none"
-    options.source_fps = fps
+    options.source_fps = cfg.fps
     if cfg.codec == "h264":
         options.fallback_h264_width = cfg.width
         options.fallback_h264_height = cfg.height
     return options
 
 
-def decoder_graph(cfg: AppConfig, fps: int) -> pyneat.Graph:
+def decoder_graph(cfg: AppConfig) -> pyneat.Graph:
     """Hardware decode to NV12 frames at the stream's size."""
     decode = pyneat.SimaDecodeOptions()
     decode.type = DECODE_TYPES[cfg.codec]
     decode.dec_width = cfg.width
     decode.dec_height = cfg.height
-    decode.dec_fps = fps
+    decode.dec_fps = cfg.fps
     if cfg.codec == "mjpeg":
         # Leaves free decode surfaces while inference and the video sender hold frames.
         decode.num_buffers = 32
@@ -210,11 +211,11 @@ def decoder_graph(cfg: AppConfig, fps: int) -> pyneat.Graph:
     return graph
 
 
-def video_options(cfg: AppConfig, fps: int) -> pyneat.VideoSenderOptions:
+def video_options(cfg: AppConfig) -> pyneat.VideoSenderOptions:
     """Send H.264 and H.265 to Insight unchanged; re-encode decoded MJPEG frames as H.264."""
     if cfg.codec == "mjpeg":
         encode = pyneat.SimaEncodeOptions()
-        encode.fps = fps
+        encode.fps = cfg.fps
         options = pyneat.VideoSenderOptions.from_raw(encode)
     else:
         options = pyneat.VideoSenderOptions.passthrough(RTSP_CODECS[cfg.codec])
@@ -291,11 +292,12 @@ def postprocess_options(cfg: AppConfig) -> postprocess.PostprocessOptions:
     )
 
 
-def stream_fps(cfg: AppConfig) -> int:
-    """The stream's frame rate: the configured one, or a probe when input.fps is 0."""
-    return (
-        cfg.fps if cfg.fps > 0 else probe_rtsp_stream_info(cfg.source, cfg.rtsp_tcp).fps
+def with_stream_info(cfg: AppConfig) -> AppConfig:
+    """The config with the stream's frame size and rate, read with a probe, in place of each 0."""
+    stream = probe_rtsp_stream_info(
+        cfg.source, cfg.rtsp_tcp, RtspStreamInfo(cfg.width, cfg.height, cfg.fps)
     )
+    return replace(cfg, width=stream.width, height=stream.height, fps=stream.fps)
 
 
 def transformer_sample(
@@ -420,15 +422,15 @@ def main(argv: list[str] | None = None) -> int:
             f"model.labels must list {postprocess.NUM_CLASSES} COCO class names, "
             f"one per line: {cfg.labels_path}"
         )
-    fps = stream_fps(cfg)
+    cfg = with_stream_info(cfg)
     backbone = pyneat.Model(str(cfg.model_path), backbone_options(cfg))
     transformer = pyneat.Model(str(cfg.transformer_path), transformer_options())
     proposals_shape = list(transformer.input_specs()[1].shape)
     mask_size = int(transformer.output_specs()[2].shape[1]) if cfg.segmentation else 0
 
-    rtsp = pyneat.groups.rtsp_encoded_input(rtsp_options(cfg, fps))
-    decoder = decoder_graph(cfg, fps)
-    video = pyneat.groups.video_sender(video_options(cfg, fps))
+    rtsp = pyneat.groups.rtsp_encoded_input(rtsp_options(cfg))
+    decoder = decoder_graph(cfg)
+    video = pyneat.groups.video_sender(video_options(cfg))
     graph = pyneat.Graph()
     graph.connect(rtsp, decoder)
     if cfg.codec == "mjpeg":
@@ -444,7 +446,7 @@ def main(argv: list[str] | None = None) -> int:
     source_run = graph.build(run_options())
     metadata_sender = pyneat.MetadataSender(metadata_options(cfg))
     print(
-        f"RF-DETR {cfg.model_id} {cfg.codec}: {cfg.source} ({cfg.width}x{cfg.height}@{fps}) "
+        f"RF-DETR {cfg.model_id} {cfg.codec}: {cfg.source} ({cfg.width}x{cfg.height}@{cfg.fps}) "
         f"-> Insight {cfg.insight_host} video={cfg.video_port_base} "
         f"metadata={cfg.metadata_port_base}"
     )

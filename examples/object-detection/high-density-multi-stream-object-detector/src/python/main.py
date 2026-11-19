@@ -33,7 +33,7 @@ sys.path.insert(0, str(SUPPORT_DIR))
 from sima_examples import detection_egress
 from sima_examples.config import Config
 from sima_examples.labels import load_labels
-from sima_examples.rtsp_probe import probe_rtsp_stream_info
+from sima_examples.rtsp_probe import RtspStreamInfo, probe_rtsp_stream_info
 from sima_examples.stop_signals import stop_on_signals
 
 RTSP_CODECS = {"h264": pyneat.RtspCodec.H264, "h265": pyneat.RtspCodec.H265}
@@ -47,9 +47,10 @@ class AppConfig:
     labels_path: Path
     sources: list[str]
     codec: str
+    # Each 0 reads that value from every stream with a probe.
     width: int
     height: int
-    fps: int  # 0 reads each stream's frame rate with a probe.
+    fps: int
     rtsp_tcp: bool
     rtsp_latency_ms: int
     min_score: float
@@ -121,11 +122,13 @@ def model_options(cfg: AppConfig) -> pyneat.ModelOptions:
     return options
 
 
-def detector_graph(model: pyneat.Model, cfg: AppConfig) -> pyneat.Graph:
+def detector_graph(
+    model: pyneat.Model, cfg: AppConfig, frame: RtspStreamInfo
+) -> pyneat.Graph:
     """The model every stream shares: "detector_frame" input -> model -> "detections" output."""
     input_options = model.input_appsrc_options(False)
     input_options.max_bytes = (
-        cfg.width * cfg.height * 3 // 2 * input_options.pool_max_buffers
+        frame.width * frame.height * 3 // 2 * input_options.pool_max_buffers
     )
     frames = pyneat.Graph()
     frames.add(pyneat.nodes.input("detector_frame", input_options))
@@ -144,7 +147,9 @@ def detector_graph(model: pyneat.Model, cfg: AppConfig) -> pyneat.Graph:
     return graph
 
 
-def rtsp_options(cfg: AppConfig, url: str, fps: int) -> pyneat.RtspEncodedInputOptions:
+def rtsp_options(
+    cfg: AppConfig, url: str, stream: RtspStreamInfo
+) -> pyneat.RtspEncodedInputOptions:
     options = pyneat.RtspEncodedInputOptions()
     options.url = url
     options.codec = RTSP_CODECS[cfg.codec]
@@ -153,21 +158,21 @@ def rtsp_options(cfg: AppConfig, url: str, fps: int) -> pyneat.RtspEncodedInputO
     options.auto_caps_from_stream = cfg.fps == 0
     options.source_fps = cfg.fps
     if cfg.codec == "h264":
-        options.fallback_h264_width = cfg.width
-        options.fallback_h264_height = cfg.height
-        options.fallback_h264_fps = fps
+        options.fallback_h264_width = stream.width
+        options.fallback_h264_height = stream.height
+        options.fallback_h264_fps = stream.fps
     return options
 
 
-def decoder_graph(cfg: AppConfig, fps: int) -> pyneat.Graph:
+def decoder_graph(cfg: AppConfig, stream: RtspStreamInfo) -> pyneat.Graph:
     """Hardware decode to NV12 frames at the stream's size, ending at "detector_frame"."""
     decode = pyneat.SimaDecodeOptions()
     decode.type = DECODE_TYPES[cfg.codec]
     decode.decoder_name = "decoder"
     decode.next_element = "CVU"
-    decode.dec_width = cfg.width
-    decode.dec_height = cfg.height
-    decode.dec_fps = fps
+    decode.dec_width = stream.width
+    decode.dec_height = stream.height
+    decode.dec_fps = stream.fps
     decode.num_buffers = cfg.decoder_buffers
     decode.input_buffers = 2
     decode.decoder_tuning = "throughput-low-latency"
@@ -176,7 +181,7 @@ def decoder_graph(cfg: AppConfig, fps: int) -> pyneat.Graph:
     graph.add(pyneat.nodes.sima_decode(decode))
     graph.add(
         pyneat.nodes.caps_raw(
-            "NV12", cfg.width, cfg.height, cfg.fps, pyneat.CapsMemory.Any
+            "NV12", stream.width, stream.height, cfg.fps, pyneat.CapsMemory.Any
         )
     )
     graph.add(pyneat.nodes.output("detector_frame"))
@@ -234,16 +239,30 @@ def run_options(cfg: AppConfig) -> pyneat.RunOptions:
     return options
 
 
-def stream_fps(cfg: AppConfig) -> dict[str, int]:
-    """Each source URL's frame rate: the configured one, or a probe when input.fps is 0."""
-    if cfg.fps > 0:
-        return {url: cfg.fps for url in cfg.sources}
-    return {
-        url: probe_rtsp_stream_info(url, cfg.rtsp_tcp).fps for url in set(cfg.sources)
+def stream_info(cfg: AppConfig) -> list[RtspStreamInfo]:
+    """Each stream's frame size and rate: the configured values, and a probe's for each 0.
+
+    Every stream has the same size, because the streams share one model input.
+    """
+    configured = RtspStreamInfo(cfg.width, cfg.height, cfg.fps)
+    by_url = {
+        url: probe_rtsp_stream_info(url, cfg.rtsp_tcp, configured)
+        for url in set(cfg.sources)
     }
+    # Core gap: a model shared by several streams accepts one input size, and a stream of
+    # another size fails the build with "input spec mismatch".
+    (first_url, first), *others = by_url.items()
+    for url, stream in others:
+        if (stream.width, stream.height) != (first.width, first.height):
+            raise ValueError(
+                "every input.source stream needs the same frame size, because the streams "
+                f"share one model: {first_url} is {first.width}x{first.height}, "
+                f"{url} is {stream.width}x{stream.height}"
+            )
+    return [by_url[url] for url in cfg.sources]
 
 
-def decode_boxes(sample: pyneat.Sample, cfg: AppConfig) -> list:
+def decode_boxes(sample: pyneat.Sample, stream: RtspStreamInfo, cfg: AppConfig) -> list:
     """The boxes in a detections sample, whose first tensor is the BBOX payload."""
     if sample.kind == pyneat.SampleKind.TensorSet and sample.tensors:
         bbox = sample.tensors[0]
@@ -252,7 +271,7 @@ def decode_boxes(sample: pyneat.Sample, cfg: AppConfig) -> list:
     else:
         raise RuntimeError(f"expected a BBOX tensor, got {sample.kind}")
     result = pyneat.detections.decode_bbox_tensor(
-        bbox, cfg.width, cfg.height, cfg.max_detections, strict=True
+        bbox, stream.width, stream.height, cfg.max_detections, strict=True
     )
     return result.boxes
 
@@ -273,6 +292,7 @@ def frame_metadata(sample: pyneat.Sample, index: int) -> detection_egress.FrameM
 def send_detections(
     run: pyneat.Run,
     metadata_senders: list[pyneat.MetadataSender],
+    streams: list[RtspStreamInfo],
     labels: list[str],
     cfg: AppConfig,
     stop: threading.Event,
@@ -289,11 +309,12 @@ def send_detections(
         index = 0
         if len(metadata_senders) > 1:
             index = int(sample.stream_id.removeprefix("stream"))
+        stream = streams[index]
         payload = detection_egress.serialize(
-            decode_boxes(sample, cfg),
+            decode_boxes(sample, stream, cfg),
             labels,
-            cfg.width,
-            cfg.height,
+            stream.width,
+            stream.height,
             frame_metadata(sample, index),
         )
         # A nonblocking send drops the message while the socket buffer is full; the drops are
@@ -312,15 +333,15 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     labels = load_labels(cfg.labels_path)
-    fps_by_url = stream_fps(cfg)
+    streams = stream_info(cfg)
     model = pyneat.Model(str(cfg.model_path), model_options(cfg))
-    detector = detector_graph(model, cfg)
+    detector = detector_graph(model, cfg, streams[0])
 
     graph = pyneat.Graph(options=graph_options(cfg))
     metadata_senders = []
     for index, url in enumerate(cfg.sources):
-        rtsp = pyneat.groups.rtsp_encoded_input(rtsp_options(cfg, url, fps_by_url[url]))
-        decoder = decoder_graph(cfg, fps_by_url[url])
+        rtsp = pyneat.groups.rtsp_encoded_input(rtsp_options(cfg, url, streams[index]))
+        decoder = decoder_graph(cfg, streams[index])
         graph.connect(rtsp, decoder)
         graph.connect(decoder, detector, detector_link(cfg, index))
         if cfg.video_enabled:
@@ -338,7 +359,7 @@ def main(argv: list[str] | None = None) -> int:
     stop = stop_on_signals()
     run = graph.build(run_options(cfg))
     try:
-        send_detections(run, metadata_senders, labels, cfg, stop)
+        send_detections(run, metadata_senders, streams, labels, cfg, stop)
     finally:
         run.close()
 

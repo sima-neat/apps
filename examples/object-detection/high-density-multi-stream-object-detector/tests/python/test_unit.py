@@ -30,4 +30,4 @@ def test_shipped_profiles_load(filename, streams, fps):
     cfg = main_module.load_app_config(COMMON_DIR / filename)
     assert len(cfg.sources) == streams
     assert cfg.fps == fps
-    assert (cfg.width, cfg.height) == (1280, 720)
+    assert (cfg.width, cfg.height) == (0, 0), "RTSP streams report their own frame size"

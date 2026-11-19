@@ -46,9 +46,10 @@ struct AppConfig {
   fs::path labels_path;
   std::string source;
   std::string codec;
+  // Each 0 reads that value from the stream with a probe.
   int width = 0;
   int height = 0;
-  int fps = 0; // 0 reads the stream's frame rate with a probe.
+  int fps = 0;
   bool rtsp_tcp = true;
   int rtsp_latency_ms = 0;
   int frames = 0; // 0 runs until Ctrl+C.
@@ -182,7 +183,7 @@ neat::Model::Options transformer_options() {
   return options;
 }
 
-groups::RtspEncodedInputOptions rtsp_options(const AppConfig& cfg, int fps) {
+groups::RtspEncodedInputOptions rtsp_options(const AppConfig& cfg) {
   groups::RtspEncodedInputOptions options;
   options.url = cfg.source;
   options.codec = rtsp_codec(cfg);
@@ -192,7 +193,7 @@ groups::RtspEncodedInputOptions rtsp_options(const AppConfig& cfg, int fps) {
     // Keep the RTP timestamps; arrival-time corrections drift during high-rate replay.
     options.buffer_mode = "none";
   }
-  options.source_fps = fps;
+  options.source_fps = cfg.fps;
   if (cfg.codec == "h264") {
     options.fallback_h264_width = cfg.width;
     options.fallback_h264_height = cfg.height;
@@ -201,12 +202,12 @@ groups::RtspEncodedInputOptions rtsp_options(const AppConfig& cfg, int fps) {
 }
 
 // Hardware decode to NV12 frames at the stream's size.
-neat::Graph decoder_graph(const AppConfig& cfg, int fps) {
+neat::Graph decoder_graph(const AppConfig& cfg) {
   neat::SimaDecodeOptions decode;
   decode.type = decode_type(cfg);
   decode.dec_width = cfg.width;
   decode.dec_height = cfg.height;
-  decode.dec_fps = fps;
+  decode.dec_fps = cfg.fps;
   if (cfg.codec == "mjpeg") {
     // Leaves free decode surfaces while inference and the video sender hold frames.
     decode.num_buffers = 32;
@@ -217,8 +218,8 @@ neat::Graph decoder_graph(const AppConfig& cfg, int fps) {
 }
 
 // Send H.264 and H.265 to Insight unchanged; re-encode decoded MJPEG frames as H.264.
-groups::VideoSenderOptions video_options(const AppConfig& cfg, int fps) {
-  auto options = cfg.codec == "mjpeg" ? groups::VideoSenderOptions::FromRaw({.fps = fps})
+groups::VideoSenderOptions video_options(const AppConfig& cfg) {
+  auto options = cfg.codec == "mjpeg" ? groups::VideoSenderOptions::FromRaw({.fps = cfg.fps})
                                       : groups::VideoSenderOptions::Passthrough(rtsp_codec(cfg));
   options.host = cfg.insight_host;
   options.video_port_base = cfg.video_port_base;
@@ -293,10 +294,14 @@ rfdetr::PostprocessOptions postprocess_options(const AppConfig& cfg) {
   return options;
 }
 
-// The stream's frame rate: the configured one, or a probe when input.fps is 0.
-int stream_fps(const AppConfig& cfg) {
-  return cfg.fps > 0 ? cfg.fps
-                     : sima_examples::probe_rtsp_stream_info(cfg.source, cfg.rtsp_tcp).fps;
+// The config with the stream's frame size and rate, read with a probe, in place of each 0.
+AppConfig with_stream_info(AppConfig cfg) {
+  const auto stream = sima_examples::probe_rtsp_stream_info(cfg.source, cfg.rtsp_tcp,
+                                                            {cfg.width, cfg.height, cfg.fps});
+  cfg.width = stream.width;
+  cfg.height = stream.height;
+  cfg.fps = stream.fps;
+  return cfg;
 }
 
 // The values of a float32 output tensor, copied to host memory. On the DevKit, data_ptr()
@@ -411,7 +416,7 @@ int run_app(const CliOptions& cli) {
     std::cerr << "Error: config file not found: " << cli.config_path.string() << "\n";
     return 2;
   }
-  const AppConfig cfg = load_app_config(cli.config_path);
+  AppConfig cfg = load_app_config(cli.config_path);
   if (cli.validate_config_only) {
     std::cout << "Config validated: " << cli.config_path.string() << " (model=" << cfg.model_id
               << ")\n";
@@ -425,16 +430,16 @@ int run_app(const CliOptions& cli) {
   sima_examples::require(static_cast<int>(labels.size()) == rfdetr::kNumClasses,
                          "model.labels must list " + std::to_string(rfdetr::kNumClasses) +
                              " COCO class names, one per line: " + cfg.labels_path.string());
-  const int fps = stream_fps(cfg);
+  cfg = with_stream_info(cfg);
   neat::Model backbone(cfg.model_path.string(), backbone_options(cfg));
   neat::Model transformer(cfg.transformer_path.string(), transformer_options());
   const std::vector<int64_t> proposals_shape = transformer.input_specs().at(1).shape;
   const int mask_size =
       cfg.segmentation ? static_cast<int>(transformer.output_specs().at(2).shape.at(1)) : 0;
 
-  auto rtsp = groups::RtspEncodedInput(rtsp_options(cfg, fps));
-  const neat::Graph decoder = decoder_graph(cfg, fps);
-  auto video = groups::VideoSender(video_options(cfg, fps));
+  auto rtsp = groups::RtspEncodedInput(rtsp_options(cfg));
+  const neat::Graph decoder = decoder_graph(cfg);
+  auto video = groups::VideoSender(video_options(cfg));
   neat::Graph graph;
   graph.connect(rtsp, decoder);
   if (cfg.codec == "mjpeg") {
@@ -452,8 +457,9 @@ int run_app(const CliOptions& cli) {
   neat::MetadataSender metadata_sender(metadata_options(cfg), &metadata_error);
   sima_examples::require(metadata_sender.ok(), metadata_error);
   std::cout << "RF-DETR " << cfg.model_id << " " << cfg.codec << ": " << cfg.source << " ("
-            << cfg.width << "x" << cfg.height << "@" << fps << ") -> Insight " << cfg.insight_host
-            << " video=" << cfg.video_port_base << " metadata=" << cfg.metadata_port_base << "\n";
+            << cfg.width << "x" << cfg.height << "@" << cfg.fps << ") -> Insight "
+            << cfg.insight_host << " video=" << cfg.video_port_base
+            << " metadata=" << cfg.metadata_port_base << "\n";
 
   std::atomic<bool>& stop = sima_examples::stop_on_signals();
   std::string feed_error;

@@ -17,6 +17,9 @@ model.labels:
   type: string
   meaning: Class-label file with one label per line. A relative path starts at the working directory.
 
+input.type:
+  type: string
+  meaning: Input kind the config sets, such as rtsp, http, or usb, for an example that takes several. Only the keys of that kind are read.
 input.source:
   type: string_list
   meaning: Input streams, one RTSP URL per stream. The same URL may repeat.
@@ -25,13 +28,13 @@ input.codec:
   meaning: Encoded video format of every input stream, such as h264, h265, or mjpeg. The example's config lists the formats it decodes.
 input.width:
   type: integer
-  meaning: Frame width of every input stream, in pixels.
+  meaning: Frame width, in pixels. For RTSP, 0 reads each stream's width with a probe, the recommended setting, and a value is set only for a stream that does not report it. For USB, the width of one of the camera's modes.
 input.height:
   type: integer
-  meaning: Frame height of every input stream, in pixels.
+  meaning: Frame height, in pixels, read and set like input.width.
 input.fps:
   type: integer
-  meaning: Frame rate of every input stream. 0 reads each stream's rate with a probe.
+  meaning: Frame rate. For RTSP, 0 reads each stream's rate with a probe, and a value fixes the rate of every stream. For USB, the rate of one of the camera's modes.
 input.rtsp.tcp:
   type: boolean
   meaning: Receive RTSP over TCP instead of UDP.

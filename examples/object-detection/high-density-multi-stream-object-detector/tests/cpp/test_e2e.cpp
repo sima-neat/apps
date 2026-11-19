@@ -118,8 +118,6 @@ void run_case(const std::string& binary, const std::string& model, const std::st
                    {{"model.path", model},
                     {"model.labels", labels_path.string()},
                     {"input.codec", codec},
-                    {"input.width", "1280"},
-                    {"input.height", "720"},
                     {"input.fps", "0"},
                     {"output.video_enabled", "true"},
                     {"output.insight.host", "127.0.0.1"},

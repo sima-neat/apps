@@ -4,7 +4,6 @@
 #include "sima_examples/testing/test_process.h"
 
 #include <nlohmann/json.hpp>
-#include <opencv2/videoio.hpp>
 
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -39,14 +38,6 @@ struct TestCase {
   Variant model;
   SourceCase source;
 };
-
-// The test stream's frame size, which the config must state; zero when it cannot be read.
-std::pair<int, int> frame_size(const std::string& url) {
-  cv::VideoCapture capture(url);
-  const auto width = static_cast<int>(capture.get(cv::CAP_PROP_FRAME_WIDTH));
-  const auto height = static_cast<int>(capture.get(cv::CAP_PROP_FRAME_HEIGHT));
-  return {width, height};
-}
 
 // Every result names a label from the label file and passes inference.min_score (0.2), and
 // every segment carries a polygon.
@@ -138,11 +129,6 @@ int main(int argc, char** argv) {
     if (!fs::exists(backbone) || !fs::exists(transformer)) {
       return skip_or_fail("missing RF-DETR " + test.task + " artifacts");
     }
-    const auto [width, height] = frame_size(rtsp_url);
-    if (width <= 0 || height <= 0) {
-      std::cerr << "[FAIL] cannot read the frame size of " << rtsp_url << "\n";
-      return 1;
-    }
     const std::string case_name = test.model.id + "_" + test.source.codec;
     const std::string output_dir =
         create_test_output_dir("rfdetr-detection-segmentation", "test_" + case_name);
@@ -157,8 +143,6 @@ int main(int argc, char** argv) {
         {"model.labels", labels.string()},
         {"input.source", rtsp_url},
         {"input.codec", test.source.codec},
-        {"input.width", std::to_string(width)},
-        {"input.height", std::to_string(height)},
         {"inference.frames", "20"},
         {"inference.min_score", "0.2"},
         // The config comments recommend 100 results per frame for detection, 24 for

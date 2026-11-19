@@ -156,7 +156,7 @@ Choose one config under `${APP_DIR}/src/common/` and edit:
 - every entry under `input.source`
 - `output.insight.host`
 - `input.codec`: `h264`, the validated default, or `h265`
-- `input.width`, `input.height`, and `input.fps` to match the sources. The 20-stream config sets `input.fps: 0` to read the frame rate from each source.
+- `input.width`, `input.height`, and `input.fps`: leave each at 0 to read it from every source, so sources of another size need no config change. Every source must have the same frame size, because the streams share one model. The 30- and 60-stream configs set `input.fps` to their profile's rate. Set a size only for a source that does not report one.
 
 Insight channel and port mapping is deterministic:
 
@@ -232,10 +232,13 @@ without opening a stream or touching Insight:
   the archive, so this appears only once the run starts.
 - `has unknown keys: <key>` names a key the application does not read, such as
   `streams` from an older config. Rename it as the packaged config shows.
-- `failed to probe RTSP frame rate: <url>` appears with `input.fps: 0` when the
-  source is unreachable from the board or reports no frame rate. Verify the URL
-  from the board itself; the URL Insight displays is not always reachable from
-  the target.
+- `failed to probe RTSP frame size: <url>` or `failed to probe RTSP frame rate: <url>`
+  appears when a value left at 0 cannot be read: the source is unreachable from the
+  board, or it does not report that value. Verify the URL from the board itself; the
+  URL Insight displays is not always reachable from the target. For a reachable source,
+  set the value the message names.
+- `every input.source stream needs the same frame size` names two sources whose
+  sizes differ. Use sources of one size, because the streams share one model.
 
 ## Source Files
 
