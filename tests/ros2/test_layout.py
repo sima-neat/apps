@@ -14,7 +14,8 @@ def test_each_scoped_native_example_has_a_separate_ros_directory():
                 if p.parent.name != 'pcie-high-density-multi-stream-object-detector'}
     actual = {p.parent.relative_to(ROOT / 'examples/ros2')
               for p in (ROOT / 'examples/ros2').glob('*/*/README.md')}
-    assert actual == expected
+    ros_only = {Path("multi-model/perception-switchboard")}
+    assert actual == expected | ros_only
     for key in expected:
         native = ROOT / 'examples' / key
         ros = ROOT / 'examples/ros2' / key

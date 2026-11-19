@@ -1,0 +1,63 @@
+# ROS parameter file. All paths below are relative to this file unless absolute.
+# Only yolo.enabled, yolo.overlay_mode and depth.enabled change at runtime.
+/**/input:
+  ros__parameters:
+    kind: folder                  # folder or rtsp; source:=none uses an external image topic.
+    path: <image-folder-or-file>
+    loop: true                    # Repeat a folder for interactive mode switching.
+    fps: 15.0                     # Folder replay rate / RTSP ROS publication limit.
+    rtsp_url: ""
+    width: 1280                   # RTSP decoder geometry; match the source stream.
+    height: 720
+    frame_id: camera
+    image_topic: image
+
+/**/yolo:
+  ros__parameters:
+    enabled: true
+    overlay_mode: both            # detection, segmentation, both (display only).
+    model_path: <yolo26-seg-model.tar.gz>
+    labels_path: coco_label.txt
+    image_topic: image
+    max_width: 1920
+    max_height: 1080
+    min_score: 0.55
+    nms_iou: 0.60
+    max_detections: 50
+    inflight_frames: 2
+    timeout_seconds: 30.0
+    publish_preview: true
+
+/**/depth:
+  ros__parameters:
+    enabled: false                # Standby until enabled; model loads on its first frame.
+    model_path: <depth-anything-v2-vits-model.tar.gz>
+    image_topic: image
+    infer_size: 518
+    max_input_size: 1920          # Larger images downscale to this side before Neat.
+    inflight_frames: 2
+    timeout_seconds: 30.0
+    preview_mode: depth          # depth or side_by_side; display only.
+    publish_preview: true
+
+/**/vlm:
+  ros__parameters:
+    image_topic: image
+    start_server: false           # true loads Neat GenAI at launch; inference stays on demand.
+    model_path: <prepared-vlm-directory>
+    model: Qwen3-VL-2B-Instruct-GPTQ-a16w4
+    server_port: 9998
+    endpoint: http://127.0.0.1:9998/v1/chat/completions  # Used when start_server is false.
+    image_max_age_seconds: 3.0
+    timeout_seconds: 180.0
+    max_tokens: 128
+    system_prompt: Describe the supplied image accurately and concisely.
+
+/**/output:
+  ros__parameters:
+    insight.enabled: false
+    insight.host: ""
+    insight.video_port_base: 9000
+    insight.channel_base: 0       # YOLO=base, depth=base+1, VLM snapshot=base+2.
+    insight.fps: 30              # Output cap, independent of inference and input FPS.
+    save.directory: ""           # Empty disables saving; otherwise one folder per stream/run.

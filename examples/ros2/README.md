@@ -39,6 +39,7 @@ Build output stays in that example's ignored `build/`, `install/` and `log/`.
 
 | Example | Package | Main node | Default source |
 | --- | --- | --- | --- |
+| [multi-model/perception-switchboard](multi-model/perception-switchboard/README.md) | `neat_perception_switchboard` | `yolo_node.py`, `depth_node.py`, `vlm_node.py` | `local` |
 | [anomaly-detection/fastflow-anomaly-detector](anomaly-detection/fastflow-anomaly-detector/README.md) | `neat_fastflow_anomaly_detector` | `anomaly_node.py` | `live` |
 | [anomaly-detection/patchcore-anomaly-detector](anomaly-detection/patchcore-anomaly-detector/README.md) | `neat_patchcore_anomaly_detector` | `anomaly_node.py` | `live` |
 | [benchmarking/mipi-camera-capture](benchmarking/mipi-camera-capture/README.md) | `neat_mipi_camera_capture` | `capture_node.py` | `live` |
