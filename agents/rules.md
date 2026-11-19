@@ -50,8 +50,9 @@ Place each piece of code by the first question it answers yes to:
   files the link points to, so the bundle and a fetched example hold no links. The
   high-density and RF-DETR examples still find `support/python` in a folder above themselves,
   so both scripts also ship that folder, `support/README.md`, and `support/cpp/sima_examples/`
-  without `testing/` as reference source. C++ needs no link: the build puts `support/cpp` on
-  the include path.
+  as reference source; `build.sh` leaves out its `testing/` folder, and `get-example.sh` ships
+  all of `support/cpp`. C++ needs no link: the build puts `support/cpp` on the include path.
+  The high-density and RF-DETR examples move to the link once it is agreed.
 - Platform tooling owns provisioning, recovery, and setup of the host, network, mounts,
   devices, and the SDK. Examples start from a prepared system.
 

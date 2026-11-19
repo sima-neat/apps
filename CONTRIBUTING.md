@@ -17,16 +17,10 @@ Required:
 - `src/python/` for Python implementations
 - matching files under `tests/cpp/` or `tests/python/` for enabled coverage
 
-A Python implementation reaches the shared helpers through a relative symlink,
-`src/python/sima_examples -> ../../../../../support/python/sima_examples`, so
-`main.py` imports `sima_examples` with no path code. Create it with
-`ln -s ../../../../../support/python/sima_examples src/python/sima_examples`
-from the example folder; `scripts/create_example_scaffold.sh` creates it for a
-new example. `build.sh` and `scripts/get-example.sh` copy the files the link
-points to, so the installed bundle and a fetched example hold no links. On
-Windows, clone with `git config core.symlinks true` and symlink permission, or
-git writes the link as a text file and the import fails. The high-density and
-RF-DETR examples still find `support/python` in a folder above `main.py`.
+A Python implementation imports the shared helpers through the
+`src/python/sima_examples` link that `agents/rules.md` "Where code goes" describes. Clone with
+`git clone -c core.symlinks=true` (on Windows, with Developer Mode on); without it git writes the
+link as a text file and `main.py` cannot import `sima_examples`.
 
 Do not add legacy root-level paths such as `main.py`, `main.cpp`, `common/`,
 `python/`, or `cpp/`.
@@ -259,7 +253,7 @@ generation, and affected CI workflows.
 | `examples/<category>/<example>/src/python/` | Python implementation and dependencies |
 | `examples/<category>/<example>/src/common/` | Shared runtime configuration and data |
 | `support/README.md` | What each shared helper does |
-| `support/python/` | Helpers the Python examples share. An example that links them from `src/python/sima_examples` in the repository holds its own copy in that folder here |
+| `support/python/` | Helpers the Python examples share, for the examples that find them in a folder above `main.py`. An example with the `src/python/sima_examples` link has its own copy in that folder instead |
 | `support/cpp/` | Source of the helpers the C++ executables are built with, as reference |
 | `assets/datasets/` | Shipped runtime sample data |
 | `models/` | User-managed model packages |

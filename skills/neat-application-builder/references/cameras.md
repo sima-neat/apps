@@ -19,4 +19,5 @@ modes. `include/nodes/io/CameraInput.h` and `UsbCameraInput.h` define the option
   camera lists. Call `usb_camera_info(options)` once and pass the result to `UsbCameraInput`.
   Its `decoded_format` (NV12, or NV16 for 4:2:2 webcams) is the `SimaDecode` output format and
   the model's preprocessing input format. Forward the JPEG frames to Insight with
-  `Passthrough(RtspCodec::MJPEG)`.
+  `Passthrough(RtspCodec::MJPEG)`, which carries RTP/JPEG: at most 2040 pixels per side, in
+  multiples of 8, so pick a camera mode within that or the sender's caps fail to negotiate.
