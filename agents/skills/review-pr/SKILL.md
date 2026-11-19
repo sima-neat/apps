@@ -14,7 +14,8 @@ says what to check and in which order; cite the owning file in each finding.
 ## Steps
 
 1. Read the linked issue and the pull request description. List every behavior the change
-   claims.
+   claims. Report a description that lacks a section, graph, screenshot, or test row that
+   `agents/skills/write-pr-description/SKILL.md` requires for this change.
 2. Read `agents/rules.md`, `agents/coding-style.md`, the `CONTRIBUTING.md` sections for the
    areas the change touches, and both customer skills under `skills/`.
 3. Trace each mode the README advertises from source to result: the input, the model, every

@@ -23,6 +23,7 @@ reader. `CONTRIBUTING.md` holds the layout, README contract, test registration, 
 |---|---|
 | Add an example, or convert one to the shared structure | `agents/skills/add-or-convert-example/SKILL.md` |
 | Review a pull request | `agents/skills/review-pr/SKILL.md` |
+| Write or update a pull request description | `agents/skills/write-pr-description/SKILL.md` |
 | Write or review any example code | `agents/coding-style.md` |
 | Place code, change config keys, tests, or packaging | `agents/rules.md` |
 | Judge how an example uses nodes, graphs, and the Neat APIs | `skills/neat-application-builder/SKILL.md` |
