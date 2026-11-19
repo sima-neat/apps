@@ -51,6 +51,20 @@ is the reference: read its `main.py` and `main.cpp` before writing or reviewing 
 - Read it with `sima_examples.config.Config` in Python and `sima_examples::Config` in
   C++, and call `reject_unread_keys()` after the last read, so an old or misspelled key fails
   at startup.
+- `config.yaml` sets one configuration: one input type with only the keys it reads. When the
+  example supports several input types, `input.type` names the one set, and comments under it
+  list the keys each other type takes:
+
+  ```yaml
+  input:
+    type: rtsp        # rtsp, http, or usb. For http, replace codec, tcp, and latency_ms with
+                      # ssl_strict. For usb, set source to a camera ID and add width and height.
+    source: rtsp://<host>:<port>/<stream>
+    codec: h264       # h264, h265, or mjpeg.
+  ```
+
+  The code reads the keys of the configured type, so a key left from another type fails at
+  `reject_unread_keys()`.
 - A value a customer has no reason to change, such as an internal buffer count that is the
   same in every shipped profile, is not a setting: write it in the code where the option is
   set.
