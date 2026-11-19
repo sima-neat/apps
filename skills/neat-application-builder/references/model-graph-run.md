@@ -25,6 +25,11 @@ Required MPK Cast/Quant/Tess adapters remain automatic; `preprocess.enable = Off
 does not select MLA-only execution. See Core's
 [Model guide](https://github.com/sima-neat/core/blob/develop/docs/develop-apps/development-workflow/model.mdx#raw-tensor-input).
 
+Image preprocessing does not convert NV12 or NV16 frames to `GRAY8`; the build
+fails with "no implicit YUV conversion". For a grayscale model, pass the
+decoded frame's Y plane as a `GRAY8` tensor, as
+`examples/feature-extraction/superpoint-feature-matcher` does.
+
 Read outputs by the contract `output_specs()` reports:
 
 - Outputs carry the model package's logical shape (for example `[1, 1000]` for

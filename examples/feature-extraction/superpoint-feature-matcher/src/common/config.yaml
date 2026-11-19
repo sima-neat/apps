@@ -1,0 +1,60 @@
+superpoint:
+  # See Prepare the Model in the README for all three packages.
+  path: models/superpoint/w8a8/superpoint_w8a8_mpk.tar.gz
+
+matcher:
+  type: lightglue            # lightglue or superglue. Only the matching section below is read.
+
+  lightglue:
+    path: models/lightglue_superpoint/w8a8/lightglue_superpoint_w8a8_mpk.tar.gz
+    match_threshold: 0.1     # Lowest assignment probability that counts as a match.
+
+  superglue:
+    path: models/superglue_outdoor/w16a16/superglue_outdoor_w16a16_mpk.tar.gz
+    match_threshold: 0.2     # Lowest match score after the Sinkhorn iterations.
+    sinkhorn_iterations: 20  # Sinkhorn iterations on the CPU.
+
+source:
+  type: rtsp                 # rtsp, http, usb or mipi. Only the matching section below is read.
+
+  rtsp:
+    url: <rtsp-url>          # rtsp://<rtsp-source-ip>:<port>/<stream-name>
+    codec: h264              # h264, h265 or mjpeg.
+    tcp: true                # RTSP over TCP.
+    latency_ms: 100          # Receive latency.
+    fps: 0                   # 0 detects it from the stream. Set it for MJPEG streams that don't report one.
+
+  http:
+    url: <http-mjpeg-url>    # http(s)://... MJPEG streams only.
+    ssl_strict: true         # false accepts self-signed HTTPS certificates.
+    fps: 0                   # 0 detects it from the stream.
+
+  usb:
+    camera: ""               # A camera ID from pyneat.usb_camera_ids().
+    width: 1280              # One of the camera's MJPEG modes, exactly: width, height and fps.
+    height: 720
+    fps: 30
+
+  mipi:
+    camera: ""               # A libcamera camera name from `cam -l`. Empty picks the default camera.
+    width: 1920              # A mode the sensor supports: width, height and fps.
+    height: 1080
+    fps: 30
+
+inference:
+  frames: 0                  # Frame limit. 0 means run continuously.
+
+output:
+  save_dir: ""               # Optional directory for composed frames.
+  save_every: 0              # Save every Nth composed frame. 0 disables saving.
+  insight:
+    host: <insight-host-ip>  # Host running the Insight receiver/viewer.
+    video_port: 9000         # UDP video port.
+    bitrate_kbps: 8000       # H.264 bitrate of the composed frame, twice the source width.
+
+# Test harness settings only. Normal example runs ignore this section.
+testing:
+  e2e:
+    output:
+      save_every: 10
+      total_saved_frames: 20

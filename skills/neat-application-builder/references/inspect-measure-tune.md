@@ -46,3 +46,14 @@ moving a stage to another processor. Where buffers live between stages is descri
   lossless processing.
 - Change queue depths and inference buffer counts only after a measurement
   shows the need, and measure again after each change.
+
+## Tune CPU work
+
+- When CPU stages slow down under load but not alone, read each thread's CPU
+  time in `/proc/self/task/<tid>/stat` before changing the pipeline.
+- `opencv-python` bundles a multithreaded OpenBLAS for `cv2.gemm`, and its idle
+  workers spin at full CPU between calls, taking every core of the DevKit. An
+  application that runs its own CPU threads sets `OPENBLAS_NUM_THREADS=1`
+  before importing `cv2` and calls `cv2.setNumThreads(1)`, then runs frames in
+  parallel. OpenCV and numpy release the GIL during their calls, so Python
+  worker threads scale for drawing and matrix work.
