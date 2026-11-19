@@ -208,12 +208,10 @@ without opening a stream or touching Insight:
   the archive, so this appears only once the run starts.
 - `has unknown keys: <key>` names a key the application does not read, such as
   `streams` from an older config. Rename it as the packaged config shows.
-- `failed to probe RTSP frame rate: <url>` appears with `input.fps: 0`. From the
-  C++ binary it can mean an unreachable source or one that advertises no frame
-  rate. The Python entrypoint reports an unreachable source as
-  `failed to open RTSP source for probing: <url>`. Verify the URL from the board
-  itself rather than from the machine running Insight; the URL Insight displays
-  is not always reachable from the target.
+- `failed to probe RTSP frame rate: <url>` appears with `input.fps: 0` when the
+  source is unreachable from the board or reports no frame rate. Verify the URL
+  from the board itself; the URL Insight displays is not always reachable from
+  the target.
 
 ## Source Files
 

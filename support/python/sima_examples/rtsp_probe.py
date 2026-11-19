@@ -5,6 +5,7 @@ Mirrors support/cpp/rtsp_probe.h.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 import cv2
@@ -17,11 +18,14 @@ class RtspStreamInfo:
     fps: int
 
 
-def probe_rtsp_stream_info(url: str) -> RtspStreamInfo:
-    capture = cv2.VideoCapture(url)
+def probe_rtsp_stream_info(url: str, tcp: bool) -> RtspStreamInfo:
+    """Read the stream with OpenCV's FFmpeg backend, over TCP when `tcp` is set."""
+    # The FFmpeg backend reads its RTSP options from this variable when it opens the URL.
+    os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
+        "rtsp_transport;tcp" if tcp else "rtsp_transport;udp"
+    )
+    capture = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
     try:
-        if not capture.isOpened():
-            raise RuntimeError(f"failed to open RTSP source for probing: {url}")
         info = RtspStreamInfo(
             width=int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0),
             height=int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0),
@@ -29,6 +33,7 @@ def probe_rtsp_stream_info(url: str) -> RtspStreamInfo:
         )
     finally:
         capture.release()
+    # An unreachable source and one that reports no frame rate fail the same way, as in C++.
     if info.fps <= 0:
         raise RuntimeError(f"failed to probe RTSP frame rate: {url}")
     return info

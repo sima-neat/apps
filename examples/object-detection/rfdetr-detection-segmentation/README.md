@@ -193,12 +193,10 @@ from both implementations.
   `coco-labels.txt`, whose `unused` lines fill the IDs COCO leaves empty.
 - `input.codec must be h264, h265, or mjpeg` means `input.codec` names a codec
   this example does not decode.
-- With `input.fps: 0`, `failed to probe RTSP frame rate: <url>` from C++, or
-  `failed to open RTSP source for probing: <url>` from Python, means the source
-  could not be probed, usually because the URL is not reachable from the board.
-  Verify it from the board itself; the URL Insight displays is not always
-  reachable from the target. Where the source is reachable but reports no frame
-  rate, set `input.fps`.
+- `failed to probe RTSP frame rate: <url>` appears with `input.fps: 0` when the
+  source is unreachable from the board or reports no frame rate. Verify the URL
+  from the board itself; the URL Insight displays is not always reachable from
+  the target. For a reachable source with no frame rate, set `input.fps`.
 
 ## Performance
 
