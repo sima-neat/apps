@@ -8,8 +8,10 @@ reader. `CONTRIBUTING.md` holds the layout, README contract, test registration, 
 
 1. An example's entrypoint shows the Neat flow. One function creates the `Model`, builds the
    whole graph with every `connect`, runs it, and closes it.
-2. Code without a Neat API call that two or more examples need lives in `support/`. Code only
-   one example needs stays in that example, in its entrypoint or its `utils/` folder.
+2. Code two or more examples need lives in `support/`, the shared library. It may read Neat
+   data types but never creates a model, graph, or run. Code one example needs stays in that
+   example, in its entrypoint or its `utils/` folder. `agents/rules.md` "Where code goes"
+   decides each case.
 3. A helper every example would need around a Neat API call is a Core gap. Open a Core issue
    instead of adding an Apps workaround.
 4. `config.yaml` uses the key names in `examples/config-keys.yaml` and puts example-only

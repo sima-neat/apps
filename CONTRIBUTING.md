@@ -243,6 +243,7 @@ generation, and affected CI workflows.
 | `examples/<category>/<example>/src/cpp/` | C++ implementation reference |
 | `examples/<category>/<example>/src/python/` | Python implementation and dependencies |
 | `examples/<category>/<example>/src/common/` | Shared runtime configuration and data |
+| `support/README.md` | What each shared helper does |
 | `support/python/` | Helpers the Python examples share |
 | `support/cpp/` | Source of the helpers the C++ executables are built with, as reference |
 | `assets/datasets/` | Shipped runtime sample data |
@@ -259,7 +260,7 @@ to compile source or run the Apps test suite.
 | --- | --- |
 | `examples/` | Application examples organized by category |
 | `examples/config-keys.yaml` | Config keys the examples share, checked by `tests/scripts/test_config_keys.py` |
-| `support/cpp/sima_examples/`, `support/python/sima_examples/` | Code without Neat API calls that two or more examples share, under the same file and function names in each language |
+| `support/` | The shared library: code two or more examples need, under the same file and function names in each language. `support/README.md` lists the modules, and `agents/rules.md` says what goes there instead of an example's `utils/` |
 | `skills/` | Customer skills that sima-cli installs |
 | `agents/` | Rules and skills for contributors' agents and the automatic review |
 | `assets/datasets/` | Runtime datasets shipped with Apps |

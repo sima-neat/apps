@@ -5,21 +5,36 @@ Where each part of an application goes, and what every change keeps true.
 
 ## Where code goes
 
-| Code | Place |
-|---|---|
-| Model, graph, run, and every other Neat API call | The example's entrypoint, `src/python/main.py` and `src/cpp/main.cpp` |
-| Settings a customer may change | The example's `src/common/config.yaml` |
-| Files the example's C++ and Python share | The example's `src/common/` |
-| Code without a Neat API call that two or more examples need | `support/python/sima_examples/` and `support/cpp/sima_examples/`, included as `sima_examples/<file>.h` |
-| Code only one example needs | That example's entrypoint, or its `src/python/utils/` and `src/cpp/utils/` when the code would bury the application flow. The C++ `utils/` files join the example's target through `target_sources` |
-| Model preparation | The Model Registry when it is reusable. Temporary preparation stays in the example's `src/common` as one development-only flow, never a packaged runtime dependency |
-| A helper every example would need around a Neat API call | Core: open a Core issue with a reproducer instead of adding it to Apps |
-| Test helpers | `tests/utils/` in Python and `support/cpp/sima_examples/testing/` in C++ |
+Place each piece of code by the first question it answers yes to:
 
-- `support/` code mirrors across languages: a helper both languages need has the same file
-  name, function names, and behavior in each, such as `Config.load` in `config.py` and
-  `Config::load` in `config.h`, and each names the other in its header comment. A helper only one language needs, such as C++
-  `pull_status.h`, exists only there.
+1. Does it create a `Model`, add or connect a graph node, build a `Run`, or push to or pull
+   from one? It goes in the example's entrypoint, `src/python/main.py` and `src/cpp/main.cpp`.
+2. Would every example need it around a Neat API call? It is a Core gap: open a Core issue
+   with a reproducer instead of adding it to Apps.
+3. Do two or more examples need it? It goes in `support/`, the shared library.
+4. Otherwise it belongs to one example: in its entrypoint, or in its `src/python/utils/` and
+   `src/cpp/utils/` when it would bury the application flow.
+
+| Place | Holds | Examples |
+|---|---|---|
+| Entrypoint | The Neat flow: models, the whole graph, the run, and its teardown | `main.py`, `main.cpp` |
+| `src/*/utils/` | Host-side logic one example needs, such as postprocessing or tracking | RF-DETR `postprocess.*`, the trackers' `tracker.*` |
+| `support/python/sima_examples/`, `support/cpp/sima_examples/` | Code two or more examples need. It may read and convert Neat data types, such as `Tensor`, `Sample`, and `PullStatus`, and never creates a model, graph, or run | `config`, `labels`, `rtsp_probe`, `detection_egress` |
+| `src/common/` | Files one example's C++ and Python share | `config.yaml`, label files |
+| Model Registry | Reusable model preparation. Temporary preparation stays in the example's `src/common/` as one development-only flow, never a packaged runtime dependency | |
+| `tests/utils/`, `support/cpp/sima_examples/testing/` | Test helpers, in Python and C++ | the metadata listener |
+
+- When a second example needs code from one example's `utils/`, move it to `support/` in the
+  same pull request, in both languages, and delete the copy.
+- `support/` mirrors across languages: a helper both languages need has the same file name,
+  function names, and behavior in each, such as `Config.load` in `config.py` and
+  `Config::load` in `config.h`, and each names the other in its header comment. A helper only
+  one language needs, such as C++ `pull_status.h`, exists only there. `support/README.md`
+  lists every module.
+- `support/` has no example-specific names, keys, or defaults. It is tested once, under
+  `tests/scripts/` for Python, not again in each example.
+- The C++ `utils/` files join the example's target through `target_sources`. A Python
+  entrypoint imports its `utils/` modules with `from utils import <module>`.
 - A Python entrypoint finds `support/python` in a folder above itself, as the high-density
   example does. `build.sh` and `scripts/get-example.sh` ship that folder, and
   `support/cpp/sima_examples/` without `testing/` as reference source.
@@ -65,8 +80,8 @@ Where each part of an application goes, and what every change keeps true.
   the process started. Unit tests download nothing and need no live service.
 - A broken test prerequisite fails clearly. A test never skips silently or falls back to
   other inputs.
-- Unit tests cover the example's own logic. Code moved to `support/` is tested once there,
-  under `tests/scripts/` for Python.
+- Unit tests cover the example's own logic. `support/` code is tested once, as
+  "Where code goes" says.
 
 ## Documentation and publication
 

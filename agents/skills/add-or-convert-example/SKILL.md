@@ -23,8 +23,9 @@ The reference is `examples/object-detection/high-density-multi-stream-object-det
 4. Write `main` as the application flow with the whole graph in it, and one small function per
    option struct or subgraph. Check each option against the installed Core header and delete
    assignments that restate a default.
-5. Move code without a Neat API call that another example also needs into `support/`, in both
-   languages. Replace hand-written code that a public Neat API already provides, such as box
+5. Place each helper as `agents/rules.md` "Where code goes" decides: code another example
+   also needs moves into `support/` in both languages, and code only this example needs goes
+   in its `utils/` when it would bury the flow. Replace hand-written code that a public Neat API already provides, such as box
    payload parsing with `decode_bbox_tensor`. When a missing Neat API forces a workaround, open
    a Core issue and link it in a comment.
 6. Delete everything nothing reaches: options, branches, config keys, environment variables,

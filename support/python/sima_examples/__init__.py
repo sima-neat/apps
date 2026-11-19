@@ -1,4 +1,5 @@
-"""Helpers the Python examples share. None of them calls the Neat APIs.
+"""Helpers the Python examples share. See support/README.md for the module list.
 
-The examples call pyneat themselves, so each one shows how a Neat application is built.
+No helper creates a model, graph, or run: the examples call pyneat themselves, so each one
+shows how a Neat application is built.
 """
