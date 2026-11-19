@@ -168,7 +168,7 @@ APU is the application processor, the board's general-purpose CPU.
 | Extra fragment | `extra_fragment` | `extra_fragment` | `""` | A GStreamer text fragment added at the end of the group | Not changed in any shipped example; keep the default |
 | Strict TLS | `ssl_strict` | `ssl_strict` | `true` | `false` turns off strict TLS certificate checks | The server uses a self-signed HTTPS certificate: `single-stream-object-detector` documents `ssl_strict: false` for that in its config |
 | Source FPS | `source_fps` | `source_fps` | `-1` | Frame rate the server sends. Written into the caps and used as the decoder frame rate | The stream does not report a frame rate. `single-stream-object-detector` sets it from its config `fps`, where `0` detects it from the stream |
-| Videorate | `use_videorate` | `use_videorate` | `false` | Adds a node that drops or repeats frames to reach `video_rate_fps` | Not changed in any shipped example; keep the default |
+| Videorate | `use_videorate` | `use_videorate` | `false` | Adds a node that drops frames to lower the rate to `video_rate_fps`. It never repeats frames | Not changed in any shipped example; keep the default |
 | Videorate FPS | `video_rate_fps` | `video_rate_fps` | `-1` | Frame rate that videorate outputs. `-1` means `source_fps` | Not changed in any shipped example; keep the default |
 | Header capture | `header_capture` | `header_capture` | Empty | Names of multipart part headers to copy into `Sample::attributes` of the decoded frame they arrived with. Empty turns capture off. At most 64 names of at most 128 bytes | Not changed in any shipped example; keep the default |
 

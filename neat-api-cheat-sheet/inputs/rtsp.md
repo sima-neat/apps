@@ -136,7 +136,7 @@ board's general-purpose CPU.
 | Decode height | `dec_height` | `dec_height` | `-1` | Height of the decoded frames | Same as decode width |
 | Decode FPS | `dec_fps` | `dec_fps` | `-1` | Frame rate of the decoded frames. Also a fallback source frame rate | Use `source_fps` instead. Both together must be equal |
 | Decoder buffers | `num_buffers` | `num_buffers` | `-1` (decoder default) | How many decoded frames the decoder can hold | The model and preview keep frames while the decoder needs free ones, for example the rfdetr example sets `32` for MJPEG |
-| Videorate | `use_videorate` | `use_videorate` | `false` | Adds a node that drops or repeats frames to reach `video_rate_fps` | The next node needs a lower frame rate than the camera sends |
+| Videorate | `use_videorate` | `use_videorate` | `false` | Adds a node that drops frames to lower the rate to `video_rate_fps`. It never repeats frames | The next node needs a lower frame rate than the camera sends |
 | Videorate FPS | `video_rate_fps` | `video_rate_fps` | `-1` | Frame rate that videorate outputs. `-1` means `source_fps` | Set the rate you need. Requires `use_videorate = true` |
 | Decoder input buffers | `decoder_input_buffers` | `decoder_input_buffers` | `-1` (decoder default) | How many encoded frames the decoder can queue | Many streams on one board. The high-density example sets it from its config |
 | Decoder tuning | `decoder_tuning` | `decoder_tuning` | `""` | Decoder tuning preset, for example `low-memory` or `throughput-low-latency` | Many streams on one board run out of decoder memory or fall behind. The high-density example sets it from its config |
