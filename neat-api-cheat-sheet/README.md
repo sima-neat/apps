@@ -31,6 +31,7 @@ Every page follows [TEMPLATE.md](TEMPLATE.md).
 - [RTSP inputs](inputs/rtsp.md): `RtspDecodedInput`, `RtspEncodedInput`, `RtspCodec`, reading an IP camera stream
 - [Cameras](inputs/cameras.md): `CameraInput`, `UsbCameraInput`, `HttpMjpegDecodedInput`, reading MIPI, USB and HTTP MJPEG cameras
 - [Decode and caps](inputs/decode-and-caps.md): `SimaDecode`, `CapsRaw`, `CapsMemory`, `VideoConvert`, `VideoScale`, `VideoRate`, decoding and fixing the frame format
+- [PCIe](inputs/pcie.md): `PCIeSrc`, receiving streams from the PC that a Modalix PCIe card is plugged into
 
 ## How C++ names map to Python names
 
