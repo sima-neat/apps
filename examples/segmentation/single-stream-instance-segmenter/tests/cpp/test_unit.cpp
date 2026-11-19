@@ -6,9 +6,9 @@
 #include "../../src/cpp/main.cpp"
 #undef main
 
-#include "support/runtime/pull_status.h"
-#include "support/testing/test_checks.h"
-#include "support/testing/test_process.h"
+#include "support/cpp/pull_status.h"
+#include "support/cpp/testing/test_checks.h"
+#include "support/cpp/testing/test_process.h"
 
 #include <nlohmann/json.hpp>
 

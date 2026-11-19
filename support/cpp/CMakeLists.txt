@@ -1,8 +1,9 @@
 add_library(sima_neat_apps_support_runtime STATIC
-  runtime/asset_utils.cpp
-  runtime/config_utils.cpp
-  runtime/example_utils.cpp
-  object_detection/obj_detection_utils.cpp
+  asset_utils.cpp
+  config.cpp
+  example_utils.cpp
+  obj_detection_utils.cpp
+  rtsp_probe.cpp
 )
 add_library(SimaNeatApps::support_runtime ALIAS sima_neat_apps_support_runtime)
 
@@ -30,7 +31,7 @@ if (BUILD_TESTING)
   endif()
 
   add_library(sima_neat_apps_support_testing STATIC
-    runtime/config_utils.cpp
+    config.cpp
     testing/metadata_json_listener.cpp
     testing/source_cases.cpp
     testing/test_checks.cpp

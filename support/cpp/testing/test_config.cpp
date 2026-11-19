@@ -1,4 +1,4 @@
-#include "support/testing/test_config.h"
+#include "support/cpp/testing/test_config.h"
 
 #include <cstdlib>
 #include <fstream>
@@ -13,8 +13,8 @@ namespace {
 
 namespace fs = std::filesystem;
 
-std::map<std::string, ScalarConfig>& config_cache() {
-  static std::map<std::string, ScalarConfig> cache;
+std::map<std::string, Config>& config_cache() {
+  static std::map<std::string, Config> cache;
   return cache;
 }
 
@@ -24,7 +24,7 @@ std::string full_key(const std::string& example_name, const std::string& section
   return section + "." + key;
 }
 
-void require_present(const ScalarConfig& config, const std::string& key) {
+void require_present(const Config& config, const std::string& key) {
   if (!config.string_value(key).has_value()) {
     throw std::runtime_error("src/common/config.yaml missing required key: " + key);
   }
@@ -126,7 +126,7 @@ void write_node(std::ostream& out, const ConfigNode& node, int indent) {
   }
 }
 
-std::map<std::string, std::string> runtime_scalars_for_e2e(const ScalarConfig& common) {
+std::map<std::string, std::string> runtime_scalars_for_e2e(const Config& common) {
   std::map<std::string, std::string> values = common.scalars();
   std::map<std::string, std::string> e2e_overrides;
 
@@ -202,12 +202,11 @@ std::filesystem::path example_common_config_path(const std::string& example_name
   return matches.front();
 }
 
-const ScalarConfig& example_common_config(const std::string& example_name) {
+const Config& example_common_config(const std::string& example_name) {
   auto& cache = config_cache();
   auto it = cache.find(example_name);
   if (it == cache.end()) {
-    it = cache.emplace(example_name, ScalarConfig::load(example_common_config_path(example_name)))
-             .first;
+    it = cache.emplace(example_name, Config::load(example_common_config_path(example_name))).first;
   }
   return it->second;
 }
@@ -222,7 +221,7 @@ std::vector<std::string> configured_model_paths(const std::string& example_name,
     return paths;
   }
 
-  const ScalarConfig& config = example_common_config(example_name);
+  const Config& config = example_common_config(example_name);
   std::string configured = config.string_or("model.path", "");
   if (configured.empty()) {
     configured = config.string_or("model", "");
@@ -254,7 +253,7 @@ std::string model_case_label(const std::string& case_name, const std::string& mo
 
 int e2e_int(const std::string& example_name, const std::string& section, const std::string& key) {
   const std::string path = full_key(example_name, section, key);
-  const ScalarConfig& config = example_common_config(example_name);
+  const Config& config = example_common_config(example_name);
   require_present(config, path);
   return config.int_or(path, 0);
 }

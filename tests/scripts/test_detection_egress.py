@@ -1,4 +1,4 @@
-"""The Python metadata message matches the C++ one in support/object_detection/detection_egress.h.
+"""The Python metadata message matches the C++ one in support/cpp/detection_egress.h.
 
 The inputs and expected values are the ones the high-density example's C++ unit test uses.
 """

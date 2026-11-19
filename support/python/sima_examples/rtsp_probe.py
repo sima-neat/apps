@@ -1,4 +1,7 @@
-"""Read an RTSP stream's frame size and frame rate before the graph is built."""
+"""Read an RTSP stream's frame size and frame rate before the graph is built.
+
+Mirrors support/cpp/rtsp_probe.h.
+"""
 
 from __future__ import annotations
 

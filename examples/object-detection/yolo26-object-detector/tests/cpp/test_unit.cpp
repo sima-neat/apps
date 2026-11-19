@@ -1,5 +1,5 @@
 // Unit test for yolo26-object-detector: validates CLI arg handling.
-#include "support/testing/test_process.h"
+#include "support/cpp/testing/test_process.h"
 
 #include <iostream>
 #include <string>

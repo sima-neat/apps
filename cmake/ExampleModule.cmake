@@ -70,10 +70,11 @@ function(_sima_neat_apps_ensure_support_runtime apps_root)
   find_package(nlohmann_json REQUIRED)
 
   add_library(sima_neat_apps_support_runtime STATIC
-    "${apps_root}/support/runtime/asset_utils.cpp"
-    "${apps_root}/support/runtime/config_utils.cpp"
-    "${apps_root}/support/runtime/example_utils.cpp"
-    "${apps_root}/support/object_detection/obj_detection_utils.cpp"
+    "${apps_root}/support/cpp/asset_utils.cpp"
+    "${apps_root}/support/cpp/config.cpp"
+    "${apps_root}/support/cpp/example_utils.cpp"
+    "${apps_root}/support/cpp/obj_detection_utils.cpp"
+    "${apps_root}/support/cpp/rtsp_probe.cpp"
   )
   add_library(SimaNeatApps::support_runtime ALIAS sima_neat_apps_support_runtime)
 
@@ -106,12 +107,12 @@ function(_sima_neat_apps_ensure_support_testing apps_root)
   endif()
 
   add_library(sima_neat_apps_support_testing STATIC
-    "${apps_root}/support/runtime/config_utils.cpp"
-    "${apps_root}/support/testing/metadata_json_listener.cpp"
-    "${apps_root}/support/testing/source_cases.cpp"
-    "${apps_root}/support/testing/test_checks.cpp"
-    "${apps_root}/support/testing/test_config.cpp"
-    "${apps_root}/support/testing/test_process.cpp"
+    "${apps_root}/support/cpp/config.cpp"
+    "${apps_root}/support/cpp/testing/metadata_json_listener.cpp"
+    "${apps_root}/support/cpp/testing/source_cases.cpp"
+    "${apps_root}/support/cpp/testing/test_checks.cpp"
+    "${apps_root}/support/cpp/testing/test_config.cpp"
+    "${apps_root}/support/cpp/testing/test_process.cpp"
   )
   add_library(SimaNeatApps::support_testing ALIAS sima_neat_apps_support_testing)
 

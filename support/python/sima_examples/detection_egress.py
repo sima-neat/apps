@@ -1,6 +1,6 @@
 """Build the object-detection metadata message that Insight draws over the video.
 
-Mirrors `sima_examples::detection_egress` in support/object_detection/detection_egress.h,
+Mirrors `sima_examples::detection_egress` in support/cpp/detection_egress.h,
 so the C++ and Python examples send the same JSON.
 """
 

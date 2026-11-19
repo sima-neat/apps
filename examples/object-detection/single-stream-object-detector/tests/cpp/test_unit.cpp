@@ -1,11 +1,11 @@
 // Unit test for single-stream-object-detector: CLI handling, the ffprobe
 // command builder, the configuration rules --validate-config-only can
 // reach without a model or a stream, and the NV16 saved-frame conversion.
-#include "support/runtime/example_utils.h"
-#include "support/runtime/ffprobe_command.h"
-#include "support/runtime/pull_status.h"
-#include "support/testing/test_checks.h"
-#include "support/testing/test_process.h"
+#include "support/cpp/example_utils.h"
+#include "support/cpp/rtsp_probe.h"
+#include "support/cpp/pull_status.h"
+#include "support/cpp/testing/test_checks.h"
+#include "support/cpp/testing/test_process.h"
 
 #include <opencv2/imgproc.hpp>
 

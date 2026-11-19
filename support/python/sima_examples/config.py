@@ -22,7 +22,7 @@ def _flatten(mapping: dict[str, Any], prefix: str = "") -> dict[str, Any]:
 class Config:
     """The values of one config file. Every key the example reads must be present.
 
-    Mirrors `sima_examples::ScalarConfig` in support/runtime/config_utils.h.
+    Mirrors `sima_examples::Config` in support/cpp/config.h.
     """
 
     def __init__(self, path: Path) -> None:

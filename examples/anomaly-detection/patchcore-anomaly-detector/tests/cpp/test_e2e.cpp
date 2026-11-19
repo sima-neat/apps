@@ -2,9 +2,9 @@
 // nominal set, then scores the images in SIMANEAT_APPS_TEST_INPUT_DIR and
 // verifies the overlay output; the held-out test checks verdicts and overlays
 // on the bundled held-out normal and defect images.
-#include "support/testing/metadata_json_listener.h"
-#include "support/testing/test_config.h"
-#include "support/testing/test_process.h"
+#include "support/cpp/testing/metadata_json_listener.h"
+#include "support/cpp/testing/test_config.h"
+#include "support/cpp/testing/test_process.h"
 
 #include <nlohmann/json.hpp>
 #include <opencv2/core.hpp>

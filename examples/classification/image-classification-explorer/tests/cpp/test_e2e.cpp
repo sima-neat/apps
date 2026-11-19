@@ -1,8 +1,8 @@
 // E2E test for image-classification-explorer.
 // Runs the binary against a real image with four real models and verifies the
 // report files it produces.
-#include "support/testing/test_process.h"
-#include "support/testing/test_config.h"
+#include "support/cpp/testing/test_process.h"
+#include "support/cpp/testing/test_config.h"
 
 #include <nlohmann/json.hpp>
 

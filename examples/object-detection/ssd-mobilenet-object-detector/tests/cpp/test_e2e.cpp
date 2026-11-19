@@ -1,6 +1,6 @@
 // E2E test: run the binary and validate annotated images plus decoded detections.
-#include "support/testing/test_process.h"
-#include "support/testing/test_config.h"
+#include "support/cpp/testing/test_process.h"
+#include "support/cpp/testing/test_config.h"
 
 #include <nlohmann/json.hpp>
 

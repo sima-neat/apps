@@ -2,9 +2,9 @@
 // Runs the binary with each scoped DETR model and a local image folder, and verifies it exits
 // successfully, produces annotated output images, and detects objects in every image. A second
 // case does the same for a photo larger than Neat's default 1920x1080 input limit.
-#include "support/testing/source_cases.h"
-#include "support/testing/test_config.h"
-#include "support/testing/test_process.h"
+#include "support/cpp/testing/source_cases.h"
+#include "support/cpp/testing/test_config.h"
+#include "support/cpp/testing/test_process.h"
 
 #include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp>

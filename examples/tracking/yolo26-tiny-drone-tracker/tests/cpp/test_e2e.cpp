@@ -1,8 +1,8 @@
 // E2E test for yolo26-tiny-drone-tracker.
 // Runs the RTSP pipeline and verifies sampled debug frames are written.
-#include "support/testing/metadata_json_listener.h"
-#include "support/testing/test_config.h"
-#include "support/testing/test_process.h"
+#include "support/cpp/testing/metadata_json_listener.h"
+#include "support/cpp/testing/test_config.h"
+#include "support/cpp/testing/test_process.h"
 
 #include <filesystem>
 #include <iostream>

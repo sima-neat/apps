@@ -1,4 +1,4 @@
-#include "support/testing/test_checks.h"
+#include "support/cpp/testing/test_checks.h"
 
 #include <fstream>
 #include <iostream>
@@ -26,8 +26,7 @@ bool expect_not_contains(const std::string& haystack, const std::string& needle,
 }
 
 std::filesystem::path write_scratch_config(const std::string& example_name,
-                                           const std::string& test_name,
-                                           const std::string& body) {
+                                           const std::string& test_name, const std::string& body) {
   const std::string temp_dir = create_test_scratch_dir(example_name, test_name);
   if (temp_dir.empty()) {
     throw std::runtime_error("failed to create scratch directory for " + test_name);

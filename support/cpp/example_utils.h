@@ -19,27 +19,8 @@ namespace sima_examples {
 void require(bool cond, const std::string& msg);
 double time_ms();
 
-struct RtspProbeOptions {
-  int payload_type = 96;
-  int latency_ms = 200;
-  bool rtsp_tcp = true;
-  bool debug = false;
-  int decoder_num_buffers = 7;
-};
-
-struct RtspStreamInfo {
-  int width = 0;
-  int height = 0;
-  int fps = 0;
-};
-
-bool probe_rtsp_stream_info(const std::string& url, const RtspProbeOptions& opt,
-                            RtspStreamInfo& out);
-
 std::filesystem::path default_goldfish_path();
 bool download_file(const std::string& url, const std::filesystem::path& out_path);
-
-cv::Mat load_rgb_resized(const std::string& image_path, int w, int h);
 
 bool infer_dims(const simaai::neat::Tensor& t, int& w, int& h);
 

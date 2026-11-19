@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// The detection metadata message sent to Insight. Mirrors sima_examples.detection_egress in
+// support/python.
+
 #pragma once
 
 #include <nlohmann/json.hpp>

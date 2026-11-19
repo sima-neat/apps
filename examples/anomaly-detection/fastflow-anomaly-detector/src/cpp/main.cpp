@@ -29,9 +29,10 @@
  * to Insight as H.264 video. output.save_dir writes the same frames as JPEGs.
  */
 #include "neat.h"
-#include "support/runtime/config_utils.h"
-#include "support/runtime/example_utils.h"
-#include "support/runtime/pull_status.h"
+#include "support/cpp/config.h"
+#include "support/cpp/example_utils.h"
+#include "support/cpp/rtsp_probe.h"
+#include "support/cpp/pull_status.h"
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -88,7 +89,7 @@ struct Config {
 };
 
 /// One normalisation value per channel, in R, G, B order, from a list such as `[0.4, 0.4, 0.4]`.
-std::array<float, 3> rgb_stats(const sima_examples::ScalarConfig& raw, const std::string& key,
+std::array<float, 3> rgb_stats(const sima_examples::Config& raw, const std::string& key,
                                std::array<float, 3> fallback) {
   const auto text = raw.string_value(key);
   if (!text) {
@@ -107,7 +108,7 @@ std::array<float, 3> rgb_stats(const sima_examples::ScalarConfig& raw, const std
 }
 
 Config load_config(const fs::path& path) {
-  const auto raw = sima_examples::ScalarConfig::load(path);
+  const auto raw = sima_examples::Config::load(path);
   Config cfg;
   cfg.model_path = raw.string_or("model.path", "");
   cfg.mean = rgb_stats(raw, "model.normalize.mean", {0.3893437F, 0.35421189F, 0.36142577F});

@@ -1,5 +1,5 @@
 #include "examples/tracking/multi-stream-tracker/src/cpp/utils/tracker_api.cpp"
-#include "support/testing/test_process.h"
+#include "support/cpp/testing/test_process.h"
 
 #include <nlohmann/json.hpp>
 

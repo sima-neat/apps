@@ -1,6 +1,6 @@
 #pragma once
 
-#include "support/runtime/config_utils.h"
+#include "support/cpp/config.h"
 
 #include <filesystem>
 #include <map>
@@ -16,7 +16,7 @@ using ConfigLists = std::map<std::string, std::vector<std::string>>;
 std::filesystem::path example_common_config_path(const std::string& example_name);
 
 // Load the shipped src/common/config.yaml for an example.
-const ScalarConfig& example_common_config(const std::string& example_name);
+const Config& example_common_config(const std::string& example_name);
 
 // Resolve the configured model filename under the active test model directory.
 std::string configured_model_path(const std::string& example_name, const std::string& models_dir);

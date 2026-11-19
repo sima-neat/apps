@@ -1,5 +1,5 @@
 // Unit test for ssd-mobilenet-object-detector: validates CLI and decode configuration.
-#include "support/testing/test_process.h"
+#include "support/cpp/testing/test_process.h"
 
 #include <filesystem>
 #include <fstream>

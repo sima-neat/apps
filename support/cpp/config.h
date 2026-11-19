@@ -12,9 +12,9 @@ namespace sima_examples {
 
 // The values of one config.yaml, read by dotted key such as "input.rtsp.tcp". Scalars and
 // lists of scalars are supported; a list of mappings is skipped.
-class ScalarConfig {
+class Config {
 public:
-  static ScalarConfig load(const std::filesystem::path& path);
+  static Config load(const std::filesystem::path& path);
 
   [[nodiscard]] std::optional<std::string> string_value(const std::string& key) const;
   [[nodiscard]] std::string string_or(const std::string& key,

@@ -5,7 +5,7 @@
  * Usage: detr-object-detector [--config <path>]
  */
 #include "neat.h"
-#include "support/runtime/config_utils.h"
+#include "support/cpp/config.h"
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -79,7 +79,7 @@ struct Config {
 };
 
 Config load_config(const fs::path& path) {
-  const auto raw = sima_examples::ScalarConfig::load(path);
+  const auto raw = sima_examples::Config::load(path);
   Config cfg;
   cfg.model_path = raw.string_or("model.path", kDefaultModelPath);
   cfg.input_dir = raw.string_or("io.input_dir", "assets/datasets/coco");

@@ -1,7 +1,7 @@
 // E2E test for yolo26-object-detector.
 // Runs the binary with a real model, labels, and test images, verifies outputs.
-#include "support/testing/test_process.h"
-#include "support/testing/test_config.h"
+#include "support/cpp/testing/test_process.h"
+#include "support/cpp/testing/test_config.h"
 
 #include <filesystem>
 #include <iostream>

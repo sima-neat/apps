@@ -13,8 +13,9 @@
 #include <nodes/io/MetadataSender.h>
 #include "patchcore_memory_bank.h"
 #include "patchcore_overlay.h"
-#include "support/runtime/config_utils.h"
-#include "support/runtime/example_utils.h"
+#include "support/cpp/config.h"
+#include "support/cpp/example_utils.h"
+#include "support/cpp/rtsp_probe.h"
 #include <nlohmann/json.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -162,7 +163,7 @@ void validate_config(const Config& cfg) {
 }
 
 Config load_config(const fs::path& path) {
-  const auto raw = sima_examples::ScalarConfig::load(path);
+  const auto raw = sima_examples::Config::load(path);
   Config cfg;
   cfg.model_path = raw.string_or("model.path", "");
 

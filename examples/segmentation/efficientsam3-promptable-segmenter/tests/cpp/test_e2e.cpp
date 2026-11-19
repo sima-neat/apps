@@ -1,9 +1,9 @@
 // E2E test for efficientsam3-promptable-segmenter: an RTSP H.264 or H.265 stream in, H.264 video
 // and person segments out to Insight.
-#include "support/testing/metadata_json_listener.h"
-#include "support/testing/source_cases.h"
-#include "support/testing/test_config.h"
-#include "support/testing/test_process.h"
+#include "support/cpp/testing/metadata_json_listener.h"
+#include "support/cpp/testing/source_cases.h"
+#include "support/cpp/testing/test_config.h"
+#include "support/cpp/testing/test_process.h"
 
 #include <nlohmann/json.hpp>
 

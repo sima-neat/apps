@@ -1,9 +1,9 @@
 // E2E test for multi-stream-multi-model.
 // Runs four RTSP streams through four different models and verifies that each stream publishes
 // its own Insight contract and writes its own annotated debug frames.
-#include "support/testing/metadata_json_listener.h"
-#include "support/testing/test_config.h"
-#include "support/testing/test_process.h"
+#include "support/cpp/testing/metadata_json_listener.h"
+#include "support/cpp/testing/test_config.h"
+#include "support/cpp/testing/test_process.h"
 
 #include <nlohmann/json.hpp>
 

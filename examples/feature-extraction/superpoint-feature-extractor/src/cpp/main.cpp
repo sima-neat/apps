@@ -5,9 +5,10 @@
  * Usage: superpoint-feature-extractor [--config <path>]
  */
 #include "neat.h"
-#include "support/runtime/config_utils.h"
-#include "support/runtime/example_utils.h"
-#include "support/runtime/pull_status.h"
+#include "support/cpp/config.h"
+#include "support/cpp/example_utils.h"
+#include "support/cpp/rtsp_probe.h"
+#include "support/cpp/pull_status.h"
 
 #include <opencv2/imgproc.hpp>
 
@@ -46,7 +47,7 @@ struct Config {
 };
 
 Config load_config(const fs::path& path) {
-  const auto raw = sima_examples::ScalarConfig::load(path);
+  const auto raw = sima_examples::Config::load(path);
   Config cfg;
   cfg.model = raw.string_or("model.path", "models/superpoint/w8a8/superpoint_w8a8_mpk.tar.gz");
   cfg.rtsp_url = raw.string_or("source.rtsp_url", "");

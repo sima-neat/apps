@@ -1,5 +1,5 @@
 // Unit test for detr-object-detector: validates CLI arg and config handling.
-#include "support/testing/test_process.h"
+#include "support/cpp/testing/test_process.h"
 
 #include <filesystem>
 #include <fstream>

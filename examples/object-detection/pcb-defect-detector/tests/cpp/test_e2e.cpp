@@ -3,8 +3,8 @@
 // then verifies that one annotated image is written per input image.
 #include <opencv2/opencv.hpp>
 
-#include "support/testing/test_config.h"
-#include "support/testing/test_process.h"
+#include "support/cpp/testing/test_config.h"
+#include "support/cpp/testing/test_process.h"
 
 #include <algorithm>
 #include <filesystem>

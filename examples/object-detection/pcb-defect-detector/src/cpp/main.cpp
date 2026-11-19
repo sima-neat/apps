@@ -11,7 +11,7 @@
  *                            [--validate-config-only]
  */
 #include "neat.h"
-#include "support/runtime/config_utils.h"
+#include "support/cpp/config.h"
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -126,7 +126,7 @@ CliOptions parse_cli(int argc, char** argv) {
 }
 
 Config load_config(const CliOptions& cli) {
-  const auto raw = sima_examples::ScalarConfig::load(cli.config_path);
+  const auto raw = sima_examples::Config::load(cli.config_path);
 
   Config cfg;
   cfg.model_path = raw.string_or("model.path", "");

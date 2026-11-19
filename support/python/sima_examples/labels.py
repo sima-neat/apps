@@ -1,4 +1,4 @@
-"""Read a class-label file with one label per line."""
+"""Read a class-label file with one label per line. Mirrors support/cpp/labels.h."""
 
 from __future__ import annotations
 

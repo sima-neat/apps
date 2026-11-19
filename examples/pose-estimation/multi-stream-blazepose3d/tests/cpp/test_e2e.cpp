@@ -1,7 +1,7 @@
 #include "examples/pose-estimation/multi-stream-blazepose3d/src/cpp/pose_logic.h"
-#include "support/testing/metadata_json_listener.h"
-#include "support/testing/test_config.h"
-#include "support/testing/test_process.h"
+#include "support/cpp/testing/metadata_json_listener.h"
+#include "support/cpp/testing/test_config.h"
+#include "support/cpp/testing/test_process.h"
 
 #include <nlohmann/json.hpp>
 #include <opencv2/videoio.hpp>

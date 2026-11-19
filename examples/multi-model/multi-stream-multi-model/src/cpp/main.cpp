@@ -16,9 +16,10 @@
 #include "neat/models.h"
 #include "neat/node_groups.h"
 #include "neat/nodes.h"
-#include "support/object_detection/obj_detection_utils.h"
-#include "support/runtime/config_utils.h"
-#include "support/runtime/example_utils.h"
+#include "support/cpp/obj_detection_utils.h"
+#include "support/cpp/config.h"
+#include "support/cpp/example_utils.h"
+#include "support/cpp/rtsp_probe.h"
 
 #include <nodes/groups/VideoSender.h>
 #include <nodes/io/MetadataSender.h>
@@ -460,7 +461,7 @@ std::string unquote(std::string value) {
   return value;
 }
 
-/// Split `url: rtsp://host/path` into its key and value. ScalarConfig cannot reach inside a YAML
+/// Split `url: rtsp://host/path` into its key and value. Config cannot reach inside a YAML
 /// sequence, so the stream list is parsed here.
 bool split_key_value(const std::string& line, std::string& key, std::string& value) {
   const auto colon = line.find(':');
@@ -619,7 +620,7 @@ void validate_config(const AppConfig& cfg) {
 }
 
 AppConfig load_app_config(const fs::path& config_path) {
-  const auto raw = sima_examples::ScalarConfig::load(config_path);
+  const auto raw = sima_examples::Config::load(config_path);
   const auto default_labels =
       fs::path(SIMANEAT_APPS_EXAMPLE_SOURCE_DIR).parent_path() / "common" / "coco_label.txt";
 

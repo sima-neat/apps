@@ -1,4 +1,4 @@
-#include "support/runtime/config_utils.h"
+#include "support/cpp/config.h"
 
 #include <algorithm>
 #include <cctype>
@@ -117,13 +117,13 @@ std::string trim_copy(const std::string& value) {
   return value.substr(start, end - start + 1);
 }
 
-ScalarConfig ScalarConfig::load(const std::filesystem::path& path) {
+Config Config::load(const std::filesystem::path& path) {
   std::ifstream input(path);
   if (!input.is_open()) {
     throw std::runtime_error("failed to open config file: " + path.string());
   }
 
-  ScalarConfig config;
+  Config config;
   config.path_ = path;
   std::vector<std::pair<int, std::string>> stack;
   int list_block_indent = -1;
@@ -212,7 +212,7 @@ ScalarConfig ScalarConfig::load(const std::filesystem::path& path) {
   return config;
 }
 
-std::optional<std::string> ScalarConfig::string_value(const std::string& key) const {
+std::optional<std::string> Config::string_value(const std::string& key) const {
   read_keys_.insert(key);
   const auto it = scalars_.find(key);
   if (it == scalars_.end() || is_nullish(it->second)) {
@@ -221,32 +221,31 @@ std::optional<std::string> ScalarConfig::string_value(const std::string& key) co
   return it->second;
 }
 
-std::string ScalarConfig::string_or(const std::string& key,
-                                    const std::string& default_value) const {
+std::string Config::string_or(const std::string& key, const std::string& default_value) const {
   const auto value = string_value(key);
   return value.has_value() ? *value : default_value;
 }
 
-int ScalarConfig::int_or(const std::string& key, int default_value) const {
+int Config::int_or(const std::string& key, int default_value) const {
   const auto value = string_value(key);
   return value.has_value() ? parse_int(*value, key) : default_value;
 }
 
-double ScalarConfig::double_or(const std::string& key, double default_value) const {
+double Config::double_or(const std::string& key, double default_value) const {
   const auto value = string_value(key);
   return value.has_value() ? parse_double(*value, key) : default_value;
 }
 
-bool ScalarConfig::bool_or(const std::string& key, bool default_value) const {
+bool Config::bool_or(const std::string& key, bool default_value) const {
   const auto value = string_value(key);
   return value.has_value() ? parse_bool(*value, key) : default_value;
 }
 
-std::map<std::string, std::string> ScalarConfig::scalars() const {
+std::map<std::string, std::string> Config::scalars() const {
   return {scalars_.begin(), scalars_.end()};
 }
 
-std::string ScalarConfig::require_key(const std::string& key) const {
+std::string Config::require_key(const std::string& key) const {
   const auto it = scalars_.find(key);
   if (it == scalars_.end()) {
     throw std::runtime_error(path_.string() + " is missing " + key);
@@ -255,23 +254,23 @@ std::string ScalarConfig::require_key(const std::string& key) const {
   return it->second;
 }
 
-std::string ScalarConfig::string(const std::string& key) const {
+std::string Config::string(const std::string& key) const {
   return require_key(key);
 }
 
-int ScalarConfig::integer(const std::string& key) const {
+int Config::integer(const std::string& key) const {
   return parse_int(require_key(key), key);
 }
 
-double ScalarConfig::number(const std::string& key) const {
+double Config::number(const std::string& key) const {
   return parse_double(require_key(key), key);
 }
 
-bool ScalarConfig::boolean(const std::string& key) const {
+bool Config::boolean(const std::string& key) const {
   return parse_bool(require_key(key), key);
 }
 
-std::vector<std::string> ScalarConfig::string_list(const std::string& key) const {
+std::vector<std::string> Config::string_list(const std::string& key) const {
   const auto it = lists_.find(key);
   if (it == lists_.end()) {
     return {require_key(key)}; // One value stands for a list of one.
@@ -283,7 +282,7 @@ std::vector<std::string> ScalarConfig::string_list(const std::string& key) const
   return it->second;
 }
 
-void ScalarConfig::reject_unread_keys() const {
+void Config::reject_unread_keys() const {
   std::set<std::string> unread;
   for (const auto& [key, value] : scalars_) {
     if (read_keys_.count(key) == 0) {

@@ -46,7 +46,7 @@ is the reference: read its `main.py` and `main.cpp` before writing or reviewing 
 - Each key carries a short comment saying what it does. Values are scalars or lists of
   scalars, which the C++ and Python readers parse the same way.
 - Read the config once, at the start, into one typed `AppConfig`, and pass that object.
-- Read it with `sima_examples.config.Config` in Python and `sima_examples::ScalarConfig` in
+- Read it with `sima_examples.config.Config` in Python and `sima_examples::Config` in
   C++, and call `reject_unread_keys()` after the last read, so an old or misspelled key fails
   at startup.
 - A value the same in every shipped profile is not a setting: write it in the code where the

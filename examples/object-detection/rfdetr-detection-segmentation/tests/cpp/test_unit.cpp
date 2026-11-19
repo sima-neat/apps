@@ -2,7 +2,7 @@
 #include "../../src/cpp/main.cpp"
 #undef main
 
-#include "support/testing/test_process.h"
+#include "support/cpp/testing/test_process.h"
 
 #include <cmath>
 #include <filesystem>

@@ -1,6 +1,6 @@
 // Unit test for single-stream-thermal-face-detector: validates CLI arg handling.
-#include "support/runtime/pull_status.h"
-#include "support/testing/test_process.h"
+#include "support/cpp/pull_status.h"
+#include "support/cpp/testing/test_process.h"
 
 #include <filesystem>
 #include <fstream>

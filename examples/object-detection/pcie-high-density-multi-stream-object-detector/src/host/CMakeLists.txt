@@ -27,7 +27,7 @@ set(APP_COMMON_DIR "${APP_ROOT}/src/common")
 add_executable(pcie-high-density-multi-stream-object-detector-host
   main.cpp
   "${APP_COMMON_DIR}/app_config.cpp"
-  "${APPS_ROOT}/support/runtime/config_utils.cpp"
+  "${APPS_ROOT}/support/cpp/config.cpp"
 )
 
 target_link_libraries(pcie-high-density-multi-stream-object-detector-host

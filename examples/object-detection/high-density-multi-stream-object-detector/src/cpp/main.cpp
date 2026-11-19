@@ -16,11 +16,12 @@
 // its detection boxes go to Insight, one channel per stream.
 
 #include "neat.h"
-#include "support/object_detection/detection_egress.h"
-#include "support/runtime/config_utils.h"
-#include "support/runtime/example_utils.h"
-#include "support/runtime/labels.h"
-#include "support/runtime/pull_status.h"
+#include "support/cpp/config.h"
+#include "support/cpp/detection_egress.h"
+#include "support/cpp/example_utils.h"
+#include "support/cpp/labels.h"
+#include "support/cpp/pull_status.h"
+#include "support/cpp/rtsp_probe.h"
 
 #include <algorithm>
 #include <csignal>
@@ -104,7 +105,7 @@ CliOptions parse_args(int argc, char** argv) {
 }
 
 AppConfig load_app_config(const fs::path& path) {
-  const auto config = sima_examples::ScalarConfig::load(path);
+  const auto config = sima_examples::Config::load(path);
   AppConfig cfg;
   cfg.model_path = fs::absolute(path).parent_path() / config.string("model.path");
   cfg.labels_path = config.string("model.labels");
