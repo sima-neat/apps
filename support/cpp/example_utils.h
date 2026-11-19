@@ -39,10 +39,7 @@ struct ScoredIndex {
 };
 
 std::vector<float> tensor_to_floats(const simaai::neat::Tensor& t);
-std::vector<float> scores_from_tensor(const simaai::neat::Tensor& t, const std::string& label);
 std::vector<ScoredIndex> topk_with_softmax(const std::vector<float>& v, int k);
-void check_top1(const std::vector<float>& scores, int expected_id, float min_prob,
-                const std::string& label);
 
 struct MetadataBox {
   std::string id;

@@ -134,21 +134,6 @@ std::vector<float> tensor_to_floats(const simaai::neat::Tensor& t) {
   return out;
 }
 
-std::vector<float> scores_from_tensor(const simaai::neat::Tensor& t, const std::string& label) {
-  auto scores_full = tensor_to_floats(t);
-  if (scores_full.empty()) {
-    throw std::runtime_error(label + ": empty tensor output");
-  }
-  if (scores_full.size() < 1000) {
-    throw std::runtime_error(label + ": expected at least 1000 scores, got " +
-                             std::to_string(scores_full.size()));
-  }
-  if (scores_full.size() > 1000) {
-    scores_full.resize(1000);
-  }
-  return scores_full;
-}
-
 std::vector<ScoredIndex> topk_with_softmax(const std::vector<float>& v, int k) {
   if (v.empty() || k <= 0)
     return {};
@@ -179,31 +164,6 @@ std::vector<ScoredIndex> topk_with_softmax(const std::vector<float>& v, int k) {
     out.push_back(ScoredIndex{id, v[id], static_cast<float>(prob)});
   }
   return out;
-}
-
-void check_top1(const std::vector<float>& scores, int expected_id, float min_prob,
-                const std::string& label) {
-  const auto top = topk_with_softmax(scores, 5);
-  std::cout << "[" << label << "] top1 index=" << top[0].index << " score=" << top[0].value
-            << " prob=" << top[0].prob << "\n";
-  std::cout << "[" << label << "] top5:";
-  for (const auto& t : top) {
-    std::cout << " " << t.index << ":" << t.prob;
-  }
-  std::cout << "\n";
-
-  if (expected_id < 0)
-    return;
-
-  if (top[0].index != expected_id) {
-    throw std::runtime_error(label + ": top-1 mismatch: expected " + std::to_string(expected_id) +
-                             " got " + std::to_string(top[0].index));
-  }
-  if (min_prob > 0.0f && top[0].prob < min_prob) {
-    throw std::runtime_error(label + ": top-1 probability too low: " + std::to_string(top[0].prob) +
-                             " < " + std::to_string(min_prob));
-  }
-  std::cout << "[" << label << "] top-1 matches expected class " << expected_id << "\n";
 }
 
 std::string metadata_boxes_data_json(const std::string& array_key,

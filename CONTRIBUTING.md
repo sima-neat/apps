@@ -250,7 +250,7 @@ to compile source or run the Apps test suite.
 | --- | --- |
 | `examples/` | Application examples organized by category |
 | `examples/config-keys.yaml` | Config keys the examples share, checked by `tests/scripts/test_config_keys.py` |
-| `support/` | Code without Neat API calls that two or more examples share, in C++ and Python |
+| `support/cpp/`, `support/python/` | Code without Neat API calls that two or more examples share, under the same file names in each language |
 | `skills/` | Customer skills that sima-cli installs |
 | `agents/` | Rules and skills for contributors' agents and the automatic review |
 | `assets/datasets/` | Runtime datasets shipped with Apps |
