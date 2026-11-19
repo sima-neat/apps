@@ -51,7 +51,8 @@ the public APIs. The project's own rules decide layout, configuration, and packa
    GenAI. Python spells functions in snake case (`pyneat.nodes.input`,
    `pyneat.groups.rtsp_encoded_input`), and names `Model::Options` and `Model::Runner`
    `pyneat.ModelOptions` and `pyneat.ModelRunner`. A long-running application handles `SIGINT`,
-   `SIGTERM`, and `SIGHUP`, and closes every `Run` and `Model::Runner` on every exit path. For
+   `SIGTERM`, and `SIGHUP` by setting a stop flag that every pull loop checks between pulls,
+   and closes every `Run` and `Model::Runner` on every exit path. For
    Insight video and metadata or a local window, read
    [application output](references/application-output.md). For Docker, read
    [containers](references/containers.md). Done when the application builds against the

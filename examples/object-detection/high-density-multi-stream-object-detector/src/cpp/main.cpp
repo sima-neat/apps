@@ -22,8 +22,9 @@
 #include "sima_examples/labels.h"
 #include "sima_examples/pull_status.h"
 #include "sima_examples/rtsp_probe.h"
+#include "sima_examples/stop_signals.h"
 
-#include <csignal>
+#include <atomic>
 #include <cstdint>
 #include <filesystem>
 #include <iostream>
@@ -41,12 +42,6 @@ namespace groups = simaai::neat::nodes::groups;
 namespace {
 
 constexpr int kPullTimeoutMs = 100;
-
-volatile std::sig_atomic_t g_stop_requested = 0;
-
-void request_stop(int) {
-  g_stop_requested = 1;
-}
 
 struct AppConfig {
   fs::path model_path;
@@ -301,10 +296,11 @@ sima_examples::detection_egress::FrameMetadata frame_metadata(const neat::Sample
   return metadata;
 }
 
-// Send every detections sample to its stream's Insight channel until SIGINT.
+// Send every detections sample to its stream's Insight channel until a stop signal.
 void send_detections(neat::Run& run, std::vector<neat::MetadataSender>& metadata_senders,
-                     const std::vector<std::string>& labels, const AppConfig& cfg) {
-  while (g_stop_requested == 0) {
+                     const std::vector<std::string>& labels, const AppConfig& cfg,
+                     const std::atomic<bool>& stop) {
+  while (!stop) {
     neat::Sample sample;
     neat::PullError error;
     const auto status = run.pull("detections", kPullTimeoutMs, sample, &error);
@@ -365,10 +361,10 @@ int run_app(const CliOptions& cli) {
             << " video_ports=" << cfg.video_port_base
             << "+ metadata_ports=" << cfg.metadata_port_base << "+\n";
 
-  std::signal(SIGINT, request_stop);
+  const std::atomic<bool>& stop = sima_examples::stop_on_signals();
   // The Run's destructor closes it when send_detections throws.
   neat::Run run = graph.build(run_options(cfg));
-  send_detections(run, metadata_senders, labels, cfg);
+  send_detections(run, metadata_senders, labels, cfg, stop);
   run.close();
 
   for (std::size_t index = 0; index < metadata_senders.size(); ++index) {

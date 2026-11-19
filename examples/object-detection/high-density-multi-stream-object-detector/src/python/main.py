@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -33,6 +34,7 @@ from sima_examples import detection_egress
 from sima_examples.config import Config
 from sima_examples.labels import load_labels
 from sima_examples.rtsp_probe import probe_rtsp_stream_info
+from sima_examples.stop_signals import stop_on_signals
 
 RTSP_CODECS = {"h264": pyneat.RtspCodec.H264, "h265": pyneat.RtspCodec.H265}
 DECODE_TYPES = {"h264": pyneat.SimaDecodeType.H264, "h265": pyneat.SimaDecodeType.H265}
@@ -278,9 +280,10 @@ def send_detections(
     metadata_senders: list[pyneat.MetadataSender],
     labels: list[str],
     cfg: AppConfig,
+    stop: threading.Event,
 ) -> None:
-    """Send every detections sample to its stream's Insight channel until the run stops."""
-    while True:
+    """Send every detections sample to its stream's Insight channel until a stop signal."""
+    while not stop.is_set():
         sample = run.pull("detections", PULL_TIMEOUT_MS)
         if sample is None:
             if run.last_error() or not run.running():
@@ -337,11 +340,10 @@ def main(argv: list[str] | None = None) -> int:
         f"video_ports={cfg.video_port_base}+ metadata_ports={cfg.metadata_port_base}+"
     )
 
+    stop = stop_on_signals()
     run = graph.build(run_options(cfg))
     try:
-        send_detections(run, metadata_senders, labels, cfg)
-    except KeyboardInterrupt:
-        pass  # Ctrl+C stops the run.
+        send_detections(run, metadata_senders, labels, cfg, stop)
     finally:
         run.close()
 

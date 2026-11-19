@@ -12,12 +12,12 @@
 #include "sima_examples/labels.h"
 #include "sima_examples/pull_status.h"
 #include "sima_examples/rtsp_probe.h"
+#include "sima_examples/stop_signals.h"
 #include "utils/postprocess.h"
 
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
-#include <csignal>
 #include <exception>
 #include <filesystem>
 #include <functional>
@@ -37,12 +37,6 @@ namespace {
 constexpr int kPullTimeoutMs = 100;
 const std::vector<std::string> kModelIds = {"det-nano", "det-small", "det-medium", "det-large",
                                             "seg-nano", "seg-small", "seg-medium"};
-
-std::atomic<bool> g_stop_requested{false};
-
-void request_stop(int) {
-  g_stop_requested = true;
-}
 
 struct AppConfig {
   std::string model_id;
@@ -361,9 +355,10 @@ std::string result_json(const neat::Sample& result, const std::vector<std::strin
 // Hand every backbone result to the transformer until the run stops. A push waits while the
 // transformer's input queue is full, so no backbone result is lost.
 void feed_transformer(neat::Run& source_run, neat::Model::Runner& transformer_runner,
-                      const std::vector<int64_t>& proposals_shape, std::string& error) {
+                      const std::vector<int64_t>& proposals_shape, std::atomic<bool>& stop,
+                      std::string& error) {
   try {
-    while (!g_stop_requested) {
+    while (!stop) {
       neat::Sample sample;
       neat::PullError pull_error;
       const auto status = source_run.pull("backbone", kPullTimeoutMs, sample, &pull_error);
@@ -376,21 +371,22 @@ void feed_transformer(neat::Run& source_run, neat::Model::Runner& transformer_ru
       }
     }
   } catch (const std::exception& failure) {
-    if (!g_stop_requested) {
+    if (!stop) {
       error = failure.what();
     }
   }
-  g_stop_requested = true;
+  stop = true;
 }
 
 // Send every transformer result to Insight until inference.frames or a stop; return the count.
 int send_results(neat::Model::Runner& transformer_runner,
                  const neat::MetadataSender& metadata_sender,
-                 const std::vector<std::string>& labels, int mask_size, const AppConfig& cfg) {
+                 const std::vector<std::string>& labels, int mask_size, const AppConfig& cfg,
+                 const std::atomic<bool>& stop) {
   const std::string metadata_type = cfg.segmentation ? "segmentation" : "object-detection";
   const auto options = postprocess_options(cfg);
   int sent = 0;
-  while (!g_stop_requested && (cfg.frames == 0 || sent < cfg.frames)) {
+  while (!stop && (cfg.frames == 0 || sent < cfg.frames)) {
     const neat::Sample result = transformer_runner.pull(kPullTimeoutMs);
     if (result.empty()) {
       continue;
@@ -459,18 +455,18 @@ int run_app(const CliOptions& cli) {
             << cfg.width << "x" << cfg.height << "@" << fps << ") -> Insight " << cfg.insight_host
             << " video=" << cfg.video_port_base << " metadata=" << cfg.metadata_port_base << "\n";
 
-  std::signal(SIGINT, request_stop);
+  std::atomic<bool>& stop = sima_examples::stop_on_signals();
   std::string feed_error;
   std::thread feeder(feed_transformer, std::ref(source_run), std::ref(transformer_runner),
-                     std::cref(proposals_shape), std::ref(feed_error));
+                     std::cref(proposals_shape), std::ref(stop), std::ref(feed_error));
   int sent = 0;
   std::exception_ptr send_error;
   try {
-    sent = send_results(transformer_runner, metadata_sender, labels, mask_size, cfg);
+    sent = send_results(transformer_runner, metadata_sender, labels, mask_size, cfg, stop);
   } catch (...) {
     send_error = std::current_exception();
   }
-  g_stop_requested = true;
+  stop = true;
   transformer_runner.close_input(); // Ends a push the feeder may be blocked in.
   feeder.join();
   transformer_runner.close();

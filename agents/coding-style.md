@@ -73,8 +73,9 @@ is the reference: read its `main.py` and `main.cpp` before writing or reviewing 
 
 - Each function does one job. A function described with "and" becomes two functions.
 - Give a behavior that a boolean parameter would switch its own function.
-- Keep state in `main` and pass it down. The one global is the C++ stop flag a signal handler
-  sets.
+- Keep state in `main` and pass it down. Stop on Ctrl-C, SIGTERM, and SIGHUP with
+  `stop_on_signals()` from the shared library: `main` passes its flag to every pull loop and
+  closes the run when the loop ends.
 - Delete every function, option, branch, and config key that no entry point reaches.
 
 ## Errors, output, and comments

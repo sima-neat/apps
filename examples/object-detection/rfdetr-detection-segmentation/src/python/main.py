@@ -36,6 +36,7 @@ sys.path.insert(0, str(SUPPORT_DIR))
 from sima_examples.config import Config
 from sima_examples.labels import load_labels
 from sima_examples.rtsp_probe import probe_rtsp_stream_info
+from sima_examples.stop_signals import stop_on_signals
 from utils import postprocess
 
 MODEL_IDS = (
@@ -383,23 +384,20 @@ def send_results(
     metadata_type = "segmentation" if cfg.segmentation else "object-detection"
     options = postprocess_options(cfg)
     sent = 0
-    try:
-        while not stop.is_set() and (cfg.frames == 0 or sent < cfg.frames):
-            result = transformer_runner.pull(timeout_ms=PULL_TIMEOUT_MS)
-            if not result:
-                continue
-            # A nonblocking send drops the message while the socket buffer is full; the drops
-            # are counted in the sender's stats and reported when the run ends. Any other
-            # failure raises.
-            metadata_sender.send_metadata(
-                metadata_type,
-                result_json(result, labels, mask_size, options),
-                result.pts_ns // 1_000_000 if result.pts_ns >= 0 else -1,
-                str(result.frame_id) if result.frame_id >= 0 else "",
-            )
-            sent += 1
-    except KeyboardInterrupt:
-        pass  # Ctrl+C stops the run.
+    while not stop.is_set() and (cfg.frames == 0 or sent < cfg.frames):
+        result = transformer_runner.pull(timeout_ms=PULL_TIMEOUT_MS)
+        if not result:
+            continue
+        # A nonblocking send drops the message while the socket buffer is full; the drops
+        # are counted in the sender's stats and reported when the run ends. Any other
+        # failure raises.
+        metadata_sender.send_metadata(
+            metadata_type,
+            result_json(result, labels, mask_size, options),
+            result.pts_ns // 1_000_000 if result.pts_ns >= 0 else -1,
+            str(result.frame_id) if result.frame_id >= 0 else "",
+        )
+        sent += 1
     return sent
 
 
@@ -451,7 +449,7 @@ def main(argv: list[str] | None = None) -> int:
         f"metadata={cfg.metadata_port_base}"
     )
 
-    stop = threading.Event()
+    stop = stop_on_signals()
     feed_errors: list[Exception] = []
     feeder = threading.Thread(
         target=feed_transformer,

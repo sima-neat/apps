@@ -27,6 +27,7 @@ A module in both columns has the same file name, function names, and behavior in
 | `config` | Reads `config.yaml` by dotted key, such as `input.rtsp.tcp`, and rejects keys the example never read | `config.py` | `config.h` |
 | `labels` | Reads a class-label file with one label per line | `labels.py` | `labels.h` |
 | `rtsp_probe` | Reads an RTSP stream's frame size and frame rate before the graph is built | `rtsp_probe.py` | `rtsp_probe.h` |
+| `stop_signals` | Sets a stop flag on Ctrl-C, SIGTERM, or a dropped ssh session (SIGHUP), so the pull loop ends and the run closes | `stop_signals.py` | `stop_signals.h` |
 | `detection_egress` | Builds the object-detection metadata message that Insight draws over the video | `detection_egress.py` | `detection_egress.h` |
 | `pull_status` | Reads the status of one `Run::pull`: a sample arrived, or the pull timed out and the loop tries again. A closed output or a pull error throws with the reason | | `pull_status.h` |
 | `example_utils` | Converts tensors to OpenCV images and float vectors, and other small C++ helpers | | `example_utils.h` |
