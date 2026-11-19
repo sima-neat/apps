@@ -158,7 +158,7 @@ def rtsp_options(cfg: AppConfig, url: str, fps: int) -> pyneat.RtspEncodedInputO
 
 
 def decoder_graph(cfg: AppConfig, fps: int) -> pyneat.Graph:
-    """Hardware decode to NV12 frames at the model's input size, ending at "detector_frame"."""
+    """Hardware decode to NV12 frames at the stream's size, ending at "detector_frame"."""
     decode = pyneat.SimaDecodeOptions()
     decode.type = DECODE_TYPES[cfg.codec]
     decode.decoder_name = "decoder"

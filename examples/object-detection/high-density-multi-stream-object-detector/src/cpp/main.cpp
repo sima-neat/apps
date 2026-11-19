@@ -187,7 +187,7 @@ groups::RtspEncodedInputOptions rtsp_options(const AppConfig& cfg, const std::st
   return options;
 }
 
-// Hardware decode to NV12 frames at the model's input size, ending at "detector_frame".
+// Hardware decode to NV12 frames at the stream's size, ending at "detector_frame".
 neat::Graph decoder_graph(const AppConfig& cfg, int fps) {
   neat::SimaDecodeOptions decode;
   decode.type = cfg.codec == "h265" ? neat::SimaDecodeType::H265 : neat::SimaDecodeType::H264;
