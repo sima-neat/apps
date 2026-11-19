@@ -267,11 +267,6 @@ def frame_metadata(sample: pyneat.Sample, index: int) -> detection_egress.FrameM
         duration_ns=sample.duration_ns,
         input_seq=sample.input_seq,
         orig_input_seq=sample.orig_input_seq,
-        rtp_timestamp=(
-            detection_egress.rtp_timestamp_from_pts_ns(sample.pts_ns)
-            if sample.pts_ns >= 0
-            else None
-        ),
     )
 
 

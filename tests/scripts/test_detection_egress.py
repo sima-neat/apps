@@ -92,8 +92,3 @@ def test_message_without_pts_has_no_rtp_timestamp():
     assert message["timestamp"] == -1
     assert message["frame_id"] == ""
     assert "rtp_timestamp" not in message
-
-
-def test_rtp_timestamp_uses_the_90_khz_clock():
-    assert detection_egress.rtp_timestamp_from_pts_ns(1_000_000_000) == 90_000
-    assert detection_egress.rtp_timestamp_from_pts_ns(0) == 0

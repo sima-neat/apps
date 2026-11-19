@@ -289,10 +289,6 @@ sima_examples::detection_egress::FrameMetadata frame_metadata(const neat::Sample
   metadata.duration_ns = sample.duration_ns;
   metadata.input_seq = sample.input_seq;
   metadata.orig_input_seq = sample.orig_input_seq;
-  if (sample.pts_ns >= 0) {
-    metadata.rtp_timestamp =
-        sima_examples::detection_egress::rtp_timestamp_from_pts_ns(sample.pts_ns);
-  }
   return metadata;
 }
 

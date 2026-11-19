@@ -68,7 +68,7 @@ std::pair<int, json> validate_metadata_message(const MetadataJsonMessage& messag
               payload.at("stream_id") == "stream" + std::to_string(index),
           "wrong metadata channel");
   require(!payload.at("frame_id").get<std::string>().empty() &&
-              payload.at("pts_ns").get<int64_t>() >= 0 && payload.contains("rtp_timestamp"),
+              payload.at("pts_ns").get<int64_t>() >= 0,
           "missing frame identity");
   require_objects_match_config(payload.at("data").at("objects"), labels);
   return {index, payload};

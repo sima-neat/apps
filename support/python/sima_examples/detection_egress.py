@@ -12,7 +12,6 @@ from dataclasses import dataclass
 from typing import Protocol
 
 UNKNOWN_LABEL = "unknown"
-RTP_CLOCK_HZ = 90_000
 
 
 class Box(Protocol):
@@ -38,12 +37,9 @@ class FrameMetadata:
     duration_ns: int = -1
     input_seq: int = -1
     orig_input_seq: int = -1
+    # The RTP timestamp an application read from the source packets, sent when set. Insight
+    # pairs metadata with video by `timestamp`, the frame's presentation time in milliseconds.
     rtp_timestamp: int | None = None
-
-
-def rtp_timestamp_from_pts_ns(pts_ns: int) -> int:
-    """The 90 kHz RTP timestamp Insight uses to pair metadata with its video frame."""
-    return (pts_ns * RTP_CLOCK_HZ // 1_000_000_000) & 0xFFFFFFFF
 
 
 def serialize(

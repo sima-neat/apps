@@ -73,7 +73,6 @@ def validate_metadata_message(message, base_port):
     assert payload["stream_index"] == index
     assert payload["stream_id"] == f"stream{index}"
     assert payload["frame_id"] and payload["pts_ns"] >= 0
-    assert "rtp_timestamp" in payload
     for item in payload["data"]["objects"]:
         assert item["label"] in LABELS, f"label not in coco_label.txt: {item['label']}"
         assert 0.3 <= item["confidence"] <= 1.0, "confidence below inference.min_score"
