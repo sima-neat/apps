@@ -38,14 +38,8 @@ def select_source(urls, codec):
     errors = []
     for url in dict.fromkeys(urls):
         cap = cv2.VideoCapture(
-            url,
-            cv2.CAP_ANY,
-            [
-                cv2.CAP_PROP_OPEN_TIMEOUT_MSEC,
-                20000,
-                cv2.CAP_PROP_READ_TIMEOUT_MSEC,
-                20000,
-            ],
+            url, cv2.CAP_ANY,
+            [cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 20000, cv2.CAP_PROP_READ_TIMEOUT_MSEC, 20000],
         )
         try:
             if not cap.isOpened():
@@ -91,13 +85,7 @@ def test_metadata_throughput(
     port = int(os.environ.get("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", "9100"))
     config = e2e_config_writer(
         {
-            "input": {
-                "source": [url] * 20,
-                "codec": codec,
-                "width": 1280,
-                "height": 720,
-                "fps": 0,
-            },
+            "input": {"source": [url] * 20, "codec": codec, "width": 1280, "height": 720, "fps": 0},
             "output": {
                 "video_enabled": True,
                 "insight": {
@@ -180,7 +168,9 @@ def test_metadata_throughput(
                     )
                     break
                 if process.poll() is not None:
-                    receiver_failure = "application exited before the receiver reached its frame target"
+                    receiver_failure = (
+                        "application exited before the receiver reached its frame target"
+                    )
                     break
                 if now >= deadline:
                     receiver_failure = (
@@ -198,15 +188,11 @@ def test_metadata_throughput(
                 process.kill()
                 stdout, stderr = process.communicate()
 
-    assert not forced_kill, (
-        f"application required forced kill after SIGINT\n{stdout}{stderr}"
-    )
+    assert not forced_kill, f"application required forced kill after SIGINT\n{stdout}{stderr}"
     assert process.returncode == 0, stdout + stderr
     assert not receiver_failure, f"{receiver_failure}\n{stdout}{stderr}"
     assert tracker.complete
-    assert all(tracker.useful_detection), (
-        "missing useful detections on one or more streams"
-    )
+    assert all(tracker.useful_detection), "missing useful detections on one or more streams"
     assert tracker.total_measured == 5000
     assert tracker.elapsed_s > 0
     aggregate_fps = tracker.total_measured / tracker.elapsed_s

@@ -66,9 +66,7 @@ class ReceivedMetadataTracker:
         if self.measurement_started:
             return
         if not self.warmup_complete:
-            raise RuntimeError(
-                "metadata measurement cannot start before warmup completes"
-            )
+            raise RuntimeError("metadata measurement cannot start before warmup completes")
         self.measurement_started = True
         self._measurement_start = now
         self._last_progress = [now] * len(self._last_progress)

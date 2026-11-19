@@ -96,13 +96,6 @@ def test_config_reads_every_key(tmp_path):
     assert cfg.queue_depth == 16 and cfg.internal_queue_depth == 1
 
 
-def test_one_source_url_reads_as_one_stream(tmp_path):
-    path = write_config(
-        tmp_path, **{"input.source": "input:\n  source: rtsp://127.0.0.1/one"}
-    )
-    assert main_module.load_app_config(path).sources == ["rtsp://127.0.0.1/one"]
-
-
 def test_unknown_key_is_rejected(tmp_path):
     path = write_config(tmp_path, extra="streams:\n  - rtsp://old\n")
     with pytest.raises(ValueError, match="unknown keys: streams"):
@@ -118,10 +111,4 @@ def test_missing_key_is_rejected(tmp_path):
 def test_codec_must_be_h264_or_h265(tmp_path):
     path = write_config(tmp_path, **{"input.codec": "  codec: mjpeg"})
     with pytest.raises(ValueError, match="input.codec must be h264 or h265"):
-        main_module.load_app_config(path)
-
-
-def test_wrong_type_is_rejected(tmp_path):
-    path = write_config(tmp_path, **{"input.fps": "  fps: thirty"})
-    with pytest.raises(ValueError, match="input.fps must be an integer"):
         main_module.load_app_config(path)

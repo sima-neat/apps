@@ -9,7 +9,7 @@ import yaml
 
 APPS_ROOT = Path(__file__).resolve().parents[2]
 KEY_FILE = APPS_ROOT / "examples" / "config-keys.yaml"
-EXAMPLE_ONLY_PREFIXES = ("app.", "testing.")
+EXAMPLE_ONLY_PREFIXES = ("app.",)
 TYPE_CHECKS = {
     "string": lambda value: isinstance(value, str),
     "integer": lambda value: isinstance(value, int) and not isinstance(value, bool),

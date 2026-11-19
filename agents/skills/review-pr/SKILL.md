@@ -78,7 +78,6 @@ says what to check and in which order; cite the owning file in each finding.
 - **Packaging and portal:** when packaging changes, `scripts/ci/validate_apps_runtime_archive.sh`
   passes. When a README or preview changes, catalog generation succeeds, only source files
   were edited, and the catalog and detail pages were checked at desktop and phone widths.
-- Report anything not run or observed as `not verified`.
 
 ## Skill updates
 
@@ -91,14 +90,12 @@ request updates them when it shows something they lack or contradict:
 - a default, error, or pitfall the change uncovered;
 - a skill statement the change proves wrong.
 
-For each, name the skill file and the text to add or change. Repository conventions, such as
-config key names, stay out of `skills/`. When nothing applies, the verdict is
-`Skill updates: none` with the reason. Do not ask for a `playbook.yml` version bump.
+For each, name the skill file and the text to add or change, or give the verdict
+`Skill updates: none` with the reason, as `AGENTS.md` requires.
 
 ## Findings
 
-- Report one finding per root cause, anchored to the smallest changed line range, with the
-  condition, the breakage, and its impact.
+- Anchor each finding to the smallest changed line range.
 - Separate correctness, structure, packaging, and customer-workflow blockers from optional
   naming, style, and performance follow-ups. A blocker can stand while CI passes.
 - Skip style preferences outside `agents/coding-style.md`, vague risks, and test requests that

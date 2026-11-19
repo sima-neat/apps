@@ -36,10 +36,10 @@ must process every frame.
 - Send video to Insight with `VideoSenderOptions::Passthrough(codec)` from the encoded
   stream. It skips decoding and re-encoding for the display path. Leave
   `VideoSenderOptions::async` at `false`, so the sender stays in the source's pipeline.
-- Connect one encoded source to its decoder and to its video sender with plain `connect`
-  calls. Neat then runs source, decoder, and sender as one pipeline. A `graphs::Branch`, a
-  decoder or sender fed through `nodes::Input`, or a realtime link between source and decoder
-  splits it into several pipelines with a hand-off between them.
+- Connect an encoded source to its decoder with a plain `connect`, so Neat runs the source
+  and decoder as one pipeline. A `graphs::Branch`, a decoder fed through `nodes::Input`, or a
+  realtime link between source and decoder splits them into separate pipelines with a
+  hand-off between them.
 - Choose `RunOptions::output_memory` as the builder skill's inspect, measure, and tune
   reference describes. An `Owned` result is already a copy: read it in place with
   `map_read()` or `data_ptr<T>()` in C++ and `to_numpy(copy=False)` in Python.

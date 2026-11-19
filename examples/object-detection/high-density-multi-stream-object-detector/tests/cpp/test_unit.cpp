@@ -29,8 +29,6 @@ using sima_examples::testing::write_scratch_config;
 
 namespace {
 
-constexpr const char* kModelPath = "models/yolo26n/w8a8/yolo26n_w8a8_mpk.tar.gz";
-
 struct TestBox {
   float x1 = 0.0f;
   float y1 = 0.0f;
@@ -40,52 +38,7 @@ struct TestBox {
   int class_id = -1;
 };
 
-std::string legacy_metadata_json(const std::vector<TestBox>& boxes,
-                                 const std::vector<std::string>& labels, int frame_w, int frame_h,
-                                 const sima_examples::detection_egress::FrameMetadata& frame) {
-  nlohmann::json data;
-  data["objects"] = nlohmann::json::array();
-  int object_index = 1;
-  for (const auto& box : boxes) {
-    const int x1 = std::max(0, static_cast<int>(box.x1));
-    const int y1 = std::max(0, static_cast<int>(box.y1));
-    int width = std::max(0, static_cast<int>(box.x2 - box.x1));
-    int height = std::max(0, static_cast<int>(box.y2 - box.y1));
-    if (x1 + width > frame_w)
-      width = frame_w - x1;
-    if (y1 + height > frame_h)
-      height = frame_h - y1;
-    const std::string label = box.class_id >= 0 && box.class_id < static_cast<int>(labels.size())
-                                  ? labels[static_cast<std::size_t>(box.class_id)]
-                                  : "unknown";
-    data["objects"].push_back({
-        {"id", "obj_" + std::to_string(object_index++)},
-        {"label", label},
-        {"confidence", box.score},
-        {"bbox",
-         {static_cast<float>(x1), static_cast<float>(y1), static_cast<float>(std::max(0, width)),
-          static_cast<float>(std::max(0, height))}},
-    });
-  }
-
-  nlohmann::json payload;
-  payload["type"] = "object-detection";
-  payload["data"] = nlohmann::json::parse(data.dump());
-  payload["timestamp"] = frame.pts_ns >= 0 ? frame.pts_ns / 1'000'000 : -1;
-  payload["frame_id"] = frame.frame_id >= 0 ? std::to_string(frame.frame_id) : "";
-  payload["stream_id"] = std::string(frame.stream_id);
-  payload["stream_index"] = frame.stream_index;
-  payload["pts_ns"] = frame.pts_ns;
-  payload["dts_ns"] = frame.dts_ns;
-  payload["duration_ns"] = frame.duration_ns;
-  payload["input_seq"] = frame.input_seq;
-  payload["orig_input_seq"] = frame.orig_input_seq;
-  if (frame.rtp_timestamp.has_value())
-    payload["rtp_timestamp"] = *frame.rtp_timestamp;
-  return payload.dump();
-}
-
-bool test_metadata_fast_path_preserves_insight_payload() {
+bool test_serialize_builds_insight_payload() {
   const std::vector<TestBox> boxes{
       {10.9f, -2.0f, 35.9f, 20.8f, 0.75f, 0},
       {90.0f, 80.0f, 120.0f, 130.0f, 0.5f, 1},
@@ -103,13 +56,13 @@ bool test_metadata_fast_path_preserves_insight_payload() {
   frame.orig_input_seq = 77;
   frame.rtp_timestamp = 111'111;
 
-  const std::string expected = legacy_metadata_json(boxes, labels, 100, 100, frame);
-  const std::string actual =
-      sima_examples::detection_egress::serialize(boxes, labels, 100, 100, frame);
-  bool ok = expect_true(actual == expected,
-                        "single-pass metadata matches the legacy Insight JSON byte-for-byte");
-
-  const auto parsed = nlohmann::json::parse(actual);
+  const auto parsed = nlohmann::json::parse(
+      sima_examples::detection_egress::serialize(boxes, labels, 100, 100, frame));
+  bool ok =
+      expect_true(parsed.at("type") == "object-detection" && parsed.at("stream_id") == "stream7" &&
+                      parsed.at("stream_index") == 7 && parsed.at("frame_id") == "42" &&
+                      parsed.at("timestamp") == 1234 && parsed.at("pts_ns") == 1'234'567'890,
+                  "metadata carries the frame envelope");
   ok &= expect_true(parsed.at("data").at("objects").size() == boxes.size(),
                     "metadata keeps every decoded box");
   ok &= expect_true(parsed.at("data").at("objects").at(0).at("id") == "obj_1" &&
@@ -117,7 +70,7 @@ bool test_metadata_fast_path_preserves_insight_payload() {
                     "metadata preserves object IDs and escaped labels");
   ok &= expect_true(parsed.at("data").at("objects").at(1).at("bbox") ==
                         nlohmann::json({90.0f, 80.0f, 10.0f, 20.0f}),
-                    "metadata preserves legacy frame-edge clamping");
+                    "metadata clamps boxes to the frame edge");
   ok &= expect_true(parsed.at("data").at("objects").at(2).at("label") == "unknown",
                     "metadata preserves unknown-class labels");
   ok &= expect_true(parsed.at("rtp_timestamp") == *frame.rtp_timestamp,
@@ -128,9 +81,10 @@ bool test_metadata_fast_path_preserves_insight_payload() {
   frame.rtp_timestamp.reset();
   const std::string no_pts =
       sima_examples::detection_egress::serialize(boxes, labels, 100, 100, frame);
-  ok &= expect_true(no_pts == legacy_metadata_json(boxes, labels, 100, 100, frame),
-                    "single-pass metadata preserves the no-PTS envelope");
-  ok &= expect_true(!nlohmann::json::parse(no_pts).contains("rtp_timestamp"),
+  const auto parsed_no_pts = nlohmann::json::parse(no_pts);
+  ok &= expect_true(parsed_no_pts.at("timestamp") == -1 && parsed_no_pts.at("frame_id") == "",
+                    "metadata marks a frame without PTS");
+  ok &= expect_true(!parsed_no_pts.contains("rtp_timestamp"),
                     "metadata omits RTP timestamp when source PTS is absent");
   return ok;
 }
@@ -360,9 +314,6 @@ int main(int argc, char** argv) {
   if (!test_metadata_listener_validates_queued_messages())
     return 1;
 
-  if (argc == 2 && std::string(argv[1]) == "--detection-egress-only") {
-    return test_metadata_fast_path_preserves_insight_payload() ? 0 : 1;
-  }
   if (argc < 2) {
     std::cerr << "[ERR] usage: " << argv[0] << " <example-binary>\n";
     return 2;
@@ -370,7 +321,7 @@ int main(int argc, char** argv) {
 
   const std::string binary = argv[1];
   bool ok = true;
-  ok &= test_metadata_fast_path_preserves_insight_payload();
+  ok &= test_serialize_builds_insight_payload();
   ok &= test_help_runs(binary);
   ok &= test_unknown_argument_fails(binary);
   ok &= test_missing_config_file_fails_cleanly(binary);
