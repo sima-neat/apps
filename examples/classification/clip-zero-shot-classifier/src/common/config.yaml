@@ -1,0 +1,27 @@
+model:
+  image_encoder: <image-encoder-path>        # Image encoder package, e.g. models/clip_vit_b_16/w8a16/clip_vit_b_16_w8a16_image_encoder_mpk.tar.gz. Runs on every frame.
+  text_encoder: <text-encoder-path>          # Text encoder package, e.g. models/clip_vit_b_16/w8a16/clip_vit_b_16_w8a16_text_encoder_mpk.tar.gz. Runs once per prompt at startup.
+  tokenizer: <tokenizer-path>                # The text encoder's tokenizer, text_encoder/tokenizer.json in the model package.
+  token_embeddings: <token-embeddings-path>  # The token-embedding table, text_encoder/token_embeddings.npy in the model package.
+
+prompts:
+  path: examples/classification/clip-zero-shot-classifier/src/common/prompts.txt  # One prompt per line, at least two, each at most 75 tokens.
+
+source:
+  rtsp_url: <rtsp-url>       # RTSP stream, e.g. rtsp://<insight-host-ip>:8554/src1.
+  codec: h264                # Stream codec: h264, h265 or mjpeg.
+  tcp: true                  # Use TCP for RTSP transport.
+  latency_ms: 100            # RTSP receive latency in milliseconds.
+
+inference:
+  frames: 0                  # Classified-frame limit. 0 means run continuously.
+
+runtime:
+  profile: false             # Print the classification rate, the per-frame ranking and panel times, the skipped frames, and the top prompt every profile_interval classified frames.
+  profile_interval: 100      # Classified frames per profile line.
+
+output:
+  insight:
+    host: <insight-host-ip>  # Host running the Insight receiver/viewer.
+    video_port: 9000         # UDP video port.
+    metadata_port: 9100      # UDP metadata port.

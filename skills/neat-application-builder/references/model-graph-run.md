@@ -25,11 +25,21 @@ Required MPK Cast/Quant/Tess adapters remain automatic; `preprocess.enable = Off
 does not select MLA-only execution. See Core's
 [Model guide](https://github.com/sima-neat/core/blob/develop/docs/develop-apps/development-workflow/model.mdx#raw-tensor-input).
 
+With Neat 0.6.1 on Platform 3.0.0, `preprocess.resize.mode = ResizeMode::Crop`
+fails at `Graph::build` with `padding_type: unknown or unsupported padding
+placement`. For a model trained with a center crop, use `Stretch` or
+`Letterbox` and check the accuracy effect on real frames.
+
 Read outputs by the contract `output_specs()` reports:
 
 - Outputs carry the model package's logical shape (for example `[1, 1000]` for
   a classifier), and a Float32 output's format tag may be `EVXX_FLOAT32`
   instead of `FP32`. Decode by dtype and shape rather than by format tag.
+- A pulled `Sample` holds one output tensor in `tensor` and several in
+  `tensors`. Python code checks `sample.kind`, and C++ code can call
+  `tensors_from_sample(...)` to get a `TensorList` either way. When a
+  package's output count can change between versions, pick the output by its
+  element count, as `examples/classification/clip-zero-shot-classifier` does.
 - A default `nodes::Input` wired straight to one model image input inherits
   that input's image format. Give explicit options when one input feeds
   several models.

@@ -1,0 +1,51 @@
+models:
+  clip_vit_b_16_image_encoder:
+    source: model-registry
+    name: clip_vit_b_16
+    ref: develop
+    variant: w8a16
+    spec: latest
+    file: clip_vit_b_16_w8a16_image_encoder_mpk.tar.gz
+  clip_vit_b_16_text_encoder:
+    source: model-registry
+    name: clip_vit_b_16
+    ref: develop
+    variant: w8a16
+    spec: latest
+    file: clip_vit_b_16_w8a16_text_encoder_mpk.tar.gz
+  clip_vit_b_16_tokenizer:
+    source: model-registry
+    name: clip_vit_b_16
+    ref: develop
+    variant: w8a16
+    spec: latest
+    file: tokenizer.json
+  clip_vit_b_16_token_embeddings:
+    source: model-registry
+    name: clip_vit_b_16
+    ref: develop
+    variant: w8a16
+    spec: latest
+    file: token_embeddings.npy
+unit:
+  python: true
+  cpp: true
+e2e:
+  python:
+    enabled: false
+    reason: The CLIP ViT-B/16 registry package ships text_encoder/tokenizer.json and text_encoder/token_embeddings.npy only after sima-neat/models#499, and the Apps model download can fetch a develop registry model only after sima-neat/apps#708.
+    requires_rtsp: true
+    models:
+      - clip_vit_b_16_image_encoder
+      - clip_vit_b_16_text_encoder
+      - clip_vit_b_16_tokenizer
+      - clip_vit_b_16_token_embeddings
+  cpp:
+    enabled: false
+    reason: The CLIP ViT-B/16 registry package ships text_encoder/tokenizer.json and text_encoder/token_embeddings.npy only after sima-neat/models#499, and the Apps model download can fetch a develop registry model only after sima-neat/apps#708.
+    requires_rtsp: true
+    models:
+      - clip_vit_b_16_image_encoder
+      - clip_vit_b_16_text_encoder
+      - clip_vit_b_16_tokenizer
+      - clip_vit_b_16_token_embeddings
