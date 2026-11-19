@@ -1,10 +1,10 @@
 {
   "neat-core": {
-    "policy": "snap"
+    "ref": "v0.6.2"
   },
   "sdk": {
     "channel": "develop"
   },
-  "platform-version": "3.0.0",
+  "platform-version": "3.0.1",
   "modelzoo-version": "3.0.0"
 }

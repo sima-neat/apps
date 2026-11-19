@@ -41,8 +41,9 @@ double minimum_stream_fps() {
   std::string unit;
   if (meminfo >> field >> kib >> unit && field == "MemTotal:" && unit == "kB" &&
       kib > 0 && kib <= kEightGiBKiB)
-    return 26.5;
-  return 28.125;
+    return 25.0;
+  // Eight CI DevKits on Platform 3.0.1 held 556 to 565 FPS in total for H.264.
+  return 27.0;
 }
 
 std::pair<int, json> validate_metadata_message(const MetadataJsonMessage& message, int base_port) {

@@ -45,14 +45,28 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-The default model is `<default-model>`.
+Use this form when the model is in the [model browser](https://developer.sima.ai/models/). List only the variants the browser offers for each model.
+
+The default model is `<model-id>` with the `<variant>` variant. Download it and unpack it with `sima-cli` 2.1.20 or newer:
+
+```bash
+sima-cli models download --id <model-id> --variant <variant>
+unzip -o models/<model-id>/<variant>/<model-id>_<variant>_default.zip -d models/<model-id>/<variant>
+```
+
+The download is a ZIP file with the model package and its license. `unzip` puts the model package, `models/<model-id>/<variant>/<model-id>_<variant>_mpk.tar.gz`, next to the ZIP file. Set `model.path` in the example config to that `.tar.gz` file, not to the ZIP file.
+
+| ID | Variants | Role |
+| --- | --- | --- |
+| `<model-id>` | `<variant>`, `<other-variant>` | Default (`<variant>`) |
+| `<supported-model-id>` | `<variant>` | Supported |
+
+Use this form only when the model is not in the model browser. Model packages then come from the Model Zoo release below, which can differ from the installed platform version. Replace `<model-file>` with a file from the table.
 
 | Model file | Role |
 | --- | --- |
 | `<default-model>` | Default |
 | `<supported-model>` | Supported |
-
-Model packages come from the Model Zoo release below, which can differ from the installed platform version. Replace `<model-file>` with a file from the table.
 
 ```bash
 export MODELZOO_VERSION="3.0.0"

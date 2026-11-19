@@ -120,7 +120,7 @@ def main() -> int:
     runtime_cfg = raw.get("runtime", {})
     output_cfg = raw.get("output", {})
 
-    model_path = model_cfg.get("path", "models/yolo26m-det-bf16-mla_tess-b1.tar.gz")
+    model_path = model_cfg.get("path", "models/yolo26m/w16a16/yolo26m_w16a16_mpk.tar.gz")
     labels_path = Path(
         model_cfg.get(
             "labels",

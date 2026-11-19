@@ -50,32 +50,41 @@ Run the remaining commands from `prebuilt-apps/`.
 
 The default profile uses YOLO26n detection. Every profile consumes a compiled `.tar.gz` package directly.
 
-| Profile | Task | Model package |
-| --- | --- | --- |
-| `detect` | YOLO26n detection | `yolo26n-det-int8-b1.tar.gz` |
-| `pose` | YOLO26n pose | `yolo26n-pose-bf16-mla_tess-b1.tar.gz` |
-| `segment` | YOLO26n instance segmentation | `yolo26n-seg-bf16-mla_tess.tar.gz` |
-| `ssd` | SSD-MobileNet V2 detection | `ssd_mobilenet_v2_modalix_int8_tess_mla_mpk.tar.gz` |
-| `classify` | ResNet-50 classification | `resnet_50_mpk.tar.gz` |
-| `depth` | MiDaS v2.1 Small depth | `midas_v21_small_256_mpk.tar.gz` |
+| Profile | Task | Model | Source |
+| --- | --- | --- | --- |
+| `detect` | YOLO26n detection | `yolo26n`, variant `w8a8` | Model browser |
+| `pose` | YOLO26n pose | `yolo26n_pose`, variant `w16a16` | Model browser |
+| `segment` | YOLO26n instance segmentation | `yolo26n_seg`, variant `w16a16` | Model browser |
+| `ssd` | SSD-MobileNet V2 detection | `ssd_mobilenet_v2_modalix_int8_tess_mla_mpk.tar.gz` | Model Zoo |
+| `classify` | ResNet-50 classification | `resnet_50`, variant `w8a8` | Model browser |
+| `depth` | MiDaS v2.1 Small depth | `midas_v21_small_256_mpk.tar.gz` | Model Zoo |
 
-Model packages come from the Model Zoo release below, which can differ from the installed platform version. Download the packages for the profiles you plan to run into `models/`:
+Download the packages for the profiles you plan to run into `models/`. The [model browser](https://developer.sima.ai/models/) models download with `sima-cli` 2.1.20 or newer as a ZIP file with the model package and its license; unpack each one:
+
+```bash
+sima-cli models download --id yolo26n --variant w8a8
+unzip -o models/yolo26n/w8a8/yolo26n_w8a8_default.zip -d models/yolo26n/w8a8
+sima-cli models download --id yolo26n_pose --variant w16a16
+unzip -o models/yolo26n_pose/w16a16/yolo26n_pose_w16a16_default.zip -d models/yolo26n_pose/w16a16
+sima-cli models download --id yolo26n_seg --variant w16a16
+unzip -o models/yolo26n_seg/w16a16/yolo26n_seg_w16a16_default.zip -d models/yolo26n_seg/w16a16
+sima-cli models download --id resnet_50 --variant w8a8
+unzip -o models/resnet_50/w8a8/resnet_50_w8a8_default.zip -d models/resnet_50/w8a8
+```
+
+SSD-MobileNet V2 and MiDaS are not in the model browser yet. Download them from the Model Zoo release below, which can differ from the installed platform version:
 
 ```bash
 export MODELZOO_VERSION="3.0.0"
 mkdir -p models
 cd models
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26-detection/yolo26n-det-int8-b1.tar.gz"
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26-pose/yolo26n-pose-bf16-mla_tess-b1.tar.gz"
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26-segmentation/yolo26n-seg-bf16-mla_tess.tar.gz"
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/resnet_50_mpk.tar.gz"
 sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/midas_v21_small_256_mpk.tar.gz"
 sima-cli download \
   "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/ssd_mobilenet_v2_modalix_int8_tess_mla_mpk.tar.gz"
 cd ..
 ```
 
-Each profile reads `models/<model package>` by default.
+Each profile reads its package from `models/` by default: `models/<id>/<variant>/<id>_<variant>_mpk.tar.gz` for the model browser models, and `models/<file>` for the Model Zoo ones.
 
 ## Configure
 
@@ -118,7 +127,7 @@ Stream YOLO26 detection or segmentation to Insight, using the `insight` settings
 ```bash
 python3 ${APP_DIR}/src/python/main.py \
   --profile segment \
-  --model models/yolo26n-seg-bf16-mla_tess.tar.gz \
+  --model models/yolo26n_seg/w16a16/yolo26n_seg_w16a16_mpk.tar.gz \
   --continuous \
   --insight-host 192.168.1.127 \
   --insight-video-port 9000 \

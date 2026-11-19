@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://github.com/sima-neat/apps/actions/workflows/vulcan-ci.yml"><img src="https://github.com/sima-neat/apps/actions/workflows/vulcan-ci.yml/badge.svg" alt="Vulcan CI"></a>
-  <img src="https://img.shields.io/badge/Neat%20Development%20Environment-3.0.0-green" alt="Neat Development Environment 3.0.0">
+  <img src="https://img.shields.io/badge/Neat%20Development%20Environment-3.0.1-green" alt="Neat Development Environment 3.0.1">
   <img src="https://img.shields.io/badge/C%2B%2B-20-informational" alt="C++ 20">
   <img src="https://img.shields.io/badge/Python-3-informational" alt="Python 3">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue" alt="License Apache 2.0"></a>
@@ -45,23 +45,22 @@ without internet access, see [Install Apps](#install-apps).
    APP_DIR=examples/object-detection/yolo26-object-detector
    ```
 
-2. Download the YOLO26 model. Downloads need your SiMa Developer Portal
-   login. Run `sima-cli login` once, or follow the prompt the first download
-   prints.
+2. Download the YOLO26 model and unpack it. The download is a ZIP file with
+   the model package and its license; the example reads the `.tar.gz`
+   package inside it. The
+   [model browser](https://developer.sima.ai/models/) lists the model. The
+   download needs `sima-cli` 2.1.20 or newer.
 
    ```bash
-   export MODELZOO_VERSION="3.0.0"
-   mkdir -p models
-   cd models
-   sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26-detection/yolo26m-det-bf16-mla_tess-b1.tar.gz"
-   cd ..
+   sima-cli models download --id yolo26m --variant w16a16
+   unzip -o models/yolo26m/w16a16/yolo26m_w16a16_default.zip -d models/yolo26m/w16a16
    ```
 
-3. Point the configuration at the model. The input images and the output
-   folder are already set.
+3. Point the configuration at the model package. The input images and the
+   output folder are already set.
 
    ```bash
-   sed -i 's#<model-path>#models/yolo26m-det-bf16-mla_tess-b1.tar.gz#' ${APP_DIR}/src/common/config.yaml
+   sed -i 's#<model-path>#models/yolo26m/w16a16/yolo26m_w16a16_mpk.tar.gz#' ${APP_DIR}/src/common/config.yaml
    ```
 
 4. Run the detector.
@@ -150,9 +149,16 @@ Check the platform version installed on the DevKit:
 cat /etc/buildinfo
 ```
 
-Model packages come from the Model Zoo release, whose version can differ from
-the platform version. Downloads need your SiMa Developer Portal login. Set the
-Model Zoo version before downloading:
+Most examples take their model from the
+[model browser](https://developer.sima.ai/models/), as the YOLO26 object
+detector in the quick start does. They download it with
+`sima-cli models download`, which needs `sima-cli` 2.1.20 or newer.
+
+Examples whose model is not in the model browser download the package from
+the Model Zoo release, whose version can differ from the platform version.
+These downloads need your SiMa Developer Portal login: run `sima-cli login`
+once, or follow the prompt the first download prints. Set the Model Zoo
+version before downloading:
 
 ```bash
 export MODELZOO_VERSION="3.0.0"

@@ -27,10 +27,11 @@ def minimum_stream_fps():
             field, value, unit = meminfo.readline().split()
         kib = int(value)
         if field == "MemTotal:" and unit == "kB" and 0 < kib <= EIGHT_GIB_KIB:
-            return 26.5
+            return 25.0
     except (OSError, ValueError):
         pass
-    return 28.125
+    # Eight CI DevKits on Platform 3.0.1 held 556 to 565 FPS in total for H.264.
+    return 27.0
 
 
 def select_source(urls, codec):

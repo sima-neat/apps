@@ -139,10 +139,13 @@ def tensor_dim(tensor, name: str) -> int:
 
 
 def decoded_tensor_to_rgb(tensor) -> np.ndarray:
+    # The decoder pads its frames: a 1080p frame has 2048-byte rows and its UV plane starts
+    # after 1088 rows, and a 720p UV plane starts after 768 rows. contiguous() packs the
+    # planes back to back so the bytes can be read as one width x (height * 3 / 2) image.
     if tensor.is_nv12():
         width = tensor_dim(tensor, "width")
         height = tensor_dim(tensor, "height")
-        payload = np.frombuffer(tensor.copy_payload_bytes(), dtype=np.uint8)
+        payload = np.frombuffer(tensor.contiguous().copy_payload_bytes(), dtype=np.uint8)
         expected = width * height * 3 // 2
         if payload.size < expected:
             raise RuntimeError(f"NV12 payload too small: {payload.size} < {expected}")
@@ -153,7 +156,7 @@ def decoded_tensor_to_rgb(tensor) -> np.ndarray:
     if tensor.is_i420():
         width = tensor_dim(tensor, "width")
         height = tensor_dim(tensor, "height")
-        payload = np.frombuffer(tensor.copy_payload_bytes(), dtype=np.uint8)
+        payload = np.frombuffer(tensor.contiguous().copy_payload_bytes(), dtype=np.uint8)
         expected = width * height * 3 // 2
         if payload.size < expected:
             raise RuntimeError(f"I420 payload too small: {payload.size} < {expected}")

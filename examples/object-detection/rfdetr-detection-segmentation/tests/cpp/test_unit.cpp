@@ -77,17 +77,17 @@ int configuration_rule_failures() {
        "insight:\n    host: 127.0.0.1\n",
        "max_detections/max_segments must be > 0"},
       {"mask-threshold-above",
-       "model:\n  task: segmentation\n  labels: labels.txt\n  segmentation:\n    backbone: "
-       "seg-b.tar.gz\n    transformer: seg-t.tar.gz\nsource:\n  rtsp_url: "
+       "model:\n  task: segmentation\n  labels: labels.txt\n  segmentation:\n    medium:\n      "
+       "backbone: seg-b.tar.gz\n      transformer: seg-t.tar.gz\nsource:\n  rtsp_url: "
        "rtsp://camera/live\ninference:\n  segmentation:\n    mask_threshold: 2.0\noutput:\n  "
        "insight:\n    host: 127.0.0.1\n",
        "inference.segmentation.mask_threshold must be in [0, 1]"},
-      {"mask-grid-below",
-       "model:\n  task: segmentation\n  labels: labels.txt\n  segmentation:\n    backbone: "
-       "seg-b.tar.gz\n    transformer: seg-t.tar.gz\nsource:\n  rtsp_url: "
-       "rtsp://camera/live\ninference:\n  segmentation:\n    mask_grid_size: 107\noutput:\n  "
+      {"mask-grid-zero",
+       "model:\n  task: segmentation\n  labels: labels.txt\n  segmentation:\n    medium:\n      "
+       "backbone: seg-b.tar.gz\n      transformer: seg-t.tar.gz\nsource:\n  rtsp_url: "
+       "rtsp://camera/live\ninference:\n  segmentation:\n    mask_grid_size: 0\noutput:\n  "
        "insight:\n    host: 127.0.0.1\n",
-       "inference.segmentation.mask_grid_size must be >= 108"},
+       "inference.segmentation.mask_grid_size must be > 0"},
       {"insight-host-empty",
        "model:\n  task: detection\n  labels: labels.txt\n  detection:\n    variant: small\n    "
        "small:\n      backbone: small-b.tar.gz\n      transformer: small-t.tar.gz\nsource:\n  "
@@ -215,49 +215,56 @@ int main(int argc, char** argv) {
 
   Config segmentation_config;
   segmentation_config.task = Task::Segmentation;
-  segmentation_config.top_k = 200;
   segmentation_config.min_score = 0.3F;
   segmentation_config.max_results = 1;
   segmentation_config.mask_threshold = 0.08F;
-  std::vector<float> segmentation_boxes(200U * 4U, 0.0F);
-  segmentation_boxes[0] = 0.5F;
-  segmentation_boxes[1] = 0.5F;
-  segmentation_boxes[2] = 0.5F;
-  segmentation_boxes[3] = 0.5F;
-  std::copy_n(segmentation_boxes.begin(), 4, segmentation_boxes.begin() + 4);
-  std::vector<float> segmentation_logits(200U * 91U, -20.0F);
-  segmentation_logits[0] = 12.0F;
-  segmentation_logits[1] = 11.0F;
-  segmentation_logits[91U + 1U] = 10.0F;
-  std::vector<float> masks(108U * 108U * 200U, -20.0F);
-  for (int y = 40; y < 68; ++y) {
-    for (int x = 40; x < 68; ++x) {
-      masks[static_cast<std::size_t>((y * 108 + x) * 200)] = 10.0F;
-    }
-  }
-  TransformerOutputs segmentation_output{
-      neat::Tensor::from_vector(segmentation_boxes, {1, 200, 4}, neat::TensorMemory::CPU),
-      neat::Tensor::from_vector(segmentation_logits, {1, 200, 91}, neat::TensorMemory::CPU),
-      neat::Tensor::from_vector(masks, {1, 108, 108, 200}, neat::TensorMemory::CPU),
-  };
-  for (const int grid_size : {108, 432, 640}) {
-    segmentation_config.mask_grid_size = grid_size;
-    const auto segments = nlohmann::json::parse(
-        segmentation_metadata(segmentation_output, 1280, 720, labels, segmentation_config));
-    const auto& segment_entries = segments.at("segments");
-    bool valid_polygon = segment_entries.size() == 1U &&
-                         segment_entries.front().at("label") == "person" &&
-                         segment_entries.front().at("mask").size() >= 3U;
-    if (valid_polygon) {
-      for (const auto& point : segment_entries.front().at("mask")) {
-        valid_polygon = valid_polygon && point.at(0).get<int>() >= 0 &&
-                        point.at(0).get<int>() < 1280 && point.at(1).get<int>() >= 0 &&
-                        point.at(1).get<int>() < 720;
+  // Medium carries 200 queries and 108x108 masks; nano carries 100 queries and 78x78 masks.
+  for (const ModelContract contract : {ModelContract{36, 200, 108}, ModelContract{26, 100, 78}}) {
+    const auto top_k = static_cast<std::size_t>(contract.top_k);
+    const auto mask_size = static_cast<std::size_t>(contract.mask_size);
+    std::vector<float> segmentation_boxes(top_k * 4U, 0.0F);
+    segmentation_boxes[0] = 0.5F;
+    segmentation_boxes[1] = 0.5F;
+    segmentation_boxes[2] = 0.5F;
+    segmentation_boxes[3] = 0.5F;
+    std::copy_n(segmentation_boxes.begin(), 4, segmentation_boxes.begin() + 4);
+    std::vector<float> segmentation_logits(top_k * 91U, -20.0F);
+    segmentation_logits[0] = 12.0F;
+    segmentation_logits[1] = 11.0F;
+    segmentation_logits[91U + 1U] = 10.0F;
+    std::vector<float> masks(mask_size * mask_size * top_k, -20.0F);
+    for (std::size_t y = mask_size * 3U / 8U; y < mask_size * 5U / 8U; ++y) {
+      for (std::size_t x = mask_size * 3U / 8U; x < mask_size * 5U / 8U; ++x) {
+        masks[(y * mask_size + x) * top_k] = 10.0F;
       }
     }
-    if (!valid_polygon || segments.dump().size() > kMetadataByteBudget) {
-      std::cerr << "[FAIL] segmentation metadata must contain a labeled polygon\n";
-      ++failures;
+    const int64_t queries = contract.top_k;
+    const int64_t side = contract.mask_size;
+    TransformerOutputs segmentation_output{
+        neat::Tensor::from_vector(segmentation_boxes, {1, queries, 4}, neat::TensorMemory::CPU),
+        neat::Tensor::from_vector(segmentation_logits, {1, queries, 91}, neat::TensorMemory::CPU),
+        neat::Tensor::from_vector(masks, {1, side, side, queries}, neat::TensorMemory::CPU),
+    };
+    for (const int grid_size : {contract.mask_size, 432, 640}) {
+      segmentation_config.mask_grid_size = grid_size;
+      const auto segments = nlohmann::json::parse(segmentation_metadata(
+          segmentation_output, 1280, 720, labels, segmentation_config, contract));
+      const auto& segment_entries = segments.at("segments");
+      bool valid_polygon = segment_entries.size() == 1U &&
+                           segment_entries.front().at("label") == "person" &&
+                           segment_entries.front().at("mask").size() >= 3U;
+      if (valid_polygon) {
+        for (const auto& point : segment_entries.front().at("mask")) {
+          valid_polygon = valid_polygon && point.at(0).get<int>() >= 0 &&
+                          point.at(0).get<int>() < 1280 && point.at(1).get<int>() >= 0 &&
+                          point.at(1).get<int>() < 720;
+        }
+      }
+      if (!valid_polygon || segments.dump().size() > kMetadataByteBudget) {
+        std::cerr << "[FAIL] segmentation metadata must contain a labeled polygon for "
+                  << contract.top_k << " queries and " << contract.mask_size << " masks\n";
+        ++failures;
+      }
     }
   }
 
@@ -285,18 +292,19 @@ int main(int argc, char** argv) {
 
     config.open(config_path, std::ios::trunc);
     config << "model:\n  task: segmentation\n  labels: labels.txt\n  segmentation:\n"
-              "    backbone: segmentation-b.tar.gz\n"
-              "    transformer: segmentation-t.tar.gz\n"
+              "    variant: small\n    small:\n"
+              "      backbone: segmentation-b.tar.gz\n"
+              "      transformer: segmentation-t.tar.gz\n"
               "source:\n  rtsp_url: rtsp://camera/live\n"
               "inference:\n  segmentation:\n    max_segments: 24\n    mask_grid_size: 640\n"
               "output:\n  insight:\n    host: 127.0.0.1\n";
     config.close();
     try {
       const auto selected = load_config(config_path);
-      if (selected.task != Task::Segmentation || selected.top_k != 200 ||
+      if (selected.task != Task::Segmentation || selected.variant != "small" ||
           selected.mask_grid_size != 640 || selected.backbone != "segmentation-b.tar.gz" ||
           selected.min_score != 0.3F) {
-        std::cerr << "[FAIL] config must select the fixed segmentation model contract\n";
+        std::cerr << "[FAIL] config must select the segmentation size's model pair\n";
         ++failures;
       }
     } catch (const std::exception& error) {

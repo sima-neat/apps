@@ -10,7 +10,7 @@
 | Languages | C++, Python |
 | Status | experimental |
 | Binary Name | multi-stream-multi-model |
-| Model | yolo_11s, yolo_11s_seg, yolo26m-pose-int8-b1, yolo26m-det-int8-b1 |
+| Model | yolo11s (w8a8), yolo26s_seg (w8a16), yolo26m_pose (w8a8), yolo26m (w8a8) |
 
 ## Concept
 
@@ -59,29 +59,34 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-Model packages come from the Model Zoo release below, which can differ from the installed platform
-version. Set each `streams[].model` to the matching package and keep the archives compressed.
+The four packages come from the [model browser](https://developer.sima.ai/models/). Download and
+unpack them with `sima-cli` 2.1.20 or newer. Set each `streams[].model` to the matching package
+and keep the archives compressed.
 
 | Stream | Task | Model package | Source | `decode` |
 | --- | --- | --- | --- | --- |
-| 0 | Detection | `models/yolo_11s_mpk.tar.gz` | Direct artifact (Model Zoo `yolo_11s`) | `yolov8` |
-| 1 | Segmentation | `models/yolo_11s_seg_mpk.tar.gz` | Direct artifact (Model Zoo `yolo_11s_seg`) | `yolov8` |
-| 2 | Pose | `models/yolo26m-pose-int8-b1.tar.gz` | Direct artifact | `yolo26` |
-| 3 | Detection | `models/yolo26m-det-int8-b1.tar.gz` | Direct artifact | `yolo26` |
+| 0 | Detection | `models/yolo11s/w8a8/yolo11s_w8a8_mpk.tar.gz` | `yolo11s`, variant `w8a8` | `yolov8` |
+| 1 | Segmentation | `models/yolo26s_seg/w8a16/yolo26s_seg_w8a16_mpk.tar.gz` | `yolo26s_seg`, variant `w8a16` | `yolo26` |
+| 2 | Pose | `models/yolo26m_pose/w8a8/yolo26m_pose_w8a8_mpk.tar.gz` | `yolo26m_pose`, variant `w8a8` | `yolo26` |
+| 3 | Detection | `models/yolo26m/w8a8/yolo26m_w8a8_mpk.tar.gz` | `yolo26m`, variant `w8a8` | `yolo26` |
 
 ```bash
-export MODELZOO_VERSION="3.0.0"
-mkdir -p models
-cd models
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo_11s_mpk.tar.gz"
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo_11s_seg_mpk.tar.gz"
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26-pose/yolo26m-pose-int8-b1.tar.gz"
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26-detection/yolo26m-det-int8-b1.tar.gz"
-cd ..
+sima-cli models download --id yolo11s --variant w8a8
+unzip -o models/yolo11s/w8a8/yolo11s_w8a8_default.zip -d models/yolo11s/w8a8
+sima-cli models download --id yolo26s_seg --variant w8a16
+unzip -o models/yolo26s_seg/w8a16/yolo26s_seg_w8a16_default.zip -d models/yolo26s_seg/w8a16
+sima-cli models download --id yolo26m_pose --variant w8a8
+unzip -o models/yolo26m_pose/w8a8/yolo26m_pose_w8a8_default.zip -d models/yolo26m_pose/w8a8
+sima-cli models download --id yolo26m --variant w8a8
+unzip -o models/yolo26m/w8a8/yolo26m_w8a8_default.zip -d models/yolo26m/w8a8
 ```
 
+`sima-cli models download` saves each package as a ZIP file, such as
+`models/yolo26s_seg/w8a16/yolo26s_seg_w8a16_default.zip`; extracting it gives the
+`_mpk.tar.gz` file in the table.
+
 These four packages are the tested set. The `decode` setting selects the package's head layout:
-use `yolov8` for these YOLO11 packages and `yolo26` for these YOLO26 packages.
+use `yolov8` for the YOLO11 package and `yolo26` for the YOLO26 packages.
 
 ## Prepare Insight
 
@@ -142,10 +147,10 @@ touching the cameras.
 Each stream prints its resolved task, model, camera, and Insight ports at startup:
 
 ```text
-[stream 0] task=detection decode=yolov8 model=yolo_11s_mpk.tar.gz rtsp=<url> stream=1920x1080@30 insight=<host> video=9000 metadata=9100
-[stream 1] task=segmentation decode=yolov8 model=yolo_11s_seg_mpk.tar.gz rtsp=<url> stream=1920x1080@30 insight=<host> video=9001 metadata=9101
-[stream 2] task=pose decode=yolo26 model=yolo26m-pose-int8-b1.tar.gz rtsp=<url> stream=1920x1080@30 insight=<host> video=9002 metadata=9102
-[stream 3] task=detection decode=yolo26 model=yolo26m-det-int8-b1.tar.gz rtsp=<url> stream=1920x1080@30 insight=<host> video=9003 metadata=9103
+[stream 0] task=detection decode=yolov8 model=yolo11s_w8a8_mpk.tar.gz rtsp=<url> stream=1920x1080@30 insight=<host> video=9000 metadata=9100
+[stream 1] task=segmentation decode=yolo26 model=yolo26s_seg_w8a16_mpk.tar.gz rtsp=<url> stream=1920x1080@30 insight=<host> video=9001 metadata=9101
+[stream 2] task=pose decode=yolo26 model=yolo26m_pose_w8a8_mpk.tar.gz rtsp=<url> stream=1920x1080@30 insight=<host> video=9002 metadata=9102
+[stream 3] task=detection decode=yolo26 model=yolo26m_w8a8_mpk.tar.gz rtsp=<url> stream=1920x1080@30 insight=<host> video=9003 metadata=9103
 ```
 
 When the run ends (Ctrl-C, or `inference.frames` reached), each stream reports what it published:
@@ -172,7 +177,7 @@ its element counters (`Pipeline:`, `ElementFlow:`, `Backend:`), and each stream 
 throughput every 100 frames:
 
 ```text
-[profile stream=1 task=segmentation] frames=100 output_fps=30.3 avg_result_pull_ms=24.3 avg_metadata_send_ms=4.1 avg_instances=3.7
+[profile stream=1 task=segmentation] frames=100 output_fps=30.3 avg_result_pull_ms=28.0 avg_metadata_send_ms=3.5 avg_instances=15.2
 ```
 
 Set `runtime.profile: false` for a quiet run.
