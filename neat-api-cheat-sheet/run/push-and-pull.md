@@ -27,9 +27,15 @@ you are reading it, which is every streaming application. Use the
 `std::optional<Sample>` form only for a short, bounded read where you do not
 need to distinguish a timeout from end of stream.
 
-Use `try_push()` instead of `push()` when you would rather drop a frame than
-let the calling thread wait on a full queue. Use `Graph::run(...)` instead of
-either when you want one frame in and one result out.
+**Choose between `push()` and `try_push()` deliberately, because they do not
+differ only in blocking.** `push()` always waits for queue space, whatever
+`RunOptions::overflow_policy` says. `try_push()` is the only call that consults
+the policy. So an application that wants stale frames dropped must call
+`try_push()`; setting `KeepLatest` and calling `push()` gives backpressure, not
+dropping. See Pitfalls.
+
+Use `Graph::run(...)` instead of either when you want one frame in and one
+result out.
 
 ## Minimal example
 
@@ -70,12 +76,12 @@ their arguments. `RunOptions` is on [run.md](run.md).
 
 | Call | C++ | Python | Default | What it does | Why and when to change it |
 |---|---|---|---|---|---|
-| Push a tensor list | `push(const TensorList&)` | `push(input)` / `push_tensors(inputs)` | — | Pushes one frame as a list of tensors to the default input port. Returns `false` on a backpressure timeout. | The usual push for an application that builds its own tensor, for example from a `cv::Mat`. |
+| Push a tensor list | `push(const TensorList&)` | `push(input)` / `push_tensors(inputs)` | — | Pushes one frame as a list of tensors to the default input port. **Waits** for queue space; `overflow_policy` is not consulted. Returns `false` only when the input is closed or the run has stopped. | The usual push for an application that builds its own tensor, for example from a `cv::Mat`, and can tolerate waiting when the graph falls behind. |
 | Push to a named port | `push(std::string_view, const TensorList&)` | `push(name, input)` | — | Same, to a specific named input port. | Multi-input models, where each port takes a different tensor. |
 | Push images | `push(const std::vector<cv::Mat>&)` | not available (pass arrays to `push`) | — | C++ convenience overload that wraps `cv::Mat`s as tensors. | Saves building the `TensorList` yourself when you already hold `cv::Mat`s. |
 | Push a sample | `push(const Sample&)` | `push_samples(inputs)` | — | Pushes a typed `Sample`, which can carry metadata and a bundle of payloads. | When you need to set `port_name`, timestamps or attributes on the frame, or when bridging a pulled sample into another graph. |
-| Push without blocking | `try_push(...)` | `try_push(...)` / `try_push_tensors` / `try_push_samples` | — | Same payload forms, but gives up instead of waiting on a full queue. | A live source where the calling thread must not stall; pair it with `on_input_drop` in `RunOptions` to count what you lost. |
-| Push an opaque holder | `push_holder(const std::shared_ptr<void>&)` | not available | — | Pushes a lifetime-holding object alongside the data path. | Advanced; no shipped example uses it. |
+| Push without blocking | `try_push(...)` | `try_push(...)` / `try_push_tensors` / `try_push_samples` | — | Same payload forms, but applies `overflow_policy` instead of waiting: `Block` returns `false`, `DropIncoming` drops your frame and returns `false`, `KeepLatest` evicts the oldest queued frame and returns `true`. | **The only call that honours `overflow_policy`.** Use it for a live source where the calling thread must not stall, and pair it with `on_input_drop` in `RunOptions` to count what you lost. |
+| Push an opaque holder | `push_holder(const std::shared_ptr<void>&)` | not available | — | Marked **internal** in the header. Pushes a `GstBuffer` held by a tensor ref to preserve plugin metadata. | Not public API; no shipped example uses it. |
 | Copy on push | not an argument (`RunAdvancedOptions::copy_input`) | `copy=False` keyword | `false` | Copies the pushed buffer instead of referencing it. | Set it when the buffer you push does not outlive the call. In Python it is a per-call keyword; in C++ it is a run-wide option. |
 | Declare layout / format | not available | `layout=None`, `image_format=None` keywords | `None` (inferred) | Tells the binding how to interpret the array you pass. | Set `image_format` when the array is an image whose pixel format cannot be inferred, for example BGR vs RGB. |
 | Close the input | `close_input()` | `close_input()` | — | Signals end of input; the graph drains and then its outputs report `Closed`. | Call it at shutdown so pullers see a clean end of stream rather than a timeout. |
@@ -162,11 +168,22 @@ high-density detector does.
 it, pullers cannot tell the difference between "the producer is done" and "the
 producer is slow". Call it before joining the threads that pull.
 
-**`push()` returning `false` is not an error.** It means the queue was full and
-the backpressure timeout elapsed, or the overflow policy dropped the frame. The
-shipped examples throw on `false`, which is correct for their case — a dropped
-frame means a lost result — but an application that tolerates drops should
-count them instead.
+**`overflow_policy` has no effect on `push()`.** Every `push()` overload waits
+for queue space; the policy is read only on the `try_push()` path. Symptom: an
+application sets `KeepLatest` for a live camera, calls `push()`, and gets
+ingress backpressure instead of frame dropping — no error, no drop counter, and
+the latency appears upstream of Neat in the capture or network stack, where it
+cannot be attributed to this setting. Fix: call `try_push()`.
+
+Note that the header currently states the opposite on one `push()` overload, so
+do not take that comment as the contract. This is filed as
+[sima-neat/core#1463](https://github.com/sima-neat/core/issues/1463).
+
+**`push()` returning `false` does not mean the queue was full.** Because it
+waits, `false` means the input has been closed or the run has stopped. The
+shipped examples throw on `false`, which is correct for their case. A `false`
+from `try_push()` is the different, ordinary case: the queue was full under
+`Block` or `DropIncoming`, and the frame was not accepted.
 
 ## Used in
 
@@ -181,6 +198,10 @@ count them instead.
 - C++ header: `include/pipeline/Run.h` (`Run::push`, `try_push`, `pull`,
   `pull_tensors`, `pull_samples`, `run`, `close_input`, `can_push`, `can_pull`),
   `include/pipeline/GraphOptions.h` (`PullStatus`, `PullError`)
+- Blocking and overflow behavior: `src/pipeline/runtime/RunPush.cpp`
+  (`admit_input_queue_locked`, and the `block` argument every `push`/`try_push`
+  overload passes). The header's `@return` line on `push()` contradicts this;
+  see [sima-neat/core#1463](https://github.com/sima-neat/core/issues/1463).
 - Python binding: `python/src/module.cpp`, `nb::class_<Run>`,
   `nb::enum_<PullStatus>`, `nb::class_<PullError>`
 - Core commit: `bce80cb6`

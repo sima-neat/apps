@@ -63,7 +63,7 @@ Complete flow: [high-density-multi-stream-object-detector](../../examples/object
 |---|---|---|---|---|---|
 | Preset | `preset` | `preset` | `RunPreset::Balanced` | Sets `queue_depth` and `overflow_policy` together, and decides whether output storage is shared by default. | Set `Realtime` for a live camera or RTSP feed, where a late frame is worthless. Set `Reliable` for a file or dataset run, where dropping a frame corrupts the result. |
 | Queue depth | `queue_depth` | `queue_depth` | `4` (then overridden by the preset — see Pitfalls) | Capacity of the ingress and internal runtime queues, and of framework-created output queues. | Deeper for a jittery source that arrives in bursts; shallower to cut latency. A public `Output` node's `OutputOptions::max_buffers` wins for its own terminal queue. |
-| Overflow policy | `overflow_policy` | `overflow_policy` | `OverflowPolicy::Block` (then overridden by the preset — see Pitfalls) | What a full ingress queue does to a new frame. | `KeepLatest` for live video: drop the stale frame and keep running. `Block` when every frame must be processed. A public `Output` node uses its own `OutputOptions::drop` instead. |
+| Overflow policy | `overflow_policy` | `overflow_policy` | `OverflowPolicy::Block` (then overridden by the preset — see Pitfalls) | Chooses what happens when a queue is full. It applies to `try_push()` at ingress and to the output side. It does **not** apply to `push()`, which always waits. | Set `KeepLatest` and call `try_push()` for a live source, so a stale frame is dropped instead of stalling the caller. Leave it `Block` when every frame must be processed. A public `Output` node uses its own `OutputOptions::drop` for its terminal queue. See [push-and-pull.md](push-and-pull.md). |
 | Output memory | `output_memory` | `output_memory` | `OutputMemory::Auto` | Whether pulled tensors share the producer's buffer or are copied into framework storage. | See [tensors.md](tensors.md); `ZeroCopy` is the fast path and the one that can stall the pipeline if you hold tensors too long. |
 | Input timeout | `input_timeout_ms` | `input_timeout_ms` | `-1` (framework default) | Default pull timeout for `build()`/`run()` input-mode paths. | Leave it; pass an explicit `timeout_ms` to the `pull()` or `run()` call instead, which is what every shipped example does. |
 | Startup preflight | `startup_preflight` | `startup_preflight` | `true` | For seeded `build(input, ...)` overloads only, pushes and pulls the seed once at build time so payload errors surface from `build()` rather than asynchronously. | Set `false` when the seed exists only to adapt caps or shape and you are latency-sensitive at startup; you then see first-sample failures through `pull()` or `last_error()`. Seedless and source builds ignore it. |
@@ -87,6 +87,22 @@ The preset's effect is not documented in the header; these values come from
 
 Every realtime example in this repository picks `Realtime` with `KeepLatest`
 and `ZeroCopy`; `Reliable` is not used by any shipped example.
+
+### `OverflowPolicy`
+
+Which call a value affects matters more than the value itself. `push()` ignores
+all three; see [push-and-pull.md](push-and-pull.md).
+
+| Value | C++ | Python | `try_push()` at ingress | Output side |
+|---|---|---|---|---|
+| Block | `OverflowPolicy::Block` | `pyneat.OverflowPolicy.Block` | Returns `false` and keeps the queue as it is. | `appsink` does not drop. |
+| KeepLatest | `OverflowPolicy::KeepLatest` | `pyneat.OverflowPolicy.KeepLatest` | Evicts the oldest queued item, accepts yours, returns `true`. | `appsink` drops. |
+| DropIncoming | `OverflowPolicy::DropIncoming` | `pyneat.OverflowPolicy.DropIncoming` | Drops your item, returns `false`, leaves the queue as it is. | `appsink` drops. |
+
+The output-side column is `stream_opt.appsink_drop`, which is set to
+`overflow_policy != Block`, so `KeepLatest` and `DropIncoming` behave the same
+there. The full value reference lives in the `graph/` area's
+`queues-and-overflow.md`.
 
 ### `RunMode`
 
@@ -126,6 +142,13 @@ runs with, and nothing warns you. Fix: pick a value that differs from the
 struct default, or pick the preset that already means what you want. This is
 why the realtime examples write `queue_depth = 3` rather than 4.
 
+**Setting `overflow_policy` does not make `push()` drop frames.** `push()`
+always waits for queue space; only `try_push()` consults the policy. Symptom:
+an application that sets `KeepLatest` for a live source and calls `push()` gets
+ingress backpressure instead of frame dropping, with no error and no drop
+counter, so the latency shows up upstream of Neat. Fix: call `try_push()`.
+The full explanation is in [push-and-pull.md](push-and-pull.md).
+
 **Sync mode substitutes its own defaults before the preset is applied.** For
 `RunMode::Sync`, any field still at its struct default is replaced from
 `sync_run_defaults()` — `preset` becomes `Reliable` and `queue_depth` becomes
@@ -156,7 +179,10 @@ tears the pipeline down.
   (`RunMode`)
 - Preset values: `src/pipeline/graph/GraphBuildInput.cpp`
   (`preset_default_queue_depth`, `preset_default_overflow_policy`,
-  `preset_default_zero_copy`, `resolve_build_opt`)
+  `preset_default_zero_copy`, `resolve_build_opt`); output-side overflow from
+  `stream_opt.appsink_drop` in the same file
+- Overflow policy call sites: `src/pipeline/runtime/RunPush.cpp`
+  (`admit_input_queue_locked`)
 - Python binding: `python/src/module.cpp`, `nb::class_<RunOptions>`,
   `nb::class_<RunAdvancedOptions>`, `nb::enum_<RunPreset>`, `nb::class_<Run>`
 - Core commit: `bce80cb6`
