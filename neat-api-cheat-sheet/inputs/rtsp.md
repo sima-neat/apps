@@ -106,7 +106,7 @@ SPS and PPS are the H.264 headers that a decoder needs before the first frame.
 | Fallback width | `fallback_h264_width` | `fallback_h264_width` | `-1` | H.264 width used when the stream does not carry one | The camera does not announce its size |
 | Fallback height | `fallback_h264_height` | `fallback_h264_height` | `-1` | H.264 height used when the stream does not carry one | Same as fallback width |
 | Source FPS | `source_fps` | `source_fps` | `-1` | The frame rate the camera sends. Written into the caps for every codec | The camera does not announce its frame rate. Set the real rate, it does not change the rate |
-| Payload type | `payload_type` | `payload_type` | `-1` | Only RTP packets with this payload type are accepted. `-1` means the codec default: `96` for H.264 and H.265, `26` for MJPEG. `0` accepts any | No frames arrive although the URL works in another player: the camera uses another payload number. Set it, or `0` |
+| Payload type | `payload_type` | `payload_type` | `-1` | Only RTP packets with this payload type are accepted. `-1` means the codec default: `96` for H.264 and H.265, `26` for MJPEG. `0` accepts any | Shipped examples set only the codec default `96`, for example `single-stream-object-detector`. Keep the default |
 
 `RtspDecodedInputOptions`
 
@@ -126,7 +126,7 @@ board's general-purpose CPU.
 | Allocator type | `sima_allocator_type` | `sima_allocator_type` | `2` | Memory allocator for the decoded frames | Not changed in any shipped example; keep the default |
 | Output format | `out_format` | `out_format` | `NV12` | Pixel format the decoder outputs: `NV12`, `I420`, or `NV16` for MJPEG only. `I420` turns off zero-copy output, so each frame is copied before the next node gets it | The next node needs `I420`, or a 4:2:2 MJPEG camera should stay `NV16` |
 | Decoder name | `decoder_name` | `decoder_name` | `""` | Name of the decoder node | You look up the decoder by name, for example in logs or in a graph description |
-| Raw output | `decoder_raw_output` | `decoder_raw_output` | `true` | `true` keeps decoded frames in SiMa memory. `false` outputs them in system memory | Leave `true` so frames reach the model without a copy |
+| Raw output | `decoder_raw_output` | `decoder_raw_output` | `true` | `true` keeps decoded frames in SiMa memory. `false` outputs them in system memory | Not changed in any shipped example; keep the default |
 | Decoder next element | `decoder_next_element` | `decoder_next_element` | `""` | Tells the decoder which processor reads its output: `CVU` or `APU` | Not changed in any shipped example; keep the default |
 | Videoconvert | `use_videoconvert` | `use_videoconvert` | `false` | Adds a format converter that runs on the board's CPU after the decoder | The next node accepts only a format the decoder cannot output, for example `BGR`. Costs CPU time per frame |
 | Videoscale | `use_videoscale` | `use_videoscale` | `false` | Adds a scaler that runs on the board's CPU after the decoder | The next node needs another size and nothing else scales. Costs CPU time per frame |
