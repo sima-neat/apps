@@ -5,10 +5,11 @@ description: Write or update the description of a sima-neat/apps pull request. U
 
 # Write a Pull Request Description
 
-A reviewer reads the description once and must come away knowing what changed, why, how the
-example's graph looks now, what it produces, and what each test proves. Write it plain,
-precise, and brief: short sentences, the project's own names, one fact per line, no
-adjectives that do not carry information.
+Write it executive-first: a reviewer who reads only the Summary and Risk sections knows what
+was done and what could break. Everything below them is evidence for those two sections. Write
+it plain and brief: short sentences, the project's own names, one fact per line, no adjectives
+that do not carry information. Detail a reviewer does not need to judge the change, such as
+history per commit, line counts, or before and after numbers, stays in the commit messages.
 
 ## Steps
 
@@ -33,27 +34,34 @@ and why, and every test and number in it traces to a file or a run.
 ## Sections
 
 ```markdown
-## Why
+## Summary
 
-<The problem a customer or contributor hits, in two or three sentences. Name the issue.>
+<What the pull request does and for whom, in one or two sentences. Name the issue.>
+
+- **<Outcome>.** <One line per main result a reviewer must know.>
+
+## Risk
+
+- **<Risk>.** <Breaking changes, dependency or pin changes, code owner files, flaky or tight
+  thresholds, and known issues, one line each, with what breaks and for whom.>
 
 ## What Changed
 
-- <One line per change a reviewer must know, with the file or key it touches.>
+- <One line per change the Summary does not name, with the file or key it touches.>
 
 ### <example name>
 
 <Flowgraph of the example's graph topology, with change markers.>
 
-- <One note line per part or path worth attention.>
+- <One or two note lines per part or path worth attention.>
 
 <!-- screenshot: <example name> -->
 
 ## Tests
 
-| Test | Checks | Why |
-| --- | --- | --- |
-| `<file>::<test>` | <the behavior it asserts> | <the failure it would catch> |
+| Test | Checks |
+| --- | --- |
+| `<file>` | <the behavior it asserts> |
 
 ## Validation
 
@@ -64,29 +72,26 @@ and why, and every test and number in it traces to a file or a run.
 
 <The customer skill files changed and the lesson each teaches, or `Skill updates: none` with
 the reason.>
-
-## Notes
-
-<Breaking changes, follow-ups, and known issues, one line each. Omit when empty.>
 ```
 
 ## Rules
 
-- **Why** says what was wrong or missing, not what the diff does. Bad: "Refactored the config
-  loader." Good: "Each example parsed its own config keys, so a key learned in one example
-  meant nothing in the next."
-- **What Changed** names the user-visible effect first and the mechanism only when a reviewer
+- **Summary** states outcomes, not mechanisms. Bad: "Refactored the config loader." Good:
+  "Every example reads the same config keys, and CI rejects a key outside the shared list."
+- **Risk** comes before any detail and names every failure the change can cause or exposes,
+  including test failures seen during validation. Write `Risk: none` only when nothing applies.
+- **What Changed** adds only what the Summary leaves out. It names the user-visible effect first and the mechanism only when a reviewer
   needs it to judge correctness. Give before and after for a renamed key, argument, or output.
 - **Flowgraph:** one graph per changed example, showing the Neat parts the entrypoint
   connects: inputs, decode, models, links and their policies, outputs, and senders. Mark parts
   `(new)`, `(changed)`, or `(removed)`. A pull request that changes no example's graph draws
   the graph of the files it rewires instead, or omits the graph.
-- **Tests** lists every test the pull request adds or changes, and each existing test it relies
-  on as evidence. One row per test. "Checks" is the assertion, such as "every channel gets at
-  least 27 detection messages per second"; "Why" is the regression it guards against.
+- **Tests** has one row per test file or group the pull request adds, changes, or relies on as
+  evidence. "Checks" is the assertion, such as "every channel gets at least 27 detection
+  messages per second".
 - **Validation** keeps venues apart. A host check is not board evidence, and a run on an earlier
   commit says which commit. Report measured numbers with the venue, the MLA clock, and the
-  input that produced them.
+  input that produced them, in one table.
 - Each list item and table row stays on one source line. No headings beyond the ones above.
 - Omit AI attribution, internal hostnames, private links, board addresses, and customer
   information. The repository is public.
