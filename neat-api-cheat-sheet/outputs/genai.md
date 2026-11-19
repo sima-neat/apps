@@ -164,7 +164,7 @@ Python: `pyneat.GenAITask`.
 | Method | C++ | Python | What it does |
 |---|---|---|---|
 | Create | `GenAIServer(GenAIServerOptions = {})` | `pyneat.GenAIServer(options)` | Makes a server. Nothing is listening yet. |
-| Add by path | `add_model(path)` | `add_model(model_dir)` | Loads the model and returns the served name. The name comes from `model_type` in the config: lower case, a leading `vlm-`, `llm-` or `asr-` removed, other odd characters turned into `-`. If that is empty, the directory name is used. |
+| Add by path | `add_model(path)` | `add_model(model_dir)` | Reads the model directory, creates the model and returns the served name. It does not warm the model, see Pitfalls. The name comes from `model_type` in the config: lower case, a leading `vlm-`, `llm-` or `asr-` removed, other odd characters turned into `-`. If that is empty, the directory name is used. |
 | Add by path and name | `add_model(path, name)` | `add_model(model_dir, served_name)` | Same, with the name you choose. Clients put this name in the `model` field. |
 | Add a loaded model | `add_model(name, shared_ptr<GenAIModel>)` | not available | Registers a model you already loaded. |
 | Remove | `remove_model(name)` | `remove_model(served_name)` | Returns `true` if the name was registered. The model's memory is released once no request is still using it. |
@@ -197,7 +197,7 @@ are listed in Core's `genai-server.mdx`. The server turns them into a
 
 | Method | C++ | Python | What it does |
 |---|---|---|---|
-| Create | `VisionLanguageModel(model_dir)` | `pyneat.VisionLanguageModel(model_dir)` | Loads the model onto the MLA. This takes time and happens in the constructor. |
+| Create | `VisionLanguageModel(model_dir)` | `pyneat.VisionLanguageModel(model_dir)` | Reads the model directory and creates the model. The load onto the MLA finishes on the first request. |
 | Accepts images | `accepts_image()` | `accepts_image()` | `true` when the model has a vision part. |
 | Model id | `model_id()` | `model_id()` | The model directory's name. |
 | Run | `run(request)` | `run(request)` | Returns a full `GenerationResult`. |
@@ -320,9 +320,14 @@ running.
   example does this for its speech model.
 - **`stop()` removes your models.** After `stop()` the server holds no models.
   Fix: call `add_model()` again before the next `start()`.
-- **Adding a text or image model blocks.** `add_model()` loads the model before
-  it returns. A speech model loads later, during warm-up or on its first
-  request.
+- **A model added to a running server is not warmed.** `add_model()` reads
+  the model directory and creates the model, but the load onto the MLA
+  finishes on the first request. `start()` warms every model it holds once,
+  so a model added after `start()` gets no warm-up. Its first request is then
+  slow, and a load failure or an out-of-memory error shows up there, in front
+  of a user. Fix: send one small request right after `add_model()`, as
+  [neat-genai-studio](../../examples/genai/neat-genai-studio/) does in
+  `src/python/server/model_manager.py`.
 - **Same served name twice.** `add_model()` throws `OpenAI served model already
   exists: <name>`. Fix: pass a different name, or call `remove_model()` first.
   Two models whose config gives the same default name need explicit names.
