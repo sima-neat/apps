@@ -1,232 +1,161 @@
-// Unit test for single-stream-object-detector: CLI handling, the configuration
-// rules --validate-config-only can reach without a model or a stream, and the
-// NV16 saved-frame conversion.
-#include "sima_examples/example_utils.h"
-#include "sima_examples/rtsp_probe.h"
-#include "sima_examples/pull_status.h"
+// Unit tests for the single-stream object detector's own config rules: input.type selects the
+// input, and the example reads only the keys that type takes, each with the codecs and frame
+// sizes it can carry. tests/python/test_unit.py runs the same cases against main.py.
+
 #include "sima_examples/testing/test_checks.h"
 #include "sima_examples/testing/test_process.h"
 
-#include <opencv2/imgproc.hpp>
-
-#include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <iterator>
+#include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace fs = std::filesystem;
 
-using sima_examples::nv16_to_bgr;
-using sima_examples::pull_status_has_sample;
 using sima_examples::testing::expect_contains;
-using sima_examples::testing::expect_not_contains;
 using sima_examples::testing::expect_true;
-using sima_examples::testing::ProcessResult;
+using sima_examples::testing::remove_dir;
 using sima_examples::testing::spawn_and_wait;
-using sima_examples::testing::validate_config_body;
+using sima_examples::testing::write_scratch_config;
 
 namespace {
 
 constexpr const char* kExampleName = "single-stream-object-detector";
 
-// The smallest config the validator accepts, with the source and model lines
-// supplied by the caller so each test states exactly the keys it is about.
-// Everything else takes its documented default.
-std::string minimal_config(const std::string& source_lines, const std::string& model_lines = "") {
-  return "model:\n"
-         "  path: models/model.tar.gz\n" +
-         model_lines + "source:\n" + source_lines +
-         "output:\n"
-         "  insight:\n"
-         "    host: 127.0.0.1\n";
+using Lines = std::vector<std::pair<std::string, std::string>>;
+
+// The input keys each input type reads, with test values, as YAML lines under `input:`.
+Lines input_lines(const std::string& type) {
+  if (type == "rtsp") {
+    return {{"type", "rtsp"},
+            {"source", "rtsp://127.0.0.1:8554/src1"},
+            {"codec", "h264"},
+            {"width", "1280"},
+            {"height", "720"},
+            {"fps", "0"},
+            {"rtsp", "\n    tcp: true\n    latency_ms: 100"}};
+  }
+  if (type == "http") {
+    return {{"type", "http"},
+            {"source", "http://127.0.0.1:8080/stream.mjpg"},
+            {"width", "1280"},
+            {"height", "720"},
+            {"fps", "30"}};
+  }
+  return {{"type", "usb"},
+          {"source", "usb-0000:00:14.0-1"},
+          {"width", "1280"},
+          {"height", "720"},
+          {"fps", "30"}};
 }
 
-bool test_help_runs(const std::string& binary) {
-  const auto r = spawn_and_wait(binary, {"--help"}, 20000);
-  return expect_true(r.exit_code == 0, "help exits with code 0") &&
-         expect_contains(r.stdout_text, "Usage", "help prints usage");
+// A config of `type`. `inputs` replaces or adds input keys; `app` is the app: section, which an
+// http config has by default.
+std::string config_body(const std::string& type, const std::map<std::string, std::string>& inputs,
+                        const std::string& app = "") {
+  std::string body = "model:\n  path: models/yolo26m_w16a16_mpk.tar.gz\n  labels: coco_label.txt\n"
+                     "input:\n";
+  auto values = inputs;
+  for (const auto& [key, value] : input_lines(type)) {
+    const auto replaced = values.find(key);
+    body += "  " + key + ": " + (replaced == values.end() ? value : replaced->second) + "\n";
+    if (replaced != values.end()) {
+      values.erase(replaced);
+    }
+  }
+  for (const auto& [key, value] : values) {
+    body += "  " + key + ": " + value + "\n";
+  }
+  body += "inference:\n  frames: 0\n  min_score: 0.3\n  nms_iou: 0.6\n  max_detections: 50\n"
+          "output:\n  insight:\n    host: 127.0.0.1\n    video_port_base: 9000\n"
+          "    metadata_port_base: 9100\n";
+  const std::string app_section = app.empty() && type == "http" ? "ssl_strict: false" : app;
+  if (!app_section.empty()) {
+    body += "app:\n  " + app_section + "\n";
+  }
+  return body;
 }
 
-bool test_missing_config_file_fails(const std::string& binary) {
-  const auto r =
-      spawn_and_wait(binary, {"--config", "/nonexistent/single-rtsp-config.yaml"}, 20000);
-  return expect_true(r.exit_code != 0, "missing config exits non-zero") &&
-         expect_contains(r.stderr_text, "failed to open config", "missing config names the config");
+sima_examples::testing::ProcessResult validate(const std::string& binary, const std::string& name,
+                                               const std::string& body) {
+  const fs::path config_path = write_scratch_config(kExampleName, name, body);
+  const auto result =
+      spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
+  remove_dir(config_path.parent_path().string());
+  return result;
 }
 
-bool test_unknown_flag_fails(const std::string& binary) {
-  const auto r = spawn_and_wait(binary, {"--bogus"}, 20000);
-  return expect_true(r.exit_code != 0, "unknown flag exits non-zero") &&
-         expect_contains(r.stderr_text, "unknown argument", "unknown flag names the argument");
+bool expect_rejected(const std::string& binary, const std::string& name, const std::string& body,
+                     const std::string& message) {
+  const auto result = validate(binary, name, body);
+  return expect_true(result.exit_code == 1, name + " is rejected") &&
+         expect_contains(result.stderr_text, message, name + " names the cause");
 }
 
-// Only the section source.type names is read. The validated line reports its key, never the URL,
-// which can carry credentials.
-bool test_rtsp_section_supplies_the_url(const std::string& binary) {
-  const auto r =
-      validate_config_body(kExampleName, binary, "rtsp_section_url",
-                           minimal_config("  rtsp:\n"
-                                          "    url: rtsp://user:secret@127.0.0.1:8554/src1\n"));
-  return expect_true(r.exit_code == 0, "source.rtsp.url validates") &&
-         expect_contains(r.stdout_text, "source=source.rtsp.url",
-                         "rtsp source reports source.rtsp.url") &&
-         expect_not_contains(r.stdout_text, "rtsp://", "validated line does not echo the URL");
+bool test_shipped_config_loads(const std::string& binary) {
+  // A scratch copy, so the process logs the harness writes next to the config stay out of
+  // src/common.
+  std::ifstream shipped("examples/object-detection/single-stream-object-detector/src/common/"
+                        "config.yaml");
+  const std::string body{std::istreambuf_iterator<char>(shipped), {}};
+  const auto result = validate(binary, "shipped_config", body);
+  return expect_true(!body.empty() && result.exit_code == 0, "config.yaml loads") &&
+         expect_contains(result.stdout_text, "source=rtsp", "config.yaml reads an RTSP source");
 }
 
-bool test_flat_source_url_is_not_read(const std::string& binary) {
-  const auto r = validate_config_body(kExampleName, binary, "flat_source_url",
-                                      minimal_config("  url: rtsp://127.0.0.1:8554/src1\n"));
-  return expect_true(r.exit_code != 0, "a flat source.url is not read") &&
-         expect_contains(r.stderr_text, "source.rtsp.url must be set",
-                         "missing url names source.rtsp.url");
-}
-
-bool test_http_source_reads_its_own_section(const std::string& binary) {
-  const auto r = validate_config_body(kExampleName, binary, "http_section",
-                                      minimal_config("  type: http\n"
-                                                     "  rtsp:\n"
-                                                     "    url: rtsp://127.0.0.1:8554/src1\n"));
-  return expect_true(r.exit_code != 0, "http source does not read the rtsp section") &&
-         expect_contains(r.stderr_text, "source.http.url must be set",
-                         "missing url names source.http.url");
-}
-
-// The Python loader once accepted this because Path("") is "."; the C++ side
-// is held to the rule so the two implementations cannot drift apart.
-bool test_empty_labels_is_rejected(const std::string& binary) {
-  const auto r = validate_config_body(
-      kExampleName, binary, "empty_labels",
-      minimal_config("  rtsp:\n    url: rtsp://127.0.0.1:8554/src1\n", "  labels: \"\"\n"));
-  return expect_true(r.exit_code != 0, "empty model.labels is rejected") &&
-         expect_contains(r.stderr_text, "model.labels must be set",
-                         "empty labels error names the key");
-}
-
-// source.type=usb names a camera instead of a URL; the validated line reports the key, not the ID.
-bool test_usb_source_validates_without_a_url(const std::string& binary) {
-  const auto r =
-      validate_config_body(kExampleName, binary, "usb_source",
-                           minimal_config("  type: usb\n"
-                                          "  usb:\n"
-                                          "    camera: /base/pci@7000000000-3.1:1.0-046d:08e5\n"
-                                          "    width: 1280\n"
-                                          "    height: 720\n"
-                                          "    fps: 30\n"));
-  return expect_true(r.exit_code == 0, "usb source with a camera validates") &&
-         expect_contains(r.stdout_text, "source=source.usb.camera",
-                         "usb source reports source.usb.camera");
-}
-
-bool test_usb_source_requires_camera_and_fps(const std::string& binary) {
-  const auto no_camera = validate_config_body(kExampleName, binary, "usb_no_camera",
-                                              minimal_config("  type: usb\n"
-                                                             "  usb:\n"
-                                                             "    fps: 30\n"));
-  const auto no_fps = validate_config_body(kExampleName, binary, "usb_no_fps",
-                                           minimal_config("  type: usb\n"
-                                                          "  usb:\n"
-                                                          "    camera: cam0\n"
-                                                          "    fps: 0\n"));
-  return expect_true(no_camera.exit_code != 0, "usb source without a camera is rejected") &&
-         expect_contains(no_camera.stderr_text, "source.usb.camera must be set",
-                         "missing camera names source.usb.camera") &&
-         expect_true(no_fps.exit_code != 0, "usb source without a frame rate is rejected") &&
-         expect_contains(no_fps.stderr_text, "source.usb.fps must be > 0",
-                         "missing fps names source.usb.fps");
-}
-
-// The camera's JPEG is forwarded as RTP/JPEG, which carries 8-pixel blocks up to 2040 per side.
-bool test_usb_source_rejects_sizes_rtp_jpeg_cannot_carry(const std::string& binary) {
+bool test_each_input_type_reads_its_own_keys(const std::string& binary) {
   bool ok = true;
-  for (const std::string& size :
-       {"    width: 3840\n    height: 2160\n", "    width: 1284\n    height: 720\n"}) {
-    const auto r = validate_config_body(kExampleName, binary, "usb_rtp_jpeg_size",
-                                        minimal_config("  type: usb\n"
-                                                       "  usb:\n"
-                                                       "    camera: cam0\n"
-                                                       "    fps: 30\n" +
-                                                       size));
-    ok &= expect_true(r.exit_code != 0, "usb size RTP/JPEG cannot carry is rejected") &&
-          expect_contains(r.stderr_text, "multiples of 8 and at most 2040",
-                          "rejected size names the RTP/JPEG limit");
+  for (const std::string type : {"rtsp", "http", "usb"}) {
+    const auto result = validate(binary, "own_keys_" + type, config_body(type, {}));
+    ok &= expect_true(result.exit_code == 0, type + " config loads") &&
+          expect_contains(result.stdout_text, "source=" + type, type + " config reads as " + type);
   }
   return ok;
 }
 
-bool test_closed_output_is_terminal() {
-  using simaai::neat::PullStatus;
-  simaai::neat::PullError pull_error;
-  pull_error.message = "queue torn down";
-  simaai::neat::PullError end_of_stream;
-  end_of_stream.message = "input source reached end of stream";
-  const auto thrown_message = [](PullStatus status, const simaai::neat::PullError& detail,
-                                 const std::string& run_error) -> std::string {
-    try {
-      (void)pull_status_has_sample(status, "detections", detail, run_error);
-    } catch (const std::runtime_error& error) {
-      return error.what();
-    }
-    return "";
-  };
-  return expect_true(thrown_message(PullStatus::Closed, pull_error, "source reached EOS") ==
-                         "detections output closed unexpectedly: source reached EOS",
-                     "closed output ends the run with the runtime's reason") &&
-         expect_true(thrown_message(PullStatus::Closed, end_of_stream, "") ==
-                         "detections output closed unexpectedly: input source reached end of "
-                         "stream",
-                     "closed output without a run error keeps the pull's reason") &&
-         expect_true(thrown_message(PullStatus::Error, pull_error, "source reached EOS") ==
-                         "failed to pull detections: queue torn down",
-                     "pull error ends the run with its message") &&
-         expect_true(!pull_status_has_sample(PullStatus::Timeout, "detections", pull_error, ""),
-                     "timeout is not a sample") &&
-         expect_true(pull_status_has_sample(PullStatus::Ok, "detections", pull_error, ""),
-                     "successful pull is a sample");
+bool test_a_key_of_another_input_type_is_rejected(const std::string& binary) {
+  bool ok = true;
+  ok &= expect_rejected(binary, "http_with_codec", config_body("http", {{"codec", "mjpeg"}}),
+                        "unknown keys: input.codec");
+  ok &= expect_rejected(binary, "usb_with_rtsp", config_body("usb", {{"rtsp", "\n    tcp: true"}}),
+                        "unknown keys: input.rtsp.tcp");
+  ok &= expect_rejected(binary, "rtsp_with_ssl_strict", config_body("rtsp", {}, "ssl_strict: true"),
+                        "unknown keys: app.ssl_strict");
+  return ok;
 }
 
-// A 4:2:2 frame whose chroma changes on every row, in padded planes: each row must keep its own
-// chroma, which a 4:2:0 conversion would drop.
-bool test_nv16_frame_keeps_each_rows_chroma() {
-  constexpr int kWidth = 8;
-  constexpr int kHeight = 4;
-  constexpr int kStride = 16;
-  std::vector<uint8_t> bytes(2 * kHeight * kStride, 0);
-  for (int row = 0; row < kHeight; ++row) {
-    const uint8_t u = row % 2 ? 240 : 90;
-    const uint8_t v = row % 2 ? 90 : 240;
-    for (int x = 0; x < kWidth; ++x) {
-      bytes[row * kStride + x] = 81;
-      bytes[(kHeight + row) * kStride + x] = x % 2 ? v : u;
-    }
+bool test_unknown_input_type_is_rejected(const std::string& binary) {
+  return expect_rejected(binary, "unknown_input_type", config_body("rtsp", {{"type", "rtsps"}}),
+                         "input.type must be rtsp, http, or usb");
+}
+
+bool test_codec_must_be_h264_h265_or_mjpeg(const std::string& binary) {
+  return expect_rejected(binary, "unsupported_codec", config_body("rtsp", {{"codec", "vp9"}}),
+                         "input.codec must be h264, h265, or mjpeg");
+}
+
+bool test_http_and_usb_sources_need_a_frame_rate(const std::string& binary) {
+  bool ok = true;
+  for (const std::string type : {"http", "usb"}) {
+    ok &= expect_rejected(binary, "no_fps_" + type, config_body(type, {{"fps", "0"}}),
+                          "input.fps must be above 0 for an HTTP or USB source");
   }
-  simaai::neat::Tensor tensor = simaai::neat::Tensor::from_vector(
-      bytes, {static_cast<int64_t>(bytes.size())}, simaai::neat::TensorMemory::CPU);
-  tensor.semantic.image = simaai::neat::ImageSpec{simaai::neat::ImageSpec::PixelFormat::NV16, ""};
-  tensor.planes = {
-      {simaai::neat::PlaneRole::Y, {kHeight, kWidth}, {kStride, 1}, 0},
-      {simaai::neat::PlaneRole::UV, {kHeight, kWidth}, {kStride, 1}, kHeight * kStride},
-  };
-  cv::Mat bgr;
-  std::string err;
-  if (!expect_true(nv16_to_bgr(tensor, bgr, err), "NV16 converts: " + err))
-    return false;
-  auto expected = [](uint8_t u, uint8_t v) {
-    cv::Mat pair(1, 2, CV_8UC2);
-    pair.at<cv::Vec2b>(0, 0) = cv::Vec2b(81, u);
-    pair.at<cv::Vec2b>(0, 1) = cv::Vec2b(81, v);
-    cv::Mat out;
-    cv::cvtColor(pair, out, cv::COLOR_YUV2BGR_YUY2);
-    return out.at<cv::Vec3b>(0, 0);
-  };
-  bool ok = expect_true(bgr.rows == kHeight && bgr.cols == kWidth, "NV16 keeps its size");
-  for (int row = 0; row < kHeight && ok; ++row) {
-    const cv::Vec3b want = row % 2 ? expected(240, 90) : expected(90, 240);
-    for (int x = 0; x < kWidth; ++x)
-      ok &= bgr.at<cv::Vec3b>(row, x) == want;
+  return ok;
+}
+
+bool test_usb_frame_size_must_fit_rtp_jpeg(const std::string& binary) {
+  bool ok = true;
+  for (const auto& [width, height] :
+       std::vector<std::pair<std::string, std::string>>{{"1284", "720"}, {"3840", "2160"}}) {
+    ok &= expect_rejected(binary, "usb_size_" + width,
+                          config_body("usb", {{"width", width}, {"height", height}}),
+                          "multiples of 8 and at most 2040");
   }
-  return expect_true(ok, "every NV16 row keeps its own chroma") &&
-         expect_true(expected(90, 240) != expected(240, 90), "the two rows differ in colour");
+  return ok;
 }
 
 } // namespace
@@ -236,20 +165,15 @@ int main(int argc, char** argv) {
     std::cerr << "[ERR] usage: " << argv[0] << " <example-binary>\n";
     return 2;
   }
-  const std::string binary = argv[1];
 
+  const std::string binary = argv[1];
   bool ok = true;
-  ok &= test_help_runs(binary);
-  ok &= test_missing_config_file_fails(binary);
-  ok &= test_unknown_flag_fails(binary);
-  ok &= test_rtsp_section_supplies_the_url(binary);
-  ok &= test_flat_source_url_is_not_read(binary);
-  ok &= test_http_source_reads_its_own_section(binary);
-  ok &= test_empty_labels_is_rejected(binary);
-  ok &= test_usb_source_validates_without_a_url(binary);
-  ok &= test_usb_source_requires_camera_and_fps(binary);
-  ok &= test_usb_source_rejects_sizes_rtp_jpeg_cannot_carry(binary);
-  ok &= test_closed_output_is_terminal();
-  ok &= test_nv16_frame_keeps_each_rows_chroma();
+  ok &= test_shipped_config_loads(binary);
+  ok &= test_each_input_type_reads_its_own_keys(binary);
+  ok &= test_a_key_of_another_input_type_is_rejected(binary);
+  ok &= test_unknown_input_type_is_rejected(binary);
+  ok &= test_codec_must_be_h264_h265_or_mjpeg(binary);
+  ok &= test_http_and_usb_sources_need_a_frame_rate(binary);
+  ok &= test_usb_frame_size_must_fit_rtp_jpeg(binary);
   return ok ? 0 : 1;
 }

@@ -14,9 +14,9 @@
 
 ## Concept
 
-Detects objects in one RTSP or MJPEG stream with YOLO26 and sends synchronized H.264 video and detection metadata to Insight.
+Detects objects in one RTSP, HTTP MJPEG, or USB camera stream with YOLO26 and sends synchronized video and detection metadata to Insight.
 
-The decoded frame branches inside a single graph to the detector and to the H.264 sender. Both outputs therefore carry timestamps from the same frame, which is what lets Insight draw each detection on the frame it came from. Setting `output.save_dir` adds a third branch that returns the decoded frame to the application so it can write annotated JPEGs.
+The decoded frame branches inside a single graph to the detector and to the video sender, which re-encodes it as H.264. Both outputs therefore carry timestamps from the same frame, which is what lets Insight draw each detection on the frame it came from. A USB camera's own JPEG goes to Insight unchanged, and only the model reads the decoded frame.
 
 ## Preview
 
@@ -50,7 +50,7 @@ sima-cli models download --id yolo26m --variant w16a16
 unzip -o models/yolo26m/w16a16/yolo26m_w16a16_default.zip -d models/yolo26m/w16a16
 ```
 
-The download is a ZIP file with the model package and its license. `unzip` puts the model package, `models/yolo26m/w16a16/yolo26m_w16a16_mpk.tar.gz`, next to the ZIP file. Set `model.path` in the config to that `.tar.gz` file, not to the ZIP file.
+The download is a ZIP file with the model package and its license. `unzip` puts the model package, `models/yolo26m/w16a16/yolo26m_w16a16_mpk.tar.gz`, next to the ZIP file. The packaged `model.path` already points to that `.tar.gz` file: a relative `model.path` starts at the config file, and `../../../../../models/` from `${APP_DIR}/src/common/` is `prebuilt-apps/models/`.
 
 | ID | Variants | Role |
 | --- | --- | --- |
@@ -60,21 +60,29 @@ The download is a ZIP file with the model package and its license. `unzip` puts 
 | `yolo26l` | `w8a16`, `w16a16` | Supported |
 | `yolo26x` | `w8a8`, `w8a16`, `w16a16` | Supported |
 
-To use another model, replace `yolo26m` and `w16a16` in both commands and in `model.path`. The variant is the number format the model was compiled with: `w8a8` stores weights and activations as 8-bit integers, `w8a16` keeps 8-bit integer weights and stores activations in BF16, a 16-bit float format, and `w16a16` uses BF16 for both. The model browser lists the measured accuracy and speed of each size and variant.
+To use another model, replace `yolo26m` and `w16a16` in both commands and in `model.path`, or set `model.path` to the absolute path of the `.tar.gz` file. The variant is the number format the model was compiled with: `w8a8` stores weights and activations as 8-bit integers, `w8a16` keeps 8-bit integer weights and stores activations in BF16, a 16-bit float format, and `w16a16` uses BF16 for both. The model browser lists the measured accuracy and speed of each size and variant.
 
 ## Prepare Insight
 
 [Insight](https://developer.sima.ai/software/tools/insight/) can host the input stream and render the video and detection metadata. Install videos directly from the Insight catalog or through Insight's YouTube support.
 
-In the Insight Web UI, start the required stream and copy its source URL. Use RTSP for H.264 or H.265; for MJPEG, Insight supports both RTSP and HTTP URLs. For RTSP, set `source.rtsp.codec` to `h264`, `h265`, or `mjpeg`. Decoded frames are encoded as H.264 for Insight output. Use a host and published port that the target can reach, not `localhost` and not an address only Insight's own machine can resolve. Verify the URL from the target before running; the application prints the resolved source and its dimensions on startup.
+In the Insight Web UI, start the required stream and copy its source URL into `input.source`. Use RTSP for H.264 or H.265; for MJPEG, Insight supports both RTSP and HTTP URLs. For RTSP, set `input.codec` to `h264`, `h265`, or `mjpeg`; an HTTP stream is MJPEG and takes no codec. Decoded frames are encoded as H.264 for Insight output. Use a host and published port that the target can reach, not `localhost` and not an address only Insight's own machine can resolve. Verify the URL from the target before running; the application prints the source and its frame size on startup.
 
 ## Configure
 
-Open `${APP_DIR}/src/common/config.yaml`. Set `model.path` (for the default model, `models/yolo26m/w16a16/yolo26m_w16a16_mpk.tar.gz`), `source.type` and the matching `source.rtsp`, `source.http`, or `source.usb` section (only that section is read), and the Insight host and video and metadata ports.
+Open `${APP_DIR}/src/common/config.yaml`. It sets one input type, `input.type: rtsp`, with only the keys that type reads; a key of another type fails at startup and names the key. Set:
 
-The source supports RTSP H.264, H.265, and MJPEG, plus HTTP MJPEG. Keep `inference.frames` at `0` to run until you stop the application.
+- `input.source`: the RTSP URL.
+- `input.codec`: `h264`, `h265`, or `mjpeg`.
+- `input.width` and `input.height`: the stream's frame size.
+- `input.fps`: `0` reads the RTSP stream's frame rate with a probe.
+- `output.insight.host`, and the Insight ports `output.insight.video_port_base` and `output.insight.metadata_port_base`.
 
-To use a USB camera, set `source.type: usb`, `source.usb.camera` to its stable ID, and `source.usb.width`, `source.usb.height`, and `source.usb.fps` to an MJPEG mode the camera lists. List the connected camera IDs and modes on the DevKit:
+Keep `inference.frames` at `0` to run until you stop the application.
+
+For an HTTP or HTTPS MJPEG stream, set `input.type: http` and `input.source` to its URL, delete `input.codec` and `input.rtsp`, set `input.fps` to the stream's frame rate, such as `30`, and add the `app:` section the config's last lines show, with `ssl_strict: false` only for a self-signed certificate.
+
+To use a USB camera, set `input.type: usb`, `input.source` to its stable ID, and `input.width`, `input.height`, and `input.fps` to an MJPEG mode the camera lists, and delete `input.codec` and `input.rtsp`. List the connected camera IDs and modes on the DevKit:
 
 ```bash
 source ~/pyneat/bin/activate
@@ -104,16 +112,16 @@ python3 ${APP_DIR}/src/python/main.py \
 
 ## Expected Result
 
-The application prints the resolved source on startup and a count when the frame
-limit is reached:
+The application prints the source on startup and, when it stops, the number of
+frames whose detections it sent to Insight:
 
 ```text
-processed=200 video_sender=<insight-host>:9000
+source=rtsp://<rtsp-source-ip>:<port>/<stream-name> type=rtsp codec=h264 stream=1280x720@30 insight=<insight-host-ip> video=9000 metadata=9100
+processed=200 video_sender=<insight-host-ip>:9000
 ```
 
-The packaged config ships `inference.frames: 0`, which runs continuously. The
-closing `processed=` line prints only when a finite limit is reached, and
-interrupting the run with Ctrl-C skips it. For a bounded check that ends by
+The packaged config ships `inference.frames: 0`, which runs until Ctrl-C; the
+`processed=` line then prints when you stop it. For a bounded check that ends by
 itself, set a positive limit first:
 
 ```yaml
@@ -121,10 +129,7 @@ inference:
   frames: 200
 ```
 
-Left at `0`, the live Insight stream is the success signal instead. Either way,
-to confirm detections without watching Insight, set `output.save_dir` to a
-directory and `output.save_every` to a non-zero interval; the application then
-writes annotated frames there as it runs.
+Insight shows the video with a box and label on every detected object.
 
 ## Troubleshooting
 
@@ -133,13 +138,15 @@ writes annotated frames there as it runs.
 - Verify the Insight host and UDP ports if video and detections are absent.
 - Check model loading and score thresholds when video arrives without boxes.
 - If the model fails to load, check that `model.path` points to the `_mpk.tar.gz` file unpacked from the download, not to the ZIP file.
-- The startup probe adapts the decode path when source resolution changes.
+- If the run fails while the graph starts, check that `input.width` and `input.height` match the stream's frame size.
 
 ## Source Files
 
 - C++ reference source: `src/cpp/main.cpp`
 - Python source: `src/python/main.py`
 - Shared config: `src/common/config.yaml`
+- Class labels: `src/common/coco_label.txt`
+- Helpers the examples share: `support/python/sima_examples/` and, as C++ reference source, `support/cpp/sima_examples/`, at the root of the installed bundle
 
 The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
 
