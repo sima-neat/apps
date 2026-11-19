@@ -309,8 +309,8 @@ int stream_fps(const AppConfig& cfg) {
   return info.fps;
 }
 
-// The values of a float32 output tensor, copied to host memory. The backbone's zero-copy
-// outputs report CPU but cannot be mapped, so data_ptr() would throw for them.
+// The values of a float32 output tensor, copied to host memory. On the DevKit, data_ptr()
+// throws "tensor storage is not mappable" for these outputs, while this copy reads them.
 std::vector<float> float_values(const neat::Tensor& tensor) {
   std::vector<float> values(tensor.dense_bytes_tight() / sizeof(float));
   sima_examples::require(tensor.copy_dense_bytes_tight_to(reinterpret_cast<uint8_t*>(values.data()),
