@@ -71,6 +71,14 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def required_string(config: Config, key: str) -> str:
+    """The string at `key`, which must not be empty."""
+    value = config.string(key)
+    if not value:
+        raise ValueError(f"{key} must not be empty")
+    return value
+
+
 def load_app_config(path: Path) -> AppConfig:
     config = Config.load(path)
     input_type = config.string("input.type")
@@ -79,11 +87,10 @@ def load_app_config(path: Path) -> AppConfig:
     rtsp = input_type == "rtsp"
     # Only the keys of input.type are read, so reject_unread_keys() fails on another type's.
     app_config = AppConfig(
-        model_path=path.resolve().parent
-        / Path(config.string("model.path")).expanduser(),
-        labels_path=Path(config.string("model.labels")).expanduser(),
+        model_path=path.absolute().parent / required_string(config, "model.path"),
+        labels_path=Path(required_string(config, "model.labels")),
         input_type=input_type,
-        source=config.string("input.source"),
+        source=required_string(config, "input.source"),
         codec=config.string("input.codec") if rtsp else "mjpeg",
         width=config.integer("input.width"),
         height=config.integer("input.height"),
@@ -94,7 +101,7 @@ def load_app_config(path: Path) -> AppConfig:
         min_score=config.number("inference.min_score"),
         nms_iou=config.number("inference.nms_iou"),
         max_detections=config.integer("inference.max_detections"),
-        insight_host=config.string("output.insight.host"),
+        insight_host=required_string(config, "output.insight.host"),
         video_port_base=config.integer("output.insight.video_port_base"),
         metadata_port_base=config.integer("output.insight.metadata_port_base"),
         ssl_strict=config.boolean("app.ssl_strict") if input_type == "http" else True,
@@ -106,6 +113,12 @@ def load_app_config(path: Path) -> AppConfig:
         raise ValueError(
             "input.width, input.height, and input.fps must be above 0 for an HTTP or USB source"
         )
+    if rtsp and min(app_config.width, app_config.height, app_config.fps) < 0:
+        raise ValueError(
+            "input.width, input.height, and input.fps must be 0 or more for an RTSP source"
+        )
+    if app_config.rtsp_latency_ms < 0:
+        raise ValueError("input.rtsp.latency_ms must be 0 or more")
     if app_config.frames < 0:
         raise ValueError("inference.frames must be 0 or more")
     if app_config.max_detections <= 0:
@@ -114,6 +127,12 @@ def load_app_config(path: Path) -> AppConfig:
         raise ValueError("inference.min_score must be from 0 to 1")
     if not 0.0 <= app_config.nms_iou <= 1.0:
         raise ValueError("inference.nms_iou must be from 0 to 1")
+    for key, port in (
+        ("output.insight.video_port_base", app_config.video_port_base),
+        ("output.insight.metadata_port_base", app_config.metadata_port_base),
+    ):
+        if not 1 <= port <= 65535:
+            raise ValueError(f"{key} must be from 1 to 65535")
     # Core candidate: Core rejects a larger JPEG only when the video sender's caps fail to
     # negotiate, with no message that names the RTP/JPEG limit.
     if app_config.input_type == "usb" and not all(

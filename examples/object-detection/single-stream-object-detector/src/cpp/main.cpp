@@ -94,6 +94,15 @@ CliOptions parse_args(int argc, char** argv) {
   return options;
 }
 
+// The string at `key`, which must not be empty.
+std::string required_string(const sima_examples::Config& config, const std::string& key) {
+  std::string value = config.string(key);
+  if (value.empty()) {
+    throw std::runtime_error(key + " must not be empty");
+  }
+  return value;
+}
+
 AppConfig load_app_config(const fs::path& path) {
   const auto config = sima_examples::Config::load(path);
   AppConfig cfg;
@@ -103,9 +112,9 @@ AppConfig load_app_config(const fs::path& path) {
   }
   const bool rtsp = cfg.input_type == "rtsp";
   // Only the keys of input.type are read, so reject_unread_keys() fails on another type's.
-  cfg.model_path = fs::absolute(path).parent_path() / config.string("model.path");
-  cfg.labels_path = config.string("model.labels");
-  cfg.source = config.string("input.source");
+  cfg.model_path = fs::absolute(path).parent_path() / required_string(config, "model.path");
+  cfg.labels_path = required_string(config, "model.labels");
+  cfg.source = required_string(config, "input.source");
   cfg.codec = rtsp ? config.string("input.codec") : "mjpeg";
   cfg.width = config.integer("input.width");
   cfg.height = config.integer("input.height");
@@ -118,7 +127,7 @@ AppConfig load_app_config(const fs::path& path) {
   cfg.min_score = config.number("inference.min_score");
   cfg.nms_iou = config.number("inference.nms_iou");
   cfg.max_detections = config.integer("inference.max_detections");
-  cfg.insight_host = config.string("output.insight.host");
+  cfg.insight_host = required_string(config, "output.insight.host");
   cfg.video_port_base = config.integer("output.insight.video_port_base");
   cfg.metadata_port_base = config.integer("output.insight.metadata_port_base");
   if (cfg.input_type == "http") {
@@ -132,6 +141,13 @@ AppConfig load_app_config(const fs::path& path) {
     throw std::runtime_error(
         "input.width, input.height, and input.fps must be above 0 for an HTTP or USB source");
   }
+  if (rtsp && (cfg.width < 0 || cfg.height < 0 || cfg.fps < 0)) {
+    throw std::runtime_error(
+        "input.width, input.height, and input.fps must be 0 or more for an RTSP source");
+  }
+  if (cfg.rtsp_latency_ms < 0) {
+    throw std::runtime_error("input.rtsp.latency_ms must be 0 or more");
+  }
   if (cfg.frames < 0) {
     throw std::runtime_error("inference.frames must be 0 or more");
   }
@@ -143,6 +159,13 @@ AppConfig load_app_config(const fs::path& path) {
   }
   if (!(cfg.nms_iou >= 0.0 && cfg.nms_iou <= 1.0)) {
     throw std::runtime_error("inference.nms_iou must be from 0 to 1");
+  }
+  for (const auto& [key, port] :
+       {std::pair{"output.insight.video_port_base", cfg.video_port_base},
+        std::pair{"output.insight.metadata_port_base", cfg.metadata_port_base}}) {
+    if (port < 1 || port > 65535) {
+      throw std::runtime_error(std::string(key) + " must be from 1 to 65535");
+    }
   }
   // Core candidate: Core rejects a larger JPEG only when the video sender's caps fail to
   // negotiate, with no message that names the RTP/JPEG limit.
