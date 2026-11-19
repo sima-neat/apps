@@ -23,6 +23,16 @@ languages. There are no separate C++ and Python pages.
 
 Every page follows [TEMPLATE.md](TEMPLATE.md).
 
+## Pages
+
+### Model and decoding
+
+- [Model](model/model.md): loading a compiled model, `Model::Options`, and running it with `run` or `build` and a runner
+- [PreprocessOptions](model/preprocessing.md): turning an application's image into the model's input: resize, color, normalization
+- [BoxDecodeType](model/decoding.md): turning a detector's raw outputs into boxes, and the `decode_*` helpers
+- [Model::RouteOptions](model/routes.md): using a model as a stage of a larger `Graph`, and the hand-built route nodes
+- [Model::benchmark](model/benchmark.md): measuring a model's latency, throughput and power on the board
+
 ## How C++ names map to Python names
 
 The C++ API lives in the `simaai::neat` namespace. The Python API is the
