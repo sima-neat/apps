@@ -31,3 +31,12 @@ def test_each_stop_signal_sets_the_event(number, restore_handlers):
     assert not stop.is_set()
     os.kill(os.getpid(), number)
     assert stop.wait(1.0), f"{signal.Signals(number).name} did not set the stop event"
+
+
+def test_an_ignored_hangup_stays_ignored(restore_handlers):
+    # nohup starts the example with SIGHUP ignored, so closing its terminal must not stop it.
+    signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    stop = stop_on_signals()
+    os.kill(os.getpid(), signal.SIGHUP)
+    assert not stop.wait(0.2), "SIGHUP stopped a run started under nohup"
+    assert signal.getsignal(signal.SIGHUP) is signal.SIG_IGN
