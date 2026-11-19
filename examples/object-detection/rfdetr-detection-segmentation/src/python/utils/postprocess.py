@@ -33,7 +33,14 @@ class PostprocessOptions:
 
 def top_indices(values: np.ndarray, count: int) -> np.ndarray:
     """Indices of the `count` largest values, largest first; equal values keep index order."""
-    return np.argsort(-values, kind="stable")[:count]
+    count = min(count, values.size)
+    # Selecting before sorting keeps this linear in the values: a full sort of the 27,300 class
+    # scores per frame cost a fifth of the Python throughput.
+    cutoff = values[np.argpartition(-values, count - 1)[count - 1]]
+    selected = np.concatenate(
+        (np.flatnonzero(values > cutoff), np.flatnonzero(values == cutoff))
+    )[:count]
+    return selected[np.lexsort((selected, -values[selected]))]
 
 
 def top_proposals(scores: np.ndarray, proposals: np.ndarray, count: int) -> np.ndarray:
