@@ -1,75 +1,79 @@
 ---
 name: neat-application-builder
-description: Build or adapt Neat applications using public C++ or Python APIs. Use for camera, file, or RTSP pipelines, measuring or tuning model execution, packaging apps in Docker, and application logic consuming compiled model archives or deployed GenAI model directories.
+description: Build or change a Neat application with the public C++ or Python APIs. Use for a `Model` on inputs the application supplies, a `Graph` over camera, file, or RTSP sources, multi-stream or multi-model graphs, Insight output, GenAI models, and Docker packaging.
 ---
 
 # Neat Application Builder
 
-This skill is for anyone building an application on the Neat Library, in any
-project. It teaches the Neat APIs, not the conventions of a particular
-repository; follow the project's own rules for layout, configuration, and
-packaging.
+Build against the installed Neat Library. Its headers and Python bindings are the callable
+contract, and Core docs and source at the same version explain the behavior. This skill teaches
+the public APIs. The project's own rules decide layout, configuration, and packaging.
 
-Build against the installed Neat Library's public APIs. Installed headers and
-bindings define the callable contract; matching packaged source and docs explain
-behavior. Verify the APIs affected by the task against that installation.
+## Steps
 
-## Choose the relevant guidance
+1. **Locate the installed contract.** Run `neat` (or `neat --json`) where the application will
+   run. It reports the installed Core, PyNeat, Scheduler, Runner, and LLiMa versions. Headers
+   live under `$SYSROOT/usr/include` in the Neat Development Environment and under
+   `/usr/include` on the DevKit. Core source and docs live under `/neat-resources/core-src` in
+   images whose `/etc/sdk-release` reports `Neat Core = bundled`. Otherwise use the Core source
+   at the installed version's tag. To find the header that owns an API, use the
+   [API surface map](references/api-surface-map.md). For Python, read the binding in Core's
+   `python/src/module.cpp` or run `help(pyneat.<Name>)` on the target. Done when every class,
+   function, and option field the planned code names has been found in its header or binding,
+   and each one that could not be found is listed.
 
-- When locating the installation or a starting example, read
-  [source of truth](references/source-of-truth.md).
-- When choosing or changing the execution approach, read the
-  [API decision map](references/api-decision-map.md). Identify the artifact,
-  input owner, and API family before committing to a topology.
-- For classic model execution or graph composition, read
-  [Model, Graph, and Run](references/model-graph-run.md).
-- When choosing inputs, combining them with models, building the graph and
-  its `Run`, or choosing the options each takes, read
-  [graph topologies](references/graph-topologies.md).
-- For LLM, VLM, ASR, or HTTP model serving, read
-  [GenAI APIs](references/genai.md).
-- When locating an unfamiliar API, use the
-  [API surface map](references/api-surface-map.md) to find the relevant header
-  or binding. Inspect only the areas needed by the task.
-- When adding or changing visualization, read
-  [application output](references/application-output.md).
-- When inspecting where model stages run, measuring latency or power, or
-  tuning memory and buffering, read
-  [inspect, measure, and tune](references/inspect-measure-tune.md). For
-  throughput work on a running application, use the
-  `neat-application-optimizer` skill.
-- When packaging or running the application in Docker, read
-  [containers](references/containers.md).
+2. **Open a starting point.** For a focused change, start from the existing application. For a
+   new one, open the closest Apps example: under `/neat-resources/apps-src/examples` in
+   Core-bundled images, otherwise the public
+   [Apps examples](https://github.com/sima-neat/apps/tree/main/examples). Two examples show the
+   multi-stage patterns: `object-detection/high-density-multi-stream-object-detector` runs many
+   RTSP streams on one shared model, and `object-detection/rfdetr-detection-segmentation` runs
+   two models with host work between them. Where an example and the installed headers
+   disagree, follow the headers. Done when the starting code is open and either matches the
+   installed Core (it came from the image's `/neat-resources/apps-src`, or from
+   `sima-cli neat install apps`, which installs the Core it needs) or every API it calls has
+   passed the step 1 check.
 
-For a new application or execution approach, inspect the closest compatible Apps
-example for structure, configuration, and runtime patterns. For a focused edit,
-start with the existing application and consult other examples as needed.
+3. **Choose the API shape.** Classic models load a compiled model archive
+   (`*_mpk.tar.gz`), not ONNX. GenAI models load a deployed LLiMa model directory.
 
-## Implementation defaults
+   | The application | Use | Read |
+   |---|---|---|
+   | Supplies images or tensors and waits for each result | `Model::run(...)` | [Model](references/model.md) |
+   | Supplies inputs and pushes and pulls many of them | `Model::build(...)`, which returns a `Model::Runner` | [Model](references/model.md) |
+   | Lets Neat own a camera, file, or RTSP source, or chains several stages, streams, or models | `Graph`, whose `build(...)` returns a `Run` | [Graph topologies](references/graph-topologies.md), and the "Construct and configure", "Detection settings", and "Read outputs" sections of [Model](references/model.md) |
+   | Runs an LLM, VLM, or ASR model, or serves one over HTTP | `GenAIModel`, `VisionLanguageModel`, `ASRModel`, or `GenAIServer` | [GenAI](references/genai.md) |
 
-- C++ applications start with `#include <neat.h>` unless a narrower public
-  include is appropriate. Python applications use installed `pyneat`, with
-  `pyneat.genai` for GenAI APIs.
-- Long-running applications handle `SIGINT`, `SIGTERM`, and `SIGHUP`, close
-  their `Run` handles, and release model, codec, display, and streaming resources
-  on exit.
+   Done when the artifact type and the owner of the input (the application or the `Graph`) are
+   known and one row is chosen.
 
-## Completion
+4. **Implement.** C++ includes `<neat.h>`. Python imports `pyneat`, and `pyneat.genai` for
+   GenAI. Python spells functions in snake case (`pyneat.nodes.input`,
+   `pyneat.groups.rtsp_encoded_input`), and names `Model::Options` and `Model::Runner`
+   `pyneat.ModelOptions` and `pyneat.ModelRunner`. A long-running application handles `SIGINT`,
+   `SIGTERM`, and `SIGHUP`, and closes every `Run` and `Model::Runner` on every exit path. For
+   Insight video and metadata or a local window, read
+   [application output](references/application-output.md). For Docker, read
+   [containers](references/containers.md). Done when the application builds against the
+   installed headers (C++), or, in Python, when every options object it uses has been
+   constructed and every field set on the target without an error. An import alone does not
+   check attribute names. Check them with a short script that builds the options and graph
+   objects, or with `dir()` and `help()` on each object.
 
-Within the approved scope, continue through implementation, the supported
-build/run workflow, output inspection, and fixes to failures caused by the
-change. Use [validation](references/validation.md) to select checks for the
-changed behavior and rerun affected checks after fixes. Return runnable commands,
-observed results, and explicit gaps when required evidence is unavailable.
+5. **Validate.** Choose the checks with [validation](references/validation.md), run the
+   application on the target, and inspect its output. Done when the output matches the
+   application's contract on the target, or each check that could not run is named with its
+   missing prerequisite. For Insight output, that means `MetadataSender.stats()` shows
+   `datagrams_sent` rising on every channel and the Insight page shows video and boxes on every
+   stream. Return the commands, the observed results, and those gaps.
 
 ## Related work
 
-When the user names a model, check the Model Browser (`sima-cli models
---help`) for a compiled package that matches the variant and target, and use
-it if one exists. Otherwise prepare the model; model preparation belongs to
-the public Model Compiler or LLiMa documentation.
-Viewer and device operations belong to Insight and Neat Development Environment
-documentation. Applications on a PCIe host use the `simaai::neat::pcie` and
-`pyneatpcie` APIs and the `neat-pcie-application-builder` skill. Use the
-corresponding installed skill when available. This skill owns application code
-and application-side APIs.
+- Measuring or raising throughput, lowering latency, and removing copies belong to the
+  `neat-application-optimizer` skill.
+- Compiling a model belongs to the Model Compiler or LLiMa documentation. To download a model
+  that is already compiled, follow [Model](references/model.md).
+- A PCIe host application uses the `simaai::neat::pcie` and `pyneatpcie` APIs and the
+  `neat-pcie-application-builder` skill.
+- Insight viewer setup and device operations belong to the Insight and Neat Development
+  Environment documentation.

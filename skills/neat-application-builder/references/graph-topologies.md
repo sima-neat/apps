@@ -1,114 +1,217 @@
 # Graph Topologies
 
-How to pick the inputs, combine them with models in a `Graph`, build the `Run`, and choose
-the options each step takes. The installed headers under `nodes/`, `nodes/groups/`, and
-`pipeline/` define every node and option, and Core's `docs/develop-apps/development-workflow/`
-pages explain them.
+How to start a `Graph` at its input, combine it with models and outputs, and drive the `Run`.
+The installed headers under `nodes/`, `nodes/groups/`, and `pipeline/` define every node and
+option and show each default. Set only the options whose default does not fit. Core's
+`docs/develop-apps/development-workflow/graph.mdx` and `pipeline.mdx` explain them.
 
 ## Pick the input
 
 | The frames come from | Start the graph with |
 |---|---|
-| The application, which pushes images or tensors | `nodes::Input("name", options)`, then `graph.build(first_input, run_options)` |
-| A live RTSP stream, decoded by Neat | `nodes::groups::RtspDecodedInput` |
-| A live RTSP stream you also forward still encoded | `nodes::groups::RtspEncodedInput`, then `nodes::SimaDecode` and `nodes::CapsRaw` |
+| The application, which pushes images or tensors | `nodes::Input("name", options)` |
+| A live RTSP stream that Neat decodes | `nodes::groups::RtspDecodedInput` |
+| A live RTSP stream that is also forwarded still encoded | `nodes::groups::RtspEncodedInput`, then `nodes::SimaDecode` |
 | A video file | `nodes::groups::VideoInputGroup` |
 | Still images | `nodes::groups::ImageInputGroup` or `nodes::StillImageInput` |
 | An HTTP MJPEG camera | `nodes::groups::HttpMjpegDecodedInput` |
-| A camera on the board | `nodes::CameraInput` or `nodes::UsbCameraInput` |
+| A MIPI camera on the board | `nodes::CameraInput` ([cameras](cameras.md)) |
+| A USB webcam | `nodes::UsbCameraInput` ([cameras](cameras.md)) |
 
-A graph that starts at a source group produces its own frames: build it with
-`graph.build(run_options)` and only pull. A graph that starts at `nodes::Input` waits for
-`push()`. Building it with a first input lets Neat derive the frame format from real data.
+## RTSP and decoder options
 
-- **Frame rate:** `source_fps` on a stream input declares the rate the source sends. Set it
-  when the stream does not announce one, as some MJPEG cameras do not. To change the rate,
-  set `use_videorate` and `video_rate_fps`.
-- **Camera queue:** `CameraInputOptions::leaky_queue` defaults to `true` with a depth of 2, so
-  a graph slower than the camera drops frames without an error. Set it to `false` on a path
-  that must process every frame.
-- **Camera into a model:** make the camera the graph's first node and add the model with
-  `Model::RouteOptions`: `include_input = false`, and `upstream_name` and `buffer_name` set
-  to the camera's `buffer_name`. The camera's frames then reach the model without a copy or
-  a CPU conversion.
+`RtspEncodedInputOptions` (C++ `nodes::groups`, Python `pyneat.RtspEncodedInputOptions`):
+
+- `url` and `codec` (`RtspCodec::H264`, `H265`, or `MJPEG`) for every stream.
+- `tcp` (default `true`) and `latency_ms`, the jitter buffer (default `200`). The high-density
+  example sets `latency_ms = 100`.
+- `drop_on_latency` (default `true`) drops late packets. Turn it off only when every frame
+  matters more than freshness.
+- `buffer_mode = "none"` keeps the RTP timestamps as sent. The RF-DETR example sets it for TCP
+  sources, because arrival-time corrections drift during high-rate replay.
+- Frame rate and caps for H.264:
+  - With `auto_caps_from_stream = true` (the default), Neat reads the size and rate from the
+    stream and uses `fallback_h264_width`, `fallback_h264_height`, and `fallback_h264_fps` when
+    the stream lacks them.
+  - With `auto_caps_from_stream = false`, Neat takes the rate from `source_fps` (or
+    `fallback_h264_fps`) and the size from the fallback fields, and the build fails when any is
+    missing.
+  - The high-density example sets the fallback fields to the stream's size and rate, turns
+    auto caps off when its configuration gives the rate, and leaves them on when it does not.
+- `source_fps` declares the rate for H.265 and MJPEG too. Set it when the stream does not
+  announce one, as some MJPEG cameras do not.
+
+`SimaDecodeOptions` (Python `pyneat.SimaDecodeOptions`) for `nodes::SimaDecode`:
+
+- `type` is a `SimaDecodeType` (`H264`, `H265`, `MJPEG`, `JPEG`), not an `RtspCodec`. The
+  default is `H264`, so set it for every other codec.
+- `dec_width`, `dec_height`, and `dec_fps` default to the upstream values. Both examples set
+  them to the stream's own size and rate. The model's preprocessing resizes later.
+- `next_element` selects the decoder's downstream consumer, `"CVU"` or `"APU"`. The
+  high-density example sets `"CVU"`, where its frames go to the model's EV74 preprocessing.
+  `decoder_name` only overrides the element name.
+- `num_buffers`, `input_buffers`, `decoder_tuning`, and `memory_opt` trade memory for
+  throughput. The high-density example sets all four for many streams, and the RF-DETR example
+  raises only `num_buffers` (to 32) for MJPEG. The `neat-application-optimizer` skill's tuning
+  reference covers them.
+
+The high-density decoder subgraph ends with `nodes::CapsRaw("NV12", width, height, fps,
+CapsMemory::Any)` before its `Output`, which fixes the format handed to the model.
 
 ## Build the graph
 
-- `add(...)` appends a stage to a linear chain: input, model, output.
-- `connect(a, b)` joins two graphs. Use it to branch one producer to several consumers, join
-  several producers into one consumer, or join subgraphs you built separately.
-- `model.graph()` returns the model's own route: preprocessing, inference, and decoding. Add or
-  connect it as one stage. Do not rebuild that route by hand.
+- `add(...)` appends a stage to a linear chain.
+- `connect(a, b, link_options)` joins two graphs. Use it to send one producer to several
+  consumers, join several producers into one consumer, or join subgraphs built separately.
+  A plain `connect(a, b)` is lossless, except that Core promotes live fan-in with the default
+  policy to latest-by-stream.
+- `model.graph()` returns the model's route as one stage. Add or connect it. A default
+  `nodes::Input` wired straight to one model image input takes that input's image format. Give
+  the `Input` explicit options when it feeds several models.
 - End every result the application reads with `nodes::Output("name", OutputOptions)`, and pull
   it by that name.
-- Create a subgraph once in a variable and connect the variable. Calling a builder function in
+- Name inputs and outputs for what they carry (`detector_frame`, `detections`). The
+  `Graph("name")` label is diagnostic only.
+- Create a subgraph once in a variable and connect the variable. A builder function called in
   each `connect` creates two copies.
-- A subgraph that another graph connects into starts with
-  `connect(nodes::Input("name"), first_node)`. Starting it with `add(Input)` then
-  `add(first_node)` fails at build with `internal runtime-port edge is missing ports`.
-- End a subgraph that feeds a model with several inputs with an `Output` named after the model
-  input it feeds.
+- **A subgraph that starts at `nodes::Input`:** put the `Input` alone in its own graph and
+  `connect` that graph to the first stage. Adding the `Input` and the next stage to one graph
+  with `add` fails at build with `internal runtime-port edge is missing ports`. This applies
+  only where a graph starts at `Input`, such as the shared detector below. A subgraph that starts
+  at another node, such as the decoder subgraph, is built with `add`.
+- For a model with several inputs, name each upstream `Output` after the model input it feeds.
+  `model.graph().inputs()` lists those names.
+
+## Keep every frame or the newest
+
+Each of these drops stale frames or results in favor of newer ones:
+
+- `GraphLinkPolicy::RealtimeLatestByStream` on a link
+- a `nodes::Queue` with `QueueOptions::max_buffers` and `OverflowPolicy::KeepLatest`
+- `OutputOptions::Latest()` on an output
+- `RunOptions::preset = RunPreset::Realtime`, which sets small queues with `KeepLatest`
+  overflow, and which both examples use for live input
+
+Keep plain links and `OutputOptions::EveryFrame(n)`, which holds up to `n` results, on paths
+that must process every frame.
 
 ## Combine inputs with models
 
-- **One input, one model:** `source → model.graph() → Output`.
-- **One input, two consumers:** connect the same source to the model and to a
-  `nodes::groups::VideoSender`. Neat reads the stream once and feeds both.
-- **Many streams, one model:** build the model graph once and connect each stream's decoder to
-  it, all inside one parent graph with one `Run`. Graphs built with separate `build()` calls
-  cannot share a model. Give the model's `nodes::Input` the options from
-  `model.input_appsrc_options(false)`. They block by default, so frames wait for the model
-  and the dropping happens on the links. Pass `GraphLinkOptions` on each stream's link:
-  - `policy = GraphLinkPolicy::RealtimeLatestByStream`, so a busy model receives each
-    stream's newest frame and drops stale ones;
-  - `stream_id`, such as `stream3`. The pulled `Sample` carries it, so the application knows
-    which stream a result belongs to;
-  - `max_inflight_per_stream` and `max_inflight_total`, so one stream cannot fill the model.
+- **One stream, one model:** `RtspEncodedInput → decoder → model.graph() → Output`. To give the
+  model the newest frame when inference lags, the RF-DETR example puts a `KeepLatest`
+  `nodes::Queue` with `max_buffers = 4` before the model.
+- **One stream, model and Insight video:** connect the `RtspEncodedInput` graph both to the
+  decoder and to a `VideoSender`. Neat reads the stream once and feeds both.
+  [Application output](application-output.md) owns the sender options and the link to it.
+- **Many streams, one model:** see [Many streams, one model](#many-streams-one-model).
 - **Results joined by frame:** before a `graphs::Combine` with `CombinePolicy::ByFrame` or
-  `ByPts`, use plain links. A latest-by-stream link drops frames, and the join then waits
-  for frames that never arrive.
-- **Two models in sequence:** connect the first model's output graph to the second model's
-  input. Check each model's `input_specs()` so the formats match.
-- **Two models with host work between them:** pull the first model's result from its `Run`,
-  compute on the host, and push the result to the second model's `Model::Runner`. Build that
-  runner with `model.build(seed)`, where `seed` holds tensors shaped by `input_specs()`. Copy
-  the frame fields, such as `frame_id`, `stream_id`, and `pts_ns`, from the pulled `Sample` to
-  the pushed one, so each result still names its frame. Pull from the first model and push to
-  the second in one thread, and pull the second model's results in another.
+  `ByPts`, use plain links. A latest-by-stream link drops frames, and the join then waits for
+  frames that never arrive.
+- **Two models in sequence:** connect the first model's graph to the second model's graph.
+  Check each model's `input_specs()` so the formats match.
+- **Two models with host work between them:** the RF-DETR example shows the pattern.
+  - The first model runs in the `Graph` and ends at `Output("backbone")`. The second runs as a
+    `Model::Runner`, built with a seed of zero tensors shaped by `input_specs()` in
+    `TensorMemory::EV74` and with `RunOptions::output_memory = OutputMemory::Owned`.
+  - A feeder thread pulls each first-model result from the `Run`, computes on the host, and
+    pushes a new `Sample` of kind `TensorSet` to the runner. Copy the frame identity from the
+    pulled `Sample` to the pushed one: `frame_id`, `stream_id`, `stream_label`, `input_seq`,
+    `orig_input_seq`, `pts_ns`, `dts_ns`, `duration_ns`, and `attributes`.
+  - A tensor passed on from the first model may sit in CPU storage (`StorageKind::CpuOwned` or
+    `CpuExternal`). Move it with `cvu()` before pushing it to a model that reads device memory.
+    A device tensor passes without a copy.
+  - The main thread pulls the runner's results. To stop, set the stop flag, call the runner's
+    `close_input()` to release a push that is waiting, join the feeder, then close the runner
+    and the `Run`.
 
-## Build and drive the run
+## Many streams, one model
 
-1. `graph.build(run_options)` or `graph.build(first_input, run_options)` returns a `Run`.
-2. Push images or tensors with `run.push("input name", inputs)` when the graph starts at
-   `nodes::Input`.
-3. Pull with `run.pull("output name", timeout_ms, ...)`. C++ returns a `PullStatus`; Python
-   returns `None` on a timeout or a closed run. Check `run.running()` and `run.last_error()`
-   to tell them apart.
-4. Close the run with `run.close()` on every exit path, including `SIGINT`.
+All streams share one model inside one parent graph with one `Run`. Graphs built with separate
+`build()` calls cannot share a model. The high-density example wires it like this (Python, and
+`main.cpp` makes the same calls):
 
-Pushing from one thread and pulling from another is safe. Several threads pushing into the
-same `Run` must take turns, behind one lock.
+```python
+# The shared detector: three graphs, joined with connect.
+input_options = model.input_appsrc_options(False)
+input_options.max_bytes = width * height * 3 // 2 * input_options.pool_max_buffers
+frames = pyneat.Graph()
+frames.add(pyneat.nodes.input("detector_frame", input_options))
+results = pyneat.Graph()
+results.add(pyneat.nodes.output("detections", pyneat.OutputOptions.every_frame(queue_depth)))
+model_graph = model.graph()
+detector = pyneat.Graph()
+detector.connect(frames, model_graph)
+detector.connect(model_graph, results)
 
-A detection model's pulled result is a `TensorSet` whose first tensor is the `BBOX` payload,
-not a single `Tensor`. Pass that first tensor to `decode_bbox_tensor`.
+graph = pyneat.Graph(options=graph_options)  # advanced_execution.internal_queue_depth
+for index, url in enumerate(urls):
+    rtsp = pyneat.groups.rtsp_encoded_input(rtsp_options(url))
+    decoder = pyneat.Graph("decoder")  # built with add
+    decoder.add(pyneat.nodes.sima_decode(decode_options))
+    decoder.add(pyneat.nodes.caps_raw("NV12", width, height, fps, pyneat.CapsMemory.Any))
+    decoder.add(pyneat.nodes.output("detector_frame"))
+    graph.connect(rtsp, decoder)
+    graph.connect(decoder, detector, detector_link(index))  # the same detector every time
+    # Insight video: application-output.md owns these options and this link.
+    graph.connect(rtsp, pyneat.groups.video_sender(video_options(index)), video_link)
+run = graph.build(run_options)
+```
 
-## Options to pass
+- Each decoder subgraph ends at `Output("detector_frame")`, the name of the detector's `Input`.
+- `model.input_appsrc_options(False)` has `block = true`, so frames wait at the model's input
+  and the dropping happens on the links. `max_bytes` bounds the bytes queued there.
+- `detector_link(index)` is a `GraphLinkOptions` with
+  `policy = GraphLinkPolicy::RealtimeLatestByStream`, `stream_id = f"stream{index}"`,
+  `max_inflight_per_stream`, and `max_inflight_total`. The pulled `Sample` carries the
+  `stream_id`, so one pull loop on `detections` routes each result to its stream.
+- `RunOptions` sets `preset = RunPreset::Realtime`, `queue_depth`, and
+  `output_memory = OutputMemory::ZeroCopy`.
 
-| Option struct | Passed to | Controls |
-|---|---|---|
-| `Model::Options` | `Model` | Preprocessing input format and preset, box decoder, score and NMS thresholds, `top_k` |
-| Input group options, such as `RtspEncodedInputOptions` | The input group | URL or path, codec, transport, jitter buffer, frame size and rate |
-| `SimaDecodeOptions` | `nodes::SimaDecode` | Codec, output size and rate, decoder buffers |
-| `GraphLinkOptions` | `connect` | Link policy, `stream_id`, frames in flight |
-| `OutputOptions` | `nodes::Output` | How many results wait to be pulled |
-| `GraphOptions` | `Graph` | Execution settings such as `advanced_execution.internal_queue_depth` |
-| `RunOptions` | `graph.build` | `preset` (`Realtime` for live input), `queue_depth`, `output_memory` (`ZeroCopy` or `Owned`) |
-| `VideoSenderOptions`, `MetadataSenderOptions` | Insight senders | Host, channel, ports; `VideoSenderOptions::Passthrough(codec)` forwards encoded video |
+Starting values from the example's profiles. The example sets `OutputOptions::EveryFrame(n)` on
+`detections` and `RunOptions::queue_depth` to the same value, and sets both in-flight caps.
+Start from the row closest to your stream count and rate.
 
-Set only the options the application needs to change. The installed header shows each default.
+| Streams and rate | `max_inflight_per_stream` | `max_inflight_total` | `EveryFrame(n)` and `queue_depth` | `internal_queue_depth` | Decoder `num_buffers` |
+|---|---|---|---|---|---|
+| 20 at 30 FPS | 1 | 8 | 16 | 1 | 8 |
+| 30 at 20 FPS | 4 | 30 | 4 | 2 | 16 |
+| 60 at 10 FPS | 1 | 8 | 1 | 2 | 4 |
 
-## Keep the topology readable
+Changing these values for speed belongs to the `neat-application-optimizer` skill.
 
-- Build the whole graph in one place, so every `add` and `connect` is visible together.
-- Return each option struct or small subgraph from a function named for what it returns, such
-  as `rtsp_options` or `decoder_graph`.
+## Drive the run
+
+1. `graph.build(run_options)` returns a `Run`. A graph that starts at a source group produces
+   its own frames, so the application only pulls. A graph that starts at `nodes::Input` waits
+   for `push()`. Building it with a first input, `graph.build(first_input, run_options)`, lets
+   Neat derive the frame format from real data.
+2. Push with `run.push("input name", inputs)`. Unnamed `push` and `pull` work only when the
+   graph has one input or one output.
+3. Pull in a loop with a short timeout. Both reference examples use 100 ms.
+   - C++: `run.pull("name", timeout_ms, sample, &error)` returns a `PullStatus`.
+   - Python: `run.pull("name", timeout_ms)` returns `None` on a timeout and on a closed run.
+     After `None`, stop when `run.last_error()` is set or `run.running()` is false, and
+     otherwise pull again.
+
+Pushing from one thread and pulling from another is safe. Several threads pushing into the same
+`Run` must take turns behind one lock.
+
+### Output memory
+
+Choose `RunOptions::output_memory` by how long the application keeps each result:
+
+- It reads each result and releases it before the next pull: `ZeroCopy`, as both reference
+  examples use for their graphs. A held result or open `Mapping` keeps its runtime buffer, so
+  holding several stalls the producer.
+- It keeps results (frame history, a hand-off to another thread): `Owned`.
+  Each pull copies the result into system memory that holds no runtime buffer. The RF-DETR
+  transformer runner uses it so that reading results holds none of the transformer's buffers.
+
+### Decoded frames read on the host
+
+When application code reads a decoded frame on the host (a crop for a VLM, an annotated
+snapshot), expect decoder padding. A 1080p NV12 frame has 2048-byte rows, and its UV plane
+starts after 1088 rows. Pack it with `tensor.contiguous().copy_payload_bytes()`, or read each
+plane at its `byte_offset` and `strides_bytes`. A slice of `copy_payload_bytes()` to
+`width * height * 3 / 2` bytes corrupts the image. Test host-side frames at 1080p, because
+720p rows are unpadded and only the colors shift there.
