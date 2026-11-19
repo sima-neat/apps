@@ -145,7 +145,8 @@ def test_publishes_insight_video_and_metadata(
         for entry in json.loads(message.payload)["data"]["objects"]:
             assert entry["label"] in LABELS, entry
             assert entry["confidence"] >= MIN_SCORE, entry
-    # Decoded RTSP and HTTP frames are re-encoded as RTP H.264 (payload type 96); a USB
-    # camera's own JPEG is sent as RTP/JPEG (payload type 26).
+    # H.265 goes to Insight as received (RTP payload type 98), and so does a USB camera's JPEG
+    # (26). H.264 is passed through and decoded MJPEG and HTTP frames are encoded as H.264 (96).
+    payload_type = 26 if source["type"] == "usb" else 98 if source.get("codec") == "h265" else 96
     assert len(video_packet) > 12 and video_packet[0] >> 6 == 2
-    assert video_packet[1] & 0x7F == (26 if source["type"] == "usb" else 96)
+    assert video_packet[1] & 0x7F == payload_type

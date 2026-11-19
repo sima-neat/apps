@@ -16,7 +16,56 @@
 
 Detects objects in one RTSP, HTTP MJPEG, or USB camera stream with YOLO26 and sends synchronized video and detection metadata to Insight.
 
-The decoded frame branches inside a single graph to the detector and to the video sender, which re-encodes it as H.264. Both outputs therefore carry timestamps from the same frame, which is what lets Insight draw each detection on the frame it came from. A USB camera's own JPEG goes to Insight unchanged, and only the model reads the decoded frame.
+```text
+How does a frame move through single-stream-object-detector?
+
+╭┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╮
+┆ RUN, input.type rtsp                                                              ┆
+┆  ┌────────────────────────────────┐  H.264, H.265       ┌──────────────────────┐  ┆
+┆  │ RtspEncodedInput               │────────────────────►│ VideoSender          │──┼─────┐
+┆  └────────────────────────────────┘  as received        └──────────────────────┘  ┆     │
+┆             │ encoded frames                                        ▲             ┆     │ video
+┆             ▼                                                       │             ┆     │
+┆  ┌────────────────────────────────┐  MJPEG: NV12, latest, 2 held    │             ┆     │
+┆  │ SimaDecode                     │─────────────────────────────────┘             ┆     │
+┆  └────────────────────────────────┘                                               ┆     │
+┆             │ NV12 frames                                                         ┆     │
+┆             ▼                                                                     ┆     │
+┆  ┌────────────────────────────────┐                                               ┆     │
+┆  │ YOLO26 Model                   │                                               ┆     │
+┆  └────────────────────────────────┘                                               ┆     │
+┆             │ BBOX tensor                                                         ┆     │
+┆             ▼                                                                     ┆     │
+┆  ┌────────────────────────────────┐                                               ┆     │
+┆  │ Output "detections"            │                                               ┆     │
+┆  └────────────────────────────────┘                                               ┆     │
+╰┄┄┄┄┄┄┄┄┄┄┄┄┄│┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯     │
+              ▼ pull, decode_bbox_tensor                                                  ▼
+   ┌────────────────────────────────┐                                                ┌─────────┐
+   │ MetadataSender                 │───────────────────────────────────────────────►│ Insight │
+   └────────────────────────────────┘   boxes as JSON                                └─────────┘
+
+With input.type http, one group receives and decodes the MJPEG stream:
+
+ ┌────────────────────────────────┐  NV12 frames,       ┌──────────────────────┐
+ │ HttpMjpegDecodedInput          │────────────────────►│ VideoSender          │
+ └────────────────────────────────┘  latest, 2 held     └──────────────────────┘
+            │ NV12 frames to the YOLO26 Model, as above
+
+With input.type usb, the camera's own JPEG goes to Insight:
+
+ ┌────────────────────────────────┐  camera JPEG,       ┌──────────────────────┐
+ │ UsbCameraInput                 │────────────────────►│ VideoSender          │
+ └────────────────────────────────┘  latest             └──────────────────────┘
+            │ camera JPEG
+            ▼
+ ┌────────────────────────────────┐
+ │ SimaDecode                     │
+ └────────────────────────────────┘
+            │ NV12, or NV16 from a 4:2:2 camera, to the YOLO26 Model
+```
+
+H.264 and H.265 go to Insight as received, while the decoder feeds the model. An MJPEG stream, over RTSP or HTTP, is decoded once and its frames are encoded as H.264 for Insight; the link to the encoder keeps the newest frames and holds at most two, so the encoder cannot starve the decoder. A USB camera's own JPEG goes to Insight unchanged, and only the model reads the decoded frame. Each detection message carries the frame's timestamp, which Insight uses to draw the boxes on the frame they came from.
 
 ## Preview
 
@@ -80,7 +129,7 @@ Open `${APP_DIR}/src/common/config.yaml`. It sets one input type, `input.type: r
 
 Keep `inference.frames` at `0` to run until you stop the application.
 
-For an HTTP or HTTPS MJPEG stream, set `input.type: http` and `input.source` to its URL, delete `input.codec` and `input.rtsp`, set `input.fps` to the stream's frame rate, such as `30`, and add the `app:` section the config's last lines show, with `ssl_strict: false` only for a self-signed certificate.
+For an HTTP or HTTPS MJPEG stream, set `input.type: http` and `input.source` to its URL, delete `input.codec` and `input.rtsp`, set `input.fps` to the stream's frame rate, such as `30`, and add an `app:` section with `ssl_strict: true`, or `false` only for a self-signed certificate, as the comment under `input.type` shows.
 
 To use a USB camera, set `input.type: usb`, `input.source` to its stable ID, and `input.width`, `input.height`, and `input.fps` to an MJPEG mode the camera lists, and delete `input.codec` and `input.rtsp`. List the connected camera IDs and modes on the DevKit:
 
@@ -138,7 +187,7 @@ Insight shows the video with a box and label on every detected object.
 - Verify the Insight host and UDP ports if video and detections are absent.
 - Check model loading and score thresholds when video arrives without boxes.
 - If the model fails to load, check that `model.path` points to the `_mpk.tar.gz` file unpacked from the download, not to the ZIP file.
-- If the run fails while the graph starts, check that `input.width` and `input.height` match the stream's frame size.
+- With `input.fps: 0`, an RTSP run stops at startup when the stream's frame size differs from `input.width` and `input.height`, and the error names both sizes. With a fixed `input.fps` the application does not read the stream's size, so set `input.width` and `input.height` to it.
 
 ## Source Files
 

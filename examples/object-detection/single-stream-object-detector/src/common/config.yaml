@@ -1,21 +1,27 @@
 # YOLO26 object detection of one RTSP, HTTP MJPEG, or USB camera stream, shown in Insight.
 model:
-  path: ../../../../../models/yolo26m/w16a16/yolo26m_w16a16_mpk.tar.gz  # Compiled model package; relative paths start at this file.
-  labels: examples/object-detection/single-stream-object-detector/src/common/coco_label.txt  # Relative to the working directory.
+  # Compiled model package; a relative path starts at this file.
+  path: ../../../../../models/yolo26m/w16a16/yolo26m_w16a16_mpk.tar.gz
+  # Class labels, one per line; a relative path starts at the working directory.
+  labels: examples/object-detection/single-stream-object-detector/src/common/coco_label.txt
 
 input:
-  type: rtsp                    # rtsp, http, or usb. For http, delete codec and rtsp and add app.ssl_strict. For usb, set source to a camera ID and delete codec and rtsp.
-  source: rtsp://<rtsp-source-ip>:<port>/<stream-name>  # RTSP URL; an http:// or https:// MJPEG URL for http; a camera ID from pyneat.usb_camera_ids() for usb.
-  codec: h264                   # h264, h265, or mjpeg. HTTP and USB sources are MJPEG.
-  width: 1280                   # Frame width of the stream, in pixels; for usb, one of the camera's MJPEG modes.
+  # rtsp, http, or usb. For http, delete codec and rtsp, set source to the http:// or
+  # https:// MJPEG URL, and add "app:" with "ssl_strict: true" (false accepts a self-signed
+  # certificate). For usb, delete codec and rtsp and set source to a camera ID from
+  # pyneat.usb_camera_ids().
+  type: rtsp
+  source: rtsp://<rtsp-source-ip>:<port>/<stream-name>  # The RTSP URL.
+  codec: h264                   # h264, h265, or mjpeg.
+  width: 1280                   # Frame width of the stream, in pixels; for usb, a camera mode.
   height: 720                   # Frame height of the stream, in pixels.
-  fps: 0                        # 0 reads the RTSP stream's frame rate with a probe; http and usb need the rate.
+  fps: 0                        # 0 reads the RTSP stream's rate; http and usb need the rate.
   rtsp:
     tcp: true                   # Receive RTSP over TCP.
     latency_ms: 100             # RTSP jitter buffer.
 
 inference:
-  frames: 0                     # Frames to process before stopping; 0 runs until Ctrl+C.
+  frames: 0                     # Frames to process before stopping; 0 runs until stopped.
   min_score: 0.30               # Lowest score a detection needs.
   nms_iou: 0.60                 # Overlap at which NMS drops the weaker box.
   max_detections: 50            # Boxes kept per frame.
@@ -25,7 +31,3 @@ output:
     host: <insight-host-ip>     # Machine running Insight.
     video_port_base: 9000       # Insight video port.
     metadata_port_base: 9100    # Insight metadata port.
-
-# For input.type http only:
-# app:
-#   ssl_strict: true            # false accepts a self-signed HTTPS certificate.

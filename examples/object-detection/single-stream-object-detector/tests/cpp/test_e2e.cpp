@@ -168,12 +168,13 @@ int run_source_case(const std::string& binary, const std::string& model_path,
               << result.stdout_text << "\n";
     return 1;
   }
-  // Decoded RTSP and HTTP frames are re-encoded as RTP H.264 (payload type 96); a USB camera's
-  // own JPEG is sent as RTP/JPEG (payload type 26).
+  // H.265 goes to Insight as received (RTP payload type 98), and so does a USB camera's JPEG
+  // (26). H.264 is passed through and decoded MJPEG and HTTP frames are encoded as H.264 (96).
+  const int payload_type = usb ? 26 : source_case.codec == "h265" ? 98 : 96;
   if (video_bytes <= 12 || (video_packet[0] >> 6) != 2 ||
-      (video_packet[1] & 0x7F) != (usb ? 26 : 96)) {
-    std::cerr << "[FAIL] " << label << " did not publish RTP " << (usb ? "JPEG" : "H.264")
-              << " video to Insight\n";
+      (video_packet[1] & 0x7F) != payload_type) {
+    std::cerr << "[FAIL] " << label << " did not publish RTP video with payload type "
+              << payload_type << " to Insight\n";
     return 1;
   }
   std::cout << "[OK] " << label << " sent " << kFrames
