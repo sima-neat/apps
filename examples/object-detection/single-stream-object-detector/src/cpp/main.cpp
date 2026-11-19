@@ -134,6 +134,9 @@ AppConfig load_app_config(const fs::path& path) {
   if (cfg.frames < 0) {
     throw std::runtime_error("inference.frames must be 0 or more");
   }
+  if (cfg.max_detections <= 0) {
+    throw std::runtime_error("inference.max_detections must be above 0");
+  }
   // Core candidate: Core rejects a larger JPEG only when the video sender's caps fail to
   // negotiate, with no message that names the RTP/JPEG limit.
   const auto rtp_jpeg_side = [](int side) {
@@ -224,6 +227,10 @@ neat::Graph decoder_graph(const AppConfig& cfg, int fps, neat::FormatTag frame_f
   decode.dec_width = cfg.width;
   decode.dec_height = cfg.height;
   decode.dec_fps = fps;
+  if (cfg.codec == "mjpeg") {
+    // Leaves free decode surfaces while inference and the video encoder hold frames.
+    decode.num_buffers = 32;
+  }
   neat::Graph graph("decoder");
   graph.add(neat::nodes::SimaDecode(std::move(decode)));
   return graph;
@@ -286,7 +293,8 @@ int stream_fps(const AppConfig& cfg) {
     return cfg.fps;
   }
   const auto info = sima_examples::probe_rtsp_stream_info(cfg.source, cfg.rtsp_tcp);
-  if (info.width != cfg.width || info.height != cfg.height) {
+  // A probe that read no size (0x0) leaves the check to the configured size.
+  if (info.width > 0 && info.height > 0 && (info.width != cfg.width || info.height != cfg.height)) {
     throw std::runtime_error("the stream is " + std::to_string(info.width) + "x" +
                              std::to_string(info.height) +
                              ", but input.width and input.height are " + std::to_string(cfg.width) +
@@ -347,7 +355,8 @@ int run_app(const CliOptions& cli) {
   const AppConfig cfg = load_app_config(cli.config_path);
   if (cli.validate_config_only) {
     std::cout << "Config validated: " << cli.config_path.string() << " (input=" << cfg.input_type
-              << ")\n";
+              << ", codec=" << cfg.codec << ", " << cfg.width << "x" << cfg.height
+              << ", fps=" << cfg.fps << ")\n";
     return 0;
   }
 

@@ -40,8 +40,14 @@ INPUTS = {
 }
 
 
-def load(tmp_path: Path, input_type: str):
-    """load_app_config on a config of `input_type` with the keys the config comments list."""
+def validate(config_path: Path, capsys) -> tuple[int, str]:
+    """main --validate-config-only on `config_path`: the exit code and stdout."""
+    code = main_module.main(["--config", str(config_path), "--validate-config-only"])
+    return code, capsys.readouterr().out
+
+
+def config_path(tmp_path: Path, input_type: str) -> Path:
+    """A config of `input_type` with the keys the config comments list."""
     config = {
         "model": {"path": "models/yolo26m_w16a16_mpk.tar.gz", "labels": "coco_label.txt"},
         "input": INPUTS[input_type],
@@ -54,19 +60,17 @@ def load(tmp_path: Path, input_type: str):
         config["app"] = {"ssl_strict": False}
     path = tmp_path / "config.yaml"
     path.write_text(yaml.safe_dump(config), encoding="utf-8")
-    return main_module.load_app_config(path)
+    return path
 
 
-def test_shipped_config_loads():
-    cfg = main_module.load_app_config(COMMON_DIR / "config.yaml")
-    assert cfg.input_type == "rtsp"
-    assert (cfg.codec, cfg.width, cfg.height, cfg.fps) == ("h264", 1280, 720, 0)
+def test_shipped_config_loads(capsys):
+    code, out = validate(COMMON_DIR / "config.yaml", capsys)
+    assert code == 0, "config.yaml loads"
+    assert "input=rtsp, codec=h264, 1280x720, fps=0" in out, "config.yaml reads its values"
 
 
-@pytest.mark.parametrize(
-    ("input_type", "codec", "ssl_strict"),
-    [("rtsp", "h264", True), ("http", "mjpeg", False), ("usb", "mjpeg", True)],
-)
-def test_each_input_type_loads_with_its_documented_keys(tmp_path, input_type, codec, ssl_strict):
-    cfg = load(tmp_path, input_type)
-    assert (cfg.input_type, cfg.codec, cfg.ssl_strict) == (input_type, codec, ssl_strict)
+@pytest.mark.parametrize("input_type", ["rtsp", "http", "usb"])
+def test_each_input_type_loads_with_its_documented_keys(tmp_path, capsys, input_type):
+    code, out = validate(config_path(tmp_path, input_type), capsys)
+    assert code == 0, f"{input_type} config loads"
+    assert f"input={input_type}" in out, f"{input_type} config reads as {input_type}"

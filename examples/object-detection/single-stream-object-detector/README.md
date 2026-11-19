@@ -115,7 +115,7 @@ To use another model, replace `yolo26m` and `w16a16` in both commands and in `mo
 
 [Insight](https://developer.sima.ai/software/tools/insight/) can host the input stream and render the video and detection metadata. Install videos directly from the Insight catalog or through Insight's YouTube support.
 
-In the Insight Web UI, start the required stream and copy its source URL into `input.source`. Use RTSP for H.264 or H.265; for MJPEG, Insight supports both RTSP and HTTP URLs. For RTSP, set `input.codec` to `h264`, `h265`, or `mjpeg`; an HTTP stream is MJPEG and takes no codec. Decoded frames are encoded as H.264 for Insight output. Use a host and published port that the target can reach, not `localhost` and not an address only Insight's own machine can resolve. Verify the URL from the target before running; the application prints the source and its frame size on startup.
+In the Insight Web UI, start the required stream and copy its source URL into `input.source`. Use RTSP for H.264 or H.265; for MJPEG, Insight supports both RTSP and HTTP URLs. For RTSP, set `input.codec` to `h264`, `h265`, or `mjpeg`; an HTTP stream is MJPEG and takes no codec. H.264 and H.265 streams and a USB camera's JPEG go to Insight as received; RTSP and HTTP MJPEG frames are decoded and re-encoded as H.264, as Concept shows. Use a host and published port that the target can reach, not `localhost` and not an address only Insight's own machine can resolve. Verify the URL from the target before running; the application prints the source and its frame size on startup.
 
 ## Configure
 
@@ -162,7 +162,7 @@ python3 ${APP_DIR}/src/python/main.py \
 ## Expected Result
 
 The application prints the source on startup and, when it stops, the number of
-frames whose detections it sent to Insight:
+frames it processed. Each one's detections went to Insight unless the socket was full and dropped them:
 
 ```text
 source=rtsp://<rtsp-source-ip>:<port>/<stream-name> type=rtsp codec=h264 stream=1280x720@30 insight=<insight-host-ip> video=9000 metadata=9100
@@ -187,7 +187,7 @@ Insight shows the video with a box and label on every detected object.
 - Verify the Insight host and UDP ports if video and detections are absent.
 - Check model loading and score thresholds when video arrives without boxes.
 - If the model fails to load, check that `model.path` points to the `_mpk.tar.gz` file unpacked from the download, not to the ZIP file.
-- With `input.fps: 0`, an RTSP run stops at startup when the stream's frame size differs from `input.width` and `input.height`, and the error names both sizes. With a fixed `input.fps` the application does not read the stream's size, so set `input.width` and `input.height` to it.
+- With `input.fps: 0`, an RTSP run stops at startup when the stream's frame size differs from `input.width` and `input.height`, and the error names both sizes. With a fixed `input.fps`, or when the probe reads no size, the size is not checked: set `input.width` and `input.height` to the stream's size.
 
 ## Source Files
 

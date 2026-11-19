@@ -105,6 +105,8 @@ def load_app_config(path: Path) -> AppConfig:
         raise ValueError("input.fps must be above 0 for an HTTP or USB source")
     if app_config.frames < 0:
         raise ValueError("inference.frames must be 0 or more")
+    if app_config.max_detections <= 0:
+        raise ValueError("inference.max_detections must be above 0")
     # Core candidate: Core rejects a larger JPEG only when the video sender's caps fail to
     # negotiate, with no message that names the RTP/JPEG limit.
     if app_config.input_type == "usb" and not all(
@@ -189,6 +191,9 @@ def decoder_graph(cfg: AppConfig, fps: int, frame_format: pyneat.Format) -> pyne
     decode.dec_width = cfg.width
     decode.dec_height = cfg.height
     decode.dec_fps = fps
+    if cfg.codec == "mjpeg":
+        # Leaves free decode surfaces while inference and the video encoder hold frames.
+        decode.num_buffers = 32
     graph = pyneat.Graph("decoder")
     graph.add(pyneat.nodes.sima_decode(decode))
     return graph
@@ -256,7 +261,9 @@ def stream_fps(cfg: AppConfig) -> int:
     if cfg.fps > 0:
         return cfg.fps
     info = probe_rtsp_stream_info(cfg.source, cfg.rtsp_tcp)
-    if (info.width, info.height) != (cfg.width, cfg.height):
+    # A probe that read no size (0x0) leaves the check to the configured size.
+    probed = (info.width, info.height)
+    if info.width > 0 and info.height > 0 and probed != (cfg.width, cfg.height):
         raise ValueError(
             f"the stream is {info.width}x{info.height}, but input.width and input.height "
             f"are {cfg.width}x{cfg.height}"
@@ -294,10 +301,10 @@ def send_detections(
         sample = run.pull("detections", PULL_TIMEOUT_MS)
         if sample is None:
             if run.last_error() or not run.running():
-                reason = run.last_error()
-                raise RuntimeError(
-                    "detections output closed unexpectedly" + (f": {reason}" if reason else "")
-                )
+                # pyneat's pull returns no detail, so a run that stopped without an error of
+                # its own has reached the end of the stream, which C++ reports the same way.
+                reason = run.last_error() or "source reached EOS"
+                raise RuntimeError(f"detections output closed unexpectedly: {reason}")
             continue
         payload = detection_egress.serialize(
             decode_boxes(sample, cfg),
@@ -323,7 +330,10 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     cfg = load_app_config(args.config)
     if args.validate_config_only:
-        print(f"Config validated: {args.config} (input={cfg.input_type})")
+        print(
+            f"Config validated: {args.config} (input={cfg.input_type}, codec={cfg.codec}, "
+            f"{cfg.width}x{cfg.height}, fps={cfg.fps})"
+        )
         return 0
 
     labels = load_labels(cfg.labels_path)

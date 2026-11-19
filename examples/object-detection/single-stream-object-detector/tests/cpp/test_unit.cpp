@@ -84,7 +84,8 @@ bool test_shipped_config_loads(const std::string& binary) {
   const std::string body{std::istreambuf_iterator<char>(shipped), {}};
   const auto result = validate(binary, "shipped_config", body);
   return expect_true(!body.empty() && result.exit_code == 0, "config.yaml loads") &&
-         expect_contains(result.stdout_text, "input=rtsp", "config.yaml reads an RTSP source");
+         expect_contains(result.stdout_text, "input=rtsp, codec=h264, 1280x720, fps=0",
+                         "config.yaml reads its values");
 }
 
 bool test_each_input_type_loads_with_its_documented_keys(const std::string& binary) {
