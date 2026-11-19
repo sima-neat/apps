@@ -27,6 +27,17 @@ Do not use it for data that only goes to the network. A branch that sends
 video to Insight ends in [VideoSender](video-sender.md) and needs no
 `Output`. The application does not see those frames.
 
+To end a graph in a GStreamer element that has no Neat node, use
+`nodes::Custom(fragment)` (`pyneat.nodes.custom(fragment)`). GStreamer is the
+media framework Core builds its pipelines on, and `fragment` is raw GStreamer
+launch text, for example `"fakesink sync=false"`. It is an escape hatch:
+Core does not check that the elements in the text exist, so a typo fails only
+when the graph is built. An empty fragment becomes a pass-through element.
+Prefer a typed node when one exists. The only Apps use of `Custom` adds an
+extra decode step in
+[yolo26-tiny-drone-tracker](../../examples/tracking/yolo26-tiny-drone-tracker/),
+not an end node.
+
 ## Minimal example
 
 The model branch ends in a named output. The application pulls each
@@ -138,6 +149,6 @@ sets `combine_policy` on `OutputOptions` directly. Most examples use
 
 ## Source
 
-- C++ header: `include/nodes/common/Output.h`
-- Python binding: `python/src/module.cpp`, `OutputOptions`, `CombinePolicy`, `nodes.output`
+- C++ headers: `include/nodes/common/Output.h`, `include/nodes/common/Caps.h` (`nodes::Custom`)
+- Python binding: `python/src/module.cpp`, `OutputOptions`, `CombinePolicy`, `nodes.output`, `nodes.custom`
 - Core commit: `7e5317be`
