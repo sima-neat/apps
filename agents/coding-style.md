@@ -11,7 +11,11 @@ is the reference: read its `main.py` and `main.cpp` before writing or reviewing 
 - Each step is one line or one call to a function named for what it does. A reader understands
   the application from `main` without opening the functions.
 - The C++ and Python entrypoints have the same functions, with the same names, in the same
-  order.
+  order. In C++, `main` only reports errors and calls `run_app`; `run_app` is the function
+  these rules call `main`.
+- Use the simplest implementation that meets the requirement. Each extra helper,
+  abstraction, dependency, process, and compatibility path needs a reason a reader can see.
+- Python entrypoints import the Neat Library at the top: `import pyneat`.
 
 ## Graph topology
 
@@ -39,6 +43,8 @@ is the reference: read its `main.py` and `main.cpp` before writing or reviewing 
 
 - `config.yaml` owns every value a customer may change. The code has no default for a config
   value; a missing key is an error that names the key.
+- Each key carries a short comment saying what it does. Values are scalars or lists of
+  scalars, which the C++ and Python readers parse the same way.
 - Read the config once, at the start, into one typed `AppConfig`, and pass that object.
 - Read it with `sima_examples.config.Config` in Python and `sima_examples::ScalarConfig` in
   C++, and call `reject_unread_keys()` after the last read, so an old or misspelled key fails
@@ -57,10 +63,13 @@ is the reference: read its `main.py` and `main.cpp` before writing or reviewing 
 ## Errors, output, and comments
 
 - An error is one line that names the cause and the key or value involved:
-  `input.codec must be h264 or h265`.
+  `input.codec must be h264 or h265`. Handle the failures a customer following the README can
+  hit; leave hardening against concurrent runs or hostile file systems to platform tooling.
 - A failure the application tolerates by design, such as a nonblocking send that drops a
   message, carries a one-line comment saying so, and the application reports the count when
   it stops.
-- Print only what the customer needs to see the run start, progress, and stop.
+- Print only what the customer needs to see the run start, progress, and stop. The result
+  the reader came for comes first, and every number names what it measures and its unit:
+  `inference 3.0 ms`.
 - A comment explains a choice the code cannot show, with its evidence. It describes the code
   as it is, not its history.

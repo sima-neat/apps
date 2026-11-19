@@ -11,7 +11,8 @@ Where each part of an application goes, and what every change keeps true.
 | Settings a customer may change | The example's `src/common/config.yaml` |
 | Files the example's C++ and Python share | The example's `src/common/` |
 | Code without a Neat API call that two or more examples need | `support/python/sima_examples/` and `support/runtime/` or `support/object_detection/` in C++ |
-| Code only one example needs | That example's entrypoint |
+| Code only one example needs | That example's entrypoint, or its `src/python/utils/` and `src/cpp/utils/` when the code would bury the application flow |
+| Model preparation | The Model Registry when it is reusable. Temporary preparation stays in the example's `src/common` as one development-only flow, never a packaged runtime dependency |
 | A helper every example would need around a Neat API call | Core: open a Core issue with a reproducer instead of adding it to Apps |
 | Test helpers | `tests/utils/` and `support/testing/` |
 
@@ -21,7 +22,8 @@ Where each part of an application goes, and what every change keeps true.
   example does. `build.sh` and `scripts/get-example.sh` ship that folder.
 - Keep system provisioning, recovery, and setup outside the examples. Platform tooling owns
   the host, network, mounts, devices, the SDK, and unrelated processes.
-- Treat a missing runtime capability as Core work rather than an Apps workaround.
+- Treat a missing runtime capability as Core work rather than an Apps workaround. A comment
+  that claims a runtime limitation links the Core issue that reproduces it.
 
 ## Config keys
 
@@ -41,15 +43,20 @@ Where each part of an application goes, and what every change keeps true.
   metadata.
 - Measure before changing topology, queue policy, copies, buffer counts, or worker counts.
   Faster output never excuses wrong output, and a performance claim names what was measured.
+  Keeping up with a source's frame rate is not a capacity measurement, and a latency number
+  follows an untimed warm-up.
 - Real-time visualization uses Insight, with video and metadata sent through the Neat APIs.
   Offline and batch examples may read files and save or display results.
+- Output files default to a path under `sandbox/`, which git ignores. The application writes
+  only the outputs the config selects.
 - New examples normally include `src/common/config.yaml`, C++ and Python implementations,
   and unit and end-to-end tests. The pull request explains every omission.
 
 ## Tests
 
-- `tests/test-scope.yaml` and each example's `tests/test-scope.yaml` decide which tests run
-  and with which models. Register enabled C++ tests with CMake.
+- Each example's `tests/test-scope.yaml` decides which of its tests run and with which
+  models. Register enabled C++ tests with CMake. `build.sh`, `tests/test.sh`, and workflow
+  filters name no individual test, so one registration serves local runs and CI.
 - An end-to-end test proves useful output, such as boxes received in metadata, not only that
   the process started. Unit tests download nothing and need no live service.
 - A broken test prerequisite fails clearly. A test never skips silently or falls back to
@@ -61,5 +68,12 @@ Where each part of an application goes, and what every change keeps true.
 
 - README commands, models, paths, configuration, and expected results match the installed
   package. Run documented commands exactly as written.
+- The demonstration is complete and small: every prerequisite is shipped, obtainable with a
+  documented command, provided by the customer as the README states, or produced by an
+  earlier documented step.
+- README steps for live sample streams use the Insight web page: install or pick the videos
+  there, start the streams, and copy their URLs into the config.
+- A change to a rule every README follows accounts for every example, and updates the
+  template, the validator, and the contract tests that can check it.
 - Keep credentials, customer information, internal material, agent plans, scratch notes,
   and build or runtime artifacts out of this public repository.
