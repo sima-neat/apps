@@ -107,6 +107,10 @@ def load_app_config(path: Path) -> AppConfig:
         raise ValueError("inference.frames must be 0 or more")
     if app_config.max_detections <= 0:
         raise ValueError("inference.max_detections must be above 0")
+    if not 0.0 <= app_config.min_score <= 1.0:
+        raise ValueError("inference.min_score must be from 0 to 1")
+    if not 0.0 <= app_config.nms_iou <= 1.0:
+        raise ValueError("inference.nms_iou must be from 0 to 1")
     # Core candidate: Core rejects a larger JPEG only when the video sender's caps fail to
     # negotiate, with no message that names the RTP/JPEG limit.
     if app_config.input_type == "usb" and not all(

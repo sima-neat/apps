@@ -137,6 +137,12 @@ AppConfig load_app_config(const fs::path& path) {
   if (cfg.max_detections <= 0) {
     throw std::runtime_error("inference.max_detections must be above 0");
   }
+  if (!(cfg.min_score >= 0.0 && cfg.min_score <= 1.0)) {
+    throw std::runtime_error("inference.min_score must be from 0 to 1");
+  }
+  if (!(cfg.nms_iou >= 0.0 && cfg.nms_iou <= 1.0)) {
+    throw std::runtime_error("inference.nms_iou must be from 0 to 1");
+  }
   // Core candidate: Core rejects a larger JPEG only when the video sender's caps fail to
   // negotiate, with no message that names the RTP/JPEG limit.
   const auto rtp_jpeg_side = [](int side) {
