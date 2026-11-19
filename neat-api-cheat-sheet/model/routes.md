@@ -91,12 +91,18 @@ execution fields override `Model::Options` for this route only.
 | Name suffix | `name_suffix` | `name_suffix` | `""` | Appended to every element name the route generates: `quant_1` became `quant_cam0_2` on a DevKit. | Two routes of one model in one `Graph`, such as one per camera: give each its own suffix so element names, logs and diagnostics tell them apart. `Model::Options::name_suffix` does the same for every route of the model. |
 | Output and input name | `buffer_name` | `buffer_name` | `""`: the output endpoint is named after the model's unpacked folder | Names the route's aggregate output endpoint. With `include_input`, it also names the buffer of the added `Input` node. | Set a fixed name when another fragment connects to the model's output by name: the default name changes every run (see Pitfalls). The Core MIPI camera guide sets it to the camera's `buffer_name`, together with `upstream_name`. |
 | Build messages | `verbose` | not available | `VerboseOptions{}`: level `Production`, progress messages on | Which messages building the route prints, such as `[1/4] Initializing runtime...` to `[4/4] Graph ready`. It replaces the model's `verbose` for this route. | `VerboseOptions::quiet()` for a headless service whose log should hold only your own messages. In Python these lines cannot be switched off. |
-| Pre- and postprocess placement (coarse) | `processcvu_requested_run_target` | not available | `"AUTO"` | Where the model's pre- and postprocessing kernels run: `"AUTO"`, `"EV74"` or `"A65"`. `AUTO` picks the A65 when the stage supports it, otherwise the EV74. | Prefer `advanced_execution.preprocess_target` and `postprocess_target`, which override it. Keep it only in older C++ code. |
-| Pre- and postprocess placement (older form) | `processcvu` | not available | `pre_run_target = "AUTO"`, `post_run_target = "AUTO"`, `async = true` | A non-`AUTO` target overrides `Model::Options::processcvu` for this route. `async` can only switch the asynchronous path on, never off; see Pitfalls. | Prefer `advanced_execution`. Keep it only in older C++ code. |
-| MLA execution (older form) | `processmla` | not available | `async = true`, `output_pool_buffers = 0`, `defer_output_invalidate = true` | A positive `output_pool_buffers` overrides the model's number of MLA output buffers for this route. `async` can only switch on. | Prefer `advanced_execution.inference_output_buffers` and `inference_async`. |
-| Prepared runner (retired) | `prepared_runner` | not available | Empty `mode`, `ring_depth = 0`, `profile = false`, empty `dequant_flags` | Kept only so older C++ code compiles. Retired modes fail when the pipeline is built. | Never. Leave the default. |
-| Internal queue depth (older form) | `async_queue_depth` | not available | `0`: the value in `Model::Options` | Depth of the queues Neat inserts between the route's stages. | Prefer `advanced_execution.internal_queue_depth`. |
-| Execution controls | `advanced_execution` | `advanced_execution` | Every field unset (Python `None`): the model's own settings | The same fields as `Model::Options::advanced_execution` ([model.md](model.md)): placement, asynchronous stages, MLA output buffers, queue depth. A field set here wins over the model's value for this route. | A route needs other execution settings than the model's default, for example `preprocess_target = "EV74"` to keep camera preprocessing on the EV74, as the MIPI Multi-Model example does. On a DevKit, `preprocess_async = False` on the model and `True` on the route gave an asynchronous route. |
+| Pre- and postprocess placement (coarse) | `processcvu_requested_run_target` | not available | `"AUTO"` | Where the model's pre- and postprocessing kernels run: `"AUTO"`, `"EV74"` or `"A65"`. `AUTO` runs a stage on the EV74 whenever the EV74 can run it; only the conversion steps after the MLA, such as `Dequant` and `DetessDequant`, go to the A65 when the A65 can run them. | Prefer `advanced_execution.preprocess_target` and `postprocess_target`, which override it. Keep it only in older C++ code. |
+
+The other execution fields are the same structures as on `Model::Options`:
+`processcvu`, `processmla`, `prepared_runner` and `async_queue_depth` (C++
+only) and `advanced_execution` (both languages). Their meaning and defaults
+are on [model.md](model.md#options). Set here, they change this route only: a
+field set in `advanced_execution` wins over the model's value, a non-`AUTO`
+`processcvu` target and a positive `processmla.output_pool_buffers` override
+the model's, and `async_queue_depth = 0` keeps the model's. On a DevKit,
+`preprocess_async = False` on the model and `True` on the route gave an
+asynchronous route. The MIPI Multi-Model example sets
+`advanced_execution.preprocess_target = "EV74"` on its camera route.
 
 ### How an app gets a route
 
@@ -157,7 +163,8 @@ planner puts `QuantTess` before the MLA: one kernel pass that quantizes float
 input to INT8 and tessellates it. After the MLA it puts `DetessDequant`: one
 pass that undoes the tile layout and converts INT8 back to float. Both are
 `processcvu` kernels, the model-managed pre- and postprocessing kernels that
-Neat places on the EV74 or the A65 (see `advanced_execution`).
+Neat places on the EV74 or the A65 (see `advanced_execution` on
+[model.md](model.md#options)).
 
 The [Face Detector](../../examples/face-detection/face-detector/) loads
 its RetinaFace model with `preprocess.kind = InputKind::Tensor` and builds
@@ -227,9 +234,7 @@ change them.
   `compiled_contract` or `model_lineage`; `XOptions(model)` still fills the
   contract inside. `config_json` takes and returns a `dict`, or `None`.
 - A from-Model constructor on a route without that stage throws
-  `std::runtime_error` in C++ and `RuntimeError` in Python. A retired setting,
-  such as `defer_output_cache_sync = false`, throws `std::invalid_argument` in
-  C++ and `ValueError` in Python.
+  `std::runtime_error` in C++ and `RuntimeError` in Python.
 
 ## Pitfalls
 
@@ -259,29 +264,8 @@ change them.
   `nodes.detess_dequant()` throws at once: `DetessDequant: num_buffers must
   be model-managed (use DetessDequantOptions(Model))`. `QuantTess()` is
   created, but the graph build fails because it has no configuration
-  (`QuantTess.cpp`, "graph-owned contract compilation requires config_json or
+  ("graph-owned contract compilation requires config_json or
   compiled_contract"). Fix: pass `XOptions(model)`.
-- **The older `async = false` switches have no effect on a route.** The route
-  merge only copies `processcvu.async` and `processmla.async` when they are
-  `true`, and the route's own default is `true` (`src/model/Model.cpp`,
-  `route_options_from_model_route_options`). On a DevKit,
-  `Model::Options::processcvu.async = False` and `processmla.async = False`
-  still gave `async=true` on every element in `describe_backend()`. Fix: set
-  `advanced_execution.preprocess_async = false` and `inference_async = false`,
-  which gave `async=false`.
-- **An unknown placement target is silently `AUTO`.**
-  `advanced_execution.preprocess_target = "GPU"` built without an error;
-  Core maps every unknown value to `"AUTO"`
-  (`ProcessCvuRunTargetPolicy.cpp`). Fix: write exactly `"AUTO"`, `"A65"`
-  or `"EV74"`.
-- **A target the stage cannot use fails at build.** On a YOLO26n image route,
-  `preprocess_target = "A65"` on the route threw `ValueError: processcvu stage
-  cannot run on explicitly requested target A65 (source=processcvu_pre).
-  Supported target(s): EV74.` Neat's image preprocessing runs only on the
-  EV74.
-- **`defer_output_cache_sync = false` is rejected.** It threw `ValueError:
-  processmla.defer_output_invalidate=false is retired (including
-  advanced_execution.defer_output_cache_sync=false)`. Leave it unset.
 - **`build` ignores the boundary flags.** `Model::build` always sets
   `include_input` and `include_output` to `true` before it builds, so setting
   them for `build`, as the Neat GenAI Studio's Supertonic engine does, has no

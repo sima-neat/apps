@@ -33,21 +33,9 @@ nodes) or the model runner instead (`Model::Runner::start_measurement`, see the
 
 ## Minimal example
 
-No shipped example calls `benchmark` from C++; this block is built from
-`include/model/Model.h`. It was compiled with the SDK and run on a DevKit with
-Core 0.6.2.
-
-C++
-
-```cpp
-simaai::neat::Model model(model_path);
-simaai::neat::BenchmarkOptions options;
-options.num_samples = 100;
-options.min_duration_ms = 10000;
-simaai::neat::BenchmarkReport report = model.benchmark(options);
-std::cout << "latency_ms=" << report.latency_ms << " fps=" << report.fps << "\n";
-report.save("sandbox/model-benchmark/report.yaml");
-```
+No shipped example calls `benchmark` from C++. C++ uses the same call,
+`Model::benchmark(BenchmarkOptions)`, which returns a `BenchmarkReport` with
+the same fields.
 
 Python, from
 [`model-benchmark/src/python/main.py`](../../examples/benchmarking/model-benchmark/src/python/main.py)
@@ -79,7 +67,7 @@ Complete flow: [Model Benchmark](../../examples/benchmarking/model-benchmark/)
 | Resize policy | `resize_mode` | `resize_mode` | Not set (`None`): the route's own resize policy, or `Stretch` when the route does not resize | How the source image maps onto the model input in the metadata BoxDecode receives. Values are `ResizeMode::Stretch`, `Letterbox` and `Crop` (Python `pyneat.ResizeMode.*`). | Only for BoxDecode routes, when your application letterboxes or crops but the route would assume another policy. It does not change what the benchmark measures on other routes. |
 | Plugin latency (deprecated) | `include_plugin_latency` | `include_plugin_latency` | `false` / `False` | Also collects per-plugin latency during both passes. | Do not use it in new code. It is deprecated and will be removed. |
 | Minimum pass length | `min_duration_ms` | `min_duration_ms` | `10000` (10 s) | The least time each pass, latency and throughput, runs, in milliseconds. Must be 0 or greater. `0` stops each pass after `num_samples` inputs. | Keep the default, or raise it to 30000 as the `model-benchmark` example does, when you need power and memory: Sentinel samples every 2 s, so a short window has no power sample. Set `0` for a quick smoke test on a development board when you only need latency and FPS. |
-| MLA layer timings | `include_mla_layer_stats` | `include_mla_layer_stats` | `false` / `False` | After the benchmark, times each compiled MLA layer with the `mla-rt` tool and fills `mla_layer_stats`. | When a model is slower than expected and you want to see which layers take the time, for example before asking for a different compilation. Needs `mla-rt` in `PATH` and no other MLA workload on the board. |
+| MLA layer timings | `include_mla_layer_stats` | `include_mla_layer_stats` | `false` / `False` | After the benchmark, times each compiled MLA layer with the `mla-rt` tool and fills `mla_layer_stats`. | When a model is slower than expected and you want to see which layers take the time, for example before asking for a different compilation. Needs no other MLA workload on the board. |
 | MLA stage timings | `include_mla_stage_stats` | `include_mla_stage_stats` | `false` / `False` | After the benchmark, times each compiled MLA stage run on its own (mean of 200 runs) and fills `mla_stage_stats`. | When you want the pure accelerator time of the model, without host overhead, to compare with `latency_ms`. Same requirements as layer timings. |
 | Your own inputs | `inputs` | `inputs` | Empty (`[]`): synthetic inputs | Tensors to push for every sample, one per model input, in `input_specs()` order, as `run()` takes them. | When the model's cost depends on the data, such as a detector whose decode time grows with the number of objects, or a segmentation decoder. Pass a real frame, for example an image read with OpenCV. |
 
@@ -166,10 +154,10 @@ any other ending. It creates missing directories and replaces an existing file.
   package's default route, accepts `original_width` and `original_height` and
   ignores them.
 - **MLA timings need an idle board.** `include_mla_layer_stats` and
-  `include_mla_stage_stats` need `mla-rt` in `PATH` and no other MLA workload.
-  If collection fails, the benchmark numbers stay valid, a warning is printed,
-  and the reason is in `mla_layer_stats.status` or `mla_stage_stats.status`.
-  Check `status == "ok"` before reading the list.
+  `include_mla_stage_stats` need no other MLA workload. If collection fails,
+  the benchmark numbers stay valid, a warning is printed, and the reason is in
+  `mla_layer_stats.status` or `mla_stage_stats.status`. Check
+  `status == "ok"` before reading the list.
 - **Telemetry is board-wide.** Power, CPU and memory include every process on
   the board. Stop other applications before you compare power numbers.
 

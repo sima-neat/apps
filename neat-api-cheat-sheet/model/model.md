@@ -80,32 +80,26 @@ Complete flow: [PatchCore Anomaly Detector](../../examples/anomaly-detection/pat
 the constructor, `Model(path, options)`. The `Model` keeps its own copy, so
 changing the struct after loading has no effect.
 
+The box-decoding fields (`decode_type`, `decode_type_option`,
+`score_threshold`, `nms_iou_threshold`, `top_k`, `superpoint`, `num_classes`,
+`yolox_seg_pose`, `boxdecode_original_width`, `boxdecode_original_height`,
+`boxdecode_resize_mode` and `multimask_output`) are on
+[decoding.md](decoding.md#options). This table has the others.
+
 | Option | C++ | Python | Default | What it does | Why and when to change it |
 |---|---|---|---|---|---|
 | Preprocessing | `preprocess` | `preprocess` | Empty `PreprocessOptions`: no image preprocessing; the route keeps only the adapters the MPK requires, such as quantize | Describes the input you send (for example a camera frame) and how Neat turns it into the model's input tensor: resize, color conversion, normalization. | See [preprocessing.md](preprocessing.md). |
-| Decoder | `decode_type` | `decode_type` | `BoxDecodeType::Unspecified`: no decoder | Selects the detection decoder (YOLOv8, YOLO26, DETR and others) that turns raw detection outputs into boxes. Without it a detector returns its raw output tensors. | See [decoding.md](decoding.md). |
-| Decoder variant | `decode_type_option` | `decode_type_option` | `BoxDecodeTypeOption::Auto` | Picks a variant of the detection head layout for the decoder. | See [decoding.md](decoding.md). |
-| Score threshold | `score_threshold` | `score_threshold` | `0.0` | Drops decoded detections with a lower score. | See [decoding.md](decoding.md). |
-| NMS overlap | `nms_iou_threshold` | `nms_iou_threshold` | `0.0` | Overlap above which non-maximum suppression (NMS) removes duplicate boxes. | See [decoding.md](decoding.md). |
-| Detection cap | `top_k` | `top_k` | `0` | The most detections the decoder returns. | See [decoding.md](decoding.md). |
-| SuperPoint decoder | `superpoint` | `superpoint` | `SuperPointOptions{}` (profile `Auto`) | Settings of the SuperPoint keypoint decoder. | See [decoding.md](decoding.md). |
-| Class count | `num_classes` | `num_classes` | `0`: taken from the MPK | Number of classes the detection heads produce. | See [decoding.md](decoding.md). |
-| YOLOX segmentation and pose | `yolox_seg_pose` | `yolox_seg_pose` | `YoloXSegPoseOptions{}` (no pose classes) | Settings of the YOLOX segmentation and pose decoder. | See [decoding.md](decoding.md). |
 | Class-map decode | `semantic_segmentation` | `semantic_segmentation` | Off: `enable = false`, `output_width = output_height = 0` (the model input size), `align_corners = false` | Replaces the dequantize or cast postprocess with a decode on the EV74 (the board's vision processor). It resizes the class scores to the output size and returns one class index per pixel: an `[N, H, W]` class map, UINT8 for up to 256 classes, INT32 above. | A SegFormer-style segmentation model whose raw output is per-class scores: enable it to get a class map instead of scores. Set `output_width` and `output_height` both to the camera frame size to label every source pixel. The constructor throws `std::invalid_argument` when the route cannot do it, for example when `decode_type` is set or only one dimension is set. |
-| Source width (deprecated) | `boxdecode_original_width` | `boxdecode_original_width` | `0` | Original image width the decoder maps boxes back to. | See [decoding.md](decoding.md). |
-| Source height (deprecated) | `boxdecode_original_height` | `boxdecode_original_height` | `0` | Original image height the decoder maps boxes back to. | See [decoding.md](decoding.md). |
-| Decoder resize policy | `boxdecode_resize_mode` | `boxdecode_resize_mode` | Not set (`None`) | The resize policy the decoder assumes when it maps boxes back. | See [decoding.md](decoding.md). |
 | Upstream element name | `upstream_name` | `upstream_name` | `"decoder"` (a video decoder) | Name of the pipeline element the route expects in front of its first stage. | Leave it for `run` and `build`. It matters when you join the model's route to another element by name in a `Graph`; see [routes.md](routes.md), where `RouteOptions::upstream_name` sets it per route. |
 | Name suffix | `name_suffix` | `name_suffix` | `""` | Text appended to every pipeline element name the model generates. | You load the same model twice in one process, for example once per camera, and want element names and diagnostics that do not collide. `RouteOptions::name_suffix` does the same per route. |
 | Keep unpacked files | `cleanup_extracted_model_data` | `cleanup_extracted_model_data` | `true` | `true` deletes the folder the archive was unpacked into when the process exits. `false` keeps it. | Set `false` while debugging, to read the unpacked contract (`etc/*_mpk.json`) and stage configuration files after the run. Leave `true` in production; see [What loading does](#what-loading-does). |
 | Diagnostics | `verbose` | `verbose` | `VerboseOptions{}`: level `Production`, progress messages on, every topic off | Which messages loading and route planning print. Presets are `VerboseOptions::quiet()`, `production()`, `debug_plugins()` and `debug_all()` (Python `pyneat.VerboseOptions.quiet()` and so on). Topics such as `planner`, `plugins` and `gstreamer` can be switched on one at a time. | `quiet()` for a headless service whose log should hold only your own messages, as the High-Density Multi-Stream Object Detector does by default. `planner = true` when the route is not what you expected: it prints the MPK stages in order and the adapters the planner chose. It covers loading only; see Pitfalls. |
 | Stop early | `inference_terminal` | `inference_terminal` | Full route: `mla_only = false`, every stop point unset | Ends the route before its last stage. `mla_only` stops after the MLA. `last_stage_index`, `last_stage_name`, `last_plugin_id` and `last_processor` stop after a stage picked by position, name, plugin or processor. Python type: `pyneat.InferenceTerminalPolicy`. | You want the raw MLA output, to debug a postprocess or to feed a next stage that needs only the MLA result. With `mla_only` on a DevKit, ResNet-50 returned one 1008-byte UINT8 buffer instead of 1000 float scores. |
-| Stage placement (older form) | `processcvu` | `processcvu` | `pre_run_target = "AUTO"`, `post_run_target = "AUTO"`, `async = true` (Python `async_`) | Where the model's pre- and postprocessing kernels run: `"EV74"`, `"A65"` (the Arm CPU) or `"AUTO"`, which picks A65 when the stage supports it and EV74 otherwise. `async = true` submits these stages through the asynchronous path, which favors throughput. `async = false` set here has no effect: the route's default `RouteOptions` turns it back on. | Prefer `advanced_execution` in new code. The SuperPoint example sets `post_run_target = "A65"` together with its A65 decoder profile. To force the synchronous path, for example when you suspect the asynchronous one of a problem, set `advanced_execution.preprocess_async = false` instead. |
-| MLA execution (older form) | `processmla` | `processmla` | `async = true` (Python `async_`), `output_pool_buffers = 0` (the runtime default of 4), `defer_output_invalidate = true` | `async = true` submits MLA work through the asynchronous path. `async = false` set here has no effect for the same reason; use `advanced_execution.inference_async = false`. `output_pool_buffers` sets how many MLA output buffers exist. `defer_output_invalidate` is kept for compatibility, must stay `true`, and `false` is rejected. | Raise `output_pool_buffers` when your code holds several model outputs at once, such as the tensors of previous frames, and the MLA has to wait for a free buffer. Prefer `advanced_execution` in new code. |
+| Stage placement (older form) | `processcvu` | `processcvu` | `pre_run_target = "AUTO"`, `post_run_target = "AUTO"`, `async = true` (Python `async_`) | Where the model's pre- and postprocessing kernels run: `"EV74"`, `"A65"` (the Arm CPU) or `"AUTO"`. `AUTO` runs a stage on the EV74 whenever the EV74 can run it. Only the conversion steps after the MLA, such as dequantize (`Dequant`) and `DetessDequant`, go to the A65 when the A65 can run them. `async = true` submits these stages through the asynchronous path, which favors throughput. `async = false` set here has no effect; see Pitfalls. | Prefer `advanced_execution` in new code. The SuperPoint example sets `post_run_target = "A65"` together with its A65 decoder profile. To force the synchronous path, for example when you suspect the asynchronous one of a problem, set `advanced_execution.preprocess_async = false` instead. |
+| MLA execution (older form) | `processmla` | `processmla` | `async = true` (Python `async_`), `output_pool_buffers = 0` (the runtime default of 4), `defer_output_invalidate = true` | `async = true` submits MLA work through the asynchronous path. `async = false` set here has no effect; see Pitfalls. `output_pool_buffers` sets how many MLA output buffers exist. `defer_output_invalidate` is kept for compatibility, must stay `true`, and `false` is rejected. | Raise `output_pool_buffers` when your code holds several model outputs at once, such as the tensors of previous frames, and the MLA has to wait for a free buffer. Prefer `advanced_execution` in new code. |
 | Prepared runner (retired) | `prepared_runner` | not available | Empty `mode`, `ring_depth = 0`, `profile = false`, empty `dequant_flags` | Kept only so older C++ code still compiles. Retired modes fail when the pipeline is built. | Never. Leave the default. |
 | Internal queue depth (older form) | `async_queue_depth` | not available | `0`: the framework default | Depth of the queues Neat inserts between model stages. | Prefer `advanced_execution.internal_queue_depth`, which is also the Python way to set it. |
 | Execution controls | `advanced_execution` | `advanced_execution` | Every field unset: no effect | Gathers the execution settings of the four rows above under plain names; see the table below. A field you set overrides the matching older field, even when you set it to `false`. | The preferred way to change placement, concurrency or buffering. Change one field at a time and compare with the default route, as you would for any tuning. |
-| Single mask | `multimask_output` | `multimask_output` | `true` | For Segment Anything decoders: `true` keeps the best of several candidate masks, `false` keeps the single-mask answer. | See [decoding.md](decoding.md). |
 
 `advanced_execution` (`AdvancedExecutionOptions`, Python
 `pyneat.AdvancedExecutionOptions`) has these fields. Every field is optional,
@@ -115,8 +109,8 @@ and Python shows an unset field as `None`.
 |---|---|---|
 | `preprocess_target` | `processcvu.pre_run_target` | Where model-managed preprocessing runs: `"AUTO"`, `"A65"` or `"EV74"`. A placement the stage does not support is an error; Neat's own image preprocessing runs only on the EV74. |
 | `postprocess_target` | `processcvu.post_run_target` | Where postprocessing adapters such as dequantize run. It does not move box decoding, which runs on the A65. |
-| `preprocess_async` | `processcvu.async` | Asynchronous pre- and postprocessing stages. |
-| `inference_async` | `processmla.async` | Asynchronous MLA submissions. |
+| `preprocess_async` | `processcvu.async` (Python `async_`) | Asynchronous pre- and postprocessing stages. |
+| `inference_async` | `processmla.async` (Python `async_`) | Asynchronous MLA submissions. |
 | `inference_output_buffers` | `processmla.output_pool_buffers` | Number of MLA output buffers. |
 | `defer_output_cache_sync` | `processmla.defer_output_invalidate` | Leave unset; `false` is rejected. |
 | `prepared_runner` | `prepared_runner` | Leave unset; retired. |
@@ -137,9 +131,8 @@ The constructor:
 
 1. Checks the archive and unpacks it. Unpacked models live in a
    `proc_run_<random>` folder for the process, in the first writable place
-   among: the `SIMA_MPK_EXTRACT_ROOT` environment variable, an NVMe drive,
-   `/data/simaai/coprocessing/models/`, `$TMPDIR/simaai/coprocessing/models`
-   (`/tmp/...` when `TMPDIR` is unset), and `./tmp/model_extract`. Loading the
+   among: an NVMe drive, `/data/simaai/coprocessing/models/`,
+   `/tmp/simaai/coprocessing/models` and `./tmp/model_extract`. Loading the
    same archive again in one process reuses the unpacked copy.
 2. Reads the contract and plans the route from it and your `Options`.
 3. Prints `Model loaded: <name> (package storage: <kind>, runtime package path:
@@ -247,6 +240,8 @@ These calls ask a loaded model about itself. All of them except
   which is `RuntimeError` in Python.
 - Python names `InferenceTerminalPolicy` and `PreprocessRequirements` without
   the `Model` prefix the naming rules predict.
+- A retired execution setting, such as `defer_output_cache_sync = false`,
+  throws `std::invalid_argument` in C++ and `ValueError` in Python.
 
 ## Pitfalls
 
@@ -286,10 +281,28 @@ These calls ask a loaded model about itself. All of them except
 - **Kept folders are never deleted for you.** With
   `cleanup_extracted_model_data = false` the process folder stays after exit,
   with a `.sima_modelpack_keep` marker, until you delete it. Setting `false` on
-  one `Model` keeps the folder for every model in the process. The
-  environment variable `SIMA_MPK_CLEANUP_EXTRACTED=0` keeps it too. On the
+  one `Model` keeps the folder for every model in the process. On the
   DevKit used here the folder was under `/tmp`, a memory-backed file system,
   so it is also gone after a reboot.
+- **The older `async = false` switches have no effect.** When a runner or
+  route is built, the route copies `processcvu.async` and `processmla.async`
+  only when they are `true`, and the route's own default is `true`. On a
+  DevKit, `processcvu.async_ = False` and `processmla.async_ = False` on
+  `ModelOptions` still gave `async=true` on every element in
+  `describe_backend()`. Fix: set `advanced_execution.preprocess_async = false`
+  and `inference_async = false`, which gave `async=false`.
+- **An unknown placement target is silently `AUTO`.**
+  `advanced_execution.preprocess_target = "GPU"` built without an error; Core
+  treats every unknown value as `"AUTO"`. Fix: write exactly `"AUTO"`,
+  `"A65"` or `"EV74"`.
+- **A target the stage cannot use fails at build.** On a YOLO26n image route,
+  `preprocess_target = "A65"` on the route threw `ValueError: processcvu stage
+  cannot run on explicitly requested target A65 (source=processcvu_pre).
+  Supported target(s): EV74.` Neat's image preprocessing runs only on the
+  EV74.
+- **`defer_output_cache_sync = false` is rejected.** It threw `ValueError:
+  processmla.defer_output_invalidate=false is retired (including
+  advanced_execution.defer_output_cache_sync=false)`. Leave it unset.
 
 ## Used in
 

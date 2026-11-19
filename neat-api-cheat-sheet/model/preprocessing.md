@@ -93,11 +93,11 @@ In Python, an unset optional field is `None`.
 | YUV conversion order | `color_conversion_placement` | `color_conversion_placement` | `PreprocColorConversionPlacement::AfterResize` | For YUV input (NV12, I420), whether YUV-to-RGB conversion happens after the resize (default) or before it. Other color inputs reject `BeforeResize`. | You feed NV12 from a camera and must match a reference that converts to RGB before resizing. |
 | Float rounding | `floating_conversion` | `floating_conversion` | `PreprocFloatingConversion::Legacy` | How values are rounded to BF16: `Legacy` truncates, `NearestEven` rounds to nearest. | A BF16 model whose accuracy check against a PyTorch reference is off by rounding. Selects fixed source arithmetic. |
 
-The last four rows are fixed source arithmetic (Core's "Fixed source
-arithmetic" in `docs/reference/nodes/preproc.mdx`). Any of them, a typed
-`resize.interpolation`, `Crop` or `shorter_side` needs an image route with
-preprocessing on, no `transforms` list, and `quantize` and `tessellate` left at
-`Auto`; otherwise the `Model` constructor throws.
+The last four rows are fixed source arithmetic (see Core's
+[Fixed source arithmetic](https://developer.sima.ai/software/reference/nodes/preproc#fixed-source-arithmetic)).
+Any of them, a typed `resize.interpolation`, `Crop` or `shorter_side` needs an
+image route with preprocessing on, no `transforms` list, and `quantize` and
+`tessellate` left at `Auto`; otherwise the `Model` constructor throws.
 
 ### Resize: `ResizeSpec`
 
@@ -195,7 +195,7 @@ use `input_specs()` to know what to send.
 
 | C++ | Python | Meaning |
 |---|---|---|
-| `NormalizePreset::None` | `pyneat.NormalizePreset.None` | No preset; use the `normalize` fields. |
+| `NormalizePreset::None` | `getattr(pyneat.NormalizePreset, "None")`: `None` is a Python keyword, so `pyneat.NormalizePreset.None` is a syntax error | No preset; use the `normalize` fields. |
 | `NormalizePreset::ImageNet` | `pyneat.NormalizePreset.ImageNet` | Turns normalization on with mean `{0.485, 0.456, 0.406}` and stddev `{0.229, 0.224, 0.225}`, unless you set explicit statistics. Does not change the resize. |
 | `NormalizePreset::COCO_YOLO` | `pyneat.NormalizePreset.COCO_YOLO` | Turns the resize on and forces `Letterbox` with pad 114, and turns normalization on with mean `{0, 0, 0}` and stddev `{1, 1, 1}` (pixels scaled to 0–1). |
 
@@ -271,10 +271,9 @@ use `input_specs()` to know what to send.
   `preprocess_plan().effective.normalize.enable` is `On`.
 - **Mean and stddev alone do not turn normalization on.** With
   `normalize.enable` at `Auto`, the planner turns normalization on only when
-  `normalize.has_explicit_stats` is true or a preset is set
-  (`src/model/InputPlanner.cpp`, `plan_preprocess`). Setting only `mean` and
-  `stddev` leaves normalization off, with the symptom above. Fix: set
-  `has_explicit_stats = true`, as the FastFlow example does.
+  `normalize.has_explicit_stats` is true or a preset is set. Setting only
+  `mean` and `stddev` leaves normalization off, with the symptom above. Fix:
+  set `has_explicit_stats = true`, as the FastFlow example does.
 - **Swapped colors are silent when the tag is wrong.** Pixels in BGR order
   tagged as RGB are converted as if they were RGB. On a DevKit, ResNet-50 with
   `preset = ImageNet` then answered class 178 (Weimaraner, 0.32) for the
