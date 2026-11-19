@@ -40,6 +40,10 @@ says what to check and in which order; cite the owning file in each finding.
   call hidden in `support/`.
 - **Config:** it uses the shared key names, keeps example-only settings under `app.`, comments
   each key, and the application rejects unread keys.
+- **New config keys:** compare each key the change adds, to `examples/config-keys.yaml` or
+  under `app.`, with every entry's `meaning`. Report a key that renames, or restates in
+  another unit, a setting a listed key covers, and name the key to use. A key another example
+  already has under `app.` belongs in `examples/config-keys.yaml` under one shared name.
 - **Demonstration:** every prerequisite is shipped, obtainable with a documented command,
   provided by the customer as the README states, or produced by an earlier documented step.
   A fixture a test creates does not count.

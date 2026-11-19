@@ -30,7 +30,8 @@ Where each part of an application goes, and what every change keeps true.
 - `examples/config-keys.yaml` lists the key names examples share. An example uses those names
   for the settings listed there and puts every setting only it has under `app.`.
 - When a converted example needs a shared setting the file does not list, add the key to the
-  file in the same pull request.
+  file in the same pull request. A new key, shared or under `app.`, names a setting that no
+  listed key already covers, even under another name or unit.
 - `tests/scripts/test_config_keys.py` checks every converted example's config files. Remove an
   example from its `PENDING_EXAMPLES` list in the pull request that converts it.
 - Changing a key name, CLI argument, output file, or metadata field changes the customer
