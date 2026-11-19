@@ -102,31 +102,20 @@ in the same folder. Keep both files there.
 Edit `$APP_DIR/src/common/config.yaml`:
 
 - Set `model.id` to the variant you downloaded and `model.path` to its backbone
-  package. A relative `model.path` starts at the config file, so the packaged
-  `../../../../../models/...` value reaches `prebuilt-apps/models/`. For
-  `seg-medium`, set `model.id: seg-medium` and
-  `model.path: ../../../../../models/rf_detr_seg_medium/w8a16_w8a8_mixed/rf_detr_seg_medium_w8a16_w8a8_mixed_backbone_mpk.tar.gz`.
-- Set `input.source` and `input.codec` (`h264`, `h265`, or `mjpeg`).
-- Set `input.width` and `input.height` to the stream's frame size. The decoder,
-  the backbone's preprocessing, and the box coordinates use them.
-- Leave `input.fps: 0` to read the stream's frame rate with a probe, or set it.
+  package. A relative `model.path` starts at the config file, so for `seg-medium`
+  it is `../../../../../models/rf_detr_seg_medium/w8a16_w8a8_mixed/rf_detr_seg_medium_w8a16_w8a8_mixed_backbone_mpk.tar.gz`.
+- Set `input.source`, and `input.codec` to `h264`, `h265`, or `mjpeg`.
+- Set `input.width` and `input.height` to the stream's frame size. Leave
+  `input.fps: 0` to read the frame rate from the stream, or set it.
 - Set `output.insight.host`, `video_port_base`, and `metadata_port_base` to the
   values reported by Insight.
 - For segmentation, set `inference.min_score: 0.3` and
-  `inference.max_detections: 24`. The packaged 0.5 and 100 suit detection.
-- Keep `inference.frames: 0` to run until Ctrl-C, or set the number of results
-  after which the application stops.
+  `inference.max_detections: 24`.
+- Keep `inference.frames: 0` to run until Ctrl-C, or set a result count.
 
-Segmentation uses `app.mask_grid_size: 640` for smoother outlines. Set it to the
+Segmentation traces outlines on a 640 grid (`app.mask_grid_size`). Set it to the
 model's mask size from the table above (78, 96, or 108) for native contours with
-less CPU work, or to a value in between. It only resizes the mask probabilities
-before the outline is traced; the model output keeps its own mask size.
-Detection reads but does not use the `app.` settings.
-
-The application reads every key in the config and rejects any other key, so a
-renamed or misspelled key stops it at startup with `has unknown keys: <key>`.
-Settings under `app` belong to this example only; the other names are shared by
-the examples, as listed in the repository's `examples/config-keys.yaml`.
+less CPU work.
 
 ## Run
 

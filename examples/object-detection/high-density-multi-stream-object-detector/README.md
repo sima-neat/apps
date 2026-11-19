@@ -28,6 +28,8 @@ RTSP H.264/H.265
 
 The application expresses this fan-out with ordinary `Graph::connect()` and starts it with ordinary `Graph::build()`. Core fuses the eligible topology internally. `VideoSender` consumes the read-only encoded access unit before the decoder, so the application does not open a second RTSP session, copy a decoded EV buffer, run an encoder, or shuttle encoded frames through appsink/appsrc. The UDP sender uses `async=false` so its sink cannot hold the shared live pipeline in `PAUSED` while waiting for preroll from every stream. The encoded edge uses `RealtimeLatestByStream`; a congested Insight channel can drop stale encoded work without blocking that stream's decoder branch.
 
+`inference.max_inflight_per_stream` and `inference.max_inflight_total` bound raw decoder-backed frames admitted to the shared detector. The 20- and 60-stream profiles use a total limit of eight; the 30-stream profile uses 30 so one aggregate frame interval can be admitted without an unbounded queue. The realtime mux retains only the latest pending frame for each stream.
+
 Detection metadata includes the source `rtp_timestamp` and is sent with nonblocking UDP. A compatible Insight receiver holds complete encoded RTP frames for 400 ms and matches metadata to that source timestamp before WebRTC forwarding. Keep one active viewer while validating metadata, as described below.
 
 The three checked-in profiles use the same application and model:
@@ -123,16 +125,8 @@ Choose one config under `${APP_DIR}/src/common/` and edit:
 - `model.path`
 - every entry under `input.source`
 - `output.insight.host`
-
-Set `input.codec` to `h264` or `h265`. H.264 is the default in all checked-in density profiles and remains the validated high-density configuration.
-
-`inference.max_inflight_per_stream` and `inference.max_inflight_total` bound raw decoder-backed frames admitted to the shared detector. The 20- and 60-stream profiles use a total limit of eight; the 30-stream profile uses 30 so one aggregate frame interval can be admitted without an unbounded queue. The realtime mux retains only the latest pending frame for each stream.
-
-The application reads every key in the config and rejects any other key, so a renamed or misspelled key stops it at startup with `has unknown keys: <key>`. Settings under `app` belong to this example only; the other names are shared by the examples, as listed in the repository's `examples/config-keys.yaml`.
-
-The application publishes metadata from the first valid detection result and runs continuously until interrupted. Insight pairs video and metadata through each message's source RTP timestamp.
-
-The default 20-stream config sets `input.fps: 0`, so the application probes each source for its frame rate. The 30- and 60-stream profiles set the frame rate and start without probing. Keep `input.width`, `input.height`, and a nonzero `input.fps` matched to the sources.
+- `input.codec`: `h264`, the validated default, or `h265`
+- `input.width`, `input.height`, and `input.fps` to match the sources. The 20-stream config sets `input.fps: 0` to read the frame rate from each source.
 
 Insight channel and port mapping is deterministic:
 

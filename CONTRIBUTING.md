@@ -57,8 +57,16 @@ The validator requires these sections in order:
 9. `Source Files`
 10. `Development From Source`
 
-Optional sections such as `Expected Result` and `Troubleshooting` belong where
-they support that sequence.
+Each section is one step the customer takes, in that order, and every command
+runs as written from `prebuilt-apps/`. Optional sections go in these places:
+
+- a `Prepare <input>` section, such as `Prepare Insight`, after `Prepare the Model`
+- `Expected Result`, `Troubleshooting`, and `Performance` after `Run`
+
+Keep each section minimal and precise. `Configure` names only the keys the
+customer edits, one bullet each, with the value or where it comes from. Explain
+behavior in `Concept`, and list error messages with their fixes in
+`Troubleshooting`.
 
 The installed workflow must:
 

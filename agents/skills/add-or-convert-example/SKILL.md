@@ -32,7 +32,9 @@ The reference is `examples/object-detection/high-density-multi-stream-object-det
 7. Shrink the unit tests to the example's own logic: help, missing config, every shipped
    profile loads, unknown and missing keys. Keep the end-to-end tests' assertions and change
    only the keys they override.
-8. Update the README for every changed key, argument, and output.
+8. Update the README for every changed key, argument, and output. Keep its sections and
+   their order as `CONTRIBUTING.md`'s README Contract sets them, and change only the lines
+   the conversion affects.
 9. Compare the result with the customer skills under `skills/`. Add what this example teaches
    that they lack, or record `Skill updates: none` with the reason.
 10. Build in the Neat SDK, run the unit and end-to-end tests in both languages on a Modalix
