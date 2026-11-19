@@ -11,7 +11,7 @@
 namespace sima_examples {
 
 // The values of one config.yaml, read by dotted key such as "input.rtsp.tcp". Scalars and
-// lists of scalars are supported; a list of mappings is skipped.
+// lists of scalars are read; the items of a list of mappings are not.
 class Config {
 public:
   static Config load(const std::filesystem::path& path);

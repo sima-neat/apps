@@ -19,6 +19,7 @@ pkg_check_modules(GST REQUIRED IMPORTED_TARGET
   gstreamer-rtsp-1.0
   glib-2.0
 )
+pkg_check_modules(YAML_CPP REQUIRED IMPORTED_TARGET yaml-cpp)
 
 get_filename_component(APPS_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../../.." ABSOLUTE)
 get_filename_component(APP_ROOT "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
@@ -34,6 +35,7 @@ target_link_libraries(pcie-high-density-multi-stream-object-detector-host
   PRIVATE
     SimaPCIeHost::sima_neat_pcie_host
     PkgConfig::GST
+    PkgConfig::YAML_CPP
     nlohmann_json::nlohmann_json
 )
 

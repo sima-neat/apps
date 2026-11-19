@@ -1,12 +1,12 @@
 #include "support/cpp/config.h"
 
+#include <yaml-cpp/yaml.h>
+
 #include <algorithm>
 #include <cctype>
 #include <cstddef>
-#include <fstream>
-#include <sstream>
+#include <functional>
 #include <stdexcept>
-#include <utility>
 #include <vector>
 
 namespace sima_examples {
@@ -16,47 +16,6 @@ std::string lower_copy(std::string value) {
   std::transform(value.begin(), value.end(), value.begin(),
                  [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
   return value;
-}
-
-std::string strip_inline_comment(const std::string& line) {
-  bool in_single = false;
-  bool in_double = false;
-  std::string out;
-  out.reserve(line.size());
-  for (char c : line) {
-    if (c == '\'' && !in_double) {
-      in_single = !in_single;
-    } else if (c == '"' && !in_single) {
-      in_double = !in_double;
-    } else if (c == '#' && !in_single && !in_double) {
-      break;
-    }
-    out.push_back(c);
-  }
-  return out;
-}
-
-std::string unquote(std::string value) {
-  value = trim_copy(value);
-  if (value.size() >= 2 && ((value.front() == '"' && value.back() == '"') ||
-                            (value.front() == '\'' && value.back() == '\''))) {
-    return value.substr(1, value.size() - 2);
-  }
-  return value;
-}
-
-std::string join_stack(const std::vector<std::pair<int, std::string>>& stack) {
-  std::ostringstream out;
-  bool first = true;
-  for (const auto& [indent, key] : stack) {
-    static_cast<void>(indent);
-    if (!first) {
-      out << '.';
-    }
-    first = false;
-    out << key;
-  }
-  return out.str();
 }
 
 bool is_nullish(const std::string& value) {
@@ -92,19 +51,6 @@ bool parse_bool(const std::string& value, const std::string& key) {
   throw std::runtime_error(key + " must be true or false");
 }
 
-// "url: rtsp://x" starts a mapping item; "rtsp://x" and "<rtsp-url-1>" are scalars.
-bool is_mapping_item(const std::string& item) {
-  const std::size_t colon = item.find(':');
-  if (colon == std::string::npos || colon == 0) {
-    return false;
-  }
-  if (colon + 1 < item.size() && item[colon + 1] != ' ' && item[colon + 1] != '\t') {
-    return false;
-  }
-  return std::all_of(item.begin(), item.begin() + static_cast<std::ptrdiff_t>(colon),
-                     [](unsigned char c) { return std::isalnum(c) || c == '_' || c == '-'; });
-}
-
 } // namespace
 
 std::string trim_copy(const std::string& value) {
@@ -118,100 +64,47 @@ std::string trim_copy(const std::string& value) {
 }
 
 Config Config::load(const std::filesystem::path& path) {
-  std::ifstream input(path);
-  if (!input.is_open()) {
-    throw std::runtime_error("failed to open config file: " + path.string());
-  }
-
   Config config;
   config.path_ = path;
-  std::vector<std::pair<int, std::string>> stack;
-  int list_block_indent = -1;
-  std::string raw_line;
-  while (std::getline(input, raw_line)) {
-    const std::string without_comment = strip_inline_comment(raw_line);
-    if (trim_copy(without_comment).empty()) {
-      continue;
-    }
-
-    int indent = 0;
-    while (indent < static_cast<int>(without_comment.size()) &&
-           (without_comment[static_cast<std::size_t>(indent)] == ' ' ||
-            without_comment[static_cast<std::size_t>(indent)] == '\t')) {
-      ++indent;
-    }
-
-    const std::string line = trim_copy(without_comment);
-    if (list_block_indent >= 0) {
-      if (indent > list_block_indent) {
-        continue;
-      }
-      list_block_indent = -1;
-    }
-    if (line == "-" || line.rfind("- ", 0) == 0) {
-      list_block_indent = indent;
-      const std::string item = trim_copy(line.substr(1));
-      if (!stack.empty()) {
-        // A mapping item is kept out of the string items, and string_list() rejects its key.
-        // The key still counts as present, so reject_unread_keys() reports it when unread.
-        const std::string list_key = join_stack(stack);
-        auto& items = config.lists_[list_key];
-        if (is_mapping_item(item)) {
-          config.lists_with_mappings_.insert(list_key);
-        } else if (!item.empty()) {
-          items.push_back(unquote(item));
-        }
-      }
-      continue;
-    }
-
-    const std::size_t colon = line.find(':');
-    if (colon == std::string::npos) {
-      throw std::runtime_error("invalid config line: " + line);
-    }
-
-    const std::string key = trim_copy(line.substr(0, colon));
-    std::string value = trim_copy(line.substr(colon + 1));
-    while (!stack.empty() && indent <= stack.back().first) {
-      stack.pop_back();
-    }
-
-    if (value.empty() || value == "{}") {
-      stack.emplace_back(indent, key);
-      continue;
-    }
-
-    std::string full_key = join_stack(stack);
-    if (!full_key.empty()) {
-      full_key += '.';
-    }
-    full_key += key;
-    if (value.front() == '[' && value.back() == ']') {
-      // A flow list such as [a, b]. The raw text stays readable for the older getters.
-      config.scalars_[full_key] = value;
-      auto& items = config.lists_[full_key];
-      // Split on commas outside quotes, so a quoted URL may contain a comma.
-      std::string item;
-      char quote = '\0';
-      for (const char c : value.substr(1, value.size() - 2) + ',') {
-        if (quote != '\0') {
-          quote = c == quote ? '\0' : quote;
-        } else if (c == '"' || c == '\'') {
-          quote = c;
-        } else if (c == ',') {
-          if (!trim_copy(item).empty()) {
-            items.push_back(unquote(trim_copy(item)));
-          }
-          item.clear();
-          continue;
-        }
-        item += c;
-      }
-      continue;
-    }
-    config.scalars_[full_key] = unquote(value);
+  YAML::Node root;
+  try {
+    root = YAML::LoadFile(path.string());
+  } catch (const YAML::BadFile&) {
+    throw std::runtime_error("failed to open config file: " + path.string());
+  } catch (const YAML::Exception& error) {
+    throw std::runtime_error(path.string() + ": " + error.what());
   }
-
+  if (!root.IsNull() && !root.IsMap()) {
+    throw std::runtime_error(path.string() + " must hold a mapping");
+  }
+  // Store every leaf under its dotted key: a scalar as its text, null as "null", and a list of
+  // scalars as its items. A list holding mappings is recorded, but its items are not read.
+  const std::function<void(const std::string&, const YAML::Node&)> add =
+      [&config, &add](const std::string& key, const YAML::Node& node) {
+        if (node.IsMap()) {
+          for (const auto& entry : node) {
+            const auto child = entry.first.as<std::string>();
+            add(key.empty() ? child : key + "." + child, entry.second);
+          }
+        } else if (node.IsSequence()) {
+          auto& items = config.lists_[key];
+          for (const auto& item : node) {
+            if (item.IsScalar()) {
+              items.push_back(item.Scalar());
+            } else if (!item.IsNull()) {
+              config.lists_with_mappings_.insert(key);
+            }
+          }
+          if (node.Style() == YAML::EmitterStyle::Flow) {
+            config.scalars_[key] = YAML::Dump(node); // Older getters read a flow list as text.
+          }
+        } else {
+          config.scalars_[key] = node.IsNull() ? "null" : node.Scalar();
+        }
+      };
+  if (root.IsMap()) {
+    add("", root);
+  }
   return config;
 }
 

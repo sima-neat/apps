@@ -1,3 +1,8 @@
+if (NOT TARGET PkgConfig::YAML_CPP)
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(YAML_CPP REQUIRED IMPORTED_TARGET yaml-cpp)
+endif()
+
 add_library(sima_neat_apps_support_runtime STATIC
   asset_utils.cpp
   config.cpp
@@ -13,7 +18,11 @@ target_link_libraries(sima_neat_apps_support_runtime
     opencv_videoio
 )
 
-target_link_libraries(sima_neat_apps_support_runtime PUBLIC nlohmann_json::nlohmann_json)
+target_link_libraries(sima_neat_apps_support_runtime
+  PUBLIC
+    nlohmann_json::nlohmann_json
+    PkgConfig::YAML_CPP
+)
 
 target_include_directories(sima_neat_apps_support_runtime
   PUBLIC
@@ -43,6 +52,7 @@ if (BUILD_TESTING)
     PUBLIC
       nlohmann_json::nlohmann_json
       PkgConfig::OPENCV
+      PkgConfig::YAML_CPP
   )
   target_include_directories(sima_neat_apps_support_testing
     PUBLIC
