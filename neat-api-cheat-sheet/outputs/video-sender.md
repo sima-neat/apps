@@ -40,7 +40,7 @@ through `VideoSender`.
 
 Encode frames pushed by the application and send them to Insight on
 channel 0. `Input` is the node the application pushes frames into, see
-[Input](../inputs/input-node.md).
+[Input (#748)](https://github.com/sima-neat/apps/issues/748).
 
 C++
 

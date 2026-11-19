@@ -78,7 +78,7 @@ Complete flow: [single-stream-thermal-face-detector](../../examples/face-detecti
 | Form | C++ | Python | What it does |
 |---|---|---|---|
 | Unnamed | `nodes::Output(opt)` | `pyneat.nodes.output(opt)` | Output read with `pull()` without a name. Options default to `OutputOptions{}` |
-| Named | `nodes::Output("name", opt)` | `pyneat.nodes.output("name", opt)` | Output read with `pull("name", ...)`. Other fragments can connect to it by name, see [links](../graph/links.md) |
+| Named | `nodes::Output("name", opt)` | `pyneat.nodes.output("name", opt)` | Output read with `pull("name", ...)`. Other fragments can connect to it by name, see [links (#745)](https://github.com/sima-neat/apps/issues/745) |
 
 `OutputOptions` presets. Pick one and change a field only when the preset is
 close but not right.
@@ -109,7 +109,7 @@ close but not right.
 
 [patchcore-anomaly-detector](../../examples/anomaly-detection/patchcore-anomaly-detector/)
 sets `combine_policy` on `OutputOptions` directly. Most examples use
-`graphs::Combine`, see [Branch and Combine](../graph/branch-and-combine.md).
+`graphs::Combine`, see [Branch and Combine (#745)](https://github.com/sima-neat/apps/issues/745).
 
 ## Language differences
 

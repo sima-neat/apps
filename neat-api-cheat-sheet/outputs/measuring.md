@@ -48,7 +48,7 @@ Do not use them for these cases:
 - You only want the speed of a compiled model package with synthetic input.
   Use `Model::benchmark()`. It runs its own latency pass and throughput pass
   and fills `BenchmarkReport.telemetry` with a `TelemetryMonitor` internally.
-  See [model benchmarking](../model/benchmark.md).
+  See [model benchmarking (#747)](https://github.com/sima-neat/apps/issues/747).
 - You need the numbers in a file for CI or a support ticket. Pass the
   `MeasureReport` to `save_run_json()` (C++) or `run.save_json()` (Python), and
   call `Telemetry::save()` for the board data.
