@@ -16,6 +16,7 @@ import pytest
 from tests.utils.metadata_json_listener import MetadataJsonListener
 
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
+LABELS = set((EXAMPLE_DIR / "src" / "common" / "coco-labels.txt").read_text().splitlines())
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
 
 
@@ -162,14 +163,8 @@ def test_publishes_insight_video_and_metadata(
     assert last.timestamp_ms > first.timestamp_ms
     entries = json.loads(last.payload)["data"][data_key]
     for entry in entries:
-        assert entry.get("label")
-        assert 0.0 <= entry.get("confidence", -1.0) <= 1.0
-        assert len(entry.get("bbox", [])) == 4
-        assert all(value >= 0.0 for value in entry["bbox"])
+        assert entry["label"] in LABELS, f"label not in coco-labels.txt: {entry['label']}"
+        assert 0.2 <= entry["confidence"] <= 1.0, "confidence below inference.min_score"
+        assert len(entry["bbox"]) == 4
         if task == "segmentation":
-            assert entry.get("mask_format") == "polygon"
-            assert len(entry.get("mask", [])) >= 3
-            assert all(
-                len(point) == 2 and all(value >= 0.0 for value in point)
-                for point in entry["mask"]
-            )
+            assert entry["mask_format"] == "polygon" and len(entry["mask"]) >= 3

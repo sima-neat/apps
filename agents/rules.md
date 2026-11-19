@@ -80,8 +80,9 @@ Place each piece of code by the first question it answers yes to:
   the process started. Unit tests download nothing and need no live service.
 - A broken test prerequisite fails clearly. A test never skips silently or falls back to
   other inputs.
-- Unit tests cover the example's own logic. `support/` code is tested once, as
-  "Where code goes" says.
+- `agents/skills/write-example-tests/SKILL.md` says which tests an example has. `support/`
+  code is tested once, as "Where code goes" says. C++ `detection_egress` is the exception:
+  `support/` has no C++ test program yet, so its test lives in the high-density example.
 
 ## Documentation and publication
 

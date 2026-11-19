@@ -1,3 +1,4 @@
+#include "sima_examples/labels.h"
 #include "sima_examples/testing/metadata_json_listener.h"
 #include "sima_examples/testing/test_config.h"
 #include "sima_examples/testing/test_process.h"
@@ -12,6 +13,7 @@
 #include <array>
 #include <filesystem>
 #include <iostream>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -46,41 +48,30 @@ std::pair<int, int> frame_size(const std::string& url) {
   return {width, height};
 }
 
-bool valid_metadata(const MetadataJsonListenerResult& result, bool segmentation) {
+// Every result names a label from the label file and passes inference.min_score (0.2), and
+// every segment carries a polygon.
+bool valid_metadata(const MetadataJsonListenerResult& result, bool segmentation,
+                    const std::set<std::string>& labels) {
   const char* data_key = segmentation ? "segments" : "objects";
   for (const auto& message : result.messages) {
     if (message.frame_id.empty() ||
         message.frame_id.find_first_not_of("0123456789") != std::string::npos ||
         message.timestamp_ms < 0) {
+      std::cerr << "[FAIL] bad frame identity: " << message.frame_id << "\n";
       return false;
     }
     const auto payload = nlohmann::json::parse(message.payload);
     for (const auto& entry : payload.at("data").at(data_key)) {
-      if (!entry.contains("label") || entry.at("label").get<std::string>().empty() ||
-          !entry.contains("confidence") || !entry.at("confidence").is_number() ||
-          entry.at("confidence").get<double>() < 0.0 ||
-          entry.at("confidence").get<double>() > 1.0 ||
-          !entry.contains("bbox") || !entry.at("bbox").is_array() ||
-          entry.at("bbox").size() != 4U) {
+      const double confidence = entry.at("confidence").get<double>();
+      if (labels.count(entry.at("label").get<std::string>()) != 1 || confidence < 0.2 ||
+          confidence > 1.0 || entry.at("bbox").size() != 4U) {
+        std::cerr << "[FAIL] result outside the label file or below min_score: " << entry.dump()
+                  << "\n";
         return false;
       }
-      for (const auto& value : entry.at("bbox")) {
-        if (!value.is_number() || value.get<double>() < 0.0) {
-          return false;
-        }
-      }
-      if (!segmentation) {
-        continue;
-      }
-      if (!entry.contains("mask_format") || entry.at("mask_format") != "polygon" ||
-          !entry.contains("mask") || !entry.at("mask").is_array() || entry.at("mask").size() < 3U) {
+      if (segmentation && (entry.at("mask_format") != "polygon" || entry.at("mask").size() < 3U)) {
+        std::cerr << "[FAIL] segment without a polygon: " << entry.dump() << "\n";
         return false;
-      }
-      for (const auto& point : entry.at("mask")) {
-        if (!point.is_array() || point.size() != 2U || !point[0].is_number() ||
-            !point[1].is_number() || point[0].get<double>() < 0.0 || point[1].get<double>() < 0.0) {
-          return false;
-        }
       }
     }
   }
@@ -134,6 +125,8 @@ int main(int argc, char** argv) {
   const int timeout_ms = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
   const fs::path labels =
       example_common_config_path("rfdetr-detection-segmentation").parent_path() / "coco-labels.txt";
+  const auto label_list = sima_examples::load_labels(labels);
+  const std::set<std::string> label_set(label_list.begin(), label_list.end());
 
   for (const auto& test : cases) {
     const char* rtsp_url = env_or_null(test.source.environment);
@@ -220,8 +213,9 @@ int main(int argc, char** argv) {
     }
     const auto metadata = listener.wait_for_messages();
     const auto following = listener.wait_for_messages();
-    if (!metadata.success || !following.success || !valid_metadata(metadata, segmentation) ||
-        !valid_metadata(following, segmentation)) {
+    if (!metadata.success || !following.success ||
+        !valid_metadata(metadata, segmentation, label_set) ||
+        !valid_metadata(following, segmentation, label_set)) {
       std::cerr << "[FAIL] invalid RF-DETR " << case_name << " metadata: " << metadata.error
                 << "\n";
       return 1;

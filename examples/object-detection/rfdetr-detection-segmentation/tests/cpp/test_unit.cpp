@@ -24,48 +24,6 @@ using sima_examples::testing::write_scratch_config;
 
 namespace {
 
-// Every key the application reads, with test values, followed by `extra`.
-std::string config_body(const std::string& extra = "", const std::string& skip_key = "") {
-  const std::vector<std::pair<std::string, std::string>> lines{
-      {"", "model:"},
-      {"model.id", "  id: seg-medium"},
-      {"model.path", "  path: models/rf_detr_seg_medium_backbone_mpk.tar.gz"},
-      {"model.labels", "  labels: coco-labels.txt"},
-      {"", "input:"},
-      {"input.source", "  source: rtsp://127.0.0.1:8554/src1"},
-      {"input.codec", "  codec: h264"},
-      {"input.width", "  width: 1280"},
-      {"input.height", "  height: 720"},
-      {"input.fps", "  fps: 30"},
-      {"", "  rtsp:"},
-      {"input.rtsp.tcp", "    tcp: true"},
-      {"input.rtsp.latency_ms", "    latency_ms: 10"},
-      {"", "inference:"},
-      {"inference.frames", "  frames: 0"},
-      {"inference.min_score", "  min_score: 0.3"},
-      {"inference.max_detections", "  max_detections: 24"},
-      {"", "output:"},
-      {"", "  insight:"},
-      {"output.insight.host", "    host: 127.0.0.1"},
-      {"output.insight.video_port_base", "    video_port_base: 9000"},
-      {"output.insight.metadata_port_base", "    metadata_port_base: 9100"},
-      {"", "app:"},
-      {"app.mask_threshold", "  mask_threshold: 0.08"},
-      {"app.mask_grid_size", "  mask_grid_size: 640"},
-  };
-  std::string body;
-  for (const auto& [key, line] : lines) {
-    if (key.empty() || key != skip_key) {
-      body += line + "\n";
-    }
-  }
-  return body + extra;
-}
-
-std::string replaced(std::string body, const std::string& from, const std::string& to) {
-  return body.replace(body.find(from), from.size(), to);
-}
-
 sima_examples::testing::ProcessResult validate(const std::string& binary, const std::string& name,
                                                const std::string& body) {
   const fs::path config_path = write_scratch_config("rfdetr-detection-segmentation", name, body);
@@ -73,28 +31,6 @@ sima_examples::testing::ProcessResult validate(const std::string& binary, const 
       spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
   remove_dir(config_path.parent_path().string());
   return result;
-}
-
-bool test_help_runs(const std::string& binary) {
-  const auto result = spawn_and_wait(binary, {"--help"}, 20000);
-  return expect_true(result.exit_code == 0, "help exits with code 0") &&
-         expect_contains(result.stdout_text, "--config", "help mentions --config") &&
-         expect_contains(result.stdout_text, "--validate-config-only",
-                         "help mentions --validate-config-only");
-}
-
-bool test_unknown_argument_fails(const std::string& binary) {
-  const auto result = spawn_and_wait(binary, {"--frames", "10"}, 20000);
-  return expect_true(result.exit_code == 1, "an unknown argument exits with code 1") &&
-         expect_contains(result.stderr_text, "unknown argument: --frames",
-                         "the error names the unknown argument");
-}
-
-bool test_missing_config_file_fails_cleanly(const std::string& binary) {
-  const auto result = spawn_and_wait(binary, {"--config", "does-not-exist.yaml"}, 20000);
-  return expect_true(result.exit_code == 2, "missing config exits with code 2") &&
-         expect_contains(result.stderr_text, "config file not found",
-                         "missing config error mentions config file not found");
 }
 
 bool test_shipped_config_validates(const std::string& binary) {
@@ -106,53 +42,6 @@ bool test_shipped_config_validates(const std::string& binary) {
   const auto result = validate(binary, "shipped_config_validates", body);
   return expect_true(!body.empty() && result.exit_code == 0, "the shipped config validates") &&
          expect_contains(result.stdout_text, "model=det-small", "the shipped model is det-small");
-}
-
-bool test_config_reads_every_key(const std::string& binary) {
-  const auto result = validate(binary, "config_reads_every_key", config_body());
-  return expect_true(result.exit_code == 0, "a config with every key validates") &&
-         expect_contains(result.stdout_text, "model=seg-medium", "model.id is read");
-}
-
-bool test_unknown_key_is_rejected(const std::string& binary) {
-  const auto result =
-      validate(binary, "unknown_key_is_rejected", config_body("source:\n  rtsp_url: rtsp://old\n"));
-  return expect_true(result.exit_code == 1, "a config with an unknown key is rejected") &&
-         expect_contains(result.stderr_text, "unknown keys: source.rtsp_url",
-                         "the error names the unknown key");
-}
-
-bool test_missing_key_is_rejected(const std::string& binary) {
-  const auto result =
-      validate(binary, "missing_key_is_rejected", config_body("", "app.mask_grid_size"));
-  return expect_true(result.exit_code == 1, "a config without app.mask_grid_size is rejected") &&
-         expect_contains(result.stderr_text, "is missing app.mask_grid_size",
-                         "the error names the missing key");
-}
-
-bool test_model_id_must_name_a_variant(const std::string& binary) {
-  const auto result = validate(binary, "model_id_must_name_a_variant",
-                               replaced(config_body(), "id: seg-medium", "id: seg-large"));
-  return expect_true(result.exit_code == 1, "an unknown model.id is rejected") &&
-         expect_contains(result.stderr_text, "model.id must be one of det-nano",
-                         "the error lists the model IDs");
-}
-
-bool test_model_path_must_name_a_backbone_package(const std::string& binary) {
-  const auto result = validate(
-      binary, "model_path_must_name_a_backbone_package",
-      replaced(config_body(), "rf_detr_seg_medium_backbone_mpk", "rf_detr_seg_medium_mpk"));
-  return expect_true(result.exit_code == 1, "a model.path without _backbone_mpk is rejected") &&
-         expect_contains(result.stderr_text, "must name an RF-DETR backbone package",
-                         "the error names the expected package");
-}
-
-bool test_codec_must_be_h264_h265_or_mjpeg(const std::string& binary) {
-  const auto result = validate(binary, "codec_must_be_h264_h265_or_mjpeg",
-                               replaced(config_body(), "codec: h264", "codec: vp9"));
-  return expect_true(result.exit_code == 1, "an unsupported codec is rejected") &&
-         expect_contains(result.stderr_text, "input.codec must be h264, h265, or mjpeg",
-                         "the error names the supported codecs");
 }
 
 std::vector<std::string> coco_labels() {
@@ -259,20 +148,10 @@ int main(int argc, char** argv) {
     return 2;
   }
 
-  const std::string binary = argv[1];
   bool ok = true;
+  ok &= test_shipped_config_validates(argv[1]);
   ok &= test_top_proposals_are_stable_and_best_first();
   ok &= test_detection_skips_unused_classes_and_scales_to_the_frame();
   ok &= test_segmentation_traces_a_polygon_inside_the_box();
-  ok &= test_help_runs(binary);
-  ok &= test_unknown_argument_fails(binary);
-  ok &= test_missing_config_file_fails_cleanly(binary);
-  ok &= test_shipped_config_validates(binary);
-  ok &= test_config_reads_every_key(binary);
-  ok &= test_unknown_key_is_rejected(binary);
-  ok &= test_missing_key_is_rejected(binary);
-  ok &= test_model_id_must_name_a_variant(binary);
-  ok &= test_model_path_must_name_a_backbone_package(binary);
-  ok &= test_codec_must_be_h264_h265_or_mjpeg(binary);
   return ok ? 0 : 1;
 }

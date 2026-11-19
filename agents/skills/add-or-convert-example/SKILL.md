@@ -30,9 +30,8 @@ The reference is `examples/object-detection/high-density-multi-stream-object-det
    a Core issue and link it in a comment.
 6. Delete everything nothing reaches: options, branches, config keys, environment variables,
    profiling, and validation that only repeats what the reader already checks.
-7. Shrink the unit tests to the example's own logic: help, missing config, every shipped
-   profile loads, unknown and missing keys. Keep the end-to-end tests' assertions and change
-   only the keys they override.
+7. Rewrite the tests with `agents/skills/write-example-tests/SKILL.md`: unit tests for the
+   example's own logic and the shipped configs, and end-to-end tests that prove the output.
 8. Update the README for every changed key, argument, and output. Keep its sections and
    their order as `CONTRIBUTING.md`'s README Contract sets them, and change only the lines
    the conversion affects.

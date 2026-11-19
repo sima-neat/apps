@@ -1,3 +1,4 @@
+#include "sima_examples/labels.h"
 #include "sima_examples/testing/metadata_json_listener.h"
 #include "sima_examples/testing/test_config.h"
 #include "sima_examples/testing/test_process.h"
@@ -46,7 +47,18 @@ double minimum_stream_fps() {
   return 27.0;
 }
 
-std::pair<int, json> validate_metadata_message(const MetadataJsonMessage& message, int base_port) {
+// Every detection names a label from the label file and passes inference.min_score (0.3).
+void require_objects_match_config(const json& objects, const std::set<std::string>& labels) {
+  for (const auto& item : objects) {
+    require(labels.count(item.at("label").get<std::string>()) == 1,
+            "label not in coco_label.txt: " + item.at("label").dump());
+    const double confidence = item.at("confidence").get<double>();
+    require(confidence >= 0.3 && confidence <= 1.0, "confidence below inference.min_score");
+  }
+}
+
+std::pair<int, json> validate_metadata_message(const MetadataJsonMessage& message, int base_port,
+                                               const std::set<std::string>& labels) {
   const auto payload = json::parse(message.payload);
   const int index = message.port - base_port;
   require(index >= 0 && index < 20, "metadata arrived on an unexpected port");
@@ -58,6 +70,7 @@ std::pair<int, json> validate_metadata_message(const MetadataJsonMessage& messag
   require(!payload.at("frame_id").get<std::string>().empty() &&
               payload.at("pts_ns").get<int64_t>() >= 0 && payload.contains("rtp_timestamp"),
           "missing frame identity");
+  require_objects_match_config(payload.at("data").at("objects"), labels);
   return {index, payload};
 }
 
@@ -97,20 +110,22 @@ void run_case(const std::string& binary, const std::string& model, const std::st
   const auto config = fs::path(output).parent_path() / "config.yaml";
   const int port = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100);
   const int video = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000);
-  write_e2e_config(
-      kExample, config,
-      {{"model.path", model},
-       {"model.labels",
-        (example_common_config_path(kExample).parent_path() / "coco_label.txt").string()},
-       {"input.codec", codec},
-       {"input.width", "1280"},
-       {"input.height", "720"},
-       {"input.fps", "0"},
-       {"output.video_enabled", "true"},
-       {"output.insight.host", "127.0.0.1"},
-       {"output.insight.video_port_base", std::to_string(video)},
-       {"output.insight.metadata_port_base", std::to_string(port)}},
-      {{"input.source", std::vector<std::string>(20, url)}});
+  const fs::path labels_path =
+      example_common_config_path(kExample).parent_path() / "coco_label.txt";
+  const auto label_list = sima_examples::load_labels(labels_path);
+  const std::set<std::string> labels(label_list.begin(), label_list.end());
+  write_e2e_config(kExample, config,
+                   {{"model.path", model},
+                    {"model.labels", labels_path.string()},
+                    {"input.codec", codec},
+                    {"input.width", "1280"},
+                    {"input.height", "720"},
+                    {"input.fps", "0"},
+                    {"output.video_enabled", "true"},
+                    {"output.insight.host", "127.0.0.1"},
+                    {"output.insight.video_port_base", std::to_string(video)},
+                    {"output.insight.metadata_port_base", std::to_string(port)}},
+                   {{"input.source", std::vector<std::string>(20, url)}});
   MetadataJsonListenerOptions options;
   options.base_port = port;
   options.num_ports = 20;
@@ -135,7 +150,7 @@ void run_case(const std::string& binary, const std::string& model, const std::st
       require(metadata.error.empty() || metadata.timed_out,
               "metadata listener failed: " + metadata.error);
       for (const auto& message : metadata.messages) {
-        const auto [index, payload] = validate_metadata_message(message, port);
+        const auto [index, payload] = validate_metadata_message(message, port, labels);
         tracker.observe(static_cast<std::size_t>(index), payload.at("frame_id").get<std::string>(),
                         message.object_count > 0, Tracker::Clock::now());
         if (tracker.warmup_complete() && !tracker.measurement_started()) {
@@ -145,7 +160,7 @@ void run_case(const std::string& binary, const std::string& model, const std::st
           require(drained.error.empty(),
                   "metadata listener failed during warmup drain: " + drained.error);
           for (const auto& queued_message : drained.messages) {
-            (void)validate_metadata_message(queued_message, port);
+            (void)validate_metadata_message(queued_message, port, labels);
           }
           break;
         }

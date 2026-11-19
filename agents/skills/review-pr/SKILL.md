@@ -62,7 +62,9 @@ says what to check and in which order; cite the owning file in each finding.
   senders.
 - **Tests:** each advertised behavior maps to an end-to-end assertion in both languages. A
   test that only starts the process is no evidence. Stateful applications test failure,
-  replacement, stop, cleanup, and restart.
+  replacement, stop, cleanup, and restart. Report a test that
+  `agents/skills/write-example-tests/SKILL.md` keeps out, and a behavior no test was seen
+  failing for.
 - **Code owners:** changes to dependency pins, `build.sh`, or
   `.github/workflows/vulcan-ci.yml` are flagged for code owner review.
 

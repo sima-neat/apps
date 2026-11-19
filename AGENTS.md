@@ -25,6 +25,7 @@ reader. `CONTRIBUTING.md` holds the layout, README contract, test registration, 
 |---|---|
 | Add an example, or convert one to the shared structure | `agents/skills/add-or-convert-example/SKILL.md` |
 | Review a pull request | `agents/skills/review-pr/SKILL.md` |
+| Write, trim, or review an example's tests | `agents/skills/write-example-tests/SKILL.md` |
 | Write or update a pull request description | `agents/skills/write-pr-description/SKILL.md` |
 | Write or review any example code | `agents/coding-style.md` |
 | Place code, change config keys, tests, or packaging | `agents/rules.md` |
