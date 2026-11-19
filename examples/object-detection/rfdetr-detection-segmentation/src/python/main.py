@@ -19,19 +19,12 @@ import pyneat
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
 
 # The helpers the examples share live in <apps root>/support/python.
-SUPPORT_DIR = next(
-    (
-        path / "support" / "python"
-        for path in Path(__file__).resolve().parents
-        if (path / "support" / "python" / "sima_examples").is_dir()
-    ),
-    None,
-)
-if SUPPORT_DIR is None:
-    raise SystemExit(
-        "support/python not found above this example; reinstall the Apps package"
-    )
-sys.path.insert(0, str(SUPPORT_DIR))
+for apps_root in Path(__file__).resolve().parents:
+    if (apps_root / "support" / "python" / "sima_examples").is_dir():
+        sys.path.insert(0, str(apps_root / "support" / "python"))
+        break
+else:
+    raise SystemExit("support/python not found above this example; reinstall the Apps package")
 
 from sima_examples.config import Config
 from sima_examples.labels import load_labels
