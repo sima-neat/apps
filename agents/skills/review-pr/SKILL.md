@@ -49,9 +49,15 @@ each finding cites the owning file and section.
 - **Models:** the README's model source matches the example's `tests/test-scope.yaml` and
   follows the order `CONTRIBUTING.md` gives.
 - **Documentation:** read every added, changed, or deleted Markdown file as customer content.
+  The README's `Concept` graph matches the parts and links `main` connects.
 - **Tests:** they follow `agents/skills/write-example-tests/SKILL.md`. Each advertised behavior
   maps to an end-to-end assertion in both languages. Stateful examples test failure,
   replacement, stop, cleanup, and restart.
+- **Core candidates:** report each piece of code that works around a missing or broken Core
+  capability as its own finding labeled `Core candidate`: a helper every example would need,
+  a format parsed by hand, a value Core should provide, or a comment describing a runtime
+  limitation. Name the Core API that would replace it and the lines it would save. These
+  findings are proposals for the maintainer, not blockers.
 - **Code owners:** flag changes to dependency pins, `build.sh`, or
   `.github/workflows/vulcan-ci.yml` for code owner review.
 

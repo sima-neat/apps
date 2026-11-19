@@ -11,8 +11,9 @@ Place each piece of code by the first question it answers yes to:
 1. Does it create a `Model`, add or connect a graph node, build a `Run`, or push to or pull
    from one? It is part of the Neat flow and goes in the entrypoint, `src/python/main.py` and
    `src/cpp/main.cpp`.
-2. Would every example need it around a Neat API call? It is a Core gap: open a Core issue
-   with a reproducer, and link it in a comment where the example works around it.
+2. Would every example need it around a Neat API call? It is a Core gap: write the smallest
+   workaround in the example with a one-line comment naming what Core lacks. The review
+   reports it as a Core candidate, and the maintainer decides which become Core issues.
 3. Do two or more examples need it, counting the examples still in `PENDING_EXAMPLES`? It
    goes in the shared library, `support/`.
 4. Otherwise it is the example's own logic: in its entrypoint, or in its `src/python/utils/`
@@ -22,7 +23,7 @@ Place each piece of code by the first question it answers yes to:
 |---|---|---|
 | Entrypoint | The Neat flow: models, the whole graph, the run, and its teardown | `main.py`, `main.cpp` |
 | `src/*/utils/` | The example's own logic, such as postprocessing or tracking | RF-DETR `postprocess.*`, the trackers' `tracker.*` |
-| `support/python/sima_examples/`, `support/cpp/sima_examples/` | The shared library: code two or more examples need. It may read and convert Neat data types, such as `Tensor`, `Sample`, and `PullStatus`, and never creates a model, graph, or run | `config`, `labels`, `rtsp_probe`, `detection_egress` |
+| `support/python/sima_examples/`, `support/cpp/sima_examples/` | The shared library: code two or more examples need. It may read and convert Neat data types, such as `Tensor`, `Sample`, and `PullStatus`, and never creates a model, graph, or run | `config`, `labels`, `rtsp_probe`, `stop_signals`, `detection_egress` |
 | `src/common/` | Files one example's C++ and Python share | `config.yaml`, label files |
 | Model Registry | Reusable model preparation. Temporary preparation stays in the example's `src/common/` as one development-only flow, outside the packaged runtime | |
 | `tests/utils/`, `support/cpp/sima_examples/testing/` | Test helpers two or more examples' tests use, in Python and C++ | the metadata listener |
