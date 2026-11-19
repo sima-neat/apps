@@ -23,6 +23,16 @@ languages. There are no separate C++ and Python pages.
 
 Every page follows [TEMPLATE.md](TEMPLATE.md).
 
+## Pages
+
+### Outputs, GenAI and measuring
+
+- [Output](outputs/output-node.md): `nodes::Output`, `OutputOptions` and its presets, `CombinePolicy`, reading results with `pull()`
+- [VideoSender](outputs/video-sender.md): sending video to Insight with `FromRaw` or `Passthrough`, `SimaEncode`, `UdpOutput`
+- [MetadataSender](outputs/metadata-sender.md): sending boxes, masks and poses to Insight as JSON over UDP
+- [GenAI](outputs/genai.md): `GenAIServer`, `VisionLanguageModel`, `ASRModel`, `GenerationRequest` and the GenAI graph fragments
+- [Measuring](outputs/measuring.md): `MeasureOptions` and `start_measurement()` for a run, `TelemetryMonitor` for board power, temperature and memory
+
 ## How C++ names map to Python names
 
 The C++ API lives in the `simaai::neat` namespace. The Python API is the
