@@ -11,7 +11,7 @@
 namespace sima_examples {
 
 // The values of one config.yaml, read by dotted key such as "input.rtsp.tcp". Scalars and
-// lists of scalars are read; the items of a list of mappings are not.
+// lists of strings are read; string_list() rejects a list holding anything else.
 class Config {
 public:
   static Config load(const std::filesystem::path& path);
@@ -42,7 +42,7 @@ private:
   std::filesystem::path path_;
   std::unordered_map<std::string, std::string> scalars_;
   std::unordered_map<std::string, std::vector<std::string>> lists_;
-  std::set<std::string> lists_with_mappings_;
+  std::set<std::string> lists_with_non_strings_;
   // Filled by the getters, so a const reader can still report what it never read.
   mutable std::set<std::string> read_keys_;
 };

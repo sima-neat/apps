@@ -78,7 +78,8 @@ Config Config::load(const std::filesystem::path& path) {
     throw std::runtime_error(path.string() + " must hold a mapping");
   }
   // Store every leaf under its dotted key: a scalar as its text, null as "null", and a list of
-  // scalars as its items. A list holding mappings is recorded, but its items are not read.
+  // scalars as its items. A list holding a null, a list, or a mapping is recorded as one
+  // string_list() rejects, as the Python reader does.
   const std::function<void(const std::string&, const YAML::Node&)> add =
       [&config, &add](const std::string& key, const YAML::Node& node) {
         if (node.IsMap()) {
@@ -91,8 +92,8 @@ Config Config::load(const std::filesystem::path& path) {
           for (const auto& item : node) {
             if (item.IsScalar()) {
               items.push_back(item.Scalar());
-            } else if (!item.IsNull()) {
-              config.lists_with_mappings_.insert(key);
+            } else {
+              config.lists_with_non_strings_.insert(key);
             }
           }
           if (node.Style() == YAML::EmitterStyle::Flow) {
@@ -172,7 +173,7 @@ std::vector<std::string> Config::string_list(const std::string& key) const {
     return {require_key(key)}; // One value stands for a list of one.
   }
   read_keys_.insert(key);
-  if (it->second.empty() || lists_with_mappings_.count(key) > 0) {
+  if (it->second.empty() || lists_with_non_strings_.count(key) > 0) {
     throw std::runtime_error(key + " must be a non-empty list of strings");
   }
   return it->second;
