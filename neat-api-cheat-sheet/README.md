@@ -79,3 +79,5 @@ API, update the page and its commit.
 - Take the C++ column from the header and the Python column from the bindings.
 - Keep each code block to 10 lines or fewer.
 - Link to a shipped example for the complete flow.
+- Do not document environment variables such as `SIMA_*`. They are internal
+  Core switches, not supported API. Give the API-level fix instead.
