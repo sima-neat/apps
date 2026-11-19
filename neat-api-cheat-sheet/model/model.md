@@ -96,7 +96,7 @@ The box-decoding fields (`decode_type`, `decode_type_option`,
 | Diagnostics | `verbose` | `verbose` | `VerboseOptions{}`: level `Production`, progress messages on, every topic off | Which messages loading and route planning print. Presets are `VerboseOptions::quiet()`, `production()`, `debug_plugins()` and `debug_all()` (Python `pyneat.VerboseOptions.quiet()` and so on). Topics such as `planner`, `plugins` and `gstreamer` can be switched on one at a time. | `quiet()` for a headless service whose log should hold only your own messages, as the High-Density Multi-Stream Object Detector does by default. `planner = true` when the route is not what you expected: it prints the MPK stages in order and the adapters the planner chose. It covers loading only; see Pitfalls. |
 | Stop early | `inference_terminal` | `inference_terminal` | Full route: `mla_only = false`, every stop point unset | Ends the route before its last stage. `mla_only` stops after the MLA. `last_stage_index`, `last_stage_name`, `last_plugin_id` and `last_processor` stop after a stage picked by position, name, plugin or processor. Python type: `pyneat.InferenceTerminalPolicy`. | You want the raw MLA output, to debug a postprocess or to feed a next stage that needs only the MLA result. With `mla_only` on a DevKit, ResNet-50 returned one 1008-byte UINT8 buffer instead of 1000 float scores. |
 | Stage placement (older form) | `processcvu` | `processcvu` | `pre_run_target = "AUTO"`, `post_run_target = "AUTO"`, `async = true` (Python `async_`) | Where the model's pre- and postprocessing kernels run: `"EV74"`, `"A65"` (the Arm CPU) or `"AUTO"`. `AUTO` runs a stage on the EV74 whenever the EV74 can run it. Only the conversion steps after the MLA, such as dequantize (`Dequant`) and `DetessDequant`, go to the A65 when the A65 can run them. `async = true` submits these stages through the asynchronous path, which favors throughput. `async = false` set here has no effect; see Pitfalls. | Prefer `advanced_execution` in new code. The SuperPoint example sets `post_run_target = "A65"` together with its A65 decoder profile. To force the synchronous path, for example when you suspect the asynchronous one of a problem, set `advanced_execution.preprocess_async = false` instead. |
-| MLA execution (older form) | `processmla` | `processmla` | `async = true` (Python `async_`), `output_pool_buffers = 0` (the runtime default of 4), `defer_output_invalidate = true` | `async = true` submits MLA work through the asynchronous path. `async = false` set here has no effect; see Pitfalls. `output_pool_buffers` sets how many MLA output buffers exist. `defer_output_invalidate` is kept for compatibility, must stay `true`, and `false` is rejected. | Raise `output_pool_buffers` when your code holds several model outputs at once, such as the tensors of previous frames, and the MLA has to wait for a free buffer. Prefer `advanced_execution` in new code. |
+| MLA execution (older form) | `processmla` | `processmla` | `async = true` (Python `async_`), `output_pool_buffers = 0` (the runtime default of 4), `defer_output_invalidate = true` | `async = true` submits MLA work through the asynchronous path. `async = false` set here has no effect; see Pitfalls. `output_pool_buffers` sets how many MLA output buffers exist. `defer_output_invalidate` is kept for compatibility; `false` set here is ignored. | Raise `output_pool_buffers` when your code holds several model outputs at once, such as the tensors of previous frames, and the MLA has to wait for a free buffer. Prefer `advanced_execution` in new code. |
 | Prepared runner (retired) | `prepared_runner` | not available | Empty `mode`, `ring_depth = 0`, `profile = false`, empty `dequant_flags` | Kept only so older C++ code still compiles. Retired modes fail when the pipeline is built. | Never. Leave the default. |
 | Internal queue depth (older form) | `async_queue_depth` | not available | `0`: the framework default | Depth of the queues Neat inserts between model stages. | Prefer `advanced_execution.internal_queue_depth`, which is also the Python way to set it. |
 | Execution controls | `advanced_execution` | `advanced_execution` | Every field unset: no effect | Gathers the execution settings of the four rows above under plain names; see the table below. A field you set overrides the matching older field, even when you set it to `false`. | The preferred way to change placement, concurrency or buffering. Change one field at a time and compare with the default route, as you would for any tuning. |
@@ -138,8 +138,10 @@ The constructor:
 3. Prints `Model loaded: <name> (package storage: <kind>, runtime package path:
    <folder>)` unless `verbose` is `quiet()`.
 
-Any failure throws `NeatError` (Python `pyneat.NeatError`, with an
-`error_code` attribute). A `Model` can be moved but not copied.
+Most failures throw `NeatError` (Python `pyneat.NeatError`, with an
+`error_code` attribute). Invalid `semantic_segmentation` settings and retired
+execution settings throw `std::invalid_argument` (Python `ValueError`). A
+`Model` can be moved but not copied.
 
 ### Running: `run`, `build` and the runner
 
@@ -174,7 +176,7 @@ was not set. One `[1, 224, 224, 3]` array into ResNet-50 returned one
 Seed `build` with a real input when the route takes images: pass a frame of the
 size you will send, as the examples do. `RouteOptions` belongs to
 [routes.md](routes.md). `RunOptions`, such as the queue depth and what happens
-when the queue is full, belongs to the [`run/`](../run/) pages.
+when the queue is full, belongs to the `run/` pages.
 
 The runner methods an application uses:
 

@@ -97,7 +97,10 @@ The last four rows are fixed source arithmetic (see Core's
 [Fixed source arithmetic](https://developer.sima.ai/software/reference/nodes/preproc#fixed-source-arithmetic)).
 Any of them, a typed `resize.interpolation`, `Crop` or `shorter_side` needs an
 image route with preprocessing on, no `transforms` list, and `quantize` and
-`tessellate` left at `Auto`; otherwise the `Model` constructor throws.
+`tessellate` left at `Auto`; otherwise the `Model` constructor throws. With
+fixed source arithmetic, normalization also needs `rescale_factor` (`1` for
+unscaled pixels), and an INT8 model also needs `quantization_step`; the
+constructor throws when either is missing.
 
 ### Resize: `ResizeSpec`
 
@@ -159,8 +162,10 @@ the model wants a float32 tensor that you resized and normalized yourself:
 `[1, 640, 640, 3]` for YOLO26n and `[1, 224, 224, 3]` for ResNet-50. The plan
 reports `graph_family = Disabled`, and `info().pre_kernels` lists `quantize`.
 
-With `kind = Image`, Neat adds an EV74 image stage (`graph_family =
-Preproc`). Then:
+With `kind = Image` and at least one image step on, through `enable = On` or
+an image setting such as `input_format`, `resize` or a preset, Neat adds an
+EV74 image stage (`graph_family = Preproc`). `kind = Image` alone adds no
+image stage. Then:
 
 - the image may have any size up to `input_max_width` × `input_max_height`,
   and `input_specs()` reports `[-1, -1, 3]` UInt8;

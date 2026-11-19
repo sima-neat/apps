@@ -34,7 +34,7 @@ for an application that assembles the stages by hand.
 | You build the stages yourself, one node at a time | `groups::MLA(model)` with `QuantTess` and `DetessDequant`. Rare: `model.graph()` contains the same stages |
 
 How a `Graph` connects fragments and nodes, with `add` and `connect`, is on
-the [`graph/`](../graph/) pages. To decode raw detection heads outside the
+the `graph/` pages. To decode raw detection heads outside the
 route, C++ has `stages::BoxDecode`; see [decoding.md](decoding.md).
 
 ## Minimal example
@@ -110,7 +110,7 @@ asynchronous route. The MIPI Multi-Model example sets
 |---|---|---|
 | `model.graph()` | `model.graph()` | The full route with default `RouteOptions`: no `Input` or `Output` node, open named endpoints |
 | `model.graph(route)` | `model.graph(options)` or `model.graph_with_options(options)` | The full route, shaped by `route` |
-| `graph.add(model)`, `graph.connect(..., model)` | `graph.add(model)`, `graph.add_model(model)`, `graph.connect(..., model)` | Adds the model's route to your `Graph`; `add` uses default `RouteOptions`. See the [`graph/`](../graph/) pages |
+| `graph.add(model)`, `graph.connect(..., model)` | `graph.add(model)`, `graph.add_model(model)`, `graph.connect(..., model)` | Adds the model's route to your `Graph`; `add` uses default `RouteOptions`. See the `graph/` pages |
 | `model.fragment(Stage)`, or `preprocess()`, `inference()`, `postprocess()` | `model.fragment(pyneat.ModelStage.*)`, or the same three methods | One portion of the route; see [`Stage` values](#stage-values) |
 | `model.backend_fragment(Stage)` | `model.backend_fragment(stage)` | The GStreamer text of one portion, for debugging |
 | `model.build(route, ...)` | `model.build_with_route_options(options)`, or `model.build(input, route_options=...)` | A `Model::Runner` with an `Input` and `Output` added; see [model.md](model.md) |
@@ -200,9 +200,9 @@ change them.
 
 | Option | C++ | Python | Default | What it does | Why and when to change it |
 |---|---|---|---|---|---|
-| Config file | `config_path` | `config_path` | `""` | Path of a kernel configuration JSON file. | Only for a kernel configured outside a `Model`. Use `XOptions(model)` instead. |
-| Inline config | `config_json` | `config_json` (a `dict`, or `None`) | Not set (`None`) | Kernel configuration given inline. Wins over `config_path`. | Same as `config_path`. |
-| Upstream element (DetessDequant only) | `upstream_name` | `upstream_name` | `""`; `DetessDequantOptions(model)` sets the model's MLA stage | The MLA element whose output it reads. | Leave what `DetessDequantOptions(model)` sets. |
+| Config file | `config_path` | `config_path` | `""` | Path of a kernel configuration JSON file. No effect on `DetessDequant`, which runs only from `compiled_contract`. | Only for a kernel configured outside a `Model`. Use `XOptions(model)` instead. |
+| Inline config | `config_json` | `config_json` (a `dict`, or `None`) | Not set (`None`) | Kernel configuration given inline. Wins over `config_path`. No effect on `DetessDequant`. | Same as `config_path`. |
+| Upstream element (DetessDequant only) | `upstream_name` | `upstream_name` | `""`; `DetessDequantOptions(model)` sets the model's MLA stage | The MLA element whose output it reads. It has no effect. | Leave what `DetessDequantOptions(model)` sets. |
 | Element name | `element_name` | `element_name` | `""`: generated, such as `n2_quanttess`; `DetessDequantOptions(model)` sets the model's stage name | The GStreamer element name. | A fixed name you want to find in `describe_backend()` output and error messages. |
 | Compiled contract | `compiled_contract` | not available | Empty; `XOptions(model)` fills it | The model's compiled kernel description: scale, zero point, tile geometry. It replaces the config fields. | Never set it yourself. It is the reason to use `XOptions(model)`. |
 | Buffer count | `num_buffers` | `num_buffers` | `0`: the default; `XOptions(model)` sets the model's count | Size of the element's buffer pool. | Leave it. When locked, it must equal `num_buffers_model` and be 4 (asynchronous) or 1 (synchronous), or the node constructor throws. |
