@@ -1,7 +1,10 @@
 # Drawing an Example's Graph Topology
 
-The graph answers one question, written as its first line: "How does a frame move through
-`<example>`?". It shows the parts `main.py` and `main.cpp` connect, at that altitude only.
+An example's README shows its graph topology in `Concept`, and a pull request description
+shows the graph of each example it changes. Both use this guide. The graph answers one
+question, written as its first line: "How does a frame move through `<example>`?". It shows
+the parts `main.py` and `main.cpp` connect, at that altitude only. A pull request copies the
+README's graph and adds change markers.
 
 ## Parts
 

@@ -16,6 +16,36 @@
 
 Runs one YOLO26 detector across 20, 30, or 60 RTSP streams and sends synchronized video and detection metadata to Insight.
 
+```text
+How does a frame move through high-density-multi-stream-object-detector?
+
+╭┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╮
+┆ RUN                                                             ┆
+┆  ┌──────────────────────┐  encoded frames  ┌──────────────────┐ ┆
+┆  │ RtspEncodedInput × N │─────────────────►│ VideoSender × N  │──────┐
+┆  └──────────────────────┘  latest/stream   └──────────────────┘ ┆    │
+┆             │ encoded frames                                    ┆    │ video
+┆             ▼                                                   ┆    │
+┆  ┌──────────────────────┐                                       ┆    │
+┆  │ SimaDecode × N       │                                       ┆    │
+┆  └──────────────────────┘                                       ┆    │
+┆             │ NV12, latest/stream                               ┆    │
+┆             ▼                                                   ┆    │
+┆  ┌──────────────────────┐                                       ┆    │
+┆  │ YOLO26 Model         │                                       ┆    │
+┆  └──────────────────────┘                                       ┆    │
+┆             │ BBOX tensor                                       ┆    │
+┆             ▼                                                   ┆    │
+┆  ┌──────────────────────┐                                       ┆    │
+┆  │ Output "detections"  │                                       ┆    │
+┆  └──────────────────────┘                                       ┆    │
+╰┄┄┄┄┄┄┄┄┄┄┄┄┄│┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯    │
+              ▼ pull                                                   ▼
+   ┌──────────────────────┐   boxes as JSON                     ┌──────────────┐
+   │ MetadataSender × N   │────────────────────────────────────►│ Insight      │
+   └──────────────────────┘                                     └──────────────┘
+```
+
 Unlike the general multi-stream detector, this application tunes the pipeline for high stream counts.
 
 Each RTSP source is depacketized once, then Core fuses two branches into the same source pipeline:
@@ -30,7 +60,7 @@ The application expresses this fan-out with ordinary `Graph::connect()` and star
 
 `inference.max_inflight_per_stream` and `inference.max_inflight_total` bound raw decoder-backed frames admitted to the shared detector. The 20- and 60-stream profiles use a total limit of eight; the 30-stream profile uses 30 so one aggregate frame interval can be admitted without an unbounded queue. The realtime mux retains only the latest pending frame for each stream.
 
-Detection metadata includes the source `rtp_timestamp` and is sent with nonblocking UDP. A compatible Insight receiver holds complete encoded RTP frames for 400 ms and matches metadata to that source timestamp before WebRTC forwarding. Keep one active viewer while validating metadata, as described below.
+Detection metadata is sent with nonblocking UDP. Its `timestamp`, the frame's presentation time in milliseconds, is what Insight matches to the video frame before WebRTC forwarding. Keep one active viewer while validating metadata, as described below.
 
 The three checked-in profiles use the same application and model:
 

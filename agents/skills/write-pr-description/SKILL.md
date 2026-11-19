@@ -17,7 +17,8 @@ history per commit, line counts, or before and after numbers, stays in the commi
    changed shared file (`support/`, `build.sh`, CI, `skills/`, `agents/`).
 2. Write the sections below in order. Leave a section out only where this skill says so.
 3. For each changed example, draw its graph topology with
-   [references/flowgraph.md](references/flowgraph.md), from its `main.py` and `main.cpp` at the
+   `agents/references/flowgraph.md`: copy the graph from the example's README `Concept` and
+   mark what changed, or draw it from its `main.py` and `main.cpp` at the
    pushed commit.
 4. For each changed example, capture one screenshot of its result: the Insight view for a live
    example, or the annotated output image for an offline one. Run it from the installed

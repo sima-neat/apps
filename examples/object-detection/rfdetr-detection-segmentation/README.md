@@ -16,6 +16,51 @@
 
 Run RF-DETR detection or instance segmentation on one H.264, H.265, or MJPEG RTSP stream and view the result in Insight.
 
+```text
+How does a frame move through rfdetr-detection-segmentation?
+
+╭┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╮
+┆ RUN                                                             ┆
+┆  ┌──────────────────────┐  encoded, H.264/H.265 ┌─────────────┐ ┆
+┆  │ RtspEncodedInput     │──────────────────────►│ VideoSender │─────┐
+┆  └──────────────────────┘                       └─────────────┘ ┆   │
+┆             │ encoded frames                           ▲        ┆   │ video
+┆             ▼                                          │        ┆   │
+┆  ┌──────────────────────┐  NV12, MJPEG only            │        ┆   │
+┆  │ SimaDecode           │──────────────────────────────┘        ┆   │
+┆  └──────────────────────┘                                       ┆   │
+┆             │ NV12, newest 4                                    ┆   │
+┆             ▼                                                   ┆   │
+┆  ┌──────────────────────┐                                       ┆   │
+┆  │ Backbone Model       │                                       ┆   │
+┆  └──────────────────────┘                                       ┆   │
+┆             │ features, proposals                               ┆   │
+┆             ▼                                                   ┆   │
+┆  ┌──────────────────────┐                                       ┆   │
+┆  │ Output "backbone"    │                                       ┆   │
+┆  └──────────────────────┘                                       ┆   │
+╰┄┄┄┄┄┄┄┄┄┄┄┄┄│┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯   │
+              ▼ pull                                                  │
+   ┌────────────────────────────┐                                     │
+   │ top proposals (utils/)     │                                     │
+   └────────────────────────────┘                                     │
+              │ boxes, features                                       │
+              ▼                                                       │
+   ┌────────────────────────────┐                                     │
+   │ Transformer Runner         │                                     │
+   └────────────────────────────┘                                     │
+              │ logits, boxes, masks                                  │
+              ▼                                                       │
+   ┌────────────────────────────┐                                     │
+   │ results (utils/)           │                                     │
+   └────────────────────────────┘                                     │
+              │ boxes or polygons                                     │
+              ▼                                                       ▼
+   ┌────────────────────────────┐  JSON                        ┌──────────────┐
+   │ MetadataSender             │─────────────────────────────►│ Insight      │
+   └────────────────────────────┘                              └──────────────┘
+```
+
 Each RF-DETR model comes as two packages: a backbone and a decoder, which the code calls the transformer. The application decodes the stream to NV12 once. A 4-frame queue replaces stale decoded frames when inference falls behind. EV74 converts, resizes, and normalizes admitted frames for the backbone. Host code selects the backbone's strongest proposals and passes their boxes and the backbone's feature tensor to the transformer. Insight receives the video and the matching detection boxes or segmentation polygons.
 
 The backbone output keeps up to eight results, and the transformer input waits while its four-entry queue is full, so completed backbone work is not dropped. These capacities do not include buffers held by active stages.

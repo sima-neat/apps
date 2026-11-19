@@ -35,7 +35,9 @@ then `agents/coding-style.md` and `agents/rules.md`.
    config reader makes.
 7. Write the tests with `agents/skills/write-example-tests/SKILL.md`.
 8. Update the README for every changed key, argument, and output, in the sections and order
-   `CONTRIBUTING.md` "README Contract" sets. Change only the lines the change affects.
+   `CONTRIBUTING.md` "README Contract" sets, and draw or update the graph topology in
+   `Concept`. Change only the lines the change affects. The step is done when the graph shows
+   every part and link `main` connects.
 9. Compare the result with the customer skills as `agents/rules.md` "Customer skills"
    describes, and record the skill text to add or `Skill updates: none` with the reason.
 10. Build in the Neat SDK, run the unit and end-to-end tests in both languages on a Modalix

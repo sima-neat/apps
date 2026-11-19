@@ -63,7 +63,11 @@ runs as written from `prebuilt-apps/`. Optional sections go in these places:
 - a `Prepare <input>` section, such as `Prepare Insight`, after `Prepare the Model`
 - `Expected Result`, `Troubleshooting`, and `Performance` after `Run`
 
-Keep each section minimal and precise. `Configure` names only the keys the
+Keep each section minimal and precise. `Concept` starts with the one- or
+two-sentence portal summary, then shows the graph topology as a flowgraph in a
+`text` code block, drawn as `agents/references/flowgraph.md` describes: the
+inputs, decoders, models, outputs, and senders the entrypoint connects, and the
+link policies between them. `Configure` names only the keys the
 customer edits, one bullet each, with the value or where it comes from. Explain
 behavior in `Concept`, and list error messages with their fixes in
 `Troubleshooting`.
