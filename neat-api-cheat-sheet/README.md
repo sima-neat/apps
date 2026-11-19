@@ -23,6 +23,15 @@ languages. There are no separate C++ and Python pages.
 
 Every page follows [TEMPLATE.md](TEMPLATE.md).
 
+## Pages
+
+### Run
+
+- [Run](run/run.md): `Run`, `RunOptions`, `RunPreset`, `RunMode`
+- [Push and pull](run/push-and-pull.md): `push`, `try_push`, `pull`, `pull_tensors`, `pull_samples`, `PullStatus`, `PullError`, `close_input`
+- [Sample](run/samples.md): `Sample`, `SampleKind`, `tensors_from_sample`
+- [Tensor](run/tensors.md): `Tensor`, `TensorList`, `TensorMemory`, `Mapping`, `OutputMemory`
+
 ## How C++ names map to Python names
 
 The C++ API lives in the `simaai::neat` namespace. The Python API is the
