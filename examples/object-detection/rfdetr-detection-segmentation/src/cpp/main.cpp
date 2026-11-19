@@ -136,8 +136,11 @@ AppConfig load_app_config(const fs::path& path) {
   cfg.mask_grid_size = config.integer("app.mask_grid_size");
   config.reject_unread_keys();
   if (std::find(kModelIds.begin(), kModelIds.end(), cfg.model_id) == kModelIds.end()) {
-    throw std::runtime_error("model.id must be one of det-nano, det-small, det-medium, "
-                             "det-large, seg-nano, seg-small, seg-medium");
+    std::string ids;
+    for (const auto& id : kModelIds) {
+      ids += (ids.empty() ? "" : ", ") + id;
+    }
+    throw std::runtime_error("model.id must be one of " + ids);
   }
   if (cfg.codec != "h264" && cfg.codec != "h265" && cfg.codec != "mjpeg") {
     throw std::runtime_error("input.codec must be h264, h265, or mjpeg");
@@ -400,11 +403,15 @@ int send_results(neat::Model::Runner& transformer_runner,
       continue;
     }
     // A nonblocking send drops the message while the socket buffer is full; the drops are
-    // counted in the sender's stats and reported when the run ends.
-    (void)metadata_sender.send_metadata(
-        metadata_type, result_json(result, labels, mask_size, options),
-        result.pts_ns >= 0 ? result.pts_ns / 1'000'000 : -1,
-        result.frame_id >= 0 ? std::to_string(result.frame_id) : "");
+    // counted in the sender's stats and reported when the run ends. Any other failure throws.
+    std::string send_error;
+    if (!metadata_sender.send_metadata(metadata_type, result_json(result, labels, mask_size, options),
+                                       result.pts_ns >= 0 ? result.pts_ns / 1'000'000 : -1,
+                                       result.frame_id >= 0 ? std::to_string(result.frame_id) : "",
+                                       &send_error) &&
+        !send_error.empty()) {
+      throw std::runtime_error("metadata send failed: " + send_error);
+    }
     ++sent;
   }
   return sent;

@@ -12,7 +12,6 @@ struct RtspProbeOptions {
   int latency_ms = 200;
   bool rtsp_tcp = true;
   bool debug = false;
-  int decoder_num_buffers = 7;
 };
 
 struct RtspStreamInfo {

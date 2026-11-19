@@ -293,10 +293,9 @@ def send_detections(
             cfg.height,
             frame_metadata(sample, index),
         )
-        try:
-            metadata_senders[index].send_raw_json(payload)
-        except RuntimeError:
-            pass  # A nonblocking send drops the message while the socket buffer is full.
+        # A nonblocking send drops the message while the socket buffer is full; the drops are
+        # counted in the sender's stats and reported when the run ends. Any other failure raises.
+        metadata_senders[index].send_raw_json(payload)
 
 
 def main(argv: list[str] | None = None) -> int:

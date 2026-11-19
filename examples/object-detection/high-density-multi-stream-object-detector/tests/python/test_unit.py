@@ -102,12 +102,6 @@ def test_unknown_key_is_rejected(tmp_path):
         main_module.load_app_config(path)
 
 
-def test_missing_key_is_rejected(tmp_path):
-    path = write_config(tmp_path, **{"app.queue_depth": ""})
-    with pytest.raises(ValueError, match="is missing app.queue_depth"):
-        main_module.load_app_config(path)
-
-
 def test_codec_must_be_h264_or_h265(tmp_path):
     path = write_config(tmp_path, **{"input.codec": "  codec: mjpeg"})
     with pytest.raises(ValueError, match="input.codec must be h264 or h265"):

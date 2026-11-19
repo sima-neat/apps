@@ -387,7 +387,8 @@ def send_results(
             if not result:
                 continue
             # A nonblocking send drops the message while the socket buffer is full; the drops
-            # are counted in the sender's stats and reported when the run ends.
+            # are counted in the sender's stats and reported when the run ends. Any other
+            # failure raises.
             metadata_sender.send_metadata(
                 metadata_type,
                 result_json(result, labels, mask_size, options),

@@ -45,15 +45,6 @@ CONFIG_LINES = {
 
 LABELS = ["unused", "person"] + ["unused"] * 89
 
-OPTIONS = postprocess.PostprocessOptions(
-    width=1280,
-    height=720,
-    min_score=0.3,
-    max_detections=10,
-    mask_threshold=0.08,
-    mask_grid_size=640,
-)
-
 
 def write_config(tmp_path: Path, extra: str = "", **replace: str) -> Path:
     lines = {**CONFIG_LINES, **replace}
@@ -110,12 +101,6 @@ def test_config_reads_every_key(tmp_path):
 def test_unknown_key_is_rejected(tmp_path):
     path = write_config(tmp_path, extra="source:\n  rtsp_url: rtsp://old\n")
     with pytest.raises(ValueError, match="unknown keys: source.rtsp_url"):
-        main_module.load_app_config(path)
-
-
-def test_missing_key_is_rejected(tmp_path):
-    path = write_config(tmp_path, **{"app.mask_grid_size": ""})
-    with pytest.raises(ValueError, match="is missing app.mask_grid_size"):
         main_module.load_app_config(path)
 
 

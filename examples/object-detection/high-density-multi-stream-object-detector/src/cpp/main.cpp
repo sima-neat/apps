@@ -322,8 +322,12 @@ void send_detections(neat::Run& run, std::vector<neat::MetadataSender>& metadata
     const std::string payload = sima_examples::detection_egress::serialize(
         decode_boxes(sample, cfg), labels, cfg.width, cfg.height, frame_metadata(sample, index));
     // A nonblocking send drops the message while the socket buffer is full; the drops are
-    // counted in the sender's stats and reported when the run ends.
-    (void)metadata_senders.at(static_cast<std::size_t>(index)).send_raw_json(payload);
+    // counted in the sender's stats and reported when the run ends. Any other failure throws.
+    std::string send_error;
+    if (!metadata_senders.at(static_cast<std::size_t>(index)).send_raw_json(payload, &send_error) &&
+        !send_error.empty()) {
+      throw std::runtime_error("metadata send failed: " + send_error);
+    }
   }
 }
 
