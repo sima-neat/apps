@@ -137,19 +137,22 @@ marked "not set" are `std::optional` in C++ and `None` in Python.
 - C++ `async` is `async_` in Python, because `async` is a reserved word.
 - C++ can fill `SimaEncodeOptions` inline: `FromRaw({.fps = 30})`. Python
   creates `pyneat.SimaEncodeOptions()` first and sets its fields.
+- Invalid options throw `std::invalid_argument` in C++. Python raises
+  `ValueError` with the same message.
 - The deprecated factories warn at compile time in C++. Python gives no
   warning.
 
 ## Pitfalls
 
-- **Encoder settings on MJPEG.** `FromRaw` throws `MJPEG does not accept
-  bitrate, rate control, profile, level, GOP or IDR settings` when one of
-  them is set. Changing `encoder.*` after `FromRaw` with MJPEG throws
+- **Encoder settings on MJPEG.** `FromRaw` throws `SimaEncode: MJPEG does not
+  accept bitrate, rate control, profile, level, GOP or IDR settings` when one
+  of them is set. Changing `encoder.*` after `FromRaw` with MJPEG throws
   `VideoSender: MJPEG does not accept legacy video encoder overrides`. Use
   `quality` for MJPEG.
 - **An option outside its range throws when the options are created.** For
-  example `quality applies only to MJPEG`, `gop_length must be within
-  0..1000`, or `num_buffers must be -1 or within 1..20`. Fix the value named
+  example `SimaEncode: quality applies only to MJPEG`, `SimaEncode: gop_length
+  must be within 0..1000`, or `SimaEncode: num_buffers must be -1 or within
+  1..20`. Fix the value named
   in the message.
 - **The resolution is fixed by the first frame.** `SimaEncode` takes its
   size from the first frames and keeps it for the whole run. It does not
