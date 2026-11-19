@@ -151,8 +151,13 @@ ScalarConfig ScalarConfig::load(const std::filesystem::path& path) {
     if (line == "-" || line.rfind("- ", 0) == 0) {
       list_block_indent = indent;
       const std::string item = trim_copy(line.substr(1));
-      if (!item.empty() && !is_mapping_item(item) && !stack.empty()) {
-        config.lists_[join_stack(stack)].push_back(unquote(item));
+      if (!stack.empty()) {
+        // A list of mappings has no string items, but its key still counts as present, so
+        // reject_unread_keys() reports it when the example never reads it.
+        auto& items = config.lists_[join_stack(stack)];
+        if (!item.empty() && !is_mapping_item(item)) {
+          items.push_back(unquote(item));
+        }
       }
       continue;
     }
@@ -178,8 +183,17 @@ ScalarConfig ScalarConfig::load(const std::filesystem::path& path) {
       full_key += '.';
     }
     full_key += key;
-    if (value == "[]") {
-      config.lists_[full_key];
+    if (value.front() == '[' && value.back() == ']') {
+      // A flow list such as [a, b]. The raw text stays readable for the older getters.
+      config.scalars_[full_key] = value;
+      auto& items = config.lists_[full_key];
+      std::stringstream inner(value.substr(1, value.size() - 2));
+      std::string item;
+      while (std::getline(inner, item, ',')) {
+        if (!trim_copy(item).empty()) {
+          items.push_back(unquote(trim_copy(item)));
+        }
+      }
       continue;
     }
     config.scalars_[full_key] = unquote(value);
