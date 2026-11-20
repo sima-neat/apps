@@ -149,16 +149,16 @@ def rtsp_mjpeg_urls() -> list[str]:
     )
 
 
-def usb_camera_cases(source: dict[str, Any]) -> list[Any]:
+def usb_camera_cases(source: dict[str, Any], case_id: str = "usb-camera") -> list[Any]:
     """The USB camera e2e case, collected only when SIMANEAT_TEST_USB_CAMERA names a camera.
 
     CI runners have no USB camera, and strict e2e fails on any skip, so without the variable
     the case is not collected and a warning names the variable instead.
     """
     if os.environ.get("SIMANEAT_TEST_USB_CAMERA", "").strip():
-        return [pytest.param(source, id="usb-camera")]
+        return [pytest.param(source, id=case_id)]
     warnings.warn(
-        "usb-camera e2e not collected: set SIMANEAT_TEST_USB_CAMERA to a USB camera ID",
+        f"{case_id} e2e not collected: set SIMANEAT_TEST_USB_CAMERA to a USB camera ID",
         stacklevel=2,
     )
     return []

@@ -14,7 +14,7 @@
 
 ## Concept
 
-Detects objects in one RTSP or MJPEG stream with YOLO26 and sends synchronized H.264 video and detection metadata to Insight.
+Detects objects in one RTSP stream, HTTP MJPEG stream, or USB camera with YOLO26 and sends synchronized H.264 video and detection metadata to Insight.
 
 The decoded frame branches inside a single graph to the detector and to the H.264 sender. Both outputs therefore carry timestamps from the same frame, which is what lets Insight draw each detection on the frame it came from. Setting `output.save_dir` adds a third branch that returns the decoded frame to the application so it can write annotated JPEGs.
 
@@ -25,7 +25,7 @@ The decoded frame branches inside a single graph to the detector and to the H.26
 ## Prerequisites
 
 - `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on the Modalix DevKit, or in a Neat SDK container paired with it.
-- An RTSP H.264, RTSP H.265, RTSP MJPEG, or HTTP MJPEG source, or a USB (UVC) MJPEG camera plugged into the DevKit, and an [Insight](https://developer.sima.ai/software/tools/insight/) URL reachable from the target.
+- An RTSP H.264, RTSP H.265, RTSP MJPEG, or HTTP MJPEG source, or a USB (UVC) camera with MJPEG or YUYV modes plugged into the DevKit, and an [Insight](https://developer.sima.ai/software/tools/insight/) URL reachable from the target.
 
 ## Install Apps
 
@@ -72,9 +72,9 @@ In the Insight Web UI, start the required stream and copy its source URL. Use RT
 
 Open `${APP_DIR}/src/common/config.yaml`. Set `model.path` (for the default model, `models/yolo26m/w16a16/yolo26m_w16a16_mpk.tar.gz`), `source.type` and the matching `source.rtsp`, `source.http`, or `source.usb` section (only that section is read), and the Insight host and video and metadata ports.
 
-The source supports RTSP H.264, H.265, and MJPEG, plus HTTP MJPEG. Keep `inference.frames` at `0` to run until you stop the application.
+The source supports RTSP H.264, H.265, and MJPEG, HTTP MJPEG, and USB MJPEG or YUYV. Keep `inference.frames` at `0` to run until you stop the application.
 
-To use a USB camera, set `source.type: usb`, `source.usb.camera` to its stable ID, and `source.usb.width`, `source.usb.height`, and `source.usb.fps` to an MJPEG mode the camera lists. List the connected camera IDs and modes on the DevKit:
+To use a USB camera, set `source.type: usb`, `source.usb.camera` to its stable ID, `source.usb.format` to `mjpeg` (the default) or `yuyv`, and `source.usb.width`, `source.usb.height`, and `source.usb.fps` to a mode the camera lists in that format. List the connected camera IDs and modes on the DevKit:
 
 ```bash
 source ~/pyneat/bin/activate
@@ -82,7 +82,9 @@ python3 -c "import pyneat; print(pyneat.usb_camera_ids())"
 v4l2-ctl --list-devices && v4l2-ctl -d /dev/video<N> --list-formats-ext
 ```
 
-The camera's own JPEG goes to Insight unchanged as RTP/JPEG, with no re-encoding, so view it with an Insight version that shows JPEG channels. The same JPEG is decoded on the hardware decoder only for the model, in the camera's own sampling: most webcams send 4:2:2 MJPEG, which decodes to NV16, and the model reads it directly. RTP/JPEG carries sizes up to 2040 pixels per side in multiples of 8, so 4K modes are rejected at startup. A 1080p webcam's MJPEG is about 66-90 Mbit/s on the network.
+With `mjpeg`, the camera's own JPEG goes to Insight unchanged as RTP/JPEG, with no re-encoding, so view it with an Insight version that shows JPEG channels. The same JPEG is decoded on the hardware decoder only for the model, in the camera's own sampling: most webcams send 4:2:2 MJPEG, which decodes to NV16, and the model reads it directly. RTP/JPEG carries sizes up to 2040 pixels per side in multiples of 8, so 4K modes are rejected at startup. A 1080p webcam's MJPEG is about 66-90 Mbit/s on the network.
+
+With `source.usb.format: yuyv`, the camera sends uncompressed frames. The model reads them directly, and the video branch converts them to NV12 and encodes them as H.264 for Insight, so YUYV modes need even dimensions up to 3840x2160. Uncompressed frames use more USB bandwidth, so cameras usually list YUYV at lower resolutions or frame rates than MJPEG.
 
 ## Run
 
@@ -129,7 +131,7 @@ writes annotated frames there as it runs.
 ## Troubleshooting
 
 - Verify stream reachability if the first frame times out.
-- For a USB camera, an unknown ID or an unsupported mode fails at startup with the connected IDs or the camera's MJPEG modes; close other programs that hold the camera.
+- For a USB camera, an unknown ID or an unsupported mode fails at startup with the connected IDs or the camera's modes in the selected format; close other programs that hold the camera.
 - Verify the Insight host and UDP ports if video and detections are absent.
 - Check model loading and score thresholds when video arrives without boxes.
 - If the model fails to load, check that `model.path` points to the `_mpk.tar.gz` file unpacked from the download, not to the ZIP file.
