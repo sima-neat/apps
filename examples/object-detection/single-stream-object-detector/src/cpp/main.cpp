@@ -61,9 +61,6 @@ struct AppConfig {
   int video_port_base = 0;
   int metadata_port_base = 0;
   bool ssl_strict = true; // HTTP only.
-  // RTSP only: input.fps was 0, so Core takes the caps from the stream. with_stream_info sets it
-  // before the probe fills fps.
-  bool fps_from_stream = false;
 };
 
 struct CliOptions {
@@ -170,7 +167,8 @@ groups::RtspEncodedInputOptions rtsp_options(const AppConfig& cfg) {
   options.codec = rtsp_codec(cfg);
   options.tcp = cfg.rtsp_tcp;
   options.latency_ms = cfg.rtsp_latency_ms;
-  options.auto_caps_from_stream = cfg.fps_from_stream;
+  // with_stream_info already read the size and rate, so Core uses them as given.
+  options.auto_caps_from_stream = false;
   options.source_fps = cfg.fps;
   if (cfg.codec == "h264") {
     options.fallback_h264_width = cfg.width;
@@ -274,7 +272,6 @@ AppConfig with_stream_info(AppConfig cfg) {
   }
   const auto info = sima_examples::probe_rtsp_stream_info(
       cfg.source, cfg.rtsp_tcp, sima_examples::RtspStreamInfo{cfg.width, cfg.height, cfg.fps});
-  cfg.fps_from_stream = cfg.fps == 0;
   cfg.width = info.width;
   cfg.height = info.height;
   cfg.fps = info.fps;

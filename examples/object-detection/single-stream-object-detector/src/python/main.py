@@ -64,9 +64,6 @@ class AppConfig:
     video_port_base: int
     metadata_port_base: int
     ssl_strict: bool  # HTTP only.
-    # RTSP only: input.fps was 0, so Core takes the caps from the stream. with_stream_info sets
-    # it before the probe fills fps.
-    fps_from_stream: bool = False
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -142,7 +139,8 @@ def rtsp_options(cfg: AppConfig) -> pyneat.RtspEncodedInputOptions:
     options.codec = RTSP_CODECS[cfg.codec]
     options.tcp = cfg.rtsp_tcp
     options.latency_ms = cfg.rtsp_latency_ms
-    options.auto_caps_from_stream = cfg.fps_from_stream
+    # with_stream_info already read the size and rate, so Core uses them as given.
+    options.auto_caps_from_stream = False
     options.source_fps = cfg.fps
     if cfg.codec == "h264":
         options.fallback_h264_width = cfg.width
@@ -247,9 +245,7 @@ def with_stream_info(cfg: AppConfig) -> AppConfig:
         return cfg
     configured = RtspStreamInfo(cfg.width, cfg.height, cfg.fps)
     info = probe_rtsp_stream_info(cfg.source, cfg.rtsp_tcp, configured)
-    return replace(
-        cfg, width=info.width, height=info.height, fps=info.fps, fps_from_stream=cfg.fps == 0
-    )
+    return replace(cfg, width=info.width, height=info.height, fps=info.fps)
 
 
 def decode_boxes(sample: pyneat.Sample, cfg: AppConfig) -> list:

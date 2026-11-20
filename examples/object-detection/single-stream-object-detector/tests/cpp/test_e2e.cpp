@@ -8,15 +8,20 @@
 
 #include <arpa/inet.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <set>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -69,6 +74,31 @@ bool valid_detections(const std::vector<MetadataJsonMessage>& messages,
     }
   }
   return true;
+}
+
+// Each video packet's RTP header, kept until `stop` is set and the socket is empty.
+std::vector<std::array<unsigned char, 12>> drain_video(int socket, const std::atomic<bool>& stop) {
+  const timeval timeout{0, 200000};
+  ::setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+  std::vector<std::array<unsigned char, 12>> headers;
+  std::array<unsigned char, 65536> packet{};
+  while (true) {
+    if (::recv(socket, packet.data(), packet.size(), 0) >= 12) {
+      headers.emplace_back();
+      std::copy_n(packet.begin(), 12, headers.back().begin());
+    } else if (stop) {
+      return headers;
+    }
+  }
+}
+
+// Insight's pairing: the metadata's timestamp on the 90 kHz RTP clock is within 1 ms of a video
+// frame's RTP timestamp.
+bool pairs(int64_t timestamp_ms, const std::set<uint32_t>& rtp_timestamps) {
+  const auto ticks = static_cast<uint32_t>(timestamp_ms * 90);
+  return std::any_of(rtp_timestamps.begin(), rtp_timestamps.end(), [ticks](uint32_t rtp) {
+    return (ticks > rtp ? ticks - rtp : rtp - ticks) <= 90;
+  });
 }
 
 int run_source_case(const std::string& binary, const std::string& model_path,
@@ -136,11 +166,13 @@ int run_source_case(const std::string& binary, const std::string& model_path,
   }
 
   const int timeout_ms = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
+  std::atomic<bool> stop{false};
+  std::vector<std::array<unsigned char, 12>> headers;
+  std::thread drain([&] { headers = drain_video(video_socket, stop); });
   const ProcessResult result =
       spawn_and_wait(binary, {"--config", config_path.string()}, timeout_ms);
-  std::array<unsigned char, 65536> video_packet{};
-  const auto video_bytes =
-      ::recv(video_socket, video_packet.data(), video_packet.size(), MSG_DONTWAIT);
+  stop = true;
+  drain.join();
   ::close(video_socket);
   remove_dir(output_dir);
 
@@ -177,11 +209,26 @@ int run_source_case(const std::string& binary, const std::string& model_path,
                            : source_case.codec == "h265"  ? 98
                            : source_case.codec == "mjpeg" ? 26
                                                           : 96;
-  if (video_bytes <= 12 || (video_packet[0] >> 6) != 2 ||
-      (video_packet[1] & 0x7F) != payload_type) {
+  if (headers.empty() || (headers.front()[0] >> 6) != 2 ||
+      (headers.front()[1] & 0x7F) != payload_type) {
     std::cerr << "[FAIL] " << label << " did not publish RTP video with payload type "
               << payload_type << " to Insight\n";
     return 1;
+  }
+  // Insight draws each message's boxes on the video frame its timestamp names.
+  std::set<uint32_t> rtp_timestamps;
+  for (const auto& header : headers) {
+    rtp_timestamps.insert(static_cast<uint32_t>(header[4]) << 24 | header[5] << 16 |
+                          header[6] << 8 | header[7]);
+  }
+  for (const auto* batch : {&metadata.messages, &following.messages, &rest.messages}) {
+    for (const auto& message : *batch) {
+      if (!pairs(message.timestamp_ms, rtp_timestamps)) {
+        std::cerr << "[FAIL] " << label << " sent metadata timestamp " << message.timestamp_ms
+                  << " that no video frame carries\n";
+        return 1;
+      }
+    }
   }
   std::cout << "[OK] " << label << " sent " << kFrames
             << " frames of detection metadata and Insight video\n";

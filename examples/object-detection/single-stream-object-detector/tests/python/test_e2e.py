@@ -7,6 +7,7 @@ import os
 import socket
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import cv2
@@ -79,6 +80,24 @@ def _keep_only_input_type_keys(config_path: Path, source: dict) -> None:
     config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
 
 
+def _drain_video(sock: socket.socket, stop: threading.Event, headers: list[bytes]) -> None:
+    """Keep each video packet's RTP header until `stop` is set and the socket is empty."""
+    sock.settimeout(0.2)
+    while True:
+        try:
+            headers.append(sock.recv(65536)[:12])
+        except TimeoutError:
+            if stop.is_set():
+                return
+
+
+def _pairs(timestamp_ms: int, rtp_timestamps: set[int]) -> bool:
+    """Insight's pairing: the metadata's timestamp on the 90 kHz RTP clock is within 1 ms of a
+    video frame's RTP timestamp."""
+    ticks = (timestamp_ms * 90) & 0xFFFFFFFF
+    return any(abs(ticks - rtp) <= 90 for rtp in rtp_timestamps)
+
+
 @pytest.mark.e2e
 @pytest.mark.parametrize("source", SOURCE_CASES)
 def test_publishes_insight_video_and_metadata(
@@ -118,15 +137,22 @@ def test_publishes_insight_video_and_metadata(
         socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as video,
     ):
         video.bind(("127.0.0.1", video_port))
-        video.settimeout(5.0)
-        result = subprocess.run(
-            [sys.executable, str(MAIN_PY), "--config", str(config_path)],
-            capture_output=True,
-            text=True,
-            timeout=test_timeout_ms / 1000,
-            cwd=str(EXAMPLE_DIR),
-            check=False,
-        )
+        headers: list[bytes] = []
+        stop = threading.Event()
+        drain = threading.Thread(target=_drain_video, args=(video, stop, headers))
+        drain.start()
+        try:
+            result = subprocess.run(
+                [sys.executable, str(MAIN_PY), "--config", str(config_path)],
+                capture_output=True,
+                text=True,
+                timeout=test_timeout_ms / 1000,
+                cwd=str(EXAMPLE_DIR),
+                check=False,
+            )
+        finally:
+            stop.set()
+            drain.join()
         assert result.returncode == 0, (
             f"exited with {result.returncode}\nstdout:\n{result.stdout}\n"
             f"stderr:\n{result.stderr}"
@@ -135,14 +161,14 @@ def test_publishes_insight_video_and_metadata(
         following = listener.wait_for_messages(5.0)
         # The rest of the run's messages, so the checks below see every frame it sent.
         rest = listener.drain_pending()
-        video_packet = video.recv(65536)
 
     assert f"processed={FRAMES} " in result.stdout, result.stdout
     assert metadata.success, metadata.error
     assert following.success, following.error
     first, last = metadata.messages[-1], following.messages[-1]
     assert int(last.frame_id) > int(first.frame_id)
-    for message in metadata.messages + following.messages + rest.messages:
+    messages = metadata.messages + following.messages + rest.messages
+    for message in messages:
         for entry in json.loads(message.payload)["data"]["objects"]:
             assert entry["label"] in LABELS, entry
             assert entry["confidence"] >= MIN_SCORE, entry
@@ -150,5 +176,9 @@ def test_publishes_insight_video_and_metadata(
     # go to Insight as received; decoded HTTP frames are encoded as H.264 (96).
     codec = "mjpeg" if source["type"] == "usb" else source.get("codec")
     payload_type = 96 if source["type"] == "http" else {"h264": 96, "h265": 98, "mjpeg": 26}[codec]
-    assert len(video_packet) > 12 and video_packet[0] >> 6 == 2
-    assert video_packet[1] & 0x7F == payload_type
+    assert headers and len(headers[0]) == 12 and headers[0][0] >> 6 == 2
+    assert headers[0][1] & 0x7F == payload_type
+    # Insight draws each message's boxes on the video frame its timestamp names.
+    rtp_timestamps = {int.from_bytes(header[4:8], "big") for header in headers}
+    unpaired = [m.timestamp_ms for m in messages if not _pairs(m.timestamp_ms, rtp_timestamps)]
+    assert not unpaired, f"metadata timestamps with no video frame: {unpaired[:5]}"
