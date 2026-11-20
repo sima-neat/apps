@@ -40,6 +40,22 @@ Every page follows [TEMPLATE.md](TEMPLATE.md).
 - [Model::RouteOptions](model/routes.md): using a model as a stage of a larger `Graph`, and the hand-built route nodes
 - [Model::benchmark](model/benchmark.md): measuring a model's latency, throughput and power on the board
 
+### Inputs
+
+- [Input](inputs/input-node.md): `nodes::Input`, `InputOptions`, `InputMemoryPolicy`, `PayloadType`, pushing frames from the application
+- [RTSP inputs](inputs/rtsp.md): `RtspDecodedInput`, `RtspEncodedInput`, `RtspCodec`, reading an IP camera stream
+- [Cameras](inputs/cameras.md): `CameraInput`, `UsbCameraInput`, `HttpMjpegDecodedInput`, reading MIPI, USB and HTTP MJPEG cameras
+- [Decode and caps](inputs/decode-and-caps.md): `SimaDecode`, `CapsRaw`, `CapsMemory`, `VideoConvert`, `VideoScale`, `VideoRate`, decoding and fixing the frame format
+- [PCIe](inputs/pcie.md): `PCIeSrc`, receiving streams from the PC that a Modalix PCIe card is plugged into
+
+### Outputs, GenAI and measuring
+
+- [Output](outputs/output-node.md): `nodes::Output`, `OutputOptions` and its presets, `CombinePolicy`, reading results with `pull()`
+- [VideoSender](outputs/video-sender.md): sending video to Insight with `FromRaw` or `Passthrough`, `SimaEncode`, `UdpOutput`
+- [MetadataSender](outputs/metadata-sender.md): sending boxes, masks and poses to Insight as JSON over UDP
+- [GenAI](outputs/genai.md): `GenAIServer`, `VisionLanguageModel`, `ASRModel`, `GenerationRequest` and the GenAI graph fragments
+- [Measuring](outputs/measuring.md): `MeasureOptions` and `start_measurement()` for a run, `TelemetryMonitor` for board power, temperature and memory
+
 ## How C++ names map to Python names
 
 The C++ API lives in the `simaai::neat` namespace. The Python API is the
@@ -90,3 +106,5 @@ API, update the page and its commit.
 - Take the C++ column from the header and the Python column from the bindings.
 - Keep each code block to 10 lines or fewer.
 - Link to a shipped example for the complete flow.
+- Do not document environment variables such as `SIMA_*`. They are internal
+  Core switches, not supported API. Give the API-level fix instead.

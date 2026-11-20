@@ -1,0 +1,75 @@
+# The config.yaml keys that examples share, one entry per dotted key path.
+#
+# An example uses these names for the settings listed here, and puts every setting that only
+# it has under `app.`, such as `app.decoder_buffers`. When a converted example needs a shared
+# setting that is not listed, add it here in the same pull request.
+# tests/scripts/test_config_keys.py checks the config files of every converted example.
+#
+# Types: string, integer, number, boolean, string_list (a list of strings, or one string).
+
+model.path:
+  type: string
+  meaning: Compiled model package (.tar.gz). A relative path starts at the config file.
+model.id:
+  type: string
+  meaning: Which model variant model.path holds, when an example supports several, such as det-small. The example's config lists its IDs.
+model.labels:
+  type: string
+  meaning: Class-label file with one label per line. A relative path starts at the working directory.
+
+input.type:
+  type: string
+  meaning: Input kind the config sets, such as rtsp, http, or usb, for an example that takes several. Only the keys of that kind are read.
+input.source:
+  type: string_list
+  meaning: Input streams, one RTSP URL per stream. The same URL may repeat.
+input.codec:
+  type: string
+  meaning: Encoded video format of every input stream, such as h264, h265, or mjpeg. The example's config lists the formats it decodes.
+input.width:
+  type: integer
+  meaning: Frame width, in pixels. For RTSP, 0 reads each stream's width with a probe, the recommended setting, and a value is set only for a stream that does not report it. For USB, the width of one of the camera's modes.
+input.height:
+  type: integer
+  meaning: Frame height, in pixels, read and set like input.width.
+input.fps:
+  type: integer
+  meaning: Frame rate. For RTSP, 0 reads each stream's rate with a probe, and a value fixes the rate of every stream. For USB, the rate of one of the camera's modes.
+input.rtsp.tcp:
+  type: boolean
+  meaning: Receive RTSP over TCP instead of UDP.
+input.rtsp.latency_ms:
+  type: integer
+  meaning: RTSP jitter buffer, in milliseconds.
+
+inference.frames:
+  type: integer
+  meaning: Frames to process before the application stops. 0 runs until interrupted.
+inference.min_score:
+  type: number
+  meaning: Lowest score a detection needs, from 0 to 1.
+inference.nms_iou:
+  type: number
+  meaning: Overlap at which non-maximum suppression drops the weaker box, from 0 to 1.
+inference.max_detections:
+  type: integer
+  meaning: Detections kept per frame.
+inference.max_inflight_per_stream:
+  type: integer
+  meaning: Frames of one stream the shared model holds at once.
+inference.max_inflight_total:
+  type: integer
+  meaning: Frames of all streams the shared model holds at once.
+
+output.video_enabled:
+  type: boolean
+  meaning: Send each stream's video to Insight. false sends only the metadata.
+output.insight.host:
+  type: string
+  meaning: Address of the machine running Insight.
+output.insight.video_port_base:
+  type: integer
+  meaning: UDP port of stream 0's video. Stream i uses this port + i.
+output.insight.metadata_port_base:
+  type: integer
+  meaning: UDP port of stream 0's metadata. Stream i uses this port + i.

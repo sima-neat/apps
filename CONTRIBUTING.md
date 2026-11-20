@@ -57,8 +57,20 @@ The validator requires these sections in order:
 9. `Source Files`
 10. `Development From Source`
 
-Optional sections such as `Expected Result` and `Troubleshooting` belong where
-they support that sequence.
+Each section is one step the customer takes, in that order, and every command
+runs as written from `prebuilt-apps/`. Optional sections go in these places:
+
+- a `Prepare <input>` section, such as `Prepare Insight`, after `Prepare the Model`
+- `Expected Result`, `Troubleshooting`, and `Performance` after `Run`
+
+Keep each section minimal and precise. `Concept` starts with the one- or
+two-sentence portal summary, then shows the graph topology as a flowgraph in a
+`text` code block, drawn as `agents/references/flowgraph.md` describes: the
+inputs, decoders, models, outputs, and senders the entrypoint connects, and the
+link policies between them. `Configure` names only the keys the
+customer edits, one bullet each, with the value or where it comes from. Explain
+behavior in `Concept`, and list error messages with their fixes in
+`Troubleshooting`.
 
 The installed workflow must:
 
@@ -80,13 +92,17 @@ Each example README must identify:
 - its default model
 - every additional model explicitly supported by its preprocessing and
   postprocessing path
-- whether each model comes from Model Zoo, a direct artifact, or an
-  example-specific installer
+- whether each model comes from the model browser, Model Zoo, a direct
+  artifact, or an example-specific installer
 - the corresponding `sima-cli` command when that source supports it
 - the downloaded package selected by `model.path`
 
-Use `models/` for user-managed packages. Model downloads use the Model Zoo
-version, which can differ from the installed platform version. Take it from
+Use `models/` for user-managed packages. When a model is in the
+[model browser](https://developer.sima.ai/models/), download it from there
+with `sima-cli models download --id <model-id> --variant <variant>` and list
+only the variants the browser offers. Use the Model Zoo only for a model the
+browser does not have. Model Zoo downloads use the Model Zoo version, which
+can differ from the installed platform version. Take it from
 `modelzoo-version` in `deps/manifest.json`, and keep the literal documented in
 example READMEs in sync with that field.
 
@@ -127,6 +143,10 @@ to it and name only the settings they must change. Do not copy the full file
 into the README. A focused snippet is appropriate only for an override or
 generated configuration that the package does not provide.
 
+Config files use the key names in `examples/config-keys.yaml` and put settings
+only one example has under `app.`. Every key is required, and the application
+rejects keys it does not read.
+
 Bundle instructions run from `prebuilt-apps/`. Define
 `APP_DIR=examples/<category>/<example>` once and reuse it so commands remain
 readable without changing relative model, asset, label, or output paths.
@@ -139,10 +159,17 @@ artifacts required by e2e coverage.
 
 ```yaml
 models:
-  model_id:
-    source: modelzoo
+  model_id:              # a model in the model browser
+    source: model-registry
     name: model_name
-    file: model_name_mpk.tar.gz
+    ref: main
+    spec: latest
+    variant: w8a8
+    file: model_name_w8a8_mpk.tar.gz
+  other_model_id:        # a model only the Model Zoo has
+    source: modelzoo
+    name: other_model_name
+    file: other_model_name_mpk.tar.gz
 unit:
   python: true
   cpp: true
@@ -220,6 +247,9 @@ generation, and affected CI workflows.
 | `examples/<category>/<example>/src/cpp/` | C++ implementation reference |
 | `examples/<category>/<example>/src/python/` | Python implementation and dependencies |
 | `examples/<category>/<example>/src/common/` | Shared runtime configuration and data |
+| `support/README.md` | What each shared helper does |
+| `support/python/` | Helpers the Python examples share |
+| `support/cpp/` | Source of the helpers the C++ executables are built with, as reference |
 | `assets/datasets/` | Shipped runtime sample data |
 | `models/` | User-managed model packages |
 | `deps/neat-apps.json` | Installed Apps ref and exact commit |
@@ -233,6 +263,10 @@ to compile source or run the Apps test suite.
 | Path | Purpose |
 | --- | --- |
 | `examples/` | Application examples organized by category |
+| `examples/config-keys.yaml` | Config keys the examples share, checked by `tests/scripts/test_config_keys.py` |
+| `support/` | The shared library: code two or more examples need, under the same file and function names in each language. `support/README.md` lists the modules, and `agents/rules.md` says what goes there instead of an example's `utils/` |
+| `skills/` | Customer skills that sima-cli installs |
+| `agents/` | Rules and skills for contributors' agents and the automatic review |
 | `assets/datasets/` | Runtime datasets shipped with Apps |
 | `assets/datasets-test/` | Repository-only test fixtures |
 | `models/` | Ignored user-managed model packages |

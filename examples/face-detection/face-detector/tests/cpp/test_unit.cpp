@@ -1,5 +1,5 @@
 // Unit test for face-detector: validates CLI arg handling.
-#include "support/testing/test_process.h"
+#include "sima_examples/testing/test_process.h"
 
 #include <iostream>
 #include <string>

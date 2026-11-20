@@ -16,9 +16,10 @@
 #include "neat/models.h"
 #include "neat/node_groups.h"
 #include "neat/nodes.h"
-#include "support/runtime/config_utils.h"
-#include "support/runtime/example_utils.h"
-#include "support/runtime/pull_status.h"
+#include "sima_examples/config.h"
+#include "sima_examples/example_utils.h"
+#include "sima_examples/rtsp_probe.h"
+#include "sima_examples/pull_status.h"
 
 #include <nodes/groups/VideoSender.h>
 #include <nodes/io/MetadataSender.h>
@@ -154,7 +155,7 @@ simaai::neat::nodes::groups::RtspCodec parse_codec(std::string value) {
   throw std::runtime_error("input.codec must be h264/avc, h265/hevc, or mjpeg");
 }
 
-// ScalarConfig reads scalars only, so the `streams:` list is read here.
+// Config reads scalars only, so the `streams:` list is read here.
 std::vector<std::string> parse_streams(const fs::path& config_path) {
   std::ifstream input(config_path);
   std::vector<std::string> streams;
@@ -209,7 +210,7 @@ void validate_config(const AppConfig& cfg) {
 }
 
 AppConfig load_app_config(const fs::path& config_path) {
-  const auto raw = sima_examples::ScalarConfig::load(config_path);
+  const auto raw = sima_examples::Config::load(config_path);
   const auto default_labels =
       fs::path(SIMANEAT_APPS_EXAMPLE_SOURCE_DIR).parent_path() / "common" / "dota_label.txt";
 

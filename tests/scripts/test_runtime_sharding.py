@@ -374,6 +374,83 @@ def test_registry_latest_bypasses_persistent_cache():
     )
 
 
+REGISTRY_MODEL = {
+    "source": "model-registry",
+    "name": "demo",
+    "ref": "main",
+    "spec": "latest",
+    "variant": "w8a8",
+    "file": "model.tar.gz",
+}
+
+
+def _registry_listing(monkeypatch, builds, *, fail=False):
+    commands = []
+
+    def run(command, **_):
+        commands.append(command)
+        if fail:
+            raise subprocess.CalledProcessError(1, command)
+        stdout = "notice before the document\n" + json.dumps({"models": builds})
+        return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+
+    monkeypatch.setenv("SIMA_CLI_BIN", "sima-cli")
+    monkeypatch.setattr(cache.subprocess, "run", run)
+    return commands
+
+
+def _build(run_id, variant="w8a8"):
+    return {
+        "id": run_id,
+        "sha256": f"sha-{run_id}",
+        "metadata": {"model_id": "demo", "variant_id": variant},
+    }
+
+
+def test_registry_variant_identity_is_the_served_build(monkeypatch):
+    commands = _registry_listing(monkeypatch, [_build("run-1"), _build("other", "w16a16")])
+    staging = {**REGISTRY_MODEL, "ref": "feat/x", "file": "staging.tar.gz"}
+
+    identities = cache.registry_identities(
+        {"model.tar.gz": REGISTRY_MODEL, "staging.tar.gz": staging}
+    )
+
+    assert identities["model.tar.gz"] == {
+        "model": REGISTRY_MODEL,
+        "run_id": "run-1",
+        "package_sha256": "sha-run-1",
+    }
+    assert commands == [
+        ["sima-cli", "models", "list", "--stg", "--branch", "feat/x", "--json"],
+        ["sima-cli", "models", "list", "--branch", "main", "--json"],
+    ]
+
+
+@pytest.mark.parametrize(
+    ("builds", "fail"),
+    [([], False), ([_build("run-1"), _build("run-2")], False), ([_build("run-1")], True)],
+    ids=["missing", "ambiguous", "listing-failed"],
+)
+def test_unidentified_registry_variant_bypasses_cache(monkeypatch, builds, fail):
+    _registry_listing(monkeypatch, builds, fail=fail)
+    assert cache.registry_identities({"model.tar.gz": REGISTRY_MODEL}) == {}
+
+
+def test_registry_variant_is_reused_until_its_build_changes(acquisition, monkeypatch):
+    prepare, downloads, _, scope = acquisition
+    scope["examples"]["example"]["models"]["m"] = REGISTRY_MODEL
+    builds = [_build("run-1")]
+    listings = _registry_listing(monkeypatch, builds)
+
+    assert prepare(1)["hits"] == 0
+    # One listing per run: the download is published without asking again.
+    assert len(listings) == 1
+    assert prepare(2)["hits"] == 1
+    builds[0] = _build("run-2")
+    assert prepare(3)["hits"] == 0
+    assert len(downloads) == 2
+
+
 @pytest.mark.parametrize("rtsp", [False, True])
 @pytest.mark.parametrize("excluded_status", ["online", "offline"])
 @pytest.mark.parametrize("busy", [False, True])

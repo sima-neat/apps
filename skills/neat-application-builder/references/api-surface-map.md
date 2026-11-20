@@ -1,124 +1,76 @@
 # API Surface Map
 
-Use the relevant section to locate a public API in matching Core source. Paths
-below are relative to that source root; installed headers provide the callable
-contract and mark deprecated APIs. Read only the headers and docs needed for the
-task.
+Where each public API lives in Core source of the installed version. Paths are relative to the
+source root. The installed headers are the callable contract and mark deprecated APIs.
 
-## Contents
+## Application surface
 
-- Core Application Surface
-- Data And Boundary Types
-- Nodes And Graph Fragments
-- Model Pre/Post And Decode Helpers
-- GenAI Surface
-- Diagnostics And Measurement
-- Python Surface
+- Entry point and development loop: `include/neat.h`, `docs/develop-apps/development-workflow/index.md`
+- Generated C++ and Python reference: `docs/reference/`
+- `Model`, `Model::Options`, `Model::RouteOptions`, `Model::Runner`: `include/model/Model.h`,
+  `docs/develop-apps/development-workflow/model.mdx`
+- `Graph`, `GraphOptions`, `GraphLinkOptions`, validation, save and load:
+  `include/pipeline/Graph.h`, `include/pipeline/GraphOptions.h`,
+  `docs/develop-apps/development-workflow/graph.mdx`, and
+  `docs/develop-apps/advanced-concepts/application-design/graphs.md` for branching and joining
+- `Run`, `RunOptions`, `OutputMemory`, push and pull, close and drain:
+  `include/pipeline/Run.h`, `docs/develop-apps/development-workflow/overview.mdx`,
+  `docs/develop-apps/development-workflow/pipeline.mdx`
 
-## Core Application Surface
+## Data types
 
-- Application entry point and development loop
-  - Inspect `include/neat.h`
-  - Read `docs/develop-apps/development-workflow/index.md`
-- Generated C++ and Python API reference
-  - Read `docs/reference/`
-- `Model`, `Model::Options`, `Model::RouteOptions`, and `Model::Runner`
-  - Inspect `include/model/Model.h`
-  - Read `docs/develop-apps/development-workflow/model.mdx`
-- `Graph`, `GraphOptions`, graph link policies, validation, save/load, describe helpers, and RTSP serving
-  - Inspect `include/pipeline/Graph.h`
-  - Inspect `include/pipeline/GraphOptions.h`
-  - Read `docs/develop-apps/development-workflow/graph.mdx`
-  - Read `docs/develop-apps/advanced-concepts/application-design/graphs.md` for graph composition details
-- `Run`, `RunOptions`, `OutputMemory`, push/pull, endpoint names, measurement, and close/drain behavior
-  - Inspect `include/pipeline/Run.h`
-  - Read `docs/develop-apps/development-workflow/overview.mdx`
-  - Read `docs/develop-apps/development-workflow/pipeline.mdx` for the built pipeline and runtime view
+- `Tensor`, `TensorList`, `TensorSpec`, dtype, layout, pixel formats, OpenCV and NumPy
+  adapters: `include/pipeline/Tensor.h`, `TensorCore.h`, `TensorSpec.h`, `TensorTypes.h`,
+  `docs/develop-apps/development-workflow/core_types.mdx`,
+  `docs/develop-apps/advanced-concepts/data-model-contracts/data_formats.md`
+- `Sample`, frame identity, and `Sample::attributes`: `include/pipeline/GraphOptions.h`,
+  `docs/develop-apps/advanced-concepts/data-model-contracts/frame_attributes.md`
+- Memory placement between stages:
+  `docs/develop-apps/advanced-concepts/data-model-contracts/memory_model.md`
+- Encoded media and payload types: `include/pipeline/EncodedSampleUtil.h`,
+  `include/pipeline/PayloadType.h`, `include/pipeline/FormatSpec.h`
 
-## Data And Boundary Types
+## Nodes and node groups
 
-- `Tensor`, `TensorList`, `TensorSpec`, dtype/layout/pixel-format helpers, and OpenCV/NumPy adapters
-  - Inspect `include/pipeline/Tensor.h` (`TensorList`), `include/pipeline/TensorCore.h`, `include/pipeline/TensorSpec.h`, and `include/pipeline/TensorTypes.h`
-  - Read `docs/develop-apps/development-workflow/core_types.mdx`
-  - Read `docs/develop-apps/advanced-concepts/data-model-contracts/data_formats.md` for data and media format contracts
-- `Sample`, bundles, frame IDs, timestamps, and metadata-carrying payloads
-  - Inspect `Sample` in `include/pipeline/GraphOptions.h`
-  - Read `docs/develop-apps/development-workflow/core_types.mdx`
-- Per-frame string attributes that must stay attached through decode and graph branches
-  - Inspect `Sample::attributes` in `include/pipeline/GraphOptions.h`
-  - Read `docs/develop-apps/advanced-concepts/data-model-contracts/frame_attributes.md`
-- Memory placement between stages
-  - Read `docs/develop-apps/advanced-concepts/data-model-contracts/memory_model.md`
-- Encoded media helpers and payload types
-  - Inspect `include/pipeline/EncodedSampleUtil.h`
-  - Inspect `include/pipeline/PayloadType.h`
-  - Inspect `include/pipeline/FormatSpec.h`
+- Umbrella includes: `include/neat/nodes.h`, `include/neat/node_groups.h`,
+  `docs/develop-apps/development-workflow/node.mdx`
+- `nodes::Input`, `nodes::Output`, `nodes::Queue`, and other common nodes:
+  `include/nodes/io/Input.h`, `include/nodes/common/`
+- Cameras, images, video, RTSP, HTTP, UDP, and `MetadataSender`: `include/nodes/io/`,
+  `docs/reference/nodes/camera-input.mdx`, and
+  `docs/develop-apps/advanced-concepts/application-design/`
+- Node groups such as `RtspEncodedInput`, `RtspDecodedInput`, `VideoSender`, and
+  `ImageInputGroup`: `include/nodes/groups/`
+- `SimaDecode` and `SimaEncode` for H.264, H.265, JPEG, and MJPEG:
+  `include/nodes/sima/SimaDecode.h`, `include/nodes/sima/SimaEncode.h`
+- Other fixed-function nodes: `include/nodes/sima/`
+- LiDAR voxelization and bird's-eye view: `docs/reference/lidar_bev_kernel_nodes.md`
 
-## Nodes And Graph Fragments
+## Preprocessing and decoding
 
-- Public node umbrella includes
-  - Inspect `include/neat/nodes.h`
-  - Inspect `include/neat/node_groups.h`
-  - Read `docs/develop-apps/development-workflow/node.mdx` for public nodes and node groups
-- Boundary nodes and common graph nodes
-  - Inspect `include/nodes/io/Input.h` (including `InputMemoryPolicy`) and `include/nodes/common/`
-- Camera, image, video, RTSP, HTTP, UDP, and metadata I/O
-  - Inspect `include/nodes/io/` (`CameraInput.h`, `UsbCameraInput.h`, `RTSPInput.h`, `HttpSource.h`, `StillImageInput.h`, `UdpOutput.h`, `MetadataSender.h`)
-  - Read `docs/develop-apps/advanced-concepts/application-design/` for `mipi-camera-input.md`, `usb-camera-input.md`, `video_sender.md`, and `metadata_sender.md`
-  - Read `docs/reference/nodes/camera-input.mdx` for camera options and errors
-- Pre-built node groups for common application plumbing
-  - Inspect `include/nodes/groups/*.h`
-  - Start with `RtspEncodedInput.h`, `RtspDecodedInput.h`, `RtspCodec.h`, `VideoSender.h`, `ImageInputGroup.h`, and `ModelGroups.h`
+- Preprocessing options: `include/model/PreprocessPlan.h`, `include/nodes/sima/Preproc.h`
+- Box decoding and detection types: `include/pipeline/DetectionTypes.h`, `BoxDecodeType.h`,
+  `BoxDecodeOptions.h`, `SuperPointTypes.h`, `include/nodes/sima/SimaBoxDecode.h`,
+  `docs/reference/boxdecode_decode_types.md`
 
-## Model Pre/Post And Decode Helpers
+## GenAI
 
-- Preprocess and model route options
-  - Inspect `include/model/PreprocessPlan.h`
-  - Inspect `include/nodes/sima/Preproc.h`
-- Detection and segmentation decode helpers
-  - Inspect `include/pipeline/DetectionTypes.h`
-  - Inspect `include/pipeline/BoxDecodeType.h`
-  - Inspect `include/pipeline/BoxDecodeOptions.h`
-  - Inspect `include/pipeline/SuperPointTypes.h`
-  - Inspect `include/nodes/sima/SimaBoxDecode.h`
-  - Read `docs/reference/boxdecode_decode_types.md`
-  - Treat `BoxDecodeType::Ssd` as a selector for the supported prepared SSD recipes, not as a generic shape-inferred SSD decoder
-  - Inspect the SuperPoint profile and output format instead of decoding its result layout from tensor shape alone
-  - `decode_superpoint` keypoints are model-input pixels, not source-frame pixels, until sima-neat/core#1328 is fixed; map them onto the source frame with the width and height of `Model::resolved_preprocess_plan().mla_contract` before drawing, as `examples/feature-extraction/superpoint-feature-extractor` does
-- Native H.264, H.265/HEVC, JPEG, and MJPEG decoding and encoding
-  - Inspect `include/nodes/sima/SimaDecode.h` and `include/nodes/sima/SimaEncode.h`
-  - Prefer codec-neutral `payload_type`, `VideoSenderOptions::FromRaw(...)`, and `VideoSenderOptions::Passthrough(codec)` in new encoded-media code
-- LiDAR voxelization and bird's-eye-view nodes
-  - Read `docs/reference/lidar_bev_kernel_nodes.md`
-- Fixed-function Sima nodes when composing lower-level graph routes
-  - Inspect `include/nodes/sima/*.h`
+- `include/neat/genai.h`, `include/genai/`, and
+  `docs/develop-apps/development-workflow/genai-model/` (`index.mdx`, `direct-api.mdx`,
+  `genai-server.mdx`)
 
-## GenAI Surface
+## Diagnostics and measurement
 
-- GenAI umbrella include, task model APIs, serving, and graph fragments
-  - Inspect `include/neat/genai.h` and `include/genai/`
-  - Read `docs/develop-apps/development-workflow/genai-model/index.mdx`
-  - Read `docs/develop-apps/development-workflow/genai-model/direct-api.mdx`
-  - Read `docs/develop-apps/development-workflow/genai-model/genai-server.mdx`
+- Errors and graph reports: `include/pipeline/NeatError.h`, `GraphReport.h`, `ErrorCodes.h`,
+  `docs/reference/error-codes.md`
+- `Graph::validate`, `describe`, `describe_backend`, `save`, `load`: `include/pipeline/Graph.h`
+- `Model::execution_plan`, `BenchmarkOptions`, `BenchmarkReport`: `include/model/Model.h`,
+  `include/pipeline/ExecutionPlan.h`
+- `Run::start_measurement`, `MeasureScope`, `MeasureReport`: `include/pipeline/Run.h`
+- `TelemetryMonitor`: `include/pipeline/TelemetryMonitor.h`
 
-## Diagnostics And Measurement
+## Python
 
-- Structured errors, graph reports, and error code taxonomy
-  - Inspect `include/pipeline/NeatError.h`
-  - Inspect `include/pipeline/GraphReport.h`
-  - Inspect `include/pipeline/ErrorCodes.h`
-  - Read `docs/reference/error-codes.md`
-- Graph inspection helpers
-  - Inspect `Graph::validate`, `Graph::describe`, `Graph::describe_backend`, `Graph::save`, and `Graph::load` in `include/pipeline/Graph.h`
-- Model execution plan and benchmark
-  - Inspect `Model::execution_plan`, `BenchmarkOptions`, and `BenchmarkReport` in `include/model/Model.h`, and `include/pipeline/ExecutionPlan.h`
-- Application measurement and board telemetry
-  - Inspect `MeasureScope`, `MeasureReport`, and `Run::start_measurement` in `include/pipeline/Run.h`
-  - Inspect `include/pipeline/TelemetryMonitor.h`
-
-## Python Surface
-
-- Python bindings mirror the public C++ application concepts but names and helper methods can differ.
-- Inspect `python/src/module.cpp` in Core source for binding truth.
-- Read `docs/reference/pythonapi/` when present in the installed docs.
-- For NumPy/image interop, inspect binding definitions for `Tensor`, `ModelOptions`, `RunOptions`, `GenAIModel`, and `GenAIServer`.
+Python bindings follow the C++ concepts, but names and helper methods can differ.
+`python/src/module.cpp` is the binding source, and `docs/reference/pythonapi/` documents it
+when the installed docs include it.

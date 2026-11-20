@@ -16,6 +16,10 @@
 
 <In one or two plain-English sentences, say what the application does and produces. Name the main model or model family when useful. Keep this paragraph under 200 characters because the portal uses it as the card summary.>
 
+```text
+<Flowgraph of the graph topology, drawn as agents/references/flowgraph.md describes.>
+```
+
 ## Preview
 
 Add an application-specific image under `portal/assets/examples/<category>/<example>/`.
