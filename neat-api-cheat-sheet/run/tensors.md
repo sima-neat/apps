@@ -105,7 +105,7 @@ value.
 |---|---|---|---|---|---|
 | Auto | `OutputMemory::Auto` | `pyneat.OutputMemory.Auto` | the default | Retains standard DMA-BUF output storage and certified CPU-only terminal pools; other storage follows the preset's policy. | Leave it unless you know which of the two you want. The preset decides: `Realtime` and `Balanced` default to sharing storage, `Reliable` does not. |
 | ZeroCopy | `OutputMemory::ZeroCopy` | `pyneat.OutputMemory.ZeroCopy` | — | Pulled tensors share the producer's storage. Retained tensors and their mappings hold producer-buffer loans. | The fast path, and what every realtime example picks. Choose it when you consume each frame promptly and release it. |
-| Owned | `OutputMemory::Owned` | `pyneat.OutputMemory.Owned` | — | Copies into independent framework-owned DMA-BUF storage, holding no producer loan. | Choose it when a pulled tensor must outlive its frame — buffering results, handing them to another thread, or keeping a history. Pay one copy to stop worrying about loans. |
+| Owned | `OutputMemory::Owned` | `pyneat.OutputMemory.Owned` | — | Copies into independent framework-owned system memory, holding no producer loan and using no device (CMA) memory. | Choose it when a pulled tensor must outlive its frame — buffering results, handing them to another thread, or keeping a history. Pay one copy to stop worrying about loans. |
 
 ### Reading and writing
 
@@ -235,4 +235,4 @@ not. Cast before pushing.
   `nb::enum_<TensorMemory>`, `nb::enum_<OutputMemory>`;
   `python/pyneat/_wrappers.py` for `from_numpy`, `to_numpy`, `from_torch`,
   `to_torch`, `from_dlpack`, `from_list`
-- Core commit: `bce80cb6`
+- Core commit: `c68a5241`

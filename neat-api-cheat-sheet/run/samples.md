@@ -35,6 +35,7 @@ C++
 
 ```cpp
 const auto status = run.pull("detections", 0, sample, &err);
+if (status != simaai::neat::PullStatus::Ok) { return {}; } // nothing to read yet
 // Bundles carry one field per logical output; pick yours by label.
 for (const simaai::neat::Sample& field : sample.fields) {
   if (field.stream_label == "frame") {
@@ -48,6 +49,8 @@ Python
 
 ```python
 sample = run.pull("detections", 0)
+if sample is None:  # a timeout, or end of stream if can_pull() is False
+    return None
 # tensors_from_sample is not bound; walk the union yourself.
 if sample.kind == pyneat.SampleKind.Bundle:
     sample = next(f for f in sample.fields if f.stream_label == "frame")
@@ -196,4 +199,4 @@ arithmetic.
   `nb::enum_<SampleKind>`, `nb::bind_map<SampleAttributes>`,
   `make_tensor_sample`, `make_text_sample`, `make_encoded_sample`;
   `python/pyneat/_wrappers.py`, `Sample.from_encoded`
-- Core commit: `bce80cb6`
+- Core commit: `c68a5241`

@@ -25,8 +25,8 @@ Set only `preset` when your application fits one of the three shapes: a live
 camera or RTSP feed (`Realtime`), a mixed workload (`Balanced`), or a file or
 dataset where losing a frame is unacceptable (`Reliable`). Set the individual
 fields when you need a depth or a policy the preset does not give you — but
-read the pitfall below first, because an explicit value that happens to equal
-the struct default is ignored.
+read the pitfall below first, because an explicit `queue_depth` of 4 is
+indistinguishable from leaving it unset.
 
 For a one-shot "one frame in, one result out" call, use `Graph::run(...)`
 instead of building a `Run` and pushing to it.
@@ -38,9 +38,9 @@ C++
 ```cpp
 simaai::neat::RunOptions run_options;
 run_options.preset = simaai::neat::RunPreset::Realtime;
-run_options.queue_depth = 3;
-run_options.overflow_policy = simaai::neat::OverflowPolicy::KeepLatest;
+run_options.queue_depth = 16; // any value but 4; see Pitfalls
 run_options.output_memory = simaai::neat::OutputMemory::ZeroCopy;
+// overflow_policy stays Auto, which Realtime resolves to KeepLatest.
 auto run = graph.build(run_options);
 ```
 
@@ -48,8 +48,9 @@ Python
 
 ```python
 run_opt = pyneat.RunOptions()
-run_opt.queue_depth = 3
-run_opt.overflow_policy = pyneat.OverflowPolicy.Block
+run_opt.preset = pyneat.RunPreset.Realtime
+run_opt.queue_depth = 16
+run_opt.output_memory = pyneat.OutputMemory.ZeroCopy
 run = graph.build(run_opt)
 ```
 
@@ -61,48 +62,43 @@ Complete flow: [high-density-multi-stream-object-detector](../../examples/object
 
 | Option | C++ | Python | Default | What it does | Why and when to change it |
 |---|---|---|---|---|---|
-| Preset | `preset` | `preset` | `RunPreset::Balanced` | Sets `queue_depth` and `overflow_policy` together, and decides whether output storage is shared by default. | Set `Realtime` for a live camera or RTSP feed, where a late frame is worthless. Set `Reliable` for a file or dataset run, where dropping a frame corrupts the result. |
+| Preset | `preset` | `preset` | `RunPreset::Balanced` | Sets the default `queue_depth`, decides whether output storage is shared, and decides what `OverflowPolicy::Auto` resolves to. | Set `Realtime` for a live camera or RTSP feed, where a late frame is worthless. Set `Reliable` for a file or dataset run, where dropping a frame corrupts the result. |
 | Queue depth | `queue_depth` | `queue_depth` | `4` (then overridden by the preset — see Pitfalls) | Capacity of the ingress and internal runtime queues, and of framework-created output queues. | Deeper for a jittery source that arrives in bursts; shallower to cut latency. A public `Output` node's `OutputOptions::max_buffers` wins for its own terminal queue. |
-| Overflow policy | `overflow_policy` | `overflow_policy` | `OverflowPolicy::Block` (then overridden by the preset — see Pitfalls) | Chooses what happens when a queue is full. It applies to `try_push()` at ingress and to the output side. It does **not** apply to `push()`, which always waits. | Set `KeepLatest` and call `try_push()` for a live source, so a stale frame is dropped instead of stalling the caller. Leave it `Block` when every frame must be processed. A public `Output` node uses its own `OutputOptions::drop` for its terminal queue. See [push-and-pull.md](push-and-pull.md). |
+| Overflow policy | `overflow_policy` | `overflow_policy` | `OverflowPolicy::Auto` | Chooses what happens when a queue is full. It applies to `try_push()` at ingress and to whether the run's own output queue drops results. It does **not** apply to `push()`, which always waits. `Auto` means `KeepLatest` under the `Realtime` preset and `Block` under the others. | Leave it `Auto` and let the preset decide. Set an explicit value only to override the preset — for example `KeepLatest` with `Balanced`. An explicit value is always kept. A public `Output` node uses its own `OutputOptions::drop` for its terminal queue. Values are listed in [queues-and-overflow.md](../graph/queues-and-overflow.md); which call reads them is in [push-and-pull.md](push-and-pull.md). |
 | Output memory | `output_memory` | `output_memory` | `OutputMemory::Auto` | Whether pulled tensors share the producer's buffer or are copied into framework storage. | See [tensors.md](tensors.md); `ZeroCopy` is the fast path and the one that can stall the pipeline if you hold tensors too long. |
-| Input timeout | `input_timeout_ms` | `input_timeout_ms` | `-1` (framework default) | Default pull timeout for `build()`/`run()` input-mode paths. | Leave it; pass an explicit `timeout_ms` to the `pull()` or `run()` call instead, which is what every shipped example does. |
-| Startup preflight | `startup_preflight` | `startup_preflight` | `true` | For seeded `build(input, ...)` overloads only, pushes and pulls the seed once at build time so payload errors surface from `build()` rather than asynchronously. | Set `false` when the seed exists only to adapt caps or shape and you are latency-sensitive at startup; you then see first-sample failures through `pull()` or `last_error()`. Seedless and source builds ignore it. |
+| Input timeout | `input_timeout_ms` | `input_timeout_ms` | `-1` (framework default) | The output wait for input-mode `Graph::run()` and for the seeded build preflight. `Run::run()` and `Model::run()` ignore it and use their own per-call `timeout_ms`. | Leave it. Pass an explicit `timeout_ms` to the `pull()` or `run()` call instead, which is what every shipped example does. |
+| Startup preflight | `startup_preflight` | `startup_preflight` | `true` | For seeded `build(input, ...)` overloads only, pushes and pulls the seed once at build time so payload errors surface from `build()` rather than asynchronously. Core skips the probe for H.264 and H.265, where a decoder can need several frames. | Set `false` when the seed exists only to adapt caps or shape and you are latency-sensitive at startup; you then see first-sample failures through `pull()` or `last_error()`. Seedless and source builds ignore it. |
 | Advanced knobs | `advanced` | `advanced` | `RunAdvancedOptions{}` | Nested struct: `copy_input`, `max_input_bytes`, `sync_num_buffers_override`, `prepare_output_cpu_visible`. | `copy_input = true` when the buffer you push is short-lived and you cannot keep it alive. `max_input_bytes` to reject oversized pushes instead of failing deeper in. The other two are compatibility fields. |
-| Input-drop callback | `on_input_drop` | `on_input_drop` | empty | Called when the overflow policy drops a pushed frame, with an `InputDropInfo` record. | Add it when you need a drop counter or a log line for telemetry. It runs on the pushing thread, so keep it short. |
+| Input-drop callback | `on_input_drop` | `on_input_drop` | empty | Called with an `InputDropInfo` record when a pending input is discarded because the input format or regime changed. It is **not** called for overflow drops. | Add it to log or count the frames lost across a format change. It runs on a pipeline thread, so keep it short. There is no callback for frames dropped by `overflow_policy`. |
 | Build-time JSON export | `run_export` | `run_export` | `RunAutoExportOptions{}` (disabled) | Writes a topology snapshot as soon as the `Run` is built. | Useful as a CI artifact or for graph visualisation before any frame has been pushed. For final throughput and latency numbers, export after the run has drained instead. |
-| Legacy export spelling | `graph_run_export` | `graph_run_export` | `RunAutoExportOptions{}` | Backward-compatible alias for `run_export`. | Do not use in new code. |
-| Board power monitor | `power_monitor` | `power_monitor` | `PowerMonitorOptions{}` | Deprecated board power telemetry. | Do not use. Use `TelemetryMonitor` around the measured work; it also records temperatures, CPU usage and memory. |
+
+Two fields are kept only for compatibility and should not be set in new code:
+`graph_run_export` is an older spelling of `run_export`, and `power_monitor` is
+deprecated board power telemetry — use `TelemetryMonitor` instead, as
+[measuring.md](../outputs/measuring.md) describes.
 
 ### `RunPreset`
 
-The preset's effect is not documented in the header; these values come from
-`preset_default_queue_depth`, `preset_default_overflow_policy` and
-`preset_default_zero_copy` in `src/pipeline/graph/GraphBuildInput.cpp`.
+The preset decides the queue depth, whether output storage is shared, and what
+`OverflowPolicy::Auto` resolves to. The resolved policy is on
+[queues-and-overflow.md](../graph/queues-and-overflow.md).
 
-| Value | Queue depth | Overflow policy | Shares output storage | Use it for |
-|---|---|---|---|---|
-| `Realtime` | 2 | `KeepLatest` | yes | A live camera or RTSP feed. Latency matters; a dropped stale frame is the right trade. |
-| `Balanced` | 4 | `Block` | yes | The default. A mixed workload where neither latency nor completeness dominates. |
-| `Reliable` | 8 | `Block` | no | A file, dataset or batch run. Every frame must be processed, and copied output is worth the cost. |
+| Value | Queue depth | Shares output storage | Use it for |
+|---|---|---|---|
+| `Realtime` | 2 | yes | A live camera or RTSP feed. Latency matters; a dropped stale frame is the right trade. |
+| `Balanced` | 4 | yes | The default. A mixed workload where neither latency nor completeness dominates. |
+| `Reliable` | 8 | no | A file, dataset or batch run. Every frame must be processed, and copied output is worth the cost. |
 
-Every realtime example in this repository picks `Realtime` with `KeepLatest`
-and `ZeroCopy`; `Reliable` is not used by any shipped example.
+Every realtime example in this repository picks `Realtime` with `ZeroCopy`;
+`Reliable` is not used by any shipped example.
 
 ### `OverflowPolicy`
 
-Which call a value affects matters more than the value itself. `push()` ignores
-all three; see [push-and-pull.md](push-and-pull.md).
-
-| Value | C++ | Python | `try_push()` at ingress | Output side |
-|---|---|---|---|---|
-| Block | `OverflowPolicy::Block` | `pyneat.OverflowPolicy.Block` | Returns `false` and keeps the queue as it is. | `appsink` does not drop. |
-| KeepLatest | `OverflowPolicy::KeepLatest` | `pyneat.OverflowPolicy.KeepLatest` | Evicts the oldest queued item, accepts yours, returns `true`. | `appsink` drops. |
-| DropIncoming | `OverflowPolicy::DropIncoming` | `pyneat.OverflowPolicy.DropIncoming` | Drops your item, returns `false`, leaves the queue as it is. | `appsink` drops. |
-
-The output-side column is `stream_opt.appsink_drop`, which is set to
-`overflow_policy != Block`, so `KeepLatest` and `DropIncoming` behave the same
-there. The full value reference lives in the `graph/` area's
-`queues-and-overflow.md`.
+The four values and what each one does are in
+[queues-and-overflow.md](../graph/queues-and-overflow.md). Two things are
+specific to a `Run`: `Auto` resolves from the preset, and the value is read by
+`try_push()` at ingress and by the run's own output queue — never by `push()`.
+Which call reads it is in [push-and-pull.md](push-and-pull.md).
 
 ### `RunMode`
 
@@ -131,33 +127,30 @@ get (see Pitfalls).
 
 ## Pitfalls
 
-**An explicit option that equals the struct default is treated as unset.**
-`resolve_build_opt` in `src/pipeline/graph/GraphBuildInput.cpp:1383` fills in
-preset-derived values with the test `if (out.queue_depth == defaults.queue_depth)`.
-So writing `queue_depth = 4` — the struct default — next to
-`RunPreset::Realtime` silently gives you **2**, not 4. Writing
-`overflow_policy = OverflowPolicy::Block` next to `Realtime` silently gives you
-`KeepLatest`. Symptom: the depth or policy you set is not the one the graph
-runs with, and nothing warns you. Fix: pick a value that differs from the
-struct default, or pick the preset that already means what you want. This is
-why the realtime examples write `queue_depth = 3` rather than 4.
+**An explicit `queue_depth` of 4 is treated as unset.** The build fills in the
+preset's depth whenever `queue_depth` still equals its struct default, and that
+default is 4. So writing `queue_depth = 4` next to `RunPreset::Realtime`
+silently gives you **2**, not 4. Symptom: the depth you set is not the depth the
+graph runs with, and nothing warns you. Fix: pick a value that differs from 4,
+or pick the preset that already means what you want. This is why the realtime
+examples write `queue_depth = 3`. `overflow_policy` is not affected — an
+explicit value there is always kept.
 
 **Setting `overflow_policy` does not make `push()` drop frames.** `push()`
-always waits for queue space; only `try_push()` consults the policy. Symptom:
-an application that sets `KeepLatest` for a live source and calls `push()` gets
-ingress backpressure instead of frame dropping, with no error and no drop
-counter, so the latency shows up upstream of Neat. Fix: call `try_push()`.
-The full explanation is in [push-and-pull.md](push-and-pull.md).
+always waits for queue space; only `try_push()` consults the policy. Fix: call
+`try_push()`. The full explanation is in [push-and-pull.md](push-and-pull.md).
 
 **Sync mode substitutes its own defaults before the preset is applied.** For
-`RunMode::Sync`, any field still at its struct default is replaced from
-`sync_run_defaults()` — `preset` becomes `Reliable` and `queue_depth` becomes
-`1`. The same equality test applies, so the same surprise is available twice.
+`RunMode::Sync`, any field still at its struct default is replaced with a sync
+default — `preset` becomes `Reliable` and `queue_depth` becomes `1`. The same
+equality test applies, so the same surprise is available twice.
 
 **`startup_preflight` does nothing on a seedless build.** It applies only to
 `build(input, ...)` overloads that receive an initial `cv::Mat`, `TensorList`
 or `Sample`. Setting it on a source-driven graph has no effect; first-frame
-failures still surface through `pull()` or `last_error()`.
+failures still surface through `pull()` or `last_error()`. Core also skips the
+probe when the input is H.264 or H.265, because a decoder can need several
+frames before it emits one.
 
 **A `Run` left in scope keeps the graph running.** It is move-only and its
 destructor stops the runtime. Dropping it earlier than you meant to — for
@@ -166,23 +159,21 @@ tears the pipeline down.
 
 ## Used in
 
-- [high-density-multi-stream-object-detector](../../examples/object-detection/high-density-multi-stream-object-detector/) — `Realtime`, `KeepLatest`, `ZeroCopy`, `queue_depth = 3`
+- [high-density-multi-stream-object-detector](../../examples/object-detection/high-density-multi-stream-object-detector/) — `Realtime`, `ZeroCopy`, `queue_depth` from config, `overflow_policy` left `Auto`
 - [depth-estimator](../../examples/depth-estimation/depth-estimator/) — `Block`, explicit `queue_depth`, folder-of-images workload
 - [fastflow-anomaly-detector](../../examples/anomaly-detection/fastflow-anomaly-detector/)
 - [multi-stream-pose-estimator](../../examples/pose-estimation/multi-stream-pose-estimator/)
-- [yolov8-instance-segmenter](../../examples/segmentation/yolov8-instance-segmenter/)
+- [single-stream-instance-segmenter](../../examples/segmentation/single-stream-instance-segmenter/)
 
 ## Source
 
 - C++ header: `include/pipeline/Run.h` (`Run`, `RunOptions`, `RunPreset`,
-  `RunAdvancedOptions`, `RunAutoExportOptions`), `include/pipeline/GraphOptions.h`
-  (`RunMode`)
-- Preset values: `src/pipeline/graph/GraphBuildInput.cpp`
-  (`preset_default_queue_depth`, `preset_default_overflow_policy`,
-  `preset_default_zero_copy`, `resolve_build_opt`); output-side overflow from
-  `stream_opt.appsink_drop` in the same file
-- Overflow policy call sites: `src/pipeline/runtime/RunPush.cpp`
-  (`admit_input_queue_locked`)
+  `OutputMemory`, `RunAdvancedOptions`, `RunAutoExportOptions`),
+  `include/policy/OverflowPolicy.h` (`OverflowPolicy`),
+  `include/pipeline/GraphOptions.h` (`RunMode`)
 - Python binding: `python/src/module.cpp`, `nb::class_<RunOptions>`,
   `nb::class_<RunAdvancedOptions>`, `nb::enum_<RunPreset>`, `nb::class_<Run>`
-- Core commit: `bce80cb6`
+- The preset depths and the sync defaults are runtime behavior, not header
+  values. They were read from Core at the commit below and are not part of the
+  published API.
+- Core commit: `c68a5241`
