@@ -21,13 +21,13 @@ How does a frame move through rfdetr-detection-segmentation?
 
 ╭┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╮
 ┆ RUN                                                             ┆
-┆  ┌──────────────────────┐  encoded, H.264/H.265 ┌─────────────┐ ┆
+┆  ┌──────────────────────┐  encoded, as received ┌─────────────┐ ┆
 ┆  │ RtspEncodedInput     │──────────────────────►│ VideoSender │─────┐
 ┆  └──────────────────────┘                       └─────────────┘ ┆   │
-┆             │ encoded frames                           ▲        ┆   │ video
-┆             ▼                                          │        ┆   │
-┆  ┌──────────────────────┐  NV12, MJPEG only            │        ┆   │
-┆  │ SimaDecode           │──────────────────────────────┘        ┆   │
+┆             │ encoded frames                                    ┆   │ video
+┆             ▼                                                   ┆   │
+┆  ┌──────────────────────┐                                       ┆   │
+┆  │ SimaDecode           │                                       ┆   │
 ┆  └──────────────────────┘                                       ┆   │
 ┆             │ NV12, newest 4                                    ┆   │
 ┆             ▼                                                   ┆   │
@@ -65,9 +65,7 @@ Each RF-DETR model comes as two packages: a backbone and a decoder, which the co
 
 The backbone output keeps up to eight results, and the transformer input waits while its four-entry queue is full, so completed backbone work is not dropped. These capacities do not include buffers held by active stages.
 
-MJPEG reserves 32 decoded buffers so decoding can continue while inference and the video sender retain frames. This is tested headroom for the application, not an exact count of graph-held buffers. The raw NV12 storage is about 44 MB at 720p, 100 MB at 1080p, or 398 MB at 4K, before alignment.
-
-TCP sources use RTP timestamps directly to avoid arrival-time corrections during high-rate replay. H.264 and H.265 video reach Insight as encoded passthrough. MJPEG video is re-encoded to H.264 from the decoded frames; when the encoder falls behind, the video keeps the newest frames and inference keeps the full input rate.
+TCP sources use RTP timestamps directly to avoid arrival-time corrections during high-rate replay. H.264, H.265, and MJPEG video reach Insight as encoded passthrough, so the video is never encoded again.
 
 ## Preview
 
@@ -241,9 +239,9 @@ End-to-end throughput measured on Modalix with the Python application and no oth
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 720p | H.264 | 189 | 94 | 72 | 35 | 87 | 74 | 32 |
 | 720p | H.265 | 192 | 98 | 72 | 35 | 87 | 73 | 31 |
-| 720p | MJPEG | 188 | 98 | 72 | 35 | 87 | 74 | 32 |
+| 720p | MJPEG | 195 | 98 | 72 | 35 | 87 | 74 | 32 |
 
-The MJPEG runs set `input.fps: 120`. With the probed 300 FPS, the H.264 encoder that re-encodes MJPEG for Insight stops at startup; the setting changes only the rate that encoder is given, and the model still processes every frame the stream delivers.
+The nano detector's MJPEG figure was measured with the video sent to Insight as received. The other MJPEG figures were measured before that change, with `input.fps: 120` and the video encoded again as H.264.
 
 ## Source Files
 

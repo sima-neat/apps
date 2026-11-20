@@ -208,31 +208,17 @@ neat::Graph decoder_graph(const AppConfig& cfg) {
   decode.dec_width = cfg.width;
   decode.dec_height = cfg.height;
   decode.dec_fps = cfg.fps;
-  if (cfg.codec == "mjpeg") {
-    // Leaves free decode surfaces while inference and the video sender hold frames.
-    decode.num_buffers = 32;
-  }
   neat::Graph graph("decoder");
   graph.add(neat::nodes::SimaDecode(std::move(decode)));
   return graph;
 }
 
-// Send H.264 and H.265 to Insight unchanged; re-encode decoded MJPEG frames as H.264.
+// Send the stream to Insight as received.
 groups::VideoSenderOptions video_options(const AppConfig& cfg) {
-  auto options = cfg.codec == "mjpeg" ? groups::VideoSenderOptions::FromRaw({.fps = cfg.fps})
-                                      : groups::VideoSenderOptions::Passthrough(rtsp_codec(cfg));
+  auto options = groups::VideoSenderOptions::Passthrough(rtsp_codec(cfg));
   options.host = cfg.insight_host;
   options.video_port_base = cfg.video_port_base;
   return options;
-}
-
-// Bound the decoded frames the MJPEG video sender holds, so it cannot starve the decoder.
-neat::GraphLinkOptions video_link() {
-  neat::GraphLinkOptions link;
-  link.policy = neat::GraphLinkPolicy::RealtimeLatestByStream;
-  link.max_inflight_per_stream = 2;
-  link.max_inflight_total = 2;
-  return link;
 }
 
 // Newest decoded frames -> backbone -> "backbone" output. The queue replaces its oldest frame
@@ -442,12 +428,8 @@ int run_app(const CliOptions& cli) {
   auto video = groups::VideoSender(video_options(cfg));
   neat::Graph graph;
   graph.connect(rtsp, decoder);
-  if (cfg.codec == "mjpeg") {
-    graph.connect(decoder, video, video_link());
-  } else {
-    // A plain link lets Core tee the encoded stream to the decoder and the video sender.
-    graph.connect(rtsp, video);
-  }
+  // A plain link lets Core tee the encoded stream to the decoder and the video sender.
+  graph.connect(rtsp, video);
   graph.connect(decoder, backbone_graph(backbone));
 
   neat::Model::Runner transformer_runner = transformer.build(

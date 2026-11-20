@@ -214,8 +214,10 @@ int main(int argc, char** argv) {
                 << " did not complete with progressing frame identities\n";
       return 1;
     }
-    // VideoSender uses RTP H.265 (98) or H.264 (96). MJPEG is re-encoded as H.264.
-    const int payload_type = test.source.codec == "h265" ? 98 : 96;
+    // VideoSender forwards the stream as received: RTP H.264 (96), H.265 (98), or JPEG (26).
+    const int payload_type = test.source.codec == "h265"    ? 98
+                             : test.source.codec == "mjpeg" ? 26
+                                                            : 96;
     if (video_bytes <= 12 || (video_packet[0] >> 6) != 2 ||
         (video_packet[1] & 0x7f) != payload_type) {
       std::cerr << "[FAIL] RF-DETR " << case_name << " did not publish the expected RTP video\n";

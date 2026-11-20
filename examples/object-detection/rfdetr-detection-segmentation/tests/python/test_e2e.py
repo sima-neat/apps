@@ -133,9 +133,9 @@ def test_publishes_insight_video_and_metadata(
     assert metadata.success, metadata.error
     assert following.success, following.error
     assert f"RF-DETR {model_id}: sent 20 results to Insight" in result.stdout
-    # VideoSender uses RTP H.265 (98) or H.264 (96). MJPEG is re-encoded as H.264.
+    # VideoSender forwards the stream as received: RTP H.264 (96), H.265 (98), or JPEG (26).
     assert len(video_packet) > 12 and video_packet[0] >> 6 == 2
-    assert video_packet[1] & 0x7F == (98 if codec == "h265" else 96)
+    assert video_packet[1] & 0x7F == {"h264": 96, "h265": 98, "mjpeg": 26}[codec]
     for message in metadata.messages + following.messages:
         assert message.frame_id.isdecimal() and message.timestamp_ms >= 0
     first, last = metadata.messages[-1], following.messages[-1]

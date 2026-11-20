@@ -196,34 +196,17 @@ def decoder_graph(cfg: AppConfig) -> pyneat.Graph:
     decode.dec_width = cfg.width
     decode.dec_height = cfg.height
     decode.dec_fps = cfg.fps
-    if cfg.codec == "mjpeg":
-        # Leaves free decode surfaces while inference and the video sender hold frames.
-        decode.num_buffers = 32
     graph = pyneat.Graph("decoder")
     graph.add(pyneat.nodes.sima_decode(decode))
     return graph
 
 
 def video_options(cfg: AppConfig) -> pyneat.VideoSenderOptions:
-    """Send H.264 and H.265 to Insight unchanged; re-encode decoded MJPEG frames as H.264."""
-    if cfg.codec == "mjpeg":
-        encode = pyneat.SimaEncodeOptions()
-        encode.fps = cfg.fps
-        options = pyneat.VideoSenderOptions.from_raw(encode)
-    else:
-        options = pyneat.VideoSenderOptions.passthrough(RTSP_CODECS[cfg.codec])
+    """Send the stream to Insight as received."""
+    options = pyneat.VideoSenderOptions.passthrough(RTSP_CODECS[cfg.codec])
     options.host = cfg.insight_host
     options.video_port_base = cfg.video_port_base
     return options
-
-
-def video_link() -> pyneat.GraphLinkOptions:
-    """Bound the decoded frames the MJPEG video sender holds, so it cannot starve the decoder."""
-    link = pyneat.GraphLinkOptions()
-    link.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
-    link.max_inflight_per_stream = 2
-    link.max_inflight_total = 2
-    return link
 
 
 def backbone_graph(backbone: pyneat.Model) -> pyneat.Graph:
@@ -426,11 +409,8 @@ def main(argv: list[str] | None = None) -> int:
     video = pyneat.groups.video_sender(video_options(cfg))
     graph = pyneat.Graph()
     graph.connect(rtsp, decoder)
-    if cfg.codec == "mjpeg":
-        graph.connect(decoder, video, video_link())
-    else:
-        # A plain link lets Core tee the encoded stream to the decoder and the video sender.
-        graph.connect(rtsp, video)
+    # A plain link lets Core tee the encoded stream to the decoder and the video sender.
+    graph.connect(rtsp, video)
     graph.connect(decoder, backbone_graph(backbone))
 
     transformer_runner = transformer.build(
