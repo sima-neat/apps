@@ -32,6 +32,13 @@ Every page follows [TEMPLATE.md](TEMPLATE.md).
 - [Branch and Combine](graph/branch-and-combine.md): `graphs::Branch`, `graphs::Combine`, and the `CombinePolicy` values
 - [Queue and OverflowPolicy](graph/queues-and-overflow.md): `nodes::Queue`, `QueueOptions`, and the `OverflowPolicy` values
 
+### Run
+
+- [Run](run/run.md): `Run`, `RunOptions`, `RunPreset`, `RunMode`
+- [Push and pull](run/push-and-pull.md): `push`, `try_push`, `pull`, `pull_tensors`, `pull_samples`, `PullStatus`, `PullError`, `close_input`
+- [Sample](run/samples.md): `Sample`, `SampleKind`, `tensors_from_sample`
+- [Tensor](run/tensors.md): `Tensor`, `TensorList`, `TensorMemory`, `Mapping`, `OutputMemory`
+
 ### Model and decoding
 
 - [Model](model/model.md): loading a compiled model, `Model::Options`, and running it with `run` or `build` and a runner
