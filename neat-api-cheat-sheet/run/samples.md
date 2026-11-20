@@ -49,7 +49,7 @@ Python
 
 ```python
 sample = run.pull("detections", 0)
-if sample is None:  # a timeout, or end of stream if can_pull() is False
+if sample is None:  # a timeout or end of stream
     return None
 # tensors_from_sample is not bound; walk the union yourself.
 if sample.kind == pyneat.SampleKind.Bundle:
@@ -114,10 +114,10 @@ Complete flow: [fastflow-anomaly-detector](../../examples/anomaly-detection/fast
 
 | Helper | C++ | Python | What it does | Why and when to use it |
 |---|---|---|---|---|
-| Is it empty | `empty()` | `empty()` | True when the sample carries no payload. | Guard before reading. |
-| Logical count | `size()` | `size()` | Bundle field count; `1` for any non-empty non-Bundle sample; `0` when empty. | Lets one loop handle all three kinds. |
-| Uniform access | `front()`, `back()`, `operator[]`, `begin()`/`end()` | `front()`, `back()`, `__getitem__` | On a Bundle these address the fields; on a non-Bundle they return the sample itself. | Write code that does not branch on `kind`: iterating a single-tensor sample yields that one sample. |
-| Build a Bundle | `reserve(n)`, `push_back(Sample)` | `reserve`, `push_back` | Appending to an empty sample turns it into a Bundle. | Composing a multi-output sample to push. |
+| Is it empty | `empty()` | `bool(sample)`, `False` when empty | True when the sample carries no payload. | Guard before reading. |
+| Logical count | `size()` | `len(sample)` | Bundle field count; `1` for any non-empty non-Bundle sample; `0` when empty. | Lets one loop handle all three kinds. |
+| Uniform access | `front()`, `back()`, `operator[]`, `begin()`/`end()` | `sample[i]`, iteration | On a Bundle these address the fields; on a non-Bundle they return the sample itself. Python's `sample[i]` checks the index and raises `IndexError` when it is out of range. | Write code that does not branch on `kind`: iterating a single-tensor sample yields that one sample. |
+| Build a Bundle | `reserve(n)`, `push_back(Sample)` | `append(sample)` | Appending to an empty sample turns it into a Bundle. | Composing a multi-output sample to push. |
 | Flatten to tensors | `tensors_from_sample(sample, require_nonempty = true)` | not available | Extracts every tensor from any of the three shapes, recursively. | The one-line way to get the numbers. Pass `false` when an empty sample is acceptable rather than an error. |
 | Build from tensors | `sample_from_tensors(tensors)` | not available | Makes a `TensorSet` sample. | Pushing a tensor list as a sample. |
 | Single tensor or throw | `require_single_tensor(sample)` | not available | Returns the one tensor; throws `NeatError` if there are zero or more than one. | Asserting a single-output contract instead of silently taking `front()`. |
@@ -165,11 +165,12 @@ field by comparing `stream_label` rather than indexing `fields[0]`. Symptom: a
 model or graph change silently swaps your frame and your detections. Fix:
 select by `stream_label` or `logical_output_index`.
 
-**`front()` and `operator[]` do not fail on a non-Bundle.** They return the
+**In C++, `front()` and `operator[]` do not fail on a non-Bundle.** They return the
 sample itself. That is deliberate — it lets one loop handle every kind — but it
 means an index error does not look like one. Symptom: `sample[3]` on a
 single-tensor sample returns the sample rather than throwing. Fix: check
-`size()` when the index actually matters.
+`size()` when the index actually matters. Python's `sample[i]` raises
+`IndexError` instead.
 
 **A borrowed sample (`owned == false`) must not be kept.** It holds a loan on
 the producer's buffer. Copy the data out before the sample goes out of scope.

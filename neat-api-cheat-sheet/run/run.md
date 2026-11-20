@@ -64,7 +64,7 @@ Complete flow: [high-density-multi-stream-object-detector](../../examples/object
 |---|---|---|---|---|---|
 | Preset | `preset` | `preset` | `RunPreset::Balanced` | Sets the default `queue_depth`, decides whether output storage is shared, and decides what `OverflowPolicy::Auto` resolves to. | Set `Realtime` for a live camera or RTSP feed, where a late frame is worthless. Set `Reliable` for a file or dataset run, where dropping a frame corrupts the result. |
 | Queue depth | `queue_depth` | `queue_depth` | `4` (then overridden by the preset — see Pitfalls) | Capacity of the ingress and internal runtime queues, and of framework-created output queues. | Deeper for a jittery source that arrives in bursts; shallower to cut latency. A public `Output` node's `OutputOptions::max_buffers` wins for its own terminal queue. |
-| Overflow policy | `overflow_policy` | `overflow_policy` | `OverflowPolicy::Auto` | Chooses what happens when a queue is full. It applies to `try_push()` at ingress and to whether the run's own output queue drops results. It does **not** apply to `push()`, which always waits. `Auto` means `KeepLatest` under the `Realtime` preset and `Block` under the others. | Leave it `Auto` and let the preset decide. Set an explicit value only to override the preset — for example `KeepLatest` with `Balanced`. An explicit value is always kept. A public `Output` node uses its own `OutputOptions::drop` for its terminal queue. Values are listed in [queues-and-overflow.md](../graph/queues-and-overflow.md); which call reads them is in [push-and-pull.md](push-and-pull.md). |
+| Overflow policy | `overflow_policy` | `overflow_policy` | `OverflowPolicy::Auto` | What happens when a queue is full, for `try_push()` and for the run's own output queue. `push()` always waits, see [push-and-pull.md](push-and-pull.md). `Auto` means `KeepLatest` under the `Realtime` preset and `Block` under the others. | Leave it `Auto` and let the preset decide. Set an explicit value only to override the preset, for example `KeepLatest` with `Balanced`. An explicit value is always kept. A public `Output` node uses its own `OutputOptions::drop` for its terminal queue. The values are on [queues-and-overflow.md](../graph/queues-and-overflow.md). |
 | Output memory | `output_memory` | `output_memory` | `OutputMemory::Auto` | Whether pulled tensors share the producer's buffer or are copied into framework storage. | See [tensors.md](tensors.md); `ZeroCopy` is the fast path and the one that can stall the pipeline if you hold tensors too long. |
 | Input timeout | `input_timeout_ms` | `input_timeout_ms` | `-1` (framework default) | The output wait for input-mode `Graph::run()` and for the seeded build preflight. `Run::run()` and `Model::run()` ignore it and use their own per-call `timeout_ms`. | Leave it. Pass an explicit `timeout_ms` to the `pull()` or `run()` call instead, which is what every shipped example does. |
 | Startup preflight | `startup_preflight` | `startup_preflight` | `true` | For seeded `build(input, ...)` overloads only, pushes and pulls the seed once at build time so payload errors surface from `build()` rather than asynchronously. Core skips the probe for H.264 and H.265, where a decoder can need several frames. | Set `false` when the seed exists only to adapt caps or shape and you are latency-sensitive at startup; you then see first-sample failures through `pull()` or `last_error()`. Seedless and source builds ignore it. |
@@ -80,8 +80,7 @@ deprecated board power telemetry — use `TelemetryMonitor` instead, as
 ### `RunPreset`
 
 The preset decides the queue depth, whether output storage is shared, and what
-`OverflowPolicy::Auto` resolves to. The resolved policy is on
-[queues-and-overflow.md](../graph/queues-and-overflow.md).
+`OverflowPolicy::Auto` resolves to, see the `overflow_policy` row above.
 
 | Value | Queue depth | Shares output storage | Use it for |
 |---|---|---|---|
@@ -91,14 +90,6 @@ The preset decides the queue depth, whether output storage is shared, and what
 
 Every realtime example in this repository picks `Realtime` with `ZeroCopy`;
 `Reliable` is not used by any shipped example.
-
-### `OverflowPolicy`
-
-The four values and what each one does are in
-[queues-and-overflow.md](../graph/queues-and-overflow.md). Two things are
-specific to a `Run`: `Auto` resolves from the preset, and the value is read by
-`try_push()` at ingress and by the run's own output queue — never by `push()`.
-Which call reads it is in [push-and-pull.md](push-and-pull.md).
 
 ### `RunMode`
 
@@ -135,10 +126,6 @@ graph runs with, and nothing warns you. Fix: pick a value that differs from 4,
 or pick the preset that already means what you want. This is why the realtime
 examples write `queue_depth = 3`. `overflow_policy` is not affected — an
 explicit value there is always kept.
-
-**Setting `overflow_policy` does not make `push()` drop frames.** `push()`
-always waits for queue space; only `try_push()` consults the policy. Fix: call
-`try_push()`. The full explanation is in [push-and-pull.md](push-and-pull.md).
 
 **Sync mode substitutes its own defaults before the preset is applied.** For
 `RunMode::Sync`, any field still at its struct default is replaced with a sync

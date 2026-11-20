@@ -8,15 +8,15 @@ outputs.
 
 Not every graph takes pushed input. A graph whose first node is a video source
 — an RTSP feed, a camera, a file reader — feeds itself, and the application
-only pulls. `Run::can_push()` and `Run::can_pull()` tell you which kind of
-graph you built.
+only pulls. On a graph with one input and one output, `Run::can_push()` and
+`Run::can_pull()` tell you which kind of graph you built.
 
 `pull()` has to report four different things, not two: a sample arrived, the
 wait timed out, the pipeline reached end of stream, or the runtime failed.
 `PullStatus` is that answer and `PullError` carries the detail when the answer
-is `Error`. Python has no `PullStatus` form, so a Python application separates
-the middle two with `can_pull()`, which is `false` once the pipeline is at end
-of stream.
+is `Error`. Python has no `PullStatus` form. On a graph with one output, a
+Python application separates the middle two with `can_pull()`, which is
+`false` once that output is at end of stream.
 
 ## When to use it
 
@@ -29,12 +29,8 @@ you are reading it, which is every streaming application. Use the
 `std::optional<Sample>` form only for a short, bounded read where you do not
 need to distinguish a timeout from end of stream.
 
-**Choose between `push()` and `try_push()` deliberately, because they do not
-differ only in blocking.** `push()` waits for queue space under every overflow
-policy. `try_push()` is the only call that consults the policy. So an
-application that wants stale frames dropped must call `try_push()`; setting
-`KeepLatest` and calling `push()` gives backpressure, not dropping. See
-Pitfalls.
+Call `try_push()` when stale frames should be dropped. `push()` always waits,
+see Pitfalls.
 
 Use `Graph::run(...)` instead of either when you want one frame in and one
 result out.
@@ -61,7 +57,7 @@ Python
 ```python
 sample = run.pull("detections", 50)
 if sample is None:
-    # None is both "timed out" and "closed" — can_pull() separates them.
+    # None means timed out or closed. With one output, can_pull() tells which.
     if not run.can_pull():
         raise RuntimeError(f"output closed: {run.last_error()}")
     return
@@ -78,11 +74,11 @@ their arguments. `RunOptions` is on [run.md](run.md).
 
 | Call | C++ | Python | Default | What it does | Why and when to change it |
 |---|---|---|---|---|---|
-| Push a tensor list | `push(const TensorList&)` | `push(input)` / `push_tensors(inputs)` | — | Pushes one frame as a list of tensors to the default input port. **Waits** for queue space under every overflow policy. Returns `false` when the input is closed, the run has stopped, or a graph input timed out; work already accepted stays available to drain. | The usual push for an application that builds its own tensor, for example from a `cv::Mat`, and can tolerate waiting when the graph falls behind. |
+| Push a tensor list | `push(const TensorList&)` | `push(input)` / `push_tensors(inputs)` | — | Pushes one frame as a list of tensors to the default input port. **Waits** for queue space under every overflow policy. Returns `false` when the input is closed, the run has stopped, or a graph input timed out; work already accepted stays available to drain. See Pitfalls. | The usual push for an application that builds its own tensor, for example from a `cv::Mat`, and can tolerate waiting when the graph falls behind. |
 | Push to a named port | `push(std::string_view, const TensorList&)` | `push(name, input)` | — | Same, to a specific named input port. | Multi-input models, where each port takes a different tensor. |
 | Push images | `push(const std::vector<cv::Mat>&)` | not available (pass arrays to `push`) | — | C++ convenience overload that wraps `cv::Mat`s as tensors. | Saves building the `TensorList` yourself when you already hold `cv::Mat`s. |
 | Push a sample | `push(const Sample&)` | `push_samples(inputs)` | — | Pushes a typed `Sample`, which can carry metadata and a bundle of payloads. | When you need to set `port_name`, timestamps or attributes on the frame, or when bridging a pulled sample into another graph. |
-| Push without blocking | `try_push(...)` | `try_push(...)` / `try_push_tensors` / `try_push_samples` | — | Same payload forms, but applies the resolved `overflow_policy` instead of waiting: `Block` returns `false`, `DropIncoming` drops your frame and returns `false`, `KeepLatest` evicts the oldest queued frame and returns `true`. `Auto` resolves to `KeepLatest` under the `Realtime` preset and `Block` otherwise. | **The only call that honours `overflow_policy`.** Use it for a live source where the calling thread must not stall, and pair it with `on_input_drop` in `RunOptions` to count what you lost. |
+| Push without blocking | `try_push(...)` | `try_push(...)` / `try_push_tensors` / `try_push_samples` | — | Same payload forms, but applies the resolved `overflow_policy` instead of waiting: `Block` returns `false`, `DropIncoming` drops your frame and returns `false`, `KeepLatest` evicts the oldest queued frame and returns `true`. `Auto` follows the preset, see [run.md](run.md). | **The only call that reads `overflow_policy`.** Use it for a live source where the calling thread must not stall. No callback reports these drops. |
 | Copy on push | not an argument (`RunAdvancedOptions::copy_input`) | `copy=False` keyword | `false` | Copies the pushed buffer instead of referencing it. | Set it when the buffer you push does not outlive the call. In Python it is a per-call keyword; in C++ it is a run-wide option. |
 | Declare layout / format | not available | `layout=None`, `image_format=None` keywords | `None` (inferred) | Tells the binding how to interpret the array you pass. | Set `image_format` when the array is an image whose pixel format cannot be inferred, for example BGR vs RGB. |
 | Close the input | `close_input()` | `close_input()` | — | Signals end of input; the graph drains and then its outputs report `Closed`. | Call it at shutdown so pullers see a clean end of stream rather than a timeout. |
@@ -94,8 +90,8 @@ not public API; no shipped example uses them.
 
 | Call | C++ | Python | What it does | Why and when to use it |
 |---|---|---|---|---|
-| Can the run take pushes | `can_push()` | `can_push()` | `true` while the input side accepts pushes, `false` once it is closed. | Branch on it once after `build()` to tell a push-driven graph from a source-driven one. |
-| Can the run yield samples | `can_pull()` | `can_pull()` | `true` while the output side may still produce a sample, `false` at end of stream. | **The end-of-stream check.** In Python it is the only way to tell a `None` from `pull()` apart from a timeout. |
+| Can the run take pushes | `can_push()` | `can_push()` | `true` while the input side accepts pushes, `false` once it is closed. It checks only the default input, so on a graph with more than one input it is always `false`. | On a graph with one input, branch on it once after `build()` to tell a push-driven graph from a source-driven one. |
+| Can the run yield samples | `can_pull()` | `can_pull()` | `true` while the output side may still produce a sample, `false` at end of stream. It checks only the default output, so on a graph with more than one output it is always `false`. | **The end-of-stream check on a graph with one output.** In Python it is then the only way to tell a `None` from `pull()` apart from a timeout. |
 | Input port names | `input_names()` | `input_names()` | The names accepted by `push(name, ...)`. Empty for an unnamed or linear run. | Call it once after `build()` to learn the ports a multi-input graph exposes, instead of hard-coding the strings. |
 | Output port names | `output_names()` | `output_names()` | The names accepted by `pull(name, ...)`. Empty for an unnamed or linear run. | The same for outputs, and the natural way to drive a drain loop over every output of a multi-stream graph. |
 
@@ -135,12 +131,14 @@ differences.
 
 **Python's `pull()` does not return a status.** The `PullStatus`-returning
 overload is not bound; Python's `pull()` returns `Sample | None` and `None`
-means both "nothing arrived yet" and "the pipeline has ended". Call
-`run.can_pull()` after a `None` to tell them apart: `false` means end of
-stream, so stop reading that output. `run.running()` is **not** the right check
-— it reports the pipeline state, which can still be playing while an output is
-drained. The shipped Python examples predate `can_pull()` and use
-`running()` plus `last_error()` instead; see `pull_result_has_sample` in
+means both "nothing arrived yet" and "the pipeline has ended". On a graph
+with one output, call `run.can_pull()` after a `None` to tell them apart:
+`false` means end of stream, so stop reading that output. On a graph with more
+than one output, `can_pull()` is always `false`, and Python has no call that
+tells a timeout from end of stream for one output. `run.running()` does not
+fill that gap: it reports the pipeline state, which can still be playing while
+an output is drained. The shipped Python examples use `running()` plus
+`last_error()`; see `pull_result_has_sample` in
 [fastflow-anomaly-detector](../../examples/anomaly-detection/fastflow-anomaly-detector/src/python/main.py).
 A C++ application should use the `PullStatus` form rather than either.
 
@@ -172,9 +170,9 @@ consequence of a failure.
 **In Python, a `None` from `pull()` at shutdown looks like an ordinary
 timeout.** The same bug as above, but the type system does not help you.
 Symptom: a Python application that polls forever after the video ends. Fix:
-check `run.can_pull()` after every `None` and stop when it is `false`. Checking
-`run.running()` instead is not enough, because the pipeline can still be
-playing while that output is finished.
+on a graph with one output, check `run.can_pull()` after every `None` and stop
+when it is `false`. On a graph with more than one output, `can_pull()` is
+always `false`; see Language differences.
 
 **`pull()` with the default `timeout_ms = -1` blocks forever.** In a loop that
 drains several outputs, one quiet output blocks the others. Fix: poll with
