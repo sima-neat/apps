@@ -95,6 +95,14 @@ Each of these drops stale frames or results in favor of newer ones:
 Keep plain links and `OutputOptions::EveryFrame(n)`, which holds up to `n` results, on paths
 that must process every frame.
 
+Keep a plain link on encoded H.264 or H.265 that goes into a decoder whose frames the
+application processes. A realtime link drops encoded frames there, and every frame after a
+dropped one decodes corrupted until the next keyframe.
+
+`GraphLinkOptions::queue_depth` has no effect: a realtime link keeps one pending sample per
+stream. Do not raise it to add buffering. Use `OutputOptions` on the `Output`, or a
+`nodes::Queue` with `max_buffers`. See `GraphLinkOptions` in `include/pipeline/GraphOptions.h`.
+
 ## Combine inputs with models
 
 - **One stream, one model:** `RtspEncodedInput → decoder → model.graph() → Output`. To give the
