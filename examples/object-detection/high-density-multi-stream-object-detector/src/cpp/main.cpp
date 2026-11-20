@@ -238,20 +238,6 @@ std::vector<neat::Box> decode_boxes(const neat::Sample& sample,
       .boxes;
 }
 
-sima_examples::detection_egress::FrameMetadata frame_metadata(const neat::Sample& sample,
-                                                              int index) {
-  sima_examples::detection_egress::FrameMetadata metadata;
-  metadata.stream_index = index;
-  metadata.stream_id = sample.stream_id;
-  metadata.frame_id = sample.frame_id;
-  metadata.pts_ns = sample.pts_ns;
-  metadata.dts_ns = sample.dts_ns;
-  metadata.duration_ns = sample.duration_ns;
-  metadata.input_seq = sample.input_seq;
-  metadata.orig_input_seq = sample.orig_input_seq;
-  return metadata;
-}
-
 // Send every detections sample to its stream's Insight channel until a stop signal.
 void send_detections(neat::Run& run, std::vector<neat::MetadataSender>& metadata_senders,
                      const std::vector<sima_examples::RtspStreamInfo>& streams,
@@ -273,7 +259,7 @@ void send_detections(neat::Run& run, std::vector<neat::MetadataSender>& metadata
     const auto& stream = streams.at(static_cast<std::size_t>(index));
     const std::string payload = sima_examples::detection_egress::serialize(
         decode_boxes(sample, stream, max_detections), labels, stream.width, stream.height,
-        frame_metadata(sample, index));
+        sima_examples::detection_egress::frame_metadata(sample, index));
     // A nonblocking send drops the message while the socket buffer is full; the drops are
     // counted in the sender's stats and reported when the run ends. Any other failure throws.
     std::string send_error;

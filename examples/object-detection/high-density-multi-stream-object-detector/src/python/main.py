@@ -207,19 +207,6 @@ def decode_boxes(sample: pyneat.Sample, stream: RtspStreamInfo, max_detections: 
     return result.boxes
 
 
-def frame_metadata(sample: pyneat.Sample, index: int) -> detection_egress.FrameMetadata:
-    return detection_egress.FrameMetadata(
-        stream_index=index,
-        stream_id=sample.stream_id,
-        frame_id=sample.frame_id,
-        pts_ns=sample.pts_ns,
-        dts_ns=sample.dts_ns,
-        duration_ns=sample.duration_ns,
-        input_seq=sample.input_seq,
-        orig_input_seq=sample.orig_input_seq,
-    )
-
-
 def send_detections(
     run: pyneat.Run,
     metadata_senders: list[pyneat.MetadataSender],
@@ -246,7 +233,7 @@ def send_detections(
             labels,
             stream.width,
             stream.height,
-            frame_metadata(sample, index),
+            detection_egress.frame_metadata(sample, index),
         )
         # A nonblocking send drops the message while the socket buffer is full; the drops are
         # counted in the sender's stats and reported when the run ends. Any other failure raises.
