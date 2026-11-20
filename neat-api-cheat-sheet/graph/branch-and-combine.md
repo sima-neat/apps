@@ -9,8 +9,9 @@ fragment that you connect like any other, see [links](links.md).
 
 `CombinePolicy` tells a combined output how to match samples from its inputs:
 pair them by frame ID or by timestamp into one bundle, forward them one at a
-time, or reject more than one producer. A bundle is a `Sample` whose fields are
-the matched samples, see [samples](../run/samples.md).
+time, or reject more than one producer. A sample is one frame, tensor, or set
+of tensors with its frame ID and timestamp. A bundle is a sample whose fields
+are the matched samples, see the Run page of this cheat sheet.
 
 ## When to use it
 
@@ -29,11 +30,13 @@ do not set, such as a deeper queue on a combined output.
 
 ## Minimal example
 
-Split the source, then join the frame and its detections by frame ID.
+Split the source, then join the frame and its detections by frame ID. This is
+the detector's flow with frame saving turned on.
 
 C++
 
 ```cpp
+auto branch = simaai::neat::graphs::Branch("source", {"video", "model", "frame"});
 runtime.graph.connect(source, branch);
 runtime.graph.connect(branch, video_graph);
 runtime.graph.connect(branch, model_graph);
@@ -71,13 +74,15 @@ Complete flow: [single-stream-object-detector](../../examples/object-detection/s
 | Combine inputs | `Combine(inputs, ...)` | `combine(inputs, ...)` | required, at least one | Names of the input endpoints. Upstream outputs with these names connect to them | One name per producer whose samples you combine |
 | Combine output | `Combine(..., output, ...)` | `combine(..., output, ...)` | required | Name of the combined output endpoint, the name you pass to `Run::pull()` | Name it after the joined result, such as `detector_output` |
 | Combine policy | `Combine(..., policy)` | `combine(..., policy)` | `CombinePolicy::ByFrame` | How samples from the inputs are matched. See the next table | `ByPts` when the producers share timestamps but not frame IDs, `RoundRobin` for independent live streams |
-| Output combine policy | `OutputOptions::combine_policy` | `OutputOptions.combine_policy` | `CombinePolicy::None` | The same choice for a hand-built fan-in on a plain `nodes::Output` | Set it whenever more than one producer connects to one `Output` |
+
+A hand-built fan-in on a plain `nodes::Output` takes the same values through
+`OutputOptions::combine_policy`, see [Output](../outputs/output-node.md).
 
 `CombinePolicy`
 
 | Value | C++ | Python | What it does | When to use it |
 |---|---|---|---|---|
-| None | `CombinePolicy::None` | `pyneat.CombinePolicy.None_` | Accepts one producer. More than one producer fails and asks for a policy | Default of a plain `Output`, so an accidental fan-in does not mix samples |
+| None | `CombinePolicy::None` | `pyneat.CombinePolicy.None_` | Accepts one producer. More than one producer fails when the graph is built, unless every producer connects through a `RealtimeLatestByStream` link | Default of a plain `Output`, so an accidental fan-in does not mix samples |
 | By frame | `CombinePolicy::ByFrame` | `pyneat.CombinePolicy.ByFrame` | Waits for one sample from every input with the same `Sample::frame_id` and emits them as one bundle | A frame and the results computed from it, as in the detector above |
 | By PTS | `CombinePolicy::ByPts` | `pyneat.CombinePolicy.ByPts` | Same, matched on `Sample::pts_ns`, the presentation timestamp | Producers that keep media timestamps but do not carry frame IDs |
 | Round robin | `CombinePolicy::RoundRobin` | `pyneat.CombinePolicy.RoundRobin` | Forwards samples from all inputs fairly, one at a time, without bundling | Several independent live streams that share one model path |
@@ -90,9 +95,9 @@ Complete flow: [single-stream-object-detector](../../examples/object-detection/s
 
 ## Pitfalls
 
-- **Branches share one buffer.** `Branch` compiles to a shallow fan-out with no
-  copies, so every branch sees the same frame buffer. A branch that changes the
-  frame in place changes it for the others. Copy the frame before you change it.
+- **Branches share one buffer.** `Branch` does not copy the frame, so every
+  branch sees the same frame buffer. A branch that changes the frame in place
+  changes it for the others. Copy the frame before you change it.
 - **No silent fallback.** `ByFrame` fails when a sample has no frame ID and
   `ByPts` fails when it has no timestamp. Neither falls back to the other. Keep
   frame IDs when samples pass through your own code.
@@ -100,16 +105,20 @@ Complete flow: [single-stream-object-detector](../../examples/object-detection/s
   when each input delivered a matching sample. Independent cameras never match,
   so pairing them stalls. Use `RoundRobin` for independent streams.
 - **Two different defaults.** `Combine()` defaults to `ByFrame`, but
-  `OutputOptions::combine_policy` defaults to `None`. A hand-built fan-in without
-  a policy fails when the graph is built.
-- **The combined output holds four samples.** `Combine()` gives its output the
-  default `OutputOptions`: four queued samples, blocking when full. Pushing a
-  batch of more than four inputs before the first pull blocks the graph. Pull
-  while you push, or build the fan-in by hand with
-  `OutputOptions::EveryFrame(n)` sized for the batch. See
-  [queues and overflow](queues-and-overflow.md).
-- **Endpoint names must be unique.** An empty or repeated name in either helper
-  fails immediately with `duplicate endpoint name`.
+  `OutputOptions::combine_policy` defaults to `None`. A hand-built fan-in
+  without a policy fails when the graph is built with
+  `public endpoint has multiple producers`, unless every producer connects
+  through a `RealtimeLatestByStream` link.
+- **A batch pushed before the first pull can stall.** `Combine()` gives its
+  output the default `OutputOptions`: four waiting samples, and the graph waits
+  when they are full. The input and internal queues hold more samples, so more
+  than four inputs can go in before the first pull, but how many depends on the
+  graph. Pull while you push, or build the fan-in by hand with
+  `OutputOptions::EveryFrame(n)` sized for the batch, see
+  [Output](../outputs/output-node.md).
+- **Endpoint names must be non-empty and unique.** An empty name fails
+  immediately with `endpoint name must not be empty`. A repeated name fails with
+  `duplicate endpoint name`.
 
 ## Used in
 
@@ -124,6 +133,6 @@ Complete flow: [single-stream-object-detector](../../examples/object-detection/s
 
 ## Source
 
-- C++ header: `include/graphs/Fragments.h` (`Branch`, `Combine`), `include/nodes/common/Output.h` (`CombinePolicy`, `OutputOptions::combine_policy`), `include/graph/nodes/FanOut.h` (shared payload in a branch)
+- C++ header: `include/graphs/Fragments.h` (`Branch`, `Combine`), `include/nodes/common/Output.h` (`CombinePolicy`)
 - Python binding: `python/src/module.cpp`, `pyneat.graphs.branch`, `pyneat.graphs.combine`, `CombinePolicy`
-- Core commit: `8c9ffead`
+- Core commit: `c68a5241`
