@@ -56,8 +56,8 @@ Complete flow: [pcie-high-density-multi-stream-object-detector](../../examples/o
 | Option | C++ | Python | Default | What it does | Why and when to change it |
 |---|---|---|---|---|---|
 | Queue | `queue` | `queue` | `0` | The PCIe data queue that the node listens on | The PC sends on another queue. The pcie example reads it from `card.queue` in its config and accepts `0` to `5` |
-| Buffer size | `buffer_size` | `buffer_size` | `4194304` | Output buffer size in bytes when no size comes with the stream. Also the largest encoded sample | Not changed in any shipped example; keep the default |
-| Pool size | `pool_size` | `pool_size` | `0` | Output buffers per stream. `0` keeps the default of the PCIe element | The card runs out of memory: the pcie example's README says to lower `pcie.pool_size` if `CmaFree` on the card approaches zero. The example sets `2` and requires its decoder `input_buffers` to be at least `pool_size` |
+| Buffer size | `buffer_size` | `buffer_size` | `4194304` | Output buffer size in bytes when no size comes with the stream. Also the largest encoded sample | Keep the default. The pcie example reads it from its config and ships the default |
+| Pool size | `pool_size` | `pool_size` | `0` | Output buffers per stream. `0` keeps the default of the PCIe element | The card runs out of memory: the pcie example's README says to lower `pcie.pool_size` if `CmaFree` on the card approaches zero. The example's configs set `2` or `4`, and it requires its decoder `input_buffers` to be at least `pool_size` |
 
 ## Language differences
 

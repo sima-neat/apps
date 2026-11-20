@@ -70,10 +70,10 @@ camera = pyneat.CameraInputOptions()
 camera.width = CAMERA_WIDTH
 camera.height = CAMERA_HEIGHT
 camera.framerate_num = CAMERA_FPS
-camera.framerate_den = 1
 camera.format = "NV12"
 camera.buffer_name = CAMERA_BUFFER
 camera.allow_cpu_fallback = False
+camera_graph = pyneat.Graph(f"mipi_{profile.name}_camera")
 camera_graph.add(pyneat.nodes.camera_input(camera))
 ```
 
@@ -97,17 +97,17 @@ also called EV74, is the board's vision processor that runs preprocessing.
 
 | Option | C++ | Python | Default | What it does | Why and when to change it |
 |---|---|---|---|---|---|
-| Camera name | `camera_name` | `camera_name` | Not set (`std::nullopt`, `None`) | libcamera name of the camera, for example `"imx477 5-001a"` from `cam -l`. Not set means libcamera's default camera | Not changed in any shipped example; keep the default |
-| Width | `width` | `width` | `1920` | Frame width in pixels | Not changed in any shipped example; keep the default |
-| Height | `height` | `height` | `1080` | Frame height in pixels | Not changed in any shipped example; keep the default |
-| Frame rate numerator | `framerate_num` | `framerate_num` | `30` | Frame rate is `framerate_num / framerate_den` | Not changed in any shipped example; keep the default |
-| Frame rate denominator | `framerate_den` | `framerate_den` | `1` | Denominator of the frame rate. `0` becomes `1` | Not changed in any shipped example; keep the default |
-| Format | `format` | `format` | `"NV12"` | Pixel format the node announces. Empty becomes `NV12`. The output description covers `RGB`, `BGR`, `GRAY8`, `NV12`, `NV16` and `I420` | Not changed in any shipped example; keep the default |
+| Camera name | `camera_name` | `camera_name` | Not set (`std::nullopt`, `None`) | libcamera name of the camera, for example `"imx477 5-001a"` from `cam -l`. Not set means libcamera's default camera | The board has more than one camera. `mipi-camera-capture` reads it from its config |
+| Width | `width` | `width` | `1920` | Frame width in pixels | The camera mode you need. `mipi-multi-model` and `mipi-camera-capture` set it |
+| Height | `height` | `height` | `1080` | Frame height in pixels | Same as width |
+| Frame rate numerator | `framerate_num` | `framerate_num` | `30` | Frame rate is `framerate_num / framerate_den` | The camera mode you need. `mipi-multi-model` and `mipi-camera-capture` set it |
+| Frame rate denominator | `framerate_den` | `framerate_den` | `1` | Denominator of the frame rate. `0` becomes `1` | A fractional frame rate. `mipi-camera-capture` reads it from its config |
+| Format | `format` | `format` | `"NV12"` | Pixel format the node announces. Empty becomes `NV12`. The output description covers `RGB`, `BGR`, `GRAY8`, `NV12`, `NV16` and `I420` | The next node needs another format. `mipi-multi-model` sets `NV12` |
 | Buffer name | `buffer_name` | `buffer_name` | `"camera"` | Name that the CVU and MLA stages use to find this camera's frames. Empty becomes `"camera"` | A model route reads the camera by name: `mipi-multi-model` sets the same name in `ModelRouteOptions.buffer_name` |
 | Insert queue | `insert_queue` | `insert_queue` | `true` | Adds a small queue after the camera so the camera is not held back without limit | Not changed in any shipped example; keep the default |
 | Leaky queue | `leaky_queue` | `leaky_queue` | `true` | The queue drops frames when it is full instead of holding the camera back | Not changed in any shipped example; keep the default |
-| Queue depth | `queue_depth` | `queue_depth` | `2` | Buffer limit of the queue. `0` leaves the limit unset | Not changed in any shipped example; keep the default |
-| Allow CPU fallback | `allow_cpu_fallback` | `allow_cpu_fallback` | `false` | `false` is strict zero-copy: a frame that would need a copy fails. `true` copies such a frame on the board's CPU instead | Not changed in any shipped example; keep the default |
+| Queue depth | `queue_depth` | `queue_depth` | `2` | Buffer limit of the queue. `0` drops Neat's limit, so the queue keeps its GStreamer default | `mipi-camera-capture` reads it from its config |
+| Allow CPU fallback | `allow_cpu_fallback` | `allow_cpu_fallback` | `false` | `false` is strict zero-copy: a frame that would need a copy fails. `true` copies such a frame on the board's CPU instead | A copy is acceptable when zero-copy fails. `mipi-camera-capture` sets it from its `strict_zero_copy` config |
 
 `UsbCameraInputOptions`
 
@@ -117,14 +117,14 @@ required and there is no `format`.
 | Option | C++ | Python | Default | What it does | Why and when to change it |
 |---|---|---|---|---|---|
 | Camera name | `camera_name` | `camera_name` | `""` | Stable USB camera ID from `usb_camera_ids()`, for example `"/base/pci@7000000000-3.1:1.0-046d:08e5"`. The ID changes when the camera moves to another USB port | Always set it. Empty fails, see the pitfalls |
-| Width | `width` | `width` | `1920` | Width of an exact MJPEG mode of the camera | The camera has no 1920x1080 MJPEG mode. `single-stream-object-detector` sets `1280` in its config |
+| Width | `width` | `width` | `1920` | Width of an exact MJPEG mode of the camera | Your camera has no 1920x1080 MJPEG mode. `single-stream-object-detector` sets `1280` in its config |
 | Height | `height` | `height` | `1080` | Height of that MJPEG mode | Same as width. `single-stream-object-detector` sets `720` |
-| Frame rate numerator | `framerate_num` | `framerate_num` | `30` | Frame rate of that MJPEG mode, `framerate_num / framerate_den` | Not changed in any shipped example; keep the default |
+| Frame rate numerator | `framerate_num` | `framerate_num` | `30` | Frame rate of that MJPEG mode, `framerate_num / framerate_den` | Match the camera's mode. `single-stream-object-detector` sets it from its config `fps` |
 | Frame rate denominator | `framerate_den` | `framerate_den` | `1` | Denominator of the frame rate | Not changed in any shipped example; keep the default |
 | Buffer name | `buffer_name` | `buffer_name` | `"camera"` | Name that the CVU and MLA stages use to find this camera's frames. Empty fails | Not changed in any shipped example; keep the default |
 | Insert queue | `insert_queue` | `insert_queue` | `true` | Adds a small queue after the camera | Not changed in any shipped example; keep the default |
 | Leaky queue | `leaky_queue` | `leaky_queue` | `true` | The queue drops frames when it is full instead of holding the camera back | Not changed in any shipped example; keep the default |
-| Queue depth | `queue_depth` | `queue_depth` | `2` | Buffer limit of the queue. The capture pool holds `queue_depth + 6` frames, at most `64`, so the largest value is `58` | Not changed in any shipped example; keep the default |
+| Queue depth | `queue_depth` | `queue_depth` | `2` | Buffer limit of the queue. With `insert_queue`, the capture pool holds `queue_depth + 6` frames, at most `64`, so the largest value is `58` | Not changed in any shipped example; keep the default |
 
 `UsbCameraInfo`, returned by `usb_camera_info(opt)`
 
@@ -151,11 +151,11 @@ APU is the application processor, the board's general-purpose CPU.
 | User agent | `user_agent` | `user_agent` | `""` | HTTP User-Agent header. Empty keeps the source's default | Not changed in any shipped example; keep the default |
 | Multipart boundary | `multipart_boundary` | `multipart_boundary` | `""` | Multipart boundary string. Empty means detect it from the stream | Not changed in any shipped example; keep the default |
 | Single stream | `multipart_single_stream` | `multipart_single_stream` | `false` | `true` assumes the multipart content type does not change | Not changed in any shipped example; keep the default |
-| Insert queue | `insert_queue` | `insert_queue` | `true` | Adds a queue after the HTTP source and one after the JPEG parser | Not changed in any shipped example; keep the default |
+| Insert queue | `insert_queue` | `insert_queue` | `true` | Adds a queue after the HTTP source and one after the JPEG parser, or after the multipart demux when `header_capture` is set | Not changed in any shipped example; keep the default |
 | Sync mode | `sync_mode` | `sync_mode` | `false` | `true` removes the queues that `insert_queue` adds | Not changed in any shipped example; keep the default |
 | Allocator type | `sima_allocator_type` | `sima_allocator_type` | `2` | Memory allocator for the decoded frames | Not changed in any shipped example; keep the default |
-| Output format | `out_format` | `out_format` | `NV12` | Pixel format the decoder outputs: `NV12`, `I420` or `NV16` | Not changed in any shipped example; keep the default |
-| Decoder name | `decoder_name` | `decoder_name` | `""` | Name of the decoder node | `single-stream-object-detector` sets `"decoder"` |
+| Output format | `out_format` | `out_format` | `NV12` | Pixel format the decoder outputs. With `decoder_raw_output = true` it must be `NV12`, `I420` or `NV16`; see [decode-and-caps](decode-and-caps.md) | Not changed in any shipped example; keep the default |
+| Decoder name | `decoder_name` | `decoder_name` | `""` | Name of the decoder node, also used as the name of its output buffer. Empty gives `n<index>_decoder` | `single-stream-object-detector` sets `"decoder"` |
 | Raw output | `decoder_raw_output` | `decoder_raw_output` | `true` | `true` keeps decoded frames in SiMa memory | Not changed in any shipped example; keep the default |
 | Decoder next element | `decoder_next_element` | `decoder_next_element` | `""` | Tells the decoder which processor reads its output: `CVU` or `APU` | Not changed in any shipped example; keep the default |
 | Decode width | `dec_width` | `dec_width` | `-1` | Width of the decoded frames. `-1` takes it from the stream | Not changed in any shipped example; keep the default |
@@ -169,7 +169,7 @@ APU is the application processor, the board's general-purpose CPU.
 | Strict TLS | `ssl_strict` | `ssl_strict` | `true` | `false` turns off strict TLS certificate checks | The server uses a self-signed HTTPS certificate: `single-stream-object-detector` documents `ssl_strict: false` for that in its config |
 | Source FPS | `source_fps` | `source_fps` | `-1` | Frame rate the server sends. Written into the caps and used as the decoder frame rate | The stream does not report a frame rate. `single-stream-object-detector` sets it from its config `fps`, where `0` detects it from the stream |
 | Videorate | `use_videorate` | `use_videorate` | `false` | Adds a node that drops frames to lower the rate to `video_rate_fps`. It never repeats frames | Not changed in any shipped example; keep the default |
-| Videorate FPS | `video_rate_fps` | `video_rate_fps` | `-1` | Frame rate that videorate outputs. `-1` means `source_fps` | Not changed in any shipped example; keep the default |
+| Videorate FPS | `video_rate_fps` | `video_rate_fps` | `-1` | Frame rate that videorate outputs. `-1` means the source frame rate | Not changed in any shipped example; keep the default |
 | Header capture | `header_capture` | `header_capture` | Empty | Names of multipart part headers to copy into `Sample::attributes` of the decoded frame they arrived with. Empty turns capture off. At most 64 names of at most 128 bytes | Not changed in any shipped example; keep the default |
 
 The `HttpMjpegDecodedInputOptions` header says `sync_mode` makes the sink
@@ -241,16 +241,8 @@ elements run in sync mode, but Core only removes the queues that
   `output_caps.fps conflicts with source_fps; use video_rate_fps for rate conversion`
   or `output_caps.fps conflicts with video_rate_fps`. Fix: set only
   `source_fps`, and use videorate to change the rate.
-- **An output format the decoder cannot produce.** With
-  `decoder_raw_output = true`, an `out_format` other than `NV12`, `I420` or
-  `NV16` fails with
-  `SimaDecode: raw_output supports only NV12 or I420 (or NV16 for JPEG/MJPEG)`.
-- **The output format does not match the model.** A model's preprocessing is
-  prepared for one input format. When frames arrive in another format, the
-  preprocessing rejects them at run time with
-  `video caps exceed the prepared format/capacity envelope`. Fix: set the
-  model's preprocessing input format to the camera's output format. Read in
-  the source, not verified on a device.
+- **An output format the decoder cannot produce, or frames that do not match
+  the model.** See the pitfalls in [decode-and-caps](decode-and-caps.md).
 
 ## Used in
 

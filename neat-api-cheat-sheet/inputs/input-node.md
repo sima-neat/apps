@@ -21,7 +21,7 @@ Accelerator) runs the model, and DMS0 is the memory it reads its input from.
 `nodes::Input("name")` also gives the graph a named endpoint: an input that
 other code finds by its name. A fragment is a graph made to be joined to other
 graphs, for example the graph that `model.graph()` returns. `Graph::connect()`
-joins another fragment to the named input, see [links](../graph/links.md).
+joins another fragment to the named input, see the Links page of this cheat sheet.
 
 ## When to use it
 

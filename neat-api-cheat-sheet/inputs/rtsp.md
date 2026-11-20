@@ -91,7 +91,7 @@ SPS and PPS are the H.264 headers that a decoder needs before the first frame.
 | Codec | `codec` | `codec` | `RtspCodec::H264` | Which codec path to build. See the `RtspCodec` table | The camera streams H.265 or MJPEG |
 | Latency | `latency_ms` | `latency_ms` | `200` | Size of the receiver's jitter buffer, in milliseconds | Shipped examples set `100`, for example `single-stream-object-detector` and `high-density-multi-stream-object-detector` in their `src/common/config.yaml` |
 | TCP | `tcp` | `tcp` | `true` | `true` requests RTSP over TCP, `false` over UDP | Not changed in any shipped example; keep the default |
-| Drop on latency | `drop_on_latency` | `drop_on_latency` | `true` | Asks the receiver to drop late buffers instead of stalling | Not changed in any shipped example; keep the default |
+| Drop on latency | `drop_on_latency` | `drop_on_latency` | `true` | Asks the receiver to drop late buffers instead of stalling | `high-density-multi-stream-object-detector` sets it from its config. Otherwise keep the default |
 | Buffer mode | `buffer_mode` | `buffer_mode` | `""` (receiver default) | Buffering mode of the RTSP receiver, for example `none` | The rfdetr example sets `none` for TCP streams. Otherwise leave it |
 | Insert queue | `insert_queue` | `insert_queue` | `true` | Adds a queue after the receiver and one after the depacketizer or parser, so each runs in its own thread | Not changed in any shipped example; keep the default |
 | Sync mode | `sync_mode` | `sync_mode` | `false` | `true` removes the queues that `insert_queue` adds, the same as `insert_queue = false` | Not changed in any shipped example; keep the default |
@@ -99,14 +99,14 @@ SPS and PPS are the H.264 headers that a decoder needs before the first frame.
 | MJPEG payload type (deprecated) | `mjpeg_payload_type` | `mjpeg_payload_type` | `26` | Old MJPEG payload filter. Used only when `payload_type` is `-1` | Never in new code. Use `payload_type` |
 | SPS/PPS interval | `h264_parse_config_interval` | `h264_parse_config_interval` | `-1` (parser default) | How often the H.264 parser repeats SPS and PPS | A decoder that joins the stream late and waits for the next keyframe to start |
 | H.264 FPS | `h264_fps` | `h264_fps` | `-1` | Frame rate written into the H.264 caps | Use `source_fps` instead. Both together must be equal |
-| H.264 width | `h264_width` | `h264_width` | `-1` | Width written into the H.264 caps | You know the stream size and turn `auto_caps_from_stream` off |
+| H.264 width | `h264_width` | `h264_width` | `-1` | Width written into the H.264 caps. With width, height and a frame rate all set, these caps are used even when `auto_caps_from_stream` is on | You know the stream size |
 | H.264 height | `h264_height` | `h264_height` | `-1` | Height written into the H.264 caps | Same as width |
-| Auto caps | `auto_caps_from_stream` | `auto_caps_from_stream` | `true` | Reads the H.264 size and frame rate from the stream. For MJPEG, reads the frame rate from the RTSP session description when `source_fps` is not set | Set `false` only with width, height and frame rate all set, see the pitfalls |
+| Auto caps | `auto_caps_from_stream` | `auto_caps_from_stream` | `true` | Reads the H.264 size and frame rate from the stream when any of them is not set. For MJPEG, reads the frame rate from the RTSP session description when `source_fps` is not set | Set `false` only with width, height and frame rate all set, see the pitfalls |
 | Fallback FPS | `fallback_h264_fps` | `fallback_h264_fps` | `-1` | H.264 frame rate used when the stream does not carry one | The camera does not announce its frame rate and a later node needs one, for example an encoder |
 | Fallback width | `fallback_h264_width` | `fallback_h264_width` | `-1` | H.264 width used when the stream does not carry one | The camera does not announce its size |
 | Fallback height | `fallback_h264_height` | `fallback_h264_height` | `-1` | H.264 height used when the stream does not carry one | Same as fallback width |
 | Source FPS | `source_fps` | `source_fps` | `-1` | The frame rate the camera sends. Written into the caps for every codec | The camera does not announce its frame rate. Set the real rate, it does not change the rate |
-| Payload type | `payload_type` | `payload_type` | `-1` | Only RTP packets with this payload type are accepted. `-1` means the codec default: `96` for H.264 and H.265, `26` for MJPEG. `0` accepts any | Shipped examples set only the codec default `96`, for example `single-stream-object-detector`. Keep the default |
+| Payload type | `payload_type` | `payload_type` | `-1` | Only RTP packets with this payload type are accepted. `-1` means the codec default: `96` for H.264 and H.265, `26` for MJPEG. `0` accepts any | Keep the default, which already matches the codec |
 
 `RtspDecodedInputOptions`
 
@@ -124,10 +124,10 @@ board's general-purpose CPU.
 | Option | C++ | Python | Default | What it does | Why and when to change it |
 |---|---|---|---|---|---|
 | Allocator type | `sima_allocator_type` | `sima_allocator_type` | `2` | Memory allocator for the decoded frames | Not changed in any shipped example; keep the default |
-| Output format | `out_format` | `out_format` | `NV12` | Pixel format the decoder outputs: `NV12`, `I420`, or `NV16` for MJPEG only. `I420` turns off zero-copy output, so each frame is copied before the next node gets it | The next node needs `I420`, or a 4:2:2 MJPEG camera should stay `NV16` |
-| Decoder name | `decoder_name` | `decoder_name` | `""` | Name of the decoder node | You look up the decoder by name, for example in logs or in a graph description |
+| Output format | `out_format` | `out_format` | `NV12` | Pixel format the decoder outputs. With `decoder_raw_output = true` it must be `NV12`, `I420`, or `NV16` for MJPEG; with `false` any raw format works. `I420` turns off zero-copy output, so each frame is copied before the next node gets it | The next node needs `I420`, or a 4:2:2 MJPEG camera should output `NV16` |
+| Decoder name | `decoder_name` | `decoder_name` | `""` | Name of the decoder node, also used as the name of its output buffer. Empty gives `n<index>_decoder` | You look up the decoder by name, for example in logs or in a graph description |
 | Raw output | `decoder_raw_output` | `decoder_raw_output` | `true` | `true` keeps decoded frames in SiMa memory. `false` outputs them in system memory | Not changed in any shipped example; keep the default |
-| Decoder next element | `decoder_next_element` | `decoder_next_element` | `""` | Tells the decoder which processor reads its output: `CVU` or `APU` | Not changed in any shipped example; keep the default |
+| Decoder next element | `decoder_next_element` | `decoder_next_element` | `""` | Tells the decoder which processor reads its output: `CVU` or `APU` | `high-density-multi-stream-object-detector` sets `CVU` on its own `SimaDecode`. Otherwise keep the default |
 | Videoconvert | `use_videoconvert` | `use_videoconvert` | `false` | Adds a format converter after the decoder | Not changed in any shipped example; keep the default |
 | Videoscale | `use_videoscale` | `use_videoscale` | `false` | Adds a scaler after the decoder | Not changed in any shipped example; keep the default |
 | Output caps | `output_caps` | `output_caps` | Off | Fixes the caps at the end of the group. See the `OutputCaps` table | The next node needs a fixed format, size and frame rate, for example a model input |
@@ -135,18 +135,18 @@ board's general-purpose CPU.
 | Decode width | `dec_width` | `dec_width` | `-1` | Width of the decoded frames. For MJPEG, `output_caps.width` is used when this is `-1` and `use_videoscale` is off | H.265 and MJPEG cameras whose size the decoder must know. The examples set it for those codecs |
 | Decode height | `dec_height` | `dec_height` | `-1` | Height of the decoded frames | Same as decode width |
 | Decode FPS | `dec_fps` | `dec_fps` | `-1` | Frame rate of the decoded frames. Also a fallback source frame rate | Use `source_fps` instead. Both together must be equal |
-| Decoder buffers | `num_buffers` | `num_buffers` | `-1` (decoder default) | How many decoded frames the decoder can hold | The model and preview keep frames while the decoder needs free ones, for example the rfdetr example sets `32` for MJPEG |
+| Decoder buffers | `num_buffers` | `num_buffers` | `-1` (decoder default) | How many decoded frames the decoder can hold | The model and preview keep frames while the decoder needs free ones, for example the rfdetr example sets `32` on its own `SimaDecode` for MJPEG |
 | Videorate | `use_videorate` | `use_videorate` | `false` | Adds a node that drops frames to lower the rate to `video_rate_fps`. It never repeats frames | The next node needs a lower frame rate than the camera sends |
-| Videorate FPS | `video_rate_fps` | `video_rate_fps` | `-1` | Frame rate that videorate outputs. `-1` means `source_fps` | Set the rate you need. Requires `use_videorate = true` |
-| Decoder input buffers | `decoder_input_buffers` | `decoder_input_buffers` | `-1` (decoder default) | How many encoded frames the decoder can queue | Many streams on one board. The high-density example sets it from its config |
-| Decoder tuning | `decoder_tuning` | `decoder_tuning` | `""` | Decoder tuning preset, for example `low-memory` or `throughput-low-latency` | Many streams on one board run out of decoder memory or fall behind. The high-density example sets it from its config |
-| Decoder memory optimization | `decoder_memory_opt` | `decoder_memory_opt` | `false` | Turns on the decoder's memory-optimized path | Not changed in any shipped example; keep the default |
+| Videorate FPS | `video_rate_fps` | `video_rate_fps` | `-1` | Frame rate that videorate outputs. `-1` means the source frame rate | Set the rate you need. Requires `use_videorate = true` |
+| Decoder input buffers | `decoder_input_buffers` | `decoder_input_buffers` | `-1` (decoder default) | How many encoded frames the decoder can queue | Many streams on one board. The high-density example sets the matching `SimaDecode` option from its config |
+| Decoder tuning | `decoder_tuning` | `decoder_tuning` | `""` | Decoder tuning preset, for example `low-memory` or `throughput-low-latency` | Many streams on one board run out of decoder memory or fall behind. The high-density example sets the matching `SimaDecode` option from its config |
+| Decoder memory optimization | `decoder_memory_opt` | `decoder_memory_opt` | `false` | Turns on the decoder's memory-optimized path | The high-density example turns on the matching `SimaDecode` option with the `low-memory` or `throughput-low-latency` tuning |
 
 `OutputCaps` (`RtspDecodedInputOptions::output_caps`, Python `pyneat.RtspDecodedInputOutputCaps`)
 
 | Option | C++ | Python | Default | What it does | Why and when to change it |
 |---|---|---|---|---|---|
-| Enable | `enable` | `enable` | `false` | Adds the caps filter. The other fields apply only when this is `true` | Set it with the fields you need |
+| Enable | `enable` | `enable` | `false` | Adds the caps filter. Without it, `fps` is still checked against `source_fps` and, for MJPEG, still serves as the fallback frame rate, and `width` and `height` still set the decode size when `dec_width` and `dec_height` are `-1` | Set it with the fields you need |
 | Format | `format` | `format` | `NV12` | Pixel format the group announces | Match `out_format`, or the converter output when `use_videoconvert` is on |
 | Width | `width` | `width` | `-1` (not fixed) | Width the group announces | The next node needs a fixed size |
 | Height | `height` | `height` | `-1` (not fixed) | Height the group announces | Same as width |
@@ -172,12 +172,13 @@ parser. The tables above describe what Core does.
   rate.** When auto caps are off, width, height and frame rate must all
   resolve. Width and height come from `h264_width`/`h264_height`, then the
   fallback fields. The frame rate comes from `source_fps`, then `h264_fps`,
-  then `fallback_h264_fps`. `RtspDecodedInput` also tries `dec_fps` and
-  `dec_width`/`dec_height`. Otherwise `RtspEncodedInput` fails with
+  then `fallback_h264_fps`. Otherwise both groups fail with
   `H.264 explicit caps require width, height, and fps when auto_caps_from_stream is false`,
-  and `RtspDecodedInput` with `decoder_raw_output = true` fails with
-  `decoder_raw_output requires h264 width/height/fps`. Fix: set all three, or
-  keep `auto_caps_from_stream = true`.
+  because `RtspDecodedInput` builds an `RtspEncodedInput` inside. `dec_fps`,
+  `dec_width` and `dec_height` do not count for this check. They only satisfy
+  the earlier `decoder_raw_output requires h264 width/height/fps` check of
+  `RtspDecodedInput`. Fix: set all three, or keep
+  `auto_caps_from_stream = true`.
 - **Two frame-rate options with different values.** `source_fps` together
   with `h264_fps` or `dec_fps` of another value fails with
   `source_fps conflicts with h264_fps` or `... with dec_fps`. For H.264 in
@@ -194,18 +195,8 @@ parser. The tables above describe what Core does.
   fails with `use_videorate requires video_rate_fps or source_fps`. With
   `output_caps.enable`, an `output_caps.fps` that differs from the videorate
   rate fails with `output_caps.fps conflicts with video_rate_fps`.
-- **An output format the decoder cannot produce.** With
-  `decoder_raw_output = true`, any `out_format` other than `NV12`, `I420`, or
-  `NV16` for MJPEG fails with
-  `SimaDecode: raw_output supports only NV12 or I420 (or NV16 for JPEG/MJPEG)`.
-  Fix: decode to `NV12` and convert later, for example with
-  `use_videoconvert`.
-- **The output format does not match the model.** A model's preprocessing is
-  prepared for one input format. When the frames arrive in another format,
-  the preprocessing rejects them at run time with
-  `video caps exceed the prepared format/capacity envelope`. Fix: set the
-  model's preprocessing input format to the group's `out_format`, usually
-  NV12. Read in the source, not verified on a device.
+- **An output format the decoder cannot produce, or frames that do not match
+  the model.** See the pitfalls in [decode-and-caps](decode-and-caps.md).
 - **The deprecated payload fields print a warning.** Setting
   `h264_payload_type` or `mjpeg_payload_type` to a value other than the codec
   default, with `payload_type` still `-1`, prints a deprecation warning once.

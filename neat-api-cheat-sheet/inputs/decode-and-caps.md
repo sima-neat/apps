@@ -67,7 +67,7 @@ decoder.add(pyneat.nodes.caps_raw("NV12", stream.frame_w, stream.frame_h,
 
 Complete flow: [multi-stream-object-detector](../../examples/object-detection/multi-stream-object-detector/)
 
-`VideoConvert`, `VideoRate` and `VideoScale` followed by `CapsRaw`:
+`VideoRate` followed by `CapsRaw`, added when the configured frame rate differs from the source:
 [yolo26-tiny-drone-tracker](../../examples/tracking/yolo26-tiny-drone-tracker/)
 
 ## Options
@@ -91,8 +91,8 @@ processor, the board's general-purpose CPU.
 |---|---|---|---|---|---|
 | Type | `type` | `type` | `SimaDecodeType::H264` | Encoded input type. See the `SimaDecodeType` table | The stream is H.265, JPEG or MJPEG. Every shipped example sets it |
 | Allocator type | `sima_allocator_type` | `sima_allocator_type` | `2` | Memory allocator for the decoded frames | Not changed in any shipped example; keep the default |
-| Output format | `out_format` | `out_format` | `NV12` | Pixel format of the decoded frames. With `raw_output = true`: `NV12`, `I420`, or `NV16` for JPEG and MJPEG | A 4:2:2 USB camera: `single-stream-object-detector` sets `usb_camera_info().decoded_format`, which can be `NV16` |
-| Decoder name | `decoder_name` | `decoder_name` | `""` | Name of the decoder. Empty names it `n<index>_decoder` | The examples set `"decoder"` |
+| Output format | `out_format` | `out_format` | `NV12` | Pixel format of the decoded frames. With `raw_output = true`: `NV12`, `I420`, or `NV16` for JPEG and MJPEG. With `false`, any raw format. `I420` turns off zero-copy output | A 4:2:2 USB camera: `single-stream-object-detector` sets `usb_camera_info().decoded_format`, which can be `NV16` |
+| Decoder name | `decoder_name` | `decoder_name` | `""` | Name of the decoder, also used as the name of its output buffer. Empty names it `n<index>_decoder` | The examples set `"decoder"` |
 | Raw output | `raw_output` | `raw_output` | `true` | `true` outputs the decoder's frames in SiMa memory. `false` adds a format converter and outputs `out_format` in system memory | Not changed in any shipped example; keep the default |
 | Next element | `next_element` | `next_element` | `""` | Tells the decoder which processor reads its output: `CVU` or `APU` | `high-density-multi-stream-object-detector` sets `CVU` for decoded frames that go to the model |
 | Decode width | `dec_width` | `dec_width` | `-1` | Width of the decoded frames. `-1` takes it from the stream | The examples set the stream width they probed |
@@ -120,7 +120,7 @@ processor, the board's general-purpose CPU.
 | Value | C++ | Python | What it does | When to use it |
 |---|---|---|---|---|
 | Any | `CapsMemory::Any` | `pyneat.CapsMemory.Any` | Leaves the memory open | Default. The examples set `Any` |
-| System memory | `CapsMemory::SystemMemory` | `pyneat.CapsMemory.SystemMemory` | The caps announce system memory, so the frames are in memory the board's CPU can map | Not changed in any shipped example; keep the default |
+| System memory | `CapsMemory::SystemMemory` | `pyneat.CapsMemory.SystemMemory` | The caps require system memory. Nothing is copied, so the node before it must already output system memory, for example `VideoConvert` | Not changed in any shipped example; keep the default |
 
 `VideoConvert()`, `VideoScale()`, `VideoRate()`
 
@@ -153,7 +153,8 @@ The `CapsRaw` header lists `SysMem` and `MlaShm` as memory examples, but
   fails with
   `SimaDecode: raw_output supports only NV12 or I420 (or NV16 for JPEG/MJPEG)`.
   Fix: decode to `NV12` and add `VideoConvert` and `CapsRaw` with the format
-  you need.
+  you need. A name Core does not know, such as `"RGBA"`, does not fail: it
+  becomes `NV12`.
 - **`raw_output = false` moves frames to system memory.** `SimaDecode` then
   adds a format converter after the decoder and announces `out_format` in
   system memory, so the frames leave SiMa memory. Fix: keep
@@ -161,7 +162,7 @@ The `CapsRaw` header lists `SysMem` and `MlaShm` as memory examples, but
 - **A fractional frame rate in `CapsRaw`.** `fps` is a whole number written
   as `fps/1`, so a rate such as `30000/1001` cannot be set.
 - **The decoded format does not match the model.** A model's preprocessing is
-  prepared for one input format. When frames arrive in another format, the
+  prepared for one input format. When frames arrive in another format, or larger than the prepared size, the
   preprocessing rejects them at run time with
   `video caps exceed the prepared format/capacity envelope`. Fix: set the
   model's preprocessing input format to `out_format`, for example `NV16` for a
@@ -174,7 +175,7 @@ The `CapsRaw` header lists `SysMem` and `MlaShm` as memory examples, but
 - [rfdetr-detection-segmentation](../../examples/object-detection/rfdetr-detection-segmentation/) (`num_buffers` for MJPEG)
 - [single-stream-object-detector](../../examples/object-detection/single-stream-object-detector/) (`SimaDecode` MJPEG after `UsbCameraInput`)
 - [multi-stream-multi-model](../../examples/multi-model/multi-stream-multi-model/) (`num_buffers`)
-- [yolo26-tiny-drone-tracker](../../examples/tracking/yolo26-tiny-drone-tracker/) (`VideoConvert`, `VideoRate`, `VideoScale`, `CapsRaw`)
+- [yolo26-tiny-drone-tracker](../../examples/tracking/yolo26-tiny-drone-tracker/) (`VideoRate`, `CapsRaw`)
 
 ## Source
 
