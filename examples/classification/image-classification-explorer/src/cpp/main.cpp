@@ -4,8 +4,8 @@
  * and generate a browsable HTML report plus JSON/CSV results.
  */
 #include "neat.h"
-#include "support/runtime/config_utils.h"
-#include "support/runtime/example_utils.h"
+#include "sima_examples/config.h"
+#include "sima_examples/example_utils.h"
 
 #include <nlohmann/json.hpp>
 #include <opencv2/imgcodecs.hpp>
@@ -66,7 +66,7 @@ public:
 std::string lower_copy(std::string value); // defined below, used by parse_yaml_int
 
 // PyYAML reads integers with the YAML 1.1 rules: a leading zero is octal, `0x`
-// and `0b` are radix prefixes and underscores are separators. ScalarConfig uses
+// and `0b` are radix prefixes and underscores are separators. Config uses
 // std::stoi in base 10, so `num_classes: 010` is 8 to Python and 10 to C++ -
 // no error on either side, just two different runs. Parse it the way PyYAML
 // does so both read the same number out of the same file.
@@ -168,7 +168,7 @@ std::string decode_double_quoted_yaml(const std::string& body) {
   std::string out;
   out.reserve(body.size());
   // A single-quoted YAML scalar escapes an apostrophe by doubling it, so
-  // `'report''s'` is `report's` to PyYAML. ScalarConfig strips the outer quotes
+  // `'report''s'` is `report's` to PyYAML. Config strips the outer quotes
   // and leaves the pair, and the quote style is gone by the time we see it - so
   // collapse unconditionally, which both sides do, rather than leave one
   // spelling agreeing and the other not.
@@ -337,11 +337,11 @@ bool path_is_real_directory(const fs::path& p) {
   return !ec && fs::is_directory(status);
 }
 
-// PyYAML resolves `~` to null, so `input: ~` means "not set". ScalarConfig only
+// PyYAML resolves `~` to null, so `input: ~` means "not set". Config only
 // recognises the spelling `null`, so without this C++ would look for a file
 // literally named "~" while Python downloaded the fallback sample.
 // PyYAML 1.1 resolves these spellings to a Boolean, and Python renders the
-// Boolean as "true"/"false". ScalarConfig passes the original word through, so
+// Boolean as "true"/"false". Config passes the original word through, so
 // `output_dir: yes` was the directory "yes" here and "true" there.
 // Python prints a float with str(): the shortest text that reads back as the
 // same value, and never bare digits - 0.0 prints as "0.0", not "0".
@@ -383,7 +383,7 @@ std::string python_float_text(double value) {
 }
 
 // The fourth YAML scalar type. PyYAML resolves `1_000.0` to 1000.0 and Python
-// renders it "1000.0"; ScalarConfig keeps the text. A '.' or an exponent is
+// renders it "1000.0"; Config keeps the text. A '.' or an exponent is
 // required so this never claims a value the integer reader should have, and the
 // whole string must match so a path like "models/v1.0" or an extension ".jpg"
 // is left alone.
@@ -437,12 +437,11 @@ std::optional<bool> parse_yaml_bool(const std::string& text) {
 std::string unquote_yaml_key(const std::string& key);    // defined below
 std::string strip_yaml_comment(const std::string& line); // defined below
 
-// ScalarConfig unquotes values but not keys, so a quoted section or profile
+// Config unquotes values but not keys, so a quoted section or profile
 // name is stored with its quotes and `models.m.path` misses entirely. PyYAML
 // normalises the key, so build the same view once: every dotted segment
 // unquoted, which is also how profile names are compared elsewhere.
-const std::map<std::string, std::string>&
-normalized_scalars(const sima_examples::ScalarConfig& raw) {
+const std::map<std::string, std::string>& normalized_scalars(const sima_examples::Config& raw) {
   static std::map<std::string, std::string> cache;
   static bool built = false;
   if (!built) {
@@ -467,8 +466,7 @@ normalized_scalars(const sima_examples::ScalarConfig& raw) {
   return cache;
 }
 
-std::optional<std::string> config_scalar(const sima_examples::ScalarConfig& raw,
-                                         const std::string& key) {
+std::optional<std::string> config_scalar(const sima_examples::Config& raw, const std::string& key) {
   std::optional<std::string> value = raw.string_value(key);
   if (!value.has_value()) {
     const auto& normalized = normalized_scalars(raw);
@@ -482,8 +480,8 @@ std::optional<std::string> config_scalar(const sima_examples::ScalarConfig& raw,
   // take their text from this function, and decoding only in the string path
   // meant `input_width: "\\x32\\x32\\x34"` was 224 to PyYAML and unparseable here.
   const std::string decoded = sima_examples::trim_copy(decode_double_quoted_yaml(*value));
-  // ScalarConfig already treats a bare `null` as absent, but an escape can also
-  // decode *to* null, and `~` is null to PyYAML and not to ScalarConfig.
+  // Config already treats a bare `null` as absent, but an escape can also
+  // decode *to* null, and `~` is null to PyYAML and not to Config.
   if (decoded == "~" || lower_copy(decoded) == "null")
     return std::nullopt;
   if (decoded.find('\0') != std::string::npos) {
@@ -497,12 +495,12 @@ std::optional<std::string> config_scalar(const sima_examples::ScalarConfig& raw,
   return decoded;
 }
 
-std::string config_scalar_or(const sima_examples::ScalarConfig& raw, const std::string& key,
+std::string config_scalar_or(const sima_examples::Config& raw, const std::string& key,
                              const std::string& fallback) {
   const auto raw_value = config_scalar(raw, key);
   if (!raw_value.has_value())
     return fallback;
-  // ScalarConfig unquotes but does not decode, so a double-quoted escape such
+  // Config unquotes but does not decode, so a double-quoted escape such
   // as `"report\\u002d2026"` arrives here as literal backslash text while
   // PyYAML already gave Python `report-2026`. Decoding unconditionally is what
   // makes the two agree: an escape that PyYAML left alone because the value was
@@ -512,12 +510,12 @@ std::string config_scalar_or(const sima_examples::ScalarConfig& raw, const std::
   const std::optional<std::string> value = raw_value; // config_scalar decoded it
   // PyYAML resolves an unquoted numeric scalar to a number, and Python renders
   // that number as text, so `output_dir: 010` names the directory "8" there.
-  // ScalarConfig keeps the text "010" and cannot see whether it was quoted, so
+  // Config keeps the text "010" and cannot see whether it was quoted, so
   // canonicalise the same way here: both entrypoints then agree for either
   // spelling. A value that is not a YAML integer is untouched.
   if (const auto number = parse_yaml_int(*value))
     return std::to_string(*number);
-  // A collection written where a scalar belongs. ScalarConfig keeps the text,
+  // A collection written where a scalar belongs. Config keeps the text,
   // so C++ would create a directory literally named "[a, b]" while Python
   // rejects the list. Both reject it now - including the quoted spelling, which
   // neither side can distinguish, so both treat it the same way.
@@ -533,7 +531,7 @@ std::string config_scalar_or(const sima_examples::ScalarConfig& raw, const std::
   return *value;
 }
 
-int config_int(const sima_examples::ScalarConfig& raw, const std::string& key, int fallback) {
+int config_int(const sima_examples::Config& raw, const std::string& key, int fallback) {
   const auto text = config_scalar(raw, key);
   if (!text.has_value())
     return fallback;
@@ -652,11 +650,11 @@ std::string lower_copy(std::string value) {
   return value;
 }
 
-// ScalarConfig unquotes values but not mapping keys, so a profile declared as
+// Config unquotes values but not mapping keys, so a profile declared as
 // `"resnet_50":` arrives with its quotes attached. Strip them for display and
 // metadata while the original spelling stays the lookup key.
 // Profile names travel through config keys, report columns, CSV/JSON fields and
-// the HTML controls, and ScalarConfig addresses them through dotted, colon-
+// the HTML controls, and Config addresses them through dotted, colon-
 // separated keys. Restrict them to a portable set so both languages accept
 // exactly the same names instead of diverging on exotic YAML keys.
 bool is_valid_profile_name(const std::string& name) {
@@ -800,7 +798,7 @@ std::vector<std::string> split_csv(const std::string& value) {
   return out;
 }
 
-// ScalarConfig flattens nested maps into dotted keys (e.g. "models.resnet_50.path") and
+// Config flattens nested maps into dotted keys (e.g. "models.resnet_50.path") and
 // stores them in an unordered/sorted map, so it cannot tell us the order profiles were
 // declared in. Recover the *set* of profile names (order not meaningful here) by
 // scanning the raw scalar map. The profile name is everything before the final
@@ -808,7 +806,7 @@ std::vector<std::string> split_csv(const std::string& value) {
 // with a clear message instead of being silently truncated.
 // Items of a block sequence under `parent: / key:`, in file order.
 //
-// ScalarConfig drops block-sequence entries outright (it skips any line opening
+// Config drops block-sequence entries outright (it skips any line opening
 // with "- "), so a perfectly ordinary
 //
 //     output_format:
@@ -818,7 +816,7 @@ std::vector<std::string> split_csv(const std::string& value) {
 // reached C++ as nothing at all while PyYAML gave Python the full list - the
 // two entrypoints silently ran different configurations, which is the failure
 // this application exists to avoid. The flow form `[html, json]` survives
-// ScalarConfig as text and is handled by config_formats; this covers the block
+// Config as text and is handled by config_formats; this covers the block
 // form, which has to come from the file itself.
 std::vector<std::string> block_sequence_items(const fs::path& config_path,
                                               const std::string& parent_key,
@@ -880,7 +878,7 @@ const std::array<const char*, 3> kReportFormats = {"html", "json", "csv"};
 // Which report files to write, defaulting to html alone.
 //
 // Accepts a YAML sequence (`[html, json]`) or a comma-separated scalar
-// (`html,json`). ScalarConfig flattens the file, so a sequence arrives here as
+// (`html,json`). Config flattens the file, so a sequence arrives here as
 // the literal text "[html, json]" - PyYAML gives Python a real list from the
 // same bytes, and io.extensions in the same block already uses the comma form
 // for exactly this reason. Supporting both spellings is what keeps the two
@@ -888,14 +886,14 @@ const std::array<const char*, 3> kReportFormats = {"html", "json", "csv"};
 //
 // Returned in kReportFormats order, not the order written, so the value behaves
 // as a set and both entrypoints iterate it identically.
-std::vector<std::string> config_formats(const sima_examples::ScalarConfig& raw,
-                                        const std::string& key, const fs::path& config_path) {
+std::vector<std::string> config_formats(const sima_examples::Config& raw, const std::string& key,
+                                        const fs::path& config_path) {
   const auto value = config_scalar(raw, key);
   std::string text;
   if (value.has_value()) {
     text = sima_examples::trim_copy(*value);
   } else {
-    // Either absent, or written as a block sequence that ScalarConfig dropped.
+    // Either absent, or written as a block sequence that Config dropped.
     const auto dot = key.find('.');
     const auto items =
         dot == std::string::npos
@@ -952,7 +950,7 @@ std::vector<std::string> config_formats(const sima_examples::ScalarConfig& raw,
   return ordered;
 }
 
-std::vector<std::string> profile_names(const sima_examples::ScalarConfig& raw) {
+std::vector<std::string> profile_names(const sima_examples::Config& raw) {
   std::vector<std::string> names;
   std::set<std::string> seen;
   for (const auto& [key, value] : raw.scalars()) {
@@ -982,11 +980,11 @@ std::string strip_yaml_comment(const std::string& line) {
 
 // Recover the declaration order of top-level keys under `models:` by scanning the
 // config file's own text, so C++ iterates profiles in the same order Python does
-// (Python's dict/YAML loader preserves declaration order; ScalarConfig does not).
+// (Python's dict/YAML loader preserves declaration order; Config does not).
 // Falls back to an empty vector (caller falls back to alphabetical) if the file
 // can't be read or doesn't look like the expected shape.
 // Keys at the document's top level, in declaration order and *with* duplicates.
-// ScalarConfig flattens the file, so by the time it is loaded a repeated `io:`
+// Config flattens the file, so by the time it is loaded a repeated `io:`
 // has already been merged into one section and the duplicate is unrecoverable -
 // the text is the only place it still exists, which is why this reads the file
 // again rather than the parsed config. Same fidelity as ordered_model_keys: a
@@ -1159,11 +1157,11 @@ int default_resize_shorter(int width, int height) {
       static_cast<long long>(std::max(width, height)) * 8 / 7, kMaxInputDimension));
 }
 
-std::vector<ModelProfile> load_profiles(const sima_examples::ScalarConfig& raw,
+std::vector<ModelProfile> load_profiles(const sima_examples::Config& raw,
                                         const fs::path& config_path) {
   const auto known_names = profile_names(raw);
   auto ordered = ordered_model_keys(config_path);
-  // Validate the declared spelling before reconciliation, so a key ScalarConfig
+  // Validate the declared spelling before reconciliation, so a key Config
   // cannot represent (a colon inside the name) is reported by its real name.
   for (const auto& key : ordered) {
     if (!is_quoted_yaml_key(key) && looks_like_yaml_non_string(key)) {
@@ -1178,11 +1176,11 @@ std::vector<ModelProfile> load_profiles(const sima_examples::ScalarConfig& raw,
   }
   // A name declared twice configures the two entrypoints differently and neither
   // behaviour is worth keeping: PyYAML drops the first mapping whole and the last
-  // wins, while ScalarConfig flattens the file and merges the two field by field,
+  // wins, while Config flattens the file and merges the two field by field,
   // so a first `foo` with `top_k: 0` and a second with only a new `path` left C++
   // holding the invalid top_k and Python running a different model on the
   // default. Both reject it now. The text scan is the only place the duplicate
-  // still exists - ScalarConfig has already merged it away - and unquote_yaml_key
+  // still exists - Config has already merged it away - and unquote_yaml_key
   // makes `foo:` and `"foo":` one name, as they are in YAML.
   {
     std::set<std::string> seen;
@@ -1194,7 +1192,7 @@ std::vector<ModelProfile> load_profiles(const sima_examples::ScalarConfig& raw,
       }
     }
   }
-  // ScalarConfig has no scalar for an empty mapping, but the text scan does. Keep
+  // Config has no scalar for an empty mapping, but the text scan does. Keep
   // those extra declared profile names so the required-field validation below can
   // reject them just as Python does. Fall back only when the scan misses a scalar
   // profile.
@@ -2665,9 +2663,9 @@ int main(int argc, char** argv) {
     config_directory() = fs::absolute(args.config_path).parent_path();
 
     // An unreadable or malformed config file is a configuration failure.
-    const sima_examples::ScalarConfig raw = [&] {
+    const sima_examples::Config raw = [&] {
       try {
-        return sima_examples::ScalarConfig::load(args.config_path);
+        return sima_examples::Config::load(args.config_path);
       } catch (const std::exception& e) {
         throw ConfigError(e.what());
       }
@@ -2678,7 +2676,7 @@ int main(int argc, char** argv) {
     // whose second sets only `output_dir`, C++ classified the customer's file
     // while Python classified a fallback image it downloaded - both exit 0, both
     // write a report, and the reports describe different inputs. PyYAML keeps
-    // only the last mapping; ScalarConfig merges the two. Reject it instead.
+    // only the last mapping; Config merges the two. Reject it instead.
     {
       std::set<std::string> seen;
       for (const auto& key : top_level_keys(args.config_path)) {
@@ -2690,7 +2688,7 @@ int main(int argc, char** argv) {
       }
     }
 
-    // `io: /images` or `validation: 5` leaves ScalarConfig holding a scalar at
+    // `io: /images` or `validation: 5` leaves Config holding a scalar at
     // the section name, and every nested lookup below would quietly fall back to
     // its default. Python rejects these, so reject them here too.
     // Through config_scalar, not string_value: a section whose value decodes to
@@ -2703,10 +2701,10 @@ int main(int argc, char** argv) {
     }
 
     // Not guarded: a collection written where a scalar belongs, such as
-    // `output_dir: [a, b]`. Python rejects it; ScalarConfig keeps the text
+    // `output_dir: [a, b]`. Python rejects it; Config keeps the text
     // verbatim, so C++ would create a directory literally named "[a, b]".
     //
-    // Guarding it here was tried twice and withdrawn both times. ScalarConfig
+    // Guarding it here was tried twice and withdrawn both times. Config
     // flattens the file to scalars, which loses what is needed to do this
     // correctly: a block sequence leaves no entry at all, a quoted "[a, b]" is
     // indistinguishable from an unquoted one, and a check over every scalar
@@ -2740,7 +2738,7 @@ int main(int argc, char** argv) {
     }
 
     const double min_probability = [&] {
-      // The decoded text, not ScalarConfig's original: double_or re-reads the
+      // The decoded text, not Config's original: double_or re-reads the
       // raw value, so `"\\x30\\x2e\\x32"` - 0.2 to PyYAML - was literal backslash
       // text here and rejected.
       const auto text = config_scalar(raw, "validation.min_probability");

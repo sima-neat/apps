@@ -4,8 +4,8 @@
 #include "../../src/cpp/main.cpp"
 #undef main
 
-#include "support/testing/test_config.h"
-#include "support/testing/test_process.h"
+#include "sima_examples/testing/test_config.h"
+#include "sima_examples/testing/test_process.h"
 
 #include <iostream>
 #include <string>

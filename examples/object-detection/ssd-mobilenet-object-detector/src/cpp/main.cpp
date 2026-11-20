@@ -7,8 +7,8 @@
  * Usage: ssd-mobilenet-object-detector [--config <path>]
  */
 #include "neat.h"
-#include "support/runtime/config_utils.h"
-#include "support/runtime/example_utils.h"
+#include "sima_examples/config.h"
+#include "sima_examples/example_utils.h"
 
 #include <nlohmann/json.hpp>
 
@@ -104,7 +104,7 @@ fs::path resolve_asset(const std::string& configured, const char* default_path,
 }
 
 Config load_config(const fs::path& path) {
-  const auto raw = sima_examples::ScalarConfig::load(path);
+  const auto raw = sima_examples::Config::load(path);
   Config cfg;
   cfg.model = raw.string_or("model.path", "");
   cfg.preprocessing_profile = raw.string_or("model.preprocessing_profile", "tensorflow_ssd");

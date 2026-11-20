@@ -15,7 +15,7 @@
 #include "app_config.h"
 #include "bbox_payload.h"
 #include "stall_tracker.h"
-#include "support/object_detection/detection_egress.h"
+#include "sima_examples/detection_egress.h"
 
 #include <gst/app/gstappsink.h>
 #include <gst/gst.h>

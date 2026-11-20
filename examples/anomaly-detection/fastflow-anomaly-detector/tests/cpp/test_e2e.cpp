@@ -1,6 +1,6 @@
 // E2E test for fastflow-anomaly-detector.
-#include "support/testing/test_config.h"
-#include "support/testing/test_process.h"
+#include "sima_examples/testing/test_config.h"
+#include "sima_examples/testing/test_process.h"
 
 #include <filesystem>
 #include <iostream>

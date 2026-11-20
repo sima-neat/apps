@@ -13,26 +13,20 @@ include("${CMAKE_CURRENT_LIST_DIR}/../../../../../cmake/ExampleModule.cmake")
 sima_neat_apps_module(
   "rfdetr-detection-segmentation"
   OUTPUT_TARGET_VAR RFDETR_TARGET
+  UNIT_TEST
   METADATA_E2E_TEST
 )
 
-if (BUILD_TESTING)
-  get_filename_component(APPS_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../../.." ABSOLUTE)
-  add_executable(
-    rfdetr-detection-segmentation_unit_test
-    "${CMAKE_CURRENT_LIST_DIR}/../../tests/cpp/test_unit.cpp"
-  )
-  target_link_libraries(
-    rfdetr-detection-segmentation_unit_test
-    PRIVATE SimaNeatApps::support_runtime SimaNeatApps::support_testing
-  )
-  target_include_directories(rfdetr-detection-segmentation_unit_test PRIVATE "${APPS_ROOT}")
-  add_test(
-    NAME rfdetr-detection-segmentation.unit
-    COMMAND $<TARGET_FILE:rfdetr-detection-segmentation_unit_test> $<TARGET_FILE:${RFDETR_TARGET}>
-  )
-  set_tests_properties(
-    rfdetr-detection-segmentation.unit
-    PROPERTIES SKIP_RETURN_CODE 77 LABELS "unit" WORKING_DIRECTORY "${APPS_ROOT}"
-  )
+set(RFDETR_UTILS "${CMAKE_CURRENT_LIST_DIR}/utils/postprocess.cpp")
+target_sources(${RFDETR_TARGET} PRIVATE ${RFDETR_UTILS})
+
+# The unit test checks the postprocessing in process, so it compiles the utils too.
+if (TARGET rfdetr-detection-segmentation_unit_test)
+  target_sources(rfdetr-detection-segmentation_unit_test PRIVATE ${RFDETR_UTILS})
+endif()
+
+# The e2e test reads each test stream's frame size with OpenCV.
+if (TARGET rfdetr-detection-segmentation_e2e_test)
+  find_package(OpenCV REQUIRED COMPONENTS core videoio)
+  target_link_libraries(rfdetr-detection-segmentation_e2e_test PRIVATE opencv_videoio)
 endif()

@@ -48,7 +48,8 @@ without internet access, see [Install Apps](#install-apps).
 2. Download the YOLO26 model and unpack it. The download is a ZIP file with
    the model package and its license; the example reads the `.tar.gz`
    package inside it. The
-   [model browser](https://developer.sima.ai/models/) lists the model.
+   [model browser](https://developer.sima.ai/models/) lists the model. The
+   download needs `sima-cli` 2.1.20 or newer.
 
    ```bash
    sima-cli models download --id yolo26m --variant w16a16
@@ -148,19 +149,20 @@ Check the platform version installed on the DevKit:
 cat /etc/buildinfo
 ```
 
-Most examples download model packages from the Model Zoo release, whose
-version can differ from the platform version. These downloads need your SiMa
-Developer Portal login: run `sima-cli login` once, or follow the prompt the
-first download prints. Set the Model Zoo version before downloading:
+Most examples take their model from the
+[model browser](https://developer.sima.ai/models/), as the YOLO26 object
+detector in the quick start does. They download it with
+`sima-cli models download`, which needs `sima-cli` 2.1.20 or newer.
+
+Examples whose model is not in the model browser download the package from
+the Model Zoo release, whose version can differ from the platform version.
+These downloads need your SiMa Developer Portal login: run `sima-cli login`
+once, or follow the prompt the first download prints. Set the Model Zoo
+version before downloading:
 
 ```bash
 export MODELZOO_VERSION="3.0.0"
 ```
-
-Examples that take their model from the
-[model browser](https://developer.sima.ai/models/), such as the YOLO26
-object detector in the quick start, download it with
-`sima-cli models download` and need neither the login nor `MODELZOO_VERSION`.
 
 Sample data ships under `assets/datasets/`.
 

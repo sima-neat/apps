@@ -1,391 +1,150 @@
-#define main rfdetr_application_main
-#include "../../src/cpp/main.cpp"
-#undef main
+#include "../../src/cpp/utils/postprocess.h"
+#include "sima_examples/config.h"
+#include "sima_examples/labels.h"
+#include "sima_examples/testing/test_checks.h"
 
-#include "support/testing/test_process.h"
+#include <nlohmann/json.hpp>
 
 #include <cmath>
+#include <cstddef>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <string>
+#include <utility>
 #include <vector>
 
-using sima_examples::testing::create_test_scratch_dir;
-using sima_examples::testing::remove_dir;
-using sima_examples::testing::spawn_and_wait;
+namespace fs = std::filesystem;
+
+using sima_examples::testing::expect_true;
 
 namespace {
 
-// Configuration rules load_config enforces (Refs #526), driven in-process the
-// way the variant check above is: each config is the minimal valid one with
-// exactly one value broken, and the exception must name the rule.
-struct RuleCase {
-  const char* name;
-  const char* body;
-  const char* message;
-};
+// The checks the application leaves to its config: the values it reads are usable.
+bool test_shipped_config_names_a_supported_model_stream_and_labels() {
+  const fs::path common_dir = "examples/object-detection/rfdetr-detection-segmentation/src/common";
+  const auto config = sima_examples::Config::load(common_dir / "config.yaml");
+  const std::string codec = config.string("input.codec");
+  bool ok = expect_true(config.string("model.id") == "det-small", "the shipped model is det-small");
+  // The decoder package sits next to the backbone that model.path names.
+  ok &= expect_true(fs::path(config.string("model.path")).filename() ==
+                        "rf_detr_small_w8a8_mixed_w16a16_backbone_mpk.tar.gz",
+                    "model.path names the backbone package");
+  ok &= expect_true(codec == "h264" || codec == "h265" || codec == "mjpeg",
+                    "the shipped codec is supported");
+  // The model's class IDs index the labels directly.
+  ok &= expect_true(sima_examples::load_labels(config.string("model.labels")).size() ==
+                        static_cast<std::size_t>(rfdetr::kNumClasses),
+                    "model.labels lists every COCO class ID");
+  ok &= expect_true(config.number("inference.min_score") >= 0.0 &&
+                        config.number("inference.min_score") <= 1.0 &&
+                        !config.string("output.insight.host").empty(),
+                    "the shipped inference and output values are usable");
+  return ok;
+}
 
-int configuration_rule_failures() {
-  const std::vector<RuleCase> cases = {
-      {"backbone-empty",
-       "model:\n  task: detection\n  labels: labels.txt\n  detection:\n    variant: small\n    "
-       "small:\n      backbone: ''\n      transformer: small-t.tar.gz\nsource:\n  rtsp_url: "
-       "rtsp://camera/live\ninference:\n  detection: {}\noutput:\n  insight:\n    host: "
-       "127.0.0.1\n",
-       "backbone and transformer must be set"},
-      {"labels-empty",
-       "model:\n  task: detection\n  labels: ''\n  detection:\n    variant: small\n    small:\n    "
-       "  backbone: small-b.tar.gz\n      transformer: small-t.tar.gz\nsource:\n  rtsp_url: "
-       "rtsp://camera/live\ninference:\n  detection: {}\noutput:\n  insight:\n    host: "
-       "127.0.0.1\n",
-       "model.labels must be set"},
-      {"rtsp-url-not-rtsp",
-       "model:\n  task: detection\n  labels: labels.txt\n  detection:\n    variant: small\n    "
-       "small:\n      backbone: small-b.tar.gz\n      transformer: small-t.tar.gz\nsource:\n  "
-       "rtsp_url: http://127.0.0.1:8080/stream\ninference:\n  detection: {}\noutput:\n  insight:\n "
-       "   host: 127.0.0.1\n",
-       "source.rtsp_url must be an RTSP URL"},
-      {"latency-negative",
-       "model:\n  task: detection\n  labels: labels.txt\n  detection:\n    variant: small\n    "
-       "small:\n      backbone: small-b.tar.gz\n      transformer: small-t.tar.gz\nsource:\n  "
-       "rtsp_url: rtsp://camera/live\n  latency_ms: -1\ninference:\n  detection: {}\noutput:\n  "
-       "insight:\n    host: 127.0.0.1\n",
-       "source.latency_ms and inference.frames must be >= 0"},
-      {"frames-negative",
-       "model:\n  task: detection\n  labels: labels.txt\n  detection:\n    variant: small\n    "
-       "small:\n      backbone: small-b.tar.gz\n      transformer: small-t.tar.gz\nsource:\n  "
-       "rtsp_url: rtsp://camera/live\ninference:\n  frames: -1\n  detection: {}\noutput:\n  "
-       "insight:\n    host: 127.0.0.1\n",
-       "source.latency_ms and inference.frames must be >= 0"},
-      {"width-negative",
-       "model:\n  task: detection\n  labels: labels.txt\n  detection:\n    variant: small\n    "
-       "small:\n      backbone: small-b.tar.gz\n      transformer: small-t.tar.gz\nsource:\n  "
-       "rtsp_url: rtsp://camera/live\n  width: -1\ninference:\n  detection: {}\noutput:\n  "
-       "insight:\n    host: 127.0.0.1\n",
-       "source.width, source.height, and source.fps must be >= 0"},
-      {"min-score-above",
-       "model:\n  task: detection\n  labels: labels.txt\n  detection:\n    variant: small\n    "
-       "small:\n      backbone: small-b.tar.gz\n      transformer: small-t.tar.gz\nsource:\n  "
-       "rtsp_url: rtsp://camera/live\ninference:\n  detection:\n    min_score: 1.5\noutput:\n  "
-       "insight:\n    host: 127.0.0.1\n",
-       "min_score must be in [0, 1]"},
-      {"max-detections-zero",
-       "model:\n  task: detection\n  labels: labels.txt\n  detection:\n    variant: small\n    "
-       "small:\n      backbone: small-b.tar.gz\n      transformer: small-t.tar.gz\nsource:\n  "
-       "rtsp_url: rtsp://camera/live\ninference:\n  detection:\n    max_detections: 0\noutput:\n  "
-       "insight:\n    host: 127.0.0.1\n",
-       "max_detections/max_segments must be > 0"},
-      {"mask-threshold-above",
-       "model:\n  task: segmentation\n  labels: labels.txt\n  segmentation:\n    medium:\n      "
-       "backbone: seg-b.tar.gz\n      transformer: seg-t.tar.gz\nsource:\n  rtsp_url: "
-       "rtsp://camera/live\ninference:\n  segmentation:\n    mask_threshold: 2.0\noutput:\n  "
-       "insight:\n    host: 127.0.0.1\n",
-       "inference.segmentation.mask_threshold must be in [0, 1]"},
-      {"mask-grid-zero",
-       "model:\n  task: segmentation\n  labels: labels.txt\n  segmentation:\n    medium:\n      "
-       "backbone: seg-b.tar.gz\n      transformer: seg-t.tar.gz\nsource:\n  rtsp_url: "
-       "rtsp://camera/live\ninference:\n  segmentation:\n    mask_grid_size: 0\noutput:\n  "
-       "insight:\n    host: 127.0.0.1\n",
-       "inference.segmentation.mask_grid_size must be > 0"},
-      {"insight-host-empty",
-       "model:\n  task: detection\n  labels: labels.txt\n  detection:\n    variant: small\n    "
-       "small:\n      backbone: small-b.tar.gz\n      transformer: small-t.tar.gz\nsource:\n  "
-       "rtsp_url: rtsp://camera/live\ninference:\n  detection: {}\noutput:\n  insight:\n    host: "
-       "''\n",
-       "output.insight.host must be set"},
-      {"video-port-zero",
-       "model:\n  task: detection\n  labels: labels.txt\n  detection:\n    variant: small\n    "
-       "small:\n      backbone: small-b.tar.gz\n      transformer: small-t.tar.gz\nsource:\n  "
-       "rtsp_url: rtsp://camera/live\ninference:\n  detection: {}\noutput:\n  insight:\n    host: "
-       "127.0.0.1\n    video_port: 0\n",
-       "Insight ports must be in [1, 65535]"},
-  };
-  int failures = 0;
-  const std::string temp_dir =
-      create_test_scratch_dir("rfdetr-detection-segmentation", "configuration-rules");
-  if (temp_dir.empty()) {
-    std::cerr << "[FAIL] could not create config test directory\n";
-    return 1;
+std::vector<std::string> coco_labels() {
+  std::vector<std::string> labels(91, "unused");
+  labels[1] = "person";
+  return labels;
+}
+
+bool test_top_proposals_are_stable_and_best_first() {
+  std::vector<float> scores(305, 0.0F);
+  scores[3] = 2.0F;
+  scores[4] = 2.0F;
+  std::vector<float> proposals(scores.size() * 4U, 0.0F);
+  for (std::size_t index = 0; index < scores.size(); ++index) {
+    proposals[index * 4U] = static_cast<float>(index);
   }
-  const fs::path config_path = fs::path(temp_dir) / "config.yaml";
-  for (const RuleCase& c : cases) {
-    std::ofstream(config_path, std::ios::trunc) << c.body;
-    try {
-      (void)load_config(config_path);
-      std::cerr << "[FAIL] " << c.name << ": config must be rejected\n";
-      ++failures;
-    } catch (const std::exception& error) {
-      if (std::string(error.what()).find(c.message) == std::string::npos) {
-        std::cerr << "[FAIL] " << c.name << ": error does not name the rule: " << error.what()
-                  << "\n";
-        ++failures;
-      } else {
-        std::cout << "[OK] " << c.name << " is rejected by its rule\n";
+  const auto best = rfdetr::top_proposals(scores, proposals, 300);
+  return expect_true(best.size() == 1200U && best[0] == 3.0F && best[4] == 4.0F && best[8] == 0.0F,
+                     "top proposals are the 300 best, best first, ties in index order");
+}
+
+bool test_detection_skips_unused_classes_and_scales_to_the_frame() {
+  std::vector<float> boxes(300U * 4U, 0.0F);
+  for (const std::size_t query : {0U, 1U}) {
+    boxes[query * 4U] = 0.5F;
+    boxes[query * 4U + 1U] = 0.5F;
+    boxes[query * 4U + 2U] = 0.5F;
+    boxes[query * 4U + 3U] = 0.25F;
+  }
+  std::vector<float> logits(300U * 91U, -20.0F);
+  logits[1] = 10.0F;        // person on query 0
+  logits[91U + 2U] = 12.0F; // an unused class on query 1, ranked first
+  rfdetr::PostprocessOptions options;
+  options.width = 1920;
+  options.height = 1080;
+  options.min_score = 0.5F;
+  options.max_detections = 10;
+  const auto objects = nlohmann::json::parse(
+      rfdetr::detection_json(boxes, logits, coco_labels(), options))["objects"];
+  const auto near = [](const nlohmann::json& value, float expected) {
+    return std::abs(value.get<float>() - expected) < 0.01F;
+  };
+  return expect_true(objects.size() == 1U && objects[0]["id"] == "obj_1" &&
+                         objects[0]["label"] == "person" && near(objects[0]["bbox"][0], 480.0F) &&
+                         near(objects[0]["bbox"][1], 405.0F) &&
+                         near(objects[0]["bbox"][2], 960.0F) && near(objects[0]["bbox"][3], 270.0F),
+                     "detection skips unused classes and scales boxes to the frame");
+}
+
+bool test_segmentation_traces_a_polygon_inside_the_box() {
+  bool ok = true;
+  // Medium carries 200 queries and 108x108 masks; nano carries 100 queries and 78x78 masks.
+  for (const auto& [queries, mask_size] : {std::pair{200, 108}, std::pair{100, 78}}) {
+    const auto count = static_cast<std::size_t>(queries);
+    const auto side = static_cast<std::size_t>(mask_size);
+    std::vector<float> boxes(count * 4U, 0.0F);
+    for (const std::size_t query : {0U, 1U}) {
+      for (std::size_t value = 0; value < 4U; ++value) {
+        boxes[query * 4U + value] = 0.5F;
       }
     }
+    std::vector<float> logits(count * 91U, -20.0F);
+    logits[1] = 11.0F;        // person on query 0
+    logits[91U + 1U] = 10.0F; // person on query 1, whose mask is empty
+    std::vector<float> masks(side * side * count, -20.0F);
+    for (std::size_t y = side * 3U / 8U; y < side * 5U / 8U; ++y) {
+      for (std::size_t x = side * 3U / 8U; x < side * 5U / 8U; ++x) {
+        masks[(y * side + x) * count] = 10.0F;
+      }
+    }
+    for (const int grid_size : {mask_size, 432, 640}) {
+      rfdetr::PostprocessOptions options;
+      options.width = 1280;
+      options.height = 720;
+      options.min_score = 0.3F;
+      options.max_detections = 24;
+      options.mask_threshold = 0.08F;
+      options.mask_grid_size = grid_size;
+      const std::string payload =
+          rfdetr::segmentation_json(boxes, logits, masks, mask_size, coco_labels(), options);
+      const auto segments = nlohmann::json::parse(payload)["segments"];
+      bool valid = segments.size() == 1U && segments[0]["label"] == "person" &&
+                   segments[0]["mask_format"] == "polygon" &&
+                   segments[0]["bbox"] == nlohmann::json({320, 180, 640, 360}) &&
+                   segments[0]["mask"].size() >= 3U && payload.size() <= 32'768U;
+      for (const auto& point : valid ? segments[0]["mask"] : nlohmann::json::array()) {
+        valid = valid && point[0].get<int>() >= 320 && point[0].get<int>() < 960 &&
+                point[1].get<int>() >= 180 && point[1].get<int>() < 540;
+      }
+      ok &= expect_true(valid, "segmentation traces one polygon inside its box for " +
+                                   std::to_string(queries) + " queries, " +
+                                   std::to_string(mask_size) + " masks, grid " +
+                                   std::to_string(grid_size));
+    }
   }
-  remove_dir(temp_dir);
-  return failures;
+  return ok;
 }
 
 } // namespace
 
-int main(int argc, char** argv) {
-  if (argc < 2) {
-    std::cerr << "[ERR] usage: " << argv[0] << " <example-binary>\n";
-    return 2;
-  }
-  int failures = 0;
-
-  if (parse_source_codec("h264") != SourceCodec::H264 ||
-      parse_source_codec("AVC") != SourceCodec::H264 ||
-      parse_source_codec("h265") != SourceCodec::H265 ||
-      parse_source_codec("HEVC") != SourceCodec::H265 ||
-      parse_source_codec("mjpeg") != SourceCodec::Mjpeg ||
-      parse_source_codec("JPEG") != SourceCodec::Mjpeg) {
-    std::cerr << "[FAIL] source codec aliases must resolve to H.264, H.265, or MJPEG\n";
-    ++failures;
-  }
-
-  const SourceGeometry probed{1280, 720, 60};
-  const SourceGeometry fallback{640, 480, 30};
-  const auto resolved = resolve_geometry(probed, fallback);
-  const auto partial = resolve_geometry({1280, 0, 0}, fallback);
-  if (resolved.width != 1280 || resolved.height != 720 || resolved.fps != 30 ||
-      partial.width != 1280 || partial.height != 480 || partial.fps != 30) {
-    std::cerr << "[FAIL] configured FPS must override the probe and dimensions remain fallbacks\n";
-    ++failures;
-  }
-
-  auto shared_output = neat::Tensor::from_vector(
-      std::vector<float>{99.0F, 1.0F, 2.0F, 3.0F, 4.0F, 88.0F}, {6}, neat::TensorMemory::CPU);
-  shared_output.shape = {2};
-  shared_output.byte_offset = sizeof(float);
-  if (read_floats(shared_output) != std::vector<float>{1.0F, 2.0F}) {
-    std::cerr << "[FAIL] tensor reads must exclude adjacent output storage\n";
-    ++failures;
-  }
-  auto padded_output = neat::Tensor::from_vector(
-      std::vector<float>{1.0F, 2.0F, 99.0F, 3.0F, 4.0F, 88.0F}, {6}, neat::TensorMemory::CPU);
-  padded_output.shape = {2, 2};
-  padded_output.strides_bytes = {3 * sizeof(float), sizeof(float)};
-  if (read_floats(padded_output) != std::vector<float>{1.0F, 2.0F, 3.0F, 4.0F}) {
-    std::cerr << "[FAIL] tensor reads must respect padded row strides\n";
-    ++failures;
-  }
-  shared_output.shape = {8};
-  try {
-    (void)read_floats(shared_output);
-    std::cerr << "[FAIL] tensor reads must reject insufficient storage\n";
-    ++failures;
-  } catch (const std::exception&) {
-  }
-
-  std::vector<float> scores(305, 0.0F);
-  scores[3] = 2.0F;
-  scores[4] = 2.0F;
-  std::vector<float> proposals(scores.size() * 4U);
-  for (std::size_t index = 0; index < scores.size(); ++index) {
-    proposals[index * 4U] = static_cast<float>(index);
-  }
-  const auto gathered = stable_topk_gather(scores, proposals, 300);
-  if (gathered.size() != 1200U || gathered[0] != 3.0F || gathered[4] != 4.0F ||
-      gathered[8] != 0.0F) {
-    std::cerr << "[FAIL] TopK/Gather must be stable, descending, and limited to 300 rows\n";
-    ++failures;
-  }
-
-  std::vector<std::string> labels(91, "unused");
-  labels[1] = "person";
-  std::vector<float> boxes(1200, 0.0F);
-  boxes[0] = 0.5F;
-  boxes[1] = 0.5F;
-  boxes[2] = 0.5F;
-  boxes[3] = 0.25F;
-  std::vector<float> logits(27300, -20.0F);
-  logits[1] = 10.0F;
-  const auto objects = postprocess(boxes, logits, 1920, 1080, labels, 0.5F, 10, 300);
-  if (objects.size() != 1U || objects[0].label != "person" ||
-      std::abs(objects[0].x - 480.0F) > 0.01F || std::abs(objects[0].y - 405.0F) > 0.01F ||
-      std::abs(objects[0].w - 960.0F) > 0.01F || std::abs(objects[0].h - 270.0F) > 0.01F) {
-    std::cerr << "[FAIL] postprocessing must preserve sparse COCO IDs and source geometry\n";
-    ++failures;
-  }
-
-  Config segmentation_config;
-  segmentation_config.task = Task::Segmentation;
-  segmentation_config.min_score = 0.3F;
-  segmentation_config.max_results = 1;
-  segmentation_config.mask_threshold = 0.08F;
-  // Medium carries 200 queries and 108x108 masks; nano carries 100 queries and 78x78 masks.
-  for (const ModelContract contract : {ModelContract{36, 200, 108}, ModelContract{26, 100, 78}}) {
-    const auto top_k = static_cast<std::size_t>(contract.top_k);
-    const auto mask_size = static_cast<std::size_t>(contract.mask_size);
-    std::vector<float> segmentation_boxes(top_k * 4U, 0.0F);
-    segmentation_boxes[0] = 0.5F;
-    segmentation_boxes[1] = 0.5F;
-    segmentation_boxes[2] = 0.5F;
-    segmentation_boxes[3] = 0.5F;
-    std::copy_n(segmentation_boxes.begin(), 4, segmentation_boxes.begin() + 4);
-    std::vector<float> segmentation_logits(top_k * 91U, -20.0F);
-    segmentation_logits[0] = 12.0F;
-    segmentation_logits[1] = 11.0F;
-    segmentation_logits[91U + 1U] = 10.0F;
-    std::vector<float> masks(mask_size * mask_size * top_k, -20.0F);
-    for (std::size_t y = mask_size * 3U / 8U; y < mask_size * 5U / 8U; ++y) {
-      for (std::size_t x = mask_size * 3U / 8U; x < mask_size * 5U / 8U; ++x) {
-        masks[(y * mask_size + x) * top_k] = 10.0F;
-      }
-    }
-    const int64_t queries = contract.top_k;
-    const int64_t side = contract.mask_size;
-    TransformerOutputs segmentation_output{
-        neat::Tensor::from_vector(segmentation_boxes, {1, queries, 4}, neat::TensorMemory::CPU),
-        neat::Tensor::from_vector(segmentation_logits, {1, queries, 91}, neat::TensorMemory::CPU),
-        neat::Tensor::from_vector(masks, {1, side, side, queries}, neat::TensorMemory::CPU),
-    };
-    for (const int grid_size : {contract.mask_size, 432, 640}) {
-      segmentation_config.mask_grid_size = grid_size;
-      const auto segments = nlohmann::json::parse(segmentation_metadata(
-          segmentation_output, 1280, 720, labels, segmentation_config, contract));
-      const auto& segment_entries = segments.at("segments");
-      bool valid_polygon = segment_entries.size() == 1U &&
-                           segment_entries.front().at("label") == "person" &&
-                           segment_entries.front().at("mask").size() >= 3U;
-      if (valid_polygon) {
-        for (const auto& point : segment_entries.front().at("mask")) {
-          valid_polygon = valid_polygon && point.at(0).get<int>() >= 0 &&
-                          point.at(0).get<int>() < 1280 && point.at(1).get<int>() >= 0 &&
-                          point.at(1).get<int>() < 720;
-        }
-      }
-      if (!valid_polygon || segments.dump().size() > kMetadataByteBudget) {
-        std::cerr << "[FAIL] segmentation metadata must contain a labeled polygon for "
-                  << contract.top_k << " queries and " << contract.mask_size << " masks\n";
-        ++failures;
-      }
-    }
-  }
-
-  const std::string temp_dir =
-      create_test_scratch_dir("rfdetr-detection-segmentation", "model-variant");
-  if (temp_dir.empty()) {
-    std::cerr << "[FAIL] could not create config test directory\n";
-    ++failures;
-  } else {
-    const fs::path config_path = fs::path(temp_dir) / "config.yaml";
-    std::ofstream config(config_path);
-    config << "model:\n  task: detection\n  detection:\n    variant: large\n"
-              "source: {}\ninference: {}\noutput:\n  insight: {}\n";
-    config.close();
-    try {
-      (void)load_config(config_path);
-      std::cerr << "[FAIL] config must reject a variant without a model pair\n";
-      ++failures;
-    } catch (const std::exception& error) {
-      if (std::string(error.what()).find("model.detection.large") == std::string::npos) {
-        std::cerr << "[FAIL] missing model pair error must name the selected variant\n";
-        ++failures;
-      }
-    }
-
-    config.open(config_path, std::ios::trunc);
-    config << "model:\n  task: segmentation\n  labels: labels.txt\n  segmentation:\n"
-              "    variant: small\n    small:\n"
-              "      backbone: segmentation-b.tar.gz\n"
-              "      transformer: segmentation-t.tar.gz\n"
-              "source:\n  rtsp_url: rtsp://camera/live\n"
-              "inference:\n  segmentation:\n    max_segments: 24\n    mask_grid_size: 640\n"
-              "output:\n  insight:\n    host: 127.0.0.1\n";
-    config.close();
-    try {
-      const auto selected = load_config(config_path);
-      if (selected.task != Task::Segmentation || selected.variant != "small" ||
-          selected.mask_grid_size != 640 || selected.backbone != "segmentation-b.tar.gz" ||
-          selected.min_score != 0.3F) {
-        std::cerr << "[FAIL] config must select the segmentation size's model pair\n";
-        ++failures;
-      }
-    } catch (const std::exception& error) {
-      std::cerr << "[FAIL] valid segmentation config was rejected: " << error.what() << "\n";
-      ++failures;
-    }
-
-    config.open(config_path, std::ios::trunc);
-    config << "model:\n  task: detection\n  labels: labels.txt\n  detection:\n"
-              "    variant: large\n    large:\n      backbone: large-b.tar.gz\n"
-              "      transformer: large-t.tar.gz\n"
-              "source:\n  rtsp_url: rtsp://camera/live\n"
-              "inference:\n  segmentation:\n    mask_threshold: 2.0\n"
-              "output:\n  insight:\n    host: 127.0.0.1\n";
-    config.close();
-    try {
-      const auto selected = load_config(config_path);
-      if (selected.task != Task::Detection || selected.backbone != "large-b.tar.gz") {
-        std::cerr << "[FAIL] inactive segmentation settings must not affect detection\n";
-        ++failures;
-      }
-    } catch (const std::exception& error) {
-      std::cerr << "[FAIL] inactive segmentation settings rejected detection: " << error.what()
-                << "\n";
-      ++failures;
-    }
-    remove_dir(temp_dir);
-  }
-
-  const std::string binary = argv[1];
-  const auto help = spawn_and_wait(binary, {"--help"}, 20000);
-  if (help.exit_code != 0 || help.stdout_text.find("--config") == std::string::npos) {
-    std::cerr << "[FAIL] help should describe the config-driven CLI\n";
-    ++failures;
-  }
-  const auto no_config = spawn_and_wait(binary, {}, 20000);
-  if (no_config.exit_code == 0 ||
-      no_config.stderr_text.find("--config is required") == std::string::npos) {
-    std::cerr << "[FAIL] the application should require an explicit config path\n";
-    ++failures;
-  }
-  const auto missing =
-      spawn_and_wait(binary, {"--config", "/nonexistent/rfdetr-config.yaml"}, 20000);
-  if (missing.exit_code == 0 || missing.stderr_text.find("config") == std::string::npos) {
-    std::cerr << "[FAIL] a missing config should fail clearly\n";
-    ++failures;
-  }
-  failures += configuration_rule_failures();
-  // The pull loop treats a timeout as "try again" and a closed output or pull error as the
-  // end of the run, carrying the runtime's own reason.
-  {
-    using sima_examples::pull_status_has_sample;
-    using simaai::neat::PullStatus;
-    simaai::neat::PullError pull_error;
-    pull_error.message = "queue torn down";
-    const auto thrown_message = [&](PullStatus status) -> std::string {
-      try {
-        (void)pull_status_has_sample(status, "backbone", pull_error, "source reached EOS");
-      } catch (const std::runtime_error& error) {
-        return error.what();
-      }
-      return "";
-    };
-    const std::string closed = thrown_message(PullStatus::Closed);
-    const std::string errored = thrown_message(PullStatus::Error);
-    if (closed != "backbone output closed unexpectedly: source reached EOS") {
-      std::cerr << "[FAIL] closed output should end the run with the reason, got: " << closed
-                << "\n";
-      ++failures;
-    } else if (errored != "failed to pull backbone: queue torn down") {
-      std::cerr << "[FAIL] pull error should end the run with its message, got: " << errored
-                << "\n";
-      ++failures;
-    } else if (pull_status_has_sample(PullStatus::Timeout, "backbone", pull_error, "") ||
-               !pull_status_has_sample(PullStatus::Ok, "backbone", pull_error, "")) {
-      std::cerr << "[FAIL] a timeout is not a sample and a successful pull is\n";
-      ++failures;
-    } else {
-      std::cout << "[OK] closed output and pull error are terminal, timeout is not\n";
-    }
-  }
-
-  return failures == 0 ? 0 : 1;
+int main() {
+  bool ok = true;
+  ok &= test_shipped_config_names_a_supported_model_stream_and_labels();
+  ok &= test_top_proposals_are_stable_and_best_first();
+  ok &= test_detection_skips_unused_classes_and_scales_to_the_frame();
+  ok &= test_segmentation_traces_a_polygon_inside_the_box();
+  return ok ? 0 : 1;
 }

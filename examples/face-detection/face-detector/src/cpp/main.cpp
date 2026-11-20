@@ -6,8 +6,8 @@
  * Usage: face-detector [--config <path>]
  */
 #include "neat.h"
-#include "support/runtime/example_utils.h"
-#include "support/runtime/config_utils.h"
+#include "sima_examples/example_utils.h"
+#include "sima_examples/config.h"
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -508,7 +508,7 @@ static std::vector<fs::path> image_paths_in_dir(const fs::path& input_dir) {
 }
 
 static Config load_config(const fs::path& path) {
-  const auto raw = sima_examples::ScalarConfig::load(path);
+  const auto raw = sima_examples::Config::load(path);
   Config cfg;
   cfg.model = raw.string_or("model.path", "models/retinaface_mobilenet25_mod_0_mpk.tar.gz");
   cfg.input_dir = raw.string_or("io.input_dir", "assets/datasets/coco");

@@ -1,6 +1,6 @@
-#include "support/testing/source_cases.h"
-#include "support/testing/test_config.h"
-#include "support/testing/test_process.h"
+#include "sima_examples/testing/source_cases.h"
+#include "sima_examples/testing/test_config.h"
+#include "sima_examples/testing/test_process.h"
 
 #include <arpa/inet.h>
 #include <sys/socket.h>

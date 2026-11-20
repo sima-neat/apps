@@ -316,14 +316,14 @@ class TestLoadProfiles:
     )
     def test_rejects_non_integral_values(self, field, value):
         """Regression: int() silently truncated `top_k: 1.9` to 1 while the C++
-        ScalarConfig rejected the same file, so the two entrypoints ran
+        Config rejected the same file, so the two entrypoints ran
         different settings."""
         raw = {"models": {"a": {"path": "m.tar.gz", field: value}}}
         with pytest.raises(ValueError, match="must be an integer"):
             main.load_profiles(raw)
 
     def test_accepts_integer_text_values(self):
-        """C++ ScalarConfig parses scalars from text, so a quoted integer is
+        """C++ Config parses scalars from text, so a quoted integer is
         still an integer in both implementations."""
         raw = {"models": {"a": {"path": "m.tar.gz", "top_k": "3", "num_classes": "10"}}}
         profile = main.load_profiles(raw)[0]
@@ -337,7 +337,7 @@ class TestLoadProfiles:
 
     @pytest.mark.parametrize(("value", "expected"), [(5, "5"), (True, "true"), (False, "false")])
     def test_scalar_settings_render_as_cpp_reads_them(self, value, expected):
-        """ScalarConfig sees every value as text and cannot tell `path: 5` from
+        """Config sees every value as text and cannot tell `path: 5` from
         `path: "5"`, so Python must render the same text rather than reject one
         of them - and booleans must be YAML-style, not Python-style."""
         profile = main.load_profiles({"models": {"a": {"path": value}}})[0]
@@ -351,7 +351,7 @@ class TestLoadProfiles:
 
     @pytest.mark.parametrize("value", [2**31, -2**31 - 1])
     def test_rejects_values_outside_int32(self, value):
-        """The C++ ScalarConfig parses with std::stoi, so a value Python would
+        """The C++ Config parses with std::stoi, so a value Python would
         accept and C++ would reject must fail in both."""
         raw = {"models": {"a": {"path": "m.tar.gz", "top_k": value}}}
         with pytest.raises(ValueError, match="out of range"):
@@ -769,13 +769,13 @@ class TestCsvQuoting:
 
 
 class TestScalarConfigSemantics:
-    """`ScalarConfig` unquotes a value and then tests it for null, and it never
+    """`Config` unquotes a value and then tests it for null, and it never
     sees a YAML type. Python has the typed value but not the raw spelling, so
     neither side can recover what the other lost - the only way they agree is
     for Python to adopt the same lossy rules."""
 
     @pytest.mark.parametrize("value,expected", [
-        ("null", "fallback"),    # unquoted by ScalarConfig, then read as null
+        ("null", "fallback"),    # unquoted by Config, then read as null
         ("NULL", "fallback"),
         ("~", "fallback"),
         ("010", "8"),            # C++ cannot tell this from the bare 010
@@ -840,7 +840,7 @@ class TestThumbnailDecoderErrors:
 
 class TestDateScalars:
     def test_unquoted_date_is_its_iso_text(self):
-        """PyYAML resolves `2026-10-02` to a date while ScalarConfig hands C++
+        """PyYAML resolves `2026-10-02` to a date while Config hands C++
         the text, so Python rejected a dated output directory that C++ ran."""
         import datetime as _dt
         assert main.config_str(_dt.date(2026, 10, 2), "io.output_dir", "report") == "2026-10-02"
@@ -861,7 +861,7 @@ class TestFloatScalarSemantics:
 
     @pytest.mark.parametrize("value", ["null", "NULL", "~"])
     def test_quoted_nulls_fall_back_to_the_default(self, value):
-        """C++ sees these as absent once ScalarConfig unquotes them, so Python
+        """C++ sees these as absent once Config unquotes them, so Python
         must default rather than reject the file."""
         assert main.config_float(value, "validation.min_probability", 0.5) == 0.5
 
@@ -906,7 +906,7 @@ class TestYamlIntegers:
         ("0b101", 5),
         ("1_0", 10),         # underscore separator
         ("-010", -8),
-        (" 5 ", 5),          # ScalarConfig trims; PyYAML would too
+        (" 5 ", 5),          # Config trims; PyYAML would too
     ])
     def test_yaml_spellings(self, text, expected):
         assert main.parse_yaml_int(text) == expected
@@ -2065,7 +2065,7 @@ class TestArgParsing:
         assert "Traceback" not in r.stderr
 
     def test_quoted_numbers_are_accepted_like_cpp(self, tmp_path, monkeypatch):
-        """ScalarConfig parses every scalar from text, so a quoted number is a
+        """Config parses every scalar from text, so a quoted number is a
         number there; Python must accept it rather than reject what C++ runs."""
         monkeypatch.setitem(sys.modules, "pyneat", _make_fake_pyneat())
         img = tmp_path / "a.jpg"
