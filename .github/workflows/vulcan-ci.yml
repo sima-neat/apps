@@ -191,6 +191,19 @@ jobs:
       - name: Run repository contract tests
         run: python3 -m pytest -c tests/pytest.ini --rootdir=. -v tests/scripts
 
+      # Builds the portal on every ref so a broken catalog or portal build
+      # blocks publishing; build-sysdoc-examples builds the published copy.
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Build portal
+        working-directory: portal
+        run: |
+          npm ci
+          npm run build
+
   publish-vulcan-artifacts:
     name: Publish to Vulcan
     if: ${{ !inputs.nightly }}
