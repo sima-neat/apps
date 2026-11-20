@@ -20,7 +20,8 @@ std::filesystem::path write_scratch_config(const std::string& example_name,
                                            const std::string& test_name, const std::string& body);
 
 // Writes `body` as a scratch config, runs `binary --config <it> --validate-config-only`,
-// and removes the scratch directory. What the validator said is in the result.
+// and removes the scratch directory. What the validator said is in the result. Only examples
+// not yet converted to reading keys where they are used still have that flag.
 ProcessResult validate_config_body(const std::string& example_name, const std::string& binary,
                                    const std::string& test_name, const std::string& body);
 

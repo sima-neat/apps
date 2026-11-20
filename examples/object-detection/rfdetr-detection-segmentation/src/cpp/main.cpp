@@ -15,12 +15,12 @@
 #include "sima_examples/stop_signals.h"
 #include "utils/postprocess.h"
 
-#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <exception>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -35,135 +35,40 @@ namespace groups = simaai::neat::nodes::groups;
 namespace {
 
 constexpr int kPullTimeoutMs = 100;
-const std::vector<std::string> kModelIds = {"det-nano", "det-small", "det-medium", "det-large",
-                                            "seg-nano", "seg-small", "seg-medium"};
-
-struct AppConfig {
-  std::string model_id;
-  bool segmentation = false;
-  fs::path model_path;
-  fs::path transformer_path;
-  fs::path labels_path;
-  std::string source;
-  std::string codec;
-  // Each 0 reads that value from the stream with a probe.
-  int width = 0;
-  int height = 0;
-  int fps = 0;
-  bool rtsp_tcp = true;
-  int rtsp_latency_ms = 0;
-  int frames = 0; // 0 runs until Ctrl+C.
-  double min_score = 0.0;
-  int max_detections = 0;
-  std::string insight_host;
-  int video_port_base = 0;
-  int metadata_port_base = 0;
-  double mask_threshold = 0.0;
-  int mask_grid_size = 0;
+const std::map<std::string, groups::RtspCodec> kRtspCodecs = {
+    {"h264", groups::RtspCodec::H264},
+    {"h265", groups::RtspCodec::H265},
+    {"mjpeg", groups::RtspCodec::MJPEG},
+};
+const std::map<std::string, neat::SimaDecodeType> kDecodeTypes = {
+    {"h264", neat::SimaDecodeType::H264},
+    {"h265", neat::SimaDecodeType::H265},
+    {"mjpeg", neat::SimaDecodeType::MJPEG},
 };
 
-struct CliOptions {
-  fs::path config_path;
-  bool validate_config_only = false;
-};
-
-CliOptions parse_args(int argc, char** argv) {
-  CliOptions options;
+fs::path parse_args(int argc, char** argv) {
   const fs::path adjacent_config = fs::path(argv[0]).parent_path() / "config.yaml";
-  options.config_path = fs::exists(adjacent_config)
-                            ? adjacent_config
-                            : sima_examples::default_config_path(SIMANEAT_APPS_EXAMPLE_SOURCE_DIR);
+  fs::path config_path = fs::exists(adjacent_config)
+                             ? adjacent_config
+                             : sima_examples::default_config_path(SIMANEAT_APPS_EXAMPLE_SOURCE_DIR);
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
-    if (arg == "--config") {
-      if (i + 1 >= argc) {
-        throw std::runtime_error("--config requires a path");
-      }
-      options.config_path = argv[++i];
-    } else if (arg == "--validate-config-only") {
-      options.validate_config_only = true;
-    } else if (arg == "--help" || arg == "-h") {
-      std::cout << "Usage: " << argv[0] << " [--config <path>] [--validate-config-only]\n";
-      std::exit(0);
+    if (arg == "--config" && i + 1 < argc) {
+      config_path = argv[++i];
     } else {
-      throw std::runtime_error("unknown argument: " + arg);
+      throw std::runtime_error("usage: " + std::string(argv[0]) + " [--config <path>]");
     }
   }
-  return options;
-}
-
-// The decoder package next to the backbone: _backbone_mpk becomes _decoder_mpk.
-fs::path transformer_path(const fs::path& model_path) {
-  const std::string backbone = "_backbone_mpk";
-  std::string name = model_path.filename().string();
-  const auto at = name.find(backbone);
-  if (at == std::string::npos) {
-    throw std::runtime_error(
-        "model.path must name an RF-DETR backbone package (*_backbone_mpk.tar.gz): " +
-        model_path.string());
-  }
-  return model_path.parent_path() / name.replace(at, backbone.size(), "_decoder_mpk");
-}
-
-AppConfig load_app_config(const fs::path& path) {
-  const auto config = sima_examples::Config::load(path);
-  AppConfig cfg;
-  cfg.model_id = config.string("model.id");
-  cfg.segmentation = cfg.model_id.starts_with("seg-");
-  cfg.model_path =
-      (fs::absolute(path).parent_path() / config.string("model.path")).lexically_normal();
-  cfg.transformer_path = transformer_path(cfg.model_path);
-  cfg.labels_path = config.string("model.labels");
-  cfg.source = config.string("input.source");
-  cfg.codec = config.string("input.codec");
-  cfg.width = config.integer("input.width");
-  cfg.height = config.integer("input.height");
-  cfg.fps = config.integer("input.fps");
-  cfg.rtsp_tcp = config.boolean("input.rtsp.tcp");
-  cfg.rtsp_latency_ms = config.integer("input.rtsp.latency_ms");
-  cfg.frames = config.integer("inference.frames");
-  cfg.min_score = config.number("inference.min_score");
-  cfg.max_detections = config.integer("inference.max_detections");
-  cfg.insight_host = config.string("output.insight.host");
-  cfg.video_port_base = config.integer("output.insight.video_port_base");
-  cfg.metadata_port_base = config.integer("output.insight.metadata_port_base");
-  cfg.mask_threshold = config.number("app.mask_threshold");
-  cfg.mask_grid_size = config.integer("app.mask_grid_size");
-  config.reject_unread_keys();
-  if (std::find(kModelIds.begin(), kModelIds.end(), cfg.model_id) == kModelIds.end()) {
-    std::string ids;
-    for (const auto& id : kModelIds) {
-      ids += (ids.empty() ? "" : ", ") + id;
-    }
-    throw std::runtime_error("model.id must be one of " + ids);
-  }
-  if (cfg.codec != "h264" && cfg.codec != "h265" && cfg.codec != "mjpeg") {
-    throw std::runtime_error("input.codec must be h264, h265, or mjpeg");
-  }
-  return cfg;
-}
-
-groups::RtspCodec rtsp_codec(const AppConfig& cfg) {
-  if (cfg.codec == "h265") {
-    return groups::RtspCodec::H265;
-  }
-  return cfg.codec == "mjpeg" ? groups::RtspCodec::MJPEG : groups::RtspCodec::H264;
-}
-
-neat::SimaDecodeType decode_type(const AppConfig& cfg) {
-  if (cfg.codec == "h265") {
-    return neat::SimaDecodeType::H265;
-  }
-  return cfg.codec == "mjpeg" ? neat::SimaDecodeType::MJPEG : neat::SimaDecodeType::H264;
+  return config_path;
 }
 
 // EV74 converts each NV12 frame to RGB, stretches it to the model input, and normalizes it.
-neat::Model::Options backbone_options(const AppConfig& cfg) {
+neat::Model::Options backbone_options(const sima_examples::RtspStreamInfo& stream) {
   neat::Model::Options options;
   options.preprocess.kind = neat::InputKind::Image;
   options.preprocess.enable = neat::AutoFlag::On;
-  options.preprocess.input_max_width = cfg.width;
-  options.preprocess.input_max_height = cfg.height;
+  options.preprocess.input_max_width = stream.width;
+  options.preprocess.input_max_height = stream.height;
   options.preprocess.input_max_depth = 3;
   options.preprocess.resize.enable = neat::AutoFlag::On;
   options.preprocess.resize.mode = neat::ResizeMode::Stretch;
@@ -183,41 +88,44 @@ neat::Model::Options transformer_options() {
   return options;
 }
 
-groups::RtspEncodedInputOptions rtsp_options(const AppConfig& cfg) {
+groups::RtspEncodedInputOptions rtsp_options(const sima_examples::Config& config,
+                                             const sima_examples::RtspStreamInfo& stream) {
   groups::RtspEncodedInputOptions options;
-  options.url = cfg.source;
-  options.codec = rtsp_codec(cfg);
-  options.tcp = cfg.rtsp_tcp;
-  options.latency_ms = cfg.rtsp_latency_ms;
-  if (cfg.rtsp_tcp) {
+  options.url = config.string("input.source");
+  options.codec = kRtspCodecs.at(config.string("input.codec"));
+  options.tcp = config.boolean("input.rtsp.tcp");
+  options.latency_ms = config.integer("input.rtsp.latency_ms");
+  if (options.tcp) {
     // Keep the RTP timestamps; arrival-time corrections drift during high-rate replay.
     options.buffer_mode = "none";
   }
-  options.source_fps = cfg.fps;
-  if (cfg.codec == "h264") {
-    options.fallback_h264_width = cfg.width;
-    options.fallback_h264_height = cfg.height;
+  options.source_fps = stream.fps;
+  if (options.codec == groups::RtspCodec::H264) {
+    options.fallback_h264_width = stream.width;
+    options.fallback_h264_height = stream.height;
   }
   return options;
 }
 
 // Hardware decode to NV12 frames at the stream's size.
-neat::Graph decoder_graph(const AppConfig& cfg) {
+neat::Graph decoder_graph(const sima_examples::Config& config,
+                          const sima_examples::RtspStreamInfo& stream) {
   neat::SimaDecodeOptions decode;
-  decode.type = decode_type(cfg);
-  decode.dec_width = cfg.width;
-  decode.dec_height = cfg.height;
-  decode.dec_fps = cfg.fps;
+  decode.type = kDecodeTypes.at(config.string("input.codec"));
+  decode.dec_width = stream.width;
+  decode.dec_height = stream.height;
+  decode.dec_fps = stream.fps;
   neat::Graph graph("decoder");
   graph.add(neat::nodes::SimaDecode(std::move(decode)));
   return graph;
 }
 
 // Send the stream to Insight as received.
-groups::VideoSenderOptions video_options(const AppConfig& cfg) {
-  auto options = groups::VideoSenderOptions::Passthrough(rtsp_codec(cfg));
-  options.host = cfg.insight_host;
-  options.video_port_base = cfg.video_port_base;
+groups::VideoSenderOptions video_options(const sima_examples::Config& config) {
+  auto options =
+      groups::VideoSenderOptions::Passthrough(kRtspCodecs.at(config.string("input.codec")));
+  options.host = config.string("output.insight.host");
+  options.video_port_base = config.integer("output.insight.video_port_base");
   return options;
 }
 
@@ -234,10 +142,10 @@ neat::Graph backbone_graph(neat::Model& backbone) {
   return graph;
 }
 
-neat::MetadataSenderOptions metadata_options(const AppConfig& cfg) {
+neat::MetadataSenderOptions metadata_options(const sima_examples::Config& config) {
   neat::MetadataSenderOptions options;
-  options.host = cfg.insight_host;
-  options.metadata_port_base = cfg.metadata_port_base;
+  options.host = config.string("output.insight.host");
+  options.metadata_port_base = config.integer("output.insight.metadata_port_base");
   return options;
 }
 
@@ -269,25 +177,16 @@ neat::TensorList transformer_seed(neat::Model& transformer) {
   return seed;
 }
 
-rfdetr::PostprocessOptions postprocess_options(const AppConfig& cfg) {
+rfdetr::PostprocessOptions postprocess_options(const sima_examples::Config& config,
+                                               const sima_examples::RtspStreamInfo& stream) {
   rfdetr::PostprocessOptions options;
-  options.width = cfg.width;
-  options.height = cfg.height;
-  options.min_score = static_cast<float>(cfg.min_score);
-  options.max_detections = cfg.max_detections;
-  options.mask_threshold = static_cast<float>(cfg.mask_threshold);
-  options.mask_grid_size = cfg.mask_grid_size;
+  options.width = stream.width;
+  options.height = stream.height;
+  options.min_score = static_cast<float>(config.number("inference.min_score"));
+  options.max_detections = config.integer("inference.max_detections");
+  options.mask_threshold = static_cast<float>(config.number("app.mask_threshold"));
+  options.mask_grid_size = config.integer("app.mask_grid_size");
   return options;
-}
-
-// The config with the stream's frame size and rate, read with a probe, in place of each 0.
-AppConfig with_stream_info(AppConfig cfg) {
-  const auto stream = sima_examples::probe_rtsp_stream_info(cfg.source, cfg.rtsp_tcp,
-                                                            {cfg.width, cfg.height, cfg.fps});
-  cfg.width = stream.width;
-  cfg.height = stream.height;
-  cfg.fps = stream.fps;
-  return cfg;
 }
 
 // The values of a float32 output tensor, copied to host memory. On the DevKit, data_ptr()
@@ -369,15 +268,16 @@ void feed_transformer(neat::Run& source_run, neat::Model::Runner& transformer_ru
   stop = true;
 }
 
-// Send every transformer result to Insight until inference.frames or a stop; return the count.
+// Send every transformer result to Insight until `frames` (0: no limit) or a stop; return the
+// count.
 int send_results(neat::Model::Runner& transformer_runner,
                  const neat::MetadataSender& metadata_sender,
-                 const std::vector<std::string>& labels, int mask_size, const AppConfig& cfg,
+                 const std::vector<std::string>& labels, int mask_size,
+                 const rfdetr::PostprocessOptions& options, int frames,
                  const std::atomic<bool>& stop) {
-  const std::string metadata_type = cfg.segmentation ? "segmentation" : "object-detection";
-  const auto options = postprocess_options(cfg);
+  const std::string metadata_type = mask_size > 0 ? "segmentation" : "object-detection";
   int sent = 0;
-  while (!stop && (cfg.frames == 0 || sent < cfg.frames)) {
+  while (!stop && (frames == 0 || sent < frames)) {
     const neat::Sample result = transformer_runner.pull(kPullTimeoutMs);
     if (result.empty()) {
       continue;
@@ -385,10 +285,10 @@ int send_results(neat::Model::Runner& transformer_runner,
     // A nonblocking send drops the message while the socket buffer is full; the drops are
     // counted in the sender's stats and reported when the run ends. Any other failure throws.
     std::string send_error;
-    if (!metadata_sender.send_metadata(metadata_type, result_json(result, labels, mask_size, options),
-                                       result.pts_ns >= 0 ? result.pts_ns / 1'000'000 : -1,
-                                       result.frame_id >= 0 ? std::to_string(result.frame_id) : "",
-                                       &send_error) &&
+    if (!metadata_sender.send_metadata(
+            metadata_type, result_json(result, labels, mask_size, options),
+            result.pts_ns >= 0 ? result.pts_ns / 1'000'000 : -1,
+            result.frame_id >= 0 ? std::to_string(result.frame_id) : "", &send_error) &&
         !send_error.empty()) {
       throw std::runtime_error("metadata send failed: " + send_error);
     }
@@ -397,35 +297,31 @@ int send_results(neat::Model::Runner& transformer_runner,
   return sent;
 }
 
-int run_app(const CliOptions& cli) {
-  if (!fs::exists(cli.config_path)) {
-    std::cerr << "Error: config file not found: " << cli.config_path.string() << "\n";
-    return 2;
-  }
-  AppConfig cfg = load_app_config(cli.config_path);
-  if (cli.validate_config_only) {
-    std::cout << "Config validated: " << cli.config_path.string() << " (model=" << cfg.model_id
-              << ")\n";
-    return 0;
-  }
-  sima_examples::require(fs::exists(cfg.transformer_path),
-                         "decoder package not found: " + cfg.transformer_path.string());
-
-  const auto labels = sima_examples::load_labels(cfg.labels_path);
-  // The model's class IDs index the labels directly.
-  sima_examples::require(static_cast<int>(labels.size()) == rfdetr::kNumClasses,
-                         "model.labels must list " + std::to_string(rfdetr::kNumClasses) +
-                             " COCO class names, one per line: " + cfg.labels_path.string());
-  cfg = with_stream_info(cfg);
-  neat::Model backbone(cfg.model_path.string(), backbone_options(cfg));
-  neat::Model transformer(cfg.transformer_path.string(), transformer_options());
+int run_app(const fs::path& config_path) {
+  const auto config = sima_examples::Config::load(config_path);
+  const auto stream = sima_examples::probe_rtsp_stream_info(
+      config.string("input.source"), config.boolean("input.rtsp.tcp"),
+      {config.integer("input.width"), config.integer("input.height"), config.integer("input.fps")});
+  const std::string model_id = config.string("model.id");
+  // A model comes as two packages: the backbone that model.path names, and the decoder, which
+  // the code calls the transformer, next to it.
+  const fs::path backbone_path =
+      fs::absolute(config_path).parent_path() / config.string("model.path");
+  std::string transformer_name = backbone_path.filename().string();
+  transformer_name.replace(transformer_name.find("_backbone_mpk"), 13, "_decoder_mpk");
+  neat::Model backbone(backbone_path.string(), backbone_options(stream));
+  neat::Model transformer((backbone_path.parent_path() / transformer_name).string(),
+                          transformer_options());
   const std::vector<int64_t> proposals_shape = transformer.input_specs().at(1).shape;
-  const int mask_size =
-      cfg.segmentation ? static_cast<int>(transformer.output_specs().at(2).shape.at(1)) : 0;
+  const int mask_size = model_id.starts_with("seg-")
+                            ? static_cast<int>(transformer.output_specs().at(2).shape.at(1))
+                            : 0;
+  // The model's class IDs index the labels directly.
+  const auto labels = sima_examples::load_labels(config.string("model.labels"));
 
-  auto rtsp = groups::RtspEncodedInput(rtsp_options(cfg));
-  const neat::Graph decoder = decoder_graph(cfg);
-  auto video = groups::VideoSender(video_options(cfg));
+  auto rtsp = groups::RtspEncodedInput(rtsp_options(config, stream));
+  const neat::Graph decoder = decoder_graph(config, stream);
+  auto video = groups::VideoSender(video_options(config));
   neat::Graph graph;
   graph.connect(rtsp, decoder);
   // A plain link lets Core tee the encoded stream to the decoder and the video sender.
@@ -436,12 +332,13 @@ int run_app(const CliOptions& cli) {
       transformer_seed(transformer), neat::Model::RouteOptions{}, transformer_run_options());
   neat::Run source_run = graph.build(run_options());
   std::string metadata_error;
-  neat::MetadataSender metadata_sender(metadata_options(cfg), &metadata_error);
+  neat::MetadataSender metadata_sender(metadata_options(config), &metadata_error);
   sima_examples::require(metadata_sender.ok(), metadata_error);
-  std::cout << "RF-DETR " << cfg.model_id << " " << cfg.codec << ": " << cfg.source << " ("
-            << cfg.width << "x" << cfg.height << "@" << cfg.fps << ") -> Insight "
-            << cfg.insight_host << " video=" << cfg.video_port_base
-            << " metadata=" << cfg.metadata_port_base << "\n";
+  std::cout << "RF-DETR " << model_id << " " << config.string("input.codec") << ": "
+            << config.string("input.source") << " (" << stream.width << "x" << stream.height << "@"
+            << stream.fps << ") -> Insight " << config.string("output.insight.host")
+            << " video=" << config.integer("output.insight.video_port_base")
+            << " metadata=" << config.integer("output.insight.metadata_port_base") << "\n";
 
   std::atomic<bool>& stop = sima_examples::stop_on_signals();
   std::string feed_error;
@@ -450,7 +347,9 @@ int run_app(const CliOptions& cli) {
   int sent = 0;
   std::exception_ptr send_error;
   try {
-    sent = send_results(transformer_runner, metadata_sender, labels, mask_size, cfg, stop);
+    sent =
+        send_results(transformer_runner, metadata_sender, labels, mask_size,
+                     postprocess_options(config, stream), config.integer("inference.frames"), stop);
   } catch (...) {
     send_error = std::current_exception();
   }
@@ -466,7 +365,7 @@ int run_app(const CliOptions& cli) {
     throw std::runtime_error(feed_error);
   }
 
-  std::cout << "RF-DETR " << cfg.model_id << ": sent " << sent << " results to Insight\n";
+  std::cout << "RF-DETR " << model_id << ": sent " << sent << " results to Insight\n";
   const auto failures = metadata_sender.stats().send_failures;
   if (failures > 0) {
     std::cout << failures << " metadata messages dropped\n";

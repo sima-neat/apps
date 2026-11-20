@@ -28,7 +28,6 @@ class Config:
     def __init__(self, path: Path, values: dict[str, Any]) -> None:
         self.path = path
         self._values = values
-        self._unread = set(values)
 
     @classmethod
     def load(cls, path: Path) -> Config:
@@ -41,7 +40,6 @@ class Config:
     def _value(self, key: str, kind: type, kind_name: str) -> Any:
         if key not in self._values:
             raise ValueError(f"{self.path} is missing {key}")
-        self._unread.discard(key)
         value = self._values[key]
         # YAML reads `true` as a bool, and bool is a subclass of int.
         if not isinstance(value, kind) or (
@@ -70,10 +68,3 @@ class Config:
         if not values or not all(isinstance(value, str) for value in values):
             raise ValueError(f"{key} must be a non-empty list of strings")
         return values
-
-    def reject_unread_keys(self) -> None:
-        """Fail on keys the example never read, such as a renamed or misspelled key."""
-        if self._unread:
-            raise ValueError(
-                f"{self.path} has unknown keys: {', '.join(sorted(self._unread))}"
-            )

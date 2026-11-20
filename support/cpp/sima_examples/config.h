@@ -33,9 +33,6 @@ public:
   // A single value reads as a list of one.
   [[nodiscard]] std::vector<std::string> string_list(const std::string& key) const;
 
-  // Throws on keys no getter read, such as a renamed or misspelled key.
-  void reject_unread_keys() const;
-
 private:
   std::string require_key(const std::string& key) const;
 
@@ -43,8 +40,6 @@ private:
   std::unordered_map<std::string, std::string> scalars_;
   std::unordered_map<std::string, std::vector<std::string>> lists_;
   std::set<std::string> lists_with_non_strings_;
-  // Filled by the getters, so a const reader can still report what it never read.
-  mutable std::set<std::string> read_keys_;
 };
 
 std::string trim_copy(const std::string& value);

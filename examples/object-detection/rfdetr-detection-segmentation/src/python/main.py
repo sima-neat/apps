@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import sys
 import threading
-from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -32,15 +31,6 @@ from sima_examples.rtsp_probe import RtspStreamInfo, probe_rtsp_stream_info
 from sima_examples.stop_signals import stop_on_signals
 from utils import postprocess
 
-MODEL_IDS = (
-    "det-nano",
-    "det-small",
-    "det-medium",
-    "det-large",
-    "seg-nano",
-    "seg-small",
-    "seg-medium",
-)
 RTSP_CODECS = {
     "h264": pyneat.RtspCodec.H264,
     "h265": pyneat.RtspCodec.H265,
@@ -66,94 +56,19 @@ FRAME_IDENTITY = (
 )
 
 
-@dataclass(frozen=True)
-class AppConfig:
-    model_id: str
-    segmentation: bool
-    model_path: Path
-    transformer_path: Path
-    labels_path: Path
-    source: str
-    codec: str
-    # Each 0 reads that value from the stream with a probe.
-    width: int
-    height: int
-    fps: int
-    rtsp_tcp: bool
-    rtsp_latency_ms: int
-    frames: int  # 0 runs until Ctrl+C.
-    min_score: float
-    max_detections: int
-    insight_host: str
-    video_port_base: int
-    metadata_port_base: int
-    mask_threshold: float
-    mask_grid_size: int
-
-
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
-    parser.add_argument(
-        "--validate-config-only", action="store_true", help="check the config and exit"
-    )
     return parser.parse_args(argv)
 
 
-def transformer_path(model_path: Path) -> Path:
-    """The decoder package next to the backbone: _backbone_mpk becomes _decoder_mpk."""
-    if "_backbone_mpk" not in model_path.name:
-        raise ValueError(
-            f"model.path must name an RF-DETR backbone package (*_backbone_mpk.tar.gz): {model_path}"
-        )
-    return model_path.with_name(
-        model_path.name.replace("_backbone_mpk", "_decoder_mpk", 1)
-    )
-
-
-def load_app_config(path: Path) -> AppConfig:
-    config = Config.load(path)
-    model_id = config.string("model.id")
-    model_path = (
-        path.resolve().parent / Path(config.string("model.path")).expanduser()
-    ).resolve()
-    app_config = AppConfig(
-        model_id=model_id,
-        segmentation=model_id.startswith("seg-"),
-        model_path=model_path,
-        transformer_path=transformer_path(model_path),
-        labels_path=Path(config.string("model.labels")).expanduser(),
-        source=config.string("input.source"),
-        codec=config.string("input.codec"),
-        width=config.integer("input.width"),
-        height=config.integer("input.height"),
-        fps=config.integer("input.fps"),
-        rtsp_tcp=config.boolean("input.rtsp.tcp"),
-        rtsp_latency_ms=config.integer("input.rtsp.latency_ms"),
-        frames=config.integer("inference.frames"),
-        min_score=config.number("inference.min_score"),
-        max_detections=config.integer("inference.max_detections"),
-        insight_host=config.string("output.insight.host"),
-        video_port_base=config.integer("output.insight.video_port_base"),
-        metadata_port_base=config.integer("output.insight.metadata_port_base"),
-        mask_threshold=config.number("app.mask_threshold"),
-        mask_grid_size=config.integer("app.mask_grid_size"),
-    )
-    config.reject_unread_keys()
-    if model_id not in MODEL_IDS:
-        raise ValueError(f"model.id must be one of {', '.join(MODEL_IDS)}")
-    if app_config.codec not in RTSP_CODECS:
-        raise ValueError("input.codec must be h264, h265, or mjpeg")
-    return app_config
-
-
-def backbone_options(cfg: AppConfig) -> pyneat.ModelOptions:
+def backbone_options(stream: RtspStreamInfo) -> pyneat.ModelOptions:
     """EV74 converts each NV12 frame to RGB, stretches it to the model input, and normalizes it."""
     options = pyneat.ModelOptions()
     options.preprocess.kind = pyneat.InputKind.Image
     options.preprocess.enable = pyneat.AutoFlag.On
-    options.preprocess.input_max_width = cfg.width
-    options.preprocess.input_max_height = cfg.height
+    options.preprocess.input_max_width = stream.width
+    options.preprocess.input_max_height = stream.height
     options.preprocess.input_max_depth = 3
     options.preprocess.resize.enable = pyneat.AutoFlag.On
     options.preprocess.resize.mode = pyneat.ResizeMode.Stretch
@@ -173,39 +88,39 @@ def transformer_options() -> pyneat.ModelOptions:
     return options
 
 
-def rtsp_options(cfg: AppConfig) -> pyneat.RtspEncodedInputOptions:
+def rtsp_options(config: Config, stream: RtspStreamInfo) -> pyneat.RtspEncodedInputOptions:
     options = pyneat.RtspEncodedInputOptions()
-    options.url = cfg.source
-    options.codec = RTSP_CODECS[cfg.codec]
-    options.tcp = cfg.rtsp_tcp
-    options.latency_ms = cfg.rtsp_latency_ms
-    if cfg.rtsp_tcp:
+    options.url = config.string("input.source")
+    options.codec = RTSP_CODECS[config.string("input.codec")]
+    options.tcp = config.boolean("input.rtsp.tcp")
+    options.latency_ms = config.integer("input.rtsp.latency_ms")
+    if options.tcp:
         # Keep the RTP timestamps; arrival-time corrections drift during high-rate replay.
         options.buffer_mode = "none"
-    options.source_fps = cfg.fps
-    if cfg.codec == "h264":
-        options.fallback_h264_width = cfg.width
-        options.fallback_h264_height = cfg.height
+    options.source_fps = stream.fps
+    if options.codec == pyneat.RtspCodec.H264:
+        options.fallback_h264_width = stream.width
+        options.fallback_h264_height = stream.height
     return options
 
 
-def decoder_graph(cfg: AppConfig) -> pyneat.Graph:
+def decoder_graph(config: Config, stream: RtspStreamInfo) -> pyneat.Graph:
     """Hardware decode to NV12 frames at the stream's size."""
     decode = pyneat.SimaDecodeOptions()
-    decode.type = DECODE_TYPES[cfg.codec]
-    decode.dec_width = cfg.width
-    decode.dec_height = cfg.height
-    decode.dec_fps = cfg.fps
+    decode.type = DECODE_TYPES[config.string("input.codec")]
+    decode.dec_width = stream.width
+    decode.dec_height = stream.height
+    decode.dec_fps = stream.fps
     graph = pyneat.Graph("decoder")
     graph.add(pyneat.nodes.sima_decode(decode))
     return graph
 
 
-def video_options(cfg: AppConfig) -> pyneat.VideoSenderOptions:
+def video_options(config: Config) -> pyneat.VideoSenderOptions:
     """Send the stream to Insight as received."""
-    options = pyneat.VideoSenderOptions.passthrough(RTSP_CODECS[cfg.codec])
-    options.host = cfg.insight_host
-    options.video_port_base = cfg.video_port_base
+    options = pyneat.VideoSenderOptions.passthrough(RTSP_CODECS[config.string("input.codec")])
+    options.host = config.string("output.insight.host")
+    options.video_port_base = config.integer("output.insight.video_port_base")
     return options
 
 
@@ -224,10 +139,10 @@ def backbone_graph(backbone: pyneat.Model) -> pyneat.Graph:
     return graph
 
 
-def metadata_options(cfg: AppConfig) -> pyneat.MetadataSenderOptions:
+def metadata_options(config: Config) -> pyneat.MetadataSenderOptions:
     options = pyneat.MetadataSenderOptions()
-    options.host = cfg.insight_host
-    options.metadata_port_base = cfg.metadata_port_base
+    options.host = config.string("output.insight.host")
+    options.metadata_port_base = config.integer("output.insight.metadata_port_base")
     return options
 
 
@@ -257,23 +172,15 @@ def transformer_seed(transformer: pyneat.Model) -> list[pyneat.Tensor]:
     ]
 
 
-def postprocess_options(cfg: AppConfig) -> postprocess.PostprocessOptions:
+def postprocess_options(config: Config, stream: RtspStreamInfo) -> postprocess.PostprocessOptions:
     return postprocess.PostprocessOptions(
-        width=cfg.width,
-        height=cfg.height,
-        min_score=cfg.min_score,
-        max_detections=cfg.max_detections,
-        mask_threshold=cfg.mask_threshold,
-        mask_grid_size=cfg.mask_grid_size,
+        width=stream.width,
+        height=stream.height,
+        min_score=config.number("inference.min_score"),
+        max_detections=config.integer("inference.max_detections"),
+        mask_threshold=config.number("app.mask_threshold"),
+        mask_grid_size=config.integer("app.mask_grid_size"),
     )
-
-
-def with_stream_info(cfg: AppConfig) -> AppConfig:
-    """The config with the stream's frame size and rate, read with a probe, in place of each 0."""
-    stream = probe_rtsp_stream_info(
-        cfg.source, cfg.rtsp_tcp, RtspStreamInfo(cfg.width, cfg.height, cfg.fps)
-    )
-    return replace(cfg, width=stream.width, height=stream.height, fps=stream.fps)
 
 
 def transformer_sample(
@@ -355,14 +262,14 @@ def send_results(
     metadata_sender: pyneat.MetadataSender,
     labels: list[str],
     mask_size: int,
-    cfg: AppConfig,
+    options: postprocess.PostprocessOptions,
+    frames: int,
     stop: threading.Event,
 ) -> int:
-    """Send every transformer result to Insight until inference.frames or a stop; return the count."""
-    metadata_type = "segmentation" if cfg.segmentation else "object-detection"
-    options = postprocess_options(cfg)
+    """Send every transformer result to Insight until `frames` (0: no limit) or a stop."""
+    metadata_type = "segmentation" if mask_size else "object-detection"
     sent = 0
-    while not stop.is_set() and (cfg.frames == 0 or sent < cfg.frames):
+    while not stop.is_set() and (frames == 0 or sent < frames):
         result = transformer_runner.pull(timeout_ms=PULL_TIMEOUT_MS)
         if not result:
             continue
@@ -381,32 +288,34 @@ def send_results(
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    if not args.config.is_file():
-        print(f"Error: config file not found: {args.config}", file=sys.stderr)
-        return 2
-    cfg = load_app_config(args.config)
-    if args.validate_config_only:
-        print(f"Config validated: {args.config} (model={cfg.model_id})")
-        return 0
-    if not cfg.transformer_path.is_file():
-        raise FileNotFoundError(f"decoder package not found: {cfg.transformer_path}")
-
-    labels = load_labels(cfg.labels_path)
-    # The model's class IDs index the labels directly.
-    if len(labels) != postprocess.NUM_CLASSES:
-        raise ValueError(
-            f"model.labels must list {postprocess.NUM_CLASSES} COCO class names, "
-            f"one per line: {cfg.labels_path}"
-        )
-    cfg = with_stream_info(cfg)
-    backbone = pyneat.Model(str(cfg.model_path), backbone_options(cfg))
-    transformer = pyneat.Model(str(cfg.transformer_path), transformer_options())
+    config = Config.load(args.config)
+    stream = probe_rtsp_stream_info(
+        config.string("input.source"),
+        config.boolean("input.rtsp.tcp"),
+        RtspStreamInfo(
+            config.integer("input.width"),
+            config.integer("input.height"),
+            config.integer("input.fps"),
+        ),
+    )
+    model_id = config.string("model.id")
+    # A model comes as two packages: the backbone that model.path names, and the decoder,
+    # which the code calls the transformer, next to it.
+    backbone_path = args.config.resolve().parent / Path(config.string("model.path")).expanduser()
+    transformer_path = backbone_path.with_name(
+        backbone_path.name.replace("_backbone_mpk", "_decoder_mpk")
+    )
+    backbone = pyneat.Model(str(backbone_path), backbone_options(stream))
+    transformer = pyneat.Model(str(transformer_path), transformer_options())
     proposals_shape = list(transformer.input_specs()[1].shape)
-    mask_size = int(transformer.output_specs()[2].shape[1]) if cfg.segmentation else 0
+    segmentation = model_id.startswith("seg-")
+    mask_size = int(transformer.output_specs()[2].shape[1]) if segmentation else 0
+    # The model's class IDs index the labels directly.
+    labels = load_labels(Path(config.string("model.labels")).expanduser())
 
-    rtsp = pyneat.groups.rtsp_encoded_input(rtsp_options(cfg))
-    decoder = decoder_graph(cfg)
-    video = pyneat.groups.video_sender(video_options(cfg))
+    rtsp = pyneat.groups.rtsp_encoded_input(rtsp_options(config, stream))
+    decoder = decoder_graph(config, stream)
+    video = pyneat.groups.video_sender(video_options(config))
     graph = pyneat.Graph()
     graph.connect(rtsp, decoder)
     # A plain link lets Core tee the encoded stream to the decoder and the video sender.
@@ -417,11 +326,13 @@ def main(argv: list[str] | None = None) -> int:
         transformer_seed(transformer), run_options=transformer_run_options()
     )
     source_run = graph.build(run_options())
-    metadata_sender = pyneat.MetadataSender(metadata_options(cfg))
+    metadata_sender = pyneat.MetadataSender(metadata_options(config))
     print(
-        f"RF-DETR {cfg.model_id} {cfg.codec}: {cfg.source} ({cfg.width}x{cfg.height}@{cfg.fps}) "
-        f"-> Insight {cfg.insight_host} video={cfg.video_port_base} "
-        f"metadata={cfg.metadata_port_base}"
+        f"RF-DETR {model_id} {config.string('input.codec')}: {config.string('input.source')} "
+        f"({stream.width}x{stream.height}@{stream.fps}) "
+        f"-> Insight {config.string('output.insight.host')} "
+        f"video={config.integer('output.insight.video_port_base')} "
+        f"metadata={config.integer('output.insight.metadata_port_base')}"
     )
 
     stop = stop_on_signals()
@@ -433,7 +344,13 @@ def main(argv: list[str] | None = None) -> int:
     feeder.start()
     try:
         sent = send_results(
-            transformer_runner, metadata_sender, labels, mask_size, cfg, stop
+            transformer_runner,
+            metadata_sender,
+            labels,
+            mask_size,
+            postprocess_options(config, stream),
+            config.integer("inference.frames"),
+            stop,
         )
     finally:
         stop.set()
@@ -444,7 +361,7 @@ def main(argv: list[str] | None = None) -> int:
     if feed_errors:
         raise feed_errors[0]
 
-    print(f"RF-DETR {cfg.model_id}: sent {sent} results to Insight")
+    print(f"RF-DETR {model_id}: sent {sent} results to Insight")
     if metadata_sender.stats().send_failures:
         print(f"{metadata_sender.stats().send_failures} metadata messages dropped")
     return 0

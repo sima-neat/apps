@@ -19,9 +19,10 @@ then `agents/coding-style.md` and `agents/rules.md`.
    example from `PENDING_EXAMPLES` in `tests/scripts/test_config_keys.py`. The step is done when
    that test passes and every key left in `config.yaml` names a setting the README or the
    code needs.
-3. Write `load_app_config` as `agents/coding-style.md` "Configuration" describes. The step is
-   done when every key in every shipped config is read and `--validate-config-only` passes on
-   each.
+3. Read the config as `agents/coding-style.md` "Configuration" describes, and move the
+   example's config checks into its unit tests as `agents/rules.md` "Tests" describes. The
+   step is done when the application holds no config struct, no config checks, and no
+   `--validate-config-only`, and the unit tests load every shipped config.
 4. Write `main` as `agents/coding-style.md` "Flow" and "Graph topology" describe. The step is
    done when every option was checked against the installed Core header, located as
    `skills/neat-application-builder/SKILL.md` step 1 says, and no assignment restates a

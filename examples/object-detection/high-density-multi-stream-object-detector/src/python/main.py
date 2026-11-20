@@ -8,7 +8,6 @@ from __future__ import annotations
 import argparse
 import sys
 import threading
-from dataclasses import dataclass
 from pathlib import Path
 
 import pyneat
@@ -34,74 +33,13 @@ DECODE_TYPES = {"h264": pyneat.SimaDecodeType.H264, "h265": pyneat.SimaDecodeTyp
 PULL_TIMEOUT_MS = 100
 
 
-@dataclass(frozen=True)
-class AppConfig:
-    model_path: Path
-    labels_path: Path
-    sources: list[str]
-    codec: str
-    # Each 0 reads that value from every stream with a probe.
-    width: int
-    height: int
-    fps: int
-    rtsp_tcp: bool
-    rtsp_latency_ms: int
-    min_score: float
-    nms_iou: float
-    max_detections: int
-    max_inflight_per_stream: int
-    max_inflight_total: int
-    video_enabled: bool
-    insight_host: str
-    video_port_base: int
-    metadata_port_base: int
-    decoder_buffers: int
-    queue_depth: int
-    internal_queue_depth: int
-
-
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
-    parser.add_argument(
-        "--validate-config-only", action="store_true", help="check the config and exit"
-    )
     return parser.parse_args(argv)
 
 
-def load_app_config(path: Path) -> AppConfig:
-    config = Config.load(path)
-    app_config = AppConfig(
-        model_path=path.resolve().parent
-        / Path(config.string("model.path")).expanduser(),
-        labels_path=Path(config.string("model.labels")).expanduser(),
-        sources=config.string_list("input.source"),
-        codec=config.string("input.codec"),
-        width=config.integer("input.width"),
-        height=config.integer("input.height"),
-        fps=config.integer("input.fps"),
-        rtsp_tcp=config.boolean("input.rtsp.tcp"),
-        rtsp_latency_ms=config.integer("input.rtsp.latency_ms"),
-        min_score=config.number("inference.min_score"),
-        nms_iou=config.number("inference.nms_iou"),
-        max_detections=config.integer("inference.max_detections"),
-        max_inflight_per_stream=config.integer("inference.max_inflight_per_stream"),
-        max_inflight_total=config.integer("inference.max_inflight_total"),
-        video_enabled=config.boolean("output.video_enabled"),
-        insight_host=config.string("output.insight.host"),
-        video_port_base=config.integer("output.insight.video_port_base"),
-        metadata_port_base=config.integer("output.insight.metadata_port_base"),
-        decoder_buffers=config.integer("app.decoder_buffers"),
-        queue_depth=config.integer("app.queue_depth"),
-        internal_queue_depth=config.integer("app.internal_queue_depth"),
-    )
-    config.reject_unread_keys()
-    if app_config.codec not in RTSP_CODECS:
-        raise ValueError("input.codec must be h264 or h265")
-    return app_config
-
-
-def model_options(cfg: AppConfig) -> pyneat.ModelOptions:
+def model_options(config: Config) -> pyneat.ModelOptions:
     options = pyneat.ModelOptions()
     options.verbose = pyneat.VerboseOptions.quiet()
     options.preprocess.kind = pyneat.InputKind.Image
@@ -109,14 +47,14 @@ def model_options(cfg: AppConfig) -> pyneat.ModelOptions:
     options.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.NV12
     options.preprocess.preset = pyneat.NormalizePreset.COCO_YOLO
     options.decode_type = pyneat.BoxDecodeType.YoloV26
-    options.score_threshold = cfg.min_score
-    options.nms_iou_threshold = cfg.nms_iou
-    options.top_k = cfg.max_detections
+    options.score_threshold = config.number("inference.min_score")
+    options.nms_iou_threshold = config.number("inference.nms_iou")
+    options.top_k = config.integer("inference.max_detections")
     return options
 
 
 def detector_graph(
-    model: pyneat.Model, cfg: AppConfig, frame: RtspStreamInfo
+    model: pyneat.Model, config: Config, frame: RtspStreamInfo
 ) -> pyneat.Graph:
     """The model every stream shares: "detector_frame" input -> model -> "detections" output."""
     input_options = model.input_appsrc_options(False)
@@ -129,7 +67,7 @@ def detector_graph(
     detections = pyneat.Graph()
     detections.add(
         pyneat.nodes.output(
-            "detections", pyneat.OutputOptions.every_frame(cfg.queue_depth)
+            "detections", pyneat.OutputOptions.every_frame(config.integer("app.queue_depth"))
         )
     )
 
@@ -141,32 +79,32 @@ def detector_graph(
 
 
 def rtsp_options(
-    cfg: AppConfig, url: str, stream: RtspStreamInfo
+    config: Config, url: str, stream: RtspStreamInfo
 ) -> pyneat.RtspEncodedInputOptions:
     options = pyneat.RtspEncodedInputOptions()
     options.url = url
-    options.codec = RTSP_CODECS[cfg.codec]
-    options.tcp = cfg.rtsp_tcp
-    options.latency_ms = cfg.rtsp_latency_ms
-    options.auto_caps_from_stream = cfg.fps == 0
-    options.source_fps = cfg.fps
-    if cfg.codec == "h264":
+    options.codec = RTSP_CODECS[config.string("input.codec")]
+    options.tcp = config.boolean("input.rtsp.tcp")
+    options.latency_ms = config.integer("input.rtsp.latency_ms")
+    options.source_fps = config.integer("input.fps")
+    options.auto_caps_from_stream = options.source_fps == 0
+    if options.codec == pyneat.RtspCodec.H264:
         options.fallback_h264_width = stream.width
         options.fallback_h264_height = stream.height
         options.fallback_h264_fps = stream.fps
     return options
 
 
-def decoder_graph(cfg: AppConfig, stream: RtspStreamInfo) -> pyneat.Graph:
+def decoder_graph(config: Config, stream: RtspStreamInfo) -> pyneat.Graph:
     """Hardware decode to NV12 frames at the stream's size, ending at "detector_frame"."""
     decode = pyneat.SimaDecodeOptions()
-    decode.type = DECODE_TYPES[cfg.codec]
+    decode.type = DECODE_TYPES[config.string("input.codec")]
     decode.decoder_name = "decoder"
     decode.next_element = "CVU"
     decode.dec_width = stream.width
     decode.dec_height = stream.height
     decode.dec_fps = stream.fps
-    decode.num_buffers = cfg.decoder_buffers
+    decode.num_buffers = config.integer("app.decoder_buffers")
     decode.input_buffers = 2
     decode.decoder_tuning = "throughput-low-latency"
     decode.memory_opt = True
@@ -174,7 +112,11 @@ def decoder_graph(cfg: AppConfig, stream: RtspStreamInfo) -> pyneat.Graph:
     graph.add(pyneat.nodes.sima_decode(decode))
     graph.add(
         pyneat.nodes.caps_raw(
-            "NV12", stream.width, stream.height, cfg.fps, pyneat.CapsMemory.Any
+            "NV12",
+            stream.width,
+            stream.height,
+            config.integer("input.fps"),
+            pyneat.CapsMemory.Any,
         )
     )
     graph.add(pyneat.nodes.output("detector_frame"))
@@ -185,13 +127,13 @@ def stream_id(index: int) -> str:
     return f"stream{index}"
 
 
-def detector_link(cfg: AppConfig, index: int) -> pyneat.GraphLinkOptions:
+def detector_link(config: Config, index: int) -> pyneat.GraphLinkOptions:
     """Feed the shared model the latest frame of each stream, with bounded frames in flight."""
     link = pyneat.GraphLinkOptions()
     link.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
     link.stream_id = stream_id(index)
-    link.max_inflight_per_stream = cfg.max_inflight_per_stream
-    link.max_inflight_total = cfg.max_inflight_total
+    link.max_inflight_per_stream = config.integer("inference.max_inflight_per_stream")
+    link.max_inflight_total = config.integer("inference.max_inflight_total")
     return link
 
 
@@ -201,47 +143,49 @@ def video_link() -> pyneat.GraphLinkOptions:
     return link
 
 
-def video_options(cfg: AppConfig, index: int) -> pyneat.VideoSenderOptions:
+def video_options(config: Config, index: int) -> pyneat.VideoSenderOptions:
     """Send the encoded stream to Insight unchanged, on video port base + index."""
-    options = pyneat.VideoSenderOptions.passthrough(RTSP_CODECS[cfg.codec])
-    options.host = cfg.insight_host
+    options = pyneat.VideoSenderOptions.passthrough(RTSP_CODECS[config.string("input.codec")])
+    options.host = config.string("output.insight.host")
     options.channel = index
-    options.video_port_base = cfg.video_port_base
+    options.video_port_base = config.integer("output.insight.video_port_base")
     return options
 
 
-def metadata_options(cfg: AppConfig, index: int) -> pyneat.MetadataSenderOptions:
+def metadata_options(config: Config, index: int) -> pyneat.MetadataSenderOptions:
     options = pyneat.MetadataSenderOptions()
-    options.host = cfg.insight_host
+    options.host = config.string("output.insight.host")
     options.channel = index
-    options.metadata_port_base = cfg.metadata_port_base
+    options.metadata_port_base = config.integer("output.insight.metadata_port_base")
     return options
 
 
-def graph_options(cfg: AppConfig) -> pyneat.GraphOptions:
+def graph_options(config: Config) -> pyneat.GraphOptions:
     options = pyneat.GraphOptions()
-    options.advanced_execution.internal_queue_depth = cfg.internal_queue_depth
+    options.advanced_execution.internal_queue_depth = config.integer("app.internal_queue_depth")
     return options
 
 
-def run_options(cfg: AppConfig) -> pyneat.RunOptions:
+def run_options(config: Config) -> pyneat.RunOptions:
     options = pyneat.RunOptions()
     options.preset = pyneat.RunPreset.Realtime
-    options.queue_depth = cfg.queue_depth
+    options.queue_depth = config.integer("app.queue_depth")
     options.output_memory = pyneat.OutputMemory.ZeroCopy
     return options
 
 
-def stream_info(cfg: AppConfig) -> list[RtspStreamInfo]:
+def stream_info(config: Config, sources: list[str]) -> list[RtspStreamInfo]:
     """Each stream's frame size and rate: the configured values, and a probe's for each 0.
 
     Every stream has the same size, because the streams share one model input.
     """
-    configured = RtspStreamInfo(cfg.width, cfg.height, cfg.fps)
-    by_url = {
-        url: probe_rtsp_stream_info(url, cfg.rtsp_tcp, configured)
-        for url in set(cfg.sources)
-    }
+    configured = RtspStreamInfo(
+        config.integer("input.width"),
+        config.integer("input.height"),
+        config.integer("input.fps"),
+    )
+    tcp = config.boolean("input.rtsp.tcp")
+    by_url = {url: probe_rtsp_stream_info(url, tcp, configured) for url in set(sources)}
     # Core gap: a model shared by several streams accepts one input size, and a stream of
     # another size fails the build with "input spec mismatch".
     (first_url, first), *others = by_url.items()
@@ -252,10 +196,10 @@ def stream_info(cfg: AppConfig) -> list[RtspStreamInfo]:
                 f"share one model: {first_url} is {first.width}x{first.height}, "
                 f"{url} is {stream.width}x{stream.height}"
             )
-    return [by_url[url] for url in cfg.sources]
+    return [by_url[url] for url in sources]
 
 
-def decode_boxes(sample: pyneat.Sample, stream: RtspStreamInfo, cfg: AppConfig) -> list:
+def decode_boxes(sample: pyneat.Sample, stream: RtspStreamInfo, max_detections: int) -> list:
     """The boxes in a detections sample, whose first tensor is the BBOX payload."""
     if sample.kind == pyneat.SampleKind.TensorSet and sample.tensors:
         bbox = sample.tensors[0]
@@ -264,7 +208,7 @@ def decode_boxes(sample: pyneat.Sample, stream: RtspStreamInfo, cfg: AppConfig) 
     else:
         raise RuntimeError(f"expected a BBOX tensor, got {sample.kind}")
     result = pyneat.detections.decode_bbox_tensor(
-        bbox, stream.width, stream.height, cfg.max_detections, strict=True
+        bbox, stream.width, stream.height, max_detections, strict=True
     )
     return result.boxes
 
@@ -287,7 +231,7 @@ def send_detections(
     metadata_senders: list[pyneat.MetadataSender],
     streams: list[RtspStreamInfo],
     labels: list[str],
-    cfg: AppConfig,
+    max_detections: int,
     stop: threading.Event,
 ) -> None:
     """Send every detections sample to its stream's Insight channel until a stop signal."""
@@ -304,7 +248,7 @@ def send_detections(
             index = int(sample.stream_id.removeprefix("stream"))
         stream = streams[index]
         payload = detection_egress.serialize(
-            decode_boxes(sample, stream, cfg),
+            decode_boxes(sample, stream, max_detections),
             labels,
             stream.width,
             stream.height,
@@ -317,42 +261,45 @@ def send_detections(
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    if not args.config.is_file():
-        print(f"Error: config file not found: {args.config}", file=sys.stderr)
-        return 2
-    cfg = load_app_config(args.config)
-    if args.validate_config_only:
-        print(f"Config validated: {args.config} (streams={len(cfg.sources)})")
-        return 0
+    config = Config.load(args.config)
+    sources = config.string_list("input.source")
+    streams = stream_info(config, sources)
+    labels = load_labels(Path(config.string("model.labels")).expanduser())
+    model_path = args.config.resolve().parent / Path(config.string("model.path")).expanduser()
+    model = pyneat.Model(str(model_path), model_options(config))
+    detector = detector_graph(model, config, streams[0])
 
-    labels = load_labels(cfg.labels_path)
-    streams = stream_info(cfg)
-    model = pyneat.Model(str(cfg.model_path), model_options(cfg))
-    detector = detector_graph(model, cfg, streams[0])
-
-    graph = pyneat.Graph(options=graph_options(cfg))
+    graph = pyneat.Graph(options=graph_options(config))
     metadata_senders = []
-    for index, url in enumerate(cfg.sources):
-        rtsp = pyneat.groups.rtsp_encoded_input(rtsp_options(cfg, url, streams[index]))
-        decoder = decoder_graph(cfg, streams[index])
+    for index, url in enumerate(sources):
+        rtsp = pyneat.groups.rtsp_encoded_input(rtsp_options(config, url, streams[index]))
+        decoder = decoder_graph(config, streams[index])
         graph.connect(rtsp, decoder)
-        graph.connect(decoder, detector, detector_link(cfg, index))
-        if cfg.video_enabled:
+        graph.connect(decoder, detector, detector_link(config, index))
+        if config.boolean("output.video_enabled"):
             graph.connect(
                 rtsp,
-                pyneat.groups.video_sender(video_options(cfg, index)),
+                pyneat.groups.video_sender(video_options(config, index)),
                 video_link(),
             )
-        metadata_senders.append(pyneat.MetadataSender(metadata_options(cfg, index)))
+        metadata_senders.append(pyneat.MetadataSender(metadata_options(config, index)))
     print(
-        f"streams={len(cfg.sources)} insight={cfg.insight_host} "
-        f"video_ports={cfg.video_port_base}+ metadata_ports={cfg.metadata_port_base}+"
+        f"streams={len(sources)} insight={config.string('output.insight.host')} "
+        f"video_ports={config.integer('output.insight.video_port_base')}+ "
+        f"metadata_ports={config.integer('output.insight.metadata_port_base')}+"
     )
 
     stop = stop_on_signals()
-    run = graph.build(run_options(cfg))
+    run = graph.build(run_options(config))
     try:
-        send_detections(run, metadata_senders, streams, labels, cfg, stop)
+        send_detections(
+            run,
+            metadata_senders,
+            streams,
+            labels,
+            config.integer("inference.max_detections"),
+            stop,
+        )
     finally:
         run.close()
 

@@ -1,47 +1,45 @@
 #include "../../src/cpp/utils/postprocess.h"
+#include "sima_examples/config.h"
+#include "sima_examples/labels.h"
 #include "sima_examples/testing/test_checks.h"
-#include "sima_examples/testing/test_process.h"
 
 #include <nlohmann/json.hpp>
 
 #include <cmath>
 #include <cstddef>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
-#include <iterator>
 #include <string>
 #include <utility>
 #include <vector>
 
 namespace fs = std::filesystem;
 
-using sima_examples::testing::expect_contains;
 using sima_examples::testing::expect_true;
-using sima_examples::testing::remove_dir;
-using sima_examples::testing::spawn_and_wait;
-using sima_examples::testing::write_scratch_config;
 
 namespace {
 
-sima_examples::testing::ProcessResult validate(const std::string& binary, const std::string& name,
-                                               const std::string& body) {
-  const fs::path config_path = write_scratch_config("rfdetr-detection-segmentation", name, body);
-  const auto result =
-      spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
-  remove_dir(config_path.parent_path().string());
-  return result;
-}
-
-bool test_shipped_config_validates(const std::string& binary) {
-  // A scratch copy, so the process logs the harness writes next to the config stay out of
-  // src/common.
-  std::ifstream shipped(
-      "examples/object-detection/rfdetr-detection-segmentation/src/common/config.yaml");
-  const std::string body{std::istreambuf_iterator<char>(shipped), {}};
-  const auto result = validate(binary, "shipped_config_validates", body);
-  return expect_true(!body.empty() && result.exit_code == 0, "the shipped config validates") &&
-         expect_contains(result.stdout_text, "model=det-small", "the shipped model is det-small");
+// The checks the application leaves to its config: the values it reads are usable.
+bool test_shipped_config_names_a_supported_model_stream_and_labels() {
+  const fs::path common_dir = "examples/object-detection/rfdetr-detection-segmentation/src/common";
+  const auto config = sima_examples::Config::load(common_dir / "config.yaml");
+  const std::string codec = config.string("input.codec");
+  bool ok = expect_true(config.string("model.id") == "det-small", "the shipped model is det-small");
+  // The decoder package sits next to the backbone that model.path names.
+  ok &= expect_true(fs::path(config.string("model.path")).filename() ==
+                        "rf_detr_small_w8a8_mixed_w16a16_backbone_mpk.tar.gz",
+                    "model.path names the backbone package");
+  ok &= expect_true(codec == "h264" || codec == "h265" || codec == "mjpeg",
+                    "the shipped codec is supported");
+  // The model's class IDs index the labels directly.
+  ok &= expect_true(sima_examples::load_labels(config.string("model.labels")).size() ==
+                        static_cast<std::size_t>(rfdetr::kNumClasses),
+                    "model.labels lists every COCO class ID");
+  ok &= expect_true(config.number("inference.min_score") >= 0.0 &&
+                        config.number("inference.min_score") <= 1.0 &&
+                        !config.string("output.insight.host").empty(),
+                    "the shipped inference and output values are usable");
+  return ok;
 }
 
 std::vector<std::string> coco_labels() {
@@ -142,14 +140,9 @@ bool test_segmentation_traces_a_polygon_inside_the_box() {
 
 } // namespace
 
-int main(int argc, char** argv) {
-  if (argc < 2) {
-    std::cerr << "[ERR] usage: " << argv[0] << " <example-binary>\n";
-    return 2;
-  }
-
+int main() {
   bool ok = true;
-  ok &= test_shipped_config_validates(argv[1]);
+  ok &= test_shipped_config_names_a_supported_model_stream_and_labels();
   ok &= test_top_proposals_are_stable_and_best_first();
   ok &= test_detection_skips_unused_classes_and_scales_to_the_frame();
   ok &= test_segmentation_traces_a_polygon_inside_the_box();

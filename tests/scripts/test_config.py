@@ -30,7 +30,6 @@ def test_reads_dotted_keys_by_type(tmp_path):
     assert config.string_list("input.source") == ["a", "b"]
     assert config.number("inference.min_score") == 0.25
     assert config.string("model.path") == "m.tar.gz"
-    config.reject_unread_keys()
 
 
 def test_one_string_reads_as_a_list_of_one(tmp_path):
@@ -54,10 +53,3 @@ def test_bool_is_not_an_integer(tmp_path):
     config = config_file(tmp_path, "input:\n  fps: true\n")
     with pytest.raises(ValueError, match="input.fps must be an integer"):
         config.integer("input.fps")
-
-
-def test_unread_keys_are_rejected(tmp_path):
-    config = config_file(tmp_path, "input:\n  fps: 30\nstreams: [old]\n")
-    config.integer("input.fps")
-    with pytest.raises(ValueError, match="unknown keys: streams"):
-        config.reject_unread_keys()

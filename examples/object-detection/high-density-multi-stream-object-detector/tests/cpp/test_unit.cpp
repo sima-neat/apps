@@ -1,24 +1,18 @@
+#include "sima_examples/config.h"
 #include "sima_examples/detection_egress.h"
 #include "sima_examples/testing/test_checks.h"
-#include "sima_examples/testing/test_process.h"
 
 #include <nlohmann/json.hpp>
 
 #include <filesystem>
-#include <fstream>
 #include <iostream>
-#include <iterator>
 #include <string>
 #include <utility>
 #include <vector>
 
 namespace fs = std::filesystem;
 
-using sima_examples::testing::expect_contains;
 using sima_examples::testing::expect_true;
-using sima_examples::testing::remove_dir;
-using sima_examples::testing::spawn_and_wait;
-using sima_examples::testing::write_scratch_config;
 
 namespace {
 
@@ -82,45 +76,34 @@ bool test_serialize_builds_insight_payload() {
   return ok;
 }
 
-sima_examples::testing::ProcessResult validate(const std::string& binary, const std::string& name,
-                                               const std::string& body) {
-  const fs::path config_path =
-      write_scratch_config("high-density-multi-stream-object-detector", name, body);
-  const auto result =
-      spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
-  remove_dir(config_path.parent_path().string());
-  return result;
-}
-
-bool test_shipped_profiles_validate(const std::string& binary) {
+// The checks the application leaves to its config: the values it reads are usable.
+bool test_shipped_profiles_load() {
   const fs::path common_dir =
       "examples/object-detection/high-density-multi-stream-object-detector/src/common";
   const std::vector<std::pair<std::string, int>> profiles{
       {"config.yaml", 20}, {"config-30x720p20fps.yaml", 30}, {"config-60x720p10fps.yaml", 60}};
   bool ok = true;
   for (const auto& [filename, streams] : profiles) {
-    // A scratch copy, so the process logs the harness writes next to the config stay out of
-    // src/common.
-    std::ifstream shipped(common_dir / filename);
-    const std::string body{std::istreambuf_iterator<char>(shipped), {}};
-    const auto result = validate(binary, "shipped_" + fs::path(filename).stem().string(), body);
-    ok &= expect_true(!body.empty() && result.exit_code == 0, filename + " validates") &&
-          expect_contains(result.stdout_text, "streams=" + std::to_string(streams),
-                          filename + " reads every stream");
+    const auto config = sima_examples::Config::load(common_dir / filename);
+    const std::string codec = config.string("input.codec");
+    ok &= expect_true(static_cast<int>(config.string_list("input.source").size()) == streams,
+                      filename + " lists every stream");
+    ok &= expect_true(codec == "h264" || codec == "h265", filename + " names a supported codec");
+    ok &= expect_true(config.integer("input.width") == 0 && config.integer("input.height") == 0,
+                      filename + " reads each stream's frame size");
+    ok &= expect_true(config.integer("inference.max_detections") > 0 &&
+                          config.integer("app.queue_depth") > 0 &&
+                          !config.string("output.insight.host").empty(),
+                      filename + " sets usable inference and output values");
   }
   return ok;
 }
 
 } // namespace
 
-int main(int argc, char** argv) {
-  if (argc < 2) {
-    std::cerr << "[ERR] usage: " << argv[0] << " <example-binary>\n";
-    return 2;
-  }
-
+int main() {
   bool ok = true;
   ok &= test_serialize_builds_insight_payload();
-  ok &= test_shipped_profiles_validate(argv[1]);
+  ok &= test_shipped_profiles_load();
   return ok ? 0 : 1;
 }

@@ -110,7 +110,6 @@ Config Config::load(const std::filesystem::path& path) {
 }
 
 std::optional<std::string> Config::string_value(const std::string& key) const {
-  read_keys_.insert(key);
   const auto it = scalars_.find(key);
   if (it == scalars_.end() || is_nullish(it->second)) {
     return std::nullopt;
@@ -147,7 +146,6 @@ std::string Config::require_key(const std::string& key) const {
   if (it == scalars_.end()) {
     throw std::runtime_error(path_.string() + " is missing " + key);
   }
-  read_keys_.insert(key);
   return it->second;
 }
 
@@ -172,33 +170,10 @@ std::vector<std::string> Config::string_list(const std::string& key) const {
   if (it == lists_.end()) {
     return {require_key(key)}; // One value stands for a list of one.
   }
-  read_keys_.insert(key);
   if (it->second.empty() || lists_with_non_strings_.count(key) > 0) {
     throw std::runtime_error(key + " must be a non-empty list of strings");
   }
   return it->second;
-}
-
-void Config::reject_unread_keys() const {
-  std::set<std::string> unread;
-  for (const auto& [key, value] : scalars_) {
-    if (read_keys_.count(key) == 0) {
-      unread.insert(key);
-    }
-  }
-  for (const auto& [key, values] : lists_) {
-    if (read_keys_.count(key) == 0) {
-      unread.insert(key);
-    }
-  }
-  if (unread.empty()) {
-    return;
-  }
-  std::string keys;
-  for (const auto& key : unread) {
-    keys += (keys.empty() ? "" : ", ") + key;
-  }
-  throw std::runtime_error(path_.string() + " has unknown keys: " + keys);
 }
 
 std::filesystem::path default_config_path(const char* source_dir) {

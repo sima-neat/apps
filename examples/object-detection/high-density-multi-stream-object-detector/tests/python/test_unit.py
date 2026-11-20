@@ -27,7 +27,19 @@ pytestmark = pytest.mark.unit
     ],
 )
 def test_shipped_profiles_load(filename, streams, fps):
-    cfg = main_module.load_app_config(COMMON_DIR / filename)
-    assert len(cfg.sources) == streams
-    assert cfg.fps == fps
-    assert (cfg.width, cfg.height) == (0, 0), "RTSP streams report their own frame size"
+    """The checks the application leaves to its config: the values it reads are usable."""
+    config = main_module.Config.load(COMMON_DIR / filename)
+    assert len(config.string_list("input.source")) == streams
+    assert config.integer("input.fps") == fps
+    assert (config.integer("input.width"), config.integer("input.height")) == (0, 0), (
+        "RTSP streams report their own frame size"
+    )
+    assert config.string("input.codec") in main_module.RTSP_CODECS
+    assert (EXAMPLE_DIR.parents[2] / config.string("model.labels")).is_file()
+    for key in ("input.rtsp.latency_ms", "inference.max_detections",
+                "inference.max_inflight_per_stream", "inference.max_inflight_total",
+                "app.decoder_buffers", "app.queue_depth", "app.internal_queue_depth"):
+        assert config.integer(key) > 0, key
+    assert 0 <= config.number("inference.min_score") <= 1
+    assert 0 <= config.number("inference.nms_iou") <= 1
+    assert config.string("output.insight.host")

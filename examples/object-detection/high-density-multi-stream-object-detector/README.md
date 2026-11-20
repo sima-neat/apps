@@ -183,12 +183,6 @@ CONFIG="$APP_DIR/src/common/config-30x720p20fps.yaml"
 CONFIG="$APP_DIR/src/common/config-60x720p10fps.yaml"
 ```
 
-Validate the selected config without starting RTSP or Insight:
-
-```bash
-"$APP" --config "$CONFIG" --validate-config-only
-```
-
 Run the C++ application:
 
 ```bash
@@ -219,19 +213,11 @@ If channels do not start, confirm that every publisher was already reachable and
 
 ## Troubleshooting
 
-Check the configuration before involving hardware. This validates and exits
-without opening a stream or touching Insight:
-
-```bash
-"$APP" --config "$CONFIG" --validate-config-only
-```
-
 - `ModelPack: invalid_archive: archive path does not exist` at run time means
   `model.path` resolved from the config file rather than from `prebuilt-apps/`.
-  Use the absolute path printed in Prepare the Model. Validation does not open
-  the archive, so this appears only once the run starts.
-- `has unknown keys: <key>` names a key the application does not read, such as
-  `streams` from an older config. Rename it as the packaged config shows.
+  Use the absolute path printed in Prepare the Model.
+- `<config> is missing <key>` or `<key> must be <type>` names a key the config
+  lacks or sets to the wrong type. Compare it with the packaged config.
 - `failed to probe RTSP frame size: <url>` or `failed to probe RTSP frame rate: <url>`
   appears when a value left at 0 cannot be read: the source is unreachable from the
   board, or it does not report that value. Verify the URL from the board itself; the

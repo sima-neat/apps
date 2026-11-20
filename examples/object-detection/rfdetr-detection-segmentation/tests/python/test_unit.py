@@ -21,15 +21,28 @@ pytestmark = pytest.mark.unit
 LABELS = ["unused", "person"] + ["unused"] * 89
 
 
-def test_shipped_config_loads():
-    cfg = main_module.load_app_config(COMMON_DIR / "config.yaml")
-    assert cfg.model_id == "det-small" and not cfg.segmentation
-    assert cfg.model_path.name == "rf_detr_small_w8a8_mixed_w16a16_backbone_mpk.tar.gz"
-    assert cfg.transformer_path == cfg.model_path.with_name(
-        "rf_detr_small_w8a8_mixed_w16a16_decoder_mpk.tar.gz"
-    )
+def test_shipped_config_names_a_supported_model_stream_and_labels():
+    """The checks the application leaves to its config: the values it reads are usable."""
+    config = main_module.Config.load(COMMON_DIR / "config.yaml")
+    assert config.string("model.id") == "det-small"
+    model_path = COMMON_DIR / config.string("model.path")
+    # The decoder package sits next to the backbone that model.path names.
+    assert model_path.name == "rf_detr_small_w8a8_mixed_w16a16_backbone_mpk.tar.gz"
     # The packaged path reaches prebuilt-apps/models from the config file.
-    assert cfg.model_path.resolve().is_relative_to(EXAMPLE_DIR.parents[2] / "models")
+    assert model_path.resolve().is_relative_to(EXAMPLE_DIR.parents[2] / "models")
+    assert config.string("input.codec") in main_module.RTSP_CODECS
+    assert config.string("input.codec") in main_module.DECODE_TYPES
+    # The model's class IDs index the labels directly.
+    labels = (EXAMPLE_DIR.parents[2] / config.string("model.labels")).read_text().splitlines()
+    assert len(labels) == postprocess.NUM_CLASSES
+    for key in ("input.width", "input.height", "input.fps", "input.rtsp.latency_ms",
+                "inference.frames", "inference.max_detections", "app.mask_grid_size",
+                "output.insight.video_port_base", "output.insight.metadata_port_base"):
+        assert config.integer(key) >= 0, key
+    assert 0 <= config.number("inference.min_score") <= 1
+    assert 0 <= config.number("app.mask_threshold") <= 1
+    assert config.string("output.insight.host")
+    assert config.boolean("input.rtsp.tcp")
 
 
 def test_top_proposals_are_stable_and_best_first():

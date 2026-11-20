@@ -196,35 +196,14 @@ because the socket buffer was full, a further line counts them.
 
 ## Troubleshooting
 
-Check the configuration before involving hardware. This validates and exits
-without opening a stream:
-
-```bash
-python3 ${APP_DIR}/src/python/main.py \
-  --config ${APP_DIR}/src/common/config.yaml --validate-config-only
-```
-
-A valid configuration prints `Config validated: <config path> (model=det-small)`
-from both implementations.
-
-- `has unknown keys: <key>` names a key the application does not read. Configs
-  from earlier releases name the model pair under `model.task`,
-  `model.detection`, and `model.segmentation`, and the source under `source`;
-  rewrite them as the packaged config shows.
-- `model.id must be one of det-nano, ...` means `model.id` names no supported
-  variant.
-- `model.path must name an RF-DETR backbone package` means `model.path` does not
-  name a `*_backbone_mpk.tar.gz` file. Point it at the backbone, not the decoder.
-- `decoder package not found: <path>` means the decoder package is not next to
-  the backbone. Extract both files from the same download into one folder.
 - `ModelPack: invalid_archive: archive path does not exist` means `model.path`
-  resolved from the config file to a missing file. Validation does not open the
-  archive, so this appears only once the run starts.
-- `model.labels must list 91 COCO class names` means the label file does not
-  have one line for each of the model's 91 class IDs. Use the shipped
-  `coco-labels.txt`, whose `unused` lines fill the IDs COCO leaves empty.
-- `input.codec must be h264, h265, or mjpeg` means `input.codec` names a codec
-  this example does not decode.
+  resolved from the config file to a missing file, or the decoder package
+  (`*_decoder_mpk.tar.gz`) is not next to the backbone. Point `model.path` at the
+  backbone and extract both files from the same download into one folder.
+- `KeyError` naming a codec in Python, or `map::at` in C++, means `input.codec`
+  names a codec this example does not decode. Use `h264`, `h265`, or `mjpeg`.
+- `<config> is missing <key>` or `<key> must be <type>` names a key the config
+  lacks or sets to the wrong type. Compare it with the packaged config.
 - `failed to probe RTSP frame size: <url>` or `failed to probe RTSP frame rate: <url>`
   appears when a value left at 0 cannot be read: the source is unreachable from the
   board, or it does not report that value. Verify the URL from the board itself; the

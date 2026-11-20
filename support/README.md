@@ -24,7 +24,7 @@ A module in both columns has the same file name, function names, and behavior in
 
 | Module | What it does | Python | C++ |
 | --- | --- | --- | --- |
-| `config` | Reads `config.yaml` by dotted key, such as `input.rtsp.tcp`, and rejects keys the example never read | `config.py` | `config.h` |
+| `config` | Reads `config.yaml` by dotted key, such as `input.rtsp.tcp`. A missing key or a value of the wrong type raises with the key's name | `config.py` | `config.h` |
 | `labels` | Reads a class-label file with one label per line | `labels.py` | `labels.h` |
 | `rtsp_probe` | Reads an RTSP stream's frame size and frame rate before the graph is built, for each value the config leaves at 0 | `rtsp_probe.py` | `rtsp_probe.h` |
 | `stop_signals` | Sets a stop flag on Ctrl-C, SIGTERM, or a dropped ssh session (SIGHUP), so the pull loop ends and the run closes | `stop_signals.py` | `stop_signals.h` |
@@ -33,6 +33,17 @@ A module in both columns has the same file name, function names, and behavior in
 | `example_utils` | Converts tensors to OpenCV images and float vectors, and other small C++ helpers | | `example_utils.h` |
 | `obj_detection_utils` | Parses and draws bounding boxes from a box tensor | | `obj_detection_utils.h` |
 | `asset_utils` | Downloads sample files | | `asset_utils.h` |
+
+Test helpers live in `support/cpp/sima_examples/testing/` for C++ and `tests/utils/` for
+Python. `validate_config_body` runs an example with `--validate-config-only`, so only the
+examples that still read their config into an `AppConfig` use it. It goes away with the last
+of them.
+
+## Changing the library
+
+A pull request that adds, removes, or changes a module, function, or behavior here updates
+this page in the same pull request, and lists the change in its description under `Shared
+library`. Each example that calls the changed function is updated in that pull request too.
 
 The C++ source ships in the installed package as reference. The packaged C++ executables are
 already built with it.

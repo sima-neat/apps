@@ -50,6 +50,7 @@ if (BUILD_TESTING)
   add_library(SimaNeatApps::support_testing ALIAS sima_neat_apps_support_testing)
   target_link_libraries(sima_neat_apps_support_testing
     PUBLIC
+      SimaNeatApps::support_runtime
       nlohmann_json::nlohmann_json
       PkgConfig::OPENCV
       PkgConfig::YAML_CPP

@@ -36,6 +36,10 @@ Place each piece of code by the first question it answers yes to:
   `Config::load` in `config.h`, and each names the other in its header comment. A helper only
   one language needs, such as C++ `pull_status.h`, exists only there. `support/README.md`
   lists every packaged module.
+- A change to the shared library updates `support/README.md` in the same pull request: the
+  module table, and any note on a helper the change leaves only some examples using. The pull
+  request description lists the change under `Shared library`, and every caller is updated in
+  that pull request.
 - The shared library holds only generic names, keys, and defaults, and is tested once, under
   `tests/scripts/` for Python.
 - The C++ `utils/` files join the example's target through `target_sources`. A Python
@@ -81,6 +85,10 @@ Place each piece of code by the first question it answers yes to:
 - Each example's `tests/test-scope.yaml` decides which of its tests run and with which models.
   Register enabled C++ tests with CMake. `build.sh`, `tests/test.sh`, and workflow filters
   name no individual test, so one registration serves local runs and CI.
+- Unit tests check what the application leaves to its config: every shipped config loads
+  with the shared `Config`, its codec, model, and label file are ones the application
+  supports, and its numbers are in range. `tests/scripts/test_config_keys.py` checks that
+  every key is a shared name. The application itself does none of these checks.
 - Unit tests download nothing and need no live service. A broken prerequisite fails with an
   error that names it. A test runs with the inputs it names or fails.
 - `support/` has no C++ test program yet, so a shared C++ helper's test lives in the first

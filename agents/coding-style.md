@@ -47,10 +47,15 @@ is the reference: read its `main.py` and `main.cpp` before writing or reviewing 
   an error that names it.
 - Each key carries a short comment saying what it does. Values are scalars or lists of
   scalars, which the C++ and Python readers parse the same way.
-- Read the config once, at the start, into one typed `AppConfig`, and pass that object.
-- Read it with `sima_examples.config.Config` in Python and `sima_examples::Config` in
-  C++, and call `reject_unread_keys()` after the last read, so an old or misspelled key fails
-  at startup.
+- `main` loads the file once with `sima_examples.config.Config` in Python or
+  `sima_examples::Config` in C++ and passes that object to the functions that build Neat
+  options. Each function reads the keys it sets, where it sets them, such as
+  `options.latency_ms = config.integer("input.rtsp.latency_ms")`, so every setting appears once
+  in the code. A value derived from several keys, such as the probed stream size, is a local
+  in `main`.
+- The application reads its config and runs. Range checks, supported-value checks, and
+  unknown-key checks of the shipped configs live in the unit tests, as `agents/rules.md`
+  "Tests" describes.
 - `config.yaml` sets one configuration: one input type with only the keys it reads. When the
   example supports several input types, `input.type` names the one set, and comments under it
   list the keys each other type takes:
@@ -67,8 +72,7 @@ is the reference: read its `main.py` and `main.cpp` before writing or reviewing 
     fps: 0
   ```
 
-  The code reads the keys of the configured type, so a key left from another type fails at
-  `reject_unread_keys()`.
+  The code reads only the keys of the configured type.
 - An RTSP stream's frame size and rate come from `probe_rtsp_stream_info`, which fills each
   of `input.width`, `input.height`, and `input.fps` the config leaves at 0. A customer then
   switches to a stream of another resolution without editing the config.
