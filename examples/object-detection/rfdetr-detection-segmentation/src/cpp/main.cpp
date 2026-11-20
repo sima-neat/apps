@@ -92,7 +92,7 @@ groups::RtspEncodedInputOptions rtsp_options(const sima_examples::Config& config
                                              const sima_examples::RtspStreamInfo& stream) {
   groups::RtspEncodedInputOptions options;
   options.url = config.string("input.source");
-  options.codec = kRtspCodecs.at(config.string("input.codec"));
+  options.codec = config.choice("input.codec", kRtspCodecs);
   options.tcp = config.boolean("input.rtsp.tcp");
   options.latency_ms = config.integer("input.rtsp.latency_ms");
   if (options.tcp) {
@@ -111,7 +111,7 @@ groups::RtspEncodedInputOptions rtsp_options(const sima_examples::Config& config
 neat::Graph decoder_graph(const sima_examples::Config& config,
                           const sima_examples::RtspStreamInfo& stream) {
   neat::SimaDecodeOptions decode;
-  decode.type = kDecodeTypes.at(config.string("input.codec"));
+  decode.type = config.choice("input.codec", kDecodeTypes);
   decode.dec_width = stream.width;
   decode.dec_height = stream.height;
   decode.dec_fps = stream.fps;
@@ -122,8 +122,7 @@ neat::Graph decoder_graph(const sima_examples::Config& config,
 
 // Send the stream to Insight as received.
 groups::VideoSenderOptions video_options(const sima_examples::Config& config) {
-  auto options =
-      groups::VideoSenderOptions::Passthrough(kRtspCodecs.at(config.string("input.codec")));
+  auto options = groups::VideoSenderOptions::Passthrough(config.choice("input.codec", kRtspCodecs));
   options.host = config.string("output.insight.host");
   options.video_port_base = config.integer("output.insight.video_port_base");
   return options;

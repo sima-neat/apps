@@ -21,7 +21,7 @@ else:
     raise SystemExit("support/python not found above this example; reinstall the Apps package")
 
 from sima_examples import detection_egress
-from sima_examples.config import Config
+from sima_examples.config import Config, lookup
 from sima_examples.labels import load_labels
 from sima_examples.rtsp_probe import RtspStreamInfo, probe_rtsp_stream_info
 from sima_examples.stop_signals import stop_on_signals
@@ -50,7 +50,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
 
 
 def model_options(
-    config: Config, stream: RtspStreamInfo, frame_format: pyneat.Format
+    config: Config, stream: RtspStreamInfo, frame_format: pyneat.Format, max_detections: int
 ) -> pyneat.ModelOptions:
     """YOLO26 on the decoded frames: NV12, or NV16 from a 4:2:2 USB camera."""
     options = pyneat.ModelOptions()
@@ -67,14 +67,14 @@ def model_options(
     options.decode_type = pyneat.BoxDecodeType.YoloV26
     options.score_threshold = config.number("inference.min_score")
     options.nms_iou_threshold = config.number("inference.nms_iou")
-    options.top_k = config.integer("inference.max_detections")
+    options.top_k = max_detections
     return options
 
 
 def rtsp_options(config: Config, stream: RtspStreamInfo) -> pyneat.RtspEncodedInputOptions:
     options = pyneat.RtspEncodedInputOptions()
     options.url = config.string("input.source")
-    options.codec = RTSP_CODECS[config.string("input.codec")]
+    options.codec = config.choice("input.codec", RTSP_CODECS)
     options.tcp = config.boolean("input.rtsp.tcp")
     options.latency_ms = config.integer("input.rtsp.latency_ms")
     # With input.fps at 0, Core also takes the caps from the stream: above 60 fps, caps set from
@@ -123,7 +123,7 @@ def decoder_graph(codec: str, stream: RtspStreamInfo, frame_format: pyneat.Forma
     """Hardware decode of the RTSP stream or the camera's JPEG: NV12, or NV16 for a 4:2:2
     camera."""
     decode = pyneat.SimaDecodeOptions()
-    decode.type = DECODE_TYPES[codec]
+    decode.type = lookup("input.codec", codec, DECODE_TYPES)
     decode.out_format = frame_format
     decode.dec_width = stream.width
     decode.dec_height = stream.height
@@ -154,7 +154,7 @@ def video_options(
         options = pyneat.VideoSenderOptions.from_raw(encode)
     else:
         # Passthrough(MJPEG) carries RTP/JPEG, at most 2040 pixels per side.
-        options = pyneat.VideoSenderOptions.passthrough(RTSP_CODECS[codec])
+        options = pyneat.VideoSenderOptions.passthrough(lookup("input.codec", codec, RTSP_CODECS))
     options.host = config.string("output.insight.host")
     options.video_port_base = config.integer("output.insight.video_port_base")
     return options
@@ -233,7 +233,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     config = Config.load(args.config)
     input_type = config.string("input.type")
-    codec = INPUT_CODECS[input_type] or config.string("input.codec")
+    codec = config.choice("input.type", INPUT_CODECS) or config.string("input.codec")
+    # Used by both the model and the box decode.
+    max_detections = config.integer("inference.max_detections")
     configured = RtspStreamInfo(
         config.integer("input.width"), config.integer("input.height"), config.integer("input.fps")
     )
@@ -251,7 +253,9 @@ def main(argv: list[str] | None = None) -> int:
     camera = pyneat.usb_camera_info(camera_options) if camera_options else None
     frame_format = camera.decoded_format if camera else pyneat.Format.NV12
     model_path = args.config.absolute().parent / config.string("model.path")
-    model = pyneat.Model(str(model_path), model_options(config, stream, frame_format))
+    model = pyneat.Model(
+        str(model_path), model_options(config, stream, frame_format, max_detections)
+    )
     detector = detector_graph(model)
     video = pyneat.groups.video_sender(video_options(config, input_type, codec, stream))
 
@@ -288,7 +292,7 @@ def main(argv: list[str] | None = None) -> int:
             metadata_sender,
             labels,
             stream,
-            config.integer("inference.max_detections"),
+            max_detections,
             config.integer("inference.frames"),
             stop,
         )

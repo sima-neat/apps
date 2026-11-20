@@ -75,7 +75,7 @@ fs::path parse_args(int argc, char** argv) {
 // YOLO26 on the decoded frames: NV12, or NV16 from a 4:2:2 USB camera.
 neat::Model::Options model_options(const sima_examples::Config& config,
                                    const sima_examples::RtspStreamInfo& stream,
-                                   neat::FormatTag frame_format) {
+                                   neat::FormatTag frame_format, int max_detections) {
   neat::Model::Options options;
   options.preprocess.kind = neat::InputKind::Image;
   options.preprocess.enable = neat::AutoFlag::On;
@@ -88,7 +88,7 @@ neat::Model::Options model_options(const sima_examples::Config& config,
   options.decode_type = neat::BoxDecodeType::YoloV26;
   options.score_threshold = config.number("inference.min_score");
   options.nms_iou_threshold = config.number("inference.nms_iou");
-  options.top_k = config.integer("inference.max_detections");
+  options.top_k = max_detections;
   return options;
 }
 
@@ -96,7 +96,7 @@ groups::RtspEncodedInputOptions rtsp_options(const sima_examples::Config& config
                                              const sima_examples::RtspStreamInfo& stream) {
   groups::RtspEncodedInputOptions options;
   options.url = config.string("input.source");
-  options.codec = kRtspCodecs.at(config.string("input.codec"));
+  options.codec = config.choice("input.codec", kRtspCodecs);
   options.tcp = config.boolean("input.rtsp.tcp");
   options.latency_ms = config.integer("input.rtsp.latency_ms");
   // With input.fps at 0, Core also takes the caps from the stream: above 60 fps, caps set from
@@ -147,7 +147,7 @@ neat::Graph camera_graph(const neat::UsbCameraInputOptions& options,
 neat::Graph decoder_graph(const std::string& codec, const sima_examples::RtspStreamInfo& stream,
                           neat::FormatTag frame_format) {
   neat::SimaDecodeOptions decode;
-  decode.type = kDecodeTypes.at(codec);
+  decode.type = sima_examples::lookup("input.codec", codec, kDecodeTypes);
   decode.out_format = frame_format;
   decode.dec_width = stream.width;
   decode.dec_height = stream.height;
@@ -174,7 +174,8 @@ groups::VideoSenderOptions video_options(const sima_examples::Config& config,
   // encoded again for Insight. Passthrough(MJPEG) carries RTP/JPEG, at most 2040 pixels per side.
   auto options = input_type == "http"
                      ? groups::VideoSenderOptions::FromRaw({.fps = stream.fps})
-                     : groups::VideoSenderOptions::Passthrough(kRtspCodecs.at(codec));
+                     : groups::VideoSenderOptions::Passthrough(
+                           sima_examples::lookup("input.codec", codec, kRtspCodecs));
   options.host = config.string("output.insight.host");
   options.video_port_base = config.integer("output.insight.video_port_base");
   return options;
@@ -252,10 +253,12 @@ int send_detections(neat::Run& run, neat::MetadataSender& metadata_sender,
 int run_app(const fs::path& config_path) {
   const auto config = sima_examples::Config::load(config_path);
   const std::string input_type = config.string("input.type");
-  std::string codec = kInputCodecs.at(input_type);
+  std::string codec = config.choice("input.type", kInputCodecs);
   if (codec.empty()) {
     codec = config.string("input.codec");
   }
+  // Used by both the model and the box decode.
+  const int max_detections = config.integer("inference.max_detections");
   const sima_examples::RtspStreamInfo configured{
       config.integer("input.width"), config.integer("input.height"), config.integer("input.fps")};
   // An RTSP stream's size and rate come from the probe for each value the config leaves at 0;
@@ -272,7 +275,8 @@ int run_app(const fs::path& config_path) {
       camera_options ? std::optional(neat::usb_camera_info(*camera_options)) : std::nullopt;
   const neat::FormatTag frame_format = camera ? camera->decoded_format : neat::FormatTag::NV12;
   const fs::path model_path = fs::absolute(config_path).parent_path() / config.string("model.path");
-  neat::Model model(model_path.string(), model_options(config, stream, frame_format));
+  neat::Model model(model_path.string(),
+                    model_options(config, stream, frame_format, max_detections));
   const neat::Graph detector = detector_graph(model);
   const neat::Graph video = groups::VideoSender(video_options(config, input_type, codec, stream));
 
@@ -307,8 +311,7 @@ int run_app(const fs::path& config_path) {
             << " codec=" << codec << " stream=" << stream.width << "x" << stream.height << "@"
             << stream.fps << " insight=" << host << " video=" << video_port
             << " metadata=" << config.integer("output.insight.metadata_port_base") << "\n";
-  const int processed = send_detections(run, metadata_sender, labels, stream,
-                                        config.integer("inference.max_detections"),
+  const int processed = send_detections(run, metadata_sender, labels, stream, max_detections,
                                         config.integer("inference.frames"), stop);
   run.close();
 

@@ -1,11 +1,15 @@
 // Unit tests for the single-stream object detector: the checks the application leaves to its
-// config. tests/python/test_unit.py runs the same checks against main.py's tables.
+// config. tests/python/test_unit.py runs the same checks against main.py's tables. This example
+// also holds the test of the shared C++ Config::choice, since support/ has no C++ test program.
 
 #include "sima_examples/config.h"
 #include "sima_examples/labels.h"
 #include "sima_examples/testing/test_checks.h"
 
 #include <filesystem>
+#include <fstream>
+#include <map>
+#include <stdexcept>
 #include <string>
 
 namespace fs = std::filesystem;
@@ -49,8 +53,29 @@ bool test_shipped_config_names_a_supported_input_model_and_labels() {
   return ok;
 }
 
+// An unknown table value names the key, the value, and the choices, as in Python.
+bool test_choice_names_the_key_and_the_value() {
+  const fs::path path = fs::temp_directory_path() / "single-stream-choice-test.yaml";
+  std::ofstream(path) << "input:\n  codec: h265\n  type: vp8\n";
+  const auto config = sima_examples::Config::load(path);
+  const std::map<std::string, int> codecs = {{"h264", 1}, {"h265", 2}, {"mjpeg", 3}};
+  bool ok = expect_true(config.choice("input.codec", codecs) == 2, "choice returns the entry");
+  std::string error;
+  try {
+    (void)config.choice("input.type", codecs);
+  } catch (const std::runtime_error& thrown) {
+    error = thrown.what();
+  }
+  fs::remove(path);
+  ok &= expect_true(error == "input.type: unknown value 'vp8' (expected h264, h265, mjpeg)",
+                    "an unknown value names the key, the value, and the choices: " + error);
+  return ok;
+}
+
 } // namespace
 
 int main() {
-  return test_shipped_config_names_a_supported_input_model_and_labels() ? 0 : 1;
+  bool ok = test_shipped_config_names_a_supported_input_model_and_labels();
+  ok &= test_choice_names_the_key_and_the_value();
+  return ok ? 0 : 1;
 }

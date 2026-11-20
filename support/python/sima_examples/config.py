@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 import yaml
+
+T = TypeVar("T")
 
 
 def _flatten(mapping: dict[str, Any], prefix: str = "") -> dict[str, Any]:
@@ -17,6 +20,16 @@ def _flatten(mapping: dict[str, Any], prefix: str = "") -> dict[str, Any]:
         else:
             values[path] = value
     return values
+
+
+def lookup(key: str, value: str, table: Mapping[str, T]) -> T:
+    """`table[value]`; a value the table lacks raises with `key`, the value, and the choices.
+
+    Use it for a value `main` derives from the config; `Config.choice` reads the key itself.
+    """
+    if value not in table:
+        raise ValueError(f"{key}: unknown value '{value}' (expected {', '.join(sorted(table))})")
+    return table[value]
 
 
 class Config:
@@ -59,6 +72,10 @@ class Config:
 
     def boolean(self, key: str) -> bool:
         return self._value(key, bool, "true or false")
+
+    def choice(self, key: str, table: Mapping[str, T]) -> T:
+        """The `table` entry the string at `key` names, such as a codec name's Neat enum."""
+        return lookup(key, self.string(key), table)
 
     def string_list(self, key: str) -> list[str]:
         """A list of strings; a single string reads as a list of one."""
