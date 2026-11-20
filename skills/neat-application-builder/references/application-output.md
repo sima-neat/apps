@@ -23,12 +23,11 @@ setup belongs to the Insight documentation or the installed Insight skill.
     one pending encoded frame for the sender and replaces it when the network is slow, so the
     preview never holds back the decoder. The high-density example uses it.
   - A plain `connect` sends every encoded frame, and a slow sender can hold back the decoder.
-    The RF-DETR example uses it for H.264 and H.265.
+    The RF-DETR example uses it for H.264, H.265, and MJPEG.
 - **Decoded frames re-encoded:** connect the decoder to a `FromRaw` sender with a
-  `RealtimeLatestByStream` link and small `max_inflight_per_stream` and `max_inflight_total`
-  (the RF-DETR example uses `2` and `2`), so the encoder cannot hold the frames the decoder
-  needs. The RF-DETR example does this for MJPEG input and gives that decoder
-  `num_buffers = 32`.
+  `RealtimeLatestByStream` link and small `max_inflight_per_stream` and `max_inflight_total`,
+  so the encoder cannot hold the frames the decoder needs. Use it only when the source codec is
+  one Insight cannot play.
 
 ## Metadata to Insight
 
