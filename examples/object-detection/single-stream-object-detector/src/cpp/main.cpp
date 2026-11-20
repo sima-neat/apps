@@ -94,9 +94,13 @@ CliOptions parse_args(int argc, char** argv) {
   return options;
 }
 
-// The string at `key`, which must not be empty.
+// The string at `key`, which must not be null or empty.
 std::string required_string(const sima_examples::Config& config, const std::string& key) {
   std::string value = config.string(key);
+  // Config::string() returns a YAML null as the text "null"; Python's Config rejects it.
+  if (!config.string_value(key)) {
+    throw std::runtime_error(key + " must be a string, got null");
+  }
   if (value.empty()) {
     throw std::runtime_error(key + " must not be empty");
   }
