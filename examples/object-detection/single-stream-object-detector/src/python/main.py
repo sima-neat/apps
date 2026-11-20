@@ -754,6 +754,7 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
     if save_frames:
         frame_graph = pyneat.Graph("frame")
         if raw_usb:
+            frame_graph.add(pyneat.nodes.input("frame"))
             snapshot = pyneat.ColorConvertOptions()
             snapshot.output_format = pyneat.ImageFormat.BGR
             snapshot.color = usb_camera.color

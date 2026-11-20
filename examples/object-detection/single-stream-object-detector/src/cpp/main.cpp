@@ -808,6 +808,7 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
   if (save_frames) {
     simaai::neat::Graph frame_graph("frame");
     if (raw_usb) {
+      frame_graph.add(simaai::neat::nodes::Input("frame"));
       simaai::neat::ColorConvertOptions snapshot;
       snapshot.output_format = simaai::neat::ImageFormat::BGR;
       snapshot.color = usb_camera->color;
