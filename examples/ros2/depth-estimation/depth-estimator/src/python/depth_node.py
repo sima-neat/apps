@@ -59,20 +59,34 @@ class DepthNode(Node):
     def initialize_model(self, config, config_path=None):
         runtime = config.get("runtime", {})
         self.size = int(runtime.get("infer_size", 518))
+        self.max_input_size = int(runtime.get("max_input_size", 1920))
+        if min(self.size, self.max_input_size) < 1:
+            raise ValueError("infer_size and max_input_size must be positive")
         self.queue_depth = int(runtime.get("queue_depth", 4))
         options = pyneat.ModelOptions()
         options.preprocess.kind = pyneat.InputKind.Image
         options.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.RGB
-        options.preprocess.input_max_width = self.size
-        options.preprocess.input_max_height = self.size
+        options.preprocess.input_max_width = self.max_input_size
+        options.preprocess.input_max_height = self.max_input_size
         options.preprocess.input_max_depth = 3
+        # Match the native model preprocessor: EV74 performs the bicubic resize.
+        options.preprocess.resize.enable = pyneat.AutoFlag.On
+        options.preprocess.resize.mode = pyneat.ResizeMode.Stretch
+        options.preprocess.resize.width = self.size
+        options.preprocess.resize.height = self.size
+        options.preprocess.resize.scaling_type = "BICUBIC"
         self.model = pyneat.Model(config["model"]["path"], options)
 
     def prepare_input(self, message):
         if message.encoding != "bgr8":
             raise ValueError("Depth input must be bgr8, matching the native example")
-        rgb = cv2.cvtColor(image_array(message), cv2.COLOR_BGR2RGB)
-        rgb = cv2.resize(rgb, (self.size, self.size), interpolation=cv2.INTER_LINEAR)
+        bgr = image_array(message)
+        # Only oversized images are reduced on the CPU, as in the native app.
+        scale = self.max_input_size / max(bgr.shape[:2])
+        if scale < 1:
+            size = (max(1, int(bgr.shape[1] * scale)), max(1, int(bgr.shape[0] * scale)))
+            bgr = cv2.resize(bgr, size, interpolation=cv2.INTER_AREA)
+        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
         return [pyneat.Tensor.from_numpy(np.ascontiguousarray(rgb), copy=True,
                                         image_format=pyneat.PixelFormat.RGB)]
 

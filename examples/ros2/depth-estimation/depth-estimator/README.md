@@ -55,12 +55,18 @@ to this example directory. Shipped labels are under `src/common/`.
 | --- | --- |
 | `model` | Model package(s), labels and app-specific model options |
 | `io` | Input image directory/file and output paths |
-| `runtime` | Frame limits, warmup and runtime controls used by this app |
+| `runtime.infer_size` | Model input width/height (518); Neat performs bicubic resizing |
+| `runtime.max_input_size` | Maximum source width/height (1920); larger images are area-downscaled with aspect ratio preserved |
+| `runtime.queue_depth` | Neat runtime queue depth (4) |
 | `ros.image_topic`, `ros.results_topic` | Image input and matching JSON result topics (defaults `image`, `results`) |
 | `ros.input_policy` | `complete`: backpressure; `latest`: discard unadmitted older images |
 | `ros.source_window`, `pending_frames`, `inflight_frames` | Bounded outstanding, queued and admitted work |
 | `ros.visualization.save.enabled`, `.directory` | Save matched overlays in a new run directory |
 | `ros.visualization.insight.enabled`, `.host` | Enable Insight video and choose its host |
+
+Images within `runtime.max_input_size` retain their source resolution until Neat
+preprocessing. The RGB conversion, bicubic model resize and oversized-image
+handling match the native Python depth example.
 
 These are startup YAML settings, not dynamic ROS parameters. Restart after edits.
 

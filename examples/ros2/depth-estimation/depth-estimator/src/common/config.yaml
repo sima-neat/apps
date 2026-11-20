@@ -6,7 +6,8 @@ io:                          # Input and output paths.
   output_dir: sandbox/depth-estimator # Folder for depth visualizations.
 
 runtime:                     # Runtime settings.
-  infer_size: 518            # Square model input size.
+  infer_size: 518            # Square model input size; Neat uses bicubic resizing.
+  max_input_size: 1920       # Area-downscale only larger images before Neat preprocessing.
   queue_depth: 4             # Runtime queue depth.
 
 output:
