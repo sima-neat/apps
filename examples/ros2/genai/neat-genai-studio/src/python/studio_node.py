@@ -21,13 +21,15 @@ from sensor_msgs.msg import Image
 from std_msgs.msg import String
 import yaml
 from image_transport import image_array, header_dict
+from studio_tls import backend_ssl_context
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True)
     args, ros_args = parser.parse_known_args(argv)
-    config = yaml.safe_load(args.config.read_text())
+    config_path = args.config.expanduser().resolve(strict=True)
+    config = yaml.safe_load(config_path.read_text())
     settings = config.get("ros", {})
     app = config["app"]
     web = app.get("web", {})
@@ -119,7 +121,10 @@ def main(argv=None):
         else:
             payload = json.dumps(body, allow_nan=False).encode()
         req = request.Request(endpoint + suffix, data=payload, headers=headers, method="POST")
-        with request.urlopen(req, timeout=timeout) as response:
+        # Resolve trust per request so the backend may create its certificate
+        # after the ROS node starts. All four operations use this verified context.
+        context = backend_ssl_context(config_path, settings, endpoint)
+        with request.urlopen(req, timeout=timeout, context=context) as response:
             if operation == "chat" and body.get("stream", False):
                 for raw in response:
                     if stop.is_set():

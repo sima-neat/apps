@@ -1,4 +1,4 @@
-"""Real ROS audio request transport with a controlled HTTP backend.
+"""Real ROS chat/audio transport with controlled HTTP and self-signed HTTPS backends.
 
 These checks cover routing, multipart bytes and response formats, not speech
 model accuracy or performance. No model downloads or live service are needed.
@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import ssl
 import subprocess
 import sys
 import threading
@@ -26,7 +27,19 @@ pytestmark = pytest.mark.ros2
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_audio_routes_payloads_and_response_formats(tmp_path):
+def make_certificate(directory, *, host="127.0.0.1"):
+    directory.mkdir(parents=True, exist_ok=True)
+    certificate, key = directory / "server.crt", directory / "server.key"
+    subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-sha256",
+        "-nodes", "-days", "1", "-keyout", str(key), "-out", str(certificate),
+        "-subj", "/CN=localhost", "-addext", f"subjectAltName=IP:{host},DNS:localhost"],
+        check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    return certificate, key
+
+
+@pytest.mark.parametrize("tls_mode", ["http", "local", "installed", "ca", "env",
+                                      "untrusted", "wrong_ca", "wrong_host", "missing_ca"])
+def test_routes_payloads_and_response_formats(tmp_path, tls_mode):
     audio = b"RIFF\x00\xff\x80\nWAVE transport fixture"
     seen = []
     held_requests = []
@@ -40,7 +53,15 @@ def test_audio_routes_payloads_and_response_formats(tmp_path):
 
         def do_POST(self):
             payload = self.rfile.read(int(self.headers["Content-Length"]))
-            if self.path == "/v1/audio/speech":
+            if self.path == "/v1/chat/completions":
+                body = json.loads(payload)
+                seen.append((self.path, body, None))
+                if body.get("stream"):
+                    content_type = "text/event-stream"
+                    result = b'data: {"choices":[{"delta":{"content":"hello"}}]}\n\ndata: [DONE]\n\n'
+                else:
+                    content_type, result = "application/json", b'{"choices":[{"message":{"content":"hello"}}]}'
+            elif self.path == "/v1/audio/speech":
                 body = json.loads(payload)
                 seen.append((self.path, body, None))
                 if body.get("input") == "hold":
@@ -76,19 +97,48 @@ def test_audio_routes_payloads_and_response_formats(tmp_path):
             self.wfile.write(result)
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Backend)
+    # Mirror the backend's source and installed asset layouts without loading models.
+    backend = tmp_path / "backend"
+    api = backend / "src/python/api/studio_api.py"
+    api.parent.mkdir(parents=True)
+    api.touch()
+    config = backend / ("common/config.yaml" if tls_mode == "installed" else "src/common/config.yaml")
+    config.parent.mkdir(parents=True, exist_ok=True)
+    environment = dict(os.environ)
+    environment.pop("NEAT_TLS_CERT", None)
+    environment.pop("NEAT_TLS_KEY", None)
+    settings = {"request_timeout_seconds": 5, "pending_requests": 2}
+    web = {"port": server.server_port}  # No https key: exercise the default HTTPS path.
+    if tls_mode == "http":
+        settings["studio_url"] = f"http://127.0.0.1:{server.server_port}"
+    else:
+        certificate, key = make_certificate(backend / ".local-certs",
+            host="127.0.0.2" if tls_mode == "wrong_host" else "127.0.0.1")
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(str(certificate), str(key))
+        server.socket = context.wrap_socket(server.socket, server_side=True)
+        if tls_mode == "env":
+            # Backend override lives outside .local-certs and is shared via the environment.
+            overridden = tmp_path / "custom-server.crt"
+            certificate.rename(overridden)
+            environment["NEAT_TLS_CERT"] = str(overridden)
+        elif tls_mode in ("ca", "untrusted", "wrong_ca", "missing_ca"):
+            settings["studio_url"] = f"https://127.0.0.1:{server.server_port}"
+            if tls_mode == "ca":
+                settings["tls_ca_file"] = "../../.local-certs/server.crt"
+            elif tls_mode == "wrong_ca":
+                settings["tls_ca_file"] = str(make_certificate(tmp_path / "other")[0])
+            elif tls_mode == "missing_ca":
+                settings["tls_ca_file"] = "missing.pem"
+    config.write_text(yaml.safe_dump({"app": {"web": web}, "ros": settings}))
     thread = threading.Thread(target=server.serve_forever)
     thread.start()
-    config = tmp_path / "config.yaml"
-    config.write_text(yaml.safe_dump({"app": {}, "ros": {
-        "studio_url": f"http://127.0.0.1:{server.server_port}",
-        "request_timeout_seconds": 5, "pending_requests": 2}}))
     rclpy.init()
     observer = Node("studio_transport_test")
     responses = []
     observer.create_subscription(String, "studio_test_responses",
                                  lambda msg: responses.append(json.loads(msg.data)), 16)
     publisher = observer.create_publisher(String, "studio_test_requests", 8)
-    environment = dict(os.environ)
     entry = ROOT / "examples/ros2/genai/neat-genai-studio/src/python/studio_node.py"
     process = None
 
@@ -111,6 +161,21 @@ def test_audio_routes_payloads_and_response_formats(tmp_path):
                 "responses:=studio_test_responses"], env=environment, stdout=log, stderr=log)
             wait_until(lambda: publisher.get_subscription_count() == 1 and
                        observer.count_publishers("studio_test_responses") == 1)
+            chat = {"messages": [{"role": "user", "content": "hello"}]}
+            if tls_mode in ("untrusted", "wrong_ca", "wrong_host", "missing_ca"):
+                reply = send({"id": "rejected-tls", "body": chat})
+                expected = "certificate not found" if tls_mode == "missing_ca" else "CERTIFICATE_VERIFY_FAILED"
+                assert expected in reply["error"], reply
+                assert not seen, "Untrusted requests must not reach the backend"
+                return
+            reply = send({"id": "chat", "body": chat})
+            assert "error" not in reply, reply
+            assert reply["data"]["choices"][0]["message"]["content"] == "hello"
+            assert seen[-1][1]["max_tokens"] == 512
+            reply = send({"id": "stream", "body": {**chat, "stream": True}})
+            wait_until(lambda: any(x["id"] == "stream" and x["done"] for x in responses))
+            fragments = [x for x in responses if x["id"] == "stream" and not x["done"]]
+            assert fragments[0]["data"]["choices"][0]["delta"]["content"] == "hello"
             for operation, route in (("transcribe", "transcriptions"), ("translate", "translations")):
                 for response_format in ("json", "verbose_json", "text"):
                     body = {"response_format": response_format, "temperature": 0}

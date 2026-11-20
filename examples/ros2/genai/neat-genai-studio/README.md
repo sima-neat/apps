@@ -15,10 +15,12 @@ neat-genai-studio/
     ├── common/config.yaml
     └── python/
         ├── studio_node.py
+        ├── studio_tls.py
         └── image_transport.py
 ```
 
 [studio_node.py](src/python/studio_node.py) declares its ROS interfaces and execution flow directly.
+[studio_tls.py](src/python/studio_tls.py) selects the trusted certificate for HTTPS requests.
 `main()` declares image/request subscriptions and response publication.
 `receive()` admits bounded requests; `perform()` makes the HTTP inference call
 on a worker. The local `server/` and `api/` directories contain the unchanged
@@ -43,6 +45,7 @@ to this example directory. Shipped labels are under `src/common/`.
 | `server` | Model catalog, loaded models and model-server endpoints |
 | `app` | Local backend endpoints, web service and speech engines |
 | `ros.studio_url` | Existing backend URL; defaults to the configured local web service |
+| `ros.tls_ca_file` | Optional trusted PEM CA/certificate; relative paths resolve beside the YAML file |
 | `ros.request_timeout_seconds` | Maximum backend request time, default 120 seconds |
 | `ros.pending_requests` | Bound on pending/active requests, default 1; excess requests get an error |
 | `ros.image_topic` | Latest optional image for image-bearing chat requests, default `image` |
@@ -74,8 +77,31 @@ the native preparation guide. Start the local backend in another terminal with:
 CONFIG_PATH="$PWD/src/common/config.yaml" ./run.sh
 ```
 
-Alternatively use an existing backend and set `ros.studio_url`. The ROS node
-uses the same model service, generation settings and speech engines.
+The default local URL uses HTTPS. The ROS client trusts the backend's generated
+`.local-certs/server.crt` in this app's checkout (or installed package when using
+the installed backend/config). If the backend uses `NEAT_TLS_CERT` and
+`NEAT_TLS_KEY`, export the same `NEAT_TLS_CERT` in the ROS terminal or set
+`ros.tls_ca_file` to its certificate/issuing CA. The ROS client never needs the
+private key. Start the backend before sending requests so its certificate exists.
+
+Alternatively use an existing backend and set `ros.studio_url`. An explicit URL
+uses the system trust store; for a self-signed or privately issued certificate,
+set `ros.tls_ca_file` to a trusted local PEM file. For example:
+
+```yaml
+ros:
+  studio_url: https://studio.example:5000
+  tls_ca_file: /path/to/studio-ca.pem
+  pending_requests: 1
+```
+
+Relative certificate paths resolve beside the YAML file. When an installed ROS
+node uses a config stored outside the backend's app directory, set `tls_ca_file`
+explicitly if the backend runs from a different checkout/installation. Certificate
+and hostname verification remain enabled; the URL hostname/IP must appear in the
+certificate. HTTP (`app.web.https: false` or an explicit HTTP URL) needs no TLS
+settings. These settings apply to chat, speech, transcription and translation.
+The ROS node uses the same model service, generation settings and speech engines.
 
 ```bash
 ros2 launch neat_genai_studio app.launch.py \

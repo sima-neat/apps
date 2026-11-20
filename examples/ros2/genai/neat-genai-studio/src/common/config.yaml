@@ -63,4 +63,5 @@ app:                         # Studio backend settings.
 
 # ROS image-topic settings. See this example's README.md.
 ros:
+  tls_ca_file: ""      # Optional PEM CA/certificate; relative to this YAML file. See README.
   pending_requests: 1  # Maximum admitted requests; values above one allow concurrency.

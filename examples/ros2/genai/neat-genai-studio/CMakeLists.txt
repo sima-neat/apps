@@ -3,7 +3,7 @@ project(neat_genai_studio)
 find_package(ament_cmake REQUIRED)
 install(PROGRAMS src/python/studio_node.py
         DESTINATION lib/${PROJECT_NAME})
-install(FILES src/python/image_transport.py
+install(FILES src/python/image_transport.py src/python/studio_tls.py
         DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY launch src/common DESTINATION share/${PROJECT_NAME}
         PATTERN "__pycache__" EXCLUDE)
